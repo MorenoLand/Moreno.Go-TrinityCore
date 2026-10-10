@@ -132,11 +132,24 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		if character.Race == 0 || character.Class == 0 || character.Gender > 2 {
 			continue
 		}
+		// Player::BuildEnumData (Player.cpp:1447-1453): a race/class pair with
+		// no playercreateinfo row skips the character, same as
+		// sObjectMgr->GetPlayerInfo returning null.
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var pairOK int
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", character.Race, character.Class).Scan(&pairOK); err != nil {
+				continue
+			}
+		}
 		if s.server.Data != nil {
 			if valid, known, appearanceErr := s.server.Data.ValidateAppearance(character.Race, character.Class, character.Gender, character.HairStyle, character.HairColor, character.Face, character.FacialStyle, character.Skin); appearanceErr == nil && known && !valid {
 				character.Skin, character.Face, character.HairStyle, character.HairColor, character.FacialStyle = 0, 0, 0, 0, 0
+				// Player.cpp:1460-1466: the at-login flag DB write only runs
+				// when the flag is not already set.
+				if character.AtLogin&uint16(atLoginCustomize) == 0 {
+					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET skin = 0, face = 0, hairStyle = 0, hairColor = 0, facialStyle = 0, at_login = at_login | 8 WHERE guid = ? AND account = ?", character.GUID, s.accountID)
+				}
 				character.AtLogin |= uint16(atLoginCustomize)
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET skin = 0, face = 0, hairStyle = 0, hairColor = 0, facialStyle = 0, at_login = at_login | 8 WHERE guid = ? AND account = ?", character.GUID, s.accountID)
 			}
 		}
 		characters = append(characters, character)
@@ -310,7 +323,10 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		}
 		if required := s.server.Config.CharacterCreatingMinLevelForDeathKnight; required > 0 {
 			var maxLevel sql.NullInt64
-			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT MAX(level) FROM characters WHERE account = ? AND class <> ?", s.accountID, class).Scan(&maxLevel); err != nil {
+			// CHAR_SEL_CHAR_CREATE_INFO ("SELECT level, race, class FROM
+			// characters WHERE account = ?") has no class filter: every
+			// account row, death knights included, feeds the level check.
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT MAX(level) FROM characters WHERE account = ?", s.accountID).Scan(&maxLevel); err != nil {
 				return false
 			}
 			if !maxLevel.Valid || maxLevel.Int64 < int64(required) {
@@ -338,11 +354,19 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		}
 		return false
 	}
-	var accountCharacters int64
-	if err := s.server.CharactersStore.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ?", s.accountID).Scan(&accountCharacters); err != nil {
+	// CharacterHandler.cpp:430-440: the account limit counts characters across
+	// all realms via LOGIN_SEL_SUM_REALM_CHARACTERS
+	// ("SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?"), not this
+	// realm's rows — a NULL sum (no rows) counts as zero like C++ GetDouble().
+	var realmChars sql.NullFloat64
+	if err := s.server.AuthStore.QueryRowContext(ctx, "SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?", s.accountID).Scan(&realmChars); err != nil {
 		return false
 	}
-	if accountCharacters >= int64(s.server.Config.CharactersPerAccount) {
+	accountCharacters := 0.0
+	if realmChars.Valid {
+		accountCharacters = realmChars.Float64
+	}
+	if accountCharacters >= float64(s.server.Config.CharactersPerAccount) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateAccountLimit)
 	}
 	var realmCharacterCount int64
@@ -462,14 +486,17 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	if _, ok := s.legitimate[guid]; !ok {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), 72)
-	}
-	// WorldSession::HandleCharDeleteOpcode (CharacterHandler.cpp:641-666): a
-	// loaded character cannot be deleted (silent return, no result packet);
-	// guild leaders and arena team captains are rejected with dedicated codes.
+	// WorldSession::HandleCharDeleteOpcode (CharacterHandler.cpp:641-646): a
+	// character loaded in any session cannot be deleted (silent return, no
+	// result packet) — ObjectAccessor::FindPlayer covers every session, and
+	// the local check covers a half-loaded own player.
 	if s.playerLoaded && s.playerGUID == guid {
 		return true
+	}
+	if s.server != nil {
+		if sess := s.server.findSessionByGUID(guid); sess != nil {
+			return true
+		}
 	}
 	var guildLeaderCount int
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild WHERE leaderguid = ?", guid).Scan(&guildLeaderCount); err == nil && guildLeaderCount > 0 {
@@ -482,8 +509,11 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	var accountID uint32
 	var charClass, charLevel uint8
 	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account, class, level FROM characters WHERE guid = ?", guid).Scan(&accountID, &charClass, &charLevel)
+	// CharacterHandler.cpp:661-671: an unknown guid or a character from
+	// another account is a silent return, not CHAR_DELETE_FAILED — the
+	// sCharacterCache lookup + account gate in C++ sends no packet.
 	if errors.Is(err, sql.ErrNoRows) || err != nil || accountID != s.accountID {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), 72)
+		return true
 	}
 	// Player::DeleteFromDB (Player.cpp:4204-4221): the delete method comes
 	// from CharDelete.Method (0 = REMOVE, 1 = UNLINK); a character below the
@@ -1878,14 +1908,20 @@ func (s *session) buildEnumCharacter(ctx context.Context, packet *protocol.Buffe
 	packet.WriteF32(c.Y)
 	packet.WriteF32(c.Z)
 	packet.WriteU32(c.GuildID)
+	// Player::BuildEnumData (Player.cpp:1469-1471): AT_LOGIN_RESURRECT clears
+	// the ghost bit before the character flags and the pet arm are computed.
+	playerFlags := c.PlayerFlags
+	if c.AtLogin&uint16(atLoginResurrect) != 0 {
+		playerFlags &^= playerFlagGhost
+	}
 	flags := uint32(0)
-	if c.PlayerFlags&characterFlagHideHelm != 0 {
+	if playerFlags&characterFlagHideHelm != 0 {
 		flags |= characterFlagHideHelm
 	}
-	if c.PlayerFlags&characterFlagHideCloak != 0 {
+	if playerFlags&characterFlagHideCloak != 0 {
 		flags |= characterFlagHideCloak
 	}
-	if c.PlayerFlags&playerFlagGhost != 0 {
+	if playerFlags&playerFlagGhost != 0 {
 		flags |= characterFlagGhost
 	}
 	if c.AtLogin&uint16(atLoginRename) != 0 {
@@ -1911,11 +1947,14 @@ func (s *session) buildEnumCharacter(ctx context.Context, packet *protocol.Buffe
 		packet.WriteU8(0)
 	}
 	petDisplay, petLevel, petFamily := uint32(0), uint32(0), uint32(0)
-	if c.PetEntry != 0 && c.PlayerFlags&playerFlagGhost == 0 && (c.Class == 3 || c.Class == 6 || c.Class == 9) {
-		petDisplay, petLevel = c.PetDisplay, c.PetLevel
+	// Player::BuildEnumData (Player.cpp:1531-1541): the pet row is shown only
+	// for non-ghost warlocks/hunters/death knights whose creature template
+	// exists; a missing template zeroes the display and level too.
+	if c.PetEntry != 0 && playerFlags&playerFlagGhost == 0 && (c.Class == 3 || c.Class == 6 || c.Class == 9) {
 		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 			var family int64
-			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(family, 0) FROM creature_template WHERE entry = ?", c.PetEntry).Scan(&family); err == nil && family > 0 {
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(family, 0) FROM creature_template WHERE entry = ?", c.PetEntry).Scan(&family); err == nil {
+				petDisplay, petLevel = c.PetDisplay, c.PetLevel
 				petFamily = uint32(family)
 			}
 		}
