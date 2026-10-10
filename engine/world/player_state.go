@@ -4969,7 +4969,21 @@ func (s *session) handleTogglePvP(ctx context.Context, payload []byte) bool {
 		playerFlagsInPvP    = 0x02
 		playerFlagsPvPTimer = 0x04
 	)
-	if s.player.PlayerFlags&playerFlagsInPvP != 0 {
+	// Reference: WorldSession::HandleTogglePvP (MiscHandler.cpp:485) +
+	// TogglePvP::HasPvPStatus (MiscPackets.h:309): the opcode carries an
+	// optional u8. With the byte present the flags are set explicitly;
+	// without it both flags toggle. The UpdatePvP(true,true) / EndTimer
+	// arms have no Go pvpInfo model (Go tracks zone hostility via
+	// s.pvpHostile and the flag itself) — documented delta.
+	if len(payload) >= 1 {
+		if payload[0] != 0 {
+			s.player.PlayerFlags |= playerFlagsInPvP
+			s.player.PlayerFlags &^= playerFlagsPvPTimer
+		} else {
+			s.player.PlayerFlags &^= playerFlagsInPvP
+			s.player.PlayerFlags |= playerFlagsPvPTimer
+		}
+	} else if s.player.PlayerFlags&playerFlagsInPvP != 0 {
 		s.player.PlayerFlags &^= playerFlagsInPvP
 		s.player.PlayerFlags |= playerFlagsPvPTimer
 	} else {
