@@ -446,8 +446,16 @@ func (s *session) sendGuildQueryResponse(ctx context.Context, guildID uint32) bo
 	buf := protocol.NewBuffer(256)
 	buf.WriteU32(guildID)
 	buf.WriteCString(name)
-	for _, r := range ranks {
-		buf.WriteCString(r)
+	// QueryGuildInfoResponse::Write (GuildPackets.cpp:28-43) iterates the
+	// full std::array<std::string, GUILD_RANKS_MAX_COUNT> (GuildPackets.h:45)
+	// — always 10 rank-name strings, padded with empties; RankCount is the
+	// actual rank size and follows the emblem fields.
+	for i := 0; i < guildRanksMaxCount; i++ {
+		if i < len(ranks) {
+			buf.WriteCString(ranks[i])
+		} else {
+			buf.WriteCString("")
+		}
 	}
 	buf.WriteU32(uint32(emblemStyle))
 	buf.WriteU32(uint32(emblemColor))
@@ -1704,14 +1712,20 @@ func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) 
 
 	// Guild.cpp:1403: else if (Member* member = GetMember(name)) — the note
 	// is set only when the target is a guild member; C++ then re-sends the
-	// roster to the setter (HandleRoster). The rows-affected check mirrors
-	// the GetMember null gate.
-	res, _ := cdb.ExecContext(ctx, `UPDATE guild_member SET pnote = ?
-		WHERE guildid = ? AND guid = (SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1)`, note, guildID, targetName)
-	if n, _ := res.RowsAffected(); n > 0 {
-		return s.handleGuildRoster(ctx)
+	// roster to the setter (HandleRoster) even when the note is unchanged
+	// (Member::SetPublicNote/SetOfficerNote (Guild.cpp:551-571) early-return
+	// skips only the DB write). RowsAffected is not the GetMember gate here:
+	// the MySQL DSN has no clientFoundRows, so an unchanged value reports
+	// 0 rows changed — gate the roster resend on the member lookup instead.
+	var targetGUID int64
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid FROM guild_member AS gm
+		JOIN characters AS c ON c.guid = gm.guid
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID)
+	if err != nil || targetGUID == 0 {
+		return true
 	}
-	return true
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET pnote = ? WHERE guildid = ? AND guid = ?", note, guildID, targetGUID)
+	return s.handleGuildRoster(ctx)
 }
 
 // handleGuildSetOfficerNote processes CMSG_GUILD_SET_OFFICER_NOTE (0x235).
@@ -1745,12 +1759,15 @@ func (s *session) handleGuildSetOfficerNote(ctx context.Context, payload []byte)
 		return true
 	}
 
-	res, _ := cdb.ExecContext(ctx, `UPDATE guild_member SET offnote = ?
-		WHERE guildid = ? AND guid = (SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1)`, note, guildID, targetName)
-	if n, _ := res.RowsAffected(); n > 0 {
-		return s.handleGuildRoster(ctx)
+	var targetGUID int64
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid FROM guild_member AS gm
+		JOIN characters AS c ON c.guid = gm.guid
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID)
+	if err != nil || targetGUID == 0 {
+		return true
 	}
-	return true
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET offnote = ? WHERE guildid = ? AND guid = ?", note, guildID, targetGUID)
+	return s.handleGuildRoster(ctx)
 }
 
 // handleGuildInfoText processes CMSG_GUILD_INFO_TEXT (0x2FC).
