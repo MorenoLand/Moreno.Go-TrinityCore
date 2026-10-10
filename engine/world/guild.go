@@ -1002,6 +1002,11 @@ func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 	if err != nil || targetName == "" {
 		return false
 	}
+	// WorldSession::HandleGuildPromoteOpcode (GuildHandler.cpp:95):
+	// normalizePlayerName gates the handler — the normalized name is then
+	// used for the member lookup (Guild::GetMember does an exact,
+	// case-sensitive name match, Guild.h:772-779).
+	targetName = normalizePlayerName(targetName)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -1029,7 +1034,7 @@ func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 	var memberName string
 	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank, c.name FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank, &memberName)
+		WHERE gm.guildid = ? AND c.name = ? LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank, &memberName)
 	if err != nil || targetGUID == 0 {
 		return true
 	}
@@ -1091,6 +1096,11 @@ func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 	if err != nil || targetName == "" {
 		return false
 	}
+	// WorldSession::HandleGuildDemoteOpcode (GuildHandler.cpp:104):
+	// normalizePlayerName gates the handler — the normalized name is then
+	// used for the member lookup (Guild::GetMember does an exact,
+	// case-sensitive name match, Guild.h:772-779).
+	targetName = normalizePlayerName(targetName)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -1118,7 +1128,7 @@ func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 	var memberName string
 	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank, c.name FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank, &memberName)
+		WHERE gm.guildid = ? AND c.name = ? LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank, &memberName)
 	if err != nil || targetGUID == 0 {
 		return true
 	}
@@ -1265,6 +1275,12 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 	if err != nil || removee == "" {
 		return false
 	}
+	// WorldSession::HandleGuildRemoveOpcode (GuildHandler.cpp:51):
+	// normalizePlayerName gates the handler — the normalized name is what
+	// Guild::HandleRemoveMember broadcasts (GE_REMOVED) and passes to the
+	// RANK_TOO_HIGH_S command result, and Guild::GetMember does an exact,
+	// case-sensitive name match (Guild.h:772-779).
+	removee = normalizePlayerName(removee)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -1289,7 +1305,7 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 	var targetGUID, targetRank int64
 	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, removee).Scan(&targetGUID, &targetRank)
+		WHERE gm.guildid = ? AND c.name = ? LIMIT 1`, guildID, removee).Scan(&targetGUID, &targetRank)
 	// GetMember miss is silent — no command result (Guild.cpp:1567).
 	if err != nil || targetGUID == 0 {
 		return true
@@ -1688,6 +1704,10 @@ func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) 
 	}
 	note, _ := r.ReadCString()
 
+	// WorldSession::HandleGuildSetPublicNoteOpcode (GuildHandler.cpp:146):
+	// normalizePlayerName gates the handler; the member lookup is an exact,
+	// case-sensitive name match (Guild::GetMember, Guild.h:772-779).
+	targetName = normalizePlayerName(targetName)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -1720,7 +1740,7 @@ func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) 
 	var targetGUID int64
 	err = cdb.QueryRowContext(ctx, `SELECT gm.guid FROM guild_member AS gm
 		JOIN characters AS c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID)
+		WHERE gm.guildid = ? AND c.name = ? LIMIT 1`, guildID, targetName).Scan(&targetGUID)
 	if err != nil || targetGUID == 0 {
 		return true
 	}
@@ -1741,6 +1761,10 @@ func (s *session) handleGuildSetOfficerNote(ctx context.Context, payload []byte)
 	}
 	note, _ := r.ReadCString()
 
+	// WorldSession::HandleGuildSetOfficerNoteOpcode (GuildHandler.cpp:156):
+	// normalizePlayerName gates the handler; the member lookup is an exact,
+	// case-sensitive name match (Guild::GetMember, Guild.h:772-779).
+	targetName = normalizePlayerName(targetName)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -1762,7 +1786,7 @@ func (s *session) handleGuildSetOfficerNote(ctx context.Context, payload []byte)
 	var targetGUID int64
 	err = cdb.QueryRowContext(ctx, `SELECT gm.guid FROM guild_member AS gm
 		JOIN characters AS c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID)
+		WHERE gm.guildid = ? AND c.name = ? LIMIT 1`, guildID, targetName).Scan(&targetGUID)
 	if err != nil || targetGUID == 0 {
 		return true
 	}
