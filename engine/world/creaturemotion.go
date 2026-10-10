@@ -1375,8 +1375,9 @@ func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64
 // AI()->CheckInRoom() every 2.5s while engaged → EnterEvadeMode at
 // CreatureAI.cpp:425. Go has no boundary model (no SetBoundary/IsInBounds
 // analog; the instance GetBossBoundary arm is unmodeled, matching the per-boss
-// Lua notes); the 45.0yd leash at creaturemotion.go:878 is the open-world analog
-// only. SEQUENCE_BREAK ("boss prerequisites not defeated"):
+// Lua notes); the visibility-range leash at creaturemotion.go:1895 is the
+// open-world analog only (dungeons skip it per CanCreatureAttack :2585).
+// SEQUENCE_BREAK ("boss prerequisites not defeated"):
 // BossAI::_JustEngagedWith (ScriptedCreature.cpp:530-535, CheckRequiredBosses
 // fail) plus the hadronox / blood_prince_council / lady_deathwhisper /
 // sindragosa / valithria_dreamwalker boss scripts — no bridge: Go has no
@@ -1874,24 +1875,54 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// me->Attack(who, false) — no chase (meleePossible=false) — and the
 		// turret only ever casts spell[0] inside its range band. It
 		// legitimately engages as far out as the CanStartAttack arm above,
-		// so the 45yd open-world leash is extended by its spell max range.
-		leashDist := float32(45.0)
+		// so the open-world leash is extended by its spell max range.
+		// Creature::CanCreatureAttack (Creature.cpp:2560-2608): the leash
+		// measures the VICTIM's distance from HOME (IsInDist, :2607 — 2D
+		// for flight, :2604-2605), not the creature-to-victim chase gap;
+		// the radius is min(map visibility range, 2*SIZE_OF_GRID_CELL) +
+		// both combat reaches (:2593-2601) — 100yd on continents, 133.33yd
+		// in BGs/arenas — and dungeon maps skip the leash entirely (:2585).
+		// The recently-damaged (MAX_AGGRO_RESET_TIME = 10s, Unit.h:40; DoT
+		// ticks never stamp LastDamaged, Unit.cpp:903) and any-live-taunt
+		// (HasAuraType(SPELL_AURA_MOD_TAUNT), :2589) skips apply
+		// creature-wide, not per victim. World bosses (Creature.cpp:2353:
+		// type_flags & CREATURE_TYPE_FLAG_BOSS_MOB, SharedDefines.h:2731)
+		// leash regardless of recent damage. The charmer/player gate
+		// (!GetCharmerOrOwnerGUID().IsPlayer(), :2583) is vacuous:
+		// OwnerGUID != 0 motions return through updatePetMotion ahead of
+		// the combat tick and never reach this site. The config-overridable
+		// visibility distances are unmodeled; the C++ defaults are used.
+		inDungeon := false
+		leashBase := float32(100.0)
+		if s != nil && s.Data != nil {
+			if mapEntry, found, err := s.Data.Map(motion.Map); err == nil && found {
+				inDungeon = mapEntry.IsDungeon()
+				if mapEntry.IsBattleground() || mapEntry.IsBattleArena() {
+					leashBase = float32(133.3333)
+				}
+			}
+		}
+		leashDist := leashBase
 		if motion.AIName == "TurretAI" {
 			leashDist += turretSpellMaxRange(s, motion)
 		}
-		if dist > leashDist {
-			// Creature::CanCreatureAttack (Creature.cpp:2560-2603): the leash
-			// does not fire while the creature is recently damaged
-			// (MAX_AGGRO_RESET_TIME = 10s after a direct-damage hit,
-			// Unit.h:40 — DoT ticks never stamp LastDamaged, Unit.cpp:903)
-			// or while the victim holds a live taunt. The arm is gated on
-			// !isWorldBoss() (Creature.cpp:2353-2357: type_flags &
-			// CREATURE_TYPE_FLAG_BOSS_MOB, SharedDefines.h:2731) — world
-			// bosses leash regardless of recent damage. The charmer/player
-			// gate (!GetCharmerOrOwnerGUID().IsPlayer(), :2583) is vacuous:
-			// OwnerGUID != 0 motions return through updatePetMotion ahead of
-			// the combat tick and never reach this site.
-			taunted := motion.ThreatMgr != nil && motion.ThreatMgr.IsTaunted(motion.TargetGUID)
+		leashVictimReach := float32(1.5)
+		if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
+			leashVictimReach = target.Sess.player.CombatReach
+		}
+		leashCReach := motion.CombatReach
+		if leashCReach <= 0 {
+			leashCReach = 1.5
+		}
+		leashDist += leashCReach + leashVictimReach
+		var homeDist float32
+		if motion.CanFly {
+			homeDist = float32(math.Hypot(float64(target.X-motion.HomeX), float64(target.Y-motion.HomeY)))
+		} else {
+			homeDist = float32(distance3D(target.X, target.Y, target.Z, motion.HomeX, motion.HomeY, motion.HomeZ))
+		}
+		if !inDungeon && homeDist > leashDist {
+			taunted := motion.ThreatMgr != nil && motion.ThreatMgr.HasAnyTaunt()
 			recentlyDamaged := !motion.LastDamaged.IsZero() && now.Sub(motion.LastDamaged) < 10*time.Second
 			bossMob := motion.TypeFlags&creatureTypeFlagBossMob != 0
 			if bossMob || (!recentlyDamaged && !taunted) {

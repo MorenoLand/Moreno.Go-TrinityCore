@@ -260,6 +260,28 @@ func (tm *ThreatManager) IsTaunted(victim uint64) bool {
 	return tm.isTauntedLocked(victim)
 }
 
+// HasAnyTaunt reports whether ANY live taunt state exists on the creature,
+// the creature-wide HasAuraType(SPELL_AURA_MOD_TAUNT) leg of
+// Creature::CanCreatureAttack (Creature.cpp:2589): the C++ check is on the
+// creature, not on the victim, so a taunt from one attacker suppresses the
+// leash for every victim. Lazily expires elapsed auras the same way
+// isTauntedLocked does.
+func (tm *ThreatManager) HasAnyTaunt() bool {
+	if tm == nil {
+		return false
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	now := time.Now()
+	for victim, exp := range tm.tauntExpiry {
+		if exp.IsZero() || now.Before(exp) {
+			return true
+		}
+		delete(tm.tauntExpiry, victim)
+	}
+	return false
+}
+
 // threatUpdateIntervalMs mirrors THREAT_UPDATE_INTERVAL (ThreatManager.h:86).
 const threatUpdateIntervalMs = 1000
 
