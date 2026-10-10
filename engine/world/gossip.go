@@ -283,12 +283,52 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.sendVendorList(ctx, guid)
 			s.gossipClosed = true
 		} else if item.Action == 6 { // GOSSIP_OPTION_SPIRITHEALER
-			if s.isDeadOrGhost() && objectUint32OrZero(creature, "NPCFlags")&npcFlagSpiritHealer != 0 {
-				confirm := protocol.NewBuffer(8)
-				confirm.WriteU64(guid)
-				if err := s.write(uint16(protocol.OpcodeSMSG_SPIRIT_HEALER_CONFIRM), confirm.Bytes(), true); err != nil {
-					return false
+			// Player::OnGossipSelect (Player.cpp:14621-14624): the spirit
+			// healer casts 17251 (triggered, original caster = the player) on
+			// itself; the spell's resurrect effect registers a resurrect
+			// request (Spell::EffectResurrect, SpellEffects.cpp:4270-4293).
+			// No confirm dialog: SMSG_SPIRIT_HEALER_CONFIRM is STATUS_NEVER in
+			// Opcodes.cpp:677 — the confirm/activate flow nothing sends — and
+			// no gossip close, so gossipClosed only suppresses the tail's
+			// SMSG_GOSSIP_COMPLETE to stay wire-faithful. The cast visual
+			// (SMSG_SPELL_START/GO from the creature) has no Go bridge; the
+			// mechanic is what lands here.
+			if s.isDeadOrGhost() && s.resurrection == nil && s.player != nil && npcFlags&npcFlagSpiritHealer != 0 {
+				pct := uint32(50)
+				ignoreReclaim := false
+				if s.server != nil && s.server.Data != nil {
+					if sp, found, derr := s.server.Data.Spell(17251); derr == nil && found && len(sp.Effects) > 0 {
+						if v := sp.Effects[0].BasePoints + 1; v >= 1 && v <= 100 {
+							pct = uint32(v)
+						}
+						ignoreReclaim = sp.AttributesEx3&spellAttr3IgnoreResurrectionTimer != 0
+					}
 				}
+				health := uint32(int64(s.player.MaxHealth) * int64(pct) / 100)
+				mana := uint32(int64(s.player.MaxPowers[0]) * int64(pct) / 100)
+				name, _ := creature.Fields["Name"].(string)
+				x, _ := objectFloat32Field(creature, "X")
+				y, _ := objectFloat32Field(creature, "Y")
+				z, _ := objectFloat32Field(creature, "Z")
+				// Spell::ExecuteLogEffectResurrect (Spell.cpp:4617-4621) as
+				// flushed by SendLogExecute: caster is the creature here, not
+				// the player sendResurrectLog assumes.
+				log := protocol.NewBuffer(32)
+				log.WritePackedGUID(guid)
+				log.WriteU32(17251)
+				log.WriteU32(1)
+				log.WriteU32(spellEffectResurrect)
+				log.WriteU32(1)
+				log.WritePackedGUID(s.playerGUID)
+				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+				// SetResurrectRequestData WorldRelocates the caster: the
+				// stored location is the spirit healer's position (the accept
+				// path teleports the ghost there before resurrecting).
+				s.setResurrectRequestData(guid, objectUint32OrZero(creature, "Map"), x, y, z, health, mana, 0)
+				// Spell::SendResurrectRequest (Spell.cpp:4693-4709): creature
+				// caster name, spirit-healer sickness flag set, reclaim-timer
+				// override from the spell's attributes.
+				s.sendResurrectRequest(guid, name, true, !ignoreReclaim)
 				s.gossipClosed = true
 			}
 		} else if item.Action == 4 { // GOSSIP_OPTION_TAXIVENDOR
@@ -377,6 +417,38 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				s.gossip = defaultMenu
 				if sendErr := s.sendGossipMenu(); sendErr != nil {
 					s.debug("gossip submenu response failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", sendErr)
+					return true
+				}
+			}
+		} else if item.Action == 2 { // GOSSIP_OPTION_QUESTGIVER
+			// Player::OnGossipSelect (Player.cpp:14625-14628):
+			// PrepareQuestMenu(guid) + SendPreparedQuest(guid) — the quest-menu
+			// open. The single-quest fast-open mirrors the hello path's
+			// existing SendPreparedQuest approximation; multiple quests go out
+			// in the gossip message's quest section, same as the questgiver
+			// hello.
+			if s.player != nil {
+				quests, qerr := s.loadCreatureQuestMenu(ctx, entry, s.player.Level)
+				if qerr != nil {
+					s.debug("gossip questgiver menu load failed", "account", s.accountName, "entry", entry, "error", qerr)
+					s.gossipClosed = true
+					_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
+					return true
+				}
+				if len(quests) == 1 {
+					q := quests[0]
+					queryPayload := protocol.NewBuffer(12)
+					queryPayload.WriteU64(guid)
+					queryPayload.WriteU32(q.ID)
+					status, _ := s.characterQuestStatus(ctx, q.ID)
+					if status == questStatusComplete || status == questStatusIncomplete {
+						return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
+					}
+					return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
+				}
+				s.gossip = &gossipMenuState{SenderGUID: guid, MenuID: menuID, TitleID: 0x00FFFFFF, Items: make(map[uint32]gossipMenuItem), Quests: quests}
+				if sendErr := s.sendGossipMenu(); sendErr != nil {
+					s.debug("gossip questgiver menu response failed", "account", s.accountName, "entry", entry, "error", sendErr)
 					return true
 				}
 			}
