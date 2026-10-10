@@ -350,6 +350,8 @@ const (
 	taxiErrNoVendorNearby uint32 = 5
 	taxiErrNotVisited     uint32 = 6
 	taxiErrPlayerBusy     uint32 = 7 // ERR_TAXIPLAYERBUSY (SharedDefines.h)
+	taxiErrAlreadyMounted uint32 = 8 // ERR_TAXIPLAYERALREADYMOUNTED (SharedDefines.h:3656)
+	taxiErrShapeshifted   uint32 = 9 // ERR_TAXIPLAYERSHAPESHIFTED (SharedDefines.h:3657)
 )
 
 func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
@@ -368,7 +370,15 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	var sourceNode, destNode uint32
+	// C++ HandleActivateTaxiOpcode (TaxiHandler.cpp:259-264) and
+	// HandleActivateTaxiExpressOpcode (:166-172): the flightmaster interact
+	// gate fires FIRST — before any taximask check — and answers
+	// ERR_TAXITOOFARAWAY (4) when the player can't interact with the NPC.
+	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagFlightmaster)) {
+		return reply(taxiErrTooFarAway)
+	}
+
+	var nodes []uint32
 	if len(payload) >= 20 {
 		// CMSG_ACTIVATETAXIEXPRESS: guid (8), nodeCount (4), nodes... (nodeCount * 4)
 		nodeCount, err := reader.ReadU32()
@@ -378,7 +388,6 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 		if nodeCount == 0 {
 			return true // HandleActivateTaxiExpressOpcode: empty node list returns silently
 		}
-		var nodes []uint32
 		for i := uint32(0); i < nodeCount; i++ {
 			node, err := reader.ReadU32()
 			if err != nil {
@@ -392,25 +401,44 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 		if len(nodes) < 2 {
 			return true // Player::ActivateTaxiPathTo: nodes.size() < 2 returns false with no reply
 		}
-		sourceNode = nodes[0]
-		destNode = nodes[len(nodes)-1]
 	} else {
-		// CMSG_ACTIVATETAXI: guid (8), source (4), dest (4)
-		sourceNode, err = reader.ReadU32()
+		// CMSG_ACTIVATETAXI: guid (8), source (4), dest (4).
+		// C++ HandleActivateTaxiOpcode (TaxiHandler.cpp:267-271) gates BOTH
+		// endpoints on the taximask — an unvisited destination answers
+		// ERR_TAXINOTVISITED too, not just an unvisited source.
+		sourceNode, err := reader.ReadU32()
 		if err != nil {
 			return false
 		}
-		destNode, err = reader.ReadU32()
+		destNode, err := reader.ReadU32()
 		if err != nil {
 			return false
 		}
-		if !s.isTaxiMaskNodeKnown(sourceNode) && !s.isTaxiCheater() {
+		if !s.isTaxiCheater() && (!s.isTaxiMaskNodeKnown(sourceNode) || !s.isTaxiMaskNodeKnown(destNode)) {
 			return reply(taxiErrNotVisited)
 		}
+		nodes = []uint32{sourceNode, destNode}
 	}
+	sourceNode, destNode := nodes[0], nodes[len(nodes)-1]
 
-	// Player::ActivateTaxiPathTo validation order: vendor/nearest node,
-	// known source node, existing path, money.
+	// Player::ActivateTaxiPathTo (Player.cpp:21517-21558): the pre-flight
+	// state gates fire after the handler's interact/known-node gates, in
+	// C++ order. Logging-out, in-combat, stunned or rooted answers
+	// ERR_TAXIPLAYERBUSY (7); mounted answers ERR_TAXIPLAYERALREADYMOUNTED
+	// (8); a non-melee cast in progress answers ERR_TAXIPLAYERBUSY (7).
+	// The shapeshift arm (ERR_TAXIPLAYERSHAPESHIFTED, 9) has no Go bridge:
+	// Unit::IsInDisallowedMountForm (Unit.cpp:9170) needs the
+	// SpellShapeshiftForm DBC flags plus the display-info chain, and Go
+	// only tracks the raw form id.
+	if !s.logoutAt.IsZero() || s.isInCombat() || s.player.UnitFlags&unitFlagStunned != 0 || s.rooted {
+		return reply(taxiErrPlayerBusy)
+	}
+	if s.player.MountDisplayID != 0 {
+		return reply(taxiErrAlreadyMounted)
+	}
+	if s.genericCastInProgress() {
+		return reply(taxiErrPlayerBusy)
+	}
 	nearest, ok := s.nearestCreatureTaxiNode(ctx, guid)
 	if !ok {
 		return reply(taxiErrNoVendorNearby)
@@ -418,16 +446,50 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	if s.server.Data == nil {
 		return reply(taxiErrUnspecified)
 	}
-	pathID, price, found, err := s.server.Data.TaxiPathLinks(sourceNode, destNode)
-	if err != nil || !found {
+	// Player::ActivateTaxiPathTo (Player.cpp:21562-21567): an unknown source
+	// node answers ERR_TAXINOSUCHPATH before any hop resolution.
+	if !s.server.Data.TaxiNodeExists(sourceNode) {
 		return reply(taxiErrNoSuchPath)
 	}
-	if uint64(s.player.Money) < uint64(price) {
+	// Player::ActivateTaxiPathTo (Player.cpp:21591-21608): each consecutive
+	// node pair resolves through its own direct TaxiPath link (the C++
+	// ObjectMgr::GetTaxiPath lookup); a missing hop clears the destinations
+	// and returns false with NO reply — silent, like the C++ arm.
+	var pathIDs []uint32
+	var rawTotal uint64
+	for i := 1; i < len(nodes); i++ {
+		pathID, hopPrice, found, herr := s.server.Data.TaxiPathLinks(nodes[i-1], nodes[i])
+		if herr != nil || !found || pathID == 0 {
+			return true
+		}
+		pathIDs = append(pathIDs, pathID)
+		rawTotal += uint64(hopPrice)
+	}
+	// Player::ActivateTaxiPathTo (Player.cpp:21624-21631): the reputation
+	// discount (GetReputationPriceDiscount, 1.0 below Friendly, -5% per rank
+	// above) applies to the summed multi-hop cost; the money gate is against
+	// the discounted total. C++ deducts the first leg at departure and each
+	// later leg on arrival (FlightPathMovementGenerator.cpp:121-122); Go has
+	// no intermediate arrival events — its single spline always runs to the
+	// final node — so the full discounted total is taken at departure. Same
+	// total for a completed flight.
+	discount := s.reputationPriceDiscount(ctx, guid)
+	totalCost := uint32(math.Ceil(float64(rawTotal) * discount))
+	if uint64(s.player.Money) < uint64(totalCost) {
 		return reply(taxiErrNotEnoughMoney)
 	}
-	if price > 0 {
-		s.player.Money -= price
-		s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, uint32(price))
+	// SendDoFlight mount gate (Player.cpp:21610-21616): no mount model for
+	// the source node on the npc path answers ERR_TAXIUNSPECIFIEDSERVERERROR.
+	mount := uint32(0)
+	if mountDisplay, merr := s.server.Data.TaxiNodeMount(sourceNode, s.playerAlliance()); merr == nil {
+		mount = mountDisplay
+	}
+	if mount == 0 {
+		return reply(taxiErrUnspecified)
+	}
+	if totalCost > 0 {
+		s.player.Money -= totalCost
+		s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, totalCost)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		}
@@ -438,19 +500,18 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	// calls TradeCancel(true) unconditionally at flight start
 	// (Player::ActivateTaxiPathTo, Player.cpp:21586).
 	s.cancelTrade(true)
-	// SendDoFlight: mount and run the TaxiPathNode spline as a flying
-	// monster move (Flying 0x2000 | Catmullrom 0x40000 per MoveSplineFlag).
-	mount := uint32(0)
-	if mountDisplay, err := s.server.Data.TaxiNodeMount(sourceNode, s.playerAlliance()); err == nil {
-		mount = mountDisplay
-	}
+	// SendDoFlight runs the TaxiPathNode spline as a flying monster move
+	// (Flying 0x2000 | Catmullrom 0x40000 per MoveSplineFlag); C++ flies
+	// sourcepath (the FIRST hop, Player.cpp:21683) and chains the rest via
+	// path-switch events Go has no model for — the standing single-spline
+	// delta — so the first hop's path is what takes off.
 	previousTaxiPath := s.player.TaxiPath
 	s.player.TaxiPath = strings.Join([]string{strconv.FormatUint(uint64(s.taxiFlightMasterFaction(ctx, guid)), 10), strconv.FormatUint(uint64(sourceNode), 10), strconv.FormatUint(uint64(destNode), 10)}, " ") + " "
-	if !s.startTaxiFlight(pathID, mount, nearest == sourceNode) {
+	if !s.startTaxiFlight(pathIDs[0], mount, nearest == sourceNode) {
 		s.player.TaxiPath = previousTaxiPath
 	}
 	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
-	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "source", sourceNode, "dest", destNode, "cost", price)
+	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "source", sourceNode, "dest", destNode, "cost", totalCost)
 	return reply(taxiErrOK)
 }
 
