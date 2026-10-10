@@ -1510,6 +1510,23 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell lookup failed", "account", s.accountName, "spell", spellID, "error", err)
 		return true
 	}
+	// HandleCastSpellOpcode (SpellHandler.cpp:420-430): the client resends
+	// the autoshot cast opcode when another spell is cast during the shoot
+	// rotation — when the same auto-repeat spell is already running on the
+	// same wire unit target, the resend is silently ignored. It does NOT
+	// toggle the running cast off (explicit toggles go through
+	// handleCancelAutoRepeatSpell).
+	if (spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0) || spellID == 75 || spellID == 5019 {
+		if s.autoRepeatSpell == spellID && s.autoRepeatSpell != 0 {
+			var wireTarget uint64
+			if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+				wireTarget = target.UnitGUID
+			}
+			if wireTarget != 0 && wireTarget == s.autoRepeatTarget {
+				return true
+			}
+		}
+	}
 	learned := s.hasActiveSpell(spellID)
 	gmMode := s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0
 	if !found || spell.Attributes&spellAttributePassive != 0 || !canPlayerCastSpell(learned, gmMode) {
@@ -2334,7 +2351,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	isAutoRepeat := (spell.AttributesEx1&0x20 != 0) || spellID == 75 || spellID == 5019
 	targetGUID := uint64(0)
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 		targetGUID = target.UnitGUID
@@ -2521,15 +2537,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Auto-repeat toggle: if already repeating this spell on this target, toggle it off (TC SpellHandler.cpp:420-430)
-	if isAutoRepeat && s.autoRepeatSpell == spellID && s.autoRepeatTarget == targetGUID {
-		s.autoRepeatSpell = 0
-		s.autoRepeatTarget = 0
-		buf := protocol.NewBuffer(9)
-		buf.WritePackedGUID(s.playerGUID)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
-		return true
-	}
+	// (autoshot resend dedup lives at the top of handleCastSpell per
+	// SpellHandler.cpp:420-430 — a same-spell/same-target resend is a
+	// silent ignore, never a toggle-off)
 
 	// Range and Ammo checks for ranged / auto-repeat spells (TC Spell::CheckCast)
 	if targetGUID != 0 && targetGUID != s.playerGUID {
