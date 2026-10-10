@@ -20,7 +20,23 @@ func (s *session) handleStandStateChange(ctx context.Context, payload []byte) bo
 		return true
 	}
 	s.player.StandState = uint8(state)
-	s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldBytes1: state})
+	// Reference: Unit::SetStandState (Unit.cpp:10557-10569). Standing — the
+	// only one of the four client-sendable states that counts as a stand
+	// state (Unit::IsStandState, Unit.cpp:10551-10555) — breaks auras flagged
+	// AURA_INTERRUPT_FLAG_NOT_SEATED (food/drink).
+	if state == 0 { // UNIT_STAND_STATE_STAND
+		s.removeAurasWithInterruptFlags(auraInterruptFlagNotSeated)
+	}
+	// SetByteValue(UNIT_FIELD_BYTES_1, UNIT_BYTES_1_OFFSET_STAND_STATE, state)
+	// touches only the stand-state byte; the stand flags in byte 2 are
+	// preserved. C++ sends SMSG_STANDSTATE_UPDATE directly to the player
+	// (Unit.cpp:10564-10568); the byte value reaches other clients through
+	// the normal values-update flow.
+	merged := uint32(state) | uint32(s.player.StandFlags)<<16
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(uint8(state))
+	_ = s.write(uint16(protocol.OpcodeSMSG_STANDSTATE_UPDATE), buf.Bytes(), true)
+	s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldBytes1: merged})
 	s.debug("stand state changed", "account", s.accountName, "state", state)
 	return true
 }

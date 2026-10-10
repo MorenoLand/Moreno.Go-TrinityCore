@@ -4622,6 +4622,49 @@ func (s *session) handleSetActionBarToggles(payload []byte) bool {
 	return true
 }
 
+// actionButtonDataValid mirrors Player::IsActionButtonDataValid
+// (Player.cpp:6362-6414): the button must be below MAX_ACTION_BUTTONS
+// (Player.h:217, 144), spell actions must name an existing spell the player
+// knows (Player::HasSpell — known and not disabled), item actions must name
+// an existing item template, and the type must be one of the known
+// ActionButtonType values (Player.h:172-177: SPELL=0x00, C=0x01, EQSET=0x20,
+// MACRO=0x40, CMACRO=0x41, ITEM=0x80). The MAX_ACTION_BUTTON_ACTION_VALUE
+// (0x01000000) gate is vacuous here: the action arrives pre-masked to the
+// low 24 bits (ACTION_BUTTON_ACTION), so it can never reach the bound.
+func (s *session) actionButtonDataValid(ctx context.Context, button uint8, action uint32, actionType uint8) bool {
+	if button >= 144 || s.player == nil {
+		return false
+	}
+	switch actionType {
+	case 0x00: // ACTION_BUTTON_SPELL
+		if s.server == nil || s.server.Data == nil {
+			return false
+		}
+		if _, found, err := s.server.Data.Spell(action); err != nil || !found {
+			return false
+		}
+		for _, learned := range s.player.Spells {
+			if learned.ID == action && !learned.Disabled {
+				return true
+			}
+		}
+		return false
+	case 0x80: // ACTION_BUTTON_ITEM
+		if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return false
+		}
+		var one int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ? LIMIT 1", action).Scan(&one); err != nil {
+			return false
+		}
+		return true
+	case 0x01, 0x20, 0x40, 0x41: // ACTION_BUTTON_C, EQSET, MACRO, CMACRO
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *session) handleSetActionButton(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	button, err := reader.ReadU8()
@@ -4633,6 +4676,12 @@ func (s *session) handleSetActionButton(ctx context.Context, payload []byte) boo
 		return false
 	}
 	if button >= 144 || !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if data != 0 && !s.actionButtonDataValid(ctx, button, data&0x00FFFFFF, uint8(data>>24)) {
+		// Reference: Player::addActionButton (Player.cpp:6416-6430) drops
+		// invalid button data (IsActionButtonDataValid, Player.cpp:6362-6414)
+		// instead of storing it.
 		return true
 	}
 	s.player.Actions[button] = data
