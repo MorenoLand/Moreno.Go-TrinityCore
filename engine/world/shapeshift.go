@@ -584,3 +584,410 @@ func (s *session) removeShapeshiftFormEffects(stanceSpellID uint32, form uint8) 
 		s.clampStanceRage(stanceSpellID, form)
 	}
 }
+
+// shapeshiftBoostSpells mirrors the form -> (spellId, spellId2,
+// HotWSpellId) table at the top of AuraEffect::HandleShapeshiftBoosts
+// (SpellAuraEffects.cpp:1079-1145). Forms with no row (ghoul, ambient,
+// stealth, creature cat/bear) yield zeros, matching the C++ break arms.
+func shapeshiftBoostSpells(form uint8) (uint32, uint32, uint32) {
+	switch form {
+	case 1: // FORM_CAT
+		return 3025, 0, 24900
+	case 2: // FORM_TREE
+		return 34123, 0, 0
+	case 3: // FORM_TRAVEL
+		return 5419, 0, 0
+	case 4: // FORM_AQUA
+		return 5421, 0, 0
+	case 5: // FORM_BEAR
+		return 1178, 21178, 24899
+	case 8: // FORM_DIREBEAR
+		return 9635, 21178, 24899
+	case 16: // FORM_GHOSTWOLF
+		return 67116, 0, 0
+	case 17: // FORM_BATTLESTANCE
+		return 21156, 0, 0
+	case 18: // FORM_DEFENSIVESTANCE
+		return 7376, 0, 0
+	case 19: // FORM_BERSERKERSTANCE
+		return 7381, 0, 0
+	case 22: // FORM_METAMORPHOSIS
+		return 54817, 54879, 0
+	case 27: // FORM_FLIGHT_EPIC
+		return 40122, 40121, 0
+	case 28: // FORM_SHADOW
+		return 49868, 71167, 0
+	case 29: // FORM_FLIGHT
+		return 33948, 34764, 0
+	case 31: // FORM_MOONKIN
+		return 24905, 69366, 0
+	case 32: // FORM_SPIRITOFREDEMPTION
+		return 27792, 27795, 0
+	default:
+		return 0, 0, 0
+	}
+}
+
+// spellStanceMask folds the two ShapeshiftMask DBC words the way
+// SpellInfo::Stances does (DBCStructure.h:1404: fields 12-13).
+func spellStanceMask(spell wotlk.Spell) uint64 {
+	return uint64(spell.ShapeshiftMask[0]) | uint64(spell.ShapeshiftMask[1])<<32
+}
+
+// playerHasKnownSpell mirrors Player::HasSpell's spell-map lookup
+// (Player.cpp) for the passive checks in HandleShapeshiftBoosts: the spell
+// is known and not disabled.
+func (s *session) playerHasKnownSpell(spellID uint32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	for _, learned := range s.player.Spells {
+		if learned.ID == spellID && !learned.Disabled {
+			return true
+		}
+	}
+	return false
+}
+
+// dummyAuraEffectAmount mirrors Unit::GetDummyAuraEffect(family, icon, 0)
+// (Unit.cpp:4510-4524): the live effect-0 amount of the first matching
+// SPELL_AURA_DUMMY aura.
+func (s *session) dummyAuraEffectAmount(family uint32, iconID uint32) (int32, bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraDummy || aura.EffectMask&1 == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || spell.SpellFamilyName != family || spell.SpellIconID != iconID {
+			continue
+		}
+		return aura.Amounts[0], true
+	}
+	return 0, false
+}
+
+// heartOfTheWildStaminaPct mirrors the Heart of the Wild arm of
+// AuraEffect::HandleShapeshiftBoosts (SpellAuraEffects.cpp:1208-1224): the
+// amount of the first MOD_TOTAL_STAT_PERCENTAGE aura with SpellIconID 240
+// and MiscValue 3 (the Cat/Bear/Direbear talent). SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE = 137.
+func (s *session) heartOfTheWildStaminaPct() int32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != 137 || aura.EffectMask&1 == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || spell.SpellIconID != 240 {
+			continue
+		}
+		if aura.MiscValue != 3 {
+			continue
+		}
+		return aura.Amounts[0]
+	}
+	return 0
+}
+
+// savageRoarDummyActive mirrors the Savage Roar arm of
+// AuraEffect::HandleShapeshiftBoosts (SpellAuraEffects.cpp:1227-1229):
+// a live SPELL_AURA_DUMMY druid-family aura with family flags (0,
+// 0x10000000, 0) (the Savage Roar talent aura).
+func (s *session) savageRoarDummyActive() bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraDummy {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || spell.SpellFamilyName != spellFamilyDruid {
+			continue
+		}
+		if spell.SpellFamilyFlags[0] == 0 && spell.SpellFamilyFlags[1] == 0x10000000 && spell.SpellFamilyFlags[2] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// survivalOfTheFittestBonus mirrors the Survival of the Fittest arm of
+// AuraEffect::HandleShapeshiftBoosts (SpellAuraEffects.cpp:1242-1248):
+// the EFFECT_2 template value (not the live amount) of the
+// MOD_TOTAL_STAT_PERCENTAGE druid-family aura with family flags[0] 961.
+func (s *session) survivalOfTheFittestBonus() (int32, bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != 137 || aura.EffectMask&1 == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || spell.SpellFamilyName != spellFamilyDruid || spell.SpellFamilyFlags[0] != 961 {
+			continue
+		}
+		if len(spell.Effects) < 3 {
+			return 0, false
+		}
+		return spell.Effects[2].BasePoints, true
+	}
+	return 0, false
+}
+
+// newShapeshiftStanceMask mirrors the newAura lookup at the top of the
+// HandleShapeshiftBoosts remove leg (SpellAuraEffects.cpp:1286-1297):
+// the stance bit of another still-active shapeshift aura, or 0 when the
+// player is leaving every form. removedSpellID is the aura being removed;
+// the C++ comparison is against the removed AuraEffect itself, and Go holds
+// one aura per spell ID, so the removed spell ID is the exact match.
+func (s *session) newShapeshiftStanceMask(removedSpellID uint32) uint64 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraModShapeshift || aura.SpellID == removedSpellID {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for _, effect := range spell.Effects {
+			if effect.Aura != spellAuraModShapeshift || effect.MiscValue <= 0 {
+				continue
+			}
+			return uint64(1) << (uint64(effect.MiscValue) - 1)
+		}
+	}
+	return 0
+}
+
+// auraRemovedOnShapeLost mirrors Aura::IsRemovedOnShapeLost
+// (SpellAuras.cpp:1096-1103): a self-cast aura whose spell carries a
+// non-zero Stances mask and neither the NOT_SHAPESHIFT nor the
+// NOT_NEED_SHAPESHIFT attribute.
+func (s *session) auraRemovedOnShapeLost(aura *activeAura, spell wotlk.Spell) bool {
+	if s == nil || s.player == nil || aura == nil {
+		return false
+	}
+	if aura.CasterGUID != s.playerGUID {
+		return false
+	}
+	if spellStanceMask(spell) == 0 {
+		return false
+	}
+	if spell.AttributesEx1&spellAttr2NotNeedShapeshift != 0 {
+		return false
+	}
+	if spell.Attributes&spellAttr0NotShapeshift != 0 {
+		return false
+	}
+	return true
+}
+
+// handleShapeshiftBoosts mirrors AuraEffect::HandleShapeshiftBoosts
+// (SpellAuraEffects.cpp:1072-1316) both legs. The caller runs it with
+// prevForm != form on apply (SpellAuraEffects.cpp:1784) and unconditionally
+// on remove (SpellAuraEffects.cpp:1860).
+func (s *session) handleShapeshiftBoosts(ctx context.Context, spellID uint32, form uint8, apply bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	spellId, spellId2, hotWSpellId := shapeshiftBoostSpells(form)
+	if apply {
+		if spellId != 0 {
+			s.castSpellDirect(ctx, spellId, s.playerGUID)
+		}
+		if spellId2 != 0 {
+			s.castSpellDirect(ctx, spellId2, s.playerGUID)
+		}
+		var stanceBit uint64
+		if form > 0 && form <= 64 {
+			stanceBit = uint64(1) << (form - 1)
+		}
+		// Known passive/hidden-clientside spells gated on the new form's
+		// stance bit (SpellAuraEffects.cpp:1158-1172).
+		for _, learned := range s.player.Spells {
+			if learned.Disabled || learned.ID == spellId || learned.ID == spellId2 {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(learned.ID)
+			if err != nil || !found {
+				continue
+			}
+			if spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0HiddenClientside == 0 {
+				continue
+			}
+			if stanceBit != 0 && spellStanceMask(spell)&stanceBit != 0 {
+				s.castSpellDirect(ctx, learned.ID, s.playerGUID)
+			}
+		}
+		// Glyphs (SpellAuraEffects.cpp:1175-1188).
+		for _, glyphID := range s.player.Glyphs[s.player.ActiveTalentGroup] {
+			if glyphID == 0 {
+				continue
+			}
+			glyph, found, err := s.server.Data.GlyphProperties(uint32(glyphID))
+			if err != nil || !found {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(glyph.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			if spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0HiddenClientside == 0 {
+				continue
+			}
+			if stanceBit != 0 && spellStanceMask(spell)&stanceBit != 0 {
+				s.castSpellDirect(ctx, glyph.SpellID, s.playerGUID)
+			}
+		}
+		// Leader of the Pack (SpellAuraEffects.cpp:1191-1196).
+		if s.playerHasKnownSpell(17007) {
+			if spell, found, err := s.server.Data.Spell(24932); err == nil && found && stanceBit != 0 && spellStanceMask(spell)&stanceBit != 0 {
+				s.castSpellDirect(ctx, 24932, s.playerGUID)
+			}
+		}
+		// Improved Barkskin (SpellAuraEffects.cpp:1198-1205).
+		if s.playerHasKnownSpell(63410) || s.playerHasKnownSpell(63411) {
+			s.removeAura(66530)
+			if form == 3 { // FORM_TRAVEL; FORM_NONE is impossible on the apply leg
+				s.castSpellDirect(ctx, 66530, s.playerGUID)
+			}
+		}
+		// Heart of the Wild (SpellAuraEffects.cpp:1208-1224): 1% stamina
+		// and 1% attack power per 2% intellect.
+		if hotWSpellId != 0 {
+			if pct := s.heartOfTheWildStaminaPct(); pct > 0 {
+				s.castSpellDirectWithBasePoint(ctx, hotWSpellId, s.playerGUID, uint32(pct/2))
+			}
+		}
+		switch form {
+		case 1: // FORM_CAT
+			if s.savageRoarDummyActive() {
+				s.castSpellDirect(ctx, 62071, s.playerGUID)
+			}
+			if amount, ok := s.dummyAuraEffectAmount(spellFamilyGeneric, 2851); ok && amount > 0 {
+				s.castSpellDirectWithBasePoint(ctx, 48420, s.playerGUID, uint32(amount))
+			}
+		case 5, 8: // FORM_BEAR / FORM_DIREBEAR
+			if amount, ok := s.dummyAuraEffectAmount(spellFamilyGeneric, 2851); ok && amount > 0 {
+				s.castSpellDirectWithBasePoint(ctx, 48418, s.playerGUID, uint32(amount))
+			}
+			if bonus, ok := s.survivalOfTheFittestBonus(); ok && bonus > 0 {
+				s.castSpellDirectWithBasePoint(ctx, 62069, s.playerGUID, uint32(bonus))
+			}
+		case 31: // FORM_MOONKIN
+			if amount, ok := s.dummyAuraEffectAmount(spellFamilyGeneric, 2851); ok && amount > 0 {
+				s.castSpellDirectWithBasePoint(ctx, 48421, s.playerGUID, uint32(amount))
+			}
+		case 2: // FORM_TREE
+			if amount, ok := s.dummyAuraEffectAmount(spellFamilyGeneric, 2851); ok && amount > 0 {
+				s.castSpellDirectWithBasePoint(ctx, 48422, s.playerGUID, uint32(amount))
+			}
+		}
+		return
+	}
+	// Remove leg (SpellAuraEffects.cpp:1278-1316). RemoveOwnedAura's caster
+	// match is vacuous: Go holds one aura per spell ID and the companion
+	// casts are self-casts.
+	if spellId != 0 {
+		s.removeAura(spellId)
+	}
+	if spellId2 != 0 {
+		s.removeAura(spellId2)
+	}
+	// Improved Barkskin remove (SpellAuraEffects.cpp:1280-1285).
+	if s.playerHasKnownSpell(63410) || s.playerHasKnownSpell(63411) {
+		s.removeAura(66530)
+		s.castSpellDirect(ctx, 66530, s.playerGUID)
+	}
+	// Strip auras that don't fit the form being shifted into
+	// (SpellAuraEffects.cpp:1299-1315).
+	newStance := s.newShapeshiftStanceMask(spellID)
+	var strip []uint32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if !s.auraRemovedOnShapeLost(aura, spell) {
+			continue
+		}
+		if spellStanceMask(spell)&newStance == 0 {
+			strip = append(strip, aura.SpellID)
+		}
+	}
+	for _, id := range strip {
+		s.removeAura(id)
+	}
+}
+
+// addTemporaryShapeshiftSpell mirrors Player::AddTemporarySpell
+// (Player.cpp:3609-3620): a spell already in the list — temporary or
+// permanent — is left alone; otherwise it is recorded active and temporary.
+// Temporary spells are never persisted (Player::_SaveSpells skips
+// PLAYERSPELL_TEMPORARY), so no DB write happens here.
+func (s *session) addTemporaryShapeshiftSpell(spellID uint32) {
+	if s == nil || s.player == nil || spellID == 0 {
+		return
+	}
+	for _, learned := range s.player.Spells {
+		if learned.ID == spellID {
+			return
+		}
+	}
+	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: true, Temporary: true})
+}
+
+// removeTemporaryShapeshiftSpell mirrors Player::RemoveTemporarySpell
+// (Player.cpp:3622-3630): only a temporary entry is erased; a permanently
+// learned copy of the same spell survives.
+func (s *session) removeTemporaryShapeshiftSpell(spellID uint32) {
+	if s == nil || s.player == nil || spellID == 0 {
+		return
+	}
+	for i, learned := range s.player.Spells {
+		if learned.ID == spellID && learned.Temporary {
+			s.player.Spells = append(s.player.Spells[:i], s.player.Spells[i+1:]...)
+			return
+		}
+	}
+}
+
+// updateFormPresetSpells mirrors the spell-learning tail of
+// AuraEffect::HandleAuraModShapeshift (SpellAuraEffects.cpp:1897-1907):
+// the SpellShapeshiftFormEntry preset spells are granted as temporary
+// spells on apply and revoked on remove. C++ notes no action-bar or
+// spellbook packet is needed.
+func (s *session) updateFormPresetSpells(form uint8, apply bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
+	if err != nil || !found {
+		return
+	}
+	for _, presetID := range shape.PresetSpellIDs {
+		if presetID == 0 {
+			continue
+		}
+		if apply {
+			s.addTemporaryShapeshiftSpell(presetID)
+		} else {
+			s.removeTemporaryShapeshiftSpell(presetID)
+		}
+	}
+}

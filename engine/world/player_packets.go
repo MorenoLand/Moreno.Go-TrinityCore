@@ -16,6 +16,11 @@ type learnedSpell struct {
 	Active    bool
 	Disabled  bool
 	Dependent bool
+	// Temporary mirrors PLAYERSPELL_TEMPORARY (Player.cpp:3609-3628):
+	// form preset spells granted by AddTemporarySpell live only in
+	// memory while the form is active and are never written to
+	// character_spell.
+	Temporary bool
 }
 
 func boolToInt(value bool) int64 {

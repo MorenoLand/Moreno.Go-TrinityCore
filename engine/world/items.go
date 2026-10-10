@@ -4584,3 +4584,150 @@ func (s *session) equipmentSetUnequipSlot(ctx context.Context, slot uint32) {
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 }
+
+// updateEquipSpellsAtFormChange mirrors Player::UpdateEquipSpellsAtFormChange
+// (Player.cpp:8024-8043), run from Player::InitDataForForm at the end of
+// HandleAuraModShapeshift's apply and remove legs (SpellAuraEffects.cpp:1894).
+// Each equipped item sheds its equip spells that no longer fit the form and
+// re-casts the ON_EQUIP ones that fit but aren't active from that item; each
+// item-set threshold spell is likewise removed when it fails the form gate
+// and re-cast when it passes and isn't active. The broken-item and
+// CanUseAttackType gates (Player.cpp:8028) ride the durability row and the
+// disarm flags; the MAX_ATTACK default arm of GetAttackBySlot
+// (Player.cpp:10130-10139) makes non-weapon slots always pass.
+func (s *session) updateEquipSpellsAtFormChange(ctx context.Context) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	disarmedMain := s.player.UnitFlags&unitFlagDisarmed != 0
+	disarmedOffhand := s.player.UnitFlags2&unitFlag2DisarmOffhand != 0
+	disarmedRanged := s.player.UnitFlags2&unitFlag2DisarmRanged != 0
+	type equippedItem struct {
+		guid, entry, slot, durability int64
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx,
+		`SELECT ci.item, ii.itemEntry, ci.slot, COALESCE(ii.durability, 0)
+		FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ? ORDER BY ci.slot`,
+		s.playerGUID, int64(equipSlotEnd))
+	if err != nil {
+		return
+	}
+	var items []equippedItem
+	for rows.Next() {
+		var it equippedItem
+		if rows.Scan(&it.guid, &it.entry, &it.slot, &it.durability) != nil || it.guid == 0 || it.entry <= 0 {
+			continue
+		}
+		items = append(items, it)
+	}
+	rows.Close()
+	for _, it := range items {
+		tmpl, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(it.entry))
+		if !ok {
+			continue
+		}
+		if tmpl.MaxDurability > 0 && it.durability == 0 {
+			continue
+		}
+		switch uint8(it.slot) {
+		case equipSlotMainhand:
+			if disarmedMain {
+				continue
+			}
+		case equipSlotOffhand:
+			if disarmedOffhand {
+				continue
+			}
+		case equipSlotRanged:
+			if disarmedRanged {
+				continue
+			}
+		}
+		itemGUID := uint64(it.guid)
+		var spellIDs, spellTriggers [5]int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT spellid_1, spelltrigger_1, spellid_2, spelltrigger_2, spellid_3, spelltrigger_3, spellid_4, spelltrigger_4, spellid_5, spelltrigger_5 FROM item_template WHERE entry = ? LIMIT 1`, it.entry).Scan(
+			&spellIDs[0], &spellTriggers[0], &spellIDs[1], &spellTriggers[1], &spellIDs[2], &spellTriggers[2],
+			&spellIDs[3], &spellTriggers[3], &spellIDs[4], &spellTriggers[4]); err != nil {
+			continue
+		}
+		// ApplyItemEquipSpell(item, false, true): remove only the spells
+		// that fail the form gate (Player.cpp:8009-8017).
+		for i := 0; i < maxItemProtoSpells; i++ {
+			if spellIDs[i] <= 0 {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(uint32(spellIDs[i]))
+			if err != nil || !found {
+				continue
+			}
+			if s.checkShapeshiftCast(spell) == 0 {
+				continue
+			}
+			s.removeAurasDueToItemSpell(uint32(spellIDs[i]), itemGUID)
+		}
+		// ApplyItemEquipSpell(item, true, true): cast ON_EQUIP spells that
+		// fit the form and aren't already active from this item
+		// (Player.cpp:7990-8007).
+		for i := 0; i < maxItemProtoSpells; i++ {
+			if spellIDs[i] <= 0 || spellTriggers[i] != itemSpellTriggerOnEquip {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(uint32(spellIDs[i]))
+			if err != nil || !found {
+				continue
+			}
+			if s.checkShapeshiftCast(spell) != 0 {
+				continue
+			}
+			if s.hasAuraFromItem(uint32(spellIDs[i]), itemGUID) {
+				continue
+			}
+			s.castSpellDirectWithItem(ctx, uint32(spellIDs[i]), s.playerGUID, itemGUID)
+		}
+	}
+	// Item-set leg (Player.cpp:8032-8043): set bonuses ignore the broken
+	// state; the item is nil so the remove leg strips the whole spell and
+	// the apply leg skips when any aura of that spell is active.
+	for _, eff := range s.itemSetEff {
+		if eff == nil {
+			continue
+		}
+		for _, setSpellID := range eff.spells {
+			if setSpellID == 0 {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(setSpellID)
+			if err != nil || !found {
+				continue
+			}
+			if s.checkShapeshiftCast(spell) != 0 {
+				s.removeAura(setSpellID)
+				continue
+			}
+			if s.hasAura(setSpellID) {
+				continue
+			}
+			s.castSpellDirect(ctx, setSpellID, s.playerGUID)
+		}
+	}
+}
+
+// hasAuraFromItem reports whether an aura of the spell is active with the
+// given cast-item GUID (the form_change "already active from this item"
+// check in Player::ApplyEquipSpell, Player.cpp:7998-8004).
+func (s *session) hasAuraFromItem(spellID uint32, itemGUID uint64) bool {
+	if s == nil || itemGUID == 0 {
+		return false
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	aura, ok := s.activeAuras[spellID]
+	return ok && aura != nil && !aura.Stopped && aura.ItemGUID == itemGUID
+}

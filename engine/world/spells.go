@@ -16873,6 +16873,19 @@ func (s *session) removeAura(spellID uint32) {
 	// refreshTransformDisplay call above.
 	if wasShapeshift && s.player != nil {
 		s.removeShapeshiftFormEffects(spellID, removedShapeshiftForm)
+		// AuraEffect::HandleShapeshiftBoosts remove leg
+		// (SpellAuraEffects.cpp:1278-1316): companion casts are stripped
+		// and auras that don't fit the incoming form are removed — C++
+		// runs it at the end of the remove leg (SpellAuraEffects.cpp:1860).
+		s.handleShapeshiftBoosts(context.Background(), spellID, removedShapeshiftForm, false)
+		// Player::InitDataForForm's equip-spell re-eval on the remove leg
+		// (Player.cpp:8024-8043, called from SpellAuraEffects.cpp:1894 for
+		// players): shed form-gated item/item-set spells that no longer
+		// fit, re-cast the ones that do.
+		s.updateEquipSpellsAtFormChange(context.Background())
+		// Form preset spells are revoked as temporary spells on remove
+		// (SpellAuraEffects.cpp:1904-1906).
+		s.updateFormPresetSpells(removedShapeshiftForm, false)
 	}
 	// AuraEffect::HandleAuraModDisarm remove leg
 	// (SpellAuraEffects.cpp:2284-2348).
@@ -19028,6 +19041,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if eff.Aura == spellAuraTrackStealthed {
 			targetSess.player.PlayerFieldBytes |= playerFieldByteTrackStealthed
 		}
+		// C++ only runs HandleShapeshiftBoosts(target, true) when the form
+		// actually changed (SpellAuraEffects.cpp:1784): capture the
+		// pre-apply form before the strip leg below.
+		prevShapeshiftForm := uint8(0)
+		if targetSess.player != nil {
+			prevShapeshiftForm = targetSess.player.ShapeshiftForm
+		}
 		if eff.Aura == 36 {
 			// AuraEffect::HandleAuraModShapeshift apply leg
 			// (SpellAuraEffects.cpp:1696-1790): the other-form strip, the
@@ -19050,6 +19070,29 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// triggers the rebuild.
 		if eff.Aura == 36 {
 			_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
+			// AuraEffect::HandleShapeshiftBoosts apply leg
+			// (SpellAuraEffects.cpp:1072-1276): companion casts, stance-gated
+			// passive/glyph re-casts, and the form-specific talent procs —
+			// only when the form actually changed, like the C++ prevForm !=
+			// form gate (SpellAuraEffects.cpp:1784).
+			if uint8(eff.MiscValue) != prevShapeshiftForm {
+				targetSess.handleShapeshiftBoosts(ctx, spell.ID, uint8(eff.MiscValue), true)
+			}
+			// Player::InitDataForForm's equip-spell re-eval
+			// (Player::UpdateEquipSpellsAtFormChange, Player.cpp:8024-8043):
+			// the attack-time pair and AP/damage pair already run above via
+			// refreshTransformDisplay + calculatePlayerStats; the
+			// UpdateDisplayPower arm rides playerPowerType in the update
+			// builder; this re-casts/sheds form-gated item and item-set
+			// spells. The Dash amount recalc (SpellAuraEffects.cpp:1877) is
+			// vacuous: AuraEffect::CalculateAmount carries no form-dependent
+			// arm for MOD_INCREASE_SPEED, so the recalculated amount is
+			// identical.
+			targetSess.updateEquipSpellsAtFormChange(ctx)
+			// Learn spells for the shapeshift form
+			// (SpellAuraEffects.cpp:1897-1907): form preset spells are
+			// granted as temporary spells on apply.
+			targetSess.updateFormPresetSpells(uint8(eff.MiscValue), true)
 		}
 		// AuraEffect::HandleAuraModDisarm apply leg
 		// (SpellAuraEffects.cpp:2284-2348): the flag is set BEFORE the

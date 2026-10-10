@@ -29,6 +29,10 @@ import (
 // spellEffectLearnSpell is the pre-existing const in spells.go (= 36).
 const spellAttr0Passive = 0x40
 
+// spellAttr0HiddenClientside mirrors SPELL_ATTR0_HIDDEN_CLIENTSIDE
+// (SharedDefines.h:419).
+const spellAttr0HiddenClientside = 0x80
+
 // lookupRecord is the DBC record surface the lookup arms read (id, name and
 // arm-specific extra fields); dbc.Record implements it directly.
 type lookupRecord interface {
