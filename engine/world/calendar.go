@@ -1046,51 +1046,130 @@ func (s *session) handleCalendarRemoveEvent(ctx context.Context, payload []byte)
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		var evTime uint32
-		var evTitle string
-		_ = cdb.QueryRowContext(ctx, "SELECT eventtime, title FROM calendar_events WHERE id = ?", eventID).Scan(&evTime, &evTitle)
 
-		// SendCalendarEventRemovedAlert (CalendarMgr.cpp:549-557): u8(1), u64
-		// event id, packed event time; to every event relative, before the
-		// invites and the event are deleted.
-		remBuf := protocol.NewBuffer(16)
-		remBuf.WriteU8(1) // FIXME: If true does not SignalEvent(EVENT_CALENDAR_ACTION_PENDING)
-		remBuf.WriteU64(eventID)
-		remBuf.WritePackedTime(time.Unix(int64(evTime), 0))
-		for _, t := range calendarEventRelativeSessions(ctx, s.server, eventID) {
-			_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_REMOVED_ALERT), remBuf.Bytes(), true)
+		// WorldSession::HandleCalendarRemoveEvent (CalendarHandler.cpp:409)
+		// passes the request straight to CalendarMgr::RemoveEvent
+		// (CalendarMgr.cpp:217): no creator/moderator gate — a missing event
+		// answers CALENDAR_ERROR_EVENT_INVALID and anything else is removed.
+		var exists int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM calendar_events WHERE id = ?", eventID).Scan(&exists)
+		if exists == 0 {
+			return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
 		}
-
-		// CalendarMgr::RemoveEvent (CalendarMgr.cpp:177-217): when an event is
-		// deleted, every invitee except the remover gets a calendar mail
-		// (MailDraft(subject, body) with MAIL_CHECK_MASK_COPIED). Subject is
-		// removerGUID:title, body is the packed event time as a decimal string
-		// (CalendarEvent::BuildCalendarMailSubject/BuildCalendarMailBody).
-		// MailSender(CalendarEvent*) -> MAIL_CALENDAR (5), sender = event id,
-		// MAIL_STATIONERY_DEFAULT; the 30-day expiry arm applies.
-		now := time.Now().Unix()
-		mailBody := strconv.FormatUint(uint64(protocol.PackTime(time.Unix(int64(evTime), 0))), 10)
-		mailRows, mailErr := cdb.QueryContext(ctx, "SELECT invitee FROM calendar_invites WHERE event = ?", eventID)
-		if mailErr == nil {
-			defer mailRows.Close()
-			for mailRows.Next() {
-				var inviteeGUID uint64
-				if err := mailRows.Scan(&inviteeGUID); err != nil || inviteeGUID == s.playerGUID {
-					continue
-				}
-				nextMailID := s.server.generateMailID()
-				subject := strconv.FormatUint(s.playerGUID, 10) + ":" + evTitle
-				_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-					VALUES (?, 5, 41, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)`,
-					nextMailID, uint32(eventID), inviteeGUID, subject, mailBody, now+mailSendExpireDelay(false, 0), now)
-				s.sendMailNotify(inviteeGUID)
-			}
-		}
-
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM calendar_events WHERE id = ? AND (creator = ? OR id IN (SELECT event FROM calendar_invites WHERE invitee = ? AND rank = 2))", eventID, s.playerGUID, s.playerGUID)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM calendar_invites WHERE event = ?", eventID)
+		s.calendarRemoveEventFully(ctx, cdb, eventID, s.playerGUID)
 	}
 	return s.sendCalendarCommandResult(CalendarOk)
+}
+
+// calendarRemoveEventFully mirrors CalendarMgr::RemoveEvent
+// (CalendarMgr.cpp:217-262): the SMSG_CALENDAR_EVENT_REMOVED_ALERT goes to
+// every event relative before anything is deleted, every invitee except the
+// remover gets a calendar mail (MailDraft with MAIL_CHECK_MASK_COPIED;
+// subject "removerGUID:title", body packed event time), then the invites and
+// the event rows are deleted.
+func (s *session) calendarRemoveEventFully(ctx context.Context, cdb *sql.DB, eventID uint64, removerGUID uint64) {
+	var evTime uint32
+	var evTitle string
+	_ = cdb.QueryRowContext(ctx, "SELECT eventtime, title FROM calendar_events WHERE id = ?", eventID).Scan(&evTime, &evTitle)
+
+	// SendCalendarEventRemovedAlert (CalendarMgr.cpp:549-557): u8(1), u64
+	// event id, packed event time; to every event relative, before the
+	// invites and the event are deleted.
+	remBuf := protocol.NewBuffer(16)
+	remBuf.WriteU8(1) // FIXME: If true does not SignalEvent(EVENT_CALENDAR_ACTION_PENDING)
+	remBuf.WriteU64(eventID)
+	remBuf.WritePackedTime(time.Unix(int64(evTime), 0))
+	for _, t := range calendarEventRelativeSessions(ctx, s.server, eventID) {
+		_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_REMOVED_ALERT), remBuf.Bytes(), true)
+	}
+
+	// CalendarMgr::RemoveEvent (CalendarMgr.cpp:217-262): when an event is
+	// deleted, every invitee except the remover gets a calendar mail
+	// (MailDraft(subject, body) with MAIL_CHECK_MASK_COPIED). Subject is
+	// removerGUID:title, body is the packed event time as a decimal string
+	// (CalendarEvent::BuildCalendarMailSubject/BuildCalendarMailBody).
+	// MailSender(CalendarEvent*) -> MAIL_CALENDAR (5), sender = event id,
+	// MAIL_STATIONERY_DEFAULT; the 30-day expiry arm applies.
+	now := time.Now().Unix()
+	mailBody := strconv.FormatUint(uint64(protocol.PackTime(time.Unix(int64(evTime), 0))), 10)
+	if mailRows, mailErr := cdb.QueryContext(ctx, "SELECT invitee FROM calendar_invites WHERE event = ?", eventID); mailErr == nil {
+		for mailRows.Next() {
+			var inviteeGUID uint64
+			if err := mailRows.Scan(&inviteeGUID); err != nil || inviteeGUID == removerGUID {
+				continue
+			}
+			nextMailID := s.server.generateMailID()
+			subject := strconv.FormatUint(removerGUID, 10) + ":" + evTitle
+			_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+				VALUES (?, 5, 41, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)`,
+				nextMailID, uint32(eventID), inviteeGUID, subject, mailBody, now+mailSendExpireDelay(false, 0), now)
+			s.sendMailNotify(inviteeGUID)
+		}
+		mailRows.Close()
+	}
+
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM calendar_events WHERE id = ?", eventID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM calendar_invites WHERE event = ?", eventID)
+}
+
+// removePlayerGuildEventsAndSignups mirrors
+// CalendarMgr::RemovePlayerGuildEventsAndSignups (CalendarMgr.cpp:295), which
+// Guild::HandleLeaveMember (Guild.cpp:1558) calls on both the leave and the
+// disband paths: guild events and announcements created by the player go
+// through the full RemoveEvent path, and the player's own invites to guild
+// events of the given guild are dropped with an invite-remove broadcast
+// (SendCalendarEventInviteRemove, CalendarMgr.cpp:559; the remove-ALERT arm
+// only fires for non-guild events so it stays silent here).
+func (s *session) removePlayerGuildEventsAndSignups(ctx context.Context, playerGUID uint64, guildID uint32) {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return
+	}
+	var createdIDs []uint64
+	if rows, err := cdb.QueryContext(ctx, `SELECT id FROM calendar_events WHERE creator = ?
+		AND (flags & ?) != 0`, playerGUID, calendarFlagGuildEvent|calendarFlagWithoutInvites); err == nil {
+		for rows.Next() {
+			var eventID uint64
+			if err := rows.Scan(&eventID); err == nil {
+				createdIDs = append(createdIDs, eventID)
+			}
+		}
+		rows.Close()
+	}
+	for _, eventID := range createdIDs {
+		s.calendarRemoveEventFully(ctx, cdb, eventID, playerGUID)
+	}
+	type guildInvite struct {
+		inviteID uint64
+		eventID  uint64
+		invitee  uint64
+		evFlags  uint32
+	}
+	var invites []guildInvite
+	if rows, err := cdb.QueryContext(ctx, `SELECT i.id, i.event, i.invitee, e.flags FROM calendar_invites i
+		JOIN calendar_events e ON e.id = i.event
+		WHERE i.invitee = ? AND (e.flags & ?) != 0
+		AND e.creator IN (SELECT guid FROM guild_member WHERE guildid = ?)`,
+		playerGUID, calendarFlagGuildEvent, guildID); err == nil {
+		for rows.Next() {
+			var inv guildInvite
+			if err := rows.Scan(&inv.inviteID, &inv.eventID, &inv.invitee, &inv.evFlags); err == nil {
+				invites = append(invites, inv)
+			}
+		}
+		rows.Close()
+	}
+	for _, inv := range invites {
+		remBuf := protocol.NewBuffer(24)
+		remBuf.WritePackedGUID(inv.invitee)
+		remBuf.WriteU64(inv.eventID)
+		remBuf.WriteU32(inv.evFlags)
+		remBuf.WriteU8(1) // FIXME
+		for _, t := range calendarEventRelativeSessions(ctx, s.server, inv.eventID) {
+			_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_REMOVED), remBuf.Bytes(), true)
+		}
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM calendar_invites WHERE id = ?", inv.inviteID)
+	}
 }
 
 // handleCalendarCopyEvent processes CMSG_CALENDAR_COPY_EVENT (0x430).

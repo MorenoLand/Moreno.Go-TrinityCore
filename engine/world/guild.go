@@ -802,6 +802,10 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 	if guildID == 0 {
 		return true
 	}
+	// Guild::HandleLeaveMember (Guild.cpp:1558):
+	// RemovePlayerGuildEventsAndSignups runs on both the leave and the
+	// disband path.
+	s.removePlayerGuildEventsAndSignups(ctx, s.playerGUID, uint32(guildID))
 	// Guild::HandleLeaveMember (Guild.cpp:1529): the leader cannot leave while
 	// other members remain; a lone leader disbands the guild instead of leaving.
 	if uint64(leaderGUID) == s.playerGUID {
@@ -1034,6 +1038,13 @@ func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 	newRank := targetRank - 1
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = ? WHERE guid = ? AND guildid = ?", newRank, targetGUID, guildID)
 
+	// Guild::Member::ChangeRank (Guild.cpp:577-588): the online target's
+	// PLAYER_GUILDRANK updates alongside the DB row (player->SetRank).
+	if targetSess := s.server.findSessionByGUID(uint64(targetGUID)); targetSess != nil && targetSess.player != nil {
+		targetSess.player.GuildRank = uint8(newRank)
+		targetSess.sendPlayerUpdate()
+	}
+
 	// Guild::HandleUpdateMemberRank (Guild.cpp:1644):
 	// _LogEvent(GUILD_EVENT_LOG_PROMOTE_PLAYER, player, member, newRankId)
 	s.logGuildEvent(ctx, uint32(guildID), guildEventLogPromotePlayer, s.playerGUID, uint64(targetGUID), uint8(newRank))
@@ -1126,6 +1137,13 @@ func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 	newRank := targetRank + 1
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = ? WHERE guid = ? AND guildid = ?", newRank, targetGUID, guildID)
 
+	// Guild::Member::ChangeRank (Guild.cpp:577-588): the online target's
+	// PLAYER_GUILDRANK updates alongside the DB row (player->SetRank).
+	if targetSess := s.server.findSessionByGUID(uint64(targetGUID)); targetSess != nil && targetSess.player != nil {
+		targetSess.player.GuildRank = uint8(newRank)
+		targetSess.sendPlayerUpdate()
+	}
+
 	// Guild::HandleUpdateMemberRank (Guild.cpp:1644):
 	// _LogEvent(GUILD_EVENT_LOG_DEMOTE_PLAYER, player, member, newRankId)
 	s.logGuildEvent(ctx, uint32(guildID), guildEventLogDemotePlayer, s.playerGUID, uint64(targetGUID), uint8(newRank))
@@ -1190,6 +1208,16 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET leaderguid = ? WHERE guildid = ?", newLeaderGUID, guildID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 1 WHERE guid = ? AND guildid = ?", s.playerGUID, guildID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 0 WHERE guid = ? AND guildid = ?", newLeaderGUID, guildID)
+
+	// Guild::HandleSetLeader (Guild.cpp:1373): the old leader drops to
+	// GR_OFFICER (Guild.h:72) through Member::ChangeRank, which also
+	// player->SetRank's the connected player — the new leader takes rank 0.
+	s.player.GuildRank = 1
+	s.sendPlayerUpdate()
+	if newLeaderSess := s.server.findSessionByGUID(uint64(newLeaderGUID)); newLeaderSess != nil && newLeaderSess.player != nil {
+		newLeaderSess.player.GuildRank = 0
+		newLeaderSess.sendPlayerUpdate()
+	}
 
 	// Guild::HandleSetLeader (Guild.cpp:1379):
 	// _BroadcastEvent(GE_LEADER_CHANGED, ObjectGuid::Empty, player->GetName(),
