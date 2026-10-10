@@ -23671,18 +23671,51 @@ func (s *session) handleCancelAutoRepeatSpell(payload []byte) bool {
 }
 
 // handleCancelTempEnchantment processes CMSG_CANCEL_TEMP_ENCHANTMENT (0x379).
-// Reference: WorldSession::HandleCancelTempEnchantmentOpcode (ItemHandler.cpp:1145).
+// Reference: WorldSession::HandleCancelTempEnchantmentOpcode (ItemHandler.cpp:1145-1161).
 func (s *session) handleCancelTempEnchantment(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	slot, err := r.ReadU32()
+	eslot, err := r.ReadU32()
 	if err != nil {
 		return false
 	}
-	_ = slot
-	s.sendPlayerUpdate()
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+	// ItemHandler.cpp:1151 — applies only to equipped items
+	// (Player::IsEquipmentPos(INVENTORY_SLOT_BAG_0, eslot), bag 0 slots < 19).
+	if eslot >= uint32(equipSlotEnd) {
+		return true
+	}
+	var instanceGUID int64
+	var enchStr string
+	err = cdb.QueryRowContext(ctx, `SELECT ii.guid, COALESCE(ii.enchantments, '')
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, eslot).Scan(&instanceGUID, &enchStr)
+	if err != nil || instanceGUID == 0 {
+		return true
+	}
+	// ItemHandler.cpp:1157 — nothing to clear when the TEMP_ENCHANTMENT_SLOT
+	// (slot 1 -> index 3 of the column, ItemDefines.h:147) is empty.
+	fields := strings.Fields(enchStr)
+	if len(fields) <= 3 {
+		return true
+	}
+	tempID, _ := strconv.ParseUint(fields[3], 10, 32)
+	if tempID == 0 {
+		return true
+	}
+	// Player::ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, false) +
+	// item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT): zero the slot's three
+	// fields, then recompute the equipped stat mods (syncEquipmentCache is
+	// the same call the imbue path makes after writeItemEnchantmentSlot).
+	s.writeItemEnchantmentSlot(ctx, uint64(instanceGUID), 1, 0, 0)
+	s.syncEquipmentCache(ctx)
 	return true
 }
 

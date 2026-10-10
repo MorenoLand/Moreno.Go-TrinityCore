@@ -3012,6 +3012,10 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 	}
 	dstKey, ok := s.inventoryBagKey(ctx, dstBag)
 	if !ok {
+		// ItemHandler.cpp HandleSplitItemOpcode: IsValidPos(dstbag, dstslot,
+		// false) answers EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT — not a silent
+		// return (same arm as the autostore handler below).
+		s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcGUID))
 		return true
 	}
 	db := s.server.CharactersStore.DB
@@ -3124,6 +3128,10 @@ func (s *session) handleAutoStoreBagItem(ctx context.Context, payload []byte) bo
 	}
 	dstKey, ok := s.inventoryBagKey(ctx, dstBag)
 	if !ok {
+		// ItemHandler.cpp:721-725: IsValidPos(dstbag, NULL_SLOT, false)
+		// answers EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT for an invalid
+		// destination bag — not a silent return.
+		s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(itemGUID))
 		return true
 	}
 	slot, ok := s.freeInventorySlot(ctx, dstKey)
