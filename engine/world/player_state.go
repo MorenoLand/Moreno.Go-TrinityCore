@@ -4965,10 +4965,6 @@ func (s *session) handleTogglePvP(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	const (
-		playerFlagsInPvP    = 0x02
-		playerFlagsPvPTimer = 0x04
-	)
 	// Reference: WorldSession::HandleTogglePvP (MiscHandler.cpp:485) +
 	// TogglePvP::HasPvPStatus (MiscPackets.h:309): the opcode carries an
 	// optional u8. With the byte present the flags are set explicitly;
@@ -4977,18 +4973,18 @@ func (s *session) handleTogglePvP(ctx context.Context, payload []byte) bool {
 	// s.pvpHostile and the flag itself) — documented delta.
 	if len(payload) >= 1 {
 		if payload[0] != 0 {
-			s.player.PlayerFlags |= playerFlagsInPvP
-			s.player.PlayerFlags &^= playerFlagsPvPTimer
+			s.player.PlayerFlags |= playerFlagInPVP
+			s.player.PlayerFlags &^= playerFlagPVPTimer
 		} else {
-			s.player.PlayerFlags &^= playerFlagsInPvP
-			s.player.PlayerFlags |= playerFlagsPvPTimer
+			s.player.PlayerFlags &^= playerFlagInPVP
+			s.player.PlayerFlags |= playerFlagPVPTimer
 		}
-	} else if s.player.PlayerFlags&playerFlagsInPvP != 0 {
-		s.player.PlayerFlags &^= playerFlagsInPvP
-		s.player.PlayerFlags |= playerFlagsPvPTimer
+	} else if s.player.PlayerFlags&playerFlagInPVP != 0 {
+		s.player.PlayerFlags &^= playerFlagInPVP
+		s.player.PlayerFlags |= playerFlagPVPTimer
 	} else {
-		s.player.PlayerFlags |= playerFlagsInPvP
-		s.player.PlayerFlags &^= playerFlagsPvPTimer
+		s.player.PlayerFlags |= playerFlagInPVP
+		s.player.PlayerFlags &^= playerFlagPVPTimer
 	}
 	s.sendPlayerUpdate()
 	return true

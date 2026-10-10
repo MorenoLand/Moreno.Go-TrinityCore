@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -1910,15 +1909,12 @@ func (s *session) handleInspectArenaTeams(ctx context.Context, payload []byte) b
 	if target.Map != s.player.Map {
 		return true
 	}
-	dx := float64(s.player.X - target.X)
-	dy := float64(s.player.Y - target.Y)
-	dz := float64(s.player.Z - target.Z)
-	if math.Sqrt(dx*dx+dy*dy+dz*dz) > inspectDistance {
+	if !inspectWithinDistance(s.player, target) {
 		return true
 	}
 
 	// IsValidAttackTarget arm (ArenaTeamHandler.cpp:51)
-	if s.security == 0 && playerTeam(s.player.Race) != playerTeam(target.Race) {
+	if inspectBlockedByHostility(s.player, target) {
 		return true
 	}
 
@@ -1973,13 +1969,10 @@ func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) b
 	if target.Map != s.player.Map {
 		return true
 	}
-	dx := float64(s.player.X - target.X)
-	dy := float64(s.player.Y - target.Y)
-	dz := float64(s.player.Z - target.Z)
-	if math.Sqrt(dx*dx+dy*dy+dz*dz) > inspectDistance {
+	if !inspectWithinDistance(s.player, target) {
 		return true
 	}
-	if s.security == 0 && playerTeam(s.player.Race) != playerTeam(target.Race) {
+	if inspectBlockedByHostility(s.player, target) {
 		return true
 	}
 
