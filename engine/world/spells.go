@@ -6079,11 +6079,9 @@ func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) 
 		return false
 	}
 	// finishSpellCast serves player-initiated casts (m_triggeredByAuraSpell
-	// is null), so the non-triggered DR group applies; Go's
-	// getDiminishingReturnsGroup mirrors diminishingGroupCompute(false)
-	// (SpellInfo.cpp:2242) — the triggered variant differs only for the
-	// mechanic-STUN/ROOT fallbacks (SpellInfo.cpp:2424/2428).
-	group := getDiminishingReturnsGroup(spell.ID, spell.Mechanic)
+	// is null), so the non-triggered DR group applies
+	// (getDiminishingReturnsGroup(..., false), SpellInfo.cpp:2242).
+	group := getDiminishingReturnsGroup(spell.ID, spell.Mechanic, false)
 	if group == DiminishingNone {
 		return false
 	}
@@ -6113,7 +6111,7 @@ func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) 
 		if err != nil || !found {
 			continue
 		}
-		if getDiminishingReturnsGroup(aura.SpellID, auraSpell.Mechanic) != group {
+		if getDiminishingReturnsGroup(aura.SpellID, auraSpell.Mechanic, false) != group {
 			continue
 		}
 		// Aura::GetDuration is the live remaining duration
@@ -6133,7 +6131,7 @@ func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) 
 		// target is DR-affected) then the level modifier. Run on the
 		// target session so its GetDiminishing level applies; the taunt
 		// special-case mods only apply to creature targets (Unit.cpp:9069).
-		if _, newDuration, ok := targetSess.applyDiminishingToDuration(spell.ID, spell.Mechanic, uint32(maxDuration), true); ok && newDuration > 0 && newDuration < existing {
+		if _, newDuration, ok := targetSess.applyDiminishingToDuration(spell.ID, spell.Mechanic, uint32(maxDuration), true, false); ok && newDuration > 0 && newDuration < existing {
 			return true
 		}
 	}
@@ -9253,7 +9251,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false, 0)
+					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false, 0, false)
 				}
 				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
 				// reflected chain jump resolves its unit to the caster, so a
@@ -9261,7 +9259,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// caster — the same victim-selection arms as the loop above.
 				if len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
 					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
-					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0)
+					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -12958,6 +12956,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// spells (Unit::TriggerAurasProcOnEvent, Unit.cpp:10424, Spell::IsProcDisabled).
 	s.triggeredNoProcEvents++
 	defer func() { s.triggeredNoProcEvents-- }()
+	// Spell::m_triggeredByAuraSpell (Spell.h:808): the diminishing-returns
+	// group resolves the triggered variant when the cast was triggered by an
+	// aura (Spell::PreprocessSpellHit, Spell.cpp:2798). The flag is consumed
+	// here — nested triggered casts (EffectTriggerSpell, item procs) start
+	// plain, matching C++ where each Spell object carries its own
+	// m_triggeredByAuraSpell.
+	triggeredByAura := s.triggeredByAuraCast
+	s.triggeredByAuraCast = false
 	// Spell::m_hitMask (Spell.cpp:2603): the triggered cast is its own Spell
 	// object with its own accumulating mask; save/reset/restore keeps a
 	// nested triggered cast from polluting the outer cast's FINISH/CAST-phase
@@ -13367,7 +13373,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if schoolMask == 0 {
 					schoolMask = 1
 				}
-				s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID)
+				s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura)
 			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 				healAmount := uint32(eff.BasePoints + 1)
 				if healAmount == 0 && spellID == ProcSpellCrusader {
@@ -13431,7 +13437,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
-		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, auraCasterGUID, false, castItemGUID)
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, auraCasterGUID, false, castItemGUID, triggeredByAura)
 	}
 
 	// Spell::handle_immediate (Spell.cpp:3568-3591): channeled spells start
@@ -19206,8 +19212,11 @@ func isExistingAreaAuraOfTarget(aura *activeAura, exSpell wotlk.Spell, targetGUI
 // castItemGUID is the raw item instance GUID when the aura comes from an item
 // cast (Aura::m_castItemGuid, SpellAuras.cpp:430: m_castItemGuid(createInfo.
 // CastItemGUID)); 0 otherwise. The steal path passes 0 — the C++ steal
-// createInfo carries no cast item (Unit.cpp:4020-4023).
-func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64) {
+// createInfo carries no cast item (Unit.cpp:4020-4023). triggeredByAura
+// selects the aura-proc DR group variant (Spell::PreprocessSpellHit,
+// Spell.cpp:2798 — m_triggeredByAuraSpell != null); only the triggered-cast
+// dispatch passes true.
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64, triggeredByAura bool) {
 	if s.player == nil {
 		return
 	}
@@ -19268,7 +19277,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		var drGroup DiminishingGroup
 		if !positive && durationMs > 0 {
 			var ok bool
-			drGroup, durationMs, ok = targetSess.applyDiminishingToDuration(spell.ID, spell.Mechanic, durationMs, true)
+			drGroup, durationMs, ok = targetSess.applyDiminishingToDuration(spell.ID, spell.Mechanic, durationMs, true, triggeredByAura)
 			if !ok {
 				// Target is immune to crowd control due to DR
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spell.ID, 38), true) // SPELL_FAILED_IMMUNE = 38

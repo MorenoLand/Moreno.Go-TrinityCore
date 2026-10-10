@@ -56,7 +56,12 @@ type diminishingReturn struct {
 
 // getDiminishingReturnsGroup resolves the diminishing returns group for a spell ID and mechanic.
 // Mirrors TrinityCore SpellInfo::diminishingGroupCompute (SpellInfo.cpp:2276-2433).
-func getDiminishingReturnsGroup(spellID, mechanic uint32) DiminishingGroup {
+// The triggered flag selects the aura-proc variant (SpellInfo.cpp:2424/2428):
+// mechanic-STUN resolves to DIMINISHING_STUN (random proc stuns) and
+// mechanic-ROOT to DIMINISHING_ROOT (random proc roots) when the cast was
+// triggered by an aura (Spell::m_triggeredByAuraSpell != null,
+// Spell.cpp:2798); the explicit spell-ID overrides above ignore the flag.
+func getDiminishingReturnsGroup(spellID, mechanic uint32, triggered bool) DiminishingGroup {
 	// Specific spell overrides matching TrinityCore
 	switch spellID {
 	// Cyclone
@@ -170,6 +175,11 @@ func getDiminishingReturnsGroup(spellID, mechanic uint32) DiminishingGroup {
 	case 5: // MECHANIC_FEAR
 		return DiminishingFear
 	case 7, 13: // MECHANIC_ROOT, FREEZE
+		// SpellInfo.cpp:2428 — random proc roots (Frostbite, Shattered
+		// Barrier) track DIMINISHING_ROOT when triggered by an aura.
+		if triggered {
+			return DiminishingRoot
+		}
 		return DiminishingControlledRoot
 	case 9: // MECHANIC_SILENCE
 		return DiminishingSilence
@@ -178,6 +188,11 @@ func getDiminishingReturnsGroup(spellID, mechanic uint32) DiminishingGroup {
 	case 11: // MECHANIC_SNARE
 		return DiminishingLimitOnly
 	case 12: // MECHANIC_STUN
+		// SpellInfo.cpp:2424 — random proc stuns (Impact, Blackout) track
+		// DIMINISHING_STUN when triggered by an aura.
+		if triggered {
+			return DiminishingStun
+		}
 		return DiminishingControlledStun
 	case 18: // MECHANIC_BANISH
 		return DiminishingBanish
@@ -206,6 +221,7 @@ func isGroupDurationLimited(group DiminishingGroup) bool {
 		DiminishingScatterShot,
 		DiminishingSilence,
 		DiminishingSleep,
+		DiminishingStun,
 		DiminishingLimitOnly,
 		DiminishingDragonsBreath:
 		return true
@@ -305,8 +321,10 @@ func (s *session) clearDiminishings() {
 
 // applyDiminishingToDuration calculates the final CC duration and determines immunity.
 // Mirrors TrinityCore Unit::ApplyDiminishingToDuration (Unit.cpp:9036-9099).
-func (s *session) applyDiminishingToDuration(spellID, mechanic uint32, durationMs uint32, isPvP bool) (DiminishingGroup, uint32, bool) {
-	group := getDiminishingReturnsGroup(spellID, mechanic)
+// The triggered flag selects the aura-proc DR group variant
+// (Spell::PreprocessSpellHit, Spell.cpp:2798 — m_triggeredByAuraSpell != null).
+func (s *session) applyDiminishingToDuration(spellID, mechanic uint32, durationMs uint32, isPvP, triggered bool) (DiminishingGroup, uint32, bool) {
+	group := getDiminishingReturnsGroup(spellID, mechanic, triggered)
 	if group == DiminishingNone || durationMs == 0 {
 		return DiminishingNone, durationMs, true
 	}

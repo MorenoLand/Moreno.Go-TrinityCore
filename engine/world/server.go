@@ -446,6 +446,7 @@ type session struct {
 	diminishing               [DiminishingMax]diminishingReturn
 	procICD                   map[uint32]time.Time
 	triggeredNoProcEvents     int
+	triggeredByAuraCast       bool // Spell::m_triggeredByAuraSpell (Spell.h:808) — set when the triggered cast below was triggered by an aura proc (AuraEffect::HandleProcTriggerSpellAuraProc passes the triggering effect, SpellAuraEffects.cpp:5706); consumed at castSpellDirectWithOverrides entry so nested triggered casts start plain, matching the per-Spell-object lifetime. Selects the triggered DR group variant in PreprocessSpellHit (Spell.cpp:2798).
 	// attackPowerOfArmorApplied tracks the SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
 	// (285) total currently folded into AttackPower/RangedAttackPower, so the
 	// 30s periodic tick (SpellAuraEffects.cpp:5635-5641) can apply amount

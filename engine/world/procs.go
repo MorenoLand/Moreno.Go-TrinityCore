@@ -2297,9 +2297,17 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 				if i < len(aura.Amounts) && aura.Amounts[i] > 0 {
 					basePoint = uint32(aura.Amounts[i])
 				}
+				// HandleProcTriggerSpellAuraProc passes the triggering aura
+				// effect (SpellAuraEffects.cpp:5706), so m_triggeredByAuraSpell
+				// is set — the DR group resolves the triggered variant
+				// (Spell.cpp:2798).
+				s.triggeredByAuraCast = true
 				s.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, triggerTargetGUID, basePoint)
+				s.triggeredByAuraCast = false
 			} else {
+				s.triggeredByAuraCast = true
 				s.castSpellDirect(ctx, eff.TriggerSpell, triggerTargetGUID)
+				s.triggeredByAuraCast = false
 			}
 		}
 		if disableProc {
