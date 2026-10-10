@@ -156,6 +156,21 @@ func resolveDestDestPosition(store *wotlk.Store, target uint32, radiusIndex uint
 	return dx + dist*float32(math.Cos(float64(angle))), dy + dist*float32(math.Sin(float64(angle))), dz, true
 }
 
+// spellHasCasterDestTarget reports whether any active effect carries a
+// caster-dest implicit target (SelectImplicitCasterDestTargets,
+// Spell.cpp:1312).
+func spellHasCasterDestTarget(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if isCasterDestTarget(eff.ImplicitTargetA) || isCasterDestTarget(eff.ImplicitTargetB) {
+			return true
+		}
+	}
+	return false
+}
+
 // spellHasDestFamilyTarget reports whether any active effect carries a
 // target-dest or dest-dest implicit target.
 func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
@@ -173,7 +188,8 @@ func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
 
 // resolveImplicitSpellDestination mirrors the destination half of
 // Spell::SelectSpellTargets (Spell.cpp:758-794) for the target-dest and
-// dest-dest families, the 89 traj destination, the 76/106 channel
+// dest-dest families, the caster-dest family (SelectImplicitCasterDestTargets,
+// Spell.cpp:1312), the 89 traj destination, the 76/106 channel
 // destinations, and TARGET_DEST_NEARBY_ENTRY (46, the DEST half of
 // Spell::SelectImplicitNearbyTargets, Spell.cpp:1036): it starts from the
 // client-supplied destination (falling back to the caster position, like
@@ -189,7 +205,7 @@ func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
 // false when a 46 effect finds no object, which fails the cast with
 // SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
 func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) (protocol.SpellTargetData, bool) {
-	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell) && !spellHasDestNearbyEntryTarget(spell)) {
+	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasCasterDestTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell) && !spellHasDestNearbyEntryTarget(spell)) {
 		return target, true
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
@@ -209,6 +225,24 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 		}
 		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			switch {
+			case isCasterDestTarget(targetType):
+				// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1312-1424):
+				// caster-dest implicit targets (18/32/41-44/47-50/55/72/73)
+				// set the spell destination from the caster-relative position
+				// on every cast — C++ m_targets.SetDst at the end of the
+				// function, not just for totem summons (the totem path in
+				// totems.go predates this general resolution). The
+				// destination starts from the caster's position
+				// (dest(*m_caster), Spell.cpp:1314), ignoring any
+				// client-supplied dest; like the other families, later
+				// effects overwrite earlier ones. The script
+				// DestinationTargetSelect handlers are the documented
+				// no-bridge leg (no ScriptMgr model).
+				combatReach := s.player.CombatReach
+				if combatReach <= 0 {
+					combatReach = 1.5
+				}
+				x, y, z = resolveCasterDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach)
 			case isTargetDestTarget(targetType):
 				// C++ asserts a non-null object target here; without a
 				// resolvable unit target Go keeps the current destination.

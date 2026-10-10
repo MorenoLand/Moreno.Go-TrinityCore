@@ -101,14 +101,14 @@ func spellEffectExplicitUsedTargetFlag(effect uint32) uint32 {
 		return targetFlagGameObjectItem // TARGET_OBJECT_TYPE_GOBJ_ITEM
 	case 86, 87, 88, 89:
 		return targetFlagGameObject // TARGET_OBJECT_TYPE_GOBJ
-	case 53, 54, 99, 101, 127, 156:
+	case 53, 54, 99, 101, 127, 156, 158:
 		return targetFlagItem // TARGET_OBJECT_TYPE_ITEM
 	case 1, 2, 6, 7, 8, 9, 10, 11, 16, 17, 19, 24, 31, 35, 36, 38, 40, 41,
 		44, 45, 55, 57, 58, 59, 62, 63, 65, 66, 67, 68, 70, 71, 73, 75,
 		80, 82, 90, 91, 92, 95, 96, 98, 100, 102, 103, 108, 111, 112,
 		114, 115, 117, 119, 120, 121, 123, 124, 125, 126, 128, 129, 130,
 		132, 133, 136, 137, 138, 139, 140, 141, 142, 143, 146, 147, 150,
-		153, 154, 157:
+		153, 154, 157, 159, 160, 161, 162, 163, 164:
 		return targetFlagUnit // TARGET_OBJECT_TYPE_UNIT
 	default:
 		return 0
