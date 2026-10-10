@@ -1544,6 +1544,7 @@ const (
 	stableSuccessStable  uint8 = 0x08 // STABLE_SUCCESS_STABLE
 	stableSuccessUnslot  uint8 = 0x09 // STABLE_SUCCESS_UNSTABLE
 	stableSuccessBuySlot uint8 = 0x0A // STABLE_SUCCESS_BUY_SLOT
+	stableErrExotic      uint8 = 0x0C // STABLE_ERR_EXOTIC
 )
 
 // handleBuyStableSlot processes CMSG_BUY_STABLE_SLOT (0x272).
@@ -1553,39 +1554,46 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 		return false
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // npcGUID
+	npcGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	// NPCHandler.cpp:566-570 (HandleBuyStableSlot): CheckStableMaster gates
+	// the purchase; a failed check answers STABLE_ERR_STABLE (the feign-death
+	// strip below it is the standing tree-wide no-bridge: no player unit states).
+	if !s.checkStableMaster(ctx, npcGUID) {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return false
 	}
 
-	var purchasedCount int
-	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_pet WHERE owner = ? AND slot > 0", s.playerGUID).Scan(&purchasedCount)
-
-	if purchasedCount >= len(stableSlotPrices) {
-		res := protocol.NewBuffer(1)
-		res.WriteU8(stableErrStable)
-		_ = s.write(uint16(protocol.OpcodeSMSG_STABLE_RESULT), res.Bytes(), true)
+	// NPCHandler.cpp:575-586: the slot price is StableSlotPrices[MaxStabledPets+1]
+	// and the cap gate is MaxStabledPets < MAX_PET_STABLES (PetDefines.h:36);
+	// MaxStabledPets is characters.stable_slots (loaded at player_state.go:2914,
+	// saved with the character row). The purchase persists, and the Go price
+	// table keeps its standing order [5s, 5g, 50g, 150g].
+	if s.player.StableSlots >= uint8(len(stableSlotPrices)) {
+		s.sendPetStableResult(stableErrStable)
 		return true
 	}
 
-	cost := stableSlotPrices[purchasedCount]
+	cost := stableSlotPrices[s.player.StableSlots]
 	if s.player.Money < cost {
-		res := protocol.NewBuffer(1)
-		res.WriteU8(stableErrMoney)
-		_ = s.write(uint16(protocol.OpcodeSMSG_STABLE_RESULT), res.Bytes(), true)
+		s.sendPetStableResult(stableErrMoney)
 		return true
 	}
 
 	s.player.Money -= cost
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	s.player.StableSlots++
+	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ?, stable_slots = ? WHERE guid = ?", s.player.Money, s.player.StableSlots, s.playerGUID)
 
-	res := protocol.NewBuffer(1)
-	res.WriteU8(stableSuccessBuySlot)
-	_ = s.write(uint16(protocol.OpcodeSMSG_STABLE_RESULT), res.Bytes(), true)
+	s.sendPetStableResult(stableSuccessBuySlot)
 	s.sendPlayerUpdate()
-	s.debug("stable slot purchased", "account", s.accountName, "slot", purchasedCount+1)
+	s.debug("stable slot purchased", "account", s.accountName, "slot", s.player.StableSlots)
 	return true
 }
 
@@ -1737,6 +1745,32 @@ func (s *session) checkStableMaster(ctx context.Context, guid uint64) bool {
 	return s.creatureHasNpcFlag(ctx, guid, npcFlagStablemaster)
 }
 
+// checkStabledPetTameable mirrors the exotic-pet arm shared by
+// HandleStableSwapPet (NPCHandler.cpp:641-649) and HandleUnstablePet
+// (NPCHandler.cpp:475-483): the stabled pet's template must be tameable by
+// this player; an exotic-capable template answers STABLE_ERR_EXOTIC, any
+// other failure (including the null-creatureInfo arm) STABLE_ERR_STABLE.
+func (s *session) checkStabledPetTameable(ctx context.Context, creatureEntry uint32) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		s.sendPetStableResult(stableErrStable)
+		return false
+	}
+	var ctype, family, typeFlags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0), COALESCE(family, 0), COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&ctype, &family, &typeFlags); err != nil {
+		s.sendPetStableResult(stableErrStable)
+		return false
+	}
+	if !creatureTameable(ctype, family, typeFlags, s.canTameExoticPets()) {
+		if creatureTameable(ctype, family, typeFlags, true) {
+			s.sendPetStableResult(stableErrExotic)
+		} else {
+			s.sendPetStableResult(stableErrStable)
+		}
+		return false
+	}
+	return true
+}
+
 // sendPetStableResult mirrors WorldSession::SendPetStableResult.
 func (s *session) sendPetStableResult(code uint8) {
 	buf := protocol.NewBuffer(1)
@@ -1783,7 +1817,9 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 			}
 		}
 		rows.Close()
-		for slot := int64(1); slot <= 4; slot++ {
+		// NPCHandler.cpp:423: the free-slot scan runs over freeSlot < MaxStabledPets
+		// (slot = PET_SAVE_FIRST_STABLE_SLOT + freeSlot), i.e. slots 1..stable_slots.
+		for slot := int64(1); slot <= int64(s.player.StableSlots); slot++ {
 			if _, used := taken[slot]; !used {
 				freeSlot = slot
 				break
@@ -1863,9 +1899,13 @@ func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	var stabledSlot int64
-	err = cdb.QueryRowContext(ctx, "SELECT slot FROM character_pet WHERE owner = ? AND id = ? AND slot > 0", s.playerGUID, petNumber).Scan(&stabledSlot)
+	var stabledEntry uint32
+	err = cdb.QueryRowContext(ctx, "SELECT slot, entry FROM character_pet WHERE owner = ? AND id = ? AND slot > 0", s.playerGUID, petNumber).Scan(&stabledSlot, &stabledEntry)
 	if err != nil {
 		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	if !s.checkStabledPetTameable(ctx, stabledEntry) {
 		return true
 	}
 	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ? WHERE owner = ? AND slot = 0", stabledSlot, s.playerGUID); err != nil {
@@ -1903,6 +1943,14 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	var stabledEntry uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT entry FROM character_pet WHERE owner = ? AND id = ? AND slot > 0", s.playerGUID, petNumber).Scan(&stabledEntry); err != nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	if !s.checkStabledPetTameable(ctx, stabledEntry) {
 		return true
 	}
 	var active int64
@@ -2692,10 +2740,9 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 	buf := protocol.NewBuffer(16 + len(pets)*32)
 	buf.WriteU64(npcGUID)
 	buf.WriteU8(uint8(len(pets)))
-	// NPCHandler.cpp:328: the slots byte is the player's MaxStabledPets.
-	// Go does not track purchased slot counts (C++ characters.stableSlots),
-	// so the stable always reports the maximum.
-	buf.WriteU8(4) // num slots
+	// NPCHandler.cpp:328: the slots byte is the player's MaxStabledPets, i.e.
+	// characters.stable_slots (bridged by handleBuyStableSlot).
+	buf.WriteU8(s.player.StableSlots) // num slots
 	for _, p := range pets {
 		buf.WriteU32(p.ID)
 		buf.WriteU32(p.Entry)
