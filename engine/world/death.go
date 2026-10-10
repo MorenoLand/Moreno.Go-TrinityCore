@@ -1432,19 +1432,29 @@ func (s *session) deleteCorpseDataForResetBinds(ctx context.Context, charGUID ui
 	}
 }
 
-// resurrectPlayer mirrors Player::ResurrectPlayer for the core state: clear
-// the ghost flag and death timer, restore land walking and control, and point
-// the corpse map at an invalid map id. When restorePercent is positive the
-// reference health and power restoration applies (half of maximum health and
-// mana, zero rage, half energy).
+// resurrectPlayer mirrors Player::ResurrectPlayer (Player.cpp:4682) with the
+// C++ default applySickness=true: every caller that does not explicitly pass
+// false inflicts resurrection sickness on level 11+ characters. The only
+// false arm in the tree is ResurrectUsingRequestDataImpl (Player.cpp:24228),
+// bridged by resurrectPlayerNoSickness.
 func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
-	s.resurrectPlayerWithBones(ctx, restorePercent, false)
+	s.resurrectPlayerWithBones(ctx, restorePercent, false, true)
+}
+
+// resurrectPlayerNoSickness mirrors the ResurrectUsingRequestDataImpl arm
+// (Player.cpp:24228: ResurrectPlayer(0.0f, false)): an accepted resurrect
+// request never inflicts resurrection sickness.
+func (s *session) resurrectPlayerNoSickness(ctx context.Context, restorePercent float32) {
+	s.resurrectPlayerWithBones(ctx, restorePercent, false, false)
 }
 
 // resurrectPlayerWithBones mirrors Player::ResurrectPlayer (Player.cpp:4682);
 // toBones converts the corpse to bones (Player::SpawnCorpseBones, the
-// EffectSelfResurrect arm) instead of despawning it.
-func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent float32, toBones bool) {
+// EffectSelfResurrect arm) instead of despawning it. applySickness is the
+// ResurrectPlayer applySickness parameter: true runs the resurrection
+// sickness leg (Player.cpp:4740-4753) after the ghost auras are removed,
+// matching the C++ order.
+func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent float32, toBones, applySickness bool) {
 	if s.player == nil {
 		return
 	}
@@ -1459,6 +1469,9 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	s.deathTimer = time.Time{}
 	s.removeAura(8326)
 	s.removeAura(20584)
+	if applySickness {
+		s.applyResurrectionSickness()
+	}
 	if toBones {
 		s.convertCorpseToBones(ctx, false)
 	} else {
@@ -1575,7 +1588,7 @@ func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) b
 	if data.MapID != s.player.Map || data.X != s.player.X || data.Y != s.player.Y || data.Z != s.player.Z {
 		s.teleportTo(data.MapID, data.X, data.Y, data.Z, s.player.Orientation)
 	}
-	s.resurrectPlayer(ctx, 0)
+	s.resurrectPlayerNoSickness(ctx, 0)
 	s.player.Health = data.Health
 	s.player.Powers[0] = data.Mana
 	s.player.Powers[1] = 0 // rage
@@ -1751,7 +1764,7 @@ func (s *session) handleEffectSelfResurrect(ctx context.Context, eff wotlk.Spell
 			mana = uint32(float32(s.player.MaxPowers[0]) * float32(damage) / 100)
 		}
 	}
-	s.resurrectPlayerWithBones(ctx, 0, true)
+	s.resurrectPlayerWithBones(ctx, 0, true, true)
 	s.player.Health = health
 	s.player.Powers[0] = mana
 	s.player.Powers[1] = 0
@@ -1932,6 +1945,23 @@ func (s *session) resSicknessSpellID(race uint8) uint32 {
 	return 15007
 }
 
+// applyResurrectionSickness mirrors the applySickness leg of
+// Player::ResurrectPlayer (Player.cpp:4740-4753): characters at or above
+// CONFIG_DEATH_SICKNESS_LEVEL (default 11) suffer the race's own
+// ResSicknessSpellID — one minute per level above 10 for levels 11-19,
+// ten minutes at level 20+. The C++ CastSpell(..., true) is a triggered
+// apply, which applyAuraWithDuration mirrors.
+func (s *session) applyResurrectionSickness() {
+	if s == nil || s.player == nil || s.player.Level < 11 {
+		return
+	}
+	durationMinutes := s.player.Level - 10
+	if durationMinutes > 10 {
+		durationMinutes = 10
+	}
+	s.applyAuraWithDuration(s.resSicknessSpellID(s.player.Race), uint32(durationMinutes)*60*1000)
+}
+
 // handleSpiritHealerActivate processes CMSG_SPIRIT_HEALER_ACTIVATE (0x21C).
 // Reference: WorldSession::HandleSpiritHealerActivateOpcode (NPCHandler.cpp:198)
 // and WorldSession::SendSpiritResurrect (NPCHandler.cpp:219).
@@ -1955,19 +1985,9 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 	}
 	s.resurrectPlayer(ctx, 0.5)
 	s.durabilityLossAll(ctx, 0.25, true)
-	if s.player.Level > 10 {
-		// Characters level 1-10 have no sickness (CONFIG_DEATH_SICKNESS_LEVEL
-		// default 11, Player.cpp:4748).
-		// Characters level 11-19 suffer 1 minute per level above 10 (1-9 minutes).
-		// Characters level 20+ suffer 10 minutes of sickness (TC Player::ResurrectPlayer:4740-4753).
-		// The spell is the race's own ResSicknessSpellID (Player.cpp:4746), not
-		// a hardcoded 15007.
-		durationMinutes := s.player.Level - 10
-		if durationMinutes > 10 {
-			durationMinutes = 10
-		}
-		s.applyAuraWithDuration(s.resSicknessSpellID(s.player.Race), uint32(durationMinutes)*60*1000)
-	}
+	// Resurrection sickness is applied inside resurrectPlayer (the
+	// ResurrectPlayer(0.5f, true) arm, NPCHandler.cpp:221), matching the
+	// reference order: sickness before the durability loss.
 	s.spawnCorpseBones(ctx)
 	if corpseGraveFound {
 		ghostGrave, ghostGraveFound := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, playerTeam(s.player.Race))
