@@ -2309,6 +2309,23 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
 		return true
 	}
+	// Raise Dead scripted reagent check (spell_dk_raise_dead::CheckReagents,
+	// spell_dk.cpp:2029-2048): when no corpse is targeted, 46584's reagent
+	// comes from the reagent spell 48289 (Raise Dead Use Reagent: 1x Corpse
+	// Dust), not from the main spell's own reagent list (empty). C++ runs
+	// this in OnCheckCast during SPELL_STATE_PREPARING, before the cast bar.
+	// Go has no creature-corpse model, so the _corpse arm is unreachable and
+	// the check always applies. The failure packet names the reagent spell,
+	// matching Spell::SendCastResult(player, reagentSpell, 0,
+	// SPELL_FAILED_REAGENTS) with SPELL_FAILED_DONT_REPORT.
+	if spellID == 46584 {
+		if reagentSpell, found, err := s.server.Data.Spell(48289); err == nil && found &&
+			!s.canNoReagentCast(reagentSpell) && !s.hasSpellReagents(ctx, reagentSpell) {
+			s.sendCastFailed(ctx, castID, reagentSpell, spellFailedReagents)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "raise dead reagent missing")
+			return true
+		}
+	}
 
 	// Totem item/category requirements (Spell::CheckCast, Spell.cpp:6823-6856):
 	// run right after the reagent check, matching C++ CheckCast relative order.
@@ -10143,6 +10160,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.sendSummonObjectLog(spellID, 28, guid)
 			}
 		} else if spellID == 46584 { // Raise Dead
+			// spell_dk_raise_dead::ConsumeReagents (spell_dk.cpp:2068-2079):
+			// with no corpse targeted, the cast triggers 48289 (Raise Dead
+			// Use Reagent), whose own TakeReagents destroys the Corpse Dust.
+			// C++ runs this OnCast, before the summon effect; the _corpse arm
+			// is unreachable in Go (no creature-corpse model). takeSpellReagents
+			// carries the CanNoReagentCast skip (Spell.cpp:5053-5055), matching
+			// the triggered cast's TRIGGERED_FULL_MASK & ~TRIGGERED_IGNORE_POWER_AND_REAGENT_COST.
+			if reagentSpell, found, err := s.server.Data.Spell(48289); err == nil && found {
+				s.takeSpellReagents(effCtx, reagentSpell, castItemGUID, castItemEntry)
+			}
 			if guid := s.handleSummonPet(effCtx, spellID, 26125); guid != 0 {
 				s.sendSummonObjectLog(spellID, 28, guid)
 			}
