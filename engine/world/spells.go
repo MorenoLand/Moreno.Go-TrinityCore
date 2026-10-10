@@ -87,6 +87,8 @@ const (
 	spellAttr0UnaffectedByInvulnerability  uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr0OnlyStealthed                uint32 = 0x00020000 // SPELL_ATTR0_ONLY_STEALTHED (SharedDefines.h:429)
+	spellAttr0OutdoorsOnly                 uint32 = 0x00008000 // SPELL_ATTR0_OUTDOORS_ONLY (SharedDefines.h:427)
+	spellAttr0IndoorsOnly                  uint32 = 0x00004000 // SPELL_ATTR0_INDOORS_ONLY (SharedDefines.h:426)
 	spellAttr0CuPickpocket                 uint32 = 0x00000400 // SPELL_ATTR0_CU_PICKPOCKET (SpellInfo.h:188) — custom attr, tested against AttributesCu
 	spellAttr0CuNegativeMask               uint32 = 0x00007000 // SPELL_ATTR0_CU_NEGATIVE (SpellInfo.h:203) = CU_NEGATIVE_EFF0|EFF1|EFF2 — custom attrs, tested against AttributesCu
 	spellAttr0OnNextSwing2                 uint32 = 0x00000400 // SPELL_ATTR0_ON_NEXT_SWING_2 (SharedDefines.h:422) — tested against Attributes (DBC attr0), no clash with the custom-attr const above
@@ -262,9 +264,13 @@ const (
 	spellFailedTargetFriendly            uint8  = 115   // SPELL_FAILED_TARGET_FRIENDLY (SharedDefines.h:1097)
 	spellFailedNotHere                   uint8  = 60    // SPELL_FAILED_NOT_HERE (SharedDefines.h:1042)
 	spellFailedNoDueling                 uint8  = 79    // SPELL_FAILED_NO_DUELING (SharedDefines.h:1061)
+	spellFailedOnlyIndoors               uint8  = 90    // SPELL_FAILED_ONLY_INDOORS (SharedDefines.h:1072)
+	spellFailedOnlyOutdoors              uint8  = 93    // SPELL_FAILED_ONLY_OUTDOORS (SharedDefines.h:1075)
 
 	areaFlagNoFlyZone  uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 	areaFlagAllowDuels uint32 = 0x00000040 // AREA_FLAG_ALLOW_DUELS (DBCEnums.h:253) — AreaTableEntry.Flags bit tested by Spell::EffectDuel (SpellEffects.cpp:3812-3823)
+	areaFlagInside     uint32 = 0x02000000 // AREA_FLAG_INSIDE (DBCEnums.h:272) — used for determining spell related inside/outside questions in Map::IsOutdoors
+	areaFlagOutside    uint32 = 0x04000000 // AREA_FLAG_OUTSIDE (DBCEnums.h:273) — used for determining spell related inside/outside questions in Map::IsOutdoors
 
 	spellImplicitTargetUnitPet uint32 = 5 // TARGET_UNIT_PET (SharedDefines.h:1446)
 
@@ -1679,6 +1685,54 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedCustomError, spellCustomErrorGMOnly), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cheat spell without gm mode")
+		return true
+	}
+	// CheckCast ended-battleground gate (Spell::CheckCast, Spell.cpp:5229-5235):
+	// once the battleground ends (STATUS_WAIT_LEAVE), only triggered casts
+	// are processed — a client-initiated cast reports
+	// SPELL_FAILED_DONT_REPORT (27). The !IsTriggered() and TYPEID_PLAYER
+	// arms are vacuous here (this is the client-initiated player path).
+	// Go's live-BG analog is the arena world model (battleground_arena.go):
+	// a registered participant of an arena whose status reached
+	// ArenaStatusWaitLeave hits the gate, mirroring the battleground.go
+	// leave-combat check. Non-arena battlegrounds have no end-lifecycle
+	// status model (ambient map-keyed states), so the gate never fires
+	// there — a documented delta. C++ relative order: right after the
+	// cheat-spell gate, ahead of the outdoors/indoors arms.
+	if s.server != nil && IsArenaMap(s.player.Map) {
+		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+			arena.mu.Lock()
+			_, inArena := arena.PlayerTeams[s.playerGUID]
+			ended := arena.Status == ArenaStatusWaitLeave
+			arena.mu.Unlock()
+			if inArena && ended {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "arena ended, waiting leave")
+				return true
+			}
+		}
+	}
+	// CheckCast outdoors/indoors arms (Spell::CheckCast, Spell.cpp:5236-5248):
+	// SPELL_ATTR0_OUTDOORS_ONLY (0x00008000) spells fail with
+	// SPELL_FAILED_ONLY_OUTDOORS (93) when the caster is not outdoors, and
+	// SPELL_ATTR0_INDOORS_ONLY (0x00004000) spells fail with
+	// SPELL_FAILED_ONLY_INDOORS (90) when the caster is outdoors. The
+	// TYPEID_PLAYER arm is vacuous here (client-initiated player path); the
+	// isLineOfSightCalcEnabled() gate is live by default in C++
+	// (IVMapManager constructor true, vmap.enableLOS=1) and has no Go
+	// config — Go's terrain LoS model is the standing analog, so the gate
+	// is always on here. IsOutdoors rides s.isOutdoors (the Map.cpp
+	// non-WMO fallback); the WMO arms have no Go model. C++ relative
+	// order: right after the ended-battleground gate, ahead of the
+	// form/stealth block.
+	if spell.Attributes&spellAttr0OutdoorsOnly != 0 && !s.isOutdoors() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyOutdoors), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires outdoors", "area", s.areaID)
+		return true
+	}
+	if spell.Attributes&spellAttr0IndoorsOnly != 0 && s.isOutdoors() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyIndoors), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires indoors", "area", s.areaID)
 		return true
 	}
 	// CheckCast moving/autorepeat arm (Spell::CheckCast, Spell.cpp:5316-5323):
@@ -4977,6 +5031,25 @@ func (wg *wgBattlegroundState) wgCanFlyIn() bool {
 	wg.mu.Lock()
 	defer wg.mu.Unlock()
 	return !wg.IsActive
+}
+
+// isOutdoors mirrors the non-WMO fallback of the outdoors computation
+// feeding Object::IsOutdoors (Map.cpp:2805-2812): with no WMO area info the
+// position is outdoors unless the AreaTable entry carries AREA_FLAG_INSIDE
+// without AREA_FLAG_OUTSIDE; a missing area entry defaults to outdoors.
+// The WMO arms (mogpFlags & 0x8, WMOAreaTable Flags 4/2) have no Go model —
+// Go's terrain carries no WMO group-flag data — so WMO interiors read as
+// the area-flag fallback here. s.areaID is refreshed on movement
+// (updateZoneAndArea, terrain.go), matching the C++ relocate-time cache.
+func (s *session) isOutdoors() bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	area, found, areaErr := s.server.Data.Area(s.areaID)
+	if areaErr != nil || !found {
+		return true
+	}
+	return area.Flags&(areaFlagInside|areaFlagOutside) != areaFlagInside
 }
 
 // checkFlyCast mirrors the SPELL_AURA_FLY /
