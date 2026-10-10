@@ -4347,8 +4347,6 @@ func (s *session) handleGuildBankLogQuery(ctx context.Context, payload []byte) b
 }
 
 // handleGuildBankMoneyWithdrawn processes MSG_GUILD_BANK_MONEY_WITHDRAWN (0x3FE).
-// Reference: WorldSession::HandleGuildBankMoneyWithdrawn (GuildHandler.cpp:238).
-// handleGuildBankMoneyWithdrawn processes MSG_GUILD_BANK_MONEY_WITHDRAWN.
 // Reference: WorldSession::HandleGuildBankMoneyWithdrawn (GuildHandler.cpp:238)
 // via Guild::SendMoneyInfo -> Guild::_GetMemberRemainingMoney (Guild.cpp).
 // The guildmaster reports (int32)GUILD_WITHDRAW_MONEY_UNLIMITED (-1); other
@@ -4357,6 +4355,12 @@ func (s *session) handleGuildBankLogQuery(ctx context.Context, payload []byte) b
 // and only when the (uint32 wraparound then int32) difference is > 0.
 func (s *session) handleGuildBankMoneyWithdrawn(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	// Guild::SendMoneyInfo (Guild.cpp:1880-1882): the member lookup missing
+	// (the player is not in a guild) is a silent no-op — no packet at all.
+	// The C++ handler only reaches SendMoneyInfo through a non-null guild.
+	if s.player.GuildID == 0 {
 		return true
 	}
 	buf := protocol.NewBuffer(8)
