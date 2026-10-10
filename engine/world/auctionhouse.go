@@ -1330,8 +1330,13 @@ func buildAuctionCommandResult(auctionID, action, result uint32) []byte {
 // Reference: WorldSession::HandleAuctionListPendingSales (AuctionHouseHandler.cpp:812).
 func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
+	// WorldSession::HandleAuctionListPendingSales (AuctionHouseHandler.cpp:812-830):
+	// the handler skips the auctioneer GUID and always answers a zero count —
+	// the per-sale loop in C++ is commented out, so no sale data is ever sent.
+	// (A prior Go implementation parsed pending-sale mails here; that was
+	// invented behavior with no C++ arm, removed for fidelity.)
 	if len(payload) >= 8 {
 		r := protocol.NewReader(payload)
 		auctioneer, _ := r.ReadU64() // auctioneer GUID (reference AuctionHouseHandler.cpp:816)
@@ -1339,114 +1344,7 @@ func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []b
 			return true
 		}
 	}
-
-	cdb := s.server.CharactersStore.DB
-	if cdb == nil {
-		buf := protocol.NewBuffer(4)
-		buf.WriteU32(0)
-		return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
-	}
-
-	now := time.Now().Unix()
-	rows, err := cdb.QueryContext(ctx, `SELECT m.subject, m.body, COALESCE(c.name, 'Buyer'), m.money, m.deliver_time
-		FROM mail AS m
-		LEFT JOIN characters AS c ON c.guid = m.sender
-		WHERE m.receiver = ? AND m.messageType = ? AND m.money > 0 AND m.deliver_time > ? ORDER BY m.deliver_time ASC LIMIT 50`, s.playerGUID, mailAuctionType, now)
-	if err != nil {
-		buf := protocol.NewBuffer(4)
-		buf.WriteU32(0)
-		return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
-	}
-
-	type pendingSale struct {
-		itemName  string
-		buyerName string
-		bid       uint32
-		buyout    uint32
-		timeLeft  float32
-	}
-	var sales []pendingSale
-
-	type rawPendingRow struct {
-		subject     string
-		body        string
-		buyerName   string
-		money       int64
-		deliverTime int64
-	}
-	var rawRows []rawPendingRow
-	for rows.Next() {
-		var r rawPendingRow
-		if err := rows.Scan(&r.subject, &r.body, &r.buyerName, &r.money, &r.deliverTime); err == nil {
-			rawRows = append(rawRows, r)
-		}
-	}
-	rows.Close()
-
-	for _, r := range rawRows {
-		itemName := "Item"
-		if strings.Contains(r.subject, ":") {
-			parts := strings.Split(r.subject, ":")
-			if len(parts) > 0 {
-				var itemEntry int64
-				_, _ = fmt.Sscanf(parts[0], "%d", &itemEntry)
-				if itemEntry > 0 {
-					var name string
-					if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-						_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemEntry).Scan(&name)
-					}
-					if name == "" && cdb != nil {
-						_ = cdb.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemEntry).Scan(&name)
-					}
-					if name != "" {
-						itemName = name
-					}
-				}
-			}
-		} else {
-			trimmed := strings.TrimPrefix(r.subject, "Auction successful: ")
-			if trimmed != "" {
-				itemName = trimmed
-			}
-		}
-
-		buyerName := r.buyerName
-		if strings.Contains(r.body, ":") {
-			bodyParts := strings.Split(r.body, ":")
-			if len(bodyParts) > 0 {
-				var buyerGUID uint64
-				_, _ = fmt.Sscanf(bodyParts[0], "%X", &buyerGUID)
-				if buyerGUID > 0 && cdb != nil {
-					var name string
-					if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", buyerGUID).Scan(&name); err == nil && name != "" {
-						buyerName = name
-					}
-				}
-			}
-		}
-
-		var timeLeft float32
-		if r.deliverTime > now {
-			timeLeft = float32(r.deliverTime-now) / 3600.0
-		}
-		sales = append(sales, pendingSale{
-			itemName:  itemName,
-			buyerName: buyerName,
-			bid:       uint32(r.money),
-			buyout:    uint32(r.money),
-			timeLeft:  timeLeft,
-		})
-	}
-
-	buf := protocol.NewBuffer(4 + len(sales)*64)
-	buf.WriteU32(uint32(len(sales)))
-	for _, ps := range sales {
-		buf.WriteCString(ps.itemName)
-		buf.WriteCString(ps.buyerName)
-		buf.WriteU32(ps.bid)
-		buf.WriteU32(ps.buyout)
-		buf.WriteF32(ps.timeLeft)
-	}
-
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(0)
 	return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
 }

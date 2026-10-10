@@ -240,3 +240,55 @@ func (s *session) giveReputation(ctx context.Context, factionID uint32, amount i
 	s.player.Reputations = append(s.player.Reputations, rep)
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, amount, factionFlagVisible)
 }
+
+// reputationPriceDiscount mirrors Player::GetReputationPriceDiscount
+// (Player.cpp:23674-23689): the vendor/repair price multiplier from the
+// player's reputation rank with the NPC's faction template's faction — 1.0 at
+// neutral and below, minus 5% per rank above neutral. The faction template id
+// comes from creature_template (faction_A for Alliance, faction_H for Horde)
+// resolved to its FactionTemplate.dbc faction; anything unresolvable keeps
+// the 1.0 no-discount default.
+func (s *session) reputationPriceDiscount(ctx context.Context, npcGUID uint64) float64 {
+	const neutralRank = 3 // REP_NEUTRAL (SharedDefines.h:209-220)
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil ||
+		s.server.WorldStore.DB == nil || s.server.Data == nil {
+		return 1.0
+	}
+	entry := uint32((npcGUID >> 24) & 0x00FFFFFF)
+	if entry == 0 {
+		return 1.0
+	}
+	var factionA, factionH int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT faction_A, faction_H FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&factionA, &factionH); err != nil {
+		return 1.0
+	}
+	templateID := factionA
+	if !s.playerAlliance() {
+		templateID = factionH
+	}
+	if templateID <= 0 {
+		return 1.0
+	}
+	ft, ok, err := s.server.Data.FactionTemplate(uint32(templateID))
+	if err != nil || !ok || ft.Faction == 0 {
+		return 1.0
+	}
+	var standing int64
+	found := false
+	for _, rep := range s.player.Reputations {
+		if rep.FactionID == ft.Faction {
+			standing = int64(totalReputationStanding(rep))
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 1.0
+	}
+	rank := reputationRank(standing)
+	if rank <= neutralRank {
+		return 1.0
+	}
+	return 1.0 - 0.05*float64(rank-neutralRank)
+}

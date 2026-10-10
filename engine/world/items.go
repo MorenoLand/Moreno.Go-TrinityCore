@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -3698,6 +3699,10 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// NPCHandler.cpp:734 (HandleRepairItemOpcode): the repair price is scaled
+	// by the player's reputation-price discount with the NPC's faction.
+	discountMod := s.reputationPriceDiscount(ctx, npcGUID)
+
 	if s.server == nil || s.server.CharactersStore == nil {
 		return true
 	}
@@ -3737,7 +3742,9 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 		}
 		maxDurability := getMaxDurability(itemEntry)
 		if maxDurability > durability {
-			cost := (maxDurability - durability) * 10
+			// Player::DurabilityRepair (Player.cpp:5084-5134): the final cost
+			// is ceiled after the discount multiplier is applied.
+			cost := uint32(math.Ceil(float64(maxDurability-durability) * 10 * discountMod))
 			repaired := false
 			if guildBank != 0 {
 				// Player::DurabilityRepair (Player.cpp:5084): guild-bank
@@ -3788,7 +3795,7 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			for _, it := range rawItems {
 				maxD := getMaxDurability(it.entry)
 				if maxD > it.curD {
-					cost := (maxD - it.curD) * 10
+					cost := uint32(math.Ceil(float64(maxD-it.curD) * 10 * discountMod))
 					totalCost += cost
 					toRepair = append(toRepair, repairItem{guid: it.guid, cost: cost, maxD: maxD})
 				}
