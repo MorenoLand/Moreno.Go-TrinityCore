@@ -135,21 +135,25 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		s.server.channels = make(map[string]*worldChannel)
 	}
 	channel := s.server.channels[key]
-	if channel == nil {
+	fresh := channel == nil
+	if fresh {
 		channel = &worldChannel{
 			ID:   channelID,
 			Name: name,
 			// Reference: Channel::Channel - custom channels announce
 			// joins/leaves and hand out ownership; constant (built-in)
-			// channels do neither.
+			// channels do neither, and their members carry MEMBER_FLAG_NONE.
 			Flags:      flags,
 			Password:   password,
-			Owner:      s.playerGUID,
 			Announce:   channelID == 0,
 			Members:    make(map[*session]struct{}),
-			Moderators: map[uint64]struct{}{s.playerGUID: {}},
+			Moderators: make(map[uint64]struct{}),
 			Muted:      make(map[uint64]struct{}),
 			Banned:     make(map[uint64]struct{}),
+		}
+		if channelID == 0 {
+			channel.Owner = s.playerGUID
+			channel.Moderators[s.playerGUID] = struct{}{}
 		}
 		s.server.channels[key] = channel
 	}
@@ -162,7 +166,9 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		if !custom {
 			return true
 		}
-		return s.sendChannelNotify(channelAlreadyMemberNotice, channel.Name, nil) == nil
+		// Reference: PlayerAlreadyMemberAppend (ChannelAppenders.h) carries the
+		// joiner's GUID in the notice payload.
+		return s.sendChannelNotify(channelAlreadyMemberNotice, channel.Name, &channelNotifyGUID{GUID: s.playerGUID}) == nil
 	}
 	if channel.Banned != nil {
 		if _, banned := channel.Banned[s.playerGUID]; banned {
@@ -209,6 +215,13 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	// SMSG_USERLIST_UPDATE to all (the joiner is already in the member set,
 	// so they receive their own update on custom channels).
 	s.broadcastUserlist(channelIDValue != 0, s.playerGUID, joinerFlags, channelFlagsValue, numPlayers, channelName, others)
+	// Reference: Channel::JoinChannel (Channel.cpp) - the first join of a
+	// fresh custom channel grants ownership through SetOwner(guid, false),
+	// which broadcasts CHAT_MODE_CHANGE_NOTICE (old flags MEMBER_FLAG_NONE,
+	// new flags owner+moderator) to all members.
+	if fresh && channelIDValue == 0 {
+		_ = s.sendChannelNotify(channelModeChangeNotice, channelName, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: 0, NewFlags: joinerFlags})
+	}
 	s.debug("channel joined", "account", s.accountName, "channel", channelName, "id", channelIDValue)
 	return true
 }
@@ -327,11 +340,23 @@ func (s *session) handleChannelList(payload []byte) bool {
 		guid  uint64
 		flags uint8
 	}
+	// Reference: Channel::List (Channel.cpp) answers CHAT_NOT_MEMBER_NOTICE
+	// when the requester is not on the channel.
+	if _, on := channel.Members[s]; !on {
+		s.server.channelsMu.RUnlock()
+		return s.sendChannelNotify(channelNotMemberNotice, name, nil) == nil
+	}
 	members := make([]member, 0, len(channel.Members))
 	for session := range channel.Members {
-		if session.worldReady.Load() && session.player != nil {
-			// Reference: Channel::List writes each member's owner/moderator/
-			// muted flags; the GM see-all/visibility filter has no Go model.
+		if !session.worldReady.Load() || session.player == nil {
+			continue
+		}
+		// Reference: Channel::List (Channel.cpp) - members above the
+		// GM-in-who-list security level stay hidden from viewers without the
+		// who-see-all permission, and GM-invisible members stay hidden per
+		// Player::IsVisibleGloballyFor.
+		if (s.whoSeeAllSecurityLevels || int(session.security) <= s.server.Config.GMInWhoListLevel) &&
+			isVisibleGloballyFor(s, session) {
 			members = append(members, member{guid: session.playerGUID, flags: channel.memberFlags(session.playerGUID)})
 		}
 	}
