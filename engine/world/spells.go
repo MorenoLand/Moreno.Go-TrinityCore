@@ -501,6 +501,8 @@ const (
 	spellEffectHealPct                             = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
 	spellEffectEnergizePct                         = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
 	spellAuraMounted                               = 78
+	spellAuraWaterBreathing                        = 82  // SPELL_AURA_WATER_BREATHING (SpellAuraDefines.h:162)
+	spellAuraModWaterBreathing                     = 155 // SPELL_AURA_MOD_WATER_BREATHING (SpellAuraDefines.h:235)
 	spellAuraOpenStable                            = 292 // SPELL_AURA_OPEN_STABLE (SpellAuraDefines.h:372)
 	spellAuraModShapeshift                         = 36  // SPELL_AURA_MOD_SHAPESHIFT (SpellAuraDefines.h:116)
 	spellAuraSpiritOfRedemption                    = 176 // SPELL_AURA_SPIRIT_OF_REDEMPTION (SpellAuraDefines.h:256)

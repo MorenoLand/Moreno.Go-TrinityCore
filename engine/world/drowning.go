@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -63,13 +64,22 @@ func (s *session) stopMirrorTimer(timerType uint32) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_STOP_MIRROR_TIMER), pkt, true)
 }
 
+// breathTimerMax mirrors Player::getMaxTimer(BREATH_TIMER) (Player.cpp:824-831):
+// 3 minutes scaled by the MOD_WATER_BREATHING (155) aura multiplier. Only the
+// WATER_BREATHING (82) aura disables the timer; 155 extends it, it never
+// disables it.
+func (s *session) breathTimerMax() int32 {
+	return int32(float32(maxBreathTimerMs) * s.auraMultiplier(spellAuraModWaterBreathing))
+}
+
 // handleEnterSwimming initializes breath countdown if water breathing is not active.
 func (s *session) handleEnterSwimming() {
 	if s.player == nil || s.player.Health == 0 {
 		return
 	}
-	// Water breathing check (SPELL_AURA_WATER_BREATHING = 82, SPELL_AURA_MOD_WATER_BREATHING = 155)
-	if s.hasAuraType(82) || s.hasAuraType(155) {
+	// Water breathing check (Player.cpp:827): only SPELL_AURA_WATER_BREATHING
+	// (82) disables the timer; SPELL_AURA_MOD_WATER_BREATHING (155) scales it.
+	if s.hasAuraType(spellAuraWaterBreathing) {
 		s.breathTimer = -1
 		return
 	}
@@ -77,19 +87,21 @@ func (s *session) handleEnterSwimming() {
 		s.breathTimer = -1
 		return
 	}
+	maxBreath := s.breathTimerMax()
 	if s.breathTimer <= 0 {
-		s.breathTimer = maxBreathTimerMs
+		s.breathTimer = maxBreath
 	}
 	s.lastBreathTick = time.Now()
-	s.sendMirrorTimer(mirrorTimerBreath, uint32(s.breathTimer), uint32(maxBreathTimerMs), -1)
+	s.sendMirrorTimer(mirrorTimerBreath, uint32(s.breathTimer), uint32(maxBreath), -1)
 }
 
 // handleExitSwimming switches breath mirror timer into regen mode (+10 scale) until full.
 func (s *session) handleExitSwimming() {
-	if s.breathTimer != -1 && s.breathTimer < maxBreathTimerMs {
+	maxBreath := s.breathTimerMax()
+	if s.breathTimer != -1 && s.breathTimer < maxBreath {
 		s.lastBreathTick = time.Now()
-		s.sendMirrorTimer(mirrorTimerBreath, uint32(s.breathTimer), uint32(maxBreathTimerMs), 10)
-	} else if s.breathTimer >= maxBreathTimerMs {
+		s.sendMirrorTimer(mirrorTimerBreath, uint32(s.breathTimer), uint32(maxBreath), 10)
+	} else if s.breathTimer >= maxBreath {
 		s.breathTimer = -1
 		s.stopMirrorTimer(mirrorTimerBreath)
 	}
@@ -107,8 +119,8 @@ func (s *session) handleDrowningTick(ctx context.Context, now time.Time) {
 	}
 
 	if s.isSwimming {
-		// Water breathing check
-		if s.hasAuraType(82) || s.hasAuraType(155) || (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0 {
+		// Water breathing check (Player.cpp:827)
+		if s.hasAuraType(spellAuraWaterBreathing) || (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0 {
 			if s.breathTimer != -1 {
 				s.breathTimer = -1
 				s.stopMirrorTimer(mirrorTimerBreath)
@@ -117,9 +129,9 @@ func (s *session) handleDrowningTick(ctx context.Context, now time.Time) {
 		}
 
 		if s.breathTimer == -1 {
-			s.breathTimer = maxBreathTimerMs
+			s.breathTimer = s.breathTimerMax()
 			s.lastBreathTick = now
-			s.sendMirrorTimer(mirrorTimerBreath, uint32(s.breathTimer), uint32(maxBreathTimerMs), -1)
+			s.sendMirrorTimer(mirrorTimerBreath, uint32(s.breathTimer), uint32(s.breathTimerMax()), -1)
 			return
 		}
 
@@ -135,13 +147,12 @@ func (s *session) handleDrowningTick(ctx context.Context, now time.Time) {
 		s.lastBreathTick = now
 		s.breathTimer -= diffMs
 
-		if s.breathTimer <= 0 {
-			// Drowning tick: deal damage every second (Player.cpp:880-884)
-			s.breathTimer = 0
-			damage := s.player.MaxHealth / 5
-			if damage == 0 {
-				damage = 1
-			}
+		if s.breathTimer < 0 {
+			// Drowning tick (Player.cpp:879-885): re-arm to 1 second so damage
+			// fires per second like C++, not once per world tick, and add the
+			// urand(0, level-1) term.
+			s.breathTimer += 1000
+			damage := s.player.MaxHealth/5 + uint32(rand.Intn(int(s.player.Level)))
 			s.environmentalDamage(ctx, damageDrowning, damage)
 		}
 	} else if s.breathTimer != -1 {
@@ -156,7 +167,7 @@ func (s *session) handleDrowningTick(ctx context.Context, now time.Time) {
 		}
 		s.lastBreathTick = now
 		s.breathTimer += 10 * diffMs
-		if s.breathTimer >= maxBreathTimerMs {
+		if s.breathTimer >= s.breathTimerMax() {
 			s.breathTimer = -1
 			s.stopMirrorTimer(mirrorTimerBreath)
 		}
@@ -272,10 +283,8 @@ func (s *session) handleFatigueTick(ctx context.Context, now time.Time) {
 				s.fatigueTimer = 0
 			}
 			if s.player.Health > 0 && !isGhost {
-				damage := s.player.MaxHealth / 5
-				if damage == 0 {
-					damage = 1
-				}
+				// Player.cpp:916-917: GetMaxHealth()/5 + urand(0, level-1)
+				damage := s.player.MaxHealth/5 + uint32(rand.Intn(int(s.player.Level)))
 				s.environmentalDamage(ctx, damageExhausted, damage)
 			} else if isGhost {
 				s.repopAtGraveyard(ctx)
@@ -333,7 +342,7 @@ func (s *Server) updatePlayerUnderwater(ctx context.Context, now time.Time) {
 	var sessions []*session
 	for sess := range s.sessions {
 		if sess.worldReady.Load() && sess.player != nil &&
-			(sess.isSwimming || (sess.breathTimer != -1 && sess.breathTimer < maxBreathTimerMs) ||
+			(sess.isSwimming || sess.breathTimer != -1 ||
 				sess.inDarkWater || (sess.fatigueTimer != -1 && sess.fatigueTimer < maxFatigueTimerMs)) {
 			sessions = append(sessions, sess)
 		}
