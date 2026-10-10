@@ -2638,6 +2638,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.MoveType == 2 && len(motion.Points) == 0 {
 		return
 	}
+	// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:126-132)
+	// and RandomMovementGenerator::DoUpdate (RandomMovementGenerator.cpp:204-210):
+	// UNIT_STATE_NOT_MOVE (or LOST_CONTROL) / a preventing cast interrupts the
+	// generator and no new leg is launched until the state clears. Go's atomic
+	// splines make the mid-leg StopMoving unbridgeable; the launch gate is the
+	// observable arm — a rooted or casting patrol no longer teleports along its
+	// path while stunned. UNIT_STATE_LOST_CONTROL (fear/confuse generators)
+	// stays unmodeled (no Go fear/confuse generator), matching the chase arm's
+	// documented delta.
+	if s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
+		return
+	}
 	var destX, destY, destZ float32
 	var speed float32
 	var wait time.Duration
@@ -2687,8 +2699,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// CreatureMovementData::Random (CanRun/AlwaysRun, CreatureData.h:105)
 		// have no bridge either (Go models no creature_template_addon fields
 		// beyond path_id). SignalFormationMovement (creature groups) is
-		// unmodeled, as are the UNIT_STATE_NOT_MOVE/LOST_CONTROL/casting
-		// interruption guards of SetRandomLocation.
+		// unmodeled; the UNIT_STATE_NOT_MOVE/casting interruption guards of
+		// SetRandomLocation (RandomMovementGenerator.cpp:204-210) ride the
+		// shared launch gate above (the LOST_CONTROL leg has no Go
+		// fear/confuse model).
 		angle := rand.Float64() * 2 * math.Pi
 		dist := rand.Float64() * motion.Wander
 		destX = float32(float64(motion.HomeX) + dist*math.Cos(angle))
