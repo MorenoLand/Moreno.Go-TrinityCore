@@ -827,11 +827,11 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 // handleControllerEjectPassenger processes CMSG_CONTROLLER_EJECT_PASSENGER (0x4A9).
 // Reference: WorldSession::HandleEjectPassenger (VehicleHandler.cpp:151-188).
 func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	passGUID, err := r.ReadU64()
+	passGUID, err := r.ReadPackedGUID()
 	if err != nil || passGUID == 0 {
 		return true
 	}
@@ -839,32 +839,28 @@ func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []
 	if s.server == nil {
 		return true
 	}
-	vehGUID := s.player.VehicleGUID
-	if vehGUID == 0 {
-		vehGUID = s.playerGUID
-	}
-	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehGUID)
-	if !canEjectVehiclePassenger(kit, s.playerGUID, passGUID) {
+	// VehicleHandler.cpp:157: the ejector must carry a vehicle kit of their own
+	// (Unit::GetVehicleKit returns m_vehicleKit — the kit of a unit that IS a
+	// vehicle base, not of a mere passenger). A controlling passenger riding
+	// somebody else's vehicle cannot eject in C++; the old code let any
+	// CanControl-seat passenger eject.
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
+	if kit == nil {
 		return true
 	}
-	if passSess := s.server.findSessionByGUID(passGUID); passSess != nil && passSess.player.Map == s.player.Map && passSess.player.InstanceID == s.player.InstanceID && passSess.player.VehicleGUID == vehGUID {
-		passSess.exitVehicle(ctx)
+	// The ejected unit must ride this same vehicle (VehicleHandler.cpp:169).
+	// Creature passengers have no Go model (AddPassenger is player-only), so
+	// only player sessions are ejectable here.
+	passSess := s.server.findSessionByGUID(passGUID)
+	if passSess == nil || passSess.player.Map != s.player.Map || passSess.player.InstanceID != s.player.InstanceID || passSess.player.VehicleGUID != s.playerGUID {
+		return true
 	}
+	_, passengerSeat, _ := kit.GetSeatForPassenger(passGUID)
+	if passengerSeat == nil || !passengerSeat.IsEjectable() {
+		return true
+	}
+	passSess.exitVehicle(ctx)
 	return true
-}
-
-func canEjectVehiclePassenger(kit *VehicleKit, controllerGUID, passengerGUID uint64) bool {
-	if kit == nil || controllerGUID == 0 || passengerGUID == 0 {
-		return false
-	}
-	if !(kit.IsPlayer && kit.VehicleGUID == controllerGUID) {
-		_, controllerSeat, _ := kit.GetSeatForPassenger(controllerGUID)
-		if controllerSeat == nil || !controllerSeat.CanControl() {
-			return false
-		}
-	}
-	_, passengerSeat, _ := kit.GetSeatForPassenger(passengerGUID)
-	return passengerSeat != nil && passengerSeat.IsEjectable()
 }
 
 // handleDismissControlledVehicle processes CMSG_DISMISS_CONTROLLED_VEHICLE (0x46D).
@@ -893,20 +889,16 @@ func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []
 // handlePlayerVehicleEnter processes CMSG_PLAYER_VEHICLE_ENTER (0x46E).
 // Reference: WorldSession::HandleEnterPlayerVehicle (VehicleHandler.cpp:129-149).
 func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	vehGUID, err := r.ReadU64()
+	// The packet carries only a packed player GUID (VehicleHandler.cpp:132);
+	// there is no seat byte. The seat defaults to "any available seat"
+	// (Unit::EnterVehicle seatId = -1, Unit.cpp:13073).
+	vehGUID, err := r.ReadPackedGUID()
 	if err != nil || vehGUID == 0 {
 		return true
-	}
-	seat := int8(1)
-	if len(payload) >= 9 {
-		sByte, err := r.ReadU8()
-		if err == nil {
-			seat = int8(sByte)
-		}
 	}
 	if s.server == nil || IsArenaMap(s.player.Map) {
 		return true
@@ -919,7 +911,7 @@ func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) 
 	if kit == nil || !kit.IsPlayer {
 		return true
 	}
-	s.enterVehicle(ctx, vehGUID, seat)
+	s.enterVehicle(ctx, vehGUID, -1)
 	return true
 }
 
@@ -930,7 +922,7 @@ func playerVehicleEntryAllowed(player, target *session) bool {
 	if player.player.Map != target.player.Map || player.player.InstanceID != target.player.InstanceID {
 		return false
 	}
-	interactionDistance := 5.0 + float64(player.player.CombatReach) + float64(target.player.CombatReach)
+	interactionDistance := 5.0 // INTERACTION_DISTANCE, flat (ObjectDefines.h:24); no combat-reach fold.
 	return distance3D(player.player.X, player.player.Y, player.player.Z, target.player.X, target.player.Y, target.player.Z) <= interactionDistance
 }
 

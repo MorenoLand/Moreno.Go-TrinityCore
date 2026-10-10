@@ -2170,8 +2170,11 @@ func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// DuelHandler.cpp:27-28: no duel, the acceptor is the initiator, or the
-	// duel already left DUEL_STATE_CHALLENGED -> silent return.
-	if s.duelPartner == 0 || s.duelInitiator || s.duelCountdown {
+	// duel already left DUEL_STATE_CHALLENGED -> silent return. The
+	// IN_PROGRESS leg (DuelTeam != 0, set when the 3s countdown elapses) has
+	// no duelCountdown equivalent — without it a duplicate accept re-armed
+	// the countdown mid-duel.
+	if s.duelPartner == 0 || s.duelInitiator || s.duelCountdown || s.player.DuelTeam != 0 {
 		return true
 	}
 	var partner *session

@@ -136,12 +136,13 @@ type auctionRecord struct {
 }
 
 func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	s.expireAuctions(ctx)
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadU64()
+	// CMSG_AUCTION_HELLO carries a packed NPC GUID (AuctionHouseHandler.cpp:42).
+	guid, err := reader.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
@@ -171,12 +172,13 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	s.expireAuctions(ctx)
 	reader := protocol.NewReader(payload)
-	auctioneer, _ := reader.ReadU64()
+	// Packed NPC GUID (AuctionHouseHandler.cpp:747).
+	auctioneer, _ := reader.ReadPackedGUID()
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
@@ -361,11 +363,12 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 }
 
 func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 24 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	auctioneer, _ := reader.ReadU64() // auctioneer
+	// Packed auctioneer GUID (AuctionHouseHandler.cpp:122).
+	auctioneer, _ := reader.ReadPackedGUID()
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
@@ -382,7 +385,8 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	itemGUIDs := make([]int64, 0, itemCount)
 	stackCounts := make([]uint32, 0, itemCount)
 	for i := uint32(0); i < itemCount; i++ {
-		rawItemGUID, rerr := reader.ReadU64()
+		// Packed item GUIDs (AuctionHouseHandler.cpp:139: recvData >> itemGUIDs[i]).
+		rawItemGUID, rerr := reader.ReadPackedGUID()
 		if rerr != nil {
 			return false
 		}
@@ -578,11 +582,12 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 }
 
 func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	auctioneer, _ := reader.ReadU64()
+	// Packed auctioneer GUID (AuctionHouseHandler.cpp:432).
+	auctioneer, _ := reader.ReadPackedGUID()
 	auctionID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -807,10 +812,11 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	// C++ HandleAuctionListOwnerItems (AuctionHouseHandler.cpp:708-727):
 	// the auctioneer GUID comes first in the packet and the NPC interact
 	// check runs before anything else.
-	if len(payload) < 8 {
+	if len(payload) < 1 {
 		return true
 	}
-	auctioneer, _ := protocol.NewReader(payload).ReadU64()
+	// Packed auctioneer GUID (AuctionHouseHandler.cpp:712).
+	auctioneer, _ := protocol.NewReader(payload).ReadPackedGUID()
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
@@ -867,14 +873,18 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	}
 
 	var outbidIDs []uint32
-	if len(payload) >= 16 {
+	if len(payload) >= 1 {
 		r := protocol.NewReader(payload)
-		auctioneer, _ := r.ReadU64()
+		// Packed auctioneer GUID (AuctionHouseHandler.cpp:657).
+		auctioneer, _ := r.ReadPackedGUID()
 		_, _ = r.ReadU32() // listFrom, unused
 		outbiddedCount, _ := r.ReadU32()
 		// C++ HandleAuctionListBidderItems (AuctionHouseHandler.cpp:659-663):
 		// a bad packet size zeroes the outbidded count instead of trusting it.
-		if uint64(outbiddedCount)*4 != uint64(len(payload)-16) {
+		// The constant 16 is C++'s own (it assumes an 8-byte GUID even though
+		// the GUID on the wire is packed); int64 arithmetic keeps short
+		// packets on the zero-the-count path instead of underflowing.
+		if int64(outbiddedCount)*4 != int64(len(payload))-16 {
 			outbiddedCount = 0
 		}
 		if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
@@ -964,11 +974,12 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 }
 
 func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	auctioneer, _ := reader.ReadU64()
+	// Packed auctioneer GUID (AuctionHouseHandler.cpp:580).
+	auctioneer, _ := reader.ReadPackedGUID()
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
