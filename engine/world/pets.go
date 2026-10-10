@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -2048,6 +2049,18 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 	case actCommand:
 		switch spellOrAction {
 		case commandAttack:
+			// PetHandler.cpp:200-207: a pet cannot be ordered to attack while
+			// its owner is pacified (SPELL_AURA_MOD_PACIFY).
+			pacified := false
+			for _, aura := range s.loadedAuras() {
+				if aura != nil && aura.AuraType == spellAuraModPacify {
+					pacified = true
+					break
+				}
+			}
+			if pacified {
+				return true
+			}
 			if s.server != nil {
 				s.server.onPetCommandAttack(s.player.Map, s.player.InstanceID, petGUID, targetGUID)
 			}
@@ -2495,9 +2508,6 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	petGUID, _ := r.ReadU64()
 	newName, _ := r.ReadCString()
-	if newName == "" {
-		return true
-	}
 	// PetHandler.cpp:594-596: isdeclined byte, then 5 declined-name strings.
 	isDeclined, _ := r.ReadU8()
 	var declined [5]string
@@ -2507,12 +2517,13 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 		}
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
 		petNumber := s.petNumberForGUID(petGUID)
 		// PetHandler.cpp:591-596: only hunter pets can be renamed; the GUID
 		// must resolve to the player's own pet (petNumberForGUID already
 		// requires the active-pet GUID match) and the owner column must match.
 		var petType, renamed int64
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType, renamed FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType, &renamed)
+		_ = cdb.QueryRowContext(ctx, "SELECT PetType, renamed FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType, &renamed)
 		if petNumber == 0 || petType != 1 {
 			return true
 		}
@@ -2524,23 +2535,87 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 		if renamed != 0 && !s.petRenameAllowed[petGUID] {
 			return true
 		}
+		// PetHandler.cpp:599-603: the name goes through ObjectMgr::CheckPetName
+		// (utf8 validity, MAX_PET_NAME=12, MinPetName=2 config default) plus the
+		// reserved-name list; failures answer SMSG_PET_NAME_INVALID.
+		if reason := s.checkPetName(ctx, newName); reason != petNameSuccess {
+			s.sendPetNameInvalid(reason, newName, nil)
+			return true
+		}
 		now := time.Now().Unix()
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+		_, _ = cdb.ExecContext(ctx,
 			"UPDATE character_pet SET name = ?, renamed = 1, savetime = ? WHERE id = ? AND owner = ?",
 			newName, now, petNumber, s.playerGUID)
 		// PetHandler.cpp:624 removes the flag after a successful rename.
 		delete(s.petRenameAllowed, petGUID)
 		// PetHandler.cpp:649-662: declined names persist in
 		// character_pet_declinedname (id, owner, genitive..prepositional).
+		// ObjectMgr::CheckDeclinedNames' declension match has no Go bridge
+		// (Russian declension table); client-sent names store verbatim.
 		if isDeclined != 0 {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			_, _ = cdb.ExecContext(ctx,
 				"DELETE FROM character_pet_declinedname WHERE id = ?", petNumber)
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			_, _ = cdb.ExecContext(ctx,
 				"INSERT INTO character_pet_declinedname (id, owner, genitive, dative, accusative, instrumental, prepositional) VALUES (?, ?, ?, ?, ?, ?, ?)",
 				petNumber, s.playerGUID, declined[0], declined[1], declined[2], declined[3], declined[4])
 		}
 	}
 	return true
+}
+
+// Pet name invalid reasons mirror PetNameInvalidReason (SharedDefines.h:3708).
+const (
+	petNameSuccess    = 0
+	petNameInvalid    = 1
+	petNameNoName     = 2
+	petNameTooShort   = 3
+	petNameTooLong    = 4
+	petNameMixedLang  = 6
+	petNameProfane    = 7
+	petNameReserved   = 8
+	petNameDeclension = 16
+)
+
+// checkPetName mirrors the portable core of ObjectMgr::CheckPetName
+// (ObjectMgr.cpp:8642): utf8 validity, MAX_PET_NAME (12) and MinPetName (2,
+// World.cpp:818 config default) bounds, and the reserved_name list C++ loads
+// from the characters DB (ObjectMgr.cpp:8482). The ValidateName profanity and
+// strict-mask checks have no Go bridge (no name-validation DB model).
+func (s *session) checkPetName(ctx context.Context, name string) uint32 {
+	if !utf8.ValidString(name) {
+		return petNameInvalid
+	}
+	if len([]rune(name)) > 12 {
+		return petNameTooLong
+	}
+	if len([]rune(name)) < 2 {
+		return petNameTooShort
+	}
+	if s != nil && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var n int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", name).Scan(&n); err == nil && n > 0 {
+			return petNameReserved
+		}
+	}
+	return petNameSuccess
+}
+
+// sendPetNameInvalid mirrors WorldSession::SendPetNameInvalid
+// (PetHandler.cpp:836-850): SMSG_PET_NAME_INVALID carries the u32 reason, the
+// name string, and the declined-name flag (with the 5 case strings when set).
+func (s *session) sendPetNameInvalid(reason uint32, name string, declined *[5]string) {
+	buf := protocol.NewBuffer(64)
+	buf.WriteU32(reason)
+	buf.WriteCString(name)
+	if declined != nil {
+		buf.WriteU8(1)
+		for _, d := range declined {
+			buf.WriteCString(d)
+		}
+	} else {
+		buf.WriteU8(0)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_NAME_INVALID), buf.Bytes(), true)
 }
 
 // handlePetSetAction processes CMSG_PET_SET_ACTION (0x174).
@@ -2576,6 +2651,11 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		actType uint8
 		action  uint32
 	}
+	type petSetActionPair struct {
+		pos     uint32
+		actType uint8
+		action  uint32
+	}
 	slots := make([]actionSlot, 10)
 	slots[0] = actionSlot{actType: 0x07, action: 2} // Attack
 	slots[1] = actionSlot{actType: 0x07, action: 1} // Follow
@@ -2595,28 +2675,76 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	var pairs []petSetActionPair
 	for i := 0; i < count; i++ {
 		pos, pErr := r.ReadU32()
 		data, dErr := r.ReadU32()
 		if pErr != nil || dErr != nil {
-			continue
+			return true
 		}
-		// PetHandler.cpp:460-461: an out-of-range action-bar position drops
+		// PetHandler.cpp:487-492: an out-of-range action-bar position drops
 		// the whole packet instead of skipping the entry.
 		if pos >= 10 {
 			return true
 		}
 		aType := uint8((data >> 24) & 0xFF)
 		aAction := data & 0x00FFFFFF
-		slots[pos] = actionSlot{actType: aType, action: aAction}
+		pairs = append(pairs, petSetActionPair{pos: pos, actType: aType, action: aAction})
+	}
+
+	const (
+		petActCommand  uint8 = 0x07
+		petActReaction uint8 = 0x06
+		petActEnabled  uint8 = 0xC1
+		petActDisabled uint8 = 0x81
+		petActPassive  uint8 = 0x01
+	)
+
+	// PetHandler.cpp:494-501: command and reaction buttons can only be MOVED,
+	// not removed — at moving count == 2, at removing count == 1, so a
+	// single-entry command/reaction update drops the whole packet.
+	moveCommand := false
+	for _, p := range pairs {
+		if p.actType == petActCommand || p.actType == petActReaction {
+			if count == 1 {
+				return true
+			}
+			moveCommand = true
+		}
+	}
+
+	// PetHandler.cpp:519-534: at a command->spell swap the client removes the
+	// spell first in another packet, so only command-move correctness is
+	// checked: each moved command/reaction button must match the CURRENT bar
+	// entry at the OTHER position, else the whole packet drops.
+	if moveCommand {
+		for i, p := range pairs {
+			if p.actType == petActCommand || p.actType == petActReaction {
+				other := slots[pairs[1-i].pos]
+				if other.action != p.action || other.actType != p.actType {
+					return true
+				}
+			}
+		}
+	}
+
+	// PetHandler.cpp:547-551: a spell-type button (en/disable/cast) whose
+	// action the pet does not know is skipped entirely — no bar entry, no
+	// autocast toggle.
+	motion := s.controlledPetMotion(petGUID)
+	for _, p := range pairs {
+		if p.action != 0 && (p.actType == petActEnabled || p.actType == petActDisabled || p.actType == petActPassive) && !s.petKnowsSpell(ctx, motion, p.action) {
+			continue
+		}
+		slots[p.pos] = actionSlot{actType: p.actType, action: p.action}
 
 		// Synchronize pet_spell table when spell action buttons change active state
 		petNumber := s.petNumberForGUID(petGUID)
-		if aAction > 0 && petNumber > 0 {
-			if aType == 0xC1 { // ACT_ENABLED (autocast enabled)
-				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 1 WHERE guid = ? AND spell = ?", petNumber, aAction)
-			} else if aType == 0x81 { // ACT_DISABLED (autocast disabled)
-				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 0 WHERE guid = ? AND spell = ?", petNumber, aAction)
+		if p.action > 0 && petNumber > 0 {
+			if p.actType == 0xC1 { // ACT_ENABLED (autocast enabled)
+				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 1 WHERE guid = ? AND spell = ?", petNumber, p.action)
+			} else if p.actType == 0x81 { // ACT_DISABLED (autocast disabled)
+				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 0 WHERE guid = ? AND spell = ?", petNumber, p.action)
 			}
 		}
 	}
