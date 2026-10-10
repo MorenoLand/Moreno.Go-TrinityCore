@@ -13536,6 +13536,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.stopAttackOnSpellFinish(spell)
 	}
 
+	// Spell::_cast (Spell.cpp:3442-3450): the CAST_SPELL criterion updates for
+	// player casters with no triggered gate — a triggered cast counts as a
+	// cast, same as the client path (spells.go:8086). The cast-item USE_ITEM
+	// arm is suppressed here: every Go triggered cast carries
+	// TRIGGERED_FULL_MASK, which includes TRIGGERED_IGNORE_CAST_ITEM
+	// (SpellDefines.h:137 — "Will not take away cast item or update related
+	// achievement criteria").
+	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
+	// Spell::PreprocessSpellHit (Spell.cpp:2730-2735): the caster-side timed
+	// spell-cast achievement and the CAST_SPELL2 criterion fire per unit
+	// target with no triggered gate. The client path folds the per-target
+	// legs to once per cast (spells.go:8087-8088); this path does the same.
+	// The target-side BE_SPELL_TARGET legs ride the shared damage/heal
+	// funnels (spells.go:12374/14754), which the triggered effect loop
+	// above calls.
+	s.startTimedAchievement(timedTypeSpellCast, spellID)
+	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
+
 	// Spell::_cast (Spell.cpp:3502-3511): a triggered cast (C++
 	// Unit::CastSpell(id, true)) runs the same _cast tail, so the
 	// spell_linked_spell list fires here too. The CHEAT_COOLDOWN leg
