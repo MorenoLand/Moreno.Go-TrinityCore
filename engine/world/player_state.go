@@ -2153,6 +2153,17 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	}
 	state.RangedAttackPower += uint32(baseRAP)
 
+	// StatSystem.cpp:479 — the live SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
+	// total (recomputed every 30s by the periodic tick,
+	// SpellAuraEffects.cpp:5635-5641) feeds both melee and ranged flat
+	// attack power. The tracked field keeps the tick's delta fold in sync.
+	apOfArmor := int32(s.playerAuraModifier(spellAuraModAttackPowerOfArmor))
+	if apOfArmor > 0 {
+		state.AttackPower += uint32(apOfArmor)
+		state.RangedAttackPower += uint32(apOfArmor)
+	}
+	s.attackPowerOfArmorApplied = apOfArmor
+
 	// Apply Ammo DPS to ranged weapon damage (TC StatSystem.cpp:584-588, Player.cpp:8430-8450)
 	if state.AmmoID > 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		var ammoClass, ammoSubclass uint8
@@ -2358,6 +2369,45 @@ func (s *session) playerAuraModifier(auraType uint32) float32 {
 		}
 	}
 	return total
+}
+
+// refreshAttackPowerOfArmor mirrors the UpdateAttackPowerAndDamage(false/true)
+// pair at the end of AuraEffect::HandleModAttackPowerOfArmorAuraTick
+// (SpellAuraEffects.cpp:5640-5641): the recomputed aura-285 amount feeds the
+// flat attack-power modifier on both melee and ranged (StatSystem.cpp:479),
+// and the ranged weapon-damage AP bonus is rebuilt the way
+// UpdateDamagePhysical(RANGED_ATTACK) does. Deltas fold against the last
+// applied total so the 30s tick and aura removal never need a full recalc.
+func (s *session) refreshAttackPowerOfArmor() {
+	if s == nil || s.player == nil {
+		return
+	}
+	total := int32(s.playerAuraModifier(spellAuraModAttackPowerOfArmor))
+	delta := total - s.attackPowerOfArmorApplied
+	if delta == 0 {
+		return
+	}
+	s.attackPowerOfArmorApplied = total
+	if ap := int32(s.player.AttackPower) + delta; ap > 0 {
+		s.player.AttackPower = uint32(ap)
+	} else {
+		s.player.AttackPower = 0
+	}
+	if rap := int32(s.player.RangedAttackPower) + delta; rap > 0 {
+		s.player.RangedAttackPower = uint32(rap)
+	} else {
+		s.player.RangedAttackPower = 0
+	}
+	// StatSystem.cpp:590-591 — the ranged weapon-damage bonus rides ranged
+	// attack power; rebuild the delta the way calculatePlayerStats bakes it.
+	speedMod := float32(s.player.RangedAttackTime) / 1000.0
+	if speedMod <= 0 {
+		speedMod = 2.0
+	}
+	bonus := (float32(delta) / 14.0) * speedMod
+	s.player.MinRangedDamage += bonus
+	s.player.MaxRangedDamage += bonus
+	s.sendPlayerUpdate()
 }
 
 func (s *session) updatePlayerParryPercentage(state *playerState, level uint8) {

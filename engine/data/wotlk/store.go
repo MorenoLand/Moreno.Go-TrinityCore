@@ -1007,6 +1007,15 @@ func (s *Store) spell(id uint32) (Spell, bool, error) {
 			}
 		}
 		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Mechanic: effectMechanic, Aura: aura, AuraPeriod: auraPeriod, Amplitude: amplitude, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell, ChainTargets: chainTargets, ItemType: itemType, PointsPerCombo: pointsPerCombo, SpellClassMask: spellClassMask, ChainAmplitude: chainAmplitude, BonusCoefficient: bonusCoefficient}
+		// SpellMgr.cpp:4962 — the 30-second special-aura cadence: a
+		// SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR (285) aura effect ticks every
+		// 30s regardless of the DBC amplitude so that
+		// AuraEffect::HandleModAttackPowerOfArmorAuraTick
+		// (SpellAuraEffects.cpp:5635-5641) recomputes the armor-derived
+		// amount. The C++ patch overwrites unconditionally; mirror it.
+		if effect == spellEffectApplyAura && aura == 285 {
+			spell.Effects[i].AuraPeriod = 30 * 1000
+		}
 	}
 	for i := range spell.Reagent {
 		reagent, err := record.Int32(52 + i) // Reagent, DBCStructure.h:1441 (52-59)

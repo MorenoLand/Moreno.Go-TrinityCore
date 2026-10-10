@@ -16360,6 +16360,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasMovementSpeedAura := false
 	wasMountedFlight := false
 	wasParryAura := false
+	wasAttackPowerOfArmor := false
 	removedAuraType := uint32(0)
 	removedFakeInebriation := uint32(0)
 	removedEffectMask := uint8(0)
@@ -16371,6 +16372,7 @@ func (s *session) removeAura(spellID uint32) {
 			removedCasterGUID = aura.CasterGUID
 			removedAuraType = aura.AuraType
 			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
+			wasAttackPowerOfArmor = s.activeAuraHasEffect(aura, spellAuraModAttackPowerOfArmor)
 			wasMounted = aura.AuraType == spellAuraMounted
 			wasMountedFlight = wasMounted && s.activeAuraHasEffect(aura, spellAuraMountedFlightSpeed)
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
@@ -16522,6 +16524,13 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasParryAura && s.player != nil {
 		s.updatePlayerParryPercentage(s.player, s.player.Level)
+	}
+	// AuraEffect::HandleModAttackPowerOfArmorAuraTick's
+	// UpdateAttackPowerAndDamage pair (SpellAuraEffects.cpp:5640-5641) has no
+	// remove-time leg (HandleNoImmediateEffect), but Go's attack power is a
+	// stored stat, so the withdrawn aura's contribution is folded out here.
+	if wasAttackPowerOfArmor {
+		s.refreshAttackPowerOfArmor()
 	}
 	// AuraEffect::HandleSpiritOfRedemption remove leg
 	// (SpellAuraEffects.cpp:1527-1553): "die at aura end" — when the spirit
@@ -19448,6 +19457,39 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, ts)
 		}
 		_ = ts.applyPeriodicTickDamageToPlayer(dmg, burnTargetHealth, aura)
+	case spellAuraModAttackPowerOfArmor: // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
+		// SpellAuraEffects.cpp:5635-5641 (HandleModAttackPowerOfArmorAuraTick):
+		// armorMod = Effects[effIndex].CalcValue(caster, &m_baseAmount);
+		// amount = target->GetArmor() / armorMod; then
+		// UpdateAttackPowerAndDamage(false) and (true). The divisor rides
+		// the tree's flat BasePoints+1 CalcValue convention (the
+		// random-roll/combo-point/ApplyEffectModifiers legs have no Go
+		// model); C++ GetArmor() is the total normal-school resistance while
+		// Go's armor carries no SPELL_AURA_MOD_RESISTANCE (22) fold — a
+		// documented delta. SetAmount pins the amount (no client packet);
+		// the AP rebuild runs through refreshAttackPowerOfArmor.
+		divisor := int32(0)
+		effIndex := -1
+		if ts.server != nil && ts.server.Data != nil {
+			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				for i, eff := range sp.Effects {
+					if eff.Aura == spellAuraModAttackPowerOfArmor && aura.EffectMask&(1<<uint(i)) != 0 {
+						effIndex = i
+						divisor = eff.BasePoints + 1
+						break
+					}
+				}
+			}
+		}
+		if effIndex < 0 || divisor <= 0 {
+			break
+		}
+		amount := int32(ts.player.Armor) / divisor
+		if effIndex < len(aura.Amounts) {
+			aura.Amounts[effIndex] = amount
+		}
+		aura.Amount = uint32(amount)
+		ts.refreshAttackPowerOfArmor()
 	}
 }
 
@@ -20489,6 +20531,28 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		_, burnAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, burnTargetHealth, target, key, aura)
 		return burnAlive
+	case spellAuraModAttackPowerOfArmor: // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
+		// SpellAuraEffects.cpp:5635-5641 (HandleModAttackPowerOfArmorAuraTick):
+		// amount = target->GetArmor() / Effects[effIndex].CalcValue(...),
+		// then UpdateAttackPowerAndDamage(false/true). The divisor rides the
+		// tree's flat BasePoints+1 CalcValue convention; Go creatures carry
+		// no attack-power model, so the AP rebuild half stays unbridged
+		// (documented, like the other creature damage simplifications).
+		divisor := int32(0)
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				for i, eff := range sp.Effects {
+					if eff.Aura == spellAuraModAttackPowerOfArmor && aura.EffectMask&(1<<uint(i)) != 0 {
+						divisor = eff.BasePoints + 1
+						break
+					}
+				}
+			}
+		}
+		if divisor > 0 {
+			aura.Amount = uint32(int32(target.Armor) / divisor)
+		}
+		return true
 	}
 	return true
 }

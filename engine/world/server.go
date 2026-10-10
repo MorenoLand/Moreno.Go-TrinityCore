@@ -442,6 +442,11 @@ type session struct {
 	diminishing               [DiminishingMax]diminishingReturn
 	procICD                   map[uint32]time.Time
 	triggeredNoProcEvents     int
+	// attackPowerOfArmorApplied tracks the SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
+	// (285) total currently folded into AttackPower/RangedAttackPower, so the
+	// 30s periodic tick (SpellAuraEffects.cpp:5635-5641) can apply amount
+	// recomputes as deltas without a full stat recalc.
+	attackPowerOfArmorApplied int32
 	castProcHitMask           uint32 // Spell::m_hitMask (Spell.cpp:2603) — per-target proc hit masks ORed in as the cast's damage/heal targets resolve; reset at each cast entry (finishSpellCast, the triggered-cast path, the delayed arrival closure) with save/restore for nested casts, mirroring the per-Spell-object lifetime
 	procDeep                  int    // Unit::m_procDeep (Unit.h:1729) — elevated while the player's auras are evaluated for a proc event (Unit::TriggerAurasProcOnEvent, Unit.cpp:10424-10448); a hit on a proc-deep unit cannot trigger further procs (Unit::CanProc, Unit.h:1609; Spell.cpp:2441)
 	extraAttacks              uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings
