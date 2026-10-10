@@ -643,10 +643,43 @@ func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) 
 }
 
 // handleQuestPoiQuery processes CMSG_QUEST_POI_QUERY (0x1E3).
-// Reference: WorldSession::HandleQuestPOIQuery (QuestHandler.cpp:520).
+// Reference: WorldSession::HandleQuestPOIQuery (QueryHandler.cpp:321-363).
 func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool {
-	buf := protocol.NewBuffer(4)
-	buf.WriteU32(0) // count = 0 POIs
+	r := protocol.NewReader(payload)
+	count, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	// QueryHandler.cpp:323-324: more than MAX_QUEST_LOG_SIZE (25) quest ids is a
+	// silent drop — no packet at all.
+	if count > playerQuestLogSlots {
+		return true
+	}
+	// QueryHandler.cpp:328-330: duplicate quest ids are collapsed into a set.
+	seen := make(map[uint32]struct{}, count)
+	questIDs := make([]uint32, 0, count)
+	for i := uint32(0); i < count; i++ {
+		questID, err := r.ReadU32()
+		if err != nil {
+			return false
+		}
+		if _, dup := seen[questID]; dup {
+			continue
+		}
+		seen[questID] = struct{}{}
+		questIDs = append(questIDs, questID)
+	}
+
+	buf := protocol.NewBuffer(4 + len(questIDs)*8)
+	buf.WriteU32(uint32(len(questIDs)))
+	for _, questID := range questIDs {
+		// QueryHandler.cpp:332-356 echoes every quest id; quests with POI data
+		// append the QuestPOIWrapper buffer. Go has no quest_poi model (no
+		// loader for quest_poi/quest_poi_points), so every quest takes the
+		// C++ no-wrapper arm: quest id + zero POI count (documented delta).
+		buf.WriteU32(questID)
+		buf.WriteU32(0)
+	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_QUEST_POI_QUERY_RESPONSE), buf.Bytes(), true)
 	return true
 }

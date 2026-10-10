@@ -3578,9 +3578,9 @@ func (s *session) handleReadItem(ctx context.Context, payload []byte) bool {
 }
 
 // handlePageTextQuery processes CMSG_PAGE_TEXT_QUERY (0x05A).
-// Reference: WorldSession::HandleQueryPageText (QueryHandler.cpp:277).
+// Reference: WorldSession::HandleQueryPageText (QueryHandler.cpp:277-316).
 func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+	if len(payload) < 4 {
 		return true
 	}
 	r := protocol.NewReader(payload)
@@ -3589,17 +3589,35 @@ func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool 
 		return false
 	}
 
-	var text string
-	var nextPageID uint32
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, NextPageID FROM page_text WHERE ID = ? LIMIT 1", pageID).Scan(&text, &nextPageID)
-	}
+	// QueryHandler.cpp:286: while (pageID) — a zero page id sends nothing at all,
+	// and the handler walks the NextPageID chain itself, one packet per page.
+	// (The 256 cap is a Go-only guard against a cyclic NextPageID chain in the DB;
+	// C++ would spin the same while loop forever.)
+	for pages := 0; pageID != 0 && pages < 256; pages++ {
+		var text string
+		var nextPageID uint32
+		found := false
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, NextPageID FROM page_text WHERE ID = ? LIMIT 1", pageID).Scan(&text, &nextPageID); err == nil {
+				found = true
+			}
+		}
 
-	buf := protocol.NewBuffer(32 + len(text))
-	buf.WriteU32(pageID)
-	buf.WriteCString(text)
-	buf.WriteU32(nextPageID)
-	_ = s.write(uint16(protocol.OpcodeSMSG_PAGE_TEXT_QUERY_RESPONSE), buf.Bytes(), true)
+		buf := protocol.NewBuffer(32 + len(text))
+		buf.WriteU32(pageID)
+		if !found {
+			// QueryHandler.cpp:296-299: a missing page answers "Item page missing."
+			// with a zero next page, ending the chain.
+			buf.WriteCString("Item page missing.")
+			buf.WriteU32(0)
+			_ = s.write(uint16(protocol.OpcodeSMSG_PAGE_TEXT_QUERY_RESPONSE), buf.Bytes(), true)
+			break
+		}
+		buf.WriteCString(text)
+		buf.WriteU32(nextPageID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PAGE_TEXT_QUERY_RESPONSE), buf.Bytes(), true)
+		pageID = nextPageID
+	}
 	return true
 }
 

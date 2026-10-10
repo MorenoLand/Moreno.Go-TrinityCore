@@ -2216,12 +2216,27 @@ func (s *session) handleCorpseQuery(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeMSG_CORPSE_QUERY), buf.Bytes(), true)
 		return true
 	}
+	// QueryHandler.cpp:161-178: when the corpse lies on a different map than the
+	// player and that map is a dungeon with a corpse entrance map, the marker is
+	// drawn at the dungeon entrance instead of the (undisplayable) interior.
+	mapID, x, y, z := corpse.MapID, corpse.X, corpse.Y, corpse.Z
+	if mapID != s.player.Map && s.server.Data != nil {
+		if mapEntry, found, err := s.server.Data.Map(mapID); err == nil && found &&
+			mapEntry.IsDungeon() && mapEntry.CorpseMapID >= 0 {
+			if _, entranceFound, entranceErr := s.server.Data.Map(uint32(mapEntry.CorpseMapID)); entranceErr == nil && entranceFound {
+				mapID = uint32(mapEntry.CorpseMapID)
+				x, y = mapEntry.CorpseX, mapEntry.CorpseY
+				// Entrance Z comes from Map::GetHeight in C++; no terrain bridge
+				// in Go, so the corpse's own Z is kept (documented delta).
+			}
+		}
+	}
 	buf := protocol.NewBuffer(25)
 	buf.WriteU8(1) // corpse found
-	buf.WriteU32(corpse.MapID)
-	buf.WriteF32(corpse.X)
-	buf.WriteF32(corpse.Y)
-	buf.WriteF32(corpse.Z)
+	buf.WriteU32(mapID)
+	buf.WriteF32(x)
+	buf.WriteF32(y)
+	buf.WriteF32(z)
 	buf.WriteU32(corpse.MapID)
 	buf.WriteU32(0) // unknown
 	_ = s.write(uint16(protocol.OpcodeMSG_CORPSE_QUERY), buf.Bytes(), true)
