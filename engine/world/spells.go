@@ -357,6 +357,7 @@ const (
 	spellEffectCharge                  = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
 	spellEffectSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
 	spellEffectOpenLock                = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
+	spellEffectDismissPet              = 102 // SPELL_EFFECT_DISMISS_PET (SharedDefines.h:913)
 	spellEffectDispel                  = 38  // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
 	spellEffectResurrectPet            = 109 // SPELL_EFFECT_RESURRECT_PET (SharedDefines.h:920)
 	spellEffectSummon                  = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
@@ -3888,6 +3889,11 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 			}
 		}
 	}
+	// Spell::ExecuteLogEffectOpenLock (SpellEffects.cpp:2058) fires after a
+	// successful open on the gameobject arm; C++ sends it after SendLoot, so
+	// the packet order relative to the door/button use and the loot window
+	// is a documented cosmetic delta. The item-target arm stays unmodeled.
+	s.sendOpenLockLog(spell.ID, goGUID)
 	// Spell::SendLoot DOOR/BUTTON arm: a pick-locked door or button opens
 	// instead of showing a loot window. The arm returns before
 	// Player::SendLoot, so no previous-loot release runs here.
@@ -9361,13 +9367,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				glyphPropID := uint16(eff.MiscValue)
 				s.applyGlyph(effCtx, s.targetGlyphSlot, glyphPropID)
 			case 56: // SPELL_EFFECT_SUMMON_PET
-				s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue))
+				// Spell::EffectSummonPet (SpellEffects.cpp:3102) logs the
+				// summoned pet via ExecuteLogEffectSummonObject.
+				if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue)); guid != 0 {
+					s.sendSummonObjectLog(spellID, eff.Effect, guid)
+				}
 			case 28: // SPELL_EFFECT_SUMMON
-				s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue))
+				// Spell::EffectSummonType (SpellEffects.cpp:2343/2402) logs
+				// the summoned creature via ExecuteLogEffectSummonObject.
+				if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue)); guid != 0 {
+					s.sendSummonObjectLog(spellID, eff.Effect, guid)
+				}
 			case 101: // SPELL_EFFECT_FEED_PET
 				s.handleFeedPet(effCtx, spellID, target.ItemGUID, eff.TriggerSpell, uint8(effectIndex))
 			case 102: // SPELL_EFFECT_DISMISS_PET
-				s.handleDismissPet(effCtx)
+				s.handleDismissPet(effCtx, spellID)
 			case 109: // SPELL_EFFECT_RESURRECT_PET
 				s.handleResurrectPet(effCtx, spellID)
 			case 55: // SPELL_EFFECT_TAMECREATURE
@@ -9908,13 +9922,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.handleEffectInterruptCast(effCtx, targetGUID, spell, wotlk.SpellEffect{})
 		}
 		if spellID == 2641 { // Dismiss Pet
-			s.handleDismissPet(effCtx)
+			s.handleDismissPet(effCtx, spellID)
 		} else if spellID == 883 { // Call Pet
 			s.handleSummonPet(effCtx, spellID, 0)
 		} else if spellID == 31687 { // Summon Water Elemental
-			s.handleSummonPet(effCtx, spellID, 510)
+			// Effect 28 (SPELL_EFFECT_SUMMON) logs the summon; the effect
+			// loop already handled it when present — the already-active
+			// gate keeps this exactly-once.
+			if guid := s.handleSummonPet(effCtx, spellID, 510); guid != 0 {
+				s.sendSummonObjectLog(spellID, 28, guid)
+			}
 		} else if spellID == 46584 { // Raise Dead
-			s.handleSummonPet(effCtx, spellID, 26125)
+			if guid := s.handleSummonPet(effCtx, spellID, 26125); guid != 0 {
+				s.sendSummonObjectLog(spellID, 28, guid)
+			}
 		} else if spellID == 63645 {
 			s.activateSpec(effCtx, 0)
 		} else if spellID == 63644 {
@@ -25601,7 +25622,7 @@ func (s *session) handleEffectSummonObject(ctx context.Context, spell wotlk.Spel
 	s.server.spawnDynamicGameObject(dyn)
 	// unitCaster->m_ObjectSlot[slot] = go->GetGUID(); ExecuteLogEffectSummonObject.
 	s.player.ObjectSlots[slot] = dyn.GUID
-	s.sendSummonObjectLog(spell.ID, dyn.GUID)
+	s.sendSummonObjectLog(spell.ID, eff.Effect, dyn.GUID)
 	// Documented no-bridge: GAMEOBJECT_LEVEL (Go's dynamic GO state carries no
 	// level field) and the quaternion rotation from the caster's orientation
 	// (the wild-summon bridge, handleEffectSummonObjectWild, already ships the
@@ -28295,7 +28316,7 @@ func (s *session) handleEffectSummonObjectWild(ctx context.Context, spell wotlk.
 		})
 	}
 	s.server.spawnDynamicGameObject(dyn)
-	s.sendSummonObjectLog(spell.ID, dyn.GUID)
+	s.sendSummonObjectLog(spell.ID, eff.Effect, dyn.GUID)
 	_ = ctx
 }
 
@@ -28424,9 +28445,9 @@ func (s *session) applyGameObjectArtKit(ctx context.Context, goGUID uint64, artK
 
 // sendSummonObjectLog mirrors Spell::ExecuteLogEffectSummonObject
 // (Spell.cpp:4606): SMSG_SPELLLOGEXECUTE carrying the summoned object's GUID
-// under the summon effect ID (Spell.cpp:4547), sent to the caster and nearby
+// under the effect's own id (Spell.cpp:4547), sent to the caster and nearby
 // players like the other spell-log builders.
-func (s *session) sendSummonObjectLog(spellID uint32, goGUID uint64) {
+func (s *session) sendSummonObjectLog(spellID, effectID uint32, goGUID uint64) {
 	if s == nil || s.player == nil {
 		return
 	}
@@ -28434,9 +28455,51 @@ func (s *session) sendSummonObjectLog(spellID uint32, goGUID uint64) {
 	log.WritePackedGUID(s.playerGUID)
 	log.WriteU32(spellID)
 	log.WriteU32(1)
-	log.WriteU32(spellEffectSummonObjectWild)
+	log.WriteU32(effectID)
 	log.WriteU32(1)
 	log.WritePackedGUID(goGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
+}
+
+// sendOpenLockLog mirrors Spell::ExecuteLogEffectOpenLock (Spell.cpp:4588):
+// SMSG_SPELLLOGEXECUTE carrying the opened gameobject's GUID under the
+// open-lock effect id, sent to the caster and nearby players like the other
+// spell-log builders.
+func (s *session) sendOpenLockLog(spellID uint32, goGUID uint64) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectOpenLock)
+	log.WriteU32(1)
+	log.WritePackedGUID(goGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
+}
+
+// sendUnsummonObjectLog mirrors Spell::ExecuteLogEffectUnsummonObject
+// (Spell.cpp:4612): SMSG_SPELLLOGEXECUTE carrying the dismissed pet's GUID
+// under the dismiss-pet effect id, sent to the caster and nearby players like
+// the other spell-log builders.
+func (s *session) sendUnsummonObjectLog(spellID uint32, petGUID uint64) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectDismissPet)
+	log.WriteU32(1)
+	log.WritePackedGUID(petGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)

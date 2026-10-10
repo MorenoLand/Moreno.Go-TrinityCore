@@ -1240,13 +1240,13 @@ func (s *session) updatePetOnLevelUp(ctx context.Context) bool {
 	return true
 }
 
-func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uint32) {
+func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uint32) uint64 {
 	if s.player == nil {
-		return
+		return 0
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return
+		return 0
 	}
 
 	// If entry == 0 (e.g. Hunter Call Pet 883), summon current stabled or existing pet
@@ -1258,11 +1258,11 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 			s.playerGUID).Scan(&petID, &pEntry, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState)
 		if err != nil {
 			s.debug("no pet found to call", "account", s.accountName)
-			return
+			return 0
 		}
 		if s.player.PetGUID != 0 {
 			if s.activePetNumber() == uint32(petID) {
-				return // already active
+				return 0 // already active
 			}
 			s.unsummonPet(ctx, petSaveNotInSlot)
 		}
@@ -1275,7 +1275,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 			maxMana = uint32(curMana)
 		}
 		s.spawnPet(ctx, uint32(petID), uint32(pEntry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMana, uint8(reactState))
-		return
+		return s.player.PetGUID
 	}
 
 	var petID, modelID, level, petType, reactState, curHealth, curMana int64
@@ -1287,7 +1287,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 	if err == nil && petID > 0 {
 		if s.player.PetGUID != 0 {
 			if s.activePetNumber() == uint32(petID) {
-				return // already active
+				return 0 // already active
 			}
 			s.unsummonPet(ctx, petSaveNotInSlot)
 		}
@@ -1306,7 +1306,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 		}
 
 		s.spawnPet(ctx, uint32(petID), entry, petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
-		return
+		return s.player.PetGUID
 	}
 
 	if s.player.PetGUID != 0 {
@@ -1342,10 +1342,21 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 	}
 
 	s.spawnPet(ctx, newPetID, entry, petName, playerLevel, model, maxHP, maxHP, maxMP, maxMP, 1)
+	return s.player.PetGUID
 }
 
-func (s *session) handleDismissPet(ctx context.Context) {
+func (s *session) handleDismissPet(ctx context.Context, spellID uint32) {
+	// Spell::EffectDismissPet (SpellEffects.cpp:4211) logs the unsummon of
+	// the dismissed pet; capture the GUID before unsummonPet clears it. A
+	// second (post-loop spellID 2641) call finds no pet and stays silent.
+	var petGUID uint64
+	if s.player != nil {
+		petGUID = s.player.PetGUID
+	}
 	s.unsummonPet(ctx, petSaveNotInSlot)
+	if petGUID != 0 {
+		s.sendUnsummonObjectLog(spellID, petGUID)
+	}
 }
 
 func (s *session) handleResurrectPet(ctx context.Context, spellID uint32) {
