@@ -1605,6 +1605,8 @@ const (
 	equipErrDontOwnThatItem                   = 32 // C++ EQUIP_ERR_DONT_OWN_THAT_ITEM (ItemDefines.h:58)
 	equipErrCantEquipReputation               = 64 // C++ EQUIP_ERR_CANT_EQUIP_REPUTATION (ItemDefines.h:90)
 	equipErrBagFull                           = 4
+	equipErrOnlyAmmoCanGoHere                 = 7  // C++ EQUIP_ERR_ONLY_AMMO_CAN_GO_HERE (ItemDefines.h:33)
+	equipErrBagFull6                          = 62 // C++ EQUIP_ERR_BAG_FULL6 (ItemDefines.h:88)
 	equipErrNonemptyBagOverOtherBag           = 5
 	equipErrCantEquipWithTwohanded            = 13
 	equipErrCantDualWield                     = 14
@@ -4740,12 +4742,57 @@ func (s *session) handleSetAmmo(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
 	}
+	// ItemHandler.cpp:766-770: setting ammo while dead answers
+	// EQUIP_ERR_YOU_ARE_DEAD before the packet is even read.
+	if s.isDeadOrGhost() {
+		s.sendEquipError(equipErrYouAreDead, 0)
+		return true
+	}
 	r := protocol.NewReader(payload)
 	itemEntry, _ := r.ReadU32()
-	s.player.AmmoID = itemEntry
+	if itemEntry != 0 {
+		// ItemHandler.cpp:779-783: ammo the player does not own answers
+		// EQUIP_ERR_ITEM_NOT_FOUND.
+		if s.inventoryItemCount(ctx, itemEntry) == 0 {
+			s.sendEquipError(equipErrItemNotFound, 0)
+			return true
+		}
+		// Player::SetAmmo (Player.cpp:12096-12115): re-setting the same
+		// ammo is a silent no-op; otherwise the CanUseAmmo arms gate the
+		// change and _ApplyAmmoBonuses re-derives the ranged bonus.
+		if s.player.AmmoID != itemEntry {
+			if res := s.canUseAmmo(ctx, itemEntry); res != equipErrOk {
+				s.sendEquipError(res, 0)
+				return true
+			}
+			s.player.AmmoID = itemEntry
+		}
+	} else {
+		// Player::RemoveAmmo (Player.cpp:12118-12126).
+		s.player.AmmoID = 0
+	}
 	_ = s.calculatePlayerStats(ctx, s.player)
 	s.sendPlayerUpdate()
 	return true
+}
+
+// canUseAmmo mirrors Player::CanUseAmmo (Player.cpp:12066-12094): only the
+// arms with Go models are carried — the full CanUseItem body stays a Go
+// approximation (standing delta). The dead arm is unreachable from the
+// handler (its own gate fires first, same as C++), so only the
+// template-missing, non-ammo-type, and Requires No Ammo aura arms apply.
+func (s *session) canUseAmmo(ctx context.Context, entry uint32) uint8 {
+	data, err := s.loadItemQueryData(ctx, entry)
+	if err != nil {
+		return equipErrItemNotFound
+	}
+	if data.InventoryType != invTypeAmmo {
+		return equipErrOnlyAmmoCanGoHere
+	}
+	if s.hasAura(46699) { // Requires No Ammo
+		return equipErrBagFull6
+	}
+	return equipErrOk
 }
 
 const (

@@ -1,8 +1,11 @@
 package world
 
 import (
+	"bytes"
+	"compress/zlib"
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"strconv"
 	"time"
@@ -78,6 +81,30 @@ func (s *session) sendQueryTimeResponse() {
 	buf.WriteU32(uint32(now.Unix()))
 	buf.WriteU32(uint32(nextDailyQuestResetTime(now).Sub(now).Seconds()))
 	_ = s.write(uint16(protocol.OpcodeSMSG_QUERY_TIME_RESPONSE), buf.Bytes(), true)
+}
+
+// ticketChatLogDecompress inflates the CMSG_GMTICKET_CREATE chat-log blob
+// (zlib stream, TicketHandler.cpp:88-97) toward the advertised decompressed
+// size.
+func ticketChatLogDecompress(blob []byte, decompressedSize uint32) ([]byte, error) {
+	zr, err := zlib.NewReader(bytes.NewReader(blob))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	out := make([]byte, 0, decompressedSize)
+	chunk := make([]byte, 4096)
+	for {
+		n, err := zr.Read(chunk)
+		out = append(out, chunk[:n]...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // handleGMTicketSystemStatus processes CMSG_GMTICKET_SYSTEMSTATUS (0x21A).
@@ -204,9 +231,44 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 	needResponse, _ := r.ReadU32()
 	needMoreHelpBool, _ := r.ReadU8()
 
+	// TicketHandler.cpp:69-105: the client appends a chat-log tail — a
+	// timestamp count, the zlib payload's decompressed size, then the
+	// compressed log. C++ consumes the whole tail; a failed decompression
+	// aborts the create with no response, and an invalid hyperlink in the
+	// log drops it (also no response). The log itself stays memory-only in
+	// C++ (GmTicket::_chatLog is never stored in the DB), so Go consumes
+	// and validates it without persisting.
+	var chatLog string
+	if count, err := r.ReadU32(); err == nil {
+		for i := uint32(0); i < count; i++ {
+			if _, err := r.ReadU32(); err != nil {
+				break
+			}
+		}
+		if decompressedSize, err := r.ReadU32(); err == nil && count > 0 && decompressedSize > 0 && decompressedSize < 0xFFFF {
+			if rest, err := r.Read(r.Remaining()); err == nil {
+				if data, err := ticketChatLogDecompress(rest, decompressedSize); err == nil {
+					if idx := bytes.IndexByte(data, 0); idx >= 0 {
+						chatLog = string(data[:idx])
+					} else {
+						chatLog = string(data)
+					}
+				} else {
+					return true
+				}
+			}
+		}
+	}
+
 	// TicketHandler.cpp:69: an invalid hyperlink in the ticket text drops
 	// the create.
 	if !s.validateHyperlinksAndMaybeKick(ctx, message) {
+		return true
+	}
+
+	// TicketHandler.cpp:102: an invalid hyperlink in the chat log drops
+	// the create too — the log gates ticket creation, not just the text.
+	if chatLog != "" && !s.validateHyperlinksAndMaybeKick(ctx, chatLog) {
 		return true
 	}
 
