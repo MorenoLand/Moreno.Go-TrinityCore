@@ -2795,6 +2795,28 @@ func (s *session) guildBankWithdrawMoneyForRepair(ctx context.Context, guildID u
 	return true
 }
 
+// isGuildSwapInventoryPos mirrors Player::IsInventoryPos
+// (Player.cpp:10141): only base-inventory positions reach
+// Guild::SwapItemsWithInventory — bank-bag container slots (67..73) and
+// any other non-inventory position are rejected by the handler with
+// EQUIP_ERR_NONE (59), never reaching the move.
+func isGuildSwapInventoryPos(bag, slot uint8) bool {
+	if bag == invSlotBag0 && slot == 0xFF { // INVENTORY_SLOT_BAG_0 + NULL_SLOT
+		return true
+	}
+	if bag == invSlotBag0 && slot >= invSlotItemStart && slot < invSlotItemEnd {
+		return true
+	}
+	if bag >= invSlotBagStart && bag < invSlotBagEnd {
+		return true
+	}
+	// KEYRING_SLOT_START (86) .. CURRENCYTOKEN_SLOT_END (150), Player.h
+	if bag == invSlotBag0 && slot >= invSlotKeyringStart && slot < 150 {
+		return true
+	}
+	return false
+}
+
 // handleGuildBankSwapItems processes CMSG_GUILD_BANK_SWAP_ITEMS (0x3E9).
 // Reference: WorldSession::HandleGuildBankSwapItems (GuildHandler.cpp:320).
 func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) bool {
@@ -2972,6 +2994,14 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			autoTarget := autoStore || containerSlot == 0xFF && containerItemSlot == 0xFF
 			var destination *guildMoveLocation
 			if !autoTarget {
+				// Reference: WorldSession::HandleGuildBankSwapItems
+				// (GuildHandler.cpp:331-335): non-inventory container
+				// positions (bank bags included) answer EQUIP_ERR_NONE
+				// and never reach SwapItemsWithInventory.
+				if !isGuildSwapInventoryPos(containerSlot, containerItemSlot) && !(containerSlot == 0xFF && containerItemSlot == 0xFF) {
+					s.sendEquipError(equipErrNone, 0)
+					return true
+				}
 				bagKey, ok := s.inventoryBagKey(ctx, containerSlot)
 				if !ok {
 					return true
@@ -2999,6 +3029,13 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			// inside guildMoveItem and fails silently, C++-exact; no
 			// upfront rights block or command-result feedback exists on
 			// this path.
+			// Reference: WorldSession::HandleGuildBankSwapItems
+			// (GuildHandler.cpp:331-335): the inventory-position gate
+			// applies here too — bank bags answer EQUIP_ERR_NONE.
+			if !isGuildSwapInventoryPos(containerSlot, containerItemSlot) && !(containerSlot == 0xFF && containerItemSlot == 0xFF) {
+				s.sendEquipError(equipErrNone, 0)
+				return true
+			}
 			bagKey, ok := s.inventoryBagKey(ctx, containerSlot)
 			if !ok {
 				return true
@@ -4074,16 +4111,17 @@ func (s *session) handleGuildBankUpdateTab(ctx context.Context, payload []byte) 
 		return true
 	}
 
-	// Reference: Guild::HandleSetBankTabInfo (Guild.cpp:1384-1396): a
-	// GetBankTab miss (unpurchased tab) logs an error and returns before the
-	// broadcast, so the UPDATE touching zero rows must not broadcast; C++
-	// broadcasts unconditionally once the tab exists (SetInfo no-ops the DB
-	// write when name+icon are unchanged but the event still fires).
-	res, execErr := cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabName = ?, TabIcon = ? WHERE guildid = ? AND TabId = ?", name, icon, guildID, tabID)
-	if execErr != nil {
+	// Reference: Guild::HandleSetBankTabInfo (Guild.cpp:1384-1396): the
+	// gate is GetBankTab — tabId < purchased count — not the UPDATE's
+	// row count. BankTab::SetInfo early-returns on unchanged values, but
+	// the GE_BANK_TAB_UPDATED broadcast still fires; MySQL reports zero
+	// RowsAffected for a no-change UPDATE, so gating on it wrongly
+	// silenced re-saves of identical tab info.
+	var purchasedTabs int64
+	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&purchasedTabs); err != nil || int64(tabID) >= purchasedTabs {
 		return true
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if _, execErr := cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabName = ?, TabIcon = ? WHERE guildid = ? AND TabId = ?", name, icon, guildID, tabID); execErr != nil {
 		return true
 	}
 
