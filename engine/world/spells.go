@@ -3467,20 +3467,25 @@ func (s *session) unitTargetPowerType(guid uint64) (int32, bool) {
 // spellNeedsExplicitUnitTarget mirrors SpellInfo::NeedsExplicitUnitTarget
 // (SpellInfo.cpp:1047-1050): (GetExplicitTargetMask() &
 // TARGET_FLAG_UNIT_MASK) != 0, with TARGET_FLAG_UNIT_MASK = 0x2 | 0x4 | 0x8
-// | 0x80 | 0x100 | 0x400 | 0x10000 | 0x100000 (SpellInfo.h:70-71). The
-// PARTY (0x8), RAID (0x4), and PASSENGER (0x100000) bits come from
-// spellExplicitUnitTargetMask (targets 35/57/95, SpellInfo.cpp:226/265/184);
-// the plain-UNIT (0x2) bit comes from TARGET-reference-type entries whose
-// check type falls through to TARGET_FLAG_UNIT in
-// SpellImplicitTargetInfo::GetExplicitTargetMask (SpellInfo.cpp:134-210):
-// TARGET_CHECK_DEFAULT unit entries (25 TARGET_UNIT_TARGET_ANY) and dest
-// entries (63-71 TARGET_DEST_TARGET_ANY/front/.../left, 74/75
-// TARGET_DEST_TARGET_RANDOM/RADIUS), plus TARGET_CHECK_RAID_CLASS (61
-// TARGET_UNIT_TARGET_AREA_RAID_CLASS). All real SPELL_EFFECT_CHARGE spells
-// use target 6 (UNIT_ENEMY = 0x80) or 21 (UNIT_ALLY = 0x100), so the mask
-// test is vacuous for them — the helper stays for custom-spell fidelity.
+// | 0x80 | 0x100 | 0x400 | 0x10000 | 0x100000 (SpellInfo.h:70-71).
+// GetExplicitTargetMask is the DBC Targets field OR'd with the per-effect
+// SpellImplicitTargetInfo::GetExplicitTargetMask bits
+// (_InitializeExplicitTargetMask, SpellInfo.cpp:3345-3373), so the spell
+// Targets field is tested first against the full unit mask. The named
+// check types (ENEMY/ALLY/PARTY/RAID/PASSENGER — targets 6/21/45/35/57/95,
+// plus 53 TARGET_DEST_TARGET_ENEMY) and the plain-UNIT fall-through for
+// target 90 come from spellExplicitUnitTargetMask; the remaining
+// TARGET_CHECK_DEFAULT fall-throughs carry plain TARGET_FLAG_UNIT
+// (SpellInfo.cpp:184-210): 25 (TARGET_UNIT_TARGET_ANY), 61
+// (TARGET_UNIT_TARGET_AREA_RAID_CLASS via the RAID_CLASS fall-through),
+// and the dest entries 63-71/74/75 — tested by target number below. The
+// GetMissingTargetMask extension for EFFECT_IMPLICIT_TARGET_EXPLICIT
+// effects (SpellInfo.cpp:3364) is unmodeled (explicit_target_faction.go:92).
 func spellNeedsExplicitUnitTarget(spell wotlk.Spell) bool {
-	if mask := spellExplicitUnitTargetMask(spell); mask&(targetFlagUnitParty|targetFlagUnitRaid|targetFlagUnitPassenger) != 0 {
+	if spell.Targets&targetFlagUnitMask != 0 {
+		return true
+	}
+	if mask := spellExplicitUnitTargetMask(spell); mask&targetFlagUnitMask != 0 {
 		return true
 	}
 	for _, eff := range spell.Effects {

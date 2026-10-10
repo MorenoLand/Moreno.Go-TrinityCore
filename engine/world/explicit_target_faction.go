@@ -36,18 +36,21 @@ const (
 
 // spellExplicitUnitTargetMask mirrors the unit-target half of
 // SpellImplicitTargetInfo::GetExplicitTargetMask (SpellInfo.cpp:134-210).
-// Per effect and per TargetA/TargetB, unit targets with TARGET reference
-// type map their selection check type to the validating flag:
-// TARGET_CHECK_ENEMY -> TARGET_FLAG_UNIT_ENEMY, TARGET_CHECK_ALLY ->
-// TARGET_FLAG_UNIT_ALLY, TARGET_CHECK_PARTY -> TARGET_FLAG_UNIT_PARTY,
-// TARGET_CHECK_RAID -> TARGET_FLAG_UNIT_RAID, TARGET_CHECK_PASSENGER ->
-// TARGET_FLAG_UNIT_PASSENGER. The table rows used are:
+// Per effect and per TargetA/TargetB, TARGET-reference rows map their
+// selection check type to the validating flag: TARGET_CHECK_ENEMY ->
+// TARGET_FLAG_UNIT_ENEMY, TARGET_CHECK_ALLY -> TARGET_FLAG_UNIT_ALLY,
+// TARGET_CHECK_PARTY -> TARGET_FLAG_UNIT_PARTY, TARGET_CHECK_RAID ->
+// TARGET_FLAG_UNIT_RAID, TARGET_CHECK_PASSENGER ->
+// TARGET_FLAG_UNIT_PASSENGER. TARGET_OBJECT_TYPE_DEST rows are grouped
+// with the UNIT rows under TARGET_REFERENCE_TYPE_TARGET (SpellInfo.cpp:158),
+// so target 53 (TARGET_DEST_TARGET_ENEMY, TARGET_CHECK_ENEMY) maps to
+// TARGET_FLAG_UNIT_ENEMY as well. The table rows used are:
 // 6 -> ENEMY; 21, 45 -> ALLY; 35 -> PARTY; 57 -> RAID (SpellInfo.cpp:226,
-// 241, 255, 265, 277); 95 -> PASSENGER (SpellInfo.cpp:184, 315). Target 90
-// (TARGET_UNIT_TARGET_MINIPET) carries TARGET_CHECK_DEFAULT and falls
-// through to plain TARGET_FLAG_UNIT, so the TARGET_FLAG_UNIT_MINIPET bit
-// (0x10000, SpellInfo.h:64) is never produced by GetExplicitTargetMask and
-// its CheckExplicitTarget arm (SpellInfo.cpp:1806-1808) is dead on the
+// 241, 255, 265, 277); 95 -> PASSENGER (SpellInfo.cpp:184, 315).
+// Target 90 (TARGET_UNIT_TARGET_MINIPET) carries TARGET_CHECK_DEFAULT and
+// falls through to plain TARGET_FLAG_UNIT, so the TARGET_FLAG_UNIT_MINIPET
+// bit (0x10000, SpellInfo.h:64) is never produced by GetExplicitTargetMask
+// and its CheckExplicitTarget arm (SpellInfo.cpp:1806-1808) is dead on the
 // DBC-driven path.
 func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
 	mask := uint32(0)
@@ -63,8 +66,12 @@ func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
 				mask |= targetFlagUnitAlly
 			case 35:
 				mask |= targetFlagUnitParty
+			case 53:
+				mask |= targetFlagUnitEnemy // TARGET_DEST_TARGET_ENEMY: DEST rows group with UNIT rows under TARGET_REFERENCE_TYPE_TARGET (SpellInfo.cpp:158-184)
 			case 57:
 				mask |= targetFlagUnitRaid
+			case 90:
+				mask |= targetFlagUnit // TARGET_CHECK_DEFAULT fall-through to plain TARGET_FLAG_UNIT (SpellInfo.cpp:184)
 			case 95:
 				mask |= targetFlagUnitPassenger
 			}
