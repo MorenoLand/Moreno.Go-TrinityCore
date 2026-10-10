@@ -9002,7 +9002,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false)
+					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false)
 				}
 				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
 				// reflected chain jump resolves its unit to the caster, so a
@@ -9010,7 +9010,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// caster — the same victim-selection arms as the loop above.
 				if len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
 					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
-					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false)
+					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -12793,7 +12793,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if schoolMask == 0 {
 				schoolMask = 1
 			}
-			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, s.playerGUID, false)
+			s.applyAuraToTarget(ctx, targetGUID, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, s.playerGUID, false)
 		} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 			healAmount := uint32(eff.BasePoints + 1)
 			if healAmount == 0 && spellID == ProcSpellCrusader {
@@ -12856,7 +12856,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
-		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil, false, s.playerGUID, false)
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, s.playerGUID, false)
 	}
 
 	// Spell::handle_immediate (Spell.cpp:3493, 3613-3626): Go's triggered
@@ -18390,7 +18390,7 @@ func isExistingAreaAuraOfTarget(aura *activeAura, exSpell wotlk.Spell, targetGUI
 // (Unit::RemoveAurasDueToSpellBySteal, Unit.cpp:4020:
 // createInfo.SetCasterGUID(aura->GetCasterGUID())) — the no-stack purge's
 // same-caster terms and the wire caster field key on it, not on the stealer.
-func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool) {
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool) {
 	if s.player == nil {
 		return
 	}
@@ -18418,10 +18418,21 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 
 	if targetSess != nil && targetSess.player != nil {
-		if targetSess.player.Health == 0 {
+		// Unit::AddAura dead-target gate (Unit.cpp:12274): a dead target
+		// only takes the aura when the spell is passive or carries
+		// ATTR2_CAN_TARGET_DEAD.
+		if targetSess.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			return
 		}
 		if targetSess.isImmuneToSpell(spell, s) {
+			return
+		}
+		// Spell::AddUnitTarget per-effect immunity strip
+		// (Spell.cpp:2108-2112): an effect the target is immune to never
+		// joins the aura. Synthetic effects (effIndex -1: dispel steal,
+		// retaliation silence, dynobj holder auras, the no-effect fallback)
+		// have no DBC effect row and skip this gate.
+		if effIndex >= 0 && targetSess.isImmunedToSpellEffect(spell, effIndex, s) {
 			return
 		}
 		if eff.Aura == 36 {
@@ -18879,7 +18890,20 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 
 	// Target is a creature in the world
 	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok || target.Health == 0 {
+	if !ok {
+		return
+	}
+	// Unit::AddAura dead-target gate (Unit.cpp:12274), same passive and
+	// ATTR2_CAN_TARGET_DEAD carve-outs as the player path.
+	if target.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
+		return
+	}
+	// Spell::AddUnitTarget per-effect immunity strip (Spell.cpp:2108-2112)
+	// for creature targets: an effect the creature is immune to never joins
+	// the aura. The spell-level and IMMUNE2 gates ride the hit-resolution
+	// dispatch (creatureTargetImmuneToSpell / creatureTargetFullyEffectImmune
+	// call sites), so only the per-effect leg belongs here.
+	if effIndex >= 0 && s.creatureTargetImmuneToSpellEffect(ctx, targetGUID, spell, effIndex, s) {
 		return
 	}
 	targetKey := creatureAuraKeyForTarget(target)
