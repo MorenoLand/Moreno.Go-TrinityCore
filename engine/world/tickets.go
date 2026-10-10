@@ -361,7 +361,7 @@ func (s *session) handleGmTicketSystemToggle(ctx context.Context, payload []byte
 // handleBug processes CMSG_BUG (0x1CA).
 // Reference: WorldSession::HandleBugOpcode (MiscHandler.cpp:551).
 func (s *session) handleBug(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if len(payload) < 8 {
 		return true
 	}
 	r := protocol.NewReader(payload)
@@ -369,19 +369,20 @@ func (s *session) handleBug(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	contentLen, err := r.ReadU32()
+	// CMSG_BUG carries contentLen/typeLen prefixes, but the strings parse
+	// null-terminated (ByteBuffer::operator>>(std::string) = ReadCString);
+	// C++ reads the lengths and ignores them for parsing.
+	if _, err = r.ReadU32(); err != nil {
+		return false
+	}
+	content, err := r.ReadCString()
 	if err != nil {
 		return false
 	}
-	content, err := r.ReadString(int(contentLen))
-	if err != nil {
+	if _, err = r.ReadU32(); err != nil {
 		return false
 	}
-	typeLen, err := r.ReadU32()
-	if err != nil {
-		return false
-	}
-	typeStr, err := r.ReadString(int(typeLen))
+	typeStr, err := r.ReadCString()
 	if err != nil {
 		return false
 	}

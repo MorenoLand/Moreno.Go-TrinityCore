@@ -26,15 +26,19 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	}
 
 	// 2. DBC Radius & Oriented Bounding Box Validation
-	// Reference: MiscHandler.cpp:660-673 and Player::IsInAreaTriggerRadius (Player.cpp:2417)
-	if s.server != nil && s.server.Data != nil {
-		atEntry, found, err := s.server.Data.AreaTrigger(triggerID)
-		if err == nil && found {
-			if !atEntry.IsInAreaTriggerRadius(s.player.Map, s.player.X, s.player.Y, s.player.Z) {
-				s.debug("areatrigger ignored: out of radius", "account", s.accountName, "trigger", triggerID)
-				return true
-			}
-		}
+	// Reference: MiscHandler.cpp:660-673 and Player::IsInAreaTriggerRadius (Player.cpp:2417).
+	// Unknown trigger IDs are ignored before any arm runs (MiscHandler.cpp:660-665).
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	atEntry, found, err := s.server.Data.AreaTrigger(triggerID)
+	if err != nil || !found {
+		s.debug("areatrigger ignored: unknown trigger", "account", s.accountName, "trigger", triggerID)
+		return true
+	}
+	if !atEntry.IsInAreaTriggerRadius(s.player.Map, s.player.X, s.player.Y, s.player.Z) {
+		s.debug("areatrigger ignored: out of radius", "account", s.accountName, "trigger", triggerID)
+		return true
 	}
 
 	wdb := s.server.WorldStore.DB
@@ -48,17 +52,13 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	if err := wdb.QueryRowContext(ctx, "SELECT quest FROM areatrigger_involvedrelation WHERE id = ?", triggerID).Scan(&questID); err == nil && questID != 0 {
 		status, _ := s.characterQuestStatus(ctx, questID)
 		if status == questStatusIncomplete {
-			cdb := s.server.CharactersStore.DB
-			if cdb != nil {
-				_, _ = cdb.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, questID)
-			}
-			for slot := 0; slot < playerQuestLogSlots; slot++ {
-				if s.player.QuestLog[slot].QuestID == questID {
-					s.player.QuestLog[slot].State = questCompleteStateFlag(questStatusComplete)
-					s.sendPlayerQuestLogUpdate(slot)
-					break
-				}
-			}
+			// Player::AreaExploredOrEventHappens (Player.cpp:16503): the
+			// explore objective fires SendQuestComplete, and the quest
+			// completes only when all objectives are done. Go has no
+			// per-quest Explored objective model, so the update-complete
+			// broadcast rides along with the standing completeQuest path.
+			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
+			s.completeQuest(ctx, questID)
 		}
 	}
 
@@ -68,6 +68,11 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	if err := wdb.QueryRowContext(ctx, "SELECT id FROM areatrigger_tavern WHERE id = ?", triggerID).Scan(&tavernID); err == nil && tavernID != 0 {
 		s.innTriggerID = triggerID
 		s.setRestingFlag(s.player, true)
+		// WorldSession::HandleAreaTriggerOpcode (MiscHandler.cpp:686-695):
+		// inn rest clears the FFA PvP byte flag on FFA realms.
+		if (s.server.Config.GameType == 4 || s.server.Config.GameType == 6) && s.player.PVPFlags&pvpFlagFFA != 0 {
+			s.player.PVPFlags &^= pvpFlagFFA
+		}
 		s.sendPlayerUpdate()
 		return true
 	}

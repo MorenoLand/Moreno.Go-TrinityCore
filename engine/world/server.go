@@ -539,6 +539,11 @@ type activeCastState struct {
 	CastTimeMs   uint32
 	Pushbacks    int
 	InterruptFlg uint32
+	// Target is the in-flight SpellCastTargets (m_targets). CMSG_UPDATE_MISSILE_TRAJECTORY
+	// (MiscHandler.cpp:1545) mutates the current generic spell's src/dst/elevation/speed
+	// mid-cast; the completion closure reads it back under castMu so client trajectory
+	// updates land in the fired spell.
+	Target protocol.SpellTargetData
 	// HitTriggers is the PrepareTriggersExecutedOnHit snapshot (Spell.cpp:8176):
 	// ADD_TARGET_TRIGGER auras present on the caster at cast completion, for
 	// the on-hit trigger consumer.

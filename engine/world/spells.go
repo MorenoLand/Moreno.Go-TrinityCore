@@ -2958,6 +2958,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			StartAt:      time.Now(),
 			CastTimeMs:   castTime,
 			InterruptFlg: spell.InterruptFlags,
+			Target:       target,
 		}
 		castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 			s.castMu.Lock()
@@ -2969,6 +2970,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				s.castMu.Unlock()
 				return
 			}
+			// Re-read the target under the lock: CMSG_UPDATE_MISSILE_TRAJECTORY
+			// may have rewritten its trajectory mid-cast.
+			target := castState.Target
 			s.castMu.Unlock()
 			s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0, nil)
 		})
@@ -24127,6 +24131,19 @@ func (s *session) handleUpdateMissileTrajectory(ctx context.Context, payload []b
 	moveStop, _ := r.ReadU8()
 
 	s.debug("update missile trajectory", "account", s.accountName, "guid", guid, "spell", spellID, "elevation", elevation, "speed", speed, "fire", []float32{fireX, fireY, fireZ}, "impact", []float32{impactX, impactY, impactZ}, "moveStop", moveStop)
+
+	// Spell::m_targets mutation (MiscHandler.cpp:1559-1566): the client rewrites the
+	// in-flight generic spell's src/dst, elevation, and speed. Go tracks only the
+	// player's own cast (no pet/charmed-unit cast model); anything else is ignored.
+	s.castMu.Lock()
+	if cast := s.activeCast; cast != nil && !cast.Cancelled && guid == s.playerGUID && cast.SpellID == spellID &&
+		cast.Target.Flags&protocol.SpellTargetFlagSourceLocation != 0 && cast.Target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		cast.Target.Source.X, cast.Target.Source.Y, cast.Target.Source.Z = fireX, fireY, fireZ
+		cast.Target.Destination.X, cast.Target.Destination.Y, cast.Target.Destination.Z = impactX, impactY, impactZ
+		cast.Target.TrajElevation = elevation
+		cast.Target.TrajSpeed = speed
+	}
+	s.castMu.Unlock()
 
 	if moveStop != 0 && r.Remaining() >= 4 {
 		opcode, _ := r.ReadU32()
