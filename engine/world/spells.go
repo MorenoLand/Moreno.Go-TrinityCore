@@ -18700,8 +18700,44 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	// SpellAuraEffects.cpp:827-830 — _ticksDone increments before the tick
 	// handler runs, even when the handler early-returns on a dead target.
 	aura.TickCount++
-	if aura.AuraType == 23 && aura.TriggerSpell != 0 {
-		ts.castSpellDirect(context.Background(), aura.TriggerSpell, ts.periodicTriggerTarget(aura))
+	if (aura.AuraType == spellAuraPeriodicTriggerSpell || aura.AuraType == spellAuraPeriodicTriggerSpellWithValue) && aura.TriggerSpell != 0 {
+		// SpellAuraEffects.cpp:5049-5079
+		// (HandlePeriodicTriggerSpellAuraTick) and :5081-5106
+		// (HandlePeriodicTriggerSpellWithValueAuraTick): the triggered
+		// spell casts from the aura caster when it needs an explicit unit
+		// target (SpellInfo::NeedsToBeTriggeredByCaster), otherwise from
+		// the aura target. The with-value tick additionally overrides
+		// every effect's base points with the aura amount
+		// (SPELLVALUE_BASE_POINT0+i for i in 0..MAX_SPELL_EFFECTS-1).
+		// The C++ TC_LOG_WARN/ERROR legs have no Go equivalent; an
+		// unknown triggered spell is a no-op in the cast path, like the
+		// creature tick.
+		triggerCaster := ts
+		if ts.server != nil && ts.server.Data != nil && aura.CasterGUID != ts.playerGUID {
+			if triggering, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				if triggered, found, err := ts.server.Data.Spell(aura.TriggerSpell); err == nil && found {
+					if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
+						// A creature caster has no Go cast path; an
+						// offline player caster falls back to the
+						// target, matching the tree's cast-attribution
+						// delta on the replenish trigger lines.
+						if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+							triggerCaster = casterSess
+						}
+					}
+				}
+			}
+		}
+		// SPELL_ATTR4_INHERIT_CRIT_FROM_AURA's SPELLVALUE_CRIT_CHANCE
+		// override (SpellAuraEffects.cpp:5059-5061, 5098-5100) has no Go
+		// model — the tree carries no crit-chance override on triggered
+		// casts. Eluna's OnDummyEffect (5063-5066) is likewise unbridged.
+		if aura.AuraType == spellAuraPeriodicTriggerSpellWithValue {
+			withValue := int32(aura.Amount)
+			triggerCaster.castSpellDirectWithBasePoints(context.Background(), aura.TriggerSpell, ts.periodicTriggerTarget(aura), []int32{withValue, withValue, withValue})
+		} else {
+			triggerCaster.castSpellDirect(context.Background(), aura.TriggerSpell, ts.periodicTriggerTarget(aura))
+		}
 		return
 	}
 	ts.playerStateMu.Lock()
@@ -18986,16 +19022,63 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
-		powerType := uint32(aura.MiscValue)
-		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, powerType, aura.Amount)
-		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		// SpellAuraEffects.cpp:5548-5578 (HandlePeriodicEnergizeAuraTick):
+		// the target gains the flat power amount; the log carries the
+		// clamped amount; the caster forwards half the actual gain as
+		// threat, ignoring modifiers.
+		energizePower := aura.MiscValue
+		if energizePower < 0 || energizePower > 6 {
+			break
+		}
+		// SpellAuraEffects.cpp:5552-5553 — a player whose current power
+		// type differs from the energized power gets nothing unless the
+		// spell carries SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER. There is
+		// no potion-family carve-out on the tick path, unlike
+		// Spell::EffectEnergize (SpellEffects.cpp:1788-1791).
+		var energizeSpell wotlk.Spell
+		energizeKnown := false
+		if ts.server != nil && ts.server.Data != nil {
+			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				energizeSpell, energizeKnown = sp, true
+			}
+		}
+		if playerPowerType(ts.player) != uint8(energizePower) &&
+			(!energizeKnown || energizeSpell.AttributesEx7&spellAttr7CanRestoreSecondaryPower == 0) {
+			break
+		}
+		energizePT := uint32(energizePower)
+		// SpellAuraEffects.cpp:5555-5556 — no max power, no tick (and no
+		// log). The dead-target arm is the tick dispatch's global gate.
+		if int(energizePT) >= len(ts.player.MaxPowers) || ts.player.MaxPowers[energizePT] == 0 {
+			break
+		}
+		// SpellAuraEffects.cpp:5562-5563 — don't regen when a permanent
+		// aura's target already has full power.
+		if aura.DurationMs == 0 && ts.player.Powers[energizePT] == ts.player.MaxPowers[energizePT] {
+			break
+		}
+		// SpellAuraEffects.cpp:5565 — ignore negative values (can be the
+		// result of applying spellmods to the aura amount). Go has no
+		// tick-time spellmod recalculation of periodic amounts, so
+		// aura.Amount is always non-negative here; the clamp rides the
+		// uint32 storage.
+		energizeAmount := aura.Amount
+		energizeLog := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, energizePT, energizeAmount)
+		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), energizeLog, true)
 		if ts.server != nil {
 			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), energizeLog, true)
 			}
-			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), energizeLog, ts)
 		}
-		ts.adjustSpellPower(context.Background(), aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
+		oldEnergizePower := ts.player.Powers[energizePT]
+		ts.adjustSpellPower(context.Background(), aura.TargetGUID, energizePower, int64(energizeAmount))
+		// SpellAuraEffects.cpp:5576-5577 — the caster forwards half the
+		// actual gain as threat, ignoring modifiers (the final bool).
+		// UNIT_STATE_ISOLATED / SendTickImmune has no Go model.
+		if ts.server != nil && ts.player.Powers[energizePT] > oldEnergizePower {
+			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, ts.player.Powers[energizePT]-oldEnergizePower, true)
+		}
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
 		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
@@ -19912,14 +19995,91 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		return true
 
-	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
-		powerType := uint32(aura.MiscValue)
-		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, powerType, aura.Amount)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
-		if s.server != nil {
-			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+	case 227: // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE
+		// SpellAuraEffects.cpp:5081-5106
+		// (HandlePeriodicTriggerSpellWithValueAuraTick): the triggered
+		// spell casts with every effect's base points overridden to the
+		// aura amount (SPELLVALUE_BASE_POINT0+i, i in 0..MAX_SPELL_EFFECTS-1).
+		// The creature tick has no full-cast path of its own; the aura
+		// caster's player session performs the triggered cast, with the
+		// same NeedsToBeTriggeredByCaster selection as the player path —
+		// the target-cast branch falls back to the caster session, the
+		// tree's documented cast-attribution delta for creature targets
+		// (see the replenish trigger lines). A creature caster or an
+		// offline player caster stays unbridged.
+		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
+			if _, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				if _, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
+					if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+						withValue := int32(aura.Amount)
+						casterSess.castSpellDirectWithBasePoints(ctx, aura.TriggerSpell, aura.TargetGUID, []int32{withValue, withValue, withValue})
+					}
+				}
+			}
 		}
-		s.adjustSpellPower(ctx, aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
+		return true
+
+	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
+		// SpellAuraEffects.cpp:5548-5578 (HandlePeriodicEnergizeAuraTick):
+		// the same legs as the player path; the player-only power-type
+		// mismatch gate does not fire on creatures, and the dead-target
+		// arm is this function's global gate.
+		cEnergizePower := aura.MiscValue
+		if cEnergizePower < 0 || cEnergizePower > 6 {
+			return true
+		}
+		cEnergizePT := uint32(cEnergizePower)
+		cEnergizeAmount := aura.Amount
+		cEnergizeGained := uint32(0)
+		cEnergizeSkip := true
+		if s.server != nil {
+			// SpellAuraEffects.cpp:5555-5556, 5562-5563 — no max power or
+			// a permanent aura on a full-power target: no tick, no log.
+			// Creature power rides the motion directly like the power-burn
+			// tick; adjustSpellPower only covers pets and players.
+			s.server.motionMu.Lock()
+			if motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID); motion != nil && int(cEnergizePT) < len(motion.Powers) && int(cEnergizePT) < len(motion.MaxPowers) && motion.MaxPowers[cEnergizePT] != 0 &&
+				!(aura.DurationMs == 0 && motion.Powers[cEnergizePT] == motion.MaxPowers[cEnergizePT]) {
+				old := motion.Powers[cEnergizePT]
+				maximum := motion.MaxPowers[cEnergizePT]
+				next := old + cEnergizeAmount
+				if next < old || next > maximum {
+					next = maximum
+				}
+				motion.Powers[cEnergizePT] = next
+				cEnergizeGained = next - old
+				if cEnergizePower == 0 {
+					motion.Mana = next
+				} else if cEnergizePower == 4 {
+					motion.Happiness = next
+				}
+				mapID, instID, guid, newPower := motion.Map, motion.InstanceID, motion.GUID, next
+				s.server.motionMu.Unlock()
+				s.server.broadcastCreatureValuesUpdateInInstance(mapID, instID, guid, map[int]uint32{unitFieldPower1 + int(cEnergizePower): newPower})
+				cEnergizeSkip = false
+			} else {
+				s.server.motionMu.Unlock()
+			}
+		}
+		if cEnergizeSkip {
+			return true
+		}
+		cEnergizeLog := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, cEnergizePT, cEnergizeAmount)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), cEnergizeLog, true)
+		if s.server != nil {
+			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), cEnergizeLog, s)
+		}
+		// SpellAuraEffects.cpp:5576-5577 — half the actual gain as threat,
+		// ignoring modifiers. Creature healers carry no
+		// healing-threat-multiplier model, so the ignoreModifiers leg is
+		// vacuous on the creature-caster branch.
+		if s.server != nil && cEnergizeGained > 0 {
+			if tickCaster := s.server.findSessionByGUID(aura.CasterGUID); tickCaster != nil {
+				s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, cEnergizeGained, true)
+			} else {
+				s.server.distributeCreatureHealingThreat(ctx, key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, cEnergizeGained)
+			}
+		}
 		return true
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
