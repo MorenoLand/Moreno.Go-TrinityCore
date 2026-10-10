@@ -26,6 +26,40 @@ const (
 // GMTicketResponse (TicketMgr.h:43): ALREADY_EXIST=1, CREATE_SUCCESS=2,
 // CREATE_ERROR=3, UPDATE_SUCCESS=4, UPDATE_ERROR=5, TICKET_DELETED=9.
 
+// ticketAgeDays mirrors GetAge (TicketMgr.cpp:33): (GameTime - t) / DAY.
+func ticketAgeDays(t, now int64) float32 {
+	age := float32(now-t) / 86400
+	if age < 0 {
+		age = 0
+	}
+	return age
+}
+
+// oldestOpenTicketAge mirrors TicketMgr::GetOldestOpenTicket (TicketMgr.h:205):
+// the oldest !IsClosed() && !IsCompleted() ticket's age in days; 0 when none
+// (GmTicket::WritePacket, TicketMgr.cpp:135-137).
+func (s *session) oldestOpenTicketAge(ctx context.Context, now int64) float32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var oldest int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		"SELECT MIN(lastModifiedTime) FROM gm_ticket WHERE closedBy = 0 AND type = 0 AND completed = 0").Scan(&oldest); err != nil || oldest == 0 {
+		return 0
+	}
+	return ticketAgeDays(oldest, now)
+}
+
+// noteTicketsChanged mirrors TicketMgr::UpdateLastChange (TicketMgr.cpp:416):
+// the "last change" age in the ticket packet advances on ticket creation and
+// the mutating GM ticket commands (cs_ticket.cpp), never on player
+// update/delete/resolve, views, or response appends.
+func (s *session) noteTicketsChanged() {
+	if s.server != nil {
+		s.server.ticketsLastChange.Store(time.Now().Unix())
+	}
+}
+
 // sendGMTicketDefault mirrors TicketMgr::SendTicket(session, nullptr)
 // (TicketMgr.cpp:446): the no-ticket SMSG_GMTICKET_GETTICKET state.
 func (s *session) sendGMTicketDefault() {
@@ -86,12 +120,9 @@ func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) b
 				s.sendGMResponseReceived(ticketID, message, response)
 				return true
 			}
-			// TicketMgr.cpp:127 (GmTicket::WritePacket): ages are days
-			// (GetAge divides by DAY), not seconds.
-			age := float32(time.Now().Unix()-lastModifiedTime) / 86400
-			if age < 0 {
-				age = 0
-			}
+			// TicketMgr.cpp:33 (GetAge): ages are days, not seconds.
+			now := time.Now().Unix()
+			age := ticketAgeDays(lastModifiedTime, now)
 			// TicketMgr.cpp:140: the escalated byte is min(status, 2)
 			// (TICKET_IN_ESCALATION_QUEUE); the viewed byte is the
 			// GMTICKET_OPENEDBYGM_STATUS_* flag.
@@ -108,8 +139,10 @@ func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) b
 			buf.WriteCString(message)
 			buf.WriteU8(needMoreHelp)
 			buf.WriteF32(age)
-			buf.WriteF32(0) // oldest ticket age
-			buf.WriteF32(0) // last change age
+			// TicketMgr.cpp:135-139 (GmTicket::WritePacket): oldest open
+			// ticket age, then the TicketMgr last-change age.
+			buf.WriteF32(s.oldestOpenTicketAge(ctx, now))
+			buf.WriteF32(ticketAgeDays(s.server.ticketsLastChange.Load(), now))
 			buf.WriteU8(escalated)
 			buf.WriteU8(viewedFlag)
 			return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET), buf.Bytes(), true) == nil
@@ -148,6 +181,20 @@ func (s *session) sendGMResponseReceived(ticketID uint32, message, response stri
 // handleGMTicketCreate processes CMSG_GMTICKET_CREATE (0x205).
 // Reference: WorldSession::HandleGMTicketCreateOpcode (TicketHandler.cpp:34).
 func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool {
+	// TicketHandler.cpp:37-45: the queue-disabled and LevelReq.Ticket gates
+	// fire before any parsing — the packet is never inspected on these arms,
+	// so no hyperlink validation runs there either.
+	if s.server != nil && !s.server.ticketsEnabled.Load() {
+		return true
+	}
+
+	// TicketHandler.cpp:41: LevelReq.Ticket gate with the LANG_TICKET_REQ
+	// notification (no trinity_string bridge; plain text used).
+	if s.server != nil && s.player != nil && uint32(s.player.Level) < s.server.Config.TicketLevelReq {
+		s.sendNotification("You need to be level " + strconv.FormatUint(uint64(s.server.Config.TicketLevelReq), 10) + " to use the ticket system.")
+		return true
+	}
+
 	r := protocol.NewReader(payload)
 	mapId, _ := r.ReadU32()
 	x, _ := r.ReadF32()
@@ -160,19 +207,6 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 	// TicketHandler.cpp:69: an invalid hyperlink in the ticket text drops
 	// the create.
 	if !s.validateHyperlinksAndMaybeKick(ctx, message) {
-		return true
-	}
-
-	// TicketHandler.cpp:38: a disabled ticket queue silently drops the
-	// create — no response packet is sent on this arm.
-	if s.server != nil && !s.server.ticketsEnabled.Load() {
-		return true
-	}
-
-	// TicketHandler.cpp:41: LevelReq.Ticket gate with the LANG_TICKET_REQ
-	// notification (no trinity_string bridge; plain text used).
-	if s.server != nil && s.player != nil && uint32(s.player.Level) < s.server.Config.TicketLevelReq {
-		s.sendNotification("You need to be level " + strconv.FormatUint(uint64(s.server.Config.TicketLevelReq), 10) + " to use the ticket system.")
 		return true
 	}
 
@@ -213,6 +247,9 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 			`INSERT INTO gm_ticket (id, type, playerGuid, name, description, createTime, mapId, posX, posY, posZ, lastModifiedTime, closedBy, assignedTo, comment, response, completed, escalated, viewed, needMoreHelp, resolvedBy)
 			 VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '', '', 0, 0, 0, ?, 0)`,
 			nextID, s.playerGUID, playerName, message, now, mapId, x, y, z, now, needMoreHelp)
+		// TicketHandler.cpp:118: creation advances the ticket-manager
+		// last-change clock (TicketMgr::UpdateLastChange).
+		s.noteTicketsChanged()
 		// TicketHandler.cpp:120: GMs hear about the new ticket
 		// (LANG_COMMAND_TICKETNEW 2000, inlined from TDB enUS recall).
 		if s.server != nil {

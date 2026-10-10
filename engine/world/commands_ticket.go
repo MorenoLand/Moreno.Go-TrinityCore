@@ -249,6 +249,7 @@ func (s *session) handleTicketAssign(ctx context.Context, args []string) {
 	}
 	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
+	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d assigned to %s.", t.id, targetName))
 }
 
@@ -271,6 +272,7 @@ func (s *session) handleTicketClose(ctx context.Context, args []string) {
 	t.closedBy = s.playerGUID
 	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
+	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d closed.", t.id))
 }
 
@@ -302,6 +304,7 @@ func (s *session) handleTicketComment(ctx context.Context, args []string) {
 	t.comment = strings.Join(args[1:], " ")
 	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
+	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("%s added comment to ticket %d: %s", s.player.Name, t.id, t.comment)) // LANG_COMMAND_TICKETLISTADDCOMMENT 2024
 }
 
@@ -331,6 +334,7 @@ func (s *session) handleTicketComplete(ctx context.Context, args []string) {
 	t.completed = true
 	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
+	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d completed.", t.id))
 }
 
@@ -355,6 +359,7 @@ func (s *session) handleTicketDelete(ctx context.Context, args []string) {
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM gm_ticket WHERE id = ?", t.id)
 	}
+	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d deleted.", t.id))
 }
 
@@ -373,6 +378,7 @@ func (s *session) handleTicketEscalate(ctx context.Context, args []string) {
 	t.escalated = 2 // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
 	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
+	s.noteTicketsChanged()
 	// C++ sends no message to the invoking GM here (the submitter gets the
 	// ticket packet via SendTicket, which has no Go bridge), so this arm is
 	// silent, == C++.
@@ -527,6 +533,7 @@ func (s *session) handleTicketUnassign(ctx context.Context, args []string) {
 	t.assignedTo = 0
 	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
+	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d unassigned from %s.", t.id, assignedName))
 }
 
