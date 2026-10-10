@@ -4539,25 +4539,13 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	usedSlots := make(map[uint8]bool)
-	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
-	if err == nil {
-		for rows.Next() {
-			var sl int64
-			if rows.Scan(&sl) == nil {
-				usedSlots[uint8(sl)] = true
-			}
-		}
-		rows.Close()
-	}
-	freeSlot := uint8(0xFF)
-	for sl := uint8(23); sl <= 38; sl++ {
-		if !usedSlots[sl] {
-			freeSlot = sl
-			break
-		}
-	}
-	if freeSlot == 0xFF {
+	// PetitionsHandler.cpp:178-183: CanStoreNewItem(NULL_BAG, NULL_SLOT)
+	// searches the backpack then every equipped bag; a full inventory
+	// answers the equip error via SendEquipError(msg, nullptr, nullptr,
+	// charterid) — EQUIP_ERR_INVENTORY_FULL — not a silent return.
+	bagKey, clientBag, freeSlot, slotOK := s.findFreeInventorySlot(ctx, s.playerGUID)
+	if !slotOK {
+		s.sendEquipError(equipErrInventoryFull, 0)
 		return true
 	}
 
@@ -4576,7 +4564,7 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	// here, matching the C++ SendNewItem state.
 	enchantments := fmt.Sprintf("%d 0 0", nextItemGUID)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, 5863, ?, ?, 1, 0, '', 0, ?, 0, 0, 0, '')", nextItemGUID, s.playerGUID, s.playerGUID, enchantments)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextItemGUID)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, bagKey, freeSlot, nextItemGUID)
 	// PetitionsHandler.cpp:197-204: buying a new charter invalidates the
 	// owner's previous petition of the same type (RemovePetition). The
 	// REPLACE covers the petition row (PK is ownerguid+type); the old
@@ -4585,7 +4573,7 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO petition (ownerguid, petitionguid, name, type) VALUES (?, ?, ?, 9)",
 		s.playerGUID, petitionGUID, name)
 
-	_ = s.sendItemCreate(uint64(nextItemGUID), 5863, 1, 0, freeSlot)
+	_ = s.sendItemCreate(uint64(nextItemGUID), 5863, 1, clientBag, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	return true
@@ -4599,12 +4587,14 @@ func (s *session) sendPetitionShowSignatures(target *session, petitionGUID uint6
 	}
 	cdb := s.server.CharactersStore.DB
 
-	var ownerGUID, petitionType int64
-	// SendPetitionSigns (PetitionsHandler.cpp:243-248) gates on the CALLER's
-	// guild id (_player->GetGuildId()), not the target's: on the offer path
-	// the signs are dropped when the OFFERER is in a guild, even though the
-	// packet is addressed to the target.
-	if err := cdb.QueryRow("SELECT ownerguid, type FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID, &petitionType); err != nil || petitionType == 9 && s.player.GuildID != 0 {
+	var ownerGUID int64
+	// SendPetitionSigns (PetitionsHandler.cpp:243) answers unconditionally:
+	// the guild gate ("if guild petition and has guild => error, return")
+	// lives in HandlePetitionShowSignatures (PetitionsHandler.cpp:234-236)
+	// only — HandleOfferPetitionOpcode (PetitionsHandler.cpp:514-587) calls
+	// SendPetitionSigns with no gate, so a guilded offerer offering their
+	// charter still shows the target the signs.
+	if err := cdb.QueryRow("SELECT ownerguid FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID); err != nil {
 		return
 	}
 
@@ -4648,6 +4638,17 @@ func (s *session) handlePetitionShowSignatures(ctx context.Context, payload []by
 	petitionGUID, err := r.ReadU64()
 	if err != nil {
 		return false
+	}
+	// PetitionsHandler.cpp:234-236: a guild-charter show-signatures request
+	// from a player already in a guild is silently dropped — the gate lives
+	// here, not in SendPetitionSigns (which the offer path also uses).
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil {
+		var pType int64
+		_ = cdb.QueryRowContext(ctx, "SELECT type FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&pType)
+		if pType == 9 && s.player.GuildID != 0 {
+			return true
+		}
 	}
 	s.sendPetitionShowSignatures(s, petitionGUID)
 	return true

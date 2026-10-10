@@ -1590,6 +1590,7 @@ const (
 	equipErrSlotIsEmpty                       = 22
 	equipErrItemNotFound                      = 23
 	equipErrNotEnoughMoney                    = 29
+	equipErrInventoryFull                     = 50 // C++ EQUIP_ERR_INVENTORY_FULL (ItemDefines.h:76)
 	equipErrCanOnlyDoWithEmptyBags            = 31
 	equipErrItemLocked                        = 36 // C++ EQUIP_ERR_ITEM_LOCKED (ItemDefines.h:62)
 	equipErrYouAreDead                        = 38

@@ -494,7 +494,10 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 	// If team consists only of the captain, disband the team ==
 	// ArenaTeam::Disband: DelMember each member (online members get QUIT_S with
 	// the team name), then delete the team and member rows. C++ returns without
-	// the leave event or a further command result on this path.
+	// the leave event or a further command result on this path. The
+	// union of the per-member DelMember queue-cleanup legs runs first
+	// (ArenaTeam::Disband == ArenaTeam.cpp:374-383).
+	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), 0)
 	if s.playerGUID == uint64(captainGUID) {
 		rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
 		if err == nil {
@@ -514,22 +517,15 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 		return true
 	}
 
-	// ArenaTeam::DelMember (cleanDb = true): drop the member row, drop the
-	// leaver's queued (not invited) arena queue entries when in a group ==
-	// the group-mate queue cleanup leg (invited players never reach here).
-	// DelMember answers QUIT_S to the leaver (ArenaTeam.cpp:357); the
-	// handler sends it again below (ArenaTeamHandler.cpp:261).
+	// ArenaTeam::DelMember (cleanDb = true) == ArenaTeam.cpp:316: the member
+	// loop drops queued (not invited) arena queue entries of every online
+	// member sharing the leaver's group (invited players never reach here),
+	// then the member row is erased and the leaver gets QUIT_S
+	// (ArenaTeam.cpp:357); the handler sends it again below
+	// (ArenaTeamHandler.cpp:261).
+	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), s.groupID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID)
 	s.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
-	if s.groupID != 0 {
-		for i := range s.bgQueues {
-			e := &s.bgQueues[i]
-			if e.Active && e.IsArena && e.ArenaType == uint8(aType) && e.InstanceID == 0 {
-				s.bgQueues[i] = bgQueueEntry{}
-				s.sendBattlefieldStatus(uint8(i))
-			}
-		}
-	}
 	// BroadcastEvent(ERR_ARENA_TEAM_LEAVE_SS) == C++ (ArenaTeamHandler.cpp:260):
 	// the leaver's row is gone, so the fan-out reaches only remaining members.
 	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventLeaveSS, s.playerGUID, s.player.Name, teamName)
@@ -606,24 +602,18 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 		return true
 	}
 
-	// ArenaTeam::DelMember(guid, true): drop the member row, drop the removed
-	// member's queued (not invited) arena entries when in a group, and answer
-	// QUIT_S with the team name to an online member == the leave handler's
-	// DelMember port.
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, memberGUID)
+	// ArenaTeam::DelMember(guid, true) == ArenaTeam.cpp:316: the member loop
+	// drops queued (not invited) arena entries of every online member
+	// sharing the removed member's group, then the member row is erased and
+	// an online member gets QUIT_S with the team name (ArenaTeam.cpp:357).
+	removedGroupID := uint64(0)
 	if ms := s.server.findSessionByGUID(uint64(memberGUID)); ms != nil {
-		if ms.groupID != 0 {
-			for i := range ms.bgQueues {
-				e := &ms.bgQueues[i]
-				if e.Active && e.IsArena && e.ArenaType == uint8(aType) && e.InstanceID == 0 {
-					ms.bgQueues[i] = bgQueueEntry{}
-					ms.sendBattlefieldStatus(uint8(i))
-				}
-			}
-		}
-		if ms.player != nil {
-			ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
-		}
+		removedGroupID = ms.groupID
+	}
+	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), removedGroupID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, memberGUID)
+	if ms := s.server.findSessionByGUID(uint64(memberGUID)); ms != nil && ms.player != nil {
+		ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
 	}
 	// BroadcastEvent(ERR_ARENA_TEAM_REMOVE_SSS) == C++
 	// (ArenaTeamHandler.cpp:358): removed member's row is gone, so the
@@ -679,7 +669,9 @@ func (s *session) handleArenaTeamDisband(ctx context.Context, payload []byte) bo
 	// command result on this path; C++'s BroadcastEvent(ERR_ARENA_TEAM_DISBANDED_S)
 	// runs after Members was emptied (ArenaTeam.cpp:376-383), so BroadcastPacket
 	// iterates zero members and no event packet ever hits the wire — skipping it
-	// is C++-exact, not a gap.
+	// is C++-exact, not a gap. The union of the per-member DelMember
+	// queue-cleanup legs runs first.
+	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), 0)
 	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
 	if err == nil {
 		for rows.Next() {
@@ -758,6 +750,45 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventLeaderChangedSSS, 0, s.player.Name, name, teamName)
 	s.debug("arena team leader changed", "team", teamID, "captain", memberGUID)
 	return true
+}
+
+// clearArenaTeamGroupQueues mirrors the queue-cleanup leg of
+// ArenaTeam::DelMember (ArenaTeam.cpp:316-352): the member loop drops queued
+// (not invited — IsInvitedToBGInstanceGUID, Go's entry.InstanceID == 0
+// convention) arena queue entries of this team's type for every online member
+// sharing the removed player's group, each answered with a STATUS_NONE
+// battlefield-status packet. A groupID of 0 cleans every online member's
+// group instead — the union of the per-member DelMember legs that
+// ArenaTeam::Disband runs (ArenaTeam.cpp:374-383).
+func (s *session) clearArenaTeamGroupQueues(ctx context.Context, cdb *sql.DB, teamID uint32, arenaType uint8, groupID uint64) {
+	if cdb == nil {
+		return
+	}
+	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mGUID int64
+		if rows.Scan(&mGUID) != nil {
+			continue
+		}
+		ms := s.server.findSessionByGUID(uint64(mGUID))
+		if ms == nil || ms.groupID == 0 {
+			continue
+		}
+		if groupID != 0 && ms.groupID != groupID {
+			continue
+		}
+		for i := range ms.bgQueues {
+			e := &ms.bgQueues[i]
+			if e.Active && e.IsArena && e.ArenaType == arenaType && e.InstanceID == 0 {
+				ms.bgQueues[i] = bgQueueEntry{}
+				ms.sendBattlefieldStatus(uint8(i))
+			}
+		}
+	}
 }
 
 // arenaTeamQueueLocked reports whether the session holds an invited arena
