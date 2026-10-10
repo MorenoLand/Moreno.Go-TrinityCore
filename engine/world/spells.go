@@ -28622,6 +28622,31 @@ func (s *Server) creatureHasControlLossAura(key creatureAuraKey) bool {
 	return false
 }
 
+// creatureHasNotMoveAura reports whether the creature carries a stun or root
+// aura — the UNIT_STATE_STUNNED | UNIT_STATE_ROOT legs of the
+// UNIT_STATE_NOT_MOVE chase-pause arm (ChaseMovementGenerator.cpp:98-106,
+// Unit.h:256). Died is handled by the tick's Health gate and distracted by
+// DistractedUntil; fear and confuse replace the chase with the fleeing and
+// confused generators, which have no Go model (documented no-bridge), so
+// they are not paused here.
+func (s *Server) creatureHasNotMoveAura(key creatureAuraKey) bool {
+	if s == nil {
+		return false
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil {
+			continue
+		}
+		switch aura.AuraType {
+		case spellAuraModStun, spellAuraModRoot:
+			return true
+		}
+	}
+	return false
+}
+
 // handleEffectAddFarsight mirrors Spell::EffectAddFarsight
 // (SpellEffects.cpp:2580), which runs once at SPELL_EFFECT_HANDLE_HIT on the
 // caster. The caster must be a player in the world; a

@@ -15,6 +15,14 @@ const (
 	petSpellFailedCasterAuraState uint8  = 22
 	petSpellFailedNoPower         uint8  = 85
 	petSpellFailedUnknown         uint8  = 187
+	// petFollowDist is PET_FOLLOW_DIST (PetDefines.h:85): the pet's follow
+	// destination sits this far plus both combat reaches from the owner
+	// (WorldObject::GetNearPoint, Object.cpp:3307).
+	petFollowDist float32 = 1.0
+	// petFollowRangeTolerance is FOLLOW_RANGE_TOLERANCE
+	// (FollowMovementGenerator.h:31): the follow spline launches only once
+	// the pet is past follow distance + this tolerance.
+	petFollowRangeTolerance float32 = 1.0
 )
 
 func ResolvePetSpellPowerCost(spell wotlk.Spell, maxPower, maxHealth uint32) uint32 {
@@ -348,6 +356,17 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 	// 4. Follow Owner
 	if motion.PetCommand == PetCommandFollow {
 		dist := float32(math.Hypot(float64(owner.X-motion.X), float64(owner.Y-motion.Y)))
+		// Follow stop/resume distances use both combat reaches
+		// (GetNearPoint / PositionOkay, Object.cpp:3307 /
+		// FollowMovementGenerator.cpp:43-50).
+		ownerReach := float32(1.5)
+		if owner.Sess != nil && owner.Sess.player != nil && owner.Sess.player.CombatReach > 0 {
+			ownerReach = owner.Sess.player.CombatReach
+		}
+		petReach := motion.CombatReach
+		if petReach <= 0 {
+			petReach = 1.5
+		}
 		if dist > 45.0 {
 			// Teleport directly to owner if too far
 			motion.X = owner.X + 1.5
@@ -358,28 +377,73 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			}
 			motion.Moving = false
 			s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z)
-		} else if dist > 3.0 {
-			// Run to catch up with owner
-			dx := owner.X - motion.X
-			dy := owner.Y - motion.Y
-			angle := float32(math.Atan2(float64(dy), float64(dx)))
-			motion.Orientation = angle
-			destX := owner.X - 1.5*float32(math.Cos(float64(angle)))
-			destY := owner.Y - 1.5*float32(math.Sin(float64(angle)))
+		} else if dist > petFollowDist+petFollowRangeTolerance+ownerReach+petReach {
+			// Run to catch up with owner.
+			// FollowMovementGenerator (FollowMovementGenerator.cpp:57-140):
+			// the pet holds ChaseAngle(PI/2, PI/4) relative to the owner
+			// (PET_FOLLOW_ANGLE, PetDefines.h:85; GetFollowAngle, Unit.h:1655):
+			// its current relative angle is kept while inside [PI/4, 3PI/4]
+			// and clamped to the nearer bound otherwise
+			// (FollowMovementGenerator.cpp:122-135). The destination is the
+			// near point at PET_FOLLOW_DIST plus both combat reaches
+			// (WorldObject::GetNearPoint, Object.cpp:3307). The walk-when-the-
+			// owner-walks arm (init.SetWalk(target->IsWalking()),
+			// FollowMovementGenerator.cpp:155) has no bridge — Go models no
+			// player walk state. init.SetFacing(target->GetOrientation())
+			// (FollowMovementGenerator.cpp:156) faces the pet at the owner's
+			// orientation for the whole spline. The stop distance is the
+			// combat reaches + PET_FOLLOW_DIST (PositionOkay,
+			// FollowMovementGenerator.cpp:43-50) with the launch hysteresis
+			// adding FOLLOW_RANGE_TOLERANCE. The 45-yard teleport above has no
+			// C++ arm — a Go pragmatism (the generator would keep running
+			// indefinitely), documented here rather than bridged.
+			ownerOrient := float32(0)
+			if owner.Sess != nil && owner.Sess.player != nil {
+				ownerOrient = owner.Sess.player.Orientation
+			}
+			relAngle := math.Atan2(float64(motion.Y-owner.Y), float64(motion.X-owner.X)) - float64(ownerOrient)
+			for relAngle < 0 {
+				relAngle += 2 * math.Pi
+			}
+			for relAngle >= 2*math.Pi {
+				relAngle -= 2 * math.Pi
+			}
+			const followAngleCenter = math.Pi / 2
+			const followAngleTol = math.Pi / 4
+			upperBound, lowerBound := followAngleCenter+followAngleTol, followAngleCenter-followAngleTol
+			chosenAngle := relAngle
+			if relAngle < lowerBound || relAngle > upperBound {
+				diffUpper := relAngle - upperBound
+				for diffUpper < 0 {
+					diffUpper += 2 * math.Pi
+				}
+				diffLower := lowerBound - relAngle
+				for diffLower < 0 {
+					diffLower += 2 * math.Pi
+				}
+				if diffUpper < diffLower {
+					chosenAngle = upperBound
+				} else {
+					chosenAngle = lowerBound
+				}
+			}
+			absAngle := float64(ownerOrient) + chosenAngle
+			nearDist := float64(petFollowDist + ownerReach + petReach)
+			destX := owner.X + float32(nearDist*math.Cos(absAngle))
+			destY := owner.Y + float32(nearDist*math.Sin(absAngle))
 			destZ := owner.Z
-			speed := motion.RunSpeed
+			motion.Orientation = ownerOrient
+			speed := creatureSplineVelocity(motion, false)
 			if speed <= 0 {
 				speed = 7.0
 			}
-			duration := uint32(float64(dist) / float64(speed) * 1000.0)
-			if duration < 200 {
-				duration = 200
-			}
+			duration := splineDurationMs(float64(dist), speed)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, ownerOrient, true)
 			motion.X = destX
 			motion.Y = destY
 			motion.Z = destZ
 			motion.Moving = true
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false)
+			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 		} else {
 			motion.Moving = false
 		}

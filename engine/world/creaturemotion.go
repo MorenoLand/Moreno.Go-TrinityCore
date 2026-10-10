@@ -194,9 +194,16 @@ type creatureMotion struct {
 	Points  []waypointPoint
 	NextIdx int
 
-	Moving    bool
-	Evading   bool
-	MoveEnds  time.Time
+	Moving   bool
+	Evading  bool
+	MoveEnds time.Time
+	// ChaseTX/ChaseTY record the victim's position when the combat pursuit
+	// spline launched — ChaseMovementGenerator's _lastTargetPosition
+	// (ChaseMovementGenerator.h): the chase re-paths whenever the target
+	// moves, so a spline whose victim left the launch point is relaunched.
+	// Zero when no pursuit spline is armed.
+	ChaseTX   float32
+	ChaseTY   float32
 	WaitUntil time.Time
 	Refreshed time.Time
 	// DistractedUntil is the DistractMovementGenerator hold
@@ -2166,12 +2173,48 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// casts spell[0] when the victim sits in the range band, so an
 			// out-of-band victim just ends the tick here.
 			if motion.AIName != "TurretAI" {
-				if !motion.Moving || now.After(motion.MoveEnds) {
-					duration := splineDurationMs(float64(dist), creatureSplineVelocity(motion, false))
-					s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false, 0, false)
-					motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
-					motion.Moving = true
-					motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+				// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:98-106):
+				// UNIT_STATE_NOT_MOVE (root | stun | died | distracted, Unit.h:256)
+				// pauses the chase. Died rides the tick's Health gate and
+				// distracted rides DistractedUntil above; fear and confuse
+				// replace the chase with the fleeing and confused generators,
+				// which have no Go model (documented no-bridge), so they are
+				// not paused here. The melee swing below still fires while
+				// stunned or rooted (DoMeleeAttackIfReady gates UNIT_STATE_CASTING
+				// only, UnitAI.cpp:61-63), so only the pursuit pauses.
+				if !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
+					// ChaseMovementGenerator re-paths whenever the target moves
+					// (_lastTargetPosition, ChaseMovementGenerator.cpp:157-159):
+					// relaunch the spline when the victim left the launch
+					// point so a kiting victim can't outrun a stale spline.
+					targetMoved := motion.ChaseTX != target.X || motion.ChaseTY != target.Y
+					if !motion.Moving || now.After(motion.MoveEnds) || targetMoved {
+						// ChaseMovementGenerator paths to the victim's center
+						// then shortens to maxTarget = CONTACT_DISTANCE +
+						// hitboxSum (CONTACT_DISTANCE 0.5, ObjectDefines.h:23;
+						// ShortenPathUntilDist, ChaseMovementGenerator.cpp:211):
+						// the creature stops at melee-ring contact, not on the
+						// victim's center.
+						shorten := float32(0.5) + cReach + victimReach
+						destX, destY := target.X, target.Y
+						if dist > shorten {
+							destX = target.X + (motion.X-target.X)/dist*shorten
+							destY = target.Y + (motion.Y-target.Y)/dist*shorten
+						}
+						// init.SetFacing(target) (ChaseMovementGenerator.cpp:217):
+						// face the victim for the whole spline.
+						faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
+						if faceAngle < 0 {
+							faceAngle += 2 * math.Pi
+						}
+						motion.Orientation = faceAngle
+						duration := splineDurationMs(float64(dist), creatureSplineVelocity(motion, false))
+						s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true)
+						motion.X, motion.Y, motion.Z = destX, destY, target.Z
+						motion.ChaseTX, motion.ChaseTY = target.X, target.Y
+						motion.Moving = true
+						motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+					}
 				}
 			}
 			return
