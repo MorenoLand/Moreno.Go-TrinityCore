@@ -12905,6 +12905,29 @@ func (s *session) castSpellDirectWithItem(ctx context.Context, spellID uint32, t
 	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, castItemGUID)
 }
 
+// spellEffectImplicitTargetExplicit reports whether the effect's _data row
+// carries EFFECT_IMPLICIT_TARGET_EXPLICIT (SpellEffectInfo::_data,
+// SpellInfo.cpp:605-783) — the implicit-target type
+// Spell::SelectEffectTypeImplicitTargets falls back to when the effect's own
+// TargetA/TargetB selected nothing (Spell.cpp:1748+). The CASTER leg is dead:
+// the table holds zero EFFECT_IMPLICIT_TARGET_CASTER rows.
+func spellEffectImplicitTargetExplicit(effect uint32) bool {
+	switch effect {
+	case 1, 2, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18,
+		19, 24, 27, 28, 29, 31, 33, 35, 36, 38, 40, 41,
+		43, 44, 45, 50, 53, 54, 55, 56, 57, 58, 59, 62,
+		63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 75, 76,
+		80, 81, 82, 83, 86, 87, 88, 89, 90, 91, 92, 95,
+		96, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108,
+		109, 111, 112, 113, 114, 115, 116, 117, 119, 120, 121, 123,
+		124, 125, 126, 127, 128, 129, 130, 132, 133, 135, 136, 137,
+		138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 149, 150,
+		153, 154, 156, 157, 158, 159, 160, 161, 162, 163, 164:
+		return true
+	}
+	return false
+}
+
 func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints []int32, castItemGUID uint64) {
 	if s == nil || s.player == nil || spellID == 0 {
 		return
@@ -13016,6 +13039,22 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
 		return
 	}
+	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) runs the
+	// chain leg (Spell.cpp:1575 -> SelectImplicitChainTargets, 1582-1624) for
+	// triggered casts too — SelectSpellTargets carries no IsTriggered gate on
+	// it. The explicit object target (targetGUID here, post-redirect) seeds
+	// the search; chainSpellJumps encodes the maxTargets > 1 gate plus the
+	// call-site eligibility (NEARBY-category or TARGET-reference unit implicit
+	// targets, Spell.cpp:1173/1575). The jumps join the SMSG_SPELL_GO hit list
+	// and the initial-threat target set like C++'s m_UniqueTargetInfo; the
+	// per-effect jump caps and falloff thread through the effect loop below.
+	// A missed jump takes no miss entry on this path (no arrival-time miss
+	// model for triggered casts).
+	chainJumpGUIDs := []uint64{}
+	if jumps, isChainHeal := chainSpellJumps(spell); jumps > 0 && targetGUID != 0 {
+		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal)
+		hitTargets = append(hitTargets, chainJumpGUIDs...)
+	}
 	// Cast flags mirror Spell::SendSpellGo for a triggered player cast
 	// (Spell.cpp:4283-4330): PENDING for triggered non-auto-repeat casts with
 	// cast count 0 (Spell.cpp:4292), POWER_LEFT_SELF + remaining power for
@@ -13112,6 +13151,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// path too — triggered casts go through the same per-target processing
 	// (PreprocessTarget ahead of the effect loop).
 	s.breakHitBySpellAuras(ctx, spell, targetGUID)
+	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334) runs per target —
+	// the chain jumps are hit targets too, so their auras break the same way.
+	for _, jumpGUID := range chainJumpGUIDs {
+		s.breakHitBySpellAuras(ctx, spell, jumpGUID)
+	}
 	// Per-(cast, target) first-merge marker for the aura re-apply path
 	// (Spell.cpp:2842): only the first aura effect per target runs the
 	// ModStackAmount(+1) merge, later effects only refresh their amounts.
@@ -13121,84 +13165,148 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			continue
 		}
 		hasExplicitEffects = true
-		if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
-			s.executeSpellInstantKill(ctx, targetGUID, spellID)
-		} else if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
-			baseDmg := uint32(eff.BasePoints + 1)
-			// The SPELL_ATTR0_CU_SHARE_DAMAGE division arm of
-			// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348) is a no-op on
-			// this path: a triggered cast serves exactly one target per call,
-			// so the divisor is 1. The client path divides in applyEffects.
-			if baseDmg == 0 {
-				if spellID == ProcSpellFieryWeapon {
-					baseDmg = 40
-				} else if spellID == ProcSpellInstantPois {
-					baseDmg = 280
+		// Spell::SelectEffectTypeImplicitTargets special case (Spell.cpp:1708-1746):
+		// effects 85 (SUMMON_PLAYER) and 152 (SUMMON_RAF_FRIEND) target the
+		// caster's *selection*, never the wire target, and run once per effect.
+		// The per-effect immunity check uses a null caster (Spell.cpp:1721-1732);
+		// the deferred AddFarSpellCallback has no Go model (no map-thread
+		// callback queue), same as the client path.
+		if eff.Effect == spellEffectSummonPlayer {
+			if s.server != nil && s.player != nil && s.selection != 0 {
+				if targetSess := s.server.findSessionByGUID(s.selection); targetSess != nil {
+					if !targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
+						targetSess.sendSummonRequest(s.playerGUID, s.player.Zone)
+					}
 				}
 			}
-			s.executeDirectSpellDamage(ctx, targetGUID, spellID, baseDmg, uint8(spell.SchoolMask))
-		} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
-			amount := uint32(eff.BasePoints + 1)
-			schoolMask := spell.SchoolMask
-			if schoolMask == 0 {
-				schoolMask = 1
+			continue
+		}
+		if eff.Effect == spellEffectSummonRafFriend {
+			if s.server != nil && s.player != nil && s.selection != 0 {
+				if targetSess := s.server.findSessionByGUID(s.selection); targetSess != nil {
+					if !targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
+						s.handleEffectSummonRafFriend(ctx, s.selection, eff)
+					}
+				}
 			}
-			s.applyAuraToTarget(ctx, targetGUID, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID)
-		} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
-			healAmount := uint32(eff.BasePoints + 1)
-			if healAmount == 0 && spellID == ProcSpellCrusader {
-				healAmount = 100
+			continue
+		}
+		// Spell::SelectEffectTypeImplicitTargets (Spell.cpp:1748+): for effects
+		// whose _data implicit target type is EXPLICIT, the target is the
+		// explicit unit target, falling back to the caster when there is none
+		// (the corpse leg has no Go model). On this path the explicit unit
+		// target is targetGUID; a zero targetGUID (the aura/trigger callers
+		// leave it for the fallback legs) resolves EXPLICIT-typed effects to
+		// the caster, matching C++. The CASTER leg is dead — the _data table
+		// carries zero EFFECT_IMPLICIT_TARGET_CASTER rows.
+		primaryTarget := targetGUID
+		if primaryTarget == 0 && spellEffectImplicitTargetExplicit(eff.Effect) {
+			primaryTarget = s.playerGUID
+		}
+		// Per-effect chain threading (Spell.cpp:1582-1624): only the chaining
+		// effect reaches the jump targets (C++ adds them with that effect's
+		// mask, Spell.cpp:1619), and each effect jumps at most its own
+		// ChainTarget-1 (the shared list carries the largest). The falloff is
+		// EffectChainAmplitude with SPELLMOD_DAMAGE_MULTIPLIER applied once per
+		// effect (Spell.cpp:7717-7718), accumulated per hit jump
+		// (Spell.cpp:7771-7774); jump index 0 is the primary target.
+		effectTargets := []uint64{primaryTarget}
+		chainMult := 1.0
+		if jumpCap := int(eff.ChainTargets) - 1; jumpCap > 0 && len(chainJumpGUIDs) > 0 &&
+			(chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
+			if jumpCap > len(chainJumpGUIDs) {
+				jumpCap = len(chainJumpGUIDs)
 			}
-			s.executeSpellHeal(ctx, targetGUID, spellID, healAmount, effectIndex)
-		} else if eff.Effect == spellEffectEnergize {
-			// Spell::EffectEnergize per-target legs (power-type gate,
-			// per-spell adjustments) ride energizeEffectTarget on the
-			// triggered path too.
-			s.energizeEffectTarget(ctx, spell, spellID, eff, targetGUID)
-		} else if eff.Effect == spellEffectEnergizePct {
-			// Spell::EffectEnergizePct per-target legs ride energizePctEffectTarget
-			// on the triggered path too.
-			s.energizePctEffectTarget(ctx, spell, eff, targetGUID)
-		} else if eff.Effect == spellEffectPowerBurn {
-			var burnLog []takeTargetPowerEntry
-			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID, true); burned > 0 {
-				s.executeSpellDamage(ctx, targetGUID, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
-				// SpellEffects.cpp:1370-1373: the take-target-power log
-				// fires before the multiplier, with a zero gain.
-				burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: targetGUID, powerTaken: burned, powerType: uint32(eff.MiscValue)})
-			}
-			if len(burnLog) > 0 {
-				s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerBurn), burnLog)
-			}
-		} else if eff.Effect == spellEffectTriggerSpell || eff.Effect == spellEffectTriggerSpellWithValue {
-			// Spell::EffectTriggerSpell per-target legs ride
-			// triggerSpellEffectTarget on the triggered path too (the
-			// special cases are per-target LAUNCH_TARGET legs; the
-			// handle-mode split is structural on both paths).
-			s.triggerSpellEffectTarget(ctx, spellID, eff, targetGUID)
-		} else if eff.Effect == spellEffectTriggerMissile || eff.Effect == spellEffectTriggerMissileWithValue {
-			// Spell::EffectTriggerMissileSpell per-target legs ride
-			// runTriggerMissileEffect on the triggered path too (the HIT
-			// arm needs an empty target list, which this path never
-			// produces — targetGUID is always resolved here).
-			s.runTriggerMissileEffect(ctx, spell, eff, []uint64{targetGUID})
-		} else if eff.Effect == spellEffectThreat {
-			s.applySpellThreat(ctx, spell, targetGUID, eff.BasePoints+1)
-		} else if eff.Effect == spellEffectHealMaxHealth {
-			s.executeSpellMaxHealthHeal(ctx, targetGUID, spellID, eff.BasePoints+1)
-		} else if eff.Effect == spellEffectAddComboPoints {
-			// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789):
-			// the effectHandleMode gate is structural (this dispatch is the
-			// HIT phase), damage <= 0 gains nothing. A new target restarts
-			// the bank, the same target accumulates (Spell::AddComboPointGain,
-			// Spell.h:515-522); the spend lands in _handle_finish_phase.
-			gain := int8(eff.BasePoints + 1)
-			if gain > 0 && targetGUID != 0 {
-				if targetGUID != comboGainTarget {
-					comboGainTarget = targetGUID
-					comboGain = gain
-				} else {
-					comboGain += gain
+			effectTargets = append(effectTargets, chainJumpGUIDs[:jumpCap]...)
+			chainMult = s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
+		}
+		for jumpIndex, effectTarget := range effectTargets {
+			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
+				s.executeSpellInstantKill(ctx, effectTarget, spellID)
+			} else if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
+				baseDmg := uint32(eff.BasePoints + 1)
+				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): the
+				// SPELL_ATTR0_CU_SHARE_DAMAGE division splits the damage over the
+				// targets hit with this effect — the per-effect target count here
+				// (1 without chain jumps). The client path divides in applyEffects.
+				if baseDmg == 0 {
+					if spellID == ProcSpellFieryWeapon {
+						baseDmg = 40
+					} else if spellID == ProcSpellInstantPois {
+						baseDmg = 280
+					}
+				}
+				// The division lands after the missing-data fallbacks above: a
+				// zero here means missing DBC data (C++ divides the computed
+				// damage, SpellEffects.cpp:334-348).
+				if spell.SpellFamilyName == spellFamilyGeneric && s.server != nil &&
+					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 && len(effectTargets) > 1 {
+					baseDmg /= uint32(len(effectTargets))
+				}
+				s.executeDirectSpellDamage(ctx, effectTarget, spellID, chainScaledAmount(baseDmg, chainMult, jumpIndex), uint8(spell.SchoolMask))
+			} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
+				amount := uint32(eff.BasePoints + 1)
+				schoolMask := spell.SchoolMask
+				if schoolMask == 0 {
+					schoolMask = 1
+				}
+				s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID)
+			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
+				healAmount := uint32(eff.BasePoints + 1)
+				if healAmount == 0 && spellID == ProcSpellCrusader {
+					healAmount = 100
+				}
+				s.executeSpellHeal(ctx, effectTarget, spellID, chainScaledAmount(healAmount, chainMult, jumpIndex), effectIndex)
+			} else if eff.Effect == spellEffectEnergize {
+				// Spell::EffectEnergize per-target legs (power-type gate,
+				// per-spell adjustments) ride energizeEffectTarget on the
+				// triggered path too.
+				s.energizeEffectTarget(ctx, spell, spellID, eff, effectTarget)
+			} else if eff.Effect == spellEffectEnergizePct {
+				// Spell::EffectEnergizePct per-target legs ride energizePctEffectTarget
+				// on the triggered path too.
+				s.energizePctEffectTarget(ctx, spell, eff, effectTarget)
+			} else if eff.Effect == spellEffectPowerBurn {
+				var burnLog []takeTargetPowerEntry
+				if burned := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, eff.BasePoints+1, spellID, true); burned > 0 {
+					s.executeSpellDamage(ctx, effectTarget, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
+					// SpellEffects.cpp:1370-1373: the take-target-power log
+					// fires before the multiplier, with a zero gain.
+					burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: burned, powerType: uint32(eff.MiscValue)})
+				}
+				if len(burnLog) > 0 {
+					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerBurn), burnLog)
+				}
+			} else if eff.Effect == spellEffectTriggerSpell || eff.Effect == spellEffectTriggerSpellWithValue {
+				// Spell::EffectTriggerSpell per-target legs ride
+				// triggerSpellEffectTarget on the triggered path too (the
+				// special cases are per-target LAUNCH_TARGET legs; the
+				// handle-mode split is structural on both paths).
+				s.triggerSpellEffectTarget(ctx, spellID, eff, effectTarget)
+			} else if eff.Effect == spellEffectTriggerMissile || eff.Effect == spellEffectTriggerMissileWithValue {
+				// Spell::EffectTriggerMissileSpell per-target legs ride
+				// runTriggerMissileEffect on the triggered path too (the HIT
+				// arm needs an empty target list, which this path never
+				// produces — targetGUID is always resolved here).
+				s.runTriggerMissileEffect(ctx, spell, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectThreat {
+				s.applySpellThreat(ctx, spell, effectTarget, eff.BasePoints+1)
+			} else if eff.Effect == spellEffectHealMaxHealth {
+				s.executeSpellMaxHealthHeal(ctx, effectTarget, spellID, eff.BasePoints+1)
+			} else if eff.Effect == spellEffectAddComboPoints {
+				// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789):
+				// the effectHandleMode gate is structural (this dispatch is the
+				// HIT phase), damage <= 0 gains nothing. A new target restarts
+				// the bank, the same target accumulates (Spell::AddComboPointGain,
+				// Spell.h:515-522); the spend lands in _handle_finish_phase.
+				gain := int8(eff.BasePoints + 1)
+				if gain > 0 && effectTarget != 0 {
+					if effectTarget != comboGainTarget {
+						comboGainTarget = effectTarget
+						comboGain = gain
+					} else {
+						comboGain += gain
+					}
 				}
 			}
 		}
