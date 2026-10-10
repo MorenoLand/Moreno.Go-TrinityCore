@@ -917,6 +917,14 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	}
 	radius := float32(0)
 	cone := false
+	// WorldObjectSpellConeTargetCheck::operator() (Spell.cpp:8432): the cone
+	// direction is C++-custom-attr driven — CU_CONE_BACK (set in
+	// SpellMgr.cpp:2840 when SpellVisual[0] == 3879) keeps targets in the back
+	// cone (WorldObject::isInBack, Object.cpp:1417: !HasInArc(2*pi - arc));
+	// CU_CONE_LINE has no write site in C++ (only the read at Spell.cpp:8439)
+	// and is a no-op. Otherwise the front cone at the hardcoded M_PI/2
+	// cone targets (24/54/104) below.
+	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
 	destinationCenter := false
 	// Spell.cpp:1194-1196 / 1249-1251: when an effect has no radius entry
 	// (CalcRadius == 0), the area radius falls back to the spell's max range
@@ -979,8 +987,15 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(z-centerZ)) > float64(radius) {
 			return
 		}
-		if cone && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi/2) {
-			return
+		if cone {
+			if backCone {
+				// WorldObject::isInBack (Object.cpp:1417): !HasInArc(2*pi - arc, target).
+				if hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, 2*math.Pi-math.Pi/2) {
+					return
+				}
+			} else if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi/2) {
+				return
+			}
 		}
 		if _, ok := seen[guid]; ok {
 			return
@@ -1020,8 +1035,15 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(targetSession.player.Z-centerZ)) > float64(radius) {
 			continue
 		}
-		if cone && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, targetSession.player.X, targetSession.player.Y, math.Pi/2) {
-			continue
+		if cone {
+			if backCone {
+				// WorldObject::isInBack (Object.cpp:1417): !HasInArc(2*pi - arc, target).
+				if hasInArc(s.player.Orientation, s.player.X, s.player.Y, targetSession.player.X, targetSession.player.Y, 2*math.Pi-math.Pi/2) {
+					continue
+				}
+			} else if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, targetSession.player.X, targetSession.player.Y, math.Pi/2) {
+				continue
+			}
 		}
 		if _, ok := seen[targetSession.playerGUID]; ok {
 			continue

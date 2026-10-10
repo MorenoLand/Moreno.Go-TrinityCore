@@ -524,6 +524,12 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	if radius <= 0 || len(checks) == 0 {
 		return nil
 	}
+	// WorldObjectSpellConeTargetCheck::operator() (Spell.cpp:8432): CU_CONE_BACK
+	// (set in SpellMgr.cpp:2840 when SpellVisual[0] == 3879) keeps targets in
+	// the back cone (WorldObject::isInBack, Object.cpp:1417:
+	// !HasInArc(2*pi - arc)); the cone angle itself is the hardcoded M_PI/2
+	// (SelectImplicitConeTargets, Spell.cpp:1188).
+	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
 	targets := make([]uint64, 0)
@@ -536,8 +542,15 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(c.z-s.player.Z)) > float64(radius) {
 			return
 		}
-		if c.guid != s.playerGUID && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, c.x, c.y, math.Pi/2) {
-			return
+		if c.guid != s.playerGUID {
+			if backCone {
+				// WorldObject::isInBack (Object.cpp:1417): !HasInArc(2*pi - arc, target).
+				if hasInArc(s.player.Orientation, s.player.X, s.player.Y, c.x, c.y, 2*math.Pi-math.Pi/2) {
+					return
+				}
+			} else if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, c.x, c.y, math.Pi/2) {
+				return
+			}
 		}
 		_, wantAlly := checks[friendlyCheckAlly]
 		_, wantEntry := checks[friendlyCheckEntry]
