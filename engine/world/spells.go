@@ -111,6 +111,7 @@ const (
 	spellAttr6IgnoreCasterAuras            uint32 = 0x00000004 // SPELL_ATTR6_IGNORE_CASTER_AURAS (SharedDefines.h:636) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6LimitPctDamageMods           uint32 = 0x20000000 // SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS (SharedDefines.h:663) — ATTR6 is Go's AttributesEx6
 	spellAttr6LimitPctHealingMods          uint32 = 0x08000000 // SPELL_ATTR6_LIMIT_PCT_HEALING_MODS (SharedDefines.h:661) — ATTR6 is Go's AttributesEx6
+	spellAttr6IgnoreCategoryCooldownMods   uint32 = 0x80000000 // SPELL_ATTR6_IGNORE_CATEGORY_COOLDOWN_MODS (SharedDefines.h:665) — ATTR6 is Go's AttributesEx6
 	spellAttr1DispelAurasOnImmunity        uint32 = 0x00008000 // SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY (SharedDefines.h:464) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2UnaffectedByAuraSchoolImmune uint32 = 0x04000000 // SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE (SharedDefines.h:512) — ATTR2 is Go's AttributesEx1
 
@@ -536,6 +537,7 @@ const (
 	spellAuraModDamagePercentTaken                 = 87   // SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN (SpellAuraDefines.h:167)
 	spellAuraModMechanicDamageTakenPercent         = 255  // SPELL_AURA_MOD_MECHANIC_DAMAGE_TAKEN_PERCENT (SpellAuraDefines.h:335)
 	spellAuraModIgnoreTargetResist                 = 269  // SPELL_AURA_MOD_IGNORE_TARGET_RESIST (SpellAuraDefines.h:349)
+	spellAuraModCooldown                           = 196  // SPELL_AURA_MOD_COOLDOWN (SpellAuraDefines.h:276) — only 24818 Noxious Breath
 	spellAuraModDamageFromCaster                   = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
 	spellAuraDummy                                 = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
 	spellAuraModDurationByDispelNotStack           = 246  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK (SpellAuraDefines.h:326)
@@ -7937,14 +7939,51 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if castItemEntry != 0 && (s.server.isPotionItem(ctx, castItemEntry) || s.server.spellIsCooldownStartedOnEvent(spell)) {
 		s.lastPotionId = castItemEntry
 	} else if applyCooldown && (spell.RecoveryTime > 0 || categoryRecoveryTime > 0) {
-		cooldownEnd := categoryEnd
-		if spell.RecoveryTime > 0 {
-			cooldownEnd = now.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
+		cooldownMs, categoryCooldownMs := int32(spell.RecoveryTime), int32(categoryRecoveryTime)
+		// SpellHistory::StartCooldown (SpellHistory.cpp:313-319): SPELLMOD_COOLDOWN
+		// folds over the cooldown and — unless ATTR6_IGNORE_CATEGORY_COOLDOWN_MODS —
+		// the category cooldown. The spell-mod taking window is live here
+		// (endSpellModTaking is deferred at the _cast tail), so applySpellMod
+		// mirrors the ApplySpellMod(spellInfo->Id, SPELLMOD_COOLDOWN, ..., spell)
+		// calls, which also run with a non-null taking spell.
+		cooldownMs = s.applySpellMod(spell, spellModCooldown, cooldownMs)
+		if spell.AttributesEx6&spellAttr6IgnoreCategoryCooldownMods == 0 {
+			categoryCooldownMs = s.applySpellMod(spell, spellModCooldown, categoryCooldownMs)
 		}
-		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
-	}
-	if applyCooldown && spell.RecoveryTime > 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, spell.RecoveryTime), true)
+		// SpellHistory::StartCooldown (SpellHistory.cpp:321-330):
+		// SPELL_AURA_MOD_COOLDOWN (aura 196, only 24818 Noxious Breath) adds
+		// to the cooldown of the caster's own spells only, and the modded
+		// value rides SMSG_SPELL_COOLDOWN (needsCooldownPacket).
+		needsCooldownPacket := false
+		if auraMod := s.totalAuraModifier(spellAuraModCooldown); auraMod != 0 && playerHasSpell(s.player, spellID) {
+			needsCooldownPacket = true
+			cooldownMs += auraMod * 1000
+		}
+		if cooldownMs < 0 {
+			cooldownMs = 0
+		}
+		if categoryCooldownMs < 0 {
+			categoryCooldownMs = 0
+		}
+		if cooldownMs > 0 || categoryCooldownMs > 0 {
+			cooldownEnd := now.Unix()
+			if categoryCooldownMs > 0 {
+				cooldownEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+			}
+			if cooldownMs > 0 {
+				cooldownEnd = now.Add(time.Duration(cooldownMs) * time.Millisecond).Unix()
+			}
+			moddedCategoryEnd := now.Unix()
+			if categoryCooldownMs > 0 {
+				moddedCategoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+			}
+			s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
+			if needsCooldownPacket {
+				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, uint32(cooldownMs)), true)
+			} else if spell.RecoveryTime > 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, spell.RecoveryTime), true)
+			}
+		}
 	}
 	if applyCooldown && spellID == 8690 {
 		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
@@ -23490,6 +23529,50 @@ func (s *session) resetCastCooldownCheat(spellID uint32) {
 	buf.WriteU32(spellID)
 	buf.WriteU64(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buf.Bytes(), true)
+}
+
+// modifyPlayerSpellCooldown bridges SpellHistory::ModifyCooldown
+// (SpellHistory.cpp:409-430): an existing cooldown entry for spellID is
+// shifted by cooldownModMs (negative = reduction); when the shifted end is
+// not in the future the entry is erased instead (EraseCooldown). It is a
+// no-op when the modifier is 0 or no entry exists. SMSG_MODIFY_COOLDOWN
+// carries the spell id, the caster GUID and the signed delta
+// (SpellHistory.cpp:421-429). The sole C++ caller is the shaman Feedback
+// script (spell_shaman.cpp:1447, SpellScript queue); the mechanism is
+// bridged here so the script layer can call it. Go stores ends at
+// second granularity (the tree-wide spellCooldown convention); the shift
+// and the future check run on that granularity.
+func (s *session) modifyPlayerSpellCooldown(spellID uint32, cooldownModMs int32) {
+	if s == nil || s.player == nil || cooldownModMs == 0 {
+		return
+	}
+	now := time.Now()
+	found := false
+	s.playerStateMu.Lock()
+	kept := s.player.Cooldowns[:0]
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell != spellID {
+			kept = append(kept, cd)
+			continue
+		}
+		found = true
+		if shifted := time.Unix(cd.End, 0).Add(time.Duration(cooldownModMs) * time.Millisecond); shifted.After(now) {
+			cd.End = shifted.Unix()
+			kept = append(kept, cd)
+		}
+		// else the entry is erased; C++ EraseCooldown also drops the
+		// category-map entry, which Go has no separate model of.
+	}
+	s.player.Cooldowns = kept
+	s.playerStateMu.Unlock()
+	if !found {
+		return
+	}
+	buf := protocol.NewBuffer(4 + 8 + 4)
+	buf.WriteU32(spellID)
+	buf.WriteU64(s.playerGUID)
+	buf.WriteI32(cooldownModMs)
+	_ = s.write(uint16(protocol.OpcodeSMSG_MODIFY_COOLDOWN), buf.Bytes(), true)
 }
 
 // handleFarSight processes CMSG_FAR_SIGHT (0x27A).
