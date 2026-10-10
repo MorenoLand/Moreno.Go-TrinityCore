@@ -11,6 +11,7 @@ import (
 
 const (
 	gmTicketQueueStatusEnabled    uint32 = 1
+	gmTicketQueueStatusDisabled   uint32 = 0
 	gmTicketStatusDefault         uint32 = 10
 	gmTicketStatusHasText         uint32 = 6
 	gmTicketResponseAlreadyExist  uint32 = 1
@@ -46,8 +47,16 @@ func (s *session) sendQueryTimeResponse() {
 // handleGMTicketSystemStatus processes CMSG_GMTICKET_SYSTEMSTATUS (0x21A).
 // Reference: WorldSession::HandleGMTicketSystemStatusOpcode (TicketHandler.cpp:185).
 func (s *session) handleGMTicketSystemStatus(ctx context.Context, payload []byte) bool {
+	// TicketHandler.cpp:188: the answer reflects the live queue status —
+	// the Go .ticket togglesystem flips server.ticketsEnabled, so a
+	// disabled queue must answer DISABLED, not the previously hardcoded
+	// ENABLED (TicketMgr.h:33-34).
+	status := gmTicketQueueStatusEnabled
+	if s.server != nil && !s.server.ticketsEnabled.Load() {
+		status = gmTicketQueueStatusDisabled
+	}
 	buf := protocol.NewBuffer(4)
-	buf.WriteU32(gmTicketQueueStatusEnabled)
+	buf.WriteU32(status)
 	return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_SYSTEMSTATUS), buf.Bytes(), true) == nil
 }
 

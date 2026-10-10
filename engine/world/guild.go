@@ -4355,11 +4355,13 @@ const (
 // handlePetitionBuy processes CMSG_PETITION_BUY (0x1B6).
 // Reference: WorldSession::HandlePetitionBuyOpcode (PetitionsHandler.cpp:48).
 func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	npcGUID, _ := r.ReadU64()
+	// PetitionsHandler.cpp:52 — the NPC guid is packed on the wire; a raw
+	// ReadU64 misparses it and the buy silently never worked.
+	npcGUID, _ := r.ReadPackedGUID()
 	_, _ = r.ReadU32() // 0
 	_, _ = r.ReadU64() // 0
 	name, err := r.ReadCString()
@@ -4498,11 +4500,12 @@ func (s *session) sendPetitionShowSignatures(target *session, petitionGUID uint6
 // handlePetitionShowSignatures processes CMSG_PETITION_SHOW_SIGNATURES (0x1BE).
 // Reference: WorldSession::HandlePetitionShowSignatures (PetitionsHandler.cpp:220).
 func (s *session) handlePetitionShowSignatures(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petitionGUID, err := r.ReadU64()
+	// PetitionsHandler.cpp:223 — packed guid on the wire.
+	petitionGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
@@ -4513,12 +4516,13 @@ func (s *session) handlePetitionShowSignatures(ctx context.Context, payload []by
 // handlePetitionQuery processes CMSG_PETITION_QUERY (0x1C6).
 // Reference: WorldSession::HandleQueryPetition (PetitionsHandler.cpp:261).
 func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	_, _ = r.ReadU32() // guild GUID (client echo; the reference answers the petition GUID low32)
-	petitionGUID, err := r.ReadU64()
+	// PetitionsHandler.cpp:266 — packed guid follows the u32 echo.
+	petitionGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
@@ -4576,11 +4580,13 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 // handlePetitionSign processes CMSG_PETITION_SIGN (0x1C0).
 // Reference: WorldSession::HandleSignPetition (PetitionsHandler.cpp:383).
 func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petitionGUID, err := r.ReadU64()
+	// PetitionsHandler.cpp:386-387 — packed guid + u8 unk on the wire; the
+	// unk byte carries no data (Go ignores the tail).
+	petitionGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
@@ -4668,11 +4674,12 @@ func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
 // handleTurnInPetition processes CMSG_TURN_IN_PETITION (0x1C4).
 // Reference: WorldSession::HandleTurnInPetitionOpcode (PetitionsHandler.cpp:589).
 func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petitionGUID, err := r.ReadU64()
+	// PetitionsHandler.cpp:592 — packed guid on the wire.
+	petitionGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
@@ -4814,13 +4821,14 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 // handleOfferPetition processes CMSG_OFFER_PETITION (0x1C3).
 // Reference: WorldSession::HandleOfferPetitionOpcode (PetitionsHandler.cpp:514).
 func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	_, _ = r.ReadU32() // junk
-	petitionGUID, _ := r.ReadU64()
-	targetGUID, _ := r.ReadU64()
+	// PetitionsHandler.cpp:530-532 — both guids are packed on the wire.
+	petitionGUID, _ := r.ReadPackedGUID()
+	targetGUID, _ := r.ReadPackedGUID()
 
 	if s.server != nil {
 		targetSess := s.server.findSessionByGUID(targetGUID)
@@ -4855,11 +4863,12 @@ func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool 
 // handlePetitionShowList processes CMSG_PETITION_SHOWLIST (0x1BB).
 // Reference: WorldSession::HandlePetitionShowListOpcode (PetitionsHandler.cpp:408).
 func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	npcGUID, _ := r.ReadU64()
+	// PetitionsHandler.cpp:745 — packed guid on the wire.
+	npcGUID, _ := r.ReadPackedGUID()
 
 	// PetitionsHandler.cpp:743-749: the list is served only by an
 	// interactable petitioner NPC. Go lists only the guild charter row;
@@ -4896,11 +4905,12 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 // handlePetitionDecline processes MSG_PETITION_DECLINE (0x1C2).
 // Reference: WorldSession::HandleDeclinePetition (PetitionsHandler.cpp:493).
 func (s *session) handlePetitionDecline(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petitionGUID, _ := r.ReadU64()
+	// PetitionsHandler.cpp:496 — packed guid on the wire.
+	petitionGUID, _ := r.ReadPackedGUID()
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil && petitionGUID > 0 {
@@ -4923,11 +4933,12 @@ func (s *session) handlePetitionDecline(ctx context.Context, payload []byte) boo
 // handlePetitionRename processes MSG_PETITION_RENAME (0x1C1).
 // Reference: WorldSession::HandlePetitionRenameGuild (PetitionsHandler.cpp:322).
 func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 9 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petitionGUID, err := r.ReadU64()
+	// PetitionsHandler.cpp:325-326 — packed guid + name string on the wire.
+	petitionGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return false
 	}

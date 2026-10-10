@@ -67,7 +67,9 @@ func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool
 		return false
 	}
 	r := protocol.NewReader(payload)
-	bankerGUID, err := r.ReadU64()
+	// NPCPackets.h (Hello::Unit) and the client send a PACKED guid; a raw
+	// ReadU64 misparses it and the activate silently never worked.
+	bankerGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
@@ -97,7 +99,9 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	r := protocol.NewReader(payload)
-	bankerGUID, err := r.ReadU64()
+	// BankPackets.h (BuyBankSlot::Banker) is a packed ObjectGuid on the
+	// wire; ReadU64 misparses it.
+	bankerGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
