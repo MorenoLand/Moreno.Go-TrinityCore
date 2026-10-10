@@ -77,9 +77,15 @@ func resolveCasterDestPosition(store *wotlk.Store, target uint32, radiusIndex ui
 		return x, y, z
 	}
 	radius := float32(0)
+	// SpellEffectInfo::HasRadius (SpellInfo.cpp:546-549) is RadiusEntry !=
+	// nullptr — a nonzero index whose DBC row is missing counts as no
+	// radius (Store.SpellRadius reports ok for index 0, so the index must
+	// be checked as well).
+	hasRadius := false
 	if store != nil {
 		if value, ok, err := store.SpellRadius(radiusIndex, level); err == nil && ok {
 			radius = value
+			hasRadius = radiusIndex != 0
 		}
 	}
 	angle := casterDestDirectionAngle(target)
@@ -98,11 +104,15 @@ func resolveCasterDestPosition(store *wotlk.Store, target uint32, radiusIndex ui
 		angle = rand.Float32() * 2 * float32(math.Pi)
 	case implicitTargetDestCasterFrontRight, implicitTargetDestCasterBackRight,
 		implicitTargetDestCasterBackLeft, implicitTargetDestCasterFrontLeft:
-		if radiusIndex == 0 {
+		// Spell.cpp:1403-1405: the totem diagonals fall back to
+		// DefaultTotemDistance when the effect has no radius entry.
+		if !hasRadius {
 			dist = defaultTotemDistance
 		}
 	}
-	if target != implicitTargetDestCasterFrontLeap && dist < combatReach {
+	// Spell.cpp:1419-1420: the combat-reach floor applies to every target
+	// in the default branch, including FRONT_LEAP.
+	if dist < combatReach {
 		dist = combatReach
 	}
 	angle += orientation
