@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -175,6 +176,51 @@ func (s *session) sendArenaTeamCommandResult(teamAction uint32, team, player str
 	_ = s.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_COMMAND_RESULT), buf.Bytes(), true)
 }
 
+// Arena team event codes (ArenaTeam.h:62, ArenaTeamEvents).
+const (
+	arenaTeamEventJoinSS           = 3
+	arenaTeamEventLeaveSS          = 4
+	arenaTeamEventRemoveSSS        = 5
+	arenaTeamEventLeaderChangedSSS = 7
+)
+
+// broadcastArenaTeamEvent sends SMSG_ARENA_TEAM_EVENT to every online member
+// of the team. Mirrors ArenaTeam::BroadcastEvent (ArenaTeam.cpp:551) +
+// BroadcastPacket (:544): u8 event, u8 strCount, the CStrings, then the raw
+// u64 GUID when non-empty (ObjectGuid operator<< raw semantics).
+func (s *session) broadcastArenaTeamEvent(ctx context.Context, cdb *sql.DB, teamID uint32, event uint8, guid uint64, strs ...string) {
+	if s.server == nil || cdb == nil {
+		return
+	}
+	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	payload := make([]byte, 0, 2+8)
+	payload = append(payload, event, uint8(len(strs)))
+	for _, st := range strs {
+		payload = append(payload, []byte(st)...)
+		payload = append(payload, 0)
+	}
+	if guid != 0 {
+		var le [8]byte
+		for i := 0; i < 8; i++ {
+			le[i] = byte(guid >> (8 * i))
+		}
+		payload = append(payload, le[:]...)
+	}
+	for rows.Next() {
+		var mGUID int64
+		if rows.Scan(&mGUID) != nil {
+			continue
+		}
+		if ms := s.server.findSessionByGUID(uint64(mGUID)); ms != nil && ms.player != nil {
+			_ = ms.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_EVENT), payload, true)
+		}
+	}
+}
+
 // arenaTeamSlotByType mirrors ArenaTeam::GetSlotByType (ArenaTeam.cpp:599):
 // 2v2 -> 0, 3v3 -> 1, 5v5 -> 2, anything else -> 0xFF.
 func arenaTeamSlotByType(aType uint32) uint32 {
@@ -214,6 +260,12 @@ func (s *session) handleArenaTeamInvite(ctx context.Context, payload []byte) boo
 	invitedName, err := r.ReadCString()
 	if err != nil {
 		return false
+	}
+	// C++ normalizePlayerName fails on invalid UTF-8 (ObjectMgr.cpp:147) and
+	// the handler returns silently (ArenaTeamHandler.cpp:94-96); Go's
+	// case-mapper never fails, so gate it here == the social.go precedent.
+	if invitedName != "" && !utf8.ValidString(invitedName) {
+		return true
 	}
 	invitedName = normalizePlayerName(invitedName)
 
@@ -303,8 +355,9 @@ func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) boo
 	}
 
 	// GetArenaTeamById miss -> silent return == C++.
+	var teamName string
 	var aType, captainGUID uint32
-	if err := cdb.QueryRowContext(ctx, "SELECT type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&aType, &captainGUID); err != nil {
+	if err := cdb.QueryRowContext(ctx, "SELECT name, type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &aType, &captainGUID); err != nil {
 		return true
 	}
 
@@ -350,6 +403,11 @@ func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) boo
 
 	// Player::SetArenaTeamIdInvited(0) on the online player == C++ AddMember.
 	s.arenaTeamInvited = 0
+
+	// BroadcastEvent(ERR_ARENA_TEAM_JOIN_SS) == C++ (ArenaTeamHandler.cpp:200):
+	// the new member row is in the table, so the fan-out reaches every online
+	// member including the joiner == C++ AddMember-then-broadcast order.
+	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventJoinSS, s.playerGUID, s.player.Name, teamName)
 
 	rosterPayload := protocol.NewBuffer(4)
 	rosterPayload.WriteU32(teamID)
@@ -458,9 +516,11 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 
 	// ArenaTeam::DelMember (cleanDb = true): drop the member row, drop the
 	// leaver's queued (not invited) arena queue entries when in a group ==
-	// the group-mate queue cleanup leg (invited players never reach here),
-	// and answer QUIT_S with the team name.
+	// the group-mate queue cleanup leg (invited players never reach here).
+	// DelMember answers QUIT_S to the leaver (ArenaTeam.cpp:357); the
+	// handler sends it again below (ArenaTeamHandler.cpp:261).
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID)
+	s.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
 	if s.groupID != 0 {
 		for i := range s.bgQueues {
 			e := &s.bgQueues[i]
@@ -470,6 +530,9 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 			}
 		}
 	}
+	// BroadcastEvent(ERR_ARENA_TEAM_LEAVE_SS) == C++ (ArenaTeamHandler.cpp:260):
+	// the leaver's row is gone, so the fan-out reaches only remaining members.
+	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventLeaveSS, s.playerGUID, s.player.Name, teamName)
 	s.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
 	s.debug("arena team leave", "team", teamID)
 	return true
@@ -510,11 +573,12 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 		return true
 	}
 
-	// normalizePlayerName arm == C++; the Go form fails only on empty names.
-	name = normalizePlayerName(name)
-	if name == "" {
+	// normalizePlayerName arm == C++ (ArenaTeamHandler.cpp:333): fails on empty
+	// and on invalid UTF-8 (ObjectMgr.cpp:143/147) -> silent return.
+	if name == "" || !utf8.ValidString(name) {
 		return true
 	}
+	name = normalizePlayerName(name)
 
 	// GetMember(name) miss -> CREATE_S/PLAYER_NOT_FOUND_S == C++.
 	var memberGUID int64
@@ -545,8 +609,7 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 	// ArenaTeam::DelMember(guid, true): drop the member row, drop the removed
 	// member's queued (not invited) arena entries when in a group, and answer
 	// QUIT_S with the team name to an online member == the leave handler's
-	// DelMember port. BroadcastEvent(ERR_ARENA_TEAM_REMOVE_SSS) has no Go
-	// member-broadcast model (precedent: accept/leave handlers).
+	// DelMember port.
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, memberGUID)
 	if ms := s.server.findSessionByGUID(uint64(memberGUID)); ms != nil {
 		if ms.groupID != 0 {
@@ -562,6 +625,10 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 			ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
 		}
 	}
+	// BroadcastEvent(ERR_ARENA_TEAM_REMOVE_SSS) == C++
+	// (ArenaTeamHandler.cpp:358): removed member's row is gone, so the
+	// fan-out reaches only remaining members; the GUID slot is empty.
+	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventRemoveSSS, 0, name, teamName, s.player.Name)
 	s.debug("arena team member removed", "team", teamID, "member", memberGUID)
 	return true
 }
@@ -609,8 +676,10 @@ func (s *session) handleArenaTeamDisband(ctx context.Context, payload []byte) bo
 
 	// ArenaTeam::Disband: DelMember each member (online members get QUIT_S
 	// with the team name), then delete the team and member rows. C++ sends no
-	// command result on this path; the BroadcastEvent(ERR_ARENA_TEAM_DISBANDED_S)
-	// fan-out has no Go member-broadcast model (precedent: leave handler).
+	// command result on this path; C++'s BroadcastEvent(ERR_ARENA_TEAM_DISBANDED_S)
+	// runs after Members was emptied (ArenaTeam.cpp:376-383), so BroadcastPacket
+	// iterates zero members and no event packet ever hits the wire — skipping it
+	// is C++-exact, not a gap.
 	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
 	if err == nil {
 		for rows.Next() {
@@ -651,8 +720,9 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 	}
 
 	// Check for valid arena team -> silent return == C++.
+	var teamName string
 	var aType, captainGUID uint32
-	if err := cdb.QueryRowContext(ctx, "SELECT type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&aType, &captainGUID); err != nil {
+	if err := cdb.QueryRowContext(ctx, "SELECT name, type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &aType, &captainGUID); err != nil {
 		return true
 	}
 
@@ -662,11 +732,12 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 		return true
 	}
 
-	// normalizePlayerName arm == C++ (Go fails only on empty names).
-	name = normalizePlayerName(name)
-	if name == "" {
+	// normalizePlayerName arm == C++ (ArenaTeamHandler.cpp:380): fails on empty
+	// and on invalid UTF-8 (ObjectMgr.cpp:143/147) -> silent return.
+	if name == "" || !utf8.ValidString(name) {
 		return true
 	}
+	name = normalizePlayerName(name)
 
 	// GetMember(name) miss -> CREATE_S/PLAYER_NOT_FOUND_S == C++.
 	var memberGUID int64
@@ -680,10 +751,11 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 		return true
 	}
 
-	// ArenaTeam::SetCaptain == C++. The BroadcastEvent
-	// (ERR_ARENA_TEAM_LEADER_CHANGED_SSS) fan-out has no Go member-broadcast
-	// model (precedent: accept/leave/remove handlers).
+	// ArenaTeam::SetCaptain == C++ (ArenaTeam.cpp). BroadcastEvent
+	// (ERR_ARENA_TEAM_LEADER_CHANGED_SSS) == C++
+	// (ArenaTeamHandler.cpp:401): old captain, new captain, team name.
 	_, _ = cdb.ExecContext(ctx, "UPDATE arena_team SET captainGuid = ? WHERE arenaTeamId = ?", memberGUID, teamID)
+	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventLeaderChangedSSS, 0, s.player.Name, name, teamName)
 	s.debug("arena team leader changed", "team", teamID, "captain", memberGUID)
 	return true
 }
