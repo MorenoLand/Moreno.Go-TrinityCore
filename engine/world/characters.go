@@ -268,6 +268,18 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
 	}
+	// ObjectMgr::IsReservedName (ObjectMgr.cpp:8515-8524): lowercased exact
+	// match against the reserved_name rows, gated on
+	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME
+	// (CharacterHandler.cpp:392). Answers CHAR_NAME_RESERVED (95); the gate
+	// sits between the CheckPlayerName-equivalent (validCharacterName above)
+	// and the death-knight arm below, == C++ order.
+	if !s.skipReservedNameCheck {
+		var reserved int
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(name)).Scan(&reserved); err == nil && reserved > 0 {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameReserved)
+		}
+	}
 	if class == 6 {
 		if s.server.Config.DeathKnightsPerRealm == 0 {
 			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
@@ -2407,7 +2419,7 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// ObjectMgr::CheckPlayerName approximation (validCharacterName covers the
-	// length/alphabet arms; reserved-name table has no Go bridge — standing delta).
+	// length/alphabet arms).
 	if !validCharacterName(newName) {
 		sendRename(charNameFailure, false, "")
 		return true
@@ -2427,6 +2439,16 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 	if atLogin&atLoginRename == 0 {
 		sendRename(charCreateError, false, "")
 		return true
+	}
+	// IsReservedName arm (CharacterHandler.cpp:1133): gated on
+	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME; answers
+	// CHAR_NAME_RESERVED (95) ahead of the free-name check == C++ order.
+	if !s.skipReservedNameCheck {
+		var reserved int
+		if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(newName)).Scan(&reserved); err == nil && reserved > 0 {
+			sendRename(charNameReserved, false, "")
+			return true
+		}
 	}
 	if row, err := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); err == nil {
 		var one int
@@ -2663,6 +2685,20 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 			buf.WriteU8(charCreateError)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
 			return true
+		}
+		// IsReservedName arm (CharacterHandler.cpp:1725): gated on
+		// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME; answers
+		// CHAR_NAME_RESERVED (95) ahead of the name-in-use check == C++
+		// order. (The normalize/CheckPlayerName arms C++ runs ahead of this
+		// have no Go bridge on this path — documented gap, name is taken raw.)
+		if !s.skipReservedNameCheck {
+			var reserved int
+			if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(newName)).Scan(&reserved); err == nil && reserved > 0 {
+				buf := protocol.NewBuffer(1)
+				buf.WriteU8(charNameReserved)
+				_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+				return true
+			}
 		}
 		newTeam := teamForRace(race)
 		// Faction change must swap to the opposite faction team (CharacterHandler.cpp:1687)
