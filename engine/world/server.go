@@ -536,6 +536,13 @@ type activeCastState struct {
 	// ADD_TARGET_TRIGGER auras present on the caster at cast completion, for
 	// the on-hit trigger consumer.
 	HitTriggers []spellHitTrigger
+	// Executing is the m_executedCurrently analog (Spell.h:548:
+	// IsInterruptable() = !m_executedCurrently, set Spell.cpp:3315, cleared
+	// 3345/3421/3526): true while finishSpellCast runs the cast's effects.
+	// Unit::InterruptSpell (Unit.cpp:3140-3149) refuses any interrupt while
+	// set, so self-inflicted side effects (e.g. a self-stun) cannot cancel
+	// the executing cast.
+	Executing bool
 }
 
 func (s *Server) playerSessionForGUID(guid uint64) *session {

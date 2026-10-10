@@ -2310,11 +2310,19 @@ func (s *session) removeItemDependentAuras(ctx context.Context, removedItemGUID 
 			stop = true
 		}
 	}
-	if hasChannel && channelSpell.EquippedItemClass >= 0 && !fits(channelSpell) {
-		stop = true
+	castStop := stop
+	channelStop := hasChannel && channelSpell.EquippedItemClass >= 0 && !fits(channelSpell)
+	// Player.cpp:24014-24020 — the currently-cast spells are interrupted per
+	// slot via Unit::InterruptSpell (INTERRUPTED + CAST_FAILED broadcast
+	// through Spell::cancel), not the silent stopSpellLifecycle teardown
+	// the logout path uses. The SPELL_STATE_DELAYED carve-out is vacuous in
+	// Go's model (no delayed-vs-active distinction), and the IsInterruptable
+	// gate rides the interrupt calls themselves.
+	if castStop {
+		s.interruptCurrentCast()
 	}
-	if stop {
-		s.stopSpellLifecycle()
+	if channelStop {
+		s.interruptCurrentChannel()
 	}
 }
 

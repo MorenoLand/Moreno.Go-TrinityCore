@@ -6680,6 +6680,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				return
 			}
 			completedCast = s.activeCast
+			// Spell.h:548 / Spell.cpp:3315 — m_executedCurrently goes true
+			// the moment the cast is claimed for execution, closing the
+			// IsInterruptable gate for the whole effect run.
+			completedCast.Executing = true
 		}
 		s.castMu.Unlock()
 	}
@@ -15366,6 +15370,15 @@ func (s *session) finishNextSwingCast(ctx context.Context, q *queuedNextSwing) {
 func (s *session) interruptCurrentCast() {
 	s.castMu.Lock()
 	if s.activeCast != nil {
+		// Unit::InterruptSpell (Unit.cpp:3140-3149): the IsInterruptable
+		// gate (Spell.h:548) — a cast currently executing its effects
+		// cannot be interrupted, so self-inflicted side effects (e.g. a
+		// self-stun from the executing spell) never cancel it mid-run.
+		// The container is left untouched and no packets go out.
+		if s.activeCast.Executing {
+			s.castMu.Unlock()
+			return
+		}
 		if s.activeCast.Timer != nil {
 			s.activeCast.Timer.Stop()
 		}
@@ -23244,6 +23257,11 @@ type activeChannelState struct {
 	TickTimer         *time.Timer
 	DrainTimer        *time.Timer
 	Stopped           bool
+	// Executing is the m_executedCurrently analog for channel ticks
+	// (Spell.h:548): true while channelTick runs the tick's effects, so
+	// interruptCurrentChannel honors the same Unit::InterruptSpell
+	// IsInterruptable gate as the generic cast path.
+	Executing bool
 	// Taking is the spellmod taking context for the channeling cast —
 	// the Go model of the C++ Spell's m_appliedMods registry for the
 	// channel. Aura::UpdateOwner (SpellAuras.cpp:790-810) holds the
@@ -23485,6 +23503,13 @@ func (s *session) interruptCurrentChannel() {
 		s.castMu.Unlock()
 		return
 	}
+	// Unit::InterruptSpell (Unit.cpp:3140-3149): the IsInterruptable gate
+	// (Spell.h:548) — a channel tick currently executing its effects cannot
+	// be interrupted; the channel is left untouched and no packets go out.
+	if channel.Executing {
+		s.castMu.Unlock()
+		return
+	}
 	s.activeChannel = nil
 	if channel.Timer != nil {
 		channel.Timer.Stop()
@@ -23650,6 +23675,11 @@ func (s *session) channelTick() {
 		s.finishChannel()
 		return
 	}
+	// Spell.h:548 — the tick claims the channel for execution, closing the
+	// IsInterruptable gate until the tick's effects land.
+	s.castMu.Lock()
+	channel.Executing = true
+	s.castMu.Unlock()
 	for effectIndex, effect := range spell.Effects {
 		if effect.Effect == 0 || effect.Effect == 6 && effect.Aura == 23 {
 			continue
@@ -23672,7 +23702,9 @@ func (s *session) channelTick() {
 		}
 	}
 
+	// Gate reopens: the tick's effects have landed.
 	s.castMu.Lock()
+	channel.Executing = false
 	channel = s.activeChannel
 	if channel == nil || channel.Stopped {
 		s.castMu.Unlock()
