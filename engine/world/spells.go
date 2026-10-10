@@ -13500,6 +13500,31 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			chainMult = s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 		}
+		// Spell::DoEffectOnLaunchTarget AOE legs (Spell.cpp:7749-7758) run
+		// per effect for area-targeting damage effects: the victim's
+		// Unit::CalculateAOEAvoidance product per target, and for player
+		// casters the 10-target cap (damage * 10 / targetAmount over the
+		// whole unique target list, hits and misses). Same legs as the
+		// client path (spells.go:8275); this fan-out never applied them.
+		// The cap divisor counts hitTargets (the full unique list) minus
+		// the caster, matching the client-path convention.
+		areaDmgEffect := eff.Effect == 2 && (spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect))
+		aoeCapDivisor := 0
+		if areaDmgEffect {
+			for _, guid := range hitTargets {
+				if guid == 0 || guid == s.playerGUID {
+					continue
+				}
+				aoeCapDivisor++
+			}
+			if aoeCapDivisor <= 10 {
+				aoeCapDivisor = 0
+			}
+		}
+		aoeSchoolMask := uint32(spell.SchoolMask)
+		if aoeSchoolMask == 0 {
+			aoeSchoolMask = 1
+		}
 		for _, et := range effectTargets {
 			effectTarget, jumpIndex := et.guid, et.jumpIndex
 			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
@@ -13524,7 +13549,22 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 && len(effectTargets) > 1 {
 					baseDmg /= uint32(len(effectTargets))
 				}
-				s.executeDirectSpellDamage(ctx, effectTarget, spellID, chainScaledAmount(baseDmg, chainMult, jumpIndex), uint8(spell.SchoolMask))
+				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7752-7758): the
+				// player 10-target AOE cap lands on the per-effect damage
+				// (cap-then-avoidance order matches the client path).
+				if areaDmgEffect && baseDmg > 0 && aoeCapDivisor > 0 {
+					baseDmg = baseDmg * 10 / uint32(aoeCapDivisor)
+				}
+				targetDamage := chainScaledAmount(baseDmg, chainMult, jumpIndex)
+				// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404): the
+				// victim's AOE-avoidance aura product scales the
+				// area-effect damage per target.
+				if areaDmgEffect && targetDamage > 0 {
+					if avoid := s.aoeDamageAvoidanceMultiplier(ctx, effectTarget, aoeSchoolMask); avoid != 1 {
+						targetDamage = uint32(float64(targetDamage) * avoid)
+					}
+				}
+				s.executeDirectSpellDamage(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask))
 			} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
 				amount := uint32(eff.BasePoints + 1)
 				schoolMask := spell.SchoolMask
