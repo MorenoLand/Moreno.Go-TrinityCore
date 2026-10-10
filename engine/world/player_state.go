@@ -4942,7 +4942,9 @@ func (s *session) handleSetTitle(ctx context.Context, payload []byte) bool {
 	switch {
 	case title > 0 && title < maxTitleIndex && s.playerHasTitle(uint32(title)):
 		s.player.ChosenTitle = uint32(title)
-		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
+		// No achievement fire: ACHIEVEMENT_CRITERIA_TYPE_OWN_RANK is
+		// never fired by the C++ server (AchievementMgr.cpp:1130
+		// "Not implemented yet").
 	case title > 0 && title < maxTitleIndex:
 		return true
 	default:

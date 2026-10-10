@@ -1144,9 +1144,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.repopAtGraveyard(ctx)
 		s.player.repopOnLogin = false
 	}
-	if s.player.ChosenTitle > 0 {
-		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
-	}
+	// ACHIEVEMENT_CRITERIA_TYPE_OWN_RANK is never fired by the C++
+	// server (AchievementMgr.cpp:1130 "Not implemented yet"), so no
+	// title fire belongs here.
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
 	if firstLogin {
 		s.triggerPlayerEvent(ctx, scripting.PlayerEventFirstLogin, s.luaPlayer())
