@@ -6407,6 +6407,13 @@ func (s *session) handleWorldTeleport(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
+	// WorldSession::HandleWorldTeleportOpcode (MiscHandler.cpp:1072): the
+	// in-flight check runs before the permission gate — a player in flight
+	// has the packet silently ignored.
+	if s.isInFlight() {
+		return true
+	}
+
 	allowed := s.security >= 1 || (s.player.ExtraFlags&playerExtraGMOn != 0)
 	if !allowed && s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
 		hasPerm, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionOpcodeWorldTeleport)
