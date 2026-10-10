@@ -827,35 +827,41 @@ func (s *session) healDevourMagicPet(ctx context.Context, petCaster *creatureMot
 type stolenBuff struct {
 	candidate        dispelCandidate
 	remainingMs      uint32
+	victimMaxMs      uint32
 	charges          uint8
 	stealCharge      bool
 	victimCasterGUID uint64
 	victimAura       *activeAura
 }
 
-// stealVictimState reads the victim aura's current remaining duration and
-// charge count; degrades to the candidate's recorded duration when the aura
-// is gone. Also returns the aura's caster GUID and instance pointer for the
-// single-target steal dance.
-func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTargetPlayer bool, cand dispelCandidate) (uint32, uint8, uint64, *activeAura) {
+// stealVictimState reads the victim aura's current remaining duration, max
+// duration and charge count; degrades to the candidate's recorded duration
+// when the aura is gone. Also returns the aura's caster GUID and instance
+// pointer for the single-target steal dance.
+func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTargetPlayer bool, cand dispelCandidate) (remainingMs, victimMaxMs uint32, charges uint8, victimCasterGUID uint64, victimAura *activeAura) {
 	if isTargetPlayer && targetSess != nil {
 		targetSess.castMu.Lock()
 		defer targetSess.castMu.Unlock()
 		if aura := targetSess.activeAuras[cand.SpellID]; aura != nil && !aura.Stopped {
 			advanceAuraDuration(aura, time.Now())
-			return aura.RemainingMs, aura.RemainingCharges, aura.CasterGUID, aura
+			return aura.RemainingMs, aura.DurationMs, aura.RemainingCharges, aura.CasterGUID, aura
 		}
-		return cand.DurationMs, 0, 0, nil
+		return cand.DurationMs, 0, 0, 0, nil
 	}
 	if s.server != nil && s.player != nil {
 		key := creatureAuraKeyForPlayer(*s.player, targetGUID)
 		s.server.auraMu.Lock()
 		defer s.server.auraMu.Unlock()
 		if aura := s.server.activeCreatureAuras[key][cand.SpellID]; aura != nil && !aura.Stopped {
-			return aura.RemainingMs, aura.RemainingCharges, aura.CasterGUID, aura
+			// Creature auras expire on AfterFunc timers; RemainingMs is
+			// only advanced lazily, so bring it current before reading
+			// (the player path above does the same). Advancing is safe:
+			// expiry is timer-driven and never reads RemainingMs.
+			advanceAuraDuration(aura, time.Now())
+			return aura.RemainingMs, aura.DurationMs, aura.RemainingCharges, aura.CasterGUID, aura
 		}
 	}
-	return cand.DurationMs, 0, 0, nil
+	return cand.DurationMs, 0, 0, 0, nil
 }
 
 // stolenAuraMergesInto reports whether the stealer-side merge of
@@ -929,11 +935,14 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 			existing.RemainingCharges = uint8(stSpell.ProcCharges)
 		}
 	}
-	// oldAura->SetDuration(int32(dur)), Unit.cpp:4009.
-	existing.DurationMs = dur
+	// oldAura->SetDuration(int32(dur)), Unit.cpp:4009. Aura::SetDuration
+	// (SpellAuras.cpp:894) writes only m_duration — the remaining time —
+	// never the max, so the stealer's original max duration survives the
+	// merge; the earlier code wrongly overwrote it.
 	existing.RemainingMs = dur
 	existing.DurationUpdatedAt = time.Now()
 	slot, positive := existing.Slot, existing.Positive
+	maxDur := existing.DurationMs
 	var count uint8
 	if stealCharge {
 		count = existing.RemainingCharges
@@ -946,21 +955,40 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 	s.castMu.Unlock()
 	// Charges ride the stack-count field of the aura update
 	// (player_auras.go).
-	s.sendAuraUpdateWithStack(slot, spellID, false, positive, dur, dur, count)
+	s.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDur, dur, count)
 	return true
 }
 
-// setAuraCharges fixes the stolen aura's charge count after the fresh apply
-// (C++ SetLoadedState charges arg, Unit.cpp:4032) and pushes the corrected
-// count to the client when it changed.
-func (s *session) setAuraCharges(spellID uint32, charges uint8) {
+// setAuraCharges fixes the stolen aura's charge count and max duration after
+// the fresh apply (C++ Aura::SetLoadedState charges + maxduration args,
+// SpellAuras.cpp:1238, called at Unit.cpp:4032) and pushes the corrected
+// values to the client when either changed. The max duration is the VICTIM
+// aura's max, not the capped remaining: a 30-minute buff stolen with 5
+// minutes left keeps max=30m in C++ while the earlier code sent max=5m.
+func (s *session) setAuraCharges(spellID uint32, charges uint8, victimMaxMs uint32) {
 	s.castMu.Lock()
 	aura := s.activeAuras[spellID]
-	if aura == nil || aura.Stopped || aura.RemainingCharges == charges {
+	if aura == nil || aura.Stopped {
 		s.castMu.Unlock()
 		return
 	}
-	aura.RemainingCharges = charges
+	changed := false
+	if aura.RemainingCharges != charges {
+		aura.RemainingCharges = charges
+		changed = true
+	}
+	// Skip a zero victim max: the victim aura is permanent and Go's
+	// DurationMs==0 means permanent, which would freeze the expiry
+	// countdown (advanceAuraDuration no-ops on DurationMs==0) while C++
+	// still expires the stolen aura on m_duration=dur.
+	if victimMaxMs != 0 && aura.DurationMs != victimMaxMs {
+		aura.DurationMs = victimMaxMs
+		changed = true
+	}
+	if !changed {
+		s.castMu.Unlock()
+		return
+	}
 	slot, positive := aura.Slot, aura.Positive
 	maxDuration, remaining := aura.DurationMs, aura.RemainingMs
 	s.castMu.Unlock()
@@ -1016,8 +1044,8 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 					stealCharge = sp.AttributesEx7&spellAttr7DispelCharges != 0
 				}
 			}
-			remaining, charges, victimCasterGUID, victimAura := s.stealVictimState(targetSess, targetGUID, isTargetPlayer, cand)
-			stolen = append(stolen, stolenBuff{candidate: cand, remainingMs: remaining, charges: charges, stealCharge: stealCharge, victimCasterGUID: victimCasterGUID, victimAura: victimAura})
+			remaining, victimMaxMs, charges, victimCasterGUID, victimAura := s.stealVictimState(targetSess, targetGUID, isTargetPlayer, cand)
+			stolen = append(stolen, stolenBuff{candidate: cand, remainingMs: remaining, victimMaxMs: victimMaxMs, charges: charges, stealCharge: stealCharge, victimCasterGUID: victimCasterGUID, victimAura: victimAura})
 			// C++ RemoveAurasDueToSpellBySteal (Unit.cpp:4046-4049): a
 			// successful steal removes one charge
 			// (SPELL_ATTR7_DISPEL_CHARGES) or one stack
@@ -1087,7 +1115,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		if st.stealCharge {
 			wantCharges = 1
 		}
-		s.setAuraCharges(cand.SpellID, wantCharges)
+		s.setAuraCharges(cand.SpellID, wantCharges, st.victimMaxMs)
 	}
 
 	if len(failList) > 0 {
