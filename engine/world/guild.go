@@ -1963,6 +1963,26 @@ func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) b
 	r := protocol.NewReader(payload)
 	targetGUID, _ := r.ReadU64()
 
+	// !player + IsWithinDistInMap(INSPECT_DISTANCE) + IsValidAttackTarget
+	// gates (MiscHandler.cpp:1044-1051); C++ answers nothing when any fails.
+	targetSession := s.server.findSessionByGUID(targetGUID)
+	if targetSession == nil || !targetSession.worldReady.Load() || targetSession.player == nil {
+		return true
+	}
+	target := targetSession.player
+	if target.Map != s.player.Map {
+		return true
+	}
+	dx := float64(s.player.X - target.X)
+	dy := float64(s.player.Y - target.Y)
+	dz := float64(s.player.Z - target.Z)
+	if math.Sqrt(dx*dx+dy*dy+dz*dz) > inspectDistance {
+		return true
+	}
+	if s.security == 0 && playerTeam(s.player.Race) != playerTeam(target.Race) {
+		return true
+	}
+
 	var honorPoints uint8
 	var killsToday, todayContrib, yestContrib, lifetimeHK uint32
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

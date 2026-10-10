@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -694,14 +695,37 @@ func (s *session) sendAllAchievementData() {
 // RespondInspectAchievements (packed target GUID, earned block, -1,
 // progress block, -1).
 func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	targetGUID, err := r.ReadU64()
+	// Reference: WorldSession::HandleQueryInspectAchievements
+	// (MiscHandler.cpp:1415) reads a PACKED guid (>> guid.ReadAsPacked()).
+	targetGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
+
+	// ObjectAccessor::GetPlayer + IsWithinDistInMap(INSPECT_DISTANCE) +
+	// IsValidAttackTarget gates (MiscHandler.cpp:1419-1426).
+	targetSession := s.server.findSessionByGUID(targetGUID)
+	if targetSession == nil || !targetSession.worldReady.Load() || targetSession.player == nil {
+		return true
+	}
+	target := targetSession.player
+	if target.Map != s.player.Map {
+		return true
+	}
+	dx := float64(s.player.X - target.X)
+	dy := float64(s.player.Y - target.Y)
+	dz := float64(s.player.Z - target.Z)
+	if math.Sqrt(dx*dx+dy*dy+dz*dz) > inspectDistance {
+		return true
+	}
+	if s.security == 0 && playerTeam(s.player.Race) != playerTeam(target.Race) {
+		return true
+	}
+
 	cdb := s.server.CharactersStore
 	if cdb == nil || cdb.DB == nil {
 		return true

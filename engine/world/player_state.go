@@ -4997,10 +4997,6 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 	granter.player.GrantableLevels--
 	granter.sendPlayerUpdate()
 
-	if s.player.Level >= 80 {
-		return true
-	}
-
 	s.player.Level++
 	s.player.MaxHealth = 200 + uint32(s.player.Level)*50
 	s.player.Health = s.player.MaxHealth
