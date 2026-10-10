@@ -16733,6 +16733,7 @@ func (s *session) removeAura(spellID uint32) {
 	forcedReactionRank := uint32(0)
 	wasTransform := false
 	wasShapeshift := false
+	removedShapeshiftForm := uint8(0)
 	wasStealth := false
 	wasInvisibility := false
 	wasTrackStealthed := false
@@ -16767,6 +16768,9 @@ func (s *session) removeAura(spellID uint32) {
 			}
 			wasTransform = aura.AuraType == 56
 			wasShapeshift = aura.AuraType == 36
+			if wasShapeshift && aura.MiscValue >= 0 && aura.MiscValue <= 255 {
+				removedShapeshiftForm = uint8(aura.MiscValue)
+			}
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
 			wasTrackStealthed = aura.AuraType == spellAuraTrackStealthed
@@ -16861,6 +16865,14 @@ func (s *session) removeAura(spellID uint32) {
 	// rebuild (the apply leg above carries the gain-side half).
 	if wasShapeshift && s.player != nil {
 		_ = s.calculatePlayerStats(context.Background(), s.player)
+	}
+	// AuraEffect::HandleAuraModShapeshift remove leg
+	// (SpellAuraEffects.cpp:1808-1860): the druid shift-out movement-impair
+	// strip, the Nordrassil set-bonus procs, and the warrior stance rage
+	// clamp. The form reset + display restore ride the
+	// refreshTransformDisplay call above.
+	if wasShapeshift && s.player != nil {
+		s.removeShapeshiftFormEffects(spellID, removedShapeshiftForm)
 	}
 	// AuraEffect::HandleAuraModDisarm remove leg
 	// (SpellAuraEffects.cpp:2284-2348).
@@ -19015,6 +19027,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == spellAuraTrackStealthed {
 			targetSess.player.PlayerFieldBytes |= playerFieldByteTrackStealthed
+		}
+		if eff.Aura == 36 {
+			// AuraEffect::HandleAuraModShapeshift apply leg
+			// (SpellAuraEffects.cpp:1696-1790): the other-form strip, the
+			// snare/root + polymorph drop for the listed forms, and the
+			// Furor power arms run before the display/stat pair below —
+			// C++ strips before SetShapeshiftForm, and Go's refresh reads
+			// the post-strip aura set.
+			targetSess.applyShapeshiftFormEffects(ctx, spell.ID, uint8(eff.MiscValue))
 		}
 		if eff.Aura == 36 || eff.Aura == 56 {
 			targetSess.refreshTransformDisplay(ctx)

@@ -1,6 +1,11 @@
 package world
 
-import "github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+import (
+	"context"
+	"math/rand/v2"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+)
 
 // formShadow mirrors FORM_SHADOW (SpellAuraDefines.h:435): the Shadowform
 // shapeshift form id carried by SPELL_AURA_MOD_SHAPESHIFT's MiscValue and,
@@ -316,4 +321,266 @@ func (s *session) predatoryStrikesPct() (levelPct, weaponPct float64, ok bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+const powerEnergy = 3 // POWER_ENERGY (SharedDefines.h power enum)
+
+// spellHasCuAuraCC mirrors the SPELL_ATTR0_CU_AURA_CC arms of the C++
+// spell-load pass (SpellMgr.cpp:2662-2672, 2842-2858): any possess/confuse/
+// charm/fear/stun aura effect, warrior shouts (family flags[0] & 0x20000),
+// druid roars (family flags[0] & 0x8), and the Stoneclaw Totem effect (5729).
+// Unit::RemoveAurasByShapeShift consults it through HasAttribute.
+func spellHasCuAuraCC(spell wotlk.Spell) bool {
+	for _, effect := range spell.Effects {
+		switch effect.Aura {
+		case spellAuraModPossess, spellAuraModConfuse, spellAuraCharm, spellAuraAoeCharm, spellAuraModFear, spellAuraModStun:
+			return true
+		}
+	}
+	switch spell.SpellFamilyName {
+	case spellFamilyWarrior:
+		return spell.SpellFamilyFlags[0]&0x20000 != 0 // Shout / Piercing Howl
+	case spellFamilyDruid:
+		return spell.SpellFamilyFlags[0]&0x8 != 0 // Roar
+	case spellFamilyGeneric:
+		return spell.ID == 5729 // Stoneclaw Totem effect
+	}
+	return false
+}
+
+// removeAurasByShapeShift mirrors Unit::RemoveAurasByShapeShift
+// (Unit.cpp:4234-4248): every aura whose all-effects mechanic mask touches
+// snare|root leaves, except CC auras carrying the custom AURA_CC attribute.
+func (s *session) removeAurasByShapeShift() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	var mask uint32 = (1 << mechanicSnare) | (1 << mechanicRoot)
+	var ids []uint32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellMechanicMask(spell)&mask != 0 && !spellHasCuAuraCC(spell) {
+			ids = append(ids, aura.SpellID)
+		}
+	}
+	for _, id := range ids {
+		s.expirePlayerAura(id)
+	}
+}
+
+// removeOtherShapeshiftAuras mirrors the
+// RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT, ObjectGuid::Empty, GetBase())
+// arm of AuraEffect::HandleAuraModShapeshift (SpellAuraEffects.cpp:1712): a
+// newly applied shapeshift strips every other shapeshift aura; the applying
+// spell itself is the excluded base.
+func (s *session) removeOtherShapeshiftAuras(exceptSpellID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	var ids []uint32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraModShapeshift || aura.SpellID == exceptSpellID {
+			continue
+		}
+		ids = append(ids, aura.SpellID)
+	}
+	for _, id := range ids {
+		s.expirePlayerAura(id)
+	}
+}
+
+// removePolymorphAura mirrors the polymorph-drop arm of
+// AuraEffect::HandleAuraModShapeshift (SpellAuraEffects.cpp:1707-1708):
+// shifting into a listed form while polymorphed removes the transform aura
+// (Unit::IsPolymorphed + RemoveAurasDueToSpell(GetTransformSpell()),
+// Unit.cpp:10574-10584 — the transform spell whose specific is
+// SPELL_SPECIFIC_MAGE_POLYMORPH).
+func (s *session) removePolymorphAura() {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraTransform {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellSpecific(spell, s.server.spellFirstRank) == spellSpecificMagePolymorph {
+			s.expirePlayerAura(aura.SpellID)
+			return
+		}
+	}
+}
+
+// furorProcChance mirrors the Furor lookup in
+// AuraEffect::HandleAuraModShapeshift (SpellAuraEffects.cpp:1731-1733): the
+// SPELL_AURA_DUMMY effect-0 amount of the druid-family aura with SpellIconID
+// 238, floored at 0.
+func (s *session) furorProcChance() int32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraDummy || aura.EffectMask&1 == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || spell.SpellFamilyName != spellFamilyDruid || spell.SpellIconID != 238 {
+			continue
+		}
+		if aura.Amounts[0] > 0 {
+			return aura.Amounts[0]
+		}
+		return 0
+	}
+	return 0
+}
+
+// applyShapeshiftFormEffects runs the apply-leg arms of
+// AuraEffect::HandleAuraModShapeshift (SpellAuraEffects.cpp:1696-1790) that
+// the refreshTransformDisplay + calculatePlayerStats pair below doesn't
+// cover: the other-form strip, the snare/root + polymorph drop for the
+// listed forms, and the Furor power arms for cat/bear/direbear. The
+// HandleShapeshiftBoosts companion casts, the Dash amount recalc, and the
+// form spell-learning arms are separate units.
+func (s *session) applyShapeshiftFormEffects(ctx context.Context, spellID uint32, form uint8) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	s.removeOtherShapeshiftAuras(spellID)
+	switch form {
+	case 1, 2, 3, 4, 5, 8, 27, 29, 31: // cat/tree/travel/aqua/bear/direbear/flight-epic/flight/moonkin
+		s.removeAurasByShapeShift()
+		s.removePolymorphAura()
+	}
+	switch form {
+	case 1, 5, 8: // cat/bear/direbear carry non-mana power: the Furor arms
+		chance := s.furorProcChance()
+		if form == 1 {
+			oldPower := s.player.Powers[powerEnergy]
+			s.adjustSpellPower(ctx, s.playerGUID, powerEnergy, -int64(oldPower))
+			grant := int32(oldPower)
+			if grant > chance {
+				grant = chance
+			}
+			if grant < 0 {
+				grant = 0
+			}
+			s.castSpellDirectWithBasePoint(ctx, 17099, s.playerGUID, uint32(grant))
+		} else if chance > 0 && rand.IntN(100) < int(chance) {
+			s.castSpellDirect(ctx, 17057, s.playerGUID)
+		}
+	}
+}
+
+// hasLiveAuraEffect reports whether the spell's effect index is live on the
+// player (Unit::GetAuraEffect(spellId, effIndex) non-null, Unit.cpp:4494).
+func (s *session) hasLiveAuraEffect(spellID uint32, effIndex uint8) bool {
+	if s == nil {
+		return false
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	aura, ok := s.activeAuras[spellID]
+	return ok && aura != nil && !aura.Stopped && aura.EffectMask&(1<<uint(effIndex)) != 0
+}
+
+// defensiveTacticsRage mirrors Unit::IsScriptOverriden(m_spellInfo, 831)
+// (Unit.cpp:4764-4776) for the defensive-stance remove arm: the first
+// SPELL_AURA_OVERRIDE_CLASS_SCRIPTS aura with MiscValue 831 whose family
+// mask affects the stance spell, amount x10 into POWER_RAGE units.
+func (s *session) defensiveTacticsRage(stanceSpell wotlk.Spell) uint32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != auraOverrideClassScripts || aura.MiscValue != 831 {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, stanceSpell) {
+				if aura.Amounts[index] > 0 {
+					return uint32(aura.Amounts[index]) * 10
+				}
+				return 0
+			}
+		}
+		return 0
+	}
+	return 0
+}
+
+// clampStanceRage mirrors the warrior-stance remove arm of
+// AuraEffect::HandleAuraModShapeshift (SpellAuraEffects.cpp:1826-1854):
+// leaving a stance clamps rage to the retained amount — Defensive Tactics
+// (form 18 only) plus Stance Mastery / Tactical Mastery (warrior family,
+// SpellIconID 139) effect-0 base points, all x10 into POWER_RAGE units.
+func (s *session) clampStanceRage(stanceSpellID uint32, form uint8) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	var rageVal uint32
+	if form == 18 { // FORM_DEFENSIVESTANCE
+		if stanceSpell, found, err := s.server.Data.Spell(stanceSpellID); err == nil && found {
+			rageVal += s.defensiveTacticsRage(stanceSpell)
+		}
+	}
+	for _, learned := range s.player.Spells {
+		if learned.Disabled {
+			continue
+		}
+		sp, found, err := s.server.Data.Spell(learned.ID)
+		if err != nil || !found || sp.SpellFamilyName != spellFamilyWarrior || sp.SpellIconID != 139 {
+			continue
+		}
+		if len(sp.Effects) == 0 || sp.Effects[0].BasePoints < 0 {
+			continue
+		}
+		rageVal += uint32(sp.Effects[0].BasePoints+1) * 10
+	}
+	if cur := s.player.Powers[powerRage]; cur > rageVal {
+		s.adjustSpellPower(context.Background(), s.playerGUID, powerRage, -int64(cur-rageVal))
+	}
+}
+
+// removeShapeshiftFormEffects runs the remove-leg arms of
+// AuraEffect::HandleAuraModShapeshift (SpellAuraEffects.cpp:1808-1860): the
+// druid shift-out movement-impair strip (only once the last shapeshift aura
+// left), the Nordrassil set-bonus procs, and the warrior stance rage clamp.
+// The form reset and display restore ride the refreshTransformDisplay call
+// above; HandleShapeshiftBoosts(target, false) is a separate unit.
+func (s *session) removeShapeshiftFormEffects(stanceSpellID uint32, form uint8) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if !s.hasAuraType(spellAuraModShapeshift) && s.player.Class == 11 { // CLASS_DRUID
+		s.removeAurasByShapeShift()
+	}
+	switch form {
+	case 1, 5, 8: // cat/bear/direbear: Nordrassil Harness bonus (37315 -> 37316)
+		if s.hasLiveAuraEffect(37315, 0) {
+			s.castSpellDirect(context.Background(), 37316, s.playerGUID)
+		}
+	case 31: // moonkin: Nordrassil Regalia bonus (37324 -> 37325)
+		if s.hasLiveAuraEffect(37324, 0) {
+			s.castSpellDirect(context.Background(), 37325, s.playerGUID)
+		}
+	case 17, 18, 19: // warrior stances: rage clamp
+		s.clampStanceRage(stanceSpellID, form)
+	}
 }
