@@ -1500,26 +1500,31 @@ func (s *session) persistResurrectionState(ctx context.Context) {
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, playerFlags = ?, death_expire_time = 0 WHERE guid = ?", s.player.Health, s.player.PlayerFlags, s.playerGUID)
 }
 
-// resurrectionData mirrors Player::_resurrectionData (ResurrectionData):
-// the caster, the caster location for the teleport, and the restored health
-// and mana values carried by the resurrect spell effect.
+// resurrectionData mirrors Player::_resurrectionData (ResurrectionData,
+// Player.h:871): the caster, the caster location for the teleport, the
+// restored health and mana values carried by the resurrect spell effect,
+// and the applied aura id (Raise Ally, Player.cpp:24222; 0 on the plain
+// resurrect paths, SpellEffects.cpp:270/4296).
 type resurrectionData struct {
 	GUID    uint64
 	MapID   uint32
 	X, Y, Z float32
 	Health  uint32
 	Mana    uint32
+	Aura    uint32
 }
 
 // setResurrectRequestData mirrors Player::SetResurrectRequestData. The
 // reference asserts that no request is outstanding; the caller is expected to
-// check first, so an overwrite here is logged and refused.
-func (s *session) setResurrectRequestData(casterGUID uint64, mapID uint32, x, y, z float32, health, mana uint32) {
+// check first, so an overwrite here is logged and refused. appliedAura is the
+// Raise Ally arm (spell_dk.cpp:2841); the plain EffectResurrect paths pass 0
+// (SpellEffects.cpp:270, 4296).
+func (s *session) setResurrectRequestData(casterGUID uint64, mapID uint32, x, y, z float32, health, mana, appliedAura uint32) {
 	if s.resurrection != nil {
 		s.debug("resurrect request overwritten", "account", s.accountName, "guid", s.playerGUID)
 		return
 	}
-	s.resurrection = &resurrectionData{GUID: casterGUID, MapID: mapID, X: x, Y: y, Z: z, Health: health, Mana: mana}
+	s.resurrection = &resurrectionData{GUID: casterGUID, MapID: mapID, X: x, Y: y, Z: z, Health: health, Mana: mana, Aura: appliedAura}
 }
 
 // sendResurrectRequest mirrors Spell::SendResurrectRequest: raw caster GUID,
@@ -1582,6 +1587,18 @@ func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) b
 		return true
 	}
 	data := *s.resurrection
+	// Player::ResurrectUsingRequestData (Player.cpp:24200-24214): requests
+	// carrying an applied aura (DK Raise Ally, spell_dk.cpp:2841) cast the
+	// aura on the dead player and return — the plain teleport/resurrect/
+	// bones legs never run. RemoveGhoul has no Go analog (no raised-ghoul
+	// pet model); the aura's risen-ally summon (spell_dk_raise_ally, 46619)
+	// stays unbridged — applyAura holds the shell until the spell-script
+	// summon model exists.
+	if data.Aura != 0 {
+		s.applyAura(data.Aura)
+		s.resurrection = nil
+		return true
+	}
 	// Reference teleports to the caster location before resurrecting so the
 	// player does not revive into nearby creatures at the corpse; the delayed
 	// teleport retry path has no Go equivalent because teleportTo is sync.
@@ -1738,7 +1755,7 @@ func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
 		// stores the request at the caster's location, and sends the request
 		// whose reclaim-delay byte is !HasAttribute(IGNORE_RESURRECTION_TIMER).
 		s.sendResurrectLog(spell.ID, s.playerGUID)
-		s.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana)
+		s.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
 		s.sendResurrectRequest(s.playerGUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
 		return
 	}

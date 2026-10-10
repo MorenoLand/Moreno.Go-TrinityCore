@@ -28400,7 +28400,7 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	// The m_corpseTarget arm has no Go model (no corpse targets on the client
 	// path — spells.go target check notes); appliedAura is 0 on this path.
 	s.sendResurrectLog(spell.ID, targetGUID)
-	targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana)
+	targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
 	// Spell::SendResurrectRequest (Spell.cpp:4693-4709): the fourth byte
 	// overrides the corpse-reclaim delay for spells carrying
 	// SPELL_ATTR3_IGNORE_RESURRECTION_TIMER; spiritHealer stays false for
