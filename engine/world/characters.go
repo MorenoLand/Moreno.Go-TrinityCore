@@ -2647,6 +2647,18 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 	}
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
+	// Racing another account's character is a cheat: C++ kicks the session
+	// (CharacterHandler.cpp:1622-1630).
+	store := s.server.CharactersStore
+	if store == nil || store.DB == nil {
+		return true
+	}
+	var legit int
+	if err := store.DB.QueryRowContext(ctx, "SELECT 1 FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&legit); err != nil {
+		s.debug("race change cheat attempt", "guid", guid)
+		s.kickSession(s)
+		return true
+	}
 	newName, _ := r.ReadCString()
 	gender, _ := r.ReadU8()
 	skin, _ := r.ReadU8()
@@ -2656,40 +2668,112 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 	face, _ := r.ReadU8()
 	race, _ := r.ReadU8()
 
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		var atLogin uint64
-		var oldRace, class uint8
-		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class); err != nil {
-			buf := protocol.NewBuffer(1)
-			buf.WriteU8(charCreateError)
-			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
-			return true
+	// Failures answer the u8 code alone; success appends guid/name/appearance
+	// (SendCharFactionChange, CharacterHandler.cpp:2189-2206).
+	sendRaceChange := func(code uint8) bool {
+		buf := protocol.NewBuffer(1)
+		buf.WriteU8(code)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+		return true
+	}
+
+	cdb := store.DB
+	var atLogin uint64
+	var oldRace, class uint8
+	if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class); err != nil {
+		return sendRaceChange(charCreateError)
+	}
+	// sObjectMgr->GetPlayerInfo(race, class): the race/class combination must
+	// exist in playercreateinfo (CharacterHandler.cpp:1659-1663).
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var comboOK int
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", race, class).Scan(&comboOK); err != nil {
+			return sendRaceChange(charCreateError)
 		}
-		// usedLoginFlag = AT_LOGIN_CHANGE_RACE (CharacterHandler.cpp:1681-1685).
-		if atLogin&atLoginChangeRace == 0 {
-			buf := protocol.NewBuffer(1)
-			buf.WriteU8(charCreateError)
-			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
-			return true
+	}
+	// usedLoginFlag = AT_LOGIN_CHANGE_RACE (CharacterHandler.cpp:1681-1685).
+	if atLogin&atLoginChangeRace == 0 {
+		return sendRaceChange(charCreateError)
+	}
+	// Race change must stay on the same faction team (CharacterHandler.cpp:1687).
+	if teamForRace(oldRace) != teamForRace(race) {
+		return sendRaceChange(charCreateCharacterRaceOnly)
+	}
+	// normalizePlayerName (CharacterHandler.cpp:1709-1713): empty or
+	// invalid-UTF-8 answers CHAR_NAME_NO_NAME.
+	if !utf8.ValidString(newName) {
+		return sendRaceChange(charNameNoName)
+	}
+	newName = normalizePlayerName(newName)
+	if newName == "" {
+		return sendRaceChange(charNameNoName)
+	}
+	// ObjectMgr::CheckPlayerName approximation (CharacterHandler.cpp:1715-1719).
+	if !validCharacterName(newName) {
+		return sendRaceChange(charNameFailure)
+	}
+	// IsReservedName arm (CharacterHandler.cpp:1722-1726): gated on
+	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME; answers
+	// CHAR_NAME_RESERVED (95) on the normalized name == C++ order.
+	if !s.skipReservedNameCheck {
+		var reserved int
+		if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(newName)).Scan(&reserved); err == nil && reserved > 0 {
+			return sendRaceChange(charNameReserved)
 		}
-		// sObjectMgr->GetPlayerInfo(race, class): race must be playable for the
-		// class combination (the class arm has no Go DBC bridge).
-		if playable, _ := s.server.raceDefinition(race); !playable {
-			buf := protocol.NewBuffer(1)
-			buf.WriteU8(charCreateError)
-			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
-			return true
+	}
+	// Name already taken by another character (CharacterHandler.cpp:1729-1736,
+	// CHAR_CREATE_NAME_IN_USE).
+	var takenBy uint64
+	if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", newName).Scan(&takenBy); err == nil && takenBy != guid {
+		return sendRaceChange(charCreateNameInUse)
+	}
+	// Arena team captain cannot race change (CharacterHandler.cpp:1738-1742).
+	var isCaptain int
+	if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM arena_team WHERE captainGuid = ?", uint32(guid)).Scan(&isCaptain); err == nil {
+		return sendRaceChange(charCreateCharacterArenaLeader)
+	}
+
+	// Player::OfflineResurrect (Player.cpp:4801-4808): drop the corpse and queue
+	// AT_LOGIN_RESURRECT; the name/at_login row rewrite sets the resurrect flag
+	// and clears the change-race flag (CharacterHandler.cpp:1763-1769).
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ?", guid)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_declinedname WHERE guid = ?", guid)
+	_, _ = cdb.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, at_login = (at_login | %d) & ~%d WHERE guid = ?", atLoginResurrect, atLoginChangeRace),
+		newName, gender, skin, face, hairStyle, hairColor, facialHair, race, guid)
+
+	// Language switch on actual race change (CharacterHandler.cpp:1785-1840):
+	// delete all languages, re-insert the faction + race languages.
+	if oldRace != race {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill IN (98, 109, 111, 759, 313, 113, 673, 115, 315, 137)", guid)
+		var factionLang uint32
+		if teamForRace(race) == 0 {
+			factionLang = 98 // Common
+		} else {
+			factionLang = 109 // Orcish
 		}
-		// Race change must stay on the same faction team (CharacterHandler.cpp:1687)
-		if oldRace != 0 && teamForRace(oldRace) != teamForRace(race) {
-			buf := protocol.NewBuffer(1)
-			buf.WriteU8(charCreateCharacterRaceOnly)
-			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
-			return true
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_skills (guid, skill, value, max) VALUES (?, ?, 300, 300)", guid, factionLang)
+		var racialSkill uint32
+		switch race {
+		case 3: // Dwarf
+			racialSkill = 111
+		case 11: // Draenei
+			racialSkill = 759
+		case 7: // Gnome
+			racialSkill = 313
+		case 4: // Night Elf
+			racialSkill = 113
+		case 5: // Undead
+			racialSkill = 673
+		case 6: // Tauren
+			racialSkill = 115
+		case 8: // Troll
+			racialSkill = 315
+		case 10: // Blood Elf
+			racialSkill = 137
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
-			newName, gender, skin, face, hairStyle, hairColor, facialHair, race, guid)
+		if racialSkill != 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_skills (guid, skill, value, max) VALUES (?, ?, 300, 300)", guid, racialSkill)
+		}
 	}
 
 	buf := protocol.NewBuffer(17 + len(newName))
@@ -2717,6 +2801,18 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 	}
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
+	// Faction-changing another account's character is a cheat: C++ kicks the
+	// session (CharacterHandler.cpp:1622-1630).
+	store := s.server.CharactersStore
+	if store == nil || store.DB == nil {
+		return true
+	}
+	var legit int
+	if err := store.DB.QueryRowContext(ctx, "SELECT 1 FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&legit); err != nil {
+		s.debug("faction change cheat attempt", "guid", guid)
+		s.kickSession(s)
+		return true
+	}
 	newName, _ := r.ReadCString()
 	gender, _ := r.ReadU8()
 	skin, _ := r.ReadU8()
@@ -2726,11 +2822,11 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 	face, _ := r.ReadU8()
 	race, _ := r.ReadU8()
 
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
+	cdb := store.DB
+	{
 		var atLogin uint64
-		var oldRace uint8
-		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace); err != nil {
+		var oldRace, class uint8
+		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class); err != nil {
 			buf := protocol.NewBuffer(1)
 			buf.WriteU8(charCreateError)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
@@ -2744,6 +2840,14 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
 			return true
 		}
+		// sObjectMgr->GetPlayerInfo(race, class): the race/class combination must
+		// exist in playercreateinfo (CharacterHandler.cpp:1659-1663).
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var comboOK int
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", race, class).Scan(&comboOK); err != nil {
+				return sendFactionChange(charCreateError)
+			}
+		}
 		// usedLoginFlag = AT_LOGIN_CHANGE_FACTION (CharacterHandler.cpp:1681-1685).
 		if atLogin&atLoginChangeFaction == 0 {
 			return sendFactionChange(charCreateError)
@@ -2751,12 +2855,22 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 		newTeam := teamForRace(race)
 		// Faction change must swap to the opposite faction team
 		// (CharacterHandler.cpp:1687) — ahead of the name arms, == C++ order.
-		if oldRace != 0 && teamForRace(oldRace) == newTeam {
+		if teamForRace(oldRace) == newTeam {
 			return sendFactionChange(charCreateCharacterSwapFaction)
 		}
 		// CONFIG_CHARACTER_CREATING_DISABLED_RACEMASK
-		// (CharacterHandler.cpp:1695-1702): mirrors the char-create mask check.
-		if s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
+		// (CharacterHandler.cpp:1695-1702): gated on
+		// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RACEMASK; mirrors the
+		// char-create mask check.
+		skipRacemaskCheck := false
+		if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+			var permErr error
+			skipRacemaskCheck, permErr = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSkipCheckCharacterCreationRacemask)
+			if permErr != nil {
+				skipRacemaskCheck = false
+			}
+		}
+		if !skipRacemaskCheck && s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
 			return sendFactionChange(charCreateError)
 		}
 		// normalizePlayerName (CharacterHandler.cpp:1709-1713): empty or
@@ -2796,8 +2910,11 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 			return sendFactionChange(charCreateCharacterArenaLeader)
 		}
 
-		// Resurrect character if dead
-		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET health = 1 WHERE guid = ? AND health = 0", guid)
+		// Player::OfflineResurrect (Player.cpp:4801-4808): drop the corpse and
+		// queue AT_LOGIN_RESURRECT (OR'd into at_login below,
+		// CharacterHandler.cpp:1763-1769).
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ?", guid)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_declinedname WHERE guid = ?", guid)
 
 		// Set capital city homebind and world coordinates (CharacterHandler.cpp:1907-1925)
 		var spawnMap, spawnZone int64
@@ -2812,15 +2929,26 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_homebind SET mapId = ?, zoneId = ?, posX = ?, posY = ?, posZ = ? WHERE guid = ?",
 			spawnMap, spawnZone, spawnX, spawnY, spawnZ, guid)
-		_, err := cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, at_login = at_login & ~64 WHERE guid = ?",
+		_, err := cdb.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, at_login = (at_login | %d) & ~%d WHERE guid = ?", atLoginResurrect, atLoginChangeFaction),
 			newName, gender, skin, face, hairStyle, hairColor, facialHair, race, spawnMap, spawnZone, spawnX, spawnY, spawnZ, spawnO, guid)
 		if err != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
 				newName, gender, skin, face, hairStyle, hairColor, facialHair, race, guid)
 		}
 
-		// Delete friends list and social interactions
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_social WHERE guid = ? OR friend = ?", guid, guid)
+		// Delete friends list and social interactions: only when the account
+		// lacks RBAC_PERM_TWO_SIDE_ADD_FRIEND (CharacterHandler.cpp:1898-1906).
+		twoSideFriend := false
+		if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+			var permErr error
+			twoSideFriend, permErr = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionTwoSideAddFriend)
+			if permErr != nil {
+				twoSideFriend = false
+			}
+		}
+		if !twoSideFriend {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_social WHERE guid = ? OR friend = ?", guid, guid)
+		}
 
 		// Delete all active quests in progress (CharacterHandler.cpp:1959)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ?", guid)
