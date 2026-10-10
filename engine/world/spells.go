@@ -7142,20 +7142,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// legs in the explicit-target and area-target checks (no modOwner
 	// spellmod-window arm either — beginSpellModTaking defers the window
 	// across the whole function, matching 3323/3418/3519).
-	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) and
-	// Spell::SelectImplicitDestDestTargets (Spell.cpp:1464): resolve the
-	// spell destination from target-relative / dest-relative implicit
-	// targets once, before the area selection and persistent-area read
-	// sites below consume it.
-	target, destOK := s.resolveImplicitSpellDestination(ctx, spell, spellID, target)
-	if !destOK {
-		// Spell.cpp:1111: no nearby entry object found ->
-		// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
-		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
-		return
-	}
-
 	hitTargets := make([]uint64, 0, 1)
 	// Spell::CheckCast routes the explicit unit target through
 	// SpellInfo::CheckExplicitTarget (Spell.cpp:5365, SpellInfo.cpp:1799),
@@ -7300,6 +7286,32 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			hitTargets = append(hitTargets, explicitUnitGUID)
 		}
 	}
+	// Spell::InitExplicitTargets (Spell.cpp:659-700): the implicit dest
+	// arms read the object target AFTER the wire-validity removal and the
+	// selection/victim/self fallbacks — not the raw wire target. Promote
+	// the resolved explicit unit into the dest arm's read slot so the
+	// 53/63/64-71/74/75 family anchors on the same object C++ asserts
+	// non-null (Spell.cpp:1434). The wire branch already left
+	// target.UnitGUID identical, and the redirect wrote its own GUID, so
+	// only the selection fallback changes the slot here.
+	if explicitUnitGUID != 0 && explicitUnitGUID != target.UnitGUID {
+		target.UnitGUID = explicitUnitGUID
+		target.Flags |= protocol.SpellTargetFlagUnitWireMask
+	}
+	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) and
+	// Spell::SelectImplicitDestDestTargets (Spell.cpp:1464): resolve the
+	// spell destination from target-relative / dest-relative implicit
+	// targets once, before the area selection and persistent-area read
+	// sites below consume it.
+	target, destOK := s.resolveImplicitSpellDestination(ctx, spell, spellID, target)
+	if !destOK {
+		// Spell.cpp:1111: no nearby entry object found ->
+		// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
+		return
+	}
+
 	areaSpell := isAreaEnemySpell(spell)
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
 	friendlyNearbySpell := isFriendlyNearbySpell(spell)
@@ -12959,12 +12971,37 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if firstLogin {
 		castTimeStamp = gameTimeMS()
 	}
+	// Spell::_cast (Spell.cpp:3288-3293): cancel at lost explicit target — a
+	// non-zero object-target GUID that no longer resolves aborts the cast
+	// before SelectSpellTargets. A zero target is not a lost target (the
+	// aura/trigger callers leave it for the fallback legs), so only the
+	// non-zero unresolvable case cancels.
+	if targetGUID != 0 {
+		if _, ok := s.getCombatTarget(ctx, targetGUID); !ok {
+			s.debug("triggered cast cancelled", "account", s.accountName, "spell", spellID, "reason", "lost explicit target")
+			return
+		}
+	}
 	hitTargets := []uint64{targetGUID}
 	spellTargetFlags := protocol.SpellTargetFlagUnitWireMask
 	if firstLogin {
 		spellTargetFlags = protocol.SpellTargetFlagUnit
 	}
 	spellTarget := protocol.SpellTargetData{Flags: spellTargetFlags, UnitGUID: targetGUID}
+	// Spell::SelectExplicitTargets (Spell.cpp:724-757) runs inside
+	// SelectSpellTargets for triggered casts too — the redirect arm carries
+	// no IsTriggered gate — so the magic redirect
+	// (WorldObject::GetMagicHitRedirectTarget, Object.cpp:3188-3217)
+	// applies here before the implicit arms: a live Grounding Totem magnet
+	// on the victim pulls the explicit unit target onto the totem, and the
+	// SMSG_SPELL_GO target list follows it (mirroring m_targets
+	// SetUnitTarget). The melee/ranged arm stays unbridged (no Go source,
+	// see totems.go).
+	if redirectGUID, ok := s.groundingTotemMagnetGUID(ctx, spell, targetGUID); ok {
+		targetGUID = redirectGUID
+		spellTarget.UnitGUID = redirectGUID
+		hitTargets = []uint64{redirectGUID}
+	}
 	// Spell::SelectSpellTargets (Spell.cpp:758-800) runs on triggered casts
 	// too — Spell::cast (Spell.cpp:3264) calls it regardless of the
 	// TRIGGERED flags (only the CheckCast gauntlet and the cast-bar sends

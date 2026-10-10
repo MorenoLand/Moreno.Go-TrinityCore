@@ -215,7 +215,12 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 	}
 	var unitTarget combatTarget
 	hasUnitTarget := false
-	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+	// Spell::InitExplicitTargets (Spell.cpp:668-678): a wire object target
+	// whose type the spell's explicit mask does not need is removed before
+	// the implicit arms run, so the 53/63/64-71/74/75 arm never anchors on
+	// it — the fits-mask gate rides here as well as in the cast-completion
+	// explicit block.
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && explicitWireTargetFitsMask(spell, target) {
 		if resolved, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
 			unitTarget, hasUnitTarget = resolved, true
 		}
