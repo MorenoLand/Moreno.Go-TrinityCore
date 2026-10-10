@@ -10282,12 +10282,10 @@ func (s *session) spellCastingTimeForBonus(spell wotlk.Spell, isDot bool, castin
 	// (Unit.cpp:10936-10951): split the cast time by the portion of the
 	// bonus belonging to each leg.
 	if overTime > 0 && directDamage {
-		originalCastTime := castingTime
-		if s.server != nil && s.server.Data != nil {
-			if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
-				originalCastTime = uint32(ct)
-			}
-		}
+		// Unit.cpp:10939-10941: OriginalCastTime is the null-spell
+		// CalcCastTime (base + REQ_AMMO +500, SpellInfo.cpp:3097-3105),
+		// clamped like the coefficient cast time above.
+		originalCastTime := s.calcCastTimeForBonus(spell)
 		if originalCastTime > 7000 {
 			originalCastTime = 7000
 		}
@@ -10332,6 +10330,29 @@ func (s *session) spellCastingTimeForBonus(spell wotlk.Spell, isDot bool, castin
 // over the DoT's duration and tick count. Unlike the old stub there is no
 // 1.0 cap — C++ clamps the cast time at 7000ms instead, so long casts scale
 // up to 2.0.
+// calcCastTimeForBonus mirrors the null-spell SpellInfo::CalcCastTime
+// (SpellInfo.cpp:3097-3105) used by the spellpower coefficient path: the
+// SpellCastTimes.dbc base, plus +500ms for non-auto-repeat ranged spells with
+// ATTR0_REQ_AMMO. Returns 0 when no cast-time row exists, like C++'s early
+// return.
+func (s *session) calcCastTimeForBonus(spell wotlk.Spell) uint32 {
+	if s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	ct, ok, err := s.server.Data.SpellCastTime(spell.CastingTimeIndex)
+	if err != nil || !ok {
+		return 0
+	}
+	castTime := int32(ct)
+	if spell.Attributes&spellAttr0ReqAmmo != 0 && spell.AttributesEx1&spellAttr2AutorepeatFlag == 0 {
+		castTime += 500
+	}
+	if castTime <= 0 {
+		return 0
+	}
+	return uint32(castTime)
+}
+
 func (s *session) defaultSpellDamageCoefficient(spell wotlk.Spell, isDot bool) float64 {
 	dotFactor := 1.0
 	var duration int32
@@ -10354,10 +10375,10 @@ func (s *session) defaultSpellDamageCoefficient(spell wotlk.Spell, isDot bool) f
 		if duration > 0 {
 			castingTime = uint32(duration)
 		}
-	} else if s.server != nil && s.server.Data != nil {
-		if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
-			castingTime = uint32(ct)
-		}
+	} else {
+		// SpellInfo::CalcCastTime (SpellInfo.cpp:3097-3105): the null-spell
+		// form carries the REQ_AMMO +500 on top of the DBC base.
+		castingTime = s.calcCastTimeForBonus(spell)
 	}
 	castingTime = s.spellCastingTimeForBonus(spell, isDot, castingTime)
 	return (float64(castingTime) / 3500.0) * dotFactor
@@ -10401,7 +10422,10 @@ func (s *session) spellDoneCoefficient(spell wotlk.Spell, effIndex int, isDot bo
 	if spell.MaxLevel != 0 && s.player != nil && uint32(s.player.Level) >= spell.MaxLevel {
 		factor = math.Max(0, math.Min(1, (22.0+float64(spell.MaxLevel)-float64(s.player.Level))/20.0))
 	}
-	coeff = s.applySpellModFloat(spell, spellModDamageMultiplier, coeff*100) / 100
+	// Unit::SpellDamageBonusDone (Unit.cpp:6718-6723): the spellpower
+	// coefficient carries SPELLMOD_BONUS_MULTIPLIER (op 24), not
+	// SPELLMOD_DAMAGE_MULTIPLIER (op 20, the chain-amplitude op).
+	coeff = s.applySpellModFloat(spell, spellModBonusMultiplier, coeff*100) / 100
 	return coeff * factor
 }
 
@@ -10847,7 +10871,10 @@ func (s *session) spellHealingDoneCoefficient(spell wotlk.Spell, effIndex int, i
 	if spell.MaxLevel != 0 && s.player != nil && uint32(s.player.Level) >= spell.MaxLevel {
 		factor = math.Max(0, math.Min(1, (22.0+float64(spell.MaxLevel)-float64(s.player.Level))/20.0))
 	}
-	coeff = s.applySpellModFloat(spell, spellModDamageMultiplier, coeff*100) / 100
+	// Unit::SpellHealingBonusDone (Unit.cpp:7593-7598): the spellpower
+	// coefficient carries SPELLMOD_BONUS_MULTIPLIER (op 24), not
+	// SPELLMOD_DAMAGE_MULTIPLIER (op 20, the chain-amplitude op).
+	coeff = s.applySpellModFloat(spell, spellModBonusMultiplier, coeff*100) / 100
 	return coeff * factor
 }
 
