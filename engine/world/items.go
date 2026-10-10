@@ -1327,7 +1327,12 @@ func inventoryTypeToSlot(invType uint8) uint8 {
 }
 
 // handleItemNameQuery processes CMSG_ITEM_NAME_QUERY (0x2C4).
-// Reference: WorldSession::HandleItemNameQueryOpcode (ItemHandler.cpp:812).
+// Reference: WorldSession::HandleItemNameQueryOpcode (ItemHandler.cpp:812) +
+// ObjectMgr::LoadItemSetNames (ObjectMgr.cpp:3449). The C++ serves
+// `item_set_names` (the set display name + InventoryType keyed by item entry),
+// not item_template: entries without a set name get no response at all, and set
+// members missing a name row fall back to item_template at load time. The
+// item_set_names_locale fallback has no Go analog (enUS-only session locale).
 func (s *session) handleItemNameQuery(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	itemID, err := r.ReadU32()
@@ -1336,19 +1341,22 @@ func (s *session) handleItemNameQuery(ctx context.Context, payload []byte) bool 
 	}
 	_, _ = r.ReadU64() // skip guid
 
-	var name string
-	var invType uint32
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, InventoryType FROM item_template WHERE entry = ? LIMIT 1", itemID).Scan(&name, &invType)
-	}
-	if name == "" {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return true
+	}
+	var name string
+	var invType int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, InventoryType FROM item_set_names WHERE entry = ? LIMIT 1", itemID).Scan(&name, &invType); err != nil {
+		var itemSet int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, InventoryType, itemset FROM item_template WHERE entry = ? LIMIT 1", itemID).Scan(&name, &invType, &itemSet); err != nil || itemSet == 0 {
+			return true
+		}
 	}
 
 	buf := protocol.NewBuffer(len(name) + 16)
 	buf.WriteU32(itemID)
 	buf.WriteCString(name)
-	buf.WriteU32(invType)
+	buf.WriteU32(uint32(invType))
 	return s.write(uint16(protocol.OpcodeSMSG_ITEM_NAME_QUERY_RESPONSE), buf.Bytes(), true) == nil
 }
 
@@ -3670,8 +3678,33 @@ func (s *session) handleReadItem(ctx context.Context, payload []byte) bool {
 	}
 	bag := payload[0]
 	slot := payload[1]
-	itemGUID, _, _, err := s.inventoryItemAt(ctx, bag, slot)
-	if err != nil || itemGUID == 0 {
+	itemGUID, itemEntry, _, err := s.inventoryItemAt(ctx, bag, slot)
+	// ItemHandler.cpp:348/367: the item must exist AND its template must carry
+	// page text, otherwise EQUIP_ERR_ITEM_NOT_FOUND answers with no packet.
+	data, loadErr := s.loadItemQueryData(ctx, uint32(itemEntry))
+	if err != nil || itemGUID == 0 || loadErr != nil || data.PageText == 0 {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+	// ItemHandler.cpp:352-362: CanUseItem failure answers SMSG_READ_ITEM_FAILED
+	// with the item GUID plus the equip error; Go's bool-only helpers split the
+	// C++ InventoryResult into the level gate (equipErrCantEquipLevelI) and the
+	// specific canUseItemResult code.
+	msg := uint8(equipErrOk)
+	if uint32(s.player.Level) < data.RequiredLevel {
+		msg = equipErrCantEquipLevelI
+	} else {
+		var spellIDs [5]int64
+		for i, spell := range data.Spells {
+			spellIDs[i] = int64(spell.ID)
+		}
+		msg = s.canUseItemResult(ctx, data.Class, data.SubClass, data.Flags2, int64(data.AllowableClass), int64(data.AllowableRace), data.RequiredSkill, data.RequiredSkillRank, data.RequiredSpell, data.HolidayID, data.Quality, data.RequiredReputationFaction, data.RequiredReputationRank, spellIDs)
+	}
+	if msg != equipErrOk {
+		buf := protocol.NewBuffer(8)
+		buf.WriteU64(uint64(itemGUID))
+		_ = s.write(uint16(protocol.OpcodeSMSG_READ_ITEM_FAILED), buf.Bytes(), true)
+		s.sendEquipError(msg, uint64(itemGUID))
 		return true
 	}
 	buf := protocol.NewBuffer(8)
@@ -3725,7 +3758,7 @@ func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool 
 }
 
 // handleWrapItem processes CMSG_WRAP_ITEM (0x1D3).
-// Reference: WorldSession::HandleWrapItemOpcode (ItemHandler.cpp:836).
+// Reference: WorldSession::HandleWrapItemOpcode (ItemHandler.cpp:836-945).
 func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -3740,7 +3773,13 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
-	targetGUID, targetEntry, targetCount, err := s.inventoryItemAt(ctx, itemBag, itemSlot)
+	// ItemHandler.cpp:854: the wrapper must be a real wrapper item (cheat arm).
+	giftData, giftErr := s.loadItemQueryData(ctx, uint32(giftEntry))
+	if giftErr != nil || giftData.Flags&itemTemplateFlagIsWrapper == 0 {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+	targetGUID, targetEntry, _, err := s.inventoryItemAt(ctx, itemBag, itemSlot)
 	if err != nil || targetGUID == 0 {
 		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
@@ -3758,23 +3797,44 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Stackable items (count > 1) cannot be wrapped
-	if targetCount > 1 {
-		s.sendEquipError(equipErrStackableCantBeWrapped, uint64(targetGUID))
-		return true
-	}
-
+	targetData, targetErr := s.loadItemQueryData(ctx, uint32(targetEntry))
+	var targetInstanceFlags int64
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 
-		// Already wrapped check
+		// Already wrapped check (ItemHandler.cpp:876: ITEM_FIELD_GIFTCREATOR set)
 		var existingGift uint32
 		if err := cdb.QueryRowContext(ctx, "SELECT entry FROM character_gifts WHERE item_guid = ? LIMIT 1", targetGUID).Scan(&existingGift); err == nil && existingGift != 0 {
 			s.sendEquipError(equipErrWrappedCantBeWrapped, uint64(targetGUID))
 			return true
 		}
 
-		// Consume gift wrapper from inventory
+		// ItemHandler.cpp:882: bags cannot be wrapped.
+		if targetErr == nil && targetData.Class == itemClassContainer {
+			s.sendEquipError(equipErrBagsCantBeWrapped, uint64(targetGUID))
+			return true
+		}
+
+		// ItemHandler.cpp:887: soulbound items cannot be wrapped.
+		if err := cdb.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ?", targetGUID).Scan(&targetInstanceFlags); err == nil && targetInstanceFlags&int64(itemInstanceFlagSoulbound) != 0 {
+			s.sendEquipError(equipErrBoundCantBeWrapped, uint64(targetGUID))
+			return true
+		}
+
+		// ItemHandler.cpp:893: the TEMPLATE stack limit gates, not the instance
+		// count — a stackable item with count 1 still cannot be wrapped.
+		if targetErr == nil && targetData.Stackable != 1 {
+			s.sendEquipError(equipErrStackableCantBeWrapped, uint64(targetGUID))
+			return true
+		}
+
+		// ItemHandler.cpp:899: unique (MaxCount>0) items cannot be wrapped.
+		if targetErr == nil && targetData.MaxCount > 0 {
+			s.sendEquipError(equipErrUniqueCantBeWrapped, uint64(targetGUID))
+			return true
+		}
+
+		// Consume gift wrapper from inventory (Player::DestroyItemCount arm).
 		var wrapperCount uint32
 		_ = cdb.QueryRowContext(ctx, "SELECT count FROM item_instance WHERE guid = ?", giftGUID).Scan(&wrapperCount)
 		if wrapperCount > 1 {
@@ -3785,12 +3845,11 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		}
 		s.adjustQuestItemCount(ctx, uint32(giftEntry), 1, false)
 
-		// Record original entry in character_gifts
-		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_gifts (guid, item_guid, entry, flags) VALUES (?, ?, ?, 0)", s.playerGUID, targetGUID, targetEntry)
-
-		// Map wrapped item entry
-		var wrappedEntry uint32 = 5043
-		switch giftEntry {
+		// ItemHandler.cpp:919-933: the item takes the wrapper's entry, then the
+		// wrapper->wrapped remap; flags are REPLACED with WRAPPED (0x8) and the
+		// original flags are kept in character_gifts for the unwrap path.
+		wrappedEntry := uint32(giftEntry)
+		switch wrappedEntry {
 		case 5042:
 			wrappedEntry = 5043
 		case 5048:
@@ -3804,8 +3863,8 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		case 21830:
 			wrappedEntry = 21831
 		}
-		// Set itemEntry = wrappedEntry and flags |= 0x8 (ITEM_FIELD_FLAG_WRAPPED)
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = flags | 8 WHERE guid = ?", wrappedEntry, targetGUID)
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_gifts (guid, item_guid, entry, flags) VALUES (?, ?, ?, ?)", s.playerGUID, targetGUID, targetEntry, targetInstanceFlags)
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ? WHERE guid = ?", wrappedEntry, uint32(itemInstanceFlagWrapped), targetGUID)
 		s.adjustQuestItemCount(ctx, uint32(targetEntry), 1, false)
 		s.adjustQuestItemCount(ctx, wrappedEntry, 1, true)
 		_ = s.sendInventoryItems(ctx)

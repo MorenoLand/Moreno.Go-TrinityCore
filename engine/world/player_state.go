@@ -1545,9 +1545,11 @@ func (s *session) loadPeriodicQuestStatuses(ctx context.Context, state *playerSt
 
 const itemFlagsCustomRealTimeDuration uint32 = 0x0001
 const itemTemplateFlagConjured uint32 = 0x00000002
+const itemTemplateFlagIsWrapper uint32 = 0x00000200 // ITEM_FLAG_IS_WRAPPER (ItemTemplate.h:161)
 const itemInstanceFlagSoulbound uint32 = 0x00000001
 const itemInstanceFlagWrapped uint32 = 0x00000008
 const itemInstanceFlagBOPTradeable uint32 = 0x00000100
+const itemClassContainer uint32 = 1 // ITEM_CLASS_CONTAINER (ItemTemplate.h:300)
 const itemInstanceFlagRefundable uint32 = 0x00001000
 const itemInventoryTypeBag int64 = 18
 
