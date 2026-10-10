@@ -723,12 +723,31 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 			return true
 		}
 	}
+	// Guild::AddMember (Guild.cpp:2195-2204): Player::RemovePetitionsAndSigns
+	// (GUILD_CHARTER_TYPE) runs before the member row is created, so joining
+	// clears the acceptor's charter signatures and owned charters.
+	removeGuildCharterPetitions(ctx, cdb, s.playerGUID)
+	// Guild::AddMember (Guild.cpp:2214-2216): rankId == GUILD_RANK_NONE ->
+	// _GetLowestRankId() = m_ranks.size()-1. Rank ids stay sequential 0..n-1
+	// (HandleAddNewRank appends, HandleRemoveLowestRank drops the tail), so
+	// MAX(rid) is the lowest rank; the old hardcoded 4 assigned the wrong
+	// rank in guilds that added ranks.
+	lowestRank := uint32(4)
+	var maxRid sql.NullInt64
+	if err := cdb.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&maxRid); err == nil && maxRid.Valid {
+		lowestRank = uint32(maxRid.Int64)
+	}
 	s.guildInvitedID = 0
 	s.guildInviterGUID = 0
-	_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", guildID, s.playerGUID)
+	_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, ?, '', '')", guildID, s.playerGUID, lowestRank)
 	s.player.GuildID = guildID
-	s.player.GuildRank = 4
+	s.player.GuildRank = uint8(lowestRank)
 	s.sendPlayerUpdate()
+
+	// Guild::AddMember (Guild.cpp:2228): SendLoginInfo runs right after the
+	// member is in place — MOTD event, bank tabs info, the roster reply, and
+	// the SIGNED_ON broadcast — before the join log event.
+	s.sendGuildLoginInfo(ctx)
 
 	// Guild::AddMember (Guild.cpp:2268):
 	// _LogEvent(GUILD_EVENT_LOG_JOIN_GUILD, lowguid)
@@ -752,10 +771,7 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 
 	// ScriptMgr::OnGuildAddMember (Guild.cpp:2272): fires after the member is
 	// stored and broadcast, with the new member's player and rank.
-	s.fireGuildEvent(ctx, scripting.GuildEventOnAddMember, s.luaGuildObject(ctx, uint32(guildID)), s.luaPlayer(), uint32(4))
-
-	// Guild::HandleAcceptMember (Guild.cpp:1518) sends no roster — the
-	// client re-requests it via CMSG_GUILD_ROSTER.
+	s.fireGuildEvent(ctx, scripting.GuildEventOnAddMember, s.luaGuildObject(ctx, uint32(guildID)), s.luaPlayer(), lowestRank)
 	return true
 }
 
