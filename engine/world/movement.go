@@ -386,7 +386,31 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// bounds. The passenger rides the vehicle; the client-reported
 	// position is rebroadcast below but never becomes canonical.
 	if !vehiclePassenger {
+		// Unit::InterruptMovementBasedAuras (Unit.cpp:562-570): every world
+		// tick C++ strips auras with AURA_INTERRUPT_FLAG_TURNING when the
+		// player's orientation changed, and AURA_INTERRUPT_FLAG_MOVE when the
+		// position moved and the player is not on a vehicle. The Go tree has
+		// no world-tick unit update, so the strip rides this packet-driven
+		// position apply. Turned/relocated mirror Unit::UpdatePosition's
+		// _positionUpdateInfo (Unit.cpp:13401-13404): orientation delta (the
+		// fuzzy angular-distance check) and XYZ delta past 0.001. Teleports
+		// never pass through here (handleMoveTeleportAck applies the
+		// destination directly), matching C++ Relocate which sets no
+		// _positionUpdateInfo. Vehicle passengers return above; the
+		// turning-seat arm already strips their TURNING auras.
+		turned := info.Orientation != s.player.Orientation
+		relocated := math.Abs(float64(info.X-s.player.X)) > 0.001 ||
+			math.Abs(float64(info.Y-s.player.Y)) > 0.001 ||
+			math.Abs(float64(info.Z-s.player.Z)) > 0.001
 		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+		if s.player.VehicleGUID == 0 {
+			if turned {
+				s.removeAurasWithInterruptFlags(auraInterruptFlagTurning)
+			}
+			if relocated {
+				s.removeAurasWithInterruptFlags(auraInterruptFlagMove)
+			}
+		}
 		s.updateZoneAndArea(ctx, false)
 		previousTransportGUID := s.player.TransportGUID
 		reportedTransportGUID := uint64(0)
