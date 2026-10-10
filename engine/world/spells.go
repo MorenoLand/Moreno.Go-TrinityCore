@@ -13025,6 +13025,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		spellTarget.UnitGUID = redirectGUID
 		hitTargets = []uint64{redirectGUID}
 	}
+	// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500-1556) runs on
+	// triggered casts too — SelectSpellTargets carries no IsTriggered gate —
+	// so a triggered spell carrying TARGET_UNIT_PET (5) or
+	// TARGET_UNIT_VEHICLE (94) resolves the caster's guardian pet / vehicle
+	// base instead of the wire target, mirroring the client path's
+	// implicitCasterUnitTarget arm (spells.go:7192). The wire spellTarget
+	// keeps the caller-supplied explicit target (C++ AddUnitTarget never
+	// rewrites m_targets); the later nearby/area arms take precedence the
+	// same way they do on the client path. TARGET_UNIT_MASTER (27) stays
+	// unbridged — Go has no player charm model, same as the client path;
+	// TARGET_UNIT_SUMMONER (92) and TARGET_UNIT_PASSENGER_0..7 are vacuous
+	// here (the caster is always the session player). No failure gate: the
+	// C++ arm never fails the cast, it just adds nothing.
+	if casterUnitGUID, ok := s.implicitCasterUnitTarget(spell); ok {
+		targetGUID = casterUnitGUID
+		hitTargets = []uint64{casterUnitGUID}
+	}
 	// Spell::SelectSpellTargets (Spell.cpp:758-800) runs on triggered casts
 	// too — Spell::cast (Spell.cpp:3264) calls it regardless of the
 	// TRIGGERED flags (only the CheckCast gauntlet and the cast-bar sends
