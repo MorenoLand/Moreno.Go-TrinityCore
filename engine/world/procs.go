@@ -1560,6 +1560,115 @@ func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID 
 	})
 }
 
+// procPeriodicDamageTickAuraTriggers evaluates real aura procs on the done
+// side of a periodic damage tick (SpellAuraEffects.cpp:5210-5225): the tail of
+// AuraEffect::HandlePeriodicDamageAurasTick (and the leech tick at :5295-5305)
+// runs Unit::ProcSkillsAndAuras(caster, target, PROC_FLAG_DONE_PERIODIC,
+// PROC_FLAG_TAKEN_PERIODIC | (damage ? PROC_FLAG_TAKEN_DAMAGE : 0),
+// PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, hitMask, nullptr, &damageInfo,
+// nullptr). C++ passes no Spell, so ProcEventInfo::GetProcSpell is nil and the
+// triggered-cast suppression in CanSpellTriggerProcOnEvent (SpellMgr.cpp:526)
+// never engages — the tick event is deliberately NOT marked triggered. There
+// is no SPELL_ATTR3_CANT_TRIGGER_PROC arm on the tick path (that gate lives in
+// Spell::TargetInfo::DoDamageAndTriggers, Spell.cpp:2440), so none is checked
+// here. The hit mask starts from the absorb/resist state (C++
+// damageInfo.GetHitMask() after CalcAbsorbResist) with PROC_HIT_NORMAL /
+// PROC_HIT_CRITICAL ORed in only when damage landed; the absorb bit rides
+// along via spellDamageProcHitMask like the direct-damage path. Runs on the
+// caster's own session; offline casters (no session) skip the done side —
+// documented delta.
+func (s *session) procPeriodicDamageTickAuraTriggers(ctx context.Context, tickSpell wotlk.Spell, schoolMask uint32, targetGUID uint64, crit bool, absorbed, resisted, damage uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spellCopy := tickSpell
+	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
+		typeMask:       procFlagDonePeriodic,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeDamage,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, crit, absorbed),
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+		damage:         damage,
+	})
+}
+
+// procPeriodicDamageTickTakenAuraTriggers is the victim-side half of the
+// periodic damage tick proc (SpellAuraEffects.cpp:5210-5225): the target's own
+// session runs the loop so its TAKEN_PERIODIC / TAKEN_DAMAGE auras gate
+// (Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418); the trigger targets
+// the caster. PROC_FLAG_TAKEN_DAMAGE is ORed in only when damage landed, like
+// C++. Creature victims have no aura plumbing in Go, so only online players
+// run the taken pass, like the direct-damage path.
+func (s *session) procPeriodicDamageTickTakenAuraTriggers(ctx context.Context, tickSpell wotlk.Spell, schoolMask uint32, casterGUID uint64, crit bool, absorbed, resisted, damage uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	typeMask := procFlagTakenPeriodic
+	if damage > 0 {
+		typeMask |= procFlagTakenDamage
+	}
+	spellCopy := tickSpell
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeDamage,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, crit, absorbed),
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+		damage:         damage,
+	})
+}
+
+// procPeriodicHealthFunnelAuraTriggers evaluates real aura procs on the done
+// side of a Health Funnel tick heal (SpellAuraEffects.cpp:5350):
+// Unit::ProcSkillsAndAuras(caster, target, PROC_FLAG_DONE_PERIODIC,
+// PROC_FLAG_TAKEN_PERIODIC, PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT,
+// PROC_HIT_NORMAL, nullptr, nullptr, &healInfo). No crit, no absorb, no damage
+// mask on the taken side — C++ never ORs TAKEN_DAMAGE here. Runs on the
+// caster's own session; offline casters skip the done side.
+func (s *session) procPeriodicHealthFunnelAuraTriggers(ctx context.Context, funnelSpell wotlk.Spell, schoolMask uint32, targetGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spellCopy := funnelSpell
+	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
+		typeMask:       procFlagDonePeriodic,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        procHitNormal,
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+	})
+}
+
+// procPeriodicHealthFunnelTakenAuraTriggers is the victim-side half of the
+// Health Funnel tick heal proc (SpellAuraEffects.cpp:5350): the heal target's
+// own session runs the loop so its TAKEN_PERIODIC auras gate; the trigger
+// targets the caster. Creature targets have no aura plumbing in Go.
+func (s *session) procPeriodicHealthFunnelTakenAuraTriggers(ctx context.Context, funnelSpell wotlk.Spell, schoolMask uint32, casterGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spellCopy := funnelSpell
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       procFlagTakenPeriodic,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        procHitNormal,
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+	})
+}
+
 // procSpellReflectTakenAuraTriggers fires the reflector-side proc for a
 // reflected spell: ProcReflectDelayed (Spell.cpp:2069-2090, scheduled at
 // Spell.cpp:2181) runs Unit::ProcSkillsAndAuras(caster, reflector,

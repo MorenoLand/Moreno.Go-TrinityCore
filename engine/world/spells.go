@@ -19224,6 +19224,20 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// leech tick path (case 53) below.
 		_ = ts.applyPeriodicTickDamageToPlayer(dmg, targetHealth, aura)
 
+		// Periodic-tick aura procs (SpellAuraEffects.cpp:5210-5225): the
+		// tick's tail runs Unit::ProcSkillsAndAuras with DONE_PERIODIC /
+		// TAKEN_PERIODIC(+TAKEN_DAMAGE), PROC_SPELL_TYPE_DAMAGE,
+		// PROC_SPELL_PHASE_HIT. The done side runs on the caster's session,
+		// the taken side on the victim's session. Unknown-spell ticks skip
+		// (the proc gates need the spell data) — data gap, documented.
+		if tickKnown {
+			procCtx := context.Background()
+			if tickCaster != nil {
+				tickCaster.procPeriodicDamageTickAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.TargetGUID, crit, absorbed, resisted, dmg)
+			}
+			ts.procPeriodicDamageTickTakenAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.CasterGUID, crit, absorbed, resisted, dmg)
+		}
+
 	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
 		heal := aura.Amount
 		var healCaster *session
@@ -19528,6 +19542,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
 		}
 		dealt := ts.applyPeriodicTickDamageToPlayer(dmg, targetHealth, aura)
+		// Periodic-tick aura procs (SpellAuraEffects.cpp:5295-5305): the
+		// leech tick's damage half runs the same Unit::ProcSkillsAndAuras
+		// tail as the damage tick, before the caster heal below.
+		if tickKnown {
+			procCtx := context.Background()
+			if tickCaster != nil {
+				tickCaster.procPeriodicDamageTickAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.TargetGUID, crit, absorbed, resisted, dmg)
+			}
+			ts.procPeriodicDamageTickTakenAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.CasterGUID, crit, absorbed, resisted, dmg)
+		}
 		ts.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex)
 
 	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL
@@ -19563,6 +19587,20 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
 			} else {
 				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal, false)
+			}
+		}
+		// Periodic-heal procs (SpellAuraEffects.cpp:5350): the funnel heal
+		// runs Unit::ProcSkillsAndAuras with DONE_PERIODIC / TAKEN_PERIODIC,
+		// PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL. The
+		// done side runs on the caster's session, the taken side on the heal
+		// target's session.
+		if ts.server != nil && ts.server.Data != nil {
+			if funnelSpell, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				procCtx := context.Background()
+				if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+					casterSess.procPeriodicHealthFunnelAuraTriggers(procCtx, funnelSpell, aura.SchoolMask, aura.TargetGUID)
+				}
+				ts.procPeriodicHealthFunnelTakenAuraTriggers(procCtx, funnelSpell, aura.SchoolMask, aura.CasterGUID)
 			}
 		}
 
@@ -20218,6 +20256,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// Unit::DealDamage + kill legs, shared with the leech tick path
 		// (case 53) below.
 		_, targetAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, targetHealth, target, key, aura)
+		// Periodic-tick aura procs (SpellAuraEffects.cpp:5210-5225): the
+		// tick's tail runs Unit::ProcSkillsAndAuras with DONE_PERIODIC /
+		// TAKEN_PERIODIC(+TAKEN_DAMAGE), PROC_SPELL_TYPE_DAMAGE,
+		// PROC_SPELL_PHASE_HIT. Only the done side fires here — creature
+		// victims have no aura plumbing in Go (same as the direct path);
+		// the done side runs on the caster's session (s when the caster is
+		// offline, matching the tickCaster fallback above).
+		if tickKnown && tickCaster != nil {
+			tickCaster.procPeriodicDamageTickAuraTriggers(ctx, tickSpell, aura.SchoolMask, aura.TargetGUID, crit, absorbed, resisted, dmg)
+		}
 		return targetAlive
 
 	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
@@ -20572,6 +20620,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		dealt, targetAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, targetHealth, target, key, aura)
+		// Periodic-tick aura procs (SpellAuraEffects.cpp:5295-5305): the
+		// leech tick's damage half runs the same Unit::ProcSkillsAndAuras
+		// tail as the damage tick, before the caster heal below. Done side
+		// only — creature victims have no aura plumbing in Go.
+		if tickKnown && tickCaster != nil {
+			tickCaster.procPeriodicDamageTickAuraTriggers(ctx, tickSpell, aura.SchoolMask, aura.TargetGUID, crit, absorbed, resisted, dmg)
+		}
 		s.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex)
 		return targetAlive
 
@@ -20613,6 +20668,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				s.server.distributeCreatureHealingThreat(ctx, key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
 			} else {
 				s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, effectiveHeal, false)
+			}
+		}
+		// Periodic-heal procs (SpellAuraEffects.cpp:5350): the funnel heal
+		// runs Unit::ProcSkillsAndAuras with DONE_PERIODIC / TAKEN_PERIODIC,
+		// PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL. Done
+		// side only — creature targets have no aura plumbing in Go.
+		if s.server != nil && s.server.Data != nil {
+			if funnelSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+					casterSess.procPeriodicHealthFunnelAuraTriggers(ctx, funnelSpell, aura.SchoolMask, aura.TargetGUID)
+				}
 			}
 		}
 		return true
