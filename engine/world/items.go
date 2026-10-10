@@ -1168,6 +1168,7 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	// Player::RemoveItem -> _ApplyItemMods(false) (Player.cpp:12419): a
 	// destroyed equipped item sheds its equip spells before the row goes.
 	if bagKey == 0 && slot < equipSlotEnd && (currentCount <= int64(count) || count == 0) {
+		s.removeItemSetItem(ctx, uint32(itemEntry))
 		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
 		s.removeItemDependentAuras(ctx, uint64(itemGUID))
 		s.applyEnchantEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
@@ -1880,6 +1881,11 @@ func (s *session) applyLoginItemEquipSpells(ctx context.Context) {
 	}
 	rows.Close()
 	for _, it := range items {
+		// _ApplyAllItemMods second-loop order (Player.cpp:8385-8401): the
+		// item set leg runs before the equip-spell and enchantment legs and
+		// is NOT skipped for broken items ("item set bonuses not dependent
+		// from item broken state", Player.cpp:8391).
+		s.addItemSetItem(ctx, uint32(it.entry))
 		// Player.cpp:8392-8393: broken items shed their equip spells at login.
 		if tmpl, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(it.entry)); ok && tmpl.MaxDurability > 0 && it.durability == 0 {
 			continue
@@ -1919,14 +1925,194 @@ func (s *session) updateItemEquipSpellsOnMove(ctx context.Context, itemGUID, fro
 	// new position's apply (Player::_ApplyItemMods, Player.cpp:7446: equip
 	// spell, item-dependent auras, enchantment legs in that order).
 	if wasEquipped {
+		// Player::RemoveItem order (Player.cpp:12520-12528): the item set
+		// leg leaves before _ApplyItemMods(false).
+		s.removeItemSetItem(ctx, uint32(itemEntry))
 		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
 		s.removeItemDependentAuras(ctx, uint64(itemGUID))
 		s.applyEnchantEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
 	}
 	if isEquipped {
+		// Player::EquipItem order (Player.cpp:12328-12336): the item set
+		// leg applies before _ApplyItemMods(true).
+		s.addItemSetItem(ctx, uint32(itemEntry))
 		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), true)
 		s.applyItemDependentAuras(ctx)
 		s.applyEnchantEquipSpells(ctx, itemGUID, uint32(itemEntry), true)
+	}
+}
+
+// itemSetEffect mirrors ItemSetEffect (Item.h:33-38): one item set tracked on
+// the player — its set id, how many of its items are equipped, and the set
+// bonus spells currently applied (MAX_ITEM_SET_SPELLS = 8).
+type itemSetEffect struct {
+	setID     uint32
+	itemCount uint32
+	spells    [8]uint32
+}
+
+const (
+	// ItemSet.dbc field offsets (DBCStructure.h:987-990).
+	itemSetDBCSpellFirst        = 35 // SetSpellID[0]
+	itemSetDBCThresholdFirst    = 43 // SetThreshold[0]
+	itemSetDBCRequiredSkill     = 51
+	itemSetDBCRequiredSkillRank = 52
+)
+
+// itemSetIDForEntry reads the itemset column for an item_template entry.
+func (s *session) itemSetIDForEntry(ctx context.Context, itemEntry uint32) uint32 {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || itemEntry == 0 {
+		return 0
+	}
+	var itemSet int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT itemset FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&itemSet); err != nil || itemSet <= 0 {
+		return 0
+	}
+	return uint32(itemSet)
+}
+
+// addItemSetItem mirrors AddItemsSetItem (Item.cpp:41-118): equipping an item
+// belonging to an item set bumps that set's equipped count and casts each
+// newly-reached threshold's set bonus spell as a triggered self-cast with no
+// cast item (Player::ApplyEquipSpell's itemset arm, Player.cpp:7988-8009 —
+// the CheckShapeshift gate, then CastSpell with CastSpellExtraArgs(Item*)
+// carrying nullptr, SpellDefines.h:165). Set bonuses apply even for broken
+// items ("item set bonuses not dependent from item broken state",
+// Player.cpp:8391), so callers must not gate this on durability. A spell the
+// form gate rejects is still recorded — only its cast is deferred to form
+// change (Item.cpp:105). The form-change re-evaluation arm
+// (Player::UpdateEquipSpellsAtFormChange's itemset leg, Player.cpp:8024-8043)
+// has no Go hook and is documented.
+func (s *session) addItemSetItem(ctx context.Context, itemEntry uint32) {
+	if s == nil || s.player == nil || itemEntry == 0 {
+		return
+	}
+	setID := s.itemSetIDForEntry(ctx, itemEntry)
+	if setID == 0 {
+		return
+	}
+	if s.server == nil || s.server.Data == nil {
+		return
+	}
+	file, err := s.server.Data.File("ItemSet")
+	if err != nil || file == nil {
+		return
+	}
+	rec, ok := file.Find(setID)
+	if !ok {
+		s.debug("item set not found", "set", setID, "item", itemEntry)
+		return
+	}
+	// Item.cpp:56-57: a set whose skill requirement the player does not meet
+	// is skipped (GetSkillValue carries the temp bonus, Player.cpp:6240).
+	if requiredSkill, _ := rec.Uint32(itemSetDBCRequiredSkill); requiredSkill != 0 {
+		requiredRank, _ := rec.Uint32(itemSetDBCRequiredSkillRank)
+		if playerSkillTotalValue(s.player, requiredSkill) < int32(requiredRank) {
+			return
+		}
+	}
+	if s.itemSetEff == nil {
+		s.itemSetEff = make(map[uint32]*itemSetEffect)
+	}
+	eff, ok := s.itemSetEff[setID]
+	if !ok {
+		eff = &itemSetEffect{setID: setID}
+		s.itemSetEff[setID] = eff
+	}
+	eff.itemCount++
+	for x := 0; x < len(eff.spells); x++ {
+		spellID, _ := rec.Uint32(itemSetDBCSpellFirst + x)
+		if spellID == 0 {
+			continue
+		}
+		threshold, _ := rec.Uint32(itemSetDBCThresholdFirst + x)
+		// Item.cpp:78-79: "not enough for spell".
+		if threshold > eff.itemCount {
+			continue
+		}
+		present := false
+		for _, have := range eff.spells {
+			if have == spellID {
+				present = true
+				break
+			}
+		}
+		if present {
+			continue
+		}
+		for y := 0; y < len(eff.spells); y++ {
+			if eff.spells[y] != 0 {
+				continue
+			}
+			spell, found, spellErr := s.server.Data.Spell(spellID)
+			if spellErr != nil || !found {
+				// Item.cpp:100-104: unknown set spell logs and stops the
+				// free-slot scan; the threshold loop continues.
+				s.debug("item set unknown spell", "set", setID, "spell", spellID)
+				break
+			}
+			// ApplyEquipSpell's apply arm (Player.cpp:7991-8009): the
+			// shapeshift gate only suppresses the cast, not the recording.
+			if s.checkShapeshiftCast(spell) == 0 {
+				s.castSpellDirectWithItem(ctx, spellID, s.playerGUID, 0)
+			}
+			eff.spells[y] = spellID
+			break
+		}
+	}
+}
+
+// removeItemSetItem mirrors RemoveItemsSetItem (Item.cpp:120-176):
+// unequipping a set item drops the count and strips each set bonus spell
+// whose threshold is no longer met via RemoveAurasDueToSpell (the itemset
+// arm of Player::ApplyEquipSpell, Player.cpp:8018-8021). A missing effect
+// entry (the skill gate refused the apply) removes nothing (Item.cpp:156).
+func (s *session) removeItemSetItem(ctx context.Context, itemEntry uint32) {
+	if s == nil || s.player == nil || itemEntry == 0 {
+		return
+	}
+	setID := s.itemSetIDForEntry(ctx, itemEntry)
+	if setID == 0 {
+		return
+	}
+	if s.server == nil || s.server.Data == nil {
+		return
+	}
+	file, err := s.server.Data.File("ItemSet")
+	if err != nil || file == nil {
+		return
+	}
+	rec, ok := file.Find(setID)
+	if !ok {
+		s.debug("item set not found", "set", setID, "item", itemEntry)
+		return
+	}
+	eff := s.itemSetEff[setID]
+	if eff == nil {
+		return
+	}
+	eff.itemCount--
+	for x := 0; x < len(eff.spells); x++ {
+		spellID, _ := rec.Uint32(itemSetDBCSpellFirst + x)
+		if spellID == 0 {
+			continue
+		}
+		threshold, _ := rec.Uint32(itemSetDBCThresholdFirst + x)
+		// Item.cpp:136-137: "enough for spell".
+		if threshold <= eff.itemCount {
+			continue
+		}
+		for z := 0; z < len(eff.spells); z++ {
+			if eff.spells[z] == spellID {
+				s.removeAura(spellID)
+				eff.spells[z] = 0
+				break
+			}
+		}
+	}
+	// Item.cpp:169-174: all set items removed — drop the effect.
+	if eff.itemCount == 0 {
+		delete(s.itemSetEff, setID)
 	}
 }
 

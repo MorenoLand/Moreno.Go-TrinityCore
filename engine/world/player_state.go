@@ -2169,7 +2169,25 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		var ammoClass, ammoSubclass uint8
 		var ammoDmgMin, ammoDmgMax float64
 		err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT class, subclass, dmg_min1, dmg_max1 FROM item_template WHERE entry = ?", state.AmmoID).Scan(&ammoClass, &ammoSubclass, &ammoDmgMin, &ammoDmgMax)
+		// Player::_ApplyAmmoBonuses' CheckAmmoCompatibility
+		// (Player.cpp:8451-8481): the ammo DPS applies only when a ranged
+		// weapon is equipped (equippedWeaponInstance folds the broken-weapon
+		// gate, Player.cpp:8459) and its subclass matches the ammo —
+		// bow/crossbow take arrows, guns take bullets.
+		ammoCompatible := false
 		if err == nil && ammoClass == 6 { // ITEM_CLASS_PROJECTILE
+			if _, weaponEntry := s.equippedWeaponInstance(ctx, equipSlotRanged); weaponEntry != 0 {
+				if weapon, ok := s.server.getItemStoreTemplateInfo(ctx, weaponEntry); ok {
+					switch weapon.SubClass {
+					case itemSubclassWeaponBow, itemSubclassWeaponCrossbow:
+						ammoCompatible = uint32(ammoSubclass) == itemSubclassArrow
+					case itemSubclassWeaponGun:
+						ammoCompatible = uint32(ammoSubclass) == itemSubclassBullet
+					}
+				}
+			}
+		}
+		if ammoCompatible {
 			ammoDPS := float32(ammoDmgMin+ammoDmgMax) / 2.0
 			state.AmmoDPS = ammoDPS
 			speedMod := float32(state.RangedAttackTime) / 1000.0
@@ -2178,6 +2196,9 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 			}
 			state.MinRangedDamage += ammoDPS * speedMod
 			state.MaxRangedDamage += ammoDPS * speedMod
+		} else {
+			// Player.cpp:8442-8445: no compatible ammo -> zero DPS.
+			state.AmmoDPS = 0
 		}
 	}
 
@@ -2360,6 +2381,70 @@ func (s *session) playerAuraModifier(auraType uint32) float32 {
 		}
 		spell, found, err := s.server.Data.Spell(aura.SpellID)
 		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if index < len(aura.Amounts) && aura.EffectMask&(1<<uint(index)) != 0 && effect.Aura == auraType {
+				total += float32(aura.Amounts[index])
+			}
+		}
+	}
+	return total
+}
+
+// playerAuraModifierWeaponFit mirrors the CheckAttackFitToAuraRequirement
+// filter (Player.cpp:7946-7956) bound into GetTotalAuraModifier by
+// Player::UpdateWeaponDependentCritAuras (Player.cpp:7882-7905): an aura of
+// the given type counts toward an attack type's crit only when its spell
+// carries no equipped-item requirement (EquippedItemClass == -1), or the
+// weapon equipped for that attack type fits the spell's class/subclass
+// requirements (Item::IsFitToSpellRequirements, Item.cpp:799-832). The
+// GetWeaponForAttack useable arm (unbroken weapon of ITEM_CLASS_WEAPON)
+// rides equippedWeaponInstance; the IsInFeralForm arm rides the
+// ShapeshiftForm cat/bear/dire-bear check, like attackPowerMultiplier.
+func (s *session) playerAuraModifierWeaponFit(ctx context.Context, auraType uint32, attackType protocol.WeaponAttackType) float32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	var slot uint8
+	switch attackType {
+	case protocol.OffAttack:
+		slot = equipSlotOffhand
+	case protocol.RangedAttack:
+		slot = equipSlotRanged
+	default:
+		slot = equipSlotMainhand
+	}
+	var form uint8
+	if s.player != nil {
+		form = s.player.ShapeshiftForm
+	}
+	feral := form == 1 || form == 5 || form == 8 // FORM_CAT, FORM_BEAR, FORM_DIREBEAR
+	var total float32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		fits := spell.EquippedItemClass < 0
+		if !fits && !feral {
+			_, entry := s.equippedWeaponInstance(ctx, slot)
+			if entry != 0 {
+				// Item::IsFitToSpellRequirements' non-enchant arm
+				// (Item.cpp:804-819): class equality plus the subclass
+				// mask (0 = any subclass). Aura spells are never enchant
+				// spells, so the vellum and inventory-type arms are vacuous.
+				if info, ok := s.server.getItemStoreTemplateInfo(ctx, entry); ok &&
+					int32(info.Class) == spell.EquippedItemClass &&
+					(spell.EquippedItemSubClass == 0 || spell.EquippedItemSubClass&(1<<info.SubClass) != 0) {
+					fits = true
+				}
+			}
+		}
+		if !fits {
 			continue
 		}
 		for index, effect := range spell.Effects {

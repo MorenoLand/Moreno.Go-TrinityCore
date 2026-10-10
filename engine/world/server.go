@@ -354,15 +354,19 @@ type session struct {
 	auras                        map[uint32]struct{}
 	auraSlots                    map[uint32]uint8
 	activeAuras                  map[uint32]*activeAura
-	spellMods                    [spellModOpCount][]*spellModifier // Player::m_spellMods, guarded by castMu
-	spellModTaking               []*spellModTakingContext          // Player::m_spellModTakingSpell as a stack, guarded by castMu
-	ownerPetAuraMu               sync.Mutex
-	ownerPetAuraSources          map[ownerPetAuraKey]ownerPetAuraSource
-	ownerPetAuraSourcesLoaded    bool
-	scale                        float32
-	emoteState                   uint32
-	playerLocked                 bool
-	rooted                       bool
+	// itemSetEff mirrors Player::ItemSetEff (Player.h): the item sets with
+	// at least one equipped piece, keyed by set id — the set bonus spell
+	// tracking AddItemsSetItem/RemoveItemsSetItem (Item.cpp) maintain.
+	itemSetEff                map[uint32]*itemSetEffect
+	spellMods                 [spellModOpCount][]*spellModifier // Player::m_spellMods, guarded by castMu
+	spellModTaking            []*spellModTakingContext          // Player::m_spellModTakingSpell as a stack, guarded by castMu
+	ownerPetAuraMu            sync.Mutex
+	ownerPetAuraSources       map[ownerPetAuraKey]ownerPetAuraSource
+	ownerPetAuraSourcesLoaded bool
+	scale                     float32
+	emoteState                uint32
+	playerLocked              bool
+	rooted                    bool
 	// forcedSpeedChanges mirrors Player::m_forced_speed_changes (Player.h:2023):
 	// pending forced-speed-change ACKs per UnitMoveType, incremented for every
 	// real SMSG_FORCE_*_SPEED_CHANGE sent.

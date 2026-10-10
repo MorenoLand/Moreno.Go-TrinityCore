@@ -450,7 +450,7 @@ func (s *session) directWeaponCritChance(ctx context.Context, target combatTarge
 		return 0
 	}
 	attackType := spellWeaponAttackType(spell)
-	chance := s.directWeaponCritChanceDone(spell, schoolMask, attackType)
+	chance := s.directWeaponCritChanceDone(ctx, spell, schoolMask, attackType)
 	return s.directWeaponCritChanceTaken(ctx, target, isPlayerVictim, spell, attackType, chance)
 }
 
@@ -464,7 +464,7 @@ func (s *session) directWeaponCritChance(ctx context.Context, target combatTarge
 // UpdateCritPercentage (StatSystem.cpp:624) folds into those fields are not
 // part of Go's stored fields, so they are added here. The weapon-skill term
 // (0.04%/skill vs max for level) has no Go model and stays a residual.
-func (s *session) directWeaponCritChanceDone(spell wotlk.Spell, schoolMask uint8, attackType protocol.WeaponAttackType) float64 {
+func (s *session) directWeaponCritChanceDone(ctx context.Context, spell wotlk.Spell, schoolMask uint8, attackType protocol.WeaponAttackType) float64 {
 	if s == nil || s.player == nil {
 		return 0
 	}
@@ -477,7 +477,12 @@ func (s *session) directWeaponCritChanceDone(spell wotlk.Spell, schoolMask uint8
 	default:
 		chance = float64(s.player.MeleeCrit)
 	}
-	chance += float64(s.playerAuraModifier(spellAuraModWeaponCritPercent))
+	// Player.cpp:7899: SPELL_AURA_MOD_WEAPON_CRIT_PERCENT counts per attack
+	// type through CheckAttackFitToAuraRequirement (the weapon for that
+	// attack type must fit the aura spell's item requirements); the
+	// SPELL_AURA_MOD_CRIT_PCT (290) term carries no item requirement and
+	// stays unfiltered.
+	chance += float64(s.playerAuraModifierWeaponFit(ctx, spellAuraModWeaponCritPercent, attackType))
 	chance += float64(s.playerAuraModifier(spellAuraModCritPct))
 	chance += float64(s.playerAuraModifierByMiscMask(spellAuraModSpellCritChanceSchool, int32(schoolMask)))
 	chance = s.applySpellModFloat(spell, spellModCriticalChance, chance)
