@@ -835,14 +835,25 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 	var srcItemGUID, dstItemGUID int64
 	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, srcSlot).Scan(&srcItemGUID)
 	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, dstSlot).Scan(&dstItemGUID)
-	if srcItemGUID == 0 && dstItemGUID == 0 {
+	if srcItemGUID == 0 {
+		// Player::SwapItem (Player.cpp:13154-55): an empty source slot is a
+		// silent no-op — C++ performs no slot-role normalization.
 		return true
 	}
 
-	// If moving to an empty slot, but caller passed swapped slots (src empty, dst occupied)
-	if srcItemGUID == 0 && dstItemGUID != 0 {
-		srcSlot, dstSlot = dstSlot, srcSlot
-		srcItemGUID, dstItemGUID = dstItemGUID, srcItemGUID
+	// Player::SwapItem (Player.cpp:13156-60): swapping while dead answers
+	// EQUIP_ERR_YOU_ARE_DEAD.
+	if s.player.Health == 0 {
+		s.sendEquipError(equipErrYouAreDead, uint64(srcItemGUID))
+		return true
+	}
+
+	// HandleSwapInvItemOpcode (ItemHandler.cpp:90-101): touching bank
+	// positions (bag 0, slots 39..73) without an active banker session is a
+	// silent drop.
+	isBankSlot := func(sl uint8) bool { return sl >= 39 && sl < 74 }
+	if (isBankSlot(srcSlot) || isBankSlot(dstSlot)) && !s.canUseBank(ctx, 0) {
+		return true
 	}
 
 	if srcItemGUID != 0 && dstItemGUID != 0 {
@@ -995,9 +1006,28 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 
 	dstBag, dstSlot, dstBagKey, dstItemGUID := slotBagA, slotSlotA, bagKeyA, itemGUIDA
 	srcBag, srcSlot, srcBagKey, srcItemGUID := slotBagB, slotSlotB, bagKeyB, itemGUIDB
-	// If src was empty but dst has an item, normalize so src is the slot with the item
-	if srcItemGUID == 0 && dstItemGUID != 0 {
-		srcBag, srcSlot, srcBagKey, srcItemGUID, dstBag, dstSlot, dstBagKey, dstItemGUID = dstBag, dstSlot, dstBagKey, dstItemGUID, srcBag, srcSlot, srcBagKey, srcItemGUID
+	if srcItemGUID == 0 {
+		// Player::SwapItem (Player.cpp:13154-55): an empty source slot is a
+		// silent no-op — C++ performs no slot-role normalization.
+		return true
+	}
+
+	// Player::SwapItem (Player.cpp:13156-60): swapping while dead answers
+	// EQUIP_ERR_YOU_ARE_DEAD.
+	if s.player.Health == 0 {
+		s.sendEquipError(equipErrYouAreDead, uint64(srcItemGUID))
+		return true
+	}
+
+	// HandleSwapItem (ItemHandler.cpp:158-169): touching bank positions
+	// without an active banker session is a silent drop (Player::IsBankPos,
+	// Player.cpp:10163-72: bag-0 slots 39..73, or any slot inside a bank
+	// bag 67..73).
+	isBankPos := func(bag, slot uint8) bool {
+		return (bag == 0 && slot >= 39 && slot < 74) || (bag >= 67 && bag <= 73)
+	}
+	if (isBankPos(slotBagB, slotSlotB) || isBankPos(slotBagA, slotSlotA)) && !s.canUseBank(ctx, 0) {
+		return true
 	}
 
 	if srcItemGUID != 0 && dstItemGUID != 0 {
@@ -1564,6 +1594,7 @@ const (
 	equipErrBagsCantBeWrapped                 = 48
 	equipErrInvFull                           = 50
 	equipErrCouldntSplitItems                 = 27 // C++ EQUIP_ERR_COULDNT_SPLIT_ITEMS (ItemDefines.h:53)
+	equipErrTriedToSplitMoreThanCount         = 26 // C++ EQUIP_ERR_TRIED_TO_SPLIT_MORE_THAN_COUNT (ItemDefines.h:52)
 	equipErrAlreadyLooted                     = 49 // C++ EQUIP_ERR_ALREADY_LOOTED (ItemDefines.h:75)
 	equipErrTooMuchGold                       = 77
 	equipErrItemMaxLimitCategoryCountExceeded = 84
@@ -2945,6 +2976,11 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 	}
 	srcGUID, srcEntry, srcCount, err := s.inventoryItemAt(ctx, srcBag, srcSlot)
 	if err != nil || srcGUID == 0 {
+		// Player::SplitItem (Player.cpp:13039-43): a missing source item
+		// answers EQUIP_ERR_ITEM_NOT_FOUND (the handler's IsValidPos arm,
+		// ItemHandler.cpp:58-62, uses the same error for an invalid source
+		// position).
+		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
 	// Player::SplitItem (Player.cpp:13047): an item whose loot was generated
@@ -2955,7 +2991,23 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 		s.sendEquipError(equipErrCouldntSplitItems, uint64(srcGUID))
 		return true
 	}
-	if count >= uint32(srcCount) {
+	// Player::SplitItem (Player.cpp:13065-70): an item parked in the trade
+	// window cannot be split (packet spoofing — silent return).
+	if s.trade != nil {
+		for _, slot := range s.trade.Items {
+			if slot.ItemGUID == uint64(srcGUID) {
+				return true
+			}
+		}
+	}
+	// Player::SplitItem (Player.cpp:13052-62): splitting the whole stack or
+	// more than the stack holds is answered, not dropped.
+	if count == uint32(srcCount) {
+		s.sendEquipError(equipErrCouldntSplitItems, uint64(srcGUID))
+		return true
+	}
+	if count > uint32(srcCount) {
+		s.sendEquipError(equipErrTriedToSplitMoreThanCount, uint64(srcGUID))
 		return true
 	}
 	dstKey, ok := s.inventoryBagKey(ctx, dstBag)
@@ -2978,7 +3030,50 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 			_ = tx.Rollback()
 			return true
 		}
-		if _, err = tx.ExecContext(ctx, "UPDATE item_instance SET count = count + ? WHERE guid = ?", count, dstGUID); err != nil {
+		// Item::CanBeMergedPartlyWith (Item.cpp:782-84): a stack whose loot
+		// was generated cannot be the merge target.
+		if s.server.containerLootGenerated(uint64(dstGUID)) {
+			_ = tx.Rollback()
+			s.sendEquipError(equipErrAlreadyLooted, uint64(dstGUID))
+			return true
+		}
+		var maxStack int64 = 1
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1) FROM item_template WHERE entry = ?", srcEntry).Scan(&maxStack)
+		}
+		if maxStack < 1 {
+			maxStack = 1
+		}
+		if dstCount+int64(count) > maxStack {
+			// CanStoreItem_InSpecificSlot (Player.cpp:10560-69): the target
+			// slot fills to maxStack and the remainder spills to other
+			// inventory slots (Go spills to a free backpack slot; a full
+			// CanStoreItem bag search is a standing no-bridge).
+			if _, err = tx.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", maxStack, dstGUID); err != nil {
+				_ = tx.Rollback()
+				return true
+			}
+			remainder := dstCount + int64(count) - maxStack
+			freeSlot, ok := s.findFreeBackpackSlot(ctx)
+			if !ok {
+				_ = tx.Rollback()
+				s.sendEquipError(equipErrInvFull, uint64(srcGUID))
+				return true
+			}
+			spillGUID := int64(s.server.generateItemGUID())
+			if spillGUID <= 0 {
+				_ = tx.Rollback()
+				return true
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", spillGUID, srcEntry, s.playerGUID, remainder); err != nil {
+				_ = tx.Rollback()
+				return true
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, 0, freeSlot, spillGUID); err != nil {
+				_ = tx.Rollback()
+				return true
+			}
+		} else if _, err = tx.ExecContext(ctx, "UPDATE item_instance SET count = count + ? WHERE guid = ?", count, dstGUID); err != nil {
 			_ = tx.Rollback()
 			return true
 		}
