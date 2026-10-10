@@ -1735,12 +1735,23 @@ func (s *session) creatureHasNpcFlag(ctx context.Context, guid uint64, flag uint
 // npcFlagStablemaster mirrors UNIT_NPC_FLAG_STABLEMASTER (UnitDefines.h:208).
 const npcFlagStablemaster = 0x00400000
 
-// checkStableMaster mirrors WorldSession::CheckStableMaster: the player
-// opening their own stable requires GM state, otherwise the target creature
-// must be a stablemaster.
+// checkStableMaster mirrors WorldSession::CheckStableMaster
+// (PetHandler.cpp:437-460): the player opening their own stable needs GM
+// state OR SPELL_AURA_OPEN_STABLE (292); a stablemaster creature must carry
+// the STABLEMASTER flag.
 func (s *session) checkStableMaster(ctx context.Context, guid uint64) bool {
 	if guid == s.playerGUID {
-		return s.player.ExtraFlags&playerExtraGMOn != 0
+		if s.player.ExtraFlags&playerExtraGMOn != 0 {
+			return true
+		}
+		// PetHandler.cpp:442: a non-GM player under SPELL_AURA_OPEN_STABLE
+		// (e.g. Call Stabled Pet) may open their own stable.
+		for _, aura := range s.loadedAuras() {
+			if aura != nil && aura.AuraType == spellAuraOpenStable {
+				return true
+			}
+		}
+		return false
 	}
 	return s.creatureHasNpcFlag(ctx, guid, npcFlagStablemaster)
 }
