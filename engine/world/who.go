@@ -118,19 +118,32 @@ func (s *session) handleWho(ctx context.Context, payload []byte) bool {
 			}
 		}
 
+		// Cross-team and GM-level visibility mirror HandleWhoOpcode's opening filters:
+		// opposite-team players are hidden without RBAC_PERM_TWO_SIDE_WHO_LIST
+		// (off by default), and console-level accounts stay hidden from players
+		// without RBAC_PERM_WHO_SEE_ALL_SEC_LEVELS (default GM.InWhoList.Level = 3).
+		if s.security == 0 {
+			if teamForRace(target.Race) != teamForRace(s.player.Race) {
+				continue
+			}
+			if targetSession.security > 3 {
+				continue
+			}
+		}
+
 		// Level range
 		lvl := uint32(target.Level)
 		if lvl < levelMin || lvl > levelMax {
 			continue
 		}
 
-		// Class mask
-		if classMask != 0 && (classMask&(1<<target.Class)) == 0 {
+		// Class mask: C++ applies the mask unconditionally, so a zero mask matches nobody.
+		if (classMask & (1 << target.Class)) == 0 {
 			continue
 		}
 
-		// Race mask
-		if raceMask != 0 && (raceMask&(1<<target.Race)) == 0 {
+		// Race mask: same unconditional-mask semantics.
+		if (raceMask & (1 << target.Race)) == 0 {
 			continue
 		}
 
