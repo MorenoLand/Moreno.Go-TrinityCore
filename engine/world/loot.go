@@ -785,6 +785,9 @@ func (s *Server) creatureLootAllowed(mapID, instanceID uint32, targetGUID, stand
 // (Unit.cpp:13921-13931): the UNIT_DYNFLAG_LOOTABLE bit is masked per viewer, so a
 // corpse only sparkles for players who may actually loot it. Only the arms Go can
 // model are evaluated:
+//   - the pending-bind arm (Player.cpp:18107): while the instance-lock
+//     warning query is outstanding (HasPendingBind) the corpse never
+//     sparkles for that viewer, before any loot-record check;
 //   - the fully-looted arm (Player.cpp:18109): motion.Looted (set by clearCreatureLoot)
 //     or a loot store with no rows left hides the sparkle for everyone;
 //   - the group loot-method ladder (Player.cpp:18125-18147): MASTER_LOOT and
@@ -800,14 +803,16 @@ func (s *Server) creatureLootAllowed(mapID, instanceID uint32, targetGUID, stand
 // Loot::hasItemForAll / hasItemFor / hasOverThresholdItem (Loot.cpp:516-585) feed the
 // personal-row arms from the server loot store; when the store has no rows yet (Go
 // fills loot lazily at first open) the personal arms default to visible.
-// Documented no-bridge arms: HasPendingBind (Player.cpp:18107, no Go bind model),
-// LootItem conditions (Loot.cpp:519, no Go condition model — every row counts as
+// Documented no-bridge arms: LootItem conditions (Loot.cpp:519, no Go condition model — every row counts as
 // unconditional), the isDead arm (Go only broadcasts LOOTABLE on death paths, where
 // C++'s arm is definitionally true), and IsDamageEnoughForLootingAndReward (the kill
 // path already sheds LOOTABLE|TAPPED on a failed requirement, kill.go).
-func (s *Server) creatureLootSparkleVisible(mapID, instanceID uint32, targetGUID, viewerGUID, viewerGroupID uint64) bool {
+func (s *Server) creatureLootSparkleVisible(mapID, instanceID uint32, targetGUID, viewerGUID, viewerGroupID uint64, viewerPendingBind bool) bool {
 	if s == nil {
 		return true
+	}
+	if viewerPendingBind {
+		return false
 	}
 	if motion := s.findCreatureMotion(mapID, instanceID, targetGUID); motion != nil && motion.Looted {
 		return false

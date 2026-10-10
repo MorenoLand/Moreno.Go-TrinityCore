@@ -2148,6 +2148,17 @@ func (s *session) takePendingBind() (uint64, uint32, uint32, bool) {
 	return instanceID, mapID, difficulty, true
 }
 
+// hasPendingBind mirrors Player::HasPendingBind (Player.h:2067) — a nonzero
+// _pendingBindId means the instance-lock warning query is still outstanding.
+func (s *session) hasPendingBind() bool {
+	if s == nil {
+		return false
+	}
+	s.pendingBindMu.Lock()
+	defer s.pendingBindMu.Unlock()
+	return s.pendingBindInstanceID != 0
+}
+
 func (s *Server) updatePendingInstanceBinds(ctx context.Context, elapsed time.Duration) {
 	if s == nil || elapsed <= 0 {
 		return

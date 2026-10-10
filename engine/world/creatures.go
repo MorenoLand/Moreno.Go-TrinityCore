@@ -278,7 +278,7 @@ func buildCreatureUpdate(spawn creatureSpawn, observer *session) []byte {
 		// spawn only sparkles for the observer when the sparkle-visibility
 		// check passes for them.
 		if observer != nil && observer.server != nil && observer.player != nil &&
-			!observer.server.creatureLootSparkleVisible(spawn.Map, observer.player.InstanceID, rawGUID, observer.player.GUID, observer.groupID) {
+			!observer.server.creatureLootSparkleVisible(spawn.Map, observer.player.InstanceID, rawGUID, observer.player.GUID, observer.groupID, observer.hasPendingBind()) {
 			values[unitFieldDynamicFlags] &^= unitDynFlagLootable
 		}
 	}
@@ -535,7 +535,7 @@ func (s *Server) broadcastCreatureValuesUpdate(mapID uint32, guid uint64, fields
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
-		if masked != nil && !s.creatureLootSparkleVisible(mapID, sess.player.InstanceID, guid, sess.player.GUID, sess.groupID) {
+		if masked != nil && !s.creatureLootSparkleVisible(mapID, sess.player.InstanceID, guid, sess.player.GUID, sess.groupID, sess.hasPendingBind()) {
 			_ = sess.write(masked.Opcode, masked.Payload.Bytes(), true)
 			continue
 		}
@@ -567,7 +567,7 @@ func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint3
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
 			continue
 		}
-		if masked != nil && !s.creatureLootSparkleVisible(mapID, instanceID, guid, sess.player.GUID, sess.groupID) {
+		if masked != nil && !s.creatureLootSparkleVisible(mapID, instanceID, guid, sess.player.GUID, sess.groupID, sess.hasPendingBind()) {
 			_ = sess.write(masked.Opcode, masked.Payload.Bytes(), true)
 			continue
 		}
