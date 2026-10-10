@@ -8792,12 +8792,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectPowerBurn:
 				amount := eff.BasePoints + 1
+				var burnLog []takeTargetPowerEntry
 				for _, effectTarget := range hitTargets {
 					// SpellEffects.cpp:1383: the drained power is dealt as
-					// damage scaled by the effect value multiplier.
-					if burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID); burned > 0 {
+					// damage scaled by the effect value multiplier. The
+					// Mana Burn cap is burn-only (SpellEffects.cpp:1358);
+					// the m_damage merge into the spell's damage packet is
+					// a documented no-bridge (no cast-wide accumulator in
+					// Go — one executeSpellDamage per effect per target,
+					// the tree-wide convention).
+					if burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID, true); burned > 0 {
 						s.executeSpellDamage(effCtx, effectTarget, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
+						// SpellEffects.cpp:1370-1373: the take-target-power
+						// log fires before the multiplier, with a zero gain.
+						burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: burned, powerType: uint32(eff.MiscValue)})
 					}
+				}
+				if len(burnLog) > 0 {
+					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerBurn), burnLog)
 				}
 			case spellEffectParry:
 				if s.player != nil && !s.player.CanParry {
@@ -9180,25 +9192,62 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
 				s.handleEffectHealthLeech(effCtx, spellID, hitTargets, effectIndex, eff)
 			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
-				amount := eff.BasePoints + 1
-				// SpellEffects.cpp:1277-1282: the drain amount is direct
-				// damage for the caster's SpellDamageBonusDone before the
-				// drain, so the caster's spell power scales it. Go models
-				// the spellpower term of SpellDamageBonusDone (see
-				// executeSpellDamage); the damage-taken side has no Go
-				// infra.
-				if s.player != nil && s.player.SpellPower > 0 {
-					amount += int32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effectIndex, false)))
+				// Spell::EffectPowerDrain (SpellEffects.cpp:1265-1307) name-by-name:
+				// the drain amount carries the full SpellDamageBonusDone leg
+				// (Unit.cpp:6598-6736: the spell-power coefficient term, the
+				// flat/pct done mods, SPELLMOD_DAMAGE — the drain C++ arm
+				// passes an empty SpellModValues only for the pct total,
+				// which the helper recomputes anyway) and then the
+				// SpellDamageBonusTaken leg (Unit.cpp:7052-7131) before the
+				// resilience slice (SpellEffects.cpp:1285-1287). Documented
+				// no-bridge: the npcbot Obsidian Destroyer arm
+				// (SpellEffects.cpp:1290-1292 — no bot damage model) and the
+				// EnergizeBySpell threat forward (Unit.cpp:6590-6596 — no
+				// energize-threat model).
+				drainSpell, drainKnown := wotlk.Spell{}, false
+				if s.server != nil && s.server.Data != nil {
+					if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+						drainSpell, drainKnown = sp, true
+					}
 				}
+				drainSchool := uint32(1)
+				if drainKnown && drainSpell.SchoolMask != 0 {
+					drainSchool = drainSpell.SchoolMask
+				}
+				baseAmount := int32(eff.BasePoints + 1)
+				var drainLog []takeTargetPowerEntry
 				for _, effectTarget := range hitTargets {
-					// SpellEffects.cpp:1301: the caster regains the drained
-					// power scaled by the effect value multiplier, never
-					// from a self drain.
-					if drained := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID); drained > 0 {
-						if effectTarget != s.playerGUID {
-							s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, int32(effectValueMultiplied(drained, eff.Amplitude)))
+					// SpellEffects.cpp:1275: damage < 0 returns before any
+					// power moves; a zero amount drains nothing below.
+					if baseAmount <= 0 {
+						continue
+					}
+					amount := s.spellDamageBonusDone(effCtx, drainSpell, drainKnown, uint32(baseAmount), effectTarget, effectIndex, false)
+					if drainKnown && s.server != nil {
+						if victimSess := s.server.findSessionByGUID(effectTarget); victimSess != nil && victimSess.player != nil {
+							amount = spellDamageBonusTaken(amount, drainSpell, drainSchool, victimSess, s)
+						} else if target, ok := s.getCombatTarget(effCtx, effectTarget); ok {
+							amount = creatureSpellDamageBonusTaken(s.server, amount, drainSpell, drainSchool, creatureAuraKeyForTarget(target), s)
 						}
 					}
+					// SpellEffects.cpp:1301: the caster regains the drained
+					// power scaled by the effect value multiplier, never
+					// from a self drain. The Mana Burn cap is burn-only
+					// (SpellEffects.cpp:1358-1364).
+					if drained := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, int32(amount), spellID, false); drained > 0 {
+						gainMultiplier := float32(0)
+						if effectTarget != s.playerGUID {
+							s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, int32(effectValueMultiplied(drained, eff.Amplitude)))
+							gainMultiplier = eff.Amplitude
+						}
+						// SpellEffects.cpp:1305: the take-target-power log
+						// carries the drained amount with the value
+						// multiplier (zero on a self drain).
+						drainLog = append(drainLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: drained, powerType: uint32(eff.MiscValue), gainMultiplier: gainMultiplier})
+					}
+				}
+				if len(drainLog) > 0 {
+					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), drainLog)
 				}
 			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2: // 140/141/160: SPELL_EFFECT_FORCE_CAST* (EffectForceCast, SpellEffects.cpp:1048)
 				s.handleEffectForceCast(effCtx, spellID, eff, hitTargets)
@@ -12427,8 +12476,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// on the triggered path too.
 			s.energizePctEffectTarget(ctx, spell, eff, targetGUID)
 		} else if eff.Effect == spellEffectPowerBurn {
-			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID); burned > 0 {
+			var burnLog []takeTargetPowerEntry
+			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID, true); burned > 0 {
 				s.executeSpellDamage(ctx, targetGUID, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
+				// SpellEffects.cpp:1370-1373: the take-target-power log
+				// fires before the multiplier, with a zero gain.
+				burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: targetGUID, powerTaken: burned, powerType: uint32(eff.MiscValue)})
+			}
+			if len(burnLog) > 0 {
+				s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerBurn), burnLog)
 			}
 		} else if eff.Effect == spellEffectTriggerSpell || eff.Effect == spellEffectTriggerSpellWithValue {
 			// Spell::EffectTriggerSpell per-target legs ride
@@ -13162,7 +13218,7 @@ func drainManaResilienceReduction(target *session, amount uint32) uint32 {
 	return reduction
 }
 
-func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, powerType int32, amount int32, spellID uint32) uint32 {
+func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, powerType int32, amount int32, spellID uint32, manaBurnCap bool) uint32 {
 	if s == nil || s.player == nil || powerType < 0 || powerType >= 7 || amount <= 0 {
 		return 0
 	}
@@ -13173,7 +13229,7 @@ func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, po
 		// power type matches, not only players. Creature motions carry a
 		// power model (Powers/MaxPowers/PowerType); motions without
 		// populated max powers stay a no-op via the maximum != 0 gate.
-		return s.applySpellPowerBurnToCreature(targetGUID, powerType, amount, spellID)
+		return s.applySpellPowerBurnToCreature(targetGUID, powerType, amount, spellID, manaBurnCap)
 	}
 	if target.player == nil || target.player.Health == 0 || playerPowerType(target.player) != uint8(powerType) {
 		return 0
@@ -13183,7 +13239,10 @@ func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, po
 		return 0
 	}
 	burn := int64(amount)
-	if spellID == 8129 {
+	// SpellEffects.cpp:1358-1364 — the Mana Burn (8129) percent/cap arm
+	// lives in EffectPowerBurn ONLY; EffectPowerDrain (SpellEffects.cpp:1265)
+	// has no such arm, so the cap rides the burn-only callers via manaBurnCap.
+	if manaBurnCap && spellID == 8129 {
 		burn = int64(maximum) * burn / 100
 		casterMax := s.player.MaxPowers[uint32(powerType)]
 		cap := int64(casterMax) * int64(amount) * 2 / 100
@@ -13219,10 +13278,12 @@ func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, po
 // Spell::EffectPowerDrain/EffectPowerBurn: an alive unit whose power type
 // matches loses up to burn power, and the drained amount is returned for
 // the caster-gain (drain) or damage (burn) follow-ons. The Mana Burn 8129
-// target/caster cap runs against the motion's max powers; the resilience
-// term is dead here because C++'s GetCombatRatingDamageReduction returns
-// 0 for non-players (see drainManaResilienceReduction).
-func (s *session) applySpellPowerBurnToCreature(targetGUID uint64, powerType int32, amount int32, spellID uint32) uint32 {
+// target/caster cap runs against the motion's max powers on the burn path
+// only (manaBurnCap — SpellEffects.cpp:1358-1364 has no EffectPowerDrain
+// counterpart); the resilience term is dead here because C++'s
+// GetCombatRatingDamageReduction returns 0 for non-players (see
+// drainManaResilienceReduction).
+func (s *session) applySpellPowerBurnToCreature(targetGUID uint64, powerType int32, amount int32, spellID uint32, manaBurnCap bool) uint32 {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
 		return 0
 	}
@@ -13234,7 +13295,7 @@ func (s *session) applySpellPowerBurnToCreature(targetGUID uint64, powerType int
 		return 0
 	}
 	burn := int64(amount)
-	if spellID == 8129 { // Mana Burn: burn x% of target's mana, capped at 2x% of caster's
+	if manaBurnCap && spellID == 8129 { // Mana Burn: burn x% of target's mana, capped at 2x% of caster's
 		burn = int64(motion.MaxPowers[index]) * burn / 100
 		cap := int64(s.player.MaxPowers[index]) * int64(amount) * 2 / 100
 		if burn > cap {
@@ -13259,6 +13320,45 @@ func (s *session) applySpellPowerBurnToCreature(targetGUID uint64, powerType int
 	s.server.motionMu.Unlock()
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldPower1 + int(index): next})
 	return uint32(burn)
+}
+
+// takeTargetPowerEntry is one drained unit in the take-target-power log.
+type takeTargetPowerEntry struct {
+	targetGUID     uint64
+	powerTaken     uint32
+	powerType      uint32
+	gainMultiplier float32
+}
+
+// sendTakeTargetPowerLog mirrors Spell::ExecuteLogEffectTakeTargetPower
+// (Spell.cpp:4557-4564) as flushed by Spell::SendLogExecute
+// (Spell.cpp:4523-4555): SMSG_SPELLLOGEXECUTE carrying the caster, the
+// spell id, one effect entry, and per target the drained unit, the power
+// taken, the power type, and the gain multiplier. EffectPowerDrain logs
+// the drained amount with the effect value multiplier
+// (SpellEffects.cpp:1301-1305, zero on a self drain); EffectPowerBurn
+// logs the pre-multiplication drain with a zero gain
+// (SpellEffects.cpp:1369-1373).
+func (s *session) sendTakeTargetPowerLog(spellID uint32, effectID uint32, targets []takeTargetPowerEntry) {
+	if s == nil || s.player == nil || len(targets) == 0 {
+		return
+	}
+	log := protocol.NewBuffer(64)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1) // effect count
+	log.WriteU32(effectID)
+	log.WriteU32(uint32(len(targets)))
+	for _, t := range targets {
+		log.WritePackedGUID(t.targetGUID)
+		log.WriteU32(t.powerTaken)
+		log.WriteU32(t.powerType)
+		log.WriteF32(t.gainMultiplier)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
 }
 
 func (s *session) spellPowerTarget(targetGUID uint64) *session {
@@ -19223,10 +19323,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if ts.player.Powers[burnPowerType] < oldBurnPower {
 			burnDealt = oldBurnPower - ts.player.Powers[burnPowerType]
 		}
-		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
-		// ValueMultiplier DBC field has no Go model; burn spells carry
-		// 1.0, so the damage equals the drained amount.
-		dmg := burnDealt
+		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
+		// (SpellInfo.cpp:344: ValueMultiplier = EffectAmplitude[effIndex]);
+		// SPELLMOD_VALUE_MULTIPLIER has no Go infra. The DBC half rides
+		// valueMultiplierForAura, the same resolver the periodic leech
+		// and health-funnel ticks use.
+		dmg := effectValueMultiplied(burnDealt, ts.valueMultiplierForAura(aura.SpellID, spellAuraPowerBurn))
 		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
 		}
