@@ -62,6 +62,7 @@ const (
 	charCreateNameInUse                 = 50
 	// SendCharRename/SendCharCustomize/SendCharFactionChange result codes
 	// (SharedDefines.h:3447-3463, :3428-3431).
+	charCreateCharacterArenaLeader = 64
 	charCreateCharacterSwapFaction = 66
 	charCreateCharacterRaceOnly    = 67
 	charNameFailure                = 88
@@ -234,6 +235,16 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	// normalizePlayerName (CharacterHandler.cpp:377): the name C++ validates
+	// and stores is the normalized form (lowercased, first letter upper);
+	// empty/invalid-UTF-8 answers CHAR_NAME_NO_NAME.
+	if !utf8.ValidString(name) {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameNoName)
+	}
+	name = normalizePlayerName(name)
+	if name == "" {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameNoName)
+	}
 	values := make([]uint8, 9)
 	for i := range values {
 		values[i], err = b.ReadU8()
@@ -242,7 +253,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		}
 	}
 	race, class, gender := values[0], values[1], values[2]
-	if !validCharacterName(name) || race == 0 || class == 0 || gender > 2 {
+	if race == 0 || class == 0 || gender > 2 {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
 	}
 	if disabled := s.server.Config.CharacterCreatingDisabled; disabled != 0 {
@@ -268,12 +279,18 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
 	}
+	// ObjectMgr::CheckPlayerName approximation (CharacterHandler.cpp:381-386):
+	// validCharacterName covers the length/alphabet arms; runs after the
+	// creation-mask gates, == C++ order.
+	if !validCharacterName(name) {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
+	}
 	// ObjectMgr::IsReservedName (ObjectMgr.cpp:8515-8524): lowercased exact
 	// match against the reserved_name rows, gated on
 	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME
 	// (CharacterHandler.cpp:392). Answers CHAR_NAME_RESERVED (95); the gate
-	// sits between the CheckPlayerName-equivalent (validCharacterName above)
-	// and the death-knight arm below, == C++ order.
+	// sits between the CheckPlayerName-equivalent (validCharacterName just
+	// above) and the death-knight arm below, == C++ order.
 	if !s.skipReservedNameCheck {
 		var reserved int
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(name)).Scan(&reserved); err == nil && reserved > 0 {
@@ -2429,6 +2446,17 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 		sendRename(charCreateError, false, "")
 		return true
 	}
+	// IsReservedName arm (CharacterHandler.cpp:1133): gated on
+	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME; answers
+	// CHAR_NAME_RESERVED (95) ahead of the account/at-login/free-name check,
+	// == C++ order (reserved :1133, CHAR_SEL_FREE_NAME :1141).
+	if !s.skipReservedNameCheck {
+		var reserved int
+		if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(newName)).Scan(&reserved); err == nil && reserved > 0 {
+			sendRename(charNameReserved, false, "")
+			return true
+		}
+	}
 	// The character must belong to this account, carry AT_LOGIN_RENAME, and
 	// the new name must be free (CHAR_SEL_FREE_NAME, :1141).
 	var atLogin uint64
@@ -2439,16 +2467,6 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 	if atLogin&atLoginRename == 0 {
 		sendRename(charCreateError, false, "")
 		return true
-	}
-	// IsReservedName arm (CharacterHandler.cpp:1133): gated on
-	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME; answers
-	// CHAR_NAME_RESERVED (95) ahead of the free-name check == C++ order.
-	if !s.skipReservedNameCheck {
-		var reserved int
-		if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(newName)).Scan(&reserved); err == nil && reserved > 0 {
-			sendRename(charNameReserved, false, "")
-			return true
-		}
 	}
 	if row, err := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); err == nil {
 		var one int
@@ -2679,34 +2697,64 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
 			return true
 		}
-		// usedLoginFlag = AT_LOGIN_CHANGE_FACTION (CharacterHandler.cpp:1681-1685).
-		if atLogin&atLoginChangeFaction == 0 {
+		// Failures answer the u8 code alone; success appends guid/name/appearance
+		// (SendCharFactionChange, CharacterHandler.cpp:2189-2206).
+		sendFactionChange := func(code uint8) bool {
 			buf := protocol.NewBuffer(1)
-			buf.WriteU8(charCreateError)
+			buf.WriteU8(code)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
 			return true
 		}
-		// IsReservedName arm (CharacterHandler.cpp:1725): gated on
+		// usedLoginFlag = AT_LOGIN_CHANGE_FACTION (CharacterHandler.cpp:1681-1685).
+		if atLogin&atLoginChangeFaction == 0 {
+			return sendFactionChange(charCreateError)
+		}
+		newTeam := teamForRace(race)
+		// Faction change must swap to the opposite faction team
+		// (CharacterHandler.cpp:1687) — ahead of the name arms, == C++ order.
+		if oldRace != 0 && teamForRace(oldRace) == newTeam {
+			return sendFactionChange(charCreateCharacterSwapFaction)
+		}
+		// CONFIG_CHARACTER_CREATING_DISABLED_RACEMASK
+		// (CharacterHandler.cpp:1695-1702): mirrors the char-create mask check.
+		if s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
+			return sendFactionChange(charCreateError)
+		}
+		// normalizePlayerName (CharacterHandler.cpp:1709-1713): empty or
+		// invalid-UTF-8 answers CHAR_NAME_NO_NAME.
+		if !utf8.ValidString(newName) {
+			return sendFactionChange(charNameNoName)
+		}
+		newName = normalizePlayerName(newName)
+		if newName == "" {
+			return sendFactionChange(charNameNoName)
+		}
+		// ObjectMgr::CheckPlayerName approximation
+		// (CharacterHandler.cpp:1715-1719): validCharacterName covers the
+		// length/alphabet arms.
+		if !validCharacterName(newName) {
+			return sendFactionChange(charNameFailure)
+		}
+		// IsReservedName arm (CharacterHandler.cpp:1722-1726): gated on
 		// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME; answers
-		// CHAR_NAME_RESERVED (95) ahead of the name-in-use check == C++
-		// order. (The normalize/CheckPlayerName arms C++ runs ahead of this
-		// have no Go bridge on this path — documented gap, name is taken raw.)
+		// CHAR_NAME_RESERVED (95) on the normalized name == C++ order.
 		if !s.skipReservedNameCheck {
 			var reserved int
 			if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(newName)).Scan(&reserved); err == nil && reserved > 0 {
-				buf := protocol.NewBuffer(1)
-				buf.WriteU8(charNameReserved)
-				_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
-				return true
+				return sendFactionChange(charNameReserved)
 			}
 		}
-		newTeam := teamForRace(race)
-		// Faction change must swap to the opposite faction team (CharacterHandler.cpp:1687)
-		if oldRace != 0 && teamForRace(oldRace) == newTeam {
-			buf := protocol.NewBuffer(1)
-			buf.WriteU8(charCreateCharacterSwapFaction)
-			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
-			return true
+		// Name already taken by another character
+		// (CharacterHandler.cpp:1729-1736, CHAR_CREATE_NAME_IN_USE).
+		var takenBy uint64
+		if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", newName).Scan(&takenBy); err == nil && takenBy != guid {
+			return sendFactionChange(charCreateNameInUse)
+		}
+		// Arena team captain cannot faction change
+		// (CharacterHandler.cpp:1738-1742, CHAR_CREATE_CHARACTER_ARENA_LEADER).
+		var isCaptain int
+		if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM arena_team WHERE captainGuid = ?", uint32(guid)).Scan(&isCaptain); err == nil {
+			return sendFactionChange(charCreateCharacterArenaLeader)
 		}
 
 		// Resurrect character if dead
