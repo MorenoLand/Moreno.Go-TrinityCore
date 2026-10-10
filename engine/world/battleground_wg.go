@@ -250,6 +250,7 @@ type wgBattlegroundState struct {
 	TenacityStack uint32
 
 	PlayersInWar      map[uint64]uint32 // playerGUID -> team
+	PlayersInQueue    map[uint64]uint32 // playerGUID -> team; mirrors Battlefield::m_PlayersInQueue[team] (Battlefield.h)
 	PlayerRanks       map[uint64]uint32 // playerGUID -> rank spell ID (Recruit, Corporal, Lieutenant)
 	PlayerKillsInRank map[uint64]uint32 // playerGUID -> kills in current rank towards next promotion (0..5)
 	Vehicles          map[uint64]uint32 // vehicleGUID -> team
@@ -1041,6 +1042,7 @@ func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 			Enabled:           true,
 			Winner:            -1,
 			PlayersInWar:      make(map[uint64]uint32),
+			PlayersInQueue:    make(map[uint64]uint32),
 			PlayerRanks:       make(map[uint64]uint32),
 			PlayerKillsInRank: make(map[uint64]uint32),
 			Vehicles:          make(map[uint64]uint32),

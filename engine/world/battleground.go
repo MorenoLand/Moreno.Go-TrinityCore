@@ -1068,11 +1068,44 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 	}
 
 	if accepted != 0 {
-		buf := protocol.NewBuffer(9)
-		buf.WriteU32(battleID)
-		buf.WriteU8(0)  // unk
-		buf.WriteU32(1) // clear afk
-		_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_ENTERED), buf.Bytes(), true)
+		// Battlefield::PlayerAcceptInviteToWar (Battlefield.cpp:390): the
+		// IsWarTime() gate, the m_PlayersInWar insert
+		// (AddOrSetPlayerToCorrectBfGroup), SendBfEntered, and the AFK clear.
+		// The invited-set erase has no Go model (no invite tracking); the
+		// OnPlayerJoinWar script hook is engine-only.
+		if s.server != nil && battleID == WGBattleID {
+			wg := s.server.getOrCreateWGState()
+			wg.mu.Lock()
+			if wg.Enabled && wg.IsActive {
+				afk := s.player.PlayerFlags&playerFlagAFK != 0
+				wg.PlayersInWar[s.playerGUID] = teamForRace(s.player.Race)
+				wg.mu.Unlock()
+				// SendBfEntered (BattlefieldHandler.cpp:100): u32 battleId,
+				// u8(1), u8(1), u8(isAFK) — 7 bytes; the AFK byte is read
+				// before the ToggleAFK clear below.
+				buf := protocol.NewBuffer(7)
+				buf.WriteU32(battleID)
+				buf.WriteU8(1)
+				buf.WriteU8(1)
+				if afk {
+					buf.WriteU8(1)
+				} else {
+					buf.WriteU8(0)
+				}
+				_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_ENTERED), buf.Bytes(), true)
+				if afk {
+					s.setPlayerAFK(false)
+				}
+			} else {
+				wg.mu.Unlock()
+			}
+		}
+	} else if s.server != nil && battleID == WGBattleID && s.player.Zone == WGZoneID {
+		// HandleBfEntryInviteResponse decline arm (BattlefieldHandler.cpp:151):
+		// a decliner still inside the zone is kicked from the battlefield.
+		// KickPosition (BattlefieldWG.cpp:435): 5728.117, 2714.346, 697.733 on
+		// the WG map.
+		s.teleportTo(WGMapID, 5728.117, 2714.346, 697.733, 0)
 	}
 	s.debug("battlefield entry invite response", "battle", battleID, "accepted", accepted)
 	return true
@@ -1088,6 +1121,27 @@ func (s *session) handleBfQueueInviteResponse(ctx context.Context, payload []byt
 	battleID, _ := r.ReadU32()
 	accepted, _ := r.ReadU8()
 
+	if accepted != 0 && s.server != nil && battleID == WGBattleID {
+		// Battlefield::PlayerAcceptInviteToQueue (Battlefield.cpp:366): insert
+		// the player into the queue, then answer with SendBfQueueInviteResponse
+		// (BattlefieldHandler.cpp:73) — u32 battleId, u32 zoneId, u8(1
+		// accepted), u8(1 not-full), u8(1 warmup) = 11 bytes.
+		wg := s.server.getOrCreateWGState()
+		wg.mu.Lock()
+		if wg.PlayersInQueue == nil {
+			wg.PlayersInQueue = make(map[uint64]uint32)
+		}
+		wg.PlayersInQueue[s.playerGUID] = teamForRace(s.player.Race)
+		wg.mu.Unlock()
+		buf := protocol.NewBuffer(11)
+		buf.WriteU32(battleID)
+		buf.WriteU32(WGZoneID)
+		buf.WriteU8(1)
+		buf.WriteU8(1)
+		buf.WriteU8(1)
+		_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE), buf.Bytes(), true)
+	}
+
 	s.debug("battlefield queue invite response", "battle", battleID, "accepted", accepted)
 	return true
 }
@@ -1101,11 +1155,16 @@ func (s *session) handleBfQueueExitRequest(ctx context.Context, payload []byte) 
 	r := protocol.NewReader(payload)
 	battleID, _ := r.ReadU32()
 
-	buf := protocol.NewBuffer(9)
-	buf.WriteU32(battleID)
-	buf.WriteU8(0) // reason 0 = normal exit
-	buf.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_EJECTED), buf.Bytes(), true)
+	// Battlefield::AskToLeaveQueue (Battlefield.cpp:374): erase from the
+	// queue. C++ sends no packet here — the old fabricated
+	// SMSG_BATTLEFIELD_MGR_EJECTED reply (also a wrong 9-byte shape; C++'s
+	// SendBfLeaveMessage is 7 bytes) is dropped.
+	if s.server != nil && battleID == WGBattleID {
+		wg := s.server.getOrCreateWGState()
+		wg.mu.Lock()
+		delete(wg.PlayersInQueue, s.playerGUID)
+		wg.mu.Unlock()
+	}
 	s.debug("battlefield exit request", "battle", battleID)
 	return true
 }
