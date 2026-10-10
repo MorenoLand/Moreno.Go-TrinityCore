@@ -77,6 +77,20 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// 4b. Battleground area-trigger arm
+	// Reference: MiscHandler.cpp:697-700 — runs after the tavern return, does not
+	// return itself (execution continues to the teleport arm). Battleground::
+	// HandleAreaTrigger is empty, so only arena map scripts have trigger arms.
+	if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+		arena.mu.RLock()
+		inProgress := arena.Status == ArenaStatusInProgress
+		mapID := arena.MapID
+		arena.mu.RUnlock()
+		if inProgress {
+			s.handleArenaAreaTrigger(triggerID, mapID)
+		}
+	}
+
 	// 5. Teleport trigger
 	// Reference: MiscHandler.cpp:705-779 (areatrigger_teleport)
 	var targetMap int64

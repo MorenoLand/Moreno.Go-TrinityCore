@@ -91,6 +91,14 @@ const (
 	ArenaAutoLeaveDelay      = 120 * time.Second
 	ArenaTimeLimitPointsLoss = -16
 
+	// Ring of Valor fire/pillar preamble (BattlegroundRV.h:84-87):
+	// StartingEventOpenDoors sets OPEN_FENCES + FIRST_TIMER 20133ms, the fire
+	// opens, CLOSE_FIRE_TIMER 5000ms closes it, FIRE_TO_PILLAR_TIMER 20000ms
+	// later the first TogglePillarCollision fires, then PILLAR_SWITCH_TIMER
+	// 25000ms repeats it.
+	RVPillarFirstSwitchDelay = (20133 + 5000 + 20000) * time.Millisecond
+	RVPillarSwitchInterval   = 25 * time.Second
+
 	// Buff GameObjects (Shadow Sight)
 	ArenaGOShadowSight1 uint32 = 184663
 	ArenaGOShadowSight2 uint32 = 184664
@@ -627,10 +635,10 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 
 	arena.Status = ArenaStatusInProgress
 	arena.MatchStartTime = time.Now()
-	arena.RVPillarSwitchTimer = time.Now().Add(20 * time.Second)
+	arena.RVPillarSwitchTimer = time.Now().Add(RVPillarFirstSwitchDelay)
 	arena.mu.Unlock()
 
-	s.broadcastArenaMessage(arena.MapID, "The arena battle has begun!")
+	s.broadcastArenaStartText(arena.MapID, ArenaTextStartBattleHasBegun, "The arena battle has begun!")
 
 	// Process all players in the arena
 	s.sessionsMu.RLock()
@@ -1060,6 +1068,50 @@ func (s *Server) broadcastArenaMessage(mapID uint32, msg string) {
 	}
 }
 
+// broadcastArenaStartText resolves an arena start broadcast_text ID from the
+// world DB (falling back to the hardcoded English text when the row is
+// missing) and broadcasts it to every player on the arena map. C++ sends
+// these IDs via Battleground::SendBroadcastText (Arena.h:25-28, Arena.cpp:68-71,
+// CHAT_MSG_BG_SYSTEM_NEUTRAL).
+func (s *Server) broadcastArenaStartText(mapID, textID uint32, fallback string) {
+	text := fallback
+	if s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+		var dbText string
+		if err := s.WorldStore.DB.QueryRowContext(context.Background(), "SELECT Text FROM broadcast_text WHERE ID = ?", textID).Scan(&dbText); err == nil && dbText != "" {
+			text = dbText
+		}
+	}
+	s.broadcastArenaMessage(mapID, text)
+}
+
+// handleArenaAreaTrigger dispatches arena map-script area triggers for an
+// in-progress arena (status gate applied by the caller in areatrigger.go).
+// Reference: BattlegroundNA/BE/RL/DS/RV::HandleAreaTrigger; Battleground::
+// HandleAreaTrigger is empty, so only the arena map scripts have trigger arms.
+func (s *session) handleArenaAreaTrigger(triggerID, mapID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	switch mapID {
+	case ArenaMapDalaranSewers:
+		switch triggerID {
+		case 5347, 5348:
+			// BattlegroundDS::HandleAreaTrigger: the pipe area strips Demonic
+			// Circle and resets the pipe knockback count; Go has no
+			// pipe-knockback model, so the count reset is a no-op.
+			s.removeAura(SpellWarlDemonicCircle)
+		}
+	case ArenaMapNagrand:
+		// 4536, 4537: swallowed buff triggers, no-op in C++ and Go.
+	case ArenaMapBladesEdge:
+		// 4538, 4539: swallowed buff triggers, no-op in C++ and Go.
+	case ArenaMapRuinsOfLordaeron:
+		// 4696, 4697: swallowed buff triggers, no-op in C++ and Go.
+	case ArenaMapRingOfValor:
+		// 5224, 5226, 5473, 5474: fire removed in 3.2.0, no-op in C++ and Go.
+	}
+}
+
 // updateArenaBattles ticks every live arena, driving warmup countdowns, match
 // start, the match time limit, and per-map hazards. BattlegroundMgr::Update
 // (BattlegroundMgr.cpp:94) sweeps all running instances with bg->Update(diff)
@@ -1103,13 +1155,13 @@ func (s *Server) updateArenaTick(arena *arenaBattlegroundState, now time.Time) {
 
 		if remaining <= 60*time.Second && remaining > 30*time.Second && !arena.AnnouncedOneMinute {
 			arena.AnnouncedOneMinute = true
-			s.broadcastArenaMessage(arena.MapID, "One minute until the arena battle begins!")
+			s.broadcastArenaStartText(arena.MapID, ArenaTextStartOneMinute, "One minute until the arena battle begins!")
 		} else if remaining <= 30*time.Second && remaining > 15*time.Second && !arena.AnnouncedThirtySeconds {
 			arena.AnnouncedThirtySeconds = true
-			s.broadcastArenaMessage(arena.MapID, "Thirty seconds until the arena battle begins!")
+			s.broadcastArenaStartText(arena.MapID, ArenaTextStartThirtySeconds, "Thirty seconds until the arena battle begins!")
 		} else if remaining <= 15*time.Second && remaining > 0 && !arena.AnnouncedFifteenSeconds {
 			arena.AnnouncedFifteenSeconds = true
-			s.broadcastArenaMessage(arena.MapID, "Fifteen seconds until the arena battle begins!")
+			s.broadcastArenaStartText(arena.MapID, ArenaTextStartFifteenSeconds, "Fifteen seconds until the arena battle begins!")
 		} else if remaining <= 0 {
 			s.startArenaMatch(arena)
 		}
@@ -1125,7 +1177,7 @@ func (s *Server) updateArenaTick(arena *arenaBattlegroundState, now time.Time) {
 			arena.mu.Lock()
 			if now.After(arena.RVPillarSwitchTimer) {
 				arena.RVPillarCollision = !arena.RVPillarCollision
-				arena.RVPillarSwitchTimer = now.Add(25 * time.Second)
+				arena.RVPillarSwitchTimer = now.Add(RVPillarSwitchInterval)
 			}
 			arena.mu.Unlock()
 		}
