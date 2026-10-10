@@ -34,6 +34,12 @@ const (
 	spellAttr5SkipCheckcastLosCheck uint32 = 0x04000000 // SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK (SharedDefines.h:623) — ATTR5 is Go's AttributesEx5
 	spellAttr5HasteAffectDuration   uint32 = 0x00002000 // SPELL_ATTR5_HASTE_AFFECT_DURATION (SharedDefines.h:610) — ATTR5 is Go's AttributesEx5
 
+	// spellCustomAttrRollingPeriodic mirrors SPELL_ATTR0_CU_ROLLING_PERIODIC
+	// (SpellInfo.h:189): a periodic aura whose refresh rolls the old amount's
+	// remaining-tick portion into the new amount (SpellAuraEffects.cpp:525-539).
+	// It arrives from the spell_custom_attr DB table via getSpellCustomAttr.
+	spellCustomAttrRollingPeriodic uint32 = 0x00000800
+
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
 	spellAttr1NotBreakStealth    uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
@@ -17044,6 +17050,51 @@ func refreshAuraEffectBasepoints(existing *activeAura, spell wotlk.Spell, eff wo
 	}
 }
 
+// rollingPeriodicCarryOver mirrors the SPELL_ATTR0_CU_ROLLING_PERIODIC arm of
+// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:525-539): on a stack refresh
+// the new amount absorbs the old aura's remaining-tick portion — oldAmount *
+// remainingTicks / totalTicks — before the stack multiplier. C++ sums over the
+// owner's same-spell/same-caster/same-effect periodic effects; Go holds one
+// aura per spell ID, so the set collapses to this effect, gated on the new
+// cast sharing the old aura's caster (C++ matches on GetCasterGUID).
+// totalTicks mirrors AuraEffect::GetTotalTicks (SpellAuraEffects.cpp:540-550):
+// maxDuration/amplitude, +1 for ATTR5_START_PERIODIC_AT_APPLY; remaining =
+// total - _ticksDone (SpellAuraEffects.h:79). Callers must invoke this before
+// overwriting the old DurationMs/PeriodMs/TickCount.
+func (s *session) rollingPeriodicCarryOver(existing *activeAura, spell wotlk.Spell, eff wotlk.SpellEffect, casterGUID uint64) int32 {
+	if existing == nil || existing.PeriodMs == 0 || existing.DurationMs == 0 {
+		return 0
+	}
+	if s == nil || s.server == nil || s.server.getSpellCustomAttr(spell.ID)&spellCustomAttrRollingPeriodic == 0 {
+		return 0
+	}
+	if casterGUID == 0 || casterGUID != existing.CasterGUID {
+		return 0
+	}
+	index := -1
+	for i, candidate := range spell.Effects {
+		if candidate == eff && i < 8 {
+			index = i
+			break
+		}
+	}
+	if index < 0 || index >= len(existing.Amounts) {
+		return 0
+	}
+	total := int32(existing.DurationMs / existing.PeriodMs)
+	if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+		total++
+	}
+	if total <= 0 {
+		return 0
+	}
+	remaining := total - int32(existing.TickCount)
+	if remaining <= 0 {
+		return 0
+	}
+	return existing.Amounts[index] * remaining / total
+}
+
 // castMerged tracks, for one cast, the target GUIDs whose existing aura
 // already ran the re-apply merge; a nil map means the caller applies a
 // single aura effect per spell and keeps the old always-merge behavior.
@@ -18460,7 +18511,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// recalculated from them (Aura::SetStackAmount, SpellAuras.cpp:1008).
 			// Go has no stack-scaled amount recalc, so the amounts follow the
 			// new cast directly; the stack-scaled multiplier half stays unmodeled.
-			refreshAuraEffectBasepoints(existing, spell, eff, amount)
+			// AuraEffect::CalculateAmount SPELL_ATTR0_CU_ROLLING_PERIODIC arm
+			// (SpellAuraEffects.cpp:525-539): a refresh of a rolling periodic
+			// aura folds the old amount's remaining-tick portion into the new
+			// amount before the stack multiplier. Runs inside SetStackAmount
+			// (SpellAuras.cpp:1007) — once per refresh on the merging effect;
+			// later sweep effects only refresh basepoints (the !firstMerge
+			// branch), like C++ where ModStackAmount runs once per cast
+			// (Spell.cpp:2842).
+			mergeAmount := amount
+			if carry := s.rollingPeriodicCarryOver(existing, spell, eff, casterGUID); carry != 0 {
+				mergeAmount = uint32(int32(amount) + carry)
+			}
+			refreshAuraEffectBasepoints(existing, spell, eff, mergeAmount)
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()
@@ -18873,8 +18936,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		existing.StackCount = stackCount
 		existing.RemainingCharges = uint8(spell.ProcCharges)
 		// Creature-side mirror of the player merge's basepoint update
-		// (Unit.cpp:3360-3372, Aura::SetStackAmount, SpellAuras.cpp:1008).
-		refreshAuraEffectBasepoints(existing, spell, eff, amount)
+		// (Unit.cpp:3360-3372, Aura::SetStackAmount, SpellAuras.cpp:1008),
+		// including the SPELL_ATTR0_CU_ROLLING_PERIODIC carry-over
+		// (SpellAuraEffects.cpp:525-539).
+		mergeAmount := amount
+		if carry := s.rollingPeriodicCarryOver(existing, spell, eff, casterGUID); carry != 0 {
+			mergeAmount = uint32(int32(amount) + carry)
+		}
+		refreshAuraEffectBasepoints(existing, spell, eff, mergeAmount)
 		existing.DurationMs = durationMs
 		existing.RemainingMs = durationMs
 		existing.DurationUpdatedAt = time.Now()
