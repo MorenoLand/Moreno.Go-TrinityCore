@@ -8653,6 +8653,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.executeSpellDamage(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex)
 				}
 			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
+				// Spell::EffectHeal (SpellEffects.cpp:1399): the damage<0
+				// gate is at function top, so it covers effect 10 too — a
+				// negative effect value heals nothing. The pct arm's gate
+				// below only covers 136.
+				if eff.Effect == spellEffectHeal && eff.BasePoints+1 <= 0 {
+					break
+				}
 				heal := uint32(eff.BasePoints + 1)
 				// Spell::EffectHeal (SpellEffects.cpp): the Death Pact arm
 				// (SPELLFAMILY_DEATHKNIGHT, SpellFamilyFlags[0] & 0x00080000)
@@ -13105,6 +13112,25 @@ func effectValueMultiplied(value uint32, amplitude float32) uint32 {
 	return uint32(int32(float64(value) * float64(amplitude)))
 }
 
+// valueMultiplierForAura resolves the CalcValueMultiplier DBC half
+// (SpellInfo.cpp:344: ValueMultiplier = EffectAmplitude[effIndex] — Go's
+// eff.Amplitude) for the first effect carrying the given aura type; 1.0
+// when the spell or the effect cannot be resolved. The
+// SPELLMOD_VALUE_MULTIPLIER term has no Go infra.
+func (s *session) valueMultiplierForAura(spellID uint32, auraType uint32) float32 {
+	if s.server == nil || s.server.Data == nil {
+		return 1.0
+	}
+	if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+		for _, eff := range sp.Effects {
+			if eff.Aura == auraType {
+				return eff.Amplitude
+			}
+		}
+	}
+	return 1.0
+}
+
 // drainManaResilienceReduction mirrors the resilience term in
 // Spell::EffectPowerDrain and Spell::EffectPowerBurn
 // (SpellEffects.cpp:1285-1287): mana drains are reduced by the target's
@@ -13806,9 +13832,9 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 // The consumed aura is removed from the target unless the caster carries
 // Glyph of Swiftmend (54824). The outer HEAL-type healing-taken leg on the
 // full Swiftmend amount (SpellHealingBonusTaken, SpellEffects.cpp:1466)
-// rides executeSpellHealDoneBonus's healingTakenBonus; the tick-internal
-// DOT-type taken leg on the consumed tick amount (SpellEffects.cpp:1448,
-// MOD_HOT_PCT etc.) rides healingTakenBonus's dotType arm.
+// rides executeSpellHealDoneBonus's healingTakenBonus. The tick-internal
+// DOT-type taken call (SpellEffects.cpp:1448) discards its return in C++ —
+// it modifies nothing — so no dotType leg applies on this path.
 // The C++ error-return when no aura matches despite the aura state is
 // unreachable here because Go's aura-state bit derives from the same
 // family-flags classifier.
@@ -18999,10 +19025,10 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if !ok {
 			break
 		}
-		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
-		// ValueMultiplier DBC field has no Go model and
-		// SPELLMOD_VALUE_MULTIPLIER is unbridged; funnel spells carry 1.0.
-		heal := paid
+		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
+		// (SpellInfo.cpp:344: ValueMultiplier = EffectAmplitude[effIndex]);
+		// SPELLMOD_VALUE_MULTIPLIER has no Go infra.
+		heal := effectValueMultiplied(paid, ts.valueMultiplierForAura(aura.SpellID, 62))
 		curHP := ts.player.Health
 		maxHP := ts.player.MaxHealth
 		newHP := curHP + heal
@@ -19339,10 +19365,11 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 		return
 	}
 	heal := dealtDamage
-	// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
-	// ValueMultiplier DBC field has no Go model and
-	// SPELLMOD_VALUE_MULTIPLIER is unbridged; leech spells carry 1.0, so the
-	// heal equals the dealt damage.
+	// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
+	// (SpellInfo.cpp:528-535): TC sets ValueMultiplier =
+	// EffectAmplitude[effIndex] (SpellInfo.cpp:344), and Go's eff.Amplitude
+	// carries exactly that field (Spell.dbc 101-103). The SPELLMOD_VALUE_MULTIPLIER
+	// term has no Go infra (documented beside each caller).
 	var leechSpell wotlk.Spell
 	leechKnown := false
 	if s.server != nil && s.server.Data != nil {
@@ -19354,6 +19381,9 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 		stack := uint32(aura.StackCount)
 		if stack == 0 {
 			stack = 1
+		}
+		if leechEffIndex >= 0 && leechEffIndex < len(leechSpell.Effects) {
+			heal = effectValueMultiplied(heal, leechSpell.Effects[leechEffIndex].Amplitude)
 		}
 		heal = casterSess.spellHealingBonusDone(leechSpell, heal, casterSess, leechEffIndex, true, stack)
 	} else if casterSess.player.SpellPower > 0 {
@@ -19929,10 +19959,10 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if !ok {
 			return true
 		}
-		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
-		// ValueMultiplier DBC field has no Go model and
-		// SPELLMOD_VALUE_MULTIPLIER is unbridged; funnel spells carry 1.0.
-		heal := paid
+		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
+		// (SpellInfo.cpp:344: ValueMultiplier = EffectAmplitude[effIndex]);
+		// SPELLMOD_VALUE_MULTIPLIER has no Go infra.
+		heal := effectValueMultiplied(paid, s.valueMultiplierForAura(aura.SpellID, 62))
 		curHP := target.Health
 		maxHP := target.MaxHealth
 		newHP := curHP + heal
@@ -25414,7 +25444,12 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, h
 		if dealt > healthBefore {
 			dealt = healthBefore
 		}
-		s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex)
+		// Spell::EffectHealthLeech (SpellEffects.cpp:1550): the caster
+		// self-heal only lands when the caster is alive — the damage leg
+		// above runs regardless.
+		if s.player != nil && s.player.Health > 0 {
+			s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex)
+		}
 	}
 }
 
