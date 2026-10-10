@@ -626,6 +626,12 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 	if err != nil || targetName == "" {
 		return false
 	}
+	// WorldSession::HandleGuildInviteOpcode (GuildHandler.cpp:43):
+	// normalizePlayerName gates the handler; Guild::HandleInviteMember
+	// (Guild.cpp:1466) resolves the invitee with ObjectAccessor::
+	// FindPlayerByName — an exact, case-sensitive match on the normalized
+	// name. Same normalize+exact treatment as the other name-based handlers.
+	targetName = normalizePlayerName(targetName)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -642,7 +648,7 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 	// (online) player, otherwise SendCommandResult(INVITE,
 	// ERR_GUILD_PLAYER_NOT_FOUND_S, name).
 	var targetGUID int64
-	err = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1", targetName).Scan(&targetGUID)
+	err = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? LIMIT 1", targetName).Scan(&targetGUID)
 	targetSess := s.server.findSessionByGUID(uint64(targetGUID))
 	if err != nil || targetGUID == 0 || targetSess == nil || targetSess.player == nil {
 		s.sendGuildCommandResult(guildCmdInvite, targetName, errGuildPlayerNotFoundS)
@@ -1199,6 +1205,11 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	if err != nil || newMasterName == "" {
 		return false
 	}
+	// WorldSession::HandleGuildSetGuildMaster (GuildHandler.cpp:129):
+	// normalizePlayerName gates the handler, and Guild::GetMember
+	// (Guild.h:772-779) does an exact, case-sensitive name match —
+	// same normalize+exact treatment as handleGuildRemove/Promote/Demote/notes.
+	newMasterName = normalizePlayerName(newMasterName)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -1223,7 +1234,7 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	var newLeaderName string
 	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, c.name FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, newMasterName).Scan(&newLeaderGUID, &newLeaderName)
+		WHERE gm.guildid = ? AND c.name = ? LIMIT 1`, guildID, newMasterName).Scan(&newLeaderGUID, &newLeaderName)
 	if err != nil || newLeaderGUID == 0 || uint64(newLeaderGUID) == s.playerGUID {
 		return true
 	}
