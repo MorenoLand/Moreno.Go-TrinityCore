@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -129,7 +131,7 @@ func (s *session) handleNPCAddTable(ctx context.Context, args []string) {
 	rest := args[1:]
 	switch {
 	case strings.HasPrefix("formation", sub):
-		s.handleNPCAddFormation(ctx)
+		s.handleNPCAddFormation(ctx, rest)
 	case strings.HasPrefix("item", sub):
 		s.handleNPCAddItem(ctx)
 	case strings.HasPrefix("move", sub):
@@ -142,13 +144,57 @@ func (s *session) handleNPCAddTable(ctx context.Context, args []string) {
 	}
 }
 
-// handleNPCAddFormation is documented-blocked (cs_npc.cpp:1220): formations
-// need the selected live creature plus the FormationMgr bridge.
-func (s *session) handleNPCAddFormation(ctx context.Context) {
+// handleNPCAddFormation mirrors HandleNpcAddFormationCommand (cs_npc.cpp):
+// the selected creature becomes a formation member under leaderGUID. Two
+// C++ quirks are replicated for 1:1 behavior: the binds put followAngle
+// into the `dist` column and followDist into `angle`
+// (WorldDatabase.cpp WORLD_INS_CREATURE_FORMATION column order vs the
+// setFloat(2, followAngle)/setFloat(3, followDist) binds), and the angle is
+// stored in degrees while the consumer reads radians. groupAI is stored 0
+// exactly like C++, so the row stays inert until groupAI gains
+// FLAG_IDLE_IN_FORMATION (0x200) — LeaderStartedMoving skips members
+// without it, in both trees.
+func (s *session) handleNPCAddFormation(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCAddFormation) {
 		return
 	}
-	s.sendSysMessage("npc add formation is not supported: live creature selection and the formation manager have no Go bridge.")
+	if len(args) < 1 {
+		s.sendSysMessage("Syntax: .npc add formation $leaderGUID")
+		return
+	}
+	leaderGUID, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil || leaderGUID == 0 {
+		s.sendSysMessage("Invalid leader GUID.")
+		return
+	}
+	if uint16(s.selection>>48) != 0xF130 {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	memberLow := uint32(s.selection & 0x00FFFFFF)
+	if memberLow == 0 {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	server := s.server
+	if row, ok := server.formationRowFor(memberLow); ok {
+		s.sendSysMessage(fmt.Sprintf("Selected creature is already member of group %d", row.leaderGUID))
+		return
+	}
+	member := s.findCreatureMotion(s.selection)
+	if member == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	followAngle := (math.Atan2(float64(s.player.Y-member.Y), float64(s.player.X-member.X)) - float64(s.player.Orientation)) * 180.0 / math.Pi
+	followDist := math.Hypot(float64(s.player.X-member.X), float64(s.player.Y-member.Y))
+	if _, err := server.WorldStore.DB.ExecContext(ctx, "INSERT INTO creature_formations (leaderGUID, memberGUID, dist, angle, groupAI) VALUES (?, ?, ?, ?, ?)", uint32(leaderGUID), memberLow, float32(followAngle), float32(followDist), 0); err != nil {
+		s.sendSysMessage("Failed to store the formation row.")
+		return
+	}
+	server.ensureFormationsLoaded(ctx)
+	server.addFormationRow(memberLow, formationRow{leaderGUID: uint32(leaderGUID), dist: float32(followAngle), angle: float32(followDist)})
+	s.sendSysMessage(fmt.Sprintf("Creature %d added to formation with leader %d", memberLow, uint32(leaderGUID)))
 }
 
 // handleNPCAddItem is documented-blocked (cs_npc.cpp:177): vendor-list edits

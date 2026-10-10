@@ -210,7 +210,20 @@ type creatureMotion struct {
 	// (Spell::EffectDistract, SpellEffects.cpp:2547): the creature turned to
 	// face the distraction and pauses wandering until this time. Zero when
 	// not distracted.
-	DistractedUntil time.Time
+	DistractedUntil         time.Time
+	FormationLeadGUID       uint64    // leader world GUID once LeaderStartedMoving pulls this member into formation (CreatureGroups.cpp:280)
+	FormationDist           float32   // formation slot distance (creature_formations.dist)
+	FormationAngle          float32   // formation slot angle (FollowAngle + pi; LeaderStartedMoving inverts the DB angle)
+	FormationPoint1         uint32    // leader waypoint id that mirrors the slot angle (creature_formations.point_1)
+	FormationPoint2         uint32    // second leader waypoint id that mirrors the slot angle (creature_formations.point_2)
+	FormationActive         bool      // member moves on the leader's spline rhythm; suppresses its own wander/waypoint legs
+	FormationPredicted      bool      // _hasPredictedDestination: member launched against a moving leader
+	FormationLeaderMoveEnds time.Time // leader MoveEnds of the spline the member last launched against (movespline GetId analog)
+	FormationNextCheck      time.Time // next FORMATION_MOVEMENT_INTERVAL (1200ms) re-check
+	FormationLeaderX        float32   // leader X at last re-check (DoUpdate's _lastLeaderPosition)
+	FormationLeaderY        float32   // leader Y at last re-check
+	MoveHeading             float32   // travel heading of the current leg, recorded at launch (FormationMovementGenerator's relativeAngle)
+	MoveVelocity            float32   // speed of the current leg, recorded at launch (movespline Velocity analog for catchup)
 }
 
 type waypointPoint struct {
@@ -2650,6 +2663,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
 		return
 	}
+	// FormationMovementGenerator::DoUpdate (FormationMovementGenerator.cpp):
+	// a member pulled into formation moves on the leader's spline rhythm
+	// instead of its own wander/waypoint legs. Combat takes precedence (the
+	// C++ chase generator is pushed over the formation generator), and while
+	// the member's own leg is in flight the tick returns at the Moving gate
+	// above — C++ would relaunch mid-spline on a new leader spline, which
+	// the atomic-spline model cannot express (documented delta; the 1200ms
+	// interval re-check picks it up on the next tick).
+	if motion.FormationActive && !motion.InCombat {
+		if s.stepFormationMember(motion, now) {
+			return
+		}
+	}
 	var destX, destY, destZ float32
 	var speed float32
 	var wait time.Duration
@@ -2733,11 +2759,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 	}
 	duration := splineDurationMs(moveDist, speed)
+	// The leg's travel heading and speed are recorded for the formation slot
+	// predictor (FormationMovementGenerator's relativeAngle and the 1.65s
+	// catchup): the atomic-spline model jumps to the destination at launch,
+	// so the heading would otherwise be lost.
+	motion.MoveHeading = float32(math.Atan2(float64(destY-motion.Y), float64(destX-motion.X)))
+	motion.MoveVelocity = speed
 	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk, facing, hasFacing)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
+	// Creature::SignalFormationMovement (Creature.cpp:362-369) via
+	// CreatureGroup::LeaderStartedMoving (CreatureGroups.cpp:280-295): a
+	// leader launching an idle-path leg pulls FLAG_IDLE_IN_FORMATION members
+	// into formation movement. PointMovementGenerator's two signal sites
+	// have no Go analog (no MovePoint launch); wander/waypoint cover this
+	// leg launcher.
+	s.formationLeaderStartedMoving(ctx, motion, now)
 }
 
 // noGrayAggroBlocked ports Creature::CheckNoGrayAggroConfig

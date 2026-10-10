@@ -173,6 +173,10 @@ type Server struct {
 	groups                    map[uint64]*groupState // groupID -> groupState
 	motionMu                  sync.Mutex
 	instanceCreatureMotion    map[instanceAdmissionKey]map[uint64]*creatureMotion
+	formationMu               sync.RWMutex
+	formationRows             map[uint32]formationRow // creature_formations by member low GUID (FormationMgr::_creatureGroupMap)
+	formationLeaders          map[uint32][]uint32     // leader low GUID -> member low GUIDs
+	formationLoaded           bool
 	creatureRespawns          map[uint32]creatureRespawn
 	instanceCreatureRespawns  map[instanceAdmissionKey]map[uint32]creatureRespawn
 	transportMu               sync.Mutex
