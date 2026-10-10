@@ -370,10 +370,9 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	}
 	reader := protocol.NewReader(payload)
 	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:122: recvData >> auctioneer).
+	// The NPC interact check sits AFTER the max-money gate in C++
+	// (AuctionHouseHandler.cpp:164-169), not up front — see below.
 	auctioneer, _ := reader.ReadU64()
-	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
-		return true
-	}
 	itemCount, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -420,6 +419,14 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	// buyout above MAX_MONEY_AMOUNT answers ERR_AUCTION_DATABASE_ERROR.
 	if bid > maxMoneyAmount || buyout > maxMoneyAmount {
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionSellItem, errAuctionDatabaseError), true)
+		return true
+	}
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:164-169): the NPC
+	// interact check fires here, AFTER the max-money gate — an over-limit
+	// bid answers ERR_AUCTION_DATABASE_ERROR even when the player is
+	// nowhere near an auctioneer. (The faction->house-entry lookup at
+	// :171-177 has no Go model: the AH is house-agnostic.)
+	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:175-184): the client
@@ -1292,7 +1299,12 @@ func writeAuctionInfo(buf *protocol.Buffer, a auctionRecord) {
 	}
 	buf.WriteU32(a.ID)
 	buf.WriteU32(a.ItemEntry)
-	for i := 0; i < 6; i++ {
+	// C++ AuctionEntry::BuildAuctionInfo (AuctionHouseMgr.cpp:849): the
+	// enchantment block is MAX_INSPECTED_ENCHANTMENT_SLOT = 7 triples
+	// (ItemDefines.h:153), not 6 — one slot short shifts every later field
+	// by 12 bytes on the wire. The Go item model keeps no enchantment
+	// data, so the seven triples stay zeroed.
+	for i := 0; i < 7; i++ {
 		buf.WriteU32(0)
 		buf.WriteU32(0)
 		buf.WriteU32(0)
@@ -1333,17 +1345,14 @@ func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []b
 		return true
 	}
 	// WorldSession::HandleAuctionListPendingSales (AuctionHouseHandler.cpp:812-830):
-	// the handler skips the auctioneer GUID and always answers a zero count —
-	// the per-sale loop in C++ is commented out, so no sale data is ever sent.
+	// the handler only skips the 8-byte auctioneer GUID (read_skip<uint64>)
+	// and always answers a zero count — the per-sale loop in C++ is
+	// commented out, so no sale data is ever sent, and there is NO NPC
+	// interact check on this path (a prior Go implementation gated on
+	// canInteractWithNPC, an invented restriction that dropped the answer
+	// whenever the player was away from an auctioneer).
 	// (A prior Go implementation parsed pending-sale mails here; that was
 	// invented behavior with no C++ arm, removed for fidelity.)
-	if len(payload) >= 8 {
-		r := protocol.NewReader(payload)
-		auctioneer, _ := r.ReadU64() // auctioneer GUID (reference AuctionHouseHandler.cpp:816)
-		if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
-			return true
-		}
-	}
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(0)
 	return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
