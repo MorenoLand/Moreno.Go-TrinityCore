@@ -4379,9 +4379,9 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	// PetitionsHandler.cpp:52 — the NPC guid is packed on the wire; a raw
-	// ReadU64 misparses it and the buy silently never worked.
-	npcGUID, _ := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:52 — `recvData >> guidNPC` reads a raw 8-byte
+	// GUID (operator>>(ObjectGuid&) is a raw uint64 read, ObjectGuid.cpp:76).
+	npcGUID, _ := r.ReadU64()
 	_, _ = r.ReadU32() // 0
 	_, _ = r.ReadU64() // 0
 	name, err := r.ReadCString()
@@ -4524,8 +4524,8 @@ func (s *session) handlePetitionShowSignatures(ctx context.Context, payload []by
 		return true
 	}
 	r := protocol.NewReader(payload)
-	// PetitionsHandler.cpp:223 — packed guid on the wire.
-	petitionGUID, err := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:223 — `recvData >> petitionGuid`: raw 8-byte GUID.
+	petitionGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -4541,8 +4541,8 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 	}
 	r := protocol.NewReader(payload)
 	_, _ = r.ReadU32() // guild GUID (client echo; the reference answers the petition GUID low32)
-	// PetitionsHandler.cpp:266 — packed guid follows the u32 echo.
-	petitionGUID, err := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:266 — `recvData >> petitionguid`: raw 8-byte GUID.
+	petitionGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -4604,9 +4604,9 @@ func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	// PetitionsHandler.cpp:386-387 — packed guid + u8 unk on the wire; the
-	// unk byte carries no data (Go ignores the tail).
-	petitionGUID, err := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:386-387 — `recvData >> petitionGuid` is a raw
+	// 8-byte GUID; the u8 unk tail carries no data (Go ignores the tail).
+	petitionGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -4698,8 +4698,8 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 		return true
 	}
 	r := protocol.NewReader(payload)
-	// PetitionsHandler.cpp:592 — packed guid on the wire.
-	petitionGUID, err := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:592 — `recvData >> petitionguid`: raw 8-byte GUID.
+	petitionGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -4846,9 +4846,10 @@ func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool 
 	}
 	r := protocol.NewReader(payload)
 	_, _ = r.ReadU32() // junk
-	// PetitionsHandler.cpp:530-532 — both guids are packed on the wire.
-	petitionGUID, _ := r.ReadPackedGUID()
-	targetGUID, _ := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:530-532 — `recvData >> petitionGuid >> offererGuid`:
+	// raw 8-byte GUIDs.
+	petitionGUID, _ := r.ReadU64()
+	targetGUID, _ := r.ReadU64()
 
 	if s.server != nil {
 		targetSess := s.server.findSessionByGUID(targetGUID)
@@ -4887,8 +4888,8 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 		return true
 	}
 	r := protocol.NewReader(payload)
-	// PetitionsHandler.cpp:745 — packed guid on the wire.
-	npcGUID, _ := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:745 — `recvData >> guid`: raw 8-byte GUID.
+	npcGUID, _ := r.ReadU64()
 
 	// PetitionsHandler.cpp:743-749: the list is served only by an
 	// interactable petitioner NPC. Go lists only the guild charter row;
@@ -4929,8 +4930,8 @@ func (s *session) handlePetitionDecline(ctx context.Context, payload []byte) boo
 		return true
 	}
 	r := protocol.NewReader(payload)
-	// PetitionsHandler.cpp:496 — packed guid on the wire.
-	petitionGUID, _ := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:496 — `recvData >> petitionguid`: raw 8-byte GUID.
+	petitionGUID, _ := r.ReadU64()
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil && petitionGUID > 0 {
@@ -4957,8 +4958,9 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 		return true
 	}
 	r := protocol.NewReader(payload)
-	// PetitionsHandler.cpp:325-326 — packed guid + name string on the wire.
-	petitionGUID, err := r.ReadPackedGUID()
+	// PetitionsHandler.cpp:325-326 — `recvData >> petitionGuid`: raw 8-byte
+	// GUID, followed by the name string.
+	petitionGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}

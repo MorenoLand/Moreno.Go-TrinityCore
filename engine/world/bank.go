@@ -67,9 +67,10 @@ func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool
 		return false
 	}
 	r := protocol.NewReader(payload)
-	// NPCPackets.h (Hello::Unit) and the client send a PACKED guid; a raw
-	// ReadU64 misparses it and the activate silently never worked.
-	bankerGUID, err := r.ReadPackedGUID()
+	// NPC::Hello::Read (NPCPackets.cpp:20-23) does `_worldPacket >> Unit`;
+	// ByteBuffer's operator>>(ObjectGuid&) reads a raw 8-byte GUID
+	// (ObjectGuid.cpp:76-80), not a packed one.
+	bankerGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -99,9 +100,10 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	r := protocol.NewReader(payload)
-	// BankPackets.h (BuyBankSlot::Banker) is a packed ObjectGuid on the
-	// wire; ReadU64 misparses it.
-	bankerGUID, err := r.ReadPackedGUID()
+	// Bank::BuyBankSlot::Read (BankPackets.cpp:32-35) does
+	// `_worldPacket >> Banker` — a raw 8-byte GUID read
+	// (ObjectGuid.cpp:76-80), not packed.
+	bankerGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}

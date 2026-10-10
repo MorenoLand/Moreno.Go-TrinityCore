@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -356,6 +357,13 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	friendNote, _ := r.ReadCString()
+	// C++ normalizePlayerName (ObjectMgr.cpp:141-158) fails on empty or
+	// invalid-UTF-8 names, and the handler returns silently with no packet
+	// (SocialHandler.cpp:51). The empty case is covered above; invalid
+	// UTF-8 must not fall through to a FRIEND_NOT_FOUND answer.
+	if !utf8.ValidString(friendName) {
+		return true
+	}
 	// TrinityCore: HandleAddFriendOpcode normalizes the name before the lookup.
 	friendName = normalizePlayerName(friendName)
 
@@ -491,6 +499,11 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 	ignoreName, err := r.ReadCString()
 	if err != nil || ignoreName == "" {
 		return false
+	}
+	// Same normalize-failure silent return as the add-friend arm
+	// (SocialHandler.cpp:133).
+	if !utf8.ValidString(ignoreName) {
+		return true
 	}
 	// TrinityCore: HandleAddIgnoreOpcode normalizes the name before the lookup.
 	ignoreName = normalizePlayerName(ignoreName)

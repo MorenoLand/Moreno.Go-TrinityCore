@@ -141,8 +141,10 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	}
 	s.expireAuctions(ctx)
 	reader := protocol.NewReader(payload)
-	// CMSG_AUCTION_HELLO carries a packed NPC GUID (AuctionHouseHandler.cpp:42).
-	guid, err := reader.ReadPackedGUID()
+	// CMSG_AUCTION_HELLO carries the auctioneer as a raw 8-byte GUID
+	// (AuctionHouseHandler.cpp:42: recvData >> guid — ByteBuffer's
+	// operator>>(ObjectGuid&) reads a raw uint64, not a packed GUID).
+	guid, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -177,8 +179,8 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	}
 	s.expireAuctions(ctx)
 	reader := protocol.NewReader(payload)
-	// Packed NPC GUID (AuctionHouseHandler.cpp:747).
-	auctioneer, _ := reader.ReadPackedGUID()
+	// Raw 8-byte NPC GUID (AuctionHouseHandler.cpp:747: recvData >> guid).
+	auctioneer, _ := reader.ReadU64()
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
@@ -367,8 +369,8 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	// Packed auctioneer GUID (AuctionHouseHandler.cpp:122).
-	auctioneer, _ := reader.ReadPackedGUID()
+	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:122: recvData >> auctioneer).
+	auctioneer, _ := reader.ReadU64()
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
@@ -385,8 +387,8 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	itemGUIDs := make([]int64, 0, itemCount)
 	stackCounts := make([]uint32, 0, itemCount)
 	for i := uint32(0); i < itemCount; i++ {
-		// Packed item GUIDs (AuctionHouseHandler.cpp:139: recvData >> itemGUIDs[i]).
-		rawItemGUID, rerr := reader.ReadPackedGUID()
+		// Raw 8-byte item GUIDs (AuctionHouseHandler.cpp:139: recvData >> itemGUIDs[i]).
+		rawItemGUID, rerr := reader.ReadU64()
 		if rerr != nil {
 			return false
 		}
@@ -586,8 +588,8 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	// Packed auctioneer GUID (AuctionHouseHandler.cpp:432).
-	auctioneer, _ := reader.ReadPackedGUID()
+	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:432: recvData >> auctioneer).
+	auctioneer, _ := reader.ReadU64()
 	auctionID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -815,8 +817,8 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	if len(payload) < 1 {
 		return true
 	}
-	// Packed auctioneer GUID (AuctionHouseHandler.cpp:712).
-	auctioneer, _ := protocol.NewReader(payload).ReadPackedGUID()
+	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:712: recvData >> guid).
+	auctioneer, _ := protocol.NewReader(payload).ReadU64()
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
@@ -875,15 +877,15 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	var outbidIDs []uint32
 	if len(payload) >= 1 {
 		r := protocol.NewReader(payload)
-		// Packed auctioneer GUID (AuctionHouseHandler.cpp:657).
-		auctioneer, _ := r.ReadPackedGUID()
+		// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:657: recvData >> guid).
+		auctioneer, _ := r.ReadU64()
 		_, _ = r.ReadU32() // listFrom, unused
 		outbiddedCount, _ := r.ReadU32()
 		// C++ HandleAuctionListBidderItems (AuctionHouseHandler.cpp:659-663):
 		// a bad packet size zeroes the outbidded count instead of trusting it.
-		// The constant 16 is C++'s own (it assumes an 8-byte GUID even though
-		// the GUID on the wire is packed); int64 arithmetic keeps short
-		// packets on the zero-the-count path instead of underflowing.
+		// The constant 16 is C++'s own: 8-byte raw GUID + u32 listFrom + u32
+		// outbiddedCount; int64 arithmetic keeps short packets on the
+		// zero-the-count path instead of underflowing.
 		if int64(outbiddedCount)*4 != int64(len(payload))-16 {
 			outbiddedCount = 0
 		}
@@ -978,8 +980,8 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	// Packed auctioneer GUID (AuctionHouseHandler.cpp:580).
-	auctioneer, _ := reader.ReadPackedGUID()
+	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:580: recvData >> auctioneer).
+	auctioneer, _ := reader.ReadU64()
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
