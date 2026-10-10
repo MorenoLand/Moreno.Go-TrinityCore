@@ -22,6 +22,10 @@ const (
 	// KNOCK_BACK_DEST.
 	creatureFlagExtraImmunityKnockback = 0x40000000
 	attackDisplayDelay                 = 200 * time.Millisecond
+	// MAX_SHEATH_STATE (UnitDefines.h:98): sheath states run 0 (unarmed) to
+	// 2 (ranged); HandleSetSheathedOpcode (CombatHandler.cpp) rejects anything
+	// at or past this value.
+	maxSheathState = 3
 )
 
 // haveOffhandWeapon checks if the player has an offhand weapon equipped.
@@ -1367,6 +1371,10 @@ func (s *session) handleAttackStop() bool {
 	}
 	victim := s.attackTarget
 	s.attackTarget = 0
+	// Unit::AttackStop (Unit.cpp:5778) interrupts CURRENT_MELEE_SPELL — the
+	// queued on-next-swing spell (Heroic Strike et al.) never lands after a
+	// stop; Go's nextSwing model is that slot (server.go:494).
+	s.cancelNextSwingSpell()
 	if s.autoRepeatSpell != 0 {
 		s.autoRepeatSpell = 0
 		s.autoRepeatTarget = 0
@@ -1413,6 +1421,12 @@ func (s *session) handleSetSheathed(payload []byte) bool {
 	state, err := reader.ReadU32()
 	if err != nil {
 		return false
+	}
+	// HandleSetSheathedOpcode (CombatHandler.cpp:73-78): sheath states at or
+	// past MAX_SHEATH_STATE are logged and dropped without touching state.
+	if state >= maxSheathState {
+		s.debug("unknown sheath state rejected", "account", s.accountName, "state", state)
+		return true
 	}
 	s.player.SheathState = uint8(state)
 	s.sendPlayerUpdate()
