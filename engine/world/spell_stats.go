@@ -1070,25 +1070,35 @@ func (s *session) criticalHealingAmountMultiplier() float64 {
 }
 
 // spellCriticalHealingBonus mirrors Unit::SpellCriticalHealingBonus
-// (Unit.cpp:7453-7479): base 50% bonus (default DmgClass; no Go DmgClass
-// model), the 169 versus arm multiplicative on the BONUS half by victim
-// creature-type mask, then the 50 (MOD_CRITICAL_HEALING_AMOUNT) product over
-// the whole. The 163/talent/meta damage arms do NOT apply to heals.
-func (s *session) spellCriticalHealingBonus(ctx context.Context, heal uint32, targetGUID uint64) uint32 {
-	if s == nil || s.player == nil {
-		return heal + heal/2
-	}
+// (Unit.cpp:7453-7479): melee/ranged-DmgClass heals take a 100% bonus,
+// everything else 50% (damage/2). The 169 (MOD_CRIT_PERCENT_VERSUS) arm
+// runs only when the C++ caller passes a victim: the direct-heal hit arm
+// (Spell.cpp:2507) passes nullptr so versus is skipped there (applyVersus
+// false), while the periodic tick (SpellAuraEffects.cpp:5391) passes the
+// target. The 163/talent/meta damage arms do NOT apply to heals.
+func (s *session) spellCriticalHealingBonus(ctx context.Context, heal uint32, targetGUID uint64, dmgClass uint32, applyVersus bool) uint32 {
 	critBonus := int64(heal) / 2
-	if versus := s.casterVersusAuras(); len(versus) > 0 && targetGUID != 0 {
-		mask, _ := s.targetCreatureTypeMask(ctx, targetGUID)
-		versusMult := 1.0
-		for _, a := range versus {
-			if mask != 0 && uint32(a.misc)&mask != 0 {
-				versusMult *= 1.0 + float64(a.amount)/100.0
-			}
+	if dmgClass == spellDamageClassMelee || dmgClass == spellDamageClassRanged {
+		critBonus = int64(heal)
+	}
+	if s == nil || s.player == nil {
+		if critBonus > 0 {
+			return heal + uint32(critBonus)
 		}
-		if versusMult != 1.0 {
-			critBonus = int64(float64(critBonus) * versusMult)
+		return heal
+	}
+	if applyVersus {
+		if versus := s.casterVersusAuras(); len(versus) > 0 && targetGUID != 0 {
+			mask, _ := s.targetCreatureTypeMask(ctx, targetGUID)
+			versusMult := 1.0
+			for _, a := range versus {
+				if mask != 0 && uint32(a.misc)&mask != 0 {
+					versusMult *= 1.0 + float64(a.amount)/100.0
+				}
+			}
+			if versusMult != 1.0 {
+				critBonus = int64(float64(critBonus) * versusMult)
+			}
 		}
 	}
 	damage := int64(heal)

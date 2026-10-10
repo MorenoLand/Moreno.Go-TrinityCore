@@ -12474,7 +12474,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	s.updateAchievementCriteria(criteriaTypeDamageDone, 0, damageDone)
 	s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2524-2530): the
+	// IsImmunedToDamage arm zeroes the damage and sends NO damage-log
+	// packet ("no packet found in sniffs") — the immunity shows only via
+	// the miss path, never SMSG_SPELLNONMELEEDAMAGELOG.
+	if !immune {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
+	}
 
 	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor);
 	// suppressed for triggered casts (TRIGGERED_DISALLOW_PROC_EVENTS parity).
@@ -12490,19 +12496,6 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			targetCantProc = ts.procDeep > 0
 		}
 	}
-	// Item combat spells fire on spell hits only for melee/ranged
-	// damage-class spells (Spell.cpp:2588-2596); magic-damage-class spells
-	// never qualify. They also require a landed, non-immune, non-fully-
-	// resisted hit: C++ evaluates the item-spell table only when canTrigger
-	// holds (Player.cpp:8109), and a miss (PROC_HIT_MISS), immunity
-	// (PROC_HIT_IMMUNE), or full resist (PROC_HIT_FULL_RESIST) never
-	// intersects the default hit mask.
-	if s.triggeredNoProcEvents == 0 && !targetCantProc && s.spellHitMayFireItemProcs(spellID) &&
-		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
-		s.procSpellCastAndHitEffects(ctx, target, spellID)
-		s.procWeaponEnchantProcsFromSpellHit(ctx, target, !(damage >= target.Health && target.Health > 0))
-	}
-
 	// Real aura procs on the spell-hit event (TrinityCore
 	// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
 	// Spell.cpp:2427-2579): the event carries the casting spell and the
@@ -12535,6 +12528,21 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		}
 	}
 
+	// Item combat spells fire on spell hits only for melee/ranged
+	// damage-class spells; magic-damage-class spells never qualify. They
+	// also require a landed, non-immune, non-fully-resisted hit: C++
+	// evaluates the item-spell table only when canTrigger holds
+	// (Player.cpp:8109), and a miss (PROC_HIT_MISS), immunity
+	// (PROC_HIT_IMMUNE), or full resist (PROC_HIT_FULL_RESIST) never
+	// intersects the default hit mask. The table runs AFTER the aura
+	// triggers: Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2553-2570)
+	// calls Unit::ProcSkillsAndAuras first, then CastItemCombatSpell.
+	if s.triggeredNoProcEvents == 0 && !targetCantProc && s.spellHitMayFireItemProcs(spellID) &&
+		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
+		s.procSpellCastAndHitEffects(ctx, target, spellID)
+		s.procWeaponEnchantProcsFromSpellHit(ctx, target, !(damage >= target.Health && target.Health > 0))
+	}
+
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
 		s.player.UnitFlags |= unitFlagInCombat
@@ -12559,7 +12567,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
-			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
+			// The IsImmunedToDamage arm (Spell.cpp:2524-2530) sends no damage-log
+			// packet; the victim-side send is gated the same as the caster's.
+			if !immune {
+				_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
+			}
 			victimHealth := playerSess.player.Health
 			// Duel defeat (Unit.cpp:825-853, 957-973): any damage >= health-1
 			// on a duelist ends the duel — the clamped hit leaves the loser
@@ -14439,7 +14451,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
 	isCrit := s.rollSpellCrit(0, 2, healSpell)
 	if isCrit {
-		heal = s.spellCriticalHealingBonus(ctx, heal, targetGUID)
+		heal = s.spellCriticalHealingBonus(ctx, heal, targetGUID, healSpell.DefenseType, false)
 	}
 
 	effectiveHeal := heal
@@ -20340,7 +20352,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if forceCrit || rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), healSpell, takenCritBonus) {
 				healCrit = true
 				if healKnown {
-					heal = healCaster.spellCriticalHealingBonus(context.Background(), heal, aura.TargetGUID)
+					heal = healCaster.spellCriticalHealingBonus(context.Background(), heal, aura.TargetGUID, healSpell.DefenseType, true)
 				} else {
 					heal += heal / 2
 				}
@@ -21452,7 +21464,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				healCrit = true
-				heal = tickCaster.spellCriticalHealingBonus(ctx, heal, aura.TargetGUID)
+				heal = tickCaster.spellCriticalHealingBonus(ctx, heal, aura.TargetGUID, tickSpell.DefenseType, true)
 			}
 		}
 		curHP := target.Health
