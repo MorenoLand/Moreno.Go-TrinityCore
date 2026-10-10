@@ -826,12 +826,15 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 
 // handleControllerEjectPassenger processes CMSG_CONTROLLER_EJECT_PASSENGER (0x4A9).
 // Reference: WorldSession::HandleEjectPassenger (VehicleHandler.cpp:151-188).
+// The ejected GUID is a RAW 8-byte read (VehicleHandler.cpp:159: `data >> guid`
+// — ObjectGuid.cpp:76-80 raw semantics, not ReadAsPacked), so Go reads it with
+// ReadU64; the old ReadPackedGUID misparsed every eject request.
 func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	passGUID, err := r.ReadPackedGUID()
+	passGUID, err := r.ReadU64()
 	if err != nil || passGUID == 0 {
 		return true
 	}
@@ -893,10 +896,11 @@ func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) 
 		return true
 	}
 	r := protocol.NewReader(payload)
-	// The packet carries only a packed player GUID (VehicleHandler.cpp:132);
-	// there is no seat byte. The seat defaults to "any available seat"
-	// (Unit::EnterVehicle seatId = -1, Unit.cpp:13073).
-	vehGUID, err := r.ReadPackedGUID()
+	// VehicleHandler.cpp:132 reads the player GUID raw (`data >> guid` —
+	// ObjectGuid.cpp:76-80 raw 8-byte semantics, not ReadAsPacked), so Go
+	// reads it with ReadU64; the old ReadPackedGUID misparsed the packet and
+	// player-vehicle entry never fired.
+	vehGUID, err := r.ReadU64()
 	if err != nil || vehGUID == 0 {
 		return true
 	}
@@ -1008,14 +1012,11 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 	}
 	seat := int8(payload[0])
 	if len(payload) >= 2 {
+		// Packet layout is a packed vehicle GUID followed by the int8 seat id
+		// (VehicleHandler.cpp:111-114: `recvData >> guid.ReadAsPacked()` then
+		// `recvData >> seatId`) — packed only, no raw fallback.
 		r := protocol.NewReader(payload)
 		if _, err := r.ReadPackedGUID(); err == nil {
-			if sByte, err := r.ReadU8(); err == nil {
-				seat = int8(sByte)
-			}
-		} else if len(payload) >= 9 {
-			r = protocol.NewReader(payload)
-			_, _ = r.ReadU64()
 			if sByte, err := r.ReadU8(); err == nil {
 				seat = int8(sByte)
 			}
