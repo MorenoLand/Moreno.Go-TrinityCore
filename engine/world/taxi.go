@@ -694,7 +694,6 @@ func (s *session) handleSetTaxiBenchmarkMode(ctx context.Context, payload []byte
 		return true
 	}
 	mode := payload[0]
-	const playerFlagTaxiBenchmark uint32 = 0x04000000
 	if mode != 0 {
 		s.player.PlayerFlags |= playerFlagTaxiBenchmark
 	} else {

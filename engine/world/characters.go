@@ -32,6 +32,7 @@ const (
 	playerFlagOutOfBounds        uint32 = 0x00004000 // PLAYER_FLAGS_IS_OUT_OF_BOUNDS (Player.h:347) — cleared by Player::RepopAtGraveyard
 	playerFlagInPVP              uint32 = 0x00000200
 	playerFlagPVPTimer           uint32 = 0x00040000
+	playerFlagTaxiBenchmark      uint32 = 0x00020000 // PLAYER_FLAGS_TAXI_BENCHMARK (Player.h:350)
 	playerFlagContestedPVP       uint32 = 0x00000100
 	characterCustomizeNone       uint32 = 0
 	characterCustomizeCustomize  uint32 = 0x00000001
@@ -2884,9 +2885,12 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 // handleCompleteMovie processes CMSG_COMPLETE_MOVIE (0x465).
 // Reference: WorldSession::HandleCompleteMovie (MiscHandler.cpp:969).
 func (s *session) handleCompleteMovie(ctx context.Context, payload []byte) bool {
-	if s.player != nil {
-		s.player.Movie = 0
+	if s.player == nil || s.player.Movie == 0 {
+		return true
 	}
+	s.player.Movie = 0
+	// No OnMovieComplete consumer: no script implements it in the C++ tree, so the
+	// sScriptMgr->OnMovieComplete arm (MiscHandler.cpp:969-975) has no bridge target.
 	s.debug("movie completed", "account", s.accountName)
 	return true
 }
