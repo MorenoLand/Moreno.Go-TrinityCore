@@ -353,10 +353,17 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	}
 	r := protocol.NewReader(payload)
 	friendName, err := r.ReadCString()
-	if err != nil || friendName == "" {
+	if err != nil {
 		return false
 	}
 	friendNote, _ := r.ReadCString()
+	// C++ normalizePlayerName (ObjectMgr.cpp:141-149) fails on an empty name
+	// and HandleAddFriendOpcode returns silently with no packet
+	// (SocialHandler.cpp:49-52): an empty name is not a malformed packet, so
+	// it must not disconnect the session the way a truncated read does.
+	if friendName == "" {
+		return true
+	}
 	// C++ normalizePlayerName (ObjectMgr.cpp:141-158) fails on empty or
 	// invalid-UTF-8 names, and the handler returns silently with no packet
 	// (SocialHandler.cpp:51). The empty case is covered above; invalid
@@ -497,8 +504,13 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 	}
 	r := protocol.NewReader(payload)
 	ignoreName, err := r.ReadCString()
-	if err != nil || ignoreName == "" {
+	if err != nil {
 		return false
+	}
+	// Same empty-name silent return as the add-friend arm
+	// (SocialHandler.cpp:131-134): an empty name is not a malformed packet.
+	if ignoreName == "" {
+		return true
 	}
 	// Same normalize-failure silent return as the add-friend arm
 	// (SocialHandler.cpp:133).
