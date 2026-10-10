@@ -36,11 +36,12 @@ const (
 
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
-	spellAttr1NotBreakStealth  uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
-	spellAttr1NoThreat         uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr1DismissPet       uint32 = 0x00000001 // SPELL_ATTR1_DISMISS_PET (SharedDefines.h:449) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr1MeleeCombatStart uint32 = 0x00000200 // SPELL_ATTR1_MELEE_COMBAT_START (SharedDefines.h:458) — caster begins auto-attack on cast
-	spellAttr3NoInitialAggro   uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
+	spellAttr1NotBreakStealth    uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
+	spellAttr1NoThreat           uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1DismissPet         uint32 = 0x00000001 // SPELL_ATTR1_DISMISS_PET (SharedDefines.h:449) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1MeleeCombatStart   uint32 = 0x00000200 // SPELL_ATTR1_MELEE_COMBAT_START (SharedDefines.h:458) — caster begins auto-attack on cast
+	spellAttr1ChannelTrackTarget uint32 = 0x00004000 // SPELL_ATTR1_CHANNEL_TRACK_TARGET (SharedDefines.h:463) — while channeling, adjust facing to face target
+	spellAttr3NoInitialAggro     uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
 
 	spellAttr0Ability                      uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
 	spellAttr0CantCancel                   uint32 = 0x80000000 // SPELL_ATTR0_CANT_CANCEL (SharedDefines.h:443)
@@ -15689,7 +15690,23 @@ type activeAura struct {
 	PersistentAreaAura bool
 	Timer              *time.Timer
 	TickTimer          *time.Timer
-	Stopped            bool
+	// TickDueAt is the wall-clock deadline of the pending TickTimer, set
+	// whenever the tick chain is (re)scheduled. expirePlayerAura /
+	// expireCreatureAura use it to spot a tick due within one C++ world-
+	// update quantum (50ms) of expiry: C++ Aura::UpdateOwner runs
+	// AuraEffect::Update after Aura::Update zeroes the duration, and the
+	// (ticksDone+1) > totalTicks cap (SpellAuraEffects.cpp:827) still
+	// passes on the final aligned tick, so that tick fires instead of
+	// being dropped by the expiry timer winning the same-deadline race.
+	TickDueAt time.Time
+	// TickInFlight is set while a tick callback is past its Stopped check
+	// and executing, so the expiry path never fires a duplicate final tick.
+	TickInFlight bool
+	// UpkeepTimer is the m_timeCla 1s power-upkeep chain of Aura::Update
+	// (SpellAuras.cpp:838-857): spells with ManaPerSecond drain the caster
+	// every second, and the aura is removed when the caster cannot pay.
+	UpkeepTimer *time.Timer
+	Stopped     bool
 }
 
 func isHarmfulAura(auraType uint32) bool {
@@ -16392,6 +16409,7 @@ func (s *Server) clearCreatureAuras(key creatureAuraKey) {
 					if aura.TickTimer != nil {
 						aura.TickTimer.Stop()
 					}
+					stopAuraUpkeepTimer(aura)
 				}
 			}
 			delete(s.activeCreatureAuras, key)
@@ -16418,6 +16436,7 @@ func (s *session) clearActiveAuras() {
 				if aura.TickTimer != nil {
 					aura.TickTimer.Stop()
 				}
+				stopAuraUpkeepTimer(aura)
 				if aura.DRGroup != DiminishingNone {
 					s.applyDiminishingAura(aura.DRGroup, false)
 					aura.DRGroup = DiminishingNone
@@ -16510,6 +16529,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		if existing.TickTimer != nil {
 			existing.TickTimer.Stop()
 		}
+		stopAuraUpkeepTimer(existing)
 		// Aura::UnregisterSingleTarget (SpellAuras.cpp:1210): the replaced
 		// aura leaves the caster's single-cast list.
 		s.server.unregisterSingleCastAura(existing)
@@ -16729,6 +16749,7 @@ func (s *session) removeAura(spellID uint32) {
 			if aura.TickTimer != nil {
 				aura.TickTimer.Stop()
 			}
+			stopAuraUpkeepTimer(aura)
 			if aura.DRGroup != DiminishingNone {
 				s.applyDiminishingAura(aura.DRGroup, false)
 				aura.DRGroup = DiminishingNone
@@ -18461,6 +18482,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 					existing.TickTimer = nil
 				}
 			}
+			// Aura::RefreshDuration (SpellAuras.cpp:915-927) re-arms the 1s
+			// power upkeep (m_timeCla) on every refresh.
+			if auraUpkeepNeeded(spell) {
+				targetSess.scheduleAuraUpkeepLocked(existing)
+			}
 			slot, effectMask, charges := existing.Slot, existing.EffectMask, existing.RemainingCharges
 			targetSess.castMu.Unlock()
 			// AuraEffect::ChangeAmount -> CalculateSpellMod
@@ -18500,6 +18526,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			if existing.TickTimer != nil {
 				existing.TickTimer.Stop()
 			}
+			stopAuraUpkeepTimer(existing)
 			if existing.DRGroup != DiminishingNone {
 				targetSess.applyDiminishingAura(existing.DRGroup, false)
 				existing.DRGroup = DiminishingNone
@@ -18751,6 +18778,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if aura.PeriodMs > 0 {
 			targetSess.schedulePlayerPeriodicTickInitial(aura, aura.PeriodMs, periodicTickInitialDelay(spell, aura.PeriodMs))
 		}
+		// Aura constructor (SpellAuras.cpp:431-437): spells with
+		// ManaPerSecond start the 1s power-upkeep timer (m_timeCla).
+		if auraUpkeepNeeded(spell) {
+			targetSess.scheduleAuraUpkeep(aura)
+		}
 		if durationMs > 0 && durationMs < 18000000 {
 			targetSess.castMu.Lock()
 			aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
@@ -18856,6 +18888,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				existing.TickTimer = nil
 			}
 		}
+		// Aura::RefreshDuration (SpellAuras.cpp:915-927) re-arms the 1s
+		// power upkeep (m_timeCla) on every refresh.
+		if auraUpkeepNeeded(spell) {
+			s.scheduleCreatureAuraUpkeepLocked(existing)
+		}
 		slot, effectMask := existing.Slot, existing.EffectMask
 		s.server.auraMu.Unlock()
 		// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a
@@ -18892,6 +18929,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if existing.TickTimer != nil {
 			existing.TickTimer.Stop()
 		}
+		stopAuraUpkeepTimer(existing)
 	}
 
 	// Unit::IsHighestExclusiveAura (Unit.cpp:13991): a fresh aura whose
@@ -18989,6 +19027,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if aura.PeriodMs > 0 {
 		s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, periodicTickInitialDelay(spell, aura.PeriodMs))
 	}
+	// Aura constructor (SpellAuras.cpp:431-437): spells with
+	// ManaPerSecond start the 1s power-upkeep timer (m_timeCla).
+	if auraUpkeepNeeded(spell) {
+		s.scheduleCreatureAuraUpkeep(aura)
+	}
 	if durationMs > 0 && durationMs < 18000000 {
 		s.server.auraMu.Lock()
 		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
@@ -19009,6 +19052,174 @@ func affectsPlayerVisibility(auraType uint32) bool {
 
 func AffectsPlayerVisibility(auraType uint32) bool {
 	return affectsPlayerVisibility(auraType)
+}
+
+// auraUpkeepIntervalMs is the m_timeCla quantum: Aura::Update drains the
+// caster's power once per second (SpellAuras.cpp:838-857).
+const auraUpkeepIntervalMs = 1000
+
+// auraUpkeepNeeded mirrors the Aura constructor / RefreshDuration arm
+// (SpellAuras.cpp:437, 922): a spell with ManaPerSecond or
+// ManaPerSecondPerLevel starts the 1s power-upkeep timer (m_timeCla).
+func auraUpkeepNeeded(spell wotlk.Spell) bool {
+	return spell.ManaPerSecond != 0 || spell.ManaPerSecondPerLevel != 0
+}
+
+// stopAuraUpkeepTimer stops the m_timeCla upkeep chain; call sites mirror
+// the TickTimer stops on aura removal.
+func stopAuraUpkeepTimer(aura *activeAura) {
+	if aura.UpkeepTimer != nil {
+		aura.UpkeepTimer.Stop()
+		aura.UpkeepTimer = nil
+	}
+}
+
+func (ts *session) scheduleAuraUpkeep(aura *activeAura) {
+	ts.castMu.Lock()
+	defer ts.castMu.Unlock()
+	ts.scheduleAuraUpkeepLocked(aura)
+}
+
+func (ts *session) scheduleAuraUpkeepLocked(aura *activeAura) {
+	stopAuraUpkeepTimer(aura)
+	aura.UpkeepTimer = time.AfterFunc(auraUpkeepIntervalMs*time.Millisecond, func() {
+		ts.castMu.Lock()
+		if aura.Stopped {
+			ts.castMu.Unlock()
+			return
+		}
+		ts.castMu.Unlock()
+		var pMap, pInst uint32
+		ts.playerStateMu.Lock()
+		if ts.player != nil {
+			pMap, pInst = ts.player.Map, ts.player.InstanceID
+		}
+		ts.playerStateMu.Unlock()
+		if !ts.server.auraUpkeepTick(aura, pMap, pInst) {
+			ts.expirePlayerAura(aura.SpellID)
+			return
+		}
+		ts.castMu.Lock()
+		if !aura.Stopped {
+			ts.scheduleAuraUpkeepLocked(aura)
+		}
+		ts.castMu.Unlock()
+	})
+}
+
+func (s *session) scheduleCreatureAuraUpkeep(aura *activeAura) {
+	if s.server == nil {
+		return
+	}
+	s.server.auraMu.Lock()
+	defer s.server.auraMu.Unlock()
+	s.scheduleCreatureAuraUpkeepLocked(aura)
+}
+
+func (s *session) scheduleCreatureAuraUpkeepLocked(aura *activeAura) {
+	stopAuraUpkeepTimer(aura)
+	aura.UpkeepTimer = time.AfterFunc(auraUpkeepIntervalMs*time.Millisecond, func() {
+		if s.server == nil {
+			return
+		}
+		s.server.auraMu.Lock()
+		if aura.Stopped {
+			s.server.auraMu.Unlock()
+			return
+		}
+		s.server.auraMu.Unlock()
+		if !s.server.auraUpkeepTick(aura, aura.TargetKey.Map, aura.TargetKey.InstanceID) {
+			s.expireCreatureAura(aura.TargetKey, aura.SpellID, aura.Slot)
+			return
+		}
+		s.server.auraMu.Lock()
+		if !aura.Stopped {
+			s.scheduleCreatureAuraUpkeepLocked(aura)
+		}
+		s.server.auraMu.Unlock()
+	})
+}
+
+// auraUpkeepTick mirrors the m_timeCla arm of Aura::Update
+// (SpellAuras.cpp:838-857): once per second the CASTER pays
+// ManaPerSecond + ManaPerSecondPerLevel * casterLevel from the spell's power
+// pool. POWER_HEALTH costs drain health and require health strictly above
+// the cost; other powers require the pool to cover the cost. When the caster
+// cannot pay, the aura is removed (C++ Remove() drops the aura without
+// paying). A caster that cannot be resolved pays nothing and the aura stays,
+// like the C++ `else if (caster)` gate. Returns false when the aura must be
+// removed.
+func (s *Server) auraUpkeepTick(aura *activeAura, mapID, instanceID uint32) bool {
+	if s == nil || s.Data == nil || aura == nil || aura.CasterGUID == 0 {
+		return true
+	}
+	spell, found, err := s.Data.Spell(aura.SpellID)
+	if err != nil || !found {
+		return true
+	}
+	if casterSess := s.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess.player != nil {
+		casterSess.playerStateMu.Lock()
+		keep := true
+		paid := false
+		cost := int32(spell.ManaPerSecond) + int32(spell.ManaPerSecondPerLevel)*int32(casterSess.player.Level)
+		switch {
+		case cost <= 0:
+		case spell.PowerType == creaturePowerHealth:
+			// C++: health must be strictly above the cost, else Remove().
+			if int32(casterSess.player.Health) > cost {
+				casterSess.player.Health -= uint32(cost)
+				paid = true
+			} else {
+				keep = false
+			}
+		case spell.PowerType < uint32(len(casterSess.player.Powers)):
+			if int32(casterSess.player.Powers[spell.PowerType]) >= cost {
+				casterSess.player.Powers[spell.PowerType] -= uint32(cost)
+				paid = true
+			} else {
+				keep = false
+			}
+		}
+		casterSess.playerStateMu.Unlock()
+		if paid {
+			casterSess.sendPlayerUpdate()
+		}
+		return keep
+	}
+	// Creature caster: drain the motion's pools in the target's instance. A
+	// caster in another instance is unresolvable here and pays nothing, like
+	// the C++ null-caster gate.
+	var fields map[int]uint32
+	keep := true
+	paid := false
+	s.motionMu.Lock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, aura.CasterGUID); motion != nil {
+		cost := int32(spell.ManaPerSecond) + int32(spell.ManaPerSecondPerLevel)*int32(motion.Level)
+		switch {
+		case cost <= 0:
+		case spell.PowerType == creaturePowerHealth:
+			if int32(motion.Health) > cost {
+				motion.Health -= uint32(cost)
+				fields = map[int]uint32{unitFieldHealth: motion.Health}
+				paid = true
+			} else {
+				keep = false
+			}
+		case spell.PowerType < uint32(len(motion.Powers)):
+			if int32(motion.Powers[spell.PowerType]) >= cost {
+				motion.Powers[spell.PowerType] -= uint32(cost)
+				fields = map[int]uint32{unitFieldPower1 + int(spell.PowerType): motion.Powers[spell.PowerType]}
+				paid = true
+			} else {
+				keep = false
+			}
+		}
+	}
+	s.motionMu.Unlock()
+	if paid {
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, aura.CasterGUID, fields)
+	}
+	return keep
 }
 
 // periodicTickInitialDelay mirrors AuraEffect::ResetPeriodic
@@ -19046,30 +19257,31 @@ func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs u
 }
 
 func (ts *session) schedulePlayerPeriodicTickLockedInitial(aura *activeAura, periodMs, initialDelayMs uint32) {
+	aura.TickDueAt = time.Now().Add(time.Duration(initialDelayMs) * time.Millisecond)
 	aura.TickTimer = time.AfterFunc(time.Duration(initialDelayMs)*time.Millisecond, func() {
 		ts.castMu.Lock()
 		if aura.Stopped || ts.player == nil || ts.player.Health == 0 {
 			ts.castMu.Unlock()
 			return
 		}
+		aura.TickInFlight = true
 		advanceAuraDuration(aura, time.Now())
 		stillRunning := aura.RemainingMs > 0 || aura.DurationMs == 0
 		ts.castMu.Unlock()
 
 		ts.executePeriodicTickOnPlayer(aura)
 
-		if stillRunning {
-			ts.castMu.Lock()
-			if !aura.Stopped {
-				// Aura::RefreshTimers (SpellAuras.cpp:930-940) recomputes the
-				// amplitude on every refresh while a proc-triggered refresh
-				// keeps the running countdown — the running timer is not
-				// restarted, but every tick after the residual uses the
-				// current PeriodMs, like C++ using the recomputed _amplitude.
-				ts.schedulePlayerPeriodicTickLocked(aura, aura.PeriodMs)
-			}
-			ts.castMu.Unlock()
+		ts.castMu.Lock()
+		aura.TickInFlight = false
+		if stillRunning && !aura.Stopped {
+			// Aura::RefreshTimers (SpellAuras.cpp:930-940) recomputes the
+			// amplitude on every refresh while a proc-triggered refresh
+			// keeps the running countdown — the running timer is not
+			// restarted, but every tick after the residual uses the
+			// current PeriodMs, like C++ using the recomputed _amplitude.
+			ts.schedulePlayerPeriodicTickLocked(aura, aura.PeriodMs)
 		}
+		ts.castMu.Unlock()
 	})
 }
 
@@ -19113,10 +19325,96 @@ func (s *Server) funnelDonatorCost(mapID, instanceID uint32, casterGUID uint64, 
 	return damage, true, true
 }
 
+// faceChannelTargetOnPeriodicTick mirrors the channeled-aura arm of
+// AuraEffect::PeriodicTick (SpellAuraEffects.cpp:866-882): when the ticking
+// aura's spell is channeled and carries SPELL_ATTR1_CHANNEL_TRACK_TARGET,
+// the caster is turned to face its current channel object on every tick
+// (Unit::SetInFront — GetAbsoluteAngle normalized to [0, 2pi)). C++ skips the
+// turn under UNIT_STATE_CANNOT_TURN, which has no Go model, so the turn is
+// unconditional. Like C++ this is server-side only: no facing packet is sent.
+func (s *session) faceChannelTargetOnPeriodicTick(aura *activeAura, spell wotlk.Spell, known bool, mapID, instanceID uint32) {
+	if s.server == nil || !known || !isChanneledSpell(spell) || spell.AttributesEx&spellAttr1ChannelTrackTarget == 0 {
+		return
+	}
+	casterGUID := aura.CasterGUID
+	if casterGUID == 0 {
+		return
+	}
+	ctx := context.Background()
+	var channelGUID uint64
+	var casterX, casterY float32
+	casterIsPlayer := false
+	var casterSess *session
+	if casterSess = s.server.findSessionByGUID(casterGUID); casterSess != nil && casterSess.player != nil {
+		casterIsPlayer = true
+		// C++ reads the caster's live channel object
+		// (Unit::GetChannelObjectGuid), not the aura-stored one.
+		channelGUID = casterSess.channelTargetForSpell(aura.SpellID)
+		casterSess.playerStateMu.Lock()
+		casterX, casterY = casterSess.player.X, casterSess.player.Y
+		casterSess.playerStateMu.Unlock()
+	} else {
+		// Creature casters have no Go channel state (channels live on player
+		// sessions); fall back to the channel target captured at aura apply.
+		channelGUID = aura.ChannelTargetGUID
+		if tgt, found := s.getCombatTarget(ctx, casterGUID); found && tgt.Map == mapID && tgt.InstanceID == instanceID {
+			casterX, casterY = tgt.X, tgt.Y
+		} else {
+			return
+		}
+	}
+	if channelGUID == 0 || channelGUID == casterGUID {
+		return
+	}
+	var tx, ty float32
+	if ts := s.server.findSessionByGUID(channelGUID); ts != nil && ts.player != nil {
+		ts.playerStateMu.Lock()
+		tx, ty = ts.player.X, ts.player.Y
+		ts.playerStateMu.Unlock()
+	} else if tgt, found := s.getCombatTarget(ctx, channelGUID); found {
+		tx, ty = tgt.X, tgt.Y
+	} else {
+		// C++ GetWorldObject may also resolve gameobjects, which have no Go
+		// model; an unresolvable channel object simply skips the turn.
+		return
+	}
+	angle := float32(math.Atan2(float64(ty-casterY), float64(tx-casterX)))
+	if angle < 0 {
+		angle += 2 * math.Pi
+	}
+	if casterIsPlayer {
+		casterSess.playerStateMu.Lock()
+		casterSess.player.Orientation = angle
+		casterSess.playerStateMu.Unlock()
+		return
+	}
+	s.server.motionMu.Lock()
+	if motion := s.server.findCreatureMotionLocked(mapID, instanceID, casterGUID); motion != nil {
+		motion.Orientation = angle
+	}
+	s.server.motionMu.Unlock()
+}
+
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	// SpellAuraEffects.cpp:827-830 — _ticksDone increments before the tick
 	// handler runs, even when the handler early-returns on a dead target.
 	aura.TickCount++
+	// SpellAuraEffects.cpp:866-882 — channeled track-target auras re-face
+	// the caster toward the channel object on every tick.
+	var tickSpell wotlk.Spell
+	tickKnown := false
+	if ts.server != nil && ts.server.Data != nil {
+		if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+			tickSpell, tickKnown = sp, true
+		}
+	}
+	var pMap, pInst uint32
+	ts.playerStateMu.Lock()
+	if ts.player != nil {
+		pMap, pInst = ts.player.Map, ts.player.InstanceID
+	}
+	ts.playerStateMu.Unlock()
+	ts.faceChannelTargetOnPeriodicTick(aura, tickSpell, tickKnown, pMap, pInst)
 	if (aura.AuraType == spellAuraPeriodicTriggerSpell || aura.AuraType == spellAuraPeriodicTriggerSpellWithValue) && aura.TriggerSpell != 0 {
 		// SpellAuraEffects.cpp:5049-5079
 		// (HandlePeriodicTriggerSpellAuraTick) and :5081-5106
@@ -20130,17 +20428,42 @@ func (s *session) periodicTriggerTarget(aura *activeAura) uint64 {
 
 func (ts *session) expirePlayerAura(spellID uint32) {
 	ts.castMu.Lock()
+	var finalTick *activeAura
 	if ts.activeAuras != nil {
 		if aura, ok := ts.activeAuras[spellID]; ok && aura != nil {
 			aura.Stopped = true
 			if aura.TickTimer != nil {
-				aura.TickTimer.Stop()
+				// AuraEffect::Update (SpellAuraEffects.cpp:815-841) runs
+				// after Aura::Update zeroes the duration in the same world
+				// update, and the (ticksDone+1) > totalTicks cap still
+				// passes on the final aligned tick — so a tick due within
+				// one world-update quantum (50ms) of expiry fires instead
+				// of being dropped. Without this the expiry timer (created
+				// at apply) wins the same-deadline race against the tick
+				// timer (created at the previous tick) and the last tick of
+				// every duration%period==0 DoT is silently lost. The
+				// TickInFlight gate covers the tick already executing.
+				if !aura.TickInFlight && !aura.TickDueAt.IsZero() && !aura.TickDueAt.After(time.Now().Add(50*time.Millisecond)) {
+					aura.TickTimer.Stop()
+					aura.TickTimer = nil
+					finalTick = aura
+				} else {
+					aura.TickTimer.Stop()
+				}
+			}
+			if aura.UpkeepTimer != nil {
+				aura.UpkeepTimer.Stop()
+				aura.UpkeepTimer = nil
 			}
 			delete(ts.activeAuras, spellID)
 			ts.server.unregisterSingleCastAura(aura)
 		}
 	}
 	ts.castMu.Unlock()
+	if finalTick != nil {
+		advanceAuraDuration(finalTick, time.Now())
+		ts.executePeriodicTickOnPlayer(finalTick)
+	}
 	ts.dropSpellMods(spellID)
 	ts.removeAura(spellID)
 }
@@ -20167,6 +20490,7 @@ func (s *session) scheduleCreaturePeriodicTickLocked(aura *activeAura, periodMs 
 }
 
 func (s *session) scheduleCreaturePeriodicTickLockedInitial(aura *activeAura, periodMs, initialDelayMs uint32) {
+	aura.TickDueAt = time.Now().Add(time.Duration(initialDelayMs) * time.Millisecond)
 	aura.TickTimer = time.AfterFunc(time.Duration(initialDelayMs)*time.Millisecond, func() {
 		if s.server == nil {
 			return
@@ -20176,25 +20500,22 @@ func (s *session) scheduleCreaturePeriodicTickLockedInitial(aura *activeAura, pe
 			s.server.auraMu.Unlock()
 			return
 		}
+		aura.TickInFlight = true
 		advanceAuraDuration(aura, time.Now())
 		stillRunning := aura.RemainingMs > 0 || aura.DurationMs == 0
 		s.server.auraMu.Unlock()
 
 		targetAlive := s.executePeriodicTickOnCreature(aura)
-		if !targetAlive {
-			return
-		}
 
-		if stillRunning {
-			s.server.auraMu.Lock()
-			if !aura.Stopped {
-				// Like the player leg above: the running countdown is kept
-				// across refreshes, but later ticks use the recomputed
-				// PeriodMs (Aura::RefreshTimers, SpellAuras.cpp:930-940).
-				s.scheduleCreaturePeriodicTickLocked(aura, aura.PeriodMs)
-			}
-			s.server.auraMu.Unlock()
+		s.server.auraMu.Lock()
+		aura.TickInFlight = false
+		if targetAlive && stillRunning && !aura.Stopped {
+			// Like the player leg above: the running countdown is kept
+			// across refreshes, but later ticks use the recomputed
+			// PeriodMs (Aura::RefreshTimers, SpellAuras.cpp:930-940).
+			s.scheduleCreaturePeriodicTickLocked(aura, aura.PeriodMs)
 		}
+		s.server.auraMu.Unlock()
 	})
 }
 
@@ -20204,6 +20525,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	aura.TickCount++
 	ctx := context.Background()
 	key := aura.TargetKey
+	// SpellAuraEffects.cpp:866-882 — channeled track-target auras re-face
+	// the caster toward the channel object on every tick.
+	var tickSpell wotlk.Spell
+	tickKnown := false
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+			tickSpell, tickKnown = sp, true
+		}
+	}
+	s.faceChannelTargetOnPeriodicTick(aura, tickSpell, tickKnown, key.Map, key.InstanceID)
 	target, ok := s.getCombatTarget(ctx, aura.TargetGUID)
 	if !ok || target.Map != key.Map || target.InstanceID != key.InstanceID || target.Health == 0 || (s.server != nil && s.server.isCreatureEvadingInInstance(key.Map, key.InstanceID, key.GUID)) {
 		if s.server != nil {
@@ -21458,6 +21789,7 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	wasTaunt := false
 	taunterGUID := uint64(0)
 	s.server.auraMu.Lock()
+	var finalTick *activeAura
 	if s.server.activeCreatureAuras != nil {
 		if auras, ok := s.server.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
@@ -21471,7 +21803,22 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 				taunterGUID = aura.CasterGUID
 				aura.Stopped = true
 				if aura.TickTimer != nil {
-					aura.TickTimer.Stop()
+					// Same final-tick-at-expiry bridge as expirePlayerAura:
+					// AuraEffect::Update fires the last aligned tick after
+					// Aura::Update zeroes the duration (SpellAuraEffects.cpp:
+					// 815-841), so a tick due within one world-update
+					// quantum of expiry fires instead of being dropped.
+					if !aura.TickInFlight && !aura.TickDueAt.IsZero() && !aura.TickDueAt.After(time.Now().Add(50*time.Millisecond)) {
+						aura.TickTimer.Stop()
+						aura.TickTimer = nil
+						finalTick = aura
+					} else {
+						aura.TickTimer.Stop()
+					}
+				}
+				if aura.UpkeepTimer != nil {
+					aura.UpkeepTimer.Stop()
+					aura.UpkeepTimer = nil
 				}
 				delete(auras, spellID)
 				s.server.unregisterSingleCastAura(aura)
@@ -21484,6 +21831,10 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 		}
 	}
 	s.server.auraMu.Unlock()
+	if finalTick != nil {
+		advanceAuraDuration(finalTick, time.Now())
+		s.executePeriodicTickOnCreature(finalTick)
+	}
 	if wasTaunt {
 		s.server.clearCreatureTaunt(key, taunterGUID)
 	}
@@ -21524,6 +21875,7 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 				if aura.TickTimer != nil {
 					aura.TickTimer.Stop()
 				}
+				stopAuraUpkeepTimer(aura)
 				delete(auras, spellID)
 				s.unregisterSingleCastAura(aura)
 			}
