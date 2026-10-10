@@ -13055,6 +13055,26 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal)
 		hitTargets = append(hitTargets, chainJumpGUIDs...)
 	}
+	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) runs on triggered
+	// casts too — SelectSpellTargets carries no IsTriggered gate, so the
+	// area family replaces the wire-only hit list with the area search,
+	// mirroring the client path above (empty area lists never fail the
+	// cast: area selection has no BAD_IMPLICIT_TARGETS gate, unlike the
+	// nearby arms). The chain block above can never fire for area spells
+	// (chainSelectionEligibleTarget excludes the area category), so the
+	// replacement cannot discard real jumps.
+	switch {
+	case isAreaEnemySpell(spell):
+		hitTargets = s.spellAreaEnemyTargets(ctx, spell, spellTarget)
+	case isFriendlyAreaSpell(spell):
+		hitTargets = s.spellFriendlyAreaTargets(ctx, spell, spellTarget)
+	case isEntryAreaSpell(spell):
+		hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, spellTarget)
+	case isGOAreaSpell(spell):
+		hitTargets = s.spellGOAreaTargets(ctx, spell, spellID, spellTarget)
+	case isFriendlyLastTargetAreaSpell(spell) || isFriendlyTargetAreaRaidClassSpell(spell):
+		hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, hitTargets)
+	}
 	// Cast flags mirror Spell::SendSpellGo for a triggered player cast
 	// (Spell.cpp:4283-4330): PENDING for triggered non-auto-repeat casts with
 	// cast count 0 (Spell.cpp:4292), POWER_LEFT_SELF + remaining power for
