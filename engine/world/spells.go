@@ -13488,7 +13488,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if jumpCap > len(chainJumpGUIDs) {
 				jumpCap = len(chainJumpGUIDs)
 			}
-			for i, jumpGUID := range chainJumpGUIDs[:jumpCap] {
+			// The per-jump falloff exponent counts hit jumps only
+			// (Spell.cpp:7771-7774): an immune jump never reaches
+			// DoEffectOnLaunchTarget — its unit resolves null and the
+			// function returns ahead of the multiplier accumulation
+			// (Spell.cpp:7736-7744) — while a reflected jump resolves its
+			// unit to the caster (Spell.cpp:7740) and keeps its index.
+			// Same hit-counted convention as the client path (spells.go:7653).
+			jumpOrder := 0
+			for _, jumpGUID := range chainJumpGUIDs[:jumpCap] {
 				target := jumpGUID
 				if miss, ok := triggeredMiss[target]; ok {
 					if miss == protocol.SpellMissImmune {
@@ -13496,7 +13504,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					}
 					target = s.playerGUID
 				}
-				effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: i + 1})
+				jumpOrder++
+				effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: jumpOrder})
 			}
 			chainMult = s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 		}
