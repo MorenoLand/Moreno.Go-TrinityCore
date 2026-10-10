@@ -2382,56 +2382,58 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	// SendCharRename appends guid+name only on success; failures send the u8 code alone.
-	sendRename := func(code uint8, success bool) {
-		buf := protocol.NewBuffer(1 + 8 + len(rawName) + 1)
+	// The name echoed back is the normalized one C++ stored (renameInfo->Name),
+	// not the raw packet string (:2159-2165).
+	sendRename := func(code uint8, success bool, name string) {
+		buf := protocol.NewBuffer(1 + 8 + len(name) + 1)
 		buf.WriteU8(code)
 		if success {
 			buf.WriteU64(guid)
-			buf.WriteCString(rawName)
+			buf.WriteCString(name)
 		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_RENAME), buf.Bytes(), true)
 	}
 	if !utf8.ValidString(rawName) {
-		sendRename(charNameNoName, false)
+		sendRename(charNameNoName, false, "")
 		return true
 	}
 	newName := normalizePlayerName(rawName)
 	if newName == "" {
-		sendRename(charNameNoName, false)
+		sendRename(charNameNoName, false, "")
 		return true
 	}
 	// ObjectMgr::CheckPlayerName approximation (validCharacterName covers the
 	// length/alphabet arms; reserved-name table has no Go bridge — standing delta).
 	if !validCharacterName(newName) {
-		sendRename(charNameFailure, false)
+		sendRename(charNameFailure, false, "")
 		return true
 	}
 	store := s.server.CharactersStore
 	if store == nil || store.DB == nil {
-		sendRename(charCreateError, false)
+		sendRename(charCreateError, false, "")
 		return true
 	}
 	// The character must belong to this account, carry AT_LOGIN_RENAME, and
 	// the new name must be free (CHAR_SEL_FREE_NAME, :1141).
 	var atLogin uint64
 	if err := store.DB.QueryRowContext(ctx, "SELECT at_login FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin); err != nil {
-		sendRename(charCreateError, false)
+		sendRename(charCreateError, false, "")
 		return true
 	}
 	if atLogin&atLoginRename == 0 {
-		sendRename(charCreateError, false)
+		sendRename(charCreateError, false, "")
 		return true
 	}
 	if row, err := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); err == nil {
 		var one int
 		if row.Scan(&one) == nil {
-			sendRename(charCreateNameInUse, false)
+			sendRename(charCreateNameInUse, false, "")
 			return true
 		}
 	}
 	_, _ = store.ExecStatement(ctx, database.StatementID("CHAR_UPD_CHAR_NAME_AT_LOGIN"), newName, atLogin&^atLoginRename, guid)
 	_, _ = store.ExecStatement(ctx, database.StatementID("CHAR_DEL_DECLINED_NAME"), guid)
-	sendRename(0, true)
+	sendRename(0, true, newName)
 	s.debug("character renamed", "guid", guid, "name", newName)
 	return true
 }
@@ -3706,7 +3708,10 @@ func buildTutorialFlags(tutorials [8]uint32) []byte {
 }
 
 // handleSetPlayerDeclinedNames processes CMSG_SET_PLAYER_DECLINED_NAMES (0x419).
-// Reference: WorldSession::HandleSetPlayerDeclinedNames (CharacterHandler.cpp:1198).
+// Reference: WorldSession::HandleSetPlayerDeclinedNames (CharacterHandler.cpp:1198),
+// WorldSession::SendSetPlayerDeclinedNamesResult (:2208: u32 result + u64 guid),
+// ObjectMgr::CheckDeclinedNames (ObjectMgr.cpp:8808), GetMainPartOfName
+// (Util.cpp:466), isCyrillicCharacter (Util.h:141).
 func (s *session) handleSetPlayerDeclinedNames(ctx context.Context, payload []byte) bool {
 	if len(payload) < 8 {
 		return true
@@ -3714,26 +3719,26 @@ func (s *session) handleSetPlayerDeclinedNames(ctx context.Context, payload []by
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
 
-	// Read player name and 5 declined name cases: genitive, dative, accusative, instrumental, prepositional
+	// Wire order (CharacterHandler.cpp:1200-1235): guid, name, then the 5
+	// declined cases (genitive, dative, accusative, instrumental, prepositional).
 	name, _ := r.ReadCString()
 	var declined [5]string
 	for i := 0; i < 5; i++ {
 		declined[i], _ = r.ReadCString()
 	}
 
-	result := uint32(0) // 0 = SUCCESS, 1 = ERROR
+	result := uint32(1) // DECLINED_NAMES_RESULT_ERROR
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil && guid > 0 {
 		var charName string
-		err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid).Scan(&charName)
-		if err != nil || (name != "" && charName != name) {
-			result = 1
-		} else {
-			// Persist declined names to character_declinedname
-			_, _ = cdb.ExecContext(ctx,
-				`REPLACE INTO character_declinedname (guid, genitive, dative, accusative, instrumental, prepositional)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-				guid, declined[0], declined[1], declined[2], declined[3], declined[4])
+		if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid).Scan(&charName); err == nil {
+			if normalized, ok := declinedNamesAcceptable(charName, name, declined); ok {
+				_, _ = cdb.ExecContext(ctx,
+					`REPLACE INTO character_declinedname (guid, genitive, dative, accusative, instrumental, prepositional)
+					 VALUES (?, ?, ?, ?, ?, ?)`,
+					guid, normalized[0], normalized[1], normalized[2], normalized[3], normalized[4])
+				result = 0 // DECLINED_NAMES_RESULT_SUCCESS
+			}
 		}
 	}
 
@@ -3742,4 +3747,95 @@ func (s *session) handleSetPlayerDeclinedNames(ctx context.Context, payload []by
 	buf.WriteU64(guid)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SET_PLAYER_DECLINED_NAMES_RESULT), buf.Bytes(), true)
 	return true
+}
+
+// declinedNamesAcceptable mirrors the HandleSetPlayerDeclinedNames gates
+// (CharacterHandler.cpp:1204-1247): declined names are accepted only for
+// Cyrillic names, the packet name must equal the stored name, every case is
+// normalized (empty after normalization fails), and the morphological
+// consistency check (CheckDeclinedNames) must pass. The returned forms are the
+// normalized ones C++ stores (declinedname.name[i] is normalized in place,
+// :1228-1234).
+func declinedNamesAcceptable(storedName, packetName string, declined [5]string) ([5]string, bool) {
+	normalized := [5]string{}
+	if !utf8.ValidString(storedName) {
+		return normalized, false
+	}
+	first, _ := utf8.DecodeRuneInString(storedName)
+	if !isCyrillicRune(first) {
+		return normalized, false
+	}
+	if packetName != storedName {
+		return normalized, false
+	}
+	for i := 0; i < 5; i++ {
+		if !utf8.ValidString(declined[i]) {
+			return normalized, false
+		}
+		normalized[i] = normalizePlayerName(declined[i])
+		if normalized[i] == "" {
+			return normalized, false
+		}
+	}
+	if !checkDeclinedNames(storedName, normalized) {
+		return normalized, false
+	}
+	return normalized, true
+}
+
+// isCyrillicRune mirrors isCyrillicCharacter (Util.h:141-148).
+func isCyrillicRune(r rune) bool {
+	return (r >= 0x0410 && r <= 0x044F) || r == 0x0401 || r == 0x0451
+}
+
+// declinedNameMainPart mirrors GetMainPartOfName (Util.cpp:466-513): supported
+// only for Cyrillic names; strips the first matching declension ending of
+// dropEnds[declension] (0 = nominative, 1-5 the declined cases).
+func declinedNameMainPart(name []rune, declension int) []rune {
+	if len(name) == 0 || !isCyrillicRune(name[0]) || declension < 0 || declension > 5 {
+		return name
+	}
+	dropEnds := [6][][]rune{
+		{{0x0430}, {0x043E}, {0x044F}, {0x0435}, {0x044C}, {0x0439}},
+		{{0x0430}, {0x044F}, {0x044B}, {0x0438}},
+		{{0x0435}, {0x0443}, {0x044E}, {0x0438}},
+		{{0x0443}, {0x044E}, {0x043E}, {0x0435}, {0x044C}, {0x044F}, {0x0430}},
+		{{0x043E, 0x0439}, {0x0451, 0x0439}, {0x0435, 0x0439}, {0x043E, 0x043C}, {0x0451, 0x043C}, {0x0435, 0x043C}, {0x044E}},
+		{{0x0435}, {0x0438}},
+	}
+	for _, ending := range dropEnds[declension] {
+		if len(ending) > len(name) {
+			continue
+		}
+		tail := name[len(name)-len(ending):]
+		match := true
+		for i := range ending {
+			if tail[i] != ending[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return name[:len(name)-len(ending)]
+		}
+	}
+	return name
+}
+
+// checkDeclinedNames mirrors ObjectMgr::CheckDeclinedNames (ObjectMgr.cpp:8808-8830):
+// every declined case must share the nominative's main part (x), or every case
+// must equal the base name (y).
+func checkDeclinedNames(ownName string, declined [5]string) bool {
+	own := []rune(ownName)
+	mainPart := string(declinedNameMainPart(own, 0))
+	x, y := true, true
+	for i := 0; i < 5; i++ {
+		if mainPart != string(declinedNameMainPart([]rune(declined[i]), i+1)) {
+			x = false
+		}
+		if ownName != declined[i] {
+			y = false
+		}
+	}
+	return x || y
 }

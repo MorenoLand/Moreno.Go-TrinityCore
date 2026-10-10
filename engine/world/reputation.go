@@ -192,9 +192,26 @@ func (s *session) handleSetFactionAtWar(ctx context.Context, payload []byte) boo
 		if reputation.ListID != listID {
 			continue
 		}
+		// ReputationMgr::SetAtWar (ReputationMgr.cpp:465-495): always-invisible
+		// or hidden factions cannot change war state; war cannot be declared on
+		// our own faction (peace-forced, non-rival, standing above HATED); an
+		// already-set state is a no-op.
+		if reputation.Flags&(factionFlagInvisibleForced|factionFlagHidden) != 0 {
+			return true
+		}
 		if flag != 0 {
+			if reputation.Flags&factionFlagPeaceForced != 0 && reputation.Flags&factionFlagRival == 0 &&
+				reputationRank(int64(reputation.Standing)) > 0 {
+				return true
+			}
+			if reputation.Flags&factionFlagAtWar != 0 {
+				return true
+			}
 			reputation.Flags |= factionFlagAtWar
 		} else {
+			if reputation.Flags&factionFlagAtWar == 0 {
+				return true
+			}
 			reputation.Flags &^= factionFlagAtWar
 		}
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
