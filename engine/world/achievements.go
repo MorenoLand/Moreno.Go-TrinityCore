@@ -33,7 +33,9 @@ import (
 
 // CriteriaTypeCount defines the full range of achievement criteria types (0..123).
 const CriteriaTypeCount = 124
+const achievementFlagCounter uint32 = 0x00000001
 const achievementFlagHidden uint32 = 0x00000002
+const achievementFlagSumm uint32 = 0x00000008
 
 // AchievementFlags per DBCEnums.h: only realm-first achievements can be
 // realm-completed (AchievementGlobalMgr::LoadCompletedAchievements).
@@ -354,6 +356,7 @@ type achievementEntry struct {
 	Points          uint32
 	Flags           uint32
 	MinimumCriteria uint32
+	SharesCriteria  uint32 // DBC field 61, referenced achievement for criteria counting
 	Title           string // DBC field 4, default locale (hyperlink text validator)
 }
 
@@ -395,6 +398,7 @@ type achievementRuntime struct {
 	exploreByZone map[uint32][]uint32                   // zone id -> criteria ids (type 43)
 	byID          map[uint32]achievementCriteriaEntry
 	byAchieve     map[uint32][]achievementCriteriaEntry
+	byReferenced  map[uint32][]uint32 // referenced achievement ID -> parent achievement IDs (m_AchievementListByReferencedId)
 	achieveByID   map[uint32]achievementEntry
 	loaded        bool
 }
@@ -408,6 +412,7 @@ var achievementIndex = &achievementRuntime{
 	exploreByZone: make(map[uint32][]uint32),
 	byID:          make(map[uint32]achievementCriteriaEntry),
 	byAchieve:     make(map[uint32][]achievementCriteriaEntry),
+	byReferenced:  make(map[uint32][]uint32),
 	achieveByID:   make(map[uint32]achievementEntry),
 }
 
@@ -516,7 +521,11 @@ func (s *Server) loadAchievementIndex() {
 				points, _ := record.Uint32(39)
 				flags, _ := record.Uint32(41)
 				minimum, _ := record.Uint32(60)
-				achievementIndex.achieveByID[id] = achievementEntry{ID: id, Faction: faction, InstanceID: instanceID, Title: title, Category: category, Points: points, Flags: flags, MinimumCriteria: minimum}
+				shares, _ := record.Uint32(61)
+				achievementIndex.achieveByID[id] = achievementEntry{ID: id, Faction: faction, InstanceID: instanceID, Title: title, Category: category, Points: points, Flags: flags, MinimumCriteria: minimum, SharesCriteria: shares}
+				if shares != 0 {
+					achievementIndex.byReferenced[shares] = append(achievementIndex.byReferenced[shares], id)
+				}
 			}
 		}
 	}
@@ -1227,9 +1236,31 @@ func (s *session) stopTimedAchievement(criteriaID uint32) {
 // checkAchievementComplete completes the achievement when every tracked
 // criterion of it has met its quantity, then announces and persists it.
 func (s *session) checkAchievementComplete(achievementID uint32) {
+	s.checkSingleAchievementComplete(achievementID)
+	// SetCriteriaProgress also completes every achievement that references
+	// this one through SharesCriteria (AchievementMgr.cpp:1145-1149,
+	// GetAchievementByReferencedId).
 	achievementIndex.mu.RLock()
-	criteria := achievementIndex.byAchieve[achievementID]
+	parents := achievementIndex.byReferenced[achievementID]
+	achievementIndex.mu.RUnlock()
+	for _, parentID := range parents {
+		s.checkSingleAchievementComplete(parentID)
+	}
+}
+
+// checkSingleAchievementComplete mirrors AchievementMgr::IsCompletedAchievement
+// (AchievementMgr.cpp:1287-1316): when SharesCriteria is set the completion
+// test counts the referenced achievement's criteria, and SUMM achievements
+// complete on the summed progress counters rather than the completed-criteria
+// count.
+func (s *session) checkSingleAchievementComplete(achievementID uint32) {
+	achievementIndex.mu.RLock()
 	entry, hasEntry := achievementIndex.achieveByID[achievementID]
+	testID := achievementID
+	if hasEntry && entry.SharesCriteria != 0 {
+		testID = entry.SharesCriteria
+	}
+	criteria := achievementIndex.byAchieve[testID]
 	achievementIndex.mu.RUnlock()
 	if len(criteria) == 0 || !hasEntry {
 		return
@@ -1239,6 +1270,19 @@ func (s *session) checkAchievementComplete(achievementID uint32) {
 		if (entry.Faction == 0 && team != teamHorde) || (entry.Faction == 1 && team != teamAlliance) {
 			return
 		}
+	}
+	if entry.Flags&achievementFlagSumm != 0 {
+		var sum uint32
+		for _, criterion := range criteria {
+			if progress := s.criteriaProgress[criterion.ID]; progress != nil {
+				sum += progress.Counter
+				if sum >= criterion.Quantity {
+					s.completeAchievement(achievementID)
+					return
+				}
+			}
+		}
+		return
 	}
 	completedCount := uint32(0)
 	for _, criterion := range criteria {
@@ -1262,6 +1306,16 @@ func (s *session) checkAchievementComplete(achievementID uint32) {
 // and nearby players, persisted to character_achievement.
 func (s *session) completeAchievement(achievementID uint32) {
 	if _, done := s.earnedAchievements[achievementID]; done {
+		return
+	}
+	// AchievementMgr::CompletedAchievement (AchievementMgr.cpp:1506): counter
+	// achievements are statistics that can never complete. The GM-mode /
+	// RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS arm at the same site has no Go
+	// model (no GM-mode/RBAC state on the session) and stays unbridged.
+	achievementIndex.mu.RLock()
+	entry, hasEntry := achievementIndex.achieveByID[achievementID]
+	achievementIndex.mu.RUnlock()
+	if hasEntry && entry.Flags&achievementFlagCounter != 0 {
 		return
 	}
 	now := uint32(time.Now().Unix())
