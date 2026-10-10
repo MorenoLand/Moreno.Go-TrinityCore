@@ -444,6 +444,11 @@ func (s *session) handleBuyItem(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	// ItemHandler.cpp:585-589 — a 0 slot is a cheating attempt answered with
+	// silence, ahead of the interact check inside BuyItemFromVendorSlot.
+	if slot == 0 {
+		return true
+	}
 	count, err := reader.ReadU32()
 	if err != nil || count == 0 {
 		count = 1
@@ -453,9 +458,10 @@ func (s *session) handleBuyItem(ctx context.Context, payload []byte) bool {
 
 func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool {
 	// CMSG_BUY_ITEM_IN_SLOT (ItemHandler.cpp:537-575): vendorguid, item, vendorslot,
-	// bagguid, bagslot, count. The client slot stays 1-based here — processBuyItem
-	// applies the OFFSET slot-1 lookup, matching the plain-buy path.
-	if !s.playerLoaded || s.player == nil || len(payload) < 26 {
+	// bagguid, bagslot, count — count is uint32 (uint32 item, slot, count; uint8
+	// bagslot;), a full 29-byte packet. The client slot stays 1-based here —
+	// processBuyItem applies the OFFSET slot-1 lookup, matching the plain-buy path.
+	if !s.playerLoaded || s.player == nil || len(payload) < 29 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
@@ -471,6 +477,11 @@ func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool 
 	if err != nil {
 		return false
 	}
+	// ItemHandler.cpp:546-549 — the 0-slot cheat arm runs before bag
+	// resolution and the interact check, matching the plain-buy path.
+	if slot == 0 {
+		return true
+	}
 	bagGUID, err := reader.ReadU64()
 	if err != nil {
 		return false
@@ -479,7 +490,7 @@ func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool 
 	if err != nil {
 		return false
 	}
-	count, err := reader.ReadU8()
+	count, err := reader.ReadU32()
 	if err != nil || count == 0 {
 		count = 1
 	}
@@ -493,7 +504,7 @@ func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool 
 	if !ok {
 		return true
 	}
-	return s.processBuyItem(ctx, vendorGUID, itemEntry, slot, uint32(count), bag, bagSlot)
+	return s.processBuyItem(ctx, vendorGUID, itemEntry, slot, count, bag, bagSlot)
 }
 
 // vendorBuyBagSlot resolves a CMSG_BUY_ITEM_IN_SLOT bag guid to the bag's equip slot
@@ -540,12 +551,10 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 			validRows = append(validRows, r)
 		}
 	}
-	// ItemHandler.cpp:585-589 / 546-549: "client expects count starting at 1 ...
-	// if (slot > 0) --slot; else return; // cheating" — a 0 slot is a
-	// cheating attempt answered with silence, not BUY_ERR_CANT_FIND_ITEM.
-	if slot == 0 {
-		return true
-	}
+	// ItemHandler.cpp:585-589 / 546-549 — the client slot is 1-based
+	// ("numbered from 1 at client"); the 0-slot cheating arm already ran
+	// silently in the opcode handlers, so the slot-1 vector lookup here is
+	// safe and matches BuyItemFromVendorSlot's 0-based vendorslot.
 	if int(slot) > len(validRows) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 		return true
@@ -1180,7 +1189,8 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, 74+slot, bbItemGUID)
 
 	s.syncEquipmentCache(ctx)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, rawItemGUID, 0), true)
+	// Player.cpp:13646-13655 — SendSellError is error-only; HandleSellItemOpcode
+	// sends nothing on success (money/inventory arrive via the normal updates).
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("item sold to vendor", "account", s.accountName, "item", itemEntry, "guid", itemGUID, "count", count, "earned", earned, "buybackSlot", slot)
