@@ -2244,13 +2244,27 @@ func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool 
 	}
 	// Player surrendered in an active duel using /forfeit (TC: HandleDuelCancelledOpcode:62-69)
 	if s.player.DuelTeam != 0 {
-		// CombatStopWithPets(true) on both duelists (DuelHandler.cpp:65-66).
+		// CombatStopWithPets(true) on both duelists (DuelHandler.cpp:65-66):
+		// the minion arm via stopControlledPetCombat; the includingCast half
+		// is the players' own non-melee cast interrupt (Unit::CombatStop(true)
+		// -> InterruptNonMeleeSpells(false)); AttackStop is covered by
+		// clearDuelState inside endDuel. The charmed-creature arm stays
+		// unmodeled (no charmed-creature bridge).
+		s.interruptCurrentCast()
+		s.interruptCurrentChannel()
 		s.stopControlledPetCombat()
 		if s.server != nil {
 			if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil {
+				partner.interruptCurrentCast()
+				partner.interruptCurrentChannel()
 				partner.stopControlledPetCombat()
 			}
 		}
+		// DuelHandler.cpp:68: the surrendering player casts 7267 (beg) on
+		// themselves BEFORE DuelComplete(DUEL_WON). The damage-win path
+		// never casts it — DuelComplete's DUEL_WON arm only casts 52852
+		// (victory cheer) on the winner (Player.cpp:7398-7400).
+		s.castVisualSpell(7267)
 		s.endDuel(true, s.duelPartner, false)
 		return true
 	}
@@ -2436,10 +2450,9 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 				}
 			}
 		}
-		// Loser casts 7267 (Beg / surrender kneel) if won normally
-		if !fled && loserSess != nil {
-			loserSess.castVisualSpell(7267)
-		}
+		// 7267 (beg) is NOT cast here: DuelHandler.cpp:68 casts it on the
+		// surrendering player only, before DuelComplete(DUEL_WON); the
+		// damage-win path never casts it (handleDuelCancelled emits it).
 		if loserSess != nil {
 			loserSess.updateAchievementCriteria(criteriaTypeLoseDuel, 0, 1)
 		}
