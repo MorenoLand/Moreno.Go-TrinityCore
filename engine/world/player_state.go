@@ -140,6 +140,7 @@ const (
 	unitFlag2DisarmOffhand                 uint32 = 0x00000080 // UNIT_FLAG2_DISARM_OFFHAND (UnitDefines.h:168)
 	unitFlag2DisarmRanged                  uint32 = 0x00000400 // UNIT_FLAG2_DISARM_RANGED (UnitDefines.h:170)
 	unitFlagInCombat                       uint32 = 0x00080000
+	unitFlagNonAttackable                  uint32 = 0x00000002 // UNIT_FLAG_NON_ATTACKABLE (UnitDefines.h:125)
 	unitFlagLooting                        uint32 = 0x00000400 // UNIT_FLAG_LOOTING (UnitDefines.h:134)
 	unitFlagPreparation                    uint32 = 0x00000020 // UNIT_FLAG_PREPARATION (UnitDefines.h:129)
 )

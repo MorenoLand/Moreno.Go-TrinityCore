@@ -6632,51 +6632,133 @@ func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 	return 0, false
 }
 
+// sendSpellMiss mirrors WorldObject::SendSpellMiss (Object.cpp:2666-2677):
+// SMSG_SPELLLOGMISS carries the spell id, the caster GUID, a zero byte, the
+// target count (always 1 here), and per target the target GUID plus the miss
+// info byte. C++ sends it with SendMessageToSet(&data, true) — the caster's
+// visible set including the caster — so Go broadcasts to nearby sessions and
+// writes the caster's own copy directly.
+func (s *session) sendSpellMiss(targetGUID uint64, spellID uint32, missInfo uint8) {
+	if s == nil || s.server == nil || s.player == nil || targetGUID == 0 {
+		return
+	}
+	pkt := protocol.NewBuffer(30)
+	pkt.WriteU32(spellID)
+	pkt.WriteU64(s.playerGUID)
+	pkt.WriteU8(0)
+	pkt.WriteU32(1)
+	pkt.WriteU64(targetGUID)
+	pkt.WriteU8(missInfo)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGMISS), pkt.Bytes(), s)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGMISS), pkt.Bytes(), true)
+}
+
+// creatureCharmerOrOwnerGUID mirrors Unit::GetCharmerOrOwnerGUID (Unit.h:1170):
+// the charmer's GUID when the creature is charmed, else the owner's (0 for a
+// wild creature).
+func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
+	if s == nil || s.server == nil || s.player == nil {
+		return 0
+	}
+	motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, guid)
+	if motion == nil {
+		return 0
+	}
+	if motion.CharmerGUID != 0 {
+		return motion.CharmerGUID
+	}
+	return motion.OwnerGUID
+}
+
 // revalidateDelayedHitTargets mirrors handle_delayed's per-wave target
 // revalidation (Spell.cpp:3645-3663, DoProcessTargetContainer over the
-// delayed targets):
-//   - a target that vanished or died mid-flight (DoTargetSpellHit's
-//     unit->IsAlive() != IsAlive arm, Spell.cpp:2430);
+// delayed targets), which runs the full PreprocessTarget per delayed target
+// (Spell.cpp:2334-2382) plus the DoTargetSpellHit arrival arms (2384-2440):
+//   - a target that died or vanished mid-flight (DoTargetSpellHit,
+//     Spell.cpp:2430: unit->IsAlive() != IsAlive) is dropped silently — the
+//     arm sets no missinfo, so no SMSG_SPELLLOGMISS;
 //   - a delayed non-positive spell whose target was sanctuaried at or after
 //     launch (DoTargetSpellHit, Spell.cpp:2402-2404: (now - TimeDelay) <=
 //     unit->m_lastSanctuaryTime — Vanish dropping missiles already in
-//     flight; launchMs carries the cast-time anchor);
-//   - a creature that began evading between launch and hit
-//     (PreprocessSpellHit, Spell.cpp:2715-2717 -> SPELL_MISS_EVADE);
-//   - a player target that gained spell immunity mid-flight (PreprocessTarget
-//     -> PreprocessSpellHit -> DoSpellHitOnUnit's immune arm, Spell.cpp:2720).
+//     flight; launchMs carries the cast-time anchor) is dropped silently —
+//     the C++ arm notes "No missinfo in that case";
+//   - a creature that began evading between launch and hit (PreprocessSpellHit,
+//     Spell.cpp:2715-2717 -> SPELL_MISS_EVADE) drops with SMSG_SPELLLOGMISS
+//     (PreprocessTarget, Spell.cpp:2366-2372 — every non-MISS late miss fires
+//     SendSpellMiss);
+//   - a target that gained UNIT_FLAG_NON_ATTACKABLE mid-flight
+//     (PreprocessSpellHit, Spell.cpp:2740-2741 -> SPELL_MISS_EVADE), unless
+//     the target's charmer/owner is the caster, drops with SMSG_SPELLLOGMISS;
+//   - a target that gained spell immunity between launch and hit
+//     (PreprocessSpellHit, Spell.cpp:2720 — the arm applies to any unit, so
+//     creatures re-run Creature::IsImmunedToSpell) drops with
+//     SMSG_SPELLLOGMISS (SPELL_MISS_IMMUNE); an immune player target is still
+//     put in combat when the player caster could validly attack it
+//     (PreprocessTarget, Spell.cpp:2354-2357, the taunt-vs-immune case; the
+//     harmful-spell path implies IsValidAttackTarget).
 //
-// C++ sends no new SMSG_SPELL_GO for these, so missStatus is untouched.
-// For a reflected cast the C++ arrival arms run on the reflector (the
-// TargetInfo target), so sanctuary/immunity resolve against
-// reflectSourceGUID, not the caster. Reflect gained mid-flight is not
-// re-rolled — C++ rolls reflect at AddUnitTarget time (Spell.cpp:2152),
-// matching Go's cast-time roll; the ProcReflectDelayed arrival proc
-// (Spell.cpp:2181) fires via procSpellReflectTakenAuraTriggers, armed at
-// the reflect site.
+// C++ sends no new SMSG_SPELL_GO for these, so missStatus is untouched; the
+// LOGMISS packet is the client's only arrival-time signal. For a reflected
+// cast the arrival arms run on the reflector (the TargetInfo target, which
+// C++ keeps as the reflector while the effects retarget to the caster), so
+// all arms resolve against reflectSourceGUID, not the caster. Reflect gained
+// mid-flight is not re-rolled — C++ rolls reflect at AddUnitTarget time
+// (Spell.cpp:2152), matching Go's cast-time roll; the ProcReflectDelayed
+// arrival proc (Spell.cpp:2181) fires via procSpellReflectTakenAuraTriggers,
+// armed at the reflect site.
+//
+// Documented delta: the duel-end friendliness arm (PreprocessSpellHit,
+// Spell.cpp:2743-2745 — a delayed negative spell whose player target turned
+// friendly mid-flight misses as EVADE when it is no longer a valid assist
+// target) needs the full Unit::IsValidAssistTarget shape at arrival; Go keeps
+// the target live instead.
 func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64) []uint64 {
 	if len(targets) == 0 {
 		return targets
 	}
 	live := make([]uint64, 0, len(targets))
 	for _, guid := range targets {
-		tgt, ok := s.getCombatTarget(ctx, guid)
+		// For a reflected cast the arrival arms run on the reflector (the
+		// C++ TargetInfo target); the retargeted caster only receives the
+		// effects. The non-reflect case is the identity arm.
+		armGUID := guid
+		if isReflected && guid == s.playerGUID {
+			armGUID = reflectSourceGUID
+		}
+		tgt, ok := s.getCombatTarget(ctx, armGUID)
 		if !ok || tgt.Health == 0 {
 			continue
 		}
-		checkGUID := guid
-		if isReflected && guid == s.playerGUID {
-			checkGUID = reflectSourceGUID
-		}
-		if !spellIsPositive(spell) && s.sanctuaryTimeFor(checkGUID) >= launchMs {
+		if !spellIsPositive(spell) && s.sanctuaryTimeFor(armGUID) >= launchMs {
 			continue
 		}
-		if s.server != nil && s.player != nil && uint16(checkGUID>>48) == 0xF130 &&
-			s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, checkGUID) {
+		if s.server != nil && s.player != nil && uint16(armGUID>>48) == 0xF130 &&
+			s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, armGUID) {
+			s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 			continue
+		}
+		if s.server != nil && s.player != nil && armGUID != s.playerGUID &&
+			tgt.UnitFlags&unitFlagNonAttackable != 0 {
+			charmerOrOwner := armGUID
+			if uint16(armGUID>>48) == 0xF130 {
+				charmerOrOwner = s.creatureCharmerOrOwnerGUID(armGUID)
+			}
+			if charmerOrOwner != s.playerGUID {
+				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
+				continue
+			}
 		}
 		if s.server != nil {
-			if ts := s.server.findSessionByGUID(checkGUID); ts != nil && ts.isImmuneToSpell(spell, s) {
+			if ts := s.server.findSessionByGUID(armGUID); ts != nil && ts.isImmuneToSpell(spell, s) {
+				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
+				if ts.player != nil && isHarmfulSpell(spell) {
+					ts.player.UnitFlags |= unitFlagInCombat
+					ts.lastCombatTime = time.Now()
+				}
+				continue
+			}
+			if uint16(armGUID>>48) == 0xF130 && s.creatureTargetImmuneToSpell(ctx, armGUID, spell, s, tgt.Faction) {
+				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
 				continue
 			}
 		}
@@ -7323,16 +7405,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// Spell hit check for offensive spells targeting another unit
-	// SMSG_SPELLLOGMISS (WorldObject::SendSpellMiss, Object.cpp:2666) has
-	// deliberately no Go sender: every C++ fire path needs a model Go does
-	// not have. Spell.cpp:2370 fires only from PreprocessTarget's hit-time
-	// leg, which PreprocessSpellHit (Spell.cpp:2710) restricts to delayed
-	// spells (Speed > 0) with late immunity/evade — Go resolves all
-	// effects at cast time with no launch/hit split, and C++ never sends
+	// SMSG_SPELLLOGMISS (WorldObject::SendSpellMiss, Object.cpp:2666) fires
+	// from PreprocessTarget's hit-time leg (Spell.cpp:2366-2372): the
+	// PreprocessSpellHit late arms for delayed spells (Speed > 0) with
+	// mid-flight evade/immunity/NON_ATTACKABLE — bridged at missile arrival
+	// via sendSpellMiss inside revalidateDelayedHitTargets. C++ never sends
 	// LOGMISS for AddUnitTarget-time misses (the analog of the rolls
-	// below), which ride the GO trailer only. Unit.cpp:1573 needs the
-	// SPELL_AURA_DAMAGE_SHIELD model and Unit.cpp:2002/2048 the
-	// split-damage model; the bot_bm_ai sites need creature casters.
+	// below), which ride the GO trailer only. Remaining fire paths need
+	// models Go does not have: Unit.cpp:1573 (SPELL_AURA_DAMAGE_SHIELD),
+	// Unit.cpp:2002/2048 (split damage), and the bot_bm_ai sites (creature
+	// casters).
 	var missStatus []protocol.SpellMissStatus
 	isReflected := false
 	// reflectSourceGUID is the pre-retarget unit target of a reflected cast
