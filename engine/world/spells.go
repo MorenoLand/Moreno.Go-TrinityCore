@@ -9456,7 +9456,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			case 3:
-				s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
+				if spellID == spellRaiseAllyInitial {
+					// spell_dk_raise_ally_initial (spell_dk.cpp:2804): the
+					// DUMMY effect's only consumer is the resurrect-request
+					// script, not a pet aura source.
+					s.handleRaiseAllyInitial(effCtx, spell, eff, hitTargets)
+				} else {
+					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
+				}
 			case spellEffectThreat:
 				amount := eff.BasePoints + 1
 				for _, effectTarget := range hitTargets {

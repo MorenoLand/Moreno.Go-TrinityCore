@@ -38,6 +38,12 @@ const (
 	corpseTypePvE       uint32 = 1 // CORPSE_RESURRECTABLE_PVE
 	corpseTypePvP       uint32 = 2 // CORPSE_RESURRECTABLE_PVP
 	corpsePhaseAuraType uint32 = 261
+
+	spellRaiseAllyInitial = 61999 // spell_dk_raise_ally_initial (spell_dk.cpp:2803)
+	spellRaiseAlly        = 46619 // SPELL_DK_RAISE_ALLY (spell_dk.cpp:2784), the applied aura
+	broadcastTextRiseAlly = 33055 // TEXT_RISE_ALLY (spell_dk.cpp:2786)
+	chatRaidBossWhisper   = 0x2A  // CHAT_MSG_RAID_BOSS_WHISPER (SharedDefines.h:3204)
+
 	corpseFlagBones     uint32 = 0x01
 	corpseFlagUnk2      uint32 = 0x04
 	corpseFlagLootable  uint32 = 0x20 // CORPSE_FLAG_LOOTABLE (Corpse.h:45)
@@ -1542,6 +1548,42 @@ func (s *session) sendResurrectRequest(casterGUID uint64, name string, spiritHea
 	_ = s.write(uint16(protocol.OpcodeSMSG_RESURRECT_REQUEST), packet.Bytes(), true)
 }
 
+// handleRaiseAllyInitial mirrors spell_dk_raise_ally_initial's HandleDummy
+// (spell_dk.cpp:2828-2838): the DUMMY effect on a dead player hit target
+// registers a resurrect request carrying the Raise Ally aura id (the effect
+// value, 46619) with the caster's location, and sends the request — the
+// accept path then applies the aura instead of plain resurrecting
+// (ResurrectUsingRequestData, Player.cpp:24200). The script's cast gates are
+// honored per target: a non-player or alive target registers nothing
+// (SPELL_FAILED_TARGET_NOT_DEAD), as does an already-risen (ghouled) one
+// (SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW); HandleDummy's own
+// IsResurrectRequested guard skips targets with a pending request.
+func (s *session) handleRaiseAllyInitial(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	aura := uint32(0)
+	if eff.BasePoints >= 0 {
+		aura = uint32(eff.BasePoints + 1) // CalcValue: the Raise Ally spell id
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 || targetGUID == s.playerGUID {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		if !targetSess.isDeadOrGhost() || targetSess.playerHasAuraSpell(spellRaiseAlly) || targetSess.resurrection != nil {
+			continue
+		}
+		// SetResurrectRequestData stores the caster's position
+		// (Player.cpp:22247, WorldRelocate(*caster)); health and mana are 0.
+		targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, 0, 0, aura)
+		targetSess.sendResurrectRequest(s.playerGUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
+	}
+}
+
 func boolByte(value bool) uint8 {
 	if value {
 		return 1
@@ -1596,6 +1638,7 @@ func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) b
 	// summon model exists.
 	if data.Aura != 0 {
 		s.applyAura(data.Aura)
+		s.sendRaiseAllyWhisper(ctx, data.GUID)
 		s.resurrection = nil
 		return true
 	}
@@ -1617,6 +1660,34 @@ func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) b
 	s.spawnCorpseBones(ctx)
 	s.sendPlayerUpdate()
 	return true
+}
+
+// sendRaiseAllyWhisper mirrors spell_dk_raise_ally's SendText
+// (spell_dk.cpp:2915-2919): the original caster whispers the rise text
+// (broadcast_text 33055) to the risen player as a raid-boss whisper
+// (Unit::Whisper, Unit.cpp:14103 — CHAT_MSG_RAID_BOSS_WHISPER,
+// LANG_UNIVERSAL, the sender's gendered text, sent only to the target).
+// The script's ghoul summon, possess charm, scaling auras, and aura AI have
+// no Go model (no temp-summon system), so only the whisper rides the
+// applyAura shell; a missing broadcast_text row stays silent like the C++
+// GetBroadcastText miss.
+func (s *session) sendRaiseAllyWhisper(ctx context.Context, originalCasterGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	casterSess := s.server.findSessionByGUID(originalCasterGUID)
+	if casterSess == nil || casterSess.player == nil {
+		return
+	}
+	var text, text1 string
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, Text1 FROM broadcast_text WHERE ID = ?", broadcastTextRiseAlly).Scan(&text, &text1); err != nil || text == "" {
+		return
+	}
+	if casterSess.player.Gender == 1 && text1 != "" {
+		text = text1
+	}
+	packet := protocol.BuildChatMessageWithOptions(chatRaidBossWhisper, languageUniversal, originalCasterGUID, s.playerGUID, text, "", true, casterSess.player.Name, casterSess.chatTag())
+	_ = s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
 }
 
 // corpseRecord is one row of the characters.corpse table as written by
