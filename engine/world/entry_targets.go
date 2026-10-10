@@ -11,7 +11,7 @@ const implicitTargetNearbyEntry uint32 = 38 // TARGET_UNIT_NEARBY_ENTRY (SharedD
 const (
 	conditionObjectEntryGUID = 31 // CONDITION_OBJECT_ENTRY_GUID (ConditionMgr.h:69)
 	typeIDUnit               = 3  // TYPEID_UNIT
-	typeIDPlayer              = 4  // TYPEID_PLAYER
+	typeIDPlayer             = 4  // TYPEID_PLAYER
 )
 
 // isEntryNearbySpell reports spells carrying TARGET_UNIT_NEARBY_ENTRY (38)
@@ -158,6 +158,7 @@ func (s *session) spellEntryNearbyTarget(ctx context.Context, spell wotlk.Spell,
 	allowDead := spellAllowsDeadTarget(spell)
 	bestGUID := uint64(0)
 	bestDist := maxRange
+	var bestX, bestY, bestZ float32
 	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
 		if c.mapID != s.player.Map || c.instanceID != s.player.InstanceID {
 			return
@@ -187,9 +188,17 @@ func (s *session) spellEntryNearbyTarget(ctx context.Context, spell wotlk.Spell,
 		if dist < bestDist {
 			bestDist = dist
 			bestGUID = c.guid
+			bestX, bestY, bestZ = c.x, c.y, c.z
 		}
 	})
 	if bestGUID == 0 {
+		return 0, false
+	}
+	// Spell::CheckEffectTarget (Spell.cpp:1130: AddUnitTarget with
+	// checkIfValid=true) drops a nearby unit target without line of sight
+	// to the caster; an empty result fails the cast with
+	// SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:794).
+	if !s.implicitUnitTargetLOSPasses(spell, bestGUID, bestX, bestY, bestZ) {
 		return 0, false
 	}
 	return bestGUID, true

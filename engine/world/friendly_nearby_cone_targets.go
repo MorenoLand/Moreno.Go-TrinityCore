@@ -104,6 +104,7 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	bestGUID := uint64(0)
 	bestDist := maxRange
+	var bestX, bestY, bestZ float32
 	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
 		if c.guid == s.playerGUID || c.mapID != player.Map || c.instanceID != player.InstanceID ||
 			c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, false) ||
@@ -123,9 +124,17 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 		if dist < bestDist {
 			bestDist = dist
 			bestGUID = c.guid
+			bestX, bestY, bestZ = c.x, c.y, c.z
 		}
 	})
 	if bestGUID == 0 {
+		return 0, false
+	}
+	// Spell::CheckEffectTarget (Spell.cpp:1130: AddUnitTarget with
+	// checkIfValid=true) drops a nearby unit target without line of sight
+	// to the caster; an empty result fails the cast with
+	// SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:794).
+	if !s.implicitUnitTargetLOSPasses(spell, bestGUID, bestX, bestY, bestZ) {
 		return 0, false
 	}
 	return bestGUID, true
@@ -438,6 +447,7 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 	scope := s.friendlyRefererScope(s.playerGUID)
 	bestGUID := uint64(0)
 	bestDist := maxRange
+	var bestX, bestY, bestZ float32
 	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
 		if !s.friendlyAssistOK(spell, c, caster, allyOf) {
 			return
@@ -454,9 +464,17 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 		if dist < bestDist {
 			bestDist = dist
 			bestGUID = c.guid
+			bestX, bestY, bestZ = c.x, c.y, c.z
 		}
 	})
 	if bestGUID == 0 {
+		return 0, false
+	}
+	// Spell::CheckEffectTarget (Spell.cpp:1130: AddUnitTarget with
+	// checkIfValid=true) drops a nearby unit target without line of sight
+	// to the caster; an empty result fails the cast with
+	// SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:794).
+	if !s.implicitUnitTargetLOSPasses(spell, bestGUID, bestX, bestY, bestZ) {
 		return 0, false
 	}
 	return bestGUID, true

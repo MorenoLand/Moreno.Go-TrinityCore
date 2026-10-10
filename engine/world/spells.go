@@ -6620,14 +6620,58 @@ func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 		// a missing/stale motion reads as dead, matching GetGuardianPet
 		// clearing a stale pet GUID (Unit.cpp:6023-6033).
 		if motion, ok := s.petMotionForCast(s.player.PetGUID); ok && (motion.Health > 0 || spellAllowsDeadTarget(spell)) {
+			// The CheckEffectTarget LOS arm (default arm,
+			// Spell.cpp:7472-7492) runs for checkIfValid=true AddUnitTarget
+			// calls, so the pet must be in line of sight of the caster.
+			if !s.implicitUnitTargetLOSPasses(spell, s.player.PetGUID, motion.X, motion.Y, motion.Z) {
+				return 0, false
+			}
 			return s.player.PetGUID, true
 		}
 		return 0, false
 	}
 	if wantVehicle && s.player.VehicleGUID != 0 {
+		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); motion != nil {
+			// SelectImplicitCasterObjectTargets (Spell.cpp:1500) runs
+			// AddUnitTarget with checkIfValid=true for TARGET_UNIT_VEHICLE
+			// too, so the vehicle base must pass the CheckEffectTarget LOS
+			// arm like the pet above.
+			if !s.implicitUnitTargetLOSPasses(spell, s.player.VehicleGUID, motion.X, motion.Y, motion.Z) {
+				return 0, false
+			}
+		}
 		return s.player.VehicleGUID, true
 	}
 	return 0, false
+}
+
+// implicitUnitTargetLOSPasses mirrors the default arm of
+// Spell::CheckEffectTarget (Spell.cpp:7395-7450) for implicit unit targets
+// added with checkIfValid=true — the nearby single-target selections
+// (SelectImplicitNearbyTargets, Spell.cpp:1130) and the caster-object arm
+// (Spell.cpp:1552): the candidate is dropped when it lacks line of sight
+// to the caster. Area (1303), cone (1217) and chain (1610) selections pass
+// checkIfValid=false, so the LOS arm does not apply there; the explicit
+// target is covered by the cast-time LOS gates (spells.go:2630/2657/6978).
+// Exemptions: SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS (the DisableMgr LOS-disable
+// leg has no Go model), the caster itself (target == m_caster), and a
+// gameobject caster ignoring LOS checks (vacuous here — the Go caster is
+// always the session player). The triggered-aura inheritance arm
+// (m_triggeredByAuraSpell carrying ATTR2_CAN_TARGET_NOT_IN_LOS) has no
+// bridge: triggeredByAuraCast carries no spell id. The charm legs
+// (MOD_POSSESS/CHARM/POSSESS_PET/AOE_CHARM) ride the cast-time checkCharmCast
+// (spells.go:4806); no vanilla spell pairs them with nearby targets.
+func (s *session) implicitUnitTargetLOSPasses(spell wotlk.Spell, targetGUID uint64, tx, ty, tz float32) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return true
+	}
+	if spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 {
+		return true
+	}
+	if targetGUID == s.playerGUID {
+		return true
+	}
+	return s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tx, ty, tz)
 }
 
 // sendSpellMiss mirrors WorldObject::SendSpellMiss (Object.cpp:2666-2677):
