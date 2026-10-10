@@ -6588,9 +6588,14 @@ func (s *session) breakHitBySpellAuras(ctx context.Context, spell wotlk.Spell, t
 // Unit::GetVehicleBase) — and never from the wire or selection target
 // (SelectEffectImplicitTargets' EFFECT_IMPLICIT_TARGET_CASTER case never
 // consults m_targets.GetUnitTarget()). TARGET_UNIT_MASTER (27) needs the
-// caster's charmer/owner and Go has no player charm model; TARGET_UNIT_SUMMONER
+// caster's charmer/owner and Go has no player charm model (the existing
+// charm state is creature-side only, spells.go:22359); TARGET_UNIT_SUMMONER
 // (92) is vacuous for player casters; TARGET_UNIT_PASSENGER_0..7 (96+) needs
-// a creature caster, also vacuous on the client path.
+// a creature caster, also vacuous on the client path. The checkIfValid=true
+// AddUnitTarget arm is bridged for the pet via the CheckTarget alive gate
+// (dead pet rejected unless the spell allows dead targets); the vehicle
+// alive gate is a noted delta (Go clears VehicleGUID only on exit, not on
+// vehicle death).
 func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 	if s == nil || s.player == nil {
 		return 0, false
@@ -6608,7 +6613,18 @@ func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 		}
 	}
 	if wantPet && s.player.PetGUID != 0 {
-		return s.player.PetGUID, true
+		// SelectImplicitCasterObjectTargets (Spell.cpp:1500) runs
+		// AddUnitTarget with checkIfValid=true for TARGET_UNIT_PET, so the
+		// pet must pass SpellInfo::CheckTarget — whose alive gate
+		// (SpellInfo.cpp:1712-1713) rejects a dead pet unless the spell can
+		// target the dead (SPELL_ATTR2_CAN_TARGET_DEAD,
+		// spellAllowsDeadTarget). petMotionForCast is the live-motion read;
+		// a missing/stale motion reads as dead, matching GetGuardianPet
+		// clearing a stale pet GUID (Unit.cpp:6023-6033).
+		if motion, ok := s.petMotionForCast(s.player.PetGUID); ok && (motion.Health > 0 || spellAllowsDeadTarget(spell)) {
+			return s.player.PetGUID, true
+		}
+		return 0, false
 	}
 	if wantVehicle && s.player.VehicleGUID != 0 {
 		return s.player.VehicleGUID, true
@@ -9235,17 +9251,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectCharge(effCtx, targetGUID, spell)
 				}
 			case 85: // SPELL_EFFECT_SUMMON_PLAYER (EffectSummonPlayer, SpellEffects.cpp:3922)
-				// C++ runs at SPELL_EFFECT_HANDLE_HIT_TARGET per unit target: a
-				// player target gets SendSummonRequestFrom(caster). Only online
-				// players have sessions, which is the TYPEID_PLAYER gate; the
-				// HasSummonPending / Evil Twin gates live in sendSummonRequest
-				// (movement.go).
-				for _, effectTarget := range hitTargets {
-					if effectTarget == 0 {
-						continue
-					}
-					if s.server != nil && s.player != nil {
-						if targetSess := s.server.findSessionByGUID(effectTarget); targetSess != nil {
+				// Spell::SelectEffectTypeImplicitTargets special case
+				// (Spell.cpp:1708-1746): the summon target is the caster's
+				// *selection* (FindPlayer(m_caster->ToPlayer()->GetTarget())),
+				// never the wire target, and it is never stored in the target
+				// map — HandleEffects runs on it directly at HIT_TARGET.
+				// Only online players have sessions, which is the
+				// TYPEID_PLAYER gate; the selection/same-group/pending gates
+				// live in checkSummonPlayerCast (Spell.cpp:5892-5928) and the
+				// Evil Twin gate in sendSummonRequest (movement.go). The
+				// per-effect immunity check (IsImmunedToSpellEffect,
+				// Spell.cpp:1721-1732) runs with a null caster both at
+				// selection and at the deferred AddFarSpellCallback
+				// execution; the deferral itself has no Go model (no
+				// map-thread callback queue).
+				if s.server != nil && s.player != nil && s.selection != 0 {
+					if targetSess := s.server.findSessionByGUID(s.selection); targetSess != nil {
+						if !targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
 							targetSess.sendSummonRequest(s.playerGUID, s.player.Zone)
 						}
 					}
@@ -9299,11 +9321,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectScriptEffect(effCtx, spellID, eff, effectTarget)
 				}
 			case spellEffectSummonRafFriend: // 152: SPELL_EFFECT_SUMMON_RAF_FRIEND (EffectSummonRaFFriend, SpellEffects.cpp:5727)
-				for _, effectTarget := range hitTargets {
-					if effectTarget == 0 {
-						continue
+				// Same SelectEffectTypeImplicitTargets special case as effect
+				// 85 above (Spell.cpp:1709-1746): the target is the caster's
+				// selection (GetSelectedPlayer), with the null-caster
+				// per-effect immunity check (IsImmunedToSpellEffect); the
+				// recruiter-account gates live in checkSummonRafFriendCast
+				// (Spell.cpp:5929-5943) and the deferred AddFarSpellCallback
+				// has no Go model.
+				if s.server != nil && s.player != nil && s.selection != 0 {
+					if targetSess := s.server.findSessionByGUID(s.selection); targetSess != nil {
+						if !targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
+							s.handleEffectSummonRafFriend(effCtx, s.selection, eff)
+						}
 					}
-					s.handleEffectSummonRafFriend(effCtx, effectTarget, eff)
 				}
 			case spellEffectCreateTamedPet: // 153: SPELL_EFFECT_CREATE_TAMED_PET (EffectCreateTamedPet, SpellEffects.cpp:5362)
 				// CreateTamedPetFrom (new wild-creature-to-pet conversion +

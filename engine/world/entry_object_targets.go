@@ -60,7 +60,9 @@ func (s *session) entryNearbyObjectRange(spell wotlk.Spell) float64 {
 		return 0
 	}
 	maxRange := float64(rangeEntry.MaxHostile)
-	if !isHarmfulSpell(spell) {
+	// Spell.cpp:1052 (TARGET_CHECK_ENTRY arm): range =
+	// GetMaxRange(IsPositive()) — same exact gate as spellEntryNearbyTarget.
+	if spellIsPositive(spell) {
 		maxRange = float64(rangeEntry.MaxFriendly)
 	}
 	return maxRange

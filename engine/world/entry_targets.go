@@ -133,7 +133,12 @@ func (s *session) spellEntryNearbyTarget(ctx context.Context, spell wotlk.Spell,
 		return 0, false
 	}
 	maxRange := float64(rangeEntry.MaxHostile)
-	if !isHarmfulSpell(spell) {
+	// Spell.cpp:1052 (TARGET_CHECK_ENTRY/TARGET_CHECK_DEFAULT arm):
+	// range = GetMaxRange(IsPositive()). spellIsPositive is the exact
+	// IsPositive model (SpellInfo.cpp:1205, !SPELL_ATTR0_CU_NEGATIVE via the
+	// load-computed CU_NEGATIVE_EFF bits); the isHarmfulSpell heuristic
+	// disagrees with it for e.g. AoE heal/damage hybrids.
+	if spellIsPositive(spell) {
 		maxRange = float64(rangeEntry.MaxFriendly)
 	}
 	if maxRange <= 0 {
