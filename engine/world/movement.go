@@ -411,6 +411,38 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 				s.removeAurasWithInterruptFlags(auraInterruptFlagMove)
 			}
 		}
+		// MovementHandler.cpp:408-426 (HandleMovementOpcodes undermap leg):
+		// below the map's minimum height the player is out of bounds — set
+		// PLAYER_FLAGS_IS_OUT_OF_BOUNDS, take void damage, and corpse if
+		// still alive (GM/etc). Go has no height-grid model, so the leg keys
+		// on C++'s no-grid fallback: Map::GetMinHeight returns -500.0f with
+		// no grid (Map.cpp:2535). Battleground::HandlePlayerUnderMap has no
+		// override anywhere in C++ (base returns false, Battleground.h:473),
+		// so the BG gate is a documented no-bridge and the leg always runs;
+		// grid-based per-cell min heights have no Go bridge. Kept on the
+		// non-vehicle path like C++ (the vehicle block returns before
+		// UpdatePosition).
+		if info.Z < -500 {
+			if s.player.Health > 0 {
+				if s.player.PlayerFlags&playerFlagOutOfBounds == 0 {
+					s.player.PlayerFlags |= playerFlagOutOfBounds
+					s.sendPlayerUpdate()
+				}
+				s.environmentalDamage(ctx, damageFallToVoid, s.player.MaxHealth)
+				if s.player.Health > 0 {
+					// Player can be alive if GM/etc: C++ forces CORPSE
+					// state anyway ("change the death state to CORPSE to
+					// prevent the death timer from starting in the next
+					// player update"). No durability: void deaths never
+					// cost durability (Player.cpp:793-803).
+					s.player.Health = 0
+					s.killPlayer(ctx, nil, false, false)
+				}
+			}
+		} else if s.player.PlayerFlags&playerFlagOutOfBounds != 0 {
+			s.player.PlayerFlags &^= playerFlagOutOfBounds
+			s.sendPlayerUpdate()
+		}
 		s.updateZoneAndArea(ctx, false)
 		previousTransportGUID := s.player.TransportGUID
 		reportedTransportGUID := uint64(0)
@@ -1349,12 +1381,15 @@ func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool
 }
 
 // handleMountSpecialAnim processes CMSG_MOUNTSPECIAL_ANIM (0x171).
+// Reference: WorldSession::HandleMountSpecialAnimOpcode (MovementHandler.cpp:545).
+// SMSG_MOUNTSPECIAL_ANIM carries the raw uint64 GUID (WorldPacket data <<
+// uint64), not a packed GUID.
 func (s *session) handleMountSpecialAnim(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
 	buf := protocol.NewBuffer(8)
-	buf.WritePackedGUID(s.playerGUID)
+	buf.WriteU64(s.playerGUID)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_MOUNTSPECIAL_ANIM), buf.Bytes(), s)
 	return true
 }
@@ -1499,7 +1534,16 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 
 	packet := protocol.NewBuffer(21)
 	packet.WriteU64(s.playerGUID)
-	packet.WriteU8(damageType)
+	// Player::EnvironmentalDamage (Player.cpp:784): the client damage-log
+	// packet reports DAMAGE_FALL for a fall-to-void death — the raw
+	// DAMAGE_FALL_TO_VOID type never reaches the wire. The achievement
+	// criteria below keep the raw type (ACHIEVEMENT_CRITERIA_TYPE_DEATHS_FROM
+	// matches miscValue2 against the unmapped type, AchievementMgr.cpp:1828).
+	logType := damageType
+	if logType == damageFallToVoid {
+		logType = damageFall
+	}
+	packet.WriteU8(logType)
 	packet.WriteU32(damage)
 	packet.WriteU32(resist)
 	packet.WriteU32(absorb)

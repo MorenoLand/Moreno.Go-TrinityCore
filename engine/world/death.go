@@ -948,7 +948,7 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 	}
 
 	// Reference clears PLAYER_FLAGS_IS_OUT_OF_BOUNDS on every repop
-	// (Player.cpp:5155); Go never sets the flag, so the clear is a no-op.
+	// (Player.cpp:5155); set by the movement undermap leg (movement.go).
 	s.player.PlayerFlags &^= playerFlagOutOfBounds
 
 	// In battlegrounds, automatically queue for wave resurrection (Go-original:
