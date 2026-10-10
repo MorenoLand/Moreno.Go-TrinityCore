@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -421,15 +423,23 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 	if killer != nil {
 		killer.creditKillingBlowCriteria()
 	}
+	// Player::setDeathState JUST_DIED (Player.cpp:1411-1416) + the Unit::Kill
+	// Spirit of Redemption arm (Unit.cpp:11302-11310): the priceless-
+	// resurrection fill runs BEFORE the death aura strip (both C++ sites fill
+	// before Unit::setDeathState/RemoveAllAurasOnDeath remove the soulstone
+	// buff), and only when the field is currently 0. Go's clearActiveAuras
+	// never touches the player field, so one fill here covers both C++ sites
+	// (the second C++ fill is a no-op once the field is set).
+	if s.player.SelfResSpell == 0 {
+		s.player.SelfResSpell = s.getResurrectionSpellId(ctx)
+	}
 	if spiritOfRedemption {
 		// Unit::Kill Spirit of Redemption arm (Unit.cpp:11302-11314):
 		// RemoveAllAurasOnDeath, then CastSpell(27827). Go holds no passive
 		// aura instances, so clearActiveAuras is the RemoveAllAurasOnDeath
 		// analog over the applied set; the talent passive survives in the
 		// learned-spell list. PLAYER_SELF_RES_SPELL needs no save/restore:
-		// clearActiveAuras never touches the player field, and the
-		// GetResurrectionSpellId fill sub-arm is unmodeled (no
-		// reincarnation/soulstone self-res model in Go). The 27827 apply leg
+		// clearActiveAuras never touches the player field. The 27827 apply leg
 		// (stand state + SetHealth(1)) lives in applyAuraWithDuration.
 		s.clearActiveAuras()
 		s.applyAuraWithDuration(spiritOfRedemptionSpellID, spiritOfRedemptionDurationMs)
@@ -1798,6 +1808,104 @@ func (s *session) handleSelfRes(ctx context.Context) bool {
 	}
 	s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{}, 0, 0, nil)
 	return true
+}
+
+// getResurrectionSpellId mirrors Player::GetResurrectionSpellId (Player.cpp:24021-24060):
+// the priceless-resurrection scan that fills PLAYER_SELF_RES_SPELL on death,
+// before the death aura strip removes the buffs it reads. Soulstone dummy auras
+// (SpellVisual[0]==99, SpellIconID==92) map to their rank's resurrect spell at
+// prio 3; Twisting Nether 23701 applies at prio 2 on its 10% roll (its else-if
+// can overwrite an earlier soulstone, matching the C++ per-effect iteration);
+// Reincarnation (20608 learned, 21169 off cooldown, glyph 58059 or an Ankh
+// 17030 in inventory) applies at prio 1.
+func (s *session) getResurrectionSpellId(ctx context.Context) uint32 {
+	if s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	var prio uint32
+	var spellID uint32
+	// C++ iterates the dummy AuraEffect list in apply order; Go keeps auras in
+	// a spell-keyed map, so dummy auras are visited in ascending spell order.
+	// The soulstone+23701 coexistence corner then resolves by spell id rather
+	// than apply order (documented deviation).
+	s.castMu.Lock()
+	ids := make([]uint32, 0, len(s.activeAuras))
+	for id, aura := range s.activeAuras {
+		if aura != nil && aura.AuraType == spellAuraDummy {
+			ids = append(ids, id)
+		}
+	}
+	s.castMu.Unlock()
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		spell, found, err := s.server.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		if prio < 2 && spell.SpellVisual[0] == 99 && spell.SpellIconID == 92 {
+			switch id {
+			case 20707:
+				spellID = 3026
+			case 20762:
+				spellID = 20758
+			case 20763:
+				spellID = 20759
+			case 20764:
+				spellID = 20760
+			case 20765:
+				spellID = 20761
+			case 27239:
+				spellID = 27240
+			case 47883:
+				spellID = 47882
+			default:
+				// TC_LOG_ERROR("entities.player", "Unhandled spell %u: S.Resurrection", id):
+				// a visual/icon-matching dummy aura with no rank mapping leaves
+				// prio and spellID untouched (the C++ continue skips prio = 3).
+				s.debug("unhandled soulstone aura in resurrection scan", "account", s.accountName, "spell", id)
+				continue
+			}
+			prio = 3
+		} else if id == 23701 && rand.Intn(100) < 10 {
+			// roll_chance_i(10): Random.h:59-62, chance > irand(0, 99).
+			prio = 2
+			spellID = 23700
+		}
+	}
+	// Reincarnation passive (Glyph of Renewed Life 58059 or an Ankh 17030).
+	if prio < 1 && s.hasLearnedSpell(20608) && !s.spellHasCooldown(21169) && (s.hasAura(58059) || s.inventoryItemCount(ctx, 17030) > 0) {
+		spellID = 21169
+	}
+	return spellID
+}
+
+// spellHasCooldown mirrors the spell-id arm of SpellHistory::HasCooldown
+// (SpellHistory.cpp:473-487): the per-spell cooldown entry only, not the
+// category arm.
+func (s *session) spellHasCooldown(spellID uint32) bool {
+	if s.player == nil {
+		return false
+	}
+	nowUnix := time.Now().Unix()
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell == spellID && cd.End > nowUnix {
+			return true
+		}
+	}
+	return false
+}
+
+// inventoryItemCount mirrors Player::GetItemCount (Player.cpp): the total
+// stack count of an item entry across the character's inventory.
+func (s *session) inventoryItemCount(ctx context.Context, entry uint32) uint32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var count uint32
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, entry).Scan(&count); err != nil {
+		return 0
+	}
+	return count
 }
 
 // applySelfResurrectEffect mirrors Spell::EffectResurrectNew (SpellEffects.cpp:246)
