@@ -510,6 +510,14 @@ func (s *session) swapInventoryCoordinates(ctx context.Context, itemA, bagA, slo
 	} else if itemB != 0 {
 		_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", bagA, slotA, s.playerGUID, itemB)
 	}
+	// Player::SwapItem/StoreItem equipment transitions (Player.cpp:12419):
+	// itemA moved (bagA,slotA)->(bagB,slotB), itemB moved (bagB,slotB)->(bagA,slotA).
+	if itemA != 0 {
+		s.updateItemEquipSpellsOnMove(ctx, itemA, bagA, slotA, bagB, slotB)
+	}
+	if itemB != 0 {
+		s.updateItemEquipSpellsOnMove(ctx, itemB, bagB, slotB, bagA, slotA)
+	}
 }
 
 func (s *session) despawnItem(itemGUID uint64) {
@@ -1157,6 +1165,11 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 		removedCount = uint32(currentCount)
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), removedCount, false)
+	// Player::RemoveItem -> _ApplyItemMods(false) (Player.cpp:12419): a
+	// destroyed equipped item sheds its equip spells before the row goes.
+	if bagKey == 0 && slot < equipSlotEnd && (currentCount <= int64(count) || count == 0) {
+		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
+	}
 	if currentCount <= int64(count) || count == 0 {
 		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 		_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
@@ -1774,7 +1787,91 @@ func (s *session) resolveItemUseSpell(ctx context.Context, itemEntry uint32, dbI
 	return 0, nil
 }
 
-// castItemReagentTakesExtra mirrors the inner arm of Spell::TakeReagents'
+// applyItemEquipSpells mirrors Player::ApplyItemEquipSpell plus the spell half
+// of Player::ApplyEquipSpell (Player.cpp:7960-8022): equipping an item casts
+// each template spell with ITEM_SPELLTRIGGER_ON_EQUIP as a triggered cast
+// with the item as cast item (CastSpellExtraArgs(Item*), SpellDefines.h:165);
+// removing the item strips exactly those auras via RemoveAurasDueToItemSpell,
+// walking ALL template spells rather than just the ON_EQUIP ones ("un-apply
+// all spells, not only at-equipped", Player.cpp:8019). The apply leg's
+// CheckShapeshift gate (Player.cpp:7993-7996) rides checkShapeshiftCast; the
+// form_change re-evaluation arm (Player.cpp:7998-8004, UpdateEquipSpellsAt-
+// FormChange) has no Go hook yet. The entry-ID binding (GetSpellInfo lookup,
+// Player.cpp:7977-7980) skips corrupt rows like the C++ continue arms.
+func (s *session) applyItemEquipSpells(ctx context.Context, dbItemGUID int64, itemEntry uint32, apply bool) {
+	if s == nil || s.player == nil || dbItemGUID == 0 || itemEntry == 0 {
+		return
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil {
+		return
+	}
+	var spellIDs, spellTriggers [5]int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT spellid_1, spelltrigger_1, spellid_2, spelltrigger_2, spellid_3, spelltrigger_3, spellid_4, spelltrigger_4, spellid_5, spelltrigger_5 FROM item_template WHERE entry = ? LIMIT 1`, itemEntry).Scan(
+		&spellIDs[0], &spellTriggers[0], &spellIDs[1], &spellTriggers[1], &spellIDs[2], &spellTriggers[2],
+		&spellIDs[3], &spellTriggers[3], &spellIDs[4], &spellTriggers[4]); err != nil {
+		return
+	}
+	for i := 0; i < maxItemProtoSpells; i++ {
+		if spellIDs[i] <= 0 {
+			continue
+		}
+		// wrong triggering type (Player.cpp:7971-7972): only ON_EQUIP
+		// spells cast on equip; the removal leg takes every template spell.
+		if apply && spellTriggers[i] != itemSpellTriggerOnEquip {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(uint32(spellIDs[i]))
+		if err != nil || !found {
+			continue
+		}
+		if apply {
+			// Cannot be used in this stance/form (Player.cpp:7993-7996).
+			if s.checkShapeshiftCast(spell) != 0 {
+				continue
+			}
+			s.castSpellDirectWithItem(ctx, uint32(spellIDs[i]), s.playerGUID, uint64(dbItemGUID))
+		} else {
+			s.removeAurasDueToItemSpell(uint32(spellIDs[i]), uint64(dbItemGUID))
+		}
+	}
+}
+
+// updateItemEquipSpellsOnMove mirrors the _ApplyItemMods(true/false) pair
+// Player::SwapItem/StoreItem run around equipment transitions
+// (Player::_ApplyItemMods, Player.cpp:12419): an item leaving an equipment
+// slot (bag 0, slot < 19) sheds its equip spells, an item entering one gains
+// them. Called after the coordinate swap commits so the remove leg cannot
+// see a stale position.
+func (s *session) updateItemEquipSpellsOnMove(ctx context.Context, itemGUID, fromBag, fromSlot, toBag, toSlot int64) {
+	if s == nil || itemGUID == 0 || (fromBag == toBag && fromSlot == toSlot) {
+		return
+	}
+	wasEquipped := fromBag == 0 && fromSlot < int64(equipSlotEnd)
+	isEquipped := toBag == 0 && toSlot < int64(equipSlotEnd)
+	if !wasEquipped && !isEquipped {
+		return
+	}
+	var itemEntry int64
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry)
+	if itemEntry <= 0 {
+		return
+	}
+	// C++ SwapItem/StoreItem order: the old position's mods leave before the
+	// new position's apply.
+	if wasEquipped {
+		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
+	}
+	if isEquipped {
+		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), true)
+	}
+}
+
 // cast-item-as-reagent block (Spell.cpp:5066-5076): the reagent count grows
 // by one when the cast item is expendable (negative template SpellCharges
 // on some spell slot) and this use spends its last charge (abs(charges) <

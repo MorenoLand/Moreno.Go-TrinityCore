@@ -727,7 +727,7 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 				if petCaster != nil {
 					s.applyPetAura(ctx, petCaster, silenceSpell, silenceEff, petCaster.GUID, 5000, 0)
 				} else {
-					s.applyAuraToTarget(ctx, casterGUID, silenceSpell, silenceEff, -1, 5000, 0, 0, 32, nil, false, casterGUID, false)
+					s.applyAuraToTarget(ctx, casterGUID, silenceSpell, silenceEff, -1, 5000, 0, 0, 32, nil, false, casterGUID, false, 0)
 				}
 			}
 
@@ -1108,7 +1108,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		if stealCasterGUID == 0 {
 			stealCasterGUID = s.playerGUID
 		}
-		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, -1, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask, nil, true, stealCasterGUID, false)
+		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, -1, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask, nil, true, stealCasterGUID, false, 0)
 		// C++ SetLoadedState charges arg (Unit.cpp:4032): 1 for
 		// ATTR7_DISPEL_CHARGES auras, the victim's charge count otherwise.
 		wantCharges := st.charges

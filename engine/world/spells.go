@@ -303,6 +303,7 @@ const (
 	// item_instance.enchantments index of the PRISMATIC_ENCHANTMENT_SLOT
 	// (slot 6, ItemDefines.h:152) id: 3 ints per slot, slots 0-5 first.
 	itemSpellTriggerOnUse        = 0 // ITEM_SPELLTRIGGER_ON_USE (ItemTemplate.h:80)
+	itemSpellTriggerOnEquip      = 1 // ITEM_SPELLTRIGGER_ON_EQUIP (ItemTemplate.h:81)
 	itemSpellTriggerOnNoDelayUse = 5 // ITEM_SPELLTRIGGER_ON_NO_DELAY_USE (ItemTemplate.h:90)
 	maxItemProtoSpells           = 5 // MAX_ITEM_PROTO_SPELLS
 
@@ -9002,7 +9003,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false)
+					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false, 0)
 				}
 				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
 				// reflected chain jump resolves its unit to the caster, so a
@@ -9010,7 +9011,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// caster — the same victim-selection arms as the loop above.
 				if len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
 					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
-					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false)
+					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -12579,22 +12580,31 @@ func (s *session) castFirstLoginSpell(ctx context.Context, spellID uint32, targe
 }
 
 func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool) {
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, nil)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, nil, 0)
 }
 
 func (s *session) castSpellDirectWithBasePoint(ctx context.Context, spellID uint32, targetGUID uint64, basePoint uint32) {
 	value := int32(basePoint)
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, []int32{value})
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, []int32{value}, 0)
 }
 
 // castSpellDirectWithBasePoints overrides every listed effect's base points
 // (C++ CastSpellExtraArgs sets SPELLVALUE_BASE_POINT0+i for i in
 // 0..MAX_SPELL_EFFECTS-1, SpellEffects.cpp:989-992, 1037-1040).
 func (s *session) castSpellDirectWithBasePoints(ctx context.Context, spellID uint32, targetGUID uint64, basePoints []int32) {
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePoints)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePoints, 0)
 }
 
-func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints []int32) {
+// castSpellDirectWithItem mirrors the CastSpellExtraArgs(Item*) arm
+// (SpellDefines.h:165: TriggerFlags(TRIGGERED_FULL_MASK), CastItem(item))
+// used by Player::ApplyEquipSpell (Player.cpp:8007): the cast is fully
+// triggered and the item rides as the cast item, so auras created by it
+// record the item GUID (Aura::m_castItemGuid).
+func (s *session) castSpellDirectWithItem(ctx context.Context, spellID uint32, targetGUID uint64, castItemGUID uint64) {
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, castItemGUID)
+}
+
+func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints []int32, castItemGUID uint64) {
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
@@ -12605,6 +12615,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// own context.
 	s.beginSpellModTaking()
 	defer s.endSpellModTaking()
+	// Spell::SendSpellGo (Spell.cpp:4336-4340): the cast item's GUID is the
+	// wire caster for item casts (items.go:1654 convention); Go's aura model
+	// merges the C++ m_castItemGuid into the caster slot on item casts, and
+	// the raw instance GUID rides the castItemGUID param into
+	// applyAuraToTarget (Aura::m_castItemGuid, SpellAuras.cpp:430).
+	auraCasterGUID := s.playerGUID
+	if castItemGUID != 0 {
+		auraCasterGUID = castItemGUID | (uint64(0x4000) << 48)
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -12793,7 +12812,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if schoolMask == 0 {
 				schoolMask = 1
 			}
-			s.applyAuraToTarget(ctx, targetGUID, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, s.playerGUID, false)
+			s.applyAuraToTarget(ctx, targetGUID, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID)
 		} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 			healAmount := uint32(eff.BasePoints + 1)
 			if healAmount == 0 && spellID == ProcSpellCrusader {
@@ -12856,7 +12875,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
-		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, s.playerGUID, false)
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, auraCasterGUID, false, castItemGUID)
 	}
 
 	// Spell::handle_immediate (Spell.cpp:3493, 3613-3626): Go's triggered
@@ -13258,7 +13277,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 		// (unitTarget->CastSpell(unitTarget, ...)); every Go cast runs on
 		// the player session, so the heal lands with the right amount but
 		// the caster attribution differs — documented delta.
-		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, []int32{bp0})
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, []int32{bp0}, 0)
 		return true
 	case triggerReplenishManaSpell:
 		// SpellEffects.cpp:865-889: Replenish Mana (33394) — cannot target
@@ -13274,7 +13293,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 			return true
 		}
 		bp0 := eff.BasePoints
-		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, []int32{bp0})
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, []int32{bp0}, 0)
 		return true
 	case triggerDemonicEmpowerSuccub:
 		// SpellEffects.cpp:900-908: Demonic Empowerment (succubus) — strip
@@ -16931,6 +16950,28 @@ func (s *session) removeAura(spellID uint32) {
 	}
 }
 
+// removeAurasDueToItemSpell mirrors Unit::RemoveAurasDueToItemSpell
+// (Unit.cpp:4053-4065): it removes only the auras of spellID whose cast item
+// GUID matches castItemGUID — a plain RemoveAurasDueToSpell would also strip
+// the same spell cast from another item or by hand. C++ restarts the
+// spell-ID bucket scan after each removal because RemoveAura invalidates the
+// iterator; Go's activeAuras holds at most one aura per spell ID, so the
+// bucket walk and its restart are vacuous and the match reduces to a single
+// ItemGUID check. Callers: the item-equip unequip leg (Player::
+// ApplyEquipSpell, Player.cpp:8019) and enchant removal (Player.cpp:14000).
+func (s *session) removeAurasDueToItemSpell(spellID uint32, castItemGUID uint64) {
+	if s == nil || s.player == nil || castItemGUID == 0 {
+		return
+	}
+	s.castMu.Lock()
+	aura, ok := s.activeAuras[spellID]
+	match := ok && aura != nil && !aura.Stopped && aura.ItemGUID == castItemGUID
+	s.castMu.Unlock()
+	if match {
+		s.removeAura(spellID)
+	}
+}
+
 func (s *session) hasAura(spellID uint32) bool {
 	if s.auras == nil {
 		return false
@@ -18390,7 +18431,11 @@ func isExistingAreaAuraOfTarget(aura *activeAura, exSpell wotlk.Spell, targetGUI
 // (Unit::RemoveAurasDueToSpellBySteal, Unit.cpp:4020:
 // createInfo.SetCasterGUID(aura->GetCasterGUID())) — the no-stack purge's
 // same-caster terms and the wire caster field key on it, not on the stealer.
-func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool) {
+// castItemGUID is the raw item instance GUID when the aura comes from an item
+// cast (Aura::m_castItemGuid, SpellAuras.cpp:430: m_castItemGuid(createInfo.
+// CastItemGUID)); 0 otherwise. The steal path passes 0 — the C++ steal
+// createInfo carries no cast item (Unit.cpp:4020-4023).
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64) {
 	if s.player == nil {
 		return
 	}
@@ -18655,6 +18700,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			EffectMask:         spellEffectMask(spell, eff),
 			CasterGUID:         casterGUID,
 			TargetGUID:         targetGUID,
+			ItemGUID:           castItemGUID,
 			ChannelTargetGUID:  channelTargetGUID,
 			PersistentAreaAura: persistentAreaAura,
 			SchoolMask:         schoolMask,
@@ -19056,6 +19102,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		EffectMask:         spellEffectMask(spell, eff),
 		CasterGUID:         s.playerGUID,
 		TargetGUID:         targetGUID,
+		ItemGUID:           castItemGUID,
 		TargetKey:          targetKey,
 		PersistentAreaAura: persistentAreaAura,
 		SchoolMask:         schoolMask,
