@@ -12945,7 +12945,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 					s.server.creditHonorableKill(s, playerSess)
 				}
 				// The spell caster s is a player (Unit::Kill Unit.cpp:11341-11343).
-				playerSess.killPlayer(ctx, s, true)
+				playerSess.killPlayer(ctx, s, true, true)
 				// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
 				// pet arm — attacker is the player, so only the
 				// attacker's live pet gets KilledUnit(victim)
@@ -21984,7 +21984,7 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 		if ts.server != nil {
 			tickKiller = ts.server.findSessionByGUID(aura.CasterGUID)
 		}
-		ts.killPlayer(context.Background(), tickKiller, true)
+		ts.killPlayer(context.Background(), tickKiller, true, true)
 		// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill pet
 		// arm — the periodic tick's attacker is the aura caster (a
 		// player in Go's model), so only the caster's live pet gets
@@ -23209,7 +23209,7 @@ func (s *session) applyHealthFunnelSelfDamage(spellID, manaPerSecond, effectiveH
 	if funnelDamage >= casterHealth {
 		s.player.Health = 0
 		s.sendPlayerUpdate()
-		s.killPlayer(context.Background(), s, true)
+		s.killPlayer(context.Background(), s, true, true)
 	} else {
 		s.player.Health -= funnelDamage
 		s.sendPlayerUpdate()

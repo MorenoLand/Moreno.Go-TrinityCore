@@ -314,7 +314,13 @@ const (
 // pvpDeath carries Unit::Kill's attacker arm (Unit.cpp:11341-11343): true when
 // the killer resolves to a player (attacker->GetCharmerOrOwnerPlayerOrPlayerItself()),
 // feeding the corpse type and the reclaim delay.
-func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool) {
+// durabilityLoss carries Unit::Kill's durabilityLoss param (Unit.h:940,
+// default true from DealDamage): false for GM .die/.damage (cs_misc.cpp:608,
+// 2116 — both pass durabilityLoss=false, and the Kill-mode .die has a player
+// attacker so CONFIG_DURABILITY_LOSS_IN_PVP would suppress it anyway) and
+// for non-fall environmental deaths (Player::EnvironmentalDamage passes false
+// and re-applies the loss only for DAMAGE_FALL, Player.cpp:793-803).
+func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, durabilityLoss bool) {
 	if s.player == nil || s.player.Health > 0 {
 		return
 	}
@@ -474,8 +480,11 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 	// Unit::Kill (Unit.cpp:11351-11357): 10% durability loss on death, but
 	// not for PvP deaths — CONFIG_DURABILITY_LOSS_IN_PVP defaults false —
 	// and not in battlegrounds (no BG-membership model on the session; the
-	// PvP-death gate covers the player-killer case).
-	if !s.pvpDeath {
+	// PvP-death gate covers the player-killer case). The durabilityLoss param
+	// (Unit.h:940) suppresses the leg for GM .die/.damage and for
+	// non-fall environmental deaths (Player::EnvironmentalDamage only
+	// re-applies it for DAMAGE_FALL, Player.cpp:793-803).
+	if durabilityLoss && !s.pvpDeath {
 		s.durabilityLossAll(ctx, 0.10, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_DURABILITY_DAMAGE_DEATH), []byte{}, true)
 	}

@@ -252,7 +252,7 @@ func (s *session) applySharedDamageToPlayer(ctx context.Context, victimGUID, att
 		if as := s.server.findSessionByGUID(attackerGUID); as != nil {
 			killer = as
 		}
-		ts.killPlayer(ctx, killer, true)
+		ts.killPlayer(ctx, killer, true, true)
 		return
 	}
 	ts.player.Health -= share

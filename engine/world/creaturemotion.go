@@ -2118,7 +2118,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if motion.OwnerGUID != 0 {
 						creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
 					}
-					target.Sess.killPlayer(ctx, creatureKiller, false)
+					target.Sess.killPlayer(ctx, creatureKiller, false, true)
 					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
 					// player-victim branch — attacker is a wild creature (no
 					// owner player, so no pet arm):
@@ -2426,7 +2426,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if motion.OwnerGUID != 0 {
 						creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
 					}
-					target.Sess.killPlayer(ctx, creatureKiller, false)
+					target.Sess.killPlayer(ctx, creatureKiller, false, true)
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
 					}

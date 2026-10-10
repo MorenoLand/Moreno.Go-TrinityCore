@@ -1513,7 +1513,12 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	if s.player.Health == 0 {
 		s.updateAchievementCriteria(criteriaTypeDeathsFrom, uint32(damageType), 1)
 		// Environmental damage has no attacker (Unit::Kill's attacker is nil).
-		s.killPlayer(ctx, nil, false)
+		// The durabilityLoss arm mirrors Player::EnvironmentalDamage
+		// (Player.cpp:793-803): DealDamage passes durabilityLoss=false for
+		// self-inflicted damage, and the loss is re-applied only for
+		// DAMAGE_FALL — drowning, fatigue, lava, slime, fire and
+		// fall-to-void deaths cost no durability.
+		s.killPlayer(ctx, nil, false, damageType == damageFall)
 	}
 	return damage
 }
