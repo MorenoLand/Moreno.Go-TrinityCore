@@ -113,6 +113,19 @@ const permissionInstantLogout uint32 = 1
 // permissionSkipQueue mirrors rbac::RBAC_PERM_SKIP_QUEUE (RBAC.h:55).
 const permissionSkipQueue uint32 = 2
 
+// permissionJoinNormalBG mirrors rbac::RBAC_PERM_JOIN_NORMAL_BG (RBAC.h:53):
+// Player::CanJoinToBattleground (Player.cpp:22503) requires it for battlemaster
+// battleground queues (JOIN_FAILED/JOIN_TIMED_OUT without it).
+const permissionJoinNormalBG uint32 = 3
+
+// permissionJoinRandomBG mirrors rbac::RBAC_PERM_JOIN_RANDOM_BG (RBAC.h:54):
+// Player::CanJoinToBattleground requires it for random-battleground queues.
+const permissionJoinRandomBG uint32 = 4
+
+// permissionJoinArenas mirrors rbac::RBAC_PERM_JOIN_ARENAS (RBAC.h:55):
+// Player::CanJoinToBattleground requires it for arena queues.
+const permissionJoinArenas uint32 = 5
+
 const permissionSkipCheckDisableMap uint32 = 20
 
 // permissionSkipCheckOverSpeedPing mirrors rbac::RBAC_PERM_SKIP_CHECK_OVERSPEED_PING (RBAC.h).

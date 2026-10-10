@@ -186,11 +186,33 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 		return true
 	}
 
+	// BattleGroundHandler.cpp:104-105 — _player->InBattleground() → silent return.
+	// Player::InBattleground is m_bgData.bgInstanceID != 0 (Player.h:1906), mirrored by
+	// s.bgData.InstanceID (spells.go:2000 precedent); the gate covers both the solo and
+	// the group arms since it sits before the joinAsGroup split.
+	if s.bgData.InstanceID != 0 {
+		return true
+	}
+
 	// The solo-only checks below (deserter, duplicate queue, free slots, freeze) live in the
 	// !joinAsGroup arm of HandleBattlemasterJoinOpcode (BattleGroundHandler.cpp:131-193); the
 	// group arm re-checks per member through Group::CanJoinBattlegroundQueue (Group.cpp:2024).
 	if joinAsGroup != 0 {
 		s.handleBattlemasterJoinGroup(bgTypeID, instanceID)
+		return true
+	}
+
+	// BattleGroundHandler.cpp:133-139 — !CanJoinToBattleground(bg) → ERR_BATTLEGROUND_JOIN_TIMED_OUT.
+	// Player::CanJoinToBattleground (Player.cpp:22503) gates on RBAC_PERM_JOIN_RANDOM_BG for
+	// random queues and RBAC_PERM_JOIN_NORMAL_BG otherwise (battlemaster joins are never
+	// arenas); the isUsingLfg arm ahead of it has no Go per-session model (tree-wide delta).
+	if bgTypeID == battlegroundRB {
+		if !s.canJoinRandomBG {
+			s.sendJoinedBGResult(groupJoinBattlegroundTimedOut)
+			return true
+		}
+	} else if !s.canJoinNormalBG {
+		s.sendJoinedBGResult(groupJoinBattlegroundTimedOut)
 		return true
 	}
 
@@ -202,6 +224,18 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 		buf := protocol.NewBuffer(4)
 		buf.WriteI32(groupJoinBattlegroundDeserters)
 		_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), buf.Bytes(), true)
+		return true
+	}
+
+	// BattleGroundHandler.cpp:149-163 — the random-queue exclusion: already in the random
+	// queue → ERR_IN_RANDOM_BG (-14); queued elsewhere and asking for random →
+	// ERR_IN_NON_RANDOM_BG (-15). Both packets are int32-only (BattlegroundMgr.cpp:239-244).
+	if s.inRandomBGQueue() {
+		s.sendJoinedBGResult(groupJoinInRandomBG)
+		return true
+	}
+	if bgTypeID == battlegroundRB && s.inNonArenaBGQueue() {
+		s.sendJoinedBGResult(groupJoinInNonRandomBG)
 		return true
 	}
 
@@ -295,12 +329,24 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 		case member == nil || !member.playerLoaded || member.player == nil:
 			// offline member → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2049-2051)
 			err = groupJoinBattlegroundFailed
+		case (bgTypeID == battlegroundRB && !member.canJoinRandomBG) || (bgTypeID != battlegroundRB && !member.canJoinNormalBG):
+			// rbac permissions → ERR_BATTLEGROUND_JOIN_TIMED_OUT (Group.cpp:2052-2054;
+			// Player::CanJoinToBattleground, Player.cpp:22503)
+			err = groupJoinBattlegroundTimedOut
 		case teamForRace(member.player.Race) != leaderTeam:
 			// cross-faction → ERR_BATTLEGROUND_JOIN_TIMED_OUT (Group.cpp:2056-2058)
 			err = groupJoinBattlegroundTimedOut
 		case memberBGQueueIndex(member, bgTypeID) != -1:
 			// member already in this queue → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2067-2068)
 			err = groupJoinBattlegroundFailed
+		case member.inRandomBGQueue():
+			// member in the random queue → ERR_IN_RANDOM_BG (Group.cpp:2080-2081; non-arena
+			// battlemaster joins only, so the BATTLEGROUND_AA exclusion never fires)
+			err = groupJoinInRandomBG
+		case bgTypeID == battlegroundRB && member.inNonArenaBGQueue():
+			// joining random while the member is queued elsewhere → ERR_IN_NON_RANDOM_BG
+			// (Group.cpp:2082-2083)
+			err = groupJoinInNonRandomBG
 		case member.hasAura(deserterSpellBG):
 			// deserter → ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS (Group.cpp:2076-2077)
 			err = groupJoinBattlegroundDeserters
@@ -358,6 +404,42 @@ func (s *session) sendGroupJoinBGResult(members []groupMember, result int32) {
 	}
 }
 
+// sendJoinedBGResult mirrors BattlegroundMgr::BuildGroupJoinedBattlegroundPacket
+// (BattlegroundMgr.cpp:239-244) for a single session: SMSG_GROUP_JOINED_BATTLEGROUND
+// carries int32(result), with the u64(0) arm only for ERR_BATTLEGROUND_JOIN_TIMED_OUT
+// (-11) and ERR_BATTLEGROUND_JOIN_FAILED (-12).
+func (s *session) sendJoinedBGResult(result int32) {
+	buf := protocol.NewBuffer(12)
+	buf.WriteI32(result)
+	if result == groupJoinBattlegroundTimedOut || result == groupJoinBattlegroundFailed {
+		buf.WriteU64(0)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), buf.Bytes(), true)
+}
+
+// inRandomBGQueue mirrors GetBattlegroundQueueIndex(BGQueueTypeId(BATTLEGROUND_RB, 0)) <
+// PLAYER_MAX_BATTLEGROUND_QUEUES (BattleGroundHandler.cpp:149-156, Group.cpp:2081):
+// the player holds an active random-battleground queue slot.
+func (s *session) inRandomBGQueue() bool {
+	for i := 0; i < len(s.bgQueues); i++ {
+		if s.bgQueues[i].Active && !s.bgQueues[i].IsArena && s.bgQueues[i].BgTypeID == battlegroundRB {
+			return true
+		}
+	}
+	return false
+}
+
+// inNonArenaBGQueue mirrors Player::InBattlegroundQueue(true) (Player.h:1912 — the true
+// arm ignores arenas): the player holds any active non-arena battleground queue slot.
+func (s *session) inNonArenaBGQueue() bool {
+	for i := 0; i < len(s.bgQueues); i++ {
+		if s.bgQueues[i].Active && !s.bgQueues[i].IsArena {
+			return true
+		}
+	}
+	return false
+}
+
 // memberBGQueueIndex mirrors the duplicate-queue arm of CanJoinBattlegroundQueue
 // (Group.cpp:2067): the index of the member's active non-arena queue for bgTypeID, -1 if none.
 func memberBGQueueIndex(member *session, bgTypeID uint32) int {
@@ -383,6 +465,19 @@ func memberFreeBGQueueIndex(member *session) int {
 // battlegroundAA mirrors BATTLEGROUND_AA (SharedDefines.h:3515 — BattlemasterList.dbc index 6, All Arenas).
 const battlegroundAA = uint32(6)
 
+// battlegroundRB mirrors BATTLEGROUND_RB (SharedDefines.h:3522 — BattlemasterList.dbc index 32,
+// Random Battleground): Player::CanJoinToBattleground keys the RBAC permission on it
+// (Player.cpp:22503) and the join handlers exclude random/non-random queue mixing on it.
+const battlegroundRB = uint32(32)
+
+// groupJoinInRandomBG mirrors ERR_IN_RANDOM_BG (SharedDefines.h:3704 — "Can't do that while
+// in a Random Battleground queue.").
+const groupJoinInRandomBG = int32(-14)
+
+// groupJoinInNonRandomBG mirrors ERR_IN_NON_RANDOM_BG (SharedDefines.h:3705 — "Can't queue for
+// Random Battleground while in another Battleground queue.").
+const groupJoinInNonRandomBG = int32(-15)
+
 // battlegroundDisabled mirrors DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, entry)
 // (DisableMgr.cpp:401-405): for battlegrounds, mere presence of the row in the disables table
 // disables it. Same shape as questDisabled (commands_quest.go:78).
@@ -406,6 +501,14 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	arenaSlot, _ := r.ReadU8()
 	asGroup, _ := r.ReadU8()
 	isRated, _ := r.ReadU8()
+
+	// BattleGroundHandler.cpp:618-619 — ignore if already in a battleground
+	// (the "or BG queue" half of the comment is the queue checks below; the code
+	// gates only InBattleground). Player::InBattleground is m_bgData.bgInstanceID != 0
+	// (Player.h:1906), mirrored by s.bgData.InstanceID (spells.go:2000 precedent).
+	if s.bgData.InstanceID != 0 {
+		return true
+	}
 
 	arenaType := uint8(2)
 	switch arenaSlot {
@@ -434,6 +537,15 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	// Group::CanJoinBattlegroundQueue instead of the solo checks below.
 	if asGroup != 0 {
 		return s.handleBattlemasterJoinArenaGroup(ctx, arenaType, arenaSlot, isRated != 0)
+	}
+
+	// BattleGroundHandler.cpp:680-686 — !CanJoinToBattleground(bg) → ERR_BATTLEGROUND_JOIN_FAILED.
+	// The AA template isArena(), so Player::CanJoinToBattleground (Player.cpp:22503) gates on
+	// RBAC_PERM_JOIN_ARENAS; the isUsingLfg arm ahead of it has no Go per-session model
+	// (tree-wide delta).
+	if !s.canJoinArenas {
+		s.sendJoinedBGResult(groupJoinBattlegroundFailed)
+		return true
 	}
 
 	// Duplicate-queue protection: player is already in this arena queue (C++ WorldSession::HandleBattlemasterJoinArena
@@ -550,6 +662,11 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 			case member == nil || !member.playerLoaded || member.player == nil:
 				// offline member → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2049-2051)
 				err = groupJoinBattlegroundFailed
+			case !member.canJoinArenas:
+				// rbac permissions → ERR_BATTLEGROUND_JOIN_TIMED_OUT (Group.cpp:2052-2054;
+				// Player::CanJoinToBattleground on the arena template keys
+				// RBAC_PERM_JOIN_ARENAS, Player.cpp:22503)
+				err = groupJoinBattlegroundTimedOut
 			case teamForRace(member.player.Race) != leaderTeam:
 				// cross-faction → ERR_BATTLEGROUND_JOIN_TIMED_OUT (Group.cpp:2056-2058);
 				// the RBAC CanJoinToBattleground arm between them has no Go RBAC model —

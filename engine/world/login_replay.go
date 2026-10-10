@@ -617,6 +617,15 @@ func newReplayCharacterSession(ctx context.Context, server *Server, guid uint64)
 		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionSkipCheckCharacterCreationReservedName); err == nil {
 			sess.skipReservedNameCheck = permission
 		}
+		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionJoinNormalBG); err == nil {
+			sess.canJoinNormalBG = permission
+		}
+		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionJoinRandomBG); err == nil {
+			sess.canJoinRandomBG = permission
+		}
+		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionJoinArenas); err == nil {
+			sess.canJoinArenas = permission
+		}
 	}
 	return sess, nil
 }

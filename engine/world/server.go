@@ -310,12 +310,19 @@ type session struct {
 	// at auth time so the idle-connection sweeper needs no per-tick DB lookup,
 	// mirroring WorldSession::Update's HasPermission check (WorldSession.cpp:290).
 	ignoreIdleTimeout bool
-	legitimate        map[uint64]struct{}
-	characterNames    map[uint64]enumCharacter
-	mounts            *MountState
-	playerGUID        uint64
-	playerLoading     bool
-	playerLoaded      bool
+	// canJoinNormalBG / canJoinRandomBG / canJoinArenas cache RBAC_PERM_JOIN_NORMAL_BG,
+	// RBAC_PERM_JOIN_RANDOM_BG and RBAC_PERM_JOIN_ARENAS (RBAC.h:53-55) at auth time;
+	// the battlemaster join handlers consult them per Player::CanJoinToBattleground
+	// (Player.cpp:22503).
+	canJoinNormalBG bool
+	canJoinRandomBG bool
+	canJoinArenas   bool
+	legitimate      map[uint64]struct{}
+	characterNames  map[uint64]enumCharacter
+	mounts          *MountState
+	playerGUID      uint64
+	playerLoading   bool
+	playerLoaded    bool
 	// currentBankerGUID mirrors WorldSession::m_currentBankerGUID
 	// (WorldSession.h): the banker creature the player last opened the bank
 	// with, latched by SendShowBank (BankHandler.cpp:183-188) and consumed by
@@ -3813,6 +3820,19 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if s.skipReservedNameCheck, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionSkipCheckCharacterCreationReservedName); err != nil {
 		s.skipReservedNameCheck = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionSkipCheckCharacterCreationReservedName, "error", err)
+	}
+	for _, perm := range []struct {
+		id  uint32
+		dst *bool
+	}{
+		{permissionJoinNormalBG, &s.canJoinNormalBG},
+		{permissionJoinRandomBG, &s.canJoinRandomBG},
+		{permissionJoinArenas, &s.canJoinArenas},
+	} {
+		if *perm.dst, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, perm.id); err != nil {
+			*perm.dst = false
+			s.debug("RBAC permission lookup failed", "account", accountName, "permission", perm.id, "error", err)
+		}
 	}
 	s.accountExpansion = account.Expansion
 	s.debug("world authentication accepted", "account", accountName, "build", build, "expansion", s.accountExpansion, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))

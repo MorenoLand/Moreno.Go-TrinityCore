@@ -2071,6 +2071,27 @@ func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) b
 // first, per-team name blocks, ended+winner, count, then per-score
 // guid/killingblows/teamid/damage/healing/zero-objectives).
 func (s *session) handlePvpLogData(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	// WorldSession::HandlePVPLogDataOpcode (BattleGroundHandler.cpp:313-330): not in a
+	// battleground → silent return. InBattleground is m_bgData.bgInstanceID != 0
+	// (Player.h:1906), mirrored by s.bgData.InstanceID (spells.go:2000 precedent).
+	if s.bgData.InstanceID == 0 {
+		return true
+	}
+	// BattleGroundHandler.cpp:321-323 — arenas never answer the log request ("Prevent
+	// players from sending BuildPvpLogDataPacket in an arena except for when sent in
+	// BattleGround::EndBattleGround"). The live-BG queue entry carries the IsArena flag.
+	for i := 0; i < len(s.bgQueues); i++ {
+		if s.bgQueues[i].Active && s.bgQueues[i].Status == BGStatusInProgress && s.bgQueues[i].IsArena {
+			return true
+		}
+	}
+	// BuildPvPLogDataPacket (Battleground.cpp:1196-1221) serializes per-player
+	// BattlegroundScore rows plus the ended/winner block; Go tracks no BG score model,
+	// so no packet is built — documented delta. The gates above are the bridgeable arms.
+	s.debug("pvp log data requested with no score model", "account", s.accountName)
 	return true
 }
 
