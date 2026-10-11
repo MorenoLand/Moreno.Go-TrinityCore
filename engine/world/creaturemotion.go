@@ -155,6 +155,14 @@ type creatureMotion struct {
 	SpellCategoryCooldowns    map[uint32]time.Time
 	SpellCooldownCategories   map[uint32]uint32
 	SpellCooldownCategoryEnds map[uint32]time.Time
+	// GCDCooldowns mirrors SpellHistory::_globalCooldowns
+	// (SpellHistory.cpp:585-600): the pet/charmed global cooldown keyed by
+	// StartRecoveryCategory. Spell::TriggerGlobalCooldown (Spell.cpp:8232)
+	// records it; the Spell::CheckPetCast GCD arm (Spell.cpp:6249-6252)
+	// fails player-commanded pet casts with SPELL_FAILED_NOT_READY while
+	// active. Only the commanded path reads it — the AI autocast paces at
+	// 3s (pet_combat.go:603), which always dominates the 1-1.5s GCD.
+	GCDCooldowns map[uint32]time.Time
 
 	ThreatMgr           *ThreatManager
 	BossAI              BossAI

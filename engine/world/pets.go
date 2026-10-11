@@ -2266,9 +2266,20 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 		return true
 	}
-	// The GCD arm (Spell.cpp:6249-6252) has no Go bridge — Go never applies or
-	// tracks a global cooldown on pet casts (only the NoGCD wire flag at
-	// pet_combat.go:626).
+	// Spell::CheckPetCast GCD arm (Spell.cpp:6249-6252): a pet or charmed
+	// creature — both carry CharmInfo in C++ (Pet.cpp:246, Charm()), and
+	// both reach this handler via petMotionForCast — fails
+	// SPELL_FAILED_NOT_READY while its global cooldown, keyed by the
+	// spell's StartRecoveryCategory, is active. Unlike the CheckCast GCD
+	// gate (5227) and TriggerGlobalCooldown (3196), this arm has no
+	// TRIGGERED_IGNORE_GCD exemption: the triggered from-client aura leg
+	// (PetHandler.cpp:791-796) still passes through CheckPetCast. C++
+	// relative order: power, then IsReady (bridged above), then this arm,
+	// then CheckCast(true).
+	if spell.StartRecoveryCategory > 0 && s.server.petGlobalCooldownActive(motion, spell, now) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+		return true
+	}
 	// CheckCast(true) tail (Spell.cpp:6254), modeled subset in C++ relative
 	// order (CheckTarget legs ahead of CheckRange). The rest of the gauntlet
 	// is out of scope: the pet path runs no CheckCast.

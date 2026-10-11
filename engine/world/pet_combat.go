@@ -1418,12 +1418,19 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	if !handledEffect {
 		if !triggered {
-			s.recordPetSpellCooldown(motion, spell, time.Now())
+			now := time.Now()
+			s.recordPetSpellCooldown(motion, spell, now)
+			// Spell::cast (Spell.cpp:3196): a non-triggered cast triggers
+			// the global cooldown unless TRIGGERED_IGNORE_GCD — Go's
+			// triggered models TRIGGERED_FULL_MASK, which carries it.
+			s.server.triggerPetGlobalCooldown(motion, spell, now)
 		}
 		return true
 	}
 	if !triggered {
-		s.recordPetSpellCooldown(motion, spell, time.Now())
+		now := time.Now()
+		s.recordPetSpellCooldown(motion, spell, now)
+		s.server.triggerPetGlobalCooldown(motion, spell, now)
 	}
 	return true
 }

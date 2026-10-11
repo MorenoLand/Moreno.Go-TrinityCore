@@ -168,3 +168,46 @@ func (s *session) recordPetSpellCooldown(motion *creatureMotion, spell wotlk.Spe
 	motion.LastSpell = now
 	s.server.motionMu.Unlock()
 }
+
+// triggerPetGlobalCooldown mirrors Spell::TriggerGlobalCooldown
+// (Spell.cpp:8232-8261) for a pet/charmed caster: the cooldown is keyed by
+// the spell's StartRecoveryCategory (SpellHistory::AddGlobalCooldown,
+// SpellHistory.cpp:591-594). The haste-scaling arm (8249-8258) has no Go
+// bridge — the pet's UNIT_MOD_CAST_SPEED is unmodeled (pet_combat.go:1547);
+// the 1000..1500 clamp only applies inside that arm, so the raw
+// StartRecoveryTime is recorded. SPELLMOD_GLOBAL_COOLDOWN folds through the
+// owner player in C++ (Object.cpp:2246); Go leaves it unapplied here, the
+// same gap the player path documents (gcd.go:31).
+func (s *Server) triggerPetGlobalCooldown(motion *creatureMotion, spell wotlk.Spell, now time.Time) {
+	if s == nil || motion == nil || spell.StartRecoveryCategory == 0 {
+		return
+	}
+	gcdMs := int64(spell.StartRecoveryTime)
+	if gcdMs == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	if motion.GCDCooldowns == nil {
+		motion.GCDCooldowns = make(map[uint32]time.Time)
+	}
+	for category, end := range motion.GCDCooldowns {
+		if !end.After(now) {
+			delete(motion.GCDCooldowns, category)
+		}
+	}
+	motion.GCDCooldowns[spell.StartRecoveryCategory] = now.Add(time.Duration(gcdMs) * time.Millisecond)
+	s.motionMu.Unlock()
+}
+
+// petGlobalCooldownActive mirrors SpellHistory::HasGlobalCooldown
+// (SpellHistory.cpp:585-589): the lookup is keyed by the spell's own
+// StartRecoveryCategory.
+func (s *Server) petGlobalCooldownActive(motion *creatureMotion, spell wotlk.Spell, now time.Time) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	end, ok := motion.GCDCooldowns[spell.StartRecoveryCategory]
+	return ok && end.After(now)
+}
