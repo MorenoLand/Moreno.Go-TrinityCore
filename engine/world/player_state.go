@@ -3747,20 +3747,33 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		rangedAttackPowerMultiplier = runtime.rangedAttackPowerAuraMultiplier() - 1
 	}
 	values[unitModCastSpeed] = math.Float32bits(castSpeed)
-	minDmg := state.MinDamage
+	// Unit::UpdateDamagePhysical (StatSystem.cpp:62-92) bakes the
+	// UpdateDamageDoneMods/UpdateDamagePctDoneMods aura legs into the
+	// UNIT_FIELD_MIN/MAXDAMAGE display fields. Go's state holds the weapon
+	// rows only (AP lands at swing time in executeMeleeSwing, a pre-existing
+	// display delta), so only the aura legs are layered on here for the
+	// character sheet.
+	dmgFlat, dmgPctMain, dmgPctOff := float32(0), float32(1), float32(1)
+	if runtime != nil {
+		dmgFlat = float32(runtime.meleeDamageDoneFlat())
+		dmgPctMain = float32(runtime.meleeDamageDonePctMod(false))
+		dmgPctOff = float32(runtime.meleeDamageDonePctMod(true))
+	}
+	applyDmgAuras := func(base, pct float32) float32 { return (base + dmgFlat) * pct }
+	minDmg := applyDmgAuras(state.MinDamage, dmgPctMain)
 	if minDmg <= 0 {
 		minDmg = 1.0
 	}
-	maxDmg := state.MaxDamage
+	maxDmg := applyDmgAuras(state.MaxDamage, dmgPctMain)
 	if maxDmg <= minDmg {
 		maxDmg = minDmg + 1.0
 	}
 	values[unitFieldMinDamage] = math.Float32bits(minDmg)
 	values[unitFieldMaxDamage] = math.Float32bits(maxDmg)
-	values[unitFieldMinOffhandDamage] = math.Float32bits(state.MinOffhandDamage)
-	values[unitFieldMaxOffhandDamage] = math.Float32bits(state.MaxOffhandDamage)
-	values[unitFieldMinRangedDamage] = math.Float32bits(state.MinRangedDamage)
-	values[unitFieldMaxRangedDamage] = math.Float32bits(state.MaxRangedDamage)
+	values[unitFieldMinOffhandDamage] = math.Float32bits(applyDmgAuras(state.MinOffhandDamage, dmgPctOff))
+	values[unitFieldMaxOffhandDamage] = math.Float32bits(applyDmgAuras(state.MaxOffhandDamage, dmgPctOff))
+	values[unitFieldMinRangedDamage] = math.Float32bits(applyDmgAuras(state.MinRangedDamage, dmgPctMain))
+	values[unitFieldMaxRangedDamage] = math.Float32bits(applyDmgAuras(state.MaxRangedDamage, dmgPctMain))
 	values[unitFieldAttackPowerMultiplier] = math.Float32bits(attackPowerMultiplier)
 	values[unitFieldRangedAttackPowerMultiplier] = math.Float32bits(rangedAttackPowerMultiplier)
 	values[unitFieldAttackPower] = state.AttackPower
