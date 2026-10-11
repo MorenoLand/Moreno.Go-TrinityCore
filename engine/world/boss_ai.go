@@ -800,7 +800,8 @@ func (s *Server) creatureRangeTargetHostile(m *creatureMotion, targetGUID uint64
 }
 
 // checkCreatureSpellBehindFacing mirrors the behind/facing arms of
-// Spell::CheckCast (Spell.cpp:5379-5384) for creature casters. With
+// Spell::CheckCast (Spell.cpp:5379-5384) for creature casters (both the
+// wild-creature AI path and the pet path). With
 // SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET the caster must be outside the
 // target's frontal M_PI arc (HasInArc(M_PI), Position.cpp:120), failing
 // SPELL_FAILED_NOT_BEHIND; with SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER
@@ -949,17 +950,179 @@ func (s *Server) creatureSpellTargetDead(m *creatureMotion, targetGUID uint64) b
 	return motion != nil && motion.Health == 0
 }
 
+// creatureSpellTargetTypePasses is the Server-level twin of
+// session.checkTargetCreatureType for wild-creature casters
+// (SpellInfo::CheckTargetCreatureType, SpellInfo.cpp:1868-1886, as reached
+// from SpellInfo::CheckTarget, SpellInfo.cpp:1728): the spell's
+// TargetCreatureType mask (field 17) must intersect the target's
+// GetCreatureTypeMask, or the cast fizzles (the C++
+// SPELL_FAILED_TARGET_IS_PLAYER / SPELL_FAILED_BAD_TARGETS arms map to a
+// silent fail on this path). The Curse-of-Doom arm (SPELLFAMILY_WARLOCK +
+// category 1179) rejects player targets outright while creatures always
+// pass. The magnet (Grounding Totem) redirect has no Go model, so the check
+// always applies — documented gap, like the session twin.
+func (s *Server) creatureSpellTargetTypePasses(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || m == nil || targetGUID == 0 {
+		return true
+	}
+	mask, isPlayer := s.creatureTargetCreatureTypeMask(ctx, m, targetGUID)
+	if spell.SpellFamilyName == spellFamilyWarlock && spell.Category == 1179 {
+		return !isPlayer
+	}
+	return spell.TargetCreatureType == 0 || mask == 0 || mask&spell.TargetCreatureType != 0
+}
+
+// creatureTargetCreatureTypeMask is the Server-level twin of
+// session.targetCreatureTypeMask (Unit::GetCreatureTypeMask, Unit.cpp:9153):
+// mask = (type >= 1) ? 1 << (type-1) : 0. Player targets resolve through
+// their live session; creature targets resolve their template entry from
+// the motion map (falling back to the entry embedded in the runtime GUID,
+// like session.targetCreatureEntry) and the creature_template type row. A
+// zero mask means the type could not be resolved — like C++'s !creatureType
+// short-circuit, an unknown type does not fail the check.
+func (s *Server) creatureTargetCreatureTypeMask(ctx context.Context, m *creatureMotion, targetGUID uint64) (uint32, bool) {
+	if s == nil || m == nil {
+		return 0, false
+	}
+	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		return s.creatureTypeMaskOfPlayer(targetSess.player), true
+	}
+	var entry uint32
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		entry = tm.Entry
+	} else if e := uint32(targetGUID>>24) & 0xFFFFFF; e != 0 {
+		entry = e
+	}
+	if entry == 0 || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0, false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var creatureType int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT type FROM creature_template WHERE entry = ?", entry).Scan(&creatureType); err != nil {
+		return 0, false
+	}
+	if creatureType < 1 {
+		return 0, false
+	}
+	return uint32(1) << (uint32(creatureType) - 1), false
+}
+
+// creatureTypeMaskOfPlayer is the Server-level twin of
+// session.playerCreatureTypeMask (Unit::GetCreatureType, Unit.cpp:9124-9150):
+// the shapeshift form's CreatureType when set (> 0), else the race's
+// CreatureType (ChrRaces.dbc field 8).
+func (s *Server) creatureTypeMaskOfPlayer(p *playerState) uint32 {
+	if p == nil || s == nil || s.Data == nil {
+		return 0
+	}
+	if form := p.ShapeshiftForm; form != 0 {
+		if shape, found, err := s.Data.ShapeshiftForm(uint32(form)); err == nil && found && shape.CreatureType > 0 {
+			return uint32(1) << (uint32(shape.CreatureType) - 1)
+		}
+	}
+	if race, found, err := s.Data.Race(uint32(p.Race)); err == nil && found && race.CreatureType >= 1 {
+		return uint32(1) << (race.CreatureType - 1)
+	}
+	return 0
+}
+
+// creatureSpellTargetHasAuraState is the Server-level twin of
+// session.targetHasAuraState for wild-creature casters (Unit::HasAuraState
+// as reached from SpellInfo::CheckTarget, SpellInfo.cpp:1757-1766). The
+// SPELL_AURA_ABILITY_IGNORE_AURASTATE bypass reads the caster's own auras
+// (Unit.cpp:5946-5954), so it runs first for every target kind, consulting
+// the caster motion's attributed auras (the presence map carries no caster
+// info — the session twin likewise reads active auras only). Player targets
+// resolve through their live session; creature targets consult the server
+// creature aura maps keyed off the caster's map/instance. Per-caster states
+// (Conflagrate, Deadly Poison) need an aura applied by the casting motion
+// itself (CasterGUID == m.GUID, Unit.cpp:5957-5965). An unresolvable target
+// returns false, like the session twin's getCombatTarget miss.
+func (s *Server) creatureSpellTargetHasAuraState(m *creatureMotion, spell wotlk.Spell, targetGUID uint64, state uint32) bool {
+	if s == nil || m == nil || state == auraStateNone || targetGUID == 0 {
+		return false
+	}
+	if s.creatureCasterIgnoresAuraState(m, spell) {
+		return true
+	}
+	bit := uint32(1) << (state - 1)
+	perCaster := bit&perCasterAuraStateMask != 0
+	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		if perCaster {
+			for _, aura := range targetSess.loadedAuras() {
+				if aura == nil || aura.CasterGUID != m.GUID {
+					continue
+				}
+				if spellAuraStateOf(s, aura.SpellID) == state {
+					return true
+				}
+			}
+			return false
+		}
+		return targetSess.unitAuraStateMask()&bit != 0
+	}
+	target := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+	if target == nil {
+		return false
+	}
+	key := creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: targetGUID}
+	mask := auraStateHealthMask(target.Health, target.MaxHealth)
+	s.auraMu.Lock()
+	for spellID := range s.creatureAuras[key] {
+		if spellAuraStateOf(s, spellID) == state && !perCaster {
+			mask |= bit
+		}
+	}
+	for spellID, aura := range s.activeCreatureAuras[key] {
+		if spellAuraStateOf(s, spellID) != state {
+			continue
+		}
+		if perCaster && (aura == nil || aura.CasterGUID != m.GUID) {
+			continue
+		}
+		mask |= bit
+	}
+	s.auraMu.Unlock()
+	return mask&bit != 0
+}
+
+// creatureSpellTargetHasAura is the Server-level twin of
+// session.targetHasAura for wild-creature casters (SpellInfo::CheckTarget,
+// SpellInfo.cpp:1769-1772): whether the target currently carries auraSpell.
+// Player targets resolve to their session's aura set; creature targets
+// consult the server creature aura maps. The C++ GetSpellIdForDifficulty
+// remap is omitted — documented standing delta shared with the session
+// twin.
+func (s *Server) creatureSpellTargetHasAura(m *creatureMotion, targetGUID uint64, auraSpell uint32) bool {
+	if s == nil || m == nil || auraSpell == 0 || targetGUID == 0 {
+		return false
+	}
+	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		return targetSess.hasAura(auraSpell)
+	}
+	key := creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: targetGUID}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	if _, found := s.creatureAuras[key][auraSpell]; found {
+		return true
+	}
+	_, found := s.activeCreatureAuras[key][auraSpell]
+	return found
+}
+
 // checkCreatureSpellCheckTarget is the wild-creature-caster twin of the
 // explicit-target SpellInfo::CheckTarget block in Spell::CheckCast
 // (Spell.cpp:5372 — CheckTarget(m_caster, target, implicit=false) for a
 // creature caster). C++ relative order: between the conditions block
-// (5337-5348) and the range arm (5496); runs for triggered casts too (no
-// C++ triggered exemption). Returns false when the cast must fizzle. Only
-// arms with a clean Server-level model are bridged; the creature-type
-// (1728), aura-state (1757-1766) and aura-spell (1769-1773) arms need
-// Server twins of the session-anchored target resolvers and are
-// documented follow-ups below.
-func (s *Server) checkCreatureSpellCheckTarget(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+// (5337-5348) and the behind/facing arms (5379-5384); runs for triggered
+// casts too (no C++ triggered exemption). Returns false when the cast must
+// fizzle. Bridged: self, in-combat, only-players, dead, creature-type,
+// GM/invis, in-flight, aura-state, aura-spell; no-bridge documented inline
+// (visibility, ONLY_TARGET_GHOSTS, tapped/pickpocket/disarm vacuous,
+// corpses, CC implicit-only, PREVENT_RESURRECTION).
+func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
 	if s == nil || m == nil {
 		return true
 	}
@@ -1005,8 +1168,10 @@ func (s *Server) checkCreatureSpellCheckTarget(m *creatureMotion, spell wotlk.Sp
 	// creature casters. (SpellInfo.cpp:1723 UNIT_FLAG_NOT_SELECTABLE is
 	// commented out in C++; vacant.)
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1728): target creature-type
-	// gate — needs a Server twin of targetCreatureTypeMask (DB-backed
-	// creature-type lookup); documented follow-up.
+	// gate, ahead of the aura-state/aura-spell gates in C++ order.
+	if !s.creatureSpellTargetTypePasses(ctx, m, spell, targetGUID) {
+		return false
+	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1736-1743): GM-mode /
 	// GM-invisibility. A wild caster has no affecting player, so C++ fires
 	// this only for non-positive spells (GetAffectingPlayer() ||
@@ -1023,11 +1188,27 @@ func (s *Server) checkCreatureSpellCheckTarget(m *creatureMotion, spell wotlk.Sp
 			return false
 		}
 	}
-	// SpellInfo::CheckTarget (SpellInfo.cpp:1757-1773): the target
-	// aura-state and aura-spell arms need Server twins of the
-	// session-anchored targetHasAuraState/targetHasAura resolvers
-	// (creature aura-map reads are Server-side, but the per-caster filter
-	// and player branches are session-anchored); documented follow-up.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1757-1766): target aura-state
+	// requirements. C++ skips both arms for vehicle casters and when the
+	// target is the caster's charmer/owner (creature casters are never
+	// vehicles); the charmer/owner exemption mirrors the pet path.
+	charmerExempt := targetGUID == m.OwnerGUID || (m.CharmOwnerGUID != 0 && targetGUID == m.CharmOwnerGUID)
+	if !charmerExempt {
+		if spell.TargetAuraState != 0 && !s.creatureSpellTargetHasAuraState(m, spell, targetGUID, spell.TargetAuraState) {
+			return false
+		}
+		if spell.ExcludeTargetAuraState != 0 && s.creatureSpellTargetHasAuraState(m, spell, targetGUID, spell.ExcludeTargetAuraState) {
+			return false
+		}
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1769-1773): target aura-spell
+	// requirements (no charmer exemption in C++).
+	if spell.TargetAuraSpell != 0 && !s.creatureSpellTargetHasAura(m, targetGUID, spell.TargetAuraSpell) {
+		return false
+	}
+	if spell.ExcludeTargetAuraSpell != 0 && s.creatureSpellTargetHasAura(m, targetGUID, spell.ExcludeTargetAuraSpell) {
+		return false
+	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1776-1778):
 	// SPELL_AURA_PREVENT_RESURRECTION — unbridged on the player path too;
 	// documented no-bridge parity.
@@ -1104,16 +1285,17 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			return
 		}
 		// SpellInfo::CheckTarget on the explicit unit target (Spell.cpp:5372),
-		// between the conditions block and the range arm in C++ relative
-		// order. Runs for triggered casts too (no C++ triggered exemption).
-		if !s.checkCreatureSpellCheckTarget(m, spellInfo, targetGUID) {
+		// between the conditions block and the behind/facing arms in C++
+		// relative order. Runs for triggered casts too (no C++ triggered
+		// exemption).
+		if !s.checkCreatureSpellCheckTarget(ctx, m, spellInfo, targetGUID) {
 			return
 		}
-		// Spell::CheckRange (Spell.cpp:5496): C++ runs the range arm for
-		// triggered casts too (5494-5496, "Triggered spells also have
-		// range check"), between the caster-state block (5294-5314) and
-		// CheckPower (5502)/CheckCasterAuras (5509).
-		if !s.checkCreatureSpellRange(m, spellInfo, targetGUID) {
+		// Spell::CheckCast behind/facing arms (Spell.cpp:5379-5384): after
+		// CheckTarget (5372) and ahead of the unit-target LOS arm (5391) in
+		// C++ relative order. Runs for triggered casts too (no C++
+		// triggered exemption).
+		if !s.checkCreatureSpellBehindFacing(m, spellInfo, targetGUID) {
 			return
 		}
 		// Spell::CheckCast unit-target line-of-sight arm (Spell.cpp:5391-5401):
@@ -1126,7 +1308,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// GO-caster exemption is vacuous (caster is always a creature here).
 		// DisableMgr::SPELL_DISABLE_LOS has no Go model (no DisableMgr).
 		// C++ relative order: inside the unit-target block, after the
-		// behind/facing arms, ahead of the pet-presence arm.
+		// behind/facing arms, ahead of CheckRange (5496).
 		if targetGUID != 0 && targetGUID != m.GUID &&
 			spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 			spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
@@ -1135,6 +1317,13 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 					return
 				}
 			}
+		}
+		// Spell::CheckRange (Spell.cpp:5496): C++ runs the range arm for
+		// triggered casts too (5494-5496, "Triggered spells also have
+		// range check"), after the unit-target LOS arm and before
+		// CheckPower (5502)/CheckCasterAuras (5509).
+		if !s.checkCreatureSpellRange(m, spellInfo, targetGUID) {
+			return
 		}
 		// Spell::CheckPower (Spell.cpp:5502): the affordability check runs in
 		// the prepare-phase position, but the drain itself lands in _cast
