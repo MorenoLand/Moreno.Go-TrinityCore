@@ -1425,6 +1425,18 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// Spell::_cast modOwner tail (Spell.cpp:3514-3522): the cheat-cooldown
 	// reset on the owner's session. No triggered exemption in C++.
 	s.resetPetSpellCooldownCheat(motion, spell.ID)
+	// Spell::_cast "Handle procs on cast" tail (Spell.cpp:3525-3545): the
+	// PHASE_CAST proc leg fires for pet casters too — C++ runs
+	// Unit::ProcSkillsAndAuras on m_originalCaster (the pet motion here),
+	// with no triggered exemption. Pet self-buffs land in
+	// activeCreatureAuras under creatureAuraKeyForMotion(motion):
+	// getCombatTarget resolves the pet through findCreatureMotionLocked,
+	// carrying the motion's Map/InstanceID with the pet GUID, and the pet
+	// cast-aura key (pets.go) is the same {Map, InstanceID, petGUID} —
+	// so the shared creature proc loop scans the right index. Placed
+	// after the modOwner arm, matching the C++ tail order
+	// (spell_linked -> modOwner -> procs).
+	s.server.fireCreatureCastPhaseAuraProcs(ctx, motion, spell.ID, triggered)
 	return true
 }
 

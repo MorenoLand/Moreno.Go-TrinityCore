@@ -28,8 +28,19 @@ const (
 // session stores per-category expiry times instead of a single GCD slot.
 func (s *session) triggerGlobalCooldown(spell wotlk.Spell) {
 	// CanHaveGlobalCooldown is vacuous in Go: only player sessions cast.
-	// CHEAT_COOLDOWN and SPELLMOD_GLOBAL_COOLDOWN have no Go infra (noted gaps).
+	// SPELLMOD_GLOBAL_COOLDOWN is not applied here (applySpellMod covers
+	// the taking-window side per Player::ApplySpellMod, but wiring the
+	// GCD arm needs the prepare-time taking context — the Backdraft PCT
+	// ordering leg — which Go does not model yet; noted gap).
 	if spell.StartRecoveryCategory == 0 {
+		return
+	}
+	// Spell::TriggerGlobalCooldown (Spell.cpp:8238-8241): a player holding
+	// CHEAT_COOLDOWN skips the global cooldown entirely, allowing rapid
+	// casts. The C++ gate is TYPEID_PLAYER-only — pet and charmed-creature
+	// casters still trigger GCD — so it lives here on the session path,
+	// not in the motion twin (triggerPetGlobalCooldown).
+	if s.player != nil && s.player.ActiveCheats&cheatCooldown != 0 {
 		return
 	}
 
