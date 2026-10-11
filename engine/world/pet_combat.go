@@ -1183,6 +1183,52 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.creatureDispelPreCast(motion, spell, targetGUID, triggered) {
 		return true
 	}
+	// Spell::_cast lost-explicit-target arm (Spell.cpp:3287-3291, reached
+	// via UpdatePointers at 3280): an explicit object target that no
+	// longer resolves cancels the cast — no GO packet, no power drain, no
+	// cooldown. The creature-path twin (creatureCastTargetResolves,
+	// boss_ai.go) covers pet motions too. Self casts and target-less casts
+	// are exempt (GetObjectTargetGUID()==0 skips the arm), matching the
+	// creature path's guard. Runs for triggered casts too — the arm has
+	// no triggered gate. C++ tests the loss before CheckCast; the pet
+	// path collapses prepare+_cast, so it lands here after the CheckCast
+	// gates and before the _cast arms, like the creature path.
+	if targetGUID != 0 && targetGUID != motion.GUID && !s.server.creatureCastTargetResolves(motion, targetGUID) {
+		return true
+	}
+	// Spell::_cast diminishing-returns recheck (Spell.cpp:3378-3399,
+	// Unit::HasStrongerAuraWithDR, Unit.cpp:4744-4762): after CheckCast,
+	// before SelectSpellTargets/TakePower — a crowd-control spell whose
+	// DR-adjusted duration would land shorter than an already-active aura
+	// of the same DR group on the target bounces
+	// (SPELL_FAILED_AURA_BOUNCED). The session twin
+	// (spellDiminishingBounced, spells.go) bridges player targets only —
+	// Go's DR state is session-scoped with no per-creature
+	// Unit::m_Diminishings bridge, so creature targets skip the recheck
+	// (documented gap, same as the player path). The twin's non-triggered
+	// DR group is C++-exact here: C++ keys on m_triggeredByAuraSpell,
+	// which the pet path never sets (effect-triggered casts have it null,
+	// pet AI casts are not aura-triggered).
+	if s.spellDiminishingBounced(spell, targetGUID) {
+		return true
+	}
+	// Spell::_cast creature SetInFront leg (Spell.cpp:3402-3406,
+	// Unit::SetInFront, Unit.cpp:13663-13667): a creature caster with a
+	// resolving non-empty combat target that isn't possessed faces it
+	// before SelectSpellTargets. Keys on the pet's combat target
+	// (GetTarget), not the spell target, like the creature path. The
+	// UNIT_STATE_CANNOT_TURN gate has no Go model (standing no-bridge);
+	// the angle mirrors Unit::GetAbsoluteAngle (atan2 normalized to
+	// [0, 2pi), same as the distract bridge).
+	if motion.TargetGUID != 0 && motion.UnitFlags&unitFlagPossessed == 0 {
+		if tx, ty, ok := s.server.creatureUnitTargetPos(motion, motion.TargetGUID); ok {
+			angle := float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X)))
+			if angle < 0 {
+				angle += 2 * math.Pi
+			}
+			motion.Orientation = angle
+		}
+	}
 	remainingPower, hasRemainingPower, ok := s.takePetSpellPower(motion, spell, castCount, triggered)
 	if !ok {
 		return true
