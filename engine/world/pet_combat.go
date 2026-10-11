@@ -681,7 +681,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	canParry := false
 	canBlock := false
 	canDodge := true
-	var victimParryBonusBP, victimBlockBonusBP int32
+	var victimParryBonusBP, victimBlockBonusBP, victimDodgeBonusBP int32
 	if isTargetPlayer && targetSess != nil && targetSess.player != nil {
 		canParry = targetSess.player.Level >= 10 || targetSess.player.Level == 0
 		canBlock = targetSess.player.CanBlock && targetSess.player.Block > 0
@@ -705,6 +705,10 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	if !isTargetPlayer {
 		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil && !s.isTotemGUID(targetGUID) {
 			victimKey := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}
+			// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the victim's
+			// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base
+			// (dodge is not arc-gated for creatures).
+			victimDodgeBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModDodgePercent) * 100
 			inFront := hasInArc(vm.Orientation, vm.X, vm.Y, motion.X, motion.Y, math.Pi) ||
 				s.creatureAuraTypeSum(victimKey, spellAuraIgnoreHitDirection) != 0
 			if inFront && vm.FlagsExtra&0x00000004 == 0 {
@@ -717,7 +721,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			}
 		}
 	}
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP)
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
 	// (Unit.cpp:2694-2695) and the 240/4 parry-reduction arm
 	// (Unit::GetUnitParryChance's creature arm) stay unbridged on this path.

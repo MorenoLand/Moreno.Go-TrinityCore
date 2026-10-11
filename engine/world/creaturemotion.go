@@ -2373,7 +2373,34 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				victimParryBP = int32(math.Round(float64(target.Sess.player.ParryPercentage) * 100))
 				victimBlockBP = int32(math.Round(float64(target.Sess.player.BlockPercentage) * 100))
 			}
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseParryReductionBP(creatureAuraKeyForMotion(motion)), 0, 0, victimParryBP, victimBlockBP)
+			// Creature victims parry (5% base + 47) and block (5% base + 51) when
+			// the attacker is in the front arc — 288 exempts — unless the
+			// template carries CREATURE_FLAG_EXTRA_NO_PARRY (0x4) / NO_BLOCK
+			// (0x10). Totems never avoid. Mirrors the pet-attacker path
+			// (pet_combat.go) and Unit::RollMeleeOutcomeAgainst /
+			// Unit::GetUnitParryChance / Unit::GetUnitBlockChance
+			// (Unit.cpp:2213-2217, 2708, 2777).
+			var victimParryBonusBP, victimBlockBonusBP, victimDodgeBonusBP int32
+			if !isPlayerVictim {
+				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && !s.isTotemGUID(target.GUID) {
+					victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
+					// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the victim's
+					// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base
+					// (dodge is not arc-gated for creatures).
+					victimDodgeBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModDodgePercent) * 100
+					inFront := hasInArc(vm.Orientation, vm.X, vm.Y, motion.X, motion.Y, math.Pi) ||
+						s.creatureAuraTypeSum(victimKey, spellAuraIgnoreHitDirection) != 0
+					if inFront && vm.FlagsExtra&0x00000004 == 0 {
+						canParry = true
+						victimParryBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
+					}
+					if inFront && vm.FlagsExtra&0x00000010 == 0 {
+						canBlock = true
+						victimBlockBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModBlockPercent) * 100
+					}
+				}
+			}
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseParryReductionBP(creatureAuraKeyForMotion(motion)), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 			if isPlayerVictim && target.Sess != nil {
 				if target.Sess.isImmuneToDamage(1) {
 					outcome = protocol.MeleeHitImmune

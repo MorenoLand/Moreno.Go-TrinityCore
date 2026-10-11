@@ -661,7 +661,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// SPELL_AURA_MOD_BLOCK_PERCENT (51) totals add to the 5% base. A player
 	// victim's fold is read here; the creature-victim fold lands below, once
 	// the front-arc resolution is known.
-	var victimParryBonusBP, victimBlockBonusBP int32
+	var victimParryBonusBP, victimBlockBonusBP, victimDodgeBonusBP int32
 	if isPlayerVictim && vicSess != nil {
 		victimParryBonusBP = vicSess.totalAuraModifier(spellAuraModParryPercent) * 100
 		victimBlockBonusBP = vicSess.totalAuraModifier(spellAuraModBlockPercent) * 100
@@ -709,6 +709,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			} else {
 				victimParryBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
 			}
+			// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the victim's
+			// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base for
+			// creature victims (totems gated above, like the parry arm).
+			victimDodgeBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModDodgePercent) * 100
 			if (attackerInFront || ignoreHitDirection) && tm.FlagsExtra&0x00000010 == 0 {
 				canBlock = true
 				victimBlockBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModBlockPercent) * 100
@@ -742,7 +746,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// SPELL_AURA_MOD_ENEMY_DODGE (251) aura sum (Unit.cpp:2697-2698) —
 		// the same arms meleeSpellHitResult carries for melee spells.
 		dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -1329,7 +1333,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	victimBlockBP := int32(-1)
 	// Unit::GetUnitBlockChance (Unit.cpp:2777): the victim's own
 	// SPELL_AURA_MOD_BLOCK_PERCENT (51) total adds to the 5% base.
-	var victimBlockBonusBP int32
+	// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the victim's
+	// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base.
+	var victimBlockBonusBP, victimDodgeBonusBP int32
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.CanBlock && vicSess.player.Block > 0
@@ -1340,6 +1346,14 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			victimParryBP = int32(math.Round(float64(vicSess.player.ParryPercentage) * 100))
 			victimBlockBP = int32(math.Round(float64(vicSess.player.BlockPercentage) * 100))
 			victimBlockBonusBP = vicSess.totalAuraModifier(spellAuraModBlockPercent) * 100
+		}
+	}
+	// Creature victims (Unit.cpp:2676-2681): 49 total adds to the 5% dodge
+	// base. Ranged attacks never parry and creatures never block ranged
+	// (canBlock stays false), so only the dodge fold is wired here.
+	if !isPlayerVictim && s.server != nil {
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && !s.server.isTotemGUID(target.GUID) {
+			victimDodgeBonusBP = s.server.creatureAuraTypeSum(creatureAuraKeyForTarget(target), spellAuraModDodgePercent) * 100
 		}
 	}
 	// Ranged attacks ride Unit::RollMeleeOutcomeAgainst's positional arms
@@ -1389,7 +1403,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// (Unit.cpp:2694-2695) and the ungated SPELL_AURA_MOD_ENEMY_DODGE (251)
 	// sum (Unit.cpp:2697-2698) apply here like the melee site above.
 	dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -2428,6 +2442,11 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // SPELL_AURA_MOD_BLOCK_PERCENT (51) total in basis points — C++
 // GetUnitBlockChance adds the victim's 51 total to the 5% base
 // (Unit.cpp). Absent means none.
+// [11] victimDodgeBonusBP (optional): the creature victim's
+// SPELL_AURA_MOD_DODGE_PERCENT (49) total in basis points — C++
+// GetUnitDodgeChance adds the victim's 49 total to the 5% base
+// (Unit.cpp:2676-2681). Absent means none. (Slots [9]/[10] are the player
+// victim's derived parry/block percentages.)
 func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
@@ -2483,6 +2502,13 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	victimBlockBonusBP := int32(0)
 	if len(modifiers) > 8 {
 		victimBlockBonusBP = modifiers[8]
+	}
+	// Optional 12th modifier: the creature victim's SPELL_AURA_MOD_DODGE_PERCENT
+	// (49) total in basis points — C++ GetUnitDodgeChance adds the victim's 49
+	// total to the 5% base (Unit.cpp:2676-2681). Absent means none.
+	victimDodgeBonusBP := int32(0)
+	if len(modifiers) > 11 {
+		victimDodgeBonusBP = modifiers[11]
 	}
 	// Optional 10th/11th modifiers: the player victim's derived
 	// PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE in basis points.
@@ -2562,7 +2588,7 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 			// Creature victims (Unit.cpp:2676-2681): 5% + aura 49 +
 			// skillDiff*0.1% (diff<=10) or 1% + (diff-10)*0.1% (diff>10) —
 			// both arms reduce to 50*leveldif basis points.
-			dodgeChance = 500 + leveldif*50
+			dodgeChance = 500 + victimDodgeBonusBP + leveldif*50
 		}
 		if expertiseBP > 0 {
 			dodgeChance -= expertiseBP

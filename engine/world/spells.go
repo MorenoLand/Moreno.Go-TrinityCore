@@ -18630,6 +18630,37 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 	// combat result off (misc MELEE_HIT_DODGE/BLOCK/PARRY, Unit.h:356-360).
 	s.applyIgnoreCombatResultAuras(spell, &canDodge, &canParry, &canBlock)
 
+	// Creature-victim avoidance folds (Unit.cpp:2676-2681, 2722-2728,
+	// 2804-2807): SPELL_AURA_MOD_DODGE_PERCENT (49) /
+	// SPELL_AURA_MOD_PARRY_PERCENT (47) / SPELL_AURA_MOD_BLOCK_PERCENT (51)
+	// add to the 5% base. Totems never avoid, and
+	// CREATURE_FLAG_EXTRA_NO_PARRY (0x4) / NO_BLOCK (0x10) kill the parry /
+	// block roll (killing the gate is equivalent to C++'s zero chance).
+	var victimDodgeBonusBP, victimParryBonusBP, victimBlockBonusBP int32
+	if !isPlayerVictim && s.server != nil && s.player != nil {
+		// Totems never avoid (Unit.cpp:2674/2720/2801).
+		if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+			if s.server.isTotemGUID(targetGUID) {
+				canDodge = false
+				canParry = false
+				canBlock = false
+			} else {
+				victimKey := creatureAuraKeyForPlayer(*s.player, targetGUID)
+				victimDodgeBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModDodgePercent) * 100
+				if tm.FlagsExtra&0x00000004 == 0 {
+					victimParryBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
+				} else {
+					canParry = false
+				}
+				if tm.FlagsExtra&0x00000010 == 0 {
+					victimBlockBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModBlockPercent) * 100
+				} else {
+					canBlock = false
+				}
+			}
+		}
+	}
+
 	if ranged {
 		// Deflect (Unit.cpp:2519-2526): ranged-weapon spells roll the
 		// victim's SPELL_AURA_DEFLECT_SPELLS (287) total after the resist
@@ -18658,7 +18689,9 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 		if isPlayerVictim && targetSess != nil && targetSess.player != nil {
 			dodgeChance = int32(math.Round(float64(targetSess.player.DodgePercentage)*100)) + leveldif*20
 		} else {
-			dodgeChance = 500 + leveldif*50
+			// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): 5% base + the
+			// victim's SPELL_AURA_MOD_DODGE_PERCENT (49) total.
+			dodgeChance = 500 + victimDodgeBonusBP + leveldif*50
 		}
 		dodgeChance -= expertiseBP
 		// Reduce the victim's dodge chance by the attacker's
@@ -18686,9 +18719,11 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 		if isPlayerVictim && targetSess != nil && targetSess.player != nil {
 			parryChance = int32(math.Round(float64(targetSess.player.ParryPercentage)*100)) + leveldif*20
 		} else if skillDiff <= 10 {
-			parryChance = 500 + skillDiff*10
+			// Unit::GetUnitParryChance (Unit.cpp:2722-2728): 5% base + the
+			// victim's SPELL_AURA_MOD_PARRY_PERCENT (47) total.
+			parryChance = 500 + victimParryBonusBP + skillDiff*10
 		} else {
-			parryChance = 500 + 100 + (skillDiff-10)*160
+			parryChance = 500 + victimParryBonusBP + 100 + (skillDiff-10)*160
 		}
 		parryChance -= expertiseBP
 		if parryChance < 0 {
@@ -18702,7 +18737,9 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 
 	// 6. Block: Unit::GetUnitBlockChance — only for ATTR3_BLOCKABLE_SPELL
 	// spells; player victims need a usable shield (CanBlock, offhand Block).
-	// Creatures have no Go block model — unbridged.
+	// Creature victims: 5% base + SPELL_AURA_MOD_BLOCK_PERCENT (51) total +
+	// the 0.1%/skill-point arm (both piecewise arms reduce to skillDiff*10
+	// basis points, Unit.cpp:2804-2807).
 	if canBlock {
 		blockChance := int32(0)
 		if isPlayerVictim && targetSess != nil && targetSess.player != nil &&
@@ -18710,6 +18747,8 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 			// PLAYER_BLOCK_PERCENTAGE + the roll-time 0.04*skillDiff arm
 			// (Unit.cpp:2788-2796).
 			blockChance = int32(math.Round(float64(targetSess.player.BlockPercentage)*100)) + skillDiff*4
+		} else if !isPlayerVictim {
+			blockChance = 500 + victimBlockBonusBP + skillDiff*10
 		}
 		tmp += blockChance
 		if roll < int(tmp) {
