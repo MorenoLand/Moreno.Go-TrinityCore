@@ -24671,6 +24671,17 @@ func buildCooldownEvent(casterGUID uint64, spellID uint32) []byte {
 	return buf.Bytes()
 }
 
+// buildClearCooldown packs SMSG_CLEAR_COOLDOWN: the cleared spell id, then
+// the cooldown owner's GUID. SpellHistory::ResetCooldown(itr, update=true)
+// (SpellHistory.cpp:441-454) and SpellHistory::SendClearCooldowns
+// (SpellHistory.cpp:606-618) send one per cleared spell before erasing it.
+func buildClearCooldown(ownerGUID uint64, spellID uint32) []byte {
+	buf := protocol.NewBuffer(4 + 8)
+	buf.WriteU32(spellID)
+	buf.WriteU64(ownerGUID)
+	return buf.Bytes()
+}
+
 // sendPotionCooldownEvent bridges SpellHistory::SendCooldownEvent
 // (SpellHistory.cpp:364-391) for the potion flush: the
 // SMSG_COOLDOWN_EVENT for the spell plus the server-side cooldown

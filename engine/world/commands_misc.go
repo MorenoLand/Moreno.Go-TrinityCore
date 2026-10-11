@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // misc command ports misc_commandscript (cs_misc.cpp), the TWENTY-SIXTH
@@ -678,10 +680,30 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 
 // clearPlayerCooldowns mirrors SpellHistory::ResetAllCooldowns for the
 // player-side cooldown stores the Go tree models (session lockout maps and
-// the playerState cooldown list).
+// the playerState cooldown list). SpellHistory::SendClearCooldowns
+// (SpellHistory.cpp:606-618) sends SMSG_CLEAR_COOLDOWN per spell still
+// holding a cooldown before _spellCooldowns is erased — mirrored here by
+// sending for every distinct spell id in the player cooldown list (the
+// _spellCooldowns analog; category/lockout maps are not part of the C++
+// packet list).
 func (s *session) clearPlayerCooldowns() {
 	if s == nil {
 		return
+	}
+	var spellIDs []uint32
+	if s.player != nil {
+		s.playerStateMu.Lock()
+		seen := make(map[uint32]struct{}, len(s.player.Cooldowns))
+		for _, cd := range s.player.Cooldowns {
+			if _, ok := seen[cd.Spell]; !ok {
+				seen[cd.Spell] = struct{}{}
+				spellIDs = append(spellIDs, cd.Spell)
+			}
+		}
+		s.playerStateMu.Unlock()
+	}
+	for _, spellID := range spellIDs {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(s.playerGUID, spellID), true)
 	}
 	if s.schoolLockouts != nil {
 		for k := range s.schoolLockouts {
@@ -700,12 +722,16 @@ func (s *session) clearPlayerCooldowns() {
 	}
 }
 
-// clearPlayerCooldown mirrors SpellHistory::ResetCooldown(spellId) for a
-// single spell across the same stores.
+// clearPlayerCooldown mirrors SpellHistory::ResetCooldown(spellId, true)
+// (SpellHistory.cpp:432-454): the erase is silent when the spell holds no
+// cooldown, otherwise SMSG_CLEAR_COOLDOWN fires for that spell before the
+// erase. The cs_misc `.cooldown <spell>` path (cs_misc.cpp:756) passes
+// update=true; the silent default arm is unneeded on this path.
 func (s *session) clearPlayerCooldown(spellID uint32) {
 	if s == nil {
 		return
 	}
+	hadCooldown := false
 	delete(s.schoolLockouts, spellID)
 	delete(s.gcdCooldowns, spellID)
 	if s.player != nil {
@@ -714,10 +740,15 @@ func (s *session) clearPlayerCooldown(spellID uint32) {
 		for _, cd := range s.player.Cooldowns {
 			if cd.Spell != spellID {
 				kept = append(kept, cd)
+			} else {
+				hadCooldown = true
 			}
 		}
 		s.player.Cooldowns = kept
 		s.playerStateMu.Unlock()
+	}
+	if hadCooldown {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(s.playerGUID, spellID), true)
 	}
 }
 
