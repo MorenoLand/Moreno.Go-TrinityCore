@@ -9168,13 +9168,34 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case 2, 17, 31, 58, 121: // Damage effects (School damage, Weapon damage, etc.)
 				damageEffectSeen = true
+				weaponDamageEffect := eff.Effect == spellEffectWeaponDamage || eff.Effect == spellEffectWeaponDamageNoschool || eff.Effect == spellEffectWeaponPercentDamage || eff.Effect == spellEffectNormalizedWeaponDmg
+				// Spell::EffectWeaponDmg multiple-weapon-dmg-effect workaround
+				// (SpellEffects.cpp:3178-3190): only the last weapon-damage
+				// effect in the spell computes — earlier weapon effects
+				// return without dealing anything.
+				lastWeaponEffect := true
+				if weaponDamageEffect {
+					for later := effectIndex + 1; later < len(spell.Effects); later++ {
+						switch spell.Effects[later].Effect {
+						case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectNormalizedWeaponDmg:
+							lastWeaponEffect = false
+						}
+					}
+					if !lastWeaponEffect {
+						break
+					}
+				}
+				var wd weaponDmgParams
+				if weaponDamageEffect {
+					wd = weaponDmgParamsForSpell(spell)
+				}
 				damage := uint32(eff.BasePoints + 1)
 				// Effect 121 (SPELL_EFFECT_NORMALIZED_WEAPON_DMG) rides the
 				// weapon-damage path: Spell::EffectWeaponDmg
 				// (SpellEffects.cpp:3396-3405) folds its CalculateDamage into
 				// fixed_bonus exactly like 17/58, differing only via the
-				// normalized flag into the unmodeled Unit::CalculateDamage
-				// swing — so the flat BasePoints+1 treatment is identical.
+				// normalized flag into the Unit::CalculateDamage swing
+				// (spellWeaponSwingDamage).
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
 				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
 				// divide the damage by the number of targets hit with this
@@ -9236,6 +9257,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 						targetDamage := chainScaledAmount(damage, chainMult, chainJumpIndex[effectTarget])
+						if weaponDamageEffect {
+							// Spell::EffectWeaponDmg (SpellEffects.cpp:3171-3498):
+							// the weapon-damage computation — the
+							// Unit::CalculateDamage swing roll plus the
+							// fixed_bonus / weaponDamagePercentMod second pass
+							// (weaponDmgEffectBase). The chain multiplier
+							// (Spell::DoEffectOnLaunchTarget,
+							// Spell.cpp:7771-7774) scales the computed damage,
+							// and AOE avoidance folds after it, like the flat
+							// path's order below. The family-specific
+							// totalDamagePercentMod / spell_bonus arms further
+							// below then ride on this base, matching the C++
+							// order (spell_bonus :3453, pct :3456); ApplySpellMod
+							// and MeleeDamageBonusDone/Taken ride the damage
+							// pipeline (executeSpellDamageWithFlags).
+							targetDamage = chainScaledAmount(s.weaponDmgEffectBase(effCtx, spell, wd), chainMult, chainJumpIndex[effectTarget])
+						}
 						// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404):
 						// the victim's AOE-avoidance aura product scales the
 						// area-effect damage per target, before the chain
@@ -9247,36 +9285,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								targetDamage = uint32(float64(targetDamage) * avoid)
 							}
 						}
-						// Spell::EffectWeaponDmg (SpellEffects.cpp:3171-3498):
-						// the weapon-damage computation itself
-						// (Unit::CalculateDamage, the fixed_bonus /
-						// spell_bonus / weaponDamagePercentMod accumulation,
-						// the addPctMods UNIT_MOD_DAMAGE_* leg, ApplySpellMod,
-						// MeleeDamageBonusDone/Taken) has no Go model — this
-						// dispatch still deals the flat BasePoints+1 damage for
-						// weapon-damage effects, the standing weapon-damage
-						// gap recorded on the Steady Shot audit. The
-						// family-specific legs below are the only
-						// EffectWeaponDmg pieces with bridgeable
-						// infrastructure. The multiple-weapon-dmg-effect
-						// workaround (3178-3190) mirrors exactly: only the
-						// last weapon-damage effect in the spell runs the
-						// family switch; earlier ones return without doing
-						// anything. C++ counts all four weapon effect types
-						// (17/31/58/121) in that scan, and all four reach
-						// this dispatch: 121 (NORMALIZED_WEAPON_DMG) differs
-						// from 58 only via the normalized flag into the
-						// unmodeled Unit::CalculateDamage swing, so the flat
-						// BasePoints+1 treatment is identical.
-						weaponDamageEffect := eff.Effect == spellEffectWeaponDamage || eff.Effect == spellEffectWeaponDamageNoschool || eff.Effect == spellEffectWeaponPercentDamage || eff.Effect == spellEffectNormalizedWeaponDmg
-						lastWeaponEffect := true
-						for later := effectIndex + 1; later < len(spell.Effects); later++ {
-							switch spell.Effects[later].Effect {
-							case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectNormalizedWeaponDmg:
-								lastWeaponEffect = false
-							}
-						}
-						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x40 != 0 {
+						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x40 != 0 {
 							// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
 							// the Devastate arm (Warrior family,
 							// SpellFamilyFlags[1] & 0x40 — "player ones" per
@@ -9309,7 +9318,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								targetDamage += (stacks - 1) * eff2
 							}
 						}
-						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[0]&0x8000000 != 0 {
+						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[0]&0x8000000 != 0 {
 							// Spell::EffectWeaponDmg (SpellEffects.cpp:3193-3200):
 							// the Mocking Blow arm zeroes the damage (m_damage
 							// = 0, return) when the target is immune to effect
@@ -9331,7 +9340,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								continue
 							}
 						}
-						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyRogue {
+						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyRogue {
 							// Spell::EffectWeaponDmg (SpellEffects.cpp:3229-3280):
 							// the rogue family arms. Fan of Knives, Hemorrhage
 							// and Ghostly Strike (SpellFamilyFlags[1] & 0x40000
@@ -9385,7 +9394,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								}
 							}
 						}
-						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyDruid {
+						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyDruid {
 							// Spell::EffectWeaponDmg (SpellEffects.cpp:3297-3311):
 							// the druid family arms. Mangle (Cat)
 							// (SpellFamilyFlags[1] & 0x400) banks one combo
@@ -9443,7 +9452,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// The max(0, ...) guard mirrors the C++ clamp at
 						// :3462: a negative damage-done aura could otherwise
 						// wrap the uint32.
-						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyPaladin && spell.ID == 20467 {
+						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyPaladin && spell.ID == 20467 {
 							bonus := int32(0.08*s.totalAttackPowerValue(false)) + int32(0.13*s.playerAuraModifierByMiscMask(spellAuraModDamageDone, int32(spell.SchoolMask)))
 							targetDamage = uint32(max(int64(targetDamage)+int64(bonus), 0))
 						}
@@ -9474,12 +9483,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// (spell_bonus at :3453, ApplySpellMod at :3458-3459).
 						// The helper floors at zero, so the bonus is never
 						// negative and no clamp is needed.
-						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyHunter && spell.SpellFamilyFlags[1]&0x800000 != 0 {
+						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyHunter && spell.SpellFamilyFlags[1]&0x800000 != 0 {
 							if bonus := int32(0.4 * s.totalAttackPowerValue(true)); bonus > 0 {
 								targetDamage += uint32(bonus)
 							}
 						}
-						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyDeathKnight {
+						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyDeathKnight {
 							// Spell::EffectWeaponDmg (SpellEffects.cpp:3318-3385):
 							// the DeathKnight arms. The C++ family case runs
 							// independent if blocks with a break at each
@@ -9881,6 +9890,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// reflected jumps too, hence the hit-counted index above.
 				for _, rj := range reflectedJumpIndexes {
 					reflectedDamage := chainScaledAmount(damage, chainMult, rj)
+					if weaponDamageEffect {
+						// Reflected jumps run the same launch pipeline in C++
+						// (Spell::DoEffectOnLaunchTarget per target), so the
+						// weapon-damage computation applies to the reflected
+						// hit too. The family-specific arms above do not run
+						// for reflected jumps (pre-existing delta: they live
+						// in the hitTargets loop only).
+						reflectedDamage = chainScaledAmount(s.weaponDmgEffectBase(effCtx, spell, wd), chainMult, rj)
+					}
 					// The C++ avoidance arm (Spell.cpp:7758) runs for
 					// reflected jumps too — the reflected unit is the caster.
 					if isAreaDamageEffect && reflectedDamage > 0 {
@@ -30129,6 +30147,208 @@ func spellAttackTypeRanged(spell wotlk.Spell) bool {
 		return false
 	}
 	return spell.AttributesEx1&spellAttr2AutorepeatFlag != 0
+}
+
+// weaponDmgParams carries the per-cast Spell::EffectWeaponDmg
+// (SpellEffects.cpp:3171-3498) computation inputs: the attack type from
+// SpellInfo::GetAttackType, the normalized flag (any 121 effect), the
+// fixed_bonus accumulation (Σ CalculateDamage over 58/17/121 — the tree-wide
+// BasePoints+1 convention), the weaponDamagePercentMod product (Π ApplyPct
+// over 31 effects), and the addPctMods gate (!LIMIT_PCT_DAMAGE_MODS and the
+// NORMAL school bit, SpellEffects.cpp:3436).
+type weaponDmgParams struct {
+	attType     protocol.WeaponAttackType
+	normalized  bool
+	fixedBonus  int32
+	pctMod      float64
+	addTotalPct bool
+}
+
+// weaponDmgParamsForSpell builds the per-cast params for the last
+// weapon-damage effect of a spell. The first accumulation pass
+// (SpellEffects.cpp:3396-3414): 58/17 feed fixed_bonus via CalculateDamage,
+// 121 feeds fixed_bonus and sets normalized, 31 feeds
+// weaponDamagePercentMod via ApplyPct. The addPctMods gate decides whether
+// the UNIT_MOD_DAMAGE_* TOTAL_PCT fold rides inside the swing roll
+// (Unit::CalculateDamage, Unit.cpp:2334) — when it is off, C++ defers the
+// pct legs to Unit::MeleeDamageBonusDone, and Go's spellDamagePctDone fold
+// in the damage pipeline covers them instead (the two multiplications
+// distribute over the sum, so deferring is exact).
+func weaponDmgParamsForSpell(spell wotlk.Spell) weaponDmgParams {
+	p := weaponDmgParams{attType: spellWeaponAttackType(spell), pctMod: 1.0}
+	p.addTotalPct = spell.AttributesEx6&spellAttr6LimitPctDamageMods == 0 && spell.SchoolMask&spellSchoolMaskNormal != 0
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool:
+			p.fixedBonus += int32(spell.Effects[i].BasePoints + 1)
+		case spellEffectNormalizedWeaponDmg:
+			p.fixedBonus += int32(spell.Effects[i].BasePoints + 1)
+			p.normalized = true
+		case spellEffectWeaponPercentDamage:
+			p.pctMod *= 1 + float64(spell.Effects[i].BasePoints+1)/100
+		}
+	}
+	return p
+}
+
+// equippedWeaponSubclass mirrors the usable-weapon lookup of
+// Unit::GetAPMultiplier (Unit.cpp:11034): the equipped weapon for the attack
+// type (main hand / off hand / ranged slots) that is a weapon
+// (Class == ITEM_CLASS_WEAPON) and not broken (Item::IsBroken). Reports
+// false when no usable weapon is equipped — C++ then falls back to
+// BASE_ATTACK_TIME.
+func (s *session) equippedWeaponSubclass(ctx context.Context, attType protocol.WeaponAttackType) (uint32, bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, false
+	}
+	slot := int64(equipSlotMainhand)
+	switch attType {
+	case protocol.OffAttack:
+		slot = int64(equipSlotOffhand)
+	case protocol.RangedAttack:
+		slot = int64(equipSlotRanged)
+	}
+	var instanceGUID, itemEntry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT ii.guid, ii.itemEntry FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, slot).Scan(&instanceGUID, &itemEntry); err != nil || itemEntry <= 0 {
+		return 0, false
+	}
+	weapon, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry))
+	if !ok || weapon.Class != itemClassWeapon {
+		return 0, false
+	}
+	var durability int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`,
+		instanceGUID).Scan(&durability); err == nil && weapon.MaxDurability > 0 && durability == 0 {
+		return 0, false
+	}
+	return weapon.SubClass, true
+}
+
+// normalizedAPMultiplier mirrors Unit::GetAPMultiplier (Unit.cpp:11034) with
+// normalized=true: the weapon-subclass table (2H 3.3, ranged 2.8, 1H 2.4,
+// dagger 1.7, default the weapon delay), floored at 0.25. No usable weapon
+// falls back to BASE_ATTACK_TIME (2.0s), like C++.
+func (s *session) normalizedAPMultiplier(ctx context.Context, attType protocol.WeaponAttackType) float64 {
+	subclass, ok := s.equippedWeaponSubclass(ctx, attType)
+	if !ok {
+		return 2.0
+	}
+	switch subclass {
+	case uint32(itemSubclassWeaponAxe2), uint32(itemSubclassWeaponMace2), uint32(itemSubclassWeaponPolearm),
+		uint32(itemSubclassWeaponSword2), uint32(itemSubclassWeaponStaff), uint32(itemSubclassWeaponFishingPole):
+		return 3.3
+	case uint32(itemSubclassWeaponBow), uint32(itemSubclassWeaponGun), uint32(itemSubclassWeaponCrossbow),
+		uint32(itemSubclassWeaponThrown):
+		return 2.8
+	case uint32(itemSubclassWeaponAxe), uint32(itemSubclassWeaponMace), uint32(itemSubclassWeaponSword),
+		uint32(itemSubclassWeaponExotic), uint32(itemSubclassWeaponExotic2), uint32(itemSubclassWeaponFist):
+		return 2.4
+	case uint32(itemSubclassWeaponDagger):
+		return 1.7
+	default:
+		return 2.0
+	}
+}
+
+// spellWeaponSwingDamage mirrors Unit::CalculateDamage (Unit.cpp:2334) on the
+// non-itemDamagesMask path for a weapon-damage spell: urand over the composed
+// [min,max] for the attack type. The weapon rows are Go's raw-weapon fields
+// (player.MinDamage etc., player_state.go), the BASE_VALUE arm is the
+// AP/14 term (attackPowerMod = attackTime/1000, or the normalized subclass
+// multiplier), TOTAL_VALUE rides meleeDamageDoneFlat, and TOTAL_PCT rides
+// the off-hand 122 fold only when addTotalPct is set — the 79 NORMAL fold
+// stays out because the damage pipeline's spellDamagePctDone applies it once
+// downstream (distributive with C++'s per-piece fold, matching
+// Unit::MeleeDamageBonusDone's NORMAL-school skip, Unit.cpp:8084). Versus
+// auras and armor are not part of CalculateDamage (they ride the later
+// DealDamage/MeleeDamageBonusTaken legs — the pipeline's melee taken leg
+// covers them), and the 50% off-hand penalty is likewise excluded
+// (Unit::CalculateDamage has no such leg; the swing path applies it
+// separately). Deltas: ammo DPS beyond the Go ranged-field fold, the feral
+// normalized weapon-range substitution, and the APbonus victim-aura arm of
+// MeleeDamageBonusDone (no model).
+func (s *session) spellWeaponSwingDamage(ctx context.Context, p weaponDmgParams) uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	var minDmg, maxDmg float64
+	var attTime uint32
+	var ap float64
+	switch p.attType {
+	case protocol.OffAttack:
+		minDmg, maxDmg = float64(s.player.MinOffhandDamage), float64(s.player.MaxOffhandDamage)
+		attTime = s.player.OffhandAttackTime
+		ap = float64(s.player.AttackPower)
+	case protocol.RangedAttack:
+		minDmg, maxDmg = float64(s.player.MinRangedDamage), float64(s.player.MaxRangedDamage)
+		attTime = s.player.RangedAttackTime
+		ap = float64(s.player.RangedAttackPower)
+	default:
+		minDmg, maxDmg = float64(s.player.MinDamage), float64(s.player.MaxDamage)
+		attTime = s.player.AttackTime
+		ap = float64(s.player.AttackPower)
+	}
+	attackPowerMod := float64(attTime) / 1000.0
+	if p.normalized {
+		attackPowerMod = s.normalizedAPMultiplier(ctx, p.attType)
+	}
+	if attackPowerMod < 0.25 {
+		attackPowerMod = 0.25
+	}
+	flat := float64(s.meleeDamageDoneFlat(ctx, p.attType))
+	lo := minDmg + ap/14.0*attackPowerMod + flat
+	hi := maxDmg + ap/14.0*attackPowerMod + flat
+	if p.addTotalPct && p.attType == protocol.OffAttack {
+		offhandPct := 1.0
+		for _, amt := range s.damageDoneAuraAmounts(ctx, auraModOffhandDamagePct, 0, p.attType) {
+			offhandPct *= 1 + float64(amt)/100
+		}
+		lo *= offhandPct
+		hi *= offhandPct
+	}
+	if lo < 0 {
+		lo = 0
+	}
+	if hi < 0 {
+		hi = 0
+	}
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	loI, hiI := uint32(lo), uint32(hi)
+	if hiI <= loI {
+		return loI
+	}
+	return loI + uint32(rand.IntN(int(hiI-loI)+1))
+}
+
+// weaponDmgEffectBase assembles the pre-family-arm Spell::EffectWeaponDmg
+// damage (SpellEffects.cpp:3434-3453): the Unit::CalculateDamage swing roll
+// plus the fixed_bonus / weaponDamagePercentMod second pass. C++ walks the
+// effects in index order ("Sequence is important", SpellEffects.cpp:3440):
+// each 58/17/121 effect adds fixed_bonus, each 31 effect multiplies by
+// weaponDamagePercentMod. The addPctMods UNIT_MOD_DAMAGE_* TOTAL_PCT fold on
+// fixed_bonus is deferred to the damage pipeline (spellDamagePctDone),
+// which is exact by distributivity — see weaponDmgParamsForSpell.
+func (s *session) weaponDmgEffectBase(ctx context.Context, spell wotlk.Spell, wd weaponDmgParams) uint32 {
+	base := int64(s.spellWeaponSwingDamage(ctx, wd))
+	for j := range spell.Effects {
+		switch spell.Effects[j].Effect {
+		case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectNormalizedWeaponDmg:
+			base += int64(wd.fixedBonus)
+		case spellEffectWeaponPercentDamage:
+			base = int64(float64(base) * wd.pctMod)
+		}
+	}
+	if base < 0 {
+		base = 0
+	}
+	return uint32(base)
 }
 
 // playerHasItemCount mirrors Player::HasItemCount (count >= 1): the total
