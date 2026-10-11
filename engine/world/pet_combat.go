@@ -1335,6 +1335,69 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		target.Flags |= protocol.SpellTargetFlagDestLocation
 		target.Destination = protocol.SpellTargetLocation{X: dx, Y: dy, Z: dz}
 	}
+	// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2174-2188) for a
+	// pet caster: a victim whose reflect roll succeeds becomes a REFLECT
+	// miss and the spell returns to the pet (PreprocessTarget /
+	// DoEffectOnLaunchTarget, Spell.cpp:2350, 7740-7743 — the pet is the
+	// return trip's _spellHitTarget). Runs ahead of SendSpellGo like C++
+	// (AddUnitTarget precedes 4338). Each reflected target produces its
+	// own return trip on the pet. The ProcReflectDelayed arm
+	// (Spell.cpp:2181) fires the reflector's taken-side procs at missile
+	// arrival — creature reflectors have no Go event-list model, so only
+	// player reflectors arm it (same as the player-path doReflect).
+	reflectedSet := map[uint64]bool{}
+	type petReflectTrip struct {
+		victimGUID uint64
+		status     uint8
+	}
+	var reflectTrips []petReflectTrip
+	for _, guid := range hitTargets {
+		if guid == 0 || reflectedSet[guid] {
+			continue
+		}
+		if ok, status := s.petSpellReflectVerdict(ctx, motion, spell, guid); ok {
+			reflectedSet[guid] = true
+			reflectTrips = append(reflectTrips, petReflectTrip{victimGUID: guid, status: status})
+		}
+	}
+	var missStatus []protocol.SpellMissStatus
+	packetHits := make([]uint64, 0, len(hitTargets)+1)
+	petHitListed := false
+	for _, guid := range hitTargets {
+		if reflectedSet[guid] {
+			continue
+		}
+		packetHits = append(packetHits, guid)
+	}
+	for _, trip := range reflectTrips {
+		missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.victimGUID, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
+		if trip.status == protocol.SpellMissNone && !petHitListed {
+			packetHits = append(packetHits, motion.GUID)
+			petHitListed = true
+		}
+		if s.server.findSessionByGUID(trip.victimGUID) != nil {
+			reflectorGUID := trip.victimGUID
+			delayMs := s.spellTargetTimeDelayMs(ctx, spell, trip.victimGUID)
+			time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+				if s.server == nil {
+					return
+				}
+				if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
+					rsess.procSpellReflectTakenAuraTriggers(context.Background(), motion.GUID, spell, triggered)
+				}
+			})
+		}
+	}
+	// resolveReflectTarget maps a reflected victim to the pet for the
+	// effect legs below — the return trip's _spellHitTarget is the caster
+	// (Spell.cpp:2350, 7740-7743), so damage, heal, dispel, aura and
+	// trigger effects all land on the pet instead of the reflector.
+	resolveReflectTarget := func(guid uint64) uint64 {
+		if reflectedSet[guid] {
+			return motion.GUID
+		}
+		return guid
+	}
 	stamp := gameTimeMS()
 	castFlags := uint32(spellCastFlagGo)
 	if triggered && castCount == 0 {
@@ -1348,11 +1411,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		castFlags |= protocol.SpellCastFlagPowerLeftSelf
 		power = &remainingPower
 	}
-	goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, hitTargets, nil, spellGoPacketTarget(spell, target), power)
+	goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target), power)
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
 		return false
 	}
-	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, hitTargets, nil, spellGoPacketTarget(spell, target))
+	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target))
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	if hasDamage {
@@ -1360,29 +1423,33 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if schoolMask == 0 {
 			schoolMask = 1
 		}
-		s.executePetSpellDamage(ctx, motion, targetGUID, spell.ID, damage, schoolMask, triggered)
+		s.executePetSpellDamage(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, damage, schoolMask, triggered)
 		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
 		// enemy takes its own hit — the per-target miss roll, resistance,
 		// absorb and kill legs run per target inside
 		// executePetSpellDamage, matching DoTargetSpellHit per target.
 		for _, areaHit := range areaHits {
-			s.executePetSpellDamage(ctx, motion, areaHit.GUID, spell.ID, damage, schoolMask, triggered)
+			s.executePetSpellDamage(ctx, motion, resolveReflectTarget(areaHit.GUID), spell.ID, damage, schoolMask, triggered)
 		}
 	}
 	for i, effect := range spell.Effects {
 		if effect.Effect == 10 || effect.Effect == 105 || effect.Effect == 136 {
 			heal := uint32(effect.BasePoints + 1)
 			if heal > 0 {
-				s.executePetSpellHeal(ctx, motion, targetGUID, spell.ID, heal)
+				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, heal)
 			}
 		}
 		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
 			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
-				s.executePetSpellWithOptions(ctx, motion, triggered, 0, target, true)
+				triggerTarget := target
+				if reflectedSet[target.UnitGUID] {
+					triggerTarget.UnitGUID = motion.GUID
+				}
+				s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 			}
 		}
 		if effect.Effect == spellEffectDispel {
-			s.executePetSpellDispel(ctx, motion, targetGUID, spell, effect)
+			s.executePetSpellDispel(ctx, motion, resolveReflectTarget(targetGUID), spell, effect)
 		}
 		if effect.Effect == 6 || effect.Effect == 27 || effect.Effect == 35 {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
@@ -1392,7 +1459,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
 			durationMs := petAuraDuration(s.server, auraSpell, motion)
 			amount := uint32(auraEffect.BasePoints + 1)
-			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, targetGUID, durationMs, amount) {
+			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, resolveReflectTarget(targetGUID), durationMs, amount) {
 			}
 			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (effect 27 with an enemy
 			// area target) applies to every unit the area selection picked —
@@ -1403,7 +1470,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aAmount := uint32(aEffect.BasePoints + 1)
-					s.applyPetAura(ctx, motion, aSpell, aEffect, areaHit.GUID, aDurationMs, aAmount)
+					s.applyPetAura(ctx, motion, aSpell, aEffect, resolveReflectTarget(areaHit.GUID), aDurationMs, aAmount)
 				}
 			}
 		}
@@ -1774,6 +1841,66 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	if targetMotion != nil {
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
 	}
+}
+
+// petSpellReflectVerdict mirrors the AddUnitTarget reflect arm
+// (Spell.cpp:2152, 2174-2188; WorldObject::SpellHitResult,
+// Object.cpp:2617-2648) for a pet caster. The victim rolls the reflect arm:
+// player victims via checkSpellReflection, creature victims via
+// creatureCheckSpellReflection — C++ offers reflect to any Unit victim,
+// not just players. The offer gate is spellReflectOffered with the owner
+// session standing in for the pet's friendly relations (a pet shares its
+// owner's faction template, so IsFriendlyTo matches). The this == victim
+// early-out (Object.cpp:2633) sits ahead of the canReflect arm, so a
+// pet self-cast never reflects. On success the second return is the
+// return-trip ReflectResult (Spell.cpp:2178): the pet's own
+// SpellHitResult with canReflect=false, which can only report IMMUNE —
+// the immune arms precede the this == victim short-circuit, and the
+// magic hit/resist roll sits behind it and never runs. A non-NONE
+// status nulls the return trip (Spell.cpp:2350, 7740-7743): the GO
+// packet still reports REFLECT with the status, but the pet takes
+// nothing.
+func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, targetGUID uint64) (bool, uint8) {
+	if s == nil || s.server == nil || motion == nil || targetGUID == 0 || targetGUID == motion.GUID {
+		return false, protocol.SpellMissNone
+	}
+	if !spellCanBeReflected(spell) {
+		return false, protocol.SpellMissNone
+	}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	offered := false
+	if targetSess != nil {
+		offered = spellReflectOffered(spell, s, targetGUID, targetSess)
+	} else {
+		var targetFaction uint32
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			targetFaction = tgt.Faction
+		}
+		offered = s.creatureReflectOffered(spell, targetFaction)
+	}
+	if !offered {
+		return false, protocol.SpellMissNone
+	}
+	reflected := false
+	if targetSess != nil {
+		reflected = targetSess.checkSpellReflection(spell)
+	} else {
+		var key creatureAuraKey
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			key = creatureAuraKeyForTarget(tgt)
+		}
+		reflected = s.server.creatureCheckSpellReflection(key, spell)
+	}
+	if !reflected {
+		return false, protocol.SpellMissNone
+	}
+	if s.creatureTargetImmuneToSpell(ctx, motion.GUID, spell, s, motion.Faction) {
+		return true, protocol.SpellMissImmune
+	}
+	if spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForMotion(motion), spell, spell.SchoolMask) {
+		return true, protocol.SpellMissImmune
+	}
+	return true, protocol.SpellMissNone
 }
 
 func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool) {
