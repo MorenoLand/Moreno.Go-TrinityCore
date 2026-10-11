@@ -1236,17 +1236,20 @@ func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
 				basePower = 100
 			}
 			cost += int32(basePower) * int32(spell.ManaCostPct) / 100
-		default:
-			if pType < 7 {
-				basePower := s.player.MaxPowers[pType]
-				if basePower == 0 {
-					basePower = s.player.Powers[pType]
-				}
-				if basePower == 0 {
-					basePower = 100
-				}
-				cost += int32(basePower) * int32(spell.ManaCostPct) / 100
+		case 1, 2, 3, 4: // rage/focus/energy/happiness: pct of max power (SpellInfo.cpp:3188-3192)
+			basePower := s.player.MaxPowers[pType]
+			if basePower == 0 {
+				basePower = s.player.Powers[pType]
 			}
+			if basePower == 0 {
+				basePower = 100
+			}
+			cost += int32(basePower) * int32(spell.ManaCostPct) / 100
+		default:
+			// POWER_RUNE (5) / POWER_RUNIC_POWER (6): C++ adds nothing
+			// ("Not implemented yet", SpellInfo.cpp:3194-3196). Unknown
+			// power types never reach here — the CheckPower unknown-type
+			// arm rejects them upstream (Spell.cpp:6659-6663).
 		}
 	}
 	// Flat mod from caster auras by spell school (SpellInfo.cpp:3199-3200):
@@ -2292,6 +2295,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "item target requirements not met", "failReason", failReason)
 		return true
 	}
+	// Equipped-item requirement arm of Spell::CheckItems
+	// (Spell.cpp:6769-6774): runs right after the item-target arm and before
+	// the reagent block, matching C++ CheckItems relative order
+	// (item-target 6759-6766 -> equipped 6769-6774 -> reagents 6777-6818).
+	if failReason, ok := s.checkSpellEquippedItemRequirements(ctx, spell); !ok {
+		s.sendCastFailed(ctx, castID, spell, failReason)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "equipped item requirements not met", "failReason", failReason)
+		return true
+	}
 	// Reagent block of Spell::CheckItems (Spell.cpp:6765-6805): the
 	// TRIGGERED_IGNORE_POWER_AND_REAGENT_COST arm is structural (handleCastSpell
 	// serves CMSG_CAST_SPELL only; triggered casts go through castSpellDirect,
@@ -2415,12 +2427,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failReason := s.checkSpellCreateManaGemCast(ctx, spell); failReason != 0 {
 		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "mana gem at max charges", "failReason", failReason)
-		return true
-	}
-
-	if failReason, ok := s.checkSpellEquippedItemRequirements(ctx, spell); !ok {
-		s.sendCastFailed(ctx, castID, spell, failReason)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "equipped item requirements not met", "failReason", failReason)
 		return true
 	}
 
@@ -2785,8 +2791,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 
 	// Dispel check: if spell has only SPELL_EFFECT_DISPEL effects (and not area-targeting), verify target has dispellable auras
-	// Mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565)
-	if failReason := s.checkDispelPreCast(spell, targetGUID); failReason != 0 {
+	// Mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565). The arm keys
+	// on m_targets.GetUnitTarget() — the wire unit target only. The
+	// s.selection fallback above has no C++ analog at CheckCast time
+	// (CheckCast runs before SetTargetMap, Spell.cpp:3100), so a missing wire
+	// unit target skips the arm (checkDispelPreCast returns 0 on 0).
+	wireUnitGUID := uint64(0)
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
+		wireUnitGUID = target.UnitGUID
+	}
+	if failReason := s.checkDispelPreCast(spell, wireUnitGUID); failReason != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to dispel")
 		return true

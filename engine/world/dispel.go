@@ -397,6 +397,18 @@ func (s *session) checkStealPreCast(spell wotlk.Spell, targetGUID uint64) uint8 
 // target has nothing to dispel. The !IsTriggered() arm is structural:
 // handleCastSpell serves client-initiated casts only; triggered casts go
 // through castSpellDirect.
+// spellImplicitTargetIsArea mirrors SpellImplicitTargetInfo::IsArea()
+// (SpellInfo.cpp:71-75): the selection category is AREA or CONE. Exact
+// target set from the _data table (SpellInfo.cpp:227-328) — the pure
+// category test, with no radius-index proxy and no dest-target additions.
+func spellImplicitTargetIsArea(target uint32) bool {
+	switch target {
+	case 7, 8, 15, 16, 20, 24, 30, 31, 33, 34, 37, 51, 52, 54, 56, 59, 60, 61, 93, 104, 108:
+		return true
+	}
+	return false
+}
+
 func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8 {
 	hasNonDispelEffect := false
 	hasDispellableAura := false
@@ -404,7 +416,9 @@ func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8
 
 	for _, eff := range spell.Effects {
 		if eff.Effect == spellEffectDispel {
-			if eff.ImplicitTargetA == 18 || eff.ImplicitTargetA == 24 || eff.ImplicitTargetA == 28 || eff.RadiusIndex > 0 ||
+			// SpellEffectInfo::IsTargetingArea (SpellInfo.cpp:380-383):
+			// TargetA.IsArea() || TargetB.IsArea().
+			if spellImplicitTargetIsArea(eff.ImplicitTargetA) || spellImplicitTargetIsArea(eff.ImplicitTargetB) ||
 				spell.AttributesEx&spellAttr1MeleeCombatStart != 0 {
 				hasDispellableAura = true
 				break
@@ -420,11 +434,17 @@ func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8
 		return 0
 	}
 
+	// Spell.cpp:5538: the arm keys on m_targets.GetUnitTarget(); a missing
+	// wire unit target skips the whole arm — CheckCast runs before
+	// SetTargetMap (Spell.cpp:3100), so there is no target-map fallback here.
+	if targetGUID == 0 {
+		return 0
+	}
+
 	// Target resolution
 	var targetSess *session
-	if targetGUID == s.playerGUID || targetGUID == 0 {
+	if targetGUID == s.playerGUID {
 		targetSess = s
-		targetGUID = s.playerGUID
 	} else if s.server != nil {
 		targetSess = s.server.findSessionByGUID(targetGUID)
 	}

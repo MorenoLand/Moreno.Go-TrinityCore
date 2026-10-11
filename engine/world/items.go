@@ -2587,6 +2587,29 @@ func (s *session) checkCastItemCharges(ctx context.Context, dbItemGUID int64, it
 	return true
 }
 
+// consumableTargetVitals resolves a unit target's health and powers for the
+// consumable full-health/full-power arm of Spell::CheckItems
+// (Spell.cpp:6707-6756): the caster's own vitals, another player's session
+// vitals, or a creature motion's vitals. Reports ok=false when the target
+// has no readable vitals — the arm then skips, as before.
+func (s *session) consumableTargetVitals(targetGUID uint64) (health, maxHealth uint32, powers, maxPowers [7]uint32, ok bool) {
+	if targetGUID == 0 || s == nil || s.player == nil {
+		return 0, 0, powers, maxPowers, false
+	}
+	if targetGUID == s.playerGUID {
+		return s.player.Health, s.player.MaxHealth, s.player.Powers, s.player.MaxPowers, true
+	}
+	if s.server != nil {
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			return ts.player.Health, ts.player.MaxHealth, ts.player.Powers, ts.player.MaxPowers, true
+		}
+		if m := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); m != nil {
+			return m.Health, m.MaxHealth, m.Powers, m.MaxPowers, true
+		}
+	}
+	return 0, 0, powers, maxPowers, false
+}
+
 func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return false
@@ -2829,50 +2852,83 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				return true
 			}
 			// Consumable full-health/full-power arm of Spell::CheckItems
-			// (Spell.cpp:6704-6751): when the cast item is a consumable and
+			// (Spell.cpp:6707-6756): when the cast item is a consumable and
 			// the spell targets a unit, effects are tried in order — the
 			// first HEAL effect against a non-full-health target or
 			// ENERGIZE effect against a non-full power target clears the
 			// pending failure (the Rejuvenation Potion pattern), while an
 			// effect that finds a full target only sets the failure reason
 			// and continues. TARGET_UNIT_PET effects are skipped: there the
-			// C++ target is the caster, not the pet. Only the
-			// caster-as-target leg is bridged — other unit targets have no
-			// Go model to read health/power from. Runs before SMSG_SPELL_START,
-			// matching C++ CheckCast order (CheckItems precedes prepare's START).
-			if tplOK && itemClass == itemClassConsumable && target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && target.UnitGUID == s.playerGUID {
-				failReason := uint8(0)
-				for _, eff := range spell.Effects {
-					if eff.ImplicitTargetA == spellImplicitTargetUnitPet {
-						continue
+			// C++ target is the caster, not the pet. Vitals come from the
+			// target's session or creature motion; an unreadable target
+			// skips the arm. Runs before SMSG_SPELL_START, matching C++
+			// CheckCast order (CheckItems precedes prepare's START).
+			if tplOK && itemClass == itemClassConsumable && target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+				if health, maxHealth, powers, maxPowers, ok := s.consumableTargetVitals(target.UnitGUID); ok {
+					failReason := uint8(0)
+					for _, eff := range spell.Effects {
+						if eff.ImplicitTargetA == spellImplicitTargetUnitPet {
+							continue
+						}
+						if eff.Effect == spellEffectHeal {
+							if health >= maxHealth {
+								failReason = spellFailedAlreadyAtFullHealth
+								continue
+							}
+							failReason = 0
+							break
+						}
+						if eff.Effect == spellEffectEnergize {
+							if eff.MiscValue < 0 || eff.MiscValue >= 7 /* MAX_POWERS (SharedDefines.h:302) */ {
+								failReason = spellFailedAlreadyAtFullPower
+								continue
+							}
+							power := int(eff.MiscValue)
+							if powers[power] >= maxPowers[power] {
+								failReason = spellFailedAlreadyAtFullPower
+								continue
+							}
+							failReason = 0
+							break
+						}
 					}
-					if eff.Effect == spellEffectHeal {
-						if s.player.Health >= s.player.MaxHealth {
-							failReason = spellFailedAlreadyAtFullHealth
-							continue
-						}
-						failReason = 0
-						break
-					}
-					if eff.Effect == spellEffectEnergize {
-						if eff.MiscValue < 0 || eff.MiscValue >= 7 /* MAX_POWERS (SharedDefines.h:302) */ {
-							failReason = spellFailedAlreadyAtFullPower
-							continue
-						}
-						power := int(eff.MiscValue)
-						if s.player.Powers[power] >= s.player.MaxPowers[power] {
-							failReason = spellFailedAlreadyAtFullPower
-							continue
-						}
-						failReason = 0
-						break
+					if failReason != 0 {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+						s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "consumable target at full health/power", "failReason", failReason)
+						return true
 					}
 				}
-				if failReason != 0 {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
-					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "consumable target at full health/power", "failReason", failReason)
-					return true
-				}
+			}
+			// Reagent sufficiency arm of Spell::CheckItems (Spell.cpp:6777-6818)
+			// on the m_CastItem path: item casts are TRIGGERED_NONE, so the
+			// triggered-flag arm is vacuous and checkReagents reduces to
+			// !Player::CanNoReagentCast, forced on by a non-owned trade-item
+			// target (Spell.cpp:6781-6784) — unless the cast item's template
+			// carries ITEM_FLAG_NO_REAGENT_COST (ItemTemplate.h:180). C++
+			// fails SPELL_FAILED_REAGENTS before the cast; Go's completion
+			// path only destroyed what was present, so the cast must fail
+			// here. Runs before SMSG_SPELL_START like the other CheckCast
+			// gates on this path.
+			skipReagents := false
+			if info, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry)); ok && info.Flags&itemFlagNoReagentCost != 0 {
+				skipReagents = true
+			}
+			checkReagents := !s.canNoReagentCast(spell)
+			if !checkReagents && s.tradeItemTargetCast(target) {
+				checkReagents = true
+			}
+			if !skipReagents && checkReagents && !s.hasSpellReagents(ctx, spell) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedReagents), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
+				return true
+			}
+			// Totem item/category arm of Spell::CheckItems (Spell.cpp:6823-6857)
+			// on the m_CastItem path: runs right after the reagent arm,
+			// matching C++ CheckItems relative order.
+			if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
+				return true
 			}
 			// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
 			// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster):
