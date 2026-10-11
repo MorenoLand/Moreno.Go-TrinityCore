@@ -96,7 +96,9 @@ const (
 	unitFieldStat4                                = 88 // Spirit
 	unitFieldPosStat0                             = 89
 	unitFieldNegStat0                             = 94
-	unitFieldResistances                          = 99 // 99..105 (Physical/Armor, Holy, Fire, Nature, Frost, Shadow, Arcane)
+	unitFieldResistances                          = 99  // 99..105 (Physical/Armor, Holy, Fire, Nature, Frost, Shadow, Arcane)
+	unitFieldResistanceBuffModsPositive           = 106 // UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE = OBJECT_END + 0x64 (106..112), PRIVATE|OWNER
+	unitFieldResistanceBuffModsNegative           = 113 // UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE = OBJECT_END + 0x6B (113..119), PRIVATE|OWNER
 	unitFieldBaseMana                             = 120
 	unitFieldBaseHealth                           = 121
 	unitFieldAttackPower                          = 123
@@ -3846,6 +3848,16 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values[unitFieldResistances] = armor // Armor (resistance 0)
 	for i := 1; i < 7; i++ {
 		values[unitFieldResistances+i] = state.Resistances[i]
+	}
+	// Unit::UpdateResistanceBuffModsMod (Unit.cpp:5059-5084): the
+	// buff-mod display split — PRIVATE|OWNER, so the visibility mask keeps
+	// it on self updates only.
+	if runtime != nil {
+		modPos, modNeg := runtime.resistanceBuffModDisplay()
+		for i := 0; i < 7; i++ {
+			values[unitFieldResistanceBuffModsPositive+i] = math.Float32bits(modPos[i])
+			values[unitFieldResistanceBuffModsNegative+i] = math.Float32bits(modNeg[i])
+		}
 	}
 
 	values[unitFieldBaseHealth] = maxUint32(state.MaxHealth, 1)

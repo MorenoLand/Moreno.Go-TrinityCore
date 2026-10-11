@@ -711,6 +711,13 @@ const spellAuraAddTargetTrigger = 109
 // TakeAmmo for spells it affects.
 const spellAuraAbilityConsumeNoAmmo = 274
 
+// spellVampiricAura is the dreadlord bot aura (botcommon.h:652) whose proc
+// trigger spell is triggerReplenishLifeSpell: HandleProcTriggerSpellAuraProc
+// carries a fork special case (SpellAuraEffects.cpp:5670-5705) that fires
+// the heal with the proc damage as base points instead of the normal
+// triggered-by-aura cast.
+const spellVampiricAura = 20810
+
 // isProcTriggerAuraType mirrors the LoadSpellProc trigger-aura subset whose
 // C++ HandleProc arm fires a spell or damage (SpellMgr.cpp:1686-1729,
 // SpellAuraEffects.cpp:1010-1043): dummy, proc-trigger-spell,
@@ -2488,6 +2495,24 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 			if eff.TriggerSpell == 0 {
 				// C++ HandleProcTriggerSpellAuraProc warns and returns when
 				// the effect carries no triggered spell (SpellAuraEffects.cpp:5654-5661).
+				continue
+			}
+			if eff.Aura == spellAuraProcTriggerSpell && eff.TriggerSpell == triggerReplenishLifeSpell && auraSpell.ID == spellVampiricAura {
+				// SpellAuraEffects.cpp:5670-5705 — npcbot fork: Vampiric
+				// Aura's proc trigger replaces the normal triggered-by-aura
+				// cast with a plain triggered cast of 25155 carrying the
+				// proc damage as base points (full when the trigger target
+				// is the aura caster, quartered otherwise); zero damage
+				// fizzles the trigger. No triggeredByAuraCast: C++ passes
+				// plain extra args, not the aura effect.
+				if ev.damage == 0 {
+					continue
+				}
+				basePoint := ev.damage
+				if triggerTargetGUID != aura.CasterGUID {
+					basePoint /= 4
+				}
+				s.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, triggerTargetGUID, basePoint)
 				continue
 			}
 			if eff.Aura == spellAuraProcTriggerSpellWithValue {

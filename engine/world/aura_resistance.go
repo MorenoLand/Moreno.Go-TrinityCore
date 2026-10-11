@@ -31,12 +31,15 @@ const (
 const schoolCount = 7
 
 // resistanceFold carries the four UNIT_MOD buckets per school for the
-// resistance fold.
+// resistance fold, plus the sign-split 22 sums the buff-mod display fields
+// need (Unit::UpdateResistanceBuffModsMod reads only 22, never 83).
 type resistanceFold struct {
 	exclusive [schoolCount]int32   // 143: max positive amount per school (BASE_VALUE)
 	flat      [schoolCount]int32   // 22 + 83 flat sum (TOTAL_VALUE)
 	basePct   [schoolCount]float32 // 142 product (BASE_PCT)
 	totalPct  [schoolCount]float32 // 101 product (TOTAL_PCT)
+	pos22     [schoolCount]int32   // 22: positive-amount sum per school (display)
+	neg22     [schoolCount]int32   // 22: negative-amount sum per school (display)
 }
 
 // auraResistanceMods folds the live resistance-modifier aura effects into the
@@ -81,7 +84,21 @@ func (s *session) auraResistanceMods(excludeSpellID uint32, extra ...*activeAura
 						}
 					}
 				}
-			case spellAuraModResistance, spellAuraModBaseResistance:
+			case spellAuraModResistance:
+				for x := 0; x < schoolCount; x++ {
+					if effect.MiscValue&(1<<uint(x)) != 0 {
+						f.flat[x] += amount
+						// UpdateResistanceBuffModsMod sign split
+						// (Unit.cpp:5059-5084): the display fields sum only
+						// the 22 arm, positive and negative amounts apart.
+						if amount > 0 {
+							f.pos22[x] += amount
+						} else if amount < 0 {
+							f.neg22[x] += amount
+						}
+					}
+				}
+			case spellAuraModBaseResistance:
 				for x := 0; x < schoolCount; x++ {
 					if effect.MiscValue&(1<<uint(x)) != 0 {
 						f.flat[x] += amount
@@ -141,6 +158,23 @@ func (s *session) effectiveResistances(base [schoolCount]uint32) [schoolCount]ui
 		out[x] = uint32(v)
 	}
 	return out
+}
+
+// resistanceBuffModDisplay mirrors Unit::UpdateResistanceBuffModsMod
+// (Unit.cpp:5059-5084): per school, the positive buff-mod display value is
+// the max-positive 143 exclusive plus the positive-amount 22 sum, times the
+// 101 pct factor; the negative value is the negative-amount 22 sum times the
+// 101 factor. 83 (base resistance) and 142 (base pct) never participate.
+// The caller writes the pair as float32 bits into the PRIVATE|OWNER
+// UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE/NEGATIVE fields.
+func (s *session) resistanceBuffModDisplay() ([schoolCount]float32, [schoolCount]float32) {
+	f := s.auraResistanceMods(0)
+	var pos, neg [schoolCount]float32
+	for x := 0; x < schoolCount; x++ {
+		pos[x] = float32(f.exclusive[x]+f.pos22[x]) * f.totalPct[x]
+		neg[x] = float32(f.neg22[x]) * f.totalPct[x]
+	}
+	return pos, neg
 }
 
 // 83/142 pet arms and 123 target-resistance display: HandleModBaseResistance
