@@ -11,10 +11,28 @@ import (
 
 // Combat rating indices for spells matching TrinityCore SharedDefines.h:1760-1790
 const (
-	CombatRatingHitSpell   uint8 = 7  // CR_HIT_SPELL
-	CombatRatingCritSpell  uint8 = 10 // CR_CRIT_SPELL
-	CombatRatingHasteSpell uint8 = 19 // CR_HASTE_SPELL
+	CombatRatingHitSpell      uint8 = 7  // CR_HIT_SPELL
+	CombatRatingCritSpell     uint8 = 10 // CR_CRIT_SPELL
+	CombatRatingHasteSpell    uint8 = 19 // CR_HASTE_SPELL
+	CombatRatingHitTakenSpell uint8 = 13 // CR_HIT_TAKEN_SPELL
 )
+
+// spellRatingHitPct converts a hit rating to percent using the same
+// Gt-based divisor as getSpellHitPct (26.231995 rating = 1% at level 80).
+func spellRatingHitPct(rating float64, level uint8) float64 {
+	if rating <= 0 {
+		return 0
+	}
+	lvl := float64(level)
+	if lvl <= 0 {
+		lvl = 80
+	}
+	ratingPerPct := 26.231995 * (lvl / 80.0)
+	if ratingPerPct < 5.0 {
+		ratingPerPct = 5.0
+	}
+	return rating / ratingPerPct
+}
 
 // getSpellHastePct returns the spell haste percentage from gear rating.
 // Mirrors TrinityCore Player::GetRatingBonusValue(CR_HASTE_SPELL) (Player.cpp:8800).
@@ -45,19 +63,34 @@ func (s *session) getSpellHitPct() float64 {
 		return 0
 	}
 	rating := float64(s.player.CombatRatings[CombatRatingHitSpell])
-	if rating <= 0 {
-		return 0
+	hit := spellRatingHitPct(rating, s.player.Level)
+	// Player::UpdateSpellHitChances (StatSystem.cpp:860-864):
+	// m_modSpellHitChance = aura 55 sum + CR_HIT_SPELL rating bonus.
+	hit += float64(s.playerAuraModifier(spellAuraModSpellHitChance))
+	return hit
+}
+
+// spellHitTableBonus mirrors the caster/victim aura and rating legs of
+// WorldObject::MagicSpellHitResult (Object.cpp:2544-2561) folded into the
+// base level-diff hit table: the aura-55 + CR_HIT_SPELL caster leg (via
+// getSpellHitPct), the caster-side school-masked 199 leg, the victim-side
+// school-masked 186 leg, the victim-side 160 AoE-avoidance leg (AoE spells
+// only), and the victim player's CR_HIT_TAKEN_SPELL rating leg.
+// Documented deltas: SPELLMOD_RESIST_MISS_CHANCE spellmods, the
+// mechanic/debuff-resist and deflect rolls, creature-victim 186/160 auras
+// (no misc-masked creature aura sum), and the periodic-tick path
+// (persistentAreaTickMissed has no caster session).
+func (s *session) spellHitTableBonus(spell wotlk.Spell, targetSess *session) float64 {
+	bonusHit := s.getSpellHitPct()
+	bonusHit += float64(s.playerAuraModifierByMiscMask(spellAuraModIncreasesSpellPctToHit, int32(spell.SchoolMask)))
+	if targetSess != nil && targetSess.player != nil {
+		bonusHit += float64(targetSess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellHitChance, int32(spell.SchoolMask)))
+		bonusHit -= spellRatingHitPct(float64(targetSess.player.CombatRatings[CombatRatingHitTakenSpell]), targetSess.player.Level)
+		if isAreaEnemySpell(spell) {
+			bonusHit -= float64(targetSess.playerAuraModifier(spellAuraModAoeAvoidance))
+		}
 	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
-		lvl = 80
-	}
-	// At level 80: 26.231995 rating = 1.0% spell hit (from gtCombatRatings.dbc)
-	ratingPerPct := 26.231995 * (lvl / 80.0)
-	if ratingPerPct < 5.0 {
-		ratingPerPct = 5.0
-	}
-	return rating / ratingPerPct
+	return bonusHit
 }
 
 // calculateSpellHitChance calculates the chance [0.0, 1.0] for a spell to hit the target,

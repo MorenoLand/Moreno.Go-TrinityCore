@@ -3586,9 +3586,17 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values[unitFieldTarget+1] = uint32(state.Selection >> 32)
 	values[unitFieldPlayerFieldBytes] = playerFieldBytesValue(state)
 	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
-	shieldBlock := float32(state.Block) + float32(state.Stats[0])*0.5 - 10
+	// Player::GetShieldBlockValue (Player.cpp:5426-5430) feeds
+	// PLAYER_SHIELD_BLOCK (UpdateShieldBlockValue, Player.cpp:5397); the
+	// fold carries gear, the 158 flat leg, STR*0.5, and the 150 pct leg.
+	shieldBlock := uint32(0)
+	if runtime != nil {
+		shieldBlock = runtime.getShieldBlockValue()
+	} else if sb := float32(state.Block) + float32(state.Stats[0])*0.5 - 10; sb > 0 {
+		shieldBlock = uint32(sb)
+	}
 	if shieldBlock > 0 {
-		values[playerShieldBlock] = uint32(shieldBlock)
+		values[playerShieldBlock] = shieldBlock
 	}
 	values[playerExpertise] = state.Expertise
 	values[playerOffhandExpertise] = state.OffhandExpertise

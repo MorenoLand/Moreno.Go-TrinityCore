@@ -517,7 +517,11 @@ const (
 	spellAuraModShapeshift                            = 36  // SPELL_AURA_MOD_SHAPESHIFT (SpellAuraDefines.h:116)
 	spellAuraSpiritOfRedemption                       = 176 // SPELL_AURA_SPIRIT_OF_REDEMPTION (SpellAuraDefines.h:256)
 	spellAuraModParryPercent                          = 47
+	spellAuraModSpellHitChance                        = 55  // SPELL_AURA_MOD_SPELL_HIT_CHANCE (SpellAuraDefines.h:135)
 	spellAuraModSpellCritChance                       = 57  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (SpellAuraDefines.h:137)
+	spellAuraModAoeAvoidance                          = 160 // SPELL_AURA_MOD_AOE_AVOIDANCE (SpellAuraDefines.h:240)
+	spellAuraModAttackerSpellHitChance                = 186 // SPELL_AURA_MOD_ATTACKER_SPELL_HIT_CHANCE (SpellAuraDefines.h:266)
+	spellAuraModIncreasesSpellPctToHit                = 199 // SPELL_AURA_MOD_INCREASES_SPELL_PCT_TO_HIT (SpellAuraDefines.h:279)
 	spellAuraModSpellCritChanceSchool                 = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)
 	spellAuraModCritPct                               = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
 	spellAuraRangedAttackPowerAttackerBonus           = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
@@ -7916,7 +7920,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			isPlayerVictim := targetSess != nil
 			bonusHit := 0.0
 			if s.player != nil {
-				bonusHit = s.getSpellHitPct()
+				bonusHit = s.spellHitTableBonus(spell, targetSess)
 			}
 			var missInfo uint8
 			if spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged {
@@ -17637,23 +17641,7 @@ func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool
 	}
 	var blocked uint32
 	if isPlayerVictim {
-		// Player::GetShieldBlockValue (Player.cpp:5426-5430):
-		// max(0, (flatMod + STR*0.5 - 10) * pctMod).
-		flat := float64(vicSess.player.Block)
-		for _, amount := range vicSess.auraTypeModifiersFiltered(spellAuraModShieldBlockvalue, func(int32) bool { return true }) {
-			flat += float64(amount)
-		}
-		pctMult := 1.0
-		for _, amount := range vicSess.auraTypeModifiersFiltered(spellAuraModShieldBlockvaluePct, func(int32) bool { return true }) {
-			pctMult *= 1.0 + float64(amount)/100.0
-		}
-		str := 0.0
-		if len(vicSess.player.Stats) > 0 {
-			str = float64(vicSess.player.Stats[0])
-		}
-		if value := (flat + str*0.5 - 10) * pctMult; value > 0 {
-			blocked = uint32(value)
-		}
+		blocked = vicSess.getShieldBlockValue()
 	} else {
 		blocked = uint32(target.Level) / 2
 	}
@@ -17929,7 +17917,7 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 		targetLevel = tgt.Level
 	}
-	missInfo := magicSpellHitResult(s.player.Level, targetLevel, targetSess != nil, s.getSpellHitPct())
+	missInfo := magicSpellHitResult(s.player.Level, targetLevel, targetSess != nil, s.spellHitTableBonus(spell, targetSess))
 	if missInfo != protocol.SpellMissNone {
 		return missInfo
 	}
