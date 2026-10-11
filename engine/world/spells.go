@@ -606,6 +606,7 @@ const (
 	spellAuraModSilence                               = 27  // SPELL_AURA_MOD_SILENCE (SpellAuraDefines.h:107)
 	spellAuraModPacify                                = 25  // SPELL_AURA_MOD_PACIFY (SpellAuraDefines.h:105)
 	spellAuraModPacifySilence                         = 60  // SPELL_AURA_MOD_PACIFY_SILENCE (SpellAuraDefines.h:140)
+	spellAuraModUnattackable                          = 93  // SPELL_AURA_MOD_UNATTACKABLE (SpellAuraDefines.h:173)
 	spellAuraStateImmunity                            = 38  // SPELL_AURA_STATE_IMMUNITY (SpellAuraDefines.h:118)
 	spellAuraEffectImmunity                           = 37  // SPELL_AURA_EFFECT_IMMUNITY (SpellAuraDefines.h:117)
 	spellAuraDispelImmunity                           = 41  // SPELL_AURA_DISPEL_IMMUNITY (SpellAuraDefines.h:121)
@@ -18480,6 +18481,11 @@ func (s *session) removeAura(spellID uint32) {
 	wasFleeing := false
 	wasCharmed := false
 	wasSilenced := false
+	wasPacified := false
+	wasWaterWalk := false
+	wasFeatherFall := false
+	wasHover := false
+	wasUnattackable := false
 	wasAllowOnlyAbility := false
 	wasForcedReaction := false
 	forcedReactionFaction := uint32(0)
@@ -18557,6 +18563,22 @@ func (s *session) removeAura(spellID uint32) {
 			// HandleAuraModPacifyAndSilence): the silenced flag clears only
 			// when no silence-family aura remains.
 			wasSilenced = aura.AuraType == spellAuraModSilence || aura.AuraType == spellAuraModPacifySilence
+			// AuraEffect::HandleAuraModPacify remove leg
+			// (SpellAuraEffects.cpp:2386-2395): the PACIFIED flag clears
+			// only when no pacify-family aura remains; captured before
+			// Stopped is set like the ghost leg.
+			wasPacified = s.activeAuraHasEffect(aura, spellAuraModPacify) || s.activeAuraHasEffect(aura, spellAuraModPacifySilence)
+			// AuraEffect::HandleAuraWaterWalk / HandleAuraFeatherFall /
+			// HandleAuraHover remove legs (SpellAuraEffects.cpp:2652-2703):
+			// the client movement state resets only when no same-type aura
+			// remains.
+			wasWaterWalk = s.activeAuraHasEffect(aura, spellAuraWaterWalk)
+			wasFeatherFall = s.activeAuraHasEffect(aura, spellAuraFeatherFall)
+			wasHover = s.activeAuraHasEffect(aura, spellAuraHover)
+			// AuraEffect::HandleModUnattackable remove leg
+			// (SpellAuraEffects.cpp:2262-2264): UNIT_FLAG_NON_ATTACKABLE_2
+			// clears only when no other 93 aura remains.
+			wasUnattackable = s.activeAuraHasEffect(aura, spellAuraModUnattackable)
 			wasAllowOnlyAbility = aura.AuraType == spellAuraAllowOnlyAbility
 			// AuraEffect::HandleArenaPreparation remove leg
 			// (SpellAuraEffects.cpp:4279-4285): the preparation flag clears
@@ -18749,6 +18771,35 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasSilenced && !s.hasAuraType(spellAuraModSilence) && !s.hasAuraType(spellAuraModPacifySilence) && s.player != nil {
 		s.player.UnitFlags &^= unitFlagSilenced
+	}
+	// AuraEffect::HandleAuraModPacify remove leg (SpellAuraEffects.cpp:2386-2395).
+	if wasPacified && !s.hasAuraType(spellAuraModPacify) && !s.hasAuraType(spellAuraModPacifySilence) && s.player != nil {
+		s.player.UnitFlags &^= unitFlagPacified
+	}
+	// AuraEffect::HandleAuraWaterWalk remove leg (SpellAuraEffects.cpp:2652-2661)
+	// -> Player::SetWaterWalking(false): SMSG_MOVE_LAND_WALK to self plus
+	// the MSG_MOVE_WATER_WALK clear to the set.
+	if wasWaterWalk && !s.hasAuraType(spellAuraWaterWalk) && s.player != nil {
+		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_LAND_WALK))
+		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_WATER_WALK, 0)
+	}
+	// AuraEffect::HandleAuraFeatherFall remove leg (SpellAuraEffects.cpp:2671-2684)
+	// -> Player::SetFeatherFall(false): SMSG_MOVE_NORMAL_FALL to self plus
+	// the MSG_MOVE_FEATHER_FALL clear to the set. The SetFallInformation(0, z)
+	// fall-info reset has no Go model.
+	if wasFeatherFall && !s.hasAuraType(spellAuraFeatherFall) && s.player != nil {
+		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_NORMAL_FALL))
+		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_FEATHER_FALL, 0)
+	}
+	// AuraEffect::HandleAuraHover remove leg (SpellAuraEffects.cpp:2692-2704):
+	// SMSG_MOVE_UNSET_HOVER to self plus the MSG_MOVE_HOVER clear to the set.
+	if wasHover && !s.hasAuraType(spellAuraHover) && s.player != nil {
+		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_UNSET_HOVER))
+		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_HOVER, 0)
+	}
+	// AuraEffect::HandleModUnattackable remove leg (SpellAuraEffects.cpp:2262-2264).
+	if wasUnattackable && !s.hasAuraType(spellAuraModUnattackable) && s.player != nil {
+		s.player.UnitFlags &^= unitFlagNonAttackable2
 	}
 	if wasForcedReaction {
 		_ = s.sendForcedReactions()
@@ -20944,6 +20995,55 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// PreventionType is SPELL_PREVENTION_TYPE_SILENCE.
 			targetSess.player.UnitFlags |= unitFlagSilenced
 			targetSess.interruptSilencePreventionCasts()
+		}
+		if eff.Aura == spellAuraModPacify || eff.Aura == spellAuraModPacifySilence {
+			// AuraEffect::HandleAuraModPacify apply leg
+			// (SpellAuraEffects.cpp:2379-2396, reached via
+			// HandleAuraModPacifyAndSilence for 60): the fresh pacify aura
+			// sets UNIT_FLAG_PACIFIED unconditionally. The gate that blocks
+			// SPELL_PREVENTION_TYPE_PACIFY casts already read this flag; the
+			// flag itself was never written.
+			targetSess.player.UnitFlags |= unitFlagPacified
+		}
+		if eff.Aura == spellAuraWaterWalk {
+			// AuraEffect::HandleAuraWaterWalk apply leg
+			// (SpellAuraEffects.cpp:2649-2664) -> Player::SetWaterWalking
+			// (Player.cpp:26891): SMSG_MOVE_WATER_WALK to self plus
+			// MSG_MOVE_WATER_WALK to the set. Login-time bridging exists in
+			// characters.go; this is the mid-session path.
+			targetSess.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
+			targetSess.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_WATER_WALK, 0x10000000)
+		}
+		if eff.Aura == spellAuraFeatherFall {
+			// AuraEffect::HandleAuraFeatherFall apply leg
+			// (SpellAuraEffects.cpp:2666-2685) -> Player::SetFeatherFall
+			// (Player.cpp:26908): SMSG_MOVE_FEATHER_FALL to self plus
+			// MSG_MOVE_FEATHER_FALL to the set.
+			targetSess.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_FEATHER_FALL))
+			targetSess.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_FEATHER_FALL, 0x20000000)
+		}
+		if eff.Aura == spellAuraHover {
+			// AuraEffect::HandleAuraHover apply leg
+			// (SpellAuraEffects.cpp:2687-2705) -> Unit::SetHover: the client
+			// legs are SMSG_MOVE_SET_HOVER to self plus MSG_MOVE_HOVER to
+			// the set, mirroring the login-time bridge in characters.go. The
+			// hover-height ascent arm (Unit.cpp:13790-13791) has no Go model.
+			targetSess.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_SET_HOVER))
+			targetSess.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_HOVER, 0x40000000)
+		}
+		if eff.Aura == spellAuraModUnattackable {
+			// AuraEffect::HandleModUnattackable apply leg
+			// (SpellAuraEffects.cpp:2256-2279): the fresh aura sets
+			// UNIT_FLAG_NON_ATTACKABLE_2, stops the target's attack, and
+			// drops its auras carrying
+			// AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION. The C++
+			// dungeon-branch AttackStop-vs-CombatStop nuance has no Go
+			// model; handleAttackStop is the shared arm like the charm leg.
+			targetSess.player.UnitFlags |= unitFlagNonAttackable2
+			if targetSess.attackTarget != 0 {
+				_ = targetSess.handleAttackStop()
+			}
+			targetSess.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
 		}
 		// AuraEffect::HandleAuraAllowOnlyAbility apply leg
 		// (SpellAuraEffects.cpp:2432-2433): Bladestorm (46924) and Killing

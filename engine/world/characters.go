@@ -3176,14 +3176,15 @@ func (s *session) handleComplain(ctx context.Context, payload []byte) bool {
 }
 
 const (
-	logoutDelay       = 20 * time.Second
-	playerFlagResting = uint32(0x00000020)
-	unitFlagSilenced  = uint32(0x00002000)
-	unitFlagPacified  = uint32(0x00020000)
-	unitFlagStunned   = uint32(0x00040000)
-	unitFlagConfused  = uint32(0x00400000)
-	unitFlagFleeing   = uint32(0x00800000)
-	unitFlagDisarmed  = uint32(0x00200000) // UNIT_FLAG_DISARMED (UnitDefines.h:145)
+	logoutDelay            = 20 * time.Second
+	playerFlagResting      = uint32(0x00000020)
+	unitFlagSilenced       = uint32(0x00002000)
+	unitFlagPacified       = uint32(0x00020000)
+	unitFlagNonAttackable2 = uint32(0x00010000) // UNIT_FLAG_NON_ATTACKABLE_2 (UnitDefines.h:140)
+	unitFlagStunned        = uint32(0x00040000)
+	unitFlagConfused       = uint32(0x00400000)
+	unitFlagFleeing        = uint32(0x00800000)
+	unitFlagDisarmed       = uint32(0x00200000) // UNIT_FLAG_DISARMED (UnitDefines.h:145)
 )
 
 func (s *session) setRooted(root bool) {
