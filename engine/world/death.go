@@ -39,10 +39,9 @@ const (
 
 	corpseReclaimRadius = 39.0 // CORPSE_RECLAIM_RADIUS (Corpse.h:35)
 
-	corpseTypeBones     uint32 = 0
-	corpseTypePvE       uint32 = 1 // CORPSE_RESURRECTABLE_PVE
-	corpseTypePvP       uint32 = 2 // CORPSE_RESURRECTABLE_PVP
-	corpsePhaseAuraType uint32 = 261
+	corpseTypeBones uint32 = 0
+	corpseTypePvE   uint32 = 1 // CORPSE_RESURRECTABLE_PVE
+	corpseTypePvP   uint32 = 2 // CORPSE_RESURRECTABLE_PVP
 
 	spellRaiseAllyInitial = 61999 // spell_dk_raise_ally_initial (spell_dk.cpp:2803)
 	spellRaiseAlly        = 46619 // SPELL_DK_RAISE_ALLY (spell_dk.cpp:2784), the applied aura
@@ -148,7 +147,7 @@ func (s *session) currentPlayerPhaseMask() uint32 {
 	s.castMu.Lock()
 	phaseMask := uint32(0)
 	for _, aura := range s.activeAuras {
-		if aura != nil && !aura.Stopped && aura.AuraType == corpsePhaseAuraType {
+		if aura != nil && !aura.Stopped && aura.AuraType == spellAuraPhase {
 			phaseMask |= uint32(aura.MiscValue)
 		}
 	}

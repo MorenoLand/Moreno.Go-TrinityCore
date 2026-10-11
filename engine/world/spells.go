@@ -150,6 +150,7 @@ const (
 	spellAuraModEnemyDodge                uint32 = 251 // SPELL_AURA_MOD_ENEMY_DODGE (SpellAuraDefines.h:331) — attacker's ungated dodge-reduction aura sum (Unit.cpp:2697-2698)
 	spellAuraModTargetAbsorbSchool        uint32 = 194 // SPELL_AURA_MOD_TARGET_ABSORB_SCHOOL (SpellAuraDefines.h) — attacker's pct of damage bypassing victim absorbs
 	spellAuraModTargetAbilityAbsorbSchool uint32 = 195 // SPELL_AURA_MOD_TARGET_ABILITY_ABSORB_SCHOOL (SpellAuraDefines.h:275) — attacker's spell-specific pct of damage bypassing victim absorbs (CalcAbsorbResist, Unit.cpp:1840)
+	spellAuraPhase                        uint32 = 261 // SPELL_AURA_PHASE (SpellAuraDefines.h) — misc value ORs into the player's phase mask (AuraEffect::HandlePhase, SpellAuraEffects.cpp:1581)
 
 	victimStateDodge = 2 // VICTIMSTATE_DODGE (Unit.h:47) — MiscValue for MOD_COMBAT_RESULT_CHANCE dodge reduction
 
@@ -7653,6 +7654,28 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// before any target selection.
 	if spell.DefenseType != spellDamageClassNone && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID && s.server != nil {
 		s.server.triggerPetOwnerAttacked(s.player.Map, s.player.InstanceID, s.playerGUID, target.UnitGUID)
+	}
+
+	// Spell::SelectExplicitTargets (Spell.cpp:722-752): the explicit-target
+	// magnet arm — a SPELL_DAMAGE_CLASS_MELEE / SPELL_DAMAGE_CLASS_RANGED
+	// spell with an explicit unit target ((GetExplicitTargetMask() &
+	// TARGET_FLAG_UNIT_ENEMY) || ((mask & TARGET_FLAG_UNIT) &&
+	// !m_caster->IsFriendlyTo(target))) redirects through the
+	// ADD_CASTER_HIT_TRIGGER (111) magnet via Unit::GetMeleeHitRedirectTarget,
+	// the same bridge as the auto-attack site (meleeHitRedirectGUID in
+	// combat.go); the MAGIC arm is the already-bridged 96 spell-magnet.
+	// C++ rewrites m_targets before SelectSpellTargets, so the redirect
+	// lands here, ahead of every effect-target use of target.UnitGUID.
+	if (spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged) &&
+		target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		explicitMask := spell.Targets | spellExplicitUnitTargetMask(spell)
+		targetSess := s.server.findSessionByGUID(target.UnitGUID)
+		if explicitMask&targetFlagUnitEnemy != 0 ||
+			(explicitMask&targetFlagUnit != 0 && !s.isFriendlyToTarget(target.UnitGUID, targetSess)) {
+			if redirectGUID, ok := s.meleeHitRedirectGUID(ctx, target.UnitGUID); ok {
+				target.UnitGUID = redirectGUID
+			}
+		}
 	}
 
 	// Spell::_cast (Spell.cpp:3335) re-runs CheckCast(false) when the cast timer
@@ -18954,6 +18977,22 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.auraTouchesSkillBonus(aura) {
 		s.applySkillBonusArms(aura, 1)
 	}
+	// AuraEffect::HandlePhase apply leg (SpellAuraEffects.cpp:1581-1632): a
+	// 261 effect recomputes the player's phase mask from the OR of all
+	// remaining 261 misc values (currentPlayerPhaseMask, PHASEMASK_NORMAL =
+	// 1 when none), pushes SMSG_SET_PHASE_SHIFT (WorldSession::
+	// SendSetPhaseShift, MiscHandler.cpp:1452) and refreshes visibility (the
+	// UpdateObjectVisibility tail). The apply also drops auras interruptible
+	// by AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION (the BG flag-drop
+	// arm). The non-player arm has no Go bridge (creature aura infra carries
+	// no phase model).
+	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraPhase) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_PHASE_SHIFT), buildPhaseShift(s.currentPlayerPhaseMask()), true)
+		s.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
+		if s.server != nil {
+			s.server.refreshPlayerVisibility()
+		}
+	}
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, stackCount)
 	s.sendPlayerUpdate()
 	if auraType == 4 {
@@ -19544,6 +19583,17 @@ func (s *session) removeAura(spellID uint32) {
 				caster = s.playerGUID
 			}
 			s.server.refreshThreatTempModifier(s.player.Map, s.player.InstanceID, caster)
+		}
+	}
+	// AuraEffect::HandlePhase remove leg (SpellAuraEffects.cpp:1581-1632):
+	// the aura record is already erased above (Unit::_UnapplyAura erases
+	// before the handlers, Unit.cpp:3548), so the shift carries the
+	// recomputed mask from the remaining 261 auras (PHASEMASK_NORMAL = 1
+	// when none, per currentPlayerPhaseMask) plus the visibility refresh.
+	if s.server != nil && s.server.Data != nil && s.player != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found && spellHasAura(sp, spellAuraPhase) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SET_PHASE_SHIFT), buildPhaseShift(s.currentPlayerPhaseMask()), true)
+			s.server.refreshPlayerVisibility()
 		}
 	}
 }
@@ -25955,6 +26005,15 @@ func buildCastFailed(castID uint8, spellID uint32, result uint8) []byte {
 	buf.WriteU8(castID)
 	buf.WriteU32(spellID)
 	buf.WriteU8(result)
+	return buf.Bytes()
+}
+
+// buildPhaseShift mirrors WorldSession::SendSetPhaseShift
+// (MiscHandler.cpp:1452): SMSG_SET_PHASE_SHIFT carries the new phase mask
+// as a single uint32.
+func buildPhaseShift(phaseMask uint32) []byte {
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(phaseMask)
 	return buf.Bytes()
 }
 

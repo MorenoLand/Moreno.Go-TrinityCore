@@ -500,7 +500,9 @@ func (s *session) dropHitTriggerCharge(ht hitTriggerAura) {
 // degrades to alive + hostile like the grounding-totem bridge. The ranged
 // auto-attack path never redirects (Unit.cpp:2146-2147 "ignore ranged case");
 // the SPELL_DAMAGE_CLASS_RANGED explicit-target arm of
-// Spell::SelectExplicitTargets (Spell.cpp:743-748) has no Go model yet.
+// Spell::SelectExplicitTargets (Spell.cpp:743-748) is bridged in
+// finishSpellCast (spells.go), ahead of every effect-target use of the
+// explicit unit GUID.
 func (s *session) meleeHitRedirectGUID(ctx context.Context, victimGUID uint64) (uint64, bool) {
 	if s == nil || s.server == nil || s.player == nil || victimGUID == 0 {
 		return 0, false
