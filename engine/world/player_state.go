@@ -2202,6 +2202,16 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	// item totals accumulated above are the non-aura base the fold builds on.
 	state.Resistances = s.effectiveResistances(state.Resistances)
 
+	// Aura rating modifiers (aura_rating.go): HandleModRating (189) flat folds
+	// plus the MOD_RATING_FROM_STAT (220) stat-pct leg of Player::UpdateRating
+	// (Player.cpp:5631-5636), clamped at 0. Gear ratings are final here and
+	// state.Stats holds the fully derived stats the 220 leg needs, so the
+	// materialized CombatRatings match C++'s broadcast
+	// (PLAYER_FIELD_COMBAT_RATING_1+i) and every consumer — dodge, parry,
+	// block, hit, crit, haste, expertise, armor penetration — sees the C++
+	// value, including the haste attack/cast-time cascade of ApplyRatingMod.
+	s.applyAuraRatingFolds(state)
+
 	// 3. Derived stats (TrinityCore StatSystem.cpp:309-360)
 	totalSta := state.Stats[2]
 	totalInte := state.Stats[3]
@@ -2229,6 +2239,18 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 
 	// Armor: item armor + Agility * 2
 	state.Armor += totalAgi * 2
+
+	// Aura 182 leg of Player::UpdateArmor (StatSystem.cpp:270-274):
+	// MOD_RESISTANCE_OF_STAT_PERCENT adds stat[miscB]*amount/100 for
+	// NORMAL-school misc auras before the TOTAL_PCT multiplier (Go models no
+	// armor TOTAL_PCT, so it lands directly on the items + agility*2 total).
+	if armorOfStat := int64(s.auraArmorOfStatPercentFold(state.Stats)); armorOfStat != 0 {
+		armor := int64(state.Armor) + armorOfStat
+		if armor < 0 {
+			armor = 0
+		}
+		state.Armor = uint32(armor)
+	}
 
 	s.setAchievementCriteria(criteriaTypeHighestHealth, 0, state.MaxHealth)
 	s.setAchievementCriteria(criteriaTypeHighestArmor, 0, state.Armor)

@@ -570,6 +570,9 @@ const (
 	spellAuraModTotalStatPct                       = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
 	spellAuraModRangedAttackPower                  = 124 // SPELL_AURA_MOD_RANGED_ATTACK_POWER (SpellAuraDefines.h:204)
 	spellAuraModDamageDone                         = 13  // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93)
+	spellAuraModRating                             = 189 // SPELL_AURA_MOD_RATING (SpellAuraDefines.h:269)
+	spellAuraModRatingFromStat                     = 220 // SPELL_AURA_MOD_RATING_FROM_STAT (SpellAuraDefines.h:300)
+	spellAuraModResistanceOfStatPercent            = 182 // SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT (SpellAuraDefines.h:262)
 	spellAuraCastingSpeedNotStack                  = 65
 	spellAuraHasteSpells                           = 216
 	spellAuraFakeInebriation                       = 304
