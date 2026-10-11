@@ -21,6 +21,47 @@ const (
 	factionFlagVisible         uint8 = 0x01
 )
 
+const (
+	spellAuraModReputationGain        = 156 // SPELL_AURA_MOD_REPUTATION_GAIN (SpellAuraDefines.h:236)
+	spellAuraModFactionReputationGain = 190 // SPELL_AURA_MOD_FACTION_REPUTATION_GAIN (SpellAuraDefines.h:270)
+)
+
+// reputationGainPctMod mirrors Player::CalculateReputationGain's aura fold
+// (Player.cpp:6653-6659): the live 156 modifier plus the faction-specific
+// 190 modifier whose effect MiscValue names this faction (the kill-only
+// source gate has no Go model — all giveReputation callers share the sink).
+// C++ applies it as percent = 100 + repMod for gains, 100 - repMod for
+// losses (CalculatePct at the end). The quest-bonus, low-level rate and
+// RepRewardRate legs have no Go model.
+func (s *session) reputationGainPctMod(factionID uint32) (mod int32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			switch effect.Aura {
+			case spellAuraModReputationGain:
+				mod += aura.Amounts[index]
+			case spellAuraModFactionReputationGain:
+				if uint32(effect.MiscValue) == factionID {
+					mod += aura.Amounts[index]
+				}
+			}
+		}
+	}
+	return mod
+}
+
 func MergeReputationFlags(defaultFlags, databaseFlags uint8, totalStanding int32) uint8 {
 	flags := defaultFlags
 	if databaseFlags&factionFlagVisible != 0 && (flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 || flags&factionFlagSpecial != 0) {
@@ -226,6 +267,22 @@ func (s *session) handleSetFactionAtWar(ctx context.Context, payload []byte) boo
 func (s *session) giveReputation(ctx context.Context, factionID uint32, amount int32) {
 	if s.player == nil || factionID == 0 || amount == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
+	}
+	// Player::CalculateReputationGain (Player.cpp:6657): percent += rep > 0 ?
+	// repMod : -repMod, then CalculatePct(rep, percent); a zero or negative
+	// percent grants nothing.
+	if mod := s.reputationGainPctMod(factionID); mod != 0 {
+		percent := int64(100 + mod)
+		if amount < 0 {
+			percent = int64(100 - mod)
+		}
+		if percent <= 0 {
+			return
+		}
+		amount = int32(int64(amount) * percent / 100)
+		if amount == 0 {
+			return
+		}
 	}
 	cdb := s.server.CharactersStore.DB
 	for i := range s.player.Reputations {

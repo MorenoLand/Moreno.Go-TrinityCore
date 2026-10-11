@@ -3698,7 +3698,13 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	for i := 0; i < playerDailyQuestsCount; i++ {
 		values[playerDailyQuestsStart+i] = state.DailyQuests[i]
 	}
-	if state.Class == 6 {
+	// Player::UpdateRuneRegen (StatSystem.cpp:937-956) fills
+	// PLAYER_RUNE_REGEN_1..4 from the aura-folded base cooldowns
+	// (updatePlayerRuneRegenValues, runes.go); the fields feed the client's
+	// rune UI refresh rate.
+	if runtime != nil {
+		runtime.updatePlayerRuneRegenValues(values)
+	} else if state.Class == classDeathKnight {
 		for i := 0; i < 4; i++ {
 			values[playerRuneRegenStart+i] = math.Float32bits(0.1)
 		}
@@ -3873,7 +3879,21 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		}
 		values[playerFieldModDamageDoneNeg+school] = uint32(state.SpellDamageNegative[school])
 	}
-	if state.SpellPenetration > 0 {
+	// PLAYER_FIELD_MOD_TARGET_RESISTANCE (1195): C++ stacks two legs on this
+	// display-only field — Player::ApplySpellPenetrationBonus's -amount
+	// (StatSystem.cpp:241) plus the live 123 full-spell-mask aura amounts
+	// (targetResistanceDisplay); PLAYER_FIELD_MOD_TARGET_PHYSICAL_RESISTANCE
+	// (1196) carries the live 123 armor-mask leg alone
+	// (HandleModTargetResistance, SpellAuraEffects.cpp:3357-3376).
+	if runtime != nil {
+		penSpell, penPhysical := runtime.targetResistanceDisplay()
+		if v := -int32(state.SpellPenetration) + penSpell; v != 0 {
+			values[playerFieldModTargetResistance] = uint32(v)
+		}
+		if penPhysical != 0 {
+			values[playerFieldModTargetPhysicalResistance] = uint32(penPhysical)
+		}
+	} else if state.SpellPenetration > 0 {
 		values[playerFieldModTargetResistance] = uint32(-int32(state.SpellPenetration))
 	}
 	values[playerCritPercentage] = math.Float32bits(state.MeleeCrit)

@@ -10234,10 +10234,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// just the caster. The Faction DBC entry must exist
 				// (sFactionStore.LookupEntry gate, SpellEffects.cpp:4359-4361);
 				// an unknown faction grants nothing. Documented no-bridge:
-				// Player::CalculateReputationGain's aura fold
-				// (SPELL_AURA_MOD_REPUTATION_GAIN) and rep reward rates have
-				// no Go model — the same standing gap rewardBGEndReputation
-				// documents.
+				// Player::CalculateReputationGain's quest-bonus/low-level-rate
+				// and rep-reward-rate legs have no Go model; the aura fold
+				// (SPELL_AURA_MOD_REPUTATION_GAIN) rides inside giveReputation
+				// via reputationGainPctMod.
 				if eff.MiscValue != 0 && s.spellFactionEntryExists(uint32(eff.MiscValue)) {
 					for _, effectTarget := range hitTargets {
 						if effectTarget == 0 {

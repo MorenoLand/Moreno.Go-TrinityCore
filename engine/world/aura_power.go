@@ -293,6 +293,9 @@ func (s *session) auraManaRegenTerms() (spiritMult float32, mp5PerSec float32, i
 // (SpellAuraEffects.cpp:3613-3726) but Go tracks creature power deltas
 // nowhere; bridging the creature leg needs the creature stat-mod model
 // (standing gap, same queue as creature-caster EffectTransmitted). Rune
-// regen (Player::UpdateRuneRegen, StatSystem.cpp:940) has no Go model and
-// stays unbridged. Rage decay (Player::Regenerate POWER_RAGE,
-// Player.cpp:2147-2155) has no Go rage model and stays unbridged.
+// regen (Player::UpdateRuneRegen, StatSystem.cpp:940) is bridged in
+// runes.go: updatePlayerRuneRegenValues fills the PLAYER_RUNE_REGEN fields
+// on every player update build and runeBaseCooldownMsForSlot folds the 110
+// POWER_RUNE aura leg (Player::GetRuneBaseCooldown, Player.cpp:24840). Rage
+// decay (Player::Regenerate POWER_RAGE, Player.cpp:2147-2155) has no Go
+// rage model and stays unbridged.

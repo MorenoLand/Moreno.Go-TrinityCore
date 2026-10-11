@@ -1149,8 +1149,8 @@ func (s *Server) rewardBGEndHonor(mapID, team uint32, kills uint32) {
 // rewardBGEndReputation mirrors Battleground::RewardReputationToTeam's standing arm
 // (Battleground.cpp:640): rep standing to every worldReady session on the BG map
 // on the given team (0 Alliance, 1 Horde). C++ adds the SPELL_AURA_MOD_REPUTATION_GAIN
-// and SPELL_AURA_MOD_FACTION_REPUTATION_GAIN aura modifiers first; Go has no
-// reputation-gain aura model, so the flat giveReputation standing arm is the bridge.
+// and SPELL_AURA_MOD_FACTION_REPUTATION_GAIN aura modifiers first; Go applies the
+// same fold inside giveReputation (reputationGainPctMod).
 func (s *Server) rewardBGEndReputation(mapID, team uint32, factionID uint32, rep uint32) {
 	if s == nil || factionID == 0 || rep == 0 {
 		return

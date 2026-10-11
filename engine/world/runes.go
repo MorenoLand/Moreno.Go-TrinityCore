@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math"
 	"sort"
 	"time"
 
@@ -87,12 +88,61 @@ func (rs *dkRuneState) runeCooldownRemainingMs(index int, nowMs int64) int64 {
 }
 
 // runeBaseCooldownMsForSlot mirrors Player::GetRuneBaseCooldown
-// (Player.cpp:24840): RUNE_BASE_COOLDOWN reduced by
-// SPELL_AURA_MOD_POWER_REGEN_PERCENT auras with MiscValue == POWER_RUNE.
-// Go has no such aura plumbing, so the base cooldown is unmodified
-// (noted gap, not a stub).
+// (Player.cpp:24840): RUNE_BASE_COOLDOWN reduced by live
+// SPELL_AURA_MOD_POWER_REGEN_PERCENT (110) effects whose MiscValue is
+// POWER_RUNE and whose MiscValueB names the slot's base rune type, in
+// C++ uint32 arithmetic (cooldown * (100 - amount) / 100 per aura).
 func (s *session) runeBaseCooldownMsForSlot(index int) int64 {
-	return runeBaseCooldownMs
+	cooldown := int64(runeBaseCooldownMs)
+	if s == nil || s.player == nil || s.runes == nil || index < 0 || index >= maxRunes ||
+		s.server == nil || s.server.Data == nil {
+		return cooldown
+	}
+	base := int32(s.runes.base[index])
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for i, effect := range spell.Effects {
+			if i >= len(aura.Amounts) || aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			if effect.Aura != spellAuraModPowerRegenPct || effect.MiscValue != powerRune || effect.MiscValueB != base {
+				continue
+			}
+			cooldown = cooldown * (100 - int64(aura.Amounts[i])) / 100
+		}
+	}
+	return cooldown
+}
+
+// updatePlayerRuneRegenValues mirrors Player::UpdateRuneRegen
+// (StatSystem.cpp:937-956): PLAYER_RUNE_REGEN_1 + rune holds 1000 / cooldown,
+// where cooldown is the base cooldown of the first slot whose base rune is
+// that type. It runs on every player update build, so the C++ trigger
+// (HandleModPowerRegen, SpellAuraEffects.cpp:3625-3628 — MOD_POWER_REGEN
+// auras with misc POWER_RUNE applying/removing) needs no separate hook.
+func (s *session) updatePlayerRuneRegenValues(values []uint32) {
+	if s == nil || s.player == nil || s.player.Class != classDeathKnight || s.runes == nil {
+		return
+	}
+	for runeType := 0; runeType < runeDeath; runeType++ {
+		cooldown := int64(0)
+		for i := 0; i < maxRunes; i++ {
+			if int(s.runes.base[i]) == runeType {
+				cooldown = s.runeBaseCooldownMsForSlot(i)
+				break
+			}
+		}
+		if cooldown <= 0 {
+			continue
+		}
+		values[playerRuneRegenStart+runeType] = math.Float32bits(float32(1000.0 / float64(cooldown)))
+	}
 }
 
 // checkRuneCost mirrors Spell::CheckRuneCost (Spell.cpp:4918-4954): it

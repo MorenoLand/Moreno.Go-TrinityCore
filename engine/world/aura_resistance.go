@@ -147,6 +147,50 @@ func (s *session) effectiveResistances(base [schoolCount]uint32) [schoolCount]ui
 // and HandleAuraModBaseResistancePCT write UNIT_MOD_ARMOR for pets, and
 // HandleModTargetResistance only flips PLAYER_FIELD_MOD_TARGET_RESISTANCE /
 // PLAYER_FIELD_MOD_TARGET_PHYSICAL_RESISTANCE (SpellAuraEffects.cpp:3357-
-// 3376) as a HandleNoImmediateEffect display arm. Go has no pet armor model
-// and drives 1195 from caster-side spell penetration, so both stay
-// documented gaps in the same queue as the creature resistance leg.
+// 3376) as a HandleNoImmediateEffect display arm. The 123 display leg is
+// bridged in targetResistanceDisplay below; the 22/83 pet armor arms stay a
+// documented gap (Go has no pet armor model), same queue as the creature
+// resistance leg.
+
+// spellSchoolMaskSpell is SPELL_SCHOOL_MASK_SPELL (SharedDefines.h): the
+// fire/nature/frost/shadow/arcane school bits, excluding holy and armor.
+const spellSchoolMaskSpell = 0x7C
+
+// targetResistanceDisplay mirrors AuraEffect::HandleModTargetResistance's
+// display arms (SpellAuraEffects.cpp:3357-3376). The live 123 amount lands on
+// PLAYER_FIELD_MOD_TARGET_PHYSICAL_RESISTANCE (1196) when the effect's misc
+// covers SPELL_SCHOOL_NORMAL, and on PLAYER_FIELD_MOD_TARGET_RESISTANCE
+// (1195) only when it covers every spell school
+// ((misc & SPELL_SCHOOL_MASK_SPELL) == SPELL_SCHOOL_MASK_SPELL). The 1195
+// field also carries Player::ApplySpellPenetrationBonus's -amount leg
+// (StatSystem.cpp:241); buildPlayerUpdate adds both legs.
+func (s *session) targetResistanceDisplay() (spell, physical int32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0, 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spellData, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spellData.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != spellAuraModTargetResistance {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if effect.MiscValue&(1<<0) != 0 {
+				physical += amount
+			}
+			if effect.MiscValue&spellSchoolMaskSpell == spellSchoolMaskSpell {
+				spell += amount
+			}
+		}
+	}
+	return spell, physical
+}
