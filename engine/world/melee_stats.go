@@ -270,14 +270,17 @@ func (s *session) getRangedHastePct() float64 {
 // Player.cpp:5607-5616) composes multiplicatively with the aura arms —
 // SPELL_AURA_MOD_ATTACKSPEED (9, base attack only, stacking),
 // SPELL_AURA_MOD_MELEE_HASTE (138, base+offhand, exclusive-same-effect
-// gate), and SPELL_AURA_MOD_MELEE_RANGED_HASTE (192, all three attack
-// types, stacking). Folds read the live aura map, so apply/merge/remove
-// need no recalc hook; creature targets have no Go model (player-only
-// fold, same standing queue as the other aura arms).
+// gate), SPELL_AURA_MOD_MELEE_RANGED_HASTE (192, all three attack
+// types, stacking), and SPELL_AURA_MELEE_SLOW (193) /
+// SPELL_AURA_MOD_SPEED_SLOW_ALL (252) (base+offhand, exclusive-same-effect
+// gate vs other 193s, combatSlowLiveAmounts). Folds read the live aura map,
+// so apply/merge/remove need no recalc hook; creature targets have no Go
+// model (player-only fold, same standing queue as the other aura arms).
 func (s *session) getHastedMeleeSpeed(baseSpeed time.Duration, offhand bool) time.Duration {
 	divisor := 1.0 + s.getMeleeHastePct()/100.0
 	divisor *= float64(s.attackSpeedAuraFactor(spellAuraModMeleeRangedHaste))
 	divisor *= float64(s.meleeHaste138Factor())
+	divisor *= float64(attackSpeedFactor(s.combatSlowLiveAmounts()))
 	if !offhand {
 		divisor *= float64(s.attackSpeedAuraFactor(spellAuraModAttackSpeed))
 	}
@@ -294,13 +297,16 @@ func (s *session) getHastedMeleeSpeed(baseSpeed time.Duration, offhand bool) tim
 // getHastedRangedSpeed modifies base ranged attack speed by ranged haste.
 // Same m_modAttackSpeedPct model as getHastedMeleeSpeed: the gear-rating
 // leg composes multiplicatively with SPELL_AURA_MOD_RANGED_HASTE (140),
-// SPELL_AURA_MOD_RANGED_AMMO_HASTE (141, player-only in C++ too), and
-// SPELL_AURA_MOD_MELEE_RANGED_HASTE (192).
+// SPELL_AURA_MOD_RANGED_AMMO_HASTE (141, player-only in C++ too),
+// SPELL_AURA_MOD_MELEE_RANGED_HASTE (192), and SPELL_AURA_MELEE_SLOW (193) /
+// SPELL_AURA_MOD_SPEED_SLOW_ALL (252) (ranged arm of HandleModCombatSpeedPct,
+// combatSlowLiveAmounts).
 func (s *session) getHastedRangedSpeed(baseSpeed time.Duration) time.Duration {
 	divisor := 1.0 + s.getRangedHastePct()/100.0
 	divisor *= float64(s.attackSpeedAuraFactor(spellAuraModRangedHaste))
 	divisor *= float64(s.attackSpeedAuraFactor(spellAuraRangedAmmoHaste))
 	divisor *= float64(s.attackSpeedAuraFactor(spellAuraModMeleeRangedHaste))
+	divisor *= float64(attackSpeedFactor(s.combatSlowLiveAmounts()))
 	if divisor == 1 {
 		return baseSpeed
 	}

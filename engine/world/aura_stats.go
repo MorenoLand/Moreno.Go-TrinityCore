@@ -8,6 +8,7 @@ type statCandidate struct {
 	effectIndex int
 	amount      int32
 	firstRank   uint32
+	auraType    uint32 // Aura type of the candidate effect (0 when unused)
 }
 
 // auraStatMods mirrors the flat/pct stat-aura handlers

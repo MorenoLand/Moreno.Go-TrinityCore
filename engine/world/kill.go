@@ -820,7 +820,23 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 
 	// Clear any active auras/DoTs ticking on this creature
 	if s.server != nil {
-		s.server.clearCreatureAuras(creatureAuraKeyForTarget(target))
+		// AuraEffect::HandleChannelDeathItem remove-by-death leg
+		// (SpellAuraEffects.cpp:4690): 86 auras on the dying creature
+		// (Drain Soul) grant their items to the aura casters; runs before
+		// the strip, mirroring RemoveAllAurasOnDeath's remove-mode.
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		var deathAuras []*activeAura
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			deathAuras = append(deathAuras, aura)
+		}
+		s.server.auraMu.Unlock()
+		var tapPlayerGUID, tapGroupID uint64
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			tapPlayerGUID, tapGroupID = motion.TapPlayerGUID, motion.TapGroupID
+		}
+		s.server.grantChannelDeathItems(ctx, deathAuras, mobLevel, true, tapPlayerGUID, tapGroupID)
+		s.server.clearCreatureAuras(key)
 	}
 
 	// Alterac Valley (Map 30) creature kills (Generals, Captains, Mine bosses)

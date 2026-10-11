@@ -191,6 +191,13 @@ func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
 		if s.hasInstantCastAura() {
 			return 0
 		}
+		// AuraEffect::HandleModCombatSpeedPct's cast-time arm
+		// (SpellAuraEffects.cpp:3962/3967) via Unit::ApplyCastTimePercentMod
+		// (Unit.cpp:10867): live 193/252 effects multiply UNIT_MOD_CAST_SPEED
+		// (combatSlowCastFactor), composing with the rating-haste divisor.
+		if slowFactor := s.combatSlowCastFactor(); slowFactor != 1 {
+			castTime = int32(float64(castTime) * slowFactor)
+		}
 		if hastePct := s.getSpellHastePct(); hastePct > 0 {
 			castTime = int32(float64(castTime) / (1.0 + hastePct/100.0))
 		}

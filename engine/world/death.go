@@ -23,6 +23,9 @@ import (
 //   - ObjectMgr::GetClosestGraveyard / GetDefaultGraveyard (ObjectMgr.cpp:6849/6864)
 
 const (
+	soulShardItemID       = 6265
+	glyphOfDrainSoulSpell = 58070
+	drainSoulFamilyFlag0  = 0x4000
 	// playerFieldByteReleaseTimer is PLAYER_FIELD_BYTE_RELEASE_TIMER within
 	// PLAYER_FIELD_BYTES byte 0 (Player.h:417); set while the client shows the
 	// auto release spirit countdown.
@@ -58,6 +61,82 @@ const (
 	defaultGraveyardAlliance uint32 = 4  // Westfall (ObjectMgr.cpp:6855)
 	defaultGraveyardHorde    uint32 = 10 // Crossroads (ObjectMgr.cpp:6853)
 )
+
+// grantChannelDeathItems mirrors AuraEffect::HandleChannelDeathItem's
+// remove-by-death leg (SpellAuraEffects.cpp:4690-4743): each
+// SPELL_AURA_CHANNEL_DEATH_ITEM (86) effect on the dying unit grants its
+// ItemType x amount to the aura's caster when the caster is a player. Go's
+// death paths strip auras via clearActiveAuras with no per-aura remove legs
+// and no remove-mode tracking, so this runs explicitly before the strip on
+// both the player-death (killPlayer) and creature-death (onCreatureKilled)
+// paths. auras are the victim's pre-strip aura records; tapPlayerGUID/
+// tapGroupID are the dead creature's tap (unused for player victims).
+func (s *Server) grantChannelDeathItems(ctx context.Context, auras []*activeAura, victimLevel uint32, victimIsCreature bool, tapPlayerGUID, tapGroupID uint64) {
+	if s == nil || s.Data == nil || len(auras) == 0 {
+		return
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		caster := s.findSessionByGUID(aura.CasterGUID)
+		if caster == nil || caster.player == nil {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != spellAuraChannelDeathItem || index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount <= 0 || effect.ItemType == 0 {
+				continue
+			}
+			count := uint32(amount)
+			if effect.ItemType == soulShardItemID {
+				// Soul Shard only from units that grant XP or honor
+				// (Player::isHonorOrXPTarget, Player.cpp:24064-24083); the
+				// critter/totem exclusion has no Go creature-type model, so
+				// the gray-level gate is the modeled arm.
+				if victimLevel <= grayLevel(uint32(caster.player.Level)) {
+					continue
+				}
+				if victimIsCreature && tapPlayerGUID != caster.playerGUID && (tapGroupID == 0 || tapGroupID != caster.groupID) {
+					continue
+				}
+				// Drain Soul + Glyph of Drain Soul: roll_chance_i on the
+				// glyph's misc for an extra shard (C++ casts 58068; the
+				// outcome-equivalent is one more item here).
+				if spell.SpellFamilyName == spellFamilyWarlock && spell.SpellFamilyFlags[0]&drainSoulFamilyFlag0 != 0 {
+					caster.castMu.Lock()
+					glyph, ok := caster.activeAuras[glyphOfDrainSoulSpell]
+					caster.castMu.Unlock()
+					if ok && glyph != nil && !glyph.Stopped && glyph.MiscValue > 0 && rand.Intn(100) < int(glyph.MiscValue) {
+						count++
+					}
+				}
+			}
+			// Player::CanStoreNewItem's partial-count arm has no Go
+			// counterpart (canStoreNewItem is all-or-nothing); a full
+			// failure drops the grant like C++'s count==0 return.
+			if caster.canStoreNewItem(ctx, caster.playerGUID, effect.ItemType, count) != equipErrOk {
+				continue
+			}
+			res, err := caster.storeOrStackItem(ctx, caster.playerGUID, effect.ItemType, count)
+			if err != nil || res == nil {
+				continue
+			}
+			slotForPush := uint32(res.Slot)
+			if res.IsStack {
+				slotForPush = 0xFFFFFFFF
+			}
+			_ = caster.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(caster.playerGUID, res.ClientBag, slotForPush, effect.ItemType, count, res.InventoryCount, res.IsStack), true)
+		}
+	}
+}
 
 func (s *session) currentPlayerPhaseMask() uint32 {
 	if s == nil || s.player == nil {
@@ -451,6 +530,10 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	if s.player.SelfResSpell == 0 {
 		s.player.SelfResSpell = s.getResurrectionSpellId(ctx)
 	}
+	// AuraEffect::HandleChannelDeathItem remove-by-death leg
+	// (SpellAuraEffects.cpp:4690): 86 auras on the dying player grant their
+	// items to the aura casters; runs before RemoveAllAurasOnDeath's strip.
+	s.server.grantChannelDeathItems(ctx, s.loadedAuras(), uint32(s.player.Level), false, 0, 0)
 	if spiritOfRedemption {
 		// Unit::Kill Spirit of Redemption arm (Unit.cpp:11302-11314):
 		// RemoveAllAurasOnDeath, then CastSpell(27827). Go holds no passive

@@ -63,6 +63,94 @@ func (s *session) meleeHaste138Factor() float32 {
 	return attackSpeedFactor(amounts)
 }
 
+// combatSlowLiveAmounts mirrors the exclusive gate of
+// AuraEffect::HandleModCombatSpeedPct (SpellAuraEffects.cpp:3950-3971):
+// SPELL_AURA_MELEE_SLOW (193) and SPELL_AURA_MOD_SPEED_SLOW_ALL (252) apply
+// under GetHighestExclusiveSameEffectSpellGroupValue(this,
+// SPELL_AURA_MELEE_SLOW) (Unit.cpp:13967) — the rival scan is type-193-only,
+// so a 193 effect is gated by other 193 effects in a shared exclusive group
+// while 252 effects never gate each other (they always stack). An effect is
+// dormant when a rival's |amount| >= its own (ties lose, C++ :3957). The
+// returned amounts feed the attack-time divisor (same m_modAttackSpeedPct
+// accumulators as the 9/138/140/141/192 arms) and the cast-time multiplier.
+func (s *session) combatSlowLiveAmounts() []int32 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return nil
+	}
+	var cands []statCandidate
+	auras := s.loadedAuras()
+	for i, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != spellAuraMeleeSlow && effect.Aura != spellAuraModSpeedSlowAll {
+				continue
+			}
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			cands = append(cands, statCandidate{
+				order:       i,
+				spellID:     aura.SpellID,
+				effectIndex: index,
+				amount:      aura.Amounts[index],
+				firstRank:   s.server.spellFirstRank(aura.SpellID),
+				auraType:    effect.Aura,
+			})
+		}
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	cache := s.server.petAuraStackGroups()
+	var live []int32
+	for _, c := range cands {
+		rivalMax := int32(0)
+		for _, r := range cands {
+			if r.auraType != spellAuraMeleeSlow {
+				continue
+			}
+			if r.spellID == c.spellID && r.effectIndex == c.effectIndex && r.order == c.order {
+				continue
+			}
+			if !sharesExclusiveSameEffectGroup(c.firstRank, r.firstRank, cache) {
+				continue
+			}
+			if absAuraAmount(r.amount) > absAuraAmount(rivalMax) {
+				rivalMax = r.amount
+			}
+		}
+		if absAuraAmount(rivalMax) >= absAuraAmount(c.amount) {
+			continue
+		}
+		live = append(live, c.amount)
+	}
+	return live
+}
+
+// combatSlowCastFactor mirrors the cast-time arm of
+// AuraEffect::HandleModCombatSpeedPct (SpellAuraEffects.cpp:3962/3967) via
+// Unit::ApplyCastTimePercentMod (Unit.cpp:10867): each live 193/252 effect
+// multiplies UNIT_MOD_CAST_SPEED — positive amounts divide by (1+amount/100)
+// (haste), negative amounts multiply by (1+|amount|/100) (slow) — composing
+// multiplicatively with the rating-haste divisor in calculateSpellCastTime.
+func (s *session) combatSlowCastFactor() float64 {
+	factor := 1.0
+	for _, a := range s.combatSlowLiveAmounts() {
+		if a > 0 {
+			factor /= 1.0 + float64(a)/100.0
+		} else {
+			factor *= 1.0 + float64(-a)/100.0
+		}
+	}
+	return factor
+}
+
 // attackPowerOfStatFold mirrors the dynamic legs of
 // Player::UpdateAttackPowerAndDamage (StatSystem.cpp:466-477):
 // SPELL_AURA_MOD_ATTACK_POWER_OF_STAT_PERCENT (268) and

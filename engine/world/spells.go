@@ -543,6 +543,7 @@ const (
 	spellAuraCharm                                    = 6
 	spellAuraModTaunt                                 = 11  // SPELL_AURA_MOD_TAUNT (SpellAuraDefines.h)
 	spellAuraControlVehicle                           = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
+	spellAuraSetVehicle                               = 296 // SPELL_AURA_SET_VEHICLE_ID (SpellAuraDefines.h:376)
 	spellAuraFear                                     = 7
 	spellAuraStun                                     = 12
 	spellAuraRoot                                     = 26
@@ -585,6 +586,9 @@ const (
 	spellAuraModRangedHaste                           = 140 // SPELL_AURA_MOD_RANGED_HASTE (SpellAuraDefines.h:220)
 	spellAuraRangedAmmoHaste                          = 141 // SPELL_AURA_MOD_RANGED_AMMO_HASTE (SpellAuraDefines.h:221)
 	spellAuraModMeleeRangedHaste                      = 192 // SPELL_AURA_MOD_MELEE_RANGED_HASTE (SpellAuraDefines.h:272)
+	spellAuraMeleeSlow                                = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
+	spellAuraModSpeedSlowAll                          = 252 // SPELL_AURA_MOD_SPEED_SLOW_ALL (SpellAuraDefines.h:332)
+	spellAuraChannelDeathItem                         = 86  // SPELL_AURA_CHANNEL_DEATH_ITEM (SpellAuraDefines.h:166)
 	spellAuraModAttackPowerOfStatPercent              = 268 // SPELL_AURA_MOD_ATTACK_POWER_OF_STAT_PERCENT (SpellAuraDefines.h:348)
 	spellAuraModRangedAttackPowerOfStatPercent        = 212 // SPELL_AURA_MOD_RANGED_ATTACK_POWER_OF_STAT_PERCENT (SpellAuraDefines.h:292)
 	spellAuraModSpellDamageOfStatPercent              = 174 // SPELL_AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT (SpellAuraDefines.h:254)
@@ -18497,6 +18501,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasDetectAmore := false
 	removedDetectAmoreMisc := int32(0)
 	wasUntrackable := false
+	wasSetVehicle := false
 	wasPreparation := false
 	wasGhost := false
 	wasFactionAura := false
@@ -18621,6 +18626,7 @@ func (s *session) removeAura(spellID uint32) {
 				removedDetectAmoreMisc = aura.MiscValue
 			}
 			wasUntrackable = aura.AuraType == spellAuraUntrackable
+			wasSetVehicle = s.activeAuraHasEffect(aura, spellAuraSetVehicle)
 			wasVisibilityAura = affectsPlayerVisibility(aura.AuraType)
 			wasMovementSpeedAura = movementSpeedAura(aura.AuraType)
 			if aura.AuraType == spellAuraFakeInebriation {
@@ -18870,6 +18876,14 @@ func (s *session) removeAura(spellID uint32) {
 	// (SpellAuraEffects.cpp:2526-2536): HasAuraType gate.
 	if wasUntrackable && s.player != nil && !s.hasAuraType(spellAuraUntrackable) {
 		s.player.StandFlags &^= unitStandFlagUntrackable
+	}
+	// AuraEffect::HandleAuraSetVehicle remove leg
+	// (SpellAuraEffects.cpp:5006-5035): the vehicle kit is removed when
+	// present and SMSG_PLAYER_VEHICLE_DATA carries 0; C++ sends the packet
+	// unconditionally and has no HasAuraType gate here.
+	if wasSetVehicle && s.player != nil && s.server != nil {
+		s.server.removeVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
+		s.sendPlayerVehicleData(0)
 	}
 	if removedFakeInebriation > 0 && s.player != nil {
 		if removedFakeInebriation >= s.player.FakeInebriation {
@@ -21154,6 +21168,24 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// on the UNIT_FIELD_BYTES_1 vis-flag byte (Go packs StandFlags
 			// at bits 16-23 of unitFieldBytes1, the same byte).
 			targetSess.player.StandFlags |= unitStandFlagUntrackable
+		}
+		if eff.Aura == spellAuraSetVehicle {
+			// AuraEffect::HandleAuraSetVehicle apply leg
+			// (SpellAuraEffects.cpp:5006-5035): player-only (this block only
+			// runs for player targets) — creates the vehicle kit keyed by
+			// the aura MiscValue, broadcasts SMSG_PLAYER_VEHICLE_DATA, then
+			// SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA. The IsInWorld gate
+			// is vacuous (sessions are in-world); a missing Vehicle.dbc
+			// entry mirrors CreateVehicleKit's false return (Unit.cpp:12047)
+			// — no kit, no packets.
+			if vehicleID := eff.MiscValue; vehicleID > 0 && s.server != nil && s.server.Data != nil {
+				if _, ok, err := s.server.Data.Vehicle(uint32(vehicleID)); err == nil && ok {
+					if kit := s.server.createVehicleKit(targetSess.player.Map, targetSess.player.InstanceID, targetGUID, uint32(vehicleID), 0, true); kit != nil {
+						targetSess.sendPlayerVehicleData(uint32(vehicleID))
+						targetSess.sendCancelExpectedRideVehicleAura()
+					}
+				}
+			}
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)
