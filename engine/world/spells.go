@@ -21921,9 +21921,18 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		ts.adjustSpellPower(context.Background(), aura.TargetGUID, energizePower, int64(energizeAmount))
 		// SpellAuraEffects.cpp:5576-5577 — the caster forwards half the
 		// actual gain as threat, ignoring modifiers (the final bool).
+		// C++ fires for any caster unit type, so a caster with no player
+		// session (a wild creature, or a player caster gone offline) rides
+		// the creature threat path — the same nil-session convention the
+		// player-path heal tick uses at SpellAuraEffects.cpp:5411.
 		// UNIT_STATE_ISOLATED / SendTickImmune has no Go model.
 		if ts.server != nil && ts.player.Powers[energizePT] > oldEnergizePower {
-			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, ts.player.Powers[energizePT]-oldEnergizePower, true)
+			energizeGain := ts.player.Powers[energizePT] - oldEnergizePower
+			if energizeCaster := ts.server.findSessionByGUID(aura.CasterGUID); energizeCaster != nil {
+				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, energizeGain, true)
+			} else {
+				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, energizeGain)
+			}
 		}
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
