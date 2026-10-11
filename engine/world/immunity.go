@@ -1256,7 +1256,12 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
 		return false
 	}
-	friendly := caster != nil && friendlyToCaster != nil && friendlyToCaster(targetFaction)
+	// The friendly verdict defers to the callback even when caster is nil: the
+	// only in-tree callback (creatureTargetImmuneToSpell) already reports false
+	// for a nil caster, so this is behavior-identical there, and it lets a
+	// return-trip caller pass an always-friendly verdict for a caster that is
+	// the target itself (Unit.cpp:7909 IsFriendlyTo(caster) with caster == self).
+	friendly := friendlyToCaster != nil && friendlyToCaster(targetFaction)
 	anyEffect := false
 	immunedToAllEffects := true
 	for i := range spell.Effects {

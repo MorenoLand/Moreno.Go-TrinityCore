@@ -315,3 +315,158 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		}
 	}
 }
+
+// serverInlineReflectVerdict mirrors the AddUnitTarget reflect arm
+// (Spell.cpp:2152, 2173-2188; WorldObject::SpellHitResult, Object.cpp:2617-2666)
+// for the inline AI victim-spell path (creaturemotion.go). The victim is always
+// a player here, rolling the reflect arm via checkSpellReflection — C++ offers
+// reflect to any Unit victim, not just players. The offer gate is m_canReflect
+// (spellCanBeReflected) plus the !(IsPositive() && m_caster->IsFriendlyTo(target))
+// carve-out (Spell.cpp:2152), resolved through the motion's faction
+// (isFriendlyFaction) since the caster is a wild creature motion, not a session.
+// The this == victim early-out (Object.cpp:2633) sits ahead of the canReflect arm,
+// so a self-targeted inline cast never reflects. On success the second return is
+// the return-trip ReflectResult (Spell.cpp:2178): the motion's own SpellHitResult
+// with canReflect=false, which can only report IMMUNE — the immune arms precede
+// the this == victim short-circuit (Object.cpp:2617-2633), the positive arm
+// resolves to NONE, and the magic hit roll sits behind the short-circuit and
+// never runs. A non-NONE status nulls the return trip (Spell.cpp:2350, 7740-7743):
+// the GO packet still reports REFLECT with the status, but the motion takes nothing.
+func (s *Server) serverInlineReflectVerdict(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos) (bool, uint8) {
+	if s == nil || motion == nil || victim == nil || victim.GUID == 0 || victim.GUID == motion.GUID {
+		return false, protocol.SpellMissNone
+	}
+	if !spellCanBeReflected(spell) {
+		return false, protocol.SpellMissNone
+	}
+	if spell.AttributesCu&spellAttr0CuNegativeMask == 0 && s.isFriendlyFaction(motion.Faction, *victim) {
+		return false, protocol.SpellMissNone
+	}
+	if victim.Sess == nil || !victim.Sess.checkSpellReflection(spell) {
+		return false, protocol.SpellMissNone
+	}
+	return true, s.serverCreatureReflectReturnStatus(ctx, motion, spell)
+}
+
+// serverCreatureReflectReturnStatus is the inline-path form of the ReflectResult
+// computation (Spell.cpp:2178): unitCaster->SpellHitResult(unitCaster, spellInfo,
+// false) — the motion's own hit result with canReflect=false. Only the immune arms
+// can fire: IsImmunedToSpell (the template/effect/mechanic/school folds) and the
+// damage-only IsImmunedToDamage arm (spellHasOnlyDamageEffects). The return-trip
+// caster IS the motion, so the "target friendly to caster" term of the school fold
+// (Unit.cpp:7909) is trivially true — threaded through an always-friendly
+// callback, since the motion has no player session to stand in as caster.
+func (s *Server) serverCreatureReflectReturnStatus(ctx context.Context, motion *creatureMotion, spell wotlk.Spell) uint8 {
+	if s == nil || motion == nil {
+		return protocol.SpellMissNone
+	}
+	key := creatureAuraKeyForMotion(motion)
+	stats := s.loadCreatureStats(ctx, motion.Entry)
+	if creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(motion.GUID), nil, motion.Faction, func(uint32) bool { return true }) {
+		return protocol.SpellMissImmune
+	}
+	if spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s, key, spell, spell.SchoolMask) {
+		return protocol.SpellMissImmune
+	}
+	return protocol.SpellMissNone
+}
+
+// applyInlineReflectReturnTrip runs the reflect return trip for the inline AI
+// victim-spell path (Spell::PreprocessTarget, Spell.cpp:2350, and
+// DoEffectOnLaunchTarget, Spell.cpp:7740-7743): with ReflectResult == NONE the
+// reflected spell's effects land on the caster motion instead of the reflector.
+// C++ deals the caster's own spell back through Unit::DealDamage; the Go twin
+// reduces the motion's health under motionMu, broadcasts the new health, writes
+// the return-trip damage log to the reflector, and runs the standard creature
+// death chain on a lethal hit (the rage.go share-damage funnel shape). The
+// return-trip damage is the already-computed hit damage — C++ recalculates it,
+// but the inline path computes damage once per cast and the pet-path return trip
+// reuses the same value. Deviation: C++ delivers the return trip 1.5x TimeDelay
+// after the outbound missile (Spell.cpp:2184); Go lands it synchronously like
+// the pet-path bridge.
+func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflector *playerPos, spellID uint32, damage uint32, schoolMask uint8) {
+	if s == nil || motion == nil || reflector == nil || damage == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID)
+	if live == nil || live.Health == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	healthBefore := live.Health
+	killed := damage >= live.Health
+	if killed {
+		live.Health = 0
+		live.DynamicFlags |= unitDynFlagLootable
+		live.InCombat = false
+		live.TargetGUID = 0
+		live.Moving = false
+		if live.ThreatMgr != nil {
+			live.ThreatMgr.ClearThreat()
+		}
+	} else {
+		live.Health -= damage
+	}
+	mapID, instanceID, guid := live.Map, live.InstanceID, live.GUID
+	x, y, z := live.X, live.Y, live.Z
+	newHealth := live.Health
+	s.motionMu.Unlock()
+	overkill := uint32(0)
+	if killed {
+		overkill = damage - healthBefore
+	}
+	logPacket := buildSpellNonMeleeDamageLog(guid, guid, spellID, damage, overkill, schoolMask)
+	if reflector.Sess != nil {
+		_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
+	}
+	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, reflector.Sess)
+	if killed {
+		s.stopCreatureMotionInInstance(mapID, instanceID, guid, x, y, z)
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{
+			unitFieldHealth:       0,
+			unitFieldDynamicFlags: unitDynFlagLootable,
+		})
+		s.broadcastThreatClearInInstance(mapID, instanceID, guid)
+		if reflector.Sess != nil {
+			reflector.Sess.onCreatureKilled(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID}, nil)
+		}
+		return
+	}
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: newHealth})
+}
+
+// armInlineReflectProcDelayed mirrors the ProcReflectDelayed arm (Spell.cpp:2181)
+// for the inline AI victim-spell path: at outbound-missile arrival the reflector's
+// taken-side auras proc with PROC_HIT_REFLECT. C++ schedules it on the target's
+// event list with delay TimeDelay (0 for instant spells, Spell.cpp:2157-2171);
+// Go arms the same timer and resolves the reflector's session at fire time, the
+// same shape as the player-path doReflect and the pet-path bridge. Creature
+// reflectors have no Go event-list model, so the arm only runs for player
+// reflectors — and every victim on this path is a player.
+func (s *Server) armInlineReflectProcDelayed(motion *creatureMotion, reflector *playerPos, spell wotlk.Spell) {
+	if s == nil || motion == nil || reflector == nil || reflector.Sess == nil {
+		return
+	}
+	delayMs := 0
+	if spell.Speed > 0 {
+		dx := float64(reflector.X - motion.X)
+		dy := float64(reflector.Y - motion.Y)
+		dz := float64(reflector.Z - motion.Z)
+		dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+		if dist < 5.0 {
+			dist = 5.0
+		}
+		delayMs = int(math.Floor(dist / float64(spell.Speed) * 1000.0))
+	}
+	attackerGUID := motion.GUID
+	reflectorGUID := reflector.GUID
+	time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+		if s == nil {
+			return
+		}
+		if rsess := s.findSessionByGUID(reflectorGUID); rsess != nil {
+			rsess.procSpellReflectTakenAuraTriggers(context.Background(), attackerGUID, spell, false)
+		}
+	})
+}

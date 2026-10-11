@@ -2060,8 +2060,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			hitTargets := []uint64{target.GUID}
 			var areaHits []*playerPos
 			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
+			var inlineSpell wotlk.Spell
+			inlineSpellKnown := false
 			if s != nil && s.Data != nil {
 				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
+					inlineSpell, inlineSpellKnown = spellInfo, true
 					spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
 					// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410,
 					// ahead of the GO send): the inline path skips target
@@ -2082,7 +2085,47 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
-			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
+			// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
+			// the inline path: a victim whose reflect roll succeeds becomes a
+			// REFLECT miss and the spell returns to the motion
+			// (PreprocessTarget / DoEffectOnLaunchTarget, Spell.cpp:2350,
+			// 7740-7743). Runs ahead of SendSpellGo like C++ (AddUnitTarget
+			// precedes 4338). Each reflected target produces its own return
+			// trip; reflected targets take no per-hit legs below.
+			reflectedSet := map[uint64]bool{}
+			type inlineReflectTrip struct {
+				victim *playerPos
+				status uint8
+			}
+			var reflectTrips []inlineReflectTrip
+			if inlineSpellKnown {
+				for _, p := range append([]*playerPos{target}, areaHits...) {
+					if p == nil || p.GUID == 0 || reflectedSet[p.GUID] {
+						continue
+					}
+					if ok, status := s.serverInlineReflectVerdict(ctx, motion, inlineSpell, p); ok {
+						reflectedSet[p.GUID] = true
+						reflectTrips = append(reflectTrips, inlineReflectTrip{victim: p, status: status})
+					}
+				}
+			}
+			var missStatus []protocol.SpellMissStatus
+			packetHits := make([]uint64, 0, len(hitTargets))
+			for _, guid := range hitTargets {
+				if reflectedSet[guid] {
+					continue
+				}
+				packetHits = append(packetHits, guid)
+			}
+			for _, trip := range reflectTrips {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.victim.GUID, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
+				// ProcReflectDelayed (Spell.cpp:2181): at outbound-missile
+				// arrival the reflector's taken-side auras proc with
+				// PROC_HIT_REFLECT — armed here, ahead of the GO send,
+				// matching the C++ AddUnitTarget position.
+				s.armInlineReflectProcDelayed(motion, trip.victim, inlineSpell)
+			}
+			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, spellTarget)
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 			}
@@ -2113,9 +2156,29 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): the per-hit
 			// legs run for every enemy in the area, not just the wire victim.
-			s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
+			// Reflected victims take no per-hit legs — in C++ the REFLECT miss
+			// condition keeps _spellHitTarget away from the reflector
+			// (Spell.cpp:2350), and the return trip below is the only effect
+			// that lands.
+			if !reflectedSet[target.GUID] {
+				s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
+			}
 			for _, areaHit := range areaHits {
+				if areaHit == nil || reflectedSet[areaHit.GUID] {
+					continue
+				}
 				s.applyInlineCreatureSpellHit(ctx, motion, areaHit, spellID, damage, schoolMask, now)
+			}
+			// Reflect return trips (Spell.cpp:2350, 7740-7743): with
+			// ReflectResult == NONE the reflected spell's effects land on the
+			// caster motion. A non-NONE status already nulled the trip in the
+			// verdict — the GO packet reported REFLECT with the status and
+			// nothing lands.
+			for _, trip := range reflectTrips {
+				if trip.status != protocol.SpellMissNone {
+					continue
+				}
+				s.applyInlineReflectReturnTrip(ctx, motion, trip.victim, spellID, damage, schoolMask)
 			}
 			motion.LastSpell = now
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
