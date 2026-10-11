@@ -100,6 +100,8 @@ type dynamicGameObjectState struct {
 	ParentRotation  [4]float32
 	AutoCloseTimer  *time.Timer
 	DespawnTimer    *time.Timer
+	UsePrevState    uint8 // state before the last door/button activation (m_prevGoState twin, GameObject.h:314)
+	CooldownUntilMS int64 // template trap/goober Use-cooldown gate (m_cooldownTime twin, GameObject.cpp:1513)
 	Hidden          bool
 	IsRuntimeSpawn  bool
 	ChairSlots      map[uint32]uint64 // chair slot index -> occupant player GUID (GAMEOBJECT_TYPE_CHAIR)
@@ -534,15 +536,36 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
+	// GameObject::Use template-cooldown gate (GameObject.cpp:1513-1518):
+	// trap.cooldown / goober.cooldown (GameObjectTemplate::GetCooldown,
+	// GameObjectData.h:582) arm m_cooldownTime, and a use inside the window
+	// is dropped before the type switch; the window re-arms on every
+	// admitted use. Other types have no template cooldown, so no gate.
+	if goState.Type == GameObjectTypeTrap || goState.Type == GameObjectTypeGoober {
+		if cd := s.server.gameObjectTemplateCooldown(entry, goState.Type); cd > 0 {
+			now := time.Now().UnixMilli()
+			s.server.objectsMu.Lock()
+			blocked := now < goState.CooldownUntilMS
+			if !blocked {
+				goState.CooldownUntilMS = now + int64(cd)*1000
+			}
+			s.server.objectsMu.Unlock()
+			if blocked {
+				return true
+			}
+		}
+	}
+
 	switch goState.Type {
 	case GameObjectTypeDoor:
 		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid)
 
 	case GameObjectTypeButton:
-		// Press button
-		s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
-		s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, 0)
-		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 5*time.Second)
+		// GameObject::Use GAMEOBJECT_TYPE_BUTTON arm (GameObject.cpp:1520):
+		// doors and buttons share the identical arm — UseDoorOrButton(0,
+		// false, user) — so the button runs the same IN_USE gate, state
+		// flip and template autoCloseTime (data2) reset as doors.
+		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid)
 
 	case GameObjectTypeChest:
 		// Chests open through the lock path: the client casts Opening and
@@ -611,19 +634,25 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 			}
 		}
 		// linkedTrapId has no Go trap model (documented).
-		// GO_FLAG_IN_USE / GO_ACTIVATED loot state has no Go analog; the custom
-		// anim goes out only when the template sets customAnim, otherwise the GO
-		// state moves to ACTIVE (documented).
+		// GO_FLAG_IN_USE is transient here (C++ sets it at use and the
+		// GO_ACTIVATED update arm drops it at the next tick), so it is not
+		// modeled; the state moves to ACTIVE with the custom anim, or to
+		// ACTIVE directly (documented).
 		if tpl.customAnim != 0 {
 			s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, uint32(goState.AnimProgress))
 		} else {
 			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
 		}
-		resetDelay := 10 * time.Second
+		// m_cooldownTime = GetGameTimeMS() + GetAutoCloseTime()
+		// (GameObject.cpp:1689): the raw template value is consumed as
+		// milliseconds against the ms game clock. With no autoCloseTime the
+		// GO_ACTIVATED update arm fires at the next tick and only re-readies
+		// the state when the template carries a lockId or autoCloseTime —
+		// otherwise the goober stays ACTIVE and is immediately reusable, so
+		// no reset is scheduled.
 		if tpl.autoCloseTime > 0 {
-			resetDelay = time.Duration(tpl.autoCloseTime) * time.Second
+			s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, time.Duration(tpl.autoCloseTime)*time.Millisecond, false)
 		}
-		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, resetDelay)
 		// The spell is data10 in this TrinityCore layout (GameObjectData.h:171);
 		// the old code cast data1 (the questId) as the spell. C++ casts it at
 		// the end of Use() with the GO as caster; Go's castSpellDirect casts as

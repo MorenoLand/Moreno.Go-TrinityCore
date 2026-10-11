@@ -94,32 +94,101 @@ func (s *Server) setGameObjectStateInInstance(mapID, instanceID uint32, guid uin
 	}
 }
 
-// useDoorOrButton mirrors GameObject::UseDoorOrButton for doors
-// (GameObject.cpp): the door flips between active and ready with the
-// custom-anim broadcast, and an opened door schedules its auto-close from
-// the template timing. Shared by handleGameObjectUse and the DoLootRelease
-// door arm (LootHandler.cpp:281-285) — locked doors opened with openlock are
-// re-used on release instead of being marked looted.
+// goFlagInUse is GO_FLAG_IN_USE (SharedDefines.h:1637): disables interaction
+// while animated. Doors/buttons set it in UseDoorOrButton (via
+// SwitchDoorOrButton) and ResetDoorOrButton clears it; it doubles as the Go
+// twin of the lootState != GO_READY re-use gate.
+const goFlagInUse uint32 = 0x00000001
+
+// useDoorOrButton mirrors GameObject::UseDoorOrButton + SwitchDoorOrButton
+// (GameObject.cpp:1434-1484): a use while activated is dropped (the
+// lootState != GO_READY early-out, keyed on GO_FLAG_IN_USE here), the state
+// flips ready<->active, GO_FLAG_IN_USE goes out on the flags field, and the
+// auto-close is scheduled from the template autoCloseTime (door/button
+// data2, consumed as milliseconds against the ms game clock —
+// m_cooldownTime = GetGameTimeMS() + GetAutoCloseTime()). A zero template
+// value means the door never auto-closes (m_cooldownTime = 0 fails the
+// Update arm's m_cooldownTime check); scripts close it via ResetDoorOrButton.
+// Shared by handleGameObjectUse (door and button share the identical C++
+// Use arm: UseDoorOrButton(0, false, user)) and the DoLootRelease door arm
+// (LootHandler.cpp:281-285).
 func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64) {
 	if s == nil {
 		return
 	}
-	current := GameObjectStateReady
-	if st := s.gameObjectState(mapID, instanceID, guid); st != nil {
-		current = st.State
+	s.objectsMu.Lock()
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if st == nil {
+		s.objectsMu.Unlock()
+		return
 	}
+	if st.Flags&goFlagInUse != 0 {
+		s.objectsMu.Unlock()
+		return
+	}
+	entry := st.Entry
+	st.Flags |= goFlagInUse
+	st.UsePrevState = st.State
 	newState := GameObjectStateActive
-	if current == GameObjectStateActive {
+	if st.State == GameObjectStateActive {
 		newState = GameObjectStateReady
 	}
-	s.setGameObjectStateInInstance(mapID, instanceID, guid, newState)
+	st.State = newState
+	flags := st.Flags
+	s.objectsMu.Unlock()
+	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
+	// Eluna GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED (event 10), fired from
+	// GameObject::SetGoState (GameObject.cpp:2407), like
+	// setGameObjectStateInInstance.
+	s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(newState))
 	s.broadcastGameObjectCustomAnimInInstance(mapID, instanceID, guid, 0)
 	if newState == GameObjectStateActive {
-		s.scheduleGameObjectResetInInstance(mapID, instanceID, guid, 10*time.Second)
+		if delay := s.gameObjectAutoCloseDelay(entry); delay > 0 {
+			s.scheduleGameObjectResetInInstance(mapID, instanceID, guid, delay, true)
+		}
 	}
 }
 
-func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, guid uint64, delay time.Duration) {
+// gameObjectAutoCloseDelay mirrors GameObjectTemplate::GetAutoCloseTime
+// (GameObjectData.h:535) for the door/button arms: data2, consumed as
+// milliseconds. Zero (or an unavailable DB/template) means no auto-close.
+func (s *Server) gameObjectAutoCloseDelay(entry uint32) time.Duration {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0
+	}
+	var d int64
+	if err := s.WorldStore.DB.QueryRowContext(context.Background(),
+		`SELECT COALESCE(data2, 0) FROM gameobject_template WHERE entry = ? LIMIT 1`, entry).Scan(&d); err != nil || d <= 0 {
+		return 0
+	}
+	return time.Duration(d) * time.Millisecond
+}
+
+// gameObjectTemplateCooldown mirrors GameObjectTemplate::GetCooldown
+// (GameObjectData.h:582): trap.cooldown (data5) / goober.cooldown (data6),
+// in seconds; 0 when the template has none.
+func (s *Server) gameObjectTemplateCooldown(entry uint32, goType uint8) uint32 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0
+	}
+	var col string
+	switch goType {
+	case GameObjectTypeTrap:
+		col = "data5"
+	case GameObjectTypeGoober:
+		col = "data6"
+	default:
+		return 0
+	}
+	var d int64
+	if err := s.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT COALESCE("+col+", 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&d); err != nil || d <= 0 {
+		return 0
+	}
+	return uint32(d)
+}
+
+func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, guid uint64, delay time.Duration, restorePrev bool) {
 	if s == nil {
 		return
 	}
@@ -133,17 +202,42 @@ func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, gui
 		state.AutoCloseTimer.Stop()
 	}
 	state.AutoCloseTimer = time.AfterFunc(delay, func() {
-		// Routed through setGameObjectStateInInstance so the Eluna
-		// GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED hook fires, matching C++
-		// where the door auto-close goes through GameObject::SetGoState.
 		// The pointer-identity check preserves the original semantics: a
 		// replaced state object is not reset.
-		s.objectsMu.RLock()
+		s.objectsMu.Lock()
 		current := s.gameObjectStateLocked(mapID, instanceID, guid)
-		s.objectsMu.RUnlock()
-		if current == state {
-			s.setGameObjectStateInInstance(mapID, instanceID, guid, GameObjectStateReady)
+		if current != state {
+			s.objectsMu.Unlock()
+			return
 		}
+		var flags uint32
+		var newState uint8
+		if restorePrev {
+			// ResetDoorOrButton twin (GameObject.cpp:1422-1431): no-op when
+			// the door/button was never activated (or already reset) — the
+			// IN_USE flag is the Go twin of the GO_READY/GO_JUST_DEACTIVATED
+			// early-out. Otherwise the flag is cleared and the pre-use
+			// state (m_prevGoState) is restored.
+			if current.Flags&goFlagInUse == 0 {
+				s.objectsMu.Unlock()
+				return
+			}
+			current.Flags &^= goFlagInUse
+			current.State = current.UsePrevState
+		} else {
+			// Goober reset twin: the C++ GO_ACTIVATED update arm drops the
+			// IN_USE flag and re-readies the state only when the template
+			// carries a lockId or autoCloseTime; the timer only exists when
+			// autoCloseTime > 0, so the state returns to ready here.
+			current.State = GameObjectStateReady
+		}
+		flags = current.Flags
+		newState = current.State
+		s.objectsMu.Unlock()
+		s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
+		// Eluna GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED (event 10), fired from
+		// GameObject::SetGoState (GameObject.cpp:2407).
+		s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(newState))
 		s.broadcastGameObjectResetStateInInstance(mapID, instanceID, guid)
 	})
 	s.objectsMu.Unlock()
