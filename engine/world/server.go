@@ -1533,7 +1533,7 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		// 2. Power regeneration
 		switch p.Class {
 		case 1: // Warrior: rage decays out of combat
-			if !inCombat && p.Powers[1] > 0 && !sess.hasAuraType(spellAuraInterruptRegen) {
+			if !inCombat && p.Powers[1] > 0 && !sess.hasAuraType(spellAuraInterruptRegen) && !sess.hasAuraTypeWithMiscValue(spellAuraPreventRegeneratePower, 1) {
 				// Player::Regenerate POWER_RAGE (Player.cpp:2147-2155):
 				// -20 per 2s tick, scaled by the 110 misc-rage multiplier
 				// plus the 85 misc-rage flat arm * tickMs/5000
@@ -1557,7 +1557,9 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 			}
 		case 4: // Rogue: energy regenerates 20 per 2s tick
 			maxEnergy := sess.effectiveMaxPower(3)
-			if p.Powers[3] < maxEnergy {
+			// Player::Regenerate (Player.cpp:2121): SPELL_AURA_PREVENT_REGENERATE_POWER
+			// (294) with misc==POWER_ENERGY blocks energy regen outright.
+			if p.Powers[3] < maxEnergy && !sess.hasAuraTypeWithMiscValue(spellAuraPreventRegeneratePower, 3) {
 				// Player::Regenerate POWER_ENERGY (Player.cpp:2157-2159):
 				// 0.01 * 2000ms = 20 per 2s tick, scaled by the 110
 				// misc-energy multiplier plus the 85 misc-energy flat arm
@@ -1578,7 +1580,7 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 				}
 			}
 		case 6: // Death Knight: runic power decays out of combat
-			if !inCombat && p.Powers[6] > 0 && !sess.hasAuraType(spellAuraInterruptRegen) {
+			if !inCombat && p.Powers[6] > 0 && !sess.hasAuraType(spellAuraInterruptRegen) && !sess.hasAuraTypeWithMiscValue(spellAuraPreventRegeneratePower, 6) {
 				// Player::Regenerate POWER_RUNIC_POWER
 				// (Player.cpp:2160-2167): -30 per 2s tick, scaled by the
 				// 110 misc-runic multiplier plus the 85 misc-runic flat arm
@@ -1601,7 +1603,9 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 			}
 		default: // Mana classes (Paladin, Hunter, Priest, Shaman, Mage, Warlock, Druid)
 			maxMana := sess.effectiveMaxPower(0)
-			if p.Powers[0] < maxMana {
+			// Player::Regenerate (Player.cpp:2121): SPELL_AURA_PREVENT_REGENERATE_POWER
+			// (294) with misc==POWER_MANA blocks mana regen outright.
+			if p.Powers[0] < maxMana && !sess.hasAuraTypeWithMiscValue(spellAuraPreventRegeneratePower, 0) {
 				// Player::UpdateManaRegen (StatSystem.cpp:912-937): the
 				// spirit-term regen carries the 110 misc-mana multiplier,
 				// the mp5 term is (85 misc-mana sum + baseManaRegen)/5 plus

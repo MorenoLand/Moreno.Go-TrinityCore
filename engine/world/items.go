@@ -4123,6 +4123,11 @@ func (s *session) durabilityLossAll(ctx context.Context, percent float64, invent
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
+	// Player::DurabilityPointsLoss (Player.cpp:4960-4962):
+	// SPELL_AURA_PREVENT_DURABILITY_LOSS (289) suppresses all durability loss.
+	if s.hasAuraType(spellAuraPreventDurabilityLoss) {
+		return
+	}
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
 
@@ -4197,11 +4202,15 @@ func (s *session) durabilityLossAll(ctx context.Context, percent float64, invent
 // (Player.cpp:4934-4958): a flat point loss on every equipped item, or on
 // every item when inventory is true. Negative points restore durability,
 // clamped at max. Follows the Go durability convention (DB-backed + inventory
-// refresh; the _ApplyItemMods stat strip on the 0-crossing and the
-// SPELL_AURA_PREVENT_DURABILITY_LOSS gate are documented no-bridge, same as
-// durabilityLossAll/rollDurabilityLossOnHit).
+// refresh; the _ApplyItemMods stat strip on the 0-crossing stays unbridged,
+// same as durabilityLossAll/rollDurabilityLossOnHit). The
+// SPELL_AURA_PREVENT_DURABILITY_LOSS (289) gate of Player::DurabilityPointsLoss
+// (Player.cpp:4960-4962) applies at the top of both batch paths.
 func (s *session) durabilityPointsLossAll(ctx context.Context, points int32, inventory bool) {
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	if s.hasAuraType(spellAuraPreventDurabilityLoss) {
 		return
 	}
 	cdb := s.server.CharactersStore.DB

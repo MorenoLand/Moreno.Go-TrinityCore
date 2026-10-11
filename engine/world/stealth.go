@@ -31,6 +31,45 @@ func (s *session) getStealthDetectValue() int32 {
 	return s.getTotalAuraModifier(17)
 }
 
+// stealthMiscValues returns the distinct stealth-type misc values of the
+// session's live SPELL_AURA_MOD_STEALTH (16) effects, defaulting to
+// STEALTH_GENERAL (0) when no misc is modeled. It serves the
+// SPELL_AURA_DETECT_STEALTH (228) misc-matched auto-detect arm of
+// WorldObject::CanDetectStealthOf (Object.cpp:1753), which checks the
+// observer's 228 auras per stealth type the target is stealthed in.
+func (s *session) stealthMiscValues() []int32 {
+	seen := map[int32]bool{}
+	var out []int32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		matched := false
+		if s.server != nil && s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range spell.Effects {
+					if effect.Aura != 16 || aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if !seen[effect.MiscValue] {
+						seen[effect.MiscValue] = true
+						out = append(out, effect.MiscValue)
+					}
+					matched = true
+				}
+			}
+		}
+		if !matched && aura.AuraType == 16 && !seen[aura.MiscValue] {
+			seen[aura.MiscValue] = true
+			out = append(out, aura.MiscValue)
+		}
+	}
+	if len(out) == 0 {
+		return []int32{0}
+	}
+	return out
+}
+
 // canDetectStealthOf determines if the observer player can detect the target stealthed player.
 // Mirrors TrinityCore WorldObject::CanDetectStealthOf (Object.cpp:1719-1790).
 func (s *session) canDetectStealthOf(target *session) bool {
@@ -54,6 +93,14 @@ func (s *session) canDetectStealthOf(target *session) bool {
 	// Detect Stealth aura (SPELL_AURA_TRACK_STEALTHED = 151)
 	if s.hasAuraType(151) {
 		return true
+	}
+	// Detect Stealth aura (SPELL_AURA_DETECT_STEALTH = 228): an observer
+	// carrying a 228 effect whose misc matches one of the target's stealth
+	// types sees through it outright (Object.cpp:1753).
+	for _, mv := range target.stealthMiscValues() {
+		if s.hasAuraTypeWithMiscValue(spellAuraDetectStealth, mv) {
+			return true
+		}
 	}
 
 	dist := float32(distance3D(s.player.X, s.player.Y, s.player.Z, target.player.X, target.player.Y, target.player.Z))
@@ -146,6 +193,16 @@ func canCreatureDetectStealthOfPlayer(motion *creatureMotion, targetSess *sessio
 
 	if motion != nil && !hasInArc(motion.Orientation, motion.X, motion.Y, targetSess.player.X, targetSess.player.Y, math.Pi) {
 		return false
+	}
+
+	// SPELL_AURA_DETECT_STEALTH (228; Object.cpp:1753): a creature carrying a
+	// 228 effect whose misc matches the target's stealth type auto-detects it.
+	if targetSess != nil && targetSess.server != nil && motion != nil {
+		for _, mv := range targetSess.stealthMiscValues() {
+			if targetSess.server.creatureAuraTypeSumByMisc(creatureAuraKeyForMotion(motion), spellAuraDetectStealth, mv) > 0 {
+				return true
+			}
+		}
 	}
 
 	cLevel := uint32(1)

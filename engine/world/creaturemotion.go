@@ -2580,14 +2580,22 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// level, minus combat reach, +/-1 yard per creature-minus-player level
 		// difference, clamped to [5, 45]. (Creature::GetAggroRange, 3130-3168,
 		// is the pet-only variant — world-creature acquisition uses
-		// GetAttackDistance.) Documented deltas: the SPELL_AURA_MOD_DETECT_RANGE /
-		// MOD_DETECTED_RANGE terms are unmodeled (no aura-modifier query on
-		// creatures or players); the RATE_CREATURE_AGGRO multiplier and the
-		// expansion-max-level clamp are unmodeled (no rate model); the
-		// + m_CombatDistance term of CanStartAttack (Creature.cpp:1987-1989)
-		// is unmodeled (creature motions carry no combat-distance field).
+		// GetAttackDistance.) Documented deltas: the RATE_CREATURE_AGGRO
+		// multiplier and the expansion-max-level clamp are unmodeled (no rate
+		// model); the + m_CombatDistance term of CanStartAttack
+		// (Creature.cpp:1987-1989) is unmodeled (creature motions carry no
+		// combat-distance field).
 		levelDiff := int32(motion.Level) - int32(p.Level)
 		aggroDist := float32(20.0) - motion.CombatReach + float32(levelDiff)
+		// Creature::GetAttackDistance (Creature.cpp:2031-2040): the creature's
+		// own SPELL_AURA_MOD_DETECT_RANGE (91) and the player's
+		// SPELL_AURA_MOD_DETECTED_RANGE (152) shift the aggro radius; both
+		// apply only while the creature's level+5 stays under the max player
+		// level (80 in 3.3.5).
+		if motion.Level+5 <= 80 {
+			aggroDist += float32(s.creatureAuraTypeSum(creatureAuraKeyForMotion(motion), spellAuraModDetectRange))
+			aggroDist += float32(p.Sess.totalAuraModifier(spellAuraModDetectedRange))
+		}
 		if aggroDist < 5.0 {
 			aggroDist = 5.0
 		} else if aggroDist > 45.0 {

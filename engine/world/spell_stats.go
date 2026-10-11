@@ -450,6 +450,14 @@ func (s *session) totalAuraModifierByMiscValue(auraType uint32, miscValue int32)
 	return total
 }
 
+// hasAuraTypeWithMiscValue mirrors Unit::HasAuraTypeWithMiscvalue: true when
+// any live effect of the aura type carries the given misc value.
+func (s *session) hasAuraTypeWithMiscValue(auraType uint32, miscValue int32) bool {
+	return len(s.auraTypeModifiersFiltered(auraType, func(mv int32) bool {
+		return mv == miscValue
+	})) > 0
+}
+
 // rollSpellCrit rolls whether the spell achieves a critical strike.
 // C++ Unit::SpellCritChanceDone (Unit.cpp:7167-7170): direct (non-periodic)
 // spells without SPELL_ATTR0_CU_CAN_CRIT never crit.

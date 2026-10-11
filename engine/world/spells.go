@@ -140,6 +140,14 @@ const (
 	spellAuraIgnoreHitDirection           uint32 = 288 // SPELL_AURA_IGNORE_HIT_DIRECTION (SpellAuraDefines.h) — Deterrence is the only 3.3.5a source
 	spellAuraDeflectSpells                uint32 = 287 // SPELL_AURA_DEFLECT_SPELLS (SpellAuraDefines.h) — victim deflect chance, percent points (Object.cpp:2601, Unit.cpp:2535)
 	spellAuraSchoolHealAbsorb             uint32 = 301 // SPELL_AURA_SCHOOL_HEAL_ABSORB (SpellAuraDefines.h) — heal absorb shields (Unit::CalcHealAbsorb, Unit.cpp:2067)
+	spellAuraIgnoreCombatResult           uint32 = 202 // SPELL_AURA_IGNORE_COMBAT_RESULT (SpellAuraDefines.h) — attacker's cannot-be-dodged/blocked/parried (Unit::MeleeSpellHitResult, Unit.cpp:2555)
+	spellAuraDetectStealth                uint32 = 228 // SPELL_AURA_DETECT_STEALTH (SpellAuraDefines.h) — misc-matched stealth auto-detect (Object.cpp:1753)
+	spellAuraPreventDurabilityLoss        uint32 = 289 // SPELL_AURA_PREVENT_DURABILITY_LOSS (SpellAuraDefines.h) — suppresses durability loss (Player::DurabilityPointsLoss, Player.cpp:4962)
+	spellAuraModXPQuestPct                uint32 = 291 // SPELL_AURA_MOD_XP_QUEST_PCT (SpellAuraDefines.h) — quest XP multiplier (Player::RewardQuest, Player.cpp:15404)
+	spellAuraPreventRegeneratePower       uint32 = 294 // SPELL_AURA_PREVENT_REGENERATE_POWER (SpellAuraDefines.h) — misc==power regen block (Player::Regenerate, Player.cpp:2121)
+	spellAuraModDetectRange               uint32 = 91  // SPELL_AURA_MOD_DETECT_RANGE (SpellAuraDefines.h) — creature's own aggro-radius bonus (Creature::GetAttackDistance, Creature.cpp:2037)
+	spellAuraModDetectedRange             uint32 = 152 // SPELL_AURA_MOD_DETECTED_RANGE (SpellAuraDefines.h) — player-side aggro-radius bonus (Creature::GetAttackDistance, Creature.cpp:2039)
+	spellAuraReducePushback               uint32 = 149 // SPELL_AURA_REDUCE_PUSHBACK (SpellAuraDefines.h) — cast/channel pushback reduction (Spell::Delayed/DelayedChannel, Spell.cpp:7260/7305)
 	spellAuraModBlockPercent              uint32 = 51  // SPELL_AURA_MOD_BLOCK_PERCENT (SpellAuraDefines.h) — creature block chance bonus
 	spellAuraModShieldBlockvaluePct       uint32 = 150 // SPELL_AURA_MOD_SHIELD_BLOCKVALUE_PCT (SpellAuraDefines.h)
 	spellAuraModShieldBlockvalue          uint32 = 158 // SPELL_AURA_MOD_SHIELD_BLOCKVALUE (SpellAuraDefines.h)
@@ -155,6 +163,10 @@ const (
 	spellAuraPhase                        uint32 = 261 // SPELL_AURA_PHASE (SpellAuraDefines.h) — misc value ORs into the player's phase mask (AuraEffect::HandlePhase, SpellAuraEffects.cpp:1581)
 
 	victimStateDodge = 2 // VICTIMSTATE_DODGE (Unit.h:47) — MiscValue for MOD_COMBAT_RESULT_CHANCE dodge reduction
+
+	meleeHitDodge = 2 // MELEE_HIT_DODGE (Unit.h:356) — MiscValue for SPELL_AURA_IGNORE_COMBAT_RESULT dodge arm
+	meleeHitBlock = 3 // MELEE_HIT_BLOCK (Unit.h:357) — MiscValue for SPELL_AURA_IGNORE_COMBAT_RESULT block arm
+	meleeHitParry = 4 // MELEE_HIT_PARRY (Unit.h:358) — MiscValue for SPELL_AURA_IGNORE_COMBAT_RESULT parry arm
 
 	spellFailedEquippedItemClass         uint8  = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8  = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
@@ -18379,8 +18391,10 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 		}
 	}
 
-	// SPELL_AURA_IGNORE_COMBAT_RESULT auras (Unit.cpp:2555-2576) have no Go
-	// aura model — unbridged.
+	// SPELL_AURA_IGNORE_COMBAT_RESULT (202; Unit.cpp:2555-2576): the attacker's
+	// 202 aura effects whose spell affects this melee spell force the matching
+	// combat result off (misc MELEE_HIT_DODGE/BLOCK/PARRY, Unit.h:356-360).
+	s.applyIgnoreCombatResultAuras(spell, &canDodge, &canParry, &canBlock)
 
 	if ranged {
 		// Deflect (Unit.cpp:2519-2526): ranged-weapon spells roll the
@@ -18463,6 +18477,45 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 	}
 
 	return protocol.SpellMissNone
+}
+
+// applyIgnoreCombatResultAuras mirrors the SPELL_AURA_IGNORE_COMBAT_RESULT
+// (202) loop in Unit::MeleeSpellHitResult (Unit.cpp:2563-2584): the attacker's
+// 202 aura effects whose spell affects the melee spell force the matching
+// combat result off — misc MELEE_HIT_DODGE (2) kills canDodge, misc
+// MELEE_HIT_BLOCK (3) kills canBlock, misc MELEE_HIT_PARRY (4) kills canParry.
+// The IsAffectedOnSpell gate rides spellAffectedBySpellFamilyMask, same as
+// the 270 affect-mask arm (spells.go). Unhandled misc values are ignored,
+// matching the C++ debug-log default arm.
+func (s *session) applyIgnoreCombatResultAuras(spell wotlk.Spell, canDodge, canParry, canBlock *bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraIgnoreCombatResult || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			switch effect.MiscValue {
+			case meleeHitDodge:
+				*canDodge = false
+			case meleeHitBlock:
+				*canBlock = false
+			case meleeHitParry:
+				*canParry = false
+			}
+		}
+	}
 }
 
 // spellTargetMissResult mirrors the per-target hit resolution in
@@ -27927,7 +27980,7 @@ func (s *session) getPushbackReductionLocked(spell wotlk.Spell) int32 {
 	delayReduce := s.applySpellModNoTakingLocked(spell, spellModNotLoseCastingTime, 100)
 	var auraTotal int32
 	for _, a := range s.activeAuras {
-		if a != nil && !a.Stopped && a.AuraType == 149 { // SPELL_AURA_REDUCE_PUSHBACK
+		if a != nil && !a.Stopped && a.AuraType == spellAuraReducePushback {
 			auraTotal += int32(a.Amount)
 		}
 	}
