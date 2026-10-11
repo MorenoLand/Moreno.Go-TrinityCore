@@ -18444,6 +18444,7 @@ func (s *session) removeAura(spellID uint32) {
 	removedCasterGUID := uint64(0)
 	removedHealthAura := (*activeAura)(nil)
 	removedStatAura := (*activeAura)(nil)
+	removedResistanceAura := (*activeAura)(nil)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
@@ -18459,6 +18460,11 @@ func (s *session) removeAura(spellID uint32) {
 			// Stopped is set — activeAuraHasEffect ignores stopped auras.
 			if s.auraTouchesStats(aura) {
 				removedStatAura = aura
+			}
+			// Resistance-aura remove leg (aura_resistance.go): capture
+			// before Stopped is set, same as the stat leg.
+			if s.auraTouchesResistance(aura) {
+				removedResistanceAura = aura
 			}
 			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
 			wasAttackPowerOfArmor = s.activeAuraHasEffect(aura, spellAuraModAttackPowerOfArmor)
@@ -18705,6 +18711,15 @@ func (s *session) removeAura(spellID uint32) {
 		if preserve != nil {
 			preserve()
 		}
+	}
+	// AuraEffect::HandleAuraModResistance family remove leg
+	// (SpellAuraEffects.cpp:3232-3355): the aura record is already erased
+	// above (Unit::_UnapplyAura erases before the handlers, Unit.cpp:3548),
+	// so the resistance fold recomputes from the remaining auras — the mod
+	// drops cleanly, and a suppressed 143 exclusive peer is reinstated like
+	// the C++ remove-leg delta (GetAmount()-remainingMax, :3239-3246).
+	if removedResistanceAura != nil && s.player != nil {
+		_ = s.calculatePlayerStats(context.Background(), s.player)
 	}
 	s.sendPlayerUpdate()
 	if wasVisibilityAura && s.server != nil {
@@ -20526,6 +20541,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// Stat-aura merge leg: capture before unlocking (the fold
 			// below locks castMu itself).
 			mergeStatsDirty := targetSess.auraTouchesStats(existing)
+			// Resistance-aura merge leg: same capture for the resistance fold.
+			mergeResistDirty := targetSess.auraTouchesResistance(existing)
 			targetSess.castMu.Unlock()
 			// AuraEffect::ChangeAmount (SpellAuraEffects.cpp:662-683)
 			// unregisters then re-registers the effect with the refreshed
@@ -20538,6 +20555,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				if preserve != nil {
 					preserve()
 				}
+			}
+			// Resistance-aura merge leg: AuraEffect::ChangeAmount
+			// (SpellAuraEffects.cpp:662-683) unregisters then re-registers
+			// the effect with the refreshed amount — the live resistance
+			// fold recomputes from the merged amounts.
+			if mergeResistDirty {
+				_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
 			}
 			// AuraEffect::ChangeAmount -> CalculateSpellMod
 			// (SpellAuraEffects.cpp:657-683): the merged aura's refreshed
@@ -20896,6 +20920,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			if preserve != nil {
 				preserve()
 			}
+		case spellAuraModResistance, spellAuraModBaseResistance, spellAuraModResistancePct, spellAuraModBaseResistancePct, spellAuraModResistanceExclusive:
+			// AuraEffect::HandleAuraModResistance family apply leg
+			// (SpellAuraEffects.cpp:3232-3355): the per-school resistance
+			// bucket math re-runs from the live aura fold
+			// (Player::UpdateResistances, StatSystem.cpp:245); resistance
+			// has no current-value arm to run afterward.
+			_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
 		}
 
 		stackCount := uint8(1)

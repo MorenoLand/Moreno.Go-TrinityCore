@@ -2196,6 +2196,12 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		state.Stats[i] = uint32(v)
 	}
 
+	// Aura resistance modifiers (aura_resistance.go): the per-school
+	// (BASE_VALUE*BASE_PCT + TOTAL_VALUE)*TOTAL_PCT bucket math re-runs on
+	// every rebuild like Player::UpdateResistances (StatSystem.cpp:245); the
+	// item totals accumulated above are the non-aura base the fold builds on.
+	state.Resistances = s.effectiveResistances(state.Resistances)
+
 	// 3. Derived stats (TrinityCore StatSystem.cpp:309-360)
 	totalSta := state.Stats[2]
 	totalInte := state.Stats[3]
