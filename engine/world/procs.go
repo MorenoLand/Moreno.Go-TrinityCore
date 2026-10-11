@@ -1691,6 +1691,68 @@ func (s *session) procPeriodicDamageTickTakenAuraTriggers(ctx context.Context, t
 	})
 }
 
+// procPeriodicPowerBurnTickAuraTriggers evaluates real aura procs on the done
+// side of a power-burn tick (SpellAuraEffects.cpp:5583-5623): the tail of
+// AuraEffect::HandlePeriodicPowerBurnAuraTick runs Unit::ProcSkillsAndAuras(caster,
+// target, PROC_FLAG_DONE_PERIODIC, PROC_FLAG_TAKEN_PERIODIC | (damage ?
+// PROC_FLAG_TAKEN_DAMAGE : 0), PROC_SPELL_TYPE_NO_DMG_HEAL | (damage ?
+// PROC_SPELL_TYPE_DAMAGE : 0), PROC_SPELL_PHASE_HIT, hitMask, nullptr,
+// &dotDamageInfo, nullptr). A burn that deals no damage still procs as a
+// no-damage event (C++ always runs the call); the hit mask is built the same
+// way as the damage tick, with no crit model on the burn path (matching C++,
+// which never crits the burn). The tick event is deliberately NOT marked
+// triggered (C++ passes no Spell).
+func (s *session) procPeriodicPowerBurnTickAuraTriggers(ctx context.Context, burnSpell wotlk.Spell, schoolMask uint32, targetGUID uint64, absorbed, resisted, damage uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spellTypeMask := procSpellTypeNoDmgHeal
+	if damage > 0 {
+		spellTypeMask |= procSpellTypeDamage
+	}
+	spellCopy := burnSpell
+	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
+		typeMask:       procFlagDonePeriodic,
+		schoolMask:     schoolMask,
+		spellTypeMask:  spellTypeMask,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, false, absorbed, false),
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+		damage:         damage,
+	})
+}
+
+// procPeriodicPowerBurnTickTakenAuraTriggers is the victim-side half of the
+// power-burn tick proc (SpellAuraEffects.cpp:5583-5623): the victim's own
+// session runs the loop so its TAKEN_PERIODIC / TAKEN_DAMAGE auras gate; the
+// trigger targets the caster. PROC_FLAG_TAKEN_DAMAGE and
+// PROC_SPELL_TYPE_DAMAGE are ORed in only when damage landed, like C++.
+func (s *session) procPeriodicPowerBurnTickTakenAuraTriggers(ctx context.Context, burnSpell wotlk.Spell, schoolMask uint32, casterGUID uint64, absorbed, resisted, damage uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	typeMask := procFlagTakenPeriodic
+	spellTypeMask := procSpellTypeNoDmgHeal
+	if damage > 0 {
+		typeMask |= procFlagTakenDamage
+		spellTypeMask |= procSpellTypeDamage
+	}
+	spellCopy := burnSpell
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  spellTypeMask,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, false, absorbed, false),
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+		damage:         damage,
+	})
+}
+
 // procPeriodicHealthFunnelAuraTriggers evaluates real aura procs on the done
 // side of a Health Funnel tick heal (SpellAuraEffects.cpp:5350):
 // Unit::ProcSkillsAndAuras(caster, target, PROC_FLAG_DONE_PERIODIC,

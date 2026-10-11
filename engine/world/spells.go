@@ -22230,6 +22230,20 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, ts)
 		}
 		_ = ts.applyPeriodicTickDamageToPlayer(dmg, burnTargetHealth, aura)
+		// Periodic-tick aura procs (SpellAuraEffects.cpp:5583-5623): the burn
+		// tail runs Unit::ProcSkillsAndAuras with DONE_PERIODIC on the caster
+		// side and TAKEN_PERIODIC | (TAKEN_DAMAGE when damage landed) on the
+		// victim side, PROC_SPELL_TYPE_NO_DMG_HEAL | (PROC_SPELL_TYPE_DAMAGE
+		// when damage landed), PROC_SPELL_PHASE_HIT. The tick only runs with
+		// a live caster session (burnCaster), which carries the done leg; the
+		// taken leg runs on the victim's session.
+		if ts.server != nil && ts.server.Data != nil {
+			if burnTickSpell, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				procCtx := context.Background()
+				burnCaster.procPeriodicPowerBurnTickAuraTriggers(procCtx, burnTickSpell, aura.SchoolMask, aura.TargetGUID, burnAbsorbed, burnResisted, dmg)
+				ts.procPeriodicPowerBurnTickTakenAuraTriggers(procCtx, burnTickSpell, aura.SchoolMask, aura.CasterGUID, burnAbsorbed, burnResisted, dmg)
+			}
+		}
 	case spellAuraModAttackPowerOfArmor: // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
 		// SpellAuraEffects.cpp:5635-5641 (HandleModAttackPowerOfArmorAuraTick):
 		// armorMod = Effects[effIndex].CalcValue(caster, &m_baseAmount);
@@ -23224,12 +23238,20 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		// Periodic-heal procs (SpellAuraEffects.cpp:5350): the funnel heal
 		// runs Unit::ProcSkillsAndAuras with DONE_PERIODIC / TAKEN_PERIODIC,
-		// PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL. Done
-		// side only — creature targets have no aura plumbing in Go.
+		// PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL. The
+		// done side runs on the caster's session when online, else on the
+		// caster creature's own auras (C++ runs the done leg on any caster
+		// unit type); the taken side runs on the victim motion's own auras
+		// via the shared creature proc loop.
 		if s.server != nil && s.server.Data != nil {
 			if funnelSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
 					casterSess.procPeriodicHealthFunnelAuraTriggers(ctx, funnelSpell, aura.SchoolMask, aura.TargetGUID)
+				} else if casterMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); casterMotion != nil {
+					s.server.fireCreaturePeriodicHealTickProcs(ctx, casterMotion, nil, aura.TargetGUID, aura.CasterGUID, funnelSpell, aura.SchoolMask, false)
+				}
+				if victimMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); victimMotion != nil {
+					s.server.fireCreaturePeriodicHealTickProcs(ctx, nil, victimMotion, aura.TargetGUID, aura.CasterGUID, funnelSpell, aura.SchoolMask, false)
 				}
 			}
 		}
@@ -23475,6 +23497,18 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, s)
 		}
 		_, burnAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, burnTargetHealth, target, key, aura)
+		// Periodic-tick aura procs (SpellAuraEffects.cpp:5583-5623): the same
+		// tail as the player path — the done leg on the caster's session (the
+		// tick only runs with burnCaster live), the taken leg on the victim
+		// motion's own auras via the shared creature proc loop.
+		if s.server != nil && s.server.Data != nil {
+			if burnTickSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				burnCaster.procPeriodicPowerBurnTickAuraTriggers(ctx, burnTickSpell, aura.SchoolMask, aura.TargetGUID, burnAbsorbed, burnResisted, dmg)
+				if victimMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); victimMotion != nil {
+					s.server.fireCreaturePeriodicPowerBurnTickProcs(ctx, victimMotion, aura.TargetGUID, aura.CasterGUID, burnTickSpell, aura.SchoolMask, burnAbsorbed, burnResisted, dmg)
+				}
+			}
+		}
 		return burnAlive
 	case spellAuraModAttackPowerOfArmor: // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
 		// SpellAuraEffects.cpp:5635-5641 (HandleModAttackPowerOfArmorAuraTick):

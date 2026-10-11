@@ -2361,6 +2361,40 @@ func (s *Server) fireCreaturePeriodicHealTickProcs(ctx context.Context, caster, 
 	}
 }
 
+// fireCreaturePeriodicPowerBurnTickProcs mirrors the Unit::ProcSkillsAndAuras
+// tail of AuraEffect::HandlePeriodicPowerBurnAuraTick
+// (SpellAuraEffects.cpp:5583-5623) for creature victims: the victim motion's
+// own auras evaluate TAKEN_PERIODIC | (TAKEN_DAMAGE when damage landed) with
+// PROC_SPELL_TYPE_NO_DMG_HEAL | (PROC_SPELL_TYPE_DAMAGE when damage landed) /
+// PROC_SPELL_PHASE_HIT and the absorb/resist-derived hit mask (no crit model
+// on the burn path, matching C++). The done side needs no motion arm: the Go
+// burn tick only runs with a live caster session (burnCaster), which fires the
+// session-side done leg. The event is not marked triggered (C++ passes no
+// Spell on the tick).
+func (s *Server) fireCreaturePeriodicPowerBurnTickProcs(ctx context.Context, victim *creatureMotion, targetGUID, casterGUID uint64, burnSpell wotlk.Spell, schoolMask uint32, absorbed, resisted, damage uint32) {
+	if s == nil || victim == nil {
+		return
+	}
+	typeMask := procFlagTakenPeriodic
+	spellTypeMask := procSpellTypeNoDmgHeal
+	if damage > 0 {
+		typeMask |= procFlagTakenDamage
+		spellTypeMask |= procSpellTypeDamage
+	}
+	spellCopy := burnSpell
+	s.fireCreatureAuraProcLoop(ctx, victim, casterGUID, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  spellTypeMask,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, false, absorbed, false),
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+		damage:         damage,
+	})
+}
+
 // creatureProcTriggerDamageAuraProc mirrors
 // AuraEffect::HandleProcTriggerDamageAuraProc (SpellAuraEffects.cpp:5738-5762)
 // for a creature caster: the effect's own amount as direct spell damage of
