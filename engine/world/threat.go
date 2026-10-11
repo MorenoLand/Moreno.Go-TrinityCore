@@ -1312,7 +1312,8 @@ func (s *Server) distributeHealingThreatLocked(mapID, instanceID uint32, healerX
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 
-	var engaged []*creatureMotion
+	var engaged, controlled []*creatureMotion
+	now := time.Now()
 	for _, m := range s.motionMapLocked(mapID, instanceID) {
 		if m == nil || m.Health == 0 || !m.InCombat || m.Evading {
 			continue
@@ -1322,36 +1323,61 @@ func (s *Server) distributeHealingThreatLocked(mapID, instanceID uint32, healerX
 		// creatures that threaten it — not every creature engaged with the
 		// assistant. Go approximates that set as creatures whose current
 		// target is the assisted unit or that hold positive threat on it.
-		// The UNIT_STATE_CONTROLLED split (controlled creatures take 0 but
-		// stay out of the denominator) has no Go model — documented delta.
 		isEngaged := false
 		if m.TargetGUID == targetGUID {
 			isEngaged = true
 		} else if m.ThreatMgr != nil && targetGUID != 0 && m.ThreatMgr.GetThreat(targetGUID) > 0 {
 			isEngaged = true
 		}
-		if isEngaged {
-			engaged = append(engaged, m)
+		if !isEngaged {
+			continue
 		}
+		// ThreatManager::ForwardThreatForAssistingMe (ThreatManager.cpp:666-672):
+		// recipients under UNIT_STATE_CONTROLLED (Unit.h:251 — CONFUSED |
+		// STUNNED | FLEEING; fear lands here via the fleeing leg) take a
+		// zero add — engagement without threat — and are excluded from the
+		// even-split denominator. Go reads the CC state from the
+		// creature's live confuse/stun/fear auras plus the fleeing timer.
+		key := creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: m.GUID}
+		if (!m.FleeingUntil.IsZero() && now.Before(m.FleeingUntil)) ||
+			s.creatureHasAuraType(key, spellAuraModConfuse) ||
+			s.creatureHasAuraType(key, spellAuraModStun) ||
+			s.creatureHasAuraType(key, spellAuraModFear) {
+			controlled = append(controlled, m)
+			continue
+		}
+		engaged = append(engaged, m)
 	}
 
-	if len(engaged) == 0 {
+	if len(engaged) == 0 && len(controlled) == 0 {
 		return
 	}
 
-	threatPerCreature := totalThreat / float32(len(engaged))
-	for _, m := range engaged {
+	addAssistThreat := func(m *creatureMotion, amount float32) {
 		if m.ThreatMgr == nil {
 			m.ThreatMgr = NewThreatManager(m)
 		}
 		dist := distance3D(healerX, healerY, healerZ, m.X, m.Y, m.Z)
 		inMelee := inMeleeThreatRange(m.CombatReach, healerReach, dist)
-		switched, newVictim := m.ThreatMgr.AddThreat(healerGUID, threatPerCreature, inMelee)
+		switched, newVictim := m.ThreatMgr.AddThreat(healerGUID, amount, inMelee)
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()
 			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, entries)
 		}
 		m.Moving = true
+	}
+
+	if len(engaged) > 0 {
+		threatPerCreature := totalThreat / float32(len(engaged))
+		for _, m := range engaged {
+			addAssistThreat(m, threatPerCreature)
+		}
+	}
+	// The controlled leg mirrors C++'s AddThreat(assistant, 0.0f, spell,
+	// true): the zero add registers the threat ref and engages combat
+	// (ThreatManager.cpp:308-410) without adding threat.
+	for _, m := range controlled {
+		addAssistThreat(m, 0)
 	}
 }

@@ -42,12 +42,13 @@ const (
 
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
-	spellAttr1NotBreakStealth    uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
-	spellAttr1NoThreat           uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr1DismissPet         uint32 = 0x00000001 // SPELL_ATTR1_DISMISS_PET (SharedDefines.h:449) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr1MeleeCombatStart   uint32 = 0x00000200 // SPELL_ATTR1_MELEE_COMBAT_START (SharedDefines.h:458) — caster begins auto-attack on cast
-	spellAttr1ChannelTrackTarget uint32 = 0x00004000 // SPELL_ATTR1_CHANNEL_TRACK_TARGET (SharedDefines.h:463) — while channeling, adjust facing to face target
-	spellAttr3NoInitialAggro     uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
+	spellAttr1NotBreakStealth     uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
+	spellAttr1NoThreat            uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1UnautocastableByPet uint32 = 0x00020000 // SPELL_ATTR1_UNAUTOCASTABLE_BY_PET (SharedDefines.h:466) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1DismissPet          uint32 = 0x00000001 // SPELL_ATTR1_DISMISS_PET (SharedDefines.h:449) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1MeleeCombatStart    uint32 = 0x00000200 // SPELL_ATTR1_MELEE_COMBAT_START (SharedDefines.h:458) — caster begins auto-attack on cast
+	spellAttr1ChannelTrackTarget  uint32 = 0x00004000 // SPELL_ATTR1_CHANNEL_TRACK_TARGET (SharedDefines.h:463) — while channeling, adjust facing to face target
+	spellAttr3NoInitialAggro      uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
 
 	spellAttr0Ability                      uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
 	spellAttr0CantCancel                   uint32 = 0x80000000 // SPELL_ATTR0_CANT_CANCEL (SharedDefines.h:443)

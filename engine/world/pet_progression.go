@@ -59,6 +59,27 @@ func PetFoodBenefitLevel(petLevel, itemLevel uint32) uint32 {
 	return 0
 }
 
+// petHappinessLevelSize mirrors HAPPINESS_LEVEL_SIZE (Pet.h:24): one
+// happiness level is 333000 (petHappinessMax = 1050000, ~3.15 levels).
+const petHappinessLevelSize = 333000
+
+// petHappinessDamageMod mirrors Pet::GetHappinessState (Pet.cpp:707-714)
+// baked into Guardian::UpdateDamagePhysical (StatSystem.cpp:1521-1534):
+// HAPPY pets (2+ levels of happiness) deal 125%, UNHAPPY pets (under one
+// level) deal 75%, CONTENT pets deal 100%. C++ bakes the multiplier at
+// stat-update time only — happiness ticks never recompute damage — so Go
+// applies it at the pet stat-compute points (summon, level-up), not per
+// swing.
+func petHappinessDamageMod(happiness uint32) float32 {
+	if happiness < petHappinessLevelSize {
+		return 0.75
+	}
+	if happiness >= 2*petHappinessLevelSize {
+		return 1.25
+	}
+	return 1.0
+}
+
 func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petType uint8, oldLevel, newLevel, experience, nextLevelXP uint32) bool {
 	if s == nil || s.server == nil || s.player == nil || petID == 0 || entry == 0 || newLevel == 0 || oldLevel == newLevel || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
@@ -93,7 +114,10 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 	motion.Powers[0], motion.MaxPowers[0] = mana, maxMana
 	motion.PetNextLevelXP = nextLevelXP
 	if petType == 1 {
-		motion.MinDamage, motion.MaxDamage = float32(newLevel-newLevel/4), float32(newLevel+newLevel/4)
+		// Guardian::UpdateDamagePhysical's happiness leg (StatSystem.cpp:1521-1534),
+		// read from the pet's live happiness at stat-update time.
+		mod := petHappinessDamageMod(motion.Powers[4])
+		motion.MinDamage, motion.MaxDamage = float32(newLevel-newLevel/4)*mod, float32(newLevel+newLevel/4)*mod
 	}
 	fields := map[int]uint32{unitFieldLevel: newLevel, unitFieldHealth: health, unitFieldMaxHealth: maxHealth, unitFieldPower1: mana, unitFieldMaxPower1: maxMana, unitFieldPetExperience: experience}
 	for index, value := range attributes {

@@ -40,6 +40,9 @@ func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID u
 	minDamage, maxDamage := float32(maxUint32(level*2, 5)), float32(maxUint32(level*3, 10))
 	if petType == 1 {
 		minDamage, maxDamage = float32(level-level/4), float32(level+level/4)
+		// Guardian::UpdateDamagePhysical's happiness leg (StatSystem.cpp:1521-1534).
+		mod := petHappinessDamageMod(happiness)
+		minDamage, maxDamage = minDamage*mod, maxDamage*mod
 	}
 	motion := &creatureMotion{GUID: petGUID, Entry: entry, Map: s.player.Map, InstanceID: s.player.InstanceID, HomeX: x, HomeY: y, HomeZ: z, X: x, Y: y, Z: z, Orientation: orientation, Speed: 2.5, RunSpeed: 7, Faction: faction, Level: level, UnitFlags: unitFlagPlayerControlled, UnitFlags2: unitFlag2RegeneratePower, AttackTime: 2000, CombatReach: combatReach, Health: health, MaxHealth: maxHealth, Mana: mana, MaxMana: maxMana, PowerType: powerType, Powers: powers, MaxPowers: maxPowers, PetID: petID, PetType: petType, PetNextLevelXP: nextLevelXP, FocusRegenTimer: 4 * time.Second, HappinessTimer: 7500 * time.Millisecond, Happiness: happiness, Experience: experience, OwnerGUID: s.playerGUID, Spells: spells, SpellCooldowns: make(map[uint32]time.Time), SpellCategoryCooldowns: make(map[uint32]time.Time), SpellCooldownCategories: make(map[uint32]uint32), SpellCooldownCategoryEnds: make(map[uint32]time.Time), PetCommand: PetCommandFollow, PetReact: reactState, AutocastSpells: autocast, MinDamage: minDamage, MaxDamage: maxDamage, Refreshed: time.Now()}
 	motion.Stats = attributes

@@ -221,10 +221,31 @@ func (s *Server) onPetToggleAutocast(mapID, instanceID uint32, petGUID uint64, s
 	if s == nil || petGUID == 0 || spellID == 0 {
 		return
 	}
+	// Pet::ToggleAutocast (Pet.cpp): the spell must be autocastable
+	// (SpellInfo::IsAutocastable, SpellInfo.cpp:1101-1108 — not passive and
+	// without SPELL_ATTR1_UNAUTOCASTABLE_BY_PET) and known by the pet;
+	// otherwise the toggle is ignored.
+	if s.Data != nil {
+		if spell, found, err := s.Data.Spell(spellID); err != nil || !found ||
+			spell.Attributes&spellAttributePassive != 0 ||
+			spell.AttributesEx&spellAttr1UnautocastableByPet != 0 {
+			return
+		}
+	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	motion := s.motionMapLocked(mapID, instanceID)[petGUID]
 	if motion == nil {
+		return
+	}
+	known := false
+	for _, sp := range motion.Spells {
+		if sp == spellID {
+			known = true
+			break
+		}
+	}
+	if !known {
 		return
 	}
 
