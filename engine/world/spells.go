@@ -7792,18 +7792,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
 			}
 		})
-		// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is the
-		// caster's own SpellHitResult (Spell.cpp:2178), which is always
-		// SPELL_MISS_NONE — WorldObject::SpellHitResult returns NONE when
-		// caster == victim before any other arm (the immune-self edge
-		// case has no Go model).
+		// Spell::AddUnitTarget (Spell.cpp:2178): ReflectResult is the caster's
+		// own SpellHitResult, which can only be IMMUNE or NONE
+		// (spellReflectReturnStatus). A non-NONE result nulls _spellHitTarget
+		// (Spell.cpp:2350, 7740-7743): the GO packet still reports REFLECT
+		// with the ReflectStatus, but the caster takes no effects — the
+		// retarget below is skipped and the reflector stays the target.
+		reflectStatus := s.spellReflectReturnStatus(spell)
 		missStatus = []protocol.SpellMissStatus{{
 			TargetGUID:    targetGUID,
 			Reason:        protocol.SpellMissReflect,
-			ReflectStatus: protocol.SpellMissNone,
+			ReflectStatus: reflectStatus,
 		}}
-		targetGUID = s.playerGUID
-		hitTargets = []uint64{s.playerGUID}
+		if reflectStatus == protocol.SpellMissNone {
+			targetGUID = s.playerGUID
+			hitTargets = []uint64{s.playerGUID}
+		} else {
+			hitTargets = nil
+		}
 	}
 	if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
 		var targetSess *session
@@ -7986,11 +7992,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			jump := 0
 			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
 				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
-					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo})
+					entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
 					if missInfo == protocol.SpellMissReflect {
-						jump++
-						reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+						// Spell::AddUnitTarget (Spell.cpp:2178): each reflected
+						// jump rolls its own ReflectResult; a non-NONE result
+						// nulls _spellHitTarget (Spell.cpp:2350, 7740-7743), so
+						// the jump neither keeps its falloff index nor retargets
+						// to the caster.
+						entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+						if entry.ReflectStatus == protocol.SpellMissNone {
+							jump++
+							reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+						}
 					}
+					missStatus = append(missStatus, entry)
 					continue
 				}
 				jump++
@@ -8086,7 +8101,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// when the EXPLICIT unit target missed. C++ reads
 	// m_targets.GetUnitTargetGUID() — the wire target, post grounding-totem
 	// redirect (m_targets.SetUnitTarget) — never the first hit target: the
-	// reflect arm re-points targetGUID at the caster (7822) and the
+	// reflect arm re-points targetGUID at the caster on a clean return (7822)
+	// and the
 	// aura-scale leg re-points it at hitTargets[0] (8044), while area
 	// spells with no explicit target keep hit=true even when area targets
 	// miss. target.UnitGUID carries the same post-redirect value here. It
@@ -8514,7 +8530,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// (hitTargets holds the caster), so reflect entries never filter.
 		missedTargets := make(map[uint64]struct{}, len(missStatus))
 		for _, miss := range missStatus {
-			if miss.Reason == protocol.SpellMissReflect {
+			// A reflected target whose return trip missed the caster
+			// (ReflectStatus != NONE, Spell.cpp:2178) resolves no unit
+			// (Spell.cpp:7736-7744) — it filters like any other miss. A
+			// clean reflect retargets to the caster (hitTargets holds the
+			// caster), so those entries never filter.
+			if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
 				continue
 			}
 			missedTargets[miss.TargetGUID] = struct{}{}
@@ -8557,9 +8578,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			return
 		}
 		// A missed primary target resolves no unit: the unit-targeted
-		// single-target legs below must not fire on it. (On the reflect
-		// path targetGUID was reassigned to the caster and reflect entries
-		// never land in missedTargets, so the reflected cast stays live.)
+		// single-target legs below must not fire on it. (On a clean reflect
+		// targetGUID was reassigned to the caster and the reflect entry
+		// never lands in missedTargets, so the reflected cast stays live; a
+		// reflect whose return trip missed keeps the reflector as targetGUID
+		// and filters it like any other miss.)
 		_, primaryMissed := missedTargets[targetGUID]
 		primaryLive := !primaryMissed
 		// Eluna::SpellHit (CREATURE_EVENT_ON_HIT_BY_SPELL, event 14) fires
@@ -13742,6 +13765,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// trailer (Spell.cpp:4504-4506); the effect loop below skips immune
 	// targets and retargets reflected ones to the caster (DoEffectOnLaunchTarget,
 	// Spell.cpp:7740).
+	// Spell::AddUnitTarget (Spell.cpp:2178): every reflected target rolls the
+	// caster's own SpellHitResult once per cast — caster state is constant
+	// across the target loop — see spellReflectReturnStatus.
+	reflectReturnStatus := s.spellReflectReturnStatus(spell)
 	triggeredMiss := make(map[uint64]uint8)
 	var triggeredMissGUIDs []uint64
 	for _, guid := range hitTargets {
@@ -13780,9 +13807,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			entry := protocol.SpellMissStatus{TargetGUID: guid, Reason: miss}
 			if miss == protocol.SpellMissReflect {
 				// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is
-				// the caster's own SpellHitResult — always NONE, the caster
-				// cannot reflect onto itself (Object.cpp:2635).
-				entry.ReflectStatus = protocol.SpellMissNone
+				// the caster's own SpellHitResult (Spell.cpp:2178) — IMMUNE
+				// or NONE, see spellReflectReturnStatus.
+				entry.ReflectStatus = reflectReturnStatus
 			}
 			goMissStatus = append(goMissStatus, entry)
 			continue
@@ -13944,8 +13971,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if miss == protocol.SpellMissImmune {
 					continue
 				}
-				reflected = miss == protocol.SpellMissReflect
-				target = s.playerGUID
+				if miss == protocol.SpellMissReflect {
+					// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
+					// ReflectResult nulls _spellHitTarget — the reflected
+					// target takes no effects.
+					if reflectReturnStatus != protocol.SpellMissNone {
+						continue
+					}
+					reflected = true
+					target = s.playerGUID
+				}
 			}
 			effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, reflected: reflected})
 		}
@@ -13977,8 +14012,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					if miss == protocol.SpellMissImmune {
 						continue
 					}
-					reflected = miss == protocol.SpellMissReflect
-					target = s.playerGUID
+					if miss == protocol.SpellMissReflect {
+						// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
+						// ReflectResult nulls _spellHitTarget — the reflected
+						// jump neither keeps its falloff index nor retargets.
+						if reflectReturnStatus != protocol.SpellMissNone {
+							continue
+						}
+						reflected = true
+						target = s.playerGUID
+					}
 				}
 				jumpOrder++
 				effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: jumpOrder, reflected: reflected})
@@ -17349,6 +17392,27 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 	roll := rand.Float64() * 100.0
 	if roll >= modHitChance {
 		return protocol.SpellMissMiss
+	}
+	return protocol.SpellMissNone
+}
+
+// spellReflectReturnStatus mirrors the ReflectResult roll in
+// Spell::AddUnitTarget (Spell.cpp:2178):
+// unitCaster->SpellHitResult(unitCaster, m_spellInfo, false).
+// With caster == victim, WorldObject::SpellHitResult (Object.cpp:2617-2633)
+// can only return SPELL_MISS_IMMUNE — the two immunity arms precede the
+// this == victim early-out — or SPELL_MISS_NONE (the positive arm, the
+// caster==victim arm, and every DmgClass arm; the magic hit/resist/deflect
+// roll sits behind the this == victim check and never runs). A non-NONE
+// result nulls _spellHitTarget (Spell.cpp:2350, 7740-7743): the GO packet
+// still reports REFLECT with the ReflectStatus, but no effects land on the
+// caster.
+func (s *session) spellReflectReturnStatus(spell wotlk.Spell) uint8 {
+	if s.isImmuneToSpell(spell, s) {
+		return protocol.SpellMissImmune
+	}
+	if spellHasOnlyDamageEffects(spell) && s.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+		return protocol.SpellMissImmune
 	}
 	return protocol.SpellMissNone
 }
