@@ -9932,8 +9932,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
 					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false)
 				}
-			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
+			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self + dead-target request chain
 				s.applySelfResurrectEffect(spell)
+				s.applyResurrectNewToTargets(spell, eff, hitTargets)
 			case spellEffectTeleportUnits: // 5: SPELL_EFFECT_TELEPORT_UNITS (EffectTeleportUnits, SpellEffects.cpp:1199)
 				if s.player == nil {
 					break
@@ -26625,9 +26626,29 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 		return
 	}
 	cdb := s.server.CharactersStore.DB
+	oldSpec := s.player.ActiveTalentGroup
+
+	// Player::ActivateSpec pre-swap legs (Player.cpp:26298-26320): interrupt
+	// non-melee casts (the Executing guard inside the interrupt helpers skips
+	// the spec spell itself, matching the C++ SPELL_STATE_FINISHED state when
+	// the 162 effect runs), dismiss the pet without saving it to a slot,
+	// unsummon all totems, exit the vehicle, drop single-target auras this
+	// player cast on other units, clear the client's action bars
+	// (SendActionButtons(2)), and remove the old spec's glyph auras
+	// (RemoveAurasDueToSpell(gp->SpellID)).
+	s.interruptCurrentCast()
+	s.interruptCurrentChannel()
+	s.unsummonPet(ctx, petSaveNotInSlot)
+	for slot := uint8(0); slot < 4; slot++ {
+		s.destroyTotem(slot)
+	}
+	s.exitVehicle(ctx)
+	s.removeForeignSingleCastAuras()
+	s.sendActionButtonsClear()
+	s.removeSpecGlyphAuras(oldSpec)
 
 	// 1. Unlearn talents of current spec
-	rows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup)
+	rows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, oldSpec)
 	if err == nil {
 		var oldSpells []uint32
 		for rows.Next() {
@@ -26685,8 +26706,75 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 		s.sendActionButtons()
 	}
 
+	// New spec glyphs (Player.cpp:26406-26417): the glyph's spell lands on
+	// the player, mirrored by the login-time glyph aura application.
+	s.loadGlyphAuras(s.player)
+
 	// 6. Send talents info update
 	_ = s.sendTalentsInfo(false)
+
+	// Player.cpp:26440-26444: mana is zeroed even when it is not the active
+	// power type, then the active power is zeroed.
+	s.player.Powers[0] = 0
+	if pw := playerPowerType(s.player); int(pw) < len(s.player.Powers) {
+		s.player.Powers[pw] = 0
+	}
+	s.sendPlayerUpdate()
+}
+
+// sendActionButtonsClear mirrors Player::SendActionButtons(2)
+// (Player.cpp:6336-6356): the state-2 packet carries no button data and
+// clears the action bars client-side; sent during spec swap before the new
+// buttons go out.
+func (s *session) sendActionButtonsClear() {
+	if s.player == nil {
+		return
+	}
+	packet := protocol.NewBuffer(1)
+	packet.WriteU8(2)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ACTION_BUTTONS), packet.Bytes(), true)
+}
+
+// removeForeignSingleCastAuras mirrors the Player::ActivateSpec single-target
+// purge (Player.cpp:26309-26319): single-cast auras this player cast on other
+// units are removed; auras owned by the player stay.
+func (s *session) removeForeignSingleCastAuras() {
+	if s == nil || s.server == nil || s.playerGUID == 0 {
+		return
+	}
+	s.server.singleCastMu.Lock()
+	entries := append([]singleCastEntry(nil), s.server.singleCastAuras[s.playerGUID]...)
+	s.server.singleCastMu.Unlock()
+	for _, e := range entries {
+		if e.aura == nil {
+			continue
+		}
+		if e.aura.TargetKey.GUID != 0 || e.aura.TargetGUID != s.playerGUID {
+			s.expireSingleCastEntry(e)
+		}
+	}
+}
+
+// removeSpecGlyphAuras mirrors the Player::ActivateSpec glyph leg
+// (Player.cpp:26376-26380): the old spec's socketed glyphs lose their
+// granted spell auras (RemoveAurasDueToSpell(gp->SpellID)).
+func (s *session) removeSpecGlyphAuras(spec uint8) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if int(spec) >= len(s.player.Glyphs) {
+		return
+	}
+	for _, glyphID := range s.player.Glyphs[spec] {
+		if glyphID == 0 {
+			continue
+		}
+		glyph, found, err := s.server.Data.GlyphProperties(uint32(glyphID))
+		if err != nil || !found || glyph.SpellID == 0 {
+			continue
+		}
+		s.removeAura(glyph.SpellID)
+	}
 }
 
 // Channel and pushback state machine, mirroring the reference:

@@ -2056,6 +2056,45 @@ func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
 	}
 }
 
+// applyResurrectNewToTargets mirrors the unit-target arm of
+// Spell::EffectResurrectNew (SpellEffects.cpp:246-275): each dead player hit
+// target without an active resurrect request gets a request from the caster
+// carrying the effect damage as health and MiscValue as mana. The
+// m_corpseTarget arm has no Go model (no corpse targets on the client path);
+// the self-cast arm lives in applySelfResurrectEffect.
+func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	health := uint32(1)
+	if eff.BasePoints >= 0 {
+		health = uint32(eff.BasePoints + 1) // damage as computed by CalcValue
+	}
+	mana := uint32(0)
+	if eff.MiscValue > 0 {
+		mana = uint32(eff.MiscValue)
+	}
+	ignoreReclaimTimer := spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 || targetGUID == s.playerGUID {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		if targetSess.player.Health > 0 || targetSess.resurrection != nil {
+			continue
+		}
+		// EffectResurrectNew (SpellEffects.cpp:246-275) logs the effect,
+		// stores the request at the caster's location, and sends the request
+		// whose reclaim-delay byte is !HasAttribute(IGNORE_RESURRECTION_TIMER).
+		s.sendResurrectLog(spell.ID, targetGUID)
+		targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
+		targetSess.sendResurrectRequest(s.playerGUID, "", false, ignoreReclaimTimer)
+	}
+}
+
 // handleEffectSelfResurrect mirrors Spell::EffectSelfResurrect (SpellEffects.cpp:4429-4462),
 // the SPELL_EFFECT_SELF_RESURRECT (94) HANDLE_HIT caster arm: a dead in-world
 // player caster resurrects at once with flat (damage<0) or percent health and
