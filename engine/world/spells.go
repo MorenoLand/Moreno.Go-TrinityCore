@@ -8099,13 +8099,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// casts (items.go calls finishSpellCast with castItemGUID != 0) and
 	// under .cheat power.
 	takePower := castItemGUID == 0 && s.player.ActiveCheats&cheatPower == 0
-	// didHit mirrors Spell::TakePower (Spell.cpp:4796-4810): false only
-	// when the explicit unit target missed. It feeds the rune spend and
-	// the rage/energy miss-cost refund below; chain jumps appended to
-	// hitTargets above must not flip it.
+	// didHit mirrors Spell::TakePower (Spell.cpp:4796-4810): it is false only
+	// when the EXPLICIT unit target missed. C++ reads
+	// m_targets.GetUnitTargetGUID() — the wire target, post grounding-totem
+	// redirect (m_targets.SetUnitTarget) — never the first hit target: the
+	// reflect arm re-points targetGUID at the caster (7822) and the
+	// aura-scale leg re-points it at hitTargets[0] (8044), while area
+	// spells with no explicit target keep hit=true even when area targets
+	// miss. target.UnitGUID carries the same post-redirect value here. It
+	// feeds the rune spend and the rage/energy miss-cost refund below;
+	// chain jumps appended to hitTargets above must not flip it.
+	explicitMissTarget := uint64(0)
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
+		explicitMissTarget = target.UnitGUID
+	}
 	didHit := true
 	for _, miss := range missStatus {
-		if miss.TargetGUID == targetGUID {
+		if explicitMissTarget != 0 && miss.TargetGUID == explicitMissTarget {
 			didHit = false
 			break
 		}
