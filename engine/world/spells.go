@@ -189,6 +189,12 @@ const (
 	spellFailedNoPet                     uint8  = 84
 	spellFailedWrongPetFood              uint8  = 135
 	spellFailedNotReady                  uint8  = 67    // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
+	spellFailedOnlyStealthed             uint8  = 95    // SPELL_FAILED_ONLY_STEALTHED (SharedDefines.h:1077)
+	spellFailedNotBehind                 uint8  = 57    // SPELL_FAILED_NOT_BEHIND (SharedDefines.h:1039)
+	spellFailedNoPower                   uint8  = 85    // SPELL_FAILED_NO_POWER (SharedDefines.h:1067)
+	spellFailedOutOfRange                uint8  = 97    // SPELL_FAILED_OUT_OF_RANGE (SharedDefines.h:1079)
+	spellFailedSpellInProgress           uint8  = 105   // SPELL_FAILED_SPELL_IN_PROGRESS (SharedDefines.h:1087)
+	spellFailedUnknown                   uint8  = 187   // SPELL_FAILED_UNKNOWN (SharedDefines.h:1169)
 	spellFailedNoChargesRemain           uint8  = 76    // SPELL_FAILED_NO_CHARGES_REMAIN (SharedDefines.h:1058)
 	spellFailedDontReport                uint8  = 27    // SPELL_FAILED_DONT_REPORT (SharedDefines.h:1009)
 	spellFailedAlreadyAtFullHealth       uint8  = 2     // SPELL_FAILED_ALREADY_AT_FULL_HEALTH (SharedDefines.h:984)
@@ -1905,7 +1911,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// spell is excluded"), so queuing an on-next-swing spell while a cast
 	// bar runs does not fail SPELL_IN_PROGRESS.
 	if s.genericCastInProgress() && !s.autoShotNonBlockingCast(spellID) && !isNextMeleeSwingSpell(spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellInProgress), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
 		return true
 	}
@@ -1929,6 +1935,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		if shapeResult := s.checkShapeshiftCast(spell); shapeResult != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, shapeResult), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "shapeshift requirement not met", "result", shapeResult)
+			return true
+		}
+		// ONLY_STEALTHED arm (Spell::CheckCast, Spell.cpp:5271-5272): a spell
+		// with SPELL_ATTR0_ONLY_STEALTHED requires a live
+		// SPELL_AURA_MOD_STEALTH aura (Unit::HasStealthAura, Unit.h:1070),
+		// failing SPELL_FAILED_ONLY_STEALTHED. Runs inside the
+		// MOD_IGNORE_SHAPESHIFT exemption gate, after CheckShapeshift,
+		// matching C++ relative order.
+		if spell.Attributes&spellAttr0OnlyStealthed != 0 && !s.hasAuraType(spellAuraStealth) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyStealthed), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "requires stealth")
 			return true
 		}
 	}
@@ -2048,7 +2065,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// sets the flag in applyAuraToTarget and clears it in removeAura when
 	// no other 263 aura remains, so this gate is live.
 	if s.player.PlayerFlags&playerFlagAllowOnlyAbility != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellInProgress), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "allow-only-ability flag set")
 		return true
 	}
@@ -2577,7 +2594,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// SharedDefines.h:1169; C++ sends it anyway).
 	if pType != 0xFFFFFFFE && pType >= 7 {
 		s.debug("spells", "Spell::CheckPower: Unknown power type", "powerType", pType, "spell", spellID)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 187), true) // SPELL_FAILED_UNKNOWN = 187
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnknown), true)
 		return true
 	}
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
@@ -2585,12 +2602,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// in store.go but never read in world/ — the earlier "wired" claim was
 	// an overclaim. Genuine logic now: Spell::CheckRuneCost parity.
 	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "runes on cooldown")
 		return true
 	}
 	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
 		return true
 	}
@@ -2945,7 +2962,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					// violations with SPELL_FAILED_OUT_OF_RANGE — the engine
 					// never emits SPELL_FAILED_TOO_CLOSE (the sole C++ emitter
 					// is the Death Grip script leg in spell_dk.cpp:2760).
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
 					return true
 				}
 				// Spell::GetMinMaxRange (Spell.cpp:6584-6630) has no Auto Shot
@@ -2959,7 +2976,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
 				maxRange += float64(pReach) + float64(tgt.CombatReach)
 				if dist > maxRange {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
 					return true
 				}
 				if s.player.AmmoID == 0 {
@@ -2975,7 +2992,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
 				maxRange += float64(pReach) + float64(tgt.CombatReach)
 				if dist > maxRange {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
 					return true
 				}
 			} else if rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex); ok {
@@ -2984,7 +3001,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				// here exactly as at completion.
 				minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
 				if maxRange > 0 && dist > maxRange {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "out of range", "dist", dist, "max", maxRange)
 					return true
 				}
@@ -2994,7 +3011,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					// TOO_CLOSE — this C++ tree's engine never emits
 					// SPELL_FAILED_TOO_CLOSE (sole emitter is the Death Grip
 					// script leg, spell_dk.cpp:2760).
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
 					return true
 				}
@@ -3016,7 +3033,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			// Returns SPELL_FAILED_NOT_BEHIND = 57 ("You must be behind your target.").
 			if customAttr&SpellCustomAttrReqCasterBehindTarget != 0 {
 				if hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 57), true) // SPELL_FAILED_NOT_BEHIND = 57
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotBehind), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not behind target")
 					return true
 				}
@@ -7739,14 +7756,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		return
 	}
 	if pType < 7 && cost > 0 && s.player.Powers[pType] < cost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
-		s.sendInterrupted(castID, spellID, 0)                                                            // Spell::_cast cleanupSpell (Spell.cpp:3330-3334): CheckCast failure at completion sends SendCastResult + SendInterrupted(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
+		s.sendInterrupted(castID, spellID, 0) // Spell::_cast cleanupSpell (Spell.cpp:3330-3334): CheckCast failure at completion sends SendCastResult + SendInterrupted(0)
 		return
 	}
 	// Spell::_cast re-runs CheckCast at completion; runes spent mid-cast
 	// must fail the cast too (Spell::CheckPower rune check, Spell.cpp:6665).
 	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
 		s.sendInterrupted(castID, spellID, 0)
 		return
 	}
