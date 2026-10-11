@@ -1523,51 +1523,100 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		switch p.Class {
 		case 1: // Warrior: rage decays out of combat
 			if !inCombat && p.Powers[1] > 0 {
-				if p.Powers[1] > 20 {
-					p.Powers[1] -= 20
-				} else {
-					p.Powers[1] = 0
+				// Player::Regenerate POWER_RAGE (Player.cpp:2147-2155):
+				// -20 per 2s tick, scaled by the 110 misc-rage multiplier
+				// plus the 85 misc-rage flat arm * tickMs/5000
+				// (Player.cpp:2163-2168).
+				flat, mult := sess.auraPowerRegenTerms(1)
+				decay := int64(float64(-20)*float64(mult) + float64(flat)*0.4)
+				maxRage := sess.effectiveMaxPower(1)
+				if nv := int64(p.Powers[1]) + decay; decay != 0 && nv != int64(p.Powers[1]) {
+					if nv < 0 {
+						nv = 0
+					}
+					if nv > int64(maxRage) {
+						nv = int64(maxRage)
+					}
+					p.Powers[1] = uint32(nv)
+					fields[unitFieldPower1+1] = p.Powers[1]
+					changed = true
 				}
-				fields[unitFieldPower1+1] = p.Powers[1]
-				changed = true
 			}
 		case 4: // Rogue: energy regenerates 20 per 2s tick
-			if p.Powers[3] < 100 {
-				if p.Powers[3]+20 >= 100 {
-					p.Powers[3] = 100
-				} else {
-					p.Powers[3] += 20
+			maxEnergy := sess.effectiveMaxPower(3)
+			if p.Powers[3] < maxEnergy {
+				// Player::Regenerate POWER_ENERGY (Player.cpp:2157-2159):
+				// 0.01 * 2000ms = 20 per 2s tick, scaled by the 110
+				// misc-energy multiplier plus the 85 misc-energy flat arm
+				// * tickMs/5000 (Player.cpp:2163-2168). The C++ fraction
+				// carry (m_powerFraction) has no Go model — truncated.
+				flat, mult := sess.auraPowerRegenTerms(3)
+				gain := int64(float64(20)*float64(mult) + float64(flat)*0.4)
+				if nv := int64(p.Powers[3]) + gain; gain != 0 && nv != int64(p.Powers[3]) {
+					if nv < 0 {
+						nv = 0
+					}
+					if nv > int64(maxEnergy) {
+						nv = int64(maxEnergy)
+					}
+					p.Powers[3] = uint32(nv)
+					fields[unitFieldPower1+3] = p.Powers[3]
+					changed = true
 				}
-				fields[unitFieldPower1+3] = p.Powers[3]
-				changed = true
 			}
 		case 6: // Death Knight: runic power decays out of combat
 			if !inCombat && p.Powers[6] > 0 {
-				if p.Powers[6] > 30 {
-					p.Powers[6] -= 30
-				} else {
-					p.Powers[6] = 0
+				// Player::Regenerate POWER_RUNIC_POWER
+				// (Player.cpp:2160-2167): -30 per 2s tick, scaled by the
+				// 110 misc-runic multiplier plus the 85 misc-runic flat arm
+				// * tickMs/5000 (Player.cpp:2163-2168).
+				flat, mult := sess.auraPowerRegenTerms(6)
+				maxRunic := sess.effectiveMaxPower(6)
+				decay := int64(float64(-30)*float64(mult) + float64(flat)*0.4)
+				if nv := int64(p.Powers[6]) + decay; decay != 0 && nv != int64(p.Powers[6]) {
+					if nv < 0 {
+						nv = 0
+					}
+					if nv > int64(maxRunic) {
+						nv = int64(maxRunic)
+					}
+					p.Powers[6] = uint32(nv)
+					fields[unitFieldPower1+6] = p.Powers[6]
+					changed = true
 				}
-				fields[unitFieldPower1+6] = p.Powers[6]
-				changed = true
 			}
 		default: // Mana classes (Paladin, Hunter, Priest, Shaman, Mage, Warlock, Druid)
-			if p.Powers[0] < p.MaxPowers[0] {
-				// Outside 5-second rule
+			maxMana := sess.effectiveMaxPower(0)
+			if p.Powers[0] < maxMana {
+				// Player::UpdateManaRegen (StatSystem.cpp:912-937): the
+				// spirit-term regen carries the 110 misc-mana multiplier,
+				// the mp5 term is (85 misc-mana sum + baseManaRegen)/5 plus
+				// the 219 from-stat arms, and the 134 interrupt percentage
+				// (capped at 100) feeds the under-5s-rule regen arm.
+				spiritMult, mp5PerSec, interruptPct := sess.auraManaRegenTerms()
+				spiritPerSec := float64(s.manaRegenTickGain(uint32(p.Class), p.Level, p.Stats[3], p.Stats[4])) / 2.0
+				var gain uint32
 				if now.Sub(sess.lastCastTime) >= 5*time.Second {
-					gain := s.manaRegenTickGain(uint32(p.Class), p.Level, p.Stats[3], p.Stats[4])
-					// StatSystem.cpp:921: the mp5 term is
-					// (auraMods + m_baseManaRegen)/5 per 2s tick.
+					// Outside 5-second rule (Player.cpp:2130-2144): the 2s
+					// tick gain is (spiritTerm + mp5) * 2.
+					gain = uint32(spiritPerSec*float64(spiritMult)*2.0) + uint32(float64(mp5PerSec)*2.0)
 					gain += uint32(float64(p.ItemManaRegenBonus) / 5.0)
-					if gain > 0 {
-						if p.Powers[0]+gain >= p.MaxPowers[0] {
-							p.Powers[0] = p.MaxPowers[0]
-						} else {
-							p.Powers[0] += gain
-						}
-						fields[unitFieldPower1] = p.Powers[0]
-						changed = true
+				} else {
+					// Under the 5-second rule C++ regens the interrupted
+					// flat modifier: mp5 + 134%-of-spirit-term, * 2s
+					// (Player.cpp:2134-2138, StatSystem.cpp:933-935).
+					// Without those auras this is 0, matching the old
+					// no-regen behavior.
+					gain = uint32(float64(mp5PerSec)*2.0) + uint32(spiritPerSec*float64(interruptPct)/100.0*2.0)
+				}
+				if gain > 0 {
+					if p.Powers[0]+gain >= maxMana {
+						p.Powers[0] = maxMana
+					} else {
+						p.Powers[0] += gain
 					}
+					fields[unitFieldPower1] = p.Powers[0]
+					changed = true
 				}
 			}
 		}

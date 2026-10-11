@@ -18445,6 +18445,7 @@ func (s *session) removeAura(spellID uint32) {
 	removedHealthAura := (*activeAura)(nil)
 	removedStatAura := (*activeAura)(nil)
 	removedResistanceAura := (*activeAura)(nil)
+	removedPowerAura := (*activeAura)(nil)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
@@ -18465,6 +18466,11 @@ func (s *session) removeAura(spellID uint32) {
 			// before Stopped is set, same as the stat leg.
 			if s.auraTouchesResistance(aura) {
 				removedResistanceAura = aura
+			}
+			// Power-aura remove leg (aura_power.go): capture before
+			// Stopped is set, same as the health leg.
+			if s.auraTouchesPower(aura) {
+				removedPowerAura = aura
 			}
 			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
 			wasAttackPowerOfArmor = s.activeAuraHasEffect(aura, spellAuraModAttackPowerOfArmor)
@@ -18720,6 +18726,16 @@ func (s *session) removeAura(spellID uint32) {
 	// the C++ remove-leg delta (GetAmount()-remainingMax, :3239-3246).
 	if removedResistanceAura != nil && s.player != nil {
 		_ = s.calculatePlayerStats(context.Background(), s.player)
+	}
+	// AuraEffect::HandleAuraModIncreaseEnergy /
+	// HandleAuraModIncreaseEnergyPercent remove leg
+	// (SpellAuraEffects.cpp:3686-3726): the aura record is already erased
+	// above (Unit::_UnapplyAura erases before the handlers, Unit.cpp:3548),
+	// so the recompute sees the remaining auras — the mod drops cleanly,
+	// and the 233 arm shifts current power by the max delta against the
+	// pre-remove max. The 35 arm has no current-power leg in C++.
+	if removedPowerAura != nil && s.player != nil {
+		s.removePowerAuraArms(removedPowerAura)
 	}
 	s.sendPlayerUpdate()
 	if wasVisibilityAura && s.server != nil {
@@ -20927,6 +20943,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// (Player::UpdateResistances, StatSystem.cpp:245); resistance
 			// has no current-value arm to run afterward.
 			_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
+		case spellAuraModIncreaseEnergy, spellAuraModIncreaseEnergyPercent:
+			// AuraEffect::HandleAuraModIncreaseEnergy /
+			// HandleAuraModIncreaseEnergyPercent apply leg
+			// (SpellAuraEffects.cpp:3686-3726): the 35 flat arm has no
+			// current-power leg in C++; the 233 arm shifts current power
+			// by the max delta (ModifyPower(change), :3718-3721).
+			targetSess.applyPowerAuraArms(spell.ID, eff.Aura, eff.MiscValue, int32(amount))
 		}
 
 		stackCount := uint8(1)

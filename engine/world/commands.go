@@ -124,7 +124,10 @@ func (s *session) sendPlayerUpdate() {
 	}
 	for i, p := range s.player.Powers {
 		fields[unitFieldPower1+i] = p
-		fields[unitFieldMaxPower1+i] = s.player.MaxPowers[i]
+		// AuraEffect::HandleAuraModIncreaseEnergy / ...Percent
+		// (SpellAuraEffects.cpp:3686-3726): max power is aura-modulated
+		// live, like max health (aura_health.go).
+		fields[unitFieldMaxPower1+i] = s.effectiveMaxPower(i)
 	}
 	for i := 0; i < 25; i++ {
 		fields[playerFieldCombatRating1+i] = s.player.CombatRatings[i]
