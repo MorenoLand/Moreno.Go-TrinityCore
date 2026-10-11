@@ -66,6 +66,7 @@ const (
 	spellAttr7DispelCharges                uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7CanRestoreSecondaryPower     uint32 = 0x00010000 // SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER (SharedDefines.h:687) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7IsCheatSpell                 uint32 = 0x00000008 // SPELL_ATTR7_IS_CHEAT_SPELL (SharedDefines.h:674) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
+	spellAttr7IgnoreDurationMods           uint32 = 0x00000002 // SPELL_ATTR7_IGNORE_DURATION_MODS (SharedDefines.h:672) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7SummonPlayerTotem            uint32 = 0x00000020 // SPELL_ATTR7_SUMMON_PLAYER_TOTEM (SharedDefines.h:676) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7InterruptOnlyNonplayer       uint32 = 0x00000800 // SPELL_ATTR7_INTERRUPT_ONLY_NONPLAYER (SharedDefines.h:682) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr6AssistIgnoreImmuneFlag       uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
@@ -569,6 +570,9 @@ const (
 	spellAuraModDamageFromCaster                      = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
 	spellAuraDummy                                    = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
 	spellAuraModDurationByDispelNotStack              = 246  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK (SpellAuraDefines.h:326)
+	spellAuraModDurationByDispel                      = 245  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL (SpellAuraDefines.h:325)
+	spellAuraModArmorPenetrationPct                   = 280  // SPELL_AURA_MOD_ARMOR_PENETRATION_PCT (SpellAuraDefines.h:360)
+	spellAuraPeriodicHaste                            = 316  // SPELL_AURA_PERIODIC_HASTE (SpellAuraDefines.h:396)
 	spellAuraCloneCaster                              = 247  // SPELL_AURA_CLONE_CASTER (SpellAuraDefines.h:327)
 	spellIconCheatDeath                               = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
 	spellIconImprovedInsectSwarm                      = 1771 // Improved Insect Swarm talent dummy aura (SpellEffects.cpp:521)
@@ -13229,7 +13233,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				armor = 0
 			}
 			if armor > 0 {
-				damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct())
+				damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
 			}
 		}
 
@@ -19831,6 +19835,35 @@ func (s *session) applyAuraScaling(ctx context.Context, spellID uint32, spell wo
 // the downranked-aura leg (Spell::PreprocessSpellHit scaleAura,
 // Spell.cpp:2780-2795, via hitInfo.AuraSpellInfo) evaluates these from the
 // rank-appropriate row instead of the cast spell's.
+// hasPeriodicHasteAura mirrors Unit::HasAuraTypeWithAffectMask for
+// SPELL_AURA_PERIODIC_HASTE (Unit.cpp:4689-4696): true when the caster
+// carries a live 316 aura effect whose spell affects the given spell via
+// the spell-family affect mask (AuraEffect::IsAffectedOnSpell,
+// SpellAuraEffects.cpp:848).
+func (s *session) hasPeriodicHasteAura(spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		granting, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range granting.Effects {
+			if effect.Aura != spellAuraPeriodicHaste || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellAffectedBySpellFamilyMask(granting.SpellFamilyName, effect.SpellClassMask, spell) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (durationMs, periodMs, amount uint32) {
 	if spell.DurationIndex > 0 && s.server != nil && s.server.Data != nil && s.player != nil {
 		if val, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok && val > 0 {
@@ -19853,11 +19886,11 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 	// applied aura's duration — ModSpellDurationTime for auras of channeled
 	// spells, and the UNIT_MOD_CAST_SPEED multiply for auras of spells
 	// carrying SPELL_ATTR5_HASTE_AFFECT_DURATION or affected by a
-	// SPELL_AURA_PERIODIC_HASTE (316) aura on the caster. Go has no 316
-	// aura-type model, so that arm is vacuous here; the compression math
-	// (divide by 1+hastePct/100) is the same ModSpellDurationTime fold
-	// startChannel uses.
-	if durationMs > 0 && (isChanneledSpell(spell) || spell.AttributesEx5&spellAttr5HasteAffectDuration != 0) {
+	// SPELL_AURA_PERIODIC_HASTE (316) aura on the caster
+	// (hasPeriodicHasteAura). The compression math (divide by
+	// 1+hastePct/100) is the same ModSpellDurationTime fold startChannel
+	// uses.
+	if durationMs > 0 && (isChanneledSpell(spell) || spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell)) {
 		if hastePct := s.getSpellHastePct(); hastePct > 0 {
 			durationMs = uint32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
 		}
@@ -19876,12 +19909,13 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 	// ModSpellDurationTime (Object.cpp:2475-2495: SPELLMOD_CASTING_TIME then
 	// the UNIT_MOD_CAST_SPEED multiply; channeled without
 	// ATTR5_HASTE_AFFECT_DURATION early-returns with no compression), and
-	// non-channeled auras carrying ATTR5_HASTE_AFFECT_DURATION (or affected
-	// by a SPELL_AURA_PERIODIC_HASTE/316 aura, which has no Go model — the
-	// arm is vacuous here) multiply by UNIT_MOD_CAST_SPEED, i.e. divide by
-	// 1+hastePct/100 (ApplyPercentModFloatVar, Unit.cpp:10842-10845). The
-	// int32() truncation is the C++ cast; the floor of 1ms keeps a
-	// pathological mod from producing a zero-period timer.
+	// non-channeled auras carrying ATTR5_HASTE_AFFECT_DURATION or affected
+	// by a SPELL_AURA_PERIODIC_HASTE (316) aura on the caster
+	// (HasAuraTypeWithAffectMask, Unit.cpp:4689) multiply by
+	// UNIT_MOD_CAST_SPEED, i.e. divide by 1+hastePct/100
+	// (ApplyPercentModFloatVar, Unit.cpp:10842-10845). The int32()
+	// truncation is the C++ cast; the floor of 1ms keeps a pathological mod
+	// from producing a zero-period timer.
 	if periodMs > 0 {
 		periodMs = uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
 		if isChanneledSpell(spell) {
@@ -19893,7 +19927,7 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 					periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
 				}
 			}
-		} else if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 {
+		} else if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell) {
 			if hastePct := s.getSpellHastePct(); hastePct > 0 {
 				periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
 			}
@@ -21012,6 +21046,24 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 			targetSess.incrDiminishing(drGroup)
 			targetSess.applyDiminishingAura(drGroup, true)
+			// WorldObject::ModSpellDuration (Object.cpp:2354-2400):
+			// dispel-type duration mods — the SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL
+			// (245) always-sum and the SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK
+			// (246) strongest-negative, both folded by the spell's dispel type;
+			// the more-negative of the two is applied as a percent to the duration
+			// (only negative mods exist). Spells with
+			// ATTR7_IGNORE_DURATION_MODS skip it. The mechanic-duration arms
+			// (232/234) have no Go model, so only the dispel-type legs run here.
+			if spell.AttributesEx7&spellAttr7IgnoreDurationMods == 0 {
+				dispel := int32(spell.DispelType)
+				durationMod := min(
+					targetSess.totalAuraModifierByMiscValue(spellAuraModDurationByDispel, dispel),
+					targetSess.maxNegativeAuraModifierByMiscValue(spellAuraModDurationByDispelNotStack, dispel),
+				)
+				if durationMod != 0 {
+					durationMs = uint32(max(int64(durationMs)+int64(durationMs)*int64(durationMod)/100, 0))
+				}
+			}
 		}
 
 		targetSess.castMu.Lock()

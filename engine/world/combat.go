@@ -465,7 +465,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		armor = 0
 	}
 	if armor > 0 {
-		damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct())
+		damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct(ctx, attType))
 	}
 	if damage < 1 {
 		damage = 1
@@ -1183,7 +1183,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		armor = 0
 	}
 	if schoolMask == 1 && armor > 0 && damage > 0 {
-		damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct())
+		damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct(ctx, protocol.RangedAttack))
 	}
 
 	absorbed := uint32(0)

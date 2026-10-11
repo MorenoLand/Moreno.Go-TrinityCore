@@ -421,6 +421,22 @@ func (s *session) maxPositiveAuraModifierByMiscMask(auraType uint32, miscMask in
 	return maxValue
 }
 
+// maxNegativeAuraModifierByMiscValue mirrors
+// Unit::GetMaxNegativeAuraModifierByMiscValue (Unit.cpp:4987-4995): the
+// most-negative amount of the given aura type whose effect MiscValue equals
+// miscValue (0 when no negative amount exists).
+func (s *session) maxNegativeAuraModifierByMiscValue(auraType uint32, miscValue int32) int32 {
+	minValue := int32(0)
+	for _, amount := range s.auraTypeModifiersFiltered(auraType, func(mv int32) bool {
+		return mv == miscValue
+	}) {
+		if amount < minValue {
+			minValue = amount
+		}
+	}
+	return minValue
+}
+
 // totalAuraModifierByMiscValue mirrors Unit::GetTotalAuraModifierByMiscValue
 // (Unit.cpp:4977-4985): the sum of amounts of the given aura type whose effect
 // MiscValue equals miscValue.

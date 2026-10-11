@@ -1,8 +1,11 @@
 package world
 
 import (
+	"context"
 	"math"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // Combat rating indices for melee/ranged matching TrinityCore SharedDefines.h:1760-1790
@@ -354,26 +357,37 @@ func (s *session) getExpertiseDodgeParryReductionPct() float64 {
 	return s.getExpertise() * 0.25
 }
 
-// getArmorPenPct returns the armor penetration percentage (0.0 to 100.0%) from gear rating.
-// Mirrors TrinityCore Player::GetRatingBonusValue(CR_ARMOR_PENETRATION) (Player.cpp:8800).
-func (s *session) getArmorPenPct() float64 {
+// getArmorPenPct returns the armor penetration percentage (0.0 to 100.0%):
+// the gear-rating bonus plus the SPELL_AURA_MOD_ARMOR_PENETRATION_PCT (280)
+// aura fold. Mirrors Unit::CalcArmorReducedDamage (Unit.cpp:1655-1675):
+// arpPct = GetRatingBonusValue(CR_ARMOR_PENETRATION) +
+// GetTotalAuraModifier(280, aura's spell fits the weapon used for the
+// attack — IsItemFitToSpellRequirements), clamped to [0, 100].
+func (s *session) getArmorPenPct(ctx context.Context, attType protocol.WeaponAttackType) float64 {
 	if s == nil || s.player == nil {
 		return 0
 	}
-	rating := float64(s.player.CombatRatings[CombatRatingArmorPenetration])
-	if rating <= 0 {
-		return 0
+	var ratingPct float64
+	if rating := float64(s.player.CombatRatings[CombatRatingArmorPenetration]); rating > 0 {
+		lvl := float64(s.player.Level)
+		if lvl <= 0 {
+			lvl = 80
+		}
+		// At level 80: 15.3953 rating = 1.0% ArP (from gtCombatRatings.dbc in 3.3.5)
+		ratingPerPct := 15.3953 * (lvl / 80.0)
+		if ratingPerPct < 2.0 {
+			ratingPerPct = 2.0
+		}
+		ratingPct = rating / ratingPerPct
 	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
-		lvl = 80
+	var auraPct float64
+	for _, amt := range s.damageDoneAuraAmounts(ctx, spellAuraModArmorPenetrationPct, 0, attType) {
+		auraPct += float64(amt)
 	}
-	// At level 80: 15.3953 rating = 1.0% ArP (from gtCombatRatings.dbc in 3.3.5)
-	ratingPerPct := 15.3953 * (lvl / 80.0)
-	if ratingPerPct < 2.0 {
-		ratingPerPct = 2.0
+	arpPct := ratingPct + auraPct
+	if arpPct < 0 {
+		arpPct = 0
 	}
-	arpPct := rating / ratingPerPct
 	if arpPct > 100.0 {
 		arpPct = 100.0
 	}
