@@ -938,6 +938,44 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if targetGUID == 0 {
 		targetGUID = motion.GUID
 	}
+	// Spell::CheckCast gates (Spell.cpp:5247-5496) for a pet caster: the
+	// pet is a creatureMotion, so the creature-caster twins apply unchanged
+	// (conditions.go, boss_ai.go). C++ order: the shapeshift leg (5247),
+	// the SPELL_AURA_BLOCK_SPELL_FAMILY leg (5277-5278) and the caster-state
+	// block (5298-5314) precede the conditions block (5337-5348), which
+	// precedes CheckRange (5496) and the unit-target line-of-sight arm
+	// (5391-5401). All of them precede the power drain (TakePower,
+	// Spell.cpp:3449 runs after CheckCast), so a failing gate fizzles the
+	// cast before takePetSpellPower. The !triggered gate mirrors the
+	// creature path (TRIGGERED_IGNORE_SHAPESHIFT /
+	// TRIGGERED_IGNORE_CASTER_AURASTATE); the conditions and LOS arms run
+	// for triggered casts too, like C++ (no triggered exemption).
+	if !triggered {
+		if !s.server.checkCreatureSpellShapeshift(motion, spell) {
+			return true
+		}
+		if !s.server.checkCreatureSpellFamilyBlocked(motion, spell) {
+			return true
+		}
+		if !s.server.checkCreatureSpellCasterState(motion, spell) {
+			return true
+		}
+	}
+	if !s.server.checkCreatureSpellCastConditions(ctx, motion, spell.ID, targetGUID) {
+		return true
+	}
+	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID) {
+		return true
+	}
+	if targetGUID != 0 && targetGUID != motion.GUID &&
+		spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+		spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
+		if x, y, z, _, _, found := s.server.aiThreatUnitPos(motion, targetGUID, nil, true); found {
+			if !s.server.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, x, y, z) {
+				return true
+			}
+		}
+	}
 	remainingPower, hasRemainingPower, ok := s.takePetSpellPower(motion, spell, castCount, triggered)
 	if !ok {
 		return true
