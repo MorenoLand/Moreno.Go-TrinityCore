@@ -19034,6 +19034,56 @@ func (s *Server) clearCreatureAuras(key creatureAuraKey) {
 	}
 }
 
+// clearCreatureAurasOnDeath mirrors Unit::RemoveAllAurasOnDeath (Unit.cpp)
+// for creature victims: death-persistent auras
+// (SPELL_ATTR3_DEATH_PERSISTENT, SpellInfo.cpp:1169) survive the strip,
+// everything else stops like clearCreatureAuras. Creature auras carry no
+// passive instances, so the passive exemption is vacuous.
+func (s *Server) clearCreatureAurasOnDeath(key creatureAuraKey) {
+	if s == nil || key.GUID == 0 {
+		return
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	if s.activeCreatureAuras != nil {
+		if auras, ok := s.activeCreatureAuras[key]; ok {
+			for id, aura := range auras {
+				if aura == nil {
+					delete(auras, id)
+					continue
+				}
+				if spellDeathPersistent(s.Data, id) {
+					continue
+				}
+				aura.Stopped = true
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				if aura.TickTimer != nil {
+					aura.TickTimer.Stop()
+				}
+				stopAuraUpkeepTimer(aura)
+				delete(auras, id)
+			}
+			if len(auras) == 0 {
+				delete(s.activeCreatureAuras, key)
+			}
+		}
+	}
+	if s.creatureAuras != nil {
+		if present, ok := s.creatureAuras[key]; ok {
+			for id := range present {
+				if _, still := s.activeCreatureAuras[key][id]; !still {
+					delete(present, id)
+				}
+			}
+			if len(present) == 0 {
+				delete(s.creatureAuras, key)
+			}
+		}
+	}
+}
+
 func (s *session) clearActiveAuras() {
 	if s == nil {
 		return
@@ -19058,6 +19108,62 @@ func (s *session) clearActiveAuras() {
 			}
 		}
 		s.activeAuras = make(map[uint32]*activeAura)
+	}
+}
+
+// spellDeathPersistent mirrors SpellInfo::IsDeathPersistent
+// (SpellInfo.cpp:1169): SPELL_ATTR3_DEATH_PERSISTENT auras survive
+// Unit::RemoveAllAurasOnDeath (Unit.cpp). A missing DBC row degrades to
+// non-persistent, matching the strip-everything behavior elsewhere.
+func spellDeathPersistent(data *wotlk.Store, spellID uint32) bool {
+	if data == nil {
+		return false
+	}
+	if spell, found, _ := data.Spell(spellID); found {
+		return spell.AttributesEx3&spellAttr3DeathPersistent != 0
+	}
+	return false
+}
+
+// clearDeathAuras mirrors the Unit::RemoveAllAurasOnDeath strip
+// (Unit.cpp): death-persistent auras are kept, everything else is stopped
+// exactly like clearActiveAuras. Go holds no passive aura instances, so the
+// passive exemption is vacuous. Death call sites use this instead of
+// clearActiveAuras; logout/GM strips keep the full clear.
+func (s *session) clearDeathAuras() {
+	if s == nil {
+		return
+	}
+	var data *wotlk.Store
+	if s.server != nil {
+		data = s.server.Data
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	if s.activeAuras == nil {
+		return
+	}
+	for id, aura := range s.activeAuras {
+		if aura == nil {
+			delete(s.activeAuras, id)
+			continue
+		}
+		if spellDeathPersistent(data, id) {
+			continue
+		}
+		aura.Stopped = true
+		if aura.Timer != nil {
+			aura.Timer.Stop()
+		}
+		if aura.TickTimer != nil {
+			aura.TickTimer.Stop()
+		}
+		stopAuraUpkeepTimer(aura)
+		if aura.DRGroup != DiminishingNone {
+			s.applyDiminishingAura(aura.DRGroup, false)
+			aura.DRGroup = DiminishingNone
+		}
+		delete(s.activeAuras, id)
 	}
 }
 
@@ -24300,7 +24406,8 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 				}
 			}
 		}
-		ts.clearActiveAuras()
+		// killPlayer already ran the RemoveAllAurasOnDeath strip with the
+		// death-persistent exemption (Unit.cpp); nothing left to clear.
 		return dmg
 	} else if !godNegated {
 		ts.player.Health -= dmg

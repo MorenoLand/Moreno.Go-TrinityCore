@@ -553,10 +553,20 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		// learned-spell list. PLAYER_SELF_RES_SPELL needs no save/restore:
 		// clearActiveAuras never touches the player field. The 27827 apply leg
 		// (stand state + SetHealth(1)) lives in applyAuraWithDuration.
-		s.clearActiveAuras()
+		// The death-persistent exemption rides clearDeathAuras
+		// (Unit::RemoveAllAurasOnDeath, Unit.cpp).
+		s.clearDeathAuras()
 		s.applyAuraWithDuration(spiritOfRedemptionSpellID, spiritOfRedemptionDurationMs)
 	} else {
-		s.clearActiveAuras()
+		s.clearDeathAuras()
+		// Unit::setDeathState(JUST_DIED) (Unit.cpp): SetHealth(0) then
+		// SetPower(GetPowerType(), 0) — the current power type is zeroed
+		// with health; health is already 0 (killPlayer early-returns above
+		// 0). Deferred with the rest of the cascade while the spirit form
+		// holds (Unit.cpp:11298-11301).
+		if pt := playerPowerType(s.player); int(pt) < len(s.player.Powers) {
+			s.player.Powers[pt] = 0
+		}
 	}
 	if !spiritOfRedemption {
 		s.clearDiminishings()
@@ -667,7 +677,14 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	s.clearDiminishings()
 	s.stopMirrorTimers()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
-	s.clearActiveAuras()
+	// The deferred JUST_DIED cascade (Unit.cpp:11298-11301): the death aura
+	// strip carries the death-persistent exemption
+	// (Unit::RemoveAllAurasOnDeath), and the current power type zeroes with
+	// health (Unit::setDeathState, Unit.cpp).
+	s.clearDeathAuras()
+	if pt := playerPowerType(s.player); int(pt) < len(s.player.Powers) {
+		s.player.Powers[pt] = 0
+	}
 	s.sendPlayerUpdate()
 	s.updateCorpseReclaimDelay(s.pvpDeath)
 	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(s.pvpDeath))

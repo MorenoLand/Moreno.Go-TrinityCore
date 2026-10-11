@@ -931,6 +931,23 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// owner's session, so keep the pre-existing minimal
 				// registration (health zero + lootable flag broadcast above)
 				// and the event-3 double dispatch.
+				// Unit::setDeathState(JUST_DIED) -> RemoveAllAurasOnDeath
+				// (Unit.cpp): the death aura strip runs even on this minimal
+				// path — ahead of the KilledUnit/JustDied hooks, matching
+				// the C++ order (strip at Unit.cpp:11320, hooks at
+				// 11324-11387). The 86 channel-death-item leg
+				// (SpellAuraEffects.cpp:4690) rides ahead of the strip, and
+				// death-persistent auras survive it, mirroring
+				// onCreatureKilled's strip.
+				deathKey := creatureAuraKeyForMotion(victim)
+				s.auraMu.Lock()
+				var deathAuras []*activeAura
+				for _, aura := range s.activeCreatureAuras[deathKey] {
+					deathAuras = append(deathAuras, aura)
+				}
+				s.auraMu.Unlock()
+				s.grantChannelDeathItems(ctx, deathAuras, victim.Level, true, victim.TapPlayerGUID, victim.TapGroupID)
+				s.clearCreatureAurasOnDeath(deathKey)
 				// ThreatManager::RemoveMeFromThreatLists (ThreatManager.cpp:690-697):
 				// this path skips onCreatureKilled, so the death-side victim
 				// drop must run here — otherwise the dead creature stays a

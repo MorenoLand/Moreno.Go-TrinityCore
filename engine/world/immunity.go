@@ -15,6 +15,7 @@ const (
 	spellAuraModMaxAffectedTargets     uint32 = 277        // SPELL_AURA_MOD_MAX_AFFECTED_TARGETS (SpellAuraDefines.h:357)
 	spellAuraModIgnoreShapeshift       uint32 = 275        // SPELL_AURA_MOD_IGNORE_SHAPESHIFT (SpellAuraDefines.h:355)
 	spellAttr3IgnoreHitResult          uint32 = 0x00040000 // SPELL_ATTR3_IGNORE_HIT_RESULT (SharedDefines.h:541) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr3DeathPersistent          uint32 = 0x00100000 // SPELL_ATTR3_DEATH_PERSISTENT (SharedDefines.h:543) — auras with this attribute survive RemoveAllAurasOnDeath (Unit.cpp)
 	spellAttr1UnaffectedBySchoolImmune uint32 = 0x00010000 // SPELL_ATTR1_UNAFFECTED_BY_SCHOOL_IMMUNE (SharedDefines.h:465) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	mechanicBanish                     uint32 = 18         // MECHANIC_BANISH (SharedDefines.h:1375)
 	mechanicInvulnerability            uint32 = 25         // MECHANIC_INVULNERABILITY (SharedDefines.h:1382)

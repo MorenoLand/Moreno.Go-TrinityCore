@@ -841,7 +841,9 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			tapPlayerGUID, tapGroupID = motion.TapPlayerGUID, motion.TapGroupID
 		}
 		s.server.grantChannelDeathItems(ctx, deathAuras, mobLevel, true, tapPlayerGUID, tapGroupID)
-		s.server.clearCreatureAuras(key)
+		// RemoveAllAurasOnDeath (Unit.cpp): death-persistent auras
+		// (SPELL_ATTR3_DEATH_PERSISTENT) survive the strip.
+		s.server.clearCreatureAurasOnDeath(key)
 	}
 
 	// Alterac Valley (Map 30) creature kills (Generals, Captains, Mine bosses)
