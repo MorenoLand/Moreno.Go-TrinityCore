@@ -848,6 +848,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			spellInfo, spellKnown = si, true
 		}
 	}
+	sendGoPacket := true
 	if spellKnown {
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
 		// Spell::CheckCast unit-cooldown arm (Spell.cpp:5207-5211): a
@@ -1001,18 +1002,72 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// cast with no visual, not channeled, and no speed sends nothing.
 		// Non-triggered casts always send (the final || term). Runs after
 		// the drain/cooldown/stamp: C++ runs those before SendSpellGo's
-		// early return.
+		// early return. Only the packet is skipped — the rest of _cast
+		// (including the spell_linked tail below) still runs, so this is a
+		// flag, not an early return.
+		sendGoPacket = true
 		if triggered && spellInfo.SpellVisual[0] == 0 && spellInfo.SpellVisual[1] == 0 && !isChanneledSpell(spellInfo) && spellInfo.Speed <= 0 {
-			return
+			sendGoPacket = false
 		}
 	}
-	goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget)
+	if sendGoPacket {
+		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget)
 
-	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
-		_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, targetSess)
-	} else {
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
+		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, targetSess)
+		} else {
+			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
+		}
+	}
+	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
+	// fire at cast completion for creature casters too — after SendSpellGo
+	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
+	// on spellKnown: C++ never reaches _cast without a SpellInfo.
+	if spellKnown {
+		s.fireCreatureSpellLinkedTriggers(ctx, m, spellID, targetGUID)
+	}
+}
+
+// fireCreatureSpellLinkedTriggers applies the spell_linked_spell tail of
+// Spell::_cast (Spell.cpp:3503-3512) for a creature caster: rows of
+// spell_linked_spell with type 0 fire at cast completion — negative ids
+// RemoveAurasDueToSpell the caster's own auras of -id (the
+// unitCaster->ToUnit() arm covers creatures), positive ids are cast
+// triggered by the caster on the effective unit target
+// (m_targets.GetUnitTarget(), falling back to the caster when null).
+func (s *Server) fireCreatureSpellLinkedTriggers(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64) {
+	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT spell_effect FROM spell_linked_spell WHERE spell_trigger = ? AND type = 0", int32(spellID))
+	if err != nil {
+		if !missingTable(err) {
+			s.debug("spell_linked_spell query failed", "spell", spellID, "err", err)
+		}
+		return
+	}
+	var effects []int32
+	for rows.Next() {
+		var effect int32
+		if err := rows.Scan(&effect); err == nil {
+			effects = append(effects, effect)
+		}
+	}
+	rows.Close()
+	for _, id := range effects {
+		if id < 0 {
+			s.removeCreatureAura(creatureAuraKeyForMotion(m), uint32(-id))
+			continue
+		}
+		if id == 0 {
+			continue
+		}
+		tgt := targetGUID
+		if tgt == 0 {
+			tgt = m.GUID
+		}
+		s.castCreatureSpellInternal(ctx, m, uint32(id), tgt, true)
 	}
 }
 
