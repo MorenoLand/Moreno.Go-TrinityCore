@@ -906,7 +906,7 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 					backlashDamage = 1800
 				}
 				if petCaster != nil {
-					s.executePetSpellDamage(ctx, petCaster, petCaster.GUID, 31117, backlashDamage, 0)
+					s.executePetSpellDamage(ctx, petCaster, petCaster.GUID, 31117, backlashDamage, 0, true)
 				} else {
 					s.executeSpellDamage(ctx, casterGUID, 31117, backlashDamage, 0)
 				}
@@ -934,7 +934,7 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 					backlashDamage = 680
 				}
 				if petCaster != nil {
-					s.executePetSpellDamage(ctx, petCaster, petCaster.GUID, 64085, backlashDamage, 0)
+					s.executePetSpellDamage(ctx, petCaster, petCaster.GUID, 64085, backlashDamage, 0, true)
 				} else {
 					s.executeSpellDamage(ctx, casterGUID, 64085, backlashDamage, 0)
 				}

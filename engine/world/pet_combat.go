@@ -950,7 +950,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if schoolMask == 0 {
 			schoolMask = 1
 		}
-		s.executePetSpellDamage(ctx, motion, targetGUID, spell.ID, damage, schoolMask)
+		s.executePetSpellDamage(ctx, motion, targetGUID, spell.ID, damage, schoolMask, triggered)
 		handledEffect = true
 	}
 	for _, effect := range spell.Effects {
@@ -1256,7 +1256,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	}
 }
 
-func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8) {
+func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool) {
 	if s == nil || s.server == nil || caster == nil || damage == 0 {
 		return
 	}
@@ -1318,7 +1318,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			return
 		}
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
-		// after the spell damage log (sent pre-DealDamage in C++).
+		// after the spell damage log (sent pre-DealDamage in C++); the taken
+		// proc event below still carries the pre-negation amount — C++'s god
+		// skip lives inside DealDamage, after the DamageInfo is built
+		// (Spell.cpp:2539-2549).
+		procEventDamage := damage
 		damage = victim.negateGodModeDamage(damage)
 		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 		if damage > 0 {
@@ -1345,6 +1349,19 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			victim.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((caster.GUID>>24)&0xFFFFFF), 1)
 			// The pet spell's killer resolves to the pet's owner player.
 			victim.killPlayer(ctx, s, true, true)
+			// Unit::Kill (Unit.cpp:11283-11290): the PROC_FLAG_KILL leg fires
+			// for the killing-blow unit regardless of source — the owner-
+			// player leg runs inside killPlayer (death.go); the pet creature
+			// itself is a second killer and its own aura procs fire here,
+			// before the KilledUnit AI dispatches below (C++ order: the proc
+			// calls at 11285-11290 precede the AI hooks at 11359-11361).
+			s.server.fireCreatureMeleeAuraProcs(ctx, caster, target.GUID, procEventInfo{
+				typeMask:       procFlagKill,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      caster.GUID,
+			})
 			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the attacker is the
 			// pet — C++ Unit::Kill fires the pet arm (the owner's pet is the
 			// attacker itself) AND the player-victim branch arm, i.e. two
@@ -1371,6 +1388,27 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				victim.delayCurrentChannel()
 			}
 			victim.sendPlayerUpdate()
+		}
+		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586):
+		// Unit::ProcSkillsAndAuras (Unit.cpp:5355-5366) fires the victim-
+		// side half with the taken pre-fill plus PROC_FLAG_TAKEN_DAMAGE
+		// ORed by the damage arm (Spell.cpp:2545) — the player victim's
+		// own auras evaluate the hit as a taken-proc event
+		// (PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT; Unit.cpp:
+		// 10385-10418). The canEffectTrigger gate (Spell.cpp:2440-2442):
+		// SPELL_ATTR3_CANT_TRIGGER_PROC never reaches the loop (checked
+		// inside procSpellHitTakenAuraTriggers), the m_procDeep recursion
+		// guard is the victim session's procDeep (Unit::CanProc,
+		// Unit.h:1609), and the CanExecuteTriggersOnHit(EffectMask) arm
+		// folds into the non-zero-effect model — the pet path applies
+		// every non-zero effect to every hit target. Runs after the
+		// damage legs on both the lethal and non-lethal arms — C++ fires
+		// the call after DealSpellDamage regardless of the victim's death.
+		// Hit detail: misses (hitInfo 0x01) return before this branch, so
+		// the mask is always NORMAL, optionally with the partial-absorb
+		// bit; pet spell hits carry no crit model (standing delta).
+		if victim.procDeep == 0 {
+			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, false, false, false, absorbed, procEventDamage, triggered, false)
 		}
 		return
 	}

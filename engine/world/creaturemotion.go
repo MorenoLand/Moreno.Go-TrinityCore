@@ -2133,6 +2133,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
 					}
+					// Unit::Kill (Unit.cpp:11283-11290): the PROC_FLAG_KILL leg
+					// fires for the killing-blow unit regardless of damage
+					// source — the melee path bridges it at its own kill site,
+					// and this spell-hit site was missing it; the KILLED/DEATH
+					// legs already ran inside killPlayer (death.go).
+					s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{
+						typeMask:       procFlagKill,
+						spellTypeMask:  procSpellTypeMaskAll,
+						spellPhaseMask: procSpellPhaseNone,
+						hitMask:        procHitNone,
+						actorGUID:      motion.GUID,
+					})
 				} else if !godNegated {
 					target.Sess.player.Health -= damage
 					// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
@@ -2176,6 +2188,26 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if s != nil {
 					s.triggerPetDefensive(target.Map, target.InstanceID, target.GUID, motion.GUID)
 				}
+			}
+			// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586):
+			// Unit::ProcSkillsAndAuras (Unit.cpp:5355-5366) fires the victim-
+			// side half with the taken pre-fill plus PROC_FLAG_TAKEN_DAMAGE
+			// ORed by the damage arm (Spell.cpp:2545) — the player victim's
+			// own auras evaluate the hit as a taken-proc event
+			// (PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT; Unit.cpp:
+			// 10385-10418). The canEffectTrigger gate (Spell.cpp:2440-2442):
+			// SPELL_ATTR3_CANT_TRIGGER_PROC never reaches the loop (checked
+			// inside procSpellHitTakenAuraTriggers), the m_procDeep recursion
+			// guard is the victim session's procDeep (Unit::CanProc,
+			// Unit.h:1609), and the CanExecuteTriggersOnHit(EffectMask) arm
+			// folds into the non-zero-effect model — this path applies every
+			// non-zero effect to every hit target. Runs after the damage
+			// legs and before the stand-up arm, matching C++ order (2581
+			// precedes 2609), and fires even under the god cheat — C++'s
+			// CHEAT_GOD skip lives inside DealDamage, not the proc call.
+			// The creature actor has no auras, so only the taken leg runs.
+			if target.Sess != nil && target.Sess.player != nil && target.Sess.procDeep == 0 {
+				target.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, false, false, false, false, 0, damage, false, false)
 			}
 			// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 			// non-friendly non-positive (or dispel-effect) spell hit stands
