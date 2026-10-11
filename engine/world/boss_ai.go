@@ -797,6 +797,40 @@ func (s *Server) creatureRangeTargetHostile(m *creatureMotion, targetGUID uint64
 	return false
 }
 
+// creatureFriendlyToTarget mirrors WorldObject::IsFriendlyTo
+// (Object.cpp:2847-2850, GetReactionTo >= REP_FRIENDLY) for a creature
+// caster against a unit target, reusing the faction-template model of
+// creatureRangeTargetHostile: player targets resolve through their live
+// session's faction state, creature targets through a synthetic playerPos
+// carrying the target's faction template. Self is always friendly
+// (GetReactionTo's always-friendly-to-self arm, Object.cpp:2711). Inherited
+// degradations: no duel arm (player-vs-player only; C++ also needs a player
+// caster), no charmer/owner term (Go has no creature charm model; pets and
+// totems cast through session paths, never here), no forced-rank/FFA-PvP
+// terms (GetAffectingPlayer is null for these motions, so C++ skips that
+// block too — Object.cpp:2735-2737).
+func (s *Server) creatureFriendlyToTarget(m *creatureMotion, targetGUID uint64) bool {
+	if s == nil || m == nil {
+		return false
+	}
+	if targetGUID == m.GUID {
+		return true
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		return s.isFriendlyFaction(m.Faction, playerPos{
+			FactionTemplate: s.raceFaction(ts.player.Race),
+			Race:            ts.player.Race,
+			Class:           ts.player.Class,
+			Sess:            ts,
+			Reputations:     playerReputationMap(ts.player.Reputations),
+		})
+	}
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		return s.isFriendlyFaction(m.Faction, playerPos{FactionTemplate: tm.Faction})
+	}
+	return false
+}
+
 // creatureCastTargetResolves mirrors the lost-explicit-target arm of
 // Spell::_cast (Spell.cpp:3288-3293) for the creature path: after
 // UpdatePointers, an explicit object target that no longer resolves
@@ -908,6 +942,24 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			if !s.checkCreatureCasterAuras(m, spellInfo) {
 				return
 			}
+		}
+		// SPELL_EFFECT_DISPEL arm (Spell.cpp:5517-5562): a pure-dispel spell
+		// with a non-empty mask fizzles on a target with nothing dispellable
+		// (SPELL_FAILED_NOTHING_TO_DISPEL). Placed before the steal arm,
+		// matching C++ CheckCast order (the dispel scan precedes the
+		// per-effect switch holding STEAL_BENEFICIAL_BUFF at 5957). Runs for
+		// non-triggered casts only — the !IsTriggered() gate at 5540.
+		if !s.creatureDispelPreCast(m, spellInfo, targetGUID, triggered) {
+			return
+		}
+		// Summon-family arms (Spell.cpp:5805-5946): SUMMON_PLAYER /
+		// SUMMON_RAF_FRIEND fail for non-player casters; CREATE_TAMED_PET
+		// needs a player target without an existing pet. The SUMMON /
+		// SUMMON_PET pet+charm gates are vacuous for creature casters (no
+		// pet-ownership or charm model). Placed after the dispel arm and
+		// before the steal arm, matching C++ CheckCast case order.
+		if !s.creatureSummonPreCast(m, spellInfo, targetGUID) {
+			return
 		}
 		// SPELL_EFFECT_STEAL_BENEFICIAL_BUFF arm (Spell.cpp:5957-5984):
 		// no !IsTriggered() gate, so it runs for triggered casts too.
@@ -1069,6 +1121,47 @@ func (s *Server) fireCreatureSpellLinkedTriggers(ctx context.Context, m *creatur
 		}
 		s.castCreatureSpellInternal(ctx, m, uint32(id), tgt, true)
 	}
+}
+
+// creatureSummonPreCast mirrors the summon-family arms of Spell::CheckCast
+// for a creature caster (Spell.cpp:5805-5946). The SUMMON pet/charm gates
+// (5820-5823) and the whole SUMMON_PET arm (5839-5904) read the caster's
+// owned-pet and charm GUIDs — Go's creature motions carry no pet-ownership
+// or charm model (creatureMotion.PetID marks the motion as being a pet), so
+// GetPetGUID()/GetCharmedGUID() are always zero here and C++ can never fire
+// those arms for a creature caster: vacuous, structurally exact. The
+// player-only arms are real fizzles:
+//   - SPELL_EFFECT_SUMMON_PLAYER (5905) and SPELL_EFFECT_SUMMON_RAF_FRIEND
+//     (5935): a non-player caster fails with SPELL_FAILED_BAD_TARGETS.
+//   - SPELL_EFFECT_CREATE_TAMED_PET (5825): a non-player unit target fails
+//     with SPELL_FAILED_BAD_TARGETS; a target that already has a pet fails
+//     with SPELL_FAILED_ALREADY_HAVE_SUMMON unless the spell carries
+//     SPELL_ATTR1_DISMISS_PET.
+//
+// Creature casts have no failure-packet path, so the SPELL_FAILED_* codes
+// are internal only — false means fizzle.
+func (s *Server) creatureSummonPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if m == nil {
+		return true
+	}
+	for _, eff := range spell.Effects {
+		switch eff.Effect {
+		case spellEffectSummonPlayer, spellEffectSummonRafFriend:
+			return false
+		case spellEffectCreateTamedPet:
+			if targetGUID == 0 {
+				continue
+			}
+			ts := s.findSessionByGUID(targetGUID)
+			if ts == nil || ts.player == nil {
+				return false
+			}
+			if spell.AttributesEx&spellAttr1DismissPet == 0 && ts.player.PetGUID != 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // creatureStealPreCast mirrors the SPELL_EFFECT_STEAL_BENEFICIAL_BUFF arm

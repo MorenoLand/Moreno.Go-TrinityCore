@@ -262,6 +262,14 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 		return nil
 	}
 
+	// Unit.cpp:4591-4592: Unholy Blight (50536) on the target kills the
+	// disease bit before the scan — this arm was missing here.
+	if dispelMask&(1<<DispelDisease) != 0 {
+		if blight, ok := auras[spellUnholyBlight]; ok && blight != nil && !blight.Stopped {
+			dispelMask &^= (1 << DispelDisease)
+		}
+	}
+
 	isFriendly := false
 	if s.player != nil && s.player.PetGUID != 0 && s.player.PetGUID == creatureGUID {
 		isFriendly = true
@@ -339,7 +347,175 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 	return candidates
 }
 
-// stealableAuraList builds the Spell::EffectStealBeneficialBuff (SpellEffects.cpp:5172)
+// creatureDispelPreCast mirrors the SPELL_EFFECT_DISPEL arm of
+// Spell::CheckCast (Spell.cpp:5517-5562) for a creature caster: a spell whose
+// only effects are non-area dispels, with a non-empty dispel mask, fizzles
+// when its unit target carries no dispellable auras
+// (SPELL_FAILED_NOTHING_TO_DISPEL). The !IsTriggered() gate (Spell.cpp:5540)
+// runs for triggered casts too in Go's model only as a skip — triggered
+// creature casts bypass this arm entirely. A missing or unresolvable wire
+// unit target skips the arm (Spell.cpp:5541, GetUnitTarget null) and leaves
+// the cast to the lost-explicit-target arm in _cast. Creature casts fizzle
+// silently — there is no failure-packet path — so false means fizzle.
+// Sanctuary (Spell.cpp:5545-5552): a creature caster is never in sanctuary —
+// UNIT_BYTE2_FLAG_SANCTUARY is set only by Player::UpdateArea
+// (Player.cpp:7179/7185), no creature setter exists — and neither are
+// creature targets, so only a player target's pvpFlagSanctuary bit is read
+// (inert: Go never populates it, like the player path). The duel carve-out
+// needs a player caster (unitCaster->ToPlayer()), so it is vacuous here.
+func (s *Server) creatureDispelPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64, triggered bool) bool {
+	if m == nil || triggered || targetGUID == 0 {
+		return true
+	}
+	var dispelMask uint32
+	hasNonDispelEffect := false
+	hasDispellableAura := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectDispel {
+			// SpellEffectInfo::IsTargetingArea (SpellInfo.cpp:380-383):
+			// TargetA.IsArea() || TargetB.IsArea().
+			if spellImplicitTargetIsArea(eff.ImplicitTargetA) || spellImplicitTargetIsArea(eff.ImplicitTargetB) ||
+				spell.AttributesEx&spellAttr1MeleeCombatStart != 0 {
+				hasDispellableAura = true
+				break
+			}
+			dispelMask |= getDispelMask(uint32(eff.MiscValue))
+		} else if eff.Effect != 0 {
+			hasNonDispelEffect = true
+			break
+		}
+	}
+	if hasNonDispelEffect || hasDispellableAura || dispelMask == 0 {
+		return true
+	}
+	isFriendly := s.creatureFriendlyToTarget(m, targetGUID)
+	if !isFriendly {
+		if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			if ts.player.PVPFlags&pvpFlagSanctuary != 0 {
+				return false
+			}
+		}
+	}
+	return len(s.creatureCasterDispelCandidates(m, targetGUID, dispelMask, isFriendly)) != 0
+}
+
+// creatureCasterDispelCandidates mirrors Unit::GetDispellableAuraList
+// (Unit.cpp:4588-4628) with a creature as the dispeller: it scans the
+// target's auras — the player's activeAuras for a player target, the
+// server's activeCreatureAuras for a creature target — skipping passives and
+// applying the dispel mask, keeping only auras whose positivity opposes the
+// caster-target friendliness (Unit.cpp:4608-4612). The Unholy Blight disease
+// arm (Unit.cpp:4591-4592) applies to both target kinds. Dispel chance is
+// Aura::CalcDispelChance (SpellAuras.cpp:1218-1236): offensive dispels
+// subtract the target's SPELL_AURA_MOD_DISPEL_RESIST total, and auras at 100%
+// resistance never enter the list (Unit.cpp:4614-4617). The
+// SPELLMOD_RESIST_DISPEL_CHANCE term (SpellAuras.cpp:1224-1226, from the aura
+// caster's spell mods) has no Go model — same documented gap as the
+// player-path scans.
+func (s *Server) creatureCasterDispelCandidates(m *creatureMotion, targetGUID uint64, dispelMask uint32, isFriendly bool) []dispelCandidate {
+	if s == nil || m == nil || targetGUID == 0 {
+		return nil
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		if (dispelMask&(1<<DispelDisease) != 0) && ts.hasAura(spellUnholyBlight) {
+			dispelMask &^= (1 << DispelDisease)
+		}
+		ts.castMu.Lock()
+		defer ts.castMu.Unlock()
+		var candidates []dispelCandidate
+		for spellID, aura := range ts.activeAuras {
+			if c := s.dispelCandidateFromAura(spellID, aura, dispelMask, isFriendly, ts.calcDispelChanceLocked(!isFriendly)); c != nil {
+				candidates = append(candidates, *c)
+			}
+		}
+		return candidates
+	}
+	tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+	if tm == nil {
+		return nil
+	}
+	key := creatureAuraKeyForMotion(tm)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	auras := s.activeCreatureAuras[key]
+	if dispelMask&(1<<DispelDisease) != 0 {
+		if blight, ok := auras[spellUnholyBlight]; ok && blight != nil && !blight.Stopped {
+			dispelMask &^= (1 << DispelDisease)
+		}
+	}
+	var candidates []dispelCandidate
+	for spellID, aura := range auras {
+		chance := int32(100)
+		if !isFriendly {
+			resist := int32(0)
+			for _, ra := range auras {
+				if ra != nil && !ra.Stopped && ra.AuraType == spellAuraModDispelResist {
+					resist += int32(ra.Amount)
+				}
+			}
+			if resist < 0 {
+				resist = 0
+			} else if resist > 100 {
+				resist = 100
+			}
+			chance = 100 - resist
+		}
+		if c := s.dispelCandidateFromAura(spellID, aura, dispelMask, isFriendly, chance); c != nil {
+			candidates = append(candidates, *c)
+		}
+	}
+	return candidates
+}
+
+// dispelCandidateFromAura applies the per-aura terms of
+// Unit::GetDispellableAuraList (Unit.cpp:4602-4625) shared by the player and
+// creature scans: passive skip, dispel-mask match, the positivity-vs-
+// friendliness skip (Unit.cpp:4608-4612), the 100%-resistance exclusion
+// (Unit.cpp:4614-4617), and the dispel-charges zero-charge skip
+// (Unit.cpp:4619-4625). Returns nil when the aura cannot enter the list.
+func (s *Server) dispelCandidateFromAura(spellID uint32, aura *activeAura, dispelMask uint32, isFriendly bool, chance int32) *dispelCandidate {
+	if aura == nil || aura.Stopped {
+		return nil
+	}
+	var sp wotlk.Spell
+	var found bool
+	if s.Data != nil {
+		sp, found, _ = s.Data.Spell(spellID)
+	}
+	if found && sp.Attributes&spellAttributePassive != 0 {
+		return nil
+	}
+	if found && sp.AttributesEx7&spellAttr7DispelCharges != 0 && aura.RemainingCharges == 0 {
+		return nil
+	}
+	dispelType := aura.DispelType
+	if dispelType == 0 && found {
+		dispelType = sp.DispelType
+	}
+	if (getDispelMask(dispelType) & dispelMask) == 0 {
+		return nil
+	}
+	if isFriendly == aura.Positive {
+		return nil
+	}
+	if chance <= 0 {
+		return nil
+	}
+	return &dispelCandidate{
+		SpellID:    spellID,
+		DispelType: dispelType,
+		Mechanic:   aura.Mechanic,
+		AuraType:   aura.AuraType,
+		Slot:       aura.Slot,
+		Chance:     chance,
+		Positive:   aura.Positive,
+		DurationMs: aura.DurationMs,
+		PeriodMs:   aura.PeriodMs,
+		Amount:     aura.Amount,
+		SchoolMask: aura.SchoolMask,
+	}
+}
+
 // steal candidate list from the dispel-mask candidate list: positive auras only,
 // skipping auras whose spell carries SPELL_ATTR4_NOT_STEALABLE. Passive auras are
 // already excluded by the dispel helpers (the spellAttributePassive gate).
