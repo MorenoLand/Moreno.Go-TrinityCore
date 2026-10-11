@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"time"
 
@@ -563,6 +564,7 @@ func (s *Server) castCreatureSpellTriggered(ctx context.Context, m *creatureMoti
 }
 
 const (
+	unitFlagPossessed   uint32 = 0x01000000 // UNIT_FLAG_POSSESSED (UnitDefines.h:148)
 	creaturePowerHealth uint32 = 0xFFFFFFFE // POWER_HEALTH (-2 as signed, Powers enum)
 	creaturePowerMana   uint32 = 0          // POWER_MANA
 	creaturePowerRage   uint32 = 1          // POWER_RAGE
@@ -812,12 +814,30 @@ func (s *Server) creatureCastTargetResolves(m *creatureMotion, targetGUID uint64
 	return s.findCreatureMotion(m.Map, m.InstanceID, targetGUID) != nil
 }
 
+// creatureUnitTargetPos resolves a unit GUID to its X/Y on the motion's
+// map/instance for the SetInFront leg: live player session first (same
+// map/instance, mirroring the lost-target arm's resolution), then the
+// creature motion map — the ObjectAccessor::GetUnit(*caster, guid) model.
+func (s *Server) creatureUnitTargetPos(m *creatureMotion, targetGUID uint64) (float32, float32, bool) {
+	if s == nil || m == nil || targetGUID == 0 {
+		return 0, 0, false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil && ts.player.Map == m.Map && ts.player.InstanceID == m.InstanceID {
+		return ts.player.X, ts.player.Y, true
+	}
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		return tm.X, tm.Y, true
+	}
+	return 0, 0, false
+}
+
 func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
 	if s == nil || m == nil || spellID == 0 {
 		return
 	}
 	now := time.Now()
 	castID := uint8(1)
+	castFlags := uint32(spellCastFlagGo)
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
@@ -869,12 +889,17 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if !s.checkCreatureSpellRange(m, spellInfo, targetGUID) {
 			return
 		}
+		// Spell::CheckPower (Spell.cpp:5502): the affordability check runs in
+		// the prepare-phase position, but the drain itself lands in _cast
+		// after SelectSpellTargets (Spell.cpp:3449), so the cost is stashed
+		// for the TakePower arm below — a lost explicit target (3288-3293)
+		// or failed CheckCast never drains in C++.
+		var powerCost int32
 		if !triggered {
-			cost := s.creatureSpellPowerCost(spellInfo, m)
-			if !checkCreatureSpellPower(spellInfo, m, cost) {
+			powerCost = s.creatureSpellPowerCost(spellInfo, m)
+			if !checkCreatureSpellPower(spellInfo, m, powerCost) {
 				return
 			}
-			takeCreatureSpellPower(spellInfo, m, cost)
 			// Spell::CheckCasterAuras CC-state gate (Spell.cpp:5509,
 			// gated by TRIGGERED_IGNORE_CASTER_AURAS): after CheckPower,
 			// matching the C++ CheckCast gate order; Go's triggered
@@ -903,6 +928,23 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if targetGUID != 0 && targetGUID != m.GUID && !s.creatureCastTargetResolves(m, targetGUID) {
 			return
 		}
+		// Spell::_cast creature SetInFront leg (Spell.cpp:3404-3409,
+		// Unit::SetInFront, Unit.cpp:13663-13667): a creature caster with a
+		// resolving non-empty unit target that isn't possessed faces it
+		// before SelectSpellTargets. Keys on the creature's combat target
+		// (GetTarget), not the spell target. The UNIT_STATE_CANNOT_TURN
+		// gate has no Go model (standing no-bridge, same as the other
+		// unit-state arms); the angle mirrors Unit::GetAbsoluteAngle
+		// (atan2 normalized to [0, 2pi), same as the distract bridge).
+		if m.TargetGUID != 0 && m.UnitFlags&unitFlagPossessed == 0 {
+			if tx, ty, ok := s.creatureUnitTargetPos(m, m.TargetGUID); ok {
+				angle := float32(math.Atan2(float64(ty-m.Y), float64(tx-m.X)))
+				if angle < 0 {
+					angle += 2 * math.Pi
+				}
+				m.Orientation = angle
+			}
+		}
 		// Spell::SelectExplicitTargets magic-redirect arm (Spell.cpp:724-757):
 		// no caster-type gate — SelectSpellTargets (761) runs it for
 		// creature casts in _cast (3410), after CheckCast (the steal arm
@@ -915,6 +957,12 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			hitTargets = []uint64{redirectGUID}
 		}
 		if !triggered {
+			// Spell::TakePower (Spell.cpp:3449-3456, "Powers have to be
+			// taken before SendSpellGo"): drained after the fizzle arms,
+			// matching C++ order (SelectSpellTargets at 3410 precedes the
+			// drain at 3449). TakeReagents (3455) is player-only
+			// (Spell.cpp:5048), vacuous for creatures.
+			takeCreatureSpellPower(spellInfo, m, powerCost)
 			// Spell::SendSpellCooldown (Spell.cpp:3463, 3780-3791):
 			// non-triggered casts start the spell-history cooldown
 			// (HandleCooldowns returns early for IsIgnoringCooldowns,
@@ -933,8 +981,32 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if castMs := s.aiSpellCastTimeMs(spellInfo); castMs > 0 {
 			m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 		}
+		// Spell::SendSpellGo cast flags (Spell.cpp:4283-4330) for creature
+		// casters: base UNKNOWN_9 (spellCastFlagGo); PENDING for triggered
+		// non-auto-repeat casts (4292, same predicate as the player
+		// triggered path); NO_GCD when the spell has no start recovery
+		// time (4325, no caster gate). POWER_LEFT_SELF stays off — the
+		// 4297 arm needs a player or pet caster. AMMO (4294) needs the
+		// UNIT_VIRTUAL_ITEM_SLOT_ID model — no bridge. RUNE_LIST via
+		// ACTIVATE_RUNE fills player-side only (C++ @todo notes a
+		// creature crash there) — no bridge. ADJUST_MISSILE needs the
+		// target elevation/delay-moment model — no bridge.
+		if triggered && spellInfo.AttributesEx1&spellAttr2AutorepeatFlag == 0 {
+			castFlags |= spellCastFlagPending
+		}
+		if spellInfo.StartRecoveryTime == 0 {
+			castFlags |= protocol.SpellCastFlagNoGCD
+		}
+		// Spell::IsNeedSendToClient (Spell.cpp:7543-7547): a triggered
+		// cast with no visual, not channeled, and no speed sends nothing.
+		// Non-triggered casts always send (the final || term). Runs after
+		// the drain/cooldown/stamp: C++ runs those before SendSpellGo's
+		// early return.
+		if triggered && spellInfo.SpellVisual[0] == 0 && spellInfo.SpellVisual[1] == 0 && !isChanneledSpell(spellInfo) && spellInfo.Speed <= 0 {
+			return
+		}
 	}
-	goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
+	goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget)
 
 	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
