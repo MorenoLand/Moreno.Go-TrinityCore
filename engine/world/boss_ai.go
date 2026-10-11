@@ -1711,6 +1711,15 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.fireCreatureHitTriggers(ctx, m, spellInfo, spellID, hitTargets)
 	}
+	// Spell::_cast "Handle procs on cast" tail (Spell.cpp:3525-3545): the
+	// PHASE_CAST proc leg fires after the spell_linked tail for creature
+	// casters too. The modOwner block (3514-3522) is vacuous on this path —
+	// GetSpellModOwner returns null for wild and charmed creatures (only
+	// Pet objects carry UNIT_MASK_PET, Pet.cpp:49), so neither the
+	// spell-mod-taking reset nor the cheat-cooldown reset applies.
+	if spellKnown {
+		s.fireCreatureCastPhaseAuraProcs(ctx, m, spellID, triggered)
+	}
 }
 
 // serverAuraScaleTargetLevel resolves a hit target's level for the
@@ -2044,6 +2053,29 @@ func (s *Server) fireCreatureMeleeAuraProcs(ctx context.Context, m *creatureMoti
 	if s == nil || m == nil || victimGUID == 0 {
 		return
 	}
+	s.fireCreatureAuraProcLoop(ctx, m, victimGUID, ev)
+}
+
+// fireCreatureAuraProcLoop runs one aura-proc pass over the caster creature's
+// own auras: the shared body of Unit::TriggerAurasProcOnEvent
+// (Unit.cpp:10385-10408) for the creature path — each aura with a generated
+// spell_proc entry runs the CanSpellTriggerProcOnEvent gate against the
+// event; on pass, the chance roll fires each eligible aura effect's trigger
+// spell on triggerTargetGUID. A zero trigger target mirrors C++'s null
+// _procTarget (Unit::ProcSkillsAndAuras passes actionTarget as _procTarget,
+// Unit.cpp:10388): the trigger spell resolves its own implicit targets, and
+// the CheckExplicitTarget twin fizzles the spells that need an explicit unit
+// target (SpellInfo.cpp:1784-1790). The modOwner arm
+// (Unit.cpp:10395-10408) has no Go model — GetSpellModOwner returns null for
+// wild and charmed creatures (only Pet objects carry UNIT_MASK_PET,
+// Pet.cpp:49), and the creature path never runs pets or totems. The
+// SetCantProc evaluation window (Unit.cpp:10424-10428) has no creature-side
+// reader yet (no per-motion m_procDeep model); the _cast proc leg carries no
+// CanProc gate in C++, so the omission is inert there.
+func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion, triggerTargetGUID uint64, ev procEventInfo) {
+	if s == nil || m == nil {
+		return
+	}
 	key := creatureAuraKeyForMotion(m)
 	s.auraMu.Lock()
 	auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
@@ -2111,7 +2143,7 @@ func (s *Server) fireCreatureMeleeAuraProcs(ctx context.Context, m *creatureMoti
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
 			if eff.Aura == spellAuraProcTriggerDamage {
-				s.creatureProcTriggerDamageAuraProc(ctx, m, aura, auraSpell, i, victimGUID)
+				s.creatureProcTriggerDamageAuraProc(ctx, m, aura, auraSpell, i, triggerTargetGUID)
 				continue
 			}
 			if eff.TriggerSpell == 0 {
@@ -2128,10 +2160,60 @@ func (s *Server) fireCreatureMeleeAuraProcs(ctx context.Context, m *creatureMoti
 				continue
 			}
 			// m_caster->CastSpell(unit, triggeredSpell->Id, true): the
-			// triggered cast by the creature on the victim.
-			s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, victimGUID, true)
+			// triggered cast by the creature on the trigger target.
+			s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, triggerTargetGUID, true)
 		}
 	}
+}
+
+// fireCreatureCastPhaseAuraProcs bridges the on-cast proc leg at the end of
+// Spell::_cast (Spell.cpp:3525-3545) for a creature caster: after the
+// spell_linked_spell tail, the caster's auras evaluate one proc event with
+// PROC_SPELL_PHASE_CAST, PROC_SPELL_TYPE_MASK_ALL and the normalized hit
+// mask — Unit::ProcSkillsAndAuras(m_originalCaster, nullptr, procAttacker,
+// PROC_FLAG_NONE, ...). The type mask reuses spellFinishPhaseProcTypeMask:
+// C++ runs the same m_procAttacker fallback (the prepareDataForTriggerSystem
+// fill, else the magic/none positivity split) at both _cast legs
+// (Spell.cpp:3529-3542 vs 3764-3776). The hit mask seeds PROC_HIT_NORMAL:
+// C++ normalizes m_hitMask to NORMAL when no target crit (3537-3538), and Go
+// applies no target effects at cast time on the creature path, so no crit
+// info exists — the value the C++ normalization lands on for any
+// non-critical cast. The event's triggered state is the cast's own (Go's
+// triggered models TRIGGERED_FULL_MASK, which carries
+// TRIGGERED_DISALLOW_PROC_EVENTS). The m_originalCaster null gate is vacuous
+// (the motion is always present); SetExecutedCurrently has no Go model (no
+// cast Spell object); CreatureAI::OnSpellCastFinished has no bridge (no AI
+// classes in Go). Generated proc entries only carry PROC_SPELL_PHASE_HIT
+// (serverSpellProcEntryFor, SpellMgr.cpp:1828) — like a C++ build with no
+// spell_proc DB rows bearing PHASE_CAST, the event currently triggers
+// nothing; the bridge is structural.
+func (s *Server) fireCreatureCastPhaseAuraProcs(ctx context.Context, m *creatureMotion, spellID uint32, triggered bool) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	typeMask := spellFinishPhaseProcTypeMask(spell)
+	if typeMask == procFlagNone {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.fireCreatureAuraProcLoop(ctx, m, 0, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeMaskAll,
+		spellPhaseMask: procSpellPhaseCast,
+		hitMask:        procHitNormal,
+		triggered:      triggered,
+		eventSpell:     &spellCopy,
+		actorGUID:      m.GUID,
+	})
 }
 
 // creatureProcTriggerDamageAuraProc mirrors

@@ -1355,7 +1355,6 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, hitTargets, nil, spellGoPacketTarget(spell, target))
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
-	handledEffect := false
 	if hasDamage {
 		schoolMask := uint8(spell.SchoolMask)
 		if schoolMask == 0 {
@@ -1369,25 +1368,21 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		for _, areaHit := range areaHits {
 			s.executePetSpellDamage(ctx, motion, areaHit.GUID, spell.ID, damage, schoolMask, triggered)
 		}
-		handledEffect = true
 	}
 	for i, effect := range spell.Effects {
 		if effect.Effect == 10 || effect.Effect == 105 || effect.Effect == 136 {
 			heal := uint32(effect.BasePoints + 1)
 			if heal > 0 {
 				s.executePetSpellHeal(ctx, motion, targetGUID, spell.ID, heal)
-				handledEffect = true
 			}
 		}
 		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
 			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
 				s.executePetSpellWithOptions(ctx, motion, triggered, 0, target, true)
-				handledEffect = true
 			}
 		}
 		if effect.Effect == spellEffectDispel {
 			s.executePetSpellDispel(ctx, motion, targetGUID, spell, effect)
-			handledEffect = true
 		}
 		if effect.Effect == 6 || effect.Effect == 27 || effect.Effect == 35 {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
@@ -1398,7 +1393,6 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			durationMs := petAuraDuration(s.server, auraSpell, motion)
 			amount := uint32(auraEffect.BasePoints + 1)
 			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, targetGUID, durationMs, amount) {
-				handledEffect = true
 			}
 			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (effect 27 with an enemy
 			// area target) applies to every unit the area selection picked —
@@ -1409,29 +1403,28 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aAmount := uint32(aEffect.BasePoints + 1)
-					if s.applyPetAura(ctx, motion, aSpell, aEffect, areaHit.GUID, aDurationMs, aAmount) {
-						handledEffect = true
-					}
+					s.applyPetAura(ctx, motion, aSpell, aEffect, areaHit.GUID, aDurationMs, aAmount)
 				}
 			}
 		}
 	}
-	if !handledEffect {
-		if !triggered {
-			now := time.Now()
-			s.recordPetSpellCooldown(motion, spell, now)
-			// Spell::cast (Spell.cpp:3196): a non-triggered cast triggers
-			// the global cooldown unless TRIGGERED_IGNORE_GCD — Go's
-			// triggered models TRIGGERED_FULL_MASK, which carries it.
-			s.server.triggerPetGlobalCooldown(motion, spell, now)
-		}
-		return true
-	}
 	if !triggered {
 		now := time.Now()
 		s.recordPetSpellCooldown(motion, spell, now)
+		// Spell::cast (Spell.cpp:3196): a non-triggered cast triggers
+		// the global cooldown unless TRIGGERED_IGNORE_GCD — Go's
+		// triggered models TRIGGERED_FULL_MASK, which carries it.
 		s.server.triggerPetGlobalCooldown(motion, spell, now)
 	}
+	// Spell::_cast spell_linked_spell tail (Spell.cpp:3503-3512): type-0 rows
+	// fire at cast completion for pet casters too — the twin is shared with
+	// the creature path (pets are creature motions, and the linked cast is
+	// triggered, so the pet/creature path split is inert there). No
+	// triggered exemption in C++, so this runs for triggered casts as well.
+	s.server.fireCreatureSpellLinkedTriggers(ctx, motion, spell.ID, targetGUID)
+	// Spell::_cast modOwner tail (Spell.cpp:3514-3522): the cheat-cooldown
+	// reset on the owner's session. No triggered exemption in C++.
+	s.resetPetSpellCooldownCheat(motion, spell.ID)
 	return true
 }
 

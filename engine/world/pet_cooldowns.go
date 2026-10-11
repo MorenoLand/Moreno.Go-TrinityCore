@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID uint32, petType uint8, entry, level, faction, health, maxHealth, mana, maxMana uint32, attributes [5]uint32, happiness, experience, nextLevelXP uint32, reactState uint8, combatReach float32, x, y, z, orientation float32) {
@@ -210,4 +211,41 @@ func (s *Server) petGlobalCooldownActive(motion *creatureMotion, spell wotlk.Spe
 	defer s.motionMu.Unlock()
 	end, ok := motion.GCDCooldowns[spell.StartRecoveryCategory]
 	return ok && end.After(now)
+}
+
+// resetPetSpellCooldownCheat mirrors the cheat arm of Spell::_cast's modOwner
+// tail (Spell.cpp:3517-3522) for a pet caster: GetSpellModOwner returns the
+// owner player for pets (Object.cpp:2246 — only Pet objects carry
+// UNIT_MASK_PET, Pet.cpp:49), and with .cheat cooldown on that player the
+// just-cast spell's own RecoveryTime cooldown entry on the original caster
+// (the pet) is erased. Like C++ SpellHistory::ResetCooldown(spellId, true)
+// only the spell's own entry is cleared — category cooldowns are untouched
+// (SpellHistory.cpp:441-455). SMSG_CLEAR_COOLDOWN (spell id then caster
+// guid) goes to the owner player, which is this session. The
+// SetSpellModTakingSpell(this, false) arm of the same block has no reader
+// on the pet path — the Go pet path has no spell-mod-taking model
+// (documented standing gap) — so it stays unbridged. Runs for triggered
+// casts too: the C++ block carries no triggered exemption.
+func (s *session) resetPetSpellCooldownCheat(motion *creatureMotion, spellID uint32) {
+	if s == nil || s.player == nil || s.player.ActiveCheats&cheatCooldown == 0 {
+		return
+	}
+	if motion == nil || s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	_, removed := motion.SpellCooldowns[spellID]
+	if removed {
+		delete(motion.SpellCooldowns, spellID)
+		delete(motion.SpellCooldownCategories, spellID)
+		delete(motion.SpellCooldownCategoryEnds, spellID)
+	}
+	s.server.motionMu.Unlock()
+	if !removed {
+		return
+	}
+	buf := protocol.NewBuffer(4 + 8)
+	buf.WriteU32(spellID)
+	buf.WriteU64(motion.GUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buf.Bytes(), true)
 }
