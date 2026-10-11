@@ -891,32 +891,48 @@ func eventSpellCanTriggerProc(spell *wotlk.Spell) bool {
 // class flag; wand auto attacks (Shoot, spell 5019 — weapon class, wand
 // subclass mask bit, AUTOREPEAT_FLAG) use DONE_RANGED_AUTO_ATTACK; every other
 // spell on the damage path is negative, magic class or none class per its
-// DmgClass (Spell.dbc field 213).
+// DmgClass (Spell.dbc field 213). The hunter-trap and Hellfire arms sit after
+// the DmgClass switch in C++ (Spell.cpp:2038-2057) and apply on the hit phase
+// too: traps OR the activation flag (plus the magic NEG pair, which also
+// keeps the DoDamageAndTriggers fallback gate !procAttacker && !procVictim
+// closed) on top of the DmgClass fill, and Hellfire ASSIGNS the periodic
+// pair, replacing it. Trap is checked first, matching C++ order.
 func spellDamageProcTypeMask(spell wotlk.Spell) uint32 {
+	var mask uint32
 	switch spell.DefenseType {
 	case spellDamageClassMelee:
 		// Spell::prepareDataForTriggerSystem ORs the mainhand/offhand bit
 		// (Spell.cpp:2009-2012); the direct-spell-damage path always uses
 		// the base attack type, so the mainhand bit applies.
-		return procFlagDoneSpellMeleeDmgClass | procFlagDoneMainhandAttack
+		mask = procFlagDoneSpellMeleeDmgClass | procFlagDoneMainhandAttack
 	case spellDamageClassRanged:
 		// Spell.cpp:2018-2023 — auto attack.
 		if spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
-			return procFlagDoneRangedAutoAttack
+			mask = procFlagDoneRangedAutoAttack
+		} else {
+			mask = procFlagDoneSpellRangedDmgClass
 		}
-		return procFlagDoneSpellRangedDmgClass
 	default:
 		// Spell.cpp:2026-2034 — wands auto attack.
 		if spell.EquippedItemClass == itemClassWeapon &&
 			spell.EquippedItemSubClass&(1<<itemSubclassWeaponWand) != 0 &&
 			spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
-			return procFlagDoneRangedAutoAttack
+			mask = procFlagDoneRangedAutoAttack
+		} else if spell.DefenseType == spellDamageClassMagic {
+			mask = procFlagDoneSpellMagicDmgClassNeg
+		} else {
+			mask = procFlagDoneSpellNoneDmgClassNeg
 		}
-		if spell.DefenseType == spellDamageClassMagic {
-			return procFlagDoneSpellMagicDmgClassNeg
-		}
-		return procFlagDoneSpellNoneDmgClassNeg
 	}
+	if spell.SpellFamilyName == spellFamilyHunter &&
+		(spell.SpellFamilyFlags[0]&0x18 != 0 || spell.ID == 57879 ||
+			spell.SpellFamilyFlags[2]&0x00024000 != 0) {
+		mask |= procFlagDoneTrapActivation | procFlagDoneSpellMagicDmgClassNeg
+	}
+	if spell.SpellFamilyName == spellFamilyWarlock && spell.SpellFamilyFlags[0]&0x00000040 != 0 {
+		mask = procFlagDonePeriodic
+	}
+	return mask
 }
 
 // spellDamageTakenProcTypeMask mirrors the victim-side half of
@@ -927,30 +943,48 @@ func spellDamageProcTypeMask(spell wotlk.Spell) uint32 {
 // TAKEN_RANGED_AUTO_ATTACK, other ranged spells TAKEN_SPELL_RANGED_DMG_CLASS,
 // and magic/none-class spells fall through to the DoDamageAndTriggers
 // positivity fallback (Spell.cpp:2447-2492), negative on the damage arm. The
+// hunter-trap and Hellfire arms (Spell.cpp:2038-2057) apply after the
+// DmgClass fill: traps OR the magic NEG victim flag, Hellfire assigns the
+// periodic victim flag — trap checked first, matching C++ order. The
 // damage arm's procVictim |= PROC_FLAG_TAKEN_DAMAGE (Spell.cpp:2545) is ORed
 // at the call site, gated on non-immunity — the immune branch bypasses it.
 func spellDamageTakenProcTypeMask(spell wotlk.Spell) uint32 {
+	var mask uint32
 	switch spell.DefenseType {
 	case spellDamageClassMelee:
-		return procFlagTakenSpellMeleeDmgClass
+		mask = procFlagTakenSpellMeleeDmgClass
 	case spellDamageClassRanged:
 		// Spell.cpp:2018-2023 — auto attack.
 		if spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
-			return procFlagTakenRangedAutoAttack
+			mask = procFlagTakenRangedAutoAttack
+		} else {
+			mask = procFlagTakenSpellRangedDmgClass
 		}
-		return procFlagTakenSpellRangedDmgClass
 	default:
 		// Spell.cpp:2026-2034 — wands auto attack.
 		if spell.EquippedItemClass == itemClassWeapon &&
 			spell.EquippedItemSubClass&(1<<itemSubclassWeaponWand) != 0 &&
 			spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
-			return procFlagTakenRangedAutoAttack
+			mask = procFlagTakenRangedAutoAttack
+		} else if spell.DefenseType == spellDamageClassMagic {
+			mask = procFlagTakenSpellMagicDmgClassNeg
+		} else {
+			mask = procFlagTakenSpellNoneDmgClassNeg
 		}
-		if spell.DefenseType == spellDamageClassMagic {
-			return procFlagTakenSpellMagicDmgClassNeg
-		}
-		return procFlagTakenSpellNoneDmgClassNeg
 	}
+	// Spell.cpp:2038-2050 — hunter traps OR the magic NEG victim flag on
+	// top of the DmgClass fill; Spell.cpp:2052-2057 — Hellfire ASSIGNS the
+	// periodic victim flag, replacing the fill. Trap is checked first,
+	// matching C++ order.
+	if spell.SpellFamilyName == spellFamilyHunter &&
+		(spell.SpellFamilyFlags[0]&0x18 != 0 || spell.ID == 57879 ||
+			spell.SpellFamilyFlags[2]&0x00024000 != 0) {
+		mask |= procFlagTakenSpellMagicDmgClassNeg
+	}
+	if spell.SpellFamilyName == spellFamilyWarlock && spell.SpellFamilyFlags[0]&0x00000040 != 0 {
+		mask = procFlagTakenPeriodic
+	}
+	return mask
 }
 
 // spellFinishPhaseProcTypeMask mirrors the procAttacker leg of
