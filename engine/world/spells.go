@@ -10551,7 +10551,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (stop attack, then the flush); C++ runs the flush just
 				// before STOP_ATTACK_TARGET — packet-order only, the two
 				// operations are independent.
-				s.updatePotionCooldown(spell)
+				s.updatePotionCooldown(ctx, spell)
 			})
 			// Spell::handle_delayed (Spell.cpp:3629) no-bridge legs, noted:
 			//   - UpdatePointers() fail -> finish(false): the arrival closure
@@ -10743,7 +10743,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// handle_immediate gate (Spell.cpp:3625) applies: channeled spells run
 	// it at natural channel end (finishChannel), not at cast completion.
 	if !isChanneledSpell(spell) {
-		s.updatePotionCooldown(spell)
+		s.updatePotionCooldown(ctx, spell)
 	}
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 	s.resetCastCooldownCheat(spellID)
@@ -24682,33 +24682,154 @@ func buildClearCooldown(ownerGUID uint64, spellID uint32) []byte {
 	return buf.Bytes()
 }
 
-// sendPotionCooldownEvent bridges SpellHistory::SendCooldownEvent
-// (SpellHistory.cpp:364-391) for the potion flush: the
-// SMSG_COOLDOWN_EVENT for the spell plus the server-side cooldown
-// start (StartCooldown, with the potion item id carried on the
-// cooldown entry like the player Cooldowns Item field). The category
-// arm — a different spell currently holding the category cooldown
-// fires its own event first — is covered by scanning the session
-// cooldowns for an active same-category entry from another spell.
-func (s *session) sendPotionCooldownEvent(spell wotlk.Spell, itemID uint32) {
+// itemSpellSlots is a cached item_template spell-slot lookup (the five
+// spellid_N / spelltrigger_N / spellcharges_N / spellcooldown_N /
+// spellcategory_N / spellcategorycooldown_N column groups), following the
+// getItemStoreTemplateInfo cache pattern. A missing row is permissive —
+// callers fall back to the DBC values.
+func (s *Server) itemSpellSlots(ctx context.Context, entry uint32) ([itemSpells]itemSpellQueryData, bool) {
+	var empty [itemSpells]itemSpellQueryData
+	if entry == 0 {
+		return empty, false
+	}
+	s.itemStoreTemplateMu.RLock()
+	if s.itemSpellCooldowns != nil {
+		if slots, ok := s.itemSpellCooldowns[entry]; ok {
+			s.itemStoreTemplateMu.RUnlock()
+			return slots, true
+		}
+	}
+	s.itemStoreTemplateMu.RUnlock()
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return empty, false
+	}
+	var slots [itemSpells]itemSpellQueryData
+	targets := make([]any, 0, itemSpells*6)
+	columns := make([]string, 0, itemSpells*6)
+	scalars := make([][6]int64, itemSpells)
+	for index := 1; index <= itemSpells; index++ {
+		sc := &scalars[index-1]
+		targets = append(targets, &sc[0], &sc[1], &sc[2], &sc[3], &sc[4], &sc[5])
+		columns = append(columns, "spellid_"+strconv.Itoa(index), "spelltrigger_"+strconv.Itoa(index), "spellcharges_"+strconv.Itoa(index), "spellcooldown_"+strconv.Itoa(index), "spellcategory_"+strconv.Itoa(index), "spellcategorycooldown_"+strconv.Itoa(index))
+	}
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT "+strings.Join(columns, ", ")+" FROM item_template WHERE entry = ?", entry).Scan(targets...); err != nil {
+		return empty, false
+	}
+	for index := range slots {
+		sc := scalars[index]
+		slots[index] = itemSpellQueryData{ID: int32(sc[0]), Trigger: uint32(sc[1]), Charges: int32(sc[2]), Cooldown: int32(sc[3]), Category: uint32(sc[4]), CategoryCooldown: int32(sc[5])}
+	}
+	s.itemStoreTemplateMu.Lock()
+	if s.itemSpellCooldowns == nil {
+		s.itemSpellCooldowns = make(map[uint32][itemSpells]itemSpellQueryData)
+	}
+	s.itemSpellCooldowns[entry] = slots
+	s.itemStoreTemplateMu.Unlock()
+	return slots, true
+}
+
+// spellCooldownDurationsForItem bridges SpellHistory::GetCooldownDurations
+// (SpellHistory.cpp:212-248): for item casts the cooldown triplet comes
+// from the item template's spell slots first — the slot whose SpellId
+// matches the cast spell — and the DBC values (RecoveryTime, Category,
+// CategoryRecoveryTime) apply only when both item cooldowns are negative.
+// An unmatched slot or a missing template row behaves like C++'s
+// non-matching sObjectMgr lookup: the DBC values win.
+func (s *Server) spellCooldownDurationsForItem(ctx context.Context, spell wotlk.Spell, itemID uint32) (cooldownMs, categoryCooldownMs int32, categoryID uint32) {
+	cooldownMs, categoryCooldownMs = -1, -1
+	if itemID != 0 {
+		if slots, ok := s.itemSpellSlots(ctx, itemID); ok {
+			for _, slot := range slots {
+				if slot.ID == int32(spell.ID) {
+					cooldownMs = slot.Cooldown
+					categoryCooldownMs = slot.CategoryCooldown
+					categoryID = slot.Category
+					break
+				}
+			}
+		}
+	}
+	if cooldownMs < 0 && categoryCooldownMs < 0 {
+		cooldownMs = int32(spell.RecoveryTime)
+		categoryCooldownMs = int32(spell.CategoryRecoveryTime)
+		categoryID = spell.Category
+	}
+	return cooldownMs, categoryCooldownMs, categoryID
+}
+
+// startPotionCooldownEntry mirrors the StartCooldown tail
+// (SpellHistory.cpp:283-361) for the potion-flush path: SPELLMOD_COOLDOWN
+// folding (the taking window is live as in the main cast path),
+// SPELL_AURA_MOD_COOLDOWN on the caster's own spells, the negative clamp,
+// the both-zero early return, and the conditional SMSG_SPELL_COOLDOWN
+// (needsCooldownPacket only — the flush never sends the main-path
+// packet). The auto-repeat-ranged arm (SpellHistory.cpp:308-311) has no
+// Go attack-time model on this path. The entry carries the item id like
+// the player Cooldowns Item field (AddCooldown's itemId arm).
+func (s *session) startPotionCooldownEntry(spell wotlk.Spell, itemID uint32, cooldownMs, categoryCooldownMs int32, categoryID uint32) {
+	if cooldownMs >= 0 {
+		cooldownMs = s.applySpellMod(spell, spellModCooldown, cooldownMs)
+	}
+	if categoryCooldownMs >= 0 && spell.AttributesEx6&spellAttr6IgnoreCategoryCooldownMods == 0 {
+		categoryCooldownMs = s.applySpellMod(spell, spellModCooldown, categoryCooldownMs)
+	}
+	needsCooldownPacket := false
+	if auraMod := s.totalAuraModifier(spellAuraModCooldown); auraMod != 0 && playerHasSpell(s.player, spell.ID) {
+		needsCooldownPacket = true
+		cooldownMs += auraMod * 1000
+	}
+	if cooldownMs < 0 {
+		cooldownMs = 0
+	}
+	if categoryCooldownMs < 0 {
+		categoryCooldownMs = 0
+	}
+	if cooldownMs == 0 && categoryCooldownMs == 0 {
+		return
+	}
 	now := time.Now()
-	for _, cd := range s.player.Cooldowns {
-		if cd.Category != 0 && cd.Category == spell.Category && cd.Spell != spell.ID && (cd.End > now.Unix() || cd.CategoryEnd > now.Unix()) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, cd.Spell), true)
+	cooldownEnd := now.Unix()
+	if categoryCooldownMs > 0 {
+		cooldownEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+	}
+	if cooldownMs > 0 {
+		cooldownEnd = now.Add(time.Duration(cooldownMs) * time.Millisecond).Unix()
+	}
+	categoryEnd := now.Unix()
+	if categoryCooldownMs > 0 {
+		categoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+	}
+	s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spell.ID, Item: itemID, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
+	if needsCooldownPacket {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spell.ID, uint32(cooldownMs)), true)
+	}
+}
+
+// sendPotionCooldownEvent bridges SpellHistory::SendCooldownEvent
+// (SpellHistory.cpp:364-391) for the potion flush. The category arm — a
+// different spell currently holding the resolved category fires its own
+// SMSG_COOLDOWN_EVENT first and its server-side cooldown restarts
+// (StartCooldown, :380) — mirrors the _categoryCooldowns map: one holder
+// per category, so the first active same-category entry from another
+// spell wins. The cooldown triplet resolves through GetCooldownDurations,
+// so item-template spell-slot values win over the DBC when present.
+func (s *session) sendPotionCooldownEvent(ctx context.Context, spell wotlk.Spell, itemID uint32) {
+	now := time.Now()
+	cooldownMs, categoryCooldownMs, categoryID := s.server.spellCooldownDurationsForItem(ctx, spell, itemID)
+	if categoryID != 0 {
+		for _, cd := range s.player.Cooldowns {
+			if cd.Category == categoryID && cd.Spell != spell.ID && (cd.End > now.Unix() || cd.CategoryEnd > now.Unix()) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, cd.Spell), true)
+				if holder, found, err := s.server.Data.Spell(cd.Spell); err == nil && found {
+					hcd, hcat, hcatID := s.server.spellCooldownDurationsForItem(ctx, holder, itemID)
+					s.startPotionCooldownEntry(holder, itemID, hcd, hcat, hcatID)
+				}
+				break
+			}
 		}
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, spell.ID), true)
-	if spell.RecoveryTime > 0 || spell.CategoryRecoveryTime > 0 {
-		categoryEnd := now.Unix()
-		if spell.CategoryRecoveryTime > 0 {
-			categoryEnd = now.Add(time.Duration(spell.CategoryRecoveryTime) * time.Millisecond).Unix()
-		}
-		cooldownEnd := categoryEnd
-		if spell.RecoveryTime > 0 {
-			cooldownEnd = now.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
-		}
-		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spell.ID, Item: itemID, Category: spell.Category, End: cooldownEnd, CategoryEnd: categoryEnd})
-	}
+	s.startPotionCooldownEntry(spell, itemID, cooldownMs, categoryCooldownMs, categoryID)
 }
 
 // updatePotionCooldown bridges the Spell::finish potion leg
@@ -24722,11 +24843,11 @@ func (s *session) sendPotionCooldownEvent(spell wotlk.Spell, itemID uint32) {
 // (Player.cpp:24567) has no Go caller — Go has no combat-exit hook —
 // so the flush lands at the next non-combat cast finish instead of at
 // combat exit; the bank still clears exactly once.
-func (s *session) updatePotionCooldown(spell wotlk.Spell) {
+func (s *session) updatePotionCooldown(ctx context.Context, spell wotlk.Spell) {
 	if s.lastPotionId == 0 || s.isInCombat() {
 		return
 	}
-	s.sendPotionCooldownEvent(spell, s.lastPotionId)
+	s.sendPotionCooldownEvent(ctx, spell, s.lastPotionId)
 	s.lastPotionId = 0
 }
 
@@ -25768,7 +25889,9 @@ func (s *session) finishChannel() {
 	// the statue unsummon and IsAutoActionResetSpell need creature casters
 	// (every Go cast runs on a player session) and Go has no attack-timer
 	// model at all.
-	s.updatePotionCooldown(spell)
+	// context.Background: finishChannel runs from timer callbacks with no
+	// request context; the lookup is cached after the first fill.
+	s.updatePotionCooldown(context.Background(), spell)
 	s.stopAttackOnSpellFinish(spell)
 	s.debug("channel finished", "account", s.accountName, "spell", spellID)
 }

@@ -237,6 +237,7 @@ type Server struct {
 	itemHyperlinkTemplates map[uint32]itemHyperlinkTemplate
 	itemStoreTemplateMu    sync.RWMutex
 	itemStoreTemplates     map[uint32]itemStoreTemplateInfo
+	itemSpellCooldowns     map[uint32][itemSpells]itemSpellQueryData
 	terrainMu              sync.Mutex
 	terrainTiles           map[uint64][]terrainSpawn
 	terrainTileKnown       map[uint64]bool
