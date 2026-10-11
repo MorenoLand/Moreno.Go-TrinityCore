@@ -2031,10 +2031,18 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if miss != protocol.SpellMissNone {
 			damage = 0
 			hitInfo = 0x01
+		} else if petSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+			// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): the
+			// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm runs for pet-cast
+			// spells too (pet debuff spells carry aura effects).
+			if s.spellDebuffResisted(ctx, petSpell, targetGUID, s.server.findSessionByGUID(target.GUID)) {
+				damage = 0
+				hitInfo = 0x01
+			}
 		}
 	}
 	if damage > 0 && schoolMask > 1 {
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, target.Resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false)
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, target.Resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0)
 	}
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {

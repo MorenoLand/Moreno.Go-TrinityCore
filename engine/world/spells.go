@@ -75,6 +75,7 @@ const (
 	spellAttr6CastableWhileOnVehicle       uint32 = 0x00001000 // SPELL_ATTR6_CASTABLE_WHILE_ON_VEHICLE (SharedDefines.h:646) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6NotInRaidInstance            uint32 = 0x00000800 // SPELL_ATTR6_NOT_IN_RAID_INSTANCE (SharedDefines.h:645) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr4NotStealable                 uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4IgnoreResistances            uint32 = 0x00000001 // SPELL_ATTR4_IGNORE_RESISTANCES (SharedDefines.h:560) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4FixedDamage                  uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4NotUsableInArena             uint32 = 0x00010000 // SPELL_ATTR4_NOT_USABLE_IN_ARENA (SharedDefines.h:576) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4UsableInArena                uint32 = 0x00020000 // SPELL_ATTR4_USABLE_IN_ARENA (SharedDefines.h:577) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
@@ -573,6 +574,8 @@ const (
 	spellAuraModDurationByDispel                      = 245  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL (SpellAuraDefines.h:325)
 	spellAuraModArmorPenetrationPct                   = 280  // SPELL_AURA_MOD_ARMOR_PENETRATION_PCT (SpellAuraDefines.h:360)
 	spellAuraPeriodicHaste                            = 316  // SPELL_AURA_PERIODIC_HASTE (SpellAuraDefines.h:396)
+	spellAuraModDebuffResistance                      = 178  // SPELL_AURA_MOD_DEBUFF_RESISTANCE (SpellAuraDefines.h:258)
+	spellAuraModAbilityIgnoreTargetResist             = 270  // SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST (SpellAuraDefines.h:350)
 	spellAuraCloneCaster                              = 247  // SPELL_AURA_CLONE_CASTER (SpellAuraDefines.h:327)
 	spellIconCheatDeath                               = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
 	spellIconImprovedInsectSwarm                      = 1771 // Improved Insect Swarm talent dummy aura (SpellEffects.cpp:521)
@@ -1209,6 +1212,77 @@ func (s *session) maxPositiveAuraModifierByAffectMask(auraType uint32, spell wot
 		}
 	}
 	return maxValue
+}
+
+// totalAuraModifierByAffectMaskAndSchool is the misc-gated counterpart of
+// totalAuraModifierByAffectMask: the sum of amounts of the given aura type
+// whose effect MiscValue overlaps schoolMask and whose aura spell affects
+// the given spell (the AuraEffect::IsAffectedOnSpell gate,
+// SpellAuraEffects.cpp:848). It serves the
+// SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST (270) arm of
+// Unit::CalcSpellResistedDamage (Unit.cpp:1749).
+func (s *session) totalAuraModifierByAffectMaskAndSchool(auraType uint32, spell wotlk.Spell, schoolMask uint32) int32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	var total int32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.MiscValue&int32(schoolMask) == 0 {
+				continue
+			}
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = int32(aura.Amount)
+			}
+			if amount == 0 {
+				amount = effect.BasePoints + 1
+			}
+			total += amount
+		}
+	}
+	return total
+}
+
+// casterIgnoreResistPct mirrors the ignored-resistance arm of
+// Unit::CalcSpellResistedDamage (Unit.cpp:1749-1760): the attacker's
+// SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST (270) amounts — MiscValue
+// overlapping schoolMask and the aura spell affecting the cast spell — plus
+// the SPELL_AURA_MOD_IGNORE_TARGET_RESIST (269) misc-masked sum, capped at
+// 100. Creature casters have no affect-mask aura evaluation, so a nil
+// session (no live player caster) reports 0.
+func (s *session) casterIgnoreResistPct(spellID uint32, schoolMask uint32) int32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return 0
+	}
+	pct := s.totalAuraModifierByAffectMaskAndSchool(spellAuraModAbilityIgnoreTargetResist, spell, schoolMask)
+	for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask) {
+		pct += amount
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	return pct
 }
 
 // totalAuraModifierByAffectMask mirrors Unit::GetTotalAuraModifierByAffectMask
@@ -8157,6 +8231,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if missInfo != protocol.SpellMissNone {
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
+			} else if s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
+				// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592):
+				// the SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm — a
+				// non-positive aura-carrying spell can be fully resisted by
+				// the victim's 178 auras (MiscValue == DispelType).
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
 			} else if isBinarySpell(spell) {
 				var resistances [7]uint32
 				if targetSess != nil && targetSess.player != nil {
@@ -13244,7 +13325,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 					chaosBolt = sp.SpellFamilyName == spellFamilyWarlock && sp.SpellIconID == 3178
 				}
 			}
-			resisted, damage = calcMagicSpellResistance(damage, schoolMask, target.Resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.player.SpellPenetration)
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, target.Resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), s.player.SpellPenetration)
 			if resisted > 0 && damage == 0 {
 				// PROC_HIT_FULL_RESIST (createProcHitMask, Unit.cpp:10179):
 				// captured here, before immunity/absorption/taken
@@ -17814,6 +17895,39 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 	return protocol.SpellMissNone
 }
 
+// spellDebuffResisted rolls the SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm of
+// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): a non-positive
+// spell without SPELL_ATTR4_IGNORE_RESISTANCES that carries at least one aura
+// effect can be fully resisted — the victim's 178 auras, summed where the
+// effect MiscValue equals the spell's DispelType, add to the resist chance in
+// percent units. The GetMechanicResistChance leg has no Go model. Go rolls
+// this arm separately from the binary-spell average-resist roll; C++ folds
+// both into one combined resist_chance roll (Object.cpp:2591).
+func (s *session) spellDebuffResisted(ctx context.Context, spell wotlk.Spell, targetGUID uint64, targetSess *session) bool {
+	if spellIsPositive(spell) || spell.AttributesEx4&spellAttr4IgnoreResistances != 0 {
+		return false
+	}
+	hasAura := false
+	for i := range spell.Effects {
+		if spellEffectIsAuraEffect(spell.Effects[i]) {
+			hasAura = true
+			break
+		}
+	}
+	if !hasAura {
+		return false
+	}
+	var chance int32
+	if targetSess != nil {
+		chance = targetSess.totalAuraModifierByMiscValue(spellAuraModDebuffResistance, int32(spell.DispelType))
+	} else if s != nil && s.server != nil {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			chance = s.server.creatureAuraTypeSumByMisc(creatureAuraKeyForTarget(tgt), spellAuraModDebuffResistance, int32(spell.DispelType))
+		}
+	}
+	return chance > 0 && rand.Float64()*100 < float64(chance)
+}
+
 // spellReflectReturnStatus mirrors the ReflectResult roll in
 // Spell::AddUnitTarget (Spell.cpp:2178):
 // unitCaster->SpellHitResult(unitCaster, m_spellInfo, false).
@@ -18196,6 +18310,12 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	if missInfo != protocol.SpellMissNone {
 		return missInfo
 	}
+	// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): the
+	// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm — chain-jump targets roll it
+	// too, over the target's live auras (MiscValue == DispelType).
+	if s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
+		return protocol.SpellMissResist
+	}
 	if isBinarySpell(spell) {
 		var resistances [7]uint32
 		if targetSess != nil && targetSess.player != nil {
@@ -18222,9 +18342,12 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 // SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum folds in via the
 // HandleModSpellHitChance creature arm. Player casters stay parked (no
 // caster session in this path). Documented deltas: SPELLMOD_RESIST_MISS_CHANCE
-// spellmods, the mechanic/debuff-resist and deflect rolls,
+// spellmods, the mechanic-resist and deflect rolls,
 // SPELL_ATTR3_IGNORE_HIT_RESULT, the victim-side 186/160 aura arms, and the
-// victim CR_HIT_TAKEN_SPELL rating leg have no Go model.
+// victim CR_HIT_TAKEN_SPELL rating leg have no Go model. The
+// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm is bridged on the cast paths
+// (spellDebuffResisted) but not here — the tick carries no victim session or
+// target GUID to resolve the victim's live auras.
 func (s *Server) persistentAreaTickMissed(mapID, instanceID uint32, aura *activeAura, victimLevel uint8, isPlayerVictim bool) bool {
 	if aura == nil || !aura.PersistentAreaAura || aura.CasterLevel == 0 {
 		return false
@@ -18364,7 +18487,7 @@ func schoolMaskToResistanceIndex(schoolMask uint8) uint8 {
 // Unit.cpp:208). Holy can only be partially resisted by creatures (the
 // level-based term; template holy resistance is ignored); non-magical
 // schools are never resisted.
-func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]uint32, casterLevel, victimLevel uint8, victimIsCreature, chaosBolt bool, casterPenetration ...uint32) (resisted uint32, remainingDamage uint32) {
+func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]uint32, casterLevel, victimLevel uint8, victimIsCreature, chaosBolt bool, ignoredResistPct int32, casterPenetration ...uint32) (resisted uint32, remainingDamage uint32) {
 	if damage == 0 || schoolMask == 0 || schoolMask&0x7E == 0 {
 		return 0, damage
 	}
@@ -18410,6 +18533,16 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]ui
 	resisted = damage * uint32(step) / 10
 	if resisted > damage {
 		resisted = damage
+	}
+	// Unit::CalcSpellResistedDamage (Unit.cpp:1758-1760): the attacker's
+	// ignore-resist auras shrink the resisted portion — ApplyPct on
+	// damageResisted with (100 - ignoredResistance), capped at 100.
+	if resisted > 0 && ignoredResistPct > 0 {
+		pct := ignoredResistPct
+		if pct > 100 {
+			pct = 100
+		}
+		resisted = resisted * uint32(100-pct) / 100
 	}
 	remainingDamage = damage - resisted
 	return resisted, remainingDamage
@@ -22734,7 +22867,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -23155,7 +23288,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -23483,7 +23616,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if burnCaster.player != nil {
 				pen = burnCaster.player.SpellPenetration
 			}
-			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, pen)
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && burnResisted == 0 {
 			dmg = 1
@@ -24109,7 +24242,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -24597,7 +24730,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -24970,7 +25103,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if burnCaster.player != nil {
 				pen = burnCaster.player.SpellPenetration
 			}
-			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, pen)
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && burnResisted == 0 {
 			dmg = 1
@@ -30160,7 +30293,7 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, eff wotlk
 		}
 		var resisted uint32
 		if schoolMask > 1 {
-			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, uint8(level), true, false)
+			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, uint8(level), true, false, s.casterIgnoreResistPct(spellID, uint32(schoolMask)))
 		}
 		logPkt := buildSpellNonMeleeDamageLog(effectTarget, s.playerGUID, spellID, damage, 0, schoolMask, 0, resisted, 0)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)

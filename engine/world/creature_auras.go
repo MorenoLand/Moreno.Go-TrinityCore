@@ -208,6 +208,42 @@ func (s *Server) creatureAuraTypeSum(key creatureAuraKey, auraType uint32) int32
 	return sum
 }
 
+// creatureAuraTypeSumByMisc mirrors Unit::GetTotalAuraModifierByMiscValue
+// (Unit.cpp:4977-4985) for creature victims: the sum of live amounts of one
+// aura type whose effect MiscValue equals miscValue. It serves the
+// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm of
+// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592), where the sum is
+// gated on the spell's DispelType.
+func (s *Server) creatureAuraTypeSumByMisc(key creatureAuraKey, auraType uint32, miscValue int32) int32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 0
+	}
+	var sum int32
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != auraType || effect.MiscValue != miscValue {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				sum += aura.Amounts[index]
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return sum
+}
+
 // amounts of SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) effects on the creature's
 // live auras. C++ accumulates the amounts straight into m_modSpellHitChance
 // (no misc/school gate), and WorldObject::MagicSpellHitResult
