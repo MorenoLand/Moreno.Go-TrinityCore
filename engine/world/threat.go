@@ -1317,13 +1317,18 @@ func (s *Server) distributeHealingThreatLocked(mapID, instanceID uint32, healerX
 		if m == nil || m.Health == 0 || !m.InCombat || m.Evading {
 			continue
 		}
+		// ThreatManager::ForwardThreatForAssistingMe (ThreatManager.cpp:662-680):
+		// the recipient set is the assisted unit's _threatenedByMe — the
+		// creatures that threaten it — not every creature engaged with the
+		// assistant. Go approximates that set as creatures whose current
+		// target is the assisted unit or that hold positive threat on it.
+		// The UNIT_STATE_CONTROLLED split (controlled creatures take 0 but
+		// stay out of the denominator) has no Go model — documented delta.
 		isEngaged := false
-		if m.TargetGUID == healerGUID || m.TargetGUID == targetGUID {
+		if m.TargetGUID == targetGUID {
 			isEngaged = true
-		} else if m.ThreatMgr != nil {
-			if m.ThreatMgr.GetThreat(healerGUID) > 0 || (targetGUID != 0 && m.ThreatMgr.GetThreat(targetGUID) > 0) {
-				isEngaged = true
-			}
+		} else if m.ThreatMgr != nil && targetGUID != 0 && m.ThreatMgr.GetThreat(targetGUID) > 0 {
+			isEngaged = true
 		}
 		if isEngaged {
 			engaged = append(engaged, m)

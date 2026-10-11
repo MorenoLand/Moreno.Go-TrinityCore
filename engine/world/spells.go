@@ -67,6 +67,7 @@ const (
 	spellAttr7CanRestoreSecondaryPower     uint32 = 0x00010000 // SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER (SharedDefines.h:687) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7IsCheatSpell                 uint32 = 0x00000008 // SPELL_ATTR7_IS_CHEAT_SPELL (SharedDefines.h:674) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7SummonPlayerTotem            uint32 = 0x00000020 // SPELL_ATTR7_SUMMON_PLAYER_TOTEM (SharedDefines.h:676) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
+	spellAttr7InterruptOnlyNonplayer       uint32 = 0x00000800 // SPELL_ATTR7_INTERRUPT_ONLY_NONPLAYER (SharedDefines.h:682) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr6AssistIgnoreImmuneFlag       uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable        uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6DontConsumeProcCharges       uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
@@ -10265,6 +10266,33 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if primaryLive && !interruptHandled && isInterruptSpell(spellID) {
 			s.handleEffectInterruptCast(effCtx, targetGUID, spell, wotlk.SpellEffect{})
 		}
+		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2619-2621): a
+		// spell with SPELL_ATTR7_INTERRUPT_ONLY_NONPLAYER (0x800) that lands
+		// on a non-player target fires a triggered SPELL_INTERRUPT_NONPLAYER
+		// (32747, "Deadly Interrupt Effect", SPELL_EFFECT_INTERRUPT_CAST) on
+		// it. Go has no miss model — landed hit targets are all
+		// SPELL_MISS_NONE — so the trigger's interrupt lands directly on the
+		// creature's cast state: CastingUntil arms both the generic and the
+		// channeled current spells (boss_ai.go), matching
+		// Spell::EffectInterruptCast (SpellEffects.cpp:3518-3520) interrupting
+		// CURRENT_FIRST_NON_MELEE_SPELL through CURRENT_AUTOREPEAT_SPELL.
+		// The TYPEID_PLAYER gate rides the findSessionByGUID filter — player
+		// targets are covered by the parent spell's own interrupt effect via
+		// the isInterruptSpell arm above. The SpellHistory school lockout
+		// (SpellHistory.cpp:517) has no creature model — documented delta.
+		if primaryLive && spell.AttributesEx7&spellAttr7InterruptOnlyNonplayer != 0 {
+			for _, effectTarget := range hitTargets {
+				if effectTarget == 0 {
+					continue
+				}
+				if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+					continue
+				}
+				if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, effectTarget); motion != nil && time.Now().Before(motion.CastingUntil) {
+					motion.CastingUntil = time.Time{}
+				}
+			}
+		}
 		if spellID == 2641 { // Dismiss Pet
 			s.handleDismissPet(effCtx, spellID)
 		} else if spellID == 883 { // Call Pet
@@ -15485,7 +15513,16 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	}
 
 	if s.server != nil && effectiveHeal > 0 {
-		s.server.distributeHealingThreat(ctx, s.playerGUID, targetGUID, effectiveHeal, false)
+		// ThreatManager::ForwardThreatForAssistingMe step 1
+		// (ThreatManager.cpp:664-665): a SPELL_ATTR1_NO_THREAT spell
+		// generates no assist threat at all.
+		noThreat := false
+		if sp, found, serr := s.server.Data.Spell(spellID); serr == nil && found {
+			noThreat = sp.AttributesEx&spellAttr1NoThreat != 0
+		}
+		if !noThreat {
+			s.server.distributeHealingThreat(ctx, s.playerGUID, targetGUID, effectiveHeal, false)
+		}
 	}
 
 	// Real aura procs on the done side of a direct heal (TrinityCore
