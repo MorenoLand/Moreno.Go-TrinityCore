@@ -134,6 +134,42 @@ func (s *Server) creatureAuraDamageDonePct(key creatureAuraKey) float64 {
 	return mod
 }
 
+// petBaseArmorBonus sums the live SPELL_AURA_MOD_BASE_RESISTANCE (83)
+// amounts carrying the NORMAL school misc bit for a pet creature, mirroring
+// the pet arm of AuraEffect::HandleModBaseResistance
+// (SpellAuraEffects.cpp:3348-3351): pets (only) gain flat UNIT_MOD_ARMOR
+// TOTAL_VALUE from those effects. The 22/83 arms for players are bridged
+// elsewhere; non-pet creatures get nothing (C++ gates on IsPet()).
+func (s *Server) petBaseArmorBonus(key creatureAuraKey, isPet bool) float64 {
+	if s == nil || key.GUID == 0 || !isPet || s.Data == nil {
+		return 0
+	}
+	bonus := 0.0
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != spellAuraModBaseResistance || effect.MiscValue&1 == 0 {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				bonus += float64(aura.Amounts[index])
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return bonus
+}
+
 // creatureHasAuraType reports whether the creature carries a live (unstopped)
 // aura whose stored AuraType matches, mirroring Unit::HasAuraType for the
 // byte-flag folds in the creature update builder (the C++ remove legs gate

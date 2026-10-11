@@ -150,6 +150,12 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// AutoBalance_UnitScript::ModifySpellDamageTaken analog.
 	damage = s.autoBalanceModifyDealDamage(motion, p.Sess, damage)
 	overkill := uint32(0)
+	// Spell::EffectHealthLeech leech basis (SpellEffects.cpp:1539-1540):
+	// the damage the target actually lost — overkill excluded, Go's inline
+	// path models no absorb — captured before the damage legs mutate
+	// health; the caster-heal arm lands at the end of this function with
+	// the other cast-completion legs.
+	leechDealt := uint32(0)
 	if p.Sess != nil && p.Sess.player != nil {
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no
 		// damage — the kill/health legs are skipped explicitly (not via a
@@ -169,6 +175,12 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// spells included.
 		p.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 		victimHealth := p.Sess.player.Health
+		if !godNegated {
+			leechDealt = damage
+			if leechDealt > victimHealth {
+				leechDealt = victimHealth
+			}
+		}
 		// Duel defeat (Unit.cpp:825-853, 957-973): a charmed creature's
 		// spell lands as a duel defeat when its charmer is the duel
 		// opponent (GetControllingPlayer, Unit.cpp:5996); a wild
@@ -312,6 +324,32 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			// has no _cast, so the tail runs here after the per-hit
 			// consumer, matching C++ relative order.
 			s.fireCreatureSpellLinkedTriggers(ctx, motion, spellID, p.GUID)
+			// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553) for a
+			// creature caster: the caster heals for the damage the target
+			// actually lost (leechDealt above) times the effect's
+			// CalcValueMultiplier (eff.Amplitude, SpellInfo.cpp:344).
+			// The C++ gates on the caster being alive and the unit target
+			// existing; the SpellHealingBonusDone/Taken folds have no
+			// creature model and stay a documented delta.
+			if spellHasEffect(spellInfo, spellEffectHealthLeech) && motion != nil && leechDealt > 0 {
+				multiplier := float32(1)
+				for _, eff := range spellInfo.Effects {
+					if eff.Effect == spellEffectHealthLeech {
+						multiplier = eff.Amplitude
+						break
+					}
+				}
+				if heal := effectValueMultiplied(leechDealt, multiplier); heal > 0 {
+					s.motionMu.Lock()
+					if live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID); live != nil && live.Health > 0 {
+						live.Health += heal
+						if live.MaxHealth > 0 && live.Health > live.MaxHealth {
+							live.Health = live.MaxHealth
+						}
+					}
+					s.motionMu.Unlock()
+				}
+			}
 		}
 	}
 }

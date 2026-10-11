@@ -1225,6 +1225,71 @@ func (s *session) handleEffectTransmitted(ctx context.Context, target protocol.S
 	s.server.spawnDynamicGameObject(dyn)
 }
 
+// creatureEffectTransmitted mirrors Spell::EffectTransmitted
+// (SpellEffects.cpp:4927-5045) for a creature caster: the generic arm
+// spawns the effect's MiscValue gameobject entry as a runtime object owned
+// by the caster creature, despawning after the spell's DBC duration. The
+// fishing-node, summoning-ritual and linked-trap arms have no Go model and
+// stay documented, matching the player-path bridge (handleEffectTransmitted
+// above). Position: C++ prefers the spell dest target, then a
+// radius/random-range GetClosePoint; Go uses the dest target when present
+// and the creature position otherwise (the random-range arm is unbridged).
+func (s *Server) creatureEffectTransmitted(ctx context.Context, m *creatureMotion, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	entry := uint32(0)
+	if eff.MiscValue > 0 {
+		entry = uint32(eff.MiscValue)
+	}
+	if entry == 0 {
+		return
+	}
+	tmpl, err := gobjectTemplateByEntry(ctx, s.WorldStore.DB, entry)
+	if err != nil || tmpl == nil {
+		return
+	}
+	if tmpl.goType == GameObjectTypeFishingNode {
+		return
+	}
+	x, y, z := m.X, m.Y, m.Z
+	if tmpl.goType != GameObjectTypeRitual && target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+	}
+	lowGUID := s.nextDynamicGameObjectLowGUID()
+	newGUID := gameObjectGUID(lowGUID, entry)
+	size := tmpl.size
+	if size <= 0 {
+		size = 1.0
+	}
+	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: m.GUID, SpellID: spell.ID, Map: m.Map, InstanceID: m.InstanceID, X: x, Y: y, Z: z, Orientation: m.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	// SpellEffects.cpp:5019: the object's respawn time is the spell duration;
+	// a runtime spawn with a positive duration despawns when it elapses.
+	if spell.DurationIndex > 0 && s.Data != nil {
+		lvl := m.Level
+		if lvl == 0 {
+			lvl = 80
+		}
+		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, uint32(lvl)); derr == nil && ok && dur > 0 {
+			dyn.DespawnTimer = time.AfterFunc(time.Duration(dur)*time.Millisecond, func() {
+				s.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+			})
+		}
+	}
+	s.spawnDynamicGameObject(dyn)
+	// The summon-object spell log carries the caster creature's GUID,
+	// broadcast to the instance (the player-path bridge writes it to the
+	// caster session and nearby players instead).
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(m.GUID)
+	log.WriteU32(spell.ID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectTransmitted)
+	log.WriteU32(1)
+	log.WritePackedGUID(newGUID)
+	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+}
+
 // cancelFishingBobber mirrors the channeled arm of Spell::cancel
 // (Spell.cpp:3251-3258) for fishing: cancelling the fishing channel
 // deletes the bobber (Unit::RemoveGameObject(spellId, true),

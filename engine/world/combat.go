@@ -456,8 +456,15 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 
 	// Apply target armor damage reduction
-	if target.Armor > 0 {
-		damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage, s.getArmorPenPct())
+	armor := float64(target.Armor)
+	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
+		armor += s.server.petBaseArmorBonus(creatureAuraKeyForTarget(target), tm.OwnerGUID != 0)
+	}
+	if armor < 0 {
+		armor = 0
+	}
+	if armor > 0 {
+		damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct())
 	}
 	if damage < 1 {
 		damage = 1
@@ -1153,8 +1160,15 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		}
 	}
 	// Apply target armor damage reduction for physical ranged attacks
-	if schoolMask == 1 && target.Armor > 0 && damage > 0 {
-		damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage, s.getArmorPenPct())
+	armor := float64(target.Armor)
+	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
+		armor += s.server.petBaseArmorBonus(creatureAuraKeyForTarget(target), tm.OwnerGUID != 0)
+	}
+	if armor < 0 {
+		armor = 0
+	}
+	if schoolMask == 1 && armor > 0 && damage > 0 {
+		damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct())
 	}
 
 	absorbed := uint32(0)

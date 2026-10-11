@@ -616,7 +616,18 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	}
 
 	if targetArmor > 0 {
-		damage = calcArmorReducedDamage(float64(targetArmor), uint8(motion.Level), damage)
+		armor := float64(targetArmor)
+		if !isTargetPlayer {
+			if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil {
+				armor += s.petBaseArmorBonus(creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, vm.OwnerGUID != 0)
+			}
+		}
+		if armor < 0 {
+			armor = 0
+		}
+		if armor > 0 {
+			damage = calcArmorReducedDamage(armor, uint8(motion.Level), damage)
+		}
 	}
 
 	victimDodgeBP := int32(-1)

@@ -1719,6 +1719,20 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
 		}
 	}
+	// Spell::EffectTransmitted (SpellEffects.cpp:4927-5045) for a creature
+	// caster: the generic arm runs once per cast at SPELL_EFFECT_HANDLE_HIT
+	// (not per hit target), spawning the effect's MiscValue gameobject
+	// entry. Placed ahead of the spell_linked tail, matching C++ order
+	// (effect handlers run inside the hit phase; the linked tail fires at
+	// _cast completion). Gated on spellKnown like the tail: C++ never
+	// reaches _cast without a SpellInfo.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if eff := spellInfo.Effects[i]; eff.Effect == spellEffectTransmitted {
+				s.creatureEffectTransmitted(ctx, m, spellTarget, spellInfo, eff)
+			}
+		}
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated

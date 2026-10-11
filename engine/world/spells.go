@@ -13171,10 +13171,19 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// bonus; both are pure multiplications, so running it after the
 		// crit fold is arithmetically equivalent modulo rounding, matching
 		// the melee path's existing placement (combat.go).
-		if !instantKill && damage > 0 && schoolMask&1 != 0 && target.Armor > 0 && spellKnown &&
+		if !instantKill && damage > 0 && schoolMask&1 != 0 && spellKnown &&
 			dmgSpell.AttributesEx4&spellAttr4FixedDamage == 0 && dmgSpell.Attributes&spellAttr0CUIgnoreArmor == 0 &&
 			s.player != nil {
-			damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage, s.getArmorPenPct())
+			armor := float64(target.Armor)
+			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+				armor += s.server.petBaseArmorBonus(creatureAuraKeyForTarget(target), tm.OwnerGUID != 0)
+			}
+			if armor < 0 {
+				armor = 0
+			}
+			if armor > 0 {
+				damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct())
+			}
 		}
 
 		if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
@@ -23903,8 +23912,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// FIXED_DAMAGE spells (Unit.cpp:999-1000). Resilience has no Go
 		// creature-victim model (Unit.cpp:12345-12355: owner-is-player only)
 		// and stays unbridged, as does AOE-avoidance.
-		if !fixedDamage && aura.SchoolMask&1 != 0 && target.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
+		if !fixedDamage && aura.SchoolMask&1 != 0 {
+			armor := float64(target.Armor)
+			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+				armor += s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)
+			}
+			if armor < 0 {
+				armor = 0
+			}
+			if armor > 0 {
+				dmg = calcArmorReducedDamage(armor, aura.CasterLevel, dmg)
+			}
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1828): resist then absorb at the
 		// END of the tick pipeline — the earlier Go order resisted before
@@ -24385,8 +24403,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				}
 			}
 		}
-		if !fixedDamage && aura.SchoolMask&1 != 0 && target.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
+		if !fixedDamage && aura.SchoolMask&1 != 0 {
+			armor := float64(target.Armor)
+			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+				armor += s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)
+			}
+			if armor < 0 {
+				armor = 0
+			}
+			if armor > 0 {
+				dmg = calcArmorReducedDamage(armor, aura.CasterLevel, dmg)
+			}
 		}
 		resisted := uint32(0)
 		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
