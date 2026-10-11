@@ -695,11 +695,13 @@ const (
 	procAttrCantProcFromItemCast uint32 = 0x0000100
 )
 
-// Proc-trigger aura types (SpellAuraDefines.h:84/122/123/311).
+// Proc-trigger aura types (SpellAuraDefines.h:84/122/123/311/313).
 const (
-	spellAuraProcTriggerSpell          = 42
-	spellAuraProcTriggerDamage         = 43
-	spellAuraProcTriggerSpellWithValue = 231
+	spellAuraProcTriggerSpell            = 42
+	spellAuraProcTriggerDamage           = 43
+	spellAuraProcTriggerSpellWithValue   = 231
+	spellAuraRaidProcFromCharge          = 223
+	spellAuraRaidProcFromChargeWithValue = 225
 )
 
 // spellAuraAddTargetTrigger mirrors SPELL_AURA_ADD_TARGET_TRIGGER
@@ -719,14 +721,15 @@ const spellAuraAbilityConsumeNoAmmo = 274
 const spellVampiricAura = 20810
 
 // isProcTriggerAuraType mirrors the LoadSpellProc trigger-aura subset whose
-// C++ HandleProc arm fires a spell or damage (SpellMgr.cpp:1686-1729,
-// SpellAuraEffects.cpp:1010-1043): dummy, proc-trigger-spell,
-// proc-trigger-damage, and proc-trigger-spell-with-value. The remaining
-// isTriggerAura types (reflect, stealth-break, charge-drop auras) have no Go
-// HandleProc arm yet.
+// C++ HandleProc arm fires a spell, damage, or a charge-jump
+// (SpellMgr.cpp:1686-1729, SpellAuraEffects.cpp:1010-1043): dummy,
+// proc-trigger-spell, proc-trigger-damage, proc-trigger-spell-with-value,
+// and the raid-proc-from-charge pair. The remaining isTriggerAura types
+// (reflect, stealth-break) have no Go HandleProc arm yet.
 func isProcTriggerAuraType(auraType uint32) bool {
 	switch auraType {
-	case spellAuraDummy, spellAuraProcTriggerSpell, spellAuraProcTriggerDamage, spellAuraProcTriggerSpellWithValue:
+	case spellAuraDummy, spellAuraProcTriggerSpell, spellAuraProcTriggerDamage, spellAuraProcTriggerSpellWithValue,
+		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue:
 		return true
 	}
 	return false
@@ -2492,6 +2495,17 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 				s.procTriggerDamageAuraProc(ctx, aura, auraSpell, i, triggerTargetGUID)
 				continue
 			}
+			if eff.Aura == spellAuraRaidProcFromCharge || eff.Aura == spellAuraRaidProcFromChargeWithValue {
+				// AuraEffect::HandleRaidProcFromChargeAuraProc /
+				// HandleRaidProcFromChargeWithValueAuraProc
+				// (SpellAuraEffects.cpp:5765-5858): the charge-jump proc.
+				// The generic charge consume above already ran (C++
+				// PrepareProcToTrigger, SpellAuras.cpp:2025-2043), so
+				// aura.RemainingCharges is the post-prepare count C++
+				// reads as jumps.
+				s.procRaidProcFromCharge(ctx, aura, auraSpell, eff, i)
+				continue
+			}
 			if eff.TriggerSpell == 0 {
 				// C++ HandleProcTriggerSpellAuraProc warns and returns when
 				// the effect carries no triggered spell (SpellAuraEffects.cpp:5654-5661).
@@ -2561,4 +2575,159 @@ func (s *session) procTriggerDamageAuraProc(ctx context.Context, aura *activeAur
 		basePoint = uint32(aura.Amounts[effIndex])
 	}
 	s.executeSpellDamageNoCrit(ctx, triggerTargetGUID, auraSpell.ID, basePoint, effIndex)
+}
+
+// procRaidProcFromCharge mirrors AuraEffect::HandleRaidProcFromChargeAuraProc
+// (SpellAuraEffects.cpp:5765-5809) and
+// HandleRaidProcFromChargeWithValueAuraProc (SpellAuraEffects.cpp:5811-5858):
+// the 223/225 charge-jump proc (Shiver, Cold Stare, Prayer of Mending). The
+// current aura expires on proc finish; when charges remain, the aura spell
+// jumps to a random raid member or pet in radius with the remaining charge
+// count, then the trigger spell fires on the current holder.
+func (s *session) procRaidProcFromCharge(ctx context.Context, aura *activeAura, auraSpell wotlk.Spell, eff *wotlk.SpellEffect, effIndex int) {
+	if s == nil || s.player == nil || aura == nil || eff == nil {
+		return
+	}
+	withValue := eff.Aura == spellAuraRaidProcFromChargeWithValue
+	var triggerSpellID uint32
+	if !withValue {
+		// Hardcoded jump table (SpellAuraEffects.cpp:5771-5785); unlisted
+		// aura spells log and return in C++.
+		switch auraSpell.ID {
+		case 57949: // Shiver
+			triggerSpellID = 57952
+		case 59978: // Shiver
+			triggerSpellID = 59979
+		case 43593: // Cold Stare
+			triggerSpellID = 43594
+		default:
+			return
+		}
+	} else {
+		// Currently only Prayer of Mending: priest family, flags[1] & 0x20
+		// (SpellAuraEffects.cpp:5815-5820).
+		if auraSpell.SpellFamilyName != spellFamilyPriest || len(auraSpell.SpellFamilyFlags) < 2 || auraSpell.SpellFamilyFlags[1]&0x20 == 0 {
+			return
+		}
+		triggerSpellID = 33110
+	}
+	// Capture live aura state before the expiry below drops the record.
+	jumps := aura.RemainingCharges
+	casterGUID := aura.CasterGUID
+	spellID := aura.SpellID
+	schoolMask := aura.SchoolMask
+	durationMs := aura.DurationMs
+	amount := aura.Amount
+	if effIndex >= 0 && effIndex < len(aura.Amounts) && aura.Amounts[effIndex] > 0 {
+		amount = uint32(aura.Amounts[effIndex])
+	}
+	// Current aura expires on proc finish (SetCharges(0) + SetUsingCharges,
+	// SpellAuraEffects.cpp:5787-5788).
+	s.removeAura(spellID)
+	if jumps > 0 {
+		// Next-target selection needs a live caster for CalcRadius
+		// (SpellAuraEffects.cpp:5793-5794).
+		if radius, ok := raidProcJumpRadius(s, casterGUID, eff); ok {
+			if targetGUID := s.nextRaidMemberOrPetGUID(radius); targetGUID != 0 {
+				// target->CastSpell(triggerTarget, GetId(), {this,
+				// GetCasterGUID()}): the aura spell re-applies on the new
+				// holder with the original caster. The 225 arm additionally
+				// carries BP0 = the triggering amount and the original
+				// caster (CastSpellExtraArgs, SpellAuraEffects.cpp:5791,
+				// 5828-5830); Go's apply path takes the amount directly and
+				// the explicit caster GUID.
+				s.applyAuraToTarget(ctx, targetGUID, auraSpell, *eff, effIndex, durationMs, eff.AuraPeriod, amount, schoolMask, nil, false, casterGUID, false, 0, true)
+				// aura->SetCharges(jumps) on the freshly jumped aura
+				// (SpellAuraEffects.cpp:5798-5799).
+				if ts := s.server.findSessionByGUID(targetGUID); ts != nil {
+					ts.castMu.Lock()
+					if na := ts.activeAuras[auraSpell.ID]; na != nil && !na.Stopped {
+						na.RemainingCharges = jumps
+					}
+					ts.castMu.Unlock()
+				}
+			}
+		}
+	}
+	// target->CastSpell(target, triggerSpellId, {this, GetCasterGUID()}):
+	// the trigger fires on the current holder. Go's cast path has no
+	// OriginalCaster slot, so the trigger runs with the holder as caster
+	// (documented delta).
+	s.triggeredByAuraCast = true
+	s.castSpellDirect(ctx, triggerSpellID, s.playerGUID)
+	s.triggeredByAuraCast = false
+}
+
+// raidProcJumpRadius resolves the jump radius for a raid-proc-from-charge
+// aura: SpellInfo::Effects[effIndex].CalcRadius(caster)
+// (SpellAuraEffects.cpp:5794). The jump only happens with a live caster,
+// mirroring the C++ GetCaster() gate.
+func raidProcJumpRadius(s *session, casterGUID uint64, eff *wotlk.SpellEffect) (float32, bool) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil || eff == nil || casterGUID == 0 {
+		return 0, false
+	}
+	var level uint32
+	if cs := s.server.findSessionByGUID(casterGUID); cs != nil && cs.player != nil {
+		level = uint32(cs.player.Level)
+	} else if uint16(casterGUID>>48) == 0xF130 {
+		if m := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, casterGUID); m != nil {
+			level = m.Level
+		} else {
+			return 0, false
+		}
+	} else {
+		return 0, false
+	}
+	radius, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, level)
+	if err != nil || !ok || radius <= 0 {
+		return 0, false
+	}
+	return radius, true
+}
+
+// nextRaidMemberOrPetGUID mirrors Unit::GetNextRandomRaidMemberOrPet
+// (Unit.cpp:6423): a random alive, non-hostile raid member or guardian pet
+// within radius of the aura holder, excluding the holder itself. With no
+// group, only the holder's pet qualifies.
+func (s *session) nextRaidMemberOrPetGUID(radius float32) uint64 {
+	if s == nil || s.player == nil || s.server == nil || radius <= 0 {
+		return 0
+	}
+	var candidates []uint64
+	considerPet := func(owner *session) {
+		if owner == nil || owner.player == nil || owner.player.PetGUID == 0 {
+			return
+		}
+		m := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, owner.player.PetGUID)
+		if m == nil || m.Health == 0 {
+			return
+		}
+		if dist := distance3D(s.player.X, s.player.Y, s.player.Z, m.X, m.Y, m.Z); dist <= float64(radius) {
+			candidates = append(candidates, owner.player.PetGUID)
+		}
+	}
+	if s.groupID != 0 {
+		for _, m := range s.server.getGroupSessions(s.groupID) {
+			if m == nil || m.player == nil || m.playerGUID == s.playerGUID {
+				continue
+			}
+			if m.player.Map != s.player.Map || m.player.InstanceID != s.player.InstanceID {
+				continue
+			}
+			if m.player.Health == 0 {
+				continue
+			}
+			if distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) > float64(radius) {
+				continue
+			}
+			candidates = append(candidates, m.playerGUID)
+			considerPet(m)
+		}
+	} else {
+		considerPet(s)
+	}
+	if len(candidates) == 0 {
+		return 0
+	}
+	return candidates[rand.Intn(len(candidates))]
 }

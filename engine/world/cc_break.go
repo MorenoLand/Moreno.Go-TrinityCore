@@ -1,5 +1,9 @@
 package world
 
+import (
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+)
+
 // SpellAuraInterruptFlags bitmask values from TrinityCore SharedDefines.h:925-955
 const (
 	auraInterruptFlagHitBySpell            uint32 = 0x00000001 // removed by any damage (direct or periodic)
@@ -56,9 +60,56 @@ func getSpellAuraInterruptFlags(spellID uint32, dbcFlags uint32) uint32 {
 	}
 }
 
+// isBreakableCCAuraType mirrors the AuraEffect::HandleProc switch
+// (SpellAuraEffects.cpp:1017-1024): the CC aura types whose own amount
+// drains on damage procs via HandleBreakableCCAuraProc.
+func isBreakableCCAuraType(auraType uint32) bool {
+	switch auraType {
+	case 5, 7, 12, 26, 56: // MOD_CONFUSE, MOD_FEAR, MOD_STUN, MOD_ROOT, TRANSFORM
+		return true
+	}
+	return false
+}
+
+// drainBreakableCCAura mirrors AuraEffect::HandleBreakableCCAuraProc
+// (SpellAuraEffects.cpp:5644-5653): per damage hit, a breakable-CC aura's
+// own effect amount drops by the damage dealt; at zero or below the aura
+// breaks. drained=false with remove=false means the spell carries no
+// breakable-CC effect or lacks the taken proc flag — C++ runs no drain
+// there (the aura breaks only via interrupt flags, handled by the caller).
+// Multi-effect CC auras drain each CC effect and break when the first
+// drained effect hits zero (single-effect auras: exact).
+func drainBreakableCCAura(aura *activeAura, spell wotlk.Spell, wantProcFlag uint32, dmg uint32) (drained, remove bool) {
+	if aura == nil || spell.ProcTypeMask&wantProcFlag == 0 {
+		return false, false
+	}
+	first := -1
+	for idx := range spell.Effects {
+		eff := &spell.Effects[idx]
+		if eff.Effect == 0 || !isBreakableCCAuraType(eff.Aura) || idx >= len(aura.Amounts) {
+			continue
+		}
+		if first < 0 {
+			first = idx
+		}
+		if left := aura.Amounts[idx] - int32(dmg); left <= 0 {
+			return false, true
+		} else {
+			aura.Amounts[idx] = left
+		}
+	}
+	if first < 0 {
+		return false, false
+	}
+	// Keep the primary amount in sync with the first drained effect.
+	aura.Amount = uint32(aura.Amounts[first])
+	return true, false
+}
+
 // procDamageAuras removes CC and break-on-damage auras (e.g. Gouge, Sap, Blind, Polymorph, Stealth)
-// when the player takes damage. Also tracks damage threshold breaks for Root and Fear mechanics.
-// Mirrors TrinityCore Unit::ProcDamageAndSpellFor and RemoveAurasWithInterruptFlags.
+// when the player takes damage, and drains breakable-CC aura amounts per
+// AuraEffect::HandleBreakableCCAuraProc.
+// Mirrors RemoveAurasWithInterruptFlags (Unit.cpp:744/897) plus the proc drain.
 func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 	flags := auraInterruptFlagTakeDamage | auraInterruptFlagHitBySpell
 	if isDirectDamage {
@@ -74,51 +125,29 @@ func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 		return
 	}
 
-	maxHP := uint32(1000)
-	if s.player != nil && s.player.MaxHealth > 0 {
-		maxHP = s.player.MaxHealth
+	// The taken proc flag kind follows the damage kind (C++ proc-flag
+	// matching: direct damage -> PROC_FLAG_TAKEN_DAMAGE, otherwise
+	// PROC_FLAG_TAKEN_PERIODIC). C++ has no max-HP threshold model for
+	// CC breaks — the 15%/10% accumulation this replaces was a Go
+	// invention (the cited Unit::ProcDamageAndSpellFor does not exist in
+	// this TrinityCore fork).
+	wantProcFlag := procFlagTakenPeriodic
+	if isDirectDamage {
+		wantProcFlag = procFlagTakenDamage
 	}
-
-	// Root threshold: ~15% of max HP (TrinityCore Unit::ProcDamageAndSpellFor)
-	rootThreshold := uint32(float64(maxHP) * 0.15)
-	if rootThreshold < 100 {
-		rootThreshold = 100
-	}
-
-	// Fear threshold: ~10% of max HP
-	fearThreshold := uint32(float64(maxHP) * 0.10)
-	if fearThreshold < 100 {
-		fearThreshold = 100
-	}
-
 	var toRemove []uint32
 	s.castMu.Lock()
-	if s.activeAuras != nil {
+	if s.activeAuras != nil && s.server != nil && s.server.Data != nil {
 		for spellID, aura := range s.activeAuras {
 			if aura == nil || aura.Stopped {
 				continue
 			}
-
-			// Root (SPELL_AURA_MOD_ROOT = 26 or MechanicRoot = 7)
-			if aura.AuraType == 26 || aura.Mechanic == 7 {
-				aura.DamageTaken += dmg
-				if aura.DamageTaken >= rootThreshold {
-					toRemove = append(toRemove, spellID)
-				} else if isDirectDamage && float64(dmg)/float64(rootThreshold) >= 1.0 {
-					toRemove = append(toRemove, spellID)
-				}
+			sp, found, err := s.server.Data.Spell(spellID)
+			if err != nil || !found {
 				continue
 			}
-
-			// Fear (SPELL_AURA_MOD_FEAR = 7 or MechanicFear = 5)
-			if aura.AuraType == 7 || aura.Mechanic == 5 {
-				aura.DamageTaken += dmg
-				if aura.DamageTaken >= fearThreshold {
-					toRemove = append(toRemove, spellID)
-				} else if isDirectDamage && float64(dmg)/float64(fearThreshold) >= 1.0 {
-					toRemove = append(toRemove, spellID)
-				}
-				continue
+			if _, remove := drainBreakableCCAura(aura, sp, wantProcFlag, dmg); remove {
+				toRemove = append(toRemove, spellID)
 			}
 		}
 	}
@@ -129,43 +158,33 @@ func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 	}
 }
 
-// procCreatureDamageAuras breaks root and fear auras on creatures after exceeding damage thresholds.
+// procCreatureDamageAuras drains breakable-CC aura amounts on creatures per
+// AuraEffect::HandleBreakableCCAuraProc (SpellAuraEffects.cpp:5644-5653),
+// mirroring the player path above.
 func (s *Server) procCreatureDamageAuras(key creatureAuraKey, isDirectDamage bool, damage uint32, maxHealth uint32) {
 	if s == nil || key.GUID == 0 || damage == 0 {
 		return
 	}
 
-	maxHP := maxHealth
-	if maxHP == 0 {
-		maxHP = 1000
-	}
-	rootThreshold := uint32(float64(maxHP) * 0.15)
-	if rootThreshold < 100 {
-		rootThreshold = 100
-	}
-	fearThreshold := uint32(float64(maxHP) * 0.10)
-	if fearThreshold < 100 {
-		fearThreshold = 100
+	wantProcFlag := procFlagTakenPeriodic
+	if isDirectDamage {
+		wantProcFlag = procFlagTakenDamage
 	}
 
 	var toRemove []uint32
 	s.auraMu.Lock()
-	if s.activeCreatureAuras != nil {
+	if s.activeCreatureAuras != nil && s.Data != nil {
 		if auras, ok := s.activeCreatureAuras[key]; ok && auras != nil {
 			for spellID, aura := range auras {
 				if aura == nil || aura.Stopped {
 					continue
 				}
-				if aura.AuraType == 26 || aura.Mechanic == 7 {
-					aura.DamageTaken += damage
-					if aura.DamageTaken >= rootThreshold {
-						toRemove = append(toRemove, spellID)
-					}
-				} else if aura.AuraType == 7 || aura.Mechanic == 5 {
-					aura.DamageTaken += damage
-					if aura.DamageTaken >= fearThreshold {
-						toRemove = append(toRemove, spellID)
-					}
+				sp, found, err := s.Data.Spell(spellID)
+				if err != nil || !found {
+					continue
+				}
+				if _, remove := drainBreakableCCAura(aura, sp, wantProcFlag, damage); remove {
+					toRemove = append(toRemove, spellID)
 				}
 			}
 		}
