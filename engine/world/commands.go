@@ -55,7 +55,7 @@ func (s *session) sendPlayerUpdate() {
 	s.castMu.Unlock()
 	fields := map[int]uint32{
 		unitFieldHealth:                   s.player.Health,
-		unitFieldMaxHealth:                s.player.MaxHealth,
+		unitFieldMaxHealth:                s.effectiveMaxHealth(),
 		unitFieldLevel:                    uint32(s.player.Level),
 		unitFieldFaction:                  s.server.raceFaction(s.player.Race),
 		unitFieldFlags:                    unitFlagPlayerControlled | s.player.UnitFlags,

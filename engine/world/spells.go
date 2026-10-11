@@ -18439,12 +18439,18 @@ func (s *session) removeAura(spellID uint32) {
 	removedFakeInebriation := uint32(0)
 	removedEffectMask := uint8(0)
 	removedCasterGUID := uint64(0)
+	removedHealthAura := (*activeAura)(nil)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
 			removedEffectMask = aura.EffectMask
 			removedCasterGUID = aura.CasterGUID
 			removedAuraType = aura.AuraType
+			// Health-aura remove leg (aura_health.go): capture before
+			// Stopped is set — activeAuraHasEffect ignores stopped auras.
+			if s.auraTouchesHealth(aura) {
+				removedHealthAura = aura
+			}
 			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
 			wasAttackPowerOfArmor = s.activeAuraHasEffect(aura, spellAuraModAttackPowerOfArmor)
 			wasMounted = aura.AuraType == spellAuraMounted
@@ -18668,6 +18674,13 @@ func (s *session) removeAura(spellID uint32) {
 	// mirrors the C++ `else if (target->IsAlive())`.
 	if spellID == spiritOfRedemptionSpellID && s.player != nil && s.player.Health > 0 {
 		s.completeSpiritOfRedemptionDeath(context.Background())
+	}
+	// AuraEffect::HandleAuraModIncreaseHealth family remove leg
+	// (SpellAuraEffects.cpp:3650-3768): the aura record is already erased
+	// above (Unit::_UnapplyAura erases before the handlers, Unit.cpp:3548),
+	// so the recompute sees the remaining auras — the mod drops cleanly.
+	if removedHealthAura != nil && s.player != nil {
+		s.removeHealthAuraArms(removedHealthAura)
 	}
 	s.sendPlayerUpdate()
 	if wasVisibilityAura && s.server != nil {
@@ -20824,6 +20837,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// Unit::CanUseAttackType (Unit.cpp:2462-2475).
 		if eff.Aura == spellAuraModDisarm || eff.Aura == spellAuraModDisarmOffhand || eff.Aura == spellAuraModDisarmRanged {
 			targetSess.applyDisarmAura(ctx, eff.Aura)
+		}
+		// AuraEffect::HandleAuraModIncreaseHealth family apply leg
+		// (SpellAuraEffects.cpp:3650-3768): the flat arms heal by the
+		// amount, the 133 arm re-anchors health to the pre-apply pct.
+		switch eff.Aura {
+		case spellAuraModIncreaseHealth, spellAuraModIncreaseHealthOld, spellAuraModIncreaseHealth2, spellAuraModIncreaseHealthPercent, spellAuraModBaseHealthPct:
+			targetSess.applyHealthAuraArms(spell.ID, eff.Aura, int32(amount))
 		}
 
 		stackCount := uint8(1)
