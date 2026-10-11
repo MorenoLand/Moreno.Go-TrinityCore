@@ -317,6 +317,17 @@ func buildCreatureUpdate(spawn creatureSpawn, observer *session) []byte {
 		observer.server.creatureHasAuraType(creatureAuraKey{Map: observer.player.Map, InstanceID: observer.player.InstanceID, GUID: rawGUID}, spellAuraUntrackable) {
 		values[unitFieldBytes1] |= uint32(unitStandFlagUntrackable) << 16
 	}
+	// AuraEffect::HandleAuraModStalked (SpellAuraEffects.cpp) on creatures: a
+	// live 68-effect aura sets UNIT_DYNFLAG_TRACK_UNIT in the dynamic flags
+	// (Hunter's Mark etc.), cleared behind the HasAuraType gate on remove —
+	// a live fold over the same set is the equivalent check. The C++
+	// UpdateObjectVisibility arm has no Go model; the flag rides the
+	// creature update like the 120 fold above. The player-target arm has no
+	// Go model (UNIT_FIELD_DYNAMIC_FLAGS is not written on player updates).
+	if observer != nil && observer.server != nil && observer.player != nil && rawGUID != 0 &&
+		observer.server.creatureHasAuraType(creatureAuraKey{Map: observer.player.Map, InstanceID: observer.player.InstanceID, GUID: rawGUID}, spellAuraModStalked) {
+		values[unitFieldDynamicFlags] |= unitDynFlagTrackUnit
+	}
 	if spawn.Emote != 0 {
 		values[unitNPCEmoteState] = spawn.Emote
 	}

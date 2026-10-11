@@ -33,6 +33,11 @@ const unitDynFlagLootable uint32 = 0x00000001
 // set by Creature::SetLootRecipient on the first player-attributed hit.
 const unitDynFlagTapped uint32 = 0x00000004
 
+// unitDynFlagTrackUnit mirrors UNIT_DYNFLAG_TRACK_UNIT (SharedDefines.h:3129):
+// set by AuraEffect::HandleAuraModStalked (SpellAuraEffects.cpp) on a unit
+// carrying a live 68-effect aura (Hunter's Mark etc.).
+const unitDynFlagTrackUnit uint32 = 0x00000002
+
 // creatureFlagExtraNoPlayerDamageReq mirrors
 // CREATURE_FLAG_EXTRA_NO_PLAYER_DAMAGE_REQ (CreatureData.h:58): the
 // creature needs no player damage for kill credit.

@@ -2291,6 +2291,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				damage = uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
 			}
+			// AuraEffect::HandleModDamageDone (SpellAuraEffects.cpp): the flat
+			// NORMAL-school 13 arm runs on every target type via
+			// Unit::UpdateAllDamageDoneMods (Unit.cpp:9334-9360) — the player
+			// twin is meleeDamageDoneFlat (aura_damage.go). The percent arm
+			// is the separate HandleModDamagePercentDone (79) handler.
+			if flat := s.creatureAuraDamageDoneFlat(creatureAuraKeyForMotion(motion)); flat != 0 {
+				if dmg := int32(damage) + flat; dmg <= 0 {
+					damage = 0
+				} else {
+					damage = uint32(dmg)
+				}
+			}
 			// AutoBalance_UnitScript::ModifyMeleeDamage analog.
 			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
 			if target.Sess.player.Armor > 0 {

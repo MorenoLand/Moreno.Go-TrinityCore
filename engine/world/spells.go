@@ -612,6 +612,7 @@ const (
 	spellAuraModPacify                                = 25  // SPELL_AURA_MOD_PACIFY (SpellAuraDefines.h:105)
 	spellAuraModPacifySilence                         = 60  // SPELL_AURA_MOD_PACIFY_SILENCE (SpellAuraDefines.h:140)
 	spellAuraModUnattackable                          = 93  // SPELL_AURA_MOD_UNATTACKABLE (SpellAuraDefines.h:173)
+	spellAuraPreventsFleeing                          = 92  // SPELL_AURA_PREVENTS_FLEEING (SpellAuraDefines.h:172)
 	spellAuraStateImmunity                            = 38  // SPELL_AURA_STATE_IMMUNITY (SpellAuraDefines.h:118)
 	spellAuraEffectImmunity                           = 37  // SPELL_AURA_EFFECT_IMMUNITY (SpellAuraDefines.h:117)
 	spellAuraDispelImmunity                           = 41  // SPELL_AURA_DISPEL_IMMUNITY (SpellAuraDefines.h:121)
@@ -21647,6 +21648,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if eff.Aura == spellAuraControlVehicle && s.player != nil && s.server != nil {
 		if kit := s.server.getVehicleKit(targetKey.Map, targetKey.InstanceID, targetGUID); kit != nil {
 			s.enterVehicle(ctx, targetGUID, int8(int32(amount)-1))
+		}
+	}
+	// AuraEffect::HandlePreventFleeing apply leg (SpellAuraEffects.cpp): a
+	// fresh 92-effect aura cancels the creature's low-health flee
+	// (SetControlled(false, UNIT_STATE_FLEEING)) unless the creature already
+	// carries a fear aura (the C++ apply-leg HasAuraType(SPELL_AURA_MOD_FEAR)
+	// gate; the C++ guard is `!apply || HasAuraType` so re-applies and
+	// removes never touch it). Players have no fleeing state in Go.
+	if eff.Aura == spellAuraPreventsFleeing && s.server != nil {
+		if !s.server.creatureHasAuraType(targetKey, spellAuraModFear) {
+			if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
+				m.FleeingUntil = time.Time{}
+			}
 		}
 	}
 
