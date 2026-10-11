@@ -930,11 +930,119 @@ func (s *session) petAreaVictimPos(ctx context.Context, motion *creatureMotion, 
 	return nil
 }
 
+// checkPetSpellCheckTarget is the pet-caster twin of the explicit-target
+// SpellInfo::CheckTarget block in Spell::CheckCast (Spell.cpp:5372 —
+// CheckTarget(m_caster, target, implicit=false) for a creature caster).
+// C++ relative order: between the conditions block (5337-5348) and the
+// behind/facing arms (5379-5384); runs for triggered casts too (no C++
+// triggered exemption). Returns false when the cast must fizzle. Only
+// arms with a Go motion model are bridged; the rest are documented
+// below, matching the player path (spells.go) where it bridged them.
+// The client-initiated gauntlet (pets.go checkPetSpellTarget) already
+// sends fail codes for the CANT_TARGET_SELF and GM/invisibility arms;
+// this is the shared backstop for AI and triggered pet casts, which
+// fizzle silently like the other CheckCast twins here.
+func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, targetGUID uint64, explicitUnitTarget bool) bool {
+	if s == nil || motion == nil {
+		return true
+	}
+	// C++ only enters the block for m_targets.GetUnitTarget() != null.
+	if !explicitUnitTarget {
+		return true
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1637-1638):
+	// SPELL_ATTR1_CANT_TARGET_SELF with caster == target.
+	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID == motion.GUID {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1641-1642): the CanSeeOrDetect
+	// visibility gate is unbridged — Go has no stealth/invisibility-level
+	// model on either side (documented no-bridge, like the player path).
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1650-1651):
+	// SPELL_ATTR1_CANT_TARGET_IN_COMBAT with an in-combat target. The
+	// UNIT_FLAG_PET_IN_COMBAT half has no Go model (unitTargetInCombat).
+	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.unitTargetInCombat(targetGUID) {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1654-1662):
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS — no Go model (target-side ghost aura
+	// state is unmodeled); documented no-bridge.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1667-1692): the CANT_TARGET_TAPPED,
+	// PICKPOCKET and DISARM arms sit inside C++'s
+	// `caster->GetTypeId() == TYPEID_PLAYER` block — vacuous for a pet
+	// caster, so they are correctly absent here.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1697-1710): corpse targets —
+	// no Go corpse-target model on the pet path; documented no-bridge.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1712-1713):
+	// SPELL_ATTR3_ONLY_TARGET_PLAYERS with a non-player target.
+	if spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0 {
+		if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); !isPlayer {
+			return false
+		}
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1715-1716): dead targets fail
+	// unless the spell allows them (IsAllowingDeadTarget, 1177).
+	// Unresolvable targets fail open, like the LOS arms below.
+	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		if tgt.Health == 0 && !spellAllowsDeadTarget(spell) {
+			return false
+		}
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1718-1720): the implicit-only
+	// crowd-control gate is vacuous — C++ passes implicit=false for
+	// creature casters. (SpellInfo.cpp:1723 UNIT_FLAG_NOT_SELECTABLE is
+	// commented out in C++; vacant.)
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1728): target creature-type
+	// gate, ahead of the aura-state/aura-spell gates in C++ order.
+	if failReason := s.checkTargetCreatureType(ctx, spell, targetGUID); failReason != 0 {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1736-1743): GM-mode /
+	// GM-invisibility. The pet caster's GetAffectingPlayer is the owner
+	// session, so the gate fires for harmful and helpful casts alike,
+	// like C++; self-targets are exempt (unitTarget != caster).
+	if targetGUID != motion.GUID && s.server.gmAttackTargetBlocked(targetGUID) {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1745-1747): in-flight targets.
+	if s.explicitTargetFlyingBlocked(spell, targetGUID) {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1757-1766): target aura-state
+	// requirements. C++ skips both arms for vehicle casters and when the
+	// target is the caster's charmer/owner — the pet's owner (or charmer)
+	// is exempt here. Documented delta: targetHasAuraState filters
+	// per-caster attributed auras on the owner's GUID, while pet-applied
+	// auras record the pet's motion GUID as caster.
+	charmerExempt := targetGUID == motion.OwnerGUID || (motion.CharmOwnerGUID != 0 && targetGUID == motion.CharmOwnerGUID)
+	if !charmerExempt {
+		if spell.TargetAuraState != 0 && !s.targetHasAuraState(ctx, targetGUID, spell.TargetAuraState, spell) {
+			return false
+		}
+		if spell.ExcludeTargetAuraState != 0 && s.targetHasAuraState(ctx, targetGUID, spell.ExcludeTargetAuraState, spell) {
+			return false
+		}
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1769-1773): target aura-spell
+	// requirements (no charmer exemption in C++).
+	if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
+		return false
+	}
+	if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1776-1778):
+	// SPELL_AURA_PREVENT_RESURRECTION — unbridged on the player path too;
+	// documented no-bridge parity.
+	return true
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
 	}
 	targetGUID := target.UnitGUID
+	explicitUnitTarget := targetGUID != 0
 	if targetGUID == 0 {
 		targetGUID = motion.GUID
 	}
@@ -943,7 +1051,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// (boss_ai.go). C++ relative order: the shapeshift leg (5247), the
 	// SPELL_AURA_BLOCK_SPELL_FAMILY leg (5277-5278) and the caster-state
 	// block (5298-5314) precede the conditions block (5337-5348), which
-	// precedes the behind/facing arms (5379-5384), the unit-target
+	// precedes the explicit-target CheckTarget block (5353-5377), the
+	// behind/facing arms (5379-5384), the unit-target
 	// line-of-sight arm (5391-5401), the dest line-of-sight arm (5403-5409),
 	// the spell-focus arm (5477-5481), and CheckRange (5496) last. All of
 	// them precede the power drain (TakePower, Spell.cpp:3449 runs after
@@ -964,6 +1073,23 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 	}
 	if !s.server.checkCreatureSpellCastConditions(ctx, motion, spell.ID, targetGUID) {
+		return true
+	}
+	// SpellInfo::CheckExplicitTarget null-target arm (SpellInfo.cpp:1784-1790):
+	// a spell whose explicit target mask needs a target fizzles when none
+	// was provided. The client-initiated gauntlet (pets.go) already covers
+	// this via Spell::CheckPetCast (Spell.cpp:6230-6235,
+	// SPELL_FAILED_BAD_IMPLICIT_TARGETS); this is the shared backstop for
+	// AI and triggered pet casts. C++ relative order: CheckExplicitTarget
+	// (5365) precedes CheckTarget (5372).
+	if !explicitUnitTarget && spellNeedsExplicitUnitTarget(spell) {
+		return true
+	}
+	// SpellInfo::CheckTarget on the explicit unit target (Spell.cpp:5372),
+	// between the conditions block and the behind/facing arms in C++
+	// relative order. Runs for triggered casts too (no C++ triggered
+	// exemption on this block).
+	if !s.checkPetSpellCheckTarget(ctx, motion, spell, targetGUID, explicitUnitTarget) {
 		return true
 	}
 	if !s.server.checkCreatureSpellBehindFacing(motion, spell, targetGUID) {

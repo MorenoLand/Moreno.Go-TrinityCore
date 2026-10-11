@@ -908,6 +908,132 @@ func (s *Server) creatureUnitTargetPos(m *creatureMotion, targetGUID uint64) (fl
 	return 0, 0, false
 }
 
+// creatureSpellTargetInCombat is the Server-level twin of unitTargetInCombat
+// for wild-creature casters (SpellInfo::CheckTarget, SpellInfo.cpp:1650):
+// a target player's session combat state, or a target creature's
+// motion.InCombat. Resolves nothing — returns false when the guid maps to
+// no unit. The UNIT_FLAG_PET_IN_COMBAT half of the C++ OR has no Go model.
+func (s *Server) creatureSpellTargetInCombat(m *creatureMotion, targetGUID uint64) bool {
+	if s == nil {
+		return false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		return ts.attackTarget != 0 || ts.player.UnitFlags&unitFlagInCombat != 0
+	}
+	if m == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, targetGUID)
+	s.motionMu.Unlock()
+	return motion != nil && motion.InCombat
+}
+
+// creatureSpellTargetDead reports whether the explicit unit target is dead
+// (SpellInfo::CheckTarget, SpellInfo.cpp:1715): player health or
+// creature-motion health. False when the guid resolves to nothing
+// (fail-open, like the LOS arms).
+func (s *Server) creatureSpellTargetDead(m *creatureMotion, targetGUID uint64) bool {
+	if s == nil {
+		return false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		return ts.player.Health == 0
+	}
+	if m == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, targetGUID)
+	s.motionMu.Unlock()
+	return motion != nil && motion.Health == 0
+}
+
+// checkCreatureSpellCheckTarget is the wild-creature-caster twin of the
+// explicit-target SpellInfo::CheckTarget block in Spell::CheckCast
+// (Spell.cpp:5372 — CheckTarget(m_caster, target, implicit=false) for a
+// creature caster). C++ relative order: between the conditions block
+// (5337-5348) and the range arm (5496); runs for triggered casts too (no
+// C++ triggered exemption). Returns false when the cast must fizzle. Only
+// arms with a clean Server-level model are bridged; the creature-type
+// (1728), aura-state (1757-1766) and aura-spell (1769-1773) arms need
+// Server twins of the session-anchored target resolvers and are
+// documented follow-ups below.
+func (s *Server) checkCreatureSpellCheckTarget(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || m == nil {
+		return true
+	}
+	// C++ only enters the block for m_targets.GetUnitTarget() != null.
+	if targetGUID == 0 {
+		return true
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1637-1638):
+	// SPELL_ATTR1_CANT_TARGET_SELF with caster == target.
+	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID == m.GUID {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1641-1642): the CanSeeOrDetect
+	// visibility gate is unbridged — Go has no stealth/invisibility-level
+	// model on either side (documented no-bridge, like the player path).
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1650-1651):
+	// SPELL_ATTR1_CANT_TARGET_IN_COMBAT with an in-combat target.
+	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.creatureSpellTargetInCombat(m, targetGUID) {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1654-1662):
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS — no Go model (target-side ghost aura
+	// state is unmodeled); documented no-bridge.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1667-1692): the CANT_TARGET_TAPPED,
+	// PICKPOCKET and DISARM arms sit inside C++'s
+	// `caster->GetTypeId() == TYPEID_PLAYER` block — vacuous for a creature
+	// caster, so they are correctly absent here.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1697-1710): corpse targets —
+	// no Go corpse-target model on the creature path; documented no-bridge.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1712-1713):
+	// SPELL_ATTR3_ONLY_TARGET_PLAYERS with a non-player target — a guid
+	// with a live session is a player.
+	if spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0 && s.findSessionByGUID(targetGUID) == nil {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1715-1716): dead targets fail
+	// unless the spell allows them (IsAllowingDeadTarget, 1177).
+	if s.creatureSpellTargetDead(m, targetGUID) && !spellAllowsDeadTarget(spell) {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1718-1720): the implicit-only
+	// crowd-control gate is vacuous — C++ passes implicit=false for
+	// creature casters. (SpellInfo.cpp:1723 UNIT_FLAG_NOT_SELECTABLE is
+	// commented out in C++; vacant.)
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1728): target creature-type
+	// gate — needs a Server twin of targetCreatureTypeMask (DB-backed
+	// creature-type lookup); documented follow-up.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1736-1743): GM-mode /
+	// GM-invisibility. A wild caster has no affecting player, so C++ fires
+	// this only for non-positive spells (GetAffectingPlayer() ||
+	// !IsPositive()); charmed/owned casters keep the owner leg via
+	// m.OwnerGUID. Self-targets are exempt (unitTarget != caster).
+	if targetGUID != m.GUID && (m.OwnerGUID != 0 || !spellIsPositive(spell)) && s.gmAttackTargetBlocked(targetGUID) {
+		return false
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1745-1747): in-flight targets
+	// (only players fly); the ALLOW_INFLIGHT_TARGET custom attribute
+	// exempts, like the player path.
+	if ts := s.findSessionByGUID(targetGUID); ts != nil {
+		if s.getSpellCustomAttr(spell.ID)&SpellCustomAttrAllowInflightTarget == 0 && ts.inFlight {
+			return false
+		}
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1757-1773): the target
+	// aura-state and aura-spell arms need Server twins of the
+	// session-anchored targetHasAuraState/targetHasAura resolvers
+	// (creature aura-map reads are Server-side, but the per-caster filter
+	// and player branches are session-anchored); documented follow-up.
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1776-1778):
+	// SPELL_AURA_PREVENT_RESURRECTION — unbridged on the player path too;
+	// documented no-bridge parity.
+	return true
+}
+
 func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
 	if s == nil || m == nil || spellID == 0 {
 		return
@@ -968,6 +1094,19 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// (5294-5314) and the range arm (5496). A failing set fizzles the
 		// cast (the caster has no client to report a fail code to).
 		if !s.checkCreatureSpellCastConditions(ctx, m, spellID, targetGUID) {
+			return
+		}
+		// SpellInfo::CheckExplicitTarget null-target arm (SpellInfo.cpp:1784-1790):
+		// a spell whose explicit target mask needs a target fizzles when
+		// none was provided. C++ relative order: CheckExplicitTarget (5365)
+		// precedes CheckTarget (5372).
+		if targetGUID == 0 && spellNeedsExplicitUnitTarget(spellInfo) {
+			return
+		}
+		// SpellInfo::CheckTarget on the explicit unit target (Spell.cpp:5372),
+		// between the conditions block and the range arm in C++ relative
+		// order. Runs for triggered casts too (no C++ triggered exemption).
+		if !s.checkCreatureSpellCheckTarget(m, spellInfo, targetGUID) {
 			return
 		}
 		// Spell::CheckRange (Spell.cpp:5496): C++ runs the range arm for
