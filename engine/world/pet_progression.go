@@ -321,6 +321,36 @@ func (s *session) updatePetLevelSpells(ctx context.Context, petID, entry, oldLev
 			}
 		}
 	}
+	// CharmInfo::AddSpellToActionBar (Unit.cpp:10053): a ranked replacement
+	// does not vacate the bar slot — the slot's action is swapped to the new
+	// rank in place, keeping the autocast type. Go's rank swap left the old
+	// rank's action in abdata, so the client bar kept a spell the pet no
+	// longer knew.
+	if len(swaps) > 0 && s.server != nil {
+		if slots, ok := loadPetActionBar(ctx, cdb, petID, s.playerGUID); ok {
+			changed := false
+			for _, swap := range swaps {
+				if swap.oldSpell == 0 || swap.newSpell == 0 {
+					continue
+				}
+				first := s.server.getFirstSpellInChain(swap.newSpell)
+				for i, slot := range slots {
+					actionType := uint8(slot >> 24)
+					if !petSpellActionType(actionType) {
+						continue
+					}
+					if action := slot & 0x00FFFFFF; action != 0 && s.server.getFirstSpellInChain(action) == first {
+						slots[i] = makePetActionSlot(actionType, swap.newSpell)
+						changed = true
+						break
+					}
+				}
+			}
+			if changed {
+				savePetActionBar(ctx, cdb, petID, s.playerGUID, slots)
+			}
+		}
+	}
 	if notify {
 		if petType == 1 {
 			s.sendTalentsInfo(true)

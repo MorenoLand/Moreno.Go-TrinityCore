@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"sort"
 	"strconv"
@@ -47,7 +48,66 @@ const (
 	unitFieldCreatedBySpell   = 81
 	petFocusMax               = 100
 	petHappinessMax           = 1050000
+	// petTameStartHappiness mirrors Pet::CreateBaseAtTamed (Pet.cpp:830):
+	// a freshly tamed pet starts at 166500, not at max happiness, so it
+	// deals the UNHAPPY 75% damage leg until fed (Pet.cpp:707-714).
+	petTameStartHappiness = 166500
 )
+
+// petSpellActionType reports whether a bar slot type holds a spell action
+// (Unit.h:594-598: UnitActionBarEntry::IsActionBarForSpell), as opposed to a
+// command or reaction button.
+func petSpellActionType(actionType uint8) bool {
+	return actionType == petActionPassive || actionType == petActionDisabled || actionType == petActionEnabled
+}
+
+// makePetActionSlot packs a bar slot the way MAKE_UNIT_ACTION_BUTTON does
+// (Unit.h:583): the action in the low 24 bits, the type in the high byte.
+func makePetActionSlot(actionType uint8, action uint32) uint32 {
+	return action&0x00FFFFFF | uint32(actionType)<<24
+}
+
+// loadPetActionBar reads the 10 packed action-bar slots from the pet's
+// character_pet.abdata row. The string form is the GenerateActionBarData
+// layout (Pet.cpp:485): "type action type action ..." with 20 tokens.
+func loadPetActionBar(ctx context.Context, cdb interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, petID uint32, ownerGUID uint64) ([10]uint32, bool) {
+	var slots [10]uint32
+	var abdata string
+	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(abdata, '') FROM character_pet WHERE id = ? AND owner = ?", petID, ownerGUID).Scan(&abdata); err != nil {
+		return slots, false
+	}
+	tokens := strings.Fields(abdata)
+	if len(tokens) != 20 {
+		return slots, false
+	}
+	for i := 0; i < 10; i++ {
+		t, tErr := strconv.ParseUint(tokens[i*2], 10, 8)
+		a, aErr := strconv.ParseUint(tokens[i*2+1], 10, 32)
+		if tErr != nil || aErr != nil {
+			return slots, false
+		}
+		slots[i] = makePetActionSlot(uint8(t), uint32(a))
+	}
+	return slots, true
+}
+
+// savePetActionBar persists the 10 packed slots back to the pet's abdata.
+func savePetActionBar(ctx context.Context, cdb interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, petID uint32, ownerGUID uint64, slots [10]uint32) {
+	var sb strings.Builder
+	for i, slot := range slots {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(strconv.FormatUint(uint64(slot>>24), 10))
+		sb.WriteByte(' ')
+		sb.WriteString(strconv.FormatUint(uint64(slot&0x00FFFFFF), 10))
+	}
+	_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET abdata = ? WHERE id = ? AND owner = ?", sb.String(), petID, ownerGUID)
+}
 
 func (s *session) normalizePetActionBarSlot(slot uint32) uint32 {
 	actionType := uint8(slot >> 24)
@@ -1472,8 +1532,8 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 	now := time.Now().Unix()
 
 	_, _ = cdb.ExecContext(ctx,
-		"INSERT INTO character_pet (id, entry, owner, modelid, CreatedBySpell, PetType, level, exp, Reactstate, name, renamed, slot, curhealth, curmana, curhappiness, savetime, abdata) VALUES (?, ?, ?, ?, ?, 1, ?, 0, 1, ?, 0, 0, ?, ?, 1050000, ?, '')",
-		newPetID, targetEntry, s.playerGUID, modelID, spellID, petLevel, cName, maxHP, maxMP, now)
+		"INSERT INTO character_pet (id, entry, owner, modelid, CreatedBySpell, PetType, level, exp, Reactstate, name, renamed, slot, curhealth, curmana, curhappiness, savetime, abdata) VALUES (?, ?, ?, ?, ?, 1, ?, 0, 1, ?, 0, 0, ?, ?, ?, ?, '')",
+		newPetID, targetEntry, s.playerGUID, modelID, spellID, petLevel, cName, maxHP, maxMP, petTameStartHappiness, now)
 
 	spells := getPetSpellsForLevel(targetEntry, petLevel)
 	for _, sp := range spells {

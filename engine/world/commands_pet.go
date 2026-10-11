@@ -195,6 +195,24 @@ func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) {
 	if _, err := db.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petID, spellID); err != nil {
 		return
 	}
+	// CharmInfo::RemoveSpellFromActionBar (Unit.cpp:10085): the unlearned
+	// spell was the last rank (clear_ab=true, no rank re-learn), so the
+	// first bar slot holding any rank of its chain is cleared in place.
+	if ts.server != nil {
+		if slots, ok := loadPetActionBar(ctx, db, petID, ts.playerGUID); ok {
+			first := ts.server.getFirstSpellInChain(spellID)
+			for i, slot := range slots {
+				if !petSpellActionType(uint8(slot >> 24)) {
+					continue
+				}
+				if action := slot & 0x00FFFFFF; action != 0 && ts.server.getFirstSpellInChain(action) == first {
+					slots[i] = makePetActionSlot(petActionPassive, 0) // SetActionBar(i, 0, ACT_PASSIVE)
+					savePetActionBar(ctx, db, petID, ts.playerGUID, slots)
+					break
+				}
+			}
+		}
+	}
 	unlearnBuf := protocol.NewBuffer(4)
 	unlearnBuf.WriteU32(spellID)
 	_ = ts.write(uint16(protocol.OpcodeSMSG_PET_UNLEARNED_SPELL), unlearnBuf.Bytes(), true)
