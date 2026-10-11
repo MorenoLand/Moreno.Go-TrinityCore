@@ -21954,6 +21954,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			stackCount := uint8(cur)
 			existing.StackCount = stackCount
 			existing.RemainingCharges = uint8(spell.ProcCharges)
+			// Unit::_TryStackingOrRefreshingExistingAura cast-item correction
+			// (Unit.cpp:3366-3370): a re-cast from a different item re-points
+			// the aura's cast item GUID, so later item-suffix recalculations
+			// read the newest cast's item.
+			if castItemGUID != existing.ItemGUID {
+				existing.ItemGUID = castItemGUID
+			}
 			// Unit::_TryStackingOrRefreshingExistingAura basepoint update
 			// (Unit.cpp:3360-3372): a re-cast overwrites the aura's per-effect
 			// basepoints with the new cast's values, and the live amounts are
@@ -22706,6 +22713,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		stackCount := uint8(cur)
 		existing.StackCount = stackCount
 		existing.RemainingCharges = uint8(spell.ProcCharges)
+		// Creature-side mirror of the player merge's cast-item correction
+		// (Unit.cpp:3366-3370): a re-cast from a different item re-points
+		// the aura's cast item GUID.
+		if castItemGUID != existing.ItemGUID {
+			existing.ItemGUID = castItemGUID
+		}
 		// Creature-side mirror of the player merge's basepoint update
 		// (Unit.cpp:3360-3372, Aura::SetStackAmount, SpellAuras.cpp:1008),
 		// including the SPELL_ATTR0_CU_ROLLING_PERIODIC carry-over
