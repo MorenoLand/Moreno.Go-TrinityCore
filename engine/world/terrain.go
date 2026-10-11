@@ -3,6 +3,7 @@ package world
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -220,11 +221,14 @@ func (s *session) removeAreaRestrictedAura(ctx context.Context, spellID uint32) 
 	}
 }
 
-func (s *session) spellAreaRules(ctx context.Context, spellID uint32) ([]spellAreaRule, bool) {
-	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+// fetchSpellAreaRules reads the raw spell_area rows for a spell; both the
+// session twin (player casts) and the creature-path twin (null player) build
+// on it. ok is false when the query errors or no rows exist.
+func fetchSpellAreaRules(ctx context.Context, db *sql.DB, spellID uint32) ([]spellAreaRule, bool) {
+	if db == nil {
 		return nil, false
 	}
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT area, quest_start, quest_end, aura_spell, racemask, gender, autocast, quest_start_status, quest_end_status FROM spell_area WHERE spell = ?`, spellID)
+	rows, err := db.QueryContext(ctx, `SELECT area, quest_start, quest_end, aura_spell, racemask, gender, autocast, quest_start_status, quest_end_status FROM spell_area WHERE spell = ?`, spellID)
 	if err != nil {
 		return nil, false
 	}
@@ -240,6 +244,13 @@ func (s *session) spellAreaRules(ctx context.Context, spellID uint32) ([]spellAr
 		rules = append(rules, rule)
 	}
 	return rules, rows.Err() == nil && len(rules) > 0
+}
+
+func (s *session) spellAreaRules(ctx context.Context, spellID uint32) ([]spellAreaRule, bool) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil, false
+	}
+	return fetchSpellAreaRules(ctx, s.server.WorldStore.DB, spellID)
 }
 
 func (s *session) spellAreaQuestStatus(ctx context.Context, questID uint32) int64 {

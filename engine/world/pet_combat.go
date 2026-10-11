@@ -1124,6 +1124,38 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			return true
 		}
 	}
+	// Spell::CheckCast pet-presence arm (Spell.cpp:5410-5432): any effect
+	// with TargetA == TARGET_UNIT_PET (5) needs the caster's guardian pet
+	// (Unit::GetGuardianPet). The npcbot arm is vacuous (no npcbot model);
+	// pet motions carry no guardian pet, so the first such effect fizzles
+	// the cast — SPELL_FAILED_NO_PET (or SPELL_FAILED_DONT_REPORT when
+	// triggered by an aura; both fizzle silently here since the AI path
+	// has no client to report to). C++ relative order: after the dest-LOS
+	// arm (5400), ahead of the arena arm (5439). Runs for triggered casts
+	// too (no C++ triggered exemption).
+	if spellFirstEffectTargetsUnitPet(spell) {
+		return true
+	}
+	// Spell::CheckCast arena arm (Spell.cpp:5439-5447): the arm carries no
+	// caster-type gate — ATTR4_NOT_USABLE_IN_ARENA, or a recovery time over
+	// 10 minutes without ATTR4_USABLE_IN_ARENA, fails on battle-arena maps
+	// for pet casters too. (The 01:24 "vacuous" claim was wrong: the arm has
+	// no player gate.) The battleground-only arm (5434-5437) and the mounted
+	// arm (5464-5474) are TYPEID_PLAYER-gated, vacuous on the pet path.
+	// GetRecoveryTime = max(RecoveryTime, CategoryRecoveryTime)
+	// (SpellInfo.cpp:3149-3152); the map-entry-must-exist shape mirrors the
+	// creature path and the C++ sMapStore lookup. Runs for triggered casts
+	// too (no C++ triggered exemption).
+	recoveryTime := spell.RecoveryTime
+	if spell.CategoryRecoveryTime > recoveryTime {
+		recoveryTime = spell.CategoryRecoveryTime
+	}
+	if spell.AttributesEx4&spellAttr4NotUsableInArena != 0 ||
+		(recoveryTime > 10*60*1000 && spell.AttributesEx4&spellAttr4UsableInArena == 0) {
+		if entry, found, err := s.server.Data.Map(motion.Map); err == nil && found && entry.IsBattleArena() {
+			return true
+		}
+	}
 	if !s.server.motionSpellFocusFound(ctx, motion, spell) {
 		return true
 	}

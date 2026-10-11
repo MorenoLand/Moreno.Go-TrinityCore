@@ -1215,6 +1215,20 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	return true
 }
 
+// spellFirstEffectTargetsUnitPet reports whether any effect carries
+// TargetA == TARGET_UNIT_PET (5) — the Spell::CheckCast pet-presence arm
+// (Spell.cpp:5410-5432) scans all effects for the first such effect; the
+// scan order is irrelevant since any hit fizzles. Shared by the creature
+// and pet cast paths.
+func spellFirstEffectTargetsUnitPet(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.ImplicitTargetA == spellImplicitTargetUnitPet {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
 	if s == nil || m == nil || spellID == 0 {
 		return
@@ -1225,6 +1239,14 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+	// The resolved dest-family destination: evaluated ahead of the LOS
+	// gates below and reused for the GO packet write, so the dest-LOS arm
+	// and the packet carry the same value. Go creature casts carry no
+	// caller-supplied dest, so the resolution is the server-side
+	// SelectSpellTargets twin. hasDest is false when the spell carries no
+	// dest-family target.
+	var destX, destY, destZ float32
+	hasDest := false
 	var spellInfo wotlk.Spell
 	spellKnown := false
 	if s != nil && s.Data != nil {
@@ -1323,6 +1345,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// DisableMgr::SPELL_DISABLE_LOS has no Go model (no DisableMgr).
 		// C++ relative order: inside the unit-target block, after the
 		// behind/facing arms, ahead of CheckRange (5496).
+		destX, destY, destZ, hasDest = s.resolveCreatureSpellDestination(m, spellInfo, targetGUID)
 		if targetGUID != 0 && targetGUID != m.GUID &&
 			spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 			spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
@@ -1330,6 +1353,25 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				if !s.hasLineOfSight(m.Map, m.X, m.Y, m.Z, x, y, z) {
 					return
 				}
+			}
+		}
+		// Spell::CheckCast dest line-of-sight arm (Spell.cpp:5400-5408): a
+		// creature cast whose resolved destination is not within LOS from
+		// the caster fails, unless the spell carries
+		// SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS or
+		// SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK. C++ reads m_targets at
+		// CheckCast time (seeded by InitExplicitTargets before CheckCast);
+		// Go creature casts carry no caller-supplied dest, so the
+		// server-side resolved destination is evaluated at the C++
+		// relative position — after the unit-target LOS arm (5391), ahead
+		// of the pet-presence arm (5410). DisableMgr::SPELL_DISABLE_LOS
+		// has no Go model (no DisableMgr). Runs for triggered casts too
+		// (no C++ triggered exemption).
+		if hasDest &&
+			spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+			spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
+			if !s.hasLineOfSight(m.Map, m.X, m.Y, m.Z, destX, destY, destZ) {
+				return
 			}
 		}
 		// Spell::CheckCast pet-presence arm (Spell.cpp:5410-5432): any effect
@@ -1341,14 +1383,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// here since the creature path has no client to report to. C++
 		// relative order: after the dest-LOS arm, ahead of the battleground
 		// arm. Runs for triggered casts too (no C++ triggered exemption).
-		hasPetTarget := false
-		for _, eff := range spellInfo.Effects {
-			if eff.ImplicitTargetA == spellImplicitTargetUnitPet {
-				hasPetTarget = true
-				break
-			}
-		}
-		if hasPetTarget {
+		if spellFirstEffectTargetsUnitPet(spellInfo) {
 			return
 		}
 		// Spell::CheckCast arena arm (Spell.cpp:5439-5447):
@@ -1378,13 +1413,13 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// SPELL_FAILED_INCORRECT_AREA — unknown group data keeps the
 		// fail-open bridge convention) and SPELL_ATTR6_NOT_IN_RAID_INSTANCE
 		// (1552-1556). No bridge: SPELL_ATTR4_CAST_ONLY_IN_OUTLAND
-		// (1529-1550, session-twin parity), the spell_area DB leg
-		// (1558-1567, needs the player's quest/aura state — follow-up), and
-		// the battleground-spell switch (1569-1631, every arm needs a
-		// non-nil player; creatures never cast flag spells). The
-		// battleground-only (5434-5437) and mounted (5464-5474) arms are
-		// TYPEID_PLAYER-gated, vacuous for creatures. Runs for triggered
-		// casts too (no C++ triggered exemption).
+		// (1529-1550, session-twin parity), and the battleground-spell
+		// switch (1569-1631, every arm needs a non-nil player; creatures
+		// never cast flag spells). The spell_area DB leg (1558-1567) is
+		// bridged below (creatureSpellArea.go). The battleground-only
+		// (5434-5437) and mounted (5464-5474) arms are TYPEID_PLAYER-gated,
+		// vacuous for creatures. Runs for triggered casts too (no C++
+		// triggered exemption).
 		if spellInfo.AreaGroupID > 0 {
 			zoneID, areaID := s.zoneAndAreaID(m.Map, m.X, m.Y, m.Z, 0)
 			if allowed, known, groupErr := s.Data.AreaGroupAllows(uint32(spellInfo.AreaGroupID), zoneID, areaID); groupErr == nil && known && !allowed {
@@ -1393,6 +1428,23 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		}
 		if spellInfo.AttributesEx6&spellAttr6NotInRaidInstance != 0 {
 			if entry, found, err := s.Data.Map(m.Map); err != nil || !found || entry.IsRaid() {
+				return
+			}
+		}
+		// SpellInfo::CheckLocation spell_area DB leg (SpellInfo.cpp:1558-1567,
+		// SpellArea::IsFitToRequirements, SpellMgr.cpp:689-785): with a null
+		// player (creature caster) every constrained term fails — gender,
+		// raceMask, questStart/questEnd and auraSpell all need a non-null
+		// player, and the extra-conditions switch is player-gated too — so
+		// a spell with spell_area rows fails unless some row is
+		// unconstrained for a null player (creatureSpellArea.go). The
+		// player-battleground leg is vacuous (player is null). C++ relative
+		// order: after the raid-instance arm (1552), ahead of the
+		// battleground-spell switch (1569). Runs for triggered casts too
+		// (no C++ triggered exemption).
+		if rules, hasRules := s.creatureSpellAreaRules(ctx, spellID); hasRules {
+			zoneID, areaID := s.zoneAndAreaID(m.Map, m.X, m.Y, m.Z, 0)
+			if !creatureSpellAreaRulesFitNullPlayer(spellID, rules, zoneID, areaID) {
 				return
 			}
 		}
@@ -1495,20 +1547,28 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			targetGUID = redirectGUID
 			spellTarget.UnitGUID = redirectGUID
 			hitTargets = []uint64{redirectGUID}
+			// The redirect changes the anchor for the target-dest arms
+			// (SelectImplicitTargetDestTargets, Spell.cpp:1433-1462): the
+			// packet destination re-resolves on the redirected target,
+			// matching C++ arm order inside SelectSpellTargets (the
+			// 724-757 redirect precedes the 900-975 dest arms). The
+			// dest-LOS gate above keeps the pre-redirect resolution — C++
+			// evaluates that arm at CheckCast time, before the redirect.
+			destX, destY, destZ, hasDest = s.resolveCreatureSpellDestination(m, spellInfo, targetGUID)
 		}
 		// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410, ahead
 		// of TakePower at 3449): a creature casting a spell with a
 		// dest-family implicit target resolves the destination server-side
 		// and carries it in the GO packet — C++ seeds m_targets at the
 		// caster (CheckDst, Spell.cpp:6523) and SendSpellGo writes it into
-		// the packet (Spell.cpp:4338). Placed after the redirect so the
-		// target-dest arms anchor on the redirected target, matching the
-		// C++ arm order inside SelectSpellTargets.
-		if spellKnown {
-			if dx, dy, dz, ok := s.resolveCreatureSpellDestination(m, spellInfo, targetGUID); ok {
-				spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
-				spellTarget.Destination = protocol.SpellTargetLocation{X: dx, Y: dy, Z: dz}
-			}
+		// the packet (Spell.cpp:4338). The destination was resolved ahead of
+		// the LOS gates above (destX/destY/destZ); the GO packet carries the
+		// same value. Placed after the redirect so the target-dest arms
+		// anchor on the redirected target, matching the C++ arm order
+		// inside SelectSpellTargets.
+		if spellKnown && hasDest {
+			spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
+			spellTarget.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}
 		}
 		if !triggered {
 			// Spell::TakePower (Spell.cpp:3449-3456, "Powers have to be
