@@ -143,6 +143,7 @@ const (
 	spellAuraModShieldBlockvalue          uint32 = 158 // SPELL_AURA_MOD_SHIELD_BLOCKVALUE (SpellAuraDefines.h)
 	spellAuraModBlockCritChance           uint32 = 253 // SPELL_AURA_MOD_BLOCK_CRIT_CHANCE (SpellAuraDefines.h)
 	spellAuraModTotalThreat               uint32 = 103 // SPELL_AURA_MOD_TOTAL_THREAT (SpellAuraDefines.h) — additive temp threat modifier, bridged on ThreatManager
+	spellAuraModHealthRegenPercent        uint32 = 88  // SPELL_AURA_MOD_HEALTH_REGEN_PERCENT (SpellAuraDefines.h) — out-of-combat spirit health-regen multiplier (Player::RegenerateHealth, Player.cpp:2252)
 	spellAuraModRegenDuringCombat         uint32 = 116 // SPELL_AURA_MOD_REGEN_DURING_COMBAT (SpellAuraDefines.h) — health regen keeps running in combat (Second Wind)
 	spellAuraModHealthRegenInCombat       uint32 = 161 // SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (SpellAuraDefines.h) — flat health-regen bonus that also runs in combat (Player.cpp:2265)
 	spellAuraModCombatResultChance        uint32 = 248 // SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (SpellAuraDefines.h) — attacker auras reducing victim dodge (MiscValue == VICTIMSTATE_DODGE)
@@ -1283,6 +1284,71 @@ func (s *session) casterIgnoreResistPct(spellID uint32, schoolMask uint32) int32
 		pct = 0
 	}
 	return pct
+}
+
+// ignoreTargetResistArmor mirrors the ignore-resist armor legs of
+// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650), in C++ relative order:
+// the attacker's SPELL_AURA_MOD_TARGET_RESISTANCE (123) NORMAL-misc-masked
+// sum lands on the victim's armor first (123 amounts are negative for the
+// armor-shredding sources); then each
+// SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST (270) effect with a NORMAL
+// misc mask whose granting spell affects the cast spell, then each
+// SPELL_AURA_MOD_IGNORE_TARGET_RESIST (269) effect with a NORMAL misc mask
+// (no affect gate), shrinks the armor by its percent, floored per aura
+// (armor = floor(AddPct(armor, -amount))). C++ passes a null spellInfo for
+// auto swings and AuraEffect::IsAffectedOnSpell(nullptr) is false
+// (SpellAuraEffects.cpp) — so the 270 leg never runs on the plain
+// auto-attack armor path, only here on the direct-spell path. The
+// SPELLMOD_IGNORE_ARMOR (13) spellmod leg has no Go application model yet —
+// open. The victim's own armor is the input; the attacker's ARP rating leg
+// stays downstream in calcArmorReducedDamage.
+func (s *session) ignoreTargetResistArmor(armor float64, spell wotlk.Spell) float64 {
+	if armor <= 0 {
+		return armor
+	}
+	// Unit.cpp:1633-1635: the attacker's 123 NORMAL-gated sum (typically
+	// negative) is added to the victim's armor.
+	for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModTargetResistance, spellSchoolMaskNormal) {
+		armor += float64(amount)
+	}
+	shrink := func(auraType uint32, affectGate bool) {
+		for _, aura := range s.loadedAuras() {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, effect := range auraSpell.Effects {
+				if !spellEffectIsAuraEffect(effect) || effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+					continue
+				}
+				if uint32(effect.MiscValue)&spellSchoolMaskNormal == 0 {
+					continue
+				}
+				if affectGate && !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+					continue
+				}
+				amount := aura.Amounts[index]
+				if amount == 0 {
+					amount = int32(aura.Amount)
+				}
+				if amount == 0 {
+					amount = effect.BasePoints + 1
+				}
+				armor = math.Floor(armor * (100 - float64(amount)) / 100)
+			}
+		}
+	}
+	// Unit.cpp:1637-1642: 270 (affect-gated), then Unit.cpp:1644-1649: 269
+	// (ungated).
+	shrink(spellAuraModAbilityIgnoreTargetResist, true)
+	shrink(spellAuraModIgnoreTargetResist, false)
+	if armor < 0 {
+		armor = 0
+	}
+	return armor
 }
 
 // totalAuraModifierByAffectMask mirrors Unit::GetTotalAuraModifierByAffectMask
@@ -13315,6 +13381,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				armor = 0
 			}
 			if armor > 0 {
+				// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650): the 123/270/269
+				// ignore-resist armor legs run before the ARP-rating leg inside
+				// calcArmorReducedDamage.
+				armor = s.ignoreTargetResistArmor(armor, dmgSpell)
 				damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
 			}
 		}

@@ -1505,6 +1505,11 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 				gainF = s.octRegenHPPerSpirit(uint32(p.Class), uint32(p.Level), float64(p.Stats[4])) * octRegenLowLevelMultiplier(p.Level)
 				if inCombatRegen {
 					gainF *= (100 + float64(sess.getTotalAuraModifier(spellAuraModRegenDuringCombat))) / 100
+				} else {
+					// Player::RegenerateHealth (Player.cpp:2252): out of combat
+					// the spirit regen is scaled by the total
+					// SPELL_AURA_MOD_HEALTH_REGEN_PERCENT (88) multiplier.
+					gainF *= float64(ResolveAuraPercentMultiplier(sess.auraTypeModifiers(spellAuraModHealthRegenPercent)))
 				}
 			}
 			gainF += float64(sess.getTotalAuraModifier(spellAuraModHealthRegenInCombat))

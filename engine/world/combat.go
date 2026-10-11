@@ -448,7 +448,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// 1.0 in C++ too — nothing writes it), so it drops out. The flat
 		// and pct folds are per attack type with the
 		// CheckAttackFitToAuraRequirement weapon-fit gate.
-		damage = uint32((float64(damage) + float64(s.meleeDamageDoneFlat(ctx, attType))) * s.meleeDamageDonePctMod(ctx, attType))
+		damage = uint32((float64(damage) + float64(s.meleeDamageDoneFlat(ctx, attType))) * s.meleeDamageDonePctMod(ctx, attType) * s.meleeDamageDoneVersusMod(ctx, target.GUID))
 	}
 
 	// Off-hand weapon attacks suffer a 50% damage penalty by default (TrinityCore Unit.cpp:353)
@@ -1170,7 +1170,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		minDmg = 1.0
 		maxDmg = 2.0
 	}
-	damage := uint32((float64(minDmg) + float64(rand.Float32()*(maxDmg-minDmg)) + float64(s.meleeDamageDoneFlat(ctx, protocol.RangedAttack))) * s.meleeDamageDonePctMod(ctx, protocol.RangedAttack))
+	damage := uint32((float64(minDmg) + float64(rand.Float32()*(maxDmg-minDmg)) + float64(s.meleeDamageDoneFlat(ctx, protocol.RangedAttack))) * s.meleeDamageDonePctMod(ctx, protocol.RangedAttack) * s.meleeDamageDoneVersusMod(ctx, target.GUID))
 	if damage < 1 {
 		damage = 1
 	}

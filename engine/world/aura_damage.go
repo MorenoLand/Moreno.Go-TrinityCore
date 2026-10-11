@@ -137,3 +137,34 @@ func (s *session) meleeDamageDonePctMod(ctx context.Context, attackType protocol
 	}
 	return mod
 }
+
+// meleeDamageDoneVersusMod mirrors the school-independent versus legs of
+// Unit::MeleeDamageBonusDone (Unit.cpp:8061-8068), which C++ runs on every
+// melee swing (CalculateMeleeDamage, Unit.cpp:1236): the
+// MOD_DAMAGE_DONE_VERSUS (168) multiplier over the caster's auras whose
+// misc creature-type mask intersects the victim's, and the
+// MOD_DAMAGE_DONE_VERSUS_AURASTATE (303) multiplier over the caster's auras
+// whose misc aura state is active on the victim. Unlike the NORMAL-school
+// arm of MeleeDamageBonusDone (baked into the weapon-damage base in C++ and
+// into meleeDamageDonePctMod in Go), these legs are NOT gated by
+// SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS, so they ride on top of the existing
+// fold. Creature attackers keep the gap: no versus aura infra.
+func (s *session) meleeDamageDoneVersusMod(ctx context.Context, targetGUID uint64) float64 {
+	mod := 1.0
+	// MOD_DAMAGE_DONE_VERSUS (Unit.cpp:8061): GetTotalAuraMultiplierByMiscMask
+	// over the victim's creature-type mask.
+	if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
+		for _, amt := range s.auraTypeModifiersByMiscMask(auraModDamageDoneVersus, typMask) {
+			mod *= 1 + float64(amt)/100
+		}
+	}
+	// MOD_DAMAGE_DONE_VERSUS_AURASTATE (Unit.cpp:8064-8068): the predicate is
+	// victim->HasAuraState(misc) — the same read as the spell-side 303 leg in
+	// spellDamagePctDone.
+	for _, ae := range s.auraTypeMiscAmounts(auraModDamageDoneVersusAurastate) {
+		if s.targetHasAuraState(ctx, targetGUID, uint32(ae.misc), wotlk.Spell{}) {
+			mod *= 1 + float64(ae.amount)/100
+		}
+	}
+	return mod
+}
