@@ -915,6 +915,21 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 	return s.executePetSpellWithOptions(ctx, motion, spell, castCount, target, false)
 }
 
+// petAreaVictimPos resolves the pet spell's wire target to a position for
+// the area-selection twin's DEST-ref center fallback. getCombatTarget
+// resolves both player victims (pet autocast at its attack target) and
+// creature-motion victims; the twin's `seen` map uses the wire GUID to
+// exclude the explicit target from the area hits.
+func (s *session) petAreaVictimPos(ctx context.Context, motion *creatureMotion, targetGUID uint64) *playerPos {
+	if s == nil || s.server == nil || motion == nil || targetGUID == 0 {
+		return nil
+	}
+	if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		return &playerPos{Map: target.Map, InstanceID: target.InstanceID, X: target.X, Y: target.Y, Z: target.Z, GUID: targetGUID, Sess: s.server.findSessionByGUID(targetGUID)}
+	}
+	return nil
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
@@ -928,6 +943,21 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		return true
 	}
 	hitTargets := []uint64{targetGUID}
+	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): pet casts run the
+	// full target selection in C++ — an area AoE applies to every enemy unit
+	// in the area, not just the wire target. The motion-anchored twin
+	// (creatureAIAreaEnemyPlayers) finds the extra enemy players; the wire
+	// victim is excluded from its results, and their GUIDs extend the GO
+	// packet hit list below.
+	var areaHits []*playerPos
+	if isAreaEnemySpell(spell) {
+		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
+			areaHits = s.server.creatureAIAreaEnemyPlayers(ctx, motion, spell, victimPos)
+		}
+	}
+	for _, areaHit := range areaHits {
+		hitTargets = append(hitTargets, areaHit.GUID)
+	}
 	// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410) for a pet
 	// caster: the same server-side destination resolution the wild-creature
 	// path bridges (resolveCreatureSpellDestination) — C++ runs the full
@@ -966,6 +996,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			schoolMask = 1
 		}
 		s.executePetSpellDamage(ctx, motion, targetGUID, spell.ID, damage, schoolMask, triggered)
+		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
+		// enemy takes its own hit — the per-target miss roll, resistance,
+		// absorb and kill legs run per target inside
+		// executePetSpellDamage, matching DoTargetSpellHit per target.
+		for _, areaHit := range areaHits {
+			s.executePetSpellDamage(ctx, motion, areaHit.GUID, spell.ID, damage, schoolMask, triggered)
+		}
 		handledEffect = true
 	}
 	for _, effect := range spell.Effects {
@@ -996,6 +1033,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			amount := uint32(effect.BasePoints + 1)
 			if s.applyPetAura(ctx, motion, spell, effect, targetGUID, durationMs, amount) {
 				handledEffect = true
+			}
+			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (effect 27 with an enemy
+			// area target) applies to every unit the area selection picked —
+			// the wire target above plus the extra area hits.
+			if effect.Effect == 27 && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
+				for _, areaHit := range areaHits {
+					if s.applyPetAura(ctx, motion, spell, effect, areaHit.GUID, durationMs, amount) {
+						handledEffect = true
+					}
+				}
 			}
 		}
 	}
