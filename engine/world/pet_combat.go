@@ -636,9 +636,36 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	if isTargetPlayer && targetSess != nil && targetSess.player != nil {
 		victimDodgeBP = int32(math.Round(float64(targetSess.player.DodgePercentage) * 100))
 	}
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, false, false, true, 0, 0, 0, 0, victimDodgeBP)
+	// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2224-2232) +
+	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance creature-victim arms
+	// (Unit.cpp): a creature victim parries (5% base +
+	// SPELL_AURA_MOD_PARRY_PERCENT (47)) and blocks (5% base +
+	// SPELL_AURA_MOD_BLOCK_PERCENT (51)) when the attacker is in its front
+	// arc — SPELL_AURA_IGNORE_HIT_DIRECTION (288) exempts the victim — unless
+	// the template carries CREATURE_FLAG_EXTRA_NO_PARRY (0x4) / NO_BLOCK
+	// (0x10). Totems never avoid. Go previously denied creature victims both.
+	canParry := false
+	canBlock := false
+	var victimParryBonusBP, victimBlockBonusBP int32
+	if !isTargetPlayer {
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil && !s.isTotemGUID(targetGUID) {
+			victimKey := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}
+			inFront := hasInArc(vm.Orientation, vm.X, vm.Y, motion.X, motion.Y, math.Pi) ||
+				s.creatureAuraTypeSum(victimKey, spellAuraIgnoreHitDirection) != 0
+			if inFront && vm.FlagsExtra&0x00000004 == 0 {
+				canParry = true
+				victimParryBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
+			}
+			if inFront && vm.FlagsExtra&0x00000010 == 0 {
+				canBlock = true
+				victimBlockBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModBlockPercent) * 100
+			}
+		}
+	}
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, canBlock, canParry, true, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP)
 	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
-	// (Unit.cpp:2694-2695) stays unbridged on this path.
+	// (Unit.cpp:2694-2695) and the 240/4 parry-reduction arm
+	// (Unit::GetUnitParryChance's creature arm) stay unbridged on this path.
 	switch outcome {
 	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0

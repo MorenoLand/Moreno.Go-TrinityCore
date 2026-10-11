@@ -2287,6 +2287,19 @@ func (s *Server) creatureEnemyDodgeBP(key creatureAuraKey) int32 {
 	return total * 100
 }
 
+// creatureExpertiseParryReductionBP returns the creature attacker's total
+// SPELL_AURA_MOD_EXPERTISE (240) amount scaled to basis points for
+// rollMeleeOutcome's parry leg. C++ Unit::GetUnitParryChance reduces the
+// victim's parry by GetTotalAuraModifier(240)/4.0f percent for non-player
+// attackers (Unit.cpp); dodge gets no such creature arm (GetUnitDodgeChance
+// gates on TYPEID_PLAYER), so the value rides a parry-only modifier slot.
+func (s *Server) creatureExpertiseParryReductionBP(key creatureAuraKey) int32 {
+	if s == nil || key.GUID == 0 {
+		return 0
+	}
+	return s.creatureAuraTypeSum(key, spellAuraModExpertise) * 25
+}
+
 // rollMeleeOutcome implements TrinityCore's single-roll melee attack table:
 // MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
 // Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
@@ -2319,9 +2332,25 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // [5] attackerDodgeReductionBP: the attacker's
 // SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248, MiscValue == VICTIMSTATE_DODGE)
 // total in basis points — C++ GetUnitDodgeChance (Unit.cpp:2694-2695) adds the
+// attacker's 248 total to the victim's dodge chance (Go's caller folds it in
+// as attackerDodgeReductionBP for the shared leg).
 // percent-scale aura amount to the percent-scale chance, and both melee roll
 // sites scale the result by 100 (Unit.cpp:2206, 2589), so the Go basis-point
 // table adds amount*100.
+// [6] parryExpertiseBP (optional): parry-only expertise reduction in basis
+// points — C++ Unit::GetUnitParryChance's creature arm
+// (GetTotalAuraModifier(SPELL_AURA_MOD_EXPERTISE)/4.0f, Unit.cpp) reduces
+// parry but not dodge for non-player attackers. Absent, it defaults to [3],
+// matching the player arm where GetExpertiseDodgeOrParryReduction covers
+// both.
+// [7] victimParryBonusBP (optional): the creature victim's
+// SPELL_AURA_MOD_PARRY_PERCENT (47) total in basis points — C++
+// GetUnitParryChance adds the victim's 47 total to the 5% base
+// (Unit.cpp). Absent means none.
+// [8] victimBlockBonusBP (optional): the creature victim's
+// SPELL_AURA_MOD_BLOCK_PERCENT (51) total in basis points — C++
+// GetUnitBlockChance adds the victim's 51 total to the 5% base
+// (Unit.cpp). Absent means none.
 func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
@@ -2355,6 +2384,28 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	attackerDodgeReductionBP := int32(0)
 	if len(modifiers) > 5 {
 		attackerDodgeReductionBP = modifiers[5]
+	}
+	// Optional 7th modifier: the parry-only expertise reduction in basis
+	// points. C++ Unit::GetUnitParryChance reduces parry by the creature
+	// attacker's SPELL_AURA_MOD_EXPERTISE (240) total / 4.0f percent
+	// (Unit.cpp) while GetUnitDodgeChance applies no expertise reduction for
+	// non-player attackers; the player arm folds expertise into expertiseBP
+	// for both dodge and parry, so the default is expertiseBP.
+	parryExpertiseBP := expertiseBP
+	if len(modifiers) > 6 {
+		parryExpertiseBP = modifiers[6]
+	}
+	// Optional 8th/9th modifiers: the creature victim's SPELL_AURA_MOD_PARRY_PERCENT
+	// (47) / SPELL_AURA_MOD_BLOCK_PERCENT (51) totals in basis points —
+	// C++ GetUnitParryChance / GetUnitBlockChance add the victim's 47/51
+	// total to the 5% base (Unit.cpp). Absent means none.
+	victimParryBonusBP := int32(0)
+	if len(modifiers) > 7 {
+		victimParryBonusBP = modifiers[7]
+	}
+	victimBlockBonusBP := int32(0)
+	if len(modifiers) > 8 {
+		victimBlockBonusBP = modifiers[8]
 	}
 
 	leveldif := int32(victimLevel) - int32(attackerLevel)
@@ -2429,9 +2480,10 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		if leveldif > 0 {
 			parryChance += leveldif * 10
 		}
-		if expertiseBP > 0 {
-			parryChance -= expertiseBP
+		if parryExpertiseBP > 0 {
+			parryChance -= parryExpertiseBP
 		}
+		parryChance += victimParryBonusBP
 		if parryChance < 0 {
 			parryChance = 0
 		}
@@ -2449,7 +2501,10 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	// 5. Block chance: base 5% (500/10000) if victim can block
 	blockChance := int32(0)
 	if canBlock {
-		blockChance = 500
+		blockChance = 500 + victimBlockBonusBP
+		if blockChance < 0 {
+			blockChance = 0
+		}
 	}
 
 	// 6. Crit chance: base 5% (500/10000)
