@@ -467,7 +467,7 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 // reuses the same value. Deviation: C++ delivers the return trip 1.5x TimeDelay
 // after the outbound missile (Spell.cpp:2184); Go lands it synchronously like
 // the pet-path bridge.
-func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflector *playerPos, spellID uint32, damage uint32, schoolMask uint8) {
+func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflector *playerPos, spell wotlk.Spell, damage uint32, schoolMask uint8) {
 	if s == nil || motion == nil || reflector == nil || damage == 0 {
 		return
 	}
@@ -499,7 +499,7 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	if killed {
 		overkill = damage - healthBefore
 	}
-	logPacket := buildSpellNonMeleeDamageLog(guid, guid, spellID, damage, overkill, schoolMask)
+	logPacket := buildSpellNonMeleeDamageLog(guid, guid, spell.ID, damage, overkill, schoolMask)
 	if reflector.Sess != nil {
 		_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
 	}
@@ -517,6 +517,44 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 		return
 	}
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: newHealth})
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586): the
+	// return trip's _spellHitTarget is the caster itself (Spell.cpp:2350),
+	// so Unit::ProcSkillsAndAuras(caster, caster, procAttacker, procVictim,
+	// PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, ...) evaluates the
+	// motion's own auras with the done-side prefill (the
+	// prepareDataForTriggerSystem fill, spellDamageProcTypeMask), the
+	// taken-side prefill (spellDamageTakenProcTypeMask) plus
+	// PROC_FLAG_TAKEN_DAMAGE ORed by the damage arm (Spell.cpp:2545) —
+	// the parked done-side self-proc leg. The canEffectTrigger gate
+	// (Spell.cpp:2440) drops out here: the attr3 arm is checked inline
+	// (the creature loop has no attr3 gate), CanExecuteTriggersOnHit
+	// folds into the path's non-zero-effect model, and the motion has no
+	// procDeep model (standing limitation, same as the _cast leg). The
+	// loop fires once with the combined mask — C++ runs the done and
+	// taken calls separately, so an aura carrying both done AND taken
+	// flags could proc twice there and procs once here; no DBC aura
+	// carries both for one spell today. Lethal trips skip this: C++
+	// strips the caster's auras in Unit::Kill before DoDamageAndTriggers
+	// runs, so the event evaluates an empty set (net no-op); the
+	// KILL/KILLED/DEATH legs (Unit.cpp:11283-11290) are a standing gap —
+	// no creature death path in Go fires them.
+	if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+		typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell) | procFlagTakenDamage
+		if typeMask != 0 {
+			spellCopy := spell
+			s.fireCreatureAuraProcLoop(ctx, live, guid, procEventInfo{
+				typeMask:       typeMask,
+				schoolMask:     uint32(schoolMask),
+				spellTypeMask:  procSpellTypeDamage,
+				spellPhaseMask: procSpellPhaseHit,
+				hitMask:        procHitNormal,
+				triggered:      false,
+				eventSpell:     &spellCopy,
+				actorGUID:      guid,
+				damage:         damage,
+			})
+		}
+	}
 }
 
 // armInlineReflectProcDelayed mirrors the ProcReflectDelayed arm (Spell.cpp:2181)

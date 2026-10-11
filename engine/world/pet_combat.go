@@ -2118,4 +2118,34 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, healthUpdate)
 		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586) on the
+	// reflect return trip: the pet is both caster and _spellHitTarget
+	// (Spell.cpp:2350), so its own auras evaluate the hit with the
+	// done-side prefill, the taken-side prefill plus PROC_FLAG_TAKEN_DAMAGE
+	// (Spell.cpp:2545) — the same parked self-proc leg as the inline
+	// path. Only the self-hit (target == caster) runs it here: the pet
+	// path has no done-side model for ordinary hits (standing gap), and
+	// the return trip is the one hit whose victim is the pet itself.
+	// Non-lethal only — C++ strips the caster's auras in Unit::Kill before
+	// DoDamageAndTriggers runs, so a lethal return trip evaluates an empty
+	// set (net no-op).
+	if targetMotion.Health != 0 && target.GUID == caster.GUID {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+			typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell) | procFlagTakenDamage
+			if typeMask != 0 {
+				spellCopy := spell
+				s.server.fireCreatureAuraProcLoop(ctx, caster, caster.GUID, procEventInfo{
+					typeMask:       typeMask,
+					schoolMask:     uint32(schoolMask),
+					spellTypeMask:  procSpellTypeDamage,
+					spellPhaseMask: procSpellPhaseHit,
+					hitMask:        procHitNormal,
+					triggered:      triggered,
+					eventSpell:     &spellCopy,
+					actorGUID:      caster.GUID,
+					damage:         damage,
+				})
+			}
+		}
+	}
 }

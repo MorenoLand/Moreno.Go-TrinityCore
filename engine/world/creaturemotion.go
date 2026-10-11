@@ -2178,7 +2178,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if trip.status != protocol.SpellMissNone {
 					continue
 				}
-				s.applyInlineReflectReturnTrip(ctx, motion, trip.victim, spellID, damage, schoolMask)
+				s.applyInlineReflectReturnTrip(ctx, motion, trip.victim, inlineSpell, damage, schoolMask)
 			}
 			motion.LastSpell = now
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
