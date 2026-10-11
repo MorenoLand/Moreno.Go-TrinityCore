@@ -96,6 +96,44 @@ func (s *Server) creatureAuraDamageDoneFlat(key creatureAuraKey) int32 {
 	return sum
 }
 
+// creatureAuraDamageDonePct mirrors the creature half of the percent arm
+// AuraEffect::HandleModDamagePercentDone calls on every target type
+// (SpellAuraEffects.cpp:4176-4199): the product of (1 + amount/100) over
+// SPELL_AURA_MOD_DAMAGE_PERCENT_DONE (79) effects whose misc value carries
+// the NORMAL school bit. Creatures attack with BASE_ATTACK, so only the 79
+// arm applies here — the 122 off-hand arm of
+// Unit::UpdateDamagePctDoneMods (Unit.cpp:9412-9413) has no creature model,
+// mirroring the player twin meleeDamageDonePctMod (aura_damage.go).
+func (s *Server) creatureAuraDamageDonePct(key creatureAuraKey) float64 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 1.0
+	}
+	mod := 1.0
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != auraModDamagePercentDone || effect.MiscValue&1 == 0 {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				mod *= 1 + float64(aura.Amounts[index])/100
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return mod
+}
+
 // creatureHasAuraType reports whether the creature carries a live (unstopped)
 // aura whose stored AuraType matches, mirroring Unit::HasAuraType for the
 // byte-flag folds in the creature update builder (the C++ remove legs gate

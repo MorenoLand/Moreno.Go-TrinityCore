@@ -538,6 +538,7 @@ const (
 	spellAuraFeatherFall                              = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	spellAuraHover                                    = 106 // SPELL_AURA_HOVER (SpellAuraDefines.h:186)
 	spellAuraGhost                                    = 95  // SPELL_AURA_GHOST (SpellAuraDefines.h:175)
+	spellAuraInterruptRegen                           = 94  // SPELL_AURA_INTERRUPT_REGEN (SpellAuraDefines.h:174)
 	spellAuraModIncreaseMountedFlightSpeed            = 207 // SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED (SpellAuraDefines.h:287)
 	spellAuraConfuse                                  = 5
 	spellAuraCharm                                    = 6
@@ -6745,6 +6746,204 @@ func (s *session) fireSpellLinkedHitTriggers(ctx context.Context, spellID uint32
 			if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
 				s.server.castCreatureSpellInternal(ctx, tm, uint32(id), tm.GUID, true)
 			}
+		}
+	}
+}
+
+// fireLinkedAuraTrigger mirrors the REAL-mode apply arm of
+// AuraEffect::HandleAuraLinked (SpellAuraEffects.cpp:4880-4897): the linked
+// trigger spell is cast on the aura target — by the aura caster when the
+// triggered spell needs a caster (spellNeedsToBeTriggeredByCaster), by the
+// target itself otherwise — with the effect amount as effect 0's base point
+// (CastSpellExtraArgs SPELLVALUE_BASE_POINT0, only when nonzero).
+// targetKey is the creature key when the target is a creature, the zero key
+// for player targets. The difficulty adjustment
+// (GetSpellIdForDifficulty) has no Go model — TriggerSpell is used as-is,
+// the same convention as the SPELL_EFFECT_TRIGGER_SPELL funnel.
+func (s *session) fireLinkedAuraTrigger(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, amount uint32, targetGUID uint64, targetKey creatureAuraKey) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || eff.TriggerSpell == 0 {
+		return
+	}
+	triggered, found, err := s.server.Data.Spell(eff.TriggerSpell)
+	if err != nil || !found {
+		// HandleAuraLinked: unknown triggered spell — nothing fires.
+		return
+	}
+	castAs := func(caster *session, target uint64) {
+		if caster == nil {
+			return
+		}
+		if amount != 0 {
+			caster.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, target, amount)
+		} else {
+			caster.castSpellDirect(ctx, eff.TriggerSpell, target)
+		}
+	}
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		// Player target: caster->CastSpell(target, ...) — the caster is
+		// the aura caster when the triggered spell needs one, the target
+		// itself otherwise.
+		if spellNeedsToBeTriggeredByCaster(triggered, spell) {
+			castAs(s, targetGUID)
+		} else {
+			castAs(ts, targetGUID)
+		}
+		return
+	}
+	// Creature target: the player-cast direction runs through the normal
+	// cast funnel; the self-cast direction (triggered spell needs no
+	// caster) runs through the creature cast funnel.
+	if spellNeedsToBeTriggeredByCaster(triggered, spell) {
+		castAs(s, targetGUID)
+		return
+	}
+	if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
+		s.server.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, targetGUID, true)
+	}
+}
+
+// linkedTriggerCaster mirrors the caster-GUID term of
+// AuraEffect::HandleAuraLinked (SpellAuraEffects.cpp:4880-4911): the linked
+// trigger is owned by the aura caster when the triggered spell needs a
+// caster, by the target itself otherwise.
+func linkedTriggerCaster(triggered, triggering wotlk.Spell, auraCasterGUID, targetGUID uint64) uint64 {
+	if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
+		return auraCasterGUID
+	}
+	return targetGUID
+}
+
+// syncLinkedAuraStacks mirrors the AURA_EFFECT_HANDLE_REAPPLY arm of
+// AuraEffect::HandleAuraLinked (SpellAuraEffects.cpp:4905-4911): when a
+// re-cast merges into the parent aura and its stack amount changes, the
+// linked trigger aura's stack amount is set to the same value
+// (Aura::ModStackAmount). Called after the merge path's lock release.
+func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterGUID uint64, parentStack uint8) {
+	if targetSess == nil || targetSess.player == nil || targetSess.server == nil || targetSess.server.Data == nil {
+		return
+	}
+	for _, se := range spell.Effects {
+		if se.Aura != spellAuraLinked || se.TriggerSpell == 0 {
+			continue
+		}
+		triggered, found, err := targetSess.server.Data.Spell(se.TriggerSpell)
+		if err != nil || !found {
+			continue
+		}
+		wantCaster := linkedTriggerCaster(triggered, spell, parentCasterGUID, targetSess.playerGUID)
+		targetSess.castMu.Lock()
+		trig := targetSess.activeAuras[se.TriggerSpell]
+		synced := trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != parentStack
+		if synced {
+			trig.StackCount = parentStack
+		}
+		var slot uint8
+		var positive bool
+		var maxDur, dur uint32
+		var effectMask uint8
+		if trig != nil {
+			slot, positive, maxDur, dur, effectMask = trig.Slot, trig.Positive, trig.DurationMs, trig.RemainingMs, trig.EffectMask
+		}
+		targetSess.castMu.Unlock()
+		if !synced {
+			continue
+		}
+		// Aura::SetStackAmount pushes the new stack to the client — the
+		// same self + set update the parent merge sends.
+		targetSess.sendAuraUpdateWithStack(slot, se.TriggerSpell, false, positive, maxDur, dur, parentStack)
+		level := uint8(1)
+		if targetSess.player.Level > 0 {
+			level = targetSess.player.Level
+		}
+		wireMax, wireDur := auraWireDurations(triggered, maxDur, dur)
+		pkt := protocol.BuildAuraUpdateWithStackEffect(targetSess.playerGUID, wantCaster, slot, se.TriggerSpell, false, positive, wireMax, wireDur, level, parentStack, effectMask)
+		targetSess.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, targetSess)
+	}
+}
+
+// syncCreatureLinkedAuraStacks mirrors the AURA_EFFECT_HANDLE_REAPPLY arm
+// of AuraEffect::HandleAuraLinked (SpellAuraEffects.cpp:4905-4911) for
+// creature targets. Creature auras carry no client stack display, so only
+// the stored stack count is synced.
+func (srv *Server) syncCreatureLinkedAuraStacks(spell wotlk.Spell, key creatureAuraKey, parentCasterGUID uint64, parentStack uint8) {
+	if srv == nil || srv.Data == nil || key.GUID == 0 {
+		return
+	}
+	for _, se := range spell.Effects {
+		if se.Aura != spellAuraLinked || se.TriggerSpell == 0 {
+			continue
+		}
+		triggered, found, err := srv.Data.Spell(se.TriggerSpell)
+		if err != nil || !found {
+			continue
+		}
+		wantCaster := linkedTriggerCaster(triggered, spell, parentCasterGUID, key.GUID)
+		srv.auraMu.Lock()
+		if trig := srv.activeCreatureAuras[key][se.TriggerSpell]; trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != parentStack {
+			trig.StackCount = parentStack
+		}
+		srv.auraMu.Unlock()
+	}
+}
+
+// linkedTriggerRef is one AuraEffect::HandleAuraLinked (284) effect's
+// trigger reference: the linked spell ID and whether its aura is owned by
+// the parent aura's caster (HandleAuraLinked's caster-GUID term,
+// SpellAuraEffects.cpp:4880-4911).
+type linkedTriggerRef struct {
+	spellID     uint32
+	needsCaster bool
+}
+
+// linkedTriggersOfSpell collects the 284 trigger references of a spell,
+// mirroring the trigger lookup at the head of AuraEffect::HandleAuraLinked
+// (SpellAuraEffects.cpp:4882-4885): unknown triggered spells contribute
+// nothing, and only effects with a nonzero TriggerSpell count.
+func linkedTriggersOfSpell(store *wotlk.Store, spell wotlk.Spell) []linkedTriggerRef {
+	if store == nil {
+		return nil
+	}
+	var refs []linkedTriggerRef
+	for _, se := range spell.Effects {
+		if se.Aura != spellAuraLinked || se.TriggerSpell == 0 {
+			continue
+		}
+		triggered, found, err := store.Spell(se.TriggerSpell)
+		if err != nil || !found {
+			continue
+		}
+		refs = append(refs, linkedTriggerRef{spellID: se.TriggerSpell, needsCaster: spellNeedsToBeTriggeredByCaster(triggered, spell)})
+	}
+	return refs
+}
+
+// dropCreatureLinkedTriggers mirrors the remove arm of
+// AuraEffect::HandleAuraLinked (SpellAuraEffects.cpp:4898-4903) for
+// creature targets: each 284 effect's linked trigger aura leaves the
+// creature, gated on the caster GUID (the parent aura's caster when the
+// triggered spell needs a caster, the creature's own GUID otherwise).
+// parentCasterGUID is the removed parent aura's CasterGUID. Called after
+// the creature remove path's lock release; the trigger expires through the
+// normal creature expiry so its own remove legs fire.
+func (s *session) dropCreatureLinkedTriggers(triggers []linkedTriggerRef, parentCasterGUID uint64, key creatureAuraKey) {
+	if s == nil || s.server == nil || len(triggers) == 0 || key.GUID == 0 {
+		return
+	}
+	for _, trig := range triggers {
+		wantCaster := key.GUID
+		if trig.needsCaster {
+			wantCaster = parentCasterGUID
+		}
+		s.server.auraMu.Lock()
+		trigSlot, trigFound := uint8(0), false
+		if auras := s.server.activeCreatureAuras[key]; auras != nil {
+			if a := auras[trig.spellID]; a != nil && !a.Stopped && a.CasterGUID == wantCaster {
+				trigSlot, trigFound = a.Slot, true
+			}
+		}
+		s.server.auraMu.Unlock()
+		if trigFound {
+			s.expireCreatureAura(key, trig.spellID, trigSlot)
 		}
 	}
 }
@@ -18507,6 +18706,7 @@ func (s *session) removeAura(spellID uint32) {
 	removedDetectAmoreMisc := int32(0)
 	wasUntrackable := false
 	wasSetVehicle := false
+	var removedLinkedTriggers []linkedTriggerRef
 	wasPreparation := false
 	wasGhost := false
 	wasFactionAura := false
@@ -18640,6 +18840,15 @@ func (s *session) removeAura(spellID uint32) {
 			}
 			wasUntrackable = aura.AuraType == spellAuraUntrackable
 			wasSetVehicle = s.activeAuraHasEffect(aura, spellAuraSetVehicle)
+			// AuraEffect::HandleAuraLinked remove leg
+			// (SpellAuraEffects.cpp:4898-4903): the linked trigger spell's
+			// aura leaves the target when the parent leaves. Captured
+			// before Stopped is set, like the other effect-gated legs.
+			if s.server != nil {
+				if rspell, found, rerr := s.server.Data.Spell(spellID); rerr == nil && found {
+					removedLinkedTriggers = linkedTriggersOfSpell(s.server.Data, rspell)
+				}
+			}
 			wasVisibilityAura = affectsPlayerVisibility(aura.AuraType)
 			wasMovementSpeedAura = movementSpeedAura(aura.AuraType)
 			if aura.AuraType == spellAuraFakeInebriation {
@@ -18908,6 +19117,23 @@ func (s *session) removeAura(spellID uint32) {
 	if wasSetVehicle && s.player != nil && s.server != nil {
 		s.server.removeVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
 		s.sendPlayerVehicleData(0)
+	}
+	// AuraEffect::HandleAuraLinked remove leg (SpellAuraEffects.cpp:4898-4903):
+	// the linked trigger spell's aura leaves the target too, gated on the
+	// caster GUID — the aura caster's when the triggered spell needs a
+	// caster, the target's own otherwise (Go holds one aura per spell ID,
+	// so the C++ caster-GUID match compares the triggered aura's
+	// CasterGUID).
+	if removedLinkedTriggers != nil && s.player != nil {
+		for _, trig := range removedLinkedTriggers {
+			wantCaster := s.playerGUID
+			if trig.needsCaster {
+				wantCaster = removedCasterGUID
+			}
+			if a := s.activeAuras[trig.spellID]; a != nil && !a.Stopped && a.CasterGUID == wantCaster {
+				s.removeAura(trig.spellID)
+			}
+		}
 	}
 	if removedFakeInebriation > 0 && s.player != nil {
 		if removedFakeInebriation >= s.player.FakeInebriation {
@@ -20865,6 +21091,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
 			}
 			targetSess.sendPlayerUpdate()
+			// AuraEffect::HandleAuraLinked REAPPLY arm
+			// (SpellAuraEffects.cpp:4905-4911): a re-cast merge syncs the
+			// linked trigger aura's stack amount to the parent aura's.
+			targetSess.syncLinkedAuraStacks(spell, existing.CasterGUID, stackCount)
 			return
 		}
 		if existing := previous; existing != nil {
@@ -21233,6 +21463,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			aura.StackCount = 1
 			aura.RemainingCharges = 0
 		}
+		// AuraEffect::HandleAuraLinked apply leg (SpellAuraEffects.cpp:4880-4897,
+		// REAL mode): the linked trigger spell is cast on the aura target —
+		// by the aura caster when the triggered spell needs a caster, by the
+		// target itself otherwise — with the effect amount as effect 0's
+		// base point (SPELLVALUE_BASE_POINT0) when nonzero.
+		if eff.Aura == spellAuraLinked {
+			s.fireLinkedAuraTrigger(ctx, spell, eff, amount, targetGUID, creatureAuraKey{})
+		}
 		if eff.Aura == spellAuraStealth {
 			targetSess.player.StandFlags |= unitStandFlagCreep
 			targetSess.player.AuraVision |= playerAuraVisionStealth
@@ -21524,6 +21762,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if eff.Aura == spellAuraModTaunt {
 			s.server.applyCreatureTaunt(targetKey, s.playerGUID, durationMs)
 		}
+		// AuraEffect::HandleAuraLinked REAPPLY arm
+		// (SpellAuraEffects.cpp:4905-4911): a re-cast merge syncs the linked
+		// trigger aura's stack amount to the parent aura's.
+		s.server.syncCreatureLinkedAuraStacks(spell, targetKey, existing.CasterGUID, stackCount)
 		if resetPeriodic && existing.PeriodMs > 0 {
 			s.scheduleCreaturePeriodicTickInitial(existing, existing.PeriodMs, periodicTickInitialDelay(spell, existing.PeriodMs))
 		}
@@ -21631,6 +21873,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
 	if eff.Aura == spellAuraModTaunt {
 		s.server.applyCreatureTaunt(targetKey, aura.CasterGUID, durationMs)
+	}
+	// AuraEffect::HandleAuraLinked apply leg (SpellAuraEffects.cpp:4880-4897,
+	// REAL mode) for creature targets: the linked trigger spell is cast on
+	// the creature — by the aura caster when the triggered spell needs a
+	// caster (a player cast), by the creature itself otherwise (through the
+	// creature cast funnel).
+	if eff.Aura == spellAuraLinked {
+		s.fireLinkedAuraTrigger(ctx, spell, eff, amount, targetGUID, targetKey)
 	}
 	if eff.Aura == spellAuraCharm {
 		spells, reactState, commandState, controlled := s.server.charmCreature(ctx, targetKey, s.playerGUID, s.player.Race)
@@ -24970,6 +25220,8 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	taunterGUID := uint64(0)
 	wasControlVehicle := false
 	controlVehicleCaster := uint64(0)
+	var removedLinkedTriggers []linkedTriggerRef
+	removedLinkedParentCaster := uint64(0)
 	s.server.auraMu.Lock()
 	var finalTick *activeAura
 	if s.server.activeCreatureAuras != nil {
@@ -24985,6 +25237,16 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 				taunterGUID = aura.CasterGUID
 				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
 				controlVehicleCaster = aura.CasterGUID
+				// The remove arm of AuraEffect::HandleAuraLinked
+				// (SpellAuraEffects.cpp:4898-4903): the linked trigger
+				// spell's aura leaves the creature too. Captured before
+				// the aura is deleted.
+				if s.server.Data != nil {
+					if rspell, found, rerr := s.server.Data.Spell(spellID); rerr == nil && found {
+						removedLinkedTriggers = linkedTriggersOfSpell(s.server.Data, rspell)
+						removedLinkedParentCaster = aura.CasterGUID
+					}
+				}
 				aura.Stopped = true
 				if aura.TickTimer != nil {
 					// Same final-tick-at-expiry bridge as expirePlayerAura:
@@ -25044,6 +25306,10 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 		}
 	}
 
+	// AuraEffect::HandleAuraLinked remove leg (SpellAuraEffects.cpp:4898-4903):
+	// the linked trigger spell's aura leaves the creature too.
+	s.dropCreatureLinkedTriggers(removedLinkedTriggers, removedLinkedParentCaster, key)
+
 	removePkt := protocol.BuildAuraUpdate(key.GUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
 	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
 }
@@ -25058,6 +25324,8 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	taunterGUID := uint64(0)
 	wasControlVehicle := false
 	controlVehicleCaster := uint64(0)
+	var removedLinkedTriggers []linkedTriggerRef
+	removedLinkedParentCaster := uint64(0)
 	s.auraMu.Lock()
 	var slot uint8
 	if s.activeCreatureAuras != nil {
@@ -25069,6 +25337,16 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 				taunterGUID = aura.CasterGUID
 				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
 				controlVehicleCaster = aura.CasterGUID
+				// The remove arm of AuraEffect::HandleAuraLinked
+				// (SpellAuraEffects.cpp:4898-4903): the linked trigger
+				// spell's aura leaves the creature too. Captured before
+				// the aura is deleted.
+				if s.Data != nil {
+					if rspell, found, rerr := s.Data.Spell(spellID); rerr == nil && found {
+						removedLinkedTriggers = linkedTriggersOfSpell(s.Data, rspell)
+						removedLinkedParentCaster = aura.CasterGUID
+					}
+				}
 				aura.Stopped = true
 				slot = aura.Slot
 				if aura.Timer != nil {
@@ -25111,6 +25389,29 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 				caster.exitVehicle(context.Background())
 			}
 			caster.removeAura(spellID)
+		}
+	}
+
+	// AuraEffect::HandleAuraLinked remove leg (SpellAuraEffects.cpp:4898-4903):
+	// the linked trigger spell's aura leaves the creature too. The trigger
+	// expires through a session in the instance so the expiry packet carries
+	// a valid caster GUID — preferring the parent aura's caster session.
+	if removedLinkedTriggers != nil {
+		var expireSess *session
+		if casterSess := s.findSessionByGUID(removedLinkedParentCaster); casterSess != nil {
+			expireSess = casterSess
+		} else {
+			s.sessionsMu.RLock()
+			for cand := range s.sessions {
+				if cand != nil && cand.player != nil && cand.player.Map == key.Map && cand.player.InstanceID == key.InstanceID {
+					expireSess = cand
+					break
+				}
+			}
+			s.sessionsMu.RUnlock()
+		}
+		if expireSess != nil {
+			expireSess.dropCreatureLinkedTriggers(removedLinkedTriggers, removedLinkedParentCaster, key)
 		}
 	}
 

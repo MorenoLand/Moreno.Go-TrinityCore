@@ -2303,6 +2303,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					damage = uint32(dmg)
 				}
 			}
+			// AuraEffect::HandleModDamagePercentDone
+			// (SpellAuraEffects.cpp:4176-4199): the 79 NORMAL-school percent
+			// arm multiplies the flat-adjusted swing damage — the player
+			// twin is meleeDamageDonePctMod (aura_damage.go), applied as
+			// (damage + flat) * pct in executeMeleeSwing.
+			if pct := s.creatureAuraDamageDonePct(creatureAuraKeyForMotion(motion)); pct != 1.0 {
+				damage = uint32(float64(damage) * pct)
+			}
 			// AutoBalance_UnitScript::ModifyMeleeDamage analog.
 			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
 			if target.Sess.player.Armor > 0 {

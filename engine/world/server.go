@@ -1527,11 +1527,13 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		// 2. Power regeneration
 		switch p.Class {
 		case 1: // Warrior: rage decays out of combat
-			if !inCombat && p.Powers[1] > 0 {
+			if !inCombat && p.Powers[1] > 0 && !sess.hasAuraType(spellAuraInterruptRegen) {
 				// Player::Regenerate POWER_RAGE (Player.cpp:2147-2155):
 				// -20 per 2s tick, scaled by the 110 misc-rage multiplier
 				// plus the 85 misc-rage flat arm * tickMs/5000
-				// (Player.cpp:2163-2168).
+				// (Player.cpp:2163-2168). The decay is skipped entirely when
+				// the player carries an INTERRUPT_REGEN (94) aura
+				// (Player.cpp:2147: !HasAuraType(SPELL_AURA_INTERRUPT_REGEN)).
 				flat, mult := sess.auraPowerRegenTerms(1)
 				decay := int64(float64(-20)*float64(mult) + float64(flat)*0.4)
 				maxRage := sess.effectiveMaxPower(1)
@@ -1570,11 +1572,12 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 				}
 			}
 		case 6: // Death Knight: runic power decays out of combat
-			if !inCombat && p.Powers[6] > 0 {
+			if !inCombat && p.Powers[6] > 0 && !sess.hasAuraType(spellAuraInterruptRegen) {
 				// Player::Regenerate POWER_RUNIC_POWER
 				// (Player.cpp:2160-2167): -30 per 2s tick, scaled by the
 				// 110 misc-runic multiplier plus the 85 misc-runic flat arm
-				// * tickMs/5000 (Player.cpp:2163-2168).
+				// * tickMs/5000 (Player.cpp:2163-2168). Same INTERRUPT_REGEN
+				// (94) skip gate as rage (Player.cpp:2161).
 				flat, mult := sess.auraPowerRegenTerms(6)
 				maxRunic := sess.effectiveMaxPower(6)
 				decay := int64(float64(-30)*float64(mult) + float64(flat)*0.4)
