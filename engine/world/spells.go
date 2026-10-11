@@ -292,6 +292,9 @@ const (
 	// (ItemTemplate.h:320): ItemTemplate::IsPotion (ItemTemplate.h:700).
 	itemClassConsumable = 0
 	itemSubClassPotion  = 1
+	// ITEM_CLASS_QUEST (ItemTemplate.h:311): excluded from "Crafted by ..."
+	// signatures by ItemTemplate::HasSignature (ItemTemplate.cpp).
+	itemClassQuest = 12
 
 	// SPELL_CATEGORY_FLAG_COOLDOWN_STARTS_ON_EVENT (DBCEnums.h:385):
 	// SpellCategory.dbc Flags bit tested by
@@ -28443,12 +28446,110 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	if count < 1 {
 		count = 1
 	}
-	if _, err := s.storeOrStackItem(ctx, playerGUID, eff.ItemType, uint32(count)); err != nil {
+	res, err := s.storeOrStackItem(ctx, playerGUID, eff.ItemType, uint32(count))
+	if err != nil {
 		return
+	}
+	// Spell::DoCreateItem (SpellEffects.cpp:1666): a crafted item carries the
+	// "Crafted by ..." creator when the template HasSignature
+	// (ItemTemplate::HasSignature, ItemTemplate.cpp), and rolls its random
+	// property (GenerateItemRandomPropertyId). Both land only on the newly
+	// created stacks — a merged partial stack keeps the creator and
+	// property it already had.
+	if res != nil && !res.IsStack {
+		guids := append([]uint64{res.ItemGUID}, res.ExtraItemGUIDs...)
+		created := make([]uint64, 0, len(guids))
+		for _, g := range guids {
+			if g != 0 {
+				created = append(created, g)
+			}
+		}
+		if len(created) > 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			placeholders := strings.Repeat("?,", len(created)-1) + "?"
+			if s.spellCreatedItemHasSignature(ctx, eff.ItemType) {
+				args := make([]interface{}, 0, len(created)+1)
+				args = append(args, playerGUID)
+				for _, g := range created {
+					args = append(args, g)
+				}
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+					"UPDATE item_instance SET creatorGuid = ? WHERE guid IN ("+placeholders+")", args...)
+			}
+			if propertyID := s.rollCreatedItemRandomProperty(ctx, eff.ItemType); propertyID != 0 {
+				args := make([]interface{}, 0, len(created)+1)
+				args = append(args, propertyID)
+				for _, g := range created {
+					args = append(args, g)
+				}
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+					"UPDATE item_instance SET randomPropertyId = ? WHERE guid IN ("+placeholders+")", args...)
+			}
+		}
 	}
 	// Spell::DoCreateItem (SpellEffects.cpp:1666): a successful craft grows
 	// the profession skill.
 	s.updateCraftSkill(ctx, spell.ID)
+	// Spell::EffectCreateItem (SpellEffects.cpp:1679-1684): the log fires
+	// after DoCreateItem for effect 24 only — effect 157 carries the C++
+	// @todo and never logs (SpellEffects.cpp:1712), and the loot-crafting
+	// arm returned above. Go skips the log when the store itself fails; C++
+	// logs unconditionally after DoCreateItem.
+	if eff.Effect == spellEffectCreateItem {
+		s.sendCreateItemLog(spell.ID, eff.ItemType)
+	}
+}
+
+// spellCreatedItemHasSignature mirrors ItemTemplate::HasSignature
+// (ItemTemplate.cpp): a crafted item gets the "Crafted by ..." creator when
+// the template stacks to 1, is neither consumable nor quest, carries no
+// ITEM_FLAG_NO_CREATOR (ItemTemplate.h:169, 0x00020000), and is not the
+// hearthstone (6948).
+func (s *session) spellCreatedItemHasSignature(ctx context.Context, itemEntry uint32) bool {
+	if itemEntry == 0 || itemEntry == 6948 || s == nil || s.server == nil ||
+		s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var stackable, class, flags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(stackable, 1), COALESCE(class, 0), COALESCE(Flags, 0) FROM item_template WHERE entry = ? LIMIT 1",
+		itemEntry).Scan(&stackable, &class, &flags); err != nil {
+		return false
+	}
+	return stackable <= 1 && class != itemClassConsumable && class != itemClassQuest && flags&0x20000 == 0
+}
+
+// rollCreatedItemRandomProperty mirrors the random-property arm of
+// Spell::DoCreateItem (SpellEffects.cpp:1666): StoreNewItem receives
+// GenerateItemRandomPropertyId(newitemid)
+// (ItemEnchantmentMgr.cpp:122-166) — no RandomProperty/RandomSuffix column
+// set, or both set, returns 0; otherwise the template's column picks the
+// weighted entry from item_enchantment_template, which must exist in the
+// matching DBC. The roll reuses the loot path's rollLootRandomMods
+// (Loot.cpp:46-47 arms); the suffix factor derives at read time, so only
+// the property id is stored on the item.
+func (s *session) rollCreatedItemRandomProperty(ctx context.Context, itemEntry uint32) int32 {
+	if itemEntry == 0 || s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0
+	}
+	var randomProperty, randomSuffix, itemLevel, quality, invType int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(RandomProperty, 0), COALESCE(RandomSuffix, 0), COALESCE(ItemLevel, 0), COALESCE(Quality, 0), COALESCE(InventoryType, 0) FROM item_template WHERE entry = ? LIMIT 1",
+		itemEntry).Scan(&randomProperty, &randomSuffix, &itemLevel, &quality, &invType); err != nil {
+		return 0
+	}
+	if randomProperty == 0 && randomSuffix == 0 {
+		return 0
+	}
+	row := lootTemplateRow{
+		itemID:         itemEntry,
+		quality:        uint32(quality),
+		randomProperty: uint32(randomProperty),
+		randomSuffix:   uint32(randomSuffix),
+		itemLevel:      uint32(itemLevel),
+		invType:        uint32(invType),
+	}
+	_, propertyID := s.server.rollLootRandomMods(ctx, s.server.WorldStore.DB, &row)
+	return propertyID
 }
 
 // handleEffectSummonChangeItem mirrors Spell::EffectSummonChangeItem
@@ -30214,6 +30315,29 @@ func (s *session) sendUnsummonObjectLog(spellID uint32, petGUID uint64) {
 	log.WriteU32(spellEffectDismissPet)
 	log.WriteU32(1)
 	log.WritePackedGUID(petGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
+}
+
+// sendCreateItemLog mirrors Spell::ExecuteLogEffectCreateItem
+// (Spell.cpp:4594-4598) as fired by Spell::EffectCreateItem
+// (SpellEffects.cpp:1683-1684): SMSG_SPELLLOGEXECUTE carrying the created
+// item's entry under the create-item effect id (24), sent to the caster and
+// nearby players like the other spell-log builders. EffectCreateItem2 (157)
+// and EffectCreateRandomItem (59) carry the C++ @todo and never log.
+func (s *session) sendCreateItemLog(spellID, itemEntry uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectCreateItem)
+	log.WriteU32(1)
+	log.WriteU32(itemEntry)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
