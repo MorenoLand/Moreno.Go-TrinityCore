@@ -2619,30 +2619,11 @@ func (s *session) playerAuraModifier(auraType uint32) float32 {
 // filter (Player.cpp:7946-7956) bound into GetTotalAuraModifier by
 // Player::UpdateWeaponDependentCritAuras (Player.cpp:7882-7905): an aura of
 // the given type counts toward an attack type's crit only when its spell
-// carries no equipped-item requirement (EquippedItemClass == -1), or the
-// weapon equipped for that attack type fits the spell's class/subclass
-// requirements (Item::IsFitToSpellRequirements, Item.cpp:799-832). The
-// GetWeaponForAttack useable arm (unbroken weapon of ITEM_CLASS_WEAPON)
-// rides equippedWeaponInstance; the IsInFeralForm arm rides the
-// ShapeshiftForm cat/bear/dire-bear check, like attackPowerMultiplier.
+// passes attackFitsAuraRequirement for that attack type.
 func (s *session) playerAuraModifierWeaponFit(ctx context.Context, auraType uint32, attackType protocol.WeaponAttackType) float32 {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return 0
 	}
-	var slot uint8
-	switch attackType {
-	case protocol.OffAttack:
-		slot = equipSlotOffhand
-	case protocol.RangedAttack:
-		slot = equipSlotRanged
-	default:
-		slot = equipSlotMainhand
-	}
-	var form uint8
-	if s.player != nil {
-		form = s.player.ShapeshiftForm
-	}
-	feral := form == 1 || form == 5 || form == 8 // FORM_CAT, FORM_BEAR, FORM_DIREBEAR
 	var total float32
 	for _, aura := range s.loadedAuras() {
 		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
@@ -2652,22 +2633,7 @@ func (s *session) playerAuraModifierWeaponFit(ctx context.Context, auraType uint
 		if err != nil || !found {
 			continue
 		}
-		fits := spell.EquippedItemClass < 0
-		if !fits && !feral {
-			_, entry := s.equippedWeaponInstance(ctx, slot)
-			if entry != 0 {
-				// Item::IsFitToSpellRequirements' non-enchant arm
-				// (Item.cpp:804-819): class equality plus the subclass
-				// mask (0 = any subclass). Aura spells are never enchant
-				// spells, so the vellum and inventory-type arms are vacuous.
-				if info, ok := s.server.getItemStoreTemplateInfo(ctx, entry); ok &&
-					int32(info.Class) == spell.EquippedItemClass &&
-					(spell.EquippedItemSubClass == 0 || spell.EquippedItemSubClass&(1<<info.SubClass) != 0) {
-					fits = true
-				}
-			}
-		}
-		if !fits {
+		if !s.attackFitsAuraRequirement(ctx, spell, attackType) {
 			continue
 		}
 		for index, effect := range spell.Effects {
@@ -3803,27 +3769,32 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	// rows only (AP lands at swing time in executeMeleeSwing, a pre-existing
 	// display delta), so only the aura legs are layered on here for the
 	// character sheet.
-	dmgFlat, dmgPctMain, dmgPctOff := float32(0), float32(1), float32(1)
+	dmgFlatMain, dmgFlatOff, dmgFlatRanged := float32(0), float32(0), float32(0)
+	dmgPctMain, dmgPctOff, dmgPctRanged := float32(1), float32(1), float32(1)
 	if runtime != nil {
-		dmgFlat = float32(runtime.meleeDamageDoneFlat())
-		dmgPctMain = float32(runtime.meleeDamageDonePctMod(false))
-		dmgPctOff = float32(runtime.meleeDamageDonePctMod(true))
+		bg := context.Background()
+		dmgFlatMain = float32(runtime.meleeDamageDoneFlat(bg, protocol.BaseAttack))
+		dmgFlatOff = float32(runtime.meleeDamageDoneFlat(bg, protocol.OffAttack))
+		dmgFlatRanged = float32(runtime.meleeDamageDoneFlat(bg, protocol.RangedAttack))
+		dmgPctMain = float32(runtime.meleeDamageDonePctMod(bg, protocol.BaseAttack))
+		dmgPctOff = float32(runtime.meleeDamageDonePctMod(bg, protocol.OffAttack))
+		dmgPctRanged = float32(runtime.meleeDamageDonePctMod(bg, protocol.RangedAttack))
 	}
-	applyDmgAuras := func(base, pct float32) float32 { return (base + dmgFlat) * pct }
-	minDmg := applyDmgAuras(state.MinDamage, dmgPctMain)
+	applyDmgAuras := func(base, flat, pct float32) float32 { return (base + flat) * pct }
+	minDmg := applyDmgAuras(state.MinDamage, dmgFlatMain, dmgPctMain)
 	if minDmg <= 0 {
 		minDmg = 1.0
 	}
-	maxDmg := applyDmgAuras(state.MaxDamage, dmgPctMain)
+	maxDmg := applyDmgAuras(state.MaxDamage, dmgFlatMain, dmgPctMain)
 	if maxDmg <= minDmg {
 		maxDmg = minDmg + 1.0
 	}
 	values[unitFieldMinDamage] = math.Float32bits(minDmg)
 	values[unitFieldMaxDamage] = math.Float32bits(maxDmg)
-	values[unitFieldMinOffhandDamage] = math.Float32bits(applyDmgAuras(state.MinOffhandDamage, dmgPctOff))
-	values[unitFieldMaxOffhandDamage] = math.Float32bits(applyDmgAuras(state.MaxOffhandDamage, dmgPctOff))
-	values[unitFieldMinRangedDamage] = math.Float32bits(applyDmgAuras(state.MinRangedDamage, dmgPctMain))
-	values[unitFieldMaxRangedDamage] = math.Float32bits(applyDmgAuras(state.MaxRangedDamage, dmgPctMain))
+	values[unitFieldMinOffhandDamage] = math.Float32bits(applyDmgAuras(state.MinOffhandDamage, dmgFlatOff, dmgPctOff))
+	values[unitFieldMaxOffhandDamage] = math.Float32bits(applyDmgAuras(state.MaxOffhandDamage, dmgFlatOff, dmgPctOff))
+	values[unitFieldMinRangedDamage] = math.Float32bits(applyDmgAuras(state.MinRangedDamage, dmgFlatRanged, dmgPctRanged))
+	values[unitFieldMaxRangedDamage] = math.Float32bits(applyDmgAuras(state.MaxRangedDamage, dmgFlatRanged, dmgPctRanged))
 	values[unitFieldAttackPowerMultiplier] = math.Float32bits(attackPowerMultiplier)
 	values[unitFieldRangedAttackPowerMultiplier] = math.Float32bits(rangedAttackPowerMultiplier)
 	values[unitFieldAttackPower] = state.AttackPower
