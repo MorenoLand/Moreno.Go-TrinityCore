@@ -685,6 +685,40 @@ func (s *session) tickCritChance(targetGUID uint64, schoolMask uint8, spell wotl
 	return chance
 }
 
+// periodicCritChanceForAura mirrors Aura::SaveCasterInfo (SpellAuras.cpp:504-510):
+// the aura stores Aura::CalcPeriodicCritChance (SpellAuras.cpp:494-502) at
+// apply, and the tick rolls the stored chance via AuraEffect::GetCritChanceFor
+// (SpellAuraEffects.cpp:843-846) even when the caster is gone
+// (SpellAuraEffects.cpp:5173, 5388). Stored as a percent, like C++
+// _casterInfo.CritChance; the live cast path previously left it zero, so a
+// departed caster's ticks never critted.
+func (s *session) periodicCritChanceForAura(spell wotlk.Spell, targetGUID uint64, schoolMask uint8) float32 {
+	if s == nil || !s.canPeriodicTickCrit(spell) {
+		return 0
+	}
+	return float32(s.calculateSpellCritChance(targetGUID, schoolMask, spell, true) * 100)
+}
+
+// nullCasterTickCritChance mirrors the Unit::SpellCritChanceTaken
+// (Unit.cpp:7216-7345) null-caster arm behind AuraEffect::GetCritChanceFor
+// (SpellAuraEffects.cpp:843-846): the aura's stored crit chance
+// (Aura::CalcPeriodicCritChance, SpellAuras.cpp:494-502 — populated at apply
+// by periodicCritChanceForAura) plus the victim-side 179/197 terms, which
+// C++ applies only to non-positive spells (Unit.cpp:7228). Every
+// caster-gated leg — the scripted taken arms, resilience, level suppression
+// and MOD_CRIT_CHANCE_FOR_CASTER (Unit.cpp:7241, 7390) — is skipped, so a
+// periodic tick still rolls (and can crit) when its caster is gone.
+func nullCasterTickCritChance(storedCritPct float32, spell wotlk.Spell, spellKnown bool, victimMod179, victimMod197 float64) float64 {
+	chance := float64(storedCritPct) / 100.0
+	if spellKnown && !spellIsPositive(spell) {
+		chance += (victimMod179 + victimMod197) / 100.0
+	}
+	if chance < 0 {
+		chance = 0
+	}
+	return chance
+}
+
 // canPeriodicTickCrit mirrors Aura::CanPeriodicTickCrit (SpellAuras.cpp:475-491):
 // a periodic aura's ticks crit only when the spell allows it.
 // SPELL_ATTR2_CANT_CRIT blocks outright; SPELL_ATTR4_INHERIT_CRIT_FROM_AURA

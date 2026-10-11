@@ -20475,6 +20475,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			StackAmount:        spell.StackAmount,
 			HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
 			RemainingCharges:   uint8(spell.ProcCharges),
+			CritChance:         s.periodicCritChanceForAura(spell, targetGUID, uint8(schoolMask)),
 		}
 		setAuraEffectPersistence(aura, spell, eff, amount)
 		if eff.Aura == 4 && previous != nil && previous.AuraType == 4 {
@@ -20951,6 +20952,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		StackAmount:        spell.StackAmount,
 		HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
 		RemainingCharges:   uint8(spell.ProcCharges),
+		CritChance:         s.periodicCritChanceForAura(spell, targetGUID, uint8(schoolMask)),
 	}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
 	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420): a fresh
@@ -21561,6 +21563,23 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 					dmg += dmg / 2
 				}
 			}
+		} else if !fixedDamage {
+			// SpellAuraEffects.cpp:5173-5175 — the crit roll runs even
+			// when the caster is gone: GetCritChanceFor feeds the aura's
+			// stored crit chance with a null caster (see
+			// nullCasterTickCritChance). The nil-session bonus mirrors
+			// Unit::SpellCriticalDamageBonus's null-caster arm.
+			if rand.Float64() < nullCasterTickCritChance(aura.CritChance, tickSpell, tickKnown,
+				float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask))),
+				float64(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))) {
+				crit = true
+				if tickKnown {
+					var nilSess *session
+					dmg = nilSess.spellCriticalDamageBonus(context.Background(), tickSpell, dmg, aura.TargetGUID)
+				} else {
+					dmg += dmg / 2
+				}
+			}
 		}
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182) — physical
 		// schools only; Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000)
@@ -21731,6 +21750,25 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				healCrit = true
 				if healKnown {
 					heal = healCaster.spellCriticalHealingBonus(context.Background(), heal, aura.TargetGUID, healSpell.DefenseType, true)
+				} else {
+					heal += heal / 2
+				}
+			}
+		} else {
+			// SpellAuraEffects.cpp:5388-5390 — the crit roll runs even
+			// when the caster is gone: GetCritChanceFor feeds the aura's
+			// stored crit chance with a null caster (see
+			// nullCasterTickCritChance). The nil-session bonus mirrors
+			// Unit::SpellCriticalHealingBonus's null-caster arm
+			// (Unit.cpp:7469-7482): the versus and MOD_CRITICAL_HEALING_AMOUNT
+			// legs are skipped.
+			if rand.Float64() < nullCasterTickCritChance(aura.CritChance, healSpell, healKnown,
+				float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask))),
+				float64(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))) {
+				healCrit = true
+				if healKnown {
+					var nilSess *session
+					heal = nilSess.spellCriticalHealingBonus(context.Background(), heal, aura.TargetGUID, healSpell.DefenseType, true)
 				} else {
 					heal += heal / 2
 				}
@@ -21931,6 +21969,21 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				crit = true
 				if tickKnown {
 					dmg = tickCaster.spellCriticalDamageBonus(context.Background(), tickSpell, dmg, aura.TargetGUID)
+				} else {
+					dmg += dmg / 2
+				}
+			}
+		} else if !fixedDamage {
+			// SpellAuraEffects.cpp:5295-5305 — the leech tick runs the
+			// damage-tick tail, so the null-caster crit arm (UNIT 1,
+			// SpellAuraEffects.cpp:5173-5175) applies here too.
+			if rand.Float64() < nullCasterTickCritChance(aura.CritChance, tickSpell, tickKnown,
+				float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask))),
+				float64(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))) {
+				crit = true
+				if tickKnown {
+					var nilSess *session
+					dmg = nilSess.spellCriticalDamageBonus(context.Background(), tickSpell, dmg, aura.TargetGUID)
 				} else {
 					dmg += dmg / 2
 				}
@@ -22806,6 +22859,26 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					dmg += dmg / 2
 				}
 			}
+		} else if !fixedDamage && procActorIsPlayerGUID(aura.CasterGUID) {
+			// SpellAuraEffects.cpp:5173-5175 — the crit roll runs even when
+			// the player caster is gone (see nullCasterTickCritChance). The
+			// level-suppression term is caster-gated in C++
+			// (Unit.cpp:7333-7339) and skipped; wild-creature casters keep
+			// the standing no-crit gap (no Go creature spell-crit model).
+			var cMod179 float64
+			for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, aura.SchoolMask) {
+				cMod179 += float64(amt)
+			}
+			cMod197 := float64(creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
+			if rand.Float64() < nullCasterTickCritChance(aura.CritChance, tickSpell, tickKnown, cMod179, cMod197) {
+				crit = true
+				if tickKnown {
+					var nilSess *session
+					dmg = nilSess.spellCriticalDamageBonus(ctx, tickSpell, dmg, aura.TargetGUID)
+				} else {
+					dmg += dmg / 2
+				}
+			}
 		}
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182); skipped for
 		// FIXED_DAMAGE spells (Unit.cpp:999-1000). Resilience has no Go
@@ -22965,6 +23038,24 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				healCrit = true
 				heal = tickCaster.spellCriticalHealingBonus(ctx, heal, aura.TargetGUID, tickSpell.DefenseType, true)
+			}
+		} else if procActorIsPlayerGUID(aura.CasterGUID) {
+			// SpellAuraEffects.cpp:5388-5390 — the crit roll runs even when
+			// the player caster is gone (see nullCasterTickCritChance). The
+			// level-suppression term is caster-gated in C++
+			// (Unit.cpp:7333-7339) and skipped; wild-creature casters keep
+			// the standing no-crit gap (no Go creature spell-crit model).
+			var cMod179 float64
+			if tickKnown && !spellIsPositive(tickSpell) && s.server != nil {
+				for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, aura.SchoolMask) {
+					cMod179 += float64(amt)
+				}
+			}
+			cMod197 := float64(creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
+			if rand.Float64() < nullCasterTickCritChance(aura.CritChance, tickSpell, tickKnown, cMod179, cMod197) {
+				healCrit = true
+				var nilSess *session
+				heal = nilSess.spellCriticalHealingBonus(ctx, heal, aura.TargetGUID, tickSpell.DefenseType, true)
 			}
 		}
 		curHP := target.Health
