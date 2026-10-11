@@ -795,6 +795,23 @@ func (s *Server) creatureRangeTargetHostile(m *creatureMotion, targetGUID uint64
 	return false
 }
 
+// creatureCastTargetResolves mirrors the lost-explicit-target arm of
+// Spell::_cast (Spell.cpp:3288-3293) for the creature path: after
+// UpdatePointers, an explicit object target that no longer resolves
+// cancels the cast. A player target resolves through its live session on
+// the caster's map/instance (C++ only sees in-map objects); any other unit
+// resolves through the creature motion map. Self casts and target-less
+// casts never reach this helper (GetObjectTargetGUID()==0 skips the arm).
+func (s *Server) creatureCastTargetResolves(m *creatureMotion, targetGUID uint64) bool {
+	if s == nil || m == nil {
+		return true
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		return ts.player.Map == m.Map && ts.player.InstanceID == m.InstanceID
+	}
+	return s.findCreatureMotion(m.Map, m.InstanceID, targetGUID) != nil
+}
+
 func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
 	if s == nil || m == nil || spellID == 0 {
 		return
@@ -874,6 +891,28 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// never starts a cooldown and never arms cast state.
 		if !s.creatureStealPreCast(m, spellInfo, targetGUID) {
 			return
+		}
+		// Spell::_cast lost-explicit-target arm (Spell.cpp:3288-3293): an
+		// explicit unit target whose object no longer resolves cancels the
+		// cast — no GO packet, no cooldown (SelectSpellTargets at 3410
+		// precedes SendSpellCooldown at 3463). Checked before the redirect:
+		// C++ tests the loss before SelectSpellTargets. Self casts and
+		// target-less casts are exempt (GetObjectTargetGUID()==0 skips the
+		// arm). Runs for triggered casts too — the arm has no triggered
+		// gate.
+		if targetGUID != 0 && targetGUID != m.GUID && !s.creatureCastTargetResolves(m, targetGUID) {
+			return
+		}
+		// Spell::SelectExplicitTargets magic-redirect arm (Spell.cpp:724-757):
+		// no caster-type gate — SelectSpellTargets (761) runs it for
+		// creature casts in _cast (3410), after CheckCast (the steal arm
+		// above) and before the cooldown record. A live Grounding Totem
+		// magnet on the victim pulls the cast onto the totem; the GO
+		// packet below carries the redirected target.
+		if redirectGUID, ok := s.creatureGroundingTotemRedirect(ctx, m, spellInfo, targetGUID); ok {
+			targetGUID = redirectGUID
+			spellTarget.UnitGUID = redirectGUID
+			hitTargets = []uint64{redirectGUID}
 		}
 		if !triggered {
 			// Spell::SendSpellCooldown (Spell.cpp:3463, 3780-3791):

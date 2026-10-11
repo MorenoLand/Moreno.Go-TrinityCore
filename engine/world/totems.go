@@ -637,6 +637,108 @@ func (s *session) groundingTotemMagnetGUID(ctx context.Context, spell wotlk.Spel
 	return totemGUID, true
 }
 
+// creatureGroundingTotemRedirect mirrors the SPELL_DAMAGE_CLASS_MAGIC arm of
+// Spell::SelectExplicitTargets (Spell.cpp:724-757) via
+// WorldObject::GetMagicHitRedirectTarget (Object.cpp:3188-3217) for a
+// creature caster. SelectExplicitTargets carries no caster-type gate —
+// SelectSpellTargets (Spell.cpp:761) runs it for creature casts through
+// Spell::cast (Spell.cpp:3410) — so a creature's harmful magic cast at a
+// player victim is pulled onto the victim's live Grounding Totem and the
+// magnet is consumed, exactly like the player-cast path
+// (groundingTotemMagnetGUID). Caster friendliness keys on the creature's
+// faction template (isFriendlyFaction/isHostileFaction; duel not counted —
+// player-vs-player only, like creatureRangeTargetHostile). The PvP,
+// sanctuary, party/raid and passenger arms of CheckExplicitTarget
+// (SpellInfo.cpp:1786-1805) and IsValidAttackTarget are player-side and
+// vacuous for a creature target — they degrade to the faction verdict, the
+// same degradation the session path documents for nil target sessions. The
+// melee/ranged arm (Unit::GetMeleeHitRedirectTarget, aura 111) stays
+// unbridged — no Go-modeled source — as does the Speed>0 charge-delay
+// nuance (Go consumes the magnet at selection time).
+func (s *Server) creatureGroundingTotemRedirect(ctx context.Context, m *creatureMotion, spell wotlk.Spell, victimGUID uint64) (uint64, bool) {
+	if s == nil || m == nil || victimGUID == 0 {
+		return 0, false
+	}
+	// DmgClass gate: only SPELL_DAMAGE_CLASS_MAGIC redirects here
+	// (Spell.cpp:739-741). Go's DefenseType is the DBC DmgClass field.
+	if spell.DefenseType != spellDamageClassMagic {
+		return 0, false
+	}
+	// Object.cpp:3191-3193: abilities, CANT_BE_REDIRECTED, and
+	// UNAFFECTED_BY_INVULNERABILITY spells ignore magnets.
+	if spell.Attributes&spellAttr0Ability != 0 || spell.AttributesEx&spellAttr1CantBeRedirected != 0 || spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+		return 0, false
+	}
+	// Spell.cpp:728-731: the redirect only runs for explicit enemy-unit
+	// targets, or plain unit targets not friendly to the caster.
+	explicitMask := spellExplicitUnitTargetMask(spell)
+	victimSess := s.findSessionByGUID(victimGUID)
+	if victimSess == nil || victimSess.player == nil {
+		// The magnet aura lives on the totem's owner; without a live player
+		// victim there is no magnet to consult.
+		return 0, false
+	}
+	if explicitMask&targetFlagUnitEnemy == 0 {
+		if explicitMask&targetFlagUnit == 0 {
+			return 0, false
+		}
+		tp := playerPos{
+			FactionTemplate: s.raceFaction(victimSess.player.Race),
+			Race:            victimSess.player.Race,
+			Class:           victimSess.player.Class,
+			Sess:            victimSess,
+			Reputations:     playerReputationMap(victimSess.player.Reputations),
+		}
+		if s.isFriendlyFaction(m.Faction, tp) {
+			return 0, false
+		}
+	}
+	// The magnet: the victim's live Grounding Totem (air slot, spell 8177).
+	s.totemMu.RLock()
+	totem := s.activeTotems[victimGUID][TotemSlotAir]
+	s.totemMu.RUnlock()
+	if totem == nil || totem.SpellID != 8177 {
+		return 0, false
+	}
+	totem.mu.Lock()
+	totemGUID := totem.TotemGUID
+	consumed := totem.Stopped || totem.MagnetUsed
+	totem.mu.Unlock()
+	if consumed {
+		return 0, false
+	}
+	// The totem must be a live motion on the caster's map (C++ operates on
+	// the in-map object; a despawned totem cannot redirect).
+	tm := s.findCreatureMotion(m.Map, m.InstanceID, totemGUID)
+	if tm == nil || tm.Health == 0 {
+		return 0, false
+	}
+	// Object.cpp:3200: the magnet must pass CheckExplicitTarget and
+	// IsValidAttackTarget — the unit-flag arm plus the creature-caster
+	// faction terms (SpellInfo.cpp:1786-1805).
+	if spellTargetUnitBlocked(spell, tm.UnitFlags, tm.FlagsExtra, false) {
+		return 0, false
+	}
+	totemPos := playerPos{FactionTemplate: tm.Faction}
+	if explicitMask&targetFlagUnitEnemy != 0 {
+		if s.isFriendlyFaction(m.Faction, totemPos) || !s.isHostileFaction(m.Faction, totemPos) {
+			return 0, false
+		}
+	} else if explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0 {
+		if s.isHostileFaction(m.Faction, totemPos) {
+			return 0, false
+		}
+	}
+	totem.mu.Lock()
+	if totem.Stopped || totem.MagnetUsed {
+		totem.mu.Unlock()
+		return 0, false
+	}
+	totem.MagnetUsed = true
+	totem.mu.Unlock()
+	return totemGUID, true
+}
+
 // handleEffectDestroyAllTotems processes SPELL_EFFECT_DESTROY_ALL_TOTEMS (110).
 // Reference: Spell::EffectDestroyAllTotems (SpellEffects.cpp:4820-4842) runs
 // once at SPELL_EFFECT_HANDLE_HIT on the caster: every live totem in the four
