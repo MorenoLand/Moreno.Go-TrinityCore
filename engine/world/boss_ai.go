@@ -1105,6 +1105,16 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.fireCreatureSpellLinkedTriggers(ctx, m, spellID, targetGUID)
 	}
+	// Spell::DoTriggersOnSpellHit (Spell.cpp:2913-2957): the per-hit trigger
+	// consumer — ADD_TARGET_TRIGGER snapshot plus the spell_linked
+	// SPELL_LINK_HIT (type 1) rows — fires per hit target. Go's creature
+	// path applies spell damage in the combat tick, so this runs at cast
+	// completion next to the type-0 tail above, the same placement that
+	// tail uses. Gated on spellKnown like the tail: C++ never reaches
+	// _cast without a SpellInfo.
+	if spellKnown {
+		s.fireCreatureHitTriggers(ctx, m, spellInfo, spellID, hitTargets)
+	}
 }
 
 // fireCreatureSpellLinkedTriggers applies the spell_linked_spell tail of
@@ -1146,6 +1156,280 @@ func (s *Server) fireCreatureSpellLinkedTriggers(ctx context.Context, m *creatur
 			tgt = m.GUID
 		}
 		s.castCreatureSpellInternal(ctx, m, uint32(id), tgt, true)
+	}
+}
+
+// prepareCreatureHitTriggerSpells mirrors Spell::PrepareTriggersExecutedOnHit
+// (Spell.cpp:8176-8206) for a creature caster: it snapshots the caster
+// creature's SPELL_AURA_ADD_TARGET_TRIGGER aura effects present at cast
+// completion, so triggered auras gained mid-cast cannot affect the caster and
+// proc chance uses the combo-point-independent base amount. Same arms as the
+// player-path snapshot (AuraEffect::IsAffectedOnSpell family gate,
+// TriggerSpell DBC-known gate, base-amount chance times stack amount — the
+// CalculateSpellDamage fold stays a documented delta, as on that path).
+func (s *Server) prepareCreatureHitTriggerSpells(m *creatureMotion, spell wotlk.Spell) []spellHitTrigger {
+	if s == nil || m == nil || s.Data == nil {
+		return nil
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	var triggers []spellHitTrigger
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraAddTargetTrigger || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			// AuraEffect::IsAffectedOnSpell (SpellAuraEffects.cpp:848).
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			if effect.TriggerSpell == 0 {
+				continue
+			}
+			if _, found, err := s.Data.Spell(effect.TriggerSpell); err != nil || !found {
+				continue
+			}
+			chance := aura.BaseAmounts[index]
+			if chance == 0 {
+				chance = effect.BasePoints + 1
+			}
+			chance *= int32(aura.StackAmount)
+			triggers = append(triggers, spellHitTrigger{
+				TriggerSpellID:       effect.TriggerSpell,
+				TriggeredByAuraSpell: aura.SpellID,
+				Chance:               chance,
+			})
+		}
+	}
+	return triggers
+}
+
+// canExecuteHitTriggers mirrors Spell::CanExecuteTriggersOnHit
+// (Spell.cpp:8164-8174) for either caster path: an effect bit in the hit
+// mask fires the trigger unless the triggering aura carries
+// SPELL_ATTR4_PROC_ONLY_ON_CASTER (SharedDefines.h:561), in which case only
+// effects whose implicit target A is TARGET_UNIT_CASTER
+// (SharedDefines.h:1442) qualify.
+func (s *Server) canExecuteHitTriggers(spell wotlk.Spell, effMask uint8, triggeredByAuraSpell uint32) bool {
+	onlyOnCaster := false
+	if triggeredByAuraSpell != 0 && s != nil && s.Data != nil {
+		if auraSpell, found, err := s.Data.Spell(triggeredByAuraSpell); err == nil && found {
+			onlyOnCaster = auraSpell.AttributesEx4&spellAttr4ProcOnlyOnCaster != 0
+		}
+	}
+	for i, eff := range spell.Effects {
+		if effMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		if !onlyOnCaster || eff.ImplicitTargetA == targetUnitCaster {
+			return true
+		}
+	}
+	return false
+}
+
+// fireCreatureHitTriggers mirrors Spell::DoTriggersOnSpellHit
+// (Spell.cpp:2913-2957) for a creature caster, per hit target. C++ calls it
+// inside DoTargetSpellHit after damage/healing is dealt (Spell.cpp:2650-2652);
+// Go's creature path applies spell damage in the combat tick
+// (creaturemotion.go), so the consumer runs at cast completion next to the
+// spell_linked tail, the same placement that tail uses. Two legs:
+//   - ADD_TARGET_TRIGGER snapshot: per trigger, the CanExecuteTriggersOnHit
+//     effMask gate plus the roll_chance_i chance fires
+//     m_caster->CastSpell(unit, triggeredSpell->Id, true) — a triggered cast
+//     by the caster creature on the hit target; a triggered aura with no
+//     duration (-1) inherits the remaining duration of the cast spell's own
+//     aura on the target from the caster.
+//   - spell_linked_spell hit rows (type 1, SPELL_LINK_HIT, SpellMgr.h:106):
+//     negative ids RemoveAurasDueToSpell on the hit target, positive ids are
+//     cast by the hit target on itself with the caster as original caster.
+func (s *Server) fireCreatureHitTriggers(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, hitTargets []uint64) {
+	if s == nil || m == nil {
+		return
+	}
+	// effMask is the mask of the spell's non-zero effects: Go applies every
+	// non-zero effect to every hit target, so there is no per-target effect
+	// filtering like C++'s per-target EffectMask.
+	var hitEffMask uint8
+	for effectIndex, eff := range spell.Effects {
+		if eff.Effect != 0 {
+			hitEffMask |= 1 << uint(effectIndex)
+		}
+	}
+	triggers := s.prepareCreatureHitTriggerSpells(m, spell)
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		// DoTargetSpellHit runs per unit target; GO guids flow through
+		// hitTargets like C++'s AddGOTarget but are never hit targets.
+		if high := uint16(targetGUID >> 48); high != 0 && high != 0xF130 {
+			continue
+		}
+		for _, t := range triggers {
+			if !s.canExecuteHitTriggers(spell, hitEffMask, t.TriggeredByAuraSpell) {
+				continue
+			}
+			// roll_chance_i(chance): urand(0, 99) < chance.
+			if rand.Float64()*100 >= float64(t.Chance) {
+				continue
+			}
+			// m_caster->CastSpell(unit, triggeredSpell->Id, true): triggered
+			// cast by the caster creature on the hit target.
+			s.castCreatureSpellInternal(ctx, m, t.TriggerSpellID, targetGUID, true)
+			s.inheritCreatureHitTriggerAuraDuration(ctx, m.GUID, spellID, t.TriggerSpellID, targetGUID, m.Map, m.InstanceID)
+		}
+		s.fireCreatureSpellLinkedHitTriggers(ctx, m, spellID, targetGUID)
+	}
+}
+
+// fireCreatureSpellLinkedHitTriggers mirrors the spell_linked tail of
+// Spell::DoTriggersOnSpellHit (Spell.cpp:2951-2957) for a creature caster:
+// rows of spell_linked_spell with type 1 (id + SPELL_LINK_HIT,
+// SpellMgr.h:106) fire per hit target — negative ids RemoveAurasDueToSpell
+// on the hit target, positive ids are cast by the hit target on itself
+// (unit->CastSpell(unit, *i, m_caster->GetGUID()) — TRIGGERED_FULL_MASK via
+// CastSpellExtraArgs(ObjectGuid), SpellDefines.h:167) with the creature
+// caster as original caster. (Spell.cpp carries a @todo to remove this
+// table; Go mirrors the cast leg in fireCreatureSpellLinkedTriggers, so the
+// hit leg is mirrored here for the same reason.)
+func (s *Server) fireCreatureSpellLinkedHitTriggers(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64) {
+	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil || targetGUID == 0 {
+		return
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT spell_effect FROM spell_linked_spell WHERE spell_trigger = ? AND type = 1", int32(spellID))
+	if err != nil {
+		if !missingTable(err) {
+			s.debug("spell_linked_spell hit query failed", "spell", spellID, "err", err)
+		}
+		return
+	}
+	var effects []int32
+	for rows.Next() {
+		var effect int32
+		if err := rows.Scan(&effect); err == nil {
+			effects = append(effects, effect)
+		}
+	}
+	rows.Close()
+	for _, id := range effects {
+		if id == 0 {
+			continue
+		}
+		if id < 0 {
+			// Unit::RemoveAurasDueToSpell on the hit target.
+			linkedSpellID := uint32(-id)
+			if ts := s.findSessionByGUID(targetGUID); ts != nil {
+				ts.removeAura(linkedSpellID)
+				continue
+			}
+			if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+				s.removeCreatureAura(creatureAuraKeyForMotion(tm), linkedSpellID)
+			}
+			continue
+		}
+		// unit->CastSpell(unit, id, m_caster->GetGUID()): the hit target
+		// casts on itself, triggered. Player targets cast through their
+		// own session; creature targets cast through the creature path.
+		if ts := s.findSessionByGUID(targetGUID); ts != nil {
+			ts.castSpellDirect(ctx, uint32(id), targetGUID)
+			continue
+		}
+		if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+			s.castCreatureSpellInternal(ctx, tm, uint32(id), tm.GUID, true)
+		}
+	}
+}
+
+// inheritCreatureHitTriggerAuraDuration mirrors the no-duration leg of
+// Spell::DoTriggersOnSpellHit (Spell.cpp:2935-2949) for a creature caster:
+// SPELL_AURA_ADD_TARGET_TRIGGER auras must not trigger auras without
+// duration, so when the triggered spell's raw duration is -1
+// (SpellInfo::GetDuration, SpellInfo.cpp:3077) the triggered aura — applied
+// to the hit target by the caster creature — inherits the remaining duration
+// of the cast spell's own aura on that target from the caster.
+// Aura::GetDuration is the live remaining duration.
+func (s *Server) inheritCreatureHitTriggerAuraDuration(ctx context.Context, casterGUID uint64, spellID, triggeredSpellID uint32, targetGUID uint64, mapID, instanceID uint32) {
+	if s == nil || s.Data == nil {
+		return
+	}
+	duration, found, err := s.Data.SpellDurationBase(triggeredSpellID)
+	if err != nil || !found || duration != -1 {
+		return
+	}
+	remainingOf := func(remainingMs uint32, updatedAt time.Time) uint32 {
+		remaining := int64(remainingMs)
+		if !updatedAt.IsZero() {
+			if elapsed := time.Since(updatedAt).Milliseconds(); elapsed > 0 {
+				if uint64(elapsed) < uint64(remaining) {
+					remaining -= elapsed
+				} else {
+					remaining = 0
+				}
+			}
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		return uint32(remaining)
+	}
+	// unit->GetAura(spellId, casterGUID) on the hit target: player targets
+	// carry their auras on their session.
+	if ts := s.findSessionByGUID(targetGUID); ts != nil {
+		var base, triggered *activeAura
+		for _, aura := range ts.loadedAuras() {
+			if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+				continue
+			}
+			switch aura.SpellID {
+			case spellID:
+				base = aura
+			case triggeredSpellID:
+				triggered = aura
+			}
+		}
+		if base == nil || triggered == nil {
+			return
+		}
+		remaining := remainingOf(base.RemainingMs, base.DurationUpdatedAt)
+		triggered.DurationMs = remaining
+		triggered.RemainingMs = remaining
+		triggered.DurationUpdatedAt = time.Now()
+		// Aura::SetDuration pushes the client update
+		// (SpellAuras.cpp:902); the triggered aura was applied as
+		// permanent, so refresh the client's duration here.
+		ts.sendAuraUpdate(triggered.Slot, triggeredSpellID, false, triggered.Positive, remaining, remaining)
+		return
+	}
+	// Creature hit target: the server-side creature aura records.
+	if tm := s.findCreatureMotion(mapID, instanceID, targetGUID); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.auraMu.Lock()
+		defer s.auraMu.Unlock()
+		auras := s.activeCreatureAuras[key]
+		if auras == nil {
+			return
+		}
+		base, ok := auras[spellID]
+		if !ok || base == nil || base.Stopped || base.CasterGUID != casterGUID {
+			return
+		}
+		triggered, ok := auras[triggeredSpellID]
+		if !ok || triggered == nil || triggered.Stopped || triggered.CasterGUID != casterGUID {
+			return
+		}
+		remaining := remainingOf(base.RemainingMs, base.DurationUpdatedAt)
+		triggered.DurationMs = remaining
+		triggered.RemainingMs = remaining
+		triggered.DurationUpdatedAt = time.Now()
 	}
 }
 

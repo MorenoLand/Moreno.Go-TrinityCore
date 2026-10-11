@@ -6532,26 +6532,13 @@ func (s *session) prepareHitTriggerSpells(spell wotlk.Spell) []spellHitTrigger {
 }
 
 // canExecuteHitTriggers mirrors Spell::CanExecuteTriggersOnHit
-// (Spell.cpp:8164-8174): an effect bit in the hit mask fires the trigger
-// unless the triggering aura carries SPELL_ATTR4_PROC_ONLY_ON_CASTER
-// (SharedDefines.h:561), in which case only effects whose implicit target A
-// is TARGET_UNIT_CASTER (SharedDefines.h:1442) qualify.
+// (Spell.cpp:8164-8174); the gate lives on Server so the creature path
+// shares it — this wrapper preserves the session call shape.
 func (s *session) canExecuteHitTriggers(spell wotlk.Spell, effMask uint8, triggeredByAuraSpell uint32) bool {
-	onlyOnCaster := false
-	if triggeredByAuraSpell != 0 && s != nil && s.server != nil && s.server.Data != nil {
-		if auraSpell, found, err := s.server.Data.Spell(triggeredByAuraSpell); err == nil && found {
-			onlyOnCaster = auraSpell.AttributesEx4&spellAttr4ProcOnlyOnCaster != 0
-		}
+	if s == nil {
+		return (*Server)(nil).canExecuteHitTriggers(spell, effMask, triggeredByAuraSpell)
 	}
-	for i, eff := range spell.Effects {
-		if effMask&(1<<uint(i)) == 0 {
-			continue
-		}
-		if !onlyOnCaster || eff.ImplicitTargetA == targetUnitCaster {
-			return true
-		}
-	}
-	return false
+	return s.server.canExecuteHitTriggers(spell, effMask, triggeredByAuraSpell)
 }
 
 // fireHitTriggerSpells mirrors Spell::DoTriggersOnSpellHit
@@ -6605,83 +6592,15 @@ func (s *session) fireHitTriggerSpells(ctx context.Context, spell wotlk.Spell, s
 // the remaining duration of the cast spell's own aura on that target from
 // the caster. Aura::GetDuration is the live remaining duration
 // (player_aura_save.go:305-318 pattern).
+// inheritHitTriggerAuraDuration mirrors the no-duration leg of
+// Spell::DoTriggersOnSpellHit (Spell.cpp:2935-2949); the leg itself lives on
+// Server (inheritCreatureHitTriggerAuraDuration) so the creature path shares
+// it — this wrapper supplies the player caster's GUID, map and instance.
 func (s *session) inheritHitTriggerAuraDuration(ctx context.Context, spellID, triggeredSpellID uint32, targetGUID uint64) {
-	if s == nil || s.server == nil || s.server.Data == nil {
+	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	duration, found, err := s.server.Data.SpellDurationBase(triggeredSpellID)
-	if err != nil || !found || duration != -1 {
-		return
-	}
-	casterGUID := s.playerGUID
-	remainingOf := func(remainingMs uint32, updatedAt time.Time) uint32 {
-		remaining := int64(remainingMs)
-		if !updatedAt.IsZero() {
-			if elapsed := time.Since(updatedAt).Milliseconds(); elapsed > 0 {
-				if uint64(elapsed) < uint64(remaining) {
-					remaining -= elapsed
-				} else {
-					remaining = 0
-				}
-			}
-		}
-		if remaining < 0 {
-			remaining = 0
-		}
-		return uint32(remaining)
-	}
-	// unit->GetAura(spellId, casterGUID) on the hit target: player targets
-	// carry their auras on their session.
-	if ts := s.server.findSessionByGUID(targetGUID); ts != nil {
-		var base, triggered *activeAura
-		for _, aura := range ts.loadedAuras() {
-			if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
-				continue
-			}
-			switch aura.SpellID {
-			case spellID:
-				base = aura
-			case triggeredSpellID:
-				triggered = aura
-			}
-		}
-		if base == nil || triggered == nil {
-			return
-		}
-		remaining := remainingOf(base.RemainingMs, base.DurationUpdatedAt)
-		triggered.DurationMs = remaining
-		triggered.RemainingMs = remaining
-		triggered.DurationUpdatedAt = time.Now()
-		// Aura::SetDuration pushes the client update
-		// (SpellAuras.cpp:902); the triggered aura was applied as
-		// permanent, so refresh the client's duration here.
-		ts.sendAuraUpdate(triggered.Slot, triggeredSpellID, false, triggered.Positive, remaining, remaining)
-		return
-	}
-	// Creature hit target: the server-side creature aura records.
-	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok {
-		return
-	}
-	key := creatureAuraKeyForTarget(target)
-	s.server.auraMu.Lock()
-	defer s.server.auraMu.Unlock()
-	auras := s.server.activeCreatureAuras[key]
-	if auras == nil {
-		return
-	}
-	base, ok := auras[spellID]
-	if !ok || base == nil || base.Stopped || base.CasterGUID != casterGUID {
-		return
-	}
-	triggered, ok := auras[triggeredSpellID]
-	if !ok || triggered == nil || triggered.Stopped || triggered.CasterGUID != casterGUID {
-		return
-	}
-	remaining := remainingOf(base.RemainingMs, base.DurationUpdatedAt)
-	triggered.DurationMs = remaining
-	triggered.RemainingMs = remaining
-	triggered.DurationUpdatedAt = time.Now()
+	s.server.inheritCreatureHitTriggerAuraDuration(ctx, s.playerGUID, spellID, triggeredSpellID, targetGUID, s.player.Map, s.player.InstanceID)
 }
 
 // fireSpellLinkedHitTriggers mirrors the spell_linked tail of
@@ -6739,10 +6658,17 @@ func (s *session) fireSpellLinkedHitTriggers(ctx context.Context, spellID uint32
 			continue
 		}
 		// unit->CastSpell(unit, id, casterGUID): the hit target casts on
-		// itself. Player targets cast through their own session; Go has no
-		// creature caster path, so the creature leg is a documented gap.
+		// itself, triggered (CastSpellExtraArgs(ObjectGuid),
+		// SpellDefines.h:167). Player targets cast through their own
+		// session; creature targets cast through the creature path.
 		if ts := s.server.findSessionByGUID(targetGUID); ts != nil {
 			ts.castSpellDirect(ctx, uint32(id), targetGUID)
+			continue
+		}
+		if s.player != nil {
+			if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+				s.server.castCreatureSpellInternal(ctx, tm, uint32(id), tm.GUID, true)
+			}
 		}
 	}
 }
