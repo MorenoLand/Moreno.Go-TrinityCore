@@ -582,6 +582,10 @@ const (
 	spellAuraModMeleeRangedHaste                      = 192 // SPELL_AURA_MOD_MELEE_RANGED_HASTE (SpellAuraDefines.h:272)
 	spellAuraModAttackPowerOfStatPercent              = 268 // SPELL_AURA_MOD_ATTACK_POWER_OF_STAT_PERCENT (SpellAuraDefines.h:348)
 	spellAuraModRangedAttackPowerOfStatPercent        = 212 // SPELL_AURA_MOD_RANGED_ATTACK_POWER_OF_STAT_PERCENT (SpellAuraDefines.h:292)
+	spellAuraModSpellDamageOfStatPercent              = 174 // SPELL_AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT (SpellAuraDefines.h:254)
+	spellAuraModSpellHealingOfStatPercent             = 175 // SPELL_AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT (SpellAuraDefines.h:255)
+	spellAuraModSpellDamageOfAttackPower              = 237 // SPELL_AURA_MOD_SPELL_DAMAGE_OF_ATTACK_POWER (SpellAuraDefines.h:317)
+	spellAuraModSpellHealingOfAttackPower             = 238 // SPELL_AURA_MOD_SPELL_HEALING_OF_ATTACK_POWER (SpellAuraDefines.h:318)
 	spellAuraFakeInebriation                          = 304
 	spellAuraTransform                                = 56  // SPELL_AURA_TRANSFORM (SpellAuraDefines.h:136)
 	spellAuraMechanicImmunity                         = 77  // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
@@ -11590,6 +11594,11 @@ func (s *session) spellDamageDoneFlat(ctx context.Context, spell wotlk.Spell, ta
 	advertised := int32(0)
 	if s.player != nil {
 		advertised = int32(s.player.SpellPower)
+		// Unit::SpellBaseDamageBonusDone (Unit.cpp:7149-7161): the of-stat
+		// (174) and of-attack-power (237) percent legs ride the same
+		// advertised benefit the spellpower base does.
+		advertised += s.spellDamageOfStatFold(spell.SchoolMask)
+		advertised += s.spellDamageOfAttackPowerFold(spell.SchoolMask)
 	}
 	advertised += s.victimDamageTakenFlat(spell, targetGUID, target)
 	flat := int32(0)
@@ -11923,6 +11932,11 @@ func (s *session) spellHealingDoneFlat(spell wotlk.Spell, target *session, effIn
 	advertised := int32(0)
 	if s.player != nil {
 		advertised = int32(s.player.SpellPower)
+		// Unit::SpellBaseHealingBonusDone (Unit.cpp:7783-7795): the of-stat
+		// (175) and of-attack-power (238) percent legs ride the same
+		// advertised benefit the spellpower base does.
+		advertised += s.spellHealingOfStatFold()
+		advertised += s.spellHealingOfAttackPowerFold(spell.SchoolMask)
 	}
 	// Victim's SPELL_AURA_MOD_HEALING auras (Unit.cpp:7554): Amplify Magic
 	// raises / Dampen Magic lowers the caster's advertised benefit, per school.
