@@ -613,6 +613,8 @@ const (
 	spellAuraModRoot                                  = 26  // SPELL_AURA_MOD_ROOT (SpellAuraDefines.h:106)
 	spellAuraModScale                                 = 61  // SPELL_AURA_MOD_SCALE (SpellAuraDefines.h:141)
 	spellAuraModScale2                                = 239 // SPELL_AURA_MOD_SCALE_2 (SpellAuraDefines.h:319)
+	spellAuraModSkill                                 = 30  // SPELL_AURA_MOD_SKILL (SpellAuraDefines.h:110)
+	spellAuraModSkillTalent                           = 98  // SPELL_AURA_MOD_SKILL_TALENT (SpellAuraDefines.h:178)
 	spellAuraArenaPreparation                         = 215 // SPELL_AURA_ARENA_PREPARATION (SpellAuraDefines.h:295)
 	spellAuraModFaction                               = 243 // SPELL_AURA_MOD_FACTION (SpellAuraDefines.h:323)
 	unitStandFlagCreep                                = 0x02
@@ -4007,7 +4009,7 @@ func (s *session) checkSkinningCast(spell wotlk.Spell, target protocol.SpellTarg
 		return spellFailedTargetNotLooted
 	}
 	skillID := lootSkillForCreatureTypeFlags(typeFlags)
-	skillValue := playerSkillTotalValue(s.player, skillID)
+	skillValue := s.playerSkillTotalValue(skillID)
 	targetLevel := int32(motion.Level)
 	var reqValue int32
 	if skillValue < 100 {
@@ -4567,7 +4569,7 @@ func (s *session) checkOpenLockCast(spell wotlk.Spell, target protocol.SpellTarg
 					reqSkillValue = int32(lock.Skill[j])
 					// The npcbot arm (Spell.cpp:7836-7839) is vacuous — no
 					// creature casters on the client path.
-					skillValue = playerSkillTotalValue(s.player, skillID)
+					skillValue = s.playerSkillTotalValue(skillID)
 					// Skill bonus from the cast spell (Spell.cpp:7840-7842,
 					// mostly item spells) on item-target casts.
 					if eff.ImplicitTargetA == implicitTargetGameObjectItemTarget || eff.ImplicitTargetB == implicitTargetGameObjectItemTarget {
@@ -14482,7 +14484,7 @@ func (s *session) energizeEffectTarget(ctx context.Context, spell wotlk.Spell, s
 	case 67490: // Runic Mana Injector (1824-1830)
 		// The ToPlayer arm is vacuous — the caster is always the session
 		// player; HasSkill rides playerSkillTotalValue presence (> 0).
-		if s.player != nil && playerSkillTotalValue(s.player, skillEngineering) > 0 {
+		if s.player != nil && s.playerSkillTotalValue(skillEngineering) > 0 {
 			amount = amount * 125 / 100
 		}
 	case 71132: // Glyph of Shadow Word: Pain (1831-1834)
@@ -18266,6 +18268,12 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		s.activeAuras = make(map[uint32]*activeAura)
 	}
 	if existing, exists := s.activeAuras[spellID]; exists && existing != nil {
+		// AuraEffect::HandleAuraModSkill replace leg
+		// (SpellAuraEffects.cpp:755): the replaced aura's skill bonus
+		// leaves before the new aura's registers.
+		if !existing.Stopped && s.auraTouchesSkillBonus(existing) {
+			s.applySkillBonusArms(existing, -1)
+		}
 		existing.Stopped = true
 		if existing.Timer != nil {
 			existing.Timer.Stop()
@@ -18434,6 +18442,12 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraModFaction) {
 		s.player.UnitFlags &^= unitFlagPlayerControlled
 	}
+	// AuraEffect::HandleAuraModSkill apply leg
+	// (SpellAuraEffects.cpp:2559-2574): 30/98 effects adjust the
+	// temporary/permanent skill bonus (aura_skill.go).
+	if s.auraTouchesSkillBonus(aura) {
+		s.applySkillBonusArms(aura, 1)
+	}
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, stackCount)
 	s.sendPlayerUpdate()
 	if auraType == 4 {
@@ -18484,6 +18498,7 @@ func (s *session) removeAura(spellID uint32) {
 	removedResistanceAura := (*activeAura)(nil)
 	removedPowerAura := (*activeAura)(nil)
 	removedCombatAura := (*activeAura)(nil)
+	removedSkillAura := (*activeAura)(nil)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
@@ -18514,6 +18529,11 @@ func (s *session) removeAura(spellID uint32) {
 			// Stopped is set, same as the stat/resistance/power legs.
 			if s.auraTouchesMeleeCombat(aura) {
 				removedCombatAura = aura
+			}
+			// Skill-bonus-aura remove leg (aura_skill.go): capture before
+			// Stopped is set, same as the health leg.
+			if s.auraTouchesSkillBonus(aura) {
+				removedSkillAura = aura
 			}
 			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
 			wasAttackPowerOfArmor = s.activeAuraHasEffect(aura, spellAuraModAttackPowerOfArmor)
@@ -18803,6 +18823,13 @@ func (s *session) removeAura(spellID uint32) {
 	// pre-remove max. The 35 arm has no current-power leg in C++.
 	if removedPowerAura != nil && s.player != nil {
 		s.removePowerAuraArms(removedPowerAura)
+	}
+	// AuraEffect::HandleAuraModSkill remove leg
+	// (SpellAuraEffects.cpp:2559-2574): the aura record is already erased
+	// above (Unit::_UnapplyAura erases before the handlers, Unit.cpp:3548),
+	// so the recorded amounts drop cleanly out of the bonus maps.
+	if removedSkillAura != nil && s.player != nil {
+		s.applySkillBonusArms(removedSkillAura, -1)
 	}
 	s.sendPlayerUpdate()
 	if wasVisibilityAura && s.server != nil {
@@ -20676,6 +20703,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			return
 		}
 		if existing := previous; existing != nil {
+			// AuraEffect::HandleAuraModSkill replace leg
+			// (SpellAuraEffects.cpp:755): the replaced aura's skill bonus
+			// leaves before the new aura's registers.
+			if !existing.Stopped && targetSess.auraTouchesSkillBonus(existing) {
+				targetSess.applySkillBonusArms(existing, -1)
+			}
 			existing.Stopped = true
 			if existing.Timer != nil {
 				existing.Timer.Stop()
@@ -21078,6 +21111,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				caster = s.playerGUID
 			}
 			s.server.refreshThreatTempModifier(targetSess.player.Map, targetSess.player.InstanceID, caster)
+		}
+		// AuraEffect::HandleAuraModSkill apply leg
+		// (SpellAuraEffects.cpp:2559-2574): 30/98 effects adjust the
+		// target's temporary/permanent skill bonus (aura_skill.go).
+		if targetSess.auraTouchesSkillBonus(aura) {
+			targetSess.applySkillBonusArms(aura, 1)
 		}
 		return
 	}
@@ -28217,7 +28256,7 @@ func (s *session) checkSpellDisenchantCast(ctx context.Context, spell wotlk.Spel
 		}
 		// 2.0.x addon: player enchanting level against the item's
 		// disenchanting requirement (Spell.cpp:7039-7040).
-		if skill := playerSkillTotalValue(s.player, skillEnchanting); skill < 0 || info.RequiredDisenchantSkill > uint32(skill) {
+		if skill := s.playerSkillTotalValue(skillEnchanting); skill < 0 || info.RequiredDisenchantSkill > uint32(skill) {
 			return spellFailedLowCastlevel
 		}
 		// Quality 2-4 only (Spell.cpp:7041-7042).
@@ -28285,7 +28324,7 @@ func (s *session) checkSpellProspectMillingCast(ctx context.Context, spell wotlk
 		}
 		// Check for enough skill in jewelcrafting/inscription
 		// (Spell.cpp:7062-7063/7087-7088).
-		if skillValue := playerSkillTotalValue(s.player, skill); skillValue < 0 || info.RequiredSkillRank > uint32(skillValue) {
+		if skillValue := s.playerSkillTotalValue(skill); skillValue < 0 || info.RequiredSkillRank > uint32(skillValue) {
 			return spellFailedLowCastlevel, 0
 		}
 		// Five of the target stack are consumed (Spell.cpp:7066-7072/7091-7097).

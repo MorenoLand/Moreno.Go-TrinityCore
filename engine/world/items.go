@@ -244,7 +244,7 @@ func (s *session) canUseItemResult(ctx context.Context, itemClass, itemSubClass,
 		return equipErrOk
 	}
 	if reqSkill != 0 {
-		skillVal := playerSkillTotalValue(s.player, reqSkill)
+		skillVal := s.playerSkillTotalValue(reqSkill)
 		if skillVal == 0 {
 			return equipErrNoRequiredProficiency
 		} else if skillVal < int32(reqSkillRank) {
@@ -274,7 +274,7 @@ func (s *session) canUseItemResult(ctx context.Context, itemClass, itemSubClass,
 				allowEquip = itemSkill == 293
 			}
 		}
-		if !allowEquip && playerSkillTotalValue(s.player, itemSkill) == 0 {
+		if !allowEquip && s.playerSkillTotalValue(itemSkill) == 0 {
 			return equipErrNoRequiredProficiency
 		}
 	}
@@ -2085,7 +2085,7 @@ func (s *session) addItemSetItem(ctx context.Context, itemEntry uint32) {
 	// is skipped (GetSkillValue carries the temp bonus, Player.cpp:6240).
 	if requiredSkill, _ := rec.Uint32(itemSetDBCRequiredSkill); requiredSkill != 0 {
 		requiredRank, _ := rec.Uint32(itemSetDBCRequiredSkillRank)
-		if playerSkillTotalValue(s.player, requiredSkill) < int32(requiredRank) {
+		if s.playerSkillTotalValue(requiredSkill) < int32(requiredRank) {
 			return
 		}
 	}

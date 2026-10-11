@@ -377,6 +377,11 @@ type session struct {
 	auras                        map[uint32]struct{}
 	auraSlots                    map[uint32]uint8
 	activeAuras                  map[uint32]*activeAura
+	// skillTempBonus / skillTalentBonus mirror Player::m_skillBonus
+	// (Player.cpp:6024-6041): the temporary (30) and permanent talent (98)
+	// skill bonuses from HandleAuraModSkill, keyed by skill id.
+	skillTempBonus   map[uint32]int32
+	skillTalentBonus map[uint32]int32
 	// itemSetEff mirrors Player::ItemSetEff (Player.h): the item sets with
 	// at least one equipped piece, keyed by set id — the set bonus spell
 	// tracking AddItemsSetItem/RemoveItemsSetItem (Item.cpp) maintain.

@@ -77,6 +77,8 @@ const (
 	playerQuestLogSlots                           = 25
 	playerSkillInfoStart                          = 636
 	playerMaxSkills                               = 127
+	playerFieldTrackCreatures                     = 1022 // PLAYER_TRACK_CREATURES = UNIT_END + 0x036A (UpdateFields.h:344), PRIVATE
+	playerFieldTrackResources                     = 1023 // PLAYER_TRACK_RESOURCES = UNIT_END + 0x036B (UpdateFields.h:345), PRIVATE
 	playerVisibleItemStart                        = 283
 	playerVisibleItemCount                        = 19
 	unitFieldMaxHealth                            = 32
@@ -3542,6 +3544,15 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		objectScale = runtime.auraObjectScale()
 	}
 	values[objectFieldScale] = math.Float32bits(objectScale)
+	// AuraEffect::HandleAuraTrackCreatures / HandleAuraTrackResources
+	// (SpellAuraEffects.cpp:2448-2480): PLAYER_TRACK_CREATURES and
+	// PLAYER_TRACK_RESOURCES carry bit 1 << (misc-1) per active 44/45
+	// effect (aura_track.go). Both are PRIVATE, so the existing
+	// visibility filter keeps them off other recipients' updates.
+	if runtime != nil {
+		values[playerFieldTrackCreatures] = runtime.playerTrackFieldMask(spellAuraTrackCreatures)
+		values[playerFieldTrackResources] = runtime.playerTrackFieldMask(spellAuraTrackResources)
+	}
 	lvl := state.Level
 	if lvl < 1 {
 		lvl = 1
@@ -3720,7 +3731,14 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		idx := playerSkillInfoStart + i*3
 		values[idx] = uint32(sk.Skill) | uint32(sk.Step)<<16
 		values[idx+1] = uint32(sk.Value) | uint32(sk.Max)<<16
-		values[idx+2] = uint32(sk.Bonus)
+		// AuraEffect::HandleAuraModSkill (SpellAuraEffects.cpp:2559-2574):
+		// the bonus word packs the 30 temporary bonus low and the 98
+		// talent bonus on top of the permanent bonus high (aura_skill.go).
+		var temp, talent int32
+		if runtime != nil {
+			temp, talent = runtime.skillAuraBonus(uint32(sk.Skill))
+		}
+		values[idx+2] = skillBonusFieldValue(sk.Bonus, temp, talent)
 	}
 	equipment := strings.Fields(state.Equipment)
 	for slot := 0; slot < playerVisibleItemCount; slot++ {

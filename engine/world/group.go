@@ -153,7 +153,7 @@ func refreshGroupMaxEnchantingLevel(srv *Server, g *groupState) {
 	var maxLvl uint16
 	for _, m := range g.Members {
 		if sess := srv.findSessionByGUID(m.GUID); sess != nil && sess.player != nil {
-			if v := playerSkillTotalValue(sess.player, skillEnchanting); v > int32(maxLvl) {
+			if v := sess.playerSkillTotalValue(skillEnchanting); v > int32(maxLvl) {
 				maxLvl = uint16(v)
 			}
 		}

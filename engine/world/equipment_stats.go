@@ -431,15 +431,23 @@ func playerSkillValue(state *playerState, skillID uint32) uint32 {
 	return 0
 }
 
-// playerSkillTotalValue mirrors Player::GetSkillValue (Player.cpp:6240-6252):
-// base value plus the temporary bonus. skill.Bonus holds the PLAYER_SKILL_BONUS
-// field whose low part is SKILL_TEMP_BONUS (Player.cpp:124); Go never populates
-// temp skill bonuses, so the term currently contributes 0 — the formula stays
-// for fidelity with the C++ computation.
-func playerSkillTotalValue(state *playerState, skillID uint32) int32 {
-	for _, skill := range state.Skills {
+// playerSkillTotalValue mirrors Player::GetSkillValue (Player.cpp:6240-6255):
+// base value plus the temporary bonus plus the permanent bonus, clamped at
+// 0. The 30/98 aura legs from HandleAuraModSkill (aura_skill.go) feed the
+// temp/talent terms; skill.Bonus carries any permanent bonus loaded from
+// the skill record.
+func (s *session) playerSkillTotalValue(skillID uint32) int32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	for _, skill := range s.player.Skills {
 		if uint32(skill.Skill) == skillID {
-			return int32(skill.Value) + int32(int16(skill.Bonus))
+			temp, talent := s.skillAuraBonus(skillID)
+			total := int32(skill.Value) + int32(int16(skill.Bonus)) + temp + talent
+			if total < 0 {
+				return 0
+			}
+			return total
 		}
 	}
 	return 0

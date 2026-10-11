@@ -326,6 +326,19 @@ func buildCreatureUpdate(spawn creatureSpawn, observer *session) []byte {
 	if spawn.Scale > 0 {
 		values[objectFieldScale] = math.Float32bits(spawn.Scale)
 	}
+	// Unit::RecalculateObjectScale (Unit.cpp:10593-10598) on creatures:
+	// native template scale plus the live 61/239 aura sums over 100,
+	// floored at 0.01 for non-players.
+	if observer != nil && observer.server != nil && observer.player != nil && rawGUID != 0 {
+		scaleSum := observer.server.creatureAuraScaleSum(creatureAuraKey{Map: observer.player.Map, InstanceID: observer.player.InstanceID, GUID: rawGUID})
+		if scaleSum != 0 {
+			scale := float64(spawn.Scale) + float64(scaleSum)/100
+			if scale < 0.01 {
+				scale = 0.01
+			}
+			values[objectFieldScale] = math.Float32bits(float32(scale))
+		}
+	}
 	mask := protocol.NewUpdateMask(len(values))
 	for index, value := range values {
 		if value != 0 {

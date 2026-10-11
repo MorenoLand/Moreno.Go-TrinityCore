@@ -139,7 +139,8 @@ func (s *session) sendPlayerUpdate() {
 		idx := playerSkillInfoStart + i*3
 		fields[idx] = uint32(sk.Skill) | uint32(sk.Step)<<16
 		fields[idx+1] = uint32(sk.Value) | uint32(sk.Max)<<16
-		fields[idx+2] = uint32(sk.Bonus)
+		temp, talent := s.skillAuraBonus(uint32(sk.Skill))
+		fields[idx+2] = skillBonusFieldValue(sk.Bonus, temp, talent)
 	}
 	equipment := strings.Fields(s.player.Equipment)
 	for slot := 0; slot < playerVisibleItemCount; slot++ {
