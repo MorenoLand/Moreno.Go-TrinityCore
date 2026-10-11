@@ -22983,19 +22983,26 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// (HandlePeriodicTriggerSpellWithValueAuraTick): the triggered
 		// spell casts with every effect's base points overridden to the
 		// aura amount (SPELLVALUE_BASE_POINT0+i, i in 0..MAX_SPELL_EFFECTS-1).
-		// The creature tick has no full-cast path of its own; the aura
-		// caster's player session performs the triggered cast, with the
-		// same NeedsToBeTriggeredByCaster selection as the player path —
-		// the target-cast branch falls back to the caster session, the
-		// tree's documented cast-attribution delta for creature targets
-		// (see the replenish trigger lines). A creature caster or an
-		// offline player caster stays unbridged.
+		// SpellAuraEffects.cpp:5089 — triggerCaster is the aura caster
+		// when the trigger spell NeedsToBeTriggeredByCaster, else the
+		// aura target (the creature). The target-cast arm has no bridge:
+		// the creature tick has no full-cast path, so it rides the
+		// caster's player session as well — the tree's documented
+		// cast-attribution delta for creature targets (see the replenish
+		// trigger lines). A creature caster or an offline player caster
+		// stays unbridged.
 		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
-			if _, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
-				if _, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
-					if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+			if triggering, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				if triggered, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
+					var triggerCaster *session
+					if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
+						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
+					} else {
+						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
+					}
+					if triggerCaster != nil {
 						withValue := int32(aura.Amount)
-						casterSess.castSpellDirectWithBasePoints(ctx, aura.TriggerSpell, aura.TargetGUID, []int32{withValue, withValue, withValue})
+						triggerCaster.castSpellDirectWithBasePoints(ctx, aura.TriggerSpell, aura.TargetGUID, []int32{withValue, withValue, withValue})
 					}
 				}
 			}
