@@ -1284,6 +1284,20 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if targetGUID == 0 && spellNeedsExplicitUnitTarget(spellInfo) {
 			return
 		}
+		// SpellInfo::CheckExplicitTarget faction arms (SpellInfo.cpp:1793-1811):
+		// the enemy/ally/party/raid/minipet/passenger verdict on the explicit
+		// unit target. C++ relative order: CheckExplicitTarget (5365) ahead
+		// of CheckTarget (5372). The affecting player is the charm/owner
+		// session when one resolves, else nil (wild caster).
+		var explicitAttacker *session
+		if os := s.findSessionByGUID(m.CharmOwnerGUID); m.CharmOwnerGUID != 0 && os != nil {
+			explicitAttacker = os
+		} else if os := s.findSessionByGUID(m.OwnerGUID); m.OwnerGUID != 0 && os != nil {
+			explicitAttacker = os
+		}
+		if targetGUID != 0 && !s.checkCreatureExplicitTargetFaction(m, explicitAttacker, spellInfo, targetGUID) {
+			return
+		}
 		// SpellInfo::CheckTarget on the explicit unit target (Spell.cpp:5372),
 		// between the conditions block and the behind/facing arms in C++
 		// relative order. Runs for triggered casts too (no C++ triggered

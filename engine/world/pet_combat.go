@@ -1085,6 +1085,15 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !explicitUnitTarget && spellNeedsExplicitUnitTarget(spell) {
 		return true
 	}
+	// SpellInfo::CheckExplicitTarget faction arms (SpellInfo.cpp:1793-1811):
+	// the enemy/ally/party/raid/minipet/passenger verdict on the explicit
+	// unit target. C++ relative order: CheckExplicitTarget (5365) runs
+	// ahead of CheckTarget (5372). The pet's affecting player is the owner
+	// session. Only truly explicit targets reach the faction block — C++
+	// returns before it when no target was sent (1784-1790, bridged above).
+	if explicitUnitTarget && !s.server.checkCreatureExplicitTargetFaction(motion, s, spell, targetGUID) {
+		return true
+	}
 	// SpellInfo::CheckTarget on the explicit unit target (Spell.cpp:5372),
 	// between the conditions block and the behind/facing arms in C++
 	// relative order. Runs for triggered casts too (no C++ triggered

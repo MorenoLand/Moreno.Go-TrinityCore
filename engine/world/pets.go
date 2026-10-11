@@ -2272,6 +2272,16 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	// CheckCast(true) tail (Spell.cpp:6254), modeled subset in C++ relative
 	// order (CheckTarget legs ahead of CheckRange). The rest of the gauntlet
 	// is out of scope: the pet path runs no CheckCast.
+	// SpellInfo::CheckExplicitTarget faction arms (SpellInfo.cpp:1793-1811):
+	// the enemy/ally/party/raid/minipet/passenger verdict on the explicit
+	// unit target fails SPELL_FAILED_BAD_TARGETS. C++ relative order:
+	// CheckExplicitTarget (5365) runs ahead of the CheckTarget legs below
+	// (5372); the backstop in executePetSpellWithOptions re-checks this for
+	// AI and triggered casts, which fizzle silently.
+	if target.UnitGUID != 0 && s.server != nil && !s.server.checkCreatureExplicitTargetFaction(motion, s, spell, target.UnitGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+		return true
+	}
 	// SpellInfo::CheckTarget GM/invisibility leg (SpellInfo.cpp:1736-1743):
 	// a GM-mode or GM-invisible player target fails with
 	// SPELL_FAILED_BM_OR_INVISGOD. The pet caster's GetAffectingPlayer is the
