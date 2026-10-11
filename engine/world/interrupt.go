@@ -96,6 +96,7 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 		spellID    uint32
 		schoolMask uint32
 		channeled  bool
+		channel    *activeChannelState
 	}
 	var interrupted []interruptedCast
 
@@ -178,7 +179,7 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 			channel.Stopped = true
 			// Packets ride the deferred per-spell loop below (lockout ->
 			// log -> cancel packets), like the generic arm above.
-			interrupted = append(interrupted, interruptedCast{castID: curCastID, spellID: curSpellID, schoolMask: schoolMask, channeled: true})
+			interrupted = append(interrupted, interruptedCast{castID: curCastID, spellID: curSpellID, schoolMask: schoolMask, channeled: true, channel: channel})
 		}
 	}
 	targetSess.castMu.Unlock()
@@ -199,12 +200,33 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 			}
 			s.sendInterruptCastLog(interruptSpell.ID, targetGUID, in.spellID)
 			if in.channeled {
+				// Spell::cancel CASTING arm + tail (Spell.cpp:3227-3238,
+				// 3248-3253): the same cleanup composition as
+				// interruptCurrentChannel — the channeled spell's owned
+				// auras come off the caster and target, its summoned game
+				// objects and dynamic objects despawn — before
+				// SendChannelUpdate(0), SendInterrupted(0), and
+				// SendCastResult(INTERRUPTED).
+				targetSess.removeChannelGameObjects(in.spellID)
+				if targetSess.server != nil {
+					targetSess.server.despawnCasterDynObjects(targetSess.playerGUID, in.spellID)
+				}
+				if in.channel != nil {
+					targetSess.expireChannelAuras(in.channel)
+				}
 				targetSess.sendChannelUpdate(0)
 			} else {
 				targetSess.cancelGlobalCooldown(in.spellID)
 			}
 			targetSess.sendInterrupted(in.castID, in.spellID, 0)
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(in.castID, in.spellID, spellFailedInterrupted), true)
+			// Spell::cancel tail (Spell.cpp:3248-3250): the RemoveDynObject
+			// arm has no channeled gate — cancelling a recast mid-cast
+			// also removes the previous cast's dynamic object of the same
+			// spell (interruptCurrentCast carries the same leg).
+			if !in.channeled && targetSess.server != nil {
+				targetSess.server.despawnCasterDynObjects(targetSess.playerGUID, in.spellID)
+			}
 		}
 	}
 	// Not bridged: the lockout duration's victim-side mechanic/dispel
