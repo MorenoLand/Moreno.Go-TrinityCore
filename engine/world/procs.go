@@ -825,6 +825,14 @@ type procEventInfo struct {
 	damage          uint32
 }
 
+// procActorIsPlayerGUID reports whether a proc actor GUID belongs to a
+// player: player GUIDs ride the zero high word (HighGuid::HIGHGUID_PLAYER,
+// 0x0000); creatures and pets carry 0xF130/0xF140 (creatureWorldGUID,
+// petGUIDFor). A zero GUID is no actor at all.
+func procActorIsPlayerGUID(guid uint64) bool {
+	return guid != 0 && uint16(guid>>48) == 0
+}
+
 // canSpellTriggerProcOnEvent mirrors SpellMgr::CanSpellTriggerProcOnEvent
 // (SpellMgr.cpp:502-583): the entry's ProcFlags must intersect the event's
 // type mask, then the attribute, school, spell-family, spell-type,
@@ -833,7 +841,12 @@ func canSpellTriggerProcOnEvent(entry spellProcEntry, ev procEventInfo) bool {
 	if ev.typeMask&entry.ProcFlags == 0 {
 		return false
 	}
-	if entry.AttributesMask&procAttrReqExpOrHonor != 0 && !ev.xpOrHonorTarget {
+	// XP/honor gate (SpellMgr.cpp:508-511): C++ applies it only when the proc
+	// event's actor is a player — eventInfo.GetActor()->ToPlayer() is null
+	// for creature and pet actors, so the check never engages there. A nil
+	// action target passes the C++ null check; player-actor KILL sites fill
+	// xpOrHonorTarget from Player::isHonorOrXPTarget.
+	if entry.AttributesMask&procAttrReqExpOrHonor != 0 && procActorIsPlayerGUID(ev.actorGUID) && !ev.xpOrHonorTarget {
 		return false
 	}
 	if entry.AttributesMask&procAttrReqManaCost != 0 && ev.eventSpell != nil {
@@ -2075,15 +2088,19 @@ func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, att
 // killer for the victim's KILLED event; the DEATH event targets the victim
 // itself (ProcSkillsAndAuras(victim, victim, NONE, DEATH)). actorGUID follows
 // the damage-path convention: the aura owner's GUID on the done side, the
-// attacker's on the taken side.
-func (s *session) procKillAuraTriggers(ctx context.Context, triggerTargetGUID uint64, actorGUID uint64, typeMask uint32) {
+// attacker's on the taken side. xpOrHonorTarget carries the
+// Player::isHonorOrXPTarget verdict (Player.cpp:24064) for the event's action
+// target — the C++ gate (SpellMgr.cpp:508-511) engages only for player
+// actors, which the shared gate derives from actorGUID.
+func (s *session) procKillAuraTriggers(ctx context.Context, triggerTargetGUID uint64, actorGUID uint64, typeMask uint32, xpOrHonorTarget bool) {
 	s.procAuraTriggerLoop(ctx, triggerTargetGUID, procEventInfo{
-		typeMask:       typeMask,
-		schoolMask:     0,
-		spellTypeMask:  procSpellTypeMaskAll,
-		spellPhaseMask: procSpellPhaseNone,
-		hitMask:        procHitNone,
-		actorGUID:      actorGUID,
+		typeMask:        typeMask,
+		schoolMask:      0,
+		spellTypeMask:   procSpellTypeMaskAll,
+		spellPhaseMask:  procSpellPhaseNone,
+		hitMask:         procHitNone,
+		xpOrHonorTarget: xpOrHonorTarget,
+		actorGUID:       actorGUID,
 	})
 }
 

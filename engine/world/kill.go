@@ -711,7 +711,52 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		// no bearer: creature auras live in a server-side map with no
 		// generic proc loop (only the damage-aura break bridge).
 		if creatureType != creatureTypeCritter {
-			s.procKillAuraTriggers(ctx, target.GUID, s.playerGUID, procFlagKill)
+			// Player::isHonorOrXPTarget (Player.cpp:24064-24083): the
+			// creature must be above the killer's gray level and not a
+			// critter (excluded by the outer gate) or totem.
+			honorTarget := s.player != nil && mobLevel > grayLevel(uint32(s.player.Level)) && !s.server.isTotemGUID(target.GUID)
+			s.procKillAuraTriggers(ctx, target.GUID, s.playerGUID, procFlagKill, honorTarget)
+		}
+		// Unit::Kill (Unit.cpp:11283-11290): the general-arm KILL leg on
+		// the killer creature's own auras (pet and wild-creature killers —
+		// the player-attacker KILL leg fired above), plus the victim-side
+		// KILLED and DEATH legs on the victim creature's own auras. C++
+		// order: owner arm (above), general arm (KILL on attacker, KILLED
+		// on victim), DEATH on victim, then the killing-blow criteria. The
+		// general arm is gated on the victim not being a critter; the DEATH
+		// leg is unconditional. The victim motion still holds its auras
+		// here (clearCreatureAuras runs below); the two spells.go kill paths
+		// that cleared auras pre-kill simply evaluate empty sets.
+		if killer != nil && creatureType != creatureTypeCritter {
+			s.server.fireCreatureAuraProcLoop(ctx, killer, target.GUID, procEventInfo{
+				typeMask:       procFlagKill,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      killer.GUID,
+			})
+		}
+		if victim := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); victim != nil {
+			killerGUID := s.playerGUID
+			if killer != nil {
+				killerGUID = killer.GUID
+			}
+			if creatureType != creatureTypeCritter {
+				s.server.fireCreatureAuraProcLoop(ctx, victim, killerGUID, procEventInfo{
+					typeMask:       procFlagKilled,
+					spellTypeMask:  procSpellTypeMaskAll,
+					spellPhaseMask: procSpellPhaseNone,
+					hitMask:        procHitNone,
+					actorGUID:      victim.GUID,
+				})
+			}
+			s.server.fireCreatureAuraProcLoop(ctx, victim, target.GUID, procEventInfo{
+				typeMask:       procFlagDeath,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      victim.GUID,
+			})
 		}
 		s.creditKillingBlowCriteria()
 

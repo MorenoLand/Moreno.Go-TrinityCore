@@ -1903,6 +1903,39 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 	return true, protocol.SpellMissNone
 }
 
+// firePetSpellDoneSideProcs evaluates the done-side proc leg of
+// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586) on the pet
+// caster's own auras: Unit::ProcSkillsAndAuras(caster, unitTarget, ...) with
+// the m_procAttacker prefill (Spell.cpp:1999-2056 via
+// spellDamageProcTypeMask), PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT.
+// It runs on every damage-dealing hit — misses and fully absorbed hits
+// return before the damage legs, matching the taken-side placement. The
+// canEffectTrigger gate (Spell.cpp:2440-2442) reduces to the attr3
+// CANT_TRIGGER_PROC check: the CanExecuteTriggersOnHit arm folds into the
+// pet path's non-zero-effect model and the creature path carries no CanProc
+// reader. The reflect return trip (target == caster) is excluded — its
+// bridge already fires the combined done+taken event on the pet's auras.
+func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, schoolMask uint8, triggered bool) {
+	if s == nil || s.server == nil || s.server.Data == nil || caster == nil || targetGUID == caster.GUID {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found || spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	spellCopy := spell
+	s.server.fireCreatureAuraProcLoop(ctx, caster, targetGUID, procEventInfo{
+		typeMask:       spellDamageProcTypeMask(spellCopy),
+		schoolMask:     uint32(schoolMask),
+		spellTypeMask:  procSpellTypeDamage,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        procHitNormal,
+		triggered:      triggered,
+		eventSpell:     &spellCopy,
+		actorGUID:      caster.GUID,
+	})
+}
+
 func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool) {
 	if s == nil || s.server == nil || caster == nil || damage == 0 {
 		return
@@ -2057,6 +2090,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if victim.procDeep == 0 {
 			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, false, false, false, absorbed, procEventDamage, triggered, false)
 		}
+		// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
+		// runs after the taken side on both the lethal and non-lethal arms.
+		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered)
 		return
 	}
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
@@ -2118,6 +2154,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, healthUpdate)
 		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
 	}
+	// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
+	// runs after the damage legs on both the lethal and non-lethal arms —
+	// C++ fires ProcSkillsAndAuras after DealSpellDamage even when the blow
+	// kills. The self-hit is excluded (the return-trip bridge below already
+	// fires the combined done+taken event on the pet's auras).
+	s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered)
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586) on the
 	// reflect return trip: the pet is both caster and _spellHitTarget
 	// (Spell.cpp:2350), so its own auras evaluate the hit with the

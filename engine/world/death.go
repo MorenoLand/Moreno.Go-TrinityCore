@@ -422,10 +422,22 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	var killerGUID uint64
 	if killer != nil {
 		killerGUID = killer.playerGUID
-		killer.procKillAuraTriggers(ctx, s.playerGUID, killer.playerGUID, procFlagKill)
+		// Player::isHonorOrXPTarget (Player.cpp:24064-24083): the victim
+		// must be above the killer's gray level; player victims are never
+		// critters or totems, and the scaled-XP config defaults to 0
+		// (World.cpp:757), so the gray check applies unconditionally.
+		victimHonorTarget := false
+		if s.player != nil && killer.player != nil {
+			victimHonorTarget = uint32(s.player.Level) > grayLevel(uint32(killer.player.Level))
+		}
+		killer.procKillAuraTriggers(ctx, s.playerGUID, killer.playerGUID, procFlagKill, victimHonorTarget)
 	}
-	s.procKillAuraTriggers(ctx, killerGUID, killerGUID, procFlagKilled)
-	s.procKillAuraTriggers(ctx, s.playerGUID, s.playerGUID, procFlagDeath)
+	attackerHonorTarget := false
+	if killer != nil && killer.player != nil && s.player != nil {
+		attackerHonorTarget = uint32(killer.player.Level) > grayLevel(uint32(s.player.Level))
+	}
+	s.procKillAuraTriggers(ctx, killerGUID, killerGUID, procFlagKilled, attackerHonorTarget)
+	s.procKillAuraTriggers(ctx, s.playerGUID, s.playerGUID, procFlagDeath, true)
 	if killer != nil {
 		killer.creditKillingBlowCriteria()
 	}
