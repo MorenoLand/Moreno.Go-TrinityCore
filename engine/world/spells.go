@@ -21960,7 +21960,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 			ts.procPeriodicDamageTickTakenAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.CasterGUID, crit, absorbed, resisted, dmg)
 		}
-		ts.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex)
+		ts.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex, tickSpell, tickKnown, crit)
 
 	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL
 		// SpellAuraEffects.cpp:5323-5349 (HandlePeriodicHealthFunnelAuraTick):
@@ -22367,14 +22367,20 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 }
 
 // applyPeriodicLeechHeal runs the caster-side heal of a PERIODIC_LEECH tick
-// (SpellAuraEffects.cpp:5304-5316): heal = dealt damage x CalcValueMultiplier,
+// (SpellAuraEffects.cpp:5304-5320): heal = dealt damage x CalcValueMultiplier,
 // then SpellHealingBonusDone (DOT) and SpellHealingBonusTaken (DOT) on the
-// caster. Unit::SpellHealingBonusDone zeroes the flat done leg for leech spells
+// caster, then Unit::ProcSkillsAndAuras(caster, caster, PROC_FLAG_DONE_PERIODIC,
+// PROC_FLAG_TAKEN_PERIODIC, PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, hitMask,
+// nullptr, nullptr, &healInfo) at :5320 — both legs on the caster's own auras.
+// Unit::SpellHealingBonusDone zeroes the flat done leg for leech spells
 // (Unit.cpp:7601-7610), so only the percent leg and the SPELLMOD_DOT spellmod
-// apply here — never a spellpower term. Leech heals never crit.
-func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, dealtDamage uint32, leechEffIndex int) {
+// apply here — never a spellpower term. Leech heals never crit. C++ fires the
+// HealBySpell / threat / proc legs with no heal==0 gate (only the caster
+// in-world-and-alive gate), so the Go early returns on dealt/heal == 0 are
+// removed — a zero tick still runs the proc legs.
+func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, dealtDamage uint32, leechEffIndex int, tickSpell wotlk.Spell, tickKnown, crit bool) {
 	// C++: the caster heal runs only when the caster is in world and alive.
-	if casterSess == nil || casterSess.player == nil || casterSess.player.Health == 0 || dealtDamage == 0 {
+	if casterSess == nil || casterSess.player == nil || casterSess.player.Health == 0 {
 		return
 	}
 	heal := dealtDamage
@@ -22407,23 +22413,27 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 		heal += uint32(math.Round(float64(casterSess.player.SpellPower) * casterSess.spellBonusMultiplier(aura.SpellID, leechEffIndex, true) * float64(stack)))
 	}
 	heal = casterSess.healingTakenBonus(casterSess, aura.CasterGUID, aura.SpellID, heal, true)
-	if heal == 0 {
-		return
+	if heal > 0 {
+		curHP := casterSess.player.Health
+		maxHP := casterSess.player.MaxHealth
+		newHP := curHP + heal
+		effectiveHeal := heal
+		if newHP > maxHP {
+			effectiveHeal = maxHP - curHP
+			newHP = maxHP
+		}
+		casterSess.player.Health = newHP
+		casterSess.sendPlayerUpdate()
+		// Unit::ForwardThreatForAssistingMe(caster, effectiveHeal * 0.5) — the 0.5
+		// is inside distributeHealingThreat.
+		if s.server != nil && effectiveHeal > 0 {
+			s.server.distributeHealingThreat(context.Background(), casterSess.playerGUID, casterSess.playerGUID, effectiveHeal, false)
+		}
 	}
-	curHP := casterSess.player.Health
-	maxHP := casterSess.player.MaxHealth
-	newHP := curHP + heal
-	effectiveHeal := heal
-	if newHP > maxHP {
-		effectiveHeal = maxHP - curHP
-		newHP = maxHP
-	}
-	casterSess.player.Health = newHP
-	casterSess.sendPlayerUpdate()
-	// Unit::ForwardThreatForAssistingMe(caster, effectiveHeal * 0.5) — the 0.5
-	// is inside distributeHealingThreat.
-	if s.server != nil && effectiveHeal > 0 {
-		s.server.distributeHealingThreat(context.Background(), casterSess.playerGUID, casterSess.playerGUID, effectiveHeal, false)
+	// Leech self-heal proc tail (SpellAuraEffects.cpp:5320): the unknown-spell
+	// gate matches the rest of the tick's proc legs.
+	if tickKnown {
+		casterSess.procPeriodicLeechSelfHealAuraTriggers(context.Background(), tickSpell, aura.SchoolMask, aura.CasterGUID, crit)
 	}
 }
 
@@ -23193,7 +23203,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				s.server.fireCreaturePeriodicDamageTickProcs(ctx, nil, victimMotion, aura.TargetGUID, aura.CasterGUID, tickSpell, aura.SchoolMask, crit, absorbed, resisted, dmg)
 			}
 		}
-		s.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex)
+		s.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex, tickSpell, tickKnown, crit)
 		return targetAlive
 
 	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL

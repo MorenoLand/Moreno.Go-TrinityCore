@@ -1856,6 +1856,23 @@ func (s *session) procPeriodicHealTickTakenAuraTriggers(ctx context.Context, tic
 	})
 }
 
+// procPeriodicLeechSelfHealAuraTriggers fires both legs of the
+// PERIODIC_LEECH self-heal proc (SpellAuraEffects.cpp:5316-5320): the tail of
+// AuraEffect::HandlePeriodicHealthLeechAuraTick runs
+// Unit::ProcSkillsAndAuras(caster, caster, PROC_FLAG_DONE_PERIODIC,
+// PROC_FLAG_TAKEN_PERIODIC, PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT,
+// hitMask, nullptr, nullptr, &healInfo) — both legs evaluate on the caster's
+// own auras with the caster itself as trigger target and attacker. C++ fires
+// it unconditionally of the healed amount (no heal==0 gate); the caller
+// carries the unknown-spell gate like the rest of the tick's proc legs. The
+// hit mask reuses the damage half's in C++ (absorb/resist bits included);
+// Go's heal convention reduces it to the crit-conditional normal/critical
+// mask, like the other heal-tick helpers.
+func (s *session) procPeriodicLeechSelfHealAuraTriggers(ctx context.Context, leechSpell wotlk.Spell, schoolMask uint32, casterGUID uint64, crit bool) {
+	s.procPeriodicHealTickAuraTriggers(ctx, leechSpell, schoolMask, casterGUID, crit)
+	s.procPeriodicHealTickTakenAuraTriggers(ctx, leechSpell, schoolMask, casterGUID, crit)
+}
+
 // procSpellReflectTakenAuraTriggers fires the reflector-side proc for a
 // reflected spell: ProcReflectDelayed (Spell.cpp:2069-2090, scheduled at
 // Spell.cpp:2181) runs Unit::ProcSkillsAndAuras(caster, reflector,
