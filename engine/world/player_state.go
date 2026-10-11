@@ -2719,11 +2719,14 @@ func (s *session) refreshAttackPowerOfArmor() {
 // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR (285) leg of the mods field
 // (StatSystem.cpp:479); the flat aura-99/124 legs
 // (AuraEffect::HandleAuraModAttackPower/HandleAuraModRangedAttackPower,
-// SpellAuraEffects.cpp:4065-4087) and the 166/167 percent legs ride the live
-// aura folds. The wand-user carve-out on the ranged 124/167 handlers
-// (SpellAuraEffects.cpp:4075-4087, 4105-4119 — priests, mages, warlocks never
-// gain ranged AP from auras) is mirrored. Unbridged: the 212/268
-// of-stat-percent legs (StatSystem.cpp:464-476) — no per-stat AP fold exists.
+// SpellAuraEffects.cpp:4065-4087), the 166/167 percent legs, and the
+// 268/212 of-stat-percent legs (Player::UpdateAttackPowerAndDamage,
+// StatSystem.cpp:466-477: CalculatePct(GetStat(misc), amount) summed into
+// the flat mods bucket via attackPowerOfStatFold) ride the live aura folds.
+// The wand-user carve-out on the ranged 124/167/212 handlers
+// (SpellAuraEffects.cpp:4075-4087, 4105-4119, StatSystem.cpp:464-468 —
+// priests, mages, warlocks never gain ranged AP from auras) is mirrored.
+// Remaining gap: creature targets (no creature AP model).
 func (s *session) totalAttackPowerValue(ranged bool) float32 {
 	if s == nil || s.player == nil {
 		return 0
@@ -2736,11 +2739,13 @@ func (s *session) totalAttackPowerValue(ranged bool) float32 {
 		// handlers return early, so no 124/167 fold applies.
 		if class := s.player.Class; class != 5 && class != 8 && class != 9 {
 			flat = s.playerAuraModifier(spellAuraModRangedAttackPower)
+			flat += float32(s.attackPowerOfStatFold(spellAuraModRangedAttackPowerOfStatPercent))
 			mult = s.rangedAttackPowerAuraMultiplier()
 		}
 	} else {
 		base = s.player.AttackPower
 		flat = s.playerAuraModifier(spellAuraModAttackPower)
+		flat += float32(s.attackPowerOfStatFold(spellAuraModAttackPowerOfStatPercent))
 		mult = s.attackPowerAuraMultiplier()
 	}
 	ap := int32(base) + int32(flat)

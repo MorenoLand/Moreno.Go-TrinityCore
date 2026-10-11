@@ -1317,11 +1317,11 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			}
 			mainSpeed := 2 * time.Second
 			if sess.player.AttackTime > 0 {
-				mainSpeed = sess.getHastedMeleeSpeed(time.Duration(sess.player.AttackTime) * time.Millisecond)
+				mainSpeed = sess.getHastedMeleeSpeed(time.Duration(sess.player.AttackTime)*time.Millisecond, false)
 			}
 			offSpeed := 2 * time.Second
 			if sess.player.OffhandAttackTime > 0 {
-				offSpeed = sess.getHastedMeleeSpeed(time.Duration(sess.player.OffhandAttackTime) * time.Millisecond)
+				offSpeed = sess.getHastedMeleeSpeed(time.Duration(sess.player.OffhandAttackTime)*time.Millisecond, true)
 			}
 
 			pReach := float32(1.5)

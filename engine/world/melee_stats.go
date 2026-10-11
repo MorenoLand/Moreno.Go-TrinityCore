@@ -264,12 +264,27 @@ func (s *session) getRangedHastePct() float64 {
 }
 
 // getHastedMeleeSpeed modifies base attack speed by melee haste.
-func (s *session) getHastedMeleeSpeed(baseSpeed time.Duration) time.Duration {
-	hastePct := s.getMeleeHastePct()
-	if hastePct <= 0 {
+// Mirrors Unit::GetAttackTime (Unit.cpp:8609-8613) over the
+// m_modAttackSpeedPct product (Unit::ApplyAttackTimePercentMod,
+// Unit.cpp:10847-10864): the gear-rating leg (Player::ApplyRatingMod,
+// Player.cpp:5607-5616) composes multiplicatively with the aura arms —
+// SPELL_AURA_MOD_ATTACKSPEED (9, base attack only, stacking),
+// SPELL_AURA_MOD_MELEE_HASTE (138, base+offhand, exclusive-same-effect
+// gate), and SPELL_AURA_MOD_MELEE_RANGED_HASTE (192, all three attack
+// types, stacking). Folds read the live aura map, so apply/merge/remove
+// need no recalc hook; creature targets have no Go model (player-only
+// fold, same standing queue as the other aura arms).
+func (s *session) getHastedMeleeSpeed(baseSpeed time.Duration, offhand bool) time.Duration {
+	divisor := 1.0 + s.getMeleeHastePct()/100.0
+	divisor *= float64(s.attackSpeedAuraFactor(spellAuraModMeleeRangedHaste))
+	divisor *= float64(s.meleeHaste138Factor())
+	if !offhand {
+		divisor *= float64(s.attackSpeedAuraFactor(spellAuraModAttackSpeed))
+	}
+	if divisor == 1 {
 		return baseSpeed
 	}
-	hasted := float64(baseSpeed) / (1.0 + hastePct/100.0)
+	hasted := float64(baseSpeed) / divisor
 	if hasted < float64(200*time.Millisecond) {
 		hasted = float64(200 * time.Millisecond)
 	}
@@ -277,12 +292,19 @@ func (s *session) getHastedMeleeSpeed(baseSpeed time.Duration) time.Duration {
 }
 
 // getHastedRangedSpeed modifies base ranged attack speed by ranged haste.
+// Same m_modAttackSpeedPct model as getHastedMeleeSpeed: the gear-rating
+// leg composes multiplicatively with SPELL_AURA_MOD_RANGED_HASTE (140),
+// SPELL_AURA_MOD_RANGED_AMMO_HASTE (141, player-only in C++ too), and
+// SPELL_AURA_MOD_MELEE_RANGED_HASTE (192).
 func (s *session) getHastedRangedSpeed(baseSpeed time.Duration) time.Duration {
-	hastePct := s.getRangedHastePct()
-	if hastePct <= 0 {
+	divisor := 1.0 + s.getRangedHastePct()/100.0
+	divisor *= float64(s.attackSpeedAuraFactor(spellAuraModRangedHaste))
+	divisor *= float64(s.attackSpeedAuraFactor(spellAuraRangedAmmoHaste))
+	divisor *= float64(s.attackSpeedAuraFactor(spellAuraModMeleeRangedHaste))
+	if divisor == 1 {
 		return baseSpeed
 	}
-	hasted := float64(baseSpeed) / (1.0 + hastePct/100.0)
+	hasted := float64(baseSpeed) / divisor
 	if hasted < float64(200*time.Millisecond) {
 		hasted = float64(200 * time.Millisecond)
 	}
