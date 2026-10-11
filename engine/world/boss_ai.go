@@ -1404,49 +1404,13 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 		// Spell::CheckCast zone arm (Spell.cpp:5448-5462,
-		// SpellInfo::CheckLocation, SpellInfo.cpp:1505-1567): the npcbot
-		// exemption is vacuous (no npcbot model) and creatures are never
-		// GMs, so the check always runs for creature casters. Zone/area come
-		// from the motion position (Server.zoneAndAreaID, the Go model of
-		// Unit::GetZoneAndAreaId); the caster's ToPlayer() is nil in C++
-		// here. Bridged legs: AreaGroupId (1508-1527,
-		// SPELL_FAILED_INCORRECT_AREA — unknown group data keeps the
-		// fail-open bridge convention) and SPELL_ATTR6_NOT_IN_RAID_INSTANCE
-		// (1552-1556). No bridge: SPELL_ATTR4_CAST_ONLY_IN_OUTLAND
-		// (1529-1550, session-twin parity), and the battleground-spell
-		// switch (1569-1631, every arm needs a non-nil player; creatures
-		// never cast flag spells). The spell_area DB leg (1558-1567) is
-		// bridged below (creatureSpellArea.go). The battleground-only
-		// (5434-5437) and mounted (5464-5474) arms are TYPEID_PLAYER-gated,
-		// vacuous for creatures. Runs for triggered casts too (no C++
-		// triggered exemption).
-		if spellInfo.AreaGroupID > 0 {
-			zoneID, areaID := s.zoneAndAreaID(m.Map, m.X, m.Y, m.Z, 0)
-			if allowed, known, groupErr := s.Data.AreaGroupAllows(uint32(spellInfo.AreaGroupID), zoneID, areaID); groupErr == nil && known && !allowed {
-				return
-			}
-		}
-		if spellInfo.AttributesEx6&spellAttr6NotInRaidInstance != 0 {
-			if entry, found, err := s.Data.Map(m.Map); err != nil || !found || entry.IsRaid() {
-				return
-			}
-		}
-		// SpellInfo::CheckLocation spell_area DB leg (SpellInfo.cpp:1558-1567,
-		// SpellArea::IsFitToRequirements, SpellMgr.cpp:689-785): with a null
-		// player (creature caster) every constrained term fails — gender,
-		// raceMask, questStart/questEnd and auraSpell all need a non-null
-		// player, and the extra-conditions switch is player-gated too — so
-		// a spell with spell_area rows fails unless some row is
-		// unconstrained for a null player (creatureSpellArea.go). The
-		// player-battleground leg is vacuous (player is null). C++ relative
-		// order: after the raid-instance arm (1552), ahead of the
-		// battleground-spell switch (1569). Runs for triggered casts too
-		// (no C++ triggered exemption).
-		if rules, hasRules := s.creatureSpellAreaRules(ctx, spellID); hasRules {
-			zoneID, areaID := s.zoneAndAreaID(m.Map, m.X, m.Y, m.Z, 0)
-			if !creatureSpellAreaRulesFitNullPlayer(spellID, rules, zoneID, areaID) {
-				return
-			}
+		// SpellInfo::CheckLocation, SpellInfo.cpp:1505-1567): the shared
+		// motion-caster twin (checkMotionSpellCheckLocation,
+		// creature_spell_area.go) — AreaGroupId + NOT_IN_RAID_INSTANCE +
+		// spell_area DB leg with null-player IsFitToRequirements. Runs for
+		// triggered casts too (no C++ triggered exemption).
+		if !s.checkMotionSpellCheckLocation(ctx, m, spellInfo) {
+			return
 		}
 		// Spell::CheckCast spell-focus arm (Spell.cpp:5476-5482): a spell
 		// with RequiresSpellFocus fizzles without a matching focus object

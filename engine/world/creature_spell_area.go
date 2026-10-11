@@ -2,6 +2,8 @@ package world
 
 import (
 	"context"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
 // SpellInfo::CheckLocation spell_area DB leg for creature casters
@@ -66,6 +68,46 @@ func creatureSpellAreaRulesFitNullPlayer(spellID uint32, rules []spellAreaRule, 
 		}
 	}
 	return false
+}
+
+// checkMotionSpellCheckLocation is the SpellInfo::CheckLocation twin
+// (SpellInfo.cpp:1505-1567) for motion casters (wild creatures and pets).
+// Zone/area come from the motion position (Server.zoneAndAreaID, the Go
+// model of Unit::GetZoneAndAreaId); the caster's ToPlayer() is nil in C++
+// here, and the npcbot exemption is vacuous (no npcbot model). Bridged
+// legs: AreaGroupId (1508-1527, SPELL_FAILED_INCORRECT_AREA — unknown
+// group data keeps the fail-open bridge convention) and
+// SPELL_ATTR6_NOT_IN_RAID_INSTANCE (1552-1556). No bridge:
+// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (1529-1550, session-twin parity) and
+// the battleground-spell switch (1569-1631, every arm needs a non-nil
+// player; creatures never cast flag spells). The spell_area DB leg
+// (1558-1567) runs with the null-player IsFitToRequirements twin
+// (creatureSpellAreaRulesFitNullPlayer) after the raid-instance arm (1552)
+// and ahead of the battleground-spell switch (1569), matching C++
+// relative order. Runs for triggered casts too (no C++ triggered
+// exemption); false means fizzle (no client on this path).
+func (s *Server) checkMotionSpellCheckLocation(ctx context.Context, m *creatureMotion, spell wotlk.Spell) bool {
+	if m == nil {
+		return true
+	}
+	if spell.AreaGroupID > 0 {
+		zoneID, areaID := s.zoneAndAreaID(m.Map, m.X, m.Y, m.Z, 0)
+		if allowed, known, groupErr := s.Data.AreaGroupAllows(uint32(spell.AreaGroupID), zoneID, areaID); groupErr == nil && known && !allowed {
+			return false
+		}
+	}
+	if spell.AttributesEx6&spellAttr6NotInRaidInstance != 0 {
+		if entry, found, err := s.Data.Map(m.Map); err != nil || !found || entry.IsRaid() {
+			return false
+		}
+	}
+	if rules, hasRules := s.creatureSpellAreaRules(ctx, spell.ID); hasRules {
+		zoneID, areaID := s.zoneAndAreaID(m.Map, m.X, m.Y, m.Z, 0)
+		if !creatureSpellAreaRulesFitNullPlayer(spell.ID, rules, zoneID, areaID) {
+			return false
+		}
+	}
+	return true
 }
 
 // creatureSpellAreaRules is the server-level spell_area query for the

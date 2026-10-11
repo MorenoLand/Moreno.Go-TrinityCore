@@ -1156,10 +1156,31 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			return true
 		}
 	}
+	if !s.server.checkMotionSpellCheckLocation(ctx, motion, spell) {
+		return true
+	}
 	if !s.server.motionSpellFocusFound(ctx, motion, spell) {
 		return true
 	}
 	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID) {
+		return true
+	}
+	// Spell::CheckCast CheckCasterAuras arm (Spell.cpp:5509): after
+	// CheckPower on the creature path (boss_ai.go). Go's triggered models
+	// TRIGGERED_IGNORE_CASTER_AURAS, so triggered pet casts skip the gate.
+	if !triggered {
+		if !s.server.checkCreatureCasterAuras(motion, spell) {
+			return true
+		}
+	}
+	// SPELL_EFFECT_DISPEL pre-cast arm (Spell.cpp:5540-5562, the
+	// nothing-to-dispel / sanctuary gate): the creature-caster twin
+	// (creatureDispelPreCast, dispel.go) applies to pet casters too — C++
+	// gates on Unit::ToUnit, not on TYPEID_PLAYER — and the
+	// !IsTriggered() gate is inside the twin. Placed before
+	// takePetSpellPower like the creature path (a failing CheckCast gate
+	// never drains power in C++).
+	if !s.server.creatureDispelPreCast(motion, spell, targetGUID, triggered) {
 		return true
 	}
 	remainingPower, hasRemainingPower, ok := s.takePetSpellPower(motion, spell, castCount, triggered)
