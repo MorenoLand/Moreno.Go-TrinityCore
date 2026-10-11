@@ -700,6 +700,24 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			}
 			targetSess.sendPlayerUpdate()
 		}
+		// Unit::AttackerStateUpdate's ProcSkillsAndAuras tail (Unit.cpp:2169):
+		// after DealMeleeDamage the pet's own auras evaluate the done-side
+		// melee event — ProcAttacker = PROC_FLAG_DONE_MELEE_AUTO_ATTACK |
+		// PROC_FLAG_DONE_MAINHAND_ATTACK (Unit.cpp:1194; pets swing
+		// BASE_ATTACK only), PROC_SPELL_TYPE_NONE, PROC_SPELL_PHASE_NONE,
+		// outcome-derived hit mask (pet melee has no block roll). Runs on
+		// both arms regardless of outcome or lethality, matching C++ (the
+		// call is unconditional after DealMeleeDamage); the trigger spell
+		// targets the victim.
+		s.fireCreatureAuraProcLoop(ctx, motion, targetGUID, procEventInfo{
+			typeMask:       procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack,
+			schoolMask:     spellSchoolMaskNormal,
+			spellTypeMask:  procSpellTypeNone,
+			spellPhaseMask: procSpellPhaseNone,
+			hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, 0),
+			actorGUID:      motion.GUID,
+			damage:         damage,
+		})
 	} else {
 		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 		if owner != nil && damage > 0 {
@@ -802,7 +820,8 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		// outcome-derived hit mask, like the wild path's twin); on lethal
 		// blows the victim's auras were stripped in the death chain, so
 		// the event evaluates an empty set (net no-op). The pet's own
-		// done-side melee procs stay unbridged on this path (standing gap).
+		// done-side melee leg (Unit.cpp:2169) fires after the taken-side
+		// leg below.
 		if victimMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); victimMotion != nil {
 			s.fireCreatureAuraProcLoop(ctx, victimMotion, motion.GUID, procEventInfo{
 				typeMask:       procFlagTakenMeleeAutoAttack,
@@ -814,6 +833,19 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				damage:         damage,
 			})
 		}
+		// Unit::AttackerStateUpdate's ProcSkillsAndAuras tail (Unit.cpp:2169):
+		// the pet's own done-side melee leg — the creature-victim twin of
+		// the player-branch leg above. Fires regardless of outcome or
+		// lethality; the pet's auras are unaffected by the victim's death.
+		s.fireCreatureAuraProcLoop(ctx, motion, targetGUID, procEventInfo{
+			typeMask:       procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack,
+			schoolMask:     spellSchoolMaskNormal,
+			spellTypeMask:  procSpellTypeNone,
+			spellPhaseMask: procSpellPhaseNone,
+			hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, 0),
+			actorGUID:      motion.GUID,
+			damage:         damage,
+		})
 	}
 }
 
