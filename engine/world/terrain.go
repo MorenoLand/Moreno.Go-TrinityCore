@@ -126,7 +126,7 @@ func (s *session) updateAreaDependentAuras(ctx context.Context, zoneID, areaID u
 			}
 		}
 		rules, hasRules := s.spellAreaRules(ctx, aura.SpellID)
-		if !hasRules || s.spellAreaRulesFit(ctx, rules, zoneID, areaID) {
+		if !hasRules || s.spellAreaRulesFit(ctx, aura.SpellID, rules, zoneID, areaID) {
 			continue
 		}
 		s.removeAreaRestrictedAura(ctx, aura.SpellID)
@@ -292,13 +292,130 @@ func (s *session) spellAreaRuleFits(ctx context.Context, rule spellAreaRule, zon
 	return true
 }
 
-func (s *session) spellAreaRulesFit(ctx context.Context, rules []spellAreaRule, zoneID, areaID uint32) bool {
+func (s *session) spellAreaRulesFit(ctx context.Context, spellID uint32, rules []spellAreaRule, zoneID, areaID uint32) bool {
+	// Extra-conditions switch (SpellArea::IsFitToRequirements tail,
+	// SpellMgr.cpp:718-781): it fails for the whole spell, not per row —
+	// C++ runs it inside every row's IsFitToRequirements, so a failing
+	// switch fails every row. Evaluating it once per spell is equivalent.
+	if spellAreaExtraConditionSpell(spellID) && !s.spellAreaExtraConditionFits(spellID, zoneID, areaID) {
+		return false
+	}
 	for _, rule := range rules {
 		if s.spellAreaRuleFits(ctx, rule, zoneID, areaID) {
 			return true
 		}
 	}
 	return false
+}
+
+// wgForZone mirrors sBattlefieldMgr->GetBattlefieldToZoneId for Wintergrasp:
+// the Go world tracks only the WG battlefield, so any other zone resolves to
+// nil exactly like a null Battlefield* in C++.
+func (s *session) wgForZone(zoneID uint32) *wgBattlegroundState {
+	if s == nil || s.server == nil {
+		return nil
+	}
+	s.server.wgMu.RLock()
+	wg := s.server.wgState
+	s.server.wgMu.RUnlock()
+	if wg == nil || wg.ZoneID != zoneID {
+		return nil
+	}
+	return wg
+}
+
+// wgWorkshopForAreaID maps the four park/graveyard areas to Go workshop slots
+// the way BattlefieldWG::GetData(area) resolves them through
+// GetSpiritGraveyardId (BattlefieldWG.cpp:1134-1149): "Graveyards and
+// Workshops are controlled by the same team", so the workshop's TeamControl
+// is the faithful GetData value.
+func wgWorkshopForAreaID(areaID uint32) uint8 {
+	switch areaID {
+	case 4538: // AREA_THE_SUNKEN_RING (SharedDefines.h:3835)
+		return WGWorkshopNE
+	case 4539: // AREA_THE_BROKEN_TEMPLATE (SharedDefines.h:3836)
+		return WGWorkshopNW
+	case 4611: // AREA_WESTPARK_WORKSHOP (SharedDefines.h:3839)
+		return WGWorkshopSW
+	case 4612: // AREA_EASTPARK_WORKSHOP (SharedDefines.h:3840)
+		return WGWorkshopSE
+	}
+	return WGMaxWorkshops
+}
+
+// spellAreaExtraConditionFits mirrors the extra-conditions switch at the tail
+// of SpellArea::IsFitToRequirements (SpellMgr.cpp:718-781): after the
+// gender/race/area/quest/aura terms, these spells carry extra player-gated
+// conditions. Every case opens with a null-player guard (vacuous here — the
+// player-side fits path always has a player; the creature twin handles the
+// null case in creature_spell_area.go). The Battleground leg just ahead of
+// the switch (player->GetBattleground() -> bg->IsSpellAllowed,
+// SpellMgr.cpp:714-717) has no Go model — there is no live Battleground
+// instance (battleground.go documents the arena/BG port as no-bridge) —
+// so it is not bridged.
+func (s *session) spellAreaExtraConditionFits(spellID, zoneID, areaID uint32) bool {
+	switch spellID {
+	case 58600: // No fly Zone - Dalaran
+		// C++ re-reads the player's CURRENT area (player->GetAreaId()) and
+		// fails closed on a missing AreaTable row (pArea && is tested as one
+		// condition). The Go autocast/removal paths pass the freshly computed
+		// area, which is that same value at this point in the update.
+		area, found, areaErr := s.server.Data.Area(areaID)
+		if areaErr != nil || !found || area.Flags&areaFlagNoFlyZone == 0 {
+			return false
+		}
+		return s.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) || s.hasAuraType(spellAuraFly)
+	case 58730: // No fly Zone - Wintergrasp
+		wg := s.wgForZone(zoneID)
+		if wg == nil || wg.wgCanFlyIn() {
+			return false
+		}
+		return s.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) || s.hasAuraType(spellAuraFly)
+	case 56618, 56617: // Horde/Alliance Controls Factory Phase Shift
+		wg := s.wgForZone(zoneID)
+		if wg == nil {
+			return false
+		}
+		// bf->GetTypeId() == BATTLEFIELD_WG is structural: the Go WG state is
+		// always the WG battlefield. C++ passes newArea (the rule's area) to
+		// GetData; the Go path carries the same areaID.
+		workshopID := wgWorkshopForAreaID(areaID)
+		if workshopID >= WGMaxWorkshops {
+			return false
+		}
+		wg.mu.Lock()
+		team := wg.Workshops[workshopID].TeamControl
+		wg.mu.Unlock()
+		if team == WGTeamHorde {
+			return spellID == 56618
+		}
+		if team == WGTeamAlliance {
+			return spellID == 56617
+		}
+		// Neutral or unknown control: C++ breaks out of the switch, which
+		// falls through to return true.
+		return true
+	case 57940, 58045: // Essence of Wintergrasp - Northrend / Wintergrasp
+		wg := s.wgForZone(zoneID)
+		if wg == nil {
+			return true // C++ breaks out of the switch -> return true
+		}
+		wg.mu.Lock()
+		defer wg.mu.Unlock()
+		// player->GetTeamId() is teamForRace in Go (0 alliance / 1 horde,
+		// matching WGTeamAlliance/WGTeamHorde); IsWarTime is wg.IsActive
+		// (Battlefield.h:246).
+		return wg.Enabled && teamForRace(s.player.Race) == wg.DefenderTeam && !wg.IsActive
+	case 74411: // Battleground - Dampening
+		wg := s.wgForZone(zoneID)
+		if wg == nil {
+			return true // C++ breaks out of the switch -> return true
+		}
+		wg.mu.Lock()
+		defer wg.mu.Unlock()
+		return wg.IsActive
+	}
+	return true
 }
 
 func (s *session) applySpellAreaAutocasts(ctx context.Context, zoneID, areaID uint32) {
@@ -316,7 +433,7 @@ func (s *session) applySpellAreaAutocasts(ctx context.Context, zoneID, areaID ui
 			continue
 		}
 		rules, hasRules := s.spellAreaRules(ctx, spellID)
-		if !hasRules || !s.spellAreaRulesFit(ctx, rules, zoneID, areaID) {
+		if !hasRules || !s.spellAreaRulesFit(ctx, spellID, rules, zoneID, areaID) {
 			continue
 		}
 		if _, found, spellErr := s.server.Data.Spell(spellID); spellErr == nil && found {

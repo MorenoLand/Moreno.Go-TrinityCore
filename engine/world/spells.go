@@ -2345,7 +2345,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// when the spell has spell_area rows, at least one must fit the
 		// player's zone/area (SpellArea::IsFitToRequirements), else
 		// SPELL_FAILED_INCORRECT_AREA.
-		if rules, hasRules := s.spellAreaRules(ctx, spellID); hasRules && !s.spellAreaRulesFit(ctx, rules, zoneID, areaID) {
+		if rules, hasRules := s.spellAreaRules(ctx, spellID); hasRules && !s.spellAreaRulesFit(ctx, spellID, rules, zoneID, areaID) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedIncorrectArea), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "incorrect area (spell_area)", "zone", zoneID, "area", areaID)
 			return true
