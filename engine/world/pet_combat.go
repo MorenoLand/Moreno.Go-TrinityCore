@@ -706,6 +706,44 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		damage = targetHealth
 	}
 
+	// Unit::DealMeleeDamage (Unit.cpp:1480-1510): when the victim parries,
+	// its next attack is hastened — the 20%/60% remaining bands collapse to
+	// 20% of swing time or shrink by 40% (calcParryHastedRemaining). The
+	// player and wild-creature paths bridge this (combat.go:834,
+	// creaturemotion.go:2398); the pet path had no arm. NO_PARRY_HASTEN
+	// (CREATURE_FLAG_EXTRA 0x8, combat.go:16) exempts creature victims.
+	if targetState == protocol.VictimStateParry {
+		if isTargetPlayer && targetSess != nil && targetSess.player != nil {
+			vMainSpeed := time.Duration(targetSess.player.AttackTime) * time.Millisecond
+			if vMainSpeed <= 0 {
+				vMainSpeed = 2 * time.Second
+			}
+			elapsed := now.Sub(targetSess.lastSwing)
+			if elapsed < vMainSpeed {
+				rem := vMainSpeed - elapsed
+				hasted := calcParryHastedRemaining(rem, vMainSpeed)
+				targetSess.lastSwing = now.Add(-(vMainSpeed - hasted))
+			}
+		} else if !isTargetPlayer {
+			s.motionMu.Lock()
+			if vm := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID); vm != nil {
+				if vm.FlagsExtra&creatureFlagExtraNoParryHasten == 0 {
+					cSpeed := time.Duration(vm.AttackTime) * time.Millisecond
+					if cSpeed <= 0 {
+						cSpeed = 2 * time.Second
+					}
+					elapsed := now.Sub(vm.LastAttack)
+					if elapsed < cSpeed {
+						rem := cSpeed - elapsed
+						hasted := calcParryHastedRemaining(rem, cSpeed)
+						vm.LastAttack = now.Add(-(cSpeed - hasted))
+					}
+				}
+			}
+			s.motionMu.Unlock()
+		}
+	}
+
 	asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, targetGUID, damage, overkill, hitInfo, targetState, 0)
 	if isTargetPlayer && targetSess != nil {
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, true)

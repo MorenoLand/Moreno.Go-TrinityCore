@@ -219,20 +219,23 @@ func spellHitCanTriggerItemProcs(isHit, immune, fullyResisted bool, absorbed uin
 
 // RollPPMChance rolls whether a weapon proc occurs based on Procs Per Minute (PPM)
 // and weapon attack speed in milliseconds.
-// Formula: chance = (weaponSpeedMs * PPM) / 60000.0
-// Reference: TrinityCore Unit::GetPPMProcChance (Unit.cpp:8820).
+// Formula: chance = floor((weaponSpeedMs * PPM) / 600.0) percent, rolled as
+// roll_chance_f (rand*100 < chance).
+// Reference: TrinityCore Unit::GetPPMProcChance (Unit.cpp:8296-8308) — the
+// percent is floored before the roll, so a 2.6s weapon at 1.0 PPM procs at
+// 4.0%, not 4.33%.
 func RollPPMChance(ppm float64, weaponSpeedMs uint32) bool {
 	if ppm <= 0 || weaponSpeedMs == 0 {
 		return false
 	}
-	chance := (float64(weaponSpeedMs) * ppm) / 60000.0
-	if chance <= 0 {
+	chancePct := math.Floor((float64(weaponSpeedMs) * ppm) / 600.0)
+	if chancePct <= 0 {
 		return false
 	}
-	if chance >= 1.0 {
+	if chancePct >= 100 {
 		return true
 	}
-	return rand.Float64() < chance
+	return rand.Float64()*100 < chancePct
 }
 
 // procChanceDefault resolves the proc roll chance for a triggered proc spell.

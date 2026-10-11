@@ -2510,6 +2510,45 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					target.Sess.player.UnitFlags |= unitFlagInCombat
 				}
 			}
+			// Unit::DealMeleeDamage (Unit.cpp:1555-1579): a wild creature's
+			// melee hit from behind can daze the victim (SPELL_DAZED 1604,
+			// triggered). Fires on normal/crit/crushing/glancing outcomes;
+			// the 20% base (0.65*level+0.5 below 30) scales by the
+			// attacker/victim skill ratio x0.16, clamped to [0,40]. Go models
+			// no weapon/defense skill bonuses, so both skills are 5*level
+			// (crushing-blow convention, combat.go:2591). Pets and charmed
+			// creatures are player-controlled and never daze (C++
+			// !IsControlledByPlayer, boss_ai.go:creatureIsPlayerControlled).
+			// The !victim->IsVehicle() arm stays unbridged — Go has no
+			// player-vehicle model.
+			if isPlayerVictim &&
+				(outcome == protocol.MeleeHitNormal || outcome == protocol.MeleeHitCrit ||
+					outcome == protocol.MeleeHitCrushing || outcome == protocol.MeleeHitGlancing) &&
+				!creatureIsPlayerControlled(motion) &&
+				!hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi) {
+				victimLvl := float64(targetLevel)
+				if victimLvl < 1 {
+					victimLvl = 1
+				}
+				attackerLvl := float64(motion.Level)
+				if attackerLvl < 1 {
+					attackerLvl = 1
+				}
+				dazeChance := 20.0
+				if victimLvl < 30 {
+					dazeChance = 0.65*victimLvl + 0.5
+				}
+				dazeChance *= attackerLvl / victimLvl * 0.16
+				if dazeChance < 0 {
+					dazeChance = 0
+				}
+				if dazeChance > 40 {
+					dazeChance = 40
+				}
+				if rand.Float64()*100 < dazeChance {
+					s.castCreatureSpellTriggered(ctx, motion, 1604, target.GUID)
+				}
+			}
 			// Unit::ProcSkillsAndAuras (Unit.cpp:2169) — the actor leg for a
 			// creature melee swing: TriggerAurasProcOnEvent with ProcAttacker
 			// = PROC_FLAG_DONE_MELEE_AUTO_ATTACK |
