@@ -10048,10 +10048,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// is always the session player); the null-target, !IsAlive,
 				// MiscValue power-range, and GetMaxPower(power) == 0 gates plus
 				// the Unit::EnergizeBySpell ModifyPower tail ride
-				// applySpellEnergize/adjustSpellPower. Documented no-bridge:
-				// SendEnergizeSpellLog (SMSG_SPELLENERGIZELOG — no Go sender)
-				// and the ForwardThreatForAssistingMe damage/2 threat forward
-				// (Unit.cpp:6590-6596 — no energize-threat model).
+				// applySpellEnergize/adjustSpellPower. The SendEnergizeSpellLog
+				// + ForwardThreatForAssistingMe(damage/2) tail (Unit.cpp:6590-6596)
+				// rides energizeBySpellTail (log sender + distributeHealingThreat
+				// with the NO_THREAT gate).
 				for _, effectTarget := range hitTargets {
 					s.energizeEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
@@ -10064,13 +10064,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// caster is always the session player); the null-target and
 				// !IsAlive gates ride the target-resolution legs of
 				// energizePctEffectTarget and applySpellEnergize/adjustSpellPower
-				// below. Documented no-bridge: the Unit::EnergizeBySpell
-				// SendEnergizeSpellLog (SMSG_SPELLENERGIZELOG — no Go sender)
-				// and the ForwardThreatForAssistingMe damage/2 threat forward
-				// (Unit.cpp:6590-6596 — no energize-threat model), same as the
-				// spellEffectEnergize arm note.
+				// below. The Unit::EnergizeBySpell SendEnergizeSpellLog +
+				// ForwardThreatForAssistingMe(damage/2) tail (Unit.cpp:6590-6596)
+				// rides energizeBySpellTail, same as the spellEffectEnergize arm.
 				for _, effectTarget := range hitTargets {
-					s.energizePctEffectTarget(effCtx, spell, eff, effectTarget)
+					s.energizePctEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
 			case spellEffectPowerBurn:
 				amount := eff.BasePoints + 1
@@ -10596,9 +10594,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// SpellDamageBonusTaken leg (Unit.cpp:7052-7131) before the
 				// resilience slice (SpellEffects.cpp:1285-1287). Documented
 				// no-bridge: the npcbot Obsidian Destroyer arm
-				// (SpellEffects.cpp:1290-1292 — no bot damage model) and the
-				// EnergizeBySpell threat forward (Unit.cpp:6590-6596 — no
-				// energize-threat model).
+				// (SpellEffects.cpp:1290-1292 — no bot damage model). The
+				// EnergizeBySpell log + threat forward (Unit.cpp:6590-6596)
+				// rides energizeBySpellTail on the non-self-drain arm.
 				drainSpell, drainKnown := wotlk.Spell{}, false
 				if s.server != nil && s.server.Data != nil {
 					if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
@@ -10632,7 +10630,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if drained := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, int32(amount), spellID, false); drained > 0 {
 						gainMultiplier := float32(0)
 						if effectTarget != s.playerGUID {
-							s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, int32(effectValueMultiplied(drained, eff.Amplitude)))
+							gain := int32(effectValueMultiplied(drained, eff.Amplitude))
+							s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, gain)
+							// SpellEffects.cpp:1300: the drain gain rides
+							// Unit::EnergizeBySpell(caster, caster, ...) — log +
+							// assist-threat tail.
+							s.energizeBySpellTail(effCtx, drainSpell, spellID, s.playerGUID, eff.MiscValue, gain)
 							gainMultiplier = eff.Amplitude
 						}
 						// SpellEffects.cpp:1305: the take-target-power log
@@ -14894,7 +14897,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			} else if eff.Effect == spellEffectEnergizePct {
 				// Spell::EffectEnergizePct per-target legs ride energizePctEffectTarget
 				// on the triggered path too.
-				s.energizePctEffectTarget(ctx, spell, eff, effectTarget)
+				s.energizePctEffectTarget(ctx, spell, spellID, eff, effectTarget)
 			} else if eff.Effect == spellEffectPowerBurn {
 				var burnLog []takeTargetPowerEntry
 				if burned := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, eff.BasePoints+1, spellID, true); burned > 0 {
@@ -15140,6 +15143,9 @@ func (s *session) energizeEffectTarget(ctx context.Context, spell wotlk.Spell, s
 		return
 	}
 	s.applySpellEnergize(ctx, effectTarget, power, amount)
+	// Unit::EnergizeBySpell (Unit.cpp:6590-6596): the log + assist-threat
+	// tail fires for every non-negative energize.
+	s.energizeBySpellTail(ctx, spell, spellID, effectTarget, power, amount)
 }
 
 // energizeCreateMana mirrors Unit::GetCreateMana for the energize pct arms
@@ -15162,6 +15168,43 @@ func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, pow
 	s.adjustSpellPower(ctx, targetGUID, powerType, int64(amount))
 }
 
+// buildSpellEnergizeLog mirrors Unit::SendEnergizeSpellLog (Unit.cpp:6577-6582):
+// victim PackedGUID, caster PackedGUID, spellId u32, powerType u32, damage i32.
+func buildSpellEnergizeLog(victimGUID, casterGUID uint64, spellID uint32, powerType uint32, amount int32) []byte {
+	buf := protocol.NewBuffer(32)
+	buf.WritePackedGUID(victimGUID)
+	buf.WritePackedGUID(casterGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(powerType)
+	buf.WriteI32(amount)
+	return buf.Bytes()
+}
+
+// energizeBySpellTail mirrors the log + threat legs of
+// Unit::EnergizeBySpell (Unit.cpp:6590-6596): SendEnergizeSpellLog fires for
+// every call (ModifyPower rides applySpellEnergize by the caller), then the
+// victim's ThreatManager::ForwardThreatForAssistingMe(caster, damage/2,
+// spellInfo, true). The damage/2 halving is folded inside
+// distributeHealingThreat; the ignoreModifiers=true leg matches the helper's
+// design note (threat.go). The ThreatManager.cpp:664-665 NO_THREAT shortcut
+// rides the spell record like the heal path. Zero or negative amounts skip
+// the threat forward (distributeHealingThreat's zero skip; C++ forwards a
+// 0-base only when the victim is already threatened, which the Go model
+// does not distinguish).
+func (s *session) energizeBySpellTail(ctx context.Context, spell wotlk.Spell, spellID uint32, victimGUID uint64, powerType int32, amount int32) {
+	if s == nil || s.player == nil || s.server == nil || victimGUID == 0 || powerType < 0 || powerType >= 7 {
+		return
+	}
+	logPkt := buildSpellEnergizeLog(victimGUID, s.playerGUID, spellID, uint32(powerType), amount)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, true)
+	if victimSess := s.server.findSessionByGUID(victimGUID); victimSess != nil && victimSess != s {
+		_ = victimSess.write(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, true)
+	}
+	if amount > 0 && spell.AttributesEx&spellAttr1NoThreat == 0 {
+		s.server.distributeHealingThreat(ctx, s.playerGUID, victimGUID, uint32(amount), true)
+	}
+}
+
 // energizePctEffectTarget mirrors the per-target legs of
 // Spell::EffectEnergizePct (SpellEffects.cpp:1847-1873): the
 // power-type-mismatch gate and the pct-of-max-power gain. The
@@ -15174,7 +15217,7 @@ func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, pow
 // (1866-1867), and a non-positive gain lands on adjustSpellPower's
 // delta==0 skip. The ModifyPower tail of Unit::EnergizeBySpell rides
 // applySpellEnergize.
-func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, effectTarget uint64) {
+func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, effectTarget uint64) {
 	power := eff.MiscValue
 	if power < 0 || power >= 7 {
 		return
@@ -15209,6 +15252,9 @@ func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell
 		return
 	}
 	s.applySpellEnergize(ctx, effectTarget, power, gain)
+	// Unit::EnergizeBySpell (Unit.cpp:6590-6596): the log + assist-threat
+	// tail fires for every non-negative energize.
+	s.energizeBySpellTail(ctx, spell, spellID, effectTarget, power, gain)
 }
 
 // Triggered-spell IDs for the Spell::EffectTriggerSpell special cases
