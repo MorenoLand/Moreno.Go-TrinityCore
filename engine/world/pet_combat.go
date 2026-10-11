@@ -2179,6 +2179,58 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 	})
 }
 
+// countDoTsByCaster mirrors Unit::GetDoTsByCaster (Unit.cpp:4808-4832): the
+// number of SPELL_AURA_PERIODIC_DAMAGE (3) /
+// SPELL_AURA_PERIODIC_DAMAGE_PERCENT (89) aura effects applied to the victim
+// whose caster is ownerGUID. C++ counts per AuraEffect, so each masked
+// periodic effect of an aura counts separately here too.
+func (s *Server) countDoTsByCaster(target combatTarget, ownerGUID uint64) uint32 {
+	if s == nil || s.Data == nil || target.GUID == 0 || ownerGUID == 0 {
+		return 0
+	}
+	isDotEffect := func(aura *activeAura, effect wotlk.SpellEffect, index int) bool {
+		if aura == nil || aura.Stopped || aura.CasterGUID != ownerGUID {
+			return false
+		}
+		if aura.EffectMask&(1<<uint(index)) == 0 {
+			return false
+		}
+		return effect.Aura == spellAuraPeriodicDamage || effect.Aura == spellAuraPeriodicDamagePercent
+	}
+	countEffects := func(auras map[uint32]*activeAura) uint32 {
+		var n uint32
+		for _, aura := range auras {
+			if aura == nil {
+				continue
+			}
+			spell, found, err := s.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, effect := range spell.Effects {
+				if isDotEffect(aura, effect, index) {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	if victim := s.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
+		victim.castMu.Lock()
+		n := countEffects(victim.activeAuras)
+		victim.castMu.Unlock()
+		return n
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[creatureAuraKeyForTarget(target)]
+	copies := make(map[uint32]*activeAura, len(auras))
+	for id, aura := range auras {
+		copies[id] = aura
+	}
+	s.auraMu.Unlock()
+	return countEffects(copies)
+}
+
 func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool) {
 	if s == nil || s.server == nil || caster == nil || damage == 0 {
 		return
@@ -2190,6 +2242,19 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		return
 	}
 	isPlayerVictim := s.server.findSessionByGUID(target.GUID) != nil
+	// Unit::SpellDamagePctDone (Unit.cpp:7021-7023): the Shadow Bite arm — a
+	// pet's Warlock-family spell with SpellFamilyFlags[1] & 0x00400000 gains
+	// 15% per DoT the victim carries from the pet's owner (GetDoTsByCaster
+	// counts PERIODIC_DAMAGE / PERIODIC_DAMAGE_PERCENT effects by caster
+	// GUID). C++ gates on IsPet(); Go pet motions carry OwnerGUID.
+	if caster.OwnerGUID != 0 && s.server != nil && s.server.Data != nil {
+		if pspell, found, perr := s.server.Data.Spell(spellID); perr == nil && found &&
+			pspell.SpellFamilyName == spellFamilyWarlock && pspell.SpellFamilyFlags[1]&0x00400000 != 0 {
+			if dots := s.server.countDoTsByCaster(target, caster.OwnerGUID); dots > 0 {
+				damage = uint32(uint64(damage) * (100 + 15*uint64(dots)) / 100)
+			}
+		}
+	}
 	hitInfo := uint32(0)
 	resisted := uint32(0)
 	absorbed := uint32(0)
