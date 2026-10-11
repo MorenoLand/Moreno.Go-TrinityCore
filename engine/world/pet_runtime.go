@@ -11,7 +11,10 @@ import (
 const (
 	petFocusRegenInterval      = 4 * time.Second
 	petHappinessInterval       = 7500 * time.Millisecond
+	petPowerRegenInterval      = 2 * time.Second
+	petPowerTypeMana           = 0
 	petPowerTypeFocus          = 2
+	petPowerTypeEnergy         = 3
 	spellAuraPowerRegen        = 85
 	spellAuraPowerRegenPercent = 110
 	spellAuraIncreaseXPPercent = 200
@@ -24,6 +27,8 @@ type PetRuntimeState struct {
 	Powers          [7]uint32
 	MaxPowers       [7]uint32
 	FocusRegenTimer time.Duration
+	PowerRegenTimer time.Duration
+	LastManaUse     time.Time
 	HappinessTimer  time.Duration
 	InCombat        bool
 }
@@ -381,6 +386,54 @@ func advancePetRuntime(state PetRuntimeState, diff time.Duration, focusGain int3
 			state.FocusRegenTimer = 0
 		}
 	}
+	// Creature::Regenerate power arm (Creature.cpp:916-921 + 939-985): every
+	// CREATURE_REGEN_INTERVAL (2s) a unit with UNIT_FLAG2_REGENERATE_POWER
+	// regens its current power — POWER_ENERGY a flat +20, otherwise
+	// POWER_MANA. Pets always carry an owner, so the mana arm always takes
+	// the in-combat formula (Spirit/5+17)*RATE_POWER_MANA while not under
+	// the five-second last-mana-use effect (Spell.cpp:4868-4870,
+	// Unit.cpp:11074); Go has no pet Spirit stat (C++ leaves it 0 for pets)
+	// and no RATE_POWER_MANA config (player_regen.go:51 documents the 1.0
+	// default), so the tick is +17 mana. The out-of-combat maxValue/3 arm is
+	// unreachable for pets (GetCharmerOrOwnerGUID is always set). FOCUS
+	// runs on the separate 4s timer above (Pet.cpp:652-653); RAGE/RUNIC
+	// fall through Regenerate's default arm with no regen, as in C++.
+	if state.PowerRegenTimer <= 0 {
+		state.PowerRegenTimer = petPowerRegenInterval
+		if state.UnitFlags2&unitFlag2RegeneratePower != 0 {
+			regenPower := state.PowerType
+			if regenPower != petPowerTypeEnergy {
+				regenPower = petPowerTypeMana
+			}
+			if int(regenPower) < len(state.Powers) && int(regenPower) < len(state.MaxPowers) &&
+				state.Powers[regenPower] < state.MaxPowers[regenPower] {
+				add := uint32(0)
+				switch regenPower {
+				case petPowerTypeEnergy:
+					add = 20
+				case petPowerTypeMana:
+					if time.Since(state.LastManaUse) >= 5*time.Second {
+						add = 17
+					}
+				}
+				if add > 0 {
+					value := state.Powers[regenPower] + add
+					if value > state.MaxPowers[regenPower] {
+						value = state.MaxPowers[regenPower]
+					}
+					if value != state.Powers[regenPower] {
+						state.Powers[regenPower] = value
+						if fields == nil {
+							fields = make(map[int]uint32, 1)
+						}
+						fields[unitFieldPower1+int(regenPower)] = value
+					}
+				}
+			}
+		}
+	} else {
+		state.PowerRegenTimer -= diff
+	}
 	if state.PetType == 1 {
 		if state.HappinessTimer <= diff {
 			loss := uint32(670)
@@ -464,7 +517,7 @@ func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 		}
 		prunePetSpellCooldowns(motion, now)
 		motion.Refreshed = now
-		state := PetRuntimeState{PetType: motion.PetType, PowerType: motion.PowerType, UnitFlags2: motion.UnitFlags2, Powers: motion.Powers, MaxPowers: motion.MaxPowers, FocusRegenTimer: motion.FocusRegenTimer, HappinessTimer: motion.HappinessTimer, InCombat: motion.InCombat || motion.UnitFlags&unitFlagInCombat != 0}
+		state := PetRuntimeState{PetType: motion.PetType, PowerType: motion.PowerType, UnitFlags2: motion.UnitFlags2, Powers: motion.Powers, MaxPowers: motion.MaxPowers, FocusRegenTimer: motion.FocusRegenTimer, PowerRegenTimer: motion.PowerRegenTimer, LastManaUse: motion.LastManaUse, HappinessTimer: motion.HappinessTimer, InCombat: motion.InCombat || motion.UnitFlags&unitFlagInCombat != 0}
 		var fields map[int]uint32
 		if focusDue {
 			state, fields = AdvancePetRuntimeWithAuras(state, diff, s.Config.FocusRate, modifiers)
@@ -472,7 +525,11 @@ func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 			state, fields = AdvancePetRuntime(state, diff, s.Config.FocusRate)
 		}
 		motion.Powers = state.Powers
+		if _, ok := fields[unitFieldPower1+0]; ok {
+			motion.Mana = motion.Powers[0]
+		}
 		motion.FocusRegenTimer = state.FocusRegenTimer
+		motion.PowerRegenTimer = state.PowerRegenTimer
 		motion.HappinessTimer = state.HappinessTimer
 		motion.Happiness = state.Powers[4]
 		if len(fields) != 0 {

@@ -111,6 +111,10 @@ func (s *session) takePetSpellPower(motion *creatureMotion, spell wotlk.Spell, c
 			motion.Powers[spell.PowerType] = current
 			if spell.PowerType == 0 {
 				motion.Mana = current
+				// Spell::TakePower (Spell.cpp:4868-4870): spending mana
+				// starts the five-second timer that suppresses
+				// Creature::Regenerate's mana arm (Unit.cpp:11074).
+				motion.LastManaUse = time.Now()
 			}
 		}
 	}

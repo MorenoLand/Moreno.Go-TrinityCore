@@ -104,6 +104,8 @@ type creatureMotion struct {
 	PetNextLevelXP  uint32
 	UnitFlags2      uint32
 	FocusRegenTimer time.Duration
+	PowerRegenTimer time.Duration
+	LastManaUse     time.Time
 	HappinessTimer  time.Duration
 	Happiness       uint32
 	Experience      uint32

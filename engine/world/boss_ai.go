@@ -672,10 +672,12 @@ func checkCreatureSpellPower(spell wotlk.Spell, m *creatureMotion, cost int32) b
 // takeCreatureSpellPower mirrors Spell::TakePower (Spell.cpp:4779-4873) for
 // creature casters: POWER_HEALTH drains health, other powers drain the pool
 // (floored at 0 like Unit::ModifyPower), POWER_RUNE is a no-op (TakeRunePower
-// is player-only). The five-second mana timer (Spell.cpp:4872-4873) is
-// vacuous for world creatures — UNIT_FLAG2_REGENERATE_POWER is never set on
-// them (Creature.cpp/Pet.cpp/Player.cpp), so Creature::Regenerate
-// early-returns and nothing reads the stamp.
+// is player-only). The five-second mana timer (Spell.cpp:4868-4870) is
+// vacuous on this path — UNIT_FLAG2_REGENERATE_POWER is set only on pets
+// (Pet.cpp:1868) and players (Player.cpp:544), never on world creatures, so
+// Creature::Regenerate early-returns here; pets stamp the timer in the pet
+// spell drain (pet_combat.go) and regen via the pet runtime
+// (pet_runtime.go).
 func takeCreatureSpellPower(spell wotlk.Spell, m *creatureMotion, cost int32) {
 	if m == nil || cost <= 0 {
 		return
