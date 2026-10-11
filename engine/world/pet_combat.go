@@ -636,8 +636,15 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	}
 
 	victimDodgeBP := int32(-1)
+	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance read the victim's
+	// PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE (Unit.cpp:2712/2788);
+	// -1 keeps the legacy 5%-base fallback.
+	victimParryBP := int32(-1)
+	victimBlockBP := int32(-1)
 	if isTargetPlayer && targetSess != nil && targetSess.player != nil {
 		victimDodgeBP = int32(math.Round(float64(targetSess.player.DodgePercentage) * 100))
+		victimParryBP = int32(math.Round(float64(targetSess.player.ParryPercentage) * 100))
+		victimBlockBP = int32(math.Round(float64(targetSess.player.BlockPercentage) * 100))
 	}
 	// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2213-2232) +
 	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance victim arms
@@ -689,7 +696,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			}
 		}
 	}
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP)
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP)
 	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
 	// (Unit.cpp:2694-2695) and the 240/4 parry-reduction arm
 	// (Unit::GetUnitParryChance's creature arm) stay unbridged on this path.

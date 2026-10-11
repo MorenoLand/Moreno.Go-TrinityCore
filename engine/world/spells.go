@@ -18351,12 +18351,12 @@ func (s *session) spellReflectReturnStatus(spell wotlk.Spell) uint8 {
 // spells never block; a mid-cast-bar player victim cannot block; the attack
 // must come from the victim's front 180° arc unless the victim carries aura
 // 288. The chance is the player's BlockPercentage (GetUnitBlockChance
-// Unit.cpp:2788-2798 — the defense-skill diff already folds into Go's
-// BlockPercentage) or a creature's 5% plus aura 51. The blocked amount is
+// Unit.cpp:2788-2798) plus the roll-time 0.04*skillDiff arm (Unit.cpp:2796),
+// or a creature's 5% plus aura 51 plus the skillDiff*0.1% arm
+// (Unit.cpp:2804-2807). The blocked amount is
 // the victim's shield block value — doubled on a block-critical (victim aura
 // 253, Unit::isBlockCritical Unit.cpp:2432-2437) — clamped to the damage
-// (fullBlock). Gaps: the skillDiff arm of the creature block chance has no
-// Go weapon/defense-skill model; creature shield-block strength (STR/20) has
+// (fullBlock). Gaps: creature shield-block strength (STR/20) has
 // no combatTarget model, so creatures block level/2 only; the
 // UNIT_STATE_CONTROLLED gate has no Go unit-state model.
 func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool, vicSess *session, spell wotlk.Spell, damage uint32) (uint32, bool) {
@@ -18409,10 +18409,19 @@ func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool
 		}
 	}
 	var blockChanceBP int32
+	// Unit::GetUnitBlockChance skill arms (Unit.cpp:2777-2807):
+	// skillDiff = (victimMaxSkill - attackerWeaponSkill) = 5*leveldif;
+	// player: 0.04*skillDiff percent; creature: skillDiff*0.1% (both
+	// piecewise arms reduce to 50*leveldif basis points).
+	attackerLevel := uint8(1)
+	if s.player != nil && s.player.Level > 0 {
+		attackerLevel = s.player.Level
+	}
+	skillDiff := (int32(target.Level) - int32(attackerLevel)) * 5
 	if isPlayerVictim {
-		blockChanceBP = int32(math.Round(float64(vicSess.player.BlockPercentage) * 100))
+		blockChanceBP = int32(math.Round(float64(vicSess.player.BlockPercentage)*100)) + skillDiff*4
 	} else {
-		blockChanceBP = 500 + creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), spellAuraModBlockPercent)
+		blockChanceBP = 500 + creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), spellAuraModBlockPercent) + skillDiff*10
 	}
 	if blockChanceBP <= 0 || rand.IntN(10000) >= int(blockChanceBP) {
 		return 0, false
@@ -18461,19 +18470,26 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 	// weapon/defense-skill diffs fold into the level-diff basis Go's melee
 	// path uses (combat.go rollMeleeOutcome); SPELLMOD_RESIST_MISS_CHANCE has
 	// no Go spellmod model and stays unbridged.
+	skillDiff := leveldif * 5
 	var missChance int32
 	if isPlayerVictim {
+		// Unit::GetUnitMissChance 5% base (Unit.cpp:2762) + skill arm
+		// (Unit.cpp:12433-12436): diff>0 adds diff*0.04%, else diff*0.02%
+		// (percent) = 4/2 basis points per skill point.
 		missChance = 500
-		if leveldif > 0 {
-			missChance += leveldif * 40
+		if skillDiff > 0 {
+			missChance += skillDiff * 4
 		} else {
-			missChance += leveldif * 20
+			missChance += skillDiff * 2
 		}
 	} else {
-		if leveldif > 10 {
-			missChance = 100 + (leveldif-10)*400
+		// PvE against creatures (Unit.cpp:12438-12444): diff>10 adds
+		// 1% + (diff-10)*0.4%, else diff*0.1% (percent).
+		missChance = 500
+		if skillDiff > 10 {
+			missChance += 100 + (skillDiff-10)*40
 		} else {
-			missChance = 500 + leveldif*100
+			missChance += skillDiff * 10
 		}
 		if targetLevel < 10 {
 			missChance = int32(float64(missChance) * (float64(targetLevel) / 10.0))
@@ -18585,17 +18601,14 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 
 	// 4. Dodge: Unit::GetUnitDodgeChance (Unit.cpp:2657) — player victims use
 	// their derived PLAYER_DODGE_PERCENTAGE with the 0.04%/skill-point arm;
-	// creatures the 5% base with the 0.1%/level arm. Go folds the skill diff
-	// into the level-diff basis like the melee path (combat.go).
+	// creatures the 5% base with the 0.1%/skill-point arm (both piecewise
+	// arms reduce to 50*leveldif basis points, Unit.cpp:2676-2681).
 	if canDodge && (isPlayerVictim || targetLevel >= 10) {
 		dodgeChance := int32(0)
 		if isPlayerVictim && targetSess != nil && targetSess.player != nil {
 			dodgeChance = int32(math.Round(float64(targetSess.player.DodgePercentage)*100)) + leveldif*20
 		} else {
-			dodgeChance = 500
-			if leveldif > 0 {
-				dodgeChance += leveldif * 10
-			}
+			dodgeChance = 500 + leveldif*50
 		}
 		dodgeChance -= expertiseBP
 		// Reduce the victim's dodge chance by the attacker's
@@ -18615,16 +18628,17 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 	}
 
 	// 5. Parry: Unit::GetUnitParryChance — same construction as dodge with
-	// the victim's derived PLAYER_PARRY_PERCENTAGE.
+	// the victim's derived PLAYER_PARRY_PERCENTAGE. Creature victims:
+	// 5% + skillDiff*0.1% (diff<=10) or 1% + (diff-10)*1.6% (diff>10)
+	// (Unit.cpp:2722-2728).
 	if canParry && (isPlayerVictim || targetLevel >= 10) {
 		parryChance := int32(0)
 		if isPlayerVictim && targetSess != nil && targetSess.player != nil {
 			parryChance = int32(math.Round(float64(targetSess.player.ParryPercentage)*100)) + leveldif*20
+		} else if skillDiff <= 10 {
+			parryChance = 500 + skillDiff*10
 		} else {
-			parryChance = 500
-			if leveldif > 0 {
-				parryChance += leveldif * 10
-			}
+			parryChance = 500 + 100 + (skillDiff-10)*160
 		}
 		parryChance -= expertiseBP
 		if parryChance < 0 {
@@ -18643,7 +18657,9 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 		blockChance := int32(0)
 		if isPlayerVictim && targetSess != nil && targetSess.player != nil &&
 			targetSess.player.CanBlock && targetSess.player.Block > 0 {
-			blockChance = int32(math.Round(float64(targetSess.player.BlockPercentage) * 100))
+			// PLAYER_BLOCK_PERCENTAGE + the roll-time 0.04*skillDiff arm
+			// (Unit.cpp:2788-2796).
+			blockChance = int32(math.Round(float64(targetSess.player.BlockPercentage)*100)) + skillDiff*4
 		}
 		tmp += blockChance
 		if roll < int(tmp) {

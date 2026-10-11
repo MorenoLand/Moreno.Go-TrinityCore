@@ -2363,10 +2363,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 			victimDodgeBP := int32(-1)
+			// Unit::GetUnitParryChance / Unit::GetUnitBlockChance read the
+			// victim's PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE
+			// (Unit.cpp:2712/2788); -1 keeps the legacy 5%-base fallback.
+			victimParryBP := int32(-1)
+			victimBlockBP := int32(-1)
 			if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
 				victimDodgeBP = int32(math.Round(float64(target.Sess.player.DodgePercentage) * 100))
+				victimParryBP = int32(math.Round(float64(target.Sess.player.ParryPercentage) * 100))
+				victimBlockBP = int32(math.Round(float64(target.Sess.player.BlockPercentage) * 100))
 			}
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseParryReductionBP(creatureAuraKeyForMotion(motion)))
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseParryReductionBP(creatureAuraKeyForMotion(motion)), 0, 0, victimParryBP, victimBlockBP)
 			if isPlayerVictim && target.Sess != nil {
 				if target.Sess.isImmuneToDamage(1) {
 					outcome = protocol.MeleeHitImmune

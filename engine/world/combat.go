@@ -635,6 +635,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	canDodge := true
 	var critReductionBP int32
 	victimDodgeBP := int32(-1)
+	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance read the victim's
+	// PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE (Unit.cpp:2712/2788);
+	// -1 keeps the legacy 5%-base fallback.
+	victimParryBP := int32(-1)
+	victimBlockBP := int32(-1)
 	var vicSess *session
 	if isPlayerVictim && s.server != nil {
 		vicSess = s.server.findSessionByGUID(target.GUID)
@@ -646,6 +651,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// Gt-based dodge (Unit::GetUnitDodgeChance reads the victim's
 			// PLAYER_DODGE_PERCENTAGE, Unit.cpp:2667).
 			victimDodgeBP = int32(math.Round(float64(vicSess.player.DodgePercentage) * 100))
+			victimParryBP = int32(math.Round(float64(vicSess.player.ParryPercentage) * 100))
+			victimBlockBP = int32(math.Round(float64(vicSess.player.BlockPercentage) * 100))
 		}
 	}
 
@@ -735,7 +742,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// SPELL_AURA_MOD_ENEMY_DODGE (251) aura sum (Unit.cpp:2697-2698) —
 		// the same arms meleeSpellHitResult carries for melee spells.
 		dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -1315,6 +1322,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	canDodge := true
 	var critReductionBP int32
 	victimDodgeBP := int32(-1)
+	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance read the victim's
+	// PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE (Unit.cpp:2712/2788);
+	// -1 keeps the legacy 5%-base fallback.
+	victimParryBP := int32(-1)
+	victimBlockBP := int32(-1)
 	// Unit::GetUnitBlockChance (Unit.cpp:2777): the victim's own
 	// SPELL_AURA_MOD_BLOCK_PERCENT (51) total adds to the 5% base.
 	var victimBlockBonusBP int32
@@ -1325,6 +1337,8 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenRanged, &critChanceBP)
 			critReductionBP = 500 - critChanceBP
 			victimDodgeBP = int32(math.Round(float64(vicSess.player.DodgePercentage) * 100))
+			victimParryBP = int32(math.Round(float64(vicSess.player.ParryPercentage) * 100))
+			victimBlockBP = int32(math.Round(float64(vicSess.player.BlockPercentage) * 100))
 			victimBlockBonusBP = vicSess.totalAuraModifier(spellAuraModBlockPercent) * 100
 		}
 	}
@@ -1375,7 +1389,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// (Unit.cpp:2694-2695) and the ungated SPELL_AURA_MOD_ENEMY_DODGE (251)
 	// sum (Unit.cpp:2697-2698) apply here like the melee site above.
 	dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -2470,26 +2484,52 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	if len(modifiers) > 8 {
 		victimBlockBonusBP = modifiers[8]
 	}
+	// Optional 10th/11th modifiers: the player victim's derived
+	// PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE in basis points.
+	// These already fold base 5%, the defense-skill term, aura 47/51 and the
+	// rating (Player::UpdateParryPercentage / UpdateBlockPercentage), so the
+	// legs below must not add victimParryBonusBP / victimBlockBonusBP again
+	// for player victims. -1 keeps the legacy 5%-base fallback.
+	victimParryBP := int32(-1)
+	if len(modifiers) > 9 {
+		victimParryBP = modifiers[9]
+	}
+	victimBlockBP := int32(-1)
+	if len(modifiers) > 10 {
+		victimBlockBP = modifiers[10]
+	}
 
 	leveldif := int32(victimLevel) - int32(attackerLevel)
+	// Weapon/defense skill difference at 5 skill per level, the C++ 1:1
+	// model for every skillDiff arm below (GetWeaponSkillValue /
+	// GetMaxSkillValueForLevel have no Go skill-bonus model, so skills are
+	// 5/level by construction — same convention as the crushing-blow fix).
+	skillDiff := leveldif * 5
 
-	// 1. Miss chance
+	// 1. Miss chance: TrinityCore Unit::MeleeSpellMissChance (Unit.cpp:12408).
 	var missChance int32
 	if isPlayerVictim {
+		// Unit::GetUnitMissChance (Unit.cpp:2762): 5% base. The
+		// GetMissPercentageFromDefense above-cap term rides the Go
+		// defense-skill model only in the sheet percentages, so the roll
+		// keeps the flat 5% — same convention as the crushing-blow fix.
+		// Skill arm (Unit.cpp:12433-12436): diff = victimMaxSkill -
+		// attackerWeaponSkill; diff>0 adds diff*0.04%, else diff*0.02%
+		// (percent) = 4/2 basis points per skill point.
 		missChance = 500
-		if leveldif > 0 {
-			missChance += leveldif * 40
+		if skillDiff > 0 {
+			missChance += skillDiff * 4
 		} else {
-			missChance += leveldif * 20
+			missChance += skillDiff * 2
 		}
 	} else {
-		// PvE against creatures
-		if leveldif > 10 {
-			missChance = 100 + (leveldif-10)*400
-		} else if leveldif > 0 {
-			missChance = 500 + leveldif*100
+		// PvE against creatures (Unit.cpp:12438-12444): diff>10 adds
+		// 1% + (diff-10)*0.4%, else diff*0.1% (percent).
+		missChance = 500
+		if skillDiff > 10 {
+			missChance += 100 + (skillDiff-10)*40
 		} else {
-			missChance = 500 + leveldif*100
+			missChance += skillDiff * 10
 		}
 		// Low level mob scaling matching TC: if victimLevel < 10, missChance *= victimLevel / 10
 		if victimLevel < 10 {
@@ -2519,10 +2559,10 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 			dodgeChance = victimDodgeBP
 			dodgeChance += leveldif * 20
 		} else {
-			dodgeChance = 500
-			if leveldif > 0 {
-				dodgeChance += leveldif * 10
-			}
+			// Creature victims (Unit.cpp:2676-2681): 5% + aura 49 +
+			// skillDiff*0.1% (diff<=10) or 1% + (diff-10)*0.1% (diff>10) —
+			// both arms reduce to 50*leveldif basis points.
+			dodgeChance = 500 + leveldif*50
 		}
 		if expertiseBP > 0 {
 			dodgeChance -= expertiseBP
@@ -2536,17 +2576,28 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		}
 	}
 
-	// 3. Parry chance: base 5% (500/10000) if victim can parry
+	// 3. Parry chance: TrinityCore Unit::GetUnitParryChance (Unit.cpp:2708).
 	parryChance := int32(0)
 	if canParry && (isPlayerVictim || victimLevel >= 10) {
-		parryChance = 500
-		if leveldif > 0 {
-			parryChance += leveldif * 10
+		if isPlayerVictim && victimParryBP >= 0 {
+			// PLAYER_PARRY_PERCENTAGE already folds base 5%, the
+			// defense-skill term, aura 47 and parry rating
+			// (Player::UpdateParryPercentage); the roll-time skill arm is
+			// 0.04*skillDiff percent (Unit.cpp:2714).
+			parryChance = victimParryBP + skillDiff*4
+		} else {
+			// Creature victims (Unit.cpp:2722-2728): 5% + aura 47 +
+			// skillDiff*0.1% (diff<=10) or 1% + (diff-10)*1.6% (diff>10).
+			parryChance = 500 + victimParryBonusBP
+			if skillDiff <= 10 {
+				parryChance += skillDiff * 10
+			} else {
+				parryChance += 100 + (skillDiff-10)*160
+			}
 		}
 		if parryExpertiseBP > 0 {
 			parryChance -= parryExpertiseBP
 		}
-		parryChance += victimParryBonusBP
 		if parryChance < 0 {
 			parryChance = 0
 		}
@@ -2561,21 +2612,38 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		}
 	}
 
-	// 5. Block chance: base 5% (500/10000) if victim can block
+	// 5. Block chance: TrinityCore Unit::GetUnitBlockChance (Unit.cpp:2777).
 	blockChance := int32(0)
 	if canBlock {
-		blockChance = 500 + victimBlockBonusBP
+		if isPlayerVictim && victimBlockBP >= 0 {
+			// PLAYER_BLOCK_PERCENTAGE already folds base 5%, the
+			// defense-skill term, aura 51 and block rating
+			// (Player::UpdateBlockPercentage, StatSystem.cpp:601); the
+			// roll-time skill arm is 0.04*skillDiff percent (Unit.cpp:2796).
+			blockChance = victimBlockBP + skillDiff*4
+		} else {
+			// Creature victims (Unit.cpp:2804-2807): 5% + aura 51 +
+			// skillDiff*0.1% (diff<=10) or 1% + (diff-10)*0.1% (diff>10) —
+			// both arms reduce to 50*leveldif basis points.
+			blockChance = 500 + victimBlockBonusBP + skillDiff*10
+		}
 		if blockChance < 0 {
 			blockChance = 0
 		}
 	}
 
-	// 6. Crit chance: base 5% (500/10000)
+	// 6. Crit chance: TrinityCore Unit::GetUnitCriticalChanceTaken
+	// (Unit.cpp:2858). The victim-type skill arms:
+	// player: -skillDiff*0.04% (Unit.cpp:2889);
+	// creature: -skillDiff*0.12%, minus 3% when skillDiff>=15 (Unit.cpp:2890-2894).
 	critChance := int32(500)
-	if leveldif > 2 {
-		critChance -= (leveldif - 2) * 100
-	} else if leveldif > 0 {
-		critChance -= leveldif * 20
+	if isPlayerVictim {
+		critChance -= skillDiff * 4
+	} else {
+		critChance -= skillDiff * 12
+		if skillDiff >= 15 {
+			critChance -= 300
+		}
 	}
 	if critBonusBP > 0 {
 		critChance += critBonusBP
