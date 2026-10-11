@@ -919,6 +919,16 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				return
 			}
 		}
+		// Spell::CheckCast conditions block (Spell.cpp:5337-5348): the
+		// creature-caster twin of the player-path arm — CONDITION_SOURCE_TYPE_SPELL
+		// rows with the caster as target 0 and the explicit unit target as
+		// target 1. C++ carries no triggered exemption on this block, so it
+		// sits outside the !triggered gate, between the caster-state block
+		// (5294-5314) and the range arm (5496). A failing set fizzles the
+		// cast (the caster has no client to report a fail code to).
+		if !s.checkCreatureSpellCastConditions(ctx, m, spellID, targetGUID) {
+			return
+		}
 		// Spell::CheckRange (Spell.cpp:5496): C++ runs the range arm for
 		// triggered casts too (5494-5496, "Triggered spells also have
 		// range check"), between the caster-state block (5294-5314) and

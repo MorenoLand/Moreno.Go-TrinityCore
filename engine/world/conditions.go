@@ -246,17 +246,18 @@ func (s *session) loadImplicitTargetConditions(ctx context.Context, spellID uint
 	return result
 }
 
-// loadSpellCastConditions fetches the `conditions` rows attached to a
-// spell's cast itself (SourceEntry = spell id; no SourceGroup filter —
-// this is the NotGrouped variant, ConditionMgr.cpp:978-991). A missing
-// table or query error degrades to no rows, matching C++ behavior with
-// no conditions (IsObjectMeetingNotGroupedConditions returns true when
-// no entry exists for the source type).
-func (s *session) loadSpellCastConditions(ctx context.Context, spellID uint32) []conditionRow {
-	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+// loadSpellCastConditionRows is the Server-level twin of
+// (*session).loadSpellCastConditions: the NotGrouped spell-cast condition
+// rows (CONDITION_SOURCE_TYPE_SPELL, ConditionMgr.cpp:978-991) for a spell.
+// The session loader delegates here so the creature-caster path shares the
+// single query. A missing table or query error degrades to no rows, matching
+// C++ behavior with no conditions (IsObjectMeetingNotGroupedConditions
+// returns true when no entry exists for the source type).
+func (s *Server) loadSpellCastConditionRows(ctx context.Context, spellID uint32) []conditionRow {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return nil
 	}
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition, ErrorType, ErrorTextId FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceEntry = ? ORDER BY ElseGroup", conditionSourceSpellCast, spellID)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition, ErrorType, ErrorTextId FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceEntry = ? ORDER BY ElseGroup", conditionSourceSpellCast, spellID)
 	if err != nil {
 		return nil
 	}
@@ -270,6 +271,16 @@ func (s *session) loadSpellCastConditions(ctx context.Context, spellID uint32) [
 		result = append(result, row)
 	}
 	return result
+}
+
+// loadSpellCastConditions fetches the `conditions` rows attached to a
+// spell's cast itself (SourceEntry = spell id; no SourceGroup filter —
+// this is the NotGrouped variant, ConditionMgr.cpp:978-991).
+func (s *session) loadSpellCastConditions(ctx context.Context, spellID uint32) []conditionRow {
+	if s == nil || s.server == nil {
+		return nil
+	}
+	return s.server.loadSpellCastConditionRows(ctx, spellID)
 }
 
 // checkSpellCastConditions mirrors the CheckCast conditions block
@@ -347,6 +358,149 @@ func (s *session) checkSpellCastConditions(ctx context.Context, spellID uint32, 
 		return spellFailedCasterAurastate, 0
 	}
 	return spellFailedBadTargets, 0
+}
+
+// creatureConditionTarget is a resolved ConditionTarget endpoint for the
+// creature-caster conditions path: the casting creature (target 0), the
+// explicit unit target (target 1 — a player session when one is online,
+// else the creature motion under that GUID), or nothing (target 2 and
+// unresolvable targets, per the C++ null-target arm,
+// ConditionMgr.cpp:133-138).
+type creatureConditionTarget struct {
+	motion *creatureMotion
+	sess   *session
+}
+
+// checkCreatureSpellCastConditions mirrors the Spell::CheckCast conditions
+// block (Spell.cpp:5337-5348) for the creature-caster path: the
+// ConditionSourceInfo is (caster creature, m_targets.GetObjectTarget()).
+// The explicit target is the cast's targetGUID: a player session when one is
+// online, else the creature motion under that GUID, else absent (the C++
+// null arm). The group scan mirrors
+// ConditionMgr::IsObjectMeetToConditionList (ConditionMgr.cpp:883-926) the
+// same way the player-path checkSpellCastConditions does: every row in a
+// live group is evaluated (no early break), a failing row kills its group,
+// and one surviving group passes the whole set. A failed set fizzles the
+// cast — the caster has no client, so the ErrorType/custom-error arms have
+// no consumer (C++ only sets m_customError to build the fail packet).
+func (s *Server) checkCreatureSpellCastConditions(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64) bool {
+	if s == nil || m == nil {
+		return true
+	}
+	rows := s.loadSpellCastConditionRows(ctx, spellID)
+	if len(rows) == 0 {
+		return true
+	}
+	resolve := func(target int64) (creatureConditionTarget, bool) {
+		switch target {
+		case 0:
+			return creatureConditionTarget{motion: m}, true
+		case 1:
+			if targetGUID == 0 {
+				return creatureConditionTarget{}, false
+			}
+			if targetGUID == m.GUID {
+				return creatureConditionTarget{motion: m}, true
+			}
+			if sess := s.findSessionByGUID(targetGUID); sess != nil && sess.player != nil {
+				return creatureConditionTarget{sess: sess}, true
+			}
+			if cm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); cm != nil {
+				return creatureConditionTarget{motion: cm}, true
+			}
+			return creatureConditionTarget{}, false
+		default:
+			return creatureConditionTarget{}, false
+		}
+	}
+	groupMet := make(map[int64]bool)
+	for i := range rows {
+		row := &rows[i]
+		met, known := groupMet[row.ElseGroup]
+		if known && !met {
+			continue
+		}
+		if !known {
+			groupMet[row.ElseGroup] = true
+		}
+		if row.ConditionType < 0 {
+			// Reference rows: no ConditionReferenceStore model, skipped
+			// like the player path.
+			continue
+		}
+		tgt, ok := resolve(row.ConditionTarget)
+		if !ok {
+			groupMet[row.ElseGroup] = false
+			continue
+		}
+		got, err := s.evalCreatureConditionTarget(ctx, *row, tgt)
+		if err != nil {
+			got = false
+		}
+		if row.Negative {
+			got = !got
+		}
+		if !got {
+			groupMet[row.ElseGroup] = false
+		}
+	}
+	for _, met := range groupMet {
+		if met {
+			return true
+		}
+	}
+	return false
+}
+
+// evalCreatureConditionTarget evaluates one condition row against a resolved
+// ConditionTarget endpoint on the creature-caster path, pre-NegativeCondition
+// (the caller flips, matching Condition::Meets, ConditionMgr.cpp:592-597).
+// Creature endpoints carry only the condition types C++ evaluates through
+// Unit/WorldObject arms without a Player (ConditionMgr.cpp:146-456): NONE,
+// AURA, ZONEID, MAPID, AREAID, LEVEL, ALIVE, HP_VAL, HP_PCT. The player-only
+// arms (object->ToPlayer() is null for a creature — CONDITION_ITEM,
+// ITEM_EQUIPPED, REPUTATION_RANK, TEAM, SKILL, the quest family, SPELL,
+// DAILY_QUEST_DONE, PET_TYPE, TAXI, QUESTSTATE, QUEST_OBJECTIVE_PROGRESS,
+// GAMEMASTER, ACHIEVEMENT, TITLE and the rest) fail on a creature endpoint,
+// like C++ (condMeets stays false). AURA and ZONEID/AREAID have no Go model
+// on creature motions (no aura registry, no zone/area fields) and fail
+// closed. Player endpoints delegate to the session evaluator with the row
+// re-targeted at 0, preserving the exact player-path semantics (including
+// its fail-closed unmodeled types).
+func (s *Server) evalCreatureConditionTarget(ctx context.Context, row conditionRow, tgt creatureConditionTarget) (bool, error) {
+	if tgt.sess != nil {
+		row.ConditionTarget = 0
+		return tgt.sess.evalCondition(ctx, row, 0, 0)
+	}
+	m := tgt.motion
+	if m == nil {
+		return false, nil
+	}
+	switch row.ConditionType {
+	case 0: // CONDITION_NONE
+		return true, nil
+	case 1: // CONDITION_AURA — no Go aura model on creature motions; C++ HasAuraEffect can never match
+		return false, nil
+	case 4: // CONDITION_ZONEID — creature motions carry no zone id
+		return false, nil
+	case 22: // CONDITION_MAPID
+		return m.Map == uint32(row.Value1), nil
+	case 23: // CONDITION_AREAID — creature motions carry no area id
+		return false, nil
+	case 27: // CONDITION_LEVEL (ConditionMgr.cpp:338-340: CompareValues(Value2, level, Value1))
+		return compareValues(int(row.Value2), int64(m.Level), row.Value1), nil
+	case 36: // CONDITION_ALIVE (ConditionMgr.cpp:443-446: unit->IsAlive())
+		return m.Health > 0, nil
+	case 37: // CONDITION_HP_VAL (ConditionMgr.cpp:447-451: CompareValues(Value2, health, Value1))
+		return compareValues(int(row.Value2), int64(m.Health), row.Value1), nil
+	case 38: // CONDITION_HP_PCT (ConditionMgr.cpp:452-456: health*100/maxHealth; integer form matches the player path's case 38)
+		if m.MaxHealth == 0 {
+			return false, nil
+		}
+		return compareValues(int(row.Value2), int64(m.Health*100/m.MaxHealth), row.Value1), nil
+	default:
+		return false, nil
+	}
 }
 
 // loadGossipMenuConditions fetches conditions attached to a gossip menu title
