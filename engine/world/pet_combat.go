@@ -792,6 +792,28 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				}
 			}
 		}
+		// Unit::DealMeleeDamage's victim leg (Unit.cpp:1194-1195): a pet's
+		// BASE_ATTACK swing fires the creature victim's own taken-side proc
+		// auras with PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK, the trigger spell
+		// targeting the pet attacker — the creature-side twin of the wild
+		// path's procVictimAuraTriggers leg (creaturemotion.go) and the
+		// player twin here (procs.go:2113). Runs after the damage legs
+		// regardless of outcome (miss/dodge/parry/evade/immune carry the
+		// outcome-derived hit mask, like the wild path's twin); on lethal
+		// blows the victim's auras were stripped in the death chain, so
+		// the event evaluates an empty set (net no-op). The pet's own
+		// done-side melee procs stay unbridged on this path (standing gap).
+		if victimMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); victimMotion != nil {
+			s.fireCreatureAuraProcLoop(ctx, victimMotion, motion.GUID, procEventInfo{
+				typeMask:       procFlagTakenMeleeAutoAttack,
+				schoolMask:     spellSchoolMaskNormal,
+				spellTypeMask:  procSpellTypeNone,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, 0),
+				actorGUID:      motion.GUID,
+				damage:         damage,
+			})
+		}
 	}
 }
 
@@ -2155,10 +2177,41 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
 	}
 	// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
-	// runs after the damage legs on both the lethal and non-lethal arms —
+	// runs after the taken side on both the lethal and non-lethal arms —
 	// C++ fires ProcSkillsAndAuras after DealSpellDamage even when the blow
 	// kills. The self-hit is excluded (the return-trip bridge below already
 	// fires the combined done+taken event on the pet's auras).
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586):
+	// Unit::ProcSkillsAndAuras (Unit.cpp:5355-5366) fires the victim-side
+	// half with the taken pre-fill plus PROC_FLAG_TAKEN_DAMAGE ORed by
+	// the damage arm (Spell.cpp:2545) — the creature victim's own auras
+	// evaluate the hit as a taken-proc event (PROC_SPELL_TYPE_DAMAGE,
+	// PROC_SPELL_PHASE_HIT; Unit.cpp:10385-10418). Mirrors the
+	// player-victim branch's taken leg above: runs after the damage legs
+	// on both the lethal and non-lethal arms, the hit mask always NORMAL
+	// (misses return early above), the attr3 arm checked inline (the
+	// creature loop has no attr3 gate), and the trigger spell targeting
+	// the pet attacker. The self-hit is excluded — the return-trip
+	// bridge below already fires the combined done+taken event there.
+	if target.GUID != caster.GUID {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+			typeMask := spellDamageTakenProcTypeMask(spell) | procFlagTakenDamage
+			if typeMask != 0 {
+				spellCopy := spell
+				s.server.fireCreatureAuraProcLoop(ctx, targetMotion, caster.GUID, procEventInfo{
+					typeMask:       typeMask,
+					schoolMask:     uint32(schoolMask),
+					spellTypeMask:  procSpellTypeDamage,
+					spellPhaseMask: procSpellPhaseHit,
+					hitMask:        procHitNormal,
+					triggered:      triggered,
+					eventSpell:     &spellCopy,
+					actorGUID:      caster.GUID,
+					damage:         damage,
+				})
+			}
+		}
+	}
 	s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered)
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586) on the
 	// reflect return trip: the pet is both caster and _spellHitTarget
