@@ -38,16 +38,20 @@ func (s *session) auraObjectScale() float32 {
 	return float32(scale)
 }
 
-// forcedFactionAura mirrors the AuraEffect::HandleAuraModFaction apply leg
+// forcedFactionAura mirrors the AuraEffect::HandleAuraModFaction legs
 // (SpellAuraEffects.cpp): while an SPELL_AURA_MOD_FACTION (243) effect is
 // active the unit's faction is the effect's misc value instead of the race
 // faction. When several are active the latest-applied one wins (C++ re-sets
-// per apply); the remove leg's PLAYER_CONTROLLED restore lives in
-// removeAura. Documented delta: C++'s remove leg restores the native faction
-// unconditionally even when a second faction aura remains — the live fold
-// keeps the remaining aura's faction instead.
+// per apply). The remove leg restores the native faction unconditionally
+// (Unit::RestoreFaction) even when a second faction aura remains — the
+// factionNativeAfterRemove marker carries that, since the live fold alone
+// would keep the remaining aura's faction. The PLAYER_CONTROLLED restore
+// lives in removeAura.
 func (s *session) forcedFactionAura() (uint32, bool) {
 	if s == nil {
+		return 0, false
+	}
+	if s.factionNativeAfterRemove {
 		return 0, false
 	}
 	var faction uint32

@@ -378,6 +378,11 @@ type session struct {
 	auras                        map[uint32]struct{}
 	auraSlots                    map[uint32]uint8
 	activeAuras                  map[uint32]*activeAura
+	// factionNativeAfterRemove mirrors Unit::RestoreFaction in the
+	// AuraEffect::HandleAuraModFaction remove leg (SpellAuraEffects.cpp:4808):
+	// removing a 243 aura restores the native faction unconditionally, even
+	// while a second 243 aura remains. Set on 243 remove, cleared on 243 apply.
+	factionNativeAfterRemove bool
 	// skillTempBonus / skillTalentBonus mirror Player::m_skillBonus
 	// (Player.cpp:6024-6041): the temporary (30) and permanent talent (98)
 	// skill bonuses from HandleAuraModSkill, keyed by skill id.

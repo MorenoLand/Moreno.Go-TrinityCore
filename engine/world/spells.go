@@ -362,6 +362,8 @@ const (
 	spellEffectBlock                   = 23 // SPELL_EFFECT_BLOCK (SharedDefines.h:834)
 	spellEffectPowerBurn               = 62
 	spellEffectThreat                  = 63
+	spellEffectDualWield               = 40 // SPELL_EFFECT_DUAL_WIELD (SharedDefines.h:851; EffectDualWield, SpellEffects.cpp:2533)
+	spellEffectSendEvent               = 61 // SPELL_EFFECT_SEND_EVENT (SharedDefines.h:872; EffectSendEvent, SpellEffects.cpp:1309)
 	spellEffectTriggerSpell            = 64
 	spellEffectTriggerSpellWithValue   = 142 // SPELL_EFFECT_TRIGGER_SPELL_WITH_VALUE (SpellEffects.cpp:211)
 	spellEffectTriggerMissile          = 32  // SPELL_EFFECT_TRIGGER_MISSILE (SpellEffects.cpp:101)
@@ -10302,6 +10304,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case 66: // SPELL_EFFECT_CREATE_MANA_GEM (EffectRechargeManaGem, SpellEffects.cpp:5665)
 				s.handleEffectRechargeManaGem(effCtx, spell)
+			case spellEffectDualWield: // 40: SPELL_EFFECT_DUAL_WIELD (EffectDualWield, SpellEffects.cpp:2533)
+				// unitTarget->SetCanDualWield(true). Go derives the capability
+				// from knowing spell 674 (items.go, terrain.go) — explicit
+				// no-op so the effect stops hitting the unhandled-effect
+				// debug arm.
+			case spellEffectSendEvent: // 61: SPELL_EFFECT_SEND_EVENT (EffectSendEvent, SpellEffects.cpp:1309)
+				// sEventScripts->ProcessEvent on the unit/gameobject/corpse
+				// target (or the focus object at HIT). Go has no event-script
+				// executor model — explicit no-op so the effect stops hitting
+				// the unhandled-effect debug arm.
 			case spellEffectLeap: // 29: SPELL_EFFECT_LEAP (EffectLeap, SpellEffects.cpp:4334)
 				for _, effectTarget := range hitTargets {
 					if effectTarget == 0 {
@@ -19166,9 +19178,12 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	}
 	// AuraEffect::HandleAuraModFaction apply leg (SpellAuraEffects.cpp): a
 	// 243 effect overrides the unit's faction and clears the player
-	// UNIT_FLAG_PLAYER_CONTROLLED bit; the remove leg restores it.
+	// UNIT_FLAG_PLAYER_CONTROLLED bit; the remove leg restores the native
+	// faction (Unit::RestoreFaction) and the bit. The marker clear models
+	// C++ re-setting the field per apply, even after a remove restored it.
 	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraModFaction) {
 		s.player.UnitFlags &^= unitFlagPlayerControlled
+		s.factionNativeAfterRemove = false
 	}
 	// AuraEffect::HandleAuraGhost apply leg (SpellAuraEffects.cpp:1555-1567):
 	// the ghost flag is set on the player when the aura applies; the remove
@@ -19544,6 +19559,12 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasFactionAura && s.player != nil {
 		s.player.UnitFlags |= unitFlagPlayerControlled
+		// AuraEffect::HandleAuraModFaction remove leg
+		// (SpellAuraEffects.cpp:4808): Unit::RestoreFaction restores the
+		// native faction unconditionally — no remaining-aura gate — so a
+		// second live 243 aura does not keep its faction after this one
+		// leaves. The fold alone would; the marker carries the restore.
+		s.factionNativeAfterRemove = true
 	}
 	if wasMovementControl && !s.hasAuraType(spellAuraStun) && !s.hasAuraType(spellAuraRoot) {
 		s.rooted = false
