@@ -928,6 +928,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		return true
 	}
 	hitTargets := []uint64{targetGUID}
+	// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410) for a pet
+	// caster: the same server-side destination resolution the wild-creature
+	// path bridges (resolveCreatureSpellDestination) — C++ runs the full
+	// SelectSpellTargets for pet casts too, seeding m_targets at the caster
+	// (CheckDst, Spell.cpp:6523) and writing it into SendSpellGo
+	// (Spell.cpp:4338). The implicit arms overwrite any client-supplied
+	// destination, so the resolved position replaces it.
+	if dx, dy, dz, ok := s.server.resolveCreatureSpellDestination(motion, spell, targetGUID); ok {
+		target.Flags |= protocol.SpellTargetFlagDestLocation
+		target.Destination = protocol.SpellTargetLocation{X: dx, Y: dy, Z: dz}
+	}
 	stamp := gameTimeMS()
 	castFlags := uint32(spellCastFlagGo)
 	if triggered && castCount == 0 {

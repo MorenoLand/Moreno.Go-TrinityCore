@@ -1041,6 +1041,20 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			spellTarget.UnitGUID = redirectGUID
 			hitTargets = []uint64{redirectGUID}
 		}
+		// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410, ahead
+		// of TakePower at 3449): a creature casting a spell with a
+		// dest-family implicit target resolves the destination server-side
+		// and carries it in the GO packet — C++ seeds m_targets at the
+		// caster (CheckDst, Spell.cpp:6523) and SendSpellGo writes it into
+		// the packet (Spell.cpp:4338). Placed after the redirect so the
+		// target-dest arms anchor on the redirected target, matching the
+		// C++ arm order inside SelectSpellTargets.
+		if spellKnown {
+			if dx, dy, dz, ok := s.resolveCreatureSpellDestination(m, spellInfo, targetGUID); ok {
+				spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
+				spellTarget.Destination = protocol.SpellTargetLocation{X: dx, Y: dy, Z: dz}
+			}
+		}
 		if !triggered {
 			// Spell::TakePower (Spell.cpp:3449-3456, "Powers have to be
 			// taken before SendSpellGo"): drained after the fizzle arms,
