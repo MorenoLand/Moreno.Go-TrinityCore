@@ -3,9 +3,9 @@ package world
 // Aura-driven max-power arms: AuraEffect::HandleAuraModIncreaseEnergy
 // (SpellAuraEffects.cpp:3686 — aura type 35, SPELL_AURA_MOD_INCREASE_ENERGY)
 // and HandleAuraModIncreaseEnergyPercent (SpellAuraEffects.cpp:3698 — aura
-// type 233, SPELL_AURA_MOD_INCREASE_ENERGY_PERCENT). C++ keeps these in
+// type 132, SPELL_AURA_MOD_INCREASE_ENERGY_PERCENT). C++ keeps these in
 // Unit::m_auraModifiersGroup[UNIT_MOD_POWER_START + power] (Unit.cpp:9237):
-// the flat TOTAL_VALUE adds (35) and TOTAL_PCT multiplies the total (233),
+// the flat TOTAL_VALUE adds (35) and TOTAL_PCT multiplies the total (132),
 // the pct leg folding multiplicatively
 // (AddPct: m *= 1+pct/100; the remove leg rebuilds the product from the
 // remaining auras via GetTotalAuraMultiplierByMiscValue,
@@ -35,7 +35,7 @@ package world
 
 const (
 	spellAuraModIncreaseEnergy        = 35  // SPELL_AURA_MOD_INCREASE_ENERGY (SpellAuraEffects.cpp:100)
-	spellAuraModIncreaseEnergyPercent = 233 // SPELL_AURA_MOD_INCREASE_ENERGY_PERCENT (SpellAuraEffects.cpp:298)
+	spellAuraModIncreaseEnergyPercent = 132 // SPELL_AURA_MOD_INCREASE_ENERGY_PERCENT (SpellAuraDefines.h:212)
 	spellAuraModPowerRegenPct         = 110 // SPELL_AURA_MOD_POWER_REGEN_PERCENT (SpellAuraEffects.cpp:175)
 	spellAuraModManaRegenInterrupt    = 134 // SPELL_AURA_MOD_MANA_REGEN_INTERRUPT (SpellAuraEffects.cpp:199)
 	spellAuraModManaRegenFromStat     = 219 // SPELL_AURA_MOD_MANA_REGEN_FROM_STAT (SpellAuraEffects.cpp:284)
@@ -43,7 +43,7 @@ const (
 )
 
 // auraPowerMods folds the live max-power-modifier aura effects for one power
-// index into the flat TOTAL_VALUE sum (35) and the TOTAL_PCT product (233).
+// index into the flat TOTAL_VALUE sum (35) and the TOTAL_PCT product (132).
 // extra carries aura records that are not (or no longer) in the session's
 // active map — the removed aura on the remove leg, whose C++ handler still
 // sees the effect when it runs (Unit::_UnapplyAura erases before the
@@ -101,7 +101,7 @@ func (s *session) effectiveMaxPower(powerIdx int) uint32 {
 }
 
 // effectiveMaxPowerExcluding recomputes the max power for the power index as
-// if the named spell's aura were absent — the pre-apply max for the 233
+// if the named spell's aura were absent — the pre-apply max for the 132
 // power-shift arm.
 func (s *session) effectiveMaxPowerExcluding(powerIdx int, spellID uint32) uint32 {
 	if s == nil || s.player == nil || powerIdx < 0 || powerIdx >= len(s.player.MaxPowers) {
@@ -116,7 +116,7 @@ func (s *session) effectiveMaxPowerExcluding(powerIdx int, spellID uint32) uint3
 }
 
 // auraTouchesPower reports whether any of the aura's effects is a max-power
-// modifier (35/233), mirroring the two handlers' table rows
+// modifier (35/132), mirroring the two handlers' table rows
 // (SpellAuraEffects.cpp:100/298).
 func (s *session) auraTouchesPower(aura *activeAura) bool {
 	for _, auraType := range []uint32{
@@ -142,7 +142,7 @@ func clampPowerToMax(cur, max uint32) uint32 {
 // applyPowerAuraArms runs the current-power half of the max-power-aura apply
 // leg, called from the fresh-apply tail of applyAuraToTarget once the aura
 // record is registered. The 35 flat arm has no current-power leg in C++
-// (SpellAuraEffects.cpp:3686-3695 just moves the stat modifier); the 233 arm
+// (SpellAuraEffects.cpp:3686-3695 just moves the stat modifier); the 132 arm
 // shifts current power by the max delta (change = newMax - oldMax,
 // SpellAuraEffects.cpp:3718-3721).
 func (s *session) applyPowerAuraArms(spellID, auraType uint32, misc int32, amount int32) {
@@ -166,7 +166,7 @@ func (s *session) applyPowerAuraArms(spellID, auraType uint32, misc int32, amoun
 // removePowerAuraArms runs the current-power half of the max-power-aura
 // remove leg. The aura record is already erased (Unit::_UnapplyAura erases
 // before the handlers, Unit.cpp:3548), so the recompute sees the remaining
-// auras. The 35 arm has no current-power leg; the 233 arm shifts current
+// auras. The 35 arm has no current-power leg; the 132 arm shifts current
 // power by the max delta against the pre-remove max, which still includes
 // the removed aura (same extra-record trick as the health remove leg).
 func (s *session) removePowerAuraArms(removed *activeAura) {

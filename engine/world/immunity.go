@@ -10,8 +10,8 @@ import (
 const (
 	spellAuraSchoolImmunity            uint32 = 39         // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119) — was mislabeled as 2 (SPELL_AURA_MOD_POSSESS); corrected 2026-10-03 during the CheckCasterAuras audit
 	spellAuraDamageImmunity            uint32 = 40         // SPELL_AURA_DAMAGE_IMMUNITY (SpellAuraDefines.h:120)
-	spellAuraReflectSpells             uint32 = 63         // SPELL_AURA_REFLECT_SPELLS (SpellAuraDefines.h:93)
-	spellAuraReflectSpellsSchool       uint32 = 64         // SPELL_AURA_REFLECT_SPELLS_SCHOOL (SpellAuraDefines.h:94)
+	spellAuraReflectSpells             uint32 = 28         // SPELL_AURA_REFLECT_SPELLS (SpellAuraDefines.h:108)
+	spellAuraReflectSpellsSchool       uint32 = 74         // SPELL_AURA_REFLECT_SPELLS_SCHOOL (SpellAuraDefines.h:154)
 	spellAuraModMaxAffectedTargets     uint32 = 277        // SPELL_AURA_MOD_MAX_AFFECTED_TARGETS (SpellAuraDefines.h:357)
 	spellAuraModIgnoreShapeshift       uint32 = 275        // SPELL_AURA_MOD_IGNORE_SHAPESHIFT (SpellAuraDefines.h:355)
 	spellAttr3IgnoreHitResult          uint32 = 0x00040000 // SPELL_ATTR3_IGNORE_HIT_RESULT (SharedDefines.h:541) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
@@ -629,7 +629,7 @@ func (s *session) creatureReflectOffered(spell wotlk.Spell, targetFaction uint32
 // creatureCheckSpellReflection is the creature-target analog of
 // checkSpellReflection: WorldObject::SpellHitResult's reflect arm
 // (Object.cpp:2641-2648) runs on any Unit, so a creature victim carrying
-// SPELL_AURA_REFLECT_SPELLS (63) / SPELL_AURA_REFLECT_SPELLS_SCHOOL (64)
+// SPELL_AURA_REFLECT_SPELLS (28) / SPELL_AURA_REFLECT_SPELLS_SCHOOL (74)
 // auras rolls the same summed chance. The activeCreatureAuras entries carry
 // the aura effect's own amount, matching the player-side flattened model.
 // On success the reflect aura is consumed. The player-side channeled

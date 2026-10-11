@@ -145,7 +145,7 @@ const (
 	spellAuraModHealthRegenInCombat       uint32 = 161 // SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (SpellAuraDefines.h) — flat health-regen bonus that also runs in combat (Player.cpp:2265)
 	spellAuraModCombatResultChance        uint32 = 248 // SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (SpellAuraDefines.h) — attacker auras reducing victim dodge (MiscValue == VICTIMSTATE_DODGE)
 	spellAuraModTargetAbsorbSchool        uint32 = 194 // SPELL_AURA_MOD_TARGET_ABSORB_SCHOOL (SpellAuraDefines.h) — attacker's pct of damage bypassing victim absorbs
-	spellAuraModTargetAbilityAbsorbSchool uint32 = 245 // SPELL_AURA_MOD_TARGET_ABILITY_ABSORB_SCHOOL (SpellAuraDefines.h) — attacker's spell-specific pct of damage bypassing victim absorbs (CalcAbsorbResist, Unit.cpp:1840)
+	spellAuraModTargetAbilityAbsorbSchool uint32 = 195 // SPELL_AURA_MOD_TARGET_ABILITY_ABSORB_SCHOOL (SpellAuraDefines.h:275) — attacker's spell-specific pct of damage bypassing victim absorbs (CalcAbsorbResist, Unit.cpp:1840)
 
 	victimStateDodge = 2 // VICTIMSTATE_DODGE (Unit.h:47) — MiscValue for MOD_COMBAT_RESULT_CHANCE dodge reduction
 
