@@ -1229,6 +1229,23 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			motion.Orientation = angle
 		}
 	}
+	// Spell::SelectExplicitTargets magic-redirect arm (Spell.cpp:724-757)
+	// via Spell::SelectSpellTargets (Spell.cpp:761, run in _cast at
+	// 3410): no caster-type gate — it runs for pet casts too, after the
+	// DR recheck and SetInFront and ahead of TakePower (3449). A live
+	// Grounding Totem magnet on the victim pulls the cast onto the totem
+	// and consumes the magnet, like the creature path
+	// (boss_ai.go). The redirect precedes the dest-family arms inside
+	// SelectSpellTargets, so the destination re-resolves on the
+	// redirected target; the LOS gates above keep the pre-redirect
+	// resolution (C++ evaluates them at CheckCast time, before the
+	// redirect). Runs for triggered casts too (no C++ triggered
+	// exemption on SelectExplicitTargets).
+	if redirectGUID, ok := s.server.creatureGroundingTotemRedirect(ctx, motion, spell, targetGUID); ok {
+		targetGUID = redirectGUID
+		target.UnitGUID = redirectGUID
+		dx, dy, dz, hasDest = s.server.resolveCreatureSpellDestination(motion, spell, targetGUID)
+	}
 	remainingPower, hasRemainingPower, ok := s.takePetSpellPower(motion, spell, castCount, triggered)
 	if !ok {
 		return true
