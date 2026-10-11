@@ -362,6 +362,8 @@ const (
 	spellEffectCharge                  = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
 	spellEffectSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
 	spellEffectOpenLock                = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
+	spellEffectSummonChangeItem        = 34  // SPELL_EFFECT_SUMMON_CHANGE_ITEM (SharedDefines.h:845; EffectSummonChangeItem, SpellEffects.cpp:2061)
+	spellEffectTransmitted             = 50  // SPELL_EFFECT_TRANS_DOOR (SharedDefines.h:861; EffectTransmitted, SpellEffects.cpp:4927)
 	spellEffectDismissPet              = 102 // SPELL_EFFECT_DISMISS_PET (SharedDefines.h:913)
 	spellEffectDispel                  = 38  // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
 	spellEffectResurrectPet            = 109 // SPELL_EFFECT_RESURRECT_PET (SharedDefines.h:920)
@@ -9923,6 +9925,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectCreateItem: // 24: SPELL_EFFECT_CREATE_ITEM
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
+			case spellEffectSummonChangeItem: // 34: SPELL_EFFECT_SUMMON_CHANGE_ITEM (EffectSummonChangeItem, SpellEffects.cpp:2061)
+				s.handleEffectSummonChangeItem(effCtx, castItemGUID, spell, eff)
+			case spellEffectTransmitted: // 50: SPELL_EFFECT_TRANS_DOOR (EffectTransmitted, SpellEffects.cpp:4927)
+				s.handleEffectTransmitted(effCtx, target, spell, eff)
 			case spellEffectCreateItem2: // 157: SPELL_EFFECT_CREATE_ITEM_2 (EffectCreateItem2, SpellEffects.cpp:1688)
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
 			case spellEffectPull: // 70: SPELL_EFFECT_PULL — EffectPull calls EffectNULL (SpellEffects.cpp:2541-2545), no-op
@@ -28257,6 +28263,69 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	// Spell::DoCreateItem (SpellEffects.cpp:1666): a successful craft grows
 	// the profession skill.
 	s.updateCraftSkill(ctx, spell.ID)
+}
+
+// handleEffectSummonChangeItem mirrors Spell::EffectSummonChangeItem
+// (SpellEffects.cpp:2061-2165): the cast item is destroyed and a fresh item
+// of the effect's ItemType is created in its place — the item-transform
+// spells (quest items that change into another item on use). The C++ arms:
+// the cast item must be a player-owned item, enchantments carry over
+// (PERM..TEMP slots), and proportional durability loss transfers to the new
+// item. C++ re-stores the new item in the old item's exact bag/slot
+// (inventory, bank, or equipment); Go stores via storeOrStackItem (the same
+// free-slot path EffectCreateItem uses) and documents the slot delta.
+// ItemAddedQuestCheck rides storeOrStackItem's adjustQuestItemCount.
+func (s *session) handleEffectSummonChangeItem(ctx context.Context, castItemGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	if castItemGUID == 0 || eff.ItemType == 0 {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	var oldEntry, oldCount, oldDurability int64
+	var oldEnchantments string
+	if err := cdb.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count, COALESCE(ii.durability, 0), COALESCE(ii.enchantments, '')
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.item = ? LIMIT 1`, s.playerGUID, int64(castItemGUID)).Scan(
+		&oldEntry, &oldCount, &oldDurability, &oldEnchantments); err != nil || oldEntry <= 0 || oldCount <= 0 {
+		return
+	}
+	var oldMaxDurability int64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", oldEntry).Scan(&oldMaxDurability)
+	}
+	// SpellEffects.cpp:2104-2112: DestroyItem on the old item. The later
+	// spendCastItemCharges (TakeCastItem) re-resolves the item and no-ops
+	// on the missing row, matching C++ nulling m_CastItem.
+	if !s.consumeInventoryItemByGUID(ctx, castItemGUID, uint32(oldCount)) {
+		return
+	}
+	res, err := s.storeOrStackItem(ctx, s.playerGUID, eff.ItemType, 1)
+	if err != nil || res == nil {
+		return
+	}
+	// SpellEffects.cpp:2088-2097: enchantment carry-over and proportional
+	// durability loss. A stack merge (IsStack) has no fresh row to stamp,
+	// so the carry-over applies to the new item only.
+	if !res.IsStack && res.ItemGUID != 0 {
+		var newMaxDurability int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", eff.ItemType).Scan(&newMaxDurability)
+		}
+		newDurability := newMaxDurability
+		if oldDurability < oldMaxDurability && oldMaxDurability > 0 && newMaxDurability > 0 {
+			newDurability = newMaxDurability * oldDurability / oldMaxDurability
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ?, durability = ? WHERE guid = ?", oldEnchantments, newDurability, int64(res.ItemGUID))
+	}
+	// Player::SendNewItem (Player.cpp:16404): SMSG_ITEM_PUSH_RESULT for the
+	// transformed item, like the quest-reward grant path.
+	slotForPush := uint32(res.Slot)
+	if res.IsStack {
+		slotForPush = 0xFFFFFFFF
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, res.ClientBag, slotForPush, eff.ItemType, 1, res.InventoryCount, res.IsStack), true)
 }
 
 // handleEffectCreateRandomItem mirrors Spell::EffectCreateRandomItem

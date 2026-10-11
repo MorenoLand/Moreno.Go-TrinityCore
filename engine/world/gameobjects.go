@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -1165,6 +1166,62 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 		s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
 	})
 	s.fishingBobberGUID = dyn.GUID
+	s.server.spawnDynamicGameObject(dyn)
+}
+
+// handleEffectTransmitted mirrors Spell::EffectTransmitted
+// (SpellEffects.cpp:4927-5045): the generic (non-fishing, non-ritual,
+// non-duel-arbiter) arm spawns the effect's MiscValue gameobject entry as a
+// runtime object owned by the caster, despawning after the spell's DBC
+// duration. The fishing-node arm is already bridged (spawnFishingBobber,
+// called before the effect dispatch); the summoning-ritual AddUniqueUse /
+// AddGameObject cancel linkage and the linked-trap spawn have no Go model
+// and stay documented. Position: C++ prefers the spell dest target, then a
+// radius/random-range GetClosePoint; Go uses the dest target when present
+// and the caster position otherwise (the random-range arm is unbridged).
+func (s *session) handleEffectTransmitted(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	entry := uint32(0)
+	if eff.MiscValue > 0 {
+		entry = uint32(eff.MiscValue)
+	}
+	if entry == 0 {
+		return
+	}
+	tmpl, err := gobjectTemplateByEntry(ctx, s.server.WorldStore.DB, entry)
+	if err != nil || tmpl == nil {
+		return
+	}
+	if tmpl.goType == GameObjectTypeFishingNode {
+		return
+	}
+	x, y, z := s.player.X, s.player.Y, s.player.Z
+	if tmpl.goType != GameObjectTypeRitual && target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+	}
+	lowGUID := s.server.nextDynamicGameObjectLowGUID()
+	newGUID := gameObjectGUID(lowGUID, entry)
+	size := tmpl.size
+	if size <= 0 {
+		size = 1.0
+	}
+	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spell.ID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	// SpellEffects.cpp:5019: the object's respawn time is the spell duration;
+	// a runtime spawn with a positive duration despawns when it elapses.
+	if spell.DurationIndex > 0 && s.server.Data != nil {
+		lvl := s.player.Level
+		if lvl == 0 {
+			lvl = 80
+		}
+		if dur, ok, derr := s.server.Data.SpellDuration(spell.DurationIndex, uint32(lvl)); derr == nil && ok && dur > 0 {
+			dyn.DespawnTimer = time.AfterFunc(time.Duration(dur)*time.Millisecond, func() {
+				s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+			})
+		}
+	}
+	s.sendSummonObjectLog(spell.ID, spellEffectTransmitted, newGUID)
 	s.server.spawnDynamicGameObject(dyn)
 }
 
