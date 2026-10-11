@@ -14,28 +14,66 @@ const (
 	SpellAuraMagicAbsorb  uint32 = 256 // SPELL_AURA_MAGIC_ABSORB (Anti-Magic Shell)
 )
 
-// getAbsorptionPriority returns the priority order for damage absorption shields.
-// Mirrors TrinityCore Unit::CalcAbsorbResist (Unit.cpp:2000-2080):
-// 1. Specific school shields (Fire Ward, Frost Ward, Shadow Ward)
-// 2. Anti-Magic Shell / Magic Absorb (Aura 256)
-// 3. Generic school shields (Power Word: Shield, Ice Barrier, Sacred Shield)
-// 4. Mana Shield (Aura 97) - absorbs last to protect player mana
-func getAbsorptionPriority(aura *activeAura) int {
+// absorbAuraPriority returns the priority order for damage absorption shields.
+// Within SPELL_AURA_SCHOOL_ABSORB (69) it mirrors TrinityCore's
+// AbsorbAuraOrderPred (SpellAuraEffects.h:316-367):
+//  1. Wards — mage/warlock family, category 56
+//  2. Sacred Shield (58597)
+//  3. Fel Blossom (28527)
+//  4. Divine Aegis (47753)
+//  5. Ice Barrier (category 471)
+//  6. Sacrifice — warlock family, icon 693
+//  7. other school-specific absorbs
+//
+// The 256 (Anti-Magic Shell) and 97 (Mana Shield) slots keep the Go tree's
+// existing combined-list positions — C++ consumes those aura types in
+// separate CalcAbsorbResist loops (Unit.cpp:1864 vs 1914), so the merged
+// pass is already a Go-side approximation; generic 69s stay ahead of mana
+// shield, matching C++.
+func (s *Server) absorbAuraPriority(aura *activeAura) int {
 	if aura == nil {
 		return 99
 	}
-	switch aura.AuraType {
-	case SpellAuraSchoolAbsorb:
-		if aura.SchoolMask != 0 && aura.SchoolMask != 127 {
-			return 1
+	if aura.AuraType == SpellAuraSchoolAbsorb {
+		var spell wotlk.Spell
+		known := false
+		if s != nil && s.Data != nil {
+			if sp, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
+				spell, known = sp, true
+			}
 		}
-		return 3
+		if known {
+			isWard := (spell.SpellFamilyName == spellFamilyMage || spell.SpellFamilyName == spellFamilyWarlock) && spell.Category == 56
+			if isWard {
+				return 1
+			}
+			switch aura.SpellID {
+			case 58597: // Sacred Shield
+				return 2
+			case 28527: // Fel Blossom
+				return 3
+			case 47753: // Divine Aegis
+				return 4
+			}
+			if spell.Category == 471 { // Ice Barrier
+				return 5
+			}
+			if spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 693 { // Sacrifice
+				return 6
+			}
+		}
+		if aura.SchoolMask != 0 && aura.SchoolMask != 127 {
+			return 7
+		}
+		return 9
+	}
+	switch aura.AuraType {
 	case SpellAuraMagicAbsorb:
-		return 2
+		return 8
 	case SpellAuraManaShield:
-		return 4
+		return 10
 	default:
-		return 5
+		return 99
 	}
 }
 
@@ -252,8 +290,8 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 			}
 		}
 		sort.SliceStable(shieldList, func(i, j int) bool {
-			pI := getAbsorptionPriority(shieldList[i])
-			pJ := getAbsorptionPriority(shieldList[j])
+			pI := s.server.absorbAuraPriority(shieldList[i])
+			pJ := s.server.absorbAuraPriority(shieldList[j])
 			if pI != pJ {
 				return pI < pJ
 			}
@@ -360,8 +398,8 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 				}
 			}
 			sort.SliceStable(shieldList, func(i, j int) bool {
-				pI := getAbsorptionPriority(shieldList[i])
-				pJ := getAbsorptionPriority(shieldList[j])
+				pI := s.absorbAuraPriority(shieldList[i])
+				pJ := s.absorbAuraPriority(shieldList[j])
 				if pI != pJ {
 					return pI < pJ
 				}

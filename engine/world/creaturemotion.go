@@ -2411,7 +2411,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// after absorption (C++ absorbs before DealDamage) — the application
 			// block below is then skipped: no health loss, no death, no pushback,
 			// no procs. lastCombatTime / in-combat still update, as entering
-			// combat precedes DealDamage in C++.
+			// combat precedes DealDamage in C++. shieldGateDamage keeps the
+			// pre-god value for the damage-shield gate below (Unit.cpp:1555:
+			// Damages is post-absorb but pre-god).
+			shieldGateDamage := damage
 			damage = target.Sess.negateGodModeDamage(damage)
 			// Unit::DealDamage (Unit.cpp:815-819): rage from fully absorbed
 			// damage — ahead of the application block the god arm skips (the
@@ -2509,6 +2512,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// trigger spell targeting the creature attacker.
 			if isPlayerVictim && target.Sess != nil {
 				target.Sess.procVictimAuraTriggers(ctx, motion.GUID, outcome, hitInfo, targetState, blocked, damage)
+			}
+			// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the player
+			// victim's SPELL_AURA_DAMAGE_SHIELD (15) effects strike the
+			// creature attacker after a damaging melee hit, gated on the
+			// pre-god post-absorb damage (see shieldGateDamage above).
+			if isPlayerVictim && target.Sess != nil && shieldGateDamage > 0 {
+				s.applyDamageShieldRetaliation(ctx,
+					damageShieldSide{sess: target.Sess, isPlayer: true},
+					damageShieldSide{key: creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}},
+					shieldGateDamage)
 			}
 			asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
 			target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)

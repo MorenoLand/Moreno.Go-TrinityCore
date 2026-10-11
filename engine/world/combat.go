@@ -708,6 +708,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
 			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 			// before the lethal / non-lethal legs (duel defeat included).
+			// shieldGateDamage keeps the pre-god value: C++ DealMeleeDamage
+			// gates the damage-shield block on damageInfo->Damages (post-
+			// absorb, pre-god — the god early-return never zeroes Damages),
+			// so a god-mode victim's shields still strike (Unit.cpp:1555).
+			shieldGateDamage := damage
 			damage = playerSess.negateGodModeDamage(damage)
 			// Unit::DealDamage (Unit.cpp:815-819): rage from fully absorbed
 			// damage — the god arm above returns before this leg in C++.
@@ -784,6 +789,19 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					playerSess.procDamageAuras(true, damage)
 					playerSess.sendPlayerUpdate()
 				}
+			}
+			// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the victim's
+			// SPELL_AURA_DAMAGE_SHIELD (15) effects strike the attacker
+			// after a damaging melee hit. Gated on the pre-god post-absorb
+			// damage (see shieldGateDamage above): C++ checks
+			// Damages[0]+Damages[1] after DealDamage ran CalcAbsorbResist,
+			// so a fully absorbed hit triggers nothing, but god-mode
+			// negation does not stop the shields.
+			if shieldGateDamage > 0 {
+				s.server.applyDamageShieldRetaliation(ctx,
+					damageShieldSide{sess: playerSess, isPlayer: true},
+					damageShieldSide{sess: s, isPlayer: true},
+					shieldGateDamage)
 			}
 			return
 		}
@@ -942,6 +960,15 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 		s.server.procCreatureDamageAuras(creatureAuraKeyForTarget(target), true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the creature victim's
+		// SPELL_AURA_DAMAGE_SHIELD (15) effects strike the attacker after a
+		// damaging melee hit (post-absorb damage; no god arm on this path).
+		if damage > 0 {
+			s.server.applyDamageShieldRetaliation(ctx,
+				damageShieldSide{key: creatureAuraKeyForTarget(target)},
+				damageShieldSide{sess: s, isPlayer: true},
+				damage)
+		}
 	}
 }
 

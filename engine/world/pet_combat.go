@@ -656,6 +656,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, targetSess)
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 		// after the attacker-state update (sent pre-DealDamage in C++).
+		// shieldGateDamage keeps the pre-god value for the damage-shield
+		// gate below (Unit.cpp:1555).
+		shieldGateDamage := damage
 		damage = targetSess.negateGodModeDamage(damage)
 		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 		if owner != nil && damage > 0 {
@@ -729,6 +732,16 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			actorGUID:      motion.GUID,
 			damage:         damage,
 		})
+		// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the player victim's
+		// SPELL_AURA_DAMAGE_SHIELD (15) effects strike the pet attacker
+		// after a damaging melee hit, gated on the pre-god damage (see
+		// shieldGateDamage above).
+		if shieldGateDamage > 0 {
+			s.applyDamageShieldRetaliation(ctx,
+				damageShieldSide{sess: targetSess, isPlayer: true},
+				damageShieldSide{key: creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}},
+				shieldGateDamage)
+		}
 	} else {
 		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 		if owner != nil && damage > 0 {
@@ -857,6 +870,16 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			actorGUID:      motion.GUID,
 			damage:         damage,
 		})
+		// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the creature victim's
+		// SPELL_AURA_DAMAGE_SHIELD (15) effects strike the pet attacker
+		// after a damaging melee hit. (The pet path models no absorb arm,
+		// so the gate is the post-armor damage.)
+		if damage > 0 {
+			s.applyDamageShieldRetaliation(ctx,
+				damageShieldSide{key: creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}},
+				damageShieldSide{key: creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}},
+				damage)
+		}
 	}
 }
 

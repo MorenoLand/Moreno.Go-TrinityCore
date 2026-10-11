@@ -11454,6 +11454,7 @@ const (
 	auraModHealing                   uint32 = 115 // SPELL_AURA_MOD_HEALING — Amplify/Dampen Magic arm of heal DoneAdvertisedBenefit (Unit.cpp:7554)
 	auraModHealingDonePercent        uint32 = 136 // SPELL_AURA_MOD_HEALING_DONE_PERCENT (Unit.cpp:7656)
 	auraModHealingDone               uint32 = 135 // SPELL_AURA_MOD_HEALING_DONE — caster's flat advertised-benefit auras (Unit.cpp:7764-7771)
+	spellAuraDamageShield            uint32 = 15  // SPELL_AURA_DAMAGE_SHIELD — retaliation handled in Unit::DealMeleeDamage (Unit.cpp:1555-1600), see damage_shield.go
 )
 
 // spellBonusEntry mirrors SpellBonusEntry (SpellMgr.h:284): one spell_bonus_data
