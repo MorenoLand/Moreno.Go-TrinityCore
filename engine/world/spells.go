@@ -18165,15 +18165,23 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 // SpellAuraEffects.cpp:5121 (periodic damage 3), 5241 (periodic leech 53),
 // and 5454 (mana leech 64) — "Consecrate ticks can miss". Health funnel
 // (62) and power burn (162) carry no such gate in C++ and are excluded.
-// Only the base level-diff miss term is bridged: AOE-avoidance, attacker
-// and victim hit-chance auras, victim CR_HIT_TAKEN_SPELL, spellmods, the
-// mechanic/debuff-resist and deflect rolls, and SPELL_ATTR3_IGNORE_HIT_RESULT
-// have no Go model and stay unbridged.
-func persistentAreaTickMissed(aura *activeAura, victimLevel uint8, isPlayerVictim bool) bool {
+// The caster's m_modSpellHitChance arm of WorldObject::MagicSpellHitResult
+// (Object.cpp:2555) runs for creature casters: their live
+// SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum folds in via the
+// HandleModSpellHitChance creature arm. Player casters stay parked (no
+// caster session in this path). Documented deltas: SPELLMOD_RESIST_MISS_CHANCE
+// spellmods, the mechanic/debuff-resist and deflect rolls,
+// SPELL_ATTR3_IGNORE_HIT_RESULT, the victim-side 186/160 aura arms, and the
+// victim CR_HIT_TAKEN_SPELL rating leg have no Go model.
+func (s *Server) persistentAreaTickMissed(mapID, instanceID uint32, aura *activeAura, victimLevel uint8, isPlayerVictim bool) bool {
 	if aura == nil || !aura.PersistentAreaAura || aura.CasterLevel == 0 {
 		return false
 	}
-	return magicSpellHitResult(aura.CasterLevel, victimLevel, isPlayerVictim) != protocol.SpellMissNone
+	var bonusHit float64
+	if s != nil && aura.CasterGUID != 0 && s.findSessionByGUID(aura.CasterGUID) == nil {
+		bonusHit = float64(s.creatureAuraSpellHitSum(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: aura.CasterGUID}))
+	}
+	return magicSpellHitResult(aura.CasterLevel, victimLevel, isPlayerVictim, bonusHit) != protocol.SpellMissNone
 }
 
 // isBinarySpell checks whether a spell is binary (i.e. does not deal direct damage,
@@ -18666,6 +18674,14 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraGhost) {
 		s.player.PlayerFlags |= playerFlagGhost
 	}
+	// AuraEffect::HandlePreventResurrection apply leg
+	// (SpellAuraEffects.cpp:5035-5044): the release-timer byte flag leaves
+	// while a 314 aura sits on the player (hides "Release Spirit"); the
+	// remove leg below re-sets it on non-instanceable maps. No HasAuraType
+	// gate on either leg in C++.
+	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraPreventResurrection) {
+		s.player.PlayerFieldBytes &^= playerFieldByteReleaseTimer
+	}
 	// AuraEffect::HandleAuraModSkill apply leg
 	// (SpellAuraEffects.cpp:2559-2574): 30/98 effects adjust the
 	// temporary/permanent skill bonus (aura_skill.go).
@@ -18718,6 +18734,7 @@ func (s *session) removeAura(spellID uint32) {
 	var removedLinkedTriggers []linkedTriggerRef
 	wasPreparation := false
 	wasGhost := false
+	wasPreventResurrection := false
 	wasFactionAura := false
 	wasTransform := false
 	wasShapeshift := false
@@ -18822,6 +18839,10 @@ func (s *session) removeAura(spellID uint32) {
 			// (SpellAuraEffects.cpp:1568-1579): captured before Stopped is
 			// set — activeAuraHasEffect ignores stopped auras.
 			wasGhost = s.activeAuraHasEffect(aura, spellAuraGhost)
+			// AuraEffect::HandlePreventResurrection remove leg
+			// (SpellAuraEffects.cpp:5035-5044): captured before Stopped is
+			// set — activeAuraHasEffect ignores stopped auras.
+			wasPreventResurrection = s.activeAuraHasEffect(aura, spellAuraPreventResurrection)
 			// AuraEffect::HandleAuraModFaction remove leg: the native faction
 			// is restored and the PLAYER_CONTROLLED bit set again. C++ sets
 			// the bit unconditionally here (no HasAuraType gate), matching
@@ -19126,6 +19147,15 @@ func (s *session) removeAura(spellID uint32) {
 	if wasSetVehicle && s.player != nil && s.server != nil {
 		s.server.removeVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
 		s.sendPlayerVehicleData(0)
+	}
+	// AuraEffect::HandlePreventResurrection remove leg
+	// (SpellAuraEffects.cpp:5035-5044): the release-timer byte flag returns
+	// on non-instanceable maps when the 314 aura leaves the player. C++ has
+	// no HasAuraType gate here.
+	if wasPreventResurrection && s.player != nil && s.server != nil && s.server.Data != nil {
+		if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found && mapInfo.InstanceType == 0 {
+			s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
+		}
 	}
 	// AuraEffect::HandleAuraLinked remove leg (SpellAuraEffects.cpp:4898-4903):
 	// the linked trigger spell's aura leaves the target too, gated on the
@@ -22444,7 +22474,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
 		// ticks roll SpellHitResult per tick; missed ticks skip and log nothing.
-		if persistentAreaTickMissed(aura, ts.player.Level, true) {
+		if ts.server.persistentAreaTickMissed(ts.player.Map, ts.player.InstanceID, aura, ts.player.Level, true) {
 			return
 		}
 		if aura.AuraType == 89 {
@@ -22891,7 +22921,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
 		// per-tick miss gate as case 3.
-		if persistentAreaTickMissed(aura, ts.player.Level, true) {
+		if ts.server.persistentAreaTickMissed(ts.player.Map, ts.player.InstanceID, aura, ts.player.Level, true) {
 			return
 		}
 		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
@@ -23075,7 +23105,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	case 64: // SPELL_AURA_PERIODIC_MANA_LEECH
 		// SpellAuraEffects.cpp:5454 — the same persistent-area-aura
 		// per-tick miss gate as case 3.
-		if persistentAreaTickMissed(aura, ts.player.Level, true) {
+		if ts.server.persistentAreaTickMissed(ts.player.Map, ts.player.InstanceID, aura, ts.player.Level, true) {
 			return
 		}
 		// SpellAuraEffects.cpp:5441-5504 (HandlePeriodicManaLeechAuraTick):
@@ -23809,7 +23839,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
 		// ticks roll SpellHitResult per tick; a miss skips the tick but
 		// keeps the chain alive (true).
-		if persistentAreaTickMissed(aura, target.Level, false) {
+		if s.server.persistentAreaTickMissed(key.Map, key.InstanceID, aura, target.Level, false) {
 			return true
 		}
 		if aura.AuraType == 89 {
@@ -24341,7 +24371,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
 		// per-tick miss gate as case 3; a miss keeps the chain alive.
-		if persistentAreaTickMissed(aura, target.Level, false) {
+		if s.server.persistentAreaTickMissed(key.Map, key.InstanceID, aura, target.Level, false) {
 			return true
 		}
 		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
@@ -24543,7 +24573,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	case 64: // SPELL_AURA_PERIODIC_MANA_LEECH
 		// SpellAuraEffects.cpp:5454 — the same persistent-area-aura
 		// per-tick miss gate as case 3; a miss keeps the chain alive.
-		if persistentAreaTickMissed(aura, target.Level, false) {
+		if s.server.persistentAreaTickMissed(key.Map, key.InstanceID, aura, target.Level, false) {
 			return true
 		}
 		// SpellAuraEffects.cpp:5441-5504 (HandlePeriodicManaLeechAuraTick) on

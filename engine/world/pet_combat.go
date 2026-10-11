@@ -2016,7 +2016,18 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	resisted := uint32(0)
 	absorbed := uint32(0)
 	if target.GUID != caster.GUID {
-		miss := magicSpellHitResult(uint8(maxUint32(caster.Level, 1)), target.Level, isPlayerVictim)
+		// WorldObject::MagicSpellHitResult (Object.cpp:2555): the caster's
+		// m_modSpellHitChance arm runs for any unit caster — the pet's live
+		// SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum (AuraEffect::
+		// HandleModSpellHitChance's creature arm) folds in here in percent
+		// units. Player-cast pet buffs land in the creature aura store, so
+		// the fold sees them; victim-side 186/160 arms stay parked (no
+		// misc-masked creature aura sum), same as the player path.
+		bonusHit := float64(0)
+		if s.server != nil {
+			bonusHit = float64(s.server.creatureAuraSpellHitSum(creatureAuraKeyForMotion(caster)))
+		}
+		miss := magicSpellHitResult(uint8(maxUint32(caster.Level, 1)), target.Level, isPlayerVictim, bonusHit)
 		if miss != protocol.SpellMissNone {
 			damage = 0
 			hitInfo = 0x01

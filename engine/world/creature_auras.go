@@ -170,6 +170,43 @@ func (s *Server) petBaseArmorBonus(key creatureAuraKey, isPet bool) float64 {
 	return bonus
 }
 
+// creatureAuraSpellHitSum mirrors the creature half of
+// AuraEffect::HandleModSpellHitChance (SpellAuraEffects.cpp:3839): the summed
+// amounts of SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) effects on the creature's
+// live auras. C++ accumulates the amounts straight into m_modSpellHitChance
+// (no misc/school gate), and WorldObject::MagicSpellHitResult
+// (Object.cpp:2555) consumes that field for any unit caster, so creature
+// casters fold it into the spell-hit roll in percent units.
+func (s *Server) creatureAuraSpellHitSum(key creatureAuraKey) int32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 0
+	}
+	var sum int32
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != spellAuraModSpellHitChance {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				sum += aura.Amounts[index]
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return sum
+}
+
 // creatureHasAuraType reports whether the creature carries a live (unstopped)
 // aura whose stored AuraType matches, mirroring Unit::HasAuraType for the
 // byte-flag folds in the creature update builder (the C++ remove legs gate

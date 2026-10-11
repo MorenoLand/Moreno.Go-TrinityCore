@@ -464,8 +464,20 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	// SpiritOfRedemtionTalent timeout)").
 	s.pvpDeath = pvpDeath
 	if !spiritOfRedemption {
-		if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
+		// Player::KillPlayer (Player.cpp:4783): the release-timer byte flag
+		// is set only on non-instanceable maps AND while the victim carries
+		// no SPELL_AURA_PREVENT_RESURRECTION (314) aura — ApplyModFlag with a
+		// false leg clears it, so a 314-marked death hides "Release Spirit".
+		instanceable := false
+		if s.server != nil && s.server.Data != nil {
+			if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found {
+				instanceable = mapInfo.InstanceType != 0
+			}
+		}
+		if s.playerLoaded && !instanceable && !s.hasAuraType(spellAuraPreventResurrection) {
 			s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
+		} else if s.playerLoaded {
+			s.player.PlayerFieldBytes &^= playerFieldByteReleaseTimer
 		}
 		s.deathTimer = time.Now().Add(autoRepopDelay)
 	}
