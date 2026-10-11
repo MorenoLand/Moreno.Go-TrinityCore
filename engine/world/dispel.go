@@ -1352,6 +1352,14 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 
 	if targetSess != nil && targetSess.player != nil {
 		targetSess.castMu.Lock()
+		// Spell::EffectDispelMechanic (SpellEffects.cpp:4749): each
+		// mechanic-matching aura is dispelled only on a successful
+		// Aura::CalcDispelChance roll — 100 minus the target's
+		// SPELL_AURA_MOD_DISPEL_RESIST total on offensive dispels
+		// (SpellAuras.cpp:1218-1236; the aura-caster SPELLMOD term has no
+		// Go model, matching the dispel-path convention).
+		offensive := !s.isFriendlyToTarget(targetGUID, targetSess)
+		chance := targetSess.calcDispelChanceLocked(offensive)
 		var toRemove []uint32
 		for spellID, aura := range targetSess.activeAuras {
 			if aura == nil || aura.Stopped {
@@ -1380,7 +1388,9 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 				}
 			}
 			if matchesMechanic {
-				toRemove = append(toRemove, spellID)
+				if int32(rand.IntN(100)) < chance {
+					toRemove = append(toRemove, spellID)
+				}
 			}
 		}
 		targetSess.castMu.Unlock()
@@ -1392,6 +1402,24 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 		s.server.auraMu.Lock()
 		key := creatureAuraKeyForPlayer(*s.player, targetGUID)
 		auras := s.server.activeCreatureAuras[key]
+		// Creature-side CalcDispelChance: same 100-minus-resist roll as
+		// the creature dispel path (dispel.go getDispellableAuraListForCreature
+		// convention); the aura-caster SPELLMOD term has no Go model.
+		chance := int32(100)
+		if !s.isFriendlyToTarget(targetGUID, nil) {
+			resist := int32(0)
+			for _, ra := range auras {
+				if ra != nil && !ra.Stopped && ra.AuraType == spellAuraModDispelResist {
+					resist += int32(ra.Amount)
+				}
+			}
+			if resist < 0 {
+				resist = 0
+			} else if resist > 100 {
+				resist = 100
+			}
+			chance = 100 - resist
+		}
 		var toRemove []struct {
 			spellID uint32
 			slot    uint8
@@ -1401,10 +1429,12 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 				continue
 			}
 			if aura.Mechanic == mechanic || (mechanic == 5 && aura.AuraType == 7) || (mechanic == 12 && aura.AuraType == 12) {
-				toRemove = append(toRemove, struct {
-					spellID uint32
-					slot    uint8
-				}{spellID: spellID, slot: aura.Slot})
+				if int32(rand.IntN(100)) < chance {
+					toRemove = append(toRemove, struct {
+						spellID uint32
+						slot    uint8
+					}{spellID: spellID, slot: aura.Slot})
+				}
 			}
 		}
 		s.server.auraMu.Unlock()

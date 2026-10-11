@@ -345,8 +345,9 @@ const (
 	spellEffectSkillStep               = 44  // SPELL_EFFECT_SKILL_STEP (SpellEffects.cpp:113)
 	spellEffectHealMaxHealth           = 67
 	spellEffectCreateItem              = 24
-	spellEffectCreateItem2             = 70
-	spellEffectCreateRandomItem        = 59 // SPELL_EFFECT_CREATE_RANDOM_ITEM (SpellEffects.cpp:128)
+	spellEffectCreateItem2             = 157 // SPELL_EFFECT_CREATE_ITEM_2 (SharedDefines.h:968; EffectCreateItem2, SpellEffects.cpp:1688)
+	spellEffectPull                    = 70  // SPELL_EFFECT_PULL (SharedDefines.h:881; EffectPull is EffectNULL, SpellEffects.cpp:2541-2545 — no-op)
+	spellEffectCreateRandomItem        = 59  // SPELL_EFFECT_CREATE_RANDOM_ITEM (SpellEffects.cpp:128)
 	spellEffectLearnSpell              = 36
 	spellEffectLearnPetSpell           = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
 	spellEffectAddExtraAttacks         = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
@@ -376,6 +377,7 @@ const (
 	spellEffectSummonRafFriend         = 152 // SPELL_EFFECT_SUMMON_RAF_FRIEND (SharedDefines.h:963)
 	spellEffectLeap                    = 29  // SPELL_EFFECT_LEAP (SharedDefines.h:840)
 	spellEffectTeleportUnitsFaceCaster = 43  // SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER (SharedDefines.h:854)
+	spellEffectTeleportUnits           = 5   // SPELL_EFFECT_TELEPORT_UNITS (SharedDefines.h:816; EffectTeleportUnits, SpellEffects.cpp:1199)
 	spellEffectJump                    = 41  // SPELL_EFFECT_JUMP (SharedDefines.h:852)
 	spellEffectJumpDest                = 42  // SPELL_EFFECT_JUMP_DEST (SharedDefines.h:853)
 	spellEffectLeapBack                = 138 // SPELL_EFFECT_LEAP_BACK (SharedDefines.h:949)
@@ -9690,7 +9692,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
-			case 5: // SPELL_EFFECT_TELEPORT_UNITS
+			case spellEffectTeleportUnits: // 5: SPELL_EFFECT_TELEPORT_UNITS (EffectTeleportUnits, SpellEffects.cpp:1199)
 				if s.player == nil {
 					break
 				}
@@ -9708,12 +9710,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						_ = s.server.WorldStore.DB.QueryRowContext(effCtx, "SELECT map, position_x, position_y, position_z FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", s.player.Race, s.player.Class).Scan(&hbMap, &hbX, &hbY, &hbZ)
 					}
 					s.teleportTo(hbMap, hbX, hbY, hbZ, s.player.Orientation)
+					s.teleportEffectUnitTargets(hitTargets, hbMap, hbX, hbY, hbZ, s.player.Orientation)
 				} else if x, y, z, ori, mapID, ok := s.spellTargetPositionDest(effCtx, spell, spellID, uint32(effectIndex)); ok {
 					// Spell::SelectImplicitCasterDestTargets
 					// (Spell.cpp:1342-1357): TARGET_DEST_DB (17) — fixed
 					// teleports (e.g. 3561 Teleport: Stormwind) resolve the
 					// destination from `spell_target_position`.
 					s.teleportTo(mapID, x, y, z, ori)
+					s.teleportEffectUnitTargets(hitTargets, mapID, x, y, z, ori)
 				} else {
 					// Spell::SelectImplicitCasterDestTargets
 					// (Spell.cpp:1353-1357): no row falls back to the object
@@ -9723,7 +9727,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// orientation substitutes the unit target's orientation
 					// (SpellEffects.cpp:1222); the unit target here is the
 					// caster. With no object target the dest stays the
-					// caster position (Spell.cpp:1314) — a no-op.
+					// caster position (Spell.cpp:1314) — a no-op for the
+					// caster, but non-caster unit targets still gather there.
 					if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 						if obj, found := s.getCombatTarget(effCtx, target.UnitGUID); found {
 							ori := obj.Orientation
@@ -9731,7 +9736,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								ori = s.player.Orientation
 							}
 							s.teleportTo(s.player.Map, obj.X, obj.Y, obj.Z, ori)
+							s.teleportEffectUnitTargets(hitTargets, s.player.Map, obj.X, obj.Y, obj.Z, ori)
 						}
+					} else {
+						s.teleportEffectUnitTargets(hitTargets, s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation)
 					}
 				}
 			case 162: // SPELL_EFFECT_TALENT_SPEC_SELECT
@@ -9915,8 +9923,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectCreateItem: // 24: SPELL_EFFECT_CREATE_ITEM
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
-			case spellEffectCreateItem2: // 70: SPELL_EFFECT_CREATE_ITEM_2
+			case spellEffectCreateItem2: // 157: SPELL_EFFECT_CREATE_ITEM_2 (EffectCreateItem2, SpellEffects.cpp:1688)
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
+			case spellEffectPull: // 70: SPELL_EFFECT_PULL — EffectPull calls EffectNULL (SpellEffects.cpp:2541-2545), no-op
 			case spellEffectCreateRandomItem: // 59: SPELL_EFFECT_CREATE_RANDOM_ITEM
 				s.handleEffectCreateRandomItem(effCtx, targetGUID, spell, eff)
 			case spellEffectSkinning: // 95: SPELL_EFFECT_SKINNING
@@ -28266,7 +28275,7 @@ func (s *session) handleEffectCreateRandomItem(ctx context.Context, targetGUID u
 }
 
 // spellIsLootCrafting mirrors SpellInfo::IsLootCrafting (SpellInfo.cpp:939):
-// effect 59 (SPELL_EFFECT_CREATE_RANDOM_ITEM), or effect 70
+// effect 59 (SPELL_EFFECT_CREATE_RANDOM_ITEM), or effect 157
 // (SPELL_EFFECT_CREATE_ITEM_2) with a totem category, a totem + icon 1
 // (the different random cards from Inscription), or no explicit item.
 func spellIsLootCrafting(spell wotlk.Spell) bool {
@@ -28332,6 +28341,55 @@ func (s *session) handleEffectLeap(ctx context.Context, targetGUID uint64, targe
 		return
 	}
 	targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation)
+}
+
+// teleportEffectUnitTargets is the Spell::EffectTeleportUnits
+// (SpellEffects.cpp:1199-1232) per-unit-target arm for non-caster hit
+// targets: the in-flight gate skips flying players (C++ :1204), a dest on
+// the target's own map lands as a near teleport (Unit::NearTeleportTo,
+// :1224-1226), a cross-map player takes the far-teleport path
+// (Player::TeleportTo, :1227-1228), and a cross-map creature is an error
+// skip (:1229-1232). The caster keeps its own existing teleport calls in
+// the case arms above (the playtested homebind/DB paths), so this skips
+// the caster session.
+func (s *session) teleportEffectUnitTargets(hitTargets []uint64, mapID uint32, x, y, z, ori float32) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 || effectTarget == s.playerGUID {
+			continue
+		}
+		if targetSess := s.server.findSessionByGUID(effectTarget); targetSess != nil && targetSess.player != nil {
+			if targetSess.inFlight {
+				continue
+			}
+			if targetSess.player.Map == mapID {
+				targetSess.nearTeleportMove(x, y, z, ori)
+			} else {
+				targetSess.teleportTo(mapID, x, y, z, ori)
+			}
+			continue
+		}
+		if uint16(effectTarget>>48) != 0xF130 {
+			continue
+		}
+		motion := s.findCreatureMotion(effectTarget)
+		if motion == nil {
+			continue
+		}
+		s.server.motionMu.Lock()
+		sameMap := motion.Map == mapID
+		if sameMap {
+			motion.X, motion.Y, motion.Z = x, y, z
+		}
+		instMap, instanceID := motion.Map, motion.InstanceID
+		s.server.motionMu.Unlock()
+		if !sameMap {
+			continue
+		}
+		s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, effectTarget, x, y, z)
+	}
 }
 
 // handleEffectTeleUnitsFaceCaster mirrors Spell::EffectTeleUnitsFaceCaster
