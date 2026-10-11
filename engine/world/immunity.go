@@ -441,6 +441,50 @@ func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
 	return false
 }
 
+// playerIsIsolated mirrors the UNIT_STATE_ISOLATED leg
+// HandleAuraModSchoolImmunity maintains (SpellAuraEffects.cpp:3142-3182): a
+// SPELL_AURA_SCHOOL_IMMUNITY aura whose spell Mechanic is MECHANIC_BANISH
+// adds the state on REAL apply and clears it on remove only when no other
+// banish-mechanic school-immunity aura remains on the target. Go derives it
+// live from the active auras — the remove-time remaining-aura recheck folds
+// into the scan, so no extra state needs syncing. The periodic tick arms
+// (SpellAuraEffects.cpp:5113-5596) consult it before the tick lands.
+func (s *session) playerIsIsolated() bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	for _, aura := range s.activeAuras {
+		if aura == nil {
+			continue
+		}
+		if aura.AuraType == spellAuraSchoolImmunity && aura.Mechanic == mechanicBanish {
+			return true
+		}
+	}
+	return false
+}
+
+// creatureIsIsolated is the creature-victim counterpart: any active
+// banish-mechanic school-immunity aura on the motion isolates it.
+func (srv *Server) creatureIsIsolated(key creatureAuraKey) bool {
+	if srv == nil {
+		return false
+	}
+	srv.auraMu.Lock()
+	defer srv.auraMu.Unlock()
+	for _, aura := range srv.activeCreatureAuras[key] {
+		if aura == nil {
+			continue
+		}
+		if aura.AuraType == spellAuraSchoolImmunity && aura.Mechanic == mechanicBanish {
+			return true
+		}
+	}
+	return false
+}
+
 // hasAuraInLock checks if the session has an aura while castMu is already held.
 func (s *session) hasAuraInLock(spellID uint32) bool {
 	if s.auras != nil {
