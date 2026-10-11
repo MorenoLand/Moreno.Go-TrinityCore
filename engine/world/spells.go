@@ -21606,13 +21606,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// Periodic-tick aura procs (SpellAuraEffects.cpp:5210-5225): the
 		// tick's tail runs Unit::ProcSkillsAndAuras with DONE_PERIODIC /
 		// TAKEN_PERIODIC(+TAKEN_DAMAGE), PROC_SPELL_TYPE_DAMAGE,
-		// PROC_SPELL_PHASE_HIT. The done side runs on the caster's session,
-		// the taken side on the victim's session. Unknown-spell ticks skip
-		// (the proc gates need the spell data) — data gap, documented.
+		// PROC_SPELL_PHASE_HIT. The done side runs on the caster's session
+		// when online, else on the caster creature's own auras (C++ runs
+		// the done leg on any caster unit type); the taken side runs on
+		// the victim's session. Unknown-spell ticks skip (the proc gates
+		// need the spell data) — data gap, documented.
 		if tickKnown {
 			procCtx := context.Background()
 			if tickCaster != nil {
 				tickCaster.procPeriodicDamageTickAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.TargetGUID, crit, absorbed, resisted, dmg)
+			} else if casterMotion := ts.findCreatureMotion(aura.CasterGUID); casterMotion != nil {
+				ts.server.fireCreaturePeriodicDamageTickProcs(procCtx, casterMotion, nil, aura.TargetGUID, aura.CasterGUID, tickSpell, aura.SchoolMask, crit, absorbed, resisted, dmg)
 			}
 			ts.procPeriodicDamageTickTakenAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.CasterGUID, crit, absorbed, resisted, dmg)
 		}
@@ -21754,7 +21758,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// tick's tail runs Unit::ProcSkillsAndAuras with DONE_PERIODIC /
 		// TAKEN_PERIODIC, PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT and a
 		// crit-conditional hit mask. The done side runs on the caster's
-		// session, the taken side on the heal target's session.
+		// session when online, else on the caster creature's own auras
+		// (C++ runs the done leg on any caster unit type); the taken side
+		// runs on the heal target's session.
 		// SpellAuraEffects.cpp:5436 — %-based (obs-mod-health) ticks never
 		// proc; SpellAuraEffects.cpp:5429-5430 — item-cast heals never proc.
 		// Unknown-spell ticks skip (the proc gates need the spell data) —
@@ -21763,6 +21769,8 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			procCtx := context.Background()
 			if healCaster != nil {
 				healCaster.procPeriodicHealTickAuraTriggers(procCtx, healSpell, aura.SchoolMask, aura.TargetGUID, healCrit)
+			} else if casterMotion := ts.findCreatureMotion(aura.CasterGUID); casterMotion != nil {
+				ts.server.fireCreaturePeriodicHealTickProcs(procCtx, casterMotion, nil, aura.TargetGUID, aura.CasterGUID, healSpell, aura.SchoolMask, healCrit)
 			}
 			ts.procPeriodicHealTickTakenAuraTriggers(procCtx, healSpell, aura.SchoolMask, aura.CasterGUID, healCrit)
 		}
@@ -21940,11 +21948,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		dealt := ts.applyPeriodicTickDamageToPlayer(dmg, targetHealth, aura)
 		// Periodic-tick aura procs (SpellAuraEffects.cpp:5295-5305): the
 		// leech tick's damage half runs the same Unit::ProcSkillsAndAuras
-		// tail as the damage tick, before the caster heal below.
+		// tail as the damage tick, before the caster heal below. The done
+		// side runs on the caster's session when online, else on the
+		// caster creature's own auras.
 		if tickKnown {
 			procCtx := context.Background()
 			if tickCaster != nil {
 				tickCaster.procPeriodicDamageTickAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.TargetGUID, crit, absorbed, resisted, dmg)
+			} else if casterMotion := ts.findCreatureMotion(aura.CasterGUID); casterMotion != nil {
+				ts.server.fireCreaturePeriodicDamageTickProcs(procCtx, casterMotion, nil, aura.TargetGUID, aura.CasterGUID, tickSpell, aura.SchoolMask, crit, absorbed, resisted, dmg)
 			}
 			ts.procPeriodicDamageTickTakenAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.CasterGUID, crit, absorbed, resisted, dmg)
 		}
