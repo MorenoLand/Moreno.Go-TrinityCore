@@ -2198,8 +2198,18 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		triggered = auraMapHasTriggerSpell(s, s.server.activeCreatureAuras[petKey], spellID)
 		s.server.auraMu.Unlock()
 	}
-	if spellErr != nil || !found || spell.Attributes&spellAttributePassive != 0 || (!petKnows && !triggered) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+	// HandlePetCastSpellOpcode (PetHandler.cpp:775-797): an unknown spell id,
+	// a passive spell, or an unlearned non-triggered spell ends the handler
+	// SILENTLY — C++ logs (unknown id) and returns without any packet, so no
+	// SMSG_PET_CAST_FAILED is sent on these three arms.
+	if spellErr != nil || !found {
+		s.debug("pet cast spell", "account", s.accountName, "pet", petGUID, "spell", spellID, "reason", "unknown spell")
+		return true
+	}
+	if spell.Attributes&spellAttributePassive != 0 {
+		return true
+	}
+	if !petKnows && !triggered {
 		return true
 	}
 	// Spell::CheckPetCast (Spell.cpp:6219-6220): the UNIT_STATE_CASTING arm has
@@ -2232,42 +2242,9 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadImplicitTargets), true)
 		return true
 	}
-	// SpellInfo::CheckTarget GM/invisibility leg (SpellInfo.cpp:1736-1743) via
-	// the CheckCast tail (Spell.cpp:6254): a GM-mode or GM-invisible player
-	// target fails with SPELL_FAILED_BM_OR_INVISGOD. The pet caster's
-	// GetAffectingPlayer is the session player, so the gate fires for harmful
-	// and helpful casts alike, like C++; self-targets are exempt
-	// (unitTarget != caster).
-	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID && s.server != nil && s.server.gmAttackTargetBlocked(target.UnitGUID) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBmOrInvisGod), true)
-		return true
-	}
-	// Power (Spell.cpp:6237-6242) and cooldown (Spell.cpp:6244-6247) arms are
-	// already covered below by checkPetSpellPower and the motion
-	// SpellCooldowns/SpellCategoryCooldowns checks. The GCD arm
-	// (Spell.cpp:6249-6252) has no Go bridge — Go never applies or tracks a
-	// global cooldown on pet casts (only the NoGCD wire flag at
-	// pet_combat.go:626). The CheckCast(true) tail (Spell.cpp:6254) is out of
-	// scope: the pet path runs no CheckCast gauntlet.
-	if isHarmfulSpell(spell) && target.UnitGUID == motion.GUID && !isSelfCastOnly(spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
-		return true
-	}
-	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID {
-		targetState, targetFound := s.getCombatTarget(ctx, target.UnitGUID)
-		if !targetFound || targetState.Map != motion.Map {
-			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
-			return true
-		}
-		if spell.RangeIndex > 0 {
-			if rangeInfo, rangeFound, rangeErr := s.server.Data.SpellRange(spell.RangeIndex); rangeErr == nil && rangeFound && rangeInfo.MaxHostile > 0 {
-				if distance3D(motion.X, motion.Y, motion.Z, targetState.X, targetState.Y, targetState.Z) > float64(rangeInfo.MaxHostile)+5 {
-					_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, 97), true)
-					return true
-				}
-			}
-		}
-	}
+	// Spell::CheckPetCast (Spell.cpp:6237-6247): power precedes cooldown, and
+	// both precede the CheckCast(true) tail (Spell.cpp:6254) — a cast that
+	// fails power and range together reports the power failure, like C++.
 	if !s.checkPetSpellPower(motion, spell, castCount) {
 		return true
 	}
@@ -2288,6 +2265,44 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	if !categoryEnd.IsZero() && !categoryEnd.Before(now) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 		return true
+	}
+	// The GCD arm (Spell.cpp:6249-6252) has no Go bridge — Go never applies or
+	// tracks a global cooldown on pet casts (only the NoGCD wire flag at
+	// pet_combat.go:626).
+	// CheckCast(true) tail (Spell.cpp:6254), modeled subset in C++ relative
+	// order (CheckTarget legs ahead of CheckRange). The rest of the gauntlet
+	// is out of scope: the pet path runs no CheckCast.
+	// SpellInfo::CheckTarget GM/invisibility leg (SpellInfo.cpp:1736-1743):
+	// a GM-mode or GM-invisible player target fails with
+	// SPELL_FAILED_BM_OR_INVISGOD. The pet caster's GetAffectingPlayer is the
+	// session player, so the gate fires for harmful and helpful casts alike,
+	// like C++; self-targets are exempt (unitTarget != caster).
+	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID && s.server != nil && s.server.gmAttackTargetBlocked(target.UnitGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBmOrInvisGod), true)
+		return true
+	}
+	// SpellInfo::CheckTarget (SpellInfo.cpp:1636-1638):
+	// SPELL_ATTR1_CANT_TARGET_SELF with caster == target fails
+	// SPELL_FAILED_BAD_TARGETS. (The old isHarmfulSpell proxy is dropped:
+	// C++ keys on the attribute, not harmfulness.)
+	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && target.UnitGUID == motion.GUID {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+		return true
+	}
+	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID {
+		targetState, targetFound := s.getCombatTarget(ctx, target.UnitGUID)
+		if !targetFound || targetState.Map != motion.Map {
+			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+			return true
+		}
+		if spell.RangeIndex > 0 {
+			if rangeInfo, rangeFound, rangeErr := s.server.Data.SpellRange(spell.RangeIndex); rangeErr == nil && rangeFound && rangeInfo.MaxHostile > 0 {
+				if distance3D(motion.X, motion.Y, motion.Z, targetState.X, targetState.Y, targetState.Z) > float64(rangeInfo.MaxHostile)+5 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, 97), true)
+					return true
+				}
+			}
+		}
 	}
 	if !s.executePetSpellWithOptions(ctx, motion, spell, castCount, target, triggered) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
