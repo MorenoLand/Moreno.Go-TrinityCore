@@ -244,13 +244,7 @@ func (s *session) calculateSpellCritChance(targetGUID uint64, schoolMask uint8, 
 	critPct = s.applySpellModFloat(spell, spellModCriticalChance, critPct)
 
 	// 5. Defender resilience reduction (in PvP)
-	if targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
-		if vicSess := s.server.findSessionByGUID(targetGUID); vicSess != nil {
-			critBP := int32(math.Round(critPct * 100))
-			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenSpell, &critBP)
-			critPct = float64(critBP) / 100.0
-		}
-	}
+	critPct = s.applyTakenCritResilience(targetGUID, critPct)
 
 	if critPct < 0 {
 		critPct = 0
@@ -260,6 +254,23 @@ func (s *session) calculateSpellCritChance(targetGUID uint64, schoolMask uint8, 
 	}
 
 	return critPct / 100.0
+}
+
+// applyTakenCritResilience mirrors the resilience arm of
+// Unit::SpellCritChanceTaken (Unit.cpp:7234-7235): the victim's resilience
+// reduces the crit-chance base, in percent units. Extracted from
+// calculateSpellCritChance so the INHERIT_CRIT_FROM_AURA seed path
+// (directSpellCritChance) can run the same taken arm on the inherited base.
+func (s *session) applyTakenCritResilience(targetGUID uint64, chancePct float64) float64 {
+	if s == nil || s.server == nil || targetGUID == 0 || targetGUID == s.playerGUID {
+		return chancePct
+	}
+	if vicSess := s.server.findSessionByGUID(targetGUID); vicSess != nil {
+		critBP := int32(math.Round(chancePct * 100))
+		vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenSpell, &critBP)
+		chancePct = float64(critBP) / 100.0
+	}
+	return chancePct
 }
 
 // playerAuraModifierByMiscMask sums the active amounts of auras of the given
@@ -389,14 +400,16 @@ func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8, spell wotlk
 // directSpellCritChance is the full direct-spell crit probability: the
 // CU_CAN_CRIT gate, the done side (calculateSpellCritChance), and the
 // victim-side taken arms below. Mirrors Spell::DoEffectOnLaunchTarget
-// (Spell.cpp:7784-7788): m_spellValue->CriticalChance override (no Go
-// model), then SpellCritChanceDone, then SpellCritChanceTaken. The
-// m_attackType routing from SpellInfo::GetAttackType (SpellInfo.cpp:1266)
+// (Spell.cpp:7784-7788): the m_spellValue->CriticalChance seed
+// (SPELLVALUE_CRIT_CHANCE, carried here as inheritCritBase in probability
+// units, 0 = unset) replaces the SpellCritChanceDone leg, then
+// SpellCritChanceTaken runs on top. The m_attackType routing from
+// SpellInfo::GetAttackType (SpellInfo.cpp:1266)
 // applies: melee/ranged-DmgClass spells use the weapon-crit done leg
 // (Unit::GetUnitCriticalChanceDone, Unit.cpp:2819) and the
 // GetUnitCriticalChanceTaken victim leg (Unit.cpp:2846); SPELL_DAMAGE_CLASS_NONE
 // spells never crit (both legs return 0).
-func (s *session) directSpellCritChance(ctx context.Context, target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
+func (s *session) directSpellCritChance(ctx context.Context, target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell, inheritCritBase float64) float64 {
 	if spell.Attributes&spellAttr0CuCanCrit == 0 {
 		return 0
 	}
@@ -404,7 +417,20 @@ func (s *session) directSpellCritChance(ctx context.Context, target combatTarget
 	case spellDamageClassMelee, spellDamageClassRanged:
 		return s.directWeaponCritChance(ctx, target, isPlayerVictim, schoolMask, spell)
 	case spellDamageClassMagic:
-		chance := s.calculateSpellCritChance(target.GUID, schoolMask, spell, false)
+		chance := inheritCritBase
+		if chance == 0 {
+			chance = s.calculateSpellCritChance(target.GUID, schoolMask, spell, false)
+		} else {
+			// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7788): the
+			// SPELLVALUE_CRIT_CHANCE seed (stored percent/100 at :7890)
+			// replaces the done leg, but the taken arms still run on top —
+			// resilience here (Unit::SpellCritChanceTaken, Unit.cpp:7234-7235),
+			// the 179/197 victim auras below. A zero seed falls back to the
+			// done leg exactly like C++'s if (!critChance). The
+			// melee/ranged-DmgClass seed arm (GetUnitCriticalChanceTaken on
+			// the inherited base) has no Go model and stays unbridged.
+			chance = s.applyTakenCritResilience(target.GUID, chance*100) / 100.0
+		}
 		return chance + s.directSpellTakenCritBonus(target, isPlayerVictim, schoolMask, spell)
 	default:
 		return 0
@@ -412,8 +438,8 @@ func (s *session) directSpellCritChance(ctx context.Context, target combatTarget
 }
 
 // rollDirectSpellCrit rolls a direct-spell crit including the victim taken arms.
-func (s *session) rollDirectSpellCrit(ctx context.Context, target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) bool {
-	return rand.Float64() < s.directSpellCritChance(ctx, target, isPlayerVictim, schoolMask, spell)
+func (s *session) rollDirectSpellCrit(ctx context.Context, target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell, inheritCritBase float64) bool {
+	return rand.Float64() < s.directSpellCritChance(ctx, target, isPlayerVictim, schoolMask, spell, inheritCritBase)
 }
 
 // spellWeaponAttackType mirrors SpellInfo::GetAttackType (SpellInfo.cpp:1266-1290),

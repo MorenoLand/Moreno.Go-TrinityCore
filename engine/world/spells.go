@@ -9446,7 +9446,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							}
 						}
 					}
-					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, targetHeal, effectIndex, doneBonus)
+					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, targetHeal, effectIndex, doneBonus, 0)
 					// Spell::EffectHeal (SpellEffects.cpp:1468-1470): the
 					// Grievous Bite (48920) removal arm lives in EffectHeal
 					// (10) only — EffectHealPct (136), EffectHealMechanical
@@ -9471,7 +9471,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
 						continue
 					}
-					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, mechHeal, effectIndex, true)
+					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, mechHeal, effectIndex, true, 0)
 				}
 			case spellEffectEnergize:
 				// Spell::EffectEnergize (SpellEffects.cpp:1775-1845) — audited;
@@ -12021,7 +12021,7 @@ func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID ui
 		return s.executeDirectSpellDamageNoCrit(ctx, targetGUID, spellID, damage, schoolMask)
 	}
 	if reflected {
-		return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, true)
+		return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, true, 0)
 	}
 	return s.executeDirectSpellDamage(ctx, targetGUID, spellID, damage, schoolMask)
 }
@@ -12049,11 +12049,11 @@ func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64
 	if s.server != nil {
 		s.server.broadcastToInstance(target.Map, target.InstanceID, uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), s)
 	}
-	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true, false, false)
+	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true, false, false, 0)
 }
 
 func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) uint32 {
-	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, false)
+	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, false, 0)
 }
 
 // executeDirectSpellDamageNoCrit runs the direct-spell-damage pipeline with
@@ -12064,7 +12064,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 // straight into CalculateSpellDamageTaken and the damage log — never a miss,
 // never a crit.
 func (s *session) executeDirectSpellDamageNoCrit(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) uint32 {
-	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, true, false)
+	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, true, false, 0)
 }
 
 // spellMechanicMask mirrors TrinityCore SpellInfo::GetAllEffectsMechanicMask
@@ -12747,9 +12747,20 @@ func (s *session) spellDamagePushesBack(spellID uint32, victimGUID uint64) bool 
 	return spell.AttributesEx3&spellAttr3TreatAsPeriodic == 0 && spell.AttributesEx7&spellAttr7NoPushbackOnDamage == 0
 }
 
-func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill, procDamage, reflected bool) uint32 {
+func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill, procDamage, reflected bool, inheritCritBase float64) uint32 {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
+	}
+	// The periodic-trigger tick's SPELLVALUE_CRIT_CHANCE seed
+	// (pendingLaunchCritChance, set when the aura spell carries
+	// SPELL_ATTR4_INHERIT_CRIT_FROM_AURA) is consumed here for casts that
+	// never pass through the triggered-cast funnel root — the creature
+	// tick's case-23 simplified path calls executeSpellDamage directly.
+	// The funnel threads its consumed seed explicitly, so a nonzero
+	// explicit value always wins and nested casts see zero either way.
+	if inheritCritBase == 0 {
+		inheritCritBase = s.pendingLaunchCritChance
+		s.pendingLaunchCritChance = 0
 	}
 	// DoDamageAndTriggers keys the damage arm off the incoming damage
 	// (if (spell->m_damage > 0) hasDamage = true, Spell.cpp:2519): damage
@@ -12801,7 +12812,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			}
 		}
 		if !instantKill && !procDamage && spellKnown && spellID != 31117 && spellID != 64085 {
-			crit = s.rollDirectSpellCrit(ctx, target, isPlayerVictim, schoolMask, dmgSpell)
+			crit = s.rollDirectSpellCrit(ctx, target, isPlayerVictim, schoolMask, dmgSpell, inheritCritBase)
 		}
 		if crit {
 			if s.server != nil && s.server.Data != nil {
@@ -13501,6 +13512,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// m_triggeredByAuraSpell.
 	triggeredByAura := s.triggeredByAuraCast
 	s.triggeredByAuraCast = false
+	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782): the CastSpellExtraArgs
+	// SPELLVALUE_CRIT_CHANCE seed rides the per-Spell-object lifetime, so it
+	// is consumed here — nested triggered casts (EffectTriggerSpell, item
+	// procs) start plain, exactly like C++ where the nested Spell object is
+	// built without the override.
+	inheritCritBase := s.pendingLaunchCritChance
+	s.pendingLaunchCritChance = 0
 	// Spell::m_hitMask (Spell.cpp:2603): the triggered cast is its own Spell
 	// object with its own accumulating mask; save/reset/restore keeps a
 	// nested triggered cast from polluting the outer cast's FINISH/CAST-phase
@@ -14092,7 +14110,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						targetDamage = uint32(float64(targetDamage) * avoid)
 					}
 				}
-				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected)
+				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase)
 			} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
 				amount := uint32(eff.BasePoints + 1)
 				schoolMask := spell.SchoolMask
@@ -14105,7 +14123,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if healAmount == 0 && spellID == ProcSpellCrusader {
 					healAmount = 100
 				}
-				s.executeSpellHeal(ctx, effectTarget, spellID, chainScaledAmount(healAmount, chainMult, jumpIndex), effectIndex)
+				s.executeSpellHeal(ctx, effectTarget, spellID, chainScaledAmount(healAmount, chainMult, jumpIndex), effectIndex, inheritCritBase)
 			} else if eff.Effect == spellEffectEnergize {
 				// Spell::EffectEnergize per-target legs (power-type gate,
 				// per-spell adjustments) ride energizeEffectTarget on the
@@ -15250,7 +15268,7 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 		} else {
 			addhealth = s.player.MaxHealth - s.player.Health
 		}
-		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0)
+		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0, 0)
 		return
 	}
 	if s.server == nil {
@@ -15266,7 +15284,7 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 		} else {
 			addhealth = target.player.MaxHealth - target.player.Health
 		}
-		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0)
+		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0, 0)
 		return
 	}
 	if creature, ok := s.getCombatTarget(ctx, targetGUID); ok && creature.Health > 0 {
@@ -15323,8 +15341,8 @@ func (s *session) effectTargetMaxHealth(ctx context.Context, targetGUID uint64) 
 	return 0
 }
 
-func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int) {
-	s.executeSpellHealDoneBonus(ctx, targetGUID, spellID, heal, effIndex, true)
+func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int, inheritCritBase float64) {
+	s.executeSpellHealDoneBonus(ctx, targetGUID, spellID, heal, effIndex, true, inheritCritBase)
 }
 
 // hasAuraOfType reports whether the session carries an active aura whose
@@ -15484,7 +15502,7 @@ func (s *session) removeGrievousBiteIfFullyHealed(targetGUID uint64) {
 // Spell::EffectHeal (SpellEffects.cpp:1423-1462) skips that leg on its path
 // (the else-if chain never reaches SpellHealingBonusDone), so the Swiftmend
 // dispatch passes doneBonus=false; every other caller passes true.
-func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int, doneBonus bool) {
+func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int, doneBonus bool, inheritCritBase float64) {
 	if s.player == nil {
 		return
 	}
@@ -15535,8 +15553,21 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// leg is off (dotType=false).
 	heal = s.healingTakenBonus(targetSess, s.playerGUID, spellID, heal, false)
 
-	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
-	isCrit := s.rollSpellCrit(0, 2, healSpell)
+	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem).
+	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7788): the
+	// SPELLVALUE_CRIT_CHANCE seed replaces the done leg for healing crits
+	// too — the CU_CAN_CRIT gate still applies (Unit::SpellCritChanceTaken's
+	// early return), and Go models no taken arms for direct heals, so the
+	// seed rolls bare. A zero seed falls back to the done leg exactly like
+	// C++'s if (!critChance).
+	isCrit := false
+	if inheritCritBase != 0 {
+		if healSpell.Attributes&spellAttr0CuCanCrit != 0 {
+			isCrit = rand.Float64() < inheritCritBase
+		}
+	} else {
+		isCrit = s.rollSpellCrit(0, 2, healSpell)
+	}
 	if isCrit {
 		heal = s.spellCriticalHealingBonus(ctx, heal, targetGUID, healSpell.DefenseType, false)
 	}
@@ -21446,9 +21477,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 		}
 		// SPELL_ATTR4_INHERIT_CRIT_FROM_AURA's SPELLVALUE_CRIT_CHANCE
-		// override (SpellAuraEffects.cpp:5059-5061, 5098-5100) has no Go
-		// model — the tree carries no crit-chance override on triggered
-		// casts. Eluna's OnDummyEffect (5063-5066) is likewise unbridged.
+		// override (SpellAuraEffects.cpp:5059-5061, 5098-5100): the
+		// triggered spell's launch crit seeds from the aura's stored crit
+		// chance (Spell::DoEffectOnLaunchTarget, Spell.cpp:7782-7788); the
+		// taken arms still apply on top inside the funnel. Consumed at the
+		// funnel entry so nested triggered casts start plain.
+		// Eluna's OnDummyEffect (5063-5066) is likewise unbridged.
+		if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
+			triggerCaster.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
+		}
 		if aura.AuraType == spellAuraPeriodicTriggerSpellWithValue {
 			withValue := int32(aura.Amount)
 			triggerCaster.castSpellDirectWithBasePoints(context.Background(), aura.TriggerSpell, ts.periodicTriggerTarget(aura), []int32{withValue, withValue, withValue})
@@ -23139,6 +23176,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					// CastSpellExtraArgs(AuraEffect) = TRIGGERED_FULL_MASK, so
 					// TRIGGERED_DISALLOW_PROC_EVENTS applies here too.
 					s.triggeredNoProcEvents++
+					// SpellAuraEffects.cpp:5059-5061 — the INHERIT_CRIT_FROM_AURA
+					// seed is consumed by the damage funnel below (the fallback
+					// arm in executeDirectSpellDamageWithFlags); the field is
+					// always consumed on this path because damage > 0.
+					if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
+						s.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
+					}
 					s.executeSpellDamage(ctx, aura.TargetGUID, aura.TriggerSpell, damage, 0)
 					s.triggeredNoProcEvents--
 				}
@@ -23169,6 +23213,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
 					}
 					if triggerCaster != nil {
+						// SpellAuraEffects.cpp:5098-5100 — the with-value tick's
+						// SPELLVALUE_CRIT_CHANCE seed rides the same funnel
+						// plumbing as the player path (consumed at the funnel
+						// entry).
+						if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
+							triggerCaster.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
+						}
 						withValue := int32(aura.Amount)
 						triggerCaster.castSpellDirectWithBasePoints(ctx, aura.TriggerSpell, aura.TargetGUID, []int32{withValue, withValue, withValue})
 					}
@@ -25749,7 +25800,7 @@ func (s *session) channelTick() {
 			if targetGUID != 0 && targetGUID != s.playerGUID {
 				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount, effectIndex)
 			} else {
-				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex)
+				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex, 0)
 			}
 		}
 	}
@@ -29179,7 +29230,7 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, h
 		// self-heal only lands when the caster is alive — the damage leg
 		// above runs regardless.
 		if s.player != nil && s.player.Health > 0 {
-			s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex)
+			s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex, 0)
 		}
 	}
 }

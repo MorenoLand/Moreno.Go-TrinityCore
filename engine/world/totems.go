@@ -346,13 +346,13 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 
 	case TotemPulseHeal:
 		healAmt := uint32(50)
-		s.executeSpellHeal(ctx, s.playerGUID, def.PulseSpell, healAmt, 0)
+		s.executeSpellHeal(ctx, s.playerGUID, def.PulseSpell, healAmt, 0, 0)
 		if s.server != nil && s.groupID != 0 {
 			s.server.sessionsMu.RLock()
 			for other := range s.server.sessions {
 				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 					if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
-						other.executeSpellHeal(ctx, other.playerGUID, def.PulseSpell, healAmt, 0)
+						other.executeSpellHeal(ctx, other.playerGUID, def.PulseSpell, healAmt, 0, 0)
 					}
 				}
 			}
