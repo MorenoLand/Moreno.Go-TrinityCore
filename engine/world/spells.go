@@ -144,6 +144,7 @@ const (
 	spellAuraModRegenDuringCombat         uint32 = 116 // SPELL_AURA_MOD_REGEN_DURING_COMBAT (SpellAuraDefines.h) — health regen keeps running in combat (Second Wind)
 	spellAuraModHealthRegenInCombat       uint32 = 161 // SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (SpellAuraDefines.h) — flat health-regen bonus that also runs in combat (Player.cpp:2265)
 	spellAuraModCombatResultChance        uint32 = 248 // SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (SpellAuraDefines.h) — attacker auras reducing victim dodge (MiscValue == VICTIMSTATE_DODGE)
+	spellAuraModEnemyDodge                uint32 = 251 // SPELL_AURA_MOD_ENEMY_DODGE (SpellAuraDefines.h:331) — attacker's ungated dodge-reduction aura sum (Unit.cpp:2697-2698)
 	spellAuraModTargetAbsorbSchool        uint32 = 194 // SPELL_AURA_MOD_TARGET_ABSORB_SCHOOL (SpellAuraDefines.h) — attacker's pct of damage bypassing victim absorbs
 	spellAuraModTargetAbilityAbsorbSchool uint32 = 195 // SPELL_AURA_MOD_TARGET_ABILITY_ABSORB_SCHOOL (SpellAuraDefines.h:275) — attacker's spell-specific pct of damage bypassing victim absorbs (CalcAbsorbResist, Unit.cpp:1840)
 
@@ -589,6 +590,7 @@ const (
 	spellAuraModAttackSpeed                           = 9   // SPELL_AURA_MOD_ATTACKSPEED (SpellAuraDefines.h:89)
 	spellAuraModMeleeHaste                            = 138 // SPELL_AURA_MOD_MELEE_HASTE (SpellAuraDefines.h:218)
 	spellAuraModRangedHaste                           = 140 // SPELL_AURA_MOD_RANGED_HASTE (SpellAuraDefines.h:220)
+	spellAuraHasteRanged                              = 218 // SPELL_AURA_HASTE_RANGED (SpellAuraDefines.h:298) — second ranged-haste arm, same ApplyAttackTimePercentMod(RANGED_ATTACK) handler as 140
 	spellAuraRangedAmmoHaste                          = 141 // SPELL_AURA_MOD_RANGED_AMMO_HASTE (SpellAuraDefines.h:221)
 	spellAuraModMeleeRangedHaste                      = 192 // SPELL_AURA_MOD_MELEE_RANGED_HASTE (SpellAuraDefines.h:272)
 	spellAuraMeleeSlow                                = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
@@ -11366,6 +11368,7 @@ const (
 	auraModDamageDoneVersusAurastate uint32 = 303 // SPELL_AURA_MOD_DAMAGE_DONE_VERSUS_AURASTATE (Unit.cpp:6786-6791)
 	auraModHealing                   uint32 = 115 // SPELL_AURA_MOD_HEALING — Amplify/Dampen Magic arm of heal DoneAdvertisedBenefit (Unit.cpp:7554)
 	auraModHealingDonePercent        uint32 = 136 // SPELL_AURA_MOD_HEALING_DONE_PERCENT (Unit.cpp:7656)
+	auraModHealingDone               uint32 = 135 // SPELL_AURA_MOD_HEALING_DONE — caster's flat advertised-benefit auras (Unit.cpp:7764-7771)
 )
 
 // spellBonusEntry mirrors SpellBonusEntry (SpellMgr.h:284): one spell_bonus_data
@@ -12152,6 +12155,10 @@ func (s *session) spellHealingDoneFlat(spell wotlk.Spell, target *session, effIn
 		return 0
 	}
 	advertised := int32(0)
+	// Unit::SpellBaseHealingBonusDone (Unit.cpp:7764-7771): the caster's own
+	// SPELL_AURA_MOD_HEALING_DONE (135) auras raise the advertised benefit
+	// before the spellpower base and the of-stat/of-AP legs.
+	advertised += s.healingDoneAuraModifier(uint32(spell.SchoolMask))
 	if s.player != nil {
 		advertised = int32(s.player.SpellPower)
 		// Unit::SpellBaseHealingBonusDone (Unit.cpp:7783-7795): the of-stat
@@ -12185,6 +12192,42 @@ func (s *session) spellHealingDoneFlat(spell wotlk.Spell, target *session, effIn
 		}
 	}
 	return flat
+}
+
+// healingDoneAuraModifier mirrors the SPELL_AURA_MOD_HEALING_DONE (135) leg of
+// Unit::SpellBaseHealingBonusDone (Unit.cpp:7764-7771): the caster's own flat
+// healing-benefit auras, gated by MiscValue — an unset misc applies to every
+// school, otherwise the misc mask must intersect the spell's school mask.
+func (s *session) healingDoneAuraModifier(schoolMask uint32) int32 {
+	var total int32
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return total
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || !spellEffectIsAuraEffect(effect) ||
+				effect.Aura != auraModHealingDone || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			misc := uint32(effect.MiscValue)
+			if misc != 0 && misc&schoolMask == 0 {
+				continue
+			}
+			amt := aura.Amounts[index]
+			if amt == 0 {
+				amt = effect.BasePoints + 1
+			}
+			total += amt
+		}
+	}
+	return total
 }
 
 // spellHealingPctDone mirrors Unit::SpellHealingPctDone (Unit.cpp:7634-7711): the
@@ -18036,10 +18079,11 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 		dodgeChance -= expertiseBP
 		// Reduce the victim's dodge chance by the attacker's
 		// SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) auras with
-		// MiscValue == VICTIMSTATE_DODGE (Unit.cpp:2694-2695). The C++ arm is
-		// percent-scale and this roll site multiplies the chance by 100
-		// (Unit.cpp:2589), so the basis-point table adds amount*100.
-		dodgeChance += s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) * 100
+		// MiscValue == VICTIMSTATE_DODGE (Unit.cpp:2694-2695) and the ungated
+		// SPELL_AURA_MOD_ENEMY_DODGE (251) aura sum (Unit.cpp:2697-2698). The
+		// C++ arms are percent-scale and this roll site multiplies the chance
+		// by 100 (Unit.cpp:2589), so the basis-point table adds amount*100.
+		dodgeChance += (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
 		if dodgeChance < 0 {
 			dodgeChance = 0
 		}

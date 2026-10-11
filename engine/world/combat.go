@@ -547,9 +547,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		hitBonusBP += s.totalAuraModifier(spellAuraModHitChance) * 100
 		hitBonusBP += victimAttackerHitChanceBP(s, target.GUID, isPlayerVictim, spellAuraModAttackerMeleeHitChance)
 		// The attacker's SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) dodge
-		// reduction (Unit.cpp:2694-2695) — the same arm meleeSpellHitResult
-		// carries for melee spells.
-		dodgeReductionBP := s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) * 100
+		// reduction (Unit.cpp:2694-2695) and the ungated
+		// SPELL_AURA_MOD_ENEMY_DODGE (251) aura sum (Unit.cpp:2697-2698) —
+		// the same arms meleeSpellHitResult carries for melee spells.
+		dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
 		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP)
 	}
 	if isPlayerVictim && s.server != nil {
@@ -1122,8 +1123,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// Ranged attacks dodge through the same RollMeleeOutcomeAgainst dodge
 	// arm (Unit.cpp:2255-2262, no attack-type gate), so the attacker's
 	// SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) dodge reduction
-	// (Unit.cpp:2694-2695) applies here like the melee site above.
-	dodgeReductionBP := s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) * 100
+	// (Unit.cpp:2694-2695) and the ungated SPELL_AURA_MOD_ENEMY_DODGE (251)
+	// sum (Unit.cpp:2697-2698) apply here like the melee site above.
+	dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
 	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -2028,6 +2030,42 @@ func (s *Server) creatureDodgeReductionBP(key creatureAuraKey) int32 {
 			}
 		}
 		if aura.AuraType == spellAuraModCombatResultChance && aura.MiscValue == victimStateDodge {
+			total += int32(aura.Amount)
+		}
+	}
+	s.auraMu.Unlock()
+	return total * 100
+}
+
+// creatureEnemyDodgeBP returns the creature attacker's total ungated
+// SPELL_AURA_MOD_ENEMY_DODGE (251) amount (Unit.cpp:2697-2698), scaled to
+// basis points for rollMeleeOutcome's dodge leg, alongside
+// creatureDodgeReductionBP (the C++ arm is percent-scale and the melee roll
+// site scales the result by 100, Unit.cpp:2206).
+func (s *Server) creatureEnemyDodgeBP(key creatureAuraKey) int32 {
+	if s == nil || key.GUID == 0 {
+		return 0
+	}
+	var total int32
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if s.Data != nil {
+			if spell, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range spell.Effects {
+					if effect.Aura != spellAuraModEnemyDodge || aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if amount := aura.Amounts[index]; amount != 0 {
+						total += amount
+					}
+				}
+				continue
+			}
+		}
+		if aura.AuraType == spellAuraModEnemyDodge {
 			total += int32(aura.Amount)
 		}
 	}
