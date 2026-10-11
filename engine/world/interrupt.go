@@ -281,14 +281,13 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 
 	if s.server != nil && s.server.Data != nil {
 		for _, ls := range s.player.Spells {
-			if !ls.Active {
-				continue
-			}
 			spellInfo, found, err := s.server.Data.Spell(ls.ID)
 			if err != nil || !found {
 				continue
 			}
-			// SpellHistory::LockSpellSchool (SpellHistory.cpp:555-563):
+			// SpellHistory::LockSpellSchool (SpellHistory.cpp:517-570): the
+			// known-spell sweep covers every non-removed spell — C++ checks
+			// only state != PLAYERSPELL_REMOVED, not the active flag —
 			// cooldown-on-event spells are skipped, PreventionType must be
 			// silence exactly, and only spells sharing the interrupted
 			// school whose remaining cooldown is shorter than the lockout
@@ -297,21 +296,41 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 				continue
 			}
 			if (spellInfo.SchoolMask&schoolMask != 0) && spellInfo.PreventionType == spellPreventionTypeSilence {
-				foundCD := false
+				// SpellHistory::GetRemainingCooldown
+				// (SpellHistory.cpp:494-515): the spell arm first, then the
+				// category arm. A remaining cooldown at or past the lockout
+				// means C++ skips the spell entirely — no entry touch, no
+				// packet row.
+				remainingMs := int64(0)
+				entryIdx := -1
 				for i := range s.player.Cooldowns {
 					if s.player.Cooldowns[i].Spell == ls.ID {
-						if s.player.Cooldowns[i].End < cooldownEnd {
-							s.player.Cooldowns[i].End = cooldownEnd
-							cooldowns[ls.ID] = durationMs
+						entryIdx = i
+						if s.player.Cooldowns[i].End > nowUnix {
+							remainingMs = (s.player.Cooldowns[i].End - nowUnix) * 1000
 						}
-						foundCD = true
 						break
 					}
 				}
-				if !foundCD {
-					cooldowns[ls.ID] = durationMs
+				if remainingMs == 0 && spellInfo.Category != 0 {
+					for i := range s.player.Cooldowns {
+						cd := &s.player.Cooldowns[i]
+						if cd.Category == spellInfo.Category && cd.CategoryEnd > nowUnix {
+							if catMs := (cd.CategoryEnd - nowUnix) * 1000; catMs > remainingMs {
+								remainingMs = catMs
+							}
+						}
+					}
+				}
+				if remainingMs >= int64(durationMs) {
+					continue
+				}
+				if entryIdx >= 0 {
+					s.player.Cooldowns[entryIdx].End = cooldownEnd
+				} else {
 					s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: ls.ID, End: cooldownEnd})
 				}
+				cooldowns[ls.ID] = durationMs
 			}
 		}
 	}

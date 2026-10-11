@@ -8268,7 +8268,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if categoryCooldownMs > 0 {
 				moddedCategoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
 			}
-			s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
+			s.replaceSpellCooldownEntry(spellCooldown{Spell: spellID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
 			if needsCooldownPacket {
 				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, uint32(cooldownMs)), true)
 			} else if spell.RecoveryTime > 0 {
@@ -8278,7 +8278,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	if applyCooldown && spellID == 8690 {
 		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
-		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Item: 6948, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
+		s.replaceSpellCooldownEntry(spellCooldown{Spell: spellID, Item: 6948, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, 900000), true)
 	}
 
@@ -24757,6 +24757,22 @@ func (s *Server) spellCooldownDurationsForItem(ctx context.Context, spell wotlk.
 	return cooldownMs, categoryCooldownMs, categoryID
 }
 
+// replaceSpellCooldownEntry mirrors SpellHistory::AddCooldown's
+// (SpellHistory.cpp:395-407) single-entry-per-spell map semantics:
+// _spellCooldowns[spellId] is overwritten, never duplicated. Go's slice
+// model drops any existing rows for the spell before appending the new
+// one, so the cast gates, ModifyCooldown and ResetCooldown always see
+// one live entry per spell.
+func (s *session) replaceSpellCooldownEntry(entry spellCooldown) {
+	kept := s.player.Cooldowns[:0]
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell != entry.Spell {
+			kept = append(kept, cd)
+		}
+	}
+	s.player.Cooldowns = append(kept, entry)
+}
+
 // startPotionCooldownEntry mirrors the StartCooldown tail
 // (SpellHistory.cpp:283-361) for the potion-flush path: SPELLMOD_COOLDOWN
 // folding (the taking window is live as in the main cast path),
@@ -24799,7 +24815,7 @@ func (s *session) startPotionCooldownEntry(spell wotlk.Spell, itemID uint32, coo
 	if categoryCooldownMs > 0 {
 		categoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
 	}
-	s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spell.ID, Item: itemID, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
+	s.replaceSpellCooldownEntry(spellCooldown{Spell: spell.ID, Item: itemID, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
 	if needsCooldownPacket {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spell.ID, uint32(cooldownMs)), true)
 	}
