@@ -743,14 +743,17 @@ type spellProcEntry struct {
 	Charges         uint32
 }
 
-// spellProcEntryFor builds the generated spell_proc entry for an aura spell.
-// Returns the entry and the DBC spell; ok is false when the spell has no DBC
-// ProcFlags or no proc-trigger aura effect (SpellMgr.cpp:1755-1814).
-func (s *session) spellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, auraSpell wotlk.Spell, ok bool) {
-	if s == nil || s.server == nil || s.server.Data == nil {
+// serverSpellProcEntryFor builds the generated spell_proc entry for an aura
+// spell. Returns the entry and the DBC spell; ok is false when the spell
+// has no DBC ProcFlags or no proc-trigger aura effect
+// (SpellMgr::LoadSpellProc, SpellMgr.cpp:1755-1869). The session twin
+// delegates here: the logic needs only the DBC spell store, so the
+// creature proc path (boss_ai.go) reuses it exactly.
+func (s *Server) serverSpellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, auraSpell wotlk.Spell, ok bool) {
+	if s == nil || s.Data == nil {
 		return entry, auraSpell, false
 	}
-	spell, found, err := s.server.Data.Spell(auraSpellID)
+	spell, found, err := s.Data.Spell(auraSpellID)
 	if err != nil || !found || spell.ProcTypeMask == 0 {
 		return entry, auraSpell, false
 	}
@@ -792,6 +795,16 @@ func (s *session) spellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, a
 		entry.AttributesMask |= procAttrTriggeredCanProc
 	}
 	return entry, spell, true
+}
+
+// spellProcEntryFor builds the generated spell_proc entry for an aura spell.
+// Returns the entry and the DBC spell; ok is false when the spell has no DBC
+// ProcFlags or no proc-trigger aura effect (SpellMgr.cpp:1755-1814).
+func (s *session) spellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, auraSpell wotlk.Spell, ok bool) {
+	if s == nil || s.server == nil {
+		return entry, auraSpell, false
+	}
+	return s.server.serverSpellProcEntryFor(auraSpellID)
 }
 
 // procEventInfo carries the CanSpellTriggerProcOnEvent inputs (SpellMgr.cpp:502).
@@ -2020,6 +2033,18 @@ func (s *session) rollAuraProcChance(entry spellProcEntry, auraSpell wotlk.Spell
 	return rand.Float64()*100 < chance
 }
 
+// rollCreatureProcChance mirrors Aura::CalcProcChance (SpellAuras.cpp:2164-2190)
+// for the creature proc path: the plain DBC ProcChance roll. The
+// SPELLMOD_CHANCE_OF_SUCCESS arm is player-spellmod only — C++
+// ApplySpellMod consults the unit's spell-mod owner, which for a wild
+// creature is the creature itself with an empty mod list — and the
+// REDUCE_PROC_60 level arm has no creature-side model (it reads the
+// player's level from the session). Generated entries never carry
+// ProcsPerMinute, so the PPM arm stays vacuous here too.
+func (s *Server) rollCreatureProcChance(entry spellProcEntry) bool {
+	return rand.Float64()*100 < float64(entry.Chance)
+}
+
 // procAuraTriggers evaluates real aura procs on a melee hit: the done-side
 // half of Unit::ProcDamageAndSpellFor's aura loop (Unit.cpp:10355-10380 via
 // TriggerAurasProcOnEvent). The trigger spell targets the victim.
@@ -2159,7 +2184,11 @@ func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID
 // no-crit arm is unmodeled by design: that aura type never enters Go's proc
 // pipeline (isProcTriggerAuraType), and in C++ its HandleProc does nothing
 // anyway (default arm).
-func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
+// checkEffectProcGates is the shared body of AuraEffect::CheckEffectProc
+// (SpellAuraEffects.cpp:835-1043) behind the session and creature twins.
+// extraAttacks is the aura target's banked extra-attack counter (player
+// sessions bank it; creatures never do, so the creature path passes 0).
+func checkEffectProcGates(srv *Server, extraAttacks uint32, aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
 	if aura == nil || eff == nil {
 		return false
 	}
@@ -2184,8 +2213,8 @@ func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev p
 			return false
 		}
 		castTime := int32(0)
-		if s != nil && s.server != nil && s.server.Data != nil {
-			if ct, _, err := s.server.Data.SpellCastTime(ev.eventSpell.ID); err == nil {
+		if srv != nil && srv.Data != nil {
+			if ct, _, err := srv.Data.SpellCastTime(ev.eventSpell.ID); err == nil {
 				castTime = ct
 			}
 		}
@@ -2212,11 +2241,11 @@ func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev p
 		// C++ AuraEffect::CheckEffectProc (SpellAuraEffects.cpp:978-984):
 		// don't proc extra attacks while the aura target is already
 		// processing an extra-attack spell (Unit::m_extraAttacks non-zero).
-		// Go banks extra swings on the session (server.go:479); the proc
-		// loop only evaluates the session player's own auras, so
-		// s.extraAttacks is the aura target's counter.
-		if eff.TriggerSpell != 0 && s != nil && s.extraAttacks != 0 {
-			if trig, found, err := s.server.Data.Spell(eff.TriggerSpell); err == nil && found &&
+		// The session loop evaluates the session player's own auras, so it
+		// passes the player's banked counter; the creature path passes 0 —
+		// creatures never bank extra swings, matching a zero bank.
+		if eff.TriggerSpell != 0 && extraAttacks != 0 && srv != nil && srv.Data != nil {
+			if trig, found, err := srv.Data.Spell(eff.TriggerSpell); err == nil && found &&
 				spellHasEffect(trig, spellEffectAddExtraAttacks) {
 				return false
 			}
@@ -2224,6 +2253,26 @@ func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev p
 	default:
 	}
 	return true
+}
+
+// checkEffectProc delegates the session's AuraEffect::CheckEffectProc gate
+// to the shared body with the player's banked extra-attack counter.
+func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
+	var extraAttacks uint32
+	var srv *Server
+	if s != nil {
+		extraAttacks = s.extraAttacks
+		srv = s.server
+	}
+	return checkEffectProcGates(srv, extraAttacks, aura, eff, ev)
+}
+
+// checkCreatureEffectProc is the creature-proc twin of
+// session.checkEffectProc (AuraEffect::CheckEffectProc,
+// SpellAuraEffects.cpp:835-1043): the shared gates with a zero
+// extra-attack bank, since the Go creature path has no extra-swing model.
+func (s *Server) checkCreatureEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
+	return checkEffectProcGates(s, 0, aura, eff, ev)
 }
 
 // procAuraTriggerLoop runs one aura-proc pass over the player's active auras:

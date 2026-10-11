@@ -2477,6 +2477,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
 					}
+					// Unit::Kill (Unit.cpp:11283-11290): the PROC_FLAG_KILL leg
+					// evaluates the killer creature's own proc auras on the
+					// kill victim; the KILLED/DEATH legs already ran inside
+					// killPlayer (death.go).
+					s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{
+						typeMask:       procFlagKill,
+						spellTypeMask:  procSpellTypeMaskAll,
+						spellPhaseMask: procSpellPhaseNone,
+						hitMask:        procHitNone,
+						actorGUID:      motion.GUID,
+					})
 				} else {
 					target.Sess.player.Health -= damage
 					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
@@ -2494,6 +2505,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
 					target.Sess.player.UnitFlags |= unitFlagInCombat
 				}
+			}
+			// Unit::ProcSkillsAndAuras (Unit.cpp:2169) — the actor leg for a
+			// creature melee swing: TriggerAurasProcOnEvent with ProcAttacker
+			// = PROC_FLAG_DONE_MELEE_AUTO_ATTACK |
+			// PROC_FLAG_DONE_MAINHAND_ATTACK (Unit.cpp:1194; creatures swing
+			// BASE_ATTACK only). Runs after damage is dealt, matching C++
+			// (2169 follows DealMeleeDamage).
+			s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{
+				typeMask:       procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack,
+				schoolMask:     spellSchoolMaskNormal,
+				spellTypeMask:  procSpellTypeNone,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
+				actorGUID:      motion.GUID,
+				damage:         damage,
+			})
+			// The victim leg of the same call: the player victim's own
+			// Taken-side proc auras fire on the melee event
+			// (PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK, Unit.cpp:1195), the
+			// trigger spell targeting the creature attacker.
+			if isPlayerVictim && target.Sess != nil {
+				target.Sess.procVictimAuraTriggers(ctx, motion.GUID, outcome, hitInfo, targetState, blocked, damage)
 			}
 			asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
 			target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)

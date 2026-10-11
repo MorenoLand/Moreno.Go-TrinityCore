@@ -1385,6 +1385,196 @@ func (s *Server) fireCreatureSpellLinkedHitTriggers(ctx context.Context, m *crea
 	}
 }
 
+// fireCreatureMeleeAuraProcs evaluates real aura procs on the done side of
+// a creature melee swing: the actor leg of Unit::ProcSkillsAndAuras
+// (Unit.cpp:5356-5365) via Unit::TriggerAurasProcOnEvent
+// (Unit.cpp:10385-10408). The attacker-side ProcSkillsAndReactives arm
+// (Unit.cpp:10253-10327) is vacuous for wild creatures — its non-victim
+// legs need a warrior player (Overpower), a hunter pet (Wolverine Bite),
+// or an npcbot, so nothing fires for a normal creature attacker. The
+// modOwner arm (Cobra Strikes, Unit.cpp:10395-10408) has no Go model
+// (no GetSpellModOwner on the creature path).
+//
+// The caller builds the event: melee swings carry
+// typeMask = PROC_FLAG_DONE_MELEE_AUTO_ATTACK | PROC_FLAG_DONE_MAINHAND_ATTACK
+// (Unit.cpp:1194 — creatures swing BASE_ATTACK only), PROC_SPELL_TYPE_NONE,
+// PROC_SPELL_PHASE_NONE, and the outcome-derived hit mask; the kill leg
+// carries PROC_FLAG_KILL / PROC_SPELL_TYPE_MASK_ALL / PROC_HIT_NONE
+// (Unit.cpp:11283-11290). The trigger spell targets the victim (melee) or
+// the kill victim (kill).
+func (s *Server) fireCreatureMeleeAuraProcs(ctx context.Context, m *creatureMotion, victimGUID uint64, ev procEventInfo) {
+	if s == nil || m == nil || victimGUID == 0 {
+		return
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+	for _, aura := range s.activeCreatureAuras[key] {
+		auras = append(auras, aura)
+	}
+	s.auraMu.Unlock()
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		entry, auraSpell, ok := s.serverSpellProcEntryFor(aura.SpellID)
+		if !ok {
+			continue
+		}
+		if entry.Charges > 0 && aura.RemainingCharges == 0 {
+			continue
+		}
+		// C++ Aura::GetProcEffectMask (SpellAuras.cpp:2082-2086): a
+		// charge-using aura with PROC_ATTR_REQ_SPELLMOD only procs when the
+		// triggering spell's applied-mods registry holds the aura. Creature
+		// melee/kill events carry no spell info and the creature path has
+		// no spell-mod taking model, so the registry is empty and the check
+		// always fails — skip, matching an empty m_appliedMods.
+		if entry.AttributesMask&procAttrReqSpellmod != 0 {
+			continue
+		}
+		if !canSpellTriggerProcOnEvent(entry, ev) {
+			continue
+		}
+		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
+		// 2192-2212): every eligible effect fires its own trigger spell.
+		eligible := make([]int, 0, len(auraSpell.Effects))
+		for i := range auraSpell.Effects {
+			eff := &auraSpell.Effects[i]
+			if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
+				continue
+			}
+			if aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			if !s.checkCreatureEffectProc(aura, eff, ev) {
+				continue
+			}
+			eligible = append(eligible, i)
+		}
+		if len(eligible) == 0 {
+			continue
+		}
+		if !s.rollCreatureProcChance(entry) {
+			continue
+		}
+		// C++ PrepareProcToTrigger (SpellAuras.cpp:2032): a charge is taken
+		// when the triggering spell is absent (melee/kill events carry no
+		// spell info) or lacks SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES.
+		if entry.Charges > 0 && !procEventKeepsProcCharges(ev) {
+			s.auraMu.Lock()
+			aura.RemainingCharges--
+			spent := aura.RemainingCharges == 0
+			s.auraMu.Unlock()
+			if spent {
+				s.removeCreatureAura(key, aura.SpellID)
+			}
+		}
+		for _, i := range eligible {
+			eff := &auraSpell.Effects[i]
+			if eff.Aura == spellAuraProcTriggerDamage {
+				s.creatureProcTriggerDamageAuraProc(ctx, m, aura, auraSpell, i, victimGUID)
+				continue
+			}
+			if eff.TriggerSpell == 0 {
+				// C++ HandleProcTriggerSpellAuraProc warns and returns when
+				// the effect carries no triggered spell
+				// (SpellAuraEffects.cpp:5654-5661).
+				continue
+			}
+			if eff.Aura == spellAuraProcTriggerSpellWithValue {
+				// HandleProcTriggerSpellWithValueAuraProc passes the
+				// triggering effect's own amount (SpellAuraEffects.cpp:5726-5728)
+				// as SPELLVALUE_BASE_POINT0. castCreatureSpellInternal has
+				// no base-point override, so this leg stays unbridged.
+				continue
+			}
+			// m_caster->CastSpell(unit, triggeredSpell->Id, true): the
+			// triggered cast by the creature on the victim.
+			s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, victimGUID, true)
+		}
+	}
+}
+
+// creatureProcTriggerDamageAuraProc mirrors
+// AuraEffect::HandleProcTriggerDamageAuraProc (SpellAuraEffects.cpp:5738-5762)
+// for a creature caster: the effect's own amount as direct spell damage of
+// the aura spell's school on the proc target — no hit roll, no crit roll.
+// C++ goes SpellDamageBonusDone -> CalculateSpellDamageTaken -> damage mods
+// -> non-melee damage log -> DealSpellDamage. The done-bonus arm
+// (SpellDamageBonusDone) has no creature-side model (no spell-power or
+// spell mods on wild creatures), so the pipeline starts at the taken leg,
+// mirroring the creature spell-damage victim block (creaturemotion.go).
+func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creatureMotion, aura *activeAura, auraSpell wotlk.Spell, effIndex int, victimGUID uint64) {
+	if s == nil || m == nil || aura == nil || victimGUID == 0 {
+		return
+	}
+	basePoint := aura.Amount
+	if effIndex >= 0 && effIndex < len(aura.Amounts) && aura.Amounts[effIndex] > 0 {
+		basePoint = uint32(aura.Amounts[effIndex])
+	}
+	if basePoint == 0 {
+		return
+	}
+	schoolMask := uint32(1)
+	if auraSpell.SchoolMask != 0 {
+		schoolMask = auraSpell.SchoolMask
+	}
+	vs := s.findSessionByGUID(victimGUID)
+	if vs == nil || vs.player == nil || vs.player.Health == 0 {
+		return
+	}
+	damage := basePoint
+	absorbed := uint32(0)
+	// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no damage.
+	if vs.godCheatActive() {
+		damage = 0
+	} else if damage > 0 {
+		absorbed, damage = vs.applyAbsorptionShields(damage, uint8(schoolMask))
+	}
+	overkill := uint32(0)
+	now := time.Now()
+	if !vs.godCheatActive() && damage > 0 {
+		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+		vs.splitShareDamagePct(ctx, victimGUID, true, creatureAuraKey{}, m.GUID, damage, schoolMask)
+		// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED.
+		vs.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
+		victimHealth := vs.player.Health
+		if damage >= victimHealth {
+			overkill = damage - victimHealth
+			vs.player.Health = 0
+			var creatureKiller *session
+			if m.OwnerGUID != 0 {
+				creatureKiller = s.findSessionByGUID(m.OwnerGUID)
+			}
+			vs.killPlayer(ctx, creatureKiller, false, true)
+			if m.BossAI != nil {
+				m.BossAI.OnKillPlayer(ctx, s, m, victimGUID)
+			}
+		} else {
+			vs.player.Health -= damage
+			// Unit::DealDamage (Unit.cpp:815-924): rage from damage
+			// received — damage + absorbed for the conversion.
+			vs.grantRageFromDamageTaken(ctx, damage+absorbed)
+			// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel.
+			vs.delayCurrentCast()
+			vs.delayCurrentChannel()
+			vs.procDamageAuras(true, damage)
+		}
+		vs.lastCombatTime = now
+		if vs.player.UnitFlags&unitFlagInCombat == 0 {
+			vs.player.UnitFlags |= unitFlagInCombat
+		}
+	}
+	logPkt := buildSpellNonMeleeDamageLog(victimGUID, m.GUID, auraSpell.ID, damage, overkill, uint8(schoolMask))
+	_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
+	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, vs)
+	vs.sendPlayerUpdate()
+	if s != nil {
+		s.triggerPetDefensive(vs.player.Map, vs.player.InstanceID, victimGUID, m.GUID)
+	}
+}
+
 // inheritCreatureHitTriggerAuraDuration mirrors the no-duration leg of
 // Spell::DoTriggersOnSpellHit (Spell.cpp:2935-2949) for a creature caster:
 // SPELL_AURA_ADD_TARGET_TRIGGER auras must not trigger auras without
