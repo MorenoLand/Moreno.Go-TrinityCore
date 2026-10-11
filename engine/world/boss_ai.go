@@ -1034,6 +1034,32 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if castMs := s.aiSpellCastTimeMs(spellInfo); castMs > 0 {
 			m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 		}
+		// Spell::handle_immediate channel arms (Spell.cpp:3569-3596):
+		// a channeled creature spell holds UNIT_STATE_CASTING for the
+		// channel duration — Unit::CastSpell arms it at cast start for
+		// CURRENT_CHANNELED_SPELL (Unit.cpp:3107, no triggered gate), and
+		// CombatAI::UpdateAI's early-out (CombatAI.cpp:97) skips the
+		// spell event and the melee swing for the whole channel. Go's
+		// cast-time-only stamp left the channel unmodeled: the creature
+		// could fire the next spell event or melee on the very next
+		// tick. The channel extends the stamp by the DBC duration on top
+		// of the cast time (C++ runs cast time first, then the channel).
+		// Deltas: the SPELLMOD_DURATION / ModSpellDurationTime
+		// (Object.cpp:2475) fold is unmodeled — GetSpellModOwner is null
+		// for creature motions and UNIT_MOD_CAST_SPEED has no Go model;
+		// a -1 (infinite) duration stamps nothing, since C++ holds the
+		// state until the channel is interrupted and Go has no
+		// creature-channel-interrupt model — an infinite stamp would
+		// soft-lock the motion. SendChannelStart (Spell.cpp:4669) stays
+		// packet-only downstream: no SMSG_SPELL_START_CHANNEL is sent on
+		// the creature path.
+		if castMs := s.aiSpellCastTimeMs(spellInfo); isChanneledSpell(spellInfo) && s != nil && s.Data != nil {
+			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur > 0 {
+				if channelUntil := now.Add(time.Duration(castMs+uint32(dur)) * time.Millisecond); channelUntil.After(m.CastingUntil) {
+					m.CastingUntil = channelUntil
+				}
+			}
+		}
 		// Spell::SendSpellGo cast flags (Spell.cpp:4283-4330) for creature
 		// casters: base UNKNOWN_9 (spellCastFlagGo); PENDING for triggered
 		// non-auto-repeat casts (4292, same predicate as the player
