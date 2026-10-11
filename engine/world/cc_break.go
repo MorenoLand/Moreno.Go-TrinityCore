@@ -180,3 +180,35 @@ func (s *Server) procCreatureDamageAuras(key creatureAuraKey, isDirectDamage boo
 func (s *session) procCastAuras() {
 	s.removeAurasWithInterruptFlags(auraInterruptFlagCast)
 }
+
+// removeCreatureAurasWithInterruptFlags mirrors Unit::RemoveAurasWithInterruptFlags
+// for creature motions: drops the motion's activeCreatureAuras whose spell
+// interrupt flags intersect the mask. Serves the Spell::prepare stealth-break
+// arm (Spell.cpp:3180-3191, AURA_INTERRUPT_FLAG_CAST and
+// AURA_INTERRUPT_FLAG_SPELL_ATTACK) on the creature and pet cast paths.
+// Collects under auraMu, then removes outside it — removeCreatureAura locks
+// auraMu itself.
+func (s *Server) removeCreatureAurasWithInterruptFlags(m *creatureMotion, flags uint32) {
+	if s == nil || m == nil || flags == 0 {
+		return
+	}
+	key := creatureAuraKeyForMotion(m)
+	var toRemove []uint32
+	s.auraMu.Lock()
+	if s.activeCreatureAuras != nil {
+		if auras, ok := s.activeCreatureAuras[key]; ok {
+			for spellID, aura := range auras {
+				if aura == nil {
+					continue
+				}
+				if getSpellAuraInterruptFlags(spellID, aura.AuraInterruptFlags)&flags != 0 {
+					toRemove = append(toRemove, spellID)
+				}
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, spellID := range toRemove {
+		s.removeCreatureAura(key, spellID)
+	}
+}

@@ -1473,6 +1473,31 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if !s.creatureStealPreCast(m, spellInfo, targetGUID) {
 			return
 		}
+		// Spell::prepare stealth-break arm (Spell.cpp:3180-3191, gated by
+		// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS 0x100): a non-triggered
+		// creature cast of a stealth-breaking spell (SpellInfo::IsBreakingStealth,
+		// SpellInfo.cpp:1244-1247 == !SPELL_ATTR1_NOT_BREAK_STEALTH) drops
+		// the caster's AURA_INTERRUPT_FLAG_CAST auras at cast start, ahead
+		// of SendSpellStart/TriggerGlobalCooldown in C++; any unit-target
+		// effect additionally drops AURA_INTERRUPT_FLAG_SPELL_ATTACK auras
+		// (GetUsedTargetObjectType() == TARGET_OBJECT_TYPE_UNIT, mirrored
+		// here by the player path's spellEffectTargetsUnit approximation,
+		// spells.go:3076). Go's triggered models TRIGGERED_FULL_MASK
+		// (0x0007FFFF), which carries both TRIGGERED_CAST_DIRECTLY (0x80,
+		// skipping the arm's else-branch) and
+		// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS, so triggered casts skip
+		// the arm. C++ relative order: after CheckCast (the steal arm
+		// above), ahead of the _cast arms (the lost-explicit-target arm
+		// below).
+		if !triggered && spellInfo.AttributesEx&spellAttr1NotBreakStealth == 0 {
+			s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagCast)
+			for _, eff := range spellInfo.Effects {
+				if spellEffectTargetsUnit(eff.Effect) {
+					s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagSpellAttack)
+					break
+				}
+			}
+		}
 		// Spell::_cast lost-explicit-target arm (Spell.cpp:3288-3293): an
 		// explicit unit target whose object no longer resolves cancels the
 		// cast — no GO packet, no cooldown (SelectSpellTargets at 3410

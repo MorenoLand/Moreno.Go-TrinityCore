@@ -1183,6 +1183,30 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.creatureDispelPreCast(motion, spell, targetGUID, triggered) {
 		return true
 	}
+	// Spell::prepare stealth-break arm (Spell.cpp:3180-3191, gated by
+	// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS 0x100): a non-triggered pet
+	// cast of a stealth-breaking spell (SpellInfo::IsBreakingStealth,
+	// SpellInfo.cpp:1244-1247 == !SPELL_ATTR1_NOT_BREAK_STEALTH) drops
+	// the pet's AURA_INTERRUPT_FLAG_CAST auras at cast start, ahead of
+	// SendSpellStart in C++; any unit-target effect additionally drops
+	// AURA_INTERRUPT_FLAG_SPELL_ATTACK auras (the player path's
+	// spellEffectTargetsUnit approximation, spells.go:3076). Go's
+	// triggered models TRIGGERED_FULL_MASK (0x0007FFFF), which carries
+	// both TRIGGERED_CAST_DIRECTLY (0x80) and
+	// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS, so triggered casts skip the
+	// arm — including the trigger-spell recursion below, whose parent
+	// cast already broke stealth. C++ relative order: after the
+	// CheckCast gates above, ahead of the _cast arms (the
+	// lost-explicit-target arm below), matching the creature path.
+	if !triggered && spell.AttributesEx&spellAttr1NotBreakStealth == 0 {
+		s.server.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagCast)
+		for _, eff := range spell.Effects {
+			if spellEffectTargetsUnit(eff.Effect) {
+				s.server.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagSpellAttack)
+				break
+			}
+		}
+	}
 	// Spell::_cast lost-explicit-target arm (Spell.cpp:3287-3291, reached
 	// via UpdatePointers at 3280): an explicit object target that no
 	// longer resolves cancels the cast — no GO packet, no power drain, no
