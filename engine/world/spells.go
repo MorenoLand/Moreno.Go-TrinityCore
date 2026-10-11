@@ -459,6 +459,35 @@ const (
 	spellEffectSummonObjectSlot3             = 106 // SPELL_EFFECT_SUMMON_OBJECT_SLOT3 (SharedDefines.h:917)
 	spellEffectSummonObjectSlot4             = 107 // SPELL_EFFECT_SUMMON_OBJECT_SLOT4 (SharedDefines.h:918)
 
+	// C++ EffectUnused/EffectNULL spell effects (SpellEffects.cpp effect table):
+	// the handlers deliberately do nothing. Named consts plus an explicit
+	// no-op dispatch case keep these effects out of the unhandled-effect
+	// debug arm, matching the 40/61 precedent.
+	spellEffectPortalTeleport       = 4   // SPELL_EFFECT_PORTAL_TELEPORT (SharedDefines.h:815; EffectUnused "unused")
+	spellEffectPortal               = 12  // SPELL_EFFECT_PORTAL (SharedDefines.h:823; EffectNULL)
+	spellEffectRitualBase           = 13  // SPELL_EFFECT_RITUAL_BASE (SharedDefines.h:824; EffectUnused "unused")
+	spellEffectRitualSpecialize     = 14  // SPELL_EFFECT_RITUAL_SPECIALIZE (SharedDefines.h:825; EffectUnused "unused")
+	spellEffectRitualActivatePortal = 15  // SPELL_EFFECT_RITUAL_ACTIVATE_PORTAL (SharedDefines.h:826; EffectUnused "unused")
+	spellEffectDodge                = 20  // SPELL_EFFECT_DODGE (SharedDefines.h:831; EffectUnused "one spell: Dodge")
+	spellEffectEvade                = 21  // SPELL_EFFECT_EVADE (SharedDefines.h:832; EffectUnused "one spell: Evade (DND)")
+	spellEffectWeapon               = 25  // SPELL_EFFECT_WEAPON (SharedDefines.h:836; EffectUnused)
+	spellEffectDefense              = 26  // SPELL_EFFECT_DEFENSE (SharedDefines.h:837; EffectUnused "one spell: Defense")
+	spellEffectSpellDefense         = 37  // SPELL_EFFECT_SPELL_DEFENSE (SharedDefines.h:848; EffectUnused "one spell: SPELLDEFENSE (DND)")
+	spellEffectLanguage             = 39  // SPELL_EFFECT_LANGUAGE (SharedDefines.h:850; EffectUnused)
+	spellEffectSpawn                = 46  // SPELL_EFFECT_SPAWN (SharedDefines.h:857; EffectUnused "clientside")
+	spellEffectStealth              = 48  // SPELL_EFFECT_STEALTH (SharedDefines.h:859; EffectUnused "one spell: Base Stealth")
+	spellEffectDetect               = 49  // SPELL_EFFECT_DETECT (SharedDefines.h:860; EffectUnused "one spell: Detect")
+	spellEffectForceCriticalHit     = 51  // SPELL_EFFECT_FORCE_CRITICAL_HIT (SharedDefines.h:862; EffectUnused "unused")
+	spellEffectGuaranteeHit         = 52  // SPELL_EFFECT_GUARANTEE_HIT (SharedDefines.h:863; EffectUnused "one spell: zzOLDCritical Shot")
+	spellEffectAttack               = 78  // SPELL_EFFECT_ATTACK (SharedDefines.h:889; EffectUnused)
+	spellEffectCreateHouse          = 81  // SPELL_EFFECT_CREATE_HOUSE (SharedDefines.h:892; EffectUnused "one spell: Create House (TEST)")
+	spellEffectBindSight            = 82  // SPELL_EFFECT_BIND_SIGHT (SharedDefines.h:893; EffectNULL)
+	spellEffectThreatAll            = 91  // SPELL_EFFECT_THREAT_ALL (SharedDefines.h:902; EffectUnused "one spell: zzOLDBrainwash")
+	spellEffect112                  = 112 // SPELL_EFFECT_112 (SharedDefines.h:923; EffectUnused)
+	spellEffectTeleportGraveyard    = 120 // SPELL_EFFECT_TELEPORT_GRAVEYARD (SharedDefines.h:931; EffectUnused "one spell: Graveyard Teleport Test")
+	spellEffect122                  = 122 // SPELL_EFFECT_122 (SharedDefines.h:933; EffectUnused "unused")
+	spellEffect163                  = 163 // (SharedDefines.h:974; EffectNULL "unused")
+
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
 	summonCategoryWild   = 0 // SUMMON_CATEGORY_WILD (SharedDefines.h:3298)
@@ -10753,6 +10782,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target: UpdateSpecCount(damage). Go has no dual-spec model —
 				// explicit no-op so the effect stops hitting the
 				// unhandled-effect debug arm.
+			case spellEffectPortalTeleport, spellEffectPortal, spellEffectRitualBase,
+				spellEffectRitualSpecialize, spellEffectRitualActivatePortal, spellEffectDodge,
+				spellEffectEvade, spellEffectWeapon, spellEffectDefense, spellEffectSpellDefense,
+				spellEffectLanguage, spellEffectSpawn, spellEffectStealth, spellEffectDetect,
+				spellEffectForceCriticalHit, spellEffectGuaranteeHit, spellEffectAttack,
+				spellEffectCreateHouse, spellEffectBindSight, spellEffectThreatAll, spellEffect112,
+				spellEffectTeleportGraveyard, spellEffect122, spellEffect163,
+				spellEffectApplyAreaAuraRaid, spellEffectApplyAreaAuraPet, spellEffectApplyAreaAuraFriend,
+				spellEffectApplyAreaAuraEnemy, spellEffectApplyAreaAuraOwner:
+				// C++ maps every one of these to EffectUnused or EffectNULL in
+				// the SpellEffects.cpp effect table — the handlers deliberately
+				// do nothing. Explicit no-op so the effects stop hitting the
+				// unhandled-effect debug arm.
 			case spellEffectEnvironmentalDMG: // 7: SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (EffectEnvironmentalDMG, SpellEffects.cpp:298)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: players take Player::EnvironmentalDamage (fire),
@@ -12629,7 +12671,7 @@ func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64
 	if !ok || target.Health == 0 {
 		return
 	}
-	// Spell::EffectInstaKill (SpellEffects.cpp:283-287): a CHEAT_GOD player
+	// Spell::EffectInstaKill (SpellEffects.cpp:274-296): a CHEAT_GOD player
 	// target is not killed — return before SMSG_SPELLINSTAKILLLOG, matching C++.
 	if s.server != nil {
 		if ps := s.server.findSessionByGUID(targetGUID); ps != nil && ps.godCheatActive() {
