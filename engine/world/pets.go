@@ -1531,6 +1531,47 @@ func (s *session) handleFeedPet(ctx context.Context, spellID uint32, itemGUID ui
 	s.debug("pet fed", "account", s.accountName, "petID", s.activePetNumber(), "item", feed.ItemEntry, "benefit", feed.Benefit, "effect", effectIndex)
 }
 
+// teachPetSpell mirrors the pet arm of Spell::EffectLearnPetSpell
+// (SpellEffects.cpp:3105-3127): pet->learnSpell + SavePetToDB(PET_SAVE_AS_CURRENT)
+// + owner->PetSpellInitialize(). The DB write is the pet_spell row (the
+// SavePetToDB spell-table arm, same triple the pet-talent and .pet learn
+// paths use); PetSpellInitialize is sendPetSpells. An unknown spell id
+// teaches nothing (C++ returns when the TriggerSpell lookup fails), and an
+// already-known spell is a silent no-op (Pet::learnSpell's HasSpell gate).
+func (s *session) teachPetSpell(ctx context.Context, spellID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || spellID == 0 {
+		return
+	}
+	if _, found, err := s.server.Data.Spell(spellID); err != nil || !found {
+		return
+	}
+	motion := s.controlledPetMotion(s.player.PetGUID)
+	if motion == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	for _, sp := range motion.Spells {
+		if sp == spellID {
+			s.server.motionMu.Unlock()
+			return
+		}
+	}
+	motion.Spells = append(motion.Spells, spellID)
+	entry, reactState := motion.Entry, motion.ReactState
+	s.server.motionMu.Unlock()
+	petNumber := s.player.PetNumber
+	if petNumber == 0 {
+		petNumber = s.petNumberForGUID(s.player.PetGUID)
+	}
+	if petNumber != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petNumber, spellID)
+	}
+	learnedBuf := protocol.NewBuffer(4)
+	learnedBuf.WriteU32(spellID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_LEARNED_SPELL), learnedBuf.Bytes(), true)
+	s.sendPetSpells(ctx, petNumber, entry, reactState)
+}
+
 var stableSlotPrices = []uint32{
 	500,     // 5s
 	50000,   // 5g

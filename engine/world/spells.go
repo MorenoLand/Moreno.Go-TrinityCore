@@ -3594,6 +3594,23 @@ func (s *session) checkLearnSpellCast(ctx context.Context, spell wotlk.Spell, ta
 	return 0
 }
 
+// learnSpellEffectTarget runs the player arm of Spell::EffectLearnSpell
+// (SpellEffects.cpp:2406-2424) on the target's session: spells 483 and
+// 55884 carry the taught spell in the effect value (damage), not
+// TriggerSpell.
+func (s *session) learnSpellEffectTarget(ctx context.Context, castSpellID uint32, eff wotlk.SpellEffect) {
+	if s == nil {
+		return
+	}
+	spellToLearn := eff.TriggerSpell
+	if castSpellID == 483 || castSpellID == 55884 {
+		spellToLearn = uint32(eff.BasePoints + 1)
+	}
+	if spellToLearn != 0 {
+		s.learnSpell(ctx, spellToLearn)
+	}
+}
+
 // checkGlyphCast mirrors the SPELL_EFFECT_APPLY_GLYPH leg of the CheckCast
 // per-effect switch (Spell.cpp:5618-5627): a glyph spell rejects with
 // SPELL_FAILED_UNIQUE_GLYPH when the player already has the glyph. C++
@@ -9929,17 +9946,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectEnchantItemPrismatic: // 156: SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
 				s.handleEffectEnchantItemPrismatic(effCtx, target, spell, eff)
 			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL
-				// Spell::EffectLearnSpell (SpellEffects.cpp:2406-2424): spells 483
-				// and 55884 carry the taught spell in the effect value (damage),
-				// not TriggerSpell. Non-player non-pet targets learn nothing;
-				// the pet-teach arm has no Go model (no pet spell persistence —
-				// see commands_pet.go), and creature casters are unmodeled.
-				spellToLearn := eff.TriggerSpell
-				if spellID == 483 || spellID == 55884 {
-					spellToLearn = uint32(eff.BasePoints + 1)
+				// Spell::EffectLearnSpell (SpellEffects.cpp:2406-2424): a
+				// non-player unit target delegates to the pet-teach arm
+				// (EffectLearnPetSpell) when it is the caster's pet; other
+				// non-player targets learn nothing. Creature casters are
+				// unmodeled. The no-unit-target arm is vacuous: the effects
+				// loop returns early when hitTargets is empty.
+				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+					ts.learnSpellEffectTarget(effCtx, spellID, eff)
+				} else if s.petNumberForGUID(targetGUID) != 0 {
+					s.teachPetSpell(effCtx, eff.TriggerSpell)
 				}
-				if spellToLearn != 0 {
-					s.learnSpell(effCtx, spellToLearn)
+			case spellEffectLearnPetSpell: // 57: SPELL_EFFECT_LEARN_PET_SPELL
+				// Spell::EffectLearnPetSpell (SpellEffects.cpp:3105-3127): a
+				// player unit target runs the EffectLearnSpell path above
+				// (which carries the 483/55884 damage carve-out); the
+				// caster's pet learns TriggerSpell into the pet spellbook
+				// (pet learnSpell + SavePetToDB + PetSpellInitialize via
+				// teachPetSpell); other targets learn nothing. The
+				// no-unit-target arm is vacuous as above.
+				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+					ts.learnSpellEffectTarget(effCtx, spellID, eff)
+				} else if s.petNumberForGUID(targetGUID) != 0 {
+					s.teachPetSpell(effCtx, eff.TriggerSpell)
 				}
 			case spellEffectResurrect: // 18: SPELL_EFFECT_RESURRECT
 				s.handleEffectResurrect(effCtx, targetGUID, spell, eff)
