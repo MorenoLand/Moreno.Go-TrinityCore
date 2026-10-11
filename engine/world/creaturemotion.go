@@ -1375,10 +1375,9 @@ func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64
 // is vacuous (the flag can never be set, see the no-path note below).
 // DoNotReacquireSpellFocusTarget is vacuous (creature casts acquire no spell focus).
 // SetTarget(Empty) is bridged (TargetGUID=0). GetSpellHistory()->ResetAllCooldowns()
-// is vacuous — SpellCooldowns/SpellCategoryCooldowns live only on pet motions
-// (pet_cooldowns.go, pets.go:2022, pet_save.go), and pet motions never route here,
-// while world creature casts (castCreatureSpell, the combat tick below) never read
-// or write either map, so there is nothing to reset. EngagementOver()->AtDisengage()
+// is bridged in triggerCreatureEvade below — the SpellCooldown* maps now live on
+// world creature motions via recordCreatureSpellCooldown; pet motions never route
+// here (pet_cooldowns.go, pets.go:2022, pet_save.go). EngagementOver()->AtDisengage()
 // has no AI-disengage model; the Go analog is InCombat=false plus the Eluna
 // On_Reset/On_LeaveCombat hooks already fired above, in Eluna::EnterEvadeMode
 // (CreatureHooks.cpp:202) order. Health is restored at evade start where C++
@@ -1506,6 +1505,13 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	// CombatAI::Reset (CombatAI.cpp:64-67): evade clears the AI event
 	// schedule; the next engage re-arms it via the JustEngagedWith pre-arm.
 	motion.SpellEventTimes = nil
+	// CreatureAI::_EnterEvadeMode -> GetSpellHistory()->ResetAllCooldowns
+	// (CreatureAI.cpp:315): evade clears the creature spell-history
+	// cooldowns started by recordCreatureSpellCooldown.
+	motion.SpellCooldowns = nil
+	motion.SpellCategoryCooldowns = nil
+	motion.SpellCooldownCategories = nil
+	motion.SpellCooldownCategoryEnds = nil
 	// CreatureAI::_EnterEvadeMode -> Unit::CombatStop(true) interrupts a
 	// non-melee cast in flight (Unit.cpp:5809-5812), so the cast-state
 	// gate clears with the event schedule.

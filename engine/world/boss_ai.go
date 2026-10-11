@@ -717,6 +717,16 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	}
 	if spellKnown {
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+		// Spell::CheckCast unit-cooldown arm (Spell.cpp:5207-5211): a
+		// creature whose spell history still holds the spell — or, for
+		// non-triggered casts, its DBC category — fizzles. The arm runs
+		// for triggered casts too (with the category ignored, via
+		// IsIgnoringCooldowns = TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD,
+		// Spell.cpp:7506-7509), so it sits ahead of the !triggered block,
+		// matching C++ order (5207 precedes the shapeshift block at 5247).
+		if !s.creatureSpellHistoryReady(m, spellInfo, triggered) {
+			return
+		}
 		// Spell::CheckPower (Spell.cpp:5502) + Spell::TakePower
 		// (Spell.cpp:3449, "Powers have to be taken before SendSpellGo"):
 		// a creature that cannot afford the spell fizzles — no packet, no
@@ -750,6 +760,12 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			if !s.checkCreatureCasterAuras(m, spellInfo) {
 				return
 			}
+			// Spell::SendSpellCooldown (Spell.cpp:3463, 3780-3791):
+			// non-triggered casts start the spell-history cooldown
+			// (HandleCooldowns returns early for IsIgnoringCooldowns,
+			// SpellHistory.cpp:165-166). Recorded after the fizzle gates:
+			// a failed CheckCast never starts a cooldown in C++.
+			s.recordCreatureSpellCooldown(m, spellInfo)
 		}
 		// Unit::CastSpell arms UNIT_STATE_CASTING for a non-triggered
 		// cast's cast time; the combat tick's early-out
@@ -770,6 +786,88 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, targetSess)
 	} else {
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
+	}
+}
+
+// creatureSpellHistoryReady mirrors the unit-cooldown arm of
+// Spell::CheckCast (Spell.cpp:5207-5211) for creature casters via
+// SpellHistory::IsReady/HasCooldown (SpellHistory.cpp:187-196, 473-487): the
+// cast fizzles while the motion's spell-history map still holds the spell's
+// own cooldown end, or — unless ignoreCategoryCooldown (triggered casts via
+// IsIgnoringCooldowns, Spell.cpp:7506-7509) — its DBC category's end. The
+// PreventionType SILENCE school-lockout arm of IsReady has no creature model
+// (no interrupt school-lockout state) — documented no-bridge.
+func (s *Server) creatureSpellHistoryReady(m *creatureMotion, spell wotlk.Spell, ignoreCategoryCooldown bool) bool {
+	if m == nil {
+		return true
+	}
+	now := time.Now()
+	if end, ok := m.SpellCooldowns[spell.ID]; ok && now.Before(end) {
+		return false
+	}
+	if !ignoreCategoryCooldown && spell.Category != 0 {
+		if end, ok := m.SpellCategoryCooldowns[spell.Category]; ok && now.Before(end) {
+			return false
+		}
+	}
+	return true
+}
+
+// recordCreatureSpellCooldown mirrors Spell::SendSpellCooldown for a creature
+// caster (Spell.cpp:3780-3791, called at 3463) via SpellHistory::StartCooldown
+// (SpellHistory.cpp:283-355): a non-triggered cast starts a RecoveryTime
+// cooldown on the spell and a CategoryRecoveryTime cooldown on its DBC
+// category (SpellInfo::GetCategory, SpellInfo.cpp:877-880). Passive spells and
+// cooldown-started-on-event spells are exempt (SpellHistory.cpp:181-184);
+// triggered casts never record (HandleCooldowns returns early for
+// IsIgnoringCooldowns, SpellHistory.cpp:165-166). The ranged-attack-time
+// fallback (category 76 / auto-repeat, SpellHistory.cpp:307-309) and the
+// SPELLMOD_COOLDOWN / SPELL_AURA_MOD_COOLDOWN applications have no creature
+// model — documented no-bridges.
+func (s *Server) recordCreatureSpellCooldown(m *creatureMotion, spell wotlk.Spell) {
+	if s == nil || m == nil {
+		return
+	}
+	if spell.Attributes&spellAttr0Passive != 0 || s.spellIsCooldownStartedOnEvent(spell) {
+		return
+	}
+	cooldownMs := int64(spell.RecoveryTime)
+	if cooldownMs < 0 {
+		cooldownMs = 0
+	}
+	categoryMs := int64(spell.CategoryRecoveryTime)
+	if categoryMs < 0 {
+		categoryMs = 0
+	}
+	if cooldownMs == 0 && categoryMs == 0 {
+		return
+	}
+	now := time.Now()
+	if m.SpellCooldowns == nil {
+		m.SpellCooldowns = make(map[uint32]time.Time)
+	}
+	// AddCooldown (SpellHistory.cpp:395): recTime is the spell cooldown, or
+	// the category end when the spell has none; the per-spell entry exists
+	// in both cases.
+	if cooldownMs > 0 {
+		m.SpellCooldowns[spell.ID] = now.Add(time.Duration(cooldownMs) * time.Millisecond)
+	} else {
+		m.SpellCooldowns[spell.ID] = now.Add(time.Duration(categoryMs) * time.Millisecond)
+	}
+	if categoryMs > 0 && spell.Category != 0 {
+		catEnd := now.Add(time.Duration(categoryMs) * time.Millisecond)
+		if m.SpellCategoryCooldowns == nil {
+			m.SpellCategoryCooldowns = make(map[uint32]time.Time)
+		}
+		if m.SpellCooldownCategories == nil {
+			m.SpellCooldownCategories = make(map[uint32]uint32)
+		}
+		if m.SpellCooldownCategoryEnds == nil {
+			m.SpellCooldownCategoryEnds = make(map[uint32]time.Time)
+		}
+		m.SpellCategoryCooldowns[spell.Category] = catEnd
+		m.SpellCooldownCategories[spell.ID] = spell.Category
+		m.SpellCooldownCategoryEnds[spell.ID] = catEnd
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -922,37 +923,104 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 }
 
-// consumeRangedAmmo mirrors Spell::TakeAmmo (Spell.cpp:4875): it destroys one
-// count of the equipped ammo (PLAYER_AMMO_ID) and reports whether ammo
-// remains afterwards. It no-ops (returning false) when no ammo is equipped;
-// callers own the out-of-ammo fallout. The wand / broken-ranged /
-// thrown-weapon legs have no Go bridge (no ranged-slot or thrown-weapon
-// model); the auto-repeat-specific fallout stays with the caller.
-func (s *session) consumeRangedAmmo(ctx context.Context) bool {
+// takeAmmo mirrors Spell::TakeAmmo (Spell.cpp:4875-4909): it consumes one
+// count of ammo for a ranged-attack spell and reports (consumed, outOfAmmo).
+// The attack-type gate (m_attackType != RANGED_ATTACK, Spell.cpp:4880) is the
+// C++-exact predicate DmgClass == SPELL_DAMAGE_CLASS_RANGED (Go
+// spell.DefenseType, SpellInfo.cpp:856) plus IsRangedWeaponSpell — so a
+// channeled hunter-family spell with DmgClass NONE (e.g. Tame Beast) consumes
+// nothing, matching C++. The player-only arm is vacuous (session casters are
+// players). The weapon legs use Player::GetWeaponForAttack(RANGED_ATTACK) =
+// EQUIPMENT_SLOT_RANGED (17), following the checkSpellRangedWeaponCast slot
+// query: no weapon, a broken weapon (Item::IsBroken, Item.h:105), or a wand
+// all return early with no consumption (Spell.cpp:4884-4887). Thrown weapons
+// (InventoryType INVTYPE_THROWN, matched here by subclass) lose one count
+// when stackable, or one durability point when Stackable == 1
+// (ItemTemplate::GetMaxStackSize == 1, ItemTemplate.h:686-689; C++
+// DurabilityPointLossForEquipSlot). Otherwise PLAYER_AMMO_ID's item loses one
+// count (outOfAmmo when the last count goes or the item is gone, mirroring
+// the CheckItems empty-ammo PLAYER_AMMO_ID = 0 leg at Spell.cpp:7174).
+func (s *session) takeAmmo(ctx context.Context, spell wotlk.Spell) (consumed, outOfAmmo bool) {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return false
+		return false, false
+	}
+	if spell.DefenseType != spellDamageClassRanged || !spellIsRangedWeaponSpell(spell) {
+		return false, false
+	}
+	cdb := s.server.CharactersStore.DB
+	var instanceGUID, itemEntry int64
+	if err := cdb.QueryRowContext(ctx,
+		`SELECT ii.guid, ii.itemEntry FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, int64(equipSlotRanged)).Scan(&instanceGUID, &itemEntry); err != nil || itemEntry <= 0 {
+		return false, false
+	}
+	weapon, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry))
+	if !ok {
+		return false, false
+	}
+	var durability int64
+	if err := cdb.QueryRowContext(ctx,
+		`SELECT COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`,
+		instanceGUID).Scan(&durability); err == nil && weapon.MaxDurability > 0 && durability == 0 {
+		return false, false
+	}
+	if weapon.SubClass == itemSubclassWeaponWand {
+		return false, false
+	}
+	if weapon.SubClass == itemSubclassWeaponThrown {
+		var count int64
+		if err := cdb.QueryRowContext(ctx,
+			`SELECT COALESCE(count, 0) FROM item_instance WHERE guid = ? LIMIT 1`,
+			instanceGUID).Scan(&count); err != nil || count <= 0 {
+			return false, true
+		}
+		if weapon.Stackable == 1 {
+			// Player::DurabilityPointsLoss (Player.cpp:4960): clamped at
+			// zero; a no-durability item (max 0, current 0) is a silent
+			// no-op — the C++ broken-item arm above already handled
+			// MaxDurability > 0 && current == 0.
+			if durability == 0 {
+				return false, false
+			}
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", durability-1, instanceGUID)
+			_ = s.sendInventoryItems(ctx)
+			s.sendPlayerUpdate()
+			return true, false
+		}
+		if count <= 1 {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", instanceGUID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", instanceGUID)
+			s.adjustQuestItemCount(ctx, uint32(itemEntry), 1, false)
+			return true, true
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", instanceGUID)
+		s.adjustQuestItemCount(ctx, uint32(itemEntry), 1, false)
+		return true, false
 	}
 	ammoEntry := s.player.AmmoID
 	if ammoEntry == 0 {
-		return false
+		return false, true
 	}
 	var itemGUID, count int64
-	err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT ii.guid, ii.count FROM character_inventory ci JOIN item_instance ii ON ci.item = ii.guid WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count > 0 LIMIT 1", s.playerGUID, ammoEntry).Scan(&itemGUID, &count)
+	err := cdb.QueryRowContext(ctx, "SELECT ii.guid, ii.count FROM character_inventory ci JOIN item_instance ii ON ci.item = ii.guid WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count > 0 LIMIT 1", s.playerGUID, ammoEntry).Scan(&itemGUID, &count)
 	if err != nil {
-		return false
+		s.player.AmmoID = 0
+		return false, true
 	}
 	if count <= 1 {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", itemGUID)
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", itemGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 		s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
 		s.player.AmmoID = 0
 		_ = s.calculatePlayerStats(ctx, s.player)
 		s.sendPlayerUpdate()
-		return false
+		return true, true
 	}
-	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", itemGUID)
+	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", itemGUID)
 	s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
-	return true
+	return true, false
 }
 
 func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, spellID uint32) {
@@ -962,16 +1030,24 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	now := time.Now()
 	s.lastRangedSwing = now
 
-	// Consume ammo for hunter bow/gun/crossbow (Spell 75) (TC Spell::TakeAmmo)
-	if spellID == 75 && s.player.AmmoID > 0 && !s.consumeRangedAmmo(ctx) {
-		// the last ammo was consumed: stop the auto-repeat; the next
-		// swing's CheckCast fails SPELL_FAILED_NO_AMMO
-		s.autoRepeatSpell = 0
-		s.autoRepeatTarget = 0
-		buf := protocol.NewBuffer(9)
-		buf.WritePackedGUID(s.playerGUID)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spellID, 75), true) // SPELL_FAILED_NO_AMMO = 75
+	// Per-swing TakeAmmo for Auto Shot (Spell 75) (TC Spell::TakeAmmo,
+	// Spell.cpp:4875): consume one ammo (or one thrown weapon) per swing;
+	// when the last count goes the auto-repeat stops with
+	// SPELL_FAILED_NO_AMMO, matching the C++ next-swing CheckCast failure.
+	// A wand/broken/missing ranged weapon or a non-ranged attack type
+	// consumes nothing and the repeat keeps firing, per TakeAmmo's
+	// early-return arms.
+	if spellID == 75 {
+		if spell, found, serr := s.server.Data.Spell(spellID); found && serr == nil {
+			if _, outOfAmmo := s.takeAmmo(ctx, spell); outOfAmmo {
+				s.autoRepeatSpell = 0
+				s.autoRepeatTarget = 0
+				buf := protocol.NewBuffer(9)
+				buf.WritePackedGUID(s.playerGUID)
+				_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spellID, 75), true) // SPELL_FAILED_NO_AMMO = 75
+			}
+		}
 	}
 
 	// Visual: broadcast SMSG_SPELL_GO (TC Spell::SendSpellGo)

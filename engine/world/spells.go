@@ -8278,11 +8278,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     consumes here at launch; the second ammo comes from the
 	//     handle_immediate tail leg bridged after the finish-phase legs
 	//     below (Spell.cpp:3620-3622).
-	//   - TakeAmmo's wand / broken-ranged / thrown-weapon legs have no Go
-	//     bridge: no ranged-slot or thrown-weapon model (wands never carry
-	//     REQ_AMMO, so the wand leg is vacuous under this gate).
+	//   - TakeAmmo's full interior (attack-type RANGED gate, wand /
+	//     broken-ranged / thrown-weapon legs) is bridged inside takeAmmo
+	//     (Spell.cpp:4875-4909); wands never carry REQ_AMMO, so the wand
+	//     leg is vacuous under this gate.
 	if spell.Attributes&spellAttr0ReqAmmo != 0 && !s.hasConsumeNoAmmoAura(spell) {
-		s.consumeRangedAmmo(ctx)
+		s.takeAmmo(ctx, spell)
 	}
 
 	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7746-7748): the launch-time
@@ -10574,7 +10575,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// on this leg); Go has no per-tick triggered casts (channelTick
 	// applies tick damage directly), so ticks consume no ammo.
 	if isChanneledSpell(spell) && isRangedWeaponSpell(spell) {
-		s.consumeRangedAmmo(ctx)
+		s.takeAmmo(ctx, spell)
 	}
 	// Spell::handle_immediate tail (Spell.cpp:3619): the cast-item charge is
 	// spent here, after the finish-phase legs and (for Volley) the tail
