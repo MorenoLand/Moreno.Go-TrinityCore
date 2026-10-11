@@ -940,16 +940,18 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	// Spell::CheckCast gates (Spell.cpp:5247-5496) for a pet caster: the
 	// pet is a creatureMotion, so the creature-caster twins apply unchanged
-	// (conditions.go, boss_ai.go). C++ order: the shapeshift leg (5247),
-	// the SPELL_AURA_BLOCK_SPELL_FAMILY leg (5277-5278) and the caster-state
+	// (boss_ai.go). C++ relative order: the shapeshift leg (5247), the
+	// SPELL_AURA_BLOCK_SPELL_FAMILY leg (5277-5278) and the caster-state
 	// block (5298-5314) precede the conditions block (5337-5348), which
-	// precedes CheckRange (5496) and the unit-target line-of-sight arm
-	// (5391-5401). All of them precede the power drain (TakePower,
-	// Spell.cpp:3449 runs after CheckCast), so a failing gate fizzles the
-	// cast before takePetSpellPower. The !triggered gate mirrors the
-	// creature path (TRIGGERED_IGNORE_SHAPESHIFT /
-	// TRIGGERED_IGNORE_CASTER_AURASTATE); the conditions and LOS arms run
-	// for triggered casts too, like C++ (no triggered exemption).
+	// precedes the behind/facing arms (5379-5384), the unit-target
+	// line-of-sight arm (5391-5401), the dest line-of-sight arm (5403-5409),
+	// the spell-focus arm (5477-5481), and CheckRange (5496) last. All of
+	// them precede the power drain (TakePower, Spell.cpp:3449 runs after
+	// CheckCast), so a failing gate fizzles the cast before
+	// takePetSpellPower. The !triggered gate mirrors the creature path
+	// (TRIGGERED_IGNORE_SHAPESHIFT / TRIGGERED_IGNORE_CASTER_AURASTATE);
+	// conditions, behind/facing, LOS, focus and range run for triggered
+	// casts too, like C++ (no triggered exemption).
 	if !triggered {
 		if !s.server.checkCreatureSpellShapeshift(motion, spell) {
 			return true
@@ -964,9 +966,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.checkCreatureSpellCastConditions(ctx, motion, spell.ID, targetGUID) {
 		return true
 	}
-	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID) {
+	if !s.server.checkCreatureSpellBehindFacing(motion, spell, targetGUID) {
 		return true
 	}
+	// Spell::SelectSpellTargets (Spell.cpp:3410) runs ahead of CheckCast in
+	// C++'s Spell::prepare, so the dest-family resolution lands before the
+	// LOS gates here; the same values feed the GO packet write below.
+	dx, dy, dz, hasDest := s.server.resolveCreatureSpellDestination(motion, spell, targetGUID)
 	if targetGUID != 0 && targetGUID != motion.GUID &&
 		spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 		spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
@@ -975,6 +981,19 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				return true
 			}
 		}
+	}
+	if hasDest &&
+		spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+		spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
+		if !s.server.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, dx, dy, dz) {
+			return true
+		}
+	}
+	if !s.server.motionSpellFocusFound(ctx, motion, spell) {
+		return true
+	}
+	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID) {
+		return true
 	}
 	remainingPower, hasRemainingPower, ok := s.takePetSpellPower(motion, spell, castCount, triggered)
 	if !ok {
@@ -1003,7 +1022,15 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// (CheckDst, Spell.cpp:6523) and writing it into SendSpellGo
 	// (Spell.cpp:4338). The implicit arms overwrite any client-supplied
 	// destination, so the resolved position replaces it.
-	if dx, dy, dz, ok := s.server.resolveCreatureSpellDestination(motion, spell, targetGUID); ok {
+	// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410) for a pet
+	// caster: the same server-side destination resolution the wild-creature
+	// path bridges (resolveCreatureSpellDestination), computed above ahead
+	// of the CheckCast gates — C++ runs the full SelectSpellTargets for
+	// pet casts too, seeding m_targets at the caster (CheckDst,
+	// Spell.cpp:6523) and writing it into SendSpellGo (Spell.cpp:4338).
+	// The implicit arms overwrite any client-supplied destination, so the
+	// resolved position replaces it.
+	if hasDest {
 		target.Flags |= protocol.SpellTargetFlagDestLocation
 		target.Destination = protocol.SpellTargetLocation{X: dx, Y: dy, Z: dz}
 	}

@@ -80,12 +80,90 @@ func (s *session) spellFocusFound(ctx context.Context, spell wotlk.Spell) bool {
 }
 
 func (s *session) spellFocusTemplateData(ctx context.Context, entry uint32) (uint32, float32, bool) {
-	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	if s == nil || s.server == nil {
+		return 0, 0, false
+	}
+	return s.server.spellFocusTemplateDataAt(ctx, entry)
+}
+
+// spellFocusTemplateDataAt is the server-level focus-template lookup:
+// template data0 = focus id, data1 = range (GameObjectFocusCheck,
+// GridNotifiers.h:663).
+func (s *Server) spellFocusTemplateDataAt(ctx context.Context, entry uint32) (uint32, float32, bool) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return 0, 0, false
 	}
 	var focusID, dist float64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(data0, 0), COALESCE(data1, 0) FROM gameobject_template WHERE entry = ? AND type = 8", entry).Scan(&focusID, &dist); err != nil {
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(data0, 0), COALESCE(data1, 0) FROM gameobject_template WHERE entry = ? AND type = 8", entry).Scan(&focusID, &dist); err != nil {
 		return 0, 0, false
 	}
 	return uint32(focusID), float32(dist), true
+}
+
+// motionSpellFocusFound mirrors Spell::SearchSpellFocus (Spell.cpp:1987)
+// anchored at a creature motion's position, for the pet CheckCast
+// spell-focus arm (Spell.cpp:5477-5481): a focus object counts only when it
+// is a spawned spell-focus GO whose template focus id matches the spell's
+// RequiresSpellFocus and the caster is within the template range
+// (GameObjectFocusCheck, GridNotifiers.h:663). Runtime dynamic spawns come
+// first, then static rows, mirroring the player path's spellFocusObject.
+// isSpawned() == !Hidden for the Go runtime spawns. Runs for triggered
+// casts too (no C++ triggered exemption).
+func (s *Server) motionSpellFocusFound(ctx context.Context, m *creatureMotion, spell wotlk.Spell) bool {
+	if s == nil || m == nil || spell.RequiresSpellFocus == 0 {
+		return true
+	}
+	visibility := float64(s.Config.VisibilityDistanceContinents)
+	if visibility <= 0 {
+		visibility = 90
+	}
+	for _, dyn := range s.gameObjectStatesInInstance(m.Map, m.InstanceID) {
+		if dyn.Hidden || dyn.Type != GameObjectTypeSpellFocus {
+			continue
+		}
+		focusID, dist, ok := s.spellFocusTemplateDataAt(ctx, dyn.Entry)
+		if !ok || focusID != spell.RequiresSpellFocus {
+			continue
+		}
+		if distance3D(m.X, m.Y, m.Z, dyn.X, dyn.Y, dyn.Z) <= float64(dist) {
+			return true
+		}
+	}
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return false
+	}
+	goArgs := make([]any, 0, 4)
+	eventClause := gameEventSpawnClause("geg.eventEntry", s.activeEventList(ctx), &goArgs)
+	query := `SELECT g.guid, g.id, g.position_x, g.position_y, g.position_z, COALESCE(t.data0, 0), COALESCE(t.data1, 0)
+		FROM gameobject AS g
+		JOIN gameobject_template AS t ON t.entry = g.id
+		LEFT JOIN game_event_gameobject AS geg ON geg.guid = g.guid
+		WHERE g.map = ? AND t.type = 8
+		AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
+		AND (g.spawnMask = 0 OR (g.spawnMask & 1) <> 0)
+		AND ` + eventClause
+	args := append([]any{m.Map, float64(m.X) - visibility, float64(m.X) + visibility, float64(m.Y) - visibility, float64(m.Y) + visibility}, goArgs...)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var low, entry int64
+		var x, y, z, focusID, dist float64
+		if err := rows.Scan(&low, &entry, &x, &y, &z, &focusID, &dist); err != nil {
+			continue
+		}
+		if uint32(focusID) != spell.RequiresSpellFocus {
+			continue
+		}
+		rawGUID := gameObjectGUID(uint32(low), uint32(entry))
+		if s.isGameObjectHiddenInInstance(m.Map, m.InstanceID, rawGUID) {
+			continue
+		}
+		if distance3D(m.X, m.Y, m.Z, float32(x), float32(y), float32(z)) <= dist {
+			return true
+		}
+	}
+	return false
 }

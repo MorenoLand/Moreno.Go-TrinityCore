@@ -799,6 +799,47 @@ func (s *Server) creatureRangeTargetHostile(m *creatureMotion, targetGUID uint64
 	return false
 }
 
+// checkCreatureSpellBehindFacing mirrors the behind/facing arms of
+// Spell::CheckCast (Spell.cpp:5379-5384) for creature casters. With
+// SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET the caster must be outside the
+// target's frontal M_PI arc (HasInArc(M_PI), Position.cpp:120), failing
+// SPELL_FAILED_NOT_BEHIND; with SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER
+// the caster must be inside it, failing SPELL_FAILED_NOT_INFRONT. Both
+// arms run for triggered casts (no C++ triggered exemption) and are
+// skipped when the target is absent or the caster itself (Spell.cpp:5377).
+// An unresolvable target is fail-open — Go cannot prove the facing
+// violation without the target's orientation.
+func (s *Server) checkCreatureSpellBehindFacing(m *creatureMotion, spellInfo wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || m == nil {
+		return true
+	}
+	customAttr := s.getSpellCustomAttr(spellInfo.ID)
+	if customAttr&(SpellCustomAttrReqCasterBehindTarget|SpellCustomAttrReqTargetFacingCaster) == 0 {
+		return true
+	}
+	if targetGUID == 0 || targetGUID == m.GUID {
+		return true
+	}
+	var o, tx, ty float32
+	found := false
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		o, tx, ty, found = ts.player.Orientation, ts.player.X, ts.player.Y, true
+	} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		o, tx, ty, found = tm.Orientation, tm.X, tm.Y, true
+	}
+	if !found {
+		return true
+	}
+	casterInFrontArc := hasInArc(o, tx, ty, m.X, m.Y, math.Pi)
+	if customAttr&SpellCustomAttrReqCasterBehindTarget != 0 && casterInFrontArc {
+		return false
+	}
+	if customAttr&SpellCustomAttrReqTargetFacingCaster != 0 && !casterInFrontArc {
+		return false
+	}
+	return true
+}
+
 // creatureFriendlyToTarget mirrors WorldObject::IsFriendlyTo
 // (Object.cpp:2847-2850, GetReactionTo >= REP_FRIENDLY) for a creature
 // caster against a unit target, reusing the faction-template model of
