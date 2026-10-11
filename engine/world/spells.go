@@ -251,6 +251,8 @@ const (
 	spellFailedIncorrectArea             uint8  = 39    // SPELL_FAILED_INCORRECT_AREA (SharedDefines.h:1021)
 	spellFailedRequiresArea              uint8  = 101   // SPELL_FAILED_REQUIRES_AREA (SharedDefines.h:1083)
 	spellFailedUniqueGlyph               uint8  = 176   // SPELL_FAILED_UNIQUE_GLYPH (SharedDefines.h:1158)
+	spellFailedGlyphSocketLocked         uint8  = 177   // SPELL_FAILED_GLYPH_SOCKET_LOCKED (SharedDefines.h:1159)
+	spellFailedInvalidGlyph              uint8  = 175   // SPELL_FAILED_INVALID_GLYPH (SharedDefines.h:1157)
 	spellFailedNotInRaidInstance         uint8  = 167   // SPELL_FAILED_NOT_IN_RAID_INSTANCE (SharedDefines.h:1149)
 	spellFailedRooted                    uint8  = 103   // SPELL_FAILED_ROOTED (SharedDefines.h:1085)
 	spellFailedLowCastLevel              uint8  = 49    // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
@@ -9752,7 +9754,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.activateSpec(effCtx, targetSpec)
 			case 74: // SPELL_EFFECT_APPLY_GLYPH
 				glyphPropID := uint16(eff.MiscValue)
-				s.applyGlyph(effCtx, s.targetGlyphSlot, glyphPropID)
+				s.applyGlyph(effCtx, castID, spell, s.targetGlyphSlot, glyphPropID)
 			case 56: // SPELL_EFFECT_SUMMON_PET
 				// Spell::EffectSummonPet (SpellEffects.cpp:3102) logs the
 				// summoned pet via ExecuteLogEffectSummonObject.
@@ -25297,14 +25299,48 @@ func (s *session) handleRemoveGlyph(ctx context.Context, payload []byte) bool {
 }
 
 // applyGlyph sockets a glyph into the specified slot for the active talent group.
-// Reference: Spell::EffectApplyGlyph (SpellEffects.cpp:4018).
-func (s *session) applyGlyph(ctx context.Context, slot uint8, glyphPropID uint16) {
-	if s.player == nil || slot >= 6 || glyphPropID == 0 {
+// Reference: Spell::EffectApplyGlyph (SpellEffects.cpp:4018-4076): the
+// per-slot level requirement fires SPELL_FAILED_GLYPH_SOCKET_LOCKED, an
+// unknown glyph-property entry sockets nothing, a glyph/socket type mismatch
+// fires SPELL_FAILED_INVALID_GLYPH, the replaced glyph's granted aura is
+// removed, and the new glyph's spell is cast triggered on the player — all
+// ahead of the socket + talent-panel resend.
+func (s *session) applyGlyph(ctx context.Context, castID uint8, spell wotlk.Spell, slot uint8, glyphPropID uint16) {
+	if s.player == nil || slot >= 6 {
+		return
+	}
+	// SpellEffects.cpp:4030-4045: glyph sockets unlock by player level.
+	glyphSocketMinLevel := [6]uint8{15, 15, 50, 30, 70, 80}
+	if minLevel := glyphSocketMinLevel[slot]; uint32(s.player.Level) < uint32(minLevel) {
+		s.sendCastFailed(ctx, castID, spell, spellFailedGlyphSocketLocked)
+		return
+	}
+	if glyphPropID == 0 || s.server == nil || s.server.Data == nil {
+		return
+	}
+	// SpellEffects.cpp:4048-4051: an unknown glyph-property entry applies nothing.
+	gp, found, gerr := s.server.Data.GlyphProperties(uint32(glyphPropID))
+	if gerr != nil || !found {
+		return
+	}
+	// SpellEffects.cpp:4052-4059: the glyph's slot type must match the socket.
+	if slotType, slotFound, slotErr := s.server.Data.GlyphSlotType(s.player.GlyphSlots[slot]); slotErr == nil && slotFound && gp.GlyphSlotFlags != slotType {
+		s.sendCastFailed(ctx, castID, spell, spellFailedInvalidGlyph)
 		return
 	}
 	spec := s.player.ActiveTalentGroup
 	if spec >= 2 {
 		spec = 0
+	}
+	// SpellEffects.cpp:4061-4069: the replaced glyph's granted aura leaves first.
+	if old := s.player.Glyphs[spec][slot]; old != 0 {
+		if oldGp, oldFound, oldErr := s.server.Data.GlyphProperties(uint32(old)); oldErr == nil && oldFound && oldGp.SpellID != 0 {
+			s.removeAura(oldGp.SpellID)
+		}
+	}
+	// SpellEffects.cpp:4071: the glyph's spell lands triggered on the player.
+	if gp.SpellID != 0 {
+		s.castSpellDirect(ctx, gp.SpellID, s.playerGUID)
 	}
 	s.player.Glyphs[spec][slot] = glyphPropID
 

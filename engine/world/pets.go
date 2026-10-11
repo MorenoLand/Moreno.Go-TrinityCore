@@ -1397,6 +1397,24 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 	if s.player.PetGUID != 0 {
 		return // already has an active pet
 	}
+	// Spell::EffectTameCreature (SpellEffects.cpp:2972-2979): the target must
+	// be a non-pet creature.
+	if uint16(targetGUID>>48) != 0xF130 {
+		return
+	}
+	var creatureLevel uint32
+	if s.server != nil {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+		if motion != nil {
+			if motion.PetID != 0 && motion.OwnerGUID != 0 {
+				s.server.motionMu.Unlock()
+				return
+			}
+			creatureLevel = motion.Level
+		}
+		s.server.motionMu.Unlock()
+	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return
@@ -1420,7 +1438,16 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 	newPetID := uint32(maxPetID + 1)
 
 	playerLevel := uint32(s.player.Level)
+	// Spell::EffectTameCreature (SpellEffects.cpp:2994): the tamed pet keeps
+	// the higher of the wild creature's level and (caster level - 5); an
+	// unresolvable creature level keeps the old caster-level behavior.
 	petLevel := playerLevel
+	if creatureLevel != 0 {
+		petLevel = creatureLevel
+		if playerLevel >= 5 && petLevel < playerLevel-5 {
+			petLevel = playerLevel - 5
+		}
+	}
 	var modelID uint32
 	var cName string
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && targetEntry != 0 {
