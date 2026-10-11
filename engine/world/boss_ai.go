@@ -699,6 +699,102 @@ func takeCreatureSpellPower(spell wotlk.Spell, m *creatureMotion, cost int32) {
 	}
 }
 
+// checkCreatureSpellRange mirrors the CheckRange leg of Spell::CheckCast
+// (Spell.cpp:5496) for creature casters. A next-melee-swing spell returns
+// {0, 100} (Spell.cpp:6588-6589), disabling the model; a missing DBC
+// range row stays permissive (unknown-data convention). The unit-target
+// arm is skipped when the target is absent or the caster itself
+// (Spell.cpp:6553). The DBC hostile/friendly pair keys on caster-vs-target
+// hostility (WorldObject::GetSpellMinRangeForTarget/
+// GetSpellMaxRangeForTarget, Object.cpp:2277-2303); the combat-reach arms
+// mirror Spell::GetMinMaxRange (Spell.cpp:6594-6625) — melee-flagged
+// entries collapse to the melee range (Unit::GetMeleeRange,
+// Unit.cpp:614-618), SPELL_RANGE_RANGED entries add the melee range to the
+// DBC min, and the caster+target reach rangeMod lands on the max (and on
+// the min when it is positive and the entry is not ranged-flagged). The
+// GO-target (Spell.cpp:6565-6569) and dest (6571-6577) arms are vacuous —
+// creature casts carry no GO or dest targets in Go — and the
+// FacingCasterFlags INFRONT arm (6563-6565) is player-only. Standing
+// no-bridges: the both-moving +8/3 term (no movement state on this path),
+// the REQ_AMMO ranged-weapon arm (player-only, Spell.cpp:6628),
+// pet/charmed owner SPELLMOD_RANGE (Unit::GetSpellModOwner needs the
+// owner's live session spellmods), and npcbot range mods.
+func (s *Server) checkCreatureSpellRange(m *creatureMotion, spellInfo wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || s.Data == nil || m == nil {
+		return true
+	}
+	if isNextMeleeSwingSpell(spellInfo) {
+		return true
+	}
+	rangeEntry, ok, err := s.Data.SpellRange(spellInfo.RangeIndex)
+	if err != nil || !ok {
+		return true
+	}
+	if targetGUID == 0 || targetGUID == m.GUID {
+		return true
+	}
+	x, y, z, reach, _, found := s.aiThreatUnitPos(m, targetGUID, nil, true)
+	if !found {
+		return true
+	}
+	cReach := m.combatReachOrDefault()
+	targetHostile := s.creatureRangeTargetHostile(m, targetGUID)
+	var minRange, maxRange float64
+	if rangeEntry.Flags&spellRangeFlagMelee != 0 {
+		maxRange = calcMeleeRange(cReach, reach)
+	} else {
+		minRange = float64(rangeEntry.MinFriendly)
+		maxRange = float64(rangeEntry.MaxFriendly)
+		if targetHostile {
+			minRange = float64(rangeEntry.MinHostile)
+			maxRange = float64(rangeEntry.MaxHostile)
+		}
+		if rangeEntry.Flags&spellRangeFlagRanged != 0 {
+			minRange += calcMeleeRange(cReach, reach)
+		} else if minRange > 0 {
+			minRange += float64(cReach) + float64(reach)
+		}
+		maxRange += float64(cReach) + float64(reach)
+	}
+	if dist := distance3D(m.X, m.Y, m.Z, x, y, z); dist > maxRange {
+		return false
+	} else if minRange > 0 && dist < minRange {
+		return false
+	}
+	return true
+}
+
+// creatureRangeTargetHostile mirrors the hostility key of
+// WorldObject::GetSpellMinRangeForTarget/GetSpellMaxRangeForTarget
+// (Object.cpp:2277-2303) for a creature caster: hostile only when the
+// caster's faction template is hostile (and not friendly) to the target's,
+// matching the player path's spellRangeTargetHostile convention
+// (spells.go:3219). Unresolvable targets key the friendly pair, like C++'s
+// null-target arm. Duel hostility is player-vs-player only and does not
+// make a creature hostile to a duelist.
+func (s *Server) creatureRangeTargetHostile(m *creatureMotion, targetGUID uint64) bool {
+	if s == nil || m == nil {
+		return false
+	}
+	hostileTo := func(tp playerPos) bool {
+		return !s.isFriendlyFaction(m.Faction, tp) && s.isHostileFaction(m.Faction, tp)
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		tp := playerPos{
+			FactionTemplate: s.raceFaction(ts.player.Race),
+			Race:            ts.player.Race,
+			Class:           ts.player.Class,
+			Sess:            ts,
+			Reputations:     playerReputationMap(ts.player.Reputations),
+		}
+		return hostileTo(tp)
+	}
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		return hostileTo(playerPos{FactionTemplate: tm.Faction})
+	}
+	return false
+}
+
 func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
 	if s == nil || m == nil || spellID == 0 {
 		return
@@ -733,8 +829,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// effects — and a paying creature drains the pool. Triggered casts
 		// (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST) skip both. The
 		// caster-state block runs first, matching C++ relative order
-		// (Spell.cpp:5298-5314 precedes CheckRange at 5491 and CheckPower
-		// at 5495).
+		// (Spell.cpp:5298-5314 precedes CheckRange at 5496 and CheckPower
+		// at 5502).
 		if !triggered {
 			// Spell::CheckCast shapeshift leg (Spell.cpp:5247-5277) and
 			// SPELL_AURA_BLOCK_SPELL_FAMILY leg (Spell.cpp:5277-5278)
@@ -748,6 +844,15 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			if !s.checkCreatureSpellCasterState(m, spellInfo) {
 				return
 			}
+		}
+		// Spell::CheckRange (Spell.cpp:5496): C++ runs the range arm for
+		// triggered casts too (5494-5496, "Triggered spells also have
+		// range check"), between the caster-state block (5294-5314) and
+		// CheckPower (5502)/CheckCasterAuras (5509).
+		if !s.checkCreatureSpellRange(m, spellInfo, targetGUID) {
+			return
+		}
+		if !triggered {
 			cost := s.creatureSpellPowerCost(spellInfo, m)
 			if !checkCreatureSpellPower(spellInfo, m, cost) {
 				return
