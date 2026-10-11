@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -44,6 +45,62 @@ func AdvanceHunterPetExperience(level, currentXP, earnedXP, maxLevel, currentNex
 
 func PetFoodInDiet(foodType, foodMask uint32) bool {
 	return foodType > 0 && foodType <= 32 && foodMask&(uint32(1)<<(foodType-1)) != 0
+}
+
+// petNativeObjectScale mirrors Pet::GetNativeObjectScale (Pet.cpp:1985-2001):
+// hunter pets interpolate the CreatureFamily Min/MaxScale band by level;
+// every other pet falls back to the creature_template scale
+// (Guardian::GetNativeObjectScale, Creature.cpp:3194-3197).
+func (s *session) petNativeObjectScale(ctx context.Context, entry, level uint32, petType uint8) float32 {
+	scale := float32(1.0)
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || entry == 0 {
+		return scale
+	}
+	wdb := s.server.WorldStore.DB
+	var dbScale float64
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(scale, 1) FROM creature_template WHERE entry = ?", entry).Scan(&dbScale); err == nil && dbScale > 0 {
+		scale = float32(dbScale)
+	}
+	if petType != 1 || s.server.Data == nil {
+		return scale
+	}
+	var family int64
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(family, 0) FROM creature_template WHERE entry = ?", entry).Scan(&family); err != nil || family <= 0 {
+		return scale
+	}
+	minScale, minLevel, maxScale, maxLevel, found, err := s.server.Data.CreatureFamilyScale(uint32(family))
+	if err != nil || !found || minScale <= 0 {
+		return scale
+	}
+	if level >= maxLevel {
+		return maxScale
+	}
+	if level <= minLevel {
+		return minScale
+	}
+	return minScale + float32(level-minLevel)/float32(maxLevel)*(maxScale-minScale)
+}
+
+// petBaseArmor mirrors the armor arm of Pet::InitStatsForLevel (Pet.cpp:885,
+// 903-905): the base armor flat modifier starts at level*50 and is replaced
+// by the pet_levelstats armor when the row carries one.
+func (s *session) petBaseArmor(ctx context.Context, entry, level uint32, petType uint8) uint32 {
+	armor := level * 50
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return armor
+	}
+	statEntry := entry
+	if petType == 1 {
+		statEntry = 1
+	}
+	if statEntry == 0 {
+		return armor
+	}
+	var dbArmor int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT armor FROM pet_levelstats WHERE creature_entry = ? AND level = ?", statEntry, level).Scan(&dbArmor); err == nil && dbArmor > 0 {
+		armor = uint32(dbArmor)
+	}
+	return armor
 }
 
 func PetFoodBenefitLevel(petLevel, itemLevel uint32) uint32 {
@@ -113,13 +170,17 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 	motion.Health, motion.MaxHealth, motion.Mana, motion.MaxMana = health, maxHealth, mana, maxMana
 	motion.Powers[0], motion.MaxPowers[0] = mana, maxMana
 	motion.PetNextLevelXP = nextLevelXP
+	// Pet::InitStatsForLevel (Pet.cpp:885-890) recomputes base armor and
+	// the native object scale at every level-up.
+	motion.Armor = s.petBaseArmor(ctx, entry, newLevel, petType)
+	petScale := s.petNativeObjectScale(ctx, entry, newLevel, petType)
 	if petType == 1 {
 		// Guardian::UpdateDamagePhysical's happiness leg (StatSystem.cpp:1521-1534),
 		// read from the pet's live happiness at stat-update time.
 		mod := petHappinessDamageMod(motion.Powers[4])
 		motion.MinDamage, motion.MaxDamage = float32(newLevel-newLevel/4)*mod, float32(newLevel+newLevel/4)*mod
 	}
-	fields := map[int]uint32{unitFieldLevel: newLevel, unitFieldHealth: health, unitFieldMaxHealth: maxHealth, unitFieldPower1: mana, unitFieldMaxPower1: maxMana, unitFieldPetExperience: experience}
+	fields := map[int]uint32{unitFieldLevel: newLevel, unitFieldHealth: health, unitFieldMaxHealth: maxHealth, unitFieldPower1: mana, unitFieldMaxPower1: maxMana, unitFieldPetExperience: experience, objectFieldScale: math.Float32bits(petScale)}
 	for index, value := range attributes {
 		fields[unitFieldStat0+index] = value
 	}
@@ -137,6 +198,13 @@ func (s *session) updatePetLevelSpells(ctx context.Context, petID, entry, oldLev
 		return
 	}
 	cdb := s.server.CharactersStore.DB
+	type rankSwap struct {
+		oldSpell, newSpell uint32
+		inheritedActive    uint8
+	}
+	var swaps []rankSwap
+	var unlearned []uint32
+	oldActive := make(map[uint32]uint8)
 	for _, chain := range getPetSpellChains(entry) {
 		var oldRank, newRank *petSpellRank
 		for i := range chain {
@@ -148,6 +216,15 @@ func (s *session) updatePetLevelSpells(ctx context.Context, petID, entry, oldLev
 			}
 		}
 		if oldRank != nil && (newRank == nil || oldRank.spellID != newRank.spellID) {
+			// Capture the old rank's live active state before the row is
+			// deleted: the replacing rank inherits it (Pet.cpp:1432).
+			var rowActive int64 = -1
+			if err := cdb.QueryRowContext(ctx, "SELECT active FROM pet_spell WHERE guid = ? AND spell = ?", petID, oldRank.spellID).Scan(&rowActive); err == nil {
+				oldActive[oldRank.spellID] = 0
+				if rowActive != 0 {
+					oldActive[oldRank.spellID] = 1
+				}
+			}
 			if _, err := cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petID, oldRank.spellID); err != nil {
 				s.debug("pet rank removal failed", "account", s.accountName, "petID", petID, "spell", oldRank.spellID, "error", err)
 			}
@@ -156,11 +233,21 @@ func (s *session) updatePetLevelSpells(ctx context.Context, petID, entry, oldLev
 				unlearn.WriteU32(oldRank.spellID)
 				_ = s.write(uint16(protocol.OpcodeSMSG_PET_UNLEARNED_SPELL), unlearn.Bytes(), true)
 			}
+			unlearned = append(unlearned, oldRank.spellID)
 		}
 		if newRank != nil && (oldRank == nil || oldRank.spellID != newRank.spellID) {
 			active := uint8(0)
 			if newRank.autocast {
 				active = 1
+			}
+			swapped := oldRank != nil && oldRank.spellID != newRank.spellID
+			if swapped {
+				// Pet::addSpell ranked-replacement arm (Pet.cpp:1429-1447):
+				// the new rank inherits the old rank's live active state
+				// instead of resetting to the static autocastable default.
+				if inherited, ok := oldActive[oldRank.spellID]; ok {
+					active = inherited
+				}
 			}
 			if _, err := cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petID, newRank.spellID, active); err != nil {
 				s.debug("pet rank learn persistence failed", "account", s.accountName, "petID", petID, "spell", newRank.spellID, "error", err)
@@ -169,6 +256,68 @@ func (s *session) updatePetLevelSpells(ctx context.Context, petID, entry, oldLev
 				learn := protocol.NewBuffer(4)
 				learn.WriteU32(newRank.spellID)
 				_ = s.write(uint16(protocol.OpcodeSMSG_PET_LEARNED_SPELL), learn.Bytes(), true)
+			}
+			oldSpell := uint32(0)
+			if swapped {
+				oldSpell = oldRank.spellID
+			}
+			swaps = append(swaps, rankSwap{oldSpell: oldSpell, newSpell: newRank.spellID, inheritedActive: active})
+		}
+	}
+	// Sync the live motion with the rank changes: C++ unlearnSpell removes
+	// the old rank from the pet's spell book (Pet.cpp:1541-1555) and
+	// removeSpell strips its auras (Pet.cpp:1571), so the engine's known
+	// spell and autocast lists must follow the DB, not keep casting the
+	// replaced rank until the next resummon.
+	if s.player != nil && s.player.PetGUID != 0 && (len(swaps) > 0 || len(unlearned) > 0) {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+		var petKey creatureAuraKey
+		if motion != nil && motion.PetID == petID {
+			for _, oldSpell := range unlearned {
+				for j, sp := range motion.Spells {
+					if sp == oldSpell {
+						motion.Spells = append(motion.Spells[:j], motion.Spells[j+1:]...)
+						break
+					}
+				}
+				for j, sp := range motion.AutocastSpells {
+					if sp == oldSpell {
+						motion.AutocastSpells = append(motion.AutocastSpells[:j], motion.AutocastSpells[j+1:]...)
+						break
+					}
+				}
+			}
+			for _, swap := range swaps {
+				known := false
+				for _, sp := range motion.Spells {
+					if sp == swap.newSpell {
+						known = true
+						break
+					}
+				}
+				if !known {
+					motion.Spells = append(motion.Spells, swap.newSpell)
+				}
+				if swap.inheritedActive != 0 {
+					auto := false
+					for _, sp := range motion.AutocastSpells {
+						if sp == swap.newSpell {
+							auto = true
+							break
+						}
+					}
+					if !auto {
+						motion.AutocastSpells = append(motion.AutocastSpells, swap.newSpell)
+					}
+				}
+			}
+			petKey = creatureAuraKeyForMotion(motion)
+		}
+		s.server.motionMu.Unlock()
+		if petKey.GUID != 0 {
+			for _, oldSpell := range unlearned {
+				s.server.removeCreatureAura(petKey, oldSpell)
 			}
 		}
 	}

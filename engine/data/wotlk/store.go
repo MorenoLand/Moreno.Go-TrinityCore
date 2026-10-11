@@ -429,6 +429,36 @@ func (s *Store) CreatureFamilyPetFoodMask(familyID uint32) (uint32, bool, error)
 	return mask, err == nil, err
 }
 
+func (s *Store) CreatureFamilyScale(familyID uint32) (minScale float32, minScaleLevel uint32, maxScale float32, maxScaleLevel uint32, found bool, err error) {
+	if familyID == 0 {
+		return 0, 0, 0, 0, false, nil
+	}
+	file, err := s.File("CreatureFamily")
+	if err != nil {
+		return 0, 0, 0, 0, false, err
+	}
+	record, found := file.Find(familyID)
+	if !found {
+		return 0, 0, 0, 0, false, nil
+	}
+	// CreatureFamily.dbc field order: 0=ID, 1=MinScale, 2=MinScaleLevel,
+	// 3=MaxScale, 4=MaxScaleLevel (DBCStructure.h).
+	if minScale, err = record.Float32(1); err != nil {
+		return 0, 0, 0, 0, false, err
+	}
+	var minLevel, maxLevel uint32
+	if minLevel, err = record.Uint32(2); err != nil {
+		return 0, 0, 0, 0, false, err
+	}
+	if maxScale, err = record.Float32(3); err != nil {
+		return 0, 0, 0, 0, false, err
+	}
+	if maxLevel, err = record.Uint32(4); err != nil {
+		return 0, 0, 0, 0, false, err
+	}
+	return minScale, minLevel, maxScale, maxLevel, true, nil
+}
+
 func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted bool) (float32, bool, error) {
 	displays, err := s.File("CreatureDisplayInfo")
 	if err != nil {

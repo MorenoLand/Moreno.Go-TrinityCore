@@ -477,13 +477,13 @@ func (s *session) getPetAttributes(ctx context.Context, entry, level uint32, pet
 	return attributes
 }
 
-func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, x, y, z, o float32) []byte {
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, scale, x, y, z, o float32) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
 	values[objectFieldType] = creatureTypeMask
 	values[objectFieldEntry] = entry
-	values[objectFieldScale] = math.Float32bits(1.0)
+	values[objectFieldScale] = math.Float32bits(scale)
 	values[unitFieldHealth] = curHealth
 	values[unitFieldMaxHealth] = maxHealth
 	values[unitFieldPower1] = curMana
@@ -741,7 +741,16 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	} else {
 		attributes := s.getPetAttributes(ctx, entry, level, uint8(petType))
 		s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
-		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
+		// Pet::InitStatsForLevel (Pet.cpp:885-890): base armor and the
+		// native object scale are set from the pet's level at stat time.
+		petArmor := s.petBaseArmor(ctx, entry, level, uint8(petType))
+		petScale := s.petNativeObjectScale(ctx, entry, level, uint8(petType))
+		s.server.motionMu.Lock()
+		if pm := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); pm != nil && pm.PetID == petID {
+			pm.Armor = petArmor
+		}
+		s.server.motionMu.Unlock()
+		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO)
 	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
