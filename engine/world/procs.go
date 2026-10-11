@@ -2155,9 +2155,10 @@ func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID
 // checkEffectProc mirrors AuraEffect::CheckEffectProc
 // (SpellAuraEffects.cpp:933-999): per-effect conditions that must hold for
 // the effect to join the proc effect mask. AuraScript check handlers have no
-// Go model and are treated as passing. The extra-attacks arm of
-// PROC_TRIGGER_SPELL/WITH_VALUE needs the target's m_extraAttacks counter,
-// which the Go player does not model, so that arm is unmodeled.
+// Go model and are treated as passing. SPELL_AURA_MOD_SPELL_CRIT_CHANCE's
+// no-crit arm is unmodeled by design: that aura type never enters Go's proc
+// pipeline (isProcTriggerAuraType), and in C++ its HandleProc does nothing
+// anyway (default arm).
 func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
 	if aura == nil || eff == nil {
 		return false
@@ -2206,6 +2207,19 @@ func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev p
 		// Skip melee hits and spells with wrong school
 		if ev.eventSpell == nil || ev.eventSpell.SchoolMask&uint32(eff.MiscValue) == 0 {
 			return false
+		}
+	case spellAuraProcTriggerSpell, spellAuraProcTriggerSpellWithValue:
+		// C++ AuraEffect::CheckEffectProc (SpellAuraEffects.cpp:978-984):
+		// don't proc extra attacks while the aura target is already
+		// processing an extra-attack spell (Unit::m_extraAttacks non-zero).
+		// Go banks extra swings on the session (server.go:479); the proc
+		// loop only evaluates the session player's own auras, so
+		// s.extraAttacks is the aura target's counter.
+		if eff.TriggerSpell != 0 && s != nil && s.extraAttacks != 0 {
+			if trig, found, err := s.server.Data.Spell(eff.TriggerSpell); err == nil && found &&
+				spellHasEffect(trig, spellEffectAddExtraAttacks) {
+				return false
+			}
 		}
 	default:
 	}
