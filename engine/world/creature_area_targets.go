@@ -371,6 +371,89 @@ func (s *Server) serverCreatureReflectReturnStatus(ctx context.Context, motion *
 	return protocol.SpellMissNone
 }
 
+// serverCastCreatureReflectVerdict mirrors the AddUnitTarget reflect arm
+// (Spell.cpp:2152, 2173-2188; WorldObject::SpellHitResult, Object.cpp:2617-2666)
+// for castCreatureSpellInternal (boss_ai.go): the generic creature-cast
+// path, whose victims can be players or creatures (combat picks, self
+// buffs, spell_linked triggers) — C++ offers reflect to any Unit victim.
+// Player victims roll via checkSpellReflection, creature victims via
+// creatureCheckSpellReflection. The offer gate is spellCanBeReflected plus
+// the !(IsPositive() && m_caster->IsFriendlyTo(target)) carve-out, resolved
+// through creatureFriendlyToTarget on the motion's faction (charm sets it
+// to the charmer's faction, Unit.cpp:11830). The this == victim early-out
+// (Object.cpp:2633) sits ahead of the canReflect arm, so a self-targeted
+// cast never reflects. The second return is the return-trip ReflectResult
+// via serverCreatureReflectReturnStatus (IMMUNE arms only); it rides the GO
+// packet's miss status — this path applies no damage legs, so there is no
+// return-trip funnel to consume it.
+func (s *Server) serverCastCreatureReflectVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (bool, uint8) {
+	if s == nil || m == nil || targetGUID == 0 || targetGUID == m.GUID {
+		return false, protocol.SpellMissNone
+	}
+	if !spellCanBeReflected(spell) {
+		return false, protocol.SpellMissNone
+	}
+	if spell.AttributesCu&spellAttr0CuNegativeMask == 0 && s.creatureFriendlyToTarget(m, targetGUID) {
+		return false, protocol.SpellMissNone
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil {
+		if !ts.checkSpellReflection(spell) {
+			return false, protocol.SpellMissNone
+		}
+	} else {
+		var key creatureAuraKey
+		if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+			key = creatureAuraKeyForMotion(tm)
+		}
+		if !s.creatureCheckSpellReflection(key, spell) {
+			return false, protocol.SpellMissNone
+		}
+	}
+	return true, s.serverCreatureReflectReturnStatus(ctx, m, spell)
+}
+
+// armCastCreatureReflectProcDelayed mirrors the ProcReflectDelayed arm
+// (Spell.cpp:2181) for the castCreatureSpellInternal path: at
+// outbound-missile arrival the reflector's taken-side auras proc with
+// PROC_HIT_REFLECT. The delay is the missile TimeDelay (dist/speed*1000
+// floored, min 5y, 0 for instant — Spell.cpp:2157-2171), measured from the
+// motion to the reflector's combat position; the session resolves at fire
+// time, the same shape as the inline-path and pet-path bridges. Creature
+// reflectors have no Go event-list model, so the arm only runs for player
+// reflectors.
+func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *creatureMotion, reflectorGUID uint64, spell wotlk.Spell) {
+	if s == nil || motion == nil || reflectorGUID == 0 {
+		return
+	}
+	if s.findSessionByGUID(reflectorGUID) == nil {
+		return
+	}
+	delayMs := 0
+	if spell.Speed > 0 {
+		dist := 20.0
+		if rs := s.findSessionByGUID(reflectorGUID); rs != nil && rs.player != nil {
+			dx := float64(rs.player.X - motion.X)
+			dy := float64(rs.player.Y - motion.Y)
+			dz := float64(rs.player.Z - motion.Z)
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d > 5.0 {
+				dist = d
+			} else {
+				dist = 5.0
+			}
+		}
+		delayMs = int(math.Floor(dist / float64(spell.Speed) * 1000.0))
+	}
+	attackerGUID := motion.GUID
+	time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+		if s == nil {
+			return
+		}
+		if rsess := s.findSessionByGUID(reflectorGUID); rsess != nil {
+			rsess.procSpellReflectTakenAuraTriggers(context.Background(), attackerGUID, spell, false)
+		}
+	})
+}
+
 // applyInlineReflectReturnTrip runs the reflect return trip for the inline AI
 // victim-spell path (Spell::PreprocessTarget, Spell.cpp:2350, and
 // DoEffectOnLaunchTarget, Spell.cpp:7740-7743): with ReflectResult == NONE the

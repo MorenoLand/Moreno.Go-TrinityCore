@@ -1255,6 +1255,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		}
 	}
 	sendGoPacket := true
+	// Reflect verdicts collected by the AddUnitTarget arm below; read by
+	// the GO send and the per-hit legs after the spellKnown block.
+	var reflectedTargets map[uint64]uint8
 	if spellKnown {
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
 		// Spell::CheckCast unit-cooldown arm (Spell.cpp:5207-5211): a
@@ -1575,6 +1578,30 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				}
 			}
 		}
+		// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
+		// this path: a hit target whose reflect roll succeeds leaves the
+		// hit list and becomes a REFLECT miss in the GO packet below
+		// (SelectSpellTargets at 3410 precedes SendSpellGo at 4338), with
+		// ProcReflectDelayed armed for player reflectors (2181). Victims
+		// here can be players or creatures. Unlike the inline AI victim
+		// path (creaturemotion.go), this path applies no damage legs at
+		// cast completion, so there is no return-trip damage funnel — C++
+		// would deal the spell back to the caster via
+		// DoEffectOnLaunchTarget (7740-7743), a documented delta shared
+		// with this path's no-damage model. The per-hit legs below
+		// (SpellHitTarget hook, trigger consumer) skip reflected targets
+		// the same way the inline path skips their per-hit legs.
+		if len(hitTargets) > 0 {
+			for _, guid := range hitTargets {
+				if ok, status := s.serverCastCreatureReflectVerdict(ctx, m, spellInfo, guid); ok {
+					if reflectedTargets == nil {
+						reflectedTargets = map[uint64]uint8{}
+					}
+					reflectedTargets[guid] = status
+					s.armCastCreatureReflectProcDelayed(ctx, m, guid, spellInfo)
+				}
+			}
+		}
 		// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410, ahead
 		// of TakePower at 3449): a creature casting a spell with a
 		// dest-family implicit target resolves the destination server-side
@@ -1669,7 +1696,21 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		}
 	}
 	if sendGoPacket {
-		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget)
+		packetHits := hitTargets
+		var missStatus []protocol.SpellMissStatus
+		if len(reflectedTargets) > 0 {
+			packetHits = make([]uint64, 0, len(hitTargets))
+			for _, guid := range hitTargets {
+				if _, ok := reflectedTargets[guid]; ok {
+					continue
+				}
+				packetHits = append(packetHits, guid)
+			}
+			for guid, status := range reflectedTargets {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissReflect, ReflectStatus: status})
+			}
+		}
+		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, spellTarget)
 
 		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
@@ -1699,7 +1740,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// precede 2652). Gated on spellKnown and a real hit target: C++ only
 	// reaches these arms with a SpellInfo and a non-null _spellHitTarget.
 	if spellKnown && targetGUID != 0 {
-		s.fireCreatureSpellHitTarget(ctx, m, targetGUID, spellID)
+		if _, reflected := reflectedTargets[targetGUID]; !reflected {
+			s.fireCreatureSpellHitTarget(ctx, m, targetGUID, spellID)
+		}
 	}
 	// Spell::DoTriggersOnSpellHit (Spell.cpp:2913-2957): the per-hit trigger
 	// consumer — ADD_TARGET_TRIGGER snapshot plus the spell_linked
@@ -1709,7 +1752,17 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// tail uses. Gated on spellKnown like the tail: C++ never reaches
 	// _cast without a SpellInfo.
 	if spellKnown {
-		s.fireCreatureHitTriggers(ctx, m, spellInfo, spellID, hitTargets)
+		unreflectedHits := hitTargets
+		if len(reflectedTargets) > 0 {
+			unreflectedHits = make([]uint64, 0, len(hitTargets))
+			for _, guid := range hitTargets {
+				if _, ok := reflectedTargets[guid]; ok {
+					continue
+				}
+				unreflectedHits = append(unreflectedHits, guid)
+			}
+		}
+		s.fireCreatureHitTriggers(ctx, m, spellInfo, spellID, unreflectedHits)
 	}
 	// Spell::_cast "Handle procs on cast" tail (Spell.cpp:3525-3545): the
 	// PHASE_CAST proc leg fires after the spell_linked tail for creature
