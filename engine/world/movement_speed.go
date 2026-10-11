@@ -15,6 +15,7 @@ const (
 	spellAuraIncreaseSwimSpeed        uint32 = 58
 	spellAuraMountedSpeedAlways       uint32 = 130
 	spellAuraMountedSpeedNotStack     uint32 = 172
+	spellAuraModSpeedNotStack         uint32 = 171 // SPELL_AURA_MOD_SPEED_NOT_STACK (SpellAuraDefines.h:251)
 	spellAuraUseNormalMovementSpeed   uint32 = 191
 	spellAuraIncreaseVehicleFlight    uint32 = 206
 	spellAuraMountedFlightSpeed       uint32 = 207
@@ -166,7 +167,7 @@ func (s *session) mountedRunSpeed() float32 {
 	}
 	main := s.maxPositiveAuraModifier(spellAuraIncreaseSpeed)
 	stack := s.auraMultiplier(129)
-	nonStack := float32(1) + float32(s.maxPositiveAuraModifier(171))/100
+	nonStack := float32(1) + float32(s.maxPositiveAuraModifier(spellAuraModSpeedNotStack))/100
 	if s.hasAuraType(spellAuraMounted) || s.player.MountDisplayID != 0 {
 		main = s.maxPositiveAuraModifier(spellAuraIncreaseMountedSpeed)
 		stack = s.auraMultiplier(spellAuraMountedSpeedAlways)

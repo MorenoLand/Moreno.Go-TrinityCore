@@ -587,6 +587,8 @@ const (
 	spellAuraModDamageFromCaster                      = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
 	spellAuraDummy                                    = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
 	spellAuraModDurationByDispelNotStack              = 246  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK (SpellAuraDefines.h:326)
+	spellAuraMechanicDurationModNotStack              = 234  // SPELL_AURA_MECHANIC_DURATION_MOD_NOT_STACK (SpellAuraDefines.h:314) — strongest-negative twin of 232, consumed in WorldObject::ModSpellDuration (Object.cpp:2381)
+	spellAuraMechanicDurationMod                      = 232  // SPELL_AURA_MECHANIC_DURATION_MOD (SpellAuraDefines.h:312) — mechanic-gated duration mod, consumed in WorldObject::ModSpellDuration (Object.cpp:2380)
 	spellAuraModDurationByDispel                      = 245  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL (SpellAuraDefines.h:325)
 	spellAuraModArmorPenetrationPct                   = 280  // SPELL_AURA_MOD_ARMOR_PENETRATION_PCT (SpellAuraDefines.h:360)
 	spellAuraPeriodicHaste                            = 316  // SPELL_AURA_PERIODIC_HASTE (SpellAuraDefines.h:396)
@@ -12664,6 +12666,42 @@ func spellMechanicMask(spell wotlk.Spell) uint32 {
 	return mask
 }
 
+// spellMechanicMaskByEffectMask mirrors SpellInfo::GetSpellMechanicMaskByEffectMask
+// (SpellInfo.cpp:1914): the spell-level mechanic plus the mechanic of every
+// effect inside effectMask — no Effect!=0 gate, unlike spellMechanicMask. The
+// ModSpellDuration (Object.cpp:2376) input uses the aura's whole effect mask.
+func spellMechanicMaskByEffectMask(spell wotlk.Spell, effectMask uint8) uint32 {
+	var mask uint32
+	if spell.Mechanic != 0 {
+		mask |= 1 << spell.Mechanic
+	}
+	for i, effect := range spell.Effects {
+		if i >= 8 {
+			break
+		}
+		if effectMask&(1<<uint(i)) != 0 && effect.Mechanic != 0 {
+			mask |= 1 << effect.Mechanic
+		}
+	}
+	return mask
+}
+
+// spellWholeAuraEffectMask ORs 1<<index for every aura effect of the spell —
+// the Go analog of HitAura->GetEffectMask() feeding ModSpellDuration
+// (Spell.cpp:2884).
+func spellWholeAuraEffectMask(spell wotlk.Spell) uint8 {
+	var mask uint8
+	for i, effect := range spell.Effects {
+		if i >= 8 {
+			break
+		}
+		if spellEffectIsAuraEffect(effect) {
+			mask |= 1 << uint(i)
+		}
+	}
+	return mask
+}
+
 // damageFromCasterMultiplier mirrors the SPELL_AURA_MOD_DAMAGE_FROM_CASTER
 // arm of TrinityCore Unit::SpellDamageBonusTaken (Unit.cpp:7094): the
 // victim's auras of that type multiply damage only when the aura's caster
@@ -21473,15 +21511,26 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 			targetSess.incrDiminishing(drGroup)
 			targetSess.applyDiminishingAura(drGroup, true)
-			// WorldObject::ModSpellDuration (Object.cpp:2354-2400):
-			// dispel-type duration mods — the SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL
-			// (245) always-sum and the SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK
-			// (246) strongest-negative, both folded by the spell's dispel type;
-			// the more-negative of the two is applied as a percent to the duration
-			// (only negative mods exist). Spells with
-			// ATTR7_IGNORE_DURATION_MODS skip it. The mechanic-duration arms
-			// (232/234) have no Go model, so only the dispel-type legs run here.
+			// WorldObject::ModSpellDuration (Object.cpp:2354-2400): the
+			// SPELL_AURA_MECHANIC_DURATION_MOD (232) always-sum and the
+			// SPELL_AURA_MECHANIC_DURATION_MOD_NOT_STACK (234)
+			// strongest-negative, both gated by the spell's mechanic mask
+			// (GetSpellMechanicMaskByEffectMask over the aura's whole effect
+			// mask, SpellInfo.cpp:1914); the more-negative of the two is
+			// applied as a percent to the duration (only negative mods
+			// exist), then the dispel-type legs (245/246) apply as a second
+			// sequential pct fold by the spell's dispel type. Spells with
+			// ATTR7_IGNORE_DURATION_MODS skip both.
 			if spell.AttributesEx7&spellAttr7IgnoreDurationMods == 0 {
+				if mechMask := spellMechanicMaskByEffectMask(spell, spellWholeAuraEffectMask(spell)); mechMask != 0 {
+					durationMod := min(
+						targetSess.totalAuraModifierByMechanicMask(spellAuraMechanicDurationMod, mechMask),
+						targetSess.maxNegativeAuraModifierByMechanicMask(spellAuraMechanicDurationModNotStack, mechMask),
+					)
+					if durationMod != 0 {
+						durationMs = uint32(max(int64(durationMs)+int64(durationMs)*int64(durationMod)/100, 0))
+					}
+				}
 				dispel := int32(spell.DispelType)
 				durationMod := min(
 					targetSess.totalAuraModifierByMiscValue(spellAuraModDurationByDispel, dispel),

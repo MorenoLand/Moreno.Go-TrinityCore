@@ -450,6 +450,36 @@ func (s *session) totalAuraModifierByMiscValue(auraType uint32, miscValue int32)
 	return total
 }
 
+// totalAuraModifierByMechanicMask mirrors the SPELL_AURA_MECHANIC_DURATION_MOD
+// (232) arm of WorldObject::ModSpellDuration (Object.cpp:2376-2381): the sum of
+// amounts of the aura type whose effect MiscValue names a mechanic inside
+// mechanicMask (the AuraEffect predicate is mechanicMask & (1 << miscValue)).
+func (s *session) totalAuraModifierByMechanicMask(auraType uint32, mechanicMask uint32) int32 {
+	var total int32
+	for _, amount := range s.auraTypeModifiersFiltered(auraType, func(mv int32) bool {
+		return mv >= 0 && mv < 32 && mechanicMask&(1<<uint32(mv)) != 0
+	}) {
+		total += amount
+	}
+	return total
+}
+
+// maxNegativeAuraModifierByMechanicMask mirrors the
+// SPELL_AURA_MECHANIC_DURATION_MOD_NOT_STACK (234) arm of
+// WorldObject::ModSpellDuration (Object.cpp:2381): the most-negative amount
+// among the mechanic-gated effects of the aura type (0 when none is negative).
+func (s *session) maxNegativeAuraModifierByMechanicMask(auraType uint32, mechanicMask uint32) int32 {
+	minValue := int32(0)
+	for _, amount := range s.auraTypeModifiersFiltered(auraType, func(mv int32) bool {
+		return mv >= 0 && mv < 32 && mechanicMask&(1<<uint32(mv)) != 0
+	}) {
+		if amount < minValue {
+			minValue = amount
+		}
+	}
+	return minValue
+}
+
 // hasAuraTypeWithMiscValue mirrors Unit::HasAuraTypeWithMiscvalue: true when
 // any live effect of the aura type carries the given misc value.
 func (s *session) hasAuraTypeWithMiscValue(auraType uint32, miscValue int32) bool {
