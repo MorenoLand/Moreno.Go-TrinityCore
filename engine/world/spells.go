@@ -2632,10 +2632,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					return true
 				}
-				// Spell::GetMinMaxRange REQ_AMMO leg (Spell.cpp:6628-6630):
-				// the max scales with the equipped ranged weapon's
-				// RangedModRange.
-				if dist > 35.0*s.rangedWeaponRangeMod(ctx, spell) {
+				// Spell::GetMinMaxRange (Spell.cpp:6584-6630) has no Auto Shot
+				// special case: the max is the DBC max (35, Range 114) scaled
+				// by the REQ_AMMO weapon term (Spell.cpp:6628-6630), then
+				// SPELLMOD_RANGE (Spell.cpp:6632-6633), then the combat-reach
+				// rangeMod (Spell.cpp:6614-6620). The both-moving +8/3 term
+				// (Spell.cpp:6622-6625) stays unmodeled — Go tracks no target
+				// movement state on this path.
+				maxRange := 35.0 * s.rangedWeaponRangeMod(ctx, spell)
+				maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+				maxRange += float64(pReach) + float64(tgt.CombatReach)
+				if dist > maxRange {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					return true
 				}
@@ -2644,8 +2651,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					return true
 				}
 			} else if spellID == 5019 { // Shoot wand (Range 4)
-				// Spell::GetMinMaxRange REQ_AMMO leg (Spell.cpp:6628-6630).
-				if dist > 30.0*s.rangedWeaponRangeMod(ctx, spell) {
+				// Same GetMinMaxRange terms as Auto Shot above
+				// (Spell.cpp:6584-6630): DBC max 30, REQ_AMMO weapon term
+				// (no-op — wands carry no REQ_AMMO attribute), SPELLMOD_RANGE,
+				// plus the combat-reach rangeMod.
+				maxRange := 30.0 * s.rangedWeaponRangeMod(ctx, spell)
+				maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+				maxRange += float64(pReach) + float64(tgt.CombatReach)
+				if dist > maxRange {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					return true
 				}
@@ -2653,7 +2666,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				// DBC-driven range check (TC Spell::CheckRange, strict=true):
 				// the GetMinMaxRange reach / REQ_AMMO / spellmod terms apply
 				// here exactly as at completion.
-				minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0)
+				minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
 				if maxRange > 0 && dist > maxRange {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "out of range", "dist", dist, "max", maxRange)
@@ -3146,9 +3159,29 @@ func spellDBCMaxRange(spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry) float
 	return float64(rangeEntry.MaxFriendly)
 }
 
+// spellRangeTargetHostile mirrors the hostility term of
+// WorldObject::GetSpellMinRangeForTarget / GetSpellMaxRangeForTarget
+// (Object.cpp:2277-2303): the hostile [0] range pair applies when the caster
+// IsHostileTo the unit target. Player targets use the duel/alliance model
+// from explicitTargetFactionBlocked; creature targets use
+// isFriendlyFaction/isHostileFaction.
+func (s *session) spellRangeTargetHostile(targetGUID uint64, tgt combatTarget) bool {
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		duelHostile := s.duelPartner != 0 && s.duelPartner == targetSess.playerGUID &&
+			s.player.DuelTeam != 0 && targetSess.player.DuelTeam != 0
+		return duelHostile || targetSess.playerAlliance() != s.playerAlliance()
+	}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	return !s.server.isFriendlyFaction(tgt.Faction, caster) && s.server.isHostileFaction(tgt.Faction, caster)
+}
+
 // spellRangeBounds mirrors Spell::GetMinMaxRange (Spell.cpp:6584-6630): the
-// friendly/hostile DBC pair plus the combat-reach, moving-target, REQ_AMMO
-// ranged-weapon, and SPELLMOD_RANGE rangeMod terms. strict selects the
+// hostile/friendly DBC pair plus the combat-reach, moving-target, REQ_AMMO
+// ranged-weapon, and SPELLMOD_RANGE rangeMod terms. The pair is selected by
+// caster-vs-target hostility (WorldObject::GetSpellMinRangeForTarget /
+// GetSpellMaxRangeForTarget, Object.cpp:2277-2303: hostile [0] when the
+// caster IsHostileTo the target, friendly [1] otherwise, friendly when there
+// is no unit target) — never by spell harmfulness. strict selects the
 // CheckCast(true) path — a next-melee-swing spell returns {0, 100}
 // (Spell.cpp:6588-6589), disabling the range model. targetReach is the unit
 // target's combat reach; hasCorpseTarget covers the C++ corpse-target arm
@@ -3159,15 +3192,15 @@ func spellDBCMaxRange(spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry) float
 // (Spell.cpp:6630, no zero guard in C++). NPCBOT's
 // ApplyCreatureSpellRangeMods has no Go creature-cast counterpart — this is
 // the player session path only.
-func (s *session) spellRangeBounds(ctx context.Context, spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry, strict bool, targetReach float64, hasUnitTarget, hasCorpseTarget, targetMoving, targetIsPlayer bool) (minRange, maxRange float64) {
+func (s *session) spellRangeBounds(ctx context.Context, spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry, strict bool, targetReach float64, hasUnitTarget, hasCorpseTarget, targetMoving, targetIsPlayer, targetHostile bool) (minRange, maxRange float64) {
 	if strict && isNextMeleeSwingSpell(spell) {
 		return 0, 100
 	}
-	maxRange = float64(rangeEntry.MaxFriendly)
 	minRange = float64(rangeEntry.MinFriendly)
-	if isHarmfulSpell(spell) {
-		maxRange = float64(rangeEntry.MaxHostile)
+	maxRange = float64(rangeEntry.MaxFriendly)
+	if targetHostile {
 		minRange = float64(rangeEntry.MinHostile)
+		maxRange = float64(rangeEntry.MaxHostile)
 	}
 	casterReach := 1.5
 	if s != nil && s.player != nil && s.player.CombatReach > 0 {
@@ -3271,6 +3304,11 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	if s.spellCastTimeMs(spell) == 0 {
 		return 0
 	}
+	// Spell::CheckRange (Spell.cpp:6552): the unit-target arm is skipped when
+	// the target is the caster — a self-targeted cast always passes range.
+	if targetGUID == s.playerGUID {
+		return 0
+	}
 	tgt, ok := s.getCombatTarget(ctx, targetGUID)
 	if !ok {
 		return 0
@@ -3305,7 +3343,7 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	if !ok {
 		return 0
 	}
-	minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, false, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0)
+	minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, false, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
 	// Spell::CheckRange (Spell.cpp:6543-6546): the non-strict completion
 	// recheck allows 10% (capped at 3.0) beyond max range for non-melee
 	// range entries.
@@ -3347,7 +3385,7 @@ func (s *session) validateSpellDestRange(ctx context.Context, spell wotlk.Spell,
 	if !ok {
 		return 0
 	}
-	minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, strict, 0, false, false, false, false)
+	minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, strict, 0, false, false, false, false, false)
 	maxRange += spellRangeTolerance(rangeEntry.Flags, maxRange, strict)
 	dist := distance3D(s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z)
 	if maxRange > 0 && dist > maxRange {
