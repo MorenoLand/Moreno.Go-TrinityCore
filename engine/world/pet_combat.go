@@ -628,6 +628,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			armor = 0
 		}
 		if armor > 0 {
+			// The pet's 123/269 ignore-resist arms run on the auto-swing
+			// path (Unit.cpp:1632-1650, null spellInfo).
+			armor = s.creatureIgnoreTargetResistArmor(creatureAuraKeyForMotion(motion), armor)
 			damage = calcArmorReducedDamage(armor, uint8(motion.Level), targetLevel, damage)
 		}
 	}

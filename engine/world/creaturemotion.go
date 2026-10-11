@@ -2324,7 +2324,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// AutoBalance_UnitScript::ModifyMeleeDamage analog.
 			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
 			if target.Sess.player.Armor > 0 {
-				damage = calcArmorReducedDamage(float64(target.Sess.player.Armor), uint8(motion.Level), target.Sess.player.Level, damage)
+				armor := float64(target.Sess.player.Armor)
+				// The attacker's 123/269 ignore-resist arms run on the
+				// creature auto-swing path (Unit.cpp:1632-1650, null
+				// spellInfo).
+				armor = s.creatureIgnoreTargetResistArmor(creatureAuraKeyForMotion(motion), armor)
+				damage = calcArmorReducedDamage(armor, uint8(motion.Level), target.Sess.player.Level, damage)
 			}
 			if damage < 1 {
 				damage = 1

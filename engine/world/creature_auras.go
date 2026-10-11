@@ -1,6 +1,9 @@
 package world
 
-import "strings"
+import (
+	"math"
+	"strings"
+)
 
 type creatureAuraKey struct {
 	Map        uint32
@@ -130,6 +133,66 @@ func (s *Server) creatureAuraScaleSum(key creatureAuraKey) int32 {
 	}
 	s.auraMu.Unlock()
 	return sum
+}
+
+// creatureAuraTypeAmountsByMiscMask mirrors the per-effect iteration of
+// Unit::GetTotalAuraModifierByMiscMask (Unit.cpp:4977) for creature auras:
+// the live amount of each active effect of auraType whose DBC MiscValue
+// overlaps miscMask.
+func (s *Server) creatureAuraTypeAmountsByMiscMask(key creatureAuraKey, auraType uint32, miscMask uint32) []int32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return nil
+	}
+	var amounts []int32
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != auraType || uint32(effect.MiscValue)&miscMask == 0 {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				amounts = append(amounts, aura.Amounts[index])
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return amounts
+}
+
+// creatureIgnoreTargetResistArmor mirrors the creature-attacker arms of
+// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650) on the auto-swing path
+// (null spellInfo): the attacker's SPELL_AURA_MOD_TARGET_RESISTANCE (123)
+// NORMAL-misc flat sum lands on the victim's armor first, then each
+// SPELL_AURA_MOD_IGNORE_TARGET_RESIST (269) NORMAL-misc effect shrinks it by
+// floor(armor*(100-amount)/100). The 270 leg never fires (null spellInfo),
+// the SPELLMOD_IGNORE_ARMOR leg is player-only, and the 280/rating armor
+// penetration leg is TYPEID_PLAYER-gated in C++ — creatures get none.
+func (s *Server) creatureIgnoreTargetResistArmor(key creatureAuraKey, armor float64) float64 {
+	if armor <= 0 {
+		return armor
+	}
+	var flat int32
+	for _, amount := range s.creatureAuraTypeAmountsByMiscMask(key, spellAuraModTargetResistance, spellSchoolMaskNormal) {
+		flat += amount
+	}
+	armor += float64(flat)
+	for _, amount := range s.creatureAuraTypeAmountsByMiscMask(key, spellAuraModIgnoreTargetResist, spellSchoolMaskNormal) {
+		armor = math.Floor(armor * (100 - float64(amount)) / 100)
+	}
+	if armor < 0 {
+		armor = 0
+	}
+	return armor
 }
 
 // creatureAuraDamageDoneFlat mirrors the creature half of the flat arm

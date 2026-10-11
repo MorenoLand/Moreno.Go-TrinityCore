@@ -1415,6 +1415,32 @@ func (s *session) ignoreTargetResistArmor(armor float64, spell wotlk.Spell) floa
 	return armor
 }
 
+// ignoreTargetResistArmorSwing mirrors the auto-swing (null-spellInfo) arms of
+// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650): the attacker's
+// SPELL_AURA_MOD_TARGET_RESISTANCE (123) NORMAL-misc flat sum lands on the
+// victim's armor first, then each SPELL_AURA_MOD_IGNORE_TARGET_RESIST (269)
+// NORMAL-misc effect shrinks it by floor(armor*(100-amount)/100). The 270 leg
+// never fires here — AuraEffect::IsAffectedOnSpell(nullptr) is false
+// (SpellAuraEffects.cpp) — and the SPELLMOD_IGNORE_ARMOR leg is skipped
+// (spellInfo == nullptr), matching the null-spellInfo auto-attack path. The
+// 280/rating armor-penetration leg stays downstream in
+// calcArmorReducedDamage.
+func (s *session) ignoreTargetResistArmorSwing(armor float64) float64 {
+	if armor <= 0 {
+		return armor
+	}
+	for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModTargetResistance, spellSchoolMaskNormal) {
+		armor += float64(amount)
+	}
+	for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, spellSchoolMaskNormal) {
+		armor = math.Floor(armor * (100 - float64(amount)) / 100)
+	}
+	if armor < 0 {
+		armor = 0
+	}
+	return armor
+}
+
 // totalAuraModifierByAffectMask mirrors Unit::GetTotalAuraModifierByAffectMask
 // (Unit.cpp:5017): sums aura amounts of the given type only from aura effects
 // whose spell affects the given spell via the spell-family affect mask.
