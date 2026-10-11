@@ -21639,6 +21639,24 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if eff.Aura == 4 {
 			targetSess.addOwnerPetAuraEffects(ctx, spell.ID, spellEffectMask(spell, eff))
 		}
+		// AuraEffect::HandleAuraDummy scripted arms
+		// (SpellAuraEffects.cpp:4329-4444, REAL|REAPPLY at apply): 39850
+		// Rocket Blast backfires on a 20% roll (the target self-casts
+		// 51581); 13139 net-o-matic roots the caster (caster self-casts
+		// 13138). The effIndex 0 gate keeps the C++ once-per-cast
+		// semantic for these single-dummy-effect spells.
+		if eff.Aura == spellAuraDummy && effIndex == 0 {
+			switch spell.ID {
+			case 39850:
+				if rand.Float64()*100 < 20 {
+					targetSess.castSpellDirect(ctx, 51581, targetGUID)
+				}
+			case 13139:
+				if casterGUID == s.playerGUID {
+					s.castSpellDirect(ctx, 13138, s.playerGUID)
+				}
+			}
+		}
 		if movementSpeedAura(eff.Aura) {
 			targetSess.sendRuntimeMovementUpdates(eff.Aura)
 		}
@@ -21921,11 +21939,39 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if eff.Aura == spellAuraLinked {
 		s.fireLinkedAuraTrigger(ctx, spell, eff, amount, targetGUID, targetKey)
 	}
-	if eff.Aura == spellAuraCharm {
+	// AuraEffect::HandleCharmConvert (SpellAuraEffects.cpp:2946-2958) and
+	// HandleAuraModCharm: 177 SPELL_AURA_AOE_CHARM applies the same
+	// SetCharmedBy as 6 SPELL_AURA_MOD_CHARM (CHARM_TYPE_CONVERT vs
+	// CHARM_TYPE_CHARM — Go's charmCreature does not model the charm
+	// type). Both run only in AURA_EFFECT_HANDLE_REAL mode.
+	if eff.Aura == spellAuraCharm || eff.Aura == spellAuraAoeCharm {
 		spells, reactState, commandState, controlled := s.server.charmCreature(ctx, targetKey, s.playerGUID, s.player.Race)
 		if controlled {
 			s.sendClientControl(targetGUID, true)
 			s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
+		}
+	}
+	// AuraEffect::HandleAuraDummy scripted arms
+	// (SpellAuraEffects.cpp:4329-4444, REAL|REAPPLY at apply): 1515 Tame
+	// Beast adds 10 threat from the caster on a threat-list-capable
+	// creature target (ThreatManager::CanHaveThreatList); 39850 Rocket
+	// Blast backfires on a 20% roll (the target self-casts 51581 through
+	// the creature funnel). The effIndex 0 gate keeps the C++ once-per-
+	// cast semantic for these single-dummy-effect spells.
+	if eff.Aura == spellAuraDummy && effIndex == 0 && s.server != nil {
+		switch spell.ID {
+		case 1515:
+			if casterGUID != 0 {
+				if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil && m.ThreatMgr != nil && m.ThreatMgr.OwnerCanHaveThreatList() {
+					m.ThreatMgr.AddThreat(casterGUID, 10.0, true)
+				}
+			}
+		case 39850:
+			if rand.Float64()*100 < 20 {
+				if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
+					s.server.castCreatureSpellInternal(ctx, m, 51581, targetGUID, true)
+				}
+			}
 		}
 	}
 	// AuraEffect::HandleAuraControlVehicle apply leg
@@ -25284,7 +25330,7 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	if s.server.activeCreatureAuras != nil {
 		if auras, ok := s.server.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
-				wasCharm = aura.AuraType == spellAuraCharm
+				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm
 				charmerGUID = aura.CasterGUID
 				// The remove arm of AuraEffect::HandleModTaunt
 				// (SpellAuraEffects.cpp:2772-2781): dropping the MOD_TAUNT
@@ -25388,7 +25434,7 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	if s.activeCreatureAuras != nil {
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
-				wasCharm = aura.AuraType == spellAuraCharm
+				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
