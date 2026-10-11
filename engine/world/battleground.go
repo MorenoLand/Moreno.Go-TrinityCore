@@ -1481,7 +1481,7 @@ func (s *session) canUseBattlegroundObject(goGUID uint64) bool {
 		var faction int64
 		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
 			"SELECT COALESCE(faction, 0) FROM gameobject_template_addon WHERE entry = ? LIMIT 1", entry).Scan(&faction); err == nil && faction != 0 {
-			playerFaction := s.server.raceFaction(s.player.Race)
+			playerFaction := s.effectiveFactionTemplate(s.player.Race)
 			_, pfound, perr := s.server.Data.FactionTemplate(playerFaction)
 			_, gfound, gerr := s.server.Data.FactionTemplate(uint32(faction))
 			if pfound && gfound && perr == nil && gerr == nil {

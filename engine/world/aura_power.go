@@ -242,10 +242,11 @@ func (s *session) auraPowerRegenTerms(powerIdx int) (flat int32, mult float32) {
 // auraManaRegenTerms folds the live mana-regen aura effects into the
 // UpdateManaRegen terms (StatSystem.cpp:912-937): the 110 misc-mana
 // multiplier on the spirit-based regen, the mp5-per-second term from 85
-// misc-mana ((sum + m_baseManaRegen) / 5 — m_baseManaRegen has no Go model
-// and reads 0) plus the 219 from-stat arms (stat[misc] * amount / 500, misc
-// is a Stats index), and the 134 interrupt percentage (capped at 100) that
-// feeds the under-5s-rule regen arm.
+// misc-mana ((sum + m_baseManaRegen) / 5 — m_baseManaRegen rides the live
+// ItemManaRegenBonus field, folded in by the caller at server.go), plus the
+// 219 from-stat arms (stat[misc] * amount / 500, misc is a Stats index), and
+// the 134 interrupt percentage (capped at 100) that feeds the under-5s-rule
+// regen arm.
 func (s *session) auraManaRegenTerms() (spiritMult float32, mp5PerSec float32, interruptPct int32) {
 	spiritMult = 1
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {

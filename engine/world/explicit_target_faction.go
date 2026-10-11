@@ -297,7 +297,7 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 		friendly = !duelHostile && targetSess.playerAlliance() == s.playerAlliance()
 		hostile = duelHostile || !friendly
 	} else {
-		caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+		caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 		friendly = s.server.isFriendlyFaction(tgt.Faction, caster)
 		hostile = !friendly && s.server.isHostileFaction(tgt.Faction, caster)
 	}

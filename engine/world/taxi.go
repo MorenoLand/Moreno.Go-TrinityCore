@@ -125,7 +125,7 @@ func (s *session) nearestCreatureTaxiNode(ctx context.Context, guid uint64) (uin
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	var faction int64
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.faction, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?`, low, entry).Scan(&faction); err == nil {
-		player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+		player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 		if s.server.isHostileFaction(uint32(faction), player) {
 			return 0, false
 		}
@@ -236,7 +236,7 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 	if rows.Err() != nil {
 		return false
 	}
-	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	for _, master := range masters {
 		if s.server.isHostileFaction(master.faction, player) {
 			continue

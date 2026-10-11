@@ -1024,7 +1024,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			centerX, centerY, centerZ = destination.X, destination.Y, destination.Z
 		}
 	}
-	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, faction, unitFlags, flagsExtra, health uint32) {
@@ -3288,7 +3288,7 @@ func (s *session) spellRangeTargetHostile(targetGUID uint64, tgt combatTarget) b
 			s.player.DuelTeam != 0 && targetSess.player.DuelTeam != 0
 		return duelHostile || targetSess.playerAlliance() != s.playerAlliance()
 	}
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	return !s.server.isFriendlyFaction(tgt.Faction, caster) && s.server.isHostileFaction(tgt.Faction, caster)
 }
 
@@ -4118,7 +4118,7 @@ func (s *session) handleEffectPickpocket(ctx context.Context, targetGUID uint64,
 	}
 	// !m_caster->IsFriendlyTo(unitTarget): Go's friendliness model reduces
 	// to hostile-vs-not (the SpellClick FRIEND convention).
-	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	if !s.server.isHostileFaction(target.Faction, player) {
 		return
 	}
@@ -5441,7 +5441,7 @@ func (s *session) checkRangedAttackPowerAttackerBonusCast(spell wotlk.Spell, tar
 	if motion == nil {
 		return 0
 	}
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	if s.server.isFriendlyFaction(motion.Faction, caster) {
 		return spellFailedTargetFriendly
 	}
@@ -7027,7 +7027,7 @@ func (s *session) isFriendlyLaunchTarget(ctx context.Context, targetGUID uint64)
 	if !ok {
 		return false
 	}
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	return s.server.isFriendlyFaction(faction, caster)
 }
 
@@ -18099,7 +18099,7 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 		hostile = !s.isFriendlyToPlayer(targetSess)
 	} else if s.server != nil {
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
-			caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+			caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 			hostile = s.server.isHostileFaction(tgt.Faction, caster)
 		}
 	}
@@ -26184,7 +26184,7 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 		if !isPet {
 			switch click.userType {
 			case 1: // SPELL_CLICK_USER_FRIEND
-				player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+				player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 				if s.server.isHostileFaction(motion.Faction, player) {
 					continue
 				}
@@ -29433,7 +29433,28 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	if count < 1 {
 		count = 1
 	}
-	res, err := s.storeOrStackItem(ctx, playerGUID, eff.ItemType, uint32(count))
+	// Spell::DoCreateItem (SpellEffects.cpp:1552-1625): gem perfection
+	// (CanCreatePerfectItem, SkillExtraItems.cpp:202) swaps the created
+	// item for the perfect variant when a skill_perfect_item_template row
+	// exists for the creation spell and the player holds the required
+	// specialization spell.
+	itemType := eff.ItemType
+	if chance, perfectItem, ok := s.canCreatePerfectItem(ctx, spell.ID); ok && rand.Float64()*100 < chance {
+		itemType = perfectItem
+	}
+	// Spell::DoCreateItem (SpellEffects.cpp:1616-1622): the
+	// skill_extra_item_template row for the creation spell adds the
+	// profession-specialization extra-item rolls — 1 base item plus up to
+	// additionalMaxNum extra creations while the chance roll keeps
+	// succeeding (CanCreateExtraItems, SkillExtraItems.cpp:223).
+	if chance, maxNum, ok := s.canCreateExtraItems(ctx, spell.ID); ok {
+		itemsCount := 1
+		for rand.Float64()*100 < chance && itemsCount <= int(maxNum) {
+			itemsCount++
+		}
+		count *= int32(itemsCount)
+	}
+	res, err := s.storeOrStackItem(ctx, playerGUID, itemType, uint32(count))
 	if err != nil {
 		return
 	}
@@ -29453,7 +29474,7 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 		}
 		if len(created) > 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			placeholders := strings.Repeat("?,", len(created)-1) + "?"
-			if s.spellCreatedItemHasSignature(ctx, eff.ItemType) {
+			if s.spellCreatedItemHasSignature(ctx, itemType) {
 				args := make([]interface{}, 0, len(created)+1)
 				args = append(args, playerGUID)
 				for _, g := range created {
@@ -29462,7 +29483,7 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 					"UPDATE item_instance SET creatorGuid = ? WHERE guid IN ("+placeholders+")", args...)
 			}
-			if propertyID := s.rollCreatedItemRandomProperty(ctx, eff.ItemType); propertyID != 0 {
+			if propertyID := s.rollCreatedItemRandomProperty(ctx, itemType); propertyID != 0 {
 				args := make([]interface{}, 0, len(created)+1)
 				args = append(args, propertyID)
 				for _, g := range created {
@@ -29482,15 +29503,59 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	// arm returned above. Go skips the log when the store itself fails; C++
 	// logs unconditionally after DoCreateItem.
 	if eff.Effect == spellEffectCreateItem {
-		s.sendCreateItemLog(spell.ID, eff.ItemType)
+		s.sendCreateItemLog(spell.ID, itemType)
 	}
 }
 
+// canCreatePerfectItem mirrors CanCreatePerfectItem (SkillExtraItems.cpp:202):
+// a skill_perfect_item_template row keyed by the creation spell, plus the
+// required specialization spell on the player, enables the perfection roll.
+// The caller rolls roll_chance_f against the returned chance.
+// canCreateExtraItems mirrors CanCreateExtraItems (SkillExtraItems.cpp:223):
+// a skill_extra_item_template row keyed by the creation spell, plus the
+// required specialization spell on the player, enables the extra-item rolls
+// with the returned chance and additionalMaxNum cap.
 // spellCreatedItemHasSignature mirrors ItemTemplate::HasSignature
 // (ItemTemplate.cpp): a crafted item gets the "Crafted by ..." creator when
 // the template stacks to 1, is neither consumable nor quest, carries no
 // ITEM_FLAG_NO_CREATOR (ItemTemplate.h:169, 0x00020000), and is not the
 // hearthstone (6948).
+func (s *session) canCreatePerfectItem(ctx context.Context, spellID uint32) (chance float64, perfectItem uint32, ok bool) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.player == nil {
+		return 0, 0, false
+	}
+	var reqSpec uint32
+	var perfectCreateChance float64
+	var perfectItemType uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT requiredSpecialization, perfectCreateChance, perfectItemType FROM skill_perfect_item_template WHERE spellId = ? LIMIT 1",
+		spellID).Scan(&reqSpec, &perfectCreateChance, &perfectItemType); err != nil {
+		return 0, 0, false
+	}
+	if perfectCreateChance <= 0 || perfectItemType == 0 || !playerHasSpell(s.player, reqSpec) {
+		return 0, 0, false
+	}
+	return perfectCreateChance, perfectItemType, true
+}
+
+func (s *session) canCreateExtraItems(ctx context.Context, spellID uint32) (chance float64, maxNum uint8, ok bool) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.player == nil {
+		return 0, 0, false
+	}
+	var reqSpec uint32
+	var additionalCreateChance float64
+	var additionalMaxNum uint8
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT requiredSpecialization, additionalCreateChance, additionalMaxNum FROM skill_extra_item_template WHERE spellId = ? LIMIT 1",
+		spellID).Scan(&reqSpec, &additionalCreateChance, &additionalMaxNum); err != nil {
+		return 0, 0, false
+	}
+	if additionalCreateChance <= 0 || !playerHasSpell(s.player, reqSpec) {
+		return 0, 0, false
+	}
+	return additionalCreateChance, additionalMaxNum, true
+}
+
 func (s *session) spellCreatedItemHasSignature(ctx context.Context, itemEntry uint32) bool {
 	if itemEntry == 0 || itemEntry == 6948 || s == nil || s.server == nil ||
 		s.server.WorldStore == nil || s.server.WorldStore.DB == nil {

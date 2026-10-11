@@ -95,7 +95,7 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 		// The player-path area sweep applies no unit-flag block to player
 		// candidates (the C++ totem/unattackable arms can't match a player
 		// session); the faction gate below carries the enemy check.
-		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: s.raceFaction(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
+		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
 		// WorldObjectSpellTargetCheck::operator() (Spell.cpp:8316):
 		// TARGET_CHECK_ENEMY — the same call shape as the creature's own
 		// aggro pick (creaturemotion.go canCreatureStartAttack).

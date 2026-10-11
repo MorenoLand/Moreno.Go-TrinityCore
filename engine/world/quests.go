@@ -237,7 +237,7 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 	if s.player != nil && uint16(guid>>48) == 0xF130 && entry != 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		var faction int64
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(faction, 0) FROM creature_template WHERE entry = ?", entry).Scan(&faction); err == nil && faction != 0 {
-			player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+			player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 			hostile = s.server.isHostileFaction(uint32(faction), player)
 		}
 	}
@@ -973,7 +973,7 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 		}
 		objectRows.Close()
 	}
-	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	entries := make([]struct {
 		guid   uint64
 		status uint8

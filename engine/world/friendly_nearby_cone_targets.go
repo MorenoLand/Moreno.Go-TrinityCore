@@ -101,7 +101,7 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 		return 0, false
 	}
 	maxRange := float64(rangeEntry.MaxHostile)
-	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	bestGUID := uint64(0)
 	bestDist := maxRange
 	var bestX, bestY, bestZ float32
@@ -442,7 +442,7 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 	if len(checks) == 0 {
 		return 0, false
 	}
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
 	scope := s.friendlyRefererScope(s.playerGUID)
 	bestGUID := uint64(0)
@@ -530,7 +530,7 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	// !HasInArc(2*pi - arc)); the cone angle itself is the hardcoded M_PI/2
 	// (SelectImplicitConeTargets, Spell.cpp:1188).
 	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
@@ -645,7 +645,7 @@ func (s *session) spellFriendlyRefCenteredAreaTargets(ctx context.Context, spell
 	if radius <= 0 {
 		return nil
 	}
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})

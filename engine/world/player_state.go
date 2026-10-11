@@ -3578,12 +3578,10 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values[unitFieldBytes1] = uint32(state.StandState) | uint32(state.StandFlags)<<16
 	// AuraEffect::HandleAuraModFaction (SpellAuraEffects.cpp): an active 243
 	// effect overrides the faction with its misc value; the remove leg
-	// restores the race faction. Live fold (forcedFactionAura).
+	// restores the race faction. Live fold (effectiveFactionTemplate).
 	values[unitFieldFaction] = s.raceFaction(state.Race)
 	if runtime != nil {
-		if forced, ok := runtime.forcedFactionAura(); ok {
-			values[unitFieldFaction] = forced
-		}
+		values[unitFieldFaction] = runtime.effectiveFactionTemplate(state.Race)
 	}
 	unitFlags := state.UnitFlags
 	if state.MountDisplayID != 0 || state.UnitFlags&unitFlagMount != 0 {

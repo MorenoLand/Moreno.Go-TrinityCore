@@ -1378,7 +1378,7 @@ func (s *session) creatureFriendlyToCaster(caster *session, targetFaction uint32
 	if s == nil || s.server == nil || caster == nil || caster.player == nil {
 		return false
 	}
-	pos := playerPos{Map: caster.player.Map, InstanceID: caster.player.InstanceID, X: caster.player.X, Y: caster.player.Y, Z: caster.player.Z, GUID: caster.playerGUID, Race: caster.player.Race, Class: caster.player.Class, Level: caster.player.Level, FactionTemplate: s.server.raceFaction(caster.player.Race), Reputations: playerReputationMap(caster.player.Reputations), Sess: caster}
+	pos := playerPos{Map: caster.player.Map, InstanceID: caster.player.InstanceID, X: caster.player.X, Y: caster.player.Y, Z: caster.player.Z, GUID: caster.playerGUID, Race: caster.player.Race, Class: caster.player.Class, Level: caster.player.Level, FactionTemplate: caster.effectiveFactionTemplate(caster.player.Race), Reputations: playerReputationMap(caster.player.Reputations), Sess: caster}
 	return !s.server.isAttackableFaction(targetFaction, pos)
 }
 

@@ -150,7 +150,7 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 			centerX, centerY, centerZ = destination.X, destination.Y, destination.Z
 		}
 	}
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
 	_, partyMembers, raidMembers, inGroup := s.friendlyGroupSnapshot()
 	inParty := func(guid uint64) bool {

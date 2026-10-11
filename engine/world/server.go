@@ -1602,13 +1602,18 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 				// the 219 from-stat arms, and the 134 interrupt percentage
 				// (capped at 100) feeds the under-5s-rule regen arm.
 				spiritMult, mp5PerSec, interruptPct := sess.auraManaRegenTerms()
+				// Player::UpdateManaRegen (StatSystem.cpp:921): the mp5 term
+				// is (85 misc-mana sum + m_baseManaRegen) / 5 — the item/enchant
+				// ITEM_MOD_MANA_REGENERATION leg feeds both the flat and the
+				// interrupted modifier, so it applies under the 5-second rule
+				// too, not just outside it.
+				mp5PerSec += float32(p.ItemManaRegenBonus) / 5.0
 				spiritPerSec := float64(s.manaRegenTickGain(uint32(p.Class), p.Level, p.Stats[3], p.Stats[4])) / 2.0
 				var gain uint32
 				if now.Sub(sess.lastCastTime) >= 5*time.Second {
 					// Outside 5-second rule (Player.cpp:2130-2144): the 2s
 					// tick gain is (spiritTerm + mp5) * 2.
 					gain = uint32(spiritPerSec*float64(spiritMult)*2.0) + uint32(float64(mp5PerSec)*2.0)
-					gain += uint32(float64(p.ItemManaRegenBonus) / 5.0)
 				} else {
 					// Under the 5-second rule C++ regens the interrupted
 					// flat modifier: mp5 + 134%-of-spirit-term, * 2s

@@ -429,7 +429,7 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 	if s == nil || s.player == nil || totem == nil || s.server == nil {
 		return
 	}
-	owner := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	owner := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	var nearest *creatureMotion
 	minDist := float64(math.MaxFloat64)
 	for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {

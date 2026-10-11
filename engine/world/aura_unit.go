@@ -1,10 +1,15 @@
 package world
 
-// playerFactionForBroadcast mirrors the UNIT_FIELD_FACTION write of
-// HandleAuraModFaction (SpellAuraEffects.cpp): an active 243 effect overrides
-// the race faction with its misc value; the remove leg restores the race
-// faction via forcedFactionAura's no-aura fallback.
-func (s *session) playerFactionForBroadcast(race uint8) uint32 {
+// effectiveFactionTemplate mirrors the live UNIT_FIELD_FACTIONTEMPLATE read
+// behind C++ Unit::GetFactionTemplateEntry: AuraEffect::HandleAuraModFaction
+// (243, SpellAuraEffects.cpp:4808) rewrites the field via SetFaction on
+// apply and restores the race faction on remove, so the broadcast display
+// AND every hostility/friendliness verdict (WorldObject::GetReactionTo,
+// Object.cpp:2708-2842) see the forced faction, not the race faction. Falls
+// back to the race faction when no 243 aura is live. Player::GetTeam
+// (m_team) is intentionally untouched — team-gated systems (taxi, chat,
+// reputation) keep the race model.
+func (s *session) effectiveFactionTemplate(race uint8) uint32 {
 	if s != nil {
 		if forced, ok := s.forcedFactionAura(); ok {
 			return forced

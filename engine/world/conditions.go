@@ -1536,7 +1536,7 @@ func (s *session) reactionRankTo(u, toUnit conditionUnit) uint32 {
 		Sess:        s,
 	}
 	if s.server != nil {
-		player.FactionTemplate = s.server.raceFaction(s.player.Race)
+		player.FactionTemplate = s.effectiveFactionTemplate(s.player.Race)
 	}
 	if u.isPlayer {
 		return s.playerToCreatureRank(player, creature.faction)

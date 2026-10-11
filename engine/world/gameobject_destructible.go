@@ -373,7 +373,7 @@ func (s *session) handleEffectGameObjectDamageGO(ctx context.Context, spellID ui
 	// caster's faction template is unknown).
 	if faction, ok := s.server.gameObjectTargetFaction(ctx, mapID, instanceID, goGUID); ok && faction != 0 {
 		targetTpl, targetOK := s.factionTemplateEntry(faction)
-		casterTpl, casterOK := s.factionTemplateEntry(s.server.raceFaction(s.player.Race))
+		casterTpl, casterOK := s.factionTemplateEntry(s.effectiveFactionTemplate(s.player.Race))
 		if targetOK && (!casterOK || factionTemplateFriendlyTo(casterTpl, targetTpl)) {
 			return
 		}

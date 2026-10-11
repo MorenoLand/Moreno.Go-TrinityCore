@@ -1638,7 +1638,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				IsGM:            isGM,
 				SeesHidden:      seesHidden,
 				IsDead:          isDead,
-				FactionTemplate: s.raceFaction(sess.player.Race),
+				FactionTemplate: sess.effectiveFactionTemplate(sess.player.Race),
 				Reputations:     playerReputationMap(sess.player.Reputations),
 				Sess:            sess,
 			})

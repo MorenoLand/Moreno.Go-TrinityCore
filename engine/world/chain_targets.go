@@ -177,7 +177,7 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 // Unit::IsValidAssistTarget. Range uses the C++ cylinder test
 // (IsWithinDist2d + |dz| <= range).
 func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primary combatTarget, radius float32, isChainHeal bool, excludeGUID uint64) []chainCandidate {
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool) {

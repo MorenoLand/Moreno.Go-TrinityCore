@@ -126,7 +126,7 @@ func (s *Server) factionTemplatesFriendly(a, b uint32) bool {
 // (boss_ai.go) does.
 func (s *Server) creatureExplicitTargetPlayerPos(ts *session) playerPos {
 	return playerPos{
-		FactionTemplate: s.raceFaction(ts.player.Race),
+		FactionTemplate: ts.effectiveFactionTemplate(ts.player.Race),
 		Race:            ts.player.Race,
 		Class:           ts.player.Class,
 		Sess:            ts,

@@ -785,7 +785,7 @@ func (s *Server) creatureRangeTargetHostile(m *creatureMotion, targetGUID uint64
 	}
 	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 		tp := playerPos{
-			FactionTemplate: s.raceFaction(ts.player.Race),
+			FactionTemplate: ts.effectiveFactionTemplate(ts.player.Race),
 			Race:            ts.player.Race,
 			Class:           ts.player.Class,
 			Sess:            ts,
@@ -862,7 +862,7 @@ func (s *Server) creatureFriendlyToTarget(m *creatureMotion, targetGUID uint64) 
 	}
 	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 		return s.isFriendlyFaction(m.Faction, playerPos{
-			FactionTemplate: s.raceFaction(ts.player.Race),
+			FactionTemplate: ts.effectiveFactionTemplate(ts.player.Race),
 			Race:            ts.player.Race,
 			Class:           ts.player.Class,
 			Sess:            ts,
