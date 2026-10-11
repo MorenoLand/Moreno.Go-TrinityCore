@@ -38,17 +38,27 @@ func chainSelectionEligibleTarget(target uint32) bool {
 
 // chainSpellJumps returns the number of additional chain jumps for a spell and
 // whether it selects allies (Chain Heal). Mirrors the maxTargets > 1 gate in
-// Spell::SelectImplicitChainTargets (Spell.cpp:1593): jumps = ChainTarget - 1.
-// Go shares one hit-target list across effects, so the largest ChainTarget
-// among chain-eligible effects wins. Effects whose ChainTarget > 1 rides a
-// non-eligible implicit target (cone, area, caster-object, caster-dest)
-// contribute nothing, matching the C++ call sites above.
-func chainSpellJumps(spell wotlk.Spell) (jumps uint32, isChainHeal bool) {
+// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624): the player's
+// SPELLMOD_JUMP_TARGETS modifiers fold into ChainTarget BEFORE the >1 gate
+// (C++ applies ApplySpellMod to maxTargets at 1585-1588, then checks
+// maxTargets > 1 at 1593), so jumps = moddedChainTarget - 1. Creature casters
+// have no spell-mod owner, so the fold is a pass-through when s carries no
+// mods. Go shares one hit-target list across effects, so the largest modded
+// ChainTarget among chain-eligible effects wins. Effects whose ChainTarget > 1
+// rides a non-eligible implicit target (cone, area, caster-object,
+// caster-dest) contribute nothing, matching the C++ call sites above.
+func chainSpellJumps(s *session, spell wotlk.Spell) (jumps uint32, isChainHeal bool) {
 	for _, eff := range spell.Effects {
-		if eff.ChainTargets > 1 &&
-			(chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) &&
-			eff.ChainTargets-1 > jumps {
-			jumps = eff.ChainTargets - 1
+		if chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB) {
+			// Spell.cpp:1585-1593: the mod folds into maxTargets before the
+			// >1 gate, so it runs even when the raw ChainTarget is 0 or 1.
+			maxTargets := int32(eff.ChainTargets)
+			if s != nil {
+				maxTargets = s.applySpellMod(spell, spellModJumpTargets, maxTargets)
+			}
+			if moddedJumps := maxTargets - 1; moddedJumps > int32(jumps) && moddedJumps > 0 {
+				jumps = uint32(moddedJumps)
+			}
 		}
 		if eff.ImplicitTargetA == spellImplicitTargetChainHealAlly || eff.ImplicitTargetB == spellImplicitTargetChainHealAlly {
 			isChainHeal = true

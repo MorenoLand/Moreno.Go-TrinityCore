@@ -7982,7 +7982,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	chainJumpIndex := make(map[uint64]int)
 	reflectedJumpIndexes := make([]int, 0, 1)
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
-		if jumps, isChainHeal := chainSpellJumps(spell); jumps > 0 {
+		if jumps, isChainHeal := chainSpellJumps(s, spell); jumps > 0 {
 			jump := 0
 			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
 				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
@@ -13623,7 +13623,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// A missed jump takes no miss entry on this path (no arrival-time miss
 	// model for triggered casts).
 	chainJumpGUIDs := []uint64{}
-	if jumps, isChainHeal := chainSpellJumps(spell); jumps > 0 && targetGUID != 0 {
+	if jumps, isChainHeal := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
 		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal)
 		hitTargets = append(hitTargets, chainJumpGUIDs...)
 	}
