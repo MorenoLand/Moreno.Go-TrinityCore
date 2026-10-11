@@ -312,6 +312,17 @@ func writeSpellCastTrailer(packet *Buffer, castFlags, targetFlags uint32) {
 	}
 }
 
+// BuildSpellDamageImmune builds SMSG_SPELLORDAMAGE_IMMUNE.
+// Reference: TrinityCore Unit::SendSpellDamageImmune (Unit.cpp:5424).
+func BuildSpellDamageImmune(casterGUID, targetGUID uint64, spellID uint32) []byte {
+	buf := NewBuffer(21)
+	buf.WriteU64(casterGUID)
+	buf.WriteU64(targetGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU8(0) // bool - log format: 0-default, 1-debug
+	return buf.Bytes()
+}
+
 // BuildPeriodicAuraLogDamage builds SMSG_PERIODICAURALOG for periodic damage / periodic damage percent.
 // Reference: TrinityCore Unit::SendPeriodicAuraLog (Unit.cpp:5372).
 func BuildPeriodicAuraLogDamage(targetGUID, casterGUID uint64, spellID, auraType, damage, overkill, schoolMask, absorb, resist uint32, critical bool) []byte {

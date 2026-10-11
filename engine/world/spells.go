@@ -21463,11 +21463,6 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
-		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
-		// ticks roll SpellHitResult per tick; missed ticks skip and log nothing.
-		if persistentAreaTickMissed(aura, ts.player.Level, true) {
-			return
-		}
 		dmg := aura.Amount
 		var tickSpell wotlk.Spell
 		tickKnown := false
@@ -21475,6 +21470,28 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
 				tickSpell, tickKnown = sp, true
 			}
+		}
+		// SpellAuraEffects.cpp:5113-5117 — isolated or damage-immune targets
+		// get SendTickImmune (SMSG_SPELLORDAMAGE_IMMUNE) and the tick is
+		// skipped, before the per-tick miss roll below. UNIT_STATE_ISOLATED
+		// has no Go model.
+		if tickKnown && ts.isImmuneToDamageSpell(tickSpell, tickSpell.SchoolMask) {
+			if aura.CasterGUID != 0 {
+				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
+				_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+				if ts.server != nil {
+					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+						_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+					}
+					ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
+				}
+			}
+			return
+		}
+		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
+		// ticks roll SpellHitResult per tick; missed ticks skip and log nothing.
+		if persistentAreaTickMissed(aura, ts.player.Level, true) {
+			return
 		}
 		if aura.AuraType == 89 {
 			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
@@ -21835,6 +21852,30 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
+		dmg := aura.Amount
+		var tickSpell wotlk.Spell
+		tickKnown := false
+		if ts.server != nil && ts.server.Data != nil {
+			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				tickSpell, tickKnown = sp, true
+			}
+		}
+		// SpellAuraEffects.cpp:5235-5239 — the same immune gate as the damage
+		// tick (SendTickImmune, SMSG_SPELLORDAMAGE_IMMUNE), before the
+		// per-tick miss roll. UNIT_STATE_ISOLATED has no Go model.
+		if tickKnown && ts.isImmuneToDamageSpell(tickSpell, tickSpell.SchoolMask) {
+			if aura.CasterGUID != 0 {
+				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
+				_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+				if ts.server != nil {
+					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+						_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+					}
+					ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
+				}
+			}
+			return
+		}
 		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
 		// per-tick miss gate as case 3.
 		if persistentAreaTickMissed(aura, ts.player.Level, true) {
@@ -21847,14 +21888,6 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// comment at the persistent-area-aura spawn). The persistent-area-aura
 		// SpellHitResult gate (5244-5246) stays unbridged — Go models no miss
 		// roll on dynobj ticks, consistent with case 3.
-		dmg := aura.Amount
-		var tickSpell wotlk.Spell
-		tickKnown := false
-		if ts.server != nil && ts.server.Data != nil {
-			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
-				tickSpell, tickKnown = sp, true
-			}
-		}
 		leechEffIndex := 0
 		if tickKnown {
 			for i, eff := range tickSpell.Effects {
@@ -22031,9 +22064,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// C++ gates: caster and target alive, and the target's power type
 		// matches. Go has no player PowerType model; the drain below
 		// naturally no-ops when the target's MaxPowers[powerType] is 0.
-		// UNIT_STATE_ISOLATED / IsImmunedToDamage have no Go model
-		// (SendTickImmune unbridged). The persistent-area-aura SpellHitResult
-		// gate is bridged by persistentAreaTickMissed at the top of this case.
+		// The persistent-area-aura SpellHitResult gate is bridged by
+		// persistentAreaTickMissed at the top of this case.
+		// UNIT_STATE_ISOLATED has no Go model.
 		if leechCaster == nil || leechCaster.player == nil || leechCaster.player.Health == 0 || ts.player.Health == 0 {
 			break
 		}
@@ -22043,6 +22076,22 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
 				tickSpell, tickKnown = sp, true
 			}
+		}
+		// SpellAuraEffects.cpp:5450-5453 — the immune gate
+		// (SendTickImmune, SMSG_SPELLORDAMAGE_IMMUNE) runs after the alive
+		// gates, before the drain.
+		if tickKnown && ts.isImmuneToDamageSpell(tickSpell, tickSpell.SchoolMask) {
+			if aura.CasterGUID != 0 {
+				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
+				_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+				if ts.server != nil {
+					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+						_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+					}
+					ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
+				}
+			}
+			break
 		}
 		drain := aura.Amount
 		if tickKnown && tickSpell.ManaCostPct != 0 {
@@ -22151,10 +22200,26 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// C++ gates: caster and target alive, and the target's power type
 		// matches the effect. Go has no player PowerType model; the drain
-		// below no-ops when MaxPowers[burnPowerType] is 0. UNIT_STATE_ISOLATED
-		// / IsImmunedToDamage have no Go model (SendTickImmune unbridged).
+		// below no-ops when MaxPowers[burnPowerType] is 0.
+		// UNIT_STATE_ISOLATED has no Go model.
 		if burnCaster == nil || burnCaster.player == nil || burnCaster.player.Health == 0 || ts.player.Health == 0 {
 			break
+		}
+		// SpellAuraEffects.cpp:5592-5596 — the immune gate
+		// (SendTickImmune, SMSG_SPELLORDAMAGE_IMMUNE) runs after the alive
+		// gates, before the drain.
+		if ts.server != nil && ts.server.Data != nil {
+			if burnSpell, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found && ts.isImmuneToDamageSpell(burnSpell, burnSpell.SchoolMask) {
+				if aura.CasterGUID != 0 {
+					immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
+					_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+						_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+					}
+					ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
+				}
+				break
+			}
 		}
 		if int(burnPowerType) >= len(ts.player.MaxPowers) || ts.player.MaxPowers[burnPowerType] == 0 {
 			break
@@ -22640,12 +22705,6 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
-		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
-		// ticks roll SpellHitResult per tick; a miss skips the tick but
-		// keeps the chain alive (true).
-		if persistentAreaTickMissed(aura, target.Level, false) {
-			return true
-		}
 		dmg := aura.Amount
 		var tickSpell wotlk.Spell
 		tickKnown := false
@@ -22653,6 +22712,24 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				tickSpell, tickKnown = sp, true
 			}
+		}
+		// SpellAuraEffects.cpp:5113-5117 — the same immune gate as the player
+		// path: damage-immune targets get SendTickImmune
+		// (SMSG_SPELLORDAMAGE_IMMUNE) and the tick is skipped, keeping the
+		// chain alive. UNIT_STATE_ISOLATED has no Go model.
+		if tickKnown && s.server != nil && creatureImmuneToDamageSpell(s.server, key, tickSpell, tickSpell.SchoolMask) {
+			if aura.CasterGUID != 0 {
+				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
+				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+				s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
+			}
+			return true
+		}
+		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
+		// ticks roll SpellHitResult per tick; a miss skips the tick but
+		// keeps the chain alive (true).
+		if persistentAreaTickMissed(aura, target.Level, false) {
+			return true
 		}
 		if aura.AuraType == 89 {
 			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
@@ -23073,6 +23150,25 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		return true
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
+		dmg := aura.Amount
+		var tickSpell wotlk.Spell
+		tickKnown := false
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				tickSpell, tickKnown = sp, true
+			}
+		}
+		// SpellAuraEffects.cpp:5235-5239 — the same immune gate as the damage
+		// tick (SendTickImmune, SMSG_SPELLORDAMAGE_IMMUNE), keeping the
+		// chain alive. UNIT_STATE_ISOLATED has no Go model.
+		if tickKnown && s.server != nil && creatureImmuneToDamageSpell(s.server, key, tickSpell, tickSpell.SchoolMask) {
+			if aura.CasterGUID != 0 {
+				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
+				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+				s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
+			}
+			return true
+		}
 		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
 		// per-tick miss gate as case 3; a miss keeps the chain alive.
 		if persistentAreaTickMissed(aura, target.Level, false) {
@@ -23082,14 +23178,6 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// the leech damage side runs the same taken->crit->armor->resilience->
 		// absorb/resist funnel as damage ticks; the dynobj done leg is already
 		// baked into AuraAmount at spawn like the damage path.
-		dmg := aura.Amount
-		var tickSpell wotlk.Spell
-		tickKnown := false
-		if s.server != nil && s.server.Data != nil {
-			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
-				tickSpell, tickKnown = sp, true
-			}
-		}
 		leechEffIndex := 0
 		if tickKnown {
 			for i, eff := range tickSpell.Effects {
@@ -23298,6 +23386,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// MaxPowers[powerType] is 0). Creature victims have no resilience
 		// model (consistent with the damage ticks), and the
 		// persistent-area-aura SpellHitResult gate stays unbridged.
+		// UNIT_STATE_ISOLATED has no Go model.
 		if leechCaster == nil || leechCaster.player == nil || leechCaster.player.Health == 0 {
 			return true
 		}
@@ -23307,6 +23396,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				tickSpell, tickKnown = sp, true
 			}
+		}
+		// SpellAuraEffects.cpp:5450-5453 — the immune gate
+		// (SendTickImmune, SMSG_SPELLORDAMAGE_IMMUNE) runs after the alive
+		// gates, keeping the chain alive.
+		if tickKnown && s.server != nil && creatureImmuneToDamageSpell(s.server, key, tickSpell, tickSpell.SchoolMask) {
+			if aura.CasterGUID != 0 {
+				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
+				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+				s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
+			}
+			return true
 		}
 		drain := aura.Amount
 		if tickKnown && tickSpell.ManaCostPct != 0 && s.server != nil {
@@ -23443,8 +23543,22 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// when MaxPowers[burnPowerType] is 0). Creature victims have no
 		// resilience model (consistent with the damage ticks), and the
 		// persistent-area-aura gate stays unbridged.
+		// UNIT_STATE_ISOLATED has no Go model.
 		if burnCaster == nil || burnCaster.player == nil || burnCaster.player.Health == 0 {
 			return true
+		}
+		// SpellAuraEffects.cpp:5592-5596 — the immune gate
+		// (SendTickImmune, SMSG_SPELLORDAMAGE_IMMUNE) runs after the alive
+		// gates, keeping the chain alive.
+		if s.server != nil && s.server.Data != nil {
+			if burnSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found && creatureImmuneToDamageSpell(s.server, key, burnSpell, burnSpell.SchoolMask) {
+				if aura.CasterGUID != 0 {
+					immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
+					_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+					s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
+				}
+				return true
+			}
 		}
 		// int32 drainedAmount = -target->ModifyPower(powerType, -damage).
 		burnDrain := aura.Amount
