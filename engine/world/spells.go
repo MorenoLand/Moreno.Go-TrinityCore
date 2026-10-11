@@ -2969,10 +2969,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if s.player.ActiveCheats&cheatCasttime != 0 {
 		castTime = 0
 	}
-	// Spell::prepare (Spell.cpp:3139-3149): channeled spells and spells with
-	// cast time cannot start while moving, unless the channel allows movement.
+	// Spell::prepare (Spell.cpp:3138-3150): channeled spells and spells with
+	// cast time cannot start while moving, unless the channel allows movement
+	// (SpellInfo::IsMoveAllowedChannel, SpellInfo.cpp:1229-1232 — the ATTR5
+	// bit OR ChannelInterruptFlags lacking MOVE|TURNING, not the ATTR5 bit
+	// alone). The charmed-by-creature trust arm is vacuous (Go has no
+	// player-charmer model) and the TYPEID_PLAYER arm is vacuous on this
+	// client-initiated path.
 	if (isChanneledSpell(spell) || castTime > 0) && s.isMoving && spell.InterruptFlags&spellInterruptFlagMovement != 0 {
-		if castTime > 0 || spell.AttributesEx5&spellAttr5CanChannelWhenMoving == 0 {
+		if castTime > 0 || !spellIsMoveAllowedChannel(spell) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "casting while moving")
 			return true
@@ -16702,12 +16707,8 @@ func (s *session) interruptSpellsOnMovement() {
 	castBreaks := cast != nil && !cast.Cancelled && cast.InterruptFlg&spellInterruptFlagMovement != 0
 	// Spell::update movement leg (Spell.cpp:3814-3831) skips the cancel for a
 	// channel C++ lets move: SpellInfo::IsMoveAllowedChannel
-	// (SpellInfo.cpp:1229-1232) = channeled (true here — the channel is
-	// active) AND (ATTR5_CAN_CHANNEL_WHEN_MOVING OR ChannelInterruptFlags
-	// lacking both AURA_INTERRUPT_FLAG_MOVE and AURA_INTERRUPT_FLAG_TURNING).
-	moveAllowed := channel != nil &&
-		(channel.Spell.AttributesEx5&spellAttr5CanChannelWhenMoving != 0 ||
-			channel.Spell.ChannelInterrupt&(auraInterruptFlagMove|auraInterruptFlagTurning) == 0)
+	// (SpellInfo.cpp:1229-1232), shared with the prepare start gate above.
+	moveAllowed := channel != nil && spellIsMoveAllowedChannel(channel.Spell)
 	channelBreaks := channel != nil && !channel.Stopped && !moveAllowed && channel.Spell.InterruptFlags&spellInterruptFlagMovement != 0
 	s.castMu.Unlock()
 
@@ -24683,6 +24684,18 @@ type activeChannelState struct {
 
 func isChanneledSpell(spell wotlk.Spell) bool {
 	return spell.AttributesEx&(spellAttr1Channeled1|spellAttr1Channeled2) != 0
+}
+
+// spellIsMoveAllowedChannel mirrors SpellInfo::IsMoveAllowedChannel
+// (SpellInfo.cpp:1229-1232): a channeled spell lets the caster move when it
+// carries SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING or its ChannelInterruptFlags
+// lack both AURA_INTERRUPT_FLAG_MOVE and AURA_INTERRUPT_FLAG_TURNING.
+// Shared by the Spell::prepare start-while-moving gate and the Spell::update
+// movement-interrupt leg so the two stay consistent.
+func spellIsMoveAllowedChannel(spell wotlk.Spell) bool {
+	return isChanneledSpell(spell) &&
+		(spell.AttributesEx5&spellAttr5CanChannelWhenMoving != 0 ||
+			spell.ChannelInterrupt&(auraInterruptFlagMove|auraInterruptFlagTurning) == 0)
 }
 
 // isRangedWeaponSpell mirrors SpellInfo::IsRangedWeaponSpell
