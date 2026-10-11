@@ -566,8 +566,10 @@ func (s *session) liveTotemSpellID(slotID uint8) uint32 {
 // TotemPulseNone), so the live totem in the victim's air slot is the magnet:
 // one redirect per totem, then MagnetUsed. The melee/ranged arm
 // (Unit::GetMeleeHitRedirectTarget, Unit.cpp:6349-6363 —
-// SPELL_AURA_ADD_CASTER_HIT_TRIGGER, aura 111) has no Go-modeled source and
-// stays unbridged, as does the Speed>0 charge-delay nuance.
+// SPELL_AURA_ADD_CASTER_HIT_TRIGGER, aura 111) is bridged separately at
+// the auto-attack site (meleeHitRedirectGUID, combat.go); the Speed>0
+// charge-delay nuance stays unbridged (Go consumes the magnet at
+// selection time).
 func (s *session) groundingTotemMagnetGUID(ctx context.Context, spell wotlk.Spell, victimGUID uint64) (uint64, bool) {
 	if s == nil || s.server == nil || s.player == nil || victimGUID == 0 {
 		return 0, false
@@ -652,9 +654,10 @@ func (s *session) groundingTotemMagnetGUID(ctx context.Context, spell wotlk.Spel
 // (SpellInfo.cpp:1786-1805) and IsValidAttackTarget are player-side and
 // vacuous for a creature target — they degrade to the faction verdict, the
 // same degradation the session path documents for nil target sessions. The
-// melee/ranged arm (Unit::GetMeleeHitRedirectTarget, aura 111) stays
-// unbridged — no Go-modeled source — as does the Speed>0 charge-delay
-// nuance (Go consumes the magnet at selection time).
+// melee/ranged arm (Unit::GetMeleeHitRedirectTarget, aura 111) is bridged
+// at the auto-attack site (meleeHitRedirectGUID, combat.go); the Speed>0
+// charge-delay nuance stays unbridged (Go consumes the magnet at
+// selection time).
 func (s *Server) creatureGroundingTotemRedirect(ctx context.Context, m *creatureMotion, spell wotlk.Spell, victimGUID uint64) (uint64, bool) {
 	if s == nil || m == nil || victimGUID == 0 {
 		return 0, false

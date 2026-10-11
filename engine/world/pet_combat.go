@@ -626,7 +626,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			armor = 0
 		}
 		if armor > 0 {
-			damage = calcArmorReducedDamage(armor, uint8(motion.Level), damage)
+			damage = calcArmorReducedDamage(armor, uint8(motion.Level), targetLevel, damage)
 		}
 	}
 

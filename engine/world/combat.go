@@ -394,6 +394,142 @@ func (s *session) negateGodModeDamage(damage uint32) uint32 {
 	return damage
 }
 
+// hitTriggerAura is one victim-side SPELL_AURA_ADD_CASTER_HIT_TRIGGER (111)
+// aura effect eligible for the melee redirect: the magnet is the aura's
+// caster GUID and chance is the effect amount (roll_chance_i percent).
+type hitTriggerAura struct {
+	spellID    uint32
+	chance     int32
+	magnet     uint64
+	aura       *activeAura
+	owner      *session // player victim; nil for creature victims
+	creaKey    creatureAuraKey
+	isCreature bool
+}
+
+// victimHitTriggerAuras collects the victim's 111 aura effects, player or
+// creature victim, mirroring victim->GetAuraEffectsByType(
+// SPELL_AURA_ADD_CASTER_HIT_TRIGGER) (Unit.cpp:6351). Per-effect aura kinds
+// come from the DBC like targetAuraEffectsByType (spells.go).
+func (s *session) victimHitTriggerAuras(victimGUID uint64) []hitTriggerAura {
+	var out []hitTriggerAura
+	collect := func(spellID uint32, aura *activeAura, owner *session, key creatureAuraKey, isCreature bool) {
+		if aura == nil || aura.Stopped || aura.CasterGUID == 0 {
+			return
+		}
+		for i := 0; i < 3; i++ {
+			if aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			t := aura.AuraType
+			if sp, found, _ := s.server.Data.Spell(spellID); found && i < len(sp.Effects) {
+				t = sp.Effects[i].Aura
+			}
+			if t != spellAuraAddCasterHitTrigger {
+				continue
+			}
+			out = append(out, hitTriggerAura{spellID: spellID, chance: aura.Amounts[i], magnet: aura.CasterGUID, aura: aura, owner: owner, creaKey: key, isCreature: isCreature})
+		}
+	}
+	if vs := s.server.findSessionByGUID(victimGUID); vs != nil && vs.player != nil {
+		vs.castMu.Lock()
+		for id, aura := range vs.activeAuras {
+			collect(id, aura, vs, creatureAuraKey{}, false)
+		}
+		vs.castMu.Unlock()
+	} else if s.player != nil {
+		key := creatureAuraKeyForPlayer(*s.player, victimGUID)
+		s.server.auraMu.Lock()
+		for id, aura := range s.server.activeCreatureAuras[key] {
+			collect(id, aura, nil, key, true)
+		}
+		s.server.auraMu.Unlock()
+	}
+	return out
+}
+
+// dropHitTriggerCharge mirrors the DropCharge(AURA_REMOVE_BY_EXPIRE) on a
+// successful redirect (Unit.cpp:6359): one charge is consumed and the aura
+// is removed at zero charges. The removals lock internally, so the charge
+// decrement runs under the map lock first and removal after release.
+func (s *session) dropHitTriggerCharge(ht hitTriggerAura) {
+	if ht.isCreature {
+		s.server.auraMu.Lock()
+		remove := false
+		if m := s.server.activeCreatureAuras[ht.creaKey]; m != nil {
+			if a, ok := m[ht.spellID]; ok && a == ht.aura && !a.Stopped {
+				if a.RemainingCharges > 0 {
+					a.RemainingCharges--
+				}
+				remove = a.RemainingCharges == 0
+			}
+		}
+		s.server.auraMu.Unlock()
+		if remove {
+			s.server.removeCreatureAura(ht.creaKey, ht.spellID)
+		}
+		return
+	}
+	vs := ht.owner
+	if vs == nil {
+		return
+	}
+	vs.castMu.Lock()
+	remove := false
+	if a, ok := vs.activeAuras[ht.spellID]; ok && a == ht.aura && !a.Stopped {
+		if a.RemainingCharges > 0 {
+			a.RemainingCharges--
+		}
+		remove = a.RemainingCharges == 0
+	}
+	vs.castMu.Unlock()
+	if remove {
+		vs.removeAura(ht.spellID)
+	}
+}
+
+// meleeHitRedirectGUID mirrors the auto-attack arm of Unit::AttackerStateUpdate
+// (Unit.cpp:2130-2156) via Unit::GetMeleeHitRedirectTarget
+// (Unit.cpp:6349-6363): while the victim carries a
+// SPELL_AURA_ADD_CASTER_HIT_TRIGGER (111) aura — Warrior Intervene (3411) /
+// hunter-pet Intervene (53476), 100% chance, 1 charge — the next melee swing
+// is redirected onto the aura's caster (the magnet) when the magnet is a
+// valid attack target, consuming one charge. C++ additionally requires the
+// magnet within LOS of the attacker and runs CheckExplicitTarget/CheckTarget
+// with a null spellInfo (vacuous); Go has no LOS model, so the validity gate
+// degrades to alive + hostile like the grounding-totem bridge. The ranged
+// auto-attack path never redirects (Unit.cpp:2146-2147 "ignore ranged case");
+// the SPELL_DAMAGE_CLASS_RANGED explicit-target arm of
+// Spell::SelectExplicitTargets (Spell.cpp:743-748) has no Go model yet.
+func (s *session) meleeHitRedirectGUID(ctx context.Context, victimGUID uint64) (uint64, bool) {
+	if s == nil || s.server == nil || s.player == nil || victimGUID == 0 {
+		return 0, false
+	}
+	for _, ht := range s.victimHitTriggerAuras(victimGUID) {
+		if ht.magnet == 0 || ht.magnet == victimGUID || ht.magnet == s.playerGUID {
+			continue
+		}
+		magnet, ok := s.getCombatTarget(ctx, ht.magnet)
+		if !ok || magnet.Health == 0 {
+			continue
+		}
+		if ms := s.server.findSessionByGUID(ht.magnet); ms != nil {
+			if s.isFriendlyToTarget(ht.magnet, ms) {
+				continue
+			}
+		} else if !isHostileFactionFallback(magnet.Faction, s.player.Race) {
+			continue
+		}
+		// roll_chance_i(amount): Random.h:59-62, chance > irand(0, 99).
+		if ht.chance <= 0 || rand.IntN(100) >= int(ht.chance) {
+			continue
+		}
+		s.dropHitTriggerCharge(ht)
+		return ht.magnet, true
+	}
+	return 0, false
+}
+
 func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType) {
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
@@ -406,6 +542,16 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		if q := s.takeNextSwingSpell(); q != nil {
 			s.finishNextSwingCast(ctx, q)
 			return
+		}
+	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2155-2156): "attack can be
+	// redirected to another target" — the ADD_CASTER_HIT_TRIGGER (111)
+	// magnet leg runs before the damage calc, after the on-next-swing
+	// spell slot is consumed (a queued spell fires in place of the swing
+	// with no redirect).
+	if redirectGUID, ok := s.meleeHitRedirectGUID(ctx, target.GUID); ok {
+		if redirected, ok := s.getCombatTarget(ctx, redirectGUID); ok && redirected.Health > 0 {
+			target = redirected
 		}
 	}
 	now := time.Now()
@@ -465,7 +611,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		armor = 0
 	}
 	if armor > 0 {
-		damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct(ctx, attType))
+		damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, attType))
 	}
 	if damage < 1 {
 		damage = 1
@@ -1210,7 +1356,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		armor = 0
 	}
 	if schoolMask == 1 && armor > 0 && damage > 0 {
-		damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct(ctx, protocol.RangedAttack))
+		damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, protocol.RangedAttack))
 	}
 
 	absorbed := uint32(0)
@@ -1602,9 +1748,10 @@ func buildAttackStop(attacker, victim uint64, nowDead bool) []byte {
 }
 
 // calcArmorReducedDamage computes physical damage reduction based on victim armor,
-// attacker level, and optional attacker armor penetration percentage (ArP).
-// Matching TrinityCore Unit::CalcArmorReducedDamage (Unit.cpp:1600-1650).
-func calcArmorReducedDamage(armor float64, attackerLevel uint8, damage uint32, armorPenPct ...float64) uint32 {
+// attacker level (the reduction curve), victim level (the armor-penetration
+// cap), and optional attacker armor penetration percentage (ArP).
+// Matching TrinityCore Unit::CalcArmorReducedDamage (Unit.cpp:1600-1700).
+func calcArmorReducedDamage(armor float64, attackerLevel uint8, victimLevel uint8, damage uint32, armorPenPct ...float64) uint32 {
 	if armor <= 0 || damage == 0 {
 		return damage
 	}
@@ -1622,12 +1769,24 @@ func calcArmorReducedDamage(armor float64, attackerLevel uint8, damage uint32, a
 		if arp > 100.0 {
 			arp = 100.0
 		}
-		// WotLK 3.3.5 Armor Penetration cap formula:
-		// maxArmorPen = (armor + 400.0 + 85.0 * levelModifier) / 3.0
-		// Reference: TrinityCore Unit::CalcArmorReducedDamage
-		maxArmorPen := (armor + 400.0 + 85.0*levelModifier) / 3.0
-		penetrated := math.Min(armor, maxArmorPen) * (arp / 100.0)
-		effectiveArmor -= penetrated
+		// Unit.cpp:1666-1675: the penetration cap keys on the VICTIM's
+		// level, not the attacker's (levelModifier above feeds only the
+		// reduction curve): maxArmorPen = 400 + 85*victimLevel below 60,
+		// plus 4.5*85*(victimLevel-59) above; capped at
+		// min((armor + maxArmorPen)/3, armor), then armor -=
+		// CalculatePct(capped, arpPct).
+		vLvl := float64(victimLevel)
+		if vLvl < 1 {
+			vLvl = 1
+		}
+		var maxArmorPen float64
+		if vLvl < 60 {
+			maxArmorPen = 400 + 85*vLvl
+		} else {
+			maxArmorPen = 400 + 85*vLvl + 4.5*85*(vLvl-59)
+		}
+		capped := math.Min((armor+maxArmorPen)/3.0, armor)
+		effectiveArmor -= capped * (arp / 100.0)
 		if effectiveArmor < 0 {
 			effectiveArmor = 0
 		}

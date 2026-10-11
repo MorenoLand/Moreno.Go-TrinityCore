@@ -2314,7 +2314,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// AutoBalance_UnitScript::ModifyMeleeDamage analog.
 			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
 			if target.Sess.player.Armor > 0 {
-				damage = calcArmorReducedDamage(float64(target.Sess.player.Armor), uint8(motion.Level), damage)
+				damage = calcArmorReducedDamage(float64(target.Sess.player.Armor), uint8(motion.Level), target.Sess.player.Level, damage)
 			}
 			if damage < 1 {
 				damage = 1

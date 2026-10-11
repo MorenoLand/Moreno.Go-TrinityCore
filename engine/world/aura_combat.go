@@ -35,8 +35,14 @@ const (
 	spellAuraModDodgePercent = 49  // SPELL_AURA_MOD_DODGE_PERCENT (SpellAuraDefines.h:129)
 	spellAuraModExpertise    = 240 // SPELL_AURA_MOD_EXPERTISE (SpellAuraDefines.h:320)
 	// spellAuraModBlockPercent (51), spellAuraModWeaponCritPercent (52),
-	// spellAuraModCritPct (290), and spellAuraModParryPercent (47) already
-	// exist in spells.go.
+	// spellAuraModParryPercent (47) already exist in spells.go.
+	//
+	// spellAuraAddCasterHitTrigger bridges Unit::GetMeleeHitRedirectTarget
+	// (Unit.cpp:6349-6363) at the auto-attack site: the victim-side 111
+	// aura (Warrior Intervene 3411 / hunter-pet Intervene 53476) redirects
+	// the next melee swing onto the aura's caster. See meleeHitRedirectGUID
+	// in combat.go.
+	spellAuraAddCasterHitTrigger = 111 // SPELL_AURA_ADD_CASTER_HIT_TRIGGER (SpellAuraDefines.h:191)
 )
 
 // auraTouchesMeleeCombat reports whether the aura record carries any of the

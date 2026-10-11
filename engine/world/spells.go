@@ -1299,9 +1299,9 @@ func (s *session) casterIgnoreResistPct(spellID uint32, schoolMask uint32) int32
 // auto swings and AuraEffect::IsAffectedOnSpell(nullptr) is false
 // (SpellAuraEffects.cpp) — so the 270 leg never runs on the plain
 // auto-attack armor path, only here on the direct-spell path. The
-// SPELLMOD_IGNORE_ARMOR (13) spellmod leg has no Go application model yet —
-// open. The victim's own armor is the input; the attacker's ARP rating leg
-// stays downstream in calcArmorReducedDamage.
+// SPELLMOD_IGNORE_ARMOR (13) spellmod leg is bridged inline below
+// (Unit.cpp:1637-1638). The victim's own armor is the input; the attacker's
+// ARP rating leg stays downstream in calcArmorReducedDamage.
 func (s *session) ignoreTargetResistArmor(armor float64, spell wotlk.Spell) float64 {
 	if armor <= 0 {
 		return armor
@@ -1310,6 +1310,16 @@ func (s *session) ignoreTargetResistArmor(armor float64, spell wotlk.Spell) floa
 	// negative) is added to the victim's armor.
 	for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModTargetResistance, spellSchoolMaskNormal) {
 		armor += float64(amount)
+	}
+	// Unit.cpp:1637-1638: the attacker's flat ignore-armor spellmods
+	// (SPELLMOD_IGNORE_ARMOR, op 13) fold into the armor before the
+	// 270/269 pct shrinks. The C++ leg is gated on spellInfo != nullptr;
+	// this method's only call site always passes a known spell, and
+	// applySpellModFloat mirrors Player::ApplySpellMod
+	// (Player.cpp:21309-21370) including the NO_DONE_BONUS per-mod gate
+	// (SpellInfo::IsAffectedBySpellMod).
+	if spell.ID != 0 {
+		armor = s.applySpellModFloat(spell, spellModIgnoreArmor, armor)
 	}
 	shrink := func(auraType uint32, affectGate bool) {
 		for _, aura := range s.loadedAuras() {
@@ -13385,7 +13395,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				// ignore-resist armor legs run before the ARP-rating leg inside
 				// calcArmorReducedDamage.
 				armor = s.ignoreTargetResistArmor(armor, dmgSpell)
-				damage = calcArmorReducedDamage(armor, s.player.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
+				damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
 			}
 		}
 
@@ -22919,7 +22929,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// leg below already does. The AOE-avoidance leg (5184-5188) has no
 		// Go model and stays unbridged.
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, ts.player.Level, dmg)
 		}
 		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
 		// damage; the isCrit arm now carries the real tick crit instead of
@@ -23345,7 +23355,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 		}
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, ts.player.Level, dmg)
 		}
 		// Unit::CanApplyResilience (Unit.cpp:12333) caster gate: a DoT
 		// applied by a wild creature does not trigger resilience; player
@@ -23679,7 +23689,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// and health-funnel ticks use.
 		dmg := effectValueMultiplied(burnDealt, ts.valueMultiplierForAura(aura.SpellID, spellAuraPowerBurn))
 		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, ts.player.Level, dmg)
 		}
 		burnResisted := uint32(0)
 		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
@@ -24301,7 +24311,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				armor = 0
 			}
 			if armor > 0 {
-				dmg = calcArmorReducedDamage(armor, aura.CasterLevel, dmg)
+				dmg = calcArmorReducedDamage(armor, aura.CasterLevel, target.Level, dmg)
 			}
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1828): resist then absorb at the
@@ -24792,7 +24802,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				armor = 0
 			}
 			if armor > 0 {
-				dmg = calcArmorReducedDamage(armor, aura.CasterLevel, dmg)
+				dmg = calcArmorReducedDamage(armor, aura.CasterLevel, target.Level, dmg)
 			}
 		}
 		resisted := uint32(0)
@@ -25166,7 +25176,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		dmg := drained
 		if !burnFixedDamage && aura.SchoolMask&1 != 0 && target.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
+			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, target.Level, dmg)
 		}
 		burnResisted := uint32(0)
 		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
