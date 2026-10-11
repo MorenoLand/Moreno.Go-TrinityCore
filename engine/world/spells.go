@@ -8569,6 +8569,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.server.fireCreatureLuaEvent(effCtx, motion, scripting.CreatureEventOnHitBySpell, s.luaPlayer(), spellID)
 			}
 		}
+		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
+		// non-friendly non-positive (or dispel-effect) spell hit stands the
+		// target up. The EVADE-miss arm is vacuous (hitTargets excludes
+		// misses, and C++ needs a live _spellHitTarget); the AtTargetAttacked
+		// half is covered by the combat-state and aggro legs further below.
+		// Creature targets carry no StandState in Go, so only player targets
+		// stand here.
+		if s.server != nil && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
+			for _, effectTarget := range hitTargets {
+				if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil &&
+					ts.player.StandState != 0 && !s.isFriendlyToPlayer(ts) {
+					ts.player.StandState = 0
+					ts.sendPlayerUpdate()
+				}
+			}
+		}
 		// Per-(cast, target) first-merge marker for the aura re-apply path
 		// (Spell.cpp:2842): only the first aura effect per target runs the
 		// ModStackAmount(+1) merge, later effects only refresh their amounts.
@@ -10207,6 +10223,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			for _, miss := range missStatus {
 				if miss.Reason == protocol.SpellMissImmune || miss.Reason == protocol.SpellMissImmune2 {
 					s.fireHitTriggerSpells(effCtx, spell, spellID, hitEffMask, completedCast.HitTriggers, miss.TargetGUID)
+				}
+			}
+		}
+		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2653-2655):
+		// after DoTriggersOnSpellHit per hit target, a player caster whose
+		// spell hit a PvP-flagged player target gets flagged PvP — _enablePVP
+		// is set in PreprocessTarget (Spell.cpp:2361-2364: the target IsPvP()
+		// and the caster is a player) and acted on after effects via
+		// Player::UpdatePvP(true) (Player.cpp:22196: PvP-timer restart +
+		// SetPvP, which also flags controlled units and the UNIT_BYTE2 PvP
+		// byte flag — the timer, pet propagation and byte flag have no Go
+		// model, documented deltas). Missed targets carry no hit here
+		// (hitTargets excludes them), matching the _spellHitTarget gate.
+		if s.server != nil && s.player != nil && s.player.PlayerFlags&playerFlagInPVP == 0 {
+			for _, effectTarget := range hitTargets {
+				if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil &&
+					ts.player.PlayerFlags&playerFlagInPVP != 0 {
+					s.player.PlayerFlags |= playerFlagInPVP
+					s.player.PlayerFlags &^= playerFlagPVPTimer
+					s.sendPlayerUpdate()
+					break
 				}
 			}
 		}

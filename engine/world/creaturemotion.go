@@ -2203,6 +2203,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						target.Sess.sendPlayerUpdate()
 					}
 					s.fireCreatureSpellHitTarget(ctx, motion, target.GUID, spellID)
+					// Spell::DoTriggersOnSpellHit (Spell.cpp:2652/2913-2957):
+					// the per-hit trigger consumer — the ADD_TARGET_TRIGGER
+					// snapshot plus the spell_linked type-1 rows — runs
+					// inside DoTargetSpellHit per hit target, ahead of the
+					// _cast tail, so it fires here on the inline path too
+					// (castCreatureSpellInternal runs the same consumer for
+					// its own casts).
+					s.fireCreatureHitTriggers(ctx, motion, spellInfo, spellID, []uint64{target.GUID})
+					// Spell::_cast spell_linked tail (Spell.cpp:3503-3512):
+					// type-0 rows fire at cast completion; the inline path
+					// has no _cast, so the tail runs here after the per-hit
+					// consumer, matching C++ relative order.
+					s.fireCreatureSpellLinkedTriggers(ctx, motion, spellID, target.GUID)
 				}
 			}
 			motion.LastSpell = now
