@@ -2439,8 +2439,16 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 	meleeRatio, meleeRatioOK := gt("gtChanceToMeleeCrit", classIndex*100+int(level)-1)
 	if meleeBaseOK && meleeRatioOK {
 		base := (meleeBase + float32(state.Stats[1])*meleeRatio) * 100
-		state.MeleeCrit = base + ratingBonus(8)
-		state.RangedCrit = base + ratingBonus(9)
+		// Player::UpdateWeaponDependentCritAuras (Player.cpp:7901-7905):
+		// the SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) flat arm, folded
+		// without the CheckAttackFitToAuraRequirement weapon-fit gate (no
+		// weapon-requirement model), plus the non-item
+		// SPELL_AURA_MOD_CRIT_PCT (290) arm, feed every weapon crit
+		// chance. The 290 fold already feeds spell crit above.
+		weaponCritAura := s.playerAuraModifier(spellAuraModWeaponCritPercent) +
+			s.playerAuraModifier(spellAuraModCritPct)
+		state.MeleeCrit = base + ratingBonus(8) + weaponCritAura
+		state.RangedCrit = base + ratingBonus(9) + weaponCritAura
 		state.OffhandCrit = state.MeleeCrit
 	}
 	// Mirrors TrinityCore Player::UpdateSpellCritChance (StatSystem.cpp:819):
@@ -2474,6 +2482,9 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 	if meleeRatioOK && classIndex >= 0 && classIndex < len(dodgeCap) && dodgeCap[classIndex] > 0 {
 		diminishing, nondiminishing := s.getDodgeFromAgility(state)
 		diminishing += float64(ratingBonus(int(CombatRatingDefenseSkill)))*0.04 + float64(ratingBonus(int(CombatRatingDodge)))
+		// Player::UpdateDodgePercentage (StatSystem.cpp:805):
+		// SPELL_AURA_MOD_DODGE_PERCENT (49) feeds the nondiminishing leg.
+		nondiminishing += float64(s.playerAuraModifier(spellAuraModDodgePercent))
 		if defenseSkill > maxSkill {
 			nondiminishing += float64(defenseSkill-maxSkill) * 0.04
 		} else {
@@ -2487,6 +2498,9 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 	}
 	if state.CanBlock && state.Block > 0 && (state.Class == 1 || state.Class == 2 || state.Class == 6 || state.Class == 7) {
 		state.BlockPercentage = 5 + ratingBonus(int(CombatRatingBlock))
+		// Player::UpdateBlockPercentage (StatSystem.cpp:612):
+		// SPELL_AURA_MOD_BLOCK_PERCENT (51) adds flat, before the clamp.
+		state.BlockPercentage += s.playerAuraModifier(spellAuraModBlockPercent)
 		if defenseSkill > maxSkill {
 			state.BlockPercentage += float32(defenseSkill-maxSkill) * 0.04
 		} else {
@@ -2497,6 +2511,12 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 		}
 	}
 	expertise := ratingBonus(23)
+	// Player::UpdateExpertise (StatSystem.cpp:880): the
+	// SPELL_AURA_MOD_EXPERTISE (120) fold is in raw expertise skill points
+	// (not rating), added after the rating conversion, without the C++
+	// IsItemFitToSpellRequirements weapon-fit gate (no
+	// weapon-requirement model).
+	expertise += s.playerAuraModifier(spellAuraModExpertise)
 	if expertise > 0 {
 		state.Expertise = uint32(expertise)
 		state.OffhandExpertise = state.Expertise

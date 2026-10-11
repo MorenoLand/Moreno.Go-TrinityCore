@@ -290,25 +290,31 @@ func (s *session) getHastedRangedSpeed(baseSpeed time.Duration) time.Duration {
 }
 
 // getExpertise returns the total expertise skill points from gear rating.
-// Mirrors TrinityCore Player::GetExpertise (Player.cpp:8850).
+// Mirrors TrinityCore Player::GetExpertise (Player.cpp:8850): rating
+// converted to points plus the raw SPELL_AURA_MOD_EXPERTISE (120) fold
+// (StatSystem.cpp:880), clamped at 0.
 func (s *session) getExpertise() float64 {
 	if s == nil || s.player == nil {
 		return 0
 	}
+	expertise := s.playerAuraModifier(spellAuraModExpertise)
 	rating := float64(s.player.CombatRatings[CombatRatingExpertise])
-	if rating <= 0 {
+	if rating > 0 {
+		lvl := float64(s.player.Level)
+		if lvl <= 0 {
+			lvl = 80
+		}
+		// At level 80: 8.197496 rating = 1.0 expertise skill point (from gtCombatRatings.dbc)
+		ratingPerPoint := 8.197496 * (lvl / 80.0)
+		if ratingPerPoint < 1.0 {
+			ratingPerPoint = 1.0
+		}
+		expertise += float32(rating / ratingPerPoint)
+	}
+	if expertise < 0 {
 		return 0
 	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
-		lvl = 80
-	}
-	// At level 80: 8.197496 rating = 1.0 expertise skill point (from gtCombatRatings.dbc)
-	ratingPerPoint := 8.197496 * (lvl / 80.0)
-	if ratingPerPoint < 1.0 {
-		ratingPerPoint = 1.0
-	}
-	return rating / ratingPerPoint
+	return float64(expertise)
 }
 
 // getExpertiseDodgeParryReductionPct returns the percentage reduction to defender dodge and parry chances.

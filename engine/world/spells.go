@@ -18385,6 +18385,13 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.activeAuraHasEffect(aura, spellAuraModParryPercent) {
 		s.updatePlayerParryPercentage(s.player, s.player.Level)
 	}
+	// Melee-combat-aura re-apply (dodge 49, block 51, weapon crit 52,
+	// crit pct 290, expertise 120): the replaced aura's modifiers leave
+	// before the new aura's register (SpellAuraEffects.cpp:755), so the
+	// live fold rebuild re-runs (aura_combat.go).
+	if s.auraTouchesMeleeCombat(aura) {
+		_ = s.calculatePlayerStats(context.Background(), s.player)
+	}
 	if mounted {
 		s.applyMountedDisplay(context.Background(), aura)
 	}
@@ -18446,6 +18453,7 @@ func (s *session) removeAura(spellID uint32) {
 	removedStatAura := (*activeAura)(nil)
 	removedResistanceAura := (*activeAura)(nil)
 	removedPowerAura := (*activeAura)(nil)
+	removedCombatAura := (*activeAura)(nil)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
@@ -18471,6 +18479,11 @@ func (s *session) removeAura(spellID uint32) {
 			// Stopped is set, same as the health leg.
 			if s.auraTouchesPower(aura) {
 				removedPowerAura = aura
+			}
+			// Melee-combat-aura remove leg (aura_combat.go): capture before
+			// Stopped is set, same as the stat/resistance/power legs.
+			if s.auraTouchesMeleeCombat(aura) {
+				removedCombatAura = aura
 			}
 			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
 			wasAttackPowerOfArmor = s.activeAuraHasEffect(aura, spellAuraModAttackPowerOfArmor)
@@ -18725,6 +18738,15 @@ func (s *session) removeAura(spellID uint32) {
 	// drops cleanly, and a suppressed 143 exclusive peer is reinstated like
 	// the C++ remove-leg delta (GetAmount()-remainingMax, :3239-3246).
 	if removedResistanceAura != nil && s.player != nil {
+		_ = s.calculatePlayerStats(context.Background(), s.player)
+	}
+	// AuraEffect::HandleAuraModDodgePercent / HandleAuraModBlockPercent /
+	// HandleAuraModWeaponCritPercent / HandleAuraModCritPct /
+	// HandleAuraModExpertise remove leg (SpellAuraEffects.cpp:3786-3900,
+	// 3596-3606): the aura record is already erased above
+	// (Unit::_UnapplyAura erases before the handlers, Unit.cpp:3548), so
+	// the recompute sees the remaining auras — the mod drops cleanly.
+	if removedCombatAura != nil && s.player != nil {
 		_ = s.calculatePlayerStats(context.Background(), s.player)
 	}
 	// AuraEffect::HandleAuraModIncreaseEnergy /
@@ -20950,6 +20972,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// current-power leg in C++; the 233 arm shifts current power
 			// by the max delta (ModifyPower(change), :3718-3721).
 			targetSess.applyPowerAuraArms(spell.ID, eff.Aura, eff.MiscValue, int32(amount))
+		case spellAuraModDodgePercent, spellAuraModBlockPercent, spellAuraModWeaponCritPercent, spellAuraModCritPct, spellAuraModExpertise:
+			// AuraEffect::HandleAuraModDodgePercent /
+			// HandleAuraModBlockPercent / HandleAuraModWeaponCritPercent /
+			// HandleAuraModCritPct / HandleAuraModExpertise apply leg
+			// (SpellAuraEffects.cpp:3786-3900, 3596-3606): C++ re-runs the
+			// matching Player::Update*Percentage; Go's folds live in
+			// calculatePlayerStats (aura_combat.go), so the wholesale
+			// rebuild is the equivalent. 47 (parry) keeps its targeted
+			// updatePlayerParryPercentage arm above.
+			_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
 		}
 
 		stackCount := uint8(1)
