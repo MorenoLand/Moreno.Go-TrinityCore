@@ -86,6 +86,11 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	// bypass still applies (Player.cpp:2504-2523).
 	seesHidden := observer != nil && observer.gmVisibilityDetect != 0
 	isGhost := state.Health > 0 && state.PlayerFlags&playerFlagGhost != 0
+	// Runtime 261-phase overrides (AuraEffect::HandlePhase creature arm,
+	// SpellAuraEffects.cpp:1581-1632): the query only sees the spawn's
+	// static c.phaseMask row, so spawn GUIDs whose override intersects the
+	// observer's phase mask are OR'd into the phase predicate.
+	phaseClause, phaseOverrideArgs := creaturePhasePredicate("? OR (c.phaseMask & ?) <> 0", s.creaturePhaseOverrideGUIDs(state.Map, phaseMask))
 	// Event creatures spawn only while their event runs; game_event_npcflag
 	// flags OR into the template npcflag during events (guards gaining
 	// seasonal gossip/questgiver flags).
@@ -114,13 +119,15 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		LEFT JOIN creature_equip_template AS eq ON eq.CreatureID = c.id AND eq.ID = COALESCE(NULLIF(c.equipment_id, 0), 1)
 		LEFT JOIN game_event_creature AS gec ON gec.guid = c.guid
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-		AND (? OR (c.phaseMask & ?) <> 0)
+		AND (` + phaseClause + `)
 		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 		AND ` + eventClause + `
 		ORDER BY c.guid`
-	queryArgs := make([]any, 0, len(selectArgs)+9+len(eventArgs))
+	queryArgs := make([]any, 0, len(selectArgs)+9+len(eventArgs)+len(phaseOverrideArgs))
 	queryArgs = append(queryArgs, selectArgs...)
-	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask, seesHidden, isGhost)
+	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask)
+	queryArgs = append(queryArgs, phaseOverrideArgs...)
+	queryArgs = append(queryArgs, seesHidden, isGhost)
 	queryArgs = append(queryArgs, eventArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, queryArgs...)
 	if err != nil {
@@ -131,10 +138,13 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
 			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-			AND (? OR (c.phaseMask & ?) <> 0)
+			AND (` + phaseClause + `)
 			AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 			ORDER BY c.guid`
-		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask, seesHidden, isGhost)
+		fallbackArgs := []any{state.Map, float64(state.X) - distance, float64(state.X) + distance, float64(state.Y) - distance, float64(state.Y) + distance, isGM, phaseMask}
+		fallbackArgs = append(fallbackArgs, phaseOverrideArgs...)
+		fallbackArgs = append(fallbackArgs, seesHidden, isGhost)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, fallbackArgs...)
 		if err != nil {
 			if missingTable(err) {
 				return nil, 0, nil

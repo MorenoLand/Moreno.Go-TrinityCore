@@ -1654,18 +1654,28 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	if distance <= 0 {
 		distance = 100.0
 	}
-	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.orientation, c.MovementType, c.wander_distance,
+	queryHead := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.orientation, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
 		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.dynamicflags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000),
 		c.curhealth
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-		AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
+		AND (`
+	queryTail := `)
 		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))`
 	seenCreatures := make(map[creatureMotionSpawnKey]struct{})
 	for _, p := range players {
-		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance, p.IsGM, p.SeesHidden, p.IsDead)
+		// Runtime 261-phase overrides (AuraEffect::HandlePhase creature arm,
+		// SpellAuraEffects.cpp:1581-1632): the query only sees the spawn's
+		// static c.phaseMask row, so spawn GUIDs whose override reaches the
+		// normal phase (bit 0 — the motion sweep's gate) are OR'd in.
+		motionPhaseClause, motionPhaseArgs := creaturePhasePredicate("? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0", s.creaturePhaseOverrideGUIDs(p.Map, 1))
+		query := queryHead + motionPhaseClause + queryTail
+		queryArgs := []any{p.Map, float64(p.X) - distance, float64(p.X) + distance, float64(p.Y) - distance, float64(p.Y) + distance, p.IsGM}
+		queryArgs = append(queryArgs, motionPhaseArgs...)
+		queryArgs = append(queryArgs, p.SeesHidden, p.IsDead)
+		rows, err := s.WorldStore.DB.QueryContext(ctx, query, queryArgs...)
 		if err != nil {
 			continue
 		}

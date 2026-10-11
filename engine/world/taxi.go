@@ -204,16 +204,23 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 	seesHidden := s.gmVisibilityDetect != 0
 	isGhost := s.player.Health > 0 && s.player.PlayerFlags&playerFlagGhost != 0
 	phaseMask := s.currentPlayerPhaseMask()
+	// Runtime 261-phase overrides (AuraEffect::HandlePhase creature arm,
+	// SpellAuraEffects.cpp:1581-1632): the query only sees the spawn's
+	// static c.phaseMask row, so spawn GUIDs whose override intersects the
+	// player's phase mask are OR'd into the phase predicate.
+	taxiPhaseClause, taxiPhaseArgs := creaturePhasePredicate("? OR (c.phaseMask & ?) <> 0", s.server.creaturePhaseOverrideGUIDs(s.player.Map, phaseMask))
 	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), (t.npcflag | ` + npcFlagExpr + `)
 		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
 		LEFT JOIN game_event_creature AS gec ON gec.guid = c.guid
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-		AND (? OR (c.phaseMask & ?) <> 0)
+		AND (` + taxiPhaseClause + `)
 		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 		AND ` + eventClause + ` ORDER BY c.guid`
-	queryArgs := make([]any, 0, len(selectArgs)+10+len(eventArgs))
+	queryArgs := make([]any, 0, len(selectArgs)+10+len(eventArgs)+len(taxiPhaseArgs))
 	queryArgs = append(queryArgs, selectArgs...)
-	queryArgs = append(queryArgs, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance, isGM, phaseMask, seesHidden, isGhost)
+	queryArgs = append(queryArgs, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance, isGM, phaseMask)
+	queryArgs = append(queryArgs, taxiPhaseArgs...)
+	queryArgs = append(queryArgs, seesHidden, isGhost)
 	queryArgs = append(queryArgs, eventArgs...)
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, queryArgs...)
 	if err != nil {

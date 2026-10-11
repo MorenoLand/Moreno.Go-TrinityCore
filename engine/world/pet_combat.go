@@ -2061,6 +2061,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			if s.spellDebuffResisted(ctx, petSpell, targetGUID, s.server.findSessionByGUID(target.GUID)) {
 				damage = 0
 				hitInfo = 0x01
+			} else if s.spellDeflectedByVictim(ctx, targetGUID, s.server.findSessionByGUID(target.GUID), caster.X, caster.Y) {
+				// WorldObject::MagicSpellHitResult (Object.cpp:2597-2604):
+				// the SPELL_AURA_DEFLECT_SPELLS (287) arm runs for
+				// pet-cast spells too (any unit caster).
+				damage = 0
+				hitInfo = 0x01
 			}
 		}
 	}

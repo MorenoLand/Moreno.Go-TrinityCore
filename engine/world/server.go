@@ -159,6 +159,7 @@ type Server struct {
 	creatureAuras             map[creatureAuraKey]map[uint32]struct{}
 	auraMu                    sync.Mutex
 	activeCreatureAuras       map[creatureAuraKey]map[uint32]*activeAura
+	creaturePhaseOverride     map[creatureAuraKey]uint32 // runtime 261-phase mask per creature (SetPhaseMask arm, SpellAuraEffects.cpp:1581-1632), guarded by auraMu
 	singleCastMu              sync.Mutex
 	singleCastAuras           map[uint64][]singleCastEntry
 	petAuraStackMu            sync.Mutex

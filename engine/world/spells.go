@@ -138,6 +138,8 @@ const (
 	spellAttr3BlockableSpell            uint32 = 0x00000008 // SPELL_ATTR3_BLOCKABLE_SPELL (SharedDefines.h:526) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
 	spellAuraIgnoreHitDirection           uint32 = 288 // SPELL_AURA_IGNORE_HIT_DIRECTION (SpellAuraDefines.h) — Deterrence is the only 3.3.5a source
+	spellAuraDeflectSpells                uint32 = 287 // SPELL_AURA_DEFLECT_SPELLS (SpellAuraDefines.h) — victim deflect chance, percent points (Object.cpp:2601, Unit.cpp:2535)
+	spellAuraSchoolHealAbsorb             uint32 = 301 // SPELL_AURA_SCHOOL_HEAL_ABSORB (SpellAuraDefines.h) — heal absorb shields (Unit::CalcHealAbsorb, Unit.cpp:2067)
 	spellAuraModBlockPercent              uint32 = 51  // SPELL_AURA_MOD_BLOCK_PERCENT (SpellAuraDefines.h) — creature block chance bonus
 	spellAuraModShieldBlockvaluePct       uint32 = 150 // SPELL_AURA_MOD_SHIELD_BLOCKVALUE_PCT (SpellAuraDefines.h)
 	spellAuraModShieldBlockvalue          uint32 = 158 // SPELL_AURA_MOD_SHIELD_BLOCKVALUE (SpellAuraDefines.h)
@@ -8354,6 +8356,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
 				}
 			}
+			if len(missStatus) == 0 && s.player != nil && s.spellDeflectedByVictim(ctx, targetGUID, targetSess, s.player.X, s.player.Y) {
+				// WorldObject::MagicSpellHitResult (Object.cpp:2597-2604):
+				// the SPELL_AURA_DEFLECT_SPELLS (287) arm — after the resist
+				// rolls, a victim with the caster in its front arc (or
+				// carrying 288) deflects on its 287 total.
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissDeflect}}
+			}
 			// Spell::AddUnitTarget (Spell.cpp:2108-2112) strips per-effect-immune
 			// bits from the target's EffectMask; UpdateSpellCastDataTargets
 			// (Spell.cpp:4491-4492) reports a target whose mask hit zero as
@@ -16144,6 +16154,16 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 		heal = s.spellCriticalHealingBonus(ctx, heal, targetGUID, healSpell.DefenseType, false)
 	}
 
+	// Unit::CalcHealAbsorb (Unit.cpp:2067-2113, called from
+	// Unit::HealBySpell at Unit.cpp:6566): SPELL_AURA_SCHOOL_HEAL_ABSORB
+	// (301) shields on the target consume the heal after the crit leg; the
+	// spell log carries the absorbed amount (Unit.cpp:6555).
+	absorbed := uint32(0)
+	if healKnown {
+		absorbed = targetSess.applyHealAbsorb(healSpell.SchoolMask, heal)
+		heal -= absorbed
+	}
+
 	effectiveHeal := heal
 	if targetSess.player.Health+heal > targetSess.player.MaxHealth {
 		effectiveHeal = targetSess.player.MaxHealth - targetSess.player.Health
@@ -16161,7 +16181,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	}
 
 	// TC Unit.cpp:6550: packet = packed(target), packed(healer), spellID, heal, overheal, absorb, crit, unused
-	healPkt := buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, 0, isCrit)
+	healPkt := buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, absorbed, isCrit)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, true)
 	if targetSess != s {
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, true)
@@ -17999,6 +18019,92 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 	return protocol.SpellMissNone
 }
 
+// spellDeflectedByVictim mirrors the deflect arm of
+// WorldObject::MagicSpellHitResult (Object.cpp:2597-2604) and the ranged arm
+// of Unit::MeleeSpellHitResult (Unit.cpp:2519-2526): after the resist roll, a
+// victim that has the caster inside its front M_PI arc — or carries
+// SPELL_AURA_IGNORE_HIT_DIRECTION (288) — deflects on its
+// SPELL_AURA_DEFLECT_SPELLS (287) total. The C++ multiplies the aura sum by
+// 100 into the running miss threshold, so the sum is plain percent points.
+// The UNIT_STATE_CONTROLLED gate has no Go unit-state model (documented at
+// the melee positional checks in combat.go).
+func (s *session) spellDeflectedByVictim(ctx context.Context, targetGUID uint64, targetSess *session, casterX, casterY float32) bool {
+	if s == nil {
+		return false
+	}
+	var deflectPct int32
+	var inFront bool
+	if targetSess != nil && targetSess.player != nil {
+		deflectPct = targetSess.totalAuraModifier(spellAuraDeflectSpells)
+		inFront = targetSess.hasAuraType(spellAuraIgnoreHitDirection) ||
+			hasInArc(targetSess.player.Orientation, targetSess.player.X, targetSess.player.Y, casterX, casterY, math.Pi)
+	} else if s.server != nil {
+		tgt, ok := s.getCombatTarget(ctx, targetGUID)
+		if !ok {
+			return false
+		}
+		key := creatureAuraKeyForTarget(tgt)
+		deflectPct = s.server.creatureAuraTypeSum(key, spellAuraDeflectSpells)
+		inFront = hasInArc(tgt.Orientation, tgt.X, tgt.Y, casterX, casterY, math.Pi)
+		if !inFront {
+			s.server.auraMu.Lock()
+			for _, aura := range s.server.activeCreatureAuras[key] {
+				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
+					inFront = true
+					break
+				}
+			}
+			s.server.auraMu.Unlock()
+		}
+	}
+	return inFront && deflectPct > 0 && rand.Float64()*100 < float64(deflectPct)
+}
+
+// applyHealAbsorb mirrors Unit::CalcHealAbsorb (Unit.cpp:2067-2113):
+// SPELL_AURA_SCHOOL_HEAL_ABSORB (301) shields consume the heal before it
+// lands. Each 301 aura whose effect misc value intersects the healing
+// spell's school mask absorbs up to its remaining amount; the aura amount
+// is reduced and the aura removed at zero (the C++ removes with
+// AURA_REMOVE_BY_ENEMY_SPELL; Go's normal remove path carries the same
+// client update). Returns the absorbed amount. Creature-target 301 has no
+// Go bridge (no creature heal-target path exists in Go).
+func (s *session) applyHealAbsorb(schoolMask uint32, heal uint32) uint32 {
+	if s == nil || heal == 0 {
+		return 0
+	}
+	var absorbed uint32
+	var exhausted []uint32
+	s.castMu.Lock()
+	if s.activeAuras != nil {
+		for _, aura := range s.activeAuras {
+			if aura == nil || aura.Stopped || aura.AuraType != spellAuraSchoolHealAbsorb || absorbed >= heal {
+				continue
+			}
+			if aura.MiscValue&int32(schoolMask) == 0 {
+				continue
+			}
+			if aura.Amount == 0 {
+				exhausted = append(exhausted, aura.SpellID)
+				continue
+			}
+			take := aura.Amount
+			if take > heal-absorbed {
+				take = heal - absorbed
+			}
+			aura.Amount -= take
+			absorbed += take
+			if aura.Amount == 0 {
+				exhausted = append(exhausted, aura.SpellID)
+			}
+		}
+	}
+	s.castMu.Unlock()
+	for _, id := range exhausted {
+		s.removeAura(id)
+	}
+	return absorbed
+}
+
 // spellDebuffResisted rolls the SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm of
 // WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): a non-positive
 // spell without SPELL_ATTR4_IGNORE_RESISTANCES that carries at least one aura
@@ -18277,8 +18383,12 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 	// aura model — unbridged.
 
 	if ranged {
-		// Deflect (Unit.cpp:2519-2526) rolls off SPELL_AURA_DEFLECT_SPELLS,
-		// which has no Go aura model — no deflect chance, returns NONE.
+		// Deflect (Unit.cpp:2519-2526): ranged-weapon spells roll the
+		// victim's SPELL_AURA_DEFLECT_SPELLS (287) total after the resist
+		// roll, gated on the caster in the victim's front arc (or 288).
+		if s.player != nil && s.spellDeflectedByVictim(ctx, targetGUID, targetSess, s.player.X, s.player.Y) {
+			return protocol.SpellMissDeflect
+		}
 		return protocol.SpellMissNone
 	}
 
@@ -22259,6 +22369,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		CritChance:         s.periodicCritChanceForAura(spell, targetGUID, uint8(schoolMask)),
 	}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
+	// AuraEffect::HandlePhase creature arm (SpellAuraEffects.cpp:1581-1632):
+	// the runtime phase mask (OR of the remaining 261 misc values) updates
+	// with the new aura in place — the C++ Unit::SetPhaseMask leg.
+	s.server.refreshCreaturePhaseOverrideLocked(targetKey)
 	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420): a fresh
 	// single-target aura registers on its caster's single-cast list and
 	// purges the caster's other single-target-with auras on other targets.
@@ -22361,6 +22475,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				m.FleeingUntil = time.Time{}
 			}
 		}
+	}
+	// AuraEffect::HandlePhase creature arm, apply tail
+	// (SpellAuraEffects.cpp:1581-1632): after the phase mask recompute
+	// above, the apply drops auras interruptible by
+	// AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION (the BG flag-drop arm —
+	// it may also take the just-applied 261 aura itself, as in C++) and
+	// refreshes visibility (the UpdateObjectVisibility tail). Creatures get
+	// no SMSG_SET_PHASE_SHIFT (no client session).
+	if eff.Aura == spellAuraPhase && s.server != nil {
+		if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
+			s.server.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagImmuneOrLostSelection)
+		}
+		s.server.refreshPlayerVisibility()
 	}
 
 	stackCount := uint8(1)
@@ -23112,7 +23239,6 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, Nourish,
 		// MOD_HOT_PCT and MOD_HEALING_RECEIVED run on the tick before the
 		// crit roll — the earlier Go path healed the raw aura amount.
-		// CalcHealAbsorb has no Go model and stays unbridged.
 		if healCaster != nil {
 			heal = healCaster.healingTakenBonus(ts, aura.CasterGUID, aura.SpellID, heal, true)
 		} else {
@@ -23175,6 +23301,19 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		curHP := ts.player.Health
 		maxHP := ts.player.MaxHealth
+		// Unit::CalcHealAbsorb (Unit.cpp:2067-2113, called at
+		// SpellAuraEffects.cpp:5399): SPELL_AURA_SCHOOL_HEAL_ABSORB (301)
+		// shields consume the tick after the crit leg; the periodic log
+		// carries the absorbed amount (SpellAuraEffects.cpp:5403).
+		healAbsorbed := uint32(0)
+		if heal > 0 {
+			absorbMask := uint32(aura.SchoolMask)
+			if healKnown {
+				absorbMask = healSpell.SchoolMask
+			}
+			healAbsorbed = ts.applyHealAbsorb(absorbMask, heal)
+			heal -= healAbsorbed
+		}
 		newHP := curHP + heal
 		overheal := uint32(0)
 		if newHP > maxHP {
@@ -23182,7 +23321,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			newHP = maxHP
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, healCrit)
+		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, healAbsorbed, healCrit)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
 			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
@@ -25687,6 +25826,7 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	taunterGUID := uint64(0)
 	wasControlVehicle := false
 	controlVehicleCaster := uint64(0)
+	wasPhase := false
 	var removedLinkedTriggers []linkedTriggerRef
 	removedLinkedParentCaster := uint64(0)
 	s.server.auraMu.Lock()
@@ -25704,6 +25844,12 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 				taunterGUID = aura.CasterGUID
 				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
 				controlVehicleCaster = aura.CasterGUID
+				// AuraEffect::HandlePhase remove leg
+				// (SpellAuraEffects.cpp:1581-1632): the aura is already
+				// erased below (Unit::_UnapplyAura erases before the
+				// handlers, Unit.cpp:3548), so the recompute sums the
+				// REMAINING 261 auras. Captured before the aura is deleted.
+				wasPhase = aura.AuraType == spellAuraPhase
 				// The remove arm of AuraEffect::HandleAuraLinked
 				// (SpellAuraEffects.cpp:4898-4903): the linked trigger
 				// spell's aura leaves the creature too. Captured before
@@ -25748,6 +25894,19 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 		advanceAuraDuration(finalTick, time.Now())
 		s.executePeriodicTickOnCreature(finalTick)
 	}
+	// AuraEffect::HandlePhase remove leg (SpellAuraEffects.cpp:1581-1632):
+	// the 261 aura is already erased above (Unit::_UnapplyAura erases before
+	// the handlers, Unit.cpp:3548), so the phase mask recomputes from the
+	// REMAINING 261 auras — the override is deleted when none remain, which
+	// is the C++ fallback to PHASEMASK_NORMAL/data phaseMask (the c.phaseMask
+	// row the queries already read). Visibility refreshes (the
+	// UpdateObjectVisibility tail).
+	if wasPhase {
+		s.server.auraMu.Lock()
+		s.server.refreshCreaturePhaseOverrideLocked(key)
+		s.server.auraMu.Unlock()
+		s.server.refreshPlayerVisibility()
+	}
 	if wasTaunt {
 		s.server.clearCreatureTaunt(key, taunterGUID)
 	}
@@ -25791,6 +25950,7 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	taunterGUID := uint64(0)
 	wasControlVehicle := false
 	controlVehicleCaster := uint64(0)
+	wasPhase := false
 	var removedLinkedTriggers []linkedTriggerRef
 	removedLinkedParentCaster := uint64(0)
 	s.auraMu.Lock()
@@ -25804,6 +25964,7 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 				taunterGUID = aura.CasterGUID
 				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
 				controlVehicleCaster = aura.CasterGUID
+				wasPhase = aura.AuraType == spellAuraPhase
 				// The remove arm of AuraEffect::HandleAuraLinked
 				// (SpellAuraEffects.cpp:4898-4903): the linked trigger
 				// spell's aura leaves the creature too. Captured before
@@ -25834,6 +25995,19 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 		}
 	}
 	s.auraMu.Unlock()
+	// AuraEffect::HandlePhase remove leg (SpellAuraEffects.cpp:1581-1632):
+	// the 261 aura is already erased above (Unit::_UnapplyAura erases before
+	// the handlers, Unit.cpp:3548), so the phase mask recomputes from the
+	// REMAINING 261 auras — the override is deleted when none remain, which
+	// is the C++ fallback to PHASEMASK_NORMAL/data phaseMask (the c.phaseMask
+	// row the queries already read). Visibility refreshes (the
+	// UpdateObjectVisibility tail).
+	if wasPhase {
+		s.auraMu.Lock()
+		s.refreshCreaturePhaseOverrideLocked(key)
+		s.auraMu.Unlock()
+		s.refreshPlayerVisibility()
+	}
 	if wasTaunt {
 		s.clearCreatureTaunt(key, taunterGUID)
 	}

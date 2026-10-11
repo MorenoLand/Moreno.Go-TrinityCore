@@ -1,5 +1,7 @@
 package world
 
+import "strings"
+
 type creatureAuraKey struct {
 	Map        uint32
 	InstanceID uint32
@@ -19,6 +21,80 @@ func creatureAuraKeyForMotion(motion *creatureMotion) creatureAuraKey {
 		return creatureAuraKey{}
 	}
 	return creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
+}
+
+// refreshCreaturePhaseOverrideLocked mirrors the creature arm of
+// AuraEffect::HandlePhase (SpellAuraEffects.cpp:1581-1632): a creature's
+// runtime phase mask is the OR of its remaining SPELL_AURA_PHASE (261) aura
+// misc values. With no 261 aura the C++ falls back to PHASEMASK_NORMAL or
+// the spawn's data phaseMask — exactly the c.phaseMask row the visibility
+// queries already read — so the override exists only while a 261 aura is
+// active. The aura's MiscValue carries the effect's misc (see the activeAura
+// construction in applyAuraToTarget); multi-effect spells store one record
+// per spell ID, so the OR runs over the per-spell records. Caller must hold
+// auraMu.
+func (s *Server) refreshCreaturePhaseOverrideLocked(key creatureAuraKey) {
+	if s == nil || key.GUID == 0 {
+		return
+	}
+	var mask uint32
+	if s.activeCreatureAuras != nil {
+		if auras, ok := s.activeCreatureAuras[key]; ok {
+			for _, aura := range auras {
+				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraPhase {
+					mask |= uint32(aura.MiscValue)
+				}
+			}
+		}
+	}
+	if s.creaturePhaseOverride == nil {
+		s.creaturePhaseOverride = make(map[creatureAuraKey]uint32)
+	}
+	if mask == 0 {
+		delete(s.creaturePhaseOverride, key)
+	} else {
+		s.creaturePhaseOverride[key] = mask
+	}
+}
+
+// creaturePhaseOverrideGUIDs returns the spawn-table GUIDs (c.guid) on mapID
+// whose runtime 261-phase override intersects observerMask — observerMask 0
+// matches any non-zero override. The visibility queries only see the spawn's
+// static c.phaseMask row, so these GUIDs are OR'd into the SQL phase
+// predicate. Pets (0xF140) and non-creature keys are excluded: they have no
+// creature-table row to match.
+func (s *Server) creaturePhaseOverrideGUIDs(mapID uint32, observerMask uint32) []uint32 {
+	if s == nil {
+		return nil
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	var guids []uint32
+	for key, mask := range s.creaturePhaseOverride {
+		if key.Map != mapID || mask == 0 || key.GUID>>48 != 0xF130 {
+			continue
+		}
+		if observerMask == 0 || mask&observerMask != 0 {
+			guids = append(guids, uint32(key.GUID&0xFFFFFF))
+		}
+	}
+	return guids
+}
+
+// creaturePhasePredicate builds the SQL phase clause for a creature query:
+// the static row gate plus the runtime 261-phase overrides for observerMask.
+// The override GUID args are returned in clause order for the query args.
+func creaturePhasePredicate(staticClause string, overrideGUIDs []uint32) (string, []any) {
+	if len(overrideGUIDs) == 0 {
+		return staticClause, nil
+	}
+	marks := make([]string, len(overrideGUIDs))
+	args := make([]any, len(overrideGUIDs))
+	for i, g := range overrideGUIDs {
+		marks[i] = "?"
+		args[i] = g
+	}
+	return "(" + staticClause + " OR c.guid IN (" + strings.Join(marks, ",") + "))", args
 }
 
 // creatureAuraScaleSum mirrors the creature half of
