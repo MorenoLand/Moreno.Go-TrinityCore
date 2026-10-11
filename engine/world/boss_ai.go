@@ -2269,6 +2269,98 @@ func (s *Server) fireCreatureCastPhaseAuraProcs(ctx context.Context, m *creature
 	})
 }
 
+// fireCreaturePeriodicDamageTickProcs mirrors the Unit::ProcSkillsAndAuras
+// tail of AuraEffect::HandlePeriodicDamageAurasTick
+// (SpellAuraEffects.cpp:5210-5225) — and the health-leech tick's identical
+// tail (SpellAuraEffects.cpp:5295-5305) — for creature actor/victim: the
+// caster motion's own auras evaluate DONE_PERIODIC, the victim motion's own
+// auras evaluate TAKEN_PERIODIC | (TAKEN_DAMAGE when damage landed), both
+// PROC_SPELL_TYPE_DAMAGE / PROC_SPELL_PHASE_HIT with the absorb/resist-
+// derived hit mask. A nil caster or victim skips that leg (dead victim,
+// offline caster); the trigger spells target the other side, matching C++.
+// The event is not marked triggered (C++ passes no Spell on the tick).
+func (s *Server) fireCreaturePeriodicDamageTickProcs(ctx context.Context, caster, victim *creatureMotion, targetGUID, casterGUID uint64, tickSpell wotlk.Spell, schoolMask uint32, crit bool, absorbed, resisted, damage uint32) {
+	if s == nil {
+		return
+	}
+	hitMask := spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, crit, absorbed, false)
+	if caster != nil {
+		spellCopy := tickSpell
+		s.fireCreatureAuraProcLoop(ctx, caster, targetGUID, procEventInfo{
+			typeMask:       procFlagDonePeriodic,
+			schoolMask:     schoolMask,
+			spellTypeMask:  procSpellTypeDamage,
+			spellPhaseMask: procSpellPhaseHit,
+			hitMask:        hitMask,
+			triggered:      false,
+			eventSpell:     &spellCopy,
+			actorGUID:      casterGUID,
+			damage:         damage,
+		})
+	}
+	if victim != nil {
+		typeMask := procFlagTakenPeriodic
+		if damage > 0 {
+			typeMask |= procFlagTakenDamage
+		}
+		spellCopy := tickSpell
+		s.fireCreatureAuraProcLoop(ctx, victim, casterGUID, procEventInfo{
+			typeMask:       typeMask,
+			schoolMask:     schoolMask,
+			spellTypeMask:  procSpellTypeDamage,
+			spellPhaseMask: procSpellPhaseHit,
+			hitMask:        hitMask,
+			triggered:      false,
+			eventSpell:     &spellCopy,
+			actorGUID:      casterGUID,
+			damage:         damage,
+		})
+	}
+}
+
+// fireCreaturePeriodicHealTickProcs mirrors the Unit::ProcSkillsAndAuras
+// tail of AuraEffect::HandlePeriodicHealAurasTick
+// (SpellAuraEffects.cpp:5423-5433) for creature actor/victim: the caster
+// motion's own auras evaluate DONE_PERIODIC, the victim motion's own auras
+// evaluate TAKEN_PERIODIC, both PROC_SPELL_TYPE_HEAL / PROC_SPELL_PHASE_HIT
+// with the crit-conditional hit mask. The caller carries the C++ gates:
+// %-based (obs-mod-health) and item-cast ticks never proc.
+func (s *Server) fireCreaturePeriodicHealTickProcs(ctx context.Context, caster, victim *creatureMotion, targetGUID, casterGUID uint64, tickSpell wotlk.Spell, schoolMask uint32, crit bool) {
+	if s == nil {
+		return
+	}
+	hitMask := procHitNormal
+	if crit {
+		hitMask = procHitCritical
+	}
+	if caster != nil {
+		spellCopy := tickSpell
+		s.fireCreatureAuraProcLoop(ctx, caster, targetGUID, procEventInfo{
+			typeMask:       procFlagDonePeriodic,
+			schoolMask:     schoolMask,
+			spellTypeMask:  procSpellTypeHeal,
+			spellPhaseMask: procSpellPhaseHit,
+			hitMask:        hitMask,
+			triggered:      false,
+			eventSpell:     &spellCopy,
+			actorGUID:      casterGUID,
+		})
+	}
+	if victim != nil {
+		spellCopy := tickSpell
+		s.fireCreatureAuraProcLoop(ctx, victim, casterGUID, procEventInfo{
+			typeMask:       procFlagTakenPeriodic,
+			schoolMask:     schoolMask,
+			spellTypeMask:  procSpellTypeHeal,
+			spellPhaseMask: procSpellPhaseHit,
+			hitMask:        hitMask,
+			triggered:      false,
+			eventSpell:     &spellCopy,
+			actorGUID:      casterGUID,
+		})
+	}
+}
+
 // creatureProcTriggerDamageAuraProc mirrors
 // AuraEffect::HandleProcTriggerDamageAuraProc (SpellAuraEffects.cpp:5738-5762)
 // for a creature caster: the effect's own amount as direct spell damage of
