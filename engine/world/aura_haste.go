@@ -176,3 +176,96 @@ func (s *session) attackPowerOfStatFold(auraType uint32) int32 {
 	}
 	return total
 }
+
+// castingSpeedNotStackLiveAmounts mirrors the sub-1000 arm of
+// AuraEffect::HandleModCastingSpeed (SpellAuraEffects.cpp:3888-3936):
+// SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (65) and SPELL_AURA_HASTE_SPELLS
+// (216) route through the same handler. Amounts >= 1000 take the
+// instant-cast path (hasInstantCastAura) and never reach the percent arm.
+// Each remaining effect is gated by
+// GetHighestExclusiveSameEffectSpellGroupValue(this, GetAuraType())
+// (Unit.cpp:13967): rivals are the same aura type only, and the effect goes
+// dormant when a same-type rival in a shared exclusive group carries
+// |amount| >= its own (ties lose, C++ :3931). The surviving amounts feed
+// Unit::ApplyCastTimePercentMod (Unit.cpp:10867).
+func (s *session) castingSpeedNotStackLiveAmounts() []int32 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return nil
+	}
+	var cands []statCandidate
+	auras := s.loadedAuras()
+	for i, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != spellAuraCastingSpeedNotStack && effect.Aura != spellAuraHasteSpells {
+				continue
+			}
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if aura.Amounts[index] >= 1000 {
+				continue
+			}
+			cands = append(cands, statCandidate{
+				order:       i,
+				spellID:     aura.SpellID,
+				effectIndex: index,
+				amount:      aura.Amounts[index],
+				firstRank:   s.server.spellFirstRank(aura.SpellID),
+				auraType:    effect.Aura,
+			})
+		}
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	cache := s.server.petAuraStackGroups()
+	var live []int32
+	for _, c := range cands {
+		rivalMax := int32(0)
+		for _, r := range cands {
+			if r.auraType != c.auraType {
+				continue
+			}
+			if r.spellID == c.spellID && r.effectIndex == c.effectIndex && r.order == c.order {
+				continue
+			}
+			if !sharesExclusiveSameEffectGroup(c.firstRank, r.firstRank, cache) {
+				continue
+			}
+			if absAuraAmount(r.amount) > absAuraAmount(rivalMax) {
+				rivalMax = r.amount
+			}
+		}
+		if absAuraAmount(rivalMax) >= absAuraAmount(c.amount) {
+			continue
+		}
+		live = append(live, c.amount)
+	}
+	return live
+}
+
+// castingSpeedCastFactor mirrors the cast-time arm of
+// AuraEffect::HandleModCastingSpeed (SpellAuraEffects.cpp:3933/3935) via
+// Unit::ApplyCastTimePercentMod (Unit.cpp:10867): each live 65/216 effect
+// multiplies UNIT_MOD_CAST_SPEED — positive amounts divide by (1+amount/100)
+// (haste), negative amounts multiply by (1+|amount|/100) (slow) — composing
+// multiplicatively with the combat-slow factor and the rating-haste divisor
+// in calculateSpellCastTime.
+func (s *session) castingSpeedCastFactor() float64 {
+	factor := 1.0
+	for _, a := range s.castingSpeedNotStackLiveAmounts() {
+		if a > 0 {
+			factor /= 1.0 + float64(a)/100.0
+		} else {
+			factor *= 1.0 + float64(-a)/100.0
+		}
+	}
+	return factor
+}

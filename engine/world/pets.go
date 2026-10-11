@@ -3064,6 +3064,16 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 		s.sendPlayerUpdate()
 	}
 
+	s.sendStabledPets(ctx, npcGUID)
+	return true
+}
+
+// sendStabledPets builds and sends the MSG_LIST_STABLED_PETS packet.
+// Reference: WorldSession::SendStablePet (NPCHandler.cpp:310): the guid field
+// carries the stable owner (a stablemaster NPC normally; the player's own
+// GUID when SPELL_AURA_OPEN_STABLE (292) opens the stable, per
+// AuraEffect::HandleAuraOpenStable, SpellAuraEffects.cpp:4918).
+func (s *session) sendStabledPets(ctx context.Context, npcGUID uint64) {
 	type petInfo struct {
 		ID    uint32
 		Entry uint32
@@ -3108,7 +3118,6 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 		buf.WriteU8(p.Flags)
 	}
 	_ = s.write(uint16(protocol.OpcodeMSG_LIST_STABLED_PETS), buf.Bytes(), true)
-	return true
 }
 
 // handleLearnPreviewTalentsPet processes CMSG_LEARN_PREVIEW_TALENTS_PET (0x4C2).

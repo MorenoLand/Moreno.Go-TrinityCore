@@ -541,6 +541,7 @@ const (
 	spellAuraModIncreaseMountedFlightSpeed            = 207 // SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED (SpellAuraDefines.h:287)
 	spellAuraConfuse                                  = 5
 	spellAuraCharm                                    = 6
+	spellAuraBindSight                                = 1   // SPELL_AURA_BIND_SIGHT (SpellAuraDefines.h:81)
 	spellAuraModTaunt                                 = 11  // SPELL_AURA_MOD_TAUNT (SpellAuraDefines.h)
 	spellAuraControlVehicle                           = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
 	spellAuraSetVehicle                               = 296 // SPELL_AURA_SET_VEHICLE_ID (SpellAuraDefines.h:376)
@@ -18483,6 +18484,9 @@ func (s *session) removeAura(spellID uint32) {
 	wasMounted := false
 	wasMovementControl := false
 	wasConfused := false
+	wasBindSight := false
+	wasBindSightCaster := uint64(0)
+	wasBindSightTarget := uint64(0)
 	wasFleeing := false
 	wasCharmed := false
 	wasSilenced := false
@@ -18568,6 +18572,14 @@ func (s *session) removeAura(spellID uint32) {
 			wasMountedFlight = wasMounted && s.activeAuraHasEffect(aura, spellAuraMountedFlightSpeed)
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
 			wasConfused = aura.AuraType == spellAuraConfuse
+			// AuraEffect::HandleBindSight remove leg
+			// (SpellAuraEffects.cpp:4754-4766, !apply arm): the caster's
+			// viewpoint returns to the caster (Player::SetViewpoint,
+			// Player.cpp:24638-24656 — PLAYER_FARSIGHT cleared, seer reset).
+			// Capture the caster/target GUIDs before Stopped is set.
+			wasBindSight = aura.AuraType == spellAuraBindSight
+			wasBindSightCaster = aura.CasterGUID
+			wasBindSightTarget = aura.TargetGUID
 			wasFleeing = aura.AuraType == spellAuraFear
 			wasCharmed = aura.AuraType == spellAuraCharm
 			// AuraEffect::HandleAuraModSilence remove leg
@@ -18783,6 +18795,17 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasConfused && !s.hasAuraType(spellAuraConfuse) && s.player != nil {
 		s.player.UnitFlags &^= unitFlagConfused
+	}
+	if wasBindSight && s.server != nil {
+		// AuraEffect::HandleBindSight remove leg: the viewpoint lives on the
+		// CASTER's session, not the target's — clear PLAYER_FARSIGHT only
+		// when it still points at the removed aura's target (RemoveGuidValue
+		// semantics, Player.cpp:24642-24647); an offline caster keeps no
+		// stale viewpoint to clear.
+		if casterSess := s.server.findSessionByGUID(wasBindSightCaster); casterSess != nil && casterSess.player != nil && casterSess.player.FarsightGUID == wasBindSightTarget {
+			casterSess.player.FarsightGUID = 0
+			casterSess.sendPlayerUpdate()
+		}
 	}
 	if wasFleeing && !s.hasAuraType(spellAuraFear) && s.player != nil {
 		s.player.UnitFlags &^= unitFlagFleeing
@@ -21050,6 +21073,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				targetSess.player.UnitFlags |= unitFlagFleeing
 			}
 		}
+		if eff.Aura == spellAuraBindSight {
+			// AuraEffect::HandleBindSight apply leg
+			// (SpellAuraEffects.cpp:4754-4766): the CASTER's viewpoint moves
+			// to the target (Player::SetViewpoint apply arm, Player.cpp:24618:
+			// PLAYER_FARSIGHT takes the target GUID). The client follows
+			// PLAYER_FARSIGHT, so pushing the caster's own update is the
+			// whole wire arm (same as the farsight-focus bridge).
+			s.player.FarsightGUID = targetGUID
+			s.sendPlayerUpdate()
+		}
 		if eff.Aura == spellAuraCharm {
 			targetSess.clearOtherMountedAuras(0)
 			targetSess.interruptCurrentCast()
@@ -21169,8 +21202,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// at bits 16-23 of unitFieldBytes1, the same byte).
 			targetSess.player.StandFlags |= unitStandFlagUntrackable
 		}
-		if eff.Aura == spellAuraSetVehicle {
-			// AuraEffect::HandleAuraSetVehicle apply leg
+		if eff.Aura == spellAuraOpenStable {
+			// AuraEffect::HandleAuraOpenStable apply leg
+			// (SpellAuraEffects.cpp:4918-4928): a player target opens the
+			// stable dialog — WorldSession::SendStablePet with the target's
+			// own GUID as the stable owner (the client auto-closes the
+			// dialog when the aura is removed, so no remove leg).
+			targetSess.sendStabledPets(ctx, targetGUID)
+		}
+		if eff.Aura == spellAuraSetVehicle { // AuraEffect::HandleAuraSetVehicle apply leg
 			// (SpellAuraEffects.cpp:5006-5035): player-only (this block only
 			// runs for player targets) — creates the vehicle kit keyed by
 			// the aura MiscValue, broadcasts SMSG_PLAYER_VEHICLE_DATA, then
