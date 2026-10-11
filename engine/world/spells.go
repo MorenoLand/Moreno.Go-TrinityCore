@@ -620,6 +620,7 @@ const (
 	spellAuraArenaPreparation                         = 215 // SPELL_AURA_ARENA_PREPARATION (SpellAuraDefines.h:295)
 	spellAuraModFaction                               = 243 // SPELL_AURA_MOD_FACTION (SpellAuraDefines.h:323)
 	unitStandFlagCreep                                = 0x02
+	unitStandFlagUntrackable                          = 0x04 // UNIT_STAND_FLAGS_UNTRACKABLE (UnitDefines.h:50)
 	playerAuraVisionStealth                           = 0x20
 	playerAuraVisionInvis                             = 0x40
 	playerFieldByteTrackStealthed              uint32 = 0x00000002
@@ -18490,6 +18491,12 @@ func (s *session) removeAura(spellID uint32) {
 	wasForcedReaction := false
 	forcedReactionFaction := uint32(0)
 	forcedReactionRank := uint32(0)
+	wasNoReagentUse := false
+	wasComprehendLanguage := false
+	wasForceMoveForward := false
+	wasDetectAmore := false
+	removedDetectAmoreMisc := int32(0)
+	wasUntrackable := false
 	wasPreparation := false
 	wasGhost := false
 	wasFactionAura := false
@@ -18606,6 +18613,14 @@ func (s *session) removeAura(spellID uint32) {
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
 			wasTrackStealthed = aura.AuraType == spellAuraTrackStealthed
+			wasNoReagentUse = aura.AuraType == spellAuraNoReagentUse
+			wasComprehendLanguage = aura.AuraType == spellAuraComprehendLanguage
+			wasForceMoveForward = aura.AuraType == spellAuraForceMoveForward
+			wasDetectAmore = aura.AuraType == spellAuraDetectAmore
+			if wasDetectAmore {
+				removedDetectAmoreMisc = aura.MiscValue
+			}
+			wasUntrackable = aura.AuraType == spellAuraUntrackable
 			wasVisibilityAura = affectsPlayerVisibility(aura.AuraType)
 			wasMovementSpeedAura = movementSpeedAura(aura.AuraType)
 			if aura.AuraType == spellAuraFakeInebriation {
@@ -18817,6 +18832,44 @@ func (s *session) removeAura(spellID uint32) {
 				s.stopAttacksForFaction(context.Background(), forcedReactionFaction)
 			}
 		}
+	}
+	// AuraEffect::HandleNoReagentUseAura remove leg
+	// (SpellAuraEffects.cpp:4289-4307): the mask is the OR over the
+	// SpellClassMasks of the REMAINING 256 effects, recomputed here because
+	// the removed aura is already out of activeAuras.
+	if wasNoReagentUse && s.player != nil {
+		s.recomputeNoReagentMask()
+	}
+	// AuraEffect::HandleComprehendLanguage remove leg
+	// (SpellAuraEffects.cpp:4834-4842): clear only when no other 244 aura
+	// remains (HasAuraType gate).
+	if wasComprehendLanguage && s.player != nil && !s.hasAuraType(spellAuraComprehendLanguage) {
+		s.player.UnitFlags2 &^= unitFlag2ComprehendLang
+	}
+	// AuraEffect::HandleForceMoveForward remove leg
+	// (SpellAuraEffects.cpp:2724-2730): HasAuraType gate.
+	if wasForceMoveForward && s.player != nil && !s.hasAuraType(spellAuraForceMoveForward) {
+		s.player.UnitFlags2 &^= unitFlag2ForceMovement
+	}
+	// AuraEffect::HandleDetectAmore remove leg
+	// (SpellAuraEffects.cpp:1510-1523): the misc-indexed vision bit clears
+	// only when no other 170 aura with the SAME misc value remains.
+	if wasDetectAmore && s.player != nil && removedDetectAmoreMisc >= 1 && removedDetectAmoreMisc <= 8 {
+		keep := false
+		for _, remaining := range s.loadedAuras() {
+			if remaining != nil && remaining.AuraType == spellAuraDetectAmore && remaining.MiscValue == removedDetectAmoreMisc {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			s.player.AuraVision &^= 1 << uint(removedDetectAmoreMisc-1)
+		}
+	}
+	// AuraEffect::HandleAuraUntrackable remove leg
+	// (SpellAuraEffects.cpp:2526-2536): HasAuraType gate.
+	if wasUntrackable && s.player != nil && !s.hasAuraType(spellAuraUntrackable) {
+		s.player.StandFlags &^= unitStandFlagUntrackable
 	}
 	if removedFakeInebriation > 0 && s.player != nil {
 		if removedFakeInebriation >= s.player.FakeInebriation {
@@ -20044,15 +20097,20 @@ const (
 	// CREATE_ITEM check).
 	spellFamilyFlagConjureRefreshment = 0x40000000
 
-	spellAuraModPossess        = 2
-	spellAuraTrackCreatures    = 44
-	spellAuraTrackResources    = 45
-	spellAuraModRegen          = 84
-	spellAuraModPowerRegen     = 85
-	spellAuraModPossessPet     = 128
-	spellAuraAoeCharm          = 177
-	spellAuraAllowOnlyAbility  = 263
-	spellAuraRetainComboPoints = 148 // SPELL_AURA_RETAIN_COMBO_POINTS (SpellAuraDefines.h:228)
+	spellAuraModPossess         = 2
+	spellAuraTrackCreatures     = 44
+	spellAuraTrackResources     = 45
+	spellAuraModRegen           = 84
+	spellAuraModPowerRegen      = 85
+	spellAuraModPossessPet      = 128
+	spellAuraAoeCharm           = 177
+	spellAuraAllowOnlyAbility   = 263
+	spellAuraRetainComboPoints  = 148 // SPELL_AURA_RETAIN_COMBO_POINTS (SpellAuraDefines.h:228)
+	spellAuraNoReagentUse       = 256 // SPELL_AURA_NO_REAGENT_USE (SpellAuraDefines.h:336)
+	spellAuraComprehendLanguage = 244 // SPELL_AURA_COMPREHEND_LANGUAGE (SpellAuraDefines.h:324)
+	spellAuraForceMoveForward   = 241 // SPELL_AURA_FORCE_MOVE_FORWARD (SpellAuraDefines.h:321)
+	spellAuraDetectAmore        = 170 // SPELL_AURA_DETECT_AMORE (SpellAuraDefines.h:250)
+	spellAuraUntrackable        = 120 // SPELL_AURA_UNTRACKABLE (SpellAuraDefines.h:200)
 
 	spellEffectApplyAura           = 6
 	spellEffectPersistentAreaAura  = 27
@@ -21059,6 +21117,43 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			if eff.MiscValue >= 0 && amount >= 4 {
 				targetSess.stopAttacksForFaction(ctx, uint32(eff.MiscValue))
 			}
+		}
+		if eff.Aura == spellAuraNoReagentUse {
+			// AuraEffect::HandleNoReagentUseAura apply leg
+			// (SpellAuraEffects.cpp:4289-4307): the fresh effect ORs its
+			// SpellClassMask into the no-reagent mask (the C++ write to
+			// PLAYER_NO_REAGENT_COST_1..3). Remove recomputes the whole
+			// fold over the remaining 256 auras (see removeAura); the
+			// change-amount leg carries the same mask, so no work here.
+			for i := 0; i < 3; i++ {
+				targetSess.player.NoReagentMask[i] |= eff.SpellClassMask[i]
+			}
+		}
+		if eff.Aura == spellAuraComprehendLanguage {
+			// AuraEffect::HandleComprehendLanguage apply leg
+			// (SpellAuraEffects.cpp:4829-4843): UNIT_FLAG2_COMPREHEND_LANG.
+			targetSess.player.UnitFlags2 |= unitFlag2ComprehendLang
+		}
+		if eff.Aura == spellAuraForceMoveForward {
+			// AuraEffect::HandleForceMoveForward apply leg
+			// (SpellAuraEffects.cpp:2716-2731): UNIT_FLAG2_FORCE_MOVEMENT.
+			targetSess.player.UnitFlags2 |= unitFlag2ForceMovement
+		}
+		if eff.Aura == spellAuraDetectAmore {
+			// AuraEffect::HandleDetectAmore apply leg
+			// (SpellAuraEffects.cpp:1499-1524): the misc-indexed aura-vision
+			// bit 1 << (miscValue-1) on PLAYER_FIELD_BYTES2 (Go's AuraVision
+			// rides that byte at playerFieldBytes2).
+			if eff.MiscValue >= 1 && eff.MiscValue <= 8 {
+				targetSess.player.AuraVision |= 1 << uint(eff.MiscValue-1)
+			}
+		}
+		if eff.Aura == spellAuraUntrackable {
+			// AuraEffect::HandleAuraUntrackable apply leg
+			// (SpellAuraEffects.cpp:2521-2537): UNIT_STAND_FLAGS_UNTRACKABLE
+			// on the UNIT_FIELD_BYTES_1 vis-flag byte (Go packs StandFlags
+			// at bits 16-23 of unitFieldBytes1, the same byte).
+			targetSess.player.StandFlags |= unitStandFlagUntrackable
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)
@@ -23154,8 +23249,26 @@ func (s *session) periodicTriggerTarget(aura *activeAura) uint64 {
 func (ts *session) expirePlayerAura(spellID uint32) {
 	ts.castMu.Lock()
 	var finalTick *activeAura
+	retainCombo := int8(0)
+	retainTarget := uint64(0)
 	if ts.activeAuras != nil {
 		if aura, ok := ts.activeAuras[spellID]; ok && aura != nil {
+			// AuraEffect::HandleAuraRetainComboPoints remove leg
+			// (SpellAuraEffects.cpp:4309-4324): the combo points banked by
+			// SPELL_EFFECT_ADD_COMBO_POINTS are withdrawn only when the aura
+			// expires by time (GetBase()->GetDuration() == 0) — a manual
+			// remove (dispel/cancel) keeps them. This function is the
+			// natural-expiry path for applyAuraToTarget auras; the legacy
+			// applyAura timer calls removeAura directly and cannot
+			// distinguish expiry, so it skips this leg.
+			if aura.AuraType == spellAuraRetainComboPoints {
+				amount := aura.Amount
+				if amount > 5 {
+					amount = 5
+				}
+				retainCombo = -int8(amount)
+				retainTarget = ts.comboTargetGUID
+			}
 			aura.Stopped = true
 			if aura.TickTimer != nil {
 				// AuraEffect::Update (SpellAuraEffects.cpp:815-841) runs
@@ -23191,6 +23304,9 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 	}
 	ts.dropSpellMods(spellID)
 	ts.removeAura(spellID)
+	if retainCombo != 0 {
+		ts.addSessionComboPoints(retainTarget, retainCombo)
+	}
 }
 
 func (s *session) scheduleCreaturePeriodicTick(aura *activeAura, periodMs uint32) {
@@ -27131,16 +27247,60 @@ func (s *session) checkItemTargetCast(ctx context.Context, spell wotlk.Spell, ta
 // spells carrying SPELL_ATTR5_NO_REAGENT_WHILE_PREP cost no reagents while
 // the caster has UNIT_FLAG_PREPARATION set (arena preparation). The second
 // C++ arm (spellInfo->SpellFamilyFlags & the PLAYER_NO_REAGENT_COST_1..3
-// update values) has no Go bridge: nothing applies SPELL_AURA_NO_REAGENT_USE
-// (256) to a player, so those fields are never set and the mask arm is dead.
-// Client-initiated casts only — triggered casts go through castSpellDirect,
-// which runs no reagent check at all.
+// update values) reads the OR of the SpellClassMasks of the caster's live
+// SPELL_AURA_NO_REAGENT_USE (256) auras (HandleNoReagentUseAura,
+// SpellAuraEffects.cpp:4289-4307); Go keeps that OR in NoReagentMask instead
+// of the three update fields (Go never broadcasts them). Client-initiated
+// casts only — triggered casts go through castSpellDirect, which runs no
+// reagent check at all.
 func (s *session) canNoReagentCast(spell wotlk.Spell) bool {
 	if s == nil || s.player == nil {
 		return false
 	}
-	return spell.AttributesEx5&spellAttr5NoReagentWhilePrep != 0 &&
-		s.player.UnitFlags&unitFlagPreparation != 0
+	if spell.AttributesEx5&spellAttr5NoReagentWhilePrep != 0 &&
+		s.player.UnitFlags&unitFlagPreparation != 0 {
+		return true
+	}
+	for i := 0; i < 3; i++ {
+		if spell.SpellFamilyFlags[i]&s.player.NoReagentMask[i] != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// recomputeNoReagentMask rebuilds the session's no-reagent mask from the
+// live SPELL_AURA_NO_REAGENT_USE (256) auras, mirroring the remove leg of
+// AuraEffect::HandleNoReagentUseAura (SpellAuraEffects.cpp:4289-4307): the
+// OR of each remaining 256 effect's own SpellClassMask
+// (m_spellInfo->Effects[effIndex].SpellClassMask).
+func (s *session) recomputeNoReagentMask() {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.castMu.Lock()
+	var mask [3]uint32
+	if s.server != nil && s.server.Data != nil {
+		for _, aura := range s.activeAuras {
+			if aura == nil || aura.Stopped || aura.AuraType != spellAuraNoReagentUse {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, effect := range spell.Effects {
+				if aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraNoReagentUse {
+					continue
+				}
+				for i := 0; i < 3; i++ {
+					mask[i] |= effect.SpellClassMask[i]
+				}
+			}
+		}
+	}
+	s.player.NoReagentMask = mask
+	s.castMu.Unlock()
 }
 
 // tradeItemTargetCast returns true when the wire target resolves to a trade

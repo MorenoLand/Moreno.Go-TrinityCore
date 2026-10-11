@@ -141,6 +141,8 @@ const (
 	unitFlag2RegeneratePower               uint32 = 0x00000800
 	unitFlag2DisarmOffhand                 uint32 = 0x00000080 // UNIT_FLAG2_DISARM_OFFHAND (UnitDefines.h:168)
 	unitFlag2DisarmRanged                  uint32 = 0x00000400 // UNIT_FLAG2_DISARM_RANGED (UnitDefines.h:170)
+	unitFlag2ComprehendLang                uint32 = 0x00000008 // UNIT_FLAG2_COMPREHEND_LANG (UnitDefines.h:164)
+	unitFlag2ForceMovement                 uint32 = 0x00000040 // UNIT_FLAG2_FORCE_MOVEMENT (UnitDefines.h:167)
 	unitFlagInCombat                       uint32 = 0x00080000
 	unitFlagNonAttackable                  uint32 = 0x00000002 // UNIT_FLAG_NON_ATTACKABLE (UnitDefines.h:125)
 	unitFlagLooting                        uint32 = 0x00000400 // UNIT_FLAG_LOOTING (UnitDefines.h:134)
@@ -273,6 +275,7 @@ type playerState struct {
 	PVPFlags                        uint8
 	StandFlags                      uint8
 	AuraVision                      uint8
+	NoReagentMask                   [3]uint32
 	TaxiMask                        [taxiMaskSize]uint32
 	QuestLog                        [playerQuestLogSlots]questLogEntry
 	MountDisplayID                  uint32

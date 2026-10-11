@@ -55,3 +55,24 @@ func (s *Server) creatureAuraScaleSum(key creatureAuraKey) int32 {
 	s.auraMu.Unlock()
 	return sum
 }
+
+// creatureHasAuraType reports whether the creature carries a live (unstopped)
+// aura whose stored AuraType matches, mirroring Unit::HasAuraType for the
+// byte-flag folds in the creature update builder (the C++ remove legs gate
+// on HasAuraType; a live fold over the same set is the equivalent check).
+func (s *Server) creatureHasAuraType(key creatureAuraKey, auraType uint32) bool {
+	if s == nil || key.GUID == 0 {
+		return false
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.AuraType == auraType {
+			return true
+		}
+	}
+	return false
+}

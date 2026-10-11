@@ -308,6 +308,15 @@ func buildCreatureUpdate(spawn creatureSpawn, observer *session) []byte {
 	if spawn.Bytes1 != 0 {
 		values[unitFieldBytes1] = spawn.Bytes1
 	}
+	// AuraEffect::HandleAuraUntrackable (SpellAuraEffects.cpp:2521-2537) on
+	// creatures: UNIT_STAND_FLAGS_UNTRACKABLE on the UNIT_FIELD_BYTES_1
+	// vis-flag byte (UNIT_BYTES_1_OFFSET_VIS_FLAG = 2, bits 16-23), as a live
+	// fold over the creature's auras like the scale fold above. The C++
+	// remove leg's HasAuraType gate is the same live-set check.
+	if observer != nil && observer.server != nil && observer.player != nil && rawGUID != 0 &&
+		observer.server.creatureHasAuraType(creatureAuraKey{Map: observer.player.Map, InstanceID: observer.player.InstanceID, GUID: rawGUID}, spellAuraUntrackable) {
+		values[unitFieldBytes1] |= uint32(unitStandFlagUntrackable) << 16
+	}
 	if spawn.Emote != 0 {
 		values[unitNPCEmoteState] = spawn.Emote
 	}
