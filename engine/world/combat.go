@@ -646,6 +646,17 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 	}
 
+	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance (Unit.cpp:2708/2777):
+	// the victim's own SPELL_AURA_MOD_PARRY_PERCENT (47) /
+	// SPELL_AURA_MOD_BLOCK_PERCENT (51) totals add to the 5% base. A player
+	// victim's fold is read here; the creature-victim fold lands below, once
+	// the front-arc resolution is known.
+	var victimParryBonusBP, victimBlockBonusBP int32
+	if isPlayerVictim && vicSess != nil {
+		victimParryBonusBP = vicSess.totalAuraModifier(spellAuraModParryPercent) * 100
+		victimBlockBonusBP = vicSess.totalAuraModifier(spellAuraModBlockPercent) * 100
+	}
+
 	// Positional defense checks (TrinityCore Unit::RollMeleeOutcomeAgainst):
 	// A defender can only parry or block attacks from within their front 180° arc (M_PI).
 	// Player victims cannot dodge attacks from behind. (NPCs can dodge from behind).
@@ -675,6 +686,26 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 	}
 
+	// Creature victims parry (5% base + 47) and block (5% base + 51) when the
+	// attacker is in the front arc (Unit::RollMeleeOutcomeAgainst,
+	// Unit.cpp:2213-2232) — unless the template carries
+	// CREATURE_FLAG_EXTRA_NO_PARRY (0x4) / NO_BLOCK (0x10). Totems never
+	// avoid. The behind-arc kill above already handled the arc leg for parry.
+	if !isPlayerVictim && s.server != nil {
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && !s.server.isTotemGUID(target.GUID) {
+			victimKey := creatureAuraKeyForTarget(target)
+			if tm.FlagsExtra&0x00000004 != 0 {
+				canParry = false
+			} else {
+				victimParryBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
+			}
+			if (attackerInFront || ignoreHitDirection) && tm.FlagsExtra&0x00000010 == 0 {
+				canBlock = true
+				victimBlockBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModBlockPercent) * 100
+			}
+		}
+	}
+
 	// A victim mid cast-bar cast cannot dodge/parry/block (Unit.cpp:2219-2224:
 	// victim->IsNonMeleeSpellCast(false); genericCastInProgress is the Go
 	// analog — channeled/autorepeat casts are skipped by construction there.
@@ -701,7 +732,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// SPELL_AURA_MOD_ENEMY_DODGE (251) aura sum (Unit.cpp:2697-2698) —
 		// the same arms meleeSpellHitResult carries for melee spells.
 		dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -1281,6 +1312,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	canDodge := true
 	var critReductionBP int32
 	victimDodgeBP := int32(-1)
+	// Unit::GetUnitBlockChance (Unit.cpp:2777): the victim's own
+	// SPELL_AURA_MOD_BLOCK_PERCENT (51) total adds to the 5% base.
+	var victimBlockBonusBP int32
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.CanBlock && vicSess.player.Block > 0
@@ -1288,10 +1322,33 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenRanged, &critChanceBP)
 			critReductionBP = 500 - critChanceBP
 			victimDodgeBP = int32(math.Round(float64(vicSess.player.DodgePercentage) * 100))
+			victimBlockBonusBP = vicSess.totalAuraModifier(spellAuraModBlockPercent) * 100
+		}
+	}
+	// Ranged attacks ride Unit::RollMeleeOutcomeAgainst's positional arms
+	// (Unit.cpp:2213-2217): no parry (canParry stays false), and
+	// SPELL_AURA_IGNORE_HIT_DIRECTION (288) exempts the victim from the
+	// behind-arc kill — the melee path's ignoreHitDirection twin.
+	ignoreHitDirection := false
+	if s.server != nil && s.player != nil {
+		if isPlayerVictim {
+			if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+				ignoreHitDirection = vicSess.hasAuraType(spellAuraIgnoreHitDirection)
+			}
+		} else {
+			key := creatureAuraKeyForPlayer(*s.player, target.GUID)
+			s.server.auraMu.Lock()
+			for _, aura := range s.server.activeCreatureAuras[key] {
+				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
+					ignoreHitDirection = true
+					break
+				}
+			}
+			s.server.auraMu.Unlock()
 		}
 	}
 	attackerInFront := hasInArc(target.Orientation, target.X, target.Y, s.player.X, s.player.Y, math.Pi)
-	if !attackerInFront {
+	if !attackerInFront && !ignoreHitDirection {
 		canBlock = false
 		if isPlayerVictim {
 			canDodge = false
@@ -1315,7 +1372,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// (Unit.cpp:2694-2695) and the ungated SPELL_AURA_MOD_ENEMY_DODGE (251)
 	// sum (Unit.cpp:2697-2698) apply here like the melee site above.
 	dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {

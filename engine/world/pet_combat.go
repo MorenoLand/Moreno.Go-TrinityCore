@@ -636,17 +636,41 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	if isTargetPlayer && targetSess != nil && targetSess.player != nil {
 		victimDodgeBP = int32(math.Round(float64(targetSess.player.DodgePercentage) * 100))
 	}
-	// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2224-2232) +
-	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance creature-victim arms
-	// (Unit.cpp): a creature victim parries (5% base +
-	// SPELL_AURA_MOD_PARRY_PERCENT (47)) and blocks (5% base +
-	// SPELL_AURA_MOD_BLOCK_PERCENT (51)) when the attacker is in its front
-	// arc — SPELL_AURA_IGNORE_HIT_DIRECTION (288) exempts the victim — unless
-	// the template carries CREATURE_FLAG_EXTRA_NO_PARRY (0x4) / NO_BLOCK
-	// (0x10). Totems never avoid. Go previously denied creature victims both.
+	// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2213-2232) +
+	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance victim arms
+	// (Unit.cpp:2708/2777). Player victims parry (a weapon — modeled as level
+	// >= 10, matching the wild-creature path) and block (CanBlock + Block >
+	// 0); their own SPELL_AURA_MOD_PARRY_PERCENT (47) /
+	// SPELL_AURA_MOD_BLOCK_PERCENT (51) totals add to the 5% base. Nobody can
+	// parry or block a pet attacking from behind, and players can't dodge
+	// from behind either (Unit.cpp:2213-2217) — SPELL_AURA_IGNORE_HIT_DIRECTION
+	// (288) exempts the victim. A victim mid cast-bar cast cannot avoid
+	// (Unit.cpp:2219-2224; the UNIT_STATE_CONTROLLED half has no Go
+	// unit-state model, stays unbridged).
 	canParry := false
 	canBlock := false
+	canDodge := true
 	var victimParryBonusBP, victimBlockBonusBP int32
+	if isTargetPlayer && targetSess != nil && targetSess.player != nil {
+		canParry = targetSess.player.Level >= 10 || targetSess.player.Level == 0
+		canBlock = targetSess.player.CanBlock && targetSess.player.Block > 0
+		victimParryBonusBP = targetSess.totalAuraModifier(spellAuraModParryPercent) * 100
+		victimBlockBonusBP = targetSess.totalAuraModifier(spellAuraModBlockPercent) * 100
+		if attackerInFront := hasInArc(targetSess.player.Orientation, targetSess.player.X, targetSess.player.Y, motion.X, motion.Y, math.Pi); !attackerInFront && !targetSess.hasAuraType(spellAuraIgnoreHitDirection) {
+			canParry = false
+			canBlock = false
+			canDodge = false
+		}
+		if targetSess.genericCastInProgress() {
+			canParry = false
+			canBlock = false
+			canDodge = false
+		}
+	}
+	// Creature victims parry (5% base + 47) and block (5% base + 51) when the
+	// attacker is in the front arc — 288 exempts — unless the template
+	// carries CREATURE_FLAG_EXTRA_NO_PARRY (0x4) / NO_BLOCK (0x10). Totems
+	// never avoid.
 	if !isTargetPlayer {
 		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil && !s.isTotemGUID(targetGUID) {
 			victimKey := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}
@@ -662,7 +686,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			}
 		}
 	}
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, canBlock, canParry, true, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP)
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP)
 	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
 	// (Unit.cpp:2694-2695) and the 240/4 parry-reduction arm
 	// (Unit::GetUnitParryChance's creature arm) stay unbridged on this path.
