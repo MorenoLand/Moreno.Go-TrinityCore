@@ -799,10 +799,57 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		} else {
 			s.server.scheduleInstanceCreatureRespawn(ctx, target, uint32(math.Max(float64(target.MaxHealth), 1)), now)
 		}
+		corpseDynFlags := uint32(1) // UNIT_DYNFLAG_LOOTABLE
+		if s.server != nil {
+			if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil && motion.PetID != 0 && motion.OwnerGUID != 0 && motion.PetType == petTypeHunter {
+				// Pet::setDeathState CORPSE (Pet.cpp:568-574): hunter-pet
+				// corpses are non-lootable — SetUInt32Value(UNIT_DYNAMIC_FLAGS,
+				// UNIT_DYNFLAG_NONE) — and non-skinnable (the skinnable clear
+				// rides the pet-death arm block below).
+				s.server.motionMu.Lock()
+				motion.DynamicFlags = 0
+				s.server.motionMu.Unlock()
+				corpseDynFlags = 0
+			}
+		}
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
-			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+			unitFieldDynamicFlags: corpseDynFlags,
 		})
+	}
+
+	// Pet::setDeathState (Pet.cpp:566-588): the CORPSE arm for hunter pets
+	// (PetType 1 = HUNTER_PET, petTypeHunter): the corpse is non-lootable
+	// (dynamic flags cleared above) and non-skinnable, and the pet loses
+	// one happiness level (ModifyPower(POWER_HAPPINESS, -HAPPINESS_LEVEL_SIZE),
+	// unsigned-clamped at zero) unless it died in a battleground or arena.
+	// Powers[4] is POWER_HAPPINESS (aura_power.go) and motion.Happiness is
+	// the persisted source (pet_save.go), so both are updated.
+	if s.server != nil {
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil && motion.PetID != 0 && motion.OwnerGUID != 0 && motion.PetType == petTypeHunter {
+			bgOrArena := false
+			if s.server.Data != nil {
+				if mapInfo, found, err := s.server.Data.Map(target.Map); err == nil && found {
+					bgOrArena = mapInfo.IsBattleground() || mapInfo.IsBattleArena()
+				}
+			}
+			s.server.motionMu.Lock()
+			motion.UnitFlags &^= unitFlagSkinnable
+			if !bgOrArena {
+				if motion.Powers[4] > petHappinessLevelSize {
+					motion.Powers[4] -= petHappinessLevelSize
+				} else {
+					motion.Powers[4] = 0
+				}
+				motion.Happiness = motion.Powers[4]
+			}
+			happiness, unitFlags := motion.Powers[4], motion.UnitFlags
+			s.server.motionMu.Unlock()
+			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
+				unitFieldPower1 + 4: happiness,
+				unitFieldFlags:      unitFlags,
+			})
+		}
 	}
 
 	// Quest kill credit: RequiredNpcOrGo entries plus KillCredit templates.
