@@ -1389,7 +1389,7 @@ func spellDamageNoDmgPositive(spell wotlk.Spell) bool {
 // state (Spell::IsTriggered, Spell.cpp:7501-7504) so the
 // CanSpellTriggerProcOnEvent mana-cost, spell-family, and triggered-cast
 // gates engage exactly. The trigger spell targets the victim.
-func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune bool) {
+func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, reflected bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1417,7 +1417,7 @@ func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGU
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeNoDmgHeal,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0),
+		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0, reflected),
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 		actorGUID:      s.playerGUID,
@@ -1440,7 +1440,7 @@ func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGU
 // targets the caster (Unit.cpp:10413). The triggered state comes from the
 // caster's cast, not the victim's session, matching Spell::IsTriggered on
 // the shared spell.
-func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, casterTriggered bool) {
+func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, casterTriggered, reflected bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1468,7 +1468,7 @@ func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, cas
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeNoDmgHeal,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0),
+		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0, reflected),
 		triggered:      casterTriggered,
 		eventSpell:     &spellCopy,
 		actorGUID:      casterGUID,
@@ -1483,7 +1483,7 @@ func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, cas
 // absorb (damage - absorb == 0 -> HITINFO_FULL_ABSORB, Unit.cpp:1128)
 // nullifies the hit: the normal/critical bit is suppressed while the
 // absorb bit is kept (createProcHitMask's damageNullified arm).
-func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed uint32) uint32 {
+func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed uint32, reflected bool) uint32 {
 	var hitMask uint32
 	switch {
 	case !isHit:
@@ -1502,6 +1502,13 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool,
 	if absorbed > 0 {
 		hitMask |= procHitAbsorb
 	}
+	// createProcHitMask (Unit.cpp:10213): a reflected hit (MissCondition ==
+	// SPELL_MISS_REFLECT, Spell.cpp:2544/2564) ORs PROC_HIT_REFLECT into the
+	// hit mask on top of the normal/crit/absorb bits. The heal arm never
+	// calls createProcHitMask, so heals take no reflect bit.
+	if reflected {
+		hitMask |= procHitReflect
+	}
 	return hitMask
 }
 
@@ -1513,7 +1520,7 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool,
 // spell-family, and triggered-cast gates engage exactly. Spells with
 // SPELL_ATTR3_CANT_TRIGGER_PROC never reach the loop (Spell.cpp:2441).
 // The trigger spell targets the victim.
-func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32) {
+func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32, reflected bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1521,7 +1528,7 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 	// unconditionally — the |= sits outside the canEffectTrigger gate, so
 	// even suppressed or CANT_TRIGGER_PROC targets feed the FINISH/CAST
 	// phase mask.
-	hitMask := spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed)
+	hitMask := spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed, reflected)
 	s.castProcHitMask |= hitMask
 	spell, found, err := s.server.Data.Spell(spellID)
 	if err != nil || !found {
@@ -1561,7 +1568,7 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 // own auras gate; the trigger spell targets the caster (Unit.cpp:10413). The
 // triggered state comes from the caster's cast, not the victim's session,
 // matching Spell::IsTriggered on the shared spell.
-func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32, casterTriggered bool) {
+func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32, casterTriggered, reflected bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1586,7 +1593,7 @@ func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID 
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed),
+		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed, reflected),
 		triggered:      casterTriggered,
 		eventSpell:     &spellCopy,
 		actorGUID:      casterGUID,
@@ -1621,7 +1628,7 @@ func (s *session) procPeriodicDamageTickAuraTriggers(ctx context.Context, tickSp
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, crit, absorbed),
+		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, crit, absorbed, false),
 		triggered:      false,
 		eventSpell:     &spellCopy,
 		actorGUID:      s.playerGUID,
@@ -1650,7 +1657,7 @@ func (s *session) procPeriodicDamageTickTakenAuraTriggers(ctx context.Context, t
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, crit, absorbed),
+		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, crit, absorbed, false),
 		triggered:      false,
 		eventSpell:     &spellCopy,
 		actorGUID:      casterGUID,

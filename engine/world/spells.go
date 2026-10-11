@@ -9312,7 +9312,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// is always the session player on these cast paths.
 						// Revisit only if a cast-wide damage accumulator and the
 						// total-AP model land.
-						s.executeSpellDamage(effCtx, effectTarget, spellID, targetDamage, effectIndex)
+						s.executeSpellDamageWithFlags(effCtx, effectTarget, spellID, targetDamage, effectIndex, false, isReflected)
 					}
 				}
 				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
@@ -9329,7 +9329,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							reflectedDamage = uint32(float64(reflectedDamage) * avoid)
 						}
 					}
-					s.executeSpellDamage(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex)
+					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex, false, true)
 				}
 			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
 				// Spell::EffectHeal (SpellEffects.cpp:1399): the damage<0
@@ -11905,7 +11905,7 @@ func (s *session) spellHealingBonusDone(spell wotlk.Spell, heal uint32, target *
 }
 
 func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) uint32 {
-	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, false)
+	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, false, false)
 }
 
 // executeSpellDamageNoCrit mirrors the SpellDamageBonusDone
@@ -11913,7 +11913,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 // executeSpellDamage for the SPELL_AURA_PROC_TRIGGER_DAMAGE (43) arm, which
 // never rolls hit or crit (SpellAuraEffects.cpp:5738-5762).
 func (s *session) executeSpellDamageNoCrit(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) uint32 {
-	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, true)
+	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, true, false)
 }
 
 // executeSpellDamageWithFlags is the executeSpellDamage pipeline
@@ -11923,7 +11923,7 @@ func (s *session) executeSpellDamageNoCrit(ctx context.Context, targetGUID uint6
 // (AuraEffect::HandleProcTriggerDamageAuraProc, SpellAuraEffects.cpp:5738-5762)
 // goes straight from SpellDamageBonusDone into the damage pipeline — never a
 // hit roll, never a crit roll — so procDamage skips both.
-func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int, procDamage bool) uint32 {
+func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int, procDamage, reflected bool) uint32 {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
@@ -11956,6 +11956,9 @@ func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID ui
 	if procDamage {
 		return s.executeDirectSpellDamageNoCrit(ctx, targetGUID, spellID, damage, schoolMask)
 	}
+	if reflected {
+		return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, true)
+	}
 	return s.executeDirectSpellDamage(ctx, targetGUID, spellID, damage, schoolMask)
 }
 
@@ -11982,11 +11985,11 @@ func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64
 	if s.server != nil {
 		s.server.broadcastToInstance(target.Map, target.InstanceID, uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), s)
 	}
-	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true, false)
+	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true, false, false)
 }
 
 func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) uint32 {
-	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false)
+	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, false)
 }
 
 // executeDirectSpellDamageNoCrit runs the direct-spell-damage pipeline with
@@ -11997,7 +12000,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 // straight into CalculateSpellDamageTaken and the damage log — never a miss,
 // never a crit.
 func (s *session) executeDirectSpellDamageNoCrit(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) uint32 {
-	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, true)
+	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, true, false)
 }
 
 // spellMechanicMask mirrors TrinityCore SpellInfo::GetAllEffectsMechanicMask
@@ -12680,7 +12683,7 @@ func (s *session) spellDamagePushesBack(spellID uint32, victimGUID uint64) bool 
 	return spell.AttributesEx3&spellAttr3TreatAsPeriodic == 0 && spell.AttributesEx7&spellAttr7NoPushbackOnDamage == 0
 }
 
-func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill bool, procDamage bool) uint32 {
+func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill, procDamage, reflected bool) uint32 {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
@@ -12978,7 +12981,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// not a call-site skip. A zero incoming damage takes the no-damage arm
 	// (PROC_SPELL_TYPE_NO_DMG_HEAL, Spell.cpp:2563-2579), not the damage arm.
 	if hadIncomingDamage && !targetCantProc {
-		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage)
+		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage, reflected)
 		// Taken-side aura procs on the victim's own auras (TrinityCore
 		// Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418): the done
 		// side runs first, matching the ProcSkillsAndAuras ordering
@@ -12988,16 +12991,16 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// taken passes iterate the same aura list.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage, s.triggeredNoProcEvents > 0)
+				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage, s.triggeredNoProcEvents > 0, reflected)
 			}
 		}
 	} else if !targetCantProc {
-		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, isHit, immune)
+		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, isHit, immune, reflected)
 		// Taken-side no-damage pass on the victim's session, after the
 		// done side, matching the ProcSkillsAndAuras ordering.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, s.triggeredNoProcEvents > 0)
+				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, s.triggeredNoProcEvents > 0, reflected)
 			}
 		}
 	}
@@ -13840,6 +13843,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	type triggeredEffectTarget struct {
 		guid      uint64
 		jumpIndex int
+		reflected bool
 	}
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
@@ -13894,13 +13898,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if target == 0 && spellEffectImplicitTargetExplicit(eff.Effect) {
 				target = s.playerGUID
 			}
+			reflected := false
 			if miss, ok := triggeredMiss[target]; ok {
 				if miss == protocol.SpellMissImmune {
 					continue
 				}
+				reflected = miss == protocol.SpellMissReflect
 				target = s.playerGUID
 			}
-			effectTargets = append(effectTargets, triggeredEffectTarget{guid: target})
+			effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, reflected: reflected})
 		}
 		// Per-effect chain threading (Spell.cpp:1582-1624): only the chaining
 		// effect reaches the jump targets (C++ adds them with that effect's
@@ -13925,14 +13931,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			jumpOrder := 0
 			for _, jumpGUID := range chainJumpGUIDs[:jumpCap] {
 				target := jumpGUID
+				reflected := false
 				if miss, ok := triggeredMiss[target]; ok {
 					if miss == protocol.SpellMissImmune {
 						continue
 					}
+					reflected = miss == protocol.SpellMissReflect
 					target = s.playerGUID
 				}
 				jumpOrder++
-				effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: jumpOrder})
+				effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: jumpOrder, reflected: reflected})
 			}
 			chainMult = s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 		}
@@ -14000,7 +14008,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						targetDamage = uint32(float64(targetDamage) * avoid)
 					}
 				}
-				s.executeDirectSpellDamage(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask))
+				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected)
 			} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
 				amount := uint32(eff.BasePoints + 1)
 				schoolMask := spell.SchoolMask
