@@ -22224,10 +22224,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// target regenerates a percentage of its max power per tick.
 		obsPowerType := aura.MiscValue
 		if obsPowerType == 127 {
-			// POWER_ALL (SharedDefines.h): C++ regenerates the target's
-			// current power type — Go has no player power-type model, so
-			// the tick is unbridged rather than draining the wrong power.
-			break
+			// POWER_ALL (SharedDefines.h:303) — C++ regenerates the
+			// target's current power type; playerPowerType resolves the
+			// same way the energize tick's mismatch gate does (case 24),
+			// so the tick is bridged instead of dropped.
+			obsPowerType = int32(playerPowerType(ts.player))
 		}
 		if obsPowerType < 0 || obsPowerType > 6 {
 			break
@@ -23512,8 +23513,10 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// Target liveness is checked at the top of this function; the power
 		// type gate has no Go creature model (the drain below no-ops when
 		// MaxPowers[powerType] is 0). Creature victims have no resilience
-		// model (consistent with the damage ticks), and the
-		// persistent-area-aura SpellHitResult gate stays unbridged.
+		// model (consistent with the damage ticks). The
+		// persistent-area-aura per-tick SpellHitResult gate
+		// (SpellAuraEffects.cpp:5454-5456) rides persistentAreaTickMissed
+		// at the top of this case.
 		// UNIT_STATE_ISOLATED has no Go model.
 		if leechCaster == nil || leechCaster.player == nil || leechCaster.player.Health == 0 {
 			return true
