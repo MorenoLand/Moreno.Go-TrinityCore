@@ -2050,10 +2050,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			castID := uint8(1)
 			castTimeStamp := uint32(now.UnixMilli())
 			hitTargets := []uint64{target.GUID}
+			var areaHits []*playerPos
 			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
 			if s != nil && s.Data != nil {
 				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
 					spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+					// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410,
+					// ahead of the GO send): the inline path skips target
+					// selection entirely, so a dest-family AI spell carried no
+					// destination in the GO packet; C++ SendSpellGo writes
+					// m_targets (Spell.cpp:4338). Resolved the same way
+					// castCreatureSpellInternal does.
+					if dx, dy, dz, ok := s.resolveCreatureSpellDestination(motion, spellInfo, target.GUID); ok {
+						spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
+						spellTarget.Destination = protocol.SpellTargetLocation{X: dx, Y: dy, Z: dz}
+					}
+					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): a
+					// creature-cast AoE hits every enemy in the area, so the
+					// GO packet's hit list extends past the wire victim.
+					for _, areaHit := range s.creatureAIAreaEnemyPlayers(ctx, motion, spellInfo, target) {
+						areaHits = append(areaHits, areaHit)
+						hitTargets = append(hitTargets, areaHit.GUID)
+					}
 				}
 			}
 			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
@@ -2085,172 +2103,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					damage = 1
 				}
 			}
-			// AutoBalance_UnitScript::ModifySpellDamageTaken analog.
-			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
-			overkill := uint32(0)
-			if target.Sess != nil && target.Sess.player != nil {
-				// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no
-				// damage — the kill/health legs are skipped explicitly (not via a
-				// damage==0 gate) because absorbed-to-zero damage still runs them
-				// in C++. The damage log below keeps the original amount, matching
-				// C++ sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
-				// (Spell.cpp:2542).
-				godNegated := target.Sess.godCheatActive()
-				// Unit::DealDamage (Unit.cpp:766-788):
-				// SPELL_AURA_SHARE_DAMAGE_PCT copies CalculatePct(damage,
-				// amount) to the aura's caster.
-				if !godNegated && damage > 0 {
-					target.Sess.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, uint32(schoolMask))
-				}
-				// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED
-				// fires for any damage to a player victim, creature-caster
-				// spells included.
-				target.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
-				victimHealth := target.Sess.player.Health
-				// Duel defeat (Unit.cpp:825-853, 957-973): a charmed creature's
-				// spell lands as a duel defeat when its charmer is the duel
-				// opponent (GetControllingPlayer, Unit.cpp:5996); a wild
-				// creature's exactly-health-1 hit still completes the duel as
-				// won, while its lethal hit kills and interrupts.
-				if !godNegated && duelDefeatOnDamage(target.Sess, target.Sess.controllingPlayerGUID(motion.GUID), damage, victimHealth) {
-					// Duel defeat consumed the hit — loser at 1 HP, duel complete.
-				} else if !godNegated && damage >= victimHealth {
-					overkill = damage - victimHealth
-					target.Sess.player.Health = 0
-					target.IsDead = true
-					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
-					// GetCharmerOrOwnerPlayerOrPlayerItself (Unit.cpp:11279):
-					// a player-owned pet's kill credits its owner; a wild
-					// creature resolves to no player.
-					var creatureKiller *session
-					if motion.OwnerGUID != 0 {
-						creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
-					}
-					target.Sess.killPlayer(ctx, creatureKiller, false, true)
-					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
-					// player-victim branch — attacker is a wild creature (no
-					// owner player, so no pet arm):
-					// attacker->AI()->KilledUnit(victim) (Unit.cpp:11359-11361).
-					s.fireCreatureTargetDied(ctx, motion, target.Sess.luaPlayer())
-					if motion.BossAI != nil {
-						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
-					}
-					// Unit::Kill (Unit.cpp:11283-11290): the PROC_FLAG_KILL leg
-					// fires for the killing-blow unit regardless of damage
-					// source — the melee path bridges it at its own kill site,
-					// and this spell-hit site was missing it; the KILLED/DEATH
-					// legs already ran inside killPlayer (death.go).
-					s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{
-						typeMask:       procFlagKill,
-						spellTypeMask:  procSpellTypeMaskAll,
-						spellPhaseMask: procSpellPhaseNone,
-						hitMask:        procHitNone,
-						actorGUID:      motion.GUID,
-					})
-				} else if !godNegated {
-					target.Sess.player.Health -= damage
-					// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
-					target.Sess.grantRageFromDamageTaken(ctx, damage)
-					// Unit::DealDamage (Unit.cpp:906-913): random durability
-					// loss on HIT TAKEN — the victim is a player.
-					target.Sess.rollDurabilityLossOnHit(ctx, damage)
-					// Unit::DealDamage (Unit.cpp:936-937): a damage spell carrying
-					// SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE or
-					// SPELL_ATTR3_TREAT_AS_PERIODIC never delays the victim's
-					// cast or channel — the !spellProto arm pushes back when the
-					// DBC row is unavailable, and the pushback leg requires
-					// non-zero damage. The victim != attacker arm is vacuous
-					// here (creature caster, player victim).
-					pushesBack := true
-					if s != nil && s.Data != nil {
-						if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
-							pushesBack = spellInfo.AttributesEx3&spellAttr3TreatAsPeriodic == 0 &&
-								spellInfo.AttributesEx7&spellAttr7NoPushbackOnDamage == 0
-						}
-					}
-					if damage > 0 && pushesBack {
-						// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
-						target.Sess.delayCurrentCast()
-						target.Sess.delayCurrentChannel()
-					}
-					target.Sess.procDamageAuras(true)
-				}
-				logPkt := buildSpellNonMeleeDamageLog(target.GUID, motion.GUID, spellID, damage, overkill, schoolMask)
-				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
-				if s != nil {
-					s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, target.Sess)
-				}
-				target.Sess.lastCombatTime = now
-				if target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
-					target.Sess.player.UnitFlags |= unitFlagInCombat
-				}
-				target.Sess.sendPlayerUpdate()
-				// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
-				// creatures are signaled OwnerAttackedBy on any non-DoT damage.
-				if s != nil {
-					s.triggerPetDefensive(target.Map, target.InstanceID, target.GUID, motion.GUID)
-				}
-			}
-			// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586):
-			// Unit::ProcSkillsAndAuras (Unit.cpp:5355-5366) fires the victim-
-			// side half with the taken pre-fill plus PROC_FLAG_TAKEN_DAMAGE
-			// ORed by the damage arm (Spell.cpp:2545) — the player victim's
-			// own auras evaluate the hit as a taken-proc event
-			// (PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT; Unit.cpp:
-			// 10385-10418). The canEffectTrigger gate (Spell.cpp:2440-2442):
-			// SPELL_ATTR3_CANT_TRIGGER_PROC never reaches the loop (checked
-			// inside procSpellHitTakenAuraTriggers), the m_procDeep recursion
-			// guard is the victim session's procDeep (Unit::CanProc,
-			// Unit.h:1609), and the CanExecuteTriggersOnHit(EffectMask) arm
-			// folds into the non-zero-effect model — this path applies every
-			// non-zero effect to every hit target. Runs after the damage
-			// legs and before the stand-up arm, matching C++ order (2581
-			// precedes 2609), and fires even under the god cheat — C++'s
-			// CHEAT_GOD skip lives inside DealDamage, not the proc call.
-			// The creature actor has no auras, so only the taken leg runs.
-			if target.Sess != nil && target.Sess.player != nil && target.Sess.procDeep == 0 {
-				target.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, false, false, false, false, 0, damage, false, false)
-			}
-			// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
-			// non-friendly non-positive (or dispel-effect) spell hit stands
-			// the target up. The EVADE-miss arm is vacuous (no miss model on
-			// this path) and the friendly gate rides the path — the tick only
-			// casts hostile AI spells at its attack victim. The AtTargetAttacked
-			// half is covered by the combat-state writes in the damage block
-			// above (lastCombatTime / UNIT_FLAG_IN_COMBAT); its threat, loot-
-			// recipient and PvP legs need a player threat manager, a player
-			// caster, or a player owner — none of which a wild creature caster
-			// has — documented no-bridge.
-			//
-			// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2639-
-			// 2650): the caster-side SpellHitTarget Eluna hook — the same arm
-			// bridged in castCreatureSpellInternal (boss_ai.go); this inline
-			// AI victim-spell path is a second hit site for it. Both arms run
-			// after the damage legs above, matching C++ order (damage is dealt
-			// before 2609/2639), and both gate on a DBC-known spell the way
-			// the castCreatureSpellInternal bridge does.
-			if s != nil && s.Data != nil {
-				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
-					if target.Sess != nil && target.Sess.player != nil && target.Sess.player.StandState != 0 &&
-						(!spellIsPositive(spellInfo) || spellHasEffect(spellInfo, spellEffectDispel)) {
-						target.Sess.player.StandState = 0
-						target.Sess.sendPlayerUpdate()
-					}
-					s.fireCreatureSpellHitTarget(ctx, motion, target.GUID, spellID)
-					// Spell::DoTriggersOnSpellHit (Spell.cpp:2652/2913-2957):
-					// the per-hit trigger consumer — the ADD_TARGET_TRIGGER
-					// snapshot plus the spell_linked type-1 rows — runs
-					// inside DoTargetSpellHit per hit target, ahead of the
-					// _cast tail, so it fires here on the inline path too
-					// (castCreatureSpellInternal runs the same consumer for
-					// its own casts).
-					s.fireCreatureHitTriggers(ctx, motion, spellInfo, spellID, []uint64{target.GUID})
-					// Spell::_cast spell_linked tail (Spell.cpp:3503-3512):
-					// type-0 rows fire at cast completion; the inline path
-					// has no _cast, so the tail runs here after the per-hit
-					// consumer, matching C++ relative order.
-					s.fireCreatureSpellLinkedTriggers(ctx, motion, spellID, target.GUID)
-				}
+			// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): the per-hit
+			// legs run for every enemy in the area, not just the wire victim.
+			s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
+			for _, areaHit := range areaHits {
+				s.applyInlineCreatureSpellHit(ctx, motion, areaHit, spellID, damage, schoolMask, now)
 			}
 			motion.LastSpell = now
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
