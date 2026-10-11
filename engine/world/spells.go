@@ -16826,6 +16826,64 @@ func (s *session) interruptCurrentCast() {
 	s.castMu.Unlock()
 }
 
+// cancelAutoRepeatOnInterrupt mirrors the CURRENT_AUTOREPEAT_SPELL arm of
+// Unit::InterruptSpell (Unit.cpp:3140-3157): every cast interrupt that runs
+// through CastStop (Unit.cpp:980, via SetControlled/Unit::SetStunned/
+// Unit::SetCharmedBy) or InterruptNonMeleeSpells (Unit.cpp:3212) also stops
+// the auto-repeat spell — for players the client gets SMSG_CANCEL_AUTO_REPEAT
+// and the repeat state clears. Go's auto-repeat lives on the session
+// (autoRepeatSpell/autoRepeatTarget) rather than in a current-spell slot, so
+// the arms that interrupt casts on aura apply (stun/confuse/fear/charm) and
+// the knockback interrupt leg call this explicitly.
+func (s *session) cancelAutoRepeatOnInterrupt() {
+	if s == nil || s.autoRepeatSpell == 0 {
+		return
+	}
+	s.autoRepeatSpell = 0
+	s.autoRepeatTarget = 0
+	buf := protocol.NewBuffer(9)
+	buf.WritePackedGUID(s.playerGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+}
+
+// interruptSilencePreventionCasts mirrors AuraEffect::HandleAuraModSilence's
+// apply leg (SpellAuraEffects.cpp:2355-2372): a fresh silence aura stops only
+// the current spells whose PreventionType is SPELL_PREVENTION_TYPE_SILENCE.
+// The IsInterruptable (Executing) gate rides the two interrupt calls, and the
+// auto-repeat slot is subject to the same PreventionType gate in C++
+// (InterruptSpell, Unit.cpp:3140).
+func (s *session) interruptSilencePreventionCasts() {
+	if s == nil {
+		return
+	}
+	s.castMu.Lock()
+	cast := s.activeCast
+	channel := s.activeChannel
+	repeatSpell := s.autoRepeatSpell
+	s.castMu.Unlock()
+	lookup := func(spellID uint32) (wotlk.Spell, bool) {
+		if s.server == nil || s.server.Data == nil || spellID == 0 {
+			return wotlk.Spell{}, false
+		}
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			return wotlk.Spell{}, false
+		}
+		return spell, true
+	}
+	if cast != nil {
+		if spell, ok := lookup(cast.SpellID); ok && spell.PreventionType == spellPreventionTypeSilence {
+			s.interruptCurrentCast()
+		}
+	}
+	if channel != nil && channel.Spell.PreventionType == spellPreventionTypeSilence {
+		s.interruptCurrentChannel()
+	}
+	if spell, ok := lookup(repeatSpell); ok && spell.PreventionType == spellPreventionTypeSilence {
+		s.cancelAutoRepeatOnInterrupt()
+	}
+}
+
 // interruptSpellsOnMovement breaks the active cast and channel when the
 // player starts moving, for spells carrying SPELL_INTERRUPT_FLAG_MOVEMENT.
 // C++ authority: Unit::InterruptNonMeleeSpells via the movement interrupt
@@ -18163,6 +18221,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasConfused := false
 	wasFleeing := false
 	wasCharmed := false
+	wasSilenced := false
 	wasAllowOnlyAbility := false
 	wasForcedReaction := false
 	forcedReactionFaction := uint32(0)
@@ -18196,6 +18255,11 @@ func (s *session) removeAura(spellID uint32) {
 			wasConfused = aura.AuraType == spellAuraConfuse
 			wasFleeing = aura.AuraType == spellAuraFear
 			wasCharmed = aura.AuraType == spellAuraCharm
+			// AuraEffect::HandleAuraModSilence remove leg
+			// (SpellAuraEffects.cpp:2360-2379, via
+			// HandleAuraModPacifyAndSilence): the silenced flag clears only
+			// when no silence-family aura remains.
+			wasSilenced = aura.AuraType == spellAuraModSilence || aura.AuraType == spellAuraModPacifySilence
 			wasAllowOnlyAbility = aura.AuraType == spellAuraAllowOnlyAbility
 			wasForcedReaction = aura.AuraType == 139
 			if wasForcedReaction && aura.MiscValue >= 0 {
@@ -18361,6 +18425,9 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasCharmed && !s.hasAuraType(spellAuraCharm) {
 		s.sendClientControl(s.playerGUID, true)
+	}
+	if wasSilenced && !s.hasAuraType(spellAuraModSilence) && !s.hasAuraType(spellAuraModPacifySilence) && s.player != nil {
+		s.player.UnitFlags &^= unitFlagSilenced
 	}
 	if wasForcedReaction {
 		_ = s.sendForcedReactions()
@@ -20426,12 +20493,22 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			targetSess.rooted = true
 			if eff.Aura == spellAuraStun {
 				targetSess.player.UnitFlags |= unitFlagStunned
+				// AuraEffect::HandleAuraModStun (SpellAuraEffects.cpp:2825)
+				// -> SetControlled(STUNNED) -> CastStop (Unit.cpp:11492) and
+				// SetStunned -> CastStop (Unit.cpp:11616): a fresh stun
+				// interrupts all three current-spell slots with
+				// withDelayed=false. Root (UNIT_STATE_ROOT) is not in
+				// UNIT_STATE_CONTROLLED, so the root arm stays cast-safe.
+				targetSess.interruptCurrentCast()
+				targetSess.interruptCurrentChannel()
+				targetSess.cancelAutoRepeatOnInterrupt()
 			}
 			targetSess.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
 		}
 		if eff.Aura == spellAuraConfuse || eff.Aura == spellAuraFear {
 			targetSess.interruptCurrentCast()
 			targetSess.interruptCurrentChannel()
+			targetSess.cancelAutoRepeatOnInterrupt()
 			if targetSess.attackTarget != 0 {
 				_ = targetSess.handleAttackStop()
 			}
@@ -20445,10 +20522,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			targetSess.clearOtherMountedAuras(0)
 			targetSess.interruptCurrentCast()
 			targetSess.interruptCurrentChannel()
+			targetSess.cancelAutoRepeatOnInterrupt()
 			if targetSess.attackTarget != 0 {
 				_ = targetSess.handleAttackStop()
 			}
 			targetSess.sendClientControl(targetSess.playerGUID, false)
+		}
+		if eff.Aura == spellAuraModSilence || eff.Aura == spellAuraModPacifySilence {
+			// AuraEffect::HandleAuraModSilence apply leg
+			// (SpellAuraEffects.cpp:2355-2372): the fresh silence aura sets
+			// UNIT_FLAG_SILENCED and stops the current spells whose
+			// PreventionType is SPELL_PREVENTION_TYPE_SILENCE.
+			targetSess.player.UnitFlags |= unitFlagSilenced
+			targetSess.interruptSilencePreventionCasts()
 		}
 		// AuraEffect::HandleAuraAllowOnlyAbility apply leg
 		// (SpellAuraEffects.cpp:2432-2433): Bladestorm (46924) and Killing
@@ -28142,6 +28228,9 @@ func (s *session) handleEffectKnockBack(ctx context.Context, eff wotlk.SpellEffe
 			targetSess.sendInterrupted(cast.CastID, cast.SpellID, 0)
 		}
 		targetSess.interruptCurrentChannel()
+		// Spell::EffectKnockBack (SpellEffects.cpp:4571):
+		// InterruptNonMeleeSpells(true) also stops the auto-repeat slot.
+		targetSess.cancelAutoRepeatOnInterrupt()
 		dx := float64(targetSess.player.X) - fromX
 		dy := float64(targetSess.player.Y) - fromY
 		var vcos, vsin float64
