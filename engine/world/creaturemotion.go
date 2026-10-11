@@ -2177,6 +2177,34 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					s.triggerPetDefensive(target.Map, target.InstanceID, target.GUID, motion.GUID)
 				}
 			}
+			// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
+			// non-friendly non-positive (or dispel-effect) spell hit stands
+			// the target up. The EVADE-miss arm is vacuous (no miss model on
+			// this path) and the friendly gate rides the path — the tick only
+			// casts hostile AI spells at its attack victim. The AtTargetAttacked
+			// half is covered by the combat-state writes in the damage block
+			// above (lastCombatTime / UNIT_FLAG_IN_COMBAT); its threat, loot-
+			// recipient and PvP legs need a player threat manager, a player
+			// caster, or a player owner — none of which a wild creature caster
+			// has — documented no-bridge.
+			//
+			// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2639-
+			// 2650): the caster-side SpellHitTarget Eluna hook — the same arm
+			// bridged in castCreatureSpellInternal (boss_ai.go); this inline
+			// AI victim-spell path is a second hit site for it. Both arms run
+			// after the damage legs above, matching C++ order (damage is dealt
+			// before 2609/2639), and both gate on a DBC-known spell the way
+			// the castCreatureSpellInternal bridge does.
+			if s != nil && s.Data != nil {
+				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
+					if target.Sess != nil && target.Sess.player != nil && target.Sess.player.StandState != 0 &&
+						(!spellIsPositive(spellInfo) || spellHasEffect(spellInfo, spellEffectDispel)) {
+						target.Sess.player.StandState = 0
+						target.Sess.sendPlayerUpdate()
+					}
+					s.fireCreatureSpellHitTarget(ctx, motion, target.GUID, spellID)
+				}
+			}
 			motion.LastSpell = now
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
 			// for its DBC cast time; the tick's early-out above bridges

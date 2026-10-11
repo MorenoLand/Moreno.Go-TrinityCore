@@ -1105,6 +1105,22 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.fireCreatureSpellLinkedTriggers(ctx, m, spellID, targetGUID)
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2639-2650):
+	// a creature caster whose spell hits a unit target fires the caster
+	// AI's SpellHitTarget(target, spell) — Eluna
+	// CREATURE_EVENT_ON_SPELL_HIT_TARGET (event 15), args
+	// (caster, target, spellid); the return is discarded (ElunaCreatureAI.h:
+	// 231-238 — it only vetoes the empty ScriptedAI arm, the same ruling
+	// as the event-14 bridge). The hit-target-side SpellHit leg (event 14)
+	// is vacuous on this path — the creature path only ever hits players,
+	// and the player path already fires it (spells.go:8569); the
+	// gameobject-caster arm has no Go model. This runs before the
+	// DoTriggersOnSpellHit consumer below, matching C++ order (2639-2650
+	// precede 2652). Gated on spellKnown and a real hit target: C++ only
+	// reaches these arms with a SpellInfo and a non-null _spellHitTarget.
+	if spellKnown && targetGUID != 0 {
+		s.fireCreatureSpellHitTarget(ctx, m, targetGUID, spellID)
+	}
 	// Spell::DoTriggersOnSpellHit (Spell.cpp:2913-2957): the per-hit trigger
 	// consumer — ADD_TARGET_TRIGGER snapshot plus the spell_linked
 	// SPELL_LINK_HIT (type 1) rows — fires per hit target. Go's creature
@@ -1157,6 +1173,26 @@ func (s *Server) fireCreatureSpellLinkedTriggers(ctx context.Context, m *creatur
 		}
 		s.castCreatureSpellInternal(ctx, m, uint32(id), tgt, true)
 	}
+}
+
+// fireCreatureSpellHitTarget fires Eluna CREATURE_EVENT_ON_SPELL_HIT_TARGET
+// (15) on the caster creature's bindings when its spell hits a unit target,
+// mirroring the caster arm of Spell::TargetInfo::DoDamageAndTriggers
+// (Spell.cpp:2643-2648). The target resolves to a player object for session
+// GUIDs and a creature object for creature GUIDs (the
+// ObjectAccessor::GetUnit(*caster, guid) model); an unresolvable target
+// passes nil, the way a despawned WorldObject would.
+func (s *Server) fireCreatureSpellHitTarget(ctx context.Context, m *creatureMotion, targetGUID uint64, spellID uint32) {
+	if s == nil || m == nil {
+		return
+	}
+	var target *scripting.Object
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		target = ts.luaPlayer()
+	} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		target = s.luaMotionCreature(tm)
+	}
+	s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnSpellHitTarget, target, spellID)
 }
 
 // prepareCreatureHitTriggerSpells mirrors Spell::PrepareTriggersExecutedOnHit
