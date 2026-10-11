@@ -540,6 +540,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		hitBonusBP := int32(math.Round(s.getMeleeHitPct() * 100))
 		critBonusBP := int32(math.Round(s.getMeleeCritPct() * 100))
 		expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
+		// SPELL_AURA_MOD_HIT_CHANCE (54) on the attacker and
+		// SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE (184) on the victim fold
+		// into the miss roll at percent scale (Unit::MeleeSpellMissChance,
+		// Unit.cpp:12425).
+		hitBonusBP += s.totalAuraModifier(spellAuraModHitChance) * 100
+		hitBonusBP += victimAttackerHitChanceBP(s, target.GUID, isPlayerVictim, spellAuraModAttackerMeleeHitChance)
 		// The attacker's SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) dodge
 		// reduction (Unit.cpp:2694-2695) — the same arm meleeSpellHitResult
 		// carries for melee spells.
@@ -1107,6 +1113,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	hitBonusBP := int32(math.Round(s.getRangedHitPct() * 100))
 	critBonusBP := int32(math.Round(s.getRangedCritPct() * 100))
 	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
+	// SPELL_AURA_MOD_HIT_CHANCE (54) on the attacker and
+	// SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE (185) on the victim fold
+	// into the miss roll at percent scale (Unit::MeleeSpellMissChance,
+	// Unit.cpp:12425).
+	hitBonusBP += s.totalAuraModifier(spellAuraModHitChance) * 100
+	hitBonusBP += victimAttackerHitChanceBP(s, target.GUID, isPlayerVictim, spellAuraModAttackerRangedHitChance)
 	// Ranged attacks dodge through the same RollMeleeOutcomeAgainst dodge
 	// arm (Unit.cpp:2255-2262, no attack-type gate), so the attacker's
 	// SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) dodge reduction
@@ -2027,6 +2039,26 @@ func (s *Server) creatureDodgeReductionBP(key creatureAuraKey) int32 {
 // MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
 // Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
 // Optional modifiers:
+// victimAttackerHitChanceBP sums the victim's
+// SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE (184) /
+// SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE (185) debuffs in basis points —
+// the Unit::MeleeSpellMissChance victim arm (Unit.cpp:12425) folds them into
+// the attacker's miss chance at percent scale.
+func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim bool, auraType uint32) int32 {
+	if s == nil || s.server == nil {
+		return 0
+	}
+	var total int32
+	if isPlayerVictim {
+		if vs := s.server.findSessionByGUID(targetGUID); vs != nil {
+			total = vs.totalAuraModifier(auraType)
+		}
+	} else if s.player != nil {
+		total = s.server.creatureAuraTypeSum(creatureAuraKeyForPlayer(*s.player, targetGUID), auraType)
+	}
+	return total * 100
+}
+
 // [0] critReductionBP (from defender resilience)
 // [1] hitBonusBP (from attacker hit rating)
 // [2] critBonusBP (from attacker crit rating & agility)

@@ -7,10 +7,10 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
-// Absorption aura types from TrinityCore SharedDefines.h:600-750
+// Absorption aura types from TrinityCore SpellAuraDefines.h
 const (
 	SpellAuraSchoolAbsorb uint32 = 69  // SPELL_AURA_SCHOOL_ABSORB (Power Word: Shield, Ice Barrier, Sacred Shield)
-	SpellAuraManaShield   uint32 = 72  // SPELL_AURA_MANA_SHIELD (Mana Shield)
+	SpellAuraManaShield   uint32 = 97  // SPELL_AURA_MANA_SHIELD (Mana Shield, SpellAuraDefines.h:177)
 	SpellAuraMagicAbsorb  uint32 = 256 // SPELL_AURA_MAGIC_ABSORB (Anti-Magic Shell)
 )
 
@@ -19,7 +19,7 @@ const (
 // 1. Specific school shields (Fire Ward, Frost Ward, Shadow Ward)
 // 2. Anti-Magic Shell / Magic Absorb (Aura 256)
 // 3. Generic school shields (Power Word: Shield, Ice Barrier, Sacred Shield)
-// 4. Mana Shield (Aura 72) - absorbs last to protect player mana
+// 4. Mana Shield (Aura 97) - absorbs last to protect player mana
 func getAbsorptionPriority(aura *activeAura) int {
 	if aura == nil {
 		return 99
@@ -301,7 +301,7 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 				continue
 			}
 
-			// 3. Mana Shield (SPELL_AURA_MANA_SHIELD = 72)
+			// 3. Mana Shield (SPELL_AURA_MANA_SHIELD = 97)
 			// In WotLK, Mana Shield absorbs all damage and drains 1.5 mana per point absorbed
 			if aura.AuraType == SpellAuraManaShield && s.player.Powers[0] > 0 {
 				currMana := s.player.Powers[0]

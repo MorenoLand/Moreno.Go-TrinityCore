@@ -172,6 +172,42 @@ func (s *Server) petBaseArmorBonus(key creatureAuraKey, isPet bool) float64 {
 
 // creatureAuraSpellHitSum mirrors the creature half of
 // AuraEffect::HandleModSpellHitChance (SpellAuraEffects.cpp:3839): the summed
+// creatureAuraTypeSum folds the live amounts of one aura type on the
+// creature's active auras, per effect via the DBC spell (no misc gate),
+// mirroring the creatureAuraSpellHitSum pattern. It serves the
+// Unit::MeleeSpellMissChance victim arm (Unit.cpp:12425):
+// SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE (184) and
+// SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE (185) are summed on the victim.
+func (s *Server) creatureAuraTypeSum(key creatureAuraKey, auraType uint32) int32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 0
+	}
+	var sum int32
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != auraType {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				sum += aura.Amounts[index]
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return sum
+}
+
 // amounts of SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) effects on the creature's
 // live auras. C++ accumulates the amounts straight into m_modSpellHitChance
 // (no misc/school gate), and WorldObject::MagicSpellHitResult
