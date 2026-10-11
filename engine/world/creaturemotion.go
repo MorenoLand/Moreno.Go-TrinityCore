@@ -2441,6 +2441,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				target.Sess.interruptAbsorbedCast()
 			}
 			if damage > 0 {
+				// Unit::CalcAbsorbResist (Unit.cpp:1977-2060):
+				// SPELL_AURA_SPLIT_DAMAGE (81/153) redirects part of the
+				// damage to the aura's caster, ahead of the 300 share leg.
+				damage = target.Sess.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
 				// Unit::DealDamage (Unit.cpp:766-788):
 				// SPELL_AURA_SHARE_DAMAGE_PCT.
 				target.Sess.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, 1)

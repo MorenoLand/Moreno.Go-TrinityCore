@@ -160,10 +160,18 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no
 		// damage — the kill/health legs are skipped explicitly (not via a
 		// damage==0 gate) because absorbed-to-zero damage still runs them
-		// in C++. The damage log below keeps the original amount, matching
-		// C++ sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
-		// (Spell.cpp:2542).
+		// in C++.
 		godNegated := p.Sess.godCheatActive()
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras
+		// (81/153) redirect part of the damage to the aura's caster, ahead
+		// of the 300 share leg. The damage log below keeps the post-split
+		// amount (the split hook sends its own log for the redirected
+		// portion); only the god arm predates the log, matching C++
+		// sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
+		// (Spell.cpp:2542).
+		if !godNegated && damage > 0 {
+			damage = p.Sess.server.splitDamageToCaster(ctx, p.GUID, true, creatureAuraKey{}, motion.GUID, damage, uint32(schoolMask))
+		}
 		// Unit::DealDamage (Unit.cpp:766-788):
 		// SPELL_AURA_SHARE_DAMAGE_PCT copies CalculatePct(damage,
 		// amount) to the aura's caster.

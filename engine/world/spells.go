@@ -13742,6 +13742,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// matching C++ sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
 			// (Spell.cpp:2542).
 			damage = playerSess.negateGodModeDamage(damage)
+			// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage
+			// auras (81/153) redirect part of the damage to the aura's
+			// caster, ahead of the 300 share leg.
+			if damage > 0 {
+				damage = s.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
+			}
 			// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 			if damage > 0 {
 				s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
@@ -13835,6 +13841,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		}
 	}
 
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
+	// redirect part of the damage to the aura's caster, ahead of the 300
+	// share leg.
+	if damage > 0 {
+		damage = s.server.splitDamageToCaster(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
+	}
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if damage > 0 {
 		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
@@ -13902,8 +13914,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// last-damaged stamp — direct spell damage with damage > 0
 			// resets it; DoT ticks never stamp (the tick funnel skips
 			// this), and player-owned victims are excluded from the arm.
-			// The damage-shield-aura exclusion is vacuous: Go models no
-			// shield-retaliation damage funnel.
+			// The damage-shield-aura exclusion lives in the recursive
+			// damage funnels (dealDirectDamageToCreature stamps only for
+			// split strikes, never shield strikes).
 			if damage > 0 && motion.OwnerGUID == 0 {
 				motion.LastDamaged = time.Now()
 			}
@@ -24091,6 +24104,12 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 	// rather than a damage==0 gate because absorbed-to-zero damage still runs
 	// the legs in C++ (absorbed hits strip TAKE_DAMAGE-interrupt auras).
 	godNegated := ts.godCheatActive()
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
+	// redirect part of the tick damage to the aura's caster, ahead of the
+	// 300 share leg.
+	if !godNegated && dmg > 0 {
+		dmg = ts.server.splitDamageToCaster(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
+	}
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if !godNegated && dmg > 0 {
 		ts.splitShareDamagePct(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
@@ -25769,6 +25788,12 @@ func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *sessio
 // periodic tick on a creature target, shared by the damage (3/89) and leech (53)
 // tick paths. Returns the damage actually dealt and whether the target survived.
 func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, targetHealth uint32, target combatTarget, key creatureAuraKey, aura *activeAura) (uint32, bool) {
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
+	// redirect part of the tick damage to the aura's caster, ahead of the
+	// 300 share leg.
+	if dmg > 0 {
+		dmg = s.server.splitDamageToCaster(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)
+	}
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if dmg > 0 {
 		s.splitShareDamagePct(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)

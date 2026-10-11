@@ -252,34 +252,52 @@ func (s *Server) applyDamageShieldToPlayer(ctx context.Context, victim damageShi
 	if victim.isPlayer {
 		holderSess = victim.sess
 	}
+	s.dealDirectDamageToPlayer(ctx, holderGUID, holderSess, ts, sh.spellID, sh.schoolMask, damage)
+}
+
+// dealDirectDamageToPlayer applies one recursive SPELL_DIRECT_DAMAGE strike
+// to a player (Unit::DealDamage, Unit.cpp:696-973): god, the split-damage
+// (81/153) and share-damage (300) legs, achievements, duel, kill,
+// rage-received, durability, pushback, the proc passes and pet-defensive all
+// run. Shared by damage-shield retaliation and split-damage redirection;
+// attackerGUID/attackerSess identify the original attacker (a nil session for
+// creatures).
+func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint64, attackerSess *session, ts *session, spellID uint32, schoolMask uint32, damage uint32) {
+	if s == nil || ts == nil || ts.player == nil || damage == 0 {
+		return
+	}
 	damage = ts.negateGodModeDamage(damage)
-	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT on the
-	// shield damage itself — the C++ split leg is gated on damagetype !=
-	// NODAMAGE, and the shield strike is SPELL_DIRECT_DAMAGE.
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras on the
+	// recursive victim redirect part of the damage to their caster, ahead of
+	// the 300 share leg below (Unit::DealDamage, Unit.cpp:766-788).
 	if damage > 0 {
-		ts.splitShareDamagePct(ctx, ts.playerGUID, true, creatureAuraKey{}, holderGUID, damage, sh.schoolMask)
+		damage = s.splitDamageToCaster(ctx, ts.playerGUID, true, creatureAuraKey{}, attackerGUID, damage, schoolMask)
+	}
+	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+	if damage > 0 {
+		ts.splitShareDamagePct(ctx, ts.playerGUID, true, creatureAuraKey{}, attackerGUID, damage, schoolMask)
 	}
 	ts.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 	ts.lastCombatTime = time.Now()
 	if ts.player.UnitFlags&unitFlagInCombat == 0 {
 		ts.player.UnitFlags |= unitFlagInCombat
 	}
-	if holderSess != nil && holderSess.player != nil {
-		if holderSess.player.UnitFlags&unitFlagInCombat == 0 {
-			holderSess.player.UnitFlags |= unitFlagInCombat
+	if attackerSess != nil && attackerSess.player != nil {
+		if attackerSess.player.UnitFlags&unitFlagInCombat == 0 {
+			attackerSess.player.UnitFlags |= unitFlagInCombat
 		}
-		holderSess.lastCombatTime = time.Now()
-		holderSess.updateAchievementCriteria(criteriaTypeDamageDone, 0, damage)
-		holderSess.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
+		attackerSess.lastCombatTime = time.Now()
+		attackerSess.updateAchievementCriteria(criteriaTypeDamageDone, 0, damage)
+		attackerSess.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
 	}
 	health := ts.player.Health
-	// Duel defeat (Unit.cpp:825-853, 957-973) with the shield holder as the
-	// damage source (GetControllingPlayer, Unit.cpp:5996).
-	holderPlayerGUID := holderGUID
+	// Duel defeat (Unit.cpp:825-853, 957-973) with the original attacker as
+	// the damage source (GetControllingPlayer, Unit.cpp:5996).
+	attackerPlayerGUID := attackerGUID
 	if ts != nil {
-		holderPlayerGUID = ts.controllingPlayerGUID(holderGUID)
+		attackerPlayerGUID = ts.controllingPlayerGUID(attackerGUID)
 	}
-	if duelDefeatOnDamage(ts, holderPlayerGUID, damage, health) {
+	if duelDefeatOnDamage(ts, attackerPlayerGUID, damage, health) {
 		ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health-1)
 		return
 	}
@@ -287,7 +305,7 @@ func (s *Server) applyDamageShieldToPlayer(ctx context.Context, victim damageShi
 		ts.player.Health = 0
 		ts.sendPlayerUpdate()
 		ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health)
-		ts.killPlayer(ctx, holderSess, true, true)
+		ts.killPlayer(ctx, attackerSess, true, true)
 		return
 	}
 	if damage == 0 {
@@ -300,36 +318,34 @@ func (s *Server) applyDamageShieldToPlayer(ctx context.Context, victim damageShi
 	// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 	ts.grantRageFromDamageTaken(ctx, damage)
 	// Unit::DealDamage (Unit.cpp:906-913, 925-931): random durability loss —
-	// HIT TAKEN on the attacker, HIT DONE on the shield holder.
+	// HIT TAKEN on the victim, HIT DONE on the original attacker.
 	ts.rollDurabilityLossOnHit(ctx, damage)
-	if holderSess != nil {
-		holderSess.rollDurabilityLossOnHit(ctx, damage)
+	if attackerSess != nil {
+		attackerSess.rollDurabilityLossOnHit(ctx, damage)
 	}
-	if ts.spellDamagePushesBack(sh.spellID, ts.playerGUID) {
+	if ts.spellDamagePushesBack(spellID, ts.playerGUID) {
 		ts.delayCurrentCast()
 		ts.delayCurrentChannel()
 	}
-	// ProcDamageAndSpellFor (Unit.cpp:10179+): the taken pass on the attacker
-	// and the done pass on the shield holder, carrying the shield's spell.
-	ts.procSpellHitTakenAuraTriggers(ctx, holderGUID, sh.spellID, true, false, false, false, false, 0, damage, false, false)
-	if holderSess != nil {
-		holderSess.procSpellHitAuraTriggers(ctx, ts.playerGUID, sh.spellID, true, false, false, false, false, 0, damage, false)
+	// ProcDamageAndSpellFor (Unit.cpp:10179+): the taken pass on the victim
+	// and the done pass on the original attacker, carrying the aura's spell.
+	ts.procSpellHitTakenAuraTriggers(ctx, attackerGUID, spellID, true, false, false, false, false, 0, damage, false, false)
+	if attackerSess != nil {
+		attackerSess.procSpellHitAuraTriggers(ctx, ts.playerGUID, spellID, true, false, false, false, false, 0, damage, false)
 	}
 	ts.sendPlayerUpdate()
-	// Unit::DealDamage (Unit.cpp:728-733): the attacker's controlled
-	// creatures are signaled OwnerAttackedBy — the attacker is the DealDamage
-	// victim here, so its pets defend against the shield holder.
-	s.triggerPetDefensive(ts.player.Map, ts.player.InstanceID, ts.playerGUID, holderGUID)
+	// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled creatures
+	// are signaled OwnerAttackedBy against the original attacker.
+	s.triggerPetDefensive(ts.player.Map, ts.player.InstanceID, ts.playerGUID, attackerGUID)
 }
 
 // applyDamageShieldToCreature deals one shield strike to a creature attacker
 // (Unit::DealDamage, Unit.cpp:696-973): the Eluna DamageTaken hook, the 300
-// split, tap, rage, threat and the kill/health legs run. Two C++ deviations
-// are load-bearing here: the evade leash's LastDamaged stamp EXCLUDES
-// damage-shield-aura damage (Unit.cpp:902), and no threat arm fires when the
-// shield holder is a player (the DealDamage victim — a player — owns no
-// threat list); when the holder is a creature its manager gains threat on
-// the original attacker per Unit.cpp:906.
+// split, tap, rage, threat and the kill/health legs run. The evade leash's
+// LastDamaged stamp EXCLUDES damage-shield-aura damage (Unit.cpp:902), and no
+// threat arm fires when the shield holder is a player (the DealDamage victim
+// — a player — owns no threat list); when the holder is a creature its
+// manager gains threat on the original attacker per Unit.cpp:906.
 func (s *Server) applyDamageShieldToCreature(ctx context.Context, victim damageShieldSide, motion *creatureMotion, key creatureAuraKey, sh damageShieldAura, damage uint32) {
 	if s == nil || motion == nil || damage == 0 {
 		return
@@ -339,23 +355,45 @@ func (s *Server) applyDamageShieldToCreature(ctx context.Context, victim damageS
 	if victim.isPlayer {
 		holderSess = victim.sess
 	}
+	s.dealDirectDamageToCreature(ctx, holderGUID, holderSess, motion, key, sh.spellID, sh.schoolMask, false, damage)
+}
+
+// dealDirectDamageToCreature applies one recursive SPELL_DIRECT_DAMAGE strike
+// to a creature (Unit::DealDamage, Unit.cpp:696-973): the Eluna DamageTaken
+// hook, the split-damage (81/153) and share-damage (300) legs, tap, rage,
+// threat and the kill/health legs run. Shared by damage-shield retaliation
+// and split-damage redirection; attackerGUID/attackerSess identify the
+// original attacker (a nil session for creatures). stampLastDamaged carries
+// the Unit.cpp:900-907 evade-leash arm — false for shield strikes (the
+// damage-shield-aura exclusion), true for split strikes.
+func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID uint64, attackerSess *session, motion *creatureMotion, key creatureAuraKey, spellID uint32, schoolMask uint32, stampLastDamaged bool, damage uint32) {
+	if s == nil || motion == nil || damage == 0 {
+		return
+	}
 	// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9): fires before damage apply
 	// (Unit::DealDamage, Unit.cpp:697-702); handlers may rewrite damage.
-	if holderSess != nil {
-		damage = s.fireCreatureDamageTaken(ctx, motion, holderSess.luaPlayer(), damage)
+	if attackerSess != nil {
+		damage = s.fireCreatureDamageTaken(ctx, motion, attackerSess.luaPlayer(), damage)
 	}
 	if damage == 0 {
 		return
 	}
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras on the
+	// recursive victim redirect part of the damage to their caster, ahead of
+	// the 300 share leg below (Unit::DealDamage, Unit.cpp:766-788).
+	damage = s.splitDamageToCaster(ctx, key.GUID, false, key, attackerGUID, damage, schoolMask)
+	if damage == 0 {
+		return
+	}
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
-	// Creature holders have no session for the split funnel (documented
-	// delta); player holders split through their own session.
-	if holderSess != nil {
-		holderSess.splitShareDamagePct(ctx, key.GUID, false, key, holderGUID, damage, sh.schoolMask)
+	// Creature attackers have no session for the split funnel (documented
+	// delta); player attackers split through their own session.
+	if attackerSess != nil {
+		attackerSess.splitShareDamagePct(ctx, key.GUID, false, key, attackerGUID, damage, schoolMask)
 	}
 	var groupID uint64
-	if holderSess != nil {
-		groupID = holderSess.groupID
+	if attackerSess != nil {
+		groupID = attackerSess.groupID
 	}
 	s.motionMu.Lock()
 	m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
@@ -364,7 +402,7 @@ func (s *Server) applyDamageShieldToCreature(ctx context.Context, victim damageS
 		return
 	}
 	// Unit::DealDamage tap block (Unit.cpp:872-876): not damagetype-gated.
-	s.recordCreatureTap(m, holderGUID, groupID, damage, m.Health)
+	s.recordCreatureTap(m, attackerGUID, groupID, damage, m.Health)
 	wasInCombat := m.InCombat
 	if damage >= m.Health {
 		m.Health = 0
@@ -383,31 +421,33 @@ func (s *Server) applyDamageShieldToCreature(ctx context.Context, victim damageS
 			unitFieldDynamicFlags: corpseFlags,
 		})
 		s.broadcastThreatClearInInstance(key.Map, key.InstanceID, key.GUID)
-		if holderSess != nil {
-			_ = holderSess.sendAttackStop(key.GUID, true)
-			holderSess.attackTarget = 0
+		if attackerSess != nil {
+			_ = attackerSess.sendAttackStop(key.GUID, true)
+			attackerSess.attackTarget = 0
 		}
 		var ct combatTarget
 		ct.GUID, ct.Map, ct.InstanceID, ct.X, ct.Y, ct.Z = m.GUID, m.Map, m.InstanceID, m.X, m.Y, m.Z
 		ct.Health, ct.MaxHealth, ct.Level = 0, m.MaxHealth, uint8(m.Level)
-		if holderSess != nil {
-			holderSess.onCreatureKilled(ctx, ct, nil)
+		if attackerSess != nil {
+			attackerSess.onCreatureKilled(ctx, ct, nil)
 		}
 		return
 	}
 	newHealth := m.Health - damage
 	m.Health = newHealth
-	// Unit::DealDamage (Unit.cpp:900-907): the damage-shield-aura exclusion —
-	// shield retaliation never stamps the evade leash. (The direct-spell path
-	// stamps unconditionally; this funnel is the anticipated non-vacuous
-	// case of that comment.)
+	// Unit::DealDamage (Unit.cpp:900-907): the evade leash's last-damaged
+	// stamp — direct-damage strikes reset it; DoTs and damage-shield-aura
+	// strikes never do.
+	if stampLastDamaged && damage > 0 && m.OwnerGUID == 0 {
+		m.LastDamaged = time.Now()
+	}
 	// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 	_, _ = s.addCreatureRageLocked(m, m.Level, damage)
 	if m.ThreatMgr == nil {
 		m.ThreatMgr = NewThreatManager(m)
 	}
 	// Unit::DealDamage (Unit.cpp:906): the DealDamage victim (the original
-	// attacker) gains threat on the damage source (the shield holder), via
+	// attacker) gains threat on the damage source, via
 	// ThreatManager::CalculateModifiedThreat (ThreatManager.cpp:606-659) —
 	// the same damageThreatAmount fold the direct-spell path uses. The
 	// step-1 gate (ThreatManager.cpp:311-317) suppresses both threat and
@@ -415,14 +455,12 @@ func (s *Server) applyDamageShieldToCreature(ctx context.Context, victim damageS
 	if m.ThreatMgr.OwnerCanHaveThreatList() {
 		threat := float32(damage)
 		step1Gate := false
-		if holderSess != nil {
-			threat, step1Gate = holderSess.damageThreatAmount(ctx, sh.spellID, sh.schoolMask, float32(damage), wasInCombat)
+		if attackerSess != nil {
+			threat, step1Gate = attackerSess.damageThreatAmount(ctx, spellID, schoolMask, float32(damage), wasInCombat)
 		}
 		if !step1Gate {
 			m.InCombat = true
-			// The shield only fires on melee hits, so the attacker is in
-			// melee range by construction.
-			switched, newVictim := m.ThreatMgr.AddThreat(holderGUID, threat, true)
+			switched, newVictim := m.ThreatMgr.AddThreat(attackerGUID, threat, true)
 			if switched && newVictim != m.TargetGUID {
 				m.TargetGUID = newVictim
 				entries := m.ThreatMgr.SortedEntries()
@@ -432,9 +470,9 @@ func (s *Server) applyDamageShieldToCreature(ctx context.Context, victim damageS
 	}
 	s.motionMu.Unlock()
 	// Unit::DealDamage (Unit.cpp:925-931): random durability loss on HIT
-	// DONE — the shield holder is the damage source.
-	if holderSess != nil {
-		holderSess.rollDurabilityLossOnHit(ctx, damage)
+	// DONE — the original attacker is the damage source.
+	if attackerSess != nil {
+		attackerSess.rollDurabilityLossOnHit(ctx, damage)
 	}
 	s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{
 		unitFieldHealth: newHealth,

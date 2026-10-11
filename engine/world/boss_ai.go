@@ -2448,6 +2448,10 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 	overkill := uint32(0)
 	now := time.Now()
 	if !vs.godCheatActive() && damage > 0 {
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras
+		// (81/153) redirect part of the damage to the aura's caster, ahead
+		// of the 300 share leg.
+		damage = s.splitDamageToCaster(ctx, victimGUID, true, creatureAuraKey{}, m.GUID, damage, schoolMask)
 		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 		vs.splitShareDamagePct(ctx, victimGUID, true, creatureAuraKey{}, m.GUID, damage, schoolMask)
 		// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED.

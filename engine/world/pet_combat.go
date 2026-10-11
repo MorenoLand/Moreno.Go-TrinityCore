@@ -660,6 +660,12 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		// gate below (Unit.cpp:1555).
 		shieldGateDamage := damage
 		damage = targetSess.negateGodModeDamage(damage)
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras
+		// (81/153) redirect part of the damage to the aura's caster, ahead
+		// of the 300 share leg.
+		if owner != nil && damage > 0 {
+			damage = owner.server.splitDamageToCaster(ctx, targetGUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
+		}
 		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 		if owner != nil && damage > 0 {
 			owner.splitShareDamagePct(ctx, targetGUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
@@ -743,6 +749,12 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				shieldGateDamage)
 		}
 	} else {
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras
+		// (81/153) redirect part of the damage to the aura's caster, ahead
+		// of the 300 share leg.
+		if owner != nil && damage > 0 {
+			damage = owner.server.splitDamageToCaster(ctx, targetGUID, false, creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, motion.GUID, damage, 1)
+		}
 		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 		if owner != nil && damage > 0 {
 			owner.splitShareDamagePct(ctx, targetGUID, false, creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, motion.GUID, damage, 1)
@@ -2117,6 +2129,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// (Spell.cpp:2539-2549).
 		procEventDamage := damage
 		damage = victim.negateGodModeDamage(damage)
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras
+		// (81/153) redirect part of the damage to the aura's caster, ahead
+		// of the 300 share leg.
+		if damage > 0 {
+			damage = s.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, caster.GUID, damage, uint32(schoolMask))
+		}
 		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 		if damage > 0 {
 			s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, caster.GUID, damage, uint32(schoolMask))
@@ -2207,6 +2225,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// runs after the taken side on both the lethal and non-lethal arms.
 		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered)
 		return
+	}
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
+	// redirect part of the damage to the aura's caster, ahead of the 300
+	// share leg.
+	if damage > 0 {
+		damage = s.server.splitDamageToCaster(ctx, target.GUID, false, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, caster.GUID, damage, uint32(schoolMask))
 	}
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if damage > 0 {

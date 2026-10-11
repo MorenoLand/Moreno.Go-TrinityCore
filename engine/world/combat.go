@@ -885,6 +885,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// ordering; the trigger spell targets the attacker.
 			playerSess.procVictimAuraTriggers(ctx, s.playerGUID, outcome, hitInfo, targetState, blocked, damage)
 			if damage > 0 {
+				// Unit::CalcAbsorbResist (Unit.cpp:1977-2060):
+				// SPELL_AURA_SPLIT_DAMAGE (81/153) redirects part of the
+				// damage to the aura's caster. Runs inside DealDamage, ahead
+				// of the health reduction below.
+				damage = s.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, 1)
 				// Unit::DealDamage (Unit.cpp:766-788):
 				// SPELL_AURA_SHARE_DAMAGE_PCT copies CalculatePct(damage,
 				// amount) to the aura's caster. Runs inside DealDamage, ahead
@@ -976,6 +981,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if damage > 0 {
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060):
+		// SPELL_AURA_SPLIT_DAMAGE (81/153) redirects part of the damage to
+		// the aura's caster, ahead of the 300 share leg.
+		damage = s.server.splitDamageToCaster(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, 1)
 		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, 1)
 	}
 
@@ -1431,6 +1440,10 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			// spell targets the attacker.
 			vicSess.procRangedVictimAuraTriggers(ctx, s.playerGUID, spellID, outcome, absorbed, blocked, damage)
 			if damage > 0 {
+				// Unit::CalcAbsorbResist (Unit.cpp:1977-2060):
+				// SPELL_AURA_SPLIT_DAMAGE (81/153) redirects part of the
+				// damage to the aura's caster, ahead of the 300 share leg.
+				damage = s.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
 				// Unit::DealDamage (Unit.cpp:766-788):
 				// SPELL_AURA_SHARE_DAMAGE_PCT copies CalculatePct(damage,
 				// amount) to the aura's caster. Runs inside DealDamage, ahead
@@ -1515,6 +1528,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		}
 	}
 
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060):
+	// SPELL_AURA_SPLIT_DAMAGE (81/153) redirects part of the damage to the
+	// aura's caster, ahead of the 300 share leg.
+	if damage > 0 {
+		damage = s.server.splitDamageToCaster(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
+	}
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if damage > 0 {
 		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
