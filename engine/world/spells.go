@@ -541,7 +541,8 @@ const (
 	spellAuraModIncreaseMountedFlightSpeed            = 207 // SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED (SpellAuraDefines.h:287)
 	spellAuraConfuse                                  = 5
 	spellAuraCharm                                    = 6
-	spellAuraModTaunt                                 = 11 // SPELL_AURA_MOD_TAUNT (SpellAuraDefines.h)
+	spellAuraModTaunt                                 = 11  // SPELL_AURA_MOD_TAUNT (SpellAuraDefines.h)
+	spellAuraControlVehicle                           = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
 	spellAuraFear                                     = 7
 	spellAuraStun                                     = 12
 	spellAuraRoot                                     = 26
@@ -18442,6 +18443,13 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraModFaction) {
 		s.player.UnitFlags &^= unitFlagPlayerControlled
 	}
+	// AuraEffect::HandleAuraGhost apply leg (SpellAuraEffects.cpp:1555-1567):
+	// the ghost flag is set on the player when the aura applies; the remove
+	// leg clears it only when no other 95 aura remains (the HasAuraType
+	// gate). The server-side ghost visibility arm has no Go model.
+	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraGhost) {
+		s.player.PlayerFlags |= playerFlagGhost
+	}
 	// AuraEffect::HandleAuraModSkill apply leg
 	// (SpellAuraEffects.cpp:2559-2574): 30/98 effects adjust the
 	// temporary/permanent skill bonus (aura_skill.go).
@@ -18477,6 +18485,7 @@ func (s *session) removeAura(spellID uint32) {
 	forcedReactionFaction := uint32(0)
 	forcedReactionRank := uint32(0)
 	wasPreparation := false
+	wasGhost := false
 	wasFactionAura := false
 	wasTransform := false
 	wasShapeshift := false
@@ -18553,6 +18562,10 @@ func (s *session) removeAura(spellID uint32) {
 			// (SpellAuraEffects.cpp:4279-4285): the preparation flag clears
 			// only when no other aura of that type remains.
 			wasPreparation = s.activeAuraHasEffect(aura, spellAuraArenaPreparation)
+			// AuraEffect::HandleAuraGhost remove leg
+			// (SpellAuraEffects.cpp:1568-1579): captured before Stopped is
+			// set — activeAuraHasEffect ignores stopped auras.
+			wasGhost = s.activeAuraHasEffect(aura, spellAuraGhost)
 			// AuraEffect::HandleAuraModFaction remove leg: the native faction
 			// is restored and the PLAYER_CONTROLLED bit set again. C++ sets
 			// the bit unconditionally here (no HasAuraType gate), matching
@@ -18709,6 +18722,11 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasPreparation && s.player != nil && !s.hasAuraType(spellAuraArenaPreparation) {
 		s.player.UnitFlags &^= unitFlagPreparation
+	}
+	// AuraEffect::HandleAuraGhost remove leg (SpellAuraEffects.cpp:1568-1579):
+	// the ghost flag clears only when no other 95 aura remains.
+	if wasGhost && s.player != nil && !s.hasAuraType(spellAuraGhost) {
+		s.player.PlayerFlags &^= playerFlagGhost
 	}
 	if wasFactionAura && s.player != nil {
 		s.player.UnitFlags |= unitFlagPlayerControlled
@@ -21351,6 +21369,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if controlled {
 			s.sendClientControl(targetGUID, true)
 			s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
+		}
+	}
+	// AuraEffect::HandleAuraControlVehicle apply leg
+	// (SpellAuraEffects.cpp:2965-2986): the aura's caster boards the vehicle
+	// creature at seat amount-1. The IsVehicle gate is the vehicle kit's
+	// presence; caster==target can't occur here (player GUID vs creature
+	// GUID namespaces are disjoint). Seat -1 rides AddPassenger's
+	// any-usable-seat fallback, the C++ 0/0-seat convention.
+	if eff.Aura == spellAuraControlVehicle && s.player != nil && s.server != nil {
+		if kit := s.server.getVehicleKit(targetKey.Map, targetKey.InstanceID, targetGUID); kit != nil {
+			s.enterVehicle(ctx, targetGUID, int8(int32(amount)-1))
 		}
 	}
 
@@ -24637,6 +24666,8 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	charmerGUID := uint64(0)
 	wasTaunt := false
 	taunterGUID := uint64(0)
+	wasControlVehicle := false
+	controlVehicleCaster := uint64(0)
 	s.server.auraMu.Lock()
 	var finalTick *activeAura
 	if s.server.activeCreatureAuras != nil {
@@ -24650,6 +24681,8 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 				// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
+				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
+				controlVehicleCaster = aura.CasterGUID
 				aura.Stopped = true
 				if aura.TickTimer != nil {
 					// Same final-tick-at-expiry bridge as expirePlayerAura:
@@ -24694,6 +24727,20 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 			charmer.sendVehiclePetSpells(0, nil)
 		}
 	}
+	// AuraEffect::HandleAuraControlVehicle remove leg
+	// (SpellAuraEffects.cpp:2987-3008): the caster leaves the vehicle and a
+	// same-spell dummy aura on the caster is dropped (RemoveAurasDueToSpell).
+	// RemovePendingEventsForPassenger has no Go model; the 53111 Devour
+	// Humanoid kill/despawn arm is vacuous here (creature-caster direction,
+	// unmodeled).
+	if wasControlVehicle {
+		if caster := s.server.findSessionByGUID(controlVehicleCaster); caster != nil && caster.player != nil {
+			if caster.player.VehicleGUID == key.GUID {
+				caster.exitVehicle(context.Background())
+			}
+			caster.removeAura(spellID)
+		}
+	}
 
 	removePkt := protocol.BuildAuraUpdate(key.GUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
 	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
@@ -24707,6 +24754,8 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	charmerGUID := uint64(0)
 	wasTaunt := false
 	taunterGUID := uint64(0)
+	wasControlVehicle := false
+	controlVehicleCaster := uint64(0)
 	s.auraMu.Lock()
 	var slot uint8
 	if s.activeCreatureAuras != nil {
@@ -24716,6 +24765,8 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
+				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
+				controlVehicleCaster = aura.CasterGUID
 				aura.Stopped = true
 				slot = aura.Slot
 				if aura.Timer != nil {
@@ -24744,6 +24795,20 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 		if charmer := s.findSessionByGUID(charmerGUID); charmer != nil && charmer.player != nil && charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID {
 			charmer.sendClientControl(key.GUID, false)
 			charmer.sendVehiclePetSpells(0, nil)
+		}
+	}
+	// AuraEffect::HandleAuraControlVehicle remove leg
+	// (SpellAuraEffects.cpp:2987-3008): the caster leaves the vehicle and a
+	// same-spell dummy aura on the caster is dropped (RemoveAurasDueToSpell).
+	// RemovePendingEventsForPassenger has no Go model; the 53111 Devour
+	// Humanoid kill/despawn arm is vacuous here (creature-caster direction,
+	// unmodeled).
+	if wasControlVehicle {
+		if caster := s.findSessionByGUID(controlVehicleCaster); caster != nil && caster.player != nil {
+			if caster.player.VehicleGUID == key.GUID {
+				caster.exitVehicle(context.Background())
+			}
+			caster.removeAura(spellID)
 		}
 	}
 
