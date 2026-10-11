@@ -760,6 +760,17 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			if !s.checkCreatureCasterAuras(m, spellInfo) {
 				return
 			}
+		}
+		// SPELL_EFFECT_STEAL_BENEFICIAL_BUFF arm (Spell.cpp:5957-5984):
+		// no !IsTriggered() gate, so it runs for triggered casts too.
+		// Placed after the caster-aura gate and before the cooldown
+		// record, matching C++ CheckCast order (5509 -> per-effect
+		// switch 5617+ -> SendSpellCooldown at 3463): a failed CheckCast
+		// never starts a cooldown and never arms cast state.
+		if !s.creatureStealPreCast(m, spellInfo, targetGUID) {
+			return
+		}
+		if !triggered {
 			// Spell::SendSpellCooldown (Spell.cpp:3463, 3780-3791):
 			// non-triggered casts start the spell-history cooldown
 			// (HandleCooldowns returns early for IsIgnoringCooldowns,
@@ -787,6 +798,98 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	} else {
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
 	}
+}
+
+// creatureStealPreCast mirrors the SPELL_EFFECT_STEAL_BENEFICIAL_BUFF arm
+// of Spell::CheckCast (Spell.cpp:5957-5984) for a creature caster: a null
+// or self unit target fizzles (SPELL_FAILED_BAD_TARGETS); a target carrying
+// no stealable aura under the effect's dispel mask fizzles
+// (SPELL_FAILED_NOTHING_TO_STEAL). Creature casts have no failure-packet
+// path, so the SPELL_FAILED_* codes are internal only — false means fizzle.
+func (s *Server) creatureStealPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if m == nil {
+		return true
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != 126 { // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
+			continue
+		}
+		if targetGUID == 0 || targetGUID == m.GUID {
+			return false
+		}
+		if !s.unitHasStealableAura(m, targetGUID, getDispelMask(uint32(eff.MiscValue))) {
+			return false
+		}
+	}
+	return true
+}
+
+// unitHasStealableAura scans the target's auras the way the CheckCast steal
+// arm scans Unit::GetVisibleAuras(): positive auras only, dispel-mask match,
+// skipping passive auras and SPELL_ATTR4_NOT_STEALABLE spells — the
+// EffectStealBeneficialBuff skip list (SpellEffects.cpp:5172). Unlike the
+// dispel-list scan there is no hostility filter: the C++ arm checks
+// AuraApplication::IsPositive() directly, and no dispel-resist or Unholy
+// Blight terms (those live in GetDispellableAuraList, which the arm does
+// not call).
+func (s *Server) unitHasStealableAura(caster *creatureMotion, targetGUID uint64, dispelMask uint32) bool {
+	if s == nil || caster == nil {
+		return false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		ts.castMu.Lock()
+		defer ts.castMu.Unlock()
+		for _, aura := range ts.activeAuras {
+			if stealableAuraRecord(s, aura, dispelMask) {
+				return true
+			}
+		}
+		return false
+	}
+	tm := s.findCreatureMotion(caster.Map, caster.InstanceID, targetGUID)
+	if tm == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(tm)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if stealableAuraRecord(s, aura, dispelMask) {
+			return true
+		}
+	}
+	return false
+}
+
+// stealableAuraRecord is the per-aura predicate of the CheckCast steal arm
+// (Spell.cpp:5957-5984): positive, dispel-mask overlap, not passive, not
+// SPELL_ATTR4_NOT_STEALABLE. Stopped auras are skipped like the other
+// aura-list scans.
+func stealableAuraRecord(s *Server, aura *activeAura, dispelMask uint32) bool {
+	if aura == nil || aura.Stopped || !aura.Positive {
+		return false
+	}
+	var sp wotlk.Spell
+	var found bool
+	if s != nil && s.Data != nil {
+		sp, found, _ = s.Data.Spell(aura.SpellID)
+	}
+	dispelType := aura.DispelType
+	if dispelType == 0 && found {
+		dispelType = sp.DispelType
+	}
+	if getDispelMask(dispelType)&dispelMask == 0 {
+		return false
+	}
+	if found {
+		if sp.Attributes&spellAttributePassive != 0 {
+			return false
+		}
+		if sp.AttributesEx4&spellAttr4NotStealable != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // creatureSpellHistoryReady mirrors the unit-cooldown arm of

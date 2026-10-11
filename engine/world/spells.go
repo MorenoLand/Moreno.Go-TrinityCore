@@ -1293,6 +1293,15 @@ func (s *session) hasSpellReagents(ctx context.Context, spell wotlk.Spell) bool 
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return true
 	}
+	// Player::HasItemCount (Player.cpp:10239-10266) skips items locked in
+	// the trade accept window (Item::IsInTrade, Item.h:107-108, set by
+	// setAcceptTradeMode, TradeHandler.cpp:209-233). Merely offered trade
+	// items are NOT skipped in C++ — the flag is only set while both sides
+	// have accepted — so only InTradeItems is excluded here.
+	var inTrade map[uint64]bool
+	if s.trade != nil {
+		inTrade = s.trade.InTradeItems
+	}
 	for i := range spell.Reagent {
 		if spell.Reagent[i] <= 0 {
 			continue
@@ -1303,8 +1312,32 @@ func (s *session) hasSpellReagents(ctx context.Context, spell wotlk.Spell) bool 
 			need = 1
 		}
 		var have int64
-		err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count),0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, int64(itemID)).Scan(&have)
-		if err != nil || have < int64(need) {
+		if len(inTrade) == 0 {
+			err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count),0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, int64(itemID)).Scan(&have)
+			if err != nil || have < int64(need) {
+				return false
+			}
+			continue
+		}
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.count FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, int64(itemID))
+		if err != nil {
+			return false
+		}
+		for rows.Next() {
+			var guid, count int64
+			if rows.Scan(&guid, &count) != nil {
+				continue
+			}
+			if inTrade[uint64(guid)] {
+				continue
+			}
+			have += count
+			if have >= int64(need) {
+				break
+			}
+		}
+		rows.Close()
+		if have < int64(need) {
 			return false
 		}
 	}
@@ -1330,6 +1363,13 @@ func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell, cast
 	// reagents while UNIT_FLAG_PREPARATION is set (arena preparation).
 	if s.canNoReagentCast(spell) {
 		return
+	}
+	// Player::DestroyItemCount (Player.cpp:12727+) skips items locked in
+	// the trade accept window (Item::IsInTrade), mirroring the HasItemCount
+	// skip in hasSpellReagents above.
+	var inTrade map[uint64]bool
+	if s.trade != nil {
+		inTrade = s.trade.InTradeItems
 	}
 	destroyedAny := false
 	for i := range spell.Reagent {
@@ -1372,6 +1412,9 @@ func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell, cast
 		for _, st := range stacks {
 			if want <= 0 {
 				break
+			}
+			if inTrade[uint64(st.guid)] {
+				continue
 			}
 			if st.count <= want {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `DELETE FROM character_inventory WHERE guid = ? AND item = ?`, s.playerGUID, st.guid)

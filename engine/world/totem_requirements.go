@@ -48,13 +48,39 @@ func (s *session) checkSpellTotemRequirements(ctx context.Context, spell wotlk.S
 }
 
 // playerItemCount mirrors Player::HasItemCount (Inventory.cpp) for the
-// presence check: total count of the item entry across the player's inventory.
+// presence check: total count of the item entry across the player's inventory,
+// skipping items locked in the trade accept window (Item::IsInTrade,
+// Player.cpp:10245) like hasSpellReagents does. Both call sites (the reagent
+// missing-item report and the totem presence check) mirror HasItemCount arms.
 func (s *session) playerItemCount(ctx context.Context, itemID uint32) int64 {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return 0
 	}
+	var inTrade map[uint64]bool
+	if s.trade != nil {
+		inTrade = s.trade.InTradeItems
+	}
+	if len(inTrade) == 0 {
+		var have int64
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count),0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, int64(itemID)).Scan(&have)
+		return have
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.count FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, int64(itemID))
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
 	var have int64
-	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count),0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, int64(itemID)).Scan(&have)
+	for rows.Next() {
+		var guid, count int64
+		if rows.Scan(&guid, &count) != nil {
+			continue
+		}
+		if inTrade[uint64(guid)] {
+			continue
+		}
+		have += count
+	}
 	return have
 }
 
