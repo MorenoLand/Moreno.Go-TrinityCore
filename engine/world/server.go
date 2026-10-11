@@ -548,6 +548,7 @@ type session struct {
 	redirectThreatInfo     []redirectThreatTarget
 	schoolLockouts         map[uint32]int64
 	gcdCooldowns           map[uint32]int64 // per-category Global Cooldown expiry Unix-ms (SpellHistory::_globalCooldowns)
+	weaponChangeGCDUntil   int64            // weapon-switch GCD window expiry Unix-ms (Player::m_weaponChangeTimer)
 	pendingBindInstanceID  uint64
 	pendingBindMapID       uint32
 	pendingBindDiff        uint32

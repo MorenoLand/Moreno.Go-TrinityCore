@@ -26792,9 +26792,18 @@ func (s *session) savePlayerSpellCooldowns(ctx context.Context, tx *sql.Tx, stat
 }
 
 func buildSpellCooldown(playerGUID uint64, spellID uint32, cooldownDurationMs uint32) []byte {
+	return buildSpellCooldownFlags(playerGUID, spellID, cooldownDurationMs, 0)
+}
+
+// buildSpellCooldownFlags packs SMSG_SPELL_COOLDOWN with an explicit flags
+// byte. SPELL_COOLDOWN_FLAG_INCLUDE_GCD (0x1, SpellHistory.h:40) tells the
+// client to start the GCD in addition to the listed cooldown — used by the
+// weapon-switch leg of Player::EquipItem (Player.cpp:12347), which sends
+// cooldown 0 with INCLUDE_GCD set.
+func buildSpellCooldownFlags(playerGUID uint64, spellID uint32, cooldownDurationMs uint32, flags uint8) []byte {
 	buf := protocol.NewBuffer(8 + 1 + 4 + 4)
 	buf.WriteU64(playerGUID)
-	buf.WriteU8(0) // flags = 0
+	buf.WriteU8(flags)
 	buf.WriteU32(spellID)
 	buf.WriteU32(cooldownDurationMs)
 	return buf.Bytes()

@@ -20,6 +20,7 @@ const (
 	itemFlagUniqueEquippable uint32 = 0x00080000
 	itemFlagIsProspectable   uint32 = 0x00040000 // ITEM_FLAG_IS_PROSPECTABLE (ItemTemplate.h:170)
 	itemFlagIsMillable       uint32 = 0x20000000 // ITEM_FLAG_IS_MILLABLE (ItemTemplate.h:181)
+	itemFlagNoEquipCooldown  uint32 = 0x00000080 // ITEM_FLAG_NO_EQUIP_COOLDOWN (ItemTemplate.h:159)
 	itemClassQuiver          uint32 = 11
 	defaultMaxPlayerLevel    uint32 = 80
 	itemBagFamilyKeys        uint32 = 0x00000100
@@ -1868,6 +1869,118 @@ func (s *session) resolveItemUseSpell(ctx context.Context, itemEntry uint32, dbI
 	return 0, nil
 }
 
+// weapon-switch GCD spell ids (Player::EquipItem, Player.cpp:12334): 6123
+// for rogues, 6119 for everyone else. CLASS_ROGUE = 4 (SharedDefines.h).
+const (
+	weaponSwitchCooldownSpell      = uint32(6119)
+	weaponSwitchCooldownSpellRogue = uint32(6123)
+	invTypeRelic                   = uint32(28) // INVTYPE_RELIC (ItemTemplate.h:289)
+	spellCooldownFlagIncludeGCD    = uint8(0x1) // SPELL_COOLDOWN_FLAG_INCLUDE_GCD (SpellHistory.h:40)
+)
+
+// applyWeaponSwitchGCD mirrors the weapon-switch leg of Player::EquipItem
+// (Player.cpp:12332-12350): equipping a weapon (ITEM_CLASS_WEAPON) or a
+// relic (INVTYPE_RELIC) while in combat and alive starts the class
+// weapon-change GCD — spell 6123 for rogues, 6119 for everyone else —
+// unless the weapon-change window is still open. C++ counts the window
+// down in m_weaponChangeTimer (Player::Update); Go stores its expiry on
+// the session. The GCD entry is keyed by StartRecoveryCategory exactly as
+// SpellHistory::AddGlobalCooldown (SpellHistory.cpp:591-594), with the raw
+// StartRecoveryTime (no haste scaling — C++ passes m_weaponChangeTimer
+// verbatim), and the client gets SMSG_SPELL_COOLDOWN with
+// SPELL_COOLDOWN_FLAG_INCLUDE_GCD and cooldown 0, as
+// BuildCooldownPacket(data, INCLUDE_GCD, cooldownSpell, 0) sends it.
+func (s *session) applyWeaponSwitchGCD(ctx context.Context, itemEntry uint32) {
+	if s == nil || s.player == nil || itemEntry == 0 {
+		return
+	}
+	if s.player.UnitFlags&unitFlagInCombat == 0 || s.player.Health == 0 {
+		return
+	}
+	nowMs := time.Now().UnixMilli()
+	if s.weaponChangeGCDUntil > nowMs {
+		return
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil {
+		return
+	}
+	var classID, invType int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Class, InventoryType FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&classID, &invType); err != nil {
+		return
+	}
+	if uint32(classID) != itemClassWeapon && uint32(invType) != invTypeRelic {
+		return
+	}
+	spellID := weaponSwitchCooldownSpell
+	if s.player.Class == 4 {
+		spellID = weaponSwitchCooldownSpellRogue
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		s.debug("weapon switch GCD spell missing from Spell.dbc", "account", s.accountName, "spell", spellID)
+		return
+	}
+	duration := int64(spell.StartRecoveryTime)
+	s.castMu.Lock()
+	if s.gcdCooldowns == nil {
+		s.gcdCooldowns = make(map[uint32]int64)
+	}
+	s.gcdCooldowns[spell.StartRecoveryCategory] = nowMs + duration
+	s.castMu.Unlock()
+	s.weaponChangeGCDUntil = nowMs + duration
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldownFlags(s.playerGUID, spellID, 0, spellCooldownFlagIncludeGCD), true)
+}
+
+// applyEquipCooldown mirrors Player::ApplyEquipCooldown (Player.cpp:23114):
+// equipping an item starts a 30-second cooldown on each of its
+// ITEM_SPELLTRIGGER_ON_USE template spells, with SMSG_ITEM_COOLDOWN (item
+// GUID + spell id) to the client. ITEM_FLAG_NO_EQUIP_COOLDOWN (0x80,
+// ItemTemplate.h:159) opts out, and a longer pre-existing cooldown is never
+// replaced by the equip cooldown (the > 30s gate, Player.cpp:23146-23147).
+// The ON_EQUIP arm's Aura::AddProcCooldown write is vacuous in Go: there is
+// no spell_proc DB table, and the generated-default SpellProcEntry carries
+// Cooldown 0 (SpellMgr.cpp:1816+), so the C++ call would arm nothing.
+func (s *session) applyEquipCooldown(ctx context.Context, itemGUID int64, itemEntry uint32) {
+	if s == nil || s.player == nil || itemGUID == 0 || itemEntry == 0 {
+		return
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var flags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Flags FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&flags); err == nil && flags&int64(itemFlagNoEquipCooldown) != 0 {
+		return
+	}
+	slots, ok := s.server.itemSpellSlots(ctx, itemEntry)
+	if !ok {
+		return
+	}
+	nowUnix := time.Now().Unix()
+	for i := 0; i < maxItemProtoSpells && i < len(slots); i++ {
+		if slots[i].ID <= 0 || slots[i].Trigger != uint32(itemSpellTriggerOnUse) {
+			continue
+		}
+		spellID := uint32(slots[i].ID)
+		var remaining int64
+		for _, cd := range s.player.Cooldowns {
+			if cd.Spell == spellID && cd.End > nowUnix {
+				if r := cd.End - nowUnix; r > remaining {
+					remaining = r
+				}
+			}
+		}
+		// Don't replace longer cooldowns by equip cooldown (Player.cpp:23146).
+		if remaining > 30 {
+			continue
+		}
+		s.replaceSpellCooldownEntry(spellCooldown{Spell: spellID, Item: itemEntry, End: nowUnix + 30})
+		buf := protocol.NewBuffer(8 + 4)
+		buf.WriteU64(uint64(itemGUID))
+		buf.WriteU32(spellID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_COOLDOWN), buf.Bytes(), true)
+	}
+}
+
 // applyItemEquipSpells mirrors Player::ApplyItemEquipSpell plus the spell half
 // of Player::ApplyEquipSpell (Player.cpp:7960-8022): equipping an item casts
 // each template spell with ITEM_SPELLTRIGGER_ON_EQUIP as a triggered cast
@@ -2017,6 +2130,12 @@ func (s *session) updateItemEquipSpellsOnMove(ctx context.Context, itemGUID, fro
 		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), true)
 		s.applyItemDependentAuras(ctx)
 		s.applyEnchantEquipSpells(ctx, itemGUID, uint32(itemEntry), true)
+		// Player::EquipItem order (Player.cpp:12362): the 30-second
+		// ON_USE-spell cooldown lands after the item-mod apply legs.
+		s.applyEquipCooldown(ctx, itemGUID, uint32(itemEntry))
+		// Player::EquipItem order (Player.cpp:12332-12350): the
+		// weapon-switch GCD arms on weapon/relic equips in combat.
+		s.applyWeaponSwitchGCD(ctx, uint32(itemEntry))
 	}
 }
 
