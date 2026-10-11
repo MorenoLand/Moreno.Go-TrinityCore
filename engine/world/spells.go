@@ -611,6 +611,10 @@ const (
 	spellAuraModImmuneAuraApplySchool                 = 267 // SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (SpellAuraDefines.h:347)
 	spellAuraMechanicImmunityMask                     = 147 // SPELL_AURA_MECHANIC_IMMUNITY_MASK (SpellAuraDefines.h:227)
 	spellAuraModRoot                                  = 26  // SPELL_AURA_MOD_ROOT (SpellAuraDefines.h:106)
+	spellAuraModScale                                 = 61  // SPELL_AURA_MOD_SCALE (SpellAuraDefines.h:141)
+	spellAuraModScale2                                = 239 // SPELL_AURA_MOD_SCALE_2 (SpellAuraDefines.h:319)
+	spellAuraArenaPreparation                         = 215 // SPELL_AURA_ARENA_PREPARATION (SpellAuraDefines.h:295)
+	spellAuraModFaction                               = 243 // SPELL_AURA_MOD_FACTION (SpellAuraDefines.h:323)
 	unitStandFlagCreep                                = 0x02
 	playerAuraVisionStealth                           = 0x20
 	playerAuraVisionInvis                             = 0x40
@@ -18418,6 +18422,18 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 			}
 		}
 	}
+	// AuraEffect::HandleArenaPreparation apply leg (SpellAuraEffects.cpp:4271-4278):
+	// the arena preparation phase sets UNIT_FLAG_PREPARATION; the remove leg
+	// clears it (guarded below). canNoReagentCast reads this flag live.
+	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraArenaPreparation) {
+		s.player.UnitFlags |= unitFlagPreparation
+	}
+	// AuraEffect::HandleAuraModFaction apply leg (SpellAuraEffects.cpp): a
+	// 243 effect overrides the unit's faction and clears the player
+	// UNIT_FLAG_PLAYER_CONTROLLED bit; the remove leg restores it.
+	if s.player != nil && s.activeAuraHasEffect(aura, spellAuraModFaction) {
+		s.player.UnitFlags &^= unitFlagPlayerControlled
+	}
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, stackCount)
 	s.sendPlayerUpdate()
 	if auraType == 4 {
@@ -18446,6 +18462,8 @@ func (s *session) removeAura(spellID uint32) {
 	wasForcedReaction := false
 	forcedReactionFaction := uint32(0)
 	forcedReactionRank := uint32(0)
+	wasPreparation := false
+	wasFactionAura := false
 	wasTransform := false
 	wasShapeshift := false
 	removedShapeshiftForm := uint8(0)
@@ -18511,6 +18529,15 @@ func (s *session) removeAura(spellID uint32) {
 			// when no silence-family aura remains.
 			wasSilenced = aura.AuraType == spellAuraModSilence || aura.AuraType == spellAuraModPacifySilence
 			wasAllowOnlyAbility = aura.AuraType == spellAuraAllowOnlyAbility
+			// AuraEffect::HandleArenaPreparation remove leg
+			// (SpellAuraEffects.cpp:4279-4285): the preparation flag clears
+			// only when no other aura of that type remains.
+			wasPreparation = s.activeAuraHasEffect(aura, spellAuraArenaPreparation)
+			// AuraEffect::HandleAuraModFaction remove leg: the native faction
+			// is restored and the PLAYER_CONTROLLED bit set again. C++ sets
+			// the bit unconditionally here (no HasAuraType gate), matching
+			// this unguarded restore.
+			wasFactionAura = s.activeAuraHasEffect(aura, spellAuraModFaction)
 			wasForcedReaction = aura.AuraType == 139
 			if wasForcedReaction && aura.MiscValue >= 0 {
 				forcedReactionFaction = uint32(aura.MiscValue)
@@ -18659,6 +18686,12 @@ func (s *session) removeAura(spellID uint32) {
 	// already bridged but live-and-vacuous until this setter landed.
 	if wasAllowOnlyAbility && s.player != nil && !s.hasAuraType(spellAuraAllowOnlyAbility) {
 		s.player.PlayerFlags &^= playerFlagAllowOnlyAbility
+	}
+	if wasPreparation && s.player != nil && !s.hasAuraType(spellAuraArenaPreparation) {
+		s.player.UnitFlags &^= unitFlagPreparation
+	}
+	if wasFactionAura && s.player != nil {
+		s.player.UnitFlags |= unitFlagPlayerControlled
 	}
 	if wasMovementControl && !s.hasAuraType(spellAuraStun) && !s.hasAuraType(spellAuraRoot) {
 		s.rooted = false

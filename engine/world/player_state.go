@@ -3534,7 +3534,14 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values := make([]uint32, playerValuesCount)
 	values[0] = uint32(state.GUID)
 	values[objectFieldType] = 0x19
-	values[objectFieldScale] = math.Float32bits(1)
+	// Unit::RecalculateObjectScale (Unit.cpp:10593-10598) feeds
+	// OBJECT_FIELD_SCALE_X: native 1.0 plus the 61/239 aura sums over 100,
+	// floored at 0.1 for players (auraObjectScale).
+	objectScale := float32(1)
+	if runtime != nil {
+		objectScale = runtime.auraObjectScale()
+	}
+	values[objectFieldScale] = math.Float32bits(objectScale)
 	lvl := state.Level
 	if lvl < 1 {
 		lvl = 1
@@ -3555,7 +3562,15 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values[unitFieldFlags2] = unitFlag2RegeneratePower | state.UnitFlags2
 	values[unitFieldHoverHeight] = math.Float32bits(1)
 	values[unitFieldBytes1] = uint32(state.StandState) | uint32(state.StandFlags)<<16
+	// AuraEffect::HandleAuraModFaction (SpellAuraEffects.cpp): an active 243
+	// effect overrides the faction with its misc value; the remove leg
+	// restores the race faction. Live fold (forcedFactionAura).
 	values[unitFieldFaction] = s.raceFaction(state.Race)
+	if runtime != nil {
+		if forced, ok := runtime.forcedFactionAura(); ok {
+			values[unitFieldFaction] = forced
+		}
+	}
 	unitFlags := state.UnitFlags
 	if state.MountDisplayID != 0 || state.UnitFlags&unitFlagMount != 0 {
 		unitFlags |= unitFlagMount

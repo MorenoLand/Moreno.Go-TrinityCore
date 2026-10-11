@@ -57,7 +57,7 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldHealth:                   s.player.Health,
 		unitFieldMaxHealth:                s.effectiveMaxHealth(),
 		unitFieldLevel:                    uint32(s.player.Level),
-		unitFieldFaction:                  s.server.raceFaction(s.player.Race),
+		unitFieldFaction:                  s.playerFactionForBroadcast(s.player.Race),
 		unitFieldFlags:                    unitFlagPlayerControlled | s.player.UnitFlags,
 		unitFieldBytes1:                   uint32(s.player.StandState) | uint32(s.player.StandFlags)<<16,
 		unitFieldPlayerFlags:              s.player.PlayerFlags,
