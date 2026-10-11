@@ -322,15 +322,19 @@ func (s *session) getHastedRangedSpeed(baseSpeed time.Duration) time.Duration {
 	return time.Duration(math.Round(hasted))
 }
 
-// getExpertise returns the total expertise skill points from gear rating.
-// Mirrors TrinityCore Player::GetExpertise (Player.cpp:8850): rating
-// converted to points plus the raw SPELL_AURA_MOD_EXPERTISE (120) fold
-// (StatSystem.cpp:880), clamped at 0.
-func (s *session) getExpertise() float64 {
-	if s == nil || s.player == nil {
+// getExpertise returns the total expertise skill points for an attack type.
+// Mirrors TrinityCore Player::UpdateExpertise (StatSystem.cpp:872-897):
+// rating converted to points plus the SPELL_AURA_MOD_EXPERTISE (120) fold,
+// each aura effect gated by SpellInfo::IsItemFitToSpellRequirements on the
+// weapon for that attack type (playerAuraModifierWeaponFit — the
+// CheckAttackFitToAuraRequirement arm, Player.cpp:7945-7954), clamped at 0.
+// C++ returns early for RANGED_ATTACK without updating any field, so the
+// ranged leg is 0 (matching GetExpertiseDodgeOrParryReduction's default arm).
+func (s *session) getExpertise(ctx context.Context, attackType protocol.WeaponAttackType) float64 {
+	if s == nil || s.player == nil || attackType == protocol.RangedAttack {
 		return 0
 	}
-	expertise := s.playerAuraModifier(spellAuraModExpertise)
+	expertise := float32(0)
 	rating := float64(s.player.CombatRatings[CombatRatingExpertise])
 	if rating > 0 {
 		lvl := float64(s.player.Level)
@@ -344,17 +348,20 @@ func (s *session) getExpertise() float64 {
 		}
 		expertise += float32(rating / ratingPerPoint)
 	}
+	expertise += s.playerAuraModifierWeaponFit(ctx, spellAuraModExpertise, attackType)
 	if expertise < 0 {
 		return 0
 	}
 	return float64(expertise)
 }
 
-// getExpertiseDodgeParryReductionPct returns the percentage reduction to defender dodge and parry chances.
-// Each 1.0 point of expertise skill reduces target dodge and parry chance by 0.25% (25 basis points).
-// Mirrors TrinityCore Player::GetExpertiseDodgeOrParryReduction (Player.cpp:8860).
-func (s *session) getExpertiseDodgeParryReductionPct() float64 {
-	return s.getExpertise() * 0.25
+// getExpertiseDodgeParryReductionPct returns the percentage reduction to defender dodge and parry chances
+// for an attack type. Each 1.0 point of expertise skill reduces target dodge and parry chance by 0.25% (25 basis points).
+// Mirrors TrinityCore Player::GetExpertiseDodgeOrParryReduction (Player.cpp:5540):
+// BASE_ATTACK reads PLAYER_EXPERTISE, OFF_ATTACK reads PLAYER_OFFHAND_EXPERTISE,
+// anything else (ranged) returns 0.
+func (s *session) getExpertiseDodgeParryReductionPct(ctx context.Context, attackType protocol.WeaponAttackType) float64 {
+	return s.getExpertise(ctx, attackType) * 0.25
 }
 
 // getArmorPenPct returns the armor penetration percentage (0.0 to 100.0%):

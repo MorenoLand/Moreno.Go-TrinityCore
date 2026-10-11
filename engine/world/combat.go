@@ -607,7 +607,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// Apply target armor damage reduction
 	armor := float64(target.Armor)
 	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
-		armor += s.server.petBaseArmorBonus(creatureAuraKeyForTarget(target), tm.OwnerGUID != 0)
+		key := creatureAuraKeyForTarget(target)
+		basePct, totalPct := s.server.petArmorPctBonus(key, tm.OwnerGUID != 0)
+		armor = (armor*basePct + s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)) * totalPct
 	}
 	if armor < 0 {
 		armor = 0
@@ -687,7 +689,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if s.player.Level > 0 {
 		hitBonusBP := int32(math.Round(s.getMeleeHitPct() * 100))
 		critBonusBP := int32(math.Round(s.getMeleeCritPct() * 100))
-		expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
+		expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct(ctx, attType) * 100))
 		// SPELL_AURA_MOD_HIT_CHANCE (54) on the attacker and
 		// SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE (184) on the victim fold
 		// into the miss roll at percent scale (Unit::MeleeSpellMissChance,
@@ -1297,7 +1299,10 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	}
 	hitBonusBP := int32(math.Round(s.getRangedHitPct() * 100))
 	critBonusBP := int32(math.Round(s.getRangedCritPct() * 100))
-	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
+	// Player::GetExpertiseDodgeOrParryReduction (Player.cpp:5540) returns 0
+	// for RANGED_ATTACK — expertise never reduces dodge/parry on ranged
+	// attacks (Unit::RollRangedOutcomeAgainst has no expertise arm).
+	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct(ctx, protocol.RangedAttack) * 100))
 	// SPELL_AURA_MOD_HIT_CHANCE (54) on the attacker and
 	// SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE (185) on the victim fold
 	// into the miss roll at percent scale (Unit::MeleeSpellMissChance,
@@ -1361,7 +1366,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// Apply target armor damage reduction for physical ranged attacks
 	armor := float64(target.Armor)
 	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
-		armor += s.server.petBaseArmorBonus(creatureAuraKeyForTarget(target), tm.OwnerGUID != 0)
+		key := creatureAuraKeyForTarget(target)
+		basePct, totalPct := s.server.petArmorPctBonus(key, tm.OwnerGUID != 0)
+		armor = (armor*basePct + s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)) * totalPct
 	}
 	if armor < 0 {
 		armor = 0

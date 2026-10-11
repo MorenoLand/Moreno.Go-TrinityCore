@@ -2412,7 +2412,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		state.MinOffhandDamage, state.MaxOffhandDamage = feralRange(state.OffhandAttackTime)
 		state.MinRangedDamage, state.MaxRangedDamage = feralRange(state.RangedAttackTime)
 	}
-	s.calculatePlayerCritFields(state, lvl)
+	s.calculatePlayerCritFields(ctx, state, lvl)
 	for school := 1; school < 7; school++ {
 		state.SpellDamagePositive[school] = int32(state.SpellPower)
 	}
@@ -2442,7 +2442,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	return nil
 }
 
-func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
+func (s *session) calculatePlayerCritFields(ctx context.Context, state *playerState, level uint8) {
 	if state == nil {
 		return
 	}
@@ -2540,15 +2540,18 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 		}
 	}
 	expertise := ratingBonus(23)
-	// Player::UpdateExpertise (StatSystem.cpp:880): the
+	// Player::UpdateExpertise (StatSystem.cpp:872-897): the
 	// SPELL_AURA_MOD_EXPERTISE (120) fold is in raw expertise skill points
-	// (not rating), added after the rating conversion, without the C++
-	// IsItemFitToSpellRequirements weapon-fit gate (no
-	// weapon-requirement model).
-	expertise += s.playerAuraModifier(spellAuraModExpertise)
+	// (not rating), added after the rating conversion, per attack type with
+	// the SpellInfo::IsItemFitToSpellRequirements weapon-fit gate on the
+	// weapon for that attack (playerAuraModifierWeaponFit).
+	expertise += s.playerAuraModifierWeaponFit(ctx, spellAuraModExpertise, protocol.BaseAttack)
 	if expertise > 0 {
 		state.Expertise = uint32(expertise)
-		state.OffhandExpertise = state.Expertise
+	}
+	offExpertise := ratingBonus(23) + s.playerAuraModifierWeaponFit(ctx, spellAuraModExpertise, protocol.OffAttack)
+	if offExpertise > 0 {
+		state.OffhandExpertise = uint32(offExpertise)
 	}
 	s.updatePlayerParryPercentage(state, level)
 }

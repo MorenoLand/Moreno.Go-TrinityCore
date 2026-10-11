@@ -137,10 +137,11 @@ func (s *Server) creatureAuraScaleSum(key creatureAuraKey) int32 {
 // (SpellAuraEffects.cpp: the NORMAL-school gate into
 // Unit::UpdateAllDamageDoneMods → Unit::UpdateDamageDoneMods,
 // Unit.cpp:9334-9360): the summed amounts of SPELL_AURA_MOD_DAMAGE_DONE (13)
-// effects whose misc value carries the NORMAL school bit. The
-// CheckAttackFitToAuraRequirement weapon-fit gate has no Go model (same
-// standing delta as the player fold meleeDamageDoneFlat in aura_damage.go),
-// so amounts sum unconditionally. Only the flat arm belongs here: the
+// effects whose misc value carries the NORMAL school bit.
+// Unit::CheckAttackFitToAuraRequirement (Unit.h:1416) returns true for
+// non-players, so creatures skip the weapon-fit gate C++-exactly; the player
+// twin meleeDamageDoneFlat (aura_damage.go) applies it via
+// attackFitsAuraRequirement. Only the flat arm belongs here: the
 // percent arm is the separate HandleModDamagePercentDone (79) handler.
 func (s *Server) creatureAuraDamageDoneFlat(key creatureAuraKey) int32 {
 	if s == nil || key.GUID == 0 || s.Data == nil {
@@ -244,6 +245,53 @@ func (s *Server) petBaseArmorBonus(key creatureAuraKey, isPet bool) float64 {
 	}
 	s.auraMu.Unlock()
 	return bonus
+}
+
+// petArmorPctBonus mirrors the pet arms of
+// AuraEffect::HandleAuraModBaseResistancePCT (142,
+// SpellAuraEffects.cpp:3343-3351) and AuraEffect::HandleModResistancePercent
+// (101, SpellAuraEffects.cpp:3313-3331): pets (only) multiply UNIT_MOD_ARMOR
+// BASE_PCT by the product of (1 + amount/100) over live 142 effects carrying
+// the NORMAL school misc bit (GetTotalAuraMultiplierByMiscMask,
+// Unit.cpp:4947), and UNIT_MOD_ARMOR TOTAL_PCT by the product over live 101
+// effects carrying the NORMAL bit (UNIT_MOD_RESISTANCE_START+0 is
+// UNIT_MOD_ARMOR). Returns (basePct, totalPct) as multipliers; callers apply
+// (baseArmor*basePct + flat83) * totalPct, matching the C++ armor composition
+// (BASE_VALUE*BASE_PCT + TOTAL_VALUE)*TOTAL_PCT — the 142 arm lands on
+// BASE_PCT so it multiplies the base armor only, not the 83 flat arm. Like
+// petBaseArmorBonus, non-pet creatures get nothing (C++ gates both on
+// IsPet()).
+func (s *Server) petArmorPctBonus(key creatureAuraKey, isPet bool) (float64, float64) {
+	if s == nil || key.GUID == 0 || !isPet || s.Data == nil {
+		return 1.0, 1.0
+	}
+	basePct, totalPct := 1.0, 1.0
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.MiscValue&1 == 0 || index >= len(aura.Amounts) {
+				continue
+			}
+			switch effect.Aura {
+			case spellAuraModBaseResistancePct:
+				basePct *= 1 + float64(aura.Amounts[index])/100
+			case spellAuraModResistancePct:
+				totalPct *= 1 + float64(aura.Amounts[index])/100
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return basePct, totalPct
 }
 
 // creatureAuraSpellHitSum mirrors the creature half of

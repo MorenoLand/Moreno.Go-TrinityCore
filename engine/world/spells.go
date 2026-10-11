@@ -13522,7 +13522,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			s.player != nil {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
-				armor += s.server.petBaseArmorBonus(creatureAuraKeyForTarget(target), tm.OwnerGUID != 0)
+				key := creatureAuraKeyForTarget(target)
+				basePct, totalPct := s.server.petArmorPctBonus(key, tm.OwnerGUID != 0)
+				armor = (armor*basePct + s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)) * totalPct
 			}
 			if armor < 0 {
 				armor = 0
@@ -18511,7 +18513,14 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 		return protocol.SpellMissNone
 	}
 
-	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
+	// Unit::MeleeSpellHitResult (Unit.cpp:2480-2486): attType is BASE_ATTACK,
+	// or RANGED_ATTACK when the spell's damage class is ranged; the expertise
+	// dodge/parry reduction follows GetExpertiseDodgeOrParryReduction(attType).
+	spellAttType := protocol.BaseAttack
+	if ranged {
+		spellAttType = protocol.RangedAttack
+	}
+	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct(ctx, spellAttType) * 100))
 
 	// 4. Dodge: Unit::GetUnitDodgeChance (Unit.cpp:2657) — player victims use
 	// their derived PLAYER_DODGE_PERCENTAGE with the 0.04%/skill-point arm;
@@ -23778,7 +23787,10 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 			ts.procPeriodicDamageTickTakenAuraTriggers(procCtx, tickSpell, aura.SchoolMask, aura.CasterGUID, crit, absorbed, resisted, dmg)
 		}
-		ts.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex, tickSpell, tickKnown, crit)
+		// The caster-side heal dispatches to the caster's session when online,
+		// else to the caster creature motion (a creature or pet caster's leech
+		// tick heals the caster itself, SpellAuraEffects.cpp:5310-5320).
+		ts.applyPeriodicLeechHealForCaster(context.Background(), ts.player.Map, ts.player.InstanceID, aura, dealt, leechEffIndex, tickSpell, tickKnown, crit)
 
 	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL
 		// SpellAuraEffects.cpp:5323-5349 (HandlePeriodicHealthFunnelAuraTick):
@@ -24305,6 +24317,75 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 	}
 }
 
+// applyPeriodicLeechHealForCaster dispatches the caster-side heal of a
+// PERIODIC_LEECH tick (SpellAuraEffects.cpp:5310-5320) to the caster's own
+// player session when online, else to the caster creature motion. The
+// player-victim tick resolved tickCaster as the caster's session or nil; the
+// creature-victim tick fell back to the scheduling session, which healed the
+// wrong player whenever the caster was a creature or pet. C++ heals the
+// caster unit itself in both cases (HealBySpell on the caster), so the
+// fallback session must never stand in for a creature caster.
+func (s *session) applyPeriodicLeechHealForCaster(ctx context.Context, mapID, instanceID uint32, aura *activeAura, dealtDamage uint32, leechEffIndex int, tickSpell wotlk.Spell, tickKnown, crit bool) {
+	if s != nil && s.server != nil {
+		if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+			s.applyPeriodicLeechHeal(casterSess, aura, dealtDamage, leechEffIndex, tickSpell, tickKnown, crit)
+			return
+		}
+		s.server.applyCreaturePeriodicLeechHeal(ctx, mapID, instanceID, aura.CasterGUID, aura, dealtDamage, leechEffIndex, tickKnown, crit, tickSpell)
+	}
+}
+
+// applyCreaturePeriodicLeechHeal runs the caster-side heal of a
+// PERIODIC_LEECH tick (SpellAuraEffects.cpp:5310-5320) when the aura caster
+// is a creature or pet: heal = dealt damage x CalcValueMultiplier
+// (EffectAmplitude, SpellInfo.cpp:344), applied to the caster motion's health
+// under motionMu and capped at MaxHealth, then the
+// ForwardThreatForAssistingMe heal-threat forward
+// (distributeCreatureHealingThreat) and the DONE_PERIODIC/TAKEN_PERIODIC
+// self-heal proc legs on the caster motion itself (C++ passes (caster,
+// caster)). The SpellHealingBonusDone/Taken folds have no creature model
+// (same standing delta as the inline EffectHealthLeech arm in
+// creature_area_targets.go). C++ sends no heal log for the leech tick's heal
+// — the periodic damage log already went out — so none is sent here either.
+func (s *Server) applyCreaturePeriodicLeechHeal(ctx context.Context, mapID, instanceID uint32, casterGUID uint64, aura *activeAura, dealtDamage uint32, leechEffIndex int, tickKnown, crit bool, tickSpell wotlk.Spell) {
+	if s == nil || s.Data == nil || casterGUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	caster := s.findCreatureMotionLocked(mapID, instanceID, casterGUID)
+	if caster == nil || caster.Health == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	heal := dealtDamage
+	if sp, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
+		if leechEffIndex >= 0 && leechEffIndex < len(sp.Effects) {
+			heal = effectValueMultiplied(heal, sp.Effects[leechEffIndex].Amplitude)
+		}
+	}
+	newHP := caster.Health + heal
+	effectiveHeal := heal
+	if caster.MaxHealth > 0 && newHP > caster.MaxHealth {
+		effectiveHeal = caster.MaxHealth - caster.Health
+		newHP = caster.MaxHealth
+	}
+	caster.Health = newHP
+	s.motionMu.Unlock()
+	if effectiveHeal > 0 {
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, map[int]uint32{unitFieldHealth: newHP})
+		// ThreatManager::ForwardThreatForAssistingMe(caster, effectiveHeal *
+		// 0.5) — the 0.5 is inside distributeCreatureHealingThreat.
+		s.distributeCreatureHealingThreat(ctx, mapID, instanceID, casterGUID, casterGUID, effectiveHeal)
+	}
+	// Leech self-heal proc tail (SpellAuraEffects.cpp:5320): the unknown-spell
+	// gate matches the player path's.
+	if tickKnown {
+		if cm := s.findCreatureMotion(mapID, instanceID, casterGUID); cm != nil {
+			s.fireCreaturePeriodicHealTickProcs(ctx, cm, cm, aura.CasterGUID, casterGUID, tickSpell, aura.SchoolMask, crit)
+		}
+	}
+}
+
 func (s *session) channelTargetForSpell(spellID uint32) uint64 {
 	if s == nil {
 		return 0
@@ -24678,7 +24759,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if !fixedDamage && aura.SchoolMask&1 != 0 {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
-				armor += s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)
+				basePct, totalPct := s.server.petArmorPctBonus(key, tm.OwnerGUID != 0)
+				armor = (armor*basePct + s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)) * totalPct
 			}
 			if armor < 0 {
 				armor = 0
@@ -25169,7 +25251,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if !fixedDamage && aura.SchoolMask&1 != 0 {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
-				armor += s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)
+				basePct, totalPct := s.server.petArmorPctBonus(key, tm.OwnerGUID != 0)
+				armor = (armor*basePct + s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)) * totalPct
 			}
 			if armor < 0 {
 				armor = 0
@@ -25240,7 +25323,10 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				s.server.fireCreaturePeriodicDamageTickProcs(ctx, nil, victimMotion, aura.TargetGUID, aura.CasterGUID, tickSpell, aura.SchoolMask, crit, absorbed, resisted, dmg)
 			}
 		}
-		s.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex, tickSpell, tickKnown, crit)
+		// The caster-side heal dispatches to the caster's session when online,
+		// else to the caster creature motion — the old tickCaster = s fallback
+		// healed the scheduling session's player for creature/pet casters.
+		s.applyPeriodicLeechHealForCaster(ctx, key.Map, key.InstanceID, aura, dealt, leechEffIndex, tickSpell, tickKnown, crit)
 		return targetAlive
 
 	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL
