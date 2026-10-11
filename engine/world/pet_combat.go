@@ -2222,7 +2222,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 	}
 	if damage > 0 && schoolMask > 1 {
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, target.Resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0)
+		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
+		// the live 22 flat amounts fold into a pet victim's resistances.
+		resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0)
 	}
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {

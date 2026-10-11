@@ -1507,6 +1507,44 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	// negated value and no damage procs fire.
 	damage = s.negateGodModeDamage(damage)
 
+	// Player::EnvironmentalDamage (Player.cpp:768-779): lava/slime damage
+	// runs the Unit::CalcAbsorbResist legs on a self DamageInfo (attacker ==
+	// victim, null spell, DIRECT_DAMAGE, fire/nature school mask) — the
+	// partial resist first (Unit::CalcSpellResistedDamage, Unit.cpp:1704),
+	// then the school-absorb/mana-shield loops. The ignore-resist sub-arm
+	// runs on the self attacker too: with a null spellInfo the 270
+	// affect-gated leg is empty (IsAffectedOnSpell(nullptr) is false) and
+	// only the 269 misc-mask sum applies, clamped 0..100
+	// (Unit.cpp:1741-1755). The 194 absorb-ignore pct bypasses the shields
+	// (Unit.cpp:1839-1855); the 245 leg needs a spell and is empty.
+	absorb := uint32(0)
+	resist := uint32(0)
+	schoolMask := uint8(0)
+	switch damageType {
+	case damageLava:
+		schoolMask = 1 << 2 // SPELL_SCHOOL_MASK_FIRE
+	case damageSlime:
+		schoolMask = 1 << 3 // SPELL_SCHOOL_MASK_NATURE
+	}
+	if schoolMask != 0 && damage > 0 {
+		ignoreResist := int32(0)
+		for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, uint32(schoolMask)) {
+			ignoreResist += amount
+		}
+		if ignoreResist < 0 {
+			ignoreResist = 0
+		} else if ignoreResist > 100 {
+			ignoreResist = 100
+		}
+		resist, damage = calcMagicSpellResistance(damage, schoolMask, s.player.Resistances, s.player.Level, s.player.Level, false, false, ignoreResist, s.player.SpellPenetration)
+		if damage > 0 {
+			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
+			absorbed, remaining := s.applyAbsorptionShields(damage-bypass, schoolMask)
+			absorb = absorbed
+			damage = remaining + bypass
+		}
+	}
+
 	// Unit::DealDamage (Unit.cpp:825-853, 957-973): environmental damage is
 	// self-damage (attacker == victim, Player.cpp:792) — damage of exactly
 	// health-1 on a duelist completes the duel as won; lethal damage is not
@@ -1528,9 +1566,6 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 			s.procDamageAuras(false)
 		}
 	}
-
-	absorb := uint32(0)
-	resist := uint32(0)
 
 	packet := protocol.NewBuffer(21)
 	packet.WriteU64(s.playerGUID)

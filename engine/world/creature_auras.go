@@ -310,6 +310,71 @@ func (s *Server) petBaseArmorBonus(key creatureAuraKey, isPet bool) float64 {
 	return bonus
 }
 
+// petResistanceBonus sums the live SPELL_AURA_MOD_RESISTANCE (22) amounts
+// per school for a pet creature, mirroring the pet arm of
+// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255-3271):
+// pets (only) gain flat UNIT_MOD_RESISTANCE TOTAL_VALUE per school from
+// effects whose misc bit covers that school (1<<x). Negative school totals
+// clamp at 0, matching the armor fold's convention. Non-pet creatures get
+// nothing (C++ gates on IsPet()).
+func (s *Server) petResistanceBonus(key creatureAuraKey, isPet bool) [schoolCount]int32 {
+	var bonus [schoolCount]int32
+	if s == nil || key.GUID == 0 || !isPet || s.Data == nil {
+		return bonus
+	}
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != spellAuraModResistance {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				for x := 0; x < schoolCount; x++ {
+					if effect.MiscValue&(1<<x) != 0 {
+						bonus[x] += aura.Amounts[index]
+					}
+				}
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for x := 0; x < schoolCount; x++ {
+		if bonus[x] < 0 {
+			bonus[x] = 0
+		}
+	}
+	return bonus
+}
+
+// petFoldedResistances returns base with the live 22 pet-resistance fold
+// applied when the key's creature is a pet (its motion carries an owner);
+// non-pets and unknown motions get base unchanged.
+func (s *Server) petFoldedResistances(key creatureAuraKey, base [schoolCount]uint32) [schoolCount]uint32 {
+	if s == nil || key.GUID == 0 {
+		return base
+	}
+	tm := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if tm == nil || tm.OwnerGUID == 0 {
+		return base
+	}
+	bonus := s.petResistanceBonus(key, true)
+	out := base
+	for x := range out {
+		out[x] += uint32(bonus[x])
+	}
+	return out
+}
+
 // petArmorPctBonus mirrors the pet arms of
 // AuraEffect::HandleAuraModBaseResistancePCT (142,
 // SpellAuraEffects.cpp:3343-3351) and AuraEffect::HandleModResistancePercent
