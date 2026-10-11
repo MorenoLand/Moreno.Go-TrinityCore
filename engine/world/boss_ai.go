@@ -926,6 +926,26 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if !s.checkCreatureSpellRange(m, spellInfo, targetGUID) {
 			return
 		}
+		// Spell::CheckCast unit-target line-of-sight arm (Spell.cpp:5391-5401):
+		// a creature caster whose spell has an explicit unit target fails
+		// when the target is not within LOS, unless the spell carries
+		// SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS or
+		// SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK. C++ runs this for triggered
+		// casts too (no triggered exemption on this arm); the dynObj
+		// losTarget origin arm is vacuous (no dyn objects in Go) and the
+		// GO-caster exemption is vacuous (caster is always a creature here).
+		// DisableMgr::SPELL_DISABLE_LOS has no Go model (no DisableMgr).
+		// C++ relative order: inside the unit-target block, after the
+		// behind/facing arms, ahead of the pet-presence arm.
+		if targetGUID != 0 && targetGUID != m.GUID &&
+			spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+			spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
+			if x, y, z, _, _, found := s.aiThreatUnitPos(m, targetGUID, nil, true); found {
+				if !s.hasLineOfSight(m.Map, m.X, m.Y, m.Z, x, y, z) {
+					return
+				}
+			}
+		}
 		// Spell::CheckPower (Spell.cpp:5502): the affordability check runs in
 		// the prepare-phase position, but the drain itself lands in _cast
 		// after SelectSpellTargets (Spell.cpp:3449), so the cost is stashed

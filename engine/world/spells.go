@@ -1679,6 +1679,19 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
+	// Spell-family block gate (Spell::CheckCast, Spell.cpp:5277-5278):
+	// a caster carrying a SPELL_AURA_BLOCK_SPELL_FAMILY (297) aura effect
+	// whose MiscValue matches the spell's SpellFamilyName cannot cast it
+	// (SPELL_FAILED_SPELL_UNAVAILABLE). MiscValue resolves from the DBC
+	// effect row, not the record's single MiscValue, and the gate is
+	// EffectMask-gated — the same shape as the creature twin
+	// (checkCreatureSpellFamilyBlocked, boss_ai.go). C++ relative order:
+	// right after the shapeshift block, ahead of the caster-state block.
+	if s.spellFamilyBlockedByAura(spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellUnavailable), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell family blocked by aura")
+		return true
+	}
 	// Caster aura spell requirements (Spell::CheckCast caster-state block, Spell.cpp:5305-5308):
 	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
 	if spell.CasterAuraSpell != 0 && !s.hasAura(spell.CasterAuraSpell) {

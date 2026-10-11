@@ -333,6 +333,36 @@ func (s *session) creatureAuraStateMask(key creatureAuraKey, target combatTarget
 	return mask
 }
 
+// spellFamilyBlockedByAura mirrors the SPELL_AURA_BLOCK_SPELL_FAMILY leg of
+// Spell::CheckCast (Spell.cpp:5277-5278): a caster carrying a
+// BLOCK_SPELL_FAMILY aura effect whose MiscValue matches the spell's
+// SpellFamilyName cannot cast it. MiscValue resolves from the DBC effect
+// row, not the record's single MiscValue, and the gate is EffectMask-gated
+// — the session twin of checkCreatureSpellFamilyBlocked (boss_ai.go).
+func (s *session) spellFamilyBlockedByAura(spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraBlockSpellFamily || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if uint32(effect.MiscValue) == spell.SpellFamilyName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // casterIgnoresAuraState reports whether the casting session carries an aura
 // effect of type SPELL_AURA_ABILITY_IGNORE_AURASTATE whose spell affects the
 // spell being cast, mirroring the bypass term at the top of
