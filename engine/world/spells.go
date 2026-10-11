@@ -565,6 +565,9 @@ const (
 	spellAuraAttackPowerPercent                    = 166
 	spellAuraRangedAttackPowerPercent              = 167
 	spellAuraModAttackPower                        = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
+	spellAuraModStat                               = 29  // SPELL_AURA_MOD_STAT (SpellAuraDefines.h:109)
+	spellAuraModPercentStat                        = 80  // SPELL_AURA_MOD_PERCENT_STAT (SpellAuraDefines.h:160)
+	spellAuraModTotalStatPct                       = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
 	spellAuraModRangedAttackPower                  = 124 // SPELL_AURA_MOD_RANGED_ATTACK_POWER (SpellAuraDefines.h:204)
 	spellAuraModDamageDone                         = 13  // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93)
 	spellAuraCastingSpeedNotStack                  = 65
@@ -18440,6 +18443,7 @@ func (s *session) removeAura(spellID uint32) {
 	removedEffectMask := uint8(0)
 	removedCasterGUID := uint64(0)
 	removedHealthAura := (*activeAura)(nil)
+	removedStatAura := (*activeAura)(nil)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
@@ -18450,6 +18454,11 @@ func (s *session) removeAura(spellID uint32) {
 			// Stopped is set — activeAuraHasEffect ignores stopped auras.
 			if s.auraTouchesHealth(aura) {
 				removedHealthAura = aura
+			}
+			// Stat-aura remove leg (aura_stats.go): capture before
+			// Stopped is set — activeAuraHasEffect ignores stopped auras.
+			if s.auraTouchesStats(aura) {
+				removedStatAura = aura
 			}
 			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
 			wasAttackPowerOfArmor = s.activeAuraHasEffect(aura, spellAuraModAttackPowerOfArmor)
@@ -18681,6 +18690,21 @@ func (s *session) removeAura(spellID uint32) {
 	// so the recompute sees the remaining auras — the mod drops cleanly.
 	if removedHealthAura != nil && s.player != nil {
 		s.removeHealthAuraArms(removedHealthAura)
+	}
+	// AuraEffect::HandleAuraModStat / HandleModPercentStat /
+	// HandleModTotalPercentStat remove leg (SpellAuraEffects.cpp:3379-3510):
+	// the aura record is already erased above (Unit::_UnapplyAura erases
+	// before the handlers, Unit.cpp:3548), so the recompute sees the
+	// remaining auras — the mod drops cleanly, and a suppressed
+	// exclusive-same-effect peer is reinstated like the C++ remove-leg
+	// reverse-then-apply pair (:3404-3413). The 137 stamina health-pct
+	// arm runs on removal too (the handler ignores the apply flag).
+	if removedStatAura != nil && s.player != nil {
+		preserve := s.statAuraHealthPreserveForAura(spellID, removedStatAura)
+		_ = s.calculatePlayerStats(context.Background(), s.player)
+		if preserve != nil {
+			preserve()
+		}
 	}
 	s.sendPlayerUpdate()
 	if wasVisibilityAura && s.server != nil {
@@ -20499,7 +20523,22 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				targetSess.scheduleAuraUpkeepLocked(existing)
 			}
 			slot, effectMask, charges := existing.Slot, existing.EffectMask, existing.RemainingCharges
+			// Stat-aura merge leg: capture before unlocking (the fold
+			// below locks castMu itself).
+			mergeStatsDirty := targetSess.auraTouchesStats(existing)
 			targetSess.castMu.Unlock()
+			// AuraEffect::ChangeAmount (SpellAuraEffects.cpp:662-683)
+			// unregisters then re-registers the effect with the refreshed
+			// amount — the live fold recomputes from the merged amounts.
+			// The 137 stamina health-pct arm (SpellAuraEffects.cpp:3497)
+			// runs here too: capture before the recalc, re-anchor after.
+			if mergeStatsDirty {
+				preserve := targetSess.statAuraHealthPreserveForEffect(spell, eff)
+				_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
+				if preserve != nil {
+					preserve()
+				}
+			}
 			// AuraEffect::ChangeAmount -> CalculateSpellMod
 			// (SpellAuraEffects.cpp:657-683): the merged aura's refreshed
 			// amounts update the registered modifier values, no re-register.
@@ -20844,6 +20883,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		switch eff.Aura {
 		case spellAuraModIncreaseHealth, spellAuraModIncreaseHealthOld, spellAuraModIncreaseHealth2, spellAuraModIncreaseHealthPercent, spellAuraModBaseHealthPct:
 			targetSess.applyHealthAuraArms(spell.ID, eff.Aura, int32(amount))
+		case spellAuraModStat, spellAuraModPercentStat, spellAuraModTotalStatPct:
+			// AuraEffect::HandleAuraModStat / HandleModPercentStat /
+			// HandleModTotalPercentStat apply leg
+			// (SpellAuraEffects.cpp:3379-3510): the whole derived-stat
+			// cascade re-runs from the live aura fold (UpdateStats ->
+			// UpdateMaxHealth / UpdateArmor / UpdateAttackPowerAndDamage),
+			// and the 137 stamina arm re-anchors current health to the
+			// pre-apply pct of the new max.
+			preserve := targetSess.statAuraHealthPreserveForEffect(spell, eff)
+			_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
+			if preserve != nil {
+				preserve()
+			}
 		}
 
 		stackCount := uint8(1)

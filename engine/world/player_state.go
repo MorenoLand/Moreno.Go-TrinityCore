@@ -2178,6 +2178,24 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		}
 	}
 
+	// Aura stat modifiers (aura_stats.go): the flat 29 and pct 80/137
+	// folds apply on top of the item totals before the derived stats,
+	// like Unit::UpdateStats (StatSystem.cpp) feeding UpdateMaxHealth /
+	// UpdateArmor / UpdateAttackPowerAndDamage: (base*basePct + total) *
+	// totalPct. At this point state.Stats holds base + items only (aura
+	// residue is impossible: every entry path rebuilds from BaseStats),
+	// so items separate cleanly.
+	statFlat, statBaseMult, statTotalMult := s.auraStatMods(0)
+	for i := 0; i < 5; i++ {
+		items := int64(state.Stats[i]) - int64(state.BaseStats[i])
+		v := int64(float64(int64(state.BaseStats[i]))*float64(statBaseMult[i])) + items + int64(statFlat[i])
+		v = int64(float64(v) * float64(statTotalMult[i]))
+		if v < 0 {
+			v = 0
+		}
+		state.Stats[i] = uint32(v)
+	}
+
 	// 3. Derived stats (TrinityCore StatSystem.cpp:309-360)
 	totalSta := state.Stats[2]
 	totalInte := state.Stats[3]
