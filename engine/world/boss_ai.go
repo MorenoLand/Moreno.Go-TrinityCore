@@ -1332,6 +1332,78 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				}
 			}
 		}
+		// Spell::CheckCast pet-presence arm (Spell.cpp:5410-5432): any effect
+		// with TargetA == TARGET_UNIT_PET (5) needs the caster's guardian pet
+		// (Unit::GetGuardianPet). The npcbot arm is vacuous (no npcbot model
+		// in Go) and creature motions carry no guardian pet, so the first
+		// such effect fizzles the cast — SPELL_FAILED_NO_PET, or
+		// SPELL_FAILED_DONT_REPORT when triggered by an aura; both fizzle
+		// here since the creature path has no client to report to. C++
+		// relative order: after the dest-LOS arm, ahead of the battleground
+		// arm. Runs for triggered casts too (no C++ triggered exemption).
+		hasPetTarget := false
+		for _, eff := range spellInfo.Effects {
+			if eff.ImplicitTargetA == spellImplicitTargetUnitPet {
+				hasPetTarget = true
+				break
+			}
+		}
+		if hasPetTarget {
+			return
+		}
+		// Spell::CheckCast arena arm (Spell.cpp:5439-5447):
+		// ATTR4_NOT_USABLE_IN_ARENA, or a recovery time over 10 minutes
+		// without ATTR4_USABLE_IN_ARENA, fails on battle-arena maps.
+		// GetRecoveryTime = max(RecoveryTime, CategoryRecoveryTime)
+		// (SpellInfo.cpp:3149-3152); the map-entry-must-exist shape mirrors
+		// the session twin and the C++ sMapStore lookup. Runs for triggered
+		// casts too (no C++ triggered exemption).
+		recoveryTime := spellInfo.RecoveryTime
+		if spellInfo.CategoryRecoveryTime > recoveryTime {
+			recoveryTime = spellInfo.CategoryRecoveryTime
+		}
+		if spellInfo.AttributesEx4&spellAttr4NotUsableInArena != 0 ||
+			(recoveryTime > 10*60*1000 && spellInfo.AttributesEx4&spellAttr4UsableInArena == 0) {
+			if entry, found, err := s.Data.Map(m.Map); err == nil && found && entry.IsBattleArena() {
+				return
+			}
+		}
+		// Spell::CheckCast zone arm (Spell.cpp:5448-5462,
+		// SpellInfo::CheckLocation, SpellInfo.cpp:1505-1567): the npcbot
+		// exemption is vacuous (no npcbot model) and creatures are never
+		// GMs, so the check always runs for creature casters. Zone/area come
+		// from the motion position (Server.zoneAndAreaID, the Go model of
+		// Unit::GetZoneAndAreaId); the caster's ToPlayer() is nil in C++
+		// here. Bridged legs: AreaGroupId (1508-1527,
+		// SPELL_FAILED_INCORRECT_AREA — unknown group data keeps the
+		// fail-open bridge convention) and SPELL_ATTR6_NOT_IN_RAID_INSTANCE
+		// (1552-1556). No bridge: SPELL_ATTR4_CAST_ONLY_IN_OUTLAND
+		// (1529-1550, session-twin parity), the spell_area DB leg
+		// (1558-1567, needs the player's quest/aura state — follow-up), and
+		// the battleground-spell switch (1569-1631, every arm needs a
+		// non-nil player; creatures never cast flag spells). The
+		// battleground-only (5434-5437) and mounted (5464-5474) arms are
+		// TYPEID_PLAYER-gated, vacuous for creatures. Runs for triggered
+		// casts too (no C++ triggered exemption).
+		if spellInfo.AreaGroupID > 0 {
+			zoneID, areaID := s.zoneAndAreaID(m.Map, m.X, m.Y, m.Z, 0)
+			if allowed, known, groupErr := s.Data.AreaGroupAllows(uint32(spellInfo.AreaGroupID), zoneID, areaID); groupErr == nil && known && !allowed {
+				return
+			}
+		}
+		if spellInfo.AttributesEx6&spellAttr6NotInRaidInstance != 0 {
+			if entry, found, err := s.Data.Map(m.Map); err != nil || !found || entry.IsRaid() {
+				return
+			}
+		}
+		// Spell::CheckCast spell-focus arm (Spell.cpp:5476-5482): a spell
+		// with RequiresSpellFocus fizzles without a matching focus object
+		// in range (motionSpellFocusFound, the SearchSpellFocus twin
+		// anchored at the creature motion). Runs for triggered casts too
+		// (no C++ triggered exemption).
+		if !s.motionSpellFocusFound(ctx, m, spellInfo) {
+			return
+		}
 		// Spell::CheckRange (Spell.cpp:5496): C++ runs the range arm for
 		// triggered casts too (5494-5496, "Triggered spells also have
 		// range check"), after the unit-target LOS arm and before
