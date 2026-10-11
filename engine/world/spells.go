@@ -9992,13 +9992,46 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectResurrect: // 18: SPELL_EFFECT_RESURRECT
 				s.handleEffectResurrect(effCtx, targetGUID, spell, eff)
-			case spellEffectReputation: // 103: SPELL_EFFECT_REPUTATION
-				if eff.MiscValue != 0 {
-					s.giveReputation(effCtx, uint32(eff.MiscValue), eff.BasePoints+1)
+			case spellEffectReputation: // 103: SPELL_EFFECT_REPUTATION (EffectReputation, SpellEffects.cpp:4349-4368)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target, player-only: every player hit target gains
+				// BasePoints+1 reputation with the MiscValue faction, not
+				// just the caster. The Faction DBC entry must exist
+				// (sFactionStore.LookupEntry gate, SpellEffects.cpp:4359-4361);
+				// an unknown faction grants nothing. Documented no-bridge:
+				// Player::CalculateReputationGain's aura fold
+				// (SPELL_AURA_MOD_REPUTATION_GAIN) and rep reward rates have
+				// no Go model — the same standing gap rewardBGEndReputation
+				// documents.
+				if eff.MiscValue != 0 && s.spellFactionEntryExists(uint32(eff.MiscValue)) {
+					for _, effectTarget := range hitTargets {
+						if effectTarget == 0 {
+							continue
+						}
+						if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.BasePoints+1)
+						}
+					}
 				}
-			case spellEffectQuestComplete: // 16: SPELL_EFFECT_QUEST_COMPLETE
+			case spellEffectQuestComplete: // 16: SPELL_EFFECT_QUEST_COMPLETE (EffectQuestComplete, SpellEffects.cpp:4371-4389)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target, player-only: the quest template must exist
+				// (sObjectMgr gate, SpellEffects.cpp:4380-4382). A target
+				// carrying the quest in its log gets the
+				// AreaExploredOrEventHappens completion (Go: completeQuest);
+				// a target without a log entry only gets the serverside
+				// SetRewardedQuest mark when the quest carries
+				// QUEST_FLAGS_TRACKING (QuestDef.h:142) — otherwise nothing
+				// happens.
 				if eff.MiscValue != 0 {
-					s.completeQuest(effCtx, uint32(eff.MiscValue))
+					for _, effectTarget := range hitTargets {
+						if effectTarget == 0 {
+							continue
+						}
+						if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+							ts.completeQuestFromSpell(effCtx, uint32(eff.MiscValue))
+						}
+					}
 				}
 			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
 				s.handleEffectHealthLeech(effCtx, spellID, hitTargets, effectIndex, eff)

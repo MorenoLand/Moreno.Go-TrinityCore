@@ -8,6 +8,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -17,6 +18,7 @@ const (
 	questStatusIncomplete          = 3
 	questStatusFailed              = 5      // QUEST_STATUS_FAILED (QuestDef.h:108)
 	questStatusRewarded            = 6      // Player::GetQuestStatus reports QUEST_STATUS_REWARDED, never NONE, for rewarded quests
+	questFlagTracking       uint32 = 0x400  // QUEST_FLAGS_TRACKING (QuestDef.h:142): automatically rewarded on complete, never in the client quest log
 	questSlotStateFail      uint32 = 0x0002 // QUEST_STATE_FAIL (Player.h:496)
 	itemBondingQuestItem    uint32 = 4      // BIND_QUEST_ITEM (ItemTemplate.h:102)
 	QuestTypeRaid           uint32 = 62
@@ -1017,6 +1019,45 @@ func (s *session) completeQuest(ctx context.Context, questID uint32) {
 			}
 		}
 	}
+}
+
+// completeQuestFromSpell mirrors Spell::EffectQuestComplete
+// (SpellEffects.cpp:4371-4389): the quest template must exist
+// (SpellEffects.cpp:4380-4382), and the completion only lands when the
+// quest sits in the target's log (AreaExploredOrEventHappens arm — Go:
+// completeQuest) or, without a log entry, when the quest carries
+// QUEST_FLAGS_TRACKING (SetRewardedQuest arm). Anything else is a no-op.
+func (s *session) completeQuestFromSpell(ctx context.Context, questID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var flags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Flags FROM quest_template WHERE ID = ?", questID).Scan(&flags); err != nil {
+		return
+	}
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		if s.player.QuestLog[slot].QuestID == questID {
+			s.completeQuest(ctx, questID)
+			return
+		}
+	}
+	if flags&int64(questFlagTracking) != 0 {
+		s.markQuestRewarded(ctx, questID)
+	}
+}
+
+// markQuestRewarded mirrors Player::SetRewardedQuest (Player.cpp): the quest
+// lands in the rewarded set without any client broadcast — the serverside
+// flag arm of EffectQuestComplete for QUEST_FLAGS_TRACKING quests.
+func (s *session) markQuestRewarded(ctx context.Context, questID uint32) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	insertIgnore := "INSERT OR IGNORE"
+	if s.server.CharactersStore.Backend != database.BackendSQLite {
+		insertIgnore = "INSERT IGNORE"
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, insertIgnore+" INTO character_queststatus_rewarded (guid, quest, active) VALUES (?, ?, 1)", s.playerGUID, questID)
 }
 
 func (s *session) countPlayerInventoryItem(ctx context.Context, itemEntry uint32) uint32 {

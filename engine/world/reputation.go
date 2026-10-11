@@ -258,6 +258,23 @@ func (s *session) giveReputation(ctx context.Context, factionID uint32, amount i
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, amount, factionFlagVisible)
 }
 
+// spellFactionEntryExists mirrors the sFactionStore.LookupEntry gate in
+// Spell::EffectReputation (SpellEffects.cpp:4359-4361): a reputation spell
+// whose MiscValue names no Faction DBC entry grants nothing. A DBC load
+// failure degrades to the old credit-anyway behavior rather than silently
+// dropping reputation.
+func (s *session) spellFactionEntryExists(factionID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	file, err := s.server.Data.File("Faction")
+	if err != nil || file == nil {
+		return true
+	}
+	_, ok := file.Find(factionID)
+	return ok
+}
+
 // reputationPriceDiscount mirrors Player::GetReputationPriceDiscount
 // (Player.cpp:23674-23689): the vendor/repair price multiplier from the
 // player's reputation rank with the NPC's faction template's faction — 1.0 at
