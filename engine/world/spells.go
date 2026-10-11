@@ -22090,12 +22090,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// the caster pays the tick amount in health — clamped so the donator
 		// is not killed (health < damage -> damage = health-1) — and the
 		// target is healed for the paid amount x CalcValueMultiplier. No bonus
-		// legs, no crit, no absorb; C++ sends no periodic log for the funnel
-		// heal, so none is sent here either.
+		// legs, no crit, no absorb, no threat (C++ 5323-5351 never calls
+		// ForwardThreatForAssistingMe; Unit::HealBySpell, Unit.cpp:6561-6574,
+		// adds none); C++ sends no periodic log for the funnel heal, so
+		// none is sent here either.
 		if ts.server == nil || ts.player.Health == 0 {
 			break
 		}
-		paid, creatureCaster, ok := ts.server.funnelDonatorCost(ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.Amount)
+		paid, _, ok := ts.server.funnelDonatorCost(ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.Amount)
 		if !ok {
 			break
 		}
@@ -22106,20 +22108,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		curHP := ts.player.Health
 		maxHP := ts.player.MaxHealth
 		newHP := curHP + heal
-		effectiveHeal := heal
 		if newHP > maxHP {
-			effectiveHeal = maxHP - curHP
 			newHP = maxHP
 		}
 		ts.player.Health = newHP
 		ts.sendPlayerUpdate()
-		if effectiveHeal > 0 {
-			if creatureCaster {
-				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
-			} else {
-				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal, false)
-			}
-		}
 		// Periodic-heal procs (SpellAuraEffects.cpp:5350): the funnel heal
 		// runs Unit::ProcSkillsAndAuras with DONE_PERIODIC / TAKEN_PERIODIC,
 		// PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL. The
@@ -23448,12 +23441,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// the caster pays the tick amount in health — clamped so the donator
 		// is not killed (health < damage -> damage = health-1) — and the
 		// target is healed for the paid amount x CalcValueMultiplier. No bonus
-		// legs, no crit, no absorb; C++ sends no periodic log for the funnel
-		// heal, so none is sent here either.
+		// legs, no crit, no absorb, no threat (C++ 5323-5351 never calls
+		// ForwardThreatForAssistingMe; Unit::HealBySpell, Unit.cpp:6561-6574,
+		// adds none); C++ sends no periodic log for the funnel heal, so
+		// none is sent here either.
 		if s.server == nil {
 			return true
 		}
-		paid, creatureCaster, ok := s.server.funnelDonatorCost(key.Map, key.InstanceID, aura.CasterGUID, aura.Amount)
+		paid, _, ok := s.server.funnelDonatorCost(key.Map, key.InstanceID, aura.CasterGUID, aura.Amount)
 		if !ok {
 			return true
 		}
@@ -23464,9 +23459,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		curHP := target.Health
 		maxHP := target.MaxHealth
 		newHP := curHP + heal
-		effectiveHeal := heal
 		if newHP > maxHP {
-			effectiveHeal = maxHP - curHP
 			newHP = maxHP
 		}
 		s.server.motionMu.Lock()
@@ -23476,13 +23469,6 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		s.server.motionMu.Unlock()
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHP})
-		if effectiveHeal > 0 {
-			if creatureCaster {
-				s.server.distributeCreatureHealingThreat(ctx, key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
-			} else {
-				s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, effectiveHeal, false)
-			}
-		}
 		// Periodic-heal procs (SpellAuraEffects.cpp:5350): the funnel heal
 		// runs Unit::ProcSkillsAndAuras with DONE_PERIODIC / TAKEN_PERIODIC,
 		// PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL. The
