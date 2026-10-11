@@ -1266,6 +1266,32 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for _, areaHit := range areaHits {
 		hitTargets = append(hitTargets, areaHit.GUID)
 	}
+	// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the AddUnitTarget
+	// min-level arm (Spell.cpp:2115-2150) + the SelectTargets removal leg
+	// (Spell.cpp:807-830) for a pet caster. The fill arm gates on
+	// IsControlledByPlayer(), which holds on this path: the pet path serves
+	// player-owned pets only (driven by the owner session), mirroring the
+	// minion leg (Unit.cpp:6056). The cast row is the pristine DBC row, so
+	// the basepoint-equality gate is exact via spellAuraScaleMask(spell,
+	// spell, true). Triggered pet casts model TRIGGERED_FULL_MASK
+	// (0x0007FFFF, SpellDefines.h:153), which carries
+	// TRIGGERED_IGNORE_AURA_SCALING (0x10), so the arm is skipped for
+	// triggered casts. Targets failing the min-level check drop out of the
+	// hit list ahead of the GO packet (SelectSpellTargets at Spell.cpp:3410
+	// precedes SendSpellGo at 4338); when none remain the cast fails with
+	// SPELL_FAILED_LOWLEVEL (807-830) — silent here, the AI path has no
+	// client to report to. The downrank map feeds the aura application below
+	// (PreprocessSpellHit scaleAura, Spell.cpp:2780-2795).
+	var petAuraScaleDownranks map[uint64]wotlk.Spell
+	if !triggered && s.server != nil && s.server.Data != nil {
+		if mask := spellAuraScaleMask(spell, spell, true); mask != 0 {
+			var failed bool
+			hitTargets, petAuraScaleDownranks, failed = s.applyPetAuraScaling(ctx, spell, motion.GUID, mask, hitTargets)
+			if failed {
+				return true
+			}
+		}
+	}
 	// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410) for a pet
 	// caster: the same server-side destination resolution the wild-creature
 	// path bridges (resolveCreatureSpellDestination) — C++ runs the full
@@ -1321,7 +1347,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 		handledEffect = true
 	}
-	for _, effect := range spell.Effects {
+	for i, effect := range spell.Effects {
 		if effect.Effect == 10 || effect.Effect == 105 || effect.Effect == 136 {
 			heal := uint32(effect.BasePoints + 1)
 			if heal > 0 {
@@ -1340,22 +1366,26 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			handledEffect = true
 		}
 		if effect.Effect == 6 || effect.Effect == 27 || effect.Effect == 35 {
-			durationMs := uint32(0)
-			if spell.DurationIndex > 0 {
-				if duration, found, err := s.server.Data.SpellDuration(spell.DurationIndex, casterLevel(motion)); err == nil && found && duration > 0 {
-					durationMs = uint32(duration)
-				}
-			}
-			amount := uint32(effect.BasePoints + 1)
-			if s.applyPetAura(ctx, motion, spell, effect, targetGUID, durationMs, amount) {
+			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
+			// a target whose aura scales takes the aura from the
+			// rank-appropriate row — duration entry, basepoints and effect
+			// row all come from it, like hitInfo.AuraBasePoints.
+			auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
+			durationMs := petAuraDuration(s.server, auraSpell, motion)
+			amount := uint32(auraEffect.BasePoints + 1)
+			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, targetGUID, durationMs, amount) {
 				handledEffect = true
 			}
 			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (effect 27 with an enemy
 			// area target) applies to every unit the area selection picked —
-			// the wire target above plus the extra area hits.
+			// the wire target above plus the extra area hits. Each area hit
+			// carries its own downrank verdict.
 			if effect.Effect == 27 && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
 				for _, areaHit := range areaHits {
-					if s.applyPetAura(ctx, motion, spell, effect, areaHit.GUID, durationMs, amount) {
+					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
+					aDurationMs := petAuraDuration(s.server, aSpell, motion)
+					aAmount := uint32(aEffect.BasePoints + 1)
+					if s.applyPetAura(ctx, motion, aSpell, aEffect, areaHit.GUID, aDurationMs, aAmount) {
 						handledEffect = true
 					}
 				}
@@ -1379,6 +1409,82 @@ func casterLevel(motion *creatureMotion) uint32 {
 		return 1
 	}
 	return motion.Level
+}
+
+// applyPetAuraScaling mirrors the AddUnitTarget ScaleAura arm
+// (Spell.cpp:2115-2150) and the SelectTargets removal leg (Spell.cpp:807-830)
+// for a pet caster. casterGUID is the pet's own GUID — the C++ self-cast
+// exemption keys on m_caster, not on the pet's owner. For every hit target
+// other than the caster whose effect mask is exactly the aura-scale mask,
+// the target passes the min-level check when targetLevel+10 reaches the
+// first rank's SpellLevel; failing targets drop from the hit list, and when
+// every target is dropped the cast fails with SPELL_FAILED_LOWLEVEL
+// (Spell.cpp:827-830), reported via failed. Targets whose level cannot be
+// resolved are kept unscaled. Passing lower-level targets are recorded in
+// the returned map with their downranked spell row — the PreprocessSpellHit
+// scaleAura leg (Spell.cpp:2780-2795) that applies the aura with the
+// rank-appropriate SpellInfo and basepoints.
+func (s *session) applyPetAuraScaling(ctx context.Context, spell wotlk.Spell, casterGUID uint64, mask uint8, hitTargets []uint64) ([]uint64, map[uint64]wotlk.Spell, bool) {
+	var targetMask uint8
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect != 0 {
+			targetMask |= 1 << uint(i)
+		}
+	}
+	var firstLevel uint32
+	if s.server != nil && s.server.Data != nil {
+		if fr, found, _ := s.server.Data.Spell(s.server.spellFirstRank(spell.ID)); found {
+			firstLevel = fr.SpellLevel
+		}
+	}
+	downranks := make(map[uint64]wotlk.Spell)
+	kept := make([]uint64, 0, len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid == 0 || guid == casterGUID || targetMask != mask {
+			kept = append(kept, guid)
+			continue
+		}
+		level, ok := s.auraScaleTargetLevel(ctx, guid)
+		if !ok || uint32(level)+10 < firstLevel {
+			continue
+		}
+		if s.server != nil {
+			if ds, ok := s.server.spellAuraRankForLevel(spell.ID, level); ok && ds.ID != spell.ID {
+				downranks[guid] = ds
+			}
+		}
+		kept = append(kept, guid)
+	}
+	if len(hitTargets) > 0 && len(kept) == 0 {
+		return nil, nil, true
+	}
+	return kept, downranks, false
+}
+
+// petAuraRankRow mirrors the Spell::PreprocessSpellHit scaleAura leg
+// (Spell.cpp:2780-2795) on the pet path: a target whose aura scales takes
+// the aura from the rank-appropriate row. The spellAuraRankForLevel twin
+// already enforced the effect-type match across all three effects, falling
+// back to the cast row on mismatch, so the downrank row is safe to index
+// directly.
+func petAuraRankRow(spell wotlk.Spell, effectIdx int, downranks map[uint64]wotlk.Spell, targetGUID uint64) (wotlk.Spell, wotlk.SpellEffect) {
+	if ds, ok := downranks[targetGUID]; ok {
+		return ds, ds.Effects[effectIdx]
+	}
+	return spell, spell.Effects[effectIdx]
+}
+
+// petAuraDuration resolves the DBC duration for one pet-path aura
+// application from the (possibly downranked) spell row, mirroring the
+// Aura::CalcMaxDuration duration-entry leg (SpellAuras.cpp:871-886).
+func petAuraDuration(s *Server, spell wotlk.Spell, motion *creatureMotion) uint32 {
+	durationMs := uint32(0)
+	if s != nil && s.Data != nil && spell.DurationIndex > 0 {
+		if duration, found, err := s.Data.SpellDuration(spell.DurationIndex, casterLevel(motion)); err == nil && found && duration > 0 {
+			durationMs = uint32(duration)
+		}
+	}
+	return durationMs
 }
 
 func (s *session) applyPetAura(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs, amount uint32) bool {

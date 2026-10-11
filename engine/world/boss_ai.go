@@ -1520,6 +1520,36 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			// evaluates that arm at CheckCast time, before the redirect.
 			destX, destY, destZ, hasDest = s.resolveCreatureSpellDestination(m, spellInfo, targetGUID)
 		}
+		// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the
+		// AddUnitTarget min-level arm (Spell.cpp:2115-2150) + the
+		// SelectTargets removal leg (Spell.cpp:807-830) for a creature
+		// caster. The fill arm gates on IsControlledByPlayer(), which holds
+		// exactly for charmed motions — charmCreature's only call site
+		// passes a player GUID (spells.go:20929), mirroring the charm legs
+		// (Unit.cpp:6219/6259/6265); wild motions keep m_auraScaleMask at 0
+		// and skip the arm entirely. The cast row is the pristine DBC row,
+		// so the basepoint-equality gate is exact via
+		// spellAuraScaleMask(spellInfo, spellInfo, true). Triggered creature
+		// casts model TRIGGERED_FULL_MASK, which carries
+		// TRIGGERED_IGNORE_AURA_SCALING (0x10), so the arm is skipped for
+		// triggered casts. Failing targets drop out of the hit list ahead
+		// of the GO packet (SelectSpellTargets at Spell.cpp:3410 precedes
+		// SendSpellGo at 4338); with none left the cast fails with
+		// SPELL_FAILED_LOWLEVEL (807-830) — silent here, the creature path
+		// has no client to report to. No downrank application: the creature
+		// path has no aura-application site at cast completion (damage lands
+		// in the combat tick), so the PreprocessSpellHit scaleAura leg
+		// (Spell.cpp:2780-2795) has nothing to hook into — documented
+		// no-bridge.
+		if !triggered && m.Charmed {
+			if mask := spellAuraScaleMask(spellInfo, spellInfo, true); mask != 0 {
+				kept, failed := s.applyCreatureAuraScaling(m, spellInfo, mask, hitTargets)
+				hitTargets = kept
+				if failed {
+					return
+				}
+			}
+		}
 		// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410, ahead
 		// of TakePower at 3449): a creature casting a spell with a
 		// dest-family implicit target resolves the destination server-side
@@ -1656,6 +1686,64 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.fireCreatureHitTriggers(ctx, m, spellInfo, spellID, hitTargets)
 	}
+}
+
+// serverAuraScaleTargetLevel resolves a hit target's level for the
+// aura-scaling min-level check (Spell::AddUnitTarget, Spell.cpp:2123/2143)
+// on the creature path, where no player session exists: online players
+// resolve via their session, tracked creatures via the motion store.
+func (s *Server) serverAuraScaleTargetLevel(m *creatureMotion, targetGUID uint64) (uint8, bool) {
+	if s == nil || m == nil {
+		return 0, false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil && ts.player.Level > 0 {
+		return ts.player.Level, true
+	}
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil && tm.Level > 0 {
+		return uint8(tm.Level), true
+	}
+	return 0, false
+}
+
+// applyCreatureAuraScaling mirrors the AddUnitTarget ScaleAura arm
+// (Spell.cpp:2115-2150) and the SelectTargets removal leg (Spell.cpp:807-830)
+// for a charmed creature caster. For every hit target other than the caster
+// whose effect mask is exactly the aura-scale mask, the target passes the
+// min-level check when targetLevel+10 reaches the first rank's SpellLevel;
+// failing targets drop from the hit list, and when every target is dropped
+// the cast fails with SPELL_FAILED_LOWLEVEL (Spell.cpp:827-830), reported
+// via failed. Targets whose level cannot be resolved are kept unscaled. The
+// downrank application has no consumer on this path (no aura-application
+// site at cast completion), so only the removal leg is modeled.
+func (s *Server) applyCreatureAuraScaling(m *creatureMotion, spell wotlk.Spell, mask uint8, hitTargets []uint64) ([]uint64, bool) {
+	var targetMask uint8
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect != 0 {
+			targetMask |= 1 << uint(i)
+		}
+	}
+	var firstLevel uint32
+	if s != nil && s.Data != nil {
+		if fr, found, _ := s.Data.Spell(s.spellFirstRank(spell.ID)); found {
+			firstLevel = fr.SpellLevel
+		}
+	}
+	kept := make([]uint64, 0, len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid == 0 || guid == m.GUID || targetMask != mask {
+			kept = append(kept, guid)
+			continue
+		}
+		level, ok := s.serverAuraScaleTargetLevel(m, guid)
+		if !ok || uint32(level)+10 < firstLevel {
+			continue
+		}
+		kept = append(kept, guid)
+	}
+	if len(hitTargets) > 0 && len(kept) == 0 {
+		return nil, true
+	}
+	return kept, false
 }
 
 // fireCreatureSpellLinkedTriggers applies the spell_linked_spell tail of
