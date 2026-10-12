@@ -94,6 +94,15 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			if spell.Attributes&spellAttributePassive != 0 || isChanneledSpell(spell) {
 				continue
 			}
+			// Player::LoadFromDB's alive-player tail (Player.cpp:18017-18020)
+			// via Unit::RemoveAllAurasRequiringDeadTarget (Unit.cpp:4376-4391):
+			// a living player drops non-passive ghost-only auras
+			// (SPELL_ATTR3_ONLY_TARGET_GHOSTS). Passive spells are already
+			// skipped above, so every loaded spell is eligible; a zero saved
+			// health loads as dead (Player.cpp:18011-18012) and keeps them.
+			if state.Health > 0 && spell.AttributesEx3&spellAttr3OnlyTargetGhosts != 0 {
+				continue
+			}
 			loadedSpell, hasLoadedSpell = spell, true
 			procCharges = spell.ProcCharges
 			switch id {

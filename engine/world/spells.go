@@ -26645,6 +26645,8 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	wasPhase := false
 	var removedLinkedTriggers []linkedTriggerRef
 	removedLinkedParentCaster := uint64(0)
+	wasQuestTame := false
+	questTameCaster := uint64(0)
 	s.server.auraMu.Lock()
 	var finalTick *activeAura
 	if s.server.activeCreatureAuras != nil {
@@ -26674,6 +26676,13 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 					if rspell, found, rerr := s.server.Data.Spell(spellID); rerr == nil && found {
 						removedLinkedTriggers = linkedTriggersOfSpell(s.server.Data, rspell)
 						removedLinkedParentCaster = aura.CasterGUID
+						// The quest-tame arm of AuraEffect::HandleAuraDummy AT
+						// REMOVE (SpellAuraEffects.cpp:4444-4472) is captured
+						// before the aura is deleted.
+						if isQuestTameSpell(rspell) {
+							wasQuestTame = true
+							questTameCaster = aura.CasterGUID
+						}
 					}
 				}
 				aura.Stopped = true
@@ -26752,6 +26761,13 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	// the linked trigger spell's aura leaves the creature too.
 	s.dropCreatureLinkedTriggers(removedLinkedTriggers, removedLinkedParentCaster, key)
 
+	// AuraEffect::HandleAuraDummy AT REMOVE quest-tame arm
+	// (SpellAuraEffects.cpp:4444-4472): dropping the dummy aura with caster
+	// and target alive casts the mapped final spell on the target.
+	if wasQuestTame {
+		s.server.fireQuestTameFinal(spellID, questTameCaster, key)
+	}
+
 	removePkt := protocol.BuildAuraUpdate(key.GUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
 	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
 }
@@ -26769,6 +26785,8 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	wasPhase := false
 	var removedLinkedTriggers []linkedTriggerRef
 	removedLinkedParentCaster := uint64(0)
+	wasQuestTame := false
+	questTameCaster := uint64(0)
 	s.auraMu.Lock()
 	var slot uint8
 	if s.activeCreatureAuras != nil {
@@ -26789,6 +26807,13 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 					if rspell, found, rerr := s.Data.Spell(spellID); rerr == nil && found {
 						removedLinkedTriggers = linkedTriggersOfSpell(s.Data, rspell)
 						removedLinkedParentCaster = aura.CasterGUID
+						// The quest-tame arm of AuraEffect::HandleAuraDummy AT
+						// REMOVE (SpellAuraEffects.cpp:4444-4472) is captured
+						// before the aura is deleted.
+						if isQuestTameSpell(rspell) {
+							wasQuestTame = true
+							questTameCaster = aura.CasterGUID
+						}
 					}
 				}
 				aura.Stopped = true
@@ -26872,8 +26897,59 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 		}
 	}
 
+	// AuraEffect::HandleAuraDummy AT REMOVE quest-tame arm
+	// (SpellAuraEffects.cpp:4444-4472): dropping the dummy aura with caster
+	// and target alive casts the mapped final spell on the target.
+	if wasQuestTame {
+		s.fireQuestTameFinal(spellID, questTameCaster, key)
+	}
+
 	removePkt := protocol.BuildAuraUpdate(key.GUID, 0, slot, 0, true, false, 0, 0, 1)
 	s.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
+}
+
+// isQuestTameSpell mirrors SpellInfo::IsQuestTame (SpellInfo.cpp): the
+// hunter quest-tame spells carry SPELL_EFFECT_THREAT on effect 0 and a
+// SPELL_AURA_DUMMY apply-aura on effect 1.
+func isQuestTameSpell(spell wotlk.Spell) bool {
+	if len(spell.Effects) < 2 {
+		return false
+	}
+	return spell.Effects[0].Effect == spellEffectThreat &&
+		spell.Effects[1].Effect == spellEffectApplyAura &&
+		spell.Effects[1].Aura == spellAuraDummy
+}
+
+// questTameFinalSpell maps each quest-tame dummy-aura spell to the spell the
+// AT REMOVE arm of AuraEffect::HandleAuraDummy casts on the target
+// (SpellAuraEffects.cpp:4446-4471).
+var questTameFinalSpell = map[uint32]uint32{
+	19548: 19597, 19674: 19677, 19687: 19676, 19688: 19678,
+	19689: 19679, 19692: 19680, 19693: 19684, 19694: 19681,
+	19696: 19682, 19697: 19683, 19699: 19685, 19700: 19686,
+	30646: 30647, 30653: 30648, 30654: 30652,
+	30099: 30100, 30102: 30103, 30105: 30104,
+}
+
+// fireQuestTameFinal mirrors the quest-tame arm of AuraEffect::HandleAuraDummy
+// AT REMOVE (SpellAuraEffects.cpp:4444-4472): dropping the dummy aura while
+// the caster and the target are both alive casts the mapped final spell on
+// the target. The C++ cast is aura-triggered; the Go direct cast follows the
+// scripted-arm convention (castSpellDirect).
+func (s *Server) fireQuestTameFinal(spellID uint32, casterGUID uint64, key creatureAuraKey) {
+	finalID, ok := questTameFinalSpell[spellID]
+	if !ok || finalID == 0 {
+		return
+	}
+	caster := s.findSessionByGUID(casterGUID)
+	if caster == nil || caster.player == nil || caster.player.Health == 0 {
+		return
+	}
+	target := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if target == nil || target.Health == 0 {
+		return
+	}
+	caster.castSpellDirect(context.Background(), finalID, key.GUID)
 }
 
 // handleCancelMountAura processes CMSG_CANCEL_MOUNT_AURA (0x375).
