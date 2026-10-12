@@ -10462,9 +10462,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectStuck(effCtx)
 			case spellEffectLeapBack: // 138: SPELL_EFFECT_LEAP_BACK (EffectLeapBack, SpellEffects.cpp:4593)
 				// LAUNCH_TARGET arm: the player caster's fall info resets
-				// (Player::SetFallInformation(0, z)). Unit::JumpTo has no Go
-				// spline model (documented no-bridge, boss_ai.go).
-				if s.player != nil {
+				// (Player::SetFallInformation(0, z)) only when the effect has
+				// a unit target — Spell::EffectLeapBack returns early on
+				// !unitTarget. Unit::JumpTo has no Go spline model
+				// (documented no-bridge, boss_ai.go).
+				hasUnitTarget := false
+				for _, effectTarget := range hitTargets {
+					if effectTarget != 0 {
+						hasUnitTarget = true
+						break
+					}
+				}
+				if hasUnitTarget && s.player != nil {
 					s.lastFallTime, s.lastFallZ = 0, s.player.Z
 				}
 			case spellEffectPullTowards: // 124: SPELL_EFFECT_PULL_TOWARDS (EffectPullTowards, SpellEffects.cpp:4667)
@@ -31526,9 +31535,18 @@ func (s *session) teleportEffectUnitTargets(hitTargets []uint64, mapID uint32, x
 // (SpellEffects.cpp:2618-2632), the SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER
 // (43) HIT_TARGET arm: the target teleports to a close point at the effect
 // radius from the caster, facing away from the caster (C++ passes
-// -m_caster->GetOrientation()). Unit::GetClosePoint's size/combat-reach leg
-// feeds the collision adjustment only; Go has no collision model, so the
-// point lands at the raw radius along the caster-to-target angle.
+// -m_caster->GetOrientation()).
+//
+// Geometry follows Unit::GetClosePoint (Object.cpp:3307-3311) exactly:
+// the angle is the CASTER's orientation (GetOrientation() + relAngle 0),
+// not the caster-to-target line, and the distance is
+// casterCombatReach + dis + targetCombatReach — GetClosePoint feeds
+// size=targetCombatReach into GetNearPoint's distance2d, whose
+// effectiveReach is the caster's own GetCombatReach (Object.cpp:3243-3270,
+// searcher=nullptr so no addition). z is the caster's z; the vmap
+// UpdateAllowedPositionZ ground clamp (Object.cpp:3272-3277) has no Go
+// model on this path. Creature unit targets have no Go teleport arm here
+// (no per-target session); only player targets teleport.
 func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUID uint64, eff wotlk.SpellEffect) {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
 		return
@@ -31543,11 +31561,13 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 			dis = value
 		}
 	}
-	angle := math.Atan2(float64(targetSess.player.Y-s.player.Y), float64(targetSess.player.X-s.player.X))
+	// Object.cpp:3307-3310: distance2d = dis + size(targetCombatReach),
+	// effectiveReach = caster's GetCombatReach, angle = caster orientation.
+	dist := s.player.CombatReach + dis + targetSess.player.CombatReach
 	targetSess.nearTeleportMove(
-		s.player.X+dis*float32(math.Cos(angle)),
-		s.player.Y+dis*float32(math.Sin(angle)),
-		targetSess.player.Z,
+		s.player.X+dist*float32(math.Cos(float64(s.player.Orientation))),
+		s.player.Y+dist*float32(math.Sin(float64(s.player.Orientation))),
+		s.player.Z,
 		-s.player.Orientation,
 	)
 }
@@ -31943,10 +31963,13 @@ func (s *session) handleEffectForceCast(ctx context.Context, spellID uint32, eff
 
 // handleEffectChargeDest mirrors Spell::EffectChargeDest (SpellEffects.cpp:4528-4546),
 // the SPELL_EFFECT_CHARGE_DEST (149) LAUNCH arm: the caster charges to the spell
-// destination. Go has no MotionMaster/MoveCharge spline model and no LOS model
-// for the GetFirstCollisionPosition arm (both documented no-bridge), so the
-// move lands as a server-initiated near teleport to the destination, the same
-// treatment as the EffectCharge bridge.
+// destination. Go has no MotionMaster/MoveCharge spline model (documented
+// no-bridge, boss_ai.go), so the move lands as a server-initiated near
+// teleport to the destination, the same treatment as the EffectCharge
+// bridge. The C++ IsWithinLOS arm clamps the charge point to the first
+// collision position when the destination is not in line of sight
+// (SpellEffects.cpp:4537-4542); Go has a LOS query (hasLineOfSight) but no
+// vmap raycast to compute that collision point, so the arm stays unbridged.
 func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.SpellTargetData) {
 	if s == nil || s.player == nil {
 		return
