@@ -2063,7 +2063,7 @@ func (s *session) castAllObtainSpells(ctx context.Context) {
 // m_canTitanGrip / m_titanGripPenaltySpellId are set by Spell::EffectTitanGrip
 // (SpellEffects.cpp:5402) from the TITAN_GRIP effect's MiscValue on the learned
 // talent; Go derives both the same way autoUnequipOffhandIfNeeded derives
-// canTitanGrip (terrain.go:181-200). With the capability present, wielding a
+// canTitanGrip (terrain.go:192-210). With the capability present, wielding a
 // 2H weapon in one hand (Player::IsUsingTwoHandedWeaponInOneHand,
 // Player.cpp:13688-13701) applies the penalty aura as a triggered self-cast
 // (CastSpell((Unit*)nullptr, m_titanGripPenaltySpellId, true)); otherwise the
@@ -2282,6 +2282,12 @@ func (s *session) updateItemEquipSpellsOnMove(ctx context.Context, itemGUID, fro
 		// Player::EquipItem order (Player.cpp:12332-12350): the
 		// weapon-switch GCD arms on weapon/relic equips in combat.
 		s.applyWeaponSwitchGCD(ctx, uint32(itemEntry))
+		// Player::FindEquipSlot INVTYPE_2HWEAPON arm (Player.cpp:9756-9776):
+		// a 2h weapon entering the mainhand cannot coexist with an offhand
+		// weapon unless Titan's Grip allows it.
+		if toBag == 0 && toSlot == int64(equipSlotMainhand) {
+			s.unequipOffhandForTwoHandedWeapon(ctx, uint32(itemEntry))
+		}
 	}
 	// Player::EquipItem/UnequipItem (Player.cpp:12416, 12445, 12571):
 	// mainhand/offhand slot changes re-evaluate the Titan's Grip penalty aura.
@@ -2289,6 +2295,25 @@ func (s *session) updateItemEquipSpellsOnMove(ctx context.Context, itemGUID, fro
 		(toBag == 0 && (toSlot == int64(equipSlotMainhand) || toSlot == int64(equipSlotOffhand))) {
 		s.checkTitanGripPenalty(ctx)
 	}
+}
+
+// unequipOffhandForTwoHandedWeapon mirrors the INVTYPE_2HWEAPON arm of
+// Player::FindEquipSlot (Player.cpp:9756-9776): a polearm or staff 2h always
+// forces the offhand out (AutoUnequipOffhandIfNeed(true)); any other 2h runs
+// the standard force=false check, which early-returns for Titan's Grip.
+func (s *session) unequipOffhandForTwoHandedWeapon(ctx context.Context, itemEntry uint32) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var invType, subClass int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(InventoryType, 0), COALESCE(subclass, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&invType, &subClass); err != nil {
+		return
+	}
+	if invType != invType2HWeapon {
+		return
+	}
+	force := subClass == itemSubclassWeaponPolearm || subClass == itemSubclassWeaponStaff
+	s.autoUnequipOffhandIfNeededForced(ctx, force)
 }
 
 // itemSetEffect mirrors ItemSetEffect (Item.h:33-38): one item set tracked on

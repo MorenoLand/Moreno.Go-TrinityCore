@@ -169,6 +169,17 @@ func (s *session) destroyZoneLimitedItems(ctx context.Context, zoneID uint32) bo
 }
 
 func (s *session) autoUnequipOffhandIfNeeded(ctx context.Context) bool {
+	return s.autoUnequipOffhandIfNeededForced(ctx, false)
+}
+
+// autoUnequipOffhandIfNeededForced mirrors Player::AutoUnequipOffhandIfNeed
+// (Player.cpp:23877-23910): the offhand weapon leaves when the player can no
+// longer dual wield, or when a 2h weapon without Titan's Grip sits in either
+// hand. The inventory search mirrors CanStoreItem(NULL_BAG, NULL_SLOT): the
+// backpack AND all equipped bags are searched, not the backpack alone; when
+// the whole inventory is full the item is mailed to self with the
+// LANG_NOT_EQUIPPED_ITEM subject, GM stationery and MAIL_CHECK_MASK_COPIED.
+func (s *session) autoUnequipOffhandIfNeededForced(ctx context.Context, force bool) bool {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
 	}
@@ -197,20 +208,59 @@ func (s *session) autoUnequipOffhandIfNeeded(ctx context.Context) bool {
 			}
 		}
 	}
-	force := !canDualWield && (offInvType == 13 || offInvType == 22)
-	if !force && (canTitanGrip || (offInvType != 17 && mainInvType != 17)) {
+	force = force || (!canDualWield && (offInvType == invTypeWeapon || offInvType == invTypeWeaponOffhand))
+	if !force && (canTitanGrip || (offInvType != invType2HWeapon && mainInvType != invType2HWeapon)) {
 		return false
 	}
-	freeSlot, ok := s.findFreeBackpackSlot(ctx)
-	if !ok {
-		return false
-	}
-	if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND item = ?", freeSlot, s.playerGUID, offItem); err != nil {
+	if bagKey, _, freeSlot, ok := s.findFreeInventorySlot(ctx, s.playerGUID); ok {
+		if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", bagKey, freeSlot, s.playerGUID, offItem); err != nil {
+			return false
+		}
+	} else if !s.mailSelfUnstoreableOffhand(ctx, cdb, uint64(offItem)) {
 		return false
 	}
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
+	return true
+}
+
+// mailSelfUnstoreableOffhand mirrors the no-space else arm of
+// Player::AutoUnequipOffhandIfNeed (Player.cpp:23899-23908): the offhand
+// item leaves the inventory (MoveItemFromInventory + DeleteFromInventoryDB +
+// SaveToDB standalone) and is mailed to self with the LANG_NOT_EQUIPPED_ITEM
+// subject, MAIL_STATIONERY_GM and MAIL_CHECK_MASK_COPIED, in one transaction.
+func (s *session) mailSelfUnstoreableOffhand(ctx context.Context, cdb *sql.DB, itemGUID uint64) bool {
+	if cdb == nil || itemGUID == 0 || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var subject string
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT content_default FROM trinity_string WHERE entry = ?", langNotEquippedItem).Scan(&subject); err != nil {
+		return false
+	}
+	tx, err := cdb.BeginTx(ctx, nil)
+	if err != nil {
+		return false
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID); err != nil {
+		return false
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, itemGUID); err != nil {
+		return false
+	}
+	mailID := s.server.generateMailID()
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+		VALUES (?, 0, ?, 0, ?, ?, ?, ?, 1, ?, ?, 0, 0, ?)`, mailID, gmStationery, s.playerGUID, s.playerGUID, subject, "There were problems with equipping one or several items.", now+mailExpiration, now, mailCheckCopied); err != nil {
+		return false
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", mailID, itemGUID, s.playerGUID); err != nil {
+		return false
+	}
+	if err := tx.Commit(); err != nil {
+		return false
+	}
 	return true
 }
 

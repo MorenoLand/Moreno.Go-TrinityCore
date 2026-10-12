@@ -354,6 +354,7 @@ const (
 	invTypeWeapon         = 13
 	invTypeWeaponMainhand = 21
 	invTypeWeaponOffhand  = 22
+	invType2HWeapon       = 17 // INVTYPE_2HWEAPON (ItemTemplate.h:280)
 
 	// ITEM_SUBCLASS_MASK_WEAPON_RANGED (ItemTemplate.h:372): bow/gun/
 	// crossbow/thrown subclasses; the EquippedItemSubClass DBC field is

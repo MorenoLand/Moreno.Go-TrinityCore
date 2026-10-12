@@ -969,6 +969,19 @@ func (s *session) removeZoneLimitedItemsFromState(ctx context.Context, state *pl
 	return true
 }
 
+// Mail constants for the cannot-equip mail fallback shared by
+// removeInvalidInventoryItems and the AutoUnequipOffhandIfNeed no-space arm
+// (Player.cpp:23899-23908): LANG_NOT_EQUIPPED_ITEM (TrinityStrings.h:706),
+// MAIL_STATIONERY_GM (Mail.h:59) and MAIL_CHECK_MASK_COPIED (Mail.h:62),
+// with the C++ 30-day expiry.
+const (
+	langNotEquippedItem = 706
+	gmStationery        = 61
+	mailCheckCopied     = 0x04
+	mailItemsPerMessage = 12
+	mailExpiration      = 30 * 86400
+)
+
 func (s *session) removeInvalidInventoryItems(ctx context.Context, state *playerState) bool {
 	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return false
@@ -1369,13 +1382,6 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 	if len(invalid) == 0 {
 		return false
 	}
-	const (
-		langNotEquippedItem = 706
-		gmStationery        = 61
-		mailCheckCopied     = 0x04
-		mailItemsPerMessage = 12
-		mailExpiration      = 30 * 86400
-	)
 	var subject string
 	if len(mailItems) > 0 {
 		if err := wdb.QueryRowContext(ctx, "SELECT content_default FROM trinity_string WHERE entry = ?", langNotEquippedItem).Scan(&subject); err != nil {

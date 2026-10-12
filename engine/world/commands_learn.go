@@ -128,6 +128,15 @@ func (s *session) unlearnSpell(ctx context.Context, spellID uint32) {
 	unlearnBuf := protocol.NewBuffer(4)
 	unlearnBuf.WriteU32(spellID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)
+	// Player::RemoveSpell (Player.cpp:3884-3895): unlearning Titan's Grip
+	// (46917) clears the capability and re-arms the penalty aura evaluation,
+	// and every unlearn re-checks the offhand (OffhandCheckAtSpellUnlearn
+	// defaults true). C++ clears the capability flags before the offhand
+	// check; Go's spell list already dropped the spell above.
+	if spellID == 46917 {
+		s.checkTitanGripPenalty(ctx)
+	}
+	s.autoUnequipOffhandIfNeeded(ctx)
 }
 
 // learnTalentDirect grants a talent rank bypassing the talent-point gate,
