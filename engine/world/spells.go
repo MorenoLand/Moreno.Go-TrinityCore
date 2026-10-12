@@ -7300,7 +7300,12 @@ func (s *session) dropCreatureLinkedTriggers(triggers []linkedTriggerRef, parent
 		}
 		s.server.auraMu.Unlock()
 		if trigFound {
-			s.expireCreatureAura(key, trig.spellID, trigSlot)
+			// AuraEffect::HandleAuraLinked remove arm
+			// (SpellAuraEffects.cpp:4901-4904): target->RemoveAura with
+			// Unit::RemoveAura's default mode — AURA_REMOVE_BY_DEFAULT
+			// (Unit.h:1244), not expiry; the expire-only final-tick leg
+			// must not fire on a linked drop.
+			s.removeCreatureAuraTimed(key, trig.spellID, trigSlot, auraRemoveByDefault)
 		}
 	}
 }
@@ -19457,53 +19462,51 @@ func (s *Server) clearCreatureAuras(key creatureAuraKey) {
 }
 
 // clearCreatureAurasOnDeath mirrors Unit::RemoveAllAurasOnDeath (Unit.cpp)
-// for creature victims: death-persistent auras
-// (SPELL_ATTR3_DEATH_PERSISTENT, SpellInfo.cpp:1169) survive the strip,
-// everything else stops like clearCreatureAuras. Creature auras carry no
-// passive instances, so the passive exemption is vacuous.
+// for creature targets: death-persistent auras
+// (SPELL_ATTR3_DEATH_PERSISTENT) survive the strip; everything else goes
+// through the creature remove funnel, so the remove legs (taunt/charm/
+// vehicle/phase/feign-death drops, linked-trigger drops, the quest-tame
+// final, speed recompute, the aura-remove broadcast) run on death exactly
+// as C++ _UnapplyAura runs them. The lock is released before the funnel
+// calls — each funnel call takes auraMu itself.
 func (s *Server) clearCreatureAurasOnDeath(key creatureAuraKey) {
 	if s == nil || key.GUID == 0 {
 		return
 	}
 	s.auraMu.Lock()
-	defer s.auraMu.Unlock()
+	var strip []uint32
 	if s.activeCreatureAuras != nil {
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			for id, aura := range auras {
-				if aura == nil {
-					delete(auras, id)
+				if aura == nil || spellDeathPersistent(s.Data, id) {
 					continue
 				}
-				if spellDeathPersistent(s.Data, id) {
-					continue
-				}
-				aura.Stopped = true
-				if aura.Timer != nil {
-					aura.Timer.Stop()
-				}
-				if aura.TickTimer != nil {
-					aura.TickTimer.Stop()
-				}
-				stopAuraUpkeepTimer(aura)
-				delete(auras, id)
-			}
-			if len(auras) == 0 {
-				delete(s.activeCreatureAuras, key)
+				strip = append(strip, id)
 			}
 		}
 	}
-	if s.creatureAuras != nil {
-		if present, ok := s.creatureAuras[key]; ok {
-			for id := range present {
-				if _, still := s.activeCreatureAuras[key][id]; !still {
-					delete(present, id)
-				}
-			}
-			if len(present) == 0 {
-				delete(s.creatureAuras, key)
-			}
+	s.auraMu.Unlock()
+	for _, id := range strip {
+		// A linked remove row may have stripped a later-listed aura first.
+		// The funnel's remove legs no-op on absent auras, but its remove
+		// broadcast is unconditional — skip already-gone records so a
+		// reused slot is not cleared on observers' clients.
+		s.auraMu.Lock()
+		_, present := s.activeCreatureAuras[key][id]
+		s.auraMu.Unlock()
+		if !present {
+			continue
 		}
+		s.removeCreatureAura(key, id)
 	}
+	s.auraMu.Lock()
+	if auras, ok := s.activeCreatureAuras[key]; ok && len(auras) == 0 {
+		delete(s.activeCreatureAuras, key)
+	}
+	if present, ok := s.creatureAuras[key]; ok && len(present) == 0 {
+		delete(s.creatureAuras, key)
+	}
+	s.auraMu.Unlock()
 }
 
 func (s *session) clearActiveAuras() {
@@ -19548,10 +19551,12 @@ func spellDeathPersistent(data *wotlk.Store, spellID uint32) bool {
 }
 
 // clearDeathAuras mirrors the Unit::RemoveAllAurasOnDeath strip
-// (Unit.cpp): death-persistent auras are kept, everything else is stopped
-// exactly like clearActiveAuras. Go holds no passive aura instances, so the
-// passive exemption is vacuous. Death call sites use this instead of
-// clearActiveAuras; logout/GM strips keep the full clear.
+// (Unit.cpp:4353): death-persistent auras are kept; everything else goes
+// through the remove funnel with AURA_REMOVE_BY_DEATH, so the mode-gated
+// remove arms (the Improved-SR party strip, the linked-cast death gate)
+// see deaths exactly as C++ _UnapplyAura reports them. Go holds no passive
+// aura instances, so the passive exemption is vacuous. Death call sites use
+// this instead of clearActiveAuras; logout/GM strips keep the full clear.
 func (s *session) clearDeathAuras() {
 	if s == nil {
 		return
@@ -19561,31 +19566,26 @@ func (s *session) clearDeathAuras() {
 		data = s.server.Data
 	}
 	s.castMu.Lock()
-	defer s.castMu.Unlock()
-	if s.activeAuras == nil {
-		return
+	var strip []uint32
+	if s.activeAuras != nil {
+		for id, aura := range s.activeAuras {
+			if aura == nil {
+				delete(s.activeAuras, id)
+				continue
+			}
+			if spellDeathPersistent(data, id) {
+				continue
+			}
+			strip = append(strip, id)
+		}
 	}
-	for id, aura := range s.activeAuras {
-		if aura == nil {
-			delete(s.activeAuras, id)
-			continue
-		}
-		if spellDeathPersistent(data, id) {
-			continue
-		}
-		aura.Stopped = true
-		if aura.Timer != nil {
-			aura.Timer.Stop()
-		}
-		if aura.TickTimer != nil {
-			aura.TickTimer.Stop()
-		}
-		stopAuraUpkeepTimer(aura)
-		if aura.DRGroup != DiminishingNone {
-			s.applyDiminishingAura(aura.DRGroup, false)
-			aura.DRGroup = DiminishingNone
-		}
-		delete(s.activeAuras, id)
+	s.castMu.Unlock()
+	// The lock is released: removeAuraWithMode takes castMu itself, and a
+	// linked remove row may strip a later-listed aura first — the funnel
+	// no-ops on absent auras, matching C++'s erase-before-handle order
+	// (Unit.cpp:3548).
+	for _, id := range strip {
+		s.removeAuraWithMode(id, auraRemoveByDeath)
 	}
 }
 
@@ -20578,8 +20578,9 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// AURA_REMOVE_BY_DEFAULT removal. Dispel/steal removals route
 	// AURA_REMOVE_BY_ENEMY_SPELL and player cancels route
 	// AURA_REMOVE_BY_CANCEL, so the arm fires on those paths as in C++;
-	// death removals still bypass the funnel (clearDeathAuras), and no-stack
-	// purges route BY_DEFAULT and correctly skip the strip.
+	// death removals route BY_DEATH through the funnel (clearDeathAuras), so
+	// the strip fires on death as in C++; no-stack purges route BY_DEFAULT
+	// and correctly skip the strip.
 	if mode != auraRemoveByDefault {
 		s.removePartySpellReflectionAuras(spellID, removedCasterGUID)
 	}
@@ -20588,7 +20589,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// rows keyed by this aura fire only when an aura was actually removed —
 	// C++ runs them from Unit::_UnapplyAura.
 	if auraWasPresent {
-		s.applyAuraLinkedRemoveArms(spellID)
+		s.applyAuraLinkedRemoveArms(spellID, mode)
 		s.applyAuraSpellAreaRows(context.Background(), spellID)
 	}
 }
@@ -23806,11 +23807,12 @@ func (s *session) applyAuraLinkedAurasAtApply(ctx context.Context, spellID uint3
 // (CastSpellExtraArgs(ObjectGuid), SpellDefines.h:189 — TRIGGERED_FULL_MASK).
 // The +spellID type-2 (SPELL_LINK_AURA) rows: negative ids would clear the
 // apply-time immunity (no ApplySpellImmune model in Go); positive ids remove
-// the linked aura — Go's remove keys on spell ID only, so the caster match is
-// vacuous. C++ gates the linked cast on removeMode != AURA_REMOVE_BY_DEATH;
-// Go's death strip bypasses removeAuraWithMode (clearDeathAuras), so the gate
-// holds structurally.
-func (s *session) applyAuraLinkedRemoveArms(spellID uint32) {
+// the linked aura with the same remove mode — C++ passes removeMode through
+// (target->RemoveAura(*itr, GetCasterGUID(), 0, removeMode)). Go's remove
+// keys on spell ID only, so the caster match is vacuous. C++ gates the
+// linked cast on removeMode != AURA_REMOVE_BY_DEATH; the gate rides the
+// mode parameter now that the death strip routes through the funnel.
+func (s *session) applyAuraLinkedRemoveArms(spellID uint32, mode auraRemoveMode) {
 	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
@@ -23819,13 +23821,13 @@ func (s *session) applyAuraLinkedRemoveArms(spellID uint32) {
 	for _, id := range spellLinkedEffects(ctx, db, -int32(spellID), spellLinkCastType) {
 		if id < 0 {
 			s.removeAura(uint32(-id))
-		} else if id > 0 {
+		} else if id > 0 && mode != auraRemoveByDeath {
 			s.castSpellDirect(ctx, uint32(id), s.playerGUID)
 		}
 	}
 	for _, id := range spellLinkedEffects(ctx, db, int32(spellID), spellLinkAuraType) {
 		if id > 0 {
-			s.removeAura(uint32(id))
+			s.removeAuraWithMode(uint32(id), mode)
 		}
 	}
 }
@@ -27681,9 +27683,11 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	}
 
 	// AuraEffect::HandleAuraLinked remove leg (SpellAuraEffects.cpp:4898-4903):
-	// the linked trigger spell's aura leaves the creature too. The trigger
-	// expires through a session in the instance so the expiry packet carries
-	// a valid caster GUID — preferring the parent aura's caster session.
+	// the linked trigger spell's aura leaves the creature too, removed with
+	// AURA_REMOVE_BY_DEFAULT (Unit::RemoveAura's default, Unit.h:1244) —
+	// not expiry. The trigger drops through a session in the instance so
+	// the remove packet carries a valid caster GUID — preferring the parent
+	// aura's caster session.
 	if removedLinkedTriggers != nil {
 		var expireSess *session
 		if casterSess := s.findSessionByGUID(removedLinkedParentCaster); casterSess != nil {
