@@ -3374,21 +3374,23 @@ func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {
 //     reject. (The IsImmuneToNPC half has no Go rejection to bypass, and the
 //     PvC type_flags assist gate at Object.cpp:3179 has no Go infra), and
 //
-// the remaining terms (NON_ATTACKABLE, NON_ATTACKABLE_2, TRIGGER, NO_COMBAT)
-// have no ATTR6 bypass in C++.
+// the remaining terms (NON_ATTACKABLE, NOT_ATTACKABLE_1, NON_ATTACKABLE_2,
+// TRIGGER, NO_COMBAT) have no ATTR6 bypass in C++.
 // assist selects the IsValidAssistTarget shape: the NON_ATTACKABLE /
-// NON_ATTACKABLE_2 / CREATURE_FLAG_EXTRA_TRIGGER /
-// CREATURE_FLAG_EXTRA_NO_COMBAT bundle only rejects negative spells there
-// (Object.cpp:3131), while IsValidAttackTarget always rejects it
-// (Object.cpp:2980).
+// NOT_ATTACKABLE_1 / NON_ATTACKABLE_2 / TAXI_FLIGHT /
+// CREATURE_FLAG_EXTRA_TRIGGER / CREATURE_FLAG_EXTRA_NO_COMBAT bundle only
+// rejects negative spells there (Object.cpp:3131), while IsValidAttackTarget
+// always rejects it (Object.cpp:2980). TAXI_FLIGHT (0x100000) rides the
+// per-call-site TaxiPath gates (player-only in C++, MoveTaxiFlight is
+// TYPEID_PLAYER-only) and Go never sets it at runtime.
 func spellTargetUnitBlocked(spell wotlk.Spell, unitFlags, flagsExtra uint32, assist bool) bool {
 	if !assist || isHarmfulSpell(spell) {
-		// 0x2 = UNIT_FLAG_NON_ATTACKABLE, 0x10000 = UNIT_FLAG_NON_ATTACKABLE_2
-		// (aura 93, Object.cpp:2980/3131 list it alongside NON_ATTACKABLE in
-		// both the attack and negative-assist flag arms; Go's creature aura
-		// model never writes it at runtime, so this fires only for static
-		// template flags).
-		if unitFlags&(0x00000002|unitFlagNonAttackable2) != 0 || flagsExtra&(0x00000080|0x00002000) != 0 {
+		// 0x2 = UNIT_FLAG_NON_ATTACKABLE, 0x80 = UNIT_FLAG_NOT_ATTACKABLE_1,
+		// 0x10000 = UNIT_FLAG_NON_ATTACKABLE_2 (aura 93; Object.cpp:2980/3131
+		// list all four bundle flags in both the attack and negative-assist
+		// flag arms; Go's creature aura model never writes 0x10000 at
+		// runtime, so this fires only for static template flags).
+		if unitFlags&(0x00000002|unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 || flagsExtra&(0x00000080|0x00002000) != 0 {
 			return true
 		}
 	}

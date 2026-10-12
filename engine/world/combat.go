@@ -330,6 +330,26 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		s.attackTarget = 0
 		return s.sendAttackStop(victim, false) == nil
 	}
+	// WorldObject::IsValidAttackTarget's remaining flag arms for the melee
+	// (bySpell=null) path (Object.cpp:2982): the bundle is
+	// NON_ATTACKABLE | TAXI_FLIGHT | NOT_ATTACKABLE_1 | NON_ATTACKABLE_2.
+	// creatureCombatDisabled covers NON_ATTACKABLE (0x2); the two static
+	// terms NOT_ATTACKABLE_1 (0x80) and NON_ATTACKABLE_2 (0x10000, aura 93's
+	// flag, written at runtime on player victims at spells.go) reject here.
+	// TAXI_FLIGHT (0x100000) and the UNIT_STATE_UNATTACKABLE state arm
+	// (Object.cpp:2939-2941) ride the live TaxiPath flag: MoveTaxiFlight is
+	// TYPEID_PLAYER-only, so a session with a live taxi path is an
+	// in-flight victim C++ rejects before Unit::Attack.
+	if target.UnitFlags&(unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
+		s.attackTarget = 0
+		return s.sendAttackStop(victim, false) == nil
+	}
+	if s.server != nil {
+		if victimSess := s.server.findSessionByGUID(victim); victimSess != nil && victimSess.player != nil && victimSess.player.TaxiPath != "" {
+			s.attackTarget = 0
+			return s.sendAttackStop(victim, false) == nil
+		}
+	}
 	if target.Map != s.player.Map {
 		s.attackTarget = 0
 		return s.sendAttackStop(victim, false) == nil

@@ -135,7 +135,21 @@ func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, s
 		if mapID != s.player.Map || instanceID != s.player.InstanceID || health == 0 {
 			return
 		}
-		if creatureCombatDisabled(unitFlags, flagsExtra) {
+		// WorldObjectSpellTrajTargetCheck (Spell.cpp:8455-8462) runs every
+		// missile-corridor candidate through WorldObjectSpellTargetCheck
+		// (Spell.cpp:8316-8343): TARGET_CHECK_ENEMY legs go to
+		// IsValidAttackTarget(unitTarget, spellInfo), whose flag arm rejects
+		// NON_ATTACKABLE | TAXI_FLIGHT | NOT_ATTACKABLE_1 | NON_ATTACKABLE_2
+		// unconditionally (Object.cpp:2982); the assist legs reject the same
+		// bundle for negative spells only (Object.cpp:3131). The unattackable
+		// state arm (UNIT_STATE_UNATTACKABLE) rejects in both legs
+		// (Object.cpp:2941, 3102) — in Go that is the live TaxiPath flag,
+		// since MoveTaxiFlight is TYPEID_PLAYER-only. This approximation
+		// keeps the pre-existing unconditional shape (no check-type plumbing)
+		// and extends it with the two static bundle terms; over-rejection
+		// for positive assist trajectory spells matches the standing
+		// approximation documented on trajCandidates.
+		if creatureCombatDisabled(unitFlags, flagsExtra) || unitFlags&(unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
 			return
 		}
 		if _, ok := seen[guid]; ok {
@@ -178,6 +192,13 @@ func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, s
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
+			continue
+		}
+		// UNIT_STATE_UNATTACKABLE arm of the traj collision gate
+		// (Object.cpp:2941/3102, unconditional in both the attack and assist
+		// legs): a player on a live taxi path is in flight and can be
+		// neither attacked nor assisted by the colliding missile.
+		if targetSession.player.TaxiPath != "" {
 			continue
 		}
 		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.CombatReach, targetSession.player.UnitFlags, 0, targetSession.player.Health, 0, true)
