@@ -672,7 +672,15 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		if attSpeed <= 0 {
 			attSpeed = 2.0
 		}
-		apBonus := (float64(s.player.AttackPower) * attSpeed) / 14.0
+		// Unit::CalculateMinMaxDamage (StatSystem.cpp:549-552): the AP leg
+		// is GetTotalAttackPowerValue(attType)/14 * attackPowerMod, where
+		// attackPowerMod = max(GetAPMultiplier, 0.25) (Unit.cpp:11034). The
+		// live aura folds (99/166/268) ride totalAttackPowerValue — the
+		// plain AttackPower field misses every aura-driven AP change.
+		if attSpeed < 0.25 {
+			attSpeed = 0.25
+		}
+		apBonus := (float64(s.totalAttackPowerValue(false)) * attSpeed) / 14.0
 		variance := float64(maxDmg - minDmg)
 		baseDmg := float64(minDmg)
 		if variance > 0 {
@@ -1651,7 +1659,23 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// MeleeDamageBonusDone's APbonus/creature flat lands after the weapon
 	// base and before the versus product, then MeleeDamageBonusTaken's
 	// flat/pct arms (87 + Sanctified Wrath ride here on the white path).
-	done := (float64(minDmg)+float64(rand.Float32()*(maxDmg-minDmg))+float64(s.meleeDamageDoneFlat(ctx, protocol.RangedAttack)))*
+	// Player::CalculateMinMaxDamage (StatSystem.cpp:552, 590-591): the AP
+	// leg GetTotalAttackPowerValue(RANGED_ATTACK)/14 * attackPowerMod rides
+	// baked into UNIT_FIELD_MIN/MAXRANGEDDAMAGE, re-baked by
+	// Player::UpdateAttackPowerAndDamage(true) on every AP change. Go bakes
+	// the term at stat-calc time from the base RangedAttackPower field
+	// (player_state.go) and never re-bakes on aura changes (124/166/167/
+	// 212), so the live-vs-baked delta re-syncs it here; the ammo-DPS leg
+	// cancels out of the delta.
+	rangedSpeedMod := float64(s.player.RangedAttackTime) / 1000.0
+	if rangedSpeedMod <= 0 {
+		rangedSpeedMod = 2.0
+	}
+	if rangedSpeedMod < 0.25 {
+		rangedSpeedMod = 0.25
+	}
+	rangedAPDelta := (float64(s.totalAttackPowerValue(true)) - float64(s.player.RangedAttackPower)) / 14.0 * rangedSpeedMod
+	done := (float64(minDmg)+float64(rand.Float32()*(maxDmg-minDmg))+rangedAPDelta+float64(s.meleeDamageDoneFlat(ctx, protocol.RangedAttack)))*
 		s.meleeDamageDonePctMod(ctx, protocol.RangedAttack) +
 		float64(s.swingDoneFlatBonus(ctx, true, false, target.GUID, target))
 	damage := uint32(done * s.meleeDamageDoneVersusMod(ctx, target.GUID))

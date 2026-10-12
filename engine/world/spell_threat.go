@@ -349,7 +349,10 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	var pctMod float32 = 1.0
 	if entry, ok := s.loadSpellThreatEntry(ctx, spell.ID); ok {
 		if entry.apPctMod != 0 {
-			threat += entry.apPctMod * float32(s.player.AttackPower)
+			// Spell::HandleThreatSpells (Spell.cpp:5112-5113): the AP leg is
+			// unitCaster->GetTotalAttackPowerValue(BASE_ATTACK) — the live
+			// aura folds, not the base field.
+			threat += entry.apPctMod * s.totalAttackPowerValue(false)
 		}
 		threat += entry.flatMod
 		pctMod = entry.pctMod

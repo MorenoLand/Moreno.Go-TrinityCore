@@ -32285,20 +32285,25 @@ func (s *session) normalizedAPMultiplier(ctx context.Context, attType protocol.W
 
 // spellWeaponSwingDamage mirrors Unit::CalculateDamage (Unit.cpp:2334) on the
 // non-itemDamagesMask path for a weapon-damage spell: urand over the composed
-// [min,max] for the attack type. The weapon rows are Go's raw-weapon fields
-// (player.MinDamage etc., player_state.go), the BASE_VALUE arm is the
-// AP/14 term (attackPowerMod = attackTime/1000, or the normalized subclass
-// multiplier), TOTAL_VALUE rides meleeDamageDoneFlat, and TOTAL_PCT rides
-// the off-hand 122 fold only when addTotalPct is set — the 79 NORMAL fold
-// stays out because the damage pipeline's spellDamagePctDone applies it once
-// downstream (distributive with C++'s per-piece fold, matching
-// Unit::MeleeDamageBonusDone's NORMAL-school skip, Unit.cpp:8084). Versus
-// auras and armor are not part of CalculateDamage (they ride the later
-// DealDamage/MeleeDamageBonusTaken legs — the pipeline's melee taken leg
-// covers them), and the 50% off-hand penalty is likewise excluded
-// (Unit::CalculateDamage has no such leg; the swing path applies it
-// separately). Deltas: ammo DPS beyond the Go ranged-field fold, the feral
-// normalized weapon-range substitution, and the APbonus victim-aura arm of
+// [min,max] for the attack type. The melee/offhand rows are Go's raw-weapon
+// fields (player.MinDamage etc., player_state.go), so the BASE_VALUE arm is
+// the live AP/14 term (totalAttackPowerValue, Unit.cpp:9507) with
+// attackPowerMod = attackTime/1000 floored at 0.25 (or the normalized subclass
+// multiplier); the ranged row is the baked UNIT_FIELD_MIN/MAXRANGEDDAMAGE
+// pair (RAP + ammo DPS, player_state.go), so only the live-vs-baked RAP delta
+// rides there — adding the full AP leg would double-count it
+// (Unit.cpp:2358-2363 rolls the baked fields directly). TOTAL_VALUE rides
+// meleeDamageDoneFlat, and TOTAL_PCT rides the off-hand 122 fold only when
+// addTotalPct is set — the 79 NORMAL fold stays out because the damage
+// pipeline's spellDamagePctDone applies it once downstream (distributive with
+// C++'s per-piece fold, matching Unit::MeleeDamageBonusDone's NORMAL-school
+// skip, Unit.cpp:8084). Versus auras and armor are not part of CalculateDamage
+// (they ride the later DealDamage/MeleeDamageBonusTaken legs — the pipeline's
+// melee taken leg covers them), and the 50% off-hand penalty is likewise
+// excluded (Unit::CalculateDamage has no such leg; the swing path applies it
+// separately). Deltas: the normalized ranged roll uses the baked
+// non-normalized ammo/RAP legs while C++ re-derives them with the 2.8
+// multiplier (StatSystem.cpp:576-588); the APbonus victim-aura arm of
 // MeleeDamageBonusDone (no model).
 func (s *session) spellWeaponSwingDamage(ctx context.Context, p weaponDmgParams) uint32 {
 	if s == nil || s.player == nil {
@@ -32311,15 +32316,23 @@ func (s *session) spellWeaponSwingDamage(ctx context.Context, p weaponDmgParams)
 	case protocol.OffAttack:
 		minDmg, maxDmg = float64(s.player.MinOffhandDamage), float64(s.player.MaxOffhandDamage)
 		attTime = s.player.OffhandAttackTime
-		ap = float64(s.player.AttackPower)
+		// Unit::CalculateDamage (Unit.cpp:2334): the melee/offhand rows are
+		// raw weapon ranges, so the AP leg lands here — with the live
+		// GetTotalAttackPowerValue (Unit.cpp:9507), not the stale field.
+		ap = float64(s.totalAttackPowerValue(false))
 	case protocol.RangedAttack:
 		minDmg, maxDmg = float64(s.player.MinRangedDamage), float64(s.player.MaxRangedDamage)
 		attTime = s.player.RangedAttackTime
-		ap = float64(s.player.RangedAttackPower)
+		// Unit::CalculateDamage (Unit.cpp:2334-2363): the non-normalized
+		// ranged roll runs over the baked UNIT_FIELD_MIN/MAXRANGEDDAMAGE
+		// fields — the RAP term is already in them, so adding the full AP
+		// leg here double-counts it. Only the live-vs-baked delta rides
+		// (same convention as the ranged white path).
+		ap = float64(s.totalAttackPowerValue(true)) - float64(s.player.RangedAttackPower)
 	default:
 		minDmg, maxDmg = float64(s.player.MinDamage), float64(s.player.MaxDamage)
 		attTime = s.player.AttackTime
-		ap = float64(s.player.AttackPower)
+		ap = float64(s.totalAttackPowerValue(false))
 	}
 	attackPowerMod := float64(attTime) / 1000.0
 	if p.normalized {
