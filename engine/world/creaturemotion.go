@@ -1077,7 +1077,7 @@ func (s *Server) aiSpellTargetClass(spell wotlk.Spell) int {
 				target = aiSpellTargetEnemy
 			}
 		}
-		if eff.Effect == 6 { // SPELL_EFFECT_APPLY_AURA
+		if eff.Effect == spellEffectApplyAura {
 			if targetType == 6 {
 				if target < aiSpellTargetDebuff {
 					target = aiSpellTargetDebuff
@@ -3404,7 +3404,15 @@ func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, contr
 	found := false
 	for _, effect := range spell.Effects {
 		switch effect.Effect {
-		case 2, 17, 31, 58, 87:
+		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+			// C++ owners: EffectSchoolDMG (SpellEffectsHandlers 2),
+			// EffectWeaponDmg (handlers 17/31/58/121). Effect 87
+			// (SPELL_EFFECT_GAMEOBJECT_DAMAGE) was wrongly grouped here —
+			// EffectGameObjectDamage (SpellEffects.cpp:5424) requires
+			// gameObjTarget and never damages units. Effect 121
+			// (NORMALIZED_WEAPON_DMG) was missing though EffectWeaponDmg
+			// handles it and it damages the unit (player path groups all
+			// four at spells.go:13112).
 			found = true
 			value := effect.CalcValueForLevel(spell, casterLevel)
 			if value > 0 {
