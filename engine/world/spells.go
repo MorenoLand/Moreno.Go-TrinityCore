@@ -12267,10 +12267,7 @@ func (s *session) overrideClassScriptAuras(spell wotlk.Spell) []classScriptAura 
 			continue
 		}
 		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
-		if err != nil || !found || auraSpell.SpellFamilyName == 0 {
-			continue
-		}
-		if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, auraSpell.SpellFamilyFlags, spell) {
+		if err != nil || !found {
 			continue
 		}
 		eff0 := int32(0)
@@ -12288,6 +12285,15 @@ func (s *session) overrideClassScriptAuras(spell wotlk.Spell) []classScriptAura 
 				continue
 			}
 			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraOverrideClassScripts {
+				continue
+			}
+			// AuraEffect::IsAffectedOnSpell (SpellAuraEffects.cpp:848-851)
+			// gates on the OVERRIDE effect's own SpellClassMask
+			// (SpellEffectInfo::SpellClassMask, EffectSpellClassMask fields
+			// 122-130), not the spell-level SpellFamilyFlags — and a
+			// zero SpellFamilyName passes the gate (SpellInfo::IsAffected
+			// returns true when familyName is 0).
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, eff.SpellClassMask, spell) {
 				continue
 			}
 			out = append(out, classScriptAura{spellID: aura.SpellID, misc: eff.MiscValue, amount: aura.Amounts[index], eff0: eff0})
@@ -12500,10 +12506,14 @@ func (s *session) spellDamagePctDone(ctx context.Context, spell wotlk.Spell, tar
 // Unit::SpellDamagePctDone: the OVERRIDE_CLASS_SCRIPTS table (Unit.cpp:6797-6876)
 // and the per-family custom damage (Unit.cpp:6879-7047). Residuals with no Go
 // model stay documented: Soul Siphon (victim affliction-dot enumeration),
-// Shadow Bite (pet-only), the Glacier Rot MeleeDamageBonusDone twin arm
-// (Unit.cpp:8137-8144 — Go has no melee done leg). Caster-matched victim
-// queries (Smite glyph 55692, JoV 31803/53742 stacks, Steady Shot glyph 56826,
-// Glacier Rot diseases) bridge via the *ByCaster helpers below.
+// Shadow Bite (pet-only). The Glacier Rot MeleeDamageBonusDone twin arm
+// (Unit.cpp:8137-8144) rides this same funnel on weapon-damage spells: C++
+// EffectWeaponDmg funnels them through MeleeDamageBonusDone with the cast
+// spell as spellProto (SpellEffects.cpp:3466), and Go funnels them through
+// the spell-damage pipeline, so the arm below fires for them here too — its
+// owner-scoped-diseases body is identical in both C++ twins. Caster-matched
+// victim queries (Smite glyph 55692, JoV 31803/53742 stacks, Steady Shot
+// glyph 56826, Glacier Rot diseases) bridge via the *ByCaster helpers below.
 func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, mod float64) float64 {
 	addPct := func(amt int32) { mod *= 1 + float64(amt)/100 } // AddPct fold (Unit.cpp:6807)
 	victimHealthless35 := s.targetHasAuraState(ctx, targetGUID, auraStateHealthless35Pct, spell)
