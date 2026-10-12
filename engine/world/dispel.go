@@ -141,12 +141,27 @@ func (s *session) calcDispelChanceLocked(offensive bool) int32 {
 				if !pSpell.Active || pSpell.Disabled {
 					continue
 				}
+				// The loop above already counted applied auras; C++
+				// GetTotalAuraModifier (Unit.cpp:4831) counts each applied aura
+				// exactly once, so a spell that is both learned and applied
+				// (e.g. Pain Suppression self-cast) must not count again here.
+				if aura, applied := s.activeAuras[pSpell.ID]; applied && aura != nil {
+					continue
+				}
 				spell, found, err := s.server.Data.Spell(pSpell.ID)
-				if err == nil && found {
-					for _, eff := range spell.Effects {
-						if eff.Aura == spellAuraModDispelResist {
-							resistChance += eff.BasePoints
-						}
+				if err != nil || !found {
+					continue
+				}
+				// C++ sums applied auras only: a learned-but-uncast non-passive
+				// spell contributes nothing. Passive spells are auto-applied in
+				// C++ (Player::AddSpell) but Go only records them in s.auras,
+				// so the scan bridges exactly the passive gap.
+				if spell.Attributes&spellAttributePassive == 0 {
+					continue
+				}
+				for _, eff := range spell.Effects {
+					if eff.Aura == spellAuraModDispelResist {
+						resistChance += eff.BasePoints
 					}
 				}
 			}
