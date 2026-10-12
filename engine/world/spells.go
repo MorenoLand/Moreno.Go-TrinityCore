@@ -24176,6 +24176,37 @@ func periodicTickCasterLevel(server *Server, casterGUID uint64) uint32 {
 	return 0
 }
 
+// tickAttackerLevel resolves the effective attacker level for a periodic
+// tick's armor/resist legs, mirroring Aura::UpdateOwner (SpellAuras.cpp:790-824):
+// every tick re-resolves the aura's LIVE caster (Aura::GetCaster,
+// SpellAuras.cpp:551-557 — the owner on GUID match, else
+// ObjectAccessor::GetUnit on the same map) and feeds it to the effect
+// handlers. Unit::CalcArmorReducedDamage (Unit.cpp:1693) then keys the armor
+// curve on attacker ? attacker->GetLevel() : GetCasterLevel() — the live
+// level when the caster resolves, the aura's stored _casterInfo.Level
+// otherwise. The returned bool reports whether the caster resolved live;
+// Unit::CalculateAverageResistReduction's level term (Unit.cpp:1813) is
+// caster-gated, so an unresolved caster skips it entirely instead of using
+// the stored level there. GetLevelForTarget is the identity (Unit.h:845), so
+// the live level feeds both legs directly.
+func tickAttackerLevel(server *Server, mapID, instanceID uint32, aura *activeAura) (uint8, bool) {
+	if server != nil && aura != nil && aura.CasterGUID != 0 {
+		if sess := server.findSessionByGUID(aura.CasterGUID); sess != nil && sess.player != nil {
+			return sess.player.Level, true
+		}
+		if m := server.findCreatureMotion(mapID, instanceID, aura.CasterGUID); m != nil {
+			return uint8(casterLevel(m)), true
+		}
+	}
+	if aura != nil {
+		if aura.StoredCasterLevel > 0 {
+			return aura.StoredCasterLevel, false
+		}
+		return aura.CasterLevel, false
+	}
+	return 0, false
+}
+
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	// Aura::UpdateOwner (SpellAuras.cpp:790-810): the channeled mod-spell
 	// arm. While the aura's caster is channeling this same spell, the
@@ -24330,6 +24361,18 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			tickCaster = ts.server.findSessionByGUID(aura.CasterGUID)
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		// tickAttackerLevel (Unit.cpp:1693/1813): the armor/resist legs key on
+		// the tick's live caster level — Aura::UpdateOwner re-resolves the
+		// caster every tick — not the apply-time snapshot. An unresolved
+		// caster feeds the stored level to the armor curve and skips the
+		// resist level term (passed as the victim's own level, which zeroes
+		// the (victimLevel-casterLevel)*5 term exactly like C++'s
+		// caster-gated arm).
+		attLevel, attResolved := tickAttackerLevel(ts.server, ts.player.Map, ts.player.InstanceID, aura)
+		resistCasterLevel := attLevel
+		if !attResolved {
+			resistCasterLevel = ts.player.Level
+		}
 		// Victim-side damage-taken multiplier runs FIRST on the tick
 		// (Unit::SpellDamageBonusTaken, Unit.cpp:7052, called at
 		// SpellAuraEffects.cpp:5171 before the crit roll) — not after
@@ -24394,7 +24437,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// leg below already does. The AOE-avoidance leg (5184-5188) has no
 		// Go model and stays unbridged.
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, ts.player.Level, dmg)
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
 		}
 		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
 		// damage; the isCrit arm now carries the real tick crit instead of
@@ -24408,12 +24451,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// at the END of the tick pipeline — the earlier Go order resisted
 		// before the taken leg.
 		resisted := uint32(0)
-		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+		if aura.SchoolMask > 1 && attLevel > 0 {
 			pen := uint32(0)
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -24782,6 +24825,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			tickCaster = ts.server.findSessionByGUID(aura.CasterGUID)
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		// tickAttackerLevel (Unit.cpp:1693/1813): the armor/resist legs key on
+		// the tick's live caster level, not the apply-time snapshot; an
+		// unresolved caster feeds the stored level to armor and skips the
+		// resist level term (see the DoT branch above).
+		attLevel, attResolved := tickAttackerLevel(ts.server, ts.player.Map, ts.player.InstanceID, aura)
+		resistCasterLevel := attLevel
+		if !attResolved {
+			resistCasterLevel = ts.player.Level
+		}
 		if tickKnown {
 			dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, tickCaster)
 		}
@@ -24832,7 +24884,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 		}
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, ts.player.Level, dmg)
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
 		}
 		// Unit::CanApplyResilience (Unit.cpp:12333) caster gate: a DoT
 		// applied by a wild creature does not trigger resilience; player
@@ -24841,12 +24893,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.applyResilienceToDamage(ts.casterCanApplyResilience(aura.CasterGUID), &dmg, crit, CombatRatingCritTakenSpell)
 		}
 		resisted := uint32(0)
-		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+		if aura.SchoolMask > 1 && attLevel > 0 {
 			pen := uint32(0)
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -25171,15 +25223,18 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// and health-funnel ticks use.
 		dmg := effectValueMultiplied(burnDealt, ts.valueMultiplierForAura(aura.SpellID, spellAuraPowerBurn))
 		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, ts.player.Level, dmg)
+			// Unit.cpp:1693 — the burn tick only runs with a live caster
+			// session (nil burnCaster returns above), so the armor curve
+			// keys on its live level, like C++'s attacker->GetLevel().
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), burnCaster.player.Level, ts.player.Level, dmg)
 		}
 		burnResisted := uint32(0)
-		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+		if aura.SchoolMask > 1 && burnCaster.player.Level > 0 {
 			pen := uint32(0)
 			if burnCaster.player != nil {
 				pen = burnCaster.player.SpellPenetration
 			}
-			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, burnCaster.player.Level, ts.player.Level, false, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && burnResisted == 0 {
 			dmg = 1
@@ -25801,6 +25856,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		// tickAttackerLevel (Unit.cpp:1693/1813): the armor/resist legs key on
+		// the tick's live caster level — the true Aura::GetCaster resolution,
+		// not the tickCaster=s fallback above; unresolved feeds the stored
+		// level to armor and skips the resist level term.
+		attLevel, attResolved := tickAttackerLevel(s.server, key.Map, key.InstanceID, aura)
+		resistCasterLevel := attLevel
+		if !attResolved {
+			resistCasterLevel = target.Level
+		}
 		// Victim-side damage-taken multiplier runs FIRST on the tick
 		// (Unit::SpellDamageBonusTaken, Unit.cpp:7052, called at
 		// SpellAuraEffects.cpp:5171 before the crit roll) — the earlier Go
@@ -25880,14 +25944,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				armor = 0
 			}
 			if armor > 0 {
-				dmg = calcArmorReducedDamage(armor, aura.CasterLevel, target.Level, dmg)
+				dmg = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
 			}
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1828): resist then absorb at the
 		// END of the tick pipeline — the earlier Go order resisted before
 		// the taken leg and never absorbed on creature ticks.
 		resisted := uint32(0)
-		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+		if aura.SchoolMask > 1 && attLevel > 0 {
 			pen := uint32(0)
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
@@ -25895,7 +25959,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
 			// the live 22 flat amounts fold into a pet victim's resistances.
 			resistances := s.server.petFoldedResistances(key, target.Resistances)
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, aura.CasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -26141,7 +26205,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				if !controlledByPlayer && s.server != nil {
 					controlledByPlayer = s.server.findSessionByGUID(aura.CasterGUID) != nil
 				}
-				if damage, ok := creatureSpellDamage(s.server, trigger, uint32(aura.CasterLevel), controlledByPlayer); ok && damage > 0 {
+				// C++ HandlePeriodicTriggerSpellAuraTick casts the trigger via the
+				// tick's live caster (or the target when the triggered spell
+				// doesn't need the caster), so its CalcValue per-level leg
+				// keys on the live level like the damage-tick arms above.
+				triggerLevel, _ := tickAttackerLevel(s.server, key.Map, key.InstanceID, aura)
+				if damage, ok := creatureSpellDamage(s.server, trigger, uint32(triggerLevel), controlledByPlayer); ok && damage > 0 {
 					// C++ HandlePeriodicTriggerSpellAuraTick casts via
 					// CastSpellExtraArgs(AuraEffect) = TRIGGERED_FULL_MASK, so
 					// TRIGGERED_DISALLOW_PROC_EVENTS applies here too.
@@ -26327,6 +26396,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		// tickAttackerLevel (Unit.cpp:1693/1813): the armor/resist legs key on
+		// the tick's live caster level — the true Aura::GetCaster resolution,
+		// not the tickCaster=s fallback above; unresolved feeds the stored
+		// level to armor and skips the resist level term.
+		attLevel, attResolved := tickAttackerLevel(s.server, key.Map, key.InstanceID, aura)
+		resistCasterLevel := attLevel
+		if !attResolved {
+			resistCasterLevel = target.Level
+		}
 		if tickKnown {
 			dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, tickCaster)
 		}
@@ -26375,11 +26453,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				armor = 0
 			}
 			if armor > 0 {
-				dmg = calcArmorReducedDamage(armor, aura.CasterLevel, target.Level, dmg)
+				dmg = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
 			}
 		}
 		resisted := uint32(0)
-		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+		if aura.SchoolMask > 1 && attLevel > 0 {
 			pen := uint32(0)
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
@@ -26387,7 +26465,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
 			// the live 22 flat amounts fold into a pet victim's resistances.
 			resistances := s.server.petFoldedResistances(key, target.Resistances)
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, aura.CasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -26755,10 +26833,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		dmg := drained
 		if !burnFixedDamage && aura.SchoolMask&1 != 0 && target.Armor > 0 {
-			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, target.Level, dmg)
+			// Unit.cpp:1693 — the burn tick only runs with a live caster
+			// session (nil burnCaster returns above), so the armor curve
+			// keys on its live level, like C++'s attacker->GetLevel().
+			dmg = calcArmorReducedDamage(float64(target.Armor), burnCaster.player.Level, target.Level, dmg)
 		}
 		burnResisted := uint32(0)
-		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+		if aura.SchoolMask > 1 && burnCaster.player.Level > 0 {
 			pen := uint32(0)
 			if burnCaster.player != nil {
 				pen = burnCaster.player.SpellPenetration
@@ -26766,7 +26847,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
 			// the live 22 flat amounts fold into a pet victim's resistances.
 			burnResistances := s.server.petFoldedResistances(key, target.Resistances)
-			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), burnResistances, aura.CasterLevel, target.Level, true, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), burnResistances, burnCaster.player.Level, target.Level, true, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
 		if dmg < 1 && burnResisted == 0 {
 			dmg = 1

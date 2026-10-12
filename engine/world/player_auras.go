@@ -126,7 +126,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				continue
 			}
 		}
-		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, ItemGUID: itemGUID, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level, StoredCasterLevel: s.auraStoredCasterLevel(casterGUID, loadedSpell)}
+		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, ItemGUID: itemGUID, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: s.auraStoredCasterLevel(casterGUID, loadedSpell), StoredCasterLevel: s.auraStoredCasterLevel(casterGUID, loadedSpell)}
 		for index := range amounts {
 			aura.Amounts[index] = int32(amounts[index])
 			aura.BaseAmounts[index] = int32(baseAmounts[index])
