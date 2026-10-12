@@ -23117,6 +23117,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)
 	}
+	// Unit::UpdateSpeed (Unit.cpp:8666): a fresh speed aura recomputes the
+	// creature's run rate — previously snares never slowed creatures.
+	if s.server != nil && spellHasSpeedAura(spell) {
+		s.server.refreshCreatureRunSpeed(targetKey, targetGUID)
+	}
 	// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a fresh
 	// MOD_TAUNT aura on a creature registers its caster's taunt state
 	// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
@@ -26649,6 +26654,7 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	removedLinkedParentCaster := uint64(0)
 	wasQuestTame := false
 	questTameCaster := uint64(0)
+	wasSpeedAura := false
 	s.server.auraMu.Lock()
 	var finalTick *activeAura
 	if s.server.activeCreatureAuras != nil {
@@ -26662,6 +26668,14 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 				// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
+				// The remove arm of the speed auras (Unit::UpdateSpeed,
+				// Unit.cpp:8666): dropping a speed aura recomputes the
+				// creature's run rate once the aura is erased below.
+				if s.server.Data != nil {
+					if saura, sfound, serr := s.server.Data.Spell(spellID); serr == nil && sfound {
+						wasSpeedAura = spellHasSpeedAura(saura)
+					}
+				}
 				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
 				controlVehicleCaster = aura.CasterGUID
 				// AuraEffect::HandlePhase remove leg
@@ -26772,6 +26786,11 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 
 	removePkt := protocol.BuildAuraUpdate(key.GUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
 	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
+	// Unit::UpdateSpeed remove arm (Unit.cpp:8666): a dropped speed aura
+	// recomputes the creature's run rate.
+	if wasSpeedAura {
+		s.server.refreshCreatureRunSpeed(key, key.GUID)
+	}
 }
 
 func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
@@ -26789,6 +26808,7 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	removedLinkedParentCaster := uint64(0)
 	wasQuestTame := false
 	questTameCaster := uint64(0)
+	wasSpeedAura := false
 	s.auraMu.Lock()
 	var slot uint8
 	if s.activeCreatureAuras != nil {
@@ -26798,6 +26818,14 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
+				// The remove arm of the speed auras (Unit::UpdateSpeed,
+				// Unit.cpp:8666): dropping a speed aura recomputes the
+				// creature's run rate once the aura is erased below.
+				if s.Data != nil {
+					if saura, sfound, serr := s.Data.Spell(spellID); serr == nil && sfound {
+						wasSpeedAura = spellHasSpeedAura(saura)
+					}
+				}
 				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
 				controlVehicleCaster = aura.CasterGUID
 				wasPhase = aura.AuraType == spellAuraPhase
@@ -26908,6 +26936,11 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 
 	removePkt := protocol.BuildAuraUpdate(key.GUID, 0, slot, 0, true, false, 0, 0, 1)
 	s.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
+	// Unit::UpdateSpeed remove arm (Unit.cpp:8666): a dropped speed aura
+	// recomputes the creature's run rate.
+	if wasSpeedAura {
+		s.refreshCreatureRunSpeed(key, key.GUID)
+	}
 }
 
 // isQuestTameSpell mirrors SpellInfo::IsQuestTame (SpellInfo.cpp): the

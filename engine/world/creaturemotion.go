@@ -56,8 +56,14 @@ type creatureMotion struct {
 	Orientation   float32
 	Speed         float32 // yd/s walk speed used for wander
 	RunSpeed      float32 // yd/s run speed used for pursuit
-	MoveType      uint32  // 1 random, 2 waypoint; 0 = IDLE_MOTION_TYPE (MovementDefines.h:28-30)
-	Wander        float64
+	// BaseRunRate banks the creature_template speed_run rate feeding
+	// refreshCreatureRunSpeed (the Unit::UpdateSpeed twin): the aura fold
+	// multiplies this DB rate, so it must survive aura changes. Walk has
+	// no bank — C++ UpdateSpeed returns early for MOVE_WALK, so the walk
+	// speed never changes.
+	BaseRunRate float32
+	MoveType    uint32 // 1 random, 2 waypoint; 0 = IDLE_MOTION_TYPE (MovementDefines.h:28-30)
+	Wander      float64
 	// WanderSteps is the remaining _wanderSteps of RandomMovementGenerator
 	// (RandomMovementGenerator.cpp:DoInitialize): the creature walks
 	// urand(2,10) splines, then pauses urand(4,10) seconds after the last one.
@@ -304,6 +310,167 @@ func splineDurationMs(dist float64, speed float32) uint32 {
 	return 1 + uint32(dist*1000/float64(speed))
 }
 
+// spellHasSpeedAura reports whether the spell carries any effect feeding
+// Unit::UpdateSpeed (Unit.cpp:8666) for creatures: MOD_INCREASE_SPEED (31),
+// MOD_DECREASE_SPEED (33), MOD_SPEED_ALWAYS (129), MOD_SPEED_NOT_STACK
+// (171), or MOD_MINIMUM_SPEED (305).
+func spellHasSpeedAura(spell wotlk.Spell) bool {
+	for _, effect := range spell.Effects {
+		switch effect.Aura {
+		case spellAuraIncreaseSpeed, spellAuraDecreaseSpeed, spellAuraModSpeedAlways, spellAuraModSpeedNotStack, spellAuraMinimumSpeed:
+			return true
+		}
+	}
+	return false
+}
+
+// creatureAuraAmountsByType collects the live per-effect amounts of one aura
+// type across the creature's auras — the raw fold behind
+// Unit::GetMaxPositiveAuraModifier / GetMaxNegativeAuraModifier /
+// GetTotalAuraModifier (Unit.cpp), read off the stored per-effect amounts.
+func (s *Server) creatureAuraAmountsByType(key creatureAuraKey, auraType uint32) []int32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return nil
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	var out []int32
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != auraType {
+				continue
+			}
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			out = append(out, aura.Amounts[index])
+		}
+	}
+	return out
+}
+
+// creatureRunSpeedRate mirrors the MOVE_RUN arm of Unit::UpdateSpeed
+// (Unit.cpp:8666-8809) for AI-driven creatures: main_speed_mod is the
+// strongest MOD_INCREASE_SPEED (31); the rate starts at
+// max(1+strongest MOD_SPEED_NOT_STACK (171), 1+total MOD_SPEED_ALWAYS
+// (129)); the strongest MOD_DECREASE_SPEED (33) applies after; the
+// MOD_MINIMUM_SPEED (305) floor rides the template base rate. The creature
+// template speed_run (banked on BaseRunRate) multiplies the rate, matching
+// the `speed *= ToCreature()->GetCreatureTemplate()->speed_run` leg.
+// MOVE_WALK returns early in C++ so walk is untouched; MOVE_SWIM/FLIGHT
+// have no Go creature model; the 191 normalization cap needs
+// MechanicImmuneMask, which creatureMotion doesn't carry (documented
+// no-bridge); the minion follow catch-up arm has no Go pet-follow-speed
+// model (documented no-bridge).
+func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
+	base := float32(1.0)
+	if motion != nil && motion.BaseRunRate > 0 {
+		base = motion.BaseRunRate
+	}
+	var mainMod int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraIncreaseSpeed) {
+		if a > mainMod {
+			mainMod = a
+		}
+	}
+	stack := float32(1.0)
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraModSpeedAlways) {
+		stack += float32(a) / 100
+	}
+	nonStack := float32(1.0)
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraModSpeedNotStack) {
+		if v := float32(1.0) + float32(a)/100; v > nonStack {
+			nonStack = v
+		}
+	}
+	rate := nonStack
+	if stack > rate {
+		rate = stack
+	}
+	if mainMod > 0 {
+		rate *= 1 + float32(mainMod)/100
+	}
+	rate *= base
+	var slow int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
+		if a < slow {
+			slow = a
+		}
+	}
+	if slow < 0 {
+		rate *= 1 + float32(slow)/100
+	}
+	var minMod int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraMinimumSpeed) {
+		if a > minMod {
+			minMod = a
+		}
+	}
+	if minMod > 0 {
+		if minSpeed := base * float32(minMod) / 100; rate < minSpeed {
+			rate = minSpeed
+		}
+	}
+	if rate < 0 {
+		rate = 0
+	}
+	return rate
+}
+
+// refreshCreatureRunSpeed mirrors Unit::SetSpeedRate (Unit.cpp:8825-8880)
+// for AI-driven creatures: the no-op-on-unchanged gate, the run-speed
+// store, the PropagateSpeedChange in-flight leg rescale
+// (MotionMaster::PropagateSpeedChange, MotionMaster.cpp — the current
+// generator's UnitSpeedChanged recalculates the spline velocity mid-leg),
+// and SMSG_FORCE_RUN_SPEED_CHANGE (packed GUID + yd/s speed) to the
+// instance, matching the AI-controlled arm of SetSpeedRate's packet tail.
+func (s *Server) refreshCreatureRunSpeed(key creatureAuraKey, guid uint64) {
+	if s == nil || guid == 0 {
+		return
+	}
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, guid)
+	if motion == nil {
+		return
+	}
+	s.refreshCreatureRunSpeedMotion(motion)
+}
+
+// refreshCreatureRunSpeedMotion is refreshCreatureRunSpeed for a motion
+// already in hand (the idle sweep re-affirms DB rates then recomputes).
+func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	key := creatureAuraKeyForMotion(motion)
+	newSpeed := creatureBaseRunSpeed * s.creatureRunSpeedRate(key, motion)
+	now := time.Now()
+	s.motionMu.Lock()
+	if motion.RunSpeed == newSpeed {
+		s.motionMu.Unlock()
+		return
+	}
+	oldVel := motion.MoveVelocity
+	motion.RunSpeed = newSpeed
+	if motion.Moving && oldVel > 0 && newSpeed > 0 {
+		if remaining := motion.MoveEnds.Sub(now); remaining > 0 {
+			motion.MoveEnds = now.Add(time.Duration(float64(remaining) * float64(oldVel) / float64(newSpeed)))
+			motion.MoveVelocity = newSpeed
+		}
+	}
+	s.motionMu.Unlock()
+	packet := protocol.NewBuffer(16)
+	packet.WritePackedGUID(motion.GUID)
+	packet.WriteF32(newSpeed)
+	s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE), packet.Bytes(), nil)
+}
+
 const (
 	creatureReactPassive uint8 = iota
 	creatureReactDefensive
@@ -460,6 +627,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			Z:           z,
 			Speed:       creatureWalkVelocity(float64(walkSpeedRate)),
 			RunSpeed:    creatureRunVelocity(float64(runSpeedRate)),
+			BaseRunRate: runSpeedRate,
 			MoveType:    moveType,
 			Wander:      wander,
 			WanderSteps: 2 + rand.Intn(9), // urand(2,10), RandomMovementGenerator.cpp:DoInitialize
@@ -1774,8 +1942,15 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			// Re-affirm absolute velocities on every sweep: motions created by
 			// older builds may still hold the raw template rate in Speed
 			// (see the motionFor rate/absolute fix) or a flat RunSpeed.
+			// Re-affirm the DB template rates on every sweep (motions from
+			// older builds may hold stale values); the aura fold then
+			// recomputes the live run speed (Unit::UpdateSpeed twin), so a
+			// snare applied since the last sweep can't be wiped by the
+			// re-affirm. Walk is re-affirmed directly — C++ UpdateSpeed
+			// returns early for MOVE_WALK, so it never changes.
+			motion.BaseRunRate = float32(runSpeed)
 			motion.Speed = creatureWalkVelocity(walkSpeed)
-			motion.RunSpeed = creatureRunVelocity(runSpeed)
+			s.refreshCreatureRunSpeedMotion(motion)
 			if motion.MaxHealth == 0 {
 				health := uint32(curHealth)
 				if health == 0 {

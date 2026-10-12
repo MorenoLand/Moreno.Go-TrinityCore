@@ -13,6 +13,7 @@ const (
 	spellAuraIncreaseMountedSpeed     uint32 = 32
 	spellAuraDecreaseSpeed            uint32 = 33
 	spellAuraIncreaseSwimSpeed        uint32 = 58
+	spellAuraModSpeedAlways           uint32 = 129 // SPELL_AURA_MOD_SPEED_ALWAYS (SpellAuraDefines.h:209)
 	spellAuraMountedSpeedAlways       uint32 = 130
 	spellAuraMountedSpeedNotStack     uint32 = 172
 	spellAuraModSpeedNotStack         uint32 = 171 // SPELL_AURA_MOD_SPEED_NOT_STACK (SpellAuraDefines.h:251)
