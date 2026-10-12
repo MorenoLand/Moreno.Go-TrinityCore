@@ -9170,6 +9170,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	var comboGainTarget uint64
 	var comboGain int8
 	applyEffects := func(effCtx context.Context) {
+		// Spell::CalculateDamage (Spell.cpp:6456) -> WorldObject::CalculateSpellDamage
+		// (Object.cpp:2271) -> SpellEffectInfo::CalcValue (SpellInfo.cpp:402): the
+		// per-(target, effect) damage value. CalcValueForLevel is the Go twin:
+		// DieSides==0 returns the flat base (no +1), DieSides rolls per target
+		// like C++, and the RealPointsPerLevel caster-level leg rides the
+		// session player's level. CalcValue's combo-point and
+		// ApplyEffectModifiers tail has no Go model (documented delta).
+		var casterLevel uint32
+		if s.player != nil {
+			casterLevel = uint32(s.player.Level)
+		}
 		// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): the effect
 		// unit resolves per target — a missed target gets no unit and no
 		// effects, while hit targets still resolve. The old whole-cast
@@ -9321,7 +9332,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if weaponDamageEffect {
 					wd = weaponDmgParamsForSpell(spell)
 				}
-				damage := uint32(eff.BasePoints + 1)
+				damage := uint32(eff.CalcValueForLevel(spell, casterLevel))
 				// Effect 121 (SPELL_EFFECT_NORMALIZED_WEAPON_DMG) rides the
 				// weapon-damage path: Spell::EffectWeaponDmg
 				// (SpellEffects.cpp:3396-3405) folds its CalculateDamage into
@@ -9434,8 +9445,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							// one-aura-per-spell merge model, so stacks
 							// applied by other warriors merge in, the same
 							// standing delta recorded on the Envenom arm).
-							// The C++ effect-2 CalculateDamage term lands as
-							// the flat BasePoints+1 convention used tree-wide;
+							// The C++ effect-2 CalculateDamage term rides
+							// CalcValueForLevel (the CalculateDamage twin);
 							// the actual weapon swing behind it stays
 							// unmodeled.
 							s.castSpellDirect(effCtx, devastateSunderArmorSpell, effectTarget)
@@ -9445,7 +9456,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							if stacks := s.devastateSunderStacks(effCtx, effectTarget); stacks > 1 {
 								var eff2 uint32
 								if len(spell.Effects) > 2 {
-									eff2 = uint32(spell.Effects[2].BasePoints + 1)
+									eff2 = uint32(spell.Effects[2].CalcValueForLevel(spell, casterLevel))
 								}
 								targetDamage += (stacks - 1) * eff2
 							}
@@ -9654,8 +9665,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								// effect-1 value) to totalDamagePercentMod
 								// when the caster carries the 59336 aura. The
 								// C++ Effects[EFFECT_1].CalcValue() (null
-								// caster, SpellInfo.cpp:402) lands as the
-								// tree-wide flat BasePoints+1 convention; the
+								// caster, SpellInfo.cpp:402) lands as
+								// Effects[1].CalcValue(); the
 								// runic power read is s.player.Powers[
 								// powerRunicPower] (runes.go). The zero
 								// result skips the AddPct, matching the C++
@@ -9664,7 +9675,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 									cap := int32(0)
 									if s.server != nil && s.server.Data != nil {
 										if glyphSpell, found, err := s.server.Data.Spell(deathStrikeGlyphSpell); err == nil && found && len(glyphSpell.Effects) > 1 {
-											cap = int32(glyphSpell.Effects[1].BasePoints + 1)
+											cap = int32(glyphSpell.Effects[1].CalcValue())
 										}
 									}
 									runic := int32(s.player.Powers[powerRunicPower])
@@ -10048,7 +10059,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if eff.Effect == spellEffectHeal && eff.BasePoints+1 <= 0 {
 					break
 				}
-				heal := uint32(eff.BasePoints + 1)
+				heal := uint32(eff.CalcValueForLevel(spell, casterLevel))
 				// Spell::EffectHeal (SpellEffects.cpp): the Death Pact arm
 				// (SPELLFAMILY_DEATHKNIGHT, SpellFamilyFlags[0] & 0x00080000)
 				// replaces the flat effect value with damage% of the caster's
@@ -10095,7 +10106,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// HP). The damage<0 and !IsAlive gates are
 						// per-effect in C++; effectTargetMaxHealth returns
 						// 0 for dead or unresolvable targets, landing both.
-						if pct := eff.BasePoints + 1; pct > 0 {
+						if pct := eff.CalcValueForLevel(spell, casterLevel); pct > 0 {
 							if maxHealth := s.effectTargetMaxHealth(effCtx, effectTarget); maxHealth > 0 {
 								targetHeal = uint32(uint64(maxHealth) * uint64(pct) / 100)
 							} else {
@@ -10138,7 +10149,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if eff.BasePoints+1 <= 0 {
 					break
 				}
-				mechHeal := uint32(eff.BasePoints + 1)
+				mechHeal := uint32(eff.CalcValueForLevel(spell, casterLevel))
 				for _, effectTarget := range hitTargets {
 					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
 						continue
@@ -10177,7 +10188,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.energizePctEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
 			case spellEffectPowerBurn:
-				amount := eff.BasePoints + 1
+				amount := eff.CalcValueForLevel(spell, casterLevel)
 				var burnLog []takeTargetPowerEntry
 				for _, effectTarget := range hitTargets {
 					// SpellEffects.cpp:1383: the drained power is dealt as
@@ -10246,7 +10257,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// extra-attack spells resolve that target to the caster
 				// (TARGET_UNIT_CASTER), and Go's player-centric combat models
 				// the counter on the caster session only.
-				amount := uint32(eff.BasePoints + 1)
+				amount := uint32(eff.CalcValueForLevel(spell, casterLevel))
 				for _, effectTarget := range hitTargets {
 					if effectTarget == s.playerGUID && s.grantExtraAttacks(amount) {
 						s.sendExtraAttacksLog(spellID, effectIndex, amount)
@@ -10261,7 +10272,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// hit unit target is a separate gain: a new target restarts
 				// the bank, the same target accumulates; the spend happens
 				// in _handle_finish_phase after all targets are processed.
-				gain := int8(eff.BasePoints + 1)
+				gain := int8(eff.CalcValueForLevel(spell, casterLevel))
 				if gain > 0 {
 					for _, effectTarget := range hitTargets {
 						if effectTarget == 0 {
@@ -10285,7 +10296,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 				}
 			case spellEffectThreat:
-				amount := eff.BasePoints + 1
+				amount := eff.CalcValueForLevel(spell, casterLevel)
 				for _, effectTarget := range hitTargets {
 					s.applySpellThreat(effCtx, spell, effectTarget, amount)
 				}
@@ -10746,7 +10757,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if drainKnown && drainSpell.SchoolMask != 0 {
 					drainSchool = drainSpell.SchoolMask
 				}
-				baseAmount := int32(eff.BasePoints + 1)
+				baseAmount := eff.CalcValueForLevel(spell, casterLevel)
 				var drainLog []takeTargetPowerEntry
 				for _, effectTarget := range hitTargets {
 					// SpellEffects.cpp:1275: damage < 0 returns before any
@@ -15081,7 +15092,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase)
 			} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
-				amount := uint32(eff.BasePoints + 1)
+				// Spell::DoSpellEffectHit (Spell.cpp:2840-2872): the aura's base
+				// amount is m_spellValue->EffectBasePoints — the raw DBC base
+				// (SpellValue ctor, Spell.cpp:500-507), never rolled and with no
+				// +1 (AuraEffect ctor default, SpellAuraEffects.cpp:386).
+				amount := uint32(eff.BasePoints)
 				schoolMask := spell.SchoolMask
 				if schoolMask == 0 {
 					schoolMask = 1
