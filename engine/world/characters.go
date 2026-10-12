@@ -3345,6 +3345,13 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	if s.server != nil {
 		s.server.clearComboPointHolders(s.playerGUID)
 	}
+	// WorldSession::LogoutPlayer (WorldSession.cpp:540-542): a player whose
+	// instance is invalid is teleported to their homebind on logout. This
+	// reads the pre-removal validity — C++ logout keeps the group membership,
+	// so it runs before removeSessionFromGroup marks the dungeon arm.
+	if s.player != nil && !s.instanceValid && !sessionIsGameMaster(s) {
+		s.teleportTo(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.player.Orientation)
+	}
 	// Player::CleanupsBeforeDelete (Player.cpp:26311): reactive timers drop
 	// (ClearAllReactives).
 	s.clearAllReactives()

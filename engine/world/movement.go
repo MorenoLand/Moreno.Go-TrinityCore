@@ -250,6 +250,11 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	if s.nearTeleportPending || s.farTeleportPending || s.inFlight {
 		return true
 	}
+	// MovementHandler.cpp:69-70: leaving the instance restores validity — the
+	// destination map is not an instance, so the homebind countdown ends.
+	if !s.instanceValid && !dungeonMapID(s.server, s.player.Map) {
+		s.instanceValid = true
+	}
 	b := protocol.NewReader(payload)
 	guid, err := b.ReadPackedGUID()
 	if err != nil {

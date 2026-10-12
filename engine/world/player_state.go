@@ -542,6 +542,14 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.CharGuild(ctx, &state)
 	s.loadPlayerGroup(ctx, guid)
 	s.validateBoundInstances(ctx, guid)
+	// Player.cpp:17831-17835: once the login map position is determined,
+	// instance validity is rechecked; the GM exception keeps a technically
+	// invalid instance.
+	s.instanceValid = true
+	s.homebindTimerMs = 0
+	if g := s.server.getGroup(s.groupID); !s.checkInstanceValidity(ctx, g) && !s.instanceLoginGameMasterException() {
+		s.instanceValid = false
+	}
 	_ = s.loadPlayerSkills(ctx, &state)
 	s.loadSkillRewardedSpells(ctx, &state)
 	_ = s.loadPlayerPacketsState(ctx, &state)

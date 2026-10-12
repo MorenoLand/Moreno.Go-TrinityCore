@@ -745,7 +745,7 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 
 // handleGroupAccept processes CMSG_GROUP_ACCEPT (0x072).
 // TrinityCore: WorldSession::HandleGroupAcceptOpcode.
-func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
+func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.pendingGroupLeader == 0 {
 		return false
 	}
@@ -802,6 +802,11 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 	s.groupID = g.ID
 	groupObj := groupLuaObject(g)
 	srv.groupsMu.Unlock()
+
+	// Group::AddMember (Group.cpp:451): re-adding a player recomputes instance
+	// validity — rejoining the same group inside a dungeon cancels a running
+	// homebind countdown when the group is bound to this instance.
+	s.instanceValid = s.checkInstanceValidity(ctx, g)
 
 	// LFGGroupScript::OnAddMember (LFGScripts.cpp:143-181): a queued player
 	// joining a group leaves the LFG queue. The per-group bookkeeping
@@ -970,6 +975,10 @@ func (s *session) removeFromGroup(g *groupState, target *session, method uint8) 
 	refreshGroupMaxEnchantingLevel(srv, g)
 	target.groupID = 0
 	target.pendingGroupLeader = 0
+	// Group::_homebindIfInstance (Group.cpp:2387-2391): group removal inside a
+	// dungeon map marks the player's instance invalid, which starts the
+	// homebind countdown (Player::UpdateHomebindTime).
+	srv.homebindIfInstance(target)
 	srv.onPlayerLeaveGroupRolls(target.playerGUID, g.ID)
 
 	// Send SMSG_GROUP_UNINVITE to the kicked player
@@ -1188,6 +1197,9 @@ func (s *Server) disbandGroup(ctx context.Context, g *groupState, hideDestroy bo
 		if !hideDestroy {
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
 		}
+		// Group::Disband (Group.cpp:908): _homebindIfInstance runs for every
+		// connected member, same as on single-member removal.
+		s.homebindIfInstance(sess)
 		empty := buildGroupList(s, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
 		_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), empty, true)
 	}

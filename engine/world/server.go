@@ -355,6 +355,14 @@ type session struct {
 	initialLoginPending          bool
 	initialLoginFirst            bool
 	temporaryUnsummonedPetNumber uint32
+	// instanceValid mirrors Player::m_InstanceValid (Player.h, init true at
+	// Player.cpp:324): false while the player sits in a dungeon instance
+	// without a valid group/instance bind, driving the homebind countdown.
+	instanceValid bool
+	// homebindTimerMs mirrors Player::m_HomebindTimer: remaining milliseconds
+	// before an invalid-instance player is ported to the nearest graveyard
+	// (Player::UpdateHomebindTime, Player.cpp:22106-22147).
+	homebindTimerMs uint32
 	// petRenameAllowed tracks UNIT_CAN_BE_RENAMED (UnitDefines.h:116) per pet
 	// GUID: set by SPELL_EFFECT_ALLOW_RENAME_PET (159,
 	// SpellEffects.cpp:5525) and consumed by the pet rename opcode gate
@@ -1237,6 +1245,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateSpiritHealerResurrectWaves(ctx, now)
 			s.updateCorpseExpiry(ctx)
 			s.updatePlayerUnderwater(ctx, now)
+			s.updateHomebindTimers(ctx, diff)
 			s.sweepIdleConnections(now)
 			s.updateArenaBattles(now)
 			s.updateAVBattles(now)
@@ -1682,7 +1691,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), characterNames: make(map[uint64]enumCharacter), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), timeSyncPending: make(map[uint32]uint32), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), characterNames: make(map[uint64]enumCharacter), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), timeSyncPending: make(map[uint32]uint32), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64), instanceValid: true}
 	state.resetTimeoutTime(false)
 	// WorldSocket::Start/CheckIpCallback (WorldSocket.cpp:49): the connect
 	// handshake rejects a banned source IP with the 1-byte AUTH_REJECT form
