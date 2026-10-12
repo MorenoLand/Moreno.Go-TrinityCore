@@ -147,6 +147,7 @@ const (
 	unitFlag2ForceMovement                 uint32 = 0x00000040 // UNIT_FLAG2_FORCE_MOVEMENT (UnitDefines.h:167)
 	unitFlagInCombat                       uint32 = 0x00080000
 	unitFlagNonAttackable                  uint32 = 0x00000002 // UNIT_FLAG_NON_ATTACKABLE (UnitDefines.h:125)
+	unitFlagImmuneToNPC                    uint32 = 0x00000200 // UNIT_FLAG_IMMUNE_TO_NPC (UnitDefines.h:133)
 	unitFlagNotAttackable1                 uint32 = 0x00000080 // UNIT_FLAG_NOT_ATTACKABLE_1 (UnitDefines.h:131)
 	unitFlagUnk29                          uint32 = 0x20000000 // UNIT_FLAG_UNK_29 (UnitDefines.h:153)
 	unitFlag2FeignDeath                    uint32 = 0x00000001 // UNIT_FLAG2_FEIGN_DEATH (UnitDefines.h:161)

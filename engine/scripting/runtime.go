@@ -723,6 +723,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetGameTime", r.getGameTime)
 	r.state.Register("GetQuest", r.getQuest)
 	r.state.Register("GetGuildByName", r.getGuildByName)
+	r.state.Register("GetItemLink", r.getItemLink)
 	r.state.Register("GetGuildByLeaderGUID", r.getGuildByLeaderGUID)
 	r.state.Register("GetPlayersInWorld", r.getPlayersInWorld)
 	r.state.Register("GetPlayerByGUID", r.getPlayerByGUID)

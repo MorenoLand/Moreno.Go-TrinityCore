@@ -114,6 +114,47 @@ func (r *Runtime) getQuest(state *lua.State) int {
 	return 1
 }
 
+// itemLinkQualityColors mirrors ItemQualityColors (SharedDefines.h):
+// grey, white, green, blue, purple, orange, light yellow, artifact.
+var itemLinkQualityColors = []uint32{
+	0xFF9D9D9D, 0xFFFFFFFF, 0xFF1EFF00, 0xFF0070DD,
+	0xFFA335EE, 0xFFFF8000, 0xFFE6CC80, 0xFFE6CC80,
+}
+
+// getItemLink is GlobalMethods::GetItemLink (GlobalMethods.h:404-427,
+// Trinity): "|c<quality-color>|Hitem:<entry>:0:0:0:0:0:0:0:0:0|h[<name>]|h|r"
+// (the non-CLASSIC link — the commands_list.go list-mail twin format).
+// An unknown entry is the C++ luaL_argerror; the locale argument is
+// accepted and range-checked but Go names are enUS-only, so it has no
+// effect.
+func (r *Runtime) getItemLink(state *lua.State) int {
+	entry := checkLuaUint64(state, 1)
+	var locale uint64
+	if state.Top() >= 2 && !state.IsNil(2) {
+		locale = checkLuaUint64(state, 2)
+	}
+	if locale >= 7 { // TOTAL_LOCALES
+		lua.ArgumentError(state, 2, "valid LocaleConstant expected")
+		return 0
+	}
+	if r.config.WorldDatabase == nil || entry > math.MaxUint32 {
+		lua.ArgumentError(state, 1, "valid ItemEntry expected")
+		return 0
+	}
+	var name string
+	var quality uint32
+	if err := r.config.WorldDatabase.QueryRow("SELECT COALESCE(name, ''), COALESCE(Quality, 0) FROM item_template WHERE entry = ?", uint32(entry)).Scan(&name, &quality); err != nil {
+		lua.ArgumentError(state, 1, "valid ItemEntry expected")
+		return 0
+	}
+	color := uint32(0xFFFFFFFF)
+	if int(quality) < len(itemLinkQualityColors) {
+		color = itemLinkQualityColors[quality]
+	}
+	state.PushString(fmt.Sprintf("|c%08x|Hitem:%d:0:0:0:0:0:0:0:0:0|h[%s]|h|r", color, uint32(entry), name))
+	return 1
+}
+
 func objectArgumentUint32(args []any, index int) (uint32, error) {
 	if index >= len(args) {
 		return 0, fmt.Errorf("argument %d is required", index+1)

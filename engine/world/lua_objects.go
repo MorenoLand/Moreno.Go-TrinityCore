@@ -27,12 +27,13 @@ type luaCreatureState struct {
 	Y            float32
 	Z            float32
 	// Template reads backing the CreatureMethods stat surface (rank,
-	// flags_extra, type_flags, family, AIName, RacialLeader are static
-	// per entry, so the constructor snapshot is exact).
+	// flags_extra, type_flags, family, AIName, RacialLeader, unit_flags are
+	// static per entry, so the constructor snapshot is exact).
 	Rank         uint32
 	FlagsExtra   uint32
 	TypeFlags    uint32
 	Family       uint32
+	UnitFlags    uint32
 	AIName       string
 	RacialLeader bool
 }
@@ -146,11 +147,11 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		npcFlagExpr = "(t.npcflag | " + flagClause + ")"
 	}
 	queryArgs := append(selectArgs, low, entry)
-	var rank, flagsExtra, typeFlags, family, racialLeader int64
+	var rank, flagsExtra, typeFlags, family, unitFlags, racialLeader int64
 	var aiName string
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", t.rank, t.flags_extra, t.type_flags, t.family, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &family, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", t.rank, t.flags_extra, t.type_flags, t.family, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &family, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
 	if err != nil && missingTable(err) {
-		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, t.rank, t.flags_extra, t.type_flags, t.family, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &family, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
+		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, t.rank, t.flags_extra, t.type_flags, t.family, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &family, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
 	}
 	if err != nil {
 		if !errorsIsNoRows(err) {
@@ -173,7 +174,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	state.X, state.Y, state.Z = motion.X, motion.Y, motion.Z
 	s.server.motionMu.Unlock()
 	state.GossipMenuID, state.NPCFlags = uint32(gossipMenuID), uint32(npcFlags)
-	state.Rank, state.FlagsExtra, state.TypeFlags, state.Family = uint32(rank), uint32(flagsExtra), uint32(typeFlags), uint32(family)
+	state.Rank, state.FlagsExtra, state.TypeFlags, state.Family, state.UnitFlags = uint32(rank), uint32(flagsExtra), uint32(typeFlags), uint32(family), uint32(unitFlags)
 	state.AIName, state.RacialLeader = aiName, racialLeader != 0
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
@@ -702,6 +703,69 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			motion.DisableReputationGain = disable
 		}
 		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// CanAggro is CreatureMethods::CanAggro (CreatureMethods.h:138-147,
+	// Trinity): !HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_NPC)
+	// (Unit.h:1045 IsImmuneToNPC, 0x200, UnitDefines.h:133) — the live
+	// motion.UnitFlags when banked, the unit_flags template snapshot
+	// otherwise.
+	methods["CanAggro"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.UnitFlags&unitFlagImmuneToNPC == 0
+		}
+		return state.UnitFlags&unitFlagImmuneToNPC == 0
+	})
+	// SetAggroEnabled is CreatureMethods::SetAggroEnabled
+	// (CreatureMethods.h:1005-1018, Trinity): allow=true removes
+	// UNIT_FLAG_IMMUNE_TO_NPC, allow=false sets it — the motion field plus
+	// the values-update broadcast twin.
+	methods["SetAggroEnabled"] = func(_ context.Context, args []any) ([]any, error) {
+		allow := true
+		if len(args) > 0 {
+			var ok bool
+			allow, ok = args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("allow must be a boolean")
+			}
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion != nil {
+			if allow {
+				motion.UnitFlags &^= unitFlagImmuneToNPC
+			} else {
+				motion.UnitFlags |= unitFlagImmuneToNPC
+			}
+		}
+		s.server.motionMu.Unlock()
+		if motion != nil {
+			s.server.broadcastCreatureValuesUpdateInInstance(state.Map, state.InstanceID, state.GUID, map[int]uint32{unitFieldFlags: motion.UnitFlags})
+		}
+		return nil, nil
+	}
+	// SetEquipmentSlots is CreatureMethods::SetEquipmentSlots
+	// (CreatureMethods.h:982-994, Trinity): SetUInt32Value
+	// (UNIT_VIRTUAL_ITEM_SLOT_ID + i, slot) for the three virtual item
+	// slots (UpdateFields.h:116, Go index 56) — the values-update
+	// broadcast is the SetUInt32Value twin.
+	methods["SetEquipmentSlots"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 3 {
+			return nil, fmt.Errorf("main_hand, off_hand and ranged are required")
+		}
+		slots := make([]uint32, 3)
+		for i := range slots {
+			slot, err := luaUint32Arg(args, i)
+			if err != nil {
+				return nil, err
+			}
+			slots[i] = slot
+		}
+		s.server.broadcastCreatureValuesUpdateInInstance(state.Map, state.InstanceID, state.GUID, map[int]uint32{
+			unitVirtualItemSlotID:     slots[0],
+			unitVirtualItemSlotID + 1: slots[1],
+			unitVirtualItemSlotID + 2: slots[2],
+		})
 		return nil, nil
 	}
 	// luaTapMotion resolves the creature motion for the tap/loot-recipient
