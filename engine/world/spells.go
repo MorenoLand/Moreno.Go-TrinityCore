@@ -7218,6 +7218,68 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 	}
 }
 
+// propagateLinkedAuraStacks mirrors the onReapply leg of
+// Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1375-1381):
+// when a re-cast merges into the parent aura, every spell_linked_spell
+// type-2 (SPELL_LINK_AURA) row keyed by +parent spell ID with a positive id
+// has that linked aura's stack amount adjusted to the parent's new stack
+// amount (Aura::ModStackAmount(GetStackAmount() - linked->GetStackAmount()),
+// SpellAuras.cpp:1030) — the linked stacks land on the parent's, clamped to
+// the linked spell's stack amount (1 for non-stackable). The linked aura
+// must be on the target from the same caster (target->GetAura(*itr,
+// GetCasterGUID())). The ModStackAmount refresh-on-equal tail
+// (RefreshTimers/SetCharges) rides the sibling syncLinkedAuraStacks
+// convention: no duration/charge touch, only the stored count plus the
+// client update.
+func (targetSess *session) propagateLinkedAuraStacks(ctx context.Context, spell wotlk.Spell, parentCasterGUID uint64, parentStack uint8) {
+	if targetSess == nil || targetSess.player == nil || targetSess.server == nil || targetSess.server.Data == nil || targetSess.server.WorldStore == nil || targetSess.server.WorldStore.DB == nil {
+		return
+	}
+	for _, id := range spellLinkedEffects(ctx, targetSess.server.WorldStore.DB, int32(spell.ID), spellLinkAuraType) {
+		if id <= 0 {
+			continue
+		}
+		linkedID := uint32(id)
+		linked, found, err := targetSess.server.Data.Spell(linkedID)
+		if err != nil || !found {
+			continue
+		}
+		maxStack := int32(linked.StackAmount)
+		if maxStack == 0 {
+			maxStack = 1
+		}
+		want := int32(parentStack)
+		if want > maxStack {
+			want = maxStack
+		}
+		targetSess.castMu.Lock()
+		trig := targetSess.activeAuras[linkedID]
+		synced := trig != nil && !trig.Stopped && trig.CasterGUID == parentCasterGUID && trig.StackCount != uint8(want)
+		if synced {
+			trig.StackCount = uint8(want)
+		}
+		var slot uint8
+		var positive bool
+		var maxDur, dur uint32
+		var effectMask uint8
+		var level uint8 = 1
+		if trig != nil {
+			slot, positive, maxDur, dur, effectMask = trig.Slot, trig.Positive, trig.DurationMs, trig.RemainingMs, trig.EffectMask
+			if trig.StoredCasterLevel != 0 {
+				level = trig.StoredCasterLevel
+			}
+		}
+		targetSess.castMu.Unlock()
+		if !synced {
+			continue
+		}
+		targetSess.sendAuraUpdateWithStack(slot, linkedID, false, positive, maxDur, dur, uint8(want))
+		wireMax, wireDur := auraWireDurations(linked, maxDur, dur)
+		pkt := protocol.BuildAuraUpdateWithStackEffect(targetSess.playerGUID, parentCasterGUID, slot, linkedID, false, positive, wireMax, wireDur, level, uint8(want), effectMask)
+		targetSess.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, targetSess)
+	}
+}
+
 // syncCreatureLinkedAuraStacks mirrors the AURA_EFFECT_HANDLE_REAPPLY arm
 // of AuraEffect::HandleAuraLinked (SpellAuraEffects.cpp:4905-4911) for
 // creature targets. Creature auras carry no client stack display, so only
@@ -7238,6 +7300,42 @@ func (srv *Server) syncCreatureLinkedAuraStacks(spell wotlk.Spell, key creatureA
 		srv.auraMu.Lock()
 		if trig := srv.activeCreatureAuras[key][se.TriggerSpell]; trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != parentStack {
 			trig.StackCount = parentStack
+		}
+		srv.auraMu.Unlock()
+	}
+}
+
+// propagateCreatureLinkedAuraStacks mirrors the onReapply leg of
+// Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1375-1381)
+// for creature targets: a re-cast merge sets every linked aura (positive
+// spell_linked_spell type-2 row keyed by +parent spell ID) carried by the
+// creature from the same caster to the parent's new stack amount, clamped
+// to the linked spell's stack amount. Creature targets carry no client
+// stack display, so only the stored count is synced.
+func (srv *Server) propagateCreatureLinkedAuraStacks(ctx context.Context, spell wotlk.Spell, key creatureAuraKey, parentCasterGUID uint64, parentStack uint8) {
+	if srv == nil || srv.Data == nil || srv.WorldStore == nil || srv.WorldStore.DB == nil || key.GUID == 0 {
+		return
+	}
+	for _, id := range spellLinkedEffects(ctx, srv.WorldStore.DB, int32(spell.ID), spellLinkAuraType) {
+		if id <= 0 {
+			continue
+		}
+		linkedID := uint32(id)
+		linked, found, err := srv.Data.Spell(linkedID)
+		if err != nil || !found {
+			continue
+		}
+		maxStack := int32(linked.StackAmount)
+		if maxStack == 0 {
+			maxStack = 1
+		}
+		want := int32(parentStack)
+		if want > maxStack {
+			want = maxStack
+		}
+		srv.auraMu.Lock()
+		if trig := srv.activeCreatureAuras[key][linkedID]; trig != nil && !trig.Stopped && trig.CasterGUID == parentCasterGUID && trig.StackCount != uint8(want) {
+			trig.StackCount = uint8(want)
 		}
 		srv.auraMu.Unlock()
 	}
@@ -22758,6 +22856,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// (SpellAuraEffects.cpp:4905-4911): a re-cast merge syncs the
 			// linked trigger aura's stack amount to the parent aura's.
 			targetSess.syncLinkedAuraStacks(spell, existing.CasterGUID, stackCount)
+			// Aura::HandleAuraSpecificMods spell_area arm (SpellAuras.cpp:
+			// 1311-1330) at reapply: the spell_area block is NOT gated on
+			// onReapply — a re-cast re-enforces the rows keyed by this aura
+			// (the target's zone may have changed since the first apply).
+			// The spell_linked SPELL_LINK_AURA apply rows stay gated on
+			// fresh apply (!onReapply, SpellAuras.cpp:1336); the onReapply
+			// leg instead propagates the parent's new stack amount to the
+			// linked auras (SpellAuras.cpp:1375-1381).
+			targetSess.applyAuraSpellAreaRows(ctx, spell.ID)
+			targetSess.propagateLinkedAuraStacks(ctx, spell, existing.CasterGUID, stackCount)
 			return
 		}
 		if existing := previous; existing != nil {
@@ -23521,6 +23629,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// (SpellAuraEffects.cpp:4905-4911): a re-cast merge syncs the linked
 		// trigger aura's stack amount to the parent aura's.
 		s.server.syncCreatureLinkedAuraStacks(spell, targetKey, existing.CasterGUID, stackCount)
+		// Creature twin of the player merge's HandleAuraSpecificMods
+		// reapply arms: spell_area re-enforcement (SpellAuras.cpp:1311-1330,
+		// not gated on onReapply) and the spell_linked onReapply stack
+		// propagate (SpellAuras.cpp:1375-1381). Creature targets carry no
+		// client stack display, so the propagate only touches the stored
+		// count.
+		s.server.applyCreatureSpellAreaRows(targetKey, spell.ID)
+		s.server.propagateCreatureLinkedAuraStacks(ctx, spell, targetKey, existing.CasterGUID, stackCount)
 		if resetPeriodic && existing.PeriodMs > 0 {
 			s.scheduleCreaturePeriodicTickInitial(existing, existing.PeriodMs, periodicTickInitialDelay(spell, existing.PeriodMs))
 		}
