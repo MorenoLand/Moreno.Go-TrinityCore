@@ -724,6 +724,14 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
+	// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2276-2279): pets can never be
+	// glancing victims — Go pet motions carry OwnerGUID.
+	isPetVictim := false
+	if !isPlayerVictim && s.server != nil {
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
+			isPetVictim = tm.OwnerGUID != 0
+		}
+	}
 	outcome := protocol.MeleeHitNormal
 	hitInfo := protocol.HitInfoAffectsVictim
 	targetState := protocol.VictimStateHit
@@ -845,7 +853,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// SPELL_AURA_MOD_ENEMY_DODGE (251) aura sum (Unit.cpp:2697-2698) —
 		// the same arms meleeSpellHitResult carries for melee spells.
 		dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -1448,6 +1456,13 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 
 	// Outcome: ranged attacks can be dodged or blocked, but cannot be parried (TC rollMeleeOutcome)
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
+	// Glancing victims exclude pets (Unit.cpp:2276-2279).
+	isPetVictim := false
+	if !isPlayerVictim && s.server != nil {
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
+			isPetVictim = tm.OwnerGUID != 0
+		}
+	}
 	canBlock := false
 	canDodge := true
 	var critReductionBP int32
@@ -1529,7 +1544,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// (Unit.cpp:2694-2695) and the ungated SPELL_AURA_MOD_ENEMY_DODGE (251)
 	// sum (Unit.cpp:2697-2698) apply here like the melee site above.
 	dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -2617,7 +2632,7 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // GetUnitDodgeChance adds the victim's 49 total to the 5% base
 // (Unit.cpp:2676-2681). Absent means none. (Slots [9]/[10] are the player
 // victim's derived parry/block percentages.)
-func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim, isPetVictim, attackerNoCrush bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
@@ -2799,9 +2814,11 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 		}
 	}
 
-	// 4. Glancing blow: players/pets against higher level mobs
+	// 4. Glancing blow: players/pets against higher level mobs; pets can
+	// never be the victim (Unit.cpp:2276-2279:
+	// victim->GetTypeId() != TYPEID_PLAYER && !victim->IsPet()).
 	glancingChance := int32(0)
-	if isPlayerOrPetAttacker && !isPlayerVictim && victimLevel > attackerLevel {
+	if isPlayerOrPetAttacker && !isPlayerVictim && !isPetVictim && victimLevel > attackerLevel {
 		glancingChance = 600 + (int32(victimLevel)-int32(attackerLevel))*600
 		if glancingChance > 4000 {
 			glancingChance = 4000
@@ -2855,9 +2872,11 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	// tmp = attackerMaxSkillValueForLevel - min(victimDefenseSkill,
 	// victimMaxSkillValueForLevel) clamped to >= 20, then tmp*200 - 1500. Go
 	// models no weapon/defense skill bonuses, so both skills are 5/level and
-	// the min arm is vacuous by construction.
+	// the min arm is vacuous by construction. CREATURE_FLAG_EXTRA_NO_CRUSH
+	// (0x20, CreatureData.h:42) bars the attacker from crushing
+	// (Unit.cpp:2312).
 	crushingChance := int32(0)
-	if !isPlayerOrPetAttacker && isPlayerVictim && attackerLevel >= victimLevel+4 {
+	if !isPlayerOrPetAttacker && !attackerNoCrush && isPlayerVictim && attackerLevel >= victimLevel+4 {
 		skillDiff := int32(attackerLevel-victimLevel) * 5
 		if skillDiff < 20 {
 			skillDiff = 20
