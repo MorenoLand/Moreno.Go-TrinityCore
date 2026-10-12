@@ -203,16 +203,20 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// creature store never carries and stay unbridged.
 		if damage > 0 && inlineSpellKnown && motion != nil && motion.OwnerGUID != 0 {
 			chance := s.creatureSpellCritChanceDone(creatureAuraKeyForMotion(motion), motion.FlagsExtra&0x20000 != 0, schoolMask, inlineSpell, true)
-			if chance > 0 {
-				if owner := s.findSessionByGUID(motion.OwnerGUID); owner != nil && owner.player != nil {
-					chance = float64(owner.applySpellMod(inlineSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
-				}
-				// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240): MAGIC
-				// takes 179 pre-resilience and 197 post, MELEE/RANGED take
-				// the GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
-				chance = s.creatureSpellCritChanceTaken(chance, p.Sess, creatureAuraKey{}, true, motion.GUID, motion.Level, uint32(p.Sess.player.Level), schoolMask, inlineSpell, true)
-				isCrit = chance > 0 && rand.Float64() < chance
+			// Unit::GetSpellModOwner: a player-owned motion's owner session
+			// carries the owner's SPELLMOD_CRITICAL_CHANCE (chance) and
+			// SPELLMOD_CRIT_DAMAGE_BONUS (bonus) arms.
+			owner := s.findSessionByGUID(motion.OwnerGUID)
+			// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7790): the taken
+			// fold runs unconditionally — there is no done-gate before it.
+			if owner != nil && owner.player != nil {
+				chance = float64(owner.applySpellMod(inlineSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 			}
+			// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240): MAGIC
+			// takes 179 pre-resilience and 197 post, MELEE/RANGED take
+			// the GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
+			chance = s.creatureSpellCritChanceTaken(chance, p.Sess, creatureAuraKey{}, true, motion.GUID, motion.Level, uint32(p.Sess.player.Level), schoolMask, inlineSpell, true)
+			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
 				// Unit::SpellCriticalDamageBonus (Unit.cpp:7411-7449) /
 				// the melee/ranged arm (Unit.cpp:1045-1062): the caster's
@@ -221,9 +225,9 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 				// half/double).
 				mask, _ := p.Sess.targetCreatureTypeMask(ctx, p.GUID)
 				if inlineSpell.DefenseType == spellDamageClassMagic {
-					damage = s.creatureSpellCriticalDamageBonus(creatureAuraKeyForMotion(motion), uint32(schoolMask), damage, mask)
+					damage = s.creatureSpellCriticalDamageBonus(creatureAuraKeyForMotion(motion), uint32(schoolMask), damage, mask, inlineSpell, owner)
 				} else {
-					damage = s.creatureSpellWeaponCritDamageBonus(creatureAuraKeyForMotion(motion), creatureAuraKey{}, p.Sess, true, uint32(schoolMask), damage, inlineSpell, mask)
+					damage = s.creatureSpellWeaponCritDamageBonus(creatureAuraKeyForMotion(motion), creatureAuraKey{}, p.Sess, true, uint32(schoolMask), damage, inlineSpell, mask, owner)
 				}
 				hitInfo = 0x02
 			}

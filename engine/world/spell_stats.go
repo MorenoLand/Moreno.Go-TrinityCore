@@ -610,20 +610,42 @@ func (s *session) directWeaponCritChanceDone(ctx context.Context, spell wotlk.Sp
 // directWeaponCritChanceTaken). The Rend and Tear / Victory Rush caster arms
 // (Unit.cpp:7353-7376) read the caster's dummy auras — creature casters never
 // carry them, so they stay unbridged. canResilience gates
-// Unit::CanApplyResilience (Unit.cpp:12333); the reduction itself only lands
-// on player victims (Go carries combat ratings on player sessions only — the
-// C++ pet-victim owner arm stays a noted edge).
+// Unit::CanApplyResilience (Unit.cpp:12333); the reduction itself runs on
+// player victims directly and on creature victims through the owner session
+// (Unit.cpp:12342-12350 — wild creatures resolve to nil and skip it). The
+// taken arms run even when
+// the done chance is zero (Spell::DoEffectOnLaunchTarget, Spell.cpp:7782-7790
+// runs the taken fold unconditionally) — there is no done-gate before them;
+// the non-critting-spell early zero above keeps that unconditional fold from
+// making CU_CAN_CRIT-less spells crittable.
 func (srv *Server) creatureSpellCritChanceTaken(doneChance float64, vicSess *session, victimKey creatureAuraKey, isPlayerVictim bool, casterGUID uint64, casterLevel, victimLevel uint32, schoolMask uint8, spell wotlk.Spell, canResilience bool) float64 {
 	if srv == nil {
 		return doneChance
 	}
+	// Unit::SpellCritChanceTaken (Unit.cpp:7229-7231): direct (non-periodic)
+	// spells without SPELL_ATTR0_CU_CAN_CRIT never crit — the whole chance
+	// zeroes out before any taken arm runs. Both Go call sites are direct
+	// damage, so the isPeriodic leg has no bridge.
+	if spell.Attributes&spellAttr0CuCanCrit == 0 {
+		return 0
+	}
 	chance := doneChance * 100.0
+	// Unit::ApplyResilience (Unit.cpp:12342-12350): a creature victim owned
+	// by a player takes the owner's resilience — combat ratings live on
+	// player sessions only, so the owner session carries the reduction; wild
+	// creatures resolve to nil and skip it.
+	resilSess := vicSess
+	if !isPlayerVictim && srv != nil {
+		if motion := srv.findCreatureMotion(victimKey.Map, victimKey.InstanceID, victimKey.GUID); motion != nil && motion.OwnerGUID != 0 {
+			resilSess = srv.findSessionByGUID(motion.OwnerGUID)
+		}
+	}
 	applyChanceResilience := func(cr uint8) {
-		if !canResilience || !isPlayerVictim || vicSess == nil {
+		if !canResilience || resilSess == nil {
 			return
 		}
 		critBP := int32(math.Round(chance * 100))
-		vicSess.applyResilienceToMeleeCritChance(true, cr, &critBP)
+		resilSess.applyResilienceToMeleeCritChance(true, cr, &critBP)
 		chance = float64(critBP) / 100.0
 	}
 	takenFlat := func(auraType uint32) float64 {
@@ -744,10 +766,14 @@ func creatureCritPercentVersus(srv *Server, key creatureAuraKey, victimCreatureT
 // arm lives in creatureSpellWeaponCritDamageBonus), the caster's 163
 // multiplier product by school misc mask, and the caster's 169 sum by the
 // victim's creature-type mask, folded as AddPct over the bonus before the
-// bonus rejoins the damage (Unit.cpp:7433-7435). The
-// SPELLMOD_CRIT_DAMAGE_BONUS owner arm (Unit.cpp:7436-7442) stays a noted
-// delta — the pre-existing nil-session convention carried the base only.
-func (srv *Server) creatureSpellCriticalDamageBonus(casterKey creatureAuraKey, schoolMask uint32, damage uint32, victimCreatureTypeMask uint32) uint32 {
+// bonus rejoins the damage (Unit.cpp:7433-7435). modOwner is the caster's
+// Unit::GetSpellModOwner() — the owner player session for player-owned
+// creature casters, nil for wild creatures; its SPELLMOD_CRIT_DAMAGE_BONUS
+// folds into the net bonus only when the base damage exceeds it (Unit.cpp:
+// 7436-7442 — the int32->uint32 wrap means a negative net bonus skips the
+// arm, mirrored by the net >= 0 guard). The pre-existing nil-session
+// convention carried the base only.
+func (srv *Server) creatureSpellCriticalDamageBonus(casterKey creatureAuraKey, schoolMask uint32, damage uint32, victimCreatureTypeMask uint32, spell wotlk.Spell, modOwner *session) uint32 {
 	critBonus := int64(damage) + int64(damage)/2
 	if srv != nil {
 		critMod := (creatureCritDamageAuraMultiplier(srv, casterKey, schoolMask) - 1.0) * 100.0
@@ -755,6 +781,12 @@ func (srv *Server) creatureSpellCriticalDamageBonus(casterKey creatureAuraKey, s
 		if critBonus != 0 && critMod != 0 {
 			// AddPct(int32 base, float pct): base += int32(float32(base) * pct / 100).
 			critBonus += int64(float32(critBonus) * float32(critMod) / 100.0)
+		}
+	}
+	if modOwner != nil {
+		net := critBonus - int64(damage)
+		if net >= 0 && int64(damage) > net {
+			critBonus = int64(damage) + int64(modOwner.applySpellMod(spell, spellModCritDamageBonus, int32(net)))
 		}
 	}
 	if critBonus < 0 {
@@ -765,14 +797,20 @@ func (srv *Server) creatureSpellCriticalDamageBonus(casterKey creatureAuraKey, s
 
 // creatureSpellWeaponCritDamageBonus mirrors the MELEE/RANGED arm of
 // Unit::CalculateSpellDamageTaken (Unit.cpp:1045-1062) for creature casters:
-// full-damage bonus, then the victim's 203/204 crit-damage auras by attack
-// type, the caster's 163 multiplier by school mask, and the caster's 169 sum
-// by the victim's creature-type mask, folded as one percent add over the
-// total (AddPct, Unit.cpp:1059-1061). The SPELLMOD_CRIT_DAMAGE_BONUS arm and
-// the npcbot legs stay a noted delta — the pre-existing nil-session
-// convention carried the double only.
-func (srv *Server) creatureSpellWeaponCritDamageBonus(casterKey creatureAuraKey, victimKey creatureAuraKey, vicSess *session, isPlayerVictim bool, schoolMask uint32, damage uint32, spell wotlk.Spell, victimCreatureTypeMask uint32) uint32 {
-	total := int64(damage) + int64(damage)
+// the bonus starts at the base damage, the owner's SPELLMOD_CRIT_DAMAGE_BONUS
+// folds into that copy via the caster's GetSpellModOwner() (Unit.cpp:1048-1050;
+// modOwner nil-safe — wild creatures keep the unmodified base), then the
+// victim's 203/204 crit-damage auras by attack type, the caster's 163
+// multiplier by school mask, and the caster's 169 sum by the victim's
+// creature-type mask fold as one percent add over the total (AddPct,
+// Unit.cpp:1059-1061). The npcbot legs stay unbridged — the pre-existing
+// nil-session convention carried the double only.
+func (srv *Server) creatureSpellWeaponCritDamageBonus(casterKey creatureAuraKey, victimKey creatureAuraKey, vicSess *session, isPlayerVictim bool, schoolMask uint32, damage uint32, spell wotlk.Spell, victimCreatureTypeMask uint32, modOwner *session) uint32 {
+	// Unit.cpp:1046-1050: crit_bonus starts at the base damage and the
+	// owner's spell mod folds into that copy (applySpellMod is nil-receiver
+	// safe, returning the base unchanged for wild casters).
+	critBonus := int64(modOwner.applySpellMod(spell, spellModCritDamageBonus, int32(damage)))
+	total := int64(damage) + critBonus
 	if srv != nil {
 		var critPctDamageMod float64
 		auraType := uint32(spellAuraModAttackerMeleeCritDmg)

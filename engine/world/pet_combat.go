@@ -2539,12 +2539,13 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	if s.server != nil && s.server.Data != nil {
 		if hs, found, err := s.server.Data.Spell(spellID); err == nil && found {
 			chance := s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, uint8(hs.SchoolMask), hs, true)
-			if chance > 0 {
-				if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
-					chance = float64(s.applySpellMod(hs, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
-				}
-				isCrit = chance > 0 && rand.Float64() < chance
+			// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the owner's
+			// SPELLMOD_CRITICAL_CHANCE folds into the done chance — the
+			// mod arm has no done-gate in C++.
+			if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
+				chance = float64(s.applySpellMod(hs, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 			}
+			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
 				var nilSess *session
 				heal = nilSess.spellCriticalHealingBonus(ctx, heal, targetGUID, hs.DefenseType, false)
@@ -2819,33 +2820,33 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	if damage > 0 && target.GUID != caster.GUID && s.server != nil && s.server.Data != nil {
 		if critSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
 			chance := s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, schoolMask, critSpell, true)
-			if chance > 0 {
-				// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the
-				// owner's SPELLMOD_CRITICAL_CHANCE folds in via
-				// GetSpellModOwner() — the calling session is the pet's
-				// owner player.
-				if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
-					chance = float64(s.applySpellMod(critSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
-				}
-				if critSpell.DefenseType == spellDamageClassMagic || critSpell.DefenseType == spellDamageClassMelee || critSpell.DefenseType == spellDamageClassRanged {
-					// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240):
-					// MAGIC takes 179 pre-resilience and 197 post, the
-					// resilience crit-chance reduction runs when the pet's
-					// owner is a player (CanApplyResilience,
-					// Unit.cpp:12333), and MELEE/RANGED take the
-					// GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
-					// Caster-side scripted arms (Shatter 849/910/911) read
-					// the caster's OVERRIDE_CLASS_SCRIPTS auras; pets carry
-					// none in the creature aura store, so they stay
-					// unbridged.
-					var vicSess *session
-					if isPlayerVictim {
-						vicSess = s.server.findSessionByGUID(target.GUID)
-					}
-					chance = s.server.creatureSpellCritChanceTaken(chance, vicSess, creatureAuraKeyForTarget(target), isPlayerVictim, caster.GUID, caster.Level, uint32(target.Level), schoolMask, critSpell, caster.OwnerGUID != 0)
-				}
-				isCrit = chance > 0 && rand.Float64() < chance
+			// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7790): the taken
+			// fold runs unconditionally — no done-gate before it.
+			// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the
+			// owner's SPELLMOD_CRITICAL_CHANCE folds in via
+			// GetSpellModOwner() — the calling session is the pet's
+			// owner player.
+			if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
+				chance = float64(s.applySpellMod(critSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 			}
+			if critSpell.DefenseType == spellDamageClassMagic || critSpell.DefenseType == spellDamageClassMelee || critSpell.DefenseType == spellDamageClassRanged {
+				// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240):
+				// MAGIC takes 179 pre-resilience and 197 post, the
+				// resilience crit-chance reduction runs when the pet's
+				// owner is a player (CanApplyResilience,
+				// Unit.cpp:12333), and MELEE/RANGED take the
+				// GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
+				// Caster-side scripted arms (Shatter 849/910/911) read
+				// the caster's OVERRIDE_CLASS_SCRIPTS auras; pets carry
+				// none in the creature aura store, so they stay
+				// unbridged.
+				var vicSess *session
+				if isPlayerVictim {
+					vicSess = s.server.findSessionByGUID(target.GUID)
+				}
+				chance = s.server.creatureSpellCritChanceTaken(chance, vicSess, creatureAuraKeyForTarget(target), isPlayerVictim, caster.GUID, caster.Level, uint32(target.Level), schoolMask, critSpell, caster.OwnerGUID != 0)
+			}
+			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
 				// Unit::SpellCriticalDamageBonus (Unit.cpp:7411-7449) /
 				// the melee/ranged arm (Unit.cpp:1045-1062): the pet's
@@ -2858,10 +2859,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				if isPlayerVictim {
 					vicSess = s.server.findSessionByGUID(target.GUID)
 				}
+				// The pet's GetSpellModOwner() is its owner — the calling
+				// session — so the owner's SPELLMOD_CRIT_DAMAGE_BONUS folds
+				// into both crit-bonus arms.
 				if critSpell.DefenseType == spellDamageClassMagic {
-					damage = s.server.creatureSpellCriticalDamageBonus(creatureAuraKeyForMotion(caster), uint32(schoolMask), damage, mask)
+					damage = s.server.creatureSpellCriticalDamageBonus(creatureAuraKeyForMotion(caster), uint32(schoolMask), damage, mask, critSpell, s)
 				} else {
-					damage = s.server.creatureSpellWeaponCritDamageBonus(creatureAuraKeyForMotion(caster), creatureAuraKeyForTarget(target), vicSess, isPlayerVictim, uint32(schoolMask), damage, critSpell, mask)
+					damage = s.server.creatureSpellWeaponCritDamageBonus(creatureAuraKeyForMotion(caster), creatureAuraKeyForTarget(target), vicSess, isPlayerVictim, uint32(schoolMask), damage, critSpell, mask, s)
 				}
 				hitInfo |= 0x02
 			}
@@ -2873,19 +2877,19 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
 		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0)
 	}
+	// Unit::CalculateSpellDamageTaken (Unit.cpp:1079-1080): the
+	// MELEE/RANGED-DmgClass arm reduces by the melee/ranged taken
+	// rating, not the spell one.
+	resilCR := uint8(CombatRatingCritTakenSpell)
+	if resilSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found && resilSpell.DefenseType != spellDamageClassMagic {
+		if spellWeaponAttackType(resilSpell) == protocol.RangedAttack {
+			resilCR = CombatRatingCritTakenRanged
+		} else {
+			resilCR = CombatRatingCritTakenMelee
+		}
+	}
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
-			// Unit::CalculateSpellDamageTaken (Unit.cpp:1079-1080): the
-			// MELEE/RANGED-DmgClass arm reduces by the melee/ranged taken
-			// rating, not the spell one.
-			resilCR := uint8(CombatRatingCritTakenSpell)
-			if resilSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found && resilSpell.DefenseType != spellDamageClassMagic {
-				if spellWeaponAttackType(resilSpell) == protocol.RangedAttack {
-					resilCR = CombatRatingCritTakenRanged
-				} else {
-					resilCR = CombatRatingCritTakenMelee
-				}
-			}
 			victim.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 			if damage > 0 {
 				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): max(194
@@ -2896,6 +2900,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				damage += bypass
 			}
 		}
+	} else if ownerSess := s.playerOwnerSessionOfCreature(target.GUID); ownerSess != nil {
+		// Unit::ApplyResilience (Unit.cpp:12342-12350): a creature victim
+		// owned by a player takes the owner's damage resilience — same
+		// crit + damage reduction arms as the player-victim call above.
+		ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 	}
 	overkill := uint32(0)
 	if damage >= target.Health && target.Health > 0 {
