@@ -2710,11 +2710,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the whole
+			// creature arm is gated on !victim->IsTotem() — totems never
+			// dodge.
+			if !isPlayerVictim && s.isTotemGUID(target.GUID) {
+				canDodge = false
+			}
 			// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
 			// a non-standing player victim always takes a crit when the attacker
 			// has nonzero crit chance.
 			victimSitting := isPlayerVictim && target.Sess != nil && target.Sess.player != nil && target.Sess.player.StandState != 0
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseParryReductionBP(creatureAuraKeyForMotion(motion)), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(creatureAuraKeyForMotion(motion)), victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseReductionBP(creatureAuraKeyForMotion(motion)), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 			if isPlayerVictim && target.Sess != nil {
 				if target.Sess.isImmuneToDamage(1) {
 					outcome = protocol.MeleeHitImmune

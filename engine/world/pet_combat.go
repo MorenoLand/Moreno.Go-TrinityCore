@@ -854,6 +854,11 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			}
 		}
 	}
+	// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the whole creature arm
+	// is gated on !victim->IsTotem() — totems never dodge.
+	if !isTargetPlayer && s.isTotemGUID(targetGUID) {
+		canDodge = false
+	}
 	// The glancing victim gate excludes pets (Unit.cpp:2276-2279); pets
 	// glance like players on the attacker side (Unit.cpp:2276).
 	isPetVictim := false
@@ -875,8 +880,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		targetState = protocol.VictimStateEvades
 	}
 	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
-	// (Unit.cpp:2694-2695) and the 240/4 parry-reduction arm
-	// (Unit::GetUnitParryChance's creature arm) stay unbridged on this path.
+	// (Unit.cpp:2694-2695) and the 240/4 dodge/parry-reduction arm
+	// (Unit::GetUnitDodgeChance's and GetUnitParryChance's creature arms,
+	// Unit.cpp:2700-2703/2756-2759) stay unbridged on this path.
 	// The roll's player/pet-attacker flag is true here: pets glance like
 	// players (Unit.cpp:2276) and, being player-controlled, never crush
 	// (Unit.cpp:2311).

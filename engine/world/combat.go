@@ -826,6 +826,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		}
 	}
+	// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the whole creature arm
+	// is gated on !victim->IsTotem() — totems never dodge.
+	if !isPlayerVictim && s.server != nil && s.server.isTotemGUID(target.GUID) {
+		canDodge = false
+	}
 
 	// A victim mid cast-bar cast cannot dodge/parry/block (Unit.cpp:2219-2224:
 	// victim->IsNonMeleeSpellCast(false); genericCastInProgress is the Go
@@ -1500,6 +1505,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	if !isPlayerVictim && s.server != nil {
 		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && !s.server.isTotemGUID(target.GUID) {
 			victimDodgeBonusBP = s.server.creatureAuraTypeSum(creatureAuraKeyForTarget(target), spellAuraModDodgePercent) * 100
+		}
+		// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the whole creature
+		// arm is gated on !victim->IsTotem() — totems never dodge.
+		if s.server.isTotemGUID(target.GUID) {
+			canDodge = false
 		}
 	}
 	// Ranged attacks ride Unit::RollMeleeOutcomeAgainst's positional arms
@@ -2577,13 +2587,17 @@ func (s *Server) creatureEnemyDodgeBP(key creatureAuraKey) int32 {
 	return total * 100
 }
 
-// creatureExpertiseParryReductionBP returns the creature attacker's total
+// creatureExpertiseReductionBP returns the creature attacker's total
 // SPELL_AURA_MOD_EXPERTISE (240) amount scaled to basis points for
-// rollMeleeOutcome's parry leg. C++ Unit::GetUnitParryChance reduces the
-// victim's parry by GetTotalAuraModifier(240)/4.0f percent for non-player
-// attackers (Unit.cpp); dodge gets no such creature arm (GetUnitDodgeChance
-// gates on TYPEID_PLAYER), so the value rides a parry-only modifier slot.
-func (s *Server) creatureExpertiseParryReductionBP(key creatureAuraKey) int32 {
+// rollMeleeOutcome's dodge and parry legs. C++ reduces BOTH dodge
+// (Unit::GetUnitDodgeChance, Unit.cpp:2700-2703) and parry
+// (Unit::GetUnitParryChance, Unit.cpp:2756-2759) by
+// GetTotalAuraModifier(240)/4.0f percent for non-player attackers, so the
+// value rides expertiseBP ([3]), which the roll subtracts from dodge and
+// which parryExpertiseBP ([6]) defaults to; the [6] slot at the creature
+// call site carries the same value and is now redundant but kept for
+// positional stability.
+func (s *Server) creatureExpertiseReductionBP(key creatureAuraKey) int32 {
 	if s == nil || key.GUID == 0 {
 		return 0
 	}
@@ -2617,7 +2631,12 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // [0] critReductionBP (from defender resilience)
 // [1] hitBonusBP (from attacker hit rating)
 // [2] critBonusBP (from attacker crit rating & agility)
-// [3] expertiseBP (reduces defender dodge and parry)
+// [3] expertiseBP (reduces defender dodge and parry). Player attackers
+// pass GetExpertiseDodgeParryReductionPct (Player::GetExpertiseDodgeOrParryReduction,
+// Player.cpp:5540; 0 for ranged); creature attackers pass
+// creatureExpertiseReductionBP (C++ reduces both dodge and parry by
+// GetTotalAuraModifier(240)/4.0f percent for non-player attackers,
+// Unit.cpp:2700-2703 and 2756-2759).
 // [4] victimDodgeBP (see below)
 // [5] attackerDodgeReductionBP: the attacker's
 // SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248, MiscValue == VICTIMSTATE_DODGE)
@@ -2629,10 +2648,10 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // table adds amount*100.
 // [6] parryExpertiseBP (optional): parry-only expertise reduction in basis
 // points — C++ Unit::GetUnitParryChance's creature arm
-// (GetTotalAuraModifier(SPELL_AURA_MOD_EXPERTISE)/4.0f, Unit.cpp) reduces
-// parry but not dodge for non-player attackers. Absent, it defaults to [3],
-// matching the player arm where GetExpertiseDodgeOrParryReduction covers
-// both.
+// (GetTotalAuraModifier(SPELL_AURA_MOD_EXPERTISE)/4.0f, Unit.cpp:2756-2759).
+// The dodge twin (Unit.cpp:2700-2703) now rides [3]; absent, it defaults
+// to [3], matching the player arm where GetExpertiseDodgeOrParryReduction
+// covers both.
 // [7] victimParryBonusBP (optional): the creature victim's
 // SPELL_AURA_MOD_PARRY_PERCENT (47) total in basis points — C++
 // GetUnitParryChance adds the victim's 47 total to the 5% base
@@ -2681,11 +2700,14 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 		attackerDodgeReductionBP = modifiers[5]
 	}
 	// Optional 7th modifier: the parry-only expertise reduction in basis
-	// points. C++ Unit::GetUnitParryChance reduces parry by the creature
-	// attacker's SPELL_AURA_MOD_EXPERTISE (240) total / 4.0f percent
-	// (Unit.cpp) while GetUnitDodgeChance applies no expertise reduction for
-	// non-player attackers; the player arm folds expertise into expertiseBP
-	// for both dodge and parry, so the default is expertiseBP.
+	// points. For non-player attackers C++ reduces parry by
+	// GetTotalAuraModifier(SPELL_AURA_MOD_EXPERTISE, 240)/4.0f percent
+	// (Unit::GetUnitParryChance, Unit.cpp:2756-2759); since
+	// GetUnitDodgeChance carries the same creature arm (Unit.cpp:2700-2703),
+	// creature call sites now pass the value in [3] as well and this slot
+	// carries the identical value for positional stability. The player arm
+	// folds expertise into expertiseBP for both dodge and parry, so the
+	// default is expertiseBP.
 	parryExpertiseBP := expertiseBP
 	if len(modifiers) > 6 {
 		parryExpertiseBP = modifiers[6]
