@@ -13869,6 +13869,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	blocked := uint32(0)
 	fullyResisted := false
 	immune := false
+	// Unit::CalculateSpellDamageTaken (Unit.cpp:983): SPELL_ATTR4_FIXED_DAMAGE
+	// skips the whole taken-mitigation block — a fixed-damage crit lands with no
+	// bonus, no SPELL_HIT_TYPE_CRIT on the log, and a normal proc hit mask
+	// (createProcHitMask reads the hit info, Unit.cpp:10238). Set below once the
+	// spell row is known.
+	fixedDamageSpell := false
 
 	if !isHit {
 		hitInfo = 0x01 // SPELL_HIT_TYPE_MISS
@@ -13887,15 +13893,17 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		if !instantKill && !procDamage && spellKnown && spellID != 31117 && spellID != 64085 {
 			crit = s.rollDirectSpellCrit(ctx, target, isPlayerVictim, schoolMask, dmgSpell, inheritCritBase)
 		}
-		if crit {
+		// SpellInfo::DmgClass is the DefenseType DBC field (SpellInfo.cpp:856),
+		// so the DefenseType route below is C++-exact.
+		fixedDamageSpell = spellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		if crit && !fixedDamageSpell {
 			if s.server != nil && s.server.Data != nil {
 				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
 					// Unit::CalculateSpellDamageTaken (Unit.cpp:1014-1040):
 					// melee/ranged-DmgClass spells take their own crit arm
 					// (flat 100% bonus plus the 203/204 victim auras), not
 					// the magic leg's SpellCriticalDamageBonus.
-					if (sp.DefenseType == spellDamageClassMelee || sp.DefenseType == spellDamageClassRanged) &&
-						sp.AttributesEx4&spellAttr4FixedDamage == 0 {
+					if sp.DefenseType == spellDamageClassMelee || sp.DefenseType == spellDamageClassRanged {
 						damage = s.spellWeaponCritDamageBonus(ctx, sp, damage, target, isPlayerVictim)
 					} else {
 						damage = s.spellCriticalDamageBonus(ctx, sp, damage, targetGUID)
@@ -14147,7 +14155,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// not a call-site skip. A zero incoming damage takes the no-damage arm
 	// (PROC_SPELL_TYPE_NO_DMG_HEAL, Spell.cpp:2563-2579), not the damage arm.
 	if hadIncomingDamage && !targetCantProc {
-		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage, reflected)
+		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, reflected)
 		// Taken-side aura procs on the victim's own auras (TrinityCore
 		// Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418): the done
 		// side runs first, matching the ProcSkillsAndAuras ordering
@@ -14157,7 +14165,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// taken passes iterate the same aura list.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage, s.triggeredNoProcEvents > 0, reflected)
+				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, s.triggeredNoProcEvents > 0, reflected)
 			}
 		}
 	} else if !targetCantProc {
