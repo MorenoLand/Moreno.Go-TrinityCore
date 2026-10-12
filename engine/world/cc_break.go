@@ -25,6 +25,38 @@ const (
 	auraInterruptFlagLeaveCombat           uint32 = 0x80000000 // removed by leaving combat (AURA_INTERRUPT_FLAG_LEAVE_COMBAT, SpellDefines.h:73)
 )
 
+// Spell attribute from TrinityCore src/server/shared/SharedDefines.h:574.
+const (
+	spellAttr4DamageDoesntBreakAuras uint32 = 0x00004000 // SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS: the spell's damage does not strip TAKE_DAMAGE-interrupt auras
+)
+
+// tickDamageBreaksAuras mirrors the Unit::DealDamage gate (Unit.cpp:743):
+// a damaging spell skips the TAKE_DAMAGE aura strip only when the spell
+// carries SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS. Spells with no DBC row
+// take the strip — the no-data regime carries no attribute data, so the
+// gate only ever suppresses the strip once Spell.dbc is loaded.
+func tickDamageBreaksAuras(srv *Server, spellID uint32) bool {
+	if srv == nil || srv.Data == nil {
+		return true
+	}
+	if sp, found, err := srv.Data.Spell(spellID); err == nil && found {
+		return sp.AttributesEx4&spellAttr4DamageDoesntBreakAuras == 0
+	}
+	return true
+}
+
+// isExceptedSpellID mirrors the `except` parameter of
+// Unit::RemoveAurasWithInterruptFlags: the aura of the spell that caused the
+// removal is kept.
+func isExceptedSpellID(spellID uint32, except []uint32) bool {
+	for _, id := range except {
+		if id != 0 && id == spellID {
+			return true
+		}
+	}
+	return false
+}
+
 // getSpellAuraInterruptFlags returns the aura interrupt bitmask from Spell.dbc with
 // hardcoded fallbacks for primary crowd-control and utility spells if DBC is unavailable.
 func getSpellAuraInterruptFlags(spellID uint32, dbcFlags uint32) uint32 {
@@ -136,6 +168,14 @@ func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 	if isDirectDamage {
 		wantProcFlag = procFlagTakenDamage
 	}
+	s.drainBreakableCCAurasOnTakenDamage(wantProcFlag, dmg)
+}
+
+// drainBreakableCCAurasOnTakenDamage runs the breakable-CC amount drain on
+// the session's active auras per AuraEffect::HandleBreakableCCAuraProc
+// (SpellAuraEffects.cpp:5644-5653): per damage hit, a breakable-CC aura's
+// own effect amount drops by the damage dealt, and the aura breaks at zero.
+func (s *session) drainBreakableCCAurasOnTakenDamage(wantProcFlag uint32, dmg uint32) {
 	var toRemove []uint32
 	s.castMu.Lock()
 	if s.activeAuras != nil && s.server != nil && s.server.Data != nil {
@@ -157,6 +197,24 @@ func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 	for _, spellID := range toRemove {
 		s.removeAura(spellID)
 	}
+}
+
+// procPeriodicTickDamageAuras mirrors the Unit::DealDamage victim arm
+// (Unit.cpp:738-750) for a periodic (DoT) tick: the strip covers
+// AURA_INTERRUPT_FLAG_TAKE_DAMAGE only — HITBYSPELL was already stripped at
+// spell-hit time (Spell.cpp:2747-2749) — excludes the ticking spell's own
+// aura, and is skipped entirely when the tick spell carries
+// SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS (Unit.cpp:743). The strip runs even
+// on zero-damage ticks (it precedes the !damage early-return in C++); the
+// breakable-CC drain follows with the taken-periodic proc flag.
+func (s *session) procPeriodicTickDamageAuras(spellID uint32, damage uint32) {
+	if tickDamageBreaksAuras(s.server, spellID) {
+		s.removeAurasWithInterruptFlags(auraInterruptFlagTakeDamage, spellID)
+	}
+	if damage == 0 {
+		return
+	}
+	s.drainBreakableCCAurasOnTakenDamage(procFlagTakenPeriodic, damage)
 }
 
 // procCreatureDamageAuras drains breakable-CC aura amounts on creatures per
@@ -204,12 +262,14 @@ func (s *session) procCastAuras() {
 
 // removeCreatureAurasWithInterruptFlags mirrors Unit::RemoveAurasWithInterruptFlags
 // for creature motions: drops the motion's activeCreatureAuras whose spell
-// interrupt flags intersect the mask. Serves the Spell::prepare stealth-break
+// interrupt flags intersect the mask. exceptSpellID mirrors the C++ `except`
+// parameter — the aura of the spell that caused the removal is kept.
+// Serves the Spell::prepare stealth-break
 // arm (Spell.cpp:3180-3191, AURA_INTERRUPT_FLAG_CAST and
 // AURA_INTERRUPT_FLAG_SPELL_ATTACK) on the creature and pet cast paths.
 // Collects under auraMu, then removes outside it — removeCreatureAura locks
 // auraMu itself.
-func (s *Server) removeCreatureAurasWithInterruptFlags(m *creatureMotion, flags uint32) {
+func (s *Server) removeCreatureAurasWithInterruptFlags(m *creatureMotion, flags uint32, exceptSpellID ...uint32) {
 	if s == nil || m == nil || flags == 0 {
 		return
 	}
@@ -220,6 +280,9 @@ func (s *Server) removeCreatureAurasWithInterruptFlags(m *creatureMotion, flags 
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			for spellID, aura := range auras {
 				if aura == nil {
+					continue
+				}
+				if isExceptedSpellID(spellID, exceptSpellID) {
 					continue
 				}
 				if getSpellAuraInterruptFlags(spellID, aura.AuraInterruptFlags)&flags != 0 {

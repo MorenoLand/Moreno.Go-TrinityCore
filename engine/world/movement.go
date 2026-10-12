@@ -1703,13 +1703,18 @@ func (s *session) getTotalAuraModifier(auraType uint32) int32 {
 }
 
 // removeAurasWithInterruptFlags removes any active or applied auras matching the given interrupt flag bitmask.
-// Mirrors Unit::RemoveAurasWithInterruptFlags.
-func (s *session) removeAurasWithInterruptFlags(flags uint32) {
+// Mirrors Unit::RemoveAurasWithInterruptFlags; exceptSpellID mirrors its
+// `except` parameter (Unit.cpp: the aura of the spell that caused the
+// removal is kept).
+func (s *session) removeAurasWithInterruptFlags(flags uint32, exceptSpellID ...uint32) {
 	var toRemove []uint32
 	seen := make(map[uint32]struct{})
 	s.castMu.Lock()
 	for _, aura := range s.activeAuras {
 		if aura != nil {
+			if isExceptedSpellID(aura.SpellID, exceptSpellID) {
+				continue
+			}
 			flg := getSpellAuraInterruptFlags(aura.SpellID, aura.AuraInterruptFlags)
 			if flg&flags != 0 {
 				if _, ok := seen[aura.SpellID]; !ok {
@@ -1720,6 +1725,9 @@ func (s *session) removeAurasWithInterruptFlags(flags uint32) {
 		}
 	}
 	for spellID := range s.auras {
+		if isExceptedSpellID(spellID, exceptSpellID) {
+			continue
+		}
 		dbcFlags := uint32(0)
 		if s.server != nil && s.server.Data != nil {
 			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {

@@ -25837,7 +25837,11 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 				casterSess.rollDurabilityLossOnHit(context.Background(), dmg)
 			}
 		}
-		ts.procDamageAuras(false, dmg)
+		// Unit::DealDamage (Unit.cpp:738-750): a periodic tick strips the
+		// victim's TAKE_DAMAGE-interrupt auras (excluding the ticking
+		// spell's own aura, skipped when the tick spell carries
+		// SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS), then drains breakable CC.
+		ts.procPeriodicTickDamageAuras(aura.SpellID, dmg)
 		ts.sendPlayerUpdate()
 		return dmg
 	}
@@ -27609,6 +27613,19 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if dmg > 0 {
 		s.splitShareDamagePct(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)
+	}
+	// Unit::DealDamage (Unit.cpp:738-750): a periodic tick strips the
+	// victim's TAKE_DAMAGE-interrupt auras — excluding the ticking spell's
+	// own aura — unless the tick spell carries
+	// SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS. Runs before the lethal leg
+	// (and on zero-damage ticks), matching C++ ordering.
+	if tickDamageBreaksAuras(s.server, aura.SpellID) {
+		s.server.motionMu.Lock()
+		victimMotion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+		s.server.motionMu.Unlock()
+		if victimMotion != nil {
+			s.server.removeCreatureAurasWithInterruptFlags(victimMotion, auraInterruptFlagTakeDamage, aura.SpellID)
+		}
 	}
 	if dmg >= targetHealth {
 		// Target slain by DoT
