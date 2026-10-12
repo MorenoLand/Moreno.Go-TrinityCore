@@ -19202,9 +19202,9 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 // (Object.cpp:2555) runs for creature casters: their live
 // SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum folds in via the
 // HandleModSpellHitChance creature arm. Player casters stay parked (no
-// caster session in this path). Documented deltas: the trigger-caster
-// max(thisLevel, SpellLevel) arm (Object.cpp:2533) has no Go model
-// (flags_extra is not carried on the motion); SPELLMOD_RESIST_MISS_CHANCE
+// caster session in this path). The trigger-caster max(thisLevel, SpellLevel)
+// arm (Object.cpp:2526-2527) IS bridged (motion FlagsExtra & 0x00000080 raises
+// the attacker level to SpellLevel). Documented deltas: SPELLMOD_RESIST_MISS_CHANCE
 // spellmods, the mechanic-resist and deflect rolls,
 // SPELL_ATTR3_IGNORE_HIT_RESULT, the victim-side 186/160 aura arms, and the
 // victim CR_HIT_TAKEN_SPELL rating leg have no Go model. The
@@ -19215,6 +19215,20 @@ func (s *Server) persistentAreaTickMissed(mapID, instanceID uint32, aura *active
 	attLevel, _ := tickAttackerLevel(s, mapID, instanceID, aura)
 	if aura == nil || !aura.PersistentAreaAura || attLevel == 0 {
 		return false
+	}
+	// WorldObject::MagicSpellHitResult (Object.cpp:2526-2527): when the caster
+	// is a creature with CREATURE_FLAG_EXTRA_TRIGGER set (Creature::IsTrigger,
+	// template flags_extra & 0x00000080, Creature.h:97), the miss leg rolls at
+	// max(thisLevel, spellInfo->SpellLevel). The motion carries the template
+	// FlagsExtra (creaturemotion.go), so the tick path can apply the arm; the
+	// other magicSpellHitResult call sites (player/pet casters) can never take
+	// this arm (C++ requires TYPEID_UNIT).
+	if s != nil && s.Data != nil && aura.CasterGUID != 0 {
+		if motion := s.findCreatureMotion(mapID, instanceID, aura.CasterGUID); motion != nil && motion.FlagsExtra&0x00000080 != 0 {
+			if sp, found, err := s.Data.Spell(aura.SpellID); err == nil && found && sp.SpellLevel > uint32(attLevel) {
+				attLevel = uint8(sp.SpellLevel)
+			}
+		}
 	}
 	var bonusHit float64
 	if s != nil && aura.CasterGUID != 0 && s.findSessionByGUID(aura.CasterGUID) == nil {

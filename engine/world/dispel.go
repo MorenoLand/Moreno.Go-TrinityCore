@@ -1116,6 +1116,59 @@ func (s *session) backlashCasterSession(casterGUID uint64) *session {
 	return s
 }
 
+// shadowAffinityDispelRestore mirrors the Shadow Affinity arm of
+// Aura::HandleAuraSpecificMods (SpellAuras.cpp:1636-1646): on an enemy-spell
+// removal (dispel) of Shadow Word: Pain or Vampiric Touch, the AURA caster's
+// Shadow Affinity dummy aura (priest family, SpellIconID 178, effect index 1 —
+// Unit::GetDummyAuraEffect's iconId/effIndex pair, Unit.h:1294) restores
+// amount% of the caster's create mana via 64103. No-op when the removed spell
+// isn't SW:P/VT or the aura caster has no live session (the C++
+// `if (!caster) break` arm); creature casters stay a documented delta.
+func (s *session) shadowAffinityDispelRestore(ctx context.Context, removedSpellID uint32, auraCasterGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	removed, found, err := s.server.Data.Spell(removedSpellID)
+	if err != nil || !found || removed.SpellFamilyName != spellFamilyPriest ||
+		(removed.SpellFamilyFlags[0]&0x00008000 == 0 && removed.SpellFamilyFlags[1]&0x00000400 == 0) {
+		return
+	}
+	casterSess := s.server.findSessionByGUID(auraCasterGUID)
+	if casterSess == nil || casterSess.player == nil {
+		return
+	}
+	var amount int32
+	for _, aura := range casterSess.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask&(1<<1) == 0 {
+			continue
+		}
+		sp, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || sp.SpellFamilyName != spellFamilyPriest || sp.SpellIconID != 178 {
+			continue
+		}
+		if len(sp.Effects) > 1 && sp.Effects[1].Aura == spellAuraDummy {
+			amount = aura.Amounts[1]
+			break
+		}
+	}
+	if amount <= 0 {
+		return
+	}
+	restore := int32(int64(amount) * int64(energizeCreateMana(casterSess)) / 100)
+	if restore <= 0 {
+		return
+	}
+	// C++ casts 64103 (SPELL_EFFECT_ENERGIZE, misc power mana) triggered on
+	// the caster; Go applies the energize + the Unit::EnergizeBySpell
+	// log/threat tail directly, like the other internal energize arms.
+	spell64103, found, err := s.server.Data.Spell(64103)
+	if err != nil || !found {
+		spell64103 = wotlk.Spell{ID: 64103}
+	}
+	casterSess.applySpellEnergize(ctx, auraCasterGUID, 0, restore)
+	casterSess.energizeBySpellTail(ctx, spell64103, 64103, auraCasterGUID, 0, restore)
+}
+
 func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, petCaster *creatureMotion, isReflected bool) {
 	if s.player == nil {
 		return
@@ -1256,6 +1309,20 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 				} else {
 					casterSess.executeSpellDamage(ctx, targetGUID, 64085, backlashDamage, 0)
 				}
+			}
+
+			// Shadow Affinity (SpellAuras.cpp:1636-1646): the
+			// AURA_REMOVE_BY_ENEMY_SPELL arm of Aura::HandleAuraSpecificMods —
+			// when Shadow Word: Pain or Vampiric Touch is removed by an enemy
+			// spell (dispel), the AURA caster's Shadow Affinity dummy aura
+			// (priest family, icon 178, effect index 1) restores amount% of the
+			// caster's create mana via 64103. Fires only on full removal —
+			// C++ ModCharges/ModStackAmount arms the specific-mods on the
+			// removal, not per charge. The Rapture arm (PW:S dispel,
+			// SpellAuras.cpp:1647+) is not bridged yet: it needs the 12s
+			// player cooldown gate and the power-type target-side spells.
+			if fullyRemoved {
+				s.shadowAffinityDispelRestore(ctx, cand.SpellID, cand.CasterGUID)
 			}
 		} else {
 			// Dispel resisted / failed
