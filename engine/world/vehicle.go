@@ -167,7 +167,7 @@ func (v *VehicleKit) GetNextEmptySeat(currSeatID int8, forward bool) (int8, bool
 
 // AddPassenger attempts to board a passenger onto the vehicle at seatID (-1 for first available).
 // Reference: Vehicle::AddPassenger (Vehicle.cpp:426-484).
-func (v *VehicleKit) AddPassenger(passengerGUID uint64, seatID int8) (assignedSeat int8, seatInfo *wotlk.VehicleSeatEntry, ok bool) {
+func (v *VehicleKit) AddPassenger(passengerGUID uint64, seatID int8, wasUnselectable bool) (assignedSeat int8, seatInfo *wotlk.VehicleSeatEntry, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -196,7 +196,10 @@ func (v *VehicleKit) AddPassenger(passengerGUID uint64, seatID int8) (assignedSe
 		return -1, nil, false
 	}
 
-	seat.Passenger.GUID = passengerGUID
+	// Vehicle::RemovePassenger (Vehicle.cpp:928-930): the exit leg needs to
+	// know whether the passenger carried UNIT_FLAG_NOT_SELECTABLE before
+	// boarding, so the pre-boarding state is recorded here.
+	seat.Passenger = PassengerInfo{GUID: passengerGUID, IsUnselectable: wasUnselectable}
 	if seat.SeatInfo != nil && seat.SeatInfo.CanEnterOrExit() && v.UsableSeatNum > 0 {
 		v.UsableSeatNum--
 	}
@@ -205,19 +208,23 @@ func (v *VehicleKit) AddPassenger(passengerGUID uint64, seatID int8) (assignedSe
 
 // RemovePassenger removes the passenger from the vehicle kit.
 // Reference: Vehicle::RemovePassenger (Vehicle.cpp:498-543).
-func (v *VehicleKit) RemovePassenger(passengerGUID uint64) (seatID int8, seatInfo *wotlk.VehicleSeatEntry, ok bool) {
+func (v *VehicleKit) RemovePassenger(passengerGUID uint64) (seatID int8, seatInfo *wotlk.VehicleSeatEntry, wasUnselectable bool, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for id, s := range v.Seats {
 		if s.Passenger.GUID == passengerGUID {
+			// C++ finds the seat iterator before resetting the passenger;
+			// the recorded pre-boarding unselectable state rides back out
+			// so the exit leg can restore it exactly (Vehicle.cpp:928-930).
+			wasUnselectable = s.Passenger.IsUnselectable
 			s.Passenger.Reset()
 			if s.SeatInfo != nil && s.SeatInfo.CanEnterOrExit() {
 				v.UsableSeatNum++
 			}
-			return id, s.SeatInfo, true
+			return id, s.SeatInfo, wasUnselectable, true
 		}
 	}
-	return -1, nil, false
+	return -1, nil, false, false
 }
 
 // SwitchSeat moves a passenger to newSeatID, validating CanSwitchFromSeat.
@@ -732,7 +739,17 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 	var seatInfo *wotlk.VehicleSeatEntry
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID); kit != nil {
-			assigned, si, ok := kit.AddPassenger(s.playerGUID, seatID)
+			// Vehicle::AddPassenger (Vehicle.cpp:465-478): boarding a
+			// specific occupied seat ejects its current occupant first.
+			if seatID >= 0 && !kit.HasEmptySeat(seatID) {
+				if occGUID := kit.GetPassenger(seatID); occGUID != 0 && occGUID != s.playerGUID {
+					if occSess := s.server.findSessionByGUID(occGUID); occSess != nil {
+						occSess.exitVehicle(ctx)
+					}
+				}
+			}
+			wasUnselectable := s.player.UnitFlags&0x02000000 != 0 // UNIT_FLAG_NOT_SELECTABLE
+			assigned, si, ok := kit.AddPassenger(s.playerGUID, seatID, wasUnselectable)
 			if !ok {
 				return
 			}
@@ -754,9 +771,12 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		}
 	}
 
-	// VehicleJoinEvent::Execute (Vehicle.cpp:832-852): boarding strips the
-	// passenger's mounted auras and temporarily unsummons the pet unless the
-	// seat carries VEHICLE_SEAT_FLAG_B_KEEP_PET.
+	// VehicleJoinEvent::Execute (Vehicle.cpp:840): boarding interrupts the
+	// passenger's non-melee spells, and (Vehicle.cpp:841) strips mounted
+	// auras; the pet is temporarily unsummoned unless the seat carries
+	// VEHICLE_SEAT_FLAG_B_KEEP_PET (Vehicle.cpp:850-852).
+	s.interruptCurrentCast()
+	s.interruptCurrentChannel()
 	s.clearOtherMountedAuras(0)
 	if seatInfo == nil || !seatInfo.HasFlag(wotlk.VehicleSeatFlagBKeepPet) {
 		s.temporarilyUnsummonPet(ctx)
@@ -781,26 +801,27 @@ func (s *session) exitVehicle(ctx context.Context) {
 
 	oldVehGUID := s.player.VehicleGUID
 	playerVehicleID := uint32(0)
+	var seatAddon *VehicleSeatAddon
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, oldVehGUID); kit != nil {
 			if kit.IsPlayer {
 				playerVehicleID = kit.VehicleID
 			}
-			_, seatInfo, _ := kit.RemovePassenger(s.playerGUID)
+			// Unit::_ExitVehicle (Unit.cpp:13193): the seat addon is
+			// captured BEFORE RemovePassenger — after removal the seat is
+			// empty and the lookup finds nothing.
+			seatAddon = kit.GetSeatAddonForSeatOfPassenger(s.playerGUID)
+			_, seatInfo, wasUnselectable, _ := kit.RemovePassenger(s.playerGUID)
 			if seatInfo != nil {
 				if seatInfo.CanControl() {
 					s.sendClientControl(oldVehGUID, false)
 					s.sendVehiclePetSpells(0, nil)
 				}
-				if seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) {
+				// Vehicle::RemovePassenger (Vehicle.cpp:928-930): the
+				// NOT_SELECTABLE flag is only cleared when the passenger
+				// did not carry it before boarding.
+				if seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) && !wasUnselectable {
 					s.player.UnitFlags &^= 0x02000000
-				}
-				addon := kit.GetSeatAddonForSeatOfPassenger(s.playerGUID)
-				if addon != nil && addon.ExitParameter == wotlk.VehicleExitParamDest {
-					s.player.X = addon.ExitParamX
-					s.player.Y = addon.ExitParamY
-					s.player.Z = addon.ExitParamZ
-					s.player.Orientation = addon.ExitParamO
 				}
 			}
 		}
@@ -812,12 +833,47 @@ func (s *session) exitVehicle(ctx context.Context) {
 	s.lastFallTime = 0
 	s.resummonTemporaryPet(ctx)
 
+	// Unit::_ExitVehicle (Unit.cpp:13215-13234): the exit position is the
+	// vehicle base position with the passenger's orientation, then the
+	// seat addon's Offset/Dest arms.
+	s.applyVehicleExitPosition(oldVehGUID, seatAddon)
+
 	s.player.VehicleGUID = 0
 	s.player.VehicleSeat = 0
 	if playerVehicleID != 0 {
 		s.sendPlayerVehicleData(0)
 	}
 	s.sendPlayerUpdate()
+}
+
+// applyVehicleExitPosition resolves the passenger's exit coordinates.
+// Reference: Unit::_ExitVehicle (Unit.cpp:13215-13234).
+func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSeatAddon) {
+	if s == nil || s.player == nil {
+		return
+	}
+	baseX, baseY, baseZ := s.player.X, s.player.Y, s.player.Z
+	if s.server != nil {
+		if baseSess := s.server.findSessionByGUID(vehicleGUID); baseSess != nil && baseSess.player != nil {
+			baseX, baseY, baseZ = baseSess.player.X, baseSess.player.Y, baseSess.player.Z
+		}
+	}
+	o := s.player.Orientation
+	if addon != nil {
+		switch addon.ExitParameter {
+		case wotlk.VehicleExitParamOffset:
+			// Position::RelocateOffset (Position.cpp:36-42).
+			cosO := float32(math.Cos(float64(o)))
+			sinO := float32(math.Sin(float64(o)))
+			baseX += addon.ExitParamX*cosO - addon.ExitParamY*sinO
+			baseY += addon.ExitParamY*cosO + addon.ExitParamX*sinO
+			baseZ += addon.ExitParamZ
+			o = normalizeOrientation(o + addon.ExitParamO)
+		case wotlk.VehicleExitParamDest:
+			baseX, baseY, baseZ, o = addon.ExitParamX, addon.ExitParamY, addon.ExitParamZ, addon.ExitParamO
+		}
+	}
+	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = baseX, baseY, baseZ, o
 }
 
 // handleChangeSeatsOnControlledVehicle processes CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE (0x49B).
