@@ -1521,7 +1521,14 @@ func (s *session) rescheduleStolenAuraTick(spellID, victimMaxMs, dur uint32) {
 	if victimMaxMs > dur {
 		elapsed = victimMaxMs - dur
 	}
-	delay := (periodMs - elapsed%periodMs) % periodMs
+	// C++ sets _periodicTimer = elapsed % amplitude and the Update loop
+	// accumulates diff until it reaches the amplitude, so the first tick
+	// fires after amplitude - (elapsed % amplitude) — a FULL amplitude
+	// when elapsed is an exact multiple (timer 0 still needs a full
+	// amplitude of accumulation, exactly like a fresh apply). The modulo
+	// must not wrap that case to 0: a 0 delay would fire an immediate
+	// extra tick C++ never fires (e.g. stealing a freshly applied HoT).
+	delay := periodMs - elapsed%periodMs
 	s.castMu.Unlock()
 	s.schedulePlayerPeriodicTickInitial(aura, periodMs, delay)
 }
