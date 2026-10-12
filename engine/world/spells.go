@@ -7201,8 +7201,8 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 		var level uint8 = 1
 		if trig != nil {
 			slot, positive, maxDur, dur, effectMask = trig.Slot, trig.Positive, trig.DurationMs, trig.RemainingMs, trig.EffectMask
-			if trig.CasterLevel != 0 {
-				level = trig.CasterLevel
+			if trig.StoredCasterLevel != 0 {
+				level = trig.StoredCasterLevel
 			}
 		}
 		targetSess.castMu.Unlock()
@@ -17559,7 +17559,7 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 			return
 		}
 		aura.StackCount -= uint8(doses)
-		stack, slot, effectMask, positive, casterGUID, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterGUID, aura.CasterLevel
+		stack, slot, effectMask, positive, casterGUID, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterGUID, aura.StoredCasterLevel
 		maxDur, dur := auraWireDurationsForAura(s, aura)
 		s.castMu.Unlock()
 		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, poison.SpellID, false, positive, maxDur, dur, casterLevel, stack, effectMask)
@@ -17577,7 +17577,7 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 			return
 		}
 		aura.StackCount -= uint8(doses)
-		stack, slot, effectMask, positive, casterGUID, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterGUID, aura.CasterLevel
+		stack, slot, effectMask, positive, casterGUID, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterGUID, aura.StoredCasterLevel
 		maxDur, dur := auraWireDurationsForAura(other, aura)
 		other.castMu.Unlock()
 		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, poison.SpellID, false, positive, maxDur, dur, casterLevel, stack, effectMask)
@@ -17596,7 +17596,7 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 			return
 		}
 		aura.StackCount -= uint8(doses)
-		stack, slot, effectMask, positive, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterLevel
+		stack, slot, effectMask, positive, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.StoredCasterLevel
 		casterGUID := aura.CasterGUID
 		if casterGUID == 0 {
 			casterGUID = s.playerGUID
@@ -18409,6 +18409,12 @@ type activeAura struct {
 	Slot              uint8
 	Positive          bool
 	CasterLevel       uint8
+	// StoredCasterLevel is the C++ Aura::_casterInfo.Level value
+	// (SpellAuras.cpp:445-451): SpellLevel unless Aura::Create resolved a
+	// live caster from the caster GUID, in which case the caster's level.
+	// The wire (BuildUpdatePacket, SpellAuras.cpp:239) sends this, while
+	// CasterLevel stays the calc-side live level.
+	StoredCasterLevel uint8
 	StackCount        uint8
 	SingleTarget      bool
 	// TickCount is the C++ AuraEffect::_ticksDone counter
@@ -19586,8 +19592,8 @@ func (s *session) sendAuraUpdateWithStack(slot uint8, spellID uint32, remove, po
 		}
 		// BuildUpdatePacket (SpellAuras.cpp:239) sends aura->GetCasterLevel(),
 		// the stored aura level — not the target session's level.
-		if aura.CasterLevel != 0 {
-			level = aura.CasterLevel
+		if aura.StoredCasterLevel != 0 {
+			level = aura.StoredCasterLevel
 		}
 	}
 	s.castMu.Unlock()
@@ -19765,6 +19771,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		SingleTarget:       isSingleTargetAuraSpellID(s.server.Data, spellID),
 		Slot:               slot,
 		Positive:           positive,
+		StoredCasterLevel:  s.auraStoredCasterLevel(s.playerGUID, wotlk.Spell{}),
 		AuraInterruptFlags: auraInterruptFlags,
 		StackAmount:        stackAmount,
 		HideDuration:       hideDuration,
@@ -22304,6 +22311,31 @@ func isExistingAreaAuraOfTarget(aura *activeAura, exSpell wotlk.Spell, targetGUI
 // selects the aura-proc DR group variant (Spell::PreprocessSpellHit,
 // Spell.cpp:2798 — m_triggeredByAuraSpell != null); only the triggered-cast
 // dispatch passes true.
+// auraStoredCasterLevel mirrors the Aura ctor's _casterInfo.Level rule
+// (SpellAuras.cpp:445-451): SpellLevel by default, the live caster's level
+// when Aura::Create resolves a caster from the caster GUID via
+// ObjectAccessor::GetUnit — same map and in-world (ObjectAccessor.cpp).
+// Item casts resolve to the casting player (Spell.cpp:4336-4340); the
+// steal path resolves the ORIGINAL caster, not the stealer
+// (Unit.cpp:4019-4023).
+func (s *session) auraStoredCasterLevel(casterGUID uint64, spell wotlk.Spell) uint8 {
+	if s != nil && s.player != nil && casterGUID != 0 {
+		if casterGUID == s.playerGUID || casterGUID&(uint64(0x4000)<<48) != 0 {
+			return s.player.Level
+		}
+		if s.server != nil {
+			if cs := s.server.findSessionByGUID(casterGUID); cs != nil && cs.player != nil &&
+				cs.player.Map == s.player.Map && cs.player.InstanceID == s.player.InstanceID {
+				return cs.player.Level
+			}
+			if m := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, casterGUID); m != nil {
+				return uint8(casterLevel(m))
+			}
+		}
+	}
+	return uint8(spell.SpellLevel)
+}
+
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64, triggeredByAura bool) {
 	if s.player == nil {
 		return
@@ -22571,7 +22603,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 			// BuildUpdatePacket (SpellAuras.cpp:239) sends the stored aura's
 			// caster level — a refresh keeps the old aura's level.
-			updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.CasterLevel, wireStack, effectMask)
+			updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.StoredCasterLevel, wireStack, effectMask)
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 			if s.server != nil {
 				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
@@ -22654,6 +22686,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			Slot:               slot,
 			Positive:           positive,
 			CasterLevel:        s.player.Level,
+			StoredCasterLevel:  s.auraStoredCasterLevel(casterGUID, spell),
 			SingleTarget:       isSingleTargetAuraSpell(spell),
 			AuraInterruptFlags: spell.AuraInterruptFlags,
 			TriggerSpell:       eff.TriggerSpell,
@@ -23137,7 +23170,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if wireCaster == 0 {
 			wireCaster = s.playerGUID
 		}
-		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, aura.CasterLevel, stackCount, spellEffectMask(spell, eff))
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, aura.StoredCasterLevel, stackCount, spellEffectMask(spell, eff))
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
@@ -23357,7 +23390,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		// BuildUpdatePacket (SpellAuras.cpp:239) sends the stored aura's
 		// caster level — a refresh keeps the old aura's level.
-		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.CasterLevel, wireStack, effectMask)
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.StoredCasterLevel, wireStack, effectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 		return
@@ -23406,6 +23439,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		Slot:               slot,
 		Positive:           positive,
 		CasterLevel:        s.player.Level,
+		StoredCasterLevel:  s.auraStoredCasterLevel(s.playerGUID, spell),
 		SingleTarget:       isSingleTargetAuraSpell(spell),
 		TriggerSpell:       eff.TriggerSpell,
 		StackAmount:        spell.StackAmount,
@@ -23570,7 +23604,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		stackCount = uint8(spell.ProcCharges)
 	}
 	wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
-	updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, aura.CasterLevel, stackCount, spellEffectMask(spell, eff))
+	updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, aura.StoredCasterLevel, stackCount, spellEffectMask(spell, eff))
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 
