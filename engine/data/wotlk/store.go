@@ -128,7 +128,13 @@ func (effect SpellEffect) CalcValue() int32 {
 }
 
 func (effect SpellEffect) calculatedBasePoints(spell Spell, casterLevel uint32) int64 {
-	basePoints := int64(effect.BasePoints)
+	return effect.calculatedBasePointsFrom(int64(effect.BasePoints), spell, casterLevel)
+}
+
+// calculatedBasePointsFrom is calculatedBasePoints starting from an explicit
+// stored base amount (AuraEffect::m_baseAmount), for the CalcValue(caster, bp)
+// call sites like the periodic-tick divisor legs.
+func (effect SpellEffect) calculatedBasePointsFrom(basePoints int64, spell Spell, casterLevel uint32) int64 {
 	if casterLevel > 0 && effect.RealPointsPerLevel != 0 {
 		level := casterLevel
 		if spell.MaxLevel > 0 && level > spell.MaxLevel {
@@ -146,7 +152,15 @@ func (effect SpellEffect) calculatedBasePoints(spell Spell, casterLevel uint32) 
 }
 
 func (effect SpellEffect) CalcValueForLevel(spell Spell, casterLevel uint32) int32 {
-	basePoints := effect.calculatedBasePoints(spell, casterLevel)
+	return effect.CalcValueForBase(spell, effect.BasePoints, casterLevel)
+}
+
+// CalcValueForBase mirrors SpellEffectInfo::CalcValue(caster, bp) with an
+// explicit stored base amount, used by the periodic-tick legs that re-derive
+// values from AuraEffect::m_baseAmount (e.g. the MOD_ATTACK_POWER_OF_ARMOR
+// divisor, SpellAuraEffects.cpp:5635-5641).
+func (effect SpellEffect) CalcValueForBase(spell Spell, baseAmount int32, casterLevel uint32) int32 {
+	basePoints := effect.calculatedBasePointsFrom(int64(baseAmount), spell, casterLevel)
 	switch {
 	case effect.DieSides > 0:
 		return int32(basePoints + 1 + rand.Int64N(int64(effect.DieSides)))

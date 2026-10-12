@@ -878,11 +878,13 @@ func (s *session) updateGatherSkill(ctx context.Context, skillID, skillValue, re
 // with the effect's calculated value as the step and the current pure skill
 // value (floored at 1) as the value. The TYPEID_PLAYER gate
 // (SpellEffects.cpp:2641-2642) is the session lookup below.
-func (s *session) applySkillStepEffect(ctx context.Context, eff wotlk.SpellEffect, effectTarget uint64) {
+func (s *session) applySkillStepEffect(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, casterLevel uint32, effectTarget uint64) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
-	damage := eff.BasePoints + 1 // tree-wide flat convention for the handler damage
+	// SpellEffects.cpp:2644 — the damage<0 gate and the tier rank both read
+	// the per-target CalculateDamage (rolled), not the flat base.
+	damage := eff.CalcValueForLevel(spell, casterLevel)
 	if damage < 0 {
 		return // SpellEffects.cpp:2644
 	}
@@ -1279,7 +1281,7 @@ func (s *session) maxPositiveAuraModifierByAffectMask(auraType uint32, spell wot
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			if amount > maxValue {
 				maxValue = amount
@@ -1324,7 +1326,7 @@ func (s *session) totalAuraModifierByAffectMaskAndSchool(auraType uint32, spell 
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 		}
@@ -1423,7 +1425,7 @@ func (s *session) ignoreTargetResistArmor(armor float64, spell wotlk.Spell) floa
 					amount = int32(aura.Amount)
 				}
 				if amount == 0 {
-					amount = effect.BasePoints + 1
+					amount = effect.BasePoints
 				}
 				armor = math.Floor(armor * (100 - float64(amount)) / 100)
 			}
@@ -1494,7 +1496,7 @@ func (s *session) totalAuraModifierByAffectMask(auraType uint32, spell wotlk.Spe
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 		}
@@ -3923,13 +3925,14 @@ func (s *session) checkLearnSpellCast(ctx context.Context, spell wotlk.Spell, ta
 // (SpellEffects.cpp:2406-2424) on the target's session: spells 483 and
 // 55884 carry the taught spell in the effect value (damage), not
 // TriggerSpell.
-func (s *session) learnSpellEffectTarget(ctx context.Context, castSpellID uint32, eff wotlk.SpellEffect) {
+func (s *session) learnSpellEffectTarget(ctx context.Context, castSpellID uint32, spell wotlk.Spell, eff wotlk.SpellEffect, casterLevel uint32) {
 	if s == nil {
 		return
 	}
 	spellToLearn := eff.TriggerSpell
 	if castSpellID == 483 || castSpellID == 55884 {
-		spellToLearn = uint32(eff.BasePoints + 1)
+		// SpellEffects.cpp:2422 — the taught spell rides the rolled damage.
+		spellToLearn = uint32(eff.CalcValueForLevel(spell, casterLevel))
 	}
 	if spellToLearn != 0 {
 		s.learnSpell(ctx, spellToLearn)
@@ -6942,7 +6945,7 @@ func (s *session) prepareHitTriggerSpells(spell wotlk.Spell) []spellHitTrigger {
 			// directly (documented delta).
 			chance := aura.BaseAmounts[index]
 			if chance == 0 {
-				chance = effect.BasePoints + 1
+				chance = effect.BasePoints
 			}
 			chance *= int32(aura.StackAmount)
 			triggers = append(triggers, spellHitTrigger{
@@ -9330,7 +9333,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				var wd weaponDmgParams
 				if weaponDamageEffect {
-					wd = weaponDmgParamsForSpell(spell)
+					wd = weaponDmgParamsForSpell(spell, casterLevel)
 				}
 				damage := uint32(eff.CalcValueForLevel(spell, casterLevel))
 				// Effect 121 (SPELL_EFFECT_NORMALIZED_WEAPON_DMG) rides the
@@ -10056,10 +10059,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// gate is at function top, so it covers effect 10 too — a
 				// negative effect value heals nothing. The pct arm's gate
 				// below only covers 136.
-				if eff.Effect == spellEffectHeal && eff.BasePoints+1 <= 0 {
+				// SpellEffects.cpp:1403 — the damage<0 gate reads the rolled
+				// CalculateDamage, shared with the heal below (Go rolls once per
+				// effect; C++ rolls per target — documented delta).
+				healValue := eff.CalcValueForLevel(spell, casterLevel)
+				if eff.Effect == spellEffectHeal && healValue < 0 {
 					break
 				}
-				heal := uint32(eff.CalcValueForLevel(spell, casterLevel))
+				heal := uint32(healValue)
 				// Spell::EffectHeal (SpellEffects.cpp): the Death Pact arm
 				// (SPELLFAMILY_DEATHKNIGHT, SpellFamilyFlags[0] & 0x00080000)
 				// replaces the flat effect value with damage% of the caster's
@@ -10068,7 +10075,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// spell-power bonus over it, like the C++ else arm).
 				if eff.Effect == 10 && spell.SpellFamilyName == spellFamilyDeathKnight &&
 					spell.SpellFamilyFlags[0]&0x80000 != 0 && s.player != nil {
-					heal = uint32(uint64(s.player.MaxHealth) * uint64(eff.BasePoints+1) / 100)
+					heal = uint32(uint64(s.player.MaxHealth) * uint64(healValue) / 100)
 				}
 				// Vessel of the Naaru (spell 45064, Vial of the Sunwell
 				// trinket): the stacked Holy Energy (aura 45062 effect-0
@@ -10146,10 +10153,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// previously fell through to the default no-op arm, so
 				// mechanical heals did nothing at all. The damage<0 and
 				// !IsAlive gates ride effectTargetMaxHealth like the pct arm.
-				if eff.BasePoints+1 <= 0 {
+				// SpellEffects.cpp:1500 — the damage<0 gate reads the rolled value.
+				mechValue := eff.CalcValueForLevel(spell, casterLevel)
+				if mechValue < 0 {
 					break
 				}
-				mechHeal := uint32(eff.CalcValueForLevel(spell, casterLevel))
+				mechHeal := uint32(mechValue)
 				for _, effectTarget := range hitTargets {
 					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
 						continue
@@ -10249,7 +10258,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectSkillStep: // 44: SPELL_EFFECT_SKILL_STEP
 				// Spell::EffectLearnSkill (SpellEffects.cpp:2637-2654).
 				for _, effectTarget := range hitTargets {
-					s.applySkillStepEffect(ctx, eff, effectTarget)
+					s.applySkillStepEffect(ctx, spell, eff, casterLevel, effectTarget)
 				}
 				// Spell::EffectAddExtraAttacks (SpellEffects.cpp:4301-4314)
 				// banks the effect's damage as pending extra swings on the
@@ -10302,7 +10311,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectHealMaxHealth:
 				for _, effectTarget := range hitTargets {
-					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID, eff.BasePoints+1)
+					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
 			case 6, 27, 35: // Apply Aura
 				durationMs, periodMs, amount := s.auraEffectParams(spell, eff)
@@ -10406,11 +10415,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			case 162: // SPELL_EFFECT_TALENT_SPEC_SELECT
-				targetSpec := uint8(0)
-				if eff.BasePoints+1 >= 2 {
-					targetSpec = 1
-				}
-				s.activateSpec(effCtx, targetSpec)
+				// Spell::EffectActivateSpec — ActivateSpec(damage-1) on the
+				// rolled CalculateDamage.
+				s.activateSpec(effCtx, uint8(eff.CalcValueForLevel(spell, casterLevel)-1))
 			case 74: // SPELL_EFFECT_APPLY_GLYPH
 				glyphPropID := uint16(eff.MiscValue)
 				s.applyGlyph(effCtx, castID, spell, s.targetGlyphSlot, glyphPropID)
@@ -10672,7 +10679,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// unmodeled. The no-unit-target arm is vacuous: the effects
 				// loop returns early when hitTargets is empty.
 				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-					ts.learnSpellEffectTarget(effCtx, spellID, eff)
+					ts.learnSpellEffectTarget(effCtx, spellID, spell, eff, casterLevel)
 				} else if s.petNumberForGUID(targetGUID) != 0 {
 					s.teachPetSpell(effCtx, eff.TriggerSpell)
 				}
@@ -10685,7 +10692,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// teachPetSpell); other targets learn nothing. The
 				// no-unit-target arm is vacuous as above.
 				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-					ts.learnSpellEffectTarget(effCtx, spellID, eff)
+					ts.learnSpellEffectTarget(effCtx, spellID, spell, eff, casterLevel)
 				} else if s.petNumberForGUID(targetGUID) != 0 {
 					s.teachPetSpell(effCtx, eff.TriggerSpell)
 				}
@@ -10693,8 +10700,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectResurrect(effCtx, targetGUID, spell, eff)
 			case spellEffectReputation: // 103: SPELL_EFFECT_REPUTATION (EffectReputation, SpellEffects.cpp:4349-4368)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
-				// target, player-only: every player hit target gains
-				// BasePoints+1 reputation with the MiscValue faction, not
+				// target, player-only: every player hit target gains the
+				// rolled effect value as reputation with the MiscValue faction,
+				// not
 				// just the caster. The Faction DBC entry must exist
 				// (sFactionStore.LookupEntry gate, SpellEffects.cpp:4359-4361);
 				// an unknown faction grants nothing. Documented no-bridge:
@@ -10708,7 +10716,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							continue
 						}
 						if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
-							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.BasePoints+1)
+							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel))
 						}
 					}
 				}
@@ -10733,7 +10741,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
-				s.handleEffectHealthLeech(effCtx, spellID, hitTargets, effectIndex, eff)
+				s.handleEffectHealthLeech(effCtx, spell, spellID, hitTargets, effectIndex, eff)
 			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
 				// Spell::EffectPowerDrain (SpellEffects.cpp:1265-1307) name-by-name:
 				// the drain amount carries the full SpellDamageBonusDone leg
@@ -10798,7 +10806,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), drainLog)
 				}
 			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2: // 140/141/160: SPELL_EFFECT_FORCE_CAST* (EffectForceCast, SpellEffects.cpp:1048)
-				s.handleEffectForceCast(effCtx, spellID, eff, hitTargets)
+				s.handleEffectForceCast(effCtx, spell, spellID, eff, hitTargets)
 			case spellEffectSelfResurrect: // 94: SPELL_EFFECT_SELF_RESURRECT (EffectSelfResurrect, SpellEffects.cpp:4429)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
 				// not per unit target.
@@ -10807,9 +10815,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on the caster.
 				s.handleEffectChargeDest(effCtx, target)
 			case spellEffectKnockBack, spellEffectKnockBackDest: // 98/144: SPELL_EFFECT_KNOCK_BACK* (EffectKnockBack, SpellEffects.cpp:4552)
-				s.handleEffectKnockBack(effCtx, eff, hitTargets, target)
+				s.handleEffectKnockBack(effCtx, spell, eff, hitTargets, target)
 			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct: // 111/115: SPELL_EFFECT_DURABILITY_DAMAGE* (EffectDurabilityDamage*, SpellEffects.cpp:4857)
-				s.handleEffectDurabilityDamage(effCtx, spellID, eff, hitTargets)
+				s.handleEffectDurabilityDamage(effCtx, spell, spellID, eff, hitTargets)
 			case spellEffectQuestClear: // 139: SPELL_EFFECT_CLEAR_QUEST (EffectQuestClear, SpellEffects.cpp:4611)
 				s.handleEffectQuestClear(effCtx, eff, hitTargets)
 			case spellEffectQuestFail: // 147: SPELL_EFFECT_QUEST_FAIL (EffectQuestFail, SpellEffects.cpp:5283)
@@ -10835,7 +10843,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// same tail as rewardHonorPoints. Item-based casts reward
 				// damage/10 with no scaling; damage<=50 scales via
 				// Trinity::Honor::hk_honor_at_level; larger damage is flat.
-				s.handleEffectAddHonor(effCtx, eff, hitTargets, castItemEntry != 0)
+				s.handleEffectAddHonor(effCtx, spell, eff, hitTargets, castItemEntry != 0)
 			case spellEffectTradeSkill: // 47: SPELL_EFFECT_TRADE_SKILL (EffectTradeSkill, SpellEffects.cpp:2692)
 				// The C++ body is entirely commented out — explicit no-op so
 				// the effect stops hitting the unhandled-effect debug arm.
@@ -10853,7 +10861,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: an unengaged, non-confused/stunned/fleeing target
 				// turns to face the spell destination for damage ms.
-				s.handleEffectDistract(effCtx, eff, hitTargets, target)
+				s.handleEffectDistract(effCtx, spell, eff, hitTargets, target)
 			case spellEffectAddFarsight: // 72: SPELL_EFFECT_ADD_FARSIGHT (EffectAddFarsight, SpellEffects.cpp:2580)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
 				// a DYNAMIC_OBJECT_FARSIGHT_FOCUS dynamic object at the spell
@@ -10929,7 +10937,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target: player targets gain effect damage drunkenness
 				// (capped at 100, with a 25% Drunken Vomit cast when the cap
 				// is hit from below).
-				s.handleEffectInebriate(effCtx, eff, hitTargets, castItemEntry)
+				s.handleEffectInebriate(effCtx, spell, eff, hitTargets, castItemEntry)
 			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
 				// 104-107: SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (EffectSummonObject,
 				// SpellEffects.cpp:4215). C++ runs this once at
@@ -11013,7 +11021,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: players take Player::EnvironmentalDamage (fire),
 				// unit targets only get the non-melee damage log.
-				s.handleEffectEnvironmentalDamage(effCtx, eff, spellID, uint8(spell.SchoolMask), hitTargets)
+				s.handleEffectEnvironmentalDamage(effCtx, spell, eff, spellID, uint8(spell.SchoolMask), hitTargets)
 			case spellEffectBind: // 11: SPELL_EFFECT_BIND (EffectBind, SpellEffects.cpp:5695)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
 				// target: sets the homebind, sends bind point update +
@@ -12710,7 +12718,7 @@ func (s *session) healingDoneAuraModifier(schoolMask uint32) int32 {
 			}
 			amt := aura.Amounts[index]
 			if amt == 0 {
-				amt = effect.BasePoints + 1
+				amt = effect.BasePoints
 			}
 			total += amt
 		}
@@ -12751,7 +12759,7 @@ func (s *session) spellHealingPctDone(spell wotlk.Spell, target *session) float6
 				}
 				amt := aura.Amounts[index]
 				if amt == 0 {
-					amt = eff.BasePoints + 1
+					amt = eff.BasePoints
 				}
 				mod *= 1 + float64(amt)/100
 			}
@@ -13015,7 +13023,7 @@ func damageFromCasterMultiplier(victim, caster *session, spell wotlk.Spell) floa
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			multiplier *= 1 + float32(amount)/100
 		}
@@ -13096,7 +13104,7 @@ func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, 
 
 // spellHasWeaponDamageEffect reports whether the spell carries a weapon-damage
 // effect handled by Spell::EffectWeaponDmg (SpellEffects.cpp:3171): 58/17/31/121.
-// The Go weapon dispatch routes all four through the same flat BasePoints+1
+// The Go weapon dispatch routes all four through the same CalcValueForLevel
 // treatment, so all four count as weapon spells for the melee bonus legs.
 func spellHasWeaponDamageEffect(spell wotlk.Spell) bool {
 	for _, eff := range spell.Effects {
@@ -13460,7 +13468,7 @@ func creatureAuraModifiersByMiscMask(s *Server, key creatureAuraKey, auraType, m
 				usedStoredAmount = true
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 		}
@@ -13534,7 +13542,7 @@ func creatureDamageFromCasterMultiplier(server *Server, key creatureAuraKey, spe
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			multiplier *= 1 + float32(amount)/100
 		}
@@ -13614,7 +13622,7 @@ func creatureHealingTakenBonus(server *Server, key creatureAuraKey, casterGUID u
 			}
 			amount := aura.Amounts[index]
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			switch effect.Aura {
 			case spellAuraModHealingPct:
@@ -16543,7 +16551,7 @@ func (s *session) healingTakenBonus(target *session, casterGUID uint64, spellID 
 					}
 					amount := aura.Amounts[index]
 					if amount == 0 {
-						amount = effect.BasePoints + 1
+						amount = effect.BasePoints
 					}
 					takenMult *= float64(100+amount) / 100
 				}
@@ -19632,6 +19640,10 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	var effectMask, recalculateMask uint8
 	var amounts, baseAmounts [3]int32
 	var effectAmount uint32
+	auraCasterLevel := uint32(0)
+	if s.player != nil {
+		auraCasterLevel = uint32(s.player.Level)
+	}
 	stackCount := uint8(1)
 	var stackAmount, procCharges uint32
 	hideDuration := false
@@ -19654,8 +19666,13 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 				miscValue = effect.MiscValue
 				if effect.Aura != 0 {
 					effectMask |= 1 << uint(index)
-					effectAmount = uint32(effect.BasePoints + 1)
-					amounts[index] = effect.BasePoints + 1
+					// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:425):
+					// the applied amount is CalcValue(caster, &m_baseAmount)
+					// — rolled and level-scaled — while the base amount stays
+					// the raw DBC base (SpellAuraEffects.cpp:386).
+					rolled := effect.CalcValueForLevel(sp, auraCasterLevel)
+					effectAmount = uint32(rolled)
+					amounts[index] = rolled
 					baseAmounts[index] = effect.BasePoints
 					if auraEffectCanBeRecalculated(effect.Aura) {
 						recalculateMask |= 1 << uint(index)
@@ -19677,7 +19694,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 						recalculateMask |= 1 << uint(index)
 					}
 					if effect.Aura == spellAuraMounted {
-						effectAmount = uint32(effect.BasePoints + 1)
+						effectAmount = uint32(effect.CalcValueForLevel(sp, auraCasterLevel))
 					}
 				}
 			}
@@ -21190,11 +21207,17 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 			periodMs = 1
 		}
 	}
-	amount = uint32(eff.BasePoints + 1)
+	// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:425): the applied
+	// aura amount is CalcValue(caster, &m_baseAmount), not the flat base.
+	var paramsCasterLevel uint32
+	if s.player != nil {
+		paramsCasterLevel = uint32(s.player.Level)
+	}
+	amount = uint32(eff.CalcValueForLevel(spell, paramsCasterLevel))
 	if amount <= 1 && isAreaEnemySpell(spell) {
 		for _, areaEffect := range spell.Effects {
 			if areaEffect.Effect == 27 && areaEffect.BasePoints >= 0 {
-				amount = uint32(areaEffect.BasePoints + 1)
+				amount = uint32(areaEffect.BasePoints)
 				break
 			}
 		}
@@ -24043,6 +24066,20 @@ func (ts *session) sendPeriodicTickImmune(aura *activeAura) {
 	}
 }
 
+// periodicTickCasterLevel resolves the caster level for the periodic-tick
+// CalcValue(caster, ...) legs (e.g. SpellAuraEffects.cpp:5635): player
+// casters via their session; unknown casters report 0, skipping the
+// RealPointsPerLevel scaling (documented delta).
+func periodicTickCasterLevel(server *Server, casterGUID uint64) uint32 {
+	if server == nil {
+		return 0
+	}
+	if sess := server.findSessionByGUID(casterGUID); sess != nil && sess.player != nil {
+		return uint32(sess.player.Level)
+	}
+	return 0
+}
+
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	// Aura::UpdateOwner (SpellAuras.cpp:790-810): the channeled mod-spell
 	// arm. While the aura's caster is channeling this same spell, the
@@ -25092,10 +25129,10 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// SpellAuraEffects.cpp:5635-5641 (HandleModAttackPowerOfArmorAuraTick):
 		// armorMod = Effects[effIndex].CalcValue(caster, &m_baseAmount);
 		// amount = target->GetArmor() / armorMod; then
-		// UpdateAttackPowerAndDamage(false) and (true). The divisor rides
-		// the tree's flat BasePoints+1 CalcValue convention (the
-		// random-roll/combo-point/ApplyEffectModifiers legs have no Go
-		// model); C++ GetArmor() is the total normal-school resistance while
+		// UpdateAttackPowerAndDamage(false) and (true). The divisor re-rolls
+		// CalcValue from the stored base amount (the combo-point and
+		// ApplyEffectModifiers legs have no Go model); C++ GetArmor() is the
+		// total normal-school resistance while
 		// Go's armor carries no SPELL_AURA_MOD_RESISTANCE (22) fold — a
 		// documented delta. SetAmount pins the amount (no client packet);
 		// the AP rebuild runs through refreshAttackPowerOfArmor.
@@ -25106,7 +25143,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				for i, eff := range sp.Effects {
 					if eff.Aura == spellAuraModAttackPowerOfArmor && aura.EffectMask&(1<<uint(i)) != 0 {
 						effIndex = i
-						divisor = eff.BasePoints + 1
+						divisor = eff.CalcValueForBase(sp, aura.BaseAmounts[i], periodicTickCasterLevel(ts.server, aura.CasterGUID))
 						break
 					}
 				}
@@ -26666,9 +26703,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		return burnAlive
 	case spellAuraModAttackPowerOfArmor: // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
 		// SpellAuraEffects.cpp:5635-5641 (HandleModAttackPowerOfArmorAuraTick):
-		// amount = target->GetArmor() / Effects[effIndex].CalcValue(...),
-		// then UpdateAttackPowerAndDamage(false/true). The divisor rides the
-		// tree's flat BasePoints+1 CalcValue convention; Go creatures carry
+		// amount = target->GetArmor() / Effects[effIndex].CalcValue(caster,
+		// &m_baseAmount), then UpdateAttackPowerAndDamage(false/true). The
+		// divisor re-rolls CalcValue from the stored base amount; Go creatures carry
 		// no attack-power model, so the AP rebuild half stays unbridged
 		// (documented, like the other creature damage simplifications).
 		divisor := int32(0)
@@ -26676,7 +26713,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				for i, eff := range sp.Effects {
 					if eff.Aura == spellAuraModAttackPowerOfArmor && aura.EffectMask&(1<<uint(i)) != 0 {
-						divisor = eff.BasePoints + 1
+						divisor = eff.CalcValueForBase(sp, aura.BaseAmounts[i], periodicTickCasterLevel(s.server, aura.CasterGUID))
 						break
 					}
 				}
@@ -26896,12 +26933,12 @@ func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *sessio
 	if tickKnown && tickSpell.SpellFamilyName == spellFamilyWarlock && tickSpell.SpellFamilyFlags[0]&0x10 != 0 {
 		if pet := caster.livePetMotion(); pet != nil {
 			// C++ reads GetBase()->GetEffect(EFFECT_1)->GetAmount() — the
-			// applied amount, which is BasePoints+1 per the tree's aura-apply
-			// convention (the Go leech aura only carries same-aura-type
-			// effects, so effect 1 is read from the DBC instead).
+			// applied amount (CalculateAmount at apply = CalcValue roll).
+			// The Go leech aura only carries same-aura-type effects, so
+			// effect 1 re-rolls from the DBC with the caster's level.
 			manaFeedVal := uint32(0)
 			if len(tickSpell.Effects) > 1 {
-				if amt := tickSpell.Effects[1].BasePoints + 1; amt > 0 {
+				if amt := tickSpell.Effects[1].CalcValueForLevel(tickSpell, uint32(caster.player.Level)); amt > 0 {
 					manaFeedVal = uint32(amt)
 				}
 			}
@@ -29221,11 +29258,17 @@ func (s *session) channelTick() {
 	s.castMu.Lock()
 	channel.Executing = true
 	s.castMu.Unlock()
+	// Channeled ticks re-hit the effect value per tick: C++ re-rolls
+	// CalculateDamage per (effect, target) on each tick, not the flat base.
+	var channelCasterLevel uint32
+	if s.player != nil {
+		channelCasterLevel = uint32(s.player.Level)
+	}
 	for effectIndex, effect := range spell.Effects {
 		if effect.Effect == 0 || effect.Effect == 6 && effect.Aura == 23 {
 			continue
 		}
-		amount := uint32(effect.BasePoints + 1)
+		amount := uint32(effect.CalcValueForLevel(spell, channelCasterLevel))
 		if amount == 0 {
 			continue
 		}
@@ -30229,7 +30272,13 @@ func (s *session) handleEffectEnchantHeldItem(ctx context.Context, spell wotlk.S
 		durationMs = uint32(d)
 	}
 	if durationMs == 0 {
-		if dmg := eff.BasePoints + 1; dmg != 0 {
+		// Spell::EffectEnchantHeldItem — the duration fallback is the
+		// rolled damage.
+		var enchantCasterLevel uint32
+		if s.player != nil {
+			enchantCasterLevel = uint32(s.player.Level)
+		}
+		if dmg := eff.CalcValueForLevel(spell, enchantCasterLevel); dmg != 0 {
 			durationMs = uint32(dmg)
 		}
 	}
@@ -30474,11 +30523,12 @@ func (s *session) handleEffectCastButtons(ctx context.Context, eff wotlk.SpellEf
 // gain effect damage drunkenness, capped at 100 — hitting the cap from below
 // rolls a 25% Drunken Vomit (67468) self-cast. Creature targets are an
 // explicit no-op arm (TYPEID_PLAYER gate).
-func (s *session) handleEffectInebriate(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64, castItemEntry uint32) {
+func (s *session) handleEffectInebriate(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, castItemEntry uint32) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	drunkMod := uint16(eff.BasePoints + 1) // Go tree convention: effect damage = BasePoints+1
+	// SpellEffects.cpp:4143 — the drunkenness gain is the rolled damage.
+	drunkMod := uint16(eff.CalcValueForLevel(spell, uint32(s.player.Level)))
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 {
 			continue
@@ -30983,9 +31033,14 @@ func (s *session) handleEffectEnchantItemTmp(ctx context.Context, target protoco
 // main/off-hand weapon that fits the cast spell receives the rank spell's
 // temp enchant with the cast spell's duration selection.
 func (s *session) applyRockbiterEnchant(ctx context.Context, spell wotlk.Spell) {
+	var rockbiterCasterLevel uint32
+	if s.player != nil {
+		rockbiterCasterLevel = uint32(s.player.Level)
+	}
 	var damage int32
 	if len(spell.Effects) > 1 {
-		damage = spell.Effects[1].BasePoints + 1
+		// SpellEffects.cpp:2852 — the rank switch reads the rolled damage.
+		damage = spell.Effects[1].CalcValueForLevel(spell, rockbiterCasterLevel)
 	}
 	var spellID uint32
 	switch damage {
@@ -31249,8 +31304,8 @@ func spellAttackTypeRanged(spell wotlk.Spell) bool {
 // weaponDmgParams carries the per-cast Spell::EffectWeaponDmg
 // (SpellEffects.cpp:3171-3498) computation inputs: the attack type from
 // SpellInfo::GetAttackType, the normalized flag (any 121 effect), the
-// fixed_bonus accumulation (Σ CalculateDamage over 58/17/121 — the tree-wide
-// BasePoints+1 convention), the weaponDamagePercentMod product (Π ApplyPct
+// fixed_bonus accumulation (Σ CalculateDamage over 58/17/121, via
+// CalcValueForLevel), the weaponDamagePercentMod product (Π ApplyPct
 // over 31 effects), and the addPctMods gate (!LIMIT_PCT_DAMAGE_MODS and the
 // NORMAL school bit, SpellEffects.cpp:3436).
 type weaponDmgParams struct {
@@ -31271,18 +31326,18 @@ type weaponDmgParams struct {
 // pct legs to Unit::MeleeDamageBonusDone, and Go's spellDamagePctDone fold
 // in the damage pipeline covers them instead (the two multiplications
 // distribute over the sum, so deferring is exact).
-func weaponDmgParamsForSpell(spell wotlk.Spell) weaponDmgParams {
+func weaponDmgParamsForSpell(spell wotlk.Spell, casterLevel uint32) weaponDmgParams {
 	p := weaponDmgParams{attType: spellWeaponAttackType(spell), pctMod: 1.0}
 	p.addTotalPct = spell.AttributesEx6&spellAttr6LimitPctDamageMods == 0 && spell.SchoolMask&spellSchoolMaskNormal != 0
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool:
-			p.fixedBonus += int32(spell.Effects[i].BasePoints + 1)
+			p.fixedBonus += spell.Effects[i].CalcValueForLevel(spell, casterLevel)
 		case spellEffectNormalizedWeaponDmg:
-			p.fixedBonus += int32(spell.Effects[i].BasePoints + 1)
+			p.fixedBonus += spell.Effects[i].CalcValueForLevel(spell, casterLevel)
 			p.normalized = true
 		case spellEffectWeaponPercentDamage:
-			p.pctMod *= 1 + float64(spell.Effects[i].BasePoints+1)/100
+			p.pctMod *= 1 + float64(spell.Effects[i].CalcValueForLevel(spell, casterLevel))/100
 		}
 	}
 	return p
@@ -31776,7 +31831,12 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	if playerGUID == 0 {
 		return
 	}
-	count := int32(eff.BasePoints + 1)
+	// SpellEffects.cpp:1587 — num_to_add is the rolled CalculateDamage.
+	var createCasterLevel uint32
+	if s.player != nil {
+		createCasterLevel = uint32(s.player.Level)
+	}
+	count := eff.CalcValueForLevel(spell, createCasterLevel)
 	if count < 1 {
 		count = 1
 	}
@@ -32197,11 +32257,12 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 // (Unit::SendSpellNonMeleeDamageLog, Unit.cpp:5302) — so only the packet is
 // sent. Go has no creature absorb-aura model on this path; the resistance
 // leg mirrors Unit::CalcSpellResistedDamage via calcMagicSpellResistance.
-func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, eff wotlk.SpellEffect, spellID uint32, schoolMask uint8, hitTargets []uint64) {
+func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, spellID uint32, schoolMask uint8, hitTargets []uint64) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	damage := uint32(eff.BasePoints + 1)
+	// SpellEffects.cpp:308 — the rolled CalculateDamage.
+	damage := uint32(eff.CalcValueForLevel(spell, uint32(s.player.Level)))
 	for _, effectTarget := range hitTargets {
 		if effectTarget == 0 {
 			continue
@@ -32558,7 +32619,7 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 // TriggerSpell at the original caster, triggered (castSpellDirect is
 // Unit::CastSpell triggered). Only player hit targets have a Go cast model;
 // creature targets are documented no-bridge (no creature cast path).
-func (s *session) handleEffectForceCast(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
+func (s *session) handleEffectForceCast(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
@@ -32566,7 +32627,9 @@ func (s *session) handleEffectForceCast(ctx context.Context, spellID uint32, eff
 	if triggered == 0 {
 		return // C++ logs a warning and returns (SpellEffects.cpp:1057-1061)
 	}
-	damage := eff.BasePoints + 1
+	// SpellEffects.cpp:1070 — RemoveAura(damage) / SPELLVALUE_BASE_POINT0
+	// both read the rolled CalculateDamage.
+	damage := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 {
 			continue
@@ -32632,12 +32695,13 @@ func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.Sp
 // angle when the target sits on the point), speedXY and -speedZ; a flying
 // target keeps flight via SMSG_MOVE_SET_CAN_FLY (same packet as the login
 // flight state).
-func (s *session) handleEffectKnockBack(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64, target protocol.SpellTargetData) {
+func (s *session) handleEffectKnockBack(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, target protocol.SpellTargetData) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
 	speedXY := float32(eff.MiscValue) * 0.1
-	speedZ := float32(eff.BasePoints+1) * 0.1
+	// Spell::EffectKnockBack — speedz is the rolled damage * 0.1.
+	speedZ := float32(eff.CalcValueForLevel(spell, uint32(s.player.Level))) * 0.1
 	if speedXY < 0.01 && speedZ < 0.01 {
 		return
 	}
@@ -32722,12 +32786,17 @@ func (s *session) handleEffectKnockBack(ctx context.Context, eff wotlk.SpellEffe
 // SPELL_AURA_PREVENT_DURABILITY_LOSS gate and the _ApplyItemMods stat strip
 // on the 0-crossing follow the Go durability convention (DB-backed +
 // inventory refresh, same as rollDurabilityLossOnHit/durabilityLossAll).
-func (s *session) handleEffectDurabilityDamage(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
+func (s *session) handleEffectDurabilityDamage(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.server == nil {
 		return
 	}
 	isPct := eff.Effect == spellEffectDurabilityDamagePct
-	damage := eff.BasePoints + 1
+	// Spell::EffectDurabilityDamage — DurabilityPointsLossAll(damage).
+	var durabilityCasterLevel uint32
+	if s.player != nil {
+		durabilityCasterLevel = uint32(s.player.Level)
+	}
+	damage := eff.CalcValueForLevel(spell, durabilityCasterLevel)
 	slot := eff.MiscValue
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 {
@@ -33156,7 +33225,8 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	if targetSess.resurrection != nil {
 		return
 	}
-	healthPct := eff.BasePoints + 1
+	// Spell::EffectResurrect — the health/mana pcts read the rolled damage.
+	healthPct := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	if healthPct < 1 {
 		healthPct = 1
 	}
@@ -33207,11 +33277,17 @@ func (s *session) sendResurrectLog(spellID uint32, targetGUID uint64) {
 	}
 }
 
-func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect) {
+func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell, spellID uint32, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect) {
 	if s.playerGUID == 0 {
 		return
 	}
-	amount := eff.BasePoints + 1
+	// Spell::EffectHealthLeech — the damage<0 gate reads the rolled
+	// CalculateDamage.
+	var leechCasterLevel uint32
+	if s.player != nil {
+		leechCasterLevel = uint32(s.player.Level)
+	}
+	amount := eff.CalcValueForLevel(spell, leechCasterLevel)
 	if amount < 0 {
 		return
 	}
@@ -33249,11 +33325,12 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, h
 // ceil(level*1.55*damage)); larger damage is taken as a flat honor amount.
 // Defensive delta: non-positive damage yields 0 honor (C++ would wrap the
 // uint32 conversion); no shipped spell carries such a value.
-func (s *session) handleEffectAddHonor(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64, castItemBased bool) {
+func (s *session) handleEffectAddHonor(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, castItemBased bool) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	damage := eff.BasePoints + 1
+	// Spell::EffectAddHonor — the honor math reads the rolled damage.
+	damage := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	for _, effectTarget := range hitTargets {
 		if effectTarget == 0 {
 			continue
@@ -33326,11 +33403,12 @@ func buildSetProficiency(itemClass uint8, mask uint32) []byte {
 // acquisition), and the turn-in-place rides the Final_Angle arm of
 // SMSG_MONSTER_MOVE. Player hit targets have no Go motion model (documented
 // no-bridge); the stand-up arm has no Go stand-state model (documented).
-func (s *session) handleEffectDistract(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64, target protocol.SpellTargetData) {
+func (s *session) handleEffectDistract(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, target protocol.SpellTargetData) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	duration := eff.BasePoints + 1
+	// Spell::EffectDistract — the distract timer is the rolled damage.
+	duration := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	if duration <= 0 {
 		return
 	}
