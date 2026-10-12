@@ -19656,6 +19656,20 @@ func (s *session) applyAura(spellID uint32) {
 }
 
 func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
+	var casterLevel uint8
+	if s.player != nil {
+		casterLevel = s.player.Level
+	}
+	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel)
+}
+
+// applyAuraFromCaster is the caster-attributed twin of applyAuraWithDuration:
+// Totem::InitSummon casts the passive pulse with the totem as caster
+// (CastSpell(this, GetSpell(), true), Totem.cpp:115), so the buff aura's
+// record, wire caster/level, and level-scaled amounts use the caster's GUID
+// and level. The totem's level is its owner's (Totem.cpp:103), passed
+// explicitly because the aura may land on a party member of another level.
+func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8) {
 	if s.auras == nil {
 		s.auras = make(map[uint32]struct{})
 	}
@@ -19712,10 +19726,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	var effectMask, recalculateMask uint8
 	var amounts, baseAmounts [3]int32
 	var effectAmount uint32
-	auraCasterLevel := uint32(0)
-	if s.player != nil {
-		auraCasterLevel = uint32(s.player.Level)
-	}
+	auraCasterLevel := uint32(casterLevel)
 	stackCount := uint8(1)
 	var stackAmount, procCharges uint32
 	hideDuration := false
@@ -19792,7 +19803,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		Mechanic:           mechanic,
 		AuraType:           auraType,
 		EffectMask:         effectMask,
-		CasterGUID:         s.playerGUID,
+		CasterGUID:         casterGUID,
 		TargetGUID:         s.playerGUID,
 		MiscValue:          miscValue,
 		Amount:             effectAmount,
@@ -19805,7 +19816,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		SingleTarget:       isSingleTargetAuraSpellID(s.server.Data, spellID),
 		Slot:               slot,
 		Positive:           positive,
-		StoredCasterLevel:  s.auraStoredCasterLevel(s.playerGUID, wotlk.Spell{}),
+		StoredCasterLevel:  casterLevel,
 		AuraInterruptFlags: auraInterruptFlags,
 		StackAmount:        stackAmount,
 		HideDuration:       hideDuration,

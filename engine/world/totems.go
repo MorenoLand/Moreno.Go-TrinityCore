@@ -456,14 +456,23 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 	switch def.PulseType {
 	case TotemPulseBuff:
 		if def.BuffSpell > 0 {
-			s.applyAura(def.BuffSpell)
+			// Totem::InitSummon casts the buff with the totem as caster
+			// (Totem.cpp:115), so the aura record and wire carry the totem
+			// GUID and the totem's (owner's) level — not the owner's session
+			// GUID. spellModOwnerSession resolves the totem back to the
+			// owner for mod lookups, like C++ GetSpellModOwner.
+			var ownerLevel uint8
+			if s.player != nil {
+				ownerLevel = s.player.Level
+			}
+			s.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
 			// Apply to nearby party members
 			if s.server != nil && s.groupID != 0 {
 				s.server.sessionsMu.RLock()
 				for other := range s.server.sessions {
 					if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 						if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
-							other.applyAura(def.BuffSpell)
+							other.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
 						}
 					}
 				}
@@ -646,6 +655,16 @@ func (s *session) runTotemLifecycle(def TotemDef, totem *activeTotem) {
 			if !s.worldReady.Load() || s.player == nil || s.player.Map != totem.Map || s.player.InstanceID != totem.InstanceID {
 				s.destroyTotemGUID(def.SlotID, totem.TotemGUID)
 				return
+			}
+			// Totem::InitSummon applies the passive buff once at summon
+			// (Totem.cpp:113-117); TotemAI::UpdateAI returns early for
+			// non-active totems, so C++ never re-applies it. The immediate
+			// pulse at spawn is the InitSummon twin — skipping the buff here
+			// avoids resetting the aura duration, re-firing the apply arms,
+			// and re-sending the aura update every PulseSecs (and keeps a
+			// dispelled buff dispelled, as in C++).
+			if def.PulseType == TotemPulseBuff {
+				continue
 			}
 			s.executeTotemPulse(context.Background(), def, totem)
 		}
