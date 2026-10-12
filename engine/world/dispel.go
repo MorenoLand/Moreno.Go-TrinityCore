@@ -795,7 +795,7 @@ func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8
 
 func isDevourMagicSpell(spellID uint32) bool {
 	switch spellID {
-	case 19505, 19731, 19734, 19736, 27276, 27277:
+	case 19505, 19731, 19734, 19736, 27276, 27277, 48011:
 		return true
 	default:
 		return false
@@ -1169,8 +1169,11 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 	// Devour Magic heal (SpellEffects.cpp:2520-2530): once per cast when at
 	// least one aura was dispelled — C++ casts triggered 19658 on the caster
 	// (the pet for pet casts), and with the Glyph of Felhunter (56249) aura
-	// the owner repeats it on itself.
-	if isDevourMagicSpell(spell.ID) && len(successList) > 0 {
+	// the owner repeats it on itself. C++ gates on SPELLFAMILY_WARLOCK +
+	// SPELLCATEGORY_DEVOUR_MAGIC (1179), not spell IDs, so the family/category
+	// arm covers every rank; the ID list is the no-data fallback (no
+	// Spell.dbc on disk means family/category read zero).
+	if (isDevourMagicSpell(spell.ID) || (spell.SpellFamilyName == spellFamilyWarlock && spell.Category == 1179)) && len(successList) > 0 {
 		healAmount := uint32(100)
 		if len(spell.Effects) > 1 && spell.Effects[1].BasePoints > 0 {
 			healAmount = uint32(spell.Effects[1].CalcValue())
@@ -1197,22 +1200,38 @@ func (s *session) healDevourMagicPet(ctx context.Context, petCaster *creatureMot
 	}
 	s.executePetSpellHeal(ctx, petCaster, petCaster.GUID, 19658, healAmount)
 	if s.player != nil && s.playerHasAura(56249) {
-		// Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759) on the owner
-		// self-heal: the C++ EffectHeal runs the taken leg with the pet as
-		// caster, so MOD_HEALING_RECEIVED matches auras the pet cast.
-		ownerHeal := s.healingTakenBonus(s, petCaster.GUID, 19658, healAmount, false)
-		overheal := uint32(0)
-		if uint64(s.player.Health)+uint64(ownerHeal) > uint64(s.player.MaxHealth) {
-			overheal = uint32(uint64(s.player.Health) + uint64(ownerHeal) - uint64(s.player.MaxHealth))
+		// SpellEffects.cpp:2527-2529: the glyph arm is owner->CastSpell(owner,
+		// 19658, args) — the 19658 caster is the OWNER, not the pet, so the
+		// MOD_HEALING_RECEIVED caster-match (Unit.cpp:7746-7754) and the
+		// SMSG_SPELLHEALLOG healer GUID both name the owner.
+		ownerHeal := s.healingTakenBonus(s, s.playerGUID, 19658, healAmount, false)
+		// Spell::_cast (Spell.cpp:3442): the CAST_SPELL criterion fires for
+		// the player caster with no triggered gate.
+		s.updateAchievementCriteria(criteriaTypeCastSpell, 19658, 1)
+		// Spell::EffectHeal (SpellEffects.cpp:1419): a dead target is not
+		// healed and sends no heal log.
+		if s.player.Health > 0 {
+			overheal := uint32(0)
+			if uint64(s.player.Health)+uint64(ownerHeal) > uint64(s.player.MaxHealth) {
+				overheal = uint32(uint64(s.player.Health) + uint64(ownerHeal) - uint64(s.player.MaxHealth))
+			}
+			packet := buildSpellHealLog(s.playerGUID, s.playerGUID, 19658, ownerHeal, overheal, 0, false)
+			_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
+			// Spell::PreprocessSpellHit (Spell.cpp:2725-2735): the per-target
+			// caster-side and target-side legs for the owner's self-cast.
+			s.startTimedAchievement(timedTypeSpellCast, 19658)
+			s.updateAchievementCriteria(criteriaTypeCastSpell2, 19658, 1)
+			s.startTimedAchievement(timedTypeSpellTarget, 19658)
+			s.updateAchievementCriteria(criteriaTypeBeSpellTarget, 19658, 1)
+			s.updateAchievementCriteria(criteriaTypeBeSpellTarget2, 19658, 1)
+			s.player.Health += ownerHeal
+			if s.player.Health > s.player.MaxHealth {
+				s.player.Health = s.player.MaxHealth
+			}
+			s.removeGrievousBiteIfFullyHealed(s.playerGUID)
+			s.sendPlayerUpdate()
 		}
-		packet := buildSpellHealLog(s.playerGUID, petCaster.GUID, 19658, ownerHeal, overheal, 0, false)
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
-		s.player.Health += ownerHeal
-		if s.player.Health > s.player.MaxHealth {
-			s.player.Health = s.player.MaxHealth
-		}
-		s.sendPlayerUpdate()
 	}
 }
 
