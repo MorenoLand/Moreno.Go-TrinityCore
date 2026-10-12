@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -346,7 +347,7 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 	ts.sendPlayerUpdate()
 	// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled creatures
 	// are signaled OwnerAttackedBy against the original attacker.
-	s.triggerPetDefensive(ts.player.Map, ts.player.InstanceID, ts.playerGUID, attackerGUID)
+	s.triggerPetDefensive(ctx, ts.player.Map, ts.player.InstanceID, ts.playerGUID, attackerGUID, scripting.CreatureEventOnOwnerAttackedAt)
 }
 
 // applyDamageShieldToCreature deals one shield strike to a creature attacker

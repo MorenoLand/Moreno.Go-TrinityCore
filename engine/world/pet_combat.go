@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	protocol "github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -263,6 +264,24 @@ func (s *Server) onPetToggleAutocast(mapID, instanceID uint32, petGUID uint64, s
 	}
 }
 
+// luaUnitObjectForGUID resolves a GUID to the Lua object Eluna pushes for a
+// hook argument: an online player session becomes the player object, a live
+// creature motion becomes the creature object, anything else is nil (Eluna
+// pushes nullptr). It mirrors the target resolution in
+// fireCreatureSpellHitTarget (boss_ai.go).
+func (s *Server) luaUnitObjectForGUID(mapID, instanceID uint32, guid uint64) any {
+	if s == nil || guid == 0 {
+		return nil
+	}
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return ts.luaPlayer()
+	}
+	if tm := s.findCreatureMotion(mapID, instanceID, guid); tm != nil {
+		return s.luaMotionCreature(tm)
+	}
+	return nil
+}
+
 // triggerPetDefensive triggers the owner's controlled creatures into attack
 // mode when the owner either attacks (assist) or takes damage (defend).
 // Mirrors TrinityCore PetAI::OwnerAttackedBy / PetAI::OwnerAttacked
@@ -271,12 +290,28 @@ func (s *Server) onPetToggleAutocast(mapID, instanceID uint32, petGUID uint64, s
 // creature with no live victim, regardless of react state or command —
 // defensive-only/follow-only gating is not in the C++.
 // (PetAI::_AttackStart: stay-commanded pets attack without chasing.)
-func (s *Server) triggerPetDefensive(mapID, instanceID uint32, ownerGUID, targetGUID uint64) {
+//
+// hookEvent is the Eluna creature hook fired for each pet that engages,
+// with the other party as the extra argument, or 0 for no hook:
+// CREATURE_EVENT_ON_OWNER_ATTACKED (12, Eluna::OwnerAttacked,
+// CreatureHooks.cpp:323-329, fired from Unit::Attack and Spell::_cast) when
+// the owner is the attacker, CREATURE_EVENT_ON_OWNER_ATTACKED_AT (13,
+// Eluna::OwnerAttackedBy, CreatureHooks.cpp:314-321, fired from
+// Unit::DealDamage, Unit.cpp:728-733) when the owner is the victim. A true
+// return vetoes that pet's engage, mirroring the C++
+// `if (!sEluna->OwnerAttacked(...)) ScriptedAI::OwnerAttacked(...)` gate
+// over the default engage. The hook fires outside the motion lock (handlers
+// re-enter it, see the enter-combat hook); the engage re-validates under the
+// lock, so a pet that died, despawned, or gained a victim in between is
+// skipped. Only engaging pets fire the hook: C++ fires it ahead of the
+// default's guards, but Go's controlled creatures are PetAI-modeled (the
+// hook has no PetAI call chain), so the hook gates the PetAI engage.
+func (s *Server) triggerPetDefensive(ctx context.Context, mapID, instanceID uint32, ownerGUID, targetGUID uint64, hookEvent int) {
 	if s == nil || ownerGUID == 0 || targetGUID == 0 || ownerGUID == targetGUID {
 		return
 	}
+	var cands []uint64
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
 	for _, m := range s.motionMapLocked(mapID, instanceID) {
 		if m.OwnerGUID != ownerGUID || m.Health == 0 {
 			continue
@@ -284,6 +319,38 @@ func (s *Server) triggerPetDefensive(mapID, instanceID uint32, ownerGUID, target
 		// PetAI::OwnerAttackedBy / PetAI::OwnerAttacked: passive pets don't
 		// do anything; a pet with a live victim does not disengage
 		// (PetAI::AttackStart's victim-alive guard).
+		if m.PetReact == PetReactPassive {
+			continue
+		}
+		if m.TargetGUID != 0 && m.InCombat {
+			continue
+		}
+		cands = append(cands, m.GUID)
+	}
+	s.motionMu.Unlock()
+	vetoed := make(map[uint64]bool, len(cands))
+	if hookEvent != 0 {
+		for _, guid := range cands {
+			m := s.findCreatureMotion(mapID, instanceID, guid)
+			if m == nil {
+				vetoed[guid] = true
+				continue
+			}
+			if s.fireCreatureLuaEvent(ctx, m, hookEvent, s.luaUnitObjectForGUID(mapID, instanceID, targetGUID)) {
+				vetoed[guid] = true
+			}
+		}
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	for _, guid := range cands {
+		if vetoed[guid] {
+			continue
+		}
+		m := s.motionMapLocked(mapID, instanceID)[guid]
+		if m == nil || m.OwnerGUID != ownerGUID || m.Health == 0 {
+			continue
+		}
 		if m.PetReact == PetReactPassive {
 			continue
 		}
@@ -307,12 +374,21 @@ func (s *Server) triggerPetDefensive(mapID, instanceID uint32, ownerGUID, target
 // the motion-map scan replaces the m_Controlled loop; the DmgClass != NONE
 // gate keeps non-damaging spells such as Hunter's Mark from triggering the
 // pet (Spell.cpp:3301-3302).
-func (s *Server) triggerPetOwnerAttacked(mapID, instanceID uint32, ownerGUID, targetGUID uint64) {
+//
+// Eluna CREATURE_EVENT_ON_OWNER_ATTACKED (12, Eluna::OwnerAttacked,
+// CreatureHooks.cpp:323-329) fires for each engaging pet ahead of the
+// engage, with the spell target as the extra argument: the virtual
+// OwnerAttacked call in Spell::_cast routes through ElunaCreatureAI for
+// binding-carrying pets. A true return vetoes that pet's engage, mirroring
+// the C++ `if (!sEluna->OwnerAttacked(...)) ScriptedAI::OwnerAttacked(...)`
+// gate. The hook fires outside the motion lock (handlers re-enter it); the
+// engage re-validates under the lock.
+func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID uint32, ownerGUID, targetGUID uint64) {
 	if s == nil || ownerGUID == 0 || targetGUID == 0 || ownerGUID == targetGUID {
 		return
 	}
+	var cands []uint64
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
 	for _, m := range s.motionMapLocked(mapID, instanceID) {
 		if m.OwnerGUID != ownerGUID || m.Health == 0 {
 			continue
@@ -323,6 +399,36 @@ func (s *Server) triggerPetOwnerAttacked(mapID, instanceID uint32, ownerGUID, ta
 		}
 		// PetAI::AttackStart: prevent the pet from disengaging from its
 		// current target.
+		if m.TargetGUID != 0 && m.InCombat {
+			continue
+		}
+		cands = append(cands, m.GUID)
+	}
+	s.motionMu.Unlock()
+	vetoed := make(map[uint64]bool, len(cands))
+	for _, guid := range cands {
+		m := s.findCreatureMotion(mapID, instanceID, guid)
+		if m == nil {
+			vetoed[guid] = true
+			continue
+		}
+		if s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnOwnerAttacked, s.luaUnitObjectForGUID(mapID, instanceID, targetGUID)) {
+			vetoed[guid] = true
+		}
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	for _, guid := range cands {
+		if vetoed[guid] {
+			continue
+		}
+		m := s.motionMapLocked(mapID, instanceID)[guid]
+		if m == nil || m.OwnerGUID != ownerGUID || m.Health == 0 {
+			continue
+		}
+		if m.PetReact == PetReactPassive {
+			continue
+		}
 		if m.TargetGUID != 0 && m.InCombat {
 			continue
 		}
@@ -810,7 +916,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		targetSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
-		s.triggerPetDefensive(targetSess.player.Map, targetSess.player.InstanceID, targetGUID, motion.GUID)
+		s.triggerPetDefensive(ctx, targetSess.player.Map, targetSess.player.InstanceID, targetGUID, motion.GUID, scripting.CreatureEventOnOwnerAttackedAt)
 		// Duel defeat (Unit.cpp:825-853, 957-973): a pet is controlled by its owner
 		// (GetControllingPlayer, Unit.cpp:5996) — the blow lands as a duel
 		// defeat when the owner is the victim's duel opponent; a lethal blow
@@ -2459,7 +2565,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		victim.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
-		s.server.triggerPetDefensive(victim.player.Map, victim.player.InstanceID, target.GUID, caster.GUID)
+		s.server.triggerPetDefensive(ctx, victim.player.Map, victim.player.InstanceID, target.GUID, caster.GUID, scripting.CreatureEventOnOwnerAttackedAt)
 		// Duel defeat (Unit.cpp:825-853, 957-973): a pet is controlled by its
 		// owner (s is the owner session here; GetControllingPlayer,
 		// Unit.cpp:5996) — the blow lands as a duel defeat when the owner is

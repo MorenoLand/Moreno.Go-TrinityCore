@@ -7796,7 +7796,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// unit target straight from the client packet (m_targets.GetUnitTarget()),
 	// before any target selection.
 	if spell.DefenseType != spellDamageClassNone && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID && s.server != nil {
-		s.server.triggerPetOwnerAttacked(s.player.Map, s.player.InstanceID, s.playerGUID, target.UnitGUID)
+		s.server.triggerPetOwnerAttacked(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.UnitGUID)
 	}
 
 	// Spell::SelectExplicitTargets (Spell.cpp:722-752): the explicit-target
@@ -14076,7 +14076,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 				// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 				if s.server != nil {
-					s.server.triggerPetDefensive(playerSess.player.Map, playerSess.player.InstanceID, target.GUID, s.playerGUID)
+					s.server.triggerPetDefensive(ctx, playerSess.player.Map, playerSess.player.InstanceID, target.GUID, s.playerGUID, scripting.CreatureEventOnOwnerAttackedAt)
 				}
 			} else if absorbed > 0 && !playerSess.godCheatActive() {
 				// Unit::DealDamage (Unit.cpp:813-819): rage from fully absorbed
@@ -14288,7 +14288,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		if !threatGated {
 			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 		}
-		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
+		s.server.triggerPetDefensive(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID, scripting.CreatureEventOnOwnerAttacked)
 	}
 	return damage
 }

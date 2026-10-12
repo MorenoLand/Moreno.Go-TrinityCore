@@ -925,7 +925,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	s.procReactiveAttackerArms(target.GUID, outcome)
 
 	if s.server != nil {
-		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID)
+		s.server.triggerPetDefensive(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID, scripting.CreatureEventOnOwnerAttacked)
 	}
 
 	// If target is an online player (e.g. duel opponent or PvP)
@@ -1357,7 +1357,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
-		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID)
+		s.server.triggerPetDefensive(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID, scripting.CreatureEventOnOwnerAttacked)
 	}
 
 	// Outcome: ranged attacks can be dodged or blocked, but cannot be parried (TC rollMeleeOutcome)

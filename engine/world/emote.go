@@ -176,7 +176,6 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		listenRange = s.server.Config.ChatListenRangeTextEmote
 	}
 	s.server.sessionsMu.RLock()
-	defer s.server.sessionsMu.RUnlock()
 	for member := range s.server.sessions {
 		if !member.worldReady.Load() || member.player == nil || member.player.Map != s.player.Map || member.player.InstanceID != s.player.InstanceID {
 			continue
@@ -187,6 +186,21 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		_ = member.write(uint16(protocol.OpcodeSMSG_TEXT_EMOTE), packet.Bytes(), true)
 		if len(visPacket) > 0 {
 			_ = member.write(uint16(protocol.OpcodeSMSG_EMOTE), visPacket, true)
+		}
+	}
+	s.server.sessionsMu.RUnlock()
+	// Eluna CREATURE_EVENT_ON_RECEIVE_EMOTE (8): ChatHandler.cpp:741-742
+	// fires Creature::ReceiveEmote -> AI()->ReceiveEmote(player, text_emote)
+	// after the text-emote broadcast (ahead of the achievement criteria
+	// update). C++ resolves the target with ObjectAccessor::GetUnit and only
+	// fires for TYPEID_UNIT targets with an AI; the Go twin resolves a live
+	// creature motion. The boolean gates only ScriptedAI::ReceiveEmote, an
+	// empty base (CreatureAI.h:168) — a provable no-op — so the veto is not
+	// consumed. Fires after the session read lock is released: hook handlers
+	// re-enter the session set.
+	if targetGUID != 0 && s.server != nil {
+		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); motion != nil {
+			s.server.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReceiveEmote, s.luaPlayer(), textEmote)
 		}
 	}
 	return true

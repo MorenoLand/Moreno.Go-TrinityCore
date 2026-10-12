@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -273,7 +274,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		if s != nil {
-			s.triggerPetDefensive(p.Map, p.InstanceID, p.GUID, motion.GUID)
+			s.triggerPetDefensive(ctx, p.Map, p.InstanceID, p.GUID, motion.GUID, scripting.CreatureEventOnOwnerAttackedAt)
 		}
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586):

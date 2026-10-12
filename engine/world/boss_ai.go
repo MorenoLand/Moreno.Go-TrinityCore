@@ -2494,7 +2494,7 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, vs)
 	vs.sendPlayerUpdate()
 	if s != nil {
-		s.triggerPetDefensive(vs.player.Map, vs.player.InstanceID, victimGUID, m.GUID)
+		s.triggerPetDefensive(ctx, vs.player.Map, vs.player.InstanceID, victimGUID, m.GUID, scripting.CreatureEventOnOwnerAttackedAt)
 	}
 }
 

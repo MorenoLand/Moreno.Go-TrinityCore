@@ -2897,7 +2897,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			target.Sess.sendPlayerUpdate()
 			if s != nil {
-				s.triggerPetDefensive(target.Map, target.InstanceID, target.GUID, motion.GUID)
+				s.triggerPetDefensive(ctx, target.Map, target.InstanceID, target.GUID, motion.GUID, scripting.CreatureEventOnOwnerAttackedAt)
 			}
 			motion.LastAttack = now
 		}
