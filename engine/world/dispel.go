@@ -883,8 +883,24 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 
 		roll := rand.IntN(100)
 		if int32(roll) < cand.Chance {
-			// Dispel success
-			successList = append(successList, cand.SpellID)
+			// Dispel success. Spell::EffectDispel (SpellEffects.cpp:2453-2471)
+			// merges repeat successes on the same aura into one successList
+			// entry (find_if on spell id + caster, charges accumulated), so
+			// SMSG_SPELLDISPELLOG carries each distinct dispelled aura once.
+			// Go holds one aura per spell ID per target, so the caster leg of
+			// the key is vacuous and the spell-ID dedup is the faithful twin.
+			// EffectStealBeneficialBuff has no such dedup
+			// (SpellEffects.cpp:5211), so the steal path stays as-is.
+			alreadyLogged := false
+			for _, logged := range successList {
+				if logged == cand.SpellID {
+					alreadyLogged = true
+					break
+				}
+			}
+			if !alreadyLogged {
+				successList = append(successList, cand.SpellID)
+			}
 			// Charge auras stay in the roll list until their last charge is
 			// gone (Spell::EffectDispel DecrementCharge loop, SpellEffects.cpp:2458).
 			fullyRemoved := true
