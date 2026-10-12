@@ -1484,6 +1484,48 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 	return true
 }
 
+// rescheduleStolenAuraTick mirrors the AuraEffect::CalculatePeriodic load arm
+// (SpellAuraEffects.cpp:619-630) that Aura::SetLoadedState runs for a freshly
+// stolen aura (Unit.cpp:4032): the stolen aura does not restart the periodic
+// timer at a full amplitude — it keeps the victim's tick cadence, with the
+// periodic timer set to the time since the victim's last tick:
+// _periodicTimer = (victimMaxDuration - dur) % amplitude. The first tick on
+// the stealer therefore fires after amplitude - (elapsed % amplitude), not
+// after a full amplitude like a fresh apply would. The merge arm needs
+// nothing: C++ only calls oldAura->SetDuration(dur) there (Unit.cpp:4009)
+// and never touches the periodic timer, so the stealer's own cadence —
+// which Go likewise never reschedules on merge — is already exact.
+// Call right after the fresh stolen-aura apply, with dur the capped stolen
+// duration and victimMaxMs the SetLoadedState maxduration arg
+// (aura->GetMaxDuration()).
+func (s *session) rescheduleStolenAuraTick(spellID, victimMaxMs, dur uint32) {
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	if aura == nil || aura.Stopped || aura.TickInFlight {
+		s.castMu.Unlock()
+		return
+	}
+	periodMs := aura.PeriodMs
+	if periodMs == 0 || victimMaxMs == 0 {
+		// Non-periodic: no timer exists. Permanent (victimMaxMs 0): C++
+		// skips the elapsed recompute for permanent auras, leaving the
+		// construction-time timer — the fresh-apply cadence
+		// applyAuraToTarget already scheduled is exact.
+		s.castMu.Unlock()
+		return
+	}
+	if aura.TickTimer != nil {
+		aura.TickTimer.Stop()
+	}
+	var elapsed uint32
+	if victimMaxMs > dur {
+		elapsed = victimMaxMs - dur
+	}
+	delay := (periodMs - elapsed%periodMs) % periodMs
+	s.castMu.Unlock()
+	s.schedulePlayerPeriodicTickInitial(aura, periodMs, delay)
+}
+
 // setAuraCharges fixes the stolen aura's charge count and max duration after
 // the fresh apply (C++ Aura::SetLoadedState charges + maxduration args,
 // SpellAuras.cpp:1238, called at Unit.cpp:4032) and pushes the corrected
@@ -1648,6 +1690,11 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 			wantCharges = 1
 		}
 		s.setAuraCharges(cand.SpellID, wantCharges, st.victimMaxMs)
+		// C++ Aura::SetLoadedState -> AuraEffect::CalculatePeriodic load arm
+		// (SpellAuraEffects.cpp:619-630, called at Unit.cpp:4032): the fresh
+		// stolen aura keeps the victim's periodic tick cadence instead of
+		// restarting the timer at a full amplitude.
+		s.rescheduleStolenAuraTick(cand.SpellID, st.victimMaxMs, dur)
 	}
 
 	if len(failList) > 0 {
