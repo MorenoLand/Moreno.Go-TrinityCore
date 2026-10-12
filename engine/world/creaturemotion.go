@@ -2633,6 +2633,20 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			// AutoBalance_UnitScript::ModifyMeleeDamage analog.
 			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
+			// Unit::CalculateMeleeDamage (Unit.cpp:1236-1237):
+			// MeleeDamageBonusTaken runs on the victim ahead of the armor
+			// reduction for every attacker type — the creature path never
+			// bridged the victim-side flat (14 + 125), percent (87 + 126),
+			// Cheat Death or Sanctified Wrath arms (the player twin rides
+			// meleeWeaponDamageTaken). The attacker's MOD_IGNORE_TARGET_RESIST
+			// (269) clawback reads the creature's own aura store.
+			if damage > 0 {
+				attackerKey := creatureAuraKeyForMotion(motion)
+				ignoreResist := creatureAuraModifiersByMiscMask(s, attackerKey, spellAuraModIgnoreTargetResist, spellSchoolMaskNormal)
+				damage = s.applyMeleeDamageTaken(damage, spellSchoolMaskNormal, ignoreResist, target.GUID, combatTarget{
+					GUID: target.GUID, Map: target.Map, InstanceID: target.InstanceID,
+				}, false, true)
+			}
 			if target.Sess.player.Armor > 0 {
 				armor := float64(target.Sess.player.Armor)
 				// The attacker's 123/269 ignore-resist arms run on the

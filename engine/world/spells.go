@@ -13153,6 +13153,52 @@ func damageFromCasterMultiplier(victim, caster *session, spell wotlk.Spell) floa
 // MOD_IGNORE_TARGET_RESIST auras. Terms with no Go model: the npcbot
 // BotMgr::GetBotDamageTakenMod arm. A nil victim session fails open,
 // preserving prior behavior.
+// cheatDeathTakenPcts mirrors the CHEAT_DEATH dummy-aura arm shared by
+// Unit::SpellDamageBonusTaken (Unit.cpp:7075-7089) and
+// Unit::MeleeDamageBonusTaken (Unit.cpp:8217-8230): a SPELL_AURA_DUMMY
+// effect of a spell carrying SpellIconID 2109 whose effect MiscValue
+// covers the normal school reduces damage taken by AddPct (Util.h:72)
+// of the less-negative of -GetMeleeCritDamageReduction(400) and the
+// effect's amount. GetMeleeCritDamageReduction (Unit.h:970) is
+// CalculatePct(400, min(CR_CRIT_TAKEN_MELEE bonus*2.2, 33.0)) — the
+// same capped percent getResilienceStats returns as critDamageReduction,
+// and CalculatePct(400, pct) truncates to 4*pct as a whole number.
+// Player-only by construction: the reduction reads the victim's
+// resilience, and creatures have no combat ratings (their C++ arm
+// computes mod = 0, so any negative amount is a no-op).
+func cheatDeathTakenPcts(victim *session) []float32 {
+	if victim == nil || victim.player == nil || victim.server == nil || victim.server.Data == nil {
+		return nil
+	}
+	_, critDmgRed, _ := getResilienceStats(victim.player.Level, victim.player.CombatRatings[CombatRatingCritTakenMelee])
+	mod := -float32(uint32(4 * critDmgRed))
+	var pcts []float32
+	for _, aura := range victim.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		cheatSpell, found, err := victim.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || cheatSpell.SpellIconID != spellIconCheatDeath {
+			continue
+		}
+		for index, effect := range cheatSpell.Effects {
+			if effect.Aura != spellAuraDummy || aura.EffectMask&(1<<uint(index)) == 0 || effect.MiscValue&spellSchoolMaskNormal == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = int32(aura.Amount)
+			}
+			pct := mod
+			if a := float32(amount); a > pct {
+				pct = a
+			}
+			pcts = append(pcts, pct)
+		}
+	}
+	return pcts
+}
+
 func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, victim, caster *session) uint32 {
 	if victim == nil {
 		return damage
@@ -13161,40 +13207,8 @@ func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, 
 	if mechanicMask := spellMechanicMask(spell); mechanicMask != 0 {
 		takenTotalMod *= ResolveAuraPercentMultiplier(victim.auraTypeModifiersByMiscMask(spellAuraModMechanicDamageTakenPercent, mechanicMask))
 	}
-	// Cheat Death dummy-aura arm (Unit.cpp:7075-7089): a SPELL_AURA_DUMMY
-	// effect of a spell carrying SpellIconID 2109 whose effect MiscValue
-	// covers the normal school reduces damage taken by AddPct (Util.h:72)
-	// of the less-negative of -GetMeleeCritDamageReduction(400) and the
-	// effect's amount. GetMeleeCritDamageReduction (Unit.h:970) is
-	// CalculatePct(400, min(CR_CRIT_TAKEN_MELEE bonus*2.2, 33.0)) — the
-	// same capped percent getResilienceStats returns as critDamageReduction,
-	// and CalculatePct(400, pct) truncates to 4*pct as a whole number.
-	if victim.player != nil && victim.server != nil && victim.server.Data != nil {
-		_, critDmgRed, _ := getResilienceStats(victim.player.Level, victim.player.CombatRatings[CombatRatingCritTakenMelee])
-		mod := -float32(uint32(4 * critDmgRed))
-		for _, aura := range victim.loadedAuras() {
-			if aura == nil || aura.Stopped {
-				continue
-			}
-			cheatSpell, found, err := victim.server.Data.Spell(aura.SpellID)
-			if err != nil || !found || cheatSpell.SpellIconID != spellIconCheatDeath {
-				continue
-			}
-			for index, effect := range cheatSpell.Effects {
-				if effect.Aura != spellAuraDummy || aura.EffectMask&(1<<uint(index)) == 0 || effect.MiscValue&spellSchoolMaskNormal == 0 {
-					continue
-				}
-				amount := aura.Amounts[index]
-				if amount == 0 {
-					amount = int32(aura.Amount)
-				}
-				pct := mod
-				if a := float32(amount); a > pct {
-					pct = a
-				}
-				takenTotalMod += takenTotalMod * pct / 100
-			}
-		}
+	for _, pct := range cheatDeathTakenPcts(victim) {
+		takenTotalMod += takenTotalMod * pct / 100
 	}
 	if spell.AttributesEx4&spellAttr4FixedDamage == 0 {
 		takenTotalMod *= ResolveAuraPercentMultiplier(victim.auraTypeModifiersByMiscMask(spellAuraModDamagePercentTaken, schoolMask))
@@ -13235,13 +13249,30 @@ func spellHasWeaponDamageEffect(spell wotlk.Spell) bool {
 // (125) / MOD_RANGED_DAMAGE_TAKEN (113), with the negative-flat clamp, then
 // the MOD_MELEE_DAMAGE_TAKEN_PCT (126) / MOD_RANGED_DAMAGE_TAKEN_PCT (114)
 // product. When applyPercentTaken is true (white swings), the
-// MOD_DAMAGE_PERCENT_TAKEN (87) arm (Unit.cpp:8178) and the Sanctified Wrath
-// MOD_IGNORE_TARGET_RESIST (195) clawback (Unit.cpp:8244-8258) ride here;
-// weapon-damage spells pass false because those two arms keep riding
+// MOD_DAMAGE_PERCENT_TAKEN (87) arm (Unit.cpp:8178), the Cheat Death dummy
+// arm (Unit.cpp:8217-8230) and the Sanctified Wrath
+// MOD_IGNORE_TARGET_RESIST (269) clawback (Unit.cpp:8244-8258) ride here;
+// weapon-damage spells pass false because those arms keep riding
 // spellDamageBonusTaken, which this runs ahead of so the flat lands before
 // every percent multiplier, matching the C++ order.
 func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, schoolMask uint32, targetGUID uint64, target combatTarget, ranged, applyPercentTaken bool) uint32 {
 	if s == nil || s.server == nil || damage == 0 {
+		return damage
+	}
+	// Unit.cpp:8247: the clawback reads the attacker's own 269 auras.
+	ignoreResist := s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask)
+	return s.server.applyMeleeDamageTaken(damage, schoolMask, ignoreResist, targetGUID, target, ranged, applyPercentTaken)
+}
+
+// applyMeleeDamageTaken is the server-level core of meleeWeaponDamageTaken,
+// shared by the player-attacker session wrapper and the creature/pet white
+// swing paths (which have no attacker session): the attacker's
+// MOD_IGNORE_TARGET_RESIST (269) amounts arrive pre-read — from the session
+// for player attackers, from the creature aura store for creature attackers
+// (pets carry no Go aura model, so they pass nil and the arm stays a noted
+// edge there).
+func (s *Server) applyMeleeDamageTaken(damage uint32, schoolMask uint32, attackerIgnoreResist []int32, targetGUID uint64, target combatTarget, ranged, applyPercentTaken bool) uint32 {
+	if s == nil || damage == 0 {
 		return damage
 	}
 	flatAura, pctAura := uint32(spellAuraModMeleeDamageTaken), uint32(spellAuraModMeleeDamageTakenPct)
@@ -13252,7 +13283,7 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 	var pcts []int32
 	var key creatureAuraKey
 	isPlayerVictim := false
-	if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+	if vs := s.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
 		isPlayerVictim = true
 		for _, amt := range vs.auraTypeModifiersByMiscMask(auraModDamageTaken, schoolMask) {
 			flat += amt
@@ -13263,22 +13294,22 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 		pcts = vs.gatedAuraModifierAmounts(pctAura, vs.auraModifierCandidatesFiltered(pctAura, nil))
 	} else if target.GUID != 0 {
 		key = creatureAuraKeyForTarget(target)
-		for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraModDamageTaken, schoolMask) {
+		for _, amt := range creatureAuraModifiersByMiscMask(s, key, auraModDamageTaken, schoolMask) {
 			flat += amt
 		}
-		flat += creatureAuraModifierSum(s.server, key, flatAura)
+		flat += creatureAuraModifierSum(s, key, flatAura)
 		// 114/126 carry no misc filter in C++ (GetTotalAuraMultiplier with no
 		// predicate); the all-bits mask folds every effect with a nonzero
 		// MiscValue, which is the whole population for these aura types.
-		pcts = creatureAuraModifiersByMiscMask(s.server, key, pctAura, 0xFFFFFFFF)
+		pcts = creatureAuraModifiersByMiscMask(s, key, pctAura, 0xFFFFFFFF)
 	}
 	if applyPercentTaken {
 		if isPlayerVictim {
-			if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+			if vs := s.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
 				pcts = append(pcts, vs.auraTypeModifiersByMiscMask(spellAuraModDamagePercentTaken, schoolMask)...)
 			}
 		} else if target.GUID != 0 {
-			pcts = append(pcts, creatureAuraModifiersByMiscMask(s.server, key, spellAuraModDamagePercentTaken, schoolMask)...)
+			pcts = append(pcts, creatureAuraModifiersByMiscMask(s, key, spellAuraModDamagePercentTaken, schoolMask)...)
 		}
 	}
 	// Unit.cpp:8171-8172: a negative flat benefit larger than the damage zeroes it.
@@ -13293,12 +13324,23 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 	for _, amt := range pcts {
 		mod *= 1 + float64(amt)/100
 	}
+	if applyPercentTaken {
+		// Unit.cpp:8217-8230: the Cheat Death dummy arm rides the white
+		// swing taken path (the spell-path twin lives in
+		// spellDamageBonusTaken). Multiplicative with the other pct arms,
+		// so position against the 126 arm is immaterial.
+		if vs := s.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+			for _, pct := range cheatDeathTakenPcts(vs) {
+				mod *= 1 + float64(pct)/100
+			}
+		}
+	}
 	if applyPercentTaken && mod < 1 {
 		// Unit.cpp:8244-8258: Sanctified Wrath — the attacker's
-		// MOD_IGNORE_TARGET_RESIST (195) auras (misc mask = attack school,
+		// MOD_IGNORE_TARGET_RESIST (269) auras (misc mask = attack school,
 		// NORMAL for white swings) claw back the damage reduction.
 		reduction := 1 - mod
-		for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask) {
+		for _, amt := range attackerIgnoreResist {
 			reduction *= 1 - float64(amt)/100
 		}
 		mod = 1 - reduction

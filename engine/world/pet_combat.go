@@ -769,6 +769,19 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		damage = 1
 	}
 
+	// Unit::CalculateMeleeDamage (Unit.cpp:1236-1237): MeleeDamageBonusTaken
+	// runs on the victim ahead of the armor reduction for every attacker
+	// type — the pet path never bridged the victim-side flat (14 + 125),
+	// percent (87 + 126) or Cheat Death arms (the player twin rides
+	// meleeWeaponDamageTaken). The Sanctified Wrath 269 clawback reads the
+	// attacker's auras; pets carry no Go aura model, so that arm stays a
+	// noted edge here.
+	if damage > 0 {
+		damage = s.applyMeleeDamageTaken(damage, spellSchoolMaskNormal, nil, targetGUID, combatTarget{
+			GUID: targetGUID, Map: motion.Map, InstanceID: motion.InstanceID,
+		}, false, true)
+	}
+
 	if targetArmor > 0 {
 		armor := float64(targetArmor)
 		if !isTargetPlayer {
