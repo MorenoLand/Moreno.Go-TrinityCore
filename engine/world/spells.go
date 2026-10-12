@@ -21473,7 +21473,15 @@ func (s *Server) singleCastDanceLocked(spell wotlk.Spell, register *activeAura, 
 	var kept []singleCastEntry
 	var purge []singleCastEntry
 	for _, e := range s.singleCastAuras[casterGUID] {
-		if e.aura == nil || e.aura == register || e.aura == exclude {
+		if e.aura == nil || e.aura == register {
+			continue
+		}
+		if e.aura == exclude {
+			// Unit.cpp:4031-4032: the steal dance unregisters the
+			// victim aura before creating the stolen copy, then
+			// re-registers it — net, the victim keeps its
+			// single-target registration on the original caster.
+			kept = append(kept, e)
 			continue
 		}
 		if register != nil && sameSingleCastTarget(e.aura, register) {

@@ -280,6 +280,15 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 		if aura == nil || aura.Stopped {
 			continue
 		}
+		// Owned-only scan (Unit.cpp:4595, SpellEffects.cpp:5161): a
+		// persistent-area aura applied by another caster's dynamic
+		// object is visible on the target but never owned, so no
+		// dispel or steal effect may list it. The steal pre-cast
+		// (Spell.cpp:5964) scans GetVisibleAuras instead and keeps it;
+		// keepResisted doubles as that pre-cast flag on the steal path.
+		if aura.PersistentAreaAura && aura.CasterGUID != targetSess.playerGUID && (!stealMode || !keepResisted) {
+			continue
+		}
 		var sp wotlk.Spell
 		var found bool
 		if s.server != nil && s.server.Data != nil {
@@ -401,6 +410,11 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 	var candAuras []*activeAura
 	for spellID, aura := range auras {
 		if aura == nil || aura.Stopped {
+			continue
+		}
+		// Owned-only scan, like the player leg above: another caster's
+		// persistent-area aura applications are never dispelled/stolen.
+		if aura.PersistentAreaAura && aura.CasterGUID != creatureGUID && (!stealMode || !keepResisted) {
 			continue
 		}
 		var sp wotlk.Spell
@@ -1543,12 +1557,12 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		// (Unit.cpp:4015-4042): the _AddAura dance runs on the stolen aura
 		// with the ORIGINAL caster, purging that caster's other
 		// single-target-with auras — but the created aura itself must not
-		// stay single-target, "so stealer won't loose it on recast". The
-		// victim aura was already unregistered from the original caster's
-		// list before the dance in C++; here it is excluded by pointer when
-		// it survived the steal decrement (a fully removed victim aura
-		// unregistered itself on expiry). The stolen aura is created with
-		// single-target registration skipped.
+		// stay single-target, "so stealer won't loose it on recast". C++
+		// unregisters the victim aura before the dance and re-registers
+		// it after (Unit.cpp:4031-4032); here it is excluded from the
+		// purge by pointer and its registration is kept (a fully removed
+		// victim aura unregistered itself on expiry). The stolen aura is
+		// created with single-target registration skipped.
 		if spellIsSingleTarget(stSpell) && st.victimCasterGUID != 0 {
 			for _, e := range s.server.crossTargetSingleCastPurge(st.victimCasterGUID, stSpell, st.victimAura) {
 				s.expireSingleCastEntry(e)
@@ -1652,6 +1666,11 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 			if aura == nil || aura.Stopped {
 				continue
 			}
+			// Owned-only scan (SpellEffects.cpp:4739): another caster's
+			// persistent-area aura applications are never dispelled.
+			if aura.PersistentAreaAura && aura.CasterGUID != targetSess.playerGUID {
+				continue
+			}
 			// C++ matches the aura spell's full mechanic mask, not just the
 			// top-level Mechanic the aura record carries
 			// (SpellInfo::GetAllEffectsMechanicMask, SpellInfo.cpp:1893-1902).
@@ -1713,6 +1732,10 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 		var matched []*activeAura
 		for _, aura := range auras {
 			if aura == nil || aura.Stopped {
+				continue
+			}
+			// Owned-only scan (SpellEffects.cpp:4739), like the player leg.
+			if aura.PersistentAreaAura && aura.CasterGUID != targetGUID {
 				continue
 			}
 			if (s.auraSpellMechanicMask(aura)&(uint32(1)<<mechanic)) != 0 || (mechanic == 5 && aura.AuraType == 7) || (mechanic == 12 && aura.AuraType == 12) {
