@@ -2271,7 +2271,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 				return true
 			}
 			if s.server != nil {
-				s.server.onPetCommandAttack(s.player.Map, s.player.InstanceID, petGUID, targetGUID)
+				s.server.onPetCommandAttack(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
 			}
 			// Send hostile AI reaction (plays pet attack sound/growl)
 			reactionBuf := protocol.NewBuffer(12)

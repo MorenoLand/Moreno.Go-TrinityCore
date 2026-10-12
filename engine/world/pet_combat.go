@@ -140,8 +140,26 @@ const (
 
 // onPetCommandAttack handles ordering the pet to attack a specific target.
 // Mirrors TrinityCore PetAI::AttackStart (PetAI.cpp:115).
-func (s *Server) onPetCommandAttack(mapID, instanceID uint32, petGUID uint64, targetGUID uint64) {
+func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint32, petGUID uint64, targetGUID uint64) {
 	if s == nil || petGUID == 0 || targetGUID == 0 {
+		return
+	}
+	// Eluna CREATURE_EVENT_ON_PRE_COMBAT (10): ElunaCreatureAI::AttackStart
+	// (ElunaCreatureAI.h:143-148) fires (event, creature, target) before the
+	// attack starts; a boolean true vetoes ScriptedAI::AttackStart — the
+	// engage below. C++ fires it whenever a script drives AI()->AttackStart
+	// on an Eluna-driven creature (ScriptedCreature.cpp:650,
+	// SmartScript.cpp, CreatureMethods.h:1246, FleeingMovementGenerator.
+	// cpp:266); in Go the only script-driven attack-start is the pet attack
+	// command (the PetAI::AttackStart twin), so the hook fires here, ahead of
+	// the GM gate the way UnitAI::AttackStart's me->Attack precedes the
+	// Unit::Attack GM leg. Fires unlocked: handlers re-enter the motion
+	// registry.
+	motion := s.findCreatureMotion(mapID, instanceID, petGUID)
+	if motion == nil {
+		return
+	}
+	if s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnPreCombat, s.luaUnitObjectForGUID(mapID, instanceID, targetGUID)) {
 		return
 	}
 	// Unit::Attack GM leg (Unit.cpp:5664-5668) via PetAI::AttackStart: a pet

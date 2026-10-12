@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"math/rand"
+	"strconv"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -605,6 +606,14 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID u
 	// since Lua handlers can call back into the motion registry.
 	if created {
 		s.triggerInstanceCreatureCreate(motion)
+		// Eluna CREATURE_EVENT_ON_ADD (36): Eluna::OnAddToWorld
+		// (CreatureHooks.cpp:73-78, args (event, creature)) fires from
+		// Creature::AddToWorld (Creature.cpp:304), right after the instance
+		// create leg (Creature.cpp:301) — same order here. The boolean is
+		// discarded (CallAllFunctions). Direct-constructed motions (temp
+		// summons, boss minions, totems, pets) bypass this funnel — the same
+		// documented delta as the instance-create bridge.
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnAdd)
 	}
 	return motion
 }
@@ -1904,7 +1913,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		return
 	}
 	now := time.Now()
-	s.pruneCreatureMotion(now)
+	s.pruneCreatureMotion(ctx, now)
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	if distance <= 0 {
 		distance = 100.0
@@ -2078,6 +2087,37 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.InCombat = false
 		motion.TargetGUID = 0
 		motion.Moving = false
+	}
+
+	// Eluna CREATURE_EVENT_ON_AIUPDATE (7): ElunaCreatureAI::UpdateAI
+	// (ElunaCreatureAI.h:37-68) fires (event, creature, diff) on every AI
+	// tick; a boolean true vetoes ScriptedAI::UpdateAI(diff) — the
+	// UpdateVictim + DoMeleeAttackIfReady step below. C++ installs the
+	// Eluna AI (and thus runs the hook) only for creatures with bindings
+	// (Eluna::GetAI, LuaEngine.cpp:1219-1236), so Go pre-checks
+	// Runtime.HasHook on both binding keys — the START_HOOK
+	// HasBindingsFor twin — and skips the Lua call entirely when nothing
+	// is registered. diff is the world-tick delta in ms (C++ uint32
+	// diff); the sweep runs on the 100ms world tick. Both binding families
+	// fire (entry, then unique), matching SetupStack's merged call list.
+	// A veto skips the rest of the step; C++ movement generators run
+	// outside the veto, but Go's step fuses movement with the AI update,
+	// so the veto also pauses motion — documented delta.
+	if s != nil && s.Features != nil && s.Features.Scripts != nil {
+		scripts := s.Features.Scripts
+		entryKind := "creature:" + strconv.FormatUint(uint64(motion.Entry), 10)
+		uniqueKind := "creature_unique:" + strconv.FormatUint(motion.GUID, 10) + ":" + strconv.FormatUint(uint64(motion.InstanceID), 10)
+		if scripts.HasHook(entryKind, scripting.CreatureEventOnAIUpdate) || scripts.HasHook(uniqueKind, scripting.CreatureEventOnAIUpdate) {
+			creature := s.luaMotionCreature(motion)
+			if creature != nil {
+				args := []any{scripting.CreatureEventOnAIUpdate, creature, uint32(100)}
+				results, _ := scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnAIUpdate, args...)
+				uniqueResults, _ := scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnAIUpdate, args...)
+				if luaHookVeto(results) || luaHookVeto(uniqueResults) {
+					return
+				}
+			}
+		}
 	}
 
 	// Pet AI handling if this creature is a player pet
@@ -3649,18 +3689,30 @@ func isAllianceRace(race uint8) bool {
 	}
 }
 
-func (s *Server) pruneCreatureMotion(now time.Time) {
+func (s *Server) pruneCreatureMotion(ctx context.Context, now time.Time) {
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	// Removed motions are collected for the post-unlock hook fire below:
+	// Lua handlers re-enter the motion registry.
+	var removed []*creatureMotion
 	for scope, motions := range s.instanceCreatureMotion {
 		for guid, motion := range motions {
 			if now.Sub(motion.Refreshed) > motionTTL {
 				delete(motions, guid)
+				removed = append(removed, motion)
 			}
 		}
 		if len(motions) == 0 {
 			delete(s.instanceCreatureMotion, scope)
 		}
+	}
+	s.motionMu.Unlock()
+	// Eluna CREATURE_EVENT_ON_REMOVE (37): Eluna::OnRemoveFromWorld
+	// (CreatureHooks.cpp:80-85, args (event, creature)) fires from
+	// Creature::RemoveFromWorld (Creature.cpp:314) when a creature leaves
+	// the world — the grid-unload twin of this TTL prune. The boolean is
+	// discarded (CallAllFunctions).
+	for _, motion := range removed {
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnRemove)
 	}
 }
 

@@ -9190,27 +9190,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// and filters it like any other miss.)
 		_, primaryMissed := missedTargets[targetGUID]
 		primaryLive := !primaryMissed
-		// Eluna::SpellHit (CREATURE_EVENT_ON_HIT_BY_SPELL, event 14) fires
-		// once per spell hit on a creature target: Spell.cpp:2626
-		// (Spell::UnitTargetInfo::DoTargetSpellHit) calls CreatureAI::
-		// SpellHit when _spellHitTarget->ToCreature(). A missed spell never
-		// fires (_spellHitTarget is null when the spell misses in
-		// DoSpellHitOnUnit), matching the miss guard above. Eluna argument
-		// order is (event, creature, caster, spellid). ElunaCreatureAI::
-		// SpellHit's truthy return vetoes only ScriptedAI::SpellHit, which
-		// is empty (the CreatureAI.h:143 base is the only implementation),
-		// so the return is discarded the way the enter-combat hook's is.
-		// The caster is always the player session here: Go has no
-		// creature-caster spell path, so the ON_SPELL_HIT_TARGET (event 15)
-		// gate (caster TYPEID_UNIT with AI enabled) has no fire site.
-		for _, effectTarget := range hitTargets {
-			if uint16(effectTarget>>48) != 0xF130 {
-				continue
-			}
-			if motion := s.findCreatureMotion(effectTarget); motion != nil {
-				s.server.fireCreatureLuaEvent(effCtx, motion, scripting.CreatureEventOnHitBySpell, s.luaPlayer(), spellID)
-			}
-		}
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 		// non-friendly non-positive (or dispel-effect) spell hit stands the
 		// target up. The EVADE-miss arm is vacuous (hitTargets excludes
@@ -9240,6 +9219,32 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		for effectIndex, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
+			}
+			// Eluna::SpellHit (CREATURE_EVENT_ON_HIT_BY_SPELL, event 14) fires
+			// per effect per creature hit target: Spell::DoProcessTargetContainer
+			// (Spell.cpp:3557-3562) calls TargetInfo::DoTargetSpellHit once per
+			// effect index in the target's EffectMask, and DoTargetSpellHit
+			// (Spell.cpp:2626-2629) calls CreatureAI::SpellHit when the target
+			// is a creature. Go's hitTargets is a flat per-cast list (no
+			// per-effect masks), so the hook fires once per non-NONE effect
+			// per creature hit target — exact when every effect lands on the
+			// target, an over-fire when effects have disjoint targets. A missed
+			// spell never fires (_spellHitTarget is null when the spell misses
+			// in DoSpellHitOnUnit), matching the miss filter on hitTargets
+			// above. Eluna argument order is (event, creature, caster,
+			// spellid). ElunaCreatureAI::SpellHit's truthy return vetoes only
+			// ScriptedAI::SpellHit, which is empty (the CreatureAI.h:143 base
+			// is the only implementation), so the return is discarded the way
+			// the enter-combat hook's is. The caster is the player session on
+			// this path; the creature-caster twin fires in
+			// castCreatureSpellInternal (boss_ai.go).
+			for _, effectTarget := range hitTargets {
+				if uint16(effectTarget>>48) != 0xF130 {
+					continue
+				}
+				if motion := s.findCreatureMotion(effectTarget); motion != nil {
+					s.server.fireCreatureLuaEvent(effCtx, motion, scripting.CreatureEventOnHitBySpell, s.luaPlayer(), spellID)
+				}
 			}
 			switch eff.Effect {
 			case 1: // SPELL_EFFECT_INSTAKILL

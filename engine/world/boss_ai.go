@@ -303,6 +303,14 @@ func (ai *vancleefAI) despawnSummons(ctx context.Context, s *Server, owner *crea
 	for _, m := range despawned {
 		s.fireCreatureSummoned(ctx, owner, scripting.CreatureEventOnSummonedCreatureDespawn, m)
 	}
+	// Eluna::OnRemoveFromWorld (CreatureHooks.cpp:80-85,
+	// CREATURE_EVENT_ON_REMOVE (37), args (event, creature)) fires from
+	// Creature::RemoveFromWorld (Creature.cpp:314) — after the
+	// SummonedCreatureDespawn leg above (TemporarySummon.cpp:280 precedes
+	// the world removal). The boolean is discarded (CallAllFunctions).
+	for _, m := range despawned {
+		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
+	}
 }
 
 // -------------------------------------------------------------
@@ -1743,6 +1751,34 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.fireCreatureSpellLinkedTriggers(ctx, m, spellID, targetGUID)
 	}
+	// Spell::TargetInfo::DoTargetSpellHit (Spell.cpp:2626-2629): the
+	// target-side SpellHit Eluna hook — CREATURE_EVENT_ON_HIT_BY_SPELL
+	// (event 14), args (event, creature, caster, spellid) — fires per
+	// effect for creature hit targets, ahead of the caster-side
+	// SpellHitTarget leg below (2629 precedes 2639-2648). The boolean veto
+	// gates only the empty ScriptedAI::SpellHit base (CreatureAI.h:143),
+	// so it is discarded. Reflected targets are skipped: C++ reflect
+	// keeps _spellHitTarget away from the reflector (Spell.cpp:2350), so
+	// the hook never fires there. Per-effect firing mirrors the
+	// DoProcessTargetContainer loop (Spell.cpp:3557-3562); Go's hitTargets
+	// is a flat per-cast list (no per-effect masks), so this fires once
+	// per non-NONE effect per creature target — the same approximation as
+	// the player path (spells.go).
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect == 0 {
+				continue
+			}
+			for _, guid := range hitTargets {
+				if _, reflected := reflectedTargets[guid]; reflected {
+					continue
+				}
+				if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+					s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
+				}
+			}
+		}
+	}
 	// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2639-2650):
 	// a creature caster whose spell hits a unit target fires the caster
 	// AI's SpellHitTarget(target, spell) — Eluna
@@ -1750,9 +1786,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// (caster, target, spellid); the return is discarded (ElunaCreatureAI.h:
 	// 231-238 — it only vetoes the empty ScriptedAI arm, the same ruling
 	// as the event-14 bridge). The hit-target-side SpellHit leg (event 14)
-	// is vacuous on this path — the creature path only ever hits players,
-	// and the player path already fires it (spells.go:8569); the
-	// gameobject-caster arm has no Go model. This runs before the
+	// fires in the block above; the gameobject-caster arm has no Go model.
+	// This runs before the
 	// DoTriggersOnSpellHit consumer below, matching C++ order (2639-2650
 	// precede 2652). Gated on spellKnown and a real hit target: C++ only
 	// reaches these arms with a SpellInfo and a non-null _spellHitTarget.
