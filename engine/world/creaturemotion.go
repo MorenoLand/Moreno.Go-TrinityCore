@@ -69,15 +69,17 @@ type creatureMotion struct {
 	// urand(2,10) splines, then pauses urand(4,10) seconds after the last one.
 	WanderSteps int
 
-	Faction         uint32
-	Level           uint32
-	UnitFlags       uint32
-	DynamicFlags    uint32
-	FlagsExtra      uint32
-	TypeFlags       uint32 // creature_template.type_flags (CreatureData.h:180); the BOSS_MOB bit (0x4, SharedDefines.h:2731) feeds Creature::isWorldBoss (Creature.cpp:2353) gates
-	CanFly          bool
-	ReactState      uint8
-	ReactStateKnown bool
+	Faction               uint32
+	Level                 uint32
+	UnitFlags             uint32
+	DynamicFlags          uint32
+	FlagsExtra            uint32
+	TypeFlags             uint32 // creature_template.type_flags (CreatureData.h:180); the BOSS_MOB bit (0x4, SharedDefines.h:2731) feeds Creature::isWorldBoss (Creature.cpp:2353) gates
+	NPCFlags              uint32 // UNIT_NPC_FLAGS live value: Lua CreatureMethods::GetNPCFlags/SetNPCFlags (SetUInt32Value twin), init from template npcflag at spawn
+	DisableReputationGain bool   // Creature::DisableReputationGain (Creature.h:320-321, default false); Lua IsReputationGainDisabled/SetDisableReputationGain
+	CanFly                bool
+	ReactState            uint8
+	ReactStateKnown       bool
 	// CreatureType mirrors creature_template.type (8 = critter,
 	// CritterAI::Permissible, PassiveAI.cpp:95-100).
 	CreatureType uint32
@@ -645,6 +647,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			UnitFlags:       st.UnitFlags,
 			FlagsExtra:      st.FlagsExtra,
 			TypeFlags:       st.TypeFlags,
+			NPCFlags:        st.NPCFlags,
 			CanFly:          st.CanFly,
 			ReactState:      st.ReactState,
 			ReactStateKnown: st.ReactStateKnown,
@@ -776,6 +779,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				UnitFlags:       st.UnitFlags,
 				FlagsExtra:      st.FlagsExtra,
 				TypeFlags:       st.TypeFlags,
+				NPCFlags:        st.NPCFlags,
 				CanFly:          st.CanFly,
 				ReactState:      st.ReactState,
 				ReactStateKnown: st.ReactStateKnown,

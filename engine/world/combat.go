@@ -1976,6 +1976,7 @@ type creatureStats struct {
 	UnitFlags       uint32
 	FlagsExtra      uint32
 	TypeFlags       uint32
+	NPCFlags        uint32 // creature_template.npcflag; live value behind Lua CreatureMethods::GetNPCFlags/SetNPCFlags (UNIT_NPC_FLAGS)
 	CanFly          bool
 	ReactState      uint8
 	ReactStateKnown bool
@@ -2034,7 +2035,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		return stats
 	}
 
-	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, flight int64
+	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight int64
 	var creatureType int64
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
 	var healthMod, manaMod, armorMod, damageMod float64
@@ -2051,12 +2052,13 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.unit_flags, 0),
 		COALESCE(ct.flags_extra, 0),
 		COALESCE(ct.type_flags, 0),
+		COALESCE(ct.npcflag, 0),
 		COALESCE(ctm.Flight, 0),
 		COALESCE(ct.type, 0),
 		COALESCE(ct.MechanicImmuneMask, 0),
 		COALESCE(ct.SpellSchoolImmuneMask, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2091,6 +2093,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.UnitFlags = uint32(unitFlags)
 	stats.FlagsExtra = uint32(flagsExtra)
 	stats.TypeFlags = uint32(typeFlags)
+	stats.NPCFlags = uint32(npcFlags)
 	stats.CanFly = flight != 0
 	stats.MechanicImmuneMask = uint32(mechanicImmuneMask)
 	stats.SpellSchoolImmuneMask = uint32(spellSchoolImmuneMask)

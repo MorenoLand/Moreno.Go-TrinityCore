@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -25,6 +26,15 @@ type luaCreatureState struct {
 	X            float32
 	Y            float32
 	Z            float32
+	// Template reads backing the CreatureMethods stat surface (rank,
+	// flags_extra, type_flags, family, AIName, RacialLeader are static
+	// per entry, so the constructor snapshot is exact).
+	Rank         uint32
+	FlagsExtra   uint32
+	TypeFlags    uint32
+	Family       uint32
+	AIName       string
+	RacialLeader bool
 }
 
 type luaGameObjectState struct {
@@ -136,9 +146,11 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		npcFlagExpr = "(t.npcflag | " + flagClause + ")"
 	}
 	queryArgs := append(selectArgs, low, entry)
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &state.Map, &state.X, &state.Y, &state.Z)
+	var rank, flagsExtra, typeFlags, family, racialLeader int64
+	var aiName string
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", t.rank, t.flags_extra, t.type_flags, t.family, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &family, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
 	if err != nil && missingTable(err) {
-		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &state.Map, &state.X, &state.Y, &state.Z)
+		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, t.rank, t.flags_extra, t.type_flags, t.family, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &family, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
 	}
 	if err != nil {
 		if !errorsIsNoRows(err) {
@@ -161,6 +173,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	state.X, state.Y, state.Z = motion.X, motion.Y, motion.Z
 	s.server.motionMu.Unlock()
 	state.GossipMenuID, state.NPCFlags = uint32(gossipMenuID), uint32(npcFlags)
+	state.Rank, state.FlagsExtra, state.TypeFlags, state.Family = uint32(rank), uint32(flagsExtra), uint32(typeFlags), uint32(family)
+	state.AIName, state.RacialLeader = aiName, racialLeader != 0
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetEntry"] = luaNoArgs(func() any { return state.Entry })
@@ -376,6 +390,498 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			motion.ThreatMgr.ClearThreat()
 		}
 		return nil, nil
+	}
+	// luaAngleTarget resolves the target of the WorldObject angle methods
+	// (WorldObjectMethods.h): either a WorldObject Lua object (player,
+	// creature, gameobject — all carry X/Y fields) or raw x, y numbers
+	// (the GetAngle(x, y) proto).
+	luaAngleTarget := func(args []any) (x, y float32, guid uint64, ok bool) {
+		if len(args) > 0 {
+			if obj, isObj := args[0].(*scripting.Object); isObj && obj != nil {
+				if fx, found := objectFloat32Field(obj, "X"); found {
+					if fy, found := objectFloat32Field(obj, "Y"); found {
+						g, _ := objectUint64Field(obj, "GUID")
+						return fx, fy, g, true
+					}
+				}
+				return 0, 0, 0, false
+			}
+		}
+		if len(args) < 2 {
+			return 0, 0, 0, false
+		}
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		y, err = luaFloat32Arg(args, 1)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		return x, y, 0, true
+	}
+	// GetAngle is WorldObjectMethods::GetAngle (WorldObjectMethods.h:658-678,
+	// Trinity arm): Position::GetAbsoluteAngle = NormalizeOrientation(
+	// atan2(dy, dx)) (Position.h:126-131); orientation is ignored.
+	methods["GetAngle"] = func(_ context.Context, args []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, fmt.Errorf("target is required")
+		}
+		tx, ty, _, ok := luaAngleTarget(args)
+		if !ok {
+			return nil, fmt.Errorf("target is required")
+		}
+		angle := normalizeOrientation(float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X))))
+		return []any{angle}, nil
+	}
+	// IsInFront is WorldObjectMethods::IsInFront (WorldObjectMethods.h:1117-1126):
+	// WorldObject::isInFront(target, arc) = HasInArc(arc, target)
+	// (Object.cpp:1412-1415); Eluna's arc defaults to pi.
+	methods["IsInFront"] = func(_ context.Context, args []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, fmt.Errorf("target is required")
+		}
+		tx, ty, targetGUID, ok := luaAngleTarget(args)
+		if !ok {
+			return nil, fmt.Errorf("target is required")
+		}
+		if targetGUID != 0 && targetGUID == state.GUID {
+			return []any{true}, nil // Position::HasInArc: always have self in arc (Position.cpp:120)
+		}
+		arc := float64(math.Pi)
+		if len(args) > 1 {
+			a, err := luaFloat32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			arc = float64(a)
+		}
+		return []any{hasInArc(motion.Orientation, motion.X, motion.Y, tx, ty, arc)}, nil
+	}
+	// IsInBack is WorldObjectMethods::IsInBack (WorldObjectMethods.h:1137-1146):
+	// WorldObject::isInBack(target, arc) = !HasInArc(2*pi - arc, target)
+	// (Object.cpp:1417-1420); Eluna's arc defaults to pi.
+	methods["IsInBack"] = func(_ context.Context, args []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, fmt.Errorf("target is required")
+		}
+		tx, ty, targetGUID, ok := luaAngleTarget(args)
+		if !ok {
+			return nil, fmt.Errorf("target is required")
+		}
+		if targetGUID != 0 && targetGUID == state.GUID {
+			return []any{false}, nil // self is always in the frontal arc, never behind it
+		}
+		arc := float64(math.Pi)
+		if len(args) > 1 {
+			a, err := luaFloat32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			arc = float64(a)
+		}
+		return []any{!hasInArc(motion.Orientation, motion.X, motion.Y, tx, ty, 2*math.Pi-arc)}, nil
+	}
+	// GetRelativePoint is WorldObjectMethods::GetRelativePoint
+	// (WorldObjectMethods.h:630-646): WorldObject::GetClosePoint(x, y, z,
+	// 0, dist, relAngle) = GetNearPoint with absAngle = orientation +
+	// relAngle at (combatReach + dist) (Object.cpp:3307-3311, 3272-3269).
+	// The height-collision re-solve (UpdateAllowedPositionZ/IsWithinLOS)
+	// has no Go model, so z stays the creature's z.
+	methods["GetRelativePoint"] = func(_ context.Context, args []any) ([]any, error) {
+		dist, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		rad, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return []any{float32(0), float32(0), float32(0)}, nil
+		}
+		r := motion.CombatReach + dist
+		a := motion.Orientation + rad
+		return []any{motion.X + r*float32(math.Cos(float64(a))), motion.Y + r*float32(math.Sin(float64(a))), motion.Z}, nil
+	}
+	// GetMap is WorldObjectMethods::GetMap: the DBC-backed Map object for
+	// the creature's map/instance (NewMapObject + mapLiveFromStore, the
+	// same builder behind the instance hooks' map argument).
+	methods["GetMap"] = func(_ context.Context, _ []any) ([]any, error) {
+		return []any{scripting.NewMapObject(state.Map, state.InstanceID, mapLiveFromStore(s.server.Data, state.Map))}, nil
+	}
+	// IsElite is CreatureMethods::IsElite: Creature::isElite
+	// (Creature.cpp:2344-2350) — rank neither NORMAL (0) nor RARE (4),
+	// and not a pet. Go pets are motions with a nonzero OwnerGUID (the
+	// pet_combat.go isPet twin).
+	methods["IsElite"] = luaNoArgs(func() any {
+		if state.Rank == 0 || state.Rank == 4 {
+			return false
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.OwnerGUID != 0 {
+			return false
+		}
+		return true
+	})
+	// IsWorldBoss is CreatureMethods::IsWorldBoss: Creature::isWorldBoss
+	// (Creature.cpp:2353-2358) — type_flags & CREATURE_TYPE_FLAG_BOSS_MOB
+	// (0x4, SharedDefines.h:2731), not a pet.
+	methods["IsWorldBoss"] = luaNoArgs(func() any {
+		if state.TypeFlags&0x4 == 0 {
+			return false
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.OwnerGUID != 0 {
+			return false
+		}
+		return true
+	})
+	// IsGuard / IsCivilian / IsTrigger are CreatureMethods.h:98/96/97:
+	// Creature::IsGuard / IsCivilian / IsTrigger read flags_extra bits
+	// CREATURE_FLAG_EXTRA_GUARD (0x8000) / CIVILIAN (0x2) / TRIGGER
+	// (0x80) (CreatureData.h:38-52).
+	methods["IsGuard"] = luaNoArgs(func() any { return state.FlagsExtra&0x8000 != 0 })
+	methods["IsCivilian"] = luaNoArgs(func() any { return state.FlagsExtra&0x2 != 0 })
+	methods["IsTrigger"] = luaNoArgs(func() any { return state.FlagsExtra&0x80 != 0 })
+	// IsRacialLeader is CreatureMethods.h:95: GetCreatureTemplate()->RacialLeader.
+	methods["IsRacialLeader"] = luaNoArgs(func() any { return state.RacialLeader })
+	// GetCreatureFamily is CreatureMethods::GetCreatureFamily: the
+	// creature_template.family enum (CreatureData.h:178).
+	methods["GetCreatureFamily"] = luaNoArgs(func() any { return state.Family })
+	// GetAIName is CreatureMethods::GetAIName (Creature.cpp:2862-2865):
+	// the creature_template.AIName column, banked on the motion at spawn.
+	methods["GetAIName"] = luaNoArgs(func() any { return state.AIName })
+	// GetScriptName is CreatureMethods::GetScriptName (Creature.cpp:2867-2870):
+	// the script name the motion was banked with at spawn (ScriptName).
+	methods["GetScriptName"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.ScriptName
+		}
+		return ""
+	})
+	// GetWanderRadius is CreatureMethods::GetWanderRadius
+	// (CreatureMethods.h:424-430, Trinity): Creature::GetWanderDistance —
+	// the spawn wander distance, motion.Wander.
+	methods["GetWanderRadius"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return float64(motion.Wander)
+		}
+		return float64(0)
+	})
+	// SetWanderRadius is CreatureMethods::SetWanderRadius
+	// (CreatureMethods.h:1062-1072, Trinity): Creature::SetWanderDistance.
+	methods["SetWanderRadius"] = func(_ context.Context, args []any) ([]any, error) {
+		dist, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID); motion != nil {
+			motion.Wander = float64(dist)
+		}
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// GetWaypointPath is CreatureMethods::GetWaypointPath
+	// (CreatureMethods.h:440-446, Trinity): the current waypoint path ID,
+	// motion.PathID.
+	methods["GetWaypointPath"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.PathID
+		}
+		return uint32(0)
+	})
+	// GetDefaultMovementType is CreatureMethods::GetDefaultMovementType:
+	// m_defaultMovementType (Creature.h:110) — the spawn movement type,
+	// motion.MoveType (1 random, 2 waypoint, 0 idle, MovementDefines.h:28-30).
+	methods["GetDefaultMovementType"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.MoveType
+		}
+		return uint32(0)
+	})
+	// SetDefaultMovementType is Creature.h:110's setter — a pure field
+	// write in C++, no generator switch.
+	methods["SetDefaultMovementType"] = func(_ context.Context, args []any) ([]any, error) {
+		moveType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID); motion != nil {
+			motion.MoveType = moveType
+		}
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// IsInEvadeMode is CreatureMethods::IsInEvadeMode: motion.Evading —
+	// the creature is returning to its spawn position from combat.
+	methods["IsInEvadeMode"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		return motion != nil && motion.Evading
+	})
+	// IsTargetableForAttack is CreatureMethods::IsTargetableForAttack
+	// (CreatureMethods.h:55-64): Unit::isTargetableForAttack(checkFakeDeath
+	// = mustBeDead) (Unit.cpp:8504-8516) — alive, no NON_ATTACKABLE
+	// (0x2) / NOT_SELECTABLE flag, no UNIT_STATE_UNATTACKABLE, and when
+	// mustBeDead no UNIT_STATE_DIED (Go: the feign-death flag twin).
+	// The NOT_SELECTABLE unit flag and UNIT_STATE_UNATTACKABLE have no Go
+	// model, so those arms are vacuous here.
+	methods["IsTargetableForAttack"] = func(_ context.Context, args []any) ([]any, error) {
+		mustBeDead := false
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				mustBeDead = b
+			}
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || motion.Health == 0 {
+			return []any{false}, nil
+		}
+		if motion.UnitFlags&unitFlagNonAttackable != 0 {
+			return []any{false}, nil
+		}
+		if mustBeDead && motion.UnitFlags2&unitFlag2FeignDeath != 0 {
+			return []any{false}, nil
+		}
+		return []any{true}, nil
+	}
+	// GetNPCFlags is CreatureMethods::GetNPCFlags
+	// (CreatureMethods.h:861-865): GetUInt32Value(UNIT_NPC_FLAGS), read
+	// from the motion's live NPCFlags (initialized from the template
+	// npcflag at spawn).
+	methods["GetNPCFlags"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.NPCFlags
+		}
+		return state.NPCFlags
+	})
+	// SetNPCFlags is CreatureMethods::SetNPCFlags
+	// (CreatureMethods.h:909-915): SetUInt32Value(UNIT_NPC_FLAGS, flags) —
+	// the motion field plus the values-update broadcast twin.
+	methods["SetNPCFlags"] = func(_ context.Context, args []any) ([]any, error) {
+		flags, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion != nil {
+			motion.NPCFlags = flags
+		}
+		s.server.motionMu.Unlock()
+		if motion != nil {
+			s.server.broadcastCreatureValuesUpdateInInstance(state.Map, state.InstanceID, state.GUID, map[int]uint32{unitFieldNPCFlags: flags})
+		}
+		return nil, nil
+	}
+	// IsReputationGainDisabled is CreatureMethods::IsReputationGainDisabled:
+	// Creature::IsReputationGainDisabled (Creature.h:321) reads the
+	// DisableReputationGain field (default false, Creature.cpp:269).
+	methods["IsReputationGainDisabled"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.DisableReputationGain
+		}
+		return false
+	})
+	// SetDisableReputationGain is Creature::SetDisableReputationGain
+	// (Creature.h:320).
+	methods["SetDisableReputationGain"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("disable is required")
+		}
+		disable, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("disable must be a boolean")
+		}
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID); motion != nil {
+			motion.DisableReputationGain = disable
+		}
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// luaTapMotion resolves the creature motion for the tap/loot-recipient
+	// methods below (Creature.cpp:1328-1355 SetLootRecipient state:
+	// TapPlayerGUID/TapGroupID).
+	luaTapMotion := func() *creatureMotion { return s.luaCreatureMotion(state.GUID, state.Entry) }
+	// IsTappedBy is CreatureMethods::IsTappedBy
+	// (CreatureMethods.h:104-113, Trinity): Creature::isTappedBy
+	// (Creature.cpp:1362-1375) — the player GUID matches the loot
+	// recipient, or the player is in the recipient group.
+	methods["IsTappedBy"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		playerGUID, ok := objectUint64Field(target, "GUID")
+		if !ok || playerGUID == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		motion := luaTapMotion()
+		if motion == nil {
+			return []any{false}, nil
+		}
+		if playerGUID == motion.TapPlayerGUID {
+			return []any{true}, nil
+		}
+		if motion.TapGroupID == 0 {
+			return []any{false}, nil
+		}
+		if sess := s.server.findSessionByGUID(playerGUID); sess != nil && sess.groupID != 0 && sess.groupID == motion.TapGroupID {
+			return []any{true}, nil
+		}
+		return []any{false}, nil
+	}
+	// HasLootRecipient is CreatureMethods::HasLootRecipient
+	// (CreatureMethods.h:118-128, Trinity): Creature::hasLootRecipient
+	// (Creature.h:218) — a loot recipient player or group is set.
+	methods["HasLootRecipient"] = luaNoArgs(func() any {
+		motion := luaTapMotion()
+		return motion != nil && (motion.TapPlayerGUID != 0 || motion.TapGroupID != 0)
+	})
+	// GetLootRecipient is CreatureMethods::GetLootRecipient: the tapping
+	// player object, nil when untapped (Eluna::Push((Player*)nullptr)).
+	methods["GetLootRecipient"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := luaTapMotion()
+		if motion == nil || motion.TapPlayerGUID == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.server.findPlayer(motion.TapPlayerGUID); player != nil {
+			return []any{player}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetLootRecipientGroup is CreatureMethods::GetLootRecipientGroup:
+	// the tapping group object, nil when the tap carries no group.
+	methods["GetLootRecipientGroup"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := luaTapMotion()
+		if motion == nil || motion.TapGroupID == 0 {
+			return []any{nil}, nil
+		}
+		if g := groupLuaObject(s.server, s.server.findGroupByID(motion.TapGroupID)); g != nil {
+			return []any{g}, nil
+		}
+		return []any{nil}, nil
+	}
+	// IsDamageEnoughForLootingAndReward is
+	// CreatureMethods::IsDamageEnoughForLootingAndReward:
+	// Creature::m_PlayerDamageReq at 0 (Creature.h:322-325), lowered by
+	// every player-attributed hit.
+	methods["IsDamageEnoughForLootingAndReward"] = luaNoArgs(func() any {
+		motion := luaTapMotion()
+		return motion != nil && motion.PlayerDamageReq == 0
+	})
+	// HasSpell is CreatureMethods::HasSpell (CreatureMethods.h:287-294):
+	// Creature::HasSpell (Creature.cpp:2730-2733) scans m_spells — Go's
+	// motion.Spells slice.
+	methods["HasSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := luaTapMotion()
+		if motion == nil {
+			return []any{false}, nil
+		}
+		for _, id := range motion.Spells {
+			if id == spell {
+				return []any{true}, nil
+			}
+		}
+		return []any{false}, nil
+	}
+	// luaSpellCooldownEnd reads the motion's spell-cooldown expiry
+	// (SpellCooldowns carries time.Time expiries, boss_ai.go:2776).
+	luaSpellCooldownEnd := func(spell uint32) (time.Time, bool) {
+		motion := luaTapMotion()
+		if motion == nil {
+			return time.Time{}, false
+		}
+		end, ok := motion.SpellCooldowns[spell]
+		return end, ok && time.Now().Before(end)
+	}
+	// HasSpellCooldown is CreatureMethods::HasSpellCooldown
+	// (CreatureMethods.h:321-331, Trinity):
+	// GetSpellHistory()->HasCooldown(spellId).
+	methods["HasSpellCooldown"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		_, active := luaSpellCooldownEnd(spell)
+		return []any{active}, nil
+	}
+	// GetCreatureSpellCooldownDelay is
+	// CreatureMethods::GetCreatureSpellCooldownDelay
+	// (CreatureMethods.h:590-605, Trinity):
+	// GetSpellHistory()->GetRemainingCooldown, in milliseconds (0 when no
+	// cooldown; the SpellInfo-exists gate has no Go twin — the Go model
+	// tracks cooldowns without spell DBC rows).
+	methods["GetCreatureSpellCooldownDelay"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		end, active := luaSpellCooldownEnd(spell)
+		if !active {
+			return []any{uint32(0)}, nil
+		}
+		remaining := end.Sub(time.Now())
+		if remaining < 0 {
+			remaining = 0
+		}
+		return []any{uint32(remaining.Milliseconds())}, nil
+	}
+	// HasCategoryCooldown is CreatureMethods::HasCategoryCooldown
+	// (CreatureMethods.h:260-279, Trinity): the spell has a nonzero
+	// category and is on cooldown.
+	methods["HasCategoryCooldown"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := luaTapMotion()
+		if motion == nil || motion.SpellCooldownCategories[spell] == 0 {
+			return []any{false}, nil
+		}
+		_, active := luaSpellCooldownEnd(spell)
+		return []any{active}, nil
+	}
+	// GetAITargetsCount is CreatureMethods::GetAITargetsCount
+	// (CreatureMethods.h:841-853, Trinity): the threatened-by-me list size.
+	methods["GetAITargetsCount"] = luaNoArgs(func() any {
+		motion := luaTapMotion()
+		if motion == nil || motion.ThreatMgr == nil {
+			return 0
+		}
+		return len(motion.ThreatMgr.SortedEntries())
+	})
+	// GetAITargets is CreatureMethods::GetAITargets
+	// (CreatureMethods.h:807-839, Trinity): the threatened-by-me victims
+	// as Unit objects (players first-resolved, then creatures).
+	methods["GetAITargets"] = func(ctx context.Context, _ []any) ([]any, error) {
+		motion := luaTapMotion()
+		if motion == nil || motion.ThreatMgr == nil {
+			return []any{[]any{}}, nil
+		}
+		targets := []any{}
+		for _, entry := range motion.ThreatMgr.SortedEntries() {
+			if player := s.server.findPlayer(entry.VictimGUID); player != nil {
+				targets = append(targets, player)
+				continue
+			}
+			if creature := s.luaCreature(ctx, entry.VictimGUID); creature != nil {
+				targets = append(targets, creature)
+			}
+		}
+		return []any{targets}, nil
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(s.server, nil, state.GUID, methods)
