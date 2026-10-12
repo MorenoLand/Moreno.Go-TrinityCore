@@ -1061,7 +1061,14 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 		s.expireCreatureAura(key, spellID, slot)
 		return true
 	}
-	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, s.playerGUID, slot, spellID, false, positive, 0, 0, 1, count)
+	// AuraApplication::BuildUpdatePacket (SpellAuras.cpp:244) sends
+	// aura->GetCasterGUID(), not the dispeller — the aura record's own
+	// caster GUID rides the partial-charge/stack update.
+	casterGUID := aura.CasterGUID
+	if casterGUID == 0 {
+		casterGUID = s.playerGUID
+	}
+	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, casterGUID, slot, spellID, false, positive, 0, 0, 1, count)
 	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, nil)
 	return false
 }

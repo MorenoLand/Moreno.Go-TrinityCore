@@ -17595,9 +17595,13 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 		}
 		aura.StackCount -= uint8(doses)
 		stack, slot, effectMask, positive := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive
+		casterGUID := aura.CasterGUID
+		if casterGUID == 0 {
+			casterGUID = s.playerGUID
+		}
 		maxDur, dur := auraWireDurationsForAura(s, aura)
 		s.server.auraMu.Unlock()
-		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, poison.SpellID, false, positive, maxDur, dur, s.player.Level, stack, effectMask)
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, poison.SpellID, false, positive, maxDur, dur, s.player.Level, stack, effectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 	}
@@ -19562,16 +19566,25 @@ func (s *session) sendAuraUpdateWithStack(slot uint8, spellID uint32, remove, po
 		}
 	}
 	effectMask := uint8(0x01)
+	casterGUID := s.playerGUID
 	s.castMu.Lock()
-	if aura := s.activeAuras[spellID]; aura != nil && aura.EffectMask != 0 {
-		effectMask = aura.EffectMask
+	if aura := s.activeAuras[spellID]; aura != nil {
+		if aura.EffectMask != 0 {
+			effectMask = aura.EffectMask
+		}
+		// AuraApplication::BuildUpdatePacket (SpellAuras.cpp:244) sends
+		// aura->GetCasterGUID(), not the target — a stolen or foreign-caster
+		// aura must not report caster==target here.
+		if aura.CasterGUID != 0 {
+			casterGUID = aura.CasterGUID
+		}
 	}
 	s.castMu.Unlock()
 	level := uint8(1)
 	if s.player != nil && s.player.Level > 0 {
 		level = s.player.Level
 	}
-	pkt := protocol.BuildAuraUpdateWithStackEffect(s.playerGUID, s.playerGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, level, stackCount, effectMask)
+	pkt := protocol.BuildAuraUpdateWithStackEffect(s.playerGUID, casterGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, level, stackCount, effectMask)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, true)
 }
 
@@ -23111,7 +23124,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			stackCount = uint8(spell.ProcCharges)
 		}
 		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
-		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, stackCount, spellEffectMask(spell, eff))
+		wireCaster := aura.CasterGUID
+		if wireCaster == 0 {
+			wireCaster = s.playerGUID
+		}
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, stackCount, spellEffectMask(spell, eff))
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
@@ -23325,7 +23342,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			wireStack = uint8(spell.ProcCharges)
 		}
 		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
-		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, wireStack, effectMask)
+		wireCaster := existing.CasterGUID
+		if wireCaster == 0 {
+			wireCaster = s.playerGUID
+		}
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, wireStack, effectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 		return
