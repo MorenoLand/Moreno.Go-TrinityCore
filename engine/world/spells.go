@@ -14262,7 +14262,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 					playerSess.delayCurrentCast()
 					playerSess.delayCurrentChannel()
 				}
-				playerSess.procDamageAuras(true, damage)
+				playerSess.procSpellDirectDamageAuras(spellID, damage)
 				playerSess.sendPlayerUpdate()
 				// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 				// creatures are signaled OwnerAttackedBy on any non-DoT damage.
@@ -14472,7 +14472,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldDynamicFlags: tappedFlags})
 		}
-		s.server.procCreatureDamageAuras(creatureAuraKeyForTarget(target), true, damage, target.MaxHealth)
+		s.server.procCreatureDirectDamageAuras(creatureAuraKeyForTarget(target), spellID, damage, target.MaxHealth)
 		// The step-1 gate skips victim engagement
 		// (ThreatManager.cpp:311-317) — without this guard the tail
 		// aggro call would re-engage a victim C++ leaves unengaged.
@@ -27627,6 +27627,14 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			s.server.removeCreatureAurasWithInterruptFlags(victimMotion, auraInterruptFlagTakeDamage, aura.SpellID)
 		}
 	}
+	// Unit::DealDamage's periodic tick procs the victim's auras with
+	// PROC_FLAG_TAKEN_PERIODIC (| PROC_FLAG_TAKEN_DAMAGE when damage lands;
+	// SpellAuraEffects.cpp:5196-5228), draining breakable-CC aura amounts via
+	// AuraEffect::HandleProc -> HandleBreakableCCAuraProc
+	// (SpellAuraEffects.cpp:1017-1025, 5644-5653). A zero-damage tick is a
+	// no-op drain in C++ (damageLeft == amount), matching
+	// procCreatureDamageAuras' damage==0 early return.
+	s.server.procCreatureDamageAuras(key, false, dmg, targetHealth)
 	if dmg >= targetHealth {
 		// Target slain by DoT
 		if s.server != nil {

@@ -171,6 +171,53 @@ func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 	s.drainBreakableCCAurasOnTakenDamage(wantProcFlag, dmg)
 }
 
+// procSpellDirectDamageAuras mirrors the two Unit::DealDamage strip arms for
+// spell-caused direct damage (Unit.cpp:743-748 + 897-898): the TAKE_DAMAGE
+// strip — skipped when the damaging spell carries
+// SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS — and the DIRECT_DAMAGE strip, both
+// excepting the damaging spell's own aura; then the breakable-CC drain with
+// the taken-damage proc flag. HITBYSPELL rides along with no exception:
+// Spell::PreprocessSpellHit (Spell.cpp:2747-2749) strips it at spell-hit
+// time on the player-cast path, and the pet/creature-spell funnels never
+// model that hit arm, so the damage-time strip is their only coverage.
+func (s *session) procSpellDirectDamageAuras(spellID uint32, damage ...uint32) {
+	if tickDamageBreaksAuras(s.server, spellID) {
+		s.removeAurasWithInterruptFlags(auraInterruptFlagTakeDamage, spellID)
+	}
+	s.removeAurasWithInterruptFlags(auraInterruptFlagDirectDamage, spellID)
+	s.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell)
+
+	dmg := uint32(0)
+	if len(damage) > 0 {
+		dmg = damage[0]
+	}
+	if dmg == 0 {
+		return
+	}
+	s.drainBreakableCCAurasOnTakenDamage(procFlagTakenDamage, dmg)
+}
+
+// procCreatureDirectDamageAuras mirrors the Unit::DealDamage strip arms for
+// direct damage on a creature victim (Unit.cpp:743-748 + 897-898): the
+// TAKE_DAMAGE strip (attr4-gated, excepting the damaging spell) and the
+// DIRECT_DAMAGE strip (excepting the damaging spell), then the breakable-CC
+// drain with the taken-damage proc flag. spellID 0 is the melee arm
+// (spellProto null in C++): both strips run with no exception.
+func (s *Server) procCreatureDirectDamageAuras(key creatureAuraKey, spellID uint32, damage uint32, maxHealth uint32) {
+	if s != nil {
+		s.motionMu.Lock()
+		m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+		s.motionMu.Unlock()
+		if m != nil {
+			if tickDamageBreaksAuras(s, spellID) {
+				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagTakeDamage, spellID)
+			}
+			s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagDirectDamage, spellID)
+		}
+	}
+	s.procCreatureDamageAuras(key, true, damage, maxHealth)
+}
+
 // drainBreakableCCAurasOnTakenDamage runs the breakable-CC amount drain on
 // the session's active auras per AuraEffect::HandleBreakableCCAuraProc
 // (SpellAuraEffects.cpp:5644-5653): per damage hit, a breakable-CC aura's

@@ -1202,7 +1202,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				unitFieldDynamicFlags: tappedFlags,
 			})
 		}
-		s.server.procCreatureDamageAuras(creatureAuraKeyForTarget(target), true, damage, target.MaxHealth)
+		s.server.procCreatureDirectDamageAuras(creatureAuraKeyForTarget(target), 0, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 		// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the creature victim's
 		// SPELL_AURA_DAMAGE_SHIELD (15) effects strike the attacker after a
@@ -1652,7 +1652,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 					vicSess.delayCurrentCast()
 					vicSess.delayCurrentChannel()
-					vicSess.procDamageAuras(true, damage)
+					vicSess.procSpellDirectDamageAuras(spellID, damage)
 					vicSess.sendPlayerUpdate()
 				}
 			}

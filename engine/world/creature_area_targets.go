@@ -259,7 +259,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 				p.Sess.delayCurrentCast()
 				p.Sess.delayCurrentChannel()
 			}
-			p.Sess.procDamageAuras(true)
+			p.Sess.procSpellDirectDamageAuras(spellID)
 		}
 		logPkt := buildSpellNonMeleeDamageLog(p.GUID, motion.GUID, spellID, damage, overkill, schoolMask)
 		_ = p.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)

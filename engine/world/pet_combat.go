@@ -2658,7 +2658,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// non-lethal hit strips DIRECT_DAMAGE-interrupt auras alongside
 			// the TAKE_DAMAGE strip — the absorbed arm above (742-747) only
 			// ran the TAKE_DAMAGE half.
-			victim.procDamageAuras(true, damage)
+			victim.procSpellDirectDamageAuras(spellID, damage)
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 			victim.grantRageFromDamageTaken(ctx, damage)
 			// Unit::DealDamage (Unit.cpp:906-913): random durability loss on

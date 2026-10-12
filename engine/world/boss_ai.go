@@ -2517,7 +2517,7 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 			// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel.
 			vs.delayCurrentCast()
 			vs.delayCurrentChannel()
-			vs.procDamageAuras(true, damage)
+			vs.procSpellDirectDamageAuras(auraSpell.ID, damage)
 		}
 		vs.lastCombatTime = now
 		if vs.player.UnitFlags&unitFlagInCombat == 0 {
