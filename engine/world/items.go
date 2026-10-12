@@ -3171,7 +3171,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				// Player::CastItemUseSpell (Player.cpp:8245): the learning
 				// spell (483/55884) carries the taught spell in
 				// SPELLVALUE_BASE_POINT0. Go's EffectLearnSpell reads
-				// eff.BasePoints+1, so the override lands on this cast's
+				// eff.CalcValueForLevel(spell, casterLevel), so the override lands on this cast's
 				// spell copy (Store.Spell returns a value).
 				spell.Effects[0].BasePoints = *learnBasePoint
 			}

@@ -1987,7 +1987,7 @@ func (s *Server) prepareCreatureHitTriggerSpells(m *creatureMotion, spell wotlk.
 			}
 			chance := aura.BaseAmounts[index]
 			if chance == 0 {
-				chance = effect.BasePoints + 1
+				chance = effect.BasePoints
 			}
 			chance *= int32(aura.StackAmount)
 			triggers = append(triggers, spellHitTrigger{

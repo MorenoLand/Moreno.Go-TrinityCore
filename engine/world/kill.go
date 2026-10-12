@@ -384,14 +384,14 @@ func (s *session) experienceAuraMultiplier() float32 {
 				continue
 			}
 			seen[key] = struct{}{}
-			amount := effect.BasePoints + 1
+			amount := effect.BasePoints
 			if current != nil {
 				amount = current.Amounts[index]
 				if amount == 0 && current.AuraType == effect.Aura && current.Amount != 0 {
 					amount = int32(current.Amount)
 				}
 				if amount == 0 && current.BaseAmounts[index] == 0 && effect.BasePoints != -1 {
-					amount = effect.BasePoints + 1
+					amount = effect.BasePoints
 				}
 			}
 			modifiers = append(modifiers, PetFocusModifier{SpellID: spellID, Effect: uint8(index), AuraType: effect.Aura, Amount: amount, StackGroup: s.server.petAuraStackGroup(spellID, effect.Aura)})

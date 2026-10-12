@@ -145,7 +145,7 @@ func (s *session) calcDispelChanceLocked(offensive bool) int32 {
 				if err == nil && found {
 					for _, eff := range spell.Effects {
 						if eff.Aura == spellAuraModDispelResist {
-							resistChance += eff.BasePoints + 1
+							resistChance += eff.BasePoints
 						}
 					}
 				}
@@ -869,7 +869,11 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 		return
 	}
 
-	maxDispelled := int(eff.BasePoints + 1)
+	casterLevel := uint32(s.player.Level)
+	if petCaster != nil {
+		casterLevel = uint32(petCaster.Level)
+	}
+	maxDispelled := int(eff.CalcValueForLevel(spell, casterLevel))
 	if maxDispelled <= 0 {
 		maxDispelled = 1
 	}
@@ -987,7 +991,7 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 	if isDevourMagicSpell(spell.ID) && len(successList) > 0 {
 		healAmount := uint32(100)
 		if len(spell.Effects) > 1 && spell.Effects[1].BasePoints > 0 {
-			healAmount = uint32(spell.Effects[1].BasePoints + 1)
+			healAmount = uint32(spell.Effects[1].CalcValue())
 		}
 		if petCaster != nil {
 			s.healDevourMagicPet(ctx, petCaster, healAmount)
@@ -1232,7 +1236,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		return
 	}
 
-	maxDispelled := int(eff.BasePoints + 1)
+	maxDispelled := int(eff.CalcValueForLevel(spell, uint32(s.player.Level)))
 	if maxDispelled <= 0 {
 		maxDispelled = 1
 	}

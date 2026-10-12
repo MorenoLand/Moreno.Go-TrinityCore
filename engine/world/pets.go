@@ -968,7 +968,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 			}
 			aura.PeriodMs = effect.AuraPeriod
 			if aura.Amount == 0 && effect.BasePoints >= 0 {
-				aura.Amount = uint32(effect.BasePoints + 1)
+				aura.Amount = uint32(effect.BasePoints)
 			}
 			aura.Positive = !isHarmfulAura(effect.Aura)
 			aura.StackAmount = spell.StackAmount
@@ -1466,7 +1466,13 @@ func (s *session) handleResurrectPet(ctx context.Context, spellID uint32, eff wo
 	if s.player == nil {
 		return
 	}
-	damage := eff.BasePoints + 1 // tree-wide flat convention for the handler damage
+	var dmgSpell wotlk.Spell
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			dmgSpell = sp
+		}
+	}
+	damage := eff.CalcValueForLevel(dmgSpell, uint32(s.player.Level))
 	if damage < 0 {
 		return // SpellEffects.cpp:4761
 	}

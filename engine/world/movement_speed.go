@@ -94,7 +94,7 @@ func (s *session) auraModifierCandidatesFiltered(auraType uint32, match func(mis
 						usedStoredAmount = true
 					}
 					if amount == 0 {
-						amount = effect.BasePoints + 1
+						amount = effect.BasePoints
 					}
 					result = append(result, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 					matched = true
@@ -176,7 +176,7 @@ func (s *session) auraTypeModifiers(auraType uint32) []int32 {
 						usedStoredAmount = true
 					}
 					if amount == 0 {
-						amount = effect.BasePoints + 1
+						amount = effect.BasePoints
 					}
 					result = append(result, amount)
 					matched = true
@@ -226,7 +226,7 @@ func (s *session) auraModifierCandidatesByMiscMask(auraType, miscMask uint32) []
 						usedStoredAmount = true
 					}
 					if amount == 0 {
-						amount = effect.BasePoints + 1
+						amount = effect.BasePoints
 					}
 					result = append(result, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 					matched = true
@@ -453,11 +453,11 @@ func mountedFlightAuraEffects(spell wotlk.Spell) (uint8, int32, [3]int32, [3]int
 		case spellAuraMounted:
 			hasMount, mountMisc = true, effect.MiscValue
 			mask |= 1 << uint(index)
-			amounts[index], baseAmounts[index] = effect.BasePoints+1, effect.BasePoints
+			amounts[index], baseAmounts[index] = effect.BasePoints, effect.BasePoints
 		case spellAuraMountedFlightSpeed, spellAuraMountedFlightSpeedAlways, spellAuraFlightSpeedNotStack:
 			hasFlightSpeed = true
 			mask |= 1 << uint(index)
-			amounts[index], baseAmounts[index] = effect.BasePoints+1, effect.BasePoints
+			amounts[index], baseAmounts[index] = effect.BasePoints, effect.BasePoints
 		}
 	}
 	return mask, mountMisc, amounts, baseAmounts, hasMount && hasFlightSpeed

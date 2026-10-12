@@ -176,7 +176,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 						aura.PeriodMs = effect.AuraPeriod
 					}
 					if aura.Amount == 0 && effect.BasePoints >= 0 {
-						aura.Amount = uint32(effect.BasePoints + 1)
+						aura.Amount = uint32(effect.BasePoints)
 					}
 				}
 				if mountMask, mountMisc, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(spell); mountedFlight && aura.EffectMask&mountMask != 0 {
@@ -338,7 +338,7 @@ func (s *session) loadGlyphAuras(state *playerState) {
 			aura.AuraType = effect.Aura
 			aura.MiscValue = effect.MiscValue
 			if effect.BasePoints >= 0 {
-				aura.Amount = uint32(effect.BasePoints + 1)
+				aura.Amount = uint32(effect.BasePoints)
 			}
 			aura.PeriodMs = effect.AuraPeriod
 			aura.Positive = !isHarmfulAura(effect.Aura)

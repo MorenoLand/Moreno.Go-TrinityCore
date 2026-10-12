@@ -1735,7 +1735,7 @@ func (s *session) handleRaiseAllyInitial(ctx context.Context, spell wotlk.Spell,
 	}
 	aura := uint32(0)
 	if eff.BasePoints >= 0 {
-		aura = uint32(eff.BasePoints + 1) // CalcValue: the Raise Ally spell id
+		aura = uint32(eff.BasePoints) // GetEffectValue: the Raise Ally spell id (unrolled base points)
 	}
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 || targetGUID == s.playerGUID {
@@ -2085,7 +2085,7 @@ func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
 		}
 		health := uint32(1)
 		if effect.BasePoints >= 0 {
-			health = uint32(effect.BasePoints + 1) // damage as computed by CalcValue
+			health = uint32(effect.CalcValueForLevel(spell, uint32(s.player.Level))) // damage as computed by CalcValue
 		}
 		mana := uint32(0)
 		if effect.MiscValue > 0 {
@@ -2113,7 +2113,7 @@ func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellE
 	}
 	health := uint32(1)
 	if eff.BasePoints >= 0 {
-		health = uint32(eff.BasePoints + 1) // damage as computed by CalcValue
+		health = uint32(eff.CalcValueForLevel(spell, uint32(s.player.Level))) // damage as computed by CalcValue
 	}
 	mana := uint32(0)
 	if eff.MiscValue > 0 {
@@ -2145,11 +2145,11 @@ func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellE
 // player caster resurrects at once with flat (damage<0) or percent health and
 // mana, rage zeroed, energy restored to full, and the corpse converted to
 // bones (Player::SpawnCorpseBones) rather than despawned.
-func (s *session) handleEffectSelfResurrect(ctx context.Context, eff wotlk.SpellEffect) {
+func (s *session) handleEffectSelfResurrect(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	if s == nil || s.player == nil || !s.isDeadOrGhost() {
 		return
 	}
-	damage := eff.BasePoints + 1
+	damage := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	var health, mana uint32
 	if damage < 0 {
 		health = uint32(-damage)

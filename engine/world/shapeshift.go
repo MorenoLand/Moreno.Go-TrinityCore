@@ -566,7 +566,7 @@ func (s *session) clampStanceRage(stanceSpellID uint32, form uint8) {
 		if len(sp.Effects) == 0 || sp.Effects[0].BasePoints < 0 {
 			continue
 		}
-		rageVal += uint32(sp.Effects[0].BasePoints+1) * 10
+		rageVal += uint32(sp.Effects[0].CalcValueForLevel(sp, uint32(s.player.Level))) * 10
 	}
 	if cur := s.player.Powers[powerRage]; cur > rageVal {
 		s.adjustSpellPower(context.Background(), s.playerGUID, powerRage, -int64(cur-rageVal))

@@ -10810,7 +10810,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectSelfResurrect: // 94: SPELL_EFFECT_SELF_RESURRECT (EffectSelfResurrect, SpellEffects.cpp:4429)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
 				// not per unit target.
-				s.handleEffectSelfResurrect(effCtx, eff)
+				s.handleEffectSelfResurrect(effCtx, spell, eff)
 			case spellEffectChargeDest: // 149: SPELL_EFFECT_CHARGE_DEST (EffectChargeDest, SpellEffects.cpp:4528)
 				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on the caster.
 				s.handleEffectChargeDest(effCtx, target)
@@ -10836,7 +10836,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectModifyThreatPercent: // 125: SPELL_EFFECT_MODIFY_THREAT_PERCENT (EffectModifyThreatPercent, SpellEffects.cpp:4915)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target on the target's threat manager.
-				s.handleEffectModifyThreatPercent(effCtx, eff, hitTargets)
+				s.handleEffectModifyThreatPercent(effCtx, spell, eff, hitTargets)
 			case spellEffectAddHonor: // 45: SPELL_EFFECT_ADD_HONOR (EffectAddHonor, SpellEffects.cpp:2661)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
 				// unit target: Player::RewardHonor(nullptr, 1, honor) — the
@@ -10856,7 +10856,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectDestroyAllTotems: // 110: SPELL_EFFECT_DESTROY_ALL_TOTEMS (EffectDestroyAllTotems, SpellEffects.cpp:4820)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
 				// not per unit target.
-				s.handleEffectDestroyAllTotems(effCtx, eff)
+				s.handleEffectDestroyAllTotems(effCtx, spell, eff)
 			case spellEffectDistract: // 69: SPELL_EFFECT_DISTRACT (EffectDistract, SpellEffects.cpp:2547)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: an unengaged, non-confused/stunned/fleeing target
@@ -10981,7 +10981,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// generates threat (ThreatManager.cpp:344-373). Go threat
 				// managers are creature-side only, so the registry lives on
 				// the session (spell_threat.go).
-				s.handleEffectRedirectThreat(spellID, eff, hitTargets)
+				s.handleEffectRedirectThreat(spell, eff, hitTargets)
 			case spellEffectActivateRune: // 146: SPELL_EFFECT_ACTIVATE_RUNE (EffectActivateRune, SpellEffects.cpp:5318)
 				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on a Death
 				// Knight caster: runes of the MiscValue type with cooldowns

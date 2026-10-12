@@ -183,7 +183,7 @@ func spellModEffectValue(aura *activeAura, index int, effect wotlk.SpellEffect) 
 		amount = int32(aura.Amount)
 	}
 	if amount == 0 {
-		amount = effect.BasePoints + 1
+		amount = effect.BasePoints
 	}
 	return amount
 }

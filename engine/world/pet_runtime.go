@@ -331,7 +331,7 @@ func (s *Server) petFocusAuraModifiers(mapID, instanceID uint32, petGUID uint64)
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 && aura.BaseAmounts[index] == 0 && effect.BasePoints != -1 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			groupID := s.petAuraStackGroup(aura.SpellID, effect.Aura)
 			modifiers = append(modifiers, PetFocusModifier{SpellID: aura.SpellID, Effect: uint8(index), AuraType: effect.Aura, Amount: amount, StackGroup: groupID})

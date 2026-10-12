@@ -2123,7 +2123,7 @@ func (s *session) loadMountState(ctx context.Context, guid uint64) (*MountState,
 		}
 		for _, effect := range spell.Effects {
 			if effect.Aura == wotlk.MountedFlightSpeedAura {
-				spells = append(spells, LearnedMountSpell{ID: spellID, MountedFlightSpeed: int(effect.BasePoints + 1)})
+				spells = append(spells, LearnedMountSpell{ID: spellID, MountedFlightSpeed: int(effect.CalcValue())})
 				break
 			}
 		}
@@ -2147,7 +2147,7 @@ func (s *session) LearnMountSpell(ctx context.Context, guid uint64, spellID uint
 	}
 	for _, effect := range spell.Effects {
 		if effect.Aura == wotlk.MountedFlightSpeedAura {
-			s.mounts.LearnSpell(LearnedMountSpell{ID: spellID, MountedFlightSpeed: int(effect.BasePoints + 1)})
+			s.mounts.LearnSpell(LearnedMountSpell{ID: spellID, MountedFlightSpeed: int(effect.CalcValue())})
 			_, err = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET extra_flags = ? WHERE guid = ? AND account = ?", s.mounts.ExtraFlags(), guid, s.accountID)
 			return err
 		}

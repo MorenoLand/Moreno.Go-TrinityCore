@@ -378,7 +378,13 @@ func (s *session) handleEffectGameObjectDamageGO(ctx context.Context, spellID ui
 			return
 		}
 	}
-	damage := eff.BasePoints + 1
+	var dmgSpell wotlk.Spell
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			dmgSpell = sp
+		}
+	}
+	damage := eff.CalcValueForLevel(dmgSpell, uint32(s.player.Level))
 	s.server.modifyDestructibleHealth(ctx, mapID, instanceID, goGUID, -damage, s.playerGUID, spellID, s)
 }
 
@@ -403,7 +409,13 @@ func (s *session) handleEffectGameObjectRepairGO(ctx context.Context, spellID ui
 	if s == nil || s.server == nil || s.player == nil || goGUID == 0 {
 		return
 	}
-	damage := eff.BasePoints + 1
+	var dmgSpell wotlk.Spell
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			dmgSpell = sp
+		}
+	}
+	damage := eff.CalcValueForLevel(dmgSpell, uint32(s.player.Level))
 	s.server.modifyDestructibleHealth(ctx, s.player.Map, s.player.InstanceID, goGUID, damage, s.playerGUID, spellID, s)
 }
 

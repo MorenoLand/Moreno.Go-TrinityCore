@@ -770,7 +770,7 @@ func (s *session) dummyAuraAmountByIconEffIndex(family, iconID uint32, effIndex 
 		}
 		amount := aura.Amounts[effIndex]
 		if amount == 0 {
-			amount = eff.BasePoints + 1
+			amount = eff.BasePoints
 		}
 		return amount, true
 	}

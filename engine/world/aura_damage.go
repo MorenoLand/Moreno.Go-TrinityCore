@@ -60,7 +60,7 @@ func (s *session) attackFitsAuraRequirement(ctx context.Context, spell wotlk.Spe
 // CheckAttackFitToAuraRequirement weapon-fit gate for the attack type. Misc
 // mask 0 disables the misc filter: the 122 off-hand leg carries no misc gate
 // in C++ (Unit.cpp:9412-9413). Amount resolution mirrors
-// auraTypeModifiersByMiscMask (stored amount, then BasePoints+1); auras whose
+// auraTypeModifiersByMiscMask (stored amount, then BasePoints); auras whose
 // spell data is missing are skipped since the gate needs the spell's
 // equipped-item requirement (the crit-fold gate helper does the same).
 func (s *session) damageDoneAuraAmounts(ctx context.Context, auraType uint32, miscMask uint32, attackType protocol.WeaponAttackType) []int32 {
@@ -93,7 +93,7 @@ func (s *session) damageDoneAuraAmounts(ctx context.Context, auraType uint32, mi
 				usedStoredAmount = true
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			result = append(result, amount)
 		}

@@ -1619,7 +1619,7 @@ func IsPlayableRace(race Race) bool {
 
 func HasMountedFlightSpeed(spell Spell, speed int32) bool {
 	for _, effect := range spell.Effects {
-		if effect.Aura == MountedFlightSpeedAura && effect.BasePoints+1 == speed {
+		if effect.Aura == MountedFlightSpeedAura && effect.CalcValue() == speed {
 			return true
 		}
 	}

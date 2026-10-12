@@ -876,7 +876,7 @@ func (s *Server) creatureGroundingTotemRedirect(ctx context.Context, m *creature
 // (flat ManaCost + ManaCostPercentage of the caster's create mana) is restored
 // via a triggered 39104 cast with the ApplyPct(damage)-scaled amount as base
 // point 0. Go's create-mana model is the session's BaseMana.
-func (s *session) handleEffectDestroyAllTotems(ctx context.Context, eff wotlk.SpellEffect) {
+func (s *session) handleEffectDestroyAllTotems(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
@@ -896,7 +896,7 @@ func (s *session) handleEffectDestroyAllTotems(ctx context.Context, eff wotlk.Sp
 		s.destroyTotem(slot)
 	}
 	// ApplyPct(mana, damage): mana *= (100 + damage) / 100.
-	mana = mana * int64(100+eff.BasePoints+1) / 100
+	mana = mana * int64(100+eff.CalcValueForLevel(spell, uint32(s.player.Level))) / 100
 	if mana > 0 {
 		// TRIGGERED_FULL_MASK in C++: castSpellDirect is Go's triggered-cast
 		// path, with the mana amount carried as SPELLVALUE_BASE_POINT0.

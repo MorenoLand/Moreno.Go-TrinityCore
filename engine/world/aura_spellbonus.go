@@ -39,7 +39,7 @@ func (s *session) spellDamageOfStatFold(schoolMask uint32) int32 {
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			// CalculatePct (Util.h): stat * amount / 100, truncating.
 			total += int32(int64(s.player.Stats[statIdx]) * int64(amount) / 100)
@@ -82,7 +82,7 @@ func (s *session) spellDamageOfAttackPowerFold(schoolMask uint32) int32 {
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			// C++ sums the amounts first (GetTotalAuraModifierByMiscMask) and
 			// takes one CalculatePct against total attack power.
@@ -130,7 +130,7 @@ func (s *session) spellHealingOfStatFold() int32 {
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			total += int32(int64(s.player.Stats[statIdx]) * int64(amount) / 100)
 		}
@@ -173,7 +173,7 @@ func (s *session) spellHealingOfAttackPowerFold(schoolMask uint32) int32 {
 				amount = int32(aura.Amount)
 			}
 			if amount == 0 {
-				amount = effect.BasePoints + 1
+				amount = effect.BasePoints
 			}
 			total += int32(int64(s.totalAttackPowerValue(false)) * int64(amount) / 100)
 		}

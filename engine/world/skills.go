@@ -264,7 +264,7 @@ func ResolveDeathKnightRuneTypes(initial [6]uint8, spells []wotlk.Spell) [6]uint
 			if effect.Effect == 0 || effect.Aura != spellAuraConvertRune {
 				continue
 			}
-			remaining := uint32(effect.BasePoints) + 1
+			remaining := uint32(effect.BasePoints)
 			for index, runeType := range initial {
 				if remaining == 0 {
 					break

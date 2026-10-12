@@ -396,7 +396,7 @@ func (s *session) handleEffectActivateRune(spell wotlk.Spell, eff wotlk.SpellEff
 	}
 	nowMs := time.Now().UnixMilli()
 	rs := s.runes
-	count := eff.BasePoints + 1 // tree-wide flat convention for the handler damage
+	count := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	if count == 0 {
 		count = 1
 	}

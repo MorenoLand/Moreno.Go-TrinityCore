@@ -175,15 +175,15 @@ func (s *session) splitThreatRedirects(motion *creatureMotion, amount float32) (
 // Reference: Spell::EffectRedirectThreat (SpellEffects.cpp:5411-5421) runs at
 // SPELL_EFFECT_HANDLE_HIT_TARGET per unit target, registering
 // (spellId, unitTarget, damage) on the caster's ThreatManager redirect
-// registry (ThreatManager.cpp:727-729). damage is the effect's BasePoints+1
-// (100 for the Misdirection/Tricks of the Trade/Vigilance redirect spells in
-// DBC). There is no alive check in C++; the registry key is the redirect
+// registry (ThreatManager.cpp:727-731), consumed when the caster generates
+// threat (ThreatManager.cpp:344-373). damage is the effect's CalculateDamage
+// value. There is no alive check in C++; the registry key is the redirect
 // spell's own id (e.g. 35079), unregistered when its aura is removed.
-func (s *session) handleEffectRedirectThreat(spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
+func (s *session) handleEffectRedirectThreat(spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.player == nil {
 		return
 	}
-	damage := eff.BasePoints + 1
+	damage := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	if damage <= 0 {
 		return
 	}
@@ -191,7 +191,7 @@ func (s *session) handleEffectRedirectThreat(spellID uint32, eff wotlk.SpellEffe
 		if targetGUID == 0 {
 			continue
 		}
-		s.registerRedirectThreat(spellID, targetGUID, uint32(damage))
+		s.registerRedirectThreat(spell.ID, targetGUID, uint32(damage))
 	}
 }
 

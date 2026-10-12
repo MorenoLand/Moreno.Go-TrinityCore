@@ -714,11 +714,11 @@ func (tm *ThreatManager) ScaleThreat(victim uint64, factor float32) (switched bo
 // scales by 0.01*(100+percent). Entities that cannot hold a threat list
 // (taunt precedent: totems, pets, triggers, player minions — OwnerGUID != 0)
 // reject silently.
-func (s *session) handleEffectModifyThreatPercent(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
+func (s *session) handleEffectModifyThreatPercent(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	damage := eff.BasePoints + 1
+	damage := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	if damage == 0 {
 		return
 	}

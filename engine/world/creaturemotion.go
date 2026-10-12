@@ -3406,7 +3406,7 @@ func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, contr
 		switch effect.Effect {
 		case 2, 17, 31, 58, 87:
 			found = true
-			value := effect.BasePoints + 1
+			value := effect.CalcValueForLevel(spell, casterLevel)
 			if value > 0 {
 				scale := float64(1)
 				if s != nil {

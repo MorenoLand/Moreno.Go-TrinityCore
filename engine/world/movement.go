@@ -1677,7 +1677,7 @@ func (s *session) getTotalAuraModifier(auraType uint32) int32 {
 				if spell.Attributes&0x00000040 != 0 {
 					for _, eff := range spell.Effects {
 						if eff.Aura == auraType {
-							total += eff.BasePoints + 1
+							total += eff.BasePoints
 						}
 					}
 				}

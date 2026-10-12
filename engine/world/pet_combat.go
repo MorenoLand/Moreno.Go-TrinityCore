@@ -1905,7 +1905,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	for i, effect := range spell.Effects {
 		if effect.Effect == 10 || effect.Effect == 105 || effect.Effect == 136 {
-			heal := uint32(effect.BasePoints + 1)
+			heal := uint32(effect.CalcValueForLevel(spell, uint32(motion.Level)))
 			if heal > 0 {
 				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, heal)
 			}
@@ -1929,7 +1929,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// row all come from it, like hitInfo.AuraBasePoints.
 			auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
 			durationMs := petAuraDuration(s.server, auraSpell, motion)
-			amount := uint32(auraEffect.BasePoints + 1)
+			amount := uint32(auraEffect.CalcValueForLevel(auraSpell, uint32(motion.Level)))
 			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, resolveReflectTarget(targetGUID), durationMs, amount) {
 			}
 			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (effect 27 with an enemy
@@ -1940,7 +1940,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				for _, areaHit := range areaHits {
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
-					aAmount := uint32(aEffect.BasePoints + 1)
+					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 					s.applyPetAura(ctx, motion, aSpell, aEffect, resolveReflectTarget(areaHit.GUID), aDurationMs, aAmount)
 				}
 			}

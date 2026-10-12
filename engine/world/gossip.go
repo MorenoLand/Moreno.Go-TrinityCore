@@ -311,7 +311,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				ignoreReclaim := false
 				if s.server != nil && s.server.Data != nil {
 					if sp, found, derr := s.server.Data.Spell(17251); derr == nil && found && len(sp.Effects) > 0 {
-						if v := sp.Effects[0].BasePoints + 1; v >= 1 && v <= 100 {
+						if v := sp.Effects[0].CalcValueForLevel(sp, uint32(s.player.Level)); v >= 1 && v <= 100 {
 							pct = uint32(v)
 						}
 						ignoreReclaim = sp.AttributesEx3&spellAttr3IgnoreResurrectionTimer != 0
