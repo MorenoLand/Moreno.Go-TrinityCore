@@ -21181,44 +21181,10 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 	if durationMs == 0 && eff.AuraPeriod > 0 {
 		durationMs = eff.AuraPeriod * 5
 	}
-	periodMs = eff.AuraPeriod
-	if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
-		periodMs = 3000
-	}
 	// AuraEffect::CalculatePeriodic (SpellAuraEffects.cpp:565-637): the DBC
-	// amplitude is not the tick interval until the caster's mods fold in.
-	// SPELLMOD_ACTIVATION_TIME (talents) applies first via the spellmod
-	// owner; then haste compression — channeled auras route through
-	// ModSpellDurationTime (Object.cpp:2475-2495: SPELLMOD_CASTING_TIME then
-	// the UNIT_MOD_CAST_SPEED multiply; channeled without
-	// ATTR5_HASTE_AFFECT_DURATION early-returns with no compression), and
-	// non-channeled auras carrying ATTR5_HASTE_AFFECT_DURATION or affected
-	// by a SPELL_AURA_PERIODIC_HASTE (316) aura on the caster
-	// (HasAuraTypeWithAffectMask, Unit.cpp:4689) multiply by
-	// UNIT_MOD_CAST_SPEED, i.e. divide by 1+hastePct/100
-	// (ApplyPercentModFloatVar, Unit.cpp:10842-10845). The int32()
-	// truncation is the C++ cast; the floor of 1ms keeps a pathological mod
-	// from producing a zero-period timer.
-	if periodMs > 0 {
-		periodMs = uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
-		if isChanneledSpell(spell) {
-			if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 {
-				if modded := s.applySpellMod(spell, spellModCastingTime, int32(periodMs)); modded > 0 {
-					periodMs = uint32(modded)
-				}
-				if hastePct := s.getSpellHastePct(); hastePct > 0 {
-					periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
-				}
-			}
-		} else if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell) {
-			if hastePct := s.getSpellHastePct(); hastePct > 0 {
-				periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
-			}
-		}
-		if periodMs == 0 {
-			periodMs = 1
-		}
-	}
+	// amplitude is not the tick interval until the caster's mods fold in —
+	// see foldPeriodicPeriod.
+	periodMs = s.foldPeriodicPeriod(spell, eff)
 	// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:425): the applied
 	// aura amount is CalcValue(caster, &m_baseAmount), not the flat base.
 	var paramsCasterLevel uint32
@@ -21260,6 +21226,50 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 		}
 	}
 	return durationMs, periodMs, amount
+}
+
+// foldPeriodicPeriod is the periodic-amplitude half of auraEffectParams,
+// extracted so the steal path can recompute a stolen aura's period from the
+// ORIGINAL caster's current mods (Aura::SetLoadedState ->
+// AuraEffect::CalculatePeriodic, SpellAuraEffects.cpp:598-618, called at
+// Unit.cpp:4032), instead of the stealer's. SPELLMOD_ACTIVATION_TIME
+// (talents) applies first via the spellmod owner; then haste compression —
+// channeled auras route through ModSpellDurationTime (Object.cpp:2475-2495:
+// SPELLMOD_CASTING_TIME then the UNIT_MOD_CAST_SPEED multiply; channeled
+// without ATTR5_HASTE_AFFECT_DURATION early-returns with no compression),
+// and non-channeled auras carrying ATTR5_HASTE_AFFECT_DURATION or affected
+// by a SPELL_AURA_PERIODIC_HASTE (316) aura on the caster
+// (HasAuraTypeWithAffectMask, Unit.cpp:4689) multiply by
+// UNIT_MOD_CAST_SPEED, i.e. divide by 1+hastePct/100
+// (ApplyPercentModFloatVar, Unit.cpp:10842-10845). The int32() truncation
+// is the C++ cast; the floor of 1ms keeps a pathological mod from
+// producing a zero-period timer.
+func (s *session) foldPeriodicPeriod(spell wotlk.Spell, eff wotlk.SpellEffect) uint32 {
+	periodMs := eff.AuraPeriod
+	if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
+		periodMs = 3000
+	}
+	if periodMs > 0 {
+		periodMs = uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
+		if isChanneledSpell(spell) {
+			if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 {
+				if modded := s.applySpellMod(spell, spellModCastingTime, int32(periodMs)); modded > 0 {
+					periodMs = uint32(modded)
+				}
+				if hastePct := s.getSpellHastePct(); hastePct > 0 {
+					periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
+				}
+			}
+		} else if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell) {
+			if hastePct := s.getSpellHastePct(); hastePct > 0 {
+				periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
+			}
+		}
+		if periodMs == 0 {
+			periodMs = 1
+		}
+	}
+	return periodMs
 }
 
 func auraTriggersSpell(spell wotlk.Spell, target uint32) bool {

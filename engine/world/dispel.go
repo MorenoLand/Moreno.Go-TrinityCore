@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"time"
 
@@ -1389,6 +1390,154 @@ func (s *session) carryStealVictimEffects(spellID uint32, victimFx *victimEffect
 	aura.ApplyResilience = victimFx.applyResilience
 }
 
+// reregisterStolenSpellMods mirrors the AuraEffect::CalculateSpellMod half
+// of Aura::SetLoadedState (SpellAuraEffects.cpp:634-653, called at
+// Unit.cpp:4032): the synthetic fresh-steal apply registered spell
+// modifiers from the single-effect record, so drop those and re-register
+// from the victim-live mask/amounts carryStealVictimEffects installed.
+// C++ snapshots the pre-RecalculateAmount values, hence this runs before
+// the recalculate calls.
+func (s *session) reregisterStolenSpellMods(spellID uint32) {
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	stopped := aura == nil || aura.Stopped
+	s.castMu.Unlock()
+	if stopped {
+		return
+	}
+	s.dropSpellMods(spellID)
+	s.addSpellMods(aura)
+}
+
+// recalculateStolenAuraPeriod mirrors the AuraEffect::CalculatePeriodic
+// recompute half of Aura::SetLoadedState (SpellAuraEffects.cpp:598-618,
+// called at Unit.cpp:4032): the stolen aura's periodic amplitude starts
+// from the DBC base and folds the ORIGINAL caster's current
+// SPELLMOD_ACTIVATION_TIME and haste — it is not the victim aura's live
+// period. A player original caster resolves via their session; any other
+// caster (offline, creature, unknown) degrades to the unmodded DBC base,
+// like C++'s null-caster path. Runs before rescheduleStolenAuraTick so the
+// load-arm phase uses the recomputed amplitude, exactly like C++.
+func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spell, spellKnown bool, victimFx *victimEffectState, victimCasterGUID uint64) {
+	if victimFx == nil || !spellKnown {
+		return
+	}
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	s.castMu.Unlock()
+	if aura == nil || aura.Stopped || aura.PeriodMs == 0 {
+		return
+	}
+	// Tick-driving effect: the last effect in the stolen mask whose aura
+	// type matches the record's, mirroring the tick dispatch.
+	tickIdx := -1
+	for i, eff := range stSpell.Effects {
+		if victimFx.effectMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		if eff.Aura == aura.AuraType {
+			tickIdx = i
+		}
+	}
+	if tickIdx < 0 {
+		return
+	}
+	var casterSess *session
+	if s.server != nil {
+		casterSess = s.server.findSessionByGUID(victimCasterGUID)
+	}
+	var periodMs uint32
+	if casterSess != nil {
+		periodMs = casterSess.foldPeriodicPeriod(stSpell, stSpell.Effects[tickIdx])
+	} else {
+		// Null-caster path (SpellAuraEffects.cpp:598-601): no spellmod or
+		// haste folds — the DBC base stands, with Go's zero-period
+		// fallback for periodic aura types (auraEffectParams convention).
+		periodMs = stSpell.Effects[tickIdx].AuraPeriod
+		if periodMs == 0 {
+			switch stSpell.Effects[tickIdx].Aura {
+			case 3, 8, 23, 24, 89:
+				periodMs = 3000
+			}
+		}
+	}
+	if periodMs == 0 {
+		return
+	}
+	s.castMu.Lock()
+	if live := s.activeAuras[spellID]; live != nil && !live.Stopped {
+		live.PeriodMs = periodMs
+	}
+	s.castMu.Unlock()
+}
+
+// recalculateStolenAuraAmounts mirrors AuraEffect::RecalculateAmount as
+// called by Aura::SetLoadedState (SpellAuras.cpp:1238-1257, via
+// Unit.cpp:4032): recalculable effects recompute their amounts from the
+// ORIGINAL caster's current stats — CalcValue with the victim's base
+// amount plus the caster's live spellpower done-bonus — instead of keeping
+// the victim aura's live amounts. A non-recalculable effect keeps its
+// carried live amount, matching C++'s SetAmount-then-maybe-recalculate
+// order. An unresolvable caster degrades to the null-caster CalcValue (no
+// level scaling, no bonuses), like periodicTickCasterLevel. Residuals:
+// the combo-points term (no combo-point infra on the caster session),
+// ApplyEffectModifiers (Go's normal apply path has no twin either), the
+// item-enchant arm (a stolen aura carries no cast item), and script
+// amount handlers (no infra).
+func (s *session) recalculateStolenAuraAmounts(spellID uint32, stSpell wotlk.Spell, spellKnown bool, victimFx *victimEffectState, victimCasterGUID uint64) {
+	if victimFx == nil || !spellKnown || victimFx.recalculateMask == 0 {
+		return
+	}
+	var casterSess *session
+	var casterLevel uint32
+	var spellPower uint32
+	if s.server != nil {
+		casterSess = s.server.findSessionByGUID(victimCasterGUID)
+	}
+	if casterSess != nil && casterSess.player != nil {
+		casterLevel = uint32(casterSess.player.Level)
+		spellPower = casterSess.player.SpellPower
+	}
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	if aura == nil || aura.Stopped {
+		s.castMu.Unlock()
+		return
+	}
+	periodMs := aura.PeriodMs
+	// Tick-driving effect first: the last effect in the stolen mask whose
+	// aura type matches the record's — its recalculated amount (if
+	// recalculable) becomes the record's primary amount.
+	primaryIdx := -1
+	for i, eff := range stSpell.Effects {
+		if victimFx.effectMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		if eff.Aura == aura.AuraType {
+			primaryIdx = i
+		}
+	}
+	for i, eff := range stSpell.Effects {
+		if victimFx.effectMask&(1<<uint(i)) == 0 || victimFx.recalculateMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		recomputed := eff.CalcValueForBase(stSpell, victimFx.baseAmounts[i], casterLevel)
+		// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:498-507): the
+		// done-bonus leg runs for periodic damage/leech/heal only, using
+		// Go's established spellpower simplification (auraEffectParams)
+		// with the recomputed period above.
+		if spellPower > 0 && periodMs > 0 &&
+			(eff.Aura == spellAuraPeriodicDamage || eff.Aura == spellAuraPeriodicLeech || eff.Aura == spellAuraPeriodicHeal) {
+			recomputed += int32(math.Round(float64(spellPower) * (float64(periodMs) / 15000.0)))
+		}
+		aura.Amounts[i] = recomputed
+		if i == primaryIdx {
+			aura.Amount = uint32(recomputed)
+		}
+	}
+	s.castMu.Unlock()
+}
+
 // stolenAuraMergesInto reports whether the stealer-side merge of
 // Unit::RemoveAurasDueToSpellBySteal (Unit.cpp:4002) applies: C++ merges only
 // via unitStealer->GetAura(aura->GetId(), aura->GetCasterGUID()), so both the
@@ -1478,6 +1627,14 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 		}
 	}
 	s.castMu.Unlock()
+	if dur == 0 {
+		// C++ oldAura->SetDuration(0) (Unit.cpp:4009): the merged aura is
+		// expired and removed on the owner's next update pass (IsExpired,
+		// Unit.cpp:2989). Go has no deferred removal queue, so expire it
+		// now instead of sending a zero-duration update.
+		s.expirePlayerAura(spellID)
+		return true
+	}
 	// Charges ride the stack-count field of the aura update
 	// (player_auras.go).
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDur, dur, count)
@@ -1643,18 +1800,30 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		}
 	}
 
-	// Apply stolen buffs to the stealer (duration capped at 2 minutes /
-	// 120000ms per TC, Unit.cpp:3999).
+	// Apply stolen buffs to the stealer. C++ (Unit.cpp:3999):
+	//   uint32 dur = std::min(2u * MINUTE * IN_MILLISECONDS, uint32(aura->GetDuration()));
+	// A permanent victim aura reports GetDuration() -1, which wraps to
+	// UINT32_MAX and clamps to 120000 — Go's permanent victim auras
+	// (DurationMs==0 with a live record) take the same arm. A
+	// merely-expired victim aura (remaining 0, max > 0) must NOT: C++
+	// steals that at duration 0 and the stolen aura expires on the
+	// stealer's next update (IsExpired, Unit.cpp:2989), never ticking.
 	for _, st := range stolen {
 		cand := st.candidate
 		dur := st.remainingMs
-		if dur == 0 || dur > 120000 {
+		if dur > 120000 {
 			dur = 120000
 		}
+		if dur == 0 && st.victimAura != nil && st.victimMaxMs == 0 {
+			dur = 120000
+		}
+		expiredSteal := dur == 0
 		stSpell := wotlk.Spell{ID: cand.SpellID, DispelType: cand.DispelType, Mechanic: cand.Mechanic}
+		stSpellKnown := false
 		if s.server != nil && s.server.Data != nil {
 			if loaded, found, _ := s.server.Data.Spell(cand.SpellID); found {
 				stSpell = loaded
+				stSpellKnown = true
 			}
 		}
 		if s.mergeStolenAura(cand.SpellID, stSpell, st.stealCharge, dur, st.victimCasterGUID) {
@@ -1690,6 +1859,14 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		// per-effect amounts, recalculate mask, crit chance and
 		// resilience flag instead of the synthetic single-effect record.
 		s.carryStealVictimEffects(cand.SpellID, st.victimFx)
+		// C++ AuraEffect::CalculateSpellMod (SpellAuraEffects.cpp:634-653,
+		// called at Unit.cpp:4032 between the amount snapshot and
+		// RecalculateAmount): the synthetic apply above registered spell
+		// modifiers from the single-effect record, so re-register from the
+		// victim-live mask/amounts just installed — C++ snapshots the
+		// pre-recalculation values, hence this runs before the recalculate
+		// calls below.
+		s.reregisterStolenSpellMods(cand.SpellID)
 		// C++ SetLoadedState charges arg (Unit.cpp:4032): 1 for
 		// ATTR7_DISPEL_CHARGES auras, the victim's charge count otherwise.
 		wantCharges := st.charges
@@ -1697,11 +1874,33 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 			wantCharges = 1
 		}
 		s.setAuraCharges(cand.SpellID, wantCharges, st.victimMaxMs)
+		// C++ Aura::SetLoadedState -> AuraEffect::CalculatePeriodic
+		// (SpellAuraEffects.cpp:598-630, called at Unit.cpp:4032): the
+		// stolen aura's amplitude is recomputed from the DBC base with the
+		// ORIGINAL caster's current spellmods/haste — not carried from
+		// the victim — and only then does the load arm phase the tick
+		// timer off it.
+		s.recalculateStolenAuraPeriod(cand.SpellID, stSpell, stSpellKnown, st.victimFx, st.victimCasterGUID)
+		// C++ AuraEffect::RecalculateAmount (via SetLoadedState,
+		// SpellAuras.cpp:1238-1257): recalculable effects recompute from
+		// the original caster's current stats instead of keeping the
+		// victim's live amounts.
+		s.recalculateStolenAuraAmounts(cand.SpellID, stSpell, stSpellKnown, st.victimFx, st.victimCasterGUID)
 		// C++ Aura::SetLoadedState -> AuraEffect::CalculatePeriodic load arm
 		// (SpellAuraEffects.cpp:619-630, called at Unit.cpp:4032): the fresh
 		// stolen aura keeps the victim's periodic tick cadence instead of
 		// restarting the timer at a full amplitude.
 		s.rescheduleStolenAuraTick(cand.SpellID, st.victimMaxMs, dur)
+		if expiredSteal {
+			// A zero-remaining victim aura is stolen at duration 0
+			// (Unit.cpp:3999); C++ still creates the stolen aura — it
+			// never ticks (the load-arm tick cap) and expires on the
+			// stealer's next update (IsExpired, Unit.cpp:2989). Go cannot
+			// represent a zero-duration non-permanent aura (DurationMs==0
+			// is permanent), so expire it now that the C++-ordered
+			// SetLoadedState sequence above has run.
+			s.expirePlayerAura(cand.SpellID)
+		}
 	}
 
 	if len(failList) > 0 {
