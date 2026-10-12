@@ -961,6 +961,59 @@ func (s *Server) fireKilledByCreatureHook(ctx context.Context, killer *creatureM
 	victim.triggerPlayerEvent(ctx, scripting.PlayerEventKilledByCreature, s.luaMotionCreature(killer), victim.luaPlayer())
 }
 
+// fireGiveXPHook fires Eluna PLAYER_EVENT_ON_GIVE_XP (12): Eluna::OnGiveXP
+// (PlayerHooks.cpp:228-252), (event, player, amount, victim), where each
+// handler's numeric return rewrites amount for the next handler
+// (ReplaceArgument). Player::GiveXP (Player.cpp:2658) fires it after the
+// dead/no-XP-gain/loot-recipient guards, before the max-level early return
+// and before the AutoBalance/xp_boost PlayerScript hooks, so the Go call
+// sits at the top of grantXPWithVictimGroup. The victim is the kill target
+// creature object, or nil for quest/exploration XP (C++ pushes a nil Unit).
+func (s *session) fireGiveXPHook(ctx context.Context, amount uint32, victimGUID uint64) uint32 {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return amount
+	}
+	var victim any
+	if victimGUID != 0 && s.player != nil {
+		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, victimGUID); motion != nil {
+			victim = s.server.luaMotionCreature(motion)
+		} else {
+			victim = s.server.findPlayer(victimGUID)
+		}
+	}
+	args := []any{scripting.PlayerEventGiveXP, s.luaPlayer(), amount, victim}
+	_, err := s.server.Features.Scripts.TriggerPlayerEventUpdated(ctx, scripting.PlayerEventGiveXP, args, func(returns []any) {
+		if len(returns) == 0 {
+			return
+		}
+		if n, ok := returns[0].(float64); ok {
+			if n < 0 {
+				amount = 0
+			} else {
+				amount = uint32(int64(n))
+			}
+			args[2] = amount
+		}
+	})
+	if err != nil {
+		s.debug("lua give-xp hook failed", "account", s.accountName, "error", err)
+	}
+	return amount
+}
+
+// fireLevelChangedHook fires Eluna PLAYER_EVENT_ON_LEVEL_CHANGE (13):
+// Eluna::OnLevelChanged (PlayerHooks.cpp:179-185), (event, player, oldLevel),
+// void (CallAllFunctions). Player::GiveLevel (Player.cpp:2787) fires it once
+// per level gained, after the level-up processing; the GM .character level
+// path goes through GiveLevel for online targets (cs_character.cpp), so it
+// fires from the Go level-up loop and handleCharacterLevel alike.
+func (s *session) fireLevelChangedHook(ctx context.Context, oldLevel uint8) {
+	if s == nil {
+		return
+	}
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventLevelChange, s.luaPlayer(), oldLevel)
+}
+
 // grantXP applies XP with repeated level-ups and updates the client fields.
 func (s *session) grantXP(ctx context.Context, amount uint32) {
 	s.grantXPWithVictim(ctx, amount, 0)
@@ -976,6 +1029,12 @@ func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGU
 
 func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, victimGUID uint64, grouped bool) {
 	if s.player == nil || amount == 0 {
+		return
+	}
+	// Eluna::OnGiveXP (PlayerHooks.cpp:228): fires before the PlayerScript
+	// hooks below; a numeric handler return rewrites the amount.
+	amount = s.fireGiveXPHook(ctx, amount, victimGUID)
+	if amount == 0 {
 		return
 	}
 	// AutoBalance_PlayerScript::OnGiveXP (AutoBalance.cpp): dungeon kill XP
@@ -1049,6 +1108,7 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 		oldHP := s.player.MaxHealth
 		oldMana := s.player.MaxPowers[0]
 		oldStats := s.player.Stats
+		oldLevel := s.player.Level
 		s.player.Level++
 		s.setAchievementCriteria(criteriaTypeReachLevel, uint32(s.player.Level), uint32(s.player.Level))
 		// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
@@ -1101,6 +1161,9 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET max = ? WHERE guid = ? AND skill = ?", sk.Max, s.playerGUID, sk.Skill)
 			}
 		}
+		// Player::GiveLevel (Player.cpp:2787): OnPlayerLevelChanged fires once
+		// per level gained, after the level-up processing.
+		s.fireLevelChangedHook(ctx, oldLevel)
 	}
 	s.sendPlayerUpdate()
 	grantPetXP()

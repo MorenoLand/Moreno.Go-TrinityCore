@@ -3570,6 +3570,10 @@ func (s *session) savePlayerState(ctx context.Context, online uint32, logout boo
 	if !s.playerLoaded || s.player == nil || s.server == nil || s.server.CharactersStore == nil {
 		return nil
 	}
+	// Eluna PLAYER_EVENT_ON_SAVE (25): Eluna::OnSave (PlayerHooks.cpp:361-366),
+	// (event, player), void (CallAllFunctions). Player::SaveToDB
+	// (Player.cpp:19528) fires it when !create, before the statements.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventSave, s.luaPlayer())
 	s.updatePlayedTime(time.Now())
 	stateCopy := *s.player
 	if s.nearTeleportPending {

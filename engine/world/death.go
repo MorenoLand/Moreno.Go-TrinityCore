@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -1268,6 +1269,11 @@ func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 	if s.player.Health > 0 || s.player.PlayerFlags&playerFlagGhost != 0 || s.hasAuraType(spellAuraPreventResurrection) {
 		return true
 	}
+	// Eluna PLAYER_EVENT_ON_REPOP (35): Eluna::OnRepop
+	// (PlayerHooks.cpp:87-92), (event, player), void (CallAllFunctions).
+	// WorldSession::HandleRepopRequest (MiscHandler.cpp:84) fires it after the
+	// guards, before the pet dismissal and the ghost conversion.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventRepop, s.luaPlayer())
 	// WorldSession::HandleRepopRequest, MiscHandler.cpp:87-89 — dismiss any
 	// pet before the repop (e.g. a warlock re-summon while dead); RemoveGhoul
 	// has no Go analog (see killPlayer).
@@ -1635,6 +1641,11 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	s.deathTimer = time.Time{}
 	s.removeAura(8326)
 	s.removeAura(20584)
+	// Eluna PLAYER_EVENT_ON_RESURRECT (36): Eluna::OnResurrect
+	// (PlayerHooks.cpp:94-99), (event, player), void (CallAllFunctions).
+	// Player::ResurrectPlayer (Player.cpp:4735) fires it after the visibility
+	// update and the obtain-spell recast, before resurrection sickness.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventResurrect, s.luaPlayer())
 	if applySickness {
 		s.applyResurrectionSickness()
 	}

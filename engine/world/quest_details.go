@@ -418,6 +418,11 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 	}
+	// Eluna PLAYER_EVENT_ON_QUEST_ABANDON (38): Eluna::OnQuestAbandon
+	// (PlayerHooks.cpp:101-107), (event, player, questId), void
+	// (CallAllFunctions). CMSG_QUESTLOG_REMOVE_QUEST (QuestHandler.cpp:449)
+	// fires it after AbandonQuest/RemoveActiveQuest/RemoveTimedAchievement.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestAbandon, s.luaPlayer(), questID)
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		wdb := s.server.WorldStore.DB
 		var entries []uint32

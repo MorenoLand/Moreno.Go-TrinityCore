@@ -25,11 +25,17 @@ const (
 	PlayerEventKillPlayer       = 6
 	PlayerEventKillCreature     = 7
 	PlayerEventKilledByCreature = 8
+	PlayerEventGiveXP           = 12
+	PlayerEventLevelChange      = 13
 	PlayerEventChat             = 18
 	PlayerEventEmote            = 23
 	PlayerEventTextEmote        = 24
+	PlayerEventSave             = 25
 	PlayerEventUpdateZone       = 27
 	PlayerEventMapChange        = 28
+	PlayerEventRepop            = 35
+	PlayerEventResurrect        = 36
+	PlayerEventQuestAbandon     = 38
 	PlayerEventCommand          = 42
 	MapEventOnPlayerEnter       = 21
 )
@@ -459,6 +465,16 @@ func (r *Runtime) triggerNUpdated(ctx context.Context, kind string, event int, n
 
 func (r *Runtime) TriggerPlayerEvent(ctx context.Context, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "player", event, args...)
+}
+
+// TriggerPlayerEventUpdated is the chained-argument player-event trigger,
+// mirroring Eluna's ReplaceArgument semantics (LuaEngine/PlayerHooks.cpp):
+// hooks whose C++ call sites consume a numeric return (PLAYER_EVENT_ON_GIVE_XP
+// rewrites amount, PLAYER_EVENT_ON_MONEY_CHANGE rewrites amount,
+// PLAYER_EVENT_ON_REPUTATION_CHANGE rewrites standing) pass each handler the
+// rewritten argument, so update mutates args between handler invocations.
+func (r *Runtime) TriggerPlayerEventUpdated(ctx context.Context, event int, args []any, update func(returns []any)) ([][]any, error) {
+	return r.triggerNUpdated(ctx, "player", event, 1, args, update)
 }
 
 // TriggerCreatureEvent fires hooks registered with

@@ -2278,6 +2278,9 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 		// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
 		t.online.autoBalanceOnLevelChanged()
 		t.online.sendPlayerUpdate()
+		// Player::GiveLevel (Player.cpp:2787): the C++ .character level
+		// command goes through GiveLevel, which fires OnPlayerLevelChanged.
+		t.online.fireLevelChangedHook(ctx, uint8(oldLevel))
 		switch {
 		case oldLevel == newLevel:
 			s.sendSysMessage(fmt.Sprintf("Your level progress has been reset by %s.", t.name))
