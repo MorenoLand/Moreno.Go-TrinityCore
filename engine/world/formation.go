@@ -187,8 +187,45 @@ func (s *Server) memberEngagingTarget(ctx context.Context, motion *creatureMotio
 // leader launches an idle-path leg, each live member row with
 // FLAG_IDLE_IN_FORMATION whose creature is alive and not engaged joins
 // formation movement (MoveFormation). The slot angle is inverted
-// (FollowAngle + pi) per the C++ comment; CanLeaderStartMoving (the leader
-// waiting for members) has no Go model.
+// canFormationLeaderStartMoving mirrors CreatureGroup::CanLeaderStartMoving
+// (CreatureGroups.cpp:298-308) via Creature::IsFormationLeaderMoveAllowed
+// (Creature.cpp:372-378): a formation leader may start its waypoint leg only
+// when no other alive group member is engaged (CreatureAI::IsEngaged —
+// Go's InCombat) or returning home (Creature::IsReturningHome — the
+// HOME_MOTION_TYPE leg; Go's Evading home-return move is the twin). The C++
+// gate sits in WaypointMovementGenerator::DoUpdate
+// (WaypointMovementGenerator.cpp:273), before the waypoint index advances,
+// so a blocked leader retries the same node on the next tick.
+func (s *Server) canFormationLeaderStartMoving(ctx context.Context, motion *creatureMotion) bool {
+	s.ensureFormationsLoaded(ctx)
+	leaderLow := uint32(motion.GUID & 0x00FFFFFF)
+	s.formationMu.RLock()
+	memberLows := append([]uint32(nil), s.formationLeaders[leaderLow]...)
+	s.formationMu.RUnlock()
+	if len(memberLows) == 0 {
+		return true
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	motions := s.motionMapLocked(motion.Map, motion.InstanceID)
+	for _, memberLow := range memberLows {
+		for guid, m := range motions {
+			if m == motion || uint32(guid&0x00FFFFFF) != memberLow {
+				continue
+			}
+			if m.Health > 0 && (m.InCombat || m.Evading) {
+				return false
+			}
+			break
+		}
+	}
+	return true
+}
+
+// formationLeaderStartedMoving mirrors CreatureGroup::LeaderStartedMoving
+// (CreatureGroups.cpp:279-295): the leader pulls FLAG_IDLE_IN_FORMATION
+// members into formation movement on its idle-path legs, with
+// (FollowAngle + pi) per the C++ comment.
 func (s *Server) formationLeaderStartedMoving(ctx context.Context, motion *creatureMotion, now time.Time) {
 	s.ensureFormationsLoaded(ctx)
 	s.formationMu.RLock()

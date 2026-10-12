@@ -2910,6 +2910,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.MoveType == 2 && len(motion.Points) == 0 {
 		return
 	}
+	// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:273):
+	// a formation leader starts its waypoint leg only when
+	// IsFormationLeaderMoveAllowed — no other alive member engaged or
+	// returning home (see canFormationLeaderStartMoving). The gate sits
+	// before the waypoint index advances, so a blocked leader retries the
+	// same node on the next tick. Random/idle legs carry no such gate.
+	if motion.MoveType == 2 && !s.canFormationLeaderStartMoving(ctx, motion) {
+		return
+	}
 	// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:126-132)
 	// and RandomMovementGenerator::DoUpdate (RandomMovementGenerator.cpp:204-210):
 	// UNIT_STATE_NOT_MOVE (or LOST_CONTROL) / a preventing cast interrupts the
