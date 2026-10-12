@@ -2764,6 +2764,23 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
+	if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 {
+		// Unit::CalculateSpellDamageTaken (Unit.cpp:1002-1006): the
+		// physical-school armor arm runs for pet casters too. A null
+		// spellInfo runs the arm in C++, so an unknown spell runs it here;
+		// the 270 affect gate needs the spell row and is skipped then.
+		var armorSpell wotlk.Spell
+		armorSpellKnown := false
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+				armorSpell, armorSpellKnown = sp, true
+			}
+		}
+		if !armorSpellKnown || armorSpell.Attributes&spellAttr0CUIgnoreArmor == 0 {
+			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), float64(target.Armor), armorSpell, armorSpellKnown)
+			damage = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
+		}
+	}
 	if damage > 0 && schoolMask > 1 {
 		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
 		// the live 22 flat amounts fold into a pet victim's resistances.
@@ -2774,10 +2791,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
 			victim.applyResilienceToDamage(true, &damage, false, CombatRatingCritTakenSpell)
 			if damage > 0 {
-				// Pet attackers carry no Go aura model, so the
-				// MOD_TARGET_ABSORB_SCHOOL (194) absorb-ignore arm
-				// (Unit.cpp:1839-1857) stays unbridged here.
-				absorbed, damage = victim.applyAbsorptionShields(damage, schoolMask)
+				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): max(194
+				// misc-masked pct, 245 ability pct affecting the cast
+				// spell) of the damage bypasses the victim's shields.
+				bypass := absorbIgnoreBypass(damage, s.server.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(caster), uint32(schoolMask), spellID))
+				absorbed, damage = victim.applyAbsorptionShields(damage-bypass, schoolMask)
+				damage += bypass
 			}
 		}
 	}

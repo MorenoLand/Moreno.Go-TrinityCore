@@ -160,10 +160,43 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		}
 	}
 	var absorbed, resisted uint32
+	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1132) arm order on the
+	// direct-spell path: victim-side taken pct legs (EffectSchoolDMG) run
+	// first, then the physical-school armor arm (Unit.cpp:1002-1006),
+	// then the DmgClass switch (crit — always false here, the inline path
+	// rolls no spell crits — plus resilience), then
+	// sScriptMgr->ModifySpellDamageTaken (Unit.cpp:1115-1117, the AutoBalance
+	// _Modifer_DealDamage hook, AutoBalance.cpp:236), and finally the
+	// CalcAbsorbResist tail (Unit.cpp:1121-1130: resist, then absorb).
+	// Unit::DealDamageMods (Unit.cpp:686) is the evade/flight zeroing arm,
+	// not a damage-modifier hook — it never fires on this path.
+	takenBlockRan := false
 	if p.Sess != nil && p.Sess.player != nil && damage > 0 {
+		takenBlockRan = true
 		if inlineSpellKnown {
 			damage = spellDamageBonusTaken(damage, inlineSpell, uint32(schoolMask), p.Sess, nil)
 		}
+		// Unit::IsDamageReducedByArmor (Unit.cpp:1618-1625): physical
+		// schools only, skipped by SPELL_ATTR0_CU_IGNORE_ARMOR; a null
+		// spellInfo runs the arm, so an unknown spell does too. The
+		// SPELLMOD_IGNORE_ARMOR / player-ARP / npcbot legs are
+		// player-or-bot-gated in C++ — a creature caster gets none.
+		if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 &&
+			(!inlineSpellKnown || inlineSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
+			armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(motion), float64(p.Sess.player.Armor), inlineSpell, inlineSpellKnown)
+			damage = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, damage)
+		}
+		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079,
+		// 1105): Unit::CanApplyResilience (Unit.cpp:12333) runs on the
+		// caster — a wild creature's owner is no player, so wild casts
+		// never reduce the victim by resilience; a player-owned motion
+		// (pet/charm) does.
+		if damage > 0 && motion != nil && motion.OwnerGUID != 0 {
+			p.Sess.applyResilienceToDamage(true, &damage, false, CombatRatingCritTakenSpell)
+		}
+		// ModifySpellDamageTaken: the AutoBalance damage multiplier scales
+		// the post-switch damage, ahead of the resist/absorb tail.
+		damage = s.autoBalanceModifyDealDamage(motion, p.Sess, damage)
 		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060) resistance leg:
 		// partial resists run for magic schools only; the creature caster
 		// carries no ignore-resist model, so the ignored pct is 0 (the pet
@@ -171,32 +204,18 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		if damage > 0 && schoolMask > 1 {
 			resisted, damage = calcMagicSpellResistance(damage, schoolMask, p.Sess.player.Resistances, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, false, false, 0)
 		}
-		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079,
-		// 1105): Unit::CanApplyResilience (Unit.cpp:12333) runs on the
-		// caster — a wild creature's owner is no player, so wild casts
-		// never reduce the victim by resilience; a player-owned motion
-		// (pet/charm) does. isCrit is false — the inline path rolls no
-		// spell crits, like the pet path.
-		if damage > 0 && motion != nil && motion.OwnerGUID != 0 {
-			p.Sess.applyResilienceToDamage(true, &damage, false, CombatRatingCritTakenSpell)
-		}
-		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857) absorb leg: the
-		// caster's MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses
-		// the victim's shields — the creature-caster analog of the player
-		// path's absorbIgnorePctForSpell; the 245 ability arm has no
-		// creature affect-mask model and stays a noted edge. Physical
-		// schools keep the standing armor-leg edge (no armor arm on
-		// creature-cast paths).
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857) absorb leg: max(194
+		// misc-masked pct, 245 ability pct affecting the cast spell) of the
+		// damage bypasses the victim's shields.
 		if damage > 0 {
-			bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(creatureAuraKeyForMotion(motion), uint32(schoolMask)))
+			bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(motion), uint32(schoolMask), spellID))
 			absorbed, damage = p.Sess.applyAbsorptionShields(damage-bypass, schoolMask)
 			damage += bypass
 		}
 	}
-	// Unit::DealDamageMods (Spell.cpp:2541): AutoBalance's
-	// ModifySpellDamageTaken hook runs after the taken-mitigation block,
-	// on the post-mitigation damage — not on the raw roll.
-	damage = s.autoBalanceModifyDealDamage(motion, p.Sess, damage)
+	if !takenBlockRan {
+		damage = s.autoBalanceModifyDealDamage(motion, p.Sess, damage)
+	}
 	overkill := uint32(0)
 	// Spell::EffectHealthLeech leech basis (SpellEffects.cpp:1539-1540):
 	// the damage the target actually lost — overkill excluded, post-absorb

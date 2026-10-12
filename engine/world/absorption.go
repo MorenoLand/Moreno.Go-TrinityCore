@@ -230,6 +230,71 @@ func (s *Server) creatureAbsorbIgnorePctForSpell(key creatureAuraKey, schoolMask
 	return float64(pct)
 }
 
+// creatureIgnoreTargetResistArmorForSpell mirrors the creature-attacker arms
+// of Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650) on the direct-spell
+// path (non-null spellInfo): the attacker's SPELL_AURA_MOD_TARGET_RESISTANCE
+// (123) NORMAL-misc flat sum lands on the victim's armor first, then each
+// SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST (270) NORMAL-misc effect whose
+// granting spell affects the cast spell, then each
+// SPELL_AURA_MOD_IGNORE_TARGET_RESIST (269) NORMAL-misc effect (no affect
+// gate), shrinks it by floor(armor*(100-amount)/100) per effect. The
+// SPELLMOD_IGNORE_ARMOR leg is player-only (a creature has no spell mod
+// owner), and the rating/280 armor-penetration leg is TYPEID_PLAYER-gated in
+// C++ — a creature caster gets neither. An unknown spell skips the 270
+// affect gate (the 194-side fallback convention).
+func (s *Server) creatureIgnoreTargetResistArmorForSpell(key creatureAuraKey, armor float64, spell wotlk.Spell, spellKnown bool) float64 {
+	if armor <= 0 {
+		return armor
+	}
+	var flat int32
+	for _, amount := range s.creatureAuraTypeAmountsByMiscMask(key, spellAuraModTargetResistance, spellSchoolMaskNormal) {
+		flat += amount
+	}
+	armor += float64(flat)
+	if spellKnown && s != nil && s.Data != nil {
+		s.auraMu.Lock()
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			auraSpell, found, err := s.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, effect := range auraSpell.Effects {
+				if effect.Aura != spellAuraModAbilityIgnoreTargetResist || aura.EffectMask&(1<<uint(index)) == 0 {
+					continue
+				}
+				if uint32(effect.MiscValue)&spellSchoolMaskNormal == 0 {
+					continue
+				}
+				if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+					continue
+				}
+				amount := int32(0)
+				if index < len(aura.Amounts) {
+					amount = aura.Amounts[index]
+				}
+				if amount == 0 {
+					amount = int32(aura.Amount)
+				}
+				if amount == 0 {
+					amount = effect.BasePoints
+				}
+				armor = math.Floor(armor * (100 - float64(amount)) / 100)
+			}
+		}
+		s.auraMu.Unlock()
+	}
+	for _, amount := range s.creatureAuraTypeAmountsByMiscMask(key, spellAuraModIgnoreTargetResist, spellSchoolMaskNormal) {
+		armor = math.Floor(armor * (100 - float64(amount)) / 100)
+	}
+	if armor < 0 {
+		armor = 0
+	}
+	return armor
+}
+
 // absorbIgnoreBypass returns the portion of damage that runs past the
 // victim's absorb shields under the attacker's absorb-ignore pct (the
 // CalculatePct arm of Unit::CalcAbsorbResist, Unit.cpp:1853-1855).
