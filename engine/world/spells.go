@@ -33208,12 +33208,11 @@ func (s *session) handleEffectSanctuary(ctx context.Context, hitTargets []uint64
 				isDungeon = entry.IsDungeon()
 			}
 			if !isDungeon {
+				// CombatStop(false, false) (SpellEffects.cpp:3767): the
+				// in-combat flag clear and the AtExitCombat LEAVE_COMBAT
+				// strip ride inside stopPlayerCombat now.
 				targetSess.stopPlayerCombat()
 				s.server.evadeCreaturesTargeting(ctx, targetSess.player.Map, targetSess.player.InstanceID, targetGUID)
-				if targetSess.player.UnitFlags&unitFlagInCombat != 0 {
-					targetSess.player.UnitFlags &^= unitFlagInCombat
-					targetSess.sendPlayerUpdate()
-				}
 				continue
 			}
 		}

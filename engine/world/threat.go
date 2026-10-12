@@ -1009,7 +1009,11 @@ func (s *Server) removeThreatVictimFromAllLists(mapID, instanceID uint32, victim
 // TELE_TO_NOT_LEAVE_COMBAT (Player.h:666) site — blink/GO/transport/boss-mechanic
 // teleports have no Go analog routing through teleportTo — so the stop is
 // unconditional here, matching C++ for every Go caller (incl. Hearthstone, whose
-// TELE_TO_SPELL still drops combat at Player.cpp:1753).
+// TELE_TO_SPELL still drops combat at Player.cpp:1753). The exit leg also
+// carries CombatManager::UpdateOwnerCombatState (CombatManager.cpp): the
+// in-combat flag clears and Unit::AtExitCombat (Unit.cpp:8964) strips
+// AURA_INTERRUPT_FLAG_LEAVE_COMBAT auras, both gated on the flag being set
+// (C++ runs AtExitCombat only on an actual combat-state flip).
 func (s *session) stopPlayerCombat() {
 	if s == nil || s.player == nil || s.server == nil {
 		return
@@ -1019,6 +1023,18 @@ func (s *session) stopPlayerCombat() {
 		victim := s.attackTarget
 		s.attackTarget = 0
 		_ = s.sendAttackStop(victim, false)
+	}
+	// CombatManager::UpdateOwnerCombatState (CombatManager.cpp) exit leg:
+	// leaving combat clears UNIT_FLAG_IN_COMBAT and runs Unit::AtExitCombat
+	// (Unit.cpp:8964), which strips AURA_INTERRUPT_FLAG_LEAVE_COMBAT auras
+	// (RemoveAurasWithInterruptFlags). The flag itself is the flip gate —
+	// C++ only runs AtExitCombat when the combat state actually changes
+	// (combatState != IsInCombat()), so a non-combat logout/teleport strips
+	// nothing. AtDisengage is a no-op virtual (Unit.h:1792).
+	if s.player.UnitFlags&unitFlagInCombat != 0 {
+		s.player.UnitFlags &^= unitFlagInCombat
+		s.sendPlayerUpdate()
+		s.removeAurasWithInterruptFlags(auraInterruptFlagLeaveCombat)
 	}
 	// Unit::AttackStop (Unit.cpp:5774-5778) interrupts CURRENT_MELEE_SPELL:
 	// a queued on-next-swing spell does not survive leaving combat.
