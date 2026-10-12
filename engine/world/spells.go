@@ -19731,6 +19731,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	wasHover := false
 	wasFeignDeath := false
 	wasWaterBreathing := false
+	wasConvertRune := false
 	wasUnattackable := false
 	wasAllowOnlyAbility := false
 	wasForcedReaction := false
@@ -19845,6 +19846,9 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			// the aura-derived state queries below must not see the removed aura.
 			wasFeignDeath = aura.AuraType == spellAuraFeignDeath
 			wasWaterBreathing = s.activeAuraHasEffect(aura, spellAuraWaterBreathing)
+			// AuraEffect::HandleAuraConvertRune remove leg
+			// (SpellAuraEffects.cpp:4876-4877): captured before Stopped is set.
+			wasConvertRune = s.activeAuraHasEffect(aura, spellAuraConvertRune)
 			// AuraEffect::HandleModUnattackable remove leg
 			// (SpellAuraEffects.cpp:2262-2264): UNIT_FLAG_NON_ATTACKABLE_2
 			// clears only when no other 93 aura remains.
@@ -20124,6 +20128,12 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// the player is still swimming.
 	if wasWaterBreathing && s.player != nil {
 		s.refreshBreathMirrorTimer()
+	}
+	// AuraEffect::HandleAuraConvertRune remove leg
+	// (SpellAuraEffects.cpp:4876-4877): slots the aura converted revert to
+	// base when no other 249 source remains.
+	if wasConvertRune {
+		s.removeConvertRuneAura(spellID)
 	}
 	if wasForcedReaction {
 		_ = s.sendForcedReactions()
@@ -22543,6 +22553,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		dispelAurasOnImmunityApply(targetSess, spell, eff)
 		if eff.Aura == spellAuraModParryPercent {
 			targetSess.updatePlayerParryPercentage(targetSess.player, targetSess.player.Level)
+		}
+		// AuraEffect::HandleAuraConvertRune apply leg
+		// (SpellAuraEffects.cpp:4847-4875).
+		if eff.Aura == spellAuraConvertRune {
+			targetSess.applyConvertRuneAura(eff, amount)
 		}
 		if eff.Aura == spellAuraFakeInebriation {
 			targetSess.player.FakeInebriation += amount

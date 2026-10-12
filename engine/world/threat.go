@@ -1035,6 +1035,13 @@ func (s *session) stopPlayerCombat() {
 		s.player.UnitFlags &^= unitFlagInCombat
 		s.sendPlayerUpdate()
 		s.removeAurasWithInterruptFlags(auraInterruptFlagLeaveCombat)
+		// Player::AtExitCombat (Player.cpp:24573-24577): Death Knight rune
+		// grace windows reset on leaving combat.
+		if s.player.Class == classDeathKnight && s.runes != nil {
+			for i := range s.runes.graceStartMs {
+				s.runes.graceStartMs[i] = -1
+			}
+		}
 	}
 	// Unit::AttackStop (Unit.cpp:5774-5778) interrupts CURRENT_MELEE_SPELL:
 	// a queued on-next-swing spell does not survive leaving combat.

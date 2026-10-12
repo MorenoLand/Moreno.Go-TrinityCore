@@ -35,20 +35,29 @@ const (
 // dkRuneState mirrors Player::m_runes (Player.h:286): per-slot base and
 // current rune types plus the cooldown end timestamp (Unix ms). Rune
 // cooldowns are session-transient like in C++; they reset on login.
+// graceStartMs is the m_runeGraceCooldown window (Player.cpp:1334-1344,
+// 24855-24869): the Unix-ms moment the slot's current ready stretch began;
+// -1 means no window (C++ 0xFFFFFFFF: init and exit-combat states). While a
+// rune sits ready, grace banks up to 2500ms, and an in-combat spend shaves
+// the banked grace off the new cooldown.
 type dkRuneState struct {
 	base          [maxRunes]uint8
 	current       [maxRunes]uint8
 	cooldownEndMs [maxRunes]int64
+	graceStartMs  [maxRunes]int64
 	lastUsed      uint8
 }
 
-// dkBaseRuneTypes resolves the base rune layout for a Death Knight:
+// dkLoginCurrentRuneTypes resolves the Death Knight's CURRENT rune layout at login:
 // {blood, blood, unholy, unholy, frost, frost} adjusted by learned
 // SPELL_AURA_CONVERT_RUNE passives (Blood of the North / Reaping /
-// Death Rune Mastery). This is the shared source for initRunes and the
-// SMSG_RESYNC_RUNES packet; the resolution logic previously lived inline
-// in sendResyncRunes.
-func (s *session) dkBaseRuneTypes() [maxRunes]uint8 {
+// Death Rune Mastery). C++ keeps base runes fixed (SetBaseRune runs only in
+// Player::InitRunes, Player.cpp:25008) and converts the CURRENT runes when
+// the passive auras apply (HandleAuraConvertRune, SpellAuraEffects.cpp:4847),
+// so this feeds current[] only; base[] stays the fixed layout and a spent
+// death rune reverts to its true base (RestoreBaseRune, Player.cpp:24904).
+// It runs on every player update build for the regen values and at init.
+func (s *session) dkLoginCurrentRuneTypes() [maxRunes]uint8 {
 	runeTypes := [maxRunes]uint8{runeBlood, runeBlood, runeUnholy, runeUnholy, runeFrost, runeFrost}
 	spells := append([]learnedSpell(nil), s.player.Spells...)
 	sort.Slice(spells, func(i, j int) bool { return spells[i].ID < spells[j].ID })
@@ -68,15 +77,42 @@ func (s *session) dkBaseRuneTypes() [maxRunes]uint8 {
 	return ResolveDeathKnightRuneTypes(runeTypes, passiveSpells)
 }
 
-// initRunes initializes the rune state for a Death Knight at login,
-// mirroring C++ where runes start ready with base types applied
-// (Player login path; Player::ResyncRunes sends the initial state).
+// initRunes initializes the rune state for a Death Knight at login.
+// Player::InitRunes (Player.cpp:24995-25014): base runes are the fixed slot
+// layout and never change afterwards (SetBaseRune has no other caller);
+// SPELL_AURA_CONVERT_RUNE passives convert the CURRENT runes when their
+// auras apply (HandleAuraConvertRune, SpellAuraEffects.cpp:4847-4875), which
+// at login — all runes ready — is exactly the dkLoginCurrentRuneTypes fold. A spent
+// death rune therefore reverts to its true base on a hit (RestoreBaseRune,
+// Player.cpp:24904-24922), instead of staying death forever.
 func (s *session) initRunes() {
 	if s.player == nil || s.player.Class != classDeathKnight {
 		return
 	}
-	base := s.dkBaseRuneTypes()
-	s.runes = &dkRuneState{base: base, current: base}
+	base := [maxRunes]uint8{runeBlood, runeBlood, runeUnholy, runeUnholy, runeFrost, runeFrost}
+	current := s.dkLoginCurrentRuneTypes()
+	rs := &dkRuneState{base: base, current: current}
+	for i := range rs.graceStartMs {
+		rs.graceStartMs[i] = -1
+	}
+	s.runes = rs
+}
+
+// runeGraceMs mirrors the m_runeGraceCooldown accumulation
+// (Player.cpp:1334-1344): grace banks while the rune sits ready, capped at
+// 2500ms. -1 is the C++ 0xFFFFFFFF no-window state (init / exit combat).
+func (rs *dkRuneState) runeGraceMs(i int, nowMs int64) int64 {
+	if rs == nil || i < 0 || i >= maxRunes || rs.graceStartMs[i] < 0 {
+		return 0
+	}
+	grace := nowMs - rs.graceStartMs[i]
+	if grace < 0 {
+		return 0
+	}
+	if grace > 2500 {
+		return 2500
+	}
+	return grace
 }
 
 // runeCooldownRemainingMs returns the remaining cooldown of a rune slot in
@@ -231,11 +267,27 @@ func (s *session) takeRunePower(ctx context.Context, spell wotlk.Spell, didHit b
 	}
 	maskBefore := s.runeReadyMask(nowMs)
 	setRuneCooldown := func(i int) {
-		if didHit {
-			rs.cooldownEndMs[i] = nowMs + s.runeBaseCooldownMsForSlot(i)
-		} else {
-			rs.cooldownEndMs[i] = nowMs + runeMissCooldownMs
+		cd := s.runeBaseCooldownMsForSlot(i)
+		if !didHit {
+			cd = runeMissCooldownMs
 		}
+		// Player::SetRuneCooldown grace arm (Player.cpp:24855-24869): a rune
+		// spent in combat shaves the banked grace — up to 2.5s accumulated
+		// while the rune sat ready — off the new cooldown, and the grace
+		// window restarts when the rune becomes ready again. Out-of-combat
+		// spends leave the window untouched (C++ arms it only inside
+		// casted && IsInCombat); the m_lastRuneGraceTimers write has no
+		// reader in the C++ tree, so Go keeps no twin.
+		if s.player.UnitFlags&unitFlagInCombat != 0 {
+			if grace := rs.runeGraceMs(i, nowMs); grace > 0 && cd > 0 {
+				if grace > cd {
+					grace = cd
+				}
+				cd -= grace
+			}
+			rs.graceStartMs[i] = nowMs + cd
+		}
+		rs.cooldownEndMs[i] = nowMs + cd
 	}
 	var runeCost [4]int32
 	for i := 0; i < runeDeath; i++ {
@@ -355,6 +407,12 @@ func (s *session) handleEffectActivateRune(spell wotlk.Spell, eff wotlk.SpellEff
 		// MiscValue current type -> SetRuneCooldown(j, 0).
 		if rs.runeCooldownRemainingMs(j, nowMs) > 0 && rs.current[j] == runeType {
 			rs.cooldownEndMs[j] = 0
+			// The rune became ready now: a grace window banked from the
+			// spend-time ready estimate restarts here — C++'s timer resumes
+			// accumulating once the rune is actually ready.
+			if rs.graceStartMs[j] > nowMs {
+				rs.graceStartMs[j] = nowMs
+			}
 			count--
 			changed = true
 		}
@@ -365,6 +423,9 @@ func (s *session) handleEffectActivateRune(spell wotlk.Spell, eff wotlk.SpellEff
 		for i := 0; i < maxRunes; i++ {
 			if rs.runeCooldownRemainingMs(i, nowMs) > 0 && rs.base[i] == runeFrost {
 				rs.cooldownEndMs[i] = 0
+				if rs.graceStartMs[i] > nowMs {
+					rs.graceStartMs[i] = nowMs
+				}
 				changed = true
 			}
 		}
@@ -372,4 +433,111 @@ func (s *session) handleEffectActivateRune(spell wotlk.Spell, eff wotlk.SpellEff
 	if changed {
 		s.sendRuneCooldownUpdate()
 	}
+}
+
+// applyConvertRuneAura mirrors AuraEffect::HandleAuraConvertRune's apply leg
+// (SpellAuraEffects.cpp:4847-4875): up to amount runes whose CURRENT type is
+// the effect's MiscValue and which are not on cooldown convert to MiscValueB.
+// The DK-class gate mirrors the ToPlayer/CLASS_DEATH_KNIGHT checks. C++
+// notifies each conversion with SMSG_CONVERT_RUNE, which Go has no opcode
+// for — the ResyncRunes push below carries the same current-type state.
+func (s *session) applyConvertRuneAura(eff wotlk.SpellEffect, amount uint32) {
+	if s == nil || s.player == nil || s.player.Class != classDeathKnight || s.runes == nil {
+		return
+	}
+	nowMs := time.Now().UnixMilli()
+	rs := s.runes
+	remaining := amount
+	from, to := uint8(eff.MiscValue), uint8(eff.MiscValueB)
+	changed := false
+	for i := 0; i < maxRunes && remaining > 0; i++ {
+		if rs.current[i] != from || rs.runeCooldownRemainingMs(i, nowMs) > 0 {
+			continue
+		}
+		rs.current[i] = to
+		remaining--
+		changed = true
+	}
+	if changed {
+		s.sendRuneCooldownUpdate()
+	}
+}
+
+// removeConvertRuneAura mirrors the remove leg (SpellAuraEffects.cpp:4876-4877)
+// through Player::RemoveRunesByAuraEffect (Player.cpp:24893-24901): slots the
+// aura converted revert to their base type. C++ tracks per-slot convert auras
+// and reverts only when none remain; Go keeps no such set, so a slot reverts
+// only when no other still-present 249 source converts the same source type
+// to the same target type.
+func (s *session) removeConvertRuneAura(spellID uint32) {
+	if s == nil || s.player == nil || s.player.Class != classDeathKnight || s.runes == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	rs := s.runes
+	changed := false
+	for _, eff := range spell.Effects {
+		if eff.Aura != spellAuraConvertRune {
+			continue
+		}
+		from, to := uint8(eff.MiscValue), uint8(eff.MiscValueB)
+		for i := 0; i < maxRunes; i++ {
+			if rs.current[i] != to || rs.base[i] != from {
+				continue
+			}
+			if s.hasOtherConvertRuneSource(spellID, from, to) {
+				continue
+			}
+			rs.current[i] = rs.base[i]
+			changed = true
+		}
+	}
+	if changed {
+		s.sendRuneCooldownUpdate()
+	}
+}
+
+// hasOtherConvertRuneSource reports whether a 249 conversion from→to is still
+// provided by something other than the aura being removed: another active 249
+// aura, or a still-learned convert-rune passive (C++ keeps such passives in
+// the slot's ConvertAuras set; Go baked them into current[] at login, so the
+// learned-spell scan is the twin of that set).
+func (s *session) hasOtherConvertRuneSource(excludeSpellID uint32, from, to uint8) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.activeAuras {
+		if aura == nil || aura.Stopped || aura.SpellID == excludeSpellID {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for _, eff := range spell.Effects {
+			if eff.Aura == spellAuraConvertRune && uint8(eff.MiscValue) == from && uint8(eff.MiscValueB) == to {
+				return true
+			}
+		}
+	}
+	if s.player != nil {
+		for _, learned := range s.player.Spells {
+			if !learned.Active || learned.Disabled || learned.ID == excludeSpellID {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(learned.ID)
+			if err != nil || !found || spell.Attributes&spellAttributePassive == 0 {
+				continue
+			}
+			for _, eff := range spell.Effects {
+				if eff.Aura == spellAuraConvertRune && uint8(eff.MiscValue) == from && uint8(eff.MiscValueB) == to {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
