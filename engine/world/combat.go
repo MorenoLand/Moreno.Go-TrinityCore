@@ -741,7 +741,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	canParry := target.Level >= 10 || isPlayerVictim
 	canDodge := true
 	var critReductionBP int32
+	// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the victim-side
+	// crit-taken arms. victimFlatCritTakenBP carries the pre-resilience
+	// SPELL_AURA_MOD_ATTACKER_MELEE/RANGED_CRIT_CHANCE (187/188) total plus the
+	// caster-matched SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) total;
+	// victimSpellWeaponCritBP carries the post-resilience
+	// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197) total.
+	var victimFlatCritTakenBP, victimSpellWeaponCritBP int32
 	victimDodgeBP := int32(-1)
+	// The attacker's melee crit bonus (GetUnitCriticalChanceDone's player arm,
+	// Unit.cpp:2823-2834) folds into the resilience base below: C++ applies
+	// ApplyResilience to critDone + the 187/308 flats (Unit.cpp:2871).
+	critBonusBP := int32(math.Round(s.getMeleeCritPct() * 100))
 	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance read the victim's
 	// PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE (Unit.cpp:2712/2788);
 	// -1 keeps the legacy 5%-base fallback.
@@ -752,9 +763,19 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		vicSess = s.server.findSessionByGUID(target.GUID)
 		if vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.CanBlock && vicSess.player.Block > 0
-			critChanceBP := int32(500)
-			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &critChanceBP)
-			critReductionBP = 500 - critChanceBP
+			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2861-2875): the
+			// victim's SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE (187) total
+			// and the caster-matched SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER
+			// (308) total join the resilience base; resilience reduces
+			// critDone + those flats, and
+			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// applies after it.
+			victimFlatCritTakenBP = int32(math.Round(float64(vicSess.playerAuraModifier(spellAuraModAttackerMeleeCritChance))*100)) +
+				int32(math.Round(vicSess.victimCritChanceForCaster(s.playerGUID)*100))
+			resilBaseBP := int32(500) + critBonusBP + victimFlatCritTakenBP
+			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
+			critReductionBP = int32(500) + critBonusBP + victimFlatCritTakenBP - resilBaseBP
+			victimSpellWeaponCritBP = int32(math.Round(float64(vicSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
 			// Gt-based dodge (Unit::GetUnitDodgeChance reads the victim's
 			// PLAYER_DODGE_PERCENTAGE, Unit.cpp:2667).
 			victimDodgeBP = int32(math.Round(float64(vicSess.player.DodgePercentage) * 100))
@@ -816,6 +837,16 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			} else {
 				victimParryBonusBP = s.server.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
 			}
+			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
+			// victim's SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE (187) total
+			// and caster-matched SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308)
+			// total are pre-resilience; C++ ApplyResilience no-ops for a
+			// creature victim without a player owner, so no resilience here;
+			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// applies after resilience.
+			victimFlatCritTakenBP = creatureAuraModifierSum(s.server, victimKey, spellAuraModAttackerMeleeCritChance)*100 +
+				int32(math.Round(creatureVictimCritChanceForCaster(s.server, victimKey, s.playerGUID)*100))
+			victimSpellWeaponCritBP = creatureAuraModifierSum(s.server, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
 			// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the victim's
 			// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base for
 			// creature victims (totems gated above, like the parry arm).
@@ -845,7 +876,6 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 
 	if s.player.Level > 0 {
 		hitBonusBP := int32(math.Round(s.getMeleeHitPct() * 100))
-		critBonusBP := int32(math.Round(s.getMeleeCritPct() * 100))
 		expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct(ctx, attType) * 100))
 		// SPELL_AURA_MOD_HIT_CHANCE (54) on the attacker and
 		// SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE (184) on the victim fold
@@ -863,7 +893,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// has nonzero crit chance. player.StandState is the Go analog of
 		// UNIT_FIELD_BYTES_1 stand state (0 = stand).
 		victimSitting := isPlayerVictim && vicSess != nil && vicSess.player != nil && vicSess.player.StandState != 0
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, victimSitting, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, victimSitting, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -1476,6 +1506,17 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	canBlock := false
 	canDodge := true
 	var critReductionBP int32
+	// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the victim-side
+	// crit-taken arms — victimFlatCritTakenBP is the pre-resilience
+	// SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE (188) total plus the
+	// caster-matched SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) total;
+	// victimSpellWeaponCritBP is the post-resilience
+	// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197) total.
+	var victimFlatCritTakenBP, victimSpellWeaponCritBP int32
+	// The attacker's ranged crit bonus (GetUnitCriticalChanceDone's player
+	// arm, Unit.cpp:2830-2832) folds into the resilience base: C++ applies
+	// ApplyResilience to critDone + the 188/308 flats (Unit.cpp:2871).
+	critBonusBP := int32(math.Round(s.getRangedCritPct() * 100))
 	victimDodgeBP := int32(-1)
 	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance read the victim's
 	// PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE (Unit.cpp:2712/2788);
@@ -1490,9 +1531,19 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.CanBlock && vicSess.player.Block > 0
-			critChanceBP := int32(500)
-			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenRanged, &critChanceBP)
-			critReductionBP = 500 - critChanceBP
+			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2861-2875): the
+			// victim's SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE (188)
+			// total and the caster-matched
+			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) total join the
+			// resilience base (critDone + flats, Unit.cpp:2871);
+			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// applies after resilience.
+			victimFlatCritTakenBP = int32(math.Round(float64(vicSess.playerAuraModifier(spellAuraModAttackerRangedCritChance))*100)) +
+				int32(math.Round(vicSess.victimCritChanceForCaster(s.playerGUID)*100))
+			resilBaseBP := int32(500) + critBonusBP + victimFlatCritTakenBP
+			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenRanged, &resilBaseBP)
+			critReductionBP = int32(500) + critBonusBP + victimFlatCritTakenBP - resilBaseBP
+			victimSpellWeaponCritBP = int32(math.Round(float64(vicSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
 			victimDodgeBP = int32(math.Round(float64(vicSess.player.DodgePercentage) * 100))
 			victimParryBP = int32(math.Round(float64(vicSess.player.ParryPercentage) * 100))
 			victimBlockBP = int32(math.Round(float64(vicSess.player.BlockPercentage) * 100))
@@ -1505,6 +1556,18 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	if !isPlayerVictim && s.server != nil {
 		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && !s.server.isTotemGUID(target.GUID) {
 			victimDodgeBonusBP = s.server.creatureAuraTypeSum(creatureAuraKeyForTarget(target), spellAuraModDodgePercent) * 100
+			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
+			// victim's SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE (188)
+			// total and caster-matched
+			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) total are
+			// pre-resilience; C++ ApplyResilience no-ops for a creature
+			// victim without a player owner, so no resilience here;
+			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// applies after resilience.
+			victimKey := creatureAuraKeyForTarget(target)
+			victimFlatCritTakenBP = creatureAuraModifierSum(s.server, victimKey, spellAuraModAttackerRangedCritChance)*100 +
+				int32(math.Round(creatureVictimCritChanceForCaster(s.server, victimKey, s.playerGUID)*100))
+			victimSpellWeaponCritBP = creatureAuraModifierSum(s.server, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
 		}
 		// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the whole creature
 		// arm is gated on !victim->IsTotem() — totems never dodge.
@@ -1542,7 +1605,6 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		}
 	}
 	hitBonusBP := int32(math.Round(s.getRangedHitPct() * 100))
-	critBonusBP := int32(math.Round(s.getRangedCritPct() * 100))
 	// Player::GetExpertiseDodgeOrParryReduction (Player.cpp:5540) returns 0
 	// for RANGED_ATTACK — expertise never reduces dodge/parry on ranged
 	// attacks (Unit::RollRangedOutcomeAgainst has no expertise arm).
@@ -1568,7 +1630,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			victimSitting = true
 		}
 	}
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, victimSitting, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, victimSitting, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -2665,6 +2727,22 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // GetUnitDodgeChance adds the victim's 49 total to the 5% base
 // (Unit.cpp:2676-2681). Absent means none. (Slots [9]/[10] are the player
 // victim's derived parry/block percentages.)
+// [12] victimFlatCritTakenBP (optional): the victim's pre-resilience crit-taken
+// flat in basis points — SPELL_AURA_MOD_ATTACKER_MELEE/RANGED_CRIT_CHANCE
+// (187/188) total plus the caster-matched SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER
+// (308) total (Unit::GetUnitCriticalChanceTaken, Unit.cpp:2861-2867). C++ adds
+// these before ApplyResilience, so callers fold them into the resilience base
+// when computing [0]. Signed; absent means none.
+// [13] victimSpellWeaponCritBP (optional): the victim's
+// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197) total in basis
+// points — C++ applies it after resilience (Unit.cpp:2875). Signed; absent
+// means none.
+// [14] attackerCritAdjustBP (optional): signed adjustment to the 5% crit base
+// in basis points — non-player attackers add their
+// SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) + SPELL_AURA_MOD_CRIT_PCT (290)
+// totals (Unit::GetUnitCriticalChanceDone, Unit.cpp:2839-2842), and
+// CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) zeroes the whole base, so callers pass
+// -500 plus the aura totals. Absent means none (player/pet callers).
 func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim, isPetVictim, attackerNoCrush, victimSitting bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
@@ -2744,6 +2822,23 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	victimBlockBP := int32(-1)
 	if len(modifiers) > 10 {
 		victimBlockBP = modifiers[10]
+	}
+	// Optional 13th/14th/15th modifiers: the victim-side crit-taken arms from
+	// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880) — the pre-resilience
+	// 187/188+308 flat [12], the post-resilience 197 total [13] — and the
+	// attacker's crit-base adjustment [14] (creature 52/290 auras, NO_CRIT
+	// zeroes the base). All signed basis points; absent means none.
+	victimFlatCritTakenBP := int32(0)
+	if len(modifiers) > 12 {
+		victimFlatCritTakenBP = modifiers[12]
+	}
+	victimSpellWeaponCritBP := int32(0)
+	if len(modifiers) > 13 {
+		victimSpellWeaponCritBP = modifiers[13]
+	}
+	attackerCritAdjustBP := int32(0)
+	if len(modifiers) > 14 {
+		attackerCritAdjustBP = modifiers[14]
 	}
 
 	leveldif := int32(victimLevel) - int32(attackerLevel)
@@ -2897,8 +2992,20 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	if critBonusBP > 0 {
 		critChance += critBonusBP
 	}
+	// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the victim-side
+	// 187/188 + 308 flat is added before resilience, the 197 total after it,
+	// then the defense-skill arm above; the roll clamps at zero like C++.
+	if victimFlatCritTakenBP != 0 {
+		critChance += victimFlatCritTakenBP
+	}
 	if critReductionBP > 0 {
 		critChance -= critReductionBP
+	}
+	if victimSpellWeaponCritBP != 0 {
+		critChance += victimSpellWeaponCritBP
+	}
+	if attackerCritAdjustBP != 0 {
+		critChance += attackerCritAdjustBP
 	}
 	if critChance < 0 {
 		critChance = 0

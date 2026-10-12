@@ -2720,7 +2720,34 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// a non-standing player victim always takes a crit when the attacker
 			// has nonzero crit chance.
 			victimSitting := isPlayerVictim && target.Sess != nil && target.Sess.player != nil && target.Sess.player.StandState != 0
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(creatureAuraKeyForMotion(motion)), victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseReductionBP(creatureAuraKeyForMotion(motion)), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+			// Unit::GetUnitCriticalChanceDone's creature arm (Unit.cpp:2836-2844):
+			// 5% base + SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) +
+			// SPELL_AURA_MOD_CRIT_PCT (290), gated on
+			// !CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) — the flag zeroes the
+			// whole base, so the adjustment is -500 plus the aura totals.
+			attackerKey := creatureAuraKeyForMotion(motion)
+			attackerCritAdjustBP := s.creatureAuraTypeSum(attackerKey, spellAuraModWeaponCritPercent)*100 +
+				s.creatureAuraTypeSum(attackerKey, spellAuraModCritPct)*100
+			if motion.FlagsExtra&0x00020000 != 0 {
+				attackerCritAdjustBP -= 500
+			}
+			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
+			// victim-side 187/308 flats (pre-resilience) and 197 total
+			// (post-resilience). A non-pet creature attacker cannot apply
+			// resilience (Unit::CanApplyResilience, Unit.cpp:12333), so the
+			// reduction stays 0 here.
+			var victimFlatCritTakenBP, victimSpellWeaponCritBP int32
+			if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
+				victimFlatCritTakenBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerMeleeCritChance))*100)) +
+					int32(math.Round(target.Sess.victimCritChanceForCaster(motion.GUID)*100))
+				victimSpellWeaponCritBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
+			} else if !isPlayerVictim {
+				victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
+				victimFlatCritTakenBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerMeleeCritChance)*100 +
+					int32(math.Round(creatureVictimCritChanceForCaster(s, victimKey, motion.GUID)*100))
+				victimSpellWeaponCritBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
+			}
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
 			if isPlayerVictim && target.Sess != nil {
 				if target.Sess.isImmuneToDamage(1) {
 					outcome = protocol.MeleeHitImmune

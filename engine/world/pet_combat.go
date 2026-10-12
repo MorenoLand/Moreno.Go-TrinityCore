@@ -795,6 +795,24 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	// -1 keeps the legacy 5%-base fallback.
 	victimParryBP := int32(-1)
 	victimBlockBP := int32(-1)
+	// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the victim-side
+	// crit-taken arms — victimFlatCritTakenBP is the pre-resilience
+	// SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE (187) total plus the
+	// caster-matched SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) total;
+	// victimSpellWeaponCritBP is the post-resilience
+	// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197) total.
+	// The pet attacker can apply resilience (Unit::CanApplyResilience,
+	// Unit.cpp:12333: owner is a player), so critReductionBP reduces the
+	// 500 + flat resilience base for player victims (and for pet victims
+	// through the owner's rating, per ApplyResilience's owner lookup).
+	var critReductionBP, victimFlatCritTakenBP, victimSpellWeaponCritBP int32
+	// Unit::GetUnitCriticalChanceDone's creature arm (Unit.cpp:2836-2844)
+	// zeroes the 5% base on CREATURE_FLAG_EXTRA_NO_CRIT (0x20000); the pet
+	// has no Go aura model, so only the flag arm bridges here.
+	var attackerCritAdjustBP int32
+	if motion.FlagsExtra&0x00020000 != 0 {
+		attackerCritAdjustBP = -500
+	}
 	if isTargetPlayer && targetSess != nil && targetSess.player != nil {
 		victimDodgeBP = int32(math.Round(float64(targetSess.player.DodgePercentage) * 100))
 		victimParryBP = int32(math.Round(float64(targetSess.player.ParryPercentage) * 100))
@@ -820,6 +838,15 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		canBlock = targetSess.player.CanBlock && targetSess.player.Block > 0
 		victimParryBonusBP = targetSess.totalAuraModifier(spellAuraModParryPercent) * 100
 		victimBlockBonusBP = targetSess.totalAuraModifier(spellAuraModBlockPercent) * 100
+		// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2861-2875): the 187
+		// total and the caster-matched 308 total join the resilience base
+		// (critDone + flats, Unit.cpp:2871); 197 applies after resilience.
+		victimFlatCritTakenBP = int32(math.Round(float64(targetSess.playerAuraModifier(spellAuraModAttackerMeleeCritChance))*100)) +
+			int32(math.Round(targetSess.victimCritChanceForCaster(motion.GUID)*100))
+		resilBaseBP := int32(500) + victimFlatCritTakenBP
+		targetSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
+		critReductionBP = int32(500) + victimFlatCritTakenBP - resilBaseBP
+		victimSpellWeaponCritBP = int32(math.Round(float64(targetSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
 		if attackerInFront := hasInArc(targetSess.player.Orientation, targetSess.player.X, targetSess.player.Y, motion.X, motion.Y, math.Pi); !attackerInFront && !targetSess.hasAuraType(spellAuraIgnoreHitDirection) {
 			canParry = false
 			canBlock = false
@@ -842,6 +869,15 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base
 			// (dodge is not arc-gated for creatures).
 			victimDodgeBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModDodgePercent) * 100
+			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
+			// victim's 187 total and caster-matched 308 total are
+			// pre-resilience; ApplyResilience no-ops for a creature victim
+			// without a player owner — the pet-victim case (owner lookup,
+			// Unit.cpp:12346) is handled below once the owner is known;
+			// 197 applies after resilience.
+			victimFlatCritTakenBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerMeleeCritChance)*100 +
+				int32(math.Round(creatureVictimCritChanceForCaster(s, victimKey, motion.GUID)*100))
+			victimSpellWeaponCritBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
 			inFront := hasInArc(vm.Orientation, vm.X, vm.Y, motion.X, motion.Y, math.Pi) ||
 				s.creatureAuraTypeSum(victimKey, spellAuraIgnoreHitDirection) != 0
 			if inFront && vm.FlagsExtra&0x00000004 == 0 {
@@ -865,13 +901,24 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	if !isTargetPlayer {
 		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil {
 			isPetVictim = vm.OwnerGUID != 0
+			// Unit::ApplyResilience's owner lookup (Unit.cpp:12342-12351):
+			// a player-owned pet victim takes crit-chance reduction from the
+			// owner's resilience rating, against an attacker that can apply
+			// it (the pet's owner is a player, Unit.cpp:12333).
+			if isPetVictim && vm.OwnerGUID != 0 {
+				if ownerSess := s.findSessionByGUID(vm.OwnerGUID); ownerSess != nil {
+					resilBaseBP := int32(500) + victimFlatCritTakenBP
+					ownerSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
+					critReductionBP = int32(500) + victimFlatCritTakenBP - resilBaseBP
+				}
+			}
 		}
 	}
 	// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
 	// a non-standing player victim always takes a crit when the attacker
 	// has nonzero crit chance.
 	victimSitting := isTargetPlayer && targetSess != nil && targetSess.player != nil && targetSess.player.StandState != 0
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, victimSitting, false, canBlock, canParry, canDodge, critReductionBP, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
 	if !isTargetPlayer && s.isCreatureEvadingInInstance(motion.Map, motion.InstanceID, targetGUID) {
 		// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
 		// victim in evade mode evades all melee swings.
@@ -882,7 +929,11 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
 	// (Unit.cpp:2694-2695) and the 240/4 dodge/parry-reduction arm
 	// (Unit::GetUnitDodgeChance's and GetUnitParryChance's creature arms,
-	// Unit.cpp:2700-2703/2756-2759) stay unbridged on this path.
+	// Unit.cpp:2700-2703/2756-2759) stay unbridged on this path, as do the
+	// pet's own 52/290 crit-done auras. The victim-side crit-taken arms
+	// (187/308 pre-resilience, 197 post-resilience, plus resilience itself —
+	// the pet's owner is a player, Unit::CanApplyResilience) ride the roll
+	// above.
 	// The roll's player/pet-attacker flag is true here: pets glance like
 	// players (Unit.cpp:2276) and, being player-controlled, never crush
 	// (Unit.cpp:2311).
