@@ -68,6 +68,11 @@ type activeTotem struct {
 	// newly acquired hostile, so the GUID is remembered until the totem
 	// has no hostile in range again.
 	LastPingVictim uint64
+	// LastVictimGUID is the TotemAI::_victimGUID twin (TotemAI.cpp:44,66-82):
+	// the damage totem remembers its acquired victim across pulses and reuses
+	// it while it is still attackable, in range, and hostile; only then does
+	// a new nearest-attackable search run.
+	LastVictimGUID uint64
 	// MagnetUsed marks a Grounding Totem whose SPELL_AURA_SPELL_MAGNET
 	// charge has been consumed by the SelectExplicitTargets redirect
 	// (WorldObject::GetMagicHitRedirectTarget, Object.cpp:3188-3217):
@@ -497,34 +502,64 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 
 	case TotemPulseAoEDamage:
 		if s.server != nil {
-			nearbyMobs := s.server.totemCreatureTargets(totem, float64(def.Radius))
+			// C++ twin: Totem::InitSummon triggered-casts the passive aura
+			// (Totem.cpp:115-117); its periodic ticks fire proc events with
+			// PROC_FLAG_DONE_PERIODIC/TAKEN_PERIODIC
+			// (SpellAuraEffects.cpp:5224), so no DISALLOW_PROC_EVENTS arm.
+			// The aura's damage effect targets enemies only, mirrored by
+			// the hostile filter below.
+			owner := totemOwnerPos(s)
 			dmg := uint32(75)
-			// C++ Totem::Update casts the pulse via CastSpell(..., true) =
-			// TRIGGERED_FULL_MASK (Totem.cpp:115), so DISALLOW_PROC_EVENTS applies.
-			s.triggeredNoProcEvents++
-			for _, m := range nearbyMobs {
+			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
+				if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+					continue
+				}
 				s.executeSpellDamage(ctx, m.GUID, def.PulseSpell, dmg, 0)
 			}
-			s.triggeredNoProcEvents--
 		}
 
 	case TotemPulseSingleTarget:
 		if s.server != nil {
-			var nearest *creatureMotion
-			minDist := float64(math.MaxFloat64)
-			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-				d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z)
-				if d < minDist {
-					minDist = d
-					nearest = m
+			// C++ twin: TotemAI::UpdateAI (TotemAI.cpp:53-82) — plain
+			// me->CastSpell(victim, GetSpell()), non-triggered, so proc
+			// events fire (no DISALLOW_PROC_EVENTS arm). The victim is
+			// remembered in _victimGUID and reused while still attackable,
+			// in range, and hostile; only then does a new
+			// nearest-attackable-unit search run (TotemAI.cpp:66-76).
+			owner := totemOwnerPos(s)
+			var victim *creatureMotion
+			totem.mu.Lock()
+			remembered := totem.LastVictimGUID
+			totem.mu.Unlock()
+			if remembered != 0 && remembered != totem.TotemGUID {
+				if m := s.server.findCreatureMotion(totem.Map, totem.InstanceID, remembered); m != nil && m.Health > 0 &&
+					distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+					s.server.isHostileFaction(m.Faction, owner) {
+					victim = m
 				}
 			}
+			if victim == nil {
+				minDist := float64(math.MaxFloat64)
+				for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
+					if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+						continue
+					}
+					if d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z); d < minDist {
+						minDist = d
+						victim = m
+					}
+				}
+			}
+			totem.mu.Lock()
+			if victim != nil {
+				totem.LastVictimGUID = victim.GUID
+			} else {
+				totem.LastVictimGUID = 0
+			}
+			totem.mu.Unlock()
 
-			if nearest != nil {
-				dmg := uint32(60)
-				s.triggeredNoProcEvents++
-				s.executeSpellDamage(ctx, nearest.GUID, def.PulseSpell, dmg, 0)
-				s.triggeredNoProcEvents--
+			if victim != nil {
+				s.executeSpellDamage(ctx, victim.GUID, def.PulseSpell, uint32(60), 0)
 			}
 		}
 
@@ -547,6 +582,15 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 	}
 }
 
+// totemOwnerPos builds the owner-side playerPos for totem pulse faction
+// checks. TotemAI::UpdateAI searches attackable units against
+// GetCharmerOrOwnerOrSelf() (TotemAI.cpp:71), and the passive damage auras
+// target enemies the same way; executeTotemPulse runs on the owner's
+// session, so the owner is the reference unit.
+func totemOwnerPos(s *session) playerPos {
+	return playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+}
+
 // sentryTotemPing bridges the sentry-totem arm of TotemAI::AttackStart
 // (TotemAI.cpp:84-96): when a hostile unit enters the sentry totem's aggro
 // range, the totem's owner receives MSG_MINIMAP_PING carrying the totem's
@@ -565,7 +609,7 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 	if s == nil || s.player == nil || totem == nil || s.server == nil {
 		return
 	}
-	owner := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	owner := totemOwnerPos(s)
 	var nearest *creatureMotion
 	minDist := float64(math.MaxFloat64)
 	for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
