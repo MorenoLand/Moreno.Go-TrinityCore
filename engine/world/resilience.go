@@ -126,6 +126,27 @@ func (s *session) applyResilienceToDamage(attackerIsPlayer bool, damage *uint32,
 	}
 }
 
+// ownerPlayerSessionOfMotion resolves the player session that owns the given
+// creature motion, or nil. Mirrors the C++ owner lookups behind
+// Unit::CanApplyResilience (Unit.cpp:12333, GetOwnerGUID().IsPlayer()) and the
+// victim side of Unit::ApplyResilience (Unit.cpp:12342-12350): charm does not
+// change the C++ owner field (UNIT_FIELD_SUMMONEDBY), so a charmed unit
+// resolves to its pre-charm owner, and a creature charmer resolves to nil
+// (its GUID is no player GUID).
+func (srv *Server) ownerPlayerSessionOfMotion(motion *creatureMotion) *session {
+	if srv == nil || motion == nil {
+		return nil
+	}
+	ownerGUID := motion.OwnerGUID
+	if motion.Charmed {
+		ownerGUID = motion.CharmOwnerGUID
+	}
+	if ownerGUID == 0 {
+		return nil
+	}
+	return srv.findSessionByGUID(ownerGUID)
+}
+
 // playerOwnerSessionOfCreature resolves the player session that owns the
 // creature with the given GUID, or nil for wild creatures. Backs both the
 // caster-side Unit::CanApplyResilience gate and the victim-side pet arm of
@@ -136,18 +157,7 @@ func (s *session) playerOwnerSessionOfCreature(guid uint64) *session {
 	if s == nil || s.server == nil || guid == 0 {
 		return nil
 	}
-	motion := s.findCreatureMotion(guid)
-	if motion == nil {
-		return nil
-	}
-	ownerGUID := motion.OwnerGUID
-	if motion.Charmed {
-		ownerGUID = motion.CharmOwnerGUID
-	}
-	if ownerGUID == 0 {
-		return nil
-	}
-	return s.server.findSessionByGUID(ownerGUID)
+	return s.server.ownerPlayerSessionOfMotion(s.findCreatureMotion(guid))
 }
 
 // casterCanApplyResilience mirrors Unit::CanApplyResilience (Unit.cpp:12333)

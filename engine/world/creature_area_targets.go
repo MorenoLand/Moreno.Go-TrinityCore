@@ -215,7 +215,10 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240): MAGIC
 			// takes 179 pre-resilience and 197 post, MELEE/RANGED take
 			// the GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
-			chance = s.creatureSpellCritChanceTaken(chance, p.Sess, creatureAuraKey{}, true, motion.GUID, motion.Level, uint32(p.Sess.player.Level), schoolMask, inlineSpell, true)
+			// Unit::CanApplyResilience (Unit.cpp:12333) runs on the caster:
+			// the owner must be a player — a creature-charmed caster
+			// resolves to nil here and skips the reduction.
+			chance = s.creatureSpellCritChanceTaken(chance, p.Sess, creatureAuraKey{}, true, motion.GUID, motion.Level, uint32(p.Sess.player.Level), schoolMask, inlineSpell, s.ownerPlayerSessionOfMotion(motion) != nil)
 			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
 				// Unit::SpellCriticalDamageBonus (Unit.cpp:7411-7449) /
@@ -234,10 +237,12 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		}
 		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079,
 		// 1105): Unit::CanApplyResilience (Unit.cpp:12333) runs on the
-		// caster — a wild creature's owner is no player, so wild casts
+		// caster — GetOwnerGUID().IsPlayer(), with charm resolving to the
+		// pre-charm owner (UNIT_FIELD_SUMMONEDBY). A wild creature's owner
+		// is no player, and neither is a creature charmer, so those casts
 		// never reduce the victim by resilience; a player-owned motion
-		// (pet/charm) does.
-		if damage > 0 && motion != nil && motion.OwnerGUID != 0 {
+		// (pet/charm/totem) does. The vehicle arm has no Go model.
+		if damage > 0 && motion != nil && s.ownerPlayerSessionOfMotion(motion) != nil {
 			// Unit::CalculateSpellDamageTaken (Unit.cpp:1079-1080): the
 			// MELEE/RANGED-DmgClass arm reduces by the melee/ranged taken
 			// rating, not the spell one (Unit.cpp:1105-1107 keeps

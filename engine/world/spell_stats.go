@@ -632,12 +632,14 @@ func (srv *Server) creatureSpellCritChanceTaken(doneChance float64, vicSess *ses
 	chance := doneChance * 100.0
 	// Unit::ApplyResilience (Unit.cpp:12342-12350): a creature victim owned
 	// by a player takes the owner's resilience — combat ratings live on
-	// player sessions only, so the owner session carries the reduction; wild
-	// creatures resolve to nil and skip it.
+	// player sessions only, so the owner session carries the reduction.
+	// Charm does not change the C++ owner field (UNIT_FIELD_SUMMONEDBY):
+	// a charmed pet victim resolves to its pre-charm owner, and a
+	// creature charmer resolves to nil — wild creatures skip it.
 	resilSess := vicSess
 	if !isPlayerVictim && srv != nil {
-		if motion := srv.findCreatureMotion(victimKey.Map, victimKey.InstanceID, victimKey.GUID); motion != nil && motion.OwnerGUID != 0 {
-			resilSess = srv.findSessionByGUID(motion.OwnerGUID)
+		if motion := srv.findCreatureMotion(victimKey.Map, victimKey.InstanceID, victimKey.GUID); motion != nil {
+			resilSess = srv.ownerPlayerSessionOfMotion(motion)
 		}
 	}
 	applyChanceResilience := func(cr uint8) {

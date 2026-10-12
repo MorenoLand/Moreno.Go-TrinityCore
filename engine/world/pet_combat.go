@@ -2834,7 +2834,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				// MAGIC takes 179 pre-resilience and 197 post, the
 				// resilience crit-chance reduction runs when the pet's
 				// owner is a player (CanApplyResilience,
-				// Unit.cpp:12333), and MELEE/RANGED take the
+				// Unit.cpp:12333 — the pre-charm owner: a creature-charmed
+				// pet resolves to nil and skips the reduction), and
+				// MELEE/RANGED take the
 				// GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
 				// Caster-side scripted arms (Shatter 849/910/911) read
 				// the caster's OVERRIDE_CLASS_SCRIPTS auras; pets carry
@@ -2844,7 +2846,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				if isPlayerVictim {
 					vicSess = s.server.findSessionByGUID(target.GUID)
 				}
-				chance = s.server.creatureSpellCritChanceTaken(chance, vicSess, creatureAuraKeyForTarget(target), isPlayerVictim, caster.GUID, caster.Level, uint32(target.Level), schoolMask, critSpell, caster.OwnerGUID != 0)
+				chance = s.server.creatureSpellCritChanceTaken(chance, vicSess, creatureAuraKeyForTarget(target), isPlayerVictim, caster.GUID, caster.Level, uint32(target.Level), schoolMask, critSpell, s.server.ownerPlayerSessionOfMotion(caster) != nil)
 			}
 			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
@@ -2888,9 +2890,16 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			resilCR = CombatRatingCritTakenMelee
 		}
 	}
+	// Unit::CalculateSpellDamageTaken (Unit.cpp:1079, 1105): the resilience
+	// arm runs only when the caster CanApplyResilience() (Unit.cpp:12333) —
+	// the pet's owner must be a player (pre-charm owner). The absorb leg
+	// below is NOT resilience-gated in C++ and stays outside the gate.
+	casterCanResil := s.server.ownerPlayerSessionOfMotion(caster) != nil
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
-			victim.applyResilienceToDamage(true, &damage, isCrit, resilCR)
+			if casterCanResil {
+				victim.applyResilienceToDamage(true, &damage, isCrit, resilCR)
+			}
 			if damage > 0 {
 				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): max(194
 				// misc-masked pct, 245 ability pct affecting the cast
@@ -2903,8 +2912,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	} else if ownerSess := s.playerOwnerSessionOfCreature(target.GUID); ownerSess != nil {
 		// Unit::ApplyResilience (Unit.cpp:12342-12350): a creature victim
 		// owned by a player takes the owner's damage resilience — same
-		// crit + damage reduction arms as the player-victim call above.
-		ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
+		// crit + damage reduction arms as the player-victim call above,
+		// still behind the caster's CanApplyResilience gate.
+		if casterCanResil {
+			ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
+		}
 	}
 	overkill := uint32(0)
 	if damage >= target.Health && target.Health > 0 {
