@@ -20184,6 +20184,39 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	if spellID == 50720 && removedCasterGUID != 0 {
 		s.unregisterRedirectThreatVictim(59665, removedCasterGUID)
 	}
+	// Aura::HandleAuraSpecificMods rogue remove arm (SpellAuras.cpp:1706-1709):
+	// removing Stealth (1784) strips the target's own rogue-family auras with
+	// SpellFamilyFlags[0] & 0x800 (the Vanish line), via the default mode.
+	// Vanish's own id is not 1784, so the strip cannot recurse.
+	if spellID == 1784 && s.player != nil && s.server != nil && s.server.Data != nil {
+		var vanishPurge []uint32
+		for _, aura := range s.loadedAuras() {
+			if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+				continue
+			}
+			sp, found, err := s.server.Data.Spell(aura.SpellID)
+			if err != nil || !found || sp.SpellFamilyName != spellFamilyRogue || sp.SpellFamilyFlags[0]&0x800 == 0 {
+				continue
+			}
+			vanishPurge = append(vanishPurge, aura.SpellID)
+		}
+		for _, id := range vanishPurge {
+			s.removeAuraWithMode(id, auraRemoveByDefault)
+		}
+	}
+	// Aura::HandleAuraSpecificMods warrior remove arm
+	// (SpellAuras.cpp:1592-1611): a Spell Reflection-line aura (warrior
+	// family, SpellFamilyFlags[1] & 0x2) removed by anything other than the
+	// default mode strips the same-line auras from every party member except
+	// the target when the SR caster has the Improved Spell Reflection dummy
+	// aura (warrior family, SpellIconID 1935, effect index 1). The strip
+	// uses the default mode, so this arm cannot recurse.
+	if mode != auraRemoveByDefault && s.player != nil && s.server != nil && s.server.Data != nil {
+		if rspell, found, rerr := s.server.Data.Spell(spellID); rerr == nil && found &&
+			rspell.SpellFamilyName == spellFamilyWarrior && rspell.SpellFamilyFlags[1]&0x2 != 0 {
+			s.improvedSpellReflectionPartyStrip(removedCasterGUID)
+		}
+	}
 	s.removeOwnerPetAurasForSpell(context.Background(), spellID)
 
 	if s.auras != nil {
@@ -20268,6 +20301,34 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	}
 	if wasInvisibility && s.player != nil && !s.hasAuraType(spellAuraInvisibility) {
 		s.player.AuraVision &^= playerAuraVisionInvis
+	}
+	// Aura::HandleAuraSpecificMods mage remove arm (SpellAuras.cpp:1581-1588):
+	// Invisibility (66) reaching its duration casts the Invisibility fade
+	// (32612) on the target and stops combat. The C++ cast carries the
+	// removed aura's effect-1 spellmods (CustomBasePointsMask), which Go's
+	// DBC-base apply path does not model — the fade applies with its DBC
+	// duration and base amount. No recursion: the fade's own id is not 66.
+	if spellID == 66 && mode == auraRemoveByExpire && s.player != nil && s.server != nil && s.server.Data != nil {
+		var fadeMs uint32
+		if fade, found, ferr := s.server.Data.Spell(32612); ferr == nil && found && fade.DurationIndex > 0 {
+			if dur, ok, derr := s.server.Data.SpellDuration(fade.DurationIndex, uint32(s.player.Level)); derr == nil && ok && dur > 0 {
+				fadeMs = uint32(dur)
+			}
+		}
+		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level)
+		// Unit::CombatStop(true) twin: interrupt the cast, stop the swing,
+		// clear the in-combat flag. The victim-side attacker clearing and
+		// the pet stop have no Go model (documented delta).
+		s.interruptCurrentCast()
+		if s.attackTarget != 0 {
+			victim := s.attackTarget
+			s.attackTarget = 0
+			_ = s.sendAttackStop(victim, false)
+		}
+		if s.player.UnitFlags&unitFlagInCombat != 0 {
+			s.player.UnitFlags &^= unitFlagInCombat
+			s.sendPlayerUpdate()
+		}
 	}
 	if wasTrackStealthed && s.player != nil && !s.hasAuraType(spellAuraTrackStealthed) {
 		s.player.PlayerFieldBytes &^= playerFieldByteTrackStealthed
@@ -23922,6 +23983,62 @@ func (s *session) applyAuraLinkedRemoveArms(spellID uint32, mode auraRemoveMode)
 	for _, id := range spellLinkedEffects(ctx, db, int32(spellID), spellLinkAuraType) {
 		if id > 0 {
 			s.removeAuraWithMode(uint32(id), mode)
+		}
+	}
+}
+
+// improvedSpellReflectionPartyStrip is the party-strip half of the
+// Spell Reflection remove arm of Aura::HandleAuraSpecificMods
+// (SpellAuras.cpp:1592-1611): when the SR aura's caster (srCasterGUID) has
+// the Improved Spell Reflection dummy aura (warrior family, SpellIconID
+// 1935, effect index 1 — Unit::GetDummyAuraEffect's iconId/effIndex pair,
+// Unit.h:1294), every party member except the aura target loses their
+// Spell Reflection-line auras (warrior family, flags[1] & 0x2) cast by the
+// SR caster. No-op when the caster is offline (the C++ `if (!caster)
+// break` arm); creature casters and offline party members stay documented
+// deltas.
+func (s *session) improvedSpellReflectionPartyStrip(srCasterGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || srCasterGUID == 0 || s.groupID == 0 {
+		return
+	}
+	casterSess := s.server.findSessionByGUID(srCasterGUID)
+	if casterSess == nil || casterSess.player == nil {
+		return
+	}
+	improved := false
+	for _, aura := range casterSess.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask&(1<<1) == 0 {
+			continue
+		}
+		sp, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || sp.SpellFamilyName != spellFamilyWarrior || sp.SpellIconID != 1935 {
+			continue
+		}
+		if len(sp.Effects) > 1 && sp.Effects[1].Aura == spellAuraDummy {
+			improved = true
+			break
+		}
+	}
+	if !improved {
+		return
+	}
+	for _, memSess := range s.server.getGroupSessions(s.groupID) {
+		if memSess == nil || memSess == s || memSess.player == nil {
+			continue
+		}
+		var strip []uint32
+		for _, aura := range memSess.loadedAuras() {
+			if aura == nil || aura.Stopped || aura.CasterGUID != srCasterGUID {
+				continue
+			}
+			sp, found, err := s.server.Data.Spell(aura.SpellID)
+			if err != nil || !found || sp.SpellFamilyName != spellFamilyWarrior || sp.SpellFamilyFlags[1]&0x2 == 0 {
+				continue
+			}
+			strip = append(strip, aura.SpellID)
+		}
+		for _, id := range strip {
+			memSess.removeAuraWithMode(id, auraRemoveByDefault)
 		}
 	}
 }
