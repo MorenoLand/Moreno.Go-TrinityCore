@@ -3193,8 +3193,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 
 	// Spellsteal check: SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126) fails at cast
 	// time when the target carries no stealable aura (Spell::CheckCast,
-	// Spell.cpp:5957-5984).
-	if failReason := s.checkStealPreCast(spell, targetGUID); failReason != 0 {
+	// Spell.cpp:5957-5984). Like the dispel arm above, this keys on
+	// m_targets.GetUnitTarget() — the wire unit target only. The s.selection
+	// fallback has no C++ analog at CheckCast time, so a missing wire unit
+	// target fails with SPELL_FAILED_BAD_TARGETS (Spell.cpp:5959), never
+	// scanning the selected unit's auras.
+	if failReason := s.checkStealPreCast(spell, wireUnitGUID); failReason != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to steal")
 		return true
