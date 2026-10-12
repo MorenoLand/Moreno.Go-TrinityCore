@@ -880,6 +880,28 @@ func isVampiricTouchSpell(spellID uint32) bool {
 
 // handleEffectDispel processes SPELL_EFFECT_DISPEL (38).
 // Mirrors TrinityCore Spell::EffectDispel (SpellEffects.cpp:2429-2531).
+// auraWireStackCount mirrors the stack-count wire field in
+// AuraApplication::BuildUpdatePacket (SpellAuras.cpp:241-242): the field
+// carries the spell's stack amount when the spell is stackable, else the
+// charge count — stack has priority over charges (checked on retail with
+// spell 50262). The full-list paths (auraUpdateRecords in player_auras.go,
+// the pet load path in pets.go) and the normal re-cast refresh
+// (spells.go) already apply this; the single-update dispel/steal paths
+// below must too, or a partial charge change on a stackable charge aura
+// shows the charge count where C++ keeps showing the stack amount.
+func auraWireStackCount(aura *activeAura) uint8 {
+	if aura == nil {
+		return 1
+	}
+	if aura.StackAmount > 0 {
+		if aura.StackCount == 0 {
+			return 1
+		}
+		return aura.StackCount
+	}
+	return aura.RemainingCharges
+}
+
 // rescaleAuraAmountsByStack mirrors the Aura::SetStackAmount recalc
 // (SpellAuras.cpp:1008) on the ModStackAmount stack-change paths: Go's aura
 // amounts are linear in the stack count (a fresh apply carries one stack's
@@ -921,9 +943,18 @@ func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
 			}
 		}
 		if dispelCharges {
-			if aura.RemainingCharges > 1 {
+			// Aura::ModCharges (SpellAuras.cpp:966-985): charges decrement
+			// only while the aura is using charges (m_procCharges != 0,
+			// SpellAuras.cpp:441) — a zero-charge ATTR7 aura is untouched
+			// by dispel/steal, with no client update. The aura is removed
+			// only when the decrement reaches zero; a 2->1 decrement
+			// survives with one charge.
+			if aura.RemainingCharges > 0 {
 				aura.RemainingCharges--
 				advanceAuraDuration(aura, time.Now())
+			} else {
+				ts.castMu.Unlock()
+				return false
 			}
 		} else if aura.StackCount > 1 {
 			// Aura::ModStackAmount(-1): the aura loses one stack and
@@ -936,14 +967,22 @@ func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
 	}
 	var slot uint8
 	var positive bool
-	var maxDuration, remaining, count uint32
+	var maxDuration, remaining uint32
+	var count uint8
+	removed := aura == nil
 	if aura != nil {
 		slot, positive = aura.Slot, aura.Positive
 		maxDuration, remaining = aura.DurationMs, aura.RemainingMs
 		if dispelCharges {
-			count = uint32(aura.RemainingCharges)
+			removed = aura.RemainingCharges == 0
 		} else {
-			count = uint32(aura.StackCount)
+			// A zero StackCount reads as a single stack (the
+			// auraUpdateRecords wire default), so ModStackAmount(-1) on
+			// it removes the aura.
+			removed = aura.StackCount <= 1
+		}
+		if !removed {
+			count = auraWireStackCount(aura)
 		}
 	}
 	ts.castMu.Unlock()
@@ -951,14 +990,11 @@ func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
 	if aura == nil {
 		return true
 	}
-	// A zero StackCount reads as a single stack (the auraUpdateRecords wire
-	// default), so ModStackAmount(-1) on it removes the aura.
-	if count <= 1 {
+	if removed {
 		ts.expirePlayerAura(spellID)
 		return true
 	}
-	// Charges ride the stack-count field of the aura update (player_auras.go).
-	ts.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, uint8(count))
+	ts.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, count)
 	return false
 }
 
@@ -984,8 +1020,17 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 			}
 		}
 		if dispelCharges {
-			if aura.RemainingCharges > 1 {
+			// Aura::ModCharges (SpellAuras.cpp:966-985): charges decrement
+			// only while the aura is using charges (m_procCharges != 0,
+			// SpellAuras.cpp:441) — a zero-charge ATTR7 aura is untouched
+			// by dispel/steal, with no client update. The aura is removed
+			// only when the decrement reaches zero; a 2->1 decrement
+			// survives with one charge.
+			if aura.RemainingCharges > 0 {
 				aura.RemainingCharges--
+			} else {
+				s.server.auraMu.Unlock()
+				return false
 			}
 		} else if aura.StackCount > 1 {
 			oldCount := uint32(aura.StackCount)
@@ -994,22 +1039,29 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 		}
 	}
 	var positive bool
-	var count uint32
+	var count uint8
+	removed := aura == nil
 	if aura != nil {
 		positive = aura.Positive
 		if dispelCharges {
-			count = uint32(aura.RemainingCharges)
+			removed = aura.RemainingCharges == 0
 		} else {
-			count = uint32(aura.StackCount)
+			// A zero StackCount reads as a single stack (the
+			// auraUpdateRecords wire default), so ModStackAmount(-1) on
+			// it removes the aura.
+			removed = aura.StackCount <= 1
+		}
+		if !removed {
+			count = auraWireStackCount(aura)
 		}
 	}
 	s.server.auraMu.Unlock()
 
-	if aura == nil || count <= 1 {
+	if aura == nil || removed {
 		s.expireCreatureAura(key, spellID, slot)
 		return true
 	}
-	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, s.playerGUID, slot, spellID, false, positive, 0, 0, 1, uint8(count))
+	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, s.playerGUID, slot, spellID, false, positive, 0, 0, 1, count)
 	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, nil)
 	return false
 }
@@ -1456,33 +1508,38 @@ func (s *session) foldPeriodicPeriodNoHaste(spell wotlk.Spell, eff wotlk.SpellEf
 // plain creature, unknown) degrades to the unmodded DBC base, like C++'s
 // null-caster path. Runs before rescheduleStolenAuraTick so the load-arm
 // phase uses the recomputed amplitude, exactly like C++.
-func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spell, spellKnown bool, victimFx *victimEffectState, victimCasterGUID uint64) {
-	if victimFx == nil || !spellKnown {
-		return
+// stolenCasterPeriodFold mirrors the AuraEffect::CalculatePeriodic amplitude
+// recompute (SpellAuraEffects.cpp:598-630) for a stolen aura: the DBC base
+// amplitude folds the ORIGINAL caster's current SPELLMOD_ACTIVATION_TIME and
+// haste (foldPeriodicPeriod on the caster's session); the pet/totem arm
+// folds the owner player's spellmods without haste (Object.cpp:2246-2258);
+// an unresolvable caster degrades to the DBC base like C++'s null-caster
+// path. effectMask/auraType select the tick-driving effect — the last effect
+// in the mask whose aura type matches the record's, mirroring the tick
+// dispatch. Returns 0 when no periodic effect is selected or the spell is
+// unknown. Callers must not hold s.castMu: the fold locks the mod-owner's
+// castMu, and the mod-owner can be s itself.
+func (s *session) stolenCasterPeriodFold(stSpell wotlk.Spell, spellKnown bool, effectMask uint8, auraType uint32, casterGUID uint64) uint32 {
+	if !spellKnown {
+		return 0
 	}
-	s.castMu.Lock()
-	aura := s.activeAuras[spellID]
-	s.castMu.Unlock()
-	if aura == nil || aura.Stopped || aura.PeriodMs == 0 {
-		return
-	}
-	// Tick-driving effect: the last effect in the stolen mask whose aura
-	// type matches the record's, mirroring the tick dispatch.
+	// Tick-driving effect: the last effect in the mask whose aura type
+	// matches the record's, mirroring the tick dispatch.
 	tickIdx := -1
 	for i, eff := range stSpell.Effects {
-		if victimFx.effectMask&(1<<uint(i)) == 0 {
+		if effectMask&(1<<uint(i)) == 0 {
 			continue
 		}
-		if eff.Aura == aura.AuraType {
+		if eff.Aura == auraType {
 			tickIdx = i
 		}
 	}
 	if tickIdx < 0 {
-		return
+		return 0
 	}
 	var casterSess *session
 	if s.server != nil {
-		casterSess = s.server.findSessionByGUID(victimCasterGUID)
+		casterSess = s.server.findSessionByGUID(casterGUID)
 	}
 	var periodMs uint32
 	if casterSess != nil {
@@ -1495,7 +1552,7 @@ func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spel
 		// fold is spellmods-only, mirroring the pet apply path
 		// (pet_combat.go:2126-2132). A miss falls through to the
 		// null-caster path below.
-		if modOwner := s.server.spellModOwnerSession(s.player.Map, s.player.InstanceID, victimCasterGUID); modOwner != nil {
+		if modOwner := s.server.spellModOwnerSession(s.player.Map, s.player.InstanceID, casterGUID); modOwner != nil {
 			periodMs = modOwner.foldPeriodicPeriodNoHaste(stSpell, stSpell.Effects[tickIdx])
 		}
 	}
@@ -1511,6 +1568,57 @@ func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spel
 			}
 		}
 	}
+	return periodMs
+}
+
+// mergeStolenMaxDuration mirrors the max-duration half of Aura::RefreshTimers
+// (SpellAuras.cpp:930-940) as run by Aura::ModStackAmount(+1) on the steal
+// merge arm (Unit.cpp:4002-4010): m_maxDuration = Aura::CalcMaxDuration
+// (SpellAuras.cpp:871-886) — the raw DBC duration (SpellInfo::GetDuration,
+// no per-level scaling) with the original caster's SPELLMOD_DURATION fold.
+// RefreshDuration's withMods arm is NOT taken (RefreshTimers calls it with
+// the default false), so the haste-duration fold does not apply here. The
+// passive no-DurationEntry carve-out is vacuous (passive auras are never
+// stealable) and the combo-points term has no Go caster-combo infra.
+// Returns 0 when the duration cannot be resolved — the caller keeps the
+// stealer's current max. Callers must not hold s.castMu: applySpellMod locks
+// the mod-owner's castMu, and the mod-owner can be s itself.
+func (s *session) mergeStolenMaxDuration(stSpell wotlk.Spell, spellKnown bool, casterGUID uint64) uint32 {
+	if !spellKnown || s.server == nil || s.server.Data == nil || stSpell.DurationIndex == 0 {
+		return 0
+	}
+	base, ok, err := s.server.Data.SpellDurationBase(stSpell.DurationIndex)
+	if err != nil || !ok || base <= 0 {
+		return 0
+	}
+	maxDur := uint32(base)
+	// The mod owner is the caster's GetSpellModOwner (Object.cpp:2246-2258):
+	// player -> self, pet/totem -> owner player, else the null-caster path
+	// (no mods). Resolved on the stealer's map/instance — the victim is
+	// within steal range, so the caster is on the same map.
+	if s.player != nil {
+		if modOwner := s.server.spellModOwnerSession(s.player.Map, s.player.InstanceID, casterGUID); modOwner != nil {
+			if modded := modOwner.applySpellMod(stSpell, spellModDuration, int32(maxDur)); modded > 0 {
+				maxDur = uint32(modded)
+			} else {
+				maxDur = 0
+			}
+		}
+	}
+	return maxDur
+}
+
+func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spell, spellKnown bool, victimFx *victimEffectState, victimCasterGUID uint64) {
+	if victimFx == nil || !spellKnown {
+		return
+	}
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	s.castMu.Unlock()
+	if aura == nil || aura.Stopped || aura.PeriodMs == 0 {
+		return
+	}
+	periodMs := s.stolenCasterPeriodFold(stSpell, spellKnown, victimFx.effectMask, aura.AuraType, victimCasterGUID)
 	if periodMs == 0 {
 		return
 	}
@@ -1624,10 +1732,42 @@ func stolenAuraMergesInto(existing *activeAura, victimCasterGUID, playerGUID uin
 // already holds the stolen spell from the same original caster, the steal
 // merges into it — one charge (Aura::ModCharges(+1), clamped to the spell's
 // max charges) or one stack (Aura::ModStackAmount(+1), clamped to the
-// spell's stack amount) — and the duration is reset to the capped stolen
-// duration, instead of the aura being re-applied fresh. Reports whether a
-// merge happened.
-func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealCharge bool, dur uint32, victimCasterGUID uint64) bool {
+// spell's stack amount) — and the remaining time is reset to the capped
+// stolen duration, instead of the aura being re-applied fresh. Reports
+// whether a merge happened.
+func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, spellKnown bool, stealCharge bool, dur uint32, victimCasterGUID uint64) bool {
+	// Snapshot mergeability and the RefreshTimers inputs before mutating.
+	// The caster folds (mergeStolenMaxDuration, stolenCasterPeriodFold)
+	// lock the mod-owner's castMu — which can be s itself — so they must
+	// run with s.castMu released.
+	s.castMu.Lock()
+	mergeable := stolenAuraMergesInto(s.activeAuras[spellID], victimCasterGUID, s.playerGUID)
+	var effectMask uint8
+	var auraType uint32
+	periodic := false
+	if mergeable && !stealCharge && spellKnown {
+		if existing := s.activeAuras[spellID]; existing != nil {
+			effectMask, auraType = existing.EffectMask, existing.AuraType
+			periodic = existing.PeriodMs > 0
+		}
+	}
+	s.castMu.Unlock()
+	if !mergeable {
+		return false
+	}
+	mergeCaster := victimCasterGUID
+	if mergeCaster == 0 {
+		mergeCaster = s.playerGUID
+	}
+	var refreshMaxDur, refreshPeriod uint32
+	if !stealCharge && spellKnown {
+		refreshMaxDur = s.mergeStolenMaxDuration(stSpell, spellKnown, mergeCaster)
+		if periodic {
+			refreshPeriod = s.stolenCasterPeriodFold(stSpell, spellKnown, effectMask, auraType, mergeCaster)
+		}
+	}
+	upkeep := !stealCharge && spellKnown && auraUpkeepNeeded(stSpell)
+
 	s.castMu.Lock()
 	existing := s.activeAuras[spellID]
 	if !stolenAuraMergesInto(existing, victimCasterGUID, s.playerGUID) {
@@ -1637,7 +1777,8 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 	if stealCharge {
 		// Aura::ModCharges(+1, SpellAuras.cpp:964): increments while the
 		// aura uses charges, clamped to CalcMaxCharges (the spell's proc
-		// charges; SPELLMOD_CHARGES has no Go infra).
+		// charges; the spellproc entry and SPELLMOD_CHARGES have no Go
+		// infra).
 		if existing.RemainingCharges > 0 || stSpell.ProcCharges > 0 {
 			charges := int32(existing.RemainingCharges) + 1
 			if max := int32(stSpell.ProcCharges); max > 0 && charges > max {
@@ -1647,9 +1788,7 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 		}
 	} else {
 		// Aura::ModStackAmount(+1, SpellAuras.cpp:1030): clamped to the
-		// spell's stack amount (1 when the spell is not stackable); an
-		// increase refreshes the charge count — the SetDuration below
-		// replaces the timer refresh.
+		// spell's stack amount (1 when the spell is not stackable).
 		maxStack := int32(existing.StackAmount)
 		if maxStack == 0 {
 			maxStack = 1
@@ -1659,7 +1798,6 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 			cur = 1
 		}
 		oldCount := uint32(cur)
-		increased := cur < maxStack
 		if cur++; cur > maxStack {
 			cur = maxStack
 		}
@@ -1668,27 +1806,51 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 		// stolen stack must scale the amounts up, or a later decrement
 		// would divide amounts that were never multiplied.
 		rescaleAuraAmountsByStack(existing, oldCount, uint32(cur))
-		if increased {
-			existing.RemainingCharges = uint8(stSpell.ProcCharges)
+		// The ModStackAmount refresh flag is unconditional on increase
+		// (SpellAuras.cpp:1042): RefreshTimers and the charge reset run
+		// even when the stack clamps at the max.
+		existing.RemainingCharges = uint8(stSpell.ProcCharges)
+		if spellKnown {
+			// Aura::RefreshTimers(true) (SpellAuras.cpp:930-940): the max
+			// duration is recomputed from the original caster
+			// (Aura::CalcMaxDuration), the periodic amplitude is
+			// recomputed and the tick timer restarts at a full amplitude
+			// (AuraEffect::ResetPeriodic(true),
+			// SpellAuraEffects.cpp:553), tick counters zero, and
+			// RefreshDuration re-arms the 1s power-upkeep clock (m_timeCla).
+			// Gated on known spell data — the no-data regime keeps the
+			// stealer's live timers.
+			if refreshMaxDur > 0 {
+				existing.DurationMs = refreshMaxDur
+			}
+			oldPeriod := existing.PeriodMs
+			if refreshPeriod > 0 {
+				existing.PeriodMs = refreshPeriod
+			} else {
+				refreshPeriod = oldPeriod
+			}
+			existing.TickCount = 0
+			if existing.TickTimer != nil {
+				existing.TickTimer.Stop()
+				existing.TickTimer = nil
+			}
+			stopAuraUpkeepTimer(existing)
 		}
 	}
-	// oldAura->SetDuration(int32(dur)), Unit.cpp:4009. Aura::SetDuration
-	// (SpellAuras.cpp:894) writes only m_duration — the remaining time —
-	// never the max, so the stealer's original max duration survives the
-	// merge; the earlier code wrongly overwrote it.
+	// oldAura->SetDuration(int32(dur)) (Unit.cpp:4009, withMods=false):
+	// only the remaining time is written, never the max.
 	existing.RemainingMs = dur
 	existing.DurationUpdatedAt = time.Now()
+	// Go's expiry timer is the twin of C++'s update-loop IsExpired check —
+	// the merge rewrites the remaining time, so the old deadline must go,
+	// or the aura expires on the pre-merge schedule.
+	if existing.Timer != nil {
+		existing.Timer.Stop()
+		existing.Timer = nil
+	}
 	slot, positive := existing.Slot, existing.Positive
 	maxDur := existing.DurationMs
-	var count uint8
-	if stealCharge {
-		count = existing.RemainingCharges
-	} else {
-		count = existing.StackCount
-		if count == 0 {
-			count = 1
-		}
-	}
+	count := auraWireStackCount(existing)
 	s.castMu.Unlock()
 	if dur == 0 {
 		// C++ oldAura->SetDuration(0) (Unit.cpp:4009): the merged aura is
@@ -1698,8 +1860,28 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 		s.expirePlayerAura(spellID)
 		return true
 	}
-	// Charges ride the stack-count field of the aura update
-	// (player_auras.go).
+	if !stealCharge && spellKnown {
+		if refreshPeriod > 0 {
+			// AuraEffect::ResetPeriodic(true): the first tick fires after
+			// a full recomputed amplitude.
+			s.schedulePlayerPeriodicTickInitial(existing, refreshPeriod, periodicTickInitialDelay(stSpell, refreshPeriod))
+		}
+		if upkeep {
+			s.scheduleAuraUpkeep(existing)
+		}
+		// AuraEffect::ChangeAmount -> CalculateSpellMod
+		// (SpellAuraEffects.cpp:657-683): the rescaled amounts update the
+		// registered modifier values.
+		s.refreshSpellModValues(existing)
+	}
+	// Re-arm the expiry timer for the merged remaining time.
+	s.castMu.Lock()
+	if live := s.activeAuras[spellID]; live == existing && !live.Stopped && dur > 0 {
+		live.Timer = time.AfterFunc(time.Duration(dur)*time.Millisecond, func() {
+			s.expirePlayerAura(spellID)
+		})
+	}
+	s.castMu.Unlock()
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDur, dur, count)
 	return true
 }
@@ -1715,10 +1897,10 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 // (victimMaxMs 0) makes the stolen aura permanent too, so C++ skips the
 // elapsed recompute and the construction ResetPeriodic stands: the first
 // tick fires after a full RECOMPUTED amplitude, and the victim-live delay
-// the fresh apply scheduled is stopped and re-armed. The merge arm needs
-// nothing: C++ only calls oldAura->SetDuration(dur) there (Unit.cpp:4009)
-// and never touches the periodic timer, so the stealer's own cadence —
-// which Go likewise never reschedules on merge — is already exact.
+// the fresh apply scheduled is stopped and re-armed. The merge arm is
+// handled separately in mergeStolenAura: C++ ModStackAmount(+1) there runs
+// Aura::RefreshTimers, which resets the periodic timer to a full
+// recomputed amplitude.
 // Call right after the fresh stolen-aura apply, with dur the capped stolen
 // duration and victimMaxMs the SetLoadedState maxduration arg
 // (aura->GetMaxDuration()).
@@ -1803,8 +1985,12 @@ func (s *session) setAuraCharges(spellID uint32, charges uint8, victimMaxMs uint
 	}
 	slot, positive := aura.Slot, aura.Positive
 	maxDuration, remaining := aura.DurationMs, aura.RemainingMs
+	// The wire stack-count field carries the stack amount for stackable
+	// spells, else the charges (AuraApplication::BuildUpdatePacket,
+	// SpellAuras.cpp:241-242).
+	wireCount := auraWireStackCount(aura)
 	s.castMu.Unlock()
-	s.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, charges)
+	s.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, wireCount)
 }
 
 // handleEffectSpellsteal processes SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126).
@@ -1907,7 +2093,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 				stSpellKnown = true
 			}
 		}
-		if s.mergeStolenAura(cand.SpellID, stSpell, st.stealCharge, dur, st.victimCasterGUID) {
+		if s.mergeStolenAura(cand.SpellID, stSpell, stSpellKnown, st.stealCharge, dur, st.victimCasterGUID) {
 			continue
 		}
 		// Unit::RemoveAurasDueToSpellBySteal single-target dance
