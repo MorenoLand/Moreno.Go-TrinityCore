@@ -1290,7 +1290,9 @@ func (s *session) applyDevourMagicSelfHeal(healAmount uint32) {
 // duration and charge count captured before the steal decrement (C++ reads
 // aura->GetDuration()/GetCharges() before mutating, Unit.cpp:3999/4032),
 // plus the victim aura's caster GUID and instance pointer for the
-// single-target steal dance (Unit.cpp:4015-4042).
+// single-target steal dance (Unit.cpp:4015-4042), plus the victim aura's
+// per-effect state for the AuraCreateInfo/SetLoadedState twin (the fresh
+// stolen aura carries the victim's live effects, Unit.cpp:4017-4033).
 type stolenBuff struct {
 	candidate        dispelCandidate
 	remainingMs      uint32
@@ -1299,21 +1301,35 @@ type stolenBuff struct {
 	stealCharge      bool
 	victimCasterGUID uint64
 	victimAura       *activeAura
+	victimFx         *victimEffectState
+}
+
+// victimEffectState snapshots the SetLoadedState inputs of the victim aura
+// (Unit.cpp:4017-4033) while the victim-side lock is held: the effect mask
+// (effMask), per-effect base amounts (baseDamage), per-effect live amounts
+// (damage), recalculate mask, crit chance and resilience flag.
+type victimEffectState struct {
+	effectMask      uint8
+	amounts         [3]int32
+	baseAmounts     [3]int32
+	recalculateMask uint8
+	critChance      float32
+	applyResilience bool
 }
 
 // stealVictimState reads the victim aura's current remaining duration, max
 // duration and charge count; degrades to the candidate's recorded duration
 // when the aura is gone. Also returns the aura's caster GUID and instance
 // pointer for the single-target steal dance.
-func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTargetPlayer bool, cand dispelCandidate) (remainingMs, victimMaxMs uint32, charges uint8, victimCasterGUID uint64, victimAura *activeAura) {
+func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTargetPlayer bool, cand dispelCandidate) (remainingMs, victimMaxMs uint32, charges uint8, victimCasterGUID uint64, victimAura *activeAura, victimFx *victimEffectState) {
 	if isTargetPlayer && targetSess != nil {
 		targetSess.castMu.Lock()
 		defer targetSess.castMu.Unlock()
 		if aura := targetSess.activeAuras[cand.SpellID]; aura != nil && !aura.Stopped {
 			advanceAuraDuration(aura, time.Now())
-			return aura.RemainingMs, aura.DurationMs, aura.RemainingCharges, aura.CasterGUID, aura
+			return aura.RemainingMs, aura.DurationMs, aura.RemainingCharges, aura.CasterGUID, aura, snapshotVictimEffectState(aura)
 		}
-		return cand.DurationMs, 0, 0, 0, nil
+		return cand.DurationMs, 0, 0, 0, nil, nil
 	}
 	if s.server != nil && s.player != nil {
 		key := creatureAuraKeyForPlayer(*s.player, targetGUID)
@@ -1325,10 +1341,52 @@ func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTar
 			// (the player path above does the same). Advancing is safe:
 			// expiry is timer-driven and never reads RemainingMs.
 			advanceAuraDuration(aura, time.Now())
-			return aura.RemainingMs, aura.DurationMs, aura.RemainingCharges, aura.CasterGUID, aura
+			return aura.RemainingMs, aura.DurationMs, aura.RemainingCharges, aura.CasterGUID, aura, snapshotVictimEffectState(aura)
 		}
 	}
-	return cand.DurationMs, 0, 0, 0, nil
+	return cand.DurationMs, 0, 0, 0, nil, nil
+}
+
+// snapshotVictimEffectState copies the SetLoadedState inputs off a victim
+// aura; the caller must hold the aura's lock.
+func snapshotVictimEffectState(aura *activeAura) *victimEffectState {
+	return &victimEffectState{
+		effectMask:      aura.EffectMask,
+		amounts:         aura.Amounts,
+		baseAmounts:     aura.BaseAmounts,
+		recalculateMask: aura.RecalculateMask,
+		critChance:      aura.CritChance,
+		applyResilience: aura.ApplyResilience,
+	}
+}
+
+// carryStealVictimEffects mirrors the AuraCreateInfo + SetLoadedState half of
+// Unit::RemoveAurasDueToSpellBySteal (Unit.cpp:4015-4033) on a freshly
+// created stolen aura: the new aura carries the VICTIM aura's live effect
+// mask, per-effect base and current amounts, recalculate mask, crit chance
+// and resilience flag. Without this the stolen aura keeps the synthetic
+// single-effect record the apply above wrote (EffectMask 0x01, one aura
+// type), while C++ carries every live effect of the victim aura at its
+// live amount. The merge path needs nothing: C++ merges via
+// ModCharges/ModStackAmount + SetDuration only and never touches the
+// victim's mask or amounts (Unit.cpp:4002-4010). A nil state (victim aura
+// gone) keeps the synthetic single-effect record.
+func (s *session) carryStealVictimEffects(spellID uint32, victimFx *victimEffectState) {
+	if victimFx == nil {
+		return
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	aura := s.activeAuras[spellID]
+	if aura == nil || aura.Stopped {
+		return
+	}
+	aura.EffectMask = victimFx.effectMask
+	aura.Amounts = victimFx.amounts
+	aura.BaseAmounts = victimFx.baseAmounts
+	aura.RecalculateMask = victimFx.recalculateMask
+	aura.CritChance = victimFx.critChance
+	aura.ApplyResilience = victimFx.applyResilience
 }
 
 // stolenAuraMergesInto reports whether the stealer-side merge of
@@ -1513,8 +1571,8 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 					stealCharge = sp.AttributesEx7&spellAttr7DispelCharges != 0
 				}
 			}
-			remaining, victimMaxMs, charges, victimCasterGUID, victimAura := s.stealVictimState(targetSess, targetGUID, isTargetPlayer, cand)
-			stolen = append(stolen, stolenBuff{candidate: cand, remainingMs: remaining, victimMaxMs: victimMaxMs, charges: charges, stealCharge: stealCharge, victimCasterGUID: victimCasterGUID, victimAura: victimAura})
+			remaining, victimMaxMs, charges, victimCasterGUID, victimAura, victimFx := s.stealVictimState(targetSess, targetGUID, isTargetPlayer, cand)
+			stolen = append(stolen, stolenBuff{candidate: cand, remainingMs: remaining, victimMaxMs: victimMaxMs, charges: charges, stealCharge: stealCharge, victimCasterGUID: victimCasterGUID, victimAura: victimAura, victimFx: victimFx})
 			// C++ RemoveAurasDueToSpellBySteal (Unit.cpp:4046-4049): a
 			// successful steal removes one charge
 			// (SPELL_ATTR7_DISPEL_CHARGES) or one stack
@@ -1578,6 +1636,11 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 			stealCasterGUID = s.playerGUID
 		}
 		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, -1, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask, nil, true, stealCasterGUID, false, 0, false)
+		// C++ AuraCreateInfo/SetLoadedState twin (Unit.cpp:4015-4033): the
+		// fresh stolen aura carries the victim aura's live effect mask,
+		// per-effect amounts, recalculate mask, crit chance and
+		// resilience flag instead of the synthetic single-effect record.
+		s.carryStealVictimEffects(cand.SpellID, st.victimFx)
 		// C++ SetLoadedState charges arg (Unit.cpp:4032): 1 for
 		// ATTR7_DISPEL_CHARGES auras, the victim's charge count otherwise.
 		wantCharges := st.charges
