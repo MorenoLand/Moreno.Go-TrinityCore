@@ -3440,7 +3440,7 @@ func (s *session) releaseGameObjectLoot(loot *activeLootState, targetGUID uint64
 		return false
 	}
 	if goState.Type == GameObjectTypeDoor {
-		s.server.useDoorOrButton(goState.Map, goState.InstanceID, goState.GUID)
+		s.server.useDoorOrButton(goState.Map, goState.InstanceID, goState.GUID, false)
 	}
 	// DoLootRelease (LootHandler.cpp:287): a fishing bobber despawns on
 	// release even with the catch still in the window — FISHINGNODE enters

@@ -4458,7 +4458,7 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
 			"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&goType); err == nil {
 			if uint8(goType) == GameObjectTypeDoor || uint8(goType) == GameObjectTypeButton {
-				s.server.useDoorOrButton(s.player.Map, s.player.InstanceID, goGUID)
+				s.server.useDoorOrButton(s.player.Map, s.player.InstanceID, goGUID, false)
 				return
 			}
 		}
@@ -33148,17 +33148,17 @@ func (s *session) handleEffectActivateObjectGO(ctx context.Context, goGUID uint6
 	case action == goActionOpenAndUnlock:
 		// GameObject::UseDoorOrButton(0, false) then the fallthrough Unlock
 		// arm clears GO_FLAG_LOCKED (SpellEffects.cpp:3961-3967).
-		s.server.useDoorOrButton(mapID, instanceID, goGUID)
+		s.server.useDoorOrButton(mapID, instanceID, goGUID, false)
 		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, false)
 	case action == goActionUnlock:
 		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, false)
 	case action == goActionLock:
 		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, true)
 	case action == goActionClose || action == goActionRebuild:
-		// GameObject::ResetDoorOrButton (GameObject.cpp:1422): back to the
-		// ready state; the reset-state packet is Go's equivalent.
-		s.server.setGameObjectStateInInstance(mapID, instanceID, goGUID, GameObjectStateReady)
-		s.server.broadcastGameObjectResetStateInInstance(mapID, instanceID, goGUID)
+		// GameObject::ResetDoorOrButton (GameObject.cpp:1422): clears the
+		// in-use flag and restores the spawn state; the reset-state packet
+		// is Go's equivalent.
+		s.server.resetDoorOrButton(mapID, instanceID, goGUID)
 	case action == goActionDespawn:
 		// GameObject::DespawnOrUnsummon (SpellEffects.cpp:3978).
 		s.server.despawnDynamicGameObjectInInstance(mapID, instanceID, goGUID)
@@ -33169,15 +33169,15 @@ func (s *session) handleEffectActivateObjectGO(ctx context.Context, goGUID uint6
 	case action == goActionCloseAndLock:
 		// GameObject::ResetDoorOrButton + SetFlag(GO_FLAG_LOCKED)
 		// (SpellEffects.cpp:3985-3988).
-		s.server.setGameObjectStateInInstance(mapID, instanceID, goGUID, GameObjectStateReady)
-		s.server.broadcastGameObjectResetStateInInstance(mapID, instanceID, goGUID)
+		s.server.resetDoorOrButton(mapID, instanceID, goGUID)
 		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, true)
 	case action == goActionDestroy:
-		// GameObject::UseDoorOrButton(0, true): GO_STATE_DESTROYED
-		// (SpellEffects.cpp:3990-3993); the bytes1 values update carries the
-		// destroyed state since no anim packet covers it.
-		s.server.setGameObjectStateInInstance(mapID, instanceID, goGUID, GameObjectStateActiveAlternative)
-		s.server.broadcastGameObjectBytes1InInstance(mapID, instanceID, goGUID)
+		// GameObject::UseDoorOrButton(0, true, unitCaster)
+		// (SpellEffects.cpp:3990-3993): the alternative arm flips a closed
+		// door to GO_STATE_DESTROYED and leaves it in-use (lootState
+		// GO_ACTIVATED), so it cannot be used again until a Close/Rebuild
+		// reset or the template autoCloseTime fires.
+		s.server.useDoorOrButton(mapID, instanceID, goGUID, true)
 	case action >= goActionUseArtKit0 && action <= goActionUseArtKit3:
 		s.applyGameObjectArtKit(ctx, goGUID, action-goActionUseArtKit0)
 	}

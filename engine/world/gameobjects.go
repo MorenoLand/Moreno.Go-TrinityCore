@@ -100,8 +100,14 @@ type dynamicGameObjectState struct {
 	ParentRotation  [4]float32
 	AutoCloseTimer  *time.Timer
 	DespawnTimer    *time.Timer
-	UsePrevState    uint8 // state before the last door/button activation (m_prevGoState twin, GameObject.h:314)
-	CooldownUntilMS int64 // template trap/goober Use-cooldown gate (m_cooldownTime twin, GameObject.cpp:1513)
+	// SpawnState is the state the GO was created with: the m_prevGoState twin
+	// (GameObject.h:314). C++ sets it once in Create (GameObject.cpp:131,349)
+	// and ResetDoorOrButton restores it (GameObject.cpp:1428) — it is NOT the
+	// pre-use state.
+	SpawnState      uint8
+	RitualOwnerGUID uint64              // summoning-ritual owner for ownerless GOs (m_ritualOwnerGUID twin, GameObject.cpp:1803)
+	RitualUsers     map[uint64]struct{} // summoning-ritual unique participants (m_unique_users twin)
+	CooldownUntilMS int64               // template trap/goober Use-cooldown gate (m_cooldownTime twin, GameObject.cpp:1513)
 	Hidden          bool
 	IsRuntimeSpawn  bool
 	ChairSlots      map[uint32]uint64 // chair slot index -> occupant player GUID (GAMEOBJECT_TYPE_CHAIR)
@@ -558,14 +564,14 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 
 	switch goState.Type {
 	case GameObjectTypeDoor:
-		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid)
+		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid, false)
 
 	case GameObjectTypeButton:
 		// GameObject::Use GAMEOBJECT_TYPE_BUTTON arm (GameObject.cpp:1520):
 		// doors and buttons share the identical arm — UseDoorOrButton(0,
 		// false, user) — so the button runs the same IN_USE gate, state
 		// flip and template autoCloseTime (data2) reset as doors.
-		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid)
+		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid, false)
 
 	case GameObjectTypeChest:
 		// Chests open through the lock path: the client casts Opening and
@@ -680,6 +686,9 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	case GameObjectTypeChair:
 		s.useGameObjectChair(ctx, goState, entry)
 
+	case GameObjectTypeRitual:
+		s.useSummoningRitual(ctx, goState, entry)
+
 	case GameObjectTypeCamera:
 		// GameObject::Use GAMEOBJECT_TYPE_CAMERA arm (GameObject.cpp:1697-1713;
 		// template layout GameObjectData.h:220-228).
@@ -752,6 +761,138 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	}
 
 	return true
+}
+
+// sameRaidGroup mirrors Player::IsInSameRaidWith (Player.cpp:2543): the same
+// player, or two players in the same non-zero group.
+func sameRaidGroup(a, b *session) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	return a.groupID != 0 && a.groupID == b.groupID
+}
+
+// useSummoningRitual mirrors the GAMEOBJECT_TYPE_SUMMONING_RITUAL arm of
+// GameObject::Use (GameObject.cpp:1803-1904; template layout
+// GameObjectData.h:236-257: data0 reqParticipants, data1 spellId, data2
+// animSpell, data3 ritualPersistent, data4 casterTargetSpell, data5
+// casterTargetSpellTargets, data6 castersGrouped). A zero reqParticipants
+// template means the ritual can never complete, like C++ (the count check
+// can never match).
+func (s *session) useSummoningRitual(ctx context.Context, goState *dynamicGameObjectState, entry uint32) {
+	if s == nil || s.server == nil || s.player == nil || goState == nil {
+		return
+	}
+	tpl := s.loadGameObjectTemplateData(ctx, entry)
+	reqParticipants, ritualSpell, animSpell := tpl[0], tpl[1], tpl[2]
+	persistent, casterTargetSpell, casterTargetTargets, castersGrouped := tpl[3], tpl[4], tpl[5], tpl[6]
+	if reqParticipants == 0 {
+		return
+	}
+	srv := s.server
+	var ownerSess *session
+	if goState.OwnerGUID != 0 {
+		ownerSess = srv.playerSessionForGUID(goState.OwnerGUID)
+	}
+	srv.objectsMu.Lock()
+	// Ritual owner is set for GOs without an owner (not summoned); the first
+	// user becomes the owner (GameObject.cpp:1816-1820).
+	if goState.RitualOwnerGUID == 0 && ownerSess == nil {
+		goState.RitualOwnerGUID = s.playerGUID
+	}
+	ritualOwnerGUID := goState.RitualOwnerGUID
+	srv.objectsMu.Unlock()
+	var ritualOwnerSess *session
+	if ritualOwnerGUID != 0 {
+		ritualOwnerSess = srv.playerSessionForGUID(ritualOwnerGUID)
+	}
+	casterSess := s
+	if ownerSess != nil && ownerSess.player != nil {
+		// Accept only use by a player from the same group as the owner,
+		// excluding the owner itself (its unique use was added by the
+		// summoning spell effect); the owner must still be channeling.
+		if ownerSess == s {
+			return
+		}
+		if castersGrouped != 0 && !sameRaidGroup(s, ownerSess) {
+			return
+		}
+		if ownerSess.activeChannel == nil {
+			return
+		}
+		casterSess = ownerSess
+	} else {
+		if ritualOwnerSess != s && castersGrouped != 0 && !sameRaidGroup(s, ritualOwnerSess) {
+			return
+		}
+	}
+	// GameObject::AddUniqueUse (GameObject.cpp:897): the unique-user set, not
+	// the raw use count, gates completion.
+	srv.objectsMu.Lock()
+	if goState.RitualUsers == nil {
+		goState.RitualUsers = make(map[uint64]struct{})
+	}
+	goState.RitualUsers[s.playerGUID] = struct{}{}
+	uniqueCount := uint32(len(goState.RitualUsers))
+	var targetUsers []uint64
+	if casterTargetSpell != 0 && casterTargetSpell != 1 {
+		targetUsers = make([]uint64, 0, len(goState.RitualUsers))
+		for u := range goState.RitualUsers {
+			targetUsers = append(targetUsers, u)
+		}
+	}
+	srv.objectsMu.Unlock()
+	if animSpell != 0 {
+		// CastSpell(player, animSpell, true): triggered, like Go's
+		// castSpellDirect, which is triggered by convention.
+		s.castSpellDirect(ctx, animSpell, s.playerGUID)
+	}
+	if uniqueCount != reqParticipants {
+		return
+	}
+	if ritualOwnerSess != nil {
+		casterSess = ritualOwnerSess
+	}
+	spellID := ritualSpell
+	if spellID == 62330 {
+		// The GO stores a nonexistent spell; replaced by the expected one,
+		// always triggered (GameObject.cpp:1856-1862).
+		spellID = 61993
+	}
+	for i := uint32(0); i < casterTargetTargets && len(targetUsers) > 0; i++ {
+		// casterTargetSpell is cast at a random GO user (GameObject.cpp:1867-1871).
+		casterSess.castSpellDirect(ctx, casterTargetSpell, targetUsers[rand.Intn(len(targetUsers))])
+	}
+	if ownerSess != nil {
+		// Finish the owner's spell (GameObject.cpp:1874).
+		ownerSess.finishChannel()
+	}
+	if persistent == 0 {
+		// SetLootState(GO_JUST_DEACTIVATED): the Update arm deletes a
+		// summoned ritual (GameObject.cpp GO_JUST_DEACTIVATED arm).
+		if goState.IsRuntimeSpawn {
+			srv.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, goState.GUID)
+		} else {
+			srv.setGameObjectHiddenInInstance(goState.Map, goState.InstanceID, goState.GUID, true)
+			srv.broadcastGameObjectDespawn(goState.Map, goState.GUID)
+		}
+	} else {
+		// Reset the ritual for the next round (GameObject.cpp:1879-1884).
+		srv.objectsMu.Lock()
+		goState.RitualOwnerGUID = 0
+		goState.RitualUsers = nil
+		srv.objectsMu.Unlock()
+	}
+	if spellID != 0 {
+		// spellCaster->CastSpell(user, spellId, triggered): the completing
+		// player is the target. Go's castSpellDirect is triggered by
+		// convention, so the animSpell/61993 triggered arms and the plain
+		// final cast all go out the same way (documented).
+		casterSess.castSpellDirect(ctx, spellID, s.playerGUID)
+	}
 }
 
 // handleGameObjectReportUse processes CMSG_GAMEOBJ_REPORT_USE (0x481).
@@ -973,6 +1114,7 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 		Z:           float32(goZ),
 		Orientation: float32(goO),
 		State:       uint8(goState),
+		SpawnState:  uint8(goState),
 		Type:        uint8(goType),
 		DisplayID:   uint32(displayID),
 		Size:        float32(size),
@@ -1104,6 +1246,9 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	if s == nil || dyn == nil {
 		return
 	}
+	// m_prevGoState twin: the spawn state is captured once at creation
+	// (GameObject.cpp:349), never per-use.
+	dyn.SpawnState = dyn.State
 	s.storeGameObjectState(dyn)
 
 	spawn := gameObjectSpawn{
