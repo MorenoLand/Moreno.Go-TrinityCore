@@ -10476,7 +10476,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if effectTarget == 0 {
 						continue
 					}
-					s.handleEffectDispel(effCtx, effectTarget, spell, eff)
+					// isReflected flips the positivity gate inside (Unit.cpp:4608-4612):
+					// a reflected dispel strips the caster's own beneficial buffs.
+					s.handleEffectDispel(effCtx, effectTarget, spell, eff, isReflected)
 				}
 			case spellEffectDispelMechanic: // 108: SPELL_EFFECT_DISPEL_MECHANIC
 				// Spell::EffectDispelMechanic (SpellEffects.cpp:4733) is also

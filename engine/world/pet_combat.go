@@ -1939,7 +1939,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 		if effect.Effect == spellEffectDispel {
-			s.executePetSpellDispel(ctx, motion, resolveReflectTarget(targetGUID), spell, effect)
+			s.executePetSpellDispel(ctx, motion, resolveReflectTarget(targetGUID), spell, effect, reflectedSet[targetGUID])
 		}
 		if effect.Effect == spellEffectDispelMechanic {
 			// Spell::EffectDispelMechanic (SpellEffects.cpp:4733-4756):
