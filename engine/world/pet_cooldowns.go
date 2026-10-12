@@ -81,6 +81,31 @@ func (s *session) loadPetCooldowns(ctx context.Context, petID uint32, motion *cr
 	}
 }
 
+// petSpellCooldownReady mirrors SpellHistory::IsReady (SpellHistory.cpp)
+// for a pet caster: the spell is ready when neither its own recovery entry
+// nor its category entry is still running. C++ checks the per-spell
+// cooldown first, then the category cooldown
+// (SpellHistory::IsReady, SpellHistory.cpp:498-512).
+func (s *Server) petSpellCooldownReady(motion *creatureMotion, spell wotlk.Spell, now time.Time) bool {
+	if s == nil || motion == nil {
+		return true
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if end, ok := motion.SpellCooldowns[spell.ID]; ok && end.After(now) {
+		return false
+	}
+	if spell.Category != 0 {
+		if end, ok := motion.SpellCategoryCooldowns[spell.Category]; ok && end.After(now) {
+			return false
+		}
+		if end, ok := motion.SpellCooldownCategoryEnds[spell.ID]; ok && end.After(now) {
+			return false
+		}
+	}
+	return true
+}
+
 func prunePetSpellCooldowns(motion *creatureMotion, now time.Time) {
 	if motion == nil {
 		return

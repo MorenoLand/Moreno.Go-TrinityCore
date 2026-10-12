@@ -572,6 +572,13 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	dist := float32(math.Hypot(float64(targetX-motion.X), float64(targetY-motion.Y)))
 	meleeRange := float32(3.5)
 
+	// PetAI::UpdateAI breakable-CC arm (PetAI.cpp:74-80): when the victim
+	// carries a breakable-by-damage crowd-control aura the pet must not
+	// break it — the tick's melee swing and autocast are suppressed, but
+	// the pet stays in combat and its chase motion (independent of
+	// UpdateAI) continues, so pursuit movement below is unaffected.
+	ccHoldAttacks := s.petVictimHasBreakableCC(motion, targetGUID, isTargetPlayer, targetSess)
+
 	if dist > meleeRange {
 		if motion.PetCommand == PetCommandStay {
 			// PetAI::UpdateAI COMMAND_STAY arm (PetAI.cpp:84-89): a
@@ -610,19 +617,21 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	} else {
 		motion.Moving = false
 
-		// Melee attack
+		// Melee attack (suppressed by the breakable-CC arm above).
 		attackTime := time.Duration(motion.AttackTime) * time.Millisecond
 		if attackTime <= 0 {
 			attackTime = 2 * time.Second
 		}
-		if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
-			s.executePetMeleeAttack(ctx, motion, owner.Sess, targetGUID, isTargetPlayer, targetSess, targetHealth, targetArmor, targetLevel, now)
-			motion.LastAttack = now
-		}
+		if !ccHoldAttacks {
+			if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
+				s.executePetMeleeAttack(ctx, motion, owner.Sess, targetGUID, isTargetPlayer, targetSess, targetHealth, targetArmor, targetLevel, now)
+				motion.LastAttack = now
+			}
 
-		// Autocast spells
-		if len(motion.AutocastSpells) > 0 && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 3*time.Second) {
-			s.executePetAutocast(ctx, motion, targetGUID, now)
+			// Autocast spells (suppressed by the breakable-CC arm above).
+			if len(motion.AutocastSpells) > 0 && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 3*time.Second) {
+				s.executePetAutocast(ctx, motion, targetGUID, now)
+			}
 		}
 	}
 }
@@ -1134,24 +1143,119 @@ func (s *Server) petCanAutoCastTarget(ctx context.Context, owner *session, caste
 	return true
 }
 
-// executePetAutocast casts the highest priority available pet autocast spell.
+// executePetAutocast mirrors PetAI::UpdateAI's autocast block
+// (PetAI.cpp:96-188): every autocast slot is evaluated, spells held by the
+// global cooldown (SpellHistory::HasGlobalCooldown) or still cooling down
+// (SpellHistory::IsReady) are skipped, and ONE eligible candidate is picked
+// at random (urand over targetSpellStore) and cast non-triggered. Go
+// previously fired only AutocastSpells[0] every tick with no cooldown or
+// GCD gate, so multi-spell pets never rotated and on-cooldown spells were
+// re-cast freely.
+// Positive spells (SpellInfo::IsPositive, SpellInfo.cpp:1205-1208 — the
+// SPELL_ATTR0_CU_NEGATIVE flag, not the per-effect fold) take the
+// CanBeUsedInCombat in-combat gate (PetAI.cpp:133-137): skipped while the
+// pet is neither in combat nor commanded to attack. Their enemy-first
+// targeting (pet attacker, then owner attacker, PetAI.cpp:142-156) has no
+// Go twin — there is no attacker index — so the pet's current victim
+// stands in as the enemy analog; the _allySet scan (PetAI.cpp:160-176)
+// likewise has no twin, so the owner is the single ally candidate (C++
+// scans pet+owner+group by GUID order; owner-only is the documented
+// approximation). SPELL_EFFECT_JUMP_DEST spells (DK Ghoul's Leap) target
+// enemies only (PetAI.cpp:158-160) and take the victim leg.
+// Offensive spells take the victim leg (PetAI.cpp:183-190): the caller
+// guarantees a live victim in combat, and CanBeUsedInCombat gates. The
+// Spell::CanAutoCast aura-stack precheck rides petCanAutoCastTarget.
 func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion, targetGUID uint64, now time.Time) {
 	if s == nil || motion == nil || len(motion.AutocastSpells) == 0 || s.Data == nil {
 		return
 	}
-	spellID := motion.AutocastSpells[0]
 	owner := s.findSessionByGUID(motion.OwnerGUID)
-	spell, found, err := s.Data.Spell(spellID)
-	if owner == nil || err != nil || !found {
+	if owner == nil {
 		return
 	}
-	// Spell::CanAutoCast aura-stack precheck (Spell.cpp:6461-6505): C++
-	// skips the autocast when the target already carries the spell or a
-	// stack-exclusive peer of one of its aura effects.
-	if !s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) {
+	type petAutocastCandidate struct {
+		spell  wotlk.Spell
+		target uint64
+	}
+	var candidates []petAutocastCandidate
+	for _, spellID := range motion.AutocastSpells {
+		if spellID == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		// PetAI.cpp:124-131 — HasGlobalCooldown / IsReady.
+		if s.petGlobalCooldownActive(motion, spell, now) {
+			continue
+		}
+		if !s.petSpellCooldownReady(motion, spell, now) {
+			continue
+		}
+		usableInCombat := spell.Attributes&spellAttr0CantUsedInCombat == 0
+		if spell.AttributesCu&spellAttr0CuNegativeMask == 0 {
+			// Positive spell (PetAI.cpp:132-181).
+			if usableInCombat && !motion.InCombat && motion.PetCommand != PetCommandAttack {
+				continue
+			}
+			jumpToEnemy := false
+			for _, eff := range spell.Effects {
+				if eff.Effect == spellEffectJumpDest {
+					jumpToEnemy = true
+					break
+				}
+			}
+			if jumpToEnemy {
+				if targetGUID != 0 && usableInCombat && s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) {
+					candidates = append(candidates, petAutocastCandidate{spell: spell, target: targetGUID})
+				}
+				continue
+			}
+			if ownerGUID := motion.OwnerGUID; ownerGUID != 0 && s.petCanAutoCastTarget(ctx, owner, motion, spell, ownerGUID) {
+				candidates = append(candidates, petAutocastCandidate{spell: spell, target: ownerGUID})
+			}
+		} else if targetGUID != 0 && motion.InCombat && usableInCombat &&
+			s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) {
+			candidates = append(candidates, petAutocastCandidate{spell: spell, target: targetGUID})
+		}
+	}
+	if len(candidates) == 0 {
 		return
 	}
-	owner.executePetSpell(ctx, motion, spell, 0, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: targetGUID})
+	// PetAI.cpp:191-196 — urand(0, targetSpellStore.size() - 1).
+	pick := candidates[rand.Intn(len(candidates))]
+	owner.executePetSpell(ctx, motion, pick.spell, 0, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: pick.target})
+}
+
+// petVictimHasBreakableCC bridges the PetAI::UpdateAI breakable-CC arm
+// (PetAI.cpp:74-80): when the victim carries a breakable-by-damage
+// crowd-control aura, the pet interrupts its non-melee casts and skips the
+// rest of the tick — it must not exit combat and must not break the CC.
+// Go pets carry no in-flight cast state (pet spells resolve instantly, so
+// InterruptNonMeleeSpells is vacuous) and no channeled-spell state (the
+// CURRENT_CHANNELED_SPELL outer gate and the channeled self-exclusion are
+// vacuous), so the arm reduces to the tick-skip the caller applies. Covers
+// player and creature victims via the shared breakableCCAuraPresent scan.
+func (s *Server) petVictimHasBreakableCC(motion *creatureMotion, targetGUID uint64, isTargetPlayer bool, targetSess *session) bool {
+	if s == nil || motion == nil || targetGUID == 0 {
+		return false
+	}
+	if isTargetPlayer {
+		if targetSess == nil {
+			return false
+		}
+		return breakableCCAuraPresent(targetSess.activeAuras)
+	}
+	s.motionMu.Lock()
+	victim := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
+	s.motionMu.Unlock()
+	if victim == nil {
+		return false
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	return breakableCCAuraPresent(s.activeCreatureAuras[creatureAuraKeyForMotion(victim)])
 }
 
 func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData) bool {

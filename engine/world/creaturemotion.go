@@ -1257,23 +1257,20 @@ func (s *Server) resolveAISpellTargetGUID(m *creatureMotion, spell wotlk.Spell, 
 	}
 }
 
-// aiVictimHasBreakableCC bridges the CasterAI::UpdateAI guard
-// (CombatAI.cpp:155):
-// me->EnsureVictim()->HasBreakableByDamageCrowdControlAura(me)
-// (Unit.cpp:673-683). True when the victim carries a CONFUSE/FEAR/STUN/
-// ROOT/TRANSFORM aura (HasBreakableByDamageAuraType, Unit.cpp:663-671)
-// whose AuraInterruptFlags include AURA_INTERRUPT_FLAG_TAKE_DAMAGE and
-// whose caster is this creature. C++ checks aura EFFECTS by type; Go's
-// activeAura carries only the first effect's AuraType, so a multi-effect
-// aura whose CC effect is not first is missed — noted, not bridged. The
-// channeled-CC self-exclusion (Unit.cpp:676) has no Go model (creatures
-// carry no channeled-spell state) and is noted, not bridged.
-func (s *Server) aiVictimHasBreakableCC(m *creatureMotion, sess *session) bool {
-	if m == nil || sess == nil {
-		return false
-	}
-	for _, aura := range sess.activeAuras {
-		if aura == nil || aura.CasterGUID != m.GUID {
+// breakableCCAuraPresent is the shared Unit::HasBreakableByDamageAuraType
+// scan (Unit.cpp:663-671): true when any live (non-stopped) aura of the
+// five breakable CC types (CONFUSE/FEAR/STUN/ROOT/TRANSFORM) carries
+// AURA_INTERRUPT_FLAG_TAKE_DAMAGE. C++ applies no caster filter — the
+// excludeCasterChannel parameter of HasBreakableByDamageCrowdControlAura
+// (Unit.cpp:673-677) only excludes the caller's own currently-channeled
+// spell (channeled CC like Seduction must not self-trigger), which has no
+// Go model (no creature channeled-spell state) and is vacuous. C++ checks
+// aura EFFECTS by type; Go stores a single activeAura per spell (keyed by
+// spell ID) carrying one AuraType, so a multi-effect aura whose CC effect
+// is not the stored one is missed — noted, not bridged.
+func breakableCCAuraPresent(auras map[uint32]*activeAura) bool {
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
 			continue
 		}
 		switch aura.AuraType {
@@ -1286,6 +1283,20 @@ func (s *Server) aiVictimHasBreakableCC(m *creatureMotion, sess *session) bool {
 		}
 	}
 	return false
+}
+
+// aiVictimHasBreakableCC bridges the CasterAI::UpdateAI guard
+// (CombatAI.cpp:155):
+// me->EnsureVictim()->HasBreakableByDamageCrowdControlAura(me)
+// (Unit.cpp:673-683). CORRECTION (2026-10-11): the earlier twin required
+// the aura's caster to be the creature itself — C++ applies no caster
+// filter; the parameter only names the channeled-spell exclusion. CC
+// applied by any unit now triggers the guard.
+func (s *Server) aiVictimHasBreakableCC(m *creatureMotion, sess *session) bool {
+	if m == nil || sess == nil {
+		return false
+	}
+	return breakableCCAuraPresent(sess.activeAuras)
 }
 
 // scheduleAISpellEvents bridges the pre-arm of CombatAI::JustEngagedWith
