@@ -443,6 +443,12 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	// matching the C++ relative order. Skipped while the spirit form holds.
 	if !spiritOfRedemption {
 		s.unsummonPet(ctx, petSaveNotInSlot)
+		// Totem::Update (Totem.cpp:47-57): a totem unsummons when its
+		// owner is not alive. Go runs no per-totem update tick, so the
+		// owner-death unsummon lands in the JUST_DIED cascade next to the
+		// pet dismissal, skipped while the spirit form holds like the
+		// rest of the cascade. Previously totems kept pulsing on a corpse.
+		s.destroyAllTotems()
 	}
 	// Player::setDeathState(JUST_DIED), Player.cpp:1385-1404: drunkenness is
 	// cleared (SetDrunkValue(0)), banked combo points are lost
@@ -662,6 +668,9 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	s.interruptCurrentChannel()
 	s.cancelNextSwingSpell()
 	s.unsummonPet(ctx, petSaveNotInSlot)
+	// Deferred Totem::Update owner-death unsummon (Totem.cpp:47-57),
+	// landing with the deferred JUST_DIED cascade.
+	s.destroyAllTotems()
 	if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	}

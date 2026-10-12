@@ -852,6 +852,24 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 		s.removeAura(buffSpell)
 	}
 
+	// Totem::UnSummon (Totem.cpp:150-162): the totem's aura leaves every
+	// party member in the same map and subgroup too — the C++ sweep has no
+	// radius gate (only the pulse application does), so the removal keys on
+	// group + map/instance only. Go has no subgroup model; groupID is the
+	// equivalent. Previously only the owner's buff was dropped, leaving
+	// party members' 30-minute buff auras dangling after the totem died.
+	if buffSpell > 0 && s.server != nil && s.groupID != 0 {
+		s.server.sessionsMu.RLock()
+		for other := range s.server.sessions {
+			if other != nil && other != s && other.worldReady.Load() && other.player != nil &&
+				other.groupID == s.groupID &&
+				other.player.Map == mapID && other.player.InstanceID == instanceID {
+				other.removeAura(buffSpell)
+			}
+		}
+		s.server.sessionsMu.RUnlock()
+	}
+
 	// Send SMSG_TOTEM_CREATED with 0 duration to clear totem bar icon
 	resp := protocol.NewBuffer(17)
 	resp.WriteU8(slotID)
