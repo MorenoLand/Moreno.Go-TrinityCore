@@ -2500,6 +2500,62 @@ func (s *Store) SkillLineAbilitiesForSkill(skillID uint32) ([]SkillLineAbilityEn
 	return abilities, ok, nil
 }
 
+// PetFamilySpells bridges the sPetFamilySpellsStore build
+// (DBCStores.cpp:485-498): passive (SPELL_ATTR0_PASSIVE) spells with
+// SpellLevel 0 whose SkillLineAbility row has AcquireMethod ==
+// SKILL_LINE_ABILITY_LEARNED_ON_SKILL_LEARN (2, DBCEnums.h:350) on a
+// skill line matching the creature family's SkillLine[0]/[1]
+// (CreatureFamily.dbc fields 5-6, DBCStructure.h:500).
+// Pet::LearnPetPassives (Pet.cpp:1883-1902) learns these as
+// ACT_DECIDE/PETSPELL_FAMILY.
+func (s *Store) PetFamilySpells(familyID uint32) ([]uint32, error) {
+	if familyID == 0 {
+		return nil, nil
+	}
+	file, err := s.File("CreatureFamily")
+	if err != nil {
+		return nil, err
+	}
+	record, found := file.Find(familyID)
+	if !found {
+		return nil, nil
+	}
+	skill0, _ := record.Uint32(5)
+	skill1, _ := record.Uint32(6)
+	seen := make(map[uint32]bool)
+	var out []uint32
+	for _, skill := range []uint32{skill0, skill1} {
+		if skill == 0 {
+			continue
+		}
+		abilities, ok, err := s.SkillLineAbilitiesForSkill(skill)
+		if err != nil || !ok {
+			continue
+		}
+		for _, ab := range abilities {
+			if ab.AcquireMethod != 2 {
+				continue
+			}
+			spell, found, err := s.Spell(ab.Spell)
+			if err != nil || !found {
+				continue
+			}
+			if spell.Attributes&spellAttr0Passive == 0 {
+				continue
+			}
+			if spell.SpellLevel != 0 {
+				continue
+			}
+			if !seen[spell.ID] {
+				seen[spell.ID] = true
+				out = append(out, spell.ID)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
 // SpellName returns the name and subtext/rank for a spell from Spell.dbc.
 func (s *Store) SpellName(id uint32) (string, string, bool, error) {
 	file, err := s.File("Spell")

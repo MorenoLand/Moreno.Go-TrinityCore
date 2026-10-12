@@ -427,6 +427,36 @@ type pSpell struct {
 	active uint8
 }
 
+// learnPetFamilyPassives bridges Pet::LearnPetPassives (Pet.cpp:1883-1902):
+// the pet's creature family (creature_template.family) resolves passive
+// spells via the DBC-built sPetFamilySpellsStore twin
+// (wotlk.Store.PetFamilySpells); ACT_DECIDE on a passive stores ACT_PASSIVE
+// (0x01, UnitDefines.h:330; Pet::addSpell, Pet.cpp:1404-1411).
+// INSERT OR REPLACE keeps the load-path re-learn (Pet.cpp:383) idempotent.
+func (s *session) learnPetFamilyPassives(ctx context.Context, petID uint32, entry uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil || petID == 0 || entry == 0 {
+		return
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return
+	}
+	var family int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(family, 0) FROM creature_template WHERE entry = ?", entry).Scan(&family); err != nil || family <= 0 {
+		return
+	}
+	passives, err := s.server.Data.PetFamilySpells(uint32(family))
+	if err != nil {
+		return
+	}
+	for _, spellID := range passives {
+		_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petID, spellID)
+	}
+}
+
 func getPetSpellsForLevel(entry uint32, level uint32) []pSpell {
 	var result []pSpell
 	chains, ok := defaultPetSpells[entry]
@@ -1375,6 +1405,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 		for _, sp := range spells {
 			_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petID, sp.id, sp.active)
 		}
+		s.learnPetFamilyPassives(ctx, uint32(petID), entry)
 
 		s.spawnPet(ctx, uint32(petID), entry, petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
 		return s.player.PetGUID
@@ -1411,6 +1442,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 	for _, sp := range spells {
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", newPetID, sp.id, sp.active)
 	}
+	s.learnPetFamilyPassives(ctx, newPetID, entry)
 
 	s.spawnPet(ctx, newPetID, entry, petName, playerLevel, model, maxHP, maxHP, maxMP, maxMP, 1)
 	return s.player.PetGUID
@@ -1587,6 +1619,7 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 	for _, sp := range spells {
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", newPetID, sp.id, sp.active)
 	}
+	s.learnPetFamilyPassives(ctx, newPetID, targetEntry)
 
 	s.spawnPet(ctx, newPetID, targetEntry, cName, petLevel, modelID, maxHP, maxHP, maxMP, maxMP, 1)
 }

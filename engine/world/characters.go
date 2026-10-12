@@ -1079,6 +1079,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				if curMana > int64(maxMP) {
 					curMana = int64(maxMP)
 				}
+				s.learnPetFamilyPassives(ctx, uint32(petID), uint32(entry))
 				s.spawnPet(ctx, uint32(petID), uint32(entry), petName, petLevel, uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
 				if s.player.PetGUID != 0 {
 					_ = s.sendTalentsInfo(true)

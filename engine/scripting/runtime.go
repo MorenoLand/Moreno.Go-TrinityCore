@@ -115,8 +115,8 @@ const (
 
 // Eluna ItemEvents contract for RegisterItemEvent. Numbering is the
 // TrinityCore LuaEngine numbering (LuaEngine/Hooks.h ItemEvents). The
-// engine fires ON_USE (2) and ON_QUEST_ACCEPT (3); ON_DUMMY_EFFECT (1),
-// ON_EXPIRE (4) and ON_REMOVE (5) carry constants but have no Go fire
+// engine fires ON_USE (2), ON_QUEST_ACCEPT (3) and ON_EXPIRE (4);
+// ON_DUMMY_EFFECT (1) and ON_REMOVE (5) carry constants but have no Go fire
 // sites (documented in engine/world/item_hooks.go).
 const (
 	ItemEventOnDummyEffect = 1
@@ -148,14 +148,11 @@ const (
 // InstanceEvents). RegisterMapEvent binds a map ID (Go kind "map:<mapID>");
 // RegisterInstanceEvent binds an instance ID (Go kind "instance:<id>") —
 // C++ fires both binding maps at every fire site
-// (LuaEngine/InstanceHooks.cpp START_HOOK). The engine fires
-// ON_PLAYER_ENTER (4), ON_GAMEOBJECT_CREATE (6) and
+// (LuaEngine/InstanceHooks.cpp START_HOOK). The engine fires ON_UPDATE (3),
+// ON_PLAYER_ENTER (4), ON_CREATURE_CREATE (5), ON_GAMEOBJECT_CREATE (6) and
 // ON_CHECK_ENCOUNTER_IN_PROGRESS (7); ON_INITIALIZE (1) is #ifndef
-// TRINITY-dead in C++ on this fork, ON_LOAD (2) has no Go instance-data
-// load path, ON_UPDATE (3) has no Go per-instance tick, and
-// ON_CREATURE_CREATE (5) has no central Go creature-creation funnel — all
-// four carry constants but no Go fire sites (documented in
-// engine/world/instance_hooks.go).
+// TRINITY-dead in C++ on this fork and ON_LOAD (2) has no Go instance-data
+// load path (documented in engine/world/instance_hooks.go).
 const (
 	InstanceEventOnInitialize             = 1
 	InstanceEventOnLoad                   = 2

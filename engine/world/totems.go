@@ -224,6 +224,71 @@ func (s *Server) totemCreatureTargets(totem *activeTotem, radius float64) []*cre
 	return targets
 }
 
+// totemDisplayForRace bridges the race-dependent display arm of
+// Totem::InitStats (Totem.cpp:88-90): sObjectMgr->GetModelForTotem
+// (ObjectMgr.cpp:1747-1753) reads player_totem_model keyed by
+// (SummonSlot, race) (SharedDefines.h:3325-3334); with no row the totem
+// keeps its template model ("Set to default", Totem.cpp:90-92). The Go
+// slot ids are Earth=0/Fire=1/Water=2/Air=3; the C++ SummonSlot ids are
+// Fire=1/Earth=2/Water=3/Air=4.
+func (s *session) totemDisplayForRace(ctx context.Context, slot uint8, entry uint32) uint32 {
+	var model int64
+	if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), 1) FROM creature_template WHERE entry = ?", entry).Scan(&model)
+		var cppSlot uint8
+		switch slot {
+		case TotemSlotFire:
+			cppSlot = 1
+		case TotemSlotEarth:
+			cppSlot = 2
+		case TotemSlotWater:
+			cppSlot = 3
+		case TotemSlotAir:
+			cppSlot = 4
+		}
+		if cppSlot != 0 && s.player != nil {
+			var display int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT DisplayId FROM player_totem_model WHERE TotemSlot = ? AND RaceId = ?", cppSlot, s.player.Race).Scan(&display); err == nil && display > 0 {
+				model = display
+			}
+		}
+	}
+	if model <= 0 {
+		model = 1
+	}
+	return uint32(model)
+}
+
+// totemTemplateFaction mirrors Creature::InitStats' template faction for
+// the totem entry; totems not in creature_template inherit the owner's
+// race faction (pets.go pattern).
+func (s *session) totemTemplateFaction(ctx context.Context, entry uint32) uint32 {
+	faction := uint32(0)
+	if s != nil && s.server != nil {
+		faction = s.server.raceFaction(s.player.Race)
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var templateFaction int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(faction, 0) FROM creature_template WHERE entry = ?", entry).Scan(&templateFaction); err == nil && templateFaction > 0 {
+				faction = uint32(templateFaction)
+			}
+		}
+	}
+	return faction
+}
+
+// totemTemplateSpeeds mirrors the template walk/run rates carried into
+// buildCreatureUpdate (Object.cpp:337-345 order).
+func (s *session) totemTemplateSpeeds(ctx context.Context, entry uint32) (float32, float32) {
+	walk, run := float32(1.0), float32(1.0)
+	if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var walkSpeed, runSpeed float64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(speed_walk, 1), COALESCE(speed_run, 1) FROM creature_template WHERE entry = ?", entry).Scan(&walkSpeed, &runSpeed); err == nil {
+			walk, run = float32(walkSpeed), float32(runSpeed)
+		}
+	}
+	return walk, run
+}
+
 func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 	if s == nil || s.player == nil {
 		return
@@ -319,6 +384,7 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		s.server.motionMu.Lock()
 		s.server.motionMapLocked(s.player.Map, s.player.InstanceID)[totemGUID] = &creatureMotion{
 			GUID:       totemGUID,
+			Entry:      def.Entry,
 			Map:        s.player.Map,
 			InstanceID: s.player.InstanceID,
 			X:          totemX,
@@ -328,6 +394,51 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 			MaxHealth:  totemHealth,
 		}
 		s.server.motionMu.Unlock()
+
+		// Sentry Totem (Totem.cpp:103-104): Totem::InitStats sets
+		// REACT_AGGRESSIVE for SENTRY_TOTEM_ENTRY.
+		if def.PulseType == TotemPulseSentry {
+			s.server.motionMu.Lock()
+			if m := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, totemGUID); m != nil {
+				m.ReactState = creatureReactAggressive
+				m.ReactStateKnown = true
+			}
+			s.server.motionMu.Unlock()
+		}
+
+		// Totem::InitStats (Totem.cpp:72-105): after SMSG_TOTEM_CREATED the
+		// totem materializes as a visible creature via Creature::AddToWorld.
+		// The Go twin sends the create block to the owner and nearby
+		// players (pets.go pattern); the display id is race-dependent via
+		// ObjectMgr::GetModelForTotem (Totem.cpp:88-90), the level is the
+		// owner's (Totem.cpp:99).
+		spawn := creatureSpawn{
+			GUID:           uint32(nextLow),
+			RawGUID:        totemGUID,
+			Entry:          def.Entry,
+			Map:            s.player.Map,
+			X:              totemX,
+			Y:              totemY,
+			Z:              totemZ,
+			Orientation:    s.player.Orientation,
+			Model:          s.totemDisplayForRace(ctx, slot, def.Entry),
+			Faction:        s.totemTemplateFaction(ctx, def.Entry),
+			Level:          maxUint32(uint32(s.player.Level), 1),
+			Health:         totemHealth,
+			MaxHealth:      totemHealth,
+			CreatedBySpell: def.SpellID,
+		}
+		stats := s.server.loadCreatureStats(ctx, def.Entry)
+		spawn.UnitFlags = stats.UnitFlags
+		spawn.BoundingRadius = stats.BoundingRadius
+		spawn.CombatReach = stats.CombatReach
+		spawn.WalkSpeed, spawn.RunSpeed = s.totemTemplateSpeeds(ctx, def.Entry)
+		updates := protocol.NewUpdateData()
+		updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, s))
+		if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+			s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+		}
 	}
 
 	// Apply immediate initial pulse
@@ -905,6 +1016,20 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	resp.WriteU32(0)
 	resp.WriteU32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_TOTEM_CREATED), resp.Bytes(), true)
+
+	// Totem::UnSummon (Totem.cpp:150-162) removes the totem from the world;
+	// the client's creature object goes away via the normal destroy path.
+	// destroyTotemGUID funnels every unsummon (expiry via runTotemLifecycle,
+	// kill, replacement, manual destroy).
+	if totemGUID != 0 {
+		destroy := protocol.NewBuffer(9)
+		destroy.WriteU64(totemGUID)
+		destroy.WriteU8(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroy.Bytes(), true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroy.Bytes(), s)
+		}
+	}
 }
 
 func (s *session) destroyAllTotems() {
