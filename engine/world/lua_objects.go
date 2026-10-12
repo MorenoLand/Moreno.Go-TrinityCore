@@ -463,6 +463,32 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		state.LootState = value
 		return nil, nil
 	}
+	// UseDoorOrButton is LuaGameObject::UseDoorOrButton
+	// (GameObjectMethods.h): the delay arg defaults to 0, which falls back
+	// to the template autoCloseTime (GameObject::UseDoorOrButton,
+	// GameObject.cpp:1434).
+	methods["UseDoorOrButton"] = func(_ context.Context, args []any) ([]any, error) {
+		var delay uint32
+		if len(args) > 0 {
+			value, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			delay = value
+		}
+		srv.useDoorOrButton(state.Map, state.InstanceID, state.GUID, false, delay)
+		return nil, nil
+	}
+	// IsTransport is LuaGameObject::IsTransport (GameObjectMethods.h):
+	// GameObject::IsTransport (GameObject.cpp) returns true for template
+	// type TRANSPORT (11) or MO_TRANSPORT (15) (SharedDefines.h:1605/1609).
+	methods["IsTransport"] = luaNoArgs(func() any {
+		if dyn := srv.gameObjectState(state.Map, state.InstanceID, state.GUID); dyn != nil {
+			return dyn.Type == GameObjectTypeTransport || dyn.Type == GameObjectTypeMOTransport
+		}
+		t := srv.gameObjectTemplateType(state.Entry)
+		return t == GameObjectTypeTransport || t == GameObjectTypeMOTransport
+	})
 	methods["Despawn"] = func(_ context.Context, _ []any) ([]any, error) {
 		srv.objectsMuLockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil

@@ -564,14 +564,14 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 
 	switch goState.Type {
 	case GameObjectTypeDoor:
-		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid, false)
+		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid, false, 0)
 
 	case GameObjectTypeButton:
 		// GameObject::Use GAMEOBJECT_TYPE_BUTTON arm (GameObject.cpp:1520):
 		// doors and buttons share the identical arm — UseDoorOrButton(0,
 		// false, user) — so the button runs the same IN_USE gate, state
 		// flip and template autoCloseTime (data2) reset as doors.
-		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid, false)
+		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid, false, 0)
 
 	case GameObjectTypeChest:
 		// Chests open through the lock path: the client casts Opening and

@@ -107,15 +107,15 @@ const goFlagInUse uint32 = 0x00000001
 // closed door flips to GO_STATE_DESTROYED (SharedDefines.h:1663) instead of
 // ACTIVE; an open or destroyed door flips back to READY. GO_FLAG_IN_USE goes
 // out on the flags field, the new state on bytes1, and the auto-close is
-// scheduled from the template autoCloseTime (door/button data2, consumed as
-// milliseconds against the ms game clock — m_cooldownTime =
-// GetGameTimeMS() + GetAutoCloseTime()) whenever the door is left non-ready.
-// A zero template value means no auto-close (m_cooldownTime = 0 fails the
-// Update arm's m_cooldownTime check); scripts close it via ResetDoorOrButton.
-// Shared by handleGameObjectUse (door and button share the identical C++
-// Use arm: UseDoorOrButton(0, false, user)) and the DoLootRelease door arm
-// (LootHandler.cpp:281-285).
-func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternative bool) {
+// scheduled from time_to_restore — 0 falls back to the template autoCloseTime
+// (door/button data2, consumed as milliseconds against the ms game clock —
+// m_cooldownTime = GetGameTimeMS() + GetAutoCloseTime()) whenever the door is
+// left non-ready. A zero template value means no auto-close (m_cooldownTime =
+// 0 fails the Update arm's m_cooldownTime check); scripts close it via
+// ResetDoorOrButton. Shared by handleGameObjectUse (door and button share the
+// identical C++ Use arm: UseDoorOrButton(0, false, user)) and the DoLootRelease
+// door arm (LootHandler.cpp:281-285).
+func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternative bool, delayMs uint32) {
 	if s == nil {
 		return
 	}
@@ -151,8 +151,14 @@ func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternat
 	s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(newState))
 	s.broadcastGameObjectCustomAnimInInstance(mapID, instanceID, guid, 0)
 	if newState != GameObjectStateReady {
-		if delay := s.gameObjectAutoCloseDelay(entry); delay > 0 {
-			s.scheduleGameObjectResetInInstance(mapID, instanceID, guid, delay, true)
+		restoreMs := delayMs
+		if restoreMs == 0 {
+			if d := s.gameObjectAutoCloseDelay(entry); d > 0 {
+				restoreMs = uint32(d / time.Millisecond)
+			}
+		}
+		if restoreMs > 0 {
+			s.scheduleGameObjectResetInInstance(mapID, instanceID, guid, time.Duration(restoreMs)*time.Millisecond, true)
 		}
 	}
 }
@@ -170,6 +176,20 @@ func (s *Server) gameObjectAutoCloseDelay(entry uint32) time.Duration {
 		return 0
 	}
 	return time.Duration(d) * time.Millisecond
+}
+
+// gameObjectTemplateType mirrors the template-type read behind
+// GameObject::IsTransport (GameObject.cpp): 0 on an unavailable DB/template.
+func (s *Server) gameObjectTemplateType(entry uint32) uint8 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0
+	}
+	var t int64
+	if err := s.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&t); err != nil || t < 0 || t > 255 {
+		return 0
+	}
+	return uint8(t)
 }
 
 // gameObjectTemplateCooldown mirrors GameObjectTemplate::GetCooldown

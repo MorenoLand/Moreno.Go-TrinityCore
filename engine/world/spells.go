@@ -4471,7 +4471,7 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
 			"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&goType); err == nil {
 			if uint8(goType) == GameObjectTypeDoor || uint8(goType) == GameObjectTypeButton {
-				s.server.useDoorOrButton(s.player.Map, s.player.InstanceID, goGUID, false)
+				s.server.useDoorOrButton(s.player.Map, s.player.InstanceID, goGUID, false, 0)
 				return
 			}
 		}
@@ -33484,7 +33484,7 @@ func (s *session) handleEffectActivateObjectGO(ctx context.Context, goGUID uint6
 	case action == goActionOpenAndUnlock:
 		// GameObject::UseDoorOrButton(0, false) then the fallthrough Unlock
 		// arm clears GO_FLAG_LOCKED (SpellEffects.cpp:3961-3967).
-		s.server.useDoorOrButton(mapID, instanceID, goGUID, false)
+		s.server.useDoorOrButton(mapID, instanceID, goGUID, false, 0)
 		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, false)
 	case action == goActionUnlock:
 		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, false)
@@ -33513,7 +33513,7 @@ func (s *session) handleEffectActivateObjectGO(ctx context.Context, goGUID uint6
 		// door to GO_STATE_DESTROYED and leaves it in-use (lootState
 		// GO_ACTIVATED), so it cannot be used again until a Close/Rebuild
 		// reset or the template autoCloseTime fires.
-		s.server.useDoorOrButton(mapID, instanceID, goGUID, true)
+		s.server.useDoorOrButton(mapID, instanceID, goGUID, true, 0)
 	case action >= goActionUseArtKit0 && action <= goActionUseArtKit3:
 		s.applyGameObjectArtKit(ctx, goGUID, action-goActionUseArtKit0)
 	}

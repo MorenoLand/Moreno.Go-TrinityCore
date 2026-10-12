@@ -77,9 +77,9 @@ func (r *Runtime) getQuest(state *lua.State) int {
 		state.PushNil()
 		return 1
 	}
-	var id, level, minLevel, flags, nextID, prevID, questType int64
+	var id, level, minLevel, flags, nextID, chainNextID, prevID, questType int64
 	var title string
-	err := r.config.WorldDatabase.QueryRow("SELECT ID, COALESCE(LogTitle, ''), COALESCE(QuestLevel, 0), COALESCE(MinLevel, 0), COALESCE(Flags, 0), COALESCE(RewardNextQuest, 0), COALESCE(PrevQuestId, 0), COALESCE(Type, 0) FROM quest_template WHERE ID = ?", uint32(questID)).Scan(&id, &title, &level, &minLevel, &flags, &nextID, &prevID, &questType)
+	err := r.config.WorldDatabase.QueryRow("SELECT ID, COALESCE(LogTitle, ''), COALESCE(QuestLevel, 0), COALESCE(MinLevel, 0), COALESCE(Flags, 0), COALESCE(RewardNextQuest, 0), COALESCE(NextQuestID, 0), COALESCE(PrevQuestId, 0), COALESCE(Type, 0) FROM quest_template WHERE ID = ?", uint32(questID)).Scan(&id, &title, &level, &minLevel, &flags, &chainNextID, &nextID, &prevID, &questType)
 	if err != nil {
 		err = r.config.WorldDatabase.QueryRow("SELECT ID, COALESCE(QuestLevel, 0), COALESCE(MinLevel, 0), COALESCE(Flags, 0) FROM quest_template WHERE ID = ?", uint32(questID)).Scan(&id, &level, &minLevel, &flags)
 	}
@@ -92,7 +92,13 @@ func (r *Runtime) getQuest(state *lua.State) int {
 	methods["GetLevel"] = func(context.Context, []any) ([]any, error) { return []any{uint32(level)}, nil }
 	methods["GetMinLevel"] = func(context.Context, []any) ([]any, error) { return []any{uint32(minLevel)}, nil }
 	methods["GetFlags"] = func(context.Context, []any) ([]any, error) { return []any{uint32(flags)}, nil }
+	// GetNextQuestId is quest_template.NextQuestID (_nextQuestId,
+	// QuestDef.cpp:179) while GetNextQuestInChain is RewardNextQuest
+	// (_rewardNextQuest, QuestDef.h:253) — Eluna splits them
+	// (QuestMethods.h); Go previously returned RewardNextQuest from
+	// GetNextQuestId.
 	methods["GetNextQuestId"] = func(context.Context, []any) ([]any, error) { return []any{int32(nextID)}, nil }
+	methods["GetNextQuestInChain"] = func(context.Context, []any) ([]any, error) { return []any{int32(chainNextID)}, nil }
 	methods["GetPrevQuestId"] = func(context.Context, []any) ([]any, error) { return []any{int32(prevID)}, nil }
 	methods["GetType"] = func(context.Context, []any) ([]any, error) { return []any{uint32(questType)}, nil }
 	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
