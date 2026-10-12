@@ -1354,6 +1354,31 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 	}
 }
 
+// auraSpellMechanicMask is the C++ SpellInfo::GetAllEffectsMechanicMask twin
+// (SpellInfo.cpp:1893-1902): the aura spell's top-level Mechanic plus every
+// non-NONE effect's Mechanic, as a bit mask. The aura record only carries the
+// top-level Mechanic, so per-effect mechanics resolve from the spell store;
+// an unresolvable spell falls back to the top-level bit alone.
+func (s *session) auraSpellMechanicMask(aura *activeAura) uint32 {
+	var mask uint32
+	if aura == nil {
+		return mask
+	}
+	if aura.Mechanic != 0 {
+		mask |= uint32(1) << aura.Mechanic
+	}
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+			for _, eff := range sp.Effects {
+				if eff.Effect != 0 && eff.Mechanic != 0 {
+					mask |= uint32(1) << eff.Mechanic
+				}
+			}
+		}
+	}
+	return mask
+}
+
 // handleEffectDispelMechanic processes SPELL_EFFECT_DISPEL_MECHANIC (108).
 // Mirrors TrinityCore Spell::EffectDispelMechanic (SpellEffects.cpp:4733-4756).
 func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
@@ -1385,7 +1410,10 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 			if aura == nil || aura.Stopped {
 				continue
 			}
-			matchesMechanic := (aura.Mechanic == mechanic)
+			// C++ matches the aura spell's full mechanic mask, not just the
+			// top-level Mechanic the aura record carries
+			// (SpellInfo::GetAllEffectsMechanicMask, SpellInfo.cpp:1893-1902).
+			matchesMechanic := (targetSess.auraSpellMechanicMask(aura) & (uint32(1) << mechanic)) != 0
 			if !matchesMechanic {
 				// Also check if aura type corresponds to standard CC mechanics
 				switch mechanic {
@@ -1448,7 +1476,7 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 			if aura == nil || aura.Stopped {
 				continue
 			}
-			if aura.Mechanic == mechanic || (mechanic == 5 && aura.AuraType == 7) || (mechanic == 12 && aura.AuraType == 12) {
+			if (s.auraSpellMechanicMask(aura)&(uint32(1)<<mechanic)) != 0 || (mechanic == 5 && aura.AuraType == 7) || (mechanic == 12 && aura.AuraType == 12) {
 				if int32(rand.IntN(100)) < chance {
 					toRemove = append(toRemove, struct {
 						spellID uint32
