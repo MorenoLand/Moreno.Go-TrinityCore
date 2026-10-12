@@ -576,7 +576,9 @@ func (s *session) luaPlayer() *scripting.Object {
 	}
 	methods["SetBinding"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	methods["SetNotRefundable"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
-	methods["PlayDirectSound"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
+	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242) —
+	// replaces the old no-op PlayDirectSound stub.
+	luaWorldObjectSoundMethods(s.server, s, s.playerGUID, methods)
 	methods["GetItemByPos"] = func(_ context.Context, _ []any) ([]any, error) { return []any{nil}, nil }
 	methods["GetNearestGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {

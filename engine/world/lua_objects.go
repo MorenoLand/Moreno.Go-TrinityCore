@@ -42,6 +42,86 @@ type luaGameObjectState struct {
 	LootState  uint32
 }
 
+// luaSoundTargetSession resolves the optional [Player] argument (args[1]) of
+// the Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242): a
+// player object with a live session gets the direct message; anything else
+// (absent, non-player, or offline) falls through to the set broadcast, as
+// C++ does for a null player.
+func (srv *Server) luaSoundTargetSession(args []any) *session {
+	if srv == nil || len(args) < 2 {
+		return nil
+	}
+	object, ok := args[1].(*scripting.Object)
+	if !ok || object == nil {
+		return nil
+	}
+	guid, ok := objectUint64Field(object, "GUID")
+	if !ok || guid == 0 {
+		return nil
+	}
+	return srv.findSessionByGUID(guid)
+}
+
+// luaDeliverSound mirrors the delivery tail shared by LuaWorldObject::PlayMusic,
+// PlayDirectSound and PlayDistanceSound (WorldObjectMethods.h:1161-1242): a
+// resolved player target gets the direct write; otherwise the packet goes to
+// the object's visible set — C++ SendMessageToSet(data, true), i.e. self plus
+// nearby (the sendSpellStart/sendSpellMiss convention: self write plus
+// broadcastToNearby skipping self; creatures and gameobjects have no session,
+// so they broadcast with a nil source like the creature-text sound arm).
+// The sSoundEntriesStore existence gate has no Go bridge (no SoundEntries.dbc
+// model, same documented-blocked state as handleEffectPlaySound): an unknown
+// id plays nothing client-side.
+func (srv *Server) luaDeliverSound(self *session, opcode uint16, payload []byte, args []any) error {
+	if srv == nil {
+		return nil
+	}
+	if target := srv.luaSoundTargetSession(args); target != nil {
+		return target.write(opcode, payload, true)
+	}
+	if self != nil {
+		if err := self.write(opcode, payload, true); err != nil {
+			return err
+		}
+		srv.broadcastToNearby(opcode, payload, self)
+		return nil
+	}
+	srv.broadcastToNearby(opcode, payload, nil)
+	return nil
+}
+
+// luaWorldObjectSoundMethods registers the three Eluna WorldObject sound
+// methods on a Lua object: PlayMusic (SMSG_PLAY_MUSIC, u32 id),
+// PlayDirectSound (SMSG_PLAY_SOUND, u32 id) and PlayDistanceSound
+// (SMSG_PLAY_OBJECT_SOUND, u32 id + packed source GUID). sourceGUID is the
+// WorldObject's GUID for the distance-sound packet; self is the source's
+// session when it has one (players), nil for creatures and gameobjects.
+func luaWorldObjectSoundMethods(srv *Server, self *session, sourceGUID uint64, methods map[string]scripting.ObjectMethod) {
+	methods["PlayMusic"] = func(_ context.Context, args []any) ([]any, error) {
+		musicID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		pkt := protocol.NewBuffer(4)
+		pkt.WriteU32(musicID)
+		return nil, srv.luaDeliverSound(self, uint16(protocol.OpcodeSMSG_PLAY_MUSIC), pkt.Bytes(), args)
+	}
+	methods["PlayDirectSound"] = func(_ context.Context, args []any) ([]any, error) {
+		soundID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return nil, srv.luaDeliverSound(self, uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(soundID), args)
+	}
+	methods["PlayDistanceSound"] = func(_ context.Context, args []any) ([]any, error) {
+		soundID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return nil, srv.luaDeliverSound(self, uint16(protocol.OpcodeSMSG_PLAY_OBJECT_SOUND), buildPlayObjectSound(soundID, sourceGUID), args)
+	}
+}
+
 func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Object {
 	if uint16(guid>>48) != 0xF130 {
 		return nil
@@ -228,6 +308,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildChatMessage(0x10, 0, state.GUID, s.player.GUID, message, ""), true)
 	}
+	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
+	luaWorldObjectSoundMethods(s.server, nil, state.GUID, methods)
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level, "InWorld": true}, Methods: methods}
 }
 
@@ -320,6 +402,8 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		srv.objectsMuUnlockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil
 	}
+	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
+	luaWorldObjectSoundMethods(srv, nil, state.GUID, methods)
 	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
 }
 

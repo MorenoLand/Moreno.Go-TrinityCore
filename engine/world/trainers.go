@@ -747,6 +747,16 @@ func buildPlaySound(soundID uint32) []byte {
 	return buf.Bytes()
 }
 
+// buildPlayObjectSound mirrors WorldPackets::Misc::PlayObjectSound::Write
+// (MiscPackets.cpp:135-141): u32 sound kit id followed by the packed source
+// GUID, for WorldObject::PlayDistanceSound (Object.cpp:3488-3494).
+func buildPlayObjectSound(soundID uint32, sourceGUID uint64) []byte {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU32(soundID)
+	buf.WritePackedGUID(sourceGUID)
+	return buf.Bytes()
+}
+
 func buildSupercededSpell(oldSpell, newSpell uint32) []byte {
 	buf := protocol.NewBuffer(8)
 	buf.WriteU32(oldSpell)

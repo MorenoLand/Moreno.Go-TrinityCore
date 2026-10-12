@@ -101,6 +101,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureTalk(ctx, motion.Map, motion.GUID, motion.Entry, motion.Name, uint8(textID), 0)
 		return nil, nil
 	}
+	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
+	luaWorldObjectSoundMethods(s, nil, motion.GUID, methods)
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{
 		"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry,
 		"Map": state.Map, "MapId": state.Map,
