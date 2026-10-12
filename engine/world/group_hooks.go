@@ -29,10 +29,15 @@ func groupLuaObject(srv *Server, g *groupState) *scripting.Object {
 	if srv != nil {
 		players = srv.luaPlayers
 	}
-	return scripting.NewGroupObject(groupGUID(g.ID), scripting.GroupLive{
+	obj := scripting.NewGroupObject(groupGUID(g.ID), scripting.GroupLive{
 		Load:    func() (scripting.GroupSnapshot, bool) { return snap, true },
 		Players: players,
 	})
+	// Eluna's mutating Group surface (AddMember/SetLeader/SendPacket/
+	// RemoveMember/Disband/ConvertToRaid/SetMembersGroup/SetTargetIcon,
+	// GroupMethods.h) re-resolves the live group per call.
+	attachGroupMutations(srv, obj, g.ID)
+	return obj
 }
 
 // RemoveMethod values for GROUP_EVENT_ON_MEMBER_REMOVE, the Eluna-visible

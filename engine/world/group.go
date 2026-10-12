@@ -1024,12 +1024,11 @@ func (s *session) removeFromGroup(g *groupState, target *session, method uint8) 
 // removeGroupMemberByGUID removes a member by guid, mirroring
 // Group::RemoveMember (Group.cpp:564): online members ride the normal
 // session detach path, offline members are dropped from the slot list.
-// CHAR_DEL_GROUP_MEMBER is the C++ _removeMember DB persist.
-func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, guid uint64) {
+// CHAR_DEL_GROUP_MEMBER is the C++ _removeMember DB persist. The RemoveMethod
+// reaches the Eluna event like the C++ sScriptMgr->OnGroupRemoveMember arm.
+func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, guid uint64, method uint8) {
 	if sess := s.findSessionByGUID(guid); sess != nil {
-		// GM .group remove: cs_group.cpp:284 calls RemoveMember with the
-		// default method (GROUP_REMOVEMETHOD_DEFAULT).
-		sess.removeFromGroup(g, sess, groupRemoveMethodDefault)
+		sess.removeFromGroup(g, sess, method)
 		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
 		}
@@ -1059,7 +1058,7 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
 	}
-	s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, guid, uint8(groupRemoveMethodDefault))
+	s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, guid, method)
 	if disbanded {
 		s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		return
@@ -1557,17 +1556,18 @@ func (s *session) handleGroupRaidConvert(_ context.Context, _ []byte) bool {
 		return false
 	}
 	srv := s.server
-	srv.groupsMu.Lock()
+	srv.groupsMu.RLock()
 	g := srv.groups[s.groupID]
-	if g == nil || g.LeaderGUID != s.playerGUID || len(g.Members) < 2 {
-		srv.groupsMu.Unlock()
+	leader := g != nil && g.LeaderGUID == s.playerGUID
+	srv.groupsMu.RUnlock()
+	if !leader {
 		return false
 	}
-	g.IsRaid = true
-	g.GroupType |= 0x02
-	srv.groupsMu.Unlock()
+	// Group::ConvertToRaid (Group.cpp:311) shared with the Lua bridge.
+	if !srv.convertGroupToRaid(g) {
+		return false
+	}
 	_ = s.sendPartyResult(partyOpInvite, "", errPartyResultOK)
-	srv.broadcastGroupList(g)
 	return true
 }
 

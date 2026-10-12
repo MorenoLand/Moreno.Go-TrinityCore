@@ -291,7 +291,7 @@ func (s *session) handleGroupRemoveCommand(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", t.name)) // LANG_GROUP_NOT_IN_GROUP (1147)
 		return
 	}
-	s.server.removeGroupMemberByGUID(ctx, g, t.guid)
+	s.server.removeGroupMemberByGUID(ctx, g, t.guid, groupRemoveMethodDefault)
 }
 
 // handleGroupJoinCommand mirrors HandleGroupJoinCommand (cs_group.cpp:288):

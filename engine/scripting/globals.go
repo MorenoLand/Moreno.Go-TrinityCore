@@ -542,8 +542,9 @@ const (
 // Push(group) (LuaEngine/GroupHooks.cpp via ElunaTemplate), shared by the
 // world engine's group event hooks. The mutating surface
 // (AddMember/SetLeader/RemoveMember/Disband/ConvertToRaid/SetMembersGroup/
-// SetTargetIcon/SendPacket, GroupMethods.h) has no script-safe live path yet
-// and stays unbridged. groupGUID is the protocol group GUID (0x1F50 high
+// SetTargetIcon/SendPacket, GroupMethods.h) is attached by the world
+// engine's attachGroupMutations, which re-resolves the live group per call.
+// groupGUID is the protocol group GUID (0x1F50 high
 // bits, as in world group.go's groupGUID).
 func NewGroupObject(groupGUID uint64, live GroupLive) *Object {
 	load := live.Load
