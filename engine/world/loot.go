@@ -471,8 +471,14 @@ func (s *Server) addLootTemplateRow(ctx context.Context, wdb *sql.DB, loot *acti
 	if count == 0 {
 		return
 	}
+	// Loot::AddItem (Loot.cpp:143-149) with ItemTemplate::GetMaxStackSize
+	// (ItemTemplate.h:686-688): the effective max stack is 0x7FFFFFFF-1
+	// (unlimited) when Stackable is <= 0 or INT32_MAX, else exactly
+	// Stackable — including 1 for non-stackables, which splits a count>1
+	// roll into count single-count stacks. Go's COALESCE yields 0 for an
+	// unknown template, which takes the unlimited arm like C++'s <= 0.
 	stacks := uint32(1)
-	if row.maxStack > 1 && count > row.maxStack {
+	if row.maxStack != 0 {
 		stacks = count / row.maxStack
 		if count%row.maxStack != 0 {
 			stacks++
@@ -525,6 +531,10 @@ func validLootTemplateRow(r *lootTemplateRow) bool {
 // world schema lacks the newer columns (matching the pre-existing
 // isMissingColumn fallbacks at the call sites).
 func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32) []lootTemplateRow {
+	// C++ LootStore::LoadLootTable (LootMgr.cpp:135) has no ORDER BY: the
+	// template rows reach AddEntry/Process in DB natural order, and the
+	// LootGroup::Roll cumulative-chance arm (LootMgr.cpp:382-392) is
+	// order-sensitive, so Go must not reorder by Item either.
 	full := `SELECT l.Item, l.Reference, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
 			COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0),
 			COALESCE(l.LootMode, 1), COALESCE(l.GroupId, 0), COALESCE(t.Stackable, 0), COALESCE(t.Flags, 0),
@@ -532,21 +542,21 @@ func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID
 			t.entry IS NOT NULL
 		FROM ` + table + ` AS l
 		LEFT JOIN item_template AS t ON t.entry = l.Item
-		WHERE l.Entry = ? ORDER BY l.Item`
+		WHERE l.Entry = ?`
 	rows, err := wdb.QueryContext(ctx, full, lootID)
 	if err != nil && isMissingColumn(err) {
 		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
 				COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
 			FROM `+table+` AS l
 			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item`, lootID)
+			WHERE l.Entry = ?`, lootID)
 	}
 	if err != nil && isMissingColumn(err) {
 		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
 					0, 0, 0
 			FROM `+table+` AS l
 			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item`, lootID)
+			WHERE l.Entry = ?`, lootID)
 	}
 	if err != nil {
 		return nil
