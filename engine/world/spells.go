@@ -19191,11 +19191,20 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 // SpellAuraEffects.cpp:5121 (periodic damage 3), 5241 (periodic leech 53),
 // and 5454 (mana leech 64) — "Consecrate ticks can miss". Health funnel
 // (62) and power burn (162) carry no such gate in C++ and are excluded.
+// "dynobj auras must always have a caster" (ASSERT_NOTNULL), and
+// WorldObject::MagicSpellHitResult (Object.cpp:2531) keys thisLevel on the
+// LIVE caster's GetLevelForTarget(victim) — not the apply-time snapshot — so
+// the miss leg resolves the tick's live caster via tickAttackerLevel (the
+// Aura::UpdateOwner re-resolution, SpellAuras.cpp:790-824) instead of the
+// record's stored level; an unresolvable caster feeds the stored level to
+// the curve, like the damage-tick armor leg.
 // The caster's m_modSpellHitChance arm of WorldObject::MagicSpellHitResult
 // (Object.cpp:2555) runs for creature casters: their live
 // SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum folds in via the
 // HandleModSpellHitChance creature arm. Player casters stay parked (no
-// caster session in this path). Documented deltas: SPELLMOD_RESIST_MISS_CHANCE
+// caster session in this path). Documented deltas: the trigger-caster
+// max(thisLevel, SpellLevel) arm (Object.cpp:2533) has no Go model
+// (flags_extra is not carried on the motion); SPELLMOD_RESIST_MISS_CHANCE
 // spellmods, the mechanic-resist and deflect rolls,
 // SPELL_ATTR3_IGNORE_HIT_RESULT, the victim-side 186/160 aura arms, and the
 // victim CR_HIT_TAKEN_SPELL rating leg have no Go model. The
@@ -19203,14 +19212,15 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 // (spellDebuffResisted) but not here — the tick carries no victim session or
 // target GUID to resolve the victim's live auras.
 func (s *Server) persistentAreaTickMissed(mapID, instanceID uint32, aura *activeAura, victimLevel uint8, isPlayerVictim bool) bool {
-	if aura == nil || !aura.PersistentAreaAura || aura.CasterLevel == 0 {
+	attLevel, _ := tickAttackerLevel(s, mapID, instanceID, aura)
+	if aura == nil || !aura.PersistentAreaAura || attLevel == 0 {
 		return false
 	}
 	var bonusHit float64
 	if s != nil && aura.CasterGUID != 0 && s.findSessionByGUID(aura.CasterGUID) == nil {
 		bonusHit = float64(s.creatureAuraSpellHitSum(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: aura.CasterGUID}))
 	}
-	return magicSpellHitResult(aura.CasterLevel, victimLevel, isPlayerVictim, bonusHit) != protocol.SpellMissNone
+	return magicSpellHitResult(attLevel, victimLevel, isPlayerVictim, bonusHit) != protocol.SpellMissNone
 }
 
 // isBinarySpell checks whether a spell is binary (i.e. does not deal direct damage,
@@ -24162,20 +24172,6 @@ func (ts *session) sendPeriodicTickImmune(aura *activeAura) {
 	}
 }
 
-// periodicTickCasterLevel resolves the caster level for the periodic-tick
-// CalcValue(caster, ...) legs (e.g. SpellAuraEffects.cpp:5635): player
-// casters via their session; unknown casters report 0, skipping the
-// RealPointsPerLevel scaling (documented delta).
-func periodicTickCasterLevel(server *Server, casterGUID uint64) uint32 {
-	if server == nil {
-		return 0
-	}
-	if sess := server.findSessionByGUID(casterGUID); sess != nil && sess.player != nil {
-		return uint32(sess.player.Level)
-	}
-	return 0
-}
-
 // tickAttackerLevel resolves the effective attacker level for a periodic
 // tick's armor/resist legs, mirroring Aura::UpdateOwner (SpellAuras.cpp:790-824):
 // every tick re-resolves the aura's LIVE caster (Aura::GetCaster,
@@ -24205,6 +24201,23 @@ func tickAttackerLevel(server *Server, mapID, instanceID uint32, aura *activeAur
 		return aura.CasterLevel, false
 	}
 	return 0, false
+}
+
+// tickCalcValueCasterLevel resolves the caster level for periodic-tick
+// CalcValue(caster, ...) legs (e.g. the MOD_ATTACK_POWER_OF_ARMOR divisor,
+// SpellAuraEffects.cpp:5635: armorMod = Effects[effIndex].CalcValue(caster,
+// &m_baseAmount), with the UpdateOwner re-resolved live caster): the live
+// caster's level when it resolves, 0 when it does not. SpellInfo.cpp:409
+// keys the RealPointsPerLevel leg on casterUnit->GetLevel() only when the
+// caster is non-null, so the unresolved case skips the leg entirely instead
+// of falling back to the stored level (CalcValueForBase treats level 0 as
+// the skip twin — unlike the armor/resist legs, which do fall back).
+func tickCalcValueCasterLevel(server *Server, mapID, instanceID uint32, aura *activeAura) uint32 {
+	level, resolved := tickAttackerLevel(server, mapID, instanceID, aura)
+	if !resolved {
+		return 0
+	}
+	return uint32(level)
 }
 
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
@@ -25291,10 +25304,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		effIndex := -1
 		if ts.server != nil && ts.server.Data != nil {
 			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				// CalcValue keys the RealPointsPerLevel leg on the tick's
+				// LIVE caster level (SpellInfo.cpp:409), skipping the leg
+				// when the caster is null — tickCalcValueCasterLevel is that
+				// twin; creature casters now contribute instead of skipping
+				// like the old player-only helper did.
+				divisorCasterLevel := tickCalcValueCasterLevel(ts.server, ts.player.Map, ts.player.InstanceID, aura)
 				for i, eff := range sp.Effects {
 					if eff.Aura == spellAuraModAttackPowerOfArmor && aura.EffectMask&(1<<uint(i)) != 0 {
 						effIndex = i
-						divisor = eff.CalcValueForBase(sp, aura.BaseAmounts[i], periodicTickCasterLevel(ts.server, aura.CasterGUID))
+						divisor = eff.CalcValueForBase(sp, aura.BaseAmounts[i], divisorCasterLevel)
 						break
 					}
 				}
@@ -26895,9 +26914,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		divisor := int32(0)
 		if s.server != nil && s.server.Data != nil {
 			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				// CalcValue keys the RealPointsPerLevel leg on the tick's
+				// LIVE caster level (SpellInfo.cpp:409), skipping the leg
+				// when the caster is null — tickCalcValueCasterLevel is that
+				// twin; creature casters now contribute instead of skipping
+				// like the old player-only helper did.
+				divisorCasterLevel := tickCalcValueCasterLevel(s.server, key.Map, key.InstanceID, aura)
 				for i, eff := range sp.Effects {
 					if eff.Aura == spellAuraModAttackPowerOfArmor && aura.EffectMask&(1<<uint(i)) != 0 {
-						divisor = eff.CalcValueForBase(sp, aura.BaseAmounts[i], periodicTickCasterLevel(s.server, aura.CasterGUID))
+						divisor = eff.CalcValueForBase(sp, aura.BaseAmounts[i], divisorCasterLevel)
 						break
 					}
 				}

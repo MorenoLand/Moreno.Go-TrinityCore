@@ -1647,7 +1647,7 @@ func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spel
 // (SpellInfo.cpp:413-424) with no spellpower leg — Go has no pet spellpower
 // model, matching the pet apply path. An unresolvable caster degrades to
 // the null-caster CalcValue (no level scaling, no bonuses), like
-// periodicTickCasterLevel. Residuals:
+// tickCalcValueCasterLevel. Residuals:
 // the combo-points term (no combo-point infra on the caster session),
 // ApplyEffectModifiers (Go's normal apply path has no twin either), the
 // item-enchant arm (a stolen aura carries no cast item), and script
