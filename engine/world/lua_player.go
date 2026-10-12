@@ -576,6 +576,56 @@ func (s *session) luaPlayer() *scripting.Object {
 	}
 	methods["SetBinding"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	methods["SetNotRefundable"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
+	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554, Trinity):
+	// HasUnitState(UNIT_STATE_CASTING). Go's cast state is s.activeCast.
+	methods["IsCasting"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.castMu.Lock()
+		casting := s.activeCast != nil
+		s.castMu.Unlock()
+		return []any{casting}, nil
+	}
+	// StopSpellCast is UnitMethods::StopSpellCast (UnitMethods.h:2532-2537):
+	// Unit::CastStop (Unit.cpp:980-985) interrupts every current non-melee
+	// spell except except_spellid; the Eluna arg defaults to 0.
+	methods["StopSpellCast"] = func(_ context.Context, args []any) ([]any, error) {
+		var spellID uint32
+		if len(args) > 0 {
+			id, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			spellID = id
+		}
+		s.castMu.Lock()
+		cur := s.activeCast
+		s.castMu.Unlock()
+		if cur != nil && (spellID == 0 || cur.SpellID != spellID) {
+			s.interruptCurrentCast()
+		}
+		return nil, nil
+	}
+	// PerformEmote is UnitMethods::PerformEmote (UnitMethods.h:2041-2049):
+	// Unit::HandleEmoteCommand sends SMSG_EMOTE (u32 emote + u64 guid) via
+	// SendMessageToSet — self write plus nearby broadcast skipping self.
+	methods["PerformEmote"] = func(_ context.Context, args []any) ([]any, error) {
+		emote, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		pkt := protocol.NewBuffer(12)
+		pkt.WriteU32(emote)
+		pkt.WriteU64(s.playerGUID)
+		if err := s.write(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), true); err != nil {
+			return nil, err
+		}
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), s)
+		return nil, nil
+	}
+	// ClearThreatList is UnitMethods::ClearThreatList
+	// (UnitMethods.h:1992-1999): ThreatManager::ClearAllThreat. Go has no
+	// per-player threat manager, so the player leg is a no-op; the
+	// creature object carries the real arm (lua_objects.go).
+	methods["ClearThreatList"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242) —
 	// replaces the old no-op PlayDirectSound stub.
 	luaWorldObjectSoundMethods(s.server, s, s.playerGUID, methods)

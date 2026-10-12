@@ -308,6 +308,75 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildChatMessage(0x10, 0, state.GUID, s.player.GUID, message, ""), true)
 	}
+	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554, Trinity):
+	// HasUnitState(UNIT_STATE_CASTING). Go creature casts are packet-only
+	// (castCreatureSpell) with no cast state, so this is always false;
+	// the player object carries the real arm (lua_player.go).
+	methods["IsCasting"] = luaNoArgs(func() any { return false })
+	// StopSpellCast is UnitMethods::StopSpellCast (UnitMethods.h:2532-2537):
+	// Unit::CastStop. No-op for creatures — no cast state to interrupt.
+	methods["StopSpellCast"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
+	// GetHomePosition is CreatureMethods::GetHomePosition
+	// (CreatureMethods.h:630-644): x, y, z, o from the creature's home
+	// position (Creature::GetHomePosition).
+	methods["GetHomePosition"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return []any{float32(0), float32(0), float32(0), float32(0)}, nil
+		}
+		return []any{motion.HomeX, motion.HomeY, motion.HomeZ, motion.Orientation}, nil
+	}
+	// SetHomePosition is CreatureMethods::SetHomePosition
+	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o).
+	methods["SetHomePosition"] = func(_ context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		o, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID); motion != nil {
+			motion.HomeX, motion.HomeY, motion.HomeZ = x, y, z
+			motion.Orientation = o
+		}
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// PerformEmote is UnitMethods::PerformEmote (UnitMethods.h:2041-2049):
+	// Unit::HandleEmoteCommand sends SMSG_EMOTE (u32 emote + u64 guid) to
+	// the visibility set; creatures broadcast with a nil source like the
+	// creature-text arms.
+	methods["PerformEmote"] = func(_ context.Context, args []any) ([]any, error) {
+		emote, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		pkt := protocol.NewBuffer(12)
+		pkt.WriteU32(emote)
+		pkt.WriteU64(state.GUID)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), nil)
+		return nil, nil
+	}
+	// ClearThreatList is UnitMethods::ClearThreatList
+	// (UnitMethods.h:1992-1999): ThreatManager::ClearAllThreat via
+	// Unit::GetThreatManager — Go's ClearThreat twin.
+	methods["ClearThreatList"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		return nil, nil
+	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(s.server, nil, state.GUID, methods)
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level, "InWorld": true}, Methods: methods}
