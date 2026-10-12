@@ -1904,14 +1904,29 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 	}
 	for i, effect := range spell.Effects {
-		if effect.Effect == 10 || effect.Effect == 105 || effect.Effect == 136 {
+		if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
 			// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
 			// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
 			// the uint32 wrap must never turn a negative rolled value into
-			// a huge heal.
+			// a huge heal. The old raw 105 here was
+			// SPELL_EFFECT_SUMMON_OBJECT_SLOT2 (SharedDefines.h:916), not
+			// SPELL_EFFECT_HEAL_MECHANICAL (75) — summon-object spells were
+			// being healed.
 			healValue := effect.CalcValueForLevel(spell, uint32(motion.Level))
 			if healValue > 0 {
-				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, uint32(healValue))
+				heal := uint32(healValue)
+				if effect.Effect == spellEffectHealPct {
+					// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
+					// the effect value is a percentage of the TARGET's max
+					// health (Unit::CountPctFromMaxHealth), not a flat
+					// amount — like the player path at spells.go:10110.
+					healTarget, ok := s.getCombatTarget(ctx, resolveReflectTarget(targetGUID))
+					if !ok || healTarget.MaxHealth == 0 {
+						continue
+					}
+					heal = uint32(uint64(healTarget.MaxHealth) * uint64(healValue) / 100)
+				}
+				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, heal)
 			}
 		}
 		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
@@ -1926,7 +1941,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if effect.Effect == spellEffectDispel {
 			s.executePetSpellDispel(ctx, motion, resolveReflectTarget(targetGUID), spell, effect)
 		}
-		if effect.Effect == 6 || effect.Effect == 27 || effect.Effect == 35 {
+		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
 			// a target whose aura scales takes the aura from the
 			// rank-appropriate row — duration entry, basepoints and effect
@@ -1936,11 +1951,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			amount := uint32(auraEffect.CalcValueForLevel(auraSpell, uint32(motion.Level)))
 			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, resolveReflectTarget(targetGUID), durationMs, amount) {
 			}
-			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (effect 27 with an enemy
-			// area target) applies to every unit the area selection picked —
-			// the wire target above plus the extra area hits. Each area hit
-			// carries its own downrank verdict.
-			if effect.Effect == 27 && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
+			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (129, SharedDefines.h:940):
+			// an enemy area aura applies to every unit the area selection
+			// picked — the wire target above plus the extra area hits. The
+			// old raw 27 was SPELL_EFFECT_PERSISTENT_AREA_AURA, which C++
+			// routes through DynamicObject (no pet-path bridge), never
+			// per-target application.
+			if effect.Effect == spellEffectApplyAreaAuraEnemy && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
 				for _, areaHit := range areaHits {
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
