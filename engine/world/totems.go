@@ -397,6 +397,8 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 			Z:          totemZ,
 			Health:     totemHealth,
 			MaxHealth:  totemHealth,
+			// Totem::Summon (Totem.cpp:99): the totem's level is the owner's.
+			Level: maxUint32(uint32(s.player.Level), 1),
 		}
 		s.server.motionMu.Unlock()
 
@@ -486,14 +488,20 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 		}
 
 	case TotemPulseHeal:
-		healAmt := uint32(50)
-		s.executeSpellHeal(ctx, s.playerGUID, def.PulseSpell, healAmt, 0, 0)
+		// AuraEffect::HandlePeriodicHealAuraTick (SpellAuraEffects.cpp:5375-5440)
+		// twin: Healing Stream's totem spell (52042) is a passive periodic-heal
+		// aura (Totem.cpp:115-116 triggered cast, aura caster = the totem), so
+		// each tick is a periodic heal, not a direct heal. The old arm ran the
+		// direct-heal path with the owner as healer (SMSG_SPELLHEALLOG, owner
+		// spell power, direct-heal procs, owner threat) — every one of those
+		// legs differs from C++.
+		s.totemHealPulseTick(ctx, def, totem, s)
 		if s.server != nil && s.groupID != 0 {
 			s.server.sessionsMu.RLock()
 			for other := range s.server.sessions {
 				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 					if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
-						other.executeSpellHeal(ctx, other.playerGUID, def.PulseSpell, healAmt, 0, 0)
+						s.totemHealPulseTick(ctx, def, totem, other)
 					}
 				}
 			}
@@ -564,21 +572,214 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 		}
 
 	case TotemPulseDispel:
-		s.removeHarmfulDebuffs(3)
+		s.totemDispelPulse(ctx, def, totem, s)
 		if s.server != nil && s.groupID != 0 {
 			s.server.sessionsMu.RLock()
 			for other := range s.server.sessions {
 				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 					if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
-						other.removeHarmfulDebuffs(3)
+						s.totemDispelPulse(ctx, def, totem, other)
 					}
 				}
 			}
 			s.server.sessionsMu.RUnlock()
 		}
 
+	case TotemPulseSlow:
+		s.totemSlowPulse(ctx, def, totem)
+
 	case TotemPulseSentry:
 		s.sentryTotemPing(def, totem)
+	}
+}
+
+// totemHealPulseTick runs one Healing Stream-style totem heal tick on the
+// target session with the totem as the heal's caster, mirroring
+// AuraEffect::HandlePeriodicHealAuraTick (SpellAuraEffects.cpp:5375-5440)
+// for a totem-caster aura:
+//
+//   - no SpellHealingBonusDone leg: C++ runs it only for DYNOBJ_AURA_TYPE
+//     ticks (SpellAuraEffects.cpp:5384); the flat aura amount stands (the
+//     totem carries no spell power). The DBC base points of the pulse
+//     spell's periodic-heal effect feed the amount when the row resolves;
+//     otherwise the legacy flat 50 stands in.
+//   - SpellHealingBonusTaken with DOT type (MOD_HOT_PCT leg on,
+//     SpellAuraEffects.cpp:5386-5390), keyed on the totem GUID so
+//     MOD_HEALING_RECEIVED auras cast by the totem match.
+//   - no crit roll: GetCritChanceFor(totem, target) is 0 (52042 also
+//     carries the can't-crit attribute per the SpellMgr.cpp fix list).
+//   - CalcHealAbsorb, then SMSG_SPELL_PERIODICAURALOG with the totem as
+//     caster (Unit::SendPeriodicAuraLog, Unit.cpp:5368) — not
+//     SMSG_SPELLHEALLOG.
+//   - assist threat to the totem (the aura's caster), effectiveHeal * 0.5
+//     (SpellAuraEffects.cpp:5406), gated on SPELL_ATTR1_NO_THREAT.
+//   - periodic heal procs: DONE_PERIODIC on the totem's own auras,
+//     TAKEN_PERIODIC on the target's (SpellAuraEffects.cpp:5423-5433).
+//   - achievement credit folds totem -> owner (Unit::DealHeal,
+//     Unit.cpp:6311-6312); the arena healing score credits the owner.
+func (s *session) totemHealPulseTick(ctx context.Context, def TotemDef, totem *activeTotem, target *session) {
+	if s == nil || s.server == nil || totem == nil || target == nil || target.player == nil {
+		return
+	}
+	if target.player.Health == 0 {
+		return
+	}
+	ownerLevel := uint32(1)
+	if s.player != nil {
+		ownerLevel = maxUint32(uint32(s.player.Level), 1)
+	}
+	var healSpell wotlk.Spell
+	healKnown := false
+	if s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(def.PulseSpell); err == nil && found {
+			healSpell, healKnown = sp, true
+		}
+	}
+	// Flat aura amount: the totem's triggered cast computes it from the DBC
+	// base points at the totem's (owner's) level.
+	heal := uint32(50)
+	if healKnown {
+		for _, eff := range healSpell.Effects {
+			if eff.Aura == spellAuraPeriodicHeal {
+				if v := eff.CalcValueForLevel(healSpell, ownerLevel); v > 0 {
+					heal = uint32(v)
+				}
+				break
+			}
+		}
+	}
+	schoolMask := uint32(1 << 3) // SPELL_SCHOOL_MASK_NATURE
+	if healKnown {
+		schoolMask = healSpell.SchoolMask
+	}
+	// SpellHealingBonusTaken, DOT type (Unit.cpp:7714-7759).
+	heal = target.healingTakenBonus(target, totem.TotemGUID, def.PulseSpell, heal, true)
+	absorbed := uint32(0)
+	if heal > 0 {
+		absorbed = target.applyHealAbsorb(schoolMask, heal)
+		heal -= absorbed
+	}
+	effectiveHeal := heal
+	overheal := uint32(0)
+	if target.player.Health+heal > target.player.MaxHealth {
+		effectiveHeal = target.player.MaxHealth - target.player.Health
+		overheal = heal - effectiveHeal
+		target.player.Health = target.player.MaxHealth
+	} else {
+		target.player.Health += heal
+	}
+	s.updateAchievementCriteria(criteriaTypeHealingDone, 0, heal)
+	s.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
+	target.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, effectiveHeal)
+	target.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
+	if s.server != nil {
+		s.server.updateArenaHealingScore(s, effectiveHeal)
+	}
+	logPkt := protocol.BuildPeriodicAuraLogHeal(target.playerGUID, totem.TotemGUID, def.PulseSpell, spellAuraPeriodicHeal, heal, overheal, absorbed, false)
+	_ = target.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+	if casterSess := s.server.findSessionByGUID(totem.TotemGUID); casterSess != nil && casterSess != target {
+		_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+	}
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, target)
+	target.sendPlayerUpdate()
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", target.player.Health, target.playerGUID)
+	}
+	if effectiveHeal > 0 {
+		noThreat := false
+		if healKnown {
+			noThreat = healSpell.AttributesEx&spellAttr1NoThreat != 0
+		}
+		if !noThreat {
+			s.server.distributeCreatureHealingThreat(ctx, totem.Map, totem.InstanceID, totem.TotemGUID, target.playerGUID, effectiveHeal)
+		}
+	}
+	// Periodic-heal procs (SpellAuraEffects.cpp:5423-5433): %-based ticks
+	// never proc — the totem pulse is a flat heal, so that gate is vacuous.
+	if healKnown {
+		totemMotion := s.server.findCreatureMotion(totem.Map, totem.InstanceID, totem.TotemGUID)
+		s.server.fireCreaturePeriodicHealTickProcs(ctx, totemMotion, nil, target.playerGUID, totem.TotemGUID, healSpell, schoolMask, false)
+		target.procPeriodicHealTickTakenAuraTriggers(ctx, healSpell, schoolMask, totem.TotemGUID, false)
+	}
+}
+
+// totemDispelPulse bridges the totem dispel pulses (Cleansing Totem 8170,
+// Tremor Totem 8143). C++ Cleansing: the periodic pulse spell (8171) carries
+// a DUMMY effect whose script casts the dispel spell on each hit unit with
+// the totem as caster and the shaman as original caster
+// (spell_shaman.cpp:397-407, SPELL_SHAMAN_CLEANSING_TOTEM_EFFECT = 52025),
+// fixing SPELLVALUE_BASE_POINT1 = 1 — Spell::EffectDispel dispels `damage`
+// auras (SpellEffects.cpp:2453), so one aura per pulse, not three. Routing
+// through dispelEffectAsCaster carries the DBC dispel-type mask, the dispel
+// success roll, SMSG_SPELLDISPELLOG with the totem as dispeller, and the
+// Unstable Affliction / Vampiric Touch backlash onto the totem. Tremor's
+// triggered dispel spell is DBC-only (no C++ script names it), so it keeps
+// the legacy path — with the count corrected to one per the tooltip.
+func (s *session) totemDispelPulse(ctx context.Context, def TotemDef, totem *activeTotem, target *session) {
+	if s == nil || totem == nil || target == nil || target.player == nil {
+		return
+	}
+	if def.SpellID == 8170 && s.server != nil && s.server.Data != nil {
+		if dispelSpell, found, err := s.server.Data.Spell(52025); err == nil && found {
+			routed := false
+			for i, eff := range dispelSpell.Effects {
+				if eff.Effect != spellEffectDispel {
+					continue
+				}
+				if i == 0 {
+					// spell_sha_cleansing_totem_pulse sets
+					// SPELLVALUE_BASE_POINT1 = 1 on the 52025 cast.
+					eff.BasePoints = 1
+				}
+				target.dispelEffectAsCaster(ctx, totem.TotemGUID, target.playerGUID, dispelSpell, eff, nil, false)
+				routed = true
+			}
+			if routed {
+				return
+			}
+		}
+	}
+	target.removeHarmfulDebuffs(1)
+}
+
+// totemSlowPulse bridges the Earthbind Totem pulse (2484 -> 3600). C++: the
+// totem's spell is a passive enemy area aura (Totem.cpp:115-117); there is no
+// TotemAI cast, and the old Go arm had no TotemPulseSlow case at all, so
+// Earthbind pulses did nothing. The Go pulse model re-applies the slow aura
+// to hostile creatures in radius each tick through the creature-aura path
+// with the totem's motion as caster (applyPetAura carries the no-stack
+// purge, the aura-update wire, and the duration timer). The duration bridges
+// two pulses so the slow neither flickers between ticks nor lingers long
+// after the totem dies or the target leaves the radius — C++ drops the aura
+// when the area aura no longer reaches the target.
+func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activeTotem) {
+	if s == nil || s.server == nil || totem == nil || def.PulseSpell == 0 || s.server.Data == nil {
+		return
+	}
+	slowSpell, found, err := s.server.Data.Spell(def.PulseSpell)
+	if err != nil || !found {
+		return
+	}
+	totemMotion := s.server.findCreatureMotion(totem.Map, totem.InstanceID, totem.TotemGUID)
+	if totemMotion == nil {
+		return
+	}
+	owner := totemOwnerPos(s)
+	intervalMs := def.PulseSecs * 1000
+	if intervalMs <= 0 {
+		intervalMs = 2000
+	}
+	for _, eff := range slowSpell.Effects {
+		if eff.Effect != spellEffectApplyAura {
+			continue
+		}
+		amount := eff.CalcValueForLevel(slowSpell, uint32(totemMotion.Level))
+		for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
+			if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+				continue
+			}
+			s.applyPetAura(ctx, totemMotion, slowSpell, eff, m.GUID, uint32(intervalMs*2), uint32(amount))
+		}
 	}
 }
 
