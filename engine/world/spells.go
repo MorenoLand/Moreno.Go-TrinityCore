@@ -12805,11 +12805,15 @@ func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64
 		return
 	}
 	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok || target.Health == 0 {
+	if !ok || target.Health == 0 || s.ghostAttackTargetBlocked(targetGUID) {
 		return
 	}
-	// Spell::EffectInstaKill (SpellEffects.cpp:274-296): a CHEAT_GOD player
-	// target is not killed — return before SMSG_SPELLINSTAKILLLOG, matching C++.
+	// Spell::EffectInstaKill (SpellEffects.cpp:274-296): the C++ gate is
+	// !unitTarget->IsAlive() — ghosts carry Health=1 in Go (death.go:473)
+	// while dead, so the Health==0 check alone admits them and the
+	// INSTAKILLLOG packet went out before the damage twin's ghost block.
+	// a CHEAT_GOD player target is not killed — return before
+	// SMSG_SPELLINSTAKILLLOG, matching C++.
 	if s.server != nil {
 		if ps := s.server.findSessionByGUID(targetGUID); ps != nil && ps.godCheatActive() {
 			return
