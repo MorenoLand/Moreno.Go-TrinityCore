@@ -704,6 +704,26 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.server.getGuildName(ctx, state.GuildID)}, nil
 	}
+	// Eluna Player:GetGuild/GetGroup (PlayerMethods.h:1535/1546). GetGuild
+	// pushes the player's live Guild object, nil when guildless like
+	// Eluna::Push((Guild*)nullptr); GetGroup pushes the live Group object,
+	// nil when the player is not in a group.
+	methods["GetGuild"] = func(ctx context.Context, _ []any) ([]any, error) {
+		var out any
+		if guild := s.luaGuildObject(ctx, state.GuildID); guild != nil {
+			out = guild
+		}
+		return []any{out}, nil
+	}
+	methods["GetGroup"] = func(_ context.Context, _ []any) ([]any, error) {
+		var out any
+		if s.groupID != 0 {
+			if group := groupLuaObject(s.server, s.server.findGroupByID(s.groupID)); group != nil {
+				out = group
+			}
+		}
+		return []any{out}, nil
+	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242) —
 	// replaces the old no-op PlayDirectSound stub.
 	luaWorldObjectSoundMethods(s.server, s, s.playerGUID, methods)

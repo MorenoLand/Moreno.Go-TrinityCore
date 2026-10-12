@@ -527,7 +527,7 @@ func (s *Server) removeSessionFromGroup(member *session) {
 		return
 	}
 	s.groupsMu.Lock()
-	groupObj := groupLuaObject(g)
+	groupObj := groupLuaObject(s, g)
 	index := -1
 	for i, value := range g.Members {
 		if value.GUID == member.playerGUID {
@@ -723,10 +723,18 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 	// fires only for the invitee.
 	if s.groupID != 0 {
 		if g := s.server.findGroupByID(s.groupID); g != nil {
-			s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, groupLuaObject(g), invitedSess.playerGUID)
+			s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, groupLuaObject(s.server, g), invitedSess.playerGUID)
 		}
 	} else {
-		ephemeral := scripting.NewGroupObject(groupGUID(0), s.playerGUID, []uint64{s.playerGUID})
+		ephemeral := scripting.NewGroupObject(groupGUID(0), scripting.GroupLive{
+			Load: func() (scripting.GroupSnapshot, bool) {
+				return scripting.GroupSnapshot{
+					LeaderGUID: s.playerGUID,
+					Members:    []scripting.GroupMemberLive{{GUID: s.playerGUID}},
+				}, true
+			},
+			Players: s.server.luaPlayers,
+		})
 		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, s.playerGUID)
 		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, invitedSess.playerGUID)
 		// LFGGroupScript::OnInviteMember (LFGScripts.cpp:231-245): a queued
@@ -800,7 +808,7 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 	g.Members = append(g.Members, groupMember{GUID: s.playerGUID, Name: s.player.Name})
 	refreshGroupMaxEnchantingLevel(srv, g)
 	s.groupID = g.ID
-	groupObj := groupLuaObject(g)
+	groupObj := groupLuaObject(s.server, g)
 	srv.groupsMu.Unlock()
 
 	// Group::AddMember (Group.cpp:451): re-adding a player recomputes instance
@@ -964,7 +972,7 @@ func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) boo
 func (s *session) removeFromGroup(g *groupState, target *session, method uint8) bool {
 	srv := s.server
 	srv.groupsMu.Lock()
-	groupObj := groupLuaObject(g)
+	groupObj := groupLuaObject(s.server, g)
 	// Remove the target member
 	for i, m := range g.Members {
 		if m.GUID == target.playerGUID {
@@ -1028,7 +1036,7 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 		return
 	}
 	s.groupsMu.Lock()
-	groupObj := groupLuaObject(g)
+	groupObj := groupLuaObject(s, g)
 	idx := -1
 	for i, m := range g.Members {
 		if m.GUID == guid {
@@ -1103,7 +1111,7 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 		s.groupsMu.Unlock()
 		return false
 	}
-	groupObj := groupLuaObject(g)
+	groupObj := groupLuaObject(s, g)
 	oldLeader := g.LeaderGUID
 	oldSess := s.findSessionByGUID(oldLeader)
 	g.LeaderGUID = guid
@@ -1164,7 +1172,7 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 // one member.
 func (s *Server) disbandGroup(ctx context.Context, g *groupState, hideDestroy bool) {
 	s.groupsMu.Lock()
-	groupObj := groupLuaObject(g)
+	groupObj := groupLuaObject(s, g)
 	members := make([]uint64, len(g.Members))
 	memberSet := make(map[uint64]struct{}, len(g.Members))
 	for i, m := range g.Members {
@@ -1290,7 +1298,7 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	} else {
 		// Non-leader leaves: C++ HandleGroupDisbandOpcode calls
 		// Player::RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE) (GroupHandler.cpp:424).
-		groupObj := groupLuaObject(g)
+		groupObj := groupLuaObject(s.server, g)
 		for i, m := range g.Members {
 			if m.GUID == s.playerGUID {
 				g.Members = append(g.Members[:i], g.Members[i+1:]...)

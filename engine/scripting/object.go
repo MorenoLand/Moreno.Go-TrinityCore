@@ -359,6 +359,14 @@ func pushValue(state *lua.State, value any) error {
 		pushPacket(state, value)
 	case *Object:
 		PushObject(state, value)
+	case []any:
+		state.NewTable()
+		for i, item := range value {
+			if err := pushValue(state, item); err != nil {
+				return err
+			}
+			state.RawSetInt(-2, i+1)
+		}
 	default:
 		return fmt.Errorf("unsupported Lua value %T", value)
 	}

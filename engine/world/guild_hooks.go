@@ -7,26 +7,38 @@ import (
 )
 
 // luaGuildObject builds the Lua Guild object for the Eluna GUILD_EVENT_*
-// hooks, the Go model of Eluna::GuildHooks' Push(guild): ID, Name, LeaderGUID
-// and MemberCount, the same surface the GetGuildByName / GetGuildByLeaderGUID
-// globals expose (scripting.NewGuildObject). Returns nil when the scripts
-// runtime is absent or the guild row is gone; callers fire the hooks before
-// the rows are deleted, like C++ Guild::Disband calling OnGuildDisband before
-// the data removal (Guild.cpp:1144).
+// hooks, the Go model of Eluna::GuildHooks' Push(guild): ID, Name, LeaderGUID,
+// MemberCount, MOTD and Info, with the GetId/GetName/GetLeaderGUID/
+// GetMemberCount/GetMOTD/GetInfo/GetLeader/GetMembers methods
+// (scripting.NewGuildObject). Returns nil when the scripts runtime is absent
+// or the guild row is gone; callers fire the hooks before the rows are
+// deleted, like C++ Guild::Disband calling OnGuildDisband before the data
+// removal (Guild.cpp:1144).
 func (s *session) luaGuildObject(ctx context.Context, guildID uint32) *scripting.Object {
 	if guildID == 0 || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil ||
 		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil
 	}
-	cdb := s.server.CharactersStore.DB
-	var id, leaderGUID int64
-	var name string
-	if err := cdb.QueryRowContext(ctx, "SELECT guildid, name, leaderguid FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&id, &name, &leaderGUID); err != nil || id == 0 {
+	srv := s.server
+	load := func() (scripting.GuildSnapshot, bool) {
+		var snap scripting.GuildSnapshot
+		cdb := srv.CharactersStore.DB
+		if cdb == nil {
+			return scripting.GuildSnapshot{}, false
+		}
+		var id, leaderGUID, memberCount int64
+		if err := cdb.QueryRowContext(context.Background(), "SELECT guildid, name, leaderguid, motd, info FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&id, &snap.Name, &leaderGUID, &snap.MOTD, &snap.Info); err != nil || id == 0 {
+			return scripting.GuildSnapshot{}, false
+		}
+		snap.LeaderGUID = uint64(leaderGUID)
+		_ = cdb.QueryRowContext(context.Background(), "SELECT COUNT(1) FROM guild_member WHERE guildid = ?", guildID).Scan(&memberCount)
+		snap.MemberCount = uint32(memberCount)
+		return snap, true
+	}
+	if _, ok := load(); !ok {
 		return nil
 	}
-	var memberCount int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(1) FROM guild_member WHERE guildid = ?", guildID).Scan(&memberCount)
-	return scripting.NewGuildObject(uint32(id), name, uint64(leaderGUID), uint32(memberCount))
+	return scripting.NewGuildObject(guildID, scripting.GuildLive{Load: load, Players: srv.luaPlayers})
 }
 
 // fireGuildEvent dispatches an Eluna GUILD_EVENT_* hook

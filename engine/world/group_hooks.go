@@ -8,20 +8,31 @@ import (
 
 // groupLuaObject builds the Lua Group object for the Eluna GROUP_EVENT_*
 // hooks, the Go model of Eluna::GroupHooks' Push(group): the protocol group
-// GUID, the leader GUID and the member GUID list. Groups are in-memory
-// (groupState), so unlike the guild surface there is no DB row to read —
-// callers snapshot the object at the C++ hook's fire point (e.g. before the
-// member list is mutated) and trigger after releasing groupsMu, since Lua
-// handlers must never run under the group lock.
-func groupLuaObject(g *groupState) *scripting.Object {
+// GUID plus the live roster (leader GUID, members, raid/BG shape) behind the
+// GetId/GetGUID/GetLeaderGUID/GetMembers/GetMembersCount/IsLeader/IsFull/
+// IsRaidGroup/IsBGGroup/IsMember/IsAssistant/SameSubGroup/
+// HasFreeSlotSubGroup/GetMemberGUID/GetMemberGroup methods
+// (scripting.NewGroupObject). Groups are in-memory (groupState), so callers
+// snapshot the object at the C++ hook's fire point (e.g. before the member
+// list is mutated) and trigger after releasing groupsMu, since Lua handlers
+// must never run under the group lock.
+func groupLuaObject(srv *Server, g *groupState) *scripting.Object {
 	if g == nil {
 		return nil
 	}
-	members := make([]uint64, 0, len(g.Members))
+	members := make([]scripting.GroupMemberLive, 0, len(g.Members))
 	for _, m := range g.Members {
-		members = append(members, m.GUID)
+		members = append(members, scripting.GroupMemberLive{GUID: m.GUID, Name: m.Name, SubGroup: m.SubGroup, Assistant: m.Flags&memberFlagAssistant != 0})
 	}
-	return scripting.NewGroupObject(groupGUID(g.ID), g.LeaderGUID, members)
+	snap := scripting.GroupSnapshot{LeaderGUID: g.LeaderGUID, Members: members, IsRaid: g.IsRaid, IsBG: g.GroupType&groupTypeBattleground != 0}
+	var players func() []*scripting.Object
+	if srv != nil {
+		players = srv.luaPlayers
+	}
+	return scripting.NewGroupObject(groupGUID(g.ID), scripting.GroupLive{
+		Load:    func() (scripting.GroupSnapshot, bool) { return snap, true },
+		Players: players,
+	})
 }
 
 // RemoveMethod values for GROUP_EVENT_ON_MEMBER_REMOVE, the Eluna-visible

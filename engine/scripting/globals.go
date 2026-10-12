@@ -140,26 +140,163 @@ func (r *Runtime) getPlayerByGUID(state *lua.State) int {
 }
 
 func (r *Runtime) getGuildByName(state *lua.State) int {
-	return r.pushGuildLookup(state, "SELECT guildid, name, leaderguid FROM guild WHERE name = ? LIMIT 1", lua.CheckString(state, 1))
+	return r.pushGuildLookup(state, "SELECT guildid, name, leaderguid, motd, info FROM guild WHERE name = ? LIMIT 1", lua.CheckString(state, 1))
 }
 
 func (r *Runtime) getGuildByLeaderGUID(state *lua.State) int {
-	return r.pushGuildLookup(state, "SELECT guildid, name, leaderguid FROM guild WHERE leaderguid = ? LIMIT 1", checkLuaUint64(state, 1))
+	return r.pushGuildLookup(state, "SELECT guildid, name, leaderguid, motd, info FROM guild WHERE leaderguid = ? LIMIT 1", checkLuaUint64(state, 1))
+}
+
+// GuildSnapshot is the live guild row behind a Lua Guild object: the fields
+// Eluna's GuildMethods.h reads from the live Guild*.
+type GuildSnapshot struct {
+	Name        string
+	LeaderGUID  uint64
+	MemberCount uint32
+	MOTD        string
+	Info        string
+}
+
+// GuildLive carries the live-data callbacks behind a Lua Guild object. Load
+// re-reads the guild row (Eluna methods read the live Guild*, not a
+// push-time copy); Players enumerates the online player objects for the
+// GetLeader/GetMembers filters. Either may be nil.
+type GuildLive struct {
+	Load    func() (GuildSnapshot, bool)
+	Players func() []*Object
+}
+
+// playerObjectByGUID finds an online player object by full GUID, the Go
+// model of eObjectAccessor()FindPlayer for the Eluna guild/group filters.
+func playerObjectByGUID(players func() []*Object, guid uint64) *Object {
+	if players == nil {
+		return nil
+	}
+	for _, player := range players() {
+		if value, ok := objectUint64(player, "GUID"); ok && value == guid {
+			return player
+		}
+	}
+	return nil
+}
+
+// objectGuildID reads a player object's guild through its GetGuildId method,
+// the accessor luaPlayer exposes (world lua_player.go).
+func objectGuildID(ctx context.Context, object *Object) (uint32, bool) {
+	if object == nil {
+		return 0, false
+	}
+	method, ok := object.Methods["GetGuildId"]
+	if !ok || method == nil {
+		return 0, false
+	}
+	values, err := method(ctx, nil)
+	if err != nil || len(values) == 0 {
+		return 0, false
+	}
+	number, ok := numericValue(values[0])
+	if !ok || number < 0 || number > math.MaxUint32 || number != math.Trunc(number) {
+		return 0, false
+	}
+	return uint32(number), true
+}
+
+// objectArgumentUint64 is the uint64 twin of objectArgumentUint32.
+func objectArgumentUint64(args []any, index int) (uint64, error) {
+	if index >= len(args) {
+		return 0, fmt.Errorf("argument %d is required", index+1)
+	}
+	number, ok := numericValue(args[index])
+	if !ok || number < 0 || number > math.MaxUint64 || number != math.Trunc(number) {
+		return 0, fmt.Errorf("argument %d must be uint64", index+1)
+	}
+	return uint64(number), nil
 }
 
 // NewGuildObject builds the Lua Guild object surface: the ID, Name,
-// LeaderGUID and MemberCount fields plus the GetId/GetName/GetLeaderGUID/
-// GetMemberCount methods. It is the Go model of Eluna's Push(guild)
-// (LuaEngine/GuildHooks.cpp via ElunaTemplate), shared by the GetGuildBy*
-// globals and the world engine's guild event hooks.
-func NewGuildObject(guildID uint32, name string, leaderGUID uint64, memberCount uint32) *Object {
-	methods := map[string]ObjectMethod{
-		"GetId":          func(context.Context, []any) ([]any, error) { return []any{uint32(guildID)}, nil },
-		"GetName":        func(context.Context, []any) ([]any, error) { return []any{name}, nil },
-		"GetLeaderGUID":  func(context.Context, []any) ([]any, error) { return []any{uint64(leaderGUID)}, nil },
-		"GetMemberCount": func(context.Context, []any) ([]any, error) { return []any{uint32(memberCount)}, nil },
+// LeaderGUID, MemberCount, MOTD and Info fields plus the GetId/GetName/
+// GetLeaderGUID/GetMemberCount/GetMOTD/GetInfo/GetLeader/GetMembers methods.
+// It is the Go model of Eluna's Push(guild) (LuaEngine/GuildHooks.cpp via
+// ElunaTemplate), shared by the GetGuildBy* globals and the world engine's
+// guild event hooks. The mutating surface (SetLeader/SetBankTabText/
+// SendPacket/SendPacketToRanked/Disband/AddMember/DeleteMember/
+// SetMemberRank, GuildMethods.h) has no script-safe live path yet and stays
+// unbridged.
+func NewGuildObject(guildID uint32, live GuildLive) *Object {
+	load := live.Load
+	if load == nil {
+		load = func() (GuildSnapshot, bool) { return GuildSnapshot{}, false }
 	}
-	return &Object{Type: "Guild", Fields: map[string]any{"ID": uint32(guildID), "Name": name, "LeaderGUID": uint64(leaderGUID), "MemberCount": uint32(memberCount)}, Methods: methods}
+	snap, _ := load()
+	methods := map[string]ObjectMethod{
+		"GetId": func(context.Context, []any) ([]any, error) { return []any{uint32(guildID)}, nil },
+		"GetName": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.Name}, nil
+			}
+			return []any{nil}, nil
+		},
+		"GetLeaderGUID": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.LeaderGUID}, nil
+			}
+			return []any{nil}, nil
+		},
+		"GetMemberCount": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.MemberCount}, nil
+			}
+			return []any{nil}, nil
+		},
+		"GetMOTD": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.MOTD}, nil
+			}
+			return []any{nil}, nil
+		},
+		"GetInfo": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.Info}, nil
+			}
+			return []any{nil}, nil
+		},
+		// GetLeader mirrors FindPlayer(guild->GetLeaderGUID()): the leader's
+		// Player object when online, nil otherwise (GuildMethods.h).
+		"GetLeader": func(context.Context, []any) ([]any, error) {
+			snap, ok := load()
+			if !ok {
+				return []any{nil}, nil
+			}
+			var out any
+			if leader := playerObjectByGUID(live.Players, snap.LeaderGUID); leader != nil {
+				out = leader
+			}
+			return []any{out}, nil
+		},
+		// GetMembers mirrors the C++ online-and-in-world filter
+		// (GuildMethods.h: IsInWorld() && GetGuildId() == guild->GetId()).
+		"GetMembers": func(ctx context.Context, _ []any) ([]any, error) {
+			members := []any{}
+			if live.Players == nil {
+				return []any{members}, nil
+			}
+			for _, player := range live.Players() {
+				if player == nil {
+					continue
+				}
+				if inWorld, ok := player.Fields["InWorld"]; ok {
+					if on, _ := inWorld.(bool); !on {
+						continue
+					}
+				}
+				if id, ok := objectGuildID(ctx, player); ok && id == guildID {
+					members = append(members, player)
+				}
+			}
+			return []any{members}, nil
+		},
+	}
+	return &Object{Type: "Guild", Fields: map[string]any{"ID": uint32(guildID), "Name": snap.Name, "LeaderGUID": snap.LeaderGUID, "MemberCount": snap.MemberCount, "MOTD": snap.MOTD, "Info": snap.Info}, Methods: methods}
 }
 
 // NewItemObject builds the Lua Item object surface for hooks that hand
@@ -175,24 +312,220 @@ func NewItemObject(guid uint64, entry, count uint32) *Object {
 	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}
 }
 
-// NewGroupObject builds the Lua Group object surface: the GUID, LeaderGUID
-// and member GUID list plus the GetId/GetLeaderGUID/GetMembers/
-// GetMembersCount methods. It is the Go model of Eluna's Push(group)
-// (LuaEngine/GroupHooks.cpp via ElunaTemplate), shared by the world
-// engine's group event hooks. The rest of Eluna's Group method surface
-// (IsLeader/SetLeader/RemoveMember/Disband/SendPacket/ConvertToRaid/...,
-// GroupMethods.h) has no live-group model behind the hooks and stays
-// unbridged. groupGUID is the protocol group GUID (0x1F50 high bits, as in
-// world group.go's groupGUID); leaderGUID/memberGUIDs are player GUIDs.
-func NewGroupObject(groupGUID, leaderGUID uint64, memberGUIDs []uint64) *Object {
-	members := append([]uint64(nil), memberGUIDs...)
-	methods := map[string]ObjectMethod{
-		"GetId":           func(context.Context, []any) ([]any, error) { return []any{uint32(groupGUID & 0xFFFFFFFF)}, nil },
-		"GetLeaderGUID":   func(context.Context, []any) ([]any, error) { return []any{leaderGUID}, nil },
-		"GetMembers":      func(context.Context, []any) ([]any, error) { return []any{append([]uint64(nil), members...)}, nil },
-		"GetMembersCount": func(context.Context, []any) ([]any, error) { return []any{uint32(len(members))}, nil },
+// GroupMemberLive is one live group roster entry behind a Lua Group object.
+type GroupMemberLive struct {
+	GUID      uint64
+	Name      string
+	SubGroup  uint8
+	Assistant bool
+}
+
+// GroupSnapshot is the live group roster behind a Lua Group object.
+type GroupSnapshot struct {
+	LeaderGUID uint64
+	Members    []GroupMemberLive
+	IsRaid     bool
+	IsBG       bool
+}
+
+// GroupLive carries the live-data callbacks behind a Lua Group object.
+// Load re-reads the roster (Eluna methods read the live Group*); Players
+// enumerates the online player objects for the GetMembers/GetLeader
+// filters. Either may be nil.
+type GroupLive struct {
+	Load    func() (GroupSnapshot, bool)
+	Players func() []*Object
+}
+
+// maxRaidSubGroups mirrors MAX_RAID_SUBGROUPS (Group.h:44,
+// MAXRAIDSIZE/MAXGROUPSIZE = 8); groupFull sizes mirror MAXGROUPSIZE=5 and
+// MAXRAIDSIZE=40 behind Group::IsFull (Group.cpp:2451).
+const (
+	maxRaidSubGroups = 8
+	maxGroupSize     = 5
+	maxRaidSize      = 40
+)
+
+// NewGroupObject builds the Lua Group object surface: the ID, GUID,
+// LeaderGUID and member GUID fields plus the GetId/GetGUID/GetLeaderGUID/
+// GetMembers/GetMembersCount/IsLeader/IsFull/IsRaidGroup/IsBGGroup/IsMember/
+// IsAssistant/SameSubGroup/HasFreeSlotSubGroup/GetMemberGUID/GetMemberGroup
+// methods (GroupMethods.h). GetMembers pushes the online Player objects for
+// members with sessions, like the C++. It is the Go model of Eluna's
+// Push(group) (LuaEngine/GroupHooks.cpp via ElunaTemplate), shared by the
+// world engine's group event hooks. The mutating surface
+// (AddMember/SetLeader/RemoveMember/Disband/ConvertToRaid/SetMembersGroup/
+// SetTargetIcon/SendPacket, GroupMethods.h) has no script-safe live path yet
+// and stays unbridged. groupGUID is the protocol group GUID (0x1F50 high
+// bits, as in world group.go's groupGUID).
+func NewGroupObject(groupGUID uint64, live GroupLive) *Object {
+	load := live.Load
+	if load == nil {
+		load = func() (GroupSnapshot, bool) { return GroupSnapshot{}, false }
 	}
-	return &Object{Type: "Group", Fields: map[string]any{"ID": uint32(groupGUID & 0xFFFFFFFF), "GUID": groupGUID, "LeaderGUID": leaderGUID, "Members": members}, Methods: methods}
+	snap, _ := load()
+	memberGUIDs := make([]uint64, 0, len(snap.Members))
+	for _, m := range snap.Members {
+		memberGUIDs = append(memberGUIDs, m.GUID)
+	}
+	memberByGUID := func(snap GroupSnapshot, guid uint64) *GroupMemberLive {
+		for i := range snap.Members {
+			if snap.Members[i].GUID == guid {
+				return &snap.Members[i]
+			}
+		}
+		return nil
+	}
+	methods := map[string]ObjectMethod{
+		"GetId":   func(context.Context, []any) ([]any, error) { return []any{uint32(groupGUID & 0xFFFFFFFF)}, nil },
+		"GetGUID": func(context.Context, []any) ([]any, error) { return []any{groupGUID}, nil },
+		"GetLeaderGUID": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.LeaderGUID}, nil
+			}
+			return []any{nil}, nil
+		},
+		// GetMembers pushes the online Player objects for members with
+		// sessions (GroupMethods.h), not the raw GUID list.
+		"GetMembers": func(context.Context, []any) ([]any, error) {
+			snap, _ := load()
+			members := []any{}
+			for _, m := range snap.Members {
+				if player := playerObjectByGUID(live.Players, m.GUID); player != nil {
+					members = append(members, player)
+				}
+			}
+			return []any{members}, nil
+		},
+		"GetMembersCount": func(context.Context, []any) ([]any, error) {
+			snap, _ := load()
+			return []any{uint32(len(snap.Members))}, nil
+		},
+		"IsLeader": func(_ context.Context, args []any) ([]any, error) {
+			guid, err := objectArgumentUint64(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			snap, _ := load()
+			return []any{guid == snap.LeaderGUID}, nil
+		},
+		// Group::IsFull (Group.cpp:2451): raid groups fill at MAXRAIDSIZE,
+		// normal groups at MAXGROUPSIZE.
+		"IsFull": func(context.Context, []any) ([]any, error) {
+			snap, _ := load()
+			limit := maxGroupSize
+			if snap.IsRaid {
+				limit = maxRaidSize
+			}
+			return []any{len(snap.Members) >= limit}, nil
+		},
+		"IsRaidGroup": func(context.Context, []any) ([]any, error) {
+			snap, _ := load()
+			return []any{snap.IsRaid}, nil
+		},
+		"IsBGGroup": func(context.Context, []any) ([]any, error) {
+			snap, _ := load()
+			return []any{snap.IsBG}, nil
+		},
+		"IsMember": func(_ context.Context, args []any) ([]any, error) {
+			guid, err := objectArgumentUint64(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			snap, _ := load()
+			return []any{memberByGUID(snap, guid) != nil}, nil
+		},
+		"IsAssistant": func(_ context.Context, args []any) ([]any, error) {
+			guid, err := objectArgumentUint64(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			snap, _ := load()
+			member := memberByGUID(snap, guid)
+			return []any{member != nil && member.Assistant}, nil
+		},
+		// SameSubGroup compares the two players' subgroups; like the C++
+		// (Group.cpp:1886) both must be group members.
+		"SameSubGroup": func(_ context.Context, args []any) ([]any, error) {
+			first, err := objectArgument(args)
+			if err != nil {
+				return nil, err
+			}
+			if len(args) < 2 {
+				return nil, fmt.Errorf("argument 2 is required")
+			}
+			second, ok := args[1].(*Object)
+			if !ok || second == nil {
+				return nil, fmt.Errorf("object argument expected")
+			}
+			guid1, ok1 := objectUint64(first, "GUID")
+			guid2, ok2 := objectUint64(second, "GUID")
+			if !ok1 || !ok2 {
+				return []any{false}, nil
+			}
+			snap, _ := load()
+			m1 := memberByGUID(snap, guid1)
+			m2 := memberByGUID(snap, guid2)
+			if m1 == nil || m2 == nil {
+				return []any{false}, nil
+			}
+			return []any{m1.SubGroup == m2.SubGroup}, nil
+		},
+		// HasFreeSlotSubGroup errors on subGroup >= MAX_RAID_SUBGROUPS like
+		// the C++ luaL_argerror (GroupMethods.h); the counter array only
+		// exists for raid groups (Group.cpp:2688), so non-raids are never
+		// free.
+		"HasFreeSlotSubGroup": func(_ context.Context, args []any) ([]any, error) {
+			sub, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if sub >= maxRaidSubGroups {
+				return nil, fmt.Errorf("valid subGroup ID expected")
+			}
+			snap, _ := load()
+			if !snap.IsRaid {
+				return []any{false}, nil
+			}
+			count := 0
+			for _, m := range snap.Members {
+				if m.SubGroup == uint8(sub) {
+					count++
+				}
+			}
+			return []any{count < maxGroupSize}, nil
+		},
+		"GetMemberGUID": func(_ context.Context, args []any) ([]any, error) {
+			if len(args) == 0 {
+				return nil, fmt.Errorf("argument 1 is required")
+			}
+			name, ok := args[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("argument 1 must be a string")
+			}
+			snap, _ := load()
+			for _, m := range snap.Members {
+				if m.Name == name {
+					return []any{m.GUID}, nil
+				}
+			}
+			return []any{uint64(0)}, nil
+		},
+		// GetMemberGroup returns MAX_RAID_SUBGROUPS+1 for non-members
+		// (Group.cpp:2571).
+		"GetMemberGroup": func(_ context.Context, args []any) ([]any, error) {
+			guid, err := objectArgumentUint64(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			snap, _ := load()
+			if member := memberByGUID(snap, guid); member != nil {
+				return []any{uint32(member.SubGroup)}, nil
+			}
+			return []any{uint32(maxRaidSubGroups + 1)}, nil
+		},
+	}
+	return &Object{Type: "Group", Fields: map[string]any{"ID": uint32(groupGUID & 0xFFFFFFFF), "GUID": groupGUID, "LeaderGUID": snap.LeaderGUID, "Members": memberGUIDs}, Methods: methods}
 }
 
 func (r *Runtime) pushGuildLookup(state *lua.State, statement string, arg any) int {
@@ -200,15 +533,30 @@ func (r *Runtime) pushGuildLookup(state *lua.State, statement string, arg any) i
 		state.PushNil()
 		return 1
 	}
-	var guildID, leaderGUID int64
-	var name string
-	if err := r.config.CharacterDB.QueryRow(statement, arg).Scan(&guildID, &name, &leaderGUID); err != nil {
+	db := r.config.CharacterDB
+	load := func() (uint32, GuildSnapshot, bool) {
+		var snap GuildSnapshot
+		var guildID, leaderGUID, memberCount int64
+		if err := db.QueryRow(statement, arg).Scan(&guildID, &snap.Name, &leaderGUID, &snap.MOTD, &snap.Info); err != nil || guildID == 0 {
+			return 0, GuildSnapshot{}, false
+		}
+		snap.LeaderGUID = uint64(leaderGUID)
+		_ = db.QueryRow("SELECT COUNT(1) FROM guild_member WHERE guildid = ?", guildID).Scan(&memberCount)
+		snap.MemberCount = uint32(memberCount)
+		return uint32(guildID), snap, true
+	}
+	guildID, _, ok := load()
+	if !ok {
 		state.PushNil()
 		return 1
 	}
-	memberCount := int64(0)
-	_ = r.config.CharacterDB.QueryRow("SELECT COUNT(1) FROM guild_member WHERE guildid = ?", guildID).Scan(&memberCount)
-	PushObject(state, NewGuildObject(uint32(guildID), name, uint64(leaderGUID), uint32(memberCount)))
+	PushObject(state, NewGuildObject(guildID, GuildLive{
+		Load: func() (GuildSnapshot, bool) {
+			_, snap, ok := load()
+			return snap, ok
+		},
+		Players: r.config.PlayerProvider,
+	}))
 	return 1
 }
 
