@@ -10237,7 +10237,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				if firesPerTarget {
 					for _, effectTarget := range hitTargets {
-						s.triggerSpellEffectTarget(effCtx, spellID, eff, effectTarget)
+						s.triggerSpellEffectTarget(effCtx, spellID, spell, eff, effectTarget)
 					}
 				}
 			case spellEffectAddExtraAttacks: // 19: SPELL_EFFECT_ADD_EXTRA_ATTACKS
@@ -11781,7 +11781,9 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	}
 	amount := uint32(0)
 	if auraEffect.BasePoints >= 0 {
-		amount = uint32(auraEffect.BasePoints + 1)
+		// The AuraEffect ctor default amount is the raw DBC base
+		// (SpellAuraEffects.cpp:386) — no +1.
+		amount = uint32(auraEffect.BasePoints)
 	}
 	if amount == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 23 || auraEffect.Aura == 89) {
 		amount = uint32(10 + int(s.player.Level)*2)
@@ -12153,7 +12155,13 @@ func (s *session) overrideClassScriptAuras(spell wotlk.Spell) []classScriptAura 
 		}
 		eff0 := int32(0)
 		if len(auraSpell.Effects) > 0 {
-			eff0 = auraSpell.Effects[0].BasePoints + 1
+			// Unit.cpp:6902: Dirty Deeds reads effect 0's live amount
+			// (GetEffect(0)->GetAmount()); the raw-BasePoints leg is the
+			// AuraEffect ctor default (SpellAuraEffects.cpp:386).
+			eff0 = auraSpell.Effects[0].BasePoints
+			if len(aura.Amounts) > 0 && aura.Amounts[0] != 0 {
+				eff0 = aura.Amounts[0]
+			}
 		}
 		for index, eff := range auraSpell.Effects {
 			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
@@ -12192,7 +12200,8 @@ func (s *session) auraTypeMiscAmounts(auraType uint32) []classScriptAura {
 			}
 			amount := aura.Amounts[index]
 			if amount == 0 {
-				amount = eff.BasePoints + 1
+				// AuraEffect ctor default: raw DBC base (SpellAuraEffects.cpp:386).
+				amount = eff.BasePoints
 			}
 			out = append(out, classScriptAura{spellID: aura.SpellID, misc: eff.MiscValue, amount: amount})
 		}
@@ -12220,7 +12229,8 @@ func (s *session) auraEffectAmount(spellID uint32, effIndex int) (int32, bool) {
 		}
 		amount := aura.Amounts[effIndex]
 		if amount == 0 {
-			amount = auraSpell.Effects[effIndex].BasePoints + 1
+			// AuraEffect ctor default: raw DBC base (SpellAuraEffects.cpp:386).
+			amount = auraSpell.Effects[effIndex].BasePoints
 		}
 		return amount, true
 	}
@@ -12250,7 +12260,8 @@ func (s *session) dummyAuraAmountByIcon(family, iconID uint32) (int32, bool) {
 			}
 			amount := aura.Amounts[index]
 			if amount == 0 {
-				amount = eff.BasePoints + 1
+				// AuraEffect ctor default: raw DBC base (SpellAuraEffects.cpp:386).
+				amount = eff.BasePoints
 			}
 			return amount, true
 		}
@@ -14519,12 +14530,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if !found {
 		spell = wotlk.Spell{ID: spellID}
 	}
+	// SpellEffectInfo::CalcValue (SpellInfo.cpp:402) levels the damage off
+	// the caster's level; every cast on this path runs on the session player.
+	casterLevel := uint32(s.player.Level)
 	if basePoints != nil && len(spell.Effects) != 0 {
-		// The override lands on the tree-wide flat convention (BasePoints+1
-		// is the effect damage), so each entry is stored minus one.
+		// Spell::SetSpellValue (Spell.cpp:7871-7877): SPELLVALUE_BASE_POINT
+		// mods land in EffectBasePoints through CalcBaseValue
+		// (SpellInfo.cpp:520-526) — the true value for flat (DieSides==0)
+		// effects, minus one for rolled effects (the nested CalcValue
+		// re-rolls base+1+rand off the stored value). CalcValue case 0
+		// returns the stored base with no +1 (SpellInfo.cpp:427-429).
 		for i, bp := range basePoints {
 			if i < len(spell.Effects) {
-				spell.Effects[i].BasePoints = bp - 1
+				if spell.Effects[i].DieSides == 0 {
+					spell.Effects[i].BasePoints = bp
+				} else {
+					spell.Effects[i].BasePoints = bp - 1
+				}
 			}
 		}
 	}
@@ -15056,7 +15078,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
 				s.executeSpellInstantKill(ctx, effectTarget, spellID)
 			} else if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
-				baseDmg := uint32(eff.BasePoints + 1)
+				// Spell::HandleEffects (Spell.cpp:5152-5175): the per-(target,
+				// effect) damage = CalculateDamage(i) — Unit::CalculateSpellDamage
+				// (Object.cpp:2271) -> SpellEffectInfo::CalcValue
+				// (SpellInfo.cpp:402-440): the raw base for DieSides==0 (no
+				// +1), rolled per target otherwise, RealPointsPerLevel off
+				// the caster level. eff.CalcValueForLevel is the Go twin.
+				baseDmg := uint32(eff.CalcValueForLevel(spell, casterLevel))
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): the
 				// SPELL_ATTR0_CU_SHARE_DAMAGE division splits the damage over the
 				// targets hit with this effect — the per-effect target count here
@@ -15103,7 +15131,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 				s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura)
 			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
-				healAmount := uint32(eff.BasePoints + 1)
+				// Spell::EffectHeal (SpellEffects.cpp:1393-1418): addhealth =
+				// damage (the HandleEffects CalculateDamage value, same twin
+				// as the SCHOOL_DAMAGE arm above).
+				healAmount := uint32(eff.CalcValueForLevel(spell, casterLevel))
 				if healAmount == 0 && spellID == ProcSpellCrusader {
 					healAmount = 100
 				}
@@ -15119,7 +15150,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				s.energizePctEffectTarget(ctx, spell, spellID, eff, effectTarget)
 			} else if eff.Effect == spellEffectPowerBurn {
 				var burnLog []takeTargetPowerEntry
-				if burned := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, eff.BasePoints+1, spellID, true); burned > 0 {
+				// Spell::EffectPowerBurn (SpellEffects.cpp:1352): the power
+				// taken is `damage` (the HandleEffects CalculateDamage value).
+				if burned := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, eff.CalcValueForLevel(spell, casterLevel), spellID, true); burned > 0 {
 					s.executeSpellDamage(ctx, effectTarget, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
 					// SpellEffects.cpp:1370-1373: the take-target-power log
 					// fires before the multiplier, with a zero gain.
@@ -15133,7 +15166,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// triggerSpellEffectTarget on the triggered path too (the
 				// special cases are per-target LAUNCH_TARGET legs; the
 				// handle-mode split is structural on both paths).
-				s.triggerSpellEffectTarget(ctx, spellID, eff, effectTarget)
+				s.triggerSpellEffectTarget(ctx, spellID, spell, eff, effectTarget)
 			} else if eff.Effect == spellEffectTriggerMissile || eff.Effect == spellEffectTriggerMissileWithValue {
 				// Spell::EffectTriggerMissileSpell per-target legs ride
 				// runTriggerMissileEffect on the triggered path too (the HIT
@@ -15141,16 +15174,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// produces — targetGUID is always resolved here).
 				s.runTriggerMissileEffect(ctx, spell, eff, []uint64{effectTarget})
 			} else if eff.Effect == spellEffectThreat {
-				s.applySpellThreat(ctx, spell, effectTarget, eff.BasePoints+1)
+				// Spell::EffectThreat (SpellEffects.cpp:3470): the threat is
+				// `damage` (the HandleEffects CalculateDamage value).
+				s.applySpellThreat(ctx, spell, effectTarget, eff.CalcValueForLevel(spell, casterLevel))
 			} else if eff.Effect == spellEffectHealMaxHealth {
-				s.executeSpellMaxHealthHeal(ctx, effectTarget, spellID, eff.BasePoints+1)
+				// Spell::EffectHealMaxHealth (SpellEffects.cpp:3488): the heal
+				// is `damage` (the HandleEffects CalculateDamage value).
+				s.executeSpellMaxHealthHeal(ctx, effectTarget, spellID, eff.CalcValueForLevel(spell, casterLevel))
 			} else if eff.Effect == spellEffectAddComboPoints {
 				// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789):
 				// the effectHandleMode gate is structural (this dispatch is the
 				// HIT phase), damage <= 0 gains nothing. A new target restarts
 				// the bank, the same target accumulates (Spell::AddComboPointGain,
 				// Spell.h:515-522); the spend lands in _handle_finish_phase.
-				gain := int8(eff.BasePoints + 1)
+				// The gain is `damage` (the HandleEffects CalculateDamage value).
+				gain := int8(eff.CalcValueForLevel(spell, casterLevel))
 				if gain > 0 && effectTarget != 0 {
 					if effectTarget != comboGainTarget {
 						comboGainTarget = effectTarget
@@ -15307,7 +15345,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 // and max-power gates plus the ModifyPower tail ride
 // applySpellEnergize/adjustSpellPower (see the arm note).
 func (s *session) energizeEffectTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, effectTarget uint64) {
-	amount := int32(eff.BasePoints + 1)
+	// Spell::EffectEnergize (SpellEffects.cpp:1775-1845) energizes `damage`
+	// (the HandleEffects CalculateDamage value); the per-spell level
+	// adjustments below ride on top of it.
+	var casterLevel uint32
+	if s != nil && s.player != nil {
+		casterLevel = uint32(s.player.Level)
+	}
+	amount := eff.CalcValueForLevel(spell, casterLevel)
 	power := eff.MiscValue
 	// SpellEffects.cpp:1788-1791: a player target whose current power type
 	// differs from the energized power gets nothing, unless the spell is
@@ -15441,6 +15486,12 @@ func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell
 	if power < 0 || power >= 7 {
 		return
 	}
+	// Spell::EffectEnergizePct (SpellEffects.cpp:1847): the percent is
+	// `damage` (the HandleEffects CalculateDamage value).
+	var casterLevel uint32
+	if s != nil && s.player != nil {
+		casterLevel = uint32(s.player.Level)
+	}
 	// SpellEffects.cpp:1863-1865: a player target whose current power type
 	// differs from the energized power gets nothing, unless the spell
 	// carries SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER. Unlike
@@ -15466,7 +15517,7 @@ func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell
 	if maxPower == 0 {
 		return
 	}
-	gain := int32(int64(maxPower) * int64(eff.BasePoints+1) / 100)
+	gain := int32(int64(maxPower) * int64(eff.CalcValueForLevel(spell, casterLevel)) / 100)
 	if gain <= 0 {
 		return
 	}
@@ -15516,7 +15567,7 @@ const (
 // longer double-fire per hit target. The m_originalCasterGUID GO-cast leg
 // (994-996) is structural for the same reason. The self-trigger skip
 // (TriggerSpell == spellID) is a Go recursion guard with no C++ counterpart.
-func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, effectTarget uint64) {
+func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, spell wotlk.Spell, eff wotlk.SpellEffect, effectTarget uint64) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -15527,10 +15578,11 @@ func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, 
 	}
 	if eff.Effect == spellEffectTriggerSpellWithValue {
 		// SpellEffects.cpp:989-992: TRIGGER_SPELL_WITH_VALUE sets every base
-		// point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the effect damage.
-		// The effect damage lands on the tree-wide flat convention
-		// (BasePoints+1), clamped at zero like the damage model.
-		bp := eff.BasePoints + 1
+		// point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the effect damage
+		// (the HandleEffects CalculateDamage value, per target). The zero
+		// clamp keeps the Go damage-model convention: C++ passes damage
+		// unclamped, but the nested uint32 consumers would wrap a negative.
+		bp := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 		if bp < 0 {
 			bp = 0
 		}
@@ -15606,9 +15658,11 @@ func (s *session) triggerLaunchSpellEffects(ctx context.Context, spell wotlk.Spe
 		if eff.Effect == spellEffectTriggerSpellWithValue {
 			// SpellEffects.cpp:989-992: TRIGGER_SPELL_WITH_VALUE sets every
 			// base point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the
-			// effect damage (the tree-wide flat convention: BasePoints+1,
-			// clamped at zero like the damage model).
-			bp := eff.BasePoints + 1
+			// effect damage (the HandleEffects CalculateDamage value). The
+			// zero clamp keeps the Go damage-model convention: C++ passes
+			// damage unclamped, but the nested uint32 consumers would wrap a
+			// negative.
+			bp := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 			if bp < 0 {
 				bp = 0
 			}
@@ -15746,7 +15800,7 @@ func (s *session) runTriggerMissileEffect(ctx context.Context, parent wotlk.Spel
 		// channel-dest spells resolve inside castSpellDirectWithOverrides),
 		// and the GO-caster leg (1033-1034) is unmodeled tree-wide — the
 		// cast lands on the caster, matching the unit-caster leg (1032).
-		s.castTriggerMissile(ctx, eff, s.playerGUID)
+		s.castTriggerMissile(ctx, parent, eff, s.playerGUID)
 		return
 	}
 	for _, effectTarget := range hitTargets {
@@ -15756,19 +15810,25 @@ func (s *session) runTriggerMissileEffect(ctx context.Context, parent wotlk.Spel
 		if !spellNeedsToBeTriggeredByCaster(triggered, parent) {
 			continue
 		}
-		s.castTriggerMissile(ctx, eff, effectTarget)
+		s.castTriggerMissile(ctx, parent, eff, effectTarget)
 	}
 }
 
 // castTriggerMissile runs the CastSpell tail of Spell::EffectTriggerMissileSpell
 // (SpellEffects.cpp:1036-1043) for one resolved target.
-func (s *session) castTriggerMissile(ctx context.Context, eff wotlk.SpellEffect, targetGUID uint64) {
+func (s *session) castTriggerMissile(ctx context.Context, parent wotlk.Spell, eff wotlk.SpellEffect, targetGUID uint64) {
 	if eff.Effect == spellEffectTriggerMissileWithValue {
 		// SpellEffects.cpp:1037-1040: the with-value arm sets every base
 		// point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the effect
-		// damage (the tree-wide flat convention: BasePoints+1, clamped at
-		// zero like the damage model).
-		bp := eff.BasePoints + 1
+		// damage (the HandleEffects CalculateDamage value, per target). The
+		// zero clamp keeps the Go damage-model convention: C++ passes
+		// damage unclamped, but the nested uint32 consumers would wrap a
+		// negative.
+		var casterLevel uint32
+		if s != nil && s.player != nil {
+			casterLevel = uint32(s.player.Level)
+		}
+		bp := eff.CalcValueForLevel(parent, casterLevel)
 		if bp < 0 {
 			bp = 0
 		}
