@@ -1941,6 +1941,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if effect.Effect == spellEffectDispel {
 			s.executePetSpellDispel(ctx, motion, resolveReflectTarget(targetGUID), spell, effect)
 		}
+		if effect.Effect == spellEffectDispelMechanic {
+			// Spell::EffectDispelMechanic (SpellEffects.cpp:4733-4756):
+			// the pet path's dispel arm handled only effect 38 — 108
+			// fell to the unhandled arm and did nothing, while C++
+			// dispatches it per unit target (SpellEffects.cpp:177) and the
+			// player path bridges it (spells.go case 108). Reflection
+			// maps the victim to the pet like the 38 arm above
+			// (Spell.cpp:2350, 7740-7743).
+			s.handleEffectDispelMechanic(ctx, resolveReflectTarget(targetGUID), spell, effect)
+		}
 		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
 			// a target whose aura scales takes the aura from the

@@ -400,6 +400,7 @@ const (
 	spellEffectTransmitted             = 50  // SPELL_EFFECT_TRANS_DOOR (SharedDefines.h:861; EffectTransmitted, SpellEffects.cpp:4927)
 	spellEffectDismissPet              = 102 // SPELL_EFFECT_DISMISS_PET (SharedDefines.h:913)
 	spellEffectDispel                  = 38  // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
+	spellEffectDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
 	spellEffectResurrectPet            = 109 // SPELL_EFFECT_RESURRECT_PET (SharedDefines.h:920)
 	spellEffectSummon                  = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
 	spellEffectSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
@@ -10477,7 +10478,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					s.handleEffectDispel(effCtx, effectTarget, spell, eff)
 				}
-			case 108: // SPELL_EFFECT_DISPEL_MECHANIC
+			case spellEffectDispelMechanic: // 108: SPELL_EFFECT_DISPEL_MECHANIC
 				// Spell::EffectDispelMechanic (SpellEffects.cpp:4733) is also
 				// per unit target.
 				for _, effectTarget := range hitTargets {
