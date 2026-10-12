@@ -2827,39 +2827,41 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
 					chance = float64(s.applySpellMod(critSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 				}
-				if critSpell.DefenseType == spellDamageClassMagic {
+				if critSpell.DefenseType == spellDamageClassMagic || critSpell.DefenseType == spellDamageClassMelee || critSpell.DefenseType == spellDamageClassRanged {
 					// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240):
-					// the victim's 179 (pre-resilience) / 197
-					// (post-resilience) totals, then the resilience
-					// crit-chance reduction — the pet's owner is a
-					// player, so CanApplyResilience holds
-					// (Unit.cpp:12333). Caster-side scripted arms
-					// (Shatter 849/910/911) read the caster's
-					// OVERRIDE_CLASS_SCRIPTS auras; pets carry none in
-					// the creature aura store, so they stay unbridged.
-					// The melee/ranged-DmgClass taken leg is
-					// GetUnitCriticalChanceTaken's weapon-skill diff —
-					// no Go model, stays unbridged.
-					chance += s.directSpellTakenCritBonus(target, isPlayerVictim, schoolMask, critSpell)
-					if caster.OwnerGUID != 0 {
-						chance = s.applyTakenCritResilience(targetGUID, chance*100) / 100.0
+					// MAGIC takes 179 pre-resilience and 197 post, the
+					// resilience crit-chance reduction runs when the pet's
+					// owner is a player (CanApplyResilience,
+					// Unit.cpp:12333), and MELEE/RANGED take the
+					// GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
+					// Caster-side scripted arms (Shatter 849/910/911) read
+					// the caster's OVERRIDE_CLASS_SCRIPTS auras; pets carry
+					// none in the creature aura store, so they stay
+					// unbridged.
+					var vicSess *session
+					if isPlayerVictim {
+						vicSess = s.server.findSessionByGUID(target.GUID)
 					}
+					chance = s.server.creatureSpellCritChanceTaken(chance, vicSess, creatureAuraKeyForTarget(target), isPlayerVictim, caster.GUID, caster.Level, uint32(target.Level), schoolMask, critSpell, caster.OwnerGUID != 0)
 				}
 				isCrit = chance > 0 && rand.Float64() < chance
 			}
 			if isCrit {
-				// Unit::CalculateSpellDamageTaken (Unit.cpp:1023-1040):
-				// magic-DmgClass crits take SpellCriticalDamageBonus, the
-				// melee/ranged arm doubles the damage. The nil session
-				// carries the base halves/doubles (the periodic-tick
-				// sites use the same convention); the pet's 163/169
-				// crit-damage auras have no creature-store fold and stay
-				// a noted edge.
-				var nilSess *session
+				// Unit::SpellCriticalDamageBonus (Unit.cpp:7411-7449) /
+				// the melee/ranged arm (Unit.cpp:1045-1062): the pet's
+				// 163/169 crit-damage auras now fold from the creature
+				// store (the old nil-session call carried only the base
+				// half/double), plus the victim's 203/204 on the
+				// melee/ranged arm.
+				mask, _ := s.targetCreatureTypeMask(ctx, targetGUID)
+				var vicSess *session
+				if isPlayerVictim {
+					vicSess = s.server.findSessionByGUID(target.GUID)
+				}
 				if critSpell.DefenseType == spellDamageClassMagic {
-					damage = nilSess.spellCriticalDamageBonus(ctx, critSpell, damage, targetGUID)
+					damage = s.server.creatureSpellCriticalDamageBonus(creatureAuraKeyForMotion(caster), uint32(schoolMask), damage, mask)
 				} else {
-					damage = nilSess.spellWeaponCritDamageBonus(ctx, critSpell, damage, target, isPlayerVictim)
+					damage = s.server.creatureSpellWeaponCritDamageBonus(creatureAuraKeyForMotion(caster), creatureAuraKeyForTarget(target), vicSess, isPlayerVictim, uint32(schoolMask), damage, critSpell, mask)
 				}
 				hitInfo |= 0x02
 			}
@@ -2873,7 +2875,18 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	}
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
-			victim.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
+			// Unit::CalculateSpellDamageTaken (Unit.cpp:1079-1080): the
+			// MELEE/RANGED-DmgClass arm reduces by the melee/ranged taken
+			// rating, not the spell one.
+			resilCR := uint8(CombatRatingCritTakenSpell)
+			if resilSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found && resilSpell.DefenseType != spellDamageClassMagic {
+				if spellWeaponAttackType(resilSpell) == protocol.RangedAttack {
+					resilCR = CombatRatingCritTakenRanged
+				} else {
+					resilCR = CombatRatingCritTakenMelee
+				}
+			}
+			victim.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 			if damage > 0 {
 				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): max(194
 				// misc-masked pct, 245 ability pct affecting the cast

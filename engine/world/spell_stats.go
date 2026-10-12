@@ -594,6 +594,211 @@ func (s *session) directWeaponCritChanceDone(ctx context.Context, spell wotlk.Sp
 	return chance / 100.0
 }
 
+// creatureSpellCritChanceTaken mirrors the victim-side arms of
+// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240) for creature-cast direct
+// spells, returning the full crit chance (done + taken), never negative.
+// SPELL_DAMAGE_CLASS_MAGIC, non-positive only: the victim's 179 (school-
+// masked) runs BEFORE the resilience reduction, which uses CR_CRIT_TAKEN_SPELL,
+// and the victim's 197 folds in AFTER (Unit.cpp:7230-7239) — resilience is a
+// flat subtractive reduction (Unit.cpp:12384), so the order is load-bearing.
+// SPELL_DAMAGE_CLASS_MELEE/RANGED take the Unit::GetUnitCriticalChanceTaken
+// leg (Unit.cpp:2858-2901): victim flat 187/188 by attack type
+// (SpellInfo::GetAttackType via spellWeaponAttackType), victim 308 filtered
+// by the caster GUID, resilience with the melee/ranged taken rating, victim
+// 197 post-resilience (no positivity gate on this leg), then the weapon-skill
+// vs defense-skill bonus (5/level by construction, same convention as
+// directWeaponCritChanceTaken). The Rend and Tear / Victory Rush caster arms
+// (Unit.cpp:7353-7376) read the caster's dummy auras — creature casters never
+// carry them, so they stay unbridged. canResilience gates
+// Unit::CanApplyResilience (Unit.cpp:12333); the reduction itself only lands
+// on player victims (Go carries combat ratings on player sessions only — the
+// C++ pet-victim owner arm stays a noted edge).
+func (srv *Server) creatureSpellCritChanceTaken(doneChance float64, vicSess *session, victimKey creatureAuraKey, isPlayerVictim bool, casterGUID uint64, casterLevel, victimLevel uint32, schoolMask uint8, spell wotlk.Spell, canResilience bool) float64 {
+	if srv == nil {
+		return doneChance
+	}
+	chance := doneChance * 100.0
+	applyChanceResilience := func(cr uint8) {
+		if !canResilience || !isPlayerVictim || vicSess == nil {
+			return
+		}
+		critBP := int32(math.Round(chance * 100))
+		vicSess.applyResilienceToMeleeCritChance(true, cr, &critBP)
+		chance = float64(critBP) / 100.0
+	}
+	takenFlat := func(auraType uint32) float64 {
+		if isPlayerVictim && vicSess != nil {
+			return float64(vicSess.playerAuraModifier(auraType))
+		}
+		return float64(creatureAuraModifierSum(srv, victimKey, auraType))
+	}
+	switch spell.DefenseType {
+	case spellDamageClassMagic:
+		if spellIsPositive(spell) {
+			return doneChance
+		}
+		if isPlayerVictim && vicSess != nil {
+			chance += float64(vicSess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(schoolMask)))
+		} else {
+			for _, amt := range creatureAuraModifiersByMiscMask(srv, victimKey, spellAuraModAttackerSpellCritChance, uint32(schoolMask)) {
+				chance += float64(amt)
+			}
+		}
+		applyChanceResilience(CombatRatingCritTakenSpell)
+		chance += takenFlat(spellAuraModAttackerSpellAndWeaponCritChance)
+	case spellDamageClassMelee, spellDamageClassRanged:
+		attackType := spellWeaponAttackType(spell)
+		flatAura := uint32(spellAuraModAttackerMeleeCritChance)
+		if attackType == protocol.RangedAttack {
+			flatAura = spellAuraModAttackerRangedCritChance
+		}
+		chance += takenFlat(flatAura)
+		if isPlayerVictim && vicSess != nil {
+			chance += vicSess.victimCritChanceForCaster(casterGUID)
+		} else {
+			chance += creatureVictimCritChanceForCaster(srv, victimKey, casterGUID)
+		}
+		cr := uint8(CombatRatingCritTakenMelee)
+		if attackType == protocol.RangedAttack {
+			cr = CombatRatingCritTakenRanged
+		}
+		applyChanceResilience(cr)
+		chance += takenFlat(spellAuraModAttackerSpellAndWeaponCritChance)
+		skillDiff := (int32(victimLevel) - int32(casterLevel)) * 5
+		if isPlayerVictim {
+			chance += -float64(skillDiff) * 0.04
+		} else {
+			chance += -float64(skillDiff) * 0.12
+			if skillDiff >= 15 {
+				chance -= 3.0
+			}
+		}
+	default:
+		return doneChance
+	}
+	if chance < 0 {
+		chance = 0
+	}
+	return chance / 100.0
+}
+
+// creatureCritDamageAuraMultiplier mirrors the creature half of the
+// SPELL_AURA_MOD_CRIT_DAMAGE_BONUS (163) arm in
+// Unit::SpellCriticalDamageBonus (Unit.cpp:7428): the product of
+// (1 + amount/100) over the caster's 163 auras whose effect misc mask
+// intersects the spell school.
+func creatureCritDamageAuraMultiplier(srv *Server, key creatureAuraKey, schoolMask uint32) float64 {
+	mult := 1.0
+	if srv == nil || srv.Data == nil || key.GUID == 0 || schoolMask == 0 {
+		return mult
+	}
+	for _, amt := range creatureAuraModifiersByMiscMask(srv, key, spellAuraModCritDamageBonus, schoolMask) {
+		mult *= 1.0 + float64(amt)/100.0
+	}
+	return mult
+}
+
+// creatureCritPercentVersus mirrors the SPELL_AURA_MOD_CRIT_PERCENT_VERSUS
+// (169) arm in Unit::SpellCriticalDamageBonus (Unit.cpp:7431): the sum of the
+// caster's 169-aura amounts whose effect misc mask intersects the victim's
+// creature-type mask.
+func creatureCritPercentVersus(srv *Server, key creatureAuraKey, victimCreatureTypeMask uint32) int32 {
+	if srv == nil || srv.Data == nil || key.GUID == 0 || victimCreatureTypeMask == 0 {
+		return 0
+	}
+	srv.auraMu.Lock()
+	auras := srv.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	srv.auraMu.Unlock()
+	var total int32
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModCritPercentVersus {
+				continue
+			}
+			if uint32(effect.MiscValue)&victimCreatureTypeMask == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			total += amount
+		}
+	}
+	return total
+}
+
+// creatureSpellCriticalDamageBonus mirrors Unit::SpellCriticalDamageBonus
+// (Unit.cpp:7411-7449) for creature casters: base 50% (the melee/ranged 100%
+// arm lives in creatureSpellWeaponCritDamageBonus), the caster's 163
+// multiplier product by school misc mask, and the caster's 169 sum by the
+// victim's creature-type mask, folded as AddPct over the bonus before the
+// bonus rejoins the damage (Unit.cpp:7433-7435). The
+// SPELLMOD_CRIT_DAMAGE_BONUS owner arm (Unit.cpp:7436-7442) stays a noted
+// delta — the pre-existing nil-session convention carried the base only.
+func (srv *Server) creatureSpellCriticalDamageBonus(casterKey creatureAuraKey, schoolMask uint32, damage uint32, victimCreatureTypeMask uint32) uint32 {
+	critBonus := int64(damage) + int64(damage)/2
+	if srv != nil {
+		critMod := (creatureCritDamageAuraMultiplier(srv, casterKey, schoolMask) - 1.0) * 100.0
+		critMod += float64(creatureCritPercentVersus(srv, casterKey, victimCreatureTypeMask))
+		if critBonus != 0 && critMod != 0 {
+			// AddPct(int32 base, float pct): base += int32(float32(base) * pct / 100).
+			critBonus += int64(float32(critBonus) * float32(critMod) / 100.0)
+		}
+	}
+	if critBonus < 0 {
+		return 0
+	}
+	return uint32(critBonus)
+}
+
+// creatureSpellWeaponCritDamageBonus mirrors the MELEE/RANGED arm of
+// Unit::CalculateSpellDamageTaken (Unit.cpp:1045-1062) for creature casters:
+// full-damage bonus, then the victim's 203/204 crit-damage auras by attack
+// type, the caster's 163 multiplier by school mask, and the caster's 169 sum
+// by the victim's creature-type mask, folded as one percent add over the
+// total (AddPct, Unit.cpp:1059-1061). The SPELLMOD_CRIT_DAMAGE_BONUS arm and
+// the npcbot legs stay a noted delta — the pre-existing nil-session
+// convention carried the double only.
+func (srv *Server) creatureSpellWeaponCritDamageBonus(casterKey creatureAuraKey, victimKey creatureAuraKey, vicSess *session, isPlayerVictim bool, schoolMask uint32, damage uint32, spell wotlk.Spell, victimCreatureTypeMask uint32) uint32 {
+	total := int64(damage) + int64(damage)
+	if srv != nil {
+		var critPctDamageMod float64
+		auraType := uint32(spellAuraModAttackerMeleeCritDmg)
+		if spellWeaponAttackType(spell) == protocol.RangedAttack {
+			auraType = spellAuraModAttackerRangedCritDmg
+		}
+		if isPlayerVictim && vicSess != nil {
+			for _, amount := range vicSess.auraTypeModifiersFiltered(auraType, func(int32) bool { return true }) {
+				critPctDamageMod += float64(amount)
+			}
+		} else {
+			critPctDamageMod += float64(creatureAuraModifierSum(srv, victimKey, auraType))
+		}
+		critPctDamageMod += (creatureCritDamageAuraMultiplier(srv, casterKey, schoolMask) - 1.0) * 100.0
+		critPctDamageMod += float64(creatureCritPercentVersus(srv, casterKey, victimCreatureTypeMask))
+		if critPctDamageMod != 0 {
+			// AddPct(int32 base, float pct): base += int32(float32(base) * pct / 100).
+			total += int64(float32(total) * float32(critPctDamageMod) / 100.0)
+		}
+	}
+	if total < 0 {
+		return 0
+	}
+	return uint32(total)
+}
+
 // directWeaponCritChanceTaken mirrors the MELEE/RANGED arms of
 // Unit::SpellCritChanceTaken for direct spells: the Rend and Tear /
 // Victory Rush caster class arms (Unit.cpp:7353-7376), then

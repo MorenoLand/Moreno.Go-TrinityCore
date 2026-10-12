@@ -196,36 +196,34 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// GetSpellModOwner()/IsNPCBotOrPet gate) can. The crit bonus sits
 		// in the DmgClass switch (Unit.cpp:1023-1040), post-armor,
 		// pre-resilience, and the taken arms feed the roll
-		// (Unit.cpp:7228-7240). The melee/ranged-DmgClass taken leg is
-		// GetUnitCriticalChanceTaken's weapon-skill diff — no Go model,
-		// stays unbridged — and the caster-side scripted arms (Shatter)
-		// read caster OVERRIDE_CLASS_SCRIPTS auras the creature store
-		// never carries.
+		// (Unit.cpp:7228-7240). The melee/ranged-DmgClass taken leg rides
+		// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2901) via
+		// creatureSpellCritChanceTaken — the caster-side scripted arms
+		// (Shatter) read caster OVERRIDE_CLASS_SCRIPTS auras the
+		// creature store never carries and stay unbridged.
 		if damage > 0 && inlineSpellKnown && motion != nil && motion.OwnerGUID != 0 {
 			chance := s.creatureSpellCritChanceDone(creatureAuraKeyForMotion(motion), motion.FlagsExtra&0x20000 != 0, schoolMask, inlineSpell, true)
 			if chance > 0 {
 				if owner := s.findSessionByGUID(motion.OwnerGUID); owner != nil && owner.player != nil {
 					chance = float64(owner.applySpellMod(inlineSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 				}
-				if inlineSpell.DefenseType == spellDamageClassMagic && !spellIsPositive(inlineSpell) {
-					chance += float64(p.Sess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(schoolMask)))
-					chance += float64(p.Sess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
-					critBP := int32(math.Round(chance * 100))
-					p.Sess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenSpell, &critBP)
-					chance = float64(critBP) / 100.0
-				}
+				// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240): MAGIC
+				// takes 179 pre-resilience and 197 post, MELEE/RANGED take
+				// the GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
+				chance = s.creatureSpellCritChanceTaken(chance, p.Sess, creatureAuraKey{}, true, motion.GUID, motion.Level, uint32(p.Sess.player.Level), schoolMask, inlineSpell, true)
 				isCrit = chance > 0 && rand.Float64() < chance
 			}
 			if isCrit {
-				// The nil session carries the base halves/doubles (the
-				// periodic-tick sites use the same convention); the
-				// creature's 163/169 crit-damage auras have no
-				// creature-store fold and stay a noted edge.
-				var nilSess *session
+				// Unit::SpellCriticalDamageBonus (Unit.cpp:7411-7449) /
+				// the melee/ranged arm (Unit.cpp:1045-1062): the caster's
+				// 163/169 crit-damage auras now fold from the creature
+				// store (the old nil-session call carried only the base
+				// half/double).
+				mask, _ := p.Sess.targetCreatureTypeMask(ctx, p.GUID)
 				if inlineSpell.DefenseType == spellDamageClassMagic {
-					damage = nilSess.spellCriticalDamageBonus(ctx, inlineSpell, damage, p.GUID)
+					damage = s.creatureSpellCriticalDamageBonus(creatureAuraKeyForMotion(motion), uint32(schoolMask), damage, mask)
 				} else {
-					damage = nilSess.spellWeaponCritDamageBonus(ctx, inlineSpell, damage, combatTarget{GUID: p.GUID, Map: p.Map, InstanceID: p.InstanceID}, true)
+					damage = s.creatureSpellWeaponCritDamageBonus(creatureAuraKeyForMotion(motion), creatureAuraKey{}, p.Sess, true, uint32(schoolMask), damage, inlineSpell, mask)
 				}
 				hitInfo = 0x02
 			}
@@ -236,7 +234,19 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// never reduce the victim by resilience; a player-owned motion
 		// (pet/charm) does.
 		if damage > 0 && motion != nil && motion.OwnerGUID != 0 {
-			p.Sess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
+			// Unit::CalculateSpellDamageTaken (Unit.cpp:1079-1080): the
+			// MELEE/RANGED-DmgClass arm reduces by the melee/ranged taken
+			// rating, not the spell one (Unit.cpp:1105-1107 keeps
+			// CR_CRIT_TAKEN_SPELL for the MAGIC arm).
+			resilCR := uint8(CombatRatingCritTakenSpell)
+			if inlineSpellKnown && inlineSpell.DefenseType != spellDamageClassMagic {
+				if spellWeaponAttackType(inlineSpell) == protocol.RangedAttack {
+					resilCR = CombatRatingCritTakenRanged
+				} else {
+					resilCR = CombatRatingCritTakenMelee
+				}
+			}
+			p.Sess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 		}
 		// ModifySpellDamageTaken: the AutoBalance damage multiplier scales
 		// the post-switch damage, ahead of the resist/absorb tail.
