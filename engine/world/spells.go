@@ -22393,6 +22393,33 @@ func (s *session) auraStoredCasterLevel(casterGUID uint64, spell wotlk.Spell) ui
 	return uint8(spell.SpellLevel)
 }
 
+// creatureAuraCasterGUID resolves the creature-target apply's aura caster:
+// the casterGUID param (a foreign player, a creature motion, or a totem)
+// wins; 0 falls back to the casting session's player, the old behavior.
+func creatureAuraCasterGUID(s *session, casterGUID uint64) uint64 {
+	if casterGUID != 0 {
+		return casterGUID
+	}
+	if s != nil {
+		return s.playerGUID
+	}
+	return 0
+}
+
+// creatureAuraCasterLevel resolves the Aura::_casterInfo.Level twin for a
+// creature-target apply: auraStoredCasterLevel (live session level,
+// same-map motion level, else SpellLevel) for a known caster; the casting
+// session's level for the zero-caster case, the old behavior.
+func creatureAuraCasterLevel(s *session, casterGUID uint64, spell wotlk.Spell) uint8 {
+	if casterGUID != 0 && s != nil {
+		return s.auraStoredCasterLevel(casterGUID, spell)
+	}
+	if s != nil && s.player != nil {
+		return s.player.Level
+	}
+	return uint8(spell.SpellLevel)
+}
+
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64, triggeredByAura bool) {
 	if s.player == nil {
 		return
@@ -23420,9 +23447,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		s.server.auraMu.Unlock()
 		// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a
 		// re-applied MOD_TAUNT aura refreshes the creature's taunt state
-		// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
+		// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458) keyed on
+		// the merged aura's recorded caster, like the fresh-apply leg below.
 		if eff.Aura == spellAuraModTaunt {
-			s.server.applyCreatureTaunt(targetKey, s.playerGUID, durationMs)
+			tauntCaster := existing.CasterGUID
+			if tauntCaster == 0 {
+				tauntCaster = s.playerGUID
+			}
+			s.server.applyCreatureTaunt(targetKey, tauntCaster, durationMs)
 		}
 		// AuraEffect::HandleAuraLinked REAPPLY arm
 		// (SpellAuraEffects.cpp:4905-4911): a re-cast merge syncs the linked
@@ -23476,6 +23508,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		return
 	}
 
+	// Creature-target branch of applyAuraToTarget: the aura record carries the
+	// spell's caster (AuraCreateInfo::SetCasterGUID) — the casterGUID param,
+	// not the casting session's player — because the dynamic-object, proc,
+	// dispel-steal and spell_linked apply paths create creature auras with a
+	// foreign caster (a creature or another player), mirroring the player
+	// branch above. The zero-caster fallback keeps the old owner attribution
+	// when no caster is known. CasterLevel/StoredCasterLevel are the
+	// Aura::_casterInfo.Level twin (SpellAuras.cpp): the caster's level —
+	// resolved session -> same-map motion -> SpellLevel via
+	// auraStoredCasterLevel — not the casting session's level; the zero-caster
+	// case keeps the session level as before.
 	slot := uint8(len(s.server.activeCreatureAuras[targetKey]) % 64)
 	aura := &activeAura{
 		SpellID:            spell.ID,
@@ -23483,7 +23526,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		Mechanic:           spell.Mechanic,
 		AuraType:           eff.Aura,
 		EffectMask:         spellEffectMask(spell, eff),
-		CasterGUID:         s.playerGUID,
+		CasterGUID:         creatureAuraCasterGUID(s, casterGUID),
 		TargetGUID:         targetGUID,
 		ItemGUID:           castItemGUID,
 		TargetKey:          targetKey,
@@ -23497,8 +23540,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		DurationUpdatedAt:  time.Now(),
 		Slot:               slot,
 		Positive:           positive,
-		CasterLevel:        s.player.Level,
-		StoredCasterLevel:  s.auraStoredCasterLevel(s.playerGUID, spell),
+		CasterLevel:        creatureAuraCasterLevel(s, casterGUID, spell),
+		StoredCasterLevel:  creatureAuraCasterLevel(s, casterGUID, spell),
 		SingleTarget:       isSingleTargetAuraSpell(spell),
 		TriggerSpell:       eff.TriggerSpell,
 		StackAmount:        spell.StackAmount,
@@ -23577,7 +23620,23 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// CHARM_TYPE_CHARM — Go's charmCreature does not model the charm
 	// type). Both run only in AURA_EFFECT_HANDLE_REAL mode.
 	if eff.Aura == spellAuraCharm || eff.Aura == spellAuraAoeCharm {
-		spells, reactState, commandState, controlled := s.server.charmCreature(ctx, targetKey, s.playerGUID, s.player.Race)
+		// Unit::SetCharmedBy (Unit.cpp): the charmer is the aura's caster —
+		// the recorded CasterGUID, not the casting session — and the charmed
+		// unit takes the charmer's faction. The common player-charm case is
+		// behavior-identical (caster == s.playerGUID -> race faction).
+		charmer := aura.CasterGUID
+		if charmer == 0 {
+			charmer = s.playerGUID
+		}
+		charmerFaction := s.server.raceFaction(s.player.Race)
+		if charmer != s.playerGUID && s.server != nil {
+			if cs := s.server.findSessionByGUID(charmer); cs != nil && cs.player != nil {
+				charmerFaction = s.server.raceFaction(cs.player.Race)
+			} else if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, charmer); m != nil {
+				charmerFaction = m.Faction
+			}
+		}
+		spells, reactState, commandState, controlled := s.server.charmCreatureFaction(ctx, targetKey, charmer, charmerFaction)
 		if controlled {
 			s.sendClientControl(targetGUID, true)
 			s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
@@ -23674,7 +23733,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		stackCount = uint8(spell.ProcCharges)
 	}
 	wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
-	updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, aura.StoredCasterLevel, stackCount, spellEffectMask(spell, eff))
+	// BuildUpdatePacket (SpellAuras.cpp:239) sends the stored aura's caster,
+	// not the casting session — the player-branch fresh-apply twin pattern.
+	wireCaster := aura.CasterGUID
+	if wireCaster == 0 {
+		wireCaster = s.playerGUID
+	}
+	updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, aura.StoredCasterLevel, stackCount, spellEffectMask(spell, eff))
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 

@@ -1474,6 +1474,14 @@ func (s *Server) rearmAISpell(m *creatureMotion, spell wotlk.Spell, spellID uint
 }
 
 func (s *Server) charmCreature(ctx context.Context, key creatureAuraKey, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8, bool) {
+	return s.charmCreatureFaction(ctx, key, charmerGUID, s.raceFaction(charmerRace))
+}
+
+// charmCreatureFaction is the charmCreature twin keyed on the charmer's
+// faction directly: Unit::SetCharmedBy sets the charmed unit's faction from
+// the charmer's faction (Unit.cpp), and a creature charmer has no race to
+// map — the call site resolves its motion faction instead.
+func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, charmerGUID uint64, charmerFaction uint32) ([]uint32, uint8, uint8, bool) {
 	if s == nil || key.GUID == 0 || charmerGUID == 0 {
 		return nil, 0, 0, false
 	}
@@ -1497,7 +1505,7 @@ func (s *Server) charmCreature(ctx context.Context, key creatureAuraKey, charmer
 	motion.CharmerGUID = charmerGUID
 	motion.Charmed = true
 	motion.UnitFlags |= unitFlagPlayerControlled
-	motion.Faction = s.raceFaction(charmerRace)
+	motion.Faction = charmerFaction
 	motion.OwnerGUID = charmerGUID
 	motion.PetCommand = PetCommandFollow
 	motion.PetReact = PetReactDefensive
