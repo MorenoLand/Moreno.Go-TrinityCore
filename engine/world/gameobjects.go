@@ -446,6 +446,109 @@ func packGameObjectRotation(x, y, z, w float32) uint64 {
 
 // handleGameObjectUse processes CMSG_GAMEOBJ_USE (0x0B1).
 // Reference: WorldSession::HandleGameObjectUseOpcode (SpellHandler.cpp:300) -> GameObject::Use (GameObject.cpp:1290).
+// admitGameObjectUse applies the GameObject::Use template-cooldown gate
+// (GameObject.cpp:1513-1518): trap.cooldown / goober.cooldown
+// (GameObjectTemplate::GetCooldown, GameObjectData.h:582) arm m_cooldownTime,
+// and a use inside the window is dropped before the type switch; the window
+// re-arms on every admitted use. Other types have no template cooldown, so
+// no gate. Returns false when the use is blocked.
+func (s *session) admitGameObjectUse(entry uint32, goState *dynamicGameObjectState) bool {
+	if s == nil || s.server == nil || goState == nil {
+		return true
+	}
+	if goState.Type != GameObjectTypeTrap && goState.Type != GameObjectTypeGoober {
+		return true
+	}
+	cd := s.server.gameObjectTemplateCooldown(entry, goState.Type)
+	if cd <= 0 {
+		return true
+	}
+	now := time.Now().UnixMilli()
+	s.server.objectsMu.Lock()
+	blocked := now < goState.CooldownUntilMS
+	if !blocked {
+		goState.CooldownUntilMS = now + int64(cd)*1000
+	}
+	s.server.objectsMu.Unlock()
+	return !blocked
+}
+
+// useGooberGameObject runs the GameObject::Use GAMEOBJECT_TYPE_GOOBER arm
+// (GameObject.cpp:1630-1696). It is shared by the CMSG_GAMEOBJ_USE path and
+// the lockpick path: Spell::SendLoot answers a lockpicked goober with
+// gameObjTarget->Use(player) directly (SpellEffects.cpp:1892-1895) — the
+// gossip-hello hook, template cooldown gate, and this arm — instead of a
+// loot window.
+func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry uint32, goState *dynamicGameObjectState) {
+	// GameObject::Use GAMEOBJECT_TYPE_GOOBER arm (GameObject.cpp:1630-1696).
+	tpl := s.loadGooberTemplate(ctx, entry)
+	// Page text is shown before the quest-gate break, like C++.
+	if tpl.pageID != 0 {
+		buf := protocol.NewBuffer(8)
+		buf.WriteU64(guid)
+		_ = s.write(uint16(protocol.OpcodeSMSG_GAMEOBJECT_PAGETEXT), buf.Bytes(), true)
+	}
+	// The goober gossip menu needs a gameobject gossip source; Go's gossip
+	// path is creature-only, so the gossipID arm is unmodeled (documented).
+	// The eventId script-start arm has no Go event-script model (documented).
+	// The quest gate: with a questId and no incomplete quest, C++ breaks
+	// out of the switch — no kill credit, no state change, no spell.
+	if tpl.questID != 0 {
+		status, _ := s.characterQuestStatus(ctx, tpl.questID)
+		if status != questStatusIncomplete {
+			return
+		}
+	}
+	// Player::KillCreditGO: group members at group reward distance share
+	// it (GameObject.cpp:1666-1672; Player::IsAtGroupRewardDistance,
+	// Player.cpp:24160-24173 — the distance anchor is the GO, and a dead
+	// member's distance anchors on their corpse via groupRewardAnchorPos).
+	s.creditQuestKills(ctx, entry, guid)
+	if s.groupID != 0 && s.server != nil {
+		inDungeon := s.isDungeonMap(goState.Map)
+		for _, m := range s.server.getGroupSessions(s.groupID) {
+			if m == s || m.player == nil {
+				continue
+			}
+			if m.player.Map != goState.Map || m.player.InstanceID != goState.InstanceID {
+				continue
+			}
+			mx, my, mz := groupRewardAnchorPos(m)
+			if inDungeon || distance3D(goState.X, goState.Y, goState.Z, mx, my, mz) <= s.server.Config.MaxGroupXPDistance {
+				m.creditQuestKills(ctx, entry, guid)
+			}
+		}
+	}
+	// linkedTrapId has no Go trap model (documented).
+	// GO_FLAG_IN_USE is transient here (C++ sets it at use and the
+	// GO_ACTIVATED update arm drops it at the next tick), so it is not
+	// modeled; the state moves to ACTIVE with the custom anim, or to
+	// ACTIVE directly (documented).
+	if tpl.customAnim != 0 {
+		s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, uint32(goState.AnimProgress))
+	} else {
+		s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
+	}
+	// m_cooldownTime = GetGameTimeMS() + GetAutoCloseTime()
+	// (GameObject.cpp:1689): the raw template value is consumed as
+	// milliseconds against the ms game clock. With no autoCloseTime the
+	// GO_ACTIVATED update arm fires at the next tick and only re-readies
+	// the state when the template carries a lockId or autoCloseTime —
+	// otherwise the goober stays ACTIVE and is immediately reusable, so
+	// no reset is scheduled.
+	if tpl.autoCloseTime > 0 {
+		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, time.Duration(tpl.autoCloseTime)*time.Millisecond, false)
+	}
+	// The spell is data10 in this TrinityCore layout (GameObjectData.h:171);
+	// the old code cast data1 (the questId) as the spell. C++ casts it at
+	// the end of Use() with the GO as caster; Go's castSpellDirect casts as
+	// the player (documented).
+	if tpl.spellID != 0 {
+		s.castSpellDirect(ctx, tpl.spellID, s.playerGUID)
+	}
+
+}
+
 func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return false
@@ -542,24 +645,8 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
-	// GameObject::Use template-cooldown gate (GameObject.cpp:1513-1518):
-	// trap.cooldown / goober.cooldown (GameObjectTemplate::GetCooldown,
-	// GameObjectData.h:582) arm m_cooldownTime, and a use inside the window
-	// is dropped before the type switch; the window re-arms on every
-	// admitted use. Other types have no template cooldown, so no gate.
-	if goState.Type == GameObjectTypeTrap || goState.Type == GameObjectTypeGoober {
-		if cd := s.server.gameObjectTemplateCooldown(entry, goState.Type); cd > 0 {
-			now := time.Now().UnixMilli()
-			s.server.objectsMu.Lock()
-			blocked := now < goState.CooldownUntilMS
-			if !blocked {
-				goState.CooldownUntilMS = now + int64(cd)*1000
-			}
-			s.server.objectsMu.Unlock()
-			if blocked {
-				return true
-			}
-		}
+	if !s.admitGameObjectUse(entry, goState) {
+		return true
 	}
 
 	switch goState.Type {
@@ -605,73 +692,7 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.handleFishingHoleUse(ctx, payload, goState)
 
 	case GameObjectTypeGoober:
-		// GameObject::Use GAMEOBJECT_TYPE_GOOBER arm (GameObject.cpp:1630-1696).
-		tpl := s.loadGooberTemplate(ctx, entry)
-		// Page text is shown before the quest-gate break, like C++.
-		if tpl.pageID != 0 {
-			buf := protocol.NewBuffer(8)
-			buf.WriteU64(guid)
-			_ = s.write(uint16(protocol.OpcodeSMSG_GAMEOBJECT_PAGETEXT), buf.Bytes(), true)
-		}
-		// The goober gossip menu needs a gameobject gossip source; Go's gossip
-		// path is creature-only, so the gossipID arm is unmodeled (documented).
-		// The eventId script-start arm has no Go event-script model (documented).
-		// The quest gate: with a questId and no incomplete quest, C++ breaks
-		// out of the switch — no kill credit, no state change, no spell.
-		if tpl.questID != 0 {
-			status, _ := s.characterQuestStatus(ctx, tpl.questID)
-			if status != questStatusIncomplete {
-				return true
-			}
-		}
-		// Player::KillCreditGO: group members at group reward distance share
-		// it (GameObject.cpp:1666-1672; Player::IsAtGroupRewardDistance,
-		// Player.cpp:24160-24173 — the distance anchor is the GO, and a dead
-		// member's distance anchors on their corpse via groupRewardAnchorPos).
-		s.creditQuestKills(ctx, entry, guid)
-		if s.groupID != 0 && s.server != nil {
-			inDungeon := s.isDungeonMap(goState.Map)
-			for _, m := range s.server.getGroupSessions(s.groupID) {
-				if m == s || m.player == nil {
-					continue
-				}
-				if m.player.Map != goState.Map || m.player.InstanceID != goState.InstanceID {
-					continue
-				}
-				mx, my, mz := groupRewardAnchorPos(m)
-				if inDungeon || distance3D(goState.X, goState.Y, goState.Z, mx, my, mz) <= s.server.Config.MaxGroupXPDistance {
-					m.creditQuestKills(ctx, entry, guid)
-				}
-			}
-		}
-		// linkedTrapId has no Go trap model (documented).
-		// GO_FLAG_IN_USE is transient here (C++ sets it at use and the
-		// GO_ACTIVATED update arm drops it at the next tick), so it is not
-		// modeled; the state moves to ACTIVE with the custom anim, or to
-		// ACTIVE directly (documented).
-		if tpl.customAnim != 0 {
-			s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, uint32(goState.AnimProgress))
-		} else {
-			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
-		}
-		// m_cooldownTime = GetGameTimeMS() + GetAutoCloseTime()
-		// (GameObject.cpp:1689): the raw template value is consumed as
-		// milliseconds against the ms game clock. With no autoCloseTime the
-		// GO_ACTIVATED update arm fires at the next tick and only re-readies
-		// the state when the template carries a lockId or autoCloseTime —
-		// otherwise the goober stays ACTIVE and is immediately reusable, so
-		// no reset is scheduled.
-		if tpl.autoCloseTime > 0 {
-			s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, time.Duration(tpl.autoCloseTime)*time.Millisecond, false)
-		}
-		// The spell is data10 in this TrinityCore layout (GameObjectData.h:171);
-		// the old code cast data1 (the questId) as the spell. C++ casts it at
-		// the end of Use() with the GO as caster; Go's castSpellDirect casts as
-		// the player (documented).
-		if tpl.spellID != 0 {
-			s.castSpellDirect(ctx, tpl.spellID, s.playerGUID)
-		}
-
+		s.useGooberGameObject(ctx, guid, entry, goState)
 	case GameObjectTypeTrap:
 		// GameObject::Use GAMEOBJECT_TYPE_TRAP arm (GameObject.cpp:1536-1549;
 		// template layout GameObjectData.h:120-138).

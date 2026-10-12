@@ -4462,19 +4462,63 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	// the packet order relative to the door/button use and the loot window
 	// is a documented cosmetic delta. The item-target arm stays unmodeled.
 	s.sendOpenLockLog(spell.ID, goGUID)
-	// Spell::SendLoot DOOR/BUTTON arm: a pick-locked door or button opens
-	// instead of showing a loot window. The arm returns before
-	// Player::SendLoot, so no previous-loot release runs here.
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		entry := uint32((goGUID >> 24) & 0xFFFFFF)
-		var goType int64
+	// Spell::SendLoot GO arms (SpellEffects.cpp:1875-1946): after the hook leg,
+	// the type switch runs before Player::SendLoot. The GOOBER arm calls
+	// GameObject::Use directly (SpellEffects.cpp:1892-1895) — gossip-hello
+	// hook, template cooldown gate, goober arm — with no event-14 fire and no
+	// loot window. The QUESTGIVER arm answers PrepareGossipMenu +
+	// SendPreparedGossip (SpellEffects.cpp:1913-1916), no loot window. The
+	// SPELL_FOCUS linked-trap arm and the CHEST eventId/linked-trap arms have
+	// no Go trap or event-script model (documented); chests fall through to
+	// the loot window like C++.
+	entry := uint32((goGUID >> 24) & 0xFFFFFF)
+	lowGUID := uint32(goGUID & 0x00FFFFFF)
+	goState, _ := s.server.getOrLoadGameObjectState(ctx, goGUID, lowGUID, entry, s.player.Map, s.player.InstanceID)
+	var goType uint8
+	haveType := false
+	if goState != nil {
+		goType, haveType = goState.Type, true
+	} else if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var t int64
 		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
-			"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&goType); err == nil {
-			if uint8(goType) == GameObjectTypeDoor || uint8(goType) == GameObjectTypeButton {
-				s.server.useDoorOrButton(s.player.Map, s.player.InstanceID, goGUID, false, 0)
-				return
-			}
+			"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&t); err == nil {
+			goType, haveType = uint8(t), true
 		}
+	}
+	if haveType && goType == GameObjectTypeGoober && goState != nil {
+		if s.fireGameObjectGossipHelloHook(ctx, goGUID) {
+			return
+		}
+		if !s.admitGameObjectUse(entry, goState) {
+			return
+		}
+		s.useGooberGameObject(ctx, goGUID, entry, goState)
+		return
+	}
+	if goState != nil {
+		// Spell::SendLoot hook leg (SpellEffects.cpp:1897-1905): ClearMenus,
+		// Eluna OnGossipHello, OnGameObjectUse (event 14), then the AI
+		// OnGossipHello — all before the type switch. A true return from
+		// either Lua hook skips the type arms and the loot window, like the
+		// C++ early return. The AI arm has no Go GO-AI model (documented).
+		if s.fireGameObjectGossipHelloHook(ctx, goGUID) {
+			return
+		}
+		if s.fireGameObjectEvent(ctx, goGUID, scripting.GameObjectEventOnUse, s.luaPlayer()) {
+			return
+		}
+		if goType == GameObjectTypeQuestGiver {
+			s.useQuestGiverGameObject(ctx, goGUID, entry)
+			return
+		}
+	}
+	// Spell::SendLoot DOOR/BUTTON arm (SpellEffects.cpp:1908-1911): a
+	// pick-locked door or button opens instead of showing a loot window. The
+	// arm returns before Player::SendLoot, so no previous-loot release runs
+	// here.
+	if haveType && (goType == GameObjectTypeDoor || goType == GameObjectTypeButton) {
+		s.server.useDoorOrButton(s.player.Map, s.player.InstanceID, goGUID, false, 0)
+		return
 	}
 	// Player::SendLoot head (Player.cpp:8526-8527): opening new loot releases
 	// the previously open window first — unconditionally, including a
