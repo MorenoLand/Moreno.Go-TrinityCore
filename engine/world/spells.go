@@ -25496,18 +25496,22 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 				retainCombo = -int8(amount)
 				retainTarget = ts.comboTargetGUID
 			}
-			aura.Stopped = true
+			// AuraEffect::Update (SpellAuraEffects.cpp:815-841) runs
+			// after Aura::Update zeroes the duration in the same world
+			// update, and the (ticksDone+1) > totalTicks cap still
+			// passes on the final aligned tick — so a tick due within
+			// one world-update quantum (50ms) of expiry fires instead
+			// of being dropped. Without this the expiry timer (created
+			// at apply) wins the same-deadline race against the tick
+			// timer (created at the previous tick) and the last tick of
+			// every duration%period==0 DoT is silently lost. The
+			// TickInFlight gate covers the tick already executing. The
+			// timer is disarmed here so the capture below in
+			// removeAuraWithMode does not stop it twice; the final tick
+			// itself runs after unlock, while the aura is still
+			// registered — like C++, where the last tick fires from
+			// AuraEffect::Update before Aura::Update removes the aura.
 			if aura.TickTimer != nil {
-				// AuraEffect::Update (SpellAuraEffects.cpp:815-841) runs
-				// after Aura::Update zeroes the duration in the same world
-				// update, and the (ticksDone+1) > totalTicks cap still
-				// passes on the final aligned tick — so a tick due within
-				// one world-update quantum (50ms) of expiry fires instead
-				// of being dropped. Without this the expiry timer (created
-				// at apply) wins the same-deadline race against the tick
-				// timer (created at the previous tick) and the last tick of
-				// every duration%period==0 DoT is silently lost. The
-				// TickInFlight gate covers the tick already executing.
 				if !aura.TickInFlight && !aura.TickDueAt.IsZero() && !aura.TickDueAt.After(time.Now().Add(50*time.Millisecond)) {
 					aura.TickTimer.Stop()
 					aura.TickTimer = nil
@@ -25516,12 +25520,15 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 					aura.TickTimer.Stop()
 				}
 			}
-			if aura.UpkeepTimer != nil {
-				aura.UpkeepTimer.Stop()
-				aura.UpkeepTimer = nil
-			}
-			delete(ts.activeAuras, spellID)
-			ts.server.unregisterSingleCastAura(aura)
+			// C++ natural expiry (Aura::Update -> Remove(AURA_REMOVE_BY_EXPIRE))
+			// runs the same Unit::_UnapplyAura remove legs as any other
+			// removal. The aura must stay in activeAuras until
+			// removeAuraWithMode captures it below: pre-deleting made the
+			// capture miss, silently skipping the stat/stealth/shapeshift/
+			// linked-arm remove legs on every natural expiry — and on every
+			// dispel/steal full removal, which funnels through here. The
+			// capture stops the upkeep timer, marks Stopped, erases the
+			// record and unregisters the single-cast entry.
 		}
 	}
 	ts.castMu.Unlock()
