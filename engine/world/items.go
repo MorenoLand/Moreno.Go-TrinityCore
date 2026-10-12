@@ -741,6 +741,21 @@ func (s *session) fireEquipHook(ctx context.Context, itemGUID int64, bag, slot u
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventEquip, s.luaPlayer(), item, bag, slot)
 }
 
+// sendEquippedItemTimeUpdate mirrors the AddItemDurations arm of
+// Player::EquipItem / Player::QuickEquipItem (Player.cpp:12315, 12433):
+// equipping an item with a remaining duration pushes SMSG_ITEM_TIME_UPDATE
+// (Item::SendTimeUpdate) so the in-session countdown displays.
+func (s *session) sendEquippedItemTimeUpdate(ctx context.Context, itemGUID int64) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || itemGUID == 0 {
+		return
+	}
+	var duration int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(duration, 0) FROM item_instance WHERE guid = ?", itemGUID).Scan(&duration); err != nil || duration <= 0 {
+		return
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(uint64(itemGUID)|(uint64(0x4000)<<48), uint32(duration)), true)
+}
+
 func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
@@ -816,6 +831,9 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 	// bag, slot) with the DESTINATION coordinates — bag is
 	// INVENTORY_SLOT_BAG_0 (255, the Go clientBag twin of bagKey 0).
 	s.fireEquipHook(ctx, itemGUID, 255, destSlot)
+	// Player::AddItemDurations (Player.cpp:12315): equipping a duration item
+	// pushes its REMAINING time to the client (Item::SendTimeUpdate).
+	s.sendEquippedItemTimeUpdate(ctx, itemGUID)
 	s.debug("item auto-equipped", "account", s.accountName, "guid", s.playerGUID, "entry", itemEntry, "slot", destSlot)
 	return true
 }
@@ -887,6 +905,8 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 	// Player::EquipItem (Player.cpp:12423) — the slot-targeted equip arm
 	// fires the Eluna hook the same way the auto-equip arm does.
 	s.fireEquipHook(ctx, itemGUID, 255, dstSlot)
+	// Player::AddItemDurations (Player.cpp:12315) — same arm.
+	s.sendEquippedItemTimeUpdate(ctx, itemGUID)
 	s.debug("item slot equipped", "account", s.accountName, "guid", s.playerGUID, "item", itemGUID, "slot", dstSlot)
 	return true
 }
@@ -3473,6 +3493,10 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, dstKey, dstSlot).Scan(&dstGUID, &dstEntry, &dstCount); err != nil && err != sql.ErrNoRows {
 		return true
 	}
+	// Item::CloneItem (Item.cpp:1033) copies the source's remaining
+	// ITEM_FIELD_DURATION onto the split-off stack — not the template's.
+	var srcDuration int64
+	_ = db.QueryRowContext(ctx, "SELECT COALESCE(duration, 0) FROM item_instance WHERE guid = ?", srcGUID).Scan(&srcDuration)
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return true
@@ -3517,7 +3541,7 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 				_ = tx.Rollback()
 				return true
 			}
-			if _, err = tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", spillGUID, srcEntry, s.playerGUID, remainder); err != nil {
+			if _, err = tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count, duration) VALUES (?, ?, ?, ?, ?)", spillGUID, srcEntry, s.playerGUID, remainder, srcDuration); err != nil {
 				_ = tx.Rollback()
 				return true
 			}
@@ -3535,7 +3559,7 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 			_ = tx.Rollback()
 			return true
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", newGUID, srcEntry, s.playerGUID, count); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count, duration) VALUES (?, ?, ?, ?, ?)", newGUID, srcEntry, s.playerGUID, count, srcDuration); err != nil {
 			_ = tx.Rollback()
 			return true
 		}
@@ -3836,6 +3860,20 @@ func (s *session) storeOrStackItem(ctx context.Context, playerGUID uint64, itemE
 	return result, err
 }
 
+// itemTemplateDuration mirrors the duration-seeding arm of Item::Create
+// (Item.cpp:291): a freshly created item seeds ITEM_FIELD_DURATION from
+// the template's Duration at once. Query failure reads as no duration.
+func (s *Server) itemTemplateDuration(ctx context.Context, itemEntry uint32) int64 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0
+	}
+	var duration int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Duration, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&duration); err != nil {
+		return 0
+	}
+	return duration
+}
+
 func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, itemEntry, count uint32) (*inventoryStoreResult, error) {
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil, errors.New("characters database not available")
@@ -3860,6 +3898,9 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 			maxDurability = md
 		}
 	}
+	// Item::Create (Item.cpp:291) seeds ITEM_FIELD_DURATION from the
+	// template at once — every new stack carries it, never 0-forced.
+	newItemDuration := s.server.itemTemplateDuration(ctx, itemEntry)
 
 	// 1. Merge into an existing partial stack first.
 	bagKey, clientBag, slot, itemGUID, curCount, pileMax, canStack := s.findStackableInventorySlot(ctx, playerGUID, itemEntry)
@@ -3939,8 +3980,8 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 		nextGUID := uint64(baseGUID) + uint64(i) + 1
 		if _, err = tx.ExecContext(ctx, `INSERT INTO item_instance
 			(guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
-			VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, ?, 0, '')`,
-			nextGUID, itemEntry, playerGUID, stackCount, maxDurability); err != nil {
+			VALUES (?, ?, ?, 0, ?, ?, '', 0, '', 0, ?, 0, '')`,
+			nextGUID, itemEntry, playerGUID, stackCount, newItemDuration, maxDurability); err != nil {
 			_ = tx.Rollback()
 			return nil, err
 		}
@@ -3961,6 +4002,14 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 	// obtain spells fired at its own obtain.
 	for _, newGUID := range guids {
 		s.applyItemObtainSpells(ctx, itemEntry, newGUID, true)
+	}
+	// Player::AddItemDurations (Player.cpp:12251): a freshly stored duration
+	// item pushes its remaining time to the client at once (Item::SendTimeUpdate,
+	// SMSG_ITEM_TIME_UPDATE) so the in-session countdown displays.
+	if newItemDuration > 0 && playerGUID == s.playerGUID {
+		for _, newGUID := range guids {
+			_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(newGUID|(uint64(0x4000)<<48), uint32(newItemDuration)), true)
+		}
 	}
 
 	var totalCount int64

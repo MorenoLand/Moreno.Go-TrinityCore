@@ -46,6 +46,9 @@ type questItemGrant struct {
 	Slot           uint32
 	InventoryCount uint32
 	Stacked        bool
+	// Template duration seeded at creation (Item::Create, Item.cpp:291) so
+	// the reward-claim handler can mirror Player::AddItemDurations.
+	Duration uint32
 }
 
 type questRewardPersistenceState struct {
@@ -149,6 +152,11 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	for _, grant := range grants {
 		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, grant.Bag, grant.Slot, grant.Entry, grant.Count, grant.InventoryCount, grant.Stacked), true); err != nil {
 			return false
+		}
+		// Player::AddItemDurations (Player.cpp:12251): freshly granted
+		// duration items push SMSG_ITEM_TIME_UPDATE at store time.
+		if !grant.Stacked && grant.Duration > 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(uint64(grant.ItemGUID)|(uint64(0x4000)<<48), grant.Duration), true)
 		}
 	}
 	s.player.Money += view.Detail.RewardMoney
@@ -618,6 +626,9 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			stackable = 1
 		}
 		remaining := uint64(item.Quantity)
+		// Item::Create (Item.cpp:291) seeds ITEM_FIELD_DURATION from the
+		// template at once on every freshly created quest-reward stack.
+		rewardDuration := s.server.itemTemplateDuration(ctx, item.ID)
 		for index := range inventory {
 			record := &inventory[index]
 			if record.Entry != item.ID || record.Count >= uint32(stackable) || remaining == 0 {
@@ -656,7 +667,7 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			if nextGUID == 0 {
 				return nil, errors.New("item guid space exhausted")
 			}
-			if _, err := tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 0, ?, 0, '', 0, '', 0, 0, 0, NULL)", nextGUID, item.ID, s.playerGUID, add); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 0, ?, ?, '', 0, '', 0, 0, 0, NULL)", nextGUID, item.ID, s.playerGUID, add, rewardDuration); err != nil {
 				return nil, err
 			}
 			if _, err := tx.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, loc.BagKey, loc.Slot, nextGUID); err != nil {
@@ -672,6 +683,7 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 				Slot:           uint32(loc.Slot),
 				InventoryCount: uint32(add),
 				Stacked:        false,
+				Duration:       uint32(rewardDuration),
 			})
 		}
 	}

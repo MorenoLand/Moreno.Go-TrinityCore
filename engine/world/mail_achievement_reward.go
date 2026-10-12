@@ -45,8 +45,11 @@ func (s *session) sendAchievementRewardMail(achievementID uint32) {
 		if nextItemGUID == 0 {
 			return
 		}
-		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, 1)",
-			nextItemGUID, itemID, s.playerGUID); err == nil {
+		// Item::CreateItem (Item.cpp:996) seeds proto->Duration at once on the
+		// minted achievement reward item.
+		rewardItemDuration := s.server.itemTemplateDuration(ctx, itemID)
+		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count, duration) VALUES (?, ?, ?, 1, ?)",
+			nextItemGUID, itemID, s.playerGUID, rewardItemDuration); err == nil {
 			itemGUIDs = append(itemGUIDs, uint64(nextItemGUID))
 		}
 	}

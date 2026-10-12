@@ -257,7 +257,10 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 	var itemGUIDs []uint64
 	for _, it := range items {
 		nextItemGUID := int64(s.server.generateItemGUID())
-		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", nextItemGUID, it.entry, guid, it.count); err != nil {
+		// Item::CreateItem (Item.cpp:996) seeds proto->Duration at once on
+		// every minted item — the GM .senditems path included.
+		sentItemDuration := s.server.itemTemplateDuration(ctx, it.entry)
+		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count, duration) VALUES (?, ?, ?, ?, ?)", nextItemGUID, it.entry, guid, it.count, sentItemDuration); err != nil {
 			continue // Item::CreateItem failing drops the item, like C++
 		}
 		itemGUIDs = append(itemGUIDs, uint64(nextItemGUID))

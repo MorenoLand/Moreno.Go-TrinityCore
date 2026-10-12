@@ -563,7 +563,11 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		if newGUID <= 0 {
 			return sellFail(errAuctionDatabaseError)
 		}
-		if _, err = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", newGUID, itemEntry, s.playerGUID, finalCount); err != nil {
+		// Item::CloneItem (Item.cpp:1033) copies the source's remaining
+		// ITEM_FIELD_DURATION onto the merged stack — not the template's.
+		var auctionDuration int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(duration, 0) FROM item_instance WHERE guid = ?", auctionItemGUID).Scan(&auctionDuration)
+		if _, err = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count, duration) VALUES (?, ?, ?, ?, ?)", newGUID, itemEntry, s.playerGUID, finalCount, auctionDuration); err != nil {
 			return sellFail(errAuctionDatabaseError)
 		}
 		for j, itemGUID := range itemGUIDs {

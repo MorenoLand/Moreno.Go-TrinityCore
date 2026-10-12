@@ -2291,8 +2291,10 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 			nextItemGUID = uint64(time.Now().UnixNano())
 		}
 
-		insItemQuery := "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, 0, 0, '', 0, 100, 0, '')"
-		if _, err := cdb.ExecContext(ctx, insItemQuery, nextItemGUID, itemEntry, guid, count); err != nil {
+		insItemQuery := "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, ?, 0, 0, '', 0, 100, 0, '')"
+		// Item::Create (Item.cpp:291) seeds proto->Duration at once on every
+		// starter-kit item as well.
+		if _, err := cdb.ExecContext(ctx, insItemQuery, nextItemGUID, itemEntry, guid, count, s.server.itemTemplateDuration(ctx, uint32(itemEntry))); err != nil {
 			continue
 		}
 

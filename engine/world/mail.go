@@ -66,8 +66,11 @@ func (srv *Server) rollMailTemplateItems(ctx context.Context, templateID uint32,
 		if nextItemGUID <= 0 {
 			nextItemGUID = 1
 		}
-		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)",
-			nextItemGUID, item, receiverGUID, count); err != nil {
+		// Item::CreateItem (Item.cpp:996) seeds proto->Duration at once; the
+		// mail-template roll mints fresh instances, so it seeds the same way.
+		templateDuration := srv.itemTemplateDuration(ctx, item)
+		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count, duration) VALUES (?, ?, ?, ?, ?)",
+			nextItemGUID, item, receiverGUID, count, templateDuration); err != nil {
 			continue
 		}
 		guids = append(guids, uint64(nextItemGUID))
@@ -1333,10 +1336,16 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		// (0x200) | ITEM_FIELD_FLAG_UNK13 (0x40000) | ITEM_FIELD_FLAG_UNK14
 		// (0x80000) = 0xC0200, not ITEM_FIELD_FLAG_SOULBOUND.
 		const mailTextItemFlags = 0xC0200
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, 0, '', ?, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, creator, mailTextItemFlags, letterText)
+		// Item::Create (Item.cpp:291) seeds proto->Duration at once on the
+		// letter item too (MailHandler.cpp:599 mints it as a fresh item).
+		mailTextDuration := s.server.itemTemplateDuration(ctx, mailBodyItemTemplate)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, ?, '', ?, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, creator, mailTextDuration, mailTextItemFlags, letterText)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, nextGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET checked = checked | 4 WHERE id = ?", mailID) // MAIL_CHECK_MASK_COPIED = 4
 		_ = s.sendItemCreate(nextGUID, mailBodyItemTemplate, 1, freeClientBag, freeSlot)
+		if mailTextDuration > 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(nextGUID|(uint64(0x4000)<<48), uint32(mailTextDuration)), true)
+		}
 		_ = s.sendInventoryItems(ctx)
 		s.sendPlayerUpdate()
 	}

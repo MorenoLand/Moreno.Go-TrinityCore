@@ -4610,7 +4610,10 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	// sendInventoryItems below re-sends the create block with it parsed from
 	// here, matching the C++ SendNewItem state.
 	enchantments := fmt.Sprintf("%d 0 0", nextItemGUID)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, 5863, ?, ?, 1, 0, '', 0, ?, 0, 0, 0, '')", nextItemGUID, s.playerGUID, s.playerGUID, enchantments)
+	// PetitionsHandler.cpp:181-192 mints the charter via Item::CreateItem —
+	// Item::Create (Item.cpp:291) seeds proto->Duration at once.
+	charterDuration := s.server.itemTemplateDuration(ctx, 5863)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, 5863, ?, ?, 1, ?, '', 0, ?, 0, 0, 0, '')", nextItemGUID, s.playerGUID, s.playerGUID, charterDuration, enchantments)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, bagKey, freeSlot, nextItemGUID)
 	// PetitionsHandler.cpp:197-204: buying a new charter invalidates the
 	// owner's previous petition of the same type (RemovePetition). The

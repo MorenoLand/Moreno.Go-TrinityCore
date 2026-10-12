@@ -383,10 +383,17 @@ func (s *session) grantQuestStartItem(ctx context.Context, itemEntry uint32) {
 	if nextGUID == 0 {
 		nextGUID = uint64(time.Now().UnixNano())
 	}
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, 0, 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID)
+	// Player::AddQuest (QuestDef.cpp): a quest's source item lands via the
+	// StoreNewItem path — Item::Create seeds proto->Duration (Item.cpp:291)
+	// and AddItemDurations pushes SMSG_ITEM_TIME_UPDATE at once.
+	startDuration := s.server.itemTemplateDuration(ctx, itemEntry)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, ?, 0, 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID, startDuration)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
 	s.adjustQuestItemCount(ctx, itemEntry, 1, true)
 	_ = s.sendItemCreate(nextGUID, itemEntry, 1, 0, freeSlot)
+	if startDuration > 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(nextGUID|(uint64(0x4000)<<48), uint32(startDuration)), true)
+	}
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 }

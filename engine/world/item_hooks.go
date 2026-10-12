@@ -213,9 +213,14 @@ func (s *session) fireItemQuestHook(ctx context.Context, giverGUID uint64, quest
 // (event, player, itemEntry) before destroying the item, matching the C++
 // hook-then-DestroyItem order with the return discarded. The realtime-only
 // offline arm is updateOfflineRealtimeItemDurations (Player.cpp:17989).
-// Remaining delta: item creation paths still insert duration=0 (C++
-// Item::CreateItem seeds proto->Duration at once); the login normalization
-// (C++ Item::LoadFromDB parity) repairs it at next login.
+// Creation seeding bridged: Server.itemTemplateDuration (Item::Create,
+// Item.cpp:291) seeds proto->Duration at every in-session mint site
+// (storeOrStackItemCore, quest reward/accept grants, GM .senditems,
+// mail-template rolls + letter copy, achievement rewards, char-create
+// starters, guild charter), while the split/auction-merge paths copy the
+// source's REMAINING duration per Item::CloneItem (Item.cpp:1033); the
+// login normalization (C++ Item::LoadFromDB parity) repairs legacy rows
+// whose duration disagrees with the template.
 //
 // (5) REMOVE — ScriptMgr::OnItemRemove fires from Player::DestroyItem
 // (Player.cpp:12662), the single funnel for every item removal in C++.
