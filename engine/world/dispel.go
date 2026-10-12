@@ -1063,9 +1063,10 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 		casterLevel = uint32(petCaster.Level)
 	}
 	maxDispelled := int(eff.CalcValueForLevel(spell, casterLevel))
-	if maxDispelled <= 0 {
-		maxDispelled = 1
-	}
+	// C++ EffectDispel (SpellEffects.cpp:2455-2461) uses the raw damage
+	// member (Spell.cpp:5165, CalculateDamage with no clamp): a value <= 0
+	// zero-iterates the roll loop and the empty successList arm returns
+	// before any packet is built, so there is no forced-to-1.
 
 	var successList []uint32
 	var failList []uint32
@@ -1470,9 +1471,11 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 	}
 
 	maxDispelled := int(eff.CalcValueForLevel(spell, uint32(s.player.Level)))
-	if maxDispelled <= 0 {
-		maxDispelled = 1
-	}
+	// C++ EffectStealBeneficialBuff (SpellEffects.cpp:5201-5202) uses the
+	// raw damage member (Spell.cpp:5165, CalculateDamage with no clamp): a
+	// value <= 0 zero-iterates the roll loop and the empty successList arm
+	// returns before SMSG_SPELLSTEALLOG is built, so there is no
+	// forced-to-1.
 
 	var successList []uint32
 	var stolen []stolenBuff
