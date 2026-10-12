@@ -576,6 +576,7 @@ const (
 	spellAuraMounted                                  = 78
 	spellAuraWaterBreathing                           = 82  // SPELL_AURA_WATER_BREATHING (SpellAuraDefines.h:162)
 	spellAuraModWaterBreathing                        = 155 // SPELL_AURA_MOD_WATER_BREATHING (SpellAuraDefines.h:235)
+	spellAuraFeignDeath                               = 66  // SPELL_AURA_FEIGN_DEATH (SpellAuraDefines.h:146)
 	spellAuraOpenStable                               = 292 // SPELL_AURA_OPEN_STABLE (SpellAuraDefines.h:372)
 	spellAuraModShapeshift                            = 36  // SPELL_AURA_MOD_SHAPESHIFT (SpellAuraDefines.h:116)
 	spellAuraSpiritOfRedemption                       = 176 // SPELL_AURA_SPIRIT_OF_REDEMPTION (SpellAuraDefines.h:256)
@@ -19728,6 +19729,8 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	wasWaterWalk := false
 	wasFeatherFall := false
 	wasHover := false
+	wasFeignDeath := false
+	wasWaterBreathing := false
 	wasUnattackable := false
 	wasAllowOnlyAbility := false
 	wasForcedReaction := false
@@ -19837,6 +19840,11 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			wasWaterWalk = s.activeAuraHasEffect(aura, spellAuraWaterWalk)
 			wasFeatherFall = s.activeAuraHasEffect(aura, spellAuraFeatherFall)
 			wasHover = s.activeAuraHasEffect(aura, spellAuraHover)
+			// AuraEffect::HandleFeignDeath / HandleWaterBreathing remove legs
+			// (SpellAuraEffects.cpp:66/82): captured before Stopped is set —
+			// the aura-derived state queries below must not see the removed aura.
+			wasFeignDeath = aura.AuraType == spellAuraFeignDeath
+			wasWaterBreathing = s.activeAuraHasEffect(aura, spellAuraWaterBreathing)
 			// AuraEffect::HandleModUnattackable remove leg
 			// (SpellAuraEffects.cpp:2262-2264): UNIT_FLAG_NON_ATTACKABLE_2
 			// clears only when no other 93 aura remains.
@@ -20101,6 +20109,21 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// AuraEffect::HandleModUnattackable remove leg (SpellAuraEffects.cpp:2262-2264).
 	if wasUnattackable && !s.hasAuraType(spellAuraModUnattackable) && s.player != nil {
 		s.player.UnitFlags &^= unitFlagNonAttackable2
+	}
+	// AuraEffect::HandleFeignDeath remove leg (SpellAuraEffects.cpp:66):
+	// the feign-death flags clear only when no other feign-death aura
+	// remains (the DIED state is aura-derived, like the hover gate above).
+	if wasFeignDeath && !s.hasAuraType(spellAuraFeignDeath) && s.player != nil {
+		s.player.UnitFlags &^= unitFlagUnk29
+		s.player.UnitFlags2 &^= unitFlag2FeignDeath
+	}
+	// AuraEffect::HandleWaterBreathing remove leg
+	// (SpellAuraEffects.cpp:82, SEND_FOR_CLIENT mask): the aura removal
+	// desyncs the mirror timers (Player::UpdateMirrorTimers,
+	// Player.cpp:841-846) — the breath countdown restarts immediately when
+	// the player is still swimming.
+	if wasWaterBreathing && s.player != nil {
+		s.refreshBreathMirrorTimer()
 	}
 	if wasForcedReaction {
 		_ = s.sendForcedReactions()
@@ -22835,6 +22858,51 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
 		}
 
+		// AuraEffect::HandleFeignDeath apply leg
+		// (SpellAuraEffects.cpp, AURA_EFFECT_HANDLE_REAL): the player's
+		// threat zeroes on every enemy threat list carrying them
+		// (ThreatReference::ScaleThreat(0), ThreatManager.cpp:52-61 —
+		// zeroThreatOnAllLists); in a dungeon the player only stops
+		// attacking (AttackStop + SendAttackSwingCancelAttack — Go has no
+		// SMSG_ATTACK_SWING_CANCEL opcode, SMSG_ATTACK_STOP rides), outside
+		// dungeons they leave combat entirely (CombatStop(false, false) →
+		// stopPlayerCombat + the evade path, like handleEffectSanctuary);
+		// IMMUNE_OR_LOST_SELECTION auras strip, own casts interrupt, and the
+		// feign-death flags set (UNIT_FLAG_UNK_29, UNIT_FLAG2_FEIGN_DEATH).
+		// The enemy-cast-interrupt arm has no Go model (creature casts carry
+		// no target tracking — castCreatureSpellInternal is parked); the
+		// UNIT_DYNFLAG_DEAD arm has no Go player model (players carry no
+		// dynamic flags); UNIT_STATE_DIED is aura-derived in Go, and its
+		// live consumer is the creature aggro gate (Creature.cpp:2514-2522,
+		// bridged in stepCreatureMotion below).
+		if eff.Aura == spellAuraFeignDeath && s.server != nil {
+			targetSess.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
+			targetSess.interruptCurrentCast()
+			targetSess.interruptCurrentChannel()
+			s.server.zeroThreatOnAllLists(targetSess.player.Map, targetSess.player.InstanceID, targetGUID)
+			if targetSess.isDungeonMap(targetSess.player.Map) {
+				if targetSess.attackTarget != 0 {
+					victim := targetSess.attackTarget
+					targetSess.attackTarget = 0
+					_ = targetSess.sendAttackStop(victim, false)
+				}
+			} else {
+				targetSess.stopPlayerCombat()
+				s.server.evadeCreaturesTargeting(ctx, targetSess.player.Map, targetSess.player.InstanceID, targetGUID)
+			}
+			targetSess.player.UnitFlags |= unitFlagUnk29
+			targetSess.player.UnitFlags2 |= unitFlag2FeignDeath
+			targetSess.sendPlayerUpdate()
+		}
+		// AuraEffect::HandleWaterBreathing apply leg
+		// (SpellAuraEffects.cpp:82, SEND_FOR_CLIENT mask): the aura apply
+		// desyncs the mirror timers (Player::UpdateMirrorTimers,
+		// Player.cpp:841-846) — Go pushes the breath-timer transition
+		// immediately instead of waiting for the next drowning tick.
+		if eff.Aura == spellAuraWaterBreathing {
+			targetSess.refreshBreathMirrorTimer()
+		}
+
 		stackCount := uint8(1)
 		if !mountedFlight && eff.Aura != spellAuraMounted && spell.StackAmount == 0 && spell.ProcCharges > 0 {
 			stackCount = uint8(spell.ProcCharges)
@@ -23221,6 +23289,31 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
 				m.FleeingUntil = time.Time{}
 			}
+		}
+	}
+	// AuraEffect::HandleFeignDeath creature arm
+	// (SpellAuraEffects.cpp:66, AURA_EFFECT_HANDLE_REAL): threat zeroes on
+	// every enemy threat list carrying the creature
+	// (ThreatReference::ScaleThreat(0)), IMMUNE_OR_LOST_SELECTION auras
+	// strip, the feign-death flags set (UNIT_FLAG_UNK_29,
+	// UNIT_FLAG2_FEIGN_DEATH, UNIT_DYNFLAG_DEAD), the react state drops to
+	// passive (SetReactState(REACT_PASSIVE)), and combat drops
+	// (CombatStop(false, false) — the dungeon AttackStop split is
+	// player-only). The enemy-cast-interrupt arm has no Go model (creature
+	// casts carry no target tracking); UNIT_STATE_DIED is aura-derived and
+	// consumed by the aggro gate in stepCreatureMotion below.
+	if eff.Aura == spellAuraFeignDeath && s.server != nil {
+		if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
+			s.server.zeroThreatOnAllLists(m.Map, m.InstanceID, targetGUID)
+			s.server.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagImmuneOrLostSelection)
+			m.UnitFlags |= unitFlagUnk29
+			m.UnitFlags2 |= unitFlag2FeignDeath
+			m.DynamicFlags |= unitDynFlagDead
+			m.ReactState = creatureReactPassive
+			m.ReactStateKnown = true
+			m.InCombat = false
+			m.TargetGUID = 0
+			s.server.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: m.UnitFlags, unitFieldFlags2: m.UnitFlags2, unitFieldDynamicFlags: m.DynamicFlags})
 		}
 	}
 	// AuraEffect::HandlePhase creature arm, apply tail
@@ -26843,6 +26936,7 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	wasControlVehicle := false
 	controlVehicleCaster := uint64(0)
 	wasPhase := false
+	wasFeignDeath := false
 	var removedLinkedTriggers []linkedTriggerRef
 	removedLinkedParentCaster := uint64(0)
 	wasQuestTame := false
@@ -26877,6 +26971,9 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 				// handlers, Unit.cpp:3548), so the recompute sums the
 				// REMAINING 261 auras. Captured before the aura is deleted.
 				wasPhase = aura.AuraType == spellAuraPhase
+				// AuraEffect::HandleFeignDeath creature remove leg
+				// (SpellAuraEffects.cpp:66): captured before the aura is deleted.
+				wasFeignDeath = aura.AuraType == spellAuraFeignDeath
 				// The remove arm of AuraEffect::HandleAuraLinked
 				// (SpellAuraEffects.cpp:4898-4903): the linked trigger
 				// spell's aura leaves the creature too. Captured before
@@ -26951,6 +27048,11 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 			charmer.sendVehiclePetSpells(0, nil)
 		}
 	}
+	// AuraEffect::HandleFeignDeath creature remove leg
+	// (SpellAuraEffects.cpp:66): flags clear, react state restores.
+	if wasFeignDeath {
+		s.server.clearCreatureFeignDeath(key)
+	}
 	// AuraEffect::HandleAuraControlVehicle remove leg
 	// (SpellAuraEffects.cpp:2987-3008): the caster leaves the vehicle and a
 	// same-spell dummy aura on the caster is dropped (RemoveAurasDueToSpell).
@@ -26986,6 +27088,24 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	}
 }
 
+// clearCreatureFeignDeath mirrors the AuraEffect::HandleFeignDeath remove
+// leg for creature targets (SpellAuraEffects.cpp:66): the feign-death flags
+// clear and the react state restores via InitializeReactState — the
+// creatureReactState recompute (npcFlags has no motion model, 0 rides).
+func (s *Server) clearCreatureFeignDeath(key creatureAuraKey) {
+	if s == nil || key.GUID == 0 {
+		return
+	}
+	if m := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil {
+		m.UnitFlags &^= unitFlagUnk29
+		m.UnitFlags2 &^= unitFlag2FeignDeath
+		m.DynamicFlags &^= unitDynFlagDead
+		m.ReactState = creatureReactState(m.CreatureType, 0, m.FlagsExtra, m.AIName)
+		m.ReactStateKnown = true
+		s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{unitFieldFlags: m.UnitFlags, unitFieldFlags2: m.UnitFlags2, unitFieldDynamicFlags: m.DynamicFlags})
+	}
+}
+
 func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	if s == nil || key.GUID == 0 || spellID == 0 {
 		return
@@ -26997,6 +27117,7 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	wasControlVehicle := false
 	controlVehicleCaster := uint64(0)
 	wasPhase := false
+	wasFeignDeath := false
 	var removedLinkedTriggers []linkedTriggerRef
 	removedLinkedParentCaster := uint64(0)
 	wasQuestTame := false
@@ -27022,6 +27143,9 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 				wasControlVehicle = aura.AuraType == spellAuraControlVehicle
 				controlVehicleCaster = aura.CasterGUID
 				wasPhase = aura.AuraType == spellAuraPhase
+				// AuraEffect::HandleFeignDeath creature remove leg
+				// (SpellAuraEffects.cpp:66): captured before the aura is deleted.
+				wasFeignDeath = aura.AuraType == spellAuraFeignDeath
 				// The remove arm of AuraEffect::HandleAuraLinked
 				// (SpellAuraEffects.cpp:4898-4903): the linked trigger
 				// spell's aura leaves the creature too. Captured before
@@ -27081,6 +27205,11 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 			charmer.sendClientControl(key.GUID, false)
 			charmer.sendVehiclePetSpells(0, nil)
 		}
+	}
+	// AuraEffect::HandleFeignDeath creature remove leg
+	// (SpellAuraEffects.cpp:66): flags clear, react state restores.
+	if wasFeignDeath {
+		s.clearCreatureFeignDeath(key)
 	}
 	// AuraEffect::HandleAuraControlVehicle remove leg
 	// (SpellAuraEffects.cpp:2987-3008): the caster leaves the vehicle and a

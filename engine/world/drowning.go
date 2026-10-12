@@ -107,6 +107,33 @@ func (s *session) handleExitSwimming() {
 	}
 }
 
+// refreshBreathMirrorTimer mirrors the HandleWaterBreathing arm of
+// Player::UpdateMirrorTimers (Player.cpp:841-846): a water-breathing aura
+// apply/remove desyncs the mirror timers so the next HandleDrowning resends
+// the breath timer state. Go pushes the transition immediately instead of
+// waiting for the next drowning tick: gaining the aura while swimming stops
+// the breath countdown now; losing it while swimming restarts the countdown
+// now. Only SPELL_AURA_WATER_BREATHING (82) drives it — aura 155 only
+// scales the max (HandleNoImmediateEffect, SpellAuraEffects.cpp:220).
+func (s *session) refreshBreathMirrorTimer() {
+	if s == nil || s.player == nil || !s.isSwimming {
+		return
+	}
+	if s.hasAuraType(spellAuraWaterBreathing) {
+		if s.breathTimer != -1 {
+			s.breathTimer = -1
+			s.stopMirrorTimer(mirrorTimerBreath)
+		}
+		return
+	}
+	if s.breathTimer == -1 {
+		maxBreath := s.breathTimerMax()
+		s.breathTimer = maxBreath
+		s.lastBreathTick = time.Now()
+		s.sendMirrorTimer(mirrorTimerBreath, uint32(s.breathTimer), uint32(maxBreath), -1)
+	}
+}
+
 // handleDrowningTick updates breath countdown or deals drowning environmental damage.
 // Mirrors TrinityCore Player::HandleDrowning (Player.cpp:860-900).
 func (s *session) handleDrowningTick(ctx context.Context, now time.Time) {

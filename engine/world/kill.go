@@ -41,6 +41,10 @@ const unitDynFlagLootable uint32 = 0x00000001
 // set by Creature::SetLootRecipient on the first player-attributed hit.
 const unitDynFlagTapped uint32 = 0x00000004
 
+// unitDynFlagDead mirrors UNIT_DYNFLAG_DEAD (SharedDefines.h:3133):
+// the feign-death corpse flag (AuraEffect::HandleFeignDeath).
+const unitDynFlagDead uint32 = 0x00000020
+
 // unitDynFlagTrackUnit mirrors UNIT_DYNFLAG_TRACK_UNIT (SharedDefines.h:3129):
 // set by AuraEffect::HandleAuraModStalked (SpellAuraEffects.cpp) on a unit
 // carrying a live 68-effect aura (Hunter's Mark etc.).

@@ -2915,6 +2915,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if p.Map != motion.Map || p.InstanceID != motion.InstanceID || p.IsGM || p.IsDead || (motion.FlagsExtra&0x00000400 != 0) || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
 			continue
 		}
+		// Creature::_IsTargetAcceptable's UNIT_STATE_DIED arm
+		// (Creature.cpp:2514-2522): a feign-death player is not an
+		// acceptable aggro target — except to guards
+		// (CREATURE_FLAG_EXTRA_GUARD, CreatureData.h:52), which detect the
+		// fake death via UNIT_FLAG2_FEIGN_DEATH. Go's DIED state is the
+		// live feign-death aura (conditions.go convention).
+		if p.Sess != nil && p.Sess.hasAuraType(spellAuraFeignDeath) && motion.FlagsExtra&0x00008000 == 0 {
+			continue
+		}
 		dist := float32(distance3D(p.X, p.Y, p.Z, motion.X, motion.Y, motion.Z))
 		// Creature::GetAttackDistance (Creature.cpp:2022-2058): 20 yards at equal
 		// level, minus combat reach, +/-1 yard per creature-minus-player level
