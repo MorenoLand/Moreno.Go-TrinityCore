@@ -339,8 +339,11 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 	}
 
 	var prevQuest, maxLvl, allowableClasses, exclGroup, nextQuest, breadcrumb, specialFlags, addonRaces sql.NullInt64
-	_ = wdb.QueryRowContext(ctx, `SELECT PrevQuestID, MaxLevel, AllowableClasses, ExclusiveGroup, NextQuestID, BreadcrumbForQuestId, SpecialFlags
-		FROM quest_template_addon WHERE ID = ?`, questID).Scan(&prevQuest, &maxLvl, &allowableClasses, &exclGroup, &nextQuest, &breadcrumb, &specialFlags)
+	var reqSkillID, reqSkillPoints, reqMinRepFaction, reqMinRepValue, reqMaxRepFaction, reqMaxRepValue sql.NullInt64
+	_ = wdb.QueryRowContext(ctx, `SELECT PrevQuestID, MaxLevel, AllowableClasses, ExclusiveGroup, NextQuestID, BreadcrumbForQuestId, SpecialFlags,
+		RequiredSkillID, RequiredSkillPoints, RequiredMinRepFaction, RequiredMinRepValue, RequiredMaxRepFaction, RequiredMaxRepValue
+		FROM quest_template_addon WHERE ID = ?`, questID).Scan(&prevQuest, &maxLvl, &allowableClasses, &exclGroup, &nextQuest, &breadcrumb, &specialFlags,
+		&reqSkillID, &reqSkillPoints, &reqMinRepFaction, &reqMinRepValue, &reqMaxRepFaction, &reqMaxRepValue)
 	if !allowableClasses.Valid && !prevQuest.Valid {
 		_ = wdb.QueryRowContext(ctx, `SELECT PrevQuestID, MaxLevel, AllowableClasses, AllowableRaces, ExclusiveGroup, NextQuestID
 			FROM quest_template_addon WHERE ID = ?`, questID).Scan(&prevQuest, &maxLvl, &allowableClasses, &addonRaces, &exclGroup, &nextQuest)
@@ -373,6 +376,35 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 		}
 	}
 
+	// Player::SatisfyQuestSkill (Player.cpp:15595): the non-pure skill value
+	// (GetSkillValue twin: playerSkillTotalValue) must reach RequiredSkillPoints.
+	if reqSkillID.Valid && reqSkillPoints.Valid && reqSkillID.Int64 > 0 {
+		if s.playerSkillTotalValue(uint32(reqSkillID.Int64)) < int32(reqSkillPoints.Int64) {
+			return false, nil
+		}
+	}
+
+	// Player::SatisfyQuestReputation (Player.cpp:15830): min/max faction gates
+	// plus the RepObjectiveFaction2 accept gate (rep already at/above its
+	// objective value blocks re-accept).
+	if reqMinRepFaction.Valid && reqMinRepFaction.Int64 > 0 && reqMinRepValue.Valid {
+		if s.reputationStanding(uint32(reqMinRepFaction.Int64)) < int32(reqMinRepValue.Int64) {
+			return false, nil
+		}
+	}
+	if reqMaxRepFaction.Valid && reqMaxRepFaction.Int64 > 0 && reqMaxRepValue.Valid {
+		if s.reputationStanding(uint32(reqMaxRepFaction.Int64)) >= int32(reqMaxRepValue.Int64) {
+			return false, nil
+		}
+	}
+	var repObjFaction2, repObjValue2 sql.NullInt64
+	if wdb.QueryRowContext(ctx, "SELECT COALESCE(RequiredFactionId2, 0), COALESCE(RequiredFactionValue2, 0) FROM quest_template WHERE ID = ?", questID).Scan(&repObjFaction2, &repObjValue2) == nil &&
+		repObjFaction2.Valid && repObjFaction2.Int64 > 0 && repObjValue2.Valid {
+		if s.reputationStanding(uint32(repObjFaction2.Int64)) >= int32(repObjValue2.Int64) {
+			return false, nil
+		}
+	}
+
 	// PrevQuestID check (chain prerequisite)
 	if prevQuest.Valid && prevQuest.Int64 != 0 {
 		if prevQuest.Int64 > 0 {
@@ -380,26 +412,175 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 				return false, nil
 			}
 		} else {
+			// Player::SatisfyQuestPreviousQuest (Player.cpp:15665): a negative
+			// PrevQuestID requires the previous quest ACTIVE-and-incomplete;
+			// complete-but-unrewarded does not satisfy it.
 			prevActiveStatus, _ := s.characterQuestStatus(ctx, uint32(-prevQuest.Int64))
-			if prevActiveStatus != questStatusIncomplete && prevActiveStatus != questStatusComplete {
+			if prevActiveStatus != questStatusIncomplete {
 				return false, nil
 			}
 		}
 	}
 
-	// In TrinityCore, BreadcrumbForQuestId is on the breadcrumb quest to point
-	// to the hub quest; the hub quest itself is not blocked by the breadcrumb.
+	// Player::SatisfyQuestBreadcrumbQuest (Player.cpp:15750): a breadcrumb
+	// quest is only available when its target hub quest is itself available.
+	// Recursive with msg=false, mirroring the C++.
+	if breadcrumb.Valid && breadcrumb.Int64 != 0 {
+		target := breadcrumb.Int64
+		if target < 0 {
+			target = -target
+		}
+		if ok, err := s.canTakeQuest(ctx, uint32(target)); err != nil || !ok {
+			return false, err
+		}
+	}
 
-	// ExclusiveGroup check
-	if exclGroup.Valid && exclGroup.Int64 != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		var exclCount int64
-		if exclGroup.Int64 > 0 {
-			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM character_queststatus_rewarded AS cqr
-				JOIN quest_template_addon AS qta ON qta.ID = cqr.quest
-				WHERE cqr.guid = ? AND qta.ExclusiveGroup = ?`, s.playerGUID, exclGroup.Int64).Scan(&exclCount)
-			if exclCount > 0 {
+	// Player::SatisfyQuestDependentBreadcrumbQuests (Player.cpp:15770): the hub
+	// quest is blocked while any breadcrumb quest pointing at it sits in the
+	// quest log (incomplete, complete, or failed).
+	if wdb != nil {
+		depRows, derr := wdb.QueryContext(ctx, "SELECT ID FROM quest_template_addon WHERE BreadcrumbForQuestId = ?", questID)
+		if derr == nil {
+			for depRows.Next() {
+				var depID int64
+				if derr = depRows.Scan(&depID); derr != nil {
+					break
+				}
+				depStatus, serr := s.characterQuestStatus(ctx, uint32(depID))
+				if serr != nil {
+					depRows.Close()
+					return false, serr
+				}
+				if depStatus != 0 {
+					depRows.Close()
+					return false, nil
+				}
+			}
+			derr = depRows.Close()
+			if derr != nil {
+				return false, derr
+			}
+		}
+	}
+
+	// Player::SatisfyQuestDependentPreviousQuests (Player.cpp:15692): when
+	// quests chain into this one via NextQuestId, one chain head must be
+	// completed; a head in a non-positive exclusive group satisfies only when
+	// every other quest in that group is completed too (each-from-all arm),
+	// while a head in a non-negative group satisfies on its own
+	// (one-from-all arm).
+	if wdb != nil {
+		chainRows, cerr := wdb.QueryContext(ctx, "SELECT ID FROM quest_template_addon WHERE NextQuestID = ?", questID)
+		if cerr == nil {
+			chainOK, haveChain, chainErr := false, false, error(nil)
+			for chainRows.Next() {
+				var chainID int64
+				if chainErr = chainRows.Scan(&chainID); chainErr != nil {
+					break
+				}
+				haveChain = true
+				if !s.isQuestRewarded(ctx, uint32(chainID)) {
+					continue
+				}
+				var chainGroup int64
+				_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(ExclusiveGroup, 0) FROM quest_template_addon WHERE ID = ?", chainID).Scan(&chainGroup)
+				if chainGroup >= 0 {
+					chainOK = true
+					break
+				}
+				groupOK := true
+				grpRows, gerr := wdb.QueryContext(ctx, "SELECT ID FROM quest_template_addon WHERE ExclusiveGroup = ? AND ID != ?", chainGroup, chainID)
+				if gerr != nil {
+					chainErr = gerr
+					break
+				}
+				for grpRows.Next() {
+					var grpID int64
+					if gerr = grpRows.Scan(&grpID); gerr != nil {
+						break
+					}
+					if !s.isQuestRewarded(ctx, uint32(grpID)) {
+						groupOK = false
+						break
+					}
+				}
+				grpRows.Close()
+				if gerr != nil {
+					chainErr = gerr
+					break
+				}
+				if groupOK {
+					chainOK = true
+					break
+				}
+			}
+			if cerr = chainRows.Close(); cerr == nil {
+				cerr = chainErr
+			}
+			if cerr != nil {
+				return false, cerr
+			}
+			if haveChain && !chainOK {
 				return false, nil
 			}
+		}
+	}
+
+	// Player::SatisfyQuestExclusiveGroup (Player.cpp:15930): only positive
+	// groups gate. For each other quest in the group: its daily/weekly/
+	// seasonal repeat gates apply (msg=false), it must not be in the quest
+	// log, and it must not be rewarded unless both quests are repeatable
+	// (QUEST_SPECIAL_FLAGS_REPEATABLE, QuestDef.h:160).
+	if exclGroup.Valid && exclGroup.Int64 > 0 {
+		var selfSpecial int64
+		_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&selfSpecial)
+		repeatableSelf := selfSpecial&0x001 != 0
+		grpRows, gerr := wdb.QueryContext(ctx, `SELECT qta.ID, COALESCE(qta.SpecialFlags, 0), COALESCE(qt.Flags, 0)
+			FROM quest_template_addon qta JOIN quest_template qt ON qt.ID = qta.ID
+			WHERE qta.ExclusiveGroup = ? AND qta.ID != ?`, exclGroup.Int64, questID)
+		if gerr != nil {
+			return false, gerr
+		}
+		for grpRows.Next() {
+			var memberID, memberSpecial, memberFlags int64
+			if gerr = grpRows.Scan(&memberID, &memberSpecial, &memberFlags); gerr != nil {
+				break
+			}
+			if !s.satisfyQuestRepeatGates(ctx, uint32(memberID), memberFlags) {
+				grpRows.Close()
+				return false, nil
+			}
+			memberStatus, merr := s.characterQuestStatus(ctx, uint32(memberID))
+			if merr != nil {
+				grpRows.Close()
+				return false, merr
+			}
+			if memberStatus != 0 {
+				grpRows.Close()
+				return false, nil
+			}
+			if s.isQuestRewarded(ctx, uint32(memberID)) && !(repeatableSelf && memberSpecial&0x001 != 0) {
+				grpRows.Close()
+				return false, nil
+			}
+		}
+		grpRows.Close()
+		if gerr != nil {
+			return false, gerr
+		}
+	}
+
+	// Player::SatisfyQuestTimed (Player.cpp:15917): only one timed quest at a
+	// time — a timed quest (QUEST_SPECIAL_FLAGS_TIMED, QuestDef.h:173) is
+	// unavailable while any other timed quest is in the quest log.
+	var timedSpecial int64
+	if wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&timedSpecial) == nil &&
+		timedSpecial&0x400 != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var timedCount int64
+		if s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM character_queststatus cq
+			JOIN quest_template_addon qta ON qta.ID = cq.quest
+			WHERE cq.guid = ? AND (COALESCE(qta.SpecialFlags, 0) & 1024) != 0`, s.playerGUID).Scan(&timedCount) == nil && timedCount > 0 {
+			return false, nil
 		}
 	}
 
@@ -410,6 +591,47 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 	}
 
 	return true, nil
+}
+
+// satisfyQuestRepeatGates mirrors the msg=false arms of
+// Player::SatisfyQuestDay/Week/Seasonal (Player.cpp:15954+) as consumed by
+// Player::SatisfyQuestExclusiveGroup: the repeat-cooldown state of another
+// quest in the exclusive group blocks taking this quest. The dungeon-finder
+// daily arm has no Go model (documented delta).
+func (s *session) satisfyQuestRepeatGates(ctx context.Context, questID uint32, questFlags int64) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	// Day: QUEST_FLAGS_DAILY (QuestDef.h:144), tracked in
+	// character_queststatus_daily; PLAYER_MAX_DAILY_QUESTS = 25 caps the day.
+	if questFlags&0x1000 != 0 {
+		var done, total int64
+		if cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&done) == nil && done > 0 {
+			return false
+		}
+		if cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_daily WHERE guid = ?", s.playerGUID).Scan(&total) == nil && total >= 25 {
+			return false
+		}
+	}
+	// Week: QUEST_FLAGS_WEEKLY (QuestDef.h:147).
+	if questFlags&0x8000 != 0 {
+		var done int64
+		if cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_weekly WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&done) == nil && done > 0 {
+			return false
+		}
+	}
+	// Seasonal: game_event_seasonal_questrelation.
+	if wdb := s.server.WorldStore.DB; wdb != nil {
+		var eventEntry sql.NullInt64
+		if wdb.QueryRowContext(ctx, "SELECT eventEntry FROM game_event_seasonal_questrelation WHERE questId = ?", questID).Scan(&eventEntry) == nil && eventEntry.Valid && eventEntry.Int64 > 0 {
+			var done int64
+			if cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_seasonal WHERE guid = ? AND quest = ? AND event = ?", s.playerGUID, questID, eventEntry.Int64).Scan(&done) == nil && done > 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *session) questDialogStatus(ctx context.Context, entry uint32) (uint8, error) {

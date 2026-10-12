@@ -10,6 +10,21 @@ func totalReputationStanding(reputation playerReputation) int32 {
 	return reputation.Base + reputation.Standing
 }
 
+// reputationStanding mirrors ReputationMgr::GetReputation
+// (ReputationMgr.cpp:119): base reputation plus recorded standing for the
+// faction, 0 when the faction has no recorded state.
+func (s *session) reputationStanding(factionID uint32) int32 {
+	if s == nil || s.player == nil || factionID == 0 {
+		return 0
+	}
+	for i := range s.player.Reputations {
+		if s.player.Reputations[i].FactionID == factionID {
+			return totalReputationStanding(s.player.Reputations[i])
+		}
+	}
+	return 0
+}
+
 const (
 	factionFlagAtWar           uint8 = 0x02
 	factionFlagHidden          uint8 = 0x04
