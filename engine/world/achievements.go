@@ -1427,6 +1427,19 @@ func (s *session) exploreArea(ctx context.Context, areaID uint32) {
 	if s.player == nil || s.server == nil || s.server.Data == nil || areaID == 0 || s.player.Health == 0 || s.player.PlayerFlags&playerFlagGhost != 0 || s.player.TaxiPath != "" {
 		return
 	}
+	// Player::CheckAreaExploreAndOutdoor (Player.cpp:6541-6542): a player who
+	// is not outdoors sheds OUTDOORS_ONLY auras (mounts) every position
+	// update, even in already-explored areas — this arm runs ahead of the
+	// area-exploration below, against the freshly resolved areaID (s.areaID
+	// is not updated until after exploreArea returns). The vmap indoorCheck
+	// config has no Go model; area flags are the non-WMO fallback.
+	outdoors := true
+	if area, found, areaErr := s.server.Data.Area(areaID); areaErr == nil && found {
+		outdoors = area.Flags&(areaFlagInside|areaFlagOutside) != areaFlagInside
+	}
+	if !outdoors {
+		s.removeAurasWithAttribute(spellAttr0OutdoorsOnly)
+	}
 	areaBit, explorationLevel, found, err := s.server.Data.AreaTableInfo(areaID)
 	if err != nil || !found || areaBit < 0 {
 		return

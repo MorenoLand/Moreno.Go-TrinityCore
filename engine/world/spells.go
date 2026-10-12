@@ -24448,8 +24448,10 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// SpellPeriodicAuraLogInfo carries the drained amount; gainMultiplier
 		// = SpellEffectInfo::CalcValueMultiplier (DBC ValueMultiplier via
-		// valueMultiplierForAura in applyPeriodicManaLeechGain).
-		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained)
+		// valueMultiplierForAura in applyPeriodicManaLeechGain). The log
+		// packet for PERIODIC_MANA_LEECH carries the float multiplier tail
+		// (SendPeriodicAuraLog Unit.cpp:5372), not the energize format.
+		logPkt := protocol.BuildPeriodicAuraLogManaLeech(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained, ts.valueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech))
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
 			if leechCaster != ts {
@@ -26013,7 +26015,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				s.server.motionMu.Unlock()
 			}
 		}
-		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained)
+		logPkt := protocol.BuildPeriodicAuraLogManaLeech(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained, s.valueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech))
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
 			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)

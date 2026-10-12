@@ -379,6 +379,24 @@ func BuildPeriodicAuraLogEnergize(targetGUID, casterGUID uint64, spellID, auraTy
 	return buf.Bytes()
 }
 
+// BuildPeriodicAuraLogManaLeech builds SMSG_PERIODICAURALOG for periodic mana
+// leech. Reference: TrinityCore Unit::SendPeriodicAuraLog (Unit.cpp:5372) — the
+// PERIODIC_MANA_LEECH arm writes power type, drained amount, then the float
+// gain multiplier (SpellEffectInfo::CalcValueMultiplier), not the energize
+// tail.
+func BuildPeriodicAuraLogManaLeech(targetGUID, casterGUID uint64, spellID, auraType, powerType, amount uint32, multiplier float32) []byte {
+	buf := NewBuffer(32)
+	buf.WritePackedGUID(targetGUID)
+	buf.WritePackedGUID(casterGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(1) // count
+	buf.WriteU32(auraType)
+	buf.WriteU32(powerType)
+	buf.WriteU32(amount)
+	buf.WriteF32(multiplier)
+	return buf.Bytes()
+}
+
 // BuildAuraUpdate builds SMSG_AURA_UPDATE (0x496) payload.
 // Reference: TrinityCore AuraApplication::BuildUpdatePacket (SpellAuras.cpp:230-252).
 func BuildAuraUpdate(targetGUID, casterGUID uint64, slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, casterLevel uint8) []byte {

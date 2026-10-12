@@ -493,3 +493,30 @@ func (s *session) sendVisibleCreatureAuras(state playerState) {
 		}
 	}
 }
+
+// removeAurasWithAttribute mirrors Unit::RemoveAurasWithAttribute (Unit.cpp):
+// drop every applied aura whose spell Attributes carry any of flags, using
+// default removal mode. C++ iterates m_appliedAuras; Go's session aura map is
+// the player analog (one row per spell ID).
+func (s *session) removeAurasWithAttribute(flags uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	var doomed []uint32
+	s.castMu.Lock()
+	if s.activeAuras != nil {
+		for spellID := range s.activeAuras {
+			spell, found, err := s.server.Data.Spell(spellID)
+			if err != nil || !found {
+				continue
+			}
+			if spell.Attributes&flags != 0 {
+				doomed = append(doomed, spellID)
+			}
+		}
+	}
+	s.castMu.Unlock()
+	for _, spellID := range doomed {
+		s.removeAura(spellID)
+	}
+}
