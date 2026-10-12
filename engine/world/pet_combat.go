@@ -1905,9 +1905,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	for i, effect := range spell.Effects {
 		if effect.Effect == 10 || effect.Effect == 105 || effect.Effect == 136 {
-			heal := uint32(effect.CalcValueForLevel(spell, uint32(motion.Level)))
-			if heal > 0 {
-				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, heal)
+			// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
+			// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
+			// the uint32 wrap must never turn a negative rolled value into
+			// a huge heal.
+			healValue := effect.CalcValueForLevel(spell, uint32(motion.Level))
+			if healValue > 0 {
+				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, uint32(healValue))
 			}
 		}
 		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {

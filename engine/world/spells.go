@@ -15141,8 +15141,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 				// Spell::EffectHeal (SpellEffects.cpp:1393-1418): addhealth =
 				// damage (the HandleEffects CalculateDamage value, same twin
-				// as the SCHOOL_DAMAGE arm above).
-				healAmount := uint32(eff.CalcValueForLevel(spell, casterLevel))
+				// as the SCHOOL_DAMAGE arm above); damage < 0 heals nothing
+				// (the C++ early return) and must not wrap to a huge uint32.
+				healValue := eff.CalcValueForLevel(spell, casterLevel)
+				if healValue < 0 {
+					continue
+				}
+				healAmount := uint32(healValue)
 				if healAmount == 0 && spellID == ProcSpellCrusader {
 					healAmount = 100
 				}
