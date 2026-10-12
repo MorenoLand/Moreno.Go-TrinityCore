@@ -459,7 +459,7 @@ func (s *Store) CreatureFamilyScale(familyID uint32) (minScale float32, minScale
 	return minScale, minLevel, maxScale, maxLevel, true, nil
 }
 
-func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted bool) (float32, bool, error) {
+func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted bool, objectScale float32) (float32, bool, error) {
 	displays, err := s.File("CreatureDisplayInfo")
 	if err != nil {
 		return 0, false, err
@@ -504,16 +504,16 @@ func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted 
 		return 0, false, err
 	}
 	if !nativeFound {
-		return CalculateCollisionHeight(false, 1, 0, 0, 0, 0), true, nil
+		return CalculateCollisionHeight(false, objectScale, 0, 0, 0, 0), true, nil
 	}
-	height := CalculateCollisionHeight(false, 1, 0, nativeModelScale, nativeCollision, nativeDisplayScale)
+	height := CalculateCollisionHeight(false, objectScale, 0, nativeModelScale, nativeCollision, nativeDisplayScale)
 	if mounted && mountDisplayID != 0 {
 		_, _, _, mountHeight, found, mountErr := loadModel(mountDisplayID)
 		if mountErr != nil {
 			return 0, false, mountErr
 		}
 		if found {
-			height = CalculateCollisionHeight(true, 1, mountHeight, nativeModelScale, nativeCollision, nativeDisplayScale)
+			height = CalculateCollisionHeight(true, objectScale, mountHeight, nativeModelScale, nativeCollision, nativeDisplayScale)
 		}
 	}
 	return height, true, nil

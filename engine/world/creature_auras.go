@@ -135,6 +135,135 @@ func (s *Server) creatureAuraScaleSum(key creatureAuraKey) int32 {
 	return sum
 }
 
+// creatureCanInstantCast mirrors the >=1000 arm of
+// AuraEffect::HandleModCastingSpeed (SpellAuraEffects.cpp:3901-3922): a
+// live SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (65) effect with amount >=
+// 1000 sets the unit's instant-cast flag (Unit::SetInstantCast), and
+// WorldObject::ModSpellCastTime (Object.cpp:2471) then reduces the cast
+// time to 0. Only aura 65 takes this path in C++; 216 never does.
+func (s *Server) creatureCanInstantCast(key creatureAuraKey) bool {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return false
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != spellAuraCastingSpeedNotStack {
+				continue
+			}
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if aura.Amounts[index] >= 1000 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// creatureCastingSpeedLiveAmounts mirrors the sub-1000 arm of
+// AuraEffect::HandleModCastingSpeed (SpellAuraEffects.cpp:3924-3936) for
+// creature auras — the creature twin of castingSpeedNotStackLiveAmounts
+// (aura_haste.go:191). Each live 65/216 effect with amount < 1000 is a
+// candidate; the exclusive-same-effect gate
+// (Unit::GetHighestExclusiveSameEffectSpellGroupValue, Unit.cpp:13967)
+// keeps an effect only when no same-type rival in a shared exclusive
+// group carries |amount| >= its own (ties lose, C++ :3931).
+func (s *Server) creatureCastingSpeedLiveAmounts(key creatureAuraKey) []int32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return nil
+	}
+	var cands []statCandidate
+	s.auraMu.Lock()
+	order := 0
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			order++
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			order++
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != spellAuraCastingSpeedNotStack && effect.Aura != spellAuraHasteSpells {
+				continue
+			}
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if aura.Amounts[index] >= 1000 {
+				continue
+			}
+			cands = append(cands, statCandidate{
+				order:       order,
+				spellID:     aura.SpellID,
+				effectIndex: index,
+				amount:      aura.Amounts[index],
+				firstRank:   s.spellFirstRank(aura.SpellID),
+				auraType:    effect.Aura,
+			})
+		}
+		order++
+	}
+	s.auraMu.Unlock()
+	if len(cands) == 0 {
+		return nil
+	}
+	cache := s.petAuraStackGroups()
+	var live []int32
+	for _, c := range cands {
+		rivalMax := int32(0)
+		for _, r := range cands {
+			if r.auraType != c.auraType {
+				continue
+			}
+			if r.spellID == c.spellID && r.effectIndex == c.effectIndex && r.order == c.order {
+				continue
+			}
+			if !sharesExclusiveSameEffectGroup(c.firstRank, r.firstRank, cache) {
+				continue
+			}
+			if absAuraAmount(r.amount) > absAuraAmount(rivalMax) {
+				rivalMax = r.amount
+			}
+		}
+		if absAuraAmount(rivalMax) >= absAuraAmount(c.amount) {
+			continue
+		}
+		live = append(live, c.amount)
+	}
+	return live
+}
+
+// creatureCastingSpeedCastFactor mirrors the cast-time arm of
+// AuraEffect::HandleModCastingSpeed (SpellAuraEffects.cpp:3933/3935) via
+// Unit::ApplyCastTimePercentMod (Unit.cpp:10867) for creature auras — the
+// creature twin of castingSpeedCastFactor (aura_haste.go:261): positive
+// amounts divide UNIT_MOD_CAST_SPEED by (1+amount/100) (haste), negative
+// amounts multiply by (1+|amount|/100) (slow), composing multiplicatively.
+func (s *Server) creatureCastingSpeedCastFactor(key creatureAuraKey) float64 {
+	factor := 1.0
+	for _, a := range s.creatureCastingSpeedLiveAmounts(key) {
+		if a > 0 {
+			factor /= 1.0 + float64(a)/100.0
+		} else {
+			factor *= 1.0 + float64(-a)/100.0
+		}
+	}
+	return factor
+}
+
 // creatureAuraTypeAmountsByMiscMask mirrors the per-effect iteration of
 // Unit::GetTotalAuraModifierByMiscMask (Unit.cpp:4977) for creature auras:
 // the live amount of each active effect of auraType whose DBC MiscValue

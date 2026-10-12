@@ -819,6 +819,43 @@ func (s *Server) aiSpellCastTimeMs(spell wotlk.Spell) uint32 {
 	return 0
 }
 
+// creatureAISpellCastTimeMs mirrors the creature-caster arm of
+// Unit::GetCurrentSpellCastTime (Unit.cpp:3235-3240) — the CasterAI re-arm
+// (CombatAI.cpp:163-165) reads the current spell's m_casttime, which
+// Spell::prepare filled via SpellInfo::CalcCastTime (SpellInfo.cpp:3091)
+// folded through WorldObject::ModSpellCastTime (Object.cpp:2448-2476).
+// Beyond the DBC base: a creature under an instant-cast aura (>=1000
+// amount) casts at 0; the SPELL_ATTR0_REQ_AMMO non-autorepeat +500 arm
+// (CalcCastTime:3102) applies; the SPELL_ATTR0_ABILITY / TRADESPELL /
+// ATTR3_NO_DONE_BONUS arms skip the cast-speed factor; otherwise the
+// creature's UNIT_MOD_CAST_SPEED (cast-speed aura factor,
+// creatureCastingSpeedCastFactor) multiplies. Go's npcbot spell-cast-time
+// mods (IsNPCBot arm) have no twin, and player SPELLMOD_CASTING_TIME is
+// null for creature casters (GetSpellModOwner), so both stay unmodeled.
+func (s *Server) creatureAISpellCastTimeMs(key creatureAuraKey, spell wotlk.Spell) uint32 {
+	if s == nil || s.Data == nil || spell.CastingTimeIndex == 0 {
+		return 0
+	}
+	value, ok, err := s.Data.SpellCastTime(spell.CastingTimeIndex)
+	if err != nil || !ok || value <= 0 {
+		return 0
+	}
+	castTime := value
+	if s.creatureCanInstantCast(key) {
+		return 0
+	}
+	if spell.Attributes&spellAttr0ReqAmmo != 0 && spell.AttributesEx1&spellAttr2AutorepeatFlag == 0 {
+		castTime += 500
+	}
+	if spell.Attributes&(spellAttr0Ability|spellAttr0Tradespell) == 0 && spell.AttributesEx3&spellAttr3NoDoneBonus == 0 {
+		castTime = int32(float64(castTime) * s.creatureCastingSpeedCastFactor(key))
+	}
+	if castTime < 0 {
+		return 0
+	}
+	return uint32(castTime)
+}
+
 // aiSpellTargetClass mirrors the target-classification leg of
 // UnitAI::FillAISpellInfo (UnitAI.cpp:210-226): only when the spell has a
 // non-zero max range, implicit-target hits upgrade the default AITARGET_SELF:
@@ -1155,7 +1192,7 @@ func (s *Server) scheduleCasterAISpellEvents(ctx context.Context, m *creatureMot
 			if tgt := s.resolveAISpellTargetGUID(m, infos[i], victimGUID, players, allowMotionLookup); tgt != 0 {
 				s.castCreatureSpell(ctx, m, spellID, tgt)
 			}
-			delay += s.aiSpellCastTimeMs(infos[i])
+			delay += s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), infos[i])
 		}
 		m.SpellEventTimes[spellID] = now.Add(time.Duration(delay) * time.Millisecond)
 	}
@@ -1221,7 +1258,7 @@ func (s *Server) rearmAISpell(m *creatureMotion, spell wotlk.Spell, spellID uint
 	}
 	var delay uint32
 	if m.AIName == "CasterAI" {
-		castTime := s.aiSpellCastTimeMs(spell)
+		castTime := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spell)
 		if castTime == 0 {
 			castTime = 500
 		}
@@ -2221,7 +2258,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
 			// for its DBC cast time; the tick's early-out above bridges
 			// CombatAI.cpp:97 / CasterAI.cpp:159.
-			if castMs := s.aiSpellCastTimeMs(dueSpell); castMs > 0 {
+			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 {
 				motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 			}
 			s.rearmAISpell(motion, dueSpell, spellID, now)

@@ -4445,7 +4445,12 @@ func (s *session) sendPlayerCollisionHeight() {
 			nativeDisplayID = race.FemaleDisplayID
 		}
 	}
-	height, found, err := s.server.Data.CollisionHeight(s.player.MountDisplayID, nativeDisplayID, s.player.MountDisplayID != 0 || s.hasAuraType(spellAuraMounted))
+	// Unit::GetCollisionHeight (Unit.cpp:14122-14146): the client's
+	// collision-height packet carries the scale-modulated height —
+	// scaleMod = GetObjectScale() (auraObjectScale), not the raw model
+	// height. A player under a growth/shrink aura mounts with the scaled
+	// height.
+	height, found, err := s.server.Data.CollisionHeight(s.player.MountDisplayID, nativeDisplayID, s.player.MountDisplayID != 0 || s.hasAuraType(spellAuraMounted), s.auraObjectScale())
 	if err != nil || !found {
 		return
 	}

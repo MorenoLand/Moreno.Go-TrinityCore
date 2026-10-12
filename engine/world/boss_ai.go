@@ -1638,7 +1638,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// non-triggered cast (the kill.go AICOND_DIE death cast is
 		// C++-triggered, but its motion is dead and never ticks again),
 		// so the triggered stamp below is inert.
-		if castMs := s.aiSpellCastTimeMs(spellInfo); castMs > 0 {
+		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); castMs > 0 {
 			m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 		}
 		// Spell::handle_immediate channel arms (Spell.cpp:3569-3596):
@@ -1653,14 +1653,17 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// of the cast time (C++ runs cast time first, then the channel).
 		// Deltas: the SPELLMOD_DURATION / ModSpellDurationTime
 		// (Object.cpp:2475) fold is unmodeled — GetSpellModOwner is null
-		// for creature motions and UNIT_MOD_CAST_SPEED has no Go model;
+		// for creature motions; the cast-speed factor of the channel's cast
+		// time now comes from creatureCastingSpeedCastFactor
+		// (creatureAISpellCastTimeMs), but ModSpellDurationTime's haste
+		// fold on the duration leg itself stays unmodeled;
 		// a -1 (infinite) duration stamps nothing, since C++ holds the
 		// state until the channel is interrupted and Go has no
 		// creature-channel-interrupt model — an infinite stamp would
 		// soft-lock the motion. SendChannelStart (Spell.cpp:4669) stays
 		// packet-only downstream: no SMSG_SPELL_START_CHANNEL is sent on
 		// the creature path.
-		if castMs := s.aiSpellCastTimeMs(spellInfo); isChanneledSpell(spellInfo) && s != nil && s.Data != nil {
+		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); isChanneledSpell(spellInfo) && s != nil && s.Data != nil {
 			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur > 0 {
 				if channelUntil := now.Add(time.Duration(castMs+uint32(dur)) * time.Millisecond); channelUntil.After(m.CastingUntil) {
 					m.CastingUntil = channelUntil
