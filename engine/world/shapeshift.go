@@ -461,6 +461,21 @@ func (s *session) applyShapeshiftFormEffects(ctx context.Context, spellID uint32
 		s.removeAurasByShapeShift()
 		s.removePolymorphAura()
 	}
+	// Unit::SetPowerType (Unit.cpp:9415-9418) rage arm, run inside the
+	// HandleAuraModShapeshift apply leg (SpellAuraEffects.cpp:1730-1734):
+	// entering bear/direbear from a non-rage power type resets current
+	// rage to zero. This runs while state.ShapeshiftForm is still the old
+	// form, so playerPowerType reads the pre-shift power type exactly like
+	// C++ GetPowerType. The unit-field power-type byte is derived from
+	// ShapeshiftForm in playerPowerType, so only the current-power half
+	// needs a twin. Energy forms keep their power (the cat arm zeroes
+	// energy itself below); stances only fire for warriors, already rage.
+	switch form {
+	case 5, 8: // FORM_BEAR / FORM_DIREBEAR
+		if playerPowerType(s.player) != powerRage {
+			s.adjustSpellPower(ctx, s.playerGUID, int32(powerRage), -int64(s.player.Powers[powerRage]))
+		}
+	}
 	switch form {
 	case 1, 5, 8: // cat/bear/direbear carry non-mana power: the Furor arms
 		chance := s.furorProcChance()

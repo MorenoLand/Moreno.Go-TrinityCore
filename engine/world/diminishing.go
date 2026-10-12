@@ -38,10 +38,11 @@ const (
 type DiminishingLevel uint8
 
 const (
-	DiminishingLevel1      DiminishingLevel = 0 // 100% duration
-	DiminishingLevel2      DiminishingLevel = 1 // 50% duration
-	DiminishingLevel3      DiminishingLevel = 2 // 25% duration
-	DiminishingLevelImmune DiminishingLevel = 3 // 0% duration (Immune)
+	DiminishingLevel1           DiminishingLevel = 0 // 100% duration
+	DiminishingLevel2           DiminishingLevel = 1 // 50% duration
+	DiminishingLevel3           DiminishingLevel = 2 // 25% duration
+	DiminishingLevelImmune      DiminishingLevel = 3 // 0% duration (Immune)
+	DiminishingLevelTauntImmune DiminishingLevel = 4 // taunt-group-only max level (SharedDefines.h:3779)
 )
 
 const (
@@ -325,14 +326,20 @@ func (s *session) getDiminishing(group DiminishingGroup) DiminishingLevel {
 }
 
 // incrDiminishing advances the diminishing return hit counter.
-// Mirrors TrinityCore Unit::IncrDiminishing (Unit.cpp:9025-9034).
+// Mirrors TrinityCore Unit::IncrDiminishing (Unit.cpp:9025-9034): the cap is
+// the spell's DiminishMaxLevel — DIMINISHING_LEVEL_TAUNT_IMMUNE for the taunt
+// group, DIMINISHING_LEVEL_IMMUNE otherwise (SpellInfo.cpp:2454-2463).
 func (s *session) incrDiminishing(group DiminishingGroup) {
 	if s == nil || group >= DiminishingMax {
 		return
 	}
 	currentLevel := s.getDiminishing(group)
+	maxLevel := DiminishingLevelImmune
+	if group == DiminishingTaunt {
+		maxLevel = DiminishingLevelTauntImmune
+	}
 	dim := &s.diminishing[group]
-	if currentLevel < DiminishingLevelImmune {
+	if currentLevel < maxLevel {
 		dim.hitCount = uint8(currentLevel) + 1
 	}
 }
@@ -387,6 +394,18 @@ func (s *session) applyDiminishingToDuration(spell wotlk.Spell, durationMs uint3
 	}
 
 	if group == DiminishingLimitOnly {
+		return group, durationMs, true
+	}
+
+	// Taunt spells take no duration mod on player targets: the
+	// DIMINISHING_TAUNT branch of Unit::ApplyDiminishingToDuration
+	// (Unit.cpp:9064-9082) only runs its 0.65/0.4225/0.274625 sequence for
+	// creatures carrying CREATURE_FLAG_EXTRA_TAUNT_DIMINISH (0x00080000);
+	// for everyone else the mod stays 1.0. Go runs the DR duration path
+	// for player targets only, so taunts land at full duration every time.
+	// Without this arm the generic 1/0.5/0.25/0 ladder made the 4th taunt
+	// on a player come back SPELL_FAILED_IMMUNE.
+	if group == DiminishingTaunt {
 		return group, durationMs, true
 	}
 

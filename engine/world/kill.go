@@ -21,6 +21,14 @@ const (
 // (CreatureData.h): the GuardAI::Permissible gate (GuardAI.cpp:29-35).
 const creatureFlagExtraGuard uint32 = 0x00000080
 
+// creatureFlagExtraTauntDiminish mirrors CREATURE_FLAG_EXTRA_TAUNT_DIMINISH
+// (CreatureData.h:56): only creatures carrying this flag take the
+// 0.65/0.4225/0.274625 taunt duration ladder
+// (Unit::ApplyDiminishingToDuration, Unit.cpp:9064-9082). Go runs the DR
+// duration path for player targets only, so this is documented for the
+// creature path, not yet consumed.
+const creatureFlagExtraTauntDiminish uint32 = 0x00080000
+
 // spellAttr0CastableWhileDead mirrors SPELL_ATTR0_CASTABLE_WHILE_DEAD
 // (SharedDefines.h:435): the UnitAI::FillAISpellInfo AICOND_DIE gate
 // (UnitAI.cpp:196) bridged in onCreatureKilled.
