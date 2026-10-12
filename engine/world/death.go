@@ -459,6 +459,12 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	if !spiritOfRedemption {
 		s.player.DrunkenState = 0
 		s.clearSessionComboPoints()
+		// Unit::setDeathState (Unit.cpp:8909-8911): combo points other
+		// players banked on the dying player are lost too
+		// (ClearComboPointHolders).
+		if s.server != nil {
+			s.server.clearComboPointHolders(s.playerGUID)
+		}
 		s.resurrection = nil
 	}
 	// Unit::Kill (Unit.cpp:11341-11343): remember the victim's PvP death for

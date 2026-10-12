@@ -5903,9 +5903,10 @@ func (s *session) sendComboPointsUpdate() {
 
 // addSessionComboPoints mirrors Unit::AddComboPoints (Unit.cpp:10655-10673):
 // a new target resets the bank to count, the same target adds clamped to
-// 0-5, and the client is notified. The m_comboPointHolders list has no Go
-// bridge — Go keeps no reverse index from a creature GUID to the sessions
-// banking points on it, so the holder cleanup on target death stays open.
+// a new target resets the bank to count, the same target adds clamped to
+// 0-5, and the client is notified. The m_comboPointHolders reverse index
+// is swept by clearComboPointHolders on target death, logout, and duel
+// end instead.
 func (s *session) addSessionComboPoints(targetGUID uint64, count int8) {
 	if s == nil || s.player == nil || count == 0 {
 		return
@@ -5954,6 +5955,29 @@ func (s *session) clearSessionComboPoints() {
 	s.comboPoints = 0
 	s.sendComboPointsUpdate()
 	s.comboTargetGUID = 0
+}
+
+// clearComboPointHolders mirrors Unit::ClearComboPointHolders
+// (Unit.cpp:10722-10726): every unit banking combo points on victimGUID
+// loses them — in C++ each holder's ClearComboPoints also drops the
+// holder from the victim's m_comboPointHolders list. Go keeps no reverse
+// index, so the sweep runs over the live sessions instead.
+func (s *Server) clearComboPointHolders(victimGUID uint64) {
+	if s == nil || victimGUID == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	holders := make([]*session, 0, 4)
+	for sess := range s.sessions {
+		if sess == nil || sess.player == nil || sess.comboTargetGUID != victimGUID {
+			continue
+		}
+		holders = append(holders, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range holders {
+		sess.clearSessionComboPoints()
+	}
 }
 
 // checkComboPointsCast mirrors the combo-point gate of Spell::CheckCast

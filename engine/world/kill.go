@@ -527,6 +527,10 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	// pet kill sites.
 	if s.server != nil {
 		s.server.removeThreatVictimFromAllLists(target.Map, target.InstanceID, target.GUID)
+		// Unit::setDeathState (Unit.cpp:8909-8911): any combo points
+		// pointed at the dying unit are lost — every holder's bank is
+		// cleared (ClearComboPointHolders).
+		s.server.clearComboPointHolders(target.GUID)
 	}
 	creatureEntry := uint32((target.GUID >> 24) & 0xFFFFFF)
 	guid := uint32(target.GUID & 0x00FFFFFF)

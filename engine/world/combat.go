@@ -2967,9 +2967,8 @@ func (s *session) checkDuelBounds() {
 // Documented no-bridge arms of DuelComplete: the OnPlayerDuelStart/OnPlayerDuelEnd
 // script hooks (no PlayerScript duel dispatch bridge — duel_reset audit); the
 // negative-aura strip (auras cast during the duel, apply time >= StartTime — no
-// aura apply-time tracking model); the combo-point cleanup (no combo-point
-// model); the Death Knight quest 12733 credit and CONFIG_HONOR_AFTER_DUEL arms;
-// the duel-flag gameobject removal (Go's arbiter is a synthetic GUID, no
+// aura apply-time tracking model); the DK quest 12733 credit and
+// CONFIG_HONOR_AFTER_DUEL arms; the duel-flag gameobject removal (Go's arbiter is a synthetic GUID, no
 // gameobject). CombatStopWithPets' charmed-creature arm is unmodeled — the pet
 // arm is bridged via stopControlledPetCombat on the surrender path.
 func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
@@ -2991,6 +2990,20 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 	if partner != nil {
 		_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
 	}
+
+	// Player::DuelComplete (Player.cpp:7432-7435): each duelist loses
+	// banked combo points when the combo target is controlled by the
+	// opponent — the opponent themselves or their pet.
+	clearDuelComboPoints := func(sess, opponent *session) {
+		if sess == nil || sess.player == nil || opponent == nil || opponent.player == nil || sess.comboTargetGUID == 0 {
+			return
+		}
+		if sess.comboTargetGUID == opponent.playerGUID || sess.comboTargetGUID == opponent.player.PetGUID {
+			sess.clearSessionComboPoints()
+		}
+	}
+	clearDuelComboPoints(s, partner)
+	clearDuelComboPoints(partner, s)
 
 	if duelEnded && winnerGUID != 0 {
 		var winnerSess, loserSess *session

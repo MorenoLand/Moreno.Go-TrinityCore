@@ -3337,6 +3337,14 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	s.stopSpellLifecycle()
 	s.stopTimedAchievements()
 	s.stopPlayerCombat()
+	// Player::CleanupsBeforeDelete (Player.cpp:1974): the logging-out
+	// player's banked combo points are lost (ClearComboPoints), and so
+	// are any points other players banked on the logging-out player
+	// (ClearComboPointHolders).
+	s.clearSessionComboPoints()
+	if s.server != nil {
+		s.server.clearComboPointHolders(s.playerGUID)
+	}
 	s.broadcastGuildMemberLogout()
 	s.triggerLogout(ctx)
 	s.releaseActiveLoot()
