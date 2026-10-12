@@ -16183,23 +16183,46 @@ func effectValueMultiplied(value uint32, amplitude float32) uint32 {
 	return uint32(int32(float64(value) * float64(amplitude)))
 }
 
-// valueMultiplierForAura resolves the CalcValueMultiplier DBC half
+// calcValueMultiplier mirrors SpellEffectInfo::CalcValueMultiplier
+// (SpellInfo.cpp:528-536): the DBC ValueMultiplier half
+// (EffectAmplitude, Spell.dbc 101-103 — Go's eff.Amplitude) folded with the
+// caster mod-owner's SPELLMOD_VALUE_MULTIPLIER. A nil mod owner is the C++
+// null-modOwner path (wild/charmed creature casters, unknown casters).
+func calcValueMultiplier(spell wotlk.Spell, effIndex int, modOwner *session) float32 {
+	mult := float32(1)
+	if effIndex >= 0 && effIndex < len(spell.Effects) {
+		mult = spell.Effects[effIndex].Amplitude
+	}
+	if modOwner != nil {
+		mult = float32(modOwner.applySpellModFloat(spell, spellModValueMultiplier, float64(mult)))
+	}
+	return mult
+}
+
+// calcValueMultiplierForAura resolves the CalcValueMultiplier DBC half
 // (SpellInfo.cpp:344: ValueMultiplier = EffectAmplitude[effIndex] — Go's
-// eff.Amplitude) for the first effect carrying the given aura type; 1.0
-// when the spell or the effect cannot be resolved. The
-// SPELLMOD_VALUE_MULTIPLIER term has no Go infra.
-func (s *session) valueMultiplierForAura(spellID uint32, auraType uint32) float32 {
+// eff.Amplitude) for the first effect carrying the given aura type, folded
+// with the caster mod-owner's SPELLMOD_VALUE_MULTIPLIER; 1.0 when the spell
+// or the effect cannot be resolved.
+func (s *session) calcValueMultiplierForAura(spellID uint32, auraType uint32, modOwner *session) float32 {
 	if s.server == nil || s.server.Data == nil {
 		return 1.0
 	}
 	if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-		for _, eff := range sp.Effects {
-			if eff.Aura == auraType {
-				return eff.Amplitude
+		for i := range sp.Effects {
+			if sp.Effects[i].Aura == auraType {
+				return calcValueMultiplier(sp, i, modOwner)
 			}
 		}
 	}
 	return 1.0
+}
+
+// valueMultiplierForAura is the null-modOwner form of
+// calcValueMultiplierForAura — the C++ CalcValueMultiplier path with no
+// spell-mod owner (kept for callers whose caster cannot resolve one).
+func (s *session) valueMultiplierForAura(spellID uint32, auraType uint32) float32 {
+	return s.calcValueMultiplierForAura(spellID, auraType, nil)
 }
 
 // drainManaResilienceReduction mirrors the resilience term in
@@ -25518,9 +25541,10 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			break
 		}
 		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
-		// (SpellInfo.cpp:344: ValueMultiplier = EffectAmplitude[effIndex]);
-		// SPELLMOD_VALUE_MULTIPLIER has no Go infra.
-		heal := effectValueMultiplied(paid, ts.valueMultiplierForAura(aura.SpellID, 62))
+		// (SpellInfo.cpp:528-536): the funnel caster's mod-owner
+		// SPELLMOD_VALUE_MULTIPLIER folds via GetSpellModOwner (pet/totem
+		// caster -> owner player; wild/charmed -> nil, the C++ null path).
+		heal := effectValueMultiplied(paid, ts.calcValueMultiplierForAura(aura.SpellID, 62, ts.server.spellModOwnerSession(ts.player.Map, ts.player.InstanceID, aura.CasterGUID)))
 		curHP := ts.player.Health
 		maxHP := ts.player.MaxHealth
 		newHP := curHP + heal
@@ -25627,7 +25651,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// valueMultiplierForAura in applyPeriodicManaLeechGain). The log
 		// packet for PERIODIC_MANA_LEECH carries the float multiplier tail
 		// (SendPeriodicAuraLog Unit.cpp:5372), not the energize format.
-		logPkt := protocol.BuildPeriodicAuraLogManaLeech(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained, ts.valueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech))
+		logPkt := protocol.BuildPeriodicAuraLogManaLeech(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained, ts.calcValueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech, leechCaster))
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
 			if leechCaster != ts {
@@ -25767,11 +25791,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			burnDealt = oldBurnPower - ts.player.Powers[burnPowerType]
 		}
 		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
-		// (SpellInfo.cpp:344: ValueMultiplier = EffectAmplitude[effIndex]);
-		// SPELLMOD_VALUE_MULTIPLIER has no Go infra. The DBC half rides
-		// valueMultiplierForAura, the same resolver the periodic leech
-		// and health-funnel ticks use.
-		dmg := effectValueMultiplied(burnDealt, ts.valueMultiplierForAura(aura.SpellID, spellAuraPowerBurn))
+		// (SpellInfo.cpp:528-536): the burn caster's mod-owner
+		// SPELLMOD_VALUE_MULTIPLIER folds via GetSpellModOwner —
+		// burnCaster is the live player caster session, so it folds its
+		// own mods.
+		dmg := effectValueMultiplied(burnDealt, ts.calcValueMultiplierForAura(aura.SpellID, spellAuraPowerBurn, burnCaster))
 		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			// Unit.cpp:1693 — the burn tick only runs with a live caster
 			// session (nil burnCaster returns above), so the armor curve
@@ -25984,10 +26008,10 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 	}
 	heal := dealtDamage
 	// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
-	// (SpellInfo.cpp:528-535): TC sets ValueMultiplier =
-	// EffectAmplitude[effIndex] (SpellInfo.cpp:344), and Go's eff.Amplitude
-	// carries exactly that field (Spell.dbc 101-103). The SPELLMOD_VALUE_MULTIPLIER
-	// term has no Go infra (documented beside each caller).
+	// (SpellInfo.cpp:528-536): the DBC ValueMultiplier half (EffectAmplitude,
+	// Spell.dbc 101-103 — Go's eff.Amplitude) folded with the caster's
+	// mod-owner SPELLMOD_VALUE_MULTIPLIER. casterSess is the player caster,
+	// so GetSpellModOwner resolves to itself.
 	var leechSpell wotlk.Spell
 	leechKnown := false
 	if s.server != nil && s.server.Data != nil {
@@ -26001,7 +26025,7 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 			stack = 1
 		}
 		if leechEffIndex >= 0 && leechEffIndex < len(leechSpell.Effects) {
-			heal = effectValueMultiplied(heal, leechSpell.Effects[leechEffIndex].Amplitude)
+			heal = effectValueMultiplied(heal, calcValueMultiplier(leechSpell, leechEffIndex, casterSess))
 		}
 		heal = casterSess.spellHealingBonusDone(leechSpell, heal, casterSess, leechEffIndex, true, stack)
 	} else if casterSess.player.SpellPower > 0 {
@@ -26057,7 +26081,10 @@ func (s *session) applyPeriodicLeechHealForCaster(ctx context.Context, mapID, in
 // applyCreaturePeriodicLeechHeal runs the caster-side heal of a
 // PERIODIC_LEECH tick (SpellAuraEffects.cpp:5310-5320) when the aura caster
 // is a creature or pet: heal = dealt damage x CalcValueMultiplier
-// (EffectAmplitude, SpellInfo.cpp:344), applied to the caster motion's health
+// (SpellInfo.cpp:528-536: EffectAmplitude + the caster mod-owner's
+// SPELLMOD_VALUE_MULTIPLIER via GetSpellModOwner — a pet caster's owner
+// player; a wild caster resolves nil, the C++ null path), applied to the
+// caster motion's health
 // under motionMu and capped at MaxHealth, then the
 // ForwardThreatForAssistingMe heal-threat forward
 // (distributeCreatureHealingThreat) and the DONE_PERIODIC/TAKEN_PERIODIC
@@ -26079,7 +26106,7 @@ func (s *Server) applyCreaturePeriodicLeechHeal(ctx context.Context, mapID, inst
 	heal := dealtDamage
 	if sp, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
 		if leechEffIndex >= 0 && leechEffIndex < len(sp.Effects) {
-			heal = effectValueMultiplied(heal, sp.Effects[leechEffIndex].Amplitude)
+			heal = effectValueMultiplied(heal, calcValueMultiplier(sp, leechEffIndex, s.spellModOwnerSession(mapID, instanceID, casterGUID)))
 		}
 	}
 	newHP := caster.Health + heal
@@ -27148,9 +27175,10 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			return true
 		}
 		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
-		// (SpellInfo.cpp:344: ValueMultiplier = EffectAmplitude[effIndex]);
-		// SPELLMOD_VALUE_MULTIPLIER has no Go infra.
-		heal := effectValueMultiplied(paid, s.valueMultiplierForAura(aura.SpellID, 62))
+		// (SpellInfo.cpp:528-536): the funnel caster's mod-owner
+		// SPELLMOD_VALUE_MULTIPLIER folds via GetSpellModOwner (pet/totem
+		// caster -> owner player; wild/charmed -> nil, the C++ null path).
+		heal := effectValueMultiplied(paid, s.calcValueMultiplierForAura(aura.SpellID, 62, s.server.spellModOwnerSession(key.Map, key.InstanceID, aura.CasterGUID)))
 		curHP := target.Health
 		maxHP := target.MaxHealth
 		newHP := curHP + heal
@@ -27272,7 +27300,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				s.server.motionMu.Unlock()
 			}
 		}
-		logPkt := protocol.BuildPeriodicAuraLogManaLeech(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained, s.valueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech))
+		logPkt := protocol.BuildPeriodicAuraLogManaLeech(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained, s.calcValueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech, leechCaster))
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
 			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
@@ -27689,8 +27717,10 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 // applyPeriodicManaLeechGain runs the caster-gain half of
 // HandlePeriodicManaLeechAuraTick (SpellAuraEffects.cpp:5489-5504), shared by
 // the player and creature tick paths: the caster gains drained x
-// CalcValueMultiplier power (DBC ValueMultiplier = EffectAmplitude via
-// valueMultiplierForAura; the SPELLMOD_VALUE_MULTIPLIER term has no Go model),
+// CalcValueMultiplier power (SpellInfo.cpp:528-536: DBC ValueMultiplier =
+// EffectAmplitude plus the caster's SPELLMOD_VALUE_MULTIPLIER via
+// GetSpellModOwner — caster is the player caster session at both call sites,
+// so it folds its own mods),
 // takes 0.5x threat on the gain with threat modifiers ignored
 // (ThreatManager::AddThreat ignoreModifiers=true) — and Drain Mana refunds its
 // Mana Feed percentage to a live guardian pet.
@@ -27699,7 +27729,16 @@ func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *sessio
 		return
 	}
 	// int32 gainAmount = int32(drainedAmount * gainMultiplier).
-	gain := int64(effectValueMultiplied(drained, s.valueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech)))
+	mult := float32(1)
+	if tickKnown {
+		for i := range tickSpell.Effects {
+			if tickSpell.Effects[i].Aura == spellAuraPeriodicManaLeech {
+				mult = calcValueMultiplier(tickSpell, i, caster)
+				break
+			}
+		}
+	}
+	gain := int64(effectValueMultiplied(drained, mult))
 	if gain == 0 {
 		return
 	}

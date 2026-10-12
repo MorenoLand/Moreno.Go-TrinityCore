@@ -192,8 +192,13 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			damage = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, damage)
 		}
 		// Unit::SpellCritChanceDone (Unit.cpp:7167-7212): wild mobs can't
-		// crit with spells, but a player-owned motion (pet/charm — the
-		// GetSpellModOwner()/IsNPCBotOrPet gate) can. The crit bonus sits
+		// crit with spells; only a caster with a non-null GetSpellModOwner
+		// (Object.cpp:2246-2261 — a player, a pet, or a player-owned
+		// totem) can. A player-charmed wild mob has a player charmer
+		// (OwnerGUID) but is neither pet nor totem, so C++ gives it no
+		// crits; the GetSpellModOwner twin below resolves it to nil and
+		// the whole arm stays closed, same as a wild creature. The crit
+		// bonus sits
 		// in the DmgClass switch (Unit.cpp:1023-1040), post-armor,
 		// pre-resilience, and the taken arms feed the roll
 		// (Unit.cpp:7228-7240). The melee/ranged-DmgClass taken leg rides
@@ -201,12 +206,17 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// creatureSpellCritChanceTaken — the caster-side scripted arms
 		// (Shatter) read caster OVERRIDE_CLASS_SCRIPTS auras the
 		// creature store never carries and stay unbridged.
-		if damage > 0 && inlineSpellKnown && motion != nil && motion.OwnerGUID != 0 {
+		var owner *session
+		if motion != nil {
+			owner = s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+		}
+		if damage > 0 && inlineSpellKnown && motion != nil && owner != nil {
 			chance := s.creatureSpellCritChanceDone(creatureAuraKeyForMotion(motion), motion.FlagsExtra&0x20000 != 0, schoolMask, inlineSpell, true)
-			// Unit::GetSpellModOwner: a player-owned motion's owner session
-			// carries the owner's SPELLMOD_CRITICAL_CHANCE (chance) and
-			// SPELLMOD_CRIT_DAMAGE_BONUS (bonus) arms.
-			owner := s.findSessionByGUID(motion.OwnerGUID)
+			// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the mod
+			// owner's SPELLMOD_CRITICAL_CHANCE folds into the done
+			// chance, and its SPELLMOD_CRIT_DAMAGE_BONUS into the
+			// crit-bonus arms below — owner is the GetSpellModOwner
+			// twin, never the raw charmer GUID.
 			// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7790): the taken
 			// fold runs unconditionally — there is no done-gate before it.
 			if owner != nil && owner.player != nil {
@@ -472,13 +482,18 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			// existing; the SpellHealingBonusDone/Taken folds have no
 			// creature model and stay a documented delta.
 			if spellHasEffect(spellInfo, spellEffectHealthLeech) && motion != nil && leechDealt > 0 {
-				multiplier := float32(1)
-				for _, eff := range spellInfo.Effects {
-					if eff.Effect == spellEffectHealthLeech {
-						multiplier = eff.Amplitude
+				leechIdx := -1
+				for i := range spellInfo.Effects {
+					if spellInfo.Effects[i].Effect == spellEffectHealthLeech {
+						leechIdx = i
 						break
 					}
 				}
+				// SpellEffectInfo::CalcValueMultiplier (SpellInfo.cpp:528-536):
+				// the caster mod-owner's SPELLMOD_VALUE_MULTIPLIER folds via
+				// GetSpellModOwner — a pet/totem motion's owner player; a wild
+				// or charmed caster resolves nil (the C++ null-modOwner path).
+				multiplier := calcValueMultiplier(spellInfo, leechIdx, s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID))
 				if heal := effectValueMultiplied(leechDealt, multiplier); heal > 0 {
 					// Spell::EffectHealthLeech (SpellEffects.cpp:1543-1548):
 					// the caster self-heal runs through Unit::HealBySpell, so
