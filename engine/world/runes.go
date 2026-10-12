@@ -28,6 +28,8 @@ const (
 	powerRunicPower = 6 // POWER_RUNIC_POWER (SharedDefines.h:301)
 
 	classDeathKnight = 6
+
+	spellEmpowerRuneWeapon uint32 = 47568 // Empower Rune Weapon (SpellEffects.cpp:5350)
 )
 
 // dkRuneState mirrors Player::m_runes (Player.h:286): per-slot base and
@@ -325,4 +327,49 @@ func (s *session) sendRuneCooldownUpdate() {
 		buf.WriteU8(uint8(255) - uint8(remaining*255/runeBaseCooldownMs))
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_RESYNC_RUNES), buf.Bytes(), true)
+}
+
+// handleEffectActivateRune mirrors Spell::EffectActivateRune
+// (SpellEffects.cpp:5318-5360): on a Death Knight caster, runes of the
+// effect's MiscValue type with a cooldown remaining have their cooldowns
+// zeroed (damage of them, 1 when damage is 0); then the Empower Rune
+// Weapon sweep zeros the cooldowns on every frost-base rune, running once
+// for effIndex 0. Player::SetRuneCooldown always calls ResyncRunes
+// (Player.cpp:24855-24881), so the rune bytes are pushed after any change.
+// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH; Go has no launch-phase
+// dispatch, so the caster arm runs once per cast.
+func (s *session) handleEffectActivateRune(spell wotlk.Spell, eff wotlk.SpellEffect, effectIndex int) {
+	if s == nil || s.player == nil || s.player.Class != classDeathKnight || s.runes == nil {
+		return // SpellEffects.cpp:5323-5328: TYPEID_PLAYER + CLASS_DEATH_KNIGHT gates
+	}
+	nowMs := time.Now().UnixMilli()
+	rs := s.runes
+	count := eff.BasePoints + 1 // tree-wide flat convention for the handler damage
+	if count == 0 {
+		count = 1
+	}
+	changed := false
+	runeType := uint8(eff.MiscValue)
+	for j := 0; j < maxRunes && count > 0; j++ {
+		// SpellEffects.cpp:5340-5345: rune on cooldown and of the
+		// MiscValue current type -> SetRuneCooldown(j, 0).
+		if rs.runeCooldownRemainingMs(j, nowMs) > 0 && rs.current[j] == runeType {
+			rs.cooldownEndMs[j] = 0
+			count--
+			changed = true
+		}
+	}
+	// SpellEffects.cpp:5348-5359: Empower Rune Weapon frost-base sweep,
+	// once per cast ("Need to do this just once").
+	if spell.ID == spellEmpowerRuneWeapon && effectIndex == 0 {
+		for i := 0; i < maxRunes; i++ {
+			if rs.runeCooldownRemainingMs(i, nowMs) > 0 && rs.base[i] == runeFrost {
+				rs.cooldownEndMs[i] = 0
+				changed = true
+			}
+		}
+	}
+	if changed {
+		s.sendRuneCooldownUpdate()
+	}
 }

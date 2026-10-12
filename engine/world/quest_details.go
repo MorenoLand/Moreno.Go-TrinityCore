@@ -18,6 +18,7 @@ const (
 	questRewardFactions    = 5
 	questDetailEmotes      = 4
 	questAutoCompleteFlags = 0x00010000
+	questFlagsAutoAccept   = 0x00080000 // QUEST_FLAGS_AUTO_ACCEPT (QuestDef.h:151)
 	questFlagsPartyAccept  = 0x00000002 // QUEST_FLAGS_PARTY_ACCEPT (QuestDef.h:133)
 	questFlagsSharable     = 0x00000008 // QUEST_FLAGS_SHARABLE (QuestDef.h:135)
 )

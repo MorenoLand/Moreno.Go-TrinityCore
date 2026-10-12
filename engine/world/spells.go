@@ -10349,7 +10349,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 102: // SPELL_EFFECT_DISMISS_PET
 				s.handleDismissPet(effCtx, spellID)
 			case 109: // SPELL_EFFECT_RESURRECT_PET
-				s.handleResurrectPet(effCtx, spellID)
+				s.handleResurrectPet(effCtx, spellID, eff)
 			case 55: // SPELL_EFFECT_TAMECREATURE
 				s.handleTameCreature(effCtx, spellID, targetGUID)
 			case 135: // SPELL_EFFECT_CALL_PET
@@ -10870,12 +10870,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectRedirectThreat(spellID, eff, hitTargets)
 			case spellEffectActivateRune: // 146: SPELL_EFFECT_ACTIVATE_RUNE (EffectActivateRune, SpellEffects.cpp:5318)
 				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on a Death
-				// Knight caster: ready-state runes of the MiscValue type have
-				// their cooldowns zeroed (damage or 1 of them), plus the
-				// Empower Rune Weapon (47568) frost-rune sweep. LAUNCH modes
-				// have no Go equivalent (spells.go:6166-6170) — explicit
-				// no-op so the effect stops hitting the unhandled-effect
-				// debug arm.
+				// Knight caster: runes of the MiscValue type with cooldowns
+				// remaining have them zeroed (damage, or 1 when 0), plus the
+				// Empower Rune Weapon (47568) frost-base sweep (effIndex 0
+				// only). Go has no launch-phase dispatch, so the caster arm
+				// runs once per cast.
+				s.handleEffectActivateRune(spell, eff, effectIndex)
 			case spellEffectTitanGrip: // 155: SPELL_EFFECT_TITAN_GRIP (EffectTitanGrip, SpellEffects.cpp:5402)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on a player
 				// caster: SetCanTitanGrip(true, MiscValue), feeding the equip
@@ -32344,9 +32344,10 @@ func (s *session) clearQuestLogEntries(ctx context.Context, questID uint32) {
 
 // handleEffectQuestStart mirrors Spell::EffectQuestStart (SpellEffects.cpp:5294-5316),
 // the SPELL_EFFECT_QUEST_START (150) HIT_TARGET arm, per player hit target:
-// CanTakeQuest gates; an auto-accept quest (SpecialFlags & 4) is added when a
-// quest-log slot is free (AddQuestAndCheckCompletion); the quest details go
-// out with the target's own GUID as giver and activateAccept=true.
+// CanTakeQuest gates; an auto-accept quest (quest_template.Flags &
+// QUEST_FLAGS_AUTO_ACCEPT or quest_template_addon.SpecialFlags & 4) is added
+// when a quest-log slot is free (AddQuestAndCheckCompletion); the quest
+// details go out with the target's own GUID as giver and activateAccept=true.
 func (s *session) handleEffectQuestStart(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
@@ -32370,7 +32371,16 @@ func (s *session) handleEffectQuestStart(ctx context.Context, eff wotlk.SpellEff
 		}
 		var specialFlags int64
 		_ = wdb.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
-		if specialFlags&4 != 0 {
+		data, err := targetSess.loadQuestDetailData(ctx, questID)
+		if err != nil {
+			continue
+		}
+		// Quest::IsAutoAccept (QuestDef.cpp:310-313): the quest load path
+		// ORs QUEST_FLAGS_AUTO_ACCEPT into Flags when SpecialFlags has 4
+		// (QuestDef.cpp:193), so either leg auto-accepts. The
+		// CONFIG_QUEST_IGNORE_AUTO_ACCEPT gate has no Go world-config model
+		// (same precedent as CONFIG_CAST_UNSTUCK in EffectStuck).
+		if data.Flags&questFlagsAutoAccept != 0 || specialFlags&4 != 0 {
 			// Player::CanAddQuest (Player.cpp:14946): needs a quest-log
 			// slot; silently skips when the log is full.
 			free := false
@@ -32384,10 +32394,6 @@ func (s *session) handleEffectQuestStart(ctx context.Context, eff wotlk.SpellEff
 				continue
 			}
 			targetSess.addQuestToPlayer(ctx, questID)
-		}
-		data, err := targetSess.loadQuestDetailData(ctx, questID)
-		if err != nil {
-			continue
 		}
 		details := buildQuestGiverDetails(data, targetGUID, 0)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -1429,34 +1430,81 @@ func (s *session) handleDismissPet(ctx context.Context, spellID uint32) {
 	}
 }
 
-func (s *session) handleResurrectPet(ctx context.Context, spellID uint32) {
+func (s *session) handleResurrectPet(ctx context.Context, spellID uint32, eff wotlk.SpellEffect) {
 	if s.player == nil {
 		return
+	}
+	damage := eff.BasePoints + 1 // tree-wide flat convention for the handler damage
+	if damage < 0 {
+		return // SpellEffects.cpp:4761
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return
 	}
 
-	var petID, entry, modelID, level, petType, reactState int64
+	var petID, entry, modelID, level, petType, reactState, curMana int64
 	var petName string
 	err := cdb.QueryRowContext(ctx,
-		"SELECT id, entry, modelid, level, COALESCE(PetType, 0), name, COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? ORDER BY slot ASC LIMIT 1",
-		s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petType, &petName, &reactState)
+		"SELECT id, entry, modelid, level, COALESCE(PetType, 0), name, COALESCE(Reactstate, 1), COALESCE(curmana, 0) FROM character_pet WHERE owner = ? ORDER BY slot ASC LIMIT 1",
+		s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petType, &petName, &reactState, &curMana)
 	if err != nil || petID == 0 {
 		return
 	}
 
 	maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), uint32(level), uint8(petType))
-	_, _ = cdb.ExecContext(ctx,
-		"UPDATE character_pet SET slot = 0, curhealth = ?, curmana = ?, savetime = ? WHERE id = ? AND owner = ?",
-		maxHP, maxMP, time.Now().Unix(), petID, s.playerGUID)
-
-	if s.player.PetGUID != 0 && s.activePetNumber() == uint32(petID) {
-		return
+	// SpellEffects.cpp:4799: SetHealth(CountPctFromMaxHealth(damage)) — the
+	// revive is a percent of max, not a full heal; mana is untouched (C++
+	// sets health only).
+	reviveHP := maxHP * uint32(damage) / 100
+	if maxMP > 0 && uint32(curMana) > maxMP {
+		curMana = int64(maxMP)
 	}
 
-	s.spawnPet(ctx, uint32(petID), uint32(entry), petName, uint32(level), uint32(modelID), maxHP, maxHP, maxMP, maxMP, uint8(reactState))
+	petNumber := uint32(petID)
+	if s.player.PetGUID != 0 && s.activePetNumber() == petNumber {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+		if motion != nil && motion.Health > 0 {
+			// Pet already alive in the world: nothing to revive
+			// (SpellEffects.cpp:4783).
+			s.server.motionMu.Unlock()
+			return
+		}
+		if motion != nil {
+			// Dead pet still in the world: revive in place
+			// (SpellEffects.cpp:4785-4799) — repositioned at the owner
+			// (GetClosePoint has no Go bridge; the follow AI re-separates
+			// to PET_FOLLOW_DIST on its next step), dynamic flags cleared
+			// (UNIT_DYNFLAG_NONE), health set to the revive percent.
+			motion.Health = reviveHP
+			motion.DynamicFlags = 0
+			motion.InCombat = false
+			motion.TargetGUID = 0
+			motion.Moving = false
+			motion.X, motion.Y, motion.Z = s.player.X, s.player.Y, s.player.Z
+			motion.Orientation = s.player.Orientation
+			s.server.motionMu.Unlock()
+			_, _ = cdb.ExecContext(ctx,
+				"UPDATE character_pet SET slot = 0, curhealth = ?, savetime = ? WHERE id = ? AND owner = ?",
+				reviveHP, time.Now().Unix(), petID, s.playerGUID)
+			s.server.broadcastCreatureValuesUpdateInInstance(s.player.Map, s.player.InstanceID, s.player.PetGUID, map[int]uint32{
+				unitFieldHealth:       reviveHP,
+				unitFieldDynamicFlags: 0,
+			})
+			s.server.broadcastMonsterMoveStopInInstance(s.player.Map, s.player.InstanceID, s.player.PetGUID, motion.X, motion.Y, motion.Z)
+			return
+		}
+		s.server.motionMu.Unlock()
+		// PetGUID set but no world motion (despawned): fall through to the
+		// DB summon leg below, matching SummonPet.
+	}
+
+	_, _ = cdb.ExecContext(ctx,
+		"UPDATE character_pet SET slot = 0, curhealth = ?, savetime = ? WHERE id = ? AND owner = ?",
+		reviveHP, time.Now().Unix(), petID, s.playerGUID)
+
+	s.spawnPet(ctx, petNumber, uint32(entry), petName, uint32(level), uint32(modelID), reviveHP, maxHP, uint32(curMana), maxMP, uint8(reactState))
 }
 
 func (s *session) handleTameCreature(ctx context.Context, spellID uint32, targetGUID uint64) {
