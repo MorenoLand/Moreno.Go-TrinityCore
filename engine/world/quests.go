@@ -728,6 +728,26 @@ func (s *session) loadCreatureQuestMenu(ctx context.Context, entry uint32, playe
 	if err != nil {
 		return nil, err
 	}
+	return s.buildQuestMenu(ctx, starterIDs, enderIDs, playerLevel)
+}
+
+// loadGameObjectQuestMenu mirrors the gameobject arm of
+// Player::PrepareQuestMenu (Player.cpp:14748): the quest relations come
+// from gameobject_queststarter/ender (ObjectMgr.cpp:8411), the menu items
+// otherwise build exactly like the creature menu.
+func (s *session) loadGameObjectQuestMenu(ctx context.Context, entry uint32, playerLevel uint8) ([]gossipQuestItem, error) {
+	starterIDs, err := loadQuestRelationIDs(ctx, s.server.WorldStore.DB, "gameobject_queststarter", entry)
+	if err != nil {
+		return nil, err
+	}
+	enderIDs, err := loadQuestRelationIDs(ctx, s.server.WorldStore.DB, "gameobject_questender", entry)
+	if err != nil {
+		return nil, err
+	}
+	return s.buildQuestMenu(ctx, starterIDs, enderIDs, playerLevel)
+}
+
+func (s *session) buildQuestMenu(ctx context.Context, starterIDs, enderIDs []uint32, playerLevel uint8) ([]gossipQuestItem, error) {
 	quests := make([]gossipQuestItem, 0, len(starterIDs)+len(enderIDs))
 	seen := make(map[uint32]struct{})
 	for _, questID := range enderIDs {

@@ -608,16 +608,37 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	switch item.Action {
 	case 1, 20: // GOSSIP_OPTION_GOSSIP / GOSSIP_OPTION_DUALSPEC_INFO
 		// Player::OnGossipSelect (Player.cpp:14604-14616): the POI fires
-		// before the submenu. The submenu re-prepare for a gameobject source
-		// has no Go loader (Go builds gossip menus for creatures only), so
-		// only the POI arm bridges; the menu otherwise stays open.
+		// before the submenu. The submenu re-prepares the gameobject's menu
+		// with showQuests=false.
 		if item.ActionPoiID != 0 {
 			s.sendGossipPOI(ctx, item.ActionPoiID)
 		}
+		if item.ActionMenuID != 0 {
+			submenu, loadErr := s.prepareGameObjectGossip(ctx, guid, entry, item.ActionMenuID, s.gameObjectDefaultGossipMenuID(ctx, entry, goState.Type), false)
+			if loadErr != nil {
+				s.debug("gameobject gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
+				s.gossipClosed = true
+				_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
+				return true
+			}
+			s.gossip = submenu
+			if sendErr := s.sendGossipMenu(); sendErr != nil {
+				s.debug("gameobject gossip submenu response failed", "account", s.accountName, "entry", entry, "error", sendErr)
+				return true
+			}
+		}
 	case 2: // GOSSIP_OPTION_QUESTGIVER
-		// PrepareQuestMenu+SendPreparedQuest for a gameobject source has no
-		// Go bridge — Go never opens gameobject quest menus natively — so a
-		// scripted select hook is the only consumer of this arm.
+		// Player::OnGossipSelect (Player.cpp:14625-14628):
+		// PrepareQuestMenu(guid) + SendPreparedQuest(guid) — the gameobject
+		// quest relations resolve through the GO entry.
+		quests, qerr := s.loadGameObjectQuestMenu(ctx, entry, s.player.Level)
+		if qerr != nil {
+			s.debug("gameobject questgiver menu load failed", "account", s.accountName, "entry", entry, "error", qerr)
+			s.gossipClosed = true
+			_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
+			return true
+		}
+		return s.sendPreparedGameObjectQuest(ctx, guid, entry, quests)
 	}
 	// Player::OnGossipSelect (Player.cpp:14699): the BoxMoney charge lands
 	// after the option arms.
@@ -842,7 +863,16 @@ func (s *session) trainerValidForCreature(ctx context.Context, creatureEntry uin
 	return s.isTrainerValidForPlayer(uint32(tType), uint32(tReq))
 }
 
-func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlags, creatureEntry uint32, creatureGUID uint64) ([]loadedGossipOption, error) {
+// gossipOptionRow is one scanned gossip_menu_option row; the creature and
+// gameobject loaders share the query and apply their own visibility gates.
+type gossipOptionRow struct {
+	id, icon, optionType, requiredFlags, actionMenuID, actionPoiID, coded, boxMoney int64
+	message, boxMessage                                                             string
+}
+
+// loadGossipOptionRows runs the gossip_menu_option lookup shared by the
+// creature and gameobject menu loaders (broadcast_text fallback included).
+func (s *session) loadGossipOptionRows(ctx context.Context, menuID uint32) ([]gossipOptionRow, error) {
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT gmo.OptionID, gmo.OptionIcon,
 		COALESCE(NULLIF(gmo.OptionText, ''), bt.Text, ''),
 		gmo.OptionType, gmo.OptionNpcFlag, gmo.ActionMenuID, gmo.ActionPoiID, gmo.BoxCoded, gmo.BoxMoney,
@@ -861,13 +891,27 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 		}
 	}
 	defer rows.Close()
-	options := make([]loadedGossipOption, 0, 32)
+	result := make([]gossipOptionRow, 0, 32)
 	for rows.Next() {
-		var id, icon, optionType, requiredFlags, actionMenuID, actionPoiID, coded, boxMoney int64
-		var message, boxMessage string
-		if err := rows.Scan(&id, &icon, &message, &optionType, &requiredFlags, &actionMenuID, &actionPoiID, &coded, &boxMoney, &boxMessage); err != nil {
+		var row gossipOptionRow
+		if err := rows.Scan(&row.id, &row.icon, &row.message, &row.optionType, &row.requiredFlags, &row.actionMenuID, &row.actionPoiID, &row.coded, &row.boxMoney, &row.boxMessage); err != nil {
 			return nil, err
 		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlags, creatureEntry uint32, creatureGUID uint64) ([]loadedGossipOption, error) {
+	optionRows, err := s.loadGossipOptionRows(ctx, menuID)
+	if err != nil {
+		return nil, err
+	}
+	options := make([]loadedGossipOption, 0, 32)
+	for _, row := range optionRows {
+		id, icon, optionType, requiredFlags := row.id, row.icon, row.optionType, row.requiredFlags
+		actionMenuID, actionPoiID, coded, boxMoney := row.actionMenuID, row.actionPoiID, row.coded, row.boxMoney
+		message, boxMessage := row.message, row.boxMessage
 		if requiredFlags != 0 && uint32(requiredFlags)&npcFlags == 0 {
 			continue
 		}
@@ -921,7 +965,159 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 		}
 		options = append(options, loadedGossipOption{ID: uint32(id), Item: gossipMenuItem{Icon: uint8(icon), Coded: coded != 0, BoxMoney: uint32(boxMoney), Message: message, BoxMessage: boxMessage, Action: uint32(optionType), ActionMenuID: uint32(actionMenuID), ActionPoiID: uint32(actionPoiID)}})
 	}
-	return options, rows.Err()
+	return options, nil
+}
+
+// loadGameObjectGossipOptions mirrors the gameobject arm of
+// Player::PrepareGossipMenu (Player.cpp:14363-14403): a gameobject source is
+// not a creature, so the OptionNpcFlag filter and the per-type visibility
+// switch never apply — the ConditionMgr gate is the only filter.
+func (s *session) loadGameObjectGossipOptions(ctx context.Context, menuID, entry uint32, guid uint64) ([]loadedGossipOption, error) {
+	optionRows, err := s.loadGossipOptionRows(ctx, menuID)
+	if err != nil {
+		return nil, err
+	}
+	options := make([]loadedGossipOption, 0, 32)
+	for _, row := range optionRows {
+		meets, err := s.meetGossipOptionConditions(ctx, menuID, uint32(row.id), entry, guid)
+		if err != nil {
+			return nil, err
+		}
+		if !meets {
+			continue
+		}
+		if len(options) >= 32 {
+			break
+		}
+		options = append(options, loadedGossipOption{ID: uint32(row.id), Item: gossipMenuItem{Icon: uint8(row.icon), Coded: row.coded != 0, BoxMoney: uint32(row.boxMoney), Message: row.message, BoxMessage: row.boxMessage, Action: uint32(row.optionType), ActionMenuID: uint32(row.actionMenuID), ActionPoiID: uint32(row.actionPoiID)}})
+	}
+	return options, nil
+}
+
+// gameObjectDefaultGossipMenuID mirrors the gameobject arm of
+// Player::GetDefaultGossipMenuForSource (Player.cpp:14729) via
+// GameObjectTemplate::GetGossipMenuId (GameObjectData.h:560): only the
+// questgiver and goober types carry a gossip menu ID.
+func (s *session) gameObjectDefaultGossipMenuID(ctx context.Context, entry uint32, goType uint8) uint32 {
+	switch goType {
+	case GameObjectTypeQuestGiver:
+		return s.loadGameObjectTemplateData(ctx, entry)[3] // questgiver.gossipID (GameObjectData.h:75)
+	case GameObjectTypeGoober:
+		return s.loadGooberTemplate(ctx, entry).gossipID
+	default:
+		return 0
+	}
+}
+
+// prepareGameObjectGossip mirrors Player::PrepareGossipMenu
+// (Player.cpp:14363) for a gameobject source: the gossip menu for menuID,
+// the menu-0 fallback when menuID is the gameobject's default menu, and the
+// quest menu from the gameobject quest relations when showQuests is set.
+func (s *session) prepareGameObjectGossip(ctx context.Context, guid uint64, entry, menuID, defaultMenuID uint32, showQuests bool) (*gossipMenuState, error) {
+	menu := &gossipMenuState{SenderGUID: guid, MenuID: menuID, TitleID: 0x00FFFFFF, Items: make(map[uint32]gossipMenuItem)}
+	titleID, err := s.loadGossipMenuTitleID(ctx, menuID, entry, guid)
+	if err != nil {
+		return nil, err
+	}
+	menu.TitleID = titleID
+	options, err := s.loadGameObjectGossipOptions(ctx, menuID, entry, guid)
+	if err != nil {
+		return nil, err
+	}
+	// Player::PrepareGossipMenu (Player.cpp:14373): the menu-0 fallback
+	// applies only when the requested menu is the source's default menu.
+	if len(options) == 0 && menuID == defaultMenuID {
+		options, err = s.loadGameObjectGossipOptions(ctx, 0, entry, guid)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, option := range options {
+		menu.Items[option.ID] = option.Item
+	}
+	if showQuests && s.player != nil {
+		quests, err := s.loadGameObjectQuestMenu(ctx, entry, s.player.Level)
+		if err != nil {
+			return nil, err
+		}
+		menu.Quests = quests
+	}
+	return menu, nil
+}
+
+// buildQuestGiverQuestList mirrors PlayerMenu::SendQuestGiverQuestList
+// (GossipDef.cpp:319-370): guid, the quest_greeting row keyed by
+// entry+TYPEID_GAMEOBJECT (or an empty title with zero emotes), then the
+// quest rows with the 3.3.3 autocomplete byte.
+func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, entry uint32, quests []gossipQuestItem) []byte {
+	title := ""
+	var emoteDelay, emoteType uint32
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var greetType, greetDelay int64
+		var greeting string
+		// LoadQuestGreetings (ObjectMgr.cpp:6447): ID, Type, GreetEmoteType, GreetEmoteDelay, Greeting.
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+			`SELECT GreetEmoteType, GreetEmoteDelay, Greeting FROM quest_greeting WHERE ID = ? AND Type = ? LIMIT 1`,
+			entry, typeIDGameObject).Scan(&greetType, &greetDelay, &greeting); err == nil {
+			title = greeting
+			// GossipDef.cpp:340-341: the packet carries delay then type.
+			emoteDelay, emoteType = uint32(greetDelay), uint32(greetType)
+		}
+	}
+	entries := protocol.NewBuffer(64)
+	var count uint8
+	for _, q := range quests {
+		entries.WriteU32(q.ID)
+		entries.WriteU32(q.Icon)
+		entries.WriteI32(q.Level)
+		entries.WriteU32(q.Flags)
+		if q.AutoComplete {
+			entries.WriteU8(1)
+		} else {
+			entries.WriteU8(0)
+		}
+		entries.WriteCString(q.Title)
+		count++
+	}
+	packet := protocol.NewBuffer(128)
+	packet.WriteU64(guid)
+	packet.WriteCString(title)
+	packet.WriteU32(emoteDelay)
+	packet.WriteU32(emoteType)
+	packet.WriteU8(count)
+	packet.Write(entries.Bytes())
+	return packet.Bytes()
+}
+
+// fastOpenQuestGiverQuest mirrors the single-quest arm of
+// Player::SendPreparedQuest (Player.cpp:14812-14843) through the same
+// status-routed approximation the creature questgiver paths use: a
+// completable/incomplete quest opens the reward window, anything else the
+// quest details.
+func (s *session) fastOpenQuestGiverQuest(ctx context.Context, guid uint64, q gossipQuestItem) bool {
+	queryPayload := protocol.NewBuffer(12)
+	queryPayload.WriteU64(guid)
+	queryPayload.WriteU32(q.ID)
+	status, _ := s.characterQuestStatus(ctx, q.ID)
+	if status == questStatusComplete || status == questStatusIncomplete {
+		return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
+	}
+	return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
+}
+
+// sendPreparedGameObjectQuest mirrors Player::SendPreparedQuest
+// (Player.cpp:14808) for a gameobject source: an empty quest menu sends
+// nothing, a single quest fast-opens, and multiple quests go out in
+// SMSG_QUESTGIVER_QUEST_LIST.
+func (s *session) sendPreparedGameObjectQuest(ctx context.Context, guid uint64, entry uint32, quests []gossipQuestItem) bool {
+	switch len(quests) {
+	case 0:
+		return true
+	case 1:
+		return s.fastOpenQuestGiverQuest(ctx, guid, quests[0])
+	default:
+		return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_LIST), s.buildQuestGiverQuestList(ctx, guid, entry, quests), true) == nil
+	}
 }
 
 func (s *session) luaGossipComplete(_ context.Context, _ []any) ([]any, error) {

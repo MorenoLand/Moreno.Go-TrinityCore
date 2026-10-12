@@ -573,6 +573,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		// flip and template autoCloseTime (data2) reset as doors.
 		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid, false, 0)
 
+	case GameObjectTypeQuestGiver:
+		// GameObject::Use GAMEOBJECT_TYPE_QUESTGIVER arm (GameObject.cpp:1525):
+		// PrepareGossipMenu(this, questgiver.gossipID, true) + SendPreparedGossip(this).
+		s.useQuestGiverGameObject(ctx, guid, entry)
+
 	case GameObjectTypeChest:
 		// Chests open through the lock path: the client casts Opening and
 		// Spell::EffectOpenLock answers Spell::SendLoot(guid, LOOT_SKINNING)
@@ -761,6 +766,37 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	}
 
 	return true
+}
+
+// useQuestGiverGameObject mirrors the GAMEOBJECT_TYPE_QUESTGIVER arm of
+// GameObject::Use (GameObject.cpp:1525-1534): PrepareGossipMenu with the
+// template's gossipID (data3) and the quest list, then SendPreparedGossip —
+// a zero gossipID with a non-empty quest menu sends the quest list directly
+// (Player::SendPreparedGossip, Player.cpp:14542).
+func (s *session) useQuestGiverGameObject(ctx context.Context, guid uint64, entry uint32) {
+	if s.player == nil {
+		return
+	}
+	tpl := s.loadGameObjectTemplateData(ctx, entry)
+	gossipID := tpl[3] // questgiver.gossipID (GameObjectData.h:75)
+	// PlayerTalkClass->ClearMenus() runs at the head of GameObject::Use.
+	s.gossip = nil
+	s.gossipClosed = false
+	menu, err := s.prepareGameObjectGossip(ctx, guid, entry, gossipID, gossipID, true)
+	if err != nil {
+		s.debug("questgiver go gossip load failed", "account", s.accountName, "entry", entry, "error", err)
+		s.gossipClosed = true
+		_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
+		return
+	}
+	if menu.MenuID == 0 && len(menu.Quests) > 0 {
+		s.sendPreparedGameObjectQuest(ctx, guid, entry, menu.Quests)
+		return
+	}
+	s.gossip = menu
+	if err := s.sendGossipMenu(); err != nil {
+		s.debug("questgiver go gossip response failed", "account", s.accountName, "entry", entry, "error", err)
+	}
 }
 
 // sameRaidGroup mirrors Player::IsInSameRaidWith (Player.cpp:2543): the same
