@@ -1417,13 +1417,26 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 		return true
 	}
 
-	// ScriptMgr::OnGuildDisband (Guild.cpp:1144) fires before guild data is
-	// removed; Disband then DeleteMember()s every member with
-	// isDisbanding=true, firing OnGuildRemoveMember per member
-	// (Guild.cpp:1148-1154, 2318) — offline members reach the hook as nil,
-	// like Eluna's Push of a null Player*. The fire sites sit before the row
-	// deletions, like C++ firing before the data removal.
-	disbandGuild := s.luaGuildObject(ctx, uint32(guildID))
+	// The C++ Disband body with its script fires lives in
+	// disbandGuildWithLuaEvents, shared with the Eluna Guild:Disband method.
+	s.disbandGuildWithLuaEvents(ctx, uint32(guildID))
+	return true
+}
+
+// disbandGuildWithLuaEvents mirrors Guild::Disband (Guild.cpp:1141):
+// ScriptMgr::OnGuildDisband fires before guild data is removed, then Disband
+// DeleteMember()s every member with isDisbanding=true, firing
+// OnGuildRemoveMember per member (Guild.cpp:1148-1154, 2318) — offline
+// members reach the hook as nil, like Eluna's Push of a null Player*. The
+// fire sites sit before the row deletions, like C++ firing before the data
+// removal. Then disbandGuildByID delivers GE_DISBANDED, deletes the rows,
+// and clears every online member's session guild state.
+func (s *session) disbandGuildWithLuaEvents(ctx context.Context, guildID uint32) {
+	cdb := s.guildCharactersDB()
+	if cdb == nil {
+		return
+	}
+	disbandGuild := s.luaGuildObject(ctx, guildID)
 	s.fireGuildEvent(ctx, scripting.GuildEventOnDisband, disbandGuild)
 	var disbandMembers []int64
 	if rows, err := cdb.QueryContext(ctx, "SELECT guid FROM guild_member WHERE guildid = ?", guildID); err == nil && rows != nil {
@@ -1442,16 +1455,8 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 		}
 		s.fireGuildEvent(ctx, scripting.GuildEventOnRemoveMember, disbandGuild, memberPlayer, true)
 	}
-
-	// Guild::Disband (Guild.cpp:1141-1190) via the shared GM helper: GE_DISBANDED
-	// reaches every online member first, the rows are deleted, then every
-	// online member's session guild state is cleared. The lone-leader arm in
-	// handleGuildLeave is the only disband path where the actor must be
-	// excluded.
-	s.disbandGuildByID(ctx, uint32(guildID))
-
+	s.disbandGuildByID(ctx, guildID)
 	s.debug("guild disbanded", "guild_id", guildID)
-	return true
 }
 
 // handleGuildAddRank processes CMSG_GUILD_ADD_RANK (0x232).

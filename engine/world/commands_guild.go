@@ -171,18 +171,20 @@ func (s *session) guildAddMember(ctx context.Context, cdb *sql.DB, guildID uint3
 	return true
 }
 
-// guildDeleteMember mirrors Guild::DeleteMember(trans, guid, false, true,
-// true) (Guild.cpp:2277) for the GM uninvite arm. A removed leader promotes
-// the lowest-rank remaining member (rank 0), broadcasting GE_LEADER_CHANGED
-// then GE_LEFT while the old leader is still a member; with no successor the
-// guild disbands. Non-leader removal is silent, exactly as in C++ —
+// guildDeleteMember mirrors Guild::DeleteMember(trans, guid, isDisbanding,
+// false, true) (Guild.cpp:2277) for the GM uninvite arm and the Eluna
+// DeleteMember path. A removed leader promotes the lowest-rank remaining
+// member (rank 0), broadcasting GE_LEADER_CHANGED then GE_LEFT while the old
+// leader is still a member; with no successor the guild disbands. The
+// leader-replacement arm is skipped when isDisbanding is set (the C++
+// !isDisbanding gate). Non-leader removal is silent, exactly as in C++ —
 // DeleteMember itself logs and broadcasts nothing.
-func (s *session) guildDeleteMember(ctx context.Context, cdb *sql.DB, guildID uint32, guid uint64) {
+func (s *session) guildDeleteMember(ctx context.Context, cdb *sql.DB, guildID uint32, guid uint64, isDisbanding bool) {
 	var leaderGUID uint64
 	_ = cdb.QueryRowContext(ctx, "SELECT leaderguid FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&leaderGUID)
 	var oldName string
 	_ = cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ? LIMIT 1", guid).Scan(&oldName)
-	if leaderGUID == guid && guid != 0 {
+	if leaderGUID == guid && guid != 0 && !isDisbanding {
 		var newGUID, newRank int64
 		var newName string
 		err := cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank, c.name FROM guild_member gm
@@ -454,7 +456,7 @@ func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string)
 		return
 	}
 	// DeleteMember(trans, targetGuid, false, true, true) (cs_guild.cpp:200).
-	s.guildDeleteMember(ctx, cdb, guildID, guid)
+	s.guildDeleteMember(ctx, cdb, guildID, guid, false)
 }
 
 // handleGuildRankCommand mirrors HandleGuildRankCommand (cs_guild.cpp:204-221):

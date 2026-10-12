@@ -219,9 +219,10 @@ func objectArgumentUint64(args []any, index int) (uint64, error) {
 // It is the Go model of Eluna's Push(guild) (LuaEngine/GuildHooks.cpp via
 // ElunaTemplate), shared by the GetGuildBy* globals and the world engine's
 // guild event hooks. The mutating surface (SetLeader/SetBankTabText/
-// SendPacket/SendPacketToRanked/Disband/AddMember/DeleteMember/
-// SetMemberRank, GuildMethods.h) has no script-safe live path yet and stays
-// unbridged.
+// SendPacket/SendPacketToRanked/Disband/AddMember/DeleteMember/SetMemberRank,
+// GuildMethods.h) is attached by the world engine's attachGuildMutations,
+// which re-resolves the live guild per call; snapshot-only objects (the
+// globals) carry the read surface only.
 func NewGuildObject(guildID uint32, live GuildLive) *Object {
 	load := live.Load
 	if load == nil {

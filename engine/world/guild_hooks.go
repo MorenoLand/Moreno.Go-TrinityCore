@@ -38,7 +38,11 @@ func (s *session) luaGuildObject(ctx context.Context, guildID uint32) *scripting
 	if _, ok := load(); !ok {
 		return nil
 	}
-	return scripting.NewGuildObject(guildID, scripting.GuildLive{Load: load, Players: srv.luaPlayers})
+	obj := scripting.NewGuildObject(guildID, scripting.GuildLive{Load: load, Players: srv.luaPlayers})
+	// The Eluna mutating Guild methods live on the world engine's live model
+	// (world/guild_lua.go), re-resolving the guild row per call.
+	attachGuildMutations(srv, s, obj, guildID)
+	return obj
 }
 
 // fireGuildEvent dispatches an Eluna GUILD_EVENT_* hook
