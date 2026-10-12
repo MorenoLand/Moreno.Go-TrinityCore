@@ -3345,6 +3345,9 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	if s.server != nil {
 		s.server.clearComboPointHolders(s.playerGUID)
 	}
+	// Player::CleanupsBeforeDelete (Player.cpp:26311): reactive timers drop
+	// (ClearAllReactives).
+	s.clearAllReactives()
 	s.broadcastGuildMemberLogout()
 	s.triggerLogout(ctx)
 	s.releaseActiveLoot()

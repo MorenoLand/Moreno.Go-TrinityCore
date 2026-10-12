@@ -894,6 +894,15 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	s.procItemAndTrinketEffects(ctx, target, attType, outcome)
 	s.procAuraTriggers(ctx, target, attType, outcome, hitInfo, targetState, blocked, damage)
 
+	// Unit::ProcSkillsAndReactives (Unit.cpp:10280-10351): dodge/parry/block
+	// avoidance arms the victim's reactive aura states (Revenge/Counterattack
+	// usability), and a warrior's dodged swing banks the Overpower combo
+	// point + 4000ms window.
+	if vicSess != nil {
+		vicSess.procReactiveVictimArms(outcome)
+	}
+	s.procReactiveAttackerArms(target.GUID, outcome)
+
 	if s.server != nil {
 		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID)
 	}
@@ -1439,9 +1448,15 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		damage *= 2
 	}
 
+	// Unit::ProcSkillsAndReactives victim arm (Unit.cpp:10283-10324): a
+	// dodged/blocked ranged shot arms AURA_STATE_DEFENSE on the victim.
+	// Ranged attacks never parry (rollMeleeOutcome comment above), so the
+	// parry arm cannot fire here; the attacker arm is melee-only in C++
+	// (Overpower is a melee swing response).
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenRanged)
+			vicSess.procReactiveVictimArms(outcome)
 		}
 	}
 

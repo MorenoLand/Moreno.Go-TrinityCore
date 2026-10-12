@@ -2,9 +2,120 @@ package world
 
 import (
 	"context"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
+
+// ReactiveType indexes (Unit.h:709-717); REACTIVE_TIMER_START is 4000ms
+// (Unit.h:707).
+const (
+	reactiveDefense       = 0 // REACTIVE_DEFENSE
+	reactiveHunterParry   = 1 // REACTIVE_HUNTER_PARRY
+	reactiveOverpower     = 2 // REACTIVE_OVERPOWER
+	reactiveWolverineBite = 3 // REACTIVE_WOLVERINE_BITE
+)
+
+const reactiveTimerStart = 4000 * time.Millisecond // REACTIVE_TIMER_START (Unit.h:707)
+
+// startReactiveTimer mirrors Unit::StartReactiveTimer (Unit.h:1602): the
+// reactive's 4000ms window opens now.
+func (s *session) startReactiveTimer(reactive int) {
+	if s == nil || s.player == nil || reactive < 0 || reactive >= len(s.reactiveUntil) {
+		return
+	}
+	s.reactiveUntil[reactive] = time.Now().Add(reactiveTimerStart)
+}
+
+// sweepReactiveTimers mirrors Unit::UpdateReactives (Unit.cpp:10769-10800):
+// expired reactives drop. REACTIVE_OVERPOWER expiry clears the warrior's
+// combo points (ClearReactive(REACTIVE_OVERPOWER) -> ClearComboPoints,
+// Unit.cpp:10743-10745, including the RETAIN_COMBO_POINTS aura strip that
+// ClearComboPoints performs, Unit.cpp:10674-10680); the defense and
+// hunter-parry arms only drop their aura-state bits, and REACTIVE_WOLVERINE_BITE
+// expiry is a silent no-op in C++ too. The npcbot attacker arms ride the
+// same timers; Go has no npcbot infrastructure (standing no-infra).
+func (s *session) sweepReactiveTimers() {
+	if s == nil || s.player == nil {
+		return
+	}
+	now := time.Now()
+	for i := range s.reactiveUntil {
+		if s.reactiveUntil[i].IsZero() || now.Before(s.reactiveUntil[i]) {
+			continue
+		}
+		s.reactiveUntil[i] = time.Time{}
+		if i == reactiveOverpower && s.player.Class == 1 { // CLASS_WARRIOR
+			s.removeAurasByType(spellAuraRetainComboPoints)
+			s.clearSessionComboPoints()
+		}
+	}
+}
+
+// clearAllReactives mirrors Unit::ClearAllReactives (Unit.cpp:10754-10767):
+// every reactive timer drops; the overpower arm keeps its combo-point
+// clearing for warriors. Called on JUST_DIED (Unit.cpp:8927) and from
+// Player::CleanupsBeforeDelete (Player.cpp:26311). The hunter-pet
+// combo-point arm has no Go pet-combo-point model (SMSG_PET_UPDATE_COMBO_POINTS
+// unwired), so it stays unbridged.
+func (s *session) clearAllReactives() {
+	if s == nil || s.player == nil {
+		return
+	}
+	for i := range s.reactiveUntil {
+		s.reactiveUntil[i] = time.Time{}
+	}
+	if s.player.Class == 1 { // CLASS_WARRIOR
+		s.removeAurasByType(spellAuraRetainComboPoints)
+		s.clearSessionComboPoints()
+	}
+}
+
+// procReactiveVictimArms mirrors the victim half of
+// Unit::ProcSkillsAndReactives (Unit.cpp:10283-10324): a dodged swing arms
+// AURA_STATE_DEFENSE (rogues skip it — Riposte), a parried swing arms
+// AURA_STATE_HUNTER_PARRY for hunters and AURA_STATE_DEFENSE for everyone
+// else, and a blocked swing arms AURA_STATE_DEFENSE. Each state lives for
+// the 4000ms reactive window and gates Revenge/Counterattack-style
+// CasterAuraState checks.
+func (s *session) procReactiveVictimArms(outcome protocol.MeleeHitOutcome) {
+	if s == nil || s.player == nil {
+		return
+	}
+	switch outcome {
+	case protocol.MeleeHitDodge:
+		if s.player.Class == 4 { // CLASS_ROGUE: Riposte skip (Unit.cpp:10290)
+			return
+		}
+		s.startReactiveTimer(reactiveDefense)
+	case protocol.MeleeHitParry:
+		if s.player.Class == 3 { // CLASS_HUNTER: Counterattack (Unit.cpp:10301-10304)
+			s.startReactiveTimer(reactiveHunterParry)
+		} else {
+			s.startReactiveTimer(reactiveDefense)
+		}
+	case protocol.MeleeHitBlock:
+		s.startReactiveTimer(reactiveDefense)
+	}
+}
+
+// procReactiveAttackerArms mirrors the attacker half of
+// Unit::ProcSkillsAndReactives (Unit.cpp:10326-10351): a warrior whose
+// swing is dodged banks a combo point on the dodger and opens the 4000ms
+// Overpower window. The hunter-pet crit arm (REACTIVE_WOLVERINE_BITE +
+// pet combo points) has no Go pet-combo-point model, so it stays
+// unbridged.
+func (s *session) procReactiveAttackerArms(targetGUID uint64, outcome protocol.MeleeHitOutcome) {
+	if s == nil || s.player == nil || s.player.Class != 1 { // CLASS_WARRIOR
+		return
+	}
+	if outcome != protocol.MeleeHitDodge || targetGUID == 0 {
+		return
+	}
+	s.addSessionComboPoints(targetGUID, 1)
+	s.startReactiveTimer(reactiveOverpower)
+}
 
 // AuraStateType values (SharedDefines.h:1320-1354).
 const (
@@ -191,9 +302,20 @@ func (s *session) lookupAuraState(spellID uint32) uint32 {
 
 // unitAuraStateMask builds the unit-wide aura state mask (health thresholds
 // plus one bit per active aura's state), mirroring UNIT_FIELD_AURASTATE as
-// maintained by Unit::ModifyAuraState (Unit.cpp:5880).
+// maintained by Unit::ModifyAuraState (Unit.cpp:5880). The reactive
+// defense/hunter-parry bits ride the ProcSkillsAndReactives timers
+// (Unit.cpp:10283-10324); expired timers are swept first, mirroring
+// Unit::UpdateReactives (Unit.cpp:10769).
 func (s *session) unitAuraStateMask() uint32 {
+	s.sweepReactiveTimers()
 	mask := auraStateHealthMask(s.player.Health, s.player.MaxHealth)
+	now := time.Now()
+	if !s.reactiveUntil[reactiveDefense].IsZero() && now.Before(s.reactiveUntil[reactiveDefense]) {
+		mask |= uint32(1) << (auraStateDefense - 1)
+	}
+	if !s.reactiveUntil[reactiveHunterParry].IsZero() && now.Before(s.reactiveUntil[reactiveHunterParry]) {
+		mask |= uint32(1) << (auraStateHunterParry - 1)
+	}
 	for spellID := range s.auras {
 		if state := s.lookupAuraState(spellID); state != auraStateNone {
 			mask |= uint32(1) << (state - 1)

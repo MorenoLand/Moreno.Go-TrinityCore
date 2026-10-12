@@ -465,6 +465,9 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		if s.server != nil {
 			s.server.clearComboPointHolders(s.playerGUID)
 		}
+		// Unit::setDeathState JUST_DIED (Unit.cpp:8927): reactive timers
+		// drop (ClearAllReactives).
+		s.clearAllReactives()
 		s.resurrection = nil
 	}
 	// Unit::Kill (Unit.cpp:11341-11343): remember the victim's PvP death for

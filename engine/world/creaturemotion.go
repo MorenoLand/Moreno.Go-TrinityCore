@@ -177,7 +177,13 @@ type creatureMotion struct {
 	CharmUnitFlags uint32
 	CharmFaction   uint32
 	CharmOwnerGUID uint64
-	PetCommand     uint8 // 0: stay, 1: follow, 2: attack
+	// CharmOldReact saves the creature's PetReact at charm time so
+	// uncharm restores it (CharmInfo::RestoreState, Unit.cpp:9936-9940:
+	// the CharmInfo ctor banks _oldReactState and DeleteCharmInfo
+	// restores it). PetReact mirrors the creature react-state numbering
+	// (creatureReact* / PetReact* both 0/1/2).
+	CharmOldReact uint8
+	PetCommand    uint8 // 0: stay, 1: follow, 2: attack
 
 	// Looted mirrors Loot::isLooted (Loot.h:236 — gold == 0 && unlootedCount
 	// == 0): set when the corpse's loot window fully empties, cleared on
@@ -1247,6 +1253,9 @@ func (s *Server) charmCreature(ctx context.Context, key creatureAuraKey, charmer
 		motion.CharmUnitFlags = motion.UnitFlags
 		motion.CharmFaction = motion.Faction
 		motion.CharmOwnerGUID = motion.OwnerGUID
+		// CharmInfo ctor banks _oldReactState (Unit.cpp:9919-9934) for
+		// the DeleteCharmInfo restore below.
+		motion.CharmOldReact = motion.PetReact
 	}
 	motion.CharmerGUID = charmerGUID
 	motion.Charmed = true
@@ -1302,7 +1311,11 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.Faction = motion.CharmFaction
 	motion.OwnerGUID = motion.CharmOwnerGUID
 	motion.PetCommand = PetCommandStay
-	motion.PetReact = PetReactPassive
+	// CharmInfo::RestoreState (Unit.cpp:9936-9940): the pre-charm react
+	// state is restored (DeleteCharmInfo), not forced to passive.
+	motion.PetReact = motion.CharmOldReact
+	motion.ReactState = motion.CharmOldReact
+	motion.CharmOldReact = 0
 	motion.CharmUnitFlags = 0
 	motion.CharmFaction = 0
 	motion.CharmOwnerGUID = 0
@@ -2451,6 +2464,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					hasted := calcParryHastedRemaining(rem, pMainSpeed)
 					target.Sess.lastSwing = now.Add(-(pMainSpeed - hasted))
 				}
+			}
+
+			// Unit::ProcSkillsAndReactives victim arm (Unit.cpp:10283-10324): a
+			// dodged/parried/blocked creature swing arms the player victim's
+			// reactive aura states (Revenge/Counterattack usability) for the
+			// 4000ms window.
+			if isPlayerVictim && target.Sess != nil {
+				target.Sess.procReactiveVictimArms(outcome)
 			}
 
 			overkill := uint32(0)

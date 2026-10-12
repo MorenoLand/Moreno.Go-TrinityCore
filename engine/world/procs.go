@@ -356,10 +356,240 @@ func (s *session) procWeaponEnchantments(ctx context.Context, target combatTarge
 	}
 
 	encID := s.getEquipmentEnchant(slot)
+	// Player::CastItemCombatSpell (Player.cpp:8055): the item-template
+	// CHANCE_ON_HIT arm runs on every damaging melee event, independent of
+	// whether the swinging weapon carries a combat enchant.
+	s.procItemCombatSpells(ctx, target, attType)
 	if encID == 0 {
 		return
 	}
 	s.fireWeaponEnchantProc(ctx, target, encID, attTime)
+}
+
+// itemSpellTriggerChanceOnHit mirrors ITEM_SPELLTRIGGER_CHANCE_ON_HIT
+// (ItemTemplate.h:82): template spells evaluated by
+// Player::CastItemCombatSpell (Player.cpp:8105) on damaging melee events.
+const itemSpellTriggerChanceOnHit = 2
+
+// weaponProcChancePercent mirrors Unit::GetWeaponProcChance (Unit.cpp:8285-8294):
+// the normalized proc chance for weapon attack speed. In the swing path the
+// just-fired attack's timer is still ready, so attType selects the arm
+// directly: mainhand swings use attackTime*1.8/1000, offhand swings use
+// attackTime*1.6/1000 (the C++ isAttackReady/haveOffhandWeapon gates collapse
+// to this at the call site inside AttackerStateUpdate).
+func weaponProcChancePercent(attType protocol.WeaponAttackType, mainTime, offTime uint32) float64 {
+	if attType == protocol.OffAttack {
+		return float64(offTime) * 1.6 / 1000.0
+	}
+	return float64(mainTime) * 1.8 / 1000.0
+}
+
+// itemCombatSpellEntry is one item_template spell row relevant to
+// Player::CastItemCombatSpell.
+type itemCombatSpellEntry struct {
+	spellID uint32
+	trigger uint32
+	ppm     float64
+}
+
+// itemCombatSpellInfo caches an item template's class plus its spell rows
+// for the CastItemCombatSpell evaluation.
+type itemCombatSpellInfo struct {
+	class  uint32
+	spells [5]itemCombatSpellEntry
+}
+
+// getItemCombatSpellInfo returns the cached class + spell rows for an item
+// template, loading them from the world DB's item_template on first use.
+// Mirrors the ItemTemplate::Spells data Player::CastItemCombatSpell
+// (Player.cpp:8055-8148) reads.
+func (s *Server) getItemCombatSpellInfo(ctx context.Context, entry uint32) *itemCombatSpellInfo {
+	if s == nil || entry == 0 {
+		return nil
+	}
+	s.itemCombatSpellMu.RLock()
+	if s.itemCombatSpells != nil {
+		if info, ok := s.itemCombatSpells[entry]; ok {
+			s.itemCombatSpellMu.RUnlock()
+			return info
+		}
+	}
+	s.itemCombatSpellMu.RUnlock()
+	if s.WorldStore == nil || s.WorldStore.DB == nil || ctx == nil {
+		return nil
+	}
+	var class uint32
+	var ids, triggers [5]uint32
+	var ppms [5]float64
+	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT class,
+		spellid_1, spelltrigger_1, spellppmRate_1,
+		spellid_2, spelltrigger_2, spellppmRate_2,
+		spellid_3, spelltrigger_3, spellppmRate_3,
+		spellid_4, spelltrigger_4, spellppmRate_4,
+		spellid_5, spelltrigger_5, spellppmRate_5
+		FROM item_template WHERE entry = ? LIMIT 1`, entry).Scan(&class,
+		&ids[0], &triggers[0], &ppms[0],
+		&ids[1], &triggers[1], &ppms[1],
+		&ids[2], &triggers[2], &ppms[2],
+		&ids[3], &triggers[3], &ppms[3],
+		&ids[4], &triggers[4], &ppms[4])
+	if err != nil {
+		return nil
+	}
+	info := &itemCombatSpellInfo{class: class}
+	for i := 0; i < 5; i++ {
+		info.spells[i] = itemCombatSpellEntry{spellID: ids[i], trigger: triggers[i], ppm: ppms[i]}
+	}
+	s.itemCombatSpellMu.Lock()
+	if s.itemCombatSpells == nil {
+		s.itemCombatSpells = make(map[uint32]*itemCombatSpellInfo)
+	}
+	s.itemCombatSpells[entry] = info
+	s.itemCombatSpellMu.Unlock()
+	return info
+}
+
+// procItemCombatSpells mirrors the item-template arm of
+// Player::CastItemCombatSpell (Player.cpp:8055-8148): every equipped item's
+// ITEM_SPELLTRIGGER_CHANCE_ON_HIT template spells are evaluated on the
+// damaging melee event. Broken items are skipped; weapon-class items only
+// proc from the slot matching the swing (mainhand/offhand/ranged). The
+// extra-attacks gate (m_extraAttacks + SPELL_EFFECT_ADD_EXTRA_ATTACKS,
+// Player.cpp:8135) aborts the whole evaluation. Chance resolution:
+// SpellPPMRate -> PPM chance on the swing's weapon speed, else the DBC
+// ProcChance, else (chance > 100, i.e. unset) the GetWeaponProcChance
+// normalized fallback. Documented deltas: the CanUseAttackType disarm
+// gate has no Go disarm-flag model; the BASE_ATTACK
+// IsUseEquipedWeapon/feral-form arm is skipped (Go's shapeshift weapon
+// usability is not modeled per swing).
+func (s *session) procItemCombatSpells(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType) {
+	if s == nil || s.player == nil || target.GUID == 0 || target.GUID == s.playerGUID || ctx == nil {
+		return
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	type slotEntry struct {
+		slot  uint8
+		entry uint32
+		info  *itemCombatSpellInfo
+	}
+	var candidates []slotEntry
+	for slot := uint8(0); slot < uint8(equipmentSlotEnd); slot++ {
+		entry := s.getEquipmentItem(slot)
+		if entry == 0 {
+			continue
+		}
+		info := s.server.getItemCombatSpellInfo(ctx, entry)
+		if info == nil {
+			continue
+		}
+		hasOnHit := false
+		for i := 0; i < 5; i++ {
+			if info.spells[i].spellID != 0 && info.spells[i].trigger == itemSpellTriggerChanceOnHit {
+				hasOnHit = true
+				break
+			}
+		}
+		if !hasOnHit {
+			continue
+		}
+		candidates = append(candidates, slotEntry{slot: slot, entry: entry, info: info})
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	// Broken-item skip (Player.cpp:8063: !item->IsBroken()): one durability
+	// lookup for the equipped candidates.
+	broken := make(map[uint8]bool)
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.durability
+			FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ?`, s.playerGUID, equipmentSlotEnd)
+		if err == nil {
+			durBySlot := make(map[uint8]uint32)
+			for rows.Next() {
+				var slot int64
+				var dur uint32
+				if rows.Scan(&slot, &dur) == nil && slot >= 0 && slot < int64(equipmentSlotEnd) {
+					durBySlot[uint8(slot)] = dur
+				}
+			}
+			rows.Close()
+			for _, c := range candidates {
+				if tmpl, ok := s.server.getItemStoreTemplateInfo(ctx, c.entry); ok && tmpl.MaxDurability > 0 {
+					if dur, found := durBySlot[c.slot]; found && dur == 0 {
+						broken[c.slot] = true
+					}
+				}
+			}
+		}
+	}
+	// Weapon-class slot match (Player.cpp:8068-8089): the swinging slot's
+	// weapon alone procs — mainhand for BASE, offhand for OFF, ranged for RANGED.
+	wantSlot := uint8(255)
+	if attType == protocol.BaseAttack {
+		wantSlot = 15 // EQUIPMENT_SLOT_MAINHAND
+	} else if attType == protocol.OffAttack {
+		wantSlot = 16 // EQUIPMENT_SLOT_OFFHAND
+	} else if attType == protocol.RangedAttack {
+		wantSlot = 17 // EQUIPMENT_SLOT_RANGED
+	}
+	mainTime := s.player.AttackTime
+	if mainTime == 0 {
+		mainTime = 2000
+	}
+	offTime := s.player.OffhandAttackTime
+	if offTime == 0 {
+		offTime = 2000
+	}
+	for _, c := range candidates {
+		if broken[c.slot] {
+			continue
+		}
+		if c.info.class == itemClassWeapon && c.slot != wantSlot {
+			continue
+		}
+		for i := 0; i < 5; i++ {
+			sp := c.info.spells[i]
+			if sp.spellID == 0 || sp.trigger != itemSpellTriggerChanceOnHit {
+				continue
+			}
+			spell, ok, err := s.server.Data.Spell(sp.spellID)
+			if err != nil || !ok {
+				continue
+			}
+			// Player.cpp:8135-8136: an extra-attack swing never procs an
+			// extra-attack spell — aborts the whole evaluation.
+			if s.extraAttacks > 0 && spellHasEffect(spell, spellEffectAddExtraAttacks) {
+				return
+			}
+			chance := float64(spell.ProcChance)
+			if sp.ppm > 0 {
+				// Player.cpp:8140-8143: PPM chance on the swinging weapon's speed.
+				speed := mainTime
+				if attType == protocol.OffAttack {
+					speed = offTime
+				}
+				if !RollPPMChance(sp.ppm, speed) {
+					continue
+				}
+			} else {
+				// Player.cpp:8144-8145: unset ProcChance (>100 in C++'s
+				// float compare) falls back to the normalized weapon proc
+				// chance.
+				if chance > 100 {
+					chance = weaponProcChancePercent(attType, mainTime, offTime)
+				}
+				if chance <= 0 || rand.Float64()*100 >= chance {
+					continue
+				}
+			}
+			// CastSpell(victim, spellId, item) — triggered (Player.cpp:8146).
+			s.castSpellDirect(ctx, sp.spellID, target.GUID)
+		}
+	}
 }
 
 // fireWeaponEnchantProc evaluates the PPM/chance roll for one weapon enchant ID
@@ -427,6 +657,11 @@ func (s *session) procWeaponEnchantProcsFromSpellHit(ctx context.Context, target
 	if attTime == 0 {
 		attTime = 2000
 	}
+	// The item-template CHANCE_ON_HIT arm of Player::CastItemCombatSpell
+	// (Player.cpp:8055) also evaluates on melee/ranged damage-class spell
+	// hits; the mainhand slot drives the weapon match, like the enchant
+	// arm below. It runs independent of the enchant lookup.
+	s.procItemCombatSpells(ctx, target, protocol.BaseAttack)
 	encID := s.getEquipmentEnchant(uint8(15)) // equipSlotMainHand
 	if encID == 0 || s.enchantProcWhiteHitOnly(encID) {
 		return

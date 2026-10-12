@@ -234,6 +234,11 @@ type Server struct {
 	enchantProcAttrs       map[uint32]uint32
 	itemTemplateMu         sync.RWMutex
 	itemTemplates          map[uint32]itemTemplateClassInfo
+	// itemCombatSpellMu guards itemCombatSpells: per-item-template cache of
+	// ITEM_SPELLTRIGGER_CHANCE_ON_HIT template spells for
+	// Player::CastItemCombatSpell (Player.cpp:8105).
+	itemCombatSpellMu      sync.RWMutex
+	itemCombatSpells       map[uint32]*itemCombatSpellInfo
 	itemHyperlinkMu        sync.RWMutex
 	itemHyperlinkTemplates map[uint32]itemHyperlinkTemplate
 	itemStoreTemplateMu    sync.RWMutex
@@ -492,47 +497,52 @@ type session struct {
 	extraAttacks              uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings
 	comboPoints               uint8  // Unit::m_comboPoints (Unit.h) — banked combo points on comboTargetGUID
 	comboTargetGUID           uint64 // Unit::m_comboTarget (Unit.h) — unit the combo points are banked against
-	lastPotionId              uint32 // Player::m_lastPotionId (Player.h:2337) — last potion/cooldown-on-event item used in combat; blocks the next potion cast
-	guildInvitedID            uint32
-	guildInviterGUID          uint64
-	groupID                   uint64 // GUID of the group this player is in (0 = no group)
-	pendingGroupLeader        uint64 // GUID of the player who invited us (0 = no invite pending)
-	lastStreamX               float32
-	lastStreamY               float32
-	lastStreamZ               float32
-	latency                   atomic.Uint32
-	lastPing                  time.Time
-	overSpeedPings            uint32
-	deathExpireTime           int64
-	deathTimer                time.Time
-	pvpDeath                  bool // PLAYER_EXTRA_PVP_DEATH analog (Player.h:450/971): Unit::Kill records it, CreateCorpse consumes it
-	resurrection              *resurrectionData
-	earnedAchievements        map[uint32]uint32
-	criteriaProgress          map[uint32]*criteriaProgressState
-	timedCriteria             map[uint32]*time.Timer
-	inFlight                  bool
-	buyback                   [12]*buybackSlot
-	currentBuybackSlot        uint8
-	arenaTeamInvited          uint32
-	bgQueues                  [2]bgQueueEntry
-	afkReporters              map[uint64]struct{}
-	afkReportedCount          uint8     // Player::CanReportAfkDueToLimit (Player.cpp:22514): 15 reports per 5 minutes
-	afkReportWindowEnd        time.Time // lazy reset point for afkReportedCount (== Player::UpdateAfkReport, Player.cpp:20715)
-	targetGlyphSlot           uint8
-	activeCast                *activeCastState
-	nextSwing                 *queuedNextSwing // CURRENT_MELEE_SPELL slot (Unit.h:572), castMu-guarded like activeCast
-	summonExpire              time.Time
-	summonerGUID              uint64
-	summonMap                 uint32
-	summonX                   float32
-	summonY                   float32
-	summonZ                   float32
-	summonO                   float32
-	summonLocSet              bool
-	activeChannel             *activeChannelState
-	fishingBobberGUID         uint64 // live fishing bobber: Go arms no activeChannel for fishing, so the channel-cancel paths clear it via cancelFishingBobber
-	runes                     *dkRuneState
-	castMu                    sync.Mutex
+	// reactiveUntil mirrors Unit::m_reactiveTimer (Unit.h:707-717):
+	// per-reactive-type expiry for the ProcSkillsAndReactives arms
+	// (defense / hunter-parry / overpower / wolverine-bite), each armed for
+	// REACTIVE_TIMER_START (4000ms). Indexed by the reactive* constants.
+	reactiveUntil      [4]time.Time
+	lastPotionId       uint32 // Player::m_lastPotionId (Player.h:2337) — last potion/cooldown-on-event item used in combat; blocks the next potion cast
+	guildInvitedID     uint32
+	guildInviterGUID   uint64
+	groupID            uint64 // GUID of the group this player is in (0 = no group)
+	pendingGroupLeader uint64 // GUID of the player who invited us (0 = no invite pending)
+	lastStreamX        float32
+	lastStreamY        float32
+	lastStreamZ        float32
+	latency            atomic.Uint32
+	lastPing           time.Time
+	overSpeedPings     uint32
+	deathExpireTime    int64
+	deathTimer         time.Time
+	pvpDeath           bool // PLAYER_EXTRA_PVP_DEATH analog (Player.h:450/971): Unit::Kill records it, CreateCorpse consumes it
+	resurrection       *resurrectionData
+	earnedAchievements map[uint32]uint32
+	criteriaProgress   map[uint32]*criteriaProgressState
+	timedCriteria      map[uint32]*time.Timer
+	inFlight           bool
+	buyback            [12]*buybackSlot
+	currentBuybackSlot uint8
+	arenaTeamInvited   uint32
+	bgQueues           [2]bgQueueEntry
+	afkReporters       map[uint64]struct{}
+	afkReportedCount   uint8     // Player::CanReportAfkDueToLimit (Player.cpp:22514): 15 reports per 5 minutes
+	afkReportWindowEnd time.Time // lazy reset point for afkReportedCount (== Player::UpdateAfkReport, Player.cpp:20715)
+	targetGlyphSlot    uint8
+	activeCast         *activeCastState
+	nextSwing          *queuedNextSwing // CURRENT_MELEE_SPELL slot (Unit.h:572), castMu-guarded like activeCast
+	summonExpire       time.Time
+	summonerGUID       uint64
+	summonMap          uint32
+	summonX            float32
+	summonY            float32
+	summonZ            float32
+	summonO            float32
+	summonLocSet       bool
+	activeChannel      *activeChannelState
+	fishingBobberGUID  uint64 // live fishing bobber: Go arms no activeChannel for fishing, so the channel-cancel paths clear it via cancelFishingBobber
+	runes              *dkRuneState
+	castMu             sync.Mutex
 	// redirectThreatRegistry mirrors ThreatManager::_redirectRegistry
 	// (ThreatManager.h): spell id -> redirect victim guid -> percent,
 	// populated by SPELL_EFFECT_REDIRECT_THREAT (Spell::EffectRedirectThreat,
