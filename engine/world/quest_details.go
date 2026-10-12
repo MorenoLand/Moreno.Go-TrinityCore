@@ -425,6 +425,15 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 	}
+	// Player::AbandonQuest (Player.cpp:15578-15598): BIND_QUEST_ITEM copies
+	// of the required/source item lists are destroyed. The TakeQuestSourceItem
+	// gate and source-item destruction are vacuous in Go (Go never grants
+	// SrcItemId at accept); the handler's PvP re-arm is a provable no-op
+	// (C++ recomputes IsHostile while the quest is still in the quest log).
+	// AchievementMgr::RemoveTimedAchievement (AchievementMgr.cpp:1487-1501):
+	// the abandoned quest's timed accept criteria lose their timers.
+	s.destroyQuestItems(ctx, questID)
+	s.removeTimedAchievements(timedTypeQuest, questID)
 	// Eluna PLAYER_EVENT_ON_QUEST_ABANDON (38): Eluna::OnQuestAbandon
 	// (PlayerHooks.cpp:101-107), (event, player, questId), void
 	// (CallAllFunctions). CMSG_QUESTLOG_REMOVE_QUEST (QuestHandler.cpp:449)

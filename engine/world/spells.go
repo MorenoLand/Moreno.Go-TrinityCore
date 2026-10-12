@@ -32757,10 +32757,10 @@ func (s *session) sendDurabilityDamageLog(spellID uint32, targetGUID uint64, ite
 // (147) HIT_TARGET arm, per player hit target: only an INCOMPLETE quest can
 // fail; the status becomes QUEST_STATUS_FAILED (5), the quest-log slot gets
 // timer 1 and QUEST_STATE_FAIL (0x2), and SMSG_QUESTGIVER_QUEST_FAILED
-// (questId + the default EQUIP_ERR_OK reason) goes out. Required quest items
-// with BIND_QUEST_ITEM bonding are destroyed (DestroyItemCount 9999). The
-// completed-timed-quest special arm needs the timed-quest model, which Go
-// does not track (documented no-bridge).
+// (questId + the default EQUIP_ERR_OK reason) goes out. Required and source
+// quest items with BIND_QUEST_ITEM bonding are destroyed (DestroyItemCount
+// 9999). The completed-timed-quest special arm needs the timed-quest model,
+// which Go does not track (documented no-bridge).
 func (s *session) handleEffectQuestFail(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.server == nil {
 		return
@@ -32803,25 +32803,28 @@ func (s *session) handleEffectQuestFail(ctx context.Context, eff wotlk.SpellEffe
 }
 
 // destroyQuestItems mirrors the quest-item destruction tail of
-// Player::FailQuest (Player.cpp:15563-15568): every RequiredItemId with a
-// positive RequiredItemCount and BIND_QUEST_ITEM (4) bonding is destroyed
-// (DestroyItemCount 9999).
+// Player::FailQuest (Player.cpp:15563-15568) and Player::AbandonQuest
+// (Player.cpp:15578-15598): every RequiredItemId (QUEST_ITEM_OBJECTIVES_COUNT)
+// and every ItemDrop source item (QUEST_SOURCE_ITEM_IDS_COUNT) with a positive
+// count and BIND_QUEST_ITEM (4) bonding is destroyed (DestroyItemCount 9999).
 func (s *session) destroyQuestItems(ctx context.Context, questID uint32) {
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
-	var itemIDs [6]uint32
-	var itemCounts [6]uint32
+	var itemIDs, itemCounts [10]uint32
 	if err := wdb.QueryRowContext(ctx, `SELECT RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5, RequiredItemId6,
-		RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6
+		RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6,
+		ItemDrop1, ItemDrop2, ItemDrop3, ItemDrop4, ItemDropQuantity1, ItemDropQuantity2, ItemDropQuantity3, ItemDropQuantity4
 		FROM quest_template WHERE ID = ?`, questID).Scan(
 		&itemIDs[0], &itemIDs[1], &itemIDs[2], &itemIDs[3], &itemIDs[4], &itemIDs[5],
-		&itemCounts[0], &itemCounts[1], &itemCounts[2], &itemCounts[3], &itemCounts[4], &itemCounts[5]); err != nil {
+		&itemCounts[0], &itemCounts[1], &itemCounts[2], &itemCounts[3], &itemCounts[4], &itemCounts[5],
+		&itemIDs[6], &itemIDs[7], &itemIDs[8], &itemIDs[9],
+		&itemCounts[6], &itemCounts[7], &itemCounts[8], &itemCounts[9]); err != nil {
 		return
 	}
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 10; i++ {
 		if itemIDs[i] == 0 || itemCounts[i] == 0 {
 			continue
 		}

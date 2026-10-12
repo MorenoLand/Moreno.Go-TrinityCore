@@ -1171,6 +1171,31 @@ func (s *session) removeCriteriaProgress(criteriaID uint32) {
 	}
 }
 
+// removeTimedAchievements mirrors AchievementMgr::RemoveTimedAchievement
+// (AchievementMgr.cpp:1487-1501): for every timed criteria of the given type
+// whose StartAsset matches the entry and that still has an armed timer, drop
+// the progress (SMSG_CRITERIA_DELETED) and kill the timer. The quest-abandon
+// path calls this so a timed quest-accept criterion dies with the quest.
+func (s *session) removeTimedAchievements(timedType, entry uint32) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	list := achievementIndex.byTimedEvent[typeAssetKey(timedType, entry)]
+	matched := make([]achievementCriteriaEntry, len(list))
+	copy(matched, list)
+	achievementIndex.mu.RUnlock()
+	if s.timedCriteria == nil {
+		return
+	}
+	for _, criterion := range matched {
+		if _, running := s.timedCriteria[criterion.ID]; running {
+			s.removeCriteriaProgress(criterion.ID)
+		}
+	}
+}
+
 // expireTimedAchievement mirrors the UpdateTimedAchievements expiry path.
 func (s *session) expireTimedAchievement(criteriaID uint32) {
 	s.removeCriteriaProgress(criteriaID)
