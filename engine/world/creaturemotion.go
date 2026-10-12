@@ -597,11 +597,19 @@ func (s *Server) storeCreatureMotion(mapID, instanceID uint32, guid uint64, moti
 // 2.5, and RunSpeed stayed a flat 7.0 instead of 7*speed_run (8.0 default).
 func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeedRate, runSpeedRate float32, currentHealth uint32) *creatureMotion {
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
-	return s.motionForLocked(ctx, guid, entry, mapID, instanceID, x, y, z, orientation, moveType, wander, walkSpeedRate, runSpeedRate, currentHealth)
+	motion, created := s.motionForLocked(ctx, guid, entry, mapID, instanceID, x, y, z, orientation, moveType, wander, walkSpeedRate, runSpeedRate, currentHealth)
+	s.motionMu.Unlock()
+	// Eluna INSTANCE_EVENT_ON_CREATURE_CREATE (5) fires from
+	// Creature::AddToWorld (Creature.cpp:301); the funnel materializes the
+	// creature on the map, so it fires here — after the lock is released,
+	// since Lua handlers can call back into the motion registry.
+	if created {
+		s.triggerInstanceCreatureCreate(motion)
+	}
+	return motion
 }
 
-func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeedRate, runSpeedRate float32, currentHealth uint32) *creatureMotion {
+func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeedRate, runSpeedRate float32, currentHealth uint32) (*creatureMotion, bool) {
 	motions := s.motionMapLocked(mapID, instanceID)
 	key := creatureWorldGUID(guid, entry)
 	motion := motions[key]
@@ -679,7 +687,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 		s.autoBalanceModifyCreatureAttributes(ctx, motion, true)
 	}
 	motion.Refreshed = time.Now()
-	return motion
+	return motion, created
 }
 
 func (s *Server) relocateTransportCreatureMotions(ctx context.Context, passengers []creatureSpawn) {
@@ -695,7 +703,7 @@ func (s *Server) relocateTransportCreatureMotions(ctx context.Context, passenger
 		}
 		key := creatureWorldGUID(passenger.GUID, passenger.Entry)
 		isNew := s.motionMapLocked(passenger.Map, 0)[key] == nil
-		motion := s.motionForLocked(ctx, passenger.GUID, passenger.Entry, passenger.Map, 0, passenger.X, passenger.Y, passenger.Z, passenger.Orientation, 0, 0, passenger.WalkSpeed, passenger.RunSpeed, passenger.Health)
+		motion, _ := s.motionForLocked(ctx, passenger.GUID, passenger.Entry, passenger.Map, 0, passenger.X, passenger.Y, passenger.Z, passenger.Orientation, 0, 0, passenger.WalkSpeed, passenger.RunSpeed, passenger.Health)
 		motion.TransportGUID = passenger.TransportGUID
 		motion.Map, motion.InstanceID = passenger.Map, 0
 		motion.HomeX, motion.HomeY, motion.HomeZ = passenger.X, passenger.Y, passenger.Z

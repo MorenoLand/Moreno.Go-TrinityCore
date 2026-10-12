@@ -1254,6 +1254,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateAVBattles(now)
 			s.updateEOTSBattles(now)
 			s.updateSABattles(now)
+			s.updateInstanceScriptTicks(ctx, diff)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}
 	}

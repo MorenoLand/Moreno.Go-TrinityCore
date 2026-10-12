@@ -2,6 +2,8 @@ package world
 
 import (
 	"context"
+	"strconv"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -99,6 +101,28 @@ func (s *Server) triggerInstanceGameObjectCreate(dyn *dynamicGameObjectState) {
 	}
 }
 
+// triggerInstanceCreatureCreate dispatches Eluna INSTANCE_EVENT_ON_CREATURE_CREATE
+// (5), fired from Creature::AddToWorld (Creature.cpp:301) via the instance's zone
+// script: (event, instance_data, map, creature). Only dynamically-materialized
+// motions pass through the Go motion funnel (motionFor) — static template spawns
+// are per-client update packets with no server-side AddToWorld, the same
+// documented delta as the INSTANCE_EVENT_ON_GAMEOBJECT_CREATE bridge.
+// Direct-constructed motions (temp summons, boss minions, totems, pets) bypass
+// the funnel and don't fire; documented delta. Returns mirror the C++ call,
+// which discards them (CallAllFunctions).
+func (s *Server) triggerInstanceCreatureCreate(motion *creatureMotion) {
+	if s == nil || motion == nil || motion.InstanceID == 0 || !s.isInstanceScriptMap(motion.Map) || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), motion.Map, motion.InstanceID, scripting.InstanceEventOnCreatureCreate, luaInstanceData(), instanceMapObject(motion.Map, motion.InstanceID, s.Data), creature); err != nil {
+		s.debug("lua instance creature-create event failed", "map", motion.Map, "instance", motion.InstanceID, "error", err)
+	}
+}
+
 // instanceEncounterHooked reports whether any Eluna
 // INSTANCE_EVENT_ON_CHECK_ENCOUNTER_IN_PROGRESS (7) handler returns true,
 // mirroring ElunaInstanceAI::IsEncounterInProgress
@@ -124,4 +148,48 @@ func (s *session) instanceEncounterHooked(ctx context.Context, mapID, instanceID
 		}
 	}
 	return false
+}
+
+// updateInstanceScriptTicks dispatches Eluna INSTANCE_EVENT_ON_UPDATE (3) per
+// instance map carrying registered handlers, fired from
+// ElunaInstanceAI::Update (LuaEngine/ElunaInstanceAI.h:118-130) on every
+// Map::Update: (event, instance_data, map, diff). C++ installs the
+// ElunaInstanceAI shim (and thus runs the update hook) only on maps that have
+// bindings (Eluna::GetInstanceData, LuaEngine.cpp:1238-1255), so Go pre-checks
+// Runtime.HasHook on both the map and instance binding keys — the Go model of
+// START_HOOK's HasBindingsFor gate. Fires only for instance maps with players;
+// a player-less Go instance has no materialized map update at all. diff is the
+// world-tick delta in ms (C++ uint32 diff). Returns mirror the C++ call, which
+// discards them (CallAllFunctions).
+func (s *Server) updateInstanceScriptTicks(ctx context.Context, diff time.Duration) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	scripts := s.Features.Scripts
+	type instanceKey struct {
+		mapID      uint32
+		instanceID uint32
+	}
+	seen := map[instanceKey]struct{}{}
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		if sess == nil || sess.player == nil || sess.player.InstanceID == 0 {
+			continue
+		}
+		seen[instanceKey{sess.player.Map, sess.player.InstanceID}] = struct{}{}
+	}
+	s.sessionsMu.RUnlock()
+	for k := range seen {
+		if !s.isInstanceScriptMap(k.mapID) {
+			continue
+		}
+		mapKind := "map:" + strconv.FormatUint(uint64(k.mapID), 10)
+		instKind := "instance:" + strconv.FormatUint(uint64(k.instanceID), 10)
+		if !scripts.HasHook(mapKind, scripting.InstanceEventOnUpdate) && !scripts.HasHook(instKind, scripting.InstanceEventOnUpdate) {
+			continue
+		}
+		if _, err := scripts.TriggerInstanceEvent(ctx, k.mapID, k.instanceID, scripting.InstanceEventOnUpdate, luaInstanceData(), instanceMapObject(k.mapID, k.instanceID, s.Data), uint32(diff.Milliseconds())); err != nil {
+			s.debug("lua instance update event failed", "map", k.mapID, "instance", k.instanceID, "error", err)
+		}
+	}
 }
