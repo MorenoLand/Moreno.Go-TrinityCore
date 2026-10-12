@@ -502,6 +502,11 @@ const (
 	summonCategoryPet    = 2 // SUMMON_CATEGORY_PET
 	summonCategoryPuppet = 3 // SUMMON_CATEGORY_PUPPET — the charm arm has no Go bridge (see checkSummonCast)
 
+	// Summon titles for the generic-summon effect arm
+	// (SpellEffects.cpp:2319-2342, SharedDefines.h:3305-3321).
+	summonTitleTotem     = 4  // SUMMON_TYPE_TOTEM
+	summonTitleLightwell = 11 // SUMMON_TYPE_LIGHTWELL
+
 	// Implicit targets for the open-lock CheckCast leg (Spell.cpp:5725-5791,
 	// SharedDefines.h:1459-1462).
 	implicitTargetGameObjectTarget     uint32 = 23 // TARGET_GAMEOBJECT_TARGET
@@ -10339,10 +10344,34 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.sendSummonObjectLog(spellID, eff.Effect, guid)
 				}
 			case 28: // SPELL_EFFECT_SUMMON
-				// Spell::EffectSummonType (SpellEffects.cpp:2343/2402) logs
-				// the summoned creature via ExecuteLogEffectSummonObject.
-				if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue)); guid != 0 {
-					s.sendSummonObjectLog(spellID, eff.Effect, guid)
+				// Spell::EffectSummonType (SpellEffects.cpp:2194-2405) HIT arm.
+				// A zero entry returns silently (SpellEffects.cpp:2199-2200), and
+				// a missing SummonProperties.dbc row logs and returns
+				// (SpellEffects.cpp:2202-2208). The SUMMON_TYPE_TOTEM/LIGHTWELL
+				// arm summons via Map::SummonCreature (SpellEffects.cpp:2319-2342);
+				// its Go twin is summonTotem, already run for totem spells in the
+				// post-loop — routing those through handleSummonPet would mint a
+				// permanent character_pet row (and a bogus PetGUID) on every totem
+				// cast. Lightwell has no Go twin and stays a documented no-bridge;
+				// every other title takes the guardian/pet path.
+				if eff.MiscValue != 0 {
+					summonTitle := uint32(0)
+					summonPropsKnown := true
+					if s.server != nil && s.server.Data != nil {
+						if props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB)); err == nil {
+							if !found {
+								s.debug("EffectSummonType: unhandled summon type", "miscValueB", eff.MiscValueB)
+								summonPropsKnown = false
+							} else {
+								summonTitle = props.Title
+							}
+						}
+					}
+					if summonPropsKnown && summonTitle != summonTitleTotem && summonTitle != summonTitleLightwell {
+						if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue)); guid != 0 {
+							s.sendSummonObjectLog(spellID, eff.Effect, guid)
+						}
+					}
 				}
 			case 101: // SPELL_EFFECT_FEED_PET
 				s.handleFeedPet(effCtx, spellID, target.ItemGUID, eff.TriggerSpell, uint8(effectIndex))
@@ -31859,19 +31888,39 @@ func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, h
 
 // handleEffectScriptEffect mirrors the SPELLFAMILY_GENERIC arms of
 // Spell::EffectScriptEffect (SpellEffects.cpp:3612-3749) that have a Go bridge.
+// Mug Transformation (41931): the first stack unit of item 38587 found in the
+// bags is consumed and triggered spell 42518 fires at the caster.
 // Onyxia Shadow Flame (22539, 22972, 22975-22985): a living hit target without
 // the Onyxia Scale Cloak aura (22683) is hit by triggered Shadow Flame 22682.
 // Brutallus Burn (45141/45151): a player hit target at or beyond the effect
 // radius without the Burn aura (46394) ignites via triggered 46394. The
-// remaining arms (Mug Transformation item hunt, Scarlet ghoul summons,
-// Wintergrasp RP-GG pickup/drop, Grab Crate vehicle) need item / temp-summon /
-// vehicle models Go lacks, and the sSpellScripts tail has no Go SpellScript
-// bridge (documented).
+// remaining arms (Scarlet ghoul summons, Wintergrasp RP-GG pickup/drop, Grab
+// Crate vehicle, Coyote Spirit/Blood Parrot despawns) need temp-summon /
+// position-cast / vehicle models Go lacks, and the sSpellScripts tail has no Go
+// SpellScript bridge (documented).
 func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, targetGUID uint64) {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
 		return
 	}
 	switch spellID {
+	case 41931:
+		// Mug Transformation (SpellEffects.cpp:3654-3685): hunt the bags for
+		// item 38587; on a hit consume one stack unit and fire triggered
+		// 42518 at the caster. C++ walks bags 19..255, slots 0..38 via
+		// GetItemByPos; Go's bag space is 1..4 (equipped bags) + 0 (backpack).
+		// The caster-is-player gate is vacuous (s.player is always set here).
+		for _, bag := range []uint8{1, 2, 3, 4, 0} {
+			for slot := uint8(0); slot < 39; slot++ {
+				itemGUID, itemEntry, _, err := s.inventoryItemAt(ctx, bag, slot)
+				if err != nil || itemGUID == 0 || uint32(itemEntry) != 38587 {
+					continue
+				}
+				if s.consumeInventoryItemByGUID(ctx, uint64(itemGUID), 1) {
+					s.castSpellDirect(ctx, 42518, s.playerGUID)
+				}
+				return
+			}
+		}
 	case 22539, 22972, 22975, 22976, 22977, 22978, 22979, 22980, 22981, 22982, 22983, 22984, 22985:
 		// Shadow Flame: !unitTarget || !IsAlive() -> return (whole effect arm).
 		alive := false

@@ -1160,11 +1160,14 @@ type TotemCategory struct {
 	TotemCategoryMask uint32
 }
 
-// SummonProperties mirrors SummonPropertiesEntry (DBCStructure.h:1653-1662):
-// only Control is read in world/ (the CheckCast summon gate).
+// SummonProperties mirrors SummonPropertiesEntry (DBCStructure.h:1653-1662).
 type SummonProperties struct {
 	ID      uint32 // SummonProperties.dbc field 0 = ID (DBCStructure.h:1656)
 	Control uint32 // SummonProperties.dbc field 1 = Control (DBCStructure.h:1657)
+	Faction uint32 // SummonProperties.dbc field 2 = Faction (DBCStructure.h:1658)
+	Title   uint32 // SummonProperties.dbc field 3 = Title (DBCStructure.h:1659)
+	Slot    uint32 // SummonProperties.dbc field 4 = Slot (DBCStructure.h:1660)
+	Flags   uint32 // SummonProperties.dbc field 5 = Flags (DBCStructure.h:1661)
 }
 
 func (s *Store) SummonProperties(id uint32) (SummonProperties, bool, error) {
@@ -1181,6 +1184,18 @@ func (s *Store) SummonProperties(id uint32) (SummonProperties, bool, error) {
 	}
 	props := SummonProperties{ID: id}
 	if props.Control, err = record.Uint32(1); err != nil {
+		return SummonProperties{}, false, err
+	}
+	if props.Faction, err = record.Uint32(2); err != nil {
+		return SummonProperties{}, false, err
+	}
+	if props.Title, err = record.Uint32(3); err != nil {
+		return SummonProperties{}, false, err
+	}
+	if props.Slot, err = record.Uint32(4); err != nil {
+		return SummonProperties{}, false, err
+	}
+	if props.Flags, err = record.Uint32(5); err != nil {
 		return SummonProperties{}, false, err
 	}
 	return props, true, nil

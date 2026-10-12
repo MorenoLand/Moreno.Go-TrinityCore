@@ -251,6 +251,11 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 
 	s.player.TotemSlots[slot] = totemGUID
 
+	// Spell::EffectSummonType's TOTEM/LIGHTWELL arm (SpellEffects.cpp:2319-2342)
+	// falls through to the tail that logs the summon via
+	// ExecuteLogEffectSummonObject (SpellEffects.cpp:2400-2403).
+	s.sendSummonObjectLog(spellID, spellEffectSummon, totemGUID)
+
 	// Send SMSG_TOTEM_CREATED
 	resp := protocol.NewBuffer(17)
 	resp.WriteU8(slot)
@@ -299,6 +304,15 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		s.server.activeTotems[s.playerGUID] = current
 		s.server.totemMu.Unlock()
 
+		// Spell::EffectSummonType's TOTEM arm (SpellEffects.cpp:2326-2341):
+		// Mana Tide Totem (16190) spawns with health at 10% of the caster's
+		// max health instead of the full effect damage.
+		totemHealth := uint32(100)
+		if spellID == 16190 && s.player.MaxHealth > 0 {
+			if pct := s.player.MaxHealth / 10; pct > 0 {
+				totemHealth = pct
+			}
+		}
 		// Register creature in creatureMotion
 		s.server.motionMu.Lock()
 		s.server.motionMapLocked(s.player.Map, s.player.InstanceID)[totemGUID] = &creatureMotion{
@@ -308,8 +322,8 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 			X:          totemX,
 			Y:          totemY,
 			Z:          totemZ,
-			Health:     100,
-			MaxHealth:  100,
+			Health:     totemHealth,
+			MaxHealth:  totemHealth,
 		}
 		s.server.motionMu.Unlock()
 	}
