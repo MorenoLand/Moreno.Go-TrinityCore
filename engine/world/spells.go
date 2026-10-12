@@ -18365,7 +18365,9 @@ func (s *session) handleCancelAura(payload []byte) bool {
 	if !spellIsPositive(spell) || spell.Attributes&spellAttributePassive != 0 {
 		return true
 	}
-	s.removeAura(spellID)
+	// WorldSession::HandleCancelAuraOpcode (SpellHandler.cpp:481): the
+	// player-cancel removal is AURA_REMOVE_BY_CANCEL, not the default mode.
+	s.removeAuraWithMode(spellID, auraRemoveByCancel)
 	// If spell being removed is a resource tracker, see if player was
 	// tracking both (herbs / minerals) and remove the other
 	if s.server != nil && s.server.Config.AllowTrackBothResources && spellHasAura(spell, spellAuraTrackResources) {
@@ -18376,7 +18378,7 @@ func (s *session) handleCancelAura(payload []byte) bool {
 			}
 		}
 		for _, trackedID := range tracked {
-			s.removeAura(trackedID)
+			s.removeAuraWithMode(trackedID, auraRemoveByCancel)
 		}
 	}
 	return true
@@ -19917,13 +19919,19 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	}
 }
 
-// auraRemoveMode mirrors the AuraRemoveMode gate on the aura-specific remove
-// legs (SpellAuras.cpp): some arms only run on non-default removals.
+// auraRemoveMode is the AuraRemoveMode enum (SpellAuraDefines.h:61-69):
+// scripted removes, player cancel, dispel/steal/absorb-destroy, natural
+// expiry, and death each carry their own mode, and the aura-specific
+// remove arms (Aura::HandleAuraSpecificMods, SpellAuras.cpp) gate on it.
 type auraRemoveMode uint8
 
 const (
-	auraRemoveByDefault auraRemoveMode = iota // charge spent / normal consume
-	auraRemoveByExpire                        // duration ran out
+	auraRemoveByNone       auraRemoveMode = iota // construction only, never a removal
+	auraRemoveByDefault                          // scripted remove, charge spent, no-stack purge
+	auraRemoveByCancel                           // CMSG_CANCEL_AURA / pet cancel (SpellHandler.cpp:481)
+	auraRemoveByEnemySpell                       // dispel, steal, absorb-aura destroy
+	auraRemoveByExpire                           // duration ran out
+	auraRemoveByDeath                            // RemoveAllAurasOnDeath (Unit.cpp:4355)
 )
 
 func (s *session) removeAura(spellID uint32) {
@@ -20567,8 +20575,11 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// arm of IsHostileTo rides isFriendlyToTarget). The successful-reflect
 	// consume path (checkSpellReflection) removes with the default mode, so
 	// this arm does not fire there — matching C++'s charge-spend
-	// AURA_REMOVE_BY_DEFAULT removal. Dispel/cancel/death removals still
-	// funnel through the default mode, so the arm misses those paths.
+	// AURA_REMOVE_BY_DEFAULT removal. Dispel/steal removals route
+	// AURA_REMOVE_BY_ENEMY_SPELL and player cancels route
+	// AURA_REMOVE_BY_CANCEL, so the arm fires on those paths as in C++;
+	// death removals still bypass the funnel (clearDeathAuras), and no-stack
+	// purges route BY_DEFAULT and correctly skip the strip.
 	if mode != auraRemoveByDefault {
 		s.removePartySpellReflectionAuras(spellID, removedCasterGUID)
 	}
@@ -21648,7 +21659,9 @@ func (s *session) expireSingleCastEntry(e singleCastEntry) {
 		cur := s.server.activeCreatureAuras[key][aura.SpellID]
 		s.server.auraMu.Unlock()
 		if cur == aura {
-			s.expireCreatureAura(key, aura.SpellID, aura.Slot)
+			// Single-target dance purge (Unit::_AddAura: (*itr)->Remove(),
+			// Unit.cpp:3411): AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
+			s.server.removeCreatureAura(key, aura.SpellID)
 		}
 		return
 	}
@@ -21663,7 +21676,7 @@ func (s *session) expireSingleCastEntry(e singleCastEntry) {
 	cur := ts.activeAuras[aura.SpellID]
 	ts.castMu.Unlock()
 	if cur == aura {
-		ts.expirePlayerAura(aura.SpellID)
+		ts.removeAura(aura.SpellID)
 	}
 }
 
@@ -22799,8 +22812,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// before the new aura's register.
 		targetSess.dropSpellMods(spell.ID)
 		targetSess.addSpellMods(aura)
+		// No-stack purge on apply (Unit::_RemoveNoStackAurasDueToAura,
+		// Unit.cpp:3666): AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
 		for _, purgeID := range purgeIDs {
-			targetSess.expirePlayerAura(purgeID.spellID)
+			targetSess.removeAura(purgeID.spellID)
 		}
 		for _, e := range scPurge {
 			s.expireSingleCastEntry(e)
@@ -23500,8 +23515,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	purge = append(purge, s.server.singleTargetNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
 	purge = append(purge, highest.purge...)
 	s.server.auraMu.Unlock()
+	// No-stack purge on apply: AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
 	for _, p := range purge {
-		s.expireCreatureAura(targetKey, p.spellID, p.slot)
+		s.server.removeCreatureAura(targetKey, p.spellID)
 	}
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)
@@ -25628,6 +25644,21 @@ func (s *session) periodicTriggerTarget(aura *activeAura) uint64 {
 }
 
 func (ts *session) expirePlayerAura(spellID uint32) {
+	ts.removePlayerAuraTimed(spellID, auraRemoveByExpire)
+}
+
+// dispelPlayerAura removes a fully-dispelled or stolen player aura. C++
+// routes these through AURA_REMOVE_BY_ENEMY_SPELL
+// (Unit::RemoveAurasDueToSpellByDispel / RemoveAurasDueToSpellBySteal,
+// Unit.cpp:3936+), never BY_EXPIRE: the expire-only legs — the
+// retain-combo-points withdrawal (which C++ runs only when
+// GetDuration()==0, SpellAuraEffects.cpp:HandleAuraRetainComboPoints) and
+// the final aligned periodic tick — do not run on dispel/steal.
+func (ts *session) dispelPlayerAura(spellID uint32) {
+	ts.removePlayerAuraTimed(spellID, auraRemoveByEnemySpell)
+}
+
+func (ts *session) removePlayerAuraTimed(spellID uint32, mode auraRemoveMode) {
 	ts.castMu.Lock()
 	var finalTick *activeAura
 	retainCombo := int8(0)
@@ -25637,12 +25668,10 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 			// AuraEffect::HandleAuraRetainComboPoints remove leg
 			// (SpellAuraEffects.cpp:4309-4324): the combo points banked by
 			// SPELL_EFFECT_ADD_COMBO_POINTS are withdrawn only when the aura
-			// expires by time (GetBase()->GetDuration() == 0) — a manual
-			// remove (dispel/cancel) keeps them. This function is the
-			// natural-expiry path for applyAuraToTarget auras; the legacy
-			// applyAura timer calls removeAura directly and cannot
-			// distinguish expiry, so it skips this leg.
-			if aura.AuraType == spellAuraRetainComboPoints {
+			// expires by time (GetBase()->GetDuration() == 0) — a dispel,
+			// steal, or cancel keeps them. This expiry-only leg is skipped
+			// for the enemy-spell mode.
+			if mode == auraRemoveByExpire && aura.AuraType == spellAuraRetainComboPoints {
 				amount := aura.Amount
 				if amount > 5 {
 					amount = 5
@@ -25665,8 +25694,10 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 			// itself runs after unlock, while the aura is still
 			// registered — like C++, where the last tick fires from
 			// AuraEffect::Update before Aura::Update removes the aura.
+			// Expiry-only: a dispel/steal removal (ModCharges/
+			// ModStackAmount, never Aura::Update) fires no final tick.
 			if aura.TickTimer != nil {
-				if !aura.TickInFlight && !aura.TickDueAt.IsZero() && !aura.TickDueAt.After(time.Now().Add(50*time.Millisecond)) {
+				if mode == auraRemoveByExpire && !aura.TickInFlight && !aura.TickDueAt.IsZero() && !aura.TickDueAt.After(time.Now().Add(50*time.Millisecond)) {
 					aura.TickTimer.Stop()
 					aura.TickTimer = nil
 					finalTick = aura
@@ -25691,10 +25722,9 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 		ts.executePeriodicTickOnPlayer(finalTick)
 	}
 	ts.dropSpellMods(spellID)
-	// Natural expiry maps to AURA_REMOVE_BY_EXPIRE, not the default mode:
-	// aura-specific remove legs gated on removeMode != AURA_REMOVE_BY_DEFAULT
-	// (e.g. Improved Spell Reflection's party strip) run here.
-	ts.removeAuraWithMode(spellID, auraRemoveByExpire)
+	// The mode selects which aura-specific remove arms run (e.g. Improved
+	// Spell Reflection's party strip fires on any non-default mode).
+	ts.removeAuraWithMode(spellID, mode)
 	if retainCombo != 0 {
 		ts.addSessionComboPoints(retainTarget, retainCombo)
 	}
@@ -27336,6 +27366,18 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 }
 
 func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot uint8) {
+	s.removeCreatureAuraTimed(key, spellID, slot, auraRemoveByExpire)
+}
+
+// dispelCreatureAura is the creature-aura counterpart of dispelPlayerAura:
+// a fully-dispelled creature aura is removed with AURA_REMOVE_BY_ENEMY_SPELL
+// (Unit::RemoveAurasDueToSpellByDispel, Unit.cpp:3936), so the expiry-only
+// final-tick leg does not run.
+func (s *session) dispelCreatureAura(key creatureAuraKey, spellID uint32, slot uint8) {
+	s.removeCreatureAuraTimed(key, spellID, slot, auraRemoveByEnemySpell)
+}
+
+func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, slot uint8, mode auraRemoveMode) {
 	if s.server == nil {
 		return
 	}
@@ -27408,7 +27450,9 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 					// Aura::Update zeroes the duration (SpellAuraEffects.cpp:
 					// 815-841), so a tick due within one world-update
 					// quantum of expiry fires instead of being dropped.
-					if !aura.TickInFlight && !aura.TickDueAt.IsZero() && !aura.TickDueAt.After(time.Now().Add(50*time.Millisecond)) {
+					// Expiry-only: a dispel removal (ModCharges/
+					// ModStackAmount, never Aura::Update) fires no final tick.
+					if mode == auraRemoveByExpire && !aura.TickInFlight && !aura.TickDueAt.IsZero() && !aura.TickDueAt.After(time.Now().Add(50*time.Millisecond)) {
 						aura.TickTimer.Stop()
 						aura.TickTimer = nil
 						finalTick = aura

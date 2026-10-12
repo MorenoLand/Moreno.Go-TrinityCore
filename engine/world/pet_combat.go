@@ -2189,8 +2189,9 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, caster.GUID, targetSess.activeAuras)...)
 		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
+		// No-stack purge on apply: AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
 		for _, purgeID := range purgeIDs {
-			targetSess.expirePlayerAura(purgeID.spellID)
+			targetSess.removeAura(purgeID.spellID)
 		}
 		for _, e := range scPurge {
 			s.expireSingleCastEntry(e)
@@ -2272,8 +2273,9 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	purge = append(purge, s.server.singleTargetNoStackPurge(spell, caster.GUID, s.server.activeCreatureAuras[targetKey])...)
 	purge = append(purge, highest.purge...)
 	s.server.auraMu.Unlock()
+	// No-stack purge on apply: AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
 	for _, p := range purge {
-		s.expireCreatureAura(targetKey, p.spellID, p.slot)
+		s.server.removeCreatureAura(targetKey, p.spellID)
 	}
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)

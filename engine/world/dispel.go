@@ -991,7 +991,9 @@ func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
 		return true
 	}
 	if removed {
-		ts.expirePlayerAura(spellID)
+		// Dispel full removal (Unit::RemoveAurasDueToSpellByDispel,
+		// Unit.cpp:3936): AURA_REMOVE_BY_ENEMY_SPELL, not BY_EXPIRE.
+		ts.dispelPlayerAura(spellID)
 		return true
 	}
 	ts.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, count)
@@ -1058,7 +1060,8 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 	s.server.auraMu.Unlock()
 
 	if aura == nil || removed {
-		s.expireCreatureAura(key, spellID, slot)
+		// Dispel full removal: AURA_REMOVE_BY_ENEMY_SPELL, not BY_EXPIRE.
+		s.dispelCreatureAura(key, spellID, slot)
 		return true
 	}
 	// AuraApplication::BuildUpdatePacket (SpellAuras.cpp:244) sends
@@ -2510,7 +2513,8 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 		}
 
 		for _, spID := range toRemove {
-			targetSess.expirePlayerAura(spID)
+			// Mass-dispel removal: AURA_REMOVE_BY_ENEMY_SPELL.
+			targetSess.dispelPlayerAura(spID)
 		}
 	} else if targetGUID != 0 && s.server != nil {
 		s.server.auraMu.Lock()
@@ -2558,7 +2562,8 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 		}
 
 		for _, item := range toRemove {
-			s.expireCreatureAura(key, item.spellID, item.slot)
+			// Mass-dispel removal: AURA_REMOVE_BY_ENEMY_SPELL.
+			s.dispelCreatureAura(key, item.spellID, item.slot)
 		}
 	}
 }
