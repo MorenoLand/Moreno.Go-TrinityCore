@@ -793,8 +793,11 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 	if damage >= target.player.Health {
 		target.player.Health = 0
 		target.sendPlayerUpdate()
-		// GM-issued damage has no player attacker.
+		// GM-issued damage has no player attacker in the kill chain, but
+		// C++ deals it with the GM as attacker (cs_misc.cpp:2207), so the
+		// Unit::Kill tail still fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6).
 		target.killPlayer(ctx, nil, false, false)
+		s.server.firePVPKillHook(ctx, s, target)
 		return
 	}
 	target.player.Health -= damage
@@ -842,8 +845,11 @@ func (s *session) handleCmdDie(ctx context.Context, args []string) {
 	}
 	target.player.Health = 0
 	target.sendPlayerUpdate()
-	// GM .die has no player attacker.
+	// GM .die has no player attacker in the kill chain, but C++ deals it
+	// with the GM as attacker (cs_misc.cpp:628), so the Unit::Kill tail
+	// still fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6).
 	target.killPlayer(ctx, nil, false, false)
+	s.server.firePVPKillHook(ctx, s, target)
 }
 
 // handleCmdDismount mirrors HandleDismountCommand (cs_misc.cpp:656-678, RBAC

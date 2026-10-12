@@ -14149,6 +14149,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target, nil)
+		// Eluna PLAYER_EVENT_ON_KILL_CREATURE (7): Unit::Kill tail
+		// (Unit.cpp:11466-11480), attacker is the player.
+		if s.server != nil {
+			if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+				s.server.fireCreatureKillHook(ctx, s, motion)
+			}
+		}
 		s.debug("target slain by spell", "account", s.accountName, "spell", spellID, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage

@@ -329,6 +329,16 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 		})
 		s.server.broadcastThreatClearInInstance(mapID, instanceID, guid)
 		s.onCreatureKilled(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID}, nil)
+		// Eluna PLAYER_EVENT_ON_KILL_CREATURE (7): Unit::Kill tail
+		// (Unit.cpp:11466-11480) — the shared damage keeps the original
+		// attacker (Unit.cpp:766-788); fires only for a direct player
+		// attacker (findSessionByGUID resolves players only, so pet/
+		// creature attackers correctly fire nothing).
+		if as := s.server.findSessionByGUID(attackerGUID); as != nil {
+			if victim := s.server.findCreatureMotion(mapID, instanceID, guid); victim != nil {
+				s.server.fireCreatureKillHook(ctx, as, victim)
+			}
+		}
 		return
 	}
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{

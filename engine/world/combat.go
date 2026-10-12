@@ -993,6 +993,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					s.server.creditHonorableKill(s, playerSess)
 					// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
 					playerSess.killPlayer(ctx, s, true, true)
+					// Eluna PLAYER_EVENT_ON_KILL_PLAYER (6): Unit::Kill tail
+					// (Unit.cpp:11466-11480), attacker and victim players.
+					s.server.firePVPKillHook(ctx, s, playerSess)
 					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
 					// pet arm — attacker is the player (player = attacker
 					// itself), so only the attacker's live pet gets
@@ -1098,6 +1101,13 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target, nil)
+		// Eluna PLAYER_EVENT_ON_KILL_CREATURE (7): Unit::Kill tail
+		// (Unit.cpp:11466-11480), attacker is the player.
+		if s.server != nil {
+			if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+				s.server.fireCreatureKillHook(ctx, s, motion)
+			}
+		}
 		s.debug("target slain by auto-attack", "account", s.accountName, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
@@ -1612,6 +1622,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					}
 					// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
 					vicSess.killPlayer(ctx, s, true, true)
+					// Eluna PLAYER_EVENT_ON_KILL_PLAYER (6): Unit::Kill tail
+					// (Unit.cpp:11466-11480), attacker and victim players.
+					s.server.firePVPKillHook(ctx, s, vicSess)
 					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
 					// pet arm — attacker is the player, so only the
 					// attacker's live pet gets KilledUnit(victim)
@@ -1709,6 +1722,13 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		buf.WritePackedGUID(s.playerGUID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
 		s.onCreatureKilled(ctx, target, nil)
+		// Eluna PLAYER_EVENT_ON_KILL_CREATURE (7): Unit::Kill tail
+		// (Unit.cpp:11466-11480), attacker is the player.
+		if s.server != nil {
+			if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+				s.server.fireCreatureKillHook(ctx, s, motion)
+			}
+		}
 		s.debug("target slain", "account", s.accountName, "guid", target.GUID)
 	} else {
 		if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {

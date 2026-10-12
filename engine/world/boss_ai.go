@@ -2468,6 +2468,9 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 				creatureKiller = s.findSessionByGUID(m.OwnerGUID)
 			}
 			vs.killPlayer(ctx, creatureKiller, false, true)
+			// Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8): Unit::Kill tail
+			// (Unit.cpp:11466-11480), attacker is the creature.
+			s.fireKilledByCreatureHook(ctx, m, vs)
 			if m.BossAI != nil {
 				m.BossAI.OnKillPlayer(ctx, s, m, victimGUID)
 			}

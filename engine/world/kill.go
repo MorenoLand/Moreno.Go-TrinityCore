@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -923,6 +924,41 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	if s.server != nil && s.player.Map == 628 {
 		s.server.handleICCreatureKilled(s, creatureEntry)
 	}
+}
+
+// firePVPKillHook fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6):
+// Eluna::OnPVPKill (PlayerHooks.cpp:155-161), (event, killer, killed), void
+// (CallAllFunctions). Unit::Kill tail (Unit.cpp:11466-11480): attacker and
+// victim are both players. No victim != attacker guard in C++.
+func (s *Server) firePVPKillHook(ctx context.Context, killer, victim *session) {
+	if s == nil || killer == nil || victim == nil {
+		return
+	}
+	killer.triggerPlayerEvent(ctx, scripting.PlayerEventKillPlayer, killer.luaPlayer(), victim.luaPlayer())
+}
+
+// fireCreatureKillHook fires Eluna PLAYER_EVENT_ON_KILL_CREATURE (7):
+// Eluna::OnCreatureKill (PlayerHooks.cpp:163-169), (event, killer, killed),
+// void (CallAllFunctions). Unit::Kill tail: attacker is a player, victim a
+// creature. Pet/wild-creature attackers fire nothing in C++
+// (attacker->ToPlayer() is nil), so only direct-player-attacker sites call this.
+func (s *Server) fireCreatureKillHook(ctx context.Context, killer *session, victim *creatureMotion) {
+	if s == nil || killer == nil || victim == nil {
+		return
+	}
+	killer.triggerPlayerEvent(ctx, scripting.PlayerEventKillCreature, killer.luaPlayer(), s.luaMotionCreature(victim))
+}
+
+// fireKilledByCreatureHook fires Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8):
+// Eluna::OnPlayerKilledByCreature (PlayerHooks.cpp:171-177),
+// (event, killer, killed), void (CallAllFunctions). Unit::Kill tail: attacker
+// is a creature, victim a player. For pet kills C++ pushes the pet itself
+// (attacker->ToCreature()), not the owner.
+func (s *Server) fireKilledByCreatureHook(ctx context.Context, killer *creatureMotion, victim *session) {
+	if s == nil || killer == nil || victim == nil {
+		return
+	}
+	victim.triggerPlayerEvent(ctx, scripting.PlayerEventKilledByCreature, s.luaMotionCreature(killer), victim.luaPlayer())
 }
 
 // grantXP applies XP with repeated level-ups and updates the client fields.

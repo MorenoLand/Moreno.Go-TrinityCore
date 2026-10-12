@@ -2774,6 +2774,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
 					}
 					target.Sess.killPlayer(ctx, creatureKiller, false, true)
+					// Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8): Unit::Kill
+					// tail (Unit.cpp:11466-11480), attacker is the creature
+					// (for pet kills C++ pushes the pet itself).
+					s.fireKilledByCreatureHook(ctx, motion, target.Sess)
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
 					}

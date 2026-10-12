@@ -19,16 +19,19 @@ import (
 )
 
 const (
-	PlayerEventFirstLogin = 30
-	PlayerEventLogin      = 3
-	PlayerEventLogout     = 4
-	PlayerEventChat       = 18
-	PlayerEventEmote      = 23
-	PlayerEventTextEmote  = 24
-	PlayerEventUpdateZone = 27
-	PlayerEventMapChange  = 28
-	PlayerEventCommand    = 42
-	MapEventOnPlayerEnter = 21
+	PlayerEventFirstLogin       = 30
+	PlayerEventLogin            = 3
+	PlayerEventLogout           = 4
+	PlayerEventKillPlayer       = 6
+	PlayerEventKillCreature     = 7
+	PlayerEventKilledByCreature = 8
+	PlayerEventChat             = 18
+	PlayerEventEmote            = 23
+	PlayerEventTextEmote        = 24
+	PlayerEventUpdateZone       = 27
+	PlayerEventMapChange        = 28
+	PlayerEventCommand          = 42
+	MapEventOnPlayerEnter       = 21
 )
 
 // Eluna GuildEvents contract for RegisterGuildEvent. Numbering is the

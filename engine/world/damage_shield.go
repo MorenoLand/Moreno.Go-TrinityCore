@@ -306,6 +306,16 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 		ts.sendPlayerUpdate()
 		ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health)
 		ts.killPlayer(ctx, attackerSess, true, true)
+		// Eluna kill hooks: Unit::Kill tail (Unit.cpp:11466-11480) — the
+		// shield holder is the attacker (Unit::DealDamage(victim, this, ...),
+		// Unit.cpp:1605).
+		if attackerSess != nil {
+			// Holder is a player: PLAYER_EVENT_ON_KILL_PLAYER (6).
+			s.firePVPKillHook(ctx, attackerSess, ts)
+		} else if motion := s.findCreatureMotion(ts.player.Map, ts.player.InstanceID, attackerGUID); motion != nil {
+			// Holder is a creature: PLAYER_EVENT_ON_KILLED_BY_CREATURE (8).
+			s.fireKilledByCreatureHook(ctx, motion, ts)
+		}
 		return
 	}
 	if damage == 0 {
@@ -430,6 +440,12 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		ct.Health, ct.MaxHealth, ct.Level = 0, m.MaxHealth, uint8(m.Level)
 		if attackerSess != nil {
 			attackerSess.onCreatureKilled(ctx, ct, nil)
+			// Eluna PLAYER_EVENT_ON_KILL_CREATURE (7): Unit::Kill tail
+			// (Unit.cpp:11466-11480) — the shield holder (a player here)
+			// is the attacker.
+			if motion := s.findCreatureMotion(ct.Map, ct.InstanceID, ct.GUID); motion != nil {
+				s.fireCreatureKillHook(ctx, attackerSess, motion)
+			}
 		}
 		return
 	}

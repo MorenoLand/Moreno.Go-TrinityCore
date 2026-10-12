@@ -214,6 +214,9 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			// owner player, so no pet arm):
 			// attacker->AI()->KilledUnit(victim) (Unit.cpp:11359-11361).
 			s.fireCreatureTargetDied(ctx, motion, p.Sess.luaPlayer())
+			// Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8): Unit::Kill tail
+			// (Unit.cpp:11466-11480), attacker is the creature.
+			s.fireKilledByCreatureHook(ctx, motion, p.Sess)
 			if motion.BossAI != nil {
 				motion.BossAI.OnKillPlayer(ctx, s, motion, p.GUID)
 			}
