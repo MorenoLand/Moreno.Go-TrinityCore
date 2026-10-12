@@ -170,7 +170,10 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 			if ok {
 				maxDuration = saved
 			} else {
-				level := uint32(aura.CasterLevel)
+				level := uint32(aura.StoredCasterLevel)
+				if level == 0 {
+					level = uint32(aura.CasterLevel)
+				}
 				if level == 0 {
 					level = petLevel
 				}

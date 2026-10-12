@@ -939,7 +939,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if casterGUID == 0 {
 			casterGUID = petGUID
 		}
-		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, TargetKey: petKey, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.server.activeCreatureAuras[petKey]) % 64), Positive: true, CasterLevel: s.player.Level, StoredCasterLevel: s.player.Level}
+		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, TargetKey: petKey, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.server.activeCreatureAuras[petKey]) % 64), Positive: true, CasterLevel: s.player.Level, StoredCasterLevel: s.auraStoredCasterLevel(casterGUID, spell)}
 		for index := range amounts {
 			aura.Amounts[index] = int32(amounts[index])
 			aura.BaseAmounts[index] = int32(baseAmounts[index])

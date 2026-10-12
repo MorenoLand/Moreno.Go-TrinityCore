@@ -75,7 +75,10 @@ func (s *session) savePlayerAuras(ctx context.Context, tx *sql.Tx, state *player
 			if saved, ok := maxDurations[key]; ok {
 				maxDuration = saved
 			} else {
-				level := uint32(aura.CasterLevel)
+				level := uint32(aura.StoredCasterLevel)
+				if level == 0 {
+					level = uint32(aura.CasterLevel)
+				}
 				if level == 0 {
 					level = uint32(state.Level)
 				}
