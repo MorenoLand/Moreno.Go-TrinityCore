@@ -1181,11 +1181,10 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 		if petCaster != nil {
 			s.healDevourMagicPet(ctx, petCaster, healAmount)
 		} else {
-			s.player.Health += healAmount
-			if s.player.Health > s.player.MaxHealth {
-				s.player.Health = s.player.MaxHealth
-			}
-			s.sendPlayerUpdate()
+			// m_caster is the player: C++ self-casts 19658 on m_caster
+			// (SpellEffects.cpp:2524), so the full EffectHeal pipeline
+			// runs — not a raw Health add.
+			s.applyDevourMagicSelfHeal(healAmount)
 		}
 	}
 }
@@ -1201,37 +1200,44 @@ func (s *session) healDevourMagicPet(ctx context.Context, petCaster *creatureMot
 	s.executePetSpellHeal(ctx, petCaster, petCaster.GUID, 19658, healAmount)
 	if s.player != nil && s.playerHasAura(56249) {
 		// SpellEffects.cpp:2527-2529: the glyph arm is owner->CastSpell(owner,
-		// 19658, args) — the 19658 caster is the OWNER, not the pet, so the
-		// MOD_HEALING_RECEIVED caster-match (Unit.cpp:7746-7754) and the
-		// SMSG_SPELLHEALLOG healer GUID both name the owner.
-		ownerHeal := s.healingTakenBonus(s, s.playerGUID, 19658, healAmount, false)
-		// Spell::_cast (Spell.cpp:3442): the CAST_SPELL criterion fires for
-		// the player caster with no triggered gate.
-		s.updateAchievementCriteria(criteriaTypeCastSpell, 19658, 1)
-		// Spell::EffectHeal (SpellEffects.cpp:1419): a dead target is not
-		// healed and sends no heal log.
-		if s.player.Health > 0 {
-			overheal := uint32(0)
-			if uint64(s.player.Health)+uint64(ownerHeal) > uint64(s.player.MaxHealth) {
-				overheal = uint32(uint64(s.player.Health) + uint64(ownerHeal) - uint64(s.player.MaxHealth))
-			}
-			packet := buildSpellHealLog(s.playerGUID, s.playerGUID, 19658, ownerHeal, overheal, 0, false)
-			_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
-			// Spell::PreprocessSpellHit (Spell.cpp:2725-2735): the per-target
-			// caster-side and target-side legs for the owner's self-cast.
-			s.startTimedAchievement(timedTypeSpellCast, 19658)
-			s.updateAchievementCriteria(criteriaTypeCastSpell2, 19658, 1)
-			s.startTimedAchievement(timedTypeSpellTarget, 19658)
-			s.updateAchievementCriteria(criteriaTypeBeSpellTarget, 19658, 1)
-			s.updateAchievementCriteria(criteriaTypeBeSpellTarget2, 19658, 1)
-			s.player.Health += ownerHeal
-			if s.player.Health > s.player.MaxHealth {
-				s.player.Health = s.player.MaxHealth
-			}
-			s.removeGrievousBiteIfFullyHealed(s.playerGUID)
-			s.sendPlayerUpdate()
+		// 19658, args) — the 19658 caster is the OWNER, not the pet.
+		s.applyDevourMagicSelfHeal(healAmount)
+	}
+}
+
+// applyDevourMagicSelfHeal runs a player self-cast of triggered 19658
+// (Devour Magic, SpellEffects.cpp:2520-2530) through the C++ EffectHeal
+// pipeline: the SpellHealingBonusTaken caster-match (Unit.cpp:7746-7754)
+// names the owner (the 19658 caster), the dead-target gate
+// (SpellEffects.cpp:1398) drops the heal and the heal log, the CAST_SPELL
+// criterion (Spell.cpp:3442) fires ahead of it, and the PreprocessSpellHit
+// legs (Spell.cpp:2725-2735) follow — crit stays false like the pet leg
+// (Spell.cpp:7782-7788; no crit model in Go's heal pipeline).
+func (s *session) applyDevourMagicSelfHeal(healAmount uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	heal := s.healingTakenBonus(s, s.playerGUID, 19658, healAmount, false)
+	s.updateAchievementCriteria(criteriaTypeCastSpell, 19658, 1)
+	if s.player.Health > 0 {
+		overheal := uint32(0)
+		if uint64(s.player.Health)+uint64(heal) > uint64(s.player.MaxHealth) {
+			overheal = uint32(uint64(s.player.Health) + uint64(heal) - uint64(s.player.MaxHealth))
 		}
+		packet := buildSpellHealLog(s.playerGUID, s.playerGUID, 19658, heal, overheal, 0, false)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
+		s.startTimedAchievement(timedTypeSpellCast, 19658)
+		s.updateAchievementCriteria(criteriaTypeCastSpell2, 19658, 1)
+		s.startTimedAchievement(timedTypeSpellTarget, 19658)
+		s.updateAchievementCriteria(criteriaTypeBeSpellTarget, 19658, 1)
+		s.updateAchievementCriteria(criteriaTypeBeSpellTarget2, 19658, 1)
+		s.player.Health += heal
+		if s.player.Health > s.player.MaxHealth {
+			s.player.Health = s.player.MaxHealth
+		}
+		s.removeGrievousBiteIfFullyHealed(s.playerGUID)
+		s.sendPlayerUpdate()
 	}
 }
 
