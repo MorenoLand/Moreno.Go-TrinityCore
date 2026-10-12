@@ -140,7 +140,7 @@ func genericObjectMethod(object *Object, name string) (ObjectMethod, bool) {
 			value, _ := object.Fields["InCombat"].(bool)
 			return []any{value}, nil
 		}, true
-	case "ToPlayer", "ToCreature", "ToGameObject", "ToUnit":
+	case "ToPlayer", "ToCreature", "ToGameObject", "ToUnit", "ToCorpse":
 		return func(context.Context, []any) ([]any, error) {
 			if objectMatchesType(object.Type, name[2:]) {
 				return []any{object}, nil
@@ -215,12 +215,16 @@ func objectTypeID(objectType string) uint8 {
 	switch objectType {
 	case "Item":
 		return 1
+	case "Container":
+		return 2
 	case "Creature", "Unit":
 		return 3
 	case "Player":
 		return 4
 	case "GameObject":
 		return 5
+	case "DynamicObject":
+		return 6
 	case "Corpse":
 		return 7
 	default:
@@ -236,6 +240,8 @@ func objectMatchesType(objectType, target string) bool {
 		return objectType == "Creature"
 	case "GameObject":
 		return objectType == "GameObject"
+	case "Corpse":
+		return objectType == "Corpse"
 	case "Unit":
 		return objectType == "Player" || objectType == "Creature"
 	default:

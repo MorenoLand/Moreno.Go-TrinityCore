@@ -299,17 +299,204 @@ func NewGuildObject(guildID uint32, live GuildLive) *Object {
 	return &Object{Type: "Guild", Fields: map[string]any{"ID": uint32(guildID), "Name": snap.Name, "LeaderGUID": snap.LeaderGUID, "MemberCount": snap.MemberCount, "MOTD": snap.MOTD, "Info": snap.Info}, Methods: methods}
 }
 
+// ItemTemplateLive is the item_template row behind a Lua Item object: the
+// fields Eluna's Item methods read through Item::GetTemplate(). The spell
+// slots mirror MAX_ITEM_PROTO_SPELLS = 5 (ItemTemplate.h:597).
+type ItemTemplateLive struct {
+	Name                              string
+	Class, SubClass, DisplayInfoID    uint32
+	Quality, ItemLevel, RequiredLevel uint32
+	BuyPrice                          int32
+	SellPrice, InventoryType          uint32
+	AllowableClass, AllowableRace     uint32
+	Stackable                         int32
+	ContainerSlots, StatsCount        uint32
+	SpellIDs                          [5]uint32
+	SpellTriggers                     [5]uint32
+}
+
+// ItemLive carries the template-data callback behind a Lua Item object.
+// Load re-reads the item_template row (Eluna's methods read the live
+// Item::GetTemplate()); a nil Load or a false return means the row is
+// missing, and the template methods push nil — C++ would dereference a
+// null template there, so Go takes the safe arm.
+type ItemLive struct {
+	LoadTemplate func() (ItemTemplateLive, bool)
+}
+
+// itemMaxStackCount mirrors ItemTemplate::GetMaxStackSize
+// (ItemTemplate.h:686): Stackable <= 0 or the 2147483647 sentinel means
+// effectively unlimited stacking.
+func itemMaxStackCount(stackable int32) uint32 {
+	if stackable == 2147483647 || stackable <= 0 {
+		return 0x7FFFFFFE
+	}
+	return uint32(stackable)
+}
+
+// invTypeBag mirrors INVTYPE_BAG behind Item::IsBag (Item.h:102):
+// an item is a bag exactly when its template inventory type is 18.
+const invTypeBag = 18
+
 // NewItemObject builds the Lua Item object surface for hooks that hand
 // scripts a live item (Eluna's Push(Item*) via ElunaTemplate): the GUID,
-// Entry and Count fields plus the GetCount method. The generic object
-// methods supply GetEntry/GetGUID/GetGUIDLow/GetTypeId (object.go); the
-// rest of Eluna's Item method surface has no Go live-item model behind it
-// and stays unbridged.
-func NewItemObject(guid uint64, entry, count uint32) *Object {
+// Entry and Count fields plus the template-read methods GetName,
+// GetQuality, GetClass, GetSubClass, GetDisplayId, GetItemLevel,
+// GetRequiredLevel, GetBuyPrice, GetSellPrice, GetInventoryType,
+// GetAllowableClass, GetAllowableRace, GetMaxStackCount, GetBagSize,
+// GetStatsCount, IsBag, GetSpellId and GetSpellTrigger (ItemMethods.h).
+// The generic object methods supply GetEntry/GetGUID/GetGUIDLow/GetTypeId
+// (object.go). The instance-bound surface (GetOwner, GetSlot, GetBagSlot,
+// IsEquipped, IsBroken) and the mutating surface (SetOwner, SetBinding,
+// SetCount, SetEnchantment, ClearEnchantment, SaveToDB) have no Go
+// live-item model behind them and stay unbridged.
+func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
+	load := live.LoadTemplate
+	if load == nil {
+		load = func() (ItemTemplateLive, bool) { return ItemTemplateLive{}, false }
+	}
+	templateValue := func(extract func(ItemTemplateLive) any) []any {
+		tmpl, ok := load()
+		if !ok {
+			return []any{nil}
+		}
+		return []any{extract(tmpl)}
+	}
+	templateSpell := func(args []any, pick func(ItemTemplateLive, uint32) uint32) ([]any, error) {
+		index, err := objectArgumentUint32(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		// ItemMethods.h: index >= MAX_ITEM_PROTO_SPELLS is a Lua argument
+		// error, raised before the template is touched.
+		if index >= 5 {
+			return nil, fmt.Errorf("valid SpellIndex expected")
+		}
+		tmpl, ok := load()
+		if !ok {
+			return []any{nil}, nil
+		}
+		return []any{pick(tmpl, index)}, nil
+	}
 	methods := map[string]ObjectMethod{
 		"GetCount": func(context.Context, []any) ([]any, error) { return []any{count}, nil },
+		"GetName": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.Name }), nil
+		},
+		"GetQuality": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.Quality }), nil
+		},
+		"GetClass": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.Class }), nil
+		},
+		"GetSubClass": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.SubClass }), nil
+		},
+		"GetDisplayId": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.DisplayInfoID }), nil
+		},
+		"GetItemLevel": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.ItemLevel }), nil
+		},
+		"GetRequiredLevel": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.RequiredLevel }), nil
+		},
+		"GetBuyPrice": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.BuyPrice }), nil
+		},
+		"GetSellPrice": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.SellPrice }), nil
+		},
+		"GetInventoryType": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.InventoryType }), nil
+		},
+		"GetAllowableClass": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.AllowableClass }), nil
+		},
+		"GetAllowableRace": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.AllowableRace }), nil
+		},
+		"GetMaxStackCount": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return itemMaxStackCount(t.Stackable) }), nil
+		},
+		// Bag::GetBagSize is the template ContainerSlots; a non-bag pushes 0.
+		"GetBagSize": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any {
+				if t.InventoryType != invTypeBag {
+					return uint32(0)
+				}
+				return t.ContainerSlots
+			}), nil
+		},
+		"GetStatsCount": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.StatsCount }), nil
+		},
+		"IsBag": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.InventoryType == invTypeBag }), nil
+		},
+		"GetSpellId": func(_ context.Context, args []any) ([]any, error) {
+			return templateSpell(args, func(t ItemTemplateLive, index uint32) uint32 { return t.SpellIDs[index] })
+		},
+		"GetSpellTrigger": func(_ context.Context, args []any) ([]any, error) {
+			return templateSpell(args, func(t ItemTemplateLive, index uint32) uint32 { return t.SpellTriggers[index] })
+		},
 	}
 	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}
+}
+
+// MapSnapshot is the map DBC entry behind a Lua Map object: the fields
+// Eluna's Map methods read through Map + sMapStore (MapMethods.h;
+// MapEntry::IsDungeon/IsRaid/IsBattleArena/IsBattleground).
+type MapSnapshot struct {
+	Name                                       string
+	IsDungeon, IsRaid, IsArena, IsBattleground bool
+}
+
+// MapLive carries the map-data callback behind a Lua Map object. Load
+// re-reads the DBC entry; a nil Load or a false return means the entry is
+// missing, and the DBC-backed methods push nil/false.
+type MapLive struct {
+	Load func() (MapSnapshot, bool)
+}
+
+// NewMapObject builds the Lua Map object surface for the MAP_EVENT_* and
+// INSTANCE_EVENT_* hooks: GetMapId/GetInstanceId ride the generic object
+// methods (object.go) and the DBC-backed GetName/IsDungeon/IsRaid/IsArena/
+// IsBattleground come from the live MapLive (MapMethods.h). The remaining
+// Map surface (GetHeight/GetDifficulty/GetPlayerCount/GetAreaId(x,y,z)/
+// GetWorldObject/SetWeather/GetInstanceData/SaveInstanceData/GetPlayers)
+// needs a live Map* with grid/difficulty state and stays unbridged.
+func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
+	load := live.Load
+	if load == nil {
+		load = func() (MapSnapshot, bool) { return MapSnapshot{}, false }
+	}
+	flag := func(extract func(MapSnapshot) bool) []any {
+		snap, _ := load()
+		return []any{extract(snap)}
+	}
+	methods := map[string]ObjectMethod{
+		"GetName": func(context.Context, []any) ([]any, error) {
+			snap, ok := load()
+			if !ok {
+				return []any{nil}, nil
+			}
+			return []any{snap.Name}, nil
+		},
+		"IsDungeon": func(context.Context, []any) ([]any, error) {
+			return flag(func(s MapSnapshot) bool { return s.IsDungeon }), nil
+		},
+		"IsRaid": func(context.Context, []any) ([]any, error) {
+			return flag(func(s MapSnapshot) bool { return s.IsRaid }), nil
+		},
+		"IsArena": func(context.Context, []any) ([]any, error) {
+			return flag(func(s MapSnapshot) bool { return s.IsArena }), nil
+		},
+		"IsBattleground": func(context.Context, []any) ([]any, error) {
+			return flag(func(s MapSnapshot) bool { return s.IsBattleground }), nil
+		},
+	}
+	return &Object{Type: "Map", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID, "InWorld": true}, Methods: methods}
 }
 
 // GroupMemberLive is one live group roster entry behind a Lua Group object.

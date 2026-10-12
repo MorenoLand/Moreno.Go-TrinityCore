@@ -746,7 +746,7 @@ func (s *session) triggerMapEntryEvent(ctx context.Context) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
 		return
 	}
-	mapObject := &scripting.Object{Type: "Map", Fields: map[string]any{"MapId": s.player.Map, "InstanceId": s.player.InstanceID, "InWorld": true}}
+	mapObject := scripting.NewMapObject(s.player.Map, s.player.InstanceID, mapLiveFromStore(s.server.Data, s.player.Map))
 	if _, err := s.server.Features.Scripts.TriggerMapEvent(ctx, s.player.Map, scripting.MapEventOnPlayerEnter, mapObject, s.luaPlayer()); err != nil {
 		s.debug("lua map entry event failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
 	}

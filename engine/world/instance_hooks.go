@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
 
@@ -17,11 +18,36 @@ func luaInstanceData() *scripting.Object {
 	return &scripting.Object{Type: "InstanceData", Fields: map[string]any{}}
 }
 
+// mapLiveFromStore builds the DBC-backed MapLive behind Lua Map objects
+// from the wotlk store (MapEntry::IsDungeon/IsRaid/IsBattleArena/
+// IsBattleground, MapMethods.h). The world side supplies the store so the
+// scripting package keeps its data-source decoupling (GuildLive/GroupLive
+// pattern).
+func mapLiveFromStore(data *wotlk.Store, mapID uint32) scripting.MapLive {
+	return scripting.MapLive{Load: func() (scripting.MapSnapshot, bool) {
+		if data == nil {
+			return scripting.MapSnapshot{}, false
+		}
+		entry, found, err := data.Map(mapID)
+		if err != nil || !found {
+			return scripting.MapSnapshot{}, false
+		}
+		return scripting.MapSnapshot{
+			Name:           entry.MapName,
+			IsDungeon:      entry.IsDungeon(),
+			IsRaid:         entry.IsRaid(),
+			IsArena:        entry.IsBattleArena(),
+			IsBattleground: entry.IsBattleground(),
+		}, true
+	}}
+}
+
 // instanceMapObject builds the map argument for the Eluna
 // INSTANCE_EVENT_* hooks, the Go model of Eluna::InstanceHooks'
-// Push(instance): the Map object carrying the map and instance IDs.
-func instanceMapObject(mapID, instanceID uint32) *scripting.Object {
-	return &scripting.Object{Type: "Map", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID, "InWorld": true}}
+// Push(instance): the Map object carrying the map and instance IDs plus
+// the DBC-backed read surface (scripting.NewMapObject).
+func instanceMapObject(mapID, instanceID uint32, data *wotlk.Store) *scripting.Object {
+	return scripting.NewMapObject(mapID, instanceID, mapLiveFromStore(data, mapID))
 }
 
 // isInstanceScriptMap reports whether the map can carry Eluna instance
@@ -47,7 +73,7 @@ func (s *session) fireInstancePlayerEnter(ctx context.Context) {
 	if s.player.InstanceID == 0 || !s.server.isInstanceScriptMap(s.player.Map) {
 		return
 	}
-	if _, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, s.player.Map, s.player.InstanceID, scripting.InstanceEventOnPlayerEnter, luaInstanceData(), instanceMapObject(s.player.Map, s.player.InstanceID), s.luaPlayer()); err != nil {
+	if _, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, s.player.Map, s.player.InstanceID, scripting.InstanceEventOnPlayerEnter, luaInstanceData(), instanceMapObject(s.player.Map, s.player.InstanceID, s.server.Data), s.luaPlayer()); err != nil {
 		s.debug("lua instance player-enter event failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
 	}
 }
@@ -68,7 +94,7 @@ func (s *Server) triggerInstanceGameObjectCreate(dyn *dynamicGameObjectState) {
 	if goObj == nil {
 		return
 	}
-	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), dyn.Map, dyn.InstanceID, scripting.InstanceEventOnGameObjectCreate, luaInstanceData(), instanceMapObject(dyn.Map, dyn.InstanceID), goObj); err != nil {
+	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), dyn.Map, dyn.InstanceID, scripting.InstanceEventOnGameObjectCreate, luaInstanceData(), instanceMapObject(dyn.Map, dyn.InstanceID, s.Data), goObj); err != nil {
 		s.debug("lua instance gameobject-create event failed", "map", dyn.Map, "instance", dyn.InstanceID, "error", err)
 	}
 }
@@ -88,7 +114,7 @@ func (s *session) instanceEncounterHooked(ctx context.Context, mapID, instanceID
 	if s == nil || s.server == nil || instanceID == 0 || !s.server.isInstanceScriptMap(mapID) || s.server.Features == nil || s.server.Features.Scripts == nil {
 		return false
 	}
-	values, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, mapID, instanceID, scripting.InstanceEventOnCheckEncounterProgress, luaInstanceData(), instanceMapObject(mapID, instanceID))
+	values, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, mapID, instanceID, scripting.InstanceEventOnCheckEncounterProgress, luaInstanceData(), instanceMapObject(mapID, instanceID, s.server.Data))
 	if err != nil {
 		s.debug("lua instance encounter check failed", "map", mapID, "instance", instanceID, "error", err)
 	}

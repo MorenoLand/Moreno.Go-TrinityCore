@@ -144,6 +144,6 @@ func (s *session) fireGuildItemMove(ctx context.Context, guildID uint32, srcLoc,
 	srcBank, srcContainer, srcSlot := moveLocHookParams(srcLoc)
 	dstBank, dstContainer, dstSlot := moveLocHookParams(dstLoc)
 	s.fireGuildEvent(ctx, scripting.GuildEventOnItemMove, guild, s.luaPlayer(),
-		scripting.NewItemObject(item.GUID, item.Entry, count),
+		scripting.NewItemObject(item.GUID, item.Entry, count, s.itemTemplateLive(ctx, item.Entry)),
 		srcBank, srcContainer, srcSlot, dstBank, dstContainer, dstSlot)
 }

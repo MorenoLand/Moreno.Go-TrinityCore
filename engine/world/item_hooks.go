@@ -6,13 +6,56 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
 
+// itemTemplateLiveFromQuery maps the item_template row into the exported
+// scripting.ItemTemplateLive behind Lua Item objects (Eluna reads these
+// through Item::GetTemplate()). Spell IDs are uint32 in C++; a negative
+// DB sentinel maps to 0.
+func itemTemplateLiveFromQuery(data itemQueryData) scripting.ItemTemplateLive {
+	live := scripting.ItemTemplateLive{
+		Name:           data.Name,
+		Class:          data.Class,
+		SubClass:       data.SubClass,
+		DisplayInfoID:  data.DisplayInfoID,
+		Quality:        data.Quality,
+		ItemLevel:      data.ItemLevel,
+		RequiredLevel:  data.RequiredLevel,
+		BuyPrice:       data.BuyPrice,
+		SellPrice:      data.SellPrice,
+		InventoryType:  data.InventoryType,
+		AllowableClass: data.AllowableClass,
+		AllowableRace:  data.AllowableRace,
+		Stackable:      data.Stackable,
+		ContainerSlots: data.ContainerSlots,
+		StatsCount:     data.StatsCount,
+	}
+	for index := range data.Spells {
+		if id := data.Spells[index].ID; id > 0 {
+			live.SpellIDs[index] = uint32(id)
+		}
+		live.SpellTriggers[index] = data.Spells[index].Trigger
+	}
+	return live
+}
+
+// itemTemplateLive loads the item_template row for the entry behind a Lua
+// Item object. sessionLuaItem and the guild item-move leg both supply it.
+func (s *session) itemTemplateLive(ctx context.Context, entry uint32) scripting.ItemLive {
+	return scripting.ItemLive{LoadTemplate: func() (scripting.ItemTemplateLive, bool) {
+		data, err := s.loadItemQueryData(ctx, entry)
+		if err != nil {
+			return scripting.ItemTemplateLive{}, false
+		}
+		return itemTemplateLiveFromQuery(data), true
+	}}
+}
+
 // sessionLuaItem builds the Lua Item object for the Eluna ITEM_EVENT_*
 // hooks from the character's item_instance row — the Go model of Eluna's
 // Push(Item*) via ElunaTemplate. It reuses scripting.NewItemObject
-// (GUID/Entry/Count + GetCount), the surface built for the guild event 9
-// leg; the rest of Eluna's Item method surface has no live-item model
-// behind it and stays unbridged. rawGUID is the item_instance low part:
-// client GUIDs carry the 0x4000 high bits (see handleUseItem and
+// (GUID/Entry/Count + the template-read surface in globals.go); the
+// instance-bound and mutating Item surface has no live-item model behind
+// it and stays unbridged. rawGUID is the item_instance low part: client
+// GUIDs carry the 0x4000 high bits (see handleUseItem and
 // questgiverStartsQuest), so both forms are probed. A nil return means no
 // handler can see the item, so the event does not fire — C++ always has a
 // live Item*.
@@ -26,7 +69,7 @@ func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting
 		rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&entry, &count); err != nil || entry == 0 {
 		return nil
 	}
-	return scripting.NewItemObject(rawGUID|(uint64(0x4000)<<48), entry, count)
+	return scripting.NewItemObject(rawGUID|(uint64(0x4000)<<48), entry, count, s.itemTemplateLive(ctx, entry))
 }
 
 // fireItemEvent dispatches an Eluna ITEM_EVENT_* hook (RegisterItemEvent)
