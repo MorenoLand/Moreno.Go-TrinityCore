@@ -247,7 +247,11 @@ func (s *Server) dispelResistSpellMod(mapID, instanceID uint32, aura *activeAura
 
 // getDispellableAuraListForPlayer returns the list of auras that can be dispelled from a player.
 // Mirrors TrinityCore Unit::GetDispellableAuraList (Unit.cpp:4588-4628).
-func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMask uint32, isReflected bool) []dispelCandidate {
+// stealMode switches to the steal-list semantics of both C++ steal paths
+// (positivity-only gate, no isReflect/friendliness term); keepResisted skips
+// the 100%-resist exclusion (the C++ CheckCast steal arm has no
+// CalcDispelChance gate).
+func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMask uint32, isReflected, stealMode, keepResisted bool) []dispelCandidate {
 	if targetSess == nil || targetSess.player == nil {
 		return nil
 	}
@@ -298,11 +302,19 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 			continue
 		}
 
-		// Friendly target: remove harmful debuffs (!aura.Positive)
-		// Hostile target: remove beneficial buffs (aura.Positive)
-		// Mirrors Unit.cpp:4608-4612; a reflected cast inverts the gate —
-		// the dispeller strips one of its own beneficial buffs.
-		if isReflected != (isFriendly == aura.Positive) {
+		if stealMode {
+			// Both C++ steal paths (CheckCast arm Spell.cpp:5957-5984 and
+			// EffectStealBeneficialBuff SpellEffects.cpp:5169-5189) key only on
+			// application positivity — the isReflect/friendliness term of
+			// Unit.cpp:4608-4612 does not exist there.
+			if !aura.Positive {
+				continue
+			}
+		} else if isReflected != (isFriendly == aura.Positive) {
+			// Friendly target: remove harmful debuffs (!aura.Positive)
+			// Hostile target: remove beneficial buffs (aura.Positive)
+			// Mirrors Unit.cpp:4608-4612; a reflected cast inverts the gate —
+			// the dispeller strips one of its own beneficial buffs.
 			continue
 		}
 
@@ -333,7 +345,7 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 	kept := candidates[:0]
 	for i := range candidates {
 		chance := s.server.auraDispelChance(mapID, instanceID, candAuras[i], resistTotal, offensive)
-		if chance <= 0 {
+		if chance <= 0 && !keepResisted {
 			continue
 		}
 		candidates[i].Chance = chance
@@ -343,7 +355,9 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 }
 
 // getDispellableAuraListForCreature returns dispellable auras on a creature.
-func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelMask uint32, isReflected bool) []dispelCandidate {
+// stealMode/keepResisted carry the steal-list semantics described on
+// getDispellableAuraListForPlayer.
+func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelMask uint32, isReflected, stealMode, keepResisted bool) []dispelCandidate {
 	if s.server == nil || s.player == nil {
 		return nil
 	}
@@ -409,9 +423,15 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 			continue
 		}
 
-		// Unit.cpp:4608-4612, isReflect arm: a reflected cast strips the
-		// caster's own beneficial buffs instead of cleansing debuffs.
-		if isReflected != (isFriendly == aura.Positive) {
+		if stealMode {
+			// Steal paths (Spell.cpp:5957-5984, SpellEffects.cpp:5169-5189) key
+			// only on application positivity — no isReflect/friendliness term.
+			if !aura.Positive {
+				continue
+			}
+		} else if isReflected != (isFriendly == aura.Positive) {
+			// Unit.cpp:4608-4612, isReflect arm: a reflected cast strips the
+			// caster's own beneficial buffs instead of cleansing debuffs.
 			continue
 		}
 
@@ -440,7 +460,7 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 	kept := candidates[:0]
 	for i := range candidates {
 		chance := s.server.auraDispelChance(mapID, instanceID, candAuras[i], resistTotal, offensive)
-		if chance <= 0 {
+		if chance <= 0 && !keepResisted {
 			continue
 		}
 		candidates[i].Chance = chance
@@ -652,14 +672,19 @@ func (s *Server) dispelCandidateFromAura(spellID uint32, aura *activeAura, dispe
 // steal candidate list from the dispel-mask candidate list: positive auras only,
 // skipping auras whose spell carries SPELL_ATTR4_NOT_STEALABLE. Passive auras are
 // already excluded by the dispel helpers (the spellAttributePassive gate).
-// C++ EffectStealBeneficialBuff builds its list with no isReflect term
-// (SpellEffects.cpp:5169-5189), so steal always passes false here.
-func (s *session) stealableAuraList(targetSess *session, targetGUID uint64, isTargetPlayer bool, dispelMask uint32) []dispelCandidate {
+// C++ builds both steal lists with no isReflect term (CheckCast arm
+// Spell.cpp:5957-5984; EffectStealBeneficialBuff SpellEffects.cpp:5169-5189), so
+// steal runs the helpers in stealMode (positivity-only gate) with isReflected
+// false.
+func (s *session) stealableAuraList(targetSess *session, targetGUID uint64, isTargetPlayer bool, dispelMask uint32, preCast bool) []dispelCandidate {
 	var candidates []dispelCandidate
 	if isTargetPlayer {
-		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask, false)
+		// preCast skips the 100%-resist exclusion: the C++ CheckCast steal arm
+		// (Spell.cpp:5957-5984) has no CalcDispelChance gate, while the effect
+		// (SpellEffects.cpp:5181-5183) keeps it.
+		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask, false, true, preCast)
 	} else {
-		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask, false)
+		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask, false, true, preCast)
 	}
 
 	var stealable []dispelCandidate
@@ -679,8 +704,9 @@ func (s *session) stealableAuraList(targetSess *session, targetGUID uint64, isTa
 
 // checkStealPreCast mirrors TrinityCore Spell::CheckCast (Spell.cpp:5957-5984) for
 // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126): no unit target or self target fails with
-// SPELL_FAILED_BAD_TARGETS; a target carrying no stealable aura under the same skip
-// list as EffectStealBeneficialBuff fails with SPELL_FAILED_NOTHING_TO_STEAL.
+// SPELL_FAILED_BAD_TARGETS; a target carrying no stealable aura fails with
+// SPELL_FAILED_NOTHING_TO_STEAL. The pre-cast keeps 100%-resist auras in the
+// list — the C++ arm has no CalcDispelChance gate (the effect twin does).
 func (s *session) checkStealPreCast(spell wotlk.Spell, targetGUID uint64) uint8 {
 	for _, eff := range spell.Effects {
 		if eff.Effect != 126 { // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
@@ -696,7 +722,7 @@ func (s *session) checkStealPreCast(spell wotlk.Spell, targetGUID uint64) uint8 
 			targetSess = s.server.findSessionByGUID(targetGUID)
 		}
 		isTargetPlayer := (targetSess != nil && targetSess.player != nil)
-		if len(s.stealableAuraList(targetSess, targetGUID, isTargetPlayer, dispelMask)) == 0 {
+		if len(s.stealableAuraList(targetSess, targetGUID, isTargetPlayer, dispelMask, true)) == 0 {
 			return spellFailedNothingToSteal
 		}
 	}
@@ -782,9 +808,9 @@ func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8
 
 	var candidates []dispelCandidate
 	if targetSess != nil && targetSess.player != nil {
-		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask, false)
+		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask, false, false, false)
 	} else if targetGUID != 0 {
-		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask, false)
+		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask, false, false, false)
 	}
 
 	if len(candidates) == 0 {
@@ -1023,9 +1049,9 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 	var candidates []dispelCandidate
 	isTargetPlayer := (targetSess != nil && targetSess.player != nil)
 	if isTargetPlayer {
-		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask, isReflected)
+		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask, isReflected, false, false)
 	} else {
-		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask, isReflected)
+		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask, isReflected, false, false)
 	}
 
 	if len(candidates) == 0 {
@@ -1437,7 +1463,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 	// Spellsteal only steals beneficial buffs (SpellEffects.cpp:5172); the
 	// helper skips passive auras (already excluded by the dispel helpers) and
 	// auras whose spell carries SPELL_ATTR4_NOT_STEALABLE.
-	stealable := s.stealableAuraList(targetSess, targetGUID, isTargetPlayer, dispelMask)
+	stealable := s.stealableAuraList(targetSess, targetGUID, isTargetPlayer, dispelMask, false)
 
 	if len(stealable) == 0 {
 		return
