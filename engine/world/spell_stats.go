@@ -655,6 +655,22 @@ func (s *session) directWeaponCritChanceTaken(ctx context.Context, target combat
 		chance += s.casterMatchedCritChanceForCaster(spell)
 		chance += float64(creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
 	}
+	// Skill-diff arm (Unit.cpp:2889-2895): crit suppression from the
+	// victim-defense minus attacker-weapon skill gap, applied after the
+	// resilience and spell-and-weapon arms. Go models no weapon/defense
+	// skill bonuses, so skills are 5/level by construction (same convention
+	// as the white-swing roll in combat.go).
+	if s.player != nil {
+		skillDiff := (int32(target.Level) - int32(s.player.Level)) * 5
+		if isPlayerVictim {
+			chance += -float64(skillDiff) * 0.04
+		} else {
+			chance += -float64(skillDiff) * 0.12
+			if skillDiff >= 15 {
+				chance -= 3.0
+			}
+		}
+	}
 	if chance < 0 {
 		chance = 0
 	}

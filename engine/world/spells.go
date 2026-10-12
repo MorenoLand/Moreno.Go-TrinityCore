@@ -1155,7 +1155,9 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
-		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || targetSession.playerAlliance() == s.playerAlliance() {
+		// WorldObject::IsValidAttackTarget (Object.cpp:2941): enemy target
+		// checks can't attack GMs, unconditionally.
+		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || targetSession.playerAlliance() == s.playerAlliance() || sessionIsGameMaster(targetSession) {
 			continue
 		}
 		// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): cylinder,
