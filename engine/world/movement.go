@@ -1652,34 +1652,14 @@ func (s *session) hasAuraType(auraType uint32) bool {
 }
 
 // getTotalAuraModifier calculates the sum of amounts of all active and passive auras of the given type.
-// Mirrors Unit::GetTotalAuraModifier.
+// Mirrors Unit::GetTotalAuraModifier: the applied-aura portion folds through
+// the same-effect-gated total (Unit.cpp:4831); the learned-passive leg below
+// stays raw, as before.
 func (s *session) getTotalAuraModifier(auraType uint32) int32 {
 	if s.player == nil {
 		return 0
 	}
-	total := int32(0)
-	s.castMu.Lock()
-	for _, aura := range s.activeAuras {
-		if aura != nil && aura.AuraType == auraType {
-			total += int32(aura.Amount)
-		}
-	}
-	if s.server != nil && s.server.Data != nil {
-		for spellID := range s.auras {
-			if s.activeAuras != nil && s.activeAuras[spellID] != nil {
-				continue
-			}
-			spell, found, err := s.server.Data.Spell(spellID)
-			if err == nil && found {
-				for _, eff := range spell.Effects {
-					if eff.Aura == auraType {
-						total += eff.BasePoints + 1
-					}
-				}
-			}
-		}
-	}
-	s.castMu.Unlock()
+	total := s.totalAuraModifier(auraType)
 
 	// Check learned passive spells
 	if s.server != nil && s.server.Data != nil {

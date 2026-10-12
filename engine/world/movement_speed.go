@@ -48,10 +48,108 @@ func (s *session) maxNegativeAuraModifier(auraType uint32) int32 {
 
 func (s *session) totalAuraModifier(auraType uint32) int32 {
 	var total int32
-	for _, amount := range s.auraTypeModifiers(auraType) {
+	for _, amount := range s.gatedAuraModifierAmounts(auraType, s.auraModifierCandidatesFiltered(auraType, nil)) {
 		total += amount
 	}
 	return total
+}
+
+// auraModifierCandidate is one per-effect aura amount feeding the total and
+// multiplier folds, carrying the owning spell ID so the Same Effect Stack
+// Rule can gate the fold. Candidates are appended in aura apply order
+// (loadedAuras is Slot-sorted), so first-wins tie-breaking matches C++'s
+// strict-< walk over the aura-effect list.
+type auraModifierCandidate struct {
+	spellID uint32
+	amount  int32
+}
+
+// auraModifierCandidatesFiltered resolves per-effect aura amounts exactly like
+// auraTypeModifiersFiltered but keeps the owning spell ID and apply order on
+// each candidate.
+func (s *session) auraModifierCandidatesFiltered(auraType uint32, match func(miscValue int32) bool) []auraModifierCandidate {
+	if s == nil {
+		return nil
+	}
+	result := make([]auraModifierCandidate, 0)
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		matched := false
+		usedStoredAmount := false
+		if s.server != nil && s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range spell.Effects {
+					if effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if match != nil && !match(effect.MiscValue) {
+						continue
+					}
+					amount := aura.Amounts[index]
+					if amount == 0 && aura.AuraType == auraType && !usedStoredAmount {
+						amount = int32(aura.Amount)
+						usedStoredAmount = true
+					}
+					if amount == 0 {
+						amount = effect.BasePoints + 1
+					}
+					result = append(result, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
+					matched = true
+				}
+			}
+		}
+		if !matched && aura.AuraType == auraType && (match == nil || match(aura.MiscValue)) {
+			amount := int32(aura.Amount)
+			if amount == 0 {
+				for _, storedAmount := range aura.Amounts {
+					if storedAmount != 0 {
+						amount = storedAmount
+						break
+					}
+				}
+			}
+			result = append(result, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
+		}
+	}
+	return result
+}
+
+// gatedAuraModifierAmounts applies the Same Effect Stack Rule
+// (SpellMgr::AddSameEffectStackRuleSpellGroups, SpellMgr.cpp:404) to a
+// candidate list, mirroring the predicate forms of
+// Unit::GetTotalAuraModifier / Unit::GetTotalAuraMultiplier
+// (Unit.cpp:4831-4883): candidates whose spell sits in an
+// EXCLUSIVE_SAME_EFFECT group for the aura type contribute only the group's
+// highest-|amount| (first applied wins ties, matching C++'s strict->
+// comparison walk over the aura-effect list); ungrouped candidates all apply.
+// Without group data every candidate applies, which is the pre-existing
+// behavior. The GetMaxPositive/Negative folds intentionally do NOT gate —
+// C++ takes the max/min over all amounts with no stack-rule arm.
+func (s *session) gatedAuraModifierAmounts(auraType uint32, cands []auraModifierCandidate) []int32 {
+	amounts := make([]int32, 0, len(cands))
+	if s == nil || s.server == nil {
+		for _, c := range cands {
+			amounts = append(amounts, c.amount)
+		}
+		return amounts
+	}
+	winner := make(map[uint32]int)
+	for i, c := range cands {
+		group := s.server.petAuraStackGroup(c.spellID, auraType)
+		if group == 0 {
+			amounts = append(amounts, c.amount)
+			continue
+		}
+		if w, ok := winner[group]; !ok || absAuraAmount(c.amount) > absAuraAmount(cands[w].amount) {
+			winner[group] = i
+		}
+	}
+	for _, i := range winner {
+		amounts = append(amounts, cands[i].amount)
+	}
+	return amounts
 }
 
 func (s *session) auraTypeModifiers(auraType uint32) []int32 {
@@ -100,11 +198,15 @@ func (s *session) auraTypeModifiers(auraType uint32) []int32 {
 	return result
 }
 
-func (s *session) auraTypeModifiersByMiscMask(auraType, miscMask uint32) []int32 {
+// auraModifierCandidatesByMiscMask resolves per-effect aura amounts exactly
+// like auraTypeModifiersByMiscMask (including its extra stored-amount
+// substitution guard on the aura's own MiscValue) but keeps the owning spell
+// ID and apply order on each candidate.
+func (s *session) auraModifierCandidatesByMiscMask(auraType, miscMask uint32) []auraModifierCandidate {
 	if s == nil || miscMask == 0 {
 		return nil
 	}
-	result := make([]int32, 0)
+	result := make([]auraModifierCandidate, 0)
 	for _, aura := range s.loadedAuras() {
 		if aura == nil || aura.Stopped {
 			continue
@@ -125,7 +227,7 @@ func (s *session) auraTypeModifiersByMiscMask(auraType, miscMask uint32) []int32
 					if amount == 0 {
 						amount = effect.BasePoints + 1
 					}
-					result = append(result, amount)
+					result = append(result, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 					matched = true
 				}
 			}
@@ -140,15 +242,29 @@ func (s *session) auraTypeModifiersByMiscMask(auraType, miscMask uint32) []int32
 					}
 				}
 			}
-			result = append(result, amount)
+			result = append(result, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 		}
 	}
 	return result
 }
 
+// gatedAuraModifierAmountsByMiscMask mirrors
+// Unit::GetTotalAuraModifierByMiscMask / GetTotalAuraMultiplierByMiscMask
+// (Unit.cpp:4937-4956): the same-effect-gated amounts of the aura type whose
+// effect MiscValue overlaps miscMask. Every caller is a C++ Total-variant
+// twin (resist, power cost, damage/healing taken/done, AoE avoidance), so the
+// gate lives here rather than at each site.
+func (s *session) gatedAuraModifierAmountsByMiscMask(auraType, miscMask uint32) []int32 {
+	return s.gatedAuraModifierAmounts(auraType, s.auraModifierCandidatesByMiscMask(auraType, miscMask))
+}
+
+func (s *session) auraTypeModifiersByMiscMask(auraType, miscMask uint32) []int32 {
+	return s.gatedAuraModifierAmountsByMiscMask(auraType, miscMask)
+}
+
 func (s *session) auraMultiplier(auraType uint32) float32 {
 	multiplier := float32(1)
-	for _, amount := range s.auraTypeModifiers(auraType) {
+	for _, amount := range s.gatedAuraModifierAmounts(auraType, s.auraModifierCandidatesFiltered(auraType, nil)) {
 		multiplier *= 1 + float32(amount)/100
 	}
 	return multiplier
@@ -276,18 +392,18 @@ func (s *session) castSpeedMultiplier() float32 {
 }
 
 func (s *session) attackPowerAuraMultiplier() float32 {
-	return ResolveAuraPercentMultiplier(s.auraTypeModifiers(spellAuraAttackPowerPercent))
+	return ResolveAuraPercentMultiplier(s.gatedAuraModifierAmounts(spellAuraAttackPowerPercent, s.auraModifierCandidatesFiltered(spellAuraAttackPowerPercent, nil)))
 }
 
 func (s *session) rangedAttackPowerAuraMultiplier() float32 {
-	return ResolveAuraPercentMultiplier(s.auraTypeModifiers(spellAuraRangedAttackPowerPercent))
+	return ResolveAuraPercentMultiplier(s.gatedAuraModifierAmounts(spellAuraRangedAttackPowerPercent, s.auraModifierCandidatesFiltered(spellAuraRangedAttackPowerPercent, nil)))
 }
 
 func (s *session) damageDoneAuraMultiplier(school uint8) float32 {
 	if school >= 7 {
 		return 1
 	}
-	return ResolveAuraPercentMultiplier(s.auraTypeModifiersByMiscMask(spellAuraDamagePercentDone, 1<<school))
+	return ResolveAuraPercentMultiplier(s.gatedAuraModifierAmountsByMiscMask(spellAuraDamagePercentDone, 1<<school))
 }
 
 func ResolveCastSpeedMultiplier(amounts []int32) float32 {

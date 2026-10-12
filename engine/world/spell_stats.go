@@ -358,50 +358,10 @@ func (s *session) playerAuraModifierByMiscMask(auraType uint32, miscMask int32) 
 // movement_speed.go: per-effect amounts from loadedAuras via the DBC spell
 // effects, with the stored single-amount fallback.
 func (s *session) auraTypeModifiersFiltered(auraType uint32, match func(miscValue int32) bool) []int32 {
-	if s == nil {
-		return nil
-	}
-	result := make([]int32, 0)
-	for _, aura := range s.loadedAuras() {
-		if aura == nil || aura.Stopped {
-			continue
-		}
-		matched := false
-		usedStoredAmount := false
-		if s.server != nil && s.server.Data != nil {
-			if spell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
-				for index, effect := range spell.Effects {
-					if effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
-						continue
-					}
-					if !match(effect.MiscValue) {
-						continue
-					}
-					amount := aura.Amounts[index]
-					if amount == 0 && aura.AuraType == auraType && !usedStoredAmount {
-						amount = int32(aura.Amount)
-						usedStoredAmount = true
-					}
-					if amount == 0 {
-						amount = effect.BasePoints + 1
-					}
-					result = append(result, amount)
-					matched = true
-				}
-			}
-		}
-		if !matched && aura.AuraType == auraType && match(aura.MiscValue) {
-			amount := int32(aura.Amount)
-			if amount == 0 {
-				for _, storedAmount := range aura.Amounts {
-					if storedAmount != 0 {
-						amount = storedAmount
-						break
-					}
-				}
-			}
-			result = append(result, amount)
-		}
+	cands := s.auraModifierCandidatesFiltered(auraType, match)
+	result := make([]int32, 0, len(cands))
+	for _, c := range cands {
+		result = append(result, c.amount)
 	}
 	return result
 }
@@ -438,13 +398,13 @@ func (s *session) maxNegativeAuraModifierByMiscValue(auraType uint32, miscValue 
 }
 
 // totalAuraModifierByMiscValue mirrors Unit::GetTotalAuraModifierByMiscValue
-// (Unit.cpp:4977-4985): the sum of amounts of the given aura type whose effect
-// MiscValue equals miscValue.
+// (Unit.cpp:4977-4985): the same-effect-gated sum of amounts of the given
+// aura type whose effect MiscValue equals miscValue.
 func (s *session) totalAuraModifierByMiscValue(auraType uint32, miscValue int32) int32 {
 	var total int32
-	for _, amount := range s.auraTypeModifiersFiltered(auraType, func(mv int32) bool {
+	for _, amount := range s.gatedAuraModifierAmounts(auraType, s.auraModifierCandidatesFiltered(auraType, func(mv int32) bool {
 		return mv == miscValue
-	}) {
+	})) {
 		total += amount
 	}
 	return total
@@ -456,9 +416,9 @@ func (s *session) totalAuraModifierByMiscValue(auraType uint32, miscValue int32)
 // mechanicMask (the AuraEffect predicate is mechanicMask & (1 << miscValue)).
 func (s *session) totalAuraModifierByMechanicMask(auraType uint32, mechanicMask uint32) int32 {
 	var total int32
-	for _, amount := range s.auraTypeModifiersFiltered(auraType, func(mv int32) bool {
+	for _, amount := range s.gatedAuraModifierAmounts(auraType, s.auraModifierCandidatesFiltered(auraType, func(mv int32) bool {
 		return mv >= 0 && mv < 32 && mechanicMask&(1<<uint32(mv)) != 0
-	}) {
+	})) {
 		total += amount
 	}
 	return total
@@ -486,6 +446,21 @@ func (s *session) hasAuraTypeWithMiscValue(auraType uint32, miscValue int32) boo
 	return len(s.auraTypeModifiersFiltered(auraType, func(mv int32) bool {
 		return mv == miscValue
 	})) > 0
+}
+
+// hasAuraTypeWithAmount mirrors Unit::HasAuraTypeWithValue (Unit.cpp:4698):
+// true when any live effect of the aura type has amount == value. This is the
+// gate Player::Regenerate uses for SPELL_AURA_PREVENT_REGENERATE_POWER
+// (Player.cpp:2123) — the DBC amount carries the power index (e.g. Aura of
+// Despair 62692's effect has no value, i.e. amount 0 = POWER_MANA), not the
+// misc value.
+func (s *session) hasAuraTypeWithAmount(auraType uint32, value int32) bool {
+	for _, amount := range s.auraTypeModifiers(auraType) {
+		if amount == value {
+			return true
+		}
+	}
+	return false
 }
 
 // rollSpellCrit rolls whether the spell achieves a critical strike.
@@ -1040,32 +1015,41 @@ var critDamageMetaGemSpells = map[uint32]bool{26297: true, 44795: true, 55341: t
 // (SPELL_AURA_MOD_CRIT_DAMAGE_BONUS, schoolMask) leg of
 // Unit::SpellCriticalDamageBonus (Unit.cpp:7428): the product of
 // (1 + amount/100) over the caster's 163 auras whose misc mask intersects the
-// spell school, with the passive crit-damage talents folded in from DBC
-// amounts and each active +3% meta gem folded in multiplicatively.
-// Gaps (not stubs): the SameEffectSpellGroup highest-wins rule (Unit.cpp:4872)
-// has no Go fold — every matching 163 aura multiplies.
+// spell school — gated by the Same Effect Stack Rule (Unit.cpp:4872) like
+// every other Total fold — with the passive crit-damage talents folded in
+// from DBC amounts and each active +3% meta gem folded in multiplicatively.
 func (s *session) critDamageAuraMultiplier(schoolMask uint32) float64 {
 	mult := 1.0
 	if s == nil || s.player == nil {
 		return mult
 	}
 	s.castMu.Lock()
+	gemCount := 0
 	for _, aura := range s.activeAuras {
 		if aura == nil || aura.Stopped {
 			continue
 		}
 		if critDamageMetaGemSpells[aura.SpellID] {
-			mult *= 1.03
-			continue
-		}
-		if aura.AuraType != spellAuraModCritDamageBonus {
-			continue
-		}
-		if schoolMask != 0 && uint32(aura.MiscValue)&schoolMask != 0 {
-			mult *= 1.0 + float64(int32(aura.Amount))/100.0
+			gemCount++
 		}
 	}
 	s.castMu.Unlock()
+	cands := s.auraModifierCandidatesFiltered(spellAuraModCritDamageBonus, func(miscValue int32) bool {
+		return schoolMask != 0 && uint32(miscValue)&schoolMask != 0
+	})
+	// Meta-gem auras ride the fixed +3% leg, never the 163 fold.
+	kept := cands[:0]
+	for _, c := range cands {
+		if !critDamageMetaGemSpells[c.spellID] {
+			kept = append(kept, c)
+		}
+	}
+	for _, amount := range s.gatedAuraModifierAmounts(spellAuraModCritDamageBonus, kept) {
+		mult *= 1.0 + float64(amount)/100.0
+	}
+	for i := 0; i < gemCount; i++ {
+		mult *= 1.03
+	}
 	mult *= s.critDamageTalentMultiplier(schoolMask)
 	return mult
 }

@@ -156,7 +156,7 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	// Player::RewardQuest (Player.cpp:15403-15404):
 	// SPELL_AURA_MOD_XP_QUEST_PCT (291) scales the quest XP after the rate.
 	if rewardXP > 0 {
-		rewardXP = uint32(float64(rewardXP) * float64(ResolveAuraPercentMultiplier(s.auraTypeModifiers(spellAuraModXPQuestPct))))
+		rewardXP = uint32(float64(rewardXP) * float64(ResolveAuraPercentMultiplier(s.gatedAuraModifierAmounts(spellAuraModXPQuestPct, s.auraModifierCandidatesFiltered(spellAuraModXPQuestPct, nil)))))
 	}
 	if rewardXP > 0 {
 		s.grantXP(ctx, rewardXP)

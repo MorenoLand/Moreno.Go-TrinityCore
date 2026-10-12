@@ -1272,9 +1272,9 @@ func (s *session) maxPositiveAuraModifierByAffectMask(auraType uint32, spell wot
 }
 
 // totalAuraModifierByAffectMaskAndSchool is the misc-gated counterpart of
-// totalAuraModifierByAffectMask: the sum of amounts of the given aura type
-// whose effect MiscValue overlaps schoolMask and whose aura spell affects
-// the given spell (the AuraEffect::IsAffectedOnSpell gate,
+// totalAuraModifierByAffectMask: the same-effect-gated sum of amounts of the
+// given aura type whose effect MiscValue overlaps schoolMask and whose aura
+// spell affects the given spell (the AuraEffect::IsAffectedOnSpell gate,
 // SpellAuraEffects.cpp:848). It serves the
 // SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST (270) arm of
 // Unit::CalcSpellResistedDamage (Unit.cpp:1749).
@@ -1282,7 +1282,7 @@ func (s *session) totalAuraModifierByAffectMaskAndSchool(auraType uint32, spell 
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return 0
 	}
-	var total int32
+	cands := make([]auraModifierCandidate, 0)
 	for _, aura := range s.loadedAuras() {
 		if aura == nil || aura.Stopped {
 			continue
@@ -1308,8 +1308,12 @@ func (s *session) totalAuraModifierByAffectMaskAndSchool(auraType uint32, spell 
 			if amount == 0 {
 				amount = effect.BasePoints + 1
 			}
-			total += amount
+			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 		}
+	}
+	var total int32
+	for _, amount := range s.gatedAuraModifierAmounts(auraType, cands) {
+		total += amount
 	}
 	return total
 }
@@ -1444,13 +1448,14 @@ func (s *session) ignoreTargetResistArmorSwing(armor float64) float64 {
 }
 
 // totalAuraModifierByAffectMask mirrors Unit::GetTotalAuraModifierByAffectMask
-// (Unit.cpp:5017): sums aura amounts of the given type only from aura effects
-// whose spell affects the given spell via the spell-family affect mask.
+// (Unit.cpp:5017): the same-effect-gated sum of aura amounts of the given
+// type, only from aura effects whose spell affects the given spell via the
+// spell-family affect mask.
 func (s *session) totalAuraModifierByAffectMask(auraType uint32, spell wotlk.Spell) int32 {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return 0
 	}
-	var total int32
+	cands := make([]auraModifierCandidate, 0)
 	for _, aura := range s.loadedAuras() {
 		if aura == nil || aura.Stopped || aura.AuraType != auraType {
 			continue
@@ -1473,8 +1478,12 @@ func (s *session) totalAuraModifierByAffectMask(auraType uint32, spell wotlk.Spe
 			if amount == 0 {
 				amount = effect.BasePoints + 1
 			}
-			total += amount
+			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 		}
+	}
+	var total int32
+	for _, amount := range s.gatedAuraModifierAmounts(auraType, cands) {
+		total += amount
 	}
 	return total
 }
@@ -12994,10 +13003,10 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 		for _, amt := range vs.auraTypeModifiersByMiscMask(auraModDamageTaken, schoolMask) {
 			flat += amt
 		}
-		for _, amt := range vs.auraTypeModifiers(flatAura) {
+		for _, amt := range vs.gatedAuraModifierAmounts(flatAura, vs.auraModifierCandidatesFiltered(flatAura, nil)) {
 			flat += amt
 		}
-		pcts = vs.auraTypeModifiers(pctAura)
+		pcts = vs.gatedAuraModifierAmounts(pctAura, vs.auraModifierCandidatesFiltered(pctAura, nil))
 	} else if target.GUID != 0 {
 		key := creatureAuraKeyForTarget(target)
 		for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraModDamageTaken, schoolMask) {
@@ -13196,9 +13205,40 @@ func (s *session) targetHasDKDiseaseDot(ctx context.Context, targetGUID uint64) 
 	return false
 }
 
+// gatedCreatureAuraModifierAmounts is the creature-side twin of
+// session.gatedAuraModifierAmounts: the Same Effect Stack Rule
+// (SpellMgr::AddSameEffectStackRuleSpellGroups, SpellMgr.cpp:404) applies to
+// creature GetTotalAuraModifier/GetTotalAuraMultiplier folds exactly as it
+// does to player folds (Unit.cpp:4831-4883).
+func gatedCreatureAuraModifierAmounts(s *Server, auraType uint32, cands []auraModifierCandidate) []int32 {
+	amounts := make([]int32, 0, len(cands))
+	if s == nil {
+		for _, c := range cands {
+			amounts = append(amounts, c.amount)
+		}
+		return amounts
+	}
+	winner := make(map[uint32]int)
+	for i, c := range cands {
+		group := s.petAuraStackGroup(c.spellID, auraType)
+		if group == 0 {
+			amounts = append(amounts, c.amount)
+			continue
+		}
+		if w, ok := winner[group]; !ok || absAuraAmount(c.amount) > absAuraAmount(cands[w].amount) {
+			winner[group] = i
+		}
+	}
+	for _, i := range winner {
+		amounts = append(amounts, cands[i].amount)
+	}
+	return amounts
+}
+
 // the sum of amounts of all live effects of the given aura type on the
 // creature, with no misc-mask filter (the periodic-tick aura-197 term in
-// Unit::SpellCritChanceTaken, Unit.cpp:7228-7234, is unfiltered).
+// Unit::SpellCritChanceTaken, Unit.cpp:7228-7234, is unfiltered). The fold
+// honors the Same Effect Stack Rule like the player-side total.
 func creatureAuraModifierSum(s *Server, key creatureAuraKey, auraType uint32) int32 {
 	if s == nil || s.Data == nil || key.GUID == 0 {
 		return 0
@@ -13210,7 +13250,15 @@ func creatureAuraModifierSum(s *Server, key creatureAuraKey, auraType uint32) in
 		copies = append(copies, aura)
 	}
 	s.auraMu.Unlock()
-	var total int32
+	// Slot-sorted apply order, matching the player-side loadedAuras order,
+	// so same-effect tie-breaking is deterministic.
+	sort.Slice(copies, func(i, j int) bool {
+		if copies[i] == nil || copies[j] == nil {
+			return copies[j] == nil
+		}
+		return copies[i].Slot < copies[j].Slot
+	})
+	cands := make([]auraModifierCandidate, 0)
 	for _, aura := range copies {
 		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
 			continue
@@ -13229,16 +13277,20 @@ func creatureAuraModifierSum(s *Server, key creatureAuraKey, auraType uint32) in
 				amount = int32(aura.Amount)
 				usedStoredAmount = true
 			}
-			total += amount
+			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 		}
+	}
+	var total int32
+	for _, amount := range gatedCreatureAuraModifierAmounts(s, auraType, cands) {
+		total += amount
 	}
 	return total
 }
 
 // creatureAuraModifiersByMiscMask mirrors the creature half of the session
-// auraTypeModifiersByMiscMask (movement_speed.go): it collects per-effect
-// amounts of the creature's active auras whose DBC row carries an effect of
-// auraType matching miscMask.
+// auraTypeModifiersByMiscMask (movement_speed.go): it collects the
+// same-effect-gated per-effect amounts of the creature's active auras whose
+// DBC row carries an effect of auraType matching miscMask.
 func creatureAuraModifiersByMiscMask(s *Server, key creatureAuraKey, auraType, miscMask uint32) []int32 {
 	if s == nil || s.Data == nil || miscMask == 0 || key.GUID == 0 {
 		return nil
@@ -13250,7 +13302,15 @@ func creatureAuraModifiersByMiscMask(s *Server, key creatureAuraKey, auraType, m
 		copies = append(copies, aura)
 	}
 	s.auraMu.Unlock()
-	result := make([]int32, 0)
+	// Slot-sorted apply order, matching the player-side loadedAuras order,
+	// so same-effect tie-breaking is deterministic.
+	sort.Slice(copies, func(i, j int) bool {
+		if copies[i] == nil || copies[j] == nil {
+			return copies[j] == nil
+		}
+		return copies[i].Slot < copies[j].Slot
+	})
+	cands := make([]auraModifierCandidate, 0)
 	for _, aura := range copies {
 		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
 			continue
@@ -13272,10 +13332,10 @@ func creatureAuraModifiersByMiscMask(s *Server, key creatureAuraKey, auraType, m
 			if amount == 0 {
 				amount = effect.BasePoints + 1
 			}
-			result = append(result, amount)
+			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
 		}
 	}
-	return result
+	return gatedCreatureAuraModifierAmounts(s, auraType, cands)
 }
 
 // aoeDamageAvoidanceMultiplier mirrors Unit::CalculateAOEAvoidance
@@ -19587,7 +19647,20 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	}
 }
 
+// auraRemoveMode mirrors the AuraRemoveMode gate on the aura-specific remove
+// legs (SpellAuras.cpp): some arms only run on non-default removals.
+type auraRemoveMode uint8
+
+const (
+	auraRemoveByDefault auraRemoveMode = iota // charge spent / normal consume
+	auraRemoveByExpire                        // duration ran out
+)
+
 func (s *session) removeAura(spellID uint32) {
+	s.removeAuraWithMode(spellID, auraRemoveByDefault)
+}
+
+func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	wasMounted := false
 	wasMovementControl := false
 	wasConfused := false
@@ -20168,7 +20241,7 @@ func (s *session) removeAura(spellID uint32) {
 			s.server.refreshThreatTempModifier(s.player.Map, s.player.InstanceID, caster)
 		}
 	}
-	// AuraEffect::HandlePhase remove leg (SpellAuraEffects.cpp:1581-1632):
+	// AuraEffect::HandleAuraPhase remove leg (SpellAuraEffects.cpp:1581-1632):
 	// the aura record is already erased above (Unit::_UnapplyAura erases
 	// before the handlers, Unit.cpp:3548), so the shift carries the
 	// recomputed mask from the remaining 261 auras (PHASEMASK_NORMAL = 1
@@ -20177,6 +20250,108 @@ func (s *session) removeAura(spellID uint32) {
 		if sp, found, _ := s.server.Data.Spell(spellID); found && spellHasAura(sp, spellAuraPhase) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SET_PHASE_SHIFT), buildPhaseShift(s.currentPlayerPhaseMask()), true)
 			s.server.refreshPlayerVisibility()
+		}
+	}
+	// Improved Spell Reflection (SpellAuras.cpp:1587-1608): when a warrior
+	// Spell Reflection aura (family flags[1] & 0x2) is removed for any
+	// non-default reason and the aura's caster carries the Improved Spell
+	// Reflection dummy (GetDummyAuraEffect(SPELLFAMILY_WARRIOR, 1935, 1):
+	// SPELL_AURA_DUMMY, effIndex 1, SpellIconID 1935, warrior family, no
+	// family flags), the matching reflect auras are stripped from every
+	// same-subgroup party member in the same map/instance except the target
+	// (Unit::GetPartyMembers: same subgroup, in map, !IsHostileTo — the duel
+	// arm of IsHostileTo rides isFriendlyToTarget). The successful-reflect
+	// consume path (checkSpellReflection) removes with the default mode, so
+	// this arm does not fire there — matching C++'s charge-spend
+	// AURA_REMOVE_BY_DEFAULT removal. Dispel/cancel/death removals still
+	// funnel through the default mode, so the arm misses those paths.
+	if mode != auraRemoveByDefault {
+		s.removePartySpellReflectionAuras(spellID, removedCasterGUID)
+	}
+}
+
+// removePartySpellReflectionAuras runs the Improved Spell Reflection party
+// strip described above.
+func (s *session) removePartySpellReflectionAuras(spellID uint32, removedCasterGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil || s.groupID == 0 {
+		return
+	}
+	removedSpell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found || removedSpell.SpellFamilyName != spellFamilyWarrior || removedSpell.SpellFamilyFlags[1]&0x2 == 0 {
+		return
+	}
+	casterGUID := removedCasterGUID
+	if casterGUID == 0 {
+		casterGUID = s.playerGUID
+	}
+	casterSess := s.server.findSessionByGUID(casterGUID)
+	if casterSess == nil || casterSess.server == nil || casterSess.server.Data == nil {
+		return
+	}
+	hasTalent := false
+	for _, aura := range casterSess.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraDummy || aura.EffectMask&(1<<1) == 0 {
+			continue
+		}
+		talentSpell, found, err := casterSess.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if talentSpell.SpellIconID == 1935 && talentSpell.SpellFamilyName == spellFamilyWarrior &&
+			talentSpell.SpellFamilyFlags[0] == 0 && talentSpell.SpellFamilyFlags[1] == 0 && talentSpell.SpellFamilyFlags[2] == 0 {
+			hasTalent = true
+			break
+		}
+	}
+	if !hasTalent {
+		return
+	}
+	var subGroup uint8
+	subGroupOK := false
+	if group := s.server.getGroup(s.groupID); group != nil {
+		subGroup, subGroupOK = group.memberSubGroup(s.playerGUID)
+	}
+	var targets []*session
+	for _, other := range s.server.getGroupSessions(s.groupID) {
+		if other == nil || other == s || !other.worldReady.Load() || other.player == nil {
+			continue
+		}
+		if other.player.Map != s.player.Map || other.player.InstanceID != s.player.InstanceID {
+			continue
+		}
+		if subGroupOK {
+			group := s.server.getGroup(s.groupID)
+			if group == nil {
+				continue
+			}
+			if sg, ok := group.memberSubGroup(other.playerGUID); !ok || sg != subGroup {
+				continue
+			}
+		}
+		if !s.isFriendlyToTarget(other.playerGUID, other) {
+			continue
+		}
+		targets = append(targets, other)
+	}
+	for _, other := range targets {
+		if other.server == nil || other.server.Data == nil {
+			continue
+		}
+		var strip []uint32
+		other.castMu.Lock()
+		for id, aura := range other.activeAuras {
+			if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+				continue
+			}
+			auraSpell, found, err := other.server.Data.Spell(id)
+			if err != nil || !found || auraSpell.SpellFamilyName != spellFamilyWarrior || auraSpell.SpellFamilyFlags[1]&0x2 == 0 {
+				continue
+			}
+			strip = append(strip, id)
+		}
+		other.castMu.Unlock()
+		for _, id := range strip {
+			other.removeAura(id)
 		}
 	}
 }
@@ -24803,7 +24978,10 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 		ts.executePeriodicTickOnPlayer(finalTick)
 	}
 	ts.dropSpellMods(spellID)
-	ts.removeAura(spellID)
+	// Natural expiry maps to AURA_REMOVE_BY_EXPIRE, not the default mode:
+	// aura-specific remove legs gated on removeMode != AURA_REMOVE_BY_DEFAULT
+	// (e.g. Improved Spell Reflection's party strip) run here.
+	ts.removeAuraWithMode(spellID, auraRemoveByExpire)
 	if retainCombo != 0 {
 		ts.addSessionComboPoints(retainTarget, retainCombo)
 	}
