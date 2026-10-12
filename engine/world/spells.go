@@ -19754,9 +19754,11 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	removedPowerAura := (*activeAura)(nil)
 	removedCombatAura := (*activeAura)(nil)
 	removedSkillAura := (*activeAura)(nil)
+	auraWasPresent := false
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
+			auraWasPresent = true
 			removedEffectMask = aura.EffectMask
 			removedCasterGUID = aura.CasterGUID
 			removedAuraType = aura.AuraType
@@ -20309,6 +20311,14 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// funnel through the default mode, so the arm misses those paths.
 	if mode != auraRemoveByDefault {
 		s.removePartySpellReflectionAuras(spellID, removedCasterGUID)
+	}
+	// Aura::HandleAuraSpecificMods table-driven remove arms
+	// (SpellAuras.cpp:1352-1378): the spell_linked rows and the spell_area
+	// rows keyed by this aura fire only when an aura was actually removed —
+	// C++ runs them from Unit::_UnapplyAura.
+	if auraWasPresent {
+		s.applyAuraLinkedRemoveArms(spellID)
+		s.applyAuraSpellAreaRows(context.Background(), spellID)
 	}
 }
 
@@ -22483,6 +22493,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		for _, e := range scPurge {
 			s.expireSingleCastEntry(e)
 		}
+		// Aura::HandleAuraSpecificMods table-driven arms (SpellAuras.cpp):
+		// the spell_area rows keyed by this aura and the spell_linked
+		// SPELL_LINK_AURA apply rows fire once per aura application, before
+		// the effect arms (C++ Unit::_AddAura, Unit.cpp:3514).
+		targetSess.applyAuraSpellAreaRows(ctx, spell.ID)
+		targetSess.applyAuraLinkedAurasAtApply(ctx, spell.ID, casterGUID)
 		// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms
 		// (SpellInfo.cpp:2860-2920): an immunity-granting aura effect whose
 		// spell carries ATTR1_DISPEL_AURAS_ON_IMMUNITY dispels the target's
@@ -23232,6 +23248,171 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			s.expireCreatureAura(targetKey, spell.ID, slot)
 		})
 		s.server.auraMu.Unlock()
+	}
+}
+
+// spellLinkCastType / spellLinkAuraType mirror the type column of
+// spell_linked_spell against SpellLinkedType (SpellMgr.h:104-111):
+// SPELL_LINK_CAST = 0 fires at cast completion, SPELL_LINK_AURA = 2 fires
+// at aura apply/remove with the spell_trigger key offset by
+// SPELL_LINKED_MAX_SPELLS*type (SpellMgr::LoadSpellLinked, SpellMgr.cpp:2122).
+const (
+	spellLinkCastType = 0
+	spellLinkAuraType = 2
+)
+
+// spellLinkedEffects reads the spell_effect column of spell_linked_spell for
+// one (spell_trigger, type) key. C++ encodes the key as
+// spell_trigger ± SPELL_LINKED_MAX_SPELLS*type preserving the trigger's sign,
+// so the aura arms query with the raw trigger: +spellID/type 2 for
+// SPELL_LINK_AURA, -spellID/type 0 for the remove-linked SPELL_LINK_CAST rows.
+func spellLinkedEffects(ctx context.Context, db *sql.DB, spellTrigger int32, linkType int32) []int32 {
+	if db == nil {
+		return nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT spell_effect FROM spell_linked_spell WHERE spell_trigger = ? AND type = ?`, spellTrigger, linkType)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var effects []int32
+	for rows.Next() {
+		var effect int32
+		if err := rows.Scan(&effect); err == nil {
+			effects = append(effects, effect)
+		}
+	}
+	return effects
+}
+
+// applyAuraSpellAreaRows mirrors the spell_area arm of
+// Aura::HandleAuraSpecificMods (SpellAuras.cpp:1311-1330): at aura apply AND
+// remove, every spell_area row keyed by the aura (aura_spell) is enforced
+// immediately — rows whose requirements no longer fit drop the row's spell
+// from the target, fitting autocast rows are cast when missing. C++ resolves
+// the target's zone/area and passes a null player for non-players (which
+// fails every player-gated row, so the linked spells are stripped); Go runs
+// this on the player-target path only and the creature-target arm stays open.
+func (s *session) applyAuraSpellAreaRows(ctx context.Context, auraSpellID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT spell, area, quest_start, quest_end, racemask, gender, autocast, quest_start_status, quest_end_status FROM spell_area WHERE aura_spell = ?`, auraSpellID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	zoneID, areaID := s.player.Zone, s.areaID
+	for rows.Next() {
+		var spellID uint32
+		var rule spellAreaRule
+		var gender, autocast int64
+		if err := rows.Scan(&spellID, &rule.Area, &rule.QuestStart, &rule.QuestEnd, &rule.RaceMask, &gender, &autocast, &rule.QuestStartStatus, &rule.QuestEndStatus); err != nil {
+			continue
+		}
+		rule.Gender, rule.Autocast = uint8(gender), autocast != 0
+		// The SpellArea::IsFitToRequirements tail (SpellMgr.cpp:718-781) is
+		// keyed by the row's spell — the same extra-condition gate the
+		// zone-update path folds in via spellAreaRulesFit.
+		fits := s.spellAreaRuleFits(ctx, rule, zoneID, areaID)
+		if fits && spellAreaExtraConditionSpell(spellID) && !s.spellAreaExtraConditionFits(spellID, zoneID, areaID) {
+			fits = false
+		}
+		if !fits {
+			s.removeAura(spellID)
+			continue
+		}
+		if rule.Autocast && !s.hasAura(spellID) {
+			s.castSpellDirect(ctx, spellID, s.playerGUID)
+		}
+	}
+}
+
+// applyAuraLinkedAurasAtApply mirrors the apply arm of
+// Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1336-1350):
+// rows of spell_linked_spell with type 2 (SPELL_LINK_AURA) keyed by the
+// applied aura fire here. Negative ids ApplySpellImmune the linked spell on
+// the target — Go has no ApplySpellImmune model (immunity.go), so that arm
+// stays unbridged. Positive ids AddAura the linked spell on the target from
+// the caster: Go runs it through the direct aura path on the caster's session
+// (falling back to the applying session when the caster is offline) with the
+// recorded caster, like the Prayer of Mending jump (procs.go). The onReapply
+// stack-amount propagate arm (SpellAuras.cpp:1381) has no linked-aura
+// registry in Go and stays open.
+func (s *session) applyAuraLinkedAurasAtApply(ctx context.Context, spellID uint32, casterGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	caster := casterGUID
+	if caster == 0 {
+		caster = s.playerGUID
+	}
+	casterSess := s
+	if cs := s.server.findSessionByGUID(caster); cs != nil && cs.player != nil {
+		casterSess = cs
+	}
+	var casterLevel uint32
+	if casterSess.player != nil {
+		casterLevel = uint32(casterSess.player.Level)
+	}
+	for _, id := range spellLinkedEffects(ctx, s.server.WorldStore.DB, int32(spellID), spellLinkAuraType) {
+		if id <= 0 {
+			continue
+		}
+		linked, found, err := s.server.Data.Spell(uint32(id))
+		if err != nil || !found {
+			continue
+		}
+		var durationMs uint32
+		if linked.DurationIndex != 0 {
+			if dur, ok, derr := s.server.Data.SpellDuration(linked.DurationIndex, casterLevel); derr == nil && ok && dur > 0 {
+				durationMs = uint32(dur)
+			}
+		}
+		castMerged := make(map[uint64]struct{})
+		for effIndex := range linked.Effects {
+			eff := linked.Effects[effIndex]
+			if eff.Aura == 0 {
+				continue
+			}
+			var amount uint32
+			if bp := eff.CalcValueForLevel(linked, casterLevel); bp > 0 {
+				amount = uint32(bp)
+			}
+			casterSess.applyAuraToTarget(ctx, s.playerGUID, linked, eff, effIndex, durationMs, eff.AuraPeriod, amount, linked.SchoolMask, castMerged, false, caster, false, 0, false)
+		}
+	}
+}
+
+// applyAuraLinkedRemoveArms mirrors the remove arms of
+// Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1352-1378).
+// The -spellID type-0 (SPELL_LINK_CAST/REMOVE) rows: negative ids strip the
+// target's aura of -id; positive ids cast the linked spell on the target,
+// fully triggered with the removed aura's caster as original caster
+// (CastSpellExtraArgs(ObjectGuid), SpellDefines.h:189 — TRIGGERED_FULL_MASK).
+// The +spellID type-2 (SPELL_LINK_AURA) rows: negative ids would clear the
+// apply-time immunity (no ApplySpellImmune model in Go); positive ids remove
+// the linked aura — Go's remove keys on spell ID only, so the caster match is
+// vacuous. C++ gates the linked cast on removeMode != AURA_REMOVE_BY_DEATH;
+// Go's death strip bypasses removeAuraWithMode (clearDeathAuras), so the gate
+// holds structurally.
+func (s *session) applyAuraLinkedRemoveArms(spellID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	ctx := context.Background()
+	db := s.server.WorldStore.DB
+	for _, id := range spellLinkedEffects(ctx, db, -int32(spellID), spellLinkCastType) {
+		if id < 0 {
+			s.removeAura(uint32(-id))
+		} else if id > 0 {
+			s.castSpellDirect(ctx, uint32(id), s.playerGUID)
+		}
+	}
+	for _, id := range spellLinkedEffects(ctx, db, int32(spellID), spellLinkAuraType) {
+		if id > 0 {
+			s.removeAura(uint32(id))
+		}
 	}
 }
 
