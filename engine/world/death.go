@@ -79,6 +79,13 @@ func (s *Server) grantChannelDeathItems(ctx context.Context, auras []*activeAura
 		if aura == nil || aura.Stopped {
 			continue
 		}
+		// AuraEffect::HandleChannelDeathItem fires only on removal with
+		// AURA_REMOVE_BY_DEATH (SpellAuraEffects.cpp:4692); death-persistent
+		// auras are never stripped by RemoveAllAurasOnDeath, so the handler
+		// never fires for them — exclude them from the pre-strip set.
+		if spellDeathPersistent(s.Data, aura.SpellID) {
+			continue
+		}
 		spell, found, err := s.Data.Spell(aura.SpellID)
 		if err != nil || !found {
 			continue
@@ -135,6 +142,70 @@ func (s *Server) grantChannelDeathItems(ctx context.Context, auras []*activeAura
 			}
 			_ = caster.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(caster.playerGUID, res.ClientBag, slotForPush, effect.ItemType, count, res.InventoryCount, res.IsStack), true)
 		}
+	}
+}
+
+// sweepOwnedAurasOnDeath mirrors the m_ownedAuras loop of
+// Unit::RemoveAllAurasOnDeath (Unit.cpp:4364-4370): auras the dying unit CAST
+// on other targets are destroyed with AURA_REMOVE_BY_DEATH — passive and
+// death-persistent auras are skipped, exactly like the applied loop. Go holds
+// no passive aura instances, so only the death-persistent gate is modeled.
+// Records are matched on aura.CasterGUID == casterGUID, which creature casts
+// set to the motion GUID (boss_ai.go:1063) and player casts to the player
+// GUID. The per-caster merge deviation is parked: a same-spell record from
+// another caster keeps its own CasterGUID and is never matched here. Lock
+// discipline: session/aura snapshots are collected under the map locks and
+// released before the funnel calls, which take the locks themselves.
+func (s *Server) sweepOwnedAurasOnDeath(casterGUID uint64) {
+	if s == nil || casterGUID == 0 {
+		return
+	}
+	// Player targets.
+	s.sessionsMu.RLock()
+	var sessions []*session
+	for sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		sess.castMu.Lock()
+		var strip []uint32
+		if sess.activeAuras != nil {
+			for id, aura := range sess.activeAuras {
+				if aura == nil || aura.CasterGUID != casterGUID || spellDeathPersistent(s.Data, id) {
+					continue
+				}
+				strip = append(strip, id)
+			}
+		}
+		sess.castMu.Unlock()
+		for _, id := range strip {
+			sess.removeAuraWithMode(id, auraRemoveByDeath)
+		}
+	}
+	// Creature targets.
+	type ownedStrip struct {
+		key creatureAuraKey
+		id  uint32
+	}
+	s.auraMu.Lock()
+	var cstrip []ownedStrip
+	if s.activeCreatureAuras != nil {
+		for key, auras := range s.activeCreatureAuras {
+			for id, aura := range auras {
+				if aura == nil || aura.CasterGUID != casterGUID || spellDeathPersistent(s.Data, id) {
+					continue
+				}
+				cstrip = append(cstrip, ownedStrip{key: key, id: id})
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, cs := range cstrip {
+		s.removeCreatureAuraWithMode(cs.key, cs.id, auraRemoveByDeath)
 	}
 }
 

@@ -19497,7 +19497,7 @@ func (s *Server) clearCreatureAurasOnDeath(key creatureAuraKey) {
 		if !present {
 			continue
 		}
-		s.removeCreatureAura(key, id)
+		s.removeCreatureAuraWithMode(key, id, auraRemoveByDeath)
 	}
 	s.auraMu.Lock()
 	if auras, ok := s.activeCreatureAuras[key]; ok && len(auras) == 0 {
@@ -19507,6 +19507,9 @@ func (s *Server) clearCreatureAurasOnDeath(key creatureAuraKey) {
 		delete(s.creatureAuras, key)
 	}
 	s.auraMu.Unlock()
+	// Unit::RemoveAllAurasOnDeath's m_ownedAuras loop (Unit.cpp:4364-4370):
+	// auras the dying creature cast on other targets are destroyed too.
+	s.sweepOwnedAurasOnDeath(key.GUID)
 }
 
 func (s *session) clearActiveAuras() {
@@ -19586,6 +19589,11 @@ func (s *session) clearDeathAuras() {
 	// (Unit.cpp:3548).
 	for _, id := range strip {
 		s.removeAuraWithMode(id, auraRemoveByDeath)
+	}
+	// Unit::RemoveAllAurasOnDeath's m_ownedAuras loop (Unit.cpp:4364-4370):
+	// auras the dying player cast on other targets are destroyed too.
+	if s.server != nil {
+		s.server.sweepOwnedAurasOnDeath(s.playerGUID)
 	}
 }
 
@@ -27563,9 +27571,21 @@ func (s *Server) clearCreatureFeignDeath(key creatureAuraKey) {
 }
 
 func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
+	s.removeCreatureAuraWithMode(key, spellID, auraRemoveByDefault)
+}
+
+// removeCreatureAuraWithMode is the mode-carrying creature remove funnel.
+// Aura::HandleAuraSpecificMods' spell_linked and spell_area remove arms
+// (SpellAuras.cpp:1352-1378) gate on the remove mode (the linked cast is
+// skipped on AURA_REMOVE_BY_DEATH), so the funnel takes the mode like the
+// player-side removeAuraWithMode. Callers that model a plain RemoveAura
+// (Unit.h:1244 default) use removeCreatureAura.
+func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32, mode auraRemoveMode) {
 	if s == nil || key.GUID == 0 || spellID == 0 {
 		return
 	}
+	auraWasPresent := false
+	removedCasterGUID := uint64(0)
 	wasCharm := false
 	charmerGUID := uint64(0)
 	wasTaunt := false
@@ -27584,6 +27604,8 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	if s.activeCreatureAuras != nil {
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
+				auraWasPresent = true
+				removedCasterGUID = aura.CasterGUID
 				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
@@ -27720,6 +27742,59 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	// recomputes the creature's run rate.
 	if wasSpeedAura {
 		s.refreshCreatureRunSpeed(key, key.GUID)
+	}
+	// Aura::HandleAuraSpecificMods table-driven remove arms
+	// (SpellAuras.cpp:1352-1378) for creature targets: the spell_linked rows
+	// and the spell_area rows keyed by this aura fire only when an aura was
+	// actually removed — C++ runs them from Unit::_UnapplyAura.
+	if auraWasPresent {
+		s.applyCreatureLinkedRemoveArms(key, spellID, mode, removedCasterGUID)
+		s.applyCreatureSpellAreaRows(key, spellID)
+	}
+}
+
+// applyCreatureLinkedRemoveArms mirrors the remove arms of
+// Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1352-1378)
+// for creature targets. The -spellID type-0 (SPELL_LINK_CAST/REMOVE) rows:
+// negative ids strip the creature's aura of -id with a plain remove
+// (Unit::RemoveAura's BY_DEFAULT); positive ids cast the linked spell on the
+// creature, fully triggered with the removed aura's caster as original caster,
+// gated on removeMode != AURA_REMOVE_BY_DEATH (:1357). The +spellID type-2
+// (SPELL_LINK_AURA) rows: positive ids remove the linked aura with the same
+// remove mode — C++ passes removeMode through
+// (target->RemoveAura(*itr, GetCasterGUID(), 0, removeMode)).
+func (s *Server) applyCreatureLinkedRemoveArms(key creatureAuraKey, spellID uint32, mode auraRemoveMode, removedCasterGUID uint64) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	ctx := context.Background()
+	db := s.WorldStore.DB
+	for _, id := range spellLinkedEffects(ctx, db, -int32(spellID), spellLinkCastType) {
+		if id < 0 {
+			s.removeCreatureAura(key, uint32(-id))
+		} else if id > 0 && mode != auraRemoveByDeath {
+			var castSess *session
+			if cs := s.findSessionByGUID(removedCasterGUID); cs != nil && cs.player != nil {
+				castSess = cs
+			} else {
+				s.sessionsMu.RLock()
+				for cand := range s.sessions {
+					if cand != nil && cand.player != nil && cand.player.Map == key.Map && cand.player.InstanceID == key.InstanceID {
+						castSess = cand
+						break
+					}
+				}
+				s.sessionsMu.RUnlock()
+			}
+			if castSess != nil {
+				castSess.castSpellDirect(ctx, uint32(id), key.GUID)
+			}
+		}
+	}
+	for _, id := range spellLinkedEffects(ctx, db, int32(spellID), spellLinkAuraType) {
+		if id > 0 {
+			s.removeCreatureAuraWithMode(key, uint32(id), mode)
+		}
 	}
 }
 

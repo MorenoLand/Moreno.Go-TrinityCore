@@ -110,6 +110,59 @@ func (s *Server) checkMotionSpellCheckLocation(ctx context.Context, m *creatureM
 	return true
 }
 
+// applyCreatureSpellAreaRows mirrors the spell_area arm of
+// Aura::HandleAuraSpecificMods (SpellAuras.cpp:1311-1330) for creature
+// targets: at aura apply AND remove, every spell_area row keyed by the aura
+// (aura_spell) is enforced immediately — rows whose requirements no longer
+// fit drop the row's spell from the creature, fitting autocast rows are cast
+// when missing. C++ resolves the target's zone/area and passes a null player
+// for non-players, so the null-player IsFitToRequirements twin
+// (creatureSpellAreaRuleFitsNullPlayer) is the fit test. The fitting
+// autocast cast is target->CastSpell(target, spellId, true): a triggered
+// self-cast, which runs through the creature cast funnel when the motion
+// still resolves.
+func (s *Server) applyCreatureSpellAreaRows(key creatureAuraKey, auraSpellID uint32) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || key.GUID == 0 {
+		return
+	}
+	ctx := context.Background()
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT spell, area, quest_start, quest_end, racemask, gender, autocast, quest_start_status, quest_end_status FROM spell_area WHERE aura_spell = ?`, auraSpellID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var zoneID, areaID uint32
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if motion != nil {
+		zoneID, areaID = s.zoneAndAreaID(motion.Map, motion.X, motion.Y, motion.Z, 0)
+	}
+	for rows.Next() {
+		var spellID uint32
+		var rule spellAreaRule
+		var gender, autocast int64
+		if err := rows.Scan(&spellID, &rule.Area, &rule.QuestStart, &rule.QuestEnd, &rule.RaceMask, &gender, &autocast, &rule.QuestStartStatus, &rule.QuestEndStatus); err != nil {
+			continue
+		}
+		rule.Gender, rule.Autocast = uint8(gender), autocast != 0
+		fits := creatureSpellAreaRuleFitsNullPlayer(rule, zoneID, areaID)
+		if fits && spellAreaExtraConditionSpell(spellID) {
+			fits = false
+		}
+		if !fits {
+			s.removeCreatureAura(key, spellID)
+			continue
+		}
+		if rule.Autocast {
+			s.auraMu.Lock()
+			_, has := s.activeCreatureAuras[key][spellID]
+			s.auraMu.Unlock()
+			if !has && motion != nil {
+				s.castCreatureSpellInternal(ctx, motion, spellID, key.GUID, true)
+			}
+		}
+	}
+}
+
 // creatureSpellAreaRules is the server-level spell_area query for the
 // creature path; ok is false when no rows exist (same convention as the
 // session twin).
