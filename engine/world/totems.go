@@ -256,10 +256,12 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 	// ExecuteLogEffectSummonObject (SpellEffects.cpp:2400-2403).
 	s.sendSummonObjectLog(spellID, spellEffectSummon, totemGUID)
 
-	// Send SMSG_TOTEM_CREATED
+	// Send SMSG_TOTEM_CREATED: Slot (u8), packed totem GUID, Duration
+	// (u32), creating SpellID (u32) — TotemPackets.cpp:27-30 writes the
+	// GUID packed (ObjectGuid), not as a fixed u64.
 	resp := protocol.NewBuffer(17)
 	resp.WriteU8(slot)
-	resp.WriteU64(totemGUID)
+	resp.WritePackedGUID(totemGUID)
 	resp.WriteU32(def.DurationMs)
 	resp.WriteU32(def.SpellID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_TOTEM_CREATED), resp.Bytes(), true)
@@ -823,6 +825,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 
 	var totemGUID uint64
 	var buffSpell uint32
+	var creatingSpellID uint32
 	var mapID, instanceID uint32
 	matched := false
 
@@ -839,6 +842,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 				}
 				totemGUID = totem.TotemGUID
 				buffSpell = totem.BuffSpell
+				creatingSpellID = totem.SpellID
 				mapID, instanceID = totem.Map, totem.InstanceID
 				matched = true
 				totem.mu.Unlock()
@@ -884,10 +888,20 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 		s.server.sessionsMu.RUnlock()
 	}
 
+	// Totem::UnSummon (Totem.cpp:150-152): every totem unsummon — expiry,
+	// kill, replacement, manual destroy — sends SMSG_COOLDOWN_EVENT for
+	// the creating spell (startCooldown=false, server-side cooldowns
+	// untouched). buildCooldownEvent matches the C++ wire order (spell
+	// u32, raw u64 owner GUID; SpellHistory.cpp:386-388).
+	if creatingSpellID != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, creatingSpellID), true)
+	}
+
 	// Send SMSG_TOTEM_CREATED with 0 duration to clear totem bar icon
+	// (packed zero GUID = single 0x00 mask byte, same parse as C++).
 	resp := protocol.NewBuffer(17)
 	resp.WriteU8(slotID)
-	resp.WriteU64(0)
+	resp.WritePackedGUID(0)
 	resp.WriteU32(0)
 	resp.WriteU32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_TOTEM_CREATED), resp.Bytes(), true)
