@@ -473,6 +473,19 @@ func (s *Server) isChannelMember(member *session, name string) bool {
 	return ok
 }
 
+// channelIDFor returns the numeric id of the resolved channel — the
+// Channel::GetChannelId twin that Eluna's PLAYER_EVENT_ON_CHANNEL_CHAT
+// carries as its routing extra.
+func (s *Server) channelIDFor(member *session, name string) uint32 {
+	key := member.scopedChannelKey(name)
+	s.channelsMu.RLock()
+	defer s.channelsMu.RUnlock()
+	if channel := s.channels[key]; channel != nil {
+		return channel.ID
+	}
+	return 0
+}
+
 // isChannelMuted reports whether the speaker carries the channel mute flag.
 func (s *Server) isChannelMuted(member *session, name string) bool {
 	key := member.scopedChannelKey(name)

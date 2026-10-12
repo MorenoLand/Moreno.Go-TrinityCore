@@ -9111,6 +9111,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			reqBuf.WriteU64(s.playerGUID)
 			_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_REQUESTED), reqBuf.Bytes(), true)
 			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_REQUESTED), reqBuf.Bytes(), true)
+			// Spell::EffectDuel (SpellEffects.cpp:3873): sScriptMgr->OnPlayerDuelRequest
+			// fires after the duel-info records are created and the request
+			// packets are sent. Eluna arg order is (event, target, challenger).
+			partner.triggerPlayerEvent(ctx, scripting.PlayerEventDuelRequest, partner.luaPlayer(), s.luaPlayer())
 		}
 	}
 

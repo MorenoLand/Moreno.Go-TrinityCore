@@ -52,6 +52,15 @@ func (s *Server) findPlayer(guid uint64) *scripting.Object {
 	return nil
 }
 
+// luaPlayerOrNil is the nil-session-safe twin of luaPlayer: a missing
+// session yields nil, the Eluna::Push((Player*)nullptr) = nil twin.
+func luaPlayerOrNil(s *session) *scripting.Object {
+	if s == nil {
+		return nil
+	}
+	return s.luaPlayer()
+}
+
 func (s *session) luaPlayer() *scripting.Object {
 	if !s.playerLoaded || s.player == nil {
 		return nil

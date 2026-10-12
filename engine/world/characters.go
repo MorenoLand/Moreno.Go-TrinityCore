@@ -578,6 +578,10 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		if _, err := tx.ExecContext(ctx, "UPDATE characters SET deleteInfos_Name = name, deleteInfos_Account = account, deleteDate = UNIX_TIMESTAMP(), name = '', account = 0 WHERE guid = ?", guid); err != nil {
 			return false
 		}
+		// CharacterHandler.cpp:689: OnPlayerDelete fires before the DB
+		// reference is removed (successful delete only). Eluna carries the
+		// guidlow (uint32).
+		s.triggerPlayerEvent(ctx, scripting.PlayerEventCharacterDelete, uint32(guid))
 		if err := tx.Commit(); err != nil {
 			return false
 		}
@@ -610,6 +614,10 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
 		return false
 	}
+	// CharacterHandler.cpp:689: OnPlayerDelete fires before the DB
+	// reference is removed (successful delete only). Eluna carries the
+	// guidlow (uint32).
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventCharacterDelete, uint32(guid))
 	if err := tx.Commit(); err != nil {
 		return false
 	}

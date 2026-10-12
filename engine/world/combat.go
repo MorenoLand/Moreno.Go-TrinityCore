@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -2871,6 +2872,12 @@ func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 		if s.player == nil || !s.duelCountdown || s.duelPartner != partnerGUID {
 			return
 		}
+		// Player::UpdateDuelFlag (Player.cpp:20785-20797): the OnPlayerDuelStart
+		// hook fires when the countdown elapses, before PLAYER_DUEL_TEAM 1/2
+		// are assigned. Eluna arg order is (event, player1, player2) = (this, opponent).
+		if partner != nil && partner.player != nil && partner.duelPartner == s.playerGUID {
+			s.triggerPlayerEvent(context.Background(), scripting.PlayerEventDuelStart, s.luaPlayer(), partner.luaPlayer())
+		}
 		s.duelCountdown = false
 		s.player.DuelTeam = 1
 		s.sendPlayerUpdate()
@@ -3049,6 +3056,14 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 		_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
 	}
 
+	// Player::DuelComplete (Player.cpp:7360): the interrupted arm fires
+	// OnPlayerDuelEnd after SMSG_DUEL_COMPLETE, before any state cleanup.
+	// C++ fires (opponent, this, type); the won/fled arm fires below after
+	// the SMSG_DUEL_WINNER broadcast, matching the packet order there.
+	if !duelEnded {
+		s.triggerPlayerEvent(context.Background(), scripting.PlayerEventDuelEnd, luaPlayerOrNil(partner), s.luaPlayer(), uint8(DuelInterrupted))
+	}
+
 	// Player::DuelComplete (Player.cpp:7432-7435): each duelist loses
 	// banked combo points when the combo target is controlled by the
 	// opponent — the opponent themselves or their pet.
@@ -3101,6 +3116,16 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 		}
 
 		// Spells: Winner casts 52852 (Victory cheer)
+		// Player::DuelComplete (Player.cpp:7360): OnPlayerDuelEnd fires after
+		// the SMSG_DUEL_WINNER broadcast, before the victory spell and the
+		// achievements/honor below. C++ fires (opponent, this, type) from the
+		// loser's DuelComplete — (winner, loser, type) — matching the Hooks.h
+		// (event, winner, loser, type) contract.
+		duelEndType := DuelWon
+		if fled {
+			duelEndType = DuelFled
+		}
+		s.triggerPlayerEvent(context.Background(), scripting.PlayerEventDuelEnd, luaPlayerOrNil(winnerSess), luaPlayerOrNil(loserSess), uint8(duelEndType))
 		if winnerSess != nil {
 			winnerSess.castVisualSpell(52852)
 			winnerSess.updateAchievementCriteria(criteriaTypeWinDuel, 0, 1)
@@ -3158,6 +3183,10 @@ func (s *session) interruptDuel() {
 	if partner != nil {
 		_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
 	}
+	// Unit::Kill (Unit.cpp:11363-11368): the duelist killed by anyone other
+	// than the duel opponent completes as DUEL_INTERRUPTED — DuelComplete
+	// fires the hook after SMSG_DUEL_COMPLETE, before state cleanup.
+	s.triggerPlayerEvent(context.Background(), scripting.PlayerEventDuelEnd, luaPlayerOrNil(partner), s.luaPlayer(), uint8(DuelInterrupted))
 	s.clearDuelState(partner)
 }
 

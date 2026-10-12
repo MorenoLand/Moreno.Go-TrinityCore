@@ -353,8 +353,14 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.firePlayerChatHook(ctx, typeID, language, message, targetName)
 		return true
 	}
-	if s.firePlayerChatHook(ctx, typeID, language, message, targetName) {
-		return true
+	// Eluna routes whisper/group/guild/channel chat to dedicated player
+	// events (Hooks.h:19-22) instead of the generic event 18 — the early
+	// generic fire is skipped for those types (LANG_ADDON still goes
+	// through the addon hook here, exactly like C++).
+	if subEvent := chatSubEvent(typeID); subEvent == 0 || language == languageAddon {
+		if s.firePlayerChatHook(ctx, typeID, language, message, targetName) {
+			return true
+		}
 	}
 	var receiver *session
 	if typeID == chatWhisper {
@@ -422,12 +428,60 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		// the message is not delivered.
 		return s.sendChannelNotify(channelMutedNotice, channelName, nil) == nil
 	}
+	// Eluna's dedicated chat events (Hooks.h:19-22) fire after the
+	// type-specific gates above — C++ (ChatHandler.cpp) resolves the
+	// receiver/group/guild/channel and runs the permission gates before the
+	// hook, which fires immediately before the message is sent. Each event
+	// carries its routing extra: receiver player (19), group (20), guild
+	// (21), channel id (22). Cancel-only, like the event-18 bridge (no
+	// message-rewrite twin exists yet).
+	if subEvent := chatSubEvent(typeID); subEvent != 0 && language != languageAddon {
+		var extra any
+		switch subEvent {
+		case scripting.PlayerEventWhisper:
+			extra = luaPlayerOrNil(receiver)
+		case scripting.PlayerEventGroupChat:
+			extra = groupLuaObject(s.server, s.server.findGroupByID(s.groupID))
+		case scripting.PlayerEventGuildChat:
+			extra = s.luaGuildObject(ctx, s.player.GuildID)
+		case scripting.PlayerEventChannelChat:
+			extra = s.server.channelIDFor(s, channelName)
+		}
+		values, hookErr := s.triggerPlayerEventValues(ctx, subEvent, s.luaPlayer(), message, typeID, language, extra)
+		if hookErr != nil {
+			s.debug("lua chat sub-event hook failed", "account", s.accountName, "event", subEvent, "error", hookErr)
+		}
+		if luaCancelled(values) {
+			s.debug("chat rejected", "account", s.accountName, "reason", "lua hook cancelled", "type", typeID)
+			return true
+		}
+	}
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channelName)
 	if typeID == chatWhisper && receiver != nil && language != languageAddon {
 		s.announceChatAutoReply(receiver)
 	}
 	s.debug("chat accepted", "account", s.accountName, "type", typeID, "gm_chat", s.gmChat)
 	return true
+}
+
+// chatSubEvent maps the chat types Eluna routes to dedicated player events
+// (Hooks.h:19-22) — whisper, group, guild, channel — returning 0 for the
+// types that stay on the generic PLAYER_EVENT_ON_CHAT (18). The type sets
+// mirror the ChatHandler.cpp arms: PARTY/PARTY_LEADER/RAID/RAID_LEADER/
+// RAID_WARNING/BATTLEGROUND/BATTLEGROUND_LEADER -> 20, GUILD/OFFICER -> 21,
+// CHANNEL -> 22, WHISPER -> 19.
+func chatSubEvent(typeID uint32) int {
+	switch typeID {
+	case chatWhisper:
+		return scripting.PlayerEventWhisper
+	case chatParty, chatPartyLeader, chatRaid, chatRaidLeader, chatRaidWarning, chatBattleground, chatBattleLeader:
+		return scripting.PlayerEventGroupChat
+	case chatGuild, chatOfficer:
+		return scripting.PlayerEventGuildChat
+	case chatChannel:
+		return scripting.PlayerEventChannelChat
+	}
+	return 0
 }
 
 // firePlayerChatHook fires the PlayerEventChat Lua hook (the sScriptMgr::OnPlayerChat

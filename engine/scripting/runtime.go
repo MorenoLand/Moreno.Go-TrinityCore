@@ -20,14 +20,23 @@ import (
 
 const (
 	PlayerEventFirstLogin       = 30
+	PlayerEventCharacterCreate  = 1 // OnCreate fires with the live Player*; Go has no player object at create time, so the engine never fires this event
+	PlayerEventCharacterDelete  = 2
 	PlayerEventLogin            = 3
 	PlayerEventLogout           = 4
+	PlayerEventDuelRequest      = 9
+	PlayerEventDuelStart        = 10
+	PlayerEventDuelEnd          = 11
 	PlayerEventKillPlayer       = 6
 	PlayerEventKillCreature     = 7
 	PlayerEventKilledByCreature = 8
 	PlayerEventGiveXP           = 12
 	PlayerEventLevelChange      = 13
 	PlayerEventChat             = 18
+	PlayerEventWhisper          = 19
+	PlayerEventGroupChat        = 20
+	PlayerEventGuildChat        = 21
+	PlayerEventChannelChat      = 22
 	PlayerEventEmote            = 23
 	PlayerEventTextEmote        = 24
 	PlayerEventSave             = 25
