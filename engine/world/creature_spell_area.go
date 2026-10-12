@@ -163,6 +163,59 @@ func (s *Server) applyCreatureSpellAreaRows(key creatureAuraKey, auraSpellID uin
 	}
 }
 
+// applyCreatureLinkedApplyArms mirrors the apply arm of
+// Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1336-1350)
+// for creature targets: rows of spell_linked_spell with type 2
+// (SPELL_LINK_AURA) keyed by the applied aura fire on application.
+// Negative ids ApplySpellImmune the linked spell on the target — Go has no
+// ApplySpellImmune model (immunity.go), so that arm stays unbridged, like the
+// player twin. Positive ids AddAura the linked spell on the creature target
+// from the aura's caster: Go runs them through the session's aura apply path
+// (which carries the creature-target branch) with the recorded caster, the
+// same model as the player twin (applyAuraLinkedAurasAtApply in spells.go).
+// Caster level for duration/amount follows the Aura ctor's _casterInfo.Level
+// twin (auraStoredCasterLevel): live session level, same-map motion level,
+// else the spell's SpellLevel. The onReapply stack-amount propagate arm
+// (SpellAuras.cpp:1381) has no linked-aura registry in Go and stays open,
+// like the player twin.
+func (s *session) applyCreatureLinkedApplyArms(ctx context.Context, targetGUID uint64, spellID uint32, casterGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	caster := casterGUID
+	if caster == 0 {
+		caster = s.playerGUID
+	}
+	for _, id := range spellLinkedEffects(ctx, s.server.WorldStore.DB, int32(spellID), spellLinkAuraType) {
+		if id <= 0 {
+			continue
+		}
+		linked, found, err := s.server.Data.Spell(uint32(id))
+		if err != nil || !found {
+			continue
+		}
+		casterLevel := uint32(s.auraStoredCasterLevel(caster, linked))
+		var durationMs uint32
+		if linked.DurationIndex != 0 {
+			if dur, ok, derr := s.server.Data.SpellDuration(linked.DurationIndex, casterLevel); derr == nil && ok && dur > 0 {
+				durationMs = uint32(dur)
+			}
+		}
+		castMerged := make(map[uint64]struct{})
+		for effIndex := range linked.Effects {
+			eff := linked.Effects[effIndex]
+			if eff.Aura == 0 {
+				continue
+			}
+			var amount uint32
+			if bp := eff.CalcValueForLevel(linked, casterLevel); bp > 0 {
+				amount = uint32(bp)
+			}
+			s.applyAuraToTarget(ctx, targetGUID, linked, eff, effIndex, durationMs, eff.AuraPeriod, amount, linked.SchoolMask, castMerged, false, caster, false, 0, false)
+		}
+	}
+}
+
 // creatureSpellAreaRules is the server-level spell_area query for the
 // creature path; ok is false when no rows exist (same convention as the
 // session twin).

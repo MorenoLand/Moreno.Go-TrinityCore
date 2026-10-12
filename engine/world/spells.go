@@ -23531,6 +23531,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)
 	}
+	// Aura::HandleAuraSpecificMods table-driven apply arms
+	// (SpellAuras.cpp:1311-1330, 1336-1350): the spell_area rows keyed by
+	// the applied aura and the spell_linked SPELL_LINK_AURA apply rows fire
+	// once per aura application, before the effect arms (C++ Unit::_AddAura,
+	// Unit.cpp:3514) — the same placement as the player twin above. The
+	// remove side was bridged first (11:47 tick); the apply side was missing.
+	if s.server != nil {
+		s.server.applyCreatureSpellAreaRows(targetKey, spell.ID)
+		s.applyCreatureLinkedApplyArms(ctx, targetGUID, spell.ID, casterGUID)
+	}
 	// Unit::UpdateSpeed (Unit.cpp:8666): a fresh speed aura recomputes the
 	// creature's run rate — previously snares never slowed creatures.
 	if s.server != nil && spellHasSpeedAura(spell) {
@@ -27585,7 +27595,6 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		return
 	}
 	auraWasPresent := false
-	removedCasterGUID := uint64(0)
 	wasCharm := false
 	charmerGUID := uint64(0)
 	wasTaunt := false
@@ -27605,7 +27614,6 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				auraWasPresent = true
-				removedCasterGUID = aura.CasterGUID
 				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
@@ -27748,7 +27756,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	// and the spell_area rows keyed by this aura fire only when an aura was
 	// actually removed — C++ runs them from Unit::_UnapplyAura.
 	if auraWasPresent {
-		s.applyCreatureLinkedRemoveArms(key, spellID, mode, removedCasterGUID)
+		s.applyCreatureLinkedRemoveArms(key, spellID, mode)
 		s.applyCreatureSpellAreaRows(key, spellID)
 	}
 }
@@ -27757,13 +27765,17 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 // Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1352-1378)
 // for creature targets. The -spellID type-0 (SPELL_LINK_CAST/REMOVE) rows:
 // negative ids strip the creature's aura of -id with a plain remove
-// (Unit::RemoveAura's BY_DEFAULT); positive ids cast the linked spell on the
-// creature, fully triggered with the removed aura's caster as original caster,
-// gated on removeMode != AURA_REMOVE_BY_DEATH (:1357). The +spellID type-2
-// (SPELL_LINK_AURA) rows: positive ids remove the linked aura with the same
-// remove mode — C++ passes removeMode through
+// (Unit::RemoveAura's BY_DEFAULT); positive ids are cast BY THE CREATURE on
+// itself — target->CastSpell(target, *itr, GetCasterGUID()) (:1357) — fully
+// triggered with the removed aura's caster as original caster
+// (CastSpellExtraArgs(ObjectGuid), SpellDefines.h:167 — TRIGGERED_FULL_MASK),
+// gated on removeMode != AURA_REMOVE_BY_DEATH. The Go twin runs it through
+// the creature cast funnel when the motion still resolves; the original
+// caster has no Go record twin (an active aura records one CasterGUID).
+// The +spellID type-2 (SPELL_LINK_AURA) rows: positive ids remove the linked
+// aura with the same remove mode — C++ passes removeMode through
 // (target->RemoveAura(*itr, GetCasterGUID(), 0, removeMode)).
-func (s *Server) applyCreatureLinkedRemoveArms(key creatureAuraKey, spellID uint32, mode auraRemoveMode, removedCasterGUID uint64) {
+func (s *Server) applyCreatureLinkedRemoveArms(key creatureAuraKey, spellID uint32, mode auraRemoveMode) {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
 	}
@@ -27773,21 +27785,13 @@ func (s *Server) applyCreatureLinkedRemoveArms(key creatureAuraKey, spellID uint
 		if id < 0 {
 			s.removeCreatureAura(key, uint32(-id))
 		} else if id > 0 && mode != auraRemoveByDeath {
-			var castSess *session
-			if cs := s.findSessionByGUID(removedCasterGUID); cs != nil && cs.player != nil {
-				castSess = cs
-			} else {
-				s.sessionsMu.RLock()
-				for cand := range s.sessions {
-					if cand != nil && cand.player != nil && cand.player.Map == key.Map && cand.player.InstanceID == key.InstanceID {
-						castSess = cand
-						break
-					}
-				}
-				s.sessionsMu.RUnlock()
-			}
-			if castSess != nil {
-				castSess.castSpellDirect(ctx, uint32(id), key.GUID)
+			// C++ casts from the creature itself (see above); the old
+			// session-entry cast misattributed the cast — and any aura it
+			// applied — to an arbitrary player in the instance. A
+			// motionless creature (dead or gone) cannot cast, so the cast
+			// simply skips.
+			if m := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil {
+				s.castCreatureSpellTriggered(ctx, m, uint32(id), key.GUID)
 			}
 		}
 	}
