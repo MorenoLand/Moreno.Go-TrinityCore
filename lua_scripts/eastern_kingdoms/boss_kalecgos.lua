@@ -388,21 +388,9 @@ local function onHumanDied(_, creature)
     creature:Talk(3)
 end
 
-RegisterCreatureEvent(ENTRY_KALECGOS_DRAGON, 1, onKalecgosCombat)
-RegisterCreatureEvent(ENTRY_KALECGOS_DRAGON, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_KALECGOS_DRAGON, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_KALECGOS_DRAGON, 23, onCombatEnd)
-
-RegisterCreatureEvent(ENTRY_SATHROVARR, 1, onSathCombat)
-RegisterCreatureEvent(ENTRY_SATHROVARR, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_SATHROVARR, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_SATHROVARR, 23, onCombatEnd)
-
-RegisterCreatureEvent(ENTRY_KALECGOS_HUMAN, 1, onHumanCombat)
-RegisterCreatureEvent(ENTRY_KALECGOS_HUMAN, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_KALECGOS_HUMAN, 4, onHumanDied)
-RegisterCreatureEvent(ENTRY_KALECGOS_HUMAN, 23, onCombatEnd)
-RegisterCreatureEvent(ENTRY_KALECGOS_HUMAN, 9, onHumanDamageTaken)
+-- Registrations removed 2026-10-12: entries 24850/24891/24892 are registered
+-- by the canonical port lua_scripts/sunwellplateau/boss_kalecgos.lua
+-- (verified closed); two registrations double-fired every combat event.
 
 -- go_kalecgos_spectral_rift (GO 187055) --
 

@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
@@ -204,11 +205,17 @@ func (s *session) fireItemQuestHook(ctx context.Context, giverGUID uint64, quest
 // handleUseItem), so there is no fire site — the same no-bridge family as
 // the gameobject leg's event 3.
 //
-// (4) EXPIRE — ScriptMgr::OnItemExpire fires from Item::UpdateDuration
-// (Item.cpp:314) when the duration countdown crosses zero. Go has no
-// item-duration countdown tick anywhere in the engine (item_template
-// Duration is loaded and sent to the client, never decremented), so there
-// is no fire site.
+// (4) EXPIRE — BRIDGED 2026-10-12: ScriptMgr::OnItemExpire fires from
+// Item::UpdateDuration (Item.cpp:314) when the duration countdown crosses
+// zero. updateItemDurations (below, on the world tick) decrements
+// item_instance.duration in whole seconds (the C++ unit — Player.cpp:1078
+// passes time_t diffs) and fires ITEM_EVENT_ON_EXPIRE (4) as
+// (event, player, itemEntry) before destroying the item, matching the C++
+// hook-then-DestroyItem order with the return discarded. The realtime-only
+// offline arm is updateOfflineRealtimeItemDurations (Player.cpp:17989).
+// Remaining delta: item creation paths still insert duration=0 (C++
+// Item::CreateItem seeds proto->Duration at once); the login normalization
+// (C++ Item::LoadFromDB parity) repairs it at next login.
 //
 // (5) REMOVE — ScriptMgr::OnItemRemove fires from Player::DestroyItem
 // (Player.cpp:12662), the single funnel for every item removal in C++.
@@ -218,3 +225,105 @@ func (s *session) fireItemQuestHook(ctx context.Context, giverGUID uint64, quest
 // mail, guild bank and character cleanup — some server-side with no
 // session. Bridging them one by one is a dedicated removal-funnel leg,
 // not this unit.
+
+// updateItemDurations mirrors Player::UpdateItemDuration as driven by
+// Player::Update (Player.cpp:1078, 13752-13766): while online, every carried
+// item's remaining duration ticks down and items crossing zero expire —
+// ScriptMgr::OnItemExpire fires first, then the item is destroyed whole
+// (Item::UpdateDuration, Item.cpp:305-320). C++ ticks in whole seconds
+// (GameTime::GetGameTime() is time_t), so this sweep runs at most once per
+// second on the world tick (runWorldTick); the realtime-only offline arm is
+// updateOfflineRealtimeItemDurations (Player.cpp:17989). Durations are
+// seconds in both item_template.Duration and item_instance.duration.
+func (s *Server) updateItemDurations(ctx context.Context) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	now := time.Now()
+	if !s.lastItemDurationTick.IsZero() && now.Sub(s.lastItemDurationTick) < time.Second {
+		return
+	}
+	elapsed := int64(1)
+	if !s.lastItemDurationTick.IsZero() {
+		elapsed = int64(now.Sub(s.lastItemDurationTick).Seconds())
+	}
+	s.lastItemDurationTick = now
+	if elapsed <= 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	var loaded []*session
+	for sess := range s.sessions {
+		if sess != nil && sess.playerLoaded && sess.player != nil {
+			loaded = append(loaded, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range loaded {
+		sess.tickItemDurations(ctx, elapsed)
+	}
+}
+
+// tickItemDurations decrements one online player's item durations by elapsed
+// seconds (the C++ realtimeonly=false arm — every duration item ticks while
+// online) and expires the ones that crossed zero. The Eluna
+// ITEM_EVENT_ON_EXPIRE (4) hook fires as (event, player, itemEntry):
+// Eluna::OnExpire pushes the template entry, not the item (ItemHooks.cpp:119-124),
+// and Item::UpdateDuration discards the hook's return before destroying the
+// item, so Go discards it too. Destruction mirrors handleDestroyItem's
+// full-removal arm (Player::DestroyItem via Player::RemoveItem, Player.cpp:12662).
+func (s *session) tickItemDurations(ctx context.Context, elapsed int64) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	db := s.server.CharactersStore.DB
+	// Candidates expiring this tick must be identified BEFORE the decrement:
+	// after it, a pre-existing 0-duration item is indistinguishable from one
+	// that just crossed zero (both read <= 0).
+	var expiring []int64
+	rows, err := db.QueryContext(ctx, `SELECT ii.guid FROM item_instance AS ii
+		JOIN character_inventory AS ci ON ci.item = ii.guid
+		WHERE ci.guid = ? AND ii.duration > 0 AND ii.duration <= ?`, s.playerGUID, elapsed)
+	if err != nil {
+		return
+	}
+	for rows.Next() {
+		var guid int64
+		if rows.Scan(&guid) == nil && guid != 0 {
+			expiring = append(expiring, guid)
+		}
+	}
+	rows.Close()
+	if _, err := db.ExecContext(ctx, `UPDATE item_instance SET duration = duration - ?
+		WHERE guid IN (SELECT item FROM character_inventory WHERE guid = ?) AND duration > 0`, elapsed, s.playerGUID); err != nil {
+		return
+	}
+	expired := false
+	for _, itemGUID := range expiring {
+		var itemEntry, count, bag, slot int64
+		if err := db.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count, ci.bag, ci.slot
+			FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ci.item = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&itemEntry, &count, &bag, &slot); err != nil || itemEntry == 0 {
+			continue
+		}
+		entry := uint32(itemEntry)
+		s.fireItemEvent(ctx, entry, scripting.ItemEventOnExpire, s.luaPlayer(), entry)
+		s.adjustQuestItemCount(ctx, entry, uint32(count), false)
+		if bag == 0 && uint8(slot) < equipSlotEnd {
+			s.removeItemSetItem(ctx, entry)
+			s.applyItemEquipSpells(ctx, itemGUID, entry, false)
+			s.removeItemDependentAuras(ctx, uint64(itemGUID))
+			s.applyEnchantEquipSpells(ctx, itemGUID, entry, false)
+		}
+		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+		s.applyItemObtainSpells(ctx, entry, 0, false)
+		s.despawnItem(uint64(itemGUID))
+		expired = true
+	}
+	if expired {
+		s.syncEquipmentCache(ctx)
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+	}
+}

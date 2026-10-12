@@ -110,4 +110,6 @@ local function illidanTargetDied(event, creature, victim)
     end
 end
 
-RegisterCreatureEvent(ENTRY_ILLIDAN_STORMRAGE, 3, illidanTargetDied)
+-- Registration removed 2026-10-12: the same arm (event 3, same Talk, same
+-- player gate) is registered by lua_scripts/blacktemple/boss_illidan.lua —
+-- two registrations double-fired the kill yell.

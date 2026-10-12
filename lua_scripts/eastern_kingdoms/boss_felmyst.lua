@@ -229,8 +229,12 @@ local function onSpawn(event, creature)
     creature:Talk(YELL_BIRTH)
 end
 
-RegisterCreatureEvent(NPC_FELMYST, 1, onCombatStart)
-RegisterCreatureEvent(NPC_FELMYST, 2, onCombatEnd)
-RegisterCreatureEvent(NPC_FELMYST, 4, onDied)
+-- Registrations for events 1/2/4/23 removed 2026-10-12: entry 25038 is
+-- registered by the canonical port lua_scripts/sunwellplateau/boss_felmyst.lua
+-- (verified closed); two registrations double-fired every combat event.
+-- Event 5 (ON_SPAWN) is KEPT: it bridges C++ JustAppeared's Talk(YELL_BIRTH)
+-- (boss_felmyst.cpp:189), which the canonical port leaves unmodeled. Go fires
+-- ON_SPAWN on the respawn path (engine/world/lua_creature_events.go), so the
+-- yell lands on respawns — C++-directional, no double-fire (only this file
+-- registers event 5 for 25038).
 RegisterCreatureEvent(NPC_FELMYST, 5, onSpawn)
-RegisterCreatureEvent(NPC_FELMYST, 23, onCombatEnd)

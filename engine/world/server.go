@@ -217,6 +217,7 @@ type Server struct {
 	spiritWaveMu           sync.Mutex
 	lastSpiritWave         time.Time
 	lastCorpseExpiry       time.Time
+	lastItemDurationTick   time.Time
 	spiritReviveQueue      map[uint64]uint64            // playerGUID -> spiritGuideGUID
 	spiritResurrectPending map[uint64]spiritWavePending // playerGUID -> wave visual pass (resurrect due 500ms later)
 	creatureTextMgr        *creatureTextMgr
@@ -1245,6 +1246,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePendingInstanceBinds(ctx, diff)
 			s.updateSpiritHealerResurrectWaves(ctx, now)
 			s.updateCorpseExpiry(ctx)
+			s.updateItemDurations(ctx)
 			s.updatePlayerUnderwater(ctx, now)
 			s.updateHomebindTimers(ctx, diff)
 			s.sweepIdleConnections(now)

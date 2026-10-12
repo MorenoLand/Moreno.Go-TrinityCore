@@ -196,7 +196,6 @@ local function onDied(event, creature)
     creature:Talk(YELL_DEATH)
 end
 
-RegisterCreatureEvent(NPC_BRUTALLUS, 1, onCombatStart)
-RegisterCreatureEvent(NPC_BRUTALLUS, 2, onCombatEnd)
-RegisterCreatureEvent(NPC_BRUTALLUS, 4, onDied)
-RegisterCreatureEvent(NPC_BRUTALLUS, 23, onCombatEnd)
+-- Registrations removed 2026-10-12: entry 24882 is registered by the
+-- canonical port lua_scripts/sunwellplateau/boss_brutallus.lua (verified
+-- closed); two registrations double-fired every combat event.

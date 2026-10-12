@@ -1758,7 +1758,9 @@ func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state 
 	if elapsed <= 0 {
 		return nil
 	}
-	elapsedMs := elapsed * 1000
+	// C++ stores ITEM_FIELD_DURATION in whole seconds (item_template.Duration
+	// is seconds; Player::UpdateItemDuration decrements by GameTime::GetGameTime
+	// diffs, which are time_t seconds — Player.cpp:1078). Decrement in seconds.
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, COALESCE(ii.duration, 0), ii.count
 		FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
@@ -1786,7 +1788,7 @@ func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state 
 	}
 	rows.Close()
 	for _, item := range items {
-		if item.duration <= elapsedMs {
+		if item.duration <= elapsed {
 			if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item.guid); err != nil {
 				return err
 			}
@@ -1796,7 +1798,7 @@ func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state 
 			s.adjustQuestItemCountForState(ctx, state, uint32(item.entry), uint32(item.count), false, false)
 			continue
 		}
-		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET duration = ? WHERE guid = ?", item.duration-elapsedMs, item.guid); err != nil {
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET duration = ? WHERE guid = ?", item.duration-elapsed, item.guid); err != nil {
 			return err
 		}
 	}
