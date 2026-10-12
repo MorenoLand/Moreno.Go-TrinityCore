@@ -854,13 +854,37 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			}
 		}
 	}
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
 	// (Unit.cpp:2694-2695) and the 240/4 parry-reduction arm
 	// (Unit::GetUnitParryChance's creature arm) stay unbridged on this path.
+	// The roll's player/pet-attacker flag is true here: pets glance like
+	// players (Unit.cpp:2276) and, being player-controlled, never crush
+	// (Unit.cpp:2311).
+	blocked := uint32(0)
 	switch outcome {
 	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0
+	case protocol.MeleeHitBlock:
+		// Unit::CalculateMeleeDamage MELEE_HIT_BLOCK arm (Unit.cpp:1340-1376).
+		var blockValue uint32
+		var critChance int32
+		if isTargetPlayer && targetSess != nil {
+			blockValue, critChance = targetSess.shieldBlockParams()
+		} else {
+			blockValue = uint32(targetLevel) / 2
+			critChance = s.creatureAuraTypeSum(creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, spellAuraModBlockCritChance)
+		}
+		var fullBlock bool
+		blocked, fullBlock = applyShieldBlockValue(blockValue, critChance, damage)
+		damage -= blocked
+		if fullBlock {
+			targetState = protocol.VictimStateBlocks
+		}
+	case protocol.MeleeHitGlancing:
+		// Unit::CalculateMeleeDamage glancing leg (Unit.cpp:1377-1397) —
+		// pets glance like players (Unit.cpp:2276).
+		damage = glancingReducedDamage(damage, uint8(motion.Level), targetLevel)
 	case protocol.MeleeHitCrit:
 		damage *= 2
 	}
@@ -909,7 +933,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		}
 	}
 
-	asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, targetGUID, damage, overkill, hitInfo, targetState, 0)
+	asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, targetGUID, damage, overkill, hitInfo, targetState, blocked)
 	if isTargetPlayer && targetSess != nil {
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, true)
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, targetSess)

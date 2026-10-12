@@ -2724,11 +2724,22 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 				damage = 0
 			case protocol.MeleeHitBlock:
-				blocked = damage / 4
-				if blocked < 1 {
-					blocked = 1
+				// Unit::CalculateMeleeDamage MELEE_HIT_BLOCK arm
+				// (Unit.cpp:1340-1376): the player victim's shield block
+				// value, doubled on a block crit, consumed against the
+				// swing; a full block zeroes damage and reports
+				// VICTIMSTATE_BLOCKS.
+				var blockValue uint32
+				var critChance int32
+				if isPlayerVictim && target.Sess != nil {
+					blockValue, critChance = target.Sess.shieldBlockParams()
 				}
+				var fullBlock bool
+				blocked, fullBlock = applyShieldBlockValue(blockValue, critChance, damage)
 				damage -= blocked
+				if fullBlock {
+					targetState = protocol.VictimStateBlocks
+				}
 			case protocol.MeleeHitCrit:
 				damage *= 2
 			case protocol.MeleeHitCrushing:

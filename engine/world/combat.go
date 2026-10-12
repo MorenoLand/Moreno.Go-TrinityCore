@@ -553,6 +553,75 @@ func (s *session) meleeHitRedirectGUID(ctx context.Context, victimGUID uint64) (
 	return 0, false
 }
 
+// swingBlockValue folds the victim-side inputs of the MELEE_HIT_BLOCK arm of
+// Unit::CalculateMeleeDamage (Unit.cpp:1340-1376): the victim's shield block
+// value — Player::GetShieldBlockValue (Player.cpp:5426-5430) for player
+// victims, the Creature::GetShieldBlockValue (Creature.cpp:2715) level/2
+// stand-in for creature victims (combatTarget carries no Strength, so the
+// STR/20 leg stays unbridged — the same stand-in spellTakenBlockAmount uses)
+// — plus the SPELL_AURA_MOD_BLOCK_CRIT_CHANCE (253) total feeding
+// Unit::isBlockCritical (Unit.cpp:2432-2437).
+func (s *session) swingBlockValue(target combatTarget, isPlayerVictim bool) (uint32, int32) {
+	var blockValue uint32
+	var critChance int32
+	if isPlayerVictim {
+		if s.server != nil {
+			if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+				blockValue, critChance = vicSess.shieldBlockParams()
+			}
+		}
+	} else if s.server != nil {
+		blockValue = uint32(target.Level) / 2
+		critChance = creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), spellAuraModBlockCritChance)
+	}
+	return blockValue, critChance
+}
+
+// shieldBlockParams bundles the player-victim inputs of the MELEE_HIT_BLOCK
+// arm: getShieldBlockValue (Player::GetShieldBlockValue, Player.cpp:5426-5430)
+// and the 253 aura total for Unit::isBlockCritical (Unit.cpp:2432-2437).
+func (s *session) shieldBlockParams() (uint32, int32) {
+	blockValue := s.getShieldBlockValue()
+	var critChance int32
+	for _, amount := range s.auraTypeModifiersFiltered(spellAuraModBlockCritChance, func(int32) bool { return true }) {
+		critChance += amount
+	}
+	return blockValue, critChance
+}
+
+// applyShieldBlockValue runs the MELEE_HIT_BLOCK consumption arm
+// (Unit.cpp:1340-1376): the block value doubles on a block-crit roll
+// (Unit::isBlockCritical, Unit.cpp:2432-2437); a full block zeroes the damage
+// and reports true so the caller sets VICTIMSTATE_BLOCKS, a partial block
+// just subtracts. The spell block arm (Unit.cpp:1060-1077) shares the same
+// semantics, so the ranged white path reuses this too.
+func applyShieldBlockValue(blockValue uint32, critChance int32, damage uint32) (uint32, bool) {
+	if critChance > 0 && rand.IntN(100) < int(critChance) {
+		blockValue += blockValue
+	}
+	if blockValue >= damage {
+		return damage, true
+	}
+	return blockValue, false
+}
+
+// glancingReducedDamage mirrors the MELEE_HIT_GLANCING arm of
+// Unit::CalculateMeleeDamage (Unit.cpp:1377-1397): the reduction is
+// irand(leveldif*10-10, leveldif*10) percent with leveldif capped at 3 —
+// ~25% average vs +3-level targets, not a flat 25%.
+func glancingReducedDamage(damage uint32, attackerLevel, victimLevel uint8) uint32 {
+	leveldif := int32(victimLevel) - int32(attackerLevel)
+	if leveldif > 3 {
+		leveldif = 3
+	}
+	reduction := leveldif*10 - 10 + int32(rand.IntN(11))
+	reduced := uint32((1.0 - float64(reduction)/100.0) * float64(damage))
+	if reduced < 1 {
+		reduced = 1
+	}
+	return reduced
+}
+
 func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType) {
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
@@ -800,11 +869,17 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0
 	case protocol.MeleeHitBlock:
-		blocked = damage / 4
-		if blocked < 1 {
-			blocked = 1
-		}
+		// Unit::CalculateMeleeDamage MELEE_HIT_BLOCK arm (Unit.cpp:1340-1376):
+		// the victim's shield block value, doubled on a block crit, consumed
+		// against the swing; a full block zeroes damage and reports
+		// VICTIMSTATE_BLOCKS.
+		blockValue, critChance := s.swingBlockValue(target, isPlayerVictim)
+		var fullBlock bool
+		blocked, fullBlock = applyShieldBlockValue(blockValue, critChance, damage)
 		damage -= blocked
+		if fullBlock {
+			targetState = protocol.VictimStateBlocks
+		}
 	case protocol.MeleeHitCrit:
 		damage *= 2
 		// Unit::CalculateMeleeDamage crit leg (Unit.cpp:1302-1319): the
@@ -812,10 +887,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// resilience reduction below.
 		damage = s.meleeCritDamageBonus(ctx, damage, target.GUID, target, false)
 	case protocol.MeleeHitGlancing:
-		damage = uint32(float64(damage) * 0.75)
-		if damage < 1 {
-			damage = 1
-		}
+		// Unit::CalculateMeleeDamage glancing leg (Unit.cpp:1377-1397).
+		damage = glancingReducedDamage(damage, s.player.Level, target.Level)
 	case protocol.MeleeHitCrushing:
 		damage = uint32(float64(damage) * 1.5)
 	}
@@ -1518,10 +1591,14 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0
 	case protocol.MeleeHitBlock:
-		blocked = damage / 4
-		if blocked < 1 {
-			blocked = 1
-		}
+		// The ranged white path mirrors Unit::CalculateMeleeDamage with
+		// RANGED_ATTACK — the same block arm as the melee site above
+		// (Unit.cpp:1340-1376; the spell block arm at Unit.cpp:1060-1077
+		// shares the semantics). Only player victims can block ranged
+		// (canBlock stays false for creatures), so this always resolves
+		// through the victim's shield block value.
+		blockValue, critChance := s.swingBlockValue(target, isPlayerVictim)
+		blocked, _ = applyShieldBlockValue(blockValue, critChance, damage)
 		damage -= blocked
 	case protocol.MeleeHitCrit:
 		damage *= 2
@@ -1529,6 +1606,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		// 203/204 + 163 + 169 arms AddPct after the doubling, ahead of the
 		// resilience reduction below.
 		damage = s.meleeCritDamageBonus(ctx, damage, target.GUID, target, true)
+	case protocol.MeleeHitGlancing:
+		// Unit::CalculateMeleeDamage glancing leg (Unit.cpp:1377-1397) — the
+		// outcome roll has no attack-type gate on glancing, so a ranged
+		// swing can glance too.
+		damage = glancingReducedDamage(damage, s.player.Level, target.Level)
 	}
 
 	// Unit::ProcSkillsAndReactives victim arm (Unit.cpp:10283-10324): a
@@ -2535,7 +2617,7 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // GetUnitDodgeChance adds the victim's 49 total to the 5% base
 // (Unit.cpp:2676-2681). Absent means none. (Slots [9]/[10] are the player
 // victim's derived parry/block percentages.)
-func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
@@ -2719,7 +2801,7 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 
 	// 4. Glancing blow: players/pets against higher level mobs
 	glancingChance := int32(0)
-	if isPlayerAttacker && !isPlayerVictim && victimLevel > attackerLevel {
+	if isPlayerOrPetAttacker && !isPlayerVictim && victimLevel > attackerLevel {
 		glancingChance = 600 + (int32(victimLevel)-int32(attackerLevel))*600
 		if glancingChance > 4000 {
 			glancingChance = 4000
@@ -2775,7 +2857,7 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	// models no weapon/defense skill bonuses, so both skills are 5/level and
 	// the min arm is vacuous by construction.
 	crushingChance := int32(0)
-	if !isPlayerAttacker && isPlayerVictim && attackerLevel >= victimLevel+4 {
+	if !isPlayerOrPetAttacker && isPlayerVictim && attackerLevel >= victimLevel+4 {
 		skillDiff := int32(attackerLevel-victimLevel) * 5
 		if skillDiff < 20 {
 			skillDiff = 20
