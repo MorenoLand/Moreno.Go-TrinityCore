@@ -1169,6 +1169,149 @@ func (s *session) shadowAffinityDispelRestore(ctx context.Context, removedSpellI
 	casterSess.energizeBySpellTail(ctx, spell64103, 64103, auraCasterGUID, 0, restore)
 }
 
+// raptureDispelProc mirrors the Rapture arm of Aura::HandleAuraSpecificMods
+// (SpellAuras.cpp:1648-1704): on an enemy-spell removal (dispel) of Power
+// Word: Shield (priest family, SpellFamilyFlags[0] & 0x00000001), the AURA
+// caster's Rapture talent aura (any rank of 47535, via the
+// GetAuraOfRankedSpell chain walk, Unit.cpp:4570-4586) restores
+// CalculatePct(caster max mana, multiplier) mana to the caster via 47755,
+// where multiplier is the first effect's amount with the C++ rank
+// adjustments (47535: -0.5, 47537: +0.5). The 12s player cooldown gate
+// (HasCooldown + the 11s minimal-delay floor before the cooldown takes
+// effect, so all bubbles broken by one damage source proc the return)
+// rides the caster session's cooldown list; C++ AddCooldown sends no
+// client packet (SpellHistory.cpp:395-407), so none is sent here. On a
+// roll_chance_i of the second effect's amount, the aura target is
+// energized by power type (mana: 63654 with CalculatePct(target max mana,
+// 2); rage: 63653; energy: 63655; runic power: 63652), cast by the aura
+// caster like the C++ triggered casts. No-op when the removed spell isn't
+// PW:S, the aura caster has no live player session (the C++
+// `if (!caster) break` arm), or the caster has no Rapture aura; creature
+// casters are a documented delta (no session holds the talent aura or
+// the cooldown).
+func (s *session) raptureDispelProc(ctx context.Context, targetGUID uint64, removedSpellID uint32, auraCasterGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	removed, found, err := s.server.Data.Spell(removedSpellID)
+	if err != nil || !found || removed.SpellFamilyName != spellFamilyPriest ||
+		len(removed.SpellFamilyFlags) < 1 || removed.SpellFamilyFlags[0]&0x00000001 == 0 {
+		return
+	}
+	casterSess := s.server.findSessionByGUID(auraCasterGUID)
+	if casterSess == nil || casterSess.player == nil {
+		return
+	}
+	var rapture *activeAura
+	for rank := s.server.getFirstSpellInChain(47535); rank != 0; rank = s.server.getNextSpellInChain(rank) {
+		for _, aura := range casterSess.loadedAuras() {
+			if aura != nil && !aura.Stopped && aura.SpellID == rank {
+				rapture = aura
+				break
+			}
+		}
+		if rapture != nil {
+			break
+		}
+	}
+	if rapture == nil {
+		return
+	}
+	// Cooldown gate: the caster is a player here, so the C++ TYPEID_PLAYER
+	// arm always applies.
+	nowUnix := time.Now().Unix()
+	remaining := int64(-1)
+	for _, cd := range casterSess.player.Cooldowns {
+		if cd.Spell == rapture.SpellID && cd.End > nowUnix {
+			remaining = cd.End - nowUnix
+			break
+		}
+	}
+	if remaining >= 0 {
+		if remaining <= 11 {
+			return
+		}
+	} else {
+		casterSess.replaceSpellCooldownEntry(spellCooldown{Spell: rapture.SpellID, End: nowUnix + 12})
+	}
+	// Effect on caster: 47755 with BP0 = CalculatePct(max mana, multiplier).
+	multiplier := float64(rapture.Amounts[0])
+	switch rapture.SpellID {
+	case 47535:
+		multiplier -= 0.5
+	case 47537:
+		multiplier += 0.5
+	}
+	if restore := int32(float64(casterSess.player.MaxPowers[0]) * multiplier / 100); restore > 0 {
+		spell47755, found, err := s.server.Data.Spell(47755)
+		if err != nil || !found {
+			spell47755 = wotlk.Spell{ID: 47755}
+		}
+		casterSess.applySpellEnergize(ctx, auraCasterGUID, 0, restore)
+		casterSess.energizeBySpellTail(ctx, spell47755, 47755, auraCasterGUID, 0, restore)
+	}
+	// Effect on aura target: roll_chance_i on the second effect's amount.
+	if chance := rapture.Amounts[1]; chance <= 0 || rand.IntN(100) >= int(chance) {
+		return
+	}
+	var targetPower uint8
+	var targetMaxMana uint32
+	targetResolved := false
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		targetPower = playerPowerType(ts.player)
+		targetMaxMana = ts.player.MaxPowers[0]
+		targetResolved = true
+	} else if s.player != nil {
+		if m := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); m != nil {
+			targetPower = uint8(m.PowerType)
+			targetMaxMana = m.MaxPowers[0]
+			targetResolved = true
+		}
+	}
+	if !targetResolved {
+		return
+	}
+	var triggerID uint32
+	var triggerPower int32
+	switch targetPower {
+	case 0: // POWER_MANA
+		triggerID = 63654
+		triggerPower = 0
+	case powerRage:
+		triggerID = 63653
+		triggerPower = int32(powerRage)
+	case powerEnergy:
+		triggerID = 63655
+		triggerPower = int32(powerEnergy)
+	case powerRunicPower:
+		triggerID = 63652
+		triggerPower = int32(powerRunicPower)
+	default:
+		return
+	}
+	trigger, found, err := s.server.Data.Spell(triggerID)
+	if err != nil || !found {
+		return
+	}
+	amount := int32(0)
+	if triggerID == 63654 {
+		// C++ overrides BP0 with CalculatePct(target max mana, 2).
+		amount = int32(int64(targetMaxMana) * 2 / 100)
+	} else {
+		for _, eff := range trigger.Effects {
+			if eff.Effect == spellEffectEnergize {
+				amount = eff.CalcValueForLevel(trigger, uint32(casterSess.player.Level))
+				break
+			}
+		}
+	}
+	if amount <= 0 {
+		return
+	}
+	casterSess.applySpellEnergize(ctx, targetGUID, triggerPower, amount)
+	casterSess.energizeBySpellTail(ctx, trigger, triggerID, targetGUID, triggerPower, amount)
+}
+
 func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, petCaster *creatureMotion, isReflected bool) {
 	if s.player == nil {
 		return
@@ -1318,11 +1461,10 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 			// (priest family, icon 178, effect index 1) restores amount% of the
 			// caster's create mana via 64103. Fires only on full removal —
 			// C++ ModCharges/ModStackAmount arms the specific-mods on the
-			// removal, not per charge. The Rapture arm (PW:S dispel,
-			// SpellAuras.cpp:1647+) is not bridged yet: it needs the 12s
-			// player cooldown gate and the power-type target-side spells.
+			// removal, not per charge.
 			if fullyRemoved {
 				s.shadowAffinityDispelRestore(ctx, cand.SpellID, cand.CasterGUID)
+				s.raptureDispelProc(ctx, targetGUID, cand.SpellID, cand.CasterGUID)
 			}
 		} else {
 			// Dispel resisted / failed
