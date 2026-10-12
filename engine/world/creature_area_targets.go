@@ -148,14 +148,60 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 // target SelectImplicitAreaTargets (Spell.cpp:1227) selected — not just the
 // wire victim — which is why this helper exists separately from the cast.
 func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatureMotion, p *playerPos, spellID, damage uint32, schoolMask uint8, now time.Time) {
-	// AutoBalance_UnitScript::ModifySpellDamageTaken analog.
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:785): the victim-side taken
+	// pct legs run on every inline spell hit, ahead of the taken-mitigation
+	// block — Unit::SpellDamageBonusTaken (Unit.cpp:7052). The caster is a
+	// wild motion (no session), so it arrives as nil.
+	var inlineSpell wotlk.Spell
+	inlineSpellKnown := false
+	if s != nil && s.Data != nil {
+		if sp, found, err := s.Data.Spell(spellID); err == nil && found {
+			inlineSpell, inlineSpellKnown = sp, true
+		}
+	}
+	var absorbed, resisted uint32
+	if p.Sess != nil && p.Sess.player != nil && damage > 0 {
+		if inlineSpellKnown {
+			damage = spellDamageBonusTaken(damage, inlineSpell, uint32(schoolMask), p.Sess, nil)
+		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060) resistance leg:
+		// partial resists run for magic schools only; the creature caster
+		// carries no ignore-resist model, so the ignored pct is 0 (the pet
+		// path passes 0 too).
+		if damage > 0 && schoolMask > 1 {
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, p.Sess.player.Resistances, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, false, false, 0)
+		}
+		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079,
+		// 1105): Unit::CanApplyResilience (Unit.cpp:12333) runs on the
+		// caster — a wild creature's owner is no player, so wild casts
+		// never reduce the victim by resilience; a player-owned motion
+		// (pet/charm) does. isCrit is false — the inline path rolls no
+		// spell crits, like the pet path.
+		if damage > 0 && motion != nil && motion.OwnerGUID != 0 {
+			p.Sess.applyResilienceToDamage(true, &damage, false, CombatRatingCritTakenSpell)
+		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857) absorb leg: the
+		// caster's MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses
+		// the victim's shields — the creature-caster analog of the player
+		// path's absorbIgnorePctForSpell; the 245 ability arm has no
+		// creature affect-mask model and stays a noted edge. Physical
+		// schools keep the standing armor-leg edge (no armor arm on
+		// creature-cast paths).
+		if damage > 0 {
+			bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(creatureAuraKeyForMotion(motion), uint32(schoolMask)))
+			absorbed, damage = p.Sess.applyAbsorptionShields(damage-bypass, schoolMask)
+			damage += bypass
+		}
+	}
+	// Unit::DealDamageMods (Spell.cpp:2541): AutoBalance's
+	// ModifySpellDamageTaken hook runs after the taken-mitigation block,
+	// on the post-mitigation damage — not on the raw roll.
 	damage = s.autoBalanceModifyDealDamage(motion, p.Sess, damage)
 	overkill := uint32(0)
 	// Spell::EffectHealthLeech leech basis (SpellEffects.cpp:1539-1540):
-	// the damage the target actually lost — overkill excluded, Go's inline
-	// path models no absorb — captured before the damage legs mutate
-	// health; the caster-heal arm lands at the end of this function with
-	// the other cast-completion legs.
+	// the damage the target actually lost — overkill excluded, post-absorb
+	// — captured before the damage legs mutate health; the caster-heal arm
+	// lands at the end of this function with the other cast-completion legs.
 	leechDealt := uint32(0)
 	if p.Sess != nil && p.Sess.player != nil {
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no
@@ -261,7 +307,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			}
 			p.Sess.procSpellDirectDamageAuras(spellID)
 		}
-		logPkt := buildSpellNonMeleeDamageLog(p.GUID, motion.GUID, spellID, damage, overkill, schoolMask)
+		logPkt := buildSpellNonMeleeDamageLog(p.GUID, motion.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, 0)
 		_ = p.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 		if s != nil {
 			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, p.Sess)
