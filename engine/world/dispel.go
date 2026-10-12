@@ -127,59 +127,113 @@ func (s *session) isFriendlyToTarget(targetGUID uint64, targetSess *session) boo
 	return false
 }
 
-// calcDispelChanceLocked calculates dispel chance assuming castMu is already held.
-func (s *session) calcDispelChanceLocked(offensive bool) int32 {
+// dispelResistTotalLocked sums the target's SPELL_AURA_MOD_DISPEL_RESIST
+// total — the applied-aura arm plus the passive-spellbook bridge — mirroring
+// the second half of Aura::CalcDispelChance (SpellAuras.cpp:1228-1229).
+// Assumes the target's castMu is held.
+func (s *session) dispelResistTotalLocked() int32 {
 	resistChance := int32(0)
-	if offensive {
-		for _, aura := range s.activeAuras {
-			if aura != nil && aura.AuraType == spellAuraModDispelResist {
-				resistChance += int32(aura.Amount)
-			}
+	for _, aura := range s.activeAuras {
+		if aura != nil && aura.AuraType == spellAuraModDispelResist {
+			resistChance += int32(aura.Amount)
 		}
-		if s.server != nil && s.server.Data != nil && s.player != nil {
-			for _, pSpell := range s.player.Spells {
-				if !pSpell.Active || pSpell.Disabled {
-					continue
-				}
-				// The loop above already counted applied auras; C++
-				// GetTotalAuraModifier (Unit.cpp:4831) counts each applied aura
-				// exactly once, so a spell that is both learned and applied
-				// (e.g. Pain Suppression self-cast) must not count again here.
-				if aura, applied := s.activeAuras[pSpell.ID]; applied && aura != nil {
-					continue
-				}
-				spell, found, err := s.server.Data.Spell(pSpell.ID)
-				if err != nil || !found {
-					continue
-				}
-				// C++ sums applied auras only: a learned-but-uncast non-passive
-				// spell contributes nothing. Passive spells are auto-applied in
-				// C++ (Player::AddSpell) but Go only records them in s.auras,
-				// so the scan bridges exactly the passive gap.
-				if spell.Attributes&spellAttributePassive == 0 {
-					continue
-				}
-				for _, eff := range spell.Effects {
-					if eff.Aura == spellAuraModDispelResist {
-						resistChance += eff.BasePoints
-					}
+	}
+	if s.server != nil && s.server.Data != nil && s.player != nil {
+		for _, pSpell := range s.player.Spells {
+			if !pSpell.Active || pSpell.Disabled {
+				continue
+			}
+			// The loop above already counted applied auras; C++
+			// GetTotalAuraModifier (Unit.cpp:4831) counts each applied aura
+			// exactly once, so a spell that is both learned and applied
+			// (e.g. Pain Suppression self-cast) must not count again here.
+			if aura, applied := s.activeAuras[pSpell.ID]; applied && aura != nil {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(pSpell.ID)
+			if err != nil || !found {
+				continue
+			}
+			// C++ sums applied auras only: a learned-but-uncast non-passive
+			// spell contributes nothing. Passive spells are auto-applied in
+			// C++ (Player::AddSpell) but Go only records them in s.auras,
+			// so the scan bridges exactly the passive gap.
+			if spell.Attributes&spellAttributePassive == 0 {
+				continue
+			}
+			for _, eff := range spell.Effects {
+				if eff.Aura == spellAuraModDispelResist {
+					resistChance += eff.BasePoints
 				}
 			}
 		}
 	}
-	if resistChance < 0 {
-		resistChance = 0
-	} else if resistChance > 100 {
-		resistChance = 100
-	}
-	return 100 - resistChance
+	return resistChance
 }
 
-// calcDispelChance mirrors TrinityCore Aura::CalcDispelChance (SpellAuras.cpp:1218-1236).
-func (s *session) calcDispelChance(offensive bool) int32 {
-	s.castMu.Lock()
-	defer s.castMu.Unlock()
-	return s.calcDispelChanceLocked(offensive)
+// auraDispelChance mirrors TrinityCore Aura::CalcDispelChance
+// (SpellAuras.cpp:1218-1236) for one candidate aura: 100 minus the
+// RoundToInterval-clamped resist total. The resist total is the aura
+// caster's SPELLMOD_RESIST_DISPEL_CHANCE fold (SpellAuras.cpp:1221-1226)
+// plus the target's SPELL_AURA_MOD_DISPEL_RESIST total on offensive dispels
+// (SpellAuras.cpp:1228-1229). Call with no session lock held: the
+// caster-mod fold takes the mod owner's castMu.
+func (s *Server) auraDispelChance(mapID, instanceID uint32, aura *activeAura, resistTotal int32, offensive bool) int32 {
+	resist := s.dispelResistSpellMod(mapID, instanceID, aura)
+	if offensive {
+		resist += resistTotal
+	}
+	if resist < 0 {
+		resist = 0
+	} else if resist > 100 {
+		resist = 100
+	}
+	return 100 - resist
+}
+
+// dispelResistSpellMod mirrors the first arm of Aura::CalcDispelChance
+// (SpellAuras.cpp:1221-1226): the aura caster's spell-mod owner folds
+// SPELLMOD_RESIST_DISPEL_CHANCE mods affecting the dispelled spell,
+// starting from a zero base. Caster resolution mirrors
+// WorldObject::GetSpellModOwner (Object.cpp:2246-2261): a player caster is
+// its own mod owner; a pet or totem creature caster resolves to its owner
+// player; anything else contributes nothing.
+func (s *Server) dispelResistSpellMod(mapID, instanceID uint32, aura *activeAura) int32 {
+	if s == nil || s.Data == nil || aura == nil || aura.CasterGUID == 0 {
+		return 0
+	}
+	spell, found, err := s.Data.Spell(aura.SpellID)
+	if err != nil || !found {
+		return 0
+	}
+	var modOwner *session
+	if cs := s.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
+		modOwner = cs
+	} else if m := s.findCreatureMotion(mapID, instanceID, aura.CasterGUID); m != nil && m.PetID != 0 && m.OwnerGUID != 0 {
+		if os := s.findSessionByGUID(m.OwnerGUID); os != nil && os.player != nil {
+			modOwner = os
+		}
+	} else if s.isTotemGUID(aura.CasterGUID) {
+		s.totemMu.RLock()
+		for ownerGUID, slots := range s.activeTotems {
+			for _, t := range slots {
+				if t != nil && t.TotemGUID == aura.CasterGUID {
+					if os := s.findSessionByGUID(ownerGUID); os != nil && os.player != nil {
+						modOwner = os
+					}
+					break
+				}
+			}
+			if modOwner != nil {
+				break
+			}
+		}
+		s.totemMu.RUnlock()
+	}
+	if modOwner == nil {
+		return 0
+	}
+	return modOwner.applySpellMod(spell, spellModResistDispelChance, 0)
 }
 
 // getDispellableAuraListForPlayer returns the list of auras that can be dispelled from a player.
@@ -196,10 +250,17 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 
 	isFriendly := s.isFriendlyToPlayer(targetSess)
 
+	// The per-aura dispel chance (Aura::CalcDispelChance) folds the aura
+	// caster's spell mods, which takes the caster session's lock — so the
+	// chance is computed after releasing the target's lock (two passes).
 	targetSess.castMu.Lock()
-	defer targetSess.castMu.Unlock()
-
+	offensive := !isFriendly
+	resistTotal := int32(0)
+	if offensive {
+		resistTotal = targetSess.dispelResistTotalLocked()
+	}
 	var candidates []dispelCandidate
+	var candAuras []*activeAura
 	for spellID, aura := range targetSess.activeAuras {
 		if aura == nil || aura.Stopped {
 			continue
@@ -235,33 +296,38 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 			continue
 		}
 
-		// Calculate dispel chance: 100 - resistChance (SpellAuras.cpp:1218-1236).
-		// 2.4.3 patch note arm (Unit.cpp:4617-4619): auras with 100% dispel
-		// resistance (chance 0) never enter the dispel list — without this
-		// they would always fail and land in SMSG_DISPEL_FAILED, which C++
-		// never sends for them. Documented no-bridge: the
-		// SPELLMOD_RESIST_DISPEL_CHANCE term (SpellAuras.cpp:1224-1226, from
-		// the aura caster's spell mods) has no Go model.
-		chance := targetSess.calcDispelChanceLocked(!isFriendly)
-		if chance <= 0 {
-			continue
-		}
-
 		candidates = append(candidates, dispelCandidate{
 			SpellID:    spellID,
 			DispelType: dispelType,
 			Mechanic:   aura.Mechanic,
 			AuraType:   aura.AuraType,
 			Slot:       aura.Slot,
-			Chance:     chance,
 			Positive:   aura.Positive,
 			DurationMs: aura.DurationMs,
 			PeriodMs:   aura.PeriodMs,
 			Amount:     aura.Amount,
 			SchoolMask: aura.SchoolMask,
 		})
+		candAuras = append(candAuras, aura)
 	}
-	return candidates
+	mapID, instanceID := targetSess.player.Map, targetSess.player.InstanceID
+	targetSess.castMu.Unlock()
+
+	// Aura::CalcDispelChance (SpellAuras.cpp:1218-1236) runs per aura.
+	// 2.4.3 patch note arm (Unit.cpp:4617-4619): auras with 100% dispel
+	// resistance (chance 0) never enter the dispel list — without this
+	// they would always fail and land in SMSG_DISPEL_FAILED, which C++
+	// never sends for them.
+	kept := candidates[:0]
+	for i := range candidates {
+		chance := s.server.auraDispelChance(mapID, instanceID, candAuras[i], resistTotal, offensive)
+		if chance <= 0 {
+			continue
+		}
+		candidates[i].Chance = chance
+		kept = append(kept, candidates[i])
+	}
+	return kept
 }
 
 // getDispellableAuraListForCreature returns dispellable auras on a creature.
@@ -270,10 +336,10 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 		return nil
 	}
 	s.server.auraMu.Lock()
-	defer s.server.auraMu.Unlock()
 
 	auras := s.server.activeCreatureAuras[creatureAuraKeyForPlayer(*s.player, creatureGUID)]
 	if len(auras) == 0 {
+		s.server.auraMu.Unlock()
 		return nil
 	}
 
@@ -290,7 +356,20 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 		isFriendly = true
 	}
 
+	// The per-aura dispel chance (Aura::CalcDispelChance) folds the aura
+	// caster's spell mods, which takes the caster session's lock — so the
+	// chance is computed after releasing auraMu (two passes).
+	offensive := !isFriendly
+	resistTotal := int32(0)
+	if offensive {
+		for _, ra := range auras {
+			if ra != nil && !ra.Stopped && ra.AuraType == spellAuraModDispelResist {
+				resistTotal += int32(ra.Amount)
+			}
+		}
+	}
 	var candidates []dispelCandidate
+	var candAuras []*activeAura
 	for spellID, aura := range auras {
 		if aura == nil || aura.Stopped {
 			continue
@@ -322,44 +401,36 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 			continue
 		}
 
-		// Aura::CalcDispelChance (SpellAuras.cpp:1218-1236): offensive
-		// dispels subtract the target's SPELL_AURA_MOD_DISPEL_RESIST total;
-		// auras at 100% resistance never enter the list (Unit.cpp:4617-4619,
-		// the 2.4.3 patch note arm). The SPELLMOD_RESIST_DISPEL_CHANCE term
-		// (SpellAuras.cpp:1224-1226) has no Go model.
-		chance := int32(100)
-		if !isFriendly {
-			resist := int32(0)
-			for _, ra := range auras {
-				if ra != nil && !ra.Stopped && ra.AuraType == spellAuraModDispelResist {
-					resist += int32(ra.Amount)
-				}
-			}
-			if resist < 0 {
-				resist = 0
-			} else if resist > 100 {
-				resist = 100
-			}
-			chance = 100 - resist
-		}
-		if chance <= 0 {
-			continue
-		}
 		candidates = append(candidates, dispelCandidate{
 			SpellID:    spellID,
 			DispelType: dispelType,
 			Mechanic:   aura.Mechanic,
 			AuraType:   aura.AuraType,
 			Slot:       aura.Slot,
-			Chance:     chance,
 			Positive:   aura.Positive,
 			DurationMs: aura.DurationMs,
 			PeriodMs:   aura.PeriodMs,
 			Amount:     aura.Amount,
 			SchoolMask: aura.SchoolMask,
 		})
+		candAuras = append(candAuras, aura)
 	}
-	return candidates
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	s.server.auraMu.Unlock()
+
+	// Aura::CalcDispelChance (SpellAuras.cpp:1218-1236) runs per aura.
+	// 2.4.3 patch note arm (Unit.cpp:4617-4619): auras at 100% resistance
+	// never enter the list.
+	kept := candidates[:0]
+	for i := range candidates {
+		chance := s.server.auraDispelChance(mapID, instanceID, candAuras[i], resistTotal, offensive)
+		if chance <= 0 {
+			continue
+		}
+		candidates[i].Chance = chance
+		kept = append(kept, candidates[i])
+	}
+	return kept
 }
 
 // creatureDispelPreCast mirrors the SPELL_EFFECT_DISPEL arm of
@@ -423,10 +494,10 @@ func (s *Server) creatureDispelPreCast(m *creatureMotion, spell wotlk.Spell, tar
 // arm (Unit.cpp:4591-4592) applies to both target kinds. Dispel chance is
 // Aura::CalcDispelChance (SpellAuras.cpp:1218-1236): offensive dispels
 // subtract the target's SPELL_AURA_MOD_DISPEL_RESIST total, and auras at 100%
-// resistance never enter the list (Unit.cpp:4614-4617). The
-// SPELLMOD_RESIST_DISPEL_CHANCE term (SpellAuras.cpp:1224-1226, from the aura
-// caster's spell mods) has no Go model — same documented gap as the
-// player-path scans.
+// resistance never enter the list (Unit.cpp:4614-4617). The aura-caster
+// SPELLMOD_RESIST_DISPEL_CHANCE fold (SpellAuras.cpp:1224-1226) runs per
+// aura via auraDispelChance, two passes so the caster-mod fold never nests
+// session locks.
 func (s *Server) creatureCasterDispelCandidates(m *creatureMotion, targetGUID uint64, dispelMask uint32, isFriendly bool) []dispelCandidate {
 	if s == nil || m == nil || targetGUID == 0 {
 		return nil
@@ -435,11 +506,29 @@ func (s *Server) creatureCasterDispelCandidates(m *creatureMotion, targetGUID ui
 		if (dispelMask&(1<<DispelDisease) != 0) && ts.hasAura(spellUnholyBlight) {
 			dispelMask &^= (1 << DispelDisease)
 		}
+		// Two passes: the per-aura chance folds the aura caster's spell
+		// mods (takes the caster session's lock), so it runs after the
+		// target's lock is released.
 		ts.castMu.Lock()
-		defer ts.castMu.Unlock()
-		var candidates []dispelCandidate
+		offensive := !isFriendly
+		resistTotal := int32(0)
+		if offensive {
+			resistTotal = ts.dispelResistTotalLocked()
+		}
+		type pendingAura struct {
+			spellID uint32
+			aura    *activeAura
+		}
+		var pending []pendingAura
 		for spellID, aura := range ts.activeAuras {
-			if c := s.dispelCandidateFromAura(spellID, aura, dispelMask, isFriendly, ts.calcDispelChanceLocked(!isFriendly)); c != nil {
+			pending = append(pending, pendingAura{spellID, aura})
+		}
+		mapID, instanceID := ts.player.Map, ts.player.InstanceID
+		ts.castMu.Unlock()
+		var candidates []dispelCandidate
+		for _, p := range pending {
+			chance := s.auraDispelChance(mapID, instanceID, p.aura, resistTotal, offensive)
+			if c := s.dispelCandidateFromAura(p.spellID, p.aura, dispelMask, isFriendly, chance); c != nil {
 				candidates = append(candidates, *c)
 			}
 		}
@@ -451,31 +540,35 @@ func (s *Server) creatureCasterDispelCandidates(m *creatureMotion, targetGUID ui
 	}
 	key := creatureAuraKeyForMotion(tm)
 	s.auraMu.Lock()
-	defer s.auraMu.Unlock()
 	auras := s.activeCreatureAuras[key]
 	if dispelMask&(1<<DispelDisease) != 0 {
 		if blight, ok := auras[spellUnholyBlight]; ok && blight != nil && !blight.Stopped {
 			dispelMask &^= (1 << DispelDisease)
 		}
 	}
-	var candidates []dispelCandidate
-	for spellID, aura := range auras {
-		chance := int32(100)
-		if !isFriendly {
-			resist := int32(0)
-			for _, ra := range auras {
-				if ra != nil && !ra.Stopped && ra.AuraType == spellAuraModDispelResist {
-					resist += int32(ra.Amount)
-				}
+	offensive := !isFriendly
+	resistTotal := int32(0)
+	if offensive {
+		for _, ra := range auras {
+			if ra != nil && !ra.Stopped && ra.AuraType == spellAuraModDispelResist {
+				resistTotal += int32(ra.Amount)
 			}
-			if resist < 0 {
-				resist = 0
-			} else if resist > 100 {
-				resist = 100
-			}
-			chance = 100 - resist
 		}
-		if c := s.dispelCandidateFromAura(spellID, aura, dispelMask, isFriendly, chance); c != nil {
+	}
+	type pendingAura struct {
+		spellID uint32
+		aura    *activeAura
+	}
+	var pending []pendingAura
+	for spellID, aura := range auras {
+		pending = append(pending, pendingAura{spellID, aura})
+	}
+	mapID, instanceID := m.Map, m.InstanceID
+	s.auraMu.Unlock()
+	var candidates []dispelCandidate
+	for _, p := range pending {
+		chance := s.auraDispelChance(mapID, instanceID, p.aura, resistTotal, offensive)
+		if c := s.dispelCandidateFromAura(p.spellID, p.aura, dispelMask, isFriendly, chance); c != nil {
 			candidates = append(candidates, *c)
 		}
 	}
@@ -1411,17 +1504,20 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 	}
 
 	if targetSess != nil && targetSess.player != nil {
-		targetSess.castMu.Lock()
 		// Spell::EffectDispelMechanic (SpellEffects.cpp:4749): each
 		// mechanic-matching aura is dispelled only on a successful
-		// Aura::CalcDispelChance roll — 100 minus the target's
-		// SPELL_AURA_MOD_DISPEL_RESIST total on offensive dispels
-		// (SpellAuras.cpp:1218-1236; the aura-caster SPELLMOD term has no
-		// Go model, matching the dispel-path convention).
+		// Aura::CalcDispelChance roll, computed per aura
+		// (SpellAuras.cpp:1218-1236). Two passes: the roll folds the aura
+		// caster's spell mods (takes the caster session's lock), so it runs
+		// after the target's lock is released.
+		targetSess.castMu.Lock()
 		offensive := !s.isFriendlyToTarget(targetGUID, targetSess)
-		chance := targetSess.calcDispelChanceLocked(offensive)
-		var toRemove []uint32
-		for spellID, aura := range targetSess.activeAuras {
+		resistTotal := int32(0)
+		if offensive {
+			resistTotal = targetSess.dispelResistTotalLocked()
+		}
+		var matched []*activeAura
+		for _, aura := range targetSess.activeAuras {
 			if aura == nil || aura.Stopped {
 				continue
 			}
@@ -1451,12 +1547,18 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 				}
 			}
 			if matchesMechanic {
-				if int32(rand.IntN(100)) < chance {
-					toRemove = append(toRemove, spellID)
-				}
+				matched = append(matched, aura)
 			}
 		}
+		mapID, instanceID := targetSess.player.Map, targetSess.player.InstanceID
 		targetSess.castMu.Unlock()
+
+		var toRemove []uint32
+		for _, aura := range matched {
+			if int32(rand.IntN(100)) < s.server.auraDispelChance(mapID, instanceID, aura, resistTotal, offensive) {
+				toRemove = append(toRemove, aura.SpellID)
+			}
+		}
 
 		for _, spID := range toRemove {
 			targetSess.expirePlayerAura(spID)
@@ -1465,39 +1567,40 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 		s.server.auraMu.Lock()
 		key := creatureAuraKeyForPlayer(*s.player, targetGUID)
 		auras := s.server.activeCreatureAuras[key]
-		// Creature-side CalcDispelChance: same 100-minus-resist roll as
-		// the creature dispel path (dispel.go getDispellableAuraListForCreature
-		// convention); the aura-caster SPELLMOD term has no Go model.
-		chance := int32(100)
-		if !s.isFriendlyToTarget(targetGUID, nil) {
-			resist := int32(0)
+		// Creature-side CalcDispelChance: same per-aura 100-minus-resist roll
+		// as the creature dispel path (SpellEffects.cpp:4749), two passes so
+		// the caster-mod fold runs without auraMu held.
+		offensive := !s.isFriendlyToTarget(targetGUID, nil)
+		resistTotal := int32(0)
+		if offensive {
 			for _, ra := range auras {
 				if ra != nil && !ra.Stopped && ra.AuraType == spellAuraModDispelResist {
-					resist += int32(ra.Amount)
+					resistTotal += int32(ra.Amount)
 				}
 			}
-			if resist < 0 {
-				resist = 0
-			} else if resist > 100 {
-				resist = 100
-			}
-			chance = 100 - resist
 		}
-		var toRemove []struct {
-			spellID uint32
-			slot    uint8
-		}
-		for spellID, aura := range auras {
+		var matched []*activeAura
+		for _, aura := range auras {
 			if aura == nil || aura.Stopped {
 				continue
 			}
 			if (s.auraSpellMechanicMask(aura)&(uint32(1)<<mechanic)) != 0 || (mechanic == 5 && aura.AuraType == 7) || (mechanic == 12 && aura.AuraType == 12) {
-				if int32(rand.IntN(100)) < chance {
-					toRemove = append(toRemove, struct {
-						spellID uint32
-						slot    uint8
-					}{spellID: spellID, slot: aura.Slot})
-				}
+				matched = append(matched, aura)
+			}
+		}
+		mapID, instanceID := s.player.Map, s.player.InstanceID
+		s.server.auraMu.Unlock()
+
+		var toRemove []struct {
+			spellID uint32
+			slot    uint8
+		}
+		for _, aura := range matched {
+			if int32(rand.IntN(100)) < s.server.auraDispelChance(mapID, instanceID, aura, resistTotal, offensive) {
+				toRemove = append(toRemove, struct {
+					spellID uint32
+					slot    uint8
+				}{spellID: aura.SpellID, slot: aura.Slot})
 			}
 		}
 		s.server.auraMu.Unlock()
