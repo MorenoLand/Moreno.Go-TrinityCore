@@ -21,6 +21,7 @@ const (
 	questInventoryFull      = 4
 	questFlagsDaily         = 0x00001000
 	questFlagsWeekly        = 0x00008000
+	questFlagsPVP           = 0x00002000 // QUEST_FLAGS_FLAGS_PVP (QuestDef.h:145)
 	questSpecialRepeatable  = 0x001
 	questSpecialDungeonFind = 0x008
 	questSpecialMonthly     = 0x010
@@ -176,6 +177,25 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 			s.giveReputation(ctx, facID, facVal)
 		}
 	}
+	// Player::RewardQuest (Player.cpp:15479-15497): the quest's reward spell
+	// is cast after the quest is marked complete (some spells gate on the
+	// completed state via spell_area data). RewSpellCast wins over RewSpell.
+	// The questgiver-creature cast arm is visual-only — the cast is
+	// triggered — so Go casts as the player, which teaches
+	// SPELL_EFFECT_LEARN_SPELL payloads through the normal cast pipeline.
+	var rewSpellCast int64
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewSpellCast, 0) FROM quest_template WHERE ID = ?", questID).Scan(&rewSpellCast)
+	}
+	rewardSpellID := uint32(0)
+	if rewSpellCast > 0 {
+		rewardSpellID = uint32(rewSpellCast)
+	} else if view.Detail.RewardSpell > 0 {
+		rewardSpellID = uint32(view.Detail.RewardSpell)
+	}
+	if rewardSpellID > 0 {
+		s.castSpellDirect(ctx, rewardSpellID, s.playerGUID)
+	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, rewardXP, view.Detail.RewardMoney, 0, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
 		return false
 	}
@@ -193,6 +213,18 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		packet.WriteU64(giverGUID)
 		packet.WriteU8(status)
 		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true)
+	}
+	// Player::RewardQuest (Player.cpp:15515): the turn-in re-broadcasts the
+	// multiple status so nearby questgivers' "?" states refresh in-session
+	// instead of waiting for a re-login, zone change, or manual query.
+	s.sendQuestgiverStatusMultiple(ctx)
+	// Player::RewardQuest (Player.cpp:15507-15510): turning in a PvP-flagged
+	// quest recomputes the hostile state — the completed quest no longer
+	// forces it — and pushes the new flags.
+	if view.Detail.Flags&questFlagsPVP != 0 {
+		if s.applyZoneState(ctx, s.player, s.player.Zone, s.areaID) {
+			s.sendPlayerUpdate()
+		}
 	}
 	s.gossip = nil
 	s.gossipClosed = true
