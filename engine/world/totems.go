@@ -603,6 +603,9 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 //     totem carries no spell power). The DBC base points of the pulse
 //     spell's periodic-heal effect feed the amount when the row resolves;
 //     otherwise the legacy flat 50 stands in.
+//   - sScriptMgr->ModifyPeriodicDamageAurasTick ahead of the taken leg
+//     (SpellAuraEffects.cpp:5376): the totem caster's AutoBalance damage
+//     multiplier scales the pulse heal.
 //   - SpellHealingBonusTaken with DOT type (MOD_HOT_PCT leg on,
 //     SpellAuraEffects.cpp:5386-5390), keyed on the totem GUID so
 //     MOD_HEALING_RECEIVED auras cast by the totem match.
@@ -651,6 +654,13 @@ func (s *session) totemHealPulseTick(ctx context.Context, def TotemDef, totem *a
 	schoolMask := uint32(1 << 3) // SPELL_SCHOOL_MASK_NATURE
 	if healKnown {
 		schoolMask = healSpell.SchoolMask
+	}
+	// AuraEffect::HandlePeriodicHealAurasTick (SpellAuraEffects.cpp:5376):
+	// sScriptMgr->ModifyPeriodicDamageAurasTick — AutoBalance_UnitScript's
+	// _Modifer_DealDamage scales the totem caster's pulse heal ahead of
+	// the taken leg, like the player-path HoT ticks.
+	if totemMotion := s.server.findCreatureMotion(totem.Map, totem.InstanceID, totem.TotemGUID); totemMotion != nil {
+		heal = s.server.autoBalanceModifyDealDamageOnMap(totemMotion, target.player.Map, heal)
 	}
 	// SpellHealingBonusTaken, DOT type (Unit.cpp:7714-7759).
 	heal = target.healingTakenBonus(target, totem.TotemGUID, def.PulseSpell, heal, true)

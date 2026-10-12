@@ -352,9 +352,19 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 					}
 				}
 				if heal := effectValueMultiplied(leechDealt, multiplier); heal > 0 {
+					// Spell::EffectHealthLeech (SpellEffects.cpp:1543-1548):
+					// the caster self-heal runs through Unit::HealBySpell, so
+					// CalcHealAbsorb and sScriptMgr->ModifyHealRecieved —
+					// AutoBalance_UnitScript::_Modifer_DealDamage scaling the
+					// creature caster's own heal — apply ahead of the health
+					// gain. The SpellHealingBonusDone/Taken self folds stay a
+					// documented delta (no creature model).
+					leechHeal := s.creatureApplyHealAbsorb(creatureAuraKeyForMotion(motion), uint32(schoolMask), heal)
+					scaledHeal := heal - leechHeal
+					scaledHeal = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, scaledHeal)
 					s.motionMu.Lock()
 					if live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID); live != nil && live.Health > 0 {
-						live.Health += heal
+						live.Health += scaledHeal
 						if live.MaxHealth > 0 && live.Health > live.MaxHealth {
 							live.Health = live.MaxHealth
 						}

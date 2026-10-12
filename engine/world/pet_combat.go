@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -2430,6 +2431,60 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	return true
 }
 
+// creatureApplyHealAbsorb mirrors Unit::CalcHealAbsorb (Unit.cpp:2067-2113)
+// over the creature aura store: the target's 301
+// (SPELL_AURA_SCHOOL_HEAL_ABSORB) shields whose misc mask covers the heal's
+// school consume the heal in slot order, each shield decremented by what it
+// took; shields drained to zero are removed after the loop (the C++
+// existExpired leg). The player-side twin is applyHealAbsorb.
+func (s *Server) creatureApplyHealAbsorb(key creatureAuraKey, schoolMask, heal uint32) uint32 {
+	if s == nil || heal == 0 || key.GUID == 0 {
+		return 0
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	sort.Slice(copies, func(i, j int) bool {
+		if copies[i] == nil || copies[j] == nil {
+			return copies[j] == nil
+		}
+		return copies[i].Slot < copies[j].Slot
+	})
+	var exhausted []uint32
+	var absorbed uint32
+	s.auraMu.Lock()
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraSchoolHealAbsorb || absorbed >= heal {
+			continue
+		}
+		if aura.MiscValue&int32(schoolMask) == 0 {
+			continue
+		}
+		if aura.Amount == 0 {
+			exhausted = append(exhausted, aura.SpellID)
+			continue
+		}
+		take := aura.Amount
+		if take > heal-absorbed {
+			take = heal - absorbed
+		}
+		aura.Amount -= take
+		absorbed += take
+		if aura.Amount == 0 {
+			exhausted = append(exhausted, aura.SpellID)
+		}
+	}
+	s.auraMu.Unlock()
+	for _, id := range exhausted {
+		s.removeCreatureAura(key, id)
+	}
+	return absorbed
+}
+
 func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, heal uint32) {
 	if s == nil || s.server == nil || caster == nil || heal == 0 {
 		return
@@ -2446,6 +2501,12 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	// (dotType=false). Pets carry no Go spellpower model, so the
 	// SpellHealingBonusDone leg is identity here.
 	targetSess := s.server.findSessionByGUID(target.GUID)
+	var absorbMask uint32
+	if s.server.Data != nil {
+		if hs, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			absorbMask = uint32(hs.SchoolMask)
+		}
+	}
 	if targetSess != nil && targetSess.player != nil {
 		heal = s.healingTakenBonus(targetSess, caster.GUID, spellID, heal, false)
 	} else if s.server.Data != nil {
@@ -2453,11 +2514,26 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 			heal = creatureHealingTakenBonus(s.server, creatureAuraKeyForTarget(target), caster.GUID, hs, true, heal, false)
 		}
 	}
+	// Unit::HealBySpell (Unit.cpp:6561-6570): CalcHealAbsorb consumes the
+	// target's 301 heal-absorb shields, then sScriptMgr->ModifyHealRecieved
+	// — AutoBalance_UnitScript::_Modifer_DealDamage scales a creature
+	// caster's direct heal the same way it scales its damage — ahead of
+	// DealHeal and the heal log. The taken legs above feed both, and the
+	// hook fires for player and creature targets alike (the attacker arm
+	// keys on the caster, which is always a creature motion here).
+	var absorbed uint32
+	if targetSess != nil && targetSess.player != nil {
+		absorbed = targetSess.applyHealAbsorb(absorbMask, heal)
+	} else {
+		absorbed = s.server.creatureApplyHealAbsorb(creatureAuraKeyForTarget(target), absorbMask, heal)
+	}
+	heal -= absorbed
+	heal = s.server.autoBalanceModifyDealDamageOnMap(caster, target.Map, heal)
 	overheal := uint32(0)
 	if uint64(target.Health)+uint64(heal) > uint64(target.MaxHealth) {
 		overheal = uint32(uint64(target.Health) + uint64(heal) - uint64(target.MaxHealth))
 	}
-	packet := buildSpellHealLog(target.GUID, caster.GUID, spellID, heal, overheal, 0, false)
+	packet := buildSpellHealLog(target.GUID, caster.GUID, spellID, heal, overheal, absorbed, false)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
 	if targetSess != nil && targetSess.player != nil {
