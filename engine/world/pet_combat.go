@@ -862,7 +862,18 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			isPetVictim = vm.OwnerGUID != 0
 		}
 	}
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+	// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
+	// a non-standing player victim always takes a crit when the attacker
+	// has nonzero crit chance.
+	victimSitting := isTargetPlayer && targetSess != nil && targetSess.player != nil && targetSess.player.StandState != 0
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+	if !isTargetPlayer && s.isCreatureEvadingInInstance(motion.Map, motion.InstanceID, targetGUID) {
+		// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
+		// victim in evade mode evades all melee swings.
+		outcome = protocol.MeleeHitEvade
+		hitInfo = protocol.HitInfoMiss
+		targetState = protocol.VictimStateEvades
+	}
 	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
 	// (Unit.cpp:2694-2695) and the 240/4 parry-reduction arm
 	// (Unit::GetUnitParryChance's creature arm) stay unbridged on this path.

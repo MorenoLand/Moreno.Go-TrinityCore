@@ -2710,13 +2710,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseParryReductionBP(creatureAuraKeyForMotion(motion)), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+			// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
+			// a non-standing player victim always takes a crit when the attacker
+			// has nonzero crit chance.
+			victimSitting := isPlayerVictim && target.Sess != nil && target.Sess.player != nil && target.Sess.player.StandState != 0
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion))+s.creatureEnemyDodgeBP(creatureAuraKeyForMotion(motion)), s.creatureExpertiseParryReductionBP(creatureAuraKeyForMotion(motion)), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 			if isPlayerVictim && target.Sess != nil {
 				if target.Sess.isImmuneToDamage(1) {
 					outcome = protocol.MeleeHitImmune
 					hitInfo = protocol.HitInfoMiss
 					targetState = protocol.VictimStateIsImmune
 				}
+			} else if s.isCreatureEvadingInInstance(target.Map, target.InstanceID, target.GUID) {
+				// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
+				// victim in evade mode evades all melee swings.
+				outcome = protocol.MeleeHitEvade
+				hitInfo = protocol.HitInfoMiss
+				targetState = protocol.VictimStateEvades
 			}
 			blocked := uint32(0)
 

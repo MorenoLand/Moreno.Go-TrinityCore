@@ -853,7 +853,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// SPELL_AURA_MOD_ENEMY_DODGE (251) aura sum (Unit.cpp:2697-2698) —
 		// the same arms meleeSpellHitResult carries for melee spells.
 		dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+		// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
+		// a non-standing player victim always takes a crit when the attacker
+		// has nonzero crit chance. player.StandState is the Go analog of
+		// UNIT_FIELD_BYTES_1 stand state (0 = stand).
+		victimSitting := isPlayerVictim && vicSess != nil && vicSess.player != nil && vicSess.player.StandState != 0
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, victimSitting, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -1544,7 +1549,16 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// (Unit.cpp:2694-2695) and the ungated SPELL_AURA_MOD_ENEMY_DODGE (251)
 	// sum (Unit.cpp:2697-2698) apply here like the melee site above.
 	dodgeReductionBP := (s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) + s.totalAuraModifier(spellAuraModEnemyDodge)) * 100
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
+	// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
+	// a non-standing player victim always takes a crit when the attacker
+	// has nonzero crit chance.
+	victimSitting := false
+	if isPlayerVictim && s.server != nil {
+		if vs := s.server.findSessionByGUID(target.GUID); vs != nil && vs.player != nil && vs.player.StandState != 0 {
+			victimSitting = true
+		}
+	}
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, victimSitting, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -2632,7 +2646,7 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // GetUnitDodgeChance adds the victim's 49 total to the 5% base
 // (Unit.cpp:2676-2681). Absent means none. (Slots [9]/[10] are the player
 // victim's derived parry/block percentages.)
-func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim, isPetVictim, attackerNoCrush bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim, isPetVictim, attackerNoCrush, victimSitting bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
@@ -2891,6 +2905,14 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	sum += missChance
 	if roll < int(sum) {
 		return protocol.MeleeHitMiss, protocol.HitInfoMiss, protocol.VictimStateIntact
+	}
+
+	// 1a. Sitting player victims always take a crit when the attacker has
+	// nonzero crit chance (Unit.cpp:2246-2247: "always crit against a sitting
+	// target (except 0 crit chance)") — checked after the miss roll, before
+	// the dodge/parry/glancing/block arms.
+	if isPlayerVictim && victimSitting && critChance > 0 {
+		return protocol.MeleeHitCrit, protocol.HitInfoAffectsVictim | protocol.HitInfoCriticalHit, protocol.VictimStateHit
 	}
 
 	// 2. DODGE
