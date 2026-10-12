@@ -381,6 +381,7 @@ type session struct {
 	logoutAt                     time.Time
 	logoutFlagsApplied           bool
 	gameTimeStartedAt            time.Time
+	loginGameTimeMS              uint32
 	writeMu                      sync.Mutex
 	movementMu                   sync.RWMutex
 	captureUpdatePackets         bool

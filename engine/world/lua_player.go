@@ -626,6 +626,84 @@ func (s *session) luaPlayer() *scripting.Object {
 	// per-player threat manager, so the player leg is a no-op; the
 	// creature object carries the real arm (lua_objects.go).
 	methods["ClearThreatList"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
+	// Eluna combo-point methods (PlayerMethods.h:1201-1226, 2715-2733).
+	// GetComboPoints is the no-arg Unit::GetComboPoints overload
+	// (Unit.h:1579): the banked count regardless of target. GetComboTarget
+	// is the TRINITY arm (player->GetComboTarget()): the banked unit as a
+	// Lua object, nil when nothing is banked. ClearComboPoints keeps the
+	// C++ RemoveAurasByType(SPELL_AURA_RETAIN_COMBO_POINTS) arm
+	// (Unit.cpp:10674-10687) that the internal session clear skips.
+	methods["AddComboPoints"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("AddComboPoints requires a target and a count")
+		}
+		object, ok := args[0].(*scripting.Object)
+		if !ok || object == nil {
+			return nil, fmt.Errorf("AddComboPoints requires a unit target")
+		}
+		targetGUID, ok := objectUint64Field(object, "GUID")
+		if !ok || targetGUID == 0 {
+			return nil, fmt.Errorf("AddComboPoints requires a unit target")
+		}
+		count, err := luaInt64Arg(args, 1)
+		if err != nil || count < math.MinInt8 || count > math.MaxInt8 {
+			return nil, fmt.Errorf("AddComboPoints count must be int8")
+		}
+		s.addSessionComboPoints(targetGUID, int8(count))
+		return nil, nil
+	}
+	methods["ClearComboPoints"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.removeAurasByType(spellAuraRetainComboPoints)
+		s.clearSessionComboPoints()
+		return nil, nil
+	}
+	methods["GetComboPoints"] = luaNoArgs(func() any { return s.sessionComboPoints(0) })
+	methods["GetComboTarget"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s.comboTargetGUID == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.server.findPlayer(s.comboTargetGUID); player != nil {
+			return []any{player}, nil
+		}
+		if creature := s.luaCreature(ctx, s.comboTargetGUID); creature != nil {
+			return []any{creature}, nil
+		}
+		return []any{nil}, nil
+	}
+	// Eluna session/account methods (PlayerMethods.h:862-866, 1495-1519,
+	// 1550-1579). GetLatency is WorldSession::GetLatency in ms; the account
+	// id/name are the login values; GetPlayerIP is
+	// WorldSession::GetRemoteAddress (no port).
+	methods["GetLatency"] = luaNoArgs(func() any { return s.latency.Load() })
+	methods["GetAccountId"] = luaNoArgs(func() any { return s.accountID })
+	methods["GetAccountName"] = luaNoArgs(func() any { return s.accountName })
+	methods["GetPlayerIP"] = luaNoArgs(func() any { return s.remoteIP() })
+	// Eluna time/talent/reputation/guild methods (PlayerMethods.h:1002,
+	// 1155-1167, 1169-1199, 1508-1516, 1227-1232). GetLevelPlayedTime is
+	// flushed like Player::Update's m_Played_time accumulation so the read
+	// is current. GetInGameTime returns the login-time server-uptime value
+	// (CharacterHandler.cpp:856), not played time. GetFreeTalentPoints is
+	// the PLAYER_CHARACTER_POINTS1 twin. GetGuildName pushes nil for the
+	// guildless, like the C++ early return.
+	methods["GetLevelPlayedTime"] = luaNoArgs(func() any {
+		s.updatePlayedTime(time.Now())
+		return state.LevelPlayedTime
+	})
+	methods["GetInGameTime"] = luaNoArgs(func() any { return s.loginGameTimeMS })
+	methods["GetFreeTalentPoints"] = luaNoArgs(func() any { return freeTalentPoints(state) })
+	methods["GetReputation"] = func(_ context.Context, args []any) ([]any, error) {
+		faction, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.reputationStanding(faction)}, nil
+	}
+	methods["GetGuildName"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if state.GuildID == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.server.getGuildName(ctx, state.GuildID)}, nil
+	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242) —
 	// replaces the old no-op PlayDirectSound stub.
 	luaWorldObjectSoundMethods(s.server, s, s.playerGUID, methods)

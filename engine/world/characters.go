@@ -1021,6 +1021,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.gameTimeStartedAt = time.Now()
+	// CharacterHandler.cpp:856: pCurrChar->SetInGameTime(GameTime::GetGameTimeMS()):
+	// Eluna Player:GetInGameTime (PlayerMethods.h:1227) returns this login-time
+	// value verbatim — in this revision it is the server-uptime clock at
+	// login, not accumulated played time.
+	s.loginGameTimeMS = gameTimeMS()
 	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.sendLoadedGroup()
 	s.server.broadcastFriendStatus(s.playerGUID, friendsResultOnline, uint32(state.Zone), uint32(state.Level), uint32(state.Class))

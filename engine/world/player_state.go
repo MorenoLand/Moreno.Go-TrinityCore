@@ -3522,6 +3522,32 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	return s.buildPlayerUpdateForTarget(state, true)
 }
 
+// freeTalentPoints mirrors the PLAYER_CHARACTER_POINTS1 value read by
+// Player::GetFreeTalentPoints (Player.h:1440): total talent points for the
+// level minus spent ranks, with the death-knight Ebon-Hold quest-bonus arm
+// (map 609, level 56+). Extracted from the update-mask computation so the
+// Eluna Player:GetFreeTalentPoints bridge reads the identical value.
+func freeTalentPoints(state *playerState) uint32 {
+	if state == nil || state.Level < 10 {
+		return 0
+	}
+	var spent uint32
+	for _, rank := range state.Talents {
+		spent += uint32(rank + 1)
+	}
+	totalPoints := uint32(state.Level - 9)
+	if state.Class == 6 && state.Map == 609 && state.Level >= 56 {
+		totalPoints = uint32(state.Level-55) + state.QuestBonus
+		if max := uint32(state.Level - 9); totalPoints > max {
+			totalPoints = max
+		}
+	}
+	if totalPoints > spent {
+		return totalPoints - spent
+	}
+	return 0
+}
+
 func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) (*protocol.Packet, error) {
 	return s.buildPlayerUpdateForRecipient(state, targetSelf, false, s.playerSessionForGUID(state.GUID), nil)
 }
@@ -3908,21 +3934,8 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values[playerParryPercentage] = math.Float32bits(state.ParryPercentage)
 
 	// Free talent points & spent points
-	if state.Level >= 10 {
-		var spent uint32
-		for _, rank := range state.Talents {
-			spent += uint32(rank + 1)
-		}
-		totalPoints := uint32(state.Level - 9)
-		if state.Class == 6 && state.Map == 609 && state.Level >= 56 {
-			totalPoints = uint32(state.Level-55) + state.QuestBonus
-			if max := uint32(state.Level - 9); totalPoints > max {
-				totalPoints = max
-			}
-		}
-		if totalPoints > spent {
-			values[playerCharacterPoints1] = totalPoints - spent
-		}
+	if points := freeTalentPoints(&state); points != 0 {
+		values[playerCharacterPoints1] = points
 	}
 	values[playerCharacterPoints2] = s.Config.MaxPrimaryTradeSkill
 
