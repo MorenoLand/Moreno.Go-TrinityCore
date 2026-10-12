@@ -918,7 +918,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	// a non-standing player victim always takes a crit when the attacker
 	// has nonzero crit chance.
 	victimSitting := isTargetPlayer && targetSess != nil && targetSess.player != nil && targetSess.player.StandState != 0
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, victimSitting, false, canBlock, canParry, canDodge, critReductionBP, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, false, victimSitting, false, canBlock, canParry, canDodge, critReductionBP, 0, 0, 0, victimDodgeBP, 0, 0, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
 	if !isTargetPlayer && s.isCreatureEvadingInInstance(motion.Map, motion.InstanceID, targetGUID) {
 		// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
 		// victim in evade mode evades all melee swings.

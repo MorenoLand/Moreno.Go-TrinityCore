@@ -893,7 +893,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// has nonzero crit chance. player.StandState is the Go analog of
 		// UNIT_FIELD_BYTES_1 stand state (0 = stand).
 		victimSitting := isPlayerVictim && vicSess != nil && vicSess.player != nil && vicSess.player.StandState != 0
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, victimSitting, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, true, victimSitting, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -1630,7 +1630,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			victimSitting = true
 		}
 	}
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, victimSitting, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, false, victimSitting, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -2186,11 +2186,10 @@ func calcArmorReducedDamage(armor float64, attackerLevel uint8, victimLevel uint
 	} else if damageReduction > 0.75 {
 		damageReduction = 0.75
 	}
-	reduced := uint32(math.Round(float64(damage) * (1.0 - damageReduction)))
-	if reduced < 1 {
-		reduced = 1
-	}
-	return reduced
+	// Unit.cpp:1700: uint32(std::ceil(std::max(damage * (1.0f -
+	// damageReduction), 0.0f))) — ceil, not round; with damage >= 1 and
+	// damageReduction <= 0.75 the result is >= 1 by construction.
+	return uint32(math.Ceil(math.Max(float64(damage)*(1.0-damageReduction), 0.0)))
 }
 
 type creatureStats struct {
@@ -2743,7 +2742,7 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // totals (Unit::GetUnitCriticalChanceDone, Unit.cpp:2839-2842), and
 // CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) zeroes the whole base, so callers pass
 // -500 plus the aura totals. Absent means none (player/pet callers).
-func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim, isPetVictim, attackerNoCrush, victimSitting bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim, isPetVictim, attackerNoCrush, attackerCanCrush, victimSitting bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
@@ -3011,15 +3010,25 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 		critChance = 0
 	}
 
-	// 7. Crushing blow: a mob 4+ levels above the victim (Unit.cpp:2314-2331):
-	// tmp = attackerMaxSkillValueForLevel - min(victimDefenseSkill,
+	// 7. Crushing blow (Unit.cpp:2310-2331): the gate is
+	// GetLevelForTarget(victim) >= victim->GetLevelForTarget(this)+4 with
+	// !IsControlledByPlayer() and no victim-type gate at all — players are
+	// NOT controlled by a player (m_ControlledByPlayer is only set on
+	// minions/charms, Unit.cpp:6056/6219), so a player 4+ levels above the
+	// victim crushes too (genuine pre-4.0.1 behavior), and mob-vs-pet
+	// victims crush as well. attackerCanCrush carries the !IsControlledByPlayer
+	// half plus the melee-table-only leg (ranged attacks never enter
+	// RollMeleeOutcomeAgainst — DealMeleeDamage returns early for
+	// RANGED_ATTACK, Unit.cpp:1206-1214 — so the ranged-white path passes
+	// false); pets are controlled and can never crush. tmp =
+	// attackerMaxSkillValueForLevel - min(victimDefenseSkill,
 	// victimMaxSkillValueForLevel) clamped to >= 20, then tmp*200 - 1500. Go
 	// models no weapon/defense skill bonuses, so both skills are 5/level and
 	// the min arm is vacuous by construction. CREATURE_FLAG_EXTRA_NO_CRUSH
 	// (0x20, CreatureData.h:42) bars the attacker from crushing
 	// (Unit.cpp:2312).
 	crushingChance := int32(0)
-	if !isPlayerOrPetAttacker && !attackerNoCrush && isPlayerVictim && attackerLevel >= victimLevel+4 {
+	if attackerCanCrush && !attackerNoCrush && attackerLevel >= victimLevel+4 {
 		skillDiff := int32(attackerLevel-victimLevel) * 5
 		if skillDiff < 20 {
 			skillDiff = 20

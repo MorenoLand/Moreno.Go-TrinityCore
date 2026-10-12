@@ -2747,7 +2747,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					int32(math.Round(creatureVictimCritChanceForCaster(s, victimKey, motion.GUID)*100))
 				victimSpellWeaponCritBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
 			}
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, true, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
 			if isPlayerVictim && target.Sess != nil {
 				if target.Sess.isImmuneToDamage(1) {
 					outcome = protocol.MeleeHitImmune
