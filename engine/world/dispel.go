@@ -1615,7 +1615,6 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 				}{spellID: aura.SpellID, slot: aura.Slot})
 			}
 		}
-		s.server.auraMu.Unlock()
 
 		for _, item := range toRemove {
 			s.expireCreatureAura(key, item.spellID, item.slot)
