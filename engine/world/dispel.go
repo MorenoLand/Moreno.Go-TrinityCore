@@ -97,6 +97,15 @@ type dispelCandidate struct {
 	DurationMs uint32
 	PeriodMs   uint32
 	Amount     uint32
+	// CasterGUID is the aura caster's GUID (GetCaster() in the C++ backlash
+	// scripts): the backlash is cast by the aura's caster, not the
+	// dispeller.
+	CasterGUID uint64
+	// Amounts is the per-effect amount snapshot (activeAura.Amounts):
+	// Amount is the last same-aura-type effect's roll, but the dispel
+	// backlashes key on a specific effect index (EFFECT_0 for Unstable
+	// Affliction, EFFECT_1 for Vampiric Touch).
+	Amounts    [3]int32
 	SchoolMask uint32
 }
 
@@ -307,6 +316,8 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 			DurationMs: aura.DurationMs,
 			PeriodMs:   aura.PeriodMs,
 			Amount:     aura.Amount,
+			CasterGUID: aura.CasterGUID,
+			Amounts:    aura.Amounts,
 			SchoolMask: aura.SchoolMask,
 		})
 		candAuras = append(candAuras, aura)
@@ -414,6 +425,8 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 			DurationMs: aura.DurationMs,
 			PeriodMs:   aura.PeriodMs,
 			Amount:     aura.Amount,
+			CasterGUID: aura.CasterGUID,
+			Amounts:    aura.Amounts,
 			SchoolMask: aura.SchoolMask,
 		})
 		candAuras = append(candAuras, aura)
@@ -630,6 +643,8 @@ func (s *Server) dispelCandidateFromAura(spellID uint32, aura *activeAura, dispe
 		DurationMs: aura.DurationMs,
 		PeriodMs:   aura.PeriodMs,
 		Amount:     aura.Amount,
+		CasterGUID: aura.CasterGUID,
+		Amounts:    aura.Amounts,
 		SchoolMask: aura.SchoolMask,
 	}
 }
@@ -958,6 +973,34 @@ func (s *session) executePetSpellDispel(ctx context.Context, motion *creatureMot
 	s.dispelEffectAsCaster(ctx, motion.GUID, targetGUID, spell, eff, motion, isReflected)
 }
 
+// backlashTickAmount returns the C++ AuraEffect amount backing a dispel
+// backlash: the EFFECT_0 tick for Unstable Affliction
+// (spell_warlock.cpp:1547), the EFFECT_1 tick for Vampiric Touch
+// (spell_priest.cpp:1424). The candidate's flat Amount is the last
+// same-aura-type effect's roll, which coincides for UA but not for VT
+// (EFFECT_0 there is the dummy), so the per-effect snapshot wins when
+// nonzero and the flat amount is the no-data fallback.
+func backlashTickAmount(cand dispelCandidate, effectIndex int) uint32 {
+	if effectIndex >= 0 && effectIndex < len(cand.Amounts) && cand.Amounts[effectIndex] > 0 {
+		return uint32(cand.Amounts[effectIndex])
+	}
+	return cand.Amount
+}
+
+// backlashCasterSession resolves the aura caster's session for a dispel
+// backlash: C++ casts the backlash with the aura's caster (GetCaster()),
+// not the dispeller (spell_warlock.cpp:1555,
+// spell_priest.cpp:1431). Falls back to the dispeller's session when the
+// aura caster is not an online player (offline, creature, unrecorded).
+func (s *session) backlashCasterSession(casterGUID uint64) *session {
+	if s != nil && s.server != nil && casterGUID != 0 {
+		if cs := s.server.findSessionByGUID(casterGUID); cs != nil && cs.player != nil {
+			return cs
+		}
+	}
+	return s
+}
+
 func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, petCaster *creatureMotion, isReflected bool) {
 	if s.player == nil {
 		return
@@ -1038,17 +1081,28 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 				candidates = candidates[:len(candidates)-1]
 			}
 
-			// Dispel Backfire / Backlash Mechanics (spell_warlock.cpp:1542-1557)
-			// Unstable Affliction: deals 9 * tick damage (cand.Amount * 9) and silences the dispeller for 5 seconds (spell 31117).
+			// Dispel Backfire / Backlash Mechanics.
+			// Unstable Affliction (spell_warlock.cpp:1531-1560): the AURA
+			// caster casts 31117 on the dispeller — 9 * EFFECT_0 tick
+			// amount — plus the 5-second silence. C++ folds the
+			// dispeller's damage-taken bonuses into the tick before the
+			// x9 (SpellDamageBonusTaken, :1551); Go's damage pipeline
+			// applies taken bonuses after the multiply instead, a
+			// second-order residual.
 			if isUnstableAfflictionSpell(cand.SpellID) {
-				backlashDamage := cand.Amount * 9
+				backlashDamage := backlashTickAmount(cand, 0) * 9
 				if backlashDamage == 0 {
 					backlashDamage = 1800
 				}
+				dispellerGUID := casterGUID
 				if petCaster != nil {
-					s.executePetSpellDamage(ctx, petCaster, petCaster.GUID, 31117, backlashDamage, 0, true)
+					dispellerGUID = petCaster.GUID
+				}
+				casterSess := s.backlashCasterSession(cand.CasterGUID)
+				if petCaster != nil && casterSess == s {
+					s.executePetSpellDamage(ctx, petCaster, dispellerGUID, 31117, backlashDamage, 0, true)
 				} else {
-					s.executeSpellDamage(ctx, casterGUID, 31117, backlashDamage, 0)
+					casterSess.executeSpellDamage(ctx, dispellerGUID, 31117, backlashDamage, 0)
 				}
 
 				silenceSpell := wotlk.Spell{
@@ -1060,23 +1114,31 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 					Effect: 6,  // SPELL_EFFECT_APPLY_AURA
 					Aura:   18, // SPELL_AURA_MOD_SILENCE
 				}
+				silenceCasterGUID := cand.CasterGUID
+				if silenceCasterGUID == 0 {
+					silenceCasterGUID = dispellerGUID
+				}
 				if petCaster != nil {
-					s.applyPetAura(ctx, petCaster, silenceSpell, silenceEff, petCaster.GUID, 5000, 0)
+					s.applyPetAura(ctx, petCaster, silenceSpell, silenceEff, dispellerGUID, 5000, 0)
 				} else {
-					s.applyAuraToTarget(ctx, casterGUID, silenceSpell, silenceEff, -1, 5000, 0, 0, 32, nil, false, casterGUID, false, 0, false)
+					casterSess.applyAuraToTarget(ctx, dispellerGUID, silenceSpell, silenceEff, -1, 5000, 0, 0, 32, nil, false, silenceCasterGUID, false, 0, false)
 				}
 			}
 
-			// Vampiric Touch: deals 2 * tick damage (cand.Amount * 2) to the dispeller (spell 64085).
+			// Vampiric Touch (spell_priest.cpp:1416-1435): the AURA caster
+			// casts 64085 on the AURA OWNER (the dispel target, via
+			// GetUnitOwner), not the dispeller — 8 * EFFECT_1 tick
+			// amount. The old code dealt 2x to the dispeller instead.
 			if isVampiricTouchSpell(cand.SpellID) {
-				backlashDamage := cand.Amount * 2
+				backlashDamage := backlashTickAmount(cand, 1) * 8
 				if backlashDamage == 0 {
 					backlashDamage = 680
 				}
-				if petCaster != nil {
-					s.executePetSpellDamage(ctx, petCaster, petCaster.GUID, 64085, backlashDamage, 0, true)
+				casterSess := s.backlashCasterSession(cand.CasterGUID)
+				if petCaster != nil && casterSess == s {
+					s.executePetSpellDamage(ctx, petCaster, targetGUID, 64085, backlashDamage, 0, true)
 				} else {
-					s.executeSpellDamage(ctx, casterGUID, 64085, backlashDamage, 0)
+					casterSess.executeSpellDamage(ctx, targetGUID, 64085, backlashDamage, 0)
 				}
 			}
 		} else {
