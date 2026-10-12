@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -2690,6 +2691,10 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		notify.WriteU8(1) // 1 = "You loot..."
 		_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_MONEY_NOTIFY), notify.Bytes(), true)
 		s.sendPlayerUpdate()
+		// LootHandler.cpp:211: the Eluna hook fires in the solo arm only —
+		// the group-split arm above has no hook — after the money grant, the
+		// achievement update and the notify, with the full loot gold.
+		s.fireLootMoneyHook(ctx, copper)
 	}
 
 	// Loot::isLooted (Loot.h:236) is gold == 0 && unlootedCount == 0, and the
@@ -3043,6 +3048,15 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 			s.clearCreatureLoot(loot)
 		}
 	}
+	// Player::StoreLootItem (Player.cpp:25140) and the group autoloot arm
+	// (LootHandler.cpp:485): the Eluna hook fires after the store, the
+	// push result and the player update, as (event, player, item, count,
+	// lootGuid) — the item is the receiving instance (the merged pile on a
+	// stack fill, matching C++'s newitem) and count is the loot row's
+	// count, not the pile's. The currency-token auto-store above routes
+	// through this same function, exactly like C++'s FillNotNormalLootFor
+	// storing through Player::StoreLootItem.
+	s.fireLootItemHook(ctx, loot, res, it)
 	s.debug("loot item stored", "account", s.accountName, "item", it.ItemEntry, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
 }
@@ -4750,4 +4764,29 @@ func (s *Server) onPlayerLeaveGroupRolls(leavingGUID uint64, groupID uint64) {
 		delete(roll.Votes, leavingGUID)
 		roll.TotalPlayersRolling--
 	}
+}
+
+// fireLootMoneyHook fires Eluna PLAYER_EVENT_ON_LOOT_MONEY (37):
+// Eluna::OnLootMoney (PlayerHooks.cpp:72) from
+// WorldSession::HandleLootMoneyOpcode (LootHandler.cpp:211), as
+// (event, player, amount) — void CallAllFunctions, no cancel semantics.
+func (s *session) fireLootMoneyHook(ctx context.Context, amount uint32) {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return
+	}
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventLootMoney, s.luaPlayer(), amount)
+}
+
+// fireLootItemHook fires Eluna PLAYER_EVENT_ON_LOOT_ITEM (32):
+// Eluna::OnLootItem (PlayerHooks.cpp:62) from Player::StoreLootItem
+// (Player.cpp:25140) and the group autoloot arm (LootHandler.cpp:485), as
+// (event, player, item, count, lootGuid) — void CallAllFunctions, no cancel
+// semantics. The loot GUID is the looted object's GUID
+// (this->GetLootGUID() / lootguid in C++).
+func (s *session) fireLootItemHook(ctx context.Context, loot *activeLootState, res *inventoryStoreResult, it lootItem) {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil || loot == nil || res == nil {
+		return
+	}
+	item := scripting.NewItemObject(res.ItemGUID, it.ItemEntry, it.Count, s.itemTemplateLive(ctx, it.ItemEntry))
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventLootItem, s.luaPlayer(), item, it.Count, loot.TargetGUID)
 }

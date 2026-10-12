@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -299,6 +300,19 @@ func (s *session) giveReputation(ctx context.Context, factionID uint32, amount i
 			return
 		}
 	}
+	// ReputationMgr::SetReputation (ReputationMgr.cpp:302): the Eluna hook
+	// fires first with the target standing; a rewritten standing becomes the
+	// new target, folded back to a delta for the additive store. Go's sink
+	// is always incremental. The GM .modify rep path mirrors C++
+	// SetOneFactionReputation, which never fires the hook (only SetReputation
+	// does), so it stays unfired there.
+	currentTotal := s.reputationStanding(factionID)
+	target := currentTotal + amount
+	target = s.fireReputationChangeHook(ctx, factionID, target, true)
+	amount = target - currentTotal
+	if amount == 0 {
+		return
+	}
 	cdb := s.server.CharactersStore.DB
 	for i := range s.player.Reputations {
 		if s.player.Reputations[i].FactionID == factionID {
@@ -397,4 +411,31 @@ func (s *session) reputationPriceDiscount(ctx context.Context, npcGUID uint64) f
 		return 1.0
 	}
 	return 1.0 - 0.05*float64(rank-neutralRank)
+}
+
+// fireReputationChangeHook fires Eluna PLAYER_EVENT_ON_REPUTATION_CHANGE
+// (15): Eluna::OnReputationChange (PlayerHooks.cpp:254) via
+// ScriptMgr::OnPlayerReputationChange (ScriptMgr.cpp:2037). C++ pushes
+// (player, factionId, standing, incremental) and lets each handler rewrite
+// the standing through a numeric return — the chained-argument convention
+// (ReplaceArgument), the same trigger as fireGiveXPHook. It returns the
+// final standing the engine must apply.
+func (s *session) fireReputationChangeHook(ctx context.Context, factionID uint32, standing int32, incremental bool) int32 {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return standing
+	}
+	args := []any{scripting.PlayerEventReputationChange, s.luaPlayer(), factionID, standing, incremental}
+	_, err := s.server.Features.Scripts.TriggerPlayerEventUpdated(ctx, scripting.PlayerEventReputationChange, args, func(returns []any) {
+		if len(returns) == 0 {
+			return
+		}
+		if n, ok := returns[0].(float64); ok {
+			standing = int32(n)
+			args[3] = standing
+		}
+	})
+	if err != nil {
+		s.debug("lua reputation-change hook failed", "account", s.accountName, "error", err)
+	}
+	return standing
 }

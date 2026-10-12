@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -186,8 +187,10 @@ func (s *session) grantMaxSkill(ctx context.Context, state *playerState, skillID
 // GetSkill()-proficiency + heirloom-exception arm (Player.cpp:11984) and the
 // reputation arm (Player.cpp:12008). IsBindedNotWith is vacuous here: the
 // item row was read from this player's own character_inventory, so the owner
-// is necessarily the player. Eluna's OnCanUseItem has no Go fire site.
-func (s *session) canUseItemResult(ctx context.Context, itemClass, itemSubClass, itemTplFlags2 uint32, allowableClass, allowableRace int64, reqSkill, reqSkillRank, reqSpell, holidayID, quality, reqRepFaction, reqRepRank uint32, itemSpellIDs [5]int64) uint8 {
+// is necessarily the player. Eluna's OnCanUseItem (PlayerHooks.cpp:11981)
+// fires at the tail, after every gate — a non-OK handler return becomes the
+// result.
+func (s *session) canUseItemResult(ctx context.Context, itemEntry, itemClass, itemSubClass, itemTplFlags2 uint32, allowableClass, allowableRace int64, reqSkill, reqSkillRank, reqSpell, holidayID, quality, reqRepFaction, reqRepRank uint32, itemSpellIDs [5]int64) uint8 {
 	if s == nil || s.player == nil {
 		return equipErrItemNotFound
 	}
@@ -291,7 +294,38 @@ func (s *session) canUseItemResult(ctx context.Context, itemClass, itemSubClass,
 			return equipErrCantEquipReputation
 		}
 	}
+	// Player::CanUseItem (Player.cpp:11981): the Eluna hook fires at the end
+	// of the check chain, and a non-OK return becomes the result.
+	if result := s.fireCanUseItemHook(ctx, itemEntry); result != equipErrOk {
+		return result
+	}
 	return equipErrOk
+}
+
+// fireCanUseItemHook fires Eluna PLAYER_EVENT_ON_CAN_USE_ITEM (31):
+// Eluna::OnCanUseItem (PlayerHooks.cpp:119) via Player::CanUseItem
+// (Player.cpp:11981), as (event, player, itemEntry). Each handler's numeric
+// return overwrites the running result — the C++ loop assigns on every
+// lua_isnumber hit, so the last numeric return wins — and any non-OK final
+// result becomes CanUseItem's answer. It returns the final InventoryResult.
+func (s *session) fireCanUseItemHook(ctx context.Context, itemEntry uint32) uint8 {
+	result := uint8(equipErrOk)
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return result
+	}
+	args := []any{scripting.PlayerEventCanUseItem, s.luaPlayer(), itemEntry}
+	_, err := s.server.Features.Scripts.TriggerPlayerEventUpdated(ctx, scripting.PlayerEventCanUseItem, args, func(returns []any) {
+		if len(returns) == 0 {
+			return
+		}
+		if n, ok := returns[0].(float64); ok {
+			result = uint8(int64(n))
+		}
+	})
+	if err != nil {
+		s.debug("lua can-use-item hook failed", "account", s.accountName, "error", err)
+	}
+	return result
 }
 
 func (s *session) canUseItemTemplate(ctx context.Context, entry uint32) bool {
@@ -689,6 +723,24 @@ func (s *session) isSlotValidForItem(invType uint8, slot uint8) bool {
 	}
 }
 
+// fireEquipHook fires Eluna PLAYER_EVENT_ON_EQUIP (29):
+// Eluna::OnEquip (PlayerHooks.cpp:109), fired at the end of
+// Player::EquipItem (Player.cpp:12410/12423) and Player::QuickEquipItem
+// (Player.cpp:12451) as (event, player, item, bag, slot) — void
+// CallAllFunctions, no cancel semantics. Go's equip funnel is the two
+// auto-equip opcode handlers; bag is the destination's client bag
+// (255 = INVENTORY_SLOT_BAG_0) and slot the destination equipment slot.
+func (s *session) fireEquipHook(ctx context.Context, itemGUID int64, bag, slot uint8) {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return
+	}
+	item := s.sessionLuaItem(ctx, uint64(itemGUID))
+	if item == nil {
+		return
+	}
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventEquip, s.luaPlayer(), item, bag, slot)
+}
+
 func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
@@ -759,6 +811,11 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 			rows.Close()
 		}
 	}
+	// Player::EquipItem (Player.cpp:12423): the Eluna hook fires at the end
+	// of the equip, after the achievement criteria, as (event, player, item,
+	// bag, slot) with the DESTINATION coordinates — bag is
+	// INVENTORY_SLOT_BAG_0 (255, the Go clientBag twin of bagKey 0).
+	s.fireEquipHook(ctx, itemGUID, 255, destSlot)
 	s.debug("item auto-equipped", "account", s.accountName, "guid", s.playerGUID, "entry", itemEntry, "slot", destSlot)
 	return true
 }
@@ -827,6 +884,9 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
+	// Player::EquipItem (Player.cpp:12423) — the slot-targeted equip arm
+	// fires the Eluna hook the same way the auto-equip arm does.
+	s.fireEquipHook(ctx, itemGUID, 255, dstSlot)
 	s.debug("item slot equipped", "account", s.accountName, "guid", s.playerGUID, "item", itemGUID, "slot", dstSlot)
 	return true
 }
@@ -3015,7 +3075,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// SpellHandler.cpp:135 — Player::CanUseItem (Player.cpp:11859) in
 		// result form; the Denveous-marker AX1/AX2 bypasses plus the
 		// faction/class/race/skill/spell/holiday/learning/reputation arms.
-		if msg := s.canUseItemResult(ctx, uint32(itemClass), uint32(itemSubClass), uint32(itemTplFlags2), allowableClass, allowableRace, uint32(reqSkill), uint32(reqSkillRank), uint32(reqSpell), uint32(holidayID), uint32(quality), uint32(reqRepFaction), uint32(reqRepRank), itemSpellIDs); msg != equipErrOk {
+		if msg := s.canUseItemResult(ctx, uint32(itemEntry), uint32(itemClass), uint32(itemSubClass), uint32(itemTplFlags2), allowableClass, allowableRace, uint32(reqSkill), uint32(reqSkillRank), uint32(reqSpell), uint32(holidayID), uint32(quality), uint32(reqRepFaction), uint32(reqRepRank), itemSpellIDs); msg != equipErrOk {
 			s.sendEquipError(msg, fullItemGUID)
 			return true
 		}
@@ -4092,7 +4152,7 @@ func (s *session) handleReadItem(ctx context.Context, payload []byte) bool {
 		for i, spell := range data.Spells {
 			spellIDs[i] = int64(spell.ID)
 		}
-		msg = s.canUseItemResult(ctx, data.Class, data.SubClass, data.Flags2, int64(data.AllowableClass), int64(data.AllowableRace), data.RequiredSkill, data.RequiredSkillRank, data.RequiredSpell, data.HolidayID, data.Quality, data.RequiredReputationFaction, data.RequiredReputationRank, spellIDs)
+		msg = s.canUseItemResult(ctx, uint32(itemEntry), data.Class, data.SubClass, data.Flags2, int64(data.AllowableClass), int64(data.AllowableRace), data.RequiredSkill, data.RequiredSkillRank, data.RequiredSpell, data.HolidayID, data.Quality, data.RequiredReputationFaction, data.RequiredReputationRank, spellIDs)
 	}
 	if msg != equipErrOk {
 		buf := protocol.NewBuffer(8)
