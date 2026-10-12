@@ -613,16 +613,25 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// Unit::CalculateMinMaxDamage (StatSystem.cpp:553-556) with the
 		// aura legs Unit::UpdateDamageDoneMods / UpdateDamagePctDoneMods
 		// (Unit.cpp:9334-9416): ((weapon + AP/14) * basePct + flat13) *
-		// pct79 (* pct122 offhand). Go models no damage BASE_PCT (always
-		// 1.0 in C++ too — nothing writes it), so it drops out. The flat
-		// and pct folds are per attack type with the
+		// pct79 (* pct122 offhand, and the UNIT_MOD_DAMAGE_OFFHAND 0.5
+		// from Unit.cpp:353 rides the same TOTAL_PCT). Go models no damage
+		// BASE_PCT (always 1.0 in C++ too — nothing writes it), so it drops
+		// out. The flat and pct folds are per attack type with the
 		// CheckAttackFitToAuraRequirement weapon-fit gate.
-		damage = uint32((float64(damage) + float64(s.meleeDamageDoneFlat(ctx, attType))) * s.meleeDamageDonePctMod(ctx, attType) * s.meleeDamageDoneVersusMod(ctx, target.GUID))
-	}
-
-	// Off-hand weapon attacks suffer a 50% damage penalty by default (TrinityCore Unit.cpp:353)
-	if attType == protocol.OffAttack {
-		damage = uint32(math.Round(float64(damage) * 0.5))
+		// Unit::CalculateMeleeDamage (Unit.cpp:1236-1237) then runs
+		// MeleeDamageBonusDone / MeleeDamageBonusTaken on the (offhand-halved)
+		// weapon base: Done's APbonus/creature flat lands after the halving
+		// and before the versus product (Unit.cpp:8061-8068), then Taken's
+		// flat/pct arms (Unit.cpp:8154-8271).
+		pct := s.meleeDamageDonePctMod(ctx, attType)
+		if attType == protocol.OffAttack {
+			// Off-hand weapon attacks suffer a 50% damage penalty by default (TrinityCore Unit.cpp:353)
+			pct *= 0.5
+		}
+		done := (float64(damage)+float64(s.meleeDamageDoneFlat(ctx, attType)))*pct +
+			float64(s.swingDoneFlatBonus(ctx, false, false, target.GUID, target))
+		damage = uint32(done * s.meleeDamageDoneVersusMod(ctx, target.GUID))
+		damage = s.meleeWeaponDamageTaken(ctx, damage, spellSchoolMaskNormal, target.GUID, target, false, true)
 	}
 
 	// Apply target armor damage reduction
@@ -798,6 +807,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		damage -= blocked
 	case protocol.MeleeHitCrit:
 		damage *= 2
+		// Unit::CalculateMeleeDamage crit leg (Unit.cpp:1302-1319): the
+		// 203/204 + 163 + 169 arms AddPct after the doubling, ahead of the
+		// resilience reduction below.
+		damage = s.meleeCritDamageBonus(ctx, damage, target.GUID, target, false)
 	case protocol.MeleeHitGlancing:
 		damage = uint32(float64(damage) * 0.75)
 		if damage < 1 {
@@ -1460,7 +1473,15 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		minDmg = 1.0
 		maxDmg = 2.0
 	}
-	damage := uint32((float64(minDmg) + float64(rand.Float32()*(maxDmg-minDmg)) + float64(s.meleeDamageDoneFlat(ctx, protocol.RangedAttack))) * s.meleeDamageDonePctMod(ctx, protocol.RangedAttack) * s.meleeDamageDoneVersusMod(ctx, target.GUID))
+	// Unit::CalculateMeleeDamage with RANGED_ATTACK (Unit.cpp:1236-1237):
+	// MeleeDamageBonusDone's APbonus/creature flat lands after the weapon
+	// base and before the versus product, then MeleeDamageBonusTaken's
+	// flat/pct arms (87 + Sanctified Wrath ride here on the white path).
+	done := (float64(minDmg)+float64(rand.Float32()*(maxDmg-minDmg))+float64(s.meleeDamageDoneFlat(ctx, protocol.RangedAttack)))*
+		s.meleeDamageDonePctMod(ctx, protocol.RangedAttack) +
+		float64(s.swingDoneFlatBonus(ctx, true, false, target.GUID, target))
+	damage := uint32(done * s.meleeDamageDoneVersusMod(ctx, target.GUID))
+	damage = s.meleeWeaponDamageTaken(ctx, damage, spellSchoolMaskNormal, target.GUID, target, true, true)
 	if damage < 1 {
 		damage = 1
 	}
@@ -1477,6 +1498,10 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		damage -= blocked
 	case protocol.MeleeHitCrit:
 		damage *= 2
+		// Unit::CalculateMeleeDamage crit leg (Unit.cpp:1302-1319): the
+		// 203/204 + 163 + 169 arms AddPct after the doubling, ahead of the
+		// resilience reduction below.
+		damage = s.meleeCritDamageBonus(ctx, damage, target.GUID, target, true)
 	}
 
 	// Unit::ProcSkillsAndReactives victim arm (Unit.cpp:10283-10324): a

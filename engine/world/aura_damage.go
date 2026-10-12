@@ -168,3 +168,42 @@ func (s *session) meleeDamageDoneVersusMod(ctx context.Context, targetGUID uint6
 	}
 	return mod
 }
+
+// meleeCritDamageBonus mirrors the MELEE_HIT_CRIT leg of
+// Unit::CalculateMeleeDamage (Unit.cpp:1302-1319): after the x2, AddPct the
+// victim's MOD_ATTACKER_MELEE_CRIT_DAMAGE (203) / MOD_ATTACKER_RANGED_CRIT_DAMAGE
+// (204) total, the attacker's MOD_CRIT_DAMAGE_BONUS (163) product-by-school
+// minus one, and the attacker's MOD_CRIT_PERCENT_VERSUS (169) sum by the
+// victim's creature-type mask. Runs on the doubled damage, ahead of the
+// resilience reduction, exactly like the C++ loop.
+func (s *session) meleeCritDamageBonus(ctx context.Context, damage uint32, targetGUID uint64, target combatTarget, ranged bool) uint32 {
+	if damage == 0 || s == nil || s.server == nil {
+		return damage
+	}
+	critAura := uint32(spellAuraModAttackerMeleeCritDmg)
+	if ranged {
+		critAura = uint32(spellAuraModAttackerRangedCritDmg)
+	}
+	var mod float64
+	if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+		mod += float64(vs.totalAuraModifier(critAura))
+	} else if target.GUID != 0 {
+		mod += float64(creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), critAura))
+	}
+	// The 163 fold carries the Same Effect Stack Rule gating plus the passive
+	// talent and meta-gem legs, matching the spell-crit twin.
+	mod += (s.critDamageAuraMultiplier(spellSchoolMaskNormal) - 1.0) * 100
+	if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
+		for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModCritPercentVersus, typMask) {
+			mod += float64(amt)
+		}
+	}
+	if mod != 0 {
+		nd := float64(damage) * (1 + mod/100)
+		if nd < 0 {
+			nd = 0
+		}
+		damage = uint32(nd)
+	}
+	return damage
+}

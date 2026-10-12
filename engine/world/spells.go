@@ -13229,17 +13229,18 @@ func spellHasWeaponDamageEffect(spell wotlk.Spell) bool {
 }
 
 // meleeWeaponDamageTaken mirrors the MeleeDamageBonusTaken-only arms of
-// Unit::MeleeDamageBonusTaken (Unit.cpp:8154-8230) for weapon-damage spells:
-// the flat MOD_DAMAGE_TAKEN (misc mask = attacker melee school; the spell
-// school is used here — weapon spells are physical, so the masks coincide)
-// plus MOD_MELEE_DAMAGE_TAKEN (125) / MOD_RANGED_DAMAGE_TAKEN (113), with the
-// negative-flat clamp, then the MOD_MELEE_DAMAGE_TAKEN_PCT (126) /
-// MOD_RANGED_DAMAGE_TAKEN_PCT (114) product. The mechanic / Cheat Death /
-// MOD_DAMAGE_PERCENT_TAKEN / from-caster / Sanctified Wrath arms are shared
-// with SpellDamageBonusTaken and keep riding spellDamageBonusTaken, which this
-// runs ahead of so the flat lands before every percent multiplier, matching
-// the C++ order. Call only for weapon-damage spells.
-func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, schoolMask uint32, targetGUID uint64, target combatTarget, ranged bool) uint32 {
+// Unit::MeleeDamageBonusTaken (Unit.cpp:8154-8271): the flat MOD_DAMAGE_TAKEN
+// (misc mask = attacker melee school; the spell school is used here — weapon
+// spells are physical, so the masks coincide) plus MOD_MELEE_DAMAGE_TAKEN
+// (125) / MOD_RANGED_DAMAGE_TAKEN (113), with the negative-flat clamp, then
+// the MOD_MELEE_DAMAGE_TAKEN_PCT (126) / MOD_RANGED_DAMAGE_TAKEN_PCT (114)
+// product. When applyPercentTaken is true (white swings), the
+// MOD_DAMAGE_PERCENT_TAKEN (87) arm (Unit.cpp:8178) and the Sanctified Wrath
+// MOD_IGNORE_TARGET_RESIST (195) clawback (Unit.cpp:8244-8258) ride here;
+// weapon-damage spells pass false because those two arms keep riding
+// spellDamageBonusTaken, which this runs ahead of so the flat lands before
+// every percent multiplier, matching the C++ order.
+func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, schoolMask uint32, targetGUID uint64, target combatTarget, ranged, applyPercentTaken bool) uint32 {
 	if s == nil || s.server == nil || damage == 0 {
 		return damage
 	}
@@ -13249,7 +13250,10 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 	}
 	var flat int32
 	var pcts []int32
+	var key creatureAuraKey
+	isPlayerVictim := false
 	if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+		isPlayerVictim = true
 		for _, amt := range vs.auraTypeModifiersByMiscMask(auraModDamageTaken, schoolMask) {
 			flat += amt
 		}
@@ -13258,7 +13262,7 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 		}
 		pcts = vs.gatedAuraModifierAmounts(pctAura, vs.auraModifierCandidatesFiltered(pctAura, nil))
 	} else if target.GUID != 0 {
-		key := creatureAuraKeyForTarget(target)
+		key = creatureAuraKeyForTarget(target)
 		for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraModDamageTaken, schoolMask) {
 			flat += amt
 		}
@@ -13267,6 +13271,15 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 		// predicate); the all-bits mask folds every effect with a nonzero
 		// MiscValue, which is the whole population for these aura types.
 		pcts = creatureAuraModifiersByMiscMask(s.server, key, pctAura, 0xFFFFFFFF)
+	}
+	if applyPercentTaken {
+		if isPlayerVictim {
+			if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+				pcts = append(pcts, vs.auraTypeModifiersByMiscMask(spellAuraModDamagePercentTaken, schoolMask)...)
+			}
+		} else if target.GUID != 0 {
+			pcts = append(pcts, creatureAuraModifiersByMiscMask(s.server, key, spellAuraModDamagePercentTaken, schoolMask)...)
+		}
 	}
 	// Unit.cpp:8171-8172: a negative flat benefit larger than the damage zeroes it.
 	if flat < 0 && damage < uint32(-flat) {
@@ -13280,6 +13293,16 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 	for _, amt := range pcts {
 		mod *= 1 + float64(amt)/100
 	}
+	if applyPercentTaken && mod < 1 {
+		// Unit.cpp:8244-8258: Sanctified Wrath — the attacker's
+		// MOD_IGNORE_TARGET_RESIST (195) auras (misc mask = attack school,
+		// NORMAL for white swings) claw back the damage reduction.
+		reduction := 1 - mod
+		for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask) {
+			reduction *= 1 - float64(amt)/100
+		}
+		mod = 1 - reduction
+	}
 	result = int64(float64(result) * mod)
 	if result < 0 {
 		return 0
@@ -13287,18 +13310,46 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 	return uint32(result)
 }
 
-// weaponDamageDoneFlatBonus mirrors the flat half of Unit::MeleeDamageBonusDone
-// (Unit.cpp:7996-8036) for weapon-damage spells: MOD_DAMAGE_DONE_CREATURE (59,
-// misc mask = victim creature-type mask) plus the attack-power-attacker-bonus
-// leg — the victim's MELEE (165) / RANGED (127) ATTACK_POWER_ATTACKER_BONUS
-// auras and the MOD_MELEE (102) / MOD_RANGED (131) ATTACK_POWER_VERSUS auras
-// (misc mask = victim creature-type mask), folded as
-// int32(APbonus / 14 * GetAPMultiplier(attType, normalized)) (Unit.cpp:8033).
-// The percent half (DoneTotalMod) rides the shared spellDamagePctDone fold —
-// MOD_DAMAGE_PERCENT_DONE, MOD_DAMAGE_DONE_VERSUS (168) and
-// MOD_DAMAGE_DONE_VERSUS_AURASTATE (303) are identical arms in both C++
-// functions — and the class-script arms ride spellDamagePctClassScripts.
-func (s *session) weaponDamageDoneFlatBonus(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget) int32 {
+// swingVictimAuraSum sums the victim's auras of the given type — the shared
+// victim-side read behind the MeleeDamageBonusDone APbonus leg (Unit.cpp:8017-8031),
+// used by both weapon-damage spells and white swings.
+func (s *session) swingVictimAuraSum(targetGUID uint64, target combatTarget, auraType uint32, miscMask uint32, filtered bool) int32 {
+	var sum int32
+	if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+		if filtered {
+			for _, amt := range vs.auraTypeModifiersByMiscMask(auraType, miscMask) {
+				sum += amt
+			}
+		} else {
+			for _, amt := range vs.auraTypeModifiers(auraType) {
+				sum += amt
+			}
+		}
+		return sum
+	}
+	if target.GUID != 0 {
+		key := creatureAuraKeyForTarget(target)
+		if filtered {
+			for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraType, miscMask) {
+				sum += amt
+			}
+		} else {
+			sum += creatureAuraModifierSum(s.server, key, auraType)
+		}
+	}
+	return sum
+}
+
+// swingDoneFlatBonus mirrors the flat half of Unit::MeleeDamageBonusDone
+// (Unit.cpp:7996-8036): MOD_DAMAGE_DONE_CREATURE (59, misc mask = victim
+// creature-type mask) plus the attack-power-attacker-bonus leg — the victim's
+// MELEE (165) / RANGED (127) ATTACK_POWER_ATTACKER_BONUS auras and the
+// MOD_MELEE (102) / MOD_RANGED (131) ATTACK_POWER_VERSUS auras (misc mask =
+// victim creature-type mask), folded as int32(APbonus / 14 *
+// GetAPMultiplier(attType, normalized)) (Unit.cpp:8033). White swings call
+// with normalized=false (C++ passes spellProto=nullptr, so the normalized
+// arm is unreachable); weapon-damage spells pass their normalized state.
+func (s *session) swingDoneFlatBonus(ctx context.Context, ranged, normalized bool, targetGUID uint64, target combatTarget) int32 {
 	if s == nil || s.server == nil {
 		return 0
 	}
@@ -13309,52 +13360,34 @@ func (s *session) weaponDamageDoneFlatBonus(ctx context.Context, spell wotlk.Spe
 			total += amt
 		}
 	}
-	ranged := isRangedWeaponSpell(spell)
 	bonusAura, versusAura := uint32(spellAuraMeleeAttackPowerAttackerBonus), uint32(spellAuraModMeleeAttackPowerVersus)
 	if ranged {
 		bonusAura, versusAura = uint32(spellAuraRangedAttackPowerAttackerBonus), uint32(spellAuraModRangedAttackPowerVersus)
 	}
-	victimAuraSum := func(auraType uint32, miscMask uint32, filtered bool) int32 {
-		var sum int32
-		if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
-			if filtered {
-				for _, amt := range vs.auraTypeModifiersByMiscMask(auraType, miscMask) {
-					sum += amt
-				}
-			} else {
-				for _, amt := range vs.auraTypeModifiers(auraType) {
-					sum += amt
-				}
-			}
-			return sum
-		}
-		if target.GUID != 0 {
-			key := creatureAuraKeyForTarget(target)
-			if filtered {
-				for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraType, miscMask) {
-					sum += amt
-				}
-			} else {
-				sum += creatureAuraModifierSum(s.server, key, auraType)
-			}
-		}
-		return sum
-	}
-	apBonus := victimAuraSum(bonusAura, 0, false)
+	apBonus := s.swingVictimAuraSum(targetGUID, target, bonusAura, 0, false)
 	if typOK && typMask != 0 {
-		apBonus += victimAuraSum(versusAura, typMask, true)
+		apBonus += s.swingVictimAuraSum(targetGUID, target, versusAura, typMask, true)
 	}
 	if apBonus != 0 {
-		normalized := false
-		for _, eff := range spell.Effects {
-			if eff.Effect == spellEffectNormalizedWeaponDmg {
-				normalized = true
-				break
-			}
-		}
 		total += int32(float64(apBonus) / 14.0 * s.attackPowerMultiplier(ctx, ranged, normalized))
 	}
 	return total
+}
+
+// weaponDamageDoneFlatBonus is swingDoneFlatBonus for weapon-damage spells:
+// the percent half (DoneTotalMod) rides the shared spellDamagePctDone fold —
+// MOD_DAMAGE_PERCENT_DONE, MOD_DAMAGE_DONE_VERSUS (168) and
+// MOD_DAMAGE_DONE_VERSUS_AURASTATE (303) are identical arms in both C++
+// functions — and the class-script arms ride spellDamagePctClassScripts.
+func (s *session) weaponDamageDoneFlatBonus(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget) int32 {
+	normalized := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectNormalizedWeaponDmg {
+			normalized = true
+			break
+		}
+	}
+	return s.swingDoneFlatBonus(ctx, isRangedWeaponSpell(spell), normalized, targetGUID, target)
 }
 
 // attackPowerMultiplier mirrors Unit::GetAPMultiplier (Unit.cpp:11034-11071):
@@ -14007,7 +14040,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 						// negative clamp, then the 126/114 pct) ahead of the shared
 						// SpellDamageBonusTaken pct arms, matching the C++ order.
 						if spellHasWeaponDamageEffect(spell) {
-							damage = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell))
+							damage = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
 						}
 						damage = spellDamageBonusTaken(damage, spell, uint32(schoolMask), playerSess, s)
 					}
@@ -14069,7 +14102,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				// the melee taken legs run ahead of the shared
 				// creatureSpellDamageBonusTaken pct arms, matching the C++ order.
 				if spellHasWeaponDamageEffect(spell) && damage > 0 {
-					damage = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell))
+					damage = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
 				}
 				damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s)
 			}
