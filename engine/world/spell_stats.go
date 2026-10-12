@@ -808,6 +808,50 @@ func (s *session) directSpellTakenCritBonus(target combatTarget, isPlayerVictim 
 	return bonus / 100.0
 }
 
+// creatureSpellCritChanceDone mirrors the creature arms of
+// Unit::SpellCritChanceDone (Unit.cpp:7167-7212). Wild mobs can't crit with
+// spells (Unit.cpp:7169-7172 — the TYPEID_UNIT && !GetSpellModOwner() &&
+// !IsNPCBotOrPet() early return); callers pass canCrit only for
+// player-influenced casters (pets, charmed motions — the Go OwnerGUID != 0
+// convention). Direct (non-periodic) spells without
+// SPELL_ATTR0_CU_CAN_CRIT never crit. SPELL_DAMAGE_CLASS_MAGIC with the
+// physical school never crits; the done leg is m_baseSpellCritChance (no Go
+// creature model — 0) plus SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (71) by
+// school misc mask. MELEE/RANGED-DmgClass spells ride the
+// GetUnitCriticalChanceDone creature arm (Unit.cpp:2836-2844): 5% unless
+// CREATURE_FLAG_EXTRA_NO_CRIT, plus 52/290, plus the 71 school-masked sum.
+// SPELL_DAMAGE_CLASS_NONE never crits. Returns a fraction, never negative.
+func (s *Server) creatureSpellCritChanceDone(key creatureAuraKey, noCritExtra bool, schoolMask uint8, spell wotlk.Spell, spellKnown bool) float64 {
+	if s == nil || !spellKnown || spell.Attributes&spellAttr0CuCanCrit == 0 {
+		return 0
+	}
+	chance := float64(0)
+	switch spell.DefenseType {
+	case spellDamageClassMagic:
+		if schoolMask&spellSchoolMaskNormal != 0 {
+			return 0
+		}
+		for _, amt := range creatureAuraModifiersByMiscMask(s, key, spellAuraModSpellCritChanceSchool, uint32(schoolMask)) {
+			chance += float64(amt)
+		}
+	case spellDamageClassMelee, spellDamageClassRanged:
+		if !noCritExtra {
+			chance = 5
+		}
+		chance += float64(s.creatureAuraTypeSum(key, spellAuraModWeaponCritPercent))
+		chance += float64(s.creatureAuraTypeSum(key, spellAuraModCritPct))
+		for _, amt := range creatureAuraModifiersByMiscMask(s, key, spellAuraModSpellCritChanceSchool, uint32(schoolMask)) {
+			chance += float64(amt)
+		}
+	default:
+		return 0
+	}
+	if chance < 0 {
+		chance = 0
+	}
+	return chance / 100.0
+}
+
 // tickCritChance mirrors the chance arm of AuraEffect::GetCritChanceFor
 // (SpellAuraEffects.cpp:843-846) as used by the periodic tick handlers
 // (HandlePeriodicDamageAurasTick, HandlePeriodicHealAurasTick): the caster's

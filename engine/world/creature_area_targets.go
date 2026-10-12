@@ -163,14 +163,19 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1132) arm order on the
 	// direct-spell path: victim-side taken pct legs (EffectSchoolDMG) run
 	// first, then the physical-school armor arm (Unit.cpp:1002-1006),
-	// then the DmgClass switch (crit — always false here, the inline path
-	// rolls no spell crits — plus resilience), then
+	// then the DmgClass switch (crit — wild mobs roll none, Unit.cpp:7167;
+	// the player-owned crit arm below — plus resilience), then
 	// sScriptMgr->ModifySpellDamageTaken (Unit.cpp:1115-1117, the AutoBalance
 	// _Modifer_DealDamage hook, AutoBalance.cpp:236), and finally the
 	// CalcAbsorbResist tail (Unit.cpp:1121-1130: resist, then absorb).
 	// Unit::DealDamageMods (Unit.cpp:686) is the evade/flight zeroing arm,
 	// not a damage-modifier hook — it never fires on this path.
 	takenBlockRan := false
+	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7790): the crit bit lands in
+	// the damage log; wild mobs roll no crits (Unit.cpp:7167), so this
+	// stays 0 unless the player-owned crit arm below fires.
+	isCrit := false
+	hitInfo := uint32(0)
 	if p.Sess != nil && p.Sess.player != nil && damage > 0 {
 		takenBlockRan = true
 		if inlineSpellKnown {
@@ -186,13 +191,52 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(motion), float64(p.Sess.player.Armor), inlineSpell, inlineSpellKnown)
 			damage = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, damage)
 		}
+		// Unit::SpellCritChanceDone (Unit.cpp:7167-7212): wild mobs can't
+		// crit with spells, but a player-owned motion (pet/charm — the
+		// GetSpellModOwner()/IsNPCBotOrPet gate) can. The crit bonus sits
+		// in the DmgClass switch (Unit.cpp:1023-1040), post-armor,
+		// pre-resilience, and the taken arms feed the roll
+		// (Unit.cpp:7228-7240). The melee/ranged-DmgClass taken leg is
+		// GetUnitCriticalChanceTaken's weapon-skill diff — no Go model,
+		// stays unbridged — and the caster-side scripted arms (Shatter)
+		// read caster OVERRIDE_CLASS_SCRIPTS auras the creature store
+		// never carries.
+		if damage > 0 && inlineSpellKnown && motion != nil && motion.OwnerGUID != 0 {
+			chance := s.creatureSpellCritChanceDone(creatureAuraKeyForMotion(motion), motion.FlagsExtra&0x20000 != 0, schoolMask, inlineSpell, true)
+			if chance > 0 {
+				if owner := s.findSessionByGUID(motion.OwnerGUID); owner != nil && owner.player != nil {
+					chance = float64(owner.applySpellMod(inlineSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+				}
+				if inlineSpell.DefenseType == spellDamageClassMagic && !spellIsPositive(inlineSpell) {
+					chance += float64(p.Sess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(schoolMask)))
+					chance += float64(p.Sess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
+					critBP := int32(math.Round(chance * 100))
+					p.Sess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenSpell, &critBP)
+					chance = float64(critBP) / 100.0
+				}
+				isCrit = chance > 0 && rand.Float64() < chance
+			}
+			if isCrit {
+				// The nil session carries the base halves/doubles (the
+				// periodic-tick sites use the same convention); the
+				// creature's 163/169 crit-damage auras have no
+				// creature-store fold and stay a noted edge.
+				var nilSess *session
+				if inlineSpell.DefenseType == spellDamageClassMagic {
+					damage = nilSess.spellCriticalDamageBonus(ctx, inlineSpell, damage, p.GUID)
+				} else {
+					damage = nilSess.spellWeaponCritDamageBonus(ctx, inlineSpell, damage, combatTarget{GUID: p.GUID, Map: p.Map, InstanceID: p.InstanceID}, true)
+				}
+				hitInfo = 0x02
+			}
+		}
 		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079,
 		// 1105): Unit::CanApplyResilience (Unit.cpp:12333) runs on the
 		// caster — a wild creature's owner is no player, so wild casts
 		// never reduce the victim by resilience; a player-owned motion
 		// (pet/charm) does.
 		if damage > 0 && motion != nil && motion.OwnerGUID != 0 {
-			p.Sess.applyResilienceToDamage(true, &damage, false, CombatRatingCritTakenSpell)
+			p.Sess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
 		}
 		// ModifySpellDamageTaken: the AutoBalance damage multiplier scales
 		// the post-switch damage, ahead of the resist/absorb tail.
@@ -326,7 +370,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			}
 			p.Sess.procSpellDirectDamageAuras(spellID)
 		}
-		logPkt := buildSpellNonMeleeDamageLog(p.GUID, motion.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, 0)
+		logPkt := buildSpellNonMeleeDamageLog(p.GUID, motion.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo)
 		_ = p.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 		if s != nil {
 			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, p.Sess)

@@ -2529,11 +2529,33 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	}
 	heal -= absorbed
 	heal = s.server.autoBalanceModifyDealDamageOnMap(caster, target.Map, heal)
+	// Unit::SpellCritChanceDone (Unit.cpp:7167-7212) creature arm on direct
+	// heals (Spell::DoEffectOnLaunchTarget, Spell.cpp:7782-7790): pets may
+	// crit heals. Positive spells skip the taken arms in C++
+	// (Unit.cpp:7228-7240), so only the done leg rolls; the bonus rides
+	// Unit::SpellCriticalHealingBonus via the nil-session base (the
+	// periodic-tick sites use the same convention).
+	isCrit := false
+	if s.server != nil && s.server.Data != nil {
+		if hs, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			chance := s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, uint8(hs.SchoolMask), hs, true)
+			if chance > 0 {
+				if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
+					chance = float64(s.applySpellMod(hs, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+				}
+				isCrit = chance > 0 && rand.Float64() < chance
+			}
+			if isCrit {
+				var nilSess *session
+				heal = nilSess.spellCriticalHealingBonus(ctx, heal, targetGUID, hs.DefenseType, false)
+			}
+		}
+	}
 	overheal := uint32(0)
 	if uint64(target.Health)+uint64(heal) > uint64(target.MaxHealth) {
 		overheal = uint32(uint64(target.Health) + uint64(heal) - uint64(target.MaxHealth))
 	}
-	packet := buildSpellHealLog(target.GUID, caster.GUID, spellID, heal, overheal, absorbed, false)
+	packet := buildSpellHealLog(target.GUID, caster.GUID, spellID, heal, overheal, absorbed, isCrit)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
 	if targetSess != nil && targetSess.player != nil {
@@ -2632,7 +2654,7 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 // pet path's non-zero-effect model and the creature path carries no CanProc
 // reader. The reflect return trip (target == caster) is excluded — its
 // bridge already fires the combined done+taken event on the pet's auras.
-func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, schoolMask uint8, triggered bool) {
+func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, schoolMask uint8, triggered, isCrit bool) {
 	if s == nil || s.server == nil || s.server.Data == nil || caster == nil || targetGUID == caster.GUID {
 		return
 	}
@@ -2641,12 +2663,19 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 		return
 	}
 	spellCopy := spell
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581): the
+	// done-side proc event's hit mask carries the rolled crit
+	// (targetInfo.IsCrit, Spell.cpp:7790).
+	hitMask := procHitNormal
+	if isCrit {
+		hitMask = procHitCritical
+	}
 	s.server.fireCreatureAuraProcLoop(ctx, caster, targetGUID, procEventInfo{
 		typeMask:       spellDamageProcTypeMask(spellCopy),
 		schoolMask:     uint32(schoolMask),
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        procHitNormal,
+		hitMask:        hitMask,
 		triggered:      triggered,
 		eventSpell:     &spellCopy,
 		actorGUID:      caster.GUID,
@@ -2781,6 +2810,61 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			damage = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
 		}
 	}
+	// Unit::SpellCritChanceDone (Unit.cpp:7167-7212) creature arm: pets may
+	// crit with spells (the IsNPCBotOrPet exception to the "mobs can't crit"
+	// rule). The crit bonus sits in the CalculateSpellDamageTaken DmgClass
+	// switch (Unit.cpp:1023-1040), post-armor, pre-resilience — so the roll
+	// and bonus land here, ahead of the resist leg and the resilience arm.
+	isCrit := false
+	if damage > 0 && target.GUID != caster.GUID && s.server != nil && s.server.Data != nil {
+		if critSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+			chance := s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, schoolMask, critSpell, true)
+			if chance > 0 {
+				// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the
+				// owner's SPELLMOD_CRITICAL_CHANCE folds in via
+				// GetSpellModOwner() — the calling session is the pet's
+				// owner player.
+				if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
+					chance = float64(s.applySpellMod(critSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+				}
+				if critSpell.DefenseType == spellDamageClassMagic {
+					// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240):
+					// the victim's 179 (pre-resilience) / 197
+					// (post-resilience) totals, then the resilience
+					// crit-chance reduction — the pet's owner is a
+					// player, so CanApplyResilience holds
+					// (Unit.cpp:12333). Caster-side scripted arms
+					// (Shatter 849/910/911) read the caster's
+					// OVERRIDE_CLASS_SCRIPTS auras; pets carry none in
+					// the creature aura store, so they stay unbridged.
+					// The melee/ranged-DmgClass taken leg is
+					// GetUnitCriticalChanceTaken's weapon-skill diff —
+					// no Go model, stays unbridged.
+					chance += s.directSpellTakenCritBonus(target, isPlayerVictim, schoolMask, critSpell)
+					if caster.OwnerGUID != 0 {
+						chance = s.applyTakenCritResilience(targetGUID, chance*100) / 100.0
+					}
+				}
+				isCrit = chance > 0 && rand.Float64() < chance
+			}
+			if isCrit {
+				// Unit::CalculateSpellDamageTaken (Unit.cpp:1023-1040):
+				// magic-DmgClass crits take SpellCriticalDamageBonus, the
+				// melee/ranged arm doubles the damage. The nil session
+				// carries the base halves/doubles (the periodic-tick
+				// sites use the same convention); the pet's 163/169
+				// crit-damage auras have no creature-store fold and stay
+				// a noted edge.
+				var nilSess *session
+				if critSpell.DefenseType == spellDamageClassMagic {
+					damage = nilSess.spellCriticalDamageBonus(ctx, critSpell, damage, targetGUID)
+				} else {
+					damage = nilSess.spellWeaponCritDamageBonus(ctx, critSpell, damage, target, isPlayerVictim)
+				}
+				hitInfo |= 0x02
+			}
+		}
+	}
 	if damage > 0 && schoolMask > 1 {
 		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
 		// the live 22 flat amounts fold into a pet victim's resistances.
@@ -2789,7 +2873,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	}
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
-			victim.applyResilienceToDamage(true, &damage, false, CombatRatingCritTakenSpell)
+			victim.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
 			if damage > 0 {
 				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): max(194
 				// misc-masked pct, 245 ability pct affecting the cast
@@ -2920,14 +3004,14 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// damage legs on both the lethal and non-lethal arms — C++ fires
 		// the call after DealSpellDamage regardless of the victim's death.
 		// Hit detail: misses (hitInfo 0x01) return before this branch, so
-		// the mask is always NORMAL, optionally with the partial-absorb
-		// bit; pet spell hits carry no crit model (standing delta).
+		// the mask is NORMAL or CRIT; pet spell crits roll at the
+		// taken-leg site above (Unit::SpellCritChanceDone, Unit.cpp:7167).
 		if victim.procDeep == 0 {
-			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, false, false, false, absorbed, procEventDamage, triggered, false)
+			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, false, false, isCrit, absorbed, procEventDamage, triggered, false)
 		}
 		// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
 		// runs after the taken side on both the lethal and non-lethal arms.
-		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered)
+		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit)
 		return
 	}
 	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
@@ -3031,7 +3115,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
-	s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered)
+	s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit)
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586) on the
 	// reflect return trip: the pet is both caster and _spellHitTarget
 	// (Spell.cpp:2350), so its own auras evaluate the hit with the
