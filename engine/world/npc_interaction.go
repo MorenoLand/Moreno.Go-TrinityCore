@@ -23,6 +23,9 @@ const unitNPCFlagPetitioner uint32 = 0x00040000
 // unitNPCFlagTabardDesigner mirrors UNIT_NPC_FLAG_TABARDDESIGNER (UnitDefines.h:205).
 const unitNPCFlagTabardDesigner uint32 = 0x00080000
 
+// unitNPCFlagSpellclick mirrors UNIT_NPC_FLAG_SPELLCLICK (UnitDefines.h:210).
+const unitNPCFlagSpellclick uint32 = 0x01000000
+
 // unitNPCFlagBattlemaster mirrors UNIT_NPC_FLAG_BATTLEMASTER (UnitDefines.h:206).
 const unitNPCFlagBattlemaster uint32 = 0x00100000
 

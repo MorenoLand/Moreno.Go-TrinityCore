@@ -182,7 +182,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 			spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
 			s.applyCreatureMotionToSpawn(state, &spawns[index])
-			updates.AddUpdateBlock(buildCreatureUpdate(spawns[index], observer))
+			updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawns[index], observer))
 		}
 		packet, err := updates.BuildPacket(0)
 		return packet, count, err
@@ -218,7 +218,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
 		s.applyCreatureMotionToSpawn(state, &spawns[index])
-		updates.AddUpdateBlock(buildCreatureUpdate(spawns[index], observer))
+		updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawns[index], observer))
 	}
 	packet, err := updates.BuildPacket(0)
 	return packet, count, err
@@ -254,7 +254,54 @@ func filterNewTransportCreaturePassengers(observer *session, spawns []creatureSp
 	return visible
 }
 
-func buildCreatureUpdate(spawn creatureSpawn, observer *session) []byte {
+// canSeeSpellClickOnCreature mirrors Player::CanSeeSpellClickOn (Player.cpp:25749-25762):
+// the UNIT_NPC_FLAG_SPELLCLICK bit is only sent to a player when the creature
+// carries the flag, at least one npc_spellclick_spells row exists for its
+// entry, and every row fits SpellClickInfo::IsFitToRequirements
+// (ObjectMgr.cpp:194) — the userType gate plus the ConditionMgr spell-click
+// conditions. C++ filters userType >= SPELL_CLICK_USER_MAX (4) at DB load; Go
+// filters at use, like handleSpellClick. The userType semantics follow
+// handleSpellClick's documented adaptation (FRIEND = not hostile; RAID/PARTY
+// reject for creatures, which are never in groups).
+func (s *session) canSeeSpellClickOnCreature(ctx context.Context, clickEntry uint32, creatureFaction uint32, creatureGUID uint64) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell_id, user_type FROM npc_spellclick_spells WHERE npc_entry = ?", clickEntry)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var spellID, userType uint32
+		if err := rows.Scan(&spellID, &userType); err != nil || spellID == 0 || userType >= 4 {
+			continue
+		}
+		count++
+		fits := true
+		switch userType {
+		case 1: // SPELL_CLICK_USER_FRIEND
+			player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+			if s.server.isHostileFaction(creatureFaction, player) {
+				fits = false
+			}
+		case 2, 3: // SPELL_CLICK_USER_RAID / SPELL_CLICK_USER_PARTY
+			fits = false
+		}
+		if fits {
+			if meets, err := s.meetSpellClickConditions(ctx, clickEntry, spellID, creatureGUID); err != nil || !meets {
+				fits = false
+			}
+		}
+		if !fits {
+			return false
+		}
+	}
+	return count > 0
+}
+
+func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *session) []byte {
 	values := make([]uint32, creatureValuesCount)
 	rawGUID := spawn.RawGUID
 	if rawGUID == 0 {
@@ -293,6 +340,13 @@ func buildCreatureUpdate(spawn creatureSpawn, observer *session) []byte {
 		}
 	}
 	values[unitFieldNPCFlags] = spawn.NPCFlags
+	// Object::BuildValuesUpdateBlockForPlayer (Unit.cpp:13844-13850): the
+	// UNIT_NPC_FLAG_SPELLCLICK bit is masked per observer via
+	// Player::CanSeeSpellClickOn.
+	if spawn.NPCFlags&unitNPCFlagSpellclick != 0 && observer != nil &&
+		!observer.canSeeSpellClickOnCreature(ctx, spawn.Entry, spawn.Faction, rawGUID) {
+		values[unitFieldNPCFlags] &^= unitNPCFlagSpellclick
+	}
 	values[unitFieldAttackTime] = maxUint32(spawn.AttackTime, 2000)
 	values[unitFieldAttackTimeOffhand] = maxUint32(spawn.AttackTime, 2000)
 	boundingRadius := spawn.BoundingRadius

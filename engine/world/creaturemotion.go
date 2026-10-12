@@ -1266,6 +1266,20 @@ func (s *Server) charmCreature(ctx context.Context, key creatureAuraKey, charmer
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
+	// CharmInfo::InitCharmCreateSpells (Unit.cpp:10003-10050): passive charm
+	// spells (MAX_SPELL_CHARM = 4, like the packet addlist) are cast on the
+	// charmed unit as triggered self-casts at charm time.
+	if s.Data != nil {
+		for x := 0; x < len(spells) && x < 4; x++ {
+			if spells[x] == 0 {
+				continue
+			}
+			if spell, found, err := s.Data.Spell(spells[x]); err == nil && found &&
+				spell.Attributes&spellAttributePassive != 0 {
+				s.castCreatureSpellTriggered(ctx, motion, spells[x], rawGUID)
+			}
+		}
+	}
 	s.broadcastCreatureValuesUpdateInInstance(mapID, motion.InstanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
 	return spells, reactState, commandState, true
 }

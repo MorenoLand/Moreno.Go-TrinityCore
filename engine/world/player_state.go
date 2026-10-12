@@ -589,6 +589,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
+	// Player::CastAllObtainSpells (Player.cpp:4732, 7840-7856): inventory items
+	// present at login fire their ITEM_SPELLTRIGGER_ON_NO_DELAY_USE spells.
+	s.castAllObtainSpells(ctx)
 	return state, nil
 }
 

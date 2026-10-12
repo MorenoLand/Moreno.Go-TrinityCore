@@ -1233,6 +1233,9 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	if currentCount <= int64(count) || count == 0 {
 		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 		_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+		// Player::RemoveItem arm (Player.cpp:12660): a destroyed item sheds
+		// its ITEM_SPELLTRIGGER_ON_NO_DELAY_USE obtain auras.
+		s.applyItemObtainSpells(ctx, uint32(itemEntry), 0, false)
 		s.despawnItem(uint64(itemGUID))
 	} else {
 		_, _ = db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
@@ -1261,6 +1264,9 @@ func (s *session) consumeInventoryItemByGUID(ctx context.Context, itemGUID uint6
 		if _, err := db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", int64(itemGUID)); err != nil {
 			return false
 		}
+		// Player::RemoveItem arm (Player.cpp:12660): a fully consumed item
+		// sheds its ITEM_SPELLTRIGGER_ON_NO_DELAY_USE obtain auras.
+		s.applyItemObtainSpells(ctx, uint32(itemEntry), 0, false)
 		s.despawnItem(itemGUID)
 	} else if _, err := db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, int64(itemGUID)); err != nil {
 		return false
@@ -1563,6 +1569,9 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", itemGUID, s.playerGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", itemGUID, s.playerGUID)
+	// Player::RemoveItem arm (Player.cpp:12660): the refunded-away item sheds
+	// its ITEM_SPELLTRIGGER_ON_NO_DELAY_USE obtain auras.
+	s.applyItemObtainSpells(ctx, uint32(itemEntry), 0, false)
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), false)
 
 	for _, g := range grants {
@@ -1757,6 +1766,9 @@ func (s *session) takeCastItemSpellCharges(ctx context.Context, dbItemGUID, item
 		} else {
 			_, _ = cdb.ExecContext(ctx, `DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?`, s.playerGUID, bagKey, slot)
 			_, _ = cdb.ExecContext(ctx, `DELETE FROM item_instance WHERE guid = ?`, dbItemGUID)
+			// Player::RemoveItem arm (Player.cpp:12660): a fully spent cast
+			// item sheds its ITEM_SPELLTRIGGER_ON_NO_DELAY_USE obtain auras.
+			s.applyItemObtainSpells(ctx, uint32(itemEntry), 0, false)
 			s.despawnItem(uint64(dbItemGUID))
 		}
 		s.adjustQuestItemCount(ctx, uint32(itemEntry), 1, false)
@@ -1981,6 +1993,140 @@ func (s *session) applyEquipCooldown(ctx context.Context, itemGUID int64, itemEn
 	}
 }
 
+// applyItemObtainSpells mirrors Player::ApplyItemObtainSpells (Player.cpp:7858-7879).
+// ITEM_SPELLTRIGGER_ON_NO_DELAY_USE (5) template spells fire when the item is
+// obtained: apply=true casts each on the player as a triggered self-cast with
+// the item as cast item (Player::CastSpell(this, spellId, item)), skipped when
+// the aura is already present; apply=false is the Player::RemoveItem arm
+// (Player.cpp:12660) — RemoveAurasDueToSpell for each such spell. Callers:
+// CastAllObtainSpells at login (Player.cpp:4732), StoreNewItem
+// (Player.cpp:12254, 12293) and RemoveItem (Player.cpp:12660).
+func (s *session) applyItemObtainSpells(ctx context.Context, itemEntry uint32, castItemGUID uint64, apply bool) {
+	if s == nil || s.player == nil || itemEntry == 0 {
+		return
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	slots, ok := s.server.itemSpellSlots(ctx, itemEntry)
+	if !ok {
+		return
+	}
+	for i := 0; i < maxItemProtoSpells && i < len(slots); i++ {
+		if slots[i].Trigger != uint32(itemSpellTriggerOnNoDelayUse) {
+			continue
+		}
+		spellID := uint32(slots[i].ID)
+		if spellID == 0 {
+			continue
+		}
+		if apply {
+			if !s.hasAura(spellID) {
+				s.castSpellDirectWithItem(ctx, spellID, s.playerGUID, castItemGUID)
+			}
+		} else {
+			s.removeAura(spellID)
+		}
+	}
+}
+
+// castAllObtainSpells mirrors Player::CastAllObtainSpells (Player.cpp:7840-7856):
+// at login every item in the equipment slots, bag slots, backpack and equipped
+// bags fires its obtain spells (Player.cpp:4732). Bank slots (39-73) and bank
+// bag contents never do.
+func (s *session) castAllObtainSpells(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, COALESCE(ii.itemEntry, 0)
+		FROM character_inventory AS ci
+		LEFT JOIN item_instance AS ii ON ii.guid = ci.item
+		LEFT JOIN character_inventory AS cb ON cb.guid = ci.guid AND cb.item = ci.bag
+		WHERE ci.guid = ? AND (
+			(ci.bag = 0 AND ci.slot >= 0 AND ci.slot < 39)
+			OR (ci.bag != 0 AND cb.bag = 0 AND cb.slot >= 19 AND cb.slot < 23)
+		)`, s.playerGUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var itemGUID, itemEntry int64
+		if rows.Scan(&itemGUID, &itemEntry) != nil || itemGUID <= 0 || itemEntry <= 0 {
+			continue
+		}
+		s.applyItemObtainSpells(ctx, uint32(itemEntry), uint64(itemGUID), true)
+	}
+}
+
+// checkTitanGripPenalty mirrors Player::CheckTitanGripPenalty (Player.cpp:13672-13686).
+// m_canTitanGrip / m_titanGripPenaltySpellId are set by Spell::EffectTitanGrip
+// (SpellEffects.cpp:5402) from the TITAN_GRIP effect's MiscValue on the learned
+// talent; Go derives both the same way autoUnequipOffhandIfNeeded derives
+// canTitanGrip (terrain.go:181-200). With the capability present, wielding a
+// 2H weapon in one hand (Player::IsUsingTwoHandedWeaponInOneHand,
+// Player.cpp:13688-13701) applies the penalty aura as a triggered self-cast
+// (CastSpell((Unit*)nullptr, m_titanGripPenaltySpellId, true)); otherwise the
+// aura is removed. Called from the EquipItem/UnequipItem weapon-slot arms
+// (Player.cpp:12416, 12445, 12571).
+func (s *session) checkTitanGripPenalty(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	var penaltySpellID uint32
+	for _, learned := range s.player.Spells {
+		if !learned.Active || learned.Disabled {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(learned.ID)
+		if err != nil || !found {
+			continue
+		}
+		for _, effect := range spell.Effects {
+			if effect.Effect == 155 && effect.MiscValue > 0 { // SPELL_EFFECT_TITAN_GRIP
+				penaltySpellID = uint32(effect.MiscValue)
+			}
+		}
+	}
+	if penaltySpellID == 0 {
+		return
+	}
+	if s.isUsingTwoHandedWeaponInOneHand(ctx) {
+		if !s.hasAura(penaltySpellID) {
+			s.castSpellDirectWithItem(ctx, penaltySpellID, s.playerGUID, 0)
+		}
+	} else {
+		s.removeAura(penaltySpellID)
+	}
+}
+
+// isUsingTwoHandedWeaponInOneHand mirrors Player::IsUsingTwoHandedWeaponInOneHand
+// (Player.cpp:13688-13701): the offhand holds a 2H weapon, or the mainhand is a
+// 2H weapon with any offhand equipped (the Titan's Grip one-hand case).
+// INVTYPE_2HWEAPON = 17.
+func (s *session) isUsingTwoHandedWeaponInOneHand(ctx context.Context) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	var offhand, offInvType int64
+	if err := cdb.QueryRowContext(ctx, `SELECT ci.item, COALESCE(it.InventoryType, 0)
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		JOIN item_template AS it ON it.entry = ii.itemEntry
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`, s.playerGUID, equipSlotOffhand).Scan(&offhand, &offInvType); err != nil || offhand == 0 {
+		return false
+	}
+	if offInvType == 17 {
+		return true
+	}
+	var mainInvType int64
+	_ = cdb.QueryRowContext(ctx, `SELECT COALESCE(it.InventoryType, 0)
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		JOIN item_template AS it ON it.entry = ii.itemEntry
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`, s.playerGUID, equipSlotMainhand).Scan(&mainInvType)
+	return mainInvType == 17
+}
+
 // applyItemEquipSpells mirrors Player::ApplyItemEquipSpell plus the spell half
 // of Player::ApplyEquipSpell (Player.cpp:7960-8022): equipping an item casts
 // each template spell with ITEM_SPELLTRIGGER_ON_EQUIP as a triggered cast
@@ -2136,6 +2282,12 @@ func (s *session) updateItemEquipSpellsOnMove(ctx context.Context, itemGUID, fro
 		// Player::EquipItem order (Player.cpp:12332-12350): the
 		// weapon-switch GCD arms on weapon/relic equips in combat.
 		s.applyWeaponSwitchGCD(ctx, uint32(itemEntry))
+	}
+	// Player::EquipItem/UnequipItem (Player.cpp:12416, 12445, 12571):
+	// mainhand/offhand slot changes re-evaluate the Titan's Grip penalty aura.
+	if (fromBag == 0 && (fromSlot == int64(equipSlotMainhand) || fromSlot == int64(equipSlotOffhand))) ||
+		(toBag == 0 && (toSlot == int64(equipSlotMainhand) || toSlot == int64(equipSlotOffhand))) {
+		s.checkTitanGripPenalty(ctx)
 	}
 }
 
@@ -3717,6 +3869,13 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
+	}
+	// Player::StoreNewItem (Player.cpp:12254, 12293): a newly stored item
+	// fires its ITEM_SPELLTRIGGER_ON_NO_DELAY_USE obtain spells. Only new
+	// stacks count — the fill arm merged onto an already-owned stack whose
+	// obtain spells fired at its own obtain.
+	for _, newGUID := range guids {
+		s.applyItemObtainSpells(ctx, itemEntry, newGUID, true)
 	}
 
 	var totalCount int64

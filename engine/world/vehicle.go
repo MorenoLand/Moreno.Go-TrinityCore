@@ -601,6 +601,14 @@ func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 }
 
+const (
+	charmActCommand  uint8 = 0x07 // ACT_COMMAND (Unit.h: ActiveStates)
+	charmActReaction uint8 = 0x06 // ACT_REACTION
+	charmActDisabled uint8 = 0x81 // ACT_DISABLED
+	charmActEnabled  uint8 = 0xC1 // ACT_ENABLED
+	charmActPassive  uint8 = 0x01 // ACT_PASSIVE
+)
+
 func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, reactState, commandState uint8) {
 	if s == nil || s.conn == nil || creatureGUID == 0 {
 		return
@@ -612,15 +620,71 @@ func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, react
 	buf.WriteU8(reactState)
 	buf.WriteU8(commandState)
 	buf.WriteU16(0)
-	for i := 0; i < 10; i++ {
-		if i < len(spells) && spells[i] != 0 {
-			buf.WriteU32(spells[i] | (uint32(i+8) << 24))
-		} else {
-			buf.WriteU32(0)
+	// Player::CharmSpellInitialize (Player.cpp:21226-21277): the bar starts as
+	// the default pet command bar (CharmInfo::InitPetActionBar, Unit.cpp:9942 —
+	// attack/follow/stay as ACT_COMMAND, four empty spell slots, three
+	// reactions), then CharmInfo::InitCharmCreateSpells (Unit.cpp:10003) folds
+	// the creature's own spells (MAX_SPELL_CHARM = 4) into the middle spell
+	// slots via AddSpellToActionBar (Unit.cpp:10053).
+	bar := [10]uint32{0x07000002, 0x07000001, 0x07000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x06000002, 0x06000001, 0x06000000}
+	var charmSpells []uint32
+	n := len(spells)
+	if n > 4 {
+		n = 4
+	}
+	haveData := s.server != nil && s.server.Data != nil
+	for x := 0; x < n; x++ {
+		spellID := spells[x]
+		if spellID == 0 {
+			continue
+		}
+		var spell wotlk.Spell
+		found := false
+		if haveData {
+			var err error
+			spell, found, err = s.server.Data.Spell(spellID)
+			if err != nil {
+				found = false
+			}
+		}
+		if !found {
+			// No DBC row: CharmInfo::InitCharmCreateSpells still records the
+			// charm spell as ACT_DISABLED and skips the action bar.
+			charmSpells = append(charmSpells, spellID|(uint32(charmActDisabled)<<24))
+			continue
+		}
+		if spell.Attributes&spellAttributePassive != 0 {
+			charmSpells = append(charmSpells, spellID|(uint32(charmActPassive)<<24))
+			continue
+		}
+		charmSpells = append(charmSpells, spellID|(uint32(charmActDisabled)<<24))
+		newState := charmActPassive
+		if spell.AttributesEx&spellAttr1UnautocastableByPet == 0 { // SpellInfo::IsAutocastable (SpellInfo.cpp:1101)
+			if spellNeedsExplicitUnitTarget(spell) {
+				newState = charmActEnabled
+			} else {
+				newState = charmActDisabled
+			}
+		}
+		// AddSpellToActionBar: first empty spell-type slot (the middle four;
+		// IsActionBarForSpell admits ACT_DISABLED/ENABLED/PASSIVE, Unit.h:594).
+		for j := 3; j < 7; j++ {
+			if bar[j]&0x00FFFFFF == 0 {
+				bar[j] = spellID | (uint32(newState) << 24)
+				break
+			}
 		}
 	}
-	buf.WriteU8(0)
-	buf.WriteU8(0)
+	for i := 0; i < 10; i++ {
+		buf.WriteU32(bar[i])
+	}
+	// The addlist: charm spells carrying an action, packed
+	// (Player.cpp:21263-21271).
+	buf.WriteU8(uint8(len(charmSpells)))
+	for _, packed := range charmSpells {
+		buf.WriteU32(packed)
+	}
+	buf.WriteU8(0) // cooldowns count
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 }
 
