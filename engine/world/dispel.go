@@ -256,8 +256,10 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 		return nil
 	}
 
-	// If target is affected by Unholy Blight (50536), cannot dispel diseases (Unit.cpp:4591)
-	if (dispelMask&(1<<DispelDisease) != 0) && targetSess.hasAura(spellUnholyBlight) {
+	// If target is affected by Unholy Blight (50536), cannot dispel diseases (Unit.cpp:4591).
+	// The carve lives in Unit::GetDispellableAuraList, which neither steal arm calls
+	// (Spell.cpp:5957-5984 pre-cast; SpellEffects.cpp:5160+ effect), so stealMode skips it.
+	if !stealMode && (dispelMask&(1<<DispelDisease) != 0) && targetSess.hasAura(spellUnholyBlight) {
 		dispelMask &^= (1 << DispelDisease)
 	}
 
@@ -370,8 +372,9 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 	}
 
 	// Unit.cpp:4591-4592: Unholy Blight (50536) on the target kills the
-	// disease bit before the scan — this arm was missing here.
-	if dispelMask&(1<<DispelDisease) != 0 {
+	// disease bit before the scan. The carve is not applied in stealMode:
+	// neither C++ steal arm calls Unit::GetDispellableAuraList.
+	if !stealMode && dispelMask&(1<<DispelDisease) != 0 {
 		if blight, ok := auras[spellUnholyBlight]; ok && blight != nil && !blight.Stopped {
 			dispelMask &^= (1 << DispelDisease)
 		}
