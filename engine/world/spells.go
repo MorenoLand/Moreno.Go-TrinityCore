@@ -24849,6 +24849,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if ts.server.persistentAreaTickMissed(ts.player.Map, ts.player.InstanceID, aura, ts.player.Level, true) {
 			return
 		}
+		// SpellAuraEffects.cpp:5131 — sScriptMgr->ModifyPeriodicDamageAurasTick
+		// (AutoBalance_UnitScript::_Modifer_DealDamage): a creature caster's
+		// damage multiplier scales the tick, like the melee and direct-spell
+		// funnels. Player casters and player-controlled pets pass through
+		// (no creature motion / the pet gate).
+		if casterMotion := ts.findCreatureMotion(aura.CasterGUID); casterMotion != nil {
+			dmg = ts.server.autoBalanceModifyDealDamageOnMap(casterMotion, ts.player.Map, dmg)
+		}
 		if aura.AuraType == 89 {
 			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
 			// ticks deal a percentage of the target's max health
@@ -25055,6 +25063,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// arm carries the same skip for full power).
 		if aura.DurationMs == 0 && ts.player.Health == ts.player.MaxHealth {
 			break
+		}
+		// SpellAuraEffects.cpp:5376 — sScriptMgr->ModifyPeriodicDamageAurasTick
+		// (AutoBalance_UnitScript::_Modifer_DealDamage): a creature caster's
+		// damage multiplier scales the heal tick too (C++ routes heals
+		// through the same modifier). Player casters and player-controlled
+		// pets pass through (no creature motion / the pet gate).
+		if casterMotion := ts.findCreatureMotion(aura.CasterGUID); casterMotion != nil {
+			heal = ts.server.autoBalanceModifyDealDamageOnMap(casterMotion, ts.player.Map, heal)
 		}
 		// SpellAuraEffects.cpp:5371-5372 — OBS_MOD_HEALTH ticks heal a
 		// percentage of the target's max health, not the stored amount
@@ -25319,6 +25335,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// per-tick miss gate as case 3.
 		if ts.server.persistentAreaTickMissed(ts.player.Map, ts.player.InstanceID, aura, ts.player.Level, true) {
 			return
+		}
+		// SpellAuraEffects.cpp:5251 — sScriptMgr->ModifyPeriodicDamageAurasTick
+		// (AutoBalance_UnitScript::_Modifer_DealDamage): a creature caster's
+		// damage multiplier scales the leech damage side, like the melee and
+		// direct-spell funnels. Player casters and player-controlled pets pass
+		// through (no creature motion / the pet gate).
+		if casterMotion := ts.findCreatureMotion(aura.CasterGUID); casterMotion != nil {
+			dmg = ts.server.autoBalanceModifyDealDamageOnMap(casterMotion, ts.player.Map, dmg)
 		}
 		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
 		// the leech damage side runs the same taken->crit->armor->resilience->
@@ -26365,6 +26389,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if s.server.persistentAreaTickMissed(key.Map, key.InstanceID, aura, target.Level, false) {
 			return true
 		}
+		// SpellAuraEffects.cpp:5131 — sScriptMgr->ModifyPeriodicDamageAurasTick
+		// (AutoBalance_UnitScript::_Modifer_DealDamage): a creature caster's
+		// damage multiplier scales the tick, like the melee and direct-spell
+		// funnels. Player casters and player-controlled pets pass through
+		// (no creature motion / the pet gate).
+		if casterMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); casterMotion != nil {
+			dmg = s.server.autoBalanceModifyDealDamageOnMap(casterMotion, key.Map, dmg)
+		}
 		if aura.AuraType == 89 {
 			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
 			// ticks deal a percentage of the target's max health
@@ -26604,6 +26636,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			return true
 		}
 		heal := aura.Amount
+		// SpellAuraEffects.cpp:5376 — sScriptMgr->ModifyPeriodicDamageAurasTick
+		// (AutoBalance_UnitScript::_Modifer_DealDamage): a creature caster's
+		// damage multiplier scales the heal tick too (C++ routes heals
+		// through the same modifier). Player casters and player-controlled
+		// pets pass through (no creature motion / the pet gate).
+		if casterMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); casterMotion != nil {
+			heal = s.server.autoBalanceModifyDealDamageOnMap(casterMotion, key.Map, heal)
+		}
 		// SpellAuraEffects.cpp:5371-5372 — OBS_MOD_HEALTH ticks heal a
 		// percentage of the target's max health, not the stored amount
 		// (Unit::CountPctFromMaxHealth = CalculatePct truncation), before
@@ -26914,6 +26954,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// per-tick miss gate as case 3; a miss keeps the chain alive.
 		if s.server.persistentAreaTickMissed(key.Map, key.InstanceID, aura, target.Level, false) {
 			return true
+		}
+		// SpellAuraEffects.cpp:5251 — sScriptMgr->ModifyPeriodicDamageAurasTick
+		// (AutoBalance_UnitScript::_Modifer_DealDamage): a creature caster's
+		// damage multiplier scales the leech damage side, like the melee and
+		// direct-spell funnels. Player casters and player-controlled pets pass
+		// through (no creature motion / the pet gate).
+		if casterMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); casterMotion != nil {
+			dmg = s.server.autoBalanceModifyDealDamageOnMap(casterMotion, key.Map, dmg)
 		}
 		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
 		// the leech damage side runs the same taken->crit->armor->resilience->

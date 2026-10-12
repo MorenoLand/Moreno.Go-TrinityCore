@@ -94,6 +94,21 @@ func autoBalanceCheckLevelOffset(selectedLevel, targetLevel uint8, higherOffset,
 // !attacker->IsInWorld() and TYPEID_PLAYER arms are structural here (the
 // attacker is always a live world creature motion).
 func (s *Server) autoBalanceModifyDealDamage(motion *creatureMotion, target *session, damage uint32) uint32 {
+	var targetMapID uint32
+	if target != nil && target.player != nil {
+		targetMapID = target.player.Map
+	}
+	return s.autoBalanceModifyDealDamageOnMap(motion, targetMapID, damage)
+}
+
+// autoBalanceModifyDealDamageOnMap is the map-keyed core of
+// autoBalanceModifyDealDamage. The periodic tick funnels
+// (AuraEffect::HandlePeriodicDamageAurasTick /
+// HandlePeriodicHealthLeechAuraTick, SpellAuraEffects.cpp:5131/5251, via
+// sScriptMgr->ModifyPeriodicDamageAurasTick) hit creature victims too, so
+// the target map is passed explicitly rather than read off a player
+// session. Behavior of the session wrapper above is unchanged.
+func (s *Server) autoBalanceModifyDealDamageOnMap(motion *creatureMotion, targetMapID uint32, damage uint32) uint32 {
 	if s == nil || s.Data == nil || motion == nil || damage == 0 {
 		return damage
 	}
@@ -106,10 +121,6 @@ func (s *Server) autoBalanceModifyDealDamage(motion *creatureMotion, target *ses
 		return damage
 	}
 	if cfg.DungeonsOnly {
-		targetMapID := uint32(0)
-		if target != nil && target.player != nil {
-			targetMapID = target.player.Map
-		}
 		attackerDungeon := false
 		if entry, found, err := s.Data.Map(motion.Map); err == nil && found {
 			attackerDungeon = entry.IsDungeon()
