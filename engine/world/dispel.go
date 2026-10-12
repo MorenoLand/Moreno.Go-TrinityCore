@@ -1978,6 +1978,17 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, spellKnow
 	if mergeCaster == 0 {
 		mergeCaster = s.playerGUID
 	}
+	// Aura::CalcMaxCharges inputs (SpellAuras.cpp:951-962) for the steal
+	// merge below: the original caster's spell-mod owner folds
+	// SPELLMOD_CHARGES. s.castMu is taken below, so the fold runs unlocked
+	// here; when the mod owner is this same session the no-taking fold runs
+	// at the use sites instead of re-locking it.
+	stealMapID, stealInstanceID := uint32(0), uint32(0)
+	if s.player != nil {
+		stealMapID, stealInstanceID = s.player.Map, s.player.InstanceID
+	}
+	stealModOwner := s.server.spellModOwnerSession(stealMapID, stealInstanceID, mergeCaster)
+	stealOwnerLocked := stealModOwner != nil && stealModOwner == s
 	var refreshMaxDur, refreshPeriod uint32
 	if !stealCharge && spellKnown {
 		refreshMaxDur = s.mergeStolenMaxDuration(stSpell, spellKnown, mergeCaster)
@@ -1995,12 +2006,13 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, spellKnow
 	}
 	if stealCharge {
 		// Aura::ModCharges(+1, SpellAuras.cpp:964): increments while the
-		// aura uses charges, clamped to CalcMaxCharges (the spell's proc
-		// charges; the spellproc entry and SPELLMOD_CHARGES have no Go
-		// infra).
-		if existing.RemainingCharges > 0 || stSpell.ProcCharges > 0 {
+		// aura uses charges, clamped to CalcMaxCharges
+		// (SpellAuras.cpp:951-962) — the DBC proc charges folded through
+		// the original caster's spell-mod owner's SPELLMOD_CHARGES mods.
+		maxCharges := calcAuraMaxChargesFor(stSpell, stealModOwner, stealOwnerLocked)
+		if existing.RemainingCharges > 0 || maxCharges > 0 {
 			charges := int32(existing.RemainingCharges) + 1
-			if max := int32(stSpell.ProcCharges); max > 0 && charges > max {
+			if max := int32(maxCharges); max > 0 && charges > max {
 				charges = max
 			}
 			existing.RemainingCharges = uint8(charges)
@@ -2027,8 +2039,10 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, spellKnow
 		rescaleAuraAmountsByStack(existing, oldCount, uint32(cur))
 		// The ModStackAmount refresh flag is unconditional on increase
 		// (SpellAuras.cpp:1042): RefreshTimers and the charge reset run
-		// even when the stack clamps at the max.
-		existing.RemainingCharges = uint8(stSpell.ProcCharges)
+		// even when the stack clamps at the max — SetCharges(
+		// CalcMaxCharges()) (SpellAuras.cpp:1060), the original caster's
+		// spell-mod owner folding SPELLMOD_CHARGES.
+		existing.RemainingCharges = calcAuraMaxChargesFor(stSpell, stealModOwner, stealOwnerLocked)
 		if spellKnown {
 			// Aura::RefreshTimers(true) (SpellAuras.cpp:930-940): the max
 			// duration is recomputed from the original caster

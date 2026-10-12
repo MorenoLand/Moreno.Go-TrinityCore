@@ -19761,6 +19761,39 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel)
 }
 
+// calcAuraMaxChargesFor mirrors the modifier fold of Aura::CalcMaxCharges
+// (SpellAuras.cpp:951-962) once the caster's spell-mod owner is resolved:
+// the DBC ProcCharges — equal to the generated spell_proc entry's Charges,
+// since this server loads no spell_proc DB table to override it — folded
+// through the owner's SPELLMOD_CHARGES modifiers (Player::ApplySpellMod,
+// Player.cpp:21309). ownerLocked reports that the caller already holds the
+// mod owner's castMu (the aura merge paths): the no-taking fold then runs
+// instead of re-locking it, exactly like applySpellModNoTakingLocked.
+func calcAuraMaxChargesFor(spell wotlk.Spell, modOwner *session, ownerLocked bool) uint8 {
+	charges := spell.ProcCharges
+	if modOwner == nil {
+		return uint8(charges)
+	}
+	if ownerLocked {
+		charges = uint32(modOwner.applySpellModNoTakingLocked(spell, spellModCharges, int32(charges)))
+	} else {
+		charges = uint32(modOwner.applySpellMod(spell, spellModCharges, int32(charges)))
+	}
+	return uint8(charges)
+}
+
+// calcAuraMaxCharges mirrors Aura::CalcMaxCharges (SpellAuras.cpp:951-962):
+// the aura's max proc charges, resolved through the caster's spell-mod
+// owner (player caster, or pet/totem caster's owner). A nil server or an
+// unresolvable mod owner (offline/unknown caster, plain creature) is the
+// C++ null path: the DBC ProcCharges stands.
+func (s *Server) calcAuraMaxCharges(spell wotlk.Spell, mapID, instanceID uint32, casterGUID uint64) uint8 {
+	if s == nil {
+		return uint8(spell.ProcCharges)
+	}
+	return calcAuraMaxChargesFor(spell, s.spellModOwnerSession(mapID, instanceID, casterGUID), false)
+}
+
 // applyAuraFromCaster is the caster-attributed twin of applyAuraWithDuration:
 // Totem::InitSummon casts the passive pulse with the totem as caster
 // (CastSpell(this, GetSpell(), true), Totem.cpp:115), so the buff aura's
@@ -19792,6 +19825,16 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		slot = freeSlot
 		s.auraSlots[spellID] = slot
 	}
+
+	// Aura::CalcMaxCharges (SpellAuras.cpp:951-962): the charge count folds
+	// the caster's spell-mod owner's SPELLMOD_CHARGES mods. Computed before
+	// castMu is taken — the fold locks the mod owner's castMu itself.
+	chargeMapID, chargeInstanceID := uint32(0), uint32(0)
+	if s.player != nil {
+		chargeMapID, chargeInstanceID = s.player.Map, s.player.InstanceID
+	}
+	chargeModOwner := s.server.spellModOwnerSession(chargeMapID, chargeInstanceID, casterGUID)
+	chargeOwnerLocked := chargeModOwner != nil && chargeModOwner == s
 
 	s.castMu.Lock()
 	if s.activeAuras == nil {
@@ -19835,9 +19878,9 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 			mechanic = sp.Mechanic
 			stackAmount = sp.StackAmount
 			hideDuration = sp.AttributesEx5&spellAttr5HideDuration != 0
-			procCharges = sp.ProcCharges
-			if sp.StackAmount == 0 && sp.ProcCharges > 0 {
-				stackCount = uint8(sp.ProcCharges)
+			procCharges = uint32(calcAuraMaxChargesFor(sp, chargeModOwner, chargeOwnerLocked))
+			if sp.StackAmount == 0 && procCharges > 0 {
+				stackCount = uint8(procCharges)
 			}
 			for index, effect := range sp.Effects {
 				if effect.Effect == 0 || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted && !(auraType == 4 && effect.Aura == 4)) {
@@ -22733,7 +22776,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 			stackCount := uint8(cur)
 			existing.StackCount = stackCount
-			existing.RemainingCharges = uint8(spell.ProcCharges)
+			// Aura::ModStackAmount's refresh charge reset
+			// (SpellAuras.cpp:1055-1062): SetCharges(CalcMaxCharges()) —
+			// the recorded caster's spell-mod owner folds SPELLMOD_CHARGES.
+			// targetSess.castMu is held, so the no-taking fold runs when the
+			// mod owner is this same session instead of re-locking it.
+			mergeModOwner := s.server.spellModOwnerSession(targetSess.player.Map, targetSess.player.InstanceID, existing.CasterGUID)
+			existing.RemainingCharges = calcAuraMaxChargesFor(spell, mergeModOwner, mergeModOwner == targetSess)
 			// Unit::_TryStackingOrRefreshingExistingAura cast-item correction
 			// (Unit.cpp:3366-3370): a re-cast from a different item re-points
 			// the aura's cast item GUID, so later item-suffix recalculations
@@ -22946,8 +22995,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			DRGroup:            drGroup,
 			StackAmount:        spell.StackAmount,
 			HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
-			RemainingCharges:   uint8(spell.ProcCharges),
-			CritChance:         s.periodicCritChanceForAura(spell, targetGUID, uint8(schoolMask)),
+			// Aura::CalcMaxCharges (SpellAuras.cpp:951-962): the DBC proc
+			// charges folded through the caster's spell-mod owner's
+			// SPELLMOD_CHARGES mods. No castMu is held here, so the locking
+			// fold runs.
+			RemainingCharges: s.server.calcAuraMaxCharges(spell, targetSess.player.Map, targetSess.player.InstanceID, casterGUID),
+			CritChance:       s.periodicCritChanceForAura(spell, targetGUID, uint8(schoolMask)),
 		}
 		setAuraEffectPersistence(aura, spell, eff, amount)
 		if eff.Aura == 4 && previous != nil && previous.AuraType == 4 {
@@ -23417,8 +23470,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 
 		stackCount := uint8(1)
-		if !mountedFlight && eff.Aura != spellAuraMounted && spell.StackAmount == 0 && spell.ProcCharges > 0 {
-			stackCount = uint8(spell.ProcCharges)
+		if !mountedFlight && eff.Aura != spellAuraMounted && spell.StackAmount == 0 && aura.RemainingCharges > 0 {
+			stackCount = aura.RemainingCharges
 		}
 		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 		wireCaster := aura.CasterGUID
@@ -23520,6 +23573,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if s.server == nil || s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
 		return
 	}
+	// Aura::CalcMaxCharges (SpellAuras.cpp:951-962): the merge-refresh and
+	// fresh-apply charge counts fold the caster's spell-mod owner's
+	// SPELLMOD_CHARGES mods. Computed before auraMu is taken — the fold
+	// locks the mod owner's castMu itself. Go merges caster-agnostically,
+	// so the incoming caster feeds the fold on the merge path too.
+	creatureMaxCharges := s.server.calcAuraMaxCharges(spell, targetKey.Map, targetKey.InstanceID, casterGUID)
 	s.server.auraMu.Lock()
 	if s.server.creatureAuras == nil {
 		s.server.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
@@ -23567,7 +23626,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		stackCount := uint8(cur)
 		existing.StackCount = stackCount
-		existing.RemainingCharges = uint8(spell.ProcCharges)
+		existing.RemainingCharges = creatureMaxCharges
 		// Creature-side mirror of the player merge's cast-item correction
 		// (Unit.cpp:3366-3370): a re-cast from a different item re-points
 		// the aura's cast item GUID.
@@ -23648,8 +23707,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			s.server.auraMu.Unlock()
 		}
 		wireStack := stackCount
-		if spell.StackAmount == 0 && spell.ProcCharges > 0 {
-			wireStack = uint8(spell.ProcCharges)
+		if spell.StackAmount == 0 && creatureMaxCharges > 0 {
+			wireStack = creatureMaxCharges
 		}
 		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 		wireCaster := existing.CasterGUID
@@ -23723,8 +23782,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		TriggerSpell:       eff.TriggerSpell,
 		StackAmount:        spell.StackAmount,
 		HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
-		RemainingCharges:   uint8(spell.ProcCharges),
-		CritChance:         s.periodicCritChanceForAura(spell, targetGUID, uint8(schoolMask)),
+		// Aura::CalcMaxCharges (SpellAuras.cpp:951-962), precomputed above
+		// before auraMu was taken.
+		RemainingCharges: creatureMaxCharges,
+		CritChance:       s.periodicCritChanceForAura(spell, targetGUID, uint8(schoolMask)),
 	}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
 	// AuraEffect::HandlePhase creature arm (SpellAuraEffects.cpp:1581-1632):
@@ -23906,8 +23967,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 
 	stackCount := uint8(1)
-	if spell.StackAmount == 0 && spell.ProcCharges > 0 {
-		stackCount = uint8(spell.ProcCharges)
+	if spell.StackAmount == 0 && creatureMaxCharges > 0 {
+		stackCount = creatureMaxCharges
 	}
 	wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 	// BuildUpdatePacket (SpellAuras.cpp:239) sends the stored aura's caster,
