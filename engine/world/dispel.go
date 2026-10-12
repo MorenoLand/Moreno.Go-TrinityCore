@@ -201,6 +201,41 @@ func (s *Server) auraDispelChance(mapID, instanceID uint32, aura *activeAura, re
 	return 100 - resist
 }
 
+// spellModOwnerSession mirrors the caster half of
+// WorldObject::GetSpellModOwner (Object.cpp:2246-2261): a player caster GUID
+// resolves to its own session; a pet or totem creature caster resolves to its
+// owner player's session; anything else (offline, unknown, plain creature)
+// yields nil — the C++ null-modOwner path.
+func (s *Server) spellModOwnerSession(mapID, instanceID uint32, casterGUID uint64) *session {
+	if s == nil || casterGUID == 0 {
+		return nil
+	}
+	if cs := s.findSessionByGUID(casterGUID); cs != nil && cs.player != nil {
+		return cs
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, casterGUID); m != nil && m.PetID != 0 && m.OwnerGUID != 0 {
+		if os := s.findSessionByGUID(m.OwnerGUID); os != nil && os.player != nil {
+			return os
+		}
+		return nil
+	}
+	if s.isTotemGUID(casterGUID) {
+		s.totemMu.RLock()
+		defer s.totemMu.RUnlock()
+		for ownerGUID, slots := range s.activeTotems {
+			for _, t := range slots {
+				if t != nil && t.TotemGUID == casterGUID {
+					if os := s.findSessionByGUID(ownerGUID); os != nil && os.player != nil {
+						return os
+					}
+					return nil
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // dispelResistSpellMod mirrors the first arm of Aura::CalcDispelChance
 // (SpellAuras.cpp:1221-1226): the aura caster's spell-mod owner folds
 // SPELLMOD_RESIST_DISPEL_CHANCE mods affecting the dispelled spell,
@@ -216,30 +251,7 @@ func (s *Server) dispelResistSpellMod(mapID, instanceID uint32, aura *activeAura
 	if err != nil || !found {
 		return 0
 	}
-	var modOwner *session
-	if cs := s.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
-		modOwner = cs
-	} else if m := s.findCreatureMotion(mapID, instanceID, aura.CasterGUID); m != nil && m.PetID != 0 && m.OwnerGUID != 0 {
-		if os := s.findSessionByGUID(m.OwnerGUID); os != nil && os.player != nil {
-			modOwner = os
-		}
-	} else if s.isTotemGUID(aura.CasterGUID) {
-		s.totemMu.RLock()
-		for ownerGUID, slots := range s.activeTotems {
-			for _, t := range slots {
-				if t != nil && t.TotemGUID == aura.CasterGUID {
-					if os := s.findSessionByGUID(ownerGUID); os != nil && os.player != nil {
-						modOwner = os
-					}
-					break
-				}
-			}
-			if modOwner != nil {
-				break
-			}
-		}
-		s.totemMu.RUnlock()
-	}
+	modOwner := s.spellModOwnerSession(mapID, instanceID, aura.CasterGUID)
 	if modOwner == nil {
 		return 0
 	}
@@ -1409,15 +1421,41 @@ func (s *session) reregisterStolenSpellMods(spellID uint32) {
 	s.addSpellMods(aura)
 }
 
+// foldPeriodicPeriodNoHaste mirrors the pet/totem-caster arm of
+// AuraEffect::CalculatePeriodic (SpellAuraEffects.cpp:598-613) through
+// WorldObject::GetSpellModOwner (Object.cpp:2246-2258): a pet or totem
+// caster's SPELLMOD_ACTIVATION_TIME mods fold through the spellmod owner —
+// the pet's owner player — while the haste legs read the pet's own
+// UNIT_MOD_CAST_SPEED, which has no Go model. The pet apply path makes the
+// same call (pet_combat.go:2126-2132), so the amplitude stands at the modded
+// DBC base — exact whenever the pet carries no haste, which Go cannot
+// represent anyway.
+func (s *session) foldPeriodicPeriodNoHaste(spell wotlk.Spell, eff wotlk.SpellEffect) uint32 {
+	periodMs := eff.AuraPeriod
+	if periodMs == 0 {
+		switch eff.Aura {
+		case 3, 8, 23, 24, 89:
+			periodMs = 3000
+		}
+	}
+	if periodMs == 0 {
+		return 0
+	}
+	return uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
+}
+
 // recalculateStolenAuraPeriod mirrors the AuraEffect::CalculatePeriodic
 // recompute half of Aura::SetLoadedState (SpellAuraEffects.cpp:598-618,
 // called at Unit.cpp:4032): the stolen aura's periodic amplitude starts
 // from the DBC base and folds the ORIGINAL caster's current
 // SPELLMOD_ACTIVATION_TIME and haste — it is not the victim aura's live
-// period. A player original caster resolves via their session; any other
-// caster (offline, creature, unknown) degrades to the unmodded DBC base,
-// like C++'s null-caster path. Runs before rescheduleStolenAuraTick so the
-// load-arm phase uses the recomputed amplitude, exactly like C++.
+// period. A player original caster resolves via their session; a pet or
+// totem original caster resolves to its owner player's session for the
+// spellmod fold (GetSpellModOwner, Object.cpp:2246-2258) with the pet's own
+// haste unmodeled, mirroring the pet apply path; any other caster (offline,
+// plain creature, unknown) degrades to the unmodded DBC base, like C++'s
+// null-caster path. Runs before rescheduleStolenAuraTick so the load-arm
+// phase uses the recomputed amplitude, exactly like C++.
 func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spell, spellKnown bool, victimFx *victimEffectState, victimCasterGUID uint64) {
 	if victimFx == nil || !spellKnown {
 		return
@@ -1449,7 +1487,19 @@ func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spel
 	var periodMs uint32
 	if casterSess != nil {
 		periodMs = casterSess.foldPeriodicPeriod(stSpell, stSpell.Effects[tickIdx])
-	} else {
+	} else if s.server != nil && s.player != nil {
+		// Pet/totem original caster (Object.cpp:2246-2258): the spellmod
+		// owner is the pet's owner player, resolved on the stealer's
+		// map/instance — the victim is within steal range, so the pet is
+		// on the same map. The pet's own haste has no Go model, so the
+		// fold is spellmods-only, mirroring the pet apply path
+		// (pet_combat.go:2126-2132). A miss falls through to the
+		// null-caster path below.
+		if modOwner := s.server.spellModOwnerSession(s.player.Map, s.player.InstanceID, victimCasterGUID); modOwner != nil {
+			periodMs = modOwner.foldPeriodicPeriodNoHaste(stSpell, stSpell.Effects[tickIdx])
+		}
+	}
+	if periodMs == 0 {
 		// Null-caster path (SpellAuraEffects.cpp:598-601): no spellmod or
 		// haste folds — the DBC base stands, with Go's zero-period
 		// fallback for periodic aura types (auraEffectParams convention).
@@ -1478,8 +1528,11 @@ func (s *session) recalculateStolenAuraPeriod(spellID uint32, stSpell wotlk.Spel
 // amount plus the caster's live spellpower done-bonus — instead of keeping
 // the victim aura's live amounts. A non-recalculable effect keeps its
 // carried live amount, matching C++'s SetAmount-then-maybe-recalculate
-// order. An unresolvable caster degrades to the null-caster CalcValue (no
-// level scaling, no bonuses), like periodicTickCasterLevel. Residuals:
+// order. A pet/totem original caster scales by the pet's own level
+// (SpellInfo.cpp:413-424) with no spellpower leg — Go has no pet spellpower
+// model, matching the pet apply path. An unresolvable caster degrades to
+// the null-caster CalcValue (no level scaling, no bonuses), like
+// periodicTickCasterLevel. Residuals:
 // the combo-points term (no combo-point infra on the caster session),
 // ApplyEffectModifiers (Go's normal apply path has no twin either), the
 // item-enchant arm (a stolen aura carries no cast item), and script
@@ -1497,6 +1550,16 @@ func (s *session) recalculateStolenAuraAmounts(spellID uint32, stSpell wotlk.Spe
 	if casterSess != nil && casterSess.player != nil {
 		casterLevel = uint32(casterSess.player.Level)
 		spellPower = casterSess.player.SpellPower
+	} else if s.player != nil {
+		// Pet/totem original caster: AuraEffect::RecalculateAmount(caster)
+		// (SpellAuras.cpp:1256) scales by the caster's own level
+		// (SpellEffectInfo::CalcValue, SpellInfo.cpp:413-424) — the pet's
+		// level, not the owner's. The spellpower done-bonus leg has no Go
+		// pet model, matching the pet apply path's level-only
+		// CalcValueForLevel (pet_combat.go:2103-2113).
+		if m := s.findCreatureMotion(victimCasterGUID); m != nil && m.PetID != 0 && m.OwnerGUID != 0 && m.Level > 0 {
+			casterLevel = uint32(m.Level)
+		}
 	}
 	s.castMu.Lock()
 	aura := s.activeAuras[spellID]
@@ -1648,14 +1711,18 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 // periodic timer set to the time since the victim's last tick:
 // _periodicTimer = (victimMaxDuration - dur) % amplitude. The first tick on
 // the stealer therefore fires after amplitude - (elapsed % amplitude), not
-// after a full amplitude like a fresh apply would. The merge arm needs
+// after a full amplitude like a fresh apply would. A permanent victim aura
+// (victimMaxMs 0) makes the stolen aura permanent too, so C++ skips the
+// elapsed recompute and the construction ResetPeriodic stands: the first
+// tick fires after a full RECOMPUTED amplitude, and the victim-live delay
+// the fresh apply scheduled is stopped and re-armed. The merge arm needs
 // nothing: C++ only calls oldAura->SetDuration(dur) there (Unit.cpp:4009)
 // and never touches the periodic timer, so the stealer's own cadence —
 // which Go likewise never reschedules on merge — is already exact.
 // Call right after the fresh stolen-aura apply, with dur the capped stolen
 // duration and victimMaxMs the SetLoadedState maxduration arg
 // (aura->GetMaxDuration()).
-func (s *session) rescheduleStolenAuraTick(spellID, victimMaxMs, dur uint32) {
+func (s *session) rescheduleStolenAuraTick(spellID, victimMaxMs, dur uint32, stSpell wotlk.Spell) {
 	s.castMu.Lock()
 	aura := s.activeAuras[spellID]
 	if aura == nil || aura.Stopped || aura.TickInFlight {
@@ -1663,16 +1730,30 @@ func (s *session) rescheduleStolenAuraTick(spellID, victimMaxMs, dur uint32) {
 		return
 	}
 	periodMs := aura.PeriodMs
-	if periodMs == 0 || victimMaxMs == 0 {
-		// Non-periodic: no timer exists. Permanent (victimMaxMs 0): C++
-		// skips the elapsed recompute for permanent auras, leaving the
-		// construction-time timer — the fresh-apply cadence
-		// applyAuraToTarget already scheduled is exact.
+	if periodMs == 0 {
+		// Non-periodic: no timer exists.
 		s.castMu.Unlock()
 		return
 	}
 	if aura.TickTimer != nil {
 		aura.TickTimer.Stop()
+	}
+	if victimMaxMs == 0 {
+		// Permanent victim aura: the stolen aura is permanent too
+		// (SetLoadedState maxduration arg is the victim's -1,
+		// SpellAuras.h:152), so C++'s CalculatePeriodic load arm skips the
+		// elapsed recompute (SpellAuraEffects.cpp:619-627) and the
+		// construction ResetPeriodic stands — the first tick fires after a
+		// full RECOMPUTED amplitude (SpellAuraEffects.cpp:553-563), not
+		// the victim-live delay the fresh apply scheduled above (that
+		// delay was computed from the victim aura's live period, folded
+		// with the original caster's mods at the victim's apply time).
+		// Re-arm at the recomputed period; START_PERIODIC_AT_APPLY keeps
+		// its zero delay like the construction arm.
+		delay := periodicTickInitialDelay(stSpell, periodMs)
+		s.castMu.Unlock()
+		s.schedulePlayerPeriodicTickInitial(aura, periodMs, delay)
+		return
 	}
 	var elapsed uint32
 	if victimMaxMs > dur {
@@ -1890,7 +1971,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		// (SpellAuraEffects.cpp:619-630, called at Unit.cpp:4032): the fresh
 		// stolen aura keeps the victim's periodic tick cadence instead of
 		// restarting the timer at a full amplitude.
-		s.rescheduleStolenAuraTick(cand.SpellID, st.victimMaxMs, dur)
+		s.rescheduleStolenAuraTick(cand.SpellID, st.victimMaxMs, dur, stSpell)
 		if expiredSteal {
 			// A zero-remaining victim aura is stolen at duration 0
 			// (Unit.cpp:3999); C++ still creates the stolen aura — it
