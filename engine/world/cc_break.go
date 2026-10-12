@@ -218,6 +218,56 @@ func (s *Server) procCreatureDirectDamageAuras(key creatureAuraKey, spellID uint
 	s.procCreatureDamageAuras(key, true, damage, maxHealth)
 }
 
+// stripRecursiveTakeDamageAuras mirrors the first Unit::DealDamage strip arm
+// (Unit.cpp:738-750) for recursive direct-damage strikes that never pass
+// through a spell hit (damage shields, split-damage redirection): the
+// TAKE_DAMAGE strip — skipped when the striking spell carries
+// SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS, excepting the striking spell's own
+// aura. No HITBYSPELL strip: C++ never strips it on this path (no spell hit
+// happens; Spell.cpp:2747 fires only in DoSpellHitOnUnit).
+func (s *session) stripRecursiveTakeDamageAuras(spellID uint32) {
+	if tickDamageBreaksAuras(s.server, spellID) {
+		s.removeAurasWithInterruptFlags(auraInterruptFlagTakeDamage, spellID)
+	}
+}
+
+// stripRecursiveDirectDamageAuras mirrors the second Unit::DealDamage strip
+// arm (Unit.cpp:897-898) plus the taken proc drain for recursive
+// direct-damage strikes: the DIRECT_DAMAGE strip excepting the striking
+// spell's own aura, then the breakable-CC drain with the taken-damage proc
+// flag (AuraEffect::HandleProc, SpellAuraEffects.cpp:1017-1025).
+func (s *session) stripRecursiveDirectDamageAuras(spellID uint32, damage uint32) {
+	s.removeAurasWithInterruptFlags(auraInterruptFlagDirectDamage, spellID)
+	if damage > 0 {
+		s.drainBreakableCCAurasOnTakenDamage(procFlagTakenDamage, damage)
+	}
+}
+
+// stripCreatureRecursiveTakeDamageAuras is the creature-victim twin of
+// stripRecursiveTakeDamageAuras (Unit.cpp:738-750).
+func (s *Server) stripCreatureRecursiveTakeDamageAuras(m *creatureMotion, spellID uint32) {
+	if s == nil || m == nil {
+		return
+	}
+	if tickDamageBreaksAuras(s, spellID) {
+		s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagTakeDamage, spellID)
+	}
+}
+
+// stripCreatureRecursiveDirectDamageAuras is the creature-victim twin of
+// stripRecursiveDirectDamageAuras (Unit.cpp:897-898 + the taken proc drain).
+func (s *Server) stripCreatureRecursiveDirectDamageAuras(key creatureAuraKey, spellID uint32, damage uint32, maxHealth uint32) {
+	if s != nil {
+		s.motionMu.Lock()
+		m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+		s.motionMu.Unlock()
+		if m != nil {
+			s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagDirectDamage, spellID)
+		}
+	}
+	s.procCreatureDamageAuras(key, true, damage, maxHealth)
+}
+
 // drainBreakableCCAurasOnTakenDamage runs the breakable-CC amount drain on
 // the session's active auras per AuraEffect::HandleBreakableCCAuraProc
 // (SpellAuraEffects.cpp:5644-5653): per damage hit, a breakable-CC aura's

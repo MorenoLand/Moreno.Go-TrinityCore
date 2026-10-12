@@ -268,6 +268,9 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 		return
 	}
 	damage = ts.negateGodModeDamage(damage)
+	// Unit::DealDamage (Unit.cpp:738-750): the TAKE_DAMAGE strip precedes the
+	// !damage early-return and the split-damage legs (:766-788).
+	ts.stripRecursiveTakeDamageAuras(spellID)
 	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras on the
 	// recursive victim redirect part of the damage to their caster, ahead of
 	// the 300 share leg below (Unit::DealDamage, Unit.cpp:766-788).
@@ -338,6 +341,9 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 		ts.delayCurrentCast()
 		ts.delayCurrentChannel()
 	}
+	// Unit::DealDamage (Unit.cpp:897-898): the DIRECT_DAMAGE strip runs after
+	// the health leg; the breakable-CC drain rides the taken proc pass.
+	ts.stripRecursiveDirectDamageAuras(spellID, damage)
 	// ProcDamageAndSpellFor (Unit.cpp:10179+): the taken pass on the victim
 	// and the done pass on the original attacker, carrying the aura's spell.
 	ts.procSpellHitTakenAuraTriggers(ctx, attackerGUID, spellID, true, false, false, false, false, 0, damage, false, false)
@@ -389,6 +395,10 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 	if damage == 0 {
 		return
 	}
+	// Unit::DealDamage (Unit.cpp:738-750): the TAKE_DAMAGE strip precedes the
+	// split-damage legs (:766-788); the Eluna DamageTaken hook above fires
+	// ahead of it (:697-702).
+	s.stripCreatureRecursiveTakeDamageAuras(motion, spellID)
 	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras on the
 	// recursive victim redirect part of the damage to their caster, ahead of
 	// the 300 share leg below (Unit::DealDamage, Unit.cpp:766-788).
@@ -486,6 +496,9 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		}
 	}
 	s.motionMu.Unlock()
+	// Unit::DealDamage (Unit.cpp:897-898): the DIRECT_DAMAGE strip runs after
+	// the health leg; the breakable-CC drain rides the taken proc pass.
+	s.stripCreatureRecursiveDirectDamageAuras(key, spellID, damage, m.MaxHealth)
 	// Unit::DealDamage (Unit.cpp:925-931): random durability loss on HIT
 	// DONE — the original attacker is the damage source.
 	if attackerSess != nil {
