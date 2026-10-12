@@ -1155,9 +1155,19 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
-		// WorldObject::IsValidAttackTarget (Object.cpp:2941): enemy target
-		// checks can't attack GMs, unconditionally.
-		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || targetSession.playerAlliance() == s.playerAlliance() || sessionIsGameMaster(targetSession) {
+		// WorldObject::IsValidAttackTarget (Object.cpp:2937-2941): enemy target
+		// checks can't attack GMs, unconditionally — and can't attack
+		// unattackable units. UNIT_STATE_UNATTACKABLE is UNIT_STATE_IN_FLIGHT
+		// (Unit.h:249), set only by the taxi flight movement generator
+		// (FlightPathMovementGenerator.cpp:44, MotionMaster::MoveTaxiFlight is
+		// TYPEID_PLAYER-only), so in Go it is the live TaxiPath flag; the
+		// creature sweep needs no state gate. The flag arm (Object.cpp:2980:
+		// NON_ATTACKABLE | TAXI_FLIGHT | NOT_ATTACKABLE_1 | NON_ATTACKABLE_2)
+		// is bridged for its live player-side term: aura 93 sets
+		// NON_ATTACKABLE_2 (0x10000) in player.UnitFlags (spells.go apply leg);
+		// TAXI_FLIGHT rides the TaxiPath gate above, and Go never sets the
+		// other two on players.
+		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.TaxiPath != "" || targetSession.player.UnitFlags&unitFlagNonAttackable2 != 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || targetSession.playerAlliance() == s.playerAlliance() || sessionIsGameMaster(targetSession) {
 			continue
 		}
 		// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): cylinder,

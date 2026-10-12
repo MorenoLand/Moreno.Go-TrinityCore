@@ -599,9 +599,9 @@ func (s *session) directWeaponCritChanceDone(ctx context.Context, spell wotlk.Sp
 // Victory Rush caster class arms (Unit.cpp:7353-7376), then
 // Unit::GetUnitCriticalChanceTaken (Unit.cpp:2846-2880) — flat victim
 // SPELL_AURA_MOD_ATTACKER_MELEE/RANGED_CRIT_CHANCE (187/188) by attack type,
-// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) caster-matched (no
-// IsAffectedOnSpell gate on this path, per the C++ lambda), resilience with
-// the melee/ranged taken rating, then SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE
+// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) on the victim, matched to auras
+// the attacker cast (no IsAffectedOnSpell gate on this path, per the C++
+// lambda), resilience with the melee/ranged taken rating, then SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE
 // (197) applied after resilience with no positivity gate (unlike the MAGIC
 // leg). The defense-skill vs weapon-skill bonus has no Go weapon-skill model
 // and stays a residual; the chance is clamped at zero like C++.
@@ -639,7 +639,7 @@ func (s *session) directWeaponCritChanceTaken(ctx context.Context, target combat
 	if isPlayerVictim {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			chance += float64(vicSess.playerAuraModifier(flatAura))
-			chance += s.casterMatchedCritChanceForCaster(spell)
+			chance += vicSess.victimCritChanceForCaster(s.playerGUID)
 			bp := int32(math.Round(chance * 100))
 			cr := CombatRatingCritTakenMelee
 			if attackType == protocol.RangedAttack {
@@ -652,7 +652,7 @@ func (s *session) directWeaponCritChanceTaken(ctx context.Context, target combat
 	} else {
 		key := creatureAuraKeyForTarget(target)
 		chance += float64(creatureAuraModifierSum(s.server, key, flatAura))
-		chance += s.casterMatchedCritChanceForCaster(spell)
+		chance += creatureVictimCritChanceForCaster(s.server, key, s.playerGUID)
 		chance += float64(creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
 	}
 	// Skill-diff arm (Unit.cpp:2889-2895): crit suppression from the
@@ -677,21 +677,58 @@ func (s *session) directWeaponCritChanceTaken(ctx context.Context, target combat
 	return chance / 100.0
 }
 
-// casterMatchedCritChanceForCaster mirrors the SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER
+// victimCritChanceForCaster mirrors the SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER
 // (308) arm inside Unit::GetUnitCriticalChanceTaken (Unit.cpp:2862-2866): the
-// sum of the caster's 308-aura amounts whose CasterGUID is the caster's own.
-// This path has no IsAffectedOnSpell gate (the magic leg's post-switch arm at
+// sum of the VICTIM's 308-aura amounts whose CasterGUID is the attacker's
+// GUID. The C++ method runs on the victim (this), so the lambda matches auras
+// cast BY the attacker — not the attacker's own auras. This path has no
+// IsAffectedOnSpell gate (the magic leg's post-switch arm at
 // Unit.cpp:7390-7397 does, and stays unbridged).
-func (s *session) casterMatchedCritChanceForCaster(spell wotlk.Spell) float64 {
-	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+func (s *session) victimCritChanceForCaster(attackerGUID uint64) float64 {
+	if s == nil || s.server == nil || s.server.Data == nil || attackerGUID == 0 {
 		return 0
 	}
 	var total float64
 	for _, aura := range s.loadedAuras() {
-		if aura == nil || aura.Stopped || aura.EffectMask == 0 || aura.CasterGUID != s.playerGUID {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 || aura.CasterGUID != attackerGUID {
 			continue
 		}
 		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModCritChanceForCaster {
+				continue
+			}
+			total += float64(aura.Amounts[index])
+		}
+	}
+	return total
+}
+
+// creatureVictimCritChanceForCaster mirrors the creature half of the
+// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) arm in
+// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2862-2866): the sum of the victim
+// creature's 308-aura amounts whose CasterGUID is the attacker's GUID, with
+// the same victim-side semantics as victimCritChanceForCaster.
+func creatureVictimCritChanceForCaster(srv *Server, key creatureAuraKey, attackerGUID uint64) float64 {
+	if srv == nil || srv.Data == nil || key.GUID == 0 || attackerGUID == 0 {
+		return 0
+	}
+	srv.auraMu.Lock()
+	auras := srv.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	srv.auraMu.Unlock()
+	var total float64
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 || aura.CasterGUID != attackerGUID {
+			continue
+		}
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
 		if err != nil || !found {
 			continue
 		}

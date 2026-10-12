@@ -3374,15 +3374,21 @@ func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {
 //     reject. (The IsImmuneToNPC half has no Go rejection to bypass, and the
 //     PvC type_flags assist gate at Object.cpp:3179 has no Go infra), and
 //
-// the remaining terms (NON_ATTACKABLE, TRIGGER, NO_COMBAT) have no ATTR6
-// bypass in C++.
+// the remaining terms (NON_ATTACKABLE, NON_ATTACKABLE_2, TRIGGER, NO_COMBAT)
+// have no ATTR6 bypass in C++.
 // assist selects the IsValidAssistTarget shape: the NON_ATTACKABLE /
-// CREATURE_FLAG_EXTRA_TRIGGER / CREATURE_FLAG_EXTRA_NO_COMBAT bundle only
-// rejects negative spells there (Object.cpp:3131), while IsValidAttackTarget
-// always rejects it (Object.cpp:2980).
+// NON_ATTACKABLE_2 / CREATURE_FLAG_EXTRA_TRIGGER /
+// CREATURE_FLAG_EXTRA_NO_COMBAT bundle only rejects negative spells there
+// (Object.cpp:3131), while IsValidAttackTarget always rejects it
+// (Object.cpp:2980).
 func spellTargetUnitBlocked(spell wotlk.Spell, unitFlags, flagsExtra uint32, assist bool) bool {
 	if !assist || isHarmfulSpell(spell) {
-		if unitFlags&0x00000002 != 0 || flagsExtra&(0x00000080|0x00002000) != 0 {
+		// 0x2 = UNIT_FLAG_NON_ATTACKABLE, 0x10000 = UNIT_FLAG_NON_ATTACKABLE_2
+		// (aura 93, Object.cpp:2980/3131 list it alongside NON_ATTACKABLE in
+		// both the attack and negative-assist flag arms; Go's creature aura
+		// model never writes it at runtime, so this fires only for static
+		// template flags).
+		if unitFlags&(0x00000002|unitFlagNonAttackable2) != 0 || flagsExtra&(0x00000080|0x00002000) != 0 {
 			return true
 		}
 	}
