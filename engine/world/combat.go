@@ -1482,6 +1482,33 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		float64(s.swingDoneFlatBonus(ctx, true, false, target.GUID, target))
 	damage := uint32(done * s.meleeDamageDoneVersusMod(ctx, target.GUID))
 	damage = s.meleeWeaponDamageTaken(ctx, damage, spellSchoolMaskNormal, target.GUID, target, true, true)
+	// Unit::CalculateMeleeDamage with RANGED_ATTACK (Unit.cpp:1216-1262):
+	// the armor reduction runs in the pre-roll damage loop — Done, Taken,
+	// armor, then the outcome roll and the crit doubling (Unit.cpp:1302-1319).
+	// The melee white path already follows this order; the ranged path had
+	// armor after the crit switch (armor was eating the crit bonus).
+	schoolMask := uint8(1) // Physical default
+	if s.server != nil && s.server.Data != nil {
+		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found && spellInfo.SchoolMask != 0 {
+			schoolMask = uint8(spellInfo.SchoolMask)
+		}
+	}
+	// Apply target armor damage reduction for physical ranged attacks
+	armor := float64(target.Armor)
+	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
+		key := creatureAuraKeyForTarget(target)
+		basePct, totalPct := s.server.petArmorPctBonus(key, tm.OwnerGUID != 0)
+		armor = (armor*basePct + s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)) * totalPct
+	}
+	if armor < 0 {
+		armor = 0
+	}
+	if schoolMask == 1 && armor > 0 && damage > 0 {
+		// The 123/269 ignore-resist arms run ahead of the ArP leg on the
+		// ranged auto-attack path (Unit.cpp:1632-1650, null spellInfo).
+		armor = s.ignoreTargetResistArmorSwing(armor)
+		damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, protocol.RangedAttack))
+	}
 	if damage < 1 {
 		damage = 1
 	}
@@ -1514,29 +1541,6 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenRanged)
 			vicSess.procReactiveVictimArms(outcome)
 		}
-	}
-
-	schoolMask := uint8(1) // Physical default
-	if s.server != nil && s.server.Data != nil {
-		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found && spellInfo.SchoolMask != 0 {
-			schoolMask = uint8(spellInfo.SchoolMask)
-		}
-	}
-	// Apply target armor damage reduction for physical ranged attacks
-	armor := float64(target.Armor)
-	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
-		key := creatureAuraKeyForTarget(target)
-		basePct, totalPct := s.server.petArmorPctBonus(key, tm.OwnerGUID != 0)
-		armor = (armor*basePct + s.server.petBaseArmorBonus(key, tm.OwnerGUID != 0)) * totalPct
-	}
-	if armor < 0 {
-		armor = 0
-	}
-	if schoolMask == 1 && armor > 0 && damage > 0 {
-		// The 123/269 ignore-resist arms run ahead of the ArP leg on the
-		// ranged auto-attack path (Unit.cpp:1632-1650, null spellInfo).
-		armor = s.ignoreTargetResistArmorSwing(armor)
-		damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, protocol.RangedAttack))
 	}
 
 	absorbed := uint32(0)
