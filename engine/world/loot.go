@@ -1064,6 +1064,92 @@ func (s *session) hasQuestForItem(ctx context.Context, itemID uint32) bool {
 	return false
 }
 
+// hasQuestForItemEx mirrors Player::HasQuestForItem (Player.cpp:16945-16998)
+// with an excluded quest and the turnIn variant. With turnIn=true a COMPLETE
+// quest whose objective counts are already met also claims the item — the
+// RewardQuest destroy arm (Player.cpp:15341) passes turnIn=true for required
+// items, while the source-item arm (:15352) uses turnIn=false. The per-slot
+// second disjunct has no itemid check in the C++, and is mirrored exactly.
+func (s *session) hasQuestForItemEx(ctx context.Context, itemID uint32, excludeQuestID uint32, turnIn bool) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	wdb := s.server.WorldStore.DB
+	for qi := range s.player.QuestLog {
+		entry := &s.player.QuestLog[qi]
+		if entry.QuestID == 0 || entry.QuestID == excludeQuestID {
+			continue
+		}
+		status, err := s.characterQuestStatus(ctx, entry.QuestID)
+		if err != nil || (status != questStatusIncomplete && !(turnIn && status == questStatusComplete)) {
+			continue
+		}
+		var reqIDs [6]int64
+		var reqCounts [6]int64
+		var dropIDs [4]int64
+		var dropQty [4]int64
+		if err := wdb.QueryRowContext(ctx, `SELECT
+				COALESCE(RequiredItemId1, 0), COALESCE(RequiredItemId2, 0), COALESCE(RequiredItemId3, 0),
+				COALESCE(RequiredItemId4, 0), COALESCE(RequiredItemId5, 0), COALESCE(RequiredItemId6, 0),
+				COALESCE(RequiredItemCount1, 0), COALESCE(RequiredItemCount2, 0), COALESCE(RequiredItemCount3, 0),
+				COALESCE(RequiredItemCount4, 0), COALESCE(RequiredItemCount5, 0), COALESCE(RequiredItemCount6, 0),
+				COALESCE(ItemDrop1, 0), COALESCE(ItemDrop2, 0), COALESCE(ItemDrop3, 0), COALESCE(ItemDrop4, 0),
+				COALESCE(ItemDropQuantity1, 0), COALESCE(ItemDropQuantity2, 0), COALESCE(ItemDropQuantity3, 0), COALESCE(ItemDropQuantity4, 0)
+			FROM quest_template WHERE ID = ?`, entry.QuestID).Scan(
+			&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqIDs[4], &reqIDs[5],
+			&reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3], &reqCounts[4], &reqCounts[5],
+			&dropIDs[0], &dropIDs[1], &dropIDs[2], &dropIDs[3],
+			&dropQty[0], &dropQty[1], &dropQty[2], &dropQty[3]); err != nil {
+			continue
+		}
+		for j := 0; j < 6; j++ {
+			if (uint32(reqIDs[j]) == itemID && entry.ItemCounts[j] < uint16(reqCounts[j])) ||
+				(turnIn && entry.ItemCounts[j] >= uint16(reqCounts[j])) {
+				return true
+			}
+		}
+		needsDrop := false
+		for j := 0; j < 4; j++ {
+			if uint32(dropIDs[j]) == itemID {
+				needsDrop = true
+				break
+			}
+		}
+		if !needsDrop {
+			continue
+		}
+		var maxCount, stackable int64
+		if err := wdb.QueryRowContext(ctx, `SELECT COALESCE(MaxCount, 0), COALESCE(Stackable, 1) FROM item_template WHERE entry = ?`, itemID).Scan(&maxCount, &stackable); err != nil {
+			continue
+		}
+		var owned int64
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+				JOIN item_instance AS ii ON ii.guid = ci.item
+				WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, itemID).Scan(&owned)
+		}
+		for j := 0; j < 4; j++ {
+			if uint32(dropIDs[j]) != itemID {
+				continue
+			}
+			// The turnIn disjunct carries no MaxCount guard in the C++
+			// (Player.cpp:16982): with MaxCount 0 and nothing owned,
+			// 0 >= 0 still claims the item.
+			if (maxCount > 0 && owned < maxCount) || (turnIn && owned >= maxCount) {
+				return true
+			}
+			if dropQty[j] > 0 {
+				if owned < dropQty[j] || turnIn {
+					return true
+				}
+			} else if stackable > 0 && owned < stackable {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // lootItemAllowedForPlayer mirrors LootItem::AllowedForPlayer (Loot.cpp:57-95)
 // minus the DB-conditions arm (no Go model). The faction arm precedes the
 // master-looter leg: faction-flagged items hide from the opposite team

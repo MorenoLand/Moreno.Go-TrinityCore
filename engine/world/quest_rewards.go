@@ -14,6 +14,7 @@ const questRequiredItems = 6
 type questRewardView struct {
 	Detail          questDetailData
 	RequiredItems   []questRewardItem
+	SourceItems     []questRewardItem
 	RequestText     string
 	CompleteEmote   uint32
 	IncompleteEmote uint32
@@ -222,6 +223,23 @@ func (s *session) loadQuestRewardView(ctx context.Context, questID uint32) (ques
 			}
 		}
 	}
+	// Player::RewardQuest (Player.cpp:15348-15359): the source-item
+	// (ItemDrop) loop destroys those alongside the required items.
+	var dropIDs [4]int64
+	var dropQty [4]int64
+	dropColumns := make([]string, 0, 8)
+	dropTargets := make([]any, 0, 8)
+	for index := 1; index <= 4; index++ {
+		dropColumns = append(dropColumns, "ItemDrop"+itoa(index), "ItemDropQuantity"+itoa(index))
+		dropTargets = append(dropTargets, &dropIDs[index-1], &dropQty[index-1])
+	}
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT "+strings.Join(dropColumns, ", ")+" FROM quest_template WHERE ID = ?", questID).Scan(dropTargets...); err == nil {
+		for index, id := range dropIDs {
+			if id != 0 {
+				view.SourceItems = append(view.SourceItems, questRewardItem{ID: uint32(id), Quantity: uint32(dropQty[index]), DisplayID: s.itemDisplayID(ctx, uint32(id))})
+			}
+		}
+	}
 	var requestText sql.NullString
 	var completeEmote, incompleteEmote int64
 	err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT EmoteOnComplete, EmoteOnIncomplete, CompletionText FROM quest_request_items WHERE ID = ?", questID).Scan(&completeEmote, &incompleteEmote, &requestText)
@@ -302,6 +320,9 @@ func (s *session) sendQuestRequestItems(view questRewardView, giverGUID uint64, 
 }
 
 func (s *session) sendQuestOfferReward(view questRewardView, giverGUID uint64, autoLaunched bool) bool {
+	// Quest::GetQuestRewards (QuestDef.cpp:266) shows GetRewOrReqMoney, not
+	// the raw template value (max-level bonus money included).
+	view.Detail.RewardMoney = uint32(s.questRewOrReqMoney(view.Detail))
 	return s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_OFFER_REWARD_MESSAGE), buildQuestGiverOfferReward(view, giverGUID, autoLaunched), true) == nil
 }
 

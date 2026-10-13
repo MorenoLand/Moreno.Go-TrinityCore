@@ -307,12 +307,22 @@ func (s *session) giveReputation(ctx context.Context, factionID uint32, amount i
 			return
 		}
 	}
-	// ReputationMgr::SetReputation (ReputationMgr.cpp:302): the Eluna hook
-	// fires first with the target standing; a rewritten standing becomes the
-	// new target, folded back to a delta for the additive store. Go's sink
-	// is always incremental. The GM .modify rep path mirrors C++
-	// SetOneFactionReputation, which never fires the hook (only SetReputation
-	// does), so it stays unfired there.
+	s.addReputationAmount(ctx, factionID, amount)
+}
+
+// addReputationAmount is the hook+persist sink shared by giveReputation and
+// the quest-reward pipeline (which scales the amount itself, mirroring
+// Player::RewardReputation + CalculateReputationGain).
+// ReputationMgr::SetReputation (ReputationMgr.cpp:302): the Eluna hook
+// fires first with the target standing; a rewritten standing becomes the
+// new target, folded back to a delta for the additive store. Go's sink
+// is always incremental. The GM .modify rep path mirrors C++
+// SetOneFactionReputation, which never fires the hook (only SetReputation
+// does), so it stays unfired there.
+func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amount int32) {
+	if s.player == nil || factionID == 0 || amount == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
 	currentTotal := s.reputationStanding(factionID)
 	target := currentTotal + amount
 	target = s.fireReputationChangeHook(ctx, factionID, target, true)

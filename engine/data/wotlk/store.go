@@ -1382,6 +1382,30 @@ func (s *Store) TeamContributionPoints(level uint32) (float32, bool, error) {
 	return data, true, nil
 }
 
+// QuestFactionReward mirrors the QuestFactionReward.dbc lookup in
+// Player::RewardReputation (Player.cpp:6804): row 1 carries the positive
+// difficulty rewards, row 2 the negative ones ("niiiiiiiiii": ID + 10
+// int32 Difficulty columns). A missing file or row degrades to not-found,
+// like the C++ null-entry arm.
+func (s *Store) QuestFactionReward(row uint32, field uint32) (int32, bool, error) {
+	if field >= 10 {
+		return 0, false, nil
+	}
+	file, err := s.File("QuestFactionReward")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(row)
+	if !ok {
+		return 0, false, nil
+	}
+	value, err := record.Int32(int(1 + field))
+	if err != nil {
+		return 0, false, err
+	}
+	return value, true, nil
+}
+
 type Emote struct {
 	ID                 uint32
 	EmoteFlags         uint32

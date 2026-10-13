@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -22,6 +21,8 @@ const (
 	questFlagsDaily         = 0x00001000
 	questFlagsWeekly        = 0x00008000
 	questFlagsPVP           = 0x00002000 // QUEST_FLAGS_FLAGS_PVP (QuestDef.h:145)
+	questFlagsNoMoneyFromXP = 0x00000100 // QUEST_FLAGS_NO_MONEY_FROM_XP (QuestDef.h:140)
+	questBindQuestItem      = 4          // BIND_QUEST_ITEM (ItemTemplate.h:102)
 	questSpecialRepeatable  = 0x001
 	questSpecialDungeonFind = 0x008
 	questSpecialMonthly     = 0x010
@@ -118,6 +119,12 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	} else if !complete {
 		return true
 	}
+	// Player::CanRewardQuest (Player.cpp:15094-15095): a quest that requires
+	// money cannot be turned in without it (silent on this arm).
+	if moneyRew := s.questRewOrReqMoney(view.Detail); moneyRew < 0 && s.player.Money < uint32(-int64(moneyRew)) {
+		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "insufficient money")
+		return true
+	}
 	grants, destroyedGUIDs, err := s.commitQuestReward(ctx, view, reward)
 	if errors.Is(err, errQuestInventoryFull) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_FAILED), buildQuestFailed(view.Detail.ID, questInventoryFull), true)
@@ -168,7 +175,15 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 			_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(uint64(grant.ItemGUID)|(uint64(0x4000)<<48), grant.Duration), true)
 		}
 	}
-	s.player.Money += view.Detail.RewardMoney
+	// Player::RewardQuest (Player.cpp:15406-15411): the money arm runs the
+	// signed RewOrReqMoney through ModifyMoney — required money subtracts
+	// (clamped at zero on overdraw), positive rewards stop at
+	// MAX_MONEY_AMOUNT, and at max level the quest pays the better of the
+	// normal reward and the max-level bonus (Quest::GetRewOrReqMoney,
+	// QuestDef.cpp:287-298).
+	moneyRew := s.questRewOrReqMoney(view.Detail)
+	newMoney, _ := applyMoneyDelta(s.player.Money, moneyRew)
+	s.setPlayerMoney(ctx, newMoney)
 	rewardXP := s.calculateQuestRewardXP(ctx, view.Detail.ID, view.Detail.RewardXPDifficulty)
 	// Player::RewardQuest (Player.cpp:15403-15404):
 	// SPELL_AURA_MOD_XP_QUEST_PCT (291) scales the quest XP after the rate.
@@ -218,13 +233,10 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 	if arena := view.Detail.RewardArenaPoints; arena != 0 {
 		s.modifyQuestArenaPoints(ctx, arena)
 	}
-	for i := 0; i < questRewardFactions; i++ {
-		facID := view.Detail.RewardFactionID[i]
-		facVal := view.Detail.RewardFactionValue[i]
-		if facID > 0 && facVal != 0 {
-			s.giveReputation(ctx, facID, facVal)
-		}
-	}
+	// Player::RewardQuest (Player.cpp:15500): reputation rewards run the
+	// full Player::RewardReputation pipeline — the template values are
+	// QuestFactionReward.dbc field indices, not flat reputation.
+	s.rewardQuestReputation(ctx, view, questID)
 	// Player::RewardQuest (Player.cpp:15479-15497): the quest's reward spell
 	// is cast after the quest is marked complete (some spells gate on the
 	// completed state via spell_area data). RewSpellCast wins over RewSpell.
@@ -260,7 +272,7 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 		qLevel = int64(s.player.Level)
 	}
 	packetHonor := 10 * s.calculateQuestHonorGain(ctx, questID, uint32(qLevel))
-	if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, packetXP, view.Detail.RewardMoney, packetHonor, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, packetXP, uint32(moneyRew), packetHonor, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
 		return false
 	}
 	_ = s.sendInventoryItems(ctx)
@@ -423,7 +435,7 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 	if err != nil {
 		return rollback(err)
 	}
-	destroyedGUIDs, err := consumeQuestItems(ctx, tx, inventory, view.RequiredItems)
+	destroyedGUIDs, err := s.destroyQuestTurnInItems(ctx, tx, inventory, view, view.Detail.ID)
 	if err != nil {
 		return rollback(err)
 	}
@@ -431,8 +443,14 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 	if err != nil {
 		return rollback(err)
 	}
-	if view.Detail.RewardMoney != 0 {
-		if _, err := tx.ExecContext(ctx, "UPDATE characters SET money = money + ? WHERE guid = ? AND account = ?", view.Detail.RewardMoney, s.playerGUID, s.accountID); err != nil {
+	// The money arm commits atomically with the reward; the absolute write
+	// mirrors SetMoney so required-money subtraction behaves identically on
+	// signed and unsigned money columns (the old relative write wrapped the
+	// negative amount through uint32, inflating SQLite money).
+	moneyRew := s.questRewOrReqMoney(view.Detail)
+	if moneyRew != 0 {
+		newMoney, _ := applyMoneyDelta(s.player.Money, moneyRew)
+		if _, err := tx.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ? AND account = ?", newMoney, s.playerGUID, s.accountID); err != nil {
 			return rollback(err)
 		}
 	}
@@ -482,8 +500,8 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 	s.applyQuestRewardPersistenceState(questID, questState)
 	s.updateAchievementCriteria(criteriaTypeCompleteQuest, questID, 1)
 	s.updateAchievementCriteria(criteriaTypeQuestCount, 0, 1)
-	if view.Detail.RewardMoney > 0 {
-		s.updateAchievementCriteria(criteriaTypeMoneyFromQuest, 0, uint32(view.Detail.RewardMoney))
+	if moneyRew > 0 {
+		s.updateAchievementCriteria(criteriaTypeMoneyFromQuest, 0, uint32(moneyRew))
 	}
 	if questState.SortID > 0 {
 		s.updateAchievementCriteria(criteriaTypeCompleteQuestsInZone, uint32(questState.SortID), 1)
@@ -657,52 +675,6 @@ func loadInventoryRewardRecords(ctx context.Context, tx *sql.Tx, guid uint64) ([
 		result = append(result, inventoryRewardRecord{Bag: bag, Slot: uint8(slot), ItemGUID: uint32(itemGUID), Entry: uint32(entry), Count: uint32(count)})
 	}
 	return result, rows.Err()
-}
-
-func consumeQuestItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, required []questRewardItem) ([]uint64, error) {
-	needed := make(map[uint32]uint64)
-	for _, item := range required {
-		if item.ID != 0 && item.Quantity != 0 {
-			needed[item.ID] += uint64(item.Quantity)
-		}
-	}
-	ids := make([]uint32, 0, len(needed))
-	for id := range needed {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	var destroyed []uint64
-	for _, entry := range ids {
-		remaining := needed[entry]
-		for index := range inventory {
-			record := &inventory[index]
-			if record.Entry != entry || record.Count == 0 || remaining == 0 {
-				continue
-			}
-			remove := uint64(record.Count)
-			if remove > remaining {
-				remove = remaining
-			}
-			record.Count -= uint32(remove)
-			remaining -= remove
-			if record.Count == 0 {
-				fullGUID := uint64(record.ItemGUID) | (uint64(0x4000) << 48)
-				destroyed = append(destroyed, fullGUID)
-				if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", record.ItemGUID); err != nil {
-					return nil, err
-				}
-				if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", record.ItemGUID); err != nil {
-					return nil, err
-				}
-			} else if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", record.Count, record.ItemGUID); err != nil {
-				return nil, err
-			}
-		}
-		if remaining != 0 {
-			return nil, fmt.Errorf("required quest item %d is unavailable", entry)
-		}
-	}
-	return destroyed, nil
 }
 
 type rewardSlotLocation struct {
@@ -1047,4 +1019,230 @@ var questXPDBC = map[uint32][9]uint32{
 	78: {0, 2150, 5400, 10800, 16200, 21600, 27000, 32400, 43200},
 	79: {0, 2200, 5450, 10900, 16350, 21800, 27250, 32700, 43600},
 	80: {0, 2200, 5500, 11050, 16550, 22050, 27550, 33100, 44100},
+}
+
+// questRewOrReqMoney mirrors Quest::GetRewOrReqMoney (QuestDef.cpp:287-298).
+// The template RewardMoney rides the view as uint32, wrapping the signed DB
+// value; int32() recovers it. Negative money is required money (returned
+// as-is); positive rewards scale by RATE_MONEY_QUEST, and at max level the
+// quest pays the better of the normal reward and the max-level bonus
+// (GetRewMoneyMaxLevel), which is zero under QUEST_FLAGS_NO_MONEY_FROM_XP.
+// Go exposes no money-rate config; the C++ defaults are 1.0, so the rate
+// arms are identity here.
+func (s *session) questRewOrReqMoney(detail questDetailData) int32 {
+	raw := int32(detail.RewardMoney)
+	if raw < 0 {
+		return raw
+	}
+	if s.player == nil || s.server == nil || uint32(s.player.Level) < s.server.Config.MaxPlayerLevel {
+		return raw
+	}
+	bonus := int32(0)
+	if detail.Flags&questFlagsNoMoneyFromXP == 0 {
+		bonus = int32(detail.RewardBonusMoney)
+	}
+	if bonus > raw {
+		return bonus
+	}
+	return raw
+}
+
+// applyMoneyDelta mirrors Player::ModifyMoney (Player.cpp:22821-22845) as a
+// pure function: a zero amount is a no-op, negative amounts clamp at zero on
+// overdraw (no wrap), and positive amounts past MAX_MONEY_AMOUNT are
+// rejected (ok=false, value unchanged — the quest path ignores the failure
+// exactly like RewardQuest ignores ModifyMoney's return).
+func applyMoneyDelta(current uint32, amount int32) (uint32, bool) {
+	if amount == 0 {
+		return current, true
+	}
+	if amount < 0 {
+		if need := uint32(-int64(amount)); current > need {
+			return current - need, true
+		}
+		return 0, true
+	}
+	if current < maxMoneyAmount-uint32(amount) {
+		return current + uint32(amount), true
+	}
+	return current, false
+}
+
+// setPlayerMoney persists an absolute money value, mirroring the
+// SetMoney/MoneyChanged leg of Player::ModifyMoney (Player.cpp:22847).
+func (s *session) setPlayerMoney(ctx context.Context, value uint32) {
+	if s.player == nil {
+		return
+	}
+	s.player.Money = value
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", value, s.playerGUID)
+	}
+	s.sendPlayerUpdate()
+}
+
+// destroyQuestTurnInItems mirrors the item-destruction arms at the head of
+// Player::RewardQuest (Player.cpp:15338-15359): required objective items and
+// source (ItemDrop) items leave the player's bags. A quest-bound item
+// (bonding BIND_QUEST_ITEM) on a non-repeatable quest is wiped entirely when
+// no other quest still needs it — checked with the turn-in variant of
+// HasQuestForItem for required items (:15341) and the plain variant for
+// source items (:15352); otherwise only the required count is destroyed.
+// Items without an item_template row are skipped, like the C++ null-template
+// arm.
+func (s *session) destroyQuestTurnInItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, view questRewardView, questID uint32) ([]uint64, error) {
+	type destroySpec struct {
+		entry      uint32
+		count      uint32
+		destroyAll bool
+		strict     bool
+	}
+	specs := make([]destroySpec, 0, len(view.RequiredItems)+len(view.SourceItems))
+	repeatable := s.questIsRepeatable(ctx, questID)
+	plan := func(items []questRewardItem, turnIn bool, strict bool) {
+		for _, item := range items {
+			if item.ID == 0 {
+				continue
+			}
+			spec := destroySpec{entry: item.ID, count: item.Quantity, strict: strict}
+			var bonding int64 = -1
+			if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT bonding FROM item_template WHERE entry = ?", item.ID).Scan(&bonding)
+			}
+			if bonding < 0 {
+				continue
+			}
+			if item.Quantity > 0 && bonding == questBindQuestItem && !repeatable && !s.hasQuestForItemEx(ctx, item.ID, questID, turnIn) {
+				spec.destroyAll = true
+			}
+			specs = append(specs, spec)
+		}
+	}
+	plan(view.RequiredItems, true, true)
+	plan(view.SourceItems, false, false)
+	var destroyed []uint64
+	for _, spec := range specs {
+		remaining := uint64(spec.count)
+		if spec.destroyAll {
+			remaining = ^uint64(0)
+		}
+		for index := range inventory {
+			record := &inventory[index]
+			if record.Entry != spec.entry || record.Count == 0 || remaining == 0 {
+				continue
+			}
+			remove := uint64(record.Count)
+			if remove > remaining {
+				remove = remaining
+			}
+			record.Count -= uint32(remove)
+			remaining -= remove
+			if record.Count == 0 {
+				fullGUID := uint64(record.ItemGUID) | (uint64(0x4000) << 48)
+				destroyed = append(destroyed, fullGUID)
+				if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", record.ItemGUID); err != nil {
+					return nil, err
+				}
+				if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", record.ItemGUID); err != nil {
+					return nil, err
+				}
+			} else if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", record.Count, record.ItemGUID); err != nil {
+				return nil, err
+			}
+		}
+		if spec.strict && !spec.destroyAll && remaining != 0 {
+			return nil, fmt.Errorf("required quest item %d is unavailable", spec.entry)
+		}
+	}
+	return destroyed, nil
+}
+
+// rewardQuestReputation mirrors Player::RewardReputation(Quest const*)
+// (Player.cpp:6784-6825): the quest_template RewardFactionValue columns are
+// QuestFactionReward.dbc field indices, not flat reputation — row 1 for
+// positive values, row 2 for negative (QuestDef.cpp:456) — while
+// RewardFactionOverride carries a flat value /100 that skips the aura bonus.
+// Gains scale by quest source (daily/weekly/monthly/repeatable/quest) and
+// the three faction team hacks gate cross-team rewards
+// (ReputationMgr::IsReputationAllowedForTeam, ReputationMgr.cpp:69-82).
+func (s *session) rewardQuestReputation(ctx context.Context, view questRewardView, questID uint32) {
+	if s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	team := playerTeam(s.player.Race)
+	for i := 0; i < questRewardFactions; i++ {
+		facID := view.Detail.RewardFactionID[i]
+		if facID == 0 || !isReputationAllowedForQuestTeam(team, facID) {
+			continue
+		}
+		rep := int32(0)
+		noQuestBonus := false
+		if override := view.Detail.RewardFactionOverride[i]; override != 0 {
+			rep = override / 100
+			noQuestBonus = true
+		} else {
+			value := view.Detail.RewardFactionValue[i]
+			row := uint32(1)
+			field := uint32(value)
+			if value < 0 {
+				row = 2
+				field = uint32(-int64(value))
+			}
+			dbcRep, found, err := s.server.Data.QuestFactionReward(row, field)
+			if err != nil || !found {
+				continue
+			}
+			rep = dbcRep
+		}
+		if rep == 0 {
+			continue
+		}
+		rep = s.calculateQuestReputationGain(facID, rep, noQuestBonus)
+		if rep == 0 || !s.spellFactionEntryExists(facID) {
+			continue
+		}
+		s.addReputationAmount(ctx, facID, rep)
+	}
+}
+
+// isReputationAllowedForQuestTeam mirrors the team hack in
+// ReputationMgr::IsReputationAllowedForTeam (ReputationMgr.cpp:69-82).
+func isReputationAllowedForQuestTeam(team uint32, factionID uint32) bool {
+	if team == teamHorde && (factionID == 1037 || factionID == 946) {
+		return false
+	}
+	if team == teamAlliance && factionID == 947 {
+		return false
+	}
+	return true
+}
+
+// calculateQuestReputationGain mirrors Player::CalculateReputationGain
+// (Player.cpp:6651-6726) for quest sources: the 156 aura modifier folds into
+// percent (skipped under noQuestBonus), gains use 100+mod and losses
+// 100-mod, and a zero or negative percent grants nothing. The low-level
+// quest rate has no Go config (C++ default 1.0, so the gray-level arm is a
+// no-op here); RepRewardRate and the recruit-a-friend bonus have no Go
+// model. Go's reputationGainPctMod also folds the faction-specific 190
+// modifier, which C++ gates to kills — the quest path keeps Go's existing
+// shared-sink behavior there (noted in reputation.go).
+func (s *session) calculateQuestReputationGain(factionID uint32, rep int32, noQuestBonus bool) int32 {
+	// All quest sources (daily/weekly/monthly/repeatable/plain) share
+	// RATE_REPUTATION_LOWLEVEL_QUEST in the C++; with no Go config for it
+	// the C++ default 1.0 applies, so the source switch and the gray-level
+	// reduction arm are no-ops here.
+	percent := float32(100)
+	if !noQuestBonus {
+		if mod := s.reputationGainPctMod(factionID); mod != 0 {
+			if rep > 0 {
+				percent += float32(mod)
+			} else {
+				percent -= float32(mod)
+			}
+		}
+	}
+	if percent <= 0 {
+		return 0
+	}
+	return int32(float32(rep) * percent / 100)
 }
