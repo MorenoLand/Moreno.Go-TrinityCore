@@ -33,9 +33,13 @@
 --
 -- DOCUMENTED-BLOCKED (no registration beyond entry 36627):
 -- boss_rotface UpdateAI — Talk(EMOTE_SLIME_SPRAY 2) rides the
--- EVENT_SLIME_SPRAY scheduler leg (no-timer-bridge; the
--- boss_toravon precedent); the Slime Spray / Mutated Infection /
--- Vile Gas DoCast legs have no-cast bridge.
+-- EVENT_SLIME_SPRAY scheduler leg (random-target + DoSummon — no
+-- bridge); PORTED (2026-10-13): EVENT_MUTATED_INFECTION —
+-- DoCastAOE(SPELL_MUTATED_INFECTION 69674) non-triggered as
+-- self-cast, 14s init on the lua-local hasten machine
+-- (EVENT_HASTEN_INFECTIONS 90s ticks, -2s per tick, min 6s —
+-- vexallus local-machine precedent); the Vile Gas DoCast leg is
+-- heroic-gated (no IsHeroic bridge).
 -- boss_rotface SpellHitTarget — Talk(SAY_SLIME_SPRAY 3) rides the
 -- SPELL_SLIME_SPRAY case of the SpellHitTarget switch —
 -- no-SpellHit-bridge queue (the SpellHit-15-never-fires queue
@@ -96,10 +100,82 @@ local SAY_AGGRO = 1
 local SAY_KILL = 6
 local SAY_DEATH = 8
 
+local SPELL_GREEN_ABOMINATION = 70001
+local SPELL_MUTATED_INFECTION = 69674
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local infection = {}
+
+-- C++ EVENT_MUTATED_INFECTION: DoCastAOE(SPELL_MUTATED_INFECTION)
+-- non-triggered -> self-cast (selin_fireheart/mr_smite DoCastAOE
+-- convention); 14s init, re-arm on the infectionCooldown machine
+-- (:115-116/:216-218).
+local function onMutatedInfection(creature, guid)
+    creature:CastSpell(creature, SPELL_MUTATED_INFECTION)
+    local st = infection[guid]
+    schedule(guid, "mutated_infection", st.cooldown, function() onMutatedInfection(creature, guid) end)
+end
+
+-- C++ EVENT_HASTEN_INFECTIONS machine (:209-215): infectionStage++ < 4
+-- -> infectionCooldown -= 2s (14s -> 12s -> 10s -> 8s -> 6s), re-arm 90s;
+-- 5th tick is a no-op — lua-local state (vexallus local-machine precedent).
+local function onHastenInfections(creature, guid)
+    local st = infection[guid]
+    if st.stage < 4 then
+        st.stage = st.stage + 1
+        st.cooldown = st.cooldown - 2000
+        schedule(guid, "hasten", 90000, function() onHastenInfections(creature, guid) end)
+    end
+end
+
 -- C++ boss_rotface::JustEngagedWith:
--- Talk(SAY_AGGRO) — the auriaya engage-port precedent.
+-- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
+-- CheckRequiredBosses evade branch (:130-135) has no bridge.
 local function rotfaceJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    infection[guid] = nil
     creature:Talk(SAY_AGGRO)
+    -- C++ :139 — DoCastSelf(SPELL_GREEN_ABOMINATION_HITTIN__YA_PROC, true)
+    -- (triggered self-cast).
+    creature:CastSpell(creature, SPELL_GREEN_ABOMINATION, true)
+    infection[guid] = { stage = 0, cooldown = 14000 }
+    schedule(guid, "mutated_infection", 14000, function() onMutatedInfection(creature, guid) end)
+    schedule(guid, "hasten", 90000, function() onHastenInfections(creature, guid) end)
+end
+
+-- C++ Reset/JustDied _Reset()/_JustDied() timer machinery —
+-- cancel/re-arm on combat events (the maiden convention).
+local function rotfaceLeaveCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    infection[guid] = nil
+end
+
+local function rotfaceReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    infection[guid] = nil
 end
 
 -- C++ boss_rotface::KilledUnit:
@@ -118,5 +194,7 @@ local function rotfaceJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_ROTFACE, 1, rotfaceJustEngagedWith)
+RegisterCreatureEvent(ENTRY_ROTFACE, 2, rotfaceLeaveCombat)
 RegisterCreatureEvent(ENTRY_ROTFACE, 3, rotfaceKilledUnit)
 RegisterCreatureEvent(ENTRY_ROTFACE, 4, rotfaceJustDied)
+RegisterCreatureEvent(ENTRY_ROTFACE, 23, rotfaceReset)

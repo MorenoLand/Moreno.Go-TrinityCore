@@ -50,9 +50,12 @@
 -- instance->SendEncounterUnit / RemoveAuras legs have no bridges);
 -- Talk(SAY_VALITHRIA_75_PERCENT 2) rides the HealReceived 75%-threshold leg
 -- with the _over75PercentTalkDone flag (no HealReceived bridge);
--- Talk(SAY_VALITHRIA_25_PERCENT 3) rides the DamageTaken
--- HealthBelowPctDamaged(25, damage) leg with the _under25PercentTalkDone
--- flag (no DamageTaken bridge);
+-- PORTED (2026-10-13): Talk(SAY_VALITHRIA_25_PERCENT 3) — the
+-- DamageTaken HealthBelowPctDamaged(25, damage) leg with the
+-- _under25PercentTalkDone latch (event 9; ironaya floored-integer
+-- convention — algalon/moroes precedent). The death-negation leg
+-- (damage = 0, _justDied flag) has no bridge — a lone damage=0 would
+-- strand the encounter (algalon precedent);
 -- Talk(SAY_VALITHRIA_DEATH 4) rides the DamageTaken death-negated leg
 -- (damage = 0, _justDied flag — she never actually dies; the trigger
 -- DoAction(ACTION_DEATH) cross-AI leg has no bridge);
@@ -93,8 +96,10 @@
 -- precedent).
 
 local ENTRY_LICH_KING_VALITHRIA = 16980
+local ENTRY_VALITHRIA_DREAMWALKER = 36789
 
 local SAY_LICH_KING_INTRO = 0
+local SAY_VALITHRIA_25_PERCENT = 3
 
 -- C++ npc_the_lich_king_controller::JustEngagedWith:
 -- Talk(SAY_LICH_KING_INTRO) — the auriaya engage-port precedent.
@@ -102,4 +107,34 @@ local function lichKingJustEngagedWith(event, creature, target)
     creature:Talk(SAY_LICH_KING_INTRO)
 end
 
+local valithriaState = {}
+
+-- C++ boss_valithria_dreamwalker::DamageTaken — HealthBelowPctDamaged(
+-- 25, damage) = (health - damage) < floor(max*25/100) (Unit.h:873;
+-- ironaya floored-integer convention) + the _under25PercentTalkDone
+-- latch — Talk(SAY_VALITHRIA_25_PERCENT) (:348-356). The
+-- death-negation leg (damage = 0 + cross-AI ACTION_DEATH) has no
+-- bridge — a lone damage=0 would strand the encounter (algalon
+-- precedent), so only the Talk latch is modeled.
+local function valithriaDamageTaken(_, creature, _, damage)
+    local guid = creature:GetGUID()
+    if valithriaState[guid] then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 25 / 100) then
+        valithriaState[guid] = true
+        creature:Talk(SAY_VALITHRIA_25_PERCENT)
+    end
+end
+
+local function valithriaReset(event, creature)
+    valithriaState[creature:GetGUID()] = nil
+end
+
 RegisterCreatureEvent(ENTRY_LICH_KING_VALITHRIA, 1, lichKingJustEngagedWith)
+RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 9, valithriaDamageTaken)
+RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 23, valithriaReset)

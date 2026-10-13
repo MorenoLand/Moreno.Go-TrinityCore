@@ -51,16 +51,17 @@
 -- sjonnir JustDied-Talk precedent; the DoCastAOE
 -- FROST_INFUSION_CREDIT heroic leg has no-cast bridge).
 -- DOCUMENTED-ONLY (in this header; only entry 36853 registered):
--- boss_sindragosa UpdateAI scheduler Talk legs — Talk(EMOTE_BERSERK_RAID
--- 11) / Talk(SAY_BERSERK 9) (EVENT_BERSERK); Talk(SAY_UNCHAINED_MAGIC
--- 1) (EVENT_UNCHAINED_MAGIC); Talk(EMOTE_WARN_BLISTERING_COLD 2)
--- (EVENT_BLISTERING_COLD); Talk(SAY_BLISTERING_COLD 3)
--- (EVENT_BLISTERING_COLD_YELL); Talk(SAY_AIR_PHASE 5) (EVENT_AIR_PHASE);
--- Talk(SAY_PHASE_2 6) (EVENT_THIRD_PHASE_CHECK, third-phase check leg)
--- — all timer-driven (no-timer-bridge; the boss_toravon precedent);
--- the air-phase movement / gravity / react-state machine and the
--- DoCast cleave / tail-smash / frost-breath / icy-grip / ice-tomb /
--- frost-bomb legs have no bridges.
+-- PORTED (2026-10-13): JustEngagedWith — DoCastSelf(
+-- SPELL_FROST_AURA 70084) + DoCastSelf(SPELL_PERMAEATING_CHILL 70109)
+-- non-triggered (:277-278, maiden engage-cast convention);
+-- EVENT_BERSERK — single-fire 10min — Talk(EMOTE_BERSERK_RAID 11) +
+-- Talk(SAY_BERSERK 9) + DoCastSelf(SPELL_BERSERK 26662) non-triggered
+-- (:242/:458-460), bare timer across all phases.
+-- boss_sindragosa UpdateAI — the land/air phase machine gates cleave /
+-- tail-smash / frost-breath / icy-grip / unchained-magic / ice-tomb /
+-- frost-bomb legs (phase-machine rule — porting bare timers would
+-- fabricate air-phase casts); Talk(SAY_PHASE_2 6) rides
+-- EVENT_THIRD_PHASE_CHECK, air-phase-gated — all unbridged.
 -- SAY_RESPITE_FOR_A_TORMENTED_SOUL 4 is declared in the text enum
 -- but never referenced by a Talk() call — dead text evidence.
 -- boss_sindragosa DoAction — ACTION_START_FROSTWYRM intro machine
@@ -101,11 +102,65 @@ local ENTRY_SINDRAGOSA = 36853
 local SAY_AGGRO = 0
 local SAY_KILL = 8
 local SAY_DEATH = 10
+local SAY_BERSERK = 9
+local EMOTE_BERSERK_RAID = 11
+
+local SPELL_FROST_AURA = 70084
+local SPELL_PERMAEATING_CHILL = 70109
+local SPELL_BERSERK = 26662
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_BERSERK: 10min single-fire — Talk(EMOTE_BERSERK_RAID) +
+-- Talk(SAY_BERSERK) + DoCastSelf(SPELL_BERSERK) non-triggered
+-- (:242/:458-460), bare timer across all phases.
+local function onBerserk(creature, guid)
+    creature:Talk(EMOTE_BERSERK_RAID)
+    creature:Talk(SAY_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK)
+end
 
 -- C++ boss_sindragosa::JustEngagedWith:
--- Talk(SAY_AGGRO) — the auriaya engage-port precedent.
+-- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
+-- CheckRequiredBosses evade branch (:269-275) has no bridge.
 local function sindragosaJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ :277-278 — DoCastSelf(SPELL_FROST_AURA) +
+    -- DoCastSelf(SPELL_PERMAEATING_CHILL), non-triggered.
+    creature:CastSpell(creature, SPELL_FROST_AURA)
+    creature:CastSpell(creature, SPELL_PERMAEATING_CHILL)
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
+end
+
+-- C++ Reset() _Reset() timer machinery — cancel/re-arm on combat
+-- events (the maiden convention).
+local function sindragosaLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function sindragosaReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_sindragosa::KilledUnit:
@@ -124,5 +179,7 @@ local function sindragosaJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 1, sindragosaJustEngagedWith)
+RegisterCreatureEvent(ENTRY_SINDRAGOSA, 2, sindragosaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 3, sindragosaKilledUnit)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 4, sindragosaJustDied)
+RegisterCreatureEvent(ENTRY_SINDRAGOSA, 23, sindragosaReset)

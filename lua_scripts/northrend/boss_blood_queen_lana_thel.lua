@@ -39,7 +39,8 @@
 -- (instance->CheckRequiredBosses / DoCastSpellOnPlayers(
 -- LIGHT_S_HAMMER_TELEPORT) / DoZoneInCombat / instance->
 -- SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, IN_PROGRESS)) have no
--- instance bridge; the DoCast aura legs have no-cast bridge.
+-- instance bridge; PORTED (2026-10-13): the three triggered
+-- self-cast auras (:188-190) — curator engage-cast precedent.
 -- boss_blood_queen_lana_thel JustDied — DoCastAOE(
 -- SPELL_BLOOD_INFUSION_CREDIT) leg has no-cast bridge;
 -- instance->SetData(DATA_BLOOD_QUICKENING_STATE, DONE) /
@@ -92,10 +93,23 @@ local SAY_AGGRO = 0
 local SAY_KILL = 8
 local SAY_DEATH = 11
 
+local SPELL_SHROUD_OF_SORROW = 70986
+local SPELL_FRENZIED_BLOODTHIRST_VISUAL = 71949
+local SPELL_CLEAR_ALL_STATUS_AILMENTS = 70939
+
 -- C++ boss_blood_queen_lana_thel::JustEngagedWith:
--- Talk(SAY_AGGRO) — the auriaya engage-port precedent.
+-- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
+-- CheckRequiredBosses evade branch (:174-180) has no bridge (same
+-- accepted deviation as the Talk).
 local function lanaThelJustEngagedWith(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    -- C++ :188-190 — triggered self-cast auras (curator engage-cast
+    -- precedent): DoCast(me, SPELL_SHROUD_OF_SORROW, true) +
+    -- DoCast(me, SPELL_FRENZIED_BLOODTHIRST_VISUAL, true) +
+    -- DoCastSelf(SPELL_CLEAR_ALL_STATUS_AILMENTS, true).
+    creature:CastSpell(creature, SPELL_SHROUD_OF_SORROW, true)
+    creature:CastSpell(creature, SPELL_FRENZIED_BLOODTHIRST_VISUAL, true)
+    creature:CastSpell(creature, SPELL_CLEAR_ALL_STATUS_AILMENTS, true)
 end
 
 -- C++ boss_blood_queen_lana_thel::KilledUnit:

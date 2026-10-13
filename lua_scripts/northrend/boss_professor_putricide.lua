@@ -93,11 +93,61 @@ local ENTRY_PROFESSOR_PUTRICIDE = 36678
 local SAY_AGGRO = 4
 local SAY_KILL = 11
 local SAY_DEATH = 13
+local SAY_BERSERK = 12
+
+local SPELL_OOZE_TANK_PROTECTION = 71770
+local SPELL_MUTATED_PLAGUE_CLEAR = 72618
+local SPELL_BERSERK2 = 47008
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_BERSERK: 10min single-fire, all phases — Talk(SAY_BERSERK) +
+-- DoCast(me, SPELL_BERSERK2) non-triggered (:266/:598-600).
+local function onBerserk(creature, guid)
+    creature:Talk(SAY_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK2)
+end
 
 -- C++ boss_professor_putricide::JustEngagedWith:
--- Talk(SAY_AGGRO) — the auriaya engage-port precedent.
+-- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
+-- CheckRequiredBosses evade branch has no bridge.
 local function putricideJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    -- C++ :274 — DoCast(me, SPELL_OOZE_TANK_PROTECTION, true)
+    -- (triggered self-cast).
+    creature:CastSpell(creature, SPELL_OOZE_TANK_PROTECTION, true)
+    schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
+end
+
+-- C++ Reset/_Reset() timer machinery — cancel/re-arm on combat
+-- events (the maiden convention).
+local function putricideLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function putricideReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_professor_putricide::KilledUnit:
@@ -113,8 +163,14 @@ end
 -- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
 local function putricideJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ :302 — DoCast(SPELL_MUTATED_PLAGUE_CLEAR), single-arg DoCast
+    -- resolves via AISpellInfo, which defaults to AITARGET_SELF
+    -- (CreatureAIImpl.h AISpellInfoType ctor), so self-cast.
+    creature:CastSpell(creature, SPELL_MUTATED_PLAGUE_CLEAR)
 end
 
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 1, putricideJustEngagedWith)
+RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 2, putricideLeaveCombat)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 3, putricideKilledUnit)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 4, putricideJustDied)
+RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 23, putricideReset)

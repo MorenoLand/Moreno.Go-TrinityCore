@@ -119,7 +119,10 @@
 -- EMOTE_DEFILE_WARNING 12 (1, scheduler) + SAY_LK_HARVEST_SOUL 7 (2,
 -- scheduler) + SAY_LK_QUAKE 5 (2, scheduler) + SAY_LK_SUMMON_VALKYR 6
 -- (1, scheduler) + SAY_LK_OUTRO_1..8 14..21 (8, scheduler) +
--- SAY_LK_BERSERK 11 (1, scheduler) + SAY_TIRION_INTRO_1 0 (1, tirion
+-- PORTED (2026-10-13): EVENT_BERSERK — 15min single-fire —
+-- Talk(SAY_LK_BERSERK 11) + DoCastSelf(SPELL_BERSERK2 47008)
+-- non-triggered (:583/:1141-1143), bare timer across all phases.
+-- SAY_TIRION_INTRO_1 0 (1, tirion
 -- DoAction) + SAY_TIRION_INTRO_2 1 (1, tirion scheduler) +
 -- SAY_TIRION_OUTRO_1 2 (1, tirion scheduler) + SAY_TERENAS_INTRO_1..3
 -- 0..2 (3, terenas scheduler) + SAY_TERENAS_OUTRO_1..2 0..1 (2,
@@ -128,6 +131,57 @@
 local ENTRY_THE_LICH_KING = 36597
 
 local SAY_LK_KILL = 10
+local SAY_LK_BERSERK = 11
+
+local SPELL_BERSERK2 = 47008
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_BERSERK: 15min single-fire — Talk(SAY_LK_BERSERK) +
+-- DoCastSelf(SPELL_BERSERK2) non-triggered (:583/:1141-1143), bare
+-- timer across all phases (EVENT_GROUP_BERSERK carries no phase).
+local function onBerserk(creature, guid)
+    creature:Talk(SAY_LK_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK2)
+end
+
+-- C++ boss_the_lich_king::JustEngagedWith schedules EVENT_BERSERK
+-- (:583); the phase-one machine arms are unbridged. No C++ Talk on
+-- engage. Event 1 registered for the berserk timer only.
+local function lichKingJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "berserk", 900000, function() onBerserk(creature, guid) end)
+end
+
+-- C++ _Reset() timer machinery — cancel/re-arm on combat events
+-- (the maiden convention).
+local function lichKingLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function lichKingReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
 
 -- C++ boss_the_lich_king::KilledUnit:
 -- if (victim->GetTypeId() == TYPEID_PLAYER &&
@@ -140,4 +194,7 @@ local function lichKingKilledUnit(event, creature, victim)
     end
 end
 
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 1, lichKingJustEngagedWith)
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 2, lichKingLeaveCombat)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 3, lichKingKilledUnit)
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)

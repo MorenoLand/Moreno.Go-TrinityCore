@@ -30,8 +30,11 @@
 -- Talk(EMOTE_WARN_PUNGENT_BLIGHT 5) ride the EVENT_INHALE_BLIGHT
 -- scheduler leg, Talk(EMOTE_GAS_SPORE 2) /
 -- Talk(EMOTE_WARN_GAS_SPORE 3) ride the EVENT_GAS_SPORE leg,
--- Talk(SAY_BERSERK 8) rides the EVENT_BERSERK leg — timer-driven
--- (no-timer-bridge; the boss_toravon precedent); the inhale
+-- PORTED (2026-10-13): EVENT_GASTRIC_BLOAT — DoCastVictim(
+-- SPELL_GASTRIC_BLOAT 72219) non-triggered, {12500,15000} init /
+-- {15000,17500} re-arm (maiden CreateLuaEvent convention);
+-- EVENT_BERSERK — single-fire 5min — Talk(SAY_BERSERK 8) +
+-- DoCastSelf(SPELL_BERSERK2 47008) non-triggered. The inhale
 -- counter / gaseous-blight aura-manipulation legs have no bridge.
 -- npc_stinky_icc::JustDied — festergut->AI()->Talk(SAY_STINKY_DEAD
 -- 0) is cross-AI Talk with no bridge, and npc_stinky_icc itself has
@@ -68,11 +71,66 @@ local ENTRY_FESTERGUT = 36626
 local SAY_AGGRO = 1
 local SAY_KILL = 7
 local SAY_DEATH = 9
+local SAY_BERSERK = 8
+
+local SPELL_GASTRIC_BLOAT = 72219
+local SPELL_BERSERK2 = 47008
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_GASTRIC_BLOAT: DoCastVictim(SPELL_GASTRIC_BLOAT)
+-- non-triggered — init {12500,15000}, re-arm {15000,17500}
+-- (boss_festergut.cpp:94/:243-244); maiden CreateLuaEvent timer
+-- convention; victim-cast via CastSpell(nil, ...).
+local function onGastricBloat(creature, guid)
+    creature:CastSpell(nil, SPELL_GASTRIC_BLOAT)
+    schedule(guid, "gastric_bloat", {15000, 17500}, function() onGastricBloat(creature, guid) end)
+end
+
+-- C++ EVENT_BERSERK: single-fire 5min — Talk(SAY_BERSERK) +
+-- DoCastSelf(SPELL_BERSERK2) non-triggered (:93/:247-248).
+local function onBerserk(creature, guid)
+    creature:Talk(SAY_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK2)
+end
 
 -- C++ boss_festergut::JustEngagedWith:
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent.
 local function festergutJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "gastric_bloat", {12500, 15000}, function() onGastricBloat(creature, guid) end)
+    schedule(guid, "berserk", 300000, function() onBerserk(creature, guid) end)
+end
+
+-- C++ Reset/JustDied _Reset()/_JustDied() timer machinery —
+-- cancel/re-arm on combat events (the maiden convention).
+local function festergutLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function festergutReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_festergut::KilledUnit:
@@ -91,5 +149,7 @@ local function festergutJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_FESTERGUT, 1, festergutJustEngagedWith)
+RegisterCreatureEvent(ENTRY_FESTERGUT, 2, festergutLeaveCombat)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 3, festergutKilledUnit)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 4, festergutJustDied)
+RegisterCreatureEvent(ENTRY_FESTERGUT, 23, festergutReset)
