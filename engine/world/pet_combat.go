@@ -1662,6 +1662,116 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	return true
 }
 
+// guardianBonusSpellDamage mirrors Guardian::GetBonusDamage as maintained by
+// Guardian::UpdateAttackPowerAndDamage (StatSystem.cpp:1425-1457): the flat
+// spell bonus a guardian pet folds into the advertised benefit in
+// Unit::SpellDamageBonusDone (Unit.cpp:6681-6683) and
+// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561). The session is the
+// guardian's owner player; C++ keeps only the finished int32, so the helper
+// returns the truncated value exactly as SetBonusDamage stores it.
+// Residual gaps: the hunter-pet Wild Hunt talent mod (StatSystem.cpp:1406-1418)
+// has no Go pet spellbook model, so the mod stays 1.0; the spirit-wolf Glyph
+// of Feral Spirit leg (63271, StatSystem.cpp:1434-1435) has no Go model, so
+// the multiplier stays 0.31.
+func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
+	if s == nil || s.player == nil || motion == nil {
+		return 0
+	}
+	switch {
+	case motion.PetType == petTypeHunter:
+		// IsHunterPet (StatSystem.cpp:1425): owner ranged AP * 0.1287 * mod.
+		return int32(s.totalAttackPowerValue(true) * 0.1287)
+	case motion.Entry == 26125 || motion.Entry == 30230:
+		// IsPetGhoul / IsRisenAlly (TemporarySummon.h:81-82,
+		// StatSystem.cpp:1428-1430): owner base AP * 0.1287.
+		return int32(s.totalAttackPowerValue(false) * 0.1287)
+	case motion.Entry == 29264:
+		// IsSpiritWolf (TemporarySummon.h:85, StatSystem.cpp:1432-1439):
+		// owner base AP * 0.31 (0.61 with the glyph).
+		return int32(s.totalAttackPowerValue(false) * 0.31)
+	case motion.PetType == petTypeSummon && s.player.Class == 9:
+		// IsPet warlock demon (StatSystem.cpp:1442-1449): max(owner fire,
+		// owner shadow damage-done bonus) * 0.15, floored at 0. The C++
+		// reads PLAYER_FIELD_MOD_DAMAGE_DONE_POS - NEG (NEG accumulates
+		// negative amounts), so the Go twin is SpellDamagePositive minus
+		// SpellDamageNegative with the same sign.
+		fire := s.player.SpellDamagePositive[2] - s.player.SpellDamageNegative[2]
+		shadow := s.player.SpellDamagePositive[5] - s.player.SpellDamageNegative[5]
+		maximum := fire
+		if shadow > maximum {
+			maximum = shadow
+		}
+		if maximum < 0 {
+			maximum = 0
+		}
+		return int32(float32(maximum) * 0.15)
+	case motion.Entry == 510:
+		// ENTRY_WATER_ELEMENTAL (StatSystem.cpp:1185, 1452-1457): owner
+		// frost damage-done bonus * 0.4, floored at 0.
+		frost := s.player.SpellDamagePositive[4] - s.player.SpellDamageNegative[4]
+		if frost < 0 {
+			frost = 0
+		}
+		return int32(float32(frost) * 0.4)
+	}
+	return 0
+}
+
+// petGuardianDoneDamageBonus mirrors the guardian arm in
+// Unit::SpellDamageBonusDone (Unit.cpp:6679-6683, 6725-6731): a guardian
+// caster adds GetBonusDamage() to the advertised benefit, then
+// DoneTotal += int32(DoneAdvertisedBenefit * coeff * factorMod) runs per
+// damage effect. The ATTR3_NO_DONE_BONUS gate (Unit.cpp:6604-6605) and the
+// DmgClass-NONE early-out — which fires only when no spell_bonus_data row
+// exists (Unit.cpp:6705-6709) — are honored. The remaining DoneTotal/DoneTotalMod
+// legs (scripted class-script arms, versus, Impurity AP arms, pct mods) stay
+// unbridged on the pet path.
+func (s *session) petGuardianDoneDamageBonus(motion *creatureMotion, spell wotlk.Spell) int32 {
+	bonus := s.guardianBonusSpellDamage(motion)
+	if bonus == 0 {
+		return 0
+	}
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
+		return 0
+	}
+	if _, hasRow := s.spellBonusRow(spell.ID); !hasRow && spell.DefenseType == spellDamageClassNone {
+		return 0
+	}
+	var total int32
+	for i, effect := range spell.Effects {
+		switch effect.Effect {
+		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+			if effect.CalcValueForLevel(spell, uint32(motion.Level)) <= 0 {
+				continue
+			}
+			total += int32(float64(bonus) * s.spellDoneCoefficient(spell, i, false))
+		}
+	}
+	return total
+}
+
+// petGuardianDoneHealingBonus mirrors the guardian arm in
+// Unit::SpellHealingBonusDone (Unit.cpp:7556-7561, 7599-7605): a guardian
+// caster adds GetBonusDamage() to the heal advertised benefit, applied as
+// int32(benefit * coeff * factorMod). The potion-family gate
+// (Unit.cpp:7494-7496) and the DmgClass-NONE early-out (Unit.cpp:7583-7587)
+// are honored; the leech/health-funnel DoneTotal zeroing (Unit.cpp:7607-7619)
+// has no pet-cast leech spells to cover and stays unbridged, as do the
+// SpellHealingPctDone and scripted class-script legs.
+func (s *session) petGuardianDoneHealingBonus(motion *creatureMotion, spell wotlk.Spell, effIndex int) int32 {
+	bonus := s.guardianBonusSpellDamage(motion)
+	if bonus == 0 {
+		return 0
+	}
+	if spell.SpellFamilyName == spellFamilyPotion {
+		return 0
+	}
+	if _, hasRow := s.spellBonusRow(spell.ID); !hasRow && spell.DefenseType == spellDamageClassNone {
+		return 0
+	}
+	return int32(float64(bonus) * s.spellHealingDoneCoefficient(spell, effIndex, false))
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
@@ -2044,6 +2154,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	if hasDamage {
+		// Unit::SpellDamageBonusDone (Unit.cpp:6681-6683, 6725-6731): the
+		// guardian's GetBonusDamage() rides the advertised benefit into the
+		// per-effect DoneTotal.
+		if bonus := s.petGuardianDoneDamageBonus(motion, spell); bonus != 0 {
+			if adjusted := int32(damage) + bonus; adjusted > 0 {
+				damage = uint32(adjusted)
+			} else {
+				damage = 0
+			}
+		}
 		schoolMask := uint8(spell.SchoolMask)
 		if schoolMask == 0 {
 			schoolMask = 1
@@ -2079,6 +2199,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						continue
 					}
 					heal = uint32(uint64(healTarget.MaxHealth) * uint64(healValue) / 100)
+				}
+				// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561, 7599-7605):
+				// the guardian's GetBonusDamage() rides the heal advertised
+				// benefit into the per-effect DoneTotal.
+				if bonus := s.petGuardianDoneHealingBonus(motion, spell, i); bonus != 0 {
+					if adjusted := int32(heal) + bonus; adjusted > 0 {
+						heal = uint32(adjusted)
+					} else {
+						heal = 0
+					}
 				}
 				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, heal)
 			}
@@ -2515,7 +2645,11 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	// (caster-matched against the pet's GUID) — previously the raw amount
 	// healed. Direct heals are HEAL type, so the MOD_HOT_PCT leg is off
 	// (dotType=false). Pets carry no Go spellpower model, so the
-	// SpellHealingBonusDone leg is identity here.
+	// SpellHealingBonusDone's guardian advertised-benefit arm
+	// (Unit.cpp:7558-7561) is applied by the pet cast site in
+	// executePetSpellWithOptions; the remaining done legs (pet's own
+	// aura-13 base, victim MOD_HEALING auras, pct/scripted mods) stay
+	// unmodeled here.
 	targetSess := s.server.findSessionByGUID(target.GUID)
 	var absorbMask uint32
 	if s.server.Data != nil {
