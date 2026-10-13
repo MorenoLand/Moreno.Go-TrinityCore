@@ -217,6 +217,42 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 	if !sameMap && s.server != nil && !s.canStartMapTeleport(context.Background(), mapID) {
 		return false
 	}
+	// Player::TeleportTo far-teleport player cleanup (Player.cpp:1805-1822),
+	// in C++ order: ResetContestedPvP, battleground leave, arena cooldown
+	// strip — all before the temporary pet unsummon below.
+	if !sameMap {
+		// Player::ResetContestedPvP (Player.cpp:20761-20766): the
+		// contested-PvP flag and timer die on teleport. The
+		// ClearUnitState(UNIT_STATE_ATTACK_PLAYER) term has no Go model (no
+		// per-unit state field).
+		if s.player.PlayerFlags&playerFlagContestedPVP != 0 {
+			s.player.PlayerFlags &^= playerFlagContestedPVP
+			s.contestedPVPEnd = time.Time{}
+			s.sendPlayerUpdate()
+		}
+		// Player.cpp:1809-1817: a far teleport whose target map differs from
+		// the battleground's leaves the BG without teleporting to the entry
+		// point (LeaveBattleground(false)). activeBattlegroundMap is the
+		// GetBattleground()->GetMapId() analog — the port leg is no-bridge
+		// in Go, so the BG's map lives on the active queue slot. The
+		// skipEntryTeleport flag avoids the entry-point teleport bouncing
+		// the player back instead of landing at the far destination; the
+		// deserter-track arm still fires (Player.cpp:22499). The
+		// CONFIG_BATTLEGROUND_CAST_DESERTER spell cast (Player.cpp:22479) and
+		// the DELAYED_SPELL_CAST_DESERTER schedule have no Go twin.
+		if bgMap := s.activeBattlegroundMap(); s.bgData.InstanceID != 0 && bgMap != 0 && bgMap != mapID {
+			s.handleLeaveBattlefield(context.Background(), nil, false, true)
+		}
+		// Player.cpp:1819-1822: RemoveArenaSpellCooldowns(true) — teleporting
+		// off an arena map resets spell cooldowns (the < 10 min recovery
+		// filter, Player.cpp:3942-3955), except for game masters. The
+		// RemoveArenaAuras twin stays a standing no-bridge: its aura
+		// positivity / spell-attribute filter (Unit.cpp:4329-4343) has no Go
+		// model.
+		if IsArenaMap(s.player.Map) && !sessionIsGameMaster(s) {
+			s.removeArenaSpellCooldowns()
+		}
+	}
 	if !sameMap && s.player.PetGUID != 0 {
 		s.temporarilyUnsummonPet(context.Background())
 	} else if sameMap && s.server != nil && s.player.PetGUID != 0 {
@@ -332,6 +368,67 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 	}
 	s.lastFallTime = 0
 	return true
+}
+
+// removeArenaSpellCooldowns mirrors Player::RemoveArenaSpellCooldowns(true)
+// (Player.cpp:3942-3955): cooldowns on spells whose RecoveryTime and
+// CategoryRecoveryTime are both under 10 minutes are reset — each erase sends
+// SMSG_CLEAR_COOLDOWN (SpellHistory::ResetCooldowns pred arm, update=true).
+// The active pet's cooldowns are reset in full while the pet still exists, so
+// this runs before the temporary pet unsummon arm.
+func (s *session) removeArenaSpellCooldowns() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	const arenaCooldownKeepMs = int64(10 * 60 * 1000)
+	s.playerStateMu.Lock()
+	snapshot := make([]spellCooldown, len(s.player.Cooldowns))
+	copy(snapshot, s.player.Cooldowns)
+	s.playerStateMu.Unlock()
+	cleared := make(map[uint32]struct{})
+	for _, cd := range snapshot {
+		spell, found, err := s.server.Data.Spell(cd.Spell)
+		if err != nil || !found {
+			continue
+		}
+		rec := int64(spell.RecoveryTime)
+		if rec < 0 {
+			rec = 0
+		}
+		cat := int64(spell.CategoryRecoveryTime)
+		if cat < 0 {
+			cat = 0
+		}
+		// The C++ predicate resets when BOTH recoveries are under 10 min.
+		if rec < arenaCooldownKeepMs && cat < arenaCooldownKeepMs {
+			cleared[cd.Spell] = struct{}{}
+		}
+	}
+	if len(cleared) == 0 {
+		return
+	}
+	s.playerStateMu.Lock()
+	kept := s.player.Cooldowns[:0]
+	for _, cd := range s.player.Cooldowns {
+		if _, drop := cleared[cd.Spell]; !drop {
+			kept = append(kept, cd)
+		}
+	}
+	s.player.Cooldowns = kept
+	s.playerStateMu.Unlock()
+	for spellID := range cleared {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(s.playerGUID, spellID), true)
+	}
+	if s.server != nil && s.player.PetGUID != 0 {
+		s.server.motionMu.Lock()
+		if pet := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID); pet != nil {
+			pet.SpellCooldowns = make(map[uint32]time.Time)
+			pet.SpellCategoryCooldowns = make(map[uint32]time.Time)
+			pet.SpellCooldownCategories = make(map[uint32]uint32)
+			pet.SpellCooldownCategoryEnds = make(map[uint32]time.Time)
+		}
+		s.server.motionMu.Unlock()
+	}
 }
 
 func (s *session) executeCommand(ctx context.Context, line string) bool {

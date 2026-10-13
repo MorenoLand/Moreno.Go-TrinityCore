@@ -3408,7 +3408,7 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 				s.trackBGDeserter(ctx, bgDesertionTypeInviteLogout)
 			}
 		}
-		s.handleLeaveBattlefield(ctx, nil, true)
+		s.handleLeaveBattlefield(ctx, nil, true, false)
 	}
 	if s.trade != nil {
 		// Reference: Player::CleanupsBeforeDelete (Player.cpp:471) -> TradeCancel(false):

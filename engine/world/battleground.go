@@ -1370,7 +1370,26 @@ func (s *session) handleBfQueueExitRequest(ctx context.Context, payload []byte) 
 // fromLogout marks the completeLogoutWithPacket call: C++ LogoutPlayer never calls
 // Player::LeaveBattleground (offline removal is the separate untracked OFFLINE site,
 // Battleground.cpp:271), so the leave-BG tracking below must not fire on logout.
-func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fromLogout bool) bool {
+// activeBattlegroundMap is the Go analog of
+// Player::GetBattleground()->GetMapId(): the battleground the player is
+// currently in, per the active queue slot. The port leg itself is no-bridge
+// (no live Battleground instance; the player's own map never becomes the
+// BG's), so the BG's map lives on the slot — battlegroundMapForType at
+// accept, the restored map at login.
+func (s *session) activeBattlegroundMap() uint32 {
+	if s == nil {
+		return 0
+	}
+	for i := range s.bgQueues {
+		e := &s.bgQueues[i]
+		if e.Active && e.InstanceID != 0 && e.MapID != 0 {
+			return e.MapID
+		}
+	}
+	return 0
+}
+
+func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fromLogout bool, skipEntryTeleport bool) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
@@ -1462,7 +1481,13 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 		}
 	}
 	s.resetAchievementCriteriaByCondition(criteriaConditionBGMap, s.player.Map)
-	if wasInBattleground && s.bgData.JoinMap != 0 {
+	// The teleportToEntryPoint=false arm: Player::TeleportTo (Player.cpp:1814)
+	// calls LeaveBattleground(false) on a far teleport away from the BG, so
+	// the player lands at the far destination instead of being bounced to
+	// the BG entry point. Battleground::RemovePlayerAtLeave gates the
+	// TeleportToBGEntryPoint arm on its teleportToEntryPoint parameter
+	// (Battleground.cpp:925-927).
+	if wasInBattleground && !skipEntryTeleport && s.bgData.JoinMap != 0 {
 		// Battleground.cpp:925-927 with Transport=true:
 		// Player::TeleportToBGEntryPoint (Player.cpp:1896-1906); the JoinMap
 		// gate mirrors the arena-end twin (battleground_arena.go) - C++
