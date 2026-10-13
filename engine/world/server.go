@@ -1887,8 +1887,12 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleTaxiQueryAvailableNodes(ctx, payload) {
 				return
 			}
-		case uint32(protocol.OpcodeCMSG_ACTIVATETAXI), uint32(protocol.OpcodeCMSG_ACTIVATETAXIEXPRESS):
-			if !state.authed || !state.handleActivateTaxi(ctx, payload) {
+		case uint32(protocol.OpcodeCMSG_ACTIVATETAXI):
+			if !state.authed || !state.handleActivateTaxi(ctx, payload, false) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ACTIVATETAXIEXPRESS):
+			if !state.authed || !state.handleActivateTaxi(ctx, payload, true) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GET_MAIL_LIST):

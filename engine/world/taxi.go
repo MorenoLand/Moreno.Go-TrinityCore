@@ -373,8 +373,19 @@ const (
 	taxiErrShapeshifted   uint32 = 9 // ERR_TAXIPLAYERSHAPESHIFTED (SharedDefines.h:3657)
 )
 
-func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
+// handleActivateTaxi serves both CMSG_ACTIVATETAXI and
+// CMSG_ACTIVATETAXIEXPRESS; express selects the packet layout. C++ keeps
+// the two handlers separate (HandleActivateTaxiOpcode vs
+// HandleActivateTaxiExpressOpcode, TaxiHandler.cpp:166-172/256-285), so a
+// 16-byte EXPRESS packet (nodeCount=1) must NOT be misread as an
+// ACTIVATETAXI source/dest pair — C++ answers it silently via
+// ActivateTaxiPathTo's nodes.size() < 2 arm.
+func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, express bool) bool {
+	minLen := 16
+	if express {
+		minLen = 12
+	}
+	if !s.playerLoaded || s.player == nil || len(payload) < minLen {
 		return true
 	}
 	reader := protocol.NewReader(payload)
@@ -398,8 +409,8 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	}
 
 	var nodes []uint32
-	if len(payload) >= 20 {
-		// CMSG_ACTIVATETAXIEXPRESS: guid (8), nodeCount (4), nodes... (nodeCount * 4)
+	if express {
+		// CMSG_ACTIVATETAXIEXPRESS: guid (8), nodeCount (4), nodes... (nodeCount * 4).
 		nodeCount, err := reader.ReadU32()
 		if err != nil || len(payload) < int(12+nodeCount*4) {
 			return reply(taxiErrNoSuchPath)

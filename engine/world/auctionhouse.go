@@ -297,13 +297,16 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 		whereClauses = append(whereClauses, "UPPER(it.name) LIKE UPPER(?)")
 		args = append(args, "%"+searchedName+"%")
 	}
+	// C++ AuctionHouseObject::BuildListAuctionItems (AuctionHouseMgr.cpp:765):
+	// the level filter applies only when levelmin != 0 — with a zero min
+	// level the max level is ignored too, not applied on its own.
 	if levelMin > 0 {
 		whereClauses = append(whereClauses, "it.RequiredLevel >= ?")
 		args = append(args, levelMin)
-	}
-	if levelMax > 0 {
-		whereClauses = append(whereClauses, "it.RequiredLevel <= ?")
-		args = append(args, levelMax)
+		if levelMax > 0 {
+			whereClauses = append(whereClauses, "it.RequiredLevel <= ?")
+			args = append(args, levelMax)
+		}
 	}
 	if auctionSlotID != 0xFFFFFFFF {
 		whereClauses = append(whereClauses, "(it.InventoryType = ? OR (? = 5 AND it.InventoryType = 20))")
@@ -1323,12 +1326,14 @@ func writeAuctionInfo(buf *protocol.Buffer, a auctionRecord) {
 	buf.WriteU32(0) // ItemFlags
 	buf.WriteU64(a.Owner)
 	buf.WriteU32(a.StartBid)
+	// C++ AuctionEntry::BuildAuctionInfo (AuctionHouseMgr.cpp:863): the
+	// minimal-outbid field is `bid ? GetAuctionOutBid() : 0` — the float
+	// 5% of the current bid, floored at 1 copper. Integer math
+	// overflowed uint32 for bids at or above 858,993,460 copper, so the
+	// shared auctionOutBid helper (float, same as CalculatePct) is used.
 	minOutBid := uint32(0)
 	if a.Bid > 0 {
-		minOutBid = a.Bid * 5 / 100
-		if minOutBid == 0 {
-			minOutBid = 1
-		}
+		minOutBid = auctionOutBid(a.Bid)
 	}
 	buf.WriteU32(minOutBid)
 	buf.WriteU32(a.Buyout)
