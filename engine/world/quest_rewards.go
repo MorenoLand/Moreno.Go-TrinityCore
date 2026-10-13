@@ -36,6 +36,12 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	if !ok {
 		return true
 	}
+	// QuestHandler.cpp:529 — the WPE guard also covers the complete-quest
+	// packet, rejecting silently before any template load.
+	if !s.canInteractWithQuestGiver(ctx, giverGUID) {
+		s.debug("quest complete rejected", "account", s.accountName, "quest", questID, "reason", "cannot interact with quest giver")
+		return true
+	}
 	status, err := s.characterQuestStatus(ctx, questID)
 	if err != nil {
 		return false
@@ -126,6 +132,12 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 		return false
 	}
 	if _, ok := s.questGiverEnder(ctx, giverGUID, questID); !ok {
+		return true
+	}
+	// QuestHandler.cpp:384 — the WPE guard also covers the request-reward
+	// packet, rejecting silently before the CanCompleteQuest transition.
+	if !s.canInteractWithQuestGiver(ctx, giverGUID) {
+		s.debug("quest request reward rejected", "account", s.accountName, "quest", questID, "reason", "cannot interact with quest giver")
 		return true
 	}
 	status, err := s.characterQuestStatus(ctx, questID)

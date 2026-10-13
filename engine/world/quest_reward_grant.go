@@ -89,6 +89,12 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	if _, ok := s.questGiverEnder(ctx, giverGUID, questID); !ok {
 		return true
 	}
+	// QuestHandler.cpp:294 — the WPE guard also covers the choose-reward
+	// packet, rejecting silently before the quest template is even loaded.
+	if !s.canInteractWithQuestGiver(ctx, giverGUID) {
+		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "cannot interact with quest giver")
+		return true
+	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
 		s.debug("quest reward load failed", "account", s.accountName, "quest", questID, "error", err)
