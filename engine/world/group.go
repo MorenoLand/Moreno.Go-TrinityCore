@@ -355,6 +355,18 @@ const (
 const maxGroupSize = 5
 const maxRaidSize = 40
 
+// groupIsFull mirrors Group::IsFull (Group.cpp:2451-2453): raid groups fill
+// at MAXRAIDSIZE (40), everything else at MAXGROUPSIZE (5).
+func groupIsFull(g *groupState) bool {
+	if g == nil {
+		return false
+	}
+	if g.IsRaid {
+		return len(g.Members) >= maxRaidSize
+	}
+	return len(g.Members) >= maxGroupSize
+}
+
 // -----------------------------------------------------------------
 // Wire helpers
 // -----------------------------------------------------------------
@@ -905,7 +917,7 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 			s.groupID = 0
 		} else if !g.isLeaderOrAssistant(s.playerGUID) {
 			return s.sendPartyResult(partyOpInvite, "", errNotLeader)
-		} else if len(g.Members) >= maxGroupSize {
+		} else if groupIsFull(g) {
 			return s.sendPartyResult(partyOpInvite, "", errGroupFull)
 		}
 	}
@@ -971,6 +983,19 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 	if leaderSess != nil && leaderSess.groupID != 0 {
 		g = srv.groups[leaderSess.groupID]
 	}
+	if g == nil {
+		// C++ resolves the invite group off the invitee's pending invite
+		// (Player::GetGroupInvite), not off the leader's session — a
+		// zoning/offline leader still leaves the group and its IsFull arm
+		// reachable (HandleGroupAcceptOpcode checks IsFull before the
+		// leader-offline/not-created handling).
+		for _, grp := range srv.groups {
+			if grp.LeaderGUID == leaderGUID {
+				g = grp
+				break
+			}
+		}
+	}
 
 	if g == nil {
 		// Forming a new group needs the leader present; joining an
@@ -996,13 +1021,36 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 		leaderSess.groupID = g.ID
 	}
 
-	if len(g.Members) >= maxGroupSize {
+	// Group::IsFull arm (HandleGroupAcceptOpcode:243-247) fires before the
+	// not-created handling, including when the leader is offline.
+	if groupIsFull(g) {
 		srv.groupsMu.Unlock()
 		_ = s.sendPartyResult(partyOpInvite, "", errGroupFull)
 		return false
 	}
 
-	g.Members = append(g.Members, groupMember{GUID: s.playerGUID, Name: s.player.Name})
+	// Group::AddMember subgroup placement (Group.cpp:404-422): raid joiners
+	// land in the first subgroup with a free slot.
+	subGroup := uint8(0)
+	if g.IsRaid {
+		placed := false
+		for i := uint8(0); i < 8; i++ {
+			if g.countInSubGroup(i) < maxGroupSize {
+				subGroup = i
+				placed = true
+				break
+			}
+		}
+		if !placed {
+			// AddMember false arm: no free subgroup. Unreachable past the
+			// IsFull gate (under 40 members a subgroup is always free);
+			// kept as the C++-exact backstop.
+			srv.groupsMu.Unlock()
+			return false
+		}
+	}
+
+	g.Members = append(g.Members, groupMember{GUID: s.playerGUID, Name: s.player.Name, SubGroup: subGroup})
 	refreshGroupMaxEnchantingLevel(srv, g)
 	s.groupID = g.ID
 	groupObj := groupLuaObject(s.server, g)
