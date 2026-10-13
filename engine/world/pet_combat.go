@@ -1833,6 +1833,119 @@ func petAuraTypeMiscAmounts(server *Server, key creatureAuraKey, auraType uint32
 	return out
 }
 
+// petHealingPctDone mirrors Unit::SpellHealingPctDone (Unit.cpp:7634-7711) for
+// a guardian pet caster: the pet's own SPELL_AURA_MOD_HEALING_DONE_PERCENT
+// (136) fold plus the owner-scoped OVERRIDE_CLASS_SCRIPTS table. Spells with
+// SPELL_ATTR3_NO_DONE_BONUS, SPELL_ATTR6_LIMIT_PCT_HEALING_MODS, or of the
+// potion family skip the leg (Unit.cpp:7642-7651). The totem redirect
+// (Unit.cpp:7637-7639) has no pet twin — a guardian is never a totem. The
+// leech/funnel zeroing (Unit.cpp:7607-7619) kills only the flat DoneTotal;
+// the percent leg still applies (Unit.cpp:7612), so spellHealingDoneZeroed
+// does not gate this fold. C++ reads the class scripts from the owner
+// (Unit.cpp:7661), and s is the owner's session.
+func (s *session) petHealingPctDone(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victimGUID uint64) float64 {
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 || spell.AttributesEx6&spellAttr6LimitPctHealingMods != 0 ||
+		spell.SpellFamilyName == spellFamilyPotion {
+		return 1.0
+	}
+	mod := 1.0
+	// Unit.cpp:7656: GetTotalAuraMultiplier applies no misc mask — every live
+	// effect of the aura type folds multiplicatively.
+	if s != nil && s.server != nil && s.server.Data != nil && motion != nil {
+		if key := creatureAuraKeyForMotion(motion); key.GUID != 0 {
+			for _, ae := range petAuraTypeMiscAmounts(s.server, key, auraModHealingDonePercent) {
+				mod *= 1 + float64(ae.amount)/100
+			}
+		}
+	}
+	if s == nil {
+		return mod
+	}
+	addPct := func(amt int32) { mod *= 1 + float64(amt)/100 } // AddPct fold
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		switch ae.misc {
+		case 21, 6935, 6918: // Test of Faith — victim below 50% health
+			if target, ok := s.getCombatTarget(ctx, victimGUID); ok && target.MaxHealth > 0 &&
+				target.Health*2 < target.MaxHealth {
+				addPct(ae.amount)
+			}
+		case 7798: // Glyph of Regrowth — victim carries Rejuvenation/Regrowth
+			if petHealTargetHasAura(s, ctx, victimGUID, spellAuraPeriodicHeal, spellFamilyDruid, 0x40, 0, 0) {
+				addPct(ae.amount)
+			}
+		case 8477: // Nourish Heal Boost — step percent per own HoT stack on the victim
+			step := ae.amount
+			boost := int32(0)
+			if s.server != nil && s.server.Data != nil && motion != nil {
+				// Unit.cpp:7678-7694: the victim auras must be cast by the
+				// healer — the pet's GUID, not the owner's.
+				for _, aura := range s.victimAurasForLookup(ctx, victimGUID) {
+					if aura == nil || aura.Stopped || aura.CasterGUID != motion.GUID {
+						continue
+					}
+					aspell, found, err := s.server.Data.Spell(aura.SpellID)
+					if err != nil || !found || aspell.SpellFamilyName != spellFamilyDruid {
+						continue
+					}
+					if aspell.SpellFamilyFlags[1]&0x10 == 0 && aspell.SpellFamilyFlags[0]&0x50 == 0 {
+						continue
+					}
+					st := int32(aura.StackCount)
+					if st == 0 {
+						st = 1
+					}
+					boost += step * st
+				}
+			}
+			addPct(boost)
+		case 7871: // Glyph of Lesser Healing Wave — victim carries Earth Shield
+			if petHealTargetHasAura(s, ctx, victimGUID, spellAuraDummy, spellFamilyShaman, 0, 0x400, 0) {
+				addPct(ae.amount)
+			}
+		}
+	}
+	return mod
+}
+
+// petHealTargetHasAura is the victim-side twin of session.hasAuraOfType for a
+// pet heal target (player session or creature): the victim's live auras are
+// scanned for an effect of the given aura type whose spell is of the given
+// family with at least one of the non-zero flag words matching the spell's
+// SpellFamilyFlags (flag96::HasFlag, Util.h:401-404).
+func petHealTargetHasAura(s *session, ctx context.Context, victimGUID uint64, auraType, familyName, flag0, flag1, flag2 uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.victimAurasForLookup(ctx, victimGUID) {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != familyName {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || !spellEffectIsAuraEffect(effect) || effect.Aura != auraType ||
+				aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if flag0|flag1|flag2 == 0 {
+				return true
+			}
+			if flag0 != 0 && auraSpell.SpellFamilyFlags[0]&flag0 != 0 {
+				return true
+			}
+			if flag1 != 0 && auraSpell.SpellFamilyFlags[1]&flag1 != 0 {
+				return true
+			}
+			if flag2 != 0 && auraSpell.SpellFamilyFlags[2]&flag2 != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // petGuardianDoneHealingBonus mirrors the full advertised-benefit fold of
 // Unit::SpellHealingBonusDone (Unit.cpp:7490-7605) for a guardian caster:
 // DoneAdvertisedBenefit = SpellBaseHealingBonusDone (the pet's own
@@ -1842,10 +1955,12 @@ func petAuraTypeMiscAmounts(server *Server, key creatureAuraKey, auraType uint32
 // (Unit.cpp:7599-7605). The potion-family gate (Unit.cpp:7494-7496) and the
 // DmgClass-NONE early-out (Unit.cpp:7583-7587) are honored, and leech /
 // health-funnel spells zero the whole DoneTotal after the fold
-// (Unit.cpp:7607-7619, via spellHealingDoneZeroed). The OVERRIDE_CLASS_SCRIPTS
-// flat arms (Unit.cpp:7510-7519), Impurity (DK-player only), the AP-bonus
-// arms, SPELLMOD_BONUS_MULTIPLIER on the coefficient and SpellHealingPctDone
-// stay unbridged on the pet path. Residual: the coefficient's level-penalty
+// (Unit.cpp:7607-7619, via spellHealingDoneZeroed). Impurity (Unit.cpp:7523-7548)
+// is correctly nil for a guardian caster — C++ gates the arm on the caster
+// being a player. The ap_bonus/ap_dot_bonus arms (Unit.cpp:7568-7581) need
+// the caster's total attack power, which Go does not model for creatures —
+// documented no-bridge. The percent leg (SpellHealingPctDone) rides the call
+// site via petHealingPctDone. Residual: the coefficient's level-penalty
 // factor reads the owner's level (spellHealingDoneCoefficient), where C++
 // reads the pet's.
 func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, effIndex int, victimGUID uint64) int32 {
@@ -1861,14 +1976,27 @@ func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creat
 	if _, hasRow := s.spellBonusRow(spell.ID); !hasRow && spell.DefenseType == spellDamageClassNone {
 		return 0
 	}
+	// Unit.cpp:7505-7519: the flat OVERRIDE_CLASS_SCRIPTS arms (Increased
+	// Rejuvenation Healing 4415, Increased Lesser Healing Wave 4953, LK Arena
+	// Savage Totem of the Third Wind 3736) come from the owner — s is the
+	// owner's session. They land in DoneTotal after the advertised x
+	// coefficient fold, so they survive even when the advertised benefit is 0
+	// (C++ adds them before the DoneAdvertisedBenefit check).
+	flat := int32(0)
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		switch ae.misc {
+		case 4415, 4953, 3736:
+			flat += ae.amount
+		}
+	}
 	schoolMask := uint32(spell.SchoolMask)
 	advertised := s.guardianBonusSpellDamage(motion)
 	advertised += s.petHealingDoneAuraModifier(motion, schoolMask)
 	advertised += s.healVictimModHealing(ctx, victimGUID, schoolMask)
-	if advertised == 0 {
+	if advertised == 0 && flat == 0 {
 		return 0
 	}
-	return int32(float64(advertised) * s.spellHealingDoneCoefficient(spell, effIndex, false))
+	return int32(float64(advertised)*s.spellHealingDoneCoefficient(spell, effIndex, false)) + flat
 }
 
 // petHealingDoneAuraModifier mirrors the pet-caster leg of
@@ -2407,6 +2535,29 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					} else {
 						heal = 0
 					}
+				}
+				// Unit::SpellHealingPctDone (Unit.cpp:7634-7711): the done
+				// percent leg is per victim in C++ and multiplies after the
+				// flat DoneTotal — heal = (healamount + DoneTotal) *
+				// DoneTotalMod (Unit.cpp:7612). The leech/funnel zeroing kills
+				// only the flat leg, so this fold runs even when the bonus
+				// above was 0.
+				if pct := s.petHealingPctDone(ctx, motion, spell, resolveReflectTarget(targetGUID)); pct != 1.0 {
+					tmp := float64(int32(heal)) * pct
+					if tmp < 0 {
+						tmp = 0
+					}
+					heal = uint32(tmp)
+				}
+				// Unit::SpellHealingBonusDone (Unit.cpp:7614-7616): the
+				// SPELLMOD_DAMAGE / SPELLMOD_DOT spellmod applies to the heal
+				// total via GetSpellModOwner — the owner player (s). The pet
+				// cast loop carries direct heal effects only, so the op is
+				// SPELLMOD_DAMAGE (the HoT tick path is the dot twin).
+				if out := s.applySpellMod(spell, spellModDamage, int32(heal)); out < 0 {
+					heal = 0
+				} else {
+					heal = uint32(out)
 				}
 				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, heal)
 			}
