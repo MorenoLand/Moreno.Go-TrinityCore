@@ -2735,6 +2735,58 @@ func (s *Server) countDoTsByCaster(target combatTarget, ownerGUID uint64) uint32
 	return countEffects(copies)
 }
 
+// applyPetHealthLeechHeal mirrors Spell::EffectHealthLeech
+// (SpellEffects.cpp:1513-1553) for a pet caster: the caster heals for the
+// damage the target actually lost (leechDealt — post-absorb, overkill
+// excluded, captured at the damage-log site) times the effect's
+// CalcValueMultiplier (SpellInfo.cpp:528-536). The SpellHealingBonusDone/
+// Taken folds have no creature model and stay a documented delta, same as
+// the inline twin (creature_area_targets.go:484-519). The self-heal runs
+// through Unit::HealBySpell — CalcHealAbsorb and the AutoBalance
+// ModifyHealRecieved hook (AutoBalance.cpp:245) ahead of the health gain
+// — under the C++ caster-alive gate (SpellEffects.cpp:1542). No heal log:
+// the inline twin sends none. No threat: Unit::DealHeal carries no
+// threat leg.
+func (s *Server) applyPetHealthLeechHeal(caster *creatureMotion, spellID uint32, schoolMask uint8, leechDealt uint32) {
+	if s == nil || s.Data == nil || caster == nil || leechDealt == 0 {
+		return
+	}
+	leechSpell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found || !spellHasEffect(leechSpell, spellEffectHealthLeech) {
+		return
+	}
+	leechIdx := -1
+	for i := range leechSpell.Effects {
+		if leechSpell.Effects[i].Effect == spellEffectHealthLeech {
+			leechIdx = i
+			break
+		}
+	}
+	if leechIdx < 0 {
+		return
+	}
+	// SpellEffectInfo::CalcValueMultiplier (SpellInfo.cpp:528-536): the
+	// caster mod-owner's SPELLMOD_VALUE_MULTIPLIER folds via
+	// GetSpellModOwner — the pet's owner player
+	// (Object.cpp:2246-2261).
+	multiplier := calcValueMultiplier(leechSpell, leechIdx, s.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID))
+	heal := effectValueMultiplied(leechDealt, multiplier)
+	if heal == 0 {
+		return
+	}
+	healAbsorbed := s.creatureApplyHealAbsorb(creatureAuraKeyForMotion(caster), uint32(schoolMask), heal)
+	scaledHeal := heal - healAbsorbed
+	scaledHeal = s.autoBalanceModifyDealDamageOnMap(caster, caster.Map, scaledHeal)
+	s.motionMu.Lock()
+	if live := s.findCreatureMotionLocked(caster.Map, caster.InstanceID, caster.GUID); live != nil && live.Health > 0 {
+		live.Health += scaledHeal
+		if live.MaxHealth > 0 && live.Health > live.MaxHealth {
+			live.Health = live.MaxHealth
+		}
+	}
+	s.motionMu.Unlock()
+}
+
 func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool) {
 	if s == nil || s.server == nil || caster == nil || damage == 0 {
 		return
@@ -2791,6 +2843,30 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				// pet-cast spells too (any unit caster).
 				damage = 0
 				hitInfo = 0x01
+			}
+		}
+	}
+	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1132): the victim-side
+	// taken pct legs run on every direct hit ahead of the armor arm —
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:785) folds
+	// Unit::SpellDamageBonusTaken (Unit.cpp:7052) on the direct-damage
+	// roll. C++ gates the whole arm on DOT (Unit.cpp:7053-7054 returns
+	// identity for SPELL_DIRECT_DAMAGE); the Go twins run it on direct
+	// damage on every sibling path (player-cast at spells.go:14159, the
+	// inline path at creature_area_targets.go:182), so the pet path joins
+	// the convention here. The caster arrives as nil on both twins — the
+	// pet carries no session auras (Sanctified Wrath bypass) and the
+	// from-caster multiplier keys on the caster GUID, which the twins
+	// cannot express for a creature caster — matching the inline path's
+	// nil-caster convention (creature_area_targets.go:182).
+	if damage > 0 && s.server != nil && s.server.Data != nil {
+		if takenSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+			if isPlayerVictim {
+				if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
+					damage = spellDamageBonusTaken(damage, takenSpell, uint32(schoolMask), victim, nil)
+				}
+			} else {
+				damage = creatureSpellDamageBonusTaken(s.server, damage, takenSpell, uint32(schoolMask), creatureAuraKeyForTarget(target), nil)
 			}
 		}
 	}
@@ -2922,6 +2998,17 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
 	}
+	// Spell::EffectHealthLeech leech basis (SpellEffects.cpp:1539-1540):
+	// the damage the target actually lost — post-absorb, overkill
+	// excluded — captured before the damage legs mutate health; the
+	// caster-heal arm lands at the end of this function with the other
+	// cast-completion legs, mirroring the inline twin
+	// (creature_area_targets.go). The basis is the pre-DealDamage
+	// damage: the C++ effect runs in the HIT_TARGET phase
+	// (Spell.cpp:2909), ahead of DealDamage's CHEAT_GOD return
+	// (Unit.cpp:735-737), so a god-cheat victim still feeds the heal —
+	// the damage log below likewise carries the pre-negation amount.
+	leechDealt := damage - overkill
 	logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
@@ -3046,6 +3133,38 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
 		// runs after the taken side on both the lethal and non-lethal arms.
 		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit)
+		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
+		// non-friendly non-positive (or dispel-effect) spell hit stands
+		// the target up. The EVADE-miss arm is vacuous — misses zero the
+		// damage above and return early, so every hit reaching this site
+		// is a non-evade hit — and the friendly gate rides the path (pet
+		// spells target hostiles), matching the inline twin
+		// (creature_area_targets.go:441-447).
+		//
+		// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2639-
+		// 2650): the caster-side SpellHitTarget Eluna hook fires for pet
+		// casters too — the pet is a creature motion with AI hooks, a
+		// third hit site alongside castCreatureSpellInternal and the
+		// inline path.
+		//
+		// Spell::DoTriggersOnSpellHit (Spell.cpp:2652/2913-2957): the
+		// per-hit trigger consumer — the ADD_TARGET_TRIGGER snapshot
+		// plus the spell_linked type-1 rows — runs per hit target after
+		// the damage and proc legs, ahead of the _cast tail, so it fires
+		// here on the pet path too.
+		if hitSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+			if victim.player.StandState != 0 && (!spellIsPositive(hitSpell) || spellHasEffect(hitSpell, spellEffectDispel)) {
+				victim.player.StandState = 0
+				victim.sendPlayerUpdate()
+			}
+			s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
+			s.server.fireCreatureHitTriggers(ctx, caster, hitSpell, spellID, []uint64{target.GUID})
+		}
+		// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553) for a pet
+		// caster: the caster-heal arm for this hit's leech basis, at the
+		// cast-completion position like the inline twin
+		// (creature_area_targets.go:484-519).
+		s.server.applyPetHealthLeechHeal(caster, spellID, schoolMask, leechDealt)
 		return
 	}
 	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
@@ -3180,4 +3299,19 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2639-
+	// 2650) + Spell::DoTriggersOnSpellHit (Spell.cpp:2652/2913-2957) on
+	// the creature-victim arm: the Eluna SpellHitTarget hook and the
+	// per-hit trigger consumer, mirroring the player-victim arm above.
+	// The stand-up arm is player-only on the Go paths (the inline twin
+	// stands players only, creature_area_targets.go:441-447).
+	if hitSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+		s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
+		s.server.fireCreatureHitTriggers(ctx, caster, hitSpell, spellID, []uint64{target.GUID})
+	}
+	// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553) for a pet
+	// caster on the creature-victim arm: the caster-heal arm for this
+	// hit's leech basis, at the cast-completion position like the
+	// player-victim arm above and the inline twin.
+	s.server.applyPetHealthLeechHeal(caster, spellID, schoolMask, leechDealt)
 }
