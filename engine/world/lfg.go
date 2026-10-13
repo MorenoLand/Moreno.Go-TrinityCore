@@ -1163,6 +1163,30 @@ func (s *session) teleportToLFGDungeon(dungeonID uint32) {
 	s.player.LfgEntryPointO = s.player.Orientation
 
 	mapID, x, y, z, ori := s.getLFGDungeonEntrance(dungeonID)
+	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1550-1567): with fromOpcode=false
+	// the destination is an LFG group member already inside the dungeon
+	// when one exists, falling back to the dungeon entrance.
+	if s.groupID != 0 && s.server != nil && mapID != 0 {
+		s.server.groupsMu.RLock()
+		var members []groupMember
+		isLFG := false
+		if grp := s.server.groups[s.groupID]; grp != nil {
+			isLFG = grp.IsLFG
+			members = append([]groupMember(nil), grp.Members...)
+		}
+		s.server.groupsMu.RUnlock()
+		if isLFG {
+			for _, m := range members {
+				if m.GUID == s.playerGUID {
+					continue
+				}
+				if ms := s.server.findSessionByGUID(m.GUID); ms != nil && ms.player != nil && ms.player.Map == mapID {
+					x, y, z, ori = ms.player.X, ms.player.Y, ms.player.Z, ms.player.Orientation
+					break
+				}
+			}
+		}
+	}
 	// LFGPlayerScript::OnMapChanged (LFGScripts.cpp:93-131): arriving in the
 	// LFG dungeon map casts Luck of the Draw when the player queued for a
 	// random dungeon (LFGMgr::selectedRandomLfgDungeon, LFGMgr.cpp:2250-2262).
@@ -1702,17 +1726,15 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 	out := payload[0] != 0
 	s.debug("lfg teleport", "account", s.accountName, "out", out)
 
+	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1507-1527): the dungeon resolves
+	// only from the player's LFG group. A solo-queued player has no group
+	// and gets LFG_TELEPORTERROR_INVALID_LOCATION, so there is no queue-
+	// entry fallback.
 	var lfgDungeonID uint32
 	if s.groupID != 0 && s.server != nil {
 		grp := s.server.getGroup(s.groupID)
 		if grp != nil && grp.IsLFG {
 			lfgDungeonID = grp.LFGDungeonID
-		}
-	}
-	if lfgDungeonID == 0 && s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
-		entry, ok := s.server.Features.LFG.Status(s.playerGUID)
-		if ok && len(entry.Dungeons) > 0 {
-			lfgDungeonID = entry.Dungeons[0]
 		}
 	}
 
@@ -1724,8 +1746,14 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	dungeonMap, _, _, _, _ := s.getLFGDungeonEntrance(lfgDungeonID)
+
 	if out {
-		s.teleportToLFGEntryPoint()
+		// LFGMgr::TeleportPlayer (LFGMgr.cpp:1529-1537): the out leg only
+		// fires when the player is standing on the dungeon map.
+		if dungeonMap != 0 && s.player.Map == dungeonMap {
+			s.teleportToLFGEntryPoint()
+		}
 		return true
 	}
 
@@ -1752,7 +1780,6 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	dungeonMap, _, _, _, _ := s.getLFGDungeonEntrance(lfgDungeonID)
 	if dungeonMap != 0 && s.player.Map == dungeonMap {
 		packet := protocol.NewBuffer(4)
 		packet.WriteU32(LFGTeleportErrorInvalidLocation)
