@@ -79,7 +79,16 @@ import (
 type BossAI interface {
 	OnReset(ctx context.Context, s *Server, motion *creatureMotion)
 	OnAggro(ctx context.Context, s *Server, motion *creatureMotion, victim uint64)
-	OnDamageTaken(ctx context.Context, s *Server, motion *creatureMotion, attacker uint64, damage uint32)
+	// OnDamageTaken mirrors UnitAI::DamageTaken (UnitAI.h:304): fired from
+	// Unit::DealDamage (Unit.cpp:701) on the victim's AI for any attacker,
+	// ahead of the tap/health/threat/rage legs. C++ passes damage as
+	// uint32&, so the hook may adjust it — hence the pointer.
+	OnDamageTaken(ctx context.Context, s *Server, motion *creatureMotion, attacker uint64, damage *uint32)
+	// DamageDealt mirrors UnitAI::DamageDealt (UnitAI.h:300): fired from
+	// Unit::DealDamage (Unit.cpp:704) on the attacker's AI after DamageTaken,
+	// on the same mutable damage. No script in this tree overrides it, so
+	// every AI keeps the base no-op.
+	DamageDealt(ctx context.Context, s *Server, motion *creatureMotion, victimGUID uint64, damage *uint32)
 	// HealReceived mirrors UnitAI::HealReceived (UnitAI.h:307): fired from
 	// Unit::DealHeal (Unit.cpp:6302) on the victim's AI ahead of the
 	// health gain, on the pre-clamp addhealth. C++ passes it as uint32&,
@@ -121,6 +130,21 @@ func fireDealHealAIHooks(ctx context.Context, s *Server, victim, healer *creatur
 	}
 	if healer != nil && healer.BossAI != nil {
 		healer.BossAI.HealDone(ctx, s, healer, victimGUID, addhealth)
+	}
+}
+
+// fireDealDamageAIHooks mirrors the AI-hook arm of Unit::DealDamage
+// (Unit.cpp:701-704): the victim AI's DamageTaken fires first, then the
+// attacker's DamageDealt — in that C++ order, on the same mutable damage,
+// ahead of the health change. A nil motion or a motion with no BossAI
+// carries no AI model, so the hook is skipped there (C++ always has an
+// AI; players and pet motions have none in Go).
+func fireDealDamageAIHooks(ctx context.Context, s *Server, victim, attacker *creatureMotion, attackerGUID, victimGUID uint64, damage *uint32) {
+	if victim != nil && victim.BossAI != nil {
+		victim.BossAI.OnDamageTaken(ctx, s, victim, attackerGUID, damage)
+	}
+	if attacker != nil && attacker.BossAI != nil {
+		attacker.BossAI.DamageDealt(ctx, s, attacker, victimGUID, damage)
 	}
 }
 
@@ -200,18 +224,11 @@ func (ai *vancleefAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion,
 	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 0, 0)
 }
 
-func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
 	if m.MaxHealth == 0 {
 		return
 	}
 	hpPct := float32(m.Health) / float32(m.MaxHealth) * 100.0
-
-	// 66% HP Quote
-	if !ai.health66 && hpPct <= 66.0 {
-		ai.health66 = true
-		// SAY_ONE = 1: "Lapdogs, all of you!"
-		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 1, 0)
-	}
 
 	// 50% HP: Summons 2 Defias Blackguards
 	if !ai.guardsCalled && hpPct <= 50.0 {
@@ -265,18 +282,20 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 		}
 	}
 
-	// 33% HP Quote
-	if !ai.health33 && hpPct <= 33.0 {
-		ai.health33 = true
-		// SAY_TWO = 3: "Fools! Our cause is righteous!"
-		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 3, 0)
-	}
-
-	// 25% HP Quote
+	// boss_vancleef.cpp:99-113: the quote arms are an else-if chain — one
+	// Talk per DamageTaken call, lowest threshold first.
 	if !ai.health25 && hpPct <= 25.0 {
 		ai.health25 = true
 		// SAY_THREE = 5: "The Brotherhood shall prevail!"
 		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 5, 0)
+	} else if !ai.health33 && hpPct <= 33.0 {
+		ai.health33 = true
+		// SAY_TWO = 3: "Fools! Our cause is righteous!"
+		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 3, 0)
+	} else if !ai.health66 && hpPct <= 66.0 {
+		ai.health66 = true
+		// SAY_ONE = 1: "Lapdogs, all of you!"
+		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 1, 0)
 	}
 }
 
@@ -285,6 +304,12 @@ func (ai *vancleefAI) HealReceived(ctx context.Context, s *Server, m *creatureMo
 }
 
 func (ai *vancleefAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
+// UnitAI::DamageDealt base no-op (UnitAI.h:300): fired on the attacker's
+// AI from Unit::DealDamage (Unit.cpp:704). No script in this tree overrides
+// it, so this stays a no-op like the heal legs above.
+func (ai *vancleefAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
 }
 
 func (ai *vancleefAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -377,7 +402,7 @@ func (ai *mrSmiteAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, 
 	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Mr. Smite", 0, 0)
 }
 
-func (ai *mrSmiteAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+func (ai *mrSmiteAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
 	if m.MaxHealth == 0 {
 		return
 	}
@@ -404,6 +429,12 @@ func (ai *mrSmiteAI) HealReceived(ctx context.Context, s *Server, m *creatureMot
 }
 
 func (ai *mrSmiteAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
+// UnitAI::DamageDealt base no-op (UnitAI.h:300): fired on the attacker's
+// AI from Unit::DealDamage (Unit.cpp:704). No script in this tree overrides
+// it, so this stays a no-op like the heal legs above.
+func (ai *mrSmiteAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
 }
 
 func (ai *mrSmiteAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -469,7 +500,7 @@ func (ai *rhahkZorAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion,
 	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Rhahk'Zor", 0, 0)
 }
 
-func (ai *rhahkZorAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+func (ai *rhahkZorAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
 }
 
 // UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
@@ -477,6 +508,12 @@ func (ai *rhahkZorAI) HealReceived(ctx context.Context, s *Server, m *creatureMo
 }
 
 func (ai *rhahkZorAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
+// UnitAI::DamageDealt base no-op (UnitAI.h:300): fired on the attacker's
+// AI from Unit::DealDamage (Unit.cpp:704). No script in this tree overrides
+// it, so this stays a no-op like the heal legs above.
+func (ai *rhahkZorAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
 }
 
 func (ai *rhahkZorAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -527,7 +564,7 @@ func (ai *taragamanAI) OnReset(ctx context.Context, s *Server, m *creatureMotion
 func (ai *taragamanAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }
 
-func (ai *taragamanAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+func (ai *taragamanAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
 }
 
 // UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
@@ -535,6 +572,12 @@ func (ai *taragamanAI) HealReceived(ctx context.Context, s *Server, m *creatureM
 }
 
 func (ai *taragamanAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
+// UnitAI::DamageDealt base no-op (UnitAI.h:300): fired on the attacker's
+// AI from Unit::DealDamage (Unit.cpp:704). No script in this tree overrides
+// it, so this stays a no-op like the heal legs above.
+func (ai *taragamanAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
 }
 
 func (ai *taragamanAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -585,7 +628,7 @@ func (ai *kreshAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) {
 func (ai *kreshAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }
 
-func (ai *kreshAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+func (ai *kreshAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
 	if m.MaxHealth == 0 {
 		return
 	}
@@ -601,6 +644,12 @@ func (ai *kreshAI) HealReceived(ctx context.Context, s *Server, m *creatureMotio
 }
 
 func (ai *kreshAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
+// UnitAI::DamageDealt base no-op (UnitAI.h:300): fired on the attacker's
+// AI from Unit::DealDamage (Unit.cpp:704). No script in this tree overrides
+// it, so this stays a no-op like the heal legs above.
+func (ai *kreshAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
 }
 
 func (ai *kreshAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -3391,7 +3440,7 @@ func newLuaBossAI(m *creatureMotion) BossAI { return &luaBossAI{} }
 func (ai *luaBossAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) {}
 func (ai *luaBossAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }
-func (ai *luaBossAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+func (ai *luaBossAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
 }
 
 // UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310): Lua bosses
@@ -3401,6 +3450,12 @@ func (ai *luaBossAI) HealReceived(ctx context.Context, s *Server, m *creatureMot
 }
 
 func (ai *luaBossAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
+// UnitAI::DamageDealt base no-op (UnitAI.h:300): fired on the attacker's
+// AI from Unit::DealDamage (Unit.cpp:704). No script in this tree overrides
+// it, so this stays a no-op like the heal legs above.
+func (ai *luaBossAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
 }
 func (ai *luaBossAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }

@@ -14787,6 +14787,16 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// below with the true pre-damage engagement state.
 		threatGated := s.spellDamageStep1Gate(spellID, false)
 		if motion != nil {
+			if motion.BossAI == nil {
+				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+			}
+			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fire on the
+			// mutable damage ahead of the tap/health/threat/rage legs; a
+			// hook-adjusted damage flows into all of them. Threshold arms
+			// (VanCleef's HealthBelowPct quotes) therefore evaluate the
+			// pre-hit health, as in C++.
+			fireDealDamageAIHooks(ctx, s.server, motion, nil, s.playerGUID, motion.GUID, &damage)
+			newHealth = target.Health - damage
 			// Unit::DealDamage tap block (Unit.cpp:872-876).
 			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health) {
 				newlyTapped = true
@@ -14815,9 +14825,6 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			wasInCombat := motion.InCombat
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion)
-			}
-			if motion.BossAI == nil {
-				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 			}
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
@@ -14866,9 +14873,6 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				} else {
 					motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 				}
-			}
-			if motion.BossAI != nil {
-				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)
 			}
 			motion.Moving = true
 		}

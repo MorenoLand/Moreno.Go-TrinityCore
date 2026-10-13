@@ -1207,6 +1207,14 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		s.motionMu.Lock()
 		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
 		if cMotion != nil {
+			if cMotion.BossAI == nil {
+				cMotion.BossAI = getBossAIForCreature(cMotion, cMotion.ScriptName)
+			}
+			// Unit::DealDamage (Unit.cpp:701-704): pet damage fires the
+			// victim's DamageTaken like any attacker; the pet motion
+			// carries no BossAI, so the DamageDealt leg is a documented
+			// no-fire (C++ PetAI::DamageDealt is a base no-op).
+			fireDealDamageAIHooks(ctx, s, cMotion, motion, motion.GUID, targetGUID, &damage)
 			// Unit::DealDamage tap block (Unit.cpp:872-876): pet damage
 			// taps for the owner (Creature::SetLootRecipient's
 			// GetCharmerOrOwnerPlayerOrPlayerItself).
@@ -1256,6 +1264,12 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			}
 		}
 		s.motionMu.Unlock()
+		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
+		// VanCleef's 50% summon arm): the fire must run after the unlock
+		// since Lua handler methods lock motionMu on demand.
+		if cMotion != nil {
+			s.drainBossSummonHooks(ctx, cMotion, cMotion.BossAI)
+		}
 		if killed {
 			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): pet attacker → pet arm
 			// + branch arm double dispatch (Unit.cpp pet arm + 11385-11387),
@@ -4394,6 +4408,14 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	rageChanged := false
 	var rageNext uint32
 	if targetMotion != nil {
+		if targetMotion.BossAI == nil {
+			targetMotion.BossAI = getBossAIForCreature(targetMotion, targetMotion.ScriptName)
+		}
+		// Unit::DealDamage (Unit.cpp:701-704): pet spell damage fires the
+		// victim's DamageTaken like any attacker; the pet motion carries
+		// no BossAI, so the DamageDealt leg is a documented no-fire (C++
+		// PetAI::DamageDealt is a base no-op).
+		fireDealDamageAIHooks(ctx, s.server, targetMotion, caster, caster.GUID, targetMotion.GUID, &damage)
 		// Unit::DealDamage tap block (Unit.cpp:872-876): pet spell
 		// damage taps for the owner (GetCharmerOrOwnerPlayerOrPlayerItself).
 		tapPlayer := s.playerGUID
@@ -4423,6 +4445,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 	}
 	s.server.motionMu.Unlock()
+	// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
+	// VanCleef's 50% summon arm): the fire must run after the unlock
+	// since Lua handler methods lock motionMu on demand.
+	if targetMotion != nil {
+		s.server.drainBossSummonHooks(ctx, targetMotion, targetMotion.BossAI)
+	}
 	if targetMotion == nil {
 		return
 	}
