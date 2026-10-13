@@ -630,24 +630,30 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 
 	prevMaxHealth := motion.MaxHealth
 	prevHealth := motion.Health
-	prevMaxMana := motion.MaxMana
+	prevMaxMana := motion.MaxPowers[0]
 	prevMana := motion.Powers[0]
 
 	motion.Armor = newBaseArmor
-	motion.MaxHealth = scaledHealth
-	// SetStatFlatModifier(UNIT_MOD_HEALTH/UNIT_MOD_MANA, BASE_VALUE) has no
-	// model in Go: the scaled values land directly on the motion fields.
+	// The scaled values are the new aura-free base (the C++ BASE_VALUE leg);
+	// live 34/133/282 and 35/132 folds recompute over them like any other
+	// stat-compute point (Creature::UpdateMaxHealth/UpdateMaxPower,
+	// StatSystem.cpp:1024-1041).
+	motion.BaseMaxHealth = scaledHealth
+	motion.BaseMaxPowers[0] = scaledMana
+	newMaxHealth, newMaxPower0 := s.recomputeCreatureMaxHealthPower(creatureAuraKeyForMotion(motion), motion)
+	motion.MaxHealth = newMaxHealth
 	if prevHealth != 0 && prevMaxHealth != 0 {
-		motion.Health = uint32(float64(scaledHealth) / float64(prevMaxHealth) * float64(prevHealth))
+		motion.Health = uint32(float64(newMaxHealth) / float64(prevMaxHealth) * float64(prevHealth))
 	} else {
 		motion.Health = 0
 	}
-	motion.MaxMana = scaledMana
+	motion.MaxMana = newMaxPower0
+	motion.MaxPowers[0] = newMaxPower0
 	motion.MaxPowers[1] = 100  // SetStatFlatModifier(UNIT_MOD_RAGE, BASE_VALUE, 100)
 	motion.MaxPowers[3] = 100  // SetStatFlatModifier(UNIT_MOD_ENERGY, BASE_VALUE, 100)
 	if motion.PowerType == 0 { // POWER_MANA
 		if prevMana != 0 && prevMaxMana != 0 {
-			motion.Powers[0] = uint32(float64(scaledMana) / float64(prevMaxMana) * float64(prevMana))
+			motion.Powers[0] = uint32(float64(newMaxPower0) / float64(prevMaxMana) * float64(prevMana))
 		} else {
 			motion.Powers[0] = 0
 		}

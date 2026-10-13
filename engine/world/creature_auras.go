@@ -661,6 +661,261 @@ func (s *Server) petIntellectAuraManaDelta(key creatureAuraKey, motion *creature
 	return (fed - float64(motion.Stats[statIntellectIndex])) * petManaMultiplicator(entry)
 }
 
+// creatureHealthAuraMods folds the live UNIT_MOD_HEALTH modifier auras on a
+// creature motion (SpellAuraEffects.cpp:3650-3768): 34/230/250 flat amounts
+// sum into TOTAL_VALUE (HandleAuraModIncreaseHealth feeds
+// HandleStatFlatModifier, whose flat group sums like the 22/83 legs),
+// 282 multiplies BASE_PCT and 133 multiplies TOTAL_PCT (both
+// ApplyStatPctModifier product folds; the remove leg rebuilds the product
+// from the remaining auras, SpellAuraEffects.cpp:3742). Amounts resolve per
+// effect like the other creature folds (stored amount, then aura record,
+// then DBC base points).
+func (s *Server) creatureHealthAuraMods(key creatureAuraKey) (flat int32, basePct, totalPct float64) {
+	basePct, totalPct = 1, 1
+	if s == nil || s.Data == nil || key.GUID == 0 {
+		return 0, 1, 1
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		usedStoredAmount := false
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 && aura.AuraType == effect.Aura && !usedStoredAmount {
+				amount = int32(aura.Amount)
+				usedStoredAmount = true
+			}
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			switch effect.Aura {
+			case spellAuraModIncreaseHealth, spellAuraModIncreaseHealthOld, spellAuraModIncreaseHealth2:
+				flat += amount
+			case spellAuraModBaseHealthPct:
+				basePct *= 1 + float64(amount)/100
+			case spellAuraModIncreaseHealthPercent:
+				totalPct *= 1 + float64(amount)/100
+			}
+		}
+	}
+	return flat, basePct, totalPct
+}
+
+// creaturePowerAuraMods is the UNIT_MOD_POWER_START+power twin of
+// creatureHealthAuraMods (SpellAuraEffects.cpp:3686-3727): 35 flat amounts
+// sum into TOTAL_VALUE (misc-gated to the power) and 132 multiplies
+// TOTAL_PCT (ApplyStatPctModifier product fold). No BASE feeders exist for
+// the power modifiers in C++.
+func (s *Server) creaturePowerAuraMods(key creatureAuraKey, power uint32) (flat int32, totalPct float64) {
+	totalPct = 1
+	if s == nil || s.Data == nil || key.GUID == 0 {
+		return 0, 1
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		usedStoredAmount := false
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.MiscValue != int32(power) {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 && aura.AuraType == effect.Aura && !usedStoredAmount {
+				amount = int32(aura.Amount)
+				usedStoredAmount = true
+			}
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			switch effect.Aura {
+			case spellAuraModIncreaseEnergy:
+				flat += amount
+			case spellAuraModIncreaseEnergyPercent:
+				totalPct *= 1 + float64(amount)/100
+			}
+		}
+	}
+	return flat, totalPct
+}
+
+// recomputeCreatureMaxHealthPower folds the live UNIT_MOD_HEALTH /
+// UNIT_MOD_POWER modifier auras over the banked aura-free base — the
+// Creature::UpdateMaxHealth / Creature::UpdateMaxPower twins
+// (StatSystem.cpp:1024-1041): ((base*basePct282)+flat34/230/250)*totalPct133
+// for health (GetTotalAuraModValue composition, Unit.cpp:9437-9448),
+// (base+flat35)*totalPct132 for power 0. Creatures have no stamina/intellect
+// arm. A zero bank falls back to the stored max (callers bank the fallback
+// before writing when the motion predates the bank fields). Callers must not
+// hold auraMu or motionMu.
+func (s *Server) recomputeCreatureMaxHealthPower(key creatureAuraKey, motion *creatureMotion) (newMaxHealth, newMaxPower0 uint32) {
+	if motion == nil {
+		return 0, 0
+	}
+	base := motion.BaseMaxHealth
+	if base == 0 {
+		base = motion.MaxHealth
+	}
+	flat, basePct, totalPct := s.creatureHealthAuraMods(key)
+	v := (float64(base)*basePct + float64(flat)) * totalPct
+	if v < 1 {
+		v = 1
+	}
+	newMaxHealth = uint32(v)
+	powerBase := motion.BaseMaxPowers[0]
+	if powerBase == 0 {
+		powerBase = motion.MaxPowers[0]
+	}
+	pflat, ptotal := s.creaturePowerAuraMods(key, 0)
+	pv := (float64(powerBase) + float64(pflat)) * ptotal
+	if pv < 0 {
+		pv = 0
+	}
+	newMaxPower0 = uint32(pv)
+	return newMaxHealth, newMaxPower0
+}
+
+// recomputeCreatureHealthPowerOnAuraChange is the non-pet twin of
+// recomputePetDerivedOnStatAuraChange: Creature::UpdateMaxHealth /
+// UpdateMaxPower (StatSystem.cpp:1024-1041) refold the live 34/230/250/133/
+// 282 and 35/132 auras over the banked aura-free base on every aura
+// apply/remove (SpellAuraEffects.cpp:3650-3768) — previously Go tracked no
+// creature aura health deltas at all. Creatures have no stamina/intellect
+// arm and no owner session. Current health follows the per-spell halves
+// (34 heal/drop, 133 pct-keep); a pure max change leaves current health
+// alone like C++ (no clamp). Callers must not hold auraMu or motionMu.
+func (s *Server) recomputeCreatureHealthPowerOnAuraChange(key creatureAuraKey, motion *creatureMotion, halves auraHealthPowerHalves, apply bool) {
+	if s == nil || motion == nil || key.GUID == 0 {
+		return
+	}
+	// Folds read under auraMu only — never nested inside motionMu.
+	healthFlat, healthBasePct, healthTotalPct := s.creatureHealthAuraMods(key)
+	powerFlat, powerTotalPct := s.creaturePowerAuraMods(key, 0)
+	s.motionMu.Lock()
+	m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+	if m == nil || m != motion {
+		s.motionMu.Unlock()
+		return
+	}
+	if m.BaseMaxHealth == 0 {
+		// Motions that predate the bank fields never had a fold applied,
+		// so the stored max is the aura-free base.
+		m.BaseMaxHealth = m.MaxHealth
+	}
+	if m.BaseMaxPowers[0] == 0 {
+		m.BaseMaxPowers[0] = m.MaxPowers[0]
+	}
+	curHealth, curPower := m.Health, m.Powers[0]
+	oldMaxHealth, oldMaxPower := m.MaxHealth, m.MaxPowers[0]
+	var healthPct float64
+	if oldMaxHealth > 0 && curHealth > 0 {
+		healthPct = float64(curHealth) / float64(oldMaxHealth)
+	}
+	zeroHealth := curHealth == 0
+	v := (float64(m.BaseMaxHealth)*healthBasePct + float64(healthFlat)) * healthTotalPct
+	if v < 1 {
+		v = 1
+	}
+	newMaxHealth := uint32(v)
+	pv := (float64(m.BaseMaxPowers[0]) + float64(powerFlat)) * powerTotalPct
+	if pv < 0 {
+		pv = 0
+	}
+	newMaxPower0 := uint32(pv)
+	newHealth := curHealth
+	switch {
+	case halves.hasHealthPct:
+		newHealth = uint32(healthPct * float64(newMaxHealth))
+		if !zeroHealth && newHealth < 1 {
+			newHealth = 1
+		}
+	case halves.flatHealth != 0 && curHealth > 0:
+		// HandleAuraModIncreaseHealth (SpellAuraEffects.cpp:3650-3665):
+		// the flat mod lands first, then current health heals by the
+		// amount on apply (capped at the new max) or drops by the amount
+		// floored at 1 on remove; a negative amount inverts the halves.
+		// ModifyHealth no-ops on a dead unit, so a dead creature keeps 0.
+		if apply {
+			if halves.flatHealth < 0 {
+				if drop := uint32(-halves.flatHealth); drop >= newHealth {
+					newHealth = 1
+				} else {
+					newHealth -= drop
+				}
+			} else if nh := newHealth + uint32(halves.flatHealth); nh > newMaxHealth {
+				newHealth = newMaxHealth
+			} else {
+				newHealth = nh
+			}
+		} else if halves.flatHealth > 0 {
+			if drop := uint32(halves.flatHealth); drop >= newHealth {
+				newHealth = 1
+			} else {
+				newHealth -= drop
+			}
+		} else if nh := newHealth + uint32(-halves.flatHealth); nh > newMaxHealth {
+			newHealth = newMaxHealth
+		} else {
+			newHealth = nh
+		}
+	}
+	newPower := curPower
+	if halves.hasPowerPct {
+		// HandleAuraModIncreaseEnergyPercent (SpellAuraEffects.cpp:3698-3727):
+		// current power shifts by the max-power change, on apply and
+		// remove alike, clamped into [0, new max] like ModifyPower.
+		if np := int64(curPower) + int64(newMaxPower0) - int64(oldMaxPower); np < 0 {
+			newPower = 0
+		} else if np > int64(newMaxPower0) {
+			newPower = newMaxPower0
+		} else {
+			newPower = uint32(np)
+		}
+	} else if newPower > newMaxPower0 {
+		newPower = newMaxPower0
+	}
+	m.Health, m.MaxHealth = newHealth, newMaxHealth
+	m.Mana, m.MaxMana = newPower, newMaxPower0
+	m.Powers[0], m.MaxPowers[0] = newPower, newMaxPower0
+	mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{
+		unitFieldHealth:    newHealth,
+		unitFieldMaxHealth: newMaxHealth,
+		unitFieldPower1:    newPower,
+		unitFieldMaxPower1: newMaxPower0,
+	})
+}
+
 // petFullArmor computes the live Guardian::UpdateArmor value
 // (StatSystem.cpp:1316-1330) for a pet motion (callers must gate on
 // motionIsPet; the IsPet-gated arms — aura-142 BASE_PCT, aura-83 TOTAL_VALUE,

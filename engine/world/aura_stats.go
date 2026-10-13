@@ -198,6 +198,68 @@ func spellHasStatModAura(spell wotlk.Spell) bool {
 	return false
 }
 
+// spellHasHealthPowerAura reports whether the spell carries any
+// UNIT_MOD_HEALTH / UNIT_MOD_POWER modifier aura (34/230/250/133/282 health,
+// 35/132 power) — the trigger gate for the max-health/max-power recompute
+// beside spellHasStatModAura's 29/137 pair (SpellAuraEffects.cpp:3650-3768).
+func spellHasHealthPowerAura(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		switch eff.Aura {
+		case spellAuraModIncreaseHealth, spellAuraModIncreaseHealthOld, spellAuraModIncreaseHealth2,
+			spellAuraModIncreaseHealthPercent, spellAuraModBaseHealthPct,
+			spellAuraModIncreaseEnergy, spellAuraModIncreaseEnergyPercent:
+			return true
+		}
+	}
+	return false
+}
+
+// auraHealthPowerHalves captures the per-spell current-health/power halves of
+// the triggering health/power aura (SpellAuraEffects.cpp:3650-3768):
+// 34/230/250 heal/drop current health by the flat amount (:3650-3665),
+// 133 re-anchors current health to the pre-change health pct on apply and
+// remove alike (:3729-3754), 282 adjusts no current health (:3757-3768),
+// 132 shifts current power by the max-power change (:3698-3727), 35 adjusts
+// no current power. The 34 amount resolves from the live record on the apply
+// leg (registered before the trigger fires); on the remove leg the record is
+// already erased, so the DBC base points stand in. Callers must not hold auraMu.
+type auraHealthPowerHalves struct {
+	flatHealth   int32
+	hasHealthPct bool
+	hasPowerPct  bool
+}
+
+func (s *Server) creatureAuraHealthPowerHalves(key creatureAuraKey, spell wotlk.Spell, spellID uint32, apply bool) auraHealthPowerHalves {
+	var h auraHealthPowerHalves
+	liveAmounts := map[int]int32{}
+	if apply && s != nil {
+		s.auraMu.Lock()
+		if rec := s.activeCreatureAuras[key][spellID]; rec != nil && !rec.Stopped {
+			for i, v := range rec.Amounts {
+				liveAmounts[i] = v
+			}
+		}
+		s.auraMu.Unlock()
+	}
+	for index, eff := range spell.Effects {
+		switch eff.Aura {
+		case spellAuraModIncreaseHealth, spellAuraModIncreaseHealthOld, spellAuraModIncreaseHealth2:
+			amt, ok := liveAmounts[index]
+			if !ok || amt == 0 {
+				amt = eff.BasePoints
+			}
+			h.flatHealth += amt
+		case spellAuraModIncreaseHealthPercent:
+			h.hasHealthPct = true
+		case spellAuraModIncreaseEnergyPercent:
+			if eff.MiscValue == 0 {
+				h.hasPowerPct = true
+			}
+		}
+	}
+	return h
+}
+
 // statStaminaIndex is STAT_STAMINA (SharedDefines.h: the Stats enum runs
 // 0 strength, 1 agility, 2 stamina, 3 intellect, 4 spirit).
 const statStaminaIndex = 2

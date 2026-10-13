@@ -24410,7 +24410,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// (UpdateMaxHealth / UpdateMaxPower). The trigger gates on the spell's
 	// 29/137 effects and on motionIsPet.
 	if s.server != nil {
-		s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID)
+		s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID, true)
 	}
 	// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a fresh
 	// MOD_TAUNT aura on a creature registers its caster's taunt state
@@ -28822,7 +28822,7 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 	// funnel twin of the removeCreatureAuraWithMode arm above; finalTick is
 	// non-nil exactly when an aura was actually removed.
 	if finalTick != nil {
-		s.server.recomputePetDerivedOnStatAuraChange(key, spellID)
+		s.server.recomputePetDerivedOnStatAuraChange(key, spellID, false)
 	}
 }
 
@@ -29027,7 +29027,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		// dropping a stat-mod aura recomputes the pet's aura-fed
 		// UNIT_FIELD_STAT0+stat fields and the stamina/intellect-fed maxima.
 		// The trigger gates on the spell's 29/137 effects and on motionIsPet.
-		s.recomputePetDerivedOnStatAuraChange(key, spellID)
+		s.recomputePetDerivedOnStatAuraChange(key, spellID, false)
 	}
 }
 

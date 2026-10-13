@@ -1298,6 +1298,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion = m
 				motion.Health = respawn.Health
 				motion.MaxHealth = respawn.Health
+				motion.BaseMaxHealth = respawn.Health
 				motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
 				motion.InCombat, motion.TargetGUID, motion.Moving = false, 0, false
 				motion.Looted = false

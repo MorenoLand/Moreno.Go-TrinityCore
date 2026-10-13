@@ -255,6 +255,19 @@ type creatureMotion struct {
 	FormationLeaderY        float32   // leader Y at last re-check
 	MoveHeading             float32   // travel heading of the current leg, recorded at launch (FormationMovementGenerator's relativeAngle)
 	MoveVelocity            float32   // speed of the current leg, recorded at launch (movespline Velocity analog for catchup)
+	// BaseMaxHealth / BaseMaxPowers bank the aura-free maxima feeding the
+	// creature health/power aura recompute — the GetCreateHealth /
+	// GetCreatePowerValue legs of Creature::UpdateMaxHealth /
+	// Creature::UpdateMaxPower (StatSystem.cpp:1024-1041). The 34/133/282
+	// and 35/132 folds multiply this bank, so it must survive aura changes
+	// (the BaseRunRate precedent). Set at spawn and at the stat-compute
+	// points (respawn, autobalance rescale, the zero-max sweep fallbacks);
+	// the trigger banks the stored max on first use for motions that
+	// predate the fields (their stored max is aura-free — nothing folded
+	// before this). Pets don't use it (their base recomputes from
+	// pet_levelstats via getPetStats).
+	BaseMaxHealth uint32
+	BaseMaxPowers [7]uint32
 }
 
 type waypointPoint struct {
@@ -660,6 +673,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
 			PlayerDamageReq: health / 2,
 			MaxHealth:       st.MaxHealth,
+			BaseMaxHealth:   st.MaxHealth,
 			Armor:           st.Armor,
 			Resistances:     st.Resistances,
 			MinDamage:       st.MinDamage,
@@ -682,6 +696,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			motion.Powers[0] = st.Mana
 			motion.MaxMana = st.Mana
 			motion.Mana = st.Mana
+			motion.BaseMaxPowers[0] = st.Mana
 		}
 		if motion.ThreatMgr == nil {
 			motion.ThreatMgr = NewThreatManager(motion)
@@ -794,6 +809,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
 				PlayerDamageReq: health / 2,
 				MaxHealth:       st.MaxHealth,
+				BaseMaxHealth:   st.MaxHealth,
 				Armor:           st.Armor,
 				MinDamage:       st.MinDamage,
 				MaxDamage:       st.MaxDamage,
@@ -2003,6 +2019,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 					health = 42
 				}
 				motion.Health, motion.MaxHealth = health, health
+				motion.BaseMaxHealth = health
 			}
 			if motion.MaxHealth > 0 && motion.Health > motion.MaxHealth {
 				motion.Health = motion.MaxHealth
@@ -2084,6 +2101,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.MaxHealth == 0 {
 		health := uint32(math.Max(float64(motion.Level)*30, 42))
 		motion.Health, motion.MaxHealth = health, health
+		motion.BaseMaxHealth = health
 	}
 	if motion.Health == 0 {
 		motion.InCombat = false

@@ -183,26 +183,33 @@ func (s *session) refreshPetStatsOnOwnerStatChange(ctx context.Context) {
 // UNIT_FIELD_STAT0+stat from the aura-fed stat, and the STAT_STAMINA /
 // STAT_INTELLECT arms rerun Guardian::UpdateMaxHealth / UpdateMaxPower
 // (StatSystem.cpp:1336-1379), whose (GetStat - createStat) * multiplicator
-// legs carry the live aura-29/137 feed. Go previously recomputed the pet's
-// maxima only at the stat-compute points (summon, level-up, owner-stat
-// change), so a stamina/intellect aura gained or lost mid-life never moved
-// the stored maxima. The owner-bonus legs stay in the stored base
-// (getPetStats); this adds the aura-feed delta on top. The 137 stamina tail
-// (SpellAuraEffects.cpp:3570-3572, SPELL_ATTR0_ABILITY) re-anchors current
-// health to the pre-change health pct instead of clamping. With no live
-// owner session the values are left alone — C++ has no offline-owner concept
-// (the pet is dismissed with the owner). Callers must not hold auraMu or
-// motionMu.
-func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellID uint32) {
+// legs carry the live aura-29/137 feed. The UNIT_MOD_HEALTH / UNIT_MOD_POWER
+// modifier auras (34/230/250/133/282, 35/132 — SpellAuraEffects.cpp:3650-3768)
+// feed the same UpdateMaxHealth / UpdateMaxPower composition on every unit,
+// pet or not (Creature::UpdateMaxHealth/UpdateMaxPower, StatSystem.cpp:1024-1041);
+// a Commanding-Shout-type aura on a pet or creature previously moved nothing
+// in Go. apply selects the apply/remove half of the per-spell current-health
+// adjustments (34 heals on apply, drops on remove; 133 re-anchors to the
+// health pct both ways). The 137 stamina tail (SpellAuraEffects.cpp:3570-3572,
+// SPELL_ATTR0_ABILITY) re-anchors current health to the pre-change health pct
+// instead of clamping. With no live owner session the pet values are left
+// alone — C++ has no offline-owner concept (the pet is dismissed with the
+// owner). Callers must not hold auraMu or motionMu.
+func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellID uint32, apply bool) {
 	if s == nil || s.Data == nil || key.GUID == 0 || spellID == 0 {
 		return
 	}
 	spell, found, err := s.Data.Spell(spellID)
-	if err != nil || !found || !spellHasStatModAura(spell) {
+	if err != nil || !found || (!spellHasStatModAura(spell) && !spellHasHealthPowerAura(spell)) {
 		return
 	}
 	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if motion == nil {
+		return
+	}
+	halves := s.creatureAuraHealthPowerHalves(key, spell, spellID, apply)
 	if !motionIsPet(motion) {
+		s.recomputeCreatureHealthPowerOnAuraChange(key, motion, halves, apply)
 		return
 	}
 	owner := s.playerSessionForGUID(motion.OwnerGUID)
@@ -212,7 +219,7 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	entry, level, petType, petID := motion.Entry, motion.Level, motion.PetType, motion.PetID
 	s.motionMu.Lock()
 	curHealth, curMana := motion.Health, motion.Mana
-	oldMaxHealth := motion.MaxHealth
+	oldMaxHealth, oldMaxMana := motion.MaxHealth, motion.MaxMana
 	s.motionMu.Unlock()
 	var healthPct float64
 	if oldMaxHealth > 0 && curHealth > 0 {
@@ -224,11 +231,28 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	if baseMaxHealth == 0 || baseMaxMana == 0 {
 		return
 	}
-	newMaxHealth := float64(baseMaxHealth) + s.petStaminaAuraHealthDelta(key, motion, entry)
+	// Guardian::UpdateMaxHealth composition (StatSystem.cpp:1336-1357):
+	// (createHealth * basePct282) + flatTOTAL(34/230/250) + (ownerBonus +
+	// aura-fed stamina delta) * multiplicator, all * totalPct133. The owner
+	// bonus lives in the getPetStats base already multiplied, so it is
+	// split back out — the 282 BASE_PCT leg covers the create health only,
+	// like C++.
+	healthBonus := float64(owner.petOwnerStaminaHealthBonus(entry, petType, petID))
+	createHealth := float64(baseMaxHealth) - healthBonus
+	healthFlat, healthBasePct, healthTotalPct := s.creatureHealthAuraMods(key)
+	staminaDelta := s.petStaminaAuraHealthDelta(key, motion, entry)
+	newMaxHealth := (createHealth*healthBasePct + float64(healthFlat) + healthBonus + staminaDelta) * healthTotalPct
 	if newMaxHealth < 1 {
 		newMaxHealth = 1
 	}
-	newMaxMana := float64(baseMaxMana) + s.petIntellectAuraManaDelta(key, motion, entry)
+	// Guardian::UpdateMaxPower composition (StatSystem.cpp:1359-1379):
+	// (createMana + flatTOTAL35 + ownerBonus*mult + intellectDelta) *
+	// totalPct132 — no BASE feeders exist for the power modifiers in C++.
+	manaBonus := float64(owner.petOwnerIntellectManaBonus(entry))
+	createMana := float64(baseMaxMana) - manaBonus
+	powerFlat, powerTotalPct := s.creaturePowerAuraMods(key, 0)
+	intellectDelta := s.petIntellectAuraManaDelta(key, motion, entry)
+	newMaxMana := (createMana + float64(powerFlat) + manaBonus + intellectDelta) * powerTotalPct
 	if newMaxMana < 1 {
 		newMaxMana = 1
 	}
@@ -236,9 +260,10 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	// SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE aura touching stamina on a
 	// SPELL_ATTR0_ABILITY spell re-anchors current health to the pre-apply
 	// pct of the new max, on apply and on remove alike (the handler ignores
-	// the apply flag for this tail).
-	preserveHealthPct := false
-	if spell.Attributes&spellAttr0Ability != 0 {
+	// the apply flag for this tail). The 133 health-pct aura re-anchors the
+	// same way (SpellAuraEffects.cpp:3729-3754).
+	preserveHealthPct := halves.hasHealthPct
+	if !preserveHealthPct && spell.Attributes&spellAttr0Ability != 0 {
 		for _, eff := range spell.Effects {
 			if eff.Aura == spellAuraModTotalStatPct && (eff.MiscValue == statStaminaIndex || eff.MiscValue == -1) {
 				preserveHealthPct = true
@@ -253,16 +278,58 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 		return
 	}
 	newHealth := curHealth
-	if preserveHealthPct {
+	switch {
+	case preserveHealthPct:
 		newHealth = uint32(healthPct * newMaxHealth)
 		if !zeroHealth && newHealth < 1 {
 			newHealth = 1
 		}
-	} else if newHealth > uint32(newMaxHealth) {
+	case halves.flatHealth != 0 && curHealth > 0:
+		// HandleAuraModIncreaseHealth (SpellAuraEffects.cpp:3650-3665):
+		// the flat mod lands first, then current health heals by the
+		// amount on apply (capped at the new max) or drops by the amount
+		// floored at 1 on remove; a negative amount inverts the halves.
+		// ModifyHealth no-ops on a dead unit, so a dead pet keeps 0.
+		if apply {
+			if halves.flatHealth < 0 {
+				if drop := uint32(-halves.flatHealth); drop >= newHealth {
+					newHealth = 1
+				} else {
+					newHealth -= drop
+				}
+			} else if nh := newHealth + uint32(halves.flatHealth); nh > uint32(newMaxHealth) {
+				newHealth = uint32(newMaxHealth)
+			} else {
+				newHealth = nh
+			}
+		} else if halves.flatHealth > 0 {
+			if drop := uint32(halves.flatHealth); drop >= newHealth {
+				newHealth = 1
+			} else {
+				newHealth -= drop
+			}
+		} else if nh := newHealth + uint32(-halves.flatHealth); nh > uint32(newMaxHealth) {
+			newHealth = uint32(newMaxHealth)
+		} else {
+			newHealth = nh
+		}
+	}
+	if newHealth > uint32(newMaxHealth) {
 		newHealth = uint32(newMaxHealth)
 	}
 	newMana := curMana
-	if newMana > uint32(newMaxMana) {
+	if halves.hasPowerPct {
+		// HandleAuraModIncreaseEnergyPercent (SpellAuraEffects.cpp:3698-3727):
+		// current power shifts by the max-power change, on apply and
+		// remove alike, clamped into [0, new max] like ModifyPower.
+		if np := int64(newMana) + int64(newMaxMana) - int64(oldMaxMana); np < 0 {
+			newMana = 0
+		} else if np > int64(newMaxMana) {
+			newMana = uint32(newMaxMana)
+		} else {
+			newMana = uint32(np)
+		}
+	} else if newMana > uint32(newMaxMana) {
 		newMana = uint32(newMaxMana)
 	}
 	m.Health, m.MaxHealth, m.Mana, m.MaxMana = newHealth, uint32(newMaxHealth), newMana, uint32(newMaxMana)
@@ -283,19 +350,27 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 // including aura apply/remove — so the stat-compute points that overwrite the
 // stored maxima (level-up, owner-stat change) must re-add the feed, or the
 // live recompute from recomputePetDerivedOnStatAuraChange would be clobbered
-// by the next compute point.
+// by the next compute point. The UNIT_MOD_HEALTH / UNIT_MOD_POWER modifier
+// folds (34/230/250/133/282, 35/132) ride along in the C++ composition, so
+// they fold here too.
 func (s *session) getPetStatsWithAuraFeed(ctx context.Context, motion *creatureMotion, entry, level uint32, petType uint8, petNumber uint32) (curHealth, maxHealth, curMana, maxMana uint32) {
 	curHealth, maxHealth, curMana, maxMana = s.getPetStats(ctx, entry, level, petType, petNumber)
 	if s == nil || s.server == nil || motion == nil {
 		return curHealth, maxHealth, curMana, maxMana
 	}
 	key := creatureAuraKeyForMotion(motion)
-	if v := float64(maxHealth) + s.server.petStaminaAuraHealthDelta(key, motion, entry); v >= 1 {
+	healthBonus := float64(s.petOwnerStaminaHealthBonus(entry, petType, petNumber))
+	createHealth := float64(maxHealth) - healthBonus
+	healthFlat, healthBasePct, healthTotalPct := s.server.creatureHealthAuraMods(key)
+	if v := (createHealth*healthBasePct + float64(healthFlat) + healthBonus + s.server.petStaminaAuraHealthDelta(key, motion, entry)) * healthTotalPct; v >= 1 {
 		maxHealth = uint32(v)
 	} else {
 		maxHealth = 1
 	}
-	if v := float64(maxMana) + s.server.petIntellectAuraManaDelta(key, motion, entry); v >= 1 {
+	manaBonus := float64(s.petOwnerIntellectManaBonus(entry))
+	createMana := float64(maxMana) - manaBonus
+	powerFlat, powerTotalPct := s.server.creaturePowerAuraMods(key, 0)
+	if v := (createMana + float64(powerFlat) + manaBonus + s.server.petIntellectAuraManaDelta(key, motion, entry)) * powerTotalPct; v >= 1 {
 		maxMana = uint32(v)
 	} else {
 		maxMana = 1
