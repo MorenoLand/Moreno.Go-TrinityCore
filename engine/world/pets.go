@@ -587,13 +587,13 @@ func petHealthMultiplicator(entry uint32) float64 {
 	}
 }
 
-// petOwnerStaminaHealthBonus mirrors the owner-stamina arm of
-// Guardian::UpdateStats(STAT_STAMINA) (StatSystem.cpp:1225-1249) folded
-// through Guardian::UpdateMaxHealth (StatSystem.cpp:1352-1356): the pet's max
-// health gains ownersBonus * multiplicator. Ghouls and risen allies scale at
-// 0.3 (+ Ravenous Dead and Glyph of the Ghoul), warlock pets at 0.75, and
+// petOwnerStaminaScale is the owner-stamina scale arm of
+// Guardian::UpdateStats(STAT_STAMINA) (StatSystem.cpp:1225-1249) without the
+// health multiplicator: the raw ownersBonus added to the pet's UNIT_FIELD_STAT2
+// by SetStat (StatSystem.cpp:1268). Ghouls and risen allies scale at 0.3
+// (+ Ravenous Dead and Glyph of the Ghoul), warlock pets at 0.75, and
 // everything else at 0.45 (+ Wild Hunt rank 1/2 effect-0 for hunter pets).
-func (s *session) petOwnerStaminaHealthBonus(entry uint32, petType uint8, petNumber uint32) uint32 {
+func (s *session) petOwnerStaminaScale(entry uint32, petType uint8, petNumber uint32) float64 {
 	if s == nil || s.player == nil || s.server == nil {
 		return 0
 	}
@@ -626,11 +626,37 @@ func (s *session) petOwnerStaminaHealthBonus(entry uint32, petType uint8, petNum
 			}
 		}
 	}
+	return mod
+}
+
+// petOwnerStaminaHealthBonus mirrors the owner-stamina arm of
+// Guardian::UpdateStats(STAT_STAMINA) (StatSystem.cpp:1225-1249) folded
+// through Guardian::UpdateMaxHealth (StatSystem.cpp:1352-1356): the pet's max
+// health gains ownersBonus * multiplicator.
+func (s *session) petOwnerStaminaHealthBonus(entry uint32, petType uint8, petNumber uint32) uint32 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
 	var stamina uint32
 	if len(s.player.Stats) > 2 {
 		stamina = s.player.Stats[2]
 	}
-	return uint32(float64(stamina) * mod * petHealthMultiplicator(entry))
+	return uint32(float64(stamina) * s.petOwnerStaminaScale(entry, petType, petNumber) * petHealthMultiplicator(entry))
+}
+
+// petOwnerIntellectScale is the intellect arm of Guardian::UpdateStats
+// (StatSystem.cpp:1251-1257) without the mana multiplicator: the raw
+// ownersBonus added to the pet's UNIT_FIELD_STAT3 by SetStat
+// (StatSystem.cpp:1268). Warlock and mage pets gain 30% of the owner's
+// intellect.
+func (s *session) petOwnerIntellectScale() float64 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if s.player.Class != 9 && s.player.Class != 8 {
+		return 0
+	}
+	return 0.3
 }
 
 // petOwnerIntellectManaBonus mirrors the intellect arm of
@@ -641,14 +667,53 @@ func (s *session) petOwnerIntellectManaBonus() uint32 {
 	if s == nil || s.player == nil {
 		return 0
 	}
-	if s.player.Class != 9 && s.player.Class != 8 {
-		return 0
-	}
 	var intellect uint32
 	if len(s.player.Stats) > 3 {
 		intellect = s.player.Stats[3]
 	}
-	return uint32(float64(intellect) * 0.3 * 15.0)
+	return uint32(float64(intellect) * s.petOwnerIntellectScale() * 15.0)
+}
+
+// petGuardianFieldStats mirrors the UNIT_FIELD_STAT0..4 writes in
+// Guardian::UpdateStats (StatSystem.cpp:1266-1282): SetStat(stat) stores
+// int32(GetTotalStatValue(stat) + ownersBonus) — the aura-fed value, not the
+// raw DB create-stat the broadcasts carried before. GetTotalStatValue(stat)
+// (Unit.cpp: GetTotalStatValue = ((flat BASE_VALUE + createStat) * BASE_PCT +
+// aura-29 flat TOTAL_VALUE) * aura-137 pct TOTAL_PCT) is the petGuardianStat
+// fold (SpellAuraEffects.cpp:3379-3413, 3525-3566), fed into SetStat on every
+// aura apply/remove through HandleStatFlatModifier/SetStatPctModifier ->
+// UpdateUnitMod -> UpdateStats (Unit.cpp:9304-9310). The owner bonus arms are
+// stamina (ghoul/risen 0.3 + Ravenous Dead + Glyph of the Ghoul, warlock pet
+// 0.75, else 0.45 + Wild Hunt; StatSystem.cpp:1225-1249) and intellect
+// (warlock/mage pet 0.30; :1251-1257). Strength, agility and spirit carry no
+// owner bonus (the ghoul strength arm is commented out in the C++; agility
+// and spirit have none). motion.Stats stays the raw DB create-stat (the
+// petGuardianStat base); these fed values go to the UNIT_FIELD_STAT0+index
+// broadcasts at the pet stat-compute points (summon, level-up, owner-stat
+// change). Like the C++ int32 cast, negative totals wrap into uint32 bits.
+func (s *session) petGuardianFieldStats(motion *creatureMotion, entry uint32, petType uint8, petNumber uint32) [5]uint32 {
+	var out [5]uint32
+	if s == nil || s.server == nil || motion == nil {
+		return out
+	}
+	key := creatureAuraKeyForMotion(motion)
+	var ownerStamina, ownerIntellect uint32
+	if s.player != nil && len(s.player.Stats) > 3 {
+		ownerStamina, ownerIntellect = s.player.Stats[2], s.player.Stats[3]
+	}
+	staminaBonus := float64(ownerStamina) * s.petOwnerStaminaScale(entry, petType, petNumber)
+	intellectBonus := float64(ownerIntellect) * s.petOwnerIntellectScale()
+	for stat := 0; stat < 5; stat++ {
+		v := s.server.petGuardianStat(key, motion, stat)
+		switch stat {
+		case 2:
+			v += staminaBonus
+		case 3:
+			v += intellectBonus
+		}
+		out[stat] = uint32(int32(v))
+	}
+	return out
 }
 
 // ravenousDeadStatMod mirrors the Ravenous Dead arm of the ghoul stat scale
@@ -956,6 +1021,10 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		updateBlock = buildCreatureUpdate(ctx, creatureSpawn{GUID: uint32(petGUID), RawGUID: petGUID, Entry: entry, Map: s.player.Map, X: petX, Y: petY, Z: petZ, Orientation: petO, Model: modelID, Faction: faction, NPCFlags: uint32(npcFlags), UnitFlags: stats.UnitFlags, UnitFlags2: unitFlag2RegeneratePower, DynamicFlags: uint32(dynamicFlags), CreatedBySpell: uint32(createdBySpell), Level: stats.Level, Health: stats.Health, MaxHealth: stats.MaxHealth, Scale: float32(scale), HoverHeight: float32(hoverHeight), BoundingRadius: petBoundingRadius, CombatReach: petCombatReach, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: stats.AttackTime, RangedAttack: uint32(rangeAttack)}, s)
 	} else {
 		attributes := s.getPetAttributes(ctx, entry, level, uint8(petType))
+		// The UNIT_FIELD_STAT0+index broadcast carries the aura-fed stats
+		// (Guardian::UpdateStats -> SetStat); motion.Stats keeps the raw DB
+		// create-stats as the petGuardianStat base.
+		fieldStats := attributes
 		s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
 		// Pet::InitStatsForLevel (Pet.cpp:885-890): base armor and the
 		// native object scale are set from the pet's level at stat time.
@@ -973,9 +1042,15 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		if pm := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); pm != nil && pm.PetID == petID {
 			pm.Armor = petArmor
 			pm.PetOwnerArmorBonus = ownerArmorBonus
+			// Guardian::UpdateStats (StatSystem.cpp:1266-1282) writes the
+			// aura-fed stats to UNIT_FIELD_STAT0+index at summon via
+			// UpdateAllStats — the broadcast carries the fed values, not
+			// the raw DB create-stats (pet auras load right after, so the
+			// aura feed is empty here; the owner bonus is not).
+			fieldStats = s.petGuardianFieldStats(pm, entry, uint8(petType), uint32(petID))
 		}
 		s.server.motionMu.Unlock()
-		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO)
+		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, fieldStats, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO)
 	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)

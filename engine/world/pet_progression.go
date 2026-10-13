@@ -164,7 +164,11 @@ func (s *session) refreshPetStatsOnOwnerStatChange(ctx context.Context) {
 	motion.Armor = armor
 	motion.PetOwnerArmorBonus = petOwnerArmorValue(petType, s.player.Armor)
 	fields := map[int]uint32{unitFieldHealth: curHealth, unitFieldMaxHealth: maxHealth, unitFieldPower1: curMana, unitFieldMaxPower1: maxMana, unitFieldResistances: s.server.petDisplayArmor(petKey, motion)}
-	for index, value := range attributes {
+	// Player::UpdateStats reruns Guardian::UpdateStats for the pet
+	// (StatSystem.cpp:108-114), rewriting UNIT_FIELD_STAT0+index from the
+	// aura-fed stats — at this point pet auras are live, so the aura-29/137
+	// feed folds in via petGuardianStat.
+	for index, value := range s.petGuardianFieldStats(motion, entry, petType, petID) {
 		fields[unitFieldStat0+index] = value
 	}
 	mapID, instanceID, petGUID := motion.Map, motion.InstanceID, motion.GUID
@@ -251,7 +255,10 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 		motion.MinDamage, motion.MaxDamage = float32(newLevel-newLevel/4)*mod, float32(newLevel+newLevel/4)*mod
 	}
 	fields := map[int]uint32{unitFieldLevel: newLevel, unitFieldHealth: health, unitFieldMaxHealth: maxHealth, unitFieldPower1: mana, unitFieldMaxPower1: maxMana, unitFieldPetExperience: experience, unitFieldResistances: s.server.petDisplayArmor(creatureAuraKeyForMotion(motion), motion), objectFieldScale: math.Float32bits(petScale)}
-	for index, value := range attributes {
+	// Guardian::UpdateStats (StatSystem.cpp:1266-1282) rewrites
+	// UNIT_FIELD_STAT0+index from the aura-fed stats at every level-up via
+	// Pet::InitStatsForLevel -> UpdateAllStats.
+	for index, value := range s.petGuardianFieldStats(motion, entry, petType, petID) {
 		fields[unitFieldStat0+index] = value
 	}
 	if petType == 1 {
