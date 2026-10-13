@@ -137,12 +137,14 @@ end
 -- C++ RainTimer: DoCast(SelectTarget(Random, 0, 30, true), 31340),
 -- non-triggered, init 20s -> {20s,35s}; nil-target no-op arm still
 -- re-arms (kazrogal precedent).
+-- C++ re-arms use X + rand32() % N -> [X, X+N-1] (exclusive top edge),
+-- NOT urand(X, X+N) -> [X, X+N]; the -1 is C++-exact, not a typo.
 local function onRain(creature, guid)
     local target = randomPlayerInRange(creature, 30, false)
     if target and not target:IsDead() then
         creature:CastSpell(target, SPELL_RAIN_OF_FIRE)
     end
-    schedule(guid, "rain", math.random(20000, 35000), function()
+    schedule(guid, "rain", math.random(20000, 34999), function()
         onRain(creature, guid)
     end)
 end
@@ -155,7 +157,7 @@ local function onDoom(creature, guid)
     if target and not target:IsDead() then
         creature:CastSpell(target, SPELL_DOOM)
     end
-    schedule(guid, "doom", math.random(45000, 50000), function()
+    schedule(guid, "doom", math.random(45000, 49999), function()
         onDoom(creature, guid)
     end)
 end
@@ -175,7 +177,7 @@ local function onCleave(creature, guid)
     if victim and not victim:IsDead() then
         creature:CastSpell(victim, SPELL_CLEAVE)
     end
-    schedule(guid, "cleave", math.random(10000, 15000), function()
+    schedule(guid, "cleave", math.random(10000, 14999), function()
         onCleave(creature, guid)
     end)
 end

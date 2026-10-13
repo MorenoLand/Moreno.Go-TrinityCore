@@ -107,7 +107,8 @@ local function akuMaiEnterCombat(event, creature, target)
 end
 
 -- C++ DamageTaken: !IsEnraged && HealthBelowPctDamaged(30, damage) ->
--- DoCast(me, SPELL_FRENZIED_RAGE) (triggered), IsEnraged = true.
+-- DoCast(me, SPELL_FRENZIED_RAGE) with default args (non-triggered),
+-- IsEnraged = true.
 -- Eluna event 9 fires pre-damage, so the projected-health check subtracts
 -- the incoming damage (jeklik precedent — C++-exact).
 local function akuMaiDamageTaken(event, creature, attacker, damage)

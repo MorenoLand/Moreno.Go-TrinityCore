@@ -103,12 +103,23 @@ local function alivePlayers(creature)
     return out
 end
 
-local function randomAlivePlayer(creature)
+local function randomAlivePlayer(creature, excludeVictim)
+    local victimGuid = nil
+    if excludeVictim then
+        local victim = creature:GetVictim()
+        victimGuid = victim ~= nil and victim:GetGUID() or nil
+    end
     local candidates = alivePlayers(creature)
-    if #candidates == 0 then
+    local out = {}
+    for _, p in ipairs(candidates) do
+        if p:GetGUID() ~= victimGuid then
+            out[#out + 1] = p
+        end
+    end
+    if #out == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return out[math.random(#out)]
 end
 
 local function malchezaarInitState(guid)
@@ -208,8 +219,9 @@ local function onSWPain(creature, guid)
         target = nil
     else
         -- C++ SelectTarget(Random, 1, 100, true): random non-tank. No
-        -- threat model, so any random alive player (documented above).
-        target = randomAlivePlayer(creature)
+        -- threat model, so a random alive player excluding the current
+        -- victim (C++ position 1 = never on the tank).
+        target = randomAlivePlayer(creature, true)
     end
     creature:CastSpell(target, SPELL_SW_PAIN)
     schedule(guid, "swpain", 20000, function() onSWPain(creature, guid) end)
@@ -271,8 +283,10 @@ local function startPhaseTwo(creature, guid)
     -- the SetEquipmentSlots / SetCanDualWield / OFF_ATTACK changes have no
     -- bridge (documented above).
     st.phase = PHASE_TWO
-    creature:Talk(SAY_AXE_TOSS1)
+    -- C++ arm order: DoCast(EQUIP_AXES) -> Talk(SAY_AXE_TOSS1) ->
+    -- DoCast(THRASH_AURA, triggered) (mandokir cast-then-yell precedent).
     creature:CastSpell(creature, SPELL_EQUIP_AXES)
+    creature:Talk(SAY_AXE_TOSS1)
     creature:CastSpell(creature, SPELL_THRASH_AURA, true)
     schedule(guid, "sunder", {5000, 10000}, function() onSunderArmor(creature, guid) end)
     -- C++ Cleave_Timer = 8000 in Initialize, decremented only in the

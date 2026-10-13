@@ -77,12 +77,18 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function healthPct(creature)
+-- C++ HealthBelowPct(pct) = GetHealth() < CountPctFromMaxHealth(pct),
+-- and this tree's CalculatePct (Util.h:66) is T(base * (float)pct / 100)
+-- truncated to integer — i.e. floor(max*pct/100). A float
+-- health*100/max < pct comparison fires up to 1 HP early at fractional
+-- boundaries (max=999, pct=50: C++ fires at health < 499, float fires at
+-- health <= 499); compare against the floored integer threshold instead.
+local function healthBelowPct(creature, pct)
     local max = creature:GetMaxHealth()
     if max == 0 then
-        return 100
+        return false
     end
-    return creature:GetHealth() * 100 / max
+    return creature:GetHealth() < math.floor(max * pct / 100)
 end
 
 local function onArcingSmash(creature, guid)
@@ -93,14 +99,14 @@ end
 local function onHealthCheck(creature, guid)
     local st = state[guid]
     if st then
-        if not st.knockaway and healthPct(creature) < 50 then
+        if not st.knockaway and healthBelowPct(creature, 50) then
             local victim = creature:GetVictim()
             if victim then
                 creature:CastSpell(victim, SPELL_KNOCKAWAY, true)
                 st.knockaway = true
             end
         end
-        if not st.wstomp and healthPct(creature) < 25 then
+        if not st.wstomp and healthBelowPct(creature, 25) then
             creature:CastSpell(creature, SPELL_WSTOMP)
             st.wstomp = true
         end

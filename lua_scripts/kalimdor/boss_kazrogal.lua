@@ -100,9 +100,11 @@ end
 
 -- C++ EVENT_CLEAVE: DoCast(me, 31436), non-triggered, init 5s ->
 -- {6s,21s}.
+-- C++ re-arm is 6000 + rand32() % 15000 -> [6000, 20999] (exclusive
+-- top edge), NOT urand(6000, 21000); the 20999 is C++-exact.
 local function onCleave(creature, guid)
     creature:CastSpell(creature, SPELL_CLEAVE)
-    schedule(guid, "cleave", math.random(6000, 21000), function()
+    schedule(guid, "cleave", math.random(6000, 20999), function()
         onCleave(creature, guid)
     end)
 end
