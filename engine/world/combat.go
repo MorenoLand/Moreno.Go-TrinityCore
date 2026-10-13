@@ -713,8 +713,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 
 	// Apply target armor damage reduction
 	armor := float64(target.Armor)
-	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && tm.OwnerGUID != 0 {
-		armor = s.server.petFullArmor(creatureAuraKeyForTarget(target), tm)
+	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
+		armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
 	}
 	if armor < 0 {
 		armor = 0
@@ -1717,8 +1717,8 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	}
 	// Apply target armor damage reduction for physical ranged attacks
 	armor := float64(target.Armor)
-	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && tm.OwnerGUID != 0 {
-		armor = s.server.petFullArmor(creatureAuraKeyForTarget(target), tm)
+	if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil {
+		armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
 	}
 	if armor < 0 {
 		armor = 0

@@ -87,8 +87,9 @@ func (s *session) petNativeObjectScale(ctx context.Context, entry, level uint32,
 // multiplies only this flat base by BASE_PCT (aura-142) and adds agility*2,
 // the TOTAL_VALUE flats (aura-22/83) and the 35% owner bonus after — so those
 // legs must NOT be baked into the stored value. They fold live at
-// damage/display time in petFullArmor, which reads the pet's agility from
-// motion.Stats[1] and resolves the owner bonus from the owner's live armor
+// damage/display time in petFullArmor, which resolves the pet's agility via
+// petGuardianStat (create-stat base plus the live aura-29 flat / aura-137
+// pct feeds) and the owner bonus from the owner's live armor
 // (C++ recomputes it on every owner-armor change, StatSystem.cpp:283).
 func (s *session) petBaseArmor(ctx context.Context, entry, level uint32, petType uint8) uint32 {
 	armor := level * 50

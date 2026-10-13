@@ -2,6 +2,7 @@ package world
 
 import (
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -475,6 +476,129 @@ func (s *Server) petOwnerArmorBonus(motion *creatureMotion) float64 {
 	return motion.PetOwnerArmorBonus
 }
 
+// statAgilityIndex is STAT_AGILITY (SharedDefines.h: the Stats enum runs
+// 0 strength, 1 agility, 2 stamina, 3 intellect, 4 spirit).
+const statAgilityIndex = 1
+
+// petGuardianStat mirrors the stat-aura feed of Unit::GetStat for a guardian
+// (StatSystem.cpp:1316-1330, 1337-1379): GetTotalStatValue(stat) —
+// ((BASE_VALUE + createStat) * BASE_PCT + aura-29 flat) * aura-137 pct —
+// before the owner-bonus arms, which Go folds separately. The stat BASE_VALUE
+// has no feeder (Unit.cpp) and stays 0; aura-80 (SPELL_AURA_MOD_PERCENT_STAT)
+// returns early for non-players (SpellAuraEffects.cpp:3427), so the stat
+// BASE_PCT stays 1.0 for guardians. The aura-29 (SPELL_AURA_MOD_STAT,
+// SpellAuraEffects.cpp:3379-3413) flat leg sums the live amounts covering the
+// stat (misc < 0 or == stat; other misc values are rejected like the C++
+// log-and-return) under the exclusive-same-effect winner gate, resolved per
+// misc value exactly like Unit::GetHighestExclusiveSameEffectSpellGroupValue
+// (Unit.cpp:13967) with checkMiscValue=true: a candidate is suppressed only
+// by a peer with the same misc value sharing an exclusive group and a
+// strictly larger |amount| (ties to the earliest-applied record, matching
+// the C++ apply leg's first-wins). The aura-137
+// (SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE, SpellAuraEffects.cpp:3525-3566) pct
+// leg multiplies (1 + amount/100) over the live effects with misc == stat or
+// == -1 — misc -2 is NOT all-stats for 137, unlike 29 — ungated, matching
+// the handler's recompute-from-live semantics (the apply-time no-stack purge
+// is shared with the other creature folds).
+func (s *Server) petGuardianStat(key creatureAuraKey, motion *creatureMotion, stat int) float64 {
+	var base float64
+	if motion != nil && stat >= 0 && stat < len(motion.Stats) {
+		base = float64(motion.Stats[stat])
+	}
+	if s == nil || s.Data == nil || key.GUID == 0 || stat < 0 || stat > 4 {
+		return base
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	// Slot-sorted apply order, matching the other creature folds, so
+	// same-effect tie-breaking is deterministic.
+	sort.Slice(copies, func(i, j int) bool {
+		if copies[i] == nil || copies[j] == nil {
+			return copies[j] == nil
+		}
+		return copies[i].Slot < copies[j].Slot
+	})
+	type stat29Candidate struct {
+		order       int
+		spellID     uint32
+		effectIndex int
+		misc        int32
+		amount      int32
+		firstRank   uint32
+	}
+	var cands []stat29Candidate
+	totalPct := 1.0
+	for order, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		usedStoredAmount := false
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 && aura.AuraType == effect.Aura && !usedStoredAmount {
+				amount = int32(aura.Amount)
+				usedStoredAmount = true
+			}
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			switch effect.Aura {
+			case spellAuraModStat:
+				if effect.MiscValue < -2 || effect.MiscValue > 4 {
+					continue
+				}
+				if effect.MiscValue < 0 || int(effect.MiscValue) == stat {
+					cands = append(cands, stat29Candidate{order: order, spellID: aura.SpellID, effectIndex: index, misc: effect.MiscValue, amount: amount, firstRank: s.spellFirstRank(aura.SpellID)})
+				}
+			case spellAuraModTotalStatPct:
+				if effect.MiscValue < -1 || effect.MiscValue > 4 {
+					continue
+				}
+				if effect.MiscValue == -1 || int(effect.MiscValue) == stat {
+					totalPct *= 1 + float64(amount)/100
+				}
+			}
+		}
+	}
+	cache := s.petAuraStackGroups()
+	var flat int64
+	for _, c := range cands {
+		suppressed := false
+		for _, p := range cands {
+			if p.order == c.order && p.spellID == c.spellID && p.effectIndex == c.effectIndex {
+				continue
+			}
+			if p.misc != c.misc {
+				continue
+			}
+			if !sharesExclusiveSameEffectGroup(c.firstRank, p.firstRank, cache) {
+				continue
+			}
+			pa, ca := absAuraAmount(p.amount), absAuraAmount(c.amount)
+			if pa > ca || (pa == ca && p.order < c.order) {
+				suppressed = true
+				break
+			}
+		}
+		if !suppressed {
+			flat += int64(c.amount)
+		}
+	}
+	return (base + float64(flat)) * totalPct
+}
+
 // petFullArmor computes the live Guardian::UpdateArmor value
 // (StatSystem.cpp:1316-1330) for a pet motion from the stored aura-free flat
 // BASE_VALUE (motion.Armor): the BASE_PCT fold (aura-142) multiplies ONLY the
@@ -482,8 +606,9 @@ func (s *Server) petOwnerArmorBonus(motion *creatureMotion) float64 {
 // 35% owner bonus AFTER, then multiplies TOTAL_PCT (aura-101). The previous
 // combat-time fold applied basePct over the whole stored value (which
 // carried agility*2 and the owner bonus), wrongly scaling those legs. The
-// agility leg reads motion.Stats[1] (the aura stat-mod feed of GetStat stays
-// unbridged); non-pet motions get the stored value unchanged.
+// agility leg is the C++-exact GetStat(STAT_AGILITY) via petGuardianStat
+// (create-stat base plus the live aura-29 flat / aura-137 pct feeds);
+// non-pet motions get the stored value unchanged.
 func (s *Server) petFullArmor(key creatureAuraKey, motion *creatureMotion) float64 {
 	if s == nil || motion == nil {
 		return 0
@@ -493,11 +618,7 @@ func (s *Server) petFullArmor(key creatureAuraKey, motion *creatureMotion) float
 	}
 	basePct, totalPct := s.petArmorPctBonus(key, true)
 	armor := float64(motion.Armor) * basePct
-	var agility uint32
-	if len(motion.Stats) > 1 {
-		agility = motion.Stats[1]
-	}
-	armor += float64(agility) * 2
+	armor += s.petGuardianStat(key, motion, statAgilityIndex) * 2
 	armor += s.petBaseArmorBonus(key, true) + s.petOwnerArmorBonus(motion)
 	armor *= totalPct
 	if armor < 0 {
@@ -615,6 +736,72 @@ func (s *Server) petArmorPctBonus(key creatureAuraKey, isPet bool) (float64, flo
 	}
 	s.auraMu.Unlock()
 	return basePct, totalPct
+}
+
+// creatureArmorFold mirrors Creature::UpdateArmor (StatSystem.cpp:1018-1022)
+// for non-pet creatures: GetTotalAuraModValue(UNIT_MOD_ARMOR) — the stored
+// template armor (BASE_VALUE, Creature.cpp:1553) times BASE_PCT, plus the
+// flat TOTAL_VALUE, times TOTAL_PCT. The only BASE_PCT feeder is the
+// IsPet-gated 142 arm (SpellAuraEffects.cpp:3287), so it stays 1.0 here; the
+// flat leg is the ungated aura-22 (SPELL_AURA_MOD_RESISTANCE, misc NORMAL)
+// sum — the 22 handler has no IsPet gate (SpellAuraEffects.cpp:3255-3269),
+// so Sunder Armor / Faerie Fire land on regular creatures too — and the pct
+// leg is the ungated aura-101 (SPELL_AURA_MOD_RESISTANCE_PCT, misc NORMAL)
+// product (:3313-3331). Aura-83 (SPELL_AURA_MOD_BASE_RESISTANCE) is
+// IsPet-gated (:3344) and stays out, like the 35% owner bonus. Negative
+// totals clamp at 0, matching the pet fold's convention (C++ SetArmor takes
+// the raw int32).
+func (s *Server) creatureArmorFold(key creatureAuraKey, storedArmor float64) float64 {
+	if s == nil || s.Data == nil || key.GUID == 0 {
+		if storedArmor < 0 {
+			storedArmor = 0
+		}
+		return storedArmor
+	}
+	var flat int64
+	totalPct := 1.0
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 || effect.MiscValue&1 == 0 || index >= len(aura.Amounts) {
+				continue
+			}
+			switch effect.Aura {
+			case spellAuraModResistance:
+				flat += int64(aura.Amounts[index])
+			case spellAuraModResistancePct:
+				totalPct *= 1 + float64(aura.Amounts[index])/100
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	armor := (storedArmor + float64(flat)) * totalPct
+	if armor < 0 {
+		armor = 0
+	}
+	return armor
+}
+
+// liveCreatureArmor dispatches the C++-exact live armor fold by victim kind:
+// Guardian::UpdateArmor (StatSystem.cpp:1316-1330) for owner-carrying motions
+// via petFullArmor, Creature::UpdateArmor (StatSystem.cpp:1018-1022) for
+// regular creatures via creatureArmorFold. C++ recomputes both on every
+// stat-modifier change (Unit::UpdateUnitMod, Unit.cpp:9307-9340); Go folds
+// live at damage/display time per the established convention. The stored
+// armor is the no-aura fallback base, so callers no longer need to gate on
+// OwnerGUID themselves.
+func (s *Server) liveCreatureArmor(key creatureAuraKey, motion *creatureMotion, storedArmor float64) float64 {
+	if motion != nil && motion.OwnerGUID != 0 {
+		return s.petFullArmor(key, motion)
+	}
+	return s.creatureArmorFold(key, storedArmor)
 }
 
 // creatureAuraSpellHitSum mirrors the creature half of

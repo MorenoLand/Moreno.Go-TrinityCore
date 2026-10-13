@@ -14291,8 +14291,8 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			dmgSpell.AttributesEx4&spellAttr4FixedDamage == 0 && dmgSpell.Attributes&spellAttr0CUIgnoreArmor == 0 &&
 			s.player != nil {
 			armor := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil && tm.OwnerGUID != 0 {
-				armor = s.server.petFullArmor(creatureAuraKeyForTarget(target), tm)
+			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+				armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
 			}
 			if armor < 0 {
 				armor = 0
@@ -27110,8 +27110,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// and stays unbridged, as does AOE-avoidance.
 		if !fixedDamage && aura.SchoolMask&1 != 0 {
 			armor := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil && tm.OwnerGUID != 0 {
-				armor = s.server.petFullArmor(key, tm)
+			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+				armor = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
 			}
 			if armor < 0 {
 				armor = 0
@@ -27725,8 +27725,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		if !fixedDamage && aura.SchoolMask&1 != 0 {
 			armor := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil && tm.OwnerGUID != 0 {
-				armor = s.server.petFullArmor(key, tm)
+			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+				armor = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
 			}
 			if armor < 0 {
 				armor = 0
@@ -28125,8 +28125,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// Pet victims fold their live armor legs (Guardian::UpdateArmor,
 			// StatSystem.cpp:1316-1330) like the other damage paths.
 			armorValue := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil && tm.OwnerGUID != 0 {
-				armorValue = s.server.petFullArmor(key, tm)
+			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+				armorValue = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
 			}
 			if armorValue > 0 {
 				dmg = calcArmorReducedDamage(armorValue, burnCaster.player.Level, target.Level, dmg)

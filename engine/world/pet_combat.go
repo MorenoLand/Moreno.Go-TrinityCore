@@ -805,8 +805,8 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	if targetArmor > 0 {
 		armor := float64(targetArmor)
 		if !isTargetPlayer {
-			if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil && vm.OwnerGUID != 0 {
-				armor = s.petFullArmor(creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, vm)
+			if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil {
+				armor = s.liveCreatureArmor(creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, vm, float64(targetArmor))
 			}
 		}
 		if armor < 0 {
@@ -3760,8 +3760,8 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// StatSystem.cpp:1316-1330): pet victims fold their aura legs
 			// here like the melee/ranged/spell damage paths do.
 			armorValue := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil && tm.OwnerGUID != 0 {
-				armorValue = s.server.petFullArmor(creatureAuraKeyForTarget(target), tm)
+			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+				armorValue = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
 			}
 			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), armorValue, armorSpell, armorSpellKnown)
 			damage = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
