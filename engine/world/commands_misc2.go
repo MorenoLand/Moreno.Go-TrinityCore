@@ -9,8 +9,8 @@ import (
 
 // misc command ports, chunk 2: misc_commandscript (cs_misc.cpp) rows 92-125
 // in C++ table order (gps through mailbox; the unaura/unbindsight rows were
-// ported in chunk 1, commands_misc.go). Of these 32 arms, 13 are native or
-// partially native and 19 are documented-blocked:
+// ported in chunk 1, commands_misc.go). Of these 32 arms, 14 are native or
+// partially native and 18 are documented-blocked:
 //
 //   - `gps` has no Go bridge: the handler is map-geometry math (cell/grid
 //     coords, VMap outdoors/indoors, MMap navmesh presence, liquid status,
@@ -42,7 +42,9 @@ import (
 //   - `respawn` has no Go bridge: creature respawn (the C++
 //     HandleRespawnCommand grid respawn sweep, cs_misc.cpp:1801-1841) has no
 //     Go model.
-//   - `wchange` has no Go bridge: zoneWeather has no SetWeather leg
+//   - `wchange` is bridged via Server.setZoneWeather (Weather::SetWeather,
+//     Weather.cpp); the SmartScript overrideWeather zone override
+//     (Map::SetZoneWeather) has no Go bridge.
 //     (weather.go exposes only regenerate/packet).
 //   - `mailbox` has no Go bridge: WorldSession::SendShowMailBox (the
 //     mailbox open packet) is unmodeled.
@@ -737,12 +739,42 @@ func (s *session) handleCmdUnstuck(ctx context.Context, args []string) {
 }
 
 // handleCmdChangeWeather mirrors HandleChangeWeather (cs_misc.cpp:1337-1362,
-// RBAC 535). Documented-blocked: zoneWeather has no SetWeather leg.
+// RBAC 535): with weather disabled it answers LANG_WEATHER_DISABLED; the
+// player's zone needs a game_weather row (GetOrGenerateZoneDefaultWeather
+// returns null otherwise, LANG_NO_WEATHER); the zone weather is then set to
+// the given type and grade via Weather::SetWeather, which no-ops on an
+// identical pair and otherwise broadcasts to the zone.
 func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandChangeWeather) {
 		return
 	}
-	s.sendSysMessage("The .wchange command is not available: weather control has no Go bridge yet.")
+	if s.server == nil || !s.server.Config.WeatherEnabled {
+		s.sendSysMessage("Weather is disabled by config.")
+		return
+	}
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
+		return
+	}
+	typeVal, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
+		return
+	}
+	intensity, err := strconv.ParseFloat(args[1], 32)
+	if err != nil {
+		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
+		return
+	}
+	if s.player == nil {
+		return
+	}
+	weather := s.server.getOrGenerateZoneWeather(ctx, s.player.Zone)
+	if weather == nil {
+		s.sendSysMessage("There is no weather in this zone.")
+		return
+	}
+	s.server.setZoneWeather(s.player.Zone, weatherType(typeVal), float32(intensity))
 }
 
 // handleCmdMailBox mirrors HandleMailBoxCommand (cs_misc.cpp:2566-2574, RBAC
