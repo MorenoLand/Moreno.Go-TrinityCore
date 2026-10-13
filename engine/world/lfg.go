@@ -478,6 +478,21 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		}
 		return true
 	}
+	// LFGMgr::JoinLfg (LFGMgr.cpp:422-428): a grouped LFG mid-dungeon
+	// re-queue (isContinue) cannot change dungeons — the requested set is
+	// replaced by the group's current dungeon (grp.LFGDungeonID is the
+	// GetDungeon(gguid) analog, set at proposal accept like C++'s SetDungeon
+	// at LFGMgr.cpp:1147) before the requirement gates run.
+	isContinue := false
+	joinDungeons := filtered
+	if s.groupID != 0 && s.server != nil {
+		if grp := s.server.getGroup(s.groupID); grp != nil && grp.IsLFG && grp.LFGState != LFGStateFinishedDungeon {
+			isContinue = true
+			if grp.LFGDungeonID != 0 {
+				joinDungeons = []uint32{grp.LFGDungeonID}
+			}
+		}
+	}
 	// LFGMgr::JoinLfg requirement gates (LFGMgr.cpp:440-466), solo-player arms
 	// in C++ order. The group/PARTY_* variants have no counterpart in the
 	// per-player queue model.
@@ -493,14 +508,7 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	if s.hasAura(lfgSpellDungeonDeserter) {
 		return failJoin(LFGJoinDeserter)
 	}
-	// isContinue: grouped LFG mid-dungeon re-queue (LFGMgr.cpp:422) — the
-	// random-cooldown gate is skipped for it.
-	isContinue := false
-	if s.groupID != 0 && s.server != nil {
-		if grp := s.server.getGroup(s.groupID); grp != nil && grp.IsLFG && grp.LFGState != LFGStateFinishedDungeon {
-			isContinue = true
-		}
-	}
+	// isContinue skips the random-cooldown gate (LFGMgr.cpp:447).
 	if !isContinue && s.hasAura(lfgSpellDungeonCooldown) {
 		return failJoin(LFGJoinRandomCooldown)
 	}
@@ -514,7 +522,7 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	isRaid := false
 	isDungeon := false
 	typeFail := LFGJoinOK
-	for _, dungeonID := range filtered {
+	for _, dungeonID := range joinDungeons {
 		dungeon, found, derr := s.server.Data.LFGDungeon(dungeonID)
 		dtype := uint32(0)
 		if derr == nil && found {
@@ -522,7 +530,7 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		}
 		switch dtype {
 		case LFGDungeonTypeRandom:
-			if len(filtered) > 1 {
+			if len(joinDungeons) > 1 {
 				typeFail = LFGJoinInvalidDungeon
 				break
 			}
@@ -554,12 +562,27 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	if isRaid {
 		return true
 	}
-	result, entry := s.server.Features.LFG.Join(s.playerGUID, roles8, filtered, comment)
+	// LFGMgr::JoinLfg (LFGMgr.cpp:683-691): on isContinue the stored
+	// selection is not overwritten (the SetSelectedDungeons skip) — the
+	// player's original pick (e.g. the random id driving luck-of-the-draw)
+	// survives the mid-dungeon re-queue.
+	storeDungeons := joinDungeons
+	if isContinue {
+		if old, ok := s.server.Features.LFG.Status(s.playerGUID); ok && len(old.Dungeons) > 0 {
+			storeDungeons = old.Dungeons
+		}
+	}
+	result, entry := s.server.Features.LFG.Join(s.playerGUID, roles8, storeDungeons, comment)
 	s.debug("lfg join", "account", s.accountName, "result", result, "dungeons", entry.Dungeons)
 	if err := s.sendLFGJoinResult(result, uint32(LFGStateNone)); err != nil {
 		return false
 	}
 	if result == LFGJoinOK {
+		// The join-queue update carries the requested (possibly replaced)
+		// set, like C++'s SendLfgUpdatePlayer(JOIN_QUEUE, dungeons).
+		if isContinue {
+			entry.Dungeons = joinDungeons
+		}
 		return s.sendLFGUpdatePlayer(LFGUpdateJoinQueue, entry) == nil
 	}
 	return true
@@ -587,9 +610,13 @@ func (s *session) handleLFGLeave() bool {
 			return true
 		}
 	}
-	if s.server.Features.LFG.Leave(s.playerGUID) {
-		s.debug("lfg leave", "account", s.accountName)
+	// LFGMgr::LeaveLfg (LFGMgr.cpp:714-749): the removed-from-queue update
+	// goes out only from the QUEUED arm — a leave with nothing queued sends
+	// nothing.
+	if !s.server.Features.LFG.Leave(s.playerGUID) {
+		return true
 	}
+	s.debug("lfg leave", "account", s.accountName)
 	return s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone}) == nil
 }
 
