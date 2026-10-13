@@ -745,7 +745,10 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		}
 
 		// 1. If previous bidder existed and was not current buyer, refund them
-		if bidderGUID > 0 && bidderGUID != int64(s.playerGUID) && lastBid > 0 {
+		// C++ SendAuctionOutbiddedMail (AuctionHouseMgr.cpp:263-280): the
+		// refund mail fires only when the old bidder still exists
+		// ((oldBidder || oldBidder_accId)).
+		if bidderGUID > 0 && bidderGUID != int64(s.playerGUID) && lastBid > 0 && s.auctionCharExists(ctx, uint64(bidderGUID)) {
 			refundMailID := s.server.generateMailID()
 			outbidSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionOutbidded, auctionID, itemCount)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
@@ -828,7 +831,9 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
-		if bidderGUID != 0 && lastBid > 0 && bidderGUID != int64(s.playerGUID) {
+		// C++ SendAuctionOutbiddedMail (AuctionHouseMgr.cpp:263-280): the
+		// refund mail fires only when the old bidder still exists.
+		if bidderGUID != 0 && lastBid > 0 && bidderGUID != int64(s.playerGUID) && s.auctionCharExists(ctx, uint64(bidderGUID)) {
 			// Refund previous bidder via mail
 			refundMailID := s.server.generateMailID()
 			outbidSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionOutbidded, auctionID, itemCount)
@@ -1038,7 +1043,10 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	// AuctionEntry::GetAuctionCut); insufficient money silently aborts the
 	// cancel — no command result is sent, and the bidder-refund mail goes
 	// out before the cut is taken.
-	if bidderGUID > 0 && lastBid > 0 {
+	// C++ SendAuctionCancelledToBidderMail (AuctionHouseMgr.cpp:287-299):
+	// the bidder refund fires only when the bidder still exists
+	// ((bidder || bidder_accId)).
+	if bidderGUID > 0 && lastBid > 0 && s.auctionCharExists(ctx, uint64(bidderGUID)) {
 		auctionCut := auctionCutFor(uint32(lastBid))
 		if s.player.Money < auctionCut {
 			return true
