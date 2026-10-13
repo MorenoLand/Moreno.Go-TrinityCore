@@ -543,6 +543,13 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32, questGiv
 			return false
 		}
 	}
+	// Player::AddQuest (Player.cpp:15236): the quest's source item is
+	// granted before the quest log slot is claimed — the C++ grant runs
+	// at 15236 while the slot is set at 15276, so the grant's
+	// ItemAddedQuestCheck scan (Player.cpp:16544) cannot see the new
+	// quest yet. Like the C++ the result is ignored by the caller.
+	s.giveQuestSourceItem(ctx, questID)
+
 	// Player::AddQuest claims a free log slot and updates PLAYER_QUEST_LOG
 	if s.player != nil {
 		targetSlot := -1
@@ -560,7 +567,32 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32, questGiv
 			s.sendPlayerQuestLogUpdate(targetSlot)
 		}
 	}
+	// Player::AddQuest (Player.cpp:15237): the requirement counts are
+	// re-adjusted after the grant, so a granted item that doubles as a
+	// required item lands in the item objectives.
 	s.initializeQuestItemCounts(ctx, questID)
+
+	// Player::AddQuest (Player.cpp:15241-15247, 15267-15271): accepting a
+	// quest makes its rep-objective factions visible, and a PvP-flagged
+	// quest forces the hostile state immediately (UpdatePvPState). The
+	// quest row is already written above, so the forcing-quest scan sees
+	// the new quest.
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var questFlags, repFac1, repFac2 int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(Flags, 0), COALESCE(RepObjectiveFaction, 0), COALESCE(RepObjectiveFaction2, 0) FROM quest_template WHERE ID = ?`, questID).Scan(&questFlags, &repFac1, &repFac2); err == nil {
+			if repFac1 > 0 {
+				s.setFactionVisible(ctx, uint32(repFac1))
+			}
+			if repFac2 > 0 {
+				s.setFactionVisible(ctx, uint32(repFac2))
+			}
+			if questFlags&questFlagsPVP != 0 && s.player != nil {
+				if s.applyZoneState(ctx, s.player, s.player.Zone, s.areaID) {
+					s.sendPlayerUpdate()
+				}
+			}
+		}
+	}
 
 	// Player::AddQuest (Player.cpp:15284/15290): SendQuestUpdate runs at
 	// the end of AddQuest, right before the status-change hook and before
@@ -574,9 +606,6 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32, questGiv
 		s.completeQuest(ctx, questID)
 	}
 
-	// Player::AddQuest (Player.cpp:15236): the quest's source item is
-	// granted here; like the C++ the result is ignored by the caller.
-	s.giveQuestSourceItem(ctx, questID)
 	return true
 }
 

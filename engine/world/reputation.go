@@ -414,6 +414,59 @@ func (s *session) questReputationChanged(ctx context.Context, factionID uint32) 
 	}
 }
 
+// setFactionVisible mirrors ReputationMgr::SetVisible(FactionState*)
+// (ReputationMgr.cpp:445-460): factions flagged INVISIBLE_FORCED or
+// HIDDEN without SPECIAL can never be made visible; an already-visible
+// faction is a no-op; otherwise the VISIBLE flag is set, the row is
+// saved, and SMSG_SET_FACTION_VISIBLE carries the faction's
+// ReputationList id. C++ always has the faction row (ReputationMgr::
+// Initialize), so a faction with no Go row is created with the
+// C++-equivalent defaults (standing 0, race-masked default flags).
+// Callers: the RepObjectiveFaction/2 arms of Player::AddQuest
+// (Player.cpp:15241-15247) and the gossip-hello NPC faction arm
+// (NPCHandler.cpp:163).
+func (s *session) setFactionVisible(ctx context.Context, factionID uint32) {
+	if s == nil || s.player == nil || factionID == 0 || s.server == nil || s.server.Data == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	// sFactionStore.LookupEntry gate: a faction with no Faction.dbc
+	// entry, or a ReputationIndex < 0, has no visible state in C++.
+	rep, found, err := s.server.Data.Reputation(factionID, s.player.Race, s.player.Class)
+	if err != nil || !found || rep.ReputationList < 0 {
+		return
+	}
+	visibleGated := func(flags uint8) bool {
+		return flags&(factionFlagInvisibleForced|factionFlagHidden) != 0 && flags&factionFlagSpecial == 0
+	}
+	for i := range s.player.Reputations {
+		if s.player.Reputations[i].FactionID != factionID {
+			continue
+		}
+		if visibleGated(s.player.Reputations[i].Flags) {
+			return
+		}
+		if s.player.Reputations[i].Flags&factionFlagVisible != 0 {
+			return
+		}
+		s.player.Reputations[i].Flags |= factionFlagVisible
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_reputation SET flags = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Flags, s.playerGUID, factionID)
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(s.player.Reputations[i].ListID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_VISIBLE), packet.Bytes(), true)
+		return
+	}
+	newRep := playerReputation{FactionID: factionID, ListID: uint32(rep.ReputationList), Standing: 0, Base: rep.BaseStanding, Flags: rep.DefaultFlags}
+	if visibleGated(newRep.Flags) {
+		return
+	}
+	newRep.Flags |= factionFlagVisible
+	s.player.Reputations = append(s.player.Reputations, newRep)
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, newRep.Standing, newRep.Flags)
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(newRep.ListID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_VISIBLE), packet.Bytes(), true)
+}
+
 // spellFactionEntryExists mirrors the sFactionStore.LookupEntry gate in
 // Spell::EffectReputation (SpellEffects.cpp:4359-4361): a reputation spell
 // whose MiscValue names no Faction DBC entry grants nothing. A DBC load
