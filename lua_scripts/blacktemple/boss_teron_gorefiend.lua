@@ -23,8 +23,11 @@
 -- self-cast, one-shot (C++ DoCast default is triggered=false —
 -- vaelastrasz convention) / incinerate 40239 12s then {12s,20s},
 -- non-triggered on a random alive player in the instance (C++
--- SelectTarget(Random, 0) takes any alive target, C++-exact) +
--- Talk(SAY_INCINERATE) / summon doom blossom 40188 8s then
+-- SelectTarget(Random, 0) takes any alive threat target — playerOnly
+-- defaults false so pets/totems are eligible; the Lua has no
+-- threat/pet-target bridge and approximates with players only,
+-- documented) + Talk(SAY_INCINERATE) / summon doom blossom 40188
+-- 8s then
 -- {30s,40s}, triggered self-cast (C++ DoCastSelf(..., true)) +
 -- Talk(SAY_BLOSSOM); the doom blossom summon (NPC 23123) has no
 -- summon bridge — only the cast and Talk are kept / shadow of death

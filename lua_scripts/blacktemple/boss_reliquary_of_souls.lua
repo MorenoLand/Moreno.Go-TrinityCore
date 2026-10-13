@@ -263,7 +263,9 @@ local function soulDamageTaken(event, creature, attacker, damage)
         end
         if not state.dead then
             state.dead = true
-            creature:CastSpell(creature, SPELL_SOUL_RELEASE, true)
+            -- C++ HandleSoulRelease -> DoCastSelf(SPELL_SOUL_RELEASE)
+            -- defaults non-triggered (UnitAI.h:320, UnitAI.cpp:165).
+            creature:CastSpell(creature, SPELL_SOUL_RELEASE)
         end
         return false, 0
     end

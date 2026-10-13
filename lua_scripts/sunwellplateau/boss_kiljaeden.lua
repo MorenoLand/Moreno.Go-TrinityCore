@@ -499,15 +499,31 @@ local function kjPump(creature, guid)
             end
         end
     end
-    -- Phase transitions: one per tick, blocked while in darkness.
-    if st.phase == PHASE_NORMAL and not st.isInDarkness and belowPct(creature, 85) then
-        st.active = 9
-        enterNextPhase(creature, guid, st, PHASE_DARKNESS)
-    elseif st.phase == PHASE_DARKNESS and not st.isInDarkness and belowPct(creature, 55) then
-        st.active = 10
-        enterNextPhase(creature, guid, st, PHASE_ARMAGEDDON)
-    elseif st.phase == PHASE_ARMAGEDDON and not st.isInDarkness and belowPct(creature, 25) then
-        enterNextPhase(creature, guid, st, PHASE_SACRIFICE)
+    -- Phase transitions: C++ :878-910 uses three SEQUENTIAL ifs,
+    -- so one tick can cascade NORMAL->DARKNESS->ARMAGEDDON->
+    -- SACRIFICE on a big damage spike; an inner else exits the chain
+    -- (the pump re-arm below still runs). Blocked while in darkness.
+    local phasesOpen = true
+    if st.phase <= PHASE_NORMAL and not st.isInDarkness then
+        if st.phase == PHASE_NORMAL and belowPct(creature, 85) then
+            st.active = 9
+            enterNextPhase(creature, guid, st, PHASE_DARKNESS)
+        else
+            phasesOpen = false
+        end
+    end
+    if phasesOpen and st.phase <= PHASE_DARKNESS and not st.isInDarkness then
+        if st.phase == PHASE_DARKNESS and belowPct(creature, 55) then
+            st.active = 10
+            enterNextPhase(creature, guid, st, PHASE_ARMAGEDDON)
+        else
+            phasesOpen = false
+        end
+    end
+    if phasesOpen and st.phase <= PHASE_ARMAGEDDON and not st.isInDarkness then
+        if st.phase == PHASE_ARMAGEDDON and belowPct(creature, 25) then
+            enterNextPhase(creature, guid, st, PHASE_SACRIFICE)
+        end
     end
     schedule(guid, "pump", TICK, function()
         kjPump(creature, guid)
@@ -610,7 +626,8 @@ RegisterCreatureEvent(ENTRY_DECEIVER, 23, deceiverReset)
 -- C++ DamageTaken: lethal damage -> triggered felfire fission;
 -- the damage itself is NOT rewritten (the death proceeds).
 local function fiendDamageTaken(event, creature, attacker, damage)
-    if damage >= creature:GetHealth() then
+    -- C++ :1101 uses strict > (damage > GetHealth()).
+    if damage > creature:GetHealth() then
         creature:CastSpell(creature, SPELL_FELFIRE_FISSION, true)
     end
 end

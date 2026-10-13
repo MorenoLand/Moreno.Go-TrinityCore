@@ -224,6 +224,12 @@ end
 -- non-triggered self-cast snare; the taunt-immune raise has no
 -- bridge). The ResetThreatList/DoZoneInCombat arms have no bridge.
 -- EVENT_SWITCH_PHASE is re-armed 60s unconditional (C++-exact).
+-- NOTE (2026-10-13): the opposite-phase timer cancels above are
+-- LOCAL-TREE-exact. Stock TC's EventMap keeps phase-mismatched
+-- pending events for immediate fire on phase return, but this
+-- tree's EventMap::ExecuteEvent (src/common/Utilities/EventMap.cpp:81)
+-- erases expired phase-mismatched events (marli precedent) — the
+-- Lua cancels model that erase exactly.
 local function changePhase(creature, guid)
     local st = supremusState(guid)
     if st.phase == PHASE_INITIAL or st.phase == PHASE_CHASE then

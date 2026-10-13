@@ -206,7 +206,8 @@ local function sacrolashShadowNova(creature, guid)
         creature:Talk(EMOTE_SHADOW_NOVA)
     end
     creature:Talk(YELL_SHADOW_NOVA)
-    schedule(guid, "shadownova", math.random(30000, 35000), function()
+    -- C++ 30000 + rand32()%5000 is exclusive-top [30000,34999].
+    schedule(guid, "shadownova", math.random(30000, 34999), function()
         sacrolashShadowNova(creature, guid)
     end)
 end
@@ -218,7 +219,8 @@ local function sacrolashConfoundingBlow(creature, guid)
     if target then
         creature:CastSpell(target, SPELL_CONFOUNDING_BLOW)
     end
-    schedule(guid, "confoundingblow", math.random(20000, 25000), function()
+    -- C++ 20000 + rand32()%5000 is exclusive-top [20000,24999].
+    schedule(guid, "confoundingblow", math.random(20000, 24999), function()
         sacrolashConfoundingBlow(creature, guid)
     end)
 end
@@ -303,7 +305,8 @@ local function alythessConflagration(creature, guid)
     schedule(guid, "blaze", 4000, function()
         alythessBlaze(creature, guid)
     end)
-    schedule(guid, "conflagration", math.random(30000, 35000), function()
+    -- C++ 30000 + rand32()%5000 is exclusive-top [30000,34999].
+    schedule(guid, "conflagration", math.random(30000, 34999), function()
         alythessConflagration(creature, guid)
     end)
 end
@@ -393,19 +396,24 @@ local function shadowImageFury(creature, guid)
     end)
 end
 
--- C++ EVENT dark strike: DoCastVictim(45271); repeat 3s.
+-- C++ EVENT dark strike: DoCastVictim(45271) only when within
+-- melee range of the victim (IsWithinMeleeRange, 5-yd stand-in);
+-- the 3s re-arm fires regardless.
 local function shadowImageDarkStrike(creature, guid)
-    creature:CastSpell(nil, SPELL_DARK_STRIKE)
+    local victim = creature:GetVictim()
+    if victim and creature:GetDistance(victim) <= 5 then
+        creature:CastSpell(nil, SPELL_DARK_STRIKE)
+    end
     schedule(guid, "darkstrike", 3000, function()
         shadowImageDarkStrike(creature, guid)
     end)
 end
 
 -- C++ per-tick image-visual maintenance arm (approximated at
--- 10s): triggered self-cast 45263 if the aura is missing.
+-- 10s): non-triggered self-cast 45263 if the aura is missing.
 local function shadowImageVisualCheck(creature, guid)
     if not creature:HasAura(SPELL_IMAGE_VISUAL) then
-        creature:CastSpell(creature, SPELL_IMAGE_VISUAL, true)
+        creature:CastSpell(creature, SPELL_IMAGE_VISUAL)
     end
     schedule(guid, "visualcheck", 10000, function()
         shadowImageVisualCheck(creature, guid)
@@ -416,7 +424,8 @@ end
 -- combat timers. The 15s KillSelf arm has no kill bridge.
 local function shadowImageEnterCombat(event, creature)
     local guid = creature:GetGUID()
-    schedule(guid, "shadowfury", math.random(5000, 20000), function()
+    -- C++ 5000 + rand32()%15000 is exclusive-top [5000,19999].
+    schedule(guid, "shadowfury", math.random(5000, 19999), function()
         shadowImageFury(creature, guid)
     end)
     schedule(guid, "darkstrike", 3000, function()
@@ -431,12 +440,11 @@ local function shadowImageLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset: triggered DoCastSelf(45263); the NOT_SELECTABLE
--- flag arm has no flag bridge.
+-- C++ Reset -> Initialize() re-arms timers only; it never casts
+-- the visual (that is the per-tick maintenance arm above) — the
+-- NOT_SELECTABLE flag arm has no flag bridge.
 local function shadowImageReset(event, creature)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_IMAGE_VISUAL, true)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(25165, 1, sacrolashEnterCombat)
