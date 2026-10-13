@@ -8625,7 +8625,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (Unit.cpp:2478) instead of the magic hit table.
 				missInfo = s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, isPlayerVictim)
 			} else {
-				missInfo = magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim, bonusHit)
+				// WorldObject::MagicSpellHitResult (Object.cpp:2534-2536):
+				// the SPELLMOD_RESIST_MISS_CHANCE arm runs the int32
+				// ApplySpellMod instantiation on the level-diff base BEFORE
+				// the 199/186/160/rating legs — the fold applies to the base,
+				// not to the bonusHit total. The caster's mod owner is the
+				// casting player itself (Object.cpp:2246-2261).
+				baseHit := int32(magicSpellHitBase(s.player.Level, targetLevel, isPlayerVictim))
+				baseHit = s.applySpellMod(spell, spellModResistMissChance, baseHit)
+				missInfo = magicSpellHitResultFromBase(float64(baseHit), bonusHit)
 			}
 			if missInfo != protocol.SpellMissNone {
 				hitTargets = nil
@@ -18805,21 +18813,35 @@ func isHarmfulSpell(spell wotlk.Spell) bool {
 	return false
 }
 
-func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bonusHit ...float64) uint8 {
+// magicSpellHitBase mirrors the base level-diff hit table of
+// WorldObject::MagicSpellHitResult (Object.cpp:2528-2532): the 96/94 curve
+// before the SPELLMOD_RESIST_MISS_CHANCE fold and the aura legs.
+func magicSpellHitBase(casterLevel, victimLevel uint8, isPlayerVictim bool) float64 {
 	lchance := int32(11)
 	if isPlayerVictim {
 		lchance = 7
 	}
 	leveldif := int32(victimLevel) - int32(casterLevel)
-	var modHitChance float64
 	if leveldif < 3 {
-		modHitChance = float64(96 - leveldif)
-	} else {
-		modHitChance = float64(94 - (leveldif-2)*lchance)
+		return float64(96 - leveldif)
 	}
+	return float64(94 - (leveldif-2)*lchance)
+}
+
+func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bonusHit ...float64) uint8 {
+	var bonus float64
 	if len(bonusHit) > 0 {
-		modHitChance += bonusHit[0]
+		bonus = bonusHit[0]
 	}
+	return magicSpellHitResultFromBase(magicSpellHitBase(casterLevel, victimLevel, isPlayerVictim), bonus)
+}
+
+// magicSpellHitResultFromBase rolls the magic hit table from an already
+// spellmod-folded base hit chance (Object.cpp:2534-2561 order): the
+// 199/186/160/rating legs inside bonusHit add AFTER the
+// SPELLMOD_RESIST_MISS_CHANCE fold, then the [1,100] clamp and the roll.
+func magicSpellHitResultFromBase(baseHitChance, bonusHit float64) uint8 {
+	modHitChance := baseHitChance + bonusHit
 	if modHitChance < 1.0 {
 		modHitChance = 1.0
 	} else if modHitChance > 100.0 {
@@ -19173,8 +19195,7 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 	// 1. Miss: Unit::MeleeSpellMissChance (Unit.cpp:12408). The +19% dual-wield
 	// arm only applies when !spellId (Unit.cpp:12419) — never for spells. The
 	// weapon/defense-skill diffs fold into the level-diff basis Go's melee
-	// path uses (combat.go rollMeleeOutcome); SPELLMOD_RESIST_MISS_CHANCE has
-	// no Go spellmod model and stays unbridged.
+	// path uses (combat.go rollMeleeOutcome).
 	skillDiff := leveldif * 5
 	var missChance int32
 	if isPlayerVictim {
@@ -19200,12 +19221,31 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 			missChance = int32(float64(missChance) * (float64(targetLevel) / 10.0))
 		}
 	}
-	// m_modRangedHitChance / m_modMeleeHitChance (Unit.cpp:12443-12446).
+	// Spellmod from SPELLMOD_RESIST_MISS_CHANCE (Unit.cpp:12440-12447): the
+	// caster's mod owner — the casting player itself here
+	// (Object.cpp:2246-2261) — folds op 16 over a 100.0f float base, and the
+	// miss chance drops by (fold - 100). Gated on spellId like C++.
+	if spell.ID != 0 {
+		if folded := s.applySpellModFloat(spell, spellModResistMissChance, 100.0); folded != 100.0 {
+			missChance -= int32(math.Round((folded - 100.0) * 100))
+		}
+	}
+	// m_modRangedHitChance / m_modMeleeHitChance (Unit.cpp:12449-12452).
 	hitBP := int32(math.Round(s.getMeleeHitPct() * 100))
 	if ranged {
 		hitBP = int32(math.Round(s.getRangedHitPct() * 100))
 	}
 	missChance -= hitBP
+	// SPELL_AURA_MOD_HIT_CHANCE (54) on the attacker and
+	// SPELL_AURA_MOD_ATTACKER_MELEE/RANGED_HIT_CHANCE (184/185) on the victim
+	// (Unit.cpp:12454-12459) — the same arms the white-swing path carries
+	// (combat.go).
+	missChance -= s.totalAuraModifier(spellAuraModHitChance) * 100
+	if ranged {
+		missChance -= victimAttackerHitChanceBP(s, targetGUID, isPlayerVictim, spellAuraModAttackerRangedHitChance)
+	} else {
+		missChance -= victimAttackerHitChanceBP(s, targetGUID, isPlayerVictim, spellAuraModAttackerMeleeHitChance)
+	}
 	if missChance < 0 {
 		missChance = 0
 	}
@@ -19520,7 +19560,12 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 		targetLevel = tgt.Level
 	}
-	missInfo := magicSpellHitResult(s.player.Level, targetLevel, targetSess != nil, s.spellHitTableBonus(spell, targetSess))
+	// WorldObject::MagicSpellHitResult (Object.cpp:2534-2536): the
+	// SPELLMOD_RESIST_MISS_CHANCE arm folds the caster's mod owner (the
+	// casting player) over the int32 level-diff base before the aura legs.
+	baseHit := int32(magicSpellHitBase(s.player.Level, targetLevel, targetSess != nil))
+	baseHit = s.applySpellMod(spell, spellModResistMissChance, baseHit)
+	missInfo := magicSpellHitResultFromBase(float64(baseHit), s.spellHitTableBonus(spell, targetSess))
 	if missInfo != protocol.SpellMissNone {
 		return missInfo
 	}

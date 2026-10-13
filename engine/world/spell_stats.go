@@ -76,10 +76,12 @@ func (s *session) getSpellHitPct() float64 {
 // getSpellHitPct), the caster-side school-masked 199 leg, the victim-side
 // school-masked 186 leg, the victim-side 160 AoE-avoidance leg (AoE spells
 // only), and the victim player's CR_HIT_TAKEN_SPELL rating leg.
-// Documented deltas: SPELLMOD_RESIST_MISS_CHANCE spellmods, the
-// mechanic/debuff-resist and deflect rolls, creature-victim 186/160 auras
-// (no misc-masked creature aura sum), and the periodic-tick path
-// (persistentAreaTickMissed has no caster session).
+// Documented deltas: the mechanic/debuff-resist and deflect rolls,
+// creature-victim 186/160 auras (no misc-masked creature aura sum), the
+// SPELLMOD_RESIST_MISS_CHANCE arm on the periodic-tick path
+// (persistentAreaTickMissed has no caster session) — on the player-cast
+// paths it folds the level-diff base at the call sites via
+// magicSpellHitResultFromBase (Object.cpp:2534-2536).
 func (s *session) spellHitTableBonus(spell wotlk.Spell, targetSess *session) float64 {
 	bonusHit := s.getSpellHitPct()
 	bonusHit += float64(s.playerAuraModifierByMiscMask(spellAuraModIncreasesSpellPctToHit, int32(spell.SchoolMask)))

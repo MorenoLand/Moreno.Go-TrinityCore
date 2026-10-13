@@ -2864,11 +2864,25 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if s.server != nil {
 			bonusHit = float64(s.server.creatureAuraSpellHitSum(creatureAuraKeyForMotion(caster)))
 		}
-		miss := magicSpellHitResult(uint8(maxUint32(caster.Level, 1)), target.Level, isPlayerVictim, bonusHit)
+		// WorldObject::MagicSpellHitResult (Object.cpp:2534-2536): the
+		// SPELLMOD_RESIST_MISS_CHANCE arm runs on the pet's mod owner —
+		// the owner player (Object.cpp:2246-2261), whose registry is this
+		// session's — folding the int32 level-diff base before the aura
+		// legs.
+		baseHit := int32(magicSpellHitBase(uint8(maxUint32(caster.Level, 1)), target.Level, isPlayerVictim))
+		var petSpell wotlk.Spell
+		petSpellKnown := false
+		if s.server != nil && s.server.Data != nil {
+			if ps, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+				petSpell, petSpellKnown = ps, true
+				baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
+			}
+		}
+		miss := magicSpellHitResultFromBase(float64(baseHit), bonusHit)
 		if miss != protocol.SpellMissNone {
 			damage = 0
 			hitInfo = 0x01
-		} else if petSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+		} else if petSpellKnown {
 			// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): the
 			// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm runs for pet-cast
 			// spells too (pet debuff spells carry aura effects).
