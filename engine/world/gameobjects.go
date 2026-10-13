@@ -557,6 +557,13 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	if err != nil || guid == 0 {
 		return false
 	}
+	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2371): a player in
+	// flight cannot interact with gameobjects — the gate fires inside
+	// HandleGameObjectUseOpcode (SpellHandler.cpp:300) before obj->Use, so
+	// the BG-flag delegate arms are gated too.
+	if s.isInFlight() {
+		return true
+	}
 
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	// ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT is updated by CMSG_GAMEOBJ_REPORT_USE
@@ -963,6 +970,13 @@ func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte)
 	guid, err := readObjectGUID(payload)
 	if err != nil || guid == 0 {
 		return false
+	}
+	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2371): a player in
+	// flight cannot interact with gameobjects — the gate fires inside
+	// HandleGameobjectReportUse (SpellHandler.cpp:318) before the
+	// achievement-criteria update.
+	if s.isInFlight() {
+		return true
 	}
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	lowGUID := uint32(guid & 0x00FFFFFF)

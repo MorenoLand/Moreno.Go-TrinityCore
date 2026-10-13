@@ -422,6 +422,13 @@ func (s *session) canInteractWithQuestGiver(ctx context.Context, guid uint64) bo
 		giver := s.server.findSessionByGUID(guid)
 		return s.player.Health > 0 && giver != nil && giver.player != nil && giver.player.Health > 0
 	case high == 0xF110:
+		// Player::CanInteractWithQuestGiver (Player.cpp:2301) -> TYPEID_GAMEOBJECT
+		// -> GetGameObjectIfCanInteractWith -> the in-flight gate
+		// (Player.cpp:2371). The player-giver and item-giver arms above have
+		// no such gate in C++ (IsAlive-only).
+		if s.isInFlight() {
+			return false
+		}
 		if s.server == nil {
 			return false
 		}

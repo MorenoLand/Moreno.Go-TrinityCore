@@ -39,6 +39,13 @@ func (s *session) canInteractWithGameObject(ctx context.Context, guid uint64, go
 	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || uint16(guid>>48) != 0xF110 {
 		return false
 	}
+	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2371): no gameobject
+	// interaction while the player is in flight — the NPC twin carries the
+	// same gate; the guild-bank handlers (GuildHandler.cpp:256/276/289/300/
+	// 307/344/355) all resolve through it in C++.
+	if s.isInFlight() {
+		return false
+	}
 	low := uint32(guid & 0x00FFFFFF)
 	var mapID int64
 	var x, y, z float32
