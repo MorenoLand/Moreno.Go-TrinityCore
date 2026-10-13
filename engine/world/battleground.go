@@ -1427,7 +1427,48 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 			s.removeAura(2584) // SPELL_WAITING_FOR_RESURRECT
 		}
 	}
+	// Battleground::RemovePlayerAtLeave (Battleground.cpp:916-927): the
+	// trailing player arms run only on the voluntary-leave path. C++
+	// LogoutPlayer never calls LeaveBattleground (offline removal is the
+	// separate untracked OFFLINE site, Battleground.cpp:271), and
+	// Player::LeaveBattleground itself gates on GetBattleground() != null
+	// (Player.cpp:22471); Player::InBattleground is m_bgData.bgInstanceID !=
+	// 0 (Player.h:1906), mirrored by s.bgData.InstanceID.
+	wasInBattleground := !fromLogout && s.bgData.InstanceID != 0
+	if wasInBattleground {
+		// Battleground.cpp:918-920: SetBattlegroundId(0,
+		// BATTLEGROUND_TYPE_NONE) + SetBGTeam(0). The bgTypeID=NONE term has
+		// no Go field, and SetBGTeam's arena-faction reset dies with the
+		// queue slots deactivated below. The stale instance id previously
+		// kept gating corpse lootability (death.go), the group/guild BG
+		// gates (group.go, guild.go) and the BG-only spell checks
+		// (spells.go) after the player had already left.
+		s.bgData.InstanceID = 0
+		s.bgData.Team = 0
+		// Battleground.cpp:826-828: the C++ removes SPELL_AURA_MOD_SHAPESHIFT
+		// when the player carries spirit of redemption - mirrored exactly,
+		// like the arena-end twin (battleground_arena.go).
+		if s.hasAuraType(spellAuraSpiritOfRedemption) {
+			s.removeAurasByType(spellAuraModShapeshift)
+		}
+		// Battleground.cpp:832-835: resurrect on exit, spawning corpse bones.
+		// The SPELL_AURA_MOUNTED strip (Battleground.cpp:830) is deliberately
+		// not mirrored: C++ restores the mount after the teleport via
+		// DELAYED_BG_MOUNT_RESTORE, which has no Go twin, so stripping would
+		// dismount where C++ leaves the player mounted.
+		if s.player.Health == 0 {
+			s.resurrectPlayer(ctx, 1.0)
+			s.spawnCorpseBones(ctx)
+		}
+	}
 	s.resetAchievementCriteriaByCondition(criteriaConditionBGMap, s.player.Map)
+	if wasInBattleground && s.bgData.JoinMap != 0 {
+		// Battleground.cpp:925-927 with Transport=true:
+		// Player::TeleportToBGEntryPoint (Player.cpp:1896-1906); the JoinMap
+		// gate mirrors the arena-end twin (battleground_arena.go) - C++
+		// returns false with no teleport when the entry point is invalid.
+		s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
+	}
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {
 			s.bgQueues[slot].Active = false
