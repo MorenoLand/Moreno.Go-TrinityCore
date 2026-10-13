@@ -14314,7 +14314,8 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 			}
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
-			// the live 22 flat amounts fold into a pet victim's resistances.
+			// the live resistance fold (22/101/143) lands on every creature
+			// victim's resistances.
 			resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
 			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), s.player.SpellPenetration)
 			if resisted > 0 && damage == 0 {
@@ -27130,7 +27131,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				pen = tickCaster.player.SpellPenetration
 			}
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
-			// the live 22 flat amounts fold into a pet victim's resistances.
+			// the live resistance fold (22/101/143) lands on every creature
+			// victim's resistances.
 			resistances := s.server.petFoldedResistances(key, target.Resistances)
 			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
@@ -27742,7 +27744,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				pen = tickCaster.player.SpellPenetration
 			}
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
-			// the live 22 flat amounts fold into a pet victim's resistances.
+			// the live resistance fold (22/101/143) lands on every creature
+			// victim's resistances.
 			resistances := s.server.petFoldedResistances(key, target.Resistances)
 			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
@@ -28139,7 +28142,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				pen = burnCaster.player.SpellPenetration
 			}
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
-			// the live 22 flat amounts fold into a pet victim's resistances.
+			// the live resistance fold (22/101/143) lands on every creature
+			// victim's resistances.
 			burnResistances := s.server.petFoldedResistances(key, target.Resistances)
 			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), burnResistances, burnCaster.player.Level, target.Level, true, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
 		}
@@ -33896,7 +33900,8 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 		var resisted uint32
 		if schoolMask > 1 {
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
-			// the live 22 flat amounts fold into a pet victim's resistances.
+			// the live resistance fold (22/101/143) lands on every creature
+			// victim's resistances.
 			resistances := s.server.petFoldedResistances(creatureAuraKeyForMotion(motion), resistances)
 			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, uint8(level), true, false, s.casterIgnoreResistPct(spellID, uint32(schoolMask)))
 		}

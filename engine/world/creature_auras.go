@@ -634,7 +634,12 @@ func (s *Server) petFullArmor(key creatureAuraKey, motion *creatureMotion) float
 		return float64(motion.Armor)
 	}
 	basePct, totalPct := s.petArmorPctBonus(key, true)
-	armor := float64(motion.Armor) * basePct
+	// C++: flat(BASE_VALUE)*pct(BASE_PCT) + agility*2 + flat(TOTAL_VALUE) +
+	// owner bonus, x pct(TOTAL_PCT) (StatSystem.cpp:1316-1330). The flat base
+	// is the DB base (SetStatFlatModifier(BASE_VALUE), Pet.cpp:906) plus the
+	// ungated aura-143 exclusive winner (SpellAuraEffects.cpp:3232-3252),
+	// beside the IsPet-gated 142/83 arms.
+	armor := (float64(motion.Armor) + s.exclusiveResistanceArmorBase(key)) * basePct
 	armor += s.petGuardianStat(key, motion, statAgilityIndex) * 2
 	armor += s.petBaseArmorBonus(key, true) + s.petOwnerArmorBonus(motion)
 	armor *= totalPct
@@ -690,26 +695,77 @@ func (s *Server) petResistanceBonus(key creatureAuraKey, isPet bool) [schoolCoun
 	return bonus
 }
 
-// petFoldedResistances returns base with the live 22 resistance fold
-// applied when the key's creature motion carries an owner. The 22 handler
-// (AuraEffect::HandleAuraModResistance, SpellAuraEffects.cpp:3255-3269) has
-// no IsPet gate — it folds TOTAL_VALUE into UNIT_MOD_RESISTANCE for every
-// unit — so charmed creatures correctly get the fold here too, even though
-// they are not pets. Regular creatures (OwnerGUID == 0) get base unchanged:
-// their damage-time 22 fold is a known gap (Go broadcasts no live resistance
-// recompute for them), recorded as a standing edge.
+// petFoldedResistances returns base with the live resistance fold applied
+// for magic-resistance mitigation at damage time. The pet path is unchanged:
+// Guardian::UpdateResistances (StatSystem.cpp:1301-1314) — base plus the live
+// 22 flat sum (petResistanceBonus, IsPet-gated arms included).
+// The non-pet path was gated on OwnerGUID != 0 — but the C++ handlers are
+// ungated: HandleAuraModResistance (SpellAuraEffects.cpp:3255-3269), the
+// aura-143 exclusive arm (SpellAuraEffects.cpp:3232-3252) and
+// HandleModResistancePercent (SpellAuraEffects.cpp:3313-3331) all fold into
+// UNIT_MOD_RESISTANCE for every unit, so regular creature victims get
+// Creature::UpdateResistances (StatSystem.cpp:1007-1014): (DB base + 143
+// winner + 22 flat) x 101 product per school. School 0 (armor) routes to
+// UpdateArmor in C++ and is folded by liveCreatureArmor, so it stays out
+// here; aura-83 is IsPet-gated (:3344) and stays out for non-pet creatures.
 func (s *Server) petFoldedResistances(key creatureAuraKey, base [schoolCount]uint32) [schoolCount]uint32 {
 	if s == nil || key.GUID == 0 {
 		return base
 	}
 	tm := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
-	if tm == nil || tm.OwnerGUID == 0 {
-		return base
+	if tm == nil || motionIsPet(tm) {
+		if tm == nil {
+			return base
+		}
+		bonus := s.petResistanceBonus(key, true)
+		out := base
+		for x := range out {
+			out[x] += uint32(bonus[x])
+		}
+		return out
 	}
-	bonus := s.petResistanceBonus(key, true)
+	var flat [schoolCount]int64
+	var exclusive [schoolCount]int64
+	totalPct := [schoolCount]float64{1, 1, 1, 1, 1, 1, 1}
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 || index >= len(aura.Amounts) {
+				continue
+			}
+			amount := aura.Amounts[index]
+			for x := 1; x < schoolCount; x++ {
+				if effect.MiscValue&(1<<uint(x)) == 0 {
+					continue
+				}
+				switch effect.Aura {
+				case spellAuraModResistance:
+					flat[x] += int64(amount)
+				case spellAuraModResistanceExclusive:
+					if a := int64(amount); a > exclusive[x] {
+						exclusive[x] = a
+					}
+				case spellAuraModResistancePct:
+					totalPct[x] *= 1 + float64(amount)/100
+				}
+			}
+		}
+	}
+	s.auraMu.Unlock()
 	out := base
-	for x := range out {
-		out[x] += uint32(bonus[x])
+	for x := 1; x < schoolCount; x++ {
+		v := (float64(base[x]) + float64(exclusive[x]) + float64(flat[x])) * totalPct[x]
+		if v < 0 {
+			v = 0
+		}
+		out[x] = uint32(v)
 	}
 	return out
 }
@@ -760,6 +816,46 @@ func (s *Server) petArmorPctBonus(key creatureAuraKey, isPet bool) (float64, flo
 	return basePct, totalPct
 }
 
+// exclusiveResistanceArmorBase mirrors the armor (misc NORMAL) leg of
+// AuraEffect::HandleAuraModResistanceExclusive (SpellAuraEffects.cpp:3232-3252,
+// aura 143): ungated — every creature target, pets included, adds the max
+// positive exclusive amount into UNIT_MOD_ARMOR BASE_VALUE
+// (UNIT_MOD_RESISTANCE_START+0 == UNIT_MOD_ARMOR, Unit.h:178). The C++
+// apply/remove legs net to the max positive winner
+// (GetMaxPositiveAuraModifierByMiscMask + the amount< GetAmount() guard), so
+// the live fold takes max() directly.
+func (s *Server) exclusiveResistanceArmorBase(key creatureAuraKey) float64 {
+	if s == nil || s.Data == nil || key.GUID == 0 {
+		return 0
+	}
+	var winner int64
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != spellAuraModResistanceExclusive ||
+				aura.EffectMask&(1<<uint(index)) == 0 || effect.MiscValue&1 == 0 ||
+				index >= len(aura.Amounts) {
+				continue
+			}
+			if amt := int64(aura.Amounts[index]); amt > winner {
+				winner = amt
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	if winner < 0 {
+		return 0
+	}
+	return float64(winner)
+}
+
 // creatureArmorFold mirrors Creature::UpdateArmor (StatSystem.cpp:1018-1022)
 // for non-pet creatures: GetTotalAuraModValue(UNIT_MOD_ARMOR) — the stored
 // template armor (BASE_VALUE, Creature.cpp:1553) times BASE_PCT, plus the
@@ -767,8 +863,10 @@ func (s *Server) petArmorPctBonus(key creatureAuraKey, isPet bool) (float64, flo
 // IsPet-gated 142 arm (SpellAuraEffects.cpp:3287), so it stays 1.0 here; the
 // flat leg is the ungated aura-22 (SPELL_AURA_MOD_RESISTANCE, misc NORMAL)
 // sum — the 22 handler has no IsPet gate (SpellAuraEffects.cpp:3255-3269),
-// so Sunder Armor / Faerie Fire land on regular creatures too — and the pct
-// leg is the ungated aura-101 (SPELL_AURA_MOD_RESISTANCE_PCT, misc NORMAL)
+// so Sunder Armor / Faerie Fire land on regular creatures too — plus the
+// ungated aura-143 (SPELL_AURA_MOD_RESISTANCE_EXCLUSIVE, misc NORMAL) max
+// positive winner into BASE_VALUE (SpellAuraEffects.cpp:3232-3252) — and the
+// pct leg is the ungated aura-101 (SPELL_AURA_MOD_RESISTANCE_PCT, misc NORMAL)
 // product (:3313-3331). Aura-83 (SPELL_AURA_MOD_BASE_RESISTANCE) is
 // IsPet-gated (:3344) and stays out, like the 35% owner bonus. Negative
 // totals clamp at 0, matching the pet fold's convention (C++ SetArmor takes
@@ -804,7 +902,10 @@ func (s *Server) creatureArmorFold(key creatureAuraKey, storedArmor float64) flo
 		}
 	}
 	s.auraMu.Unlock()
-	armor := (storedArmor + float64(flat)) * totalPct
+	// C++: (flat(BASE)*pct(BASE_PCT) + flat(TOTAL)) * pct(TOTAL_PCT); the
+	// only BASE_PCT feeder (142) is IsPet-gated so it stays 1.0 here, and the
+	// 143 winner joins the BASE_VALUE leg beside the stored template base.
+	armor := (storedArmor + s.exclusiveResistanceArmorBase(key) + float64(flat)) * totalPct
 	if armor < 0 {
 		armor = 0
 	}
