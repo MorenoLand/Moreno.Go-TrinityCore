@@ -678,7 +678,14 @@ func (s *session) totemHealPulseTick(ctx context.Context, def TotemDef, totem *a
 	} else {
 		target.player.Health += heal
 	}
-	s.updateAchievementCriteria(criteriaTypeHealingDone, 0, heal)
+	// Unit::DealHeal (Unit.cpp:6311-6315): ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE
+	// advances on the actual gain — overheal excluded — and skips a zero
+	// gain; HIGHEST_HEAL_CAST keeps the pulse's addhealth. The totem-healer
+	// rule (Unit.cpp:6306-6307, owner credited) holds structurally: s is
+	// the owner's session.
+	if effectiveHeal > 0 {
+		s.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveHeal)
+	}
 	s.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
 	target.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, effectiveHeal)
 	target.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)

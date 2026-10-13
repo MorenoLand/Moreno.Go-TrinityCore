@@ -12692,13 +12692,24 @@ func (s *session) classScriptAuraByMisc(spell wotlk.Spell, misc int32) (classScr
 // tmpDamage = (pdamage + DoneTotal) * DoneTotalMod, then the SPELLMOD_DAMAGE /
 // SPELLMOD_DOT spellmod applies to the total (Unit.cpp:6730-6733). Spells with
 // SPELL_ATTR3_NO_DONE_BONUS skip the whole leg (Unit.cpp:6603-6604). isDot selects
-// the DOT coefficient/spellmod like C++'s DamageEffectType. The DmgClass NONE
-// early-out (Unit.cpp:6705-6707) has no Go model — wotlk.Spell carries no DmgClass.
+// the DOT coefficient/spellmod like C++'s DamageEffectType.
 func (s *session) spellDamageBonusDone(ctx context.Context, spell wotlk.Spell, spellKnown bool, damage uint32, targetGUID uint64, effIndex int, isDot bool) uint32 {
 	if !spellKnown || spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
 		return damage
 	}
 	target, _ := s.getCombatTarget(ctx, targetGUID)
+	// Unit::SpellDamageBonusDone (Unit.cpp:6705-6709): spells with
+	// SPELL_DAMAGE_CLASS_NONE skip the advertised-benefit and coefficient
+	// legs (and the spellmod fold) and return pdamage x DoneTotalMod.
+	// SpellInfo::DmgClass is the DefenseType DBC field (SpellInfo.cpp:856),
+	// so the DefenseType gate is C++-exact.
+	if spell.DefenseType == spellDamageClassNone {
+		tmp := float64(damage) * s.spellDamagePctDone(ctx, spell, targetGUID, target)
+		if tmp < 0 {
+			tmp = 0
+		}
+		return uint32(tmp)
+	}
 	flat := s.spellDamageDoneFlat(ctx, spell, targetGUID, target, effIndex, isDot)
 	pct := s.spellDamagePctDone(ctx, spell, targetGUID, target)
 	tmp := float64(int32(damage)+flat) * pct
@@ -16980,7 +16991,12 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	} else {
 		targetSess.player.Health += heal
 	}
-	s.updateAchievementCriteria(criteriaTypeHealingDone, 0, heal)
+	// Unit::DealHeal (Unit.cpp:6311-6315): ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE
+	// advances on the actual gain — overheal excluded — and skips a zero
+	// gain; HIGHEST_HEAL_CAST keeps the tick's addhealth.
+	if effectiveHeal > 0 {
+		s.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveHeal)
+	}
 	s.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
 	targetSess.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, effectiveHeal)
 	targetSess.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
@@ -18839,11 +18855,13 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 // magicSpellHitResultFromBase rolls the magic hit table from an already
 // spellmod-folded base hit chance (Object.cpp:2534-2561 order): the
 // 199/186/160/rating legs inside bonusHit add AFTER the
-// SPELLMOD_RESIST_MISS_CHANCE fold, then the [1,100] clamp and the roll.
+// SPELLMOD_RESIST_MISS_CHANCE fold, then the [0,100] clamp and the roll.
+// C++ clamps with RoundToInterval(HitChance, 0, 10000) (Object.cpp:2557),
+// so a fully-negative table is a guaranteed miss — there is no 1% floor.
 func magicSpellHitResultFromBase(baseHitChance, bonusHit float64) uint8 {
 	modHitChance := baseHitChance + bonusHit
-	if modHitChance < 1.0 {
-		modHitChance = 1.0
+	if modHitChance < 0.0 {
+		modHitChance = 0.0
 	} else if modHitChance > 100.0 {
 		modHitChance = 100.0
 	}
@@ -25429,6 +25447,32 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		ts.player.Health = newHP
 		ts.sendPlayerUpdate()
 
+		// Unit::DealHeal (Unit.cpp:6292-6325): the achievement arms fire on
+		// every periodic-heal tick (SpellAuraEffects.cpp:5400). Caster side
+		// (healer = healCaster; a null healer credits nothing): the arena
+		// healing score plus ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE on the
+		// effective heal (overheal excluded, skipped at zero) and
+		// ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEAL_CAST on the tick's
+		// addhealth. Victim side (player victims):
+		// ACHIEVEMENT_CRITERIA_TYPE_TOTAL_HEALING_RECEIVED on the effective
+		// heal and ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEALING_RECEIVED on the
+		// addhealth. The victim/healer AI hooks have no Go model.
+		effectiveTickHeal := uint32(0)
+		if heal > overheal {
+			effectiveTickHeal = heal - overheal
+		}
+		if healCaster != nil && healCaster.player != nil {
+			if ts.server != nil {
+				ts.server.updateArenaHealingScore(healCaster, effectiveTickHeal)
+			}
+			if effectiveTickHeal > 0 {
+				healCaster.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveTickHeal)
+			}
+			healCaster.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
+		}
+		ts.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, effectiveTickHeal)
+		ts.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
+
 		if ts.server != nil && heal > overheal {
 			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, heal-overheal, false)
 		}
@@ -26255,6 +26299,22 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 		}
 		casterSess.player.Health = newHP
 		casterSess.sendPlayerUpdate()
+		// Unit::DealHeal (Unit.cpp:6292-6325): the periodic leech self-heal
+		// runs caster->HealBySpell (SpellAuraEffects.cpp:5317), so the
+		// achievement arms fire with healer = victim = the leeching player —
+		// the arena healing score plus HEALING_DONE on the effective heal
+		// (overheal excluded, skipped at zero) and HIGHEST_HEAL_CAST on the
+		// tick's addhealth, and the victim-side TOTAL_HEALING_RECEIVED /
+		// HIGHEST_HEALING_RECEIVED on the same session.
+		if s.server != nil {
+			s.server.updateArenaHealingScore(casterSess, effectiveHeal)
+		}
+		if effectiveHeal > 0 {
+			casterSess.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveHeal)
+		}
+		casterSess.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
+		casterSess.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, effectiveHeal)
+		casterSess.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
 		// Unit::ForwardThreatForAssistingMe(caster, effectiveHeal * 0.5) — the 0.5
 		// is inside distributeHealingThreat.
 		if s.server != nil && effectiveHeal > 0 {
@@ -27002,6 +27062,25 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				} else {
 					s.server.distributeCreatureHealingThreat(context.Background(), key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
 				}
+			}
+			// Unit::DealHeal (Unit.cpp:6311-6320): the caster-side achievement
+			// arms fire on creature-victim ticks too (SpellAuraEffects.cpp:5400
+			// calls DealHeal for every tick) — the arena healing score plus
+			// ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE on the effective heal
+			// (overheal excluded, skipped at zero) and
+			// ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEAL_CAST on the tick's
+			// addhealth. The victim arms need a player victim and stay off
+			// here; a null/offline caster credits nothing (C++ null healer).
+			if tickCaster != nil && tickCaster.player != nil {
+				tickHeal := uint32(0)
+				if heal > overheal {
+					tickHeal = heal - overheal
+				}
+				s.server.updateArenaHealingScore(tickCaster, tickHeal)
+				if tickHeal > 0 {
+					tickCaster.updateAchievementCriteria(criteriaTypeHealingDone, 0, tickHeal)
+				}
+				tickCaster.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
 			}
 		}
 		// SpellAuraEffects.cpp:5411-5433 — Health Funnel caster cost, after
