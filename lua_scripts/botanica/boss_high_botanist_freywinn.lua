@@ -176,13 +176,13 @@ local function combatTick(creature, guid)
         -- The DoCast(me, SPELL_SUMMON_FRAYER, true) arm has
         -- no summon bridge — skipped (steamrigger
         -- precedent); the tranquility / tree-form casts are
-        -- TRIGGERED in the C++ (C++-exact), modeled here as
-        -- plain self casts. The IsNonMeleeSpellCast gate /
+        -- TRIGGERED in the C++ (C++-exact) — bridged with the
+        -- triggered flag. The IsNonMeleeSpellCast gate /
         -- InterruptNonMeleeSpells have no cast-state bridge,
         -- the RemoveAllAuras arm has no aura bridge, the
         -- MoveIdle() arm has no movement bridge.
-        creature:CastSpell(creature, SPELL_TRANQUILITY)
-        creature:CastSpell(creature, SPELL_TREE_FORM)
+        creature:CastSpell(creature, SPELL_TRANQUILITY, true)
+        creature:CastSpell(creature, SPELL_TREE_FORM, true)
         st.moveFree = false
         st.treeForm = 75000
     else
