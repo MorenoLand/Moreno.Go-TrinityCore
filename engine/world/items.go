@@ -5092,6 +5092,10 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// ItemHandler.cpp:1139-1140: socketing clears the BOP-tradeable window
+	// (RemoveTradeableItem has no twin; ClearSoulboundTradeable bridged).
+	s.clearSoulboundTradeable(ctx, rawTargetGUID)
+
 	if targetBag == 0 && targetSlot < equipSlotEnd {
 		s.syncEquipmentCache(ctx)
 	}

@@ -615,6 +615,23 @@ func (s *session) soulboundTradeExpired(ctx context.Context, itemGUID uint64) bo
 	return true
 }
 
+// clearSoulboundTradeable mirrors Item::ClearSoulboundTradeable
+// (Item.cpp:1176-1186): the BOP_TRADEABLE flag is removed and the
+// item_soulbound_trade_data row deleted. C++ fires it wherever the item's
+// tradeability changes hands — socketing (ItemHandler.cpp:1139-1140),
+// enchanting (SpellEffects.cpp:2763-2764, 2828-2829). The RemoveTradeableItem
+// half has no twin (Go has no per-second owner-update tradeable list), but
+// the clear itself is bridgeable now that the soulbound-trade-data model
+// exists.
+func (s *session) clearSoulboundTradeable(ctx context.Context, itemGUID uint64) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	_, _ = cdb.ExecContext(ctx, `UPDATE item_instance SET flags = flags & ? WHERE guid = ?`, ^int64(itemInstanceFlagBOPTradeable), itemGUID)
+	_, _ = cdb.ExecContext(ctx, `DELETE FROM item_soulbound_trade_data WHERE itemGuid = ?`, itemGUID)
+}
+
 // tradeTaplistAllows mirrors the allowed-looter leg of Item::IsBindedNotWith
 // (Item.cpp:1046-1048): a BOP-tradeable item may only change hands to a trader
 // inside the item's item_soulbound_trade_data allowedPlayers set.

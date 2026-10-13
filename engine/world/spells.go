@@ -32761,8 +32761,9 @@ func (s *session) equippedWeaponInstance(ctx context.Context, slot uint8) (uint6
 // MiscValue enchantment is validated against the DBC (2736-2741) and
 // written to PERM_ENCHANTMENT_SLOT (slot 0, ItemDefines.h:146). The
 // GM-trade command log (2746-2751) has no RBAC/log model in Go
-// (documented); the RemoveTradeableItem / ClearSoulboundTradeable arms
-// (2761-2762) have no tradeable-item model (documented). The
+// (documented); RemoveTradeableItem (2763) has no twin — Go has no per-second
+// owner-update tradeable list — while ClearSoulboundTradeable (2764) is
+// bridged via clearSoulboundTradeable below. The
 // ApplyEnchantment remove/apply pair (2755/2759) is covered by
 // syncEquipmentCache for an equipped target.
 func (s *session) handleEffectEnchantItemPerm(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect, castItemEntry uint32) {
@@ -32802,6 +32803,9 @@ func (s *session) handleEffectEnchantItemPerm(ctx context.Context, target protoc
 	if t.ownedByCaster {
 		s.syncEquipmentCache(ctx)
 	}
+	// SpellEffects.cpp:2763-2764: enchanting clears the BOP-tradeable window
+	// (RemoveTradeableItem has no twin; ClearSoulboundTradeable bridged).
+	s.clearSoulboundTradeable(ctx, t.instanceGUID)
 }
 
 // handleEffectEnchantItemTmp mirrors Spell::EffectEnchantItemTmp
@@ -32917,9 +32921,9 @@ func (s *session) applyRockbiterEnchant(ctx context.Context, spell wotlk.Spell) 
 // ITEM_ENCHANTMENT_TYPE_PRISMATIC_SOCKET (=8) effect are supported
 // (2788-2804); the MiscValue enchantment is written to
 // PRISMATIC_ENCHANTMENT_SLOT (slot 6, ItemDefines.h:152). The GM-trade
-// command log (2815-2820) has no RBAC/log model in Go (documented); the
-// RemoveTradeableItem / ClearSoulboundTradeable arms (2828-2829) have no
-// tradeable-item model (documented).
+// command log (2815-2820) has no RBAC/log model in Go (documented);
+// RemoveTradeableItem (2828) has no twin while ClearSoulboundTradeable
+// (2829) is bridged via clearSoulboundTradeable below.
 func (s *session) handleEffectEnchantItemPrismatic(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
@@ -32950,6 +32954,9 @@ func (s *session) handleEffectEnchantItemPrismatic(ctx context.Context, target p
 	if t.ownedByCaster {
 		s.syncEquipmentCache(ctx)
 	}
+	// SpellEffects.cpp:2828-2829: prismatic socketing clears the
+	// BOP-tradeable window (ClearSoulboundTradeable bridged).
+	s.clearSoulboundTradeable(ctx, t.instanceGUID)
 }
 
 // checkSpellDisenchantCast mirrors the SPELL_EFFECT_DISENCHANT arm of the
