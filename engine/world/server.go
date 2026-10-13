@@ -444,6 +444,15 @@ type session struct {
 	lastSwing        time.Time
 	lastOffhandSwing time.Time
 	lastRangedSwing  time.Time
+
+	// duel_reset.cpp pre-duel snapshots: SaveHealthBeforeDuel /
+	// SaveManaBeforeDuel / SpellHistory::SaveCooldownStateBeforeDuel.
+	// Captured at duel start, restored at duel end when the reset
+	// configs are enabled. Own alignment section (blank-line split)
+	// so the duel/lastSwing sections above stay untouched.
+	duelHealthBefore    uint32
+	duelManaBefore      uint32
+	duelCooldownsBefore []spellCooldown
 	// swingErrorMsg is the m_swingErrorMsg latch (Player.cpp): 0 = no
 	// swing error sent, 1 = SMSG_ATTACK_SWING_NOT_IN_RANGE sent,
 	// 2 = SMSG_ATTACK_SWING_BAD_FACING sent. A new error packet goes out

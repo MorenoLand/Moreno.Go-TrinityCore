@@ -668,6 +668,50 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.clearSessionComboPoints()
 		return nil, nil
 	}
+	// Duel-reset methods for duel_reset.cpp's DuelResetScript (the Lua
+	// port subscribes to PlayerEventDuelStart/PlayerEventDuelEnd). The
+	// ResetDuelCooldowns / ResetDuelHealthMana config gates live inside
+	// the session methods (engine/world/duel_reset.go); the scripting
+	// runtime has no world-config bridge.
+	methods["SaveDuelCooldownState"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.saveDuelCooldownState()
+		return nil, nil
+	}
+	methods["ResetDuelSpellCooldowns"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("ResetDuelSpellCooldowns requires the onStart flag")
+		}
+		onStart, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("ResetDuelSpellCooldowns requires a boolean onStart flag")
+		}
+		s.resetDuelSpellCooldowns(onStart)
+		return nil, nil
+	}
+	methods["RestoreDuelCooldownState"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.restoreDuelCooldownState()
+		return nil, nil
+	}
+	methods["SaveDuelHealth"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.saveDuelHealth()
+		return nil, nil
+	}
+	methods["RestoreDuelHealth"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.restoreDuelHealth()
+		return nil, nil
+	}
+	methods["SaveDuelMana"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.saveDuelMana()
+		return nil, nil
+	}
+	methods["RestoreDuelMana"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.restoreDuelMana()
+		return nil, nil
+	}
+	methods["ResetAllPowers"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.resetAllPowers()
+		return nil, nil
+	}
 	methods["GetComboPoints"] = luaNoArgs(func() any { return s.sessionComboPoints(0) })
 	methods["GetComboTarget"] = func(ctx context.Context, _ []any) ([]any, error) {
 		if s.comboTargetGUID == 0 {
