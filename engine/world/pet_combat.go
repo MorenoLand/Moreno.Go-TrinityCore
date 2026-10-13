@@ -3373,6 +3373,10 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): a strength, 99 or 166
 	// aura landing on a pet rewrites its AP unit fields.
 	s.server.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
+	// Guardian::UpdateArmor / Creature::UpdateArmor on the same apply
+	// (StatSystem.cpp:1317-1330, 1018-1022): a direct armor aura (22/83/
+	// 101/142/143, NORMAL misc) rewrites UNIT_FIELD_RESISTANCES (armor).
+	s.server.recomputeCreatureArmorOnAuraChange(targetKey, spell.ID)
 	wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 	packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, aura.StoredCasterLevel, 1, aura.EffectMask)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
