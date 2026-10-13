@@ -172,7 +172,8 @@ local function bossTick(creature, guid)
         -- 5s after the phase flip.
         if st.cleave <= 1000 then
             creature:CastSpell(nil, SPELL_SHADOW_CLEAVE)
-            st.cleave = math.random(6000, 8500)
+            -- C++: Cleave_Timer = 6000 + rand32() % 2500 = [6000,8499].
+            st.cleave = math.random(6000, 8499)
         else
             st.cleave = st.cleave - 1000
         end

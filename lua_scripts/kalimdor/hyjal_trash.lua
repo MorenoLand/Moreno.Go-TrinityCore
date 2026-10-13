@@ -119,34 +119,34 @@ local SPELLS = {
     },
     ["npc_abomination"] = {
         { spell = 31607, refresh = true, target = "self" },
-        { spell = 31610, lo = 10000, hi = 10000, rlo = 15000, rhi = 25000,
+        { spell = 31610, lo = 10000, hi = 10000, rlo = 15000, rhi = 24999,
           target = "victim" },
     },
     ["npc_ghoul"] = {
-        { spell = 31540, lo = 5000, hi = 10000, rlo = 15000, rhi = 30000,
+        { spell = 31540, lo = 5000, hi = 9999, rlo = 15000, rhi = 29999,
           target = "self" },
     },
     ["npc_necromancer"] = {
-        { spell = 31627, lo = 1000, hi = 6000, rlo = 20000, rhi = 30000,
+        { spell = 31627, lo = 1000, hi = 5999, rlo = 20000, rhi = 29999,
           target = "victim" },
     },
     ["npc_banshee"] = {
-        { spell = 31651, lo = 20000, hi = 25000, target = "victim" },
-        { spell = 38183, lo = 15000, hi = 20000, target = "victim" },
-        { spell = 31662, lo = 50000, hi = 60000, target = "self" },
+        { spell = 31651, lo = 20000, hi = 24999, target = "victim" },
+        { spell = 38183, lo = 15000, hi = 19999, target = "victim" },
+        { spell = 31662, lo = 50000, hi = 59999, target = "self" },
     },
     ["npc_crypt_fiend"] = {
-        { spell = 28991, lo = 20000, hi = 25000, target = "victim" },
+        { spell = 28991, lo = 20000, hi = 24999, target = "victim" },
     },
     ["npc_fel_stalker"] = {
-        { spell = 31729, lo = 9000, hi = 14000, target = "victim" },
+        { spell = 31729, lo = 9000, hi = 13999, target = "victim" },
     },
     ["npc_frost_wyrm"] = {
         { spell = 31688, lo = 5000, hi = 5000, rlo = 4000, rhi = 4000,
           target = "victim", gate = { dist = 25, mode = "far" } },
     },
     ["npc_gargoyle"] = {
-        { spell = 31664, lo = 2000, hi = 7000, rlo = 2000, rhi = 3000,
+        { spell = 31664, lo = 2000, hi = 6999, rlo = 2000, rhi = 2999,
           target = "victim", gate = { dist = 20, mode = "near" } },
     },
 }

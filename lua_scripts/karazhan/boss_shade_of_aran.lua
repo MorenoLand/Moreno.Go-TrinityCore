@@ -360,9 +360,9 @@ local onWaterbolt
 local function elementalEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(elementalTimers, guid)
-    -- C++ water_elementalAI Reset: CastTimer = 2000 + rand32() % 3000;
-    -- combat re-arms at urand(2000, 5000).
-    schedule(elementalTimers, guid, "waterbolt", math.random(2000, 5000), function()
+    -- C++ water_elementalAI Reset: CastTimer = 2000 + rand32() % 3000
+    -- ([2000,4999], exclusive top); combat re-arms at urand(2000, 5000).
+    schedule(elementalTimers, guid, "waterbolt", math.random(2000, 4999), function()
         onWaterbolt(creature, guid)
     end)
 end

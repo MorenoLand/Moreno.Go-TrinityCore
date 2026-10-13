@@ -20,11 +20,11 @@
 -- - Constructor Initialize() arms the four timers at fixed values, so
 --   engage arms each timer at its C++ init cooldown; expiry re-arms at the
 --   C++ repeat ranges (jeklik convention): Frost Armor 31256 self-cast
---   init 37s -> {40s,60s}; Death and Decay 31258 on victim init 45s ->
---   {60s,80s} + Talk SAY_DECAY (2); Frost Nova 31250 on victim init 15s ->
---   {30s,45s} + Talk SAY_NOVA (3); Icebolt 31249 on a random alive player
+--   init 37s -> [40000,59999]; Death and Decay 31258 on victim init 45s ->
+--   [60000,79999] + Talk SAY_DECAY (2); Frost Nova 31250 on victim init 15s ->
+--   [30000,44999] + Talk SAY_NOVA (3); Icebolt 31249 on a random alive player
 --   within 40 (C++ SelectTargetMethod::Random, 0, 40, true — janalai
---   randomPlayerInRange convention) init 10s -> {11s,31s}. All four are
+--   randomPlayerInRange convention) init 10s -> [11000,30999]. All four are
 --   DoCast without the triggered flag (non-triggered, jeklik convention);
 --   nil/dead target leaves the C++ timer expired so the next tick retries
 --   — modeled as a 1s retry (batrider bomb precedent).
@@ -62,13 +62,13 @@ local SAY_ONAGGRO = 4
 -- rlo/rhi repeat range, target "self"/"victim"/"random",
 -- say (Talk on cast), randomDist for the random-player arm.
 local SPELLS = {
-    { spell = 31256, lo = 37000, hi = 37000, rlo = 40000, rhi = 60000,
+    { spell = 31256, lo = 37000, hi = 37000, rlo = 40000, rhi = 59999,
       target = "self" },
-    { spell = 31258, lo = 45000, hi = 45000, rlo = 60000, rhi = 80000,
+    { spell = 31258, lo = 45000, hi = 45000, rlo = 60000, rhi = 79999,
       target = "victim", say = SAY_DECAY },
-    { spell = 31250, lo = 15000, hi = 15000, rlo = 30000, rhi = 45000,
+    { spell = 31250, lo = 15000, hi = 15000, rlo = 30000, rhi = 44999,
       target = "victim", say = SAY_NOVA },
-    { spell = 31249, lo = 10000, hi = 10000, rlo = 11000, rhi = 31000,
+    { spell = 31249, lo = 10000, hi = 10000, rlo = 11000, rhi = 30999,
       target = "random", randomDist = 40 },
 }
 
