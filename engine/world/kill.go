@@ -278,6 +278,20 @@ func ResolveGroupXPShare(baseXP, playerLevel, sumLevel, maxLevel, maxNonGrayLeve
 	return uint32(share)
 }
 
+// creatureIsRacialLeader mirrors Creature::IsRacialLeader (Creature.h:95):
+// the creature_template.RacialLeader flag drives the "HK: Leader" honor arm
+// of Player::RewardHonor on creature kills.
+func (sv *Server) creatureIsRacialLeader(ctx context.Context, entry uint32) bool {
+	if sv == nil || sv.WorldStore == nil || sv.WorldStore.DB == nil || entry == 0 {
+		return false
+	}
+	var racialLeader int64
+	if err := sv.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RacialLeader, 0) FROM creature_template WHERE entry = ?", entry).Scan(&racialLeader); err != nil {
+		return false
+	}
+	return racialLeader != 0
+}
+
 func (s *Server) adjustCreatureKillXP(ctx context.Context, target combatTarget, creatureEntry, baseXP uint32) uint32 {
 	if s == nil || baseXP == 0 {
 		return 0
@@ -426,6 +440,14 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 	if s == nil || s.server == nil || s.player == nil || mobLevel == 0 {
 		return
 	}
+	// Target map flags: shared by the group-rate gate and the racial-leader
+	// honor arm below.
+	targetMapIsDungeon, targetMapIsRaid, targetMapIsBattleground := false, false, false
+	if s.server.Data != nil {
+		if mapInfo, found, err := s.server.Data.Map(target.Map); err == nil && found {
+			targetMapIsDungeon, targetMapIsRaid, targetMapIsBattleground = mapInfo.IsDungeon(), mapInfo.IsRaid(), mapInfo.IsBattleground()
+		}
+	}
 	group := s.server.getGroup(s.groupID)
 	if group == nil {
 		baseXP := s.server.killXPGain(ctx, uint32(s.player.Level), mobLevel)
@@ -437,18 +459,17 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 				s.grantXPWithVictimGroup(ctx, xp, target.GUID, false)
 			}
 		}
+		// KillRewarder::_RewardHonor (KillRewarder.cpp:134-138): the
+		// racial-leader honor arm also fires for solo kills.
+		if s.racialLeaderHonorEligible(ctx, target, creatureEntry, targetMapIsBattleground) {
+			s.grantRacialLeaderHonor(ctx, target.GUID, 1)
+		}
 		return
 	}
 	s.server.groupsMu.RLock()
 	members := append([]groupMember(nil), group.Members...)
 	isRaidGroup := group.IsRaid
 	s.server.groupsMu.RUnlock()
-	targetMapIsDungeon, targetMapIsRaid, targetMapIsBattleground := false, false, false
-	if s.server.Data != nil {
-		if mapInfo, found, err := s.server.Data.Map(target.Map); err == nil && found {
-			targetMapIsDungeon, targetMapIsRaid, targetMapIsBattleground = mapInfo.IsDungeon(), mapInfo.IsRaid(), mapInfo.IsBattleground()
-		}
-	}
 	type recipient struct {
 		session *session
 		level   uint32
@@ -468,7 +489,10 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 		if !killer && !s.server.atGroupKillRewardDistance(member, target, targetMapIsDungeon, s.player.InstanceID) {
 			return
 		}
-		if member.player.Health == 0 {
+		// KillRewarder::_InitGroupData (KillRewarder.cpp:99-128): the killer
+		// is counted even when dead; every other member must be alive
+		// (IsAlive — dead and ghost alike are excluded).
+		if !killer && member.isDeadOrGhost() {
 			return
 		}
 		level := uint32(member.player.Level)
@@ -495,6 +519,14 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 	if !killerFound {
 		addRecipient(s, true)
 	}
+	// KillRewarder::_RewardGroup (KillRewarder.cpp:236-256): the honor arm
+	// runs even when the victim is gray for every member — a null
+	// _maxNotGrayMember still enters the reward loop off battlegrounds.
+	if s.racialLeaderHonorEligible(ctx, target, creatureEntry, targetMapIsBattleground) {
+		for _, member := range recipients {
+			member.session.grantRacialLeaderHonor(ctx, target.GUID, count)
+		}
+	}
 	if count == 0 || sumLevel == 0 || maxNonGrayLevel == 0 {
 		return
 	}
@@ -508,6 +540,12 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 		groupRate = ResolveGroupXPRate(count, targetMapIsRaid && isRaidGroup)
 	}
 	for _, member := range recipients {
+		// KillRewarder::_RewardXP (KillRewarder.cpp:142-151): a dead
+		// member's share is zeroed in the group case — no XP is granted,
+		// but the member already counted in the denominators above.
+		if member.session.isDeadOrGhost() {
+			continue
+		}
 		share := ResolveGroupXPShare(baseXP, member.level, sumLevel, maxLevel, maxNonGrayLevel, groupRate)
 		if share == 0 {
 			continue

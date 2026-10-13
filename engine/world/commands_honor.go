@@ -294,6 +294,42 @@ func (t *session) grantHonor(ctx context.Context, honor int32, victimGUID uint64
 	t.sendPlayerUpdate()
 }
 
+// racialLeaderHonorEligible mirrors the head of the creature-victim arm of
+// Player::RewardHonor (Player.cpp:6980-6985): the victim must be a racial
+// leader without SPELL_AURA_NO_PVP_CREDIT, and the kill must be off
+// battlegrounds (KillRewarder skips the honor arm on BG maps).
+func (s *session) racialLeaderHonorEligible(ctx context.Context, target combatTarget, creatureEntry uint32, onBattleground bool) bool {
+	if s == nil || s.server == nil || onBattleground || creatureEntry == 0 {
+		return false
+	}
+	return s.server.creatureIsRacialLeader(ctx, creatureEntry) &&
+		!s.server.creatureHasAuraType(creatureAuraKeyForTarget(target), spellAuraNoPVPCredit)
+}
+
+// grantRacialLeaderHonor mirrors the creature-victim arm of Player::RewardHonor
+// (Player.cpp:6980-6985) as fired per member by KillRewarder::_RewardHonor
+// (KillRewarder.cpp:134-138): 100 base honor, divided by the group count
+// (the dead killer counts), folded through the MOD_HONOR_GAIN_PCT aura and
+// the world honor rate, announced as HK: Leader (rank 19). Dead members and
+// inactive-aura bearers are excluded, like C++ (the IsAlive gate and the
+// SPELL_AURA_PLAYER_INACTIVE gate).
+func (t *session) grantRacialLeaderHonor(ctx context.Context, victimGUID uint64, groupCount uint32) {
+	if t.player == nil || t.isDeadOrGhost() {
+		return
+	}
+	if t.hasAura(honorAuraInactiveID) {
+		return
+	}
+	t.updateHonorFields()
+	honorF := 100.0
+	if groupCount > 1 {
+		honorF /= float64(groupCount)
+	}
+	honorF *= 1 + float64(t.maxPositiveAuraModifier(spellAuraModHonorGainPct))/100
+	honorF *= t.honorRate()
+	t.grantHonor(ctx, int32(honorF), victimGUID, 19)
+}
+
 // sendPVPCredit writes SMSG_PVP_CREDIT (Player.cpp:6993): uint32 honor,
 // uint64 victim guid, uint32 victim rank.
 func (s *session) sendPVPCredit(honor int32, victimGUID uint64, victimRank uint32) {
