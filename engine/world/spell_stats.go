@@ -1351,9 +1351,15 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 // terms, these sit outside the !IsPositive block (Unit.cpp:7242) and fire
 // for positive spells too. Returns the bonus in percent points and whether
 // the hit is a forced crit (Exorcism, Lava Burst — C++ returns 100.0f).
-// The remaining arms (Shiv poisons — no Go current-spell model; Flash of
-// Light/Sacred Shield — dead code in C++, a positive-only spell inside the
-// scripted block) have no Go model and stay unbridged.
+// The remaining arms stay unbridged as verified no-bridges. Shiv poisons
+// (Unit.cpp:7308-7310): the arm sits inside the MAGIC-DmgClass case and
+// requires the caster's current generic spell to be Shiv (5938) at
+// evaluation time — but Shiv is DefenseType MELEE (wowdb spell 5938 lists
+// "Damage Type: Melee"), so its own direct cast takes the
+// GetUnitCriticalChanceTaken leg and never the MAGIC scripted section, and
+// periodic poison ticks evaluate after the instant Shiv cast finished.
+// Flash of Light/Sacred Shield is dead code in C++ (a positive-only spell
+// inside the scripted block).
 func (s *session) scriptedTakenCritBonusCore(ctx context.Context, targetGUID uint64, spell wotlk.Spell, spellKnown bool, vs scriptedTakenCritVictim) (float64, bool) {
 	bonus := 0.0
 	if s == nil || s.server == nil || s.server.Data == nil || !spellKnown {

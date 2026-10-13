@@ -24962,6 +24962,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
+			// Unit::SpellCritChanceTaken (Unit.cpp:7390-7397): the post-switch
+			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) arm fires on
+			// periodic ticks too — caster-GUID + IsAffectedOnSpell gate,
+			// MAGIC DmgClass only (melee/ranged folded it inside
+			// GetUnitCriticalChanceTaken; NONE returns 0 earlier).
+			if tickSpell.DefenseType == spellDamageClassMagic {
+				takenCritBonus += ts.victimCritChanceForCasterGated(aura.CasterGUID, tickSpell)
+			}
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				crit = true
 				if tickKnown {
@@ -25167,6 +25175,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
+			// Unit::SpellCritChanceTaken (Unit.cpp:7390-7397): the post-switch
+			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) arm fires on
+			// periodic ticks too — caster-GUID + IsAffectedOnSpell gate,
+			// MAGIC DmgClass only (melee/ranged folded it inside
+			// GetUnitCriticalChanceTaken; NONE returns 0 earlier).
+			if healSpell.DefenseType == spellDamageClassMagic {
+				takenCritBonus += ts.victimCritChanceForCasterGated(aura.CasterGUID, healSpell)
+			}
 			if forceCrit || rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), healSpell, takenCritBonus) {
 				healCrit = true
 				if healKnown {
@@ -25432,6 +25448,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
+			// Unit::SpellCritChanceTaken (Unit.cpp:7390-7397): the post-switch
+			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) arm fires on
+			// periodic ticks too — caster-GUID + IsAffectedOnSpell gate,
+			// MAGIC DmgClass only (melee/ranged folded it inside
+			// GetUnitCriticalChanceTaken; NONE returns 0 earlier).
+			if tickSpell.DefenseType == spellDamageClassMagic {
+				takenCritBonus += ts.victimCritChanceForCasterGated(aura.CasterGUID, tickSpell)
+			}
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				crit = true
 				if tickKnown {
@@ -26510,6 +26534,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
+			// Unit::SpellCritChanceTaken (Unit.cpp:7390-7397): the post-switch
+			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) arm fires on
+			// periodic ticks too — caster-GUID + IsAffectedOnSpell gate,
+			// MAGIC DmgClass only (melee/ranged folded it inside
+			// GetUnitCriticalChanceTaken; NONE returns 0 earlier).
+			if tickSpell.DefenseType == spellDamageClassMagic {
+				takenCritBonus += creatureVictimCritChanceForCasterGated(s.server, key, aura.CasterGUID, tickSpell)
+			}
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				crit = true
 				if tickKnown {
@@ -26723,6 +26755,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
+			// Unit::SpellCritChanceTaken (Unit.cpp:7390-7397): the post-switch
+			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) arm fires on
+			// periodic ticks too — caster-GUID + IsAffectedOnSpell gate,
+			// MAGIC DmgClass only (melee/ranged folded it inside
+			// GetUnitCriticalChanceTaken; NONE returns 0 earlier).
+			if tickSpell.DefenseType == spellDamageClassMagic {
+				takenCritBonus += creatureVictimCritChanceForCasterGated(s.server, key, aura.CasterGUID, tickSpell)
+			}
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				healCrit = true
 				heal = tickCaster.spellCriticalHealingBonus(ctx, heal, aura.TargetGUID, tickSpell.DefenseType, true)
@@ -27059,6 +27099,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
+			// Unit::SpellCritChanceTaken (Unit.cpp:7390-7397): the post-switch
+			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) arm fires on
+			// periodic ticks too — caster-GUID + IsAffectedOnSpell gate,
+			// MAGIC DmgClass only (melee/ranged folded it inside
+			// GetUnitCriticalChanceTaken; NONE returns 0 earlier).
+			if tickSpell.DefenseType == spellDamageClassMagic {
+				takenCritBonus += creatureVictimCritChanceForCasterGated(s.server, key, aura.CasterGUID, tickSpell)
+			}
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				crit = true
 				if tickKnown {
