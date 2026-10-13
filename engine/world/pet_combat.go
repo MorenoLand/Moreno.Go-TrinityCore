@@ -1668,9 +1668,27 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 // Unit::SpellDamageBonusDone (Unit.cpp:6681-6683) and
 // Unit::SpellHealingBonusDone (Unit.cpp:7558-7561). The session is the
 // guardian's owner player; C++ keeps only the finished int32, so the helper
-// returns the truncated value exactly as SetBonusDamage stores it.
-// Residual gap: the hunter-pet Wild Hunt talent mod (StatSystem.cpp:1406-1418)
-// has no Go pet spellbook model, so the mod stays 1.0.
+// returns the truncated value exactly as SetBonusDamage stores it. The
+// hunter-pet Wild Hunt talent mod (StatSystem.cpp:1406-1418) reads the pet's
+// spellbook via petWildHuntTalent below.
+// petWildHuntTalent returns the Wild Hunt talent spell the pet's spellbook
+// carries — 62758 (rank 1, checked first per C++) or 62762 (rank 2) — or 0.
+// StatSystem.cpp:1408-1412 reads ToPet()->m_spells; Go's pet_spell table is
+// the spellbook twin (learnPetTalent inserts talent spells keyed by pet
+// number, resetPetTalentsAtLogin removes them).
+func (s *session) petWildHuntTalent(petNumber uint32) uint32 {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || petNumber == 0 {
+		return 0
+	}
+	for _, id := range []uint32{62758, 62762} {
+		var spell uint32
+		if err := s.server.CharactersStore.DB.QueryRowContext(context.Background(), "SELECT spell FROM pet_spell WHERE guid = ? AND spell = ?", petNumber, id).Scan(&spell); err == nil && spell != 0 {
+			return spell
+		}
+	}
+	return 0
+}
+
 func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 	if s == nil || s.player == nil || motion == nil {
 		return 0
@@ -1678,7 +1696,21 @@ func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 	switch {
 	case motion.PetType == petTypeHunter:
 		// IsHunterPet (StatSystem.cpp:1425): owner ranged AP * 0.1287 * mod.
-		return int32(s.totalAttackPowerValue(true) * 0.1287)
+		// The Wild Hunt talent (StatSystem.cpp:1408-1415) adds
+		// CalculatePct(1.0, Effects[1].CalcValue()) to mod when the pet's
+		// spellbook carries 62758 (rank 1, checked first per C++) or 62762
+		// (rank 2); Go's pet_spell table is the spellbook twin
+		// (learnPetTalent writes talent spells there). The stamina
+		// (StatSystem.cpp:1237-1241) and bonusAP (0.22) arms have no Go
+		// stat/AP model and stay unbridged.
+		mod := float32(1)
+		if talent := s.petWildHuntTalent(s.petNumberForGUID(motion.GUID)); talent != 0 &&
+			s.server != nil && s.server.Data != nil {
+			if tspell, found, terr := s.server.Data.Spell(talent); terr == nil && found && len(tspell.Effects) > 1 {
+				mod += float32(tspell.Effects[1].CalcValue()) / 100
+			}
+		}
+		return int32(s.totalAttackPowerValue(true) * 0.1287 * mod)
 	case motion.Entry == 26125 || motion.Entry == 30230:
 		// IsPetGhoul / IsRisenAlly (TemporarySummon.h:81-82,
 		// StatSystem.cpp:1428-1430): owner base AP * 0.1287.
@@ -1797,12 +1829,14 @@ func (s *session) petDamageEffectBonus(spell wotlk.Spell, motion *creatureMotion
 // auras, then the owner-scoped OVERRIDE_CLASS_SCRIPTS / family table
 // (Unit.cpp:6797-7050) via spellDamagePctClassScripts — C++ reads the class
 // scripts from the owner (Unit.cpp:6794-6795), and s is the owner's session.
-// Spells with SPELL_ATTR3_NO_DONE_BONUS or SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS
-// skip the leg (Unit.cpp:6744-6749). The rank spell-damage mod
-// (Unit.cpp:6765-6766) applies to non-pet creatures only; the family arms
-// inside the shared table read the owner's auras where C++ reads the pet's,
-// but no pet-reachable spell carries those family flags, so the residual is
-// nil in practice.
+// The Shadow Bite arm (Unit.cpp:7019-7022) folds here too, after the shared
+// table: C++ puts it inside DoneTotalMod, before the mod-owner SPELLMOD tail
+// (Unit.cpp:6731-6734). Spells with SPELL_ATTR3_NO_DONE_BONUS or
+// SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS skip the leg (Unit.cpp:6744-6749). The rank
+// spell-damage mod (Unit.cpp:6765-6766) applies to non-pet creatures only;
+// the family arms inside the shared table read the owner's auras where C++
+// reads the pet's, but no other pet-reachable spell carries those family
+// flags, so the residual is nil in practice.
 func (s *session) petDamagePctDone(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, targetGUID uint64, target combatTarget) float64 {
 	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 || spell.AttributesEx6&spellAttr6LimitPctDamageMods != 0 {
 		return 1.0
@@ -1830,7 +1864,20 @@ func (s *session) petDamagePctDone(ctx context.Context, motion *creatureMotion, 
 	if s == nil {
 		return mod
 	}
-	return s.spellDamagePctClassScripts(ctx, spell, targetGUID, target, mod)
+	mod = s.spellDamagePctClassScripts(ctx, spell, targetGUID, target, mod)
+	// Unit::SpellDamagePctDone (Unit.cpp:7019-7022): the Shadow Bite arm — a
+	// pet's Warlock-family spell with SpellFamilyFlags[1] & 0x00400000 gains
+	// 15% per DoT the victim carries from the pet's owner (GetDoTsByCaster
+	// counts PERIODIC_DAMAGE / PERIODIC_DAMAGE_PERCENT effects by caster
+	// GUID). C++ gates on IsPet(); Go pet motions carry OwnerGUID. It folds
+	// inside DoneTotalMod, before the mod-owner SPELLMOD_DAMAGE tail
+	// (Unit.cpp:6731-6734) — not at the damage site.
+	if motion != nil && motion.OwnerGUID != 0 && spell.SpellFamilyName == spellFamilyWarlock && spell.SpellFamilyFlags[1]&0x00400000 != 0 {
+		if dots := s.server.countDoTsByCaster(target, motion.OwnerGUID); dots > 0 {
+			mod *= 1 + float64(dots)*0.15
+		}
+	}
+	return mod
 }
 
 // petAuraTypeMiscAmounts is the creature-key twin of auraTypeMiscAmounts: live
@@ -3417,19 +3464,6 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		return
 	}
 	isPlayerVictim := s.server.findSessionByGUID(target.GUID) != nil
-	// Unit::SpellDamagePctDone (Unit.cpp:7021-7023): the Shadow Bite arm — a
-	// pet's Warlock-family spell with SpellFamilyFlags[1] & 0x00400000 gains
-	// 15% per DoT the victim carries from the pet's owner (GetDoTsByCaster
-	// counts PERIODIC_DAMAGE / PERIODIC_DAMAGE_PERCENT effects by caster
-	// GUID). C++ gates on IsPet(); Go pet motions carry OwnerGUID.
-	if caster.OwnerGUID != 0 && s.server != nil && s.server.Data != nil {
-		if pspell, found, perr := s.server.Data.Spell(spellID); perr == nil && found &&
-			pspell.SpellFamilyName == spellFamilyWarlock && pspell.SpellFamilyFlags[1]&0x00400000 != 0 {
-			if dots := s.server.countDoTsByCaster(target, caster.OwnerGUID); dots > 0 {
-				damage = uint32(uint64(damage) * (100 + 15*uint64(dots)) / 100)
-			}
-		}
-	}
 	hitInfo := uint32(0)
 	resisted := uint32(0)
 	absorbed := uint32(0)
