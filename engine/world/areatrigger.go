@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -41,15 +42,28 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// 2b. Script hook arm
+	// Reference: MiscHandler.cpp:678 (sScriptMgr->OnAreaTrigger -> Eluna
+	// OnAreaTrigger, ServerHooks.cpp:115-125): TRIGGER_EVENT_ON_TRIGGER =
+	// 24 fires after the radius validation with (event, player, triggerId);
+	// a boolean true return vetoes the quest/tavern/BG/teleport arms.
+	if s.server != nil && s.server.Features != nil && s.server.Features.Scripts != nil {
+		if results, hookErr := s.server.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventAreaTrigger, s.luaPlayer(), triggerID); hookErr == nil && luaHookVeto(results) {
+			return true
+		}
+	}
+
 	wdb := s.server.WorldStore.DB
 	if wdb == nil {
 		return true
 	}
 
 	// 3. Area explored / Quest objective completion
-	// Reference: MiscHandler.cpp:681-685 (sObjectMgr->GetQuestForAreaTrigger)
+	// Reference: MiscHandler.cpp:681-685 (sObjectMgr->GetQuestForAreaTrigger):
+	// the whole arm sits under player->IsAlive() — a dead player touching
+	// a trigger does not complete quest objectives.
 	var questID uint32
-	if err := wdb.QueryRowContext(ctx, "SELECT quest FROM areatrigger_involvedrelation WHERE id = ?", triggerID).Scan(&questID); err == nil && questID != 0 {
+	if err := wdb.QueryRowContext(ctx, "SELECT quest FROM areatrigger_involvedrelation WHERE id = ?", triggerID).Scan(&questID); err == nil && questID != 0 && !s.isDeadOrGhost() {
 		status, _ := s.characterQuestStatus(ctx, questID)
 		if status == questStatusIncomplete {
 			// Player::AreaExploredOrEventHappens (Player.cpp:16503): the
@@ -102,6 +116,17 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 			if check.Reason != mapEntryAllowed {
 				s.sendAreaTriggerEntryFailure(ctx, uint32(targetMap), check)
 				return true
+			}
+			// MiscHandler.cpp:766-768: an LFG-group member standing in a
+			// dungeon is redirected to the battleground entry point instead
+			// of the trigger target. An invalid entry point (JoinMap == 0,
+			// the MAPID_INVALID leg of Player::TeleportToBGEntryPoint,
+			// Player.cpp:1896-1906) falls through to the normal teleport.
+			if g := s.server.findGroupByID(s.groupID); g != nil && g.IsLFG && s.bgData.JoinMap != 0 {
+				if mapEntry, found, mapErr := s.server.Data.Map(s.player.Map); mapErr == nil && found && mapEntry.IsDungeon() {
+					s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
+					return true
+				}
 			}
 		}
 		s.teleportTo(uint32(targetMap), float32(targetX), float32(targetY), float32(targetZ), float32(targetOri))

@@ -169,6 +169,13 @@ const (
 // the events the engine fires carry Go constants.
 const (
 	ServerEventAddonMessage = 30
+	// ServerEventAreaTrigger is the Eluna TRIGGER_EVENT_ON_TRIGGER
+	// (LuaEngine/Hooks.h:135 = 24, args (event, player, triggerId)):
+	// ServerHooks.cpp:115-125 fires it from
+	// WorldSession::HandleAreaTriggerOpcode (MiscHandler.cpp:678) after
+	// the radius validation, and a boolean true return vetoes the rest
+	// of the handler (CallAllFunctionsBool).
+	ServerEventAreaTrigger = 24
 )
 
 // Eluna CreatureEvents contract for RegisterCreatureEvent /
