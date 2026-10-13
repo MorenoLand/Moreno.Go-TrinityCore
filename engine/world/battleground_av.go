@@ -71,6 +71,30 @@ const (
 	AVNorthMine uint32 = 0 // Irondeep
 	AVSouthMine uint32 = 1 // Coldtooth
 
+	// Quest IDs driving BattlegroundAV::HandleQuestComplete (BattlegroundAV.h:1465-1487).
+	AVQuestScrapsA1    uint32 = 7223 // AV_QUEST_A_SCRAPS1
+	AVQuestScrapsA2    uint32 = 6781 // AV_QUEST_A_SCRAPS2
+	AVQuestScrapsH1    uint32 = 7224 // AV_QUEST_H_SCRAPS1
+	AVQuestScrapsH2    uint32 = 6741 // AV_QUEST_H_SCRAPS2
+	AVQuestCommanderA1 uint32 = 6942 // AV_QUEST_A_COMMANDER1: soldier's blood
+	AVQuestCommanderH1 uint32 = 6825 // AV_QUEST_H_COMMANDER1
+	AVQuestCommanderA2 uint32 = 6941 // AV_QUEST_A_COMMANDER2: lieutenant's insignia
+	AVQuestCommanderH2 uint32 = 6826 // AV_QUEST_H_COMMANDER2
+	AVQuestCommanderA3 uint32 = 6943 // AV_QUEST_A_COMMANDER3: commander's insignia
+	AVQuestCommanderH3 uint32 = 6827 // AV_QUEST_H_COMMANDER3
+	AVQuestBossA1      uint32 = 7386 // AV_QUEST_A_BOSS1: 5 crystal/blood
+	AVQuestBossH1      uint32 = 7385 // AV_QUEST_H_BOSS1
+	AVQuestBossA2      uint32 = 6881 // AV_QUEST_A_BOSS2: 1 crystal/blood
+	AVQuestBossH2      uint32 = 6801 // AV_QUEST_H_BOSS2
+	AVQuestNearMineA   uint32 = 5892 // AV_QUEST_A_NEAR_MINE
+	AVQuestNearMineH   uint32 = 5893 // AV_QUEST_H_NEAR_MINE
+	AVQuestOtherMineA  uint32 = 6982 // AV_QUEST_A_OTHER_MINE
+	AVQuestOtherMineH  uint32 = 6985 // AV_QUEST_H_OTHER_MINE
+	AVQuestRiderHideA  uint32 = 7026 // AV_QUEST_A_RIDER_HIDE
+	AVQuestRiderHideH  uint32 = 7002 // AV_QUEST_H_RIDER_HIDE
+	AVQuestRiderTameA  uint32 = 7027 // AV_QUEST_A_RIDER_TAME
+	AVQuestRiderTameH  uint32 = 7001 // AV_QUEST_H_RIDER_TAME
+
 	// Creatures
 	AVCreatureVanndar   uint32 = 11948 // Alliance General
 	AVCreatureDrekThar  uint32 = 11946 // Horde General
@@ -198,7 +222,8 @@ type avBattlegroundState struct {
 	HordeReinforcements    uint32
 	AllianceCaptainAlive   bool
 	HordeCaptainAlive      bool
-	CaptainBuffTimerMs     [2]int64 // == m_CaptainBuffTimer[2]: countdown-by-diff to the next team buff cast
+	CaptainBuffTimerMs     [2]int64     // == m_CaptainBuffTimer[2]: countdown-by-diff to the next team buff cast
+	QuestStatus            [2][9]uint32 // == m_Team_QuestStatus[2][9]: AV quest turn-in counters (BattlegroundAV.h:1484)
 	Nodes                  [AVNodeMax]avNodeState
 	Mines                  [2]avMineState
 	CaptureDuration        time.Duration
@@ -295,6 +320,62 @@ func (s *Server) getOrCreateAVState(mapID uint32) *avBattlegroundState {
 		s.avState[mapID] = state
 	}
 	return state
+}
+
+// handleAVQuestComplete mirrors BattlegroundAV::HandleQuestComplete
+// (BattlegroundAV.cpp:156-254): the only battleground override of the base
+// no-op (Battleground.h:488). team is the GetTeamIndexByTeamId index (0
+// Alliance, 1 Horde), matching Go's teamForRace.
+func (s *Server) handleAVQuestComplete(sess *session, questID uint32) {
+	if s == nil || sess == nil || sess.player == nil {
+		return
+	}
+	av := s.getOrCreateAVState(sess.player.Map)
+	if av == nil {
+		return
+	}
+	av.mu.Lock()
+	defer av.mu.Unlock()
+	if av.Winner >= 0 { // == GetStatus() != STATUS_IN_PROGRESS
+		return
+	}
+	team := teamForRace(sess.player.Race)
+	switch questID {
+	case AVQuestScrapsA1, AVQuestScrapsA2, AVQuestScrapsH1, AVQuestScrapsH2:
+		av.QuestStatus[team][0] += 20
+		// BattlegroundAV.cpp:170-180: at the 25/50/75 turn-in thresholds every
+		// controlled graveyard node owned by the player's team is depopulated
+		// and repopulated (defender upgrade). Go has no AddAVCreature /
+		// PopulateNode creature-spawn twin, so the repopulation tail stays a
+		// standing no-bridge; the counter drives the PopulateNode defense-tier
+		// read (BattlegroundAV.cpp:729) once that bridge lands.
+	case AVQuestCommanderA1, AVQuestCommanderH1:
+		av.QuestStatus[team][1]++
+	case AVQuestCommanderA2, AVQuestCommanderH2:
+		av.QuestStatus[team][2]++
+	case AVQuestCommanderA3, AVQuestCommanderH3:
+		av.QuestStatus[team][3]++
+		// The C++ commander arms also call RewardReputationToTeam(team, 1,
+		// player->GetTeam()) with the team index as faction_id: 0 fails the
+		// sFactionStore.LookupEntry gate and 1 ("Player, Human") has
+		// ReputationIndex -1 so the ReputationMgr state find misses — both
+		// genuine upstream no-ops, reproduced here by skipping them.
+	case AVQuestBossA1, AVQuestBossH1:
+		av.QuestStatus[team][4] += 9 // you can turn in 10 or 1 item..
+		fallthrough                  // == C++ [[fallthrough]] into the BOSS2 arm
+	case AVQuestBossA2, AVQuestBossH2:
+		av.QuestStatus[team][4]++
+	case AVQuestNearMineA, AVQuestNearMineH:
+		av.QuestStatus[team][5]++
+	case AVQuestOtherMineA, AVQuestOtherMineH:
+		av.QuestStatus[team][6]++
+	case AVQuestRiderHideA, AVQuestRiderHideH:
+		av.QuestStatus[team][7]++
+	case AVQuestRiderTameA, AVQuestRiderTameH:
+		av.QuestStatus[team][8]++
+	default:
+		// BattlegroundAV.cpp:251-254: uninteresting quests only log.
+	}
 }
 
 // handleAVGameObjectUse processes player interaction with AV banners and mine supplies.

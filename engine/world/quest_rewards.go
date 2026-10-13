@@ -46,6 +46,23 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
+	// QuestHandler.cpp:531-538 — the cheat gate mirrors the turn-in twin from
+	// the 07:20 tick: a complete-quest packet for a quest the player never
+	// picked up and cannot see start is a spoof; reject silently.
+	if status == int64(questStatusNoneValue) && !s.canSeeStartQuest(ctx, questID) {
+		s.debug("quest complete rejected", "account", s.accountName, "quest", questID, "reason", "cannot see start quest")
+		return true
+	}
+	// QuestHandler.cpp:539-540 — the battleground quest-completion arms. The
+	// base Battleground::HandleQuestComplete is a no-op (Battleground.h:488);
+	// only Alterac Valley overrides it (BattlegroundAV.cpp:156). C++ fires
+	// this before the status==COMPLETE check, i.e. on opening the turn-in
+	// dialog, not on the reward grant.
+	if s.player != nil {
+		if bgType, _, _, inBG := battlegroundTypeForMap(s.player.Map); inBG && bgType == 1 {
+			s.server.handleAVQuestComplete(s, questID)
+		}
+	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
 		return false
