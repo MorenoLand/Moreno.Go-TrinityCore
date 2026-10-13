@@ -1750,17 +1750,109 @@ func (s *session) petGuardianDoneDamageBonus(motion *creatureMotion, spell wotlk
 	return total
 }
 
-// petGuardianDoneHealingBonus mirrors the guardian arm in
-// Unit::SpellHealingBonusDone (Unit.cpp:7556-7561, 7599-7605): a guardian
-// caster adds GetBonusDamage() to the heal advertised benefit, applied as
-// int32(benefit * coeff * factorMod). The potion-family gate
-// (Unit.cpp:7494-7496) and the DmgClass-NONE early-out (Unit.cpp:7583-7587)
-// are honored; the leech/health-funnel DoneTotal zeroing (Unit.cpp:7607-7619)
-// has no pet-cast leech spells to cover and stays unbridged, as do the
-// SpellHealingPctDone and scripted class-script legs.
-func (s *session) petGuardianDoneHealingBonus(motion *creatureMotion, spell wotlk.Spell, effIndex int) int32 {
-	bonus := s.guardianBonusSpellDamage(motion)
-	if bonus == 0 {
+// petDamagePctDone mirrors Unit::SpellDamagePctDone (Unit.cpp:6738-7050) for a
+// guardian pet caster: the pet's own SPELL_AURA_MOD_DAMAGE_PERCENT_DONE (79)
+// school arm (Unit.cpp:6771-6779, non-player twin), the versus
+// (Unit.cpp:6783) and versus-aurastate (Unit.cpp:6786-6791) arms on the pet's
+// auras, then the owner-scoped OVERRIDE_CLASS_SCRIPTS / family table
+// (Unit.cpp:6797-7050) via spellDamagePctClassScripts — C++ reads the class
+// scripts from the owner (Unit.cpp:6794-6795), and s is the owner's session.
+// Spells with SPELL_ATTR3_NO_DONE_BONUS or SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS
+// skip the leg (Unit.cpp:6744-6749). The rank spell-damage mod
+// (Unit.cpp:6765-6766) applies to non-pet creatures only; the family arms
+// inside the shared table read the owner's auras where C++ reads the pet's,
+// but no pet-reachable spell carries those family flags, so the residual is
+// nil in practice.
+func (s *session) petDamagePctDone(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, targetGUID uint64, target combatTarget) float64 {
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 || spell.AttributesEx6&spellAttr6LimitPctDamageMods != 0 {
+		return 1.0
+	}
+	mod := 1.0
+	if s != nil && s.server != nil && motion != nil {
+		key := creatureAuraKeyForMotion(motion)
+		if key.GUID != 0 {
+			schoolMask := uint32(spell.SchoolMask)
+			for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraModDamagePercentDone, schoolMask) {
+				mod *= 1 + float64(amt)/100
+			}
+			if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
+				for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraModDamageDoneVersus, typMask) {
+					mod *= 1 + float64(amt)/100
+				}
+			}
+			for _, ae := range petAuraTypeMiscAmounts(s.server, key, auraModDamageDoneVersusAurastate) {
+				if s.targetHasAuraState(ctx, targetGUID, uint32(ae.misc), spell) {
+					mod *= 1 + float64(ae.amount)/100
+				}
+			}
+		}
+	}
+	if s == nil {
+		return mod
+	}
+	return s.spellDamagePctClassScripts(ctx, spell, targetGUID, target, mod)
+}
+
+// petAuraTypeMiscAmounts is the creature-key twin of auraTypeMiscAmounts: live
+// (misc, amount) pairs for every effect of the given aura type on the pet,
+// for the arms that switch on misc values (MOD_DAMAGE_DONE_VERSUS_AURASTATE).
+func petAuraTypeMiscAmounts(server *Server, key creatureAuraKey, auraType uint32) []classScriptAura {
+	var out []classScriptAura
+	if server == nil || server.Data == nil || key.GUID == 0 {
+		return nil
+	}
+	server.auraMu.Lock()
+	auras := server.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	server.auraMu.Unlock()
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		auraSpell, found, err := server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraType {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = eff.BasePoints
+			}
+			out = append(out, classScriptAura{spellID: aura.SpellID, misc: eff.MiscValue, amount: amount})
+		}
+	}
+	return out
+}
+
+// petGuardianDoneHealingBonus mirrors the full advertised-benefit fold of
+// Unit::SpellHealingBonusDone (Unit.cpp:7490-7605) for a guardian caster:
+// DoneAdvertisedBenefit = SpellBaseHealingBonusDone (the pet's own
+// SPELL_AURA_MOD_HEALING_DONE auras, Unit.cpp:7552/7764-7771) + the victim's
+// SPELL_AURA_MOD_HEALING auras (Unit.cpp:7554) + the guardian's GetBonusDamage()
+// (Unit.cpp:7558-7561), applied as int32(benefit * coeff * factorMod)
+// (Unit.cpp:7599-7605). The potion-family gate (Unit.cpp:7494-7496) and the
+// DmgClass-NONE early-out (Unit.cpp:7583-7587) are honored, and leech /
+// health-funnel spells zero the whole DoneTotal after the fold
+// (Unit.cpp:7607-7619, via spellHealingDoneZeroed). The OVERRIDE_CLASS_SCRIPTS
+// flat arms (Unit.cpp:7510-7519), Impurity (DK-player only), the AP-bonus
+// arms, SPELLMOD_BONUS_MULTIPLIER on the coefficient and SpellHealingPctDone
+// stay unbridged on the pet path. Residual: the coefficient's level-penalty
+// factor reads the owner's level (spellHealingDoneCoefficient), where C++
+// reads the pet's.
+func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, effIndex int, victimGUID uint64) int32 {
+	if s == nil || motion == nil {
+		return 0
+	}
+	if spellHealingDoneZeroed(spell) {
 		return 0
 	}
 	if spell.SpellFamilyName == spellFamilyPotion {
@@ -1769,7 +1861,99 @@ func (s *session) petGuardianDoneHealingBonus(motion *creatureMotion, spell wotl
 	if _, hasRow := s.spellBonusRow(spell.ID); !hasRow && spell.DefenseType == spellDamageClassNone {
 		return 0
 	}
-	return int32(float64(bonus) * s.spellHealingDoneCoefficient(spell, effIndex, false))
+	schoolMask := uint32(spell.SchoolMask)
+	advertised := s.guardianBonusSpellDamage(motion)
+	advertised += s.petHealingDoneAuraModifier(motion, schoolMask)
+	advertised += s.healVictimModHealing(ctx, victimGUID, schoolMask)
+	if advertised == 0 {
+		return 0
+	}
+	return int32(float64(advertised) * s.spellHealingDoneCoefficient(spell, effIndex, false))
+}
+
+// petHealingDoneAuraModifier mirrors the pet-caster leg of
+// Unit::SpellBaseHealingBonusDone (Unit.cpp:7764-7771): the guardian's own
+// SPELL_AURA_MOD_HEALING_DONE (135) auras fold into the advertised benefit
+// with the C++-exact misc gate — an unset misc applies to every school,
+// otherwise the misc mask must intersect the spell's school mask. The
+// player-only spellpower/of-stat/of-AP legs never apply to a guardian.
+func (s *session) petHealingDoneAuraModifier(motion *creatureMotion, schoolMask uint32) int32 {
+	var total int32
+	if s == nil || s.server == nil || s.server.Data == nil || motion == nil {
+		return total
+	}
+	key := creatureAuraKeyForMotion(motion)
+	if key.GUID == 0 {
+		return total
+	}
+	s.server.auraMu.Lock()
+	auras := s.server.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.server.auraMu.Unlock()
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || !spellEffectIsAuraEffect(effect) ||
+				effect.Aura != auraModHealingDone || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			misc := uint32(effect.MiscValue)
+			if misc != 0 && misc&schoolMask == 0 {
+				continue
+			}
+			amt := aura.Amounts[index]
+			if amt == 0 {
+				amt = effect.BasePoints
+			}
+			total += amt
+		}
+	}
+	return total
+}
+
+// healVictimModHealing mirrors the victim leg of Unit::SpellHealingBonusDone
+// (Unit.cpp:7554): the victim's SPELL_AURA_MOD_HEALING (115, Amplify/Dampen
+// Magic) auras raise the caster's advertised benefit per school. C++ gates on
+// (misc & schoolMask) != 0 (Unit.cpp:4937-4945), so misc-0 auras never fire —
+// the shared misc-mask helpers already carry that gate.
+func (s *session) healVictimModHealing(ctx context.Context, victimGUID uint64, schoolMask uint32) int32 {
+	if s == nil || victimGUID == 0 || schoolMask == 0 {
+		return 0
+	}
+	if victimGUID == s.playerGUID {
+		var total int32
+		for _, amt := range s.auraTypeModifiersByMiscMask(auraModHealing, schoolMask) {
+			total += amt
+		}
+		return total
+	}
+	if s.server == nil {
+		return 0
+	}
+	if ps := s.server.findSessionByGUID(victimGUID); ps != nil && ps.player != nil {
+		var total int32
+		for _, amt := range ps.auraTypeModifiersByMiscMask(auraModHealing, schoolMask) {
+			total += amt
+		}
+		return total
+	}
+	if target, ok := s.getCombatTarget(ctx, victimGUID); ok {
+		var total int32
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, creatureAuraKeyForTarget(target), auraModHealing, schoolMask) {
+			total += amt
+		}
+		return total
+	}
+	return 0
 }
 
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
@@ -2168,13 +2352,27 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if schoolMask == 0 {
 			schoolMask = 1
 		}
-		s.executePetSpellDamage(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, damage, schoolMask, triggered)
+		// Unit::SpellDamagePctDone (Unit.cpp:6738-7050): the done percent
+		// multiplier is per victim in C++ (the versus and class-script arms
+		// read the victim), so the pet's school/versus arms plus the
+		// owner-scoped class-script table fold per target here, after the
+		// flat DoneTotal above (C++ order: (pdamage + DoneTotal) * DoneTotalMod).
+		petDamageFor := func(victimGUID uint64) uint32 {
+			d := damage
+			if target, ok := s.getCombatTarget(ctx, victimGUID); ok {
+				if pct := s.petDamagePctDone(ctx, motion, spell, victimGUID, target); pct != 1.0 {
+					d = uint32(float64(d) * pct)
+				}
+			}
+			return d
+		}
+		s.executePetSpellDamage(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, petDamageFor(resolveReflectTarget(targetGUID)), schoolMask, triggered)
 		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
 		// enemy takes its own hit — the per-target miss roll, resistance,
 		// absorb and kill legs run per target inside
 		// executePetSpellDamage, matching DoTargetSpellHit per target.
 		for _, areaHit := range areaHits {
-			s.executePetSpellDamage(ctx, motion, resolveReflectTarget(areaHit.GUID), spell.ID, damage, schoolMask, triggered)
+			s.executePetSpellDamage(ctx, motion, resolveReflectTarget(areaHit.GUID), spell.ID, petDamageFor(resolveReflectTarget(areaHit.GUID)), schoolMask, triggered)
 		}
 	}
 	for i, effect := range spell.Effects {
@@ -2203,7 +2401,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561, 7599-7605):
 				// the guardian's GetBonusDamage() rides the heal advertised
 				// benefit into the per-effect DoneTotal.
-				if bonus := s.petGuardianDoneHealingBonus(motion, spell, i); bonus != 0 {
+				if bonus := s.petGuardianDoneHealingBonus(ctx, motion, spell, i, resolveReflectTarget(targetGUID)); bonus != 0 {
 					if adjusted := int32(heal) + bonus; adjusted > 0 {
 						heal = uint32(adjusted)
 					} else {
@@ -2644,12 +2842,11 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	// MOD_HEALING_PCT, the Nourish 1.2x leg and MOD_HEALING_RECEIVED
 	// (caster-matched against the pet's GUID) — previously the raw amount
 	// healed. Direct heals are HEAL type, so the MOD_HOT_PCT leg is off
-	// (dotType=false). Pets carry no Go spellpower model, so the
-	// SpellHealingBonusDone's guardian advertised-benefit arm
-	// (Unit.cpp:7558-7561) is applied by the pet cast site in
-	// executePetSpellWithOptions; the remaining done legs (pet's own
-	// aura-13 base, victim MOD_HEALING auras, pct/scripted mods) stay
-	// unmodeled here.
+	// (dotType=false). The SpellHealingBonusDone advertised-benefit arms
+	// (guardian bonus, pet's own aura-135 base, victim MOD_HEALING auras —
+	// Unit.cpp:7552-7561) ride the pet cast site in
+	// executePetSpellWithOptions; the remaining done legs (OVERRIDE_CLASS_SCRIPTS
+	// flat arms, AP arms, SpellHealingPctDone) stay unmodeled here.
 	targetSess := s.server.findSessionByGUID(target.GUID)
 	var absorbMask uint32
 	if s.server.Data != nil {

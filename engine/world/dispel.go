@@ -1525,7 +1525,30 @@ func (s *session) healDevourMagicPet(ctx context.Context, petCaster *creatureMot
 	if s.server == nil || petCaster == nil || healAmount == 0 {
 		return
 	}
-	s.executePetSpellHeal(ctx, petCaster, petCaster.GUID, 19658, healAmount)
+	heal := healAmount
+	// Spell::EffectHeal on the triggered 19658 runs the pet through
+	// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561) — the same
+	// advertised-benefit arms the pet cast site bridges — not a raw Health
+	// add.
+	if s.server.Data != nil {
+		if devourHeal, found, err := s.server.Data.Spell(19658); err == nil && found {
+			effIndex := 0
+			for i, eff := range devourHeal.Effects {
+				if eff.Effect == spellEffectHeal || eff.Effect == spellEffectHealMechanical || eff.Effect == spellEffectHealPct {
+					effIndex = i
+					break
+				}
+			}
+			if bonus := s.petGuardianDoneHealingBonus(ctx, petCaster, devourHeal, effIndex, petCaster.GUID); bonus != 0 {
+				if adjusted := int32(heal) + bonus; adjusted > 0 {
+					heal = uint32(adjusted)
+				} else {
+					heal = 0
+				}
+			}
+		}
+	}
+	s.executePetSpellHeal(ctx, petCaster, petCaster.GUID, 19658, heal)
 	if s.player != nil && s.playerHasAura(56249) {
 		// SpellEffects.cpp:2527-2529: the glyph arm is owner->CastSpell(owner,
 		// 19658, args) — the 19658 caster is the OWNER, not the pet.
