@@ -1821,11 +1821,15 @@ func (s *session) handleGroupRaidConvert(_ context.Context, _ []byte) bool {
 	if !leader || memberCount < 2 {
 		return false
 	}
-	// Group::ConvertToRaid (Group.cpp:311) shared with the Lua bridge.
-	if !srv.convertGroupToRaid(g) {
-		return false
-	}
+	// GroupHandler.cpp:587-588 — the party result goes to the client BEFORE
+	// the conversion, and the conversion cannot fail (C++ Group::ConvertToRaid
+	// returns void, Group.cpp:311): an already-raid group still gets
+	// ERR_PARTY_RESULT_OK and re-runs the conversion instead of being
+	// silently refused. The DB group-type write and the per-member
+	// UpdateVisibleGameobjectsOrSpellClicks sweep stay unbridged (standing
+	// no-bridges documented on convertGroupToRaid).
 	_ = s.sendPartyResult(partyOpInvite, "", errPartyResultOK)
+	_ = srv.convertGroupToRaid(g)
 	return true
 }
 
@@ -1855,8 +1859,11 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 	srv.groupsMu.Lock()
 	g := srv.groups[s.groupID]
 	// HandlePartyAssignmentOpcode (GroupHandler.cpp:652) gates on leader-or-
-	// assistant only — no raid-group requirement
-	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
+	// assistant; main-assist/main-tank go through Group::SetGroupMemberFlag,
+	// which refuses non-raid groups ("only available in raid groups",
+	// Group.cpp). The trailing group->SendUpdate() stays unconditional like
+	// C++ (broadcast runs even for an unknown assignment value).
+	if g == nil || !g.IsRaid || !g.isLeaderOrAssistant(s.playerGUID) {
 		srv.groupsMu.Unlock()
 		return false
 	}
@@ -2048,14 +2055,21 @@ func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte
 
 	s.server.groupsMu.Lock()
 	grp := s.server.groups[s.groupID]
-	// HandleGroupAssistantLeaderOpcode (GroupHandler.cpp:633) gates on leader
-	// only — no raid-group requirement
-	if grp == nil || !grp.isLeader(s.playerGUID) {
+	// HandleGroupAssistantLeaderOpcode (GroupHandler.cpp:633) gates on
+	// leader; Group::SetGroupMemberFlag (Group.cpp: "Assistants, main
+	// assistants and main tanks are only available in raid groups") refuses
+	// the whole operation for non-raid groups — a 5-man party leader's
+	// assistant promotion is silently ignored.
+	if grp == nil || !grp.IsRaid || !grp.isLeader(s.playerGUID) {
 		s.server.groupsMu.Unlock()
 		return true
 	}
 
-	changed := false
+	// C++-exact: Group::SetGroupMemberFlag finds the member slot and returns
+	// silently for an unknown guid; a found member is toggled and the roster
+	// rebroadcast unconditionally (SendUpdate runs after ToggleGroupMemberFlag
+	// even for a no-op toggle).
+	member := false
 	for i := range grp.Members {
 		if grp.Members[i].GUID == guid {
 			if apply != 0 {
@@ -2063,13 +2077,13 @@ func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte
 			} else {
 				grp.Members[i].Flags &^= memberFlagAssistant
 			}
-			changed = true
+			member = true
 			break
 		}
 	}
 	s.server.groupsMu.Unlock()
 
-	if changed {
+	if member {
 		s.server.broadcastGroupList(grp)
 	}
 	return true
@@ -2094,8 +2108,13 @@ func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte)
 	s.server.groupsMu.Lock()
 	grp := s.server.groups[s.groupID]
 	// HandleGroupChangeSubGroupOpcode (GroupHandler.cpp:594) gates on
-	// leader-or-assistant only — no raid-group requirement
-	if grp == nil || !grp.isLeaderOrAssistant(s.playerGUID) {
+	// leader-or-assistant; Group::HasFreeSlotSubGroup (Group.cpp:2565) needs
+	// the raid subgroup counters, which only exist for raid groups
+	// (_initRaidSubGroupsCounter runs in Group::Create/Load/ConvertToRaid
+	// only when GROUPTYPE_RAID is set) — so a 5-man party is silently
+	// refused here, and Group::ChangeMembersGroup's own isRaidGroup gate
+	// (Group.cpp:1898) double-enforces it.
+	if grp == nil || !grp.IsRaid || !grp.isLeaderOrAssistant(s.playerGUID) {
 		s.server.groupsMu.Unlock()
 		return true
 	}
