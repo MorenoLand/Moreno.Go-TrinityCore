@@ -179,8 +179,13 @@ func (s *session) handleWho(ctx context.Context, payload []byte) bool {
 			continue
 		}
 
-		// Search patterns filter
+		// Search patterns filter (MiscHandler.cpp: s_show starts true; a
+		// single non-empty pattern matching the name, guild name, or area
+		// name accepts the player — ANY-match, not ALL-match. Every
+		// non-matching pattern only rejects when no pattern matches).
 		patternMatch := true
+		matchedAny := false
+		hasPattern := false
 		var areaName string
 		if s.server.Data != nil {
 			if area, ok, err := s.server.Data.Area(target.Zone); err == nil && ok {
@@ -191,12 +196,16 @@ func (s *session) handleWho(ctx context.Context, payload []byte) bool {
 			if pat == "" {
 				continue
 			}
-			if !strings.Contains(targetNameLower, pat) &&
-				!strings.Contains(guildNameLower, pat) &&
-				(areaName == "" || !strings.Contains(areaName, pat)) {
-				patternMatch = false
+			hasPattern = true
+			if strings.Contains(targetNameLower, pat) ||
+				strings.Contains(guildNameLower, pat) ||
+				(areaName != "" && strings.Contains(areaName, pat)) {
+				matchedAny = true
 				break
 			}
+		}
+		if hasPattern && !matchedAny {
+			patternMatch = false
 		}
 		if !patternMatch {
 			continue

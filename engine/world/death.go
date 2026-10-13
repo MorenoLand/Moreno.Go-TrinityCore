@@ -2375,11 +2375,17 @@ func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
 	if s.isInFlight() {
 		return true
 	}
+	// MiscHandler.cpp:1517-1518: the Wintergrasp flag is read from the
+	// player's AREA id (GetAreaId), not the zone — the server-side sub-area
+	// from zoneAndAreaID mirrors it; the zone row alone may not carry it.
 	canHearthAndRes := false
-	if s.server.Data != nil && s.player.Zone != 0 {
-		area, found, err := s.server.Data.Area(s.player.Zone)
-		if err == nil && found && area.Flags&wotlk.AreaFlagWintergrasp2 != 0 {
-			canHearthAndRes = true
+	if s.server.Data != nil {
+		_, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Zone)
+		if areaID != 0 {
+			area, found, err := s.server.Data.Area(areaID)
+			if err == nil && found && area.Flags&wotlk.AreaFlagWintergrasp2 != 0 {
+				canHearthAndRes = true
+			}
 		}
 	}
 	if !canHearthAndRes {

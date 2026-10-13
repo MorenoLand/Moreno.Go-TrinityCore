@@ -4840,7 +4840,29 @@ func (s *session) handleUpdateAccountData(ctx context.Context, payload []byte) b
 	if err != nil {
 		return false
 	}
-	if typeID >= 8 || decompressedSize > 0xFFFF {
+	if typeID >= 8 {
+		return true
+	}
+	// MiscHandler.cpp:1196-1205: decompressedSize == 0 is an erase — the row
+	// is replaced with timestamp 0 and empty data, then
+	// SMSG_UPDATE_ACCOUNT_DATA_COMPLETE carries (type, 0).
+	if decompressedSize == 0 {
+		var eraseErr error
+		if globalAccountDataMask&(1<<typeID) != 0 {
+			_, eraseErr = s.server.CharactersStore.ExecStatement(ctx, "CHAR_REP_ACCOUNT_DATA", s.accountID, typeID, 0, "")
+		} else if s.playerLoaded {
+			_, eraseErr = s.server.CharactersStore.ExecStatement(ctx, "CHAR_REP_PLAYER_ACCOUNT_DATA", s.playerGUID, typeID, 0, "")
+		}
+		if eraseErr != nil {
+			s.debug("account data erase failed", "account", s.accountName, "type", typeID, "error", eraseErr)
+			return false
+		}
+		response := protocol.NewBuffer(8)
+		response.WriteU32(typeID)
+		response.WriteU32(0)
+		return s.write(uint16(protocol.OpcodeSMSG_UPDATE_ACCOUNT_DATA_COMPLETE), response.Bytes(), true) == nil
+	}
+	if decompressedSize > 0xFFFF {
 		return true
 	}
 	compressed, err := reader.Read(reader.Remaining())
