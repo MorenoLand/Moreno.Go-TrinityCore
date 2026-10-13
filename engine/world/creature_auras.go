@@ -696,9 +696,14 @@ func (s *Server) petResistanceBonus(key creatureAuraKey, isPet bool) [schoolCoun
 }
 
 // petFoldedResistances returns base with the live resistance fold applied
-// for magic-resistance mitigation at damage time. The pet path is unchanged:
-// Guardian::UpdateResistances (StatSystem.cpp:1301-1314) — base plus the live
-// 22 flat sum (petResistanceBonus, IsPet-gated arms included).
+// for magic-resistance mitigation at damage time. The pet path mirrors
+// Guardian::UpdateResistances (StatSystem.cpp:1301-1314): GetTotalAuraModValue
+// per school — the ungated aura-143 exclusive winner and aura-22 flat sum
+// into the flat leg, the aura-101 product multiplies, all for schools 1-6 —
+// plus the IsPet-gated 40% of the owner's live resistance
+// (hunter/warlock pets only; offline owners resolve to no bonus).
+// School 0 (armor) keeps the old 22-only fold here — the armor composition
+// lives in liveCreatureArmor/petFullArmor, not here.
 // The non-pet path was gated on OwnerGUID != 0 — but the C++ handlers are
 // ungated: HandleAuraModResistance (SpellAuraEffects.cpp:3255-3269), the
 // aura-143 exclusive arm (SpellAuraEffects.cpp:3232-3252) and
@@ -719,8 +724,63 @@ func (s *Server) petFoldedResistances(key creatureAuraKey, base [schoolCount]uin
 		}
 		bonus := s.petResistanceBonus(key, true)
 		out := base
-		for x := range out {
-			out[x] += uint32(bonus[x])
+		// The aura-143 exclusive winner and the aura-101 pct product are
+		// ungated (SpellAuraEffects.cpp:3232-3252, :3313-3331), so the pet
+		// schools fold them exactly like Creature::UpdateResistances:
+		// (base + winner + flat) x totalPct (GetTotalAuraModValue,
+		// Unit.cpp:9437-9448).
+		var exclusive [schoolCount]int64
+		totalPct := [schoolCount]float64{1, 1, 1, 1, 1, 1, 1}
+		s.auraMu.Lock()
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			spell, found, err := s.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, effect := range spell.Effects {
+				if aura.EffectMask&(1<<uint(index)) == 0 || index >= len(aura.Amounts) {
+					continue
+				}
+				for x := 1; x < schoolCount; x++ {
+					if effect.MiscValue&(1<<uint(x)) == 0 {
+						continue
+					}
+					switch effect.Aura {
+					case spellAuraModResistanceExclusive:
+						if a := int64(aura.Amounts[index]); a > exclusive[x] {
+							exclusive[x] = a
+						}
+					case spellAuraModResistancePct:
+						totalPct[x] *= 1 + float64(aura.Amounts[index])/100
+					}
+				}
+			}
+		}
+		s.auraMu.Unlock()
+		// School 0 (armor) keeps the old 22-only fold — the armor composition
+		// lives in liveCreatureArmor/petFullArmor, not here.
+		out[0] += uint32(bonus[0])
+		// Guardian::UpdateResistances (StatSystem.cpp:1301-1314): hunter and
+		// warlock pets add 40% of the owner's live resistance on top of the
+		// folded value; school <= NORMAL routes to UpdateArmor in C++.
+		var ownerRes40 [schoolCount]float64
+		if tm.PetType == petTypeHunter || tm.PetType == petTypeSummon {
+			if sess := s.playerSessionForGUID(tm.OwnerGUID); sess != nil && sess.player != nil {
+				for x := 1; x < schoolCount; x++ {
+					ownerRes40[x] = float64(sess.player.Resistances[x]) * 0.4
+				}
+			}
+		}
+		for x := 1; x < schoolCount; x++ {
+			v := (float64(base[x]) + float64(exclusive[x]) + float64(bonus[x])) * totalPct[x]
+			v += ownerRes40[x]
+			if v < 0 {
+				v = 0
+			}
+			out[x] = uint32(v)
 		}
 		return out
 	}
