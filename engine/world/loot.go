@@ -7,6 +7,8 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,6 +52,12 @@ type lootItem struct {
 	// on the new item (Player::StoreLootItem, Player.cpp:25096).
 	RandomSuffix     uint32
 	RandomPropertyID int32
+	// AllowedLooters mirrors LootItem::allowedGUIDs (Loot.h:131): the GUIDs of
+	// players present at looting, recorded by the group arm of Loot::FillLoot
+	// (Loot.cpp:214-219 -> FillNotNormalLootFor -> Loot.cpp:343-344). The set
+	// is bound onto the created item at delivery (Player::StoreNewItem,
+	// Player.cpp:12147) to drive the 2h BoP-tradeable window.
+	AllowedLooters []uint64
 }
 
 // itemFlagsCuIgnoreQuestStatus / itemFlagsCuFollowLootRules mirror
@@ -286,6 +294,161 @@ func (s *Server) fillLootTemplate(ctx context.Context, wdb *sql.DB, table string
 	var slot, qidx uint8
 	s.fillLootTemplateDepth(ctx, wdb, table, lootID, lootMode, loot, &slot, &qidx, 0, 0)
 	loot.NormalSlotCount = slot
+}
+
+// bindLootSoulboundTradeable mirrors the allowedLooters arm of Player::StoreNewItem
+// (Player.cpp:12147-12163): when a fresh (non-stack) item is created from a loot
+// row whose allowed-looter set holds more than one player, and the template is
+// non-stackable and binds on pickup, the item becomes BoP-tradeable —
+// ITEM_FIELD_FLAG_BOP_TRADEABLE (0x100) is set, CREATE_PLAYED_TIME
+// (item_instance.playedTime) seeds the owner's total played time, and the looter
+// set persists in item_soulbound_trade_data (CHAR_INS_ITEM_BOP_TRADE), opening
+// the 2h trade window (Item::SetSoulboundTradeable, Item.cpp:1171).
+// C++ reads pItem->IsSoulBound() after StoreItem bound it; StoreItem binds
+// BIND_WHEN_PICKED_UP (1) and BIND_QUEST_ITEM (4) at store (Player.cpp:12216),
+// so the Go twin tests the template bonding directly — Go defers the
+// soulbound flag to first use, and the flag must be present here for the
+// trade-path soulbound arm to see the item at all.
+func (s *session) bindLootSoulboundTradeable(ctx context.Context, ownerGUID, itemGUID uint64, itemEntry uint32, allowedLooters []uint64) {
+	if len(allowedLooters) <= 1 || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var stackable, bonding int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(stackable,1), COALESCE(Bonding,0) FROM item_template WHERE entry = ?`, itemEntry).Scan(&stackable, &bonding); err != nil {
+		return
+	}
+	if stackable != 1 || (bonding != 1 && bonding != 4) {
+		return
+	}
+	var playedTime uint32
+	if s.player != nil && ownerGUID == s.playerGUID {
+		playedTime = s.player.TotalPlayedTime
+	} else if ts := s.server.findSessionByGUID(ownerGUID); ts != nil && ts.player != nil {
+		playedTime = ts.player.TotalPlayedTime
+	}
+	cdb := s.server.CharactersStore.DB
+	if _, err := cdb.ExecContext(ctx, `UPDATE item_instance SET flags = flags | ?, playedTime = ? WHERE guid = ?`, int64(itemInstanceFlagSoulbound|itemInstanceFlagBOPTradeable), playedTime, itemGUID); err != nil {
+		return
+	}
+	var sb strings.Builder
+	for i, g := range allowedLooters {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(strconv.FormatUint(g, 10))
+	}
+	_, _ = cdb.ExecContext(ctx, `INSERT INTO item_soulbound_trade_data (itemGuid, allowedPlayers) VALUES (?, ?)`, itemGUID, sb.String())
+}
+
+// recordLootAllowedLooters mirrors the group arm of Loot::FillLoot (Loot.cpp:211-220):
+// every group member in the same map is walked through FillNotNormalLootFor, and
+// members at group-reward distance of the looted object are recorded as allowed
+// looters on each visible normal item (Loot.cpp:343-344). The set is bound onto
+// the created item at delivery (Player::StoreNewItem, Player.cpp:12147) to drive
+// the 2h BoP-tradeable window. Go fills lazily at first open, so "present at
+// looting" reads the members in range at fill time — a member in range at kill
+// time who left before the first open is not recorded (standing delta of the
+// lazy fill). The solo/personal arm (Loot.cpp:232) records only the opener;
+// with a single looter the StoreNewItem size>1 gate never fires, so it is a
+// deliberate no-op here.
+func (s *Server) recordLootAllowedLooters(ctx context.Context, loot *activeLootState, opener *session, tx, ty, tz float32) {
+	if s == nil || loot == nil || opener == nil || opener.player == nil || len(loot.Items) == 0 || opener.groupID == 0 {
+		return
+	}
+	members := []*session{opener}
+	for _, m := range s.getGroupSessions(opener.groupID) {
+		if m == nil || m.player == nil || m.playerGUID == opener.playerGUID {
+			continue
+		}
+		// Loot.cpp:217: the walk covers members in the same map...
+		if m.player.Map != loot.MapID || m.player.InstanceID != loot.InstanceID {
+			continue
+		}
+		// ...with presentAtLooting = IsAtGroupRewardDistance (Player.cpp:24160):
+		// same map+instance, within MaxGroupXPDistance of the looted object
+		// (dungeons always qualify, Player.cpp:24168-24169); a dead member's
+		// distance is measured from their corpse (groupRewardAnchorPos).
+		mx, my, mz := groupRewardAnchorPos(m)
+		if !opener.isDungeonMap(loot.MapID) && distance3D(mx, my, mz, tx, ty, tz) > float64(s.Config.MaxGroupXPDistance) {
+			continue
+		}
+		members = append(members, m)
+	}
+	// Prefetch the template fields the AllowedForPlayer arms read (one query
+	// per item instead of per member).
+	type visibleTmpl struct {
+		flags2, flags, class, bonding int64
+		requiredSkill, spell2         int64
+	}
+	tmpls := make(map[uint32]visibleTmpl, len(loot.Items))
+	for _, it := range loot.Items {
+		if it.FreeForAll {
+			continue
+		}
+		if _, ok := tmpls[it.ItemEntry]; ok {
+			continue
+		}
+		var t visibleTmpl
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			_ = s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(Flags2,0), COALESCE(Flags,0), COALESCE(Class,0), COALESCE(Bonding,0), COALESCE(RequiredSkill,0), COALESCE(spellid_2,0) FROM item_template WHERE entry = ?`, it.ItemEntry).Scan(&t.flags2, &t.flags, &t.class, &t.bonding, &t.requiredSkill, &t.spell2)
+		}
+		tmpls[it.ItemEntry] = t
+	}
+	for _, m := range members {
+		team := playerTeam(m.player.Race)
+		for slot, it := range loot.Items {
+			if it.FreeForAll {
+				continue
+			}
+			t := tmpls[it.ItemEntry]
+			// Loot.cpp:65-70: faction-flagged items hidden from the other team.
+			if (t.flags2&0x01 != 0 && team != teamHorde) || (t.flags2&0x02 != 0 && team != teamAlliance) {
+				continue
+			}
+			// Loot.cpp:73-81: the master-looter early-true leg — the master
+			// looter sees everything but quest-gated items.
+			masterSees := false
+			s.groupsMu.Lock()
+			grp := s.groups[m.groupID]
+			s.groupsMu.Unlock()
+			if grp != nil && grp.MasterLooter == m.playerGUID && it.CustomFlags&itemFlagsCuIgnoreQuestStatus == 0 && !it.NeedsQuest && it.StartQuest == 0 {
+				masterSees = true
+			}
+			if !masterSees {
+				// Loot.cpp:83-90: unusable-recipe arms.
+				if t.flags&0x02000000 != 0 {
+					skilled := false
+					for _, sk := range m.player.Skills {
+						if uint32(sk.Skill) == uint32(t.requiredSkill) {
+							skilled = true
+							break
+						}
+					}
+					if t.requiredSkill == 0 || !skilled || playerHasSpell(m.player, uint32(t.spell2)) {
+						continue
+					}
+				}
+				if t.class == 9 && t.bonding == 1 && t.spell2 != 0 && playerHasSpell(m.player, uint32(t.spell2)) {
+					continue
+				}
+				// Loot.cpp:92-93: quest-gated arm.
+				if it.CustomFlags&itemFlagsCuIgnoreQuestStatus == 0 && (it.NeedsQuest || (it.StartQuest != 0 && m.questStatusNotNone(ctx, it.StartQuest))) && !m.hasQuestForItem(ctx, it.ItemEntry) {
+					continue
+				}
+			}
+			dup := false
+			for _, g := range it.AllowedLooters {
+				if g == m.playerGUID {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				it.AllowedLooters = append(it.AllowedLooters, m.playerGUID)
+				loot.Items[slot] = it
+			}
+		}
+	}
 }
 
 // lootMaxDuplicates mirrors the Creature.cpp:485 / GameObject.cpp:404 gate:
@@ -1573,6 +1736,12 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	if lootID != 0 {
 		s.server.fillLootTemplate(ctx, wdb, "gameobject_loot_template", lootID, lootModeDefault, loot)
 		s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
+		// Loot::FillLoot group arm (Loot.cpp:214-219): the GO fill passes
+		// personal=!groupRules (Player.cpp:8598), so the allowed-looter walk
+		// runs only for chests with groupLootRules.
+		if loot.GOLootRules {
+			s.server.recordLootAllowedLooters(ctx, loot, s, goX, goY, goZ)
+		}
 		// Player::SendLoot GO arm (Player.cpp:8592-8606): the round-robin looter
 		// update before the fill and the unconditional advance after it run only
 		// when groupRules holds (chest with chest.groupLootRules); a chest
@@ -1769,6 +1938,10 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		s.server.fillLootTemplate(ctx, wdb, "creature_loot_template", lootID, lootModeDefault, loot)
 	}
 	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
+	// Loot::FillLoot group arm (Loot.cpp:214-219): the creature kill fill
+	// passes personal=false (Unit.cpp:11253), so the allowed-looter walk runs
+	// for every fresh creature loot.
+	s.server.recordLootAllowedLooters(ctx, loot, s, target.X, target.Y, target.Z)
 	if s.server != nil && s.groupID != 0 {
 		var looterAnnounce []byte
 		s.server.groupsMu.Lock()
@@ -3057,6 +3230,12 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 	if it.RandomPropertyID != 0 && res != nil && !res.IsStack && res.ItemGUID != 0 {
 		_, _ = cdb.ExecContext(ctx, `UPDATE item_instance SET randomPropertyId = ? WHERE guid = ?`, it.RandomPropertyID, res.ItemGUID)
 	}
+	// Player::StoreLootItem (Player.cpp:25095) -> Player::StoreNewItem
+	// (Player.cpp:12147): the fresh item carries the row's allowed looters;
+	// bind the BoP-tradeable window when the set qualifies.
+	if res != nil && !res.IsStack && res.ItemGUID != 0 {
+		s.bindLootSoulboundTradeable(ctx, s.playerGUID, res.ItemGUID, it.ItemEntry, it.AllowedLooters)
+	}
 	// Player::StoreLootItem (Player.cpp:25136-25137): a row taken from a
 	// persisted container leaves the stored loot too.
 	if loot.StoredContainerGUID != 0 {
@@ -3680,6 +3859,12 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 		}
 		_ = s.sendLootError(lootGUID, code)
 		return true
+	}
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:475): the given item carries
+	// the row's allowed looters into target->StoreNewItem, whose
+	// Player.cpp:12147 arm binds the BoP-tradeable window.
+	if res != nil && !res.IsStack && res.ItemGUID != 0 {
+		targetSess.bindLootSoulboundTradeable(ctx, targetGUID, res.ItemGUID, it.ItemEntry, it.AllowedLooters)
 	}
 	// HandleLootMasterGiveOpcode (LootHandler.cpp:476-479): the recipient —
 	// not the master looter — earns the loot achievement criteria; the
@@ -4462,6 +4647,21 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 	}
 	_ = winnerSess.sendInventoryItems(ctx)
 	winnerSess.sendPlayerUpdate()
+	// Group.cpp:1567/1634: the winner's item carries the row's allowed looters
+	// into StoreNewItem, whose Player.cpp:12147 arm binds the BoP-tradeable
+	// window. Quest-slot wins carry no allowed looters (C++ never populates
+	// them for quest_items), so the bind only fires for normal rows.
+	var rollAllowed []uint64
+	s.lootMu.Lock()
+	if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
+		if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+			rollAllowed = li.AllowedLooters
+		}
+	}
+	s.lootMu.Unlock()
+	if res != nil && !res.IsStack && res.ItemGUID != 0 {
+		winnerSess.bindLootSoulboundTradeable(ctx, winnerGUID, res.ItemGUID, deliveredItem, rollAllowed)
+	}
 	slotForPush := uint32(res.Slot)
 	if res.IsStack {
 		slotForPush = 0xFFFFFFFF

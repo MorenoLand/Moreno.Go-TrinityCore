@@ -534,12 +534,18 @@ func tradeHasItem(items map[uint8]tradeSlotItem, itemGUID uint64) bool {
 // whether the item may occupy a traded slot of the trade window.
 func (s *session) tradeItemCanBeTraded(ctx context.Context, itemGUID uint64, bag, slot uint8, flags int64, containerSlots, itemClass, inventoryType uint32, templateFound bool, enchantFields []string) bool {
 	// Soulbound arm (Item.cpp:724): C++ admits BOP-tradeable items here
-	// (IsBOPTradeable), but Go has no item_soulbound_trade_data bridge, so
-	// soulbound items stay rejected conservatively. That also subsumes the
-	// TRADE_STATUS_NOT_ON_TAPLIST leg (TradeHandler.cpp:774-780), which only
-	// fires for BOP-tradeable items offered to a trader outside the allowed set.
+	// (IsBOPTradeable, ITEM_FIELD_FLAG_BOP_TRADEABLE). The window is bound at
+	// loot delivery (bindLootSoulboundTradeable) and persisted in
+	// item_soulbound_trade_data; an expired window is cleared first
+	// (Item::CheckSoulboundTradeExpire, Item.cpp:1188 — C++ runs it every
+	// second from Player::Update, Player.cpp:1082; Go has no per-second
+	// player tick, so the trade offer is the enforcement point, alongside the
+	// login-time sweep in validateInventoryTradeData). A rejection here also
+	// subsumes the TRADE_STATUS_NOT_ON_TAPLIST leg for non-BOP items.
 	if flags&1 != 0 {
-		return false
+		if flags&int64(itemInstanceFlagBOPTradeable) == 0 || s.soulboundTradeExpired(ctx, itemGUID) {
+			return false
+		}
 	}
 	// IsBoundByEnchant arm (Item.cpp:1049-1058): any enchantment carrying
 	// ENCHANTMENT_CAN_SOULBOUND binds the item. The 36-int enchantments column
@@ -582,6 +588,50 @@ func (s *session) tradeItemCanBeTraded(ctx context.Context, itemGUID uint64, bag
 		}
 	}
 	return true
+}
+
+// soulboundTradeExpired mirrors Item::CheckSoulboundTradeExpire (Item.cpp:1188-1195):
+// the 2h window runs on CREATE_PLAYED_TIME (item_instance.playedTime, seeded at
+// bind time) against the owner's total played time. On expiry it runs
+// ClearSoulboundTradeable (Item.cpp:1176-1186): the BOP_TRADEABLE flag is
+// removed and the item_soulbound_trade_data row deleted. Go evaluates the
+// owner's last-saved total played time (no live per-second tick like C++'s
+// Player::Update arm, Player.cpp:1082); the login-time sweep in
+// validateInventoryTradeData covers the rest.
+func (s *session) soulboundTradeExpired(ctx context.Context, itemGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.player == nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	var playedTime int64
+	if err := cdb.QueryRowContext(ctx, `SELECT COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?`, itemGUID).Scan(&playedTime); err != nil {
+		return false
+	}
+	if playedTime+2*3600 >= int64(s.player.TotalPlayedTime) {
+		return false
+	}
+	_, _ = cdb.ExecContext(ctx, `UPDATE item_instance SET flags = flags & ? WHERE guid = ?`, ^int64(itemInstanceFlagBOPTradeable), itemGUID)
+	_, _ = cdb.ExecContext(ctx, `DELETE FROM item_soulbound_trade_data WHERE itemGuid = ?`, itemGUID)
+	return true
+}
+
+// tradeTaplistAllows mirrors the allowed-looter leg of Item::IsBindedNotWith
+// (Item.cpp:1046-1048): a BOP-tradeable item may only change hands to a trader
+// inside the item's item_soulbound_trade_data allowedPlayers set.
+func (s *session) tradeTaplistAllows(ctx context.Context, itemGUID, traderGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var allowedPlayers string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT allowedPlayers FROM item_soulbound_trade_data WHERE itemGuid = ? LIMIT 1`, itemGUID).Scan(&allowedPlayers); err != nil {
+		return false
+	}
+	for _, token := range strings.Fields(allowedPlayers) {
+		if guid, perr := strconv.ParseUint(token, 10, 64); perr == nil && guid == traderGUID {
+			return true
+		}
+	}
+	return false
 }
 
 // tradeItemCanChangeEquipStateInCombat mirrors
@@ -688,6 +738,21 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		// TradeData::SetItem (TradeData.cpp:60-65) early-returns when the slot
 		// already holds this item: no un-accept, no spell clear, no update.
 		return true
+	}
+	if tradeSlot < tradeSlotTradedCount && s.trade.Partner != nil && s.trade.Partner.player != nil {
+		// Item::IsBindedNotWith (Item.cpp:1039-1058) vs the trader
+		// (TradeHandler.cpp:774-780): a soulbound BOP-tradeable item offered
+		// to a trader outside the row's allowed-looter set answers
+		// TRADE_STATUS_NOT_ON_TAPLIST. Non-soulbound items never bind
+		// (IsBindedNotWith false); soulbound items without the BOP flag
+		// already failed CanBeTraded above, so only the BOP-tradeable
+		// outside-set case reaches here. The BOA exemption
+		// (IsBoundAccountWide) has no Go model — BOA items carry no soulbound
+		// flag in Go's inventory model.
+		if flags&1 != 0 && flags&int64(itemInstanceFlagBOPTradeable) != 0 && !s.tradeTaplistAllows(ctx, uint64(itemGUID), s.trade.Partner.playerGUID) {
+			_ = s.sendTradeStatus(tradeStatusNotOnTaplist, 0, 0, 0, 0, tradeSlot)
+			return true
+		}
 	}
 	// Reference: SendUpdateTrade (TradeHandler.cpp:95-96) writes
 	// item->IsWrapped() ? 1 : 0. Go models wrapping via the character_gifts
@@ -827,19 +892,20 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 
 	// Accept-time item re-validation, in C++ order (TradeHandler.cpp:307-348):
 	// every traded-slot item of both parties is re-checked with
-	// Item::CanBeTraded(false, true) before the partner is notified. The only
-	// representable term in Go's DB model is the soulbound flag (flags&1) —
-	// BoP-tradeable state, non-empty bags, loot generation, CanUnequipItem,
-	// loot GUIDs and enchant binding have no Go model, and the his-items
-	// IsBindedNotWith branch is commented out in C++ too. A soulbound item
-	// that reached a traded slot fails CanBeTraded, so the acceptor is
-	// answered TRADE_STATUS_TRADE_CANCELED and the handler returns, leaving
-	// the accepted state untouched exactly like C++. The CLOSE_WINDOW +
-	// EQUIP_ERR_CANNOT_TRADE_THAT IsBindedNotWith branch is unreachable here:
-	// with no BoP-tradeable model any soulbound item already fails the
-	// CanBeTraded check first, and a non-soulbound item never binds.
+	// Item::CanBeTraded(false, true) before the partner is notified. The
+	// soulbound arm admits BOP-tradeable items whose 2h window has not
+	// expired (Item::CheckSoulboundTradeExpire); the expiry is evaluated
+	// against the item owner's played time. The his-items IsBindedNotWith
+	// branch is commented out in C++ too. A failing item answers
+	// TRADE_STATUS_TRADE_CANCELED and the handler returns, leaving the
+	// accepted state untouched exactly like C++.
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
-		for _, tr := range []*playerTradeState{s.trade, partner.trade} {
+		type ownedTrade struct {
+			tr    *playerTradeState
+			owner *session
+		}
+		for _, owned := range []ownedTrade{{s.trade, s}, {partner.trade, partner}} {
+			tr := owned.tr
 			if tr == nil {
 				continue
 			}
@@ -850,7 +916,7 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 				}
 				var flags int64
 				_ = cdb.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ? LIMIT 1", it.ItemGUID).Scan(&flags)
-				if flags&1 != 0 {
+				if flags&1 != 0 && (flags&int64(itemInstanceFlagBOPTradeable) == 0 || owned.owner.soulboundTradeExpired(ctx, it.ItemGUID)) {
 					_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 					return true
 				}
