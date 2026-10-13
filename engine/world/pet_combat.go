@@ -226,12 +226,13 @@ func (s *Server) onPetSetReaction(mapID, instanceID uint32, petGUID uint64, reac
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
 		motion.PetReact = reactState
 		if reactState == PetReactPassive {
-			// In passive mode, disengage unless ordered to attack
-			if motion.PetCommand != PetCommandAttack {
-				motion.TargetGUID = 0
-				motion.InCombat = false
-				motion.Moving = false
-			}
+			// PetHandler.cpp:252-255: REACT_PASSIVE falls through to
+			// pet->AttackStop() unconditionally — a pet mid-command-attack
+			// disengages too, where the old PetCommand != Attack carve-out
+			// kept it attacking.
+			motion.TargetGUID = 0
+			motion.InCombat = false
+			motion.Moving = false
 		}
 	}
 }

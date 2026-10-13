@@ -2569,6 +2569,17 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			if pacified {
 				return true
 			}
+			// PetHandler.cpp:210-213: no target unit -> the order drops
+			// before any engage or AI reaction (Go used to broadcast the
+			// growl anyway); PetHandler.cpp:216-217: a pet already attacking
+			// that target under a command-attack ignores the re-issue —
+			// no forced target switch, no AI reaction.
+			if targetGUID == 0 {
+				return true
+			}
+			if motion.InCombat && motion.TargetGUID == targetGUID && motion.PetCommand == PetCommandAttack {
+				return true
+			}
 			if s.server != nil {
 				s.server.onPetCommandAttack(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
 			}
@@ -2625,6 +2636,32 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		}
 		s.debug("pet reaction state changed", "account", s.accountName, "pet", petGUID, "react", spellOrAction)
 	case actDisabled, actEnabled, actPassive:
+		// PetHandler.cpp:270-289: the spell arm drops silently ahead of the
+		// AI reaction on unknown spell ids, spells carrying an enemy-area
+		// implicit target (TARGET_UNIT_SRC_AREA_ENEMY/DEST_AREA_ENEMY/
+		// DEST_DYNOBJ_ENEMY, SharedDefines.h:1452-1464), unlearned spells,
+		// and passive spells — Go used to broadcast the reaction and a
+		// SpellGo visual for all of them. The gates run only with spell
+		// data present; without a DB the arm keeps its old visual-only
+		// behavior.
+		var spellTargetBase *protocol.SpellTargetData
+		if s.server != nil && s.server.Data != nil {
+			spellInfo, found, spellErr := s.server.Data.Spell(spellOrAction)
+			if spellErr != nil || !found {
+				return true
+			}
+			for i := range spellInfo.Effects {
+				switch spellInfo.Effects[i].ImplicitTargetA {
+				case 15, 16, 28:
+					return true
+				}
+			}
+			if spellInfo.Attributes&spellAttributePassive != 0 || !s.petKnowsSpell(ctx, motion, spellOrAction) {
+				return true
+			}
+			st := spellGoPacketTarget(spellInfo, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID})
+			spellTargetBase = &st
+		}
 		if targetGUID != 0 {
 			reactionBuf := protocol.NewBuffer(12)
 			reactionBuf.WriteU64(petGUID)
@@ -2636,10 +2673,8 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			if spellOrAction != 0 {
 				castTimeStamp := uint32(time.Now().UnixMilli())
 				spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
-				if s.server != nil && s.server.Data != nil {
-					if spellInfo, found, err := s.server.Data.Spell(spellOrAction); err == nil && found {
-						spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
-					}
+				if spellTargetBase != nil {
+					spellTarget = *spellTargetBase
 				}
 				goPkt := protocol.BuildSpellGo(petGUID, petGUID, 1, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
 				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
