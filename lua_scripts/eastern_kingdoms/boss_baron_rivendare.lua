@@ -56,8 +56,8 @@
 --   DoCastVictim(15708) non-triggered.
 -- - RaiseDead: 15s init -> 12s re-arm; if !RaiseDead:
 --   DoCastSelf(SPELL_RAISE_DEAD = 17473) non-triggered + 6x
---   DoCastSelf(RaiseDeadSpells, TRIGGERED) -> CastSpell on self
---   (triggered flag not modeled — mr_smite convention) +
+--   DoCastSelf(RaiseDeadSpells, TRIGGERED) -> CastSpell on self,
+--   triggered +
 --   Talk(EMOTE_RAISE_DEAD = 0); else Talk(EMOTE_DEATH_PACT = 1);
 --   per-guid RaiseDead latch, set on the raise half, cleared ONLY on
 --   the death-pact half — C++ Reset/JustEngagedWith never touch the
@@ -154,7 +154,7 @@ local function onRaiseDead(creature, guid)
     if not raiseDead[guid] then
         creature:CastSpell(creature, SPELL_RAISE_DEAD)
         for _, spell in ipairs(RAISE_DEAD_SPELLS) do
-            creature:CastSpell(creature, spell)
+            creature:CastSpell(creature, spell, true)
         end
         raiseDead[guid] = true
         creature:Talk(EMOTE_RAISE_DEAD)

@@ -70,7 +70,7 @@ end
 local function onStrike(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_STRIKE)
+        creature:CastSpell(victim, SPELL_STRIKE, true)
     end
     schedule(guid, "strike", 14000, function() onStrike(creature, guid) end)
 end
