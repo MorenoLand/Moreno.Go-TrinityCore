@@ -2294,6 +2294,43 @@ func petHealTargetHasAura(s *session, ctx context.Context, victimGUID uint64, au
 	return false
 }
 
+// petApBonusDoneFlat mirrors the ap_bonus/ap_dot_bonus arm of
+// Unit::SpellDamageBonusDone (Unit.cpp:6684-6706) and
+// Unit::SpellHealingBonusDone (Unit.cpp:7568-7581) for a guardian pet
+// caster: with a spell_bonus_data row, the ap_bonus/ap_dot_bonus
+// coefficient scales APbonus — the victim's
+// SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS (165) auras plus the pet's
+// total attack power (petGuardianAttackPower, the GetTotalAttackPowerValue
+// twin) — by the stack. The Impurity ApCoeffMod arm (Unit.cpp:7523-7548,
+// 6649-6679) is nil for a guardian caster — C++ gates it on the caster
+// being a player — so the coefficient modifier is 1.0. Pets cast no
+// ranged-weapon spells, so the BASE_ATTACK attacker-bonus aura (165) is
+// the live one (Unit.cpp:6687/7571).
+func (s *session) petApBonusDoneFlat(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victimGUID uint64, victim combatTarget, isDot bool, stack uint32) int32 {
+	if s == nil || s.server == nil || motion == nil {
+		return 0
+	}
+	bonus, ok := s.spellBonusRow(spell.ID)
+	if !ok {
+		return 0
+	}
+	coeff := bonus.apDirect
+	if isDot {
+		coeff = bonus.apDot
+	}
+	if coeff <= 0 {
+		return 0
+	}
+	if stack == 0 {
+		stack = 1
+	}
+	ap := float64(s.swingVictimAuraSum(victimGUID, victim, spellAuraMeleeAttackPowerAttackerBonus, 0, false))
+	if total, _, _, _ := s.server.petGuardianAttackPower(s, motion); total != 0 {
+		ap += total
+	}
+	return int32(coeff * float64(stack) * ap)
+}
+
 // petGuardianDoneHealingBonus mirrors the full advertised-benefit fold of
 // Unit::SpellHealingBonusDone (Unit.cpp:7490-7605) for a guardian caster:
 // DoneAdvertisedBenefit = SpellBaseHealingBonusDone (the pet's own
@@ -2305,9 +2342,9 @@ func petHealTargetHasAura(s *session, ctx context.Context, victimGUID uint64, au
 // health-funnel spells zero the whole DoneTotal after the fold
 // (Unit.cpp:7607-7619, via spellHealingDoneZeroed). Impurity (Unit.cpp:7523-7548)
 // is correctly nil for a guardian caster — C++ gates the arm on the caster
-// being a player. The ap_bonus/ap_dot_bonus arms (Unit.cpp:7568-7581) need
-// the caster's total attack power, which Go does not model for creatures —
-// documented no-bridge. The percent leg (SpellHealingPctDone) rides the call
+// being a player. The ap_bonus/ap_dot_bonus arms (Unit.cpp:7568-7581) ride
+// petApBonusDoneFlat below — the pet's total attack power comes from
+// petGuardianAttackPower (the GetTotalAttackPowerValue twin). The percent leg (SpellHealingPctDone) rides the call
 // site via petHealingPctDone. The coefficient's level-penalty factor reads the
 // pet's motion level (spellHealingDoneCoefficientCasterLevel), matching C++'s
 // caster-level read in Unit::CalculateSpellpowerCoefficientLevelPenalty.
@@ -2344,10 +2381,17 @@ func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creat
 	advertised := s.guardianBonusSpellDamage(motion)
 	advertised += s.petHealingDoneAuraModifier(motion, schoolMask)
 	advertised += s.healVictimModHealing(ctx, victimGUID, schoolMask)
-	if advertised == 0 && flat == 0 {
+	// Unit.cpp:7568-7581: the ap_bonus/ap_dot_bonus arm rides DoneTotal
+	// flat beside the advertised fold (no coefficient leg).
+	var victim combatTarget
+	if ct, ok := s.getCombatTarget(ctx, victimGUID); ok {
+		victim = ct
+	}
+	apArm := s.petApBonusDoneFlat(ctx, motion, spell, victimGUID, victim, isDot, stack)
+	if advertised == 0 && flat == 0 && apArm == 0 {
 		return 0
 	}
-	return int32(float64(advertised)*s.spellHealingDoneCoefficientCasterLevel(spell, effIndex, isDot, motion.Level)*float64(stack)) + flat
+	return int32(float64(advertised)*s.spellHealingDoneCoefficientCasterLevel(spell, effIndex, isDot, motion.Level)*float64(stack)) + flat + apArm
 }
 
 // petTickHealDoneLegs mirrors the per-tick Unit::SpellHealingBonusDone (DOT)
@@ -2466,6 +2510,17 @@ func (s *session) petPeriodicApplyDoneLegs(ctx context.Context, motion *creature
 			}
 			if v180 := s.petDoneFlatVersus(ctx, motion, spell, targetGUID); v180 != 0 {
 				if adjusted := int32(amount) + v180; adjusted > 0 {
+					amount = uint32(adjusted)
+				} else {
+					amount = 0
+				}
+			}
+			// Unit::SpellDamageBonusDone (Unit.cpp:6684-6706): the
+			// ap_dot_bonus arm rides DoneTotal flat beside the advertised
+			// fold (no coefficient leg); the bake-at-apply aura carries
+			// stack 1 like the advertised fold above.
+			if ap := s.petApBonusDoneFlat(ctx, motion, spell, targetGUID, target, true, 1); ap != 0 {
+				if adjusted := int32(amount) + ap; adjusted > 0 {
 					amount = uint32(adjusted)
 				} else {
 					amount = 0
@@ -3030,6 +3085,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						d = 0
 					}
 				}
+				// Unit::SpellDamageBonusDone (Unit.cpp:6684-6706): the
+				// ap_bonus arm rides DoneTotal flat per victim, ahead of
+				// the pct leg; the direct cast path carries stack 1.
+				if ap := s.petApBonusDoneFlat(ctx, motion, spell, victimGUID, target, false, 1); ap != 0 {
+					if adjusted := int32(d) + ap; adjusted > 0 {
+						d = uint32(adjusted)
+					} else {
+						d = 0
+					}
+				}
 				if pct := s.petDamagePctDone(ctx, motion, spell, victimGUID, target); pct != 1.0 {
 					d = uint32(float64(d) * pct)
 				}
@@ -3578,11 +3643,11 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	// MOD_HEALING_PCT, the Nourish 1.2x leg and MOD_HEALING_RECEIVED
 	// (caster-matched against the pet's GUID) — previously the raw amount
 	// healed. Direct heals are HEAL type, so the MOD_HOT_PCT leg is off
-	// (dotType=false). The SpellHealingBonusDone advertised-benefit arms
-	// (guardian bonus, pet's own aura-135 base, victim MOD_HEALING auras —
-	// Unit.cpp:7552-7561) ride the pet cast site in
-	// executePetSpellWithOptions; the remaining done legs (OVERRIDE_CLASS_SCRIPTS
-	// flat arms, AP arms, SpellHealingPctDone) stay unmodeled here.
+	// (dotType=false). The SpellHealingBonusDone done legs ride the pet
+	// cast site in executePetSpellWithOptions (flat advertised fold with
+	// the guardian bonus arm, AP arms and OVERRIDE_CLASS_SCRIPTS arms via
+	// petGuardianDoneHealingBonus; the SpellHealingPctDone leg; the
+	// SPELLMOD_DAMAGE tail) — only the taken leg remains here.
 	targetSess := s.server.findSessionByGUID(target.GUID)
 	var absorbMask uint32
 	if s.server.Data != nil {

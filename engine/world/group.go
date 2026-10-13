@@ -2541,7 +2541,13 @@ func (s *session) groupPetStats(ctx context.Context, target *session) groupPetSt
 		if petType == int64(petTypeHunter) {
 			result.powerType, result.maxPower = 2, uint16(petFocusMax)
 		}
-		result.currentPower = uint16(mana)
+		// Pet::InitStatsForLevel (Pet.cpp:930-939): DK ghouls and risen
+		// allies display POWER_ENERGY, full at summon (SetFullPower).
+		if entry == 26125 || entry == 30230 {
+			result.powerType, result.maxPower, result.currentPower = 3, uint16(petEnergyMax), uint16(petEnergyMax)
+		} else {
+			result.currentPower = uint16(mana)
+		}
 	}
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil && entry > 0 && (result.name == "" || result.model == 0) {
 		var templateName string

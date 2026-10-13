@@ -247,6 +247,7 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	curHealth, curMana := motion.Health, motion.Mana
 	oldMaxHealth, oldMaxMana := motion.MaxHealth, motion.MaxMana
 	curFocus, oldMaxFocus := motion.Powers[2], motion.MaxPowers[2]
+	curEnergy, oldMaxEnergy := motion.Powers[3], motion.MaxPowers[3]
 	s.motionMu.Unlock()
 	var healthPct float64
 	if oldMaxHealth > 0 && curHealth > 0 {
@@ -296,6 +297,21 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	newMaxFocus := (createFocus + float64(focusFlat)) * focusTotalPct
 	if newMaxFocus < 1 {
 		newMaxFocus = 1
+	}
+	// Guardian::UpdateMaxPower for POWER_ENERGY (StatSystem.cpp:1362-1382):
+	// GetCreatePowerValue(POWER_ENERGY) is 100 for every unit
+	// (Unit.cpp:9686-9688), but only DK ghouls and risen allies display it
+	// (Pet.cpp:930-939). The intellect addValue arm is mana-only, so
+	// (createEnergy + flatTOTAL35) * totalPct132 — no BASE feeders exist
+	// for the power modifiers in C++.
+	createEnergy := 0.0
+	if entry == 26125 || entry == 30230 {
+		createEnergy = float64(petEnergyMax)
+	}
+	energyFlat, energyTotalPct := s.creaturePowerAuraMods(key, 3)
+	newMaxEnergy := (createEnergy + float64(energyFlat)) * energyTotalPct
+	if newMaxEnergy < 1 {
+		newMaxEnergy = 1
 	}
 	// The 137 stamina tail (SpellAuraEffects.cpp:3570-3572): a
 	// SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE aura touching stamina on a
@@ -390,12 +406,30 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	} else if newFocus > uint32(newMaxFocus) {
 		newFocus = uint32(newMaxFocus)
 	}
+	newEnergy := curEnergy
+	if halves.powerPct[3] {
+		// HandleAuraModIncreaseEnergyPercent (SpellAuraEffects.cpp:3698-3727):
+		// current energy shifts by the max-power change, on apply and
+		// remove alike, clamped into [0, new max] like ModifyPower. The
+		// flat 35 arm (SpellAuraEffects.cpp:3686-3696) moves no current
+		// power — only the max, with a clamp.
+		if np := int64(newEnergy) + int64(newMaxEnergy) - int64(oldMaxEnergy); np < 0 {
+			newEnergy = 0
+		} else if np > int64(newMaxEnergy) {
+			newEnergy = uint32(newMaxEnergy)
+		} else {
+			newEnergy = uint32(np)
+		}
+	} else if newEnergy > uint32(newMaxEnergy) {
+		newEnergy = uint32(newMaxEnergy)
+	}
 	m.Health, m.MaxHealth, m.Mana, m.MaxMana = newHealth, uint32(newMaxHealth), newMana, uint32(newMaxMana)
 	m.Powers[0], m.MaxPowers[0] = newMana, uint32(newMaxMana)
 	m.Powers[2], m.MaxPowers[2] = newFocus, uint32(newMaxFocus)
+	m.Powers[3], m.MaxPowers[3] = newEnergy, uint32(newMaxEnergy)
 	mapID, instanceID, petGUID := m.Map, m.InstanceID, m.GUID
 	s.motionMu.Unlock()
-	fields := map[int]uint32{unitFieldHealth: newHealth, unitFieldMaxHealth: uint32(newMaxHealth), unitFieldPower1: newMana, unitFieldMaxPower1: uint32(newMaxMana), unitFieldPower1 + 2: newFocus, unitFieldMaxPower1 + 2: uint32(newMaxFocus)}
+	fields := map[int]uint32{unitFieldHealth: newHealth, unitFieldMaxHealth: uint32(newMaxHealth), unitFieldPower1: newMana, unitFieldMaxPower1: uint32(newMaxMana), unitFieldPower1 + 2: newFocus, unitFieldMaxPower1 + 2: uint32(newMaxFocus), unitFieldPower1 + 3: newEnergy, unitFieldMaxPower1 + 3: uint32(newMaxEnergy)}
 	for index, value := range owner.petGuardianFieldStats(m, entry, petType, petID) {
 		fields[unitFieldStat0+index] = value
 	}

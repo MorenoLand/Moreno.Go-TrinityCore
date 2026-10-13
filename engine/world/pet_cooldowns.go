@@ -37,6 +37,15 @@ func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID u
 		powers[2], maxPowers[2] = petFocusMax, petFocusMax
 		powers[4], maxPowers[4] = happiness, petHappinessMax
 	}
+	// Pet::InitStatsForLevel (Pet.cpp:930-939): DK ghouls and risen allies
+	// (IsPetGhoul / IsRisenAlly, TemporarySummon.h:81-82) display
+	// POWER_ENERGY with a full bar (SetFullPower(POWER_ENERGY)); the
+	// create value is 100 (Unit::GetCreatePowerValue, Unit.cpp:9686-9688).
+	// Ghoul spells pay energy costs from Powers[3] via petSpellPowerState.
+	if entry == 26125 || entry == 30230 {
+		powerType = petPowerTypeEnergy
+		powers[petPowerTypeEnergy], maxPowers[petPowerTypeEnergy] = petEnergyMax, petEnergyMax
+	}
 	minDamage, maxDamage := float32(maxUint32(level*2, 5)), float32(maxUint32(level*3, 10))
 	if petType == 1 {
 		minDamage, maxDamage = float32(level-level/4), float32(level+level/4)

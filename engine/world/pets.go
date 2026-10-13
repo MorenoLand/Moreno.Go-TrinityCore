@@ -48,7 +48,11 @@ const (
 	unitFieldPetNextLevelExp  = 78
 	unitFieldCreatedBySpell   = 81
 	petFocusMax               = 100
-	petHappinessMax           = 1050000
+	// petEnergyMax mirrors Unit::GetCreatePowerValue(POWER_ENERGY)
+	// (Unit.cpp:9686-9688): 100 for every unit. Only DK ghouls and risen
+	// allies display it (Pet.cpp:930-939).
+	petEnergyMax    = 100
+	petHappinessMax = 1050000
 	// petTameStartHappiness mirrors Pet::CreateBaseAtTamed (Pet.cpp:830):
 	// a freshly tamed pet starts at 166500, not at max happiness, so it
 	// deals the UNHAPPY 75% damage leg until fed (Pet.cpp:707-714).
@@ -813,6 +817,13 @@ func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, model
 		values[unitFieldMaxPower1+2] = petFocusMax
 		values[unitFieldPower1+4] = curHappiness
 		values[unitFieldMaxPower1+4] = petHappinessMax
+	}
+	// Pet::InitStatsForLevel (Pet.cpp:930-939): DK ghouls and risen allies
+	// display POWER_ENERGY, full at summon (SetFullPower(POWER_ENERGY)).
+	if entry == 26125 || entry == 30230 {
+		powerType = petPowerTypeEnergy
+		values[unitFieldPower1+petPowerTypeEnergy] = petEnergyMax
+		values[unitFieldMaxPower1+petPowerTypeEnergy] = petEnergyMax
 	}
 	values[unitFieldBytes0] = petClass<<8 | powerType<<24
 	values[unitFieldPetNumber] = petNumber
