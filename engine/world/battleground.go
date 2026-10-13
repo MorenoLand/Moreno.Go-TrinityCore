@@ -964,13 +964,13 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		}
 		// BattleGroundHandler.cpp:496-507: leaving a rated arena queue while
 		// invited counts as a loss — ArenaTeam::MemberLost (ArenaTeam.cpp:805)
-		// with the default MatchmakerRatingChange (-12): the personal rating
-		// takes the Elo loss vs the opponents' MMR, and week/season games
-		// increment (not wins). Go keeps no matchmaker model, so the opponents'
-		// MMR is 0 (a forfeit) and ModifyMatchmakerRating has no Go model
-		// (no MMR column); the SetArenaTeamInfoField unit-field updates have
-		// no Go model either. The HIGHEST_PERSONAL_RATING criteria update is
-		// max-keeping, == C++ UpdateAchievementCriteria.
+		// via the two-arg overload, so MatchmakerRatingChange defaults to -12
+		// (ArenaTeam.h:178). The personal rating takes the loss-mod arm vs the
+		// opponents' MMR; Go keeps no queue-time opponent MMR, so it is 0 (a
+		// forfeit). ModifyMatchmakerRating persists to character_arena_stats;
+		// week/season games increment (not wins); the SetArenaTeamInfoField
+		// unit-field updates have no Go model. The HIGHEST_PERSONAL_RATING
+		// criteria update is max-keeping, == C++ UpdateAchievementCriteria.
 		if entry.IsArena && entry.IsRated && entry.InstanceID != 0 {
 			cdb := s.server.CharactersStore.DB
 			if cdb == nil {
@@ -987,6 +987,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 					newPersonal = uint32(int32(newPersonal) + mod)
 				}
 				_, _ = cdb.ExecContext(ctx, "UPDATE arena_team_member SET personalRating = ?, weekGames = weekGames + 1, seasonGames = seasonGames + 1 WHERE arenaTeamId = ? AND guid = ?", newPersonal, teamID, s.playerGUID)
+				s.server.applyArenaMMRChange(ctx, s.playerGUID, arenaTeamSlotByType(uint32(entry.ArenaType)), -12)
 				s.setAchievementCriteria(criteriaTypeHighestPersonalRating, 0, newPersonal)
 				s.debug("rated arena queue leave: personal rating loss applied", "account", s.accountName, "team", teamID, "loss", -mod)
 			}

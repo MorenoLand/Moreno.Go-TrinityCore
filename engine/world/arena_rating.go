@@ -18,36 +18,51 @@ const (
 	ArenaPointsCap             uint32 = 10000
 )
 
-// CalcRatingDelta calculates the Elo rating change for an Arena match.
-// Mirrors TrinityCore Battleground::GetRatingBonus and Battleground::GetRatingLoss (Battleground.cpp:780-840).
-func CalcRatingDelta(winnerRating, loserRating uint32) (winnerGain, loserLoss int32) {
-	diff := float64(int64(loserRating) - int64(winnerRating))
-	winProb := 1.0 / (1.0 + math.Pow(10.0, diff/400.0))
-
-	// Base K factor in 3.3.5 is 32
-	const k = 32.0
-	gain := int32(math.Round(k * (1.0 - winProb)))
-	if gain < 1 {
-		gain = 1
-	}
-
-	loss := gain
-	// Under 1000 rating, rating loss is scaled down (WotLK catchup mechanism)
-	if loserRating < 1000 {
-		loss = int32(math.Round(float64(gain) * (float64(loserRating) / 1000.0)))
-	}
-
-	return gain, loss
+// arenaGetChanceAgainst mirrors ArenaTeam::GetChanceAgainst (ArenaTeam.cpp:680):
+// 1 / (1 + exp(ln(10) * (opponent - own) / 650)).
+func arenaGetChanceAgainst(ownRating, opponentRating uint32) float64 {
+	return 1.0 / (1.0 + math.Exp(math.Log(10.0)*(float64(opponentRating)-float64(ownRating))/650.0))
 }
 
-// arenaTeamRatingLossMod mirrors ArenaTeam::GetRatingMod (ArenaTeam.cpp:713)
-// for a loss: ceil(loseMod * -chance), with chance from
-// ArenaTeam::GetChanceAgainst (ArenaTeam.cpp:680):
-// 1 / (1 + exp(ln(10) * (opponent - own) / 650)). The lose modifier is
-// CONFIG_ARENA_LOSE_RATING_MODIFIER (World.cpp:1224, 24.0 default).
+// arenaGetRatingMod mirrors ArenaTeam::GetRatingMod (ArenaTeam.cpp:713). The win
+// arm is tiered on the team's own rating (<1000: winMod1 flat; 1000-1300: winMod1
+// scaled by (1300-rating)/300; >=1300: winMod2), the loss arm is loseMod * -chance;
+// every arm returns ceil(mod).
+func arenaGetRatingMod(ownRating, opponentRating uint32, won bool, winMod1, winMod2, loseMod float64) int32 {
+	chance := arenaGetChanceAgainst(ownRating, opponentRating)
+	var mod float64
+	if won {
+		if ownRating < 1300 {
+			if ownRating < 1000 {
+				mod = winMod1 * (1.0 - chance)
+			} else {
+				mod = ((winMod1 / 2.0) + ((winMod1 / 2.0) * (1300.0 - float64(ownRating)) / 300.0)) * (1.0 - chance)
+			}
+		} else {
+			mod = winMod2 * (1.0 - chance)
+		}
+	} else {
+		mod = loseMod * -chance
+	}
+	return int32(math.Ceil(mod))
+}
+
+// arenaGetMatchmakerRatingMod mirrors ArenaTeam::GetMatchmakerRatingMod
+// (ArenaTeam.cpp:687): ceil(((won ? 1 : 0) - chance) * mmMod).
+func arenaGetMatchmakerRatingMod(ownMMR, opponentMMR uint32, won bool, mmMod float64) int32 {
+	chance := arenaGetChanceAgainst(ownMMR, opponentMMR)
+	var wonMod float64
+	if won {
+		wonMod = 1.0
+	}
+	return int32(math.Ceil((wonMod - chance) * mmMod))
+}
+
+// arenaTeamRatingLossMod keeps the old single-call shape for the deserter path:
+// ArenaTeam::GetRatingMod (ArenaTeam.cpp:713) for a loss with the configured
+// Arena.ArenaLoseRatingModifier (World.cpp:1224, 24.0 default).
 func arenaTeamRatingLossMod(ownRating, opponentRating uint32, loseMod float64) int32 {
-	chance := 1.0 / (1.0 + math.Exp(math.Log(10.0)*(float64(opponentRating)-float64(ownRating))/650.0))
-	return int32(math.Ceil(loseMod * -chance))
+	return arenaGetRatingMod(ownRating, opponentRating, false, 0, 0, loseMod)
 }
 
 // CalculateArenaPoints calculates the weekly Arena Points awarded for a given rating and bracket type.
@@ -80,7 +95,14 @@ func CalculateArenaPoints(rating uint32, teamType uint32) uint32 {
 }
 
 // RecordArenaMatchResult applies rating and win/loss statistics to participating arena teams and members.
-// Mirrors TrinityCore ArenaTeam::WonAgainst and ArenaTeam::LostAgainst (ArenaTeam.cpp:380-450).
+// Mirrors ArenaTeam::WonAgainst / LostAgainst (ArenaTeam.cpp:769-804) as driven by
+// Arena::EndBattleground (Arena.cpp:193-204): the team rating change is
+// GetRatingMod(own team rating, opponent team MMR, won), the MMR change is
+// GetMatchmakerRatingMod(own MMR, opponent MMR, won), and each participant's
+// personal change is GetRatingMod(personal rating, opponent MMR, won)
+// (ArenaTeam::MemberWon/MemberLost, ArenaTeam.cpp:805-880). C++ SetArenaTeamInfoField
+// unit-field updates have no Go model; PreviousOpponents is queue-only (no Go
+// matchmaker). MMR persists per (guid, slot) in character_arena_stats.
 func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loserTeamID uint32, winnerMembers, loserMembers []uint64) (winnerGain, loserLoss int32, err error) {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return 0, 0, nil
@@ -97,73 +119,155 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 		return 0, 0, err
 	}
 
-	gain, loss := CalcRatingDelta(winRating, loseRating)
+	winMod1 := s.Config.ArenaWinRatingModifier1
+	winMod2 := s.Config.ArenaWinRatingModifier2
+	loseMod := s.Config.ArenaLoseRatingModifier
+	mmMod := s.Config.ArenaMatchmakerRatingModifier
 
-	newWinRating := winRating + uint32(gain)
-	var newLoseRating uint32
-	if loseRating > uint32(loss) {
-		newLoseRating = loseRating - uint32(loss)
-	} else {
-		newLoseRating = 0
+	// C++ GetArenaMatchmakerRating is the match-time MMR (m_ArenaTeamMMR, set at
+	// match start from the queued players' average); the end-of-match
+	// participants' average is its twin here.
+	winSlot := arenaTeamSlotByType(winType)
+	winnerMMR := s.avgArenaMatchmakerRating(ctx, winnerMembers, winSlot)
+	loserMMR := s.avgArenaMatchmakerRating(ctx, loserMembers, winSlot)
+
+	winnerChange := arenaGetRatingMod(winRating, loserMMR, true, winMod1, winMod2, loseMod)
+	winnerMMRChange := arenaGetMatchmakerRatingMod(winnerMMR, loserMMR, true, mmMod)
+	loserChange := arenaGetRatingMod(loseRating, winnerMMR, false, winMod1, winMod2, loseMod)
+	loserMMRChange := arenaGetMatchmakerRatingMod(loserMMR, winnerMMR, false, mmMod)
+
+	// ArenaTeam::FinishGame: the team rating floors at 0 (ArenaTeam.cpp:736-754);
+	// the HIGHEST_TEAM_RATING criteria only fires when it did not floor.
+	applyRatingFloor := func(rating uint32, change int32) uint32 {
+		if change < 0 && uint32(-change) >= rating {
+			return 0
+		}
+		return uint32(int32(rating) + change)
 	}
+	newWinRating := applyRatingFloor(winRating, winnerChange)
+	newLoseRating := applyRatingFloor(loseRating, loserChange)
 
-	// Update winning team
+	// Update winning team: games, wins, rank recompute (FinishGame).
+	var winRank uint32
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*)+1 FROM arena_team WHERE type = ? AND rating > ?", winType, newWinRating).Scan(&winRank)
 	_, err = cdb.ExecContext(ctx, `UPDATE arena_team SET rating = ?, weekGames = weekGames + 1, weekWins = weekWins + 1,
-		seasonGames = seasonGames + 1, seasonWins = seasonWins + 1 WHERE arenaTeamId = ?`, newWinRating, winnerTeamID)
-	// Reference ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_TEAM_RATING: absolute
-	// progress for the winning team members' new rating.
-	for _, guid := range winnerMembers {
-		if sess := s.findSessionByGUID(guid); sess != nil {
-			sess.setAchievementCriteria(criteriaTypeHighestTeamRating, 0, newWinRating)
+		seasonGames = seasonGames + 1, seasonWins = seasonWins + 1, rank = ? WHERE arenaTeamId = ?`,
+		newWinRating, winRank, winnerTeamID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if int32(winRating)+winnerChange >= 0 {
+		for _, guid := range winnerMembers {
+			if sess := s.findSessionByGUID(guid); sess != nil {
+				sess.setAchievementCriteria(criteriaTypeHighestTeamRating, 0, newWinRating)
+			}
 		}
 	}
-	if err != nil {
-		return 0, 0, err
-	}
 
-	// Update losing team
+	// Update losing team.
+	var loseRank uint32
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*)+1 FROM arena_team WHERE type = ? AND rating > ?", loseType, newLoseRating).Scan(&loseRank)
 	_, err = cdb.ExecContext(ctx, `UPDATE arena_team SET rating = ?, weekGames = weekGames + 1,
-		seasonGames = seasonGames + 1 WHERE arenaTeamId = ?`, newLoseRating, loserTeamID)
+		seasonGames = seasonGames + 1, rank = ? WHERE arenaTeamId = ?`, newLoseRating, loseRank, loserTeamID)
 	if err != nil {
 		return 0, 0, err
 	}
+	if int32(loseRating)+loserChange >= 0 {
+		for _, guid := range loserMembers {
+			if sess := s.findSessionByGUID(guid); sess != nil {
+				sess.setAchievementCriteria(criteriaTypeHighestTeamRating, 0, newLoseRating)
+			}
+		}
+	}
 
-	// Update winner participating members
+	// ArenaTeam::MemberWon: personal change is GetRatingMod(personal, opponent
+	// MMR, won); MMR shifts by the team MMR change; personal stats gain games
+	// and wins (ArenaTeam.cpp:852-880). ModifyPersonalRating fires
+	// HIGHEST_PERSONAL_RATING for online members and floors at 0.
 	for _, mGUID := range winnerMembers {
 		var curPersonal uint32
 		_ = cdb.QueryRowContext(ctx, "SELECT personalRating FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", winnerTeamID, mGUID).Scan(&curPersonal)
-		newPersonal := curPersonal + uint32(gain)
-		_, _ = cdb.ExecContext(ctx, `UPDATE arena_team_member SET personalRating = personalRating + ?,
+		newPersonal := applyRatingFloor(curPersonal, arenaGetRatingMod(curPersonal, loserMMR, true, winMod1, winMod2, loseMod))
+		_, _ = cdb.ExecContext(ctx, `UPDATE arena_team_member SET personalRating = ?,
 			weekGames = weekGames + 1, weekWins = weekWins + 1, seasonGames = seasonGames + 1, seasonWins = seasonWins + 1
-			WHERE arenaTeamId = ? AND guid = ?`, gain, winnerTeamID, mGUID)
+			WHERE arenaTeamId = ? AND guid = ?`, newPersonal, winnerTeamID, mGUID)
+		s.applyArenaMMRChange(ctx, mGUID, winSlot, winnerMMRChange)
 		if sess := s.findSessionByGUID(mGUID); sess != nil {
 			sess.setAchievementCriteria(criteriaTypeHighestPersonalRating, 0, newPersonal)
 		}
 	}
 
-	// Update loser participating members
+	// ArenaTeam::MemberLost: same shape, no wins (ArenaTeam.cpp:805-834).
 	for _, mGUID := range loserMembers {
 		var curPersonal uint32
 		_ = cdb.QueryRowContext(ctx, "SELECT personalRating FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", loserTeamID, mGUID).Scan(&curPersonal)
-		pLoss := loss
-		if curPersonal < 1000 {
-			pLoss = int32(math.Round(float64(gain) * (float64(curPersonal) / 1000.0)))
-		}
-		newPersonal := curPersonal
-		if newPersonal > uint32(pLoss) {
-			newPersonal -= uint32(pLoss)
-		} else {
-			newPersonal = 0
-		}
+		newPersonal := applyRatingFloor(curPersonal, arenaGetRatingMod(curPersonal, winnerMMR, false, winMod1, winMod2, loseMod))
 		_, _ = cdb.ExecContext(ctx, `UPDATE arena_team_member SET personalRating = ?,
 			weekGames = weekGames + 1, seasonGames = seasonGames + 1
 			WHERE arenaTeamId = ? AND guid = ?`, newPersonal, loserTeamID, mGUID)
+		s.applyArenaMMRChange(ctx, mGUID, winSlot, loserMMRChange)
+		if sess := s.findSessionByGUID(mGUID); sess != nil {
+			sess.setAchievementCriteria(criteriaTypeHighestPersonalRating, 0, newPersonal)
+		}
 	}
 
 	s.broadcastArenaTeamStats(winnerTeamID, newWinRating)
 	s.broadcastArenaTeamStats(loserTeamID, newLoseRating)
 
-	return gain, loss, nil
+	return winnerChange, -loserChange, nil
+}
+
+// avgArenaMatchmakerRating averages the participants' stored MMR for the slot;
+// members with no stored MMR count as Arena.ArenaStartMatchmakerRating, the
+// AddMember fallback (ArenaTeam.cpp:141). C++ sets the match MMR at queue time
+// (Battleground.h m_ArenaTeamMMR) from the same population.
+func (s *Server) avgArenaMatchmakerRating(ctx context.Context, members []uint64, slot uint32) uint32 {
+	fallback := uint32(1500)
+	if s != nil && s.Config.ArenaStartMatchmakerRating > 0 {
+		fallback = uint32(s.Config.ArenaStartMatchmakerRating)
+	}
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || len(members) == 0 {
+		return fallback
+	}
+	var sum uint64
+	for _, guid := range members {
+		var mmr uint32
+		if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT matchMakerRating FROM character_arena_stats WHERE guid = ? AND slot = ?", guid, slot).Scan(&mmr); err != nil {
+			mmr = fallback
+		}
+		sum += uint64(mmr)
+	}
+	return uint32(sum / uint64(len(members)))
+}
+
+// applyArenaMMRChange mirrors ArenaTeamMember::ModifyMatchmakerRating
+// (ArenaTeam.cpp:536): the member's MMR shifts by mod, floored at 0, persisted
+// in character_arena_stats for the member's slot.
+func (s *Server) applyArenaMMRChange(ctx context.Context, guid uint64, slot uint32, mod int32) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.CharactersStore.DB
+	fallback := uint32(1500)
+	if s.Config.ArenaStartMatchmakerRating > 0 {
+		fallback = uint32(s.Config.ArenaStartMatchmakerRating)
+	}
+	var cur uint32
+	err := cdb.QueryRowContext(ctx, "SELECT matchMakerRating FROM character_arena_stats WHERE guid = ? AND slot = ?", guid, slot).Scan(&cur)
+	if err != nil {
+		cur = fallback
+	}
+	newMMR := cur
+	if mod < 0 && uint32(-mod) >= newMMR {
+		newMMR = 0
+	} else {
+		newMMR = uint32(int32(newMMR) + mod)
+	}
+	if err != nil {
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_arena_stats (guid, slot, matchMakerRating) VALUES (?, ?, ?)", guid, slot, newMMR)
+	} else {
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_arena_stats SET matchMakerRating = ? WHERE guid = ? AND slot = ?", newMMR, guid, slot)
+	}
 }
 
 func (s *Server) broadcastArenaTeamStats(teamID, rating uint32) {
