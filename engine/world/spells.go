@@ -19039,6 +19039,15 @@ func (srv *Server) spellTakenBlockAmountFrom(target combatTarget, isPlayerVictim
 			return 0, false
 		}
 	}
+	// IsNonMeleeSpellCast(false) for creature victims (Unit.cpp:2418):
+	// motion.CastingUntil bridges the UNIT_STATE_CASTING window (cast
+	// time + channel); the CONTROLLED half stays unmodeled, as on the
+	// player path.
+	if !isPlayerVictim && srv != nil {
+		if tm := srv.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && time.Now().Before(tm.CastingUntil) {
+			return 0, false
+		}
+	}
 	inFront := hasInArc(target.Orientation, target.X, target.Y, attackerX, attackerY, math.Pi)
 	if !inFront {
 		dirOK := false
@@ -19060,6 +19069,18 @@ func (srv *Server) spellTakenBlockAmountFrom(target combatTarget, isPlayerVictim
 		}
 	}
 	var blockChanceBP int32
+	// Unit::GetUnitBlockChance (Unit.cpp:2800-2802): the creature arm is
+	// gated on !victim->IsTotem() and the template's
+	// CREATURE_FLAG_EXTRA_NO_BLOCK (0x10) — totems and no-block
+	// creatures never block.
+	if !isPlayerVictim && srv != nil {
+		if tm := srv.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && tm.FlagsExtra&0x00000010 != 0 {
+			return 0, false
+		}
+		if srv.isTotemGUID(target.GUID) {
+			return 0, false
+		}
+	}
 	// Unit::GetUnitBlockChance skill arms (Unit.cpp:2777-2807):
 	// skillDiff = (victimMaxSkill - attackerWeaponSkill) = 5*leveldif;
 	// player: 0.04*skillDiff percent; creature: skillDiff*0.1% (both
