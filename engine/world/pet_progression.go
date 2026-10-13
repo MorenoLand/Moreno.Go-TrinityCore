@@ -82,9 +82,28 @@ func (s *session) petNativeObjectScale(ctx context.Context, entry, level uint32,
 }
 
 // petBaseArmor mirrors the armor arm of Pet::InitStatsForLevel (Pet.cpp:885,
-// 903-905): the base armor flat modifier starts at level*50 and is replaced
-// by the pet_levelstats armor when the row carries one.
-func (s *session) petBaseArmor(ctx context.Context, entry, level uint32, petType uint8) uint32 {
+// 903-905) folded through Guardian::UpdateArmor (StatSystem.cpp:1316-1330):
+// (flat(BASE_VALUE) * pct(BASE_PCT) + agility*2 + flat(TOTAL_VALUE) +
+// owner bonus) * pct(TOTAL_PCT). The base armor flat modifier starts at
+// level*50 and is replaced by the pet_levelstats armor when the row carries
+// one. agility is the pet's modeled agility (getPetAttributes index 1); the
+// aura stat-mod feed of GetStat has no Go model. The aura-driven slots fold
+// the pet's live creature auras at stat-compute time: BASE_PCT from
+// SPELL_AURA_MOD_BASE_RESISTANCE_PCT (142) with misc&NORMAL (the pets-only
+// arm, SpellAuraEffects.cpp:3281-3296, additive AddPct accumulator),
+// TOTAL_VALUE flat from SPELL_AURA_MOD_RESISTANCE (22) with misc&NORMAL
+// through the school loop (SpellAuraEffects.cpp:3255-3269,
+// UNIT_MOD_RESISTANCE_START+0 == UNIT_MOD_ARMOR) and from
+// SPELL_AURA_MOD_BASE_RESISTANCE (83) with misc&NORMAL (the pets-only arm,
+// SpellAuraEffects.cpp:3340-3350), TOTAL_PCT from
+// SPELL_AURA_MOD_RESISTANCE_PCT (101) with misc&NORMAL (set semantics: the
+// product of (1+amount/100), SpellAuraEffects.cpp:3303-3321). Hunter and
+// warlock pets gain 35% of the owner's armor as a flat bonus; C++ gates on
+// IsPet(), and Go's character pets (summon/hunter) are the Pet twin.
+// Aura apply/remove does not recompute armor in Go — like the rest of the
+// pet stat model it folds at the stat-compute points (summon, level-up,
+// owner-stat change).
+func (s *session) petBaseArmor(ctx context.Context, entry, level uint32, petType uint8, agility uint32, petKey creatureAuraKey) uint32 {
 	armor := level * 50
 	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return armor
@@ -100,15 +119,90 @@ func (s *session) petBaseArmor(ctx context.Context, entry, level uint32, petType
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT armor FROM pet_levelstats WHERE creature_entry = ? AND level = ?", statEntry, level).Scan(&dbArmor); err == nil && dbArmor > 0 {
 		armor = uint32(dbArmor)
 	}
-	// Guardian::UpdateArmor (StatSystem.cpp:1316-1330): hunter and warlock
-	// pets gain 35% of the owner's armor as a flat bonus. C++ gates on
-	// IsPet(); Go's character pets (summon/hunter) are the Pet twin. The
-	// agility*2 and aura pct-modifier arms have no Go model and stay
-	// unbridged.
-	if s != nil && s.player != nil && (petType == petTypeHunter || petType == petTypeSummon) {
-		armor += uint32(float64(s.player.Armor) * 0.35)
+	armorF := float64(armor)
+	hasAuras := s.server.Data != nil && petKey.GUID != 0
+	if hasAuras {
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, petKey, spellAuraModBaseResistancePct, 1) {
+			armorF *= 1 + float64(amt)/100
+		}
 	}
-	return armor
+	armorF += float64(agility) * 2
+	totalFlat := 0.0
+	if hasAuras {
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, petKey, spellAuraModResistance, 1) {
+			totalFlat += float64(amt)
+		}
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, petKey, spellAuraModBaseResistance, 1) {
+			totalFlat += float64(amt)
+		}
+	}
+	if s != nil && s.player != nil && (petType == petTypeHunter || petType == petTypeSummon) {
+		totalFlat += float64(s.player.Armor) * 0.35
+	}
+	armorF += totalFlat
+	if hasAuras {
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, petKey, spellAuraModResistancePct, 1) {
+			armorF *= 1 + float64(amt)/100
+		}
+	}
+	if armorF < 0 {
+		armorF = 0
+	}
+	return uint32(armorF)
+}
+
+// refreshPetStatsOnOwnerStatChange mirrors the pet arm of
+// Player::UpdateStats (StatSystem.cpp:108-114): when the owner's stamina or
+// intellect changes, Guardian::UpdateStats reruns for the pet — stamina
+// feeds UpdateMaxHealth (StatSystem.cpp:1337-1357), intellect feeds
+// UpdateMaxPower (StatSystem.cpp:1359-1379). The strength arm feeds
+// UpdateAttackPowerAndDamage, which has no Go consumer, so it never
+// triggers. The pet's current health and mana are preserved (C++
+// UpdateMaxHealth/UpdateMaxPower never move the current value), clamped to
+// the new maxima, and the recomputed armor/attributes/maxima broadcast to
+// the instance like the level-up path.
+func (s *session) refreshPetStatsOnOwnerStatChange(ctx context.Context) {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 {
+		return
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+	if motion == nil {
+		s.server.motionMu.Unlock()
+		return
+	}
+	entry, level, petType, petID := motion.Entry, motion.Level, motion.PetType, motion.PetID
+	petKey := creatureAuraKeyForMotion(motion)
+	curHealth, curMana := motion.Health, motion.Mana
+	s.server.motionMu.Unlock()
+	_, maxHealth, _, maxMana := s.getPetStats(ctx, entry, level, petType, petID)
+	attributes := s.getPetAttributes(ctx, entry, level, petType)
+	armor := s.petBaseArmor(ctx, entry, level, petType, attributes[1], petKey)
+	if maxHealth == 0 || maxMana == 0 {
+		return
+	}
+	if curHealth > maxHealth {
+		curHealth = maxHealth
+	}
+	if curMana > maxMana {
+		curMana = maxMana
+	}
+	s.server.motionMu.Lock()
+	if motion = s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID); motion == nil || motion.PetID != petID {
+		s.server.motionMu.Unlock()
+		return
+	}
+	motion.Health, motion.MaxHealth, motion.Mana, motion.MaxMana = curHealth, maxHealth, curMana, maxMana
+	motion.Powers[0], motion.MaxPowers[0] = curMana, maxMana
+	motion.Stats = attributes
+	motion.Armor = armor
+	fields := map[int]uint32{unitFieldHealth: curHealth, unitFieldMaxHealth: maxHealth, unitFieldPower1: curMana, unitFieldMaxPower1: maxMana, unitFieldResistances: armor}
+	for index, value := range attributes {
+		fields[unitFieldStat0+index] = value
+	}
+	mapID, instanceID, petGUID := motion.Map, motion.InstanceID, motion.GUID
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, petGUID, fields)
 }
 
 func PetFoodBenefitLevel(petLevel, itemLevel uint32) uint32 {
@@ -180,7 +274,7 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 	motion.PetNextLevelXP = nextLevelXP
 	// Pet::InitStatsForLevel (Pet.cpp:885-890) recomputes base armor and
 	// the native object scale at every level-up.
-	motion.Armor = s.petBaseArmor(ctx, entry, newLevel, petType)
+	motion.Armor = s.petBaseArmor(ctx, entry, newLevel, petType, attributes[1], creatureAuraKeyForMotion(motion))
 	petScale := s.petNativeObjectScale(ctx, entry, newLevel, petType)
 	if petType == 1 {
 		// Guardian::UpdateDamagePhysical's happiness leg (StatSystem.cpp:1521-1534),

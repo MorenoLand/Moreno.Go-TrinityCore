@@ -2004,6 +2004,14 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	if state == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return nil
 	}
+	// Player::UpdateStats (StatSystem.cpp:108-114): the owner's stamina and
+	// intellect feed the pet's Guardian::UpdateStats (stamina -> max health,
+	// intellect -> max mana). Snapshot the pre-rebuild values so the
+	// pet-stat refresh at the end fires only on a real change.
+	var oldSta, oldInt uint32
+	if len(state.Stats) > 3 {
+		oldSta, oldInt = state.Stats[2], state.Stats[3]
+	}
 	lvl := state.Level
 	if lvl < 1 {
 		lvl = 1
@@ -2460,6 +2468,15 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				state.SpellDamagePositive[school] += amount
 			}
 		}
+	}
+
+	// The pet arm of Player::UpdateStats (StatSystem.cpp:108-114): when the
+	// rebuilt stamina or intellect differs from the pre-rebuild value, the
+	// pet's stats recompute from the owner's final stats. The strength arm
+	// feeds UpdateAttackPowerAndDamage, which has no Go consumer, so it is
+	// not a trigger.
+	if len(state.Stats) > 3 && (state.Stats[2] != oldSta || state.Stats[3] != oldInt) {
+		s.refreshPetStatsOnOwnerStatChange(ctx)
 	}
 
 	return nil

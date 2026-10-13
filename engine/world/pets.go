@@ -959,7 +959,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
 		// Pet::InitStatsForLevel (Pet.cpp:885-890): base armor and the
 		// native object scale are set from the pet's level at stat time.
-		petArmor := s.petBaseArmor(ctx, entry, level, uint8(petType))
+		petArmor := s.petBaseArmor(ctx, entry, level, uint8(petType), attributes[1], creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: petGUID})
 		petScale := s.petNativeObjectScale(ctx, entry, level, uint8(petType))
 		s.server.motionMu.Lock()
 		if pm := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); pm != nil && pm.PetID == petID {
