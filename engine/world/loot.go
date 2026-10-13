@@ -2042,6 +2042,14 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 			s.server.addLootTemplateRow(ctx, s.server.WorldStore.DB, loot, &qslot, &qidx, row)
 		}
 	}
+
+	// The flat fishing fill above never runs fillLootTemplate, so capture
+	// the normal-row count here: NormalSlotCount mirrors Loot::items.size()
+	// (the quest-row display-slot base, Loot.cpp:704; the quest loop above
+	// only writes QuestItems), and the group-roll vote-drop arm
+	// (Group.cpp:1452-1456) keys off it.
+	loot.NormalSlotCount = uint8(len(loot.Items))
+
 	s.server.lootMu.Lock()
 	if s.server.creatureLoot == nil {
 		s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
@@ -4651,6 +4659,17 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// WorldSession::HandleLootRoll (GroupHandler.cpp:483-490): the
+	// ROLL_NEED/ROLL_GREED achievement switch runs after CountRollVote
+	// unconditionally — a need/greed vote credits the criterion even when
+	// the vote itself is dropped (roll gone, loot's normal items emptied,
+	// duplicate vote) or never recorded. Only the in-a-group gate applies.
+	if rollType == rollNeed {
+		s.updateAchievementCriteria(criteriaTypeRollNeedCount, 0, 1)
+	} else if rollType == rollGreed {
+		s.updateAchievementCriteria(criteriaTypeRollGreedCount, 0, 1)
+	}
+
 	rollKey := lootRollKey{Object: lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: itemGUID}, Slot: itemSlot}
 	s.server.lootMu.Lock()
 	roll := s.server.groupRolls[rollKey]
@@ -4706,6 +4725,18 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Group::CountRollVote (Group.cpp:1452-1456): a vote on a roll whose
+	// loot has no normal rows is silently dropped — no vote recorded, no
+	// counters, no broadcast. NormalSlotCount mirrors Loot::items.size()
+	// (captured at fill time since the Go Items map shrinks on take); a
+	// missing loot state is the C++ loot->clear() case, which also empties
+	// items. Quest-only fills leave items empty, so quest-item rolls in
+	// them never resolve by vote — only the 60s EndRoll timer resolves them.
+	if cLoot := s.server.creatureLoot[rollLootObjectKey(roll)]; cLoot == nil || cLoot.NormalSlotCount == 0 {
+		s.server.lootMu.Unlock()
+		return true
+	}
+
 	// If player already voted on this roll, ignore duplicate
 	if _, voted := roll.Votes[s.playerGUID]; voted {
 		s.server.lootMu.Unlock()
@@ -4752,10 +4783,8 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		roll.TotalPass++
 	case 1:
 		roll.TotalNeed++
-		s.updateAchievementCriteria(criteriaTypeRollNeedCount, 0, 1)
 	case 2:
 		roll.TotalGreed++
-		s.updateAchievementCriteria(criteriaTypeRollGreedCount, 0, 1)
 	case 3: // DISENCHANT shares the greed total (Group.cpp:1484).
 		// C++ HandleLootRoll fires no achievement for a disenchant vote
 		// (the NEED/GREED-only switch, GroupHandler.cpp:483-490); the
@@ -4763,7 +4792,6 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		roll.TotalGreed++
 	default:
 		roll.TotalGreed++
-		s.updateAchievementCriteria(criteriaTypeRollGreedCount, 0, 1)
 	}
 
 	itemEntry := roll.ItemEntry
