@@ -590,8 +590,13 @@ type session struct {
 	pendingBindMu          sync.Mutex
 	sharingQuestID         uint32
 	sharingQuestSender     uint64
-	warden                 *wardenSession
-	playerStateMu          sync.RWMutex
+	// timedQuests mirrors Player::m_timedquests (Player.h:2226): the set of
+	// quest IDs with a running QUEST_SPECIAL_FLAGS_TIMED timer, guarded
+	// because the world tick decrements them off the handler goroutine.
+	timedQuestsMu sync.Mutex
+	timedQuests   map[uint32]struct{}
+	warden        *wardenSession
+	playerStateMu sync.RWMutex
 }
 
 type activeCastState struct {
@@ -1259,6 +1264,9 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateRestedBonuses(ctx, now)
 			s.processCreatureRespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)
+			// Player::Update (Player.cpp:1096-1113): the timed-quest timers
+			// tick down on the player update; expiry calls FailQuest.
+			s.updateTimedQuests(ctx, diff)
 			s.updatePendingInstanceBinds(ctx, diff)
 			s.updateSpiritHealerResurrectWaves(ctx, now)
 			s.updateCorpseExpiry(ctx)

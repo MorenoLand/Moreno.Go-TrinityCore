@@ -23,6 +23,160 @@ const (
 	questFlagsSharable     = 0x00000008 // QUEST_FLAGS_SHARABLE (QuestDef.h:135)
 )
 
+// Quest::HasSpecialFlag bits used by the timed-quest model (QuestDef.h:173-175).
+const (
+	questSpecialFlagsTimed            = 0x400  // QUEST_SPECIAL_FLAGS_TIMED
+	questSpecialFlagsCompletedAtStart = 0x1000 // QUEST_SPECIAL_FLAGS_COMPLETED_AT_START
+)
+
+// addTimedQuest mirrors Player::AddTimedQuest (Player.h:1318):
+// m_timedquests.insert(questId).
+func (s *session) addTimedQuest(questID uint32) {
+	if s == nil {
+		return
+	}
+	s.timedQuestsMu.Lock()
+	if s.timedQuests == nil {
+		s.timedQuests = make(map[uint32]struct{})
+	}
+	s.timedQuests[questID] = struct{}{}
+	s.timedQuestsMu.Unlock()
+}
+
+// removeTimedQuest mirrors Player::RemoveTimedQuest (Player.h:1319):
+// m_timedquests.erase(questId).
+func (s *session) removeTimedQuest(questID uint32) {
+	if s == nil {
+		return
+	}
+	s.timedQuestsMu.Lock()
+	delete(s.timedQuests, questID)
+	s.timedQuestsMu.Unlock()
+}
+
+// questTimedRemainingMs reports the milliseconds left on a timed quest whose
+// quest-log TIME field holds the absolute expiry epoch (Player::AddQuest,
+// Player.cpp:15258).
+func questTimedRemainingMs(timer, now uint32) int64 {
+	return (int64(timer) - int64(now)) * 1000
+}
+
+// updateTimedQuests mirrors the timed-quest block of Player::Update
+// (Player.cpp:1096-1113), run on the world tick: every timed quest whose
+// remaining time fits inside the tick diff fails via Player::FailQuest.
+func (s *Server) updateTimedQuests(ctx context.Context, diff time.Duration) {
+	now := uint32(time.Now().Unix())
+	diffMs := diff.Milliseconds()
+	s.sessionsMu.RLock()
+	type expiry struct {
+		sess    *session
+		questID uint32
+	}
+	var due []expiry
+	for sess := range s.sessions {
+		if !sess.worldReady.Load() || sess.player == nil {
+			continue
+		}
+		sess.timedQuestsMu.Lock()
+		for questID := range sess.timedQuests {
+			var timer uint32
+			for slot := 0; slot < playerQuestLogSlots; slot++ {
+				if sess.player.QuestLog[slot].QuestID == questID {
+					timer = sess.player.QuestLog[slot].Timer
+					break
+				}
+			}
+			// C++: q_status.Timer <= p_time → FailQuest. The Go log slot
+			// TIME is the absolute expiry epoch, so the remaining
+			// milliseconds come from timer - now.
+			if questTimedRemainingMs(timer, now) <= diffMs {
+				due = append(due, expiry{sess, questID})
+			}
+		}
+		sess.timedQuestsMu.Unlock()
+	}
+	s.sessionsMu.RUnlock()
+	for _, e := range due {
+		e.sess.failQuest(ctx, e.questID)
+	}
+}
+
+// restoreTimedQuests mirrors the timed-quest arm of Player::_LoadQuestStatus
+// (Player.cpp:18734-18742): an incomplete, unrewarded timed quest rejoins
+// the timed set; its DB timer (absolute expiry epoch, like the quest-log
+// TIME field) stays as loaded, or becomes Timer=1 when already expired so
+// the next world tick fails the quest.
+func (s *session) restoreTimedQuests(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	now := uint32(time.Now().Unix())
+	wdb := s.server.WorldStore.DB
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		entry := &state.QuestLog[slot]
+		if entry.QuestID == 0 || s.isQuestRewarded(ctx, entry.QuestID) {
+			continue
+		}
+		var specialFlags int64
+		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", entry.QuestID).Scan(&specialFlags); err != nil || specialFlags&questSpecialFlagsTimed == 0 {
+			continue
+		}
+		if status, _ := s.characterQuestStatus(ctx, entry.QuestID); status != questStatusIncomplete {
+			continue
+		}
+		s.addTimedQuest(entry.QuestID)
+		if entry.Timer <= now {
+			entry.Timer = 1
+		}
+	}
+}
+
+// failQuest mirrors Player::FailQuest (Player.cpp:15529-15577): only an
+// INCOMPLETE quest can fail (or a COMPLETE timed quest with
+// COMPLETED_AT_START). The log slot takes Timer=1 + QUEST_STATE_FAIL; timed
+// quests leave the timed set with their timer cleared and answer
+// SMSG_QUESTUPDATE_FAILEDTIMER (Player::SendQuestTimerFailed,
+// Player.cpp:17043) instead of SMSG_QUESTGIVER_QUEST_FAILED.
+func (s *session) failQuest(ctx context.Context, questID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var specialFlags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags); err != nil {
+		return
+	}
+	timed := specialFlags&questSpecialFlagsTimed != 0
+	status, _ := s.characterQuestStatus(ctx, questID)
+	if status != questStatusIncomplete {
+		if status != questStatusComplete || !timed || specialFlags&questSpecialFlagsCompletedAtStart == 0 {
+			return
+		}
+	}
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusFailed, s.playerGUID, questID)
+	}
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		if s.player.QuestLog[slot].QuestID == questID {
+			s.player.QuestLog[slot].Timer = 1
+			s.player.QuestLog[slot].State = questSlotStateFail
+			s.sendPlayerQuestLogUpdate(slot)
+			break
+		}
+	}
+	if timed {
+		s.removeTimedQuest(questID)
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(questID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_FAILEDTIMER), packet.Bytes(), true)
+	} else {
+		packet := protocol.NewBuffer(8)
+		packet.WriteU32(questID)
+		packet.WriteU32(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_FAILED), packet.Bytes(), true)
+	}
+	s.destroyQuestItems(ctx, questID)
+}
+
 // QuestFailedReason values for SMSG_QUESTGIVER_QUEST_INVALID (QuestDef.h:48).
 const (
 	questInvalidDontHaveReq = 0
@@ -142,7 +296,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	var specialFlags int64
 	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
 	if specialFlags&4 != 0 {
-		s.addQuestToPlayer(ctx, questID)
+		s.addQuestToPlayer(ctx, questID, guid)
 		// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
 		// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
 		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
@@ -214,7 +368,7 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 			s.sharingQuestSender = 0
 		}
 	}
-	s.addQuestToPlayer(ctx, questID)
+	s.addQuestToPlayer(ctx, questID, guid)
 	// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
 	// Player::AddQuestAndCheckCompletion after the auto-complete check
 	// (Player.cpp:15105-15122).
@@ -321,17 +475,63 @@ func (s *session) castQuestSourceSpell(ctx context.Context, questID uint32) {
 	}
 }
 
-func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {
+func (s *session) addQuestToPlayer(ctx context.Context, questID uint32, questGiverGUID uint64) bool {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
 	}
+	now := uint32(time.Now().Unix())
+	// Player::AddQuest, timed-quest arm (Player.cpp:15248-15266): a
+	// QUEST_SPECIAL_FLAGS_TIMED quest joins the timed set, its in-memory
+	// timer starts at TimeAllowed seconds, and the quest-log TIME field
+	// carries the absolute expiry epoch (qtime). The DB timer column keeps
+	// the same absolute epoch (Player::_SaveQuestStatus, Player.cpp:20184).
+	var timed bool
+	var timedExpiry uint32
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		wdb := s.server.WorldStore.DB
+		var specialFlags, timeAllowed int64
+		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags); err == nil && specialFlags&questSpecialFlagsTimed != 0 {
+			timed = true
+			_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(TimeAllowed, 0) FROM quest_template WHERE ID = ?", questID).Scan(&timeAllowed)
+			// Shared timed quest (Player.cpp:15253): when the giver is a
+			// player, the taker inherits the giver's remaining time.
+			if questGiverGUID != 0 && uint16(questGiverGUID>>48) == 0x0000 {
+				if giver := s.server.findSessionByGUID(questGiverGUID); giver != nil && giver.player != nil {
+					shared := int64(0)
+					for slot := 0; slot < playerQuestLogSlots; slot++ {
+						if giver.player.QuestLog[slot].QuestID == questID {
+							if gt := int64(giver.player.QuestLog[slot].Timer); gt > int64(now) {
+								shared = gt - int64(now)
+							}
+							timeAllowed = shared
+							break
+						}
+					}
+				}
+			}
+			if timeAllowed < 0 {
+				timeAllowed = 0
+			}
+			timedExpiry = now + uint32(timeAllowed)
+			s.addTimedQuest(questID)
+		}
+	}
 	s.startTimedAchievement(timedTypeQuest, questID)
 	query := `INSERT OR REPLACE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)`
+	args := []any{s.playerGUID, questID, questStatusIncomplete}
 	if s.server.CharactersStore.Backend != database.BackendSQLite {
 		query = `INSERT INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)
 			ON DUPLICATE KEY UPDATE status = VALUES(status)`
 	}
-	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, query, s.playerGUID, questID, questStatusIncomplete); err != nil {
+	if timed {
+		query = `INSERT OR REPLACE INTO character_queststatus (guid, quest, status, timer) VALUES (?, ?, ?, ?)`
+		args = append(args, timedExpiry)
+		if s.server.CharactersStore.Backend != database.BackendSQLite {
+			query = `INSERT INTO character_queststatus (guid, quest, status, timer) VALUES (?, ?, ?, ?)
+				ON DUPLICATE KEY UPDATE status = VALUES(status), timer = VALUES(timer)`
+		}
+	}
+	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, query, args...); err != nil {
 		if !missingTable(err) {
 			s.debug("quest accept failed", "account", s.accountName, "quest", questID, "error", err)
 			return false
@@ -350,7 +550,7 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {
 			}
 		}
 		if targetSlot != -1 {
-			s.player.QuestLog[targetSlot] = questLogEntry{QuestID: questID}
+			s.player.QuestLog[targetSlot] = questLogEntry{QuestID: questID, Timer: timedExpiry}
 			s.sendPlayerQuestLogUpdate(targetSlot)
 		}
 	}
@@ -625,6 +825,9 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 	// QuestHandler.cpp:443 — the second TakeQuestSourceItem pass (idempotent).
 	s.takeQuestSourceItem(ctx, questID, true)
 	s.destroyQuestItems(ctx, questID)
+	// WorldSession::HandleQuestLogRemoveQuest (QuestHandler.cpp:434): a
+	// timed quest leaves the timed set on abandon.
+	s.removeTimedQuest(questID)
 	s.removeTimedAchievements(timedTypeQuest, questID)
 	// Eluna PLAYER_EVENT_ON_QUEST_ABANDON (38): Eluna::OnQuestAbandon
 	// (PlayerHooks.cpp:101-107), (event, player, questId), void

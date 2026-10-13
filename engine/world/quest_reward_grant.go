@@ -188,6 +188,9 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 			break
 		}
 	}
+	// Player::RewardQuest (Player.cpp:15361): the quest leaves the timed
+	// set on turn-in.
+	s.removeTimedQuest(questID)
 	for _, fullGUID := range destroyedGUIDs {
 		s.sendDestroyObject(fullGUID, false)
 		s.despawnItem(fullGUID)

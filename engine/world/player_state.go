@@ -542,6 +542,10 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 			s.loadTaxiMask(taximask)
 		}
 		s.initTaxiNodesForLevel()
+		// Player::_LoadQuestStatus (Player.cpp:18734-18742): timed quests
+		// rejoin the timed set on login; an already-expired DB timer becomes
+		// Timer=1 so the next world tick fails the quest.
+		s.restoreTimedQuests(ctx, &state)
 	}
 	_ = s.CharGuild(ctx, &state)
 	s.loadPlayerGroup(ctx, guid)

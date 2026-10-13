@@ -186,7 +186,7 @@ func (s *session) handleQuestAdd(ctx context.Context, args []string) {
 	if st, err := target.characterQuestStatus(ctx, entry); err == nil && st != int64(questStatusNoneValue) {
 		return // already active: C++ returns false silently
 	}
-	target.addQuestToPlayer(ctx, entry) // AddQuestAndCheckCompletion
+	target.addQuestToPlayer(ctx, entry, 0) // AddQuestAndCheckCompletion
 }
 
 // handleQuestRemove mirrors HandleQuestRemove (cs_quest.cpp:112).

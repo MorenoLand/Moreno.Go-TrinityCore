@@ -34920,7 +34920,7 @@ func (s *session) handleEffectQuestStart(ctx context.Context, eff wotlk.SpellEff
 			if !free {
 				continue
 			}
-			targetSess.addQuestToPlayer(ctx, questID)
+			targetSess.addQuestToPlayer(ctx, questID, 0)
 		}
 		details := buildQuestGiverDetails(data, targetGUID, 0)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)

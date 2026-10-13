@@ -893,7 +893,7 @@ func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) 
 		}
 	}
 	if activeCount < 25 {
-		s.addQuestToPlayer(ctx, questID)
+		s.addQuestToPlayer(ctx, questID, 0)
 		// QuestHandler.cpp:501-503 — the quest's source spell is cast triggered.
 		s.castQuestSourceSpell(ctx, questID)
 	}
@@ -1140,7 +1140,7 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 		// and can-take arms above; after the add the sharer is answered
 		// ACCEPT_QUEST and the receiver's sharing info is cleared.
 		if data.Flags&questFlagsAutoAccept != 0 {
-			receiver.addQuestToPlayer(ctx, questID)
+			receiver.addQuestToPlayer(ctx, questID, 0)
 			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgAcceptQuest)
 			receiver.sharingQuestID = 0
 			receiver.sharingQuestSender = 0
@@ -1446,6 +1446,13 @@ func (s *session) canCompleteQuest(ctx context.Context, questID uint32) bool {
 	// Player::CanCompleteQuest (Player.cpp:14986): only INCOMPLETE quests
 	// can transition to complete.
 	if status, statusErr := s.characterQuestStatus(ctx, questID); statusErr != nil || status != questStatusIncomplete {
+		return false
+	}
+
+	// Player::CanCompleteQuest (Player.cpp:15021-15022): a timed quest whose
+	// timer has run out (Timer == 0) cannot be completed.
+	var timedSpecial int64
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&timedSpecial); err == nil && timedSpecial&questSpecialFlagsTimed != 0 && entry.Timer == 0 {
 		return false
 	}
 
