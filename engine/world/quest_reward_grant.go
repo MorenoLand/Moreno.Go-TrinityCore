@@ -116,6 +116,15 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "quest incomplete", "status", status)
 		return true
 	}
+	// QuestHandler.cpp:299 — the cheat gate's first disjunct: an auto-complete
+	// quest the player never accepted (status NONE) is only turn-inable when it
+	// is see-startable (Player::CanSeeStartQuest, Player.cpp:14913). Go
+	// previously let a spoofed packet turn in any auto-complete quest with no
+	// class/race/level/skill/reputation or chain-prerequisite check at all.
+	if status == 0 && !s.canSeeStartQuest(ctx, questID) {
+		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "quest not visible to start")
+		return true
+	}
 	if len(view.Detail.ChoiceItems) > 0 && (reward >= uint32(len(view.Detail.ChoiceItems)) || view.Detail.ChoiceItems[reward].ID == 0) {
 		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reward", reward, "reason", "choice unavailable")
 		return true
@@ -171,6 +180,51 @@ func (s *session) rewardTrackingQuest(ctx context.Context, questID uint32) {
 	s.applyQuestRewardGrants(ctx, view, questID, s.playerGUID, 0, grants, destroyedGUIDs, false)
 }
 
+// getNextQuestInChain mirrors Player::GetNextQuest (Player.cpp:14893-14916),
+// the turn-in chain arm of HandleQuestgiverChooseRewardOpcode
+// (QuestHandler.cpp:309-352). The quest's GetNextQuestInChain
+// (Quest::GetNextQuestInChain = quest_template.RewardNextQuest, QuestDef.h:253)
+// is returned only when the giver can start it: GetCreatureQuestRelations and
+// GetGOQuestRelations read the STARTER tables (ObjectMgr.h:1152/1155,
+// LoadQuestRelationsHelper, ObjectMgr.cpp:8411/8439), not the ender tables.
+// Creature GUIDs cover the C++ GetCreatureOrPetOrVehicle arm — pet GUIDs embed
+// their entry — resolved with the same entry chain as questGiverEnder. A
+// missing chain row, a missing quest template, or a giver that cannot start
+// the chain quest all yield 0, exactly like the C++ nullptr returns.
+func (s *session) getNextQuestInChain(ctx context.Context, giverGUID uint64, questID uint32) uint32 {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0
+	}
+	wdb := s.server.WorldStore.DB
+	var rewardNext uint64
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(RewardNextQuest, 0) FROM quest_template WHERE ID = ?", questID).Scan(&rewardNext); err != nil || rewardNext == 0 {
+		return 0
+	}
+	var chainExists int64
+	if err := wdb.QueryRowContext(ctx, "SELECT 1 FROM quest_template WHERE ID = ?", rewardNext).Scan(&chainExists); err != nil {
+		return 0
+	}
+	nextID := uint32(rewardNext)
+	table := "creature_queststarter"
+	if uint16(giverGUID>>48) == 0xF110 {
+		table = "gameobject_queststarter"
+	}
+	if entry := uint32((giverGUID >> 24) & 0x00FFFFFF); entry != 0 && questRelationExists(ctx, wdb, table, entry, nextID) {
+		return nextID
+	}
+	if creature := s.luaCreature(ctx, giverGUID); creature != nil {
+		if entry := objectUint32OrZero(creature, "Entry"); entry != 0 && questRelationExists(ctx, wdb, table, entry, nextID) {
+			return nextID
+		}
+	}
+	var dbEntry int64
+	if err := wdb.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", uint32(giverGUID&0x00FFFFFF)).Scan(&dbEntry); err == nil && dbEntry > 0 &&
+		questRelationExists(ctx, wdb, table, uint32(dbEntry), nextID) {
+		return nextID
+	}
+	return 0
+}
+
 // applyQuestRewardGrants runs the post-commit grant arms of
 // Player::RewardQuest (Player.cpp:15380-15515), shared by the turn-in packet
 // and the .quest reward GM command (cs_quest.cpp:313:
@@ -179,6 +233,7 @@ func (s *session) rewardTrackingQuest(ctx context.Context, questID uint32) {
 // (Player::SendQuestReward, Player.cpp:15470) and the gossip close —
 // Player::RewardQuest itself never touches the gossip frame.
 func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardView, questID uint32, giverGUID uint64, reward uint32, grants []questItemGrant, destroyedGUIDs []uint64, announce bool) bool {
+	wdb := s.server.WorldStore.DB
 	// C++ Player::RewardQuest (Player.cpp:15439-15448): the quest reward mail
 	// goes out as part of the reward flow, once the reward is committed.
 	s.sendQuestRewardMail(ctx, questID, giverGUID)
@@ -349,6 +404,34 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 	// broadcast, right before the status-change hook.
 	s.sendQuestUpdate(ctx, questID)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
+	// QuestHandler.cpp:309-352 — the turn-in chain arm of
+	// HandleQuestgiverChooseRewardOpcode. It runs only on the choose-reward
+	// packet path (announce with a real giver): the TRACKING arm and the GM
+	// command call RewardQuest without a chain. The next quest goes out only
+	// when the giver can start it (Player::GetNextQuest, Player.cpp:14893)
+	// and the player can take it silently (CanTakeQuest(nextQuest, false));
+	// an auto-accept chain quest is added behind the full
+	// CanAddQuest(nextQuest, true) gate (Player::CanAddQuest, Player.cpp:14946)
+	// with the Eluna OnQuestAccept hooks fired by the caller
+	// (Player::AddQuestAndCheckCompletion, Player.cpp:15104), and the details
+	// packet then carries the original giver GUID with activateAccept=true.
+	if announce && giverGUID != 0 {
+		if nextQuestID := s.getNextQuestInChain(ctx, giverGUID, questID); nextQuestID != 0 {
+			if canTake, terr := s.canTakeQuest(ctx, nextQuestID); terr == nil && canTake {
+				if nextData, derr := s.loadQuestDetailData(ctx, nextQuestID); derr == nil {
+					var chainSpecialFlags int64
+					_ = wdb.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", nextQuestID).Scan(&chainSpecialFlags)
+					if (nextData.Flags&questFlagsAutoAccept != 0 || chainSpecialFlags&4 != 0) && s.canAddQuest(ctx, nextQuestID, true) {
+						s.addQuestToPlayer(ctx, nextQuestID, giverGUID)
+						s.fireCreatureQuestHook(ctx, giverGUID, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, nextQuestID))
+						s.fireGameObjectQuestHook(ctx, giverGUID, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, nextQuestID))
+						s.fireItemQuestHook(ctx, giverGUID, nextQuestID)
+					}
+					_ = s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), buildQuestGiverDetails(nextData, giverGUID, 0), true)
+				}
+			}
+		}
+	}
 	s.debug("quest rewarded", "account", s.accountName, "quest", questID, "reward", reward, "items", len(grants), "money", view.Detail.RewardMoney)
 	return true
 }

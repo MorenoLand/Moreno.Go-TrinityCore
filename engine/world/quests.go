@@ -602,6 +602,231 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 	return true, nil
 }
 
+// questHighLevelHideDiff mirrors CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF
+// ("Quests.HighLevelHideDiff", World.cpp:1129): Go has no world-config model
+// for it, so the C++ default of 7 is used.
+const questHighLevelHideDiff = 7
+
+// canSeeStartQuest mirrors Player::CanSeeStartQuest (Player.cpp:14913-14924),
+// the cheat gate's first disjunct in HandleQuestgiverChooseRewardOpcode
+// (QuestHandler.cpp:299): an auto-complete quest the player never accepted
+// (status NONE) still has to be see-startable. It is CanTakeQuest minus the
+// status, timed-quest and ConditionMgr arms, with the MinLevel gate replaced
+// by the high-level hide-diff rule (player level + 7 >= MinLevel). The
+// Satisfy* blocks are the same twins canTakeQuest uses; the breadcrumb arm
+// recurses into CanTakeQuest exactly like the C++ (Player.cpp:15750).
+// DisableMgr has no Go model (same delta as canTakeQuest).
+func (s *session) canSeeStartQuest(ctx context.Context, questID uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	wdb := s.server.WorldStore.DB
+	var minLvl, questFlags, allowableRaces int64
+	if err := wdb.QueryRowContext(ctx, "SELECT MinLevel, Flags, AllowableRaces FROM quest_template WHERE ID = ?", questID).Scan(&minLvl, &questFlags, &allowableRaces); err != nil {
+		return false
+	}
+	var prevQuest, maxLvl, allowableClasses, exclGroup, breadcrumb, specialFlags, addonRaces sql.NullInt64
+	var reqSkillID, reqSkillPoints, reqMinRepFaction, reqMinRepValue, reqMaxRepFaction, reqMaxRepValue sql.NullInt64
+	_ = wdb.QueryRowContext(ctx, `SELECT PrevQuestID, MaxLevel, AllowableClasses, ExclusiveGroup, BreadcrumbForQuestId, SpecialFlags,
+		RequiredSkillID, RequiredSkillPoints, RequiredMinRepFaction, RequiredMinRepValue, RequiredMaxRepFaction, RequiredMaxRepValue
+		FROM quest_template_addon WHERE ID = ?`, questID).Scan(&prevQuest, &maxLvl, &allowableClasses, &exclGroup, &breadcrumb, &specialFlags,
+		&reqSkillID, &reqSkillPoints, &reqMinRepFaction, &reqMinRepValue, &reqMaxRepFaction, &reqMaxRepValue)
+	if !allowableClasses.Valid && !prevQuest.Valid {
+		_ = wdb.QueryRowContext(ctx, "SELECT AllowableRaces FROM quest_template_addon WHERE ID = ?", questID).Scan(&addonRaces)
+		if addonRaces.Valid && allowableRaces == 0 {
+			allowableRaces = addonRaces.Int64
+		}
+	}
+	// Player.cpp:14921 — the hide-diff rule, not the SatisfyQuestLevel gate.
+	if int64(s.player.Level)+questHighLevelHideDiff < minLvl {
+		return false
+	}
+	if allowableClasses.Valid && allowableClasses.Int64 > 0 && s.player.Class > 0 {
+		if (allowableClasses.Int64 & int64(1<<uint(s.player.Class-1))) == 0 {
+			return false
+		}
+	}
+	if allowableRaces > 0 && s.player.Race > 0 {
+		if (allowableRaces & int64(1<<uint(s.player.Race-1))) == 0 {
+			return false
+		}
+	}
+	if reqSkillID.Valid && reqSkillPoints.Valid && reqSkillID.Int64 > 0 {
+		if s.playerSkillTotalValue(uint32(reqSkillID.Int64)) < int32(reqSkillPoints.Int64) {
+			return false
+		}
+	}
+	if reqMinRepFaction.Valid && reqMinRepFaction.Int64 > 0 && reqMinRepValue.Valid {
+		if s.reputationStanding(uint32(reqMinRepFaction.Int64)) < int32(reqMinRepValue.Int64) {
+			return false
+		}
+	}
+	if reqMaxRepFaction.Valid && reqMaxRepFaction.Int64 > 0 && reqMaxRepValue.Valid {
+		if s.reputationStanding(uint32(reqMaxRepFaction.Int64)) >= int32(reqMaxRepValue.Int64) {
+			return false
+		}
+	}
+	if prevQuest.Valid && prevQuest.Int64 != 0 {
+		if prevQuest.Int64 > 0 {
+			if !s.isQuestRewarded(ctx, uint32(prevQuest.Int64)) {
+				return false
+			}
+		} else if prevStatus, _ := s.characterQuestStatus(ctx, uint32(-prevQuest.Int64)); prevStatus != questStatusIncomplete {
+			return false
+		}
+	}
+	if breadcrumb.Valid && breadcrumb.Int64 != 0 {
+		target := breadcrumb.Int64
+		if target < 0 {
+			target = -target
+		}
+		if ok, err := s.canTakeQuest(ctx, uint32(target)); err != nil || !ok {
+			return false
+		}
+	}
+	if wdb != nil {
+		depRows, derr := wdb.QueryContext(ctx, "SELECT ID FROM quest_template_addon WHERE BreadcrumbForQuestId = ?", questID)
+		if derr == nil {
+			blocked := false
+			for depRows.Next() {
+				var depID int64
+				if derr = depRows.Scan(&depID); derr != nil {
+					break
+				}
+				if depStatus, serr := s.characterQuestStatus(ctx, uint32(depID)); serr != nil {
+					derr = serr
+					break
+				} else if depStatus != 0 {
+					blocked = true
+					break
+				}
+			}
+			cerr := depRows.Close()
+			if derr != nil || cerr != nil || blocked {
+				return false
+			}
+		}
+	}
+	if wdb != nil {
+		chainRows, cerr := wdb.QueryContext(ctx, "SELECT ID FROM quest_template_addon WHERE NextQuestID = ?", questID)
+		if cerr == nil {
+			chainOK, haveChain := false, false
+			var chainErr error
+			for chainRows.Next() {
+				var chainID int64
+				if chainErr = chainRows.Scan(&chainID); chainErr != nil {
+					break
+				}
+				haveChain = true
+				if !s.isQuestRewarded(ctx, uint32(chainID)) {
+					continue
+				}
+				var chainGroup int64
+				_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(ExclusiveGroup, 0) FROM quest_template_addon WHERE ID = ?", chainID).Scan(&chainGroup)
+				if chainGroup >= 0 {
+					chainOK = true
+					break
+				}
+				groupOK := true
+				grpRows, gerr := wdb.QueryContext(ctx, "SELECT ID FROM quest_template_addon WHERE ExclusiveGroup = ? AND ID != ?", chainGroup, chainID)
+				if gerr != nil {
+					chainErr = gerr
+					break
+				}
+				for grpRows.Next() {
+					var grpID int64
+					if gerr = grpRows.Scan(&grpID); gerr != nil {
+						break
+					}
+					if !s.isQuestRewarded(ctx, uint32(grpID)) {
+						groupOK = false
+						break
+					}
+				}
+				grpRows.Close()
+				if gerr != nil {
+					chainErr = gerr
+					break
+				}
+				if groupOK {
+					chainOK = true
+					break
+				}
+			}
+			if cerr = chainRows.Close(); cerr == nil {
+				cerr = chainErr
+			}
+			if cerr != nil || (haveChain && !chainOK) {
+				return false
+			}
+		}
+	}
+	if exclGroup.Valid && exclGroup.Int64 > 0 {
+		var selfSpecial int64
+		_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&selfSpecial)
+		repeatableSelf := selfSpecial&0x001 != 0
+		grpRows, gerr := wdb.QueryContext(ctx, `SELECT qta.ID, COALESCE(qta.SpecialFlags, 0), COALESCE(qt.Flags, 0)
+			FROM quest_template_addon qta JOIN quest_template qt ON qt.ID = qta.ID
+			WHERE qta.ExclusiveGroup = ? AND qta.ID != ?`, exclGroup.Int64, questID)
+		if gerr != nil {
+			return false
+		}
+		blocked := false
+		for grpRows.Next() {
+			var memberID, memberSpecial, memberFlags int64
+			if gerr = grpRows.Scan(&memberID, &memberSpecial, &memberFlags); gerr != nil {
+				break
+			}
+			if !s.satisfyQuestRepeatGates(ctx, uint32(memberID), memberFlags) {
+				blocked = true
+				break
+			}
+			memberStatus, merr := s.characterQuestStatus(ctx, uint32(memberID))
+			if merr != nil {
+				gerr = merr
+				break
+			}
+			if memberStatus != 0 {
+				blocked = true
+				break
+			}
+			if s.isQuestRewarded(ctx, uint32(memberID)) && !(repeatableSelf && memberSpecial&0x001 != 0) {
+				blocked = true
+				break
+			}
+		}
+		grpRows.Close()
+		if gerr != nil || blocked {
+			return false
+		}
+	}
+	// Player::SatisfyQuestDay/Week/Month/Seasonal (Player.cpp:15980+),
+	// msg=false arms: the repeat-cooldown state plus the seasonal
+	// game-event-active gate. DisableMgr and the dungeon-finder daily arm
+	// have no Go model (documented deltas, same as canTakeQuest).
+	if !s.satisfyQuestRepeatGates(ctx, questID, questFlags) {
+		return false
+	}
+	if specialFlags.Valid && specialFlags.Int64&0x00000010 != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var count int64
+		if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_monthly WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&count) == nil && count > 0 {
+			return false
+		}
+	}
+	var eventEntry sql.NullInt64
+	if err := wdb.QueryRowContext(ctx, "SELECT eventEntry FROM game_event_seasonal_questrelation WHERE questId = ?", questID).Scan(&eventEntry); err == nil && eventEntry.Valid && eventEntry.Int64 > 0 {
+		if _, active := s.server.cachedActiveGameEvents(ctx)[eventEntry.Int64]; !active {
+			return false
+		}
+	}
+	if err := wdb.QueryRowContext(ctx, "SELECT eventEntry FROM game_event_creature_quest WHERE quest = ?", questID).Scan(&eventEntry); err == nil && eventEntry.Valid && eventEntry.Int64 > 0 {
+		if _, active := s.server.cachedActiveGameEvents(ctx)[eventEntry.Int64]; !active {
+			return false
+		}
+	}
+	return true
+}
+
 // satisfyQuestRepeatGates mirrors the msg=false arms of
 // Player::SatisfyQuestDay/Week/Seasonal (Player.cpp:15954+) as consumed by
 // Player::SatisfyQuestExclusiveGroup: the repeat-cooldown state of another

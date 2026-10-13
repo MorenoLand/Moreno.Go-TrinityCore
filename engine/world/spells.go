@@ -34927,16 +34927,13 @@ func (s *session) handleEffectQuestStart(ctx context.Context, eff wotlk.SpellEff
 		// CONFIG_QUEST_IGNORE_AUTO_ACCEPT gate has no Go world-config model
 		// (same precedent as CONFIG_CAST_UNSTUCK in EffectStuck).
 		if data.Flags&questFlagsAutoAccept != 0 || specialFlags&4 != 0 {
-			// Player::CanAddQuest (Player.cpp:14946): needs a quest-log
-			// slot; silently skips when the log is full.
-			free := false
-			for slot := 0; slot < playerQuestLogSlots; slot++ {
-				if targetSess.player.QuestLog[slot].QuestID == 0 || targetSess.player.QuestLog[slot].QuestID == questID {
-					free = true
-					break
-				}
-			}
-			if !free {
+			// Player::CanAddQuest (Player.cpp:14946), msg=false arm: the
+			// full gate, not just a free quest-log slot — a quest whose
+			// source item cannot be stored is also refused, silently. The
+			// manual slot scan below previously admitted it and
+			// addQuestToPlayer then granted the source item while the
+			// store silently dropped it.
+			if !targetSess.canAddQuest(ctx, questID, false) {
 				continue
 			}
 			targetSess.addQuestToPlayer(ctx, questID, 0)
