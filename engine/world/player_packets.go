@@ -387,6 +387,13 @@ func (s *session) loadSpellCooldowns(ctx context.Context, guid uint64) ([]spellC
 		if err := rows.Scan(&spell, &item, &category, &end, &categoryEnd); err != nil {
 			return nil, err
 		}
+		// SpellHistory::PersistenceHelper<Player>::ReadCooldown (SpellHistory.cpp:44):
+		// rows for spell IDs with no SpellInfo are dropped, never restored.
+		if s.server != nil && s.server.Data != nil {
+			if _, found, spellErr := s.server.Data.Spell(uint32(spell)); spellErr != nil || !found {
+				continue
+			}
+		}
 		result = append(result, spellCooldown{Spell: uint32(spell), Item: uint32(item), Category: uint32(category), End: end, CategoryEnd: categoryEnd})
 	}
 	return result, rows.Err()

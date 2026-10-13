@@ -237,6 +237,13 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 				_ = cooldownRows.Close()
 				return scanErr
 			}
+			// SpellHistory::PersistenceHelper<Pet>::ReadCooldown (SpellHistory.cpp:73-76):
+			// rows for spell IDs with no SpellInfo are dropped, never restored.
+			if s.server != nil && s.server.Data != nil {
+				if _, found, spellErr := s.server.Data.Spell(row.spell); spellErr != nil || !found {
+					continue
+				}
+			}
 			if row.end > nowUnix {
 				cooldowns[row.spell] = row
 			}
