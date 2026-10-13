@@ -3397,7 +3397,18 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		s.repopAtGraveyard(ctx)
 	}
 	if s.playerLoaded && s.player != nil {
-		s.handleLeaveBattlefield(ctx, nil)
+		// WorldSession::LogoutPlayer (WorldSession.cpp:548-557): a player who
+		// logs out while invited to a battleground queue is tracked as a
+		// deserter BEFORE the queue slots are cleared below. C++ gates on
+		// IsInvitedForBattlegroundQueueType — Go's invited ⇔ InstanceID != 0
+		// convention (arenaTeamQueueLocked) — with no isBattleground gate,
+		// so arena queues are covered too.
+		for i := range s.bgQueues {
+			if s.bgQueues[i].Active && s.bgQueues[i].InstanceID != 0 {
+				s.trackBGDeserter(ctx, bgDesertionTypeInviteLogout)
+			}
+		}
+		s.handleLeaveBattlefield(ctx, nil, true)
 	}
 	if s.trade != nil {
 		// Reference: Player::CleanupsBeforeDelete (Player.cpp:471) -> TradeCancel(false):

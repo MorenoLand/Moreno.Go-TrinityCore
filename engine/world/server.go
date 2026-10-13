@@ -3371,7 +3371,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 
 		// Battleground & PvP
 		case uint32(protocol.OpcodeCMSG_LEAVE_BATTLEFIELD):
-			if !state.authed || !state.handleLeaveBattlefield(ctx, payload) {
+			if !state.authed || !state.handleLeaveBattlefield(ctx, payload, false) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_REPORT_PVP_AFK):

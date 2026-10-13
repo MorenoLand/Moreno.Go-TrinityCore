@@ -137,6 +137,7 @@ type Config struct {
 	DeathCorpseReclaimDelayPvP              bool
 	DeathBonesWorld                         bool
 	DeathBonesBattleground                  bool
+	BattlegroundTrackDeserters              bool
 	DeletedCharacterTicketTrace             bool
 	CharDeleteMethod                        uint32
 	CharDeleteMinLevel                      uint32
@@ -522,6 +523,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_DEATH_BONES_BATTLEGROUND"); ok {
 		_ = c.set("Death.Bones.BattlegroundOrArena", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_BATTLEGROUND_TRACK_DESERTERS"); ok {
+		_ = c.set("Battleground.TrackDeserters.Enable", value)
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_REALM_ADDRESS"); ok {
 		_ = c.set("RealmAddress", value)
@@ -1049,6 +1053,8 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.DeathBonesWorld, key, value)
 	case "Death.Bones.BattlegroundOrArena":
 		return setBool(&c.DeathBonesBattleground, key, value)
+	case "Battleground.TrackDeserters.Enable":
+		return setBool(&c.BattlegroundTrackDeserters, key, value)
 	case "DeletedCharacterTicketTrace":
 		return setBool(&c.DeletedCharacterTicketTrace, key, value)
 	case "CharDelete.Method":

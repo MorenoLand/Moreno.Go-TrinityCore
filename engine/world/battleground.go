@@ -53,6 +53,33 @@ func (s *session) handleBattlemasterHello(ctx context.Context, payload []byte) b
 // battlegroundTypeNone mirrors BATTLEGROUND_TYPE_NONE (SharedDefines.h:3509).
 const battlegroundTypeNone = uint32(0)
 
+// Battleground desertion types (Battleground.h:52-56), recorded by
+// CHAR_INS_DESERTER_TRACK into battleground_deserters.
+const (
+	bgDesertionTypeLeaveBG      uint8 = 0 // player leaves the BG
+	bgDesertionTypeOffline      uint8 = 1 // player is kicked from BG because offline
+	bgDesertionTypeLeaveQueue   uint8 = 2 // player is invited to join and refuses to do it
+	bgDesertionTypeNoEnter      uint8 = 3 // player is invited to join and does nothing (time expires)
+	bgDesertionTypeInviteLogout uint8 = 4 // player is invited to join and logs out
+)
+
+// trackBGDeserter records a battleground desertion row — the Go form of
+// CHAR_INS_DESERTER_TRACK ("INSERT INTO battleground_deserters (guid, type,
+// datetime) VALUES (?, ?, NOW())", CharacterDatabase.cpp:596). It fires only
+// when Battleground.TrackDeserters.Enable is set; the C++ default is false
+// (World.cpp:1193), so this stays silent unless the operator opts in.
+func (s *session) trackBGDeserter(ctx context.Context, desertionType uint8) {
+	if s == nil || s.server == nil || !s.server.Config.BattlegroundTrackDeserters {
+		return
+	}
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+		"INSERT INTO battleground_deserters (guid, type, datetime) VALUES (?, ?, CURRENT_TIMESTAMP)",
+		s.playerGUID, desertionType)
+}
+
 // battlemasterBGType mirrors BattlegroundMgr::LoadBattleMastersEntry/GetBattleMasterBG
 // (BattlegroundMgr.cpp:872-915, BattlegroundMgr.h:127-133): entry → bg_template from the
 // battlemaster_entry table, validated against the BattlemasterList DBC (the loader skips rows
@@ -964,6 +991,16 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 				s.debug("rated arena queue leave: personal rating loss applied", "account", s.accountName, "team", teamID, "loss", -mod)
 			}
 		}
+		// BattleGroundHandler.cpp:515-521: track a player who refuses the BG
+		// invite by leaving the queue. Battleground::isBattleground() excludes
+		// arenas, and entry.InstanceID != 0 is Go's "invited to a live
+		// instance" (the C++ bg reference falls back to the template when
+		// uninvited, whose STATUS_NONE fails the status gate). The live
+		// instance's own IN_PROGRESS/WAIT_JOIN read has no Go model; an
+		// invite implies one of those states.
+		if !entry.IsArena && entry.InstanceID != 0 {
+			s.trackBGDeserter(ctx, bgDesertionTypeLeaveQueue)
+		}
 		// Leave queue
 		s.bgQueues[slot] = bgQueueEntry{}
 		s.sendBattlefieldStatus(uint8(slot))
@@ -1330,9 +1367,26 @@ func (s *session) handleBfQueueExitRequest(ctx context.Context, payload []byte) 
 
 // handleLeaveBattlefield processes CMSG_LEAVE_BATTLEFIELD (0x2E1).
 // Reference: WorldSession::HandleBattlefieldLeaveOpcode (BattleGroundHandler.cpp:528).
-func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bool {
+// fromLogout marks the completeLogoutWithPacket call: C++ LogoutPlayer never calls
+// Player::LeaveBattleground (offline removal is the separate untracked OFFLINE site,
+// Battleground.cpp:271), so the leave-BG tracking below must not fire on logout.
+func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fromLogout bool) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
+	}
+	// Player::LeaveBattleground (Player.cpp:22490-22499): leaving a live
+	// battleground while inside it is tracked. Battleground::isBattleground()
+	// excludes arenas; Go keeps no live BG instances, so an active non-arena
+	// slot with Status == BGStatusInProgress is the ported-in state (the port
+	// arm sets it on accept, battleground.go).
+	if !fromLogout {
+		for i := range s.bgQueues {
+			e := &s.bgQueues[i]
+			if e.Active && !e.IsArena && e.Status == BGStatusInProgress {
+				s.trackBGDeserter(ctx, bgDesertionTypeLeaveBG)
+				break
+			}
+		}
 	}
 	// C++ WorldSession::HandleBattlefieldLeaveOpcode (BattleGroundHandler.cpp:528)
 	// denies leaving a battleground while in combat unless the BG is already in
