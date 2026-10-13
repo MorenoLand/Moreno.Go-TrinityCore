@@ -16908,8 +16908,10 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 	// (s.player is the caster); the dead-target gate lands on the Health > 0
 	// checks below. Player targets ride executeSpellHeal so the
 	// SpellHealingBonusDone / crit / threat-forward legs of HealBySpell
-	// (Spell.cpp:2496-2513) apply; the creature arm has no such model and
-	// lands the clamped heal on the motion directly.
+	// (Spell.cpp:2496-2513) apply; the creature arm's DealHeal AI hooks
+	// (victim HealReceived; the player caster's GetAI() is nil so HealDone
+	// is skipped) are bridged via fireDealHealAIHooks before the motion
+	// write lands.
 	if targetGUID == s.playerGUID {
 		if s.player.Health == 0 {
 			return
@@ -16946,6 +16948,13 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 		} else {
 			addhealth = creature.MaxHealth - creature.Health
 		}
+		// Unit::DealHeal (Unit.cpp:6299-6304): the victim AI's HealReceived
+		// fires ahead of the health gain on the pre-clamp addhealth. The
+		// caster is a player (Unit::GetAI() returns i_AI, never populated
+		// for players), so the healer leg is nil and the helper's nil-healer
+		// gate skips HealDone — matching C++ exactly.
+		victimMotion := s.findCreatureMotion(targetGUID)
+		fireDealHealAIHooks(ctx, s.server, victimMotion, nil, s.playerGUID, targetGUID, &addhealth)
 		newHealth := creature.Health + addhealth
 		if newHealth > creature.MaxHealth {
 			newHealth = creature.MaxHealth
@@ -25769,6 +25778,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			newHP = maxHP
 		}
 
+		// SpellAuraEffects.cpp:5400 calls Unit::DealHeal for every periodic
+		// tick, so the AI-hook arm (Unit.cpp:6299-6304) fires here too: the
+		// victim motion's HealReceived, then the caster motion's HealDone.
+		// Player casters have no AI model (Unit::GetAI() returns nil for
+		// players), so the healer leg fires only when the caster resolves
+		// to a creature/pet motion — matching C++.
+		victimTickMotion := ts.findCreatureMotion(aura.TargetGUID)
+		healerTickMotion := ts.findCreatureMotion(aura.CasterGUID)
+		fireDealHealAIHooks(context.Background(), ts.server, victimTickMotion, healerTickMotion, aura.CasterGUID, aura.TargetGUID, &heal)
 		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, healAbsorbed, healCrit)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
@@ -26728,6 +26746,16 @@ func (s *Server) applyCreaturePeriodicLeechHeal(ctx context.Context, mapID, inst
 		}
 		heal = creatureHealingTakenBonus(s, casterKey, casterGUID, tickSpell, tickKnown, heal, true)
 	}
+	// AuraEffect::HandlePeriodicLeech (SpellAuraEffects.cpp:5317) routes the
+	// caster self-heal through Unit::HealBySpell, which calls Unit::DealHeal
+	// internally (Unit.cpp:6567) — so the AI-hook arm (Unit.cpp:6299-6304)
+	// fires here too, ahead of the health gain, on the pre-clamp heal. Both
+	// legs fire on the caster motion (C++ has no healer==victim filter).
+	// Fired unlocked: the helper calls into Lua AI, which must not run
+	// under motionMu.
+	if cm := s.findCreatureMotion(mapID, instanceID, casterGUID); cm != nil {
+		fireDealHealAIHooks(ctx, s, cm, cm, casterGUID, casterGUID, &heal)
+	}
 	s.motionMu.Lock()
 	live := s.findCreatureMotionLocked(mapID, instanceID, casterGUID)
 	if live == nil || live.Health == 0 {
@@ -27451,6 +27479,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			newHP = maxHP
 		}
 
+		// SpellAuraEffects.cpp:5400 calls Unit::DealHeal for every periodic
+		// tick, so the AI-hook arm (Unit.cpp:6299-6304) fires here too: the
+		// victim motion's HealReceived, then the caster motion's HealDone.
+		// Player casters have no AI model (Unit::GetAI() returns nil for
+		// players), so the healer leg fires only when the caster resolves
+		// to a creature/pet motion — matching C++.
+		victimTickMotion := s.findCreatureMotion(aura.TargetGUID)
+		healerTickMotion := s.findCreatureMotion(aura.CasterGUID)
+		fireDealHealAIHooks(ctx, s.server, victimTickMotion, healerTickMotion, aura.CasterGUID, aura.TargetGUID, &heal)
 		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, healAbsorbed, healCrit)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
