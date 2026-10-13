@@ -334,6 +334,112 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	return s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), packet, true) == nil
 }
 
+// rejectQuestgiverAccept mirrors the CLOSE_GOSSIP_CLEAR_SHARING_INFO
+// lambda of WorldSession::HandleQuestgiverAcceptQuestOpcode
+// (QuestHandler.cpp:131-135): every rejection arm closes the gossip window
+// AND clears the quest-sharing info. Go's arms closed the window but left a
+// stale sharing offer behind, so a later confirm-accept could bind to a
+// sharer from a quest that was never taken.
+func (s *session) rejectQuestgiverAccept() bool {
+	s.sharingQuestID = 0
+	s.sharingQuestSender = 0
+	return s.sendGossipComplete()
+}
+
+// satisfyQuestLog mirrors Player::SatisfyQuestLog (Player.cpp:15645-15657):
+// a free quest-log slot must exist; msg=true answers SMSG_QUESTLOG_FULL,
+// matching C++'s SendDirectMessage of the empty packet.
+func (s *session) satisfyQuestLog(msg bool) bool {
+	if s.player != nil {
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			if s.player.QuestLog[slot].QuestID == 0 {
+				return true
+			}
+		}
+	}
+	if msg {
+		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTLOG_FULL), nil, true)
+	}
+	return false
+}
+
+// canAddQuest mirrors Player::CanAddQuest (Player.cpp:14946-14967): the log
+// must have a free slot (SatisfyQuestLog) and the quest's source item must
+// fit (CanStoreNewItem). EQUIP_ERR_CANT_CARRY_MORE_OF_THIS still allows the
+// add — the player already holds the max. C++ runs this gate in
+// HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:153) before
+// AddQuestAndCheckCompletion; Go ran no gate at all, so a full quest log
+// wrote the character_queststatus row and granted the source item even
+// though the slot claim silently dropped them.
+func (s *session) canAddQuest(ctx context.Context, questID uint32, msg bool) bool {
+	if !s.satisfyQuestLog(msg) {
+		return false
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
+	}
+	var srcItem, srcCount int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(StartItem, 0), COALESCE(StartItemCount, 0) FROM quest_template WHERE ID = ?", questID).Scan(&srcItem, &srcCount); err != nil || srcItem <= 0 {
+		return true
+	}
+	count := uint32(srcCount)
+	if count == 0 {
+		count = 1
+	}
+	switch res := s.canStoreNewItem(ctx, s.playerGUID, uint32(srcItem), count); res {
+	case equipErrOk, equipErrCantCarryMoreOfThis:
+		return true
+	default:
+		if msg {
+			s.sendEquipError(res, 0)
+		}
+		return false
+	}
+}
+
+// canInteractWithQuestGiver mirrors Player::CanInteractWithQuestGiver
+// (Player.cpp:2296-2312): the WPE guard HandleQuestgiverAcceptQuestOpcode
+// runs (QuestHandler.cpp:149) before the quest template is even loaded.
+// Creatures need the QUESTGIVER npc flag inside interaction range, GOs the
+// QUESTGIVER type on the player's map/instance in range, players need both
+// parties alive, items only the accepting player. The player-giver share
+// validation (CanShareQuest/IsInSameRaidWith, QuestHandler.cpp:138-151)
+// belongs to handleQuestConfirmAccept, Go's share-accept path.
+func (s *session) canInteractWithQuestGiver(ctx context.Context, guid uint64) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	high := uint16(guid >> 48)
+	switch {
+	case high == 0x4000:
+		return s.player.Health > 0
+	case high == 0x0000 && guid != 0:
+		giver := s.server.findSessionByGUID(guid)
+		return s.player.Health > 0 && giver != nil && giver.player != nil && giver.player.Health > 0
+	case high == 0xF110:
+		if s.server == nil {
+			return false
+		}
+		entry := uint32((guid >> 24) & 0x00FFFFFF)
+		low := uint32(guid & 0x00FFFFFF)
+		goState, err := s.server.getOrLoadGameObjectState(ctx, guid, low, entry, s.player.Map, s.player.InstanceID)
+		if err != nil || goState == nil || goState.IconName == "Point" || goState.Type != GameObjectTypeQuestGiver {
+			return false
+		}
+		if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID ||
+			distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
+			return false
+		}
+		return true
+	default:
+		creature := s.luaCreature(ctx, guid)
+		if creature == nil || !s.canInteractWithCreature(creature) {
+			return false
+		}
+		return objectUint32OrZero(creature, "NPCFlags")&npcFlagQuestgiver != 0
+	}
+}
+
 func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
@@ -351,18 +457,32 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	}
 	if !s.questgiverStartsQuest(ctx, guid, questID) {
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "guid", guid, "reason", "questgiver does not start quest")
-		return s.sendGossipComplete()
+		return s.rejectQuestgiverAccept()
+	}
+	// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:149):
+	// the WPE guard runs before the quest template is loaded.
+	if !s.canInteractWithQuestGiver(ctx, guid) {
+		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "guid", guid, "reason", "cannot interact with quest giver")
+		return s.rejectQuestgiverAccept()
 	}
 	// If player is already on this quest, close gossip and return success
 	status, _ := s.characterQuestStatus(ctx, questID)
 	if status == questStatusIncomplete {
-		return s.sendGossipComplete()
+		return s.rejectQuestgiverAccept()
 	}
 	// TrinityCore re-validates CanTakeQuest on accept before AddQuest.
 	canTake, err := s.canTakeQuest(ctx, questID)
 	if err != nil || !canTake {
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canTakeQuest failed", "error", err)
-		return s.sendGossipComplete()
+		return s.rejectQuestgiverAccept()
+	}
+	// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:153):
+	// CanAddQuest gates AddQuestAndCheckCompletion — a full quest log or an
+	// unstoreable source item rejects with the window closed and the sharing
+	// info cleared.
+	if !s.canAddQuest(ctx, questID, true) {
+		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canAddQuest failed")
+		return s.rejectQuestgiverAccept()
 	}
 	// QuestHandler.cpp:144-151 — an accept that lands while the player still
 	// holds quest-sharing info answers QUEST_PARTY_MSG_ACCEPT_QUEST to the
