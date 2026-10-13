@@ -92,9 +92,13 @@ const (
 	LFGDungeonTypeHeroic  uint32 = 5
 	LFGDungeonTypeRandom  uint32 = 6
 
-	LFGJoinOK             uint32 = 0
-	LFGJoinNotMeetReqs    uint32 = 5
-	LFGJoinInvalidDungeon uint32 = 11
+	LFGJoinOK               uint32 = 0
+	LFGJoinNotMeetReqs      uint32 = 5
+	LFGJoinInvalidDungeon   uint32 = 11
+	LFGJoinMixedRaidDungeon uint32 = 7
+	LFGJoinDeserter         uint32 = 12
+	LFGJoinRandomCooldown   uint32 = 14
+	LFGJoinUsingBGSystem    uint32 = 17
 
 	// LFG script auras (LFGMgr.h:51-54,61): cast by the LFGPlayerScript /
 	// LFGGroupScript arms in LFGScripts.cpp.
@@ -427,7 +431,113 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	if len(comment) > 255 {
 		comment = comment[:255]
 	}
-	result, entry := s.server.Features.LFG.Join(s.playerGUID, uint8(roles), dungeons, comment)
+	roles8 := uint8(roles)
+	// HandleLfgJoinOpcode (LFGHandler.cpp:60-64): no dungeons selected is a
+	// silent return — no join-result packet.
+	if len(dungeons) == 0 {
+		return true
+	}
+	// HandleLfgJoinOpcode (LFGHandler.cpp:67-73): only DBC-known dungeons with
+	// a supported type enter the join set (the slot's type bits were already
+	// masked above).
+	filtered := make([]uint32, 0, len(dungeons))
+	if s.server != nil && s.server.Data != nil {
+		for _, dungeonID := range dungeons {
+			if dungeon, found, derr := s.server.Data.LFGDungeon(dungeonID); derr == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID) {
+				filtered = append(filtered, dungeonID)
+			}
+		}
+	}
+	// LFGMgr::JoinLfg (LFGMgr.cpp:405): an empty post-filter set is a silent
+	// return, no join-result packet.
+	if len(filtered) == 0 {
+		return true
+	}
+	// LFGMgr::JoinLfg (LFGMgr.cpp:408-414): no tank/healer/damage role is a
+	// silent return, no join-result packet.
+	if roles8&(LFGRoleTank|LFGRoleHealer|LFGRoleDamage) == 0 {
+		return true
+	}
+	failJoin := func(result uint32) bool {
+		if err := s.sendLFGJoinResult(result, uint32(LFGStateNone)); err != nil {
+			return false
+		}
+		return true
+	}
+	// LFGMgr::JoinLfg requirement gates (LFGMgr.cpp:455-466), solo-player arms
+	// in C++ order. The group/PARTY_* variants have no counterpart in the
+	// per-player queue model; the RBAC_PERM_JOIN_DUNGEON_FINDER permission has
+	// no Go twin (standing edge).
+	if s.bgData.InstanceID != 0 || s.inBattlegroundQueue() {
+		// InBattleground/InArena/InBattlegroundQueue (Player.h:1906,
+		// Player.cpp:23647/23554)
+		return failJoin(LFGJoinUsingBGSystem)
+	}
+	if s.hasAura(lfgSpellDungeonDeserter) {
+		return failJoin(LFGJoinDeserter)
+	}
+	// isContinue: grouped LFG mid-dungeon re-queue (LFGMgr.cpp:422) — the
+	// random-cooldown gate is skipped for it.
+	isContinue := false
+	if s.groupID != 0 && s.server != nil {
+		if grp := s.server.getGroup(s.groupID); grp != nil && grp.IsLFG && grp.LFGState != LFGStateFinishedDungeon {
+			isContinue = true
+		}
+	}
+	if !isContinue && s.hasAura(lfgSpellDungeonCooldown) {
+		return failJoin(LFGJoinRandomCooldown)
+	}
+	if s.hasAura(9454) { // Freeze debuff (LFGMgr.cpp:465)
+		return failJoin(LFGJoinNotMeetReqs)
+	}
+	// LFGMgr::JoinLfg dungeon-type validation (LFGMgr.cpp:527-557): a random
+	// dungeon must be queued alone; raid and non-raid dungeons cannot mix. The
+	// loop stops at the first failure, like the C++ result == LFG_JOIN_OK
+	// continuation condition.
+	isRaid := false
+	isDungeon := false
+	typeFail := LFGJoinOK
+	for _, dungeonID := range filtered {
+		dungeon, found, derr := s.server.Data.LFGDungeon(dungeonID)
+		dtype := uint32(0)
+		if derr == nil && found {
+			dtype = dungeon.TypeID
+		}
+		switch dtype {
+		case LFGDungeonTypeRandom:
+			if len(filtered) > 1 {
+				typeFail = LFGJoinInvalidDungeon
+				break
+			}
+			fallthrough
+		case LFGDungeonTypeHeroic, LFGDungeonTypeDungeon:
+			if isRaid {
+				typeFail = LFGJoinMixedRaidDungeon
+			} else {
+				isDungeon = true
+			}
+		case LFGDungeonTypeRaid:
+			if isDungeon {
+				typeFail = LFGJoinMixedRaidDungeon
+			} else {
+				isRaid = true
+			}
+		default:
+			typeFail = LFGJoinInvalidDungeon
+		}
+		if typeFail != LFGJoinOK {
+			break
+		}
+	}
+	if typeFail != LFGJoinOK {
+		return failJoin(typeFail)
+	}
+	// LFGMgr::JoinLfg (LFGMgr.cpp:577-581): raid-browser joins queue nothing —
+	// the raid path ends here silently.
+	if isRaid {
+		return true
+	}
+	result, entry := s.server.Features.LFG.Join(s.playerGUID, roles8, filtered, comment)
 	s.debug("lfg join", "account", s.accountName, "result", result, "dungeons", entry.Dungeons)
 	if err := s.sendLFGJoinResult(result, uint32(LFGStateNone)); err != nil {
 		return false
@@ -436,6 +546,17 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		return s.sendLFGUpdatePlayer(LFGUpdateJoinQueue, entry) == nil
 	}
 	return true
+}
+
+// inBattlegroundQueue mirrors Player::InBattlegroundQueue (Player.cpp:23554):
+// any active battleground/arena queue slot.
+func (s *session) inBattlegroundQueue() bool {
+	for i := range s.bgQueues {
+		if s.bgQueues[i].Active {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) handleLFGLeave() bool {
@@ -1399,6 +1520,32 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// hasCharmedCreature mirrors Unit::GetCharmedGUID (UNIT_FIELD_CHARM, Unit.h:1161)
+// for LFGMgr::TeleportPlayer (LFGMgr.cpp:1538): true while the player controls a
+// charmed creature, i.e. a live MOD_CHARM/AOE_CHARM creature aura on the player's
+// map instance cast by the player.
+func (s *session) hasCharmedCreature() bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return false
+	}
+	s.server.auraMu.Lock()
+	defer s.server.auraMu.Unlock()
+	for key, auras := range s.server.activeCreatureAuras {
+		if key.Map != s.player.Map || key.InstanceID != s.player.InstanceID {
+			continue
+		}
+		for _, aura := range auras {
+			if aura == nil {
+				continue
+			}
+			if aura.CasterGUID == s.playerGUID && (aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // handleLfgTeleport processes CMSG_LFG_TELEPORT (0x370).
 // Reference: WorldSession::HandleLfgTeleportOpcode (LFGHandler.cpp:144).
 func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
@@ -1445,7 +1592,9 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 		teleportErr = LFGTeleportErrorFatigue
 	} else if s.player.VehicleGUID != 0 {
 		teleportErr = LFGTeleportErrorInVehicle
-	} else if s.hasAura(9454) { // Freeze debuff (Player.cpp:9454 check)
+	} else if s.hasCharmedCreature() { // GetCharmedGUID (LFGMgr.cpp:1538)
+		teleportErr = LFGTeleportErrorCharming
+	} else if s.hasAura(9454) { // Freeze debuff (LFGMgr.cpp:1540)
 		teleportErr = LFGTeleportErrorInvalidLocation
 	}
 
