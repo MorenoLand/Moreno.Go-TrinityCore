@@ -60,9 +60,9 @@
 -- 50%-HP phase-two latch via OnDamageTaken(9) with a per-guid
 -- one-shot flag reset on OnEnterCombat(1) (gyth convention —
 -- C++-exact HealthBelowPctDamaged(50): GetHealth() - damage <
--- 0.5*GetMaxHealth()): Talk(SAY_GRAVITY_LAPSE_1) + cancel of the
--- phase-one timers (C++-exact observable: phase-one events stay
--- scheduled but no longer execute once the phase flips to
+-- floor(0.5*GetMaxHealth()), integer strict-<): Talk(SAY_GRAVITY_LAPSE_1)
+-- + cancel of the phase-one timers (C++-exact observable: phase-one
+-- events stay scheduled but no longer execute once the phase flips to
 -- PHASE_TWO; cancelling them is the faithful net effect).
 -- Lethal-damage outro chain via OnDamageTaken(9) with a per-guid
 -- one-shot flag (C++-exact: damage >= GetHealth() is checked before
@@ -70,7 +70,9 @@
 -- is set — same ordering here): Talk(SAY_DEATH) + cancel of all
 -- timers + one-shot self-cast chain 48348 @1s, 48349 @3s800ms,
 -- 48350 @7s400ms, 48350 @10s, 3617 @11s (C++ EVENT_EMOTE_* /
--- EVENT_QUITE_SUICIDE, PHASE_OUTRO-gated).
+-- EVENT_QUITE_SUICIDE, PHASE_OUTRO-gated). DamageTaken tail: non-self
+-- lethal damage is rewritten to health-1 (curator precedent) so he
+-- survives for the 11s chain — self-damage may still kill him.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
 -- packet-visual), so timers fire unconditionally and the in-loop
 -- casting gate is dropped (maiden precedent). The C++ scheduler is
@@ -190,15 +192,13 @@ local function onCombatEnd(_, creature)
     outroFired[guid] = nil
 end
 
-local function onDamageTaken(_, creature, _, damage)
+local function onDamageTaken(_, creature, attacker, damage)
     local guid = creature:GetGUID()
-    if outroFired[guid] then
-        return
-    end
     local health = creature:GetHealth()
-    -- C++ checks lethal damage first; the 50% latch is skipped once
-    -- the outro phase is set.
-    if damage >= health then
+    local newDamage = damage
+    if not outroFired[guid] and damage >= health then
+        -- C++ checks lethal damage first; the 50% latch is skipped once
+        -- the outro phase is set.
         outroFired[guid] = true
         cancelTimers(guid)
         creature:Talk(SAY_DEATH)
@@ -217,14 +217,20 @@ local function onDamageTaken(_, creature, _, damage)
         schedule(guid, "outro_5", 11000, function()
             creature:CastSpell(creature, SPELL_QUITE_SUICIDE)
         end)
-        return
-    end
-    if not phaseTwo[guid]
-        and health - damage < creature:GetMaxHealth() * 0.5 then
+    elseif not outroFired[guid] and not phaseTwo[guid]
+        and health - damage < math.floor(creature:GetMaxHealth() * 50 / 100) then
         phaseTwo[guid] = true
         cancelTimers(guid)
         creature:Talk(SAY_GRAVITY_LAPSE_1)
     end
+    -- C++ DamageTaken tail: non-self lethal damage is clamped to
+    -- health-1 so he survives for the 11s outro chain (self-damage may
+    -- still kill him). Runs on every blow, including repeat blows after
+    -- the outro fired (curator damage-rewrite precedent).
+    if damage >= health and attacker ~= creature then
+        newDamage = health - 1
+    end
+    return false, newDamage
 end
 
 RegisterCreatureEvent(ENTRY_KAELTHAS, 1, onEnterCombat)

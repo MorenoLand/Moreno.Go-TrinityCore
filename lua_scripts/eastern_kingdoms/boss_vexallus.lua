@@ -43,9 +43,12 @@
 -- OnDied(4)/OnReset(23).
 -- KilledUnit: Talk(SAY_KILL) via OnTargetDied(3) — the C++ arm has no
 -- victim-type gate, so neither does the port.
--- DamageTaken 15%-interval discharge latch (gyth/felblood
--- OnDamageTaken(9) convention — post-damage health check, single
--- threshold per event, C++-exact): _intervalHealthAmount starts at 1;
+-- DamageTaken 15%-interval discharge latch via OnDamageTaken(9).
+-- C++ checks pre-damage health (Unit::DealDamage fires DamageTaken
+-- before health is reduced; GetHealth() at event 9 IS pre-damage), so
+-- no -damage subtraction: HealthAbovePct fires when health <=
+-- floor(max*pct/100) (ironaya convention). _intervalHealthAmount
+-- starts at 1;
 -- at health below 85/70/55/40/25% (100 - 15*stage): stage += 1,
 -- Talk(SAY_ENERGY), Talk(EMOTE_DISCHARGE_ENERGY), self-cast
 -- SPELL_SUMMON_PURE_ENERGY 44322 (kaelthas phoenix-summon precedent —
@@ -144,13 +147,13 @@ local function onTargetDied(_, creature)
     creature:Talk(SAY_KILL)
 end
 
-local function onDamageTaken(_, creature, _, damage)
+local function onDamageTaken(_, creature, _, _damage)
     local guid = creature:GetGUID()
     if enraged[guid] then
         return
     end
     local stage = dischargeStage[guid] or 1
-    if creature:GetHealth() - damage < creature:GetMaxHealth() * (100 - INTERVAL_MODIFIER * stage) / 100 then
+    if creature:GetHealth() <= math.floor(creature:GetMaxHealth() * (100 - INTERVAL_MODIFIER * stage) / 100) then
         if stage == INTERVAL_SWITCH then
             enraged[guid] = true
             cancelTimers(guid)

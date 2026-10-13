@@ -210,11 +210,12 @@ local function onLeaveCombat(_, creature)
 end
 
 -- The C++ UpdateAI per-tick enrage latch (fire + air only)
--- lands on OnDamageTaken (nagrand_banner precedent): the
--- strict-fraction HealthBelowPctDamaged(35) check — health
--- after this hit strictly below 35% (shahraz precedent) —
--- with a used latch (the !GetAura re-cast arm has no
--- aura-state bridge — phase_hunter precedent).
+-- lands on OnDamageTaken (nagrand_banner precedent): C++-exact
+-- HealthBelowPct(35) = post-damage health < floor(max*35/100)
+-- (ironaya convention); the killing blow is excluded (UpdateAI never
+-- runs when dead — chromaggus precedent). used latch stands in for
+-- the !GetAura re-cast arm (no aura-state bridge —
+-- phase_hunter precedent).
 for _, entry in ipairs({ ENTRY_ENRAGED_FIRE_SPIRIT, ENTRY_ENRAGED_AIR_SPIRIT }) do
     RegisterCreatureEvent(entry, 9, function(_, creature, attacker, damage)
         local guid = creature:GetGUID()
@@ -226,7 +227,9 @@ for _, entry in ipairs({ ENTRY_ENRAGED_FIRE_SPIRIT, ENTRY_ENRAGED_AIR_SPIRIT }) 
         if maxHealth == 0 then
             return
         end
-        if (creature:GetHealth() - damage) * 100 / maxHealth < 35 then
+        local health = creature:GetHealth()
+        if damage < health
+            and (health - damage) < math.floor(maxHealth * 35 / 100) then
             st.usedEnrage = true
             creature:CastSpell(creature, SPELL_ENRAGE)
         end

@@ -79,7 +79,7 @@ end
 local function onSpawnOrReset(_, creature)
     local spellId = AURA_PAIRS[creature:GetEntry()]
     if spellId then
-        creature:CastSpell(creature, spellId, true)
+        creature:CastSpell(creature, spellId)
     end
 end
 
