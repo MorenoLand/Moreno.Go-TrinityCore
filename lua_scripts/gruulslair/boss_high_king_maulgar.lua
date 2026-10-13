@@ -116,6 +116,17 @@ local SAY_DEATH = 4
 local timers = {}
 local maulgarState = {}
 
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
+-- float edge.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -179,7 +190,8 @@ end
 
 local function maulgarMightyBlow(creature, guid)
     creature:CastSpell(nil, SPELL_MIGHTY_BLOW)
-    schedule(guid, "mightyblow", math.random(30000, 40000), function()
+    -- C++ rand32()%10000 exclusive top: [30000, 39999] (urand would be inclusive).
+    schedule(guid, "mightyblow", math.random(30000, 39999), function()
         maulgarMightyBlow(creature, guid)
     end)
 end
@@ -201,7 +213,8 @@ end
 -- {40s,50s} (initial 0s).
 local function maulgarRoar(creature, guid)
     creature:CastSpell(creature, SPELL_ROAR)
-    schedule(guid, "roar", math.random(40000, 50000), function()
+    -- C++ rand32()%10000 exclusive top: [40000, 49999] (urand would be inclusive).
+    schedule(guid, "roar", math.random(40000, 49999), function()
         maulgarRoar(creature, guid)
     end)
 end
@@ -215,7 +228,9 @@ local function maulgarPhaseCheck(creature, guid)
     if state == nil or state.phase2 then
         return
     end
-    if creature:GetHealthPct() < 50 then
+    -- C++ HealthBelowPct(50): strict-< against the floored integer
+    -- threshold (the old GetHealthPct() < 50 fired up to 1 HP early).
+    if healthBelowPct(creature, 50) then
         state.phase2 = true
         creature:Talk(SAY_ENRAGE)
         creature:CastSpell(creature, SPELL_DUAL_WIELD, true)

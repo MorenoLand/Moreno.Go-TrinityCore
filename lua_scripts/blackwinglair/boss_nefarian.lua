@@ -422,7 +422,9 @@ local function nefarianDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 20 then
+    -- C++ HealthBelowPct(20): strict-< against the floored integer
+    -- threshold (the old float < 20 fired up to 1 HP early).
+    if creature:GetHealth() - damage < math.floor(maxHealth * 20 / 100) then
         st.phase3 = true
         creature:Talk(SAY_RAISE_SKELETONS)
     end

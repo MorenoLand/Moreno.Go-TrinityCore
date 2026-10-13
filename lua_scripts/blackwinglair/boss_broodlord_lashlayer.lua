@@ -12,9 +12,9 @@
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat:
 -- Talk(SAY_AGGRO=0), arm cleave 26350 8s then every 7s / blast wave
 -- 23331 12s then {8s,16s} / mortal strike 24573 20s then {25s,35s} /
--- knockback 25778 30s then {15s,30s}, all triggered DoCastVictim
--- (jeklik convention for C++ DoCastVictim), plus the 1s boundary
--- check. Nil-victim ticks cast nothing but keep the schedule (jeklik
+-- knockback 25778 30s then {15s,30s}, all non-triggered DoCastVictim
+-- (C++ DoCast default is triggered=false — vaelastrasz convention),
+-- plus the 1s boundary check. Nil-victim ticks cast nothing but keep the schedule (jeklik
 -- convention). OnDied: Talk is not used by C++ — JustDied only runs
 -- the suppression-device deactivation (no gameobject bridge). OnLeave
 -- Combat(2)/OnReset(23): cancel timers.
@@ -72,46 +72,46 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ EVENT_CLEAVE: triggered DoCastVictim(26350); re-arm 7s.
+-- C++ EVENT_CLEAVE: non-triggered DoCastVictim(26350); re-arm 7s.
 local function onCleave(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_CLEAVE, true)
+        creature:CastSpell(victim, SPELL_CLEAVE)
     end
     schedule(guid, "cleave", 7000, function()
         onCleave(creature, guid)
     end)
 end
 
--- C++ EVENT_BLASTWAVE: triggered DoCastVictim(23331); re-arm {8s,16s}.
+-- C++ EVENT_BLASTWAVE: non-triggered DoCastVictim(23331); re-arm {8s,16s}.
 local function onBlastwave(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_BLASTWAVE, true)
+        creature:CastSpell(victim, SPELL_BLASTWAVE)
     end
     schedule(guid, "blastwave", math.random(8000, 16000), function()
         onBlastwave(creature, guid)
     end)
 end
 
--- C++ EVENT_MORTALSTRIKE: triggered DoCastVictim(24573);
+-- C++ EVENT_MORTALSTRIKE: non-triggered DoCastVictim(24573);
 -- re-arm {25s,35s}.
 local function onMortalStrike(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_MORTALSTRIKE, true)
+        creature:CastSpell(victim, SPELL_MORTALSTRIKE)
     end
     schedule(guid, "mortalstrike", math.random(25000, 35000), function()
         onMortalStrike(creature, guid)
     end)
 end
 
--- C++ EVENT_KNOCKBACK: triggered DoCastVictim(25778) + -50% threat on
+-- C++ EVENT_KNOCKBACK: non-triggered DoCastVictim(25778) + -50% threat on
 -- the victim (threat arm has no bridge); re-arm {15s,30s}.
 local function onKnockback(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_KNOCKBACK, true)
+        creature:CastSpell(victim, SPELL_KNOCKBACK)
     end
     schedule(guid, "knockback", math.random(15000, 30000), function()
         onKnockback(creature, guid)
