@@ -1754,6 +1754,7 @@ const (
 	equipErrOnlyAmmoCanGoHere                 = 7  // C++ EQUIP_ERR_ONLY_AMMO_CAN_GO_HERE (ItemDefines.h:33)
 	equipErrBagFull6                          = 62 // C++ EQUIP_ERR_BAG_FULL6 (ItemDefines.h:88)
 	equipErrNonemptyBagOverOtherBag           = 5
+	equipErrCantUnequip                       = 6 // C++ EQUIP_ERR_CANT_UNEQUIP (ItemDefines.h:32)
 	equipErrCantEquipWithTwohanded            = 13
 	equipErrCantDualWield                     = 14
 	equipErrCantCarryMoreOfThis               = 17

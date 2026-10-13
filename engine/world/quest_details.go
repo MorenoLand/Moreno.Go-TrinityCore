@@ -224,6 +224,12 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	// TYPEID_ITEM/TYPEID_CONTAINER arm of Player::AddQuestAndCheckCompletion
 	// (Player.cpp:15128); fires only for item giver GUIDs.
 	s.fireItemQuestHook(ctx, guid, questID)
+	// Player::AddQuestAndCheckCompletion, TYPEID_ITEM arm (Player.cpp:15124):
+	// accepting from an item destroys the start item (modulo the
+	// required-unique and source-item exceptions).
+	if uint16(guid>>48) == 0x4000 {
+		s.destroyQuestStartItem(ctx, questID, guid)
+	}
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
 
 	// QuestHandler.cpp:155-173 — QUEST_FLAGS_PARTY_ACCEPT: every group member
@@ -355,15 +361,184 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {
 		s.completeQuest(ctx, questID)
 	}
 
-	// Grant starter item if specified in quest_template (e.g. quest items, letters, containers)
-	var startItem int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT StartItem FROM quest_template WHERE ID = ?", questID).Scan(&startItem); err == nil && startItem > 0 {
-		s.grantQuestStartItem(ctx, uint32(startItem))
-	}
+	// Player::AddQuest (Player.cpp:15236): the quest's source item is
+	// granted here; like the C++ the result is ignored by the caller.
+	s.giveQuestSourceItem(ctx, questID)
 	return true
 }
 
-func (s *session) grantQuestStartItem(ctx context.Context, itemEntry uint32) {
+// giveQuestSourceItem mirrors Player::GiveQuestSourceItem (Player.cpp:16048-16076).
+// No grant when the quest was started by the item itself
+// (item_template.StartQuest == quest id), the stored count defaults to 1,
+// and the CanStoreNewItem gate decides: EQUIP_ERR_OK stores and notifies,
+// CANT_CARRY_MORE_OF_THIS reports success (the player already holds the
+// max), anything else sends the equip error and fails the grant.
+func (s *session) giveQuestSourceItem(ctx context.Context, questID uint32) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
+	}
+	wdb := s.server.WorldStore.DB
+	var startItem, startCount int64
+	if err := wdb.QueryRowContext(ctx, "SELECT StartItem, COALESCE(StartItemCount, 0) FROM quest_template WHERE ID = ?", questID).Scan(&startItem, &startCount); err != nil || startItem <= 0 {
+		return true
+	}
+	var startQuest int64
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(StartQuest, 0) FROM item_template WHERE entry = ?", startItem).Scan(&startQuest); err == nil && uint32(startQuest) == questID {
+		return true
+	}
+	count := uint32(startCount)
+	if count == 0 {
+		count = 1
+	}
+	switch res := s.canStoreNewItem(ctx, s.playerGUID, uint32(startItem), count); res {
+	case equipErrOk:
+		s.grantQuestStartItem(ctx, uint32(startItem), count)
+		return true
+	case equipErrCantCarryMoreOfThis:
+		return true
+	default:
+		s.sendEquipError(res, 0)
+		return false
+	}
+}
+
+// takeQuestSourceItem mirrors Player::TakeQuestSourceItem (Player.cpp:16081-16116):
+// on abandon the source item granted at accept is destroyed with the
+// CanUnequipItems gate, unless the item is the quest's own start item.
+func (s *session) takeQuestSourceItem(ctx context.Context, questID uint32, msg bool) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
+	}
+	wdb := s.server.WorldStore.DB
+	var startItem, startCount int64
+	if err := wdb.QueryRowContext(ctx, "SELECT StartItem, COALESCE(StartItemCount, 0) FROM quest_template WHERE ID = ?", questID).Scan(&startItem, &startCount); err != nil || startItem <= 0 {
+		return true
+	}
+	count := uint32(startCount)
+	if count == 0 {
+		count = 1
+	}
+	if res := s.canUnequipQuestItems(ctx, uint32(startItem), count); res != equipErrOk {
+		if msg {
+			s.sendEquipError(res, 0)
+		}
+		return false
+	}
+	var startQuest int64
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(StartQuest, 0) FROM item_template WHERE entry = ?", startItem).Scan(&startQuest); err == nil && uint32(startQuest) == questID {
+		return true
+	}
+	s.destroyQuestItemEntry(ctx, uint32(startItem), count)
+	return true
+}
+
+// canUnequipQuestItems mirrors Player::CanUnequipItems (Player.cpp:9860-9890)
+// for the abandon path: equipped copies of the entry fail the unequip gate
+// (Go has no locked/equipped quest items, so an equipment copy can never be
+// auto-unequipped), backpack copies just count toward the total; like the
+// C++ the last error is returned when the count is not reached.
+func (s *session) canUnequipQuestItems(ctx context.Context, entry, count uint32) uint8 {
+	cdb := s.server.CharactersStore.DB
+	res := uint8(equipErrOk)
+	var temp uint32
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.slot, ii.count FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ii.itemEntry = ?`, s.playerGUID, entry)
+	if err != nil {
+		return equipErrOk
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slot uint8
+		var c uint32
+		if rows.Scan(&slot, &c) != nil {
+			continue
+		}
+		if slot <= 18 {
+			res = equipErrCantUnequip
+			continue
+		}
+		temp += c
+		if temp >= count {
+			return equipErrOk
+		}
+	}
+	return res
+}
+
+// destroyQuestItemEntry destroys up to count copies of entry across the
+// player's inventory instances (Player::DestroyItemCount fan-out used by
+// TakeQuestSourceItem, Player.cpp:16112).
+func (s *session) destroyQuestItemEntry(ctx context.Context, entry, count uint32) {
+	cdb := s.server.CharactersStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.item FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.itemEntry = ?
+		ORDER BY ci.bag, ci.slot`, s.playerGUID, entry)
+	if err != nil {
+		return
+	}
+	var guids []uint64
+	for rows.Next() {
+		var g uint64
+		if rows.Scan(&g) == nil {
+			guids = append(guids, g)
+		}
+	}
+	rows.Close()
+	for _, g := range guids {
+		if count == 0 {
+			break
+		}
+		var cur uint32
+		if err := cdb.QueryRowContext(ctx, "SELECT `count` FROM item_instance WHERE guid = ?", g).Scan(&cur); err != nil || cur == 0 {
+			continue
+		}
+		take := count
+		if cur < take {
+			take = cur
+		}
+		s.destroyItemInstanceCount(ctx, g, take)
+		count -= take
+	}
+}
+
+// destroyQuestStartItem mirrors the TYPEID_ITEM arm of
+// Player::AddQuestAndCheckCompletion (Player.cpp:15124-15149): accepting a
+// quest from an item destroys the start item unless it is required for the
+// quest (unique RequiredItemId) or it is the quest's own source item.
+func (s *session) destroyQuestStartItem(ctx context.Context, questID uint32, itemGUID uint64) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	itemLow := itemGUID & 0x0000FFFFFFFFFFFF
+	var instanceGUID uint64
+	var entry uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT guid, itemEntry FROM item_instance WHERE guid = ? OR guid = ?", itemLow, itemGUID).Scan(&instanceGUID, &entry); err != nil || entry == 0 {
+		return
+	}
+	var req [6]uint32
+	if err := wdb.QueryRowContext(ctx, `SELECT RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5, RequiredItemId6
+		FROM quest_template WHERE ID = ?`, questID).Scan(&req[0], &req[1], &req[2], &req[3], &req[4], &req[5]); err == nil {
+		for _, id := range req {
+			if id != 0 && id == entry {
+				var maxCount int64
+				if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(MaxCount, 0) FROM item_template WHERE entry = ?", entry).Scan(&maxCount); err == nil && maxCount > 0 {
+					return
+				}
+			}
+		}
+	}
+	var startItem int64
+	if err := wdb.QueryRowContext(ctx, "SELECT StartItem FROM quest_template WHERE ID = ?", questID).Scan(&startItem); err == nil && uint32(startItem) == entry {
+		return
+	}
+	s.destroyItemInstance(ctx, instanceGUID)
+}
+
+func (s *session) grantQuestStartItem(ctx context.Context, itemEntry, count uint32) {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return
@@ -397,10 +572,10 @@ func (s *session) grantQuestStartItem(ctx context.Context, itemEntry uint32) {
 	// StoreNewItem path — Item::Create seeds proto->Duration (Item.cpp:291)
 	// and AddItemDurations pushes SMSG_ITEM_TIME_UPDATE at once.
 	startDuration := s.server.itemTemplateDuration(ctx, itemEntry)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, ?, 0, 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID, startDuration)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, ?, 0, 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID, count, startDuration)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
-	s.adjustQuestItemCount(ctx, itemEntry, 1, true)
-	_ = s.sendItemCreate(nextGUID, itemEntry, 1, 0, freeSlot)
+	s.adjustQuestItemCount(ctx, itemEntry, count, true)
+	_ = s.sendItemCreate(nextGUID, itemEntry, count, 0, freeSlot)
 	if startDuration > 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(nextGUID|(uint64(0x4000)<<48), uint32(startDuration)), true)
 	}
@@ -435,13 +610,20 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 	}
+	// WorldSession::HandleQuestLogRemoveQuest (QuestHandler.cpp:428): the
+	// first Player::TakeQuestSourceItem call is a gate — an unequip failure
+	// rejects the abandon before anything is removed.
+	if !s.takeQuestSourceItem(ctx, questID, true) {
+		return true
+	}
 	// Player::AbandonQuest (Player.cpp:15578-15598): BIND_QUEST_ITEM copies
-	// of the required/source item lists are destroyed. The TakeQuestSourceItem
-	// gate and source-item destruction are vacuous in Go (Go never grants
-	// SrcItemId at accept); the handler's PvP re-arm is a provable no-op
-	// (C++ recomputes IsHostile while the quest is still in the quest log).
+	// of the required/source item lists are destroyed; the handler's PvP
+	// re-arm is a provable no-op (C++ recomputes IsHostile while the quest
+	// is still in the quest log).
 	// AchievementMgr::RemoveTimedAchievement (AchievementMgr.cpp:1487-1501):
 	// the abandoned quest's timed accept criteria lose their timers.
+	// QuestHandler.cpp:443 — the second TakeQuestSourceItem pass (idempotent).
+	s.takeQuestSourceItem(ctx, questID, true)
 	s.destroyQuestItems(ctx, questID)
 	s.removeTimedAchievements(timedTypeQuest, questID)
 	// Eluna PLAYER_EVENT_ON_QUEST_ABANDON (38): Eluna::OnQuestAbandon
