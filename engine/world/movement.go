@@ -1349,6 +1349,13 @@ func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// MovementHandler.cpp:613-620: the dead/in-combat gate runs BEFORE the
+	// packet is parsed — a response from a dead or fighting player is
+	// ignored WITHOUT clearing the pending summon, so the request stays
+	// pending and the player can answer again after combat ends.
+	if s.player.Health == 0 || (s.player.UnitFlags&unitFlagInCombat != 0) {
+		return true
+	}
 	if len(payload) < 9 {
 		s.clearSummonPending()
 		return true
@@ -1360,16 +1367,18 @@ func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool
 		s.clearSummonPending()
 		return true
 	}
-	if s.player.Health == 0 || (s.player.UnitFlags&unitFlagInCombat != 0) {
-		s.clearSummonPending()
-		return true
-	}
+	// Player::SummonIfPossible (Player.cpp:23835-23836): an expired request
+	// is silently ignored and the expire field is left as-is (already past),
+	// not reset — the request reads expired either way.
 	if !s.summonExpire.IsZero() && time.Now().After(s.summonExpire) {
-		s.clearSummonPending()
 		return true
 	}
 
 	s.finishTaxiFlight()
+	// Player::SummonIfPossible (Player.cpp:23843-23844): accepting drops the
+	// battleground flag. Battleground::EventPlayerDroppedFlag has no Go twin
+	// (flag-carrier state unimplemented); C++ notes the arm is reachable
+	// only when a GM summons a flag carrier.
 	summonLocSet := s.summonLocSet
 	summonMap, summonX, summonY, summonZ, summonO := s.summonMap, s.summonX, s.summonY, s.summonZ, s.summonO
 	s.clearSummonPending()
