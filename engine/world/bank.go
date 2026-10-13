@@ -76,13 +76,11 @@ func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool
 	}
 	// BankHandler.cpp:46-53 (HandleBankerActivateOpcode): the NPC must be
 	// interactable as a banker (UNIT_NPC_FLAG_BANKER), otherwise silent drop.
-	// The feign-death strip (HasUnitState(UNIT_STATE_DIED) ->
-	// RemoveAurasByType(SPELL_AURA_FEIGN_DEATH)) has no Go bridge — Go tracks
-	// no player unit states and models no feign-death aura type (standing
-	// Go-wide delta, same as the other NPC-activate handlers).
 	if !s.canInteractWithNPC(ctx, bankerGUID, uint64(unitNPCFlagBanker)) {
 		return true
 	}
+	// BankHandler.cpp:56-57 — activating the banker strips a faked death.
+	s.removeFakeDeath()
 
 	// SendShowBank (BankHandler.cpp:183-188) latches the banker GUID
 	// (m_currentBankerGUID) before sending SMSG_SHOW_BANK, which carries only

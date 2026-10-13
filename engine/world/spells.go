@@ -6025,6 +6025,17 @@ func (s *session) removeAurasByType(auraType uint32) {
 	}
 }
 
+// removeFakeDeath mirrors the feign-death strip repeated across the C++
+// handlers (AuctionHouseHandler.cpp:52-53, ItemHandler.cpp:398,
+// BankHandler.cpp:56-57): a player faking death — UNIT_STATE_DIED, which the
+// feign-death aura sets — drops the aura when using an NPC service. Go
+// models the state as the live aura itself (gossip.go:90).
+func (s *session) removeFakeDeath() {
+	if s.hasAuraType(spellAuraFeignDeath) {
+		s.removeAurasByType(spellAuraFeignDeath)
+	}
+}
+
 // clearSessionComboPoints mirrors Unit::ClearComboPoints
 // (Unit.cpp:10674-10687): the bank empties and the client is notified.
 func (s *session) clearSessionComboPoints() {

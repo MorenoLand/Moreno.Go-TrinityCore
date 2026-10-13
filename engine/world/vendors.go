@@ -317,6 +317,8 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagVendor)) {
 		return true
 	}
+	// ItemHandler.cpp:622-623 (SendListInventory) — listing a vendor's stock strips a faked death.
+	s.removeFakeDeath()
 	creatureEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
 	// ObjectMgr::LoadVendors (ObjectMgr.cpp:9404): rows load in slot order with
 	// reference rows (negative item) expanded inline; rows without an item
@@ -1067,6 +1069,8 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellToThisMerchant)
 		return true
 	}
+	// ItemHandler.cpp:397-399 — selling strips a faked death, after the merchant gate.
+	s.removeFakeDeath()
 	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
 	if itemGUID == 0 {
 		itemGUID = int64(rawItemGUID)
@@ -1215,6 +1219,8 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		s.sendSellError(0, 0, sellErrCantFindVendor)
 		return true
 	}
+	// ItemHandler.cpp:506-508 — buying back strips a faked death.
+	s.removeFakeDeath()
 	slot, err := r.ReadU32()
 	if err != nil {
 		return false

@@ -199,6 +199,8 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
+	// AuctionHouseHandler.cpp:52-53 — interacting with the auctioneer strips a faked death.
+	s.removeFakeDeath()
 	// C++ WorldSession::SendAuctionHello (AuctionHouseHandler.cpp:57-66): the
 	// level gate and packet layout live in sendAuctionHelloPacket; the
 	// gossip select arm and the gossip-hello auctioneer fallthrough route
@@ -219,6 +221,8 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
+	// AuctionHouseHandler.cpp:781-782 — remove fake death after the interact check.
+	s.removeFakeDeath()
 	listFrom, _ := reader.ReadU32()
 	searchedName, _ := reader.ReadCString()
 
@@ -475,6 +479,8 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	default:
 		return true
 	}
+	// AuctionHouseHandler.cpp:189-190 — the strip runs after the duration gate.
+	s.removeFakeDeath()
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -657,6 +663,8 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
+	// AuctionHouseHandler.cpp:448-449 — remove fake death.
+	s.removeFakeDeath()
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -880,6 +888,8 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
+	// AuctionHouseHandler.cpp:726-727 — remove fake death.
+	s.removeFakeDeath()
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -950,6 +960,8 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 		if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 			return true
 		}
+		// AuctionHouseHandler.cpp:677-678 — remove fake death.
+		s.removeFakeDeath()
 		for i := uint32(0); i < outbiddedCount; i++ {
 			id, err := r.ReadU32()
 			if err == nil && id > 0 {
@@ -1009,6 +1021,8 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
+	// AuctionHouseHandler.cpp:593-594 — remove fake death.
+	s.removeFakeDeath()
 	auctionID, err := reader.ReadU32()
 	if err != nil {
 		return false
