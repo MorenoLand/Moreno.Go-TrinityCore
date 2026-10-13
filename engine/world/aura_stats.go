@@ -214,8 +214,30 @@ func spellHasHealthPowerAura(spell wotlk.Spell) bool {
 	return false
 }
 
-// auraHealthPowerHalves captures the per-spell current-health/power halves of
-// the triggering health/power aura (SpellAuraEffects.cpp:3650-3768):
+// spellHasPetAttackPowerAura reports whether the spell carries an aura that
+// feeds the pet's attack-power composition: SPELL_AURA_MOD_ATTACK_POWER (99)
+// and SPELL_AURA_MOD_ATTACK_POWER_PCT (166) fold into UNIT_MOD_ATTACK_POWER
+// via HandleStatFlatModifier/SetStatPctModifier -> Unit::UpdateUnitMod ->
+// UpdateAttackPowerAndDamage (Unit.cpp:9336-9337), and a strength-targeting
+// 29/137 aura runs Guardian::UpdateStats(STAT_STRENGTH) ->
+// UpdateAttackPowerAndDamage (StatSystem.cpp:1274). All three rewrite
+// UNIT_FIELD_ATTACK_POWER/_MODS/_MULTIPLIER on the pet on apply and remove;
+// other stats never touch the AP composition (the strength owner-bonus arm
+// is commented out in C++, StatSystem.cpp:1228).
+func spellHasPetAttackPowerAura(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		switch eff.Aura {
+		case spellAuraModAttackPower, spellAuraAttackPowerPercent:
+			return true
+		case spellAuraModStat, spellAuraModTotalStatPct:
+			if eff.MiscValue == 0 || eff.MiscValue == -1 { // STAT_STRENGTH, or all stats
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // 34/230/250 heal/drop current health by the flat amount (:3650-3665),
 // 133 re-anchors current health to the pre-change health pct on apply and
 // remove alike (:3729-3754), 282 adjusts no current health (:3757-3768),

@@ -1116,6 +1116,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	petKey := creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: petGUID}
 	loaded := make([]*activeAura, 0)
 	var statAuraSpellID uint32
+	var apAuraSpellID uint32
 	offlineMs := int64(0)
 	var petSaveTime int64
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(savetime, 0) FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petID).Scan(&petSaveTime)
@@ -1230,6 +1231,9 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if spellHasStatModAura(spell) {
 			statAuraSpellID = uint32(spellID)
 		}
+		if spellHasPetAttackPowerAura(spell) {
+			apAuraSpellID = uint32(spellID)
+		}
 	}
 	s.server.auraMu.Unlock()
 	if len(loaded) == 0 {
@@ -1242,6 +1246,13 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	// maxima — the summon broadcast above went out aura-free.
 	if statAuraSpellID != 0 {
 		s.server.recomputePetDerivedOnStatAuraChange(petKey, statAuraSpellID, true, nil)
+	}
+	// Guardian::UpdateAttackPowerAndDamage on the same load
+	// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): a restored strength, 99
+	// or 166 aura recomputes the pet's AP unit fields — the summon
+	// broadcast above went out aura-free.
+	if apAuraSpellID != 0 {
+		s.server.recomputePetAttackPowerOnAuraChange(petKey, apAuraSpellID)
 	}
 	records := make([]protocol.AuraUpdateRecord, 0, len(loaded))
 	for _, aura := range loaded {

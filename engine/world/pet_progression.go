@@ -343,6 +343,46 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, petGUID, fields)
 }
 
+// recomputePetAttackPowerOnAuraChange mirrors the
+// Guardian::UpdateAttackPowerAndDamage field-rewrite arms that C++ runs when
+// a pet's own attack-power-feeding aura applies or is removed
+// (StatSystem.cpp:1468-1476): UNIT_FIELD_ATTACK_POWER / _MODS /
+// _MULTIPLIER update on every strength aura (29/137 via
+// Guardian::UpdateStats(STAT_STRENGTH), StatSystem.cpp:1274) and on every
+// 99/166 aura (via Unit::UpdateUnitMod(UNIT_MOD_ATTACK_POWER),
+// Unit.cpp:9336-9337). Previously Go rewrote these fields only at summon and
+// level-up, so a Blessing of Might-type aura landing on a pet never moved
+// its advertised attack power. The composition reads live state
+// (petGuardianAttackPower folds the pet's current auras and the owner's live
+// AP), matching the C++ recompute-at-apply/remove semantics — on remove the
+// aura is already erased, so the folds read the post-remove state like the
+// C++ remove leg. With no live owner session the fields are left alone —
+// C++ has no offline-owner concept (the pet is dismissed with the owner).
+// Callers must not hold auraMu or motionMu.
+func (s *Server) recomputePetAttackPowerOnAuraChange(key creatureAuraKey, spellID uint32) {
+	if s == nil || s.Data == nil || key.GUID == 0 || spellID == 0 {
+		return
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found || !spellHasPetAttackPowerAura(spell) {
+		return
+	}
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if motion == nil || !motionIsPet(motion) {
+		return
+	}
+	owner := s.playerSessionForGUID(motion.OwnerGUID)
+	if owner == nil || owner.player == nil {
+		return
+	}
+	_, apBase, apFlat, apMult := s.petGuardianAttackPower(owner, motion)
+	s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{
+		unitFieldAttackPower:           uint32(int32(apBase)),
+		unitFieldAttackPowerMods:       uint32(apFlat),
+		unitFieldAttackPowerMultiplier: math.Float32bits(float32(apMult)),
+	})
+}
+
 // getPetStatsWithAuraFeed wraps getPetStats with the live stamina/intellect
 // aura-feed arms of Guardian::UpdateMaxHealth / UpdateMaxPower
 // (StatSystem.cpp:1336-1379): the (GetStat - createStat) * multiplicator legs

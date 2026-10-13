@@ -24411,6 +24411,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// 29/137 effects and on motionIsPet.
 	if s.server != nil {
 		s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID, true, nil)
+		// Guardian::UpdateAttackPowerAndDamage on the same apply
+		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): a strength, 99 or 166
+		// aura landing on a pet rewrites its AP unit fields.
+		s.server.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
 	}
 	// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a fresh
 	// MOD_TAUNT aura on a creature registers its caster's taunt state
@@ -28829,6 +28833,10 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 	// non-nil exactly when an aura was actually removed.
 	if finalTick != nil {
 		s.server.recomputePetDerivedOnStatAuraChange(key, spellID, false, removedHealthPowerAura)
+		// Guardian::UpdateAttackPowerAndDamage on the same remove
+		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): dropping a strength,
+		// 99 or 166 aura rewrites the pet's AP unit fields.
+		s.server.recomputePetAttackPowerOnAuraChange(key, spellID)
 	}
 }
 
@@ -29040,6 +29048,10 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		// UNIT_FIELD_STAT0+stat fields and the stamina/intellect-fed maxima.
 		// The trigger gates on the spell's 29/137 effects and on motionIsPet.
 		s.recomputePetDerivedOnStatAuraChange(key, spellID, false, removedHealthPowerAura)
+		// Guardian::UpdateAttackPowerAndDamage on the same remove
+		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): dropping a strength,
+		// 99 or 166 aura rewrites the pet's AP unit fields.
+		s.recomputePetAttackPowerOnAuraChange(key, spellID)
 	}
 }
 

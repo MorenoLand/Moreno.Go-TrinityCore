@@ -3369,6 +3369,10 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// path runs the same stat-aura recompute as the player-cast path —
 	// the trigger gates on the spell's 29/137 effects and on motionIsPet.
 	s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID, true, nil)
+	// Guardian::UpdateAttackPowerAndDamage on the same apply
+	// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): a strength, 99 or 166
+	// aura landing on a pet rewrites its AP unit fields.
+	s.server.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
 	wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 	packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, aura.StoredCasterLevel, 1, aura.EffectMask)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
