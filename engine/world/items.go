@@ -4416,6 +4416,58 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// durabilityRepairCost computes the copper cost of restoring `lost` durability
+// points on item `entry`, discounted by `discountMod`.
+// Player::DurabilityRepair (Player.cpp:5024-5066):
+//
+//	dmultiplier = DurabilityCosts[ItemLevel].WeaponSubClassCost[SubClass] (weapons)
+//	            | DurabilityCosts[ItemLevel].ArmorSubClassCost[SubClass]  (armor)
+//	            | 0 (anything else)
+//	costs = uint32(lost * dmultiplier * double(DurabilityQuality[(Quality+1)*2].Data))
+//	costs = uint32(costs * discountMod * sWorld->getRate(RATE_REPAIRCOST))
+//	if (costs == 0) costs = 1            // ITEM_QUALITY_ARTIFACT floor
+//
+// When the DBC rows are absent (missing DurabilityCosts.dbc /
+// DurabilityQuality.dbc or no row for the item level), Go keeps the legacy
+// 10-copper-per-point heuristic so repairs keep working (documented delta);
+// C++ instead logs an error and refuses the repair.
+func (s *session) durabilityRepairCost(ctx context.Context, entry, lost uint32, discountMod float64) uint32 {
+	rate := 1.0
+	if s != nil && s.server != nil {
+		rate = s.server.Config.RateRepairCost
+	}
+	if s != nil && s.server != nil && s.server.Data != nil &&
+		s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var class, subClass, itemLevel, quality uint32
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+			`SELECT COALESCE(Class, 0), COALESCE(SubClass, 0), COALESCE(ItemLevel, 0), COALESCE(Quality, 0)
+			 FROM item_template WHERE entry = ?`, entry).Scan(&class, &subClass, &itemLevel, &quality); err == nil {
+			if dcost, found, derr := s.server.Data.DurabilityCosts(itemLevel); derr == nil && found {
+				if qdata, qfound, qerr := s.server.Data.DurabilityQuality((quality + 1) * 2); qerr == nil && qfound {
+					var dmultiplier uint32
+					switch class {
+					case itemClassWeapon: // ITEM_CLASS_WEAPON
+						if subClass < 21 {
+							dmultiplier = dcost.WeaponSubClassCost[subClass]
+						}
+					case itemClassArmor: // ITEM_CLASS_ARMOR
+						if subClass < 8 {
+							dmultiplier = dcost.ArmorSubClassCost[subClass]
+						}
+					}
+					costs := uint32(float64(lost*dmultiplier) * float64(qdata))
+					costs = uint32(float64(costs) * discountMod * rate)
+					if costs == 0 {
+						costs = 1
+					}
+					return costs
+				}
+			}
+		}
+	}
+	return uint32(math.Ceil(float64(lost) * 10 * discountMod))
+}
+
 // handleRepairItem processes CMSG_REPAIR_ITEM (0x1F8 / 0x2A8).
 // Reference: WorldSession::HandleRepairItemOpcode (NPCHandler.cpp:717).
 func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
@@ -4469,16 +4521,20 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			WHERE ci.guid = ? AND (ci.item = ? OR ii.guid = ?) LIMIT 1`,
 			s.playerGUID, rawGUID, rawGUID).Scan(&itemEntry, &durability)
 		if err != nil {
-			err = cdb.QueryRowContext(ctx, "SELECT itemEntry, durability FROM item_instance WHERE guid = ?", rawGUID).Scan(&itemEntry, &durability)
+			// C++ GetItemByGuid (used by HandleRepairItemOpcode) only resolves
+			// the player's own items, so the fallback still requires an
+			// inventory row owned by this player — never any item_instance row.
+			err = cdb.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.durability
+				FROM item_instance AS ii
+				JOIN character_inventory AS ci ON ci.item = ii.guid
+				WHERE ii.guid = ? AND ci.guid = ? LIMIT 1`, rawGUID, s.playerGUID).Scan(&itemEntry, &durability)
 			if err != nil {
 				return true
 			}
 		}
 		maxDurability := getMaxDurability(itemEntry)
 		if maxDurability > durability {
-			// Player::DurabilityRepair (Player.cpp:5084-5134): the final cost
-			// is ceiled after the discount multiplier is applied.
-			cost := uint32(math.Ceil(float64(maxDurability-durability) * 10 * discountMod))
+			cost := s.durabilityRepairCost(ctx, itemEntry, maxDurability-durability, discountMod)
 			repaired := false
 			if guildBank != 0 {
 				// Player::DurabilityRepair (Player.cpp:5084): guild-bank
@@ -4510,11 +4566,22 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			curD  uint32
 		}
 		var rawItems []rawItem
+		// Player::DurabilityRepairAll (Player.cpp:4996-5007): only equipped,
+		// backpack, and carried-bag-interior items are repaired — "bank,
+		// buyback and keys not repaired". bag = 0 AND slot < 39 covers equipped
+		// (0..18), the bag slots themselves (19..22, no durability), and the
+		// backpack (23..38); the subselect covers interiors of the carried bags
+		// (bag slots 19..22). Bank slots (39..66), bank-bag interiors, and the
+		// keyring are excluded.
 		rows, err := cdb.QueryContext(ctx,
 			`SELECT ii.guid, ii.itemEntry, ii.durability
 			 FROM character_inventory AS ci
 			 JOIN item_instance AS ii ON ii.guid = ci.item
-			 WHERE ci.guid = ?`, s.playerGUID)
+			 WHERE ci.guid = ?
+			   AND ((ci.bag = 0 AND ci.slot < ?)
+			        OR ci.bag IN (SELECT item FROM character_inventory
+			                      WHERE guid = ? AND bag = 0 AND slot >= ? AND slot < ?))`,
+			s.playerGUID, invSlotItemEnd, s.playerGUID, invSlotBagStart, invSlotBagEnd)
 		if err == nil {
 			for rows.Next() {
 				var it rawItem
@@ -4529,7 +4596,7 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			for _, it := range rawItems {
 				maxD := getMaxDurability(it.entry)
 				if maxD > it.curD {
-					cost := uint32(math.Ceil(float64(maxD-it.curD) * 10 * discountMod))
+					cost := s.durabilityRepairCost(ctx, it.entry, maxD-it.curD, discountMod)
 					totalCost += cost
 					toRepair = append(toRepair, repairItem{guid: it.guid, cost: cost, maxD: maxD})
 				}

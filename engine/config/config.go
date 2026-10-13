@@ -75,6 +75,7 @@ type Config struct {
 	PlayerSaveStatsSaveOnlyOnLogout         bool
 	FocusRate                               float64
 	RateHonor                               float64
+	RateRepairCost                          float64
 	GMFreezeAuraDuration                    uint32
 	EnableMmaps                             bool
 	MaxGroupXPDistance                      float64
@@ -292,6 +293,7 @@ func Default() Config {
 	c.RestInGameRate = 1
 	c.FocusRate = 1
 	c.RateHonor = 1
+	c.RateRepairCost = 1
 	c.GMFreezeAuraDuration = 0
 	c.EnableMmaps = true
 	c.MaxGroupXPDistance = 74
@@ -479,6 +481,7 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_WILDERNESS"] = "Rate.Rest.Offline.InWilderness"
 	values["MORENOCORE_RATE_FOCUS"] = "Rate.Focus"
 	values["MORENOCORE_RATE_HONOR"] = "Rate.Honor"
+	values["MORENOCORE_RATE_REPAIRCOST"] = "Rate.RepairCost"
 	values["MORENOCORE_GM_FREEZE_AURA_DURATION"] = "GM.FreezeAuraDuration"
 	values["MORENOCORE_ENABLE_MMAPS"] = "EnableMmaps"
 	values["MORENOCORE_MAX_GROUP_XP_DISTANCE"] = "MaxGroupXPDistance"
@@ -917,6 +920,15 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.FocusRate, key, value)
 	case "Rate.Honor":
 		return setFloat64(&c.RateHonor, key, value)
+	case "Rate.RepairCost":
+		// World.cpp:555-558: Rate.RepairCost must be >= 0; negatives become 0.
+		if err := setFloat64(&c.RateRepairCost, key, value); err != nil {
+			return err
+		}
+		if c.RateRepairCost < 0 {
+			c.RateRepairCost = 0
+		}
+		return nil
 	case "GM.FreezeAuraDuration":
 		return setUint32(&c.GMFreezeAuraDuration, key, value)
 	case "EnableMmaps":
