@@ -2730,6 +2730,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if !isPlayerVictim && s.isTotemGUID(target.GUID) {
 				canDodge = false
 			}
+			// Unit::RollMeleeOutcomeAgainst's casting/cc'd victim arm
+			// (Unit.cpp:2238-2242): a victim that is casting or controlled
+			// (confused/stunned/fleeing) cannot dodge/parry/block. Player
+			// victims bridge the cast half via genericCastInProgress, creature
+			// victims via motion.CastingUntil; the CONTROLLED half bridges via
+			// the 5/7/12 aura twin (victimIsControlled).
+			if isPlayerVictim && target.Sess != nil && (target.Sess.genericCastInProgress() || victimIsControlled(s, true, target.Sess, combatTarget{})) {
+				canDodge = false
+				canParry = false
+				canBlock = false
+			} else if !isPlayerVictim {
+				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && (time.Now().Before(vm.CastingUntil) || victimIsControlled(s, false, nil, combatTarget{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID})) {
+					canDodge = false
+					canParry = false
+					canBlock = false
+				}
+			}
 			// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
 			// a non-standing player victim always takes a crit when the attacker
 			// has nonzero crit chance.

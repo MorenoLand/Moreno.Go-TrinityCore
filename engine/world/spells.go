@@ -18977,6 +18977,34 @@ func (s *session) spellReflectReturnStatus(spell wotlk.Spell) uint8 {
 // MISS > DEFLECT for ranged spells. WorldObject::SpellHitResult
 // spellTakenBlockAmount mirrors the block arm of Unit::CalculateSpellDamageTaken
 // (Unit.cpp:1013-1062) with Unit::isSpellBlocked (Unit.cpp:2412-2430): for
+// victimIsControlled bridges the UNIT_STATE_CONTROLLED half of C++'s
+// "casting or cc'd" avoidance gates (Unit.cpp:2238, 2418, 2510). Unit.h:251
+// defines UNIT_STATE_CONTROLLED = UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED
+// | UNIT_STATE_FLEEING; in C++ those states are set via SetControlled from
+// the MOD_CONFUSE (5) / MOD_FEAR (7) / MOD_STUN (12) aura handlers, so the
+// Go twin reads the victim's unstopped auras of those three types (player
+// auras via hasAuraType, creature auras via activeCreatureAuras).
+func victimIsControlled(srv *Server, isPlayerVictim bool, vicSess *session, target combatTarget) bool {
+	if isPlayerVictim {
+		return vicSess != nil && (vicSess.hasAuraType(spellAuraModConfuse) || vicSess.hasAuraType(spellAuraModFear) || vicSess.hasAuraType(spellAuraModStun))
+	}
+	if srv == nil {
+		return false
+	}
+	key := creatureAuraKeyForTarget(target)
+	srv.auraMu.Lock()
+	defer srv.auraMu.Unlock()
+	for _, aura := range srv.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.AuraType == spellAuraModConfuse || aura.AuraType == spellAuraModFear || aura.AuraType == spellAuraModStun {
+			return true
+		}
+	}
+	return false
+}
+
 // SPELL_DAMAGE_CLASS_MELEE/RANGED physical-school spells that are NOT
 // ATTR3_BLOCKABLE_SPELL (blockables resolve at hit-roll time in
 // Unit::MeleeSpellHitResult, which Go's meleeSpellHitResult covers), the
@@ -18989,10 +19017,12 @@ func (s *session) spellReflectReturnStatus(spell wotlk.Spell) uint8 {
 // (Unit.cpp:2804-2807). The blocked amount is
 // the victim's shield block value — doubled on a block-critical (victim aura
 // 253, Unit::isBlockCritical Unit.cpp:2432-2437) — clamped to the damage
-// (fullBlock). Gaps: creature shield-block strength (STR/20) has
-// no combatTarget model, so creatures block level/2 only; the
-// UNIT_STATE_CONTROLLED gate has no Go unit-state model; the mid-cast gate
-// applies to player victims only (no creature cast-bar model).
+// (fullBlock). A victim mid cast-bar or CC'd (confused/stunned/fleeing)
+// cannot block (Unit.cpp:2417-2420); the cast half bridges via
+// genericCastInProgress / motion.CastingUntil and the CONTROLLED half via
+// the 5/7/12 aura twin (victimIsControlled). Gaps: creature shield-block
+// strength (STR/20) has no combatTarget model, so creatures block level/2
+// only.
 func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool, vicSess *session, spell wotlk.Spell, damage uint32) (uint32, bool) {
 	if s == nil || s.player == nil {
 		return 0, false
@@ -19033,18 +19063,22 @@ func (srv *Server) spellTakenBlockAmountFrom(target combatTarget, isPlayerVictim
 		if !vicSess.player.CanBlock || vicSess.player.Block <= 0 {
 			return 0, false
 		}
-		// IsNonMeleeSpellCast(false): a victim mid cast-bar cannot block
-		// (Unit.cpp:2418 — the CONTROLLED half has no Go model).
-		if vicSess.genericCastInProgress() {
+		// IsNonMeleeSpellCast(false) || HasUnitState(UNIT_STATE_CONTROLLED):
+		// a victim mid cast-bar or CC'd (confused/stunned/fleeing) cannot
+		// block (Unit.cpp:2417-2420).
+		if vicSess.genericCastInProgress() || victimIsControlled(srv, true, vicSess, target) {
 			return 0, false
 		}
 	}
-	// IsNonMeleeSpellCast(false) for creature victims (Unit.cpp:2418):
-	// motion.CastingUntil bridges the UNIT_STATE_CASTING window (cast
-	// time + channel); the CONTROLLED half stays unmodeled, as on the
-	// player path.
+	// IsNonMeleeSpellCast(false) || HasUnitState(UNIT_STATE_CONTROLLED) for
+	// creature victims (Unit.cpp:2417-2420): motion.CastingUntil bridges the
+	// UNIT_STATE_CASTING window (cast time + channel); the CONTROLLED half
+	// bridges via the 5/7/12 aura twin (victimIsControlled).
 	if !isPlayerVictim && srv != nil {
 		if tm := srv.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && time.Now().Before(tm.CastingUntil) {
+			return 0, false
+		}
+		if victimIsControlled(srv, false, nil, target) {
 			return 0, false
 		}
 	}
@@ -19202,9 +19236,21 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 
 	// A victim that is casting or CC'd cannot avoid (Unit.cpp:2510-2515).
 	// The cast-bar half bridges via genericCastInProgress (the
-	// IsNonMeleeSpellCast(false) analog); the UNIT_STATE_CONTROLLED half and
-	// creature-victim cast state have no Go model and stay unbridged.
-	if isPlayerVictim && targetSess != nil && targetSess.genericCastInProgress() {
+	// IsNonMeleeSpellCast(false) analog) for player victims and
+	// motion.CastingUntil for creature victims; the UNIT_STATE_CONTROLLED
+	// half bridges via the 5/7/12 aura twin (victimIsControlled).
+	noAvoid := false
+	if isPlayerVictim && targetSess != nil {
+		noAvoid = targetSess.genericCastInProgress() || victimIsControlled(s.server, true, targetSess, combatTarget{})
+	} else if !isPlayerVictim && s.server != nil {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			if tm := s.server.findCreatureMotion(tgt.Map, tgt.InstanceID, tgt.GUID); tm != nil && time.Now().Before(tm.CastingUntil) {
+				noAvoid = true
+			}
+			noAvoid = noAvoid || victimIsControlled(s.server, false, nil, tgt)
+		}
+	}
+	if noAvoid {
 		canDodge = false
 		canParry = false
 		canBlock = false

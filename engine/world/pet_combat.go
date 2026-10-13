@@ -888,7 +888,22 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			canBlock = false
 			canDodge = false
 		}
-		if targetSess.genericCastInProgress() {
+		if targetSess.genericCastInProgress() || victimIsControlled(s, true, targetSess, combatTarget{}) {
+			// Unit::RollMeleeOutcomeAgainst's casting/cc'd victim arm
+			// (Unit.cpp:2238-2242): a victim mid cast-bar or controlled
+			// (confused/stunned/fleeing — the 5/7/12 aura twin) cannot
+			// parry/block/dodge.
+			canParry = false
+			canBlock = false
+			canDodge = false
+		}
+	}
+	// Unit::RollMeleeOutcomeAgainst's casting/cc'd victim arm
+	// (Unit.cpp:2238-2242) for creature victims: the cast half bridges via
+	// motion.CastingUntil, the CONTROLLED half via the 5/7/12 aura twin
+	// (victimIsControlled).
+	if !isTargetPlayer {
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil && (time.Now().Before(vm.CastingUntil) || victimIsControlled(s, false, nil, combatTarget{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID})) {
 			canParry = false
 			canBlock = false
 			canDodge = false

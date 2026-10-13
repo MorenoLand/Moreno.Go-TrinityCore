@@ -871,15 +871,24 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		canDodge = false
 	}
 
-	// A victim mid cast-bar cast cannot dodge/parry/block (Unit.cpp:2219-2224:
-	// victim->IsNonMeleeSpellCast(false); genericCastInProgress is the Go
-	// analog — channeled/autorepeat casts are skipped by construction there.
-	// The UNIT_STATE_CONTROLLED half has no Go unit-state model, stays
-	// unbridged; creature victims have no Go cast model, stays unbridged).
-	if isPlayerVictim && vicSess != nil && vicSess.genericCastInProgress() {
+	// A victim mid cast-bar cast or CC'd (confused/stunned/fleeing) cannot
+	// dodge/parry/block (Unit.cpp:2238-2242:
+	// victim->IsNonMeleeSpellCast(false) || victim->HasUnitState(UNIT_STATE_CONTROLLED);
+	// genericCastInProgress is the Go analog of the cast half — channeled/
+	// autorepeat casts are skipped by construction there — and the
+	// CONTROLLED half bridges via the 5/7/12 aura twin (victimIsControlled).
+	// Creature victims bridge the cast half via motion.CastingUntil.
+	if isPlayerVictim && vicSess != nil && (vicSess.genericCastInProgress() || victimIsControlled(s.server, true, vicSess, target)) {
 		canDodge = false
 		canParry = false
 		canBlock = false
+	}
+	if !isPlayerVictim && s.server != nil {
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && (time.Now().Before(tm.CastingUntil) || victimIsControlled(s.server, false, nil, target)) {
+			canDodge = false
+			canParry = false
+			canBlock = false
+		}
 	}
 
 	if s.player.Level > 0 {
@@ -1609,6 +1618,23 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	if !attackerInFront && !ignoreHitDirection {
 		canBlock = false
 		if isPlayerVictim {
+			canDodge = false
+		}
+	}
+	// Unit::RollMeleeOutcomeAgainst's casting/cc'd victim arm
+	// (Unit.cpp:2238-2242) applies to ranged attacks too: a victim that is
+	// casting or controlled (confused/stunned/fleeing) cannot dodge/block.
+	// Player victims bridge the cast half via genericCastInProgress and the
+	// CONTROLLED half via the 5/7/12 aura twin; creature victims bridge the
+	// cast half via motion.CastingUntil.
+	if isPlayerVictim && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && (vicSess.genericCastInProgress() || victimIsControlled(s.server, true, vicSess, target)) {
+			canBlock = false
+			canDodge = false
+		}
+	} else if s.server != nil {
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && (time.Now().Before(tm.CastingUntil) || victimIsControlled(s.server, false, nil, target)) {
+			canBlock = false
 			canDodge = false
 		}
 	}
