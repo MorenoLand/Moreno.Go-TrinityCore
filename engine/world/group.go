@@ -2478,8 +2478,12 @@ const (
 	memberStatusDead    uint16 = 0x0004
 	memberStatusGhost   uint16 = 0x0008
 	memberStatusPvPFFA  uint16 = 0x0010
-	memberStatusAFK     uint16 = 0x0020
-	memberStatusDND     uint16 = 0x0040
+	// Group.h:59-67 — 0x0020 is MEMBER_STATUS_UNK3 (Lua map-position
+	// calls), not AFK; MEMBER_STATUS_AFK = 0x0040, MEMBER_STATUS_DND =
+	// 0x0080. The old values showed DND players as AFK and sent a
+	// meaningless bit for AFK players on SMSG_PARTY_MEMBER_STATS_FULL.
+	memberStatusAFK uint16 = 0x0040
+	memberStatusDND uint16 = 0x0080
 )
 
 type groupAuraEntry = protocol.PartyMemberAura
