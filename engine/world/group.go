@@ -40,6 +40,7 @@ type groupState struct {
 	IsRaid        bool
 	IsLFG         bool
 	LFGDungeonID  uint32
+	LFGKicksLeft  uint8     // LfgGroupData::m_KicksLeft (LFGGroupData.h:28); reset to LFG_GROUP_MAX_KICKS on new LFG groups
 	TargetIcons   [8]uint64 // raid target icons, index=icon, value=target GUID
 	counter       uint32
 	// MaxEnchantingLevel mirrors Group::m_maxEnchantingLevel: the highest
@@ -271,6 +272,11 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 		reserveGroupID(uint64(runtimeID))
 	}
 	g := &groupState{ID: uint64(runtimeID), DBID: uint32(dbGroupID), LFGState: uint8(lfgState), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), GroupType: uint8(groupType), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0, LFGDungeonID: uint32(lfgDungeonID)}
+	if g.IsLFG {
+		// C++ GroupsStore is in-memory only; a reloaded LFG group starts
+		// with a fresh kick budget (LFGGroupData ctor: LFG_GROUP_MAX_KICKS).
+		g.LFGKicksLeft = lfgGroupMaxKicks
+	}
 	for index, icon := range icons {
 		g.TargetIcons[index] = uint64(icon)
 	}
@@ -325,18 +331,24 @@ const (
 
 // PartyResult enum, mirrors TrinityCore's PartyResult (SharedDefines.h:3739).
 const (
-	errPartyResultOK        uint32 = 0
-	errBadPlayerNameS       uint32 = 1
-	errTargetNotInGroup     uint32 = 2
-	errTargetNotInInstanceS uint32 = 3
-	errGroupFull            uint32 = 4
-	errAlreadyInGroupS      uint32 = 5
-	errNotInGroup           uint32 = 6
-	errNotLeader            uint32 = 7
-	errPlayerWrongFaction   uint32 = 8
-	errIgnoringYouS         uint32 = 9
-	errLfgPending           uint32 = 12
-	errInviteRestricted     uint32 = 13
+	errPartyResultOK               uint32 = 0
+	errBadPlayerNameS              uint32 = 1
+	errTargetNotInGroup            uint32 = 2
+	errTargetNotInInstanceS        uint32 = 3
+	errGroupFull                   uint32 = 4
+	errAlreadyInGroupS             uint32 = 5
+	errNotInGroup                  uint32 = 6
+	errNotLeader                   uint32 = 7
+	errPlayerWrongFaction          uint32 = 8
+	errIgnoringYouS                uint32 = 9
+	errLfgPending                  uint32 = 12
+	errInviteRestricted            uint32 = 13
+	errPartyLFGBootLimit           uint32 = 20 // ERR_PARTY_LFG_BOOT_LIMIT
+	errPartyLFGBootInProgress      uint32 = 22 // ERR_PARTY_LFG_BOOT_IN_PROGRESS
+	errPartyLFGBootTooFewPlayers   uint32 = 23 // ERR_PARTY_LFG_BOOT_TOO_FEW_PLAYERS
+	errPartyLFGBootInCombat        uint32 = 26 // ERR_PARTY_LFG_BOOT_IN_COMBAT
+	errPartyLFGBootDungeonComplete uint32 = 28 // ERR_PARTY_LFG_BOOT_DUNGEON_COMPLETE
+	errPartyLFGBootLootRolls       uint32 = 29 // ERR_PARTY_LFG_BOOT_LOOT_ROLLS
 )
 
 // MaxGroupSize (5-man). Raids can have up to 40.
@@ -1097,6 +1109,23 @@ func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 	}
 
 	g := s.server.findGroupByID(s.groupID)
+	if g != nil && g.IsLFG {
+		// LFG groups: any member may open a kick vote — the LFG gates of
+		// Player::CanUninviteFromGroup (Player.cpp:24426-24452) replace the
+		// leader/battleground checks, and a passed gate starts a boot vote
+		// (Group::RemoveMember returns early for LFG+KICK, Group.cpp:588)
+		// instead of removing the member. The by-name path carries no
+		// reason (GroupHandler.cpp:352-360).
+		if res := s.canStartLFGBootVote(g); res != errPartyResultOK {
+			return s.sendPartyResult(partyOpUninvite, "", res)
+		}
+		target := s.server.findSessionByName(name)
+		if target == nil || !lfgBootTargetInGroup(g, target.playerGUID) {
+			return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
+		}
+		s.server.initLFGBoot(g, s.playerGUID, target.playerGUID, "")
+		return true
+	}
 	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
 	}
@@ -1133,6 +1162,9 @@ func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) boo
 	if err != nil || guid == s.playerGUID {
 		return false
 	}
+	// CMSG_GROUP_UNINVITE_GUID carries the kick reason after the guid
+	// (GroupHandler.cpp:297); it rides into the boot proposal packet.
+	reason, _ := r.ReadCString()
 	// Player::CanUninviteFromGroup (Player.cpp:24422-24424): no group
 	// answers (PARTY_OP_UNINVITE, ERR_NOT_IN_GROUP).
 	if s.groupID == 0 {
@@ -1140,6 +1172,21 @@ func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) boo
 	}
 
 	g := s.server.findGroupByID(s.groupID)
+	if g != nil && g.IsLFG {
+		// LFG groups: any member may open a kick vote — the LFG gates of
+		// Player::CanUninviteFromGroup (Player.cpp:24426-24452) replace the
+		// leader/battleground checks, and a passed gate starts a boot vote
+		// (Group::RemoveMember returns early for LFG+KICK, Group.cpp:588)
+		// instead of removing the member.
+		if res := s.canStartLFGBootVote(g); res != errPartyResultOK {
+			return s.sendPartyResult(partyOpUninvite, "", res)
+		}
+		if !lfgBootTargetInGroup(g, guid) {
+			return s.sendPartyResult(partyOpUninvite, "", errTargetNotInGroup)
+		}
+		s.server.initLFGBoot(g, s.playerGUID, guid, reason)
+		return true
+	}
 	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
 	}

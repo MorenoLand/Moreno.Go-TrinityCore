@@ -47,6 +47,7 @@ const (
 	groupRemoveMethodDefault = 0
 	groupRemoveMethodKick    = 1
 	groupRemoveMethodLeave   = 2
+	groupRemoveMethodKickLFG = 3 // GROUP_REMOVEMETHOD_KICK_LFG (SharedDefines.h:3643)
 )
 
 // triggerGroupEvent dispatches an Eluna GROUP_EVENT_* hook

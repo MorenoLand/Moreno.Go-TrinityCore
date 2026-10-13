@@ -101,7 +101,9 @@ const (
 	lfgSpellDungeonCooldown = 71328 // LFG_SPELL_DUNGEON_COOLDOWN
 	lfgSpellDungeonDeserter = 71041 // LFG_SPELL_DUNGEON_DESERTER
 	lfgSpellLuckOfTheDraw   = 72221 // LFG_SPELL_LUCK_OF_THE_DRAW
-	lfgGroupKickVotesNeeded = 3     // LFG_GROUP_KICK_VOTES_NEEDED
+	lfgGroupKickVotesNeeded = 3     // LFG_GROUP_KICK_VOTES_NEEDED (LFGMgr.h:54)
+	lfgTimeBoot             = 120   // LFG_TIME_BOOT (LFGMgr.h:48, seconds)
+	lfgGroupMaxKicks        = 3     // LFG_GROUP_MAX_KICKS (LFGGroupData.h:28)
 	lfgFlagSeasonal         = 0x4   // LFG_FLAG_SEASONAL
 )
 
@@ -597,11 +599,11 @@ func (s *Server) lfgSelectedRandomDungeon(guid uint64) bool {
 
 // lfgGroupMemberRemoved mirrors the LFGMgr-state-free arms of
 // LFGGroupScript::OnRemoveMember (LFGScripts.cpp:183-228): the Dungeon
-// Deserter cast on mid-dungeon leaves, the SMSG_LFG_UPDATE_PARTY ping, and
-// the teleport-out of the dungeon. The InitBoot kick-vote start, the
-// per-group data writes (SetGroup/RemovePlayerFromGroup/RemoveGroupData) and
-// SendLfgOfferContinue have no Go counterpart and stay documented no-bridge:
-// Go keeps no per-group LFG data and its boot vote is client-driven only.
+// Deserter cast on mid-dungeon leaves, the Dungeon Cooldown aura strip on
+// KICK_LFG removals, the SMSG_LFG_UPDATE_PARTY ping, and the teleport-out of
+// the dungeon. The per-group data writes (SetGroup/RemovePlayerFromGroup/
+// RemoveGroupData) and SendLfgOfferContinue have no Go counterpart and stay
+// documented no-bridge: Go keeps no per-group LFG data.
 func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method uint8) {
 	if s == nil || g == nil || !g.IsLFG || target == nil || target.player == nil {
 		return
@@ -609,11 +611,257 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 	if method == groupRemoveMethodLeave && g.LFGState == LFGStateDungeon &&
 		len(g.Members) >= lfgGroupKickVotesNeeded {
 		target.applyAura(lfgSpellDungeonDeserter)
+	} else if method == groupRemoveMethodKickLFG {
+		target.removeAura(lfgSpellDungeonCooldown)
 	}
 	_ = target.sendLFGUpdateParty(LFGUpdateLeaderUnk1, LFGQueueEntry{})
 	if target.isDungeonMap(target.player.Map) {
 		target.teleportToLFGEntryPoint()
 	}
+}
+
+// lfgPlayerBoot mirrors lfg::LfgPlayerBoot (LFGMgr.h:260-267): one active
+// kick vote on an LFG group.
+type lfgPlayerBoot struct {
+	cancelTime int64 // unix seconds; expires when cancelTime < now
+	inProgress bool
+	votes      map[uint64]int8 // LFGAnswerPending/Deny/Agree per member guid
+	victim     uint64
+	reason     string
+}
+
+// initLFGBoot mirrors LFGMgr::InitBoot (LFGMgr.cpp:1406-1432): every group
+// member starts PENDING, the victim auto-votes DENY, the kicker auto-votes
+// AGREE, and every member (victim included) gets the proposal packet.
+// SetVoteKick(gguid, true) is the boot's presence in lfgBoots; Go never sets
+// LFG_STATE_BOOT as a group state — C++ doesn't either (only the
+// m_VoteKickActive flag moves).
+func (s *Server) initLFGBoot(g *groupState, kickerGUID, victimGUID uint64, reason string) {
+	if s == nil || g == nil {
+		return
+	}
+	boot := &lfgPlayerBoot{
+		cancelTime: time.Now().Unix() + lfgTimeBoot,
+		inProgress: true,
+		votes:      make(map[uint64]int8, len(g.Members)),
+		victim:     victimGUID,
+		reason:     reason,
+	}
+	for _, m := range g.Members {
+		boot.votes[m.GUID] = LFGAnswerPending
+	}
+	boot.votes[victimGUID] = LFGAnswerDeny
+	boot.votes[kickerGUID] = LFGAnswerAgree
+	s.groupsMu.Lock()
+	if s.lfgBoots == nil {
+		s.lfgBoots = make(map[uint64]*lfgPlayerBoot)
+	}
+	s.lfgBoots[g.ID] = boot
+	members := append([]groupMember(nil), g.Members...)
+	s.groupsMu.Unlock()
+	for _, m := range members {
+		if ps := s.findSessionByGUID(m.GUID); ps != nil {
+			_ = ps.sendLFGBootProposalUpdate(boot)
+		}
+	}
+}
+
+// lfgBootVote mirrors LFGMgr::UpdateBoot (LFGMgr.cpp:1439-1496): records one
+// vote, then finalizes when the outcome is decided — agreeNum reached
+// LFG_GROUP_KICK_VOTES_NEEDED, or too few votes remain to reach it. The
+// finalize notifies every voter except the victim, clears the vote-kick
+// state, and on exactly LFG_GROUP_KICK_VOTES_NEEDED agrees removes the victim
+// with GROUP_REMOVEMETHOD_KICK_LFG and spends one kick.
+func (s *Server) lfgBootVote(ctx context.Context, voter *session, accept bool) {
+	if s == nil || voter == nil || voter.groupID == 0 {
+		return
+	}
+	s.groupsMu.Lock()
+	g := s.groups[voter.groupID]
+	boot := s.lfgBoots[voter.groupID]
+	if g == nil || boot == nil || !boot.inProgress {
+		s.groupsMu.Unlock()
+		return
+	}
+	if boot.votes[voter.playerGUID] != LFGAnswerPending { // cheat check: no double vote
+		s.groupsMu.Unlock()
+		return
+	}
+	if accept {
+		boot.votes[voter.playerGUID] = LFGAnswerAgree
+	} else {
+		boot.votes[voter.playerGUID] = LFGAnswerDeny
+	}
+	var agreeNum, denyNum uint8
+	for _, v := range boot.votes {
+		switch v {
+		case LFGAnswerAgree:
+			agreeNum++
+		case LFGAnswerDeny:
+			denyNum++
+		}
+	}
+	// Not enough votes yet and the needed count is still reachable: wait.
+	if agreeNum < lfgGroupKickVotesNeeded && uint8(len(boot.votes))-denyNum >= lfgGroupKickVotesNeeded {
+		s.groupsMu.Unlock()
+		return
+	}
+	boot.inProgress = false
+	voters := make([]uint64, 0, len(boot.votes))
+	for pguid := range boot.votes {
+		if pguid != boot.victim {
+			voters = append(voters, pguid)
+		}
+	}
+	kick := agreeNum == lfgGroupKickVotesNeeded
+	victimGUID := boot.victim
+	if kick && g.LFGKicksLeft > 0 {
+		g.LFGKicksLeft--
+	}
+	delete(s.lfgBoots, g.ID)
+	groupID := g.ID
+	s.groupsMu.Unlock()
+	for _, pguid := range voters {
+		if ps := s.findSessionByGUID(pguid); ps != nil {
+			_ = ps.sendLFGBootProposalUpdate(boot)
+		}
+	}
+	if kick {
+		// C++ guards the kick on the group still existing
+		// (sGroupMgr->GetGroupByGUID); the victim session must still be in
+		// this group — a member who left mid-vote is not re-removed.
+		if g2 := s.findGroupByID(groupID); g2 != nil {
+			if vs := s.findSessionByGUID(victimGUID); vs != nil && vs.groupID == groupID {
+				_ = vs.removeFromGroup(g2, vs, groupRemoveMethodKickLFG)
+			} else if vs == nil {
+				s.removeGroupMemberByGUID(ctx, g2, victimGUID, groupRemoveMethodKickLFG)
+			}
+		}
+	}
+}
+
+// updateLFGBootVotes mirrors the boot-expiry arm of LFGMgr::Update
+// (LFGMgr.cpp:331-345): a vote past cancelTime ends without a kick — the
+// voters (victim excluded) get the closed proposal packet and the vote-kick
+// state clears. No kicks are spent on expiry.
+func (s *Server) updateLFGBootVotes(now time.Time) {
+	if s == nil {
+		return
+	}
+	nowSec := now.Unix()
+	s.groupsMu.Lock()
+	var expired []*lfgPlayerBoot
+	for id, boot := range s.lfgBoots {
+		if boot.cancelTime < nowSec {
+			boot.inProgress = false
+			expired = append(expired, boot)
+			delete(s.lfgBoots, id)
+		}
+	}
+	s.groupsMu.Unlock()
+	for _, boot := range expired {
+		for pguid := range boot.votes {
+			if pguid == boot.victim {
+				continue
+			}
+			if ps := s.findSessionByGUID(pguid); ps != nil {
+				_ = ps.sendLFGBootProposalUpdate(boot)
+			}
+		}
+	}
+}
+
+// buildLFGBootProposalUpdate mirrors WorldSession::SendLfgBootProposalUpdate
+// (LFGHandler.cpp:512-545): SMSG_LFG_BOOT_PROPOSAL_UPDATE is built per
+// recipient — didVote/agree describe that recipient's own vote. The secsleft
+// field keeps the C++ quirk verbatim: cancelTime is in seconds but the
+// packet divides by 1000, so it always writes 0.
+func buildLFGBootProposalUpdate(boot *lfgPlayerBoot, recipientGUID uint64, nowSec int64) []byte {
+	playerVote := LFGAnswerPending
+	if v, ok := boot.votes[recipientGUID]; ok {
+		playerVote = v
+	}
+	var votesNum, agreeNum uint32
+	for _, v := range boot.votes {
+		if v != LFGAnswerPending {
+			votesNum++
+			if v == LFGAnswerAgree {
+				agreeNum++
+			}
+		}
+	}
+	remaining := boot.cancelTime - nowSec
+	if remaining < 0 {
+		remaining = 0
+	}
+	packet := protocol.NewBuffer(1 + 1 + 1 + 8 + 4 + 4 + 4 + 4 + len(boot.reason) + 1)
+	packet.WriteU8(boolToU8(boot.inProgress))
+	packet.WriteU8(boolToU8(playerVote != LFGAnswerPending))
+	packet.WriteU8(boolToU8(playerVote == LFGAnswerAgree))
+	packet.WriteU64(boot.victim)
+	packet.WriteU32(votesNum)
+	packet.WriteU32(agreeNum)
+	packet.WriteU32(uint32(uint8(remaining / 1000)))
+	packet.WriteU32(lfgGroupKickVotesNeeded)
+	packet.WriteCString(boot.reason)
+	return packet.Bytes()
+}
+
+func (s *session) sendLFGBootProposalUpdate(boot *lfgPlayerBoot) error {
+	return s.write(uint16(protocol.OpcodeSMSG_LFG_BOOT_PROPOSAL_UPDATE), buildLFGBootProposalUpdate(boot, s.playerGUID, time.Now().Unix()), true)
+}
+
+// canStartLFGBootVote mirrors the LFG branch of Player::CanUninviteFromGroup
+// (Player.cpp:24426-24452). Any group member may open a vote — there is no
+// leader check for LFG groups. Returns errPartyResultOK (0) when the vote may
+// start.
+func (s *session) canStartLFGBootVote(g *groupState) uint32 {
+	if g.LFGKicksLeft == 0 {
+		return errPartyLFGBootLimit
+	}
+	s.server.groupsMu.RLock()
+	_, active := s.server.lfgBoots[g.ID]
+	members := append([]groupMember(nil), g.Members...)
+	s.server.groupsMu.RUnlock()
+	if active {
+		return errPartyLFGBootInProgress
+	}
+	if len(members) <= lfgGroupKickVotesNeeded {
+		return errPartyLFGBootTooFewPlayers
+	}
+	if g.LFGState == LFGStateFinishedDungeon {
+		return errPartyLFGBootDungeonComplete
+	}
+	// Group::isRollLootActive: any active roll owned by this group.
+	s.server.lootMu.Lock()
+	for _, roll := range s.server.groupRolls {
+		if roll != nil && roll.GroupID == g.ID {
+			s.server.lootMu.Unlock()
+			return errPartyLFGBootLootRolls
+		}
+	}
+	s.server.lootMu.Unlock()
+	// Any member in the kicker's map instance who is in combat blocks the vote.
+	for _, m := range members {
+		ms := s.server.findSessionByGUID(m.GUID)
+		if ms == nil || ms.player == nil || s.player == nil {
+			continue
+		}
+		if ms.player.Map == s.player.Map && ms.player.InstanceID == s.player.InstanceID && ms.isInCombat() {
+			return errPartyLFGBootInCombat
+		}
+	}
+	return errPartyResultOK
+}
+
+// lfgBootTargetInGroup reports whether guid is a current member of g.
+func lfgBootTargetInGroup(g *groupState, guid uint64) bool {
+	for _, m := range g.Members {
+		if m.GUID == guid {
+			return true
+		}
+	}
+	return false
 }
 
 // teleportToLFGEntryPoint mirrors the out=true leg of
@@ -1048,6 +1296,7 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				grp.IsLFG = true
 				grp.LFGDungeonID = proposal.DungeonID
 				grp.LFGState = LFGStateDungeon
+				grp.LFGKicksLeft = lfgGroupMaxKicks
 				dbGroupID := grp.DBID
 				s.server.groupsMu.Unlock()
 				if dbGroupID == 0 {
@@ -1083,16 +1332,15 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 }
 
 // handleLfgSetBootVote processes CMSG_LFG_SET_BOOT_VOTE (0x36C).
-// Reference: WorldSession::HandleLfgSetBootVoteOpcode (LFGHandler.cpp:133).
+// Reference: WorldSession::HandleLfgSetBootVoteOpcode (LFGHandler.cpp:133)
+// -> LFGMgr::UpdateBoot (LFGMgr.cpp:1439).
 func (s *session) handleLfgSetBootVote(ctx context.Context, payload []byte) bool {
 	if len(payload) < 1 {
 		return true
 	}
-	agree := payload[0]
+	agree := payload[0] != 0
 	s.debug("lfg boot vote", "account", s.accountName, "agree", agree)
-	// The C++ handler (LFGHandler.cpp:133) only calls LFGMgr::UpdateBoot;
-	// the server never fires ACHIEVEMENT_CRITERIA_TYPE_LFG_VOTE_KICK, and
-	// Go has no boot-vote state (client-driven only), so the vote ends here.
+	s.server.lfgBootVote(ctx, s, agree)
 	return true
 }
 
