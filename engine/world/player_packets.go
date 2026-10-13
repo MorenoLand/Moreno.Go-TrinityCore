@@ -78,6 +78,30 @@ func (s *session) resetSpellsAtLogin(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Player::ResetSpells (Player.cpp:23157-23213): after re-learning defaults
+	// it re-learns quest-rewarded spells via LearnQuestRewardedSpells(). The
+	// -1 arm fires here (the player is online, auras are live) while login
+	// restore skips it.
+	if rows, qerr := cdb.QueryContext(ctx, "SELECT quest FROM character_queststatus_rewarded WHERE guid = ?", s.playerGUID); qerr == nil {
+		for rows.Next() {
+			var questID uint32
+			if rows.Scan(&questID) != nil || questID == 0 {
+				continue
+			}
+			teach, removeAuraOf := s.learnQuestRewardedSpellSpells(ctx, questID, spells)
+			if removeAuraOf != 0 {
+				s.removeAura(removeAuraOf)
+			}
+			for _, spellID := range teach {
+				if hasLearnedSpell(spells, spellID) {
+					continue
+				}
+				spells = append(spells, learnedSpell{ID: spellID, Active: true})
+				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
+			}
+		}
+		_ = rows.Close()
+	}
 	s.player.Spells = spells
 	for _, spell := range spells {
 		if !spell.Active || spell.Disabled {

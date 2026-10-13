@@ -634,8 +634,7 @@ func (s *session) loadRewardedQuestState(ctx context.Context, state *playerState
 			continue
 		}
 		var title, bonusTalents int64
-		var rewardSpell int64
-		if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewardTitle, 0), COALESCE(RewardTalents, 0), COALESCE(RewardSpell, 0) FROM quest_template WHERE ID = ?", questID).Scan(&title, &bonusTalents, &rewardSpell) != nil {
+		if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewardTitle, 0), COALESCE(RewardTalents, 0) FROM quest_template WHERE ID = ?", questID).Scan(&title, &bonusTalents) != nil {
 			continue
 		}
 		// Player::RewardQuest restore at login (Player.cpp:18805-18818): the
@@ -651,18 +650,77 @@ func (s *session) loadRewardedQuestState(ctx context.Context, state *playerState
 		if bonusTalents > 0 {
 			state.QuestBonus += uint32(bonusTalents)
 		}
-		if rewardSpell > 0 && rewardSpell <= int64(^uint32(0)) && s.server.Data != nil {
-			if spell, found, spellErr := s.server.Data.Spell(uint32(rewardSpell)); spellErr == nil && found {
-				for _, effect := range spell.Effects {
-					if effect.Effect != 36 || effect.TriggerSpell == 0 || hasLearnedSpell(state.Spells, effect.TriggerSpell) {
-						continue
-					}
-					state.Spells = append(state.Spells, learnedSpell{ID: effect.TriggerSpell, Active: true})
-					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", state.GUID, effect.TriggerSpell)
-				}
+		// Player::LearnQuestRewardedSpells(quest) (Player.cpp:23302-23351): the
+		// re-taught spell is RewSpellCast, not the display spell RewSpell. The
+		// -1 arm (RemoveAurasDueToSpell of SrcSpell) is a no-op at login —
+		// auras are not loaded yet — so only the taught spells are restored.
+		if teach, _ := s.learnQuestRewardedSpellSpells(ctx, questID, state.Spells); len(teach) > 0 {
+			for _, spellID := range teach {
+				state.Spells = append(state.Spells, learnedSpell{ID: spellID, Active: true})
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", state.GUID, spellID)
 			}
 		}
 	}
+}
+
+// learnQuestRewardedSpellSpells mirrors Player::LearnQuestRewardedSpells(Quest const*)
+// (Player.cpp:23302-23351): the quest's reward spell is RewSpellCast, never the
+// display spell RewSpell. A RewSpellCast of -1 removes auras of SrcSpell instead
+// of teaching (returned as removeAuraOf). The cast fires only when some
+// LEARN_SPELL effect teaches an unknown spell; profession specializations
+// (trade-skill, single effect, no spell level) are never re-taught — they must
+// be re-learned from the NPC.
+func (s *session) learnQuestRewardedSpellSpells(ctx context.Context, questID uint32, known []learnedSpell) (teach []uint32, removeAuraOf uint32) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil || questID == 0 {
+		return nil, 0
+	}
+	var rewSpellCast int64
+	var srcSpell uint32
+	if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewSpellCast, 0), COALESCE(SrcSpell, 0) FROM quest_template WHERE ID = ?", questID).Scan(&rewSpellCast, &srcSpell) != nil {
+		return nil, 0
+	}
+	if rewSpellCast == 0 {
+		return nil, 0
+	}
+	// Player.cpp:23309-23314: RewSpellCast = -1 removes auras due to SrcSpell.
+	if rewSpellCast == -1 {
+		return nil, srcSpell
+	}
+	if rewSpellCast < 0 || rewSpellCast > int64(^uint32(0)) {
+		return nil, 0
+	}
+	spell, found, spellErr := s.server.Data.Spell(uint32(rewSpellCast))
+	if spellErr != nil || !found {
+		return nil, 0
+	}
+	learnFound := false
+	for _, effect := range spell.Effects {
+		if effect.Effect == spellEffectLearnSpell && effect.TriggerSpell != 0 && !hasLearnedSpell(known, effect.TriggerSpell) {
+			learnFound = true
+			break
+		}
+	}
+	if !learnFound {
+		return nil, 0
+	}
+	// Player.cpp:23336-23348: Effects[0]'s trigger anchors the
+	// profession-specialization exclusion.
+	if learned0 := spell.Effects[0].TriggerSpell; learned0 != 0 && !hasLearnedSpell(known, learned0) {
+		learnedInfo, lfound, lerr := s.server.Data.Spell(learned0)
+		if lerr != nil || !lfound {
+			return nil, 0
+		}
+		if learnedInfo.Effects[0].Effect == spellEffectTradeSkill && learnedInfo.Effects[1].Effect == 0 && learnedInfo.SpellLevel == 0 {
+			return nil, 0
+		}
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect != spellEffectLearnSpell || effect.TriggerSpell == 0 || hasLearnedSpell(known, effect.TriggerSpell) {
+			continue
+		}
+		teach = append(teach, effect.TriggerSpell)
+	}
+	return teach, 0
 }
 
 func (s *session) validateChosenTitle(ctx context.Context, state *playerState) {
