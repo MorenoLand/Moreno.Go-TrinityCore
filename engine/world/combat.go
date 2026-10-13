@@ -301,7 +301,11 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	}
 	target, ok := s.getCombatTarget(ctx, victim)
 	if !ok {
-		s.debug("attack target not found", "account", s.accountName, "victim", victim)
+		// CombatHandler.cpp:31-36: a CMSG_ATTACKSWING naming a unit the
+		// server cannot resolve answers SMSG_ATTACK_STOP with an empty
+		// victim guid (WorldSession::SendAttackStop(nullptr)); the packet
+		// goes to the session only, not the surrounding set.
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(s.playerGUID, 0, false), true)
 		return true
 	}
 	// WorldObject::IsValidAttackTarget GM/invisibility legs (Object.cpp:2945-2947)
@@ -354,6 +358,17 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if target.Map != s.player.Map {
 		s.attackTarget = 0
 		return s.sendAttackStop(victim, false) == nil
+	}
+	// CombatHandler.cpp:47-56: a passenger may start a melee swing only when
+	// their vehicle seat carries VEHICLE_SEAT_FLAG_CAN_ATTACK; otherwise the
+	// swing is rejected with SMSG_ATTACK_STOP before Unit::Attack is reached.
+	if s.player.VehicleGUID != 0 && s.server != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+			if _, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID); seatInfo != nil && !seatInfo.HasFlag(wotlk.VehicleSeatFlagCanAttack) {
+				s.attackTarget = 0
+				return s.sendAttackStop(victim, false) == nil
+			}
+		}
 	}
 	// C++ Unit::Attack (Unit.cpp:5650-5760): re-pressing T on the current
 	// victim while melee-attacking is a no-op (returns false, no packet);
@@ -2142,10 +2157,10 @@ func (s *session) handleAttackStop() bool {
 	}
 	victim := s.attackTarget
 	s.attackTarget = 0
-	// Unit::AttackStop (Unit.cpp:5778) interrupts CURRENT_MELEE_SPELL — the
-	// queued on-next-swing spell (Heroic Strike et al.) never lands after a
-	// stop; Go's nextSwing model is that slot (server.go:494).
-	s.cancelNextSwingSpell()
+	// The auto-repeat cancel is Go's wire bridge for CMSG_CANCEL_AUTO_REPEAT_SPELL
+	// (SpellHandler.cpp:553), which has no routed handler of its own, so it stays
+	// unconditional here — C++ InterruptSpell(CURRENT_AUTOREPEAT_SPELL) is separate
+	// from Unit::AttackStop.
 	if s.autoRepeatSpell != 0 {
 		s.autoRepeatSpell = 0
 		s.autoRepeatTarget = 0
@@ -2153,6 +2168,17 @@ func (s *session) handleAttackStop() bool {
 		buf.WritePackedGUID(s.playerGUID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
 	}
+	if victim == 0 {
+		// Unit::AttackStop (Unit.cpp:5763-5766): a CMSG_ATTACKSTOP arriving while
+		// not attacking returns false before SendMeleeAttackStop and before the
+		// CURRENT_MELEE_SPELL interrupt — no packet, no swing-slot cancel. Go
+		// previously emitted SMSG_ATTACK_STOP with an empty victim every time.
+		return true
+	}
+	// Unit::AttackStop (Unit.cpp:5778) interrupts CURRENT_MELEE_SPELL — the
+	// queued on-next-swing spell (Heroic Strike et al.) never lands after a
+	// stop; Go's nextSwing model is that slot (server.go:494).
+	s.cancelNextSwingSpell()
 	if err := s.sendAttackStop(victim, false); err != nil {
 		s.debug("attack stop failed", "account", s.accountName, "error", err)
 		return false
