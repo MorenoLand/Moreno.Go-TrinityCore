@@ -13,19 +13,23 @@
 -- Random,1) with victim fallback; gust of wind 43621 {20s,30s} /
 -- {20s,30s} repeat on a random alive player with victim fallback; call
 -- lightning 43661 {10s,20s} / {12s,17s} repeat on the victim; electrical
--- storm 43648 one-shot 60s on a random alive player within 50 yd, then a
--- 1s storm-sequence tick for 10 ticks with escalating zap 43137 casts
--- (C++ 800*2^(n-2) damage to units beyond 6 yd of the cloud); berserk
--- 45078 one-shot 10min with Talk(SAY_ENRAGE) and 10min repeat.
+-- storm 43648 every 60s on a random alive player within 50 yd (the storm
+-- zap sequence never runs — see the HandleStormSequence note below);
+-- berserk 45078 one-shot 10min with Talk(SAY_ENRAGE) and 10min repeat.
 -- The soaring eagle (24858) swoops a random alive player with eagle swoop
 -- 44732 (triggered) every {5s,10s} while in combat.
--- Deviations from C++: no summon model — the storm cloud SummonTrigger,
--- the zap visual triggers, and the eight soaring-eagle spawns never
--- exist, so their casts/spawns are skipped and the storm's zap damage is
--- approximated by the boss casting 43137 on random alive players (the C++
--- 6-yd cloud-exclusion check and the bp0 escalation have no bridge —
--- CastSpell carries no spell-value modifiers, and there is no Go summon
--- model); the EVENT_SUMMON_EAGLES arm keeps its Talk(SAY_SUMMON) only.
+-- Deviations from C++: LOCAL-TREE DEFECT — boss_akilzon.cpp never
+-- schedules EVENT_STORM_SEQUENCE (the initial arm upstream TC has in the
+-- ELECTRICAL_STORM case is missing from this tree; the only schedule is
+-- the unreachable tail of HandleStormSequence itself), so
+-- HandleStormSequence and the EVENT_SUMMON_EAGLES arm are dead code in
+-- the C++: no storm zaps, no 5s eagle summon, no SAY_SUMMON. The Lua
+-- matches the tree — the storm is the 43648 cast + 60s re-arm only. If
+-- the schedule is restored in the C++, the zap sequence (8s first tick,
+-- 1s ticks, zaps at counts 2..9, re-looping tail) needs re-adding here.
+-- No summon model — the storm cloud SummonTrigger, the zap visual
+-- triggers, and the eight soaring-eagle spawns never exist, so their
+-- casts/spawns are skipped.
 -- No weather bridge — SetWeather(WEATHER_STATE_HEAVY_RAIN/FINE) and the
 -- whole EVENT_RAIN arm have no bearer and are skipped. No movement/gravity
 -- model — MovementInform never fires, so the eagle's MovePoint swoop run
@@ -42,7 +46,6 @@ local ENTRY_AKILZON = 23574
 local ENTRY_SOARING_EAGLE = 24858
 
 local SAY_AGGRO = 0
-local SAY_SUMMON = 1
 local SAY_ENRAGE = 3
 local SAY_KILL = 4
 local SAY_DEATH = 5
@@ -52,13 +55,11 @@ local SPELL_CALL_LIGHTNING = 43661
 local SPELL_GUST_OF_WIND = 43621
 local SPELL_ELECTRICAL_STORM = 43648
 local SPELL_BERSERK = 45078
-local SPELL_ZAP = 43137
 local SPELL_CLOUD_VISUAL = 44007
 local SPELL_EAGLE_SWOOP = 44732
 
 local timers = {}
 local eagleTimers = {}
-local state = {}
 
 local function cancelTimers(store, guid)
     local per = store[guid]
@@ -137,57 +138,17 @@ local function onCallLightning(creature, guid)
     end)
 end
 
--- C++ EVENT_STORM_SEQUENCE / HandleStormSequence: the storm cloud starts
--- at count 1; each 1s tick increments, dealing escalating zap damage while
--- 1 < count < 10, and ends the storm past 10 (weather back to fine, rain
--- off, eagles summoned 5s later).
-local function stormTick(creature, guid)
-    local st = state[guid]
-    if not st or not st.stormActive then
-        return
-    end
-    st.count = st.count + 1
-    if st.count > 10 then
-        st.stormActive = false
-        st.count = 0
-        -- C++ HandleStormSequence end: ScheduleEvent(EVENT_SUMMON_EAGLES,
-        -- 5s); the eagle summons have no bearer, but the Talk arm stays.
-        creature:Talk(SAY_SUMMON)
-        return
-    end
-    if st.count > 1 then
-        -- C++ bp0 = 800 * 2^(count-2) zaps every unit beyond 6 yd of the
-        -- cloud; no spellmod bridge and no cloud position, so approximate
-        -- with up to three 43137 zap casts on random alive players.
-        local candidates = alivePlayersInRange(creature, 100)
-        for i = 1, math.min(3, #candidates) do
-            creature:CastSpell(candidates[math.random(#candidates)], SPELL_ZAP)
-        end
-    end
-    schedule(timers, guid, "stormtick", 1000, function()
-        stormTick(creature, guid)
-    end)
-end
-
 -- C++ EVENT_ELECTRICAL_STORM: random alive player within 50 yd (evade if
--- none); target casts 44007 on self (no player CastSpell bridge —
--- skipped), boss DoCast(target, 43648); cloud SummonTrigger skipped (no
--- summon model); storm sequence starts at count 1. Repeats 60s and
--- re-arms EVENT_RAIN (weather has no bridge — skipped).
+-- none — no evade bridge, so a missing target is a no-op); target casts
+-- 44007 on self (no player CastSpell bridge — skipped), boss
+-- DoCast(target, 43648) non-triggered; cloud SummonTrigger skipped (no
+-- summon model). The EVENT_STORM_SEQUENCE arm is never scheduled in this
+-- C++ tree (see the local-tree defect note above), so no sequence runs.
+-- Repeats 60s and re-arms EVENT_RAIN (weather has no bridge — skipped).
 local function onElectricalStorm(creature, guid)
     local target = randomPlayerInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_ELECTRICAL_STORM)
-        local st = state[guid]
-        if not st then
-            st = {}
-            state[guid] = st
-        end
-        st.stormActive = true
-        st.count = 1
-        schedule(timers, guid, "stormtick", 1000, function()
-            stormTick(creature, guid)
-        end)
     end
     schedule(timers, guid, "storm", 60000, function()
         onElectricalStorm(creature, guid)
@@ -206,11 +167,6 @@ end
 
 local function akilzonResetState(guid)
     cancelTimers(timers, guid)
-    local st = state[guid]
-    if st then
-        st.stormActive = false
-        st.count = 0
-    end
 end
 
 local function akilzonEnterCombat(event, creature, target)
