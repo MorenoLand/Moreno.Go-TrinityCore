@@ -351,6 +351,27 @@ func (s *session) luaPlayer() *scripting.Object {
 		packet.WriteF32(state.Orientation)
 		return nil, s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
 	}
+	// TeleportNear is the same-map arm of Teleport: it runs the
+	// near-teleport path (movement.go nearTeleportMove — the Go analog of
+	// the same-map Player::TeleportTo branch used by ScriptedAI's
+	// DoTeleportPlayer) instead of the far-transfer SMSG_NEW_WORLD above.
+	// Same-map script teleports (e.g. Jin'do's EVENT_TELEPORT) must not
+	// trigger a loading screen.
+	methods["TeleportNear"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 4 {
+			return nil, fmt.Errorf("TeleportNear requires position")
+		}
+		position := make([]float32, 4)
+		for index := range position {
+			value, valueErr := luaFloat32Arg(args, index)
+			if valueErr != nil {
+				return nil, valueErr
+			}
+			position[index] = value
+		}
+		s.nearTeleportMove(position[0], position[1], position[2], position[3])
+		return nil, nil
+	}
 	methods["Mute"] = func(_ context.Context, args []any) ([]any, error) {
 		seconds, err := luaUint32Arg(args, 0)
 		if err != nil {

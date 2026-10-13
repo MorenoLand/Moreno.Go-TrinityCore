@@ -27,16 +27,16 @@
 -- (triggered 24308 shade-of-jindo summon, then non-triggered 24306
 -- delusion curse, C++-exact order; nil-target ticks cast nothing but
 -- keep the schedule) / teleport 5s then {15s,23s} on a random alive
--- player within 100 yd (the whole effect has no bridge — player
--- teleport, the -100% threat wipe, and the 10 sacrificed-troll
--- 14826 summons are all skipped — only the re-arm is modeled).
+-- player within 100 yd (DoTeleportPlayer to TeleportLoc via
+-- Player:TeleportNear; the -100% threat wipe and the 10 sacrificed-troll
+-- 14826 summons have no bridge and are skipped).
 -- Ward 14987: the C++ AI ticks its heal timer even out of combat
 -- (2s first, then every 3s: DoCast(GetCreature(DATA_JINDO), 24311));
 -- with no instance-script bridge the Jin'do lookup has no bearer, so
 -- only the 3s re-arm is modeled (hexlord friendly-scan convention).
--- Shade 14986: OnEnterCombat self-casts invisibility 24307 (triggered,
--- C++-exact Reset cast) and arms shadow shock 19460 1s then every 2s
--- on the victim (non-triggered DoCastVictim, C++-exact); nil-victim
+-- Shade 14986: Reset self-casts invisibility 24307 (triggered, C++-exact
+-- npc_shade_of_jindoAI::Reset arm) and arms shadow shock 19460 1s then
+-- every 2s on the victim (non-triggered DoCastVictim, C++-exact); nil-victim
 -- ticks cast nothing but keep the schedule.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
 -- rest of the event queue while casting) has no UNIT_STATE bridge —
@@ -48,8 +48,8 @@
 -- shade are still registered so any that exist fight/react
 -- correctly); the ward constructor's REACT_PASSIVE arm and its
 -- AttackStart no-op have no bridge (the ward never spawns in this
--- build); no teleport bridge — DoTeleportPlayer and the formation
--- coordinates are not used; no threat model — the hex -80% and
+-- build); the teleport -100% threat wipe and the troll formation
+-- coordinates are not used (no threat/summon bridges); no threat model — the hex -80% and
 -- teleport -100% ModifyThreatByPercent arms are skipped; no Lua spawn
 -- event exists, so the ward's always-on UpdateAI heal loop is
 -- approximated with the combat-lifecycle events (1/2/4/23).
@@ -164,10 +164,17 @@ local function onDelusions(creature, guid)
     end)
 end
 
--- C++ EVENT_TELEPORT: teleport + threat wipe + 10 troll summons all
--- have no bridge (no teleport, no threat, no summon models) — only the
--- {15s,23s} re-arm is modeled.
+-- C++ EVENT_TELEPORT: random 100-yd player -> DoTeleportPlayer to
+-- TeleportLoc (boss_jindo.cpp), then the -100% threat wipe and the 10
+-- sacrificed-troll summons (no threat/summon bridges — skipped).
+-- Re-arm {15s,23s} unconditional; nil-target tick teleports nothing.
+local TELEPORT_X, TELEPORT_Y, TELEPORT_Z, TELEPORT_O =
+    -11583.7783, -1249.4278, 77.5471, 4.745
 local function onTeleport(creature, guid)
+    local target = randomPlayer100(creature)
+    if target then
+        target:TeleportNear(TELEPORT_X, TELEPORT_Y, TELEPORT_Z, TELEPORT_O)
+    end
     schedule(guid, "teleport", math.random(15000, 23000), function()
         onTeleport(creature, guid)
     end)
@@ -233,7 +240,6 @@ end
 local function shadeEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_INVISIBLE, true)
     schedule(guid, "shock", 1000, function()
         onShadowShock(creature, guid)
     end)
@@ -249,6 +255,11 @@ end
 
 local function shadeReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_shade_of_jindoAI::Reset (boss_jindo.cpp): re-arm the shadow
+    -- shock timer (Initialize) and self-cast invisibility 24307 triggered.
+    -- Reset runs at spawn and on evade; the cast does NOT belong on
+    -- enter-combat.
+    creature:CastSpell(creature, SPELL_INVISIBLE, true)
 end
 
 RegisterCreatureEvent(ENTRY_SHADE, 1, shadeEnterCombat)
