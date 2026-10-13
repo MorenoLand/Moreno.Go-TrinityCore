@@ -761,7 +761,7 @@ func (s *session) getPetAttributes(ctx context.Context, entry, level uint32, pet
 	return attributes
 }
 
-func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, scale, x, y, z, o float32) []byte {
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, scale, x, y, z, o float32, apBase, apMods uint32, apMult float32) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
@@ -784,6 +784,13 @@ func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, model
 	values[unitFieldHoverHeight] = math.Float32bits(1)
 	values[unitFieldAttackTime] = 2000
 	values[unitFieldAttackTimeOffhand] = 2000
+	// Guardian::UpdateAttackPowerAndDamage (StatSystem.cpp:1468-1476):
+	// UNIT_FIELD_ATTACK_POWER = (int32)base_attPower,
+	// UNIT_FIELD_ATTACK_POWER_MODS = (int32)attPowerMod,
+	// UNIT_FIELD_ATTACK_POWER_MULTIPLIER = attPowerMultiplier.
+	values[unitFieldAttackPower] = apBase
+	values[unitFieldAttackPowerMods] = apMods
+	values[unitFieldAttackPowerMultiplier] = math.Float32bits(apMult)
 	values[unitFieldBoundingRadius] = math.Float32bits(boundingRadius)
 	values[unitFieldCombatReach] = math.Float32bits(combatReach)
 	values[unitFieldDisplayID] = modelID
@@ -1041,6 +1048,8 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			ownerArmor = s.player.Armor
 		}
 		ownerArmorBonus := petOwnerArmorValue(uint8(petType), ownerArmor)
+		var apBase, apMods uint32
+		var apMult float32
 		s.server.motionMu.Lock()
 		if pm := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); pm != nil && pm.PetID == petID {
 			pm.Armor = petArmor
@@ -1051,9 +1060,14 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			// the raw DB create-stats (pet auras load right after, so the
 			// aura feed is empty here; the owner bonus is not).
 			fieldStats = s.petGuardianFieldStats(pm, entry, uint8(petType), uint32(petID))
+			// Guardian::UpdateAttackPowerAndDamage (StatSystem.cpp:1468-1476)
+			// writes the AP unit fields at stat-update time from the same
+			// composition the melee path recomputes lazily.
+			_, base, flat, mult := s.server.petGuardianAttackPower(s, pm)
+			apBase, apMods, apMult = uint32(int32(base)), uint32(flat), float32(mult)
 		}
 		s.server.motionMu.Unlock()
-		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, fieldStats, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO)
+		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, fieldStats, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO, apBase, apMods, apMult)
 	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)

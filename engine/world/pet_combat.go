@@ -770,6 +770,26 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		damage = 1
 	}
 
+	// Guardian::UpdateAttackPowerAndDamage (StatSystem.cpp:1386-1477) +
+	// Guardian::UpdateDamagePhysical (StatSystem.cpp:1505-1510): the pet's
+	// total attack power adds AP/14 * attackSpeed to the BASE_ATTACK swing
+	// ahead of the done-side folds — C++ folds it into the weapon damage the
+	// same CalculateMeleeDamage call then runs MeleeDamageBonusDone over.
+	// The happiness leg multiplies the whole swing (weapon range + AP term)
+	// for hunter pets (StatSystem.cpp:1521-1534), so the AP term rides the
+	// pet's live happiness mod; other pets swing unscaled.
+	if total, _, _, _ := s.petGuardianAttackPower(owner, motion); total != 0 {
+		speed := float64(motion.AttackTime) / 1000
+		if speed <= 0 {
+			speed = 2
+		}
+		happy := 1.0
+		if motion.PetType == petTypeHunter {
+			happy = float64(petHappinessDamageMod(motion.Powers[4]))
+		}
+		damage = uint32(float64(damage) + total/14*speed*happy)
+	}
+
 	// Unit::CalculateMeleeDamage (Unit.cpp:1236-1237): MeleeDamageBonusTaken
 	// runs on the victim ahead of the armor reduction for every attacker
 	// type — the pet path never bridged the victim-side flat (14 + 125),
@@ -1669,6 +1689,46 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 // returns the truncated value exactly as SetBonusDamage stores it. The
 // hunter-pet Wild Hunt talent mod (StatSystem.cpp:1406-1418) reads the pet's
 // spellbook via petWildHuntTalent below.
+// petWildHuntMod returns the hunter-pet Wild Hunt talent multiplier from
+// Guardian::UpdateAttackPowerAndDamage (StatSystem.cpp:1406-1418): 1.0 plus
+// CalculatePct(1.0, Effects[1].CalcValue()) when the pet's spellbook carries
+// 62758 (rank 1, checked first per C++) or 62762 (rank 2) — shared by the
+// SetBonusDamage spell arm and the bonusAP attack-power arm.
+func (s *session) petWildHuntMod(motion *creatureMotion) float32 {
+	mod := float32(1)
+	if motion == nil {
+		return mod
+	}
+	if talent := s.petWildHuntTalent(s.petNumberForGUID(motion.GUID)); talent != 0 &&
+		s.server != nil && s.server.Data != nil {
+		if tspell, found, terr := s.server.Data.Spell(talent); terr == nil && found && len(tspell.Effects) > 1 {
+			mod += float32(tspell.Effects[1].CalcValue()) / 100
+		}
+	}
+	return mod
+}
+
+// warlockDemonSpellPowerMax mirrors the owner-spell-power read shared by the
+// warlock-demon arms of Guardian::UpdateAttackPowerAndDamage
+// (StatSystem.cpp:1442-1449): max(owner fire, owner shadow damage-done bonus),
+// floored at 0 — the SetBonusDamage arm takes 0.15 of it, the bonusAP arm
+// 0.57 of it.
+func (s *session) warlockDemonSpellPowerMax() int32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	fire := s.player.SpellDamagePositive[2] - s.player.SpellDamageNegative[2]
+	shadow := s.player.SpellDamagePositive[5] - s.player.SpellDamageNegative[5]
+	maximum := fire
+	if shadow > maximum {
+		maximum = shadow
+	}
+	if maximum < 0 {
+		maximum = 0
+	}
+	return maximum
+}
+
 // petWildHuntTalent returns the Wild Hunt talent spell the pet's spellbook
 // carries — 62758 (rank 1, checked first per C++) or 62762 (rank 2) — or 0.
 // StatSystem.cpp:1408-1412 reads ToPet()->m_spells; Go's pet_spell table is
@@ -1693,22 +1753,12 @@ func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 	}
 	switch {
 	case motion.PetType == petTypeHunter:
-		// IsHunterPet (StatSystem.cpp:1425): owner ranged AP * 0.1287 * mod.
-		// The Wild Hunt talent (StatSystem.cpp:1408-1415) adds
-		// CalculatePct(1.0, Effects[1].CalcValue()) to mod when the pet's
-		// spellbook carries 62758 (rank 1, checked first per C++) or 62762
-		// (rank 2); Go's pet_spell table is the spellbook twin
-		// (learnPetTalent writes talent spells there). The stamina
-		// (StatSystem.cpp:1237-1241) and bonusAP (0.22) arms have no Go
-		// stat/AP model and stay unbridged.
-		mod := float32(1)
-		if talent := s.petWildHuntTalent(s.petNumberForGUID(motion.GUID)); talent != 0 &&
-			s.server != nil && s.server.Data != nil {
-			if tspell, found, terr := s.server.Data.Spell(talent); terr == nil && found && len(tspell.Effects) > 1 {
-				mod += float32(tspell.Effects[1].CalcValue()) / 100
-			}
-		}
-		return int32(s.totalAttackPowerValue(true) * 0.1287 * mod)
+		// IsHunterPet (StatSystem.cpp:1425): owner ranged AP * 0.1287 * mod,
+		// mod from petWildHuntMod (the Wild Hunt talent,
+		// StatSystem.cpp:1408-1415). The stamina (StatSystem.cpp:1237-1241)
+		// arm has no Go model; the bonusAP (0.22) arm now rides
+		// petGuardianAttackPower on the melee path.
+		return int32(s.totalAttackPowerValue(true) * 0.1287 * s.petWildHuntMod(motion))
 	case motion.Entry == 26125 || motion.Entry == 30230:
 		// IsPetGhoul / IsRisenAlly (TemporarySummon.h:81-82,
 		// StatSystem.cpp:1428-1430): owner base AP * 0.1287.
@@ -1726,21 +1776,9 @@ func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 		}
 		return int32(s.totalAttackPowerValue(false) * mult)
 	case motion.PetType == petTypeSummon && s.player.Class == 9:
-		// IsPet warlock demon (StatSystem.cpp:1442-1449): max(owner fire,
-		// owner shadow damage-done bonus) * 0.15, floored at 0. The C++
-		// reads PLAYER_FIELD_MOD_DAMAGE_DONE_POS - NEG (NEG accumulates
-		// negative amounts), so the Go twin is SpellDamagePositive minus
-		// SpellDamageNegative with the same sign.
-		fire := s.player.SpellDamagePositive[2] - s.player.SpellDamageNegative[2]
-		shadow := s.player.SpellDamagePositive[5] - s.player.SpellDamageNegative[5]
-		maximum := fire
-		if shadow > maximum {
-			maximum = shadow
-		}
-		if maximum < 0 {
-			maximum = 0
-		}
-		return int32(float32(maximum) * 0.15)
+		// IsPet warlock demon (StatSystem.cpp:1442-1449):
+		// warlockDemonSpellPowerMax() * 0.15.
+		return int32(float32(s.warlockDemonSpellPowerMax()) * 0.15)
 	case motion.Entry == 510:
 		// ENTRY_WATER_ELEMENTAL (StatSystem.cpp:1185, 1452-1457): owner
 		// frost damage-done bonus * 0.4, floored at 0.
@@ -1751,6 +1789,67 @@ func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 		return int32(float32(frost) * 0.4)
 	}
 	return 0
+}
+
+// petGuardianAttackPower mirrors Guardian::UpdateAttackPowerAndDamage's AP
+// composition (StatSystem.cpp:1386-1477) for the pet's BASE_ATTACK path:
+// BASE_VALUE = val + bonusAP with val = 2*GetStat(STAT_STRENGTH)-20
+// (imp: GetStat(STAT_STRENGTH)-10, StatSystem.cpp:1397-1400), then the
+// unit-mod fold (flatBASE * pctBASE + flatTOTAL) * pctTOTAL — BASE_PCT has no
+// guardian feeder (1.0), flatTOTAL is the aura-99 fold, pctTOTAL the aura-166
+// fold. owner is the pet's owner session; a nil owner (offline) keeps the val
+// and aura arms — C++ computes val unconditionally and only the bonusAP arms
+// need the owner. The water elemental (510) takes no bonusAP arm in C++
+// (spell bonus only), so it lands in the val-only default.
+func (s *Server) petGuardianAttackPower(owner *session, motion *creatureMotion) (total, base float64, flat int32, mult float64) {
+	if motion == nil {
+		return 0, 0, 0, 0
+	}
+	// GetStat(STAT_STRENGTH) is the aura-fed stat; the strength owner-bonus
+	// arm is commented out in C++ (StatSystem.cpp:1228), so petGuardianStat
+	// is the whole value.
+	str := s.petGuardianStat(creatureAuraKeyForMotion(motion), motion, 0)
+	val := 2*str - 20
+	if motion.Entry == 416 { // ENTRY_IMP (StatSystem.cpp:1180)
+		val = str - 10
+	}
+	var bonusAP float64
+	if owner != nil {
+		switch {
+		case motion.PetType == petTypeHunter:
+			// StatSystem.cpp:1405-1424: owner ranged AP * 0.22 * Wild Hunt
+			// mod; Animal Handler (34453) EFFECT_1 pcts both bonusAP and
+			// val (AddPct on each).
+			bonusAP = float64(owner.totalAttackPowerValue(true)) * 0.22 * float64(owner.petWildHuntMod(motion))
+			if amt, ok := owner.auraEffectAmount(34453, 1); ok {
+				bonusAP *= 1 + float64(amt)/100
+				val *= 1 + float64(amt)/100
+			}
+		case motion.Entry == 26125 || motion.Entry == 30230:
+			// IsPetGhoul / IsRisenAlly (StatSystem.cpp:1428-1430): owner
+			// base AP * 0.22.
+			bonusAP = float64(owner.totalAttackPowerValue(false)) * 0.22
+		case motion.Entry == 29264:
+			// IsSpiritWolf (StatSystem.cpp:1432-1439): owner base AP * 0.31,
+			// 0.61 with the owner's Glyph of Feral Spirit (63271).
+			m := 0.31
+			if owner.hasAura(63271) {
+				m = 0.61
+			}
+			bonusAP = float64(owner.totalAttackPowerValue(false)) * m
+		case motion.PetType == petTypeSummon && owner.player != nil && owner.player.Class == 9:
+			// IsPet warlock demon (StatSystem.cpp:1442-1449):
+			// max(owner fire, owner shadow) * 0.57.
+			bonusAP = float64(owner.warlockDemonSpellPowerMax()) * 0.57
+		}
+	}
+	base = val + bonusAP
+	key := creatureAuraKeyForMotion(motion)
+	flat = s.creatureAuraAttackPowerFlat(key)
+	pct := s.creatureAuraAttackPowerPct(key)
+	mult = pct - 1
+	total = (base + float64(flat)) * pct
+	return total, base, flat, mult
 }
 
 // petGuardianDoneDamageBonus mirrors the advertised-benefit fold of

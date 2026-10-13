@@ -463,6 +463,12 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 	for index, value := range s.petGuardianFieldStats(motion, entry, petType, petID) {
 		fields[unitFieldStat0+index] = value
 	}
+	// Guardian::UpdateAttackPowerAndDamage (StatSystem.cpp:1468-1476)
+	// rewrites the AP unit fields at every stat update too.
+	_, apBase, apFlat, apMult := s.server.petGuardianAttackPower(s, motion)
+	fields[unitFieldAttackPower] = uint32(int32(apBase))
+	fields[unitFieldAttackPowerMods] = uint32(apFlat)
+	fields[unitFieldAttackPowerMultiplier] = math.Float32bits(float32(apMult))
 	if petType == 1 {
 		fields[unitFieldPetNextLevelExp] = nextLevelXP
 	}

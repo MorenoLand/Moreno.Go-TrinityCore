@@ -404,6 +404,75 @@ func (s *Server) creatureAuraDamageDonePct(key creatureAuraKey) float64 {
 	return mod
 }
 
+// creatureAuraAttackPowerFlat mirrors the creature half of
+// AuraEffect::HandleAuraModAttackPower (SpellAuraEffects.cpp:4065-4074): the
+// summed amounts of SPELL_AURA_MOD_ATTACK_POWER (99) effects, ungated — the
+// handler feeds UNIT_MOD_ATTACK_POWER TOTAL_VALUE on every target type.
+func (s *Server) creatureAuraAttackPowerFlat(key creatureAuraKey) int32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 0
+	}
+	var sum int32
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != spellAuraModAttackPower {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				sum += aura.Amounts[index]
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return sum
+}
+
+// creatureAuraAttackPowerPct mirrors the creature half of
+// AuraEffect::HandleAuraModAttackPowerPercent
+// (SpellAuraEffects.cpp:4088-4103): the product of (1 + amount/100) over
+// SPELL_AURA_MOD_ATTACK_POWER_PCT (166) effects, ungated — the handler feeds
+// UNIT_MOD_ATTACK_POWER TOTAL_PCT on every target type.
+func (s *Server) creatureAuraAttackPowerPct(key creatureAuraKey) float64 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 1.0
+	}
+	mod := 1.0
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != spellAuraAttackPowerPercent {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				mod *= 1 + float64(aura.Amounts[index])/100
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return mod
+}
+
 // motionIsPet mirrors Unit::IsPet (Unit.h:839): (m_unitTypeMask & UNIT_MASK_PET)
 // != 0, set only for Pet objects (Pet.cpp:49). In Go only registerPetMotion
 // sets motion.PetID, so PetID != 0 is the twin — charmed creatures and any
