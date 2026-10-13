@@ -894,13 +894,11 @@ func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) 
 	if canTake, err := s.canTakeQuest(ctx, questID); err != nil || !canTake {
 		return true
 	}
-	activeCount := 0
-	for _, q := range s.player.QuestLog {
-		if q.QuestID != 0 {
-			activeCount++
-		}
-	}
-	if activeCount < 25 {
+	// QuestHandler.cpp:497-499 — the share-accept path runs the full
+	// CanAddQuest(msg=true) gate, not just the log-capacity check: a quest
+	// whose source item can't be stored is refused with the C++ equip error
+	// instead of being added with the item silently dropped.
+	if s.canAddQuest(ctx, questID, true) {
 		s.addQuestToPlayer(ctx, questID, 0)
 		// QuestHandler.cpp:501-503 — the quest's source spell is cast triggered.
 		s.castQuestSourceSpell(ctx, questID)
@@ -1141,14 +1139,19 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 		receiver.sharingQuestSender = s.playerGUID
 		details := buildQuestGiverDetails(data, receiver.playerGUID, 0)
 		_ = receiver.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)
-		// QuestHandler.cpp:618-622 — the auto-accept arm: the gate is
-		// QUEST_FLAGS_AUTO_ACCEPT (0x00080000, QuestDef.h:151), not the
+		// QuestHandler.cpp:618-622 + 637-638 — the auto-accept arm: the gate
+		// is QUEST_FLAGS_AUTO_ACCEPT (0x00080000, QuestDef.h:151), not the
 		// quest_template_addon SpecialFlags (0x4 there is the monthly flag).
-		// The CanAddQuest/CanTakeQuest re-checks are subsumed by the log-full
-		// and can-take arms above; after the add the sharer is answered
+		// The arm re-runs CanAddQuest(msg=true): the source-item storability
+		// check was never done for shared auto-accepts. The CanTakeQuest
+		// re-check is subsumed by the gate above (no receiver quest state
+		// changes between the two). AddQuestAndCheckCompletion takes the
+		// sharer as the giver, so the timed-quest shared-giver arm
+		// (Player.cpp:15253) inherits the sharer's remaining time instead of
+		// starting a fresh TimeAllowed. After the add the sharer is answered
 		// ACCEPT_QUEST and the receiver's sharing info is cleared.
-		if data.Flags&questFlagsAutoAccept != 0 {
-			receiver.addQuestToPlayer(ctx, questID, 0)
+		if data.Flags&questFlagsAutoAccept != 0 && receiver.canAddQuest(ctx, questID, true) {
+			receiver.addQuestToPlayer(ctx, questID, s.playerGUID)
 			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgAcceptQuest)
 			receiver.sharingQuestID = 0
 			receiver.sharingQuestSender = 0

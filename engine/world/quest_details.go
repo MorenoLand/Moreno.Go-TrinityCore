@@ -298,10 +298,15 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	packet := buildQuestGiverDetails(data, guid, 0)
 	s.debug("quest details response", "account", s.accountName, "quest", questID)
 
-	// In TrinityCore Player.cpp:14836, if quest is AutoAccept, add it upon viewing details
+	// In TrinityCore Player.cpp:14836 and HandleQuestgiverQueryQuestOpcode
+	// (QuestHandler.cpp:257), if quest is AutoAccept, add it upon viewing
+	// details — but only behind the full CanAddQuest(msg=true) gate. Go
+	// auto-accepted on the SpecialFlags bit alone, so a full quest log or an
+	// unstoreable source item still added the quest (with the C++ SMSG_QUESTLOG_FULL
+	// / equip-error feedback missing).
 	var specialFlags int64
 	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
-	if specialFlags&4 != 0 {
+	if specialFlags&4 != 0 && s.canAddQuest(ctx, questID, true) {
 		s.addQuestToPlayer(ctx, questID, guid)
 		// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
 		// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
