@@ -792,7 +792,7 @@ local function julianneDamageTaken(event, creature, attacker, damage)
     if raj.phase == PHASE_JULIANNE then
         raj.julianneFaking = true
         creature:Talk(JULIANNE_SAY_DEATH01)
-        creature:CastSpell(creature, SPELL_DRINK_POISON, true)
+        creature:CastSpell(creature, SPELL_DRINK_POISON)
         schedule(guid, "drinkpoison", 2500, function()
             juliannePretendDie(creature, guid)
             raj.phase = PHASE_ROMULO
