@@ -1717,24 +1717,39 @@ func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 	return 0
 }
 
-// petGuardianDoneDamageBonus mirrors the guardian arm in
-// Unit::SpellDamageBonusDone (Unit.cpp:6679-6683, 6725-6731): a guardian
-// caster adds GetBonusDamage() to the advertised benefit, then
-// DoneTotal += int32(DoneAdvertisedBenefit * coeff * factorMod) runs per
-// damage effect. The ATTR3_NO_DONE_BONUS gate (Unit.cpp:6604-6605) and the
-// DmgClass-NONE early-out — which fires only when no spell_bonus_data row
-// exists (Unit.cpp:6705-6709) — are honored. The remaining DoneTotal/DoneTotalMod
-// legs (scripted class-script arms, versus, Impurity AP arms, pct mods) stay
-// unbridged on the pet path.
+// petGuardianDoneDamageBonus mirrors the advertised-benefit fold of
+// Unit::SpellDamageBonusDone (Unit.cpp:6679-6683, 6725-6731): the pet's own
+// SPELL_AURA_MOD_DAMAGE_DONE (13) school-gated fold
+// (SpellBaseDamageBonusDone, Unit.cpp:7134-7136) plus the guardian's
+// GetBonusDamage(), then DoneTotal += int32(DoneAdvertisedBenefit * coeff *
+// factorMod) runs per damage effect. The ATTR3_NO_DONE_BONUS gate
+// (Unit.cpp:6604-6605) and the DmgClass-NONE early-out — which fires only
+// when no spell_bonus_data row exists (Unit.cpp:6705-6709) — are honored.
+// The victim's SPELL_AURA_MOD_DAMAGE_TAKEN (14) arm (Unit.cpp:6682) is per
+// victim and folds at the petDamageFor call site. The remaining
+// DoneTotal/DoneTotalMod legs (scripted class-script arms, versus, Impurity
+// AP arms, pct mods) stay unbridged on the pet path.
 func (s *session) petGuardianDoneDamageBonus(motion *creatureMotion, spell wotlk.Spell) int32 {
-	bonus := s.guardianBonusSpellDamage(motion)
-	if bonus == 0 {
-		return 0
-	}
 	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
 		return 0
 	}
 	if _, hasRow := s.spellBonusRow(spell.ID); !hasRow && spell.DefenseType == spellDamageClassNone {
+		return 0
+	}
+	// Unit::SpellDamageBonusDone (Unit.cpp:6679-6683): the advertised benefit
+	// starts at SpellBaseDamageBonusDone — for a non-player caster that is
+	// the pet's own SPELL_AURA_MOD_DAMAGE_DONE (13) school-gated fold
+	// (Unit.cpp:7134-7136, GetTotalAuraModifierByMiscMask excludes misc-0)
+	// — then the guardian's GetBonusDamage() rides on top. The victim's
+	// SPELL_AURA_MOD_DAMAGE_TAKEN (14) arm (Unit.cpp:6682) is per victim and
+	// folds at the petDamageFor call site instead.
+	advertised := s.guardianBonusSpellDamage(motion)
+	if s != nil && s.server != nil && motion != nil {
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, creatureAuraKeyForMotion(motion), spellAuraModDamageDone, uint32(spell.SchoolMask)) {
+			advertised += amt
+		}
+	}
+	if advertised == 0 {
 		return 0
 	}
 	var total int32
@@ -1744,7 +1759,26 @@ func (s *session) petGuardianDoneDamageBonus(motion *creatureMotion, spell wotlk
 			if effect.CalcValueForLevel(spell, uint32(motion.Level)) <= 0 {
 				continue
 			}
-			total += int32(float64(bonus) * s.spellDoneCoefficient(spell, i, false))
+			total += int32(float64(advertised) * s.spellDoneCoefficient(spell, i, false))
+		}
+	}
+	return total
+}
+
+// petDamageEffectBonus folds a flat advertised-benefit arm into DoneTotal
+// per damage effect — int32(arm * coeff) over the same effect set
+// petGuardianDoneDamageBonus counts (Unit.cpp:6725-6727). Used for the
+// per-victim SPELL_AURA_MOD_DAMAGE_TAKEN arm, which cannot ride the
+// victim-independent advertised fold above.
+func (s *session) petDamageEffectBonus(spell wotlk.Spell, motion *creatureMotion, arm int32) int32 {
+	var total int32
+	for i, effect := range spell.Effects {
+		switch effect.Effect {
+		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+			if motion != nil && effect.CalcValueForLevel(spell, uint32(motion.Level)) <= 0 {
+				continue
+			}
+			total += int32(float64(arm) * s.spellDoneCoefficient(spell, i, false))
 		}
 	}
 	return total
@@ -1963,7 +1997,7 @@ func petHealTargetHasAura(s *session, ctx context.Context, victimGUID uint64, au
 // site via petHealingPctDone. Residual: the coefficient's level-penalty
 // factor reads the owner's level (spellHealingDoneCoefficient), where C++
 // reads the pet's.
-func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, effIndex int, victimGUID uint64) int32 {
+func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, effIndex int, victimGUID uint64, isDot bool, stack uint32) int32 {
 	if s == nil || motion == nil {
 		return 0
 	}
@@ -1975,6 +2009,9 @@ func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creat
 	}
 	if _, hasRow := s.spellBonusRow(spell.ID); !hasRow && spell.DefenseType == spellDamageClassNone {
 		return 0
+	}
+	if stack == 0 {
+		stack = 1
 	}
 	// Unit.cpp:7505-7519: the flat OVERRIDE_CLASS_SCRIPTS arms (Increased
 	// Rejuvenation Healing 4415, Increased Lesser Healing Wave 4953, LK Arena
@@ -1996,7 +2033,44 @@ func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creat
 	if advertised == 0 && flat == 0 {
 		return 0
 	}
-	return int32(float64(advertised)*s.spellHealingDoneCoefficient(spell, effIndex, false)) + flat
+	return int32(float64(advertised)*s.spellHealingDoneCoefficient(spell, effIndex, isDot)*float64(stack)) + flat
+}
+
+// petTickHealDoneLegs mirrors the per-tick Unit::SpellHealingBonusDone (DOT)
+// for a pet caster on periodic-heal ticks (SpellAuraEffects.cpp:5384): the
+// flat advertised-benefit fold (petGuardianDoneHealingBonus, dot
+// coefficient, tick stack), the percent leg (petHealingPctDone), then the
+// mod-owner's SPELLMOD_DOT tail (Unit.cpp:7614-7616). The Go tick paths
+// resolve a pet caster to no session, so these legs never ran for pet HoTs
+// while the player path ran them per tick. owner is the pet's owner session
+// (GetSpellModOwner); a nil owner passes the legs through, matching the
+// unresolved-caster convention on the tick paths. The leech/funnel zeroing
+// kills only the flat leg — the pct fold runs even then (Unit.cpp:7612),
+// like the cast path.
+func petTickHealDoneLegs(owner *session, ctx context.Context, motion *creatureMotion, spell wotlk.Spell, effIndex int, victimGUID uint64, heal, stack uint32) uint32 {
+	if motion == nil {
+		return heal
+	}
+	if bonus := owner.petGuardianDoneHealingBonus(ctx, motion, spell, effIndex, victimGUID, true, stack); bonus != 0 {
+		if adjusted := int32(heal) + bonus; adjusted > 0 {
+			heal = uint32(adjusted)
+		} else {
+			heal = 0
+		}
+	}
+	if pct := owner.petHealingPctDone(ctx, motion, spell, victimGUID); pct != 1.0 {
+		tmp := float64(int32(heal)) * pct
+		if tmp < 0 {
+			tmp = 0
+		}
+		heal = uint32(tmp)
+	}
+	if out := owner.applySpellMod(spell, spellModDot, int32(heal)); out < 0 {
+		heal = 0
+	} else {
+		heal = uint32(out)
+	}
+	return heal
 }
 
 // petHealingDoneAuraModifier mirrors the pet-caster leg of
@@ -2488,9 +2562,31 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		petDamageFor := func(victimGUID uint64) uint32 {
 			d := damage
 			if target, ok := s.getCombatTarget(ctx, victimGUID); ok {
+				// Unit::SpellDamageBonusDone (Unit.cpp:6682): the victim's
+				// SPELL_AURA_MOD_DAMAGE_TAKEN (14, Amplify/Dampen Magic) arm
+				// rides the advertised benefit ahead of the pct leg — the
+				// weapon-damage gate inside victimDamageTakenFlat keeps it
+				// off the melee-taken side (Unit.cpp:7996).
+				if v14 := s.victimDamageTakenFlat(spell, victimGUID, target); v14 != 0 {
+					if adjusted := int32(d) + s.petDamageEffectBonus(spell, motion, v14); adjusted > 0 {
+						d = uint32(adjusted)
+					} else {
+						d = 0
+					}
+				}
 				if pct := s.petDamagePctDone(ctx, motion, spell, victimGUID, target); pct != 1.0 {
 					d = uint32(float64(d) * pct)
 				}
+			}
+			// Unit::SpellDamageBonusDone (Unit.cpp:6731-6734): the mod-owner's
+			// SPELLMOD_DAMAGE / SPELLMOD_DOT fold applies to the damage total
+			// after the pct leg — the cast loop carries direct damage effects
+			// only, so the op is SPELLMOD_DAMAGE (the DoT tick path is the
+			// dot twin).
+			if out := s.applySpellMod(spell, spellModDamage, int32(d)); out < 0 {
+				d = 0
+			} else {
+				d = uint32(out)
 			}
 			return d
 		}
@@ -2528,8 +2624,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				}
 				// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561, 7599-7605):
 				// the guardian's GetBonusDamage() rides the heal advertised
-				// benefit into the per-effect DoneTotal.
-				if bonus := s.petGuardianDoneHealingBonus(ctx, motion, spell, i, resolveReflectTarget(targetGUID)); bonus != 0 {
+				// benefit into the per-effect DoneTotal. Direct heal effects:
+				// the direct coefficient and a stack of 1.
+				if bonus := s.petGuardianDoneHealingBonus(ctx, motion, spell, i, resolveReflectTarget(targetGUID), false, 1); bonus != 0 {
 					if adjusted := int32(heal) + bonus; adjusted > 0 {
 						heal = uint32(adjusted)
 					} else {

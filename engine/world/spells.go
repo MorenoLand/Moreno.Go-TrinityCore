@@ -25459,19 +25459,30 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// tick amount before the taken leg. Gated off persistent-area auras:
 		// their done leg is baked into the stored amount at spawn (see
 		// spawnPersistentAreaAura), so a per-tick pass would double-count.
+		healEffIndex := 0
+		for i, eff := range healSpell.Effects {
+			if eff.Aura == aura.AuraType {
+				healEffIndex = i
+				break
+			}
+		}
+		stack := uint32(aura.StackCount)
+		if stack == 0 {
+			stack = 1
+		}
 		if healCaster != nil && healKnown && !aura.PersistentAreaAura {
-			healEffIndex := 0
-			for i, eff := range healSpell.Effects {
-				if eff.Aura == aura.AuraType {
-					healEffIndex = i
-					break
-				}
-			}
-			stack := uint32(aura.StackCount)
-			if stack == 0 {
-				stack = 1
-			}
 			heal = healCaster.spellHealingBonusDone(healSpell, heal, ts, healEffIndex, true, stack)
+		}
+		// Pet casters have no session, so the block above never runs for
+		// them — but C++ runs the per-tick SpellHealingBonusDone (DOT) on
+		// the pet unit too (SpellAuraEffects.cpp:5384). The pet done legs
+		// ride the live pet motion; the spellmod tail folds on the owner's
+		// session (GetSpellModOwner). An offline owner passes the legs
+		// through, matching the unresolved-caster convention on this path.
+		if healCaster == nil && healKnown && !aura.PersistentAreaAura && ts.server != nil {
+			if motion := ts.findCreatureMotion(aura.CasterGUID); motion != nil {
+				heal = petTickHealDoneLegs(ts.server.findSessionByGUID(motion.OwnerGUID), context.Background(), motion, healSpell, healEffIndex, ts.playerGUID, heal, stack)
+			}
 		}
 		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, Nourish,

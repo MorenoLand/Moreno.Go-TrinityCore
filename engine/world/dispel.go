@@ -1539,7 +1539,7 @@ func (s *session) healDevourMagicPet(ctx context.Context, petCaster *creatureMot
 					break
 				}
 			}
-			if bonus := s.petGuardianDoneHealingBonus(ctx, petCaster, devourHeal, effIndex, petCaster.GUID); bonus != 0 {
+			if bonus := s.petGuardianDoneHealingBonus(ctx, petCaster, devourHeal, effIndex, petCaster.GUID, false, 1); bonus != 0 {
 				if adjusted := int32(heal) + bonus; adjusted > 0 {
 					heal = uint32(adjusted)
 				} else {
