@@ -35,8 +35,9 @@
 -- rides POINT_FLIGHT (no-movement-inform bridge); the POINT_LAND /
 -- POINT_LAND_GROUND / POINT_TAKEOFF MotionMaster legs have no
 -- motion-master bridge.
--- boss_saviana_ragefire UpdateAI — Talk(EMOTE_ENRAGED 2) rides
--- EVENT_ENRAGE (no-timer-bridge); the EVENT_FLIGHT / EVENT_FLAME_BREATH
+-- boss_saviana_ragefire UpdateAI — Talk(EMOTE_ENRAGED 2) +
+-- EVENT_ENRAGE ported 2026-10-13 on the maiden CreateLuaEvent
+-- convention (see below); the EVENT_FLIGHT
 -- / EVENT_CONFLAGRATION / EVENT_AIR_MOVEMENT / EVENT_LAND_GROUND
 -- DoCastSelf / DoCastVictim / MoveTakeoff / MovePoint / MoveLand /
 -- events.Repeat legs have no-cast / no-motion-master / no-timer
@@ -53,13 +54,60 @@
 -- GetEffectValue on caster + MovePoint(POINT_LAND,
 -- SavianaRagefireFlyInPos)) — no SpellScript bridge.
 -- All 4 Talk() calls in the file accounted for (SAY_AGGRO 0 +
--- SAY_KILL 3 ported; SAY_CONFLAGRATION 1 + EMOTE_ENRAGED 2
--- documented above).
+-- SAY_KILL 3 + EMOTE_ENRAGED 2 ported; SAY_CONFLAGRATION 1 documented
+-- above).
 
 local ENTRY_SAVIANA_RAGEFIRE = 39747
 
 local SAY_AGGRO = 0
 local SAY_KILL  = 3
+
+local EMOTE_ENRAGED      = 2
+local SPELL_ENRAGE       = 78722
+local SPELL_FLAME_BREATH = 74403
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_ENRAGE: DoCastSelf(SPELL_ENRAGE 78722) (non-triggered) +
+-- Talk(EMOTE_ENRAGED 2), 20s init, Repeat(24s).
+local function enrageTick(creature, guid)
+    creature:CastSpell(creature, SPELL_ENRAGE)
+    creature:Talk(EMOTE_ENRAGED)
+    schedule(guid, "enrage", 24000, function()
+        enrageTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_FLAME_BREATH: DoCastVictim(SPELL_FLAME_BREATH 74403)
+-- (non-triggered), 14s init, Repeat(20s, 30s).
+local function flameBreathTick(creature, guid)
+    creature:CastSpell(nil, SPELL_FLAME_BREATH)
+    schedule(guid, "flamebreath", {20000, 30000}, function()
+        flameBreathTick(creature, guid)
+    end)
+end
 
 -- C++ boss_saviana_ragefire::JustEngagedWith:
 -- BossAI::JustEngagedWith(who); Talk(SAY_AGGRO);
@@ -67,9 +115,38 @@ local SAY_KILL  = 3
 -- EVENT_GROUP_LAND_PHASE); events.ScheduleEvent(EVENT_FLAME_BREATH,
 -- Seconds(14), EVENT_GROUP_LAND_PHASE); events.ScheduleEvent(
 -- EVENT_FLIGHT, Seconds(60), EVENT_GROUP_LAND_PHASE) — the auriaya
--- precedent (the non-Talk legs have no bridges).
+-- precedent; the land-phase timer legs (EVENT_ENRAGE /
+-- EVENT_FLAME_BREATH) ride the maiden CreateLuaEvent convention now
+-- (see below).
+-- Caveat: C++ cancels the land-phase group at takeoff (EVENT_FLIGHT)
+-- and reschedules on landing; the flight legs ride the MotionMaster
+-- (no bridge), so the group-cancel can't be modeled — since flight
+-- itself is unported the Lua boss never leaves the ground and
+-- continuous timers match the ground-phase behavior.
 local function savianaEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "enrage", 20000, function()
+        enrageTick(creature, guid)
+    end)
+    schedule(guid, "flamebreath", 14000, function()
+        flameBreathTick(creature, guid)
+    end)
+end
+
+local function savianaLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- Harness-only: no C++ JustDied Talk (only DoPlaySoundToSet, no
+-- play-sound bridge) — cancels the engage timers.
+local function savianaDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+local function savianaReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_saviana_ragefire::KilledUnit:
@@ -82,4 +159,7 @@ local function savianaKilledUnit(event, creature, victim)
 end
 
 RegisterCreatureEvent(ENTRY_SAVIANA_RAGEFIRE, 1, savianaEnterCombat)
+RegisterCreatureEvent(ENTRY_SAVIANA_RAGEFIRE, 2, savianaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SAVIANA_RAGEFIRE, 3, savianaKilledUnit)
+RegisterCreatureEvent(ENTRY_SAVIANA_RAGEFIRE, 4, savianaDied)
+RegisterCreatureEvent(ENTRY_SAVIANA_RAGEFIRE, 23, savianaReset)

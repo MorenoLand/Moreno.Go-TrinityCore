@@ -70,15 +70,79 @@ local SAY_AGGRO = 0
 local SAY_KILL  = 1
 local SAY_DEATH = 3
 
+local SPELL_CLEAVE_ARMOR    = 74367
+local SPELL_INTIMIDATING_ROAR = 74384
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_CLEAVE: DoCastVictim(SPELL_CLEAVE_ARMOR 74367)
+-- (non-triggered), 8s init, re-ScheduleEvent(15s) (fixed, not Repeat).
+local function cleaveTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CLEAVE_ARMOR)
+    schedule(guid, "cleave", 15000, function()
+        cleaveTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_INTIDMDATING_ROAR: DoCastSelf(SPELL_INTIMIDATING_ROAR 74384)
+-- (non-triggered), 14s init, Repeat(35s, 40s).
+local function intimidatingRoarTick(creature, guid)
+    creature:CastSpell(creature, SPELL_INTIMIDATING_ROAR)
+    schedule(guid, "roar", {35000, 40000}, function()
+        intimidatingRoarTick(creature, guid)
+    end)
+end
+
 -- C++ boss_general_zarithrian::JustEngagedWith:
 -- BossAI::JustEngagedWith(who); Talk(SAY_AGGRO);
 -- events.ScheduleEvent(EVENT_CLEAVE, 8s);
 -- events.ScheduleEvent(EVENT_INTIDMDATING_ROAR, 14s);
 -- events.ScheduleEvent(EVENT_SUMMON_ADDS, 15s); [+ 16s 25-man
--- EVENT_SUMMON_ADDS2] — the auriaya precedent (the non-Talk legs have
--- no bridges).
+-- EVENT_SUMMON_ADDS2] — the auriaya precedent; the cleave/roar
+-- timer legs ride the maiden CreateLuaEvent convention now (see
+-- below). EVENT_SUMMON_ADDS (Talk(SAY_ADDS 2) + stalker-triggered
+-- 74398 casts via instance GUIDs) stays documented-only: a Talk-only
+-- port would fire with no adds spawning (visible fidelity deviation).
 local function zarithrianEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "cleave", 8000, function()
+        cleaveTick(creature, guid)
+    end)
+    schedule(guid, "roar", 14000, function()
+        intimidatingRoarTick(creature, guid)
+    end)
+end
+
+local function zarithrianLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function zarithrianReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_general_zarithrian::KilledUnit:
@@ -94,9 +158,12 @@ end
 -- _JustDied(); Talk(SAY_DEATH) — the sjonnir precedent (the
 -- _JustDied() instance leg has no bridge).
 local function zarithrianDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
 RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 1, zarithrianEnterCombat)
+RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 2, zarithrianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 3, zarithrianKilledUnit)
 RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 4, zarithrianDied)
+RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 23, zarithrianReset)
