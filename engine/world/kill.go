@@ -869,8 +869,10 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		}
 	}
 
-	// Quest kill credit: RequiredNpcOrGo entries plus KillCredit templates.
-	s.creditQuestKills(ctx, creatureEntry, target.GUID)
+	// Quest kill credit (KillRewarder::_RewardKillCredit, KillRewarder.cpp:183-191):
+	// RequiredNpcOrGo entries plus KillCredit templates, shared with the
+	// group at reward distance.
+	s.grantCreatureKillQuestCredit(ctx, creatureEntry, target)
 	s.updateAchievementCriteria(criteriaTypeKillCreature, creatureEntry, 1)
 	if creatureType > 0 {
 		s.updateAchievementCriteria(criteriaTypeKillCreatureType, creatureType, 1)
@@ -1406,6 +1408,60 @@ func (s *session) questAllowedInRaid(questType uint32) bool {
 	return QuestAllowedInRaid(questType, s.player.RaidDifficulty, groupRaid, s.server.Config.QuestIgnoreRaid)
 }
 
+// grantCreatureKillQuestCredit runs the KillRewarder kill-credit leg
+// (KillRewarder.cpp:183-191, 236-256): kill credit is skipped on
+// battleground maps (the _isBattleGround arm); solo, the killer is
+// credited directly; in a group every member at group reward distance
+// shares the credit (the killer is always in range), gated on
+// alive-or-no-corpse (Player::RewardPlayerAndGroupAtEvent,
+// Player.cpp:24132-24158 — same map and instance, corpse-anchored,
+// dungeon-always, else within MaxGroupXPDistance /
+// CONFIG_GROUP_XP_DISTANCE).
+func (s *session) grantCreatureKillQuestCredit(ctx context.Context, creatureEntry uint32, target combatTarget) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if s.server.Data != nil {
+		if mapInfo, found, err := s.server.Data.Map(target.Map); err == nil && found && mapInfo.IsBattleground() {
+			return
+		}
+	}
+	if s.groupID == 0 {
+		s.creditQuestKills(ctx, creatureEntry, target.GUID)
+		return
+	}
+	inDungeon := s.isDungeonMap(target.Map)
+	credited := false
+	for _, m := range s.server.getGroupSessions(s.groupID) {
+		if m == nil || m.player == nil {
+			continue
+		}
+		if m == s {
+			credited = true
+		} else {
+			if m.player.Map != target.Map || m.player.InstanceID != target.InstanceID {
+				continue
+			}
+			mx, my, mz := groupRewardAnchorPos(m)
+			if !inDungeon && distance3D(mx, my, mz, target.X, target.Y, target.Z) > s.server.Config.MaxGroupXPDistance {
+				continue
+			}
+		}
+		// Quest objectives update only for alive members or dead members
+		// whose corpse is not yet released (Player.cpp:24152).
+		if m.isDeadOrGhost() && m.player.hasCorpse {
+			continue
+		}
+		m.creditQuestKills(ctx, creatureEntry, target.GUID)
+	}
+	if !credited {
+		s.creditQuestKills(ctx, creatureEntry, target.GUID)
+	}
+}
+
+// creditQuestKills runs Player::KilledMonster (Player.cpp:16624): the
+// KillCredit1/2 template fan-out, then the per-quest credit loop shared
+// with the gameobject-activate arm.
 func (s *session) creditQuestKills(ctx context.Context, creatureEntry uint32, victimGUID uint64) {
 	if s.player == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
@@ -1419,25 +1475,72 @@ func (s *session) creditQuestKills(ctx context.Context, creatureEntry uint32, vi
 			entries = append(entries, uint32(credit))
 		}
 	}
+	s.creditQuestObjectiveEntries(ctx, entries, victimGUID, false)
+}
+
+// creditQuestGOActivation runs Player::KillCreditGO (Player.cpp:16757): the
+// CAST-flag arm for gameobject-activate objectives (negative
+// RequiredNpcOrGo entries) — no KillCredit template fan-out and no
+// raid-group gate (C++ has neither here).
+func (s *session) creditQuestGOActivation(ctx context.Context, goEntry uint32, guid uint64) {
+	if s.player == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	s.creditQuestObjectiveEntries(ctx, []uint32{goEntry}, guid, true)
+}
+
+// creditQuestObjectiveEntries is the shared Player::KilledMonsterCredit /
+// Player::KillCreditGO quest loop. goActivate selects the sign of the
+// matched RequiredNpcOrGo objectives (negative for gameobject-activate,
+// positive for kill credit — each C++ arm skips the other's sign) and the
+// SMSG_QUESTUPDATE_ADD_KILL entry form: creature entries are sent raw while
+// gameobject ids go out as (-id)|0x80000000
+// (Player::SendQuestUpdateAddCreatureOrGo, Player.cpp:17104-17107). The KILL
+// and CAST special flags are load-computed from the same nonzero
+// RequiredNpcOrGo columns (ObjectMgr.cpp:5004), so objective matching makes
+// them vacuous here. The raid-group gate
+// (!GetGroup() || !GetGroup()->isRaidGroup() ||
+// qInfo->IsAllowedInRaid(GetMap()->GetDifficulty()), Player.cpp:16655)
+// applies to kill credit only.
+func (s *session) creditQuestObjectiveEntries(ctx context.Context, entries []uint32, guid uint64, goActivate bool) {
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		entry := s.player.QuestLog[slot]
 		if entry.QuestID == 0 {
 			continue
 		}
 		var reqIDs, reqCounts [4]int64
-		err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT RequiredNpcOrGo1, RequiredNpcOrGo2, RequiredNpcOrGo3, RequiredNpcOrGo4, RequiredNpcOrGoCount1, RequiredNpcOrGoCount2, RequiredNpcOrGoCount3, RequiredNpcOrGoCount4 FROM quest_template WHERE ID = ?", entry.QuestID).Scan(&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3])
+		var questType int64
+		err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT RequiredNpcOrGo1, RequiredNpcOrGo2, RequiredNpcOrGo3, RequiredNpcOrGo4, RequiredNpcOrGoCount1, RequiredNpcOrGoCount2, RequiredNpcOrGoCount3, RequiredNpcOrGoCount4, QuestType FROM quest_template WHERE ID = ?", entry.QuestID).Scan(&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3], &questType)
 		if err != nil {
+			continue
+		}
+		if !goActivate && !s.questAllowedInRaid(uint32(questType)) {
 			continue
 		}
 		progressed := false
 		for objective := 0; objective < 4; objective++ {
 			required := uint32(reqCounts[objective])
-			if required == 0 || reqIDs[objective] == 0 {
+			reqID := reqIDs[objective]
+			if required == 0 || reqID == 0 {
 				continue
+			}
+			var want, packetEntry uint32
+			if goActivate {
+				if reqID > 0 {
+					continue
+				}
+				want = uint32(-reqID)
+				packetEntry = want | 0x80000000
+			} else {
+				if reqID < 0 {
+					continue
+				}
+				want = uint32(reqID)
+				packetEntry = want
 			}
 			match := false
 			for _, e := range entries {
-				if uint32(reqIDs[objective]) == e {
+				if e == want {
 					match = true
 					break
 				}
@@ -1452,10 +1555,10 @@ func (s *session) creditQuestKills(ctx context.Context, creatureEntry uint32, vi
 			progressed = true
 			update := protocol.NewBuffer(24)
 			update.WriteU32(entry.QuestID)
-			update.WriteU32(uint32(reqIDs[objective]))
+			update.WriteU32(packetEntry)
 			update.WriteU32(uint32(entry.Counters[objective]))
 			update.WriteU32(required)
-			update.WriteU64(victimGUID)
+			update.WriteU64(guid)
 			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_ADD_KILL), update.Bytes(), true)
 			countColumn := "mobcount" + string(rune('1'+objective))
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET "+countColumn+" = ? WHERE guid = ? AND quest = ?", int64(entry.Counters[objective]), s.playerGUID, entry.QuestID)

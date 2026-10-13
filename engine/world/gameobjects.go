@@ -503,7 +503,7 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 	// it (GameObject.cpp:1666-1672; Player::IsAtGroupRewardDistance,
 	// Player.cpp:24160-24173 — the distance anchor is the GO, and a dead
 	// member's distance anchors on their corpse via groupRewardAnchorPos).
-	s.creditQuestKills(ctx, entry, guid)
+	s.creditQuestGOActivation(ctx, entry, guid)
 	if s.groupID != 0 && s.server != nil {
 		inDungeon := s.isDungeonMap(goState.Map)
 		for _, m := range s.server.getGroupSessions(s.groupID) {
@@ -515,7 +515,7 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 			}
 			mx, my, mz := groupRewardAnchorPos(m)
 			if inDungeon || distance3D(goState.X, goState.Y, goState.Z, mx, my, mz) <= s.server.Config.MaxGroupXPDistance {
-				m.creditQuestKills(ctx, entry, guid)
+				m.creditQuestGOActivation(ctx, entry, guid)
 			}
 		}
 	}
