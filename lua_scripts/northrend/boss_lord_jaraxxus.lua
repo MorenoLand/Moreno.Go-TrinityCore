@@ -224,11 +224,11 @@ local function jaraxxusEnterCombat(event, creature, target)
     schedule(guid, "netherpower", 22000, function()
         netherPowerTick(creature, guid)
     end)
-    -- C++ EVENT_ENRAGE: Talk(SAY_BERSERK) + DoCastSelf(Berserk 64238),
+    -- C++ EVENT_ENRAGE: Talk(SAY_BERSERK) + DoCastSelf(Berserk 64238, triggered),
     -- 10min, fires once (never rescheduled).
     schedule(guid, "berserk", 600000, function()
         creature:Talk(SAY_BERSERK)
-        creature:CastSpell(creature, SPELL_BERSERK)
+        creature:CastSpell(creature, SPELL_BERSERK, true)
     end)
 end
 
