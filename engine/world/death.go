@@ -463,13 +463,17 @@ const (
 // attacker->GetCharmerOrOwnerPlayerOrPlayerItself() arm (Unit.cpp:11279).
 // pvpDeath carries Unit::Kill's attacker arm (Unit.cpp:11341-11343): true when
 // the killer resolves to a player (attacker->GetCharmerOrOwnerPlayerOrPlayerItself()),
-// feeding the corpse type and the reclaim delay.
+// feeding the corpse type and the reclaim delay. A non-nil killer forces it
+// true inside (the owner-session resolution is the same arm), so callers
+// passing a pet owner's session need not set it.
 // durabilityLoss carries Unit::Kill's durabilityLoss param (Unit.h:940,
 // default true from DealDamage): false for GM .die/.damage (cs_misc.cpp:608,
-// 2116 — both pass durabilityLoss=false, and the Kill-mode .die has a player
-// attacker so CONFIG_DURABILITY_LOSS_IN_PVP would suppress it anyway) and
-// for non-fall environmental deaths (Player::EnvironmentalDamage passes false
-// and re-applies the loss only for DAMAGE_FALL, Player.cpp:793-803).
+// 2116) and for non-fall environmental deaths (Player::EnvironmentalDamage
+// passes false and re-applies the loss only for DAMAGE_FALL,
+// Player.cpp:793-803). The on-death gate itself is
+// (durabilityLoss && !pvp && !inBG) || (pvp && DurabilityLoss.InPvP)
+// (Unit.cpp:11350-11357); the rate is Config.DurabilityLossOnDeath
+// (World.cpp:606-617).
 func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, durabilityLoss bool) {
 	if s.player == nil || s.player.Health > 0 {
 		return
@@ -542,12 +546,19 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		s.clearAllReactives()
 		s.resurrection = nil
 	}
-	// Unit::Kill (Unit.cpp:11341-11343): remember the victim's PvP death for
-	// corpse type and corpse reclaim delay, stored until CreateCorpse (the
-	// SetPvPDeath(player != nullptr) leg). Placed after the pet arm, matching
-	// the C++ relative order. Runs at the original death even under Spirit of
-	// Redemption (Unit.cpp:11344-11346: "at original death (not at
+	// Unit::Kill (Unit.cpp:11279, 11341-11343): the PvP-death flag is
+	// SetPvPDeath(player != nullptr), where player is the attacker's
+	// GetCharmerOrOwnerPlayerOrPlayerItself — a player-owned pet's kill is a
+	// PvP death (corpse type, reclaim delay, durability gate). killer
+	// arrives here as exactly that resolution (nil for wild
+	// creatures/environment), so a non-nil killer marks the death PvP even
+	// when the caller passed pvpDeath=false. Placed after the pet arm,
+	// matching the C++ relative order. Runs at the original death even under
+	// Spirit of Redemption (Unit.cpp:11344-11346: "at original death (not at
 	// SpiritOfRedemtionTalent timeout)").
+	if killer != nil {
+		pvpDeath = true
+	}
 	s.pvpDeath = pvpDeath
 	if !spiritOfRedemption {
 		// Player::KillPlayer (Player.cpp:4783): the release-timer byte flag
@@ -680,15 +691,30 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	if s.duelPartner != 0 {
 		s.interruptDuel()
 	}
-	// Unit::Kill (Unit.cpp:11351-11357): 10% durability loss on death, but
-	// not for PvP deaths — CONFIG_DURABILITY_LOSS_IN_PVP defaults false —
-	// and not in battlegrounds (no BG-membership model on the session; the
-	// PvP-death gate covers the player-killer case). The durabilityLoss param
-	// (Unit.h:940) suppresses the leg for GM .die/.damage and for
-	// non-fall environmental deaths (Player::EnvironmentalDamage only
-	// re-applies it for DAMAGE_FALL, Player.cpp:793-803).
-	if durabilityLoss && !s.pvpDeath {
-		s.durabilityLossAll(ctx, 0.10, false)
+	// Unit::Kill (Unit.cpp:11350-11357): the on-death durability gate —
+	// (durabilityLoss && !player && !victim->InBattleground()) ||
+	// (player && CONFIG_DURABILITY_LOSS_IN_PVP). player is the
+	// GetCharmerOrOwnerPlayerOrPlayerItself arm, so killer != nil (already
+	// folded into s.pvpDeath above) is its Go twin; InBattleground is
+	// bgData.InstanceID != 0 (Player.h:1906). The rate is
+	// RATE_DURABILITY_LOSS_ON_DEATH ("DurabilityLoss.OnDeath", default 10.0,
+	// World.cpp:606-617: out of [0,100] clamps to 0, then /100). Previously
+	// Go hardcoded 0.10, suppressed the loss only on pvpDeath (so BG
+	// creature kills wrongly cost durability), and never applied it for
+	// PvP kills even with the InPvP config on.
+	inBG := s.bgData.InstanceID != 0
+	lossRate := 0.0
+	lossInPvP := false
+	if s.server != nil {
+		lossRate = s.server.Config.DurabilityLossOnDeath
+		if lossRate < 0 || lossRate > 100 {
+			lossRate = 0
+		}
+		lossRate /= 100
+		lossInPvP = s.server.Config.DurabilityLossInPvP
+	}
+	if (durabilityLoss && !s.pvpDeath && !inBG) || (s.pvpDeath && lossInPvP) {
+		s.durabilityLossAll(ctx, lossRate, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_DURABILITY_DAMAGE_DEATH), []byte{}, true)
 	}
 	s.debug("player killed", "account", s.accountName, "guid", s.playerGUID)
