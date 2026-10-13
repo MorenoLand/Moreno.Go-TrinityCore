@@ -95,7 +95,7 @@ local function onDamageTaken(_, creature, _, damage)
     end
     if creature:GetHealth() <= damage then
         summonFired[guid] = true
-        creature:CastSpell(creature, SPELL_SUMMON_SPIRE_SPIDERLING)
+        creature:CastSpell(creature, SPELL_SUMMON_SPIRE_SPIDERLING, true)
     end
 end
 

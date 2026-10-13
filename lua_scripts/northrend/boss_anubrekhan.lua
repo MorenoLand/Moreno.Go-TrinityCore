@@ -121,7 +121,7 @@ end
 -- C++ EVENT_BERSERK: DoCastSelf(Berserk 27680, triggered), 10min
 -- init, reschedules 10min.
 local function berserkTick(creature, guid)
-    creature:CastSpell(creature, SPELL_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK, true)
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature, guid)
     end)

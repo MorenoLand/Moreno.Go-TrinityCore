@@ -125,11 +125,11 @@ local function alivePlayersInInstance(creature)
     return found
 end
 
--- C++ EVENT_CLEAVE: triggered DoCastVictim(19983); re-arm 15s.
+-- C++ EVENT_CLEAVE: non-triggered DoCastVictim(19983); re-arm 15s.
 local function onCleave(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_CLEAVE, true)
+        creature:CastSpell(victim, SPELL_CLEAVE)
     end
     schedule(guid, "cleave", 15000, function()
         onCleave(creature, guid)
