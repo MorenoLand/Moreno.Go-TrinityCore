@@ -79,12 +79,14 @@
 -- ACTION_ENTER_COMBAT / ACTION_SETUP_ARCHMAGES / ACTION_DEATH machine
 -- (no-DoAction bridge) — NOT registered.
 -- npc_risen_archmage (37868) / npc_blazing_skeleton (36791) /
--- npc_suppresser (37863) / npc_blistering_zombie (37934) /
--- npc_gluttonous_abomination (37886) — zero Talk lines; their
--- UpdateAI/JustDied DoCastSelf legs (ACID_BURST / ROT_WORM_SPAWNER /
--- GUT_SPRAY), the suppresser MovementInform CHASE_MOTION_TYPE leg (no
+-- npc_suppresser (37863) — zero Talk lines; their UpdateAI DoCastSelf
+-- legs, the suppresser MovementInform CHASE_MOTION_TYPE leg (no
 -- MovementInform bridge), summoner SpellHitTarget knockback legs (event
 -- 15 never fires) — NOT registered.
+-- PORTED (2026-10-13): npc_blistering_zombie (37934) JustDied —
+-- DoCastSelf(SPELL_ACID_BURST 70744, triggered); npc_gluttonous_abomination
+-- (37886) JustDied — DoCastSelf(SPELL_ROT_WORM_SPAWNER 70675, triggered)
+-- unless killed by Valithria (event 4; the_black_morass killer-gate precedent).
 -- npc_dream_portal (37945) / npc_dream_cloud (entry DB-side, no header
 -- constant) — zero Talk lines; portal JustSummoned delayed-cast event
 -- legs (ValithriaDelayedCastEvent / ValithriaAuraRemoveEvent — no
@@ -97,9 +99,15 @@
 
 local ENTRY_LICH_KING_VALITHRIA = 16980
 local ENTRY_VALITHRIA_DREAMWALKER = 36789
+local ENTRY_BLISTERING_ZOMBIE = 37934
+local ENTRY_GLUTTONOUS_ABOMINATION = 37886
 
 local SAY_LICH_KING_INTRO = 0
 local SAY_VALITHRIA_25_PERCENT = 3
+local SAY_VALITHRIA_DEATH = 4
+
+local SPELL_ACID_BURST = 70744
+local SPELL_ROT_WORM_SPAWNER = 70675
 
 -- C++ npc_the_lich_king_controller::JustEngagedWith:
 -- Talk(SAY_LICH_KING_INTRO) — the auriaya engage-port precedent.
@@ -112,29 +120,58 @@ local valithriaState = {}
 -- C++ boss_valithria_dreamwalker::DamageTaken — HealthBelowPctDamaged(
 -- 25, damage) = (health - damage) < floor(max*25/100) (Unit.h:873;
 -- ironaya floored-integer convention) + the _under25PercentTalkDone
--- latch — Talk(SAY_VALITHRIA_25_PERCENT) (:348-356). The
--- death-negation leg (damage = 0 + cross-AI ACTION_DEATH) has no
--- bridge — a lone damage=0 would strand the encounter (algalon
--- precedent), so only the Talk latch is modeled.
+-- latch — Talk(SAY_VALITHRIA_25_PERCENT) (:348-356); the lethal leg
+-- (damage >= health) negates damage to 0 + the _justDied latch —
+-- Talk(SAY_VALITHRIA_DEATH) (:357-366). In C++ she never dies; the
+-- encounter completion rides the cross-AI ACTION_DEATH leg (no
+-- bridge), but the no-death + Talk behavior is exactly bridgeable
+-- (return false, 0 — julianne/curator damage-negation precedent).
 local function valithriaDamageTaken(_, creature, _, damage)
     local guid = creature:GetGUID()
-    if valithriaState[guid] then
-        return
-    end
+    local st = valithriaState[guid] or {}
+    valithriaState[guid] = st
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
-        return
+        return false, damage
     end
     if (creature:GetHealth() - damage) < math.floor(maxHealth * 25 / 100) then
-        valithriaState[guid] = true
-        creature:Talk(SAY_VALITHRIA_25_PERCENT)
+        if not st.talk25Done then
+            st.talk25Done = true
+            creature:Talk(SAY_VALITHRIA_25_PERCENT)
+        end
+        if damage >= creature:GetHealth() then
+            if not st.justDied then
+                st.justDied = true
+                creature:Talk(SAY_VALITHRIA_DEATH)
+            end
+            return false, 0
+        end
     end
+    return false, damage
 end
 
 local function valithriaReset(event, creature)
     valithriaState[creature:GetGUID()] = nil
 end
 
+-- C++ npc_blistering_zombie::JustDied — unconditional
+-- DoCastSelf(SPELL_ACID_BURST, true) (triggered, :851-853).
+local function blisteringZombieJustDied(event, creature, killer)
+    creature:CastSpell(creature, SPELL_ACID_BURST, true)
+end
+
+-- C++ npc_gluttonous_abomination::JustDied —
+-- DoCastSelf(SPELL_ROT_WORM_SPAWNER, true) (triggered) unless killed
+-- by Valithria herself (:873-878).
+local function gluttonousAbominationJustDied(event, creature, killer)
+    if killer and killer:GetEntry() == ENTRY_VALITHRIA_DREAMWALKER then
+        return
+    end
+    creature:CastSpell(creature, SPELL_ROT_WORM_SPAWNER, true)
+end
+
 RegisterCreatureEvent(ENTRY_LICH_KING_VALITHRIA, 1, lichKingJustEngagedWith)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 9, valithriaDamageTaken)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 23, valithriaReset)
+RegisterCreatureEvent(ENTRY_BLISTERING_ZOMBIE, 4, blisteringZombieJustDied)
+RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 4, gluttonousAbominationJustDied)
