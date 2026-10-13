@@ -1669,10 +1669,8 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 // Unit::SpellHealingBonusDone (Unit.cpp:7558-7561). The session is the
 // guardian's owner player; C++ keeps only the finished int32, so the helper
 // returns the truncated value exactly as SetBonusDamage stores it.
-// Residual gaps: the hunter-pet Wild Hunt talent mod (StatSystem.cpp:1406-1418)
-// has no Go pet spellbook model, so the mod stays 1.0; the spirit-wolf Glyph
-// of Feral Spirit leg (63271, StatSystem.cpp:1434-1435) has no Go model, so
-// the multiplier stays 0.31.
+// Residual gap: the hunter-pet Wild Hunt talent mod (StatSystem.cpp:1406-1418)
+// has no Go pet spellbook model, so the mod stays 1.0.
 func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 	if s == nil || s.player == nil || motion == nil {
 		return 0
@@ -1687,8 +1685,16 @@ func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 		return int32(s.totalAttackPowerValue(false) * 0.1287)
 	case motion.Entry == 29264:
 		// IsSpiritWolf (TemporarySummon.h:85, StatSystem.cpp:1432-1439):
-		// owner base AP * 0.31 (0.61 with the glyph).
-		return int32(s.totalAttackPowerValue(false) * 0.31)
+		// owner base AP * 0.31, 0.61 when the owner carries the Glyph of
+		// Feral Spirit (StatSystem.cpp:1434-1435 checks
+		// GetAuraEffect(63271, 0)). Go applies glyph auras into the owner's
+		// live aura set at login (player_auras.go), so s.hasAura is the
+		// exact predicate.
+		mult := float32(0.31)
+		if s.hasAura(63271) {
+			mult = 0.61
+		}
+		return int32(s.totalAttackPowerValue(false) * mult)
 	case motion.PetType == petTypeSummon && s.player.Class == 9:
 		// IsPet warlock demon (StatSystem.cpp:1442-1449): max(owner fire,
 		// owner shadow damage-done bonus) * 0.15, floored at 0. The C++
@@ -1759,7 +1765,7 @@ func (s *session) petGuardianDoneDamageBonus(motion *creatureMotion, spell wotlk
 			if effect.CalcValueForLevel(spell, uint32(motion.Level)) <= 0 {
 				continue
 			}
-			total += int32(float64(advertised) * s.spellDoneCoefficient(spell, i, false))
+			total += int32(float64(advertised) * s.spellDoneCoefficientCasterLevel(spell, i, false, motion.Level))
 		}
 	}
 	return total
@@ -1778,7 +1784,7 @@ func (s *session) petDamageEffectBonus(spell wotlk.Spell, motion *creatureMotion
 			if motion != nil && effect.CalcValueForLevel(spell, uint32(motion.Level)) <= 0 {
 				continue
 			}
-			total += int32(float64(arm) * s.spellDoneCoefficient(spell, i, false))
+			total += int32(float64(arm) * s.spellDoneCoefficientCasterLevel(spell, i, false, motion.Level))
 		}
 	}
 	return total
@@ -1994,9 +2000,9 @@ func petHealTargetHasAura(s *session, ctx context.Context, victimGUID uint64, au
 // being a player. The ap_bonus/ap_dot_bonus arms (Unit.cpp:7568-7581) need
 // the caster's total attack power, which Go does not model for creatures —
 // documented no-bridge. The percent leg (SpellHealingPctDone) rides the call
-// site via petHealingPctDone. Residual: the coefficient's level-penalty
-// factor reads the owner's level (spellHealingDoneCoefficient), where C++
-// reads the pet's.
+// site via petHealingPctDone. The coefficient's level-penalty factor reads the
+// pet's motion level (spellHealingDoneCoefficientCasterLevel), matching C++'s
+// caster-level read in Unit::CalculateSpellpowerCoefficientLevelPenalty.
 func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, effIndex int, victimGUID uint64, isDot bool, stack uint32) int32 {
 	if s == nil || motion == nil {
 		return 0
@@ -2033,7 +2039,7 @@ func (s *session) petGuardianDoneHealingBonus(ctx context.Context, motion *creat
 	if advertised == 0 && flat == 0 {
 		return 0
 	}
-	return int32(float64(advertised)*s.spellHealingDoneCoefficient(spell, effIndex, isDot)*float64(stack)) + flat
+	return int32(float64(advertised)*s.spellHealingDoneCoefficientCasterLevel(spell, effIndex, isDot, motion.Level)*float64(stack)) + flat
 }
 
 // petTickHealDoneLegs mirrors the per-tick Unit::SpellHealingBonusDone (DOT)

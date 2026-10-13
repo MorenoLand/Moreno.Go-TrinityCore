@@ -12228,6 +12228,20 @@ func isPeriodicDamageEffect(eff wotlk.SpellEffect) bool {
 // coefficient level penalty (Unit.cpp:2386-2392) and the SPELLMOD_BONUS_MULTIPLIER
 // spellmod (Unit.cpp:6718-6723).
 func (s *session) spellDoneCoefficient(spell wotlk.Spell, effIndex int, isDot bool) float64 {
+	var level uint32
+	if s.player != nil {
+		level = uint32(s.player.Level)
+	}
+	return s.spellDoneCoefficientCasterLevel(spell, effIndex, isDot, level)
+}
+
+// spellDoneCoefficientCasterLevel mirrors spellDoneCoefficient for a caster
+// whose level is supplied explicitly — the level-penalty factor
+// (Unit::CalculateSpellpowerCoefficientLevelPenalty, Unit.cpp:2386-2392)
+// reads the caster's own level, so pet casts (petGuardianDoneDamageBonus,
+// petDamageEffectBonus) must pass the pet's motion level, not the owner's.
+// A zero level (unknown) keeps the old no-penalty behavior.
+func (s *session) spellDoneCoefficientCasterLevel(spell wotlk.Spell, effIndex int, isDot bool, casterLevel uint32) float64 {
 	coeff := s.spellBonusMultiplier(spell.ID, effIndex, false)
 	if bonus, ok := s.spellBonusRow(spell.ID); ok {
 		c := bonus.direct
@@ -12239,10 +12253,7 @@ func (s *session) spellDoneCoefficient(spell wotlk.Spell, effIndex int, isDot bo
 		}
 		coeff = c
 	}
-	factor := 1.0
-	if spell.MaxLevel != 0 && s.player != nil && uint32(s.player.Level) >= spell.MaxLevel {
-		factor = math.Max(0, math.Min(1, (22.0+float64(spell.MaxLevel)-float64(s.player.Level))/20.0))
-	}
+	factor := spellCoefficientLevelFactor(spell, casterLevel)
 	// Unit::SpellDamageBonusDone (Unit.cpp:6718-6723): the spellpower
 	// coefficient carries SPELLMOD_BONUS_MULTIPLIER (op 24), not
 	// SPELLMOD_DAMAGE_MULTIPLIER (op 20, the chain-amplitude op).
@@ -12818,7 +12829,30 @@ func (s *session) spellDamageBonusDone(ctx context.Context, spell wotlk.Spell, s
 // (Unit.cpp:7592); the result is scaled by the spellpower coefficient level
 // penalty (Unit.cpp:2386-2392) and the SPELLMOD_BONUS_MULTIPLIER spellmod
 // (Unit.cpp:7593-7598).
+// spellCoefficientLevelFactor mirrors
+// Unit::CalculateSpellpowerCoefficientLevelPenalty (Unit.cpp:2386-2392):
+// below the spell's MaxLevel the factor is 1; above it the penalty scales
+// with the CASTER's level — for pet casts the pet's own level, not the
+// owner's.
+func spellCoefficientLevelFactor(spell wotlk.Spell, casterLevel uint32) float64 {
+	if spell.MaxLevel == 0 || casterLevel < spell.MaxLevel {
+		return 1
+	}
+	return math.Max(0, math.Min(1, (22.0+float64(spell.MaxLevel)-float64(casterLevel))/20.0))
+}
+
 func (s *session) spellHealingDoneCoefficient(spell wotlk.Spell, effIndex int, isDot bool) float64 {
+	var level uint32
+	if s.player != nil {
+		level = uint32(s.player.Level)
+	}
+	return s.spellHealingDoneCoefficientCasterLevel(spell, effIndex, isDot, level)
+}
+
+// spellHealingDoneCoefficientCasterLevel mirrors spellHealingDoneCoefficient
+// for a caster whose level is supplied explicitly — see
+// spellDoneCoefficientCasterLevel for the pet-level rationale.
+func (s *session) spellHealingDoneCoefficientCasterLevel(spell wotlk.Spell, effIndex int, isDot bool, casterLevel uint32) float64 {
 	coeff := s.spellBonusMultiplier(spell.ID, effIndex, true)
 	if s.server != nil {
 		if bonus, ok := s.server.spellBonusData(spell.ID); ok {
@@ -12832,10 +12866,7 @@ func (s *session) spellHealingDoneCoefficient(spell wotlk.Spell, effIndex int, i
 			coeff = c
 		}
 	}
-	factor := 1.0
-	if spell.MaxLevel != 0 && s.player != nil && uint32(s.player.Level) >= spell.MaxLevel {
-		factor = math.Max(0, math.Min(1, (22.0+float64(spell.MaxLevel)-float64(s.player.Level))/20.0))
-	}
+	factor := spellCoefficientLevelFactor(spell, casterLevel)
 	// Unit::SpellHealingBonusDone (Unit.cpp:7593-7598): the spellpower
 	// coefficient carries SPELLMOD_BONUS_MULTIPLIER (op 24), not
 	// SPELLMOD_DAMAGE_MULTIPLIER (op 20, the chain-amplitude op).
@@ -13066,11 +13097,11 @@ func (s *session) spellHealingBonusDone(spell wotlk.Spell, heal uint32, target *
 // creature victims (Unit::SpellHealingBonusDone on the per-tick DOT leg,
 // SpellAuraEffects.cpp:5384). The caster-side fold is identical; only the
 // victim-side arms differ: the victim's SPELL_AURA_MOD_HEALING (115) auras
-// come from the creature aura store and Test of Faith reads the creature's
-// health fraction. The Glyph of Regrowth / Nourish / Glyph of Lesser Healing
-// Wave victim arms stay unbridged — creature auras carry no spell-family-flag
-// model for their victim-scan predicates.
-func (s *session) spellHealingBonusDoneCreatureVictim(spell wotlk.Spell, heal uint32, key creatureAuraKey, targetHealth, targetMaxHealth uint32, effIndex int, isDot bool, stack uint32) uint32 {
+// come from the creature aura store, and Test of Faith / Glyph of Regrowth /
+// Nourish / Glyph of Lesser Healing Wave read the creature's live auras via
+// the same family-flag predicates the pet path uses (Unit.cpp:7660-7705).
+// victimGUID is the creature victim's GUID for the victim-aura scan.
+func (s *session) spellHealingBonusDoneCreatureVictim(ctx context.Context, spell wotlk.Spell, heal uint32, key creatureAuraKey, victimGUID uint64, targetHealth, targetMaxHealth uint32, effIndex int, isDot bool, stack uint32) uint32 {
 	if spell.SpellFamilyName == spellFamilyPotion {
 		return heal
 	}
@@ -13092,12 +13123,55 @@ func (s *session) spellHealingBonusDoneCreatureVictim(spell wotlk.Spell, heal ui
 		}
 	}
 	pct := s.spellHealingPctDone(spell, nil)
-	// Unit.cpp:7660-7705 — Test of Faith (21/6935/6918): the victim-side arm
-	// fires when the creature victim is below 50% health.
-	for _, ae := range s.overrideClassScriptAuras(spell) {
-		if ae.misc == 21 || ae.misc == 6935 || ae.misc == 6918 {
-			if targetMaxHealth > 0 && targetHealth*2 < targetMaxHealth {
-				pct *= 1 + float64(ae.amount)/100
+	// Unit.cpp:7634-7651 — the ATTR3_NO_DONE_BONUS /
+	// ATTR6_LIMIT_PCT_HEALING_MODS gates wrap the whole SpellHealingPctDone,
+	// including the scripted arms below.
+	if spell.AttributesEx3&spellAttr3NoDoneBonus == 0 && spell.AttributesEx6&spellAttr6LimitPctHealingMods == 0 {
+		addPct := func(amt int32) { pct *= 1 + float64(amt)/100 } // AddPct fold (Unit.cpp:7668)
+		// Unit.cpp:7660-7705 — the done scripted mod table, victim side.
+		for _, ae := range s.overrideClassScriptAuras(spell) {
+			switch ae.misc {
+			case 21, 6935, 6918: // Test of Faith — victim below 50% health
+				if targetMaxHealth > 0 && targetHealth*2 < targetMaxHealth {
+					addPct(ae.amount)
+				}
+			case 7798: // Glyph of Regrowth — victim carries Rejuvenation/Regrowth
+				if petHealTargetHasAura(s, ctx, victimGUID, spellAuraPeriodicHeal, spellFamilyDruid, 0x40, 0, 0) {
+					addPct(ae.amount)
+				}
+			case 8477: // Nourish Heal Boost — step percent per own HoT stack on the victim
+				step := ae.amount
+				boost := int32(0)
+				if s.server != nil && s.server.Data != nil {
+					// Unit.cpp:7682-7692: the victim auras must be cast by the
+					// healer — the caster session's player GUID.
+					var healerGUID uint64
+					if s != nil {
+						healerGUID = s.playerGUID
+					}
+					for _, aura := range s.victimAurasForLookup(ctx, victimGUID) {
+						if aura == nil || aura.Stopped || aura.CasterGUID != healerGUID {
+							continue
+						}
+						aspell, found, err := s.server.Data.Spell(aura.SpellID)
+						if err != nil || !found || aspell.SpellFamilyName != spellFamilyDruid {
+							continue
+						}
+						if aspell.SpellFamilyFlags[1]&0x10 == 0 && aspell.SpellFamilyFlags[0]&0x50 == 0 {
+							continue
+						}
+						st := int32(aura.StackCount)
+						if st == 0 {
+							st = 1
+						}
+						boost += step * st
+					}
+				}
+				addPct(boost)
+			case 7871: // Glyph of Lesser Healing Wave — victim carries Earth Shield
+				if petHealTargetHasAura(s, ctx, victimGUID, spellAuraDummy, spellFamilyShaman, 0, 0x400, 0) {
+					addPct(ae.amount)
+				}
 			}
 		}
 	}
@@ -27187,7 +27261,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			stack = 1
 		}
 		if tickCaster != nil && tickKnown && !aura.PersistentAreaAura {
-			heal = tickCaster.spellHealingBonusDoneCreatureVictim(tickSpell, heal, key, target.Health, target.MaxHealth, healEffIndex, true, stack)
+			heal = tickCaster.spellHealingBonusDoneCreatureVictim(ctx, tickSpell, heal, key, aura.TargetGUID, target.Health, target.MaxHealth, healEffIndex, true, stack)
 		}
 		// Pet casters have no session, so the block above never runs for
 		// them — but C++ runs the per-tick SpellHealingBonusDone (DOT) on
