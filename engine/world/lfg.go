@@ -57,6 +57,11 @@ const (
 	LFGRoleCheckAborted      uint32 = 5
 	LFGRoleCheckNoRole       uint32 = 6
 
+	// Group composition targets for the role-check solver (LFG.h:32-34).
+	lfgTanksNeeded   = 1
+	lfgHealersNeeded = 1
+	lfgDPSNeeded     = 3
+
 	LFGProposalInitiating uint8 = 0
 	LFGProposalFailed     uint8 = 1
 	LFGProposalSuccess    uint8 = 2
@@ -209,7 +214,10 @@ func (m *LFGManager) Join(guid uint64, roles uint8, dungeons []uint32, comment s
 	if len(dungeons) == 0 {
 		return LFGJoinNotMeetReqs, LFGQueueEntry{GUID: guid, Roles: roles, State: LFGStateNone}
 	}
-	roles &= LFGRoleTank | LFGRoleHealer | LFGRoleDamage
+	// LFGMgr::JoinLfg (LFGMgr.cpp:411-414): sanitize input roles. C++ keeps
+	// the LEADER bit (PLAYER_ROLE_ANY); every consumer strips it at read
+	// time (LFGMgr.cpp:955/1022/1267), so the stored queue roles carry it.
+	roles &= LFGRoleAny
 	if roles == 0 {
 		return LFGJoinNotMeetReqs, LFGQueueEntry{GUID: guid, Roles: roles, State: LFGStateNone}
 	}
@@ -299,6 +307,12 @@ func (m *LFGManager) UpdateRoleCheck(groupID uint64, guid uint64, roles uint8) *
 	}
 	// LFGMgr::UpdateRoleCheck (LFGMgr.cpp:808): sanitize input roles.
 	roles &= LFGRoleAny
+	if roles < LFGRoleTank {
+		// LFGMgr.cpp:815-816: selecting no role (or leader-only) fails the
+		// check outright — the answer is not stored.
+		rc.State = LFGRoleCheckNoRole
+		return rc
+	}
 	rc.Roles[guid] = roles
 	allAnswered := true
 	for _, r := range rc.Roles {
@@ -308,9 +322,85 @@ func (m *LFGManager) UpdateRoleCheck(groupID uint64, guid uint64, roles uint8) *
 		}
 	}
 	if allAnswered {
-		rc.State = LFGRoleCheckFinished
+		// LFGMgr.cpp:828-831: a fully-answered check resolves through
+		// CheckGroupRoles; an incompatible role set fails WRONG_ROLES. The
+		// solver mutates a copy of the roles map (C++ check_roles).
+		work := make(map[uint64]uint8, len(rc.Roles))
+		for k, v := range rc.Roles {
+			work[k] = v
+		}
+		if lfgCheckGroupRoles(work) {
+			rc.State = LFGRoleCheckFinished
+		} else {
+			rc.State = LFGRoleCheckWrongRoles
+		}
 	}
 	return rc
+}
+
+// lfgCheckGroupRoles mirrors LFGMgr::CheckGroupRoles (LFGMgr.cpp:944-1002):
+// every member must resolve to exactly one of tank/healer/dps with at most
+// one tank, one healer and three dps, covering the whole group. Multi-role
+// members are tried role-by-role (damage first, then healer, then tank —
+// the C++ arm order), recursing after each removal; the leader bit never
+// participates (LFGMgr.cpp:955). std::map iterates GUIDs in ascending
+// order, hence the sorted key pass.
+func lfgCheckGroupRoles(roles map[uint64]uint8) bool {
+	if len(roles) == 0 {
+		return false
+	}
+	guids := make([]uint64, 0, len(roles))
+	for guid := range roles {
+		guids = append(guids, guid)
+	}
+	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+	damage, tank, healer := 0, 0, 0
+	for _, guid := range guids {
+		role := roles[guid] &^ LFGRoleLeader
+		if role == LFGRoleNone {
+			return false
+		}
+		if role&LFGRoleDamage != 0 {
+			if role != LFGRoleDamage {
+				roles[guid] -= LFGRoleDamage
+				if lfgCheckGroupRoles(roles) {
+					return true
+				}
+				roles[guid] += LFGRoleDamage
+			} else if damage == lfgDPSNeeded {
+				return false
+			} else {
+				damage++
+			}
+		}
+		if role&LFGRoleHealer != 0 {
+			if role != LFGRoleHealer {
+				roles[guid] -= LFGRoleHealer
+				if lfgCheckGroupRoles(roles) {
+					return true
+				}
+				roles[guid] += LFGRoleHealer
+			} else if healer == lfgHealersNeeded {
+				return false
+			} else {
+				healer++
+			}
+		}
+		if role&LFGRoleTank != 0 {
+			if role != LFGRoleTank {
+				roles[guid] -= LFGRoleTank
+				if lfgCheckGroupRoles(roles) {
+					return true
+				}
+				roles[guid] += LFGRoleTank
+			} else if tank == lfgTanksNeeded {
+				return false
+			} else {
+				tank++
+			}
+		}
+	}
+	return tank+healer+damage == len(roles)
 }
 
 func (m *LFGManager) CreateProposal(dungeonID uint32, groupID uint64, leaderGUID uint64, players map[uint64]uint8) *LFGProposal {
