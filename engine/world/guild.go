@@ -3568,13 +3568,21 @@ func (s *session) guildApplyMovePlan(ctx context.Context, tx *sql.Tx, guildID, p
 		var guid uint64
 		if i == lastNew {
 			guid = source.GUID
-			// Like guildCloneMoveItem above (and C++ MoveItemFromInventory ->
-			// SetNotRefundable), a full-stack move out of player inventory
-			// clears the refundable/BoP-tradeable bits and drops the refund row.
-			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ?, owner_guid = ?, flags = flags & ? WHERE guid = ?", placement.Count, guildMoveOwner(placement.Location, playerGUID), ^int64(itemInstanceFlagRefundable|itemInstanceFlagBOPTradeable), guid); err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", guid); err != nil {
+			// C++ Player::MoveItemFromInventory -> Item::SetNotRefundable
+			// (Player.cpp:12586-12597, Item.cpp:1113-1129) clears only the
+			// REFUNDABLE bit on a full move out of player inventory, and
+			// drops the refund row; the BOP_TRADEABLE bit survives the move
+			// (only CloneItem strips both, which the guildCloneMoveItem
+			// branch below mirrors). Bank-source moves and withdrawals
+			// touch no flags at all (Guild::_RemoveItem, Guild.cpp:2677).
+			if !sourceLoc.Bank {
+				if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ?, owner_guid = ?, flags = flags & ? WHERE guid = ?", placement.Count, guildMoveOwner(placement.Location, playerGUID), ^int64(itemInstanceFlagRefundable), guid); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", guid); err != nil {
+					return err
+				}
+			} else if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ?, owner_guid = ? WHERE guid = ?", placement.Count, guildMoveOwner(placement.Location, playerGUID), guid); err != nil {
 				return err
 			}
 		} else {
@@ -3950,8 +3958,30 @@ func guildSwapMoveItems(ctx context.Context, tx *sql.Tx, guildID, playerGUID uin
 	if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", ownerSource, source.GUID); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", ownerDest, dest.GUID)
-	return err
+	if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", ownerDest, dest.GUID); err != nil {
+		return err
+	}
+	// Guild::_DoItemsMove (Guild.cpp:2731-2754) removes both items via
+	// MoveItemData::RemoveItem; the side living in player inventory goes
+	// through Player::MoveItemFromInventory -> Item::SetNotRefundable
+	// (Player.cpp:12586-12597, Item.cpp:1113-1129), clearing only the
+	// REFUNDABLE bit and dropping the refund row on the item that lands in
+	// the bank. The bank-side item is untouched.
+	playerItemGUID := uint64(0)
+	if !sourceLoc.Bank {
+		playerItemGUID = source.GUID
+	} else if !destination.Bank {
+		playerItemGUID = dest.GUID
+	}
+	if playerItemGUID != 0 {
+		if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), playerItemGUID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", playerItemGUID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var guildBankTabPrices = []uint32{
