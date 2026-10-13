@@ -4517,9 +4517,13 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	_, _ = r.ReadU32() // 0
 	_, _ = r.ReadU64() // 0
 	name, err := r.ReadCString()
-	if err != nil || name == "" {
+	if err != nil {
 		return true
 	}
+	// PetitionsHandler.cpp:85-100: an empty charter name is NOT dropped
+	// here — it flows to the IsValidCharterName arm below (ObjectMgr.cpp:8624:
+	// wname.size() < CONFIG_MIN_CHARTER_NAME=2), which answers
+	// ERR_GUILD_NAME_INVALID like the rename path does.
 
 	// PetitionsHandler.cpp:85-100: the seller must be an interactable
 	// petitioner NPC (UNIT_NPC_FLAG_PETITIONER); C++ only then branches on
@@ -4736,12 +4740,13 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 	// the guild arm writes (needed, needed, 0) followed by the zero block
 	// (u32x4, u16, u32x3), ten empty strings, u32(0), then
 	// u32(type != GUILD_CHARTER_TYPE) == 0 for guild charters.
+	// SendPetitionQueryOpcode (PetitionsHandler.cpp:272): the guild arm
+	// writes CONFIG_MIN_PETITION_SIGNS raw — no clamp. The C++ sign cap
+	// (++signs > type, PetitionsHandler.cpp:441) already bounds guild signs
+	// at 9 independently.
 	needed := uint32(9)
 	if s.server != nil {
 		needed = s.server.Config.MinPetitionSigns
-		if needed > 9 {
-			needed = 9
-		}
 	}
 	buf := protocol.NewBuffer(128 + len(name))
 	buf.WriteU32(uint32(petitionGUID & 0xFFFFFFFF))

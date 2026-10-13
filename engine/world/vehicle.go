@@ -1130,17 +1130,31 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
-	seat := int8(payload[0])
-	if len(payload) >= 2 {
-		// Packet layout is a packed vehicle GUID followed by the int8 seat id
-		// (VehicleHandler.cpp:111-114: `recvData >> guid.ReadAsPacked()` then
-		// `recvData >> seatId`) — packed only, no raw fallback.
-		r := protocol.NewReader(payload)
-		if _, err := r.ReadPackedGUID(); err == nil {
-			if sByte, err := r.ReadU8(); err == nil {
-				seat = int8(sByte)
-			}
-		}
+	var seat int8
+	// Packet layout is a packed vehicle GUID followed by the int8 seat id
+	// (VehicleHandler.cpp:111-114: `recvData >> guid.ReadAsPacked()` then
+	// `recvData >> seatId`).
+	r := protocol.NewReader(payload)
+	vehGUID, err := r.ReadPackedGUID()
+	if err != nil {
+		return true
+	}
+	if sByte, err := r.ReadU8(); err == nil {
+		seat = int8(sByte)
+	} else {
+		return true
+	}
+
+	// VehicleHandler.cpp:54-59: with no vehicle base the whole packet is
+	// dropped (rfinish) — never a seat assignment.
+	if s.player.VehicleGUID == 0 {
+		return true
+	}
+	// VehicleHandler.cpp:116-121: the switch only fires when the packet
+	// names the current vehicle base; otherwise C++ tries the spell-click
+	// arm on the named unit, which has no Go bridge.
+	if vehGUID != s.player.VehicleGUID {
+		return true
 	}
 
 	if s.server != nil && s.player.VehicleGUID != 0 {
