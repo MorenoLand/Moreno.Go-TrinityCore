@@ -24402,6 +24402,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if s.server != nil && spellHasSpeedAura(spell) {
 		s.server.refreshCreatureRunSpeed(targetKey, targetGUID)
 	}
+	// Guardian::UpdateStats on pet aura apply (StatSystem.cpp:1266-1282 via
+	// AuraEffect::HandleStatFlatModifier / HandleModTotalPercentStat ->
+	// Unit::UpdateUnitMod -> UpdateStats, Unit.cpp:9304-9310): a stat-mod
+	// aura landing on a pet recomputes the aura-fed UNIT_FIELD_STAT0+stat
+	// fields and the stamina/intellect-fed max health/mana
+	// (UpdateMaxHealth / UpdateMaxPower). The trigger gates on the spell's
+	// 29/137 effects and on motionIsPet.
+	if s.server != nil {
+		s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID)
+	}
 	// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a fresh
 	// MOD_TAUNT aura on a creature registers its caster's taunt state
 	// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
@@ -28807,6 +28817,13 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 	if wasSpeedAura {
 		s.server.refreshCreatureRunSpeed(key, key.GUID)
 	}
+	// Guardian::UpdateStats on pet aura remove (StatSystem.cpp:1266-1282 via
+	// Unit::UpdateUnitMod -> UpdateStats, Unit.cpp:9304-9310) — the timed
+	// funnel twin of the removeCreatureAuraWithMode arm above; finalTick is
+	// non-nil exactly when an aura was actually removed.
+	if finalTick != nil {
+		s.server.recomputePetDerivedOnStatAuraChange(key, spellID)
+	}
 }
 
 // clearCreatureFeignDeath mirrors the AuraEffect::HandleFeignDeath remove
@@ -29005,6 +29022,12 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	if auraWasPresent {
 		s.applyCreatureLinkedRemoveArms(key, spellID, mode)
 		s.applyCreatureSpellAreaRows(key, spellID)
+		// Guardian::UpdateStats on pet aura remove (StatSystem.cpp:1266-1282
+		// via Unit::UpdateUnitMod -> UpdateStats, Unit.cpp:9304-9310):
+		// dropping a stat-mod aura recomputes the pet's aura-fed
+		// UNIT_FIELD_STAT0+stat fields and the stamina/intellect-fed maxima.
+		// The trigger gates on the spell's 29/137 effects and on motionIsPet.
+		s.recomputePetDerivedOnStatAuraChange(key, spellID)
 	}
 }
 

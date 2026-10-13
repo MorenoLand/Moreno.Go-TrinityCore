@@ -141,7 +141,7 @@ func (s *session) refreshPetStatsOnOwnerStatChange(ctx context.Context) {
 	petKey := creatureAuraKeyForMotion(motion)
 	curHealth, curMana := motion.Health, motion.Mana
 	s.server.motionMu.Unlock()
-	_, maxHealth, _, maxMana := s.getPetStats(ctx, entry, level, petType, petID)
+	_, maxHealth, _, maxMana := s.getPetStatsWithAuraFeed(ctx, motion, entry, level, petType, petID)
 	attributes := s.getPetAttributes(ctx, entry, level, petType)
 	armor := s.petBaseArmor(ctx, entry, level, petType)
 	if maxHealth == 0 || maxMana == 0 {
@@ -174,6 +174,133 @@ func (s *session) refreshPetStatsOnOwnerStatChange(ctx context.Context) {
 	mapID, instanceID, petGUID := motion.Map, motion.InstanceID, motion.GUID
 	s.server.motionMu.Unlock()
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, petGUID, fields)
+}
+
+// recomputePetDerivedOnStatAuraChange mirrors the Guardian::UpdateStats arms
+// that C++ runs on every pet aura apply/remove (StatSystem.cpp:1266-1282 via
+// AuraEffect::HandleStatFlatModifier / HandleModTotalPercentStat ->
+// Unit::UpdateUnitMod -> UpdateStats, Unit.cpp:9304-9310): SetStat rewrites
+// UNIT_FIELD_STAT0+stat from the aura-fed stat, and the STAT_STAMINA /
+// STAT_INTELLECT arms rerun Guardian::UpdateMaxHealth / UpdateMaxPower
+// (StatSystem.cpp:1336-1379), whose (GetStat - createStat) * multiplicator
+// legs carry the live aura-29/137 feed. Go previously recomputed the pet's
+// maxima only at the stat-compute points (summon, level-up, owner-stat
+// change), so a stamina/intellect aura gained or lost mid-life never moved
+// the stored maxima. The owner-bonus legs stay in the stored base
+// (getPetStats); this adds the aura-feed delta on top. The 137 stamina tail
+// (SpellAuraEffects.cpp:3570-3572, SPELL_ATTR0_ABILITY) re-anchors current
+// health to the pre-change health pct instead of clamping. With no live
+// owner session the values are left alone — C++ has no offline-owner concept
+// (the pet is dismissed with the owner). Callers must not hold auraMu or
+// motionMu.
+func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellID uint32) {
+	if s == nil || s.Data == nil || key.GUID == 0 || spellID == 0 {
+		return
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found || !spellHasStatModAura(spell) {
+		return
+	}
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if !motionIsPet(motion) {
+		return
+	}
+	owner := s.playerSessionForGUID(motion.OwnerGUID)
+	if owner == nil || owner.player == nil {
+		return
+	}
+	entry, level, petType, petID := motion.Entry, motion.Level, motion.PetType, motion.PetID
+	s.motionMu.Lock()
+	curHealth, curMana := motion.Health, motion.Mana
+	oldMaxHealth := motion.MaxHealth
+	s.motionMu.Unlock()
+	var healthPct float64
+	if oldMaxHealth > 0 && curHealth > 0 {
+		healthPct = float64(curHealth) / float64(oldMaxHealth)
+	}
+	zeroHealth := curHealth == 0
+	ctx := context.Background()
+	_, baseMaxHealth, _, baseMaxMana := owner.getPetStats(ctx, entry, level, petType, petID)
+	if baseMaxHealth == 0 || baseMaxMana == 0 {
+		return
+	}
+	newMaxHealth := float64(baseMaxHealth) + s.petStaminaAuraHealthDelta(key, motion, entry)
+	if newMaxHealth < 1 {
+		newMaxHealth = 1
+	}
+	newMaxMana := float64(baseMaxMana) + s.petIntellectAuraManaDelta(key, motion, entry)
+	if newMaxMana < 1 {
+		newMaxMana = 1
+	}
+	// The 137 stamina tail (SpellAuraEffects.cpp:3570-3572): a
+	// SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE aura touching stamina on a
+	// SPELL_ATTR0_ABILITY spell re-anchors current health to the pre-apply
+	// pct of the new max, on apply and on remove alike (the handler ignores
+	// the apply flag for this tail).
+	preserveHealthPct := false
+	if spell.Attributes&spellAttr0Ability != 0 {
+		for _, eff := range spell.Effects {
+			if eff.Aura == spellAuraModTotalStatPct && (eff.MiscValue == statStaminaIndex || eff.MiscValue == -1) {
+				preserveHealthPct = true
+				break
+			}
+		}
+	}
+	s.motionMu.Lock()
+	m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+	if m == nil || m.PetID != petID {
+		s.motionMu.Unlock()
+		return
+	}
+	newHealth := curHealth
+	if preserveHealthPct {
+		newHealth = uint32(healthPct * newMaxHealth)
+		if !zeroHealth && newHealth < 1 {
+			newHealth = 1
+		}
+	} else if newHealth > uint32(newMaxHealth) {
+		newHealth = uint32(newMaxHealth)
+	}
+	newMana := curMana
+	if newMana > uint32(newMaxMana) {
+		newMana = uint32(newMaxMana)
+	}
+	m.Health, m.MaxHealth, m.Mana, m.MaxMana = newHealth, uint32(newMaxHealth), newMana, uint32(newMaxMana)
+	m.Powers[0], m.MaxPowers[0] = newMana, uint32(newMaxMana)
+	mapID, instanceID, petGUID := m.Map, m.InstanceID, m.GUID
+	s.motionMu.Unlock()
+	fields := map[int]uint32{unitFieldHealth: newHealth, unitFieldMaxHealth: uint32(newMaxHealth), unitFieldPower1: newMana, unitFieldMaxPower1: uint32(newMaxMana)}
+	for index, value := range owner.petGuardianFieldStats(m, entry, petType, petID) {
+		fields[unitFieldStat0+index] = value
+	}
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, petGUID, fields)
+}
+
+// getPetStatsWithAuraFeed wraps getPetStats with the live stamina/intellect
+// aura-feed arms of Guardian::UpdateMaxHealth / UpdateMaxPower
+// (StatSystem.cpp:1336-1379): the (GetStat - createStat) * multiplicator legs
+// carry the aura-29/137 feed, which C++ recomputes on every UpdateStats —
+// including aura apply/remove — so the stat-compute points that overwrite the
+// stored maxima (level-up, owner-stat change) must re-add the feed, or the
+// live recompute from recomputePetDerivedOnStatAuraChange would be clobbered
+// by the next compute point.
+func (s *session) getPetStatsWithAuraFeed(ctx context.Context, motion *creatureMotion, entry, level uint32, petType uint8, petNumber uint32) (curHealth, maxHealth, curMana, maxMana uint32) {
+	curHealth, maxHealth, curMana, maxMana = s.getPetStats(ctx, entry, level, petType, petNumber)
+	if s == nil || s.server == nil || motion == nil {
+		return curHealth, maxHealth, curMana, maxMana
+	}
+	key := creatureAuraKeyForMotion(motion)
+	if v := float64(maxHealth) + s.server.petStaminaAuraHealthDelta(key, motion, entry); v >= 1 {
+		maxHealth = uint32(v)
+	} else {
+		maxHealth = 1
+	}
+	if v := float64(maxMana) + s.server.petIntellectAuraManaDelta(key, motion, entry); v >= 1 {
+		maxMana = uint32(v)
+	} else {
+		maxMana = 1
+	}
+	return curHealth, maxHealth, curMana, maxMana
 }
 
 func PetFoodBenefitLevel(petLevel, itemLevel uint32) uint32 {
@@ -221,7 +348,7 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 		return false
 	}
 	s.server.motionMu.Unlock()
-	health, maxHealth, mana, maxMana := s.getPetStats(ctx, entry, newLevel, petType, petID)
+	health, maxHealth, mana, maxMana := s.getPetStatsWithAuraFeed(ctx, motion, entry, newLevel, petType, petID)
 	attributes := s.getPetAttributes(ctx, entry, newLevel, petType)
 	if health == 0 || maxHealth == 0 {
 		return false

@@ -181,6 +181,23 @@ func (s *session) auraTouchesStats(aura *activeAura) bool {
 	return false
 }
 
+// spellHasStatModAura reports whether any effect of the spell feeds
+// UNIT_MOD_STAT_* through AuraEffect::HandleStatFlatModifier (29,
+// SpellAuraEffects.cpp:3379-3413) or HandleModTotalPercentStat (137, :3525+).
+// Those are the auras whose apply/remove runs Guardian::UpdateStats via
+// Unit::UpdateUnitMod (Unit.cpp:9304-9310) — recomputing the pet's aura-fed
+// UNIT_FIELD_STAT0+stat fields and the stamina/intellect-fed maxima.
+// Aura 80 (HandleModPercentStat) is player-only ("only players have base
+// stats", SpellAuraEffects.cpp:3427) and never touches pet stats.
+func spellHasStatModAura(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraModStat || eff.Aura == spellAuraModTotalStatPct {
+			return true
+		}
+	}
+	return false
+}
+
 // statStaminaIndex is STAT_STAMINA (SharedDefines.h: the Stats enum runs
 // 0 strength, 1 agility, 2 stamina, 3 intellect, 4 spirit).
 const statStaminaIndex = 2

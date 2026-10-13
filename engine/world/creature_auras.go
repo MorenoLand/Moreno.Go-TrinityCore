@@ -613,6 +613,54 @@ func (s *Server) petGuardianStat(key creatureAuraKey, motion *creatureMotion, st
 	return (base + float64(flat)) * totalPct
 }
 
+// statIntellectIndex is STAT_INTELLECT (SharedDefines.h: the Stats enum runs
+// 0 strength, 1 agility, 2 stamina, 3 intellect, 4 spirit).
+const statIntellectIndex = 3
+
+// petManaMultiplicator mirrors the entry switch in Guardian::UpdateMaxPower
+// (StatSystem.cpp:1359-1379).
+func petManaMultiplicator(entry uint32) float64 {
+	switch entry {
+	case 416: // ENTRY_IMP
+		return 4.95
+	case 1860, 1863, 417, 17252: // ENTRY_VOIDWALKER, ENTRY_SUCCUBUS, ENTRY_FELHUNTER, ENTRY_FELGUARD
+		return 11.5
+	default:
+		return 15.0
+	}
+}
+
+// petStaminaAuraHealthDelta mirrors the stamina arm of
+// Guardian::UpdateMaxHealth (StatSystem.cpp:1336-1357):
+// (GetStat(STAT_STAMINA) - GetCreateStat(STAT_STAMINA)) * multiplicator.
+// GetStat carries the live aura-29/137 feed (petGuardianStat) plus the owner
+// bonus; the owner bonus already lives in the stored max through
+// petOwnerStaminaHealthBonus, so this returns only the aura-feed part:
+// (auraFed - createStamina) * petHealthMultiplicator(entry). C++ recomputes
+// it on every UpdateStats — including aura apply/remove — not just at the
+// pet stat-compute points.
+func (s *Server) petStaminaAuraHealthDelta(key creatureAuraKey, motion *creatureMotion, entry uint32) float64 {
+	if s == nil || motion == nil || len(motion.Stats) <= statStaminaIndex {
+		return 0
+	}
+	fed := s.petGuardianStat(key, motion, statStaminaIndex)
+	return (fed - float64(motion.Stats[statStaminaIndex])) * petHealthMultiplicator(entry)
+}
+
+// petIntellectAuraManaDelta mirrors the intellect arm of
+// Guardian::UpdateMaxPower (StatSystem.cpp:1359-1379):
+// (GetStat(STAT_INTELLECT) - GetCreateStat(STAT_INTELLECT)) * multiplicator.
+// Unlike the owner-intellect bonus (warlock/mage pets only,
+// StatSystem.cpp:1251-1257), the (GetStat - createStat) arm applies to every
+// guardian — a hunter pet carrying an intellect aura gains max mana in C++.
+func (s *Server) petIntellectAuraManaDelta(key creatureAuraKey, motion *creatureMotion, entry uint32) float64 {
+	if s == nil || motion == nil || len(motion.Stats) <= statIntellectIndex {
+		return 0
+	}
+	fed := s.petGuardianStat(key, motion, statIntellectIndex)
+	return (fed - float64(motion.Stats[statIntellectIndex])) * petManaMultiplicator(entry)
+}
+
 // petFullArmor computes the live Guardian::UpdateArmor value
 // (StatSystem.cpp:1316-1330) for a pet motion (callers must gate on
 // motionIsPet; the IsPet-gated arms — aura-142 BASE_PCT, aura-83 TOTAL_VALUE,

@@ -540,7 +540,7 @@ func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32, p
 	// at the pet stat-compute points (summon, level-up); C++ also
 	// recomputes on owner stat changes, which Go has no hook for.
 	healthBonus := s.petOwnerStaminaHealthBonus(entry, petType, petNumber)
-	manaBonus := s.petOwnerIntellectManaBonus()
+	manaBonus := s.petOwnerIntellectManaBonus(entry)
 	statEntry := entry
 	if petType == 1 {
 		statEntry = 1
@@ -662,8 +662,11 @@ func (s *session) petOwnerIntellectScale() float64 {
 // petOwnerIntellectManaBonus mirrors the intellect arm of
 // Guardian::UpdateStats (StatSystem.cpp:1251-1257) folded through
 // Guardian::UpdateMaxPower (StatSystem.cpp:1359-1379): warlock and mage pets
-// gain 30% of the owner's intellect, times the 15.0 mana multiplicator.
-func (s *session) petOwnerIntellectManaBonus() uint32 {
+// gain 30% of the owner's intellect, times the entry mana multiplicator
+// (imp 4.95, voidwalker/succubus/felhunter/felguard 11.5, default 15.0) —
+// the owner bonus flows through the same multiplicator as the aura feed in
+// C++, not a flat 15.0.
+func (s *session) petOwnerIntellectManaBonus(entry uint32) uint32 {
 	if s == nil || s.player == nil {
 		return 0
 	}
@@ -671,7 +674,7 @@ func (s *session) petOwnerIntellectManaBonus() uint32 {
 	if len(s.player.Stats) > 3 {
 		intellect = s.player.Stats[3]
 	}
-	return uint32(float64(intellect) * s.petOwnerIntellectScale() * 15.0)
+	return uint32(float64(intellect) * s.petOwnerIntellectScale() * petManaMultiplicator(entry))
 }
 
 // petGuardianFieldStats mirrors the UNIT_FIELD_STAT0..4 writes in
@@ -1098,6 +1101,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	defer rows.Close()
 	petKey := creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: petGUID}
 	loaded := make([]*activeAura, 0)
+	var statAuraSpellID uint32
 	offlineMs := int64(0)
 	var petSaveTime int64
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(savetime, 0) FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petID).Scan(&petSaveTime)
@@ -1209,10 +1213,21 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		s.server.creatureAuras[petKey][aura.SpellID] = struct{}{}
 		s.server.activeCreatureAuras[petKey][aura.SpellID] = aura
 		loaded = append(loaded, aura)
+		if spellHasStatModAura(spell) {
+			statAuraSpellID = uint32(spellID)
+		}
 	}
 	s.server.auraMu.Unlock()
 	if len(loaded) == 0 {
 		return
+	}
+	// Guardian::UpdateStats on pet aura load (StatSystem.cpp:1266-1282): the
+	// DB-restored auras apply through the same UpdateStats path as live
+	// applies in C++ (each _AddAura runs the stat handlers), so a restored
+	// stamina/intellect aura must recompute the pet's aura-fed stats and
+	// maxima — the summon broadcast above went out aura-free.
+	if statAuraSpellID != 0 {
+		s.server.recomputePetDerivedOnStatAuraChange(petKey, statAuraSpellID)
 	}
 	records := make([]protocol.AuraUpdateRecord, 0, len(loaded))
 	for _, aura := range loaded {
