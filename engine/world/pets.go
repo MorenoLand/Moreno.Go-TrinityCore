@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,15 +16,22 @@ import (
 )
 
 const (
-	petSaveAsDeleted        uint8  = 0
-	petSaveAsCurrent        uint8  = 1
-	petSaveNotInSlot        uint8  = 2
-	petStorageSlotNotInSlot uint8  = 100
-	petTypeSummon           uint8  = 0
-	petTypeHunter           uint8  = 1
-	creatureTypeDemon       uint32 = 3
-	creatureTypeUndead      uint32 = 6
-	creatureTypeHumanoid    uint32 = 7 // CREATURE_TYPE_HUMANOID (SharedDefines.h:2667)
+	petSaveAsDeleted        uint8 = 0
+	petSaveAsCurrent        uint8 = 1
+	petSaveNotInSlot        uint8 = 2
+	petStorageSlotNotInSlot uint8 = 100
+	petTypeSummon           uint8 = 0
+	petTypeHunter           uint8 = 1
+
+	// Pet talk event ids (PetDefines.h:80-81): the SMSG_PET_ACTION_SOUND
+	// payload for the 10% summon-pet talk arms (PetHandler.cpp:216, 346, 816).
+	petTalkSpecialSpell uint32 = 0
+	petTalkAttack       uint32 = 1
+	// AI_REACTION_HOSTILE (Unit.h): the SMSG_AI_REACTION growl payload.
+	aiReactionHostile    uint32 = 2
+	creatureTypeDemon    uint32 = 3
+	creatureTypeUndead   uint32 = 6
+	creatureTypeHumanoid uint32 = 7 // CREATURE_TYPE_HUMANOID (SharedDefines.h:2667)
 
 	// creatureTypeMaskHumanoidOrUndead mirrors CREATURE_TYPEMASK_HUMANOID_OR_UNDEAD
 	// (SharedDefines.h:2677): (1 << (CREATURE_TYPE_HUMANOID-1)) | (1 << (CREATURE_TYPE_UNDEAD-1)).
@@ -2640,8 +2648,6 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		reactPassive    uint32 = 0
 		reactDefensive  uint32 = 1
 		reactAggressive uint32 = 2
-
-		aiReactionHostile uint32 = 2
 	)
 
 	// PetHandler.cpp:97-102: the action target must be the player's first
@@ -2691,13 +2697,25 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			if s.server != nil {
 				s.server.onPetCommandAttack(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
 			}
-			// Send hostile AI reaction (plays pet attack sound/growl)
-			reactionBuf := protocol.NewBuffer(12)
-			reactionBuf.WriteU64(petGUID)
-			reactionBuf.WriteU32(aiReactionHostile)
-			_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
-			if s.server != nil {
-				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), s)
+			// Reference: PetHandler.cpp:213-218 — a summon pet (warlock;
+			// SUMMON_PET) ordered to attack plays the special attack talk
+			// (SMSG_PET_ACTION_SOUND with PET_TALK_ATTACK) 10% of the time
+			// when it is not attacking itself; everything else — the other
+			// 90%, hunter pets, charmed creatures (motion.Charmed carries
+			// the zero-value PetType, so it must be excluded explicitly) —
+			// answers the growl. Both SendPetTalk and SendPetAIReaction are
+			// owner-only (Unit.cpp:10463-10486 SendDirectMessage to the
+			// owner); Go used to broadcast the reaction to nearby players.
+			if motion.PetType == petTypeSummon && !motion.Charmed && petGUID != targetGUID && rand.Intn(101) < 10 {
+				talkBuf := protocol.NewBuffer(12)
+				talkBuf.WriteU64(petGUID)
+				talkBuf.WriteU32(petTalkAttack)
+				_ = s.write(uint16(protocol.OpcodeSMSG_PET_ACTION_SOUND), talkBuf.Bytes(), true)
+			} else {
+				reactionBuf := protocol.NewBuffer(12)
+				reactionBuf.WriteU64(petGUID)
+				reactionBuf.WriteU32(aiReactionHostile)
+				_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
 			}
 			s.debug("pet attack command", "account", s.accountName, "pet", petGUID, "target", targetGUID)
 		case commandFollow:
@@ -2771,25 +2789,34 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			st := spellGoPacketTarget(spellInfo, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID})
 			spellTargetBase = &st
 		}
-		if targetGUID != 0 {
+		// Reference: PetHandler.cpp:341-349 — the talk/growl fires on a
+		// successful cast even when the spell has no unit target (C++:
+		// pet != unit_target is true for a null unit_target); only the
+		// SpellGo visual below needs the target. A summon pet has the
+		// 10% PET_TALK_SPECIAL_SPELL talk; everything else gets the
+		// growl. Both are owner-only (Unit.cpp:10463-10486) — Go used to
+		// broadcast the reaction to nearby players.
+		if motion.PetType == petTypeSummon && !motion.Charmed && petGUID != targetGUID && rand.Intn(101) < 10 {
+			talkBuf := protocol.NewBuffer(12)
+			talkBuf.WriteU64(petGUID)
+			talkBuf.WriteU32(petTalkSpecialSpell)
+			_ = s.write(uint16(protocol.OpcodeSMSG_PET_ACTION_SOUND), talkBuf.Bytes(), true)
+		} else {
 			reactionBuf := protocol.NewBuffer(12)
 			reactionBuf.WriteU64(petGUID)
 			reactionBuf.WriteU32(aiReactionHostile)
 			_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
-			if s.server != nil {
-				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), s)
+		}
+		if targetGUID != 0 && spellOrAction != 0 {
+			castTimeStamp := uint32(time.Now().UnixMilli())
+			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+			if spellTargetBase != nil {
+				spellTarget = *spellTargetBase
 			}
-			if spellOrAction != 0 {
-				castTimeStamp := uint32(time.Now().UnixMilli())
-				spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
-				if spellTargetBase != nil {
-					spellTarget = *spellTargetBase
-				}
-				goPkt := protocol.BuildSpellGo(petGUID, petGUID, 1, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
-				if s.server != nil {
-					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
-				}
+			goPkt := protocol.BuildSpellGo(petGUID, petGUID, 1, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
+			_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+			if s.server != nil {
+				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
 			}
 		}
 		s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)
@@ -3021,6 +3048,24 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	if !s.executePetSpellWithOptions(ctx, motion, spell, castCount, target, triggered) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+	} else {
+		// Reference: PetHandler.cpp:808-815 — the real-cast talk/growl arm:
+		// a summon pet (ToPet() excludes charmed creatures) plays
+		// SMSG_PET_ACTION_SOUND with PET_TALK_SPECIAL_SPELL 10% of the
+		// time; every other successful cast answers the growl. Unlike the
+		// action-bar spell arm there is no self-target exclusion here.
+		// Both are owner-only (Unit.cpp:10463-10486).
+		if motion.PetType == petTypeSummon && !motion.Charmed && rand.Intn(101) < 10 {
+			talkBuf := protocol.NewBuffer(12)
+			talkBuf.WriteU64(petGUID)
+			talkBuf.WriteU32(petTalkSpecialSpell)
+			_ = s.write(uint16(protocol.OpcodeSMSG_PET_ACTION_SOUND), talkBuf.Bytes(), true)
+		} else {
+			reactionBuf := protocol.NewBuffer(12)
+			reactionBuf.WriteU64(petGUID)
+			reactionBuf.WriteU32(aiReactionHostile)
+			_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
+		}
 	}
 	s.debug("pet cast spell", "account", s.accountName, "pet", petGUID, "spell", spellID, "castCount", castCount)
 	return true
