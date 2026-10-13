@@ -761,7 +761,7 @@ func (s *session) getPetAttributes(ctx context.Context, entry, level uint32, pet
 	return attributes
 }
 
-func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, scale, x, y, z, o float32, apBase, apMods uint32, apMult float32) []byte {
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, scale, x, y, z, o float32, apBase, apMods uint32, apMult, minDmg, maxDmg float32) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
@@ -791,6 +791,11 @@ func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, model
 	values[unitFieldAttackPower] = apBase
 	values[unitFieldAttackPowerMods] = apMods
 	values[unitFieldAttackPowerMultiplier] = math.Float32bits(apMult)
+	// Guardian::UpdateDamagePhysical (StatSystem.cpp:1479-1554) writes the
+	// pet's weapon-damage range to UNIT_FIELD_MINDAMAGE/MAXDAMAGE at
+	// stat-update time.
+	values[unitFieldMinDamage] = math.Float32bits(minDmg)
+	values[unitFieldMaxDamage] = math.Float32bits(maxDmg)
 	values[unitFieldBoundingRadius] = math.Float32bits(boundingRadius)
 	values[unitFieldCombatReach] = math.Float32bits(combatReach)
 	values[unitFieldDisplayID] = modelID
@@ -1050,6 +1055,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		ownerArmorBonus := petOwnerArmorValue(uint8(petType), ownerArmor)
 		var apBase, apMods uint32
 		var apMult float32
+		var minDmg, maxDmg float32
 		s.server.motionMu.Lock()
 		if pm := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); pm != nil && pm.PetID == petID {
 			pm.Armor = petArmor
@@ -1065,9 +1071,14 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			// composition the melee path recomputes lazily.
 			_, base, flat, mult := s.server.petGuardianAttackPower(s, pm)
 			apBase, apMods, apMult = uint32(int32(base)), uint32(flat), float32(mult)
+			// Guardian::UpdateDamagePhysical (StatSystem.cpp:1479-1554)
+			// writes UNIT_FIELD_MINDAMAGE/MAXDAMAGE at the same stat-update
+			// time.
+			rangeMin, rangeMax := s.server.petPhysicalDamageRange(s, pm)
+			minDmg, maxDmg = float32(rangeMin), float32(rangeMax)
 		}
 		s.server.motionMu.Unlock()
-		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, fieldStats, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO, apBase, apMods, apMult)
+		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, fieldStats, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO, apBase, apMods, apMult, minDmg, maxDmg)
 	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
@@ -1118,6 +1129,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	var statAuraSpellID uint32
 	var apAuraSpellID uint32
 	var armorAuraSpellID uint32
+	var dmgAuraSpellID uint32
 	offlineMs := int64(0)
 	var petSaveTime int64
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(savetime, 0) FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petID).Scan(&petSaveTime)
@@ -1238,6 +1250,9 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if spellHasCreatureArmorAura(spell) {
 			armorAuraSpellID = uint32(spellID)
 		}
+		if spellHasPetWeaponDamageAura(spell) {
+			dmgAuraSpellID = uint32(spellID)
+		}
 	}
 	s.server.auraMu.Unlock()
 	if len(loaded) == 0 {
@@ -1264,6 +1279,13 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	// went out aura-free.
 	if armorAuraSpellID != 0 {
 		s.server.recomputeCreatureArmorOnAuraChange(petKey, armorAuraSpellID)
+	}
+	// Guardian::UpdateDamagePhysical on the same load (Unit.cpp:9335,
+	// StatSystem.cpp:1479-1554): a restored 13/79 NORMAL-misc aura rewrites
+	// UNIT_FIELD_MINDAMAGE/MAXDAMAGE — the summon broadcast above went out
+	// aura-free.
+	if dmgAuraSpellID != 0 {
+		s.server.recomputePetDamageFieldsOnAuraChange(petKey, dmgAuraSpellID)
 	}
 	records := make([]protocol.AuraUpdateRecord, 0, len(loaded))
 	for _, aura := range loaded {

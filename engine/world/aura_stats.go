@@ -238,6 +238,29 @@ func spellHasPetAttackPowerAura(spell wotlk.Spell) bool {
 	return false
 }
 
+// spellHasPetWeaponDamageAura reports whether the spell carries an aura that
+// feeds the pet's weapon-damage composition: SPELL_AURA_MOD_DAMAGE_DONE (13)
+// and SPELL_AURA_MOD_DAMAGE_PERCENT_DONE (79) with the NORMAL school misc bit
+// run through Unit::UpdateUnitMod -> Guardian::UpdateDamagePhysical
+// (Unit.cpp:9335, StatSystem.cpp:1479-1554) via UpdateAllDamageDoneMods /
+// UpdateAllDamagePctDoneMods (SpellAuraEffects.cpp:4166-4199), rewriting
+// UNIT_FIELD_MINDAMAGE/MAXDAMAGE on the pet on apply and remove. The
+// strength/AP arms (29/137/99/166) reach the same fields through the
+// UpdateAttackPowerAndDamage tail, so their spells are covered by
+// spellHasPetAttackPowerAura instead.
+func spellHasPetWeaponDamageAura(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.MiscValue&1 == 0 {
+			continue
+		}
+		switch eff.Aura {
+		case spellAuraModDamageDone, auraModDamagePercentDone:
+			return true
+		}
+	}
+	return false
+}
+
 // spellHasCreatureArmorAura reports whether the spell carries an aura that
 // feeds UNIT_MOD_ARMOR with the NORMAL school misc bit: 22 (flat
 // TOTAL_VALUE, SpellAuraEffects.cpp:3255-3269), 83 (pet-only flat

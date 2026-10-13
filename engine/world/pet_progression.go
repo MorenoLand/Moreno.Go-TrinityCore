@@ -402,10 +402,52 @@ func (s *Server) recomputePetAttackPowerOnAuraChange(key creatureAuraKey, spellI
 		return
 	}
 	_, apBase, apFlat, apMult := s.petGuardianAttackPower(owner, motion)
+	mindmg, maxdmg := s.petPhysicalDamageRange(owner, motion)
 	s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{
 		unitFieldAttackPower:           uint32(int32(apBase)),
 		unitFieldAttackPowerMods:       uint32(apFlat),
 		unitFieldAttackPowerMultiplier: math.Float32bits(float32(apMult)),
+		// Guardian::UpdateAttackPowerAndDamage tails into
+		// Guardian::UpdateDamagePhysical (StatSystem.cpp:1476), so the
+		// strength/AP aura apply/remove rewrites the weapon-damage fields
+		// too — not just the AP trio.
+		unitFieldMinDamage: math.Float32bits(float32(mindmg)),
+		unitFieldMaxDamage: math.Float32bits(float32(maxdmg)),
+	})
+}
+
+// recomputePetDamageFieldsOnAuraChange mirrors the Guardian::UpdateDamagePhysical
+// half that C++ runs when a pet's own weapon-damage-feeding aura applies or is
+// removed: SPELL_AURA_MOD_DAMAGE_DONE (13) and
+// SPELL_AURA_MOD_DAMAGE_PERCENT_DONE (79) with the NORMAL school misc bit run
+// through Unit::UpdateUnitMod -> UpdateDamagePhysical (Unit.cpp:9335,
+// StatSystem.cpp:1479-1554) via UpdateAllDamageDoneMods /
+// UpdateAllDamagePctDoneMods (SpellAuraEffects.cpp:4166-4199), rewriting
+// UNIT_FIELD_MINDAMAGE/MAXDAMAGE. The strength/AP arms (29/137/99/166) reach
+// the same fields through the UpdateAttackPowerAndDamage tail and ride
+// recomputePetAttackPowerOnAuraChange instead. With no live owner session the
+// fields are left alone — C++ has no offline-owner concept (the pet is
+// dismissed with the owner). Callers must not hold auraMu or motionMu.
+func (s *Server) recomputePetDamageFieldsOnAuraChange(key creatureAuraKey, spellID uint32) {
+	if s == nil || s.Data == nil || key.GUID == 0 || spellID == 0 {
+		return
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found || !spellHasPetWeaponDamageAura(spell) {
+		return
+	}
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if motion == nil || !motionIsPet(motion) {
+		return
+	}
+	owner := s.playerSessionForGUID(motion.OwnerGUID)
+	if owner == nil || owner.player == nil {
+		return
+	}
+	mindmg, maxdmg := s.petPhysicalDamageRange(owner, motion)
+	s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{
+		unitFieldMinDamage: math.Float32bits(float32(mindmg)),
+		unitFieldMaxDamage: math.Float32bits(float32(maxdmg)),
 	})
 }
 
@@ -535,6 +577,12 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 	fields[unitFieldAttackPower] = uint32(int32(apBase))
 	fields[unitFieldAttackPowerMods] = uint32(apFlat)
 	fields[unitFieldAttackPowerMultiplier] = math.Float32bits(float32(apMult))
+	// The UpdateAttackPowerAndDamage tail runs Guardian::UpdateDamagePhysical
+	// (StatSystem.cpp:1476, 1479-1554), rewriting UNIT_FIELD_MINDAMAGE/
+	// MAXDAMAGE at the same level-up.
+	rangeMin, rangeMax := s.server.petPhysicalDamageRange(s, motion)
+	fields[unitFieldMinDamage] = math.Float32bits(float32(rangeMin))
+	fields[unitFieldMaxDamage] = math.Float32bits(float32(rangeMax))
 	if petType == 1 {
 		fields[unitFieldPetNextLevelExp] = nextLevelXP
 	}

@@ -1852,6 +1852,112 @@ func (s *Server) petGuardianAttackPower(owner *session, motion *creatureMotion) 
 	return total, base, flat, mult
 }
 
+// petPhysicalDamageRange mirrors Guardian::UpdateDamagePhysical
+// (StatSystem.cpp:1479-1554), which rewrites UNIT_FIELD_MINDAMAGE/MAXDAMAGE
+// on the pet: mindamage = ((flat(BASE of UNIT_MOD_DAMAGE_MAINHAND) +
+// AP/14*att_speed + bonusDamage + weapon_mindamage) * base_pct + total_value)
+// * total_pct, then the hunter-pet happiness arm and the 61682/61683
+// MOD_ATTACKSPEED reduction. For guardians flat(BASE) and base_pct have no
+// feeders (only TOTAL_VALUE via UpdateDamageDoneMods and TOTAL_PCT via
+// UpdateDamagePctDoneMods write the mod), so the composition is
+// ((AP/14*speed + bonusDamage + weaponRange) + flat13) * pct79. bonusDamage
+// is the treant 0.09 x owner nature bonus (entry 1964) and the fire
+// elemental 0.4 x owner fire bonus (entry 15438), positive-only, owner a
+// player. The AP term reuses petGuardianAttackPower's total (the
+// GetTotalAttackPowerValue twin), so strength/99/166 auras feed the fields
+// through the UpdateAttackPowerAndDamage tail like C++. owner is the pet's
+// owner session; it may be nil (offline owner), in which case the owner
+// bonus arms read 0 — the weapon/AP/aura legs are owner-independent.
+func (s *Server) petPhysicalDamageRange(owner *session, motion *creatureMotion) (mindmg, maxdmg float64) {
+	if motion == nil {
+		return 0, 0
+	}
+	total, _, _, _ := s.petGuardianAttackPower(owner, motion)
+	speed := float64(motion.AttackTime) / 1000
+	if speed <= 0 {
+		speed = 2
+	}
+	base := total/14*speed + petGuardianBonusDamage(owner, motion)
+	key := creatureAuraKeyForMotion(motion)
+	flat := float64(s.creatureAuraDamageDoneFlat(key))
+	pct := s.creatureAuraDamageDonePct(key)
+	mindmg = (base + float64(motion.MinDamage) + flat) * pct
+	maxdmg = (base + float64(motion.MaxDamage) + flat) * pct
+	if motion.PetType == petTypeHunter {
+		happy := float64(petHappinessDamageMod(motion.Powers[4]))
+		mindmg *= happy
+		maxdmg *= happy
+	}
+	debuff := s.petWeaponDamageSpeedDebuffPct(key)
+	mindmg *= debuff
+	maxdmg *= debuff
+	return mindmg, maxdmg
+}
+
+// petGuardianBonusDamage mirrors the bonusDamage arm of
+// Guardian::UpdateDamagePhysical (StatSystem.cpp:1484-1497): force of nature
+// treants (entry 1964) add 9% of the owner's nature damage-done bonus and
+// greater fire elementals (entry 15438) add 40% of the owner's fire bonus,
+// each only when the owner is a player and the bonus is positive. Go has no
+// temp-summon motions (item-9 parked), so the arms only fire if such a
+// motion ever exists — they are entry-gated exactly like C++.
+func petGuardianBonusDamage(owner *session, motion *creatureMotion) float64 {
+	if owner == nil || owner.player == nil || motion == nil {
+		return 0
+	}
+	var bonus int32
+	switch motion.Entry {
+	case 1964: // ENTRY_TREANT
+		bonus = owner.player.SpellDamagePositive[3] - owner.player.SpellDamageNegative[3]
+		if bonus > 0 {
+			return float64(bonus) * 0.09
+		}
+	case 15438: // ENTRY_FIRE_ELEMENTAL
+		bonus = owner.player.SpellDamagePositive[2] - owner.player.SpellDamageNegative[2]
+		if bonus > 0 {
+			return float64(bonus) * 0.4
+		}
+	}
+	return 0
+}
+
+// petWeaponDamageSpeedDebuffPct mirrors the @todo-marked legacy arm inside
+// Guardian::UpdateDamagePhysical (StatSystem.cpp:1536-1550): MOD_ATTACKSPEED
+// auras from spells 61682/61683 reduce the pet's weapon damage fields by
+// AddPct(mindamage, -amount) each. Callers must not hold auraMu.
+func (s *Server) petWeaponDamageSpeedDebuffPct(key creatureAuraKey) float64 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 1.0
+	}
+	factor := 1.0
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.SpellID != 61682 && aura.SpellID != 61683 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if effect.Aura != spellAuraModAttackSpeed {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				factor *= 1 - float64(aura.Amounts[index])/100
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	return factor
+}
+
 // petGuardianDoneDamageBonus mirrors the advertised-benefit fold of
 // Unit::SpellDamageBonusDone (Unit.cpp:6679-6683, 6725-6731): the pet's own
 // SPELL_AURA_MOD_DAMAGE_DONE (13) school-gated fold
@@ -3373,6 +3479,11 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): a strength, 99 or 166
 	// aura landing on a pet rewrites its AP unit fields.
 	s.server.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
+	// Guardian::UpdateDamagePhysical on the same apply (Unit.cpp:9335,
+	// StatSystem.cpp:1479-1554): a 13/79 NORMAL-misc aura landing on a pet
+	// rewrites UNIT_FIELD_MINDAMAGE/MAXDAMAGE (the strength/AP arms ride
+	// the recomputePetAttackPowerOnAuraChange tail above).
+	s.server.recomputePetDamageFieldsOnAuraChange(targetKey, spell.ID)
 	// Guardian::UpdateArmor / Creature::UpdateArmor on the same apply
 	// (StatSystem.cpp:1317-1330, 1018-1022): a direct armor aura (22/83/
 	// 101/142/143, NORMAL misc) rewrites UNIT_FIELD_RESISTANCES (armor).

@@ -24415,6 +24415,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): a strength, 99 or 166
 		// aura landing on a pet rewrites its AP unit fields.
 		s.server.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
+		// Guardian::UpdateDamagePhysical on the same apply
+		// (Unit.cpp:9335, StatSystem.cpp:1479-1554): a 13/79 NORMAL-misc
+		// aura landing on a pet rewrites UNIT_FIELD_MINDAMAGE/MAXDAMAGE
+		// (the strength/AP arms ride the recomputePetAttackPowerOnAuraChange
+		// tail above).
+		s.server.recomputePetDamageFieldsOnAuraChange(targetKey, spell.ID)
 		// Guardian::UpdateArmor / Creature::UpdateArmor on the same apply
 		// (StatSystem.cpp:1317-1330, 1018-1022): a direct armor aura (22/83/
 		// 101/142/143, NORMAL misc) rewrites UNIT_FIELD_RESISTANCES (armor).
@@ -28841,6 +28847,10 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): dropping a strength,
 		// 99 or 166 aura rewrites the pet's AP unit fields.
 		s.server.recomputePetAttackPowerOnAuraChange(key, spellID)
+		// Guardian::UpdateDamagePhysical on the same remove (Unit.cpp:9335,
+		// StatSystem.cpp:1479-1554): a 13/79 NORMAL-misc aura leaving a pet
+		// rewrites UNIT_FIELD_MINDAMAGE/MAXDAMAGE.
+		s.server.recomputePetDamageFieldsOnAuraChange(key, spellID)
 		// Guardian::UpdateArmor / Creature::UpdateArmor on the same remove
 		// (StatSystem.cpp:1317-1330, 1018-1022): dropping a direct armor
 		// aura rewrites UNIT_FIELD_RESISTANCES (armor).
@@ -29060,6 +29070,10 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): dropping a strength,
 		// 99 or 166 aura rewrites the pet's AP unit fields.
 		s.recomputePetAttackPowerOnAuraChange(key, spellID)
+		// Guardian::UpdateDamagePhysical on the same remove (Unit.cpp:9335,
+		// StatSystem.cpp:1479-1554): a 13/79 NORMAL-misc aura leaving a pet
+		// rewrites UNIT_FIELD_MINDAMAGE/MAXDAMAGE.
+		s.recomputePetDamageFieldsOnAuraChange(key, spellID)
 		// Guardian::UpdateArmor / Creature::UpdateArmor on the same remove
 		// (StatSystem.cpp:1317-1330, 1018-1022): dropping a direct armor
 		// aura rewrites UNIT_FIELD_RESISTANCES (armor).
