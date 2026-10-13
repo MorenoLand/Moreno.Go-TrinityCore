@@ -162,11 +162,11 @@ func (s *session) playerOwnerSessionOfCreature(guid uint64) *session {
 
 // casterCanApplyResilience mirrors Unit::CanApplyResilience (Unit.cpp:12333)
 // with the Player override (Player.h:1628): a player caster always applies
-// resilience; any other caster applies it only when owned by a player (pets,
-// guardians, totems). Charm does not change the C++ owner field
+// resilience — the override short-circuits the Unit arm, so a player on a
+// multi-passenger mount (IsVehicle in C++) still applies it. A creature
+// caster applies it only when owned by a player (pets, guardians, totems)
+// and not a vehicle. Charm does not change the C++ owner field
 // (UNIT_FIELD_SUMMONEDBY), so a charmed unit resolves to its pre-charm owner.
-// The vehicle arm (a vehicle caster never applies) has no Go model — vehicle
-// occupants cast as their own GUID, which resolves to the player session.
 func (s *session) casterCanApplyResilience(casterGUID uint64) bool {
 	if s == nil || s.server == nil || casterGUID == 0 {
 		return false
@@ -174,5 +174,35 @@ func (s *session) casterCanApplyResilience(casterGUID uint64) bool {
 	if caster := s.server.findSessionByGUID(casterGUID); caster != nil {
 		return true
 	}
-	return s.playerOwnerSessionOfCreature(casterGUID) != nil
+	return s.server.creatureCasterCanApplyResilience(s.findCreatureMotion(casterGUID))
+}
+
+// creatureCasterCanApplyResilience mirrors the creature arm of
+// Unit::CanApplyResilience (Unit.cpp:12333): !IsVehicle() &&
+// GetOwnerGUID().IsPlayer(). IsVehicle() is the UNIT_MASK_VEHICLE bit, set by
+// Unit::CreateVehicleKit (Unit.cpp:12055) and cleared by
+// Unit::RemoveVehicleKit (Unit.cpp:12070); Go's twin is the vehicle-kit
+// registry (vehicle.go), so a motion with a live kit is a vehicle. Charm
+// does not change the C++ owner field (UNIT_FIELD_SUMMONEDBY), so a charmed
+// unit resolves to its pre-charm owner via ownerPlayerSessionOfMotion.
+func (srv *Server) creatureCasterCanApplyResilience(motion *creatureMotion) bool {
+	if srv == nil || srv.ownerPlayerSessionOfMotion(motion) == nil {
+		return false
+	}
+	if motion == nil {
+		return true
+	}
+	return srv.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) == nil
+}
+
+// creatureVictimTakesResilience mirrors the victim gate of
+// Unit::ApplyResilience (Unit.cpp:12342-12350): a non-player vehicle victim
+// takes no resilience at all — the early return fires before the owner
+// lookup. Player victims are exempt: a player on a multi-passenger mount
+// counts as a vehicle in C++ but still takes resilience.
+func (srv *Server) creatureVictimTakesResilience(motion *creatureMotion) bool {
+	if srv == nil || motion == nil {
+		return true
+	}
+	return srv.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) == nil
 }

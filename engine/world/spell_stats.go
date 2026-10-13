@@ -638,7 +638,10 @@ func (srv *Server) creatureSpellCritChanceTaken(doneChance float64, vicSess *ses
 	// creature charmer resolves to nil — wild creatures skip it.
 	resilSess := vicSess
 	if !isPlayerVictim && srv != nil {
-		if motion := srv.findCreatureMotion(victimKey.Map, victimKey.InstanceID, victimKey.GUID); motion != nil {
+		// Unit::ApplyResilience (Unit.cpp:12342-12343): a non-player
+		// vehicle victim takes no resilience at all — the early return
+		// fires before the owner lookup below.
+		if motion := srv.findCreatureMotion(victimKey.Map, victimKey.InstanceID, victimKey.GUID); motion != nil && srv.creatureVictimTakesResilience(motion) {
 			resilSess = srv.ownerPlayerSessionOfMotion(motion)
 		}
 	}

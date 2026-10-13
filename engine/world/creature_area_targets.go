@@ -227,8 +227,10 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			// the GetUnitCriticalChanceTaken leg (Unit.cpp:2858-2901).
 			// Unit::CanApplyResilience (Unit.cpp:12333) runs on the caster:
 			// the owner must be a player — a creature-charmed caster
-			// resolves to nil here and skips the reduction.
-			chance = s.creatureSpellCritChanceTaken(chance, p.Sess, creatureAuraKey{}, true, motion.GUID, motion.Level, uint32(p.Sess.player.Level), schoolMask, inlineSpell, s.ownerPlayerSessionOfMotion(motion) != nil)
+			// resolves to nil here and skips the reduction — and the
+			// caster must not be a vehicle (!IsVehicle, the
+			// UNIT_MASK_VEHICLE / vehicle-kit arm).
+			chance = s.creatureSpellCritChanceTaken(chance, p.Sess, creatureAuraKey{}, true, motion.GUID, motion.Level, uint32(p.Sess.player.Level), schoolMask, inlineSpell, s.creatureCasterCanApplyResilience(motion))
 			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
 				// Unit::SpellCriticalDamageBonus (Unit.cpp:7411-7449) /
@@ -247,12 +249,12 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		}
 		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079,
 		// 1105): Unit::CanApplyResilience (Unit.cpp:12333) runs on the
-		// caster — GetOwnerGUID().IsPlayer(), with charm resolving to the
-		// pre-charm owner (UNIT_FIELD_SUMMONEDBY). A wild creature's owner
-		// is no player, and neither is a creature charmer, so those casts
-		// never reduce the victim by resilience; a player-owned motion
-		// (pet/charm/totem) does. The vehicle arm has no Go model.
-		if damage > 0 && motion != nil && s.ownerPlayerSessionOfMotion(motion) != nil {
+		// caster — GetOwnerGUID().IsPlayer() with !IsVehicle(), charm
+		// resolving to the pre-charm owner (UNIT_FIELD_SUMMONEDBY). A wild
+		// creature's owner is no player, and neither is a creature charmer,
+		// so those casts never reduce the victim by resilience; a
+		// player-owned non-vehicle motion (pet/charm/totem) does.
+		if damage > 0 && s.creatureCasterCanApplyResilience(motion) {
 			// Unit::CalculateSpellDamageTaken (Unit.cpp:1079-1080): the
 			// MELEE/RANGED-DmgClass arm reduces by the melee/ranged taken
 			// rating, not the spell one (Unit.cpp:1105-1107 keeps
@@ -477,10 +479,10 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553) for a
 			// creature caster: the caster heals for the damage the target
 			// actually lost (leechDealt above) times the effect's
-			// CalcValueMultiplier (eff.Amplitude, SpellInfo.cpp:344).
-			// The C++ gates on the caster being alive and the unit target
-			// existing; the SpellHealingBonusDone/Taken folds have no
-			// creature model and stay a documented delta.
+			// CalcValueMultiplier (eff.Amplitude, SpellInfo.cpp:344),
+			// then the SpellHealingBonusDone/Taken self folds
+			// (Unit.cpp:7505-7632, 7714-7759). The C++ gates on the caster
+			// being alive and the unit target existing.
 			if spellHasEffect(spellInfo, spellEffectHealthLeech) && motion != nil && leechDealt > 0 {
 				leechIdx := -1
 				for i := range spellInfo.Effects {
@@ -493,15 +495,34 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 				// the caster mod-owner's SPELLMOD_VALUE_MULTIPLIER folds via
 				// GetSpellModOwner — a pet/totem motion's owner player; a wild
 				// or charmed caster resolves nil (the C++ null-modOwner path).
-				multiplier := calcValueMultiplier(spellInfo, leechIdx, s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID))
+				modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+				multiplier := calcValueMultiplier(spellInfo, leechIdx, modOwner)
 				if heal := effectValueMultiplied(leechDealt, multiplier); heal > 0 {
+					// Unit::SpellHealingBonusDone (Unit.cpp:7505-7632): for
+					// HEALTH_LEECH spells the flat DoneTotal is zeroed
+					// (Unit.cpp:7605-7610), so only the DoneTotalMod percent
+					// leg over the caster's 136 auras survives, followed by
+					// the mod-owner's SPELLMOD_DAMAGE fold (Unit.cpp:7624;
+					// HEAL is not DOT, so the DOT op never applies here).
+					heal = uint32(float64(heal) * creatureHealingDonePctMultiplier(s, creatureAuraKeyForMotion(motion), spellInfo))
+					if modOwner != nil {
+						if sm := modOwner.applySpellMod(spellInfo, uint8(spellModDamage), int32(heal)); sm > 0 {
+							heal = uint32(sm)
+						} else {
+							heal = 0
+						}
+					}
+					// Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759): the
+					// direct-heal arms — MOD_HEALING_PCT min/max and the
+					// caster-matched MOD_HEALING_RECEIVED — on the caster's
+					// own aura store (the heal target is the caster).
+					heal = creatureHealingTakenBonus(s, creatureAuraKeyForMotion(motion), motion.GUID, spellInfo, true, heal, false)
 					// Spell::EffectHealthLeech (SpellEffects.cpp:1543-1548):
 					// the caster self-heal runs through Unit::HealBySpell, so
 					// CalcHealAbsorb and sScriptMgr->ModifyHealRecieved —
 					// AutoBalance_UnitScript::_Modifer_DealDamage scaling the
 					// creature caster's own heal — apply ahead of the health
-					// gain. The SpellHealingBonusDone/Taken self folds stay a
-					// documented delta (no creature model).
+					// gain.
 					leechHeal := s.creatureApplyHealAbsorb(creatureAuraKeyForMotion(motion), uint32(schoolMask), heal)
 					scaledHeal := heal - leechHeal
 					scaledHeal = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, scaledHeal)

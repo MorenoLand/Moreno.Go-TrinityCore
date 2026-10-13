@@ -940,8 +940,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			// Unit::ApplyResilience's owner lookup (Unit.cpp:12342-12351):
 			// a player-owned pet victim takes crit-chance reduction from the
 			// owner's resilience rating, against an attacker that can apply
-			// it (the pet's owner is a player, Unit.cpp:12333).
-			if isPetVictim && vm.OwnerGUID != 0 {
+			// it (the pet's owner is a player, Unit.cpp:12333). A non-player
+			// vehicle victim takes no resilience (Unit.cpp:12342-12343).
+			if isPetVictim && vm.OwnerGUID != 0 && s.creatureVictimTakesResilience(vm) {
 				if ownerSess := s.findSessionByGUID(vm.OwnerGUID); ownerSess != nil {
 					resilBaseBP := int32(500) + victimFlatCritTakenBP
 					ownerSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
@@ -2739,10 +2740,11 @@ func (s *Server) countDoTsByCaster(target combatTarget, ownerGUID uint64) uint32
 // (SpellEffects.cpp:1513-1553) for a pet caster: the caster heals for the
 // damage the target actually lost (leechDealt — post-absorb, overkill
 // excluded, captured at the damage-log site) times the effect's
-// CalcValueMultiplier (SpellInfo.cpp:528-536). The SpellHealingBonusDone/
-// Taken folds have no creature model and stay a documented delta, same as
-// the inline twin (creature_area_targets.go:484-519). The self-heal runs
-// through Unit::HealBySpell — CalcHealAbsorb and the AutoBalance
+// CalcValueMultiplier (SpellInfo.cpp:528-536). The SpellHealingBonusDone
+// percent leg (136 auras + mod-owner SPELLMOD_DAMAGE, Unit.cpp:7505-7632)
+// and the SpellHealingBonusTaken direct arms (Unit.cpp:7714-7759) fold on
+// the caster's own aura store ahead of the absorb — same as the inline twin
+// (creature_area_targets.go). The self-heal runs through Unit::HealBySpell — CalcHealAbsorb and the AutoBalance
 // ModifyHealRecieved hook (AutoBalance.cpp:245) ahead of the health gain
 // — under the C++ caster-alive gate (SpellEffects.cpp:1542). No heal log:
 // the inline twin sends none. No threat: Unit::DealHeal carries no
@@ -2769,11 +2771,28 @@ func (s *Server) applyPetHealthLeechHeal(caster *creatureMotion, spellID uint32,
 	// caster mod-owner's SPELLMOD_VALUE_MULTIPLIER folds via
 	// GetSpellModOwner — the pet's owner player
 	// (Object.cpp:2246-2261).
-	multiplier := calcValueMultiplier(leechSpell, leechIdx, s.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID))
+	modOwner := s.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID)
+	multiplier := calcValueMultiplier(leechSpell, leechIdx, modOwner)
 	heal := effectValueMultiplied(leechDealt, multiplier)
 	if heal == 0 {
 		return
 	}
+	// Unit::SpellHealingBonusDone (Unit.cpp:7505-7632): for HEALTH_LEECH
+	// spells the flat DoneTotal is zeroed (Unit.cpp:7605-7610), so only the
+	// DoneTotalMod percent leg over the caster's 136 auras survives,
+	// followed by the mod-owner's SPELLMOD_DAMAGE fold (Unit.cpp:7624).
+	heal = uint32(float64(heal) * creatureHealingDonePctMultiplier(s, creatureAuraKeyForMotion(caster), leechSpell))
+	if modOwner != nil {
+		if sm := modOwner.applySpellMod(leechSpell, uint8(spellModDamage), int32(heal)); sm > 0 {
+			heal = uint32(sm)
+		} else {
+			heal = 0
+		}
+	}
+	// Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759): the direct-heal
+	// arms — MOD_HEALING_PCT min/max and the caster-matched
+	// MOD_HEALING_RECEIVED — on the caster's own aura store.
+	heal = creatureHealingTakenBonus(s, creatureAuraKeyForMotion(caster), caster.GUID, leechSpell, true, heal, false)
 	healAbsorbed := s.creatureApplyHealAbsorb(creatureAuraKeyForMotion(caster), uint32(schoolMask), heal)
 	scaledHeal := heal - healAbsorbed
 	scaledHeal = s.autoBalanceModifyDealDamageOnMap(caster, caster.Map, scaledHeal)
@@ -2922,7 +2941,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				if isPlayerVictim {
 					vicSess = s.server.findSessionByGUID(target.GUID)
 				}
-				chance = s.server.creatureSpellCritChanceTaken(chance, vicSess, creatureAuraKeyForTarget(target), isPlayerVictim, caster.GUID, caster.Level, uint32(target.Level), schoolMask, critSpell, s.server.ownerPlayerSessionOfMotion(caster) != nil)
+				chance = s.server.creatureSpellCritChanceTaken(chance, vicSess, creatureAuraKeyForTarget(target), isPlayerVictim, caster.GUID, caster.Level, uint32(target.Level), schoolMask, critSpell, s.server.creatureCasterCanApplyResilience(caster))
 			}
 			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
@@ -2968,9 +2987,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	}
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:1079, 1105): the resilience
 	// arm runs only when the caster CanApplyResilience() (Unit.cpp:12333) —
-	// the pet's owner must be a player (pre-charm owner). The absorb leg
-	// below is NOT resilience-gated in C++ and stays outside the gate.
-	casterCanResil := s.server.ownerPlayerSessionOfMotion(caster) != nil
+	// the pet's owner must be a player (pre-charm owner) and the pet must
+	// not be a vehicle. The absorb leg below is NOT resilience-gated in C++
+	// and stays outside the gate.
+	casterCanResil := s.server.creatureCasterCanApplyResilience(caster)
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
 			if casterCanResil {
@@ -2985,12 +3005,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				damage += bypass
 			}
 		}
-	} else if ownerSess := s.playerOwnerSessionOfCreature(target.GUID); ownerSess != nil {
+	} else if targetMotion := s.findCreatureMotion(target.GUID); targetMotion != nil && s.server.creatureVictimTakesResilience(targetMotion) {
 		// Unit::ApplyResilience (Unit.cpp:12342-12350): a creature victim
 		// owned by a player takes the owner's damage resilience — same
 		// crit + damage reduction arms as the player-victim call above,
-		// still behind the caster's CanApplyResilience gate.
-		if casterCanResil {
+		// still behind the caster's CanApplyResilience gate. A non-player
+		// vehicle victim takes none (Unit.cpp:12342-12343).
+		if ownerSess := s.server.ownerPlayerSessionOfMotion(targetMotion); ownerSess != nil && casterCanResil {
 			ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 		}
 	}

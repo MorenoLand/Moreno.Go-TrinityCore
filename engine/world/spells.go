@@ -13885,6 +13885,56 @@ func creatureHealingTakenBonus(server *Server, key creatureAuraKey, casterGUID u
 	return uint32(math.Max(float64(heal)*takenMult, 0))
 }
 
+// creatureHealingDonePctMultiplier mirrors the surviving percent leg of
+// Unit::SpellHealingBonusDone (Unit.cpp:7634-7711) for a creature caster's
+// self-heal: for HEALTH_LEECH spells the flat DoneTotal is zeroed
+// (Unit.cpp:7605-7610), so only DoneTotalMod applies — the product of
+// (1 + amount/100) over the caster's SPELL_AURA_MOD_HEALING_DONE_PERCENT
+// (136) auras (Unit.cpp:7656, no misc mask in C++). Spells with
+// SPELL_ATTR3_NO_DONE_BONUS, SPELL_ATTR6_LIMIT_PCT_HEALING_MODS, or of the
+// potion family skip it entirely (Unit.cpp:7642-7651). The totem arm
+// (Unit.cpp:7637-7640, owner carries the pct) and the OVERRIDE_CLASS_SCRIPTS
+// scripted arms (Unit.cpp:7660-7705) have no creature-side model — no totem
+// casts a leech spell and the creature store carries no script auras.
+func creatureHealingDonePctMultiplier(srv *Server, key creatureAuraKey, spell wotlk.Spell) float64 {
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 ||
+		spell.AttributesEx6&spellAttr6LimitPctHealingMods != 0 ||
+		spell.SpellFamilyName == spellFamilyPotion {
+		return 1.0
+	}
+	mult := 1.0
+	if srv == nil || srv.Data == nil || key.GUID == 0 {
+		return mult
+	}
+	srv.auraMu.Lock()
+	auras := srv.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	srv.auraMu.Unlock()
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != auraModHealingDonePercent {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			mult *= 1.0 + float64(amount)/100.0
+		}
+	}
+	return mult
+}
+
 // spellDamagePushesBack mirrors the pushback half of Unit::DealDamage
 // (Unit.cpp:937): damage dealt by a spell carrying
 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE or SPELL_ATTR3_TREAT_AS_PERIODIC never
@@ -14174,17 +14224,22 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// arm and before absorption, matching the C++ order. Fixed-damage
 			// spells skip the whole taken-mitigation block (Unit.cpp:999).
 			if !instantKill && damage > 0 && !(spellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0) {
-				if ownerSess := s.playerOwnerSessionOfCreature(target.GUID); ownerSess != nil {
-					resilCR := CombatRatingCritTakenSpell
-					if spellKnown {
-						switch dmgSpell.DefenseType {
-						case spellDamageClassMelee:
-							resilCR = CombatRatingCritTakenMelee
-						case spellDamageClassRanged:
-							resilCR = CombatRatingCritTakenRanged
+				// Unit::ApplyResilience (Unit.cpp:12342-12343): a non-player
+				// vehicle victim takes no resilience — the early return
+				// fires before the owner lookup.
+				if targetMotion := s.findCreatureMotion(target.GUID); targetMotion != nil && s.server.creatureVictimTakesResilience(targetMotion) {
+					if ownerSess := s.playerOwnerSessionOfCreature(target.GUID); ownerSess != nil {
+						resilCR := CombatRatingCritTakenSpell
+						if spellKnown {
+							switch dmgSpell.DefenseType {
+							case spellDamageClassMelee:
+								resilCR = CombatRatingCritTakenMelee
+							case spellDamageClassRanged:
+								resilCR = CombatRatingCritTakenRanged
+							}
 						}
+						ownerSess.applyResilienceToDamage(true, &damage, (hitInfo&0x02) != 0, resilCR)
 					}
-					ownerSess.applyResilienceToDamage(true, &damage, (hitInfo&0x02) != 0, resilCR)
 				}
 			}
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
