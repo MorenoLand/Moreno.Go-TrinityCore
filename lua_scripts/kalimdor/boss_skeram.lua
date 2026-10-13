@@ -108,7 +108,7 @@ end
 -- C++ EVENT_ARCANE_EXPLOSION: DoCastAOE(SPELL_ARCANE_EXPLOSION,
 -- true), init urand(6000,12000) -> urand(8000,18000).
 local function onArcaneExplosion(creature, guid)
-    creature:CastSpell(creature, SPELL_ARCANE_EXPLOSION)
+    creature:CastSpell(creature, SPELL_ARCANE_EXPLOSION, true)
     schedule(guid, "ae", math.random(8000, 18000), function()
         onArcaneExplosion(creature, guid)
     end)

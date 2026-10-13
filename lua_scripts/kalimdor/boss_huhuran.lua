@@ -219,6 +219,7 @@ end
 -- InterruptNonMeleeSpells (no bridge) + Talk(EMOTE_BERSERK 1) +
 -- DoCast(me, 26068) + Berserk = true (latched). Eluna event 9 is
 -- pre-damage, so projected-health check (jeklik/aku_mai convention).
+-- HealthBelowPct(31) is floored strict-< (ironaya convention).
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local s = st(guid)
@@ -229,7 +230,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (health - damage) * 100 < 31 * maxHealth then
+    if (health - damage) < math.floor(31 * maxHealth / 100) then
         s.berserk = true
         creature:Talk(EMOTE_BERSERK)
         creature:CastSpell(creature, SPELL_BERSERK)
