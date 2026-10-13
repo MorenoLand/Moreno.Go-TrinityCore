@@ -1951,7 +1951,12 @@ func (s *session) setRestBonus(state *playerState, bonus float32) {
 		bonus = maxRestBonus
 	}
 	state.RestBonus = bonus
-	if state.RestState != restStateRafLinked {
+	// Player::SetRestBonus (Player.cpp:21494-21502): a recruit-a-friend
+	// link (plus recruiter/recruited account state) pins the client rest
+	// state to REST_STATE_RAF_LINKED; otherwise the bonus thresholds decide.
+	if s != nil && s.getsRecruitAFriendBonus(true) && (s.isRecruiter || s.recruiterID != 0) {
+		state.RestState = restStateRafLinked
+	} else {
 		if bonus > 10 {
 			state.RestState = restStateRested
 		} else if bonus <= 1 {

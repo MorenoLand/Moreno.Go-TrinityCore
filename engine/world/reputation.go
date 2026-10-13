@@ -653,9 +653,9 @@ func (s *session) championingFaction(targetMapID uint32) uint32 {
 // folds into percent, plus the faction-specific 190 modifier which C++ gates
 // to kills (both already in reputationGainPctMod). The low-level kill rate
 // (World.cpp:562, "Rate.Reputation.LowLevel.Kill", default 1.0) has no Go
-// config, so the gray-level reduction arm is a no-op like the quest path;
-// RepRewardRate (rep_reward_rate) and the recruit-a-friend bonus have no Go
-// model.
+// config, so the gray-level reduction arm is a no-op like the quest path.
+// Player.cpp:6724: the recruit-a-friend bonus folds percent for every source
+// except REPUTATION_SOURCE_SPELL (the kill path is SOURCE_KILL).
 func (s *session) calculateKillReputationGain(factionID uint32, rep int32) int32 {
 	percent := float32(100)
 	if mod := s.reputationGainPctMod(factionID); mod != 0 {
@@ -664,6 +664,9 @@ func (s *session) calculateKillReputationGain(factionID uint32, rep int32) int32
 		} else {
 			percent -= float32(mod)
 		}
+	}
+	if s.getsRecruitAFriendBonus(false) {
+		percent *= 1 + float32(s.server.Config.ReputationRecruitAFriendBonusRate)
 	}
 	if percent <= 0 {
 		return 0

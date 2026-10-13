@@ -1398,10 +1398,12 @@ func isReputationAllowedForQuestTeam(team uint32, factionID uint32) bool {
 // percent (skipped under noQuestBonus), gains use 100+mod and losses
 // 100-mod, and a zero or negative percent grants nothing. The low-level
 // quest rate has no Go config (C++ default 1.0, so the gray-level arm is a
-// no-op here); RepRewardRate and the recruit-a-friend bonus have no Go
-// model. Go's reputationGainPctMod also folds the faction-specific 190
-// modifier, which C++ gates to kills — the quest path keeps Go's existing
-// shared-sink behavior there (noted in reputation.go).
+// no-op here); RepRewardRate has no Go model. Player.cpp:6724: the
+// recruit-a-friend bonus folds percent for every source except
+// REPUTATION_SOURCE_SPELL (quest sources qualify). Go's
+// reputationGainPctMod also folds the faction-specific 190 modifier, which
+// C++ gates to kills — the quest path keeps Go's existing shared-sink
+// behavior there (noted in reputation.go).
 func (s *session) calculateQuestReputationGain(factionID uint32, rep int32, noQuestBonus bool) int32 {
 	// All quest sources (daily/weekly/monthly/repeatable/plain) share
 	// RATE_REPUTATION_LOWLEVEL_QUEST in the C++; with no Go config for it
@@ -1416,6 +1418,9 @@ func (s *session) calculateQuestReputationGain(factionID uint32, rep int32, noQu
 				percent -= float32(mod)
 			}
 		}
+	}
+	if s.getsRecruitAFriendBonus(false) {
+		percent *= 1 + float32(s.server.Config.ReputationRecruitAFriendBonusRate)
 	}
 	if percent <= 0 {
 		return 0

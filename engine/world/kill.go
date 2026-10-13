@@ -1176,17 +1176,29 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 		grantPetXP()
 		return
 	}
-	restedBonus := uint32(0)
+	// Player::GiveXP (Player.cpp:2665-2673): a recruit-a-friend link triples
+	// the grant (bonus_xp = 2 * xp, kill and non-kill XP alike); RaF does
+	// NOT stack with rested experience — the rested arm (which also drains
+	// the rest bonus) only runs without the link.
+	recruitAFriend := s.getsRecruitAFriendBonus(true)
+	bonusXP := uint32(0)
 	if victimGUID != 0 {
-		if s.player.RestBonus > 0 {
-			restedBonus = uint32(s.player.RestBonus)
-			if restedBonus > amount {
-				restedBonus = amount
+		if recruitAFriend {
+			bonusXP = 2 * amount
+			s.setRestBonus(s.player, s.player.RestBonus)
+		} else {
+			if s.player.RestBonus > 0 {
+				bonusXP = uint32(s.player.RestBonus)
+				if bonusXP > amount {
+					bonusXP = amount
+				}
 			}
+			s.setRestBonus(s.player, s.player.RestBonus-float32(bonusXP))
 		}
-		s.setRestBonus(s.player, s.player.RestBonus-float32(restedBonus))
+	} else if recruitAFriend {
+		bonusXP = 2 * amount
 	}
-	totalXP := amount + restedBonus
+	totalXP := amount + bonusXP
 
 	// SMSG_LOG_XPGAIN (0x1D0): victimGUID (8), totalXP (4), type (1), [baseXP (4), groupRate (4)], rafBonus (1)
 	xpLog := protocol.NewBuffer(22)
@@ -1199,7 +1211,13 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 	} else {
 		xpLog.WriteU8(1) // 1 = non-kill XP (quest, exploration)
 	}
-	xpLog.WriteU8(0) // recruit-a-friend flag
+	// Player::SendLogXPGain (Player.cpp:2637): the RaF flag tells the
+	// client the grant already includes the recruit-a-friend bonus.
+	if recruitAFriend {
+		xpLog.WriteU8(1)
+	} else {
+		xpLog.WriteU8(0)
+	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOG_XPGAIN), xpLog.Bytes(), true)
 
 	s.player.XP += totalXP

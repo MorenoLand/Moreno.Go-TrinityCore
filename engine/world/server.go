@@ -267,7 +267,11 @@ type session struct {
 	// the account.recruiter column the C++ auth handshake SELECTs into the
 	// session (WorldSocket.cpp:267). It feeds the
 	// SPELL_EFFECT_SUMMON_RAF_FRIEND CheckCast gate (Spell.cpp:5936-5941).
-	recruiterID                  uint32
+	recruiterID uint32
+	// isRecruiter mirrors WorldSession::isRecruiter (WorldSession.h:581,
+	// WorldSocket.cpp:273-283): true when some other account row names this
+	// account as its recruiter (LEFT JOIN account r ON a.id = r.recruiter).
+	isRecruiter                  bool
 	security                     uint8
 	raidMapDifficulty            uint8
 	raidMapDifficultyInitialized bool
@@ -3932,6 +3936,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	// missing column or failed query leaves the zero (no-recruiter) state,
 	// which the RAF check treats as no link, like C++'s default 0.
 	s.recruiterID = accountRecruiterID(ctx, s.server.AuthStore.DB, account.ID)
+	s.isRecruiter = accountIsRecruiter(ctx, s.server.AuthStore.DB, account.ID)
 	s.security = account.Security
 	s.muteTime = account.MuteTime
 	s.gmChat = false
@@ -4546,6 +4551,18 @@ func accountRecruiterID(ctx context.Context, db *sql.DB, accountID uint32) uint3
 		return 0
 	}
 	return recruiter
+}
+
+// accountIsRecruiter mirrors the IsRectuiter arm of the C++ auth handshake
+// (WorldSocket.cpp:273-283): fields[12] is the LEFT JOIN account r ON
+// a.id = r.recruiter row id, non-zero exactly when this account has
+// recruited someone. Any error yields false.
+func accountIsRecruiter(ctx context.Context, db *sql.DB, accountID uint32) bool {
+	var one int
+	if err := db.QueryRowContext(ctx, "SELECT 1 FROM account WHERE recruiter = ? LIMIT 1", accountID).Scan(&one); err != nil {
+		return false
+	}
+	return true
 }
 
 func timeNow() int64 { return time.Now().Unix() }
