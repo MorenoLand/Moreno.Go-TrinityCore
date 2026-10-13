@@ -35,9 +35,10 @@
 --   non-triggered; init {2s,5s} -> repeat {2s,5s}.
 -- - Wing Buffet (EVENT_WING_BUFFET): DoCastVictim
 --   (SPELL_WING_BUFFET 18500), non-triggered; init {10s,20s} ->
---   repeat {10s,20s} (C++ re-arms it {15s,30s} on the phase-3
---   landing, but the landing needs the movement machine — see
---   below — so the phase-1 cadence holds for the whole fight).
+--   repeat {15s,30s} (C++ :380 re-arms (15s,30s) after every fire in
+--   both phases 1 and 3; the phase-3 *first-fire* re-arm at :245
+--   needs the landing — unmodeled — but the execute re-arm does
+--   not need movement).
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds):
 --   Talk SAY_KILL (1); C++ has no victim gate (unused param), so
 --   the port is ungated — faithful, not the terestian_illhoof
@@ -67,6 +68,10 @@
 -- - MovementInform arms (phase-2 takeoff, phase-3 landing Talk
 --   SAY_PHASE_2_TRANS (2), trigger kill, tank MoveChase) — no
 --   MovementInform / movement bridges.
+-- - Bellowing Roar (DoCastVictim 18431): phase-3-only — first
+--   scheduled 5s at the C++ :241 phase-3 landing (30s re-arm at
+--   :363), and the landing needs the movement machine, so the
+--   whole arm is omitted with the unreachable phase 3.
 -- - Bellowing Roar floor-eruption leg (GameObjectInRangeCheck +
 --   instance SetGuidData(DATA_FLOOR_ERUPTION_GUID) into the
 --   instance-script BFS eruption machine) — no GO-enumeration /
@@ -159,12 +164,11 @@ local function onCleave(creature, guid)
 end
 
 -- C++ EVENT_WING_BUFFET: DoCastVictim(18500), non-triggered;
--- init {10s,20s} -> repeat {10s,20s} unconditional (the {15s,30s}
--- phase-3 re-arm needs the movement machine — unmodeled, see
--- header).
+-- init {10s,20s} -> repeat {15s,30s} unconditional (C++ :380 re-arms
+-- (15s,30s) in both phase 1 and phase 3).
 local function onWingBuffet(creature, guid)
     castVictim(creature, SPELL_WING_BUFFET)
-    schedule(guid, "wingbuffet", math.random(10000, 20000), function()
+    schedule(guid, "wingbuffet", math.random(15000, 30000), function()
         onWingBuffet(creature, guid)
     end)
 end
