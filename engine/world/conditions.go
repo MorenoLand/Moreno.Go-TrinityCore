@@ -1717,9 +1717,12 @@ func compareValues(compType int, a, b int64) bool {
 // reputationRank converts a standing value to the ReputationRank bit index
 // used by rank masks (HATED=0, HOSTILE=1, UNFRIENDLY=2, NEUTRAL=3,
 // FRIENDLY=4, HONORED=5, REVERED=6, EXALTED=7).
+// reputationRank mirrors ReputationMgr::ReputationToRank
+// (ReputationMgr.cpp:34-44): PointsInRank[7] is 1000 and Reputation_Cap is
+// 42999, so exalted starts at 42000 — not 42999.
 func reputationRank(standing int64) uint32 {
 	switch {
-	case standing >= 42999:
+	case standing >= 42000:
 		return 7
 	case standing >= 21000:
 		return 6

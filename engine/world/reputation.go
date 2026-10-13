@@ -78,7 +78,14 @@ func (s *session) reputationGainPctMod(factionID uint32) (mod int32) {
 	return mod
 }
 
-func MergeReputationFlags(defaultFlags, databaseFlags uint8, totalStanding int32) uint8 {
+// MergeReputationFlags replays ReputationMgr::LoadFromDB's flag fold
+// (ReputationMgr.cpp:540-573) over the DB flags. totalStanding is the
+// client-visible total (base + raw); rawStanding is the raw
+// FactionState::Standing (DB column, base excluded). The peace-forced
+// war-declaration gate (SetAtWar, ReputationMgr.cpp:478-484) ranks the RAW
+// standing, while the hostile auto-war arm ranks the total via GetRank —
+// the two gates must not share one rank input.
+func MergeReputationFlags(defaultFlags, databaseFlags uint8, totalStanding, rawStanding int32) uint8 {
 	flags := defaultFlags
 	if databaseFlags&factionFlagVisible != 0 && (flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 || flags&factionFlagSpecial != 0) {
 		flags |= factionFlagVisible
@@ -86,15 +93,15 @@ func MergeReputationFlags(defaultFlags, databaseFlags uint8, totalStanding int32
 	if databaseFlags&factionFlagInactive != 0 && flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 && flags&factionFlagVisible != 0 {
 		flags |= factionFlagInactive
 	}
-	rank := reputationRank(int64(totalStanding))
+	rawRank := reputationRank(int64(rawStanding))
 	canChangeWar := flags&(factionFlagInvisibleForced|factionFlagHidden) == 0
-	canDeclareWar := flags&factionFlagPeaceForced == 0 || flags&factionFlagRival != 0 || rank == 0
+	canDeclareWar := flags&factionFlagPeaceForced == 0 || flags&factionFlagRival != 0 || rawRank == 0
 	if databaseFlags&factionFlagAtWar != 0 && canChangeWar && canDeclareWar {
 		flags |= factionFlagAtWar
 	} else if databaseFlags&factionFlagAtWar == 0 && flags&factionFlagVisible != 0 && canChangeWar {
 		flags &^= factionFlagAtWar
 	}
-	if rank <= 1 && canChangeWar && canDeclareWar {
+	if reputationRank(int64(totalStanding)) <= 1 && canChangeWar && canDeclareWar {
 		flags |= factionFlagAtWar
 	}
 	return flags

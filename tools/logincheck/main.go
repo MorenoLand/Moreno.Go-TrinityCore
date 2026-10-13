@@ -1350,23 +1350,23 @@ func checkCharacterCreationDefaults() error {
 }
 
 func checkReputationFlags() error {
-	visible := world.MergeReputationFlags(0x01, 0, 42000)
+	visible := world.MergeReputationFlags(0x01, 0, 42000, 42000)
 	if visible&0x01 == 0 {
 		return fmt.Errorf("default visible faction was cleared by an empty database flag set")
 	}
-	peace := world.MergeReputationFlags(0x11, 0x02, 42000)
+	peace := world.MergeReputationFlags(0x11, 0x02, 42000, 42000)
 	if peace&0x02 != 0 {
 		return fmt.Errorf("peace-forced faction was marked at war")
 	}
-	hostile := world.MergeReputationFlags(0x01, 0, -42000)
+	hostile := world.MergeReputationFlags(0x01, 0, -42000, -42000)
 	if hostile&0x02 == 0 {
 		return fmt.Errorf("hostile faction was not forced at war")
 	}
-	peaceForcedHostile := world.MergeReputationFlags(0x11, 0x02, -5000)
+	peaceForcedHostile := world.MergeReputationFlags(0x11, 0x02, -5000, -5000)
 	if peaceForcedHostile&0x02 != 0 {
 		return fmt.Errorf("peace-forced hostile faction ignored source rank threshold")
 	}
-	baseAdjusted := world.MergeReputationFlags(0x01, 0, -7000)
+	baseAdjusted := world.MergeReputationFlags(0x01, 0, -7000, -7000)
 	if baseAdjusted&0x02 == 0 {
 		return fmt.Errorf("base-adjusted hostile faction was not at war")
 	}

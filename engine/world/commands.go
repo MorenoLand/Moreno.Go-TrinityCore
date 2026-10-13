@@ -6398,11 +6398,18 @@ func (s *session) dispatchCommand(ctx context.Context, fields []string) bool {
 }
 
 // handleSetFactionCheat processes CMSG_SET_FACTION_CHEAT (0x126).
-// Reference: WorldSession::HandleSetFactionCheat (CharacterHandler.cpp:1043).
+// Reference: WorldSession::HandleSetFactionCheat (CharacterHandler.cpp:1043):
+// the handler answers with ReputationMgr::SendState(nullptr)
+// (ReputationMgr.cpp:184), i.e. SMSG_SET_FACTION_STANDING — not
+// SMSG_INITIALIZE_FACTIONS. With no faction argument the C++ packet carries
+// only factions still marked needSend; Go flushes every standing change
+// eagerly (no needSend model), so the pending set is empty and the packet is
+// the empty standing update. The _sendFactionIncreased byte has no Go
+// counterpart (rank-increase state is sent inline by the standing updates).
 func (s *session) handleSetFactionCheat(ctx context.Context, payload []byte) bool {
 	s.debug("handleSetFactionCheat received", "account", s.accountName)
 	if s.playerLoaded && s.player != nil {
-		_ = s.write(uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS), buildInitialReputations(*s.player), true)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState(nil, false), true)
 	}
 	return true
 }

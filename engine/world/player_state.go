@@ -2898,7 +2898,10 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 		}
 		state.Reputations[index].ListID = listID
 		state.Reputations[index].Standing = int32(standing)
-		state.Reputations[index].Flags = MergeReputationFlags(state.Reputations[index].Flags, uint8(flags), base+int32(standing))
+		// ReputationMgr.cpp:548: faction->Standing holds the raw DB value;
+		// the peace-forced gate ranks it raw, the hostile auto-war arm ranks
+		// the base+raw total.
+		state.Reputations[index].Flags = MergeReputationFlags(state.Reputations[index].Flags, uint8(flags), base+int32(standing), int32(standing))
 	}
 	return rows.Err()
 }
