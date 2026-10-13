@@ -18991,9 +18991,27 @@ func (s *session) spellReflectReturnStatus(spell wotlk.Spell) uint8 {
 // 253, Unit::isBlockCritical Unit.cpp:2432-2437) — clamped to the damage
 // (fullBlock). Gaps: creature shield-block strength (STR/20) has
 // no combatTarget model, so creatures block level/2 only; the
-// UNIT_STATE_CONTROLLED gate has no Go unit-state model.
+// UNIT_STATE_CONTROLLED gate has no Go unit-state model; the mid-cast gate
+// applies to player victims only (no creature cast-bar model).
 func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool, vicSess *session, spell wotlk.Spell, damage uint32) (uint32, bool) {
-	if s == nil || s.player == nil || damage == 0 {
+	if s == nil || s.player == nil {
+		return 0, false
+	}
+	attackerLevel := s.player.Level
+	if attackerLevel == 0 {
+		attackerLevel = 1
+	}
+	return s.server.spellTakenBlockAmountFrom(target, isPlayerVictim, vicSess, spell, damage, attackerLevel, s.player.X, s.player.Y)
+}
+
+// spellTakenBlockAmountFrom is the server-level core of
+// spellTakenBlockAmount with the attacker level/position passed explicitly,
+// so creature casters (the inline wild path and the pet path, which have no
+// session) can run the same isSpellBlocked arm (Unit.cpp:2412-2430) as the
+// player path. The caster's weapon skill enters only through
+// attackerLevel (5/level, same convention as directWeaponCritChanceTaken).
+func (srv *Server) spellTakenBlockAmountFrom(target combatTarget, isPlayerVictim bool, vicSess *session, spell wotlk.Spell, damage uint32, attackerLevel uint8, attackerX, attackerY float32) (uint32, bool) {
+	if damage == 0 {
 		return 0, false
 	}
 	if spell.DefenseType != spellDamageClassMelee && spell.DefenseType != spellDamageClassRanged {
@@ -19021,21 +19039,21 @@ func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool
 			return 0, false
 		}
 	}
-	inFront := hasInArc(target.Orientation, target.X, target.Y, s.player.X, s.player.Y, math.Pi)
+	inFront := hasInArc(target.Orientation, target.X, target.Y, attackerX, attackerY, math.Pi)
 	if !inFront {
 		dirOK := false
 		if isPlayerVictim {
 			dirOK = vicSess.hasAuraType(spellAuraIgnoreHitDirection)
-		} else if s.server != nil {
+		} else if srv != nil {
 			key := creatureAuraKeyForTarget(target)
-			s.server.auraMu.Lock()
-			for _, aura := range s.server.activeCreatureAuras[key] {
+			srv.auraMu.Lock()
+			for _, aura := range srv.activeCreatureAuras[key] {
 				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
 					dirOK = true
 					break
 				}
 			}
-			s.server.auraMu.Unlock()
+			srv.auraMu.Unlock()
 		}
 		if !dirOK {
 			return 0, false
@@ -19046,15 +19064,14 @@ func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool
 	// skillDiff = (victimMaxSkill - attackerWeaponSkill) = 5*leveldif;
 	// player: 0.04*skillDiff percent; creature: skillDiff*0.1% (both
 	// piecewise arms reduce to 50*leveldif basis points).
-	attackerLevel := uint8(1)
-	if s.player != nil && s.player.Level > 0 {
-		attackerLevel = s.player.Level
+	if attackerLevel == 0 {
+		attackerLevel = 1
 	}
 	skillDiff := (int32(target.Level) - int32(attackerLevel)) * 5
 	if isPlayerVictim {
 		blockChanceBP = int32(math.Round(float64(vicSess.player.BlockPercentage)*100)) + skillDiff*4
 	} else {
-		blockChanceBP = 500 + creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), spellAuraModBlockPercent) + skillDiff*10
+		blockChanceBP = 500 + creatureAuraModifierSum(srv, creatureAuraKeyForTarget(target), spellAuraModBlockPercent) + skillDiff*10
 	}
 	if blockChanceBP <= 0 || rand.IntN(10000) >= int(blockChanceBP) {
 		return 0, false
@@ -19071,7 +19088,7 @@ func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool
 			critChance += amount
 		}
 	} else {
-		critChance = creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), spellAuraModBlockCritChance)
+		critChance = creatureAuraModifierSum(srv, creatureAuraKeyForTarget(target), spellAuraModBlockCritChance)
 	}
 	if critChance > 0 && rand.IntN(100) < int(critChance) {
 		blocked += blocked

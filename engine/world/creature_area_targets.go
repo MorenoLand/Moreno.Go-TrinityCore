@@ -159,12 +159,13 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			inlineSpell, inlineSpellKnown = sp, true
 		}
 	}
-	var absorbed, resisted uint32
+	var absorbed, resisted, blocked uint32
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1132) arm order on the
 	// direct-spell path: victim-side taken pct legs (EffectSchoolDMG) run
 	// first, then the physical-school armor arm (Unit.cpp:1002-1006),
 	// then the DmgClass switch (crit — wild mobs roll none, Unit.cpp:7167;
-	// the player-owned crit arm below — plus resilience), then
+	// the player-owned crit arm below — plus the melee/ranged block arm and
+	// resilience), then
 	// sScriptMgr->ModifySpellDamageTaken (Unit.cpp:1115-1117, the AutoBalance
 	// _Modifer_DealDamage hook, AutoBalance.cpp:236), and finally the
 	// CalcAbsorbResist tail (Unit.cpp:1121-1130: resist, then absorb).
@@ -245,6 +246,27 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 					damage = s.creatureSpellWeaponCritDamageBonus(creatureAuraKeyForMotion(motion), creatureAuraKey{}, p.Sess, true, uint32(schoolMask), damage, inlineSpell, mask, owner)
 				}
 				hitInfo = 0x02
+			}
+		}
+		// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062)
+		// with Unit::isSpellBlocked (Unit.cpp:2412-2430): melee/ranged
+		// DmgClass physical spells can be blocked even when the caster is
+		// a wild motion — the block chance and shield value are victim-side
+		// (the player's CanBlock gate rejects creature victims implicitly:
+		// this path only hits players). Sits after the crit fold and before
+		// resilience, matching the C++ arm order.
+		if damage > 0 && inlineSpellKnown && motion != nil {
+			victimTarget := combatTarget{
+				GUID:        p.GUID,
+				X:           p.Sess.player.X,
+				Y:           p.Sess.player.Y,
+				Orientation: p.Sess.player.Orientation,
+				Level:       p.Sess.player.Level,
+				Armor:       p.Sess.player.Armor,
+			}
+			if b, ok := s.spellTakenBlockAmountFrom(victimTarget, true, p.Sess, inlineSpell, damage, uint8(maxUint32(motion.Level, 1)), motion.X, motion.Y); ok {
+				blocked = b
+				damage -= b
 			}
 		}
 		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079,
@@ -401,7 +423,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			}
 			p.Sess.procSpellDirectDamageAuras(spellID)
 		}
-		logPkt := buildSpellNonMeleeDamageLog(p.GUID, motion.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo)
+		logPkt := buildSpellNonMeleeDamageLog(p.GUID, motion.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
 		_ = p.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 		if s != nil {
 			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, p.Sess)

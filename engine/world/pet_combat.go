@@ -2833,6 +2833,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	hitInfo := uint32(0)
 	resisted := uint32(0)
 	absorbed := uint32(0)
+	// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062): the
+	// melee/ranged-DmgClass block subtraction lands post-crit, pre-resilience
+	// on the pet path too.
+	blocked := uint32(0)
 	if target.GUID != caster.GUID {
 		// WorldObject::MagicSpellHitResult (Object.cpp:2555): the caster's
 		// m_modSpellHitChance arm runs for any unit caster — the pet's live
@@ -2968,6 +2972,27 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
+	// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062) with
+	// Unit::isSpellBlocked (Unit.cpp:2412-2430): melee/ranged-DmgClass
+	// physical-school spells can be blocked from a pet caster — the block
+	// chance and shield value are victim-side. Runs post-crit and
+	// pre-resilience, matching the C++ arm order; the block roll and the
+	// crit roll are independent Bernoulli trials in C++, so Go's order is
+	// damage-exact. A creature victim mid cast-bar blocks (the player
+	// path's mid-cast gate has no creature cast-bar model — same delta as
+	// the player path's documented gaps).
+	if damage > 0 && s.server != nil && s.server.Data != nil {
+		if blockSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+			var vicSess *session
+			if isPlayerVictim {
+				vicSess = s.server.findSessionByGUID(target.GUID)
+			}
+			if b, ok := s.server.spellTakenBlockAmountFrom(target, isPlayerVictim, vicSess, blockSpell, damage, uint8(maxUint32(caster.Level, 1)), caster.X, caster.Y); ok {
+				blocked = b
+				damage -= b
+			}
+		}
+	}
 	if damage > 0 && schoolMask > 1 {
 		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
 		// the live 22 flat amounts fold into a pet victim's resistances.
@@ -3030,7 +3055,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// (Unit.cpp:735-737), so a god-cheat victim still feeds the heal —
 	// the damage log below likewise carries the pre-negation amount.
 	leechDealt := damage - overkill
-	logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo)
+	logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
 	if damage == 0 {
