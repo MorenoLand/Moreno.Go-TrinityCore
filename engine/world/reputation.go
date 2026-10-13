@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -561,4 +562,148 @@ func (s *session) fireReputationChangeHook(ctx context.Context, factionID uint32
 		s.debug("lua reputation-change hook failed", "account", s.accountName, "error", err)
 	}
 	return standing
+}
+
+// onkillReputation is one row of the world `creature_onkill_reputation` table
+// (ObjectMgr::LoadReputationOnKill, ObjectMgr.cpp:7981), the ReputationOnKillEntry
+// behind Player::RewardReputation(Unit*, float) (Player.cpp:6731).
+type onkillReputation struct {
+	repFaction1   uint32
+	repFaction2   uint32
+	maxCap1       uint8
+	maxCap2       uint8
+	repValue1     int32
+	repValue2     int32
+	teamDependent bool
+}
+
+// loadOnkillReputation fetches the kill-reputation row for a creature entry.
+// Columns are named explicitly: the sqlite schema orders MaxStanding before
+// IsTeamAward, unlike the C++ SELECT position list, so positional reads would
+// cross the streams.
+func loadOnkillReputation(ctx context.Context, db *sql.DB, creatureEntry uint32) (*onkillReputation, bool) {
+	if db == nil || creatureEntry == 0 {
+		return nil, false
+	}
+	var rep onkillReputation
+	var teamDependent int64
+	err := db.QueryRowContext(ctx, `SELECT RewOnKillRepFaction1, RewOnKillRepFaction2,
+		MaxStanding1, MaxStanding2, RewOnKillRepValue1, RewOnKillRepValue2, TeamDependent
+		FROM creature_onkill_reputation WHERE creature_id = ?`, creatureEntry).Scan(
+		&rep.repFaction1, &rep.repFaction2, &rep.maxCap1, &rep.maxCap2,
+		&rep.repValue1, &rep.repValue2, &teamDependent)
+	if err != nil {
+		return nil, false
+	}
+	rep.teamDependent = teamDependent != 0
+	return &rep, true
+}
+
+// championingSpellFactions maps the tabard championing dummy-aura spells to
+// their factions (AuraEffect::HandleAuraDummy, SpellAuraEffects.cpp:4599:
+// apply sets m_ChampioningFaction, remove clears it).
+var championingSpellFactions = map[uint32]uint32{
+	57819: 1106, // Argent Crusade
+	57820: 1098, // Knights of the Ebon Blade
+	57821: 1090, // Kirin Tor
+	57822: 1091, // The Wyrmrest Accord
+}
+
+// championingFaction resolves Player::GetChampioningFaction for the kill-
+// reputation arm (Player.cpp:6743-6754): one of the championing auras must be
+// live on the player, the kill must happen in a non-raid dungeon, and the
+// LFG dungeon entry for the map+difficulty must target level 80
+// (GetLFGDungeon, DBCStores.cpp:910 — first match wins).
+func (s *session) championingFaction(targetMapID uint32) uint32 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	var faction uint32
+	for spellID, fac := range championingSpellFactions {
+		if s.hasAura(spellID) {
+			faction = fac
+			break
+		}
+	}
+	if faction == 0 {
+		return 0
+	}
+	mapInfo, found, err := s.server.Data.Map(targetMapID)
+	if err != nil || !found || !mapInfo.IsNonRaidDungeon() {
+		return 0
+	}
+	dungeons, err := s.server.Data.LFGDungeons()
+	if err != nil {
+		return 0
+	}
+	difficulty := uint32(s.player.DungeonDifficulty)
+	for _, d := range dungeons {
+		if d.MapID == int32(targetMapID) && d.Difficulty == difficulty {
+			if d.TargetLevel == 80 {
+				return faction
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
+// calculateKillReputationGain mirrors Player::CalculateReputationGain
+// (Player.cpp:6651-6726) for REPUTATION_SOURCE_KILL: the 156 aura modifier
+// folds into percent, plus the faction-specific 190 modifier which C++ gates
+// to kills (both already in reputationGainPctMod). The low-level kill rate
+// (World.cpp:562, "Rate.Reputation.LowLevel.Kill", default 1.0) has no Go
+// config, so the gray-level reduction arm is a no-op like the quest path;
+// RepRewardRate (rep_reward_rate) and the recruit-a-friend bonus have no Go
+// model.
+func (s *session) calculateKillReputationGain(factionID uint32, rep int32) int32 {
+	percent := float32(100)
+	if mod := s.reputationGainPctMod(factionID); mod != 0 {
+		if rep > 0 {
+			percent += float32(mod)
+		} else {
+			percent -= float32(mod)
+		}
+	}
+	if percent <= 0 {
+		return 0
+	}
+	return int32(float32(rep) * percent / 100)
+}
+
+// rewardKillReputation mirrors Player::RewardReputation(Unit* victim, float
+// rate) (Player.cpp:6731-6779): each configured faction arm is gated on
+// TeamDependent, scaled by CalculateReputationGain and the group rate
+// (int32 truncation like C++'s int32(donerep * rate)), and skipped when the
+// faction DBC row is missing. A rank past ReputationMaxCap flips
+// ModifyReputation's limit arm, which updates only spillover and never the
+// faction itself — Go has no spillover model, so the grant is skipped. The
+// sink is addReputationAmount, whose Eluna hook and persistence mirror
+// ReputationMgr::SetReputation's main-faction arm.
+func (s *session) rewardKillReputation(ctx context.Context, rep *onkillReputation, mobLevel uint32, rate float32, targetMapID uint32) {
+	if s == nil || s.player == nil || s.server == nil || rep == nil {
+		return
+	}
+	team := teamForRace(s.player.Race)
+	championing := s.championingFaction(targetMapID)
+	grant := func(repFaction uint32, repValue int32, maxCap uint8, teamOK bool) {
+		if repFaction == 0 || !teamOK {
+			return
+		}
+		faction := repFaction
+		if championing != 0 {
+			faction = championing
+		}
+		gain := s.calculateKillReputationGain(faction, repValue)
+		gain = int32(float32(gain) * rate)
+		if gain == 0 || !s.spellFactionEntryExists(faction) {
+			return
+		}
+		if reputationRank(int64(s.reputationStanding(faction))) > uint32(maxCap) {
+			return
+		}
+		s.addReputationAmount(ctx, faction, gain)
+	}
+	grant(rep.repFaction1, rep.repValue1, rep.maxCap1, !rep.teamDependent || team == 0)
+	grant(rep.repFaction2, rep.repValue2, rep.maxCap2, !rep.teamDependent || team == 1)
 }

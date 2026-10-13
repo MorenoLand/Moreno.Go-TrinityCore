@@ -268,6 +268,7 @@ type LFGDungeon struct {
 	ID             uint32
 	MinLevel       uint32
 	MaxLevel       uint32
+	TargetLevel    uint32
 	MapID          int32
 	Difficulty     uint32
 	Flags          uint32
@@ -1600,6 +1601,7 @@ func (s *Store) parseLFGDungeon(id uint32, record dbc.Record) (LFGDungeon, bool,
 	}{
 		{18, &result.MinLevel},
 		{19, &result.MaxLevel},
+		{20, &result.TargetLevel},
 		{24, &result.Difficulty},
 		{25, &result.Flags},
 		{26, &result.TypeID},

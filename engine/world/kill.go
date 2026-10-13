@@ -448,21 +448,51 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 			targetMapIsDungeon, targetMapIsRaid, targetMapIsBattleground = mapInfo.IsDungeon(), mapInfo.IsRaid(), mapInfo.IsBattleground()
 		}
 	}
+	// KillRewarder::_InitXP (KillRewarder.cpp:119-124): off battlegrounds a
+	// vehicle-mounted killer zeroes the XP init while honor, reputation and
+	// kill credit still fire; on battlegrounds (XP-only rewards) the zero XP
+	// skips the reward entirely.
+	vehicleNoXP := s.player.VehicleGUID != 0 && !targetMapIsBattleground
+	if s.player.VehicleGUID != 0 && targetMapIsBattleground {
+		return
+	}
+	// KillRewarder::_RewardReputation (KillRewarder.cpp:179-184): skipped on
+	// battlegrounds and when the victim disables reputation gain
+	// (Creature::IsReputationGainDisabled, Creature.h:321).
+	var killRep *onkillReputation
+	if !targetMapIsBattleground && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		repDisabled := false
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			s.server.motionMu.Lock()
+			repDisabled = motion.DisableReputationGain
+			s.server.motionMu.Unlock()
+		}
+		if !repDisabled {
+			killRep, _ = loadOnkillReputation(ctx, s.server.WorldStore.DB, creatureEntry)
+		}
+	}
 	group := s.server.getGroup(s.groupID)
 	if group == nil {
-		baseXP := s.server.killXPGain(ctx, uint32(s.player.Level), mobLevel)
-		xp := s.server.adjustCreatureKillXP(ctx, target, creatureEntry, baseXP)
-		if xp > 0 {
-			xp = uint32(float32(xp) * s.experienceAuraMultiplier())
-			xp = s.applyNpcBotXPReduction(xp)
+		if !vehicleNoXP {
+			baseXP := s.server.killXPGain(ctx, uint32(s.player.Level), mobLevel)
+			xp := s.server.adjustCreatureKillXP(ctx, target, creatureEntry, baseXP)
 			if xp > 0 {
-				s.grantXPWithVictimGroup(ctx, xp, target.GUID, false)
+				xp = uint32(float32(xp) * s.experienceAuraMultiplier())
+				xp = s.applyNpcBotXPReduction(xp)
+				if xp > 0 {
+					s.grantXPWithVictimGroup(ctx, xp, target.GUID, false)
+				}
 			}
 		}
 		// KillRewarder::_RewardHonor (KillRewarder.cpp:134-138): the
 		// racial-leader honor arm also fires for solo kills.
 		if s.racialLeaderHonorEligible(ctx, target, creatureEntry, targetMapIsBattleground) {
 			s.grantRacialLeaderHonor(ctx, target.GUID, 1)
+		}
+		// KillRewarder::_RewardReputation (KillRewarder.cpp:179-184,
+		// _RewardPlayer KillRewarder.cpp:218-222): solo rate is 1.0.
+		if killRep != nil {
+			s.rewardKillReputation(ctx, killRep, mobLevel, 1.0, target.Map)
 		}
 		return
 	}
@@ -509,15 +539,40 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 			maxNonGrayLevel = level
 		}
 	}
+	// KillRewarder::_RewardGroup 3.1.3 (KillRewarder.cpp:248-256): reputation
+	// rewards every member within reward distance, dead members included
+	// ("Even dead players and corpses are rewarded", KillRewarder.cpp:182) —
+	// unlike XP, which skips them. The killer is always a rep recipient.
+	repRecipients := make([]recipient, 0, len(members))
+	repSeen := make(map[uint64]struct{}, len(members))
+	addRepRecipient := func(member *session, killer bool) {
+		if member == nil || member.player == nil || !member.worldReady.Load() {
+			return
+		}
+		guid := member.playerGUID
+		if _, exists := repSeen[guid]; exists {
+			return
+		}
+		if level := uint32(member.player.Level); level > 0 {
+			if killer || s.server.atGroupKillRewardDistance(member, target, targetMapIsDungeon, s.player.InstanceID) {
+				repSeen[guid] = struct{}{}
+				repRecipients = append(repRecipients, recipient{session: member, level: level})
+			}
+		}
+	}
 	killerFound := false
 	for _, member := range members {
-		if member.GUID == s.playerGUID {
+		isKiller := member.GUID == s.playerGUID
+		if isKiller {
 			killerFound = true
 		}
-		addRecipient(s.server.findSessionByGUID(member.GUID), member.GUID == s.playerGUID)
+		ms := s.server.findSessionByGUID(member.GUID)
+		addRecipient(ms, isKiller)
+		addRepRecipient(ms, isKiller)
 	}
 	if !killerFound {
 		addRecipient(s, true)
+		addRepRecipient(s, true)
 	}
 	// KillRewarder::_RewardGroup (KillRewarder.cpp:236-256): the honor arm
 	// runs even when the victim is gray for every member — a null
@@ -527,33 +582,47 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 			member.session.grantRacialLeaderHonor(ctx, target.GUID, count)
 		}
 	}
-	if count == 0 || sumLevel == 0 || maxNonGrayLevel == 0 {
-		return
-	}
-	baseXP := s.server.killXPGain(ctx, maxNonGrayLevel, mobLevel)
-	baseXP = s.server.adjustCreatureKillXP(ctx, target, creatureEntry, baseXP)
-	if baseXP == 0 {
-		return
-	}
 	groupRate := float32(1)
 	if !targetMapIsBattleground {
 		groupRate = ResolveGroupXPRate(count, targetMapIsRaid && isRaidGroup)
 	}
-	for _, member := range recipients {
-		// KillRewarder::_RewardXP (KillRewarder.cpp:142-151): a dead
-		// member's share is zeroed in the group case — no XP is granted,
-		// but the member already counted in the denominators above.
-		if member.session.isDeadOrGhost() {
-			continue
+	if !vehicleNoXP {
+		if count == 0 || sumLevel == 0 || maxNonGrayLevel == 0 {
+			return
 		}
-		share := ResolveGroupXPShare(baseXP, member.level, sumLevel, maxLevel, maxNonGrayLevel, groupRate)
-		if share == 0 {
-			continue
+		baseXP := s.server.killXPGain(ctx, maxNonGrayLevel, mobLevel)
+		baseXP = s.server.adjustCreatureKillXP(ctx, target, creatureEntry, baseXP)
+		if baseXP == 0 {
+			return
 		}
-		share = uint32(float32(share) * member.session.experienceAuraMultiplier())
-		share = member.session.applyNpcBotXPReduction(share)
-		if share > 0 {
-			member.session.grantXPWithVictimGroup(ctx, share, target.GUID, true)
+		for _, member := range recipients {
+			// KillRewarder::_RewardXP (KillRewarder.cpp:142-151): a dead
+			// member's share is zeroed in the group case — no XP is granted,
+			// but the member already counted in the denominators above.
+			if member.session.isDeadOrGhost() {
+				continue
+			}
+			share := ResolveGroupXPShare(baseXP, member.level, sumLevel, maxLevel, maxNonGrayLevel, groupRate)
+			if share == 0 {
+				continue
+			}
+			share = uint32(float32(share) * member.session.experienceAuraMultiplier())
+			share = member.session.applyNpcBotXPReduction(share)
+			if share > 0 {
+				member.session.grantXPWithVictimGroup(ctx, share, target.GUID, true)
+			}
+		}
+	}
+	// KillRewarder::_RewardReputation (KillRewarder.cpp:179-184,
+	// _RewardPlayer KillRewarder.cpp:218-222): the group rate is
+	// _groupRate * level / _sumLevel, 1.0 in dungeons.
+	if killRep != nil && sumLevel > 0 {
+		for _, member := range repRecipients {
+			rate := groupRate * float32(member.level) / float32(sumLevel)
+			if targetMapIsDungeon {
+				rate = 1.0
+			}
+			member.session.rewardKillReputation(ctx, killRep, mobLevel, rate, target.Map)
 		}
 	}
 }
@@ -910,11 +979,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	// Quest kill credit (KillRewarder::_RewardKillCredit, KillRewarder.cpp:183-191):
 	// RequiredNpcOrGo entries plus KillCredit templates, shared with the
 	// group at reward distance.
-	s.grantCreatureKillQuestCredit(ctx, creatureEntry, target)
-	s.updateAchievementCriteria(criteriaTypeKillCreature, creatureEntry, 1)
-	if creatureType > 0 {
-		s.updateAchievementCriteria(criteriaTypeKillCreatureType, creatureType, 1)
-	}
+	s.grantCreatureKillQuestCredit(ctx, creatureEntry, creatureType, target)
 	// Complete raid criteria when in a raid group
 	if s.groupID != 0 && s.server != nil {
 		if grp := s.server.getGroup(s.groupID); grp != nil && grp.IsRaid {
@@ -925,7 +990,6 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	if creatureEntry == 26533 {
 		s.updateAchievementCriteria(criteriaTypeMalGanisDefeated, creatureEntry, 1)
 	}
-	s.startTimedAchievement(timedTypeCreature, creatureEntry)
 
 	// Clear any active auras/DoTs ticking on this creature
 	if s.server != nil {
@@ -1456,7 +1520,12 @@ func (s *session) questAllowedInRaid(questType uint32) bool {
 // Player.cpp:24132-24158 — same map and instance, corpse-anchored,
 // dungeon-always, else within MaxGroupXPDistance /
 // CONFIG_GROUP_XP_DISTANCE).
-func (s *session) grantCreatureKillQuestCredit(ctx context.Context, creatureEntry uint32, target combatTarget) {
+// grantCreatureKillQuestCredit runs KillRewarder::_RewardKillCredit
+// (KillRewarder.cpp:186-195) per rewarded member: the KilledMonster fan-out
+// plus the KILL_CREATURE_TYPE achievement criteria (which C++ fires for every
+// group member in the reward loop, not just the killer). The alive-or-
+// corpse-unreleased gate is Player.cpp:24152's IsAlive() || !GetCorpse().
+func (s *session) grantCreatureKillQuestCredit(ctx context.Context, creatureEntry, creatureType uint32, target combatTarget) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
@@ -1467,6 +1536,7 @@ func (s *session) grantCreatureKillQuestCredit(ctx context.Context, creatureEntr
 	}
 	if s.groupID == 0 {
 		s.creditQuestKills(ctx, creatureEntry, target.GUID)
+		s.updateAchievementCriteria(criteriaTypeKillCreatureType, creatureType, 1)
 		return
 	}
 	inDungeon := s.isDungeonMap(target.Map)
@@ -1492,15 +1562,19 @@ func (s *session) grantCreatureKillQuestCredit(ctx context.Context, creatureEntr
 			continue
 		}
 		m.creditQuestKills(ctx, creatureEntry, target.GUID)
+		m.updateAchievementCriteria(criteriaTypeKillCreatureType, creatureType, 1)
 	}
 	if !credited {
 		s.creditQuestKills(ctx, creatureEntry, target.GUID)
+		s.updateAchievementCriteria(criteriaTypeKillCreatureType, creatureType, 1)
 	}
 }
 
 // creditQuestKills runs Player::KilledMonster (Player.cpp:16624): the
 // KillCredit1/2 template fan-out, then the per-quest credit loop shared
-// with the gameobject-activate arm.
+// with the gameobject-activate arm. Each fanned-out entry runs the full
+// Player::KilledMonsterCredit (Player.cpp:16637): the timed achievement
+// starts FIRST, then the per-entry kill criteria, then the quest loop.
 func (s *session) creditQuestKills(ctx context.Context, creatureEntry uint32, victimGUID uint64) {
 	if s.player == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
@@ -1513,6 +1587,10 @@ func (s *session) creditQuestKills(ctx context.Context, creatureEntry uint32, vi
 		if credit > 0 {
 			entries = append(entries, uint32(credit))
 		}
+	}
+	for _, entry := range entries {
+		s.startTimedAchievement(timedTypeCreature, entry)
+		s.updateAchievementCriteria(criteriaTypeKillCreature, entry, 1)
 	}
 	s.creditQuestObjectiveEntries(ctx, entries, victimGUID, false)
 }
@@ -1721,8 +1799,8 @@ func (s *session) resolveKillCreditTarget(targetGUID uint64) *session {
 // creature-GUID arm is vacuous here — C++ passes the player target as
 // pRewardSource, so creature_guid is empty and real_entry == entry).
 func (m *session) grantKillCreditMonster(ctx context.Context, entry uint32, targetGUID uint64) {
-	m.startTimedAchievement(timedTypeCreature, entry)
-	m.updateAchievementCriteria(criteriaTypeKillCreature, entry, 1)
+	// The timed achievement and the KILL_CREATURE criterion ride
+	// creditQuestKills (the KilledMonsterCredit arms).
 	m.creditQuestKills(ctx, entry, targetGUID)
 }
 
