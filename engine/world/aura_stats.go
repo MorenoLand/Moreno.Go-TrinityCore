@@ -219,41 +219,66 @@ func spellHasHealthPowerAura(spell wotlk.Spell) bool {
 // 34/230/250 heal/drop current health by the flat amount (:3650-3665),
 // 133 re-anchors current health to the pre-change health pct on apply and
 // remove alike (:3729-3754), 282 adjusts no current health (:3757-3768),
-// 132 shifts current power by the max-power change (:3698-3727), 35 adjusts
-// no current power. The 34 amount resolves from the live record on the apply
-// leg (registered before the trigger fires); on the remove leg the record is
-// already erased, so the DBC base points stand in. Callers must not hold auraMu.
+// 132 shifts current power by the max-power change per misc-gated power
+// (:3698-3727), 35 adjusts no current power. The 34 amount resolves from the
+// live record on the apply leg (registered before the trigger fires); on the
+// remove leg the record is already erased (Unit::_UnapplyAura erases before
+// the handlers, Unit.cpp:3548), so the trigger passes a pre-erase snapshot
+// of the erased record — C++ remove uses the stored effect amount
+// (amt = apply ? GetAmount() : -GetAmount(), :3658), never a fresh DBC
+// lookup. Effects whose mask bit is clear never ran a C++ handler, so they
+// contribute nothing — the same gate the live folds use. Callers must not
+// hold auraMu.
 type auraHealthPowerHalves struct {
 	flatHealth   int32
 	hasHealthPct bool
-	hasPowerPct  bool
+	powerPct     [7]bool
 }
 
-func (s *Server) creatureAuraHealthPowerHalves(key creatureAuraKey, spell wotlk.Spell, spellID uint32, apply bool) auraHealthPowerHalves {
+func (s *Server) creatureAuraHealthPowerHalves(key creatureAuraKey, spell wotlk.Spell, spellID uint32, apply bool, removed *activeAura) auraHealthPowerHalves {
 	var h auraHealthPowerHalves
-	liveAmounts := map[int]int32{}
+	var rec *activeAura
 	if apply && s != nil {
 		s.auraMu.Lock()
-		if rec := s.activeCreatureAuras[key][spellID]; rec != nil && !rec.Stopped {
-			for i, v := range rec.Amounts {
-				liveAmounts[i] = v
-			}
+		if r := s.activeCreatureAuras[key][spellID]; r != nil && !r.Stopped {
+			rec = r
 		}
 		s.auraMu.Unlock()
+	} else {
+		// The erase already ran; the snapshot carries the stored amounts
+		// the C++ remove leg reads from the AuraEffect object.
+		rec = removed
 	}
+	if rec == nil || rec.EffectMask == 0 {
+		return h
+	}
+	liveAmounts := map[int]int32{}
+	for i, v := range rec.Amounts {
+		liveAmounts[i] = v
+	}
+	usedStoredAmount := false
 	for index, eff := range spell.Effects {
+		if rec.EffectMask&(1<<uint(index)) == 0 {
+			continue
+		}
 		switch eff.Aura {
 		case spellAuraModIncreaseHealth, spellAuraModIncreaseHealthOld, spellAuraModIncreaseHealth2:
 			amt, ok := liveAmounts[index]
 			if !ok || amt == 0 {
+				if rec.AuraType == eff.Aura && !usedStoredAmount {
+					amt = int32(rec.Amount)
+					usedStoredAmount = true
+				}
+			}
+			if amt == 0 {
 				amt = eff.BasePoints
 			}
 			h.flatHealth += amt
 		case spellAuraModIncreaseHealthPercent:
 			h.hasHealthPct = true
 		case spellAuraModIncreaseEnergyPercent:
-			if eff.MiscValue == 0 {
-				h.hasPowerPct = true
+			if p := eff.MiscValue; p >= 0 && p < 7 {
+				h.powerPct[p] = true
 			}
 		}
 	}

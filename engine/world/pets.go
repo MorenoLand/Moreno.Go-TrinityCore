@@ -1227,7 +1227,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	// stamina/intellect aura must recompute the pet's aura-fed stats and
 	// maxima — the summon broadcast above went out aura-free.
 	if statAuraSpellID != 0 {
-		s.server.recomputePetDerivedOnStatAuraChange(petKey, statAuraSpellID, true)
+		s.server.recomputePetDerivedOnStatAuraChange(petKey, statAuraSpellID, true, nil)
 	}
 	records := make([]protocol.AuraUpdateRecord, 0, len(loaded))
 	for _, aura := range loaded {

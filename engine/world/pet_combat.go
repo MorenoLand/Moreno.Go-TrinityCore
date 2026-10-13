@@ -3269,7 +3269,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// Unit::UpdateUnitMod -> UpdateStats, Unit.cpp:9304-9310): the pet-cast
 	// path runs the same stat-aura recompute as the player-cast path —
 	// the trigger gates on the spell's 29/137 effects and on motionIsPet.
-	s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID, true)
+	s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID, true, nil)
 	wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 	packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, aura.StoredCasterLevel, 1, aura.EffectMask)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)

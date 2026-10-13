@@ -195,7 +195,7 @@ func (s *session) refreshPetStatsOnOwnerStatChange(ctx context.Context) {
 // instead of clamping. With no live owner session the pet values are left
 // alone — C++ has no offline-owner concept (the pet is dismissed with the
 // owner). Callers must not hold auraMu or motionMu.
-func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellID uint32, apply bool) {
+func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellID uint32, apply bool, removed *activeAura) {
 	if s == nil || s.Data == nil || key.GUID == 0 || spellID == 0 {
 		return
 	}
@@ -207,7 +207,7 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	if motion == nil {
 		return
 	}
-	halves := s.creatureAuraHealthPowerHalves(key, spell, spellID, apply)
+	halves := s.creatureAuraHealthPowerHalves(key, spell, spellID, apply, removed)
 	if !motionIsPet(motion) {
 		s.recomputeCreatureHealthPowerOnAuraChange(key, motion, halves, apply)
 		return
@@ -318,7 +318,7 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 		newHealth = uint32(newMaxHealth)
 	}
 	newMana := curMana
-	if halves.hasPowerPct {
+	if halves.powerPct[0] {
 		// HandleAuraModIncreaseEnergyPercent (SpellAuraEffects.cpp:3698-3727):
 		// current power shifts by the max-power change, on apply and
 		// remove alike, clamped into [0, new max] like ModifyPower.

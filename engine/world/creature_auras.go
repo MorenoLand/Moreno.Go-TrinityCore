@@ -773,13 +773,14 @@ func (s *Server) creaturePowerAuraMods(key creatureAuraKey, power uint32) (flat 
 // Creature::UpdateMaxHealth / Creature::UpdateMaxPower twins
 // (StatSystem.cpp:1024-1041): ((base*basePct282)+flat34/230/250)*totalPct133
 // for health (GetTotalAuraModValue composition, Unit.cpp:9437-9448),
-// (base+flat35)*totalPct132 for power 0. Creatures have no stamina/intellect
-// arm. A zero bank falls back to the stored max (callers bank the fallback
-// before writing when the motion predates the bank fields). Callers must not
-// hold auraMu or motionMu.
-func (s *Server) recomputeCreatureMaxHealthPower(key creatureAuraKey, motion *creatureMotion) (newMaxHealth, newMaxPower0 uint32) {
+// (base+flat35)*totalPct132 per misc-gated power (Creature::UpdateMaxPower
+// keys UNIT_MOD_POWER_START+power off the power, :1030-1041). Creatures have
+// no stamina/intellect arm. A zero bank falls back to the stored max
+// (callers bank the fallback before writing when the motion predates the
+// bank fields). Callers must not hold auraMu or motionMu.
+func (s *Server) recomputeCreatureMaxHealthPower(key creatureAuraKey, motion *creatureMotion) (newMaxHealth uint32, newMaxPowers [7]uint32) {
 	if motion == nil {
-		return 0, 0
+		return 0, [7]uint32{}
 	}
 	base := motion.BaseMaxHealth
 	if base == 0 {
@@ -791,17 +792,19 @@ func (s *Server) recomputeCreatureMaxHealthPower(key creatureAuraKey, motion *cr
 		v = 1
 	}
 	newMaxHealth = uint32(v)
-	powerBase := motion.BaseMaxPowers[0]
-	if powerBase == 0 {
-		powerBase = motion.MaxPowers[0]
+	for p := 0; p < 7; p++ {
+		powerBase := motion.BaseMaxPowers[p]
+		if powerBase == 0 {
+			powerBase = motion.MaxPowers[p]
+		}
+		pflat, ptotal := s.creaturePowerAuraMods(key, uint32(p))
+		pv := (float64(powerBase) + float64(pflat)) * ptotal
+		if pv < 0 {
+			pv = 0
+		}
+		newMaxPowers[p] = uint32(pv)
 	}
-	pflat, ptotal := s.creaturePowerAuraMods(key, 0)
-	pv := (float64(powerBase) + float64(pflat)) * ptotal
-	if pv < 0 {
-		pv = 0
-	}
-	newMaxPower0 = uint32(pv)
-	return newMaxHealth, newMaxPower0
+	return newMaxHealth, newMaxPowers
 }
 
 // recomputeCreatureHealthPowerOnAuraChange is the non-pet twin of
@@ -812,14 +815,25 @@ func (s *Server) recomputeCreatureMaxHealthPower(key creatureAuraKey, motion *cr
 // creature aura health deltas at all. Creatures have no stamina/intellect
 // arm and no owner session. Current health follows the per-spell halves
 // (34 heal/drop, 133 pct-keep); a pure max change leaves current health
-// alone like C++ (no clamp). Callers must not hold auraMu or motionMu.
+// alone like C++ (no clamp). The 35/132 folds are misc-gated per power
+// (HandleAuraModIncreaseEnergy/EnergyPercent key UNIT_MOD_POWER_START+power
+// off GetMiscValue(), :3686-3727), so every power slot refolds — a
+// rage-gated aura moves slot 1, not slot 0. Callers must not hold auraMu
+// or motionMu.
 func (s *Server) recomputeCreatureHealthPowerOnAuraChange(key creatureAuraKey, motion *creatureMotion, halves auraHealthPowerHalves, apply bool) {
 	if s == nil || motion == nil || key.GUID == 0 {
 		return
 	}
 	// Folds read under auraMu only — never nested inside motionMu.
 	healthFlat, healthBasePct, healthTotalPct := s.creatureHealthAuraMods(key)
-	powerFlat, powerTotalPct := s.creaturePowerAuraMods(key, 0)
+	powerMods := [7]struct {
+		flat     int32
+		totalPct float64
+	}{}
+	for p := 0; p < 7; p++ {
+		flat, totalPct := s.creaturePowerAuraMods(key, uint32(p))
+		powerMods[p].flat, powerMods[p].totalPct = flat, totalPct
+	}
 	s.motionMu.Lock()
 	m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 	if m == nil || m != motion {
@@ -831,11 +845,8 @@ func (s *Server) recomputeCreatureHealthPowerOnAuraChange(key creatureAuraKey, m
 		// so the stored max is the aura-free base.
 		m.BaseMaxHealth = m.MaxHealth
 	}
-	if m.BaseMaxPowers[0] == 0 {
-		m.BaseMaxPowers[0] = m.MaxPowers[0]
-	}
-	curHealth, curPower := m.Health, m.Powers[0]
-	oldMaxHealth, oldMaxPower := m.MaxHealth, m.MaxPowers[0]
+	curHealth := m.Health
+	oldMaxHealth := m.MaxHealth
 	var healthPct float64
 	if oldMaxHealth > 0 && curHealth > 0 {
 		healthPct = float64(curHealth) / float64(oldMaxHealth)
@@ -846,11 +857,36 @@ func (s *Server) recomputeCreatureHealthPowerOnAuraChange(key creatureAuraKey, m
 		v = 1
 	}
 	newMaxHealth := uint32(v)
-	pv := (float64(m.BaseMaxPowers[0]) + float64(powerFlat)) * powerTotalPct
-	if pv < 0 {
-		pv = 0
+	var newPowers, newMaxPowers [7]uint32
+	for p := 0; p < 7; p++ {
+		if m.BaseMaxPowers[p] == 0 {
+			m.BaseMaxPowers[p] = m.MaxPowers[p]
+		}
+		curPower, oldMaxPower := m.Powers[p], m.MaxPowers[p]
+		pv := (float64(m.BaseMaxPowers[p]) + float64(powerMods[p].flat)) * powerMods[p].totalPct
+		if pv < 0 {
+			pv = 0
+		}
+		np := uint32(pv)
+		newMaxPowers[p] = np
+		newPower := curPower
+		if halves.powerPct[p] {
+			// HandleAuraModIncreaseEnergyPercent (SpellAuraEffects.cpp:3698-3727):
+			// current power shifts by the max-power change, on apply and
+			// remove alike, clamped into [0, new max] like ModifyPower.
+			if x := int64(curPower) + int64(np) - int64(oldMaxPower); x < 0 {
+				newPower = 0
+			} else if x > int64(np) {
+				newPower = np
+			} else {
+				newPower = uint32(x)
+			}
+		} else if newPower > np {
+			newPower = np
+		}
+		newPowers[p] = newPower
+		m.Powers[p], m.MaxPowers[p] = newPower, np
 	}
-	newMaxPower0 := uint32(pv)
 	newHealth := curHealth
 	switch {
 	case halves.hasHealthPct:
@@ -888,32 +924,19 @@ func (s *Server) recomputeCreatureHealthPowerOnAuraChange(key creatureAuraKey, m
 			newHealth = nh
 		}
 	}
-	newPower := curPower
-	if halves.hasPowerPct {
-		// HandleAuraModIncreaseEnergyPercent (SpellAuraEffects.cpp:3698-3727):
-		// current power shifts by the max-power change, on apply and
-		// remove alike, clamped into [0, new max] like ModifyPower.
-		if np := int64(curPower) + int64(newMaxPower0) - int64(oldMaxPower); np < 0 {
-			newPower = 0
-		} else if np > int64(newMaxPower0) {
-			newPower = newMaxPower0
-		} else {
-			newPower = uint32(np)
-		}
-	} else if newPower > newMaxPower0 {
-		newPower = newMaxPower0
-	}
 	m.Health, m.MaxHealth = newHealth, newMaxHealth
-	m.Mana, m.MaxMana = newPower, newMaxPower0
-	m.Powers[0], m.MaxPowers[0] = newPower, newMaxPower0
+	m.Mana, m.MaxMana = newPowers[0], newMaxPowers[0]
 	mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
 	s.motionMu.Unlock()
-	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{
+	fields := map[int]uint32{
 		unitFieldHealth:    newHealth,
 		unitFieldMaxHealth: newMaxHealth,
-		unitFieldPower1:    newPower,
-		unitFieldMaxPower1: newMaxPower0,
-	})
+	}
+	for p := 0; p < 7; p++ {
+		fields[unitFieldPower1+p] = newPowers[p]
+		fields[unitFieldMaxPower1+p] = newMaxPowers[p]
+	}
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, fields)
 }
 
 // petFullArmor computes the live Guardian::UpdateArmor value

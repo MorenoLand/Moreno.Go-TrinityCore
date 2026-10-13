@@ -640,20 +640,25 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 	// StatSystem.cpp:1024-1041).
 	motion.BaseMaxHealth = scaledHealth
 	motion.BaseMaxPowers[0] = scaledMana
-	newMaxHealth, newMaxPower0 := s.recomputeCreatureMaxHealthPower(creatureAuraKeyForMotion(motion), motion)
+	// SetStatFlatModifier(UNIT_MOD_RAGE/UNIT_MOD_ENERGY, BASE_VALUE, 100)
+	// banked as the aura-free base: the live 35/132 folds compose over
+	// them instead of being clobbered by a flat post-recompute write.
+	motion.BaseMaxPowers[1] = 100
+	motion.BaseMaxPowers[3] = 100
+	newMaxHealth, newMaxPowers := s.recomputeCreatureMaxHealthPower(creatureAuraKeyForMotion(motion), motion)
 	motion.MaxHealth = newMaxHealth
 	if prevHealth != 0 && prevMaxHealth != 0 {
 		motion.Health = uint32(float64(newMaxHealth) / float64(prevMaxHealth) * float64(prevHealth))
 	} else {
 		motion.Health = 0
 	}
-	motion.MaxMana = newMaxPower0
-	motion.MaxPowers[0] = newMaxPower0
-	motion.MaxPowers[1] = 100  // SetStatFlatModifier(UNIT_MOD_RAGE, BASE_VALUE, 100)
-	motion.MaxPowers[3] = 100  // SetStatFlatModifier(UNIT_MOD_ENERGY, BASE_VALUE, 100)
+	motion.MaxMana = newMaxPowers[0]
+	motion.MaxPowers[0] = newMaxPowers[0]
+	motion.MaxPowers[1] = newMaxPowers[1]
+	motion.MaxPowers[3] = newMaxPowers[3]
 	if motion.PowerType == 0 { // POWER_MANA
 		if prevMana != 0 && prevMaxMana != 0 {
-			motion.Powers[0] = uint32(float64(newMaxPower0) / float64(prevMaxMana) * float64(prevMana))
+			motion.Powers[0] = uint32(float64(newMaxPowers[0]) / float64(prevMaxMana) * float64(prevMana))
 		} else {
 			motion.Powers[0] = 0
 		}
