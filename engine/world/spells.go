@@ -12510,8 +12510,8 @@ func (s *session) spellBonusRow(spellID uint32) (spellBonusEntry, bool) {
 
 // impurityApCoeffMod mirrors the Impurity arm of Unit::SpellDamageBonusDone
 // (Unit.cpp:6649-6679): for deathknight-family spells each known,
-// non-disabled Impurity talent rank adds its effect-0 DBC value as a percent
-// to the AP coefficient modifier.
+// non-disabled Impurity talent rank adds its effect-0 CalcValue() as a
+// percent to the AP coefficient modifier.
 func (s *session) impurityApCoeffMod(spell wotlk.Spell) float64 {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 1.0
@@ -12532,12 +12532,12 @@ func (s *session) impurityApCoeffMod(spell wotlk.Spell) float64 {
 			continue
 		}
 		// Unit.cpp:6667: proto->Effects[EFFECT_0].CalcValue() — the talent's
-		// static effect-0 value.
+		// effect-0 value with the DieSides roll, not the raw DBC base.
 		talent, found, err := s.server.Data.Spell(rank)
 		if err != nil || !found || len(talent.Effects) == 0 {
 			continue
 		}
-		mod *= 1 + float64(talent.Effects[0].BasePoints)/100
+		mod *= 1 + float64(talent.Effects[0].CalcValue())/100
 	}
 	return mod
 }
@@ -12896,11 +12896,11 @@ func spellHealingDoneZeroed(spell wotlk.Spell) bool {
 // benefit — the caster's spellpower plus the victim's SPELL_AURA_MOD_HEALING
 // (Amplify/Dampen Magic) per-school auras (Unit.cpp:7554) — scaled by the healing
 // done coefficient, plus the flat OVERRIDE_CLASS_SCRIPTS scripted arms
-// (Unit.cpp:7510-7519). C++ int32(DoneAdvertisedBenefit * coeff * factorMod)
-// truncates (Unit.cpp:7603); stack scales the level-penalty factor
-// (Unit.cpp:7595). The Impurity AP-coefficient arm (Unit.cpp:7523-7548) and the
-// guardian bonus-damage arm (Unit.cpp:7558) need the caster's total attack
-// power, which Go does not model — documented gap.
+// (Unit.cpp:7510-7519), plus the ap_bonus/ap_dot_bonus attack-power arm
+// (Unit.cpp:7560-7581) via spellHealingApFlat. C++ int32(DoneAdvertisedBenefit
+// * coeff * factorMod) truncates (Unit.cpp:7603); stack scales the level-penalty
+// factor (Unit.cpp:7595). The guardian bonus-damage arm (Unit.cpp:7558) has no
+// Go model — documented gap.
 func (s *session) spellHealingDoneFlat(spell wotlk.Spell, target *session, effIndex int, isDot bool, stack uint32) int32 {
 	if spellHealingDoneZeroed(spell) {
 		return 0
@@ -12943,6 +12943,36 @@ func (s *session) spellHealingDoneFlat(spell wotlk.Spell, target *session, effIn
 		}
 	}
 	return flat
+}
+
+// spellHealingApFlat mirrors the attack-power bonus arm of
+// Unit::SpellHealingBonusDone (Unit.cpp:7560-7581): with a spell_bonus_data
+// row, the ap_bonus/ap_dot_bonus coefficient scales the APbonus — the
+// victim's melee/ranged attack-power-attacker-bonus auras plus the caster's
+// total attack power — by the Impurity-adjusted ApCoeffMod, times the stack.
+// This closes the "Impurity AP-coefficient arm needs the caster's total
+// attack power" gap: totalAttackPowerValue models
+// Unit::GetTotalAttackPowerValue.
+func (s *session) spellHealingApFlat(spell wotlk.Spell, targetGUID uint64, target combatTarget, isDot bool, stack uint32) int32 {
+	bonus, ok := s.spellBonusRow(spell.ID)
+	if !ok {
+		return 0
+	}
+	coeff := bonus.apDirect
+	if isDot {
+		coeff = bonus.apDot
+	}
+	if coeff <= 0 {
+		return 0
+	}
+	ranged := isRangedWeaponSpell(spell) && spell.DefenseType != spellDamageClassMelee
+	victimBonusAura := uint32(spellAuraMeleeAttackPowerAttackerBonus)
+	if ranged {
+		victimBonusAura = uint32(spellAuraRangedAttackPowerAttackerBonus)
+	}
+	ap := float64(s.swingVictimAuraSum(targetGUID, target, victimBonusAura, 0, false))
+	ap += float64(s.totalAttackPowerValue(ranged))
+	return int32(coeff * float64(stack) * s.impurityApCoeffMod(spell) * ap)
 }
 
 // healingDoneAuraModifier mirrors the SPELL_AURA_MOD_HEALING_DONE (135) leg of
@@ -13076,6 +13106,15 @@ func (s *session) spellHealingBonusDone(spell wotlk.Spell, heal uint32, target *
 		return heal
 	}
 	flat := s.spellHealingDoneFlat(spell, target, effIndex, isDot, stack)
+	// Unit.cpp:7560-7581 — the ap_bonus/ap_dot_bonus attack-power arm rides
+	// DoneTotal with the Impurity-adjusted ApCoeffMod.
+	var tgtGUID uint64
+	var tgt combatTarget
+	if target != nil {
+		tgtGUID = target.playerGUID
+		tgt = combatTarget{GUID: tgtGUID}
+	}
+	flat += s.spellHealingApFlat(spell, tgtGUID, tgt, isDot, stack)
 	pct := s.spellHealingPctDone(spell, target)
 	tmp := float64(int32(heal)+flat) * pct
 	if tmp < 0 {
@@ -13122,6 +13161,10 @@ func (s *session) spellHealingBonusDoneCreatureVictim(ctx context.Context, spell
 			flat += int32(float64(victimFold) * s.spellHealingDoneCoefficient(spell, effIndex, isDot) * float64(st))
 		}
 	}
+	// Unit.cpp:7560-7581 — the ap_bonus/ap_dot_bonus attack-power arm rides
+	// DoneTotal with the Impurity-adjusted ApCoeffMod; the victim's
+	// attacker-bonus aura folds from the creature aura store here.
+	flat += s.spellHealingApFlat(spell, victimGUID, combatTarget{GUID: victimGUID, Map: key.Map, InstanceID: key.InstanceID}, isDot, stack)
 	pct := s.spellHealingPctDone(spell, nil)
 	// Unit.cpp:7634-7651 — the ATTR3_NO_DONE_BONUS /
 	// ATTR6_LIMIT_PCT_HEALING_MODS gates wrap the whole SpellHealingPctDone,

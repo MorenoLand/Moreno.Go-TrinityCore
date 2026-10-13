@@ -246,6 +246,7 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	s.motionMu.Lock()
 	curHealth, curMana := motion.Health, motion.Mana
 	oldMaxHealth, oldMaxMana := motion.MaxHealth, motion.MaxMana
+	curFocus, oldMaxFocus := motion.Powers[2], motion.MaxPowers[2]
 	s.motionMu.Unlock()
 	var healthPct float64
 	if oldMaxHealth > 0 && curHealth > 0 {
@@ -281,6 +282,20 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	newMaxMana := (createMana + float64(powerFlat) + manaBonus + intellectDelta) * powerTotalPct
 	if newMaxMana < 1 {
 		newMaxMana = 1
+	}
+	// Guardian::UpdateMaxPower for POWER_FOCUS (StatSystem.cpp:1362-1382):
+	// GetCreatePowerValue(POWER_FOCUS) is 100 for hunter pets and 0 for
+	// everything else (Unit.cpp:9686-9688); the intellect addValue arm is
+	// mana-only, so (createFocus + flatTOTAL35) * totalPct132 — no BASE
+	// feeders exist for the power modifiers in C++.
+	createFocus := 0.0
+	if petType == 1 {
+		createFocus = float64(petFocusMax)
+	}
+	focusFlat, focusTotalPct := s.creaturePowerAuraMods(key, 2)
+	newMaxFocus := (createFocus + float64(focusFlat)) * focusTotalPct
+	if newMaxFocus < 1 {
+		newMaxFocus = 1
 	}
 	// The 137 stamina tail (SpellAuraEffects.cpp:3570-3572): a
 	// SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE aura touching stamina on a
@@ -358,11 +373,29 @@ func (s *Server) recomputePetDerivedOnStatAuraChange(key creatureAuraKey, spellI
 	} else if newMana > uint32(newMaxMana) {
 		newMana = uint32(newMaxMana)
 	}
+	newFocus := curFocus
+	if halves.powerPct[2] {
+		// HandleAuraModIncreaseEnergyPercent (SpellAuraEffects.cpp:3698-3727):
+		// current focus shifts by the max-power change, on apply and
+		// remove alike, clamped into [0, new max] like ModifyPower. The
+		// flat 35 arm (SpellAuraEffects.cpp:3686-3696) moves no current
+		// power — only the max, with a clamp.
+		if np := int64(newFocus) + int64(newMaxFocus) - int64(oldMaxFocus); np < 0 {
+			newFocus = 0
+		} else if np > int64(newMaxFocus) {
+			newFocus = uint32(newMaxFocus)
+		} else {
+			newFocus = uint32(np)
+		}
+	} else if newFocus > uint32(newMaxFocus) {
+		newFocus = uint32(newMaxFocus)
+	}
 	m.Health, m.MaxHealth, m.Mana, m.MaxMana = newHealth, uint32(newMaxHealth), newMana, uint32(newMaxMana)
 	m.Powers[0], m.MaxPowers[0] = newMana, uint32(newMaxMana)
+	m.Powers[2], m.MaxPowers[2] = newFocus, uint32(newMaxFocus)
 	mapID, instanceID, petGUID := m.Map, m.InstanceID, m.GUID
 	s.motionMu.Unlock()
-	fields := map[int]uint32{unitFieldHealth: newHealth, unitFieldMaxHealth: uint32(newMaxHealth), unitFieldPower1: newMana, unitFieldMaxPower1: uint32(newMaxMana)}
+	fields := map[int]uint32{unitFieldHealth: newHealth, unitFieldMaxHealth: uint32(newMaxHealth), unitFieldPower1: newMana, unitFieldMaxPower1: uint32(newMaxMana), unitFieldPower1 + 2: newFocus, unitFieldMaxPower1 + 2: uint32(newMaxFocus)}
 	for index, value := range owner.petGuardianFieldStats(m, entry, petType, petID) {
 		fields[unitFieldStat0+index] = value
 	}
