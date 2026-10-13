@@ -100,24 +100,30 @@ type creatureMotion struct {
 	MinDamage   float32
 	MaxDamage   float32
 
-	Health          uint32
-	MaxHealth       uint32
-	Mana            uint32
-	MaxMana         uint32
-	PowerType       uint32
-	Powers          [7]uint32
-	MaxPowers       [7]uint32
-	Stats           [5]uint32
-	PetID           uint32
-	PetType         uint8
-	PetNextLevelXP  uint32
-	UnitFlags2      uint32
-	FocusRegenTimer time.Duration
-	PowerRegenTimer time.Duration
-	LastManaUse     time.Time
-	HappinessTimer  time.Duration
-	Happiness       uint32
-	Experience      uint32
+	Health         uint32
+	MaxHealth      uint32
+	Mana           uint32
+	MaxMana        uint32
+	PowerType      uint32
+	Powers         [7]uint32
+	MaxPowers      [7]uint32
+	Stats          [5]uint32
+	PetID          uint32
+	PetType        uint8
+	PetNextLevelXP uint32
+	// PetOwnerArmorBonus snapshots the 35% owner-armor leg folded into the
+	// pet's armor (Guardian::UpdateArmor, StatSystem.cpp:1323-1324): the
+	// offline-owner fallback when the live owner-armor resolution finds no
+	// connected owner session. Refreshed at the pet stat-compute points
+	// (summon, level-up, owner-stat change).
+	PetOwnerArmorBonus float64
+	UnitFlags2         uint32
+	FocusRegenTimer    time.Duration
+	PowerRegenTimer    time.Duration
+	LastManaUse        time.Time
+	HappinessTimer     time.Duration
+	Happiness          uint32
+	Experience         uint32
 
 	TargetGUID uint64
 	InCombat   bool

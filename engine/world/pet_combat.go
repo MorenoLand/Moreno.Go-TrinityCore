@@ -805,10 +805,8 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	if targetArmor > 0 {
 		armor := float64(targetArmor)
 		if !isTargetPlayer {
-			if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil {
-				key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}
-				basePct, totalPct := s.petArmorPctBonus(key, vm.OwnerGUID != 0)
-				armor = (armor*basePct + s.petBaseArmorBonus(key, vm.OwnerGUID != 0)) * totalPct
+			if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil && vm.OwnerGUID != 0 {
+				armor = s.petFullArmor(creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, vm)
 			}
 		}
 		if armor < 0 {
@@ -1764,9 +1762,12 @@ func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 // (Unit.cpp:6604-6605) and the DmgClass-NONE early-out — which fires only
 // when no spell_bonus_data row exists (Unit.cpp:6705-6709) — are honored.
 // The victim's SPELL_AURA_MOD_DAMAGE_TAKEN (14) arm (Unit.cpp:6682) is per
-// victim and folds at the petDamageFor call site. The remaining
-// DoneTotal/DoneTotalMod legs (scripted class-script arms, versus, Impurity
-// AP arms, pct mods) stay unbridged on the pet path.
+// victim and folds at the petDamageFor call site. The owner's flat
+// OVERRIDE_CLASS_SCRIPTS set and the pet's own MOD_FLAT_SPELL_DAMAGE_VERSUS
+// (180) arm (Unit.cpp:6617-6647) ride DoneTotal flat via
+// petDoneFlatClassScripts/petDoneFlatVersus at the call sites. The remaining
+// DoneTotal/DoneTotalMod legs (Impurity, AP arms, pct mods) stay unbridged
+// on the pet path.
 func (s *session) petGuardianDoneDamageBonus(motion *creatureMotion, spell wotlk.Spell) int32 {
 	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
 		return 0
@@ -1820,6 +1821,51 @@ func (s *session) petDamageEffectBonus(spell wotlk.Spell, motion *creatureMotion
 		}
 	}
 	return total
+}
+
+// petDoneFlatClassScripts mirrors the done-scripted-mod arm of
+// Unit::SpellDamageBonusDone (Unit.cpp:6617-6637) for a guardian pet caster:
+// the flat OVERRIDE_CLASS_SCRIPTS set (4418/4554/4555/5142/5147/5148/6008/8627)
+// is taken from the OWNER (Unit.cpp:6617-6618; s is the owner's session),
+// added flat to DoneTotal without a coefficient leg, ahead of the pct leg.
+// The ATTR3_NO_DONE_BONUS gate sits above it (Unit.cpp:6604-6605).
+func (s *session) petDoneFlatClassScripts(spell wotlk.Spell) int32 {
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
+		return 0
+	}
+	var flat int32
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		switch ae.misc {
+		case 4418, 4554, 4555, 5142, 5147, 5148, 6008, 8627:
+			flat += ae.amount
+		}
+	}
+	return flat
+}
+
+// petDoneFlatVersus mirrors the MOD_FLAT_SPELL_DAMAGE_VERSUS arm of
+// Unit::SpellDamageBonusDone (Unit.cpp:6646-6647) for a guardian pet caster:
+// the pet's own aura-180 flat by the victim's creature-type mask, added flat
+// to DoneTotal (no coefficient leg), skipped under
+// SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS. Per victim like the aura-14 arm; the
+// ATTR3_NO_DONE_BONUS gate sits above it (Unit.cpp:6604-6605).
+func (s *session) petDoneFlatVersus(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, targetGUID uint64) int32 {
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
+		return 0
+	}
+	if spell.AttributesEx6&spellAttr6LimitPctDamageMods != 0 {
+		return 0
+	}
+	if s == nil || s.server == nil || motion == nil {
+		return 0
+	}
+	var flat int32
+	if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, creatureAuraKeyForMotion(motion), auraModFlatSpellDamageVersus, typMask) {
+			flat += amt
+		}
+	}
+	return flat
 }
 
 // petDamagePctDone mirrors Unit::SpellDamagePctDone (Unit.cpp:6738-7050) for a
@@ -2187,6 +2233,24 @@ func (s *session) petPeriodicApplyDoneLegs(ctx context.Context, motion *creature
 				coeff := s.spellDoneCoefficientCasterLevel(spell, effIndex, true, motion.Level)
 				total := int32(float64(advertised+victimTaken) * coeff)
 				if adjusted := int32(amount) + total; adjusted > 0 {
+					amount = uint32(adjusted)
+				} else {
+					amount = 0
+				}
+			}
+			// Unit::SpellDamageBonusDone (Unit.cpp:6617-6647): the flat
+			// scripted arms ride DoneTotal flat (no coefficient leg) — the
+			// owner's OVERRIDE_CLASS_SCRIPTS set plus the pet's own
+			// MOD_FLAT_SPELL_DAMAGE_VERSUS by victim type.
+			if flat := s.petDoneFlatClassScripts(spell); flat != 0 {
+				if adjusted := int32(amount) + flat; adjusted > 0 {
+					amount = uint32(adjusted)
+				} else {
+					amount = 0
+				}
+			}
+			if v180 := s.petDoneFlatVersus(ctx, motion, spell, targetGUID); v180 != 0 {
+				if adjusted := int32(amount) + v180; adjusted > 0 {
 					amount = uint32(adjusted)
 				} else {
 					amount = 0
@@ -2705,6 +2769,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				damage = 0
 			}
 		}
+		// Unit::SpellDamageBonusDone (Unit.cpp:6617-6637): the flat
+		// done-scripted-mod arm — the owner's OVERRIDE_CLASS_SCRIPTS set —
+		// rides DoneTotal flat, victim-independent like the advertised fold
+		// above. (The per-victim 180 arm folds inside petDamageFor.)
+		if flat := s.petDoneFlatClassScripts(spell); flat != 0 {
+			if adjusted := int32(damage) + flat; adjusted > 0 {
+				damage = uint32(adjusted)
+			} else {
+				damage = 0
+			}
+		}
 		schoolMask := uint8(spell.SchoolMask)
 		if schoolMask == 0 {
 			schoolMask = 1
@@ -2724,6 +2799,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// off the melee-taken side (Unit.cpp:7996).
 				if v14 := s.victimDamageTakenFlat(spell, victimGUID, target); v14 != 0 {
 					if adjusted := int32(d) + s.petDamageEffectBonus(spell, motion, v14); adjusted > 0 {
+						d = uint32(adjusted)
+					} else {
+						d = 0
+					}
+				}
+				// Unit::SpellDamageBonusDone (Unit.cpp:6646-6647): the pet's
+				// own MOD_FLAT_SPELL_DAMAGE_VERSUS (180) arm by the victim's
+				// creature-type mask rides DoneTotal flat per victim, ahead
+				// of the pct leg like the aura-14 arm.
+				if v180 := s.petDoneFlatVersus(ctx, motion, spell, victimGUID); v180 != 0 {
+					if adjusted := int32(d) + v180; adjusted > 0 {
 						d = uint32(adjusted)
 					} else {
 						d = 0
@@ -3670,7 +3756,14 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 		if !armorSpellKnown || armorSpell.Attributes&spellAttr0CUIgnoreArmor == 0 {
-			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), float64(target.Armor), armorSpell, armorSpellKnown)
+			// The victim's live pet armor fold (Guardian::UpdateArmor,
+			// StatSystem.cpp:1316-1330): pet victims fold their aura legs
+			// here like the melee/ranged/spell damage paths do.
+			armorValue := float64(target.Armor)
+			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil && tm.OwnerGUID != 0 {
+				armorValue = s.server.petFullArmor(creatureAuraKeyForTarget(target), tm)
+			}
+			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), armorValue, armorSpell, armorSpellKnown)
 			damage = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
 		}
 	}

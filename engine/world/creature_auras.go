@@ -403,11 +403,14 @@ func (s *Server) creatureAuraDamageDonePct(key creatureAuraKey) float64 {
 	return mod
 }
 
-// petBaseArmorBonus sums the live SPELL_AURA_MOD_BASE_RESISTANCE (83)
-// amounts carrying the NORMAL school misc bit for a pet creature, mirroring
-// the pet arm of AuraEffect::HandleModBaseResistance
-// (SpellAuraEffects.cpp:3348-3351): pets (only) gain flat UNIT_MOD_ARMOR
-// TOTAL_VALUE from those effects. The 22/83 arms for players are bridged
+// petBaseArmorBonus sums the live flat TOTAL_VALUE armor legs for a pet
+// creature, mirroring Guardian::UpdateArmor's GetFlatModifierValue
+// (UNIT_MOD_ARMOR, TOTAL_VALUE) (StatSystem.cpp:1326): the
+// SPELL_AURA_MOD_BASE_RESISTANCE (83) pets-only arm with the NORMAL school
+// misc bit (SpellAuraEffects.cpp:3340-3350) plus the
+// SPELL_AURA_MOD_RESISTANCE (22) NORMAL-school leg, which the school loop
+// folds into UNIT_MOD_ARMOR (UNIT_MOD_RESISTANCE_START+0,
+// SpellAuraEffects.cpp:3255-3269). The 22/83 arms for players are bridged
 // elsewhere; non-pet creatures get nothing (C++ gates on IsPet()).
 func (s *Server) petBaseArmorBonus(key creatureAuraKey, isPet bool) float64 {
 	if s == nil || key.GUID == 0 || !isPet || s.Data == nil {
@@ -427,7 +430,12 @@ func (s *Server) petBaseArmorBonus(key creatureAuraKey, isPet bool) float64 {
 			if aura.EffectMask&(1<<uint(index)) == 0 {
 				continue
 			}
-			if effect.Aura != spellAuraModBaseResistance || effect.MiscValue&1 == 0 {
+			if effect.MiscValue&1 == 0 {
+				continue
+			}
+			switch effect.Aura {
+			case spellAuraModBaseResistance, spellAuraModResistance:
+			default:
 				continue
 			}
 			if index < len(aura.Amounts) {
@@ -437,6 +445,65 @@ func (s *Server) petBaseArmorBonus(key creatureAuraKey, isPet bool) float64 {
 	}
 	s.auraMu.Unlock()
 	return bonus
+}
+
+// petOwnerArmorValue mirrors the IsPet() arm of Guardian::UpdateArmor
+// (StatSystem.cpp:1323-1324): hunter and warlock pets gain 35% of the
+// owner's armor, added after the agility leg and before the TOTAL_PCT fold.
+// Go's character pets (summon/hunter) are the Pet twin; guardians keep 0.
+func petOwnerArmorValue(petType uint8, ownerArmor uint32) float64 {
+	if petType != petTypeHunter && petType != petTypeSummon {
+		return 0
+	}
+	return float64(ownerArmor) * 0.35
+}
+
+// petOwnerArmorBonus resolves the 35% owner-armor leg of
+// Guardian::UpdateArmor (StatSystem.cpp:1323-1324). C++ recomputes it from
+// the owner's live armor whenever the owner's armor changes
+// (Player::UpdateArmor calls pet->UpdateArmor(), StatSystem.cpp:283), so a
+// connected owner's live armor is the C++-exact source; the
+// stat-compute-point snapshot on the motion covers offline owners (the
+// established pass-through convention).
+func (s *Server) petOwnerArmorBonus(motion *creatureMotion) float64 {
+	if s == nil || motion == nil || motion.OwnerGUID == 0 {
+		return 0
+	}
+	if sess := s.playerSessionForGUID(motion.OwnerGUID); sess != nil && sess.player != nil {
+		return petOwnerArmorValue(motion.PetType, sess.player.Armor)
+	}
+	return motion.PetOwnerArmorBonus
+}
+
+// petFullArmor computes the live Guardian::UpdateArmor value
+// (StatSystem.cpp:1316-1330) for a pet motion from the stored aura-free flat
+// BASE_VALUE (motion.Armor): the BASE_PCT fold (aura-142) multiplies ONLY the
+// flat base — C++ adds agility*2, the TOTAL_VALUE flats (aura-22/83) and the
+// 35% owner bonus AFTER, then multiplies TOTAL_PCT (aura-101). The previous
+// combat-time fold applied basePct over the whole stored value (which
+// carried agility*2 and the owner bonus), wrongly scaling those legs. The
+// agility leg reads motion.Stats[1] (the aura stat-mod feed of GetStat stays
+// unbridged); non-pet motions get the stored value unchanged.
+func (s *Server) petFullArmor(key creatureAuraKey, motion *creatureMotion) float64 {
+	if s == nil || motion == nil {
+		return 0
+	}
+	if motion.OwnerGUID == 0 {
+		return float64(motion.Armor)
+	}
+	basePct, totalPct := s.petArmorPctBonus(key, true)
+	armor := float64(motion.Armor) * basePct
+	var agility uint32
+	if len(motion.Stats) > 1 {
+		agility = motion.Stats[1]
+	}
+	armor += float64(agility) * 2
+	armor += s.petBaseArmorBonus(key, true) + s.petOwnerArmorBonus(motion)
+	armor *= totalPct
+	if armor < 0 {
+		armor = 0
+	}
+	return armor
 }
 
 // petResistanceBonus sums the live SPELL_AURA_MOD_RESISTANCE (22) amounts
@@ -512,10 +579,9 @@ func (s *Server) petFoldedResistances(key creatureAuraKey, base [schoolCount]uin
 // the NORMAL school misc bit (GetTotalAuraMultiplierByMiscMask,
 // Unit.cpp:4947), and UNIT_MOD_ARMOR TOTAL_PCT by the product over live 101
 // effects carrying the NORMAL bit (UNIT_MOD_RESISTANCE_START+0 is
-// UNIT_MOD_ARMOR). Returns (basePct, totalPct) as multipliers; callers apply
-// (baseArmor*basePct + flat83) * totalPct, matching the C++ armor composition
-// (BASE_VALUE*BASE_PCT + TOTAL_VALUE)*TOTAL_PCT — the 142 arm lands on
-// BASE_PCT so it multiplies the base armor only, not the 83 flat arm. Like
+// UNIT_MOD_ARMOR). Returns (basePct, totalPct) as multipliers; the pet armor
+// composition lives in petFullArmor, which applies basePct to the flat base
+// only per Guardian::UpdateArmor (StatSystem.cpp:1316-1330). Like
 // petBaseArmorBonus, non-pet creatures get nothing (C++ gates both on
 // IsPet()).
 func (s *Server) petArmorPctBonus(key creatureAuraKey, isPet bool) (float64, float64) {

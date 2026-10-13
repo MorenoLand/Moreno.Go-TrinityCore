@@ -959,11 +959,20 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
 		// Pet::InitStatsForLevel (Pet.cpp:885-890): base armor and the
 		// native object scale are set from the pet's level at stat time.
-		petArmor := s.petBaseArmor(ctx, entry, level, uint8(petType), attributes[1])
+		// The stored armor is the flat BASE_VALUE only — agility*2, the
+		// aura flats and the 35% owner bonus fold live in petFullArmor
+		// (Guardian::UpdateArmor, StatSystem.cpp:1316-1330).
+		petArmor := s.petBaseArmor(ctx, entry, level, uint8(petType))
 		petScale := s.petNativeObjectScale(ctx, entry, level, uint8(petType))
+		var ownerArmor uint32
+		if s.player != nil {
+			ownerArmor = s.player.Armor
+		}
+		ownerArmorBonus := petOwnerArmorValue(uint8(petType), ownerArmor)
 		s.server.motionMu.Lock()
 		if pm := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); pm != nil && pm.PetID == petID {
 			pm.Armor = petArmor
+			pm.PetOwnerArmorBonus = ownerArmorBonus
 		}
 		s.server.motionMu.Unlock()
 		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO)
