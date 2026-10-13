@@ -286,9 +286,17 @@ func (s *Server) handleWSGPlayerDeath(sess *session) {
 	wsg.mu.Lock()
 	defer wsg.mu.Unlock()
 
-	mapID := sess.player.Map
-	x, y, z := sess.player.X, sess.player.Y, sess.player.Z
+	s.dropWSGCarriedFlag(wsg, sess, sess.player.Map, sess.player.X, sess.player.Y, sess.player.Z)
+}
 
+// dropWSGCarriedFlag drops the Warsong flag carried by sess, mirroring
+// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:289): the
+// carried flag object spawns at the player's feet, the worldstate flips
+// to on-ground, and the flag-return timer starts. The wsg mutex must be held.
+func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, mapID uint32, x, y, z float32) {
+	if wsg == nil || sess == nil {
+		return
+	}
 	if wsg.AllianceCarrierGUID == sess.playerGUID {
 		sess.removeAura(WSGSpellSilverwingFlag)
 		wsg.AllianceCarrierGUID = 0

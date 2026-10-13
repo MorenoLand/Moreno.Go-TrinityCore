@@ -164,17 +164,16 @@ func (s *session) adjustQuestItemCountForState(ctx context.Context, state *playe
 		}
 		if added && notify && s.questObjectivesComplete(ctx, entry.QuestID, entry) {
 			// Item-objective completion runs through
-			// Player::CompleteQuest (Player.cpp:15292) — DB status, the
-			// SetQuestStatus spell-area scan + OnQuestStatusChange hook,
-			// log-slot state, and the TRACKING auto-reward arm —
-			// followed by SendQuestComplete. The local state copy stays
-			// in sync so the trailing slot writeback below does not
-			// clobber the flag completeQuest just set. This arm only
-			// runs with state == s.player (adjustQuestItemCount passes
-			// s.player; the other callers pass added=false).
+			// Player::CompleteQuest (Player.cpp:15292) — C++ sends no
+			// SMSG_QUESTUPDATE_COMPLETE here (Player::SendQuestComplete
+			// fires only from Player::AreaExploredOrEventHappens,
+			// Player.cpp:16518), so none rides along. The local state
+			// copy stays in sync so the trailing slot writeback below
+			// does not clobber the flag completeQuest just set. This
+			// arm only runs with state == s.player (adjustQuestItemCount
+			// passes s.player; the other callers pass added=false).
 			entry.State = questCompleteStateFlag(questStatusComplete)
 			s.completeQuest(ctx, entry.QuestID)
-			s.sendQuestComplete(entry.QuestID)
 		} else if !added && entry.State == questCompleteStateFlag(questStatusComplete) {
 			entry.State = questCompleteStateFlag(questStatusIncomplete)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, state.GUID, entry.QuestID)

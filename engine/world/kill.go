@@ -1386,12 +1386,11 @@ func (s *session) creditPlayerKillQuest(ctx context.Context) {
 		s.sendPlayerQuestLogUpdate(slot)
 		if s.questObjectivesComplete(ctx, entry.QuestID, entry) {
 			// Player::KilledPlayerCreditForQuest (Player.cpp:16723):
-			// completion runs through Player::CompleteQuest — DB status,
-			// the SetQuestStatus spell-area scan + OnQuestStatusChange
-			// hook, log-slot state, and the TRACKING auto-reward arm —
-			// followed by SendQuestComplete.
+			// completion runs through Player::CompleteQuest — C++ sends
+			// no SMSG_QUESTUPDATE_COMPLETE here (Player::SendQuestComplete
+			// fires only from Player::AreaExploredOrEventHappens,
+			// Player.cpp:16518), so none rides along.
 			s.completeQuest(ctx, entry.QuestID)
-			s.sendQuestComplete(entry.QuestID)
 		}
 		break
 	}
@@ -1572,14 +1571,13 @@ func (s *session) creditQuestObjectiveEntries(ctx context.Context, entries []uin
 		s.sendPlayerQuestLogUpdate(slot)
 		if s.questObjectivesComplete(ctx, entry.QuestID, entry) {
 			// Player::KilledMonsterCredit (Player.cpp:16636): completion
-			// runs through Player::CompleteQuest — DB status, the
-			// SetQuestStatus spell-area scan + OnQuestStatusChange hook,
-			// log-slot state, and the TRACKING auto-reward arm —
-			// followed by SendQuestComplete.
+			// runs through Player::CompleteQuest — C++ sends no
+			// SMSG_QUESTUPDATE_COMPLETE here (Player::SendQuestComplete
+			// fires only from Player::AreaExploredOrEventHappens,
+			// Player.cpp:16518), so none rides along.
 			entry.State = questCompleteStateFlag(questStatusComplete)
 			s.player.QuestLog[slot] = entry
 			s.completeQuest(ctx, entry.QuestID)
-			s.sendQuestComplete(entry.QuestID)
 		}
 	}
 }

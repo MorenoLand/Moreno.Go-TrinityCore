@@ -1376,9 +1376,30 @@ func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool
 
 	s.finishTaxiFlight()
 	// Player::SummonIfPossible (Player.cpp:23843-23844): accepting drops the
-	// battleground flag. Battleground::EventPlayerDroppedFlag has no Go twin
-	// (flag-carrier state unimplemented); C++ notes the arm is reachable
-	// only when a GM summons a flag carrier.
+	// battleground flag (C++ notes the arm is reachable only when a GM
+	// summons a flag carrier). Go mirrors the per-BG EventPlayerDroppedFlag
+	// overrides it models: the Eye of the Storm carrier drop and the
+	// Warsong Gulch carried-flag drop.
+	if s.server != nil && s.player != nil {
+		s.server.eotsMu.RLock()
+		eots := s.server.eotsState[s.player.Map]
+		s.server.eotsMu.RUnlock()
+		if eots != nil {
+			eots.mu.Lock()
+			if eots.FlagCarrierGUID == s.playerGUID {
+				s.server.dropEOTSFlag(eots, s)
+			}
+			eots.mu.Unlock()
+		}
+		s.server.wsgMu.RLock()
+		wsg := s.server.wsgState[s.player.Map]
+		s.server.wsgMu.RUnlock()
+		if wsg != nil {
+			wsg.mu.Lock()
+			s.server.dropWSGCarriedFlag(wsg, s, s.player.Map, s.player.X, s.player.Y, s.player.Z)
+			wsg.mu.Unlock()
+		}
+	}
 	summonLocSet := s.summonLocSet
 	summonMap, summonX, summonY, summonZ, summonO := s.summonMap, s.summonX, s.summonY, s.summonZ, s.summonO
 	s.clearSummonPending()

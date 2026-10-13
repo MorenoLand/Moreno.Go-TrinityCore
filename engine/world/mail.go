@@ -236,15 +236,17 @@ func (s *Server) updateMailDeliveries(ctx context.Context, now int64) {
 	}
 }
 
+// unitNPCFlagMailbox is UNIT_NPC_FLAG_MAILBOX (UnitDefines.h:212).
+const unitNPCFlagMailbox uint32 = 0x04000000
+
 // canOpenMailBox mirrors WorldSession::CanOpenMailBox (MailHandler.cpp:36-53).
 // A mailbox GUID equal to the player's own GUID is only accepted with
 // RBAC_PERM_COMMAND_MAILBOX (id 777, the .mailbox command path); a gameobject
-// GUID (HighGuid 0xF110) or a creature GUID (unit 0xF130, pet 0xF140, vehicle
-// 0xF150 — the IsAnyTypeCreature set) is accepted without proximity checks,
-// since Go has no gameobject/NPC interaction model on these paths (noted gap:
-// the C++ GetGameObjectIfCanInteractWith / GetNPCIfCanInteractWith mailbox-
-// type terms are not verifiable); any other GUID type is refused, matching
-// the C++ else branch.
+// GUID (HighGuid 0xF110) must pass GetGameObjectIfCanInteractWith with
+// GAMEOBJECT_TYPE_MAILBOX; a creature GUID (unit 0xF130, pet 0xF140, vehicle
+// 0xF150 — the IsAnyTypeCreature set) must pass GetNPCIfCanInteractWith with
+// UNIT_NPC_FLAG_MAILBOX; any other GUID type is refused, matching the C++
+// else branch.
 func (s *session) canOpenMailBox(ctx context.Context, mailboxGUID uint64) bool {
 	if mailboxGUID == s.playerGUID {
 		granted := false
@@ -255,8 +257,10 @@ func (s *session) canOpenMailBox(ctx context.Context, mailboxGUID uint64) bool {
 		return granted
 	}
 	switch uint16(mailboxGUID >> 48) {
-	case 0xF110, 0xF130, 0xF140, 0xF150:
-		return true
+	case 0xF110:
+		return s.canInteractWithGameObject(ctx, mailboxGUID, uint32(GameObjectTypeMailbox))
+	case 0xF130, 0xF140, 0xF150:
+		return s.canInteractWithNPC(ctx, mailboxGUID, uint64(unitNPCFlagMailbox))
 	}
 	return false
 }
