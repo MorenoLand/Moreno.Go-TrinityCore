@@ -25402,6 +25402,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if ts.server != nil {
 			healCaster = ts.server.findSessionByGUID(aura.CasterGUID)
 		}
+		// Unit::DealHeal (Unit.cpp:6320-6322): a totem healer's
+		// achievement/arena credit goes to the totem's owner. The bonus,
+		// crit and threat legs keep the totem (nil-session) caster
+		// semantics; only the credit arms redirect.
+		healCredit := healCaster
+		if healCredit == nil && ts.server != nil {
+			if ownerGUID := ts.server.totemOwnerSessionGUID(aura.CasterGUID); ownerGUID != 0 {
+				healCredit = ts.server.findSessionByGUID(ownerGUID)
+			}
+		}
 		var healSpell wotlk.Spell
 		healKnown := false
 		if ts.server != nil && ts.server.Data != nil {
@@ -25571,9 +25581,10 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 
 		// Unit::DealHeal (Unit.cpp:6292-6325): the achievement arms fire on
 		// every periodic-heal tick (SpellAuraEffects.cpp:5400). Caster side
-		// (healer = healCaster; a null healer credits nothing): the arena
-		// healing score plus ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE on the
-		// effective heal (overheal excluded, skipped at zero) and
+		// (healer = healCaster, redirected to the totem owner for totem
+		// casters per Unit.cpp:6320-6322): the arena healing score plus
+		// ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE on the effective heal
+		// (overheal excluded, skipped at zero) and
 		// ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEAL_CAST on the tick's
 		// addhealth. Victim side (player victims):
 		// ACHIEVEMENT_CRITERIA_TYPE_TOTAL_HEALING_RECEIVED on the effective
@@ -25583,14 +25594,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if heal > overheal {
 			effectiveTickHeal = heal - overheal
 		}
-		if healCaster != nil && healCaster.player != nil {
+		if healCredit != nil && healCredit.player != nil {
 			if ts.server != nil {
-				ts.server.updateArenaHealingScore(healCaster, effectiveTickHeal)
+				ts.server.updateArenaHealingScore(healCredit, effectiveTickHeal)
 			}
 			if effectiveTickHeal > 0 {
-				healCaster.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveTickHeal)
+				healCredit.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveTickHeal)
 			}
-			healCaster.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
+			healCredit.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
 		}
 		ts.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, effectiveTickHeal)
 		ts.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
@@ -27053,6 +27064,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if s.server != nil {
 			tickCaster = s.server.findSessionByGUID(aura.CasterGUID)
 		}
+		// Unit::DealHeal (Unit.cpp:6320-6322): a totem healer's
+		// achievement/arena credit goes to the totem's owner; the bonus,
+		// crit and threat legs keep the totem (nil-session) caster
+		// semantics.
+		tickCredit := tickCaster
+		if tickCredit == nil && s.server != nil {
+			if ownerGUID := s.server.totemOwnerSessionGUID(aura.CasterGUID); ownerGUID != 0 {
+				tickCredit = s.server.findSessionByGUID(ownerGUID)
+			}
+		}
 		var tickSpell wotlk.Spell
 		tickKnown := false
 		if s.server != nil && s.server.Data != nil {
@@ -27192,17 +27213,18 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// (overheal excluded, skipped at zero) and
 			// ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEAL_CAST on the tick's
 			// addhealth. The victim arms need a player victim and stay off
-			// here; a null/offline caster credits nothing (C++ null healer).
-			if tickCaster != nil && tickCaster.player != nil {
+			// here; a null/offline caster credits nothing except via the
+			// totem-owner redirect (C++ null healer).
+			if tickCredit != nil && tickCredit.player != nil {
 				tickHeal := uint32(0)
 				if heal > overheal {
 					tickHeal = heal - overheal
 				}
-				s.server.updateArenaHealingScore(tickCaster, tickHeal)
+				s.server.updateArenaHealingScore(tickCredit, tickHeal)
 				if tickHeal > 0 {
-					tickCaster.updateAchievementCriteria(criteriaTypeHealingDone, 0, tickHeal)
+					tickCredit.updateAchievementCriteria(criteriaTypeHealingDone, 0, tickHeal)
 				}
-				tickCaster.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
+				tickCredit.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
 			}
 		}
 		// SpellAuraEffects.cpp:5411-5433 — Health Funnel caster cost, after

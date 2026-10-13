@@ -1210,6 +1210,32 @@ func (srv *Server) isTotemGUID(guid uint64) bool {
 	return false
 }
 
+// totemOwnerSessionGUID returns the owner player GUID of a live totem, for
+// the Unit::DealHeal totem-credit rule (Unit.cpp:6320-6322): when a totem is
+// the healer, the achievement/arena credit lands on the totem's owner.
+func (srv *Server) totemOwnerSessionGUID(totemGUID uint64) uint64 {
+	if srv == nil || totemGUID == 0 {
+		return 0
+	}
+	srv.totemMu.RLock()
+	defer srv.totemMu.RUnlock()
+	for _, slots := range srv.activeTotems {
+		for _, t := range slots {
+			if t == nil {
+				continue
+			}
+			t.mu.Lock()
+			live := !t.Stopped && t.TotemGUID == totemGUID
+			ownerGUID := t.OwnerGUID
+			t.mu.Unlock()
+			if live {
+				return ownerGUID
+			}
+		}
+	}
+	return 0
+}
+
 func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	if s == nil || s.playerGUID == 0 || slotID >= 4 {
 		return
