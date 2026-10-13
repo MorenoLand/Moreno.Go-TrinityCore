@@ -2351,7 +2351,7 @@ func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32,
 		COALESCE(ii.charges, ''), COALESCE(ii.flags, 0), COALESCE(ii.enchantments, '')
 		FROM guild_bank_item gbi
 		JOIN item_instance ii ON ii.guid = gbi.item_guid
-		WHERE gbi.guildid = ? AND gbi.TabId = ?`, guildID, tabID)
+		WHERE gbi.guildid = ? AND gbi.TabId = ? ORDER BY gbi.SlotId`, guildID, tabID)
 	if err == nil {
 		defer itemRows.Close()
 		for itemRows.Next() {
@@ -4115,12 +4115,13 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 
 	// Reference: Guild::HandleBuyBankTab (Guild.cpp:1460-1461): broadcast
 	// GE_BANK_TAB_PURCHASED to the guild, then re-send permissions to the
-	// buyer to force the client to update them.
+	// buyer to force the client to update them. No bank list is sent —
+	// the client queries the tab itself when it opens it.
 	s.broadcastGuildBankTabPurchased(uint32(guildID))
 	s.sendGuildPermissions(ctx)
 
 	s.sendPlayerUpdate()
-	return s.sendGuildBankList(ctx, bankerGUID, tabID, true)
+	return true
 }
 
 // handleGuildBankUpdateTab processes CMSG_GUILD_BANK_UPDATE_TAB (0x3EB).
