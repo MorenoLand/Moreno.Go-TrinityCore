@@ -1078,6 +1078,21 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// interiorBagSlot decodes a packet bag byte to the bag-slot whose interior
+// it addresses (normalized 1..4 -> 19..22, 5..11 -> 67..73; standard
+// 19..22/67..73 pass through), or -1 for non-interior bytes.
+func interiorBagSlot(bag uint8) int64 {
+	switch {
+	case bag >= 1 && bag <= 4:
+		return int64(18 + bag)
+	case bag >= 5 && bag <= 11:
+		return int64(62 + bag)
+	case (bag >= invSlotBagStart && bag < invSlotBagEnd) || (bag >= 67 && bag <= 73):
+		return int64(bag)
+	}
+	return -1
+}
+
 func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -1094,12 +1109,38 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 
 	bagKeyA, ok1 := s.inventoryBagKey(ctx, slotBagA)
 	bagKeyB, ok2 := s.inventoryBagKey(ctx, slotBagB)
-	if !ok1 || !ok2 {
+	// HandleSwapItem (ItemHandler.cpp:143-156): the source position is
+	// validated first (EQUIP_ERR_ITEM_NOT_FOUND), then the destination
+	// (EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT). A is the packet dst, B the src.
+	if !ok2 {
 		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+	if !ok1 {
+		s.sendEquipError(equipErrItemDoesntGoToSlot, 0)
 		return true
 	}
 
 	if bagKeyA == bagKeyB && slotSlotA == slotSlotB {
+		return true
+	}
+
+	// HandleSwapItem (ItemHandler.cpp:158-169): touching bank positions
+	// without an active banker session is a silent drop, and it runs in the
+	// handler BEFORE Player::SwapItem — so ahead of the dead check below.
+	// Player::IsBankPos (Player.cpp:10163-72): bag-0 slots 39..73, or any
+	// slot inside a bank bag (standard-encoding bytes 67..73, normalized
+	// interior bytes 5..11).
+	isBankPos := func(bag, slot uint8) bool {
+		if (bag == 0 || bag == invSlotBag0) && slot >= 39 && slot < 74 {
+			return true
+		}
+		return (bag >= 67 && bag <= 73) || (bag >= 5 && bag <= 11)
+	}
+	if isBankPos(slotBagB, slotSlotB) && !s.canUseBank(ctx, 0) {
+		return true
+	}
+	if isBankPos(slotBagA, slotSlotA) && !s.canUseBank(ctx, 0) {
 		return true
 	}
 
@@ -1125,17 +1166,6 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// HandleSwapItem (ItemHandler.cpp:158-169): touching bank positions
-	// without an active banker session is a silent drop (Player::IsBankPos,
-	// Player.cpp:10163-72: bag-0 slots 39..73, or any slot inside a bank
-	// bag 67..73).
-	isBankPos := func(bag, slot uint8) bool {
-		return (bag == 0 && slot >= 39 && slot < 74) || (bag >= 67 && bag <= 73)
-	}
-	if (isBankPos(slotBagB, slotSlotB) || isBankPos(slotBagA, slotSlotA)) && !s.canUseBank(ctx, 0) {
-		return true
-	}
-
 	if srcItemGUID != 0 && dstItemGUID != 0 {
 		if merged, _ := s.tryMergeStacks(ctx, srcItemGUID, srcBagKey, srcSlot, dstItemGUID, dstBagKey, dstSlot); merged {
 			s.debug("items merged across bags", "account", s.accountName, "srcBag", srcBag, "srcSlot", srcSlot, "dstBag", dstBag, "dstSlot", dstSlot)
@@ -1154,6 +1184,18 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	srcIsEmptyBag := srcItemGUID != 0 && s.itemIsBag(ctx, uint64(srcItemGUID)) && s.isBagEmpty(ctx, srcItemGUID)
 	if srcIsBagPos && srcItemGUID != 0 && !dstIsBagPos && !dstIsEmptyBag && s.itemIsNonemptyBag(ctx, uint64(srcItemGUID)) {
 		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
+		return true
+	}
+	// Player::SwapItem (Player.cpp:13181): putting an equipped/bank bag into
+	// its own interior answers EQUIP_ERR_NONEMPTY_BAG_OVER_OTHER_BAG.
+	if srcIsBagPos && interiorBagSlot(slotBagA) == int64(slotSlotB) {
+		s.sendEquipError(equipErrNonemptyBagOverOtherBag, uint64(srcItemGUID))
+		return true
+	}
+	// Player::SwapItem (Player.cpp:13187): equipping a bag from inside itself
+	// answers EQUIP_ERR_ITEMS_CANT_BE_SWAPPED.
+	if dstIsBagPos && interiorBagSlot(slotBagB) == int64(slotSlotA) {
+		s.sendEquipError(equipErrItemsCantBeSwapped, uint64(srcItemGUID))
 		return true
 	}
 	if dstIsBagPos && dstItemGUID != 0 && !srcIsBagPos && !srcIsEmptyBag && s.itemIsNonemptyBag(ctx, uint64(dstItemGUID)) {
@@ -1687,9 +1729,8 @@ const (
 	equipErrOk              = 0
 	equipErrCantEquipLevelI = 1
 	// C++ EQUIP_ERR_CANT_EQUIP_SKILL (ItemDefines.h:28); the pre-existing
-	// equipErrItemDoesntGoToSlot const shares this value by a stale mislabel.
 	equipErrCantEquipSkill                    = 2
-	equipErrItemDoesntGoToSlot                = 2
+	equipErrItemDoesntGoToSlot                = 3  // C++ EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT (ItemDefines.h:29); was 2 by a stale mislabel, which sent the CANT_EQUIP_SKILL client text on every slot error.
 	equipErrNoRequiredProficiency             = 8  // C++ EQUIP_ERR_NO_REQUIRED_PROFICIENCY (ItemDefines.h:34)
 	equipErrYouCanNeverUseThatItem            = 10 // C++ EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM (ItemDefines.h:36)
 	equipErrDontOwnThatItem                   = 32 // C++ EQUIP_ERR_DONT_OWN_THAT_ITEM (ItemDefines.h:58)
