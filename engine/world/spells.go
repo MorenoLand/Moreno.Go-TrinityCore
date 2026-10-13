@@ -13062,6 +13062,57 @@ func (s *session) spellHealingBonusDone(spell wotlk.Spell, heal uint32, target *
 	return uint32(out)
 }
 
+// spellHealingBonusDoneCreatureVictim mirrors spellHealingBonusDone for
+// creature victims (Unit::SpellHealingBonusDone on the per-tick DOT leg,
+// SpellAuraEffects.cpp:5384). The caster-side fold is identical; only the
+// victim-side arms differ: the victim's SPELL_AURA_MOD_HEALING (115) auras
+// come from the creature aura store and Test of Faith reads the creature's
+// health fraction. The Glyph of Regrowth / Nourish / Glyph of Lesser Healing
+// Wave victim arms stay unbridged — creature auras carry no spell-family-flag
+// model for their victim-scan predicates.
+func (s *session) spellHealingBonusDoneCreatureVictim(spell wotlk.Spell, heal uint32, key creatureAuraKey, targetHealth, targetMaxHealth uint32, effIndex int, isDot bool, stack uint32) uint32 {
+	if spell.SpellFamilyName == spellFamilyPotion {
+		return heal
+	}
+	flat := s.spellHealingDoneFlat(spell, nil, effIndex, isDot, stack)
+	// Unit.cpp:7554 — the victim's SPELL_AURA_MOD_HEALING (115) auras raise
+	// the caster's advertised benefit (Amplify Magic / Dampen Magic), folded
+	// through the same coefficient and stack as the advertised base.
+	if spell.SchoolMask != 0 && s.server != nil {
+		victimFold := int32(0)
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraModHealing, spell.SchoolMask) {
+			victimFold += amt
+		}
+		if victimFold != 0 {
+			st := stack
+			if st == 0 {
+				st = 1
+			}
+			flat += int32(float64(victimFold) * s.spellHealingDoneCoefficient(spell, effIndex, isDot) * float64(st))
+		}
+	}
+	pct := s.spellHealingPctDone(spell, nil)
+	// Unit.cpp:7660-7705 — Test of Faith (21/6935/6918): the victim-side arm
+	// fires when the creature victim is below 50% health.
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		if ae.misc == 21 || ae.misc == 6935 || ae.misc == 6918 {
+			if targetMaxHealth > 0 && targetHealth*2 < targetMaxHealth {
+				pct *= 1 + float64(ae.amount)/100
+			}
+		}
+	}
+	tmp := float64(int32(heal)+flat) * pct
+	if tmp < 0 {
+		tmp = 0
+	}
+	out := int32(tmp)
+	out = s.applySpellMod(spell, spellModDot, out)
+	if out < 0 {
+		out = 0
+	}
+	return uint32(out)
+}
+
 func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) uint32 {
 	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, false, false)
 }
@@ -27118,6 +27169,37 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.AuraType == 20 {
 			heal = uint32(float32(target.MaxHealth) * float32(heal) / 100.0)
 		}
+		// SpellAuraEffects.cpp:5384 — the per-tick SpellHealingBonusDone (DOT,
+		// stack-scaled: Unit.cpp:7595 factorMod = penalty * stack) runs on the
+		// tick amount before the taken leg, on creature victims too — the
+		// earlier creature path skipped it entirely. Gated off
+		// persistent-area auras: their done leg is baked into the stored
+		// amount at spawn, so a per-tick pass would double-count.
+		healEffIndex := 0
+		for i, eff := range tickSpell.Effects {
+			if eff.Aura == aura.AuraType {
+				healEffIndex = i
+				break
+			}
+		}
+		stack := uint32(aura.StackCount)
+		if stack == 0 {
+			stack = 1
+		}
+		if tickCaster != nil && tickKnown && !aura.PersistentAreaAura {
+			heal = tickCaster.spellHealingBonusDoneCreatureVictim(tickSpell, heal, key, target.Health, target.MaxHealth, healEffIndex, true, stack)
+		}
+		// Pet casters have no session, so the block above never runs for
+		// them — but C++ runs the per-tick SpellHealingBonusDone (DOT) on
+		// the pet unit too (SpellAuraEffects.cpp:5384). The pet done legs
+		// ride the live pet motion; the spellmod tail folds on the owner's
+		// session (GetSpellModOwner). An offline owner passes the legs
+		// through, matching the unresolved-caster convention on this path.
+		if tickCaster == nil && tickKnown && !aura.PersistentAreaAura && s.server != nil {
+			if motion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); motion != nil {
+				heal = petTickHealDoneLegs(s.server.findSessionByGUID(motion.OwnerGUID), ctx, motion, tickSpell, healEffIndex, aura.TargetGUID, heal, stack)
+			}
+		}
 		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, the
 		// Nourish 1.2x leg, MOD_HOT_PCT and MOD_HEALING_RECEIVED run on
@@ -27186,6 +27268,20 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		curHP := target.Health
 		maxHP := target.MaxHealth
+		// Unit::CalcHealAbsorb (Unit.cpp:2067-2113, called at
+		// SpellAuraEffects.cpp:5399): SPELL_AURA_SCHOOL_HEAL_ABSORB (301)
+		// shields on the creature consume the tick after the crit leg; the
+		// periodic log carries the absorbed amount (SpellAuraEffects.cpp:5403)
+		// — the earlier creature path healed through them and logged 0.
+		healAbsorbed := uint32(0)
+		if heal > 0 {
+			absorbMask := uint32(aura.SchoolMask)
+			if tickKnown {
+				absorbMask = tickSpell.SchoolMask
+			}
+			healAbsorbed = s.server.creatureApplyHealAbsorb(key, absorbMask, heal)
+			heal -= healAbsorbed
+		}
 		newHP := curHP + heal
 		overheal := uint32(0)
 		if newHP > maxHP {
@@ -27193,7 +27289,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			newHP = maxHP
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, healCrit)
+		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, healAbsorbed, healCrit)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
 			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
@@ -27645,6 +27741,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SPELLMOD_VALUE_MULTIPLIER folds via GetSpellModOwner (pet/totem
 		// caster -> owner player; wild/charmed -> nil, the C++ null path).
 		heal := effectValueMultiplied(paid, s.calcValueMultiplierForAura(aura.SpellID, 62, s.server.spellModOwnerSession(key.Map, key.InstanceID, aura.CasterGUID)))
+		// Unit::HealBySpell (Unit.cpp:6561-6570): CalcHealAbsorb consumes the
+		// target's 301 heal-absorb shields before the funnel heal lands.
+		if heal > 0 {
+			absorbed := s.server.creatureApplyHealAbsorb(key, uint32(aura.SchoolMask), heal)
+			heal -= absorbed
+		}
 		curHP := target.Health
 		maxHP := target.MaxHealth
 		newHP := curHP + heal
