@@ -80,6 +80,15 @@ type BossAI interface {
 	OnReset(ctx context.Context, s *Server, motion *creatureMotion)
 	OnAggro(ctx context.Context, s *Server, motion *creatureMotion, victim uint64)
 	OnDamageTaken(ctx context.Context, s *Server, motion *creatureMotion, attacker uint64, damage uint32)
+	// HealReceived mirrors UnitAI::HealReceived (UnitAI.h:307): fired from
+	// Unit::DealHeal (Unit.cpp:6302) on the victim's AI ahead of the
+	// health gain, on the pre-clamp addhealth. C++ passes it as uint32&,
+	// so the hook may adjust the amount — hence the pointer.
+	HealReceived(ctx context.Context, s *Server, motion *creatureMotion, healerGUID uint64, addhealth *uint32)
+	// HealDone mirrors UnitAI::HealDone (UnitAI.h:310): fired from
+	// Unit::DealHeal (Unit.cpp:6304) on the healer's AI, same mutable
+	// addhealth arm.
+	HealDone(ctx context.Context, s *Server, motion *creatureMotion, victimGUID uint64, addhealth *uint32)
 	OnKillPlayer(ctx context.Context, s *Server, motion *creatureMotion, victim uint64)
 	OnEvade(ctx context.Context, s *Server, motion *creatureMotion)
 	OnDied(ctx context.Context, s *Server, motion *creatureMotion)
@@ -97,6 +106,21 @@ func RegisterBossAI(scriptName string, entry uint32, factory func(*creatureMotio
 	}
 	if entry != 0 {
 		bossAIByEntry[entry] = factory
+	}
+}
+
+// fireDealHealAIHooks mirrors the AI-hook arm of Unit::DealHeal
+// (Unit.cpp:6299-6304): the victim AI's HealReceived fires ahead of the
+// health gain, then the healer AI's HealDone — in that C++ order, on the
+// same pre-clamp addhealth. Both fire on a self-heal (C++ has no
+// healer==victim filter). A nil motion or a motion with no BossAI carries
+// no AI model, so the hook is skipped there (C++ always has an AI).
+func fireDealHealAIHooks(ctx context.Context, s *Server, victim, healer *creatureMotion, healerGUID, victimGUID uint64, addhealth *uint32) {
+	if victim != nil && victim.BossAI != nil {
+		victim.BossAI.HealReceived(ctx, s, victim, healerGUID, addhealth)
+	}
+	if healer != nil && healer.BossAI != nil {
+		healer.BossAI.HealDone(ctx, s, healer, victimGUID, addhealth)
 	}
 }
 
@@ -256,6 +280,13 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 	}
 }
 
+// UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
+func (ai *vancleefAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
+}
+
+func (ai *vancleefAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
 func (ai *vancleefAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 	// SAY_KILL = 4: "And stay down!"
 	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 4, 0)
@@ -368,6 +399,13 @@ func (ai *mrSmiteAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMo
 	}
 }
 
+// UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
+func (ai *mrSmiteAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
+}
+
+func (ai *mrSmiteAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
 func (ai *mrSmiteAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }
 
@@ -434,6 +472,13 @@ func (ai *rhahkZorAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion,
 func (ai *rhahkZorAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
 }
 
+// UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
+func (ai *rhahkZorAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
+}
+
+func (ai *rhahkZorAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+
 func (ai *rhahkZorAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }
 
@@ -483,6 +528,13 @@ func (ai *taragamanAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion
 }
 
 func (ai *taragamanAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+}
+
+// UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
+func (ai *taragamanAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
+}
+
+func (ai *taragamanAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
 }
 
 func (ai *taragamanAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -542,6 +594,13 @@ func (ai *kreshAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMoti
 		ai.shieldUsed = true
 		s.castCreatureSpell(ctx, m, 8269, m.GUID) // Shell Shield
 	}
+}
+
+// UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
+func (ai *kreshAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
+}
+
+func (ai *kreshAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
 }
 
 func (ai *kreshAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -3333,6 +3392,15 @@ func (ai *luaBossAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) 
 func (ai *luaBossAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }
 func (ai *luaBossAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+}
+
+// UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310): Lua bosses
+// receive heal legs through creature Lua events (event-driven), so the Go
+// AI side stays a no-op like OnDamageTaken.
+func (ai *luaBossAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
+}
+
+func (ai *luaBossAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
 }
 func (ai *luaBossAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }

@@ -548,6 +548,10 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 					leechHeal := s.creatureApplyHealAbsorb(creatureAuraKeyForMotion(motion), uint32(schoolMask), heal)
 					scaledHeal := heal - leechHeal
 					scaledHeal = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, scaledHeal)
+					// Unit::DealHeal (Unit.cpp:6299-6304): the self-heal fires
+					// both AI hooks on the caster motion — C++ has no
+					// healer==victim filter on HealReceived/HealDone.
+					fireDealHealAIHooks(ctx, s, motion, motion, motion.GUID, motion.GUID, &scaledHeal)
 					s.motionMu.Lock()
 					if live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID); live != nil && live.Health > 0 {
 						live.Health += scaledHeal

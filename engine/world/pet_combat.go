@@ -3700,6 +3700,16 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 			}
 		}
 	}
+	// Unit::DealHeal (Unit.cpp:6299-6304): the victim AI's HealReceived and
+	// the healer AI's HealDone fire ahead of the health gain on the
+	// pre-clamp addhealth — the C++ hook takes addhealth by reference, so
+	// it may still adjust the amount. Player victims carry no AI model in
+	// Go, so the received leg fires only for creature victims.
+	var victimMotion *creatureMotion
+	if targetSess == nil || targetSess.player == nil {
+		victimMotion = s.findCreatureMotion(target.GUID)
+	}
+	fireDealHealAIHooks(ctx, s.server, victimMotion, caster, caster.GUID, target.GUID, &heal)
 	overheal := uint32(0)
 	if uint64(target.Health)+uint64(heal) > uint64(target.MaxHealth) {
 		overheal = uint32(uint64(target.Health) + uint64(heal) - uint64(target.MaxHealth))
