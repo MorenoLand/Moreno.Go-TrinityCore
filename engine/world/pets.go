@@ -527,30 +527,155 @@ func (s *session) generatePetName(ctx context.Context, entry uint32) string {
 	return "Pet"
 }
 
-func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32, petType uint8) (curHealth, maxHealth, curMana, maxMana uint32) {
+func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32, petType uint8, petNumber uint32) (curHealth, maxHealth, curMana, maxMana uint32) {
 	if level == 0 {
 		level = 1
 	}
+	// Guardian::UpdateStats owner arms (StatSystem.cpp:1202-1257) folded
+	// through Guardian::UpdateMaxHealth / UpdateMaxPower
+	// (StatSystem.cpp:1337-1379): the pet's max health and mana grow with
+	// the owner's stamina / intellect. The entry is captured before the
+	// hunter-pet pet_levelstats remap below — the ghoul and health
+	// multiplicator arms key on the real creature entry. Go applies these
+	// at the pet stat-compute points (summon, level-up); C++ also
+	// recomputes on owner stat changes, which Go has no hook for.
+	healthBonus := s.petOwnerStaminaHealthBonus(entry, petType, petNumber)
+	manaBonus := s.petOwnerIntellectManaBonus()
+	statEntry := entry
 	if petType == 1 {
-		entry = 1
+		statEntry = 1
 	}
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && entry != 0 {
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && statEntry != 0 {
 		var hp, mana int64
 		err := s.server.WorldStore.DB.QueryRowContext(ctx,
-			"SELECT hp, mana FROM pet_levelstats WHERE creature_entry = ? AND level = ?", entry, level).Scan(&hp, &mana)
+			"SELECT hp, mana FROM pet_levelstats WHERE creature_entry = ? AND level = ?", statEntry, level).Scan(&hp, &mana)
 		if err == nil && hp > 0 {
-			return uint32(hp), uint32(hp), uint32(mana), uint32(mana)
+			maxHP := uint32(hp) + healthBonus
+			maxMP := uint32(mana) + manaBonus
+			return maxHP, maxHP, maxMP, maxMP
 		}
 	}
-	hp := level * 35
+	hp := level*35 + healthBonus
 	if hp < 100 {
 		hp = 100
 	}
-	mana := level * 30
+	mana := level*30 + manaBonus
 	if mana < 80 {
 		mana = 80
 	}
 	return hp, hp, mana, mana
+}
+
+// petHealthMultiplicator mirrors the entry switch in
+// Guardian::UpdateMaxHealth (StatSystem.cpp:1339-1350).
+func petHealthMultiplicator(entry uint32) float64 {
+	switch entry {
+	case 416: // ENTRY_IMP
+		return 8.4
+	case 1860: // ENTRY_VOIDWALKER
+		return 11.0
+	case 1863: // ENTRY_SUCCUBUS
+		return 9.1
+	case 417: // ENTRY_FELHUNTER
+		return 9.5
+	case 17252: // ENTRY_FELGUARD
+		return 11.0
+	case 28017: // ENTRY_BLOODWORM
+		return 1.0
+	default:
+		return 10.0
+	}
+}
+
+// petOwnerStaminaHealthBonus mirrors the owner-stamina arm of
+// Guardian::UpdateStats(STAT_STAMINA) (StatSystem.cpp:1225-1249) folded
+// through Guardian::UpdateMaxHealth (StatSystem.cpp:1352-1356): the pet's max
+// health gains ownersBonus * multiplicator. Ghouls and risen allies scale at
+// 0.3 (+ Ravenous Dead and Glyph of the Ghoul), warlock pets at 0.75, and
+// everything else at 0.45 (+ Wild Hunt rank 1/2 effect-0 for hunter pets).
+func (s *session) petOwnerStaminaHealthBonus(entry uint32, petType uint8, petNumber uint32) uint32 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	var mod float64
+	switch {
+	case entry == 26125 || entry == 30230:
+		// IsPetGhoul / IsRisenAlly (TemporarySummon.h:81-82,
+		// StatSystem.cpp:1204-1218).
+		mod = 0.3
+		if pct := s.ravenousDeadStatMod(); pct != 0 {
+			mod *= 1 + float64(pct)/100
+		}
+		if amt, ok := s.auraEffectAmount(58686, 0); ok {
+			mod += float64(amt) / 100
+		}
+	case s.player.Class == 9 && petType == petTypeSummon:
+		// Warlock pets (StatSystem.cpp:1227-1230): 75% of owner stamina.
+		// C++ gates on IsPet(); Go's warlock character pets are demons.
+		mod = 0.75
+	default:
+		mod = 0.45
+		if petType == petTypeHunter && petNumber != 0 && s.server.Data != nil {
+			// Wild Hunt (StatSystem.cpp:1234-1243): rank 1 (62758)
+			// checked first, then rank 2 (62762); the stamina arm reads
+			// EFFECT_0 (the bonus-damage arm reads EFFECT_1).
+			if talent := s.petWildHuntTalent(petNumber); talent != 0 {
+				if tspell, found, terr := s.server.Data.Spell(talent); terr == nil && found && len(tspell.Effects) > 0 {
+					mod *= 1 + float64(tspell.Effects[0].CalcValue())/100
+				}
+			}
+		}
+	}
+	var stamina uint32
+	if len(s.player.Stats) > 2 {
+		stamina = s.player.Stats[2]
+	}
+	return uint32(float64(stamina) * mod * petHealthMultiplicator(entry))
+}
+
+// petOwnerIntellectManaBonus mirrors the intellect arm of
+// Guardian::UpdateStats (StatSystem.cpp:1251-1257) folded through
+// Guardian::UpdateMaxPower (StatSystem.cpp:1359-1379): warlock and mage pets
+// gain 30% of the owner's intellect, times the 15.0 mana multiplicator.
+func (s *session) petOwnerIntellectManaBonus() uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if s.player.Class != 9 && s.player.Class != 8 {
+		return 0
+	}
+	var intellect uint32
+	if len(s.player.Stats) > 3 {
+		intellect = s.player.Stats[3]
+	}
+	return uint32(float64(intellect) * 0.3 * 15.0)
+}
+
+// ravenousDeadStatMod mirrors the Ravenous Dead arm of the ghoul stat scale
+// (StatSystem.cpp:1210-1214): the owner's SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE
+// (137) Death-Knight-family aura with SpellIconID 3010 at effect 0 carries
+// the talent, whose effect-1 CalcValue edits the scale via AddPct.
+func (s *session) ravenousDeadStatMod() int32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask&1 == 0 {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != spellFamilyDeathKnight || auraSpell.SpellIconID != 3010 {
+			continue
+		}
+		if len(auraSpell.Effects) == 0 || auraSpell.Effects[0].Aura != spellAuraModTotalStatPct {
+			continue
+		}
+		if len(auraSpell.Effects) > 1 {
+			return auraSpell.Effects[1].CalcValue()
+		}
+		return 0
+	}
+	return 0
 }
 
 func (s *session) getPetAttributes(ctx context.Context, entry, level uint32, petType uint8) [5]uint32 {
@@ -1144,7 +1269,7 @@ func (s *session) resummonTemporaryPet(ctx context.Context) {
 	if petType == 0 && s.player.Level > 0 {
 		petLevel = uint32(s.player.Level)
 	}
-	maxHealth, _, maxMana, _ := s.getPetStats(ctx, uint32(entry), petLevel, uint8(petType))
+	maxHealth, _, maxMana, _ := s.getPetStats(ctx, uint32(entry), petLevel, uint8(petType), uint32(petID))
 	if maxHealth == 0 {
 		maxHealth = uint32(curHealth)
 	}
@@ -1368,7 +1493,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 			s.unsummonPet(ctx, petSaveNotInSlot)
 		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0 WHERE id = ? AND owner = ?", petID, s.playerGUID)
-		maxHP, _, maxMana, _ := s.getPetStats(ctx, uint32(pEntry), uint32(level), uint8(petType))
+		maxHP, _, maxMana, _ := s.getPetStats(ctx, uint32(pEntry), uint32(level), uint8(petType), uint32(petID))
 		if maxHP == 0 {
 			maxHP = uint32(curHealth)
 		}
@@ -1393,7 +1518,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 			s.unsummonPet(ctx, petSaveNotInSlot)
 		}
 
-		maxHP, _, maxMP, _ := s.getPetStats(ctx, entry, uint32(level), uint8(petType))
+		maxHP, _, maxMP, _ := s.getPetStats(ctx, entry, uint32(level), uint8(petType), uint32(petID))
 		curHealth = int64(maxHP)
 		curMana = int64(maxMP)
 
@@ -1424,7 +1549,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 	if playerLevel == 0 {
 		playerLevel = 1
 	}
-	maxHP, _, maxMP, _ := s.getPetStats(ctx, entry, playerLevel, 0)
+	maxHP, _, maxMP, _ := s.getPetStats(ctx, entry, playerLevel, 0, newPetID)
 
 	var model uint32
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
@@ -1490,7 +1615,7 @@ func (s *session) handleResurrectPet(ctx context.Context, spellID uint32, eff wo
 		return
 	}
 
-	maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), uint32(level), uint8(petType))
+	maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), uint32(level), uint8(petType), uint32(petID))
 	// SpellEffects.cpp:4799: SetHealth(CountPctFromMaxHealth(damage)) — the
 	// revive is a percent of max, not a full heal; mana is untouched (C++
 	// sets health only).
@@ -1614,7 +1739,7 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 		cName = "Pet"
 	}
 
-	maxHP, _, maxMP, _ := s.getPetStats(ctx, targetEntry, petLevel, 1)
+	maxHP, _, maxMP, _ := s.getPetStats(ctx, targetEntry, petLevel, 1, newPetID)
 	now := time.Now().Unix()
 
 	_, _ = cdb.ExecContext(ctx,

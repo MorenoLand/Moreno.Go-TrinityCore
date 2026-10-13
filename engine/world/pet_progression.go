@@ -100,6 +100,14 @@ func (s *session) petBaseArmor(ctx context.Context, entry, level uint32, petType
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT armor FROM pet_levelstats WHERE creature_entry = ? AND level = ?", statEntry, level).Scan(&dbArmor); err == nil && dbArmor > 0 {
 		armor = uint32(dbArmor)
 	}
+	// Guardian::UpdateArmor (StatSystem.cpp:1316-1330): hunter and warlock
+	// pets gain 35% of the owner's armor as a flat bonus. C++ gates on
+	// IsPet(); Go's character pets (summon/hunter) are the Pet twin. The
+	// agility*2 and aura pct-modifier arms have no Go model and stay
+	// unbridged.
+	if s != nil && s.player != nil && (petType == petTypeHunter || petType == petTypeSummon) {
+		armor += uint32(float64(s.player.Armor) * 0.35)
+	}
 	return armor
 }
 
@@ -148,7 +156,7 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 		return false
 	}
 	s.server.motionMu.Unlock()
-	health, maxHealth, mana, maxMana := s.getPetStats(ctx, entry, newLevel, petType)
+	health, maxHealth, mana, maxMana := s.getPetStats(ctx, entry, newLevel, petType, petID)
 	attributes := s.getPetAttributes(ctx, entry, newLevel, petType)
 	if health == 0 || maxHealth == 0 {
 		return false

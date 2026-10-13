@@ -2536,7 +2536,7 @@ func (s *session) groupPetStats(ctx context.Context, target *session) groupPetSt
 		result.health = uint32(health)
 	}
 	if !hasMotion && entry > 0 {
-		_, maxHealth, _, maxMana := target.getPetStats(ctx, uint32(entry), uint32(maxUint32(uint32(level), 1)), uint8(petType))
+		_, maxHealth, _, maxMana := target.getPetStats(ctx, uint32(entry), uint32(maxUint32(uint32(level), 1)), uint8(petType), uint32(petNumber))
 		result.maxHealth, result.maxPower = maxHealth, uint16(maxMana)
 		if petType == int64(petTypeHunter) {
 			result.powerType, result.maxPower = 2, uint16(petFocusMax)
