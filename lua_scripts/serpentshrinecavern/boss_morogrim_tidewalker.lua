@@ -117,6 +117,16 @@ local function resetMorogrim(guid)
     morogrimState[guid] = nil
 end
 
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() < 25 fires up to 1 HP early.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 -- C++ Initialize(): tidalWave 10000, wateryGrave 30000,
 -- earthquake 40000, wateryGlobules 0, earthquakeArm false,
 -- phase2 false.
@@ -176,8 +186,9 @@ local function morogrimTick(creature, guid)
             st.wateryGrave = st.wateryGrave - 1000
         end
 
-        -- Phase 2: once-guarded below 25% (C++ HealthBelowPct).
-        if creature:GetHealthPct() < 25 then
+        -- Phase 2: once-guarded below 25% (C++ HealthBelowPct(25),
+        -- floored integer threshold).
+        if healthBelowPct(creature, 25) then
             st.phase2 = true
         end
     else

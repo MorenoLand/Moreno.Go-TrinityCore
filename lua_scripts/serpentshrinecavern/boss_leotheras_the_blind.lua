@@ -67,7 +67,8 @@
 -- (the CastConsumingMadness arm is demon-cast — no inner demons
 -- exist in this model — and the DespawnDemon/SetDisplayId/
 -- LoadEquipment arms have no bridges — unmodeled, below). Final
--- form: once-guarded GetHealthPct() < 15 (C++ HealthBelowPct(15))
+-- form: once-guarded healthBelowPct(creature, 15) (C++ HealthBelowPct(15),
+-- floored integer threshold — GetHealthPct() < 15 fired up to 1 HP early)
 -- -> isFinalForm=true, demonForm=false, Talk(SAY_FINAL_FORM)
 -- (the DoSpawnCreature(DEMON_FORM 21875) copy arm has no summon
 -- bridge — unmodeled, below). OnTargetDied(3): victim:IsPlayer()
@@ -224,6 +225,16 @@ local function resetCreature(timers, states, guid)
     states[guid] = nil
 end
 
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() < 15 fires up to 1 HP early.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 -- C++ Initialize(): whirlwind 15000, chaosBlast 1000, switchToDemon
 -- 45000, switchToHuman 60000, berserk 600000, innerDemons 30000,
 -- demonForm/isFinalForm/needThreatReset/enrageUsed false.
@@ -335,7 +346,7 @@ local function leotherasTick(creature, guid)
 
     -- Final form: once-guarded <15% health (C++ HealthBelowPct(15)).
     -- The demon-copy summon is summon-blocked — header.
-    if not st.isFinalForm and creature:GetHealthPct() < 15 then
+    if not st.isFinalForm and healthBelowPct(creature, 15) then
         st.isFinalForm = true
         st.demonForm = false
         creature:Talk(SAY_FINAL_FORM)
@@ -445,8 +456,8 @@ RegisterCreatureEvent(ENTRY_DEMON_FORM, 23, demonCleanup)
 -- urand(5000,10000).
 local function freshBinderState()
     return {
-        mindblast = 3000 + math.random(0, 4999),
-        earthshock = 5000 + math.random(0, 4999),
+        mindblast = math.random(3000, 8000),
+        earthshock = math.random(5000, 10000),
     }
 end
 
@@ -464,7 +475,7 @@ local function binderTick(creature, guid)
         if pick then
             creature:CastSpell(pick, SPELL_MINDBLAST)
         end
-        st.mindblast = 10000 + math.random(0, 4999)
+        st.mindblast = math.random(10000, 15000)
     else
         st.mindblast = st.mindblast - 1000
     end
@@ -474,7 +485,7 @@ local function binderTick(creature, guid)
     -- exists — unmodeled, header. Timer bookkeeping kept so the
     -- schedule stays C++-shaped if a bridge lands.
     if st.earthshock <= 1000 then
-        st.earthshock = 8000 + math.random(0, 6999)
+        st.earthshock = math.random(8000, 15000)
     else
         st.earthshock = st.earthshock - 1000
     end
