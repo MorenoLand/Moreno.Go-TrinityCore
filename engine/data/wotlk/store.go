@@ -1363,6 +1363,25 @@ func (s *Store) CharTitle(id uint32) (CharTitle, bool, error) {
 	return title, true, nil
 }
 
+func (s *Store) TeamContributionPoints(level uint32) (float32, bool, error) {
+	if level == 0 {
+		return 0, true, nil
+	}
+	file, err := s.File("TeamContributionPoints")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(level)
+	if !ok {
+		return 0, false, nil
+	}
+	data, err := record.Float32(1)
+	if err != nil {
+		return 0, false, err
+	}
+	return data, true, nil
+}
+
 type Emote struct {
 	ID                 uint32
 	EmoteFlags         uint32

@@ -131,6 +131,14 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward commit failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
+	return s.applyQuestRewardGrants(ctx, view, questID, giverGUID, reward, grants, destroyedGUIDs)
+}
+
+// applyQuestRewardGrants runs the post-commit grant arms of
+// Player::RewardQuest (Player.cpp:15380-15515), shared by the turn-in packet
+// and the .quest reward GM command (cs_quest.cpp:313:
+// player->RewardQuest(quest, 0, player)).
+func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardView, questID uint32, giverGUID uint64, reward uint32, grants []questItemGrant, destroyedGUIDs []uint64) bool {
 	// C++ Player::RewardQuest (Player.cpp:15439-15448): the quest reward mail
 	// goes out as part of the reward flow, once the reward is committed.
 	s.sendQuestRewardMail(ctx, questID, giverGUID)
@@ -170,6 +178,46 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	if rewardXP > 0 {
 		s.grantXP(ctx, rewardXP)
 	}
+	// Player::RewardQuest (Player.cpp:15409-15413): quest honor is granted at
+	// the PLAYER level via RewardHonor(nullptr, 0, honor) (Player.cpp:6865).
+	// The arena gate (victim-null arm returns false in an arena) and the
+	// player-inactive aura gate apply; the victim-only aura multiplier arm is
+	// moot with a null victim, and the world honor rate multiplies last
+	// (Player.cpp:6993). The C++ only calls when the gain is non-zero.
+	if honor := s.calculateQuestHonorGain(ctx, view.Detail.ID, uint32(s.player.Level)); honor > 0 && !s.hasAura(honorAuraInactiveID) && !s.inArenaNow() {
+		s.updateHonorFields()
+		s.grantHonor(ctx, int32(float64(honor)*s.honorRate()), 0, 0)
+	}
+	// Player::RewardQuest (Player.cpp:15414-15420): a CharTitleId reward earns
+	// the title via SetTitle (Player.cpp:24814) — the CharTitles.dbc MaskID
+	// bit in the known-titles field plus SMSG_TITLE_EARNED.
+	if titleID := view.Detail.RewardTitleID; titleID > 0 && s.server.Data != nil {
+		if title, found, terr := s.server.Data.CharTitle(titleID); terr == nil && found {
+			if idx := title.MaskID / 32; int(idx) < len(s.player.KnownTitles) {
+				if s.player.KnownTitles[idx]&(uint32(1)<<(title.MaskID%32)) == 0 {
+					s.player.KnownTitles[idx] |= uint32(1) << (title.MaskID % 32)
+					s.persistTitles(ctx, s)
+					packet := protocol.NewBuffer(8)
+					packet.WriteU32(title.MaskID)
+					packet.WriteU32(1) // 1 - earned, 0 - lost
+					_ = s.write(uint16(protocol.OpcodeSMSG_TITLE_EARNED), packet.Bytes(), true)
+				}
+			}
+		}
+	}
+	// Player::RewardQuest (Player.cpp:15422-15425): bonus talents accumulate
+	// in the quest-reward talent count (the DK Ebon-Hold arm at 18812 feeds
+	// the same counter); Go's playerState.QuestBonus is that counter, and it
+	// is recomputed from character_queststatus_rewarded at login.
+	if talents := view.Detail.RewardTalents; talents > 0 {
+		s.player.QuestBonus += talents
+		s.sendPlayerUpdate()
+	}
+	// Player::RewardQuest (Player.cpp:15427-15428): RewArenaPoints goes
+	// through ModifyArenaPoints (Player.cpp:7085): clamp at zero, persist.
+	if arena := view.Detail.RewardArenaPoints; arena != 0 {
+		s.modifyQuestArenaPoints(ctx, arena)
+	}
 	for i := 0; i < questRewardFactions; i++ {
 		facID := view.Detail.RewardFactionID[i]
 		facVal := view.Detail.RewardFactionValue[i]
@@ -196,7 +244,23 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	if rewardSpellID > 0 {
 		s.castSpellDirect(ctx, rewardSpellID, s.playerGUID)
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, rewardXP, view.Detail.RewardMoney, 0, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
+	// Player::SendQuestReward (Player.cpp:17013-17027): the packet zeroes XP at
+	// max level; the honor field is 10 * CalculateHonorGain at the quest's
+	// level (Player::GetQuestLevel: quest level when positive, else the
+	// player's level).
+	packetXP := rewardXP
+	if s.server != nil && uint32(s.player.Level) >= s.server.Config.MaxPlayerLevel {
+		packetXP = 0
+	}
+	var qLevel int64
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT QuestLevel FROM quest_template WHERE ID = ?", questID).Scan(&qLevel)
+	}
+	if qLevel <= 0 {
+		qLevel = int64(s.player.Level)
+	}
+	packetHonor := 10 * s.calculateQuestHonorGain(ctx, questID, uint32(qLevel))
+	if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, packetXP, view.Detail.RewardMoney, packetHonor, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
 		return false
 	}
 	_ = s.sendInventoryItems(ctx)
@@ -785,6 +849,72 @@ func buildItemPushResult(playerGUID uint64, bag uint8, slot, entry, count, inven
 	packet.WriteU32(count)
 	packet.WriteU32(inventoryCount)
 	return packet.Bytes()
+}
+
+// calculateQuestHonorGain mirrors Quest::CalculateHonorGain
+// (QuestDef.cpp:348-367): level clamps at GT_MAX_LEVEL (100); the
+// TeamContributionPoints.dbc Data row scales the kill-honor multiplier by
+// 0.1 and the flat addition is summed on. A missing DBC row or zero
+// addition/multiplier yields zero, exactly like the C++ early-outs.
+func (s *session) calculateQuestHonorGain(ctx context.Context, questID, level uint32) uint32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	var addition int64
+	var multiplier float64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewardHonor, 0), COALESCE(RewardKillHonor, 0) FROM quest_template WHERE ID = ?", questID).Scan(&addition, &multiplier)
+	}
+	if addition <= 0 && multiplier <= 0 {
+		return 0
+	}
+	if level > 100 {
+		level = 100
+	}
+	data, ok, err := s.server.Data.TeamContributionPoints(level)
+	if err != nil || !ok {
+		return 0
+	}
+	return uint32(data*float32(multiplier)*0.1) + uint32(addition)
+}
+
+// inArenaNow mirrors the InArena() gate of Player::RewardHonor
+// (Player.cpp:6865): Go keeps no live-instance model, so an arena queue
+// entry past wait-queue (BGStatusInProgress) is the established proxy —
+// the same proxy the arena-team leave arm uses.
+func (s *session) inArenaNow() bool {
+	if s == nil {
+		return false
+	}
+	for i := range s.bgQueues {
+		e := &s.bgQueues[i]
+		if e.Active && e.IsArena && e.Status == BGStatusInProgress {
+			return true
+		}
+	}
+	return false
+}
+
+// modifyQuestArenaPoints mirrors Player::ModifyArenaPoints (Player.cpp:7085):
+// the total clamps at zero and persists to characters.arenaPoints. The
+// player-account gate (AccountMgr::IsPlayerAccount, security SEC_PLAYER)
+// matches the C++ early return.
+func (s *session) modifyQuestArenaPoints(ctx context.Context, value int32) {
+	if s.player == nil || s.security != 0 {
+		return
+	}
+	newValue := int64(s.player.ArenaPoints) + int64(value)
+	if newValue < 0 {
+		newValue = 0
+	}
+	s.player.ArenaPoints = uint32(newValue)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET arenaPoints = ? WHERE guid = ?", newValue, s.playerGUID)
+	}
+	if s.player.ArenaPoints != 0 {
+		s.addKnownCurrency(s.player, itemArenaPointsID)
+	}
+	s.sendPlayerUpdate()
 }
 
 func buildQuestRewardComplete(questID, xp, money, honor, talents, arena uint32) []byte {

@@ -634,9 +634,15 @@ func (s *session) loadRewardedQuestState(ctx context.Context, state *playerState
 		if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewardTitle, 0), COALESCE(RewardTalents, 0), COALESCE(RewardSpell, 0) FROM quest_template WHERE ID = ?", questID).Scan(&title, &bonusTalents, &rewardSpell) != nil {
 			continue
 		}
-		if title > 0 && title < int64(len(state.KnownTitles)*32) {
-			index := uint32(title) / 32
-			state.KnownTitles[index] |= uint32(1) << (uint32(title) % 32)
+		// Player::RewardQuest restore at login (Player.cpp:18805-18818): the
+		// title reward goes through SetTitle, whose bit is the
+		// CharTitles.dbc MaskID (Player.cpp:24816), not the title id.
+		if title > 0 && s.server.Data != nil {
+			if entry, found, terr := s.server.Data.CharTitle(uint32(title)); terr == nil && found {
+				if idx := entry.MaskID / 32; int(idx) < len(state.KnownTitles) {
+					state.KnownTitles[idx] |= uint32(1) << (entry.MaskID % 32)
+				}
+			}
 		}
 		if bonusTalents > 0 {
 			state.QuestBonus += uint32(bonusTalents)

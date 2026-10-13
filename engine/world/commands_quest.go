@@ -275,5 +275,12 @@ func (s *session) handleQuestReward(ctx context.Context, args []string) {
 	if err != nil {
 		return
 	}
-	_, _, _ = target.commitQuestReward(ctx, view, 0) // RewardQuest(quest, 0, player)
+	// .quest reward runs the full Player::RewardQuest grant path (cs_quest.cpp:313),
+	// shared with the turn-in packet: items, money, XP, honor, title,
+	// talents, arena points, reputation, mail, and the completion packet.
+	grants, destroyedGUIDs, err := target.commitQuestReward(ctx, view, 0)
+	if err != nil {
+		return
+	}
+	target.applyQuestRewardGrants(ctx, view, entry, 0, 0, grants, destroyedGUIDs)
 }
