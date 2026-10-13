@@ -2307,10 +2307,38 @@ func (s *session) sendPetStableResult(code uint8) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_STABLE_RESULT), buf.Bytes(), true)
 }
 
+// unslottedStablePetRow is one PET_SAVE_NOT_IN_SLOT pet (PetStable::UnslottedPets,
+// PetDefines.h:114) — in the DB-backed Go tree these are the character_pet
+// rows with slot = petStorageSlotNotInSlot (100); Pet.cpp:140 / Player.cpp:20873
+// push the dismissed current pet there.
+type unslottedStablePetRow struct {
+	petID   int64
+	petType int64
+	health  int64
+}
+
+// queryUnslottedStablePets lists the owner's unslotted (slot 100) pets.
+func (s *session) queryUnslottedStablePets(ctx context.Context, cdb *sql.DB) ([]unslottedStablePetRow, error) {
+	rows, err := cdb.QueryContext(ctx, "SELECT id, PetType, curhealth FROM character_pet WHERE owner = ? AND slot = ?", s.playerGUID, petStorageSlotNotInSlot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []unslottedStablePetRow
+	for rows.Next() {
+		var p unslottedStablePetRow
+		if rows.Scan(&p.petID, &p.petType, &p.health) == nil {
+			out = append(out, p)
+		}
+	}
+	return out, rows.Err()
+}
+
 // handleStablePet processes CMSG_STABLE_PET (0x270).
 // Reference: WorldSession::HandleStablePet (NPCHandler.cpp:410): a living
 // player stables its active hunter pet (slot 0) into the first free stable
-// slot; results flow through SMSG_STABLE_RESULT.
+// slot; with no active pet the single unslotted hunter pet is stabled
+// instead. Results flow through SMSG_STABLE_RESULT.
 func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -2329,14 +2357,18 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
-	var currentPetType, currentHealth int64
-	err = cdb.QueryRowContext(ctx, "SELECT PetType, curhealth FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&currentPetType, &currentHealth)
-	if err != nil || currentPetType != 1 || currentHealth <= 0 { // only living hunter pets
-		s.sendPetStableResult(stableErrStable)
-		return true
+	// NPCHandler.cpp:418-421 (HandleStablePet): GetPetStable() == nil —
+	// _LoadPetStable (Player.cpp:26758) never initializes the stable when
+	// the player has no stable slots and no pet rows at all — is a silent
+	// return with no result packet.
+	if s.player.StableSlots == 0 {
+		var petRows int64
+		if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_pet WHERE owner = ?", s.playerGUID).Scan(&petRows); err != nil || petRows == 0 {
+			return true
+		}
 	}
 	var freeSlot int64 = -1
-	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_pet WHERE owner = ? AND slot > 0 ORDER BY slot", s.playerGUID)
+	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_pet WHERE owner = ? AND slot > 0 AND slot <= ? ORDER BY slot", s.playerGUID, s.player.StableSlots)
 	if err == nil {
 		taken := map[int64]struct{}{}
 		for rows.Next() {
@@ -2346,7 +2378,7 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 			}
 		}
 		rows.Close()
-		// NPCHandler.cpp:423: the free-slot scan runs over freeSlot < MaxStabledPets
+		// NPCHandler.cpp:443: the free-slot scan runs over freeSlot < MaxStabledPets
 		// (slot = PET_SAVE_FIRST_STABLE_SLOT + freeSlot), i.e. slots 1..stable_slots.
 		for slot := int64(1); slot <= int64(s.player.StableSlots); slot++ {
 			if _, used := taken[slot]; !used {
@@ -2355,11 +2387,38 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
+	var currentPetType, currentHealth int64
+	err = cdb.QueryRowContext(ctx, "SELECT PetType, curhealth FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&currentPetType, &currentHealth)
+	if err == nil {
+		// NPCHandler.cpp:425-429: a dead or non-hunter active pet errors.
+		if currentPetType != int64(petTypeHunter) || currentHealth <= 0 {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+		if freeSlot < 0 {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+		if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", freeSlot, time.Now().Unix(), s.playerGUID); err != nil {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+		s.sendPetStableResult(stableSuccessStable)
+		return true
+	}
+	// NPCHandler.cpp:430-442: with no active pet, the exactly-one unslotted
+	// (PET_SAVE_NOT_IN_SLOT) living hunter pet is stabled instead of
+	// answering STABLE_ERR_STABLE.
+	unslotted, uerr := s.queryUnslottedStablePets(ctx, cdb)
+	if uerr != nil || len(unslotted) != 1 || unslotted[0].petType != int64(petTypeHunter) || unslotted[0].health <= 0 {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
 	if freeSlot < 0 {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
-	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", freeSlot, time.Now().Unix(), s.playerGUID); err != nil {
+	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND id = ?", freeSlot, time.Now().Unix(), s.playerGUID, unslotted[0].petID); err != nil {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
@@ -2414,9 +2473,37 @@ func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool 
 	if !s.checkStabledPetTameable(ctx, stabledEntry) {
 		return true
 	}
-	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ? WHERE owner = ? AND slot = 0", stabledSlot, s.playerGUID); err != nil {
-		s.sendPetStableResult(stableErrStable)
-		return true
+	// Reference: WorldSession::HandleStableSwapPet (NPCHandler.cpp:641+):
+	// the displaced old pet moves into the requested stabled slot; a dead
+	// or non-hunter active pet errors. With no active pet, the
+	// exactly-one unslotted living hunter pet is moved there instead; any
+	// other pet state (multiple unslotted pets) errors.
+	var activePetType, activeHealth int64
+	activeErr := cdb.QueryRowContext(ctx, "SELECT PetType, curhealth FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&activePetType, &activeHealth)
+	if activeErr == nil {
+		if activePetType != int64(petTypeHunter) || activeHealth <= 0 {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+		if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", stabledSlot, time.Now().Unix(), s.playerGUID); err != nil {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+	} else {
+		unslotted, uerr := s.queryUnslottedStablePets(ctx, cdb)
+		if uerr != nil {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+		if len(unslotted) == 1 && unslotted[0].petType == int64(petTypeHunter) && unslotted[0].health > 0 {
+			if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND id = ?", stabledSlot, time.Now().Unix(), s.playerGUID, unslotted[0].petID); err != nil {
+				s.sendPetStableResult(stableErrStable)
+				return true
+			}
+		} else if len(unslotted) > 0 {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
 	}
 	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ?", time.Now().Unix(), s.playerGUID, petNumber); err != nil {
 		s.sendPetStableResult(stableErrStable)
@@ -2469,11 +2556,29 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 	// answer STABLE_ERR_EXOTIC.
 	var activePetType, activeHealth int64
 	if err := cdb.QueryRowContext(ctx, "SELECT PetType, curhealth FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&activePetType, &activeHealth); err == nil {
-		if activeHealth <= 0 || activePetType != 1 {
+		if activeHealth <= 0 || activePetType != int64(petTypeHunter) {
 			s.sendPetStableResult(stableErrStable)
 			return true
 		}
 		if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", stabledSlot, time.Now().Unix(), s.playerGUID); err != nil {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+	} else {
+		// NPCHandler.cpp: HandleUnstablePet unslotted arm: with no
+		// summoned pet, the exactly-one unslotted living hunter pet is
+		// moved into the requested stabled slot; other pet states error.
+		unslotted, uerr := s.queryUnslottedStablePets(ctx, cdb)
+		if uerr != nil {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+		if len(unslotted) == 1 && unslotted[0].petType == int64(petTypeHunter) && unslotted[0].health > 0 {
+			if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND id = ?", stabledSlot, time.Now().Unix(), s.playerGUID, unslotted[0].petID); err != nil {
+				s.sendPetStableResult(stableErrStable)
+				return true
+			}
+		} else if len(unslotted) > 0 {
 			s.sendPetStableResult(stableErrStable)
 			return true
 		}
