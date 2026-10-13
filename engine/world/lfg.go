@@ -97,13 +97,18 @@ const (
 	LFGDungeonTypeHeroic  uint32 = 5
 	LFGDungeonTypeRandom  uint32 = 6
 
-	LFGJoinOK               uint32 = 0
-	LFGJoinNotMeetReqs      uint32 = 5
-	LFGJoinInvalidDungeon   uint32 = 11
-	LFGJoinMixedRaidDungeon uint32 = 7
-	LFGJoinDeserter         uint32 = 12
-	LFGJoinRandomCooldown   uint32 = 14
-	LFGJoinUsingBGSystem    uint32 = 17
+	LFGJoinOK                  uint32 = 0
+	LFGJoinNotMeetReqs         uint32 = 5
+	LFGJoinPartyNotMeetReqs    uint32 = 6
+	LFGJoinMixedRaidDungeon    uint32 = 7
+	LFGJoinDisconnected        uint32 = 9
+	LFGJoinInvalidDungeon      uint32 = 11
+	LFGJoinDeserter            uint32 = 12
+	LFGJoinPartyDeserter       uint32 = 13
+	LFGJoinRandomCooldown      uint32 = 14
+	LFGJoinPartyRandomCooldown uint32 = 15
+	LFGJoinTooMuchMembers      uint32 = 16
+	LFGJoinUsingBGSystem       uint32 = 17
 
 	// LFG script auras (LFGMgr.h:51-54,61): cast by the LFGPlayerScript /
 	// LFGGroupScript arms in LFGScripts.cpp.
@@ -584,8 +589,7 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		}
 	}
 	// LFGMgr::JoinLfg requirement gates (LFGMgr.cpp:440-466), solo-player arms
-	// in C++ order. The group/PARTY_* variants have no counterpart in the
-	// per-player queue model.
+	// in C++ order; the group-member arms follow at LFGMgr.cpp:467-526.
 	if !s.canJoinDungeonFinder() {
 		// HasPermission(rbac::RBAC_PERM_JOIN_DUNGEON_FINDER) (LFGMgr.cpp:440)
 		return failJoin(LFGJoinNotMeetReqs)
@@ -604,6 +608,53 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	}
 	if s.hasAura(9454) { // Freeze debuff (LFGMgr.cpp:465)
 		return failJoin(LFGJoinNotMeetReqs)
+	}
+	// LFGMgr::JoinLfg group-member restriction arms (LFGMgr.cpp:467-526).
+	// The queue stays per-player (documented model delta), but the PARTY_*
+	// validation results are bridged: the MAXGROUPSIZE gate, then per-member
+	// RBAC / deserter / random-cooldown / BG / freeze checks in C++ arm
+	// order. The RBAC check is a standalone if (LFGMgr.cpp:476-477), so a
+	// member's deserter aura overwrites its PARTY_NOT_MEET_REQS; the member
+	// BG arm carries the plain USING_BG_SYSTEM result (LFGMgr.cpp:489-490),
+	// not a PARTY_* variant. The npcbot block is fork-specific and skipped.
+	if s.groupID != 0 && s.server != nil {
+		if grp := s.server.getGroup(s.groupID); grp != nil {
+			if len(grp.Members) > 5 { // MAXGROUPSIZE (Group.h:42)
+				return failJoin(LFGJoinTooMuchMembers)
+			}
+			memberCount := 0
+			groupResult := LFGJoinOK
+			for _, m := range grp.Members {
+				ms := s.server.playerSessionForGUID(m.GUID)
+				if ms == nil {
+					continue // GetSource() null: counted as disconnected below
+				}
+				if !ms.canJoinDungeonFinder() {
+					groupResult = LFGJoinPartyNotMeetReqs
+				}
+				if ms.hasAura(lfgSpellDungeonDeserter) {
+					groupResult = LFGJoinPartyDeserter
+				} else if !isContinue && ms.hasAura(lfgSpellDungeonCooldown) {
+					groupResult = LFGJoinPartyRandomCooldown
+				} else if ms.bgData.InstanceID != 0 || ms.inBattlegroundQueue() {
+					groupResult = LFGJoinUsingBGSystem
+				} else if ms.hasAura(9454) { // Freeze debuff (LFGMgr.cpp:491-492)
+					groupResult = LFGJoinPartyNotMeetReqs
+				}
+				memberCount++
+				if groupResult != LFGJoinOK {
+					break
+				}
+			}
+			// LFGMgr.cpp:522-523: members without a live session count as
+			// disconnected.
+			if groupResult == LFGJoinOK && memberCount != len(grp.Members) {
+				groupResult = LFGJoinDisconnected
+			}
+			if groupResult != LFGJoinOK {
+				return failJoin(groupResult)
+			}
+		}
 	}
 	// LFGMgr::JoinLfg dungeon-type validation (LFGMgr.cpp:527-557): a random
 	// dungeon must be queued alone; raid and non-raid dungeons cannot mix. The
@@ -646,6 +697,42 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	}
 	if typeFail != LFGJoinOK {
 		return failJoin(typeFail)
+	}
+	// LFGMgr::JoinLfg (LFGMgr.cpp:558-567): locked dungeons are dropped from
+	// the requested set for every queued player — the joiner alone when
+	// solo, every live group member when grouped (the C++ players set). When
+	// nothing compatible remains the join fails — PARTY_NOT_MEET_REQS
+	// grouped, NOT_MEET_REQS solo — and the join result carries the lock map
+	// (LFGHandler.cpp:450). The random-dungeon expansion (LFGMgr.cpp:562)
+	// has no Go twin: the queued set keeps the random id, resolved at
+	// match time (lfgSelectedRandomDungeon), so random ids skip the filter.
+	var joinMeta []lfgJoinDungeon
+	if s.server != nil && s.server.Data != nil {
+		for _, dungeonID := range joinDungeons {
+			if dungeon, found, derr := s.server.Data.LFGDungeon(dungeonID); derr == nil && found {
+				joinMeta = append(joinMeta, lfgJoinDungeon{id: dungeonID, typeID: dungeon.TypeID, mapID: uint32(dungeon.MapID), difficulty: dungeon.Difficulty})
+			}
+		}
+	}
+	compatPlayers := []uint64{s.playerGUID}
+	grouped := false
+	if s.groupID != 0 && s.server != nil {
+		if grp := s.server.getGroup(s.groupID); grp != nil {
+			grouped = true
+			compatPlayers = compatPlayers[:0]
+			for _, m := range grp.Members {
+				if s.server.playerSessionForGUID(m.GUID) != nil {
+					compatPlayers = append(compatPlayers, m.GUID)
+				}
+			}
+		}
+	}
+	if _, lockMap := s.lfgCompatibleDungeons(joinMeta, compatPlayers, isContinue); lockMap != nil {
+		result := LFGJoinNotMeetReqs
+		if grouped {
+			result = LFGJoinPartyNotMeetReqs
+		}
+		return s.sendLFGJoinResultWithLocks(result, uint32(LFGStateNone), lockMap) == nil
 	}
 	// LFGMgr::JoinLfg (LFGMgr.cpp:577-581): raid-browser joins queue nothing —
 	// the raid path ends here silently.
@@ -739,6 +826,40 @@ func (s *session) sendLFGJoinResult(result uint32, state uint32) error {
 	packet := protocol.NewBuffer(8)
 	packet.WriteU32(result)
 	packet.WriteU32(state)
+	return s.write(uint16(protocol.OpcodeSMSG_LFG_JOIN_RESULT), packet.Bytes(), true)
+}
+
+// sendLFGJoinResultWithLocks mirrors WorldSession::SendLfgJoinResult
+// (LFGHandler.cpp:438-453): the party lock block follows result+state only
+// when the lock map is non-empty — JoinLfg clears it whenever a compatible
+// dungeon remains (LFGMgr.cpp:571-572). Party members serialize in
+// ascending guid order (std::map), dungeon entries in ascending id order.
+func (s *session) sendLFGJoinResultWithLocks(result, state uint32, lockMap map[uint64]map[uint32]uint32) error {
+	packet := protocol.NewBuffer(8)
+	packet.WriteU32(result)
+	packet.WriteU32(state)
+	if len(lockMap) > 0 {
+		guids := make([]uint64, 0, len(lockMap))
+		for guid := range lockMap {
+			guids = append(guids, guid)
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		packet.WriteU8(uint8(len(guids)))
+		for _, guid := range guids {
+			locks := lockMap[guid]
+			packet.WriteU64(guid)
+			entries := make([]uint32, 0, len(locks))
+			for dungeon := range locks {
+				entries = append(entries, dungeon)
+			}
+			sort.Slice(entries, func(i, j int) bool { return entries[i] < entries[j] })
+			packet.WriteU32(uint32(len(entries)))
+			for _, dungeon := range entries {
+				packet.WriteU32(dungeon)
+				packet.WriteU32(locks[dungeon])
+			}
+		}
+	}
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_JOIN_RESULT), packet.Bytes(), true)
 }
 
@@ -1431,6 +1552,103 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 	}
 
 	return locks
+}
+
+// lfgJoinDungeon carries the DBC metadata GetCompatibleDungeons needs for
+// the isContinue raid-locked exception.
+type lfgJoinDungeon struct {
+	id         uint32
+	typeID     uint32
+	mapID      uint32
+	difficulty uint32
+}
+
+// lfgCompatibleDungeons mirrors LFGMgr::GetCompatibleDungeons
+// (LFGMgr.cpp:888-935): for every queued player, locked dungeons are dropped
+// from the requested set and recorded in the per-player lock map, keyed by
+// masked dungeon id like C++'s lockMap[guid][dungeonId]; when compatible
+// dungeons remain the lock map is cleared (LFGMgr.cpp:933-934). The random-
+// dungeon expansion (LFGMgr.cpp:562) has no Go twin — the queued set keeps
+// the random id and match-time resolution (lfgSelectedRandomDungeon) — so
+// random ids pass through unfiltered. The isContinue raid-locked exception
+// (LFGMgr.cpp:908-926) keeps a dungeon when every checked player is saved
+// to the same instance of it.
+func (s *session) lfgCompatibleDungeons(dungeons []lfgJoinDungeon, playerGUIDs []uint64, isContinue bool) ([]uint32, map[uint64]map[uint32]uint32) {
+	remaining := make([]uint32, 0, len(dungeons))
+	for _, d := range dungeons {
+		remaining = append(remaining, d.id)
+	}
+	inRemaining := func(id uint32) bool {
+		for _, r := range remaining {
+			if r == id {
+				return true
+			}
+		}
+		return false
+	}
+	lockMap := make(map[uint64]map[uint32]uint32)
+	lockedInstance := make(map[uint32]uint32)
+	sorted := append([]uint64(nil), playerGUIDs...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	for _, pguid := range sorted {
+		if len(remaining) == 0 {
+			break
+		}
+		locks := s.getLockedDungeons(pguid)
+		for _, d := range dungeons {
+			if !inRemaining(d.id) {
+				continue
+			}
+			status, locked := locks[d.id+(d.typeID<<24)]
+			if !locked {
+				continue
+			}
+			erase := true
+			if status == LFGLockStatusRaidLocked && isContinue {
+				if instanceID, bound := s.boundLFGInstanceID(pguid, d.mapID, d.difficulty); bound {
+					if prev, seen := lockedInstance[d.id]; !seen || prev == instanceID {
+						erase = false
+					}
+					lockedInstance[d.id] = instanceID
+				}
+			}
+			if erase {
+				kept := remaining[:0]
+				for _, r := range remaining {
+					if r != d.id {
+						kept = append(kept, r)
+					}
+				}
+				remaining = kept
+			}
+			if lockMap[pguid] == nil {
+				lockMap[pguid] = make(map[uint32]uint32)
+			}
+			lockMap[pguid][d.id] = status
+		}
+	}
+	if len(remaining) > 0 {
+		lockMap = nil
+	}
+	return remaining, lockMap
+}
+
+// boundLFGInstanceID returns the instance id the character is saved to for
+// the given map/difficulty — the GetBoundInstance arm backing
+// GetCompatibleDungeons' isContinue raid-locked exception (LFGMgr.cpp:913).
+func (s *session) boundLFGInstanceID(guid uint64, mapID, difficulty uint32) (uint32, bool) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, false
+	}
+	var instanceID uint32
+	err := s.server.CharactersStore.DB.QueryRow(
+		"SELECT ci.instance FROM character_instance ci JOIN instance i ON ci.instance = i.id WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ? AND i.resettime > ?",
+		guid, mapID, difficulty, time.Now().Unix(),
+	).Scan(&instanceID)
+	if err != nil || instanceID == 0 {
+		return 0, false
+	}
+	return instanceID, true
 }
 
 // handleLfdPartyLockInfoRequest processes CMSG_LFD_PARTY_LOCK_INFO_REQUEST (0x371).
