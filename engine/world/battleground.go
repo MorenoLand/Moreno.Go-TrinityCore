@@ -802,7 +802,10 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU8() // type
+	// BattleGroundHandler.cpp:359: type is the arena type for arena queues;
+	// it selects the queue via BGQueueTypeId(bgTypeId, type)
+	// (BattleGroundHandler.cpp:382) — QUEUE_2v2/3v3/5v5 for arenas.
+	arenaType, _ := r.ReadU8()
 	_, _ = r.ReadU8() // unk2
 	bgTypeID, err := r.ReadU32()
 	if err != nil {
@@ -825,12 +828,22 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 	// _player->InBattlegroundQueue() (BattleGroundHandler.cpp:374-379) — no active
 	// slot for this battleground is answered with silence. The found slot doubles as
 	// the GroupQueueInfo the C++ leg reads (BattleGroundHandler.cpp:383-387).
+	// BattlegroundMgr::BGQueueTypeId(bgTypeId, type) (BattlegroundMgr.cpp:737):
+	// arena queues are keyed per arena type, so an arena slot only matches when
+	// its ArenaType equals the packet's type byte — a player queued for 2v2 and
+	// 3v3 at once accepts/leaves the right queue. Non-arena queues ignore type,
+	// == C++ (only the BATTLEGROUND_AA branch switches on arenaType).
 	slot := -1
 	for i := 0; i < len(s.bgQueues); i++ {
-		if s.bgQueues[i].Active && s.bgQueues[i].BgTypeID == bgTypeID {
-			slot = i
-			break
+		e := &s.bgQueues[i]
+		if !e.Active || e.BgTypeID != bgTypeID {
+			continue
 		}
+		if e.IsArena && e.ArenaType != arenaType {
+			continue
+		}
+		slot = i
+		break
 	}
 	if slot == -1 {
 		return true
@@ -921,6 +934,35 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// STATUS_WAIT_QUEUE is answered with silence.
 		if entry.IsArena && entry.Status > BGStatusWaitQueue {
 			return true
+		}
+		// BattleGroundHandler.cpp:496-507: leaving a rated arena queue while
+		// invited counts as a loss — ArenaTeam::MemberLost (ArenaTeam.cpp:805)
+		// with the default MatchmakerRatingChange (-12): the personal rating
+		// takes the Elo loss vs the opponents' MMR, and week/season games
+		// increment (not wins). Go keeps no matchmaker model, so the opponents'
+		// MMR is 0 (a forfeit) and ModifyMatchmakerRating has no Go model
+		// (no MMR column); the SetArenaTeamInfoField unit-field updates have
+		// no Go model either. The HIGHEST_PERSONAL_RATING criteria update is
+		// max-keeping, == C++ UpdateAchievementCriteria.
+		if entry.IsArena && entry.IsRated && entry.InstanceID != 0 {
+			cdb := s.server.CharactersStore.DB
+			if cdb == nil {
+				return true
+			}
+			if teamID := arenaTeamIDForSlot(ctx, cdb, s.playerGUID, uint32(entry.ArenaType)); teamID != 0 {
+				var personal uint32
+				_ = cdb.QueryRowContext(ctx, "SELECT personalRating FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID).Scan(&personal)
+				mod := arenaTeamRatingLossMod(personal, 0)
+				newPersonal := personal
+				if mod < 0 && uint32(-mod) >= newPersonal {
+					newPersonal = 0
+				} else {
+					newPersonal = uint32(int32(newPersonal) + mod)
+				}
+				_, _ = cdb.ExecContext(ctx, "UPDATE arena_team_member SET personalRating = ?, weekGames = weekGames + 1, seasonGames = seasonGames + 1 WHERE arenaTeamId = ? AND guid = ?", newPersonal, teamID, s.playerGUID)
+				s.setAchievementCriteria(criteriaTypeHighestPersonalRating, 0, newPersonal)
+				s.debug("rated arena queue leave: personal rating loss applied", "account", s.accountName, "team", teamID, "loss", -mod)
+			}
 		}
 		// Leave queue
 		s.bgQueues[slot] = bgQueueEntry{}

@@ -411,6 +411,21 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	startHonor := s.server.Config.StartHonorPoints
 	startArena := s.server.Config.StartArenaPoints
 
+	// WorldSession::HandleCharCreateOpcode (CharacterHandler.cpp:522-524,
+	// 586-587): CONFIG_SKIP_CINEMATICS skips the intro cinematic — value 1
+	// when the account already owns a character of the same race
+	// (haveSameRace, scanned from the account's character rows), value 2
+	// unconditionally. Default 0 keeps the cinematic, == C++.
+	cinematic := uint8(0)
+	if skipCine := s.server.Config.SkipCinematics; skipCine == 2 {
+		cinematic = 1
+	} else if skipCine == 1 {
+		var sameRace int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE account = ? AND race = ?", s.accountID, race).Scan(&sameRace); err == nil && sameRace > 0 {
+			cinematic = 1
+		}
+	}
+
 	watchedFaction, drunkenness := CharacterCreationDefaults()
 	args := []any{
 		uint32(guid), s.accountID, name, race, class, gender,
@@ -419,7 +434,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		uint8(0), uint8(0), uint32(0), uint16(spawn.Map), uint32(0), uint8(0),
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation,
 		float32(0), float32(0), float32(0), float32(0), uint32(0), "",
-		uint8(0), // cinematic = 0
+		cinematic,
 		uint32(0), uint32(0), float32(0), uint32(0), uint8(0), uint32(0), uint32(0),
 		uint16(0), uint8(0), uint16(atLoginFirst), uint16(spawn.Zone), uint32(0), "",
 		startArena, startHonor, uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
