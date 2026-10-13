@@ -2126,6 +2126,108 @@ func petTickHealDoneLegs(owner *session, ctx context.Context, motion *creatureMo
 	return heal
 }
 
+// petPeriodicApplyDoneLegs mirrors the apply-time done leg in
+// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:505-518): for unit auras a
+// PERIODIC_DAMAGE (3) / PERIODIC_LEECH (53) effect's amount is
+// caster->SpellDamageBonusDone(victim, spell, amount, DOT, effIndex, donePct)
+// and a PERIODIC_HEAL (8) effect's is caster->SpellHealingBonusDone(victim,
+// spell, amount, DOT, effIndex, donePct), with donePct the per-target pct leg
+// (Aura::SaveCasterInfo runs per aura instance, SpellAuras.cpp:521-525).
+// PERIODIC_DAMAGE_PERCENT (89), OBS_MOD_HEALTH (20) and
+// PERIODIC_TRIGGER_SPELL (23) carry no done leg (SpellAuraEffects.cpp:498-507).
+// The pet cast path applied raw CalcValueForLevel amounts, so pet DoTs/HoTs
+// carried no done leg at all — this is the apply-time twin of the per-tick
+// op-22 (SPELLMOD_DOT) tail petTickHealDoneLegs folds for pet HoT ticks
+// (C++ runs done legs per tick only for DYNOBJ_AURA_TYPE,
+// SpellAuraEffects.cpp:5145; unit auras bake at apply).
+func (s *session) petPeriodicApplyDoneLegs(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, effIndex int, targetGUID uint64, target combatTarget, amount uint32) uint32 {
+	if s == nil || motion == nil || effIndex < 0 || effIndex >= len(spell.Effects) {
+		return amount
+	}
+	_, hasBonusRow := s.spellBonusRow(spell.ID)
+	dmgClassNone := spell.DefenseType == spellDamageClassNone
+	// foldFlat applies the flat DoneTotal and the mod-owner SPELLMOD_DOT
+	// tail; the DmgClassNONE-no-row early-out (Unit.cpp:6707-6710,
+	// 7583-7587) applies only the pct leg, never the spellmod.
+	foldTail := func(value uint32) uint32 {
+		if out := s.applySpellMod(spell, spellModDot, int32(value)); out < 0 {
+			return 0
+		} else {
+			return uint32(out)
+		}
+	}
+	foldPct := func(value uint32, pct float64) uint32 {
+		if pct == 1.0 {
+			return value
+		}
+		if tmp := float64(int32(value)) * pct; tmp > 0 {
+			return uint32(tmp)
+		}
+		return 0
+	}
+	switch spell.Effects[effIndex].Aura {
+	case spellAuraPeriodicDamage, spellAuraPeriodicLeech:
+		// Unit::SpellDamageBonusDone (Unit.cpp:6602-6734).
+		if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
+			return amount
+		}
+		if hasBonusRow || !dmgClassNone {
+			// DoneAdvertisedBenefit: the pet's own SPELL_AURA_MOD_DAMAGE_DONE
+			// (13) school fold (Unit.cpp:7134-7136, misc-0 excluded) plus the
+			// guardian's GetBonusDamage (Unit.cpp:6681-6683), with the
+			// per-victim SPELL_AURA_MOD_DAMAGE_TAKEN (14) arm (Unit.cpp:6682).
+			advertised := s.guardianBonusSpellDamage(motion)
+			if s.server != nil {
+				for _, amt := range creatureAuraModifiersByMiscMask(s.server, creatureAuraKeyForMotion(motion), spellAuraModDamageDone, uint32(spell.SchoolMask)) {
+					advertised += amt
+				}
+			}
+			victimTaken := s.victimDamageTakenFlat(spell, targetGUID, target)
+			if advertised != 0 || victimTaken != 0 {
+				coeff := s.spellDoneCoefficientCasterLevel(spell, effIndex, true, motion.Level)
+				total := int32(float64(advertised+victimTaken) * coeff)
+				if adjusted := int32(amount) + total; adjusted > 0 {
+					amount = uint32(adjusted)
+				} else {
+					amount = 0
+				}
+			}
+		}
+		amount = foldPct(amount, s.petDamagePctDone(ctx, motion, spell, targetGUID, target))
+		if hasBonusRow || !dmgClassNone {
+			amount = foldTail(amount)
+		}
+		return amount
+	case spellAuraPeriodicHeal:
+		// Unit::SpellHealingBonusDone (Unit.cpp:7487-7632): potion spells
+		// take no bonus at all (Unit.cpp:7494-7496); there is no
+		// ATTR3_NO_DONE_BONUS gate on the heal path.
+		if spell.SpellFamilyName == spellFamilyPotion {
+			return amount
+		}
+		if hasBonusRow || !dmgClassNone {
+			// The flat fold (petGuardianDoneHealingBonus, dot coefficient,
+			// stack 1) is zeroed for leech/funnel spells
+			// (Unit.cpp:7605-7610) — the pct leg and the SPELLMOD_DOT tail
+			// still apply (Unit.cpp:7612, 7624-7626).
+			if flat := s.petGuardianDoneHealingBonus(ctx, motion, spell, effIndex, targetGUID, true, 1); flat != 0 {
+				if adjusted := int32(amount) + flat; adjusted > 0 {
+					amount = uint32(adjusted)
+				} else {
+					amount = 0
+				}
+			}
+		}
+		amount = foldPct(amount, s.petHealingPctDone(ctx, motion, spell, targetGUID))
+		if hasBonusRow || !dmgClassNone {
+			amount = foldTail(amount)
+		}
+		return amount
+	default:
+		return amount
+	}
+}
+
 // petHealingDoneAuraModifier mirrors the pet-caster leg of
 // Unit::SpellBaseHealingBonusDone (Unit.cpp:7764-7771): the guardian's own
 // SPELL_AURA_MOD_HEALING_DONE (135) auras fold into the advertised benefit
@@ -2741,8 +2843,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// row all come from it, like hitInfo.AuraBasePoints.
 			auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
 			durationMs := petAuraDuration(s.server, auraSpell, motion)
+			victimGUID := resolveReflectTarget(targetGUID)
+			var victim combatTarget
+			if ct, ok := s.getCombatTarget(ctx, victimGUID); ok {
+				victim = ct
+			}
 			amount := uint32(auraEffect.CalcValueForLevel(auraSpell, uint32(motion.Level)))
-			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, resolveReflectTarget(targetGUID), durationMs, amount) {
+			// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:505-518):
+			// the periodic done leg bakes at apply for unit auras.
+			amount = s.petPeriodicApplyDoneLegs(ctx, motion, auraSpell, i, victimGUID, victim, amount)
+			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount) {
 			}
 			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (129, SharedDefines.h:940):
 			// an enemy area aura applies to every unit the area selection
@@ -2754,8 +2864,14 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				for _, areaHit := range areaHits {
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
+					aVictimGUID := resolveReflectTarget(areaHit.GUID)
+					var aVictim combatTarget
+					if ct, ok := s.getCombatTarget(ctx, aVictimGUID); ok {
+						aVictim = ct
+					}
 					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
-					s.applyPetAura(ctx, motion, aSpell, aEffect, resolveReflectTarget(areaHit.GUID), aDurationMs, aAmount)
+					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
+					s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount)
 				}
 			}
 		}

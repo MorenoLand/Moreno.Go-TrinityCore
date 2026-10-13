@@ -26620,16 +26620,19 @@ func (s *session) applyPeriodicLeechHealForCaster(ctx context.Context, mapID, in
 // is a creature or pet: heal = dealt damage x CalcValueMultiplier
 // (SpellInfo.cpp:528-536: EffectAmplitude + the caster mod-owner's
 // SPELLMOD_VALUE_MULTIPLIER via GetSpellModOwner — a pet caster's owner
-// player; a wild caster resolves nil, the C++ null path), applied to the
-// caster motion's health
-// under motionMu and capped at MaxHealth, then the
-// ForwardThreatForAssistingMe heal-threat forward
+// player; a wild caster resolves nil, the C++ null path), then the
+// SpellHealingBonusDone / SpellHealingBonusTaken self folds
+// (Unit.cpp:7505-7632, 7714-7759): for leech spells the flat DoneTotal is
+// zeroed (Unit.cpp:7605-7610), so only the DoneTotalMod percent leg over the
+// caster's SPELL_AURA_MOD_HEALING_DONE_PERCENT (136) auras survives, then the
+// mod-owner's SPELLMOD_DOT fold (Unit.cpp:7624-7626; the leech tick heals
+// with DOT type), then the taken legs on the caster's own aura store.
+// Applied to the caster motion's health under motionMu and capped at
+// MaxHealth, then the ForwardThreatForAssistingMe heal-threat forward
 // (distributeCreatureHealingThreat) and the DONE_PERIODIC/TAKEN_PERIODIC
 // self-heal proc legs on the caster motion itself (C++ passes (caster,
-// caster)). The SpellHealingBonusDone/Taken folds have no creature model
-// (same standing delta as the inline EffectHealthLeech arm in
-// creature_area_targets.go). C++ sends no heal log for the leech tick's heal
-// — the periodic damage log already went out — so none is sent here either.
+// caster)). C++ sends no heal log for the leech tick's heal — the periodic
+// damage log already went out — so none is sent here either.
 func (s *Server) applyCreaturePeriodicLeechHeal(ctx context.Context, mapID, instanceID uint32, casterGUID uint64, aura *activeAura, dealtDamage uint32, leechEffIndex int, tickKnown, crit bool, tickSpell wotlk.Spell) {
 	if s == nil || s.Data == nil || casterGUID == 0 {
 		return
@@ -26640,19 +26643,38 @@ func (s *Server) applyCreaturePeriodicLeechHeal(ctx context.Context, mapID, inst
 		s.motionMu.Unlock()
 		return
 	}
+	casterKey := creatureAuraKeyForMotion(caster)
+	s.motionMu.Unlock()
 	heal := dealtDamage
 	if sp, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
 		if leechEffIndex >= 0 && leechEffIndex < len(sp.Effects) {
 			heal = effectValueMultiplied(heal, calcValueMultiplier(sp, leechEffIndex, s.spellModOwnerSession(mapID, instanceID, casterGUID)))
 		}
 	}
-	newHP := caster.Health + heal
-	effectiveHeal := heal
-	if caster.MaxHealth > 0 && newHP > caster.MaxHealth {
-		effectiveHeal = caster.MaxHealth - caster.Health
-		newHP = caster.MaxHealth
+	if tickKnown {
+		heal = uint32(float64(heal) * creatureHealingDonePctMultiplier(s, casterKey, tickSpell))
+		if modOwner := s.spellModOwnerSession(mapID, instanceID, casterGUID); modOwner != nil {
+			if sm := modOwner.applySpellMod(tickSpell, uint8(spellModDot), int32(heal)); sm < 0 {
+				heal = 0
+			} else {
+				heal = uint32(sm)
+			}
+		}
+		heal = creatureHealingTakenBonus(s, casterKey, casterGUID, tickSpell, tickKnown, heal, true)
 	}
-	caster.Health = newHP
+	s.motionMu.Lock()
+	live := s.findCreatureMotionLocked(mapID, instanceID, casterGUID)
+	if live == nil || live.Health == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	newHP := live.Health + heal
+	effectiveHeal := heal
+	if live.MaxHealth > 0 && newHP > live.MaxHealth {
+		effectiveHeal = live.MaxHealth - live.Health
+		newHP = live.MaxHealth
+	}
+	live.Health = newHP
 	s.motionMu.Unlock()
 	if effectiveHeal > 0 {
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, map[int]uint32{unitFieldHealth: newHP})
