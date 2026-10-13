@@ -1010,18 +1010,24 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 
 	// Handle parry haste: if defender parried, haste defender's next attack!
-	// Matching TrinityCore Unit.cpp:1480-1510.
+	// Matching TrinityCore Unit.cpp:1480-1510: the 20%/60% bands come from
+	// the pristine swing (GetAttackTime divides the scaled field by
+	// m_modAttackSpeedPct, which ApplyAttackTimePercentMod scales
+	// identically), while the remaining time is the live aura-scaled timer
+	// (GetAttackTime*m). So bands stay pristine; only the remaining uses
+	// the victim's hasted swing.
 	if targetState == protocol.VictimStateParry && s.server != nil {
 		if playerVictim := s.server.findSessionByGUID(target.GUID); playerVictim != nil && playerVictim.player != nil {
 			vMainSpeed := time.Duration(playerVictim.player.AttackTime) * time.Millisecond
 			if vMainSpeed <= 0 {
 				vMainSpeed = 2 * time.Second
 			}
+			vSwing := playerVictim.getHastedMeleeSpeed(vMainSpeed, false)
 			elapsed := now.Sub(playerVictim.lastSwing)
-			if elapsed < vMainSpeed {
-				rem := vMainSpeed - elapsed
+			if elapsed < vSwing {
+				rem := vSwing - elapsed
 				hasted := calcParryHastedRemaining(rem, vMainSpeed)
-				playerVictim.lastSwing = now.Add(-(vMainSpeed - hasted))
+				playerVictim.lastSwing = now.Add(-(vSwing - hasted))
 			}
 		} else {
 			s.server.motionMu.Lock()
@@ -1031,11 +1037,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					if cSpeed <= 0 {
 						cSpeed = 2 * time.Second
 					}
+					cSwing := time.Duration(float64(cSpeed) * s.server.creatureAttackTimeFactor(creatureAuraKeyForMotion(motion)))
 					elapsed := now.Sub(motion.LastAttack)
-					if elapsed < cSpeed {
-						rem := cSpeed - elapsed
+					if elapsed < cSwing {
+						rem := cSwing - elapsed
 						hasted := calcParryHastedRemaining(rem, cSpeed)
-						motion.LastAttack = now.Add(-(cSpeed - hasted))
+						motion.LastAttack = now.Add(-(cSwing - hasted))
 					}
 				}
 			}

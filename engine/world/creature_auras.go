@@ -1545,3 +1545,128 @@ func (s *Server) creatureHasAuraType(key creatureAuraKey, auraType uint32) bool 
 	}
 	return false
 }
+
+// attackTimeAuraModFactor converts one live attack-time aura amount into the
+// Unit::ApplyAttackTimePercentMod swing-interval multiplier
+// (Unit.cpp:10847-10864 via ApplyPercentModFloatVar, Unit.cpp:10842-10845):
+// a positive amount slows the swing (x 100/(100+amount)), a negative amount
+// speeds it up (x (100+|amount|)/100). Each effect multiplies the running
+// UNIT_FIELD_BASEATTACKTIME field and m_modAttackSpeedPct by the same
+// factor, so GetAttackTime (field/m, Unit.cpp:8609-8613) always returns the
+// pristine base — only the actual swing timer (GetAttackTime*m, reset at
+// Unit.cpp:580) moves. The damage-field legs therefore stay on the
+// pristine time; only the swing cadence folds here.
+func attackTimeAuraModFactor(amount int32) float64 {
+	if amount > 0 {
+		return 100.0 / (100.0 + float64(amount))
+	}
+	if amount < 0 {
+		return (100.0 - float64(amount)) / 100.0
+	}
+	return 1.0
+}
+
+// creatureAttackTimeFactor mirrors Unit::ApplyAttackTimePercentMod
+// (Unit.cpp:10847-10864) for the BASE_ATTACK arm over live creature auras —
+// the creature twin of the player-side getHastedMeleeSpeed aura legs
+// (melee_stats.go:271). Pets and creatures swing base-only in C++
+// (Guardian::UpdateAttackPowerAndDamage/UpdateDamagePhysical early-return
+// past BASE_ATTACK; Go has one swing timer per motion), so only the
+// BASE_ATTACK feeders are folded:
+//   - SPELL_AURA_MOD_ATTACKSPEED (9, HandleModAttackSpeed,
+//     SpellAuraEffects.cpp:3973-3981): every live effect stacks
+//     multiplicatively, and also re-runs UpdateDamagePhysical — the speed
+//     leg is a no-op there (GetAttackTime is pristine), the 61682/61683
+//     damage leg is folded separately by petWeaponDamageSpeedDebuffPct.
+//   - SPELL_AURA_MOD_MELEE_RANGED_HASTE (192, HandleModMeleeRangedSpeedPct,
+//     SpellAuraEffects.cpp:3938-3948): every live effect stacks.
+//   - SPELL_AURA_MOD_MELEE_HASTE (138, HandleModMeleeSpeedPct,
+//     SpellAuraEffects.cpp:3984-4004): the exclusive-same-effect gate keeps
+//     one winner per shared group (statWinners, same as the player-side
+//     meleeHaste138Factor).
+//   - SPELL_AURA_MELEE_SLOW (193) / SPELL_AURA_MOD_SPEED_SLOW_ALL (252,
+//     HandleModCombatSpeedPct, SpellAuraEffects.cpp:3950-3971): 252 effects
+//     always stack; a 193 effect goes dormant when a same-type rival in a
+//     shared exclusive group carries |amount| >= its own (ties lose,
+//     C++ :3957 — same rival scan as combatSlowLiveAmounts).
+//
+// Ranged-only arms (140/141/218) have no creature consumer. The fold reads
+// the live aura map, so apply/merge/remove need no recalc hook — the same
+// convention as the other creature folds. Callers must not hold auraMu.
+func (s *Server) creatureAttackTimeFactor(key creatureAuraKey) float64 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 1.0
+	}
+	var stack []int32
+	var cands138, cands193 []statCandidate
+	s.auraMu.Lock()
+	order := 0
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			order++
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			order++
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			switch effect.Aura {
+			case spellAuraModAttackSpeed, spellAuraModMeleeRangedHaste, spellAuraModSpeedSlowAll:
+				stack = append(stack, amount)
+			case spellAuraModMeleeHaste:
+				cands138 = append(cands138, statCandidate{
+					order:       order,
+					spellID:     aura.SpellID,
+					effectIndex: index,
+					amount:      amount,
+					firstRank:   s.spellFirstRank(aura.SpellID),
+					auraType:    effect.Aura,
+				})
+			case spellAuraMeleeSlow:
+				cands193 = append(cands193, statCandidate{
+					order:       order,
+					spellID:     aura.SpellID,
+					effectIndex: index,
+					amount:      amount,
+					firstRank:   s.spellFirstRank(aura.SpellID),
+					auraType:    effect.Aura,
+				})
+			}
+		}
+		order++
+	}
+	s.auraMu.Unlock()
+	factor := 1.0
+	for _, a := range stack {
+		factor *= attackTimeAuraModFactor(a)
+	}
+	for _, w := range statWinners(cands138, s.petAuraStackGroups()) {
+		factor *= attackTimeAuraModFactor(w.amount)
+	}
+	cache := s.petAuraStackGroups()
+	for _, c := range cands193 {
+		rivalMax := int32(0)
+		for _, r := range cands193 {
+			if r.spellID == c.spellID && r.effectIndex == c.effectIndex && r.order == c.order {
+				continue
+			}
+			if !sharesExclusiveSameEffectGroup(c.firstRank, r.firstRank, cache) {
+				continue
+			}
+			if absAuraAmount(r.amount) > absAuraAmount(rivalMax) {
+				rivalMax = r.amount
+			}
+		}
+		if absAuraAmount(rivalMax) >= absAuraAmount(c.amount) {
+			continue
+		}
+		factor *= attackTimeAuraModFactor(c.amount)
+	}
+	return factor
+}

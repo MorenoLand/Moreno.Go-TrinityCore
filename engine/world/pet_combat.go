@@ -743,7 +743,14 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		motion.Moving = false
 
 		// Melee attack (suppressed by the breakable-CC arm above).
-		attackTime := time.Duration(motion.AttackTime) * time.Millisecond
+		// Unit::ApplyAttackTimePercentMod (Unit.cpp:10847-10864): the
+		// pet's swing interval is UNIT_FIELD_BASEATTACKTIME scaled by the
+		// live attack-time auras (9/138/192/193/252) — creatureAttackTimeFactor
+		// is the field twin. The damage-field speed legs
+		// (executePetMeleeAttack, petPhysicalDamageRange) stay on the
+		// pristine base: C++ GetAttackTime divides the scaled field by
+		// m_modAttackSpeedPct, which the same call scales identically.
+		attackTime := time.Duration(float64(motion.AttackTime)*s.creatureAttackTimeFactor(creatureAuraKeyForMotion(motion))) * time.Millisecond
 		if attackTime <= 0 {
 			attackTime = 2 * time.Second
 		}
@@ -1044,22 +1051,24 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	}
 
 	// Unit::DealMeleeDamage (Unit.cpp:1480-1510): when the victim parries,
-	// its next attack is hastened — the 20%/60% remaining bands collapse to
-	// 20% of swing time or shrink by 40% (calcParryHastedRemaining). The
-	// player and wild-creature paths bridge this (combat.go:834,
-	// creaturemotion.go:2398); the pet path had no arm. NO_PARRY_HASTEN
-	// (CREATURE_FLAG_EXTRA 0x8, combat.go:16) exempts creature victims.
+	// its next attack is hastened — the 20%/60% remaining bands come from
+	// the pristine swing (GetAttackTime divides the scaled field by
+	// m_modAttackSpeedPct, which ApplyAttackTimePercentMod scales
+	// identically), while the remaining time is the live aura-scaled timer
+	// (GetAttackTime*m). So bands stay pristine; only the remaining uses
+	// the victim's hasted swing.
 	if targetState == protocol.VictimStateParry {
 		if isTargetPlayer && targetSess != nil && targetSess.player != nil {
 			vMainSpeed := time.Duration(targetSess.player.AttackTime) * time.Millisecond
 			if vMainSpeed <= 0 {
 				vMainSpeed = 2 * time.Second
 			}
+			vSwing := targetSess.getHastedMeleeSpeed(vMainSpeed, false)
 			elapsed := now.Sub(targetSess.lastSwing)
-			if elapsed < vMainSpeed {
-				rem := vMainSpeed - elapsed
+			if elapsed < vSwing {
+				rem := vSwing - elapsed
 				hasted := calcParryHastedRemaining(rem, vMainSpeed)
-				targetSess.lastSwing = now.Add(-(vMainSpeed - hasted))
+				targetSess.lastSwing = now.Add(-(vSwing - hasted))
 			}
 		} else if !isTargetPlayer {
 			s.motionMu.Lock()
@@ -1069,11 +1078,12 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 					if cSpeed <= 0 {
 						cSpeed = 2 * time.Second
 					}
+					cSwing := time.Duration(float64(cSpeed) * s.creatureAttackTimeFactor(creatureAuraKeyForMotion(vm)))
 					elapsed := now.Sub(vm.LastAttack)
-					if elapsed < cSpeed {
-						rem := cSpeed - elapsed
+					if elapsed < cSwing {
+						rem := cSwing - elapsed
 						hasted := calcParryHastedRemaining(rem, cSpeed)
-						vm.LastAttack = now.Add(-(cSpeed - hasted))
+						vm.LastAttack = now.Add(-(cSwing - hasted))
 					}
 				}
 			}

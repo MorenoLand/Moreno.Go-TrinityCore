@@ -2603,7 +2603,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 		motion.Moving = false
-		attackTime := time.Duration(motion.AttackTime) * time.Millisecond
+		// Unit::ApplyAttackTimePercentMod (Unit.cpp:10847-10864): the
+		// creature's swing interval is UNIT_FIELD_BASEATTACKTIME scaled by
+		// the live attack-time auras (9/138/192/193/252) —
+		// creatureAttackTimeFactor is the field twin. The lvl-fallback
+		// damage roll below keeps the pristine base (C++ weapon damage has
+		// no attack-time leg).
+		attackTime := time.Duration(float64(motion.AttackTime)*s.creatureAttackTimeFactor(creatureAuraKeyForMotion(motion))) * time.Millisecond
 		if attackTime <= 0 {
 			attackTime = 2 * time.Second
 		}
