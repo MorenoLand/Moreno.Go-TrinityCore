@@ -517,6 +517,19 @@ type session struct {
 	guildInviterGUID   uint64
 	groupID            uint64 // GUID of the group this player is in (0 = no group)
 	pendingGroupLeader uint64 // GUID of the player who invited us (0 = no invite pending)
+	// groupStatsDue/Init/Snapshot back the SMSG_PARTY_MEMBER_STATS delta
+	// system: Player::SendUpdateToOutOfRangeGroupMembers (Player.cpp:23054)
+	// on Player::Update's 5s m_groupUpdateTimer (Player.cpp:1349-1354).
+	// The snapshot holds the last values pushed to out-of-range members;
+	// the flush diffs it against the current values to build the C++
+	// update mask (core C++ sets the same flags from Unit::SetHealth /
+	// SetPower / SetMaxHealth / SetMaxPower / setPowerType / SetLevel /
+	// Player::UpdatePosition / Unit::UpdateAuraForGroup and the pet arms,
+	// choke points Go does not have, so the wire-identical mask is computed
+	// by comparison at flush time).
+	groupStatsDue      time.Time
+	groupStatsInit     bool
+	groupStatsSnapshot protocol.PartyMemberStatsChanged
 	lastStreamX        float32
 	lastStreamY        float32
 	lastStreamZ        float32
@@ -1240,6 +1253,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateContestedPvP(now)
 			s.updatePvPFlags(now)
 			s.updatePlayerRegeneration(ctx, now)
+			s.flushGroupMemberStats(ctx, now)
 			s.updateRestedBonuses(ctx, now)
 			s.processCreatureRespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)

@@ -471,36 +471,219 @@ func (s *Server) findGroupByID(id uint64) *groupState {
 	return s.groups[id]
 }
 
-func (s *Server) sendGroupPetCurrentPower(ownerGUID uint64, current uint32) {
-	if s == nil || ownerGUID == 0 {
-		return
+// groupMemberOutOfRange mirrors the recipient filter in
+// Group::UpdatePlayerOutOfRange (Group.cpp:1807-1819): a member receives the
+// stat delta when it is not in the same map instance as the changed player
+// (WorldObject::IsInMap compares map objects, so a different instance counts
+// as out-of-range) or lies beyond the viewer's sight range —
+// WorldObject::GetSightRange, 100 yards on continents (ObjectDefines.h:35).
+// Members in range already see the values through update packets.
+func groupMemberOutOfRange(owner, target *session) bool {
+	if target == nil || target.player == nil || owner == nil || owner.player == nil {
+		return false
 	}
-	owner := s.findSessionByGUID(ownerGUID)
-	if owner == nil || owner.player == nil || owner.groupID == 0 {
+	if target.player.Map != owner.player.Map || target.player.InstanceID != owner.player.InstanceID {
+		return true
+	}
+	return distance3D(target.player.X, target.player.Y, target.player.Z,
+		owner.player.X, owner.player.Y, owner.player.Z) > 100.0
+}
+
+// sendGroupStatsToOutOfRange mirrors Group::UpdatePlayerOutOfRange
+// (Group.cpp:1807): an already-built SMSG_PARTY_MEMBER_STATS delta goes to
+// every group member except the changed player that cannot see them.
+func (s *Server) sendGroupStatsToOutOfRange(owner *session, packet []byte) {
+	if s == nil || owner == nil || owner.groupID == 0 || len(packet) == 0 {
 		return
 	}
 	s.groupsMu.RLock()
 	group := s.groups[owner.groupID]
-	if group == nil {
-		s.groupsMu.RUnlock()
-		return
+	var members []groupMember
+	if group != nil {
+		members = append([]groupMember(nil), group.Members...)
 	}
-	members := append([]groupMember(nil), group.Members...)
 	s.groupsMu.RUnlock()
-	packet := protocol.NewBuffer(24)
-	packet.WritePackedGUID(ownerGUID)
-	packet.WriteU32(groupUpdateFlagPetCurPower)
-	packet.WriteU16(uint16(current))
 	for _, member := range members {
-		if member.GUID == ownerGUID {
+		if member.GUID == owner.playerGUID {
 			continue
 		}
 		target := s.findSessionByGUID(member.GUID)
-		if target == nil || target.player == nil || target.player.Map == owner.player.Map && distance3D(target.player.X, target.player.Y, target.player.Z, owner.player.X, owner.player.Y, owner.player.Z) <= 100.0 {
+		if !groupMemberOutOfRange(owner, target) {
 			continue
 		}
-		_ = target.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), packet.Bytes(), true)
+		_ = target.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), packet, true)
 	}
+}
+
+// currentGroupStatsChanged snapshots every value the SMSG_PARTY_MEMBER_STATS
+// delta packet can carry, sourced exactly like the FULL answer in
+// handleRequestPartyMemberStats (GroupHandler.cpp:920-1000).
+func (s *session) currentGroupStatsChanged(ctx context.Context) protocol.PartyMemberStatsChanged {
+	var cur protocol.PartyMemberStatsChanged
+	if s == nil || s.player == nil {
+		return cur
+	}
+	tp := s.player
+	cur.GUID = s.playerGUID
+	powerType := playerPowerType(tp)
+	cur.PowerType = powerType
+	if int(powerType) < len(tp.Powers) {
+		cur.CurrentPower = uint16(tp.Powers[powerType])
+		cur.MaximumPower = uint16(tp.MaxPowers[powerType])
+	}
+	cur.Health = tp.Health
+	cur.MaximumHealth = tp.MaxHealth
+	cur.Level = uint16(tp.Level)
+	cur.Zone = uint16(tp.Zone)
+	cur.X = uint16(tp.X)
+	cur.Y = uint16(tp.Y)
+	auraMask, auras := groupAuraEntries(s.loadedAuras(), s.playerGUID)
+	cur.AuraMask = auraMask
+	cur.Auras = auras
+	pet := s.groupPetStats(ctx, s)
+	cur.PetGUID = pet.guid
+	cur.PetName = pet.name
+	cur.PetModelID = pet.model
+	cur.PetHealth = pet.health
+	cur.PetMaximumHealth = pet.maxHealth
+	cur.PetPowerType = pet.powerType
+	cur.PetCurrentPower = pet.currentPower
+	cur.PetMaximumPower = pet.maxPower
+	cur.PetAuraMask = pet.auraMask
+	cur.PetAuras = pet.auras
+	if tp.VehicleGUID != 0 && s.server != nil {
+		if kit := s.server.getVehicleKit(tp.Map, tp.InstanceID, tp.VehicleGUID); kit != nil {
+			if _, seat, _ := kit.GetSeatForPassenger(s.playerGUID); seat != nil {
+				cur.VehicleSeatID = seat.ID
+			}
+		}
+	}
+	cur.Status = memberStatusOnline
+	if tp.Health == 0 {
+		if tp.PlayerFlags&playerFlagGhost != 0 {
+			cur.Status |= memberStatusGhost
+		} else {
+			cur.Status |= memberStatusDead
+		}
+	}
+	if tp.PlayerFlags&0x02 != 0 {
+		cur.Status |= memberStatusPvP
+	}
+	if tp.PVPFlags&0x04 != 0 {
+		cur.Status |= memberStatusPvPFFA
+	}
+	if tp.PlayerFlags&playerFlagAFK != 0 {
+		cur.Status |= memberStatusAFK
+	}
+	if tp.PlayerFlags&playerFlagDND != 0 {
+		cur.Status |= memberStatusDND
+	}
+	return cur
+}
+
+// groupStatsDeltaMask diffs the last pushed snapshot against the current
+// values and returns the SMSG_PARTY_MEMBER_STATS update mask. STATUS and ZONE
+// are deliberately excluded: no core C++ call site ever sets those flags
+// (only the FULL request path carries them).
+func groupStatsDeltaMask(prev, cur *protocol.PartyMemberStatsChanged) uint32 {
+	var mask uint32
+	if cur.Health != prev.Health {
+		mask |= protocol.GroupUpdateFlagCurrentHealth
+	}
+	if cur.MaximumHealth != prev.MaximumHealth {
+		mask |= protocol.GroupUpdateFlagMaximumHealth
+	}
+	if cur.PowerType != prev.PowerType {
+		mask |= protocol.GroupUpdateFlagPowerType
+	}
+	if cur.CurrentPower != prev.CurrentPower {
+		mask |= protocol.GroupUpdateFlagCurrentPower
+	}
+	if cur.MaximumPower != prev.MaximumPower {
+		mask |= protocol.GroupUpdateFlagMaximumPower
+	}
+	if cur.Level != prev.Level {
+		mask |= protocol.GroupUpdateFlagLevel
+	}
+	if cur.X != prev.X || cur.Y != prev.Y {
+		mask |= protocol.GroupUpdateFlagPosition
+	}
+	if cur.AuraMask != prev.AuraMask || cur.Auras != prev.Auras {
+		mask |= protocol.GroupUpdateFlagAuras
+	}
+	if cur.PetGUID != prev.PetGUID {
+		mask |= protocol.GroupUpdateFlagPetGUID
+	}
+	if cur.PetName != prev.PetName {
+		mask |= protocol.GroupUpdateFlagPetName
+	}
+	if cur.PetModelID != prev.PetModelID {
+		mask |= protocol.GroupUpdateFlagPetModelID
+	}
+	if cur.PetHealth != prev.PetHealth {
+		mask |= protocol.GroupUpdateFlagPetCurrentHealth
+	}
+	if cur.PetMaximumHealth != prev.PetMaximumHealth {
+		mask |= protocol.GroupUpdateFlagPetMaximumHealth
+	}
+	if cur.PetPowerType != prev.PetPowerType {
+		mask |= protocol.GroupUpdateFlagPetPowerType
+	}
+	if cur.PetCurrentPower != prev.PetCurrentPower {
+		mask |= protocol.GroupUpdateFlagPetCurrentPower
+	}
+	if cur.PetMaximumPower != prev.PetMaximumPower {
+		mask |= protocol.GroupUpdateFlagPetMaximumPower
+	}
+	if cur.PetAuraMask != prev.PetAuraMask || cur.PetAuras != prev.PetAuras {
+		mask |= protocol.GroupUpdateFlagPetAuras
+	}
+	if cur.VehicleSeatID != prev.VehicleSeatID {
+		mask |= protocol.GroupUpdateFlagVehicleSeat
+	}
+	return mask
+}
+
+// flushGroupMemberStats runs on the world tick and mirrors
+// Player::SendUpdateToOutOfRangeGroupMembers (Player.cpp:23054) on
+// Player::Update's 5s m_groupUpdateTimer (Player.cpp:1349-1354): each grouped
+// player pushes accumulated stat deltas to the group members that cannot see
+// them, then the mask resets.
+func (s *Server) flushGroupMemberStats(ctx context.Context, now time.Time) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	due := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess.playerLoaded && sess.player != nil && sess.groupID != 0 && !now.Before(sess.groupStatsDue) {
+			due = append(due, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range due {
+		sess.flushGroupMemberStatsOnce(ctx, now)
+	}
+}
+
+func (s *session) flushGroupMemberStatsOnce(ctx context.Context, now time.Time) {
+	s.groupStatsDue = now.Add(5 * time.Second)
+	if s.server == nil || s.player == nil {
+		return
+	}
+	cur := s.currentGroupStatsChanged(ctx)
+	if !s.groupStatsInit {
+		s.groupStatsSnapshot = cur
+		s.groupStatsInit = true
+		return
+	}
+	mask := groupStatsDeltaMask(&s.groupStatsSnapshot, &cur)
+	if mask == 0 {
+		return
+	}
+	s.groupStatsSnapshot = cur
+	cur.UpdateFlags = mask
+	s.server.sendGroupStatsToOutOfRange(s, protocol.BuildPartyMemberStatsChanged(cur))
 }
 
 func (s *Server) findGroupByDBID(id uint64) *groupState {
@@ -828,6 +1011,16 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 	}
 
 	srv.broadcastGroupList(g)
+	// Group::AddMember (Group.cpp:504-505): the joiner seeds GROUP_UPDATE_FULL
+	// on the update mask and pushes it to out-of-range members immediately —
+	// party frames populate before the first 5s flush.
+	now := time.Now()
+	s.groupStatsSnapshot = s.currentGroupStatsChanged(ctx)
+	s.groupStatsInit = true
+	s.groupStatsDue = now.Add(5 * time.Second)
+	full := s.groupStatsSnapshot
+	full.UpdateFlags = protocol.GroupUpdateFullMask
+	srv.sendGroupStatsToOutOfRange(s, protocol.BuildPartyMemberStatsChanged(full))
 	// Eluna GROUP_EVENT_ON_MEMBER_ADD (1): C++ Group::AddMember fires
 	// OnGroupAddMember after SendUpdate (Group.cpp:477). The leader joined via
 	// AddLeaderInvite at invite time and never passes through AddMember, so

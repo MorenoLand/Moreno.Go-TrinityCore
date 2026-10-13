@@ -543,21 +543,20 @@ func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 	}
 	for _, update := range updates {
 		s.broadcastCreatureValuesUpdateInInstance(update.mapID, update.instanceID, update.guid, update.fields)
-		changedPower := false
 		for powerType := uint32(0); powerType < 7; powerType++ {
 			power, ok := update.fields[unitFieldPower1+int(powerType)]
 			if !ok {
 				continue
 			}
-			changedPower = true
 			packet := protocol.NewBuffer(packedGUIDSize(update.guid) + 5)
 			packet.WritePackedGUID(update.guid)
 			packet.WriteU8(uint8(powerType))
 			packet.WriteU32(power)
 			s.broadcastToInstance(update.mapID, update.instanceID, uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), nil)
 		}
-		if changedPower {
-			s.sendGroupPetCurrentPower(update.ownerGUID, update.currentPower)
-		}
+		// Pet power for the party frame rides the 5s SMSG_PARTY_MEMBER_STATS
+		// delta flush (flushGroupMemberStats, mirroring Unit::SetPower's
+		// GROUP_UPDATE_FLAG_PET_CUR_POWER arm on the owner's mask,
+		// Unit.cpp:9645) — C++ never pushes it immediately.
 	}
 }

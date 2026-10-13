@@ -136,3 +136,137 @@ func BuildPartyMemberStatsFull(value PartyMemberStatsFull) []byte {
 	}
 	return packet.Bytes()
 }
+
+// GroupUpdateFullMask mirrors GROUP_UPDATE_FULL (Group.h:120): every known
+// delta flag except VEHICLE_SEAT, pushed on group join (Group.cpp:504).
+const GroupUpdateFullMask uint32 = 0x0007FFFF
+
+// PartyMemberStatsChanged carries the current values backing one
+// SMSG_PARTY_MEMBER_STATS delta packet. UpdateFlags selects which arms the
+// builder writes; the layout mirrors
+// WorldSession::BuildPartyMemberStatsChangedPacket (GroupHandler.cpp:734-893)
+// field-for-field, including the power-type fold-ins and the player/pet aura
+// arm asymmetry (player auras write a literal uint8(1), pet auras the real
+// flags).
+type PartyMemberStatsChanged struct {
+	GUID             uint64
+	UpdateFlags      uint32
+	Status           uint16
+	Health           uint32
+	MaximumHealth    uint32
+	PowerType        uint8
+	CurrentPower     uint16
+	MaximumPower     uint16
+	Level            uint16
+	Zone             uint16
+	X                uint16
+	Y                uint16
+	AuraMask         uint64
+	Auras            [64]PartyMemberAura
+	PetGUID          uint64
+	PetName          string
+	PetModelID       uint16
+	PetHealth        uint32
+	PetMaximumHealth uint32
+	PetPowerType     uint8
+	PetCurrentPower  uint16
+	PetMaximumPower  uint16
+	PetAuraMask      uint64
+	PetAuras         [64]PartyMemberAura
+	VehicleSeatID    uint32
+}
+
+func BuildPartyMemberStatsChanged(value PartyMemberStatsChanged) []byte {
+	mask := value.UpdateFlags
+	if mask&GroupUpdateFlagPowerType != 0 {
+		mask |= GroupUpdateFlagCurrentPower | GroupUpdateFlagMaximumPower
+	}
+	if mask&GroupUpdateFlagPetPowerType != 0 {
+		mask |= GroupUpdateFlagPetCurrentPower | GroupUpdateFlagPetMaximumPower
+	}
+	packet := NewBuffer(768)
+	packet.WritePackedGUID(value.GUID)
+	packet.WriteU32(mask)
+	if mask&GroupUpdateFlagStatus != 0 {
+		packet.WriteU16(value.Status)
+	}
+	if mask&GroupUpdateFlagCurrentHealth != 0 {
+		packet.WriteU32(value.Health)
+	}
+	if mask&GroupUpdateFlagMaximumHealth != 0 {
+		packet.WriteU32(value.MaximumHealth)
+	}
+	if mask&GroupUpdateFlagPowerType != 0 {
+		packet.WriteU8(value.PowerType)
+	}
+	if mask&GroupUpdateFlagCurrentPower != 0 {
+		packet.WriteU16(value.CurrentPower)
+	}
+	if mask&GroupUpdateFlagMaximumPower != 0 {
+		packet.WriteU16(value.MaximumPower)
+	}
+	if mask&GroupUpdateFlagLevel != 0 {
+		packet.WriteU16(value.Level)
+	}
+	if mask&GroupUpdateFlagZone != 0 {
+		packet.WriteU16(value.Zone)
+	}
+	if mask&GroupUpdateFlagPosition != 0 {
+		packet.WriteU16(value.X)
+		packet.WriteU16(value.Y)
+	}
+	if mask&GroupUpdateFlagAuras != 0 {
+		packet.WriteU64(value.AuraMask)
+		for slot, aura := range value.Auras {
+			if value.AuraMask&(uint64(1)<<uint(slot)) != 0 {
+				packet.WriteU32(aura.SpellID)
+				packet.WriteU8(1)
+			}
+		}
+	}
+	if mask&GroupUpdateFlagPetGUID != 0 {
+		packet.WriteU64(value.PetGUID)
+	}
+	if mask&GroupUpdateFlagPetName != 0 {
+		if value.PetGUID != 0 {
+			packet.WriteCString(value.PetName)
+		} else {
+			packet.WriteU8(0)
+		}
+	}
+	if mask&GroupUpdateFlagPetModelID != 0 {
+		packet.WriteU16(value.PetModelID)
+	}
+	if mask&GroupUpdateFlagPetCurrentHealth != 0 {
+		packet.WriteU32(value.PetHealth)
+	}
+	if mask&GroupUpdateFlagPetMaximumHealth != 0 {
+		packet.WriteU32(value.PetMaximumHealth)
+	}
+	if mask&GroupUpdateFlagPetPowerType != 0 {
+		packet.WriteU8(value.PetPowerType)
+	}
+	if mask&GroupUpdateFlagPetCurrentPower != 0 {
+		packet.WriteU16(value.PetCurrentPower)
+	}
+	if mask&GroupUpdateFlagPetMaximumPower != 0 {
+		packet.WriteU16(value.PetMaximumPower)
+	}
+	if mask&GroupUpdateFlagPetAuras != 0 {
+		if value.PetGUID != 0 {
+			packet.WriteU64(value.PetAuraMask)
+			for slot, aura := range value.PetAuras {
+				if value.PetAuraMask&(uint64(1)<<uint(slot)) != 0 {
+					packet.WriteU32(aura.SpellID)
+					packet.WriteU8(aura.Flags)
+				}
+			}
+		} else {
+			packet.WriteU64(0)
+		}
+	}
+	if mask&GroupUpdateFlagVehicleSeat != 0 {
+		packet.WriteU32(value.VehicleSeatID)
+	}
+	return packet.Bytes()
+}
