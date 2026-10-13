@@ -163,6 +163,9 @@ local function majordomoEnterCombat(event, creature, target)
     schedule(guid, "teleport", 20000, function()
         onTeleport(creature, guid)
     end)
+    schedule(guid, "aegis", 1000, function()
+        onAegisPump(creature, guid)
+    end)
 end
 
 -- C++ KilledUnit: 25% Talk(SAY_SLAY) (rand32() % 100 < 25,
@@ -173,20 +176,19 @@ local function majordomoTargetDied(event, creature, victim)
     end
 end
 
--- C++ UpdateAI: current (pre-damage) health strictly below 50%
--- (HealthBelowPct(50) — the engine's event 9 fires before damage is
--- applied, matching C++ Unit::DealDamage) -> triggered self-cast
--- Aegis of Ragnaros 20620 (C++-exact — no once-guard; C++ re-casts
--- every UpdateAI tick below 50%, so the damage hook re-casts per
--- damage event below 50%, geddon convention).
-local function majordomoDamageTaken(event, creature, attacker, damage)
+-- C++ UpdateAI: HealthBelowPct(50) -> triggered self-cast Aegis of
+-- Ragnaros 20620 — checked every tick (no once-guard, no DamageTaken
+-- hook in C++). Modeled as a 1s gated pump (geddon convention);
+-- strictly below the floored threshold (ironaya convention).
+local function onAegisPump(creature, guid)
     local maxHealth = creature:GetMaxHealth()
-    if maxHealth == 0 then
-        return
-    end
-    if creature:GetHealth() * 100 / maxHealth < 50 then
+    if maxHealth ~= 0
+            and creature:GetHealth() < math.floor(maxHealth * 50 / 100) then
         creature:CastSpell(creature, SPELL_AEGIS_OF_RAGNAROS, true)
     end
+    schedule(guid, "aegis", 1000, function()
+        onAegisPump(creature, guid)
+    end)
 end
 
 local function majordomoResetState(guid)
@@ -212,6 +214,11 @@ end
 -- bridge. The hello menu itself is DB-side (menu 4108); only the
 -- select arm is modeled.
 local function majordomoGossipSelect(event, player, creature, sender, action)
+    -- C++ OnGossipSelect requires the challenge option (gossipListId 0);
+    -- any other option does nothing.
+    if action ~= 0 then
+        return
+    end
     player:GossipClearMenu()
     player:GossipComplete()
     local guid = creature:GetGUID()
@@ -225,6 +232,5 @@ RegisterCreatureEvent(ENTRY_MAJORDOMO_EXECUTUS, 1, majordomoEnterCombat)
 RegisterCreatureEvent(ENTRY_MAJORDOMO_EXECUTUS, 2, majordomoLeaveCombat)
 RegisterCreatureEvent(ENTRY_MAJORDOMO_EXECUTUS, 3, majordomoTargetDied)
 RegisterCreatureEvent(ENTRY_MAJORDOMO_EXECUTUS, 4, majordomoDied)
-RegisterCreatureEvent(ENTRY_MAJORDOMO_EXECUTUS, 9, majordomoDamageTaken)
 RegisterCreatureEvent(ENTRY_MAJORDOMO_EXECUTUS, 23, majordomoReset)
 RegisterCreatureGossipEvent(ENTRY_MAJORDOMO_EXECUTUS, 2, majordomoGossipSelect)

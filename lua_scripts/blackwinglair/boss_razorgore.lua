@@ -22,7 +22,7 @@
 -- instance-script/DoAction bridge it can never fire, so secondPhase
 -- stays false: phase-two timers (cleave 22540 15s then {7s,10s} /
 -- warstomp 24375 35s then {15s,25s} / fireball volley 22425 7s then
--- {12s,15s} / conflagration 23023 12s then 30s, all triggered
+-- {12s,15s} / conflagration 23023 12s then 30s, all non-triggered
 -- DoCastVictim with unconditional re-arms) are modeled as code but
 -- unreachable, and Razorgore stays unkillable doing melee only — which
 -- is exactly what C++ phase one does in combat. Reset cancels timers
@@ -75,44 +75,44 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ EVENT_CLEAVE: triggered DoCastVictim(22540); re-arm {7s,10s}.
+-- C++ EVENT_CLEAVE: non-triggered DoCastVictim(22540); re-arm {7s,10s}.
 local function onCleave(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_CLEAVE, true)
+        creature:CastSpell(victim, SPELL_CLEAVE)
     end
     schedule(guid, "cleave", math.random(7000, 10000), function()
         onCleave(creature, guid)
     end)
 end
 
--- C++ EVENT_STOMP: triggered DoCastVictim(24375); re-arm {15s,25s}.
+-- C++ EVENT_STOMP: non-triggered DoCastVictim(24375); re-arm {15s,25s}.
 local function onWarstomp(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_WARSTOMP, true)
+        creature:CastSpell(victim, SPELL_WARSTOMP)
     end
     schedule(guid, "stomp", math.random(15000, 25000), function()
         onWarstomp(creature, guid)
     end)
 end
 
--- C++ EVENT_FIREBALL: triggered DoCastVictim(22425); re-arm {12s,15s}.
+-- C++ EVENT_FIREBALL: non-triggered DoCastVictim(22425); re-arm {12s,15s}.
 local function onFireballVolley(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_FIREBALLVOLLEY, true)
+        creature:CastSpell(victim, SPELL_FIREBALLVOLLEY)
     end
     schedule(guid, "fireball", math.random(12000, 15000), function()
         onFireballVolley(creature, guid)
     end)
 end
 
--- C++ EVENT_CONFLAGRATION: triggered DoCastVictim(23023); re-arm 30s.
+-- C++ EVENT_CONFLAGRATION: non-triggered DoCastVictim(23023); re-arm 30s.
 local function onConflagration(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_CONFLAGRATION, true)
+        creature:CastSpell(victim, SPELL_CONFLAGRATION)
     end
     schedule(guid, "conflag", 30000, function()
         onConflagration(creature, guid)

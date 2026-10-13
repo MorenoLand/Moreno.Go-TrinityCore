@@ -128,22 +128,26 @@ local function baronGeddonEnterCombat(event, creature, target)
     schedule(guid, "livingbomb", 35000, function()
         onLivingBomb(creature, guid)
     end)
+    schedule(guid, "armageddon", 1000, function()
+        onArmageddonPump(creature, guid)
+    end)
 end
 
 -- C++ UpdateAI: !HealthAbovePct(2) -> InterruptNonMeleeSpells (no
--- bridge), Talk(EMOTE_SERVICE), non-triggered DoCast(me, 20478),
--- return. Modeled on the pre-damage hook (moroes/chromaggus
--- convention): post-damage health strictly below 2%, no once-guard
--- (C++-exact).
-local function baronGeddonDamageTaken(event, creature, attacker, damage)
+-- bridge), non-triggered DoCast(me, 20478), Talk(EMOTE_SERVICE),
+-- return — checked every tick (no once-guard, no DamageTaken hook in
+-- C++). Modeled as a 1s gated pump (phalanx convention): !HealthAbovePct(2)
+-- is health <= floor(2M/100), so it fires AT exactly 2%.
+local function onArmageddonPump(creature, guid)
     local maxHealth = creature:GetMaxHealth()
-    if maxHealth == 0 then
-        return
-    end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 2 then
-        creature:Talk(EMOTE_SERVICE)
+    if maxHealth ~= 0
+            and creature:GetHealth() <= math.floor(maxHealth * 2 / 100) then
         creature:CastSpell(creature, SPELL_ARMAGEDDON)
+        creature:Talk(EMOTE_SERVICE)
     end
+    schedule(guid, "armageddon", 1000, function()
+        onArmageddonPump(creature, guid)
+    end)
 end
 
 local function baronGeddonResetState(guid)
@@ -165,5 +169,4 @@ end
 RegisterCreatureEvent(ENTRY_BARON_GEDDON, 1, baronGeddonEnterCombat)
 RegisterCreatureEvent(ENTRY_BARON_GEDDON, 2, baronGeddonLeaveCombat)
 RegisterCreatureEvent(ENTRY_BARON_GEDDON, 4, baronGeddonDied)
-RegisterCreatureEvent(ENTRY_BARON_GEDDON, 9, baronGeddonDamageTaken)
 RegisterCreatureEvent(ENTRY_BARON_GEDDON, 23, baronGeddonReset)

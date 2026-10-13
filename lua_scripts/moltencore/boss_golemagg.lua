@@ -143,11 +143,12 @@ local function golemaggReset(event, creature)
 end
 
 -- C++ DamageTaken: current (pre-damage) health strictly below 10%
--- (HealthBelowPct(10) — the engine's event 9 fires before damage is
--- applied, matching C++ Unit::DealDamage) and not already enraged ->
--- triggered self-cast enrage 19953 and arm the earthquake cycle
--- (C++-exact; the C++ HasAura(SPELL_ENRAGE) once-guard is kept as
--- per-GUID Lua state — no HasAura bridge).
+-- (HealthBelowPct(10) = GetHealth() < floor(max*10/100) — the engine's
+-- event 9 fires before damage is applied, matching C++ Unit::DealDamage)
+-- and not already enraged -> triggered self-cast enrage 19953 and arm
+-- the earthquake cycle (C++-exact; the C++ HasAura(SPELL_ENRAGE)
+-- once-guard is kept as per-GUID Lua state — no HasAura bridge, so a
+-- dispelled enrage never re-casts: accepted edge).
 local function golemaggDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if enraged[guid] then
@@ -157,7 +158,7 @@ local function golemaggDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() * 100 / maxHealth < 10 then
+    if creature:GetHealth() < math.floor(maxHealth * 10 / 100) then
         enraged[guid] = true
         creature:CastSpell(creature, SPELL_ENRAGE, true)
         schedule(guid, "earthquake", 3000, function()

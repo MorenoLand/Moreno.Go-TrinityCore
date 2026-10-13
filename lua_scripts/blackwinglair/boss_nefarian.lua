@@ -423,8 +423,11 @@ local function nefarianDamageTaken(event, creature, attacker, damage)
         return
     end
     -- C++ HealthBelowPct(20): strict-< against the floored integer
-    -- threshold (the old float < 20 fired up to 1 HP early).
-    if creature:GetHealth() - damage < math.floor(maxHealth * 20 / 100) then
+    -- threshold (the old float < 20 fired up to 1 HP early). The check
+    -- lives in UpdateAI, which never runs on the killing blow, so the
+    -- killing hit never triggers phase 3.
+    local postDamage = creature:GetHealth() - damage
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 20 / 100) then
         st.phase3 = true
         creature:Talk(SAY_RAISE_SKELETONS)
     end

@@ -13,14 +13,17 @@
 -- rolls urand(0, 19) picking an ordered pair of distinct breaths from
 -- the five (incinerate 23308, timelapse 23310, corrosive acid 23313,
 -- ignite flesh 23315, frost burn 23187) and re-rolls nothing on Reset
--- — the Lua state keeps the pair per GUID across wipes and clears it
--- only on death, matching the C++ AI lifetime. OnEnterCombat: arm
+-- — the Lua state keeps the pair per GUID for the AI's whole life:
+-- it survives wipes AND death (C++-exact — the constructor rolls the
+-- pair once; Creature::Respawn never recreates the AI, only Reset).
+-- OnEnterCombat: arm
 -- shimmer 0s then every 45s — remove the old vulnerability aura,
 -- non-triggered self-cast one of 22277/22278/22279/22280/22281,
 -- Talk(EMOTE_SHIMMER=1) / breath1 30s then every 60s,
 -- non-triggered DoCastVictim / breath2 60s then every 60s,
 -- non-triggered DoCastVictim / affliction 10s then every 10s — each
--- alive player in the instance gets a triggered cast of one random
+-- player in the instance (C++ GetPlayers() has no alive gate) gets a
+-- triggered cast of one random
 -- brood affliction (23153/23154/23155/23170/23169), and a player
 -- carrying all five gets non-triggered 23174 chromatic mutation
 -- (C++-exact; the bridge applies the aura casts, netherspite
@@ -30,9 +33,9 @@
 -- pre-damage hook as post-damage health strictly below 20% (moroes
 -- convention), once, non-triggered self-cast 28747, damage untouched.
 -- Nil-victim ticks cast nothing but keep the schedule (jeklik
--- convention). OnDied/OnLeaveCombat(2)/OnReset(23): cancel timers,
--- clear the enrage flag; the breath pair survives wipes (C++-exact)
--- and clears only on death.
+-- convention). OnDied/OnLeaveCombat(2)/OnReset(23): cancel timers. Reset also
+-- clears the enrage flag and current vulnerability (C++ Initialize);
+-- the breath pair is never cleared (C++-exact).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no UNIT_STATE bridge — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
@@ -155,8 +158,7 @@ local function alivePlayersInInstance(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
     for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
             found[#found + 1] = p
         end
     end
@@ -201,9 +203,9 @@ local function onBreath2(creature, guid)
     end)
 end
 
--- C++ EVENT_AFFLICTION: each alive player in the instance gets a
--- triggered cast of one random affliction; a player carrying all five
--- gets non-triggered 23174; re-arm 10s.
+-- C++ EVENT_AFFLICTION: each player in the instance (C++-exact: no
+-- alive gate) gets a triggered cast of one random affliction; a player
+-- carrying all five gets non-triggered 23174; re-arm 10s.
 local function onAffliction(creature, guid)
     for _, p in ipairs(alivePlayersInInstance(creature)) do
         creature:CastSpell(p, AFFLICTIONS[math.random(#AFFLICTIONS)], true)
@@ -252,7 +254,9 @@ end
 
 -- C++ UpdateAI sub-20% enrage: !Enraged && HealthBelowPct(20). The
 -- damage hook fires pre-application, so the post-damage health decides
--- (moroes convention); strictly below 20 like C++; damage untouched.
+-- (moroes convention). HealthBelowPct(20) is strict-< against the
+-- floored integer threshold (ironaya convention); UpdateAI never runs
+-- on the killing blow, so post-damage health 0 never fires it.
 local function chromaggusDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = chromaggusState[guid]
@@ -263,15 +267,11 @@ local function chromaggusDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 20 then
+    local postDamage = creature:GetHealth() - damage
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 20 / 100) then
         creature:CastSpell(creature, SPELL_ENRAGE)
         st.enraged = true
     end
-end
-
-local function chromaggusClear(guid)
-    cancelTimers(guid)
-    chromaggusState[guid] = nil
 end
 
 local function chromaggusLeaveCombat(event, creature)
@@ -279,7 +279,8 @@ local function chromaggusLeaveCombat(event, creature)
 end
 
 local function chromaggusDied(event, creature, killer)
-    chromaggusClear(creature:GetGUID())
+    -- C++ JustDied has no AI override: timers stop, state untouched.
+    cancelTimers(creature:GetGUID())
 end
 
 local function chromaggusReset(event, creature)

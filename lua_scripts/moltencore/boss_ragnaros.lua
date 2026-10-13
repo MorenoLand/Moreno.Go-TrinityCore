@@ -31,13 +31,15 @@
 -- clear per-GUID state (C++ Reset re-initializes the AI state).
 -- The submerge arm (C++-exact for the modeled arms): Talk(SAY_
 -- REINFORCEMENTS1) the first time and summon-mark state, Talk(SAY_
--- REINFORCEMENTS2) on later submerges; _isBanished is set and the
--- 90s _emergeTimer armed — while banished the per-tick handlers
--- cast nothing but keep the schedule (C++ returns early from
--- UpdateAI while banished, freezing the event queue; the port keeps
--- the 90s emerge arm). Emerge: flip _isBanished back (the C++ Talk/
--- faction/emote/flag/AttackStart arms have no bridges — see
--- deviations). The 8-son-of-flame summons and the DATA_RAGNAROS_ADDS
+-- REINFORCEMENTS2) on later submerges; the six combat timers are
+-- cancelled and the 90s emerge arm is scheduled (C++ returns early
+-- from UpdateAI while banished, freezing the event queue — the port
+-- models the freeze as cancel + re-arm with re-arm delays on emerge).
+-- Emerge: re-arm the combat timers (eruption {20s,45s}, wrath 25s,
+-- hand 20s, lava burst 10s, elemental fire {10s,14s}, magma blast
+-- 2500ms); the C++ Talk/faction/emote/flag/AttackStart arms have no
+-- bridges — see deviations. The 8-son-of-flame summons and the
+-- DATA_RAGNAROS_ADDS
 -- counter arms have no bridges — they are never spawned, so the
 -- C++ early-emerge condition (adds > 8) can never fire and emerge
 -- happens on the 90s timer only.
@@ -114,26 +116,18 @@ end
 local function getState(guid)
     local s = state[guid]
     if not s then
-        s = { hasYelledMagmaBurst = false, hasSubmergedOnce = false,
-              isBanished = false }
+        s = { hasYelledMagmaBurst = false, hasSubmergedOnce = false }
         state[guid] = s
     end
     return s
 end
 
-local function isBanished(guid)
-    local s = state[guid]
-    return s and s.isBanished
-end
-
 -- C++ EVENT_ERUPTION: non-triggered DoCastVictim(17731); re-arm
 -- {20s,45s}.
 local function onEruption(creature, guid)
-    if not isBanished(guid) then
-        local victim = creature:GetVictim()
-        if victim then
-            creature:CastSpell(victim, SPELL_ERRUPTION)
-        end
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_ERRUPTION)
     end
     schedule(guid, "eruption", 20000 + math.random(0, 25000), function()
         onEruption(creature, guid)
@@ -143,14 +137,14 @@ end
 -- C++ EVENT_WRATH_OF_RAGNAROS: non-triggered DoCastVictim(20566);
 -- 50% Talk(SAY_WRATH); re-arm 25s.
 local function onWrath(creature, guid)
-    if not isBanished(guid) then
-        local victim = creature:GetVictim()
-        if victim then
-            creature:CastSpell(victim, SPELL_WRATH_OF_RAGNAROS)
-            if math.random(0, 1) == 1 then
-                creature:Talk(SAY_WRATH)
-            end
-        end
+    -- C++: DoCastVictim first, then the 50% Talk roll — the Talk is
+    -- NOT victim-gated.
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_WRATH_OF_RAGNAROS)
+    end
+    if math.random(0, 1) == 1 then
+        creature:Talk(SAY_WRATH)
     end
     schedule(guid, "wrath", 25000, function()
         onWrath(creature, guid)
@@ -160,11 +154,9 @@ end
 -- C++ EVENT_HAND_OF_RAGNAROS: non-triggered DoCast(me, 19780);
 -- 50% Talk(SAY_HAND); re-arm 20s.
 local function onHand(creature, guid)
-    if not isBanished(guid) then
-        creature:CastSpell(creature, SPELL_HAND_OF_RAGNAROS)
-        if math.random(0, 1) == 1 then
-            creature:Talk(SAY_HAND)
-        end
+    creature:CastSpell(creature, SPELL_HAND_OF_RAGNAROS)
+    if math.random(0, 1) == 1 then
+        creature:Talk(SAY_HAND)
     end
     schedule(guid, "hand", 20000, function()
         onHand(creature, guid)
@@ -174,11 +166,9 @@ end
 -- C++ EVENT_LAVA_BURST: non-triggered DoCastVictim(21158); re-arm
 -- 10s.
 local function onLavaBurst(creature, guid)
-    if not isBanished(guid) then
-        local victim = creature:GetVictim()
-        if victim then
-            creature:CastSpell(victim, SPELL_LAVA_BURST)
-        end
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_LAVA_BURST)
     end
     schedule(guid, "lavaburst", 10000, function()
         onLavaBurst(creature, guid)
@@ -188,11 +178,9 @@ end
 -- C++ EVENT_ELEMENTAL_FIRE: non-triggered DoCastVictim(20564);
 -- re-arm {10s,14s}.
 local function onElementalFire(creature, guid)
-    if not isBanished(guid) then
-        local victim = creature:GetVictim()
-        if victim then
-            creature:CastSpell(victim, SPELL_ELEMENTAL_FIRE)
-        end
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_ELEMENTAL_FIRE)
     end
     schedule(guid, "elementalfire", 10000 + math.random(0, 4000), function()
         onElementalFire(creature, guid)
@@ -205,14 +193,12 @@ end
 -- cast fires unconditionally and the Talk fires on the first tick.
 local function onMagmaBlast(creature, guid)
     local s = getState(guid)
-    if not s.isBanished then
-        local victim = creature:GetVictim()
-        if victim then
-            creature:CastSpell(victim, SPELL_MAGMA_BLAST)
-            if not s.hasYelledMagmaBurst then
-                creature:Talk(SAY_MAGMABURST)
-                s.hasYelledMagmaBurst = true
-            end
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_MAGMA_BLAST)
+        if not s.hasYelledMagmaBurst then
+            creature:Talk(SAY_MAGMABURST)
+            s.hasYelledMagmaBurst = true
         end
     end
     schedule(guid, "magmablast", 2500, function()
@@ -220,34 +206,66 @@ local function onMagmaBlast(creature, guid)
     end)
 end
 
+-- C++: while banished, UpdateAI returns before events.Update — the
+-- event map freezes. Modeled as: submerge cancels the six combat
+-- timers, emerge re-arms them with the C++ re-arm (not init) delays.
+local function cancelCombatTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, key in ipairs({ "eruption", "wrath", "hand",
+                "lavaburst", "elementalfire", "magmablast" }) do
+            if per[key] then
+                RemoveEventById(per[key])
+                per[key] = nil
+            end
+        end
+    end
+end
+
 -- C++ UpdateAI banished arm: _emergeTimer 90s -> flip _isBanished
 -- back. The C++ faction/emote/flag/AttackStart arms have no bridges;
 -- the sons-of-flame counter never advances (no summon bridge), so
 -- the >8-adds early-emerge arm is unmodeled.
 local function onEmerge(creature, guid)
-    local s = getState(guid)
-    s.isBanished = false
+    getState(guid)
+    schedule(guid, "eruption", 20000 + math.random(0, 25000), function()
+        onEruption(creature, guid)
+    end)
+    schedule(guid, "wrath", 25000, function()
+        onWrath(creature, guid)
+    end)
+    schedule(guid, "hand", 20000, function()
+        onHand(creature, guid)
+    end)
+    schedule(guid, "lavaburst", 10000, function()
+        onLavaBurst(creature, guid)
+    end)
+    schedule(guid, "elementalfire", 10000 + math.random(0, 4000), function()
+        onElementalFire(creature, guid)
+    end)
+    schedule(guid, "magmablast", 2500, function()
+        onMagmaBlast(creature, guid)
+    end)
 end
 
--- C++ EVENT_SUBMERGE (only when not already banished): Talk(SAY_
+-- C++ EVENT_SUBMERGE (only when not already banished — the 3min re-arm
+-- outlives the 90s banish, so it can't fire twice): Talk(SAY_
 -- REINFORCEMENTS1) the first time / SAY_REINFORCEMENTS2 later;
--- _isBanished set, _emergeTimer 90s armed; re-arm 3min. The summon
--- (8 sons of flame on random targets), threat reset, faction/flag/
--- emote/react/immobilize arms have no bridges.
+-- combat timers cancelled, _emergeTimer 90s armed; re-arm 3min. The
+-- summon (8 sons of flame), threat reset, faction/flag/emote/react/
+-- immobilize arms have no bridges.
 local function onSubmerge(creature, guid)
     local s = getState(guid)
-    if not s.isBanished then
-        if not s.hasSubmergedOnce then
-            creature:Talk(SAY_REINFORCEMENTS1)
-            s.hasSubmergedOnce = true
-        else
-            creature:Talk(SAY_REINFORCEMENTS2)
-        end
-        s.isBanished = true
-        schedule(guid, "emerge", 90000, function()
-            onEmerge(creature, guid)
-        end)
+    if not s.hasSubmergedOnce then
+        creature:Talk(SAY_REINFORCEMENTS1)
+        s.hasSubmergedOnce = true
+    else
+        creature:Talk(SAY_REINFORCEMENTS2)
     end
+    cancelCombatTimers(guid)
+    schedule(guid, "emerge", 90000, function()
+        onEmerge(creature, guid)
+    end)
     schedule(guid, "submerge", 180000, function()
         onSubmerge(creature, guid)
     end)
@@ -256,8 +274,7 @@ end
 local function ragnarosEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    state[guid] = { hasYelledMagmaBurst = false, hasSubmergedOnce = false,
-                    isBanished = false }
+    state[guid] = { hasYelledMagmaBurst = false, hasSubmergedOnce = false }
     schedule(guid, "eruption", 15000, function()
         onEruption(creature, guid)
     end)

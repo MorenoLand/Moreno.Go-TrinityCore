@@ -18,9 +18,10 @@
 -- the post-event casting check have no UNIT_STATE bridge — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the DATA_EBONROC bookkeeping arms skipped); the wingbuffet-arm
--- GetThreat + ModifyThreatByPercent(victim, -75) has no bridge (no
--- threat model) — the cast still lands and the 30s re-arm is kept.
+-- the DATA_EBONROC bookkeeping arms skipped); the wingbuffet arm is C++-exact — ebonroc has NO
+-- threat arm (the -75% ModifyThreatByPercent belongs to
+-- firemaw/flamegor's arm, not ebonroc's); the cast lands and the 30s
+-- re-arm is kept.
 
 local ENTRY_EBONROC = 14601
 
@@ -64,8 +65,8 @@ local function onShadowflame(creature, guid)
     end)
 end
 
--- C++ EVENT_WINGBUFFET: non-triggered DoCastVictim(23339) + -75%
--- threat on the victim (threat arm has no bridge); re-arm 30s.
+-- C++ EVENT_WINGBUFFET: non-triggered DoCastVictim(23339) (C++-exact —
+-- no threat arm in ebonroc's AI); re-arm 30s.
 local function onWingBuffet(creature, guid)
     local victim = creature:GetVictim()
     if victim then
