@@ -199,6 +199,13 @@ func (s *Server) onPetCommandFollow(mapID, instanceID uint32, petGUID uint64) {
 }
 
 // onPetCommandStay handles ordering the pet to stay at its current position.
+// PetHandler.cpp HandlePetActionHelper COMMAND_STAY:151-162 clears the
+// motion and sets the stay command state but does NOT stop the attack — the
+// pet keeps its victim and keeps swinging while the victim stays in melee
+// range (PetAI::UpdateAI:84-89, bridged in petCombatPursuitAndAttack's
+// stay arm). Go used to clear TargetGUID/InCombat/threat here, which
+// disengaged the pet outright; the victim now survives until NeedToStop or
+// death clears it.
 func (s *Server) onPetCommandStay(mapID, instanceID uint32, petGUID uint64) {
 	if s == nil || petGUID == 0 {
 		return
@@ -206,13 +213,8 @@ func (s *Server) onPetCommandStay(mapID, instanceID uint32, petGUID uint64) {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
-		motion.TargetGUID = 0
-		motion.InCombat = false
 		motion.PetCommand = PetCommandStay
 		motion.Moving = false
-		if motion.ThreatMgr != nil {
-			motion.ThreatMgr.ClearThreat()
-		}
 	}
 }
 

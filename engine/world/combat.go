@@ -406,6 +406,55 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// ownerAttackTargetValid mirrors the owner->IsValidAttackTarget(TargetUnit)
+// gate on the pet attack command (PetHandler.cpp HandlePetActionHelper
+// COMMAND_ATTACK:203-207): the order drops silently unless the owner — the
+// session player for every player-controlled pet — passes
+// WorldObject::IsValidAttackTarget (bySpell=null, Object.cpp:2930+) on the
+// named target. It carries the same static arms as the CMSG_ATTACKSWING
+// twin (GM/invisibility, dead/ghost, NON_ATTACKABLE bundle, taxi/
+// UNIT_STATE_UNATTACKABLE, cross-map) plus the arms the swing path lacks:
+// the self-target leg (Object.cpp:2938, this==target) and the
+// "can't attack friendly targets" verdict (Object.cpp:3031, via the
+// explicit-enemy faction gate with the session player as attacker).
+// No-model deltas: CanSeeOrDetect visibility, the IsImmuneToNPC/PC legs,
+// and TREAT_AS_RAID_UNIT. For charmed wild creatures C++ skips the gate
+// (GetOwner is null); Go applies the owner verdict, a documented
+// over-strictness on that path.
+func (s *session) ownerAttackTargetValid(ctx context.Context, targetGUID uint64) bool {
+	if s == nil || s.player == nil || targetGUID == 0 || targetGUID == s.playerGUID {
+		return false
+	}
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok {
+		// PetHandler.cpp:210-213: an unresolvable unit target drops the
+		// order before any engage or AI reaction (ObjectAccessor::GetUnit
+		// nil arm).
+		return false
+	}
+	if s.server != nil && s.server.gmAttackTargetBlocked(targetGUID) {
+		return false
+	}
+	if target.Health == 0 || s.ghostAttackTargetBlocked(targetGUID) {
+		return false
+	}
+	if creatureCombatDisabled(target.UnitFlags, target.FlagsExtra) {
+		return false
+	}
+	if target.UnitFlags&(unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
+		return false
+	}
+	if s.server != nil {
+		if victimSess := s.server.findSessionByGUID(targetGUID); victimSess != nil && victimSess.player != nil && victimSess.player.TaxiPath != "" {
+			return false
+		}
+	}
+	if target.Map != s.player.Map {
+		return false
+	}
+	return !s.explicitTargetFactionBlocked(targetFlagUnitEnemy, targetGUID, target)
+}
+
 // godCheatActive reports whether this session's player carries the CHEAT_GOD
 // flag (.cheat god, commands.go).
 func (s *session) godCheatActive() bool {

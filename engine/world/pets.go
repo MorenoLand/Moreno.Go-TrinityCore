@@ -2674,14 +2674,17 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			if pacified {
 				return true
 			}
-			// PetHandler.cpp:210-213: no target unit -> the order drops
-			// before any engage or AI reaction (Go used to broadcast the
-			// growl anyway); PetHandler.cpp:216-217: a pet already attacking
-			// that target under a command-attack ignores the re-issue —
-			// no forced target switch, no AI reaction.
-			if targetGUID == 0 {
+			// PetHandler.cpp:203-207: the order drops silently unless the owner
+			// passes IsValidAttackTarget on the target (ownerAttackTargetValid
+			// mirrors Object.cpp:2930+ with the session player as attacker) —
+			// Go used to engage any target the GM gate allowed. PetHandler.cpp:210-213: no target unit -> the order
+			// drops before any engage or AI reaction.
+			if !s.ownerAttackTargetValid(ctx, targetGUID) {
 				return true
 			}
+			// PetHandler.cpp:216-217: a pet already attacking that target
+			// under a command-attack ignores the re-issue — no forced target
+			// switch, no AI reaction.
 			if motion.InCombat && motion.TargetGUID == targetGUID && motion.PetCommand == PetCommandAttack {
 				return true
 			}
@@ -2705,11 +2708,12 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 			s.debug("pet follow command", "account", s.accountName, "pet", petGUID)
 		case commandStay:
+			// PetHandler.cpp:151-162: the stay command sets the stay state
+			// (onPetCommandStay keeps the victim) and sends no
+			// SMSG_ATTACK_STOP — Go used to broadcast one and disengage.
 			if s.server != nil {
 				s.server.onPetCommandStay(s.player.Map, s.player.InstanceID, petGUID)
 			}
-			stopPkt := buildAttackStop(petGUID, 0, false)
-			_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 			s.debug("pet stay command", "account", s.accountName, "pet", petGUID)
 		case commandAbandon:
 			// PetHandler.cpp:242-256: a charmed creature is un-charmed
@@ -2800,9 +2804,42 @@ func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool 
 	r := protocol.NewReader(payload)
 	petGUID, _ := r.ReadU64()
 	spellID, _ := r.ReadU32()
+	// SpellHandler.cpp HandlePetCancelAuraOpcode:503-508: an unknown spell id
+	// drops the packet silently (the SpellInfo lookup happens first); the
+	// gate runs only with spell data present.
+	if s.server != nil && s.server.Data != nil {
+		if _, found, _ := s.server.Data.Spell(spellID); !found {
+			return true
+		}
+	}
+	// SpellHandler.cpp:510-526: the target must be the player's guardian pet
+	// or charmed creature — Go used to delete from any GUID's pet_aura row.
+	motion := s.controlledPetMotion(petGUID)
+	if motion == nil {
+		return true
+	}
+	// SpellHandler.cpp:528-532: a dead pet answers SMSG_PET_ACTION_FEEDBACK
+	// with FEEDBACK_PET_DEAD (PetDefines.h:73, Unit.cpp:10452 — a single
+	// uint8 to the owner) and the aura stays.
+	if motion.Health == 0 {
+		feedback := protocol.NewBuffer(1)
+		feedback.WriteU8(1) // FEEDBACK_PET_DEAD
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_ACTION_FEEDBACK), feedback.Bytes(), true)
+		return true
+	}
+	// SpellHandler.cpp:534: pet->RemoveOwnedAura(spell, EMPTY, 0,
+	// AURA_REMOVE_BY_CANCEL) — the live aura leaves the server's creature
+	// aura maps alongside the pet_aura row (Go only cleared the row).
 	petNumber := s.petNumberForGUID(petGUID)
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ? AND spell = ?", petNumber, spellID)
+	if s.server != nil {
+		key := creatureAuraKeyForMotion(motion)
+		s.server.auraMu.Lock()
+		delete(s.server.creatureAuras[key], spellID)
+		delete(s.server.activeCreatureAuras[key], spellID)
+		s.server.auraMu.Unlock()
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ? AND spell = ?", petNumber, spellID)
+		}
 	}
 	s.debug("pet cancel aura", "account", s.accountName, "pet", petNumber, "spell", spellID)
 	return true
