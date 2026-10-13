@@ -77,12 +77,33 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 		s.debug("npc hello rejected: missing required npc flag", "account", s.accountName, "guid", guid, "flag", requiredFlag)
 		return true
 	}
-	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:164):
-	// GetPlayer()->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TALK)
-	// runs right after the gossip-flag gate, before the spirit-guide arm.
-	// (The faction SetVisible call above it has no Go reputation-visible
-	// setter — documented open gap.)
-	s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
+	entry, ok := objectUint32Field(creature, "Entry")
+	if !ok {
+		return true
+	}
+	if questPath {
+		// WorldSession::HandleQuestgiverHelloOpcode (QuestHandler.cpp:90-92):
+		// a feign-deathing player talking to a questgiver strips the fake
+		// death (RemoveAurasByType(SPELL_AURA_FEIGN_DEATH) while
+		// UNIT_STATE_DIED is set). The quest path has no TALK-interrupt
+		// strip — that arm exists only in HandleGossipHelloOpcode.
+		if s.hasAuraType(spellAuraFeignDeath) {
+			s.removeAurasByType(spellAuraFeignDeath)
+		}
+	} else {
+		// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:162-163):
+		// talking to the NPC makes its faction template's faction visible
+		// in the reputation list (ReputationMgr::SetVisible).
+		s.setGossipHelloFactionVisible(ctx, entry)
+		// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:164):
+		// RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TALK) runs
+		// right after the SetVisible arm, before the spirit-guide arm.
+		s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
+	}
+	// Unit::PauseMovement + Creature::SetHomePosition run on BOTH paths:
+	// HandleGossipHelloOpcode (NPCHandler.cpp:168-169) and
+	// HandleQuestgiverHelloOpcode (QuestHandler.cpp:96-97).
+	s.pauseCreatureMotionForHello(guid)
 	// The spirit-guide arm exists only on the gossip path;
 	// WorldSession::HandleQuestgiverHelloOpcode (QuestHandler.cpp:78) has none.
 	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:171-185) checks
@@ -100,10 +121,6 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 		if s.inBattlegroundWaveMap() {
 			s.sendAreaSpiritHealerTime(guid, s.server.spiritWaveTimeLeftMs())
 		}
-		return true
-	}
-	entry, ok := objectUint32Field(creature, "Entry")
-	if !ok {
 		return true
 	}
 	s.gossip = nil
@@ -179,6 +196,53 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 	}
 	s.debug("npc hello handled", "account", s.accountName, "entry", entry, "questPath", questPath)
 	return true
+}
+
+// setGossipHelloFactionVisible mirrors the faction-visibility arm of
+// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:162-163): talking to
+// a creature makes its faction template's faction visible in the reputation
+// list. ReputationMgr::SetVisible resolves the faction template to the
+// faction id and no-ops when the faction can't have reputation, so the
+// template lookup here feeds the same setFactionVisible setter the quest
+// accept path uses (ReputationMgr.cpp:445-460).
+func (s *session) setGossipHelloFactionVisible(ctx context.Context, entry uint32) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil || entry == 0 {
+		return
+	}
+	var factionTemplate int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(faction, 0) FROM creature_template WHERE entry = ?", entry).Scan(&factionTemplate); err != nil || factionTemplate == 0 {
+		return
+	}
+	ft, found, err := s.server.Data.FactionTemplate(uint32(factionTemplate))
+	if err != nil || !found || ft.Faction == 0 {
+		return
+	}
+	s.setFactionVisible(ctx, ft.Faction)
+}
+
+// pauseCreatureMotionForHello mirrors the stop arms shared by the two hello
+// handlers: Unit::PauseMovement(CONFIG_CREATURE_STOP_FOR_PLAYER) +
+// Creature::SetHomePosition(GetPosition()) in HandleGossipHelloOpcode
+// (NPCHandler.cpp:168-169) and HandleQuestgiverHelloOpcode
+// (QuestHandler.cpp:96-97). The default stop time is 3 minutes
+// (Creature.MovingStopTimeForPlayer, World.cpp:1230). C++ stops the spline
+// in place and pauses the current generator; Go cancels the current wander
+// leg and holds WaitUntil so no new leg starts until the pause expires, and
+// re-bases the home position at the current spot. Mid-chase NPCs keep their
+// pursuit state (chase runs outside the wander WaitUntil gate).
+func (s *session) pauseCreatureMotionForHello(guid uint64) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid)
+	if motion == nil {
+		return
+	}
+	motion.Moving = false
+	motion.WaitUntil = time.Now().Add(3 * time.Minute)
+	motion.HomeX, motion.HomeY, motion.HomeZ = motion.X, motion.Y, motion.Z
 }
 
 func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) bool {
