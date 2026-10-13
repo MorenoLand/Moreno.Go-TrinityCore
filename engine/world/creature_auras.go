@@ -404,6 +404,16 @@ func (s *Server) creatureAuraDamageDonePct(key creatureAuraKey) float64 {
 	return mod
 }
 
+// motionIsPet mirrors Unit::IsPet (Unit.h:839): (m_unitTypeMask & UNIT_MASK_PET)
+// != 0, set only for Pet objects (Pet.cpp:49). In Go only registerPetMotion
+// sets motion.PetID, so PetID != 0 is the twin — charmed creatures and any
+// guardian/temp-summon motions carry an owner but are not pets, and must not
+// receive the IsPet-gated arms (aura-142 BASE_PCT, aura-83 TOTAL_VALUE, the
+// 35% owner-armor bonus).
+func motionIsPet(motion *creatureMotion) bool {
+	return motion != nil && motion.PetID != 0
+}
+
 // petBaseArmorBonus sums the live flat TOTAL_VALUE armor legs for a pet
 // creature, mirroring Guardian::UpdateArmor's GetFlatModifierValue
 // (UNIT_MOD_ARMOR, TOTAL_VALUE) (StatSystem.cpp:1326): the
@@ -460,14 +470,18 @@ func petOwnerArmorValue(petType uint8, ownerArmor uint32) float64 {
 }
 
 // petOwnerArmorBonus resolves the 35% owner-armor leg of
-// Guardian::UpdateArmor (StatSystem.cpp:1323-1324). C++ recomputes it from
+// Guardian::UpdateArmor (StatSystem.cpp:1323-1324), gated on Unit::IsPet
+// (Unit.h:839) via motionIsPet: charmed creatures carry an owner but are
+// Creature objects, not Pets, so they get nothing here — a charmed motion's
+// zero-value PetType previously read as petTypeSummon (0) and leaked the
+// bonus whenever the charmer was connected. C++ recomputes it from
 // the owner's live armor whenever the owner's armor changes
 // (Player::UpdateArmor calls pet->UpdateArmor(), StatSystem.cpp:283), so a
 // connected owner's live armor is the C++-exact source; the
 // stat-compute-point snapshot on the motion covers offline owners (the
 // established pass-through convention).
 func (s *Server) petOwnerArmorBonus(motion *creatureMotion) float64 {
-	if s == nil || motion == nil || motion.OwnerGUID == 0 {
+	if s == nil || motion == nil || motion.OwnerGUID == 0 || !motionIsPet(motion) {
 		return 0
 	}
 	if sess := s.playerSessionForGUID(motion.OwnerGUID); sess != nil && sess.player != nil {
@@ -600,15 +614,18 @@ func (s *Server) petGuardianStat(key creatureAuraKey, motion *creatureMotion, st
 }
 
 // petFullArmor computes the live Guardian::UpdateArmor value
-// (StatSystem.cpp:1316-1330) for a pet motion from the stored aura-free flat
-// BASE_VALUE (motion.Armor): the BASE_PCT fold (aura-142) multiplies ONLY the
-// flat base — C++ adds agility*2, the TOTAL_VALUE flats (aura-22/83) and the
-// 35% owner bonus AFTER, then multiplies TOTAL_PCT (aura-101). The previous
-// combat-time fold applied basePct over the whole stored value (which
-// carried agility*2 and the owner bonus), wrongly scaling those legs. The
-// agility leg is the C++-exact GetStat(STAT_AGILITY) via petGuardianStat
-// (create-stat base plus the live aura-29 flat / aura-137 pct feeds);
-// non-pet motions get the stored value unchanged.
+// (StatSystem.cpp:1316-1330) for a pet motion (callers must gate on
+// motionIsPet; the IsPet-gated arms — aura-142 BASE_PCT, aura-83 TOTAL_VALUE,
+// the 35% owner bonus — apply only to Pets, Unit.h:839) from the stored
+// aura-free flat BASE_VALUE (motion.Armor): the BASE_PCT fold (aura-142)
+// multiplies ONLY the flat base — C++ adds agility*2, the TOTAL_VALUE flats
+// (aura-22/83) and the 35% owner bonus AFTER, then multiplies TOTAL_PCT
+// (aura-101). The previous combat-time fold applied basePct over the whole
+// stored value (which carried agility*2 and the owner bonus), wrongly scaling
+// those legs. The agility leg is the C++-exact GetStat(STAT_AGILITY) via
+// petGuardianStat (create-stat base plus the live aura-29 flat / aura-137 pct
+// feeds); non-pet motions must not reach this function — they take
+// creatureArmorFold (Creature::UpdateArmor) via liveCreatureArmor.
 func (s *Server) petFullArmor(key creatureAuraKey, motion *creatureMotion) float64 {
 	if s == nil || motion == nil {
 		return 0
@@ -673,9 +690,14 @@ func (s *Server) petResistanceBonus(key creatureAuraKey, isPet bool) [schoolCoun
 	return bonus
 }
 
-// petFoldedResistances returns base with the live 22 pet-resistance fold
-// applied when the key's creature is a pet (its motion carries an owner);
-// non-pets and unknown motions get base unchanged.
+// petFoldedResistances returns base with the live 22 resistance fold
+// applied when the key's creature motion carries an owner. The 22 handler
+// (AuraEffect::HandleAuraModResistance, SpellAuraEffects.cpp:3255-3269) has
+// no IsPet gate — it folds TOTAL_VALUE into UNIT_MOD_RESISTANCE for every
+// unit — so charmed creatures correctly get the fold here too, even though
+// they are not pets. Regular creatures (OwnerGUID == 0) get base unchanged:
+// their damage-time 22 fold is a known gap (Go broadcasts no live resistance
+// recompute for them), recorded as a standing edge.
 func (s *Server) petFoldedResistances(key creatureAuraKey, base [schoolCount]uint32) [schoolCount]uint32 {
 	if s == nil || key.GUID == 0 {
 		return base
@@ -790,15 +812,20 @@ func (s *Server) creatureArmorFold(key creatureAuraKey, storedArmor float64) flo
 }
 
 // liveCreatureArmor dispatches the C++-exact live armor fold by victim kind:
-// Guardian::UpdateArmor (StatSystem.cpp:1316-1330) for owner-carrying motions
-// via petFullArmor, Creature::UpdateArmor (StatSystem.cpp:1018-1022) for
-// regular creatures via creatureArmorFold. C++ recomputes both on every
-// stat-modifier change (Unit::UpdateUnitMod, Unit.cpp:9307-9340); Go folds
-// live at damage/display time per the established convention. The stored
-// armor is the no-aura fallback base, so callers no longer need to gate on
-// OwnerGUID themselves.
+// Guardian::UpdateArmor (StatSystem.cpp:1316-1330) for pet motions
+// (motionIsPet, the Unit::IsPet twin, Unit.h:839) via petFullArmor,
+// Creature::UpdateArmor (StatSystem.cpp:1018-1022) for everything else via
+// creatureArmorFold — charmed creatures carry an owner but are Creature
+// objects, not Pets, so they must not receive the IsPet-gated 142/83/owner
+// arms that the old OwnerGUID!=0 gate applied. (A non-pet Guardian such as a
+// treant would add agility*2 over the Creature fold, but Go has no
+// temp-summon/guardian motions — item-9 parked — so the Creature fold is the
+// live-correct branch.) C++ recomputes both on every stat-modifier change
+// (Unit::UpdateUnitMod, Unit.cpp:9307-9340); Go folds live at damage/display
+// time per the established convention. The stored armor is the no-aura
+// fallback base, so callers no longer need to gate on OwnerGUID themselves.
 func (s *Server) liveCreatureArmor(key creatureAuraKey, motion *creatureMotion, storedArmor float64) float64 {
-	if motion != nil && motion.OwnerGUID != 0 {
+	if motionIsPet(motion) {
 		return s.petFullArmor(key, motion)
 	}
 	return s.creatureArmorFold(key, storedArmor)
