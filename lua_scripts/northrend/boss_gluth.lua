@@ -30,8 +30,18 @@
 -- DoCastSelf(Enrage 28371), randtime(16s,22s) init, randtime(16s,22s)
 -- repeat (phase_hunter self-cast precedent); the eating-state 5s
 -- deferral arm has no state bridge — documented, not wired.
+-- EVENT_DECIMATE — Talk(EMOTE_DECIMATE 1) + DoCastAOE(Decimate
+-- 28374), randtime(110s,120s) init, re-scheduled randtime(110s,120s)
+-- (C++ re-arms via ScheduleEvent, not Repeat — same interval);
+-- DoCastAOE lowers to self-cast creature:CastSpell(creature, spell)
+-- (boss_ai.go DoCastAOE self-cast convention — selin_fireheart /
+-- mr_smite precedent; the old "no DoCastAOE bridge" claim was
+-- wrong). The 20x EVENT_SEARCH_ZOMBIE_MULTI scheduling leg and the
+-- eating-state 4s deferral have no summon/state bridges — documented,
+-- not wired. The decimate damage rider lives in the unported
+-- spell_gluth_decimate SpellScript (documented below).
 -- EVENT_BERSERK — Talk(EMOTE_BERSERKER 4) + DoCastSelf(Berserk
--- 26662), 8min init, 5min repeat. JustEngagedWith schedules the three
+-- 26662), 8min init, 5min repeat. JustEngagedWith schedules the four
 -- ported events (BossAI::JustEngagedWith instance-bookkeeping leg has
 -- no bridge — tharon_ja precedent); no aggro Talk in C++.
 -- EMOTE_DECIMATE (1), EMOTE_SPOTS_ONE (0), EMOTE_DEVOURS_ALL (3)
@@ -42,10 +52,10 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — _Reset + SetReactState(REACT_AGGRESSIVE) + SetSpeed(
 -- MOVE_RUN, 12.0f) — no react-state / speed bridges; SummonedCreatureDies
--- — summons.Despawn — no summon bridge; EVENT_DECIMATE — Talk(
--- EMOTE_DECIMATE 1) + DoCastAOE(Decimate 28374) + the 20x
--- EVENT_SEARCH_ZOMBIE_MULTI scheduling machine — no DoCastAOE bridge
--- (terestian/shazzrah precedent) and no summon/zombie-list bridge;
+-- — summons.Despawn — no summon bridge; EVENT_DECIMATE's 20x
+-- EVENT_SEARCH_ZOMBIE_MULTI scheduling machine (DoCastAOE(
+-- ZOMBIE_CHOW_SEARCH_MULTI 28404) per zombie) — no summon/zombie-list
+-- bridge; the STATE_GLUTH_EATING 4s deferral — no state bridge;
 -- EVENT_SUMMON — SummonCreatureGroup(SUMMON_GROUP_CHOW_10MAN/
 -- SUMMON_GROUP_CHOW_25MAN) — no summon bridge + Is25ManRaid difficulty
 -- gate (kelidan precedent); EVENT_SEARCH_ZOMBIE_SINGLE — summons
@@ -77,10 +87,12 @@
 local ENTRY_GLUTH = 15932
 
 local EMOTE_ENRAGE = 2
+local EMOTE_DECIMATE = 1
 local EMOTE_BERSERKER = 4
 
 local SPELL_MORTAL_WOUND = 54378
 local SPELL_ENRAGE = 28371
+local SPELL_DECIMATE = 28374
 local SPELL_BERSERK = 26662
 
 local timers = {}
@@ -126,6 +138,21 @@ local function enrageTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_DECIMATE: Talk(EMOTE_DECIMATE 1) + DoCastAOE(Decimate
+-- 28374) as self-cast, randtime(110s,120s) init, re-scheduled
+-- randtime(110s,120s) (C++ ScheduleEvent re-arm). The eating-state
+-- 4s deferral and the 20x SEARCH_ZOMBIE_MULTI legs have no bridges
+-- (documented in the header); the state is never EATING without the
+-- zombie machine, so the timer fires unconditionally (maiden
+-- precedent).
+local function decimateTick(creature, guid)
+    creature:Talk(EMOTE_DECIMATE)
+    creature:CastSpell(creature, SPELL_DECIMATE)
+    schedule(guid, "decimate", math.random(110, 120) * 1000, function()
+        decimateTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_BERSERK: Talk(EMOTE_BERSERKER 4) + DoCastSelf(Berserk
 -- 26662), 8min init, 5min repeat (hard-enrage buff refresh).
 local function berserkTick(creature, guid)
@@ -137,10 +164,14 @@ local function berserkTick(creature, guid)
 end
 
 -- C++ JustEngagedWith: schedules EVENT_WOUND (10s), EVENT_ENRAGE
--- (randtime 16s,22s), EVENT_BERSERK (8min). No aggro Talk in C++.
+-- (randtime 16s,22s), EVENT_DECIMATE (randtime 110s,120s),
+-- EVENT_BERSERK (8min). No aggro Talk in C++.
 local function gluthEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "decimate", math.random(110, 120) * 1000, function()
+        decimateTick(creature, guid)
+    end)
     schedule(guid, "wound", 10000, function()
         woundTick(creature, guid)
     end)
