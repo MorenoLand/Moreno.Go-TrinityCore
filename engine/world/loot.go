@@ -2787,11 +2787,12 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		notify.WriteU8(1) // 1 = "You loot..."
 		_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_MONEY_NOTIFY), notify.Bytes(), true)
 		s.sendPlayerUpdate()
-		// LootHandler.cpp:211: the Eluna hook fires in the solo arm only —
-		// the group-split arm above has no hook — after the money grant, the
-		// achievement update and the notify, with the full loot gold.
-		s.fireLootMoneyHook(ctx, copper)
 	}
+	// HandleLootMoneyOpcode (LootHandler.cpp:210-212): the Eluna OnLootMoney
+	// hook fires after BOTH arms — the group-split arm has no separate gate —
+	// with the looter and the full loot gold. The old comment (and the old
+	// call site, inside the solo arm only) was factually wrong.
+	s.fireLootMoneyHook(ctx, copper)
 
 	// Loot::isLooted (Loot.h:236) is gold == 0 && unlootedCount == 0, and the
 	// quest-item fill arm counts quest items into unlootedCount
@@ -3144,7 +3145,7 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 			s.clearCreatureLoot(loot)
 		}
 	}
-	// Player::StoreLootItem (Player.cpp:25140) and the group autoloot arm
+	// Player::StoreLootItem (Player.cpp:25140) and the master-give arm
 	// (LootHandler.cpp:485): the Eluna hook fires after the store, the
 	// push result and the player update, as (event, player, item, count,
 	// lootGuid) — the item is the receiving instance (the merged pile on a
@@ -3690,6 +3691,21 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 	if it.Quality >= 4 {
 		targetSess.updateAchievementCriteria(criteriaTypeLootEpicItem, it.ItemEntry, it.Count)
 		targetSess.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.Count)
+	}
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:485): the Eluna OnLootItem
+	// hook fires here too — the second of exactly two C++ call sites
+	// (the other is Player::StoreLootItem, Player.cpp:25140) — with the
+	// RECIPIENT player, the given item and the loot GUID. The old code
+	// fired it on the autostore arm only.
+	targetSess.fireLootItemHook(ctx, s.activeLoot, res, it)
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:478): like
+	// Player::StoreLootItem (Player.cpp:25096), the given item keeps the loot
+	// row's randomPropertyId — StoreNewItem(dest, item.itemid, true,
+	// item.randomPropertyId, looters). The autostore arm already does this;
+	// master-give dropped it.
+	if it.RandomPropertyID != 0 && res != nil && !res.IsStack && res.ItemGUID != 0 &&
+		targetSess.server != nil && targetSess.server.CharactersStore != nil && targetSess.server.CharactersStore.DB != nil {
+		_, _ = targetSess.server.CharactersStore.DB.ExecContext(ctx, `UPDATE item_instance SET randomPropertyId = ? WHERE guid = ?`, it.RandomPropertyID, res.ItemGUID)
 	}
 	// HandleLootMasterGiveOpcode (LootHandler.cpp:484-486): the given item is
 	// marked looted (count zeroed in C++; the Go analog deletes the row) and
