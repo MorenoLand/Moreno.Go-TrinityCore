@@ -87,6 +87,7 @@ type Config struct {
 	MinDiscoveredScaledXpRatio              int
 	AuctionTimeRate                         float64
 	AuctionDepositRate                      float64
+	AuctionCutRate                          float64
 	AuctionGetAllDelay                      int
 	AuctionSearchDelay                      int
 	RestInGameRate                          float64
@@ -315,6 +316,7 @@ func Default() Config {
 	c.MinDiscoveredScaledXpRatio = 0
 	c.AuctionTimeRate = 1
 	c.AuctionDepositRate = 1
+	c.AuctionCutRate = 1
 	c.AuctionGetAllDelay = 900
 	c.AuctionSearchDelay = 300
 	c.AccountInstancesPerHour = 5
@@ -503,6 +505,7 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_MIN_DISCOVERED_SCALED_XP_RATIO"] = "MinDiscoveredScaledXPRatio"
 	values["MORENOCORE_RATE_AUCTION_TIME"] = "Rate.Auction.Time"
 	values["MORENOCORE_RATE_AUCTION_DEPOSIT"] = "Rate.Auction.Deposit"
+	values["MORENOCORE_RATE_AUCTION_CUT"] = "Rate.Auction.Cut"
 	values["MORENOCORE_AUCTION_GETALL_SCAN_DELAY"] = "Auction.GetAllScanDelay"
 	values["MORENOCORE_AUCTION_SEARCH_DELAY"] = "Auction.SearchDelay"
 	values["MORENOCORE_ADDON_CHANNEL"] = "AddonChannel"
@@ -980,6 +983,8 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.AuctionTimeRate, key, value)
 	case "Rate.Auction.Deposit":
 		return setFloat64(&c.AuctionDepositRate, key, value)
+	case "Rate.Auction.Cut":
+		return setFloat64(&c.AuctionCutRate, key, value)
 	case "Auction.GetAllScanDelay":
 		return setInt(&c.AuctionGetAllDelay, key, value)
 	case "Auction.SearchDelay":
