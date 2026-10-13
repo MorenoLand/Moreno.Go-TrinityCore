@@ -51,8 +51,9 @@
 -- player fallback), lynx rush hits a random alive player per jump
 -- (C++-exact per-hit spell, count, and 500ms cadence); the C++
 -- interleaving when a sequence starter fires while the other sequence
--- is active (shared claw counter pumped by both loop bodies) is not
--- modeled — the starter is ignored until the active sequence ends;
+-- is active spin-waits on a 500ms retry (the C++ TankGUID gate: the
+-- expired starter re-fires every UpdateAI tick until the active sequence
+-- ends, then starts immediately);
 -- the C++ melee-range gate on each sequence hit is approximated with
 -- GetDistance <= 5 (no IsWithinMeleeRange bridge); the
 -- isTargetableForAttack fallback chain collapses to victim-or-random
@@ -275,11 +276,16 @@ onSeqLoop = function(creature, guid)
 end
 
 -- C++ claw rage starter (lynx): needs a target; starts the 500ms loop.
--- Ignored while a sequence is already active (the C++ shared-counter
--- interleaving is not modeled).
+-- A starter firing while a sequence is active spin-waits on a 500ms retry
+-- (C++ TankGUID gate) instead of being dropped.
 onClawRage = function(creature, guid)
     local st = zuljinState(guid)
     if st.sequence ~= nil then
+        -- C++ TankGUID gate: the expired starter spin-waits, firing on the
+        -- first tick after the active sequence ends (never dropped).
+        schedule(timers, guid, "clawrage", 500, function()
+            onClawRage(creature, guid)
+        end)
         return
     end
     if #alivePlayers(creature) == 0 then
@@ -295,10 +301,15 @@ onClawRage = function(creature, guid)
     end)
 end
 
--- C++ lynx rush starter (lynx): same shape as claw rage, 9-hit loop.
+-- C++ lynx rush starter (lynx): same shape as claw rage, 9-hit loop;
+-- same TankGUID spin-wait while a sequence is active.
 onLynxRush = function(creature, guid)
     local st = zuljinState(guid)
     if st.sequence ~= nil then
+        -- Same C++ TankGUID spin-wait as claw rage.
+        schedule(timers, guid, "lynxrush", 500, function()
+            onLynxRush(creature, guid)
+        end)
         return
     end
     if #alivePlayers(creature) == 0 then
@@ -461,8 +472,12 @@ local function zuljinDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return false, damage
     end
+    -- C++ checks post-damage health in UpdateAI; event 9 fires pre-damage,
+    -- so subtract the incoming hit (thekal/venoxis pre-damage convention
+    -- does NOT apply here — their latches live in DamageTaken itself).
+    local postHealth = health - (damage or 0)
     local health20 = math.floor(maxHealth * 20 / 100)
-    if health < health20 * (4 - st.phase) then
+    if postHealth < health20 * (4 - st.phase) then
         enterPhase(creature, guid, st.phase + 1)
     end
     return false, damage

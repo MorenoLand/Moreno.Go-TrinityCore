@@ -67,6 +67,19 @@ local function cancelTimers(store, guid)
     end
 end
 
+local function cancelTimerKeys(store, guid, keys)
+    local per = store[guid]
+    if not per then
+        return
+    end
+    for _, key in ipairs(keys) do
+        if per[key] then
+            RemoveEventById(per[key])
+            per[key] = nil
+        end
+    end
+end
+
 local function schedule(store, guid, key, delay, fn)
     local per = store[guid]
     if not per then
@@ -207,6 +220,10 @@ local function onShapeshift(creature, guid)
     if st.inBearForm then
         creature:Talk(YELL_SHIFTEDTOTROLL)
         creature:RemoveAura(SPELL_BEARFORM)
+        -- C++ inBearForm gate: bear timers freeze and their remainders are
+        -- discarded (overwritten fresh on the next shift-in) — cancel them
+        -- so they cannot leak casts into troll form.
+        cancelTimerKeys(timers, guid, { "lacerating", "rend", "roar" })
         armTrollTimers(creature, guid)
         schedule(timers, guid, "shapeshift", math.random(45000, 50000), function()
             onShapeshift(creature, guid)
@@ -215,6 +232,9 @@ local function onShapeshift(creature, guid)
     else
         creature:Talk(YELL_SHIFTEDTOBEAR)
         creature:CastSpell(creature, SPELL_BEARFORM, true)
+        -- C++ inBearForm gate, mirrored: troll timers freeze and their
+        -- remainders are discarded (re-armed fresh on shift-out).
+        cancelTimerKeys(timers, guid, { "surge", "brutalswipe", "mangle" })
         schedule(timers, guid, "lacerating", 2000, function()
             onLaceratingSlash(creature, guid)
         end)
@@ -234,8 +254,8 @@ end
 -- C++ berserk: one-shot 600s, Talk, triggered self-cast 45078; the C++
 -- timer re-arms for 600s.
 local function onBerserk(creature, guid)
-    creature:Talk(YELL_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK, true)
+    creature:Talk(YELL_BERSERK)
     schedule(timers, guid, "berserk", 600000, function()
         onBerserk(creature, guid)
     end)
