@@ -1398,10 +1398,30 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// excludes arenas; Go keeps no live BG instances, so an active non-arena
 	// slot with Status == BGStatusInProgress is the ported-in state (the port
 	// arm sets it on accept, battleground.go).
+	// Player::LeaveBattleground (Player.cpp:22475-22485): leaving a live
+	// battleground marks the leaver deserter — spell 26013 cast triggered —
+	// unless they are a game master or Battleground.CastDeserter is off.
+	// A far-teleport leave defers the cast until the teleport completes
+	// (DELAYED_SPELL_CAST_DESERTER, Player.cpp:1918): Go arms
+	// pendingDeserterCast and fires it in completeWorldPort, the
+	// ProcessDelayedOperations analog for the far-teleport semaphore.
+	if !fromLogout && s.server != nil && s.server.Config.BattlegroundCastDeserter && !sessionIsGameMaster(s) {
+		for i := range s.bgQueues {
+			e := &s.bgQueues[i]
+			if e.Active && !e.IsArena && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitJoin) {
+				if skipEntryTeleport {
+					s.pendingDeserterCast = true
+				} else {
+					s.castSpellDirect(ctx, deserterSpellBG, s.playerGUID)
+				}
+				break
+			}
+		}
+	}
 	if !fromLogout {
 		for i := range s.bgQueues {
 			e := &s.bgQueues[i]
-			if e.Active && !e.IsArena && e.Status == BGStatusInProgress {
+			if e.Active && !e.IsArena && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitJoin) {
 				s.trackBGDeserter(ctx, bgDesertionTypeLeaveBG)
 				break
 			}

@@ -1329,6 +1329,14 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	originOrientation := s.farTeleportOriginOrientation
 	s.worldReady.Store(false)
 	s.farTeleportPending = false
+	// DELAYED_SPELL_CAST_DESERTER (Player.cpp:1918): a far-teleport BG leave
+	// schedules the deserter spell cast after the teleport completes; Go arms
+	// pendingDeserterCast in handleLeaveBattlefield and fires it here, the
+	// ProcessDelayedOperations analog for the far-teleport completion.
+	if s.pendingDeserterCast {
+		s.pendingDeserterCast = false
+		s.castSpellDirect(ctx, deserterSpellBG, s.playerGUID)
+	}
 	state := *s.player
 	if !s.validTrinityMapID(state.Map) || (!s.initialLoginPending && !validTrinityMapCoordinates(state.X, state.Y, state.Z, state.Orientation)) {
 		return false

@@ -349,6 +349,7 @@ type session struct {
 	// ResetTimeOutTime (WorldSession.cpp:733).
 	timeoutTime                  atomic.Int64
 	farTeleportPending           bool
+	pendingDeserterCast          bool
 	farTeleportOriginOrientation float32
 	farTeleportOriginMap         uint32
 	farTeleportOriginInstanceID  uint32
