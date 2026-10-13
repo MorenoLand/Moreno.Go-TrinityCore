@@ -1001,6 +1001,7 @@ const (
 	QuestPartyMsgCantBeSharedToday   = 8
 	QuestPartyMsgSharingTimerExpired = 9
 	QuestPartyMsgNotInParty          = 10
+	QuestPartyMsgNotEligibleToday    = 11 // QUEST_PARTY_MSG_NOT_ELIGIBLE_TODAY (QuestDef.h:79), distinct from 8
 )
 
 func (s *session) sendPushToPartyResponse(targetGUID uint64, msg uint8) {
@@ -1075,6 +1076,19 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 			continue
 		}
 
+		// QuestHandler.cpp:595-599 — Player::SatisfyQuestDay(quest, false):
+		// a receiver that already completed this daily today answers
+		// QUEST_PARTY_MSG_NOT_ELIGIBLE_TODAY before the CanTakeQuest gate.
+		// The dungeon-finder-quest arm has no Go model (documented delta,
+		// cf. satisfyQuestRepeatGates).
+		if data.Flags&questFlagsDaily != 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			var done int64
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_daily WHERE guid = ? AND quest = ?", receiver.playerGUID, questID).Scan(&done); err == nil && done > 0 {
+				s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgNotEligibleToday)
+				continue
+			}
+		}
+
 		canTake, _ := receiver.canTakeQuest(ctx, questID)
 		if !canTake {
 			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgCantTakeQuest)
@@ -1111,15 +1125,24 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 			continue
 		}
 
-		// Check AutoAccept
-		if specialFlags&4 != 0 {
+		// QuestHandler.cpp:614-617 — the sharing info and the details screen
+		// are set for every receiver first; the details packet carries the
+		// receiver's own guid as the quest-giver npc, not the sharer's.
+		receiver.sharingQuestID = questID
+		receiver.sharingQuestSender = s.playerGUID
+		details := buildQuestGiverDetails(data, receiver.playerGUID, 0)
+		_ = receiver.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)
+		// QuestHandler.cpp:618-622 — the auto-accept arm: the gate is
+		// QUEST_FLAGS_AUTO_ACCEPT (0x00080000, QuestDef.h:151), not the
+		// quest_template_addon SpecialFlags (0x4 there is the monthly flag).
+		// The CanAddQuest/CanTakeQuest re-checks are subsumed by the log-full
+		// and can-take arms above; after the add the sharer is answered
+		// ACCEPT_QUEST and the receiver's sharing info is cleared.
+		if data.Flags&questFlagsAutoAccept != 0 {
 			receiver.addQuestToPlayer(ctx, questID)
 			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgAcceptQuest)
-		} else {
-			receiver.sharingQuestID = questID
-			receiver.sharingQuestSender = s.playerGUID
-			details := buildQuestGiverDetails(data, s.playerGUID, 0)
-			_ = receiver.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)
+			receiver.sharingQuestID = 0
+			receiver.sharingQuestSender = 0
 		}
 	}
 	return true

@@ -204,6 +204,16 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canTakeQuest failed", "error", err)
 		return s.sendGossipComplete()
 	}
+	// QuestHandler.cpp:144-151 — an accept that lands while the player still
+	// holds quest-sharing info answers QUEST_PARTY_MSG_ACCEPT_QUEST to the
+	// sharer and clears the sharing info, ahead of CanAddQuest like the C++.
+	if s.sharingQuestSender != 0 && s.server != nil {
+		if sharer := s.server.findSessionByGUID(s.sharingQuestSender); sharer != nil {
+			sharer.sendPushToPartyResponse(s.playerGUID, QuestPartyMsgAcceptQuest)
+			s.sharingQuestID = 0
+			s.sharingQuestSender = 0
+		}
+	}
 	s.addQuestToPlayer(ctx, questID)
 	// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
 	// Player::AddQuestAndCheckCompletion after the auto-complete check
