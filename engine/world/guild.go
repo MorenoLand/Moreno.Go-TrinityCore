@@ -4626,6 +4626,9 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagPetitioner)) {
 		return true
 	}
+	// PetitionsHandler.cpp:89-91 (HandlePetitionBuyOpcode) — buying a
+	// petition strips a faked death.
+	s.removeFakeDeath()
 	if !s.creatureHasNPCFlag(ctx, npcGUID, unitNPCFlagTabardDesigner) {
 		return true
 	}
@@ -5350,6 +5353,9 @@ func (s *session) handleTabardVendorActivate(ctx context.Context, payload []byte
 	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagTabardDesigner)) {
 		return true
 	}
+	// NPCHandler.cpp:70-72 (HandleTabardVendorActivateOpcode) — activating
+	// the tabard vendor strips a faked death.
+	s.removeFakeDeath()
 
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(vendorGUID)
@@ -5388,6 +5394,9 @@ func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) boo
 		s.sendSaveGuildEmblemResult(guildEmblemInvalidVendor)
 		return true
 	}
+	// GuildHandler.cpp:217-219 (HandleSaveGuildEmblemOpcode) — the
+	// feign-death strip runs inside the interactable-vendor arm.
+	s.removeFakeDeath()
 
 	var guildID, leaderGUID int64
 	err := cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g

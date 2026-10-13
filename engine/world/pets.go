@@ -2085,12 +2085,14 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 		return false
 	}
 	// NPCHandler.cpp:566-570 (HandleBuyStableSlot): CheckStableMaster gates
-	// the purchase; a failed check answers STABLE_ERR_STABLE (the feign-death
-	// strip below it is the standing tree-wide no-bridge: no player unit states).
+	// the purchase; a failed check answers STABLE_ERR_STABLE.
 	if !s.checkStableMaster(ctx, npcGUID) {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
+	// NPCHandler.cpp:576-578 — the feign-death strip runs after the
+	// CheckStableMaster gate.
+	s.removeFakeDeath()
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -2361,6 +2363,9 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
+	// NPCHandler.cpp:399-401 (HandleStablePet) — the feign-death strip runs
+	// after the alive/CheckStableMaster gate.
+	s.removeFakeDeath()
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		s.sendPetStableResult(stableErrStable)
@@ -2467,6 +2472,9 @@ func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool 
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
+	// NPCHandler.cpp:616-618 (HandleStableSwapPet) — the feign-death strip
+	// runs after the CheckStableMaster gate.
+	s.removeFakeDeath()
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		s.sendPetStableResult(stableErrStable)
@@ -2542,6 +2550,9 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
+	// NPCHandler.cpp:462-464 (HandleUnstablePet) — the feign-death strip
+	// runs after the CheckStableMaster gate.
+	s.removeFakeDeath()
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		s.sendPetStableResult(stableErrStable)
@@ -3724,6 +3735,9 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 	if !s.checkStableMaster(ctx, npcGUID) {
 		return true
 	}
+	// NPCHandler.cpp:298-300 (HandleRequestStabledPets) — the feign-death
+	// strip runs after the CheckStableMaster gate, before the dismount arm.
+	s.removeFakeDeath()
 	// NPCHandler.cpp:299-303: opening the stable dismounts the player
 	// (C++ removes SPELL_AURA_MOUNTED; stabling while mounted deleted the pet).
 	if s.isPlayerMounted() {

@@ -4502,6 +4502,9 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagRepair)) {
 		return true
 	}
+	// NPCHandler.cpp:733-735 (HandleRepairItemOpcode) — repairing strips a
+	// faked death.
+	s.removeFakeDeath()
 
 	// NPCHandler.cpp:734 (HandleRepairItemOpcode): the repair price is scaled
 	// by the player's reputation-price discount with the NPC's faction.

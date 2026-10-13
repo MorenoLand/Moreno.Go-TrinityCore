@@ -2476,6 +2476,9 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 	if !s.canInteractWithNPC(ctx, guid, uint64(npcFlagSpiritHealer)) {
 		return true
 	}
+	// NPCHandler.cpp:212-214 (HandleSpiritHealerActivateOpcode) — activating
+	// the spirit healer strips a faked death.
+	s.removeFakeDeath()
 	corpse, hasCorpse := s.loadCorpse(ctx)
 	var corpseGrave wotlk.WorldSafeLoc
 	corpseGraveFound := false

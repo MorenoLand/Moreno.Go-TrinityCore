@@ -275,6 +275,15 @@ func (s *session) handleTaxiQueryAvailableNodes(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
+	// TaxiHandler.cpp:69-74 (HandleTaxiQueryAvailableNodes): the flightmaster
+	// interact gate fires first — a non-flightmaster GUID is silently
+	// dropped, like the activate path.
+	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagFlightmaster)) {
+		return true
+	}
+	// TaxiHandler.cpp:78-80 — the feign-death strip runs after the interact
+	// gate, before the learn-new-node check.
+	s.removeFakeDeath()
 	// HandleTaxiQueryAvailableNodes: learn unknown node, otherwise show the
 	// flight map for known nodes.
 	if s.learnNewTaxiNode(ctx, guid) {
@@ -531,6 +540,9 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	// calls TradeCancel(true) unconditionally at flight start
 	// (Player::ActivateTaxiPathTo, Player.cpp:21586).
 	s.cancelTrade(true)
+	// SendDoFlight (TaxiHandler.cpp:117-119) strips a faked death at flight
+	// start, after the ActivateTaxiPathTo money deduction.
+	s.removeFakeDeath()
 	// SendDoFlight runs the TaxiPathNode spline as a flying monster move
 	// (Flying 0x2000 | Catmullrom 0x40000 per MoveSplineFlag); C++ flies
 	// sourcepath (the FIRST hop, Player.cpp:21683) and chains the rest via

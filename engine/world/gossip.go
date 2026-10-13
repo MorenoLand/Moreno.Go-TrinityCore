@@ -315,6 +315,9 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		s.debug("gossip selection rejected: npc lacks gossip flag", "account", s.accountName, "guid", guid)
 		return true
 	}
+	// MiscHandler.cpp:162-164 (HandleGossipSelectOptionOpcode) — the
+	// feign-death strip runs after the creature validation, before dispatch.
+	s.removeFakeDeath()
 	entry, ok := objectUint32Field(creature, "Entry")
 	if !ok {
 		return true
@@ -650,6 +653,10 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 		distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > maxUseDist {
 		return true
 	}
+	// MiscHandler.cpp:162-164 (HandleGossipSelectOptionOpcode) — the
+	// feign-death strip runs after the gameobject validation, before the
+	// Eluna select hook.
+	s.removeFakeDeath()
 	// Eluna::OnGossipSelect[Code] fires before the native arms; a Lua false
 	// return skips them (MiscHandler.cpp:198-204).
 	if s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code) {
@@ -735,6 +742,10 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 // player, sender, action, code-or-nil) with no cancel semantics
 // (CallAllFunctions). There are no native arms on this path.
 func (s *session) handlePlayerGossipSelect(ctx context.Context, menuID uint32, item gossipMenuItem, code string) bool {
+	// MiscHandler.cpp:162-164 (HandleGossipSelectOptionOpcode) — the
+	// feign-death strip runs after the player-arm validation (the caller
+	// matched guid and menuId), before dispatch.
+	s.removeFakeDeath()
 	s.gossip = nil
 	codeArg := any(nil)
 	if code != "" {
@@ -765,9 +776,8 @@ func (s *session) handlePlayerGossipSelect(ctx context.Context, menuID uint32, i
 // (ScriptMgr.cpp:1655-1677), which fires GOSSIP_EVENT_ON_SELECT (2) with
 // (event, player, item, sender, action[, code]) and no cancel semantics
 // (CallAllFunctions). Go has no C++ ItemScript system, so the native
-// OnGossipSelect[Code] tail has no counterpart. The feign-death strip C++
-// runs for every arm is a standing Go-wide delta — the creature select arm
-// in this file never had it either.
+// OnGossipSelect[Code] tail has no counterpart. The feign-death strip
+// (MiscHandler.cpp:162-164) runs for every gossip select arm.
 func (s *session) handleItemGossipSelectOption(ctx context.Context, reader *protocol.Buffer, guid uint64, listID uint32) bool {
 	if s.gossip == nil || s.gossip.SenderGUID != guid {
 		s.debug("item gossip selection rejected", "account", s.accountName, "guid", guid, "list", listID)
@@ -791,6 +801,9 @@ func (s *session) handleItemGossipSelectOption(ctx context.Context, reader *prot
 		s.debug("item gossip selection unknown item", "account", s.accountName, "guid", guid)
 		return true
 	}
+	// MiscHandler.cpp:162-164 (HandleGossipSelectOptionOpcode) — the
+	// feign-death strip runs after the item validation, before dispatch.
+	s.removeFakeDeath()
 	s.fireItemGossipSelectHook(ctx, objectUint32OrZero(item, "Entry"), menuItem, code, item)
 	s.debug("item gossip selection handled", "account", s.accountName, "guid", guid, "list", listID)
 	return true
@@ -1433,6 +1446,9 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagInnkeeper)) {
 		return true
 	}
+	// NPCHandler.cpp:262-264 (HandleBinderActivateOpcode) — setting the
+	// homebind strips a faked death.
+	s.removeFakeDeath()
 	// NPCHandler.cpp:265-268 (SendBindPoint): homebind can never be set
 	// inside an instance (C++ Map::Instanceable, i.e. DBC Map InstanceType
 	// != 0); the handler returns before the bind spell cast.

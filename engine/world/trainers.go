@@ -43,6 +43,8 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	if !s.canInteractWithNPC(ctx, trainerGUID, uint64(unitNPCFlagTrainer)) {
 		return true
 	}
+	// NPCHandler.cpp:105-108 (SendTrainerList) — listing a trainer's spells strips a faked death.
+	s.removeFakeDeath()
 	var creatureEntry uint32
 	if creature := s.luaCreature(ctx, trainerGUID); creature != nil {
 		creatureEntry = objectUint32OrZero(creature, "Entry")
@@ -338,6 +340,8 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	if !s.canInteractWithNPC(ctx, trainerGUID, uint64(unitNPCFlagTrainer)) {
 		return true
 	}
+	// NPCHandler.cpp:136-138 (HandleTrainerBuySpellOpcode) — buying a spell strips a faked death.
+	s.removeFakeDeath()
 	var creatureEntry uint32
 	if creature := s.luaCreature(ctx, trainerGUID); creature != nil {
 		creatureEntry = objectUint32OrZero(creature, "Entry")

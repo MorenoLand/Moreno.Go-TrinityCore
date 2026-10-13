@@ -30156,10 +30156,9 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 		s.debug("talent wipe confirm rejected: cannot reset talents", "account", s.accountName, "guid", wipeGUID)
 		return true
 	}
-	// The feign-death strip (HasUnitState(UNIT_STATE_DIED) ->
-	// RemoveAurasByType(SPELL_AURA_FEIGN_DEATH)) has no Go bridge: Go tracks
-	// no player unit states and models no feign-death aura type — the same
-	// standing delta as the gossip select arm.
+	// SkillHandler.cpp:76-78 (HandleTalentWipeConfirm) — the feign-death
+	// strip runs after the CanResetTalents gate, before ResetTalents.
+	s.removeFakeDeath()
 	if len(s.player.Talents) == 0 || !s.resetTalents(ctx, false) {
 		// Player::ResetTalents returns false when no talents are spent
 		// (Player.cpp:3998) or the escalating cost cannot be paid
