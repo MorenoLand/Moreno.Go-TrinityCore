@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -307,6 +308,43 @@ func (s *session) sendGuildBankTabsInfo(ctx context.Context) {
 	buf.WriteU8(0)
 	buf.WriteU8(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), buf.Bytes(), true)
+}
+
+// guildBankItemTrailer derives the per-item SMSG_GUILD_BANK_LIST trailer
+// fields from the item_instance row, mirroring Guild::_SendBankList
+// (Guild.cpp:2852-2866): Charges is abs of the first spell-charge slot
+// (Item::GetSpellCharges() defaults to index 0, Item.h:159), EnchantmentID
+// is the PERM_ENCHANTMENT_SLOT (0) entry, and the socket list carries the
+// nonzero SOCK_ENCHANTMENT_SLOT (2..4) entries with their 0-based gem
+// index. Each enchantment slot occupies 3 fields (id, duration, charges),
+// so slot s starts at field 3*s.
+func guildBankItemTrailer(charges string, enchantments string) (uint8, int32, []guildBankGemEnchant) {
+	var chargeByte uint8
+	if fields := strings.Fields(charges); len(fields) > 0 {
+		if v, err := strconv.Atoi(fields[0]); err == nil {
+			if v < 0 {
+				v = -v
+			}
+			chargeByte = uint8(v)
+		}
+	}
+	var permEnchantID int32
+	var gems []guildBankGemEnchant
+	if fields := strings.Fields(enchantments); len(fields) > 0 {
+		if v, err := strconv.Atoi(fields[0]); err == nil {
+			permEnchantID = int32(v)
+		}
+		for socketSlot := 0; socketSlot < 3; socketSlot++ {
+			idx := (socketSlot + 2) * 3
+			if idx >= len(fields) {
+				continue
+			}
+			if id, err := strconv.Atoi(fields[idx]); err == nil && id != 0 {
+				gems = append(gems, guildBankGemEnchant{SocketIndex: uint8(socketSlot), EnchantID: uint32(id)})
+			}
+		}
+	}
+	return chargeByte, permEnchantID, gems
 }
 
 func guildBankRemainingSlots(rank, rights, slotsPerDay, withdrawn uint32) int32 {
@@ -2159,10 +2197,19 @@ type guildBankTabInfo struct {
 	Text string
 }
 
+type guildBankGemEnchant struct {
+	SocketIndex uint8
+	EnchantID   uint32
+}
+
 type guildBankSlotItem struct {
-	Slot  uint8
-	Entry uint32
-	Count int32
+	Slot          uint8
+	Entry         uint32
+	Count         int32
+	Flags         int32
+	Charges       uint8
+	PermEnchantID int32
+	Gems          []guildBankGemEnchant
 }
 
 // handleGuildBankerActivate processes CMSG_GUILD_BANKER_ACTIVATE (0x3E6).
@@ -2300,7 +2347,8 @@ func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32,
 	}
 
 	var items []guildBankSlotItem
-	itemRows, err := cdb.QueryContext(ctx, `SELECT gbi.SlotId, ii.itemEntry, ii.count
+	itemRows, err := cdb.QueryContext(ctx, `SELECT gbi.SlotId, ii.itemEntry, ii.count,
+		COALESCE(ii.charges, ''), COALESCE(ii.flags, 0), COALESCE(ii.enchantments, '')
 		FROM guild_bank_item gbi
 		JOIN item_instance ii ON ii.guid = gbi.item_guid
 		WHERE gbi.guildid = ? AND gbi.TabId = ?`, guildID, tabID)
@@ -2309,10 +2357,12 @@ func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32,
 		for itemRows.Next() {
 			var it guildBankSlotItem
 			var slot, entry, count int64
-			if scanErr := itemRows.Scan(&slot, &entry, &count); scanErr == nil {
+			var charges, enchantments string
+			if scanErr := itemRows.Scan(&slot, &entry, &count, &charges, &it.Flags, &enchantments); scanErr == nil {
 				it.Slot = uint8(slot)
 				it.Entry = uint32(entry)
 				it.Count = int32(count)
+				it.Charges, it.PermEnchantID, it.Gems = guildBankItemTrailer(charges, enchantments)
 				items = append(items, it)
 			}
 		}
@@ -2343,17 +2393,23 @@ func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32,
 	// The per-item trailer matches GuildBankItemInfo (GuildPackets.cpp):
 	// Flags, RandomPropertiesID, Count, EnchantmentID, Charges and the
 	// socket-enchant list are only present when ItemID != 0; an emptied
-	// slot is sent as Slot + ItemID=0 only.
+	// slot is sent as Slot + ItemID=0 only. RandomPropertiesID is always
+	// 0 for bank items (Guild::_SendBankList never sets it, so no
+	// RandomPropertiesSeed is written either).
 	writeBankItem := func(slot uint8, it guildBankSlotItem) {
 		buf.WriteU8(slot)
 		buf.WriteU32(it.Entry)
 		if it.Entry != 0 {
-			buf.WriteI32(0) // Flags
-			buf.WriteI32(0) // RandomPropertiesID
+			buf.WriteI32(it.Flags) // ITEM_FIELD_FLAGS
+			buf.WriteI32(0)        // RandomPropertiesID
 			buf.WriteI32(it.Count)
-			buf.WriteI32(0) // EnchantmentID
-			buf.WriteU8(0)  // Charges
-			buf.WriteU8(0)  // SocketEnchant count
+			buf.WriteI32(it.PermEnchantID) // PERM_ENCHANTMENT_SLOT
+			buf.WriteU8(it.Charges)        // abs of first spell-charge slot
+			buf.WriteU8(uint8(len(it.Gems)))
+			for _, gem := range it.Gems {
+				buf.WriteU8(gem.SocketIndex)
+				buf.WriteI32(int32(gem.EnchantID))
+			}
 		}
 	}
 	if fullUpdate {
@@ -2746,12 +2802,15 @@ func (s *session) guildBankWithdrawMoneyForRepair(ctx context.Context, guildID u
 		if withdrawn+amount > perDay {
 			return false
 		}
-		// ScriptMgr::OnGuildMemberWitdrawMoney (Guild.cpp:1742, repair=true):
-		// fires after validation and before the allowance update and bank
-		// debit; a handler's numeric return rewrites the amount
-		// (GuildHooks.cpp OnMemberWitdrawMoney), so the allowance, debit,
-		// log, and broadcast below all run on the rewritten amount.
-		amount = s.fireGuildMoneyEvent(ctx, scripting.GuildEventOnMoneyWithdraw, s.luaGuildObject(ctx, guildID), s.luaPlayer(), amount, true)
+	}
+	// ScriptMgr::OnGuildMemberWitdrawMoney (Guild.cpp:1742, repair=true):
+	// fires after validation and before the allowance update and bank
+	// debit, for every rank including the guildmaster (C++ fires it
+	// unconditionally); a handler's numeric return rewrites the amount
+	// (GuildHooks.cpp OnMemberWitdrawMoney), so the allowance, debit,
+	// log, and broadcast below all run on the rewritten amount.
+	amount = s.fireGuildMoneyEvent(ctx, scripting.GuildEventOnMoneyWithdraw, s.luaGuildObject(ctx, guildID), s.luaPlayer(), amount, true)
+	if rank != 0 {
 		var exists int
 		_ = cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&exists)
 		if exists == 0 {
