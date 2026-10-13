@@ -156,8 +156,10 @@ func (s *session) failQuest(ctx context.Context, questID uint32) {
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusFailed, s.playerGUID, questID)
 	}
 	// Player::FailQuest (Player.cpp:15543): the FAILED transition runs
-	// through Player::SetQuestStatus (update=true), which fires
-	// OnQuestStatusChange before the log-slot and destroy arms.
+	// through Player::SetQuestStatus (update=true) — SendQuestUpdate first
+	// (Player.cpp:16179), then OnQuestStatusChange — before the log-slot
+	// and destroy arms.
+	s.sendQuestUpdate(ctx, questID)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		if s.player.QuestLog[slot].QuestID == questID {
@@ -560,9 +562,11 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32, questGiv
 	}
 	s.initializeQuestItemCounts(ctx, questID)
 
-	// Player::AddQuest (Player.cpp:15290): the status-change hook fires at
-	// the end of AddQuest, before AddQuestAndCheckCompletion's completion
-	// check (which may fire again via SetQuestStatus in CompleteQuest).
+	// Player::AddQuest (Player.cpp:15284/15290): SendQuestUpdate runs at
+	// the end of AddQuest, right before the status-change hook and before
+	// AddQuestAndCheckCompletion's completion check (which may fire again
+	// via SetQuestStatus in CompleteQuest).
+	s.sendQuestUpdate(ctx, questID)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 
 	// If quest has no objectives or immediate completion requirements, mark complete immediately (Player::AddQuestAndCheckCompletion)

@@ -163,10 +163,18 @@ func (s *session) adjustQuestItemCountForState(ctx context.Context, state *playe
 			continue
 		}
 		if added && notify && s.questObjectivesComplete(ctx, entry.QuestID, entry) {
+			// Item-objective completion runs through
+			// Player::CompleteQuest (Player.cpp:15292) — DB status, the
+			// SetQuestStatus spell-area scan + OnQuestStatusChange hook,
+			// log-slot state, and the TRACKING auto-reward arm —
+			// followed by SendQuestComplete. The local state copy stays
+			// in sync so the trailing slot writeback below does not
+			// clobber the flag completeQuest just set. This arm only
+			// runs with state == s.player (adjustQuestItemCount passes
+			// s.player; the other callers pass added=false).
 			entry.State = questCompleteStateFlag(questStatusComplete)
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, state.GUID, entry.QuestID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
-			s.sendPlayerQuestLogUpdate(slot)
+			s.completeQuest(ctx, entry.QuestID)
+			s.sendQuestComplete(entry.QuestID)
 		} else if !added && entry.State == questCompleteStateFlag(questStatusComplete) {
 			entry.State = questCompleteStateFlag(questStatusIncomplete)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, state.GUID, entry.QuestID)
@@ -1272,13 +1280,76 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 	return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE), packet.Bytes(), true) == nil
 }
 
+// sendQuestComplete mirrors Player::SendQuestComplete
+// (Player.cpp:17003-17009): SMSG_QUESTUPDATE_COMPLETE carries the quest id
+// (uint32).
+func (s *session) sendQuestComplete(questID uint32) {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(questID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), packet.Bytes(), true)
+}
+
+// sendQuestUpdate mirrors Player::SendQuestUpdate (Player.cpp:16221-16267):
+// every spell_area row keyed by the quest (quest_start or quest_end) is
+// re-evaluated at the player's current zone/area. Rows whose requirements
+// no longer fit land on the remove list; fitting autocast rows land on the
+// cast list, and a spell present on both lists is kept (C++ erases cast
+// spells from the remove set before applying it). Casts fire only when the
+// player lacks the aura (the C++ HasAura gate) via the triggered
+// CastSpell(this, spellId, true) arm; removals are RemoveAurasDueToSpell.
+// The closing UpdateVisibleGameobjectsOrSpellClicks sweep has no Go bridge
+// (standing no-bridge, group_lua.go documents it).
+func (s *session) sendQuestUpdate(ctx context.Context, questID uint32) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.player == nil || s.server.Data == nil {
+		return
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT spell, area, quest_start, quest_end, aura_spell, racemask, gender, autocast, quest_start_status, quest_end_status FROM spell_area WHERE quest_start = ? OR quest_end = ?`, questID, questID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	toRemove := map[uint32]bool{}
+	toCast := map[uint32]bool{}
+	zoneID, areaID := s.player.Zone, s.areaID
+	for rows.Next() {
+		var spellID uint32
+		var rule spellAreaRule
+		var autocast int64
+		if rows.Scan(&spellID, &rule.Area, &rule.QuestStart, &rule.QuestEnd, &rule.AuraSpell, &rule.RaceMask, &rule.Gender, &autocast, &rule.QuestStartStatus, &rule.QuestEndStatus) != nil || spellID == 0 {
+			continue
+		}
+		rule.Autocast = autocast != 0
+		fits := s.spellAreaRuleFits(ctx, rule, zoneID, areaID)
+		if fits && spellAreaExtraConditionSpell(spellID) && !s.spellAreaExtraConditionFits(spellID, zoneID, areaID) {
+			fits = false
+		}
+		if !fits {
+			toRemove[spellID] = true
+		} else if rule.Autocast {
+			toCast[spellID] = true
+		}
+	}
+	for spellID := range toCast {
+		delete(toRemove, spellID)
+		if !s.hasAura(spellID) {
+			if _, found, spellErr := s.server.Data.Spell(spellID); spellErr == nil && found {
+				s.castSpellDirect(ctx, spellID, s.playerGUID)
+			}
+		}
+	}
+	for spellID := range toRemove {
+		s.removeAreaRestrictedAura(ctx, spellID)
+	}
+}
+
 func (s *session) completeQuest(ctx context.Context, questID uint32) {
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, questID)
 	}
 	// Player::CompleteQuest (Player.cpp:15297): the COMPLETE transition
-	// runs through Player::SetQuestStatus (update=true), which fires
-	// OnQuestStatusChange.
+	// runs through Player::SetQuestStatus (update=true) — SendQuestUpdate
+	// first (Player.cpp:16179), then the OnQuestStatusChange hook.
+	s.sendQuestUpdate(ctx, questID)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 	if s.player != nil {
 		for slot := 0; slot < playerQuestLogSlots; slot++ {
@@ -1309,8 +1380,9 @@ func (s *session) incompleteQuest(ctx context.Context, questID uint32) {
 	}
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, s.playerGUID, questID)
 	// Player::IncompleteQuest (Player.cpp:15324): the INCOMPLETE transition
-	// runs through Player::SetQuestStatus (update=true), which fires
-	// OnQuestStatusChange.
+	// runs through Player::SetQuestStatus (update=true) — SendQuestUpdate
+	// first (Player.cpp:16179), then the OnQuestStatusChange hook.
+	s.sendQuestUpdate(ctx, questID)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		if s.player.QuestLog[slot].QuestID == questID {

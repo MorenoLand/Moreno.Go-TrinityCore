@@ -338,8 +338,10 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 		s.gossip = nil
 		s.gossipClosed = true
 	}
-	// Player::RewardQuest (Player.cpp:15520): the status-change hook fires at
-	// the very end of the reward flow, after the status multiple broadcast.
+	// Player::RewardQuest (Player.cpp:15513/15520): SendQuestUpdate runs at
+	// the very end of the reward flow, after the status multiple
+	// broadcast, right before the status-change hook.
+	s.sendQuestUpdate(ctx, questID)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 	s.debug("quest rewarded", "account", s.accountName, "quest", questID, "reward", reward, "items", len(grants), "money", view.Detail.RewardMoney)
 	return true

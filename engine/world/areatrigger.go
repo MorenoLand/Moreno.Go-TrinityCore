@@ -53,11 +53,12 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 		status, _ := s.characterQuestStatus(ctx, questID)
 		if status == questStatusIncomplete {
 			// Player::AreaExploredOrEventHappens (Player.cpp:16503): the
-			// explore objective fires SendQuestComplete, and the quest
-			// completes only when all objectives are done. Go has no
-			// per-quest Explored objective model, so the update-complete
-			// broadcast rides along with the standing completeQuest path.
-			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
+			// explore objective fires SendQuestComplete (quest id on the
+			// wire, Player.cpp:17003-17009), and the quest completes only
+			// when all objectives are done. Go has no per-quest Explored
+			// objective model, so the update-complete broadcast rides
+			// along with the standing completeQuest path.
+			s.sendQuestComplete(questID)
 			s.completeQuest(ctx, questID)
 		}
 	}

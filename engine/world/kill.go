@@ -1385,11 +1385,13 @@ func (s *session) creditPlayerKillQuest(ctx context.Context) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_ADD_PVP_KILL), packet.Bytes(), true)
 		s.sendPlayerQuestLogUpdate(slot)
 		if s.questObjectivesComplete(ctx, entry.QuestID, entry) {
-			entry.State = questCompleteStateFlag(questStatusComplete)
-			s.player.QuestLog[slot] = entry
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, entry.QuestID)
-			s.sendPlayerQuestLogUpdate(slot)
-			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
+			// Player::KilledPlayerCreditForQuest (Player.cpp:16723):
+			// completion runs through Player::CompleteQuest — DB status,
+			// the SetQuestStatus spell-area scan + OnQuestStatusChange
+			// hook, log-slot state, and the TRACKING auto-reward arm —
+			// followed by SendQuestComplete.
+			s.completeQuest(ctx, entry.QuestID)
+			s.sendQuestComplete(entry.QuestID)
 		}
 		break
 	}
@@ -1569,11 +1571,15 @@ func (s *session) creditQuestObjectiveEntries(ctx context.Context, entries []uin
 		s.player.QuestLog[slot] = entry
 		s.sendPlayerQuestLogUpdate(slot)
 		if s.questObjectivesComplete(ctx, entry.QuestID, entry) {
-			entry.State = 1
+			// Player::KilledMonsterCredit (Player.cpp:16636): completion
+			// runs through Player::CompleteQuest — DB status, the
+			// SetQuestStatus spell-area scan + OnQuestStatusChange hook,
+			// log-slot state, and the TRACKING auto-reward arm —
+			// followed by SendQuestComplete.
+			entry.State = questCompleteStateFlag(questStatusComplete)
 			s.player.QuestLog[slot] = entry
-			s.sendPlayerQuestLogUpdate(slot)
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, entry.QuestID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
+			s.completeQuest(ctx, entry.QuestID)
+			s.sendQuestComplete(entry.QuestID)
 		}
 	}
 }
