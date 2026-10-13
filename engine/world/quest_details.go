@@ -155,6 +155,10 @@ func (s *session) failQuest(ctx context.Context, questID uint32) {
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusFailed, s.playerGUID, questID)
 	}
+	// Player::FailQuest (Player.cpp:15543): the FAILED transition runs
+	// through Player::SetQuestStatus (update=true), which fires
+	// OnQuestStatusChange before the log-slot and destroy arms.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		if s.player.QuestLog[slot].QuestID == questID {
 			s.player.QuestLog[slot].Timer = 1
@@ -556,6 +560,11 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32, questGiv
 	}
 	s.initializeQuestItemCounts(ctx, questID)
 
+	// Player::AddQuest (Player.cpp:15290): the status-change hook fires at
+	// the end of AddQuest, before AddQuestAndCheckCompletion's completion
+	// check (which may fire again via SetQuestStatus in CompleteQuest).
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
+
 	// If quest has no objectives or immediate completion requirements, mark complete immediately (Player::AddQuestAndCheckCompletion)
 	if s.canCompleteQuest(ctx, questID) {
 		s.completeQuest(ctx, questID)
@@ -834,6 +843,10 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 	// (CallAllFunctions). CMSG_QUESTLOG_REMOVE_QUEST (QuestHandler.cpp:449)
 	// fires it after AbandonQuest/RemoveActiveQuest/RemoveTimedAchievement.
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestAbandon, s.luaPlayer(), questID)
+	// WorldSession::HandleQuestLogRemoveQuest (QuestHandler.cpp:465): the
+	// abandon also fires OnQuestStatusChange after AbandonQuest /
+	// RemoveActiveQuest / RemoveTimedAchievement.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		wdb := s.server.WorldStore.DB
 		var entries []uint32

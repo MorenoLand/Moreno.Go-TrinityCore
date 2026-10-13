@@ -19,46 +19,47 @@ import (
 )
 
 const (
-	PlayerEventFirstLogin       = 30
-	PlayerEventCharacterCreate  = 1 // OnCreate fires with the live Player*; Go has no player object at create time, so the engine never fires this event
-	PlayerEventCharacterDelete  = 2
-	PlayerEventLogin            = 3
-	PlayerEventLogout           = 4
-	PlayerEventDuelRequest      = 9
-	PlayerEventDuelStart        = 10
-	PlayerEventDuelEnd          = 11
-	PlayerEventKillPlayer       = 6
-	PlayerEventKillCreature     = 7
-	PlayerEventKilledByCreature = 8
-	PlayerEventGiveXP           = 12
-	PlayerEventLevelChange      = 13
-	PlayerEventMoneyChange      = 14 // OnMoneyChanged fires from Player::ModifyMoney (Player.cpp:22826); Go has no central ModifyMoney — every money write is a direct field store across ~15 files, so the engine never fires this event
-	PlayerEventReputationChange = 15
-	PlayerEventTalentChange     = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; Go has no talent system, so the engine never fires this event
-	PlayerEventTalentReset      = 17 // OnTalentsReset fires from Player::ResetTalents; Go has no talent system, so the engine never fires this event
-	PlayerEventChat             = 18
-	PlayerEventWhisper          = 19
-	PlayerEventGroupChat        = 20
-	PlayerEventGuildChat        = 21
-	PlayerEventChannelChat      = 22
-	PlayerEventEmote            = 23
-	PlayerEventTextEmote        = 24
-	PlayerEventSave             = 25
-	PlayerEventBindToInstance   = 26 // OnBindToInstance fires from Player::SetBoundInstance (ScriptMgr.cpp:2037); Go has no instance-bind model, so the engine never fires this event
-	PlayerEventUpdateZone       = 27
-	PlayerEventMapChange        = 28
-	PlayerEventEquip            = 29
-	PlayerEventCanUseItem       = 31
-	PlayerEventLootItem         = 32
-	PlayerEventEnterCombat      = 33 // OnPlayerEnterCombat fires from CombatManager::NotifyAICombat per new combat reference; Go's combat-enter sites are scattered unitFlagInCombat sets with no reference model, so no C++-exact fire site exists yet
-	PlayerEventLeaveCombat      = 34 // OnPlayerLeaveCombat fires from CombatManager reference teardown (CombatManager.cpp:88-337); Go has no combat-reference model, so the engine never fires this event
-	PlayerEventRepop            = 35
-	PlayerEventResurrect        = 36
-	PlayerEventLootMoney        = 37
-	PlayerEventQuestAbandon     = 38
-	PlayerEventLearnTalents     = 39 // OnLearnTalents fires from Player::LearnTalent; Go has no talent system, so the engine never fires this event
-	PlayerEventCommand          = 42
-	MapEventOnPlayerEnter       = 21
+	PlayerEventFirstLogin        = 30
+	PlayerEventCharacterCreate   = 1 // OnCreate fires with the live Player*; Go has no player object at create time, so the engine never fires this event
+	PlayerEventCharacterDelete   = 2
+	PlayerEventLogin             = 3
+	PlayerEventLogout            = 4
+	PlayerEventDuelRequest       = 9
+	PlayerEventDuelStart         = 10
+	PlayerEventDuelEnd           = 11
+	PlayerEventKillPlayer        = 6
+	PlayerEventKillCreature      = 7
+	PlayerEventKilledByCreature  = 8
+	PlayerEventGiveXP            = 12
+	PlayerEventLevelChange       = 13
+	PlayerEventMoneyChange       = 14 // OnMoneyChanged fires from Player::ModifyMoney (Player.cpp:22826); Go has no central ModifyMoney — every money write is a direct field store across ~15 files, so the engine never fires this event
+	PlayerEventReputationChange  = 15
+	PlayerEventTalentChange      = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; Go has no talent system, so the engine never fires this event
+	PlayerEventTalentReset       = 17 // OnTalentsReset fires from Player::ResetTalents; Go has no talent system, so the engine never fires this event
+	PlayerEventChat              = 18
+	PlayerEventWhisper           = 19
+	PlayerEventGroupChat         = 20
+	PlayerEventGuildChat         = 21
+	PlayerEventChannelChat       = 22
+	PlayerEventEmote             = 23
+	PlayerEventTextEmote         = 24
+	PlayerEventSave              = 25
+	PlayerEventBindToInstance    = 26 // OnBindToInstance fires from Player::SetBoundInstance (ScriptMgr.cpp:2037); Go has no instance-bind model, so the engine never fires this event
+	PlayerEventUpdateZone        = 27
+	PlayerEventMapChange         = 28
+	PlayerEventEquip             = 29
+	PlayerEventCanUseItem        = 31
+	PlayerEventLootItem          = 32
+	PlayerEventEnterCombat       = 33 // OnPlayerEnterCombat fires from CombatManager::NotifyAICombat per new combat reference; Go's combat-enter sites are scattered unitFlagInCombat sets with no reference model, so no C++-exact fire site exists yet
+	PlayerEventLeaveCombat       = 34 // OnPlayerLeaveCombat fires from CombatManager reference teardown (CombatManager.cpp:88-337); Go has no combat-reference model, so the engine never fires this event
+	PlayerEventRepop             = 35
+	PlayerEventResurrect         = 36
+	PlayerEventLootMoney         = 37
+	PlayerEventQuestAbandon      = 38
+	PlayerEventLearnTalents      = 39 // OnLearnTalents fires from Player::LearnTalent; Go has no talent system, so the engine never fires this event
+	PlayerEventQuestStatusChange = 40 // OnQuestStatusChange fires from Player::AddQuest/RewardQuest/SetQuestStatus/quest-abandon/EffectQuestClear (ScriptMgr.cpp:2194); Eluna PlayerEvents 40 = ON_QUEST_STATUS_CHANGE, (event, player, questId), void
+	PlayerEventCommand           = 42
+	MapEventOnPlayerEnter        = 21
 )
 
 // Eluna GuildEvents contract for RegisterGuildEvent. Numbering is the

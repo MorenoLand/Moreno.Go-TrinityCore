@@ -214,8 +214,7 @@ func (s *session) handleQuestRemove(ctx context.Context, args []string) {
 	}
 	target.clearQuestLogEntries(ctx, entry)
 	// The TakeQuestSourceItem, PvP-quest-flag and OnQuestStatusChange legs
-	// have no Go bridge; the quest-log and DB deletes are the full
-	// observable state.
+	// ride along in clearQuestLogEntries (Spell::EffectQuestClear arm order).
 	s.sendSysMessage("Quest removed.") // LANG_COMMAND_QUEST_REMOVED 473
 }
 

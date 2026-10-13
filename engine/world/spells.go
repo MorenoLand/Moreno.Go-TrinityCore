@@ -34845,28 +34845,47 @@ func (s *session) handleEffectQuestClear(ctx context.Context, eff wotlk.SpellEff
 }
 
 // clearQuestLogEntries mirrors the shared core of Player::RemoveActiveQuest +
-// Player::RemoveRewardedQuest plus the quest-log clearing of
-// Spell::EffectQuestClear (SpellEffects.cpp:4611-4658): the
-// character_queststatus and character_queststatus_rewarded rows are deleted
-// and every quest-log slot holding the quest is zeroed. The
-// TakeQuestSourceItem, PvP-quest-flag and OnQuestStatusChange arms have no Go
-// bridge (same verdict as the .quest remove command path).
+// Player::RemoveRewardedQuest plus the per-slot arms of
+// Spell::EffectQuestClear (SpellEffects.cpp:4611-4658) and HandleQuestRemove
+// (cs_quest.cpp:112-163): per quest-log slot holding the quest the slot is
+// zeroed, the quest's source item is taken (TakeQuestSourceItem(logQuest,
+// false), no error message), and a PvP-flagged quest recomputes the hostile
+// state via applyZoneState (the pvpInfo.IsHostile recompute + UpdatePvPState
+// twin — Go's hasPvPForcingQuest reads the character_queststatus rows, so the
+// recompute runs while the quest's row still exists, exactly like the C++
+// reads m_QuestStatus before RemoveActiveQuest). The DB rows are deleted
+// after the slot loop and OnQuestStatusChange fires last — the same arm
+// order as EffectQuestClear (SpellEffects.cpp:4637-4653).
 func (s *session) clearQuestLogEntries(ctx context.Context, questID uint32) {
 	if s == nil || s.server == nil {
 		return
 	}
-	if cdb := s.server.CharactersStore.DB; cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, questID)
+	var pvpFlagged bool
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var flags int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM quest_template WHERE ID = ?", questID).Scan(&flags); err == nil {
+			pvpFlagged = flags&questFlagsPVP != 0
+		}
 	}
 	if s.player != nil {
 		for slot := 0; slot < playerQuestLogSlots; slot++ {
 			if s.player.QuestLog[slot].QuestID == questID {
 				s.player.QuestLog[slot] = questLogEntry{}
 				s.sendPlayerQuestLogUpdate(slot)
+				s.takeQuestSourceItem(ctx, questID, false)
+				if pvpFlagged {
+					if s.applyZoneState(ctx, s.player, s.player.Zone, s.areaID) {
+						s.sendPlayerUpdate()
+					}
+				}
 			}
 		}
 	}
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, questID)
+	}
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 }
 
 // handleEffectQuestStart mirrors Spell::EffectQuestStart (SpellEffects.cpp:5294-5316),

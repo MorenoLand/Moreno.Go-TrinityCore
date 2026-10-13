@@ -1276,6 +1276,10 @@ func (s *session) completeQuest(ctx context.Context, questID uint32) {
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, questID)
 	}
+	// Player::CompleteQuest (Player.cpp:15297): the COMPLETE transition
+	// runs through Player::SetQuestStatus (update=true), which fires
+	// OnQuestStatusChange.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 	if s.player != nil {
 		for slot := 0; slot < playerQuestLogSlots; slot++ {
 			if s.player.QuestLog[slot].QuestID == questID {
@@ -1304,6 +1308,10 @@ func (s *session) incompleteQuest(ctx context.Context, questID uint32) {
 		return
 	}
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, s.playerGUID, questID)
+	// Player::IncompleteQuest (Player.cpp:15324): the INCOMPLETE transition
+	// runs through Player::SetQuestStatus (update=true), which fires
+	// OnQuestStatusChange.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), questID)
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		if s.player.QuestLog[slot].QuestID == questID {
 			s.player.QuestLog[slot].State &^= questCompleteStateFlag(questStatusComplete)
