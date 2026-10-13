@@ -42,7 +42,11 @@ func (s *session) handleStandStateChange(ctx context.Context, payload []byte) bo
 }
 
 func (s *session) handleEmote(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 4 || s.player.Health == 0 {
+	// ChatHandler.cpp:644 (HandleEmoteOpcode): the gate is !IsAlive() ||
+	// HasUnitState(UNIT_STATE_DIED) — a feign-deathing player has full
+	// health, so the DIED-state twin (the feign-death aura) must ride
+	// alongside the health gate.
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 || s.player.Health == 0 || s.hasAuraType(spellAuraFeignDeath) {
 		return true
 	}
 	reader := protocol.NewReader(payload)
@@ -121,17 +125,20 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	// Reference: WorldSession::HandleTextEmoteOpcode (ChatHandler.cpp:700-714)
+	// Reference: WorldSession::HandleTextEmoteOpcode (ChatHandler.cpp:700-719)
 	// — the state emotes (SLEEP=12, SIT=13, KNEEL=68) and NONE=0 skip
-	// HandleEmoteCommand entirely; only the default arm sends the visual
-	// SMSG_EMOTE. The dead-entity arm (UNIT_STATE_DIED) is unreachable here:
-	// the handler returns early when the player is dead, like C++'s
-	// !IsAlive() gate.
+	// HandleEmoteCommand entirely; the default arm skips the visual
+	// SMSG_EMOTE for "dead" entities (feign death included, :719). The early
+	// !IsAlive() gate (:683) passes a feign-deathing player (IsAlive stays
+	// true), so the DIED-state arm is the live check here; the text-emote
+	// broadcast below still goes out.
 	sendVisual := false
 	switch visualEmote {
 	case 12, 13, 68:
 	default:
-		sendVisual = visualEmote != 0
+		if !s.hasAuraType(spellAuraFeignDeath) {
+			sendVisual = visualEmote != 0
+		}
 	}
 	targetName := ""
 	if targetGUID != 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
