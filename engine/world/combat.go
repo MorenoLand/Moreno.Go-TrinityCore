@@ -1224,15 +1224,31 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, 1)
 	}
 
-	if damage >= target.Health {
+	// Unit::DealDamage (Unit.cpp:699-704): the AI hooks fire at the top of
+	// DealDamage — ahead of the lethal leg — on every path, including killing
+	// blows. Fired under motionMu: the hook arms (vancleefAI) mutate motion
+	// state directly. The lethal leg decides on the post-hook damage against
+	// the locked motion health (the pre-lock snapshot is stale once hooks
+	// run); when the motion is gone the snapshot decides, as before.
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
+	if motion != nil {
+		if motion.BossAI == nil {
+			motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+		}
+		fireDealDamageAIHooks(ctx, s.server, motion, nil, s.playerGUID, motion.GUID, &damage)
+	}
+	victimHealth := target.Health
+	if motion != nil {
+		victimHealth = motion.Health
+	}
+	if damage >= victimHealth {
 		// Target dies
-		s.server.motionMu.Lock()
-		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		corpseFlags := unitDynFlagLootable
 		if motion != nil {
 			// Unit::DealDamage tap block (Unit.cpp:872-876): the killing
 			// blow taps and lowers the damage requirement when untapped.
-			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health)
+			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health)
 			s.server.clearInstanceEncounter(motion)
 			motion.Health = 0
 			motion.DynamicFlags |= unitDynFlagLootable
@@ -1248,6 +1264,15 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		}
 		s.server.motionMu.Unlock()
+
+		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
+		// VanCleef's 50% summon arm): the fire must run after the unlock
+		// since Lua handler methods lock motionMu on demand. Queued hooks
+		// fire on the lethal path too — C++ runs DamageTaken ahead of the
+		// lethal leg, so a killing blow still triggers them.
+		if motion != nil {
+			s.server.drainBossSummonHooks(ctx, motion, motion.BossAI)
+		}
 
 		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
@@ -1267,32 +1292,26 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 		s.debug("target slain by auto-attack", "account", s.accountName, "guid", target.GUID)
 	} else {
-		newHealth := target.Health - damage
+		newHealth := victimHealth - damage
 		// Unit::DealDamage (Unit.cpp:925-931): random durability loss on
 		// HIT DONE — the attacker is the player.
 		s.rollDurabilityLossOnHit(ctx, damage)
 		rageChanged := false
 		var rageNext, rageMapID, rageInstanceID uint32
 		var rageGUID uint64
-		s.server.motionMu.Lock()
-		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		newlyTapped := false
 		tappedFlags := uint32(0)
 		if motion != nil {
-			if motion.BossAI == nil {
-				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
-			}
-			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fire on the
-			// mutable damage ahead of the tap/health/threat/rage legs; a
-			// hook-adjusted damage flows into all of them. Threshold arms
-			// (VanCleef's HealthBelowPct quotes) therefore evaluate the
+			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fired above
+			// on the mutable damage ahead of the tap/health/threat/rage
+			// legs; a hook-adjusted damage flows into all of them. Threshold
+			// arms (VanCleef's HealthBelowPct quotes) therefore evaluate the
 			// pre-hit health, as in C++.
-			fireDealDamageAIHooks(ctx, s.server, motion, nil, s.playerGUID, motion.GUID, &damage)
-			newHealth = target.Health - damage
+			newHealth = motion.Health - damage
 			// Unit::DealDamage tap block (Unit.cpp:872-876): first
 			// player-attributed hit claims the loot rights, every hit
 			// lowers the damage requirement.
-			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health) {
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health) {
 				newlyTapped = true
 				tappedFlags = motion.DynamicFlags
 			}
@@ -1955,16 +1974,32 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
 	}
 
-	if damage >= target.Health {
+	// Unit::DealDamage (Unit.cpp:699-704): the AI hooks fire at the top of
+	// DealDamage — ahead of the lethal leg — on every path, including killing
+	// blows. Fired under motionMu: the hook arms (vancleefAI) mutate motion
+	// state directly. The lethal leg decides on the post-hook damage against
+	// the locked motion health (the pre-lock snapshot is stale once hooks
+	// run); when the motion is gone the snapshot decides, as before.
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
+	if motion != nil {
+		if motion.BossAI == nil {
+			motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+		}
+		fireDealDamageAIHooks(ctx, s.server, motion, nil, s.playerGUID, motion.GUID, &damage)
+	}
+	victimHealth := target.Health
+	if motion != nil {
+		victimHealth = motion.Health
+	}
+	if damage >= victimHealth {
 		// Target dies
-		s.server.motionMu.Lock()
-		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		corpseFlags := unitDynFlagLootable
 		if motion != nil {
 			s.server.clearInstanceEncounter(motion)
 			// Unit::DealDamage tap block (Unit.cpp:872-876): the killing
 			// blow taps and lowers the damage requirement when untapped.
-			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health)
+			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health)
 			motion.Health = 0
 			motion.DynamicFlags |= unitDynFlagLootable
 			// The corpse keeps TAPPED when the tap survived to death
@@ -1979,6 +2014,15 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			}
 		}
 		s.server.motionMu.Unlock()
+
+		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
+		// VanCleef's 50% summon arm): the fire must run after the unlock
+		// since Lua handler methods lock motionMu on demand. Queued hooks
+		// fire on the lethal path too — C++ runs DamageTaken ahead of the
+		// lethal leg, so a killing blow still triggers them.
+		if motion != nil {
+			s.server.drainBossSummonHooks(ctx, motion, motion.BossAI)
+		}
 
 		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
@@ -2011,23 +2055,17 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		rageChanged := false
 		var rageNext, rageMapID, rageInstanceID uint32
 		var rageGUID uint64
-		s.server.motionMu.Lock()
-		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		newlyTapped := false
 		tappedFlags := uint32(0)
 		if motion != nil {
-			if motion.BossAI == nil {
-				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
-			}
-			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fire on the
-			// mutable damage ahead of the tap/health/threat/rage legs; a
-			// hook-adjusted damage flows into all of them. Threshold arms
-			// (VanCleef's HealthBelowPct quotes) therefore evaluate the
+			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fired above
+			// on the mutable damage ahead of the tap/health/threat/rage
+			// legs; a hook-adjusted damage flows into all of them. Threshold
+			// arms (VanCleef's HealthBelowPct quotes) therefore evaluate the
 			// pre-hit health, as in C++.
-			fireDealDamageAIHooks(ctx, s.server, motion, nil, s.playerGUID, motion.GUID, &damage)
-			newHealth = target.Health - damage
+			newHealth = motion.Health - damage
 			// Unit::DealDamage tap block (Unit.cpp:872-876).
-			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health) {
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health) {
 				newlyTapped = true
 				tappedFlags = motion.DynamicFlags
 			}

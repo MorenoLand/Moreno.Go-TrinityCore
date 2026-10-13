@@ -422,6 +422,19 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		s.motionMu.Unlock()
 		return
 	}
+	if m.BossAI == nil {
+		m.BossAI = getBossAIForCreature(m, m.ScriptName)
+	}
+	// Unit::DealDamage (Unit.cpp:699-704): the AI hooks fire at the top of
+	// DealDamage — the damage-shield/split recursive strikes route through
+	// it (Unit.cpp:1608) — ahead of the tap/lethal legs. The attacker leg
+	// resolves the original attacker's creature motion when it is a
+	// creature; player attackers carry no AI, as on the direct paths.
+	var attackerMotion *creatureMotion
+	if am := s.findCreatureMotionLocked(key.Map, key.InstanceID, attackerGUID); am != nil && am.Health > 0 {
+		attackerMotion = am
+	}
+	fireDealDamageAIHooks(ctx, s, m, attackerMotion, attackerGUID, m.GUID, &damage)
 	// Unit::DealDamage tap block (Unit.cpp:872-876): not damagetype-gated.
 	s.recordCreatureTap(m, attackerGUID, groupID, damage, m.Health)
 	wasInCombat := m.InCombat
@@ -436,6 +449,12 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			m.ThreatMgr.ClearThreat()
 		}
 		s.motionMu.Unlock()
+		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
+		// VanCleef's 50% summon arm): the fire must run after the unlock
+		// since Lua handler methods lock motionMu on demand. Queued hooks
+		// fire on the lethal path too — C++ runs DamageTaken ahead of the
+		// lethal leg, so a killing strike still triggers them.
+		s.drainBossSummonHooks(ctx, m, m.BossAI)
 		s.stopCreatureMotionInInstance(key.Map, key.InstanceID, key.GUID, m.X, m.Y, m.Z)
 		s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{
 			unitFieldHealth:       0,
@@ -496,6 +515,10 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		}
 	}
 	s.motionMu.Unlock()
+	// Deferred Eluna summon hooks queued by boss OnDamageTaken — see the
+	// lethal path above; the fire must run after the unlock since Lua
+	// handler methods lock motionMu on demand.
+	s.drainBossSummonHooks(ctx, m, m.BossAI)
 	// Unit::DealDamage (Unit.cpp:897-898): the DIRECT_DAMAGE strip runs after
 	// the health leg; the breakable-CC drain rides the taken proc pass.
 	s.stripCreatureRecursiveDirectDamageAuras(key, spellID, damage, m.MaxHealth)
