@@ -1330,8 +1330,23 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	err := db.QueryRowContext(ctx, `SELECT ci.item, ii.count, ii.itemEntry FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bagKey, slot).Scan(&itemGUID, &currentCount, &itemEntry)
+	// HandleDestroyItemOpcode (ItemHandler.cpp:292-295): a missing item
+	// answers EQUIP_ERR_ITEM_NOT_FOUND — C++ CanUnequipItem returns
+	// EQUIP_ERR_OK for empty slots, so the error lands regardless of
+	// position.
 	if err != nil || itemGUID == 0 {
+		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
+	}
+	// HandleDestroyItemOpcode (ItemHandler.cpp:300-305): items flagged
+	// ITEM_FLAG_NO_USER_DESTROY (ItemTemplate.h:157, 0x20) answer
+	// EQUIP_ERR_CANT_DROP_SOULBOUND instead of being destroyed.
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var tplFlags int64
+		if ferr := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&tplFlags); ferr == nil && tplFlags&0x20 != 0 {
+			s.sendEquipError(equipErrCantDropSoulbound, 0)
+			return true
+		}
 	}
 	if bagKey == 0 && ((slot >= invSlotBagStart && slot < invSlotBagEnd) || (slot >= 67 && slot <= 73)) {
 		if !s.isBagEmpty(ctx, itemGUID) {
@@ -1747,6 +1762,7 @@ const (
 	equipErrItemsCantBeSwapped                = 21
 	equipErrSlotIsEmpty                       = 22
 	equipErrItemNotFound                      = 23
+	equipErrCantDropSoulbound                 = 24 // C++ EQUIP_ERR_CANT_DROP_SOULBOUND (ItemDefines.h:50)
 	equipErrNotEnoughMoney                    = 29
 	equipErrInventoryFull                     = 50 // C++ EQUIP_ERR_INVENTORY_FULL (ItemDefines.h:76)
 	equipErrCanOnlyDoWithEmptyBags            = 31
