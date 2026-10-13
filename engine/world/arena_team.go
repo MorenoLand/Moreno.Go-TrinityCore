@@ -358,8 +358,8 @@ func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) boo
 
 	// GetArenaTeamById miss -> silent return == C++.
 	var teamName string
-	var aType, captainGUID uint32
-	if err := cdb.QueryRowContext(ctx, "SELECT name, type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &aType, &captainGUID); err != nil {
+	var aType, captainGUID, teamRating uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT name, type, captainGuid, rating FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &aType, &captainGUID, &teamRating); err != nil {
 		return true
 	}
 
@@ -395,10 +395,20 @@ func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", s.playerGUID, aType)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", s.playerGUID, aType)
 
-	// Personal rating == C++ AddMember: CONFIG_ARENA_START_PERSONAL_RATING (1000
-	// by default) wins when positive; Go keeps no arena rating config, so the
-	// C++ default applies. The old 1500 constant belonged to the matchmaker rating.
-	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, 1000)", teamID, s.playerGUID); err != nil {
+	// Personal rating == C++ ArenaTeam::AddMember (ArenaTeam.cpp:126-131):
+	// CONFIG_ARENA_START_PERSONAL_RATING wins when positive (1000 default);
+	// otherwise the joiner inherits 1000 only when the team rating is at
+	// least 1000, else 0. The uint16 cast caps an oversized config.
+	personalRating := uint32(0)
+	if startRating := s.server.Config.ArenaStartPersonalRating; startRating > 0 {
+		personalRating = uint32(startRating)
+		if personalRating > 0xFFFF {
+			personalRating = 0xFFFF
+		}
+	} else if teamRating >= 1000 {
+		personalRating = 1000
+	}
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, ?)", teamID, s.playerGUID, personalRating); err != nil {
 		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamInternal)
 		return true
 	}

@@ -41,13 +41,13 @@ func CalcRatingDelta(winnerRating, loserRating uint32) (winnerGain, loserLoss in
 }
 
 // arenaTeamRatingLossMod mirrors ArenaTeam::GetRatingMod (ArenaTeam.cpp:713)
-// for a loss: ceil(Arena.LoseRatingModifier * -chance), with chance from
+// for a loss: ceil(loseMod * -chance), with chance from
 // ArenaTeam::GetChanceAgainst (ArenaTeam.cpp:680):
-// 1 / (1 + exp(ln(10) * (opponent - own) / 650)). The lose modifier defaults
-// to 24 (World.cpp:1224).
-func arenaTeamRatingLossMod(ownRating, opponentRating uint32) int32 {
+// 1 / (1 + exp(ln(10) * (opponent - own) / 650)). The lose modifier is
+// CONFIG_ARENA_LOSE_RATING_MODIFIER (World.cpp:1224, 24.0 default).
+func arenaTeamRatingLossMod(ownRating, opponentRating uint32, loseMod float64) int32 {
 	chance := 1.0 / (1.0 + math.Exp(math.Log(10.0)*(float64(opponentRating)-float64(ownRating))/650.0))
-	return int32(math.Ceil(24.0 * -chance))
+	return int32(math.Ceil(loseMod * -chance))
 }
 
 // CalculateArenaPoints calculates the weekly Arena Points awarded for a given rating and bracket type.

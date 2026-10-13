@@ -979,7 +979,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 			if teamID := arenaTeamIDForSlot(ctx, cdb, s.playerGUID, uint32(entry.ArenaType)); teamID != 0 {
 				var personal uint32
 				_ = cdb.QueryRowContext(ctx, "SELECT personalRating FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID).Scan(&personal)
-				mod := arenaTeamRatingLossMod(personal, 0)
+				mod := arenaTeamRatingLossMod(personal, 0, s.server.Config.ArenaLoseRatingModifier)
 				newPersonal := personal
 				if mod < 0 && uint32(-mod) >= newPersonal {
 					newPersonal = 0
