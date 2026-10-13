@@ -41,13 +41,27 @@ const maxGetAllReturn uint32 = 55000
 
 // auctionOutBid mirrors AuctionEntry::GetAuctionOutBid
 // (AuctionHouseMgr.cpp:879-884): the minimum outbid increment is 5% of the
-// current bid, at least 1 copper.
+// current bid, at least 1 copper. C++ runs CalculatePct in float
+// (T(base * pct / 100.0f)), so the product never wraps: integer math
+// overflowed uint32 for bids at or above 858,993,460 copper, shrinking the
+// increment ~7x on high-value auctions.
 func auctionOutBid(bid uint32) uint32 {
-	outbid := bid * 5 / 100
+	outbid := uint32(float32(bid) * 5 / 100)
 	if outbid == 0 {
 		outbid = 1
 	}
 	return outbid
+}
+
+// auctionCutFor mirrors AuctionEntry::GetAuctionCut
+// (AuctionHouseMgr.cpp:872-877): int32(CalculatePct(bid,
+// auctionHouseEntry->ConsignmentRate) * sWorld->getRate(RATE_AUCTION_CUT)).
+// The neutral house carries ConsignmentRate 15 and the cut-rate config
+// defaults to 1, so this is the float 15% the C++ evaluates — integer math
+// overflowed uint32 for bids at or above 286,331,154 copper and under-cut
+// high-value auctions.
+func auctionCutFor(bid uint32) uint32 {
+	return uint32(float32(bid) * float32(auctionConsignmentPct) / 100)
 }
 
 // auctionDeposit ports AuctionHouseMgr::GetAuctionDeposit
@@ -716,7 +730,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionbidders WHERE id = ?", auctionID)
 
 		// Consignment cut (neutral 15%) and profit (bid + deposit - cut)
-		consignment := uint32(buyout) * auctionConsignmentPct / 100
+		consignment := auctionCutFor(uint32(buyout))
 		profit := uint32(buyout) + uint32(deposit) - consignment
 		if s.server != nil {
 			if sellerSess := s.server.findSessionByGUID(uint64(ownerGUID)); sellerSess != nil {
@@ -1019,7 +1033,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	// cancel — no command result is sent, and the bidder-refund mail goes
 	// out before the cut is taken.
 	if bidderGUID > 0 && lastBid > 0 {
-		auctionCut := uint32(lastBid) * auctionConsignmentPct / 100
+		auctionCut := auctionCutFor(uint32(lastBid))
 		if s.player.Money < auctionCut {
 			return true
 		}
@@ -1103,7 +1117,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 			// sends SendAuctionSuccessfulMail first, then SendAuctionWonMail — the
 			// sale-pending/invoice mail (SendAuctionSalePendingMail) fires only on
 			// player buyout (AuctionHouseHandler.cpp:559) and the bot-buyer path.
-			consignment := uint32(a.lastBid) * auctionConsignmentPct / 100
+			consignment := auctionCutFor(uint32(a.lastBid))
 			profit := uint32(a.lastBid) + uint32(a.deposit) - consignment
 
 			// 1. Profit mail to seller (delayed by MailDeliveryDelay, default 1 hour),

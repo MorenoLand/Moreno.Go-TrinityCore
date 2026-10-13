@@ -94,15 +94,15 @@ func (s *session) setTradeSpell(spellID uint32, castItemGUID uint64) {
 	}
 	s.trade.SpellID = spellID
 	s.trade.SpellCastItemGUID = castItemGUID
-	if s.trade.Accepted {
-		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-	}
+	// Reference: TradeData::SetAccepted (TradeData.cpp:122-133) sends
+	// TRADE_STATUS_BACK_TO_TRADE unconditionally — even when the side was
+	// never accepted. TradeData::SetSpell runs it on both sides before the
+	// two extended updates.
+	s.trade.Accepted = false
+	_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
-		if s.trade.Partner.trade.Accepted {
-			s.trade.Partner.trade.Accepted = false
-			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-		}
+		s.trade.Partner.trade.Accepted = false
+		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		s.notifyTradeUpdate()
 	}
 }
@@ -507,15 +507,13 @@ func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	s.trade.Money = gold
-	if s.trade.Accepted {
-		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-	}
+	// Reference: TradeData::SetMoney (TradeData.cpp:103-109) runs
+	// SetAccepted(false) on both sides unconditionally before Update(true).
+	s.trade.Accepted = false
+	_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
-		if s.trade.Partner.trade.Accepted {
-			s.trade.Partner.trade.Accepted = false
-			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-		}
+		s.trade.Partner.trade.Accepted = false
+		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		s.notifyTradePartnerUpdate()
 	}
 	return true
@@ -711,25 +709,22 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		MaxDurability:    maxDurability,
 		LockID:           lockID,
 	}
-	// TradeData::SetItem spell clearing (TradeData.cpp:72-77): changing the
-	// non-traded slot removes a possible spell the trader applied to it;
-	// changing any slot removes a possible spell the player applied (the
-	// reagent may have moved).
+	// TradeData::SetItem (TradeData.cpp:60-78): SetAccepted(false) fires
+	// TRADE_STATUS_BACK_TO_TRADE unconditionally on both sides, then the
+	// extended update goes to the trader, and only then do the spell clears
+	// (each SetSpell re-runs the unconditional un-accept when a spell was
+	// actually stored).
+	s.trade.Accepted = false
+	_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
+	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
+		s.trade.Partner.trade.Accepted = false
+		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
+		s.notifyTradePartnerUpdate()
+	}
 	if tradeSlot == tradeSlotNonTraded && s.trade.Partner != nil {
 		s.trade.Partner.setTradeSpell(0, 0)
 	}
 	s.setTradeSpell(0, 0)
-	if s.trade.Accepted {
-		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-	}
-	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
-		if s.trade.Partner.trade.Accepted {
-			s.trade.Partner.trade.Accepted = false
-			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-		}
-		s.notifyTradePartnerUpdate()
-	}
 	return true
 }
 
@@ -751,24 +746,22 @@ func (s *session) handleClearTradeItem(ctx context.Context, payload []byte) bool
 		return true
 	}
 	delete(s.trade.Items, tradeSlot)
-	// HandleClearTradeItemOpcode routes through TradeData::SetItem(slot,
-	// nullptr) (TradeHandler.cpp:778-792), so the same spell clearing as
-	// handleSetTradeItem applies (TradeData.cpp:72-77).
+	// TradeData::SetItem (TradeData.cpp:60-78): SetAccepted(false) fires
+	// TRADE_STATUS_BACK_TO_TRADE unconditionally on both sides, then the
+	// extended update goes to the trader, and only then do the spell clears
+	// (each SetSpell re-runs the unconditional un-accept when a spell was
+	// actually stored).
+	s.trade.Accepted = false
+	_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
+	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
+		s.trade.Partner.trade.Accepted = false
+		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
+		s.notifyTradePartnerUpdate()
+	}
 	if tradeSlot == tradeSlotNonTraded && s.trade.Partner != nil {
 		s.trade.Partner.setTradeSpell(0, 0)
 	}
 	s.setTradeSpell(0, 0)
-	if s.trade.Accepted {
-		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-	}
-	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
-		if s.trade.Partner.trade.Accepted {
-			s.trade.Partner.trade.Accepted = false
-			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-		}
-		s.notifyTradePartnerUpdate()
-	}
 	return true
 }
 
