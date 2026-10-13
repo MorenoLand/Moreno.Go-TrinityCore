@@ -280,6 +280,17 @@ local function onTargetDied(event, creature, victim)
     end
 end
 
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
+-- float edge.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
@@ -288,7 +299,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     -- C++ UpdateAI: HealthBelowPct(15) && !HasYelled -> SAY_HALFLIFE,
     -- once. Pre-damage approximation (no pre/post-damage distinction).
     local guid = creature:GetGUID()
-    if not hasYelled[guid] and creature:GetHealthPct() <= 15 then
+    if not hasYelled[guid] and healthBelowPct(creature, 15) then
         hasYelled[guid] = true
         creature:Talk(SAY_HALFLIFE)
     end

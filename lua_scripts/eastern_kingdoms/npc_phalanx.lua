@@ -36,6 +36,21 @@ local ENTRY_PHALANX = 9502
 
 local timers = {}
 
+-- C++ npc_phalanxAI::Initialize(): FireballVolley_Timer = 0 and it only
+-- ticks while HealthBelowPct(51) (blackrock_depths.cpp:412).
+local fireballTimer = {}
+
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
+-- float edge.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -43,6 +58,7 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+        fireballTimer[guid] = nil
     end
 end
 
@@ -65,10 +81,18 @@ end
 
 local function onFireballVolley(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetHealthPct() < 51 then
-        creature:CastSpell(victim, SPELL_FIREBALLVOLLEY)
+    -- C++ UpdateAI: FireballVolley_Timer (init 0) only ticks while
+    -- HealthBelowPct(51); crossing below fires on the next tick, then
+    -- re-arms 15000. 1s-granularity gated pump.
+    if victim and healthBelowPct(creature, 51) then
+        local t = (fireballTimer[guid] or 0) - 1000
+        if t <= 0 then
+            creature:CastSpell(victim, SPELL_FIREBALLVOLLEY)
+            t = 15000
+        end
+        fireballTimer[guid] = t
     end
-    schedule(guid, "fireballvolley", 15000, function() onFireballVolley(creature, guid) end)
+    schedule(guid, "fireballvolley", 1000, function() onFireballVolley(creature, guid) end)
 end
 
 local function onMightyBlow(creature, guid)
@@ -83,7 +107,8 @@ local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "thunderclap", 12000, function() onThunderclap(creature, guid) end)
-    schedule(guid, "fireballvolley", 15000, function() onFireballVolley(creature, guid) end)
+    fireballTimer[guid] = 0
+    schedule(guid, "fireballvolley", 1000, function() onFireballVolley(creature, guid) end)
     schedule(guid, "mightyblow", 15000, function() onMightyBlow(creature, guid) end)
 end
 

@@ -66,6 +66,17 @@ local APOTHECARY_HANES_ENTRY = 23784
 local hanesState = {}
 local hanesPump = {}
 
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
+-- float edge.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 local function cancelPump(guid)
     local id = hanesPump[guid]
     if id then
@@ -82,7 +93,7 @@ local function potionTick(creature, guid)
     if not st then
         return
     end
-    if creature:GetHealthPct() < 75 then
+    if healthBelowPct(creature, 75) then
         st.potTimer = st.potTimer - 1000
         if st.potTimer <= 0 then
             creature:CastSpell(creature, SPELL_HEALING_POTION, true)

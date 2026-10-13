@@ -66,12 +66,23 @@ end
 
 -- C++ UpdateAI polls HealthBelowPct(50)/(15) every tick; the 1s
 -- pump is the honest approximation (shade_of_aran precedent).
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
+-- float edge.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 local function healthPump(creature, guid, st)
-    if creature:GetHealthPct() <= 50 and not st.hp50 then
+    if healthBelowPct(creature, 50) and not st.hp50 then
         st.hp50 = true
         creature:Talk(SAY_HP50)
     end
-    if creature:GetHealthPct() <= 15 and not st.hp15 then
+    if healthBelowPct(creature, 15) and not st.hp15 then
         st.hp15 = true
         creature:Talk(SAY_HP15)
         creature:CastSpell(creature, SPELL_FRENZY)

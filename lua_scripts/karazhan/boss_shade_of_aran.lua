@@ -86,6 +86,17 @@ local SUPER_FOLLOW = {
     [SUPER_AE] = { SUPER_FLAME, SUPER_BLIZZARD },
 }
 
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
+-- float edge.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 local timers = {}
 local aranState = {}
 local elementalTimers = {}
@@ -226,7 +237,7 @@ onNormalCast = function(creature, guid)
         if target then
             creature:CastSpell(target, NORMAL_SPELLS[math.random(#NORMAL_SPELLS)])
         end
-        if not st.elementalsSpawned and creature:GetHealthPct() < 40 then
+        if not st.elementalsSpawned and healthBelowPct(creature, 40) then
             st.elementalsSpawned = true
             -- C++ summons 4 water elementals (17167) on the victim; no
             -- summon model, so only the announcement survives.

@@ -208,16 +208,27 @@ end
 -- C++ UpdateAI health-yell legs (per-tick in C++; 1s pump here,
 -- sironas convention): HealthBelowPct(30) -> Talk(6) and
 -- HealthBelowPct(15) -> Talk(7), each latched once (C++
--- _hadYell30/_hadYell15); creature:GetHealthPct() is the
--- HealthBelowPct bridge (npc_arthas precedent).
+-- _hadYell30/_hadYell15); the floored healthBelowPct helper is the
+-- C++-exact comparison (ironaya convention).
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
+-- float edge.
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
 local function startHealthYellPump(creature, guid)
     local hadYell30, hadYell15 = false, false
     pumps[guid] = CreateLuaEvent(function()
-        if not hadYell30 and creature:GetHealthPct() < 30 then
+        if not hadYell30 and healthBelowPct(creature, 30) then
             creature:Talk(SAY_30HEALTH)
             hadYell30 = true
         end
-        if not hadYell15 and creature:GetHealthPct() < 15 then
+        if not hadYell15 and healthBelowPct(creature, 15) then
             creature:Talk(SAY_15HEALTH)
             hadYell15 = true
         end
