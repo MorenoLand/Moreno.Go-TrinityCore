@@ -14301,6 +14301,33 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// SpellInfo::DmgClass is the DefenseType DBC field (SpellInfo.cpp:856),
 		// so the DefenseType route below is C++-exact.
 		fixedDamageSpell = spellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		// Unit::CalculateSpellDamageTaken (Unit.cpp:1004-1006): physical-school
+		// spell damage is reduced by the victim's armor
+		// (Unit::IsDamageReducedByArmor: school bit 0 set and no
+		// SPELL_ATTR0_CU_IGNORE_ARMOR; SPELL_ATTR4_FIXED_DAMAGE skips the
+		// whole taken-mitigation block). C++ runs CalcArmorReducedDamage
+		// AHEAD of the crit doubling (:1037+/1095) — the ceil runs once on
+		// the pre-crit damage, then the crit doubles the integer; ceiling
+		// the doubled product instead differs by 1 whenever the pre-crit
+		// reduced damage carries a fractional part in (0, 0.5].
+		if !instantKill && damage > 0 && schoolMask&1 != 0 && spellKnown &&
+			dmgSpell.AttributesEx4&spellAttr4FixedDamage == 0 && dmgSpell.Attributes&spellAttr0CUIgnoreArmor == 0 &&
+			s.player != nil {
+			armor := float64(target.Armor)
+			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+				armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
+			}
+			if armor < 0 {
+				armor = 0
+			}
+			if armor > 0 {
+				// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650): the 123/270/269
+				// ignore-resist armor legs run before the ARP-rating leg inside
+				// calcArmorReducedDamage.
+				armor = s.ignoreTargetResistArmor(armor, dmgSpell)
+				damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
+			}
+		}
 		if crit && !fixedDamageSpell {
 			if s.server != nil && s.server.Data != nil {
 				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
@@ -14320,33 +14347,6 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
 			}
 			hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
-		}
-
-		// Unit::CalculateSpellDamageTaken (Unit.cpp:1004-1006): physical-school
-		// spell damage is reduced by the victim's armor
-		// (Unit::IsDamageReducedByArmor: school bit 0 set and no
-		// SPELL_ATTR0_CU_IGNORE_ARMOR; SPELL_ATTR4_FIXED_DAMAGE skips the
-		// whole taken-mitigation block). C++ applies armor before the crit
-		// bonus; both are pure multiplications, so running it after the
-		// crit fold is arithmetically equivalent modulo rounding, matching
-		// the melee path's existing placement (combat.go).
-		if !instantKill && damage > 0 && schoolMask&1 != 0 && spellKnown &&
-			dmgSpell.AttributesEx4&spellAttr4FixedDamage == 0 && dmgSpell.Attributes&spellAttr0CUIgnoreArmor == 0 &&
-			s.player != nil {
-			armor := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
-				armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
-			}
-			if armor < 0 {
-				armor = 0
-			}
-			if armor > 0 {
-				// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650): the 123/270/269
-				// ignore-resist armor legs run before the ARP-rating leg inside
-				// calcArmorReducedDamage.
-				armor = s.ignoreTargetResistArmor(armor, dmgSpell)
-				damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
-			}
 		}
 
 		if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
