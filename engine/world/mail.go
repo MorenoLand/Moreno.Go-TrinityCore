@@ -469,6 +469,10 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 		packet.Write(entryBytes)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_MAIL_LIST_RESULT), packet.Bytes(), true)
+	// Reference: MailHandler.cpp:560-563 — HandleGetMailList closes with
+	// UpdateNextMailTimeAndUnreads (Player.cpp:3124-3139); the loadMailState
+	// twin recounts unread delivered mails and the next delivery time.
+	s.loadMailState(ctx)
 	s.debug("mail list sent", "account", s.accountName, "mails", len(entries))
 	return true
 }
@@ -1038,7 +1042,15 @@ func (s *session) handleMailMarkAsRead(ctx context.Context, payload []byte) bool
 		return false
 	}
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE mail SET checked = (checked | 1) WHERE id = ? AND receiver = ?", mailID, s.playerGUID)
+		res, _ := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE mail SET checked = (checked | 1) WHERE id = ? AND receiver = ?", mailID, s.playerGUID)
+		// Reference: MailHandler.cpp:316-321 — the mail is player-scoped
+		// (GetMail); a found, non-deleted row decrements unReadMails (guarded
+		// at >0) unconditionally, even when the read bit was already set, so
+		// Go mirrors the decrement on any matched row rather than on a
+		// checked-state change.
+		if affected, rowsErr := res.RowsAffected(); rowsErr == nil && affected > 0 && s.unreadMails > 0 {
+			s.unreadMails--
+		}
 	}
 	return true
 }
@@ -1058,7 +1070,11 @@ func (s *session) handleQueryNextMailTime(ctx context.Context) bool {
 		TimeLeft    float32
 	}
 	var entries []nextMailEntry
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+	// Reference: MailHandler.cpp:625 — NextMailTime is gated on unReadMails > 0,
+	// not on the row scan: a deleted-but-not-recalculated mail leaves the
+	// counter stale and C++ answers 0 with an empty Next list, so Go mirrors
+	// the counter gate rather than deriving the answer from the rows.
+	if s.unreadMails > 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT messageType, stationery, sender, deliver_time
 			FROM mail WHERE receiver = ? AND (checked & 1) = 0 AND deliver_time <= ? ORDER BY id DESC`, s.playerGUID, time.Now().Unix())
 		if err == nil {
