@@ -101,11 +101,33 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 		msg = fmt.Sprintf(msg, creatureName)
 	}
 
+	chatType := chosen.Type
+	if chatType == 0 {
+		chatType = 12 // CHAT_MSG_MONSTER_SAY
+	}
+	// CreatureAI::Talk(id, target) -> CreatureTextMgr::SendChat(source, id,
+	// whisperTarget): for CHAT_MSG_MONSTER_WHISPER (0x0F) / RAID_BOSS_WHISPER
+	// (0x2A) with TEXT_RANGE_NORMAL the chat packet and the sound go to the
+	// whisper target only (CreatureTextMgrImpl.h:87, CreatureTextMgr.cpp:306).
+	// Non-player whisper targets drop the message, like C++.
+	whispered := whisperTarget != 0 && (chatType == 0x0F || chatType == 0x2A)
+	var whisperSess *session
+	if whispered {
+		whisperSess = s.findSessionByGUID(whisperTarget)
+		if whisperSess == nil || whisperSess.player == nil {
+			return
+		}
+	}
+
 	// 1. Play Sound
 	if chosen.Sound > 0 {
 		soundPkt := protocol.NewBuffer(4)
 		soundPkt.WriteU32(chosen.Sound)
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), nil)
+		if whispered {
+			_ = whisperSess.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), true)
+		} else {
+			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), nil)
+		}
 	}
 
 	// 2. Play Emote
@@ -113,14 +135,16 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 		emotePkt := protocol.NewBuffer(12)
 		emotePkt.WriteU32(chosen.Emote)
 		emotePkt.WriteU64(creatureGUID)
+		// CreatureTextMgr::SendEmote takes no whisper target (HandleEmoteCommand
+		// broadcasts to nearby), so the emote stays broadcast on the whisper arm.
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), nil)
 	}
 
 	// 3. Broadcast chat message
-	chatType := chosen.Type
-	if chatType == 0 {
-		chatType = 12 // CHAT_MSG_MONSTER_SAY
-	}
 	chatPkt := protocol.BuildMonsterChatMessage(chatType, uint32(chosen.Language), creatureGUID, creatureName, msg)
+	if whispered {
+		_ = whisperSess.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, true)
+		return
+	}
 	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
 }

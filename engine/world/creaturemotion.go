@@ -3644,7 +3644,10 @@ func (s *Server) updatePvPFlags(now time.Time) {
 	s.sessionsMu.RLock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && !sess.pvpEnd.IsZero() && !now.Before(sess.pvpEnd) {
+		// Player::UpdatePvPFlag (Player.cpp:20768): !IsPvP() returns early;
+		// the off-timer only fires once 300s have passed since EndTimer and
+		// the zone is not hostile (pvpInfo.IsHostile).
+		if sess.worldReady.Load() && sess.player != nil && sess.player.PVPFlags&0x01 != 0 && !sess.pvpEnd.IsZero() && !now.Before(sess.pvpEnd.Add(5*time.Minute)) && !sess.pvpHostile {
 			sessions = append(sessions, sess)
 		}
 	}

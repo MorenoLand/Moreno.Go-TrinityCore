@@ -20,8 +20,8 @@
 -- DoCastVictim with the HealthBelowPct(50) gate, C++-exact) /
 -- whirlwind 13736 {24s,30s} then {22s,26s} self-cast (non-triggered
 -- DoCast(me), C++-exact) / watch 24314 {13s,15s} then {12s,15s} on a
--- random alive player within 100 yd (Talk(SAY_WATCH=2) at the player,
--- C++-exact) / charge 24408 {33s,38s} then {22s,30s} on a random
+-- random alive player within 100 yd (Talk(SAY_WATCH=2) whispered to the
+-- watched player, C++-exact) / charge 24408 {33s,38s} then {22s,30s} on a random
 -- alive player within 40 yd (non-triggered DoCast, C++-exact). Re-arms are
 -- unconditional (nil-victim/nil-target ticks cast nothing but keep the
 -- schedule, jeklik convention). Every third player kill: Talk
@@ -171,12 +171,14 @@ local function onWhirlwind(creature, guid)
 end
 
 -- C++ EVENT_WATCH_PLAYER: random 100-yd player -> DoCast(player,
--- SPELL_WATCH) + Talk(SAY_WATCH, player); re-arm {12s,15s}.
+-- SPELL_WATCH) + Talk(SAY_WATCH, player) — the text id goes to the watched
+-- player as a whisper target (CreatureAI::Talk(id, whisperTarget),
+-- CreatureAI.cpp:48); re-arm {12s,15s}.
 local function onWatchPlayer(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_WATCH)
-        creature:Talk(SAY_WATCH)
+        creature:Talk(SAY_WATCH, target)
     end
     schedule(guid, "watch", math.random(12000, 15000), function()
         onWatchPlayer(creature, guid)
@@ -321,9 +323,12 @@ local function onSpeakerCleave(creature, guid)
     end)
 end
 
-local function speakerReset(event, creature)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
+-- C++ npc_vilebranch_speakerAI: the timers are armed in Initialize/Reset
+-- ({2s,4s} shout, {5s,8s} cleave) and there is NO enter-combat re-arm —
+-- UpdateAI's UpdateVictim gate means they effectively start ticking at
+-- combat start with the initial values. The Lua enter-combat arm therefore
+-- re-arms with the Reset values, not the re-arm ranges.
+local function speakerArmTimers(creature, guid)
     schedule(guid, "shout", math.random(2000, 4000), function()
         onDemoralizingShout(creature, guid)
     end)
@@ -332,15 +337,16 @@ local function speakerReset(event, creature)
     end)
 end
 
+local function speakerReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    speakerArmTimers(creature, guid)
+end
+
 RegisterCreatureEvent(ENTRY_SPEAKER, 1, function(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "shout", math.random(22000, 30000), function()
-        onDemoralizingShout(creature, guid)
-    end)
-    schedule(guid, "cleave", math.random(6000, 9000), function()
-        onSpeakerCleave(creature, guid)
-    end)
+    speakerArmTimers(creature, guid)
 end)
 RegisterCreatureEvent(ENTRY_SPEAKER, 2, function(event, creature)
     cancelTimers(creature:GetGUID())

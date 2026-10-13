@@ -90,15 +90,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
-	// Talk(textId) mirrors the C++ CreatureAI::Talk(textId) used by boss
-	// scripts: it plays the creature_text row for (entry, textId) through the
-	// same broadcastCreatureTalk path the Go BossAI implementations use.
+	// Talk(textId[, target]) mirrors the C++ CreatureAI::Talk(textId,
+	// whisperTarget) used by boss scripts: it plays the creature_text row for
+	// (entry, textId) through the same broadcastCreatureTalk path the Go
+	// BossAI implementations use. The optional target (a player object or
+	// GUID) bridges CreatureAI::Talk's whisperTarget arm — whisper-type rows
+	// (CHAT_MSG_MONSTER_WHISPER / RAID_BOSS_WHISPER) route to that player
+	// only, exactly like SendChatPacket.
 	methods["Talk"] = func(ctx context.Context, args []any) ([]any, error) {
 		textID, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		s.broadcastCreatureTalk(ctx, motion.Map, motion.GUID, motion.Entry, motion.Name, uint8(textID), 0)
+		var whisperTarget uint64
+		if len(args) >= 2 {
+			whisperTarget = luaObjectGUID(args[1])
+		}
+		s.broadcastCreatureTalk(ctx, motion.Map, motion.GUID, motion.Entry, motion.Name, uint8(textID), whisperTarget)
 		return nil, nil
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
