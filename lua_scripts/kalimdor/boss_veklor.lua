@@ -11,13 +11,18 @@
 -- (DoMeleeAttackIfReady is commented out; custom AttackStart
 -- does MoveChase at VEKLOR_DIST 20 — motion leg, no bridge).
 -- Ported arms (the self-contained in-combat legs):
--- - Shadow Bolt 26006 (DoCastVictim): 2s repeat. The <45y
---   MoveChase leg has no motion bridge; ported as fixed 2s
---   victim-cast (fankriss convention).
+-- - Shadow Bolt 26006 (DoCastVictim): C++ ShadowBolt_Timer = 0
+--   (boss_twinemperors.cpp:503) fires on the first UpdateAI tick —
+--   first Lua cast at 1ms (CreateLuaEvent floor, runtime.go:1118),
+--   then 2s repeat. The <45y MoveChase leg has no motion bridge;
+--   ported as fixed-interval victim-cast (fankriss convention).
 -- - Blizzard 26607: C++ SelectTarget Random, 0, 45.0f, true ->
 --   DoCast(target, SPELL_BLIZZARD), init urand(15s,20s) ->
 --   urand(15s,30s). Random-player pick via GetPlayersInWorld
---   (huhuran convention — no SelectTarget bridge).
+--   filtered by map/instance/alive (vem/maiden_of_virtue
+--   convention); the 45y range has no distance bridge on the
+--   Lua surface, and the raw GetPlayersInWorld pick (dead /
+--   off-map targets) was fixed this tick.
 -- - Berserk 26662 (CheckEnrage): DoCast self, init 15min ->
 --   repeat 60min. The IsNonMeleeSpellCast gate has no bridge —
 --   fixed timer.
@@ -92,15 +97,21 @@ local function onShadowBolt(creature, guid)
     end)
 end
 
--- C++ EVENT_BLIZZARD: SelectTarget Random,0,45.0f,true ->
+-- C++ Blizzard arm: SelectTarget Random,0,45.0f,true ->
 -- DoCast(target, SPELL_BLIZZARD), init urand(15000,20000) ->
--- urand(15000,30000). Random-player pick via GetPlayersInWorld
--- (huhuran convention).
+-- urand(15000,30000). Filtered random-player pick (no 45y
+-- bridge).
 local function onBlizzard(creature, guid)
-    local players = GetPlayersInWorld()
-    if #players > 0 then
-        local target = players[math.random(#players)]
-        creature:CastSpell(target, SPELL_BLIZZARD)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_BLIZZARD)
     end
     schedule(guid, "blizzard", math.random(15000, 30000), function()
         onBlizzard(creature, guid)
@@ -121,7 +132,7 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     flags[guid] = {}
-    schedule(guid, "sb", 2000, function()
+    schedule(guid, "sb", 1, function()
         onShadowBolt(creature, guid)
     end)
     schedule(guid, "blizzard", math.random(15000, 20000), function()

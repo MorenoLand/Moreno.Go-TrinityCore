@@ -35,10 +35,10 @@
 -- (C++ KilledUnit has no player gate); death: Talk(YELL_DEATH=5).
 -- Adds: Thurg — bloodlust 43578 15s then 12s (friendly-buff scan has no
 -- bearer, cast skipped, 12s cycle kept), cleave 15496 10s then 12s on
--- victim; Alyson Antille — flash heal 43575 2.5s cycle (friendly scan has
--- no bearer) with the C++ else-branch dispel magic 43577 on a random
--- alive player 50% of ticks; Gazakroth — firebolt 43584 2s then 700ms on
--- victim; Lord Raadan — thunderclap 43583 13s then 12s / flame breath
+-- victim; Alyson Antille — flash heal 43575 skipped (friendly scan has
+-- no bearer), so the C++ else-branch dispel magic 43577 fires every
+-- 2.5s tick on a random alive player; Gazakroth — firebolt 43584 2s
+-- then 700ms on victim; Lord Raadan — thunderclap 43583 13s then 12s / flame breath
 -- 43582 8s then 12s on victim; Darkheart — psychic wail 43590 8s then
 -- 12s on victim; Slither — venom spit 43579 5s then 2.5s on a random
 -- alive player within 100 yd; Fenstalker — volatile infection 43586 15s
@@ -352,17 +352,19 @@ local ADD_ARMS = {
     },
     [ENTRY_ALYSON] = {
         -- C++ flashheal arm: DoSelectLowestHpFriendly(99, 30000) has no
-        -- bearer; the else branch runs every tick instead — 50% random
-        -- alive player (SelectTarget Random has no range gate) gets
-        -- dispel magic. The commented-out MoveChase fallback is dead C++
-        -- code, not modeled.
+        -- bearer (treated as no heal target, so the else branch runs
+        -- every tick); the else branch always dispels — the urand(0,1)
+        -- only picks between the lowest-hp-friendly and random-enemy
+        -- scans, both arms calling DoCast(SPELL_DISPEL_MAGIC, false).
+        -- Only the random-enemy leg has a bridge (randomAlivePlayer,
+        -- SelectTarget Random has no range gate), so dispel fires every
+        -- 2.5s tick on a random alive player. The commented-out
+        -- MoveChase fallback is dead C++ code, not modeled.
         { key = "flashheal", first = 2500, min = 2500, max = 2500,
           fire = function(creature)
-              if math.random(0, 1) == 1 then
-                  local target = randomAlivePlayer(creature, math.huge)
-                  if target then
-                      creature:CastSpell(target, SPELL_DISPEL_MAGIC, false)
-                  end
+              local target = randomAlivePlayer(creature, math.huge)
+              if target then
+                  creature:CastSpell(target, SPELL_DISPEL_MAGIC, false)
               end
           end },
         -- The commented-out dispelmagic_timer arm is dead C++ code.

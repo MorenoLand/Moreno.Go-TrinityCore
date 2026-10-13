@@ -9,17 +9,20 @@
 -- filtered by map/instance/alive, maiden_of_virtue convention;
 -- the AttackStart leg has no bridge); Knockback 26027 on victim
 -- (8-20s -> 15-25s; the -80% threat modify has no bridge);
--- Enrage 34624 self-cast after 120s (latched — C++ Enraged flag).
+-- Enrage 34624 is NOT ported: boss_bug_trio.cpp:219's enrage arm is
+-- dead code in this tree — the else-branch decrements Charge_Timer
+-- instead of Enrage_Timer, so Enrage_Timer never ticks down and the
+-- cast never fires (side effect: Charge_Timer is double-decremented
+-- per tick). If the upstream/local C++ is fixed, re-add a latched
+-- 120s self-cast 34624 (akilzon precedent).
 -- Documented-only: JustDied instance DATA_VEM_DEATH +
 -- DATA_BUG_TRIO_DEATH + loot flag (no bridge).
 local ENTRY = 15544
 
 local SPELL_CHARGE = 26561
 local SPELL_KNOCKBACK = 26027
-local SPELL_ENRAGE = 34624
 
 local timers = {}
-local vemState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -70,46 +73,30 @@ local function onKnockback(creature, guid)
     end)
 end
 
-local function onEnrage(creature, guid)
-    local state = vemState[guid]
-    if state == nil or state.enraged then
-        return
-    end
-    state.enraged = true
-    creature:CastSpell(creature, SPELL_ENRAGE)
-end
-
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    vemState[guid] = { enraged = false }
     schedule(guid, "charge", math.random(15000, 27000), function()
         onCharge(creature, guid)
     end)
     schedule(guid, "knockback", math.random(8000, 20000), function()
         onKnockback(creature, guid)
     end)
-    schedule(guid, "enrage", 120000, function()
-        onEnrage(creature, guid)
-    end)
 end
 
 local function onLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    vemState[guid] = nil
 end
 
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    vemState[guid] = { enraged = false }
 end
 
 local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    vemState[guid] = nil
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
