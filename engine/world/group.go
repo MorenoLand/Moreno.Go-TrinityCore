@@ -323,17 +323,19 @@ const (
 	partyOpLeave    uint32 = 2
 )
 
-// PartyResult enum, mirrors TrinityCore's PartyResult.
+// PartyResult enum, mirrors TrinityCore's PartyResult (SharedDefines.h:3739).
 const (
 	errPartyResultOK        uint32 = 0
 	errBadPlayerNameS       uint32 = 1
 	errTargetNotInGroup     uint32 = 2
-	errGroupFull            uint32 = 3
-	errAlreadyInGroupS      uint32 = 4
-	errNotLeader            uint32 = 5
-	errPlayerWrongFaction   uint32 = 7
-	errIgnoringYouS         uint32 = 8
-	errTargetNotInInstanceS uint32 = 11
+	errTargetNotInInstanceS uint32 = 3
+	errGroupFull            uint32 = 4
+	errAlreadyInGroupS      uint32 = 5
+	errNotInGroup           uint32 = 6
+	errNotLeader            uint32 = 7
+	errPlayerWrongFaction   uint32 = 8
+	errIgnoringYouS         uint32 = 9
+	errLfgPending           uint32 = 12
 	errInviteRestricted     uint32 = 13
 )
 
@@ -887,13 +889,18 @@ func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 // handleGroupUninvite processes CMSG_GROUP_UNINVITE (0x075) - by name.
 // TrinityCore: WorldSession::HandleGroupUninviteOpcode.
 func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || s.groupID == 0 {
+	if !s.playerLoaded || s.player == nil {
 		return false
 	}
 	r := protocol.NewReader(payload)
 	name, err := r.ReadCString()
 	if err != nil || toLower(name) == toLower(s.player.Name) {
 		return false
+	}
+	// Player::CanUninviteFromGroup (Player.cpp:24422-24424): no group
+	// answers (PARTY_OP_UNINVITE, ERR_NOT_IN_GROUP).
+	if s.groupID == 0 {
+		return s.sendPartyResult(partyOpUninvite, "", errNotInGroup)
 	}
 
 	g := s.server.findGroupByID(s.groupID)
@@ -925,13 +932,18 @@ func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 // handleGroupUninviteGUID processes CMSG_GROUP_UNINVITE_GUID (0x076).
 // TrinityCore: WorldSession::HandleGroupUninviteGuidOpcode.
 func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || s.groupID == 0 {
+	if !s.playerLoaded || s.player == nil {
 		return false
 	}
 	r := protocol.NewReader(payload)
 	guid, err := r.ReadU64()
 	if err != nil || guid == s.playerGUID {
 		return false
+	}
+	// Player::CanUninviteFromGroup (Player.cpp:24422-24424): no group
+	// answers (PARTY_OP_UNINVITE, ERR_NOT_IN_GROUP).
+	if s.groupID == 0 {
+		return s.sendPartyResult(partyOpUninvite, "", errNotInGroup)
 	}
 
 	g := s.server.findGroupByID(s.groupID)
@@ -1559,8 +1571,14 @@ func (s *session) handleGroupRaidConvert(_ context.Context, _ []byte) bool {
 	srv.groupsMu.RLock()
 	g := srv.groups[s.groupID]
 	leader := g != nil && g.LeaderGUID == s.playerGUID
+	memberCount := 0
+	if g != nil {
+		memberCount = len(g.Members)
+	}
 	srv.groupsMu.RUnlock()
-	if !leader {
+	// GroupHandler.cpp:583-584 — conversion needs the leader and at least
+	// two members.
+	if !leader || memberCount < 2 {
 		return false
 	}
 	// Group::ConvertToRaid (Group.cpp:311) shared with the Lua bridge.
