@@ -126,6 +126,11 @@ const permissionJoinRandomBG uint32 = 4
 // Player::CanJoinToBattleground requires it for arena queues.
 const permissionJoinArenas uint32 = 5
 
+// permissionJoinDungeonFinder mirrors rbac::RBAC_PERM_JOIN_DUNGEON_FINDER
+// (RBAC.h:59): LFGMgr::JoinLfg (LFGMgr.cpp:440) and LFGMgr::GetLockedDungeons
+// (LFGMgr.cpp:1852) require it.
+const permissionJoinDungeonFinder uint32 = 6
+
 const permissionSkipCheckDisableMap uint32 = 20
 
 // permissionSkipCheckOverSpeedPing mirrors rbac::RBAC_PERM_SKIP_CHECK_OVERSPEED_PING (RBAC.h).

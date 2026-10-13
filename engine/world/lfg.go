@@ -297,6 +297,8 @@ func (m *LFGManager) UpdateRoleCheck(groupID uint64, guid uint64, roles uint8) *
 	if !ok {
 		return nil
 	}
+	// LFGMgr::UpdateRoleCheck (LFGMgr.cpp:808): sanitize input roles.
+	roles &= LFGRoleAny
 	rc.Roles[guid] = roles
 	allAnswered := true
 	for _, r := range rc.Roles {
@@ -376,6 +378,18 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 		delete(m.proposals, proposalID)
 	}
 	return prop, true
+}
+
+// canJoinDungeonFinder mirrors the HasPermission gate at the head of
+// LFGMgr::JoinLfg's requirement chain (LFGMgr.cpp:440): an account without
+// RBAC_PERM_JOIN_DUNGEON_FINDER fails with LFG_JOIN_NOT_MEET_REQS before any
+// other gate. An unavailable auth store counts as unprivileged.
+func (s *session) canJoinDungeonFinder() bool {
+	if s == nil || s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil {
+		return false
+	}
+	granted, err := accountHasPermission(context.Background(), s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionJoinDungeonFinder)
+	return err == nil && granted
 }
 
 func (s *session) handleLFGJoin(payload []byte) bool {
@@ -464,10 +478,13 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		}
 		return true
 	}
-	// LFGMgr::JoinLfg requirement gates (LFGMgr.cpp:455-466), solo-player arms
+	// LFGMgr::JoinLfg requirement gates (LFGMgr.cpp:440-466), solo-player arms
 	// in C++ order. The group/PARTY_* variants have no counterpart in the
-	// per-player queue model; the RBAC_PERM_JOIN_DUNGEON_FINDER permission has
-	// no Go twin (standing edge).
+	// per-player queue model.
+	if !s.canJoinDungeonFinder() {
+		// HasPermission(rbac::RBAC_PERM_JOIN_DUNGEON_FINDER) (LFGMgr.cpp:440)
+		return failJoin(LFGJoinNotMeetReqs)
+	}
 	if s.bgData.InstanceID != 0 || s.inBattlegroundQueue() {
 		// InBattleground/InArena/InBattlegroundQueue (Player.h:1906,
 		// Player.cpp:23647/23554)
@@ -1236,13 +1253,26 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 		}
 	}
 
+	// LFGMgr::GetLockedDungeons (LFGMgr.cpp:1852): denyJoin is computed once
+	// and skips every other lock arm — without RBAC_PERM_JOIN_DUNGEON_FINDER
+	// all dungeons report LFG_LOCKSTATUS_RAID_LOCKED. The permission belongs
+	// to the target player's session, like C++'s FindConnectedPlayer(guid).
+	denyJoin := true
+	if targetSess != nil {
+		denyJoin = !targetSess.canJoinDungeonFinder()
+	} else {
+		denyJoin = !s.canJoinDungeonFinder()
+	}
+
 	for _, dungeon := range allDungeons {
 		if dungeon.TypeID == LFGDungeonTypeRandom {
 			continue
 		}
 
 		var lockData uint32
-		if dungeon.ExpansionLevel > uint32(expansion) {
+		if denyJoin {
+			lockData = LFGLockStatusRaidLocked
+		} else if dungeon.ExpansionLevel > uint32(expansion) {
 			lockData = LFGLockStatusInsufficientExpansion
 		} else if uint32(level) < dungeon.MinLevel {
 			lockData = LFGLockStatusTooLowLevel
