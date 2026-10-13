@@ -507,7 +507,7 @@ func (s *session) directSpellCritChance(ctx context.Context, target combatTarget
 			// the inherited base) has no Go model and stays unbridged.
 			chance = s.applyTakenCritResilience(target.GUID, chance*100) / 100.0
 		}
-		return chance + s.directSpellTakenCritBonus(target, isPlayerVictim, schoolMask, spell)
+		return chance + s.directSpellTakenCritBonus(ctx, target, isPlayerVictim, schoolMask, spell)
 	default:
 		return 0
 	}
@@ -987,6 +987,80 @@ func creatureVictimCritChanceForCaster(srv *Server, key creatureAuraKey, attacke
 	return total
 }
 
+// victimCritChanceForCasterGated mirrors the post-switch 308 arm of
+// Unit::SpellCritChanceTaken (Unit.cpp:7390-7397): the victim's
+// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER auras whose CasterGUID is the
+// caster's GUID and whose aura spell affects the crit spell
+// (AuraEffect::IsAffectedOnSpell, SpellAuraEffects.cpp:848). Unlike the
+// melee/ranged arm inside GetUnitCriticalChanceTaken (bridged by
+// victimCritChanceForCaster), this arm carries the IsAffectedOnSpell gate
+// and fires for the MAGIC arm only — the melee/ranged arms already folded
+// it inside GetUnitCriticalChanceTaken (Unit.cpp:7391-7392).
+func (s *session) victimCritChanceForCasterGated(casterGUID uint64, spell wotlk.Spell) float64 {
+	if s == nil || s.server == nil || s.server.Data == nil || casterGUID == 0 {
+		return 0
+	}
+	var total float64
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 || aura.CasterGUID != casterGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModCritChanceForCaster {
+				continue
+			}
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			total += float64(aura.Amounts[index])
+		}
+	}
+	return total
+}
+
+// creatureVictimCritChanceForCasterGated mirrors the creature half of the
+// post-switch 308 arm (Unit.cpp:7390-7397): the victim creature's
+// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER auras whose CasterGUID is the
+// caster's GUID and whose aura spell affects the crit spell
+// (AuraEffect::IsAffectedOnSpell), with the same semantics as
+// victimCritChanceForCasterGated.
+func creatureVictimCritChanceForCasterGated(srv *Server, key creatureAuraKey, casterGUID uint64, spell wotlk.Spell) float64 {
+	if srv == nil || srv.Data == nil || key.GUID == 0 || casterGUID == 0 {
+		return 0
+	}
+	srv.auraMu.Lock()
+	auras := srv.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	srv.auraMu.Unlock()
+	var total float64
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 || aura.CasterGUID != casterGUID {
+			continue
+		}
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModCritChanceForCaster {
+				continue
+			}
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			total += float64(aura.Amounts[index])
+		}
+	}
+	return total
+}
+
 // dummyAuraAmountByIconEffIndex mirrors Unit::GetDummyAuraEffect(family,
 // icon, effIndex) (Unit.cpp:4540-4543 -> 4510-4522): the first live DUMMY
 // aura on the caster whose spell matches family+icon (with no family flags
@@ -1022,33 +1096,80 @@ func (s *session) dummyAuraAmountByIconEffIndex(family, iconID uint32, effIndex 
 	return 0, false
 }
 
-// directSpellTakenCritBonus mirrors the victim-side arms of
-// Unit::SpellCritChanceTaken (Unit.cpp:7230-7240) for direct (non-periodic)
-// SPELL_DAMAGE_CLASS_MAGIC spells: the victim's
-// SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (179, school-masked) and
-// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197, unfiltered),
-// gated on the spell being non-positive like C++. The MELEE/RANGED DmgClass
-// arms live in directWeaponCritChanceTaken instead (C++ takes the
-// GetUnitCriticalChanceTaken leg there, never the 179/197 magic arms).
-// C++ applies 179 before resilience and 197 after; both are flat additions and
-// Go's resilience leg already ran inside calculateSpellCritChance, so the
-// post-resilience fold here is arithmetically identical.
-func (s *session) directSpellTakenCritBonus(target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
-	if spellIsPositive(spell) || s == nil || s.server == nil {
+// directSpellTakenCritBonus mirrors the MAGIC arm of Unit::SpellCritChanceTaken
+// (Unit.cpp:7228-7240, 7242-7397) for direct (non-periodic) spells cast by the
+// session: the victim's SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (179,
+// school-masked) and SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE
+// (197, unfiltered) — non-positive spells only, like C++ (Unit.cpp:7228) — the
+// scripted taken arms (Shatter, Glyph of Shadowburn, Renewed Hope, Glyph of
+// Fire Blast, Improved Faerie Fire, Starfire/Insect Swarm, Exorcism, Lava
+// Burst — Unit.cpp:7242-7341, which sit outside the !IsPositive block and
+// fire for positive spells too), the creature-victim level suppression
+// (Unit.cpp:7332-7336), and the SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308)
+// fold with the caster-GUID + IsAffectedOnSpell gate (Unit.cpp:7390-7397).
+// The MELEE/RANGED DmgClass arms live in directWeaponCritChanceTaken instead
+// (C++ takes the GetUnitCriticalChanceTaken leg there, never the magic arms).
+// C++ applies 179 before resilience and 197 after; both are flat additions
+// and Go's resilience leg already ran inside calculateSpellCritChance, so the
+// post-resilience fold here is arithmetically identical. A forced crit
+// (Exorcism, Lava Burst — C++ returns 100.0f) returns 1.0, which always wins
+// the roll in rollDirectSpellCrit.
+func (s *session) directSpellTakenCritBonus(ctx context.Context, target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
+	if s == nil || s.server == nil {
 		return 0
 	}
+	positive := spellIsPositive(spell)
 	bonus := float64(0)
 	if isPlayerVictim {
-		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+		vicSess := s.server.findSessionByGUID(target.GUID)
+		if vicSess == nil {
+			return 0
+		}
+		if !positive {
 			bonus += float64(vicSess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(schoolMask)))
 			bonus += float64(vicSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
 		}
+		stateMask := vicSess.unitAuraStateMask()
+		scriptBonus, forceCrit := s.scriptedTakenCritBonusCore(ctx, target.GUID, spell, true, scriptedTakenCritVictim{
+			frozen:        stateMask&(1<<(auraStateFrozen-1)) != 0,
+			hasFlameShock: s.victimHasFlameShockByCaster(ctx, target.GUID, s.playerGUID),
+			aura197Total:  int32(vicSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)),
+			healthless35:  stateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
+			faerieFire:    stateMask&(1<<(auraStateFaerieFire-1)) != 0,
+		})
+		if forceCrit {
+			return 1.0
+		}
+		bonus += scriptBonus
+		bonus += vicSess.victimCritChanceForCasterGated(s.playerGUID, spell)
 	} else {
 		key := creatureAuraKeyForTarget(target)
-		for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, uint32(schoolMask)) {
-			bonus += float64(amt)
+		victim197 := creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance)
+		if !positive {
+			for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, uint32(schoolMask)) {
+				bonus += float64(amt)
+			}
+			bonus += float64(victim197)
 		}
-		bonus += float64(creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
+		stateMask := s.creatureAuraStateMask(key, target)
+		scriptBonus, forceCrit := s.scriptedTakenCritBonusCore(ctx, target.GUID, spell, true, scriptedTakenCritVictim{
+			frozen:        stateMask&(1<<(auraStateFrozen-1)) != 0,
+			hasFlameShock: s.victimHasFlameShockByCaster(ctx, target.GUID, s.playerGUID),
+			aura197Total:  int32(victim197),
+			healthless35:  stateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
+			faerieFire:    stateMask&(1<<(auraStateFaerieFire-1)) != 0,
+		})
+		if forceCrit {
+			return 1.0
+		}
+		bonus += scriptBonus
+		// Unit::SpellCritChanceTaken (Unit.cpp:7332-7336): a creature victim
+		// suppresses crit by 0.7% per level above the caster; a negative
+		// levelDiff boosts it, like C++.
+		if s.player != nil {
+			bonus -= float64(int32(target.Level)-int32(s.player.Level)) * 0.7
+		}
+		bonus += creatureVictimCritChanceForCasterGated(s.server, key, s.playerGUID, spell)
 	}
 	return bonus / 100.0
 }
@@ -1202,45 +1323,40 @@ func (s *session) canPeriodicTickCrit(spell wotlk.Spell) bool {
 	return false
 }
 
-// tickScriptedTakenCritBonus mirrors the scripted taken-side arms of
-// Unit::SpellCritChanceTaken (Unit.cpp:7236-7341) that fire for periodic
-// ticks via AuraEffect::GetCritChanceFor (SpellAuraEffects.cpp:843-846):
-//   - Shatter (caster OVERRIDE_CLASS_SCRIPTS miscValue 849/910/911
-//     affecting the tick spell + victim AURA_STATE_FROZEN): +17/34/50
-//     (Unit.cpp:7253-7264)
-//   - Glyph of Shadowburn (caster OVERRIDE_CLASS_SCRIPTS miscValue 7917
-//     affecting the tick spell + victim AURA_STATE_HEALTHLESS_35_PERCENT):
-//     +aurEff->GetAmount() (Unit.cpp:7266-7269)
-//   - Renewed Hope (caster OVERRIDE_CLASS_SCRIPTS 7997/7998 + caster
-//     carries Weakened Soul 6788): +aurEff->GetAmount() (Unit.cpp:7271-7275)
-//   - Glyph of Fire Blast (MAGE family, SpellFamilyFlags[0] == 0x2,
-//     SpellIconID == 12; victim stunned or knocked out; caster aura 56369
-//     effect 0): +aurEff->GetAmount() (Unit.cpp:7283-7288)
-//   - Improved Faerie Fire (DRUID family; victim AURA_STATE_FAERIE_FIRE;
-//     caster DUMMY aura family-DRUID icon 109): +aurEff->GetAmount()
-//     (Unit.cpp:7293-7296)
-//   - Starfire / Improved Insect Swarm (DRUID family,
-//     SpellFamilyFlags[0] & 0x4, SpellIconID == 1485; caster DUMMY aura
-//     family-DRUID icon 1771; victim carries a DRUID PERIODIC_DAMAGE aura
-//     with SpellFamilyFlags[0] & 0x2): +aurEff->GetAmount()
-//     (Unit.cpp:7300-7306)
-//   - Exorcism (PALADIN family, Category == 19; victim demon or undead):
-//     the tick crits outright (Unit.cpp:7308-7313)
-//   - Lava Burst (SHAMAN family, SpellFamilyFlags[1] & 0x1000): victim
-//     carries the caster's Flame Shock and victim aura-197 > -100 -> the
-//     tick crits outright (Unit.cpp:7316-7324)
-//
-// Returns the bonus in percent points and whether the tick is a forced
-// crit. The remaining arms (Shiv poisons — no Go current-spell model;
-// Flash of Light/Sacred Shield — the tick-spell gate is a direct heal)
-// have no Go model and stay unbridged. Rend and Tear / Victory Rush and
-// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) are bridged on the direct
-// melee-DmgClass path (directWeaponCritChanceTaken); they never fire for
-// periodic ticks in C++ (DmgClass gate at Unit.cpp:7347-7386), so they stay
-// unbridged here by design.
+// scriptedTakenCritVictim carries the victim-side inputs for the scripted
+// taken-crit arms shared by the direct-spell and periodic-tick paths.
+type scriptedTakenCritVictim struct {
+	frozen, hasFlameShock, healthless35, faerieFire bool
+	aura197Total                                    int32
+}
+
+// tickScriptedTakenCritBonus is the periodic-tick entry point of the shared
+// scripted taken-crit core (scriptedTakenCritBonusCore); the direct-spell
+// path calls the core from directSpellTakenCritBonus with victim state
+// derived from the hit target.
 func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uint64, spell wotlk.Spell, tickKnown bool, victimFrozen, victimHasFlameShock bool, victimAura197Total int32, victimHealthless35, victimFaerieFire bool) (float64, bool) {
+	return s.scriptedTakenCritBonusCore(ctx, targetGUID, spell, tickKnown, scriptedTakenCritVictim{
+		frozen:        victimFrozen,
+		hasFlameShock: victimHasFlameShock,
+		aura197Total:  victimAura197Total,
+		healthless35:  victimHealthless35,
+		faerieFire:    victimFaerieFire,
+	})
+}
+
+// scriptedTakenCritBonusCore mirrors the scripted taken-side arms of
+// Unit::SpellCritChanceTaken (Unit.cpp:7242-7341): Shatter, Glyph of
+// Shadowburn, Renewed Hope, Glyph of Fire Blast, Improved Faerie Fire,
+// Starfire/Insect Swarm, Exorcism, Lava Burst. Unlike the 179/197 taken
+// terms, these sit outside the !IsPositive block (Unit.cpp:7242) and fire
+// for positive spells too. Returns the bonus in percent points and whether
+// the hit is a forced crit (Exorcism, Lava Burst — C++ returns 100.0f).
+// The remaining arms (Shiv poisons — no Go current-spell model; Flash of
+// Light/Sacred Shield — dead code in C++, a positive-only spell inside the
+// scripted block) have no Go model and stay unbridged.
+func (s *session) scriptedTakenCritBonusCore(ctx context.Context, targetGUID uint64, spell wotlk.Spell, spellKnown bool, vs scriptedTakenCritVictim) (float64, bool) {
 	bonus := 0.0
-	if s == nil || s.server == nil || s.server.Data == nil || !tickKnown {
+	if s == nil || s.server == nil || s.server.Data == nil || !spellKnown {
 		return bonus, false
 	}
 	for _, aura := range s.loadedAuras() {
@@ -1259,7 +1375,7 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 			case 849, 910, 911: // Shatter
 				// AuraEffect::IsAffectedOnSpell gate (Unit.cpp:7242-7244)
 				// plus the frozen-state check (Unit.cpp:7262-7264).
-				if !victimFrozen || !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				if !vs.frozen || !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
 					continue
 				}
 				switch effect.MiscValue {
@@ -1273,7 +1389,7 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 			case 7917: // Glyph of Shadowburn
 				// IsAffectedOnSpell gate (Unit.cpp:7242-7244) plus the
 				// healthless-35% state check (Unit.cpp:7267-7268).
-				if victimHealthless35 && spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				if vs.healthless35 && spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
 					bonus += float64(aura.Amounts[index])
 				}
 			case 7997, 7998: // Renewed Hope
@@ -1298,7 +1414,7 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 	case spellFamilyDruid:
 		// Improved Faerie Fire (Unit.cpp:7293-7296): cumulative with the
 		// Starfire arm below — C++ does not break between them.
-		if victimFaerieFire {
+		if vs.faerieFire {
 			if amt, ok := s.dummyAuraAmountByIcon(spellFamilyDruid, 109); ok {
 				bonus += float64(amt)
 			}
@@ -1324,7 +1440,7 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 	// carries the caster's Flame Shock and the victim's
 	// MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE total exceeds -100.
 	if spell.SpellFamilyName == spellFamilyShaman && spell.SpellFamilyFlags[1]&0x1000 != 0 &&
-		victimHasFlameShock && victimAura197Total > -100 {
+		vs.hasFlameShock && vs.aura197Total > -100 {
 		return bonus, true
 	}
 	return bonus, false
