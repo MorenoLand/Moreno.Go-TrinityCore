@@ -238,6 +238,31 @@ func spellHasPetAttackPowerAura(spell wotlk.Spell) bool {
 	return false
 }
 
+// spellHasCreatureArmorAura reports whether the spell carries an aura that
+// feeds UNIT_MOD_ARMOR with the NORMAL school misc bit: 22 (flat
+// TOTAL_VALUE, SpellAuraEffects.cpp:3255-3269), 83 (pet-only flat
+// BASE_VALUE, :3344-3350), 101 (TOTAL_PCT, :3313-3331), 142 (pet-only
+// BASE_PCT, :3343-3351), 143 (exclusive BASE_VALUE winner, :3232-3252).
+// On creature/pet targets each runs through Unit::UpdateUnitMod ->
+// Guardian::UpdateArmor / Creature::UpdateArmor (StatSystem.cpp:1317-1330,
+// 1018-1022), rewriting UNIT_FIELD_RESISTANCES (armor) on apply and remove;
+// auras whose misc bit does not cover SPELL_SCHOOL_NORMAL feed only school
+// resistances and never touch the armor field.
+func spellHasCreatureArmorAura(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.MiscValue&1 == 0 {
+			continue
+		}
+		switch eff.Aura {
+		case spellAuraModResistance, spellAuraModBaseResistance,
+			spellAuraModResistancePct, spellAuraModBaseResistancePct,
+			spellAuraModResistanceExclusive:
+			return true
+		}
+	}
+	return false
+}
+
 // 34/230/250 heal/drop current health by the flat amount (:3650-3665),
 // 133 re-anchors current health to the pre-change health pct on apply and
 // remove alike (:3729-3754), 282 adjusts no current health (:3757-3768),

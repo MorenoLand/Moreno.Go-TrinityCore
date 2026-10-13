@@ -24415,6 +24415,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): a strength, 99 or 166
 		// aura landing on a pet rewrites its AP unit fields.
 		s.server.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
+		// Guardian::UpdateArmor / Creature::UpdateArmor on the same apply
+		// (StatSystem.cpp:1317-1330, 1018-1022): a direct armor aura (22/83/
+		// 101/142/143, NORMAL misc) rewrites UNIT_FIELD_RESISTANCES (armor).
+		s.server.recomputeCreatureArmorOnAuraChange(targetKey, spell.ID)
 	}
 	// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a fresh
 	// MOD_TAUNT aura on a creature registers its caster's taunt state
@@ -28837,6 +28841,10 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): dropping a strength,
 		// 99 or 166 aura rewrites the pet's AP unit fields.
 		s.server.recomputePetAttackPowerOnAuraChange(key, spellID)
+		// Guardian::UpdateArmor / Creature::UpdateArmor on the same remove
+		// (StatSystem.cpp:1317-1330, 1018-1022): dropping a direct armor
+		// aura rewrites UNIT_FIELD_RESISTANCES (armor).
+		s.server.recomputeCreatureArmorOnAuraChange(key, spellID)
 	}
 }
 
@@ -29052,6 +29060,10 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		// (StatSystem.cpp:1274 / Unit.cpp:9336-9337): dropping a strength,
 		// 99 or 166 aura rewrites the pet's AP unit fields.
 		s.recomputePetAttackPowerOnAuraChange(key, spellID)
+		// Guardian::UpdateArmor / Creature::UpdateArmor on the same remove
+		// (StatSystem.cpp:1317-1330, 1018-1022): dropping a direct armor
+		// aura rewrites UNIT_FIELD_RESISTANCES (armor).
+		s.recomputeCreatureArmorOnAuraChange(key, spellID)
 	}
 }
 

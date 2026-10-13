@@ -1387,6 +1387,35 @@ func (s *Server) liveCreatureArmor(key creatureAuraKey, motion *creatureMotion, 
 	return s.creatureArmorFold(key, storedArmor)
 }
 
+// recomputeCreatureArmorOnAuraChange is the SetArmor broadcast twin of the
+// UpdateArmor arms C++ runs when a creature/pet armor aura applies or is
+// removed (Creature::UpdateArmor StatSystem.cpp:1018-1022,
+// Guardian::UpdateArmor :1317-1330, driven by the 22/83/101/142/143
+// UNIT_MOD_ARMOR handlers): the damage-side folds already read the live
+// value, but UNIT_FIELD_RESISTANCES (armor) went stale until the next
+// stat/maxima rebroadcast — a direct armor aura (e.g. an Inner-Fire-type
+// 22/101 pair or a Sunder Armor-type 22) never moved the advertised armor.
+// The fold reads post-apply / post-remove state (C++ erases before the
+// remove handlers, Unit.cpp:3548), pet and non-pet targets dispatch through
+// liveCreatureArmor, and offline owners ride the stored snapshot (C++ has
+// no offline-owner concept). Callers must not hold auraMu or motionMu.
+func (s *Server) recomputeCreatureArmorOnAuraChange(key creatureAuraKey, spellID uint32) {
+	if s == nil || s.Data == nil || key.GUID == 0 || spellID == 0 {
+		return
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found || !spellHasCreatureArmorAura(spell) {
+		return
+	}
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if motion == nil {
+		return
+	}
+	armor := uint32(s.liveCreatureArmor(key, motion, float64(motion.Armor)))
+	s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID,
+		map[int]uint32{unitFieldResistances: armor})
+}
+
 // creatureAuraSpellHitSum mirrors the creature half of
 // AuraEffect::HandleModSpellHitChance (SpellAuraEffects.cpp:3839): the summed
 // creatureAuraTypeSum folds the live amounts of one aura type on the

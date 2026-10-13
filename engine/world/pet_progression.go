@@ -176,6 +176,32 @@ func (s *session) refreshPetStatsOnOwnerStatChange(ctx context.Context) {
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, petGUID, fields)
 }
 
+// rebroadcastPetArmorForOwner mirrors the pet arm of Player::UpdateArmor
+// (StatSystem.cpp:281-283): whenever the owner's armor rebuilds, the pet's
+// Guardian::UpdateArmor recomputes — its 35% owner-armor leg
+// (StatSystem.cpp:1323-1324) reads the owner's live armor. Go's damage fold
+// already reads it live via petOwnerArmorBonus, but the pet's
+// UNIT_FIELD_RESISTANCES (armor) field must rebroadcast so the client sees
+// the same SetArmor value. The stamina/intellect owner-stat path rides
+// refreshPetStatsOnOwnerStatChange's full rebroadcast; this covers the
+// agility-only and gear/aura-armor changes. With no live pet motion or no
+// pet flag there is nothing to rewrite (C++ calls it on GetPet(), which is
+// always a Pet).
+func (s *session) rebroadcastPetArmorForOwner(ctx context.Context) {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 {
+		return
+	}
+	motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+	if motion == nil || !motionIsPet(motion) {
+		return
+	}
+	petKey := creatureAuraKeyForMotion(motion)
+	armor := s.server.petDisplayArmor(petKey, motion)
+	mapID, instanceID, petGUID := motion.Map, motion.InstanceID, motion.GUID
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, petGUID,
+		map[int]uint32{unitFieldResistances: armor})
+}
+
 // recomputePetDerivedOnStatAuraChange mirrors the Guardian::UpdateStats arms
 // that C++ runs on every pet aura apply/remove (StatSystem.cpp:1266-1282 via
 // AuraEffect::HandleStatFlatModifier / HandleModTotalPercentStat ->

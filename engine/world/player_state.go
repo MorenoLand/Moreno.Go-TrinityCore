@@ -2007,11 +2007,15 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	// Player::UpdateStats (StatSystem.cpp:108-114): the owner's stamina and
 	// intellect feed the pet's Guardian::UpdateStats (stamina -> max health,
 	// intellect -> max mana). Snapshot the pre-rebuild values so the
-	// pet-stat refresh at the end fires only on a real change.
+	// pet-stat refresh at the end fires only on a real change. The armor
+	// snapshot feeds the Player::UpdateArmor pet arm (StatSystem.cpp:281-283):
+	// the 35% owner-armor leg of Guardian::UpdateArmor recomputes from the
+	// owner's live armor on every owner armor change.
 	var oldSta, oldInt uint32
 	if len(state.Stats) > 3 {
 		oldSta, oldInt = state.Stats[2], state.Stats[3]
 	}
+	oldArmor := state.Armor
 	lvl := state.Level
 	if lvl < 1 {
 		lvl = 1
@@ -2477,6 +2481,19 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	// not a trigger.
 	if len(state.Stats) > 3 && (state.Stats[2] != oldSta || state.Stats[3] != oldInt) {
 		s.refreshPetStatsOnOwnerStatChange(ctx)
+	}
+
+	// Player::UpdateArmor calls pet->UpdateArmor() (StatSystem.cpp:281-283):
+	// the 35% owner-armor leg of Guardian::UpdateArmor (:1323-1324) tracks
+	// the owner's live armor, so any owner armor change must rebroadcast the
+	// pet's UNIT_FIELD_RESISTANCES (armor). The stamina/intellect path above
+	// already rebroadcasts it via the full refresh; this covers the
+	// agility-only and gear/aura-armor changes (STAT_AGILITY -> UpdateArmor,
+	// :117-122, 127; intellect -> UpdateArmor, :132).
+	armorMoved := state.Armor != oldArmor
+	fullRefresh := len(state.Stats) > 3 && (state.Stats[2] != oldSta || state.Stats[3] != oldInt)
+	if armorMoved && !fullRefresh {
+		s.rebroadcastPetArmorForOwner(ctx)
 	}
 
 	return nil

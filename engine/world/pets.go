@@ -1117,6 +1117,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	loaded := make([]*activeAura, 0)
 	var statAuraSpellID uint32
 	var apAuraSpellID uint32
+	var armorAuraSpellID uint32
 	offlineMs := int64(0)
 	var petSaveTime int64
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(savetime, 0) FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petID).Scan(&petSaveTime)
@@ -1234,6 +1235,9 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if spellHasPetAttackPowerAura(spell) {
 			apAuraSpellID = uint32(spellID)
 		}
+		if spellHasCreatureArmorAura(spell) {
+			armorAuraSpellID = uint32(spellID)
+		}
 	}
 	s.server.auraMu.Unlock()
 	if len(loaded) == 0 {
@@ -1253,6 +1257,13 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	// broadcast above went out aura-free.
 	if apAuraSpellID != 0 {
 		s.server.recomputePetAttackPowerOnAuraChange(petKey, apAuraSpellID)
+	}
+	// Guardian::UpdateArmor / Creature::UpdateArmor on the same load
+	// (StatSystem.cpp:1317-1330, 1018-1022): a restored direct armor aura
+	// rewrites UNIT_FIELD_RESISTANCES (armor) — the summon broadcast above
+	// went out aura-free.
+	if armorAuraSpellID != 0 {
+		s.server.recomputeCreatureArmorOnAuraChange(petKey, armorAuraSpellID)
 	}
 	records := make([]protocol.AuraUpdateRecord, 0, len(loaded))
 	for _, aura := range loaded {
