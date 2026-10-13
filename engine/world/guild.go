@@ -4067,6 +4067,7 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 	}
 
 	s.player.Money -= cost
+	s.questMoneyChanged(ctx)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
 	// Reference: Guild::_CreateNewBankTab (Guild.cpp:2404-2425): the tab-row
@@ -4256,6 +4257,7 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 	}
 
 	s.player.Money -= amount
+	s.questMoneyChanged(ctx)
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET BankMoney = BankMoney + ? WHERE guildid = ?", amount, guildID)
@@ -4335,6 +4337,7 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 	s.consumeGuildBankMoneyWithdraw(ctx, uint32(guildID), amount)
 
 	s.player.Money += amount
+	s.questMoneyChanged(ctx)
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET BankMoney = BankMoney - ? WHERE guildid = ?", amount, guildID)
@@ -4697,6 +4700,7 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 
 	petitionGUID := uint64(nextItemGUID)
 	s.player.Money -= cost
+	s.questMoneyChanged(ctx)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	// PetitionsHandler.cpp:192: charter->SetUInt32Value(ITEM_FIELD_ENCHANTMENT_1_1,
 	// charter->GetGUID().GetCounter()) — the petition id (the item GUID
@@ -5405,6 +5409,7 @@ func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) boo
 	}
 
 	s.player.Money -= emblemPrice
+	s.questMoneyChanged(ctx)
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET EmblemStyle = ?, EmblemColor = ?, BorderStyle = ?, BorderColor = ?, BackgroundColor = ? WHERE guildid = ?",

@@ -519,6 +519,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	}
 	if totalCost > 0 {
 		s.player.Money -= totalCost
+		s.questMoneyChanged(ctx)
 		s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, totalCost)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
@@ -858,6 +859,7 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
 	if price > 0 {
 		s.player.Money -= price
+		s.questMoneyChanged(ctx)
 		s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, price)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)

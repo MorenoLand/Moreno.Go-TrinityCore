@@ -224,16 +224,17 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.removeAura(spell)
 		return nil, nil
 	}
-	methods["SetCoinage"] = func(_ context.Context, args []any) ([]any, error) {
+	methods["SetCoinage"] = func(ctx context.Context, args []any) ([]any, error) {
 		money, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
 		state.Money = money
 		_, err = s.server.CharactersStore.DB.Exec("UPDATE characters SET money = ? WHERE guid = ?", money, state.GUID)
+		s.questMoneyChanged(ctx)
 		return nil, err
 	}
-	methods["ModifyMoney"] = func(_ context.Context, args []any) ([]any, error) {
+	methods["ModifyMoney"] = func(ctx context.Context, args []any) ([]any, error) {
 		delta, err := luaInt64Arg(args, 0)
 		if err != nil {
 			return nil, err
@@ -247,6 +248,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		state.Money = uint32(money)
 		_, err = s.server.CharactersStore.DB.Exec("UPDATE characters SET money = ? WHERE guid = ?", state.Money, state.GUID)
+		s.questMoneyChanged(ctx)
 		return []any{true}, err
 	}
 	methods["SetGender"] = func(_ context.Context, args []any) ([]any, error) {

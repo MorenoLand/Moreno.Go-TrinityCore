@@ -517,6 +517,7 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	}
 	if cost > 0 {
 		s.player.Money -= cost
+		s.questMoneyChanged(ctx)
 		s.player.ResetTalentsCost = cost
 		s.player.ResetTalentsTime = uint32(time.Now().Unix())
 		s.updateAchievementCriteria(criteriaTypeGoldSpentForTalents, 0, cost)

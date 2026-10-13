@@ -881,6 +881,7 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 	// no money still answers MAIL_OK (Player.cpp:22823; MailHandler.cpp:524-527).
 	if money > 0 {
 		s.player.Money += uint32(money)
+		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET money = 0 WHERE id = ?", mailID)
 		s.sendPlayerMoneyUpdate()

@@ -138,14 +138,41 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward commit failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
-	return s.applyQuestRewardGrants(ctx, view, questID, giverGUID, reward, grants, destroyedGUIDs)
+	return s.applyQuestRewardGrants(ctx, view, questID, giverGUID, reward, grants, destroyedGUIDs, true)
+}
+
+// rewardTrackingQuest mirrors the TRACKING arm of Player::CompleteQuest
+// (Player.cpp:15304-15307): RewardQuest(qInfo, 0, this, false). The quest is
+// rewarded automatically with the choice-0 grant set — ObjectMgr only honors
+// RewardChoiceItemId[0] for TRACKING quests (ObjectMgr.cpp:4727) — and
+// announce=false, so no SMSG_QUESTGIVER_QUEST_COMPLETE goes out. The quest
+// giver is the player itself: MailSender(Object*) (Mail.cpp:50-53) writes
+// MAIL_NORMAL with the player GUID counter.
+func (s *session) rewardTrackingQuest(ctx context.Context, questID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	view, err := s.loadQuestRewardView(ctx, questID)
+	if err != nil {
+		s.debug("quest tracking reward failed", "account", s.accountName, "quest", questID, "error", err)
+		return
+	}
+	grants, destroyedGUIDs, err := s.commitQuestReward(ctx, view, 0)
+	if err != nil {
+		s.debug("quest tracking reward failed", "account", s.accountName, "quest", questID, "error", err)
+		return
+	}
+	s.applyQuestRewardGrants(ctx, view, questID, s.playerGUID, 0, grants, destroyedGUIDs, false)
 }
 
 // applyQuestRewardGrants runs the post-commit grant arms of
 // Player::RewardQuest (Player.cpp:15380-15515), shared by the turn-in packet
 // and the .quest reward GM command (cs_quest.cpp:313:
-// player->RewardQuest(quest, 0, player)).
-func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardView, questID uint32, giverGUID uint64, reward uint32, grants []questItemGrant, destroyedGUIDs []uint64) bool {
+// player->RewardQuest(quest, 0, player)). announce mirrors the RewardQuest
+// announce parameter: false skips the SMSG_QUESTGIVER_QUEST_COMPLETE packet
+// (Player::SendQuestReward, Player.cpp:15470) and the gossip close —
+// Player::RewardQuest itself never touches the gossip frame.
+func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardView, questID uint32, giverGUID uint64, reward uint32, grants []questItemGrant, destroyedGUIDs []uint64, announce bool) bool {
 	// C++ Player::RewardQuest (Player.cpp:15439-15448): the quest reward mail
 	// goes out as part of the reward flow, once the reward is committed.
 	s.sendQuestRewardMail(ctx, questID, giverGUID)
@@ -272,8 +299,10 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 		qLevel = int64(s.player.Level)
 	}
 	packetHonor := 10 * s.calculateQuestHonorGain(ctx, questID, uint32(qLevel))
-	if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, packetXP, uint32(moneyRew), packetHonor, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
-		return false
+	if announce {
+		if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, packetXP, uint32(moneyRew), packetHonor, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
+			return false
+		}
 	}
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
@@ -302,8 +331,10 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 			s.sendPlayerUpdate()
 		}
 	}
-	s.gossip = nil
-	s.gossipClosed = true
+	if announce {
+		s.gossip = nil
+		s.gossipClosed = true
+	}
 	s.debug("quest rewarded", "account", s.accountName, "quest", questID, "reward", reward, "items", len(grants), "money", view.Detail.RewardMoney)
 	return true
 }
@@ -366,6 +397,13 @@ func (s *session) sendQuestRewardMail(ctx context.Context, questID uint32, giver
 	messageType := uint32(3) // MAIL_CREATURE (Mail.h:39)
 	if senderEntry == 0 {
 		senderEntry, messageType = questGiverMailSource(ctx, s, giverGUID)
+	}
+	// Player::CompleteQuest's TRACKING arm calls RewardQuest(qInfo, 0, this,
+	// false): the quest giver is the player itself, so MailSender(Object*)
+	// (Mail.cpp:50-53) writes MAIL_NORMAL with the player GUID counter,
+	// not a creature sender.
+	if giverGUID != 0 && s != nil && giverGUID == s.playerGUID {
+		senderEntry, messageType = uint32(s.playerGUID), 0 // MAIL_NORMAL (Mail.h:36)
 	}
 	now := time.Now().Unix()
 	deliverTime := now + int64(delaySecs)
@@ -1079,6 +1117,47 @@ func (s *session) setPlayerMoney(ctx context.Context, value uint32) {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", value, s.playerGUID)
 	}
 	s.sendPlayerUpdate()
+	// Player::SetMoney (Player.cpp:22847-22851): every money change runs
+	// the quest MoneyChanged scan.
+	s.questMoneyChanged(ctx)
+}
+
+// questMoneyChanged mirrors Player::MoneyChanged (Player.cpp:16860-16882),
+// the quest leg of every money change: the quest log is scanned for
+// required-money quests (RewOrReqMoney < 0). An incomplete quest whose
+// requirement is now met completes (gated by CanCompleteQuest); a complete
+// quest whose requirement broke flips back via IncompleteQuest.
+func (s *session) questMoneyChanged(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	wdb := s.server.WorldStore.DB
+	money := int64(s.player.Money)
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		questID := s.player.QuestLog[slot].QuestID
+		if questID == 0 {
+			continue
+		}
+		var reqMoney int64
+		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(RewOrReqMoney, 0) FROM quest_template WHERE ID = ?", questID).Scan(&reqMoney); err != nil || reqMoney >= 0 {
+			continue
+		}
+		required := -reqMoney
+		status, err := s.characterQuestStatus(ctx, questID)
+		if err != nil {
+			continue
+		}
+		switch status {
+		case questStatusIncomplete:
+			if money >= required && s.canCompleteQuest(ctx, questID) {
+				s.completeQuest(ctx, questID)
+			}
+		case questStatusComplete:
+			if money < required {
+				s.incompleteQuest(ctx, questID)
+			}
+		}
+	}
 }
 
 // destroyQuestTurnInItems mirrors the item-destruction arms at the head of

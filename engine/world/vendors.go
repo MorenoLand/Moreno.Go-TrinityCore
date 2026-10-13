@@ -660,6 +660,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		}
 	}
 	s.player.Money -= totalCost
+	s.questMoneyChanged(ctx)
 	if extendedCost.ID != 0 {
 		s.player.TotalHonorPoints -= extendedCost.HonorPoints * count
 		s.player.ArenaPoints -= extendedCost.ArenaPoints * count
@@ -1120,6 +1121,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	}
 	earned := uint32(sellPrice) * uint32(count)
 	s.player.Money += earned
+	s.questMoneyChanged(ctx)
 	s.updateAchievementCriteria(criteriaTypeMoneyFromVendor, 0, earned)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
@@ -1283,6 +1285,7 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		s.currentBuybackSlot = uint8(eslot)
 	}
 	s.player.Money -= entry.Price
+	s.questMoneyChanged(ctx)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	}

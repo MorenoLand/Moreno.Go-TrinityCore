@@ -2754,6 +2754,7 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		copperPerPlayer := copper / uint32(len(nearMembers))
 		for _, m := range nearMembers {
 			m.player.Money += copperPerPlayer
+			m.questMoneyChanged(ctx)
 			// HandleLootMoneyOpcode (LootHandler.cpp:104): the achievement
 			// fires per recipient, including the split path.
 			m.updateAchievementCriteria(criteriaTypeLootMoney, 0, copperPerPlayer)
@@ -2768,6 +2769,7 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		}
 	} else {
 		s.player.Money += copper
+		s.questMoneyChanged(ctx)
 		s.updateAchievementCriteria(criteriaTypeLootMoney, 0, copper)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)

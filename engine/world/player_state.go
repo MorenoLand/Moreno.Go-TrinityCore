@@ -5383,6 +5383,7 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 	_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
 
 	s.player.Money -= cost
+	s.questMoneyChanged(ctx)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	}

@@ -282,5 +282,5 @@ func (s *session) handleQuestReward(ctx context.Context, args []string) {
 	if err != nil {
 		return
 	}
-	target.applyQuestRewardGrants(ctx, view, entry, 0, 0, grants, destroyedGUIDs)
+	target.applyQuestRewardGrants(ctx, view, entry, 0, 0, grants, destroyedGUIDs, true)
 }

@@ -541,6 +541,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		// above) never charge.
 		if boxCost > 0 && s.player != nil {
 			s.player.Money -= boxCost
+			s.questMoneyChanged(ctx)
 			if cdb := s.server.CharactersStore.DB; cdb != nil {
 				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 			}
@@ -644,6 +645,7 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	// after the option arms.
 	if boxCost > 0 {
 		s.player.Money -= boxCost
+		s.questMoneyChanged(ctx)
 		if cdb := s.server.CharactersStore.DB; cdb != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		}

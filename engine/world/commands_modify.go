@@ -380,6 +380,7 @@ func (s *session) handleModifyMoney(ctx context.Context, args []string) {
 	if chars := s.server.CharactersStore; chars != nil && chars.DB != nil {
 		_, _ = chars.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", target.player.Money, target.playerGUIDOf(target))
 	}
+	target.questMoneyChanged(ctx)
 	target.sendPlayerMoneyUpdate()
 }
 

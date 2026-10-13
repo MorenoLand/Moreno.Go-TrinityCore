@@ -1209,6 +1209,8 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	// Money transfer
 	s.player.Money = s.player.Money - s.trade.Money + partner.trade.Money
 	partner.player.Money = partner.player.Money - partner.trade.Money + s.trade.Money
+	s.questMoneyChanged(ctx)
+	partner.questMoneyChanged(ctx)
 	if !execTx("UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID) {
 		return
 	}

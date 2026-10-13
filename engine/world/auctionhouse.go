@@ -570,6 +570,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		return true
 	}
 	s.player.Money -= deposit
+	s.questMoneyChanged(ctx)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	auctionItemGUID := itemGUIDs[0]
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:296-341): a single
@@ -725,6 +726,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		} else {
 			s.player.Money -= uint32(buyout)
 		}
+		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", auctionID)
@@ -823,6 +825,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		} else {
 			s.player.Money -= price
 		}
+		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
 		if bidderGUID != 0 && lastBid > 0 && bidderGUID != int64(s.playerGUID) {
@@ -1046,6 +1049,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 			bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
 		s.sendMailNotify(uint64(bidderGUID))
 		s.player.Money -= auctionCut
+		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		s.sendPlayerMoneyUpdate()
 		s.sendPlayerUpdate()

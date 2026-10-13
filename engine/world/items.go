@@ -1724,6 +1724,7 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 	}
 
 	s.player.Money += uint32(paidMoney)
+	s.questMoneyChanged(ctx)
 	s.player.TotalHonorPoints += extendedCost.HonorPoints
 	s.player.ArenaPoints += extendedCost.ArenaPoints
 	if s.player.TotalHonorPoints > 0 {

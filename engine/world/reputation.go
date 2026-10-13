@@ -349,6 +349,9 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 					s.updateAchievementCriteria(criteriaTypeExaltedRep, factionID, 1)
 				}
 			}
+			// Player::SetReputation (ReputationMgr.cpp:302) runs the quest
+			// ReputationChanged scan after the standing lands.
+			s.questReputationChanged(ctx, factionID)
 			return
 		}
 	}
@@ -359,6 +362,56 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 	}
 	s.player.Reputations = append(s.player.Reputations, rep)
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, amount, factionFlagVisible)
+	s.questReputationChanged(ctx, factionID)
+}
+
+// questReputationChanged mirrors Player::ReputationChanged and
+// Player::ReputationChanged2 (Player.cpp:16893-16941): a standing change
+// re-scans the quest log for quests with a matching rep objective
+// (RepObjectiveFaction/Value and the Faction2 pair). An incomplete quest
+// whose threshold is now met completes (gated by CanCompleteQuest); a
+// complete quest that fell below its threshold flips back via
+// IncompleteQuest.
+func (s *session) questReputationChanged(ctx context.Context, factionID uint32) {
+	if s == nil || s.player == nil || factionID == 0 || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	wdb := s.server.WorldStore.DB
+	standing := int64(s.reputationStanding(factionID))
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		questID := s.player.QuestLog[slot].QuestID
+		if questID == 0 {
+			continue
+		}
+		var fac1, val1, fac2, val2 int64
+		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(RepObjectiveFaction, 0), COALESCE(RepObjectiveValue, 0), COALESCE(RepObjectiveFaction2, 0), COALESCE(RepObjectiveValue2, 0) FROM quest_template WHERE ID = ?", questID).Scan(&fac1, &val1, &fac2, &val2); err != nil {
+			continue
+		}
+		threshold := int64(0)
+		matched := false
+		if fac1 == int64(factionID) {
+			threshold, matched = val1, true
+		} else if fac2 == int64(factionID) {
+			threshold, matched = val2, true
+		}
+		if !matched {
+			continue
+		}
+		status, err := s.characterQuestStatus(ctx, questID)
+		if err != nil {
+			continue
+		}
+		switch status {
+		case questStatusIncomplete:
+			if standing >= threshold && s.canCompleteQuest(ctx, questID) {
+				s.completeQuest(ctx, questID)
+			}
+		case questStatusComplete:
+			if standing < threshold {
+				s.incompleteQuest(ctx, questID)
+			}
+		}
+	}
 }
 
 // spellFactionEntryExists mirrors the sFactionStore.LookupEntry gate in

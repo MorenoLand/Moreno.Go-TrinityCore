@@ -146,6 +146,7 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 	}
 
 	s.player.Money -= cost
+	s.questMoneyChanged(ctx)
 	newCount := uint8(purchasedCount + 1)
 	s.player.BankBagSlots = newCount
 	if _, err := cdb.ExecContext(ctx, "UPDATE characters SET money = ?, bankSlots = ? WHERE guid = ?", s.player.Money, newCount, s.playerGUID); err != nil {

@@ -14,21 +14,22 @@ import (
 )
 
 const (
-	questStatusComplete            = 1
-	questStatusIncomplete          = 3
-	questStatusFailed              = 5      // QUEST_STATUS_FAILED (QuestDef.h:108)
-	questStatusRewarded            = 6      // Player::GetQuestStatus reports QUEST_STATUS_REWARDED, never NONE, for rewarded quests
-	questFlagTracking       uint32 = 0x400  // QUEST_FLAGS_TRACKING (QuestDef.h:142): automatically rewarded on complete, never in the client quest log
-	questSlotStateFail      uint32 = 0x0002 // QUEST_STATE_FAIL (Player.h:496)
-	itemBondingQuestItem    uint32 = 4      // BIND_QUEST_ITEM (ItemTemplate.h:102)
-	QuestTypeRaid           uint32 = 62
-	QuestTypeRaid10         uint32 = 88
-	QuestTypeRaid25         uint32 = 89
-	RaidDifficulty25ManMask uint8  = 1
-	questDialogNone                = 0
-	questDialogIncomplete          = 5
-	questDialogReward              = 10
-	questDialogAvailable           = 8
+	questStatusComplete                   = 1
+	questStatusIncomplete                 = 3
+	questStatusFailed                     = 5      // QUEST_STATUS_FAILED (QuestDef.h:108)
+	questStatusRewarded                   = 6      // Player::GetQuestStatus reports QUEST_STATUS_REWARDED, never NONE, for rewarded quests
+	questFlagTracking              uint32 = 0x400  // QUEST_FLAGS_TRACKING (QuestDef.h:142): automatically rewarded on complete, never in the client quest log
+	questSpecialExplorationOrEvent        = 0x002  // QUEST_SPECIAL_FLAGS_EXPLORATION_OR_EVENT (QuestDef.h:161)
+	questSlotStateFail             uint32 = 0x0002 // QUEST_STATE_FAIL (Player.h:496)
+	itemBondingQuestItem           uint32 = 4      // BIND_QUEST_ITEM (ItemTemplate.h:102)
+	QuestTypeRaid                  uint32 = 62
+	QuestTypeRaid10                uint32 = 88
+	QuestTypeRaid25                uint32 = 89
+	RaidDifficulty25ManMask        uint8  = 1
+	questDialogNone                       = 0
+	questDialogIncomplete                 = 5
+	questDialogReward                     = 10
+	questDialogAvailable                  = 8
 )
 
 func QuestAllowedInRaid(questType uint32, difficulty uint8, raidGroup, ignoreRaid bool) bool {
@@ -1284,6 +1285,32 @@ func (s *session) completeQuest(ctx context.Context, questID uint32) {
 			}
 		}
 	}
+	// Player::CompleteQuest (Player.cpp:15304-15307): TRACKING-flagged
+	// quests are rewarded automatically on completion — RewardQuest(qInfo,
+	// 0, this, false) — and never appear in the client quest log.
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var flags int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM quest_template WHERE ID = ?", questID).Scan(&flags); err == nil && flags&int64(questFlagTracking) != 0 {
+			s.rewardTrackingQuest(ctx, questID)
+		}
+	}
+}
+
+// incompleteQuest mirrors Player::IncompleteQuest (Player.cpp:15320-15329):
+// the quest drops back to INCOMPLETE and the QUEST_STATE_COMPLETE log flag
+// is cleared. Like SetQuestStatus, the client quest update goes out.
+func (s *session) incompleteQuest(ctx context.Context, questID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, s.playerGUID, questID)
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		if s.player.QuestLog[slot].QuestID == questID {
+			s.player.QuestLog[slot].State &^= questCompleteStateFlag(questStatusComplete)
+			s.sendPlayerQuestLogUpdate(slot)
+			break
+		}
+	}
 }
 
 // completeQuestFromSpell mirrors Spell::EffectQuestComplete
@@ -1357,18 +1384,22 @@ func (s *session) canCompleteQuest(ctx context.Context, questID uint32) bool {
 	var reqNpcCount1, reqNpcCount2, reqNpcCount3, reqNpcCount4 int64
 	var reqItem1, reqItem2, reqItem3, reqItem4, reqItem5, reqItem6 int64
 	var reqItemCount1, reqItemCount2, reqItemCount3, reqItemCount4, reqItemCount5, reqItemCount6 int64
+	var reqMoney, repFaction, repValue, requiredPlayerKills int64
 
 	row := wdb.QueryRowContext(ctx, `SELECT Flags,
 		RequiredNpcOrGo1, RequiredNpcOrGo2, RequiredNpcOrGo3, RequiredNpcOrGo4,
 		RequiredNpcOrGoCount1, RequiredNpcOrGoCount2, RequiredNpcOrGoCount3, RequiredNpcOrGoCount4,
 		RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5, RequiredItemId6,
-		RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6
+		RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6,
+		COALESCE(RewOrReqMoney, 0), COALESCE(RepObjectiveFaction, 0), COALESCE(RepObjectiveValue, 0),
+		COALESCE(RequiredPlayerKills, 0)
 		FROM quest_template WHERE ID = ?`, questID)
 	err := row.Scan(&flags,
 		&reqNpc1, &reqNpc2, &reqNpc3, &reqNpc4,
 		&reqNpcCount1, &reqNpcCount2, &reqNpcCount3, &reqNpcCount4,
 		&reqItem1, &reqItem2, &reqItem3, &reqItem4, &reqItem5, &reqItem6,
-		&reqItemCount1, &reqItemCount2, &reqItemCount3, &reqItemCount4, &reqItemCount5, &reqItemCount6)
+		&reqItemCount1, &reqItemCount2, &reqItemCount3, &reqItemCount4, &reqItemCount5, &reqItemCount6,
+		&reqMoney, &repFaction, &repValue, &requiredPlayerKills)
 	if err != nil {
 		// Fallback for minimalist quest_template schema
 		var simpleFlags int64
@@ -1378,31 +1409,48 @@ func (s *session) canCompleteQuest(ctx context.Context, questID uint32) bool {
 		flags = simpleFlags
 	}
 
-	if uint32(flags)&questAutoCompleteFlags != 0 {
-		return true
-	}
 	// Player::CanCompleteQuest (Player.cpp:14979): the autocomplete arm uses
 	// Quest::IsAutoComplete (QuestDef.cpp:315) — Method == 0 also counts, not
 	// just the QUEST_FLAGS_AUTOCOMPLETE bit.
-	var method int64
-	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(Method, 0) FROM quest_template WHERE ID = ?", questID).Scan(&method); err == nil && method == 0 {
-		return true
+	autoComplete := uint32(flags)&questAutoCompleteFlags != 0
+	if !autoComplete {
+		var method int64
+		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(Method, 0) FROM quest_template WHERE ID = ?", questID).Scan(&method); err == nil && method == 0 {
+			autoComplete = true
+		}
 	}
 
-	// Check NPC/Creature/GO kill/cast counters against quest log slot
-	var entryCounters [4]uint16
+	// 2. Locate the quest log slot.
+	var entry questLogEntry
 	foundSlot := false
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		if s.player.QuestLog[slot].QuestID == questID {
-			entryCounters = s.player.QuestLog[slot].Counters
+			entry = s.player.QuestLog[slot]
 			foundSlot = true
 			break
 		}
 	}
+
+	// Player::CanCompleteQuest (Player.cpp:14979-14981): the auto-complete
+	// arm fires only for quests not in the log, gated on CanTakeQuest — the
+	// quest must be takeable right now, not merely flagged auto-complete.
 	if !foundSlot {
+		if autoComplete {
+			if canTake, takeErr := s.canTakeQuest(ctx, questID); takeErr == nil && canTake {
+				return true
+			}
+		}
 		return false
 	}
 
+	// Player::CanCompleteQuest (Player.cpp:14986): only INCOMPLETE quests
+	// can transition to complete.
+	if status, statusErr := s.characterQuestStatus(ctx, questID); statusErr != nil || status != questStatusIncomplete {
+		return false
+	}
+
+	// Check NPC/Creature/GO kill/cast counters against quest log slot
+	entryCounters := entry.Counters
 	reqNpcs := [4]int64{reqNpc1, reqNpc2, reqNpc3, reqNpc4}
 	reqNpcCounts := [4]int64{reqNpcCount1, reqNpcCount2, reqNpcCount3, reqNpcCount4}
 	for i := 0; i < 4; i++ {
@@ -1423,6 +1471,33 @@ func (s *session) canCompleteQuest(ctx context.Context, questID uint32) bool {
 				return false
 			}
 		}
+	}
+
+	// Player::CanCompleteQuest (Player.cpp:15017-15019): player-kill
+	// objective (QUEST_SPECIAL_FLAGS_PLAYER_KILL).
+	if requiredPlayerKills > 0 && int64(entry.PlayerCount) < requiredPlayerKills {
+		return false
+	}
+
+	// Player::CanCompleteQuest (Player.cpp:15021-15022): exploration/event
+	// objective (QUEST_SPECIAL_FLAGS_EXPLORATION_OR_EVENT).
+	var specialFlags int64
+	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	if specialFlags&questSpecialExplorationOrEvent != 0 && !entry.Explored {
+		return false
+	}
+
+	// Player::CanCompleteQuest (Player.cpp:15028-15032): required money —
+	// HasEnoughMoney(-RewOrReqMoney).
+	if reqMoney < 0 && int64(s.player.Money) < -reqMoney {
+		return false
+	}
+
+	// Player::CanCompleteQuest (Player.cpp:15034-15036): the first
+	// reputation objective — ReputationMgr::GetReputation is base standing
+	// plus recorded standing (ReputationMgr.cpp:119).
+	if repFaction > 0 && int64(s.reputationStanding(uint32(repFaction))) < repValue {
+		return false
 	}
 
 	return true
