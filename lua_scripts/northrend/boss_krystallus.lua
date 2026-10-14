@@ -58,7 +58,11 @@
 -- EVENT_GROUND_SLAM (DoCast(SPELL_GROUND_SLAM 50827) + schedules
 -- EVENT_SHATTER 10s, 15s/18s — SHATTER (50810) is
 -- SpellScript-delivered (see below); porting SLAM alone would
--- leave SPELL_STONED (50812) unshattered — half-machine);
+-- leave SPELL_STONED (50812) unshattered — half-machine. Verdict
+-- decided 2026-10-14: STAY-OUT stands (the bjarngrim
+-- documented-deviation precedent — the leg stays out,
+-- documented here); the slam self-cast is bridgeable but the
+-- stoned->shatter->damage chain is not);
 -- EVENT_STOMP — PORTED (DoCast(me, SPELL_STOMP 48131)
 -- non-triggered self-cast, {20s,29s} init / {20s,29s} re-arm,
 -- zero gating legs — boss_krystallus.cpp:73/:108-110);

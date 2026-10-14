@@ -60,17 +60,25 @@
 -- 52429) + GolemsShattered increment machine — no cast /
 -- summon-list bridges).
 -- JustSummoned (NPC_MOLTEN_GOLEM 28695 SummonList latch +
--- random-target MoveFollow + triggered SPELL_HEAT 52387 cast with
--- SetOriginalCaster(me) — no summon-list / cast / motion /
--- target-selection bridges).
+-- random-target MoveFollow + non-triggered SPELL_HEAT 52387
+-- cast via the CastSpellExtraArgs overload with SetOriginalCaster
+-- only (boss_volkhan.cpp:204 — no trigger flags; earlier header
+-- claim of "triggered" corrected 2026-10-14) — no summon-list /
+-- cast / motion / target-selection bridges).
 -- MovementInform POINT_MOTION_TYPE / EVENT_FORGE_CAST (m_uiSummonPhase
 -- 2 -> SetOrientation(2.29f) -> phase 3 — no motion bridge).
 -- GetData(DATA_SHATTER_RESISTANT 2042) -> GolemsShattered (no
 -- GetData bridge; consumer is achievement_shatter_resistant below).
 -- UpdateAI event machine: EVENT_PAUSE (m_bIsStriking resume-chase +
--- flag clears, 3.5s); EVENT_SHATTERING_STOMP (m_uiHealthAmountModifier
--- >= 3 gate: Talk(SAY_STOMP 2) + DoCast(SPELL_SHATTERING_STOMP
--- 52237) + Talk(EMOTE_SHATTER 6) + m_bCanShatterGolem = true, 30s);
+-- flag clears, 3.5s); EVENT_SHATTERING_STOMP STAYS OUT — verdict
+-- decided 2026-10-14: the arm is gated on !m_bHasTemper &&
+-- m_uiHealthAmountModifier >= 3 (boss_volkhan.cpp:255-257), and
+-- m_bHasTemper rides the unbridged forge/temper machine (set true
+-- at the health-gate :296-303, cleared only by EVENT_PAUSE
+-- :243-249 after the golem-summon phases) — a bare health-gated
+-- port would fire stomps the C++ suppresses during the temper
+-- window, and the m_bCanShatterGolem -> EVENT_SHATTER ->
+-- ShatterGolem cross-creature chain has no summon-list bridge;
 -- EVENT_SHATTER (ShatterGolem + 3s reschedule); EVENT_FORGE_CAST
 -- (DoCast(SPELL_FORGE_VISUAL 52654), 15s, PHASE_INTRO only) — no
 -- timer-event / cast bridges; the Talk arms 2, 6, 5 ride the

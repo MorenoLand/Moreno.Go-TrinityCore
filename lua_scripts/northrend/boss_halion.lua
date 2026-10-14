@@ -51,6 +51,20 @@
 -- player-gated variant precedent; the SPELL_LEAVE_TWILIGHT_REALM cast
 -- leg has no-cast bridge). Material halion has no KilledUnit arm —
 -- SAY_KILL lives on the twilight AI only.
+-- boss_twilight_halion timer arms — PORTED via the CreateLuaEvent
+-- harness (GUID-keyed timers table, cancel on events 2/4/23 — the
+-- krystallus / bjarngrim-lieutenant convention), armed from
+-- twilightHalionEnterCombat (entry 40142 registered events 1/2/3/4/23):
+-- EVENT_CLEAVE — DoCastVictim(SPELL_CLEAVE 74524) non-triggered,
+-- 3s init / randtime(7s,10s) re-arm (boss_halion.cpp:525-528) ->
+-- creature:CastSpell(nil, SPELL_CLEAVE) — the DoCastVictim lowering.
+-- EVENT_BREATH — DoCastSelf(SPELL_DARK_BREATH 74806) non-triggered,
+-- 12s init / randtime(10s,14s) re-arm (:533-536) ->
+-- creature:CastSpell(creature, SPELL_DARK_BREATH).
+-- EVENT_TAIL_LASH — DoCastAOE(SPELL_TAIL_LASH 74531) non-triggered,
+-- 12s init (armed in the C++ constructor, :420) / randtime(12s,16s)
+-- re-arm (:529-532) -> creature:CastSpell(creature, SPELL_TAIL_LASH)
+-- — the DoCastAOE self-cast lowering (boss_ai.go convention).
 -- DOCUMENTED-ONLY (in this header; only entries 39863 and 40142
 -- registered):
 -- boss_halion DamageTaken — Talk(SAY_PHASE_TWO 4) rides the 75% health
@@ -66,8 +80,21 @@
 -- EVENT_FIERY_COMBUSTION DoCastSelf / CastSpell legs ride the same
 -- phase machine (SetPhase :246/:288/:426/:477 + cross-creature
 -- controller SetData :260/:296/:667 — no phase-machine bridge).
--- boss_twilight_halion JustEngagedWith — zero Talk (not registered);
--- its scheduler / SendEncounterUnit legs ride absent bridges.
+-- boss_twilight_halion JustEngagedWith — zero Talk; the three
+-- phase-ungated timer arms are PORTED (see twilightHalionEnterCombat
+-- below). C++ UpdateAI has no phase early-return (boss_halion.cpp:
+-- 511-544), so the timers run identically in PHASE_TWO and
+-- PHASE_THREE — engage-armed CreateLuaEvent timers are faithful
+-- across both. The SendEncounterUnit / DoCastSelf
+-- SPELL_TWILIGHT_PRECISION legs ride absent bridges.
+-- EVENT_SOUL_CONSUMPTION 74792 stays out: SelectTarget Random with
+-- SPELL_TWILIGHT_REALM aura filter + TRIGGERED_IGNORE_SET_FACING —
+-- no random-target / target-filter bridges (no-bridge queues).
+-- Constructor-side legs (DUSK_SHROUD / COPY_DAMAGE auras, health
+-- sync, phase-mask / react-state / combat flags) ride absent
+-- bridges; TAIL_LASH's 12s constructor-arm is documented as a
+-- spawn->engage drift on the first tick only (twilight halion
+-- spawns in combat, so the delta is near-zero).
 -- boss_twilight_halion DamageTaken — Talk(SAY_PHASE_THREE 2) rides the
 -- 50% health transition (no-DamageTaken bridge); the
 -- DoCastSelf SPELL_TWILIGHT_DIVISION / controller SetData legs ride
@@ -138,3 +165,102 @@ end
 RegisterCreatureEvent(ENTRY_HALION, 1, halionEnterCombat)
 RegisterCreatureEvent(ENTRY_HALION, 4, halionDied)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 3, twilightHalionKilledUnit)
+
+local SPELL_CLEAVE      = 74524
+local SPELL_DARK_BREATH = 74806
+local SPELL_TAIL_LASH   = 74531
+
+-- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
+-- events 2/4/23) — the krystallus / bjarngrim-lieutenant convention.
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ UpdateAI EVENT_CLEAVE: DoCastVictim(SPELL_CLEAVE 74524)
+-- non-triggered, 3s init / randtime(7s,10s) re-arm
+-- (boss_halion.cpp:525-528) — no phase gating on the arm.
+local function cleaveTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CLEAVE)
+    schedule(guid, "cleave", {7000, 10000}, function()
+        cleaveTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_BREATH: DoCastSelf(SPELL_DARK_BREATH 74806)
+-- non-triggered, 12s init / randtime(10s,14s) re-arm
+-- (boss_halion.cpp:533-536) — no phase gating on the arm.
+local function breathTick(creature, guid)
+    creature:CastSpell(creature, SPELL_DARK_BREATH)
+    schedule(guid, "breath", {10000, 14000}, function()
+        breathTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_TAIL_LASH: DoCastAOE(SPELL_TAIL_LASH 74531)
+-- non-triggered, 12s init armed in the constructor (:420) /
+-- randtime(12s,16s) re-arm (:529-532) — no phase gating on the arm.
+-- The constructor arm is re-anchored on OnEnterCombat: twilight
+-- halion spawns in combat (UNIT_FLAG_IN_COMBAT at :414), so the
+-- spawn->engage delta on the first tick is near-zero — documented.
+local function tailLashTick(creature, guid)
+    creature:CastSpell(creature, SPELL_TAIL_LASH)
+    schedule(guid, "tail_lash", {12000, 16000}, function()
+        tailLashTick(creature, guid)
+    end)
+end
+
+-- C++ boss_twilight_halion::JustEngagedWith:
+-- events.SetPhase(PHASE_TWO); BossAI::JustEngagedWith(who);
+-- me->AddAura(SPELL_TWILIGHT_PRECISION, me);
+-- events.ScheduleEvent(EVENT_CLEAVE, 3s);
+-- events.ScheduleEvent(EVENT_BREATH, 12s);
+-- instance->SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE, me, 2)
+-- — only the three timer arms bridge (the TAIL_LASH arm moves here
+-- from its constructor schedule; SOUL_CONSUMPTION's random-target
+-- filter arm has no bridge and stays out).
+local function twilightHalionEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "cleave", 3000, function()
+        cleaveTick(creature, guid)
+    end)
+    schedule(guid, "breath", 12000, function()
+        breathTick(creature, guid)
+    end)
+    schedule(guid, "tail_lash", 12000, function()
+        tailLashTick(creature, guid)
+    end)
+end
+
+local function twilightHalionLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function twilightHalionDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 1, twilightHalionEnterCombat)
+RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 2, twilightHalionLeaveCombat)
+RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 4, twilightHalionDied)
+RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 23, twilightHalionLeaveCombat)
