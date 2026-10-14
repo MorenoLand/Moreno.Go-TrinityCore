@@ -7,12 +7,7 @@
 -- "// Ulduar" block in AddNorthrendScripts(), immediately
 -- after AddSC_boss_mimiron() (decl 118 / call 313); the call
 -- after it is AddSC_boss_freya() — loader order confirmed
--- 2026-10-06 in the 23:03 EDT audit (this lua was written
--- from the Oct 2 port session and re-audited, per the
--- xt002 22:38 / vezax 22:48 / assembly_of_iron 22:54 /
--- kologarn 22:58 stale-header precedent — this run fixes the
--- stale first-pass "No hodir lua existed" line to this
--- audited-artifact wording).
+-- 2026-10-06 in the 23:03 EDT audit.
 -- Entry: 32845 Hodir (ulduar.h NPC_HODIR, line 78 —
 -- entry-verifiable, registration proceeds (the
 -- nexus_commanders / malygos / sartharion kalecgos
@@ -26,29 +21,68 @@
 -- "spell_biting_cold", "spell_biting_cold_dot") hits
 -- boss_hodir.cpp (+ the loader decl/call lines for
 -- AddSC_boss_hodir) only; zero sql/ hits for all twelve.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied,
--- 9 OnDamageTaken.
--- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith passthrough, the DoCast
--- SPELL_BITING_COLD leg and the six ScheduleEvent legs
--- have no bridges — the auriaya engage-port precedent).
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
+-- 3 OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
+-- Timer bridge: CreateLuaEvent harness, GUID-keyed timers
+-- table, cancel on events 2/4/23 (the maiden_of_virtue /
+-- moroes / curator / nightbane precedent). CastSpell(nil,
+-- spell) = DoCastVictim; CastSpell(creature, spell) =
+-- DoCastSelf; DoCastAOE lowers to self-cast (boss_ai.go
+-- DoCastAOE lowering; the selin_fireheart / mr_smite
+-- precedent). The 3rd CastSpell arg is the C++ DoCast 3rd
+-- arg (2-arg / 1-arg overloads = non-triggered). {min,max}
+-- table delay = randtime range.
+-- Ported arms (all C++-exact for the modeled arms):
+-- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; C++ lines
+-- 370); DoCast(me, SPELL_BITING_COLD 62038, true) (line
+-- 371) -> CastSpell(creature, 62038, true); BossAI
+-- passthrough has no bridge.
+-- EVENT_FREEZE (id 1; init 25s at line 380, arm at
+-- 444-446): DoCastAOE(SPELL_FREEZE 62469), 1-arg =
+-- non-triggered -> CastSpell(creature, 62469); repeat
+-- 30-45s.
+-- EVENT_BLOWS (id 5; init 60-65s at line 381, arm at
+-- 473-477): Talk(SAY_STALACTITE 3) + Talk(EMOTE_BLOWS 8) +
+-- DoCast(me, SPELL_FROZEN_BLOWS 62478), 2-arg =
+-- non-triggered -> CastSpell(creature, 62478); repeat
+-- 60-65s.
+-- EVENT_FLASH_FREEZE (id 2; init 45s at line 382, arm at
+-- 453-455): Talk(SAY_FLASH_FREEZE 2) + Talk(EMOTE_FREEZE
+-- 7) only — the random-target SPELL_ICICLE_SNOWDRIFT loop
+-- (lines 456-458), the bare DoCast(SPELL_FLASH_FREEZE
+-- 61968) (line 459, AI-target-driven per AISpellInfo), and
+-- the whole EVENT_FLASH_FREEZE_EFFECT machinery (lines
+-- 462-470: grid creature-list, SPELL_FLASH_FREEZE_VISUAL
+-- 62148, FlashFreeze() summon legs) have no bridges;
+-- repeat 25-35s is taken from the EFFECT reschedule (line
+-- 470), which is the C++-exact Talk cadence.
+-- EVENT_RARE_CACHE (id 6; init 3min at line 383, arm at
+-- 479-483): Talk(SAY_HARD_MODE_FAILED 6) only — the
+-- iCouldSayThatThisCacheWasRare flag clear (line 481) and
+-- instance->SetData(DATA_HODIR_RARE_CACHE, 0) (line 482)
+-- have no bridges; fires once (CancelEvent, line 483).
+-- EVENT_BERSERK (id 7; init 8min at line 384, arm at
+-- 485-488): Talk(SAY_BERSERK 5) + DoCast(me,
+-- SPELL_BERSERK 47008, true) -> CastSpell(creature, 47008,
+-- true); fires once (CancelEvent, line 488).
 -- KilledUnit — player-gated Talk(SAY_SLAY 1) (event 3;
--- who->GetTypeId() == TYPEID_PLAYER — the razuvious
--- player-gated variant precedent — at least the
--- forty-first player-gated variant ported: 40 player-gated
--- lua ports carry mtimes untouched since before this file's
--- creation (file-birth order puts it at sixtieth; both
--- counts floor the original "twenty-fifth" claim, which was
--- also duplicated verbatim on boss_general_vezax.lua).
+-- who->GetTypeId() == TYPEID_PLAYER, C++ lines 389-391 —
+-- the razuvious player-gated variant precedent).
 -- DamageTaken — lethal (damage >= health) -> Talk(SAY_DEATH
--- 4) + damage = 0 (event 9; the numeric second return
--- rewrites damage C++-exact — the moroes damage-rewrite
--- precedent; the companion legs have no bridges — see
--- DOCUMENTED-ONLY).
+-- 4) + damage = 0 (event 9; C++ lines 396-399; the numeric
+-- second return rewrites damage C++-exact — the moroes
+-- damage-rewrite precedent).
+-- Deviations from C++: no UNIT_STATE_CASTING model in Go
+-- (creature casts are packet-visual), so timers fire
+-- unconditionally — melee stays engine-driven, like C++
+-- DoMeleeAttackIfReady (the maiden_of_virtue precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond
 -- entry 32845):
--- DamageTaken companion legs — RemoveAllAuras /
+-- JustEngagedWith achievement flags (gettingColdInHereTimer
+-- / gettingColdInHere / cheeseTheFreeze /
+-- iHaveTheCoolestFriends / iCouldSayThatThisCacheWasRare,
+-- lines 373-377) — DoAction/SetData-gated, no bridges.
+-- DamageTaken lethal companion legs — RemoveAllAuras /
 -- RemoveAllAttackers / AttackStop / SetReactState
 -- REACT_PASSIVE / SetFlag UNIT_FLAG_NON_ATTACKABLE /
 -- SetControlled root / InterruptNonMeleeSpells /
@@ -64,32 +98,77 @@
 -- hit — verbatim C++ behavior, which in C++ is bounded
 -- by the 10s despawn; documented here since Go cannot
 -- despawn him).
--- instance->SetData(DATA_HODIR_RARE_CACHE, 1) on lethal
--- DamageTaken and DATA_HODIR_RARE_CACHE = 0 on
--- EVENT_RARE_CACHE — no instance SetData bridge; the
--- iCouldSayThatThisCacheWasRare flag joins the
+-- DamageTaken lethal instance->SetData(DATA_HODIR_RARE_CACHE,
+-- 1) (line 400) — no instance SetData bridge; joins the
 -- no-SetData-bridge queue.
--- Reset — _Reset() + SetReactState REACT_PASSIVE +
--- frozen-helper SummonCreature legs — no bridges.
--- UpdateAI timer Talks — Talk(SAY_FLASH_FREEZE 2) +
--- Talk(EMOTE_FREEZE 7) (EVENT_FLASH_FREEZE),
--- Talk(SAY_STALACTITE 3) + Talk(EMOTE_BLOWS 8)
--- (EVENT_BLOWS), Talk(SAY_HARD_MODE_FAILED 6)
--- (EVENT_RARE_CACHE), Talk(SAY_BERSERK 5)
--- (EVENT_BERSERK) — the timer event machine has no
--- bridge; all join the no-timer-bridge queue.
+-- DamageTaken else-leg (lines 421-426:
+-- REACT_AGGRESSIVE / DoZoneInCombat / AttackStart) —
+-- zone-in / MotionMaster legs, no bridges (unreachable in
+-- Go: combat already started on event 1).
+-- EVENT_ICICLE (id 4; lines 448-451): DoCast(target,
+-- SPELL_ICICLE 62234) on SelectTarget(Random, 0, 100.0f)
+-- — random-target leg; BLOCKED per doctrine.
+-- gettingColdInHere UpdateAI leg (lines 491-499:
+-- PvE-combat-ref iteration, SPELL_BITING_COLD_TRIGGERED
+-- 62039 aura-stack check, SetData(DATA_GETTING_COLD_IN_HERE))
+-- — achievement / instance-data leg, no bridges.
+-- DoAction arms (lines 503-515:
+-- ACTION_I_HAVE_THE_COOLEST_FRIENDS /
+-- ACTION_CHEESE_THE_FREEZE) — DoAction-gated achievement
+-- flags, no bridge.
+-- Reset — _Reset() + SetReactState REACT_PASSIVE (lines
+-- 362-366) + the frozen-helper SummonCreature loop (lines
+-- 368-373: FRIENDS_COUNT summons from the Entry /
+-- SummonPositions tables, each CastSpell(FrozenHelper,
+-- SPELL_SUMMON_FLASH_FREEZE_HELPER 61989, true)) —
+-- summon legs, no bridges.
 -- npc_hodir_priest / npc_hodir_shaman / npc_hodir_druid /
--- npc_hodir_mage JustDied -> instance->GetCreature
--- (BOSS_HODIR)->AI()->DoAction
+-- npc_hodir_mage — adds legs, BLOCKED: EVENT_HEAL
+-- DoCastAOE(SPELL_GREATER_HEAL 62809) (lines 696-698,
+-- priest add); EVENT_DISPEL_MAGIC grid search +
+-- DoCast(SPELL_DISPEL_MAGIC 63499, true) (lines 700-709);
+-- HealthBelowPct(30) DoCast(62809) (line 687);
+-- EVENT_STORM_CLOUD random-target DoCast(SPELL_STORM_CLOUD
+-- 65123, true) (lines 772-774); EVENT_STARLIGHT
+-- DoCast(me, SPELL_STARLIGHT 62807, true) (lines 837-838,
+-- plain timer self-cast but on the druid add);
+-- EVENT_CONJURE_FIRE summon-list-size gate +
+-- DoCast(SPELL_CONJURE_FIRE 62823, true) (lines 915-919);
+-- EVENT_MELT_ICE FindNearestCreature(NPC_FLASH_FREEZE)
+-- + DoCast(SPELL_MELT_ICE 64528, true) (lines 921-923);
+-- all four JustDied -> hodir DoAction
 -- (ACTION_I_HAVE_THE_COOLEST_FRIENDS) — no DoAction
--- bridge; their DoSpellAttackIfReady combat legs have no
--- cast bridges — no registrations.
--- npc_flash_freezeAI DamageTaken — flash-freeze helper
--- teleport / SPELL_FLASH_FREEZE_HELPER legs — no
--- bridges; npc_icicle / npc_snowpacked_icicle fall
--- damage / snowdrift legs — no bridges; npc_toasty_fire
--- (GO_TOASTY_FIRE 194300), npc_ice_block — no bridges;
--- no registrations.
+-- bridge; their DoSpellAttackIfReady combat legs
+-- (SPELL_SMITE 61923 / SPELL_LAVA_BURST 61924 /
+-- SPELL_WRATH 62793 / SPELL_FIREBALL 61909) have no cast
+-- bridges — no registrations.
+-- npc_flash_freezeAI — IsSummonedBy: DoCast(target,
+-- SPELL_BLOCK_OF_ICE 61969, true) (line 243), NearTeleportTo
+-- teleport legs, DoAction(ACTION_CHEESE_THE_FREEZE) (lines
+-- 246-247); UpdateAI despawn/die checks (lines 209-232) —
+-- summon / teleport / despawn legs, no bridges; no
+-- registration.
+-- npc_ice_blockAI — IsSummonedBy: DoCast(target,
+-- SPELL_FLASH_FREEZE_HELPER 61990, true) (line 292);
+-- DamageTaken -> hodir REACT_AGGRESSIVE / DoZoneInCombat /
+-- AttackStart (lines 301-318) — summon / zone-in legs, no
+-- bridges; no registration.
+-- npc_icicleAI — icicleTimer arm (lines 584-600): entry
+-- 33169 NPC_ICICLE -> DoCast(me, SPELL_ICICLE_FALL 69428)
+-- + DoCast(me, SPELL_FALL_DAMAGE 62236, true); entry 33173
+-- NPC_ICICLE_SNOWDRIFT -> DoCast(me,
+-- SPELL_FALL_SNOWDRIFT 62460) + DoCast(me, SPELL_ICICLE_FALL
+-- 69428) — plain timer self-casts but on summoned icicle
+-- adds; adds legs BLOCKED per doctrine; no registration.
+-- npc_snowpacked_icicleAI — 12s despawnTimer ->
+-- RemoveGameObject(GO_SNOWDRIFT 194173) +
+-- DespawnOrUnsummon (lines 632-642) — despawn leg, no
+-- bridge; no registration.
+-- npc_toasty_fireAI — Reset: DoCast(me, SPELL_SINGED
+-- 62821, true) (line 967); SpellHit (SPELL_BLOCK_OF_ICE /
+-- SPELL_ICE_SHARD / SPELL_ICE_SHARD_HIT) -> RemoveGameObject
+-- + DespawnOrUnsummon (lines 970-978) — SpellHit /
+-- despawn legs, no bridges; no registration.
 -- spell_biting_cold / spell_biting_cold_dot —
 -- SpellScript / AuraScript — no SpellScript / AuraScript
 -- bridges; both join the no-SpellScript-bridge queue.
@@ -105,29 +184,129 @@ local ENTRY_HODIR = 32845
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
+local SAY_FLASH_FREEZE = 2
+local SAY_STALACTITE = 3
 local SAY_DEATH = 4
+local SAY_BERSERK = 5
+local SAY_HARD_MODE_FAILED = 6
+local EMOTE_FREEZE = 7
+local EMOTE_BLOWS = 8
 
--- C++ JustEngagedWith: BossAI passthrough + DoCast
--- SPELL_BITING_COLD + six ScheduleEvent legs — only the
--- Talk arm is bridgeable.
-local function hodirEnterCombat(event, creature, target)
-    creature:Talk(SAY_AGGRO)
+local SPELL_BITING_COLD = 62038
+local SPELL_FREEZE = 62469
+local SPELL_FROZEN_BLOWS = 62478
+local SPELL_BERSERK = 47008
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
 end
 
--- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then
--- Talk(SAY_SLAY) — the razuvious player-gated variant
--- precedent.
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_FREEZE (lines 444-446): DoCastAOE(SPELL_FREEZE),
+-- 1-arg = non-triggered; init 25s (line 380), repeat 30-45s
+-- (line 446).
+local function onFreeze(creature, guid)
+    creature:CastSpell(creature, SPELL_FREEZE)
+    schedule(guid, "freeze", {30000, 45000}, function() onFreeze(creature, guid) end)
+end
+
+-- C++ EVENT_BLOWS (lines 473-477): Talk(SAY_STALACTITE) +
+-- Talk(EMOTE_BLOWS) + DoCast(me, SPELL_FROZEN_BLOWS),
+-- 2-arg = non-triggered; init 60-65s (line 381), repeat
+-- 60-65s (line 477).
+local function onBlows(creature, guid)
+    creature:Talk(SAY_STALACTITE)
+    creature:Talk(EMOTE_BLOWS)
+    creature:CastSpell(creature, SPELL_FROZEN_BLOWS)
+    schedule(guid, "blows", {60000, 65000}, function() onBlows(creature, guid) end)
+end
+
+-- C++ EVENT_FLASH_FREEZE (lines 453-455): Talk-only port.
+-- The random-target SPELL_ICICLE_SNOWDRIFT loop, the bare
+-- DoCast(SPELL_FLASH_FREEZE), and the whole
+-- EVENT_FLASH_FREEZE_EFFECT machinery (lines 462-470) have
+-- no bridges. Repeat 25-35s is the C++-exact Talk cadence
+-- from the EFFECT reschedule (line 470); init 45s
+-- (line 382).
+local function onFlashFreeze(creature, guid)
+    creature:Talk(SAY_FLASH_FREEZE)
+    creature:Talk(EMOTE_FREEZE)
+    schedule(guid, "flashfreeze", {25000, 35000}, function() onFlashFreeze(creature, guid) end)
+end
+
+-- C++ JustEngagedWith (lines 370-384): BossAI passthrough
+-- (no bridge) + Talk(SAY_AGGRO) + DoCast(me,
+-- SPELL_BITING_COLD, true) -> CastSpell(creature, 62038,
+-- true); the six ScheduleEvent legs become CreateLuaEvent
+-- timers below.
+local function hodirEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:Talk(SAY_AGGRO)
+    creature:CastSpell(creature, SPELL_BITING_COLD, true)
+    schedule(guid, "freeze", 25000, function() onFreeze(creature, guid) end)
+    schedule(guid, "blows", {60000, 65000}, function() onBlows(creature, guid) end)
+    schedule(guid, "flashfreeze", 45000, function() onFlashFreeze(creature, guid) end)
+    -- C++ EVENT_RARE_CACHE (lines 479-483): Talk-only port,
+    -- init 3min (line 383), fires once (CancelEvent, line
+    -- 483); the flag clear + instance SetData legs have no
+    -- bridges.
+    schedule(guid, "rarecache", 180000, function() creature:Talk(SAY_HARD_MODE_FAILED) end)
+    -- C++ EVENT_BERSERK (lines 485-488): Talk(SAY_BERSERK) +
+    -- DoCast(me, SPELL_BERSERK, true) -> CastSpell(creature,
+    -- 47008, true); init 8min (line 384), fires once
+    -- (CancelEvent, line 488).
+    schedule(guid, "berserk", 480000, function()
+        creature:Talk(SAY_BERSERK)
+        creature:CastSpell(creature, SPELL_BERSERK, true)
+    end)
+end
+
+local function hodirLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function hodirDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+local function hodirReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ KilledUnit (lines 389-391): who->GetTypeId() ==
+-- TYPEID_PLAYER, then Talk(SAY_SLAY) — the razuvious
+-- player-gated variant precedent.
 local function hodirTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end
 
--- C++ DamageTaken: damage >= me->GetHealth() -> damage = 0
--- + Talk(SAY_DEATH) — only the Talk arm and the damage
--- rewrite are bridgeable; the numeric return performs the
--- C++-exact damage=0 rewrite (the moroes damage-rewrite
--- precedent).
+-- C++ DamageTaken (lines 396-399): damage >= me->GetHealth()
+-- -> damage = 0 + Talk(SAY_DEATH) — only the Talk arm and
+-- the damage rewrite are bridgeable; the numeric return
+-- performs the C++-exact damage=0 rewrite (the moroes
+-- damage-rewrite precedent). The companion legs
+-- (RemoveAllAuras / ... / DoCastAOE SPELL_KILL_CREDIT /
+-- SetFaction / DespawnOrUnsummon / _JustDied /
+-- instance->SetData) have no bridges — see DOCUMENTED-ONLY.
 local function hodirDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:Talk(SAY_DEATH)
@@ -136,5 +315,8 @@ local function hodirDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_HODIR, 1, hodirEnterCombat)
+RegisterCreatureEvent(ENTRY_HODIR, 2, hodirLeaveCombat)
 RegisterCreatureEvent(ENTRY_HODIR, 3, hodirTargetDied)
+RegisterCreatureEvent(ENTRY_HODIR, 4, hodirDied)
 RegisterCreatureEvent(ENTRY_HODIR, 9, hodirDamageTaken)
+RegisterCreatureEvent(ENTRY_HODIR, 23, hodirReset)
