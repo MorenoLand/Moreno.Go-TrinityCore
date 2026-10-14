@@ -3695,17 +3695,20 @@ func (s *session) handlePetStopAttack(ctx context.Context, payload []byte) bool 
 	r := protocol.NewReader(payload)
 	petGUID, _ := r.ReadU64()
 	// PetHandler.cpp:269-277: the GUID must resolve to the player's pet or
-	// charmed creature and the unit must be alive; the stop clears the victim
-	// (Unit::AttackStop) and drops the pet's threat.
-	s.stopPetAttacks(petGUID)
+	// charmed creature and the unit must be alive; the stop is Unit::AttackStop
+	// (victim clear + SMSG_ATTACK_STOP, threat kept), so the opcode path runs
+	// without the threat leg.
+	s.stopPetAttacks(petGUID, false)
 	return true
 }
 
-// stopPetAttacks mirrors the pet leg of Unit::CombatStopWithPets
-// (Unit.cpp): the pet's victim and threat clear and SMSG_ATTACK_STOP goes
-// out. Extracted from handlePetStopAttack so death/duel paths can stop a
-// controlled pet without going through the opcode handler.
-func (s *session) stopPetAttacks(petGUID uint64) {
+// stopPetAttacks mirrors the pet leg of Unit::AttackStop (Unit.cpp): the
+// pet's victim clears and SMSG_ATTACK_STOP goes out. Threat is NOT cleared:
+// C++ Unit::AttackStop carries no threat leg (threat clear belongs to
+// CombatStop). Extracted from handlePetStopAttack so death/duel paths can stop
+// a controlled pet without going through the opcode handler; those paths pass
+// clearThreat=true for the CombatStopWithPets leg.
+func (s *session) stopPetAttacks(petGUID uint64, clearThreat bool) {
 	motion := s.controlledPetMotion(petGUID)
 	if motion == nil || motion.Health == 0 || s.server == nil {
 		return
@@ -3714,7 +3717,7 @@ func (s *session) stopPetAttacks(petGUID uint64) {
 	victim := motion.TargetGUID
 	motion.TargetGUID = 0
 	motion.InCombat = false
-	if motion.ThreatMgr != nil {
+	if clearThreat && motion.ThreatMgr != nil {
 		motion.ThreatMgr.ClearThreat()
 	}
 	s.server.motionMu.Unlock()
@@ -3730,7 +3733,7 @@ func (s *session) stopOwnPetAttacks() {
 	if s == nil || s.player == nil || s.player.PetGUID == 0 {
 		return
 	}
-	s.stopPetAttacks(s.player.PetGUID)
+	s.stopPetAttacks(s.player.PetGUID, true)
 }
 
 // handleRequestPetInfo processes CMSG_REQUEST_PET_INFO (0x279).
