@@ -65,24 +65,32 @@
 --   bridge (kalecgos precedent), and every head lookup goes through
 --   _instance->GetCreature(DATA_HORSEMAN_HEAD) (instance-script model
 --   blocked).
--- - EVENT_CONFLAGRATE (phase 2): SelectTarget(SelectTargetMethod::
---   Random, 0, 30.0f, true, false) — NO RANDOM-TARGET BRIDGE (delrissa
---   precedent); phase-pinned on the unmodeled phase machine.
--- - EVENT_SUMMON_PUMPKIN (phase 3): phase-pinned; the 52236 aura's whole
---   effect is the pumpkin-spawn machinery (no summon bridge).
+-- - EVENT_CONFLAGRATE (phase 2): phase-pinned on the unmodeled
+--   phase machine — the true blocker. SelectTarget(Random, 0, 30.0f,
+--   true, false) is bridgeable per the random-player-in-range
+--   convention (GetPlayersInWorld + IsWithinDist), and DoCastSelf
+--   48149/48148 (triggered) + Talk(SAY_CONFLAGRATION) + the
+--   Repeat(18s,21s) timer are bridgeable too; porting them flat would
+--   fabricate phase-1 casts, so they stay out until a phase machine
+--   exists (gothik counterpoint).
+-- - EVENT_SUMMON_PUMPKIN (phase 3): phase-pinned; the C++ AI arm is
+--   only DoCastSelf(52236) + Repeat(30s) — the Talk(SAY_SPROUTING_
+--   PUMPKINS) leg lives in the unbridged 52236 AuraScript and the
+--   pumpkin-spawn machinery is the aura's DBC effect (no summon
+--   bridge).
 -- - Reset/JustReachedHome/InitializeAI legs: SetDisableGravity/SetHover
 --   (no bridge), _summons.DespawnAll (no despawn bridge), SetReactState
 --   (no react-state bridge — koltira precedent), SetImmuneToPC (no
 --   bridge), HandleInitialSetup's DoCastSelf(42413/43877) self-casts are
 --   stranded halves (rageclaw/phoenix_tk precedent: C++ Reset/JustAppeared
 --   run at spawn Initialize, Lua OnReset (23) fires only on reset/evade).
--- - npc_headless_horseman_head (23775): every arm hangs off SpellScript/
---   AuraScript effects (42399 send-head, 42603 HP-check AuraScript —
---   AuraScript check handlers not modeled, standing blocker), DoAction
---   legs (ACTION_HEAD_START_HEAD_PHASE/H P_67/HP_34), and
---   _instance->GetCreature(DATA_HEADLESS_HORSEMAN); its UpdateAI is
---   otherwise a PassiveAI event pump. Nothing genuinely bridgeable —
---   not registered (an empty artifact would be a stub).
+-- - npc_headless_horseman_head (23775): REGISTERED — JustDied's
+--   EVENT_RAIN_OF_TREATS 11s -> DoCastSelf(43344) ports cleanly as a
+--   single-arm registration. The rest strands: SpellScript/AuraScript
+--   effects (42399 send-head, 42603 HP-check AuraScript), DoAction
+--   legs (ACTION_HEAD_START_HEAD_PHASE/HP_67/HP_34), the triggered
+--   DoCastSelf(42428) head-is-dead SpellScript cast, and
+--   _instance->GetCreature(DATA_HEADLESS_HORSEMAN).
 -- - npc_pulsing_pumpkin (23694): Reset self-casts + the sprout arm fires
 --   only via DoAction(ACTION_PUMPKIN_SPROUTING_FINISHED) from the
 --   unmodeled 42281 SpellScript; UpdateEntry + DoZoneInCombat have no
@@ -102,11 +110,13 @@
 
 local SPELL_HORSEMAN_CLEAVE = 42587
 local SPELL_BURNING_COSMETIC = 42971
+local SPELL_RAIN_OF_TREATS = 43344
 
 local SAY_DEATH = 4
 local SAY_KILL_PLAYER = 5
 
 local ENTRY_HEADLESS_HORSEMAN = 23682
+local ENTRY_HORSEMAN_HEAD = 23775
 
 local timers = {}
 
@@ -163,3 +173,18 @@ RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 4, onDied)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 23, onCombatEnd)
+
+-- npc_headless_horseman_head (23775, scarlet_monastery.h:70):
+-- JustDied schedules EVENT_RAIN_OF_TREATS at 11s ->
+-- DoCastSelf(SPELL_RAIN_OF_TREATS 43344), non-triggered. The
+-- instance-SetData(DATA_PREPARE_RESET) and pumpkin-shrine GO-summon
+-- legs strand (instance + GO bridges), but the 43344 self-cast is
+-- severable and ports cleanly.
+local function onHeadDied(_, creature)
+    local guid = creature:GetGUID()
+    schedule(guid, "raintreats", 11000, function()
+        creature:CastSpell(creature, SPELL_RAIN_OF_TREATS)
+    end)
+end
+
+RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 4, onHeadDied)

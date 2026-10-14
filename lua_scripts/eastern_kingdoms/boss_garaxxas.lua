@@ -52,8 +52,9 @@
 -- Deviations from C++: in C++ the shot machines fire only in the
 -- else branch (not within ATTACK_DISTANCE of the victim), while
 -- wing-clip / freezing-trap / melee fire within ATTACK_DISTANCE.
--- No distance model exists on the Lua surface, so the four
--- DoCastVictim loops fire regardless of range. Also no
+-- The four DoCastVictim shot loops fire regardless of range (C++
+-- gates them to the ranged else-branch; the flat-fire deviation is
+-- kept from the prior tick). Also no
 -- UNIT_STATE_CASTING model in Go (casts are packet-visual), so the
 -- timers fire unconditionally and the in-loop casting gates are
 -- dropped (maiden precedent). The C++ scheduler is driven from
@@ -62,15 +63,18 @@
 -- Reset() Initialize() / boss_priestess_lackey_commonAI::Reset() /
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
+-- - Wing-clip machine (PORTED): DoCastVictim(SPELL_WING_CLIP 44286)
+--   4000ms init -> 4000ms loop, gated on IsWithinDist(victim, 5)
+--   (ATTACK_DISTANCE 5.0f, ObjectDefines.h) — victim-distance gate
+--   is bridged (IsWithinDist, maiden precedent). C++ gates melee to
+--   the same branch; Lua melee is engine-driven regardless.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Wing-clip machine (DoCastVictim(SPELL_WING_CLIP 44286) 4000ms
---   init -> 4000ms loop) — fires only within ATTACK_DISTANCE (no
---   distance bridge).
 -- - Freezing-trap machine (DoCastVictim(SPELL_FREEZING_TRAP 44136)
 --   15000ms init -> 15000ms loop, with the me->GetGameObject(
 --   SPELL_FREEZING_TRAP) one-trap-at-a-time re-arm to 2500ms) —
---   within-ATTACK_DISTANCE gate AND the gameobject lookup have no
---   bridges.
+--   within-ATTACK_DISTANCE gate is now bridgeable but the
+--   gameobject one-trap-at-a-time check is not; a straight 15000ms
+--   cast would double-trap, so the arm stays out.
 -- - Reset's sliver-pet leg (me->SummonCreature(NPC_SLIVER 24552, ...)
 --   + JustSummoned m_uiPetGUID tracking + ObjectAccessor re-acquire)
 --   — no summon bridge (razorgore precedent).
@@ -91,6 +95,7 @@ local SPELL_AIMED_SHOT = 44271
 local SPELL_SHOOT = 15620
 local SPELL_CONCUSSIVE_SHOT = 27634
 local SPELL_MULTI_SHOT = 31942
+local SPELL_WING_CLIP = 44286
 local SPELL_HEALING_POTION = 15503
 
 local ENTRY_GARAXXAS = 24555
@@ -152,6 +157,17 @@ local function onMultiShot(creature, guid)
     schedule(guid, "multishot", 10000, function() onMultiShot(creature, guid) end)
 end
 
+-- Wing-clip machine: fires only within ATTACK_DISTANCE (5.0f,
+-- ObjectDefines.h) of the victim — the victim-distance gate is
+-- bridged (IsWithinDist, maiden precedent), so this arm ports.
+local function onWingClip(creature, guid)
+    local victim = creature:GetVictim()
+    if victim and creature:IsWithinDist(victim, 5) then
+        creature:CastSpell(victim, SPELL_WING_CLIP)
+    end
+    schedule(guid, "wingclip", 4000, function() onWingClip(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -160,6 +176,7 @@ local function onEnterCombat(_, creature)
     schedule(guid, "shoot", 2500, function() onShoot(creature, guid) end)
     schedule(guid, "concussiveshot", 8000, function() onConcussiveShot(creature, guid) end)
     schedule(guid, "multishot", 10000, function() onMultiShot(creature, guid) end)
+    schedule(guid, "wingclip", 4000, function() onWingClip(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

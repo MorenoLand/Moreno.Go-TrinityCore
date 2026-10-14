@@ -86,9 +86,11 @@
 --   IN_PROGRESS arm — instance bridge.
 -- - JustDied's DATA_DELRISSA_DEATH_COUNT check and the lootable-flag
 --   manipulation — instance bridge.
--- - SW_PAIN machine: DoCast(SelectTarget(Random, 0, 100, true),
---   SPELL_SW_PAIN_NORMAL 14032) — no SelectTarget bridge (the_beast /
---   doomwalker precedent). The heroic 15654 leg is dropped with it.
+-- - SW_PAIN machine (PORTED): DoCast(SelectTarget(Random, 0, 100,
+--   true), SPELL_SW_PAIN_NORMAL 14032) 5000ms init -> 10000ms loop —
+--   random-player-in-100yd port, re-arms unconditionally (C++ re-arms
+--   outside the null-target guard). The heroic 15654 leg is dropped
+--   (no difficulty bridge).
 -- - ResetTimer's home-position Z+10 evade check (EnterEvadeMode) — no
 --   evade/home bridge on the Lua surface (the_beast evade precedent).
 -- - The eight lackey CreatureScript classes + commented-out
@@ -96,38 +98,38 @@
 --   boss_priestess_lackey_commonAI (AcquireGUIDs / threat-reset timer
 --   / JustDied death-count talk to Delrissa / KilledUnit forward /
 --   sub-25% healing-potion latch / Reset respawn of Delrissa) and adds
---   its own spell machine — all gate on the instance + lackey-GUID +
---   SelectTarget bridges. Their entries come from the file's own
---   m_auiAddEntries array: 24557 Kagani Nightstrike, 24558 Elris
---   Duskhallow, 24554 Eramas Brightblaze, 24561 Yazzaj, 24559 Warlord
---   Salaris, 24555 Garaxxas, 24553 Apoko, 24556 Zelfan (plus pet
---   NPC_SLIVER = 24552, summoned — no summon bridge). No .lua files
---   written for them here (stub-free precedent, grubbis / boss_lord_
---   valthalak queue precedent); queued for later runs once bridges
---   exist or as future genuinely-bridgeable slices.
--- - Kagani (rogue): gouge 12540 5500ms loop, kick 27613 7000ms loop,
---   eviscerate 27611 6000ms->4000ms loop are DoCastVictim (bridgeable
---   later); vanish 44290 + SelectTarget add-threat switch + backstab
---   15657 / kidney-shot 27615 reappear — SelectTarget bridge.
--- - Ellris (warlock): immolate 44267 / shadow-bolt 12471 victim loops
---   (bridgeable later); summon-imp 44163 JustEngagedWith (no summon
---   bridge); seed-of-corruption 44141 / curse-of-agony 14875 / fear
---   38595 — SelectTarget bridge.
--- - Eramas (monk): knockdown 11428 / snap-kick 46182 victim loops
---   (bridgeable later).
--- - Yazzai (mage): ice-lance 46194 / cone-of-cold 38384 / frostbolt
---   15043 victim loops (bridgeable later); sub-35% ice-block 27619
---   self-latch; polymorph 13323 / blizzard 44178 — SelectTarget
---   bridge; blink 14514 — combat-manager melee-range bridge.
--- - Salaris (warrior): disarm 27581 / hamstring 27584 / mortal-strike
---   44268 / piercing-howl 23600 / frightening-shout 19134 victim
---   loops + battle-shout 27578 JustEngagedWith self-cast (bridgeable
---   later); intercept 27577 — combat-manager melee-range +
---   SelectTarget bridges.
--- - Garaxxas (hunter): aimed-shot 44271 / shoot 15620 / concussive-
---   shot 27634 / multi-shot 31942 victim loops (bridgeable later);
---   wing-clip 44286 / freezing-trap 44136 — victim-distance +
---   gameobject bridges; sliver pet summon (no summon bridge).
+--   its own spell machine. The bridgeable slices are now PORTED in
+--   per-class files (entries from the file's own m_auiAddEntries,
+--   line 104): 24554 Eramas Brightblaze (knockdown 11428, snap-kick
+--   46182, potion latch), 24557 Kagani Nightstrike (gouge 12540, kick
+--   27613, eviscerate 27611, potion latch), 24558 Elris Duskhallow
+--   (immolate 44267, shadow-bolt 12471, potion latch), 24561 Yazzaj
+--   (ice-lance 46194, cone-of-cold 38384, frostbolt 15043, ice-block
+--   27619 sub-35% latch, potion latch), 24559 Warlord Salaris (battle-
+--   shout 27578 JustEngagedWith self-cast, disarm 27581, hamstring
+--   27584, mortal-strike 44268, piercing-howl 23600, frightening-shout
+--   19134, potion latch), 24555 Garaxxas (aimed-shot 44271, shoot
+--   15620, concussive-shot 27634, multi-shot 31942, wing-clip 44286,
+--   potion latch), 24553 Apoko (totem roulette RAND(27621/44257/15786),
+--   war-stomp 46026, frost-shock 21401, lesser-healing-wave 44256,
+--   potion latch), 24556 Zelfan (goblin-dragon-gun 44272, rocket-launch
+--   44137, fel-iron-bomb 46024, high-explosive-sheep 44276, potion
+--   latch). "Bridgeable later" was stale — the victim-loop / self-
+--   cast / latch arms needed no new bridges (CreateLuaEvent timer
+--   convention).
+--   Genuinely staying out per lackey (no bridges): Kagani vanish
+--   machine (SelectTarget(Random,0) non-playerOnly + threat legs);
+--   Ellris summon-imp 44163 (summon), seed-of-corruption 44141 /
+--   curse-of-agony 14875 / fear 38595 (SelectTarget Random,0);
+--   Yazzai polymorph 13323 / blizzard 44178 (SelectTarget Random,0),
+--   blink 14514 (combat-manager any-combatant melee-range check —
+--   victim-distance proxy would fabricate targeting); Salaris
+--   intercept 27577 (melee-range iteration + SelectTarget Random,0);
+--   Garaxxas freezing-trap 44136 (one-trap-at-a-time GO check),
+--   sliver pet 24552 (summon); Zelfan recombobulate 44274 (lackey-
+--   GUID-list + polymorph check); all common-AI instance/threat/
+--   GUID-list arms. npc_high_explosive_sheep is commented out in C++
+--   — nothing to port.
 -- - Apoko (shaman): totem roulette RAND(27621/44257/15786) self-cast,
 --   war-stomp 46026 self-cast, frost-shock 21401 victim, lesser-
 --   healing-wave 44256 self (bridgeable later); purge 27626 —
@@ -143,6 +145,7 @@ local SPELL_FLASH_HEAL = 17843
 local SPELL_RENEW_NORMAL = 44174
 local SPELL_SHIELD = 44291
 local SPELL_DISPEL_MAGIC = 27609
+local SPELL_SW_PAIN = 14032
 
 local PlayerDeath = { 5, 6, 7, 8, 9 }
 local MAX_PLAYER_DEATH_TALK = 4
@@ -160,6 +163,24 @@ local function cancelTimers(guid)
         end
         timers[guid] = nil
     end
+end
+
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, 100, true)
+-- (playerOnly): random alive player within 100 yd on the same map
+-- (beast/voshgajin precedent).
+local function randomPlayerInRange(creature, maxDist)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
+            found[#found + 1] = p
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
 end
 
 local function schedule(guid, key, delay, fn)
@@ -194,6 +215,14 @@ local function onDispel(creature, guid)
     schedule(guid, "dispel", 12000, function() onDispel(creature, guid) end)
 end
 
+local function onSwPain(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_SW_PAIN)
+    end
+    schedule(guid, "swpain", 10000, function() onSwPain(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -203,6 +232,7 @@ local function onEnterCombat(_, creature)
     schedule(guid, "renew", 10000, function() onRenew(creature, guid) end)
     schedule(guid, "shield", 2000, function() onShield(creature, guid) end)
     schedule(guid, "dispel", 7500, function() onDispel(creature, guid) end)
+    schedule(guid, "swpain", 5000, function() onSwPain(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
