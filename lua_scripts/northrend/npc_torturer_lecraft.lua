@@ -10,9 +10,9 @@
 -- 27394 (NPC_TORTURER_LECRAFT). The creature_template ScriptName
 -- binding is DB-side (no TDB in this workspace).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
--- 4 OnDied, 23 OnReset (the C++ overrides no DamageTaken /
--- MovementInform arms — no events 9/14; the SpellHit arm has no
--- SpellHit bridge — fizzule precedent — unmodeled).
+-- 4 OnDied, 23 OnReset, 14 OnHitBySpell (the C++ overrides no
+-- DamageTaken / MovementInform arms — no event 9; event 14
+-- fires with Eluna arg order (attumen precedent)).
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI's combat
 -- section in C++ arm order — 1s granularity exact for all C++
 -- timers; the !UpdateVictim early return collapses into the pump,
@@ -37,11 +37,10 @@
 -- DoCastVictim(SPELL_KIDNEY_SHOT 30621), re-arm urand(20s, 26s)
 -- (C++-exact). Melee is engine-driven.
 -- OnReset(23): per-GUID state drop (C++ Reset: _textCounter = 1
--- + _playerGUID.Clear() — the SpellHit half is unmodeled, so
--- the drop collapses to the pump cancel + state table clear,
--- C++-equivalent). OnLeaveCombat(2) and OnDied(4): cancel the
--- pump + drop per-GUID state (mushroom precedent; the C++
--- Reset path covers both).
+-- + _playerGUID.Clear() — a fresh state re-latches on the next
+-- hit, C++-equivalent) + pump cancel. OnLeaveCombat(2) and
+-- OnDied(4): cancel the pump + drop per-GUID state (mushroom
+-- precedent; the C++ Reset path covers both).
 -- npc_commander_eligor_dawnbringer — the whole Naxxramas-wings
 -- talk machine (EVENT_START_RANDOM 20s Talk(talkWing) + 8s
 -- MovePoint + MovementInform change-image Talk/SAY_ chain +
@@ -72,6 +71,7 @@
 
 local SPELL_HEMORRHAGE = 30478
 local SPELL_KIDNEY_SHOT = 30621
+local SPELL_HIGH_EXECUTORS_BRANDING_IRON = 48603
 
 local TORTURER_LECRAFT_ENTRY = 27394
 
@@ -139,21 +139,58 @@ local function onEnterCombat(_, creature)
     lecraftState[guid] = {
         hemorrhageTimer = math.random(5000, 8000),
         kidneyShotTimer = math.random(12000, 15000),
+        textCounter = 1, -- C++ ctor/Reset value; the SpellHit ladder latches here
     }
     lecraftPump[guid] = CreateLuaEvent(function()
         combatTick(creature, guid)
     end, 1000, 0)
 end
 
--- C++ Reset(): per-GUID state drop is C++-equivalent (the
--- _textCounter / _playerGUID half served the unmodeled SpellHit
--- arm). The C++ death path runs Reset too, so OnDied lands
--- here as well (mushroom precedent).
+-- C++ Reset(): per-GUID state drop is C++-equivalent (Reset
+-- sets _textCounter = 1 and clears _playerGUID; a fresh state
+-- re-latches on the next hit). The C++ death path runs Reset
+-- too, so OnDied lands here as well (mushroom precedent).
 local function onReset(_, creature)
     fullReset(creature:GetGUID())
+end
+
+-- C++ SpellHit arm (:628-650) — the High Executor's Branding
+-- Iron (48603) talk ladder. The first qualifying hit latches
+-- the caster's GUID (textCounter starts 1, the C++ ctor value);
+-- only the latched caster's subsequent hits advance the ladder.
+-- Talk(textCounter, player) collapses to the textId-only
+-- broadcast (documented deviation, same class as the engage
+-- Talk); KilledMonsterCredit(NPC_TORTURER_LECRAFT 27394) at
+-- counter 5 has no lua bridge — unmodeled; counter wraps
+-- 13 -> 6.
+local function onSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_HIGH_EXECUTORS_BRANDING_IRON then
+        return
+    end
+    if caster:GetTypeId() ~= 4 then -- TYPEID_PLAYER
+        return
+    end
+    local guid = creature:GetGUID()
+    local st = lecraftState[guid]
+    if not st then
+        st = { textCounter = 1 }
+        lecraftState[guid] = st
+    end
+    if st.textCounter == 1 then
+        st.playerGUID = caster:GetGUID()
+    end
+    if st.playerGUID ~= caster:GetGUID() then
+        return
+    end
+    creature:Talk(st.textCounter)
+    st.textCounter = st.textCounter + 1
+    if st.textCounter == 13 then
+        st.textCounter = 6
+    end
 end
 
 RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 2, onReset)
 RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 4, onReset)
+RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 14, onSpellHit)
 RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 23, onReset)
