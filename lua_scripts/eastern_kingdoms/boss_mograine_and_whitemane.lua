@@ -22,8 +22,7 @@
 -- fairbanks heal-cooldown pattern; C++ _Reset() does NOT touch the
 -- timer, so the flag is cleared only on event 23). OnReset cancels
 -- timers + clears the yell flag + self-casts retribution aura 8990
--- (C++ DoCastSelf(..., true) triggered — the Lua CastSpell has no
--- triggered leg, documented).
+-- (C++ DoCastSelf(..., true) triggered — Lua CastSpell(creature, spell, true)).
 -- Whitemane: OnEnterCombat Talk(SAY_WH_INTRO 0) + 5s scheduler gate ->
 -- heal 12039 at 10s->13s + power word: shield 22187 at 15s->15s + holy
 -- smite 9481 at 6s->6s. Heal: self-cast when own current health is
@@ -200,7 +199,7 @@ local function mograineReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     killYellOnCooldown[guid] = nil
-    creature:CastSpell(creature, SPELL_RETRIBUTION_AURA)
+    creature:CastSpell(creature, SPELL_RETRIBUTION_AURA, true)
 end
 
 RegisterCreatureEvent(ENTRY_MOGRAINE, 1, mograineEnterCombat)
