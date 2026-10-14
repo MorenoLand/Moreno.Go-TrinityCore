@@ -175,19 +175,14 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 				return s.handleListStabledPets(ctx, stableBuf.Bytes())
 			}
 		}
-		// Player::SendPreparedGossip (Player.cpp:14708): the single-quest
-		// fast-open (Player::SendPreparedQuest) applies only when the source
-		// lacks the GOSSIP flag. The gossip-hello path always carries the flag
-		// (gated above), so it always sends the menu; the questgiver-hello
-		// path fast-opens only for flagless questgivers.
-		if questPath && npcFlags&npcFlagGossip == 0 && defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 1 {
-			return s.fastOpenQuestGiverQuest(ctx, guid, defaultMenu.Quests[0])
-		}
-		// Player::SendPreparedGossip (Player.cpp:14708): a flagless questgiver
-		// with an empty quest menu answers nothing (SendPreparedQuest returns
-		// early on an empty menu) — no empty gossip window.
-		if questPath && npcFlags&npcFlagGossip == 0 && defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 0 {
-			return true
+		// Player::SendPreparedGossip (Player.cpp:14536-14548): on the
+		// questgiver-hello path a flagless questgiver with a non-empty quest
+		// menu goes through SendPreparedQuest (Player.cpp:14816) — empty
+		// answers nothing, a single quest fast-opens, multiple quests go out
+		// in SMSG_QUESTGIVER_QUEST_LIST. The gossip-hello path always carries
+		// the flag (gated above), so it always sends the menu.
+		if questPath && npcFlags&npcFlagGossip == 0 && defaultMenu != nil && len(defaultMenu.Items) == 0 {
+			return s.sendPreparedCreatureQuest(ctx, guid, entry, defaultMenu.Quests)
 		}
 		s.gossip = defaultMenu
 		if err := s.sendGossipMenu(); err != nil {
