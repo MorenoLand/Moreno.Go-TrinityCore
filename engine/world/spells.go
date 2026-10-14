@@ -2267,11 +2267,31 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell cast conditions not met", "failReason", failReason)
 		return true
 	}
+	// Spell::InitExplicitTargets (Spell.cpp:659-700) + SpellInfo::CheckExplicitTarget
+	// (Spell.cpp:5353-5367): the explicit unit target is resolved here at the C++
+	// gauntlet position — right after the conditions block, before the CheckTarget
+	// gates below. resolveExplicitUnitTarget mirrors m_targets (mask-filtered
+	// wire target, validated selection, or self fallback) with the null-target
+	// arm and the flag/faction/GM gates. The adopted unit feeds the CheckTarget
+	// gates below via targetGUID, like C++'s m_targets.GetUnitTarget() at 5369.
+	// Self-cast-only spells keep the legacy read: their explicit mask is empty
+	// (no C++ adoption) and the dedicated arm below owns their target slot.
 	targetGUID := uint64(0)
-	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
-		targetGUID = target.UnitGUID
-	} else if s.selection != 0 {
-		targetGUID = s.selection
+	if isSelfCastOnly(spell) {
+		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+			targetGUID = target.UnitGUID
+		} else if s.selection != 0 {
+			targetGUID = s.selection
+		}
+	} else {
+		var failReason uint8
+		var failDetail string
+		targetGUID, target, failReason, failDetail = s.resolveExplicitUnitTarget(ctx, spell, target)
+		if failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", failDetail, "failure", failReason)
+			return true
+		}
 	}
 
 	// Cannot-target-self gate (SpellInfo::CheckTarget, SpellInfo.cpp:1637-1638):
@@ -3069,8 +3089,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Dispel check: if spell has only SPELL_EFFECT_DISPEL effects (and not area-targeting), verify target has dispellable auras
 	// Mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565) — first leg of
 	// the per-effect switch. The arm keys on m_targets.GetUnitTarget() — the
-	// wire unit target only (a missing wire unit target skips the arm;
-	// checkDispelPreCast returns 0 on 0).
+	// adopted unit target (wire, validated selection, or self fallback;
+	// resolveExplicitUnitTarget mirrors m_targets at the gauntlet). A missing
+	// adopted target skips the arm; checkDispelPreCast returns 0 on 0.
 	wireUnitGUID := uint64(0)
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
 		wireUnitGUID = target.UnitGUID
@@ -4136,8 +4157,11 @@ func spellNeedsExplicitUnitTarget(spell wotlk.Spell) bool {
 // (Spell.cpp:772-775): each non-empty effect's implicit target object types
 // set TARGET_FLAG_UNIT / TARGET_FLAG_GAMEOBJECT on the target mask written
 // into the SMSG_SPELL_GO target data. SendSpellStart runs in prepare
-// (Spell.cpp:3194), before SelectSpellTargets, so the START packet keeps the
-// raw client flags — only the GO packet carries the augmented mask. The
+// (Spell.cpp:3194) — before SelectSpellTargets but after InitExplicitTargets
+// (Spell.cpp:3039) — so the START packet carries the adopted targets
+// (mask-filtered wire target, validated selection, or self fallback;
+// resolveExplicitUnitTarget mirrors m_targets): only the implicit-target mask
+// augmentation of SelectSpellTargets is GO-packet-only. The
 // (possibly empty) unit GUID rides the UNIT-family flag per
 // SpellCastTargets::Write (Spell.cpp:184-185), which Go's writer already
 // mirrors: an empty GUID packs to a single zero byte, exactly like C++.
@@ -8252,51 +8276,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spellmod-window arm either — beginSpellModTaking defers the window
 	// across the whole function, matching 3323/3418/3519).
 	hitTargets := make([]uint64, 0, 1)
-	// Spell::CheckCast routes the explicit unit target through
-	// SpellInfo::CheckExplicitTarget (Spell.cpp:5365, SpellInfo.cpp:1799),
-	// which applies the Unit::IsValidAttackTarget/IsValidAssistTarget flag
-	// gates (Object.cpp:2972/3127/2991/3134, bundled in spellTargetUnitBlocked;
-	// the NON_ATTACKABLE/TRIGGER/NO_COMBAT bundle always rejects on the
-	// attack path but only for negative spells on the assist path,
-	// Object.cpp:2980/3131)
-	// and the hostility/faction gates (Object.cpp "can't attack friendly
-	// targets" / "can't assist non-friendly targets", plus the PARTY/RAID
-	// membership terms, via explicitTargetFactionBlocked), failing the cast
-	// with SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992). The
-	// SpellInfo::CheckTarget GM/invisibility gate (SpellInfo.cpp:1736-1743,
-	// explicitTargetGMBlocked) fails the cast with
-	// SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141).
-	// Self is exempt: IsValidAssistTarget returns true for self (Object.cpp:3092).
-	// The remaining CheckExplicitTarget arms (SpellInfo.cpp:1784-1811):
-	// the TARGET_FLAG_UNIT_PASSENGER arm (1809-1811) rides
-	// explicitTargetFactionBlocked via explicitTargetPassengerBlocked
-	// (unitTarget->IsOnVehicle(unitCaster), Unit.cpp:12074-12077 — caster's
-	// kit registered under their own GUID, target in one of its seats);
-	// the TARGET_FLAG_UNIT_MINIPET arm (1806-1808) is dead —
+	// The explicit unit target arrives resolved: handleCastSpell ran
+	// resolveExplicitUnitTarget at the CheckCast gauntlet (Spell.cpp:5353-5367),
+	// mirroring how C++ fills m_targets via Spell::InitExplicitTargets
+	// (Spell.cpp:659-700) before CheckCast runs — mask-filtered wire target,
+	// CheckExplicitTarget-validated selection, or RAID/PARTY/ALLY self fallback —
+	// and validated it there (null-target arm, SpellInfo.cpp:1784-1790; the
+	// IsValidAttackTarget/IsValidAssistTarget flag gates and hostility/faction
+	// gates, SpellInfo.cpp:1793-1816; the GM-invisibility gate,
+	// SpellInfo.cpp:1736-1743). What remains here is the post-CheckCast tail:
+	// the implicit caster-unit arm (Spell::SelectImplicitCasterObjectTargets,
+	// Spell.cpp:1500 — pet 5 / vehicle 94, resolved from the caster after
+	// CheckCast) and the magic redirect (Spell::SelectExplicitTargets,
+	// Spell.cpp:724-757 — Grounding Totem magnet, also post-CheckCast).
+	// The TARGET_FLAG_UNIT_MINIPET arm (SpellInfo.cpp:1806-1808) is dead —
 	// GetExplicitTargetMask never produces the MINIPET bit (target 90 falls
-	// through to plain TARGET_FLAG_UNIT, SpellInfo.cpp:184-210). The
-	// null-target arm (1784-1790 — BAD_TARGETS when the unit/GO mask needs a
-	// target and none is sent, with the GAMEOBJECT_ITEM + itemTarget escape)
-	// is bridged below via spellExplicitObjectTargetMask, evaluated after the
-	// wire/selection/self-default fallbacks that mirror Spell::SetTargetMap
-	// (Spell.cpp:668-700). The object-target validity arm (Spell.cpp:668-678)
-	// rides explicitWireTargetFitsMask: a wire target whose object type the
-	// explicit mask does not need is dropped (GO wire targets never adopt as
-	// units — they ride the GOTargetInfo path; corpse wire targets are always
-	// dropped since the mask never carries corpse bits). Remaining deltas:
-	// the GetMissingTargetMask extension (SpellInfo.cpp:3364) now rides
-	// spellMissingExplicitTargetMask in spellExplicitObjectTargetMask below
-	// (self-range strip unmodeled); the
-	// selection fallback is validated through the CheckExplicitTarget unit
-	// gates (explicitSelectionTargetOK, Spell.cpp:684-690) under the
-	// Spell.cpp:678-679 unit-mask gate, and the self default now fires only
-	// on the ALLY/PARTY/RAID mask bits (Spell.cpp:694-696) — the earlier
-	// wider non-harmful self default is retired. The IsPassive wrapper
-	// (Spell.cpp:5353-5360) is
-	// vacuous (passive spells are rejected at the lookup) and the
-	// m_originalCaster / GO-caster arm (5360-5364) is vacuous on the
-	// client-initiated path (the caster is always the session player; no
-	// original-caster or gameobject-cast model).
+	// through to plain TARGET_FLAG_UNIT, SpellInfo.cpp:184-210). The IsPassive
+	// wrapper (Spell.cpp:5353-5360) is vacuous (passive spells are rejected at
+	// the lookup) and the m_originalCaster / GO-caster arm (5360-5364) is
+	// vacuous on the client-initiated path (the caster is always the session
+	// player; no original-caster or gameobject-cast model).
 	explicitUnitGUID := uint64(0)
 	if isSelfCastOnly(spell) {
 		hitTargets = append(hitTargets, s.playerGUID)
@@ -8305,111 +8304,58 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// CASTER-reference unit targets (pet 5, vehicle 94) resolve from the
 		// caster and take precedence over the wire/selection/self fallbacks.
 		hitTargets = append(hitTargets, casterUnitGUID)
-	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && explicitWireTargetFitsMask(spell, target) {
-		// Spell::InitExplicitTargets (Spell.cpp:668-678): the wire target is
-		// adopted only when its object type fits the spell's explicit mask —
-		// a mismatched wire target is dropped like C++'s RemoveObjectTarget.
-		// Gameobject wire targets never land here; they ride the GO path
-		// (C++ GOTargetInfo, Go's wire-GO append below).
-		explicitUnitGUID = target.UnitGUID
-	} else if s.selection != 0 && s.explicitSelectionTargetOK(ctx, spell, s.selection) {
-		// Spell::SetTargetMap (Spell.cpp:684-690): the caster's selection is
-		// adopted as the fallback explicit target only when it passes
-		// CheckExplicitTarget; otherwise the fallbacks continue below.
-		explicitUnitGUID = s.selection
-	} else if spellExplicitUnitTargetMask(spell)&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0 {
-		// Spell::SetTargetMap (Spell.cpp:694-696): the self fallback fires
-		// only when the explicit mask carries the RAID/PARTY/ALLY bits — not
-		// for every non-harmful spell. A spell that needs a unit target but
-		// adopted none falls through to the null-target arm below and fails
-		// with SPELL_FAILED_BAD_TARGETS (SpellInfo.cpp:1784-1790).
-		hitTargets = append(hitTargets, s.playerGUID)
-	}
-	// SpellInfo::CheckExplicitTarget null-target arm (SpellInfo.cpp:1784-1790):
-	// the wire target, the caster's selection, and the self default above are
-	// the Go mirrors of the targets Spell::SetTargetMap fills in before
-	// CheckCast runs (Spell.cpp:668-700 — selection, creature victim, self for
-	// ALLY/PARTY/RAID masks). When none of them produced a target and the
-	// spell's explicit mask needs a unit or gameobject target, the cast fails
-	// with SPELL_FAILED_BAD_TARGETS — unless the mask carries
-	// TARGET_FLAG_GAMEOBJECT_ITEM and the cast names an item target (the
-	// SpellInfo.cpp:1787 escape). Go's non-harmful self default is wider than
-	// C++'s (ALLY/PARTY/RAID only), so the arm only fires for spells that fell
-	// through every fallback.
-	if explicitUnitGUID == 0 && len(hitTargets) == 0 {
-		// A gameobject wire target satisfies the null-target arm the same way
-		// C++'s non-null GO object target does (SpellInfo.cpp:1784): it rides
-		// the GOTargetInfo path, never the unit adoption above, so the cast
-		// must not fail here for GO-needing spells.
-		wireGOSatisfies := spellGameObjectTargetGUID(target) != 0 &&
-			spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) != 0
-		if !wireGOSatisfies {
-			if needed := spellExplicitObjectTargetMask(spell); needed&(targetFlagUnitMask|targetFlagGameObject|targetFlagGameObjectItem) != 0 {
-				if needed&targetFlagGameObjectItem == 0 || target.Flags&protocol.SpellTargetFlagItemWireMask == 0 || target.ItemGUID == 0 {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no explicit target for mask-needing spell")
-					return
-				}
-			}
+	} else {
+		// The explicit unit target was resolved by resolveExplicitUnitTarget
+		// (Spell::InitExplicitTargets, Spell.cpp:659-700): the mask-filtered
+		// wire target, the CheckExplicitTarget-validated selection, or the
+		// RAID/PARTY/ALLY self fallback — mirrored into the target slot with
+		// the unit wire bit set. The CheckExplicitTarget gates ran there too
+		// (null-target arm, flag/faction/GM gates). The call is idempotent:
+		// on the client-cast path the gauntlet already adopted, and the
+		// re-run re-derives the same unit (C++ re-runs CheckCast at _cast for
+		// cast-time spells, Spell.cpp:3349 via cast(!m_casttime) at 3841);
+		// on the item-use/resurrect/spell-click paths this is the adoption
+		// point. Gameobject wire targets never land here; they ride the GO
+		// path (C++ GOTargetInfo, Go's wire-GO append below).
+		var failReason uint8
+		var failDetail string
+		explicitUnitGUID, target, failReason, failDetail = s.resolveExplicitUnitTarget(ctx, spell, target)
+		if failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", failDetail, "failure", failReason)
+			return
 		}
 	}
 	if explicitUnitGUID != 0 {
+		// Spell::SelectExplicitTargets (Spell.cpp:724-757): the magic
+		// redirect arm (WorldObject::GetMagicHitRedirectTarget,
+		// Object.cpp:3188-3217) runs after the explicit-target gates —
+		// C++ redirects inside SelectSpellTargets, which follows CheckCast
+		// in _cast. A live Grounding Totem magnet on the victim pulls the
+		// explicit unit target onto the totem (and the SMSG_SPELL_GO unit
+		// target with it, mirroring m_targets.SetUnitTarget). Self needs no
+		// redirect: an ENEMY-mask self target was already rejected by the
+		// faction gate, and IsFriendlyTo(self) is always true.
 		if explicitUnitGUID != s.playerGUID {
-			if tgt, ok := s.getCombatTarget(ctx, explicitUnitGUID); ok {
-				// SpellInfo.cpp:1799-1816: the ENEMY explicit mask runs the
-				// Unit::IsValidAttackTarget flag gates (bundle always rejects,
-				// Object.cpp:2980) and the ALLY/PARTY/RAID masks run the
-				// WorldObject::IsValidAssistTarget gates (bundle only for
-				// negative spells, Object.cpp:3131).
-				explicitMask := spellExplicitUnitTargetMask(spell)
-				assist := explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0
-				if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, assist) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target blocked")
-					return
-				}
-				// SpellInfo.cpp:1799-1816: the ENEMY/ALLY/PARTY/RAID explicit
-				// masks carry the hostility/faction gates.
-				if s.explicitTargetFactionBlocked(explicitMask, explicitUnitGUID, tgt) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target faction mismatch")
-					return
-				}
-				// SpellInfo.cpp:1736-1743: GM-invisible or GM-mode player targets
-				// reject the cast with SPELL_FAILED_BM_OR_INVISGOD; self is
-				// exempt (this block only runs when explicitUnitGUID != s.playerGUID).
-				if s.explicitTargetGMBlocked(explicitUnitGUID) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBmOrInvisGod), true)
-					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target GM/invisible")
-					return
-				}
-			}
-			// Spell::SelectExplicitTargets (Spell.cpp:724-757): the magic
-			// redirect arm (WorldObject::GetMagicHitRedirectTarget,
-			// Object.cpp:3188-3217) runs after the explicit-target gates —
-			// C++ redirects inside SelectSpellTargets, which follows CheckCast
-			// in _cast. A live Grounding Totem magnet on the victim pulls the
-			// explicit unit target onto the totem (and the SMSG_SPELL_GO unit
-			// target with it, mirroring m_targets.SetUnitTarget).
 			if redirectGUID, ok := s.groundingTotemMagnetGUID(ctx, spell, explicitUnitGUID); ok {
 				explicitUnitGUID = redirectGUID
 				target.UnitGUID = redirectGUID
 			}
-			// Self is exempt from the gates above (CheckTarget's
-			// `unitTarget != caster` arm, SpellInfo.cpp:1738) and is a valid
-			// explicit target, so it lands in hitTargets too — previously an
-			// explicitly self-targeted cast fizzled with an empty hit list.
-			hitTargets = append(hitTargets, explicitUnitGUID)
 		}
+		// An explicitly self-targeted cast is a valid hit: C++ targets self
+		// through m_targets, and the faction gate already rejected the
+		// ENEMY-mask self case. (Previously the append sat inside the
+		// != playerGUID guard, so explicitly self-targeted casts fizzled
+		// with an empty hit list.)
+		hitTargets = append(hitTargets, explicitUnitGUID)
 	}
 	// Spell::InitExplicitTargets (Spell.cpp:659-700): the implicit dest
 	// arms read the object target AFTER the wire-validity removal and the
-	// selection/victim/self fallbacks — not the raw wire target. Promote
-	// the resolved explicit unit into the dest arm's read slot so the
-	// 53/63/64-71/74/75 family anchors on the same object C++ asserts
-	// non-null (Spell.cpp:1434). The wire branch already left
-	// target.UnitGUID identical, and the redirect wrote its own GUID, so
-	// only the selection fallback changes the slot here.
+	// selection/victim/self fallbacks — not the raw wire target. The gauntlet
+	// adoption already mirrored the resolved explicit unit into the target
+	// slot, so the 53/63/64-71/74/75 family anchors on the same object C++
+	// asserts non-null (Spell.cpp:1434); only the Grounding Totem redirect
+	// above changes the slot here.
 	if explicitUnitGUID != 0 && explicitUnitGUID != target.UnitGUID {
 		target.UnitGUID = explicitUnitGUID
 		target.Flags |= protocol.SpellTargetFlagUnitWireMask

@@ -270,6 +270,123 @@ func (s *session) explicitSelectionTargetOK(ctx context.Context, spell wotlk.Spe
 	return !s.explicitTargetFactionBlocked(explicitMask, guid, tgt)
 }
 
+// resolveExplicitUnitTarget mirrors Spell::InitExplicitTargets (Spell.cpp:659-700)
+// and SpellInfo::CheckExplicitTarget (Spell.cpp:5353-5367, SpellInfo.cpp:1784-1816,
+// 1736-1743): it resolves the explicit unit target the way C++ fills m_targets
+// before CheckCast runs, and validates it the way CheckExplicitTarget does at
+// the CheckCast gauntlet position.
+//
+// Adoption (InitExplicitTargets / SetTargetMap):
+//   - a wire unit target is adopted only when its object type fits the spell's
+//     explicit mask (explicitWireTargetFitsMask); a mismatched wire unit target
+//     is dropped like C++'s RemoveObjectTarget (Spell.cpp:668-678). Gameobject
+//     wire targets never adopt as units (they ride the GOTargetInfo path);
+//     corpse wire targets have no Go model.
+//   - the selection/self fallbacks run only when NO wire object target was sent
+//     at all (Spell.cpp:668 — the else branch): the selection additionally needs
+//     the unit-mask gate and a passing CheckExplicitTarget (Spell.cpp:678-690,
+//     explicitSelectionTargetOK); the self fallback fires only on the
+//     RAID/PARTY/ALLY mask bits (Spell.cpp:694-696).
+//
+// The adopted unit is mirrored into the target slot (like m_targets) so the
+// CheckTarget gates, the per-effect arms, the START packet, and the completion
+// path read the same object C++ does.
+//
+// Validation (CheckExplicitTarget):
+//   - null-target arm (SpellInfo.cpp:1784-1790): BAD_TARGETS when the explicit
+//     mask needs a unit or gameobject target and none was adopted, with the
+//     GAMEOBJECT_ITEM + itemTarget escape (SpellInfo.cpp:1787). A fitting
+//     gameobject wire target satisfies the arm like C++'s non-null GO object
+//     target.
+//   - unit gates (SpellInfo.cpp:1793-1816): the IsValidAttackTarget/
+//     IsValidAssistTarget flag gates (spellTargetUnitBlocked) and the
+//     hostility/faction gates (explicitTargetFactionBlocked, BAD_TARGETS).
+//   - GM-invisibility gate (SpellInfo.cpp:1736-1743, explicitTargetGMBlocked):
+//     SPELL_FAILED_BM_OR_INVISGOD.
+//
+// Self runs only the faction gate: IsValidAssistTarget returns true for self
+// (Object.cpp:3092) but an ENEMY-mask self target is not a valid attack target;
+// self is exempt from the GM gate (SpellInfo.cpp:1738, unitTarget != caster).
+//
+// The function is idempotent: running it on an already-adopted target
+// re-derives the same unit, so the CheckCast-position call in handleCastSpell
+// and the _cast-tail call in finishSpellCast agree. (C++ re-runs CheckCast at
+// _cast for cast-time spells — Spell.cpp:3349 via cast(!m_casttime) at 3841 —
+// while instant casts skip the revalidation; the second run here is vacuous
+// for instant casts because the gauntlet and the tail execute synchronously
+// on the same state.)
+//
+// Precondition: not a self-cast-only spell (their explicit mask is empty — no
+// C++ adoption — and the dedicated arms own their target slot).
+//
+// Returns the adopted unit GUID (0 if none), the target with the adoption
+// mirrored in, and a non-zero SpellCastResult plus debug detail on failure.
+func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) (uint64, protocol.SpellTargetData, uint8, string) {
+	adoptedUnit := uint64(0)
+	wireUnit := target.UnitGUID != 0 && target.Flags&protocol.SpellTargetFlagGameObject == 0 &&
+		target.Flags&(protocol.SpellTargetFlagUnit|protocol.SpellTargetFlagUnitMinipet) != 0
+	wireObject := target.UnitGUID != 0 && target.Flags&(protocol.SpellTargetFlagUnit|protocol.SpellTargetFlagUnitMinipet|
+		protocol.SpellTargetFlagGameObject|protocol.SpellTargetFlagCorpseEnemy|protocol.SpellTargetFlagCorpseAlly) != 0
+	switch {
+	case wireUnit && explicitWireTargetFitsMask(spell, target):
+		adoptedUnit = target.UnitGUID
+	case !wireObject && s.selection != 0 && s.explicitSelectionTargetOK(ctx, spell, s.selection):
+		adoptedUnit = s.selection
+	case !wireObject && spellExplicitUnitTargetMask(spell)&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0:
+		adoptedUnit = s.playerGUID
+	}
+	if adoptedUnit != 0 {
+		target.UnitGUID = adoptedUnit
+		target.Flags |= protocol.SpellTargetFlagUnit
+	} else if wireUnit {
+		target.UnitGUID = 0
+		target.Flags &^= protocol.SpellTargetFlagUnit | protocol.SpellTargetFlagUnitMinipet
+	} else if wireObject && target.Flags&protocol.SpellTargetFlagGameObject == 0 {
+		// Corpse wire target: C++ removes it (Spell.cpp:674-675) — the
+		// explicit mask never carries corpse bits — and Go has no
+		// corpse-target model downstream.
+		target.UnitGUID = 0
+		target.Flags &^= protocol.SpellTargetFlagCorpseEnemy | protocol.SpellTargetFlagCorpseAlly
+	}
+	// C++ RemoveObjectTarget (Spell.cpp:672-673): a gameobject wire target the
+	// explicit mask does not need is dropped from m_targets. The downstream GO
+	// readers that matter (the CheckRange GO leg, the GOTargetInfo append) are
+	// all mask-gated on a fitting target, so only the unfit wire target is
+	// cleared here — without this, an out-of-range unfit GO wire target fails
+	// the range check C++ passes with a null GO target.
+	if spellGameObjectTargetGUID(target) != 0 &&
+		spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) == 0 {
+		target.UnitGUID = 0
+		target.Flags &^= protocol.SpellTargetFlagGameObject
+	}
+	if adoptedUnit == 0 {
+		wireGOSatisfies := spellGameObjectTargetGUID(target) != 0 &&
+			spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) != 0
+		if !wireGOSatisfies {
+			if needed := spellExplicitObjectTargetMask(spell); needed&(targetFlagUnitMask|targetFlagGameObject|targetFlagGameObjectItem) != 0 {
+				if needed&targetFlagGameObjectItem == 0 || target.Flags&protocol.SpellTargetFlagItemWireMask == 0 || target.ItemGUID == 0 {
+					return 0, target, spellFailedBadTargets, "no explicit target for mask-needing spell"
+				}
+			}
+		}
+	} else if tgt, ok := s.getCombatTarget(ctx, adoptedUnit); ok {
+		explicitMask := spellExplicitUnitTargetMask(spell)
+		if adoptedUnit != s.playerGUID {
+			assist := explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0
+			if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, assist) {
+				return 0, target, spellFailedBadTargets, "explicit target blocked"
+			}
+		}
+		if s.explicitTargetFactionBlocked(explicitMask, adoptedUnit, tgt) {
+			return 0, target, spellFailedBadTargets, "explicit target faction mismatch"
+		}
+		if adoptedUnit != s.playerGUID && s.explicitTargetGMBlocked(adoptedUnit) {
+			return 0, target, spellFailedBmOrInvisGod, "explicit target GM/invisible"
+		}
+	}
+	return adoptedUnit, target, 0, ""
+}
+
 // explicitTargetFactionBlocked mirrors the hostility terms that
 // SpellInfo::CheckExplicitTarget (SpellInfo.cpp:1799-1816) applies to an
 // explicit unit target. TARGET_FLAG_UNIT_ENEMY runs the
