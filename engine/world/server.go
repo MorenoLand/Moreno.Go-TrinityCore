@@ -4004,6 +4004,13 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// WorldSession::WorldSession (WorldSession.cpp:154): the account is marked
+	// online when the socket-backed session is constructed, i.e. at
+	// auth-session acceptance before queue admission — not at character login.
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", account.ID); err != nil {
+		s.debug("account online flag update failed", "account", accountName, "error", err)
+	}
+
 	if s.server.checkQueue(s, ctx, account) {
 		return true
 	}
