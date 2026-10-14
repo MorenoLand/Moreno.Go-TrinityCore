@@ -32,10 +32,11 @@
 -- (EVENT_BERSERK, 1s) + _berserk latch (PORTED — the old
 -- "no health-pct bridge" note was stale: event 9 carries damage and
 -- GetHealth()/GetMaxHealth() are available, the garfrost precedent).
--- The _berserk latch rides the berserk timer's presence: berserkTick
--- clears per["berserk"] when the 60-90s timer fires and timers are
--- canceled on leave-combat/death/reset, so a pending "berserk" key
--- means the early-berserk arm is live (C++ !\_berserk).
+-- The _berserk latch is berserkLatched[guid]: set true by the early
+-- DamageTaken arm AND by the 60-90s berserkTick fire (C++ sets
+-- _berserk = true in both), cleared by cancelTimers (C++ Initialize/
+-- Reset). The pending "berserk" per-key means the early arm is live
+-- (C++ !_berserk).
 -- EVENT_SPRING — SelectTarget(Random, 1, 35.0f, true) ->
 -- DoCast(target, RAND(SPELL_ECK_SPRING_1 55815,
 -- SPELL_ECK_SPRING_2 55837)), 8s init, 5-10s repeat: the
@@ -49,6 +50,11 @@ local SPELL_ECK_SPIT    = 55814
 local SPELL_ECK_BERSERK = 55816
 
 local timers = {}
+-- C++ _berserk bool model: true once the early-berserk DamageTaken arm
+-- has fired OR the 60-90s EVENT_BERSERK fired (both set _berserk = true
+-- in C++; Initialize/Reset clears it, which cancelTimers covers since
+-- it runs on enter-combat, leave-combat, death and reset).
+local berserkLatched = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -58,6 +64,7 @@ local function cancelTimers(guid)
         end
         timers[guid] = nil
     end
+    berserkLatched[guid] = nil
 end
 
 local function schedule(guid, key, delay, fn)
@@ -88,9 +95,11 @@ local function spitTick(creature, guid)
     end)
 end
 
--- C++ EVENT_BERSERK: DoCastSelf; 60-90s init, single fire.
+-- C++ EVENT_BERSERK: DoCastSelf; 60-90s init, single fire; sets
+-- _berserk = true.
 local function berserkTick(creature, guid)
     creature:CastSpell(creature, SPELL_ECK_BERSERK)
+    berserkLatched[guid] = true
     local per = timers[guid]
     if per then
         per["berserk"] = nil
@@ -100,12 +109,13 @@ end
 -- C++ DamageTaken (:77-84): HealthBelowPctDamaged(20, damage) (strict
 -- below, int64(health)-damage < floor(maxHealth*20/100) — event 9
 -- fires pre-damage, so health is the C++ GetHealth() value) ->
--- RescheduleEvent(EVENT_BERSERK, 1s) + _berserk latch; the per-key
--- schedule replace is the RescheduleEvent cancel+reschedule.
+-- RescheduleEvent(EVENT_BERSERK, 1s) + _berserk = true immediately (a
+-- second qualifying hit is a C++ no-op); the per-key schedule replace
+-- is the RescheduleEvent cancel+reschedule.
 local function eckDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local per = timers[guid]
-    if not per or not per["berserk"] then
+    if not per or not per["berserk"] or berserkLatched[guid] then
         return
     end
     local maxHealth = creature:GetMaxHealth()
@@ -113,6 +123,7 @@ local function eckDamageTaken(event, creature, attacker, damage)
         return
     end
     if creature:GetHealth() - damage < math.floor(maxHealth * 20 / 100) then
+        berserkLatched[guid] = true
         schedule(guid, "berserk", 1000, function()
             berserkTick(creature, guid)
         end)
