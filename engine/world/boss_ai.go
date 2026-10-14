@@ -9463,104 +9463,201 @@ func init() {
 	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_ignis", 33118)
 
+	// Razorscale (33186), Ulduar —
+	// lua_scripts/northrend/boss_razorscale.lua.
+	// Ported arms (C++-exact): EVENT_BERSERK DoCastSelf 47008
+	// TRIGGERED + Talk(EMOTE_BERSERK 2, me) 900s one-shot,
+	// no phase gate, timer-driven via CreateLuaEvent
+	// (maiden/baltharus convention, GUID-keyed timers, cancel on
+	// events 2/4/23; cast-before-Talk order kept); event 1 models
+	// only the berserk timer leg — JustEngagedWith carries no
+	// Talk arms on the boss itself (BossAI passthrough +
+	// SendEncounterUnit + phase-machine ScheduleAirPhaseEvents +
+	// summons DoAction + HandleMusic legs have no bridges);
+	// JustDied carries no Talk arms (event 4 models only the
+	// timer wipe — the auriaya JustDied-wipe precedent).
+	// Documented-only: the whole air/ground/perma-ground phase
+	// machine (DoAction ACTION_START_FIGHT / ACTION_GROUND_PHASE
+	// / ACTION_START_PERMA_GROUND / ACTION_RETURN_TO_BASE,
+	// MovementInform POINT_RAZORSCALE_*, SetPhase(PHASE_AIR /
+	// PHASE_GROUND / PHASE_PERMA_GROUND), MoveSplineInit /
+	// MovePoint / MoveLand / MoveTakeoff — no DoAction /
+	// MovementInform / MotionMaster / spline / phase bridges);
+	// EVENT_FIREBALL (SelectTarget Random + DoCast 63815,
+	// {2s,3s}, PHASE_AIR) / EVENT_DEVOURING_FLAME
+	// (SelectTarget Random + DoCast 63236, {6s,12s}/{10s,12s}) —
+	// random-target + phase legs; EVENT_SUMMON_MINIONS/_2
+	// (NPC_RAZORSCALE_SPAWNER summon leg); EVENT_FLAME_BREATH /
+	// EVENT_FLAME_BREATH_GROUND (Talk EMOTE_BREATH + DoCastVictim
+	// 63317/64021 — phase-gated); EVENT_WING_BUFFET +
+	// EVENT_FIREBOLT + EVENT_RESUME_AIR_PHASE chain (phase /
+	// motion legs); EVENT_FUSE_ARMOR (victim + HasAura 64774 gate,
+	// phase-gated); EVENT_RESUME_MOVE_CHASE (motion leg);
+	// DamageTaken perma-ground latch; SpellHit harpoon-hit
+	// counter -> DoAction(ACTION_GROUND_PHASE); CanAIAttack /
+	// JustSummoned / SummonedCreatureDies / EnterEvadeMode /
+	// HandleMusic / SummonMinions — no bridges;
+	// npc_expedition_commander (33210 — gossip -> DoAction +
+	// DoAction-gated Talks 0/1/2 + GO harpoon summon legs);
+	// npc_expedition_defender (33816 — Reset one-shot 65146,
+	// DoAction/MovementInform machine); npc_expedition_trapper
+	// (33259 — DoAction machine + MovementInform -> SPELL_SHACKLE
+	// 62646); npc_expedition_engineer (33287 — DoAction machine +
+	// spline legs; DoAction-gated Talks 0/1); npc_razorscale_
+	// spawner (33245 — summon chain); npc_darkrune_watcher (33453:
+	// EVENT_LIGHTNING_BOLT DoCastVictim 63809 5s/3s,
+	// EVENT_CHAIN_LIGHTNING DoCastVictim 64758 34s/{9s,15s}),
+	// npc_darkrune_guardian (33388: EVENT_STORMSTRIKE DoCastVictim
+	// 64757 23s/{13s,25s}), npc_darkrune_sentinel (33846:
+	// EVENT_HEROIC_STRIKE DoCastVictim 45026 9s/{5s,9s},
+	// EVENT_BATTLE_SHOUT DoCastSelf 46763 15s/25s, EVENT_WHIRLWIND
+	// DoCastSelf 63808 17s/{10s,13s}) — all three timer-driven but
+	// spawner-machine adds (boss EVENT_SUMMON_MINIONS ->
+	// NPC_RAZORSCALE_SPAWNER -> mole-machine GO ->
+	// SPELL_TRIGGER_SUMMON_IRON_DWARVES -> SPELL_SUMMON_IRON_
+	// DWARF_* — task exclusion: summon/add legs out; no
+	// registrations); npc_razorscale_harpoon_fire_state (33282 —
+	// SpellHit machine); npc_razorscale_devouring_flame (Reset
+	// one-shot 64709/64734 triggered); go_razorscale_harpoon /
+	// go_razorscale_mole_machine — no GO bridge; four spell
+	// scripts (63317/64021 flame_breath, 63968/63970/63969
+	// summon_iron_dwarves, 64821 fuse_armor, 62669 firebolt) — no
+	// SpellScript / AuraScript bridges; two achievements
+	// (iron_dwarf_medium_rare / quick_shave — GetData-based —
+	// no bridges; both join the unmodeled-achievement queue).
+	RegisterLuaBoss("boss_razorscale", 33186)
+
 	// XT-002 Deconstructor (33293), Ulduar —
 	// lua_scripts/northrend/boss_xt002.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
 	// (event 1; the BossAI::JustEngagedWith passthrough, the
-	// five ScheduleEvent legs and the DoStartTimedAchievement
-	// leg have no bridges — the auriaya engage-port precedent);
-	// KilledUnit player-gated Talk(SAY_SLAY 4) (event 3 — the
-	// razuvious player-gated variant precedent — the
-	// twenty-fourth player-gated variant ported); JustDied
+	// phase-gated ScheduleEvent legs and the
+	// DoStartTimedAchievement leg have no bridges — the auriaya
+	// engage-port precedent); EVENT_ENRAGE Talk(SAY_BERSERK 5) +
+	// DoCastSelf(SPELL_ENRAGE 26662) 2-arg non-triggered 600s
+	// one-shot, no phase gate (scheduled bare in JustEngagedWith,
+	// ExposeHeart never cancels it), timer-driven via
+	// CreateLuaEvent (maiden/baltharus convention, GUID-keyed
+	// timers, cancel on events 2/4/23 — Talk-before-cast order
+	// kept); KilledUnit player-gated Talk(SAY_SLAY 4) (event 3 —
+	// the razuvious player-gated variant precedent); JustDied
 	// Talk(SAY_DEATH 6) (event 4; the _JustDied() passthrough +
 	// RemoveFlag NOT_SELECTABLE leg has no bridge — the sjonnir
-	// JustDied-Talk precedent).
+	// JustDied-Talk precedent; also wipes the enrage timer).
 	// Documented-only: Reset / Initialize / EnterEvadeMode
 	// (DoStopTimedAchievement 21027 — no bridges);
 	// DoAction(ACTION_ENTER_HARD_MODE — no DoAction bridge);
 	// GetData(DATA_HARD_MODE / DATA_HEALTH_RECOVERED /
 	// DATA_GRAVITY_BOMB_CASUALTY — no GetData bridge);
 	// SetData(DATA_TRANSFERED_HEALTH health-transfer +
-	// DATA_GRAVITY_BOMB_CASUALTY — no SetData bridge);
-	// ExposeHeart / DisposeHeart (Talk(SAY_HEART_OPENED 1) /
-	// Talk(SAY_HEART_CLOSED 2) + Talk(EMOTE_HEART_CLOSED 9) —
-	// phase / react-state legs unbridgeable);
+	// DATA_GRAVITY_BOMB_CASUALTY — no SetData bridge); the
+	// heart-exposure phase machine (ExposeHeart: SetPhase
+	// PHASE_HEART + react-state / AttackStop + Talk
+	// SAY_HEART_OPENED 1 + EVENT_SUBMERGE; DisposeHeart:
+	// Talk SAY_HEART_CLOSED 2 + Talk EMOTE_HEART_CLOSED 9 +
+	// hard-mode react-state + RescheduleEvents; PHASE_1/
+	// PHASE_HEART SetPhase gates — no phase / DoAction /
+	// instance-GUID bridges; the gothik phase-gating precedent);
+	// EVENT_SEARING_LIGHT (DoCastSelf 63018, 9s/11s init, re-arm
+	// {16s,20s}, PHASE_1-gated + GROUP_SEARING_GRAVITY) /
+	// EVENT_GRAVITY_BOMB (DoCastSelf 63024, 18s/21s init, re-arm
+	// {16s,20s}, PHASE_1-gated) / EVENT_TYMPANIC_TANTRUM
+	// (Talk SAY_TYMPANIC_TANTRUM 3 + Talk EMOTE_TYMPANIC_TANTRUM
+	// 10 + DoCastSelf 62776, 60s init, re-arm 1min, PHASE_1-gated,
+	// canceled by ExposeHeart) — porting on continuous timers
+	// would fabricate casts during the 30s PHASE_HEART exposures;
+	// EVENT_PHASE_CHECK / EVENT_SUBMERGE (DoCastSelf 37751 +
+	// Talk EMOTE_HEART_OPENED 8 + heart DoAction) /
+	// EVENT_DISPOSE_HEART / EVENT_ENTER_HARD_MODE (SetFullHealth
+	// + DoCastSelf 65737 TRIGGERED + LOOT_MODE_HARD_MODE_1) /
+	// EVENT_RESUME_ATTACK — phase / hard-mode / DoAction machine;
 	// PassengerBoarded Talk(EMOTE_SCRAPBOT 11) — no vehicle /
-	// PassengerBoarded bridge; the UpdateAI event machine
-	// (EVENT_SEARING_LIGHT / EVENT_GRAVITY_BOMB /
-	// EVENT_TYMPANIC_TANTRUM Talk(SAY_TYMPANIC_TANTRUM 3) +
-	// Talk(EMOTE_TYMPANIC_TANTRUM 10) / EVENT_PHASE_CHECK /
-	// EVENT_SUBMERGE Talk(EMOTE_HEART_OPENED 8) /
-	// EVENT_DISPOSE_HEART / EVENT_ENRAGE Talk(SAY_BERSERK 5) /
-	// EVENT_ENTER_HARD_MODE / EVENT_RESUME_ATTACK — no
-	// timer-event / cast / phase / react-state bridges; all
-	// timer-leg yells ride the unbridgeable event machine);
-	// npc_xt002_heart (NullCreatureAI — no Talk arms; no
-	// registration); npc_scrapbot / npc_pummeller / npc_boombot
-	// / npc_life_spark / npc_xt_void_zone (no Talk arms
-	// anywhere — scheduler / movement / vehicle / damage-taken
-	// legs — no registrations); the nine spell scripts
-	// (spell_xt002_searing_light_spawn_life_spark /
-	// spell_xt002_gravity_bomb_aura /
-	// spell_xt002_gravity_bomb_damage /
-	// spell_xt002_heart_overload_periodic /
-	// spell_xt002_energy_orb (Talk(SAY_SUMMON 7) rides the
-	// spell script) / spell_xt002_tympanic_tantrum /
-	// spell_xt002_submerged / spell_xt002_321_boombot_aura /
-	// spell_xt002_exposed_heart — no SpellScript / AuraScript
-	// bridges; all nine join the no-SpellScript /
+	// PassengerBoarded bridge; npc_xt002_heart (NullCreatureAI —
+	// DoAction vehicle/cast legs; JustDied -> xt002 DoAction —
+	// no bridges; no registration); npc_scrapbot (scheduler /
+	// vehicle / SPELL_SCRAP_REPAIR machinery); npc_pummeller
+	// (scheduler trample / arcing smash / uppercut legs);
+	// npc_boombot (scheduler + DamageTaken boom leg + SPELL_BOOM
+	// 62834); npc_life_spark (scheduler SPELL_SHOCK 64230 leg);
+	// npc_xt_void_zone (scheduler SPELL_CONSUMPTION 64208 leg +
+	// SpellInfo BP0 machine) — no scheduler / movement / vehicle
+	// / damage-taken bridges; no registrations; the nine spell
+	// scripts (63018/65121 searing_light_spawn_life_spark,
+	// 63024/64234 gravity_bomb_aura, 63025/64233
+	// gravity_bomb_damage, 62791 heart_overload_periodic, 62826
+	// energy_orb (Talk SAY_SUMMON 7 rides the spell script),
+	// 62775 tympanic_tantrum, 37751 submerged, 65032
+	// 321_boombot_aura, 63849 exposed_heart — no SpellScript /
+	// AuraScript bridges; all nine join the no-SpellScript /
 	// no-AuraScript-bridge queues); the three achievements
-	// (achievement_nerf_engineering / achievement_heartbreaker
-	// / achievement_nerf_gravity_bombs — GetData-based OnCheck
-	// — no GetData / achievement bridges; all three join the
-	// unmodeled-achievement queue).
+	// (nerf_engineering / heartbreaker / nerf_gravity_bombs —
+	// GetData-based OnCheck — no GetData / achievement bridges;
+	// all three join the unmodeled-achievement queue).
 	RegisterLuaBoss("boss_xt002", 33293)
 
 	// General Vezax (33271), Ulduar —
 	// lua_scripts/northrend/boss_general_vezax.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1; the BossAI::JustEngagedWith passthrough, the
-	// DoCast SPELL_AURA_OF_DESPAIR 62692 leg, the
-	// CheckShamanisticRage (shaman HasSpell 30823 ->
-	// SPELL_CORRUPTED_RAGE 68415) leg and the six ScheduleEvent
-	// legs have no bridges — the auriaya engage-port precedent);
-	// KilledUnit player-gated Talk(SAY_SLAY 1) (event 3 — the
-	// razuvious player-gated variant precedent — the
-	// twenty-fifth player-gated variant ported); JustDied
-	// Talk(SAY_DEATH 3) (event 4; the _JustDied() passthrough +
-	// DoRemoveAurasDueToSpellOnPlayers 62692 leg has no bridge —
-	// the sjonnir JustDied-Talk precedent).
-	// Documented-only: Reset / Initialize (_Reset() + flag
-	// init — no bridges); SpellHitTarget (SPELL_SHADOW_CRASH_
-	// HIT 62659 player leg -> shadowDodger = false — no
-	// SpellHit bridge); GetData(DATA_SHADOWDODGER 29962997 /
-	// DATA_SMELL_SARONITE 31813188 — no GetData bridge);
-	// DoAction(ACTION_VAPORS_DIE / ACTION_ANIMUS_DIE — no
-	// DoAction bridge); CheckShamanisticRage map-player scan —
-	// no bridge; the UpdateAI event machine
-	// (EVENT_SURGE_OF_DARKNESS Talk(EMOTE_SURGE_OF_DARKNESS 8)
-	// + Talk(SAY_SURGE_OF_DARKNESS 2) / EVENT_SARONITE_VAPORS
-	// hard-mode leg Talk(SAY_HARDMODE 5) + Talk(EMOTE_BARRIER
-	// 7) + SPELL_SARONITE_BARRIER 63364 / 63145 + hard-mode
-	// loot mode / EVENT_BERSERK Talk(SAY_BERSERK 4) — no
-	// timer-event / cast / summon / loot-mode bridges; all
-	// timer-leg yells ride the unbridgeable event machine);
-	// boss_saronite_animus (no entry enum in C++ — spell-
-	// summoned; entry-unverifiable — no registration; no Talk
-	// arms; DoAction(ACTION_ANIMUS_DIE) leg unbridgeable);
-	// npc_saronite_vapors (no entry enum in C++ — spell-
-	// summoned; entry-unverifiable — no registration;
-	// Talk(EMOTE_VAPORS 0) rides the unbridgeable constructor;
-	// DamageTaken / DoAction(ACTION_VAPORS_DIE) legs — no
-	// bridges); the three spell scripts
-	// (spell_general_vezax_mark_of_the_faceless /
-	// spell_general_vezax_mark_of_the_faceless_leech /
-	// spell_general_vezax_saronite_vapors — no SpellScript /
-	// AuraScript bridges; all three join the no-SpellScript /
-	// no-AuraScript-bridge queues); the two achievements
-	// (achievement_shadowdodger / achievement_smell_saronite —
-	// GetData-based OnCheck — no GetData / achievement
-	// bridges; both join the unmodeled-achievement queue).
+	// + DoCast(me, SPELL_AURA_OF_DESPAIR 62692) 2-arg
+	// non-triggered self-cast at engage (event 1; the
+	// BossAI::JustEngagedWith passthrough, the
+	// CheckShamanisticRage map-player-scan leg and the four
+	// unbridgeable ScheduleEvent legs have no bridges — the
+	// malygos engage-aura precedent); timer-driven casts via
+	// CreateLuaEvent (maiden/baltharus convention, GUID-keyed
+	// timers, cancel on events 2/4/23): EVENT_SURGE_OF_DARKNESS
+	// Talk(EMOTE_SURGE_OF_DARKNESS 8) + Talk(SAY_SURGE_OF_DARKNESS
+	// 2) + DoCast(me, SPELL_SURGE_OF_DARKNESS 62662) 2-arg
+	// non-triggered, 60s init, re-arm {50s,70s} (no phase/machine
+	// leg touches it — the vapor hard-mode leg only cancels
+	// EVENT_SARONITE_VAPORS and EVENT_SEARING_FLAMES; Talk order
+	// kept); EVENT_BERSERK Talk(SAY_BERSERK 4) + DoCast(me,
+	// SPELL_BERSERK 26662) 2-arg non-triggered 600s one-shot
+	// (Talk-before-cast order kept); KilledUnit player-gated
+	// Talk(SAY_SLAY 1) (event 3 — the razuvious player-gated
+	// variant precedent); JustDied Talk(SAY_DEATH 3) (event 4;
+	// the _JustDied() passthrough + DoRemoveAurasDueToSpellOn
+	// Players(62692) leg has no bridge — the sjonnir JustDied-Talk
+	// precedent; also wipes the surge/berserk timers).
+	// Documented-only: Reset / Initialize (shadowDodger /
+	// smellSaronite / animusDead / vaporCount init — no bridges);
+	// SpellHitTarget (SPELL_SHADOW_CRASH_HIT 62659 player leg ->
+	// shadowDodger = false — no SpellHit bridge);
+	// GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
+	// 31813188 — no GetData bridge); DoAction(ACTION_VAPORS_DIE
+	// / ACTION_ANIMUS_DIE — no DoAction bridge);
+	// CheckShamanisticRage map-player scan — no bridge;
+	// EVENT_SHADOW_CRASH (CheckPlayersInRange / SelectTarget
+	// Random + DoCast 62660, init {8s,10s}, re-arm {8s,12s}) /
+	// EVENT_MARK_OF_THE_FACELESS (CheckPlayersInRange /
+	// SelectTarget Random + DoCast 63276, init {35s,40s}, re-arm
+	// {35s,45s}) — random-target selection legs; no target-search
+	// bridge; EVENT_SEARING_FLAMES (DoCastAOE 62661, re-arm
+	// {14s,17500ms} — canceled by the unbridgeable vapor
+	// hard-mode leg and rescheduled by the unbridgeable
+	// ACTION_ANIMUS_DIE DoAction leg — animus phases stay out);
+	// EVENT_SARONITE_VAPORS (DoCast 63081 self-cast, 30s init,
+	// re-arm {30s,35s} + hard-mode machine: Talk SAY_HARDMODE 5 +
+	// Talk EMOTE_BARRIER 7 + summons.DespawnAll + DoCast 63364 +
+	// DoCast 63145 + LOOT_MODE_HARD_MODE_1 + CancelEvents) —
+	// summon leg + hard-mode phase machine; boss_saronite_animus
+	// (no creature-entry enum in C++ — spell-summoned via 63145;
+	// entry-unverifiable — no registration; Reset one-shot 63319
+	// + EVENT_PROFOUND_OF_DARKNESS DoCastAOE(63420, TRIGGERED)
+	// 3s/3s timer leg rides the unbridged summon machine —
+	// task exclusion: summon/add legs out; JustDied -> vezax
+	// DoAction — no DoAction bridge); npc_saronite_vapors (no
+	// entry enum — spell-summoned via 63081; entry-unverifiable
+	// — no registration; constructor Talk(EMOTE_VAPORS 0) —
+	// no spawn bridge; MoveRandom / DamageTaken machine — no
+	// movement / damage-taken / DoAction bridges); the three
+	// spell scripts (63276 mark_of_the_faceless /
+	// mark_of_the_faceless_leech, 63323 saronite_vapors — no
+	// SpellScript / AuraScript bridges; all three join the
+	// no-SpellScript / no-AuraScript-bridge queues); the two
+	// achievements (shadowdodger / smell_saronite — GetData-based
+	// OnCheck — no GetData / achievement bridges; both join the
+	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_general_vezax", 33271)
 
 	// Assembly of Iron (Steelbreaker 32867 / Runemaster Molgeim

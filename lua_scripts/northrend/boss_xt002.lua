@@ -1,18 +1,20 @@
 -- XT-002 Deconstructor (Ulduar) — Lua port of
 -- src/server/scripts/Northrend/Ulduar/Ulduar/boss_xt002.cpp
 -- (boss_xt002 (CreatureScript) via
--- RegisterUlduarCreatureAI<boss_xt002> (BossAI), BOSS_XT002 = 3 —
--- registered from inside AddSC_boss_xt002(); loader decl 114 /
--- call 309 per northrend_script_loader.cpp — the FIFTH group of
--- the "// Ulduar" block in AddNorthrendScripts(), immediately
--- after AddSC_boss_razorscale() (decl 113 / call 308); the call
--- after it is AddSC_boss_general_vezax() — loader order
--- confirmed this run; the checkpoint sequence
--- (boss_razorscale -> boss_xt002) is followed).
+-- RegisterUlduarCreatureAI<boss_xt002> (BossAI), BOSS_XT002 = 3
+-- (ulduar.h:39); registered from inside AddSC_boss_xt002() — the
+-- FIFTH group of the "// Ulduar" block in AddNorthrendScripts(),
+-- immediately after AddSC_boss_razorscale(); the call after it is
+-- AddSC_boss_general_vezax() — loader order confirmed).
 -- Entry: 33293 XT-002 (ulduar.h NPC_XT002, line 65 —
 -- entry-verifiable, registration proceeds (the
 -- nexus_commanders / malygos / sartharion kalecgos precedent);
 -- the CreatureScript ScriptName binding is DB-side as usual.
+-- Talk ids (XT002Yells, boss_xt002.cpp:117-131, verified this
+-- run): SAY_AGGRO 0, SAY_HEART_OPENED 1, SAY_HEART_CLOSED 2,
+-- SAY_TYMPANIC_TANTRUM 3, SAY_SLAY 4, SAY_BERSERK 5, SAY_DEATH 6,
+-- SAY_SUMMON 7, EMOTE_HEART_OPENED 8, EMOTE_HEART_CLOSED 9,
+-- EMOTE_TYMPANIC_TANTRUM 10, EMOTE_SCRAPBOT 11.
 -- Sole-source verified: whole-server-tree grep for each of the
 -- nineteen script names ("boss_xt002", "npc_xt002_heart",
 -- "npc_scrapbot", "npc_pummeller", "npc_boombot",
@@ -28,21 +30,33 @@
 -- hits boss_xt002.cpp (+ the loader decl/call lines for
 -- AddSC_boss_xt002) only; zero sql/ hits for all nineteen —
 -- the audited artifact this run. No second xt002 lua exists.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
--- OnDied.
--- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith passthrough, the five ScheduleEvent
--- legs and the DoStartTimedAchievement leg have no bridges —
--- the auriaya engage-port precedent).
--- KilledUnit — player-gated Talk(SAY_SLAY 4) (event 3;
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset. Timer-driven casts ride the
+-- CreateLuaEvent convention (baltharus / maiden / auriaya
+-- precedent): module-local GUID-keyed timers table, cancelTimers
+-- on events 2/4/23, schedule(guid, key, delayMs, fn);
+-- creature:CastSpell(nil, spell) = DoCastVictim (2-arg,
+-- non-triggered), creature:CastSpell(creature, spell) =
+-- DoCastSelf / DoCastAOE, third arg true = triggered,
+-- {minMs, maxMs} = randtime re-arm. Melee is engine-driven in Go
+-- (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- Ported arms (C++-exact for all modeled arms; line refs are
+-- boss_xt002.cpp):
+-- JustEngagedWith (:186-197) — Talk(SAY_AGGRO 0) (event 1; the
+-- BossAI::JustEngagedWith passthrough, the phase-gated
+-- ScheduleEvent legs and the DoStartTimedAchievement leg have no
+-- bridges — the auriaya engage-port precedent).
+-- EVENT_ENRAGE (:362-365) — Talk(SAY_BERSERK 5) + DoCastSelf
+-- (SPELL_ENRAGE 26662) 2-arg non-triggered, 600s init (:192), no
+-- re-arm, no phase gate (scheduled bare in JustEngagedWith —
+-- ExposeHeart never cancels it) — Talk-before-cast order kept.
+-- KilledUnit (:204-208) — player-gated Talk(SAY_SLAY 4) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
--- player-gated variant precedent — the twenty-fourth
--- player-gated variant ported).
--- JustDied — Talk(SAY_DEATH 6) (event 4; the _JustDied()
--- passthrough + RemoveFlag(UNIT_FIELD_FLAGS,
+-- player-gated variant precedent).
+-- JustDied (:210-215) — Talk(SAY_DEATH 6) (event 4; the
+-- _JustDied() passthrough + RemoveFlag(UNIT_FIELD_FLAGS,
 -- UNIT_FLAG_NOT_SELECTABLE) legs have no bridges — the sjonnir
--- JustDied-Talk precedent).
+-- JustDied-Talk precedent); also wipes the enrage timer.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33293):
 -- Reset / Initialize / EnterEvadeMode — _Reset() +
@@ -56,30 +70,44 @@
 -- achievement_nerf_gravity_bombs below); SetData
 -- (DATA_TRANSFERED_HEALTH health-transfer + ModifyHealth leg;
 -- DATA_GRAVITY_BOMB_CASUALTY — no SetData bridge).
--- ExposeHeart (events.SetPhase(PHASE_HEART) + react-state /
--- AttackStop + Talk(SAY_HEART_OPENED 1) + EVENT_SUBMERGE
--- scheduling — phase / react-state / scheduler bridges
--- missing); DisposeHeart (Talk(SAY_HEART_CLOSED 2) +
--- Talk(EMOTE_HEART_CLOSED 9) + hard-mode react-state +
--- RescheduleEvents + SPELL_STAND / SPELL_COOLDOWN_CREATURE_
--- SPECIAL_2 + heart DoAction(ACTION_DISPOSE_HEART) — no
--- DoAction / cast bridges).
+-- The heart-exposure phase machine — ExposeHeart
+-- (events.SetPhase(PHASE_HEART) + react-state / AttackStop +
+-- Talk(SAY_HEART_OPENED 1) + EVENT_SUBMERGE scheduling + heart
+-- DoAction(ACTION_START_PHASE_HEART) via instance GUID — no
+-- phase / DoAction / instance bridges); DisposeHeart
+-- (Talk(SAY_HEART_CLOSED 2) + Talk(EMOTE_HEART_CLOSED 9) +
+-- hard-mode react-state + RescheduleEvents + SPELL_STAND /
+-- SPELL_COOLDOWN_CREATURE_SPECIAL_2 + heart DoAction
+-- (ACTION_DISPOSE_HEART)); RescheduleEvents re-arms the PHASE_1
+-- timers at different delays — the whole PHASE_1/PHASE_HEART
+-- machine stays out (the gothik phase-gating precedent).
+-- EVENT_SEARING_LIGHT (:332-335) — DoCastSelf
+-- (SPELL_SEARING_LIGHT 63018), 9s/11s init (:190), re-arm
+-- {16s,20s}, PHASE_1-gated + GROUP_SEARING_GRAVITY — porting on
+-- a continuous timer would fabricate casts during the 30s
+-- PHASE_HEART exposures (gothik precedent); phase machine —
+-- left out.
+-- EVENT_GRAVITY_BOMB (:336-339) — DoCastSelf
+-- (SPELL_GRAVITY_BOMB 63024), 18s/21s init (:191), re-arm
+-- {16s,20s}, PHASE_1-gated — same blocker; left out.
+-- EVENT_TYMPANIC_TANTRUM (:340-346) — Talk(SAY_TYMPANIC_TANTRUM
+-- 3) + Talk(EMOTE_TYMPANIC_TANTRUM 10) + events.DelayEvents(10s,
+-- GROUP_SEARING_GRAVITY) + DoCastSelf(SPELL_TYMPANIC_TANTRUM
+-- 62776), 60s init (:193), re-arm 1min, PHASE_1-gated and
+-- canceled by ExposeHeart — phase machine; left out.
+-- EVENT_PHASE_CHECK (:347-351) — HealthBelowPct leg ->
+-- ExposeHeart, 1s repeat — phase machine; left out.
+-- EVENT_SUBMERGE (:352-358) — DoCastSelf(SPELL_SUBMERGE 37751)
+-- + Talk(EMOTE_HEART_OPENED 8) + heart DoAction
+-- (ACTION_START_PHASE_HEART) + EVENT_DISPOSE_HEART in 30s —
+-- phase / DoAction / instance machine; left out.
+-- EVENT_DISPOSE_HEART / EVENT_ENTER_HARD_MODE (SetFullHealth +
+-- DoCastSelf(SPELL_HEARTBREAK 65737, TRIGGERED) +
+-- AddLootMode(LOOT_MODE_HARD_MODE_1) + DisposeHeart(true)) /
+-- EVENT_RESUME_ATTACK — hard-mode / phase / DoAction machine;
+-- left out.
 -- PassengerBoarded (Talk(EMOTE_SCRAPBOT 11) on scrapbot entry —
 -- no vehicle / PassengerBoarded bridge).
--- UpdateAI event machine — EVENT_SEARING_LIGHT
--- (DoCastSelf 63018); EVENT_GRAVITY_BOMB (DoCastSelf 63024);
--- EVENT_TYMPANIC_TANTRUM (Talk(SAY_TYMPANIC_TANTRUM 3) +
--- Talk(EMOTE_TYMPANIC_TANTRUM 10) + DoCastSelf 62776 +
--- DelayEvents); EVENT_PHASE_CHECK (HealthBelowPct leg ->
--- ExposeHeart); EVENT_SUBMERGE (DoCastSelf SPELL_SUBMERGE
--- 37751 + Talk(EMOTE_HEART_OPENED 8) + heart DoAction
--- (ACTION_START_PHASE_HEART)); EVENT_DISPOSE_HEART ->
--- DisposeHeart; EVENT_ENRAGE (Talk(SAY_BERSERK 5) + DoCastSelf
--- SPELL_ENRAGE 26662); EVENT_ENTER_HARD_MODE (SetFullHealth +
--- SPELL_HEARTBREAK 65737 + AddLootMode hard mode + _hardMode);
--- EVENT_RESUME_ATTACK — no timer-event / cast / phase /
--- react-state bridges; all timer-leg yells ride the
--- unbridgeable event machine.
 -- npc_xt002_heart (NullCreatureAI — no Talk arms anywhere;
 -- DoAction(ACTION_START_PHASE_HEART / ACTION_DISPOSE_HEART)
 -- vehicle / cast legs; JustDied -> xt002 DoAction
@@ -95,7 +123,8 @@
 -- npc_life_spark (no Talk arms; SPELL_SHOCK 64230 scheduler
 -- leg — no bridges — no registration);
 -- npc_xt_void_zone (PassiveAI — no Talk arms; SPELL_CONSUMPTION
--- 64208 periodic scheduler leg — no bridges — no registration).
+-- 64208 periodic scheduler leg + SpellInfo BP0 machine — no
+-- bridges — no registration).
 -- spell_xt002_searing_light_spawn_life_spark (63018/65121
 -- periodic-trigger AuraScript OnRemove — no AuraScript
 -- bridge; joins the no-AuraScript-bridge queue);
@@ -135,28 +164,80 @@ local ENTRY_XT002 = 33293
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 4
+local SAY_BERSERK = 5
 local SAY_DEATH = 6
 
--- C++ JustEngagedWith: BossAI passthrough + ScheduleEvent legs
--- + DoStartTimedAchievement — only the Talk arm is bridgeable.
-local function xt002EnterCombat(event, creature, target)
-    creature:Talk(SAY_AGGRO)
+local SPELL_ENRAGE = 26662
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
 end
 
--- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
--- (SAY_SLAY) — the razuvious player-gated variant precedent.
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_ENRAGE (:362-365): Talk(SAY_BERSERK 5) + DoCastSelf
+-- (SPELL_ENRAGE 26662) (2-arg non-triggered); 600s init (:192),
+-- no re-arm, no phase gate — Talk-before-cast order kept.
+local function enrageTick(creature)
+    creature:Talk(SAY_BERSERK)
+    creature:CastSpell(creature, SPELL_ENRAGE)
+end
+
+-- C++ JustEngagedWith (:186-197): BossAI passthrough + Talk(AGGRO)
+-- + the phase-gated ScheduleEvent legs + DoStartTimedAchievement —
+-- only the Talk arm and the phase-free EVENT_ENRAGE timer leg are
+-- bridgeable (event 1).
+local function xt002EnterCombat(event, creature, target)
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "enrage", 600000, function()
+        enrageTick(creature)
+    end)
+end
+
+-- C++ KilledUnit (:204-208): who->GetTypeId() == TYPEID_PLAYER,
+-- then Talk(SAY_SLAY) — the razuvious player-gated variant
+-- precedent.
 local function xt002TargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end
 
--- C++ JustDied: _JustDied() passthrough + Talk(SAY_DEATH) —
--- only the Talk arm is bridgeable.
+-- C++ JustDied (:210-215): _JustDied() passthrough + Talk
+-- (SAY_DEATH) + RemoveFlag NOT_SELECTABLE — only the Talk arm is
+-- bridgeable; the enrage timer is wiped with it.
 local function xt002Died(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
+end
+
+-- Shared timer wipe for events 2/23.
+local function cancelCombatTimers(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_XT002, 1, xt002EnterCombat)
+RegisterCreatureEvent(ENTRY_XT002, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_XT002, 3, xt002TargetDied)
 RegisterCreatureEvent(ENTRY_XT002, 4, xt002Died)
+RegisterCreatureEvent(ENTRY_XT002, 23, cancelCombatTimers)
