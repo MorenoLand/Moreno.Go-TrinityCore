@@ -9298,7 +9298,20 @@ func init() {
 	// roll_chance_i(50) Talk(SAY_SLAY 1) (event 3 — razuvious
 	// player-gated variant precedent plus the chance gate:
 	// math.random(1, 100) <= 50; first chance-gated slay variant
-	// ported, twenty-second player-gated variant ported).
+	// ported, twenty-second player-gated variant ported);
+	// timer-driven casts via CreateLuaEvent (maiden/baltharus
+	// convention, GUID-keyed timers, cancel on events 2/4/23):
+	// EVENT_SONIC_SCREECH DoCastVictim 64422 48s/{22s,30s};
+	// EVENT_TERRIFYING_SCREECH Talk(EMOTE_FEAR 3) + DoCastSelf
+	// 64386 + EVENT_BLAST 1ms, 38s/{36s,45s}; EVENT_BLAST
+	// DoCastAOE-as-self-cast 64389 one-shot; EVENT_SUMMON_DEFENDER
+	// Talk(EMOTE_DEFENDER 4) + DoCastSelf 64448 +
+	// EVENT_ACTIVATE_DEFENDER 2s, 1min one-shot;
+	// EVENT_ACTIVATE_DEFENDER DoCastSelf 64449 one-shot;
+	// EVENT_BERSERK DoCastSelf 47008 triggered + Talk(SAY_BERSERK 2)
+	// 10min one-shot (cast-before-Talk order kept).
+	// npc_sanctum_sentry (34014 local enum — newly registered):
+	// EVENT_RIP DoCastVictim 64375 6s/{10s,12s}.
 	// Documented-only: Reset / Initialize (_Reset() +
 	// _crazyCatLady / _nineLives flags + HandleCats(true) —
 	// no bridges); DoAction(ACTION_CRAZY_CAT_LADY 0 /
@@ -9307,23 +9320,14 @@ func init() {
 	// bridges; JustDied (DoPlaySoundToSet 15476 +
 	// SendEncounterUnit disengage + HandleCats(false) grid
 	// despawn — no Talk arms, no bridges; event 4 not
-	// registered); the UpdateAI event machine (EVENT_SONIC_SCREECH
-	// 64422 DoCastVictim 22-30s; EVENT_TERRIFYING_SCREECH
-	// Talk(EMOTE_FEAR 3) + DoCastSelf 64386 + EVENT_BLAST 36-45s;
-	// EVENT_BLAST DoCastAOE 64389; EVENT_SUMMON_DEFENDER
-	// Talk(EMOTE_DEFENDER 4) + DoCastSelf 64448 +
-	// EVENT_ACTIVATE_DEFENDER 2s; EVENT_ACTIVATE_DEFENDER
-	// DoCastSelf 64449; EVENT_SWARNING_GUARDIAN random-target
-	// DoCast 64396 25-45s; EVENT_BERSERK DoCastSelf 47008 +
-	// Talk(SAY_BERSERK 2) 10min — no timer-event / cast /
-	// target-selection bridges; EMOTE_FEAR / EMOTE_DEFENDER /
-	// SAY_BERSERK ride the unbridgeable event machine);
-	// npc_sanctum_sentry (34014 local enum — entry-verifiable but
-	// bridge-blocked, no Talk arms; Reset self-cast 64369 and the
-	// EVENT_RIP / EVENT_SAVAGE_POUNCE machine have no bridges;
-	// JustDied DoAction(ACTION_CRAZY_CAT_LADY) has no
-	// ObjectAccessor / DoAction bridges; npc_spark_of_ionar
-	// no-bridgeable-arms precedent — no registration);
+	// registered); the UpdateAI event machine's remaining legs
+	// (EVENT_SWARNING_GUARDIAN random-target DoCast 64396 25-45s
+	// + summon leg — no target-search / summon bridges);
+	// npc_sanctum_sentry remaining legs (Reset self-buff 64369
+	// one-shot; EVENT_SAVAGE_POUNCE random-target CatsTargetSelector
+	// leg; SetWalk legs; JustDied DoAction(ACTION_CRAZY_CAT_LADY)
+	// — no target-search / movement / ObjectAccessor / DoAction
+	// bridges);
 	// npc_feral_defender (no creature entry in C++ evidence, no
 	// Talk arms — the respawn/feign-death machinery has no
 	// bridges; no registration); npc_swarming_guardian (no entry
@@ -9349,7 +9353,15 @@ func init() {
 	// flag/dynflag/npcflag comment legs are DB cosmetics — the
 	// sjonnir JustDied-Talk precedent; no KilledUnit talk in
 	// C++ — no event 3 arms exist — and the aggro talk is
-	// conditional, see below).
+	// conditional, see below);
+	// timer-driven casts via CreateLuaEvent (maiden/baltharus
+	// convention, GUID-keyed timers, cancel on events 2/4/23):
+	// EVENT_PURSUE Talk(SAY_TARGET 3) + DoCastSelf 62374
+	// (single-arg DoCast resolves SELF via AISpellInfo default;
+	// spell script selects target) 1ms/35s; EVENT_MISSILE
+	// DoCastSelf 62400 triggered {1.5s,4s}/2s; EVENT_VENT
+	// DoCastAOE-as-self-cast 62396 20s/20s; EVENT_SPEED
+	// DoCastAOE-as-self-cast 62375 15s/15s.
 	// Documented-only: Reset / Initialize / InitializeAI (no
 	// bridges); JustEngagedWith — ActiveTower() picks the aggro
 	// talk conditionally on tower state (ActiveTowers false ->
@@ -9361,15 +9373,13 @@ func init() {
 	// SPELL_ELECTROSHOCK / SPELL_OVERLOAD_CIRCUIT ++Shutdown —
 	// no bridges); GetData / SetData / DoAction (tower
 	// destruction loot-mode stripping — no bridges); the
-	// UpdateAI event machine (EVENT_PURSUE Talk(SAY_TARGET 3);
-	// EVENT_SHUTDOWN Talk(SAY_OVERLOAD 11) + Talk(EMOTE_OVERLOAD
-	// 13); EVENT_REPAIR Talk(EMOTE_REPAIR 14);
-	// EVENT_THORIM_S_HAMMER Talk(SAY_TOWER_STORM 9);
-	// EVENT_MIMIRON_S_INFERNO Talk(SAY_TOWER_FLAME 7);
-	// EVENT_HODIR_S_FURY Talk(SAY_TOWER_FROST 6);
-	// EVENT_FREYA_S_WARD Talk(SAY_TOWER_NATURE 8) — no
-	// timer-event / cast / summon / target-selection bridges;
-	// all timer-leg yells ride the unbridgeable event machine);
+	// UpdateAI event machine's remaining legs (EVENT_SHUTDOWN
+	// Talk(SAY_OVERLOAD 11) + Talk(EMOTE_OVERLOAD 13) overload /
+	// vehicle leg; EVENT_REPAIR Talk(EMOTE_REPAIR 14) unit-state
+	// leg; EVENT_SUMMON DoSummonFlyer; EVENT_THORIM_S_HAMMER /
+	// EVENT_MIMIRON_S_INFERNO / EVENT_HODIR_S_FURY /
+	// EVENT_FREYA_S_WARD tower-state-gated + summon legs — no
+	// DoAction / summon / vehicle / unit-state bridges);
 	// SpellHitTarget Talk(EMOTE_PURSUE 12, passenger) — no
 	// vehicle bridge; boss_flame_leviathan_seat (33114 local
 	// enum — PassengerBoarded -> leviathan AI Talk
@@ -9418,7 +9428,14 @@ func init() {
 	// KilledUnit player-gated Talk(SAY_SLAY 4) (event 3 — the
 	// razuvious player-gated variant precedent); JustDied
 	// Talk(SAY_DEATH 6) (event 4; the _JustDied() passthrough has
-	// no bridge — the sjonnir JustDied-Talk precedent).
+	// no bridge — the sjonnir JustDied-Talk precedent);
+	// timer-driven casts via CreateLuaEvent (maiden/baltharus
+	// convention, GUID-keyed timers, cancel on events 2/4/23):
+	// EVENT_JET Talk(EMOTE_JETS 7) + DoCastSelf 62680
+	// 30s/{35s,40s} (Talk-before-cast order kept); EVENT_BERSERK
+	// DoCastSelf 47008 triggered + Talk(SAY_BERSERK 5) 480s
+	// one-shot (cast-before-Talk order kept; fixed a stale header
+	// that documented the berserk as non-triggered).
 	// Documented-only: Reset / Initialize (vehicle passenger
 	// removal + DoStopTimedAchievement — no bridges);
 	// GetData(DATA_SHATTERED 29252926) — no GetData bridge
@@ -9426,14 +9443,13 @@ func init() {
 	// (NPC_IRON_CONSTRUCT faction / react-state / flag / immune
 	// / root legs — no bridges); DoAction(ACTION_REMOVE_BUFF
 	// 20 — RemoveAuraFromStack + GameTime <5s shattered window
-	// — no bridges); the UpdateAI event machine (EVENT_JET
-	// Talk(EMOTE_JETS 7); EVENT_SLAG_POT Talk(SAY_SLAG_POT 2) +
-	// GRAB_POT / CHANGE_POT / END_POT vehicle chain; EVENT_SCORCH
-	// Talk(SAY_SCORCH 3) + SummonCreature(NPC_GROUND_SCORCH
-	// 33221); EVENT_CONSTRUCT Talk(SAY_SUMMON 1) + DoSummon;
-	// EVENT_BERSERK Talk(SAY_BERSERK 5) — no timer-event / cast
-	// / summon / target-selection / vehicle bridges; all
-	// timer-leg yells ride the unbridgeable event machine);
+	// — no bridges); the UpdateAI event machine's remaining legs
+	// (EVENT_SLAG_POT Talk(SAY_SLAG_POT 2) + GRAB_POT / CHANGE_POT
+	// / END_POT vehicle chain; EVENT_SCORCH Talk(SAY_SCORCH 3) +
+	// SummonCreature(NPC_GROUND_SCORCH 33221); EVENT_CONSTRUCT
+	// Talk(SAY_SUMMON 1) + DoSummon (self-casts left out — would
+	// diverge without the summon leg) — no timer-event / summon /
+	// target-selection / vehicle bridges);
 	// npc_iron_construct (33121 local enum — entry-verifiable
 	// but bridge-blocked: DamageTaken shatter leg + HEAT /
 	// MOLTEN / BRITTLE / IsInWater machine; no Talk arms — no

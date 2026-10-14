@@ -2,148 +2,274 @@
 -- src/server/scripts/Northrend/Ulduar/Ulduar/boss_auriaya.cpp
 -- (boss_auriaya (CreatureScript) via
 -- RegisterUlduarCreatureAI<boss_auriaya> (BossAI), BOSS_AURIAYA = 6
--- — registered from inside AddSC_boss_auriaya(); loader decl 110
--- / call 305 per northrend_script_loader.cpp — the FIRST group of
--- the "// Ulduar" block in AddNorthrendScripts(), immediately
--- after AddSC_halls_of_stone() (decl 108 / call 303) which closed
--- the Halls of Stone block; the call after it is
--- AddSC_boss_flame_leviathan() (decl 111 / call 306) — loader
--- order confirmed this run; the checkpoint sequence
--- (halls_of_stone -> boss_auriaya) is followed).
+-- (ulduar.h:42); registered from inside AddSC_boss_auriaya();
+-- loader decl 110 / call 305 per northrend_script_loader.cpp —
+-- first group of the "// Ulduar" block, after
+-- AddSC_halls_of_stone() (decl 108 / call 303); the call after is
+-- AddSC_boss_flame_leviathan() (decl 111 / call 306)).
 -- Entry: 33515 Auriaya (ulduar.h NPC_AURIAYA, line 76 —
--- entry-verifiable, registration proceeds (the nexus_commanders /
--- malygos / sartharion kalecgos precedent); the CreatureScript
--- ScriptName binding is DB-side as usual.
--- Sole-source verified: whole-server-tree grep for
--- "boss_auriaya" hits boss_auriaya.cpp (+ ulduar.h NPC_AURIAYA
--- and the loader decl/call lines for AddSC_boss_auriaya) only;
--- whole-tree grep for "npc_feral_defender",
--- "npc_sanctum_sentry", "npc_swarming_guardian",
--- "npc_seeping_essence_stalker",
--- "spell_auriaya_strenght_of_the_pack",
--- "spell_auriaya_sentinel_blast", "spell_auriaya_agro_creator",
--- "spell_auriaya_random_agro_periodic",
--- "spell_auriaya_feral_essence_removal", "spell_auriaya_feral_rush",
--- "achievement_nine_lives" and "achievement_crazy_cat_lady" hits
--- boss_auriaya.cpp only; zero sql/ hits for all thirteen
--- (the clone's sql/ tree, ~/workspace/moreno-trinitycore/sql/
--- characters/ + world/, carries zero hits — the svala 23:59
--- wording formula). The file was ported Oct 2 in e2878fb and
--- re-audited this run (the palehoof 00:09 / svala 23:59 / ingvar
--- 23:46 stale-first-pass precedent).
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied. No
--- timers in the ported arms; melee is engine-driven in Go
+-- entry-verifiable; the CreatureScript ScriptName binding is
+-- DB-side as usual).
+-- Talk ids (AuriayaYells, boss_auriaya.cpp:93-97, verified this
+-- run): SAY_AGGRO 0, SAY_SLAY 1, SAY_BERSERK 2, EMOTE_FEAR 3,
+-- EMOTE_DEFENDER 4.
+-- Sole-source verified: whole-server-tree grep for "boss_auriaya"
+-- hits boss_auriaya.cpp (+ ulduar.h NPC_AURIAYA and the loader
+-- decl/call for AddSC_boss_auriaya) only; zero sql/ hits.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset. Timer-driven casts ride the
+-- CreateLuaEvent convention (baltharus / maiden / sartharion
+-- precedent): module-local GUID-keyed timers table, cancelTimers
+-- on events 2/4/23, schedule(guid, key, delayMs, fn);
+-- creature:CastSpell(nil, spell) = DoCastVictim (2-arg,
+-- non-triggered), creature:CastSpell(creature, spell) =
+-- DoCastSelf / DoCastAOE, third arg true = triggered,
+-- {minMs, maxMs} = randtime re-arm. Melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
--- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith passthrough, the SendEncounterUnit
--- engage leg and the five ScheduleEvent legs have no bridges —
--- the boss_bookkeeping precedent for the passthrough, no
--- timer bridge for the legs).
--- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER
--- AND roll_chance_i(50), then Talk(SAY_SLAY 1) — PORTED
--- (event 3; the razuvious player-gated variant precedent:
--- victim nil-guard, victim:GetObjectType() == "Player", with
--- math.random(1, 100) <= 50 = roll_chance_i(50) — the first
--- chance-gated slay variant ported; twenty-second player-gated
--- variant ported).
--- DOCUMENTED-ONLY (in this header; no registration beyond entry
--- 33515):
--- Reset / Initialize — _Reset() + _crazyCatLady = true /
--- _nineLives = false + HandleCats(true) grid-respawn — no
--- bridge.
--- DoAction(ACTION_CRAZY_CAT_LADY 0) / DoAction(ACTION_DEFENDER_DIED
--- 1) / GetData(DATA_NINE_LIVES 30763077) / GetData(DATA_CRAZY_CAT_LADY
--- 30063007) — no DoAction / GetData bridges (consumers:
--- npc_sanctum_sentry, npc_feral_defender, achievement_nine_lives,
--- achievement_crazy_cat_lady below).
--- JustDied — DoPlaySoundToSet(15476) + SendEncounterUnit
--- disengage + HandleCats(false) grid-despawn — no Talk arms, no
--- bridges; not registered (event 4 has nothing to model).
--- UpdateAI event machine — EVENT_SONIC_SCREECH (DoCastVictim
--- 64422, 22-30s); EVENT_TERRIFYING_SCREECH (Talk(EMOTE_FEAR 3) +
--- DoCastSelf 64386 + EVENT_BLAST, 36-45s); EVENT_BLAST (DoCastAOE
--- 64389); EVENT_SUMMON_DEFENDER (Talk(EMOTE_DEFENDER 4) +
--- DoCastSelf 64448 + EVENT_ACTIVATE_DEFENDER 2s); EVENT_ACTIVATE_DEFENDER
--- (DoCastSelf 64449); EVENT_SWARNING_GUARDIAN (random-target
--- DoCast 64396, 25-45s); EVENT_BERSERK (DoCastSelf 47008 +
--- Talk(SAY_BERSERK 2), 10min) — the UNIT_STATE_CASTING gates,
--- CatsTargetSelector legs and the DoMeleeAttackIfReady tail have
--- no bridges — no timer-event / cast / target-selection
--- bridges. EMOTE_FEAR / EMOTE_DEFENDER / SAY_BERSERK are
--- timer-leg yells with no bridge; they ride the unbridgeable
--- event machine.
+-- Ported arms (C++-exact for all modeled arms; line refs are
+-- boss_auriaya.cpp):
+-- JustEngagedWith (:160-170) — Talk(SAY_AGGRO 0) + the four
+-- bridgeable timer legs below (event 1; the
+-- BossAI::JustEngagedWith passthrough and the SendEncounterUnit
+-- engage leg have no bridges — the boss_bookkeeping precedent).
+-- EVENT_SONIC_SCREECH (:234-236) — DoCastVictim
+-- (SPELL_SONIC_SCREECH 64422) 2-arg non-triggered, 48s init
+-- (:165), re-arm {22s,30s}.
+-- EVENT_TERRIFYING_SCREECH (:238-242) — Talk(EMOTE_FEAR 3) +
+-- DoCastSelf(SPELL_TERRIFYING_SCREECH 64386) 2-arg non-triggered
+-- + EVENT_BLAST in 1ms (:241), 38s init (:166), re-arm {36s,45s}.
+-- EVENT_BLAST (:244-245) — DoCastAOE(SPELL_SENTINEL_BLAST 64389)
+-- lowers to self-cast (non-triggered), fires 1ms after
+-- TERRIFYING_SCREECH, no re-arm.
+-- EVENT_SUMMON_DEFENDER (:247-250) — Talk(EMOTE_DEFENDER 4) +
+-- DoCastSelf(SPELL_DEFENDER_TRIGGER 64448) 2-arg non-triggered +
+-- EVENT_ACTIVATE_DEFENDER in 2s (:250), 60s init (:167), no re-arm.
+-- EVENT_ACTIVATE_DEFENDER (:252-253) — DoCastSelf
+-- (SPELL_ACTIVATE_DEFENDER 64449) 2-arg non-triggered, fires 2s
+-- after SUMMON_DEFENDER, no re-arm.
+-- EVENT_BERSERK (:260-262) — DoCastSelf(SPELL_BERSERK 47008,
+-- TRIGGERED) + Talk(SAY_BERSERK 2), 600s init (:169), no re-arm.
+-- KilledUnit (:172-176) — TYPEID_PLAYER gate AND roll_chance_i(50),
+-- then Talk(SAY_SLAY 1) (event 3; victim nil-guard,
+-- victim:GetObjectType() == "Player", math.random(1, 100) <= 50).
 -- npc_sanctum_sentry (CreatureScript via
 -- RegisterUlduarCreatureAI<npc_sanctum_sentry> (ScriptedAI);
--- NPC_SANCTUM_SENTRY = 34014, local enum in boss_auriaya.cpp —
--- entry-verifiable from C++ but bridge-blocked, NO registration
--- — the npc_spark_of_ionar / stormforged_lieutenant
--- no-bridgeable-arms precedent; no Talk arms anywhere in the
--- script — Reset self-cast 64369 has no cast bridge; the
--- EVENT_RIP / EVENT_SAVAGE_POUNCE machine has no timer-event /
--- cast / target-selection bridges; JustDied -> GetCreature
--- (BOSS_AURIAYA) -> DoAction(ACTION_CRAZY_CAT_LADY) has no
--- ObjectAccessor / GetData / DoAction bridges).
--- npc_feral_defender (CreatureScript via
--- RegisterUlduarCreatureAI<npc_feral_defender> (ScriptedAI); no
--- creature entry anywhere in C++ evidence — entry unverifiable
--- this run, NO registration; no Talk arms anywhere — the
--- Reset/EventStartCombat/UpdateAI machines and the DamageTaken
--- feign-death/respond machinery ride legs with no bridges (no
--- react-state / aura / target-selection / timer / DoAction
--- bridges); JustDied DoAction(ACTION_DEFENDER_DIED) same
--- DoAction-bridge block).
--- npc_swarming_guardian (CreatureScript via
--- RegisterUlduarCreatureAI<npc_swarming_guardian> (ScriptedAI);
--- no creature entry in C++ evidence, NO registration; no Talk
--- arms — the 1s scheduler aggressivity + DoCastSelf(63709) leg
--- has no timer / cast bridges).
--- npc_seeping_essence_stalker (CreatureScript via
--- RegisterUlduarCreatureAI<npc_seeping_essence_stalker>
--- (ScriptedAI); no creature entry in C++ evidence, NO
--- registration; no Talk arms — Reset self-cast 64458 has no
--- cast bridge).
--- spell_auriaya_strenght_of_the_pack (64381 area-target filter
--- by NPC_SANCTUM_SENTRY entry), spell_auriaya_sentinel_blast
--- (64392 / 64679 area-target filter keeping players and pets),
--- spell_auriaya_agro_creator (63709 dummy: random CatsTarget
--- 5-10.0f -> 64399 + 50000000 threat + AttackStart),
--- spell_auriaya_feral_essence_removal (64456 script-effect:
--- FERAL_ESSENCE 64455 ModStackAmount(-1)),
--- spell_auriaya_feral_rush (64496 / 64674 on-hit -> self
--- 64489) — no SpellScript bridge; all five join the
--- no-SpellScript-bridge queue.
--- spell_auriaya_random_agro_periodic (61906 periodic-dummy
--- aura: random CatsTarget 15-25.0f -> 3000000 threat + 64478 +
--- AttackStart) — no AuraScript bridge; joins the
--- no-AuraScript-bridge queue.
--- achievement_nine_lives (OnCheck: Auriaya AI GetData
--- (DATA_NINE_LIVES) != 0) / achievement_crazy_cat_lady (OnCheck:
--- GetData(DATA_CRAZY_CAT_LADY) != 0) — no GetData /
--- achievement bridges; both join the unmodeled-achievement
--- queue.
+-- NPC_SANCTUM_SENTRY = 34014, local Misc enum boss_auriaya.cpp:115
+-- — entry-verifiable from C++, REGISTERED this run):
+-- EVENT_RIP (:318-320) — DoCastVictim(SPELL_RIP_FLESH 64375) 2-arg
+-- non-triggered, 6s init (:293), re-arm {10s,12s}. The
+-- JustEngagedWith SetWalk(false) / Reset SetWalk(true) legs have
+-- no movement bridge; the Reset one-shot self-buff
+-- SPELL_STRENGHT_OF_THE_PACK 64369 (triggered, :287) is not
+-- timer-driven; EVENT_SAVAGE_POUNCE (:322-330) needs the
+-- CatsTargetSelector random-target leg — unbridged; JustDied (:298)
+-- -> instance GetCreature(BOSS_AURIAYA) -> DoAction
+-- (ACTION_CRAZY_CAT_LADY 0) — no instance / DoAction bridges.
+-- DOCUMENTED-ONLY (no bridgeable arms):
+-- Reset (:139-145) / HandleCats (:147-158) — _Reset() + flag resets
+-- + grid respawn/despawn of entry 34014 within 500.0f — no bridge.
+-- DoAction (:178-193, ACTION_CRAZY_CAT_LADY 0 / ACTION_DEFENDER_DIED
+-- 1) / GetData (:195-204, DATA_NINE_LIVES 30763077 /
+-- DATA_CRAZY_CAT_LADY 30063007) — no DoAction / GetData bridges.
+-- JustDied (:206-212) — DoPlaySoundToSet(15476) + SendEncounterUnit
+-- disengage + HandleCats(false); no Talk arms; event 4 models only
+-- the timer wipe.
+-- EnterEvadeMode (:214-218) — SendEncounterUnit disengage + BossAI
+-- leg — no bridge.
+-- EVENT_SWARNING_GUARDIAN (:255-258) — DoCast(target,
+-- SPELL_SUMMON_SWARMING_GUARDIAN 64396) on SelectTarget(Random, 1,
+-- 0.0f, true), 51s init (:168), re-arm {25s,45s} — random-target
+-- selection leg needs target search, and it is a summon leg; no
+-- bridges either way.
+-- The UNIT_STATE_CASTING gates and the DoMeleeAttackIfReady tail
+-- have no bridges.
+-- npc_feral_defender — the whole machine is phase-gated
+-- (PHASE_NONE/PHASE_COMBAT :111-112) and its timer legs
+-- (EVENT_RUSH :389-393, EVENT_START_COMBAT :384, respawn chain
+-- :395-415) ride CatsTargetSelector random-target selection; the
+-- DamageTaken (:427-446) feign-death machinery has no health /
+-- aura bridges; JustDied (:448-453) DoAction(ACTION_DEFENDER_DIED)
+-- has no DoAction bridge; no creature entry in C++ evidence —
+-- NO registration.
+-- npc_swarming_guardian — the 1s scheduler self-cast
+-- SPELL_AGRO_CREATOR 63709 (:464-474) is timer-driven but has no
+-- creature entry in C++ evidence — NO registration; the 63709
+-- pounce leg needs target search anyway.
+-- npc_seeping_essence_stalker — Reset one-shot self-cast
+-- SPELL_SEEPING_ESSENCE 64458 (:494-499), not timer-driven, no
+-- entry in C++ evidence — NO registration.
+-- spell_auriaya_strenght_of_the_pack (64381),
+-- spell_auriaya_sentinel_blast (64392 / 64679),
+-- spell_auriaya_agro_creator (63709),
+-- spell_auriaya_feral_essence_removal (64456),
+-- spell_auriaya_feral_rush (64496 / 64674) — no SpellScript
+-- bridge; spell_auriaya_random_agro_periodic (61906) — no
+-- AuraScript bridge; achievement_nine_lives / achievement_crazy_cat_lady
+-- — no achievement / GetData bridges; all join the unmodeled
+-- queues.
 
 local ENTRY_AURIAYA = 33515
+local ENTRY_SANCTUM_SENTRY = 34014
 
-local SAY_AGGRO = 0
-local SAY_SLAY = 1
+local SAY_AGGRO      = 0
+local SAY_SLAY       = 1
+local SAY_BERSERK    = 2
+local EMOTE_FEAR     = 3
+local EMOTE_DEFENDER = 4
 
--- C++ JustEngagedWith: Talk(AGGRO) + BossAI passthrough +
--- encounter-frame engage + ScheduleEvent legs — only the Talk
--- arm is bridgeable.
-local function auriayaEnterCombat(event, creature, target)
-    creature:Talk(SAY_AGGRO)
+local SPELL_SONIC_SCREECH      = 64422
+local SPELL_SENTINEL_BLAST     = 64389
+local SPELL_TERRIFYING_SCREECH = 64386
+local SPELL_DEFENDER_TRIGGER   = 64448
+local SPELL_ACTIVATE_DEFENDER  = 64449
+local SPELL_BERSERK            = 47008
+local SPELL_RIP_FLESH          = 64375
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
 end
 
--- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate AND
--- roll_chance_i(50), then Talk(SAY_SLAY) — the razuvious
--- player-gated variant precedent plus the roll gate:
--- math.random(1, 100) <= 50 is roll_chance_i(50).
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_SONIC_SCREECH (:234-236): DoCastVictim
+-- (SPELL_SONIC_SCREECH 64422) (2-arg non-triggered), 48s init
+-- (:165), re-arm {22s,30s}.
+local function sonicScreechTick(creature, guid)
+    creature:CastSpell(nil, SPELL_SONIC_SCREECH)
+    schedule(guid, "sonic", {22000, 30000}, function()
+        sonicScreechTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_BLAST (:244-245): DoCastAOE(SPELL_SENTINEL_BLAST 64389)
+-- lowers to self-cast creature:CastSpell(creature, spell)
+-- (non-triggered); fires 1ms after EVENT_TERRIFYING_SCREECH, no
+-- re-arm.
+local function blastTick(creature)
+    creature:CastSpell(creature, SPELL_SENTINEL_BLAST)
+end
+
+-- C++ EVENT_TERRIFYING_SCREECH (:238-242): Talk(EMOTE_FEAR 3) +
+-- DoCastSelf(SPELL_TERRIFYING_SCREECH 64386) (2-arg non-triggered)
+-- + EVENT_BLAST in 1ms (:241); 38s init (:166), re-arm {36s,45s}.
+local function terrifyingScreechTick(creature, guid)
+    creature:Talk(EMOTE_FEAR)
+    creature:CastSpell(creature, SPELL_TERRIFYING_SCREECH)
+    schedule(guid, "blast", 1, function()
+        blastTick(creature)
+    end)
+    schedule(guid, "terrifying", {36000, 45000}, function()
+        terrifyingScreechTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_ACTIVATE_DEFENDER (:252-253): DoCastSelf
+-- (SPELL_ACTIVATE_DEFENDER 64449) (2-arg non-triggered); fires 2s
+-- after EVENT_SUMMON_DEFENDER, no re-arm.
+local function activateDefenderTick(creature)
+    creature:CastSpell(creature, SPELL_ACTIVATE_DEFENDER)
+end
+
+-- C++ EVENT_SUMMON_DEFENDER (:247-250): Talk(EMOTE_DEFENDER 4) +
+-- DoCastSelf(SPELL_DEFENDER_TRIGGER 64448) (2-arg non-triggered)
+-- + EVENT_ACTIVATE_DEFENDER in 2s (:250); 60s init (:167), no
+-- re-arm.
+local function summonDefenderTick(creature, guid)
+    creature:Talk(EMOTE_DEFENDER)
+    creature:CastSpell(creature, SPELL_DEFENDER_TRIGGER)
+    schedule(guid, "activatedefender", 2000, function()
+        activateDefenderTick(creature)
+    end)
+end
+
+-- C++ EVENT_BERSERK (:260-262): DoCastSelf(SPELL_BERSERK 47008,
+-- TRIGGERED) + Talk(SAY_BERSERK 2); 600s init (:169), no re-arm.
+local function berserkTick(creature)
+    creature:CastSpell(creature, SPELL_BERSERK, true)
+    creature:Talk(SAY_BERSERK)
+end
+
+-- C++ JustEngagedWith (:160-170): BossAI passthrough + Talk(AGGRO)
+-- + encounter-frame engage + the five ScheduleEvent legs — the
+-- Talk and the four bridgeable timer legs are modeled here.
+local function auriayaEnterCombat(event, creature, target)
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "sonic", 48000, function()
+        sonicScreechTick(creature, guid)
+    end)
+    schedule(guid, "terrifying", 38000, function()
+        terrifyingScreechTick(creature, guid)
+    end)
+    schedule(guid, "summondefender", 60000, function()
+        summonDefenderTick(creature, guid)
+    end)
+    schedule(guid, "berserk", 600000, function()
+        berserkTick(creature)
+    end)
+end
+
+-- C++ KilledUnit (:172-176): who->GetTypeId() == TYPEID_PLAYER AND
+-- roll_chance_i(50), then Talk(SAY_SLAY) — victim nil-guard,
+-- victim:GetObjectType() == "Player", math.random(1, 100) <= 50.
 local function auriayaTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" and math.random(1, 100) <= 50 then
         creature:Talk(SAY_SLAY)
     end
 end
 
+-- Shared timer wipe for events 2/4/23 (auriaya JustDied :206-212
+-- carries no Talk arms, so event 4 models only the wipe).
+local function cancelCombatTimers(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- npc_sanctum_sentry — C++ EVENT_RIP (:318-320):
+-- DoCastVictim(SPELL_RIP_FLESH 64375) (2-arg non-triggered), 6s
+-- init (:293), re-arm {10s,12s}.
+local function ripTick(creature, guid)
+    creature:CastSpell(nil, SPELL_RIP_FLESH)
+    schedule(guid, "rip", {10000, 12000}, function()
+        ripTick(creature, guid)
+    end)
+end
+
+-- C++ JustEngagedWith (:291-296): EVENT_RIP 6s +
+-- EVENT_SAVAGE_POUNCE 1ms + SetWalk(false) — only the RIP timer
+-- leg is bridgeable.
+local function sentryEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "rip", 6000, function()
+        ripTick(creature, guid)
+    end)
+end
+
 RegisterCreatureEvent(ENTRY_AURIAYA, 1, auriayaEnterCombat)
+RegisterCreatureEvent(ENTRY_AURIAYA, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_AURIAYA, 3, auriayaTargetDied)
+RegisterCreatureEvent(ENTRY_AURIAYA, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_AURIAYA, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 1, sentryEnterCombat)
+RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 23, cancelCombatTimers)
