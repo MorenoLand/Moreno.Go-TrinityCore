@@ -42,11 +42,13 @@
 -- OnDied. No timers in the ported arms; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_START_P_ONE 1) (event 1; the
--- setActive / CheckRequiredBosses / EnterEvadeMode /
--- SetBossState / DoCast SPELL_BERSERK / DoStartTimedAchievement
--- legs have no bridges — the tharon_ja BossAI-bookkeeping
--- precedent; no cast bridge for the berserk aura).
+-- JustEngagedWith — Talk(SAY_START_P_ONE 1) +
+-- DoCast(SPELL_BERSERK 60670) (event 1; the setActive /
+-- CheckRequiredBosses / EnterEvadeMode / SetBossState /
+-- DoStartTimedAchievement legs have no bridges —
+-- the tharon_ja BossAI-bookkeeping precedent). The berserk is a
+-- non-triggered self-cast at engage (2-arg DoCast, UnitAI.cpp default
+-- target self) -- the aura carries the 10-min timer itself.
 -- KilledUnit — C++-GATED on who->GetTypeId() == TYPEID_PLAYER,
 -- then Talk(SAY_KILLED_PLAYER_P_ONE 3 / P_TWO 8 / P_THREE 15)
 -- selected by the AI's internal _phase (PHASE_ONE / PHASE_TWO /
@@ -140,13 +142,21 @@ local ENTRY_MALYGOS = 28859
 local SAY_START_P_ONE = 1
 local SAY_DEATH = 17
 
--- C++ JustEngagedWith: me->setActive(true) +
+-- C++ SPELL_BERSERK = 60670 (boss_malygos.cpp :105): DoCast(SPELL_BERSERK)
+-- in JustEngagedWith (:577) -- 2-arg DoCast, non-triggered self-cast
+-- (UnitAI.cpp default target self); the periodic aura itself carries the
+-- 10-minute berserk timer, so the faithful port casts it once at engage.
+local SPELL_BERSERK = 60670
+
+-- C++ JustEngagedWith (boss_malygos.cpp :563-:579): me->setActive(true) +
 -- instance->CheckRequiredBosses gate +
 -- instance->SetBossState(IN_PROGRESS) + Talk(SAY_START_P_ONE)
--- + DoCast(SPELL_BERSERK) + DoStartTimedAchievement — only the
--- Talk arm is bridgeable.
+-- + DoCast(SPELL_BERSERK) + DoStartTimedAchievement. The Talk and the
+-- berserk self-cast are bridgeable; the instance legs are
+-- BossAI-bookkeeping with no bridge (tharon_ja precedent).
 local function malygosEnterCombat(event, creature, target)
     creature:Talk(SAY_START_P_ONE)
+    creature:CastSpell(creature, SPELL_BERSERK)
 end
 
 -- C++ JustDied: _JustDied() + Talk(SAY_DEATH) + gift-box-bunny

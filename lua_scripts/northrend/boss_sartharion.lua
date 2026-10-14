@@ -20,22 +20,30 @@
 -- hits boss_sartharion.cpp (+ the loader decl/call lines for
 -- AddSC_boss_sartharion) only; zero sql/ hits. No sartharion lua
 -- existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
--- No timers in the ported arms; melee is engine-driven in Go
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset. Timers ride the CreateLuaEvent
+-- convention (baltharus / maiden precedent): GUID-keyed timers
+-- table, cancel on events 2/4/23; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_SARTHARION_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith bookkeeping (setActive /
--- CheckRequiredBosses / SetBossState IN_PROGRESS), DoZoneInCombat,
--- and the FetchDragons machine (PowerOf Tenebron / Shadron /
--- Vesperon casts 61248 / 58105 / 61251, WILL_OF_SARTHARION 61254,
--- drake loot-mode ladder, MotionMaster MovePoints to the drake
--- init positions, UNIT_FLAG_NON_ATTACKABLE legs — all gated on
--- instance GUIDs and the MotionMaster) plus the nine-event
--- ScheduleEvent calls (lava strike / cleave / flame breath / tail
--- sweep / flame tsunami / call tenebron / shadron / vesperon)
--- have no bridges — the tharon_ja / malygos BossAI-bookkeeping and
--- no-cast / no-timer-event precedents).
+-- JustEngagedWith — Talk(SAY_SARTHARION_AGGRO 0) + the three timer
+-- casts (event 1; the BossAI::JustEngagedWith bookkeeping
+-- (setActive / CheckRequiredBosses / SetBossState IN_PROGRESS),
+-- DoZoneInCombat, and the FetchDragons machine (PowerOf Tenebron /
+-- Shadron / Vesperon casts 61248 / 58105 / 61251, WILL_OF_SARTHARION
+-- 61254, drake loot-mode ladder, MotionMaster MovePoints to the
+-- drake init positions, UNIT_FLAG_NON_ATTACKABLE legs — all gated
+-- on instance GUIDs and the MotionMaster) plus the remaining
+-- ScheduleEvent calls (lava strike / flame tsunami / call tenebron /
+-- shadron / vesperon) have no bridges — the tharon_ja / malygos
+-- BossAI-bookkeeping and no-cast / no-timer-event precedents).
+-- EVENT_CLEAVE_ATTACK — DoCastVictim(SPELL_CLEAVE 56909) 2-arg
+-- non-triggered, 7s init / {7s,10s} re-arm (:174 / :461-:464).
+-- EVENT_FLAME_BREATH — Talk(SAY_SARTHARION_BREATH 2) +
+-- DoCastVictim(SPELL_FLAME_BREATH 56908) non-triggered, 20s init /
+-- {25s,35s} re-arm (:176 / :452-:456).
+-- EVENT_TAIL_SWEEP — DoCastVictim(SPELL_TAIL_LASH 56910)
+-- non-triggered, 20s init / {15s,20s} re-arm (:177 / :457-:460).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER,
 -- then Talk(SAY_SARTHARION_SLAY 8) — PORTED (event 3, the
 -- razuvious player-gated variant precedent: victim nil-guard,
@@ -61,8 +69,8 @@
 -- 30451 / 30449 — but the arms are bridge-blocked, so no
 -- separate registration).
 -- CallDragon (EVENT_CALL_TENEBRON / SHADRON / VESPERON legs) —
--- entry-switched Talk(SAY_SARTHARION_CALL_TENEBRON 3 /
--- CALL_SHADRON 4 / CALL_VESPERON 5) + AddAura power-of legs +
+-- entry-switched Talk(SAY_SARTHARION_CALL_SHADRON 3 /
+-- CALL_TENEBRON 4 / CALL_VESPERON 5) + AddAura power-of legs +
 -- MovePoint(POINT_ID_LAND) legs — no timer-event / cast /
 -- motion bridges.
 -- GetData TWILIGHT_ACHIEVEMENTS (drakeCount) — no achievement
@@ -71,34 +79,107 @@
 -- search (NPC_FIRE_CYCLONE 30648) + random-cyclone CastSpell
 -- (SPELL_LAVA_STRIKE 57571) on target — no creature-search /
 -- cast bridges.
--- UpdateAI — the nine-event machine (EVENT_HARD_ENRAGE
--- SPELL_PYROBUFFET 56916 triggered; EVENT_FLAME_TSUNAMI
--- WHISPER_LAVA_CHURN 9 + SummonCreature NPC_FLAME_TSUNAMI 30616
--- waves with MovePoints; EVENT_FLAME_BREATH Talk(SAY_BREATH 2)
--- + DoCastVictim SPELL_FLAME_BREATH 56908; EVENT_TAIL_SWEEP
--- DoCastVictim SPELL_TAIL_LASH 56910; EVENT_CLEAVE_ATTACK
--- DoCastVictim SPELL_CLEAVE 56909; EVENT_LAVA_STRIKE random-target
--- lava strike + urand SAY_SARTHARION_SPECIAL 7; EVENT_CALL_*
--- dragon calls) + the 35%-health SPELL_BERSERK 61632 leg (Talk
--- SAY_SARTHARION_BERSERK 1) gated on the three drake boss states
--- + the 10%-health soft-enrage lava-strike cadence shift — no
--- timer-event / cast / health / instance bridges.
+-- UpdateAI — the nine-event machine's remaining legs:
+-- EVENT_HARD_ENRAGE SPELL_PYROBUFFET 56916 triggered (dead arm —
+-- declared but never scheduled; porting would fabricate casts);
+-- EVENT_FLAME_TSUNAMI WHISPER_LAVA_CHURN 9 + SummonCreature
+-- NPC_FLAME_TSUNAMI 30616 waves with MovePoints; EVENT_LAVA_STRIKE
+-- random-target lava strike + urand SAY_SARTHARION_SPECIAL 7;
+-- EVENT_CALL_* dragon calls) + the 35%-health SPELL_BERSERK 61632
+-- leg (Talk SAY_SARTHARION_BERSERK 1) gated on the three drake
+-- boss states + the 10%-health soft-enrage lava-strike cadence
+-- shift — no timer-event / summon / target-search / instance /
+-- health bridges.
 -- Whisper arms (WHISPER_LAVA_CHURN 9) ride the tsunami event —
 -- no bridge.
 
 local ENTRY_SARTHARION = 28860
 
-local SAY_SARTHARION_AGGRO = 0
-local SAY_SARTHARION_DEATH = 6
-local SAY_SARTHARION_SLAY = 8
+local SAY_SARTHARION_AGGRO  = 0
+local SAY_SARTHARION_BREATH = 2
+local SAY_SARTHARION_DEATH  = 6
+local SAY_SARTHARION_SLAY   = 8
+
+local SPELL_CLEAVE       = 56909
+local SPELL_FLAME_BREATH = 56908
+local SPELL_TAIL_LASH    = 56910
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_CLEAVE_ATTACK: DoCastVictim(SPELL_CLEAVE 56909)
+-- (non-triggered), 7s init, re-arm {7s,10s}.
+local function cleaveTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CLEAVE)
+    schedule(guid, "cleave", {7000, 10000}, function()
+        cleaveTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_FLAME_BREATH: Talk(SAY_SARTHARION_BREATH 2) +
+-- DoCastVictim(SPELL_FLAME_BREATH 56908) (non-triggered), 20s init,
+-- re-arm {25s,35s}.
+local function flameBreathTick(creature, guid)
+    creature:Talk(SAY_SARTHARION_BREATH)
+    creature:CastSpell(nil, SPELL_FLAME_BREATH)
+    schedule(guid, "flamebreath", {25000, 35000}, function()
+        flameBreathTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_TAIL_SWEEP: DoCastVictim(SPELL_TAIL_LASH 56910)
+-- (non-triggered), 20s init, re-arm {15s,20s}.
+local function tailSweepTick(creature, guid)
+    creature:CastSpell(nil, SPELL_TAIL_LASH)
+    schedule(guid, "tailsweep", {15000, 20000}, function()
+        tailSweepTick(creature, guid)
+    end)
+end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith (setActive /
 -- CheckRequiredBosses / SetBossState IN_PROGRESS) + Talk(AGGRO)
 -- + DoZoneInCombat + FetchDragons (drake power-aura casts, loot
 -- modes, drake init MovePoints, non-attackable flags) +
--- ScheduleEvent x9 — only the Talk arm is bridgeable.
+-- ScheduleEvent x9 — the Talk and the three timer casts are
+-- bridgeable; the rest are machine legs with no bridges.
 local function sartharionEnterCombat(event, creature, target)
     creature:Talk(SAY_SARTHARION_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "cleave", 7000, function()
+        cleaveTick(creature, guid)
+    end)
+    schedule(guid, "flamebreath", 20000, function()
+        flameBreathTick(creature, guid)
+    end)
+    schedule(guid, "tailsweep", 20000, function()
+        tailSweepTick(creature, guid)
+    end)
+end
+
+local function sartharionLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: victim->GetTypeId() == TYPEID_PLAYER gate,
@@ -114,9 +195,16 @@ end
 -- DisappearAndDie legs via instance GUIDs — only the Talk arm
 -- is bridgeable.
 local function sartharionDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_SARTHARION_DEATH)
 end
 
+local function sartharionReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_SARTHARION, 1, sartharionEnterCombat)
+RegisterCreatureEvent(ENTRY_SARTHARION, 2, sartharionLeaveCombat)
 RegisterCreatureEvent(ENTRY_SARTHARION, 3, sartharionTargetDied)
 RegisterCreatureEvent(ENTRY_SARTHARION, 4, sartharionDied)
+RegisterCreatureEvent(ENTRY_SARTHARION, 23, sartharionReset)

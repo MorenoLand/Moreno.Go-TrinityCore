@@ -20,15 +20,21 @@
 -- twelve script names registered from AddSC_obsidian_sanctum()
 -- hits obsidian_sanctum.cpp only; zero sql/ hits. No obsidian_sanctum
 -- lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
--- No timers in the ported arms; melee is engine-driven in Go
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset. Timers ride the CreateLuaEvent
+-- convention (baltharus / maiden precedent): GUID-keyed timers
+-- table, cancel on events 2/4/23; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms; dummy_dragonAI base,
 -- shared across the three drakes):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the DoZoneInCombat
--- and the ScheduleEvent(EVENT_SHADOW_FISSURE / EVENT_SHADOW_BREATH)
--- legs have no bridges — the tharon_ja / malygos DoZoneInCombat /
--- no-timer-event precedents).
+-- JustEngagedWith — Talk(SAY_AGGRO 0) + the shadow-breath timer
+-- (event 1; the DoZoneInCombat and the
+-- ScheduleEvent(EVENT_SHADOW_FISSURE) legs have no bridges — the
+-- tharon_ja / malygos DoZoneInCombat / no-target-selection
+-- precedents).
+-- EVENT_SHADOW_BREATH — Talk(SAY_BREATH 3) +
+-- DoCastVictim(SPELL_SHADOW_BREATH 57570) 2-arg non-triggered,
+-- 20s init / {20s,25s} re-arm (:193 / :392-:396).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER,
 -- then Talk(SAY_SLAY 1) — PORTED (event 3; the razuvious
 -- player-gated variant precedent: victim nil-guard,
@@ -66,9 +72,8 @@
 -- creature-search / GO-respawn bridges);
 -- ExecuteEvent EVENT_SHADOW_FISSURE (random-target
 -- DoCast(SPELL_SHADOW_FISSURE 57579) — no target-selection /
--- cast bridges); EVENT_SHADOW_BREATH (Talk(SAY_BREATH 3) +
--- DoCastVictim(SPELL_SHADOW_BREATH 57570) — no cast bridge);
--- the UpdateAI EVENT_FREE_MOVEMENT machine (no motion bridge).
+-- cast bridges); the UpdateAI EVENT_FREE_MOVEMENT machine (no
+-- motion bridge).
 -- npc_tenebron — Reset (base); JustEngagedWith (base +
 -- ScheduleEvent EVENT_HATCH_EGGS 30s — no timer bridge);
 -- UpdateAI EVENT_HATCH_EGGS -> OpenPortal — no timer bridge.
@@ -129,15 +134,64 @@ local ENTRY_TENEBRON = 30452
 local ENTRY_SHADRON = 30451
 local ENTRY_VESPERON = 30449
 
-local SAY_AGGRO = 0
-local SAY_SLAY = 1
-local SAY_DEATH = 2
+local SAY_AGGRO  = 0
+local SAY_SLAY   = 1
+local SAY_DEATH  = 2
+local SAY_BREATH = 3
+
+local SPELL_SHADOW_BREATH = 57570
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_SHADOW_BREATH (dummy_dragonAI::ExecuteEvent):
+-- Talk(SAY_BREATH 3) + DoCastVictim(SPELL_SHADOW_BREATH 57570)
+-- (non-triggered), 20s init, re-arm {20s,25s}.
+local function shadowBreathTick(creature, guid)
+    creature:Talk(SAY_BREATH)
+    creature:CastSpell(nil, SPELL_SHADOW_BREATH)
+    schedule(guid, "shadowbreath", {20000, 25000}, function()
+        shadowBreathTick(creature, guid)
+    end)
+end
 
 -- C++ dummy_dragonAI::JustEngagedWith: Talk(SAY_AGGRO) +
 -- DoZoneInCombat + ScheduleEvent(EVENT_SHADOW_FISSURE,
--- EVENT_SHADOW_BREATH) — only the Talk arm is bridgeable.
+-- EVENT_SHADOW_BREATH) — the Talk and the shadow-breath timer are
+-- bridgeable; the rest are machine / target-selection legs with no
+-- bridges.
 local function dragonEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "shadowbreath", 20000, function()
+        shadowBreathTick(creature, guid)
+    end)
+end
+
+local function dragonLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ dummy_dragonAI::KilledUnit: victim->GetTypeId() ==
@@ -154,11 +208,18 @@ end
 -- + Talk(SAY_DEATH) + Twilight Revenge on Sartharion — only the
 -- Talk arm is bridgeable.
 local function dragonDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+end
+
+local function dragonReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 for _, entry in ipairs({ ENTRY_TENEBRON, ENTRY_SHADRON, ENTRY_VESPERON }) do
     RegisterCreatureEvent(entry, 1, dragonEnterCombat)
+    RegisterCreatureEvent(entry, 2, dragonLeaveCombat)
     RegisterCreatureEvent(entry, 3, dragonTargetDied)
     RegisterCreatureEvent(entry, 4, dragonDied)
+    RegisterCreatureEvent(entry, 23, dragonReset)
 end
