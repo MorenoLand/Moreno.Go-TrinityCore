@@ -1577,28 +1577,49 @@ func (s *session) handleItemRefundInfo(ctx context.Context, payload []byte) bool
 		return true
 	}
 
-	var itemEntry, paidMoney, paidExtendedCost, purchasePlayed int64
+	var itemEntry, itemFlags, purchasePlayed int64
 	// WorldSession::HandleItemRefundInfoRequest (ItemHandler.cpp:1169-1179)
 	// resolves the item with Player::GetItemByGuid — the item must be in the
 	// player's possession (inventory/bank/equipped); a bare refund row for an
 	// item the player no longer holds gets no answer. Same
 	// character_inventory JOIN as handleItemRefund.
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, iri.paidMoney, iri.paidExtendedCost, COALESCE(ii.playedTime, 0)
-		FROM item_instance AS ii JOIN item_refund_instance AS iri ON iri.item_guid = ii.guid AND iri.player_guid = ?
-		JOIN character_inventory AS ci ON ci.item = ii.guid AND ci.guid = ?
-		WHERE ii.guid = ? LIMIT 1`, s.playerGUID, s.playerGUID, itemGUID).Scan(&itemEntry, &paidMoney, &paidExtendedCost, &purchasePlayed)
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.flags, COALESCE(ii.playedTime, 0)
+		FROM item_instance AS ii JOIN character_inventory AS ci ON ci.item = ii.guid AND ci.guid = ?
+		WHERE ii.guid = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&itemEntry, &itemFlags, &purchasePlayed)
 	if err != nil || itemEntry == 0 {
 		return true
 	}
+	clearRefundState := func() {
+		// Item::SetNotRefundable (Item.cpp:1113-1129): clears the refundable
+		// flag and deletes the refund data keyed by item guid
+		// (DeleteRefundDataFromDB).
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), itemGUID)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", itemGUID)
+	}
 	// Player::SendRefundInfo (Player.cpp:26503-26512): Item::UpdatePlayedTime
 	// runs first and clears the refundable state when the 2h window is over
-	// (Item.cpp:1143-1156) — the info request then goes silent. Go's
-	// playedTime is the purchase-time T0 seed (see recordVendorRefund), so
-	// expiry is T0 + 2h < total played, the same shape as
-	// soulboundTradeExpired.
+	// (Item.cpp:1143-1156) — the info request then goes silent. UpdatePlayedTime
+	// is a no-op on a non-refundable item, so the flag check doubles as its
+	// IsRefundable() gate. Go's playedTime is the purchase-time T0 seed (see
+	// recordVendorRefund), so expiry is T0 + 2h < total played, the same shape
+	// as soulboundTradeExpired.
+	if uint32(itemFlags)&itemInstanceFlagRefundable == 0 {
+		return true
+	}
 	if s.player != nil && purchasePlayed+2*3600 < int64(s.player.TotalPlayedTime) {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), itemGUID)
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", itemGUID, s.playerGUID)
+		clearRefundState()
+		return true
+	}
+	// Player::SendRefundInfo (Player.cpp:26513-26519): a refundable item whose
+	// refund row belongs to someone else (requester != refundRecipient — C++
+	// sets the recipient to the purchaser at buy time and never transfers it;
+	// trade/mail/AH/guild moves clear the flag at transfer) gets
+	// SetNotRefundable + silence.
+	var paidMoney, paidExtendedCost int64
+	var rowOwner uint64
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT paidMoney, paidExtendedCost, player_guid FROM item_refund_instance WHERE item_guid = ? LIMIT 1`, itemGUID).Scan(&paidMoney, &paidExtendedCost, &rowOwner)
+	if err != nil || rowOwner != s.playerGUID {
+		clearRefundState()
 		return true
 	}
 	extendedCost := wotlk.ItemExtendedCostEntry{}
@@ -1654,28 +1675,45 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	var itemEntry, itemCount, paidMoney, paidExtendedCost, purchasePlayed int64
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count, iri.paidMoney, iri.paidExtendedCost, COALESCE(ii.playedTime, 0) FROM item_instance AS ii
+	var itemEntry, itemCount, itemFlags, purchasePlayed int64
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count, ii.flags, COALESCE(ii.playedTime, 0) FROM item_instance AS ii
 		JOIN character_inventory AS ci ON ci.item = ii.guid
-		JOIN item_refund_instance AS iri ON iri.item_guid = ii.guid AND iri.player_guid = ci.guid
-		WHERE ii.guid = ? AND ci.guid = ? LIMIT 1`, itemGUID, s.playerGUID).Scan(&itemEntry, &itemCount, &paidMoney, &paidExtendedCost, &purchasePlayed)
+		WHERE ii.guid = ? AND ci.guid = ? LIMIT 1`, itemGUID, s.playerGUID).Scan(&itemEntry, &itemCount, &itemFlags, &purchasePlayed)
 	// Player::RefundItem (Player.cpp:26576-26580): a missing or non-refundable
-	// item (no refund row, or a traded-away recipient) is a silent return —
-	// no SMSG_ITEM_REFUND_RESULT reaches the client.
+	// item is a silent return — no SMSG_ITEM_REFUND_RESULT reaches the client.
 	if err != nil || itemEntry == 0 {
 		return true
 	}
-	// Player::RefundItem (Player.cpp:26582-26590): an expired 2h window is NOT
-	// silent — SetNotRefundable runs and the client gets SMSG_ITEM_REFUND_RESULT
+	clearRefundState := func() {
+		// Item::SetNotRefundable (Item.cpp:1113-1129): clears the refundable
+		// flag and deletes the refund data keyed by item guid
+		// (DeleteRefundDataFromDB).
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), itemGUID)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", itemGUID)
+	}
+	if uint32(itemFlags)&itemInstanceFlagRefundable == 0 {
+		return true
+	}
+	// Player::RefundItem (Player.cpp:26582-26590): the expired-window arm runs
+	// BEFORE the recipient arm — an expired 2h window is NOT silent:
+	// SetNotRefundable runs and the client gets SMSG_ITEM_REFUND_RESULT
 	// error 10 (same code as the extended-cost space failure below). T0+2h
 	// shape, like handleItemRefundInfo.
 	if purchasePlayed+2*3600 < int64(s.player.TotalPlayedTime) {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), itemGUID)
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", itemGUID, s.playerGUID)
+		clearRefundState()
 		buf := protocol.NewBuffer(64)
 		buf.WriteU64(rawItemGUID)
 		buf.WriteU32(10) // error
 		return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+	}
+	// Player::RefundItem (Player.cpp:26592-26598): refundRecipient mismatch
+	// (row belongs to someone else) is SetNotRefundable + silence.
+	var paidMoney, paidExtendedCost int64
+	var rowOwner uint64
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT paidMoney, paidExtendedCost, player_guid FROM item_refund_instance WHERE item_guid = ? LIMIT 1`, itemGUID).Scan(&paidMoney, &paidExtendedCost, &rowOwner)
+	if err != nil || rowOwner != s.playerGUID {
+		clearRefundState()
+		return true
 	}
 	extendedCost := wotlk.ItemExtendedCostEntry{}
 	if paidExtendedCost != 0 {

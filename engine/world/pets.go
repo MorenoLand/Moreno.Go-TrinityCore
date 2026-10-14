@@ -3851,9 +3851,14 @@ func (s *session) stopPetAttacks(petGUID uint64, clearThreat bool) {
 		motion.ThreatMgr.ClearThreat()
 	}
 	s.server.motionMu.Unlock()
-	stopPkt := buildAttackStop(petGUID, victim, false)
-	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+	// Unit::AttackStop (Unit.cpp:5763-5789) early-returns with no packet when
+	// the unit had no victim — the stop packet only goes out when an attack
+	// was actually in progress.
+	if victim != 0 {
+		stopPkt := buildAttackStop(petGUID, victim, false)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+	}
 	s.debug("pet stop attack", "account", s.accountName, "pet", petGUID)
 }
 
