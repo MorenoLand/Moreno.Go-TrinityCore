@@ -965,6 +965,23 @@ func (s *session) activePetIsHunterType(ctx context.Context) bool {
 	return petType == int64(petTypeHunter)
 }
 
+// activePetSpellCount returns the active pet's total stored spell count — the
+// m_spells.size() arm of the GOSSIP_OPTION_UNLEARNPETTALENTS visibility gate
+// (Player.cpp:14462). pet_spell rows are the pet's full spell list (template
+// spells are written at creation), so COUNT(*) is the Go model of m_spells.
+func (s *session) activePetSpellCount(ctx context.Context) int {
+	petNumber := s.activePetNumber()
+	if petNumber == 0 || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var count int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM pet_spell WHERE guid = ?", petNumber).Scan(&count); err != nil {
+		s.debug("pet spell count query failed", "account", s.accountName, "pet", petNumber, "error", err)
+		return 0
+	}
+	return int(count)
+}
+
 // resetActivePetTalents mirrors Player::ResetPetTalents (Player.cpp:9612) +
 // Pet::resetTalents (Pet.cpp:1629): the active hunter pet's learned talent
 // spells are removed and the pet talent/spell frames resent. No-op when there

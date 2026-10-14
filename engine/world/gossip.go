@@ -1002,13 +1002,13 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 			continue
 		}
 		if optionType == 17 { // GOSSIP_OPTION_UNLEARNPETTALENTS (Player.cpp:14462)
-			// Hidden without an active hunter pet carrying learned talent
-			// spells, or when the creature isn't a valid pet-talent trainer
-			// (Creature::CanResetTalents(pet), Creature.cpp:1303). The
-			// getPetType()!=HUNTER_PET arm is the hunter-type query; the
-			// m_spells.size()<=1 proxy is folded into the learned-talent
-			// check: a pet with no learned talents has nothing to unlearn.
-			if s.activePetNumber() == 0 || !s.activePetIsHunterType(ctx) || !s.canResetPetTalents(ctx, creatureGUID) || len(s.activePetLearnedTalentSpells(ctx)) == 0 {
+			// Hidden without an active pet, when the active pet isn't a
+			// hunter pet (getPetType()!=HUNTER_PET), when it knows one or
+			// fewer spells (m_spells.size()<=1), or when the creature isn't
+			// a valid pet-talent trainer (Creature::CanResetTalents(pet),
+			// Creature.cpp:1303). C++ has no learned-talent gate — the
+			// option shows with zero talents and the reset is a no-op there.
+			if s.activePetNumber() == 0 || !s.activePetIsHunterType(ctx) || s.activePetSpellCount(ctx) <= 1 || !s.canResetPetTalents(ctx, creatureGUID) {
 				continue
 			}
 		}
