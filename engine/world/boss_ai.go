@@ -10978,4 +10978,29 @@ func init() {
 	// timer Talks (damage-gated / no-action / no-timer — NOT registered), and the
 	// 21 SpellScriptLoaders (no-SpellScript / no-AuraScript bridges) — documented-only.
 	RegisterLuaBoss("boss_illidan", 22917)
+	// npc_imprisoned_beryl_sorcerer (Borean Tundra, quest 11648) —
+	// ported arms in lua_scripts/northrend/npc_imprisoned_beryl_sorcerer.lua:
+	// UpdateAI rebuff timer (immediate + 180s, !HasAura(45631) gate,
+	// non-triggered self-cast 45631) and the SpellHit impact arm
+	// (event 14: 45634->45702 / 48252->48254 non-triggered self-casts,
+	// player-caster gated). Entry 25478 verifiable from the C++
+	// ImprisionedBerylSorcerer enum.
+	RegisterLuaBoss("npc_imprisoned_beryl_sorcerer", 25478)
+	// npc_hidden_cultist (Borean Tundra, quest 11794) — ported arm in
+	// lua_scripts/northrend/npc_hidden_cultist.lua: Reset()
+	// DoCast(SPELL_SHROUD_OF_THE_DEATH_CULTIST 46077) non-triggered
+	// self-cast (events 5/23). Entries 25827/25248/25828 verifiable
+	// from the C++ HiddenCultist enum; all three share the AI.
+	RegisterLuaBoss("npc_hidden_cultist", 25827)
+	RegisterLuaBoss("npc_hidden_cultist", 25248)
+	RegisterLuaBoss("npc_hidden_cultist", 25828)
+	// npc_tournament_training_dummy (Icecrown, Argent Tournament) —
+	// ported arms in lua_scripts/northrend/npc_tournament_training_dummy.lua:
+	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, !HasAura(64100)
+	// gate, triggered self-cast 64100), the SpellHit break-shield /
+	// charge-credit machine (event 14), and DamageTaken damage=0
+	// (event 9). Entry 33272 (NPC_CHARGE_TARGET) verifiable from the
+	// C++ TournamentDummy enum; the ranged/melee entries carry no
+	// bridgeable arms.
+	RegisterLuaBoss("npc_tournament_training_dummy", 33272)
 }
