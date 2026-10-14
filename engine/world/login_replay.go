@@ -1179,7 +1179,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		_, _, _, wasBattlefield := battlegroundTypeForMap(before.Map)
 		wasTaxiing := before.TaxiPath != ""
 		teleportTraceStart := len(recorder.Snapshot().Events)
-		session.teleportToLFGDungeon(lfgDungeonID)
+		session.teleportToLFGDungeon(lfgDungeonID, true) // opcode path: entrance-only (LFGMgr.cpp:1550)
 		if !wasDungeon && !wasBattlefield && !wasTaxiing && (session.bgData.JoinMap != before.Map || session.bgData.JoinX != before.X || session.bgData.JoinY != before.Y || session.bgData.JoinZ != before.Z || session.bgData.JoinO != before.Orientation) {
 			session.logout()
 			return recorder.Snapshot(), fmt.Errorf("LFG return point map=%d position=(%v,%v,%v,%v), want map=%d position=(%v,%v,%v,%v)", session.bgData.JoinMap, session.bgData.JoinX, session.bgData.JoinY, session.bgData.JoinZ, session.bgData.JoinO, before.Map, before.X, before.Y, before.Z, before.Orientation)

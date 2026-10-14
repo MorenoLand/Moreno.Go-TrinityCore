@@ -1263,7 +1263,7 @@ func (s *session) teleportToLFGEntryPoint() {
 	s.teleportTo(destMap, destX, destY, destZ, destOri)
 }
 
-func (s *session) teleportToLFGDungeon(dungeonID uint32) {
+func (s *session) teleportToLFGDungeon(dungeonID uint32, fromOpcode bool) {
 	if s.player == nil {
 		return
 	}
@@ -1286,8 +1286,9 @@ func (s *session) teleportToLFGDungeon(dungeonID uint32) {
 	mapID, x, y, z, ori := s.getLFGDungeonEntrance(dungeonID)
 	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1550-1567): with fromOpcode=false
 	// the destination is an LFG group member already inside the dungeon
-	// when one exists, falling back to the dungeon entrance.
-	if s.groupID != 0 && s.server != nil && mapID != 0 {
+	// when one exists, falling back to the dungeon entrance; the opcode
+	// path calls with fromOpcode=true and always uses the entrance.
+	if !fromOpcode && s.groupID != 0 && s.server != nil && mapID != 0 {
 		s.server.groupsMu.RLock()
 		var members []groupMember
 		isLFG := false
@@ -1901,7 +1902,7 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				if s.server.lfgSelectedRandomDungeon(pguid) {
 					ps.applyAura(lfgSpellDungeonCooldown)
 				}
-				ps.teleportToLFGDungeon(proposal.DungeonID)
+				ps.teleportToLFGDungeon(proposal.DungeonID, false)
 			}
 		}
 		return true
@@ -2080,7 +2081,7 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	s.teleportToLFGDungeon(lfgDungeonID)
+	s.teleportToLFGDungeon(lfgDungeonID, true)
 	return true
 }
 
