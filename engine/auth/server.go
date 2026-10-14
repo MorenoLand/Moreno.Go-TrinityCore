@@ -64,6 +64,7 @@ const (
 	realmTypePvP          uint8  = 1
 	realmTypeFFAPvP       uint8  = 16
 	maxClientRealmType    uint8  = 14
+	securityAdministrator uint8  = 3
 )
 
 var versionChallenge = [16]byte{0xBA, 0xA3, 0x1E, 0x99, 0xA0, 0x0B, 0x21, 0x57, 0xFC, 0x37, 0x3F, 0xB3, 0x69, 0xCD, 0xD2, 0xF1}
@@ -245,6 +246,14 @@ func parseTOTPMasterSecret(value string) ([crypto.AESKeySize]byte, error) {
 		decoded = decoded[len(decoded)-len(key):]
 	}
 	copy(key[len(key)-len(decoded):], decoded)
+	// SecretMgr::GetHexFromConfig (shared/Secrets/SecretMgr.cpp:60-82) parses the
+	// hex into a BigNumber and the AES key is BigNumber::ToByteArray<16>(), whose
+	// default is little-endian (common/Cryptography/BigNumber.h:121) — the key is
+	// the little-endian encoding of the configured hex *number*, not the
+	// big-endian hex bytes. Reverse so C++-encrypted TOTP secrets decrypt.
+	for i, j := 0, len(key)-1; i < j; i, j = i+1, j-1 {
+		key[i], key[j] = key[j], key[i]
+	}
 	return key, nil
 }
 
@@ -337,19 +346,26 @@ func (s *Server) ipBanned(ctx context.Context, ip string) (bool, error) {
 	if s == nil || s.Store == nil {
 		return false, nil
 	}
-	row, err := s.Store.QueryRowStatement(ctx, "LOGIN_SEL_IP_INFO", ip)
+	rows, err := s.Store.QueryStatement(ctx, "LOGIN_SEL_IP_INFO", ip)
 	if err != nil {
 		return false, err
 	}
-	var banned bool
-	var country sql.NullString
-	if err := row.Scan(&banned, &country); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
+	defer rows.Close()
+	banned := false
+	for rows.Next() {
+		// AuthSession::CheckIpCallback (AuthSession.cpp:198-205): the ban holds if
+		// ANY ip_banned row for the address is active — row order is unspecified,
+		// so the first row alone cannot decide.
+		var active uint64
+		var country sql.NullString
+		if err := rows.Scan(&active, &country); err != nil {
+			return false, err
 		}
-		return false, err
+		if active != 0 {
+			banned = true
+		}
 	}
-	return banned, nil
+	return banned, rows.Err()
 }
 
 func (s *session) handleLogonChallenge(ctx context.Context) error {
@@ -569,7 +585,11 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	s.locale = locale
 	row, err := s.server.Store.QueryRowStatement(ctx, "LOGIN_SEL_RECONNECTCHALLENGE", login)
 	if err != nil {
-		return err
+		// AuthSession::ReconnectChallengeCallback (AuthSession.cpp:643-649): a failed
+		// reconnect-challenge query surfaces as a null result, so the client still
+		// gets the unknown-account answer instead of a silent close.
+		s.debug("reconnect rejected", "account", login, "reason", "account query failed", "error", err)
+		return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
 	}
 	var loaded account
 	var locked, failed, banned, permanent, security uint64
@@ -898,6 +918,26 @@ func loadRealms(ctx context.Context, store *database.Store) ([]realm, error) {
 		if r.Icon >= maxClientRealmType {
 			r.Icon = realmTypeNormal
 		}
+		// RealmList::UpdateRealms (shared/Realm/RealmList.cpp:140-173): realm
+		// addresses resolve IPv4-only at load and a realm whose address, local
+		// address or subnet mask fails to resolve is dropped from the list;
+		// allowedSecurityLevel above SEC_ADMINISTRATOR clamps to it.
+		address, err := resolveIPv4(r.Address)
+		if err != nil {
+			continue
+		}
+		localAddress, err := resolveIPv4(r.LocalAddress)
+		if err != nil {
+			continue
+		}
+		subnetMask, err := resolveIPv4(r.LocalSubnetMask)
+		if err != nil {
+			continue
+		}
+		r.Address, r.LocalAddress, r.LocalSubnetMask = address, localAddress, subnetMask
+		if r.AllowedSecurityLevel > securityAdministrator {
+			r.AllowedSecurityLevel = securityAdministrator
+		}
 		result = append(result, r)
 	}
 	// _realms is std::map<RealmHandle, Realm> (shared/Realm/RealmList.h:51), so
@@ -905,6 +945,14 @@ func loadRealms(ctx context.Context, store *database.Store) ([]realm, error) {
 	// of the SQL ORDER BY name; match that wire order.
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, rows.Err()
+}
+
+func resolveIPv4(host string) (string, error) {
+	addr, err := net.ResolveIPAddr("ip4", host)
+	if err != nil {
+		return "", err
+	}
+	return addr.IP.String(), nil
 }
 
 func realmAddressForClient(r realm, clientIP string) string {
@@ -935,7 +983,10 @@ func realmAddressForClient(r realm, clientIP string) string {
 }
 
 func loadCharacterCounts(ctx context.Context, store *database.Store, accountID uint32) (map[uint32]int64, error) {
-	rows, err := store.DB.QueryContext(ctx, "SELECT realmid, COUNT(*) FROM realmcharacters WHERE acctid = ? GROUP BY realmid", accountID)
+	// LoginDatabase.cpp:53 (LOGIN_SEL_REALM_CHARACTER_COUNTS): the client-visible
+	// count is the stored numchars column — realmcharacters holds one row per
+	// (acctid, realmid), so COUNT(*) would wrongly report 1 for every realm.
+	rows, err := store.DB.QueryContext(ctx, "SELECT realmid, numchars FROM realmcharacters WHERE acctid = ?", accountID)
 	if err != nil {
 		return nil, err
 	}

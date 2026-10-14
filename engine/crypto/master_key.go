@@ -11,8 +11,9 @@ import (
 // AES key used to encrypt stored TOTP secrets. It mirrors the C++
 // BigNumber::ToByteArray<AES::KEY_SIZE_BYTES> semantics used by
 // cs_account.cpp's 2FA handlers (and the auth server's parseTOTPMasterSecret):
-// over-long values are truncated to the low 16 bytes, short ones are
-// left-padded with zeros.
+// the key is the little-endian encoding of the configured hex *number*
+// (BigNumber::ToByteArray defaults to little-endian); over-long values are
+// truncated to the low 16 bytes, short ones are zero-padded.
 func ParseMasterKey(value string) ([AESKeySize]byte, error) {
 	var key [AESKeySize]byte
 	value = strings.TrimSpace(value)
@@ -33,5 +34,8 @@ func ParseMasterKey(value string) ([AESKeySize]byte, error) {
 		decoded = decoded[len(decoded)-len(key):]
 	}
 	copy(key[len(key)-len(decoded):], decoded)
+	for i, j := 0, len(key)-1; i < j; i, j = i+1, j-1 {
+		key[i], key[j] = key[j], key[i]
+	}
 	return key, nil
 }

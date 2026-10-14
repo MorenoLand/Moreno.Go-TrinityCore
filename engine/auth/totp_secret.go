@@ -126,5 +126,12 @@ func (s *Server) initializeTOTPSecrets(ctx context.Context, current, previous st
 }
 
 func canonicalTOTPMasterSecret(key [crypto.AESKeySize]byte) string {
-	return strings.ToUpper(new(big.Int).SetBytes(key[:]).Text(16))
+	// The digest input is the configured hex *number* (BigNumber::AsHexStr,
+	// uppercase, no leading zeros) — undo parseTOTPMasterSecret's little-endian
+	// key encoding before rendering.
+	reversed := key
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	return strings.ToUpper(new(big.Int).SetBytes(reversed[:]).Text(16))
 }
