@@ -21,8 +21,9 @@
 -- "boss_maiden_of_grief" hits boss_maiden_of_grief.cpp + the loader
 -- decl/call lines for AddSC_boss_maiden_of_grief() only; zero sql/
 -- hits. No maiden_of_grief lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
--- No timers in the ported arms; melee is engine-driven in Go
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset. Timer arms ride CreateLuaEvent
+-- (the maiden CreateLuaEvent convention); melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
@@ -36,33 +37,105 @@
 -- "Player") — nineteenth player-gated variant ported.
 -- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied() boss
 -- bookkeeping passthrough has no bridge).
+-- UpdateAI EVENT_STORM_OF_GRIEF — PORTED (retraction re-audit
+-- 2026-10-14: the Oct-2 "no-timer-bridge" claim is stale):
+-- DoCastVictim(SPELL_STORM_OF_GRIEF 50752, triggered), 10s init
+-- (:67) / {15s,20s} re-arm (:113-115) — zero gating legs —
+-- creature:CastSpell(nil, 50752, true).
+-- UpdateAI EVENT_SHOCK_OF_SORROW — PORTED (same retraction):
+-- ResetThreatList (no threat bridge — documented-only) +
+-- Talk(SAY_STUN 3) + DoCastAOE(SPELL_SHOCK_OF_SORROW 50760)
+-- non-triggered, {20s,25s} init (:68) / {20s,30s} re-arm (:117-121)
+-- — creature:Talk(3) + creature:CastSpell(creature, 50760) (the
+-- DoCastAOE self-cast convention — selin_fireheart / mr_smite /
+-- razuvious precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 27975):
--- Reset / Initialize (_Reset() + four ScheduleEvent legs
--- (EVENT_PARTING_SORROW 25s/30s heroic-only, EVENT_STORM_OF_GRIEF
--- 10s, EVENT_SHOCK_OF_SORROW 20s/25s, EVENT_PILLAR_OF_WOE 5s/15s)
--- + DoStopTimedAchievement(ACHIEV_GOOD_GRIEF_START_EVENT) — no
--- timer / achievement bridges).
--- UpdateAI event machine — EVENT_PARTING_SORROW (random-target
--- DoCast(SPELL_PARTING_SORROW 59723), 30s/40s); EVENT_STORM_OF_GRIEF
--- (DoCastVictim(SPELL_STORM_OF_GRIEF 50752, true), 15s/20s);
--- EVENT_SHOCK_OF_SORROW (ResetThreatList + Talk(SAY_STUN 3) +
--- DoCastAOE(SPELL_SHOCK_OF_SORROW 50760), 20s/30s); EVENT_PILLAR_OF_WOE
--- (random-target DoCast(SPELL_PILLAR_OF_WOE 50761) else
--- DoCastVictim, 5s/25s) — the UNIT_STATE_CASTING gate and the
--- DoMeleeAttackIfReady tail have no bridges; Talk(3) SAY_STUN rides
--- the unmodeled machine.
+-- Reset ScheduleEvent EVENT_PARTING_SORROW (25s/30s, :66 —
+-- heroic-only: no heroic bridge) + DoStopTimedAchievement(
+-- ACHIEV_GOOD_GRIEF_START_EVENT) — no achievement bridge.
+-- UpdateAI EVENT_PARTING_SORROW (random-target
+-- DoCast(SPELL_PARTING_SORROW 59723), 30s/40s re-arm, :108-111) —
+-- no random-target bridge; EVENT_PILLAR_OF_WOE (random-target
+-- DoCast(SPELL_PILLAR_OF_WOE 50761) else DoCastVictim, 5s/25s
+-- re-arm, :123-128) — no random-target bridge; the
+-- UNIT_STATE_CASTING gate and the DoMeleeAttackIfReady tail have no
+-- bridges.
 
 local ENTRY_MAIDEN_OF_GRIEF = 27975
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
+local SAY_STUN = 3
 
--- C++ JustEngagedWith: Talk(AGGRO) + DoStartTimedAchievement +
--- BossAI passthrough — only the Talk arm is bridgeable.
+local SPELL_STORM_OF_GRIEF = 50752
+local SPELL_SHOCK_OF_SORROW = 50760
+
+-- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
+-- events 2/4/23) — the maiden / bjarngrim-lieutenant convention.
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ UpdateAI EVENT_STORM_OF_GRIEF
+-- (boss_maiden_of_grief.cpp:113-115): DoCastVictim(
+-- SPELL_STORM_OF_GRIEF 50752, triggered), 10s init (:67) /
+-- {15s,20s} re-arm — zero gating legs.
+local function stormTick(creature, guid)
+    creature:CastSpell(nil, SPELL_STORM_OF_GRIEF, true)
+    schedule(guid, "storm", {15000, 20000}, function()
+        stormTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_SHOCK_OF_SORROW (:117-121): ResetThreatList
+-- (no threat bridge — documented-only) + Talk(SAY_STUN 3) +
+-- DoCastAOE(SPELL_SHOCK_OF_SORROW 50760) non-triggered,
+-- {20s,25s} init (:68) / {20s,30s} re-arm.
+local function shockTick(creature, guid)
+    creature:Talk(SAY_STUN)
+    creature:CastSpell(creature, SPELL_SHOCK_OF_SORROW)
+    schedule(guid, "shock", {20000, 30000}, function()
+        shockTick(creature, guid)
+    end)
+end
+
+-- C++ JustEngagedWith: Talk(AGGRO) + BossAI / achievement legs —
+-- only the Talk arm is bridgeable. The Reset() ScheduleEvent legs
+-- seed the timer machine here: the C++ EventMap only ticks once
+-- UpdateAI runs with a victim, so engage-seeding is
+-- behavior-identical (the krystallus precedent).
 local function maidenEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "storm", 10000, function()
+        stormTick(creature, guid)
+    end)
+    schedule(guid, "shock", {20000, 25000}, function()
+        shockTick(creature, guid)
+    end)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -73,12 +146,19 @@ local function maidenTargetDied(event, creature, victim)
     end
 end
 
+local function maidenLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ JustDied: Talk(DEATH) + _JustDied() — only the Talk arm is
 -- bridgeable.
 local function maidenDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 1, maidenEnterCombat)
+RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 2, maidenLeaveCombat)
 RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 3, maidenTargetDied)
 RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 4, maidenDied)
+RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 23, maidenLeaveCombat)
