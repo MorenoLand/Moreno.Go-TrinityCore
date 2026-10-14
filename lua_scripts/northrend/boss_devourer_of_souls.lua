@@ -63,10 +63,9 @@
 -- 3000, DoCast(me, SPELL_WAILING_SOULS 68873) self-cast, re-arm 1000
 -- until 15 casts land (:319), then the phase ends and WAILING_SOULS
 -- re-arms at {60000,70000} (:326).
--- Deviation (documented): C++ delays all other events by 18s during the
--- wailing phase (:307); here the other arms keep their own beat but skip
--- their casts/Talks while the wailing flag is set — beats stay
--- phase-anchored instead of shifting 18s. No beam sweeps the facing
+-- C++ delays all other events by 18s during the wailing phase (:307) —
+-- modeled via delayTimers (thekal precedent): the other arms' timers
+-- shift 18s, so no casts fire mid-wailing. No beam sweeps the facing
 -- (no SetFacingTo bridge).
 -- JustDied (:203): Talk(SAY_FACE_DEATH 4) — unconditional (the sjonnir
 -- JustDied-Talk precedent; the _JustDied() passthrough leg is unmodeled).
@@ -130,14 +129,33 @@ local SPELL_WAILING_SOULS = 68873
 local timers = {}
 local devourerState = {}
 
+local function nowMs()
+    return math.floor(os.clock() * 1000)
+end
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
-        for _, id in pairs(per) do
-            RemoveEventById(id)
+        for _, t in pairs(per) do
+            RemoveEventById(t.id)
         end
         timers[guid] = nil
     end
+end
+
+-- A fired entry removes itself from the table (C++ EventMap drops consumed
+-- events from the map), so delayTimers only ever shifts still-armed
+-- timers — a one-shot that already fired is not resurrected by a delay.
+local function armEntry(guid, key, delayMs, fn)
+    local entry = { due = nowMs() + delayMs, fn = fn }
+    entry.id = CreateLuaEvent(function()
+        local per = timers[guid]
+        if per and per[key] == entry then
+            per[key] = nil
+        end
+        fn()
+    end, delayMs)
+    return entry
 end
 
 local function schedule(guid, key, delay, fn)
@@ -147,9 +165,31 @@ local function schedule(guid, key, delay, fn)
         timers[guid] = per
     end
     if per[key] then
-        RemoveEventById(per[key])
+        RemoveEventById(per[key].id)
     end
-    per[key] = CreateLuaEvent(fn, delay)
+    local delayMs = delay
+    if type(delayMs) == "table" then
+        delayMs = math.random(delayMs[1], delayMs[2])
+    end
+    per[key] = armEntry(guid, key, delayMs, fn)
+end
+
+-- C++ EventMap::DelayEvents: push every armed timer out by extraMs,
+-- preserving each timer's remaining time (thekal precedent).
+local function delayTimers(guid, extraMs)
+    local per = timers[guid]
+    if not per then
+        return
+    end
+    local now = nowMs()
+    for key, t in pairs(per) do
+        RemoveEventById(t.id)
+        local remaining = t.due - now
+        if remaining < 0 then
+            remaining = 0
+        end
+        per[key] = armEntry(guid, key, remaining + extraMs, t.fn)
+    end
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on the
@@ -178,9 +218,7 @@ local function phantomBlastTick(creature, guid)
     if state == nil then
         return
     end
-    if not state.wailing then
-        creature:CastSpell(nil, SPELL_PHANTOM_BLAST)
-    end
+    creature:CastSpell(nil, SPELL_PHANTOM_BLAST)
     schedule(guid, "phantom", 5000, function()
         phantomBlastTick(creature, guid)
     end)
@@ -194,10 +232,8 @@ local function mirroredSoulTick(creature, guid)
     if state == nil then
         return
     end
-    if not state.wailing then
-        creature:CastSpell(creature, SPELL_MIRRORED_SOUL_TARGET_SELECTOR)
-        creature:Talk(EMOTE_MIRRORED_SOUL)
-    end
+    creature:CastSpell(creature, SPELL_MIRRORED_SOUL_TARGET_SELECTOR)
+    creature:Talk(EMOTE_MIRRORED_SOUL)
     schedule(guid, "mirror", {15000, 30000}, function()
         mirroredSoulTick(creature, guid)
     end)
@@ -211,11 +247,9 @@ local function wellOfSoulsTick(creature, guid)
     if state == nil then
         return
     end
-    if not state.wailing then
-        local target = randomPlayer(creature)
-        if target then
-            creature:CastSpell(target, SPELL_WELL_OF_SOULS)
-        end
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_WELL_OF_SOULS)
     end
     schedule(guid, "well", 20000, function()
         wellOfSoulsTick(creature, guid)
@@ -234,14 +268,12 @@ local function unleashedSoulsTick(creature, guid)
     if state == nil then
         return
     end
-    if not state.wailing then
-        local target = randomPlayer(creature)
-        if target then
-            creature:CastSpell(target, SPELL_UNLEASHED_SOULS)
-        end
-        creature:Talk(SAY_FACE_UNLEASH_SOUL)
-        creature:Talk(EMOTE_UNLEASH_SOUL)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_UNLEASHED_SOULS)
     end
+    creature:Talk(SAY_FACE_UNLEASH_SOUL)
+    creature:Talk(EMOTE_UNLEASH_SOUL)
     schedule(guid, "unleashed", 30000, function()
         unleashedSoulsTick(creature, guid)
     end)
@@ -249,8 +281,8 @@ end
 
 -- C++ EVENT_WAILING_SOULS_TICK (:313-326): the 15-tick chain — first tick
 -- at 3000, DoCast(me, SPELL_WAILING_SOULS) self-cast, re-arm 1000 until 15
--- casts land (:319), then the phase ends: the wailing flag drops and
--- EVENT_WAILING_SOULS re-arms at {60000,70000} (:326). The beamAngle
+-- casts land (:319), then the phase ends and EVENT_WAILING_SOULS
+-- re-arms at {60000,70000} (:326). The beamAngle
 -- facing sweep (:314) has no bridge; the phase-end restore legs
 -- (REACT_AGGRESSIVE + DISPLAY_ANGER + unroot + MoveChase, :322-324) have
 -- no bridge and do not port.
@@ -261,10 +293,6 @@ local function wailingSoulTick(creature, guid, remaining)
             wailingSoulTick(creature, guid, remaining - 1)
         end)
     else
-        local state = devourerState[guid]
-        if state then
-            state.wailing = false
-        end
         schedule(guid, "wailing", {60000, 70000}, function()
             wailingSoulsTick(creature, guid)
         end)
@@ -275,8 +303,9 @@ end
 -- Talk(EMOTE_WAILING_SOUL) (C++ order kept); DoCast(me,
 -- SPELL_WAILING_SOULS_STARTING) self-cast; random target ->
 -- DoCast(me, SPELL_WAILING_SOULS_BEAM), gated on a target being found
--- (:287-290); sets the wailing flag (see the DelayEvents(18s) note in the
--- header); starts the 15-tick chain at 3000ms (:309). The
+-- (:287-290); pushes every other armed timer out 18s (:307, delayTimers —
+-- no other events during wailing souls); starts the 15-tick chain at
+-- 3000ms (:309). The
 -- SetDisplayId(DISPLAY_DESIRE) leg (:282) and the beam/movement
 -- choreography (SetFacingToObject :288, InterruptNonMeleeSpells :297,
 -- REACT_PASSIVE :299, SetTarget(Empty) :302, motion Clear :304,
@@ -286,7 +315,6 @@ local function wailingSoulsTick(creature, guid)
     if state == nil then
         return
     end
-    state.wailing = true
     creature:Talk(SAY_FACE_WAILING_SOUL)
     creature:Talk(EMOTE_WAILING_SOUL)
     creature:CastSpell(creature, SPELL_WAILING_SOULS_STARTING)
@@ -294,6 +322,10 @@ local function wailingSoulsTick(creature, guid)
     if target then
         creature:CastSpell(creature, SPELL_WAILING_SOULS_BEAM)
     end
+    -- C++ :307 events.DelayEvents(18s) — push every other armed timer out
+    -- 18s (no other events during wailing souls); the tick chain is
+    -- scheduled after, so it is not delayed.
+    delayTimers(guid, 18000)
     schedule(guid, "wailingtick", 3000, function()
         wailingSoulTick(creature, guid, 15)
     end)
@@ -309,7 +341,7 @@ end
 local function devourerEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    devourerState[guid] = {wailing = false}
+    devourerState[guid] = {}
     creature:Talk(SAY_FACE_AGGRO)
     schedule(guid, "phantom", 5000, function()
         phantomBlastTick(creature, guid)

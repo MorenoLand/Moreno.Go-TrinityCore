@@ -122,9 +122,9 @@
 --   unconditionally (the maiden precedent); the `return` statements after
 --   EVENT_MIGHTY_KICK (:252) and EVENT_SHADOW_BOLT (:248) that skip the rest
 --   of the event loop that tick are unmodeled (independent Lua timers);
---   events.DelayEvents(20s) on EVENT_EXPLOSIVE_BARRAGE (:266) has no bridge —
---   the other arms keep their own beat instead of shifting 20s (the devourer
---   precedent); EVENT_PURSUIT's { SPELLVALUE_MAX_TARGETS, 1 } custom leg
+--   events.DelayEvents(20s) on EVENT_EXPLOSIVE_BARRAGE (:266) is modeled
+--   via delayTimers (thekal precedent) — the other arms shift 20s;
+--   EVENT_PURSUIT's { SPELLVALUE_MAX_TARGETS, 1 } custom leg
 --   (:278) has no bridge, so pursuit is not limited to 1 target (the devourer
 --   fear precedent); the pursuit threat/fixate machine (spell_krick_pursuit
 --   SpellScript + AuraScript, DoAction store/reset legs) is unmodeled, so the
@@ -147,14 +147,33 @@ local SPELL_PURSUIT = 68987
 
 local timers = {}
 
+local function nowMs()
+    return math.floor(os.clock() * 1000)
+end
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
-        for _, id in pairs(per) do
-            RemoveEventById(id)
+        for _, t in pairs(per) do
+            RemoveEventById(t.id)
         end
         timers[guid] = nil
     end
+end
+
+-- A fired entry removes itself from the table (C++ EventMap drops consumed
+-- events from the map), so delayTimers only ever shifts still-armed
+-- timers — a one-shot that already fired is not resurrected by a delay.
+local function armEntry(guid, key, delayMs, fn)
+    local entry = { due = nowMs() + delayMs, fn = fn }
+    entry.id = CreateLuaEvent(function()
+        local per = timers[guid]
+        if per and per[key] == entry then
+            per[key] = nil
+        end
+        fn()
+    end, delayMs)
+    return entry
 end
 
 -- arlokk-style: re-scheduling a key replaces the pending timer, so each
@@ -166,9 +185,31 @@ local function schedule(guid, key, delay, fn)
         timers[guid] = per
     end
     if per[key] then
-        RemoveEventById(per[key])
+        RemoveEventById(per[key].id)
     end
-    per[key] = CreateLuaEvent(fn, delay)
+    local delayMs = delay
+    if type(delayMs) == "table" then
+        delayMs = math.random(delayMs[1], delayMs[2])
+    end
+    per[key] = armEntry(guid, key, delayMs, fn)
+end
+
+-- C++ EventMap::DelayEvents: push every armed timer out by extraMs,
+-- preserving each timer's remaining time (thekal precedent).
+local function delayTimers(guid, extraMs)
+    local per = timers[guid]
+    if not per then
+        return
+    end
+    local now = nowMs()
+    for key, t in pairs(per) do
+        RemoveEventById(t.id)
+        local remaining = t.due - now
+        if remaining < 0 then
+            remaining = 0
+        end
+        per[key] = armEntry(guid, key, remaining + extraMs, t.fn)
+    end
 end
 
 local function initState(guid)
@@ -186,9 +227,11 @@ end
 -- = non-triggered self-cast (:264); one-shot — fires only via EVENT_SPECIAL
 -- picks, no re-arm. The krick-presence gate (:259) and the krick Talk /
 -- triggered self-cast legs (:261-263) have no cross-creature bridge (see
--- header); the events.DelayEvents(20s) (:266) has no bridge.
+-- header). C++ :266 events.DelayEvents(20s) pushes every other armed timer
+-- out 20s (delayTimers, thekal precedent).
 local function onExplosiveBarrage(creature, guid)
     creature:CastSpell(creature, SPELL_EXPLOSIVE_BARRAGE_ICK)
+    delayTimers(guid, 20000)
 end
 
 -- C++ :268-274 EVENT_POISON_NOVA: Talk(SAY_ICK_POISON_NOVA) (Ick's own Talk)

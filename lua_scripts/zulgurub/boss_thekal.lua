@@ -135,6 +135,21 @@ local function cancelTimers(guid)
     end
 end
 
+-- A fired entry removes itself from the table (C++ EventMap drops consumed
+-- events from the map), so delayTimers only ever shifts still-armed
+-- timers — a one-shot that already fired is not resurrected by a delay.
+local function armEntry(guid, key, delayMs, fn)
+    local entry = { due = nowMs() + delayMs, fn = fn }
+    entry.id = CreateLuaEvent(function()
+        local per = timers[guid]
+        if per and per[key] == entry then
+            per[key] = nil
+        end
+        fn()
+    end, delayMs)
+    return entry
+end
+
 local function schedule(guid, key, delayMs, fn)
     local per = timers[guid]
     if not per then
@@ -144,7 +159,7 @@ local function schedule(guid, key, delayMs, fn)
     if per[key] then
         RemoveEventById(per[key].id)
     end
-    per[key] = { id = CreateLuaEvent(fn, delayMs), due = nowMs() + delayMs, fn = fn }
+    per[key] = armEntry(guid, key, delayMs, fn)
 end
 
 -- C++ EventMap::DelayEvents: push every armed timer out by extraMs,
@@ -161,8 +176,7 @@ local function delayTimers(guid, extraMs)
         if remaining < 0 then
             remaining = 0
         end
-        local fn = t.fn
-        per[key] = { id = CreateLuaEvent(fn, remaining + extraMs), due = now + remaining + extraMs, fn = fn }
+        per[key] = armEntry(guid, key, remaining + extraMs, t.fn)
     end
 end
 
