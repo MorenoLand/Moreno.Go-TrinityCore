@@ -10734,7 +10734,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if effectTarget == 0 {
 						continue
 					}
-					s.handleEffectScriptEffect(effCtx, spellID, eff, effectTarget)
+					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, effectTarget)
 				}
 			case spellEffectSummonRafFriend: // 152: SPELL_EFFECT_SUMMON_RAF_FRIEND (EffectSummonRaFFriend, SpellEffects.cpp:5727)
 				// Same SelectEffectTypeImplicitTargets special case as effect
@@ -34377,12 +34377,14 @@ func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, h
 // Onyxia Shadow Flame (22539, 22972, 22975-22985): a living hit target without
 // the Onyxia Scale Cloak aura (22683) is hit by triggered Shadow Flame 22682.
 // Brutallus Burn (45141/45151): a player hit target at or beyond the effect
-// radius without the Burn aura (46394) ignites via triggered 46394. The
-// remaining arms (Scarlet ghoul summons, Wintergrasp RP-GG pickup/drop, Grab
-// Crate vehicle, Coyote Spirit/Blood Parrot despawns) need temp-summon /
-// position-cast / vehicle models Go lacks, and the sSpellScripts tail has no Go
-// SpellScript bridge (documented).
-func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, targetGUID uint64) {
+// radius without the Burn aura (46394) ignites via triggered 46394.
+// Wintergrasp RP-GG pickup (57347): a creature hit target is despawned.
+// Wintergrasp RP-GG drop (57349): count 5 of the item whose entry is the
+// rolled effect value is destroyed. The remaining arms (Scarlet ghoul
+// summons, Grab Crate vehicle, Coyote Spirit/Blood Parrot despawns) need
+// temp-summon / position-cast / vehicle models Go lacks, and the sSpellScripts
+// tail has no Go SpellScript bridge (documented).
+func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, spell wotlk.Spell, eff wotlk.SpellEffect, targetGUID uint64) {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
 		return
 	}
@@ -34446,6 +34448,43 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			return
 		}
 		s.castSpellDirect(ctx, 46394, targetGUID)
+	case 57347:
+		// Retrieving (Wintergrasp RP-GG pickup, SpellEffects.cpp:3711-3716):
+		// the hit target must be a creature; the caster must be a player
+		// (vacuous — Go's effect loop runs only for player casters).
+		// DespawnOrUnsummon's twin: drop the motion from the registry and
+		// destroy the object client-side (self + broadcast, the tame
+		// precedent). Go has no respawn scheduler, so the motion is not
+		// re-added (documented).
+		if uint16(targetGUID>>48) != 0xF130 {
+			return
+		}
+		if s.server != nil && s.player != nil {
+			s.server.motionMu.Lock()
+			motions := s.server.motionMapLocked(s.player.Map, s.player.InstanceID)
+			if _, ok := motions[targetGUID]; ok {
+				delete(motions, targetGUID)
+			} else {
+				low, entry := uint32(targetGUID&0x00FFFFFF), uint32(targetGUID>>24&0x00FFFFFF)
+				delete(motions, creatureWorldGUID(low, entry))
+			}
+			s.server.motionMu.Unlock()
+		}
+		s.sendDestroyObject(targetGUID, false)
+		if s.server != nil {
+			destroyBuf := protocol.NewBuffer(9)
+			destroyBuf.WriteU64(targetGUID)
+			destroyBuf.WriteU8(0)
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), s)
+		}
+	case 57349:
+		// Drop RP-GG (Wintergrasp RP-GG at death drop, SpellEffects.cpp:3718-3725):
+		// the caster must be a player (vacuous as above); destroy count 5
+		// of the item whose entry is the rolled effect value
+		// (DestroyItemCount(damage, 5, true)).
+		if entry := eff.CalcValueForLevel(spell, uint32(s.player.Level)); entry > 0 {
+			s.destroyPlayerItemCount(ctx, s.playerGUID, uint32(entry), 5)
+		}
 	}
 }
 
