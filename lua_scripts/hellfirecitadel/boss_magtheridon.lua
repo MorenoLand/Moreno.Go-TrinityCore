@@ -292,7 +292,9 @@ local function magtheridonEnterCombat(event, creature)
     end)
 end
 
--- C++ DamageTaken: below 30% (once) -> collapse arms.
+-- C++ DamageTaken: HealthBelowPctDamaged(30, damage) (Unit.h:873 --
+-- int64(health) - int64(damage) < CountPctFromMaxHealth(30), so killing
+-- and overkill blows fire the arms too) -> collapse arms, once.
 local function magtheridonDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = magState[guid]
@@ -301,8 +303,7 @@ local function magtheridonDamageTaken(event, creature, attacker, damage)
     end
     local health = creature:GetHealth()
     local maxHealth = creature:GetMaxHealth()
-    if maxHealth > 0 and health > damage
-            and (health - damage) <= maxHealth * 0.3 then
+    if maxHealth > 0 and health - damage < math.floor(maxHealth * 30 / 100) then
         st.phase = "collapsed"
         creature:Talk(SAY_COLLAPSE)
         creature:CastSpell(creature, SPELL_CAMERA_SHAKE)

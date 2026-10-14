@@ -19,10 +19,10 @@
 --     {18s,26s} on the victim; spawn six bloodseeker bats 11368 at the
 --     fixed SpawnBat positions at 60s then every 60s (no summon model —
 --     the bats never exist, so the timer arm keeps only the re-arm).
---   phase two: the event-9 hook runs when post-damage health drops to
---     <=50% while in phase one (C++ DamageTaken fires post-damage; the
---     engine hook is pre-damage, so the incoming damage is subtracted
---     for a C++-exact !HealthAbovePct(50)): RemoveAura(23966), the four
+--   phase two: the event-9 hook runs when health is at <=50% while in
+--     phase one (C++ DamageTaken fires pre-damage and HealthAbovePct(50)
+--     evaluates current health with no damage projection; the arm fires
+--     when !(health > floor(maxHealth*50/100))): RemoveAura(23966), the four
 --     phase-1 timers are canceled (C++ SetPhase(PHASE_TWO) drops the
 --     phase-1 EventMap entries C++-exact), and the phase-2 timers arm:
 --     shadow word pain 23952 at 6s then {12s,18s} on a random alive
@@ -280,8 +280,11 @@ local function jeklikEnterCombat(event, creature, target)
 end
 
 -- C++ DamageTaken: phase one and !HealthAbovePct(50) -> drop the bat
--- form and arm the phase-two machine. The engine hook fires pre-damage,
--- so the incoming hit is subtracted for a C++-exact post-damage check.
+-- form and arm the phase-two machine. DamageTaken fires pre-damage
+-- (Unit.cpp DealDamage hooks before the health reduction) and C++
+-- HealthAbovePct(50) is health > CountPctFromMaxHealth(50) on current
+-- health -- no damage projection, so the arm fires when the health is
+-- already at or under the floored threshold (Unit.h:874).
 local function jeklikDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = jeklikState(guid)
@@ -292,7 +295,7 @@ local function jeklikDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (health - damage) * 100 > 50 * maxHealth then
+    if health > math.floor(maxHealth * 50 / 100) then
         return
     end
     st.phase = PHASE_TWO

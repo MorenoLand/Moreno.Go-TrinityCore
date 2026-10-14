@@ -432,7 +432,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (health - damage) * 100 < 10 * maxHealth then
+    if health - damage < math.floor(maxHealth * 10 / 100) then
         if not st.enraged then
             st.enraged = true
             creature:Talk(SAY_ENRAGE)
