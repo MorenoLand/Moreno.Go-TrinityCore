@@ -21,7 +21,13 @@ func main() {
 	mapID := flag.Uint("map-id", 0, "map ID written to dir_bin records")
 	tileX := flag.Uint("tile-x", 0, "ADT tile X coordinate written to dir_bin records")
 	tileY := flag.Uint("tile-y", 0, "ADT tile Y coordinate written to dir_bin records")
+	extractMask := flag.Int("extract", 6, "extract select bitmask, mirrors the C++ -e flag: MAP(1)/DBC(2)/Camera(4)")
 	flag.Parse()
+	if *extractMask <= 0 || *extractMask >= 8 {
+		fmt.Fprintln(os.Stderr, "invalid -extract mask: use MAP(1)/DBC(2)/Camera(4) bits (1-7)")
+		flag.Usage()
+		os.Exit(1)
+	}
 	if *dirBin != "" && *adtFile == "" {
 		if *wdtFile == "" {
 			fmt.Fprintln(os.Stderr, "-dir-bin requires -adt-file or -wdt-file")
@@ -100,18 +106,38 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-input is required")
 		os.Exit(2)
 	}
-	count, err := wowdata.ExtractDBC(*input, *output)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "DBC extraction failed: %v\n", err)
+	// C++ owner: src/tools/map_extractor/System.cpp main() (System.cpp:1118-1195)
+	// + HandleArgs -e (System.cpp:155-163): the extract-select bitmask
+	// MAP(1)/DBC(2)/Camera(4), validated to 1-7 (Usage -> exit 1 otherwise).
+	// DELTAS: the default is 6 (DBC|Camera), not the C++ 7 — the MAP bit has
+	// no .map writer behind it (parked multi-tick feature), so requesting it
+	// fails loudly instead of silently skipping; when the writer lands the
+	// default moves to 7. The C++ -f float-to-int flag rides the .map writer
+	// too and stays parked with it. C++ also runs the ReadBuild fatal check
+	// (exit 1 on a missing/invalid component.wow-<lang>.txt) even for
+	// camera-only extraction; Go's camera phase never consumes the build
+	// number (only the parked .map writer would), so the strict check lives
+	// in the DBC phase only (wowdata.ExtractDBC).
+	if *extractMask&1 != 0 {
+		fmt.Fprintln(os.Stderr, "MAP extraction (-extract bit 1) is not implemented: the .map writer is a parked multi-tick feature")
 		os.Exit(1)
 	}
-	fmt.Printf("Extracted and validated %d DBC files into %s\n", count, *output)
-	camCount, err := wowdata.ExtractCameras(*input, *output)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Camera extraction failed: %v\n", err)
-		os.Exit(1)
+	if *extractMask&2 != 0 {
+		count, err := wowdata.ExtractDBC(*input, *output)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "DBC extraction failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Extracted and validated %d DBC files into %s\n", count, *output)
 	}
-	fmt.Printf("Extracted %d camera files into %s\n", camCount, filepath.Join(*output, "Cameras"))
+	if *extractMask&4 != 0 {
+		camCount, err := wowdata.ExtractCameras(*input, *output)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Camera extraction failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Extracted %d camera files into %s\n", camCount, filepath.Join(*output, "Cameras"))
+	}
 }
 
 func readClientAsset(input, name string) ([]byte, error) {

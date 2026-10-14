@@ -27,9 +27,9 @@ import (
 //     C++ ExtractFile writes zero bytes when MPQFile isEof but returns true.
 //   - A missing CinematicCamera.dbc aborts the phase with the C++ message;
 //     it is not a fatal error.
-//   - DELTA: the C++ -e extract-select flag (MAP=1/DBC=2/Camera=4) has no Go
-//     counterpart; the Go tool always extracts DBCs and now cameras, like
-//     its existing always-extract-DBC behavior.
+//   - The C++ -e extract-select flag (MAP=1/DBC=2/Camera=4) is bridged by
+//     the mapextractor -extract mask (main.go); the camera phase runs when
+//     bit 4 is set (default mask 6 = DBC|Camera).
 func ExtractCameras(input, output string) (int, error) {
 	locales := mpq.DetectLocales(input)
 	if len(locales) == 0 {
