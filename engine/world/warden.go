@@ -809,9 +809,31 @@ func (w *wardenSession) processLuaCheckResponse(msg string) bool {
 	defer w.mu.Unlock()
 
 	idStr := strings.TrimPrefix(msg, wardenToken)
-	checkID, err := strconv.ParseUint(idStr, 10, 16)
-	if err == nil && w.session.server != nil && w.session.server.wardenCheckMgr != nil {
-		if chk, ok := w.session.server.wardenCheckMgr.getCheckData(uint16(checkID)); ok {
+	// C++ std::from_chars (Warden.cpp:265) parses only the leading decimal
+	// digits, yields 0 when none are present, and clamps to UINT16_MAX on
+	// overflow — so "_TW\t42;" resolves to check 42 (check-specific action)
+	// while strconv.ParseUint would reject the whole string (configured
+	// action). Mirror the C++ parse semantics exactly. Note: a DB row with
+	// id 0 stays shadowed by the sparse-slot gate in getCheckData (C++ would
+	// return _checks[0]); ids effectively start at 1, so the gate is inert
+	// here.
+	digits := idStr
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			digits = digits[:i]
+			break
+		}
+	}
+	checkID := uint16(0)
+	if digits != "" {
+		if n, err := strconv.ParseUint(digits, 10, 16); err == nil {
+			checkID = uint16(n)
+		} else {
+			checkID = 0xFFFF // from_chars saturates on overflow
+		}
+	}
+	if w.session.server != nil && w.session.server.wardenCheckMgr != nil {
+		if chk, ok := w.session.server.wardenCheckMgr.getCheckData(checkID); ok {
 			if chk.Type == LuaEvalCheck {
 				w.applyPenalty(&chk, fmt.Sprintf("failed Lua sandbox check %d", checkID))
 				return true
