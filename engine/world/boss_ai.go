@@ -10004,6 +10004,48 @@ func init() {
 	// UNIT_STATE_CASTING gate are bridge-blocked — documented in the lua
 	// header.
 	RegisterLuaBoss("boss_archavon", 31125)
+	// AddSC_boss_emalon: Emalon the Storm Watcher (Vault of Archavon)
+	// — ported arms (lua_scripts/northrend/boss_emalon.lua):
+	// timer-driven cast ports (CreateLuaEvent, GUID-keyed timers, wipe
+	// on events 2/4/23): EVENT_CHAIN_LIGHTNING 64213 (random player,
+	// 5s/25s), EVENT_LIGHTNING_NOVA 64216 (DoCastAOE = self-cast,
+	// 40s/40s), EVENT_BERSERK 26662 + Talk(EMOTE_BERSERK 2) (6min
+	// one-shot); Tempest Minion 33998 EVENT_SHOCK 64363 (DoCastVictim,
+	// 20s/20s). The EVENT_OVERCHARGE summons-list leg (+ Talk
+	// EMOTE_OVERCHARGE), the Reset-time SummonCreature x4, the
+	// overcharge self-stack loop (no GetAura stack-count bridge), the
+	// instance->GetGuidData(DATA_EMALON) legs, SetFullHealth,
+	// DespawnOrUnsummon, DoZoneInCombat and the UNIT_STATE_CASTING
+	// gates are bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_emalon", 33993)
+	// AddSC_boss_koralon: Koralon the Flame Watcher (Vault of Archavon)
+	// — ported arms (lua_scripts/northrend/boss_koralon.lua):
+	// immediate DoCast(me, SPELL_BURNING_FURY 66721) on event 1 before
+	// scheduling, then EVENT_BURNING_FURY 66721 (20s/20s),
+	// EVENT_BURNING_BREATH 66665 (15s/45s), EVENT_METEOR_FISTS 66725
+	// (75s/45s), EVENT_FLAME_CINDER 66684 (30s/30s, SPELL_FLAME_CINDER_B
+	// never cast) — all 2-arg non-triggered, timer-driven
+	// (CreateLuaEvent, GUID-keyed timers, wipe on events 2/4/23).
+	// Zero Talk lines in the C++. The three SpellScript/AuraScript
+	// loaders (spell_koralon_meteor_fists,
+	// spell_koralon_meteor_fists_damage, spell_flame_warder_meteor_fists)
+	// and the UNIT_STATE_CASTING gates are bridge-blocked —
+	// documented in the lua header.
+	RegisterLuaBoss("boss_koralon", 35013)
+	// AddSC_boss_toravon: Toravon the Ice Watcher (Vault of Archavon)
+	// — ported arms (lua_scripts/northrend/boss_toravon.lua):
+	// immediate DoCastSelf(SPELL_FROZEN_MALLET 71993) on event 1 before
+	// scheduling, then EVENT_FROZEN_ORB 72091 (12s/Repeat 32s — the
+	// SPELLVALUE_MAX_TARGETS RAID_MODE(1, 3) leg is unbridged),
+	// EVENT_WHITEOUT 72034 (25s/Repeat 38s), EVENT_FREEZING_GROUND
+	// 72090 (random player — the SelectTarget position-1 tank-exclusion
+	// is unbridged, 7s/Repeat 38s). Timer-driven (CreateLuaEvent,
+	// GUID-keyed timers, wipe on events 2/4/23). Zero Talk lines in the
+	// C++. The npc_frozen_orb_stalker Reset leg, the npc_frozen_orb
+	// IsSummonedBy instance leg, the spell_toravon_random_aggro
+	// SpellScript and the UNIT_STATE_CASTING gates are bridge-blocked
+	// — documented in the lua header.
+	RegisterLuaBoss("boss_toravon", 38433)
 	// AddSC_boss_cyanigosa: Cyanigosa (Violet Hold) — ported arms
 	// (lua_scripts/northrend/boss_cyanigosa.lua): JustEngagedWith
 	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya
