@@ -206,11 +206,9 @@ func attachGuildMutations(srv *Server, s *session, obj *scripting.Object, guildI
 		if !ok || playerGUID == 0 || !live(ctx) {
 			return nil, nil
 		}
-		var playerArg *scripting.Object
-		if ts := srv.findSessionByGUID(playerGUID); ts != nil {
-			playerArg = ts.luaPlayer()
-		}
-		s.fireGuildEvent(ctx, scripting.GuildEventOnRemoveMember, s.luaGuildObject(ctx, guildID), playerArg, isDisbanding)
+		// ScriptMgr::OnGuildRemoveMember fires inside guildDeleteMember
+		// (Guild.cpp:2313), after the leader-no-successor disband check, so
+		// a disbanded leader is not double-fired.
 		s.guildDeleteMember(ctx, srv.CharactersStore.DB, guildID, playerGUID, isDisbanding)
 		return nil, nil
 	}

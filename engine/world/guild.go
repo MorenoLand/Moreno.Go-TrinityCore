@@ -1462,13 +1462,12 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 }
 
 // disbandGuildWithLuaEvents mirrors Guild::Disband (Guild.cpp:1141):
-// ScriptMgr::OnGuildDisband fires before guild data is removed, then Disband
-// DeleteMember()s every member with isDisbanding=true, firing
-// OnGuildRemoveMember per member (Guild.cpp:1148-1154, 2318) — offline
+// ScriptMgr::OnGuildDisband fires, then GE_DISBANDED broadcasts, then
+// Disband DeleteMember()s every member with isDisbanding=true, firing
+// OnGuildRemoveMember per member (Guild.cpp:1144-1154, 2318) — offline
 // members reach the hook as nil, like Eluna's Push of a null Player*. The
 // fire sites sit before the row deletions, like C++ firing before the data
-// removal. Then disbandGuildByID delivers GE_DISBANDED, deletes the rows,
-// and clears every online member's session guild state.
+// removal.
 func (s *session) disbandGuildWithLuaEvents(ctx context.Context, guildID uint32) {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
@@ -1476,6 +1475,7 @@ func (s *session) disbandGuildWithLuaEvents(ctx context.Context, guildID uint32)
 	}
 	disbandGuild := s.luaGuildObject(ctx, guildID)
 	s.fireGuildEvent(ctx, scripting.GuildEventOnDisband, disbandGuild)
+	s.broadcastGuildEventTo(guildID, guildEventPayload(guildEventDisbanded, 0))
 	var disbandMembers []int64
 	if rows, err := cdb.QueryContext(ctx, "SELECT guid FROM guild_member WHERE guildid = ?", guildID); err == nil && rows != nil {
 		for rows.Next() {
@@ -1493,7 +1493,7 @@ func (s *session) disbandGuildWithLuaEvents(ctx context.Context, guildID uint32)
 		}
 		s.fireGuildEvent(ctx, scripting.GuildEventOnRemoveMember, disbandGuild, memberPlayer, true)
 	}
-	s.disbandGuildByID(ctx, guildID)
+	s.disbandGuildRows(ctx, guildID)
 	s.debug("guild disbanded", "guild_id", guildID)
 }
 

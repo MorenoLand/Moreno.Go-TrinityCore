@@ -1846,7 +1846,7 @@ const targetIconCount = 8
 
 // handleGroupRaidConvert processes CMSG_GROUP_RAID_CONVERT (0x28E).
 // TrinityCore: WorldSession::HandleGroupRaidConvertOpcode.
-func (s *session) handleGroupRaidConvert(_ context.Context, _ []byte) bool {
+func (s *session) handleGroupRaidConvert(ctx context.Context, _ []byte) bool {
 	if !s.playerLoaded || s.groupID == 0 {
 		return false
 	}
@@ -1873,11 +1873,10 @@ func (s *session) handleGroupRaidConvert(_ context.Context, _ []byte) bool {
 	// the conversion, and the conversion cannot fail (C++ Group::ConvertToRaid
 	// returns void, Group.cpp:311): an already-raid group still gets
 	// ERR_PARTY_RESULT_OK and re-runs the conversion instead of being
-	// silently refused. The DB group-type write and the per-member
-	// UpdateVisibleGameobjectsOrSpellClicks sweep stay unbridged (standing
-	// no-bridges documented on convertGroupToRaid).
+	// silently refused. The per-member UpdateVisibleGameobjectsOrSpellClicks
+	// sweep stays unbridged (parked with the quest-GO refresh item).
 	_ = s.sendPartyResult(partyOpInvite, "", errPartyResultOK)
-	_ = srv.convertGroupToRaid(g)
+	srv.convertGroupToRaid(ctx, g)
 	return true
 }
 

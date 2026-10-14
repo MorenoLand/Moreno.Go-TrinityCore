@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -168,9 +169,9 @@ func attachGroupMutations(srv *Server, obj *scripting.Object, groupID uint64) {
 	}
 
 	// ConvertToRaid: Group::ConvertToRaid (Group.cpp:311).
-	obj.Methods["ConvertToRaid"] = func(_ context.Context, _ []any) ([]any, error) {
+	obj.Methods["ConvertToRaid"] = func(ctx context.Context, _ []any) ([]any, error) {
 		if g := live(); g != nil {
-			srv.convertGroupToRaid(g)
+			srv.convertGroupToRaid(ctx, g)
 		}
 		return nil, nil
 	}
@@ -365,21 +366,27 @@ func (s *Server) setGroupTargetIcon(groupID uint64, icon uint8, setter, target u
 }
 
 // convertGroupToRaid flips a 5-man group to raid, mirroring
-// Group::ConvertToRaid (Group.cpp:311): the raid flag and group type are set
-// and the roster is rebroadcast. The C++ character-DB group-type write and
-// the per-member UpdateVisibleGameobjectsOrSpellClicks sweep have no Go
-// bridge (the latter is parked with the quest-GO refresh item).
-func (s *Server) convertGroupToRaid(g *groupState) bool {
-	s.groupsMu.Lock()
-	if g == nil || g.IsRaid || len(g.Members) < 2 {
-		s.groupsMu.Unlock()
-		return false
+// Group::ConvertToRaid (Group.cpp:311): unconditional void — the raid flag
+// and group type are set, the type is persisted (CHAR_UPD_GROUP_TYPE,
+// Group.cpp:318-324; Go has no BG/BF groups so the persist is unconditional),
+// and the roster is rebroadcast. The per-member
+// UpdateVisibleGameobjectsOrSpellClicks sweep stays unbridged (parked with
+// the quest-GO refresh item). The <2-member gate lives in the packet handler
+// (GroupHandler.cpp:583-584), not here.
+func (s *Server) convertGroupToRaid(ctx context.Context, g *groupState) {
+	if g == nil {
+		return
 	}
+	s.groupsMu.Lock()
 	g.IsRaid = true
 	g.GroupType |= groupTypeRaid
+	dbID := g.DBID
+	groupType := g.GroupType
 	s.groupsMu.Unlock()
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil && dbID != 0 {
+		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_UPD_GROUP_TYPE"), groupType, dbID)
+	}
 	s.broadcastGroupList(g)
-	return true
 }
 
 // luaRemoveGroupMember mirrors Group::RemoveMember (Group.cpp:564) for the
@@ -399,6 +406,10 @@ func (s *Server) luaRemoveGroupMember(ctx context.Context, g *groupState, guid u
 	if !member {
 		return false
 	}
+	// Group::RemoveMember (Group.cpp:744-749): the offline arm (player ==
+	// nullptr) disbands and returns false; the online arm returns true even
+	// when the removal disbands the group (:736-742).
+	online := s.findSessionByGUID(guid) != nil
 	s.removeGroupMemberByGUID(ctx, g, guid, method)
-	return true
+	return online
 }

@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -191,7 +192,12 @@ func (s *session) guildDeleteMember(ctx context.Context, cdb *sql.DB, guildID ui
 			JOIN characters c ON c.guid = gm.guid
 			WHERE gm.guildid = ? AND gm.guid != ? ORDER BY gm.rank ASC, gm.guid ASC LIMIT 1`, guildID, guid).Scan(&newGUID, &newRank, &newName)
 		if err != nil || newGUID == 0 {
-			s.disbandGuildByID(ctx, guildID) // Guild.cpp:2296-2300
+			// Guild::DeleteMember (Guild.cpp:2296-2300): no successor ->
+			// Disband(), which fires OnGuildDisband + GE_DISBANDED + the
+			// per-member OnGuildRemoveMember(true) sweep; the leader gets
+			// no separate OnGuildRemoveMember(false) (Disband returns
+			// before that line).
+			s.disbandGuildWithLuaEvents(ctx, guildID)
 			return
 		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE guild SET leaderguid = ? WHERE guildid = ?", newGUID, guildID)
@@ -203,6 +209,15 @@ func (s *session) guildDeleteMember(ctx context.Context, cdb *sql.DB, guildID ui
 		s.broadcastGuildEventTo(guildID, guildEventPayload(guildEventLeaderChanged, 0, oldName, newName))
 		s.broadcastGuildEventTo(guildID, guildEventPayload(guildEventLeft, guid, oldName))
 	}
+	// Guild::DeleteMember (Guild.cpp:2313): the script hook fires before
+	// the member is erased from the guild and the database. The leader
+	// disband path above returns before this line, so a disbanded leader
+	// gets only the disband sweep's OnGuildRemoveMember(true).
+	var playerArg *scripting.Object
+	if ts := s.server.findSessionByGUID(guid); ts != nil {
+		playerArg = ts.luaPlayer()
+	}
+	s.fireGuildEvent(ctx, scripting.GuildEventOnRemoveMember, s.luaGuildObject(ctx, guildID), playerArg, isDisbanding)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ? AND guildid = ?", guid, guildID)
 	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil && ts.player.GuildID == guildID {
 		ts.player.GuildID = 0
@@ -211,16 +226,22 @@ func (s *session) guildDeleteMember(ctx context.Context, cdb *sql.DB, guildID ui
 	}
 }
 
-// disbandGuildByID mirrors Guild::Disband (Guild.cpp:1141) for GM use:
-// GE_DISBANDED reaches every online member before the rows are deleted, then
-// every online member's session guild state is cleared. Shared with the
-// CMSG_GUILD_DISBAND handler in guild.go.
+// disbandGuildByID delivers GE_DISBANDED, deletes the rows, and clears
+// every online member's session guild state. It carries no script hooks;
+// paths that need the C++ Disband hooks use disbandGuildWithLuaEvents.
 func (s *session) disbandGuildByID(ctx context.Context, guildID uint32) {
+	s.broadcastGuildEventTo(guildID, guildEventPayload(guildEventDisbanded, 0))
+	s.disbandGuildRows(ctx, guildID)
+}
+
+// disbandGuildRows deletes the guild rows and clears every online member's
+// session guild state. Split from disbandGuildByID so the Lua disband path
+// can broadcast GE_DISBANDED before the per-member sweep (Guild.cpp:1144).
+func (s *session) disbandGuildRows(ctx context.Context, guildID uint32) {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
 		return
 	}
-	s.broadcastGuildEventTo(guildID, guildEventPayload(guildEventDisbanded, 0))
 	execGuildDisband(ctx, cdb, int64(guildID))
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
@@ -362,7 +383,8 @@ func (s *session) handleGuildDeleteCommand(ctx context.Context, args []string) {
 	if guildID == 0 {
 		return // silent, like the C++ (cs_guild.cpp:151)
 	}
-	s.disbandGuildByID(ctx, guildID)
+	// cs_guild.cpp:143 calls Guild::Disband(), which fires the script hooks.
+	s.disbandGuildWithLuaEvents(ctx, guildID)
 }
 
 // handleGuildInviteCommand mirrors HandleGuildInviteCommand
