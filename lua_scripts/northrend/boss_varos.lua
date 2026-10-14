@@ -207,4 +207,5 @@ end
 
 RegisterCreatureEvent(ENTRY_VAROS, 1, varosEnterCombat)
 RegisterCreatureEvent(ENTRY_VAROS, 2, varosCombatEnd)
+RegisterCreatureEvent(ENTRY_VAROS, 4, varosDied)
 RegisterCreatureEvent(ENTRY_VAROS, 23, varosCombatEnd)

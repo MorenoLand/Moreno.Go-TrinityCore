@@ -21,7 +21,10 @@
 -- Ported arms (combat only):
 -- - Bomb 8858: DoCastVictim non-triggered via creature:GetVictim()
 --   (boss_onyxia precedent), init 10s, reschedule 10s unconditional
---   (C++ Repeat outside any gate — faithful).
+--   (C++ Repeat outside any gate — faithful). Death cancels the Lua-side
+--   timer (the C++ AI object dies with its EventMap — a fresh 10s on the
+--   next engage); evade preserves it (C++ Reset leaves Bomb_Timer
+--   untouched).
 -- Unmodeled (documented-only, no bridges):
 -- - AttackStart: AttackStartCaster(victim, 10) (keep back & toss
 --   bombs/shoot) — no AttackStart bridge.
@@ -105,6 +108,15 @@ end
 local function onReset(event, creature)
 end
 
+-- The C++ AI object dies with its EventMap (JustDied commented out, but
+-- the creature object is destroyed), so a death must cancel the Lua-side
+-- bomb timer: otherwise it re-arms forever post-death and the stale
+-- per["bomb"] blocks the fresh 10s ctor re-arm on the next engage.
+local function onDied(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)

@@ -37,7 +37,8 @@
 -- precedent); EVENT_BERSERK — DoCastSelf(Berserk 26662), 600s,
 -- phase-independent (fires once, 10min after combat start —
 -- phase_hunter self-cast precedent). The berserk scheduler is
--- cancelled on 2/4/23 (gargolmar precedent).
+-- cancelled on 2/4 (gargolmar precedent; 23 is unregistered but the
+-- berserk is a one-shot 600s timer — 2/4 cover leave-combat and death).
 -- npc_swarm_scarab (34605 NPC_SCARAB — Summons enum kalecgos
 -- pass): JustDied DoCast(killer, Traitor King 68186, killer-gated)
 -- (event 4; maiden_of_virtue target-cast precedent). No

@@ -119,9 +119,14 @@ end
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "emote", math.random(EMOTE_MIN_MS, EMOTE_MAX_MS), function()
-        onEmote(creature, guid)
-    end)
+    -- C++ UpdateAI never runs while dead (zone_azuremyst_isle.cpp:238-261);
+    -- a death-reset (23 fires before 4 on the kill path) must not re-arm
+    -- the emote timer, or the corpse Talks every 120-150s until respawn.
+    if not creature:IsDead() then
+        schedule(guid, "emote", math.random(EMOTE_MIN_MS, EMOTE_MAX_MS), function()
+            onEmote(creature, guid)
+        end)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

@@ -249,6 +249,10 @@ end
 -- true) + DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL, true) one-shots,
 -- EVENT_SOUL_SHRIEK {12s,15s} (:1367-1369/:1420-1421); the
 -- REACT_PASSIVE -> EVENT_SET_AGRESSIVE 2s leg has no bridge.
+-- C++ DoAction(ACTION_DISABLE_RAGING) (:1377-1386, _events.Reset() on
+-- Frostmourne-phase entry, issued by the boss AI :1066) has no bridge —
+-- the cross-AI DoAction rides the unbridged phase machine, so the Soul
+-- Shriek timer keeps firing where C++ goes silent (gothik counterpoint).
 local function onSoulShriek(creature, guid)
     creature:CastSpell(creature, SPELL_SOUL_SHRIEK)
     schedule(guid, "soul_shriek", {12000, 15000}, function() onSoulShriek(creature, guid) end)

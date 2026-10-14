@@ -55,8 +55,9 @@
 -- phase gate is modeled); EVENT_STAGGERING_STOMP —
 -- DoCastVictim(Staggering Stomp 66330), 15s init, 22s repeat
 -- (moroes precedent). Gormok has no Talk arms on
--- JustEngagedWith/KilledUnit/JustDied. All timers cancelled on 2/4/23
--- (gargolmar precedent).
+-- JustEngagedWith/KilledUnit/JustDied. All timers cancelled on 2/23
+-- (gargolmar precedent; 23 fires before 4 on the kill path, so the
+-- unregistered event 4 is benign).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_gormok: Reset: events.SetPhase(PHASE_EVENT) (no phase bridge —
 -- anubarak_trial precedent) + HandleInitialMovement
