@@ -16,9 +16,9 @@
 -- 3 OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
 -- Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
--- The C++ UpdateAI gating on !me->IsWithinMeleeRange for the
--- Earth Shock reschedule has no range bridge; ported as the
--- fankriss victim-cast convention.
+-- The C++ UpdateAI IsWithinMeleeRange gate for the Earth Shock
+-- reschedule is ported via creature:GetDistance (ported; the old
+-- "no range bridge" claim was stale).
 -- Ported arms (the self-contained in-combat legs):
 -- - Arcane Explosion 26192 (DoCastAOE, triggered): self-cast,
 --   init urand(6s,12s) -> urand(8s,18s). The SpellScript target
@@ -154,11 +154,17 @@ local function onBlink(creature, guid)
 end
 
 -- C++ EVENT_EARTH_SHOCK: DoCastVictim(SPELL_EARTH_SHOCK), 2s
--- repeat (UpdateAI reschedules 2s while in melee range; no
--- range bridge, so fixed 2s — fankriss convention).
+-- repeat. C++ UpdateAI (boss_skeram.cpp:193-196) re-arms
+-- RescheduleEvent(EVENT_EARTH_SHOCK, 2s) every tick while
+-- IsWithinMeleeRange(GetVictim()), so the cast only fires ~2s
+-- after the victim leaves melee range. Emulated with
+-- creature:GetDistance(victim) (the old "no range bridge" header
+-- note was stale — used by moroes/midnight/netherspite/etc.):
+-- in-melee ticks skip the cast and re-arm the 2s per-key timer,
+-- exactly what the C++ re-arm does.
 local function onEarthShock(creature, guid)
     local victim = creature:GetVictim()
-    if victim then
+    if victim and creature:GetDistance(victim) > 5.0 then
         creature:CastSpell(victim, SPELL_EARTH_SHOCK)
     end
     schedule(guid, "earthshock", 2000, function()
