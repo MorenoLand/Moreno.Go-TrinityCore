@@ -23,9 +23,10 @@
 -- AddSC_boss_ionar() only; whole-server-tree grep for
 -- "npc_spark_of_ionar" hits boss_ionar.cpp only; zero sql/ hits
 -- for either. No ionar lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
--- No timers in the ported arms; melee is engine-driven in Go
--- (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset. Driven by CreateLuaEvent
+-- timers; melee is engine-driven in Go (creature combat tick),
+-- like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
 -- instance->SetBossState(DATA_IONAR, IN_PROGRESS) leg has no
@@ -62,10 +63,17 @@
 -- SetVisible(true), flag removal, SPELL_SPARK_DESPAWN 52776
 -- self-cast, MoveChase) — no timer / visibility / flag / cast /
 -- motion bridges.
--- UpdateAI timer events: EVENT-less uiStaticOverloadTimer
--- (random-target DoCast(SPELL_STATIC_OVERLOAD 52658), 5-6s) and
--- uiBallLightningTimer (DoCastVictim(SPELL_BALL_LIGHTNING 52780),
--- 10-11s) — no timer-event / cast / target-selection bridges.
+-- UpdateAI timer events (boss_ionar.cpp:260-275) — PORTED:
+-- uiBallLightningTimer DoCastVictim(SPELL_BALL_LIGHTNING 52780)
+-- non-triggered, urand(10s, 11s) init -> urand(10s, 11s) loop
+-- — PORTED as CreateLuaEvent {10000, 11000} + CastSpell(nil,
+-- 52780), cancel on 2/4/23 (the stale "no timer-event / cast
+-- bridges" claim is retracted for this arm).
+-- STAY-OUT: uiStaticOverloadTimer random-target
+-- DoCast(SPELL_STATIC_OVERLOAD 52658), 5-6s init/re-arm —
+-- gates on SelectTarget(Random, 0) (boss_ionar.cpp:261-263) with
+-- no random-target bridge; substituting a victim-cast would
+-- deviate from the C++.
 -- UpdateAI disperse health check — !bHasDispersed &&
 -- HealthBelowPct(uiDisperseHealth) (45 + urand(0,10)):
 -- Talk(SAY_SPLIT 1) + InterruptNonMeleeSpells +
@@ -90,11 +98,55 @@ local SAY_AGGRO = 0
 local SAY_SLAY = 2
 local SAY_DEATH = 3
 
+local SPELL_BALL_LIGHTNING = 52780
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ uiBallLightningTimer (:270-274): DoCastVictim(52780)
+-- non-triggered, urand(10s, 11s) init -> urand(10s, 11s) loop.
+local function ballLightningTick(creature, guid)
+    creature:CastSpell(nil, SPELL_BALL_LIGHTNING)
+    schedule(guid, "ballLightning", {10000, 11000}, function()
+        ballLightningTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: Talk(AGGRO) +
 -- instance->SetBossState(DATA_IONAR, IN_PROGRESS) — only the Talk
 -- arm is bridgeable.
 local function ionarEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "ballLightning", {10000, 11000}, function()
+        ballLightningTick(creature, guid)
+    end)
+end
+
+local function ionarCombatEnd(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -110,8 +162,11 @@ end
 -- bridgeable.
 local function ionarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_IONAR, 1, ionarEnterCombat)
+RegisterCreatureEvent(ENTRY_IONAR, 2, ionarCombatEnd)
 RegisterCreatureEvent(ENTRY_IONAR, 3, ionarTargetDied)
 RegisterCreatureEvent(ENTRY_IONAR, 4, ionarDied)
+RegisterCreatureEvent(ENTRY_IONAR, 23, ionarCombatEnd)
