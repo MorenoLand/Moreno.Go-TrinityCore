@@ -139,7 +139,7 @@ local function azshirDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 50 then
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 50 / 100) then
         siphonLatched[guid] = true
         local victim = creature:GetVictim()
         if victim then

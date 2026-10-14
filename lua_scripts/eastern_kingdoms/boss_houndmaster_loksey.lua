@@ -60,7 +60,7 @@ end
 -- 6742), Repeat(60s); else Repeat(1s).
 local function onBloodlust(creature, guid)
     local maxHealth = creature:GetMaxHealth()
-    if maxHealth > 0 and creature:GetHealth() * 100 / maxHealth < 60 then
+    if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * 60 / 100) then
         creature:CastSpell(creature, SPELL_BLOODLUST)
         schedule(guid, "bloodlust", 60000, function()
             onBloodlust(creature, guid)

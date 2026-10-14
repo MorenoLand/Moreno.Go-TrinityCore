@@ -235,11 +235,11 @@ local function falricDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    local postPct = (creature:GetHealth() - damage) * 100 / maxHealth
+    local postHealth = creature:GetHealth() - damage
     local count = st.hopelessness
-    if not ((count < 1 and postPct <= 66)
-            or (count < 2 and postPct <= 33)
-            or (count < 3 and postPct <= 10)) then
+    if not ((count < 1 and postHealth < math.floor(maxHealth * 66 / 100))
+            or (count < 2 and postHealth < math.floor(maxHealth * 33 / 100))
+            or (count < 3 and postHealth < math.floor(maxHealth * 10 / 100))) then
         return
     end
     if count >= 1 then

@@ -64,7 +64,7 @@ end
 
 local function healthBelowPct(creature, pct)
     local maxHealth = creature:GetMaxHealth()
-    return maxHealth > 0 and creature:GetHealth() * 100 / maxHealth < pct
+    return maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * pct / 100)
 end
 
 -- C++ HolyLight_Timer: cast + re-arm 20s only when HealthBelowPct(20);

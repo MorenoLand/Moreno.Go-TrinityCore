@@ -63,7 +63,7 @@
 -- Skarvald DamageTaken (lines 218-227): Enrage latch + DoCast(me,
 -- SPELL_ENRAGE 48193) (2-arg = non-triggered -> CastSpell(creature,
 -- 48193)) when !Enraged && !IsInGhostForm (structural) &&
--- HealthBelowPctDamaged(15, damage) — (health - damage)*100/maxHealth
+-- HealthBelowPctDamaged(15, damage) — floored integer threshold
 -- < 15 via event 9 (the algalon threshold+latch precedent); latch
 -- cleared on event 23 (C++ Reset() clears Enraged, line 188); damage
 -- is NOT rewritten.
@@ -228,7 +228,7 @@ local function skarvaldDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if not enraged[guid] then
         local maxHealth = creature:GetMaxHealth()
-        if maxHealth > 0 and (creature:GetHealth() - damage) * 100 / maxHealth < 15 then
+        if maxHealth > 0 and (creature:GetHealth() - damage) < math.floor(maxHealth * 15 / 100) then
             enraged[guid] = true
             creature:CastSpell(creature, SPELL_ENRAGE)
         end

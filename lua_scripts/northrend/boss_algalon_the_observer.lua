@@ -141,7 +141,7 @@ local function algalonDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 20 then
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 20 / 100) then
         state.phaseTwo = true
         creature:Talk(SAY_ALGALON_PHASE_TWO)
     end

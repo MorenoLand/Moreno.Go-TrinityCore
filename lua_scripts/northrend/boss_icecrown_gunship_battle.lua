@@ -150,8 +150,8 @@ local function captainDamageTaken(event, creature, attacker, damage)
     -- via the HasAura bridge.
     local maxHealth = creature:GetMaxHealth()
     if maxHealth ~= 0 then
-        local postPct = (creature:GetHealth() - damage) * 100 / maxHealth
-        if postPct <= 65 then
+        local postHealth = creature:GetHealth() - damage
+        if postHealth < math.floor(maxHealth * 65 / 100) then
             local entry = creature:GetEntry()
             local has = creature:HasAura(SPELL_TASTE_OF_BLOOD)
             if (entry == ENTRY_SAURFANG and not has)
@@ -229,7 +229,7 @@ local function boardingAddDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth <= 25 then
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 25 / 100) then
         desperateUsed[guid] = true
         creature:CastSpell(creature, SPELL_DESPERATE_RESOLVE, true)
     end

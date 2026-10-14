@@ -129,7 +129,7 @@ end
 
 local function healthBelowPct(creature, pct)
     local maxHealth = creature:GetMaxHealth()
-    return maxHealth > 0 and creature:GetHealth() * 100 / maxHealth < pct
+    return maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * pct / 100)
 end
 
 -- C++ EVENT_CRUSADER_STRIKE: DoCastVictim(14518); Repeat(10s).

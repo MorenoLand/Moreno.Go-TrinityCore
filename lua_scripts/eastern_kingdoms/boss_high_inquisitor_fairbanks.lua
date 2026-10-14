@@ -210,7 +210,7 @@ local function fairbanksDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth >= 25 then
+    if (creature:GetHealth() - damage) >= math.floor(maxHealth * 25 / 100) then
         return
     end
     if not shieldDone[guid] then

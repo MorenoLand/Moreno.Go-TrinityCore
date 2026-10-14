@@ -78,7 +78,7 @@ end
 
 local function healthAbovePct(creature, pct)
     local maxHealth = creature:GetMaxHealth()
-    return maxHealth > 0 and creature:GetHealth() * 100 / maxHealth > pct
+    return maxHealth > 0 and creature:GetHealth() >= math.floor(maxHealth * pct / 100)
 end
 
 -- C++ SelectTarget(Random, 0, 100, true): random alive player within

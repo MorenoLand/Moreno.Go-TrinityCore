@@ -254,7 +254,7 @@ local function onTransformCheck(creature, guid)
         return
     end
     local maxHealth = creature:GetMaxHealth()
-    if maxHealth > 0 and creature:GetHealth() * 100 / maxHealth < 40 then
+    if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * 40 / 100) then
         doTransform(creature, guid)
         return
     end

@@ -102,7 +102,8 @@ local function vishasTargetDied(event, creature, victim)
 end
 
 -- C++ DamageTaken arm: the _yellCount staircase on
--- HealthBelowPctDamaged semantics (post-damage, strictly below).
+-- HealthBelowPctDamaged semantics (post-damage, strictly below,
+-- floored integer threshold).
 local function vishasDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local count = yellCounts[guid] or 0
@@ -110,12 +111,12 @@ local function vishasDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    local healthPct = (creature:GetHealth() - damage) * 100 / maxHealth
-    if healthPct < 60 and count < 1 then
+    local postHealth = creature:GetHealth() - damage
+    if postHealth < math.floor(maxHealth * 60 / 100) and count < 1 then
         creature:Talk(SAY_HEALTH1)
         count = count + 1
     end
-    if healthPct < 30 and count < 2 then
+    if postHealth < math.floor(maxHealth * 30 / 100) and count < 2 then
         creature:Talk(SAY_HEALTH2)
         count = count + 1
     end

@@ -197,7 +197,7 @@ local function keristraszaDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 25 then
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 25 / 100) then
         keristraszaEnraged[guid] = true
         creature:Talk(SAY_ENRAGE)
         creature:Talk(SAY_FRENZY)

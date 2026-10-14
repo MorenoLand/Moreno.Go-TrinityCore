@@ -171,7 +171,7 @@ local function thalnosDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 35 then
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 35 / 100) then
         healthYellDone[guid] = true
         creature:Talk(SAY_HEALTH)
     end

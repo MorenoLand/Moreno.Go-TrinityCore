@@ -235,10 +235,10 @@ end
 
 -- C++ :117-125 DamageTaken: PHASE_1->PHASE_2 flip when !HealthAbovePct(30)
 -- is a simple latch (no summon lists, MoveFollow, or DoAction legs), so it
--- ports: event 9 fires pre-application, so the post-damage health decides
--- (the moroes precedent). Self-cast TELEPORT 68988 (:122); schedule
--- EVENT_FEAR {12000,16000}ms (:123) and the EVENT_SOULSTORM one-shot at
--- 100ms (:124), both phase-2.
+-- ports. C++ takes uint32& /*damage*/ (unnamed) — the check is on CURRENT
+-- health, no damage projection (floored <30 form, = HealthBelowPct(30)).
+-- Self-cast TELEPORT 68988 (:122); schedule EVENT_FEAR {12000,16000}ms
+-- (:123) and the EVENT_SOULSTORM one-shot at 100ms (:124), both phase-2.
 local function bronjahmDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if phase2[guid] then
@@ -248,7 +248,7 @@ local function bronjahmDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth <= 30 then
+    if creature:GetHealth() < math.floor(maxHealth * 30 / 100) then
         phase2[guid] = true
         creature:CastSpell(creature, SPELL_TELEPORT)
         schedule(guid, "fear", {12000, 16000}, function() onFear(creature, guid) end)

@@ -340,10 +340,11 @@ local function garfrostEnterCombat(event, creature, target)
 end
 
 -- C++ :132-152 DamageTaken: simple phase latch (the bronjahm precedent).
--- Event 9 fires pre-application, so the post-damage health decides,
--- floored at/below 66 / 33 like C++ !HealthAbovePct (the moroes
--- convention). The first leg returns after flipping (:141), so one hit
--- from >66% to <33% flips only to phase 2 — replicated here.
+-- C++ takes uint32& /*damage*/ (unnamed) — the !HealthAbovePct(66/33)
+-- checks are on CURRENT health, no damage projection; the floored
+-- <66 / <33 forms equal HealthBelowPct(66/33). The first leg returns
+-- after flipping (:141), so one hit from >66% to <33% flips only to
+-- phase 2 — replicated here.
 local function garfrostDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = garfrostState[guid]
@@ -354,12 +355,12 @@ local function garfrostDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    local postPct = (creature:GetHealth() - damage) * 100 / maxHealth
-    if st.phase == PHASE_ONE and postPct <= 66 then
+    local health = creature:GetHealth()
+    if st.phase == PHASE_ONE and health < math.floor(maxHealth * 66 / 100) then
         doPhaseFlip(creature, guid, PHASE_TWO, SAY_PHASE2)
         return
     end
-    if st.phase == PHASE_TWO and postPct <= 33 then
+    if st.phase == PHASE_TWO and health < math.floor(maxHealth * 33 / 100) then
         doPhaseFlip(creature, guid, PHASE_THREE, SAY_PHASE3)
         return
     end

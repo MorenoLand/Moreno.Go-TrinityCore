@@ -146,7 +146,7 @@ local function kormokDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 25 then
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 25 / 100) then
         magesLatched[guid] = true
         creature:CastSpell(creature, SPELL_SUMMON_BONE_MAGES)
     end

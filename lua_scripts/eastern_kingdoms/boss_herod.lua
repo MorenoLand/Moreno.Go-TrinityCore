@@ -155,7 +155,7 @@ local function herodDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 30 then
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 30 / 100) then
         enrageDone[guid] = true
         creature:Talk(EMOTE_ENRAGE)
         creature:Talk(SAY_ENRAGE)
