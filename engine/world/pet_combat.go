@@ -827,7 +827,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	}
 	if damage > 0 {
 		ignoreResist := creatureAuraModifiersByMiscMask(s, creatureAuraKeyForMotion(motion), spellAuraModIgnoreTargetResist, spellSchoolMaskNormal)
-		damage = s.applyMeleeDamageTaken(damage, spellSchoolMaskNormal, ignoreResist, targetGUID, combatTarget{
+		damage, _ = s.applyMeleeDamageTaken(damage, spellSchoolMaskNormal, ignoreResist, targetGUID, combatTarget{
 			GUID: targetGUID, Map: motion.Map, InstanceID: motion.InstanceID,
 		}, false, true)
 	}
@@ -4069,10 +4069,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if takenSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
 			if isPlayerVictim {
 				if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
-					damage = spellDamageBonusTaken(damage, takenSpell, uint32(schoolMask), victim, nil)
+					damage = spellDamageBonusTaken(damage, takenSpell, uint32(schoolMask), victim, nil, 1.0)
 				}
 			} else {
-				damage = creatureSpellDamageBonusTaken(s.server, damage, takenSpell, uint32(schoolMask), creatureAuraKeyForTarget(target), nil)
+				damage = creatureSpellDamageBonusTaken(s.server, damage, takenSpell, uint32(schoolMask), creatureAuraKeyForTarget(target), nil, 1.0)
 			}
 		}
 	}

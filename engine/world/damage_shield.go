@@ -206,7 +206,7 @@ func (s *Server) applyOneDamageShield(ctx context.Context, victim, attacker dama
 				}
 			}
 		}
-		damage = spellDamageBonusTaken(damage, dmgSpell, sh.schoolMask, attackerSess, s.findSessionByGUID(sh.casterGUID))
+		damage = spellDamageBonusTaken(damage, dmgSpell, sh.schoolMask, attackerSess, s.findSessionByGUID(sh.casterGUID), 1.0)
 	}
 	// Unit.cpp:1585-1595: SMSG_SPELLDAMAGESHIELD (holder, attacker, spell,
 	// damage, overkill, school) to the holder's set — before DealDamage.

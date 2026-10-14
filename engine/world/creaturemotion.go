@@ -2673,7 +2673,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if damage > 0 {
 				attackerKey := creatureAuraKeyForMotion(motion)
 				ignoreResist := creatureAuraModifiersByMiscMask(s, attackerKey, spellAuraModIgnoreTargetResist, spellSchoolMaskNormal)
-				damage = s.applyMeleeDamageTaken(damage, spellSchoolMaskNormal, ignoreResist, target.GUID, combatTarget{
+				damage, _ = s.applyMeleeDamageTaken(damage, spellSchoolMaskNormal, ignoreResist, target.GUID, combatTarget{
 					GUID: target.GUID, Map: target.Map, InstanceID: target.InstanceID,
 				}, false, true)
 			}

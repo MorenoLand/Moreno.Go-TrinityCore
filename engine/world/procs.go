@@ -2113,12 +2113,35 @@ func (s *session) procPeriodicHealTickTakenAuraTriggers(ctx context.Context, tic
 // own auras with the caster itself as trigger target and attacker. C++ fires
 // it unconditionally of the healed amount (no heal==0 gate); the caller
 // carries the unknown-spell gate like the rest of the tick's proc legs. The
-// hit mask reuses the damage half's in C++ (absorb/resist bits included);
-// Go's heal convention reduces it to the crit-conditional normal/critical
-// mask, like the other heal-tick helpers.
-func (s *session) procPeriodicLeechSelfHealAuraTriggers(ctx context.Context, leechSpell wotlk.Spell, schoolMask uint32, casterGUID uint64, crit bool) {
-	s.procPeriodicHealTickAuraTriggers(ctx, leechSpell, schoolMask, casterGUID, crit)
-	s.procPeriodicHealTickTakenAuraTriggers(ctx, leechSpell, schoolMask, casterGUID, crit)
+// hit mask reuses the damage half's in C++ (absorb/resist bits included),
+// so Go builds the same mask the damage-tick legs use rather than the
+// crit-conditional normal/critical heal-tick mask.
+func (s *session) procPeriodicLeechSelfHealAuraTriggers(ctx context.Context, leechSpell wotlk.Spell, schoolMask uint32, casterGUID uint64, crit bool, absorbed, resisted, damage uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	hitMask := spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, crit, absorbed, false)
+	spellCopy := leechSpell
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       procFlagDonePeriodic,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        hitMask,
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+	})
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       procFlagTakenPeriodic,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        hitMask,
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+	})
 }
 
 // procSpellReflectTakenAuraTriggers fires the reflector-side proc for a

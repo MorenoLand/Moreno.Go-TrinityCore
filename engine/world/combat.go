@@ -772,7 +772,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		done := (float64(damage)+float64(s.meleeDamageDoneFlat(ctx, attType)))*pct +
 			float64(s.swingDoneFlatBonus(ctx, false, false, target.GUID, target))
 		damage = uint32(done * s.meleeDamageDoneVersusMod(ctx, target.GUID))
-		damage = s.meleeWeaponDamageTaken(ctx, damage, spellSchoolMaskNormal, target.GUID, target, false, true)
+		damage, _ = s.meleeWeaponDamageTaken(ctx, damage, spellSchoolMaskNormal, target.GUID, target, false, true)
 	}
 
 	// Apply target armor damage reduction
@@ -1797,7 +1797,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		s.meleeDamageDonePctMod(ctx, protocol.RangedAttack) +
 		float64(s.swingDoneFlatBonus(ctx, true, false, target.GUID, target))
 	damage := uint32(done * s.meleeDamageDoneVersusMod(ctx, target.GUID))
-	damage = s.meleeWeaponDamageTaken(ctx, damage, spellSchoolMaskNormal, target.GUID, target, true, true)
+	damage, _ = s.meleeWeaponDamageTaken(ctx, damage, spellSchoolMaskNormal, target.GUID, target, true, true)
 	// Unit::CalculateMeleeDamage with RANGED_ATTACK (Unit.cpp:1216-1262):
 	// the armor reduction runs in the pre-roll damage loop — Done, Taken,
 	// armor, then the outcome roll and the crit doubling (Unit.cpp:1302-1319).

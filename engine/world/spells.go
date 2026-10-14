@@ -9716,13 +9716,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// ahead of the SPELLMOD_DAMAGE application inside
 						// executeSpellDamage, matching the C++ order
 						// (spell_bonus at :3453, ApplySpellMod at :3458-3459).
-						// SpellBaseDamageBonusDone is GetTotalAuraModifierByMiscMask
-						// (SPELL_AURA_MOD_DAMAGE_DONE, school) (Unit.cpp:7134).
+						// SpellBaseDamageBonusDone is the full Unit.cpp:7134-7166 fold
+						// (school-gated aura-13 + m_baseSpellPower + aura-174 + aura-237),
+						// extracted as spellBaseDamageBonusDone.
 						// The max(0, ...) guard mirrors the C++ clamp at
 						// :3462: a negative damage-done aura could otherwise
 						// wrap the uint32.
 						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyPaladin && spell.ID == 20467 {
-							bonus := int32(0.08*s.totalAttackPowerValue(false)) + int32(0.13*s.playerAuraModifierByMiscMask(spellAuraModDamageDone, int32(spell.SchoolMask)))
+							bonus := int32(0.08*s.totalAttackPowerValue(false)) + int32(0.13*float32(s.spellBaseDamageBonusDone(spell.SchoolMask)))
 							targetDamage = uint32(max(int64(targetDamage)+int64(bonus), 0))
 						}
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3289-3295): the
@@ -10901,9 +10902,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					amount := s.spellDamageBonusDone(effCtx, drainSpell, drainKnown, uint32(baseAmount), effectTarget, effectIndex, false)
 					if drainKnown && s.server != nil {
 						if victimSess := s.server.findSessionByGUID(effectTarget); victimSess != nil && victimSess.player != nil {
-							amount = spellDamageBonusTaken(amount, drainSpell, drainSchool, victimSess, s)
+							amount = spellDamageBonusTaken(amount, drainSpell, drainSchool, victimSess, s, 1.0)
 						} else if target, ok := s.getCombatTarget(effCtx, effectTarget); ok {
-							amount = creatureSpellDamageBonusTaken(s.server, amount, drainSpell, drainSchool, creatureAuraKeyForTarget(target), s)
+							amount = creatureSpellDamageBonusTaken(s.server, amount, drainSpell, drainSchool, creatureAuraKeyForTarget(target), s, 1.0)
 						}
 					}
 					// SpellEffects.cpp:1301: the caster regains the drained
@@ -12447,27 +12448,32 @@ func (s *session) victimDamageTakenFlat(spell wotlk.Spell, targetGUID uint64, ta
 	return total
 }
 
+// spellBaseDamageBonusDone mirrors Unit::SpellBaseDamageBonusDone
+// (Unit.cpp:7134-7166): the school-gated SPELL_AURA_MOD_DAMAGE_DONE (13)
+// fold for all casters, plus the player-only legs — m_baseSpellPower
+// (Unit.cpp:7146; Go's BaseSpellPower, accumulated alongside SpellPower
+// from the same equipment bonus) and the aura-174 of-stat-percent and
+// aura-237 of-attack-power folds (Unit.cpp:7149-7161). (The NPCBot
+// spellpower leg has no Go model.)
+func (s *session) spellBaseDamageBonusDone(schoolMask uint32) int32 {
+	total := int32(0)
+	for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModDamageDone, schoolMask) {
+		total += amt
+	}
+	if s.player != nil {
+		total += int32(s.player.BaseSpellPower)
+		total += s.spellDamageOfStatFold(schoolMask)
+		total += s.spellDamageOfAttackPowerFold(schoolMask)
+	}
+	return total
+}
+
 // spellDamageDoneFlat mirrors the DoneTotal accumulation in Unit::SpellDamageBonusDone
 // (Unit.cpp:6612-6728): the spell-power advertised benefit (scaled by the done
 // coefficient) plus the flat OVERRIDE_CLASS_SCRIPTS scripted arms,
 // MOD_FLAT_SPELL_DAMAGE_VERSUS and the attack-power bonus arms.
 func (s *session) spellDamageDoneFlat(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, effIndex int, isDot bool) int32 {
-	advertised := int32(0)
-	// Unit::SpellBaseDamageBonusDone (Unit.cpp:7137): the school-gated flat
-	// SPELL_AURA_MOD_DAMAGE_DONE (13) fold is the advertised-benefit base for
-	// all casters, ahead of the player-only legs below. (The NPCBot spellpower
-	// leg has no Go model.)
-	for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModDamageDone, spell.SchoolMask) {
-		advertised += amt
-	}
-	if s.player != nil {
-		advertised += int32(s.player.SpellPower)
-		// Unit::SpellBaseDamageBonusDone (Unit.cpp:7149-7161): the of-stat
-		// (174) and of-attack-power (237) percent legs ride the same
-		// advertised benefit the spellpower base does.
-		advertised += s.spellDamageOfStatFold(spell.SchoolMask)
-		advertised += s.spellDamageOfAttackPowerFold(spell.SchoolMask)
-	}
+	advertised := s.spellBaseDamageBonusDone(spell.SchoolMask)
 	advertised += s.victimDamageTakenFlat(spell, targetGUID, target)
 	flat := int32(0)
 	if advertised != 0 {
@@ -12483,7 +12489,7 @@ func (s *session) spellDamageDoneFlat(ctx context.Context, spell wotlk.Spell, ta
 	}
 	// MOD_FLAT_SPELL_DAMAGE_VERSUS (Unit.cpp:6646-6647), skipped under LIMIT_PCT_DAMAGE_MODS.
 	if spell.AttributesEx6&spellAttr6LimitPctDamageMods == 0 {
-		if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
+		if typMask, _ := s.targetCreatureTypeMask(ctx, targetGUID); typMask != 0 {
 			for _, amt := range s.auraTypeModifiersByMiscMask(auraModFlatSpellDamageVersus, typMask) {
 				flat += amt
 			}
@@ -12587,11 +12593,16 @@ func (s *session) spellDamagePctDone(ctx context.Context, spell wotlk.Spell, tar
 	// MOD_DAMAGE_PERCENT_DONE (Unit.cpp:6771-6779): C++ reads the player's baked
 	// PLAYER_FIELD_MOD_DAMAGE_DONE_PCT for players; Go has no baked field, so the
 	// live aura fold (the field's only source) serves both unit kinds.
-	for _, amt := range s.auraTypeModifiersByMiscMask(auraModDamagePercentDone, spell.SchoolMask) {
-		mod *= 1 + float64(amt)/100
+	// On the weapon-damage funnel (Unit::MeleeDamageBonusDone, Unit.cpp:8040-8045)
+	// the arm is skipped for physical spells — NORMAL-school mods are already
+	// factored into base melee damage. Non-physical weapon spells keep the arm.
+	if !(spellHasWeaponDamageEffect(spell) && spell.SchoolMask&spellSchoolMaskNormal != 0) {
+		for _, amt := range s.auraTypeModifiersByMiscMask(auraModDamagePercentDone, spell.SchoolMask) {
+			mod *= 1 + float64(amt)/100
+		}
 	}
 	// MOD_DAMAGE_DONE_VERSUS (Unit.cpp:6783).
-	if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
+	if typMask, _ := s.targetCreatureTypeMask(ctx, targetGUID); typMask != 0 {
 		for _, amt := range s.auraTypeModifiersByMiscMask(auraModDamageDoneVersus, typMask) {
 			mod *= 1 + float64(amt)/100
 		}
@@ -13484,7 +13495,7 @@ func cheatDeathTakenPcts(victim *session) []float32 {
 	return pcts
 }
 
-func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, victim, caster *session) uint32 {
+func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, victim, caster *session, meleePctMod float64) uint32 {
 	if victim == nil {
 		return damage
 	}
@@ -13499,6 +13510,11 @@ func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, 
 		takenTotalMod *= ResolveAuraPercentMultiplier(victim.auraTypeModifiersByMiscMask(spellAuraModDamagePercentTaken, schoolMask))
 		takenTotalMod *= damageFromCasterMultiplier(victim, caster, spell)
 	}
+	// Unit::MeleeDamageBonusTaken (Unit.cpp:8241-8244): weapon-damage spells run
+	// the 126/114 pct arms on the shared TakenTotalMod ahead of the Sanctified
+	// Wrath gate (:8246); meleeWeaponDamageTaken hands the product back and the
+	// non-weapon call sites pass 1.0.
+	takenTotalMod *= float32(meleePctMod)
 	if caster != nil && takenTotalMod < 1 {
 		damageReduction := float32(1) - takenTotalMod
 		for _, amount := range caster.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask) {
@@ -13540,9 +13556,9 @@ func spellHasWeaponDamageEffect(spell wotlk.Spell) bool {
 // weapon-damage spells pass false because those arms keep riding
 // spellDamageBonusTaken, which this runs ahead of so the flat lands before
 // every percent multiplier, matching the C++ order.
-func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, schoolMask uint32, targetGUID uint64, target combatTarget, ranged, applyPercentTaken bool) uint32 {
+func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, schoolMask uint32, targetGUID uint64, target combatTarget, ranged, applyPercentTaken bool) (uint32, float64) {
 	if s == nil || s.server == nil || damage == 0 {
-		return damage
+		return damage, 1.0
 	}
 	// Unit.cpp:8247: the clawback reads the attacker's own 269 auras.
 	ignoreResist := s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask)
@@ -13556,9 +13572,9 @@ func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, sch
 // for player attackers, from the creature aura store for creature attackers
 // (pets carry no Go aura model, so they pass nil and the arm stays a noted
 // edge there).
-func (s *Server) applyMeleeDamageTaken(damage uint32, schoolMask uint32, attackerIgnoreResist []int32, targetGUID uint64, target combatTarget, ranged, applyPercentTaken bool) uint32 {
+func (s *Server) applyMeleeDamageTaken(damage uint32, schoolMask uint32, attackerIgnoreResist []int32, targetGUID uint64, target combatTarget, ranged, applyPercentTaken bool) (uint32, float64) {
 	if s == nil || damage == 0 {
-		return damage
+		return damage, 1.0
 	}
 	flatAura, pctAura := uint32(spellAuraModMeleeDamageTaken), uint32(spellAuraModMeleeDamageTakenPct)
 	if ranged {
@@ -13583,10 +13599,10 @@ func (s *Server) applyMeleeDamageTaken(damage uint32, schoolMask uint32, attacke
 			flat += amt
 		}
 		flat += creatureAuraModifierSum(s, key, flatAura)
-		// 114/126 carry no misc filter in C++ (GetTotalAuraMultiplier with no
-		// predicate); the all-bits mask folds every effect with a nonzero
-		// MiscValue, which is the whole population for these aura types.
-		pcts = creatureAuraModifiersByMiscMask(s, key, pctAura, 0xFFFFFFFF)
+		// 114/126 carry no misc filter in C++: Unit::MeleeDamageBonusTaken
+		// folds them with predicate-free GetTotalAuraMultiplier
+		// (Unit.cpp:8241-8244), so MiscValue==0 effects apply too.
+		pcts = creatureAuraModifiersUnmasked(s, key, pctAura)
 	}
 	if applyPercentTaken {
 		if isPlayerVictim {
@@ -13599,11 +13615,23 @@ func (s *Server) applyMeleeDamageTaken(damage uint32, schoolMask uint32, attacke
 	}
 	// Unit.cpp:8171-8172: a negative flat benefit larger than the damage zeroes it.
 	if flat < 0 && damage < uint32(-flat) {
-		return 0
+		return 0, 1.0
 	}
 	result := int64(damage) + int64(flat)
 	if result < 0 {
 		result = 0
+	}
+	if !applyPercentTaken {
+		// Unit.cpp:8241-8260: on the weapon-spell path the 126/114 product rides
+		// the shared TakenTotalMod in spellDamageBonusTaken — the Sanctified
+		// Wrath gate at :8246 observes the full product, so the melee leg hands
+		// the mod back instead of multiplying it here. (pcts holds only 126/114
+		// on this path; the 87 arm is folded by spellDamageBonusTaken.)
+		meleePctMod := 1.0
+		for _, amt := range pcts {
+			meleePctMod *= 1 + float64(amt)/100
+		}
+		return uint32(result), meleePctMod
 	}
 	mod := 1.0
 	for _, amt := range pcts {
@@ -13632,9 +13660,9 @@ func (s *Server) applyMeleeDamageTaken(damage uint32, schoolMask uint32, attacke
 	}
 	result = int64(float64(result) * mod)
 	if result < 0 {
-		return 0
+		return 0, 1.0
 	}
-	return uint32(result)
+	return uint32(result), 1.0
 }
 
 // swingVictimAuraSum sums the victim's auras of the given type — the shared
@@ -13681,8 +13709,8 @@ func (s *session) swingDoneFlatBonus(ctx context.Context, ranged, normalized boo
 		return 0
 	}
 	var total int32
-	typMask, typOK := s.targetCreatureTypeMask(ctx, targetGUID)
-	if typOK && typMask != 0 {
+	typMask, _ := s.targetCreatureTypeMask(ctx, targetGUID)
+	if typMask != 0 {
 		for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModDamageDoneCreature, typMask) {
 			total += amt
 		}
@@ -13692,7 +13720,7 @@ func (s *session) swingDoneFlatBonus(ctx context.Context, ranged, normalized boo
 		bonusAura, versusAura = uint32(spellAuraRangedAttackPowerAttackerBonus), uint32(spellAuraModRangedAttackPowerVersus)
 	}
 	apBonus := s.swingVictimAuraSum(targetGUID, target, bonusAura, 0, false)
-	if typOK && typMask != 0 {
+	if typMask != 0 {
 		apBonus += s.swingVictimAuraSum(targetGUID, target, versusAura, typMask, true)
 	}
 	if apBonus != 0 {
@@ -13901,6 +13929,56 @@ func creatureAuraModifierSum(s *Server, key creatureAuraKey, auraType uint32) in
 // auraTypeModifiersByMiscMask (movement_speed.go): it collects the
 // same-effect-gated per-effect amounts of the creature's active auras whose
 // DBC row carries an effect of auraType matching miscMask.
+// creatureAuraModifiersUnmasked mirrors the predicate-free C++ aura folds
+// (Unit::GetTotalAuraMultiplier with no predicate — the 114/126 arms at
+// Unit.cpp:8241-8244): every active effect of auraType contributes regardless
+// of effect MiscValue, including MiscValue==0 rows that the
+// (MiscValue & mask) != 0 filter in creatureAuraModifiersByMiscMask drops.
+func creatureAuraModifiersUnmasked(s *Server, key creatureAuraKey, auraType uint32) []int32 {
+	if s == nil || s.Data == nil || key.GUID == 0 {
+		return nil
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	sort.Slice(copies, func(i, j int) bool {
+		if copies[i] == nil || copies[j] == nil {
+			return copies[j] == nil
+		}
+		return copies[i].Slot < copies[j].Slot
+	})
+	cands := make([]auraModifierCandidate, 0)
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		usedStoredAmount := false
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 && aura.AuraType == auraType && !usedStoredAmount {
+				amount = int32(aura.Amount)
+				usedStoredAmount = true
+			}
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
+		}
+	}
+	return gatedCreatureAuraModifierAmounts(s, auraType, cands)
+}
+
 func creatureAuraModifiersByMiscMask(s *Server, key creatureAuraKey, auraType, miscMask uint32) []int32 {
 	if s == nil || s.Data == nil || miscMask == 0 || key.GUID == 0 {
 		return nil
@@ -14029,7 +14107,7 @@ func creatureDamageFromCasterMultiplier(server *Server, key creatureAuraKey, spe
 // (resilience stats); the npcbot BotMgr arm has no Go model. The
 // Sanctified Wrath bypass reads the caster's own auras, which live on the
 // session even when the victim is a creature.
-func creatureSpellDamageBonusTaken(server *Server, damage uint32, spell wotlk.Spell, schoolMask uint32, key creatureAuraKey, caster *session) uint32 {
+func creatureSpellDamageBonusTaken(server *Server, damage uint32, spell wotlk.Spell, schoolMask uint32, key creatureAuraKey, caster *session, meleePctMod float64) uint32 {
 	takenTotalMod := float32(1)
 	if mechanicMask := spellMechanicMask(spell); mechanicMask != 0 {
 		takenTotalMod *= ResolveAuraPercentMultiplier(creatureAuraModifiersByMiscMask(server, key, spellAuraModMechanicDamageTakenPercent, mechanicMask))
@@ -14038,6 +14116,11 @@ func creatureSpellDamageBonusTaken(server *Server, damage uint32, spell wotlk.Sp
 		takenTotalMod *= ResolveAuraPercentMultiplier(creatureAuraModifiersByMiscMask(server, key, spellAuraModDamagePercentTaken, schoolMask))
 		takenTotalMod *= creatureDamageFromCasterMultiplier(server, key, spell, caster)
 	}
+	// Unit::MeleeDamageBonusTaken (Unit.cpp:8241-8244): weapon-damage spells run
+	// the 126/114 pct arms on the shared TakenTotalMod ahead of the Sanctified
+	// Wrath gate (:8246); meleeWeaponDamageTaken hands the product back and the
+	// non-weapon call sites pass 1.0.
+	takenTotalMod *= float32(meleePctMod)
 	if caster != nil && takenTotalMod < 1 {
 		damageReduction := float32(1) - takenTotalMod
 		for _, amount := range caster.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask) {
@@ -14415,10 +14498,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 						// spells run the melee taken legs (flat 14/125/113 with the
 						// negative clamp, then the 126/114 pct) ahead of the shared
 						// SpellDamageBonusTaken pct arms, matching the C++ order.
+						meleePctMod := 1.0
 						if spellHasWeaponDamageEffect(spell) {
-							damage = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
+							damage, meleePctMod = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
 						}
-						damage = spellDamageBonusTaken(damage, spell, uint32(schoolMask), playerSess, s)
+						damage = spellDamageBonusTaken(damage, spell, uint32(schoolMask), playerSess, s, meleePctMod)
 					}
 				}
 				isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
@@ -14477,10 +14561,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				// Unit::MeleeDamageBonusTaken (Unit.cpp:8154) on creature victims:
 				// the melee taken legs run ahead of the shared
 				// creatureSpellDamageBonusTaken pct arms, matching the C++ order.
+				meleePctMod := 1.0
 				if spellHasWeaponDamageEffect(spell) && damage > 0 {
-					damage = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
+					damage, meleePctMod = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
 				}
-				damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s)
+				damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s, meleePctMod)
 			}
 			// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062):
 			// after the crit fold and before absorb/resist.
@@ -25528,7 +25613,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// SpellAuraEffects.cpp:5171 before the crit roll) — not after
 		// resist like the earlier Go order.
 		if tickKnown {
-			dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, tickCaster)
+			dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, tickCaster, 1.0)
 		}
 		// Tick crit roll (roll_chance_f(GetCritChanceFor),
 		// SpellAuraEffects.cpp:5173-5175): fixed-damage spells do not crit,
@@ -26074,7 +26159,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			resistCasterLevel = ts.player.Level
 		}
 		if tickKnown {
-			dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, tickCaster)
+			dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, tickCaster, 1.0)
 		}
 		crit := false
 		if !fixedDamage && tickCaster != nil {
@@ -26190,7 +26275,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// The caster-side heal dispatches to the caster's session when online,
 		// else to the caster creature motion (a creature or pet caster's leech
 		// tick heals the caster itself, SpellAuraEffects.cpp:5310-5320).
-		ts.applyPeriodicLeechHealForCaster(context.Background(), ts.player.Map, ts.player.InstanceID, aura, dealt, leechEffIndex, tickSpell, tickKnown, crit)
+		ts.applyPeriodicLeechHealForCaster(context.Background(), ts.player.Map, ts.player.InstanceID, aura, dealt, absorbed, resisted, dmg, leechEffIndex, tickSpell, tickKnown, crit)
 
 	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL
 		// SpellAuraEffects.cpp:5323-5349 (HandlePeriodicHealthFunnelAuraTick):
@@ -26675,7 +26760,7 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 // HealBySpell / threat / proc legs with no heal==0 gate (only the caster
 // in-world-and-alive gate), so the Go early returns on dealt/heal == 0 are
 // removed — a zero tick still runs the proc legs.
-func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, dealtDamage uint32, leechEffIndex int, tickSpell wotlk.Spell, tickKnown, crit bool) {
+func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, dealtDamage, absorbed, resisted, tickDamage uint32, leechEffIndex int, tickSpell wotlk.Spell, tickKnown, crit bool) {
 	// C++: the caster heal runs only when the caster is in world and alive.
 	if casterSess == nil || casterSess.player == nil || casterSess.player.Health == 0 {
 		return
@@ -26746,7 +26831,7 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 	// Leech self-heal proc tail (SpellAuraEffects.cpp:5320): the unknown-spell
 	// gate matches the rest of the tick's proc legs.
 	if tickKnown {
-		casterSess.procPeriodicLeechSelfHealAuraTriggers(context.Background(), tickSpell, aura.SchoolMask, aura.CasterGUID, crit)
+		casterSess.procPeriodicLeechSelfHealAuraTriggers(context.Background(), tickSpell, aura.SchoolMask, aura.CasterGUID, crit, absorbed, resisted, tickDamage)
 	}
 }
 
@@ -26758,10 +26843,10 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 // wrong player whenever the caster was a creature or pet. C++ heals the
 // caster unit itself in both cases (HealBySpell on the caster), so the
 // fallback session must never stand in for a creature caster.
-func (s *session) applyPeriodicLeechHealForCaster(ctx context.Context, mapID, instanceID uint32, aura *activeAura, dealtDamage uint32, leechEffIndex int, tickSpell wotlk.Spell, tickKnown, crit bool) {
+func (s *session) applyPeriodicLeechHealForCaster(ctx context.Context, mapID, instanceID uint32, aura *activeAura, dealtDamage, absorbed, resisted, tickDamage uint32, leechEffIndex int, tickSpell wotlk.Spell, tickKnown, crit bool) {
 	if s != nil && s.server != nil {
 		if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
-			s.applyPeriodicLeechHeal(casterSess, aura, dealtDamage, leechEffIndex, tickSpell, tickKnown, crit)
+			s.applyPeriodicLeechHeal(casterSess, aura, dealtDamage, absorbed, resisted, tickDamage, leechEffIndex, tickSpell, tickKnown, crit)
 			return
 		}
 		s.server.applyCreaturePeriodicLeechHeal(ctx, mapID, instanceID, aura.CasterGUID, aura, dealtDamage, leechEffIndex, tickKnown, crit, tickSpell)
@@ -27201,7 +27286,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SpellAuraEffects.cpp:5171 before the crit roll) — the earlier Go
 		// order ran it after resist.
 		if tickKnown {
-			dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, tickCaster)
+			dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, tickCaster, 1.0)
 		}
 		// Tick crit roll (roll_chance_f(GetCritChanceFor),
 		// SpellAuraEffects.cpp:5173-5175); creature casters have no Go
@@ -27853,7 +27938,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			resistCasterLevel = target.Level
 		}
 		if tickKnown {
-			dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, tickCaster)
+			dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, tickCaster, 1.0)
 		}
 		crit := false
 		if !fixedDamage && tickCaster != nil && tickCaster.player != nil {
@@ -27979,7 +28064,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// The caster-side heal dispatches to the caster's session when online,
 		// else to the caster creature motion — the old tickCaster = s fallback
 		// healed the scheduling session's player for creature/pet casters.
-		s.applyPeriodicLeechHealForCaster(ctx, key.Map, key.InstanceID, aura, dealt, leechEffIndex, tickSpell, tickKnown, crit)
+		s.applyPeriodicLeechHealForCaster(ctx, key.Map, key.InstanceID, aura, dealt, absorbed, resisted, dmg, leechEffIndex, tickSpell, tickKnown, crit)
 		return targetAlive
 
 	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL

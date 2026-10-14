@@ -180,7 +180,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	if p.Sess != nil && p.Sess.player != nil && damage > 0 {
 		takenBlockRan = true
 		if inlineSpellKnown {
-			damage = spellDamageBonusTaken(damage, inlineSpell, uint32(schoolMask), p.Sess, nil)
+			damage = spellDamageBonusTaken(damage, inlineSpell, uint32(schoolMask), p.Sess, nil, 1.0)
 		}
 		// Unit::IsDamageReducedByArmor (Unit.cpp:1618-1625): physical
 		// schools only, skipped by SPELL_ATTR0_CU_IGNORE_ARMOR; a null
