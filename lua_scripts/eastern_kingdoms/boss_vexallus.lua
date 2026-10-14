@@ -36,11 +36,14 @@
 -- EVENT_OVERLOAD arm of UpdateAI):
 -- Combat entry: Talk(SAY_AGGRO) (maiden-of-virtue convention). The C++
 -- JustEngagedWith schedules EVENT_CHAIN_LIGHTNING (8s, recast 8s) and
--- EVENT_ARCANE_SHOCK (5s, recast 8s), but both handlers gate the cast
--- on SelectTarget(Random, 0, [20.0f], true) — no SelectTarget bridge on
--- the Lua surface (the_beast / felblood flame-strike precedent), so no
--- timers are ported for them. Timers cancelled on OnLeaveCombat(2)/
--- OnDied(4)/OnReset(23).
+-- EVENT_ARCANE_SHOCK (5s, recast 8s); both ported as random-player casts
+-- (GetPlayersInWorld + map/instance/alive/IsWithinDist filter,
+-- maiden_of_virtue precedent) — the old "no SelectTarget bridge" claim
+-- is retracted. C++ SelectTarget(Random, 0, 0.0f, true) for chain
+-- lightning is any-range (dist 0 = no distance restriction), modeled
+-- with range 100 (curator precedent); arcane shock's 20.0f is used
+-- literally. Timers cancelled on OnLeaveCombat(2)/OnDied(4)/
+-- OnReset(23), and on enrage via cancelTimers (C++ events.Reset()).
 -- KilledUnit: Talk(SAY_KILL) via OnTargetDied(3) — the C++ arm has no
 -- victim-type gate, so neither does the port.
 -- DamageTaken 15%-interval discharge latch via OnDamageTaken(9).
@@ -71,8 +74,10 @@
 -- precedent); JustDied has no C++ arms.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - JustSummoned: SelectTarget(Random, 0) -> summoned->GetMotionMaster(
---   )->MoveFollow — no SelectTarget bridge; summons.Summon is internal
---   BossAI machinery.
+--   )->MoveFollow — the SelectTarget leg is bridgeable but MoveFollow
+--   has no movement bridge (midnight/halazzi precedent); summons.Summon
+--   is internal BossAI machinery. Old "no SelectTarget bridge" reason
+--   corrected.
 -- - npc_pure_energy (the file's second CreatureScript class): its entry
 --   is NOT C++-verifiable (no pure-energy constant in
 --   magisters_terrace.h; the class name appears only in
@@ -91,6 +96,8 @@ local EMOTE_DISCHARGE_ENERGY = 4
 
 local SPELL_SUMMON_PURE_ENERGY = 44322
 local SPELL_OVERLOAD = 44353
+local SPELL_CHAIN_LIGHTNING = 44318
+local SPELL_ARCANE_SHOCK = 44319
 
 local ENTRY_VEXALLUS = 24744
 
@@ -123,6 +130,37 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+local function randomTargetInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() and creature:IsWithinDist(p, range) then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+local function onChainLightning(creature, guid)
+    local target = randomTargetInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
+    end
+    schedule(guid, "chain_lightning", 8000, function() onChainLightning(creature, guid) end)
+end
+
+local function onArcaneShock(creature, guid)
+    local target = randomTargetInRange(creature, 20)
+    if target then
+        creature:CastSpell(target, SPELL_ARCANE_SHOCK)
+    end
+    schedule(guid, "arcane_shock", 8000, function() onArcaneShock(creature, guid) end)
+end
+
 local function onOverload(creature, guid)
     local victim = creature:GetVictim()
     if victim then
@@ -137,6 +175,8 @@ local function onEnterCombat(_, creature)
     dischargeStage[guid] = 1
     enraged[guid] = false
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "chain_lightning", 8000, function() onChainLightning(creature, guid) end)
+    schedule(guid, "arcane_shock", 5000, function() onArcaneShock(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

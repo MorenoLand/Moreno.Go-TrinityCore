@@ -27,7 +27,7 @@
 -- sources of the class name.
 -- Verifiable numbers (file's own enums/header): SPELL_FIREBALL =
 -- 44189 / SPELL_PHOENIX = 44194 / SPELL_FLAME_STRIKE = 46162
--- (SelectTarget-gated cast — no bridge) / SPELL_SHOCK_BARRIER = 46165
+-- (random-player targeted, 44s loop — bridged) / SPELL_SHOCK_BARRIER = 46165
 -- (heroic-only arm — no difficulty bridge) / SPELL_PYROBLAST = 36819
 -- (SelectTarget-gated — no bridge) / SPELL_EMOTE_TALK_EXCLAMATION =
 -- 48348 / SPELL_EMOTE_POINT = 48349 / SPELL_EMOTE_ROAR = 48350 /
@@ -35,8 +35,8 @@
 -- SAY_GRAVITY_LAPSE_2 = 3 (repeat lapses never recur — no phase-two
 -- machinery) / SAY_POWER_FEEDBACK = 4 (phase-two — no bridge) /
 -- SAY_SUMMON_PHOENIX = 5 / SAY_ANNOUNCE_PYROBLAST = 6
--- (heroic-only arm — no bridge) / SAY_FLAME_STRIKE = 7 (cast
--- SelectTarget-gated — no bridge, no timer ported) / SAY_DEATH = 8 /
+-- (heroic-only arm — no bridge) / SAY_FLAME_STRIKE = 7 (ported) /
+-- SAY_DEATH = 8 /
 -- SAY_INTRO_1 = 0 / SAY_INTRO_2 = 1 (SetData(DATA_KAELTHAS_INTRO)-
 -- gated — no instance SetData bridge) / EVENT_FIREBALL init 1ms
 -- repeat 2s500ms / EVENT_PHOENIX init 12s repeat 45s /
@@ -57,6 +57,10 @@
 -- - EVENT_PHOENIX: Talk(SAY_SUMMON_PHOENIX) + self-cast 44194,
 --   12s init -> 45s loop (the phoenix add's own AI is unbridgeable
 --   — see below; the summon spell itself is real).
+-- - EVENT_FLAME_STRIKE: Talk(SAY_FLAME_STRIKE) + random-player
+--   (SelectTarget(Random, 0, 40.0f, true) — GetPlayersInWorld + map/
+--   instance/alive/IsWithinDist filter, maiden_of_virtue precedent)
+--   cast 46162, 44s init -> 44s loop.
 -- 50%-HP phase-two latch via OnDamageTaken(9) with a per-guid
 -- one-shot flag reset on OnEnterCombat(1) (gyth convention —
 -- C++-exact HealthBelowPctDamaged(50): GetHealth() - damage <
@@ -92,10 +96,8 @@
 -- flame-strike-trigger dummy-cast arms have no summon/MotionMaster
 -- bridges (the_beast precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - EVENT_FLAME_STRIKE: Talk(SAY_FLAME_STRIKE) + DoCast(random
---   target, 46162) gates on SelectTarget(Random, 0, 40.0f, true) —
---   no SelectTarget bridge (the_beast / vaelastrasz precedent); no
---   timer ported.
+-- - EVENT_FLAME_STRIKE now ported (above); stale "no SelectTarget
+--   bridge" claim retracted (maiden_of_virtue random-player precedent).
 -- - EVENT_SHOCK_BARRIER + EVENT_PYROBLAST: the whole arm is heroic-
 --   gated (IsHeroic) and pyroblast gates on SelectTarget(Random, 0,
 --   40.0f, true) — no difficulty bridge, no SelectTarget bridge; no
@@ -129,8 +131,11 @@ local SPELL_EMOTE_TALK_EXCLAMATION = 48348
 local SPELL_EMOTE_POINT = 48349
 local SPELL_EMOTE_ROAR = 48350
 local SPELL_QUITE_SUICIDE = 3617
+local SPELL_FLAME_STRIKE = 46162
+local SPELL_CLEAR_FLIGHT = 44232
 
 local SAY_GRAVITY_LAPSE_1 = 2
+local SAY_FLAME_STRIKE = 7
 local SAY_SUMMON_PHOENIX = 5
 local SAY_DEATH = 8
 
@@ -162,6 +167,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+local function randomTargetInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() and creature:IsWithinDist(p, range) then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 local function onFireball(creature, guid)
     local victim = creature:GetVictim()
     if victim then
@@ -176,12 +196,22 @@ local function onPhoenix(creature, guid)
     schedule(guid, "phoenix", 45000, function() onPhoenix(creature, guid) end)
 end
 
+local function onFlameStrike(creature, guid)
+    creature:Talk(SAY_FLAME_STRIKE)
+    local target = randomTargetInRange(creature, 40)
+    if target then
+        creature:CastSpell(target, SPELL_FLAME_STRIKE)
+    end
+    schedule(guid, "flame_strike", 44000, function() onFlameStrike(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
     schedule(guid, "fireball", 1, function() onFireball(creature, guid) end)
+    schedule(guid, "flame_strike", 44000, function() onFlameStrike(creature, guid) end)
     schedule(guid, "phoenix", 12000, function() onPhoenix(creature, guid) end)
 end
 
@@ -201,6 +231,7 @@ local function onDamageTaken(_, creature, attacker, damage)
         -- the outro phase is set.
         outroFired[guid] = true
         cancelTimers(guid)
+        creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
         creature:Talk(SAY_DEATH)
         schedule(guid, "outro_1", 1000, function()
             creature:CastSpell(creature, SPELL_EMOTE_TALK_EXCLAMATION)

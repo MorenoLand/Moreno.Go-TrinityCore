@@ -45,6 +45,13 @@
 -- victim:GetObjectType() == "Player" (lua_objects.go/lua_player.go
 -- GetObjectType returns "Player"/"Creature"/"GameObject").
 -- JustDied: Talk(SAY_DEATH) on OnDied(4) (najentus/halycon precedent).
+-- Sub-10%-mana latch (maiden convention — checked from the PHASE_NORMAL
+-- fel-explosion loop, GetPowerPct < 10, per-guid _scheduledEvents flag):
+-- EVENT_DRAIN_LIFE randtime(3s,7s) -> 10s loop: random-player within
+-- 20.0f (GetPlayersInWorld + map/instance/alive/IsWithinDist filter,
+-- maiden precedent) cast 44294 non-triggered; EVENT_DRAIN_CRYSTAL's
+-- non-heroic 20s/25s timing is modeled as the flag re-arm (crystal
+-- selection itself stays out, above).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
 -- packet-visual), so the fel-explosion timer fires unconditionally and
 -- the in-loop casting gate is dropped (maiden precedent). The C++
@@ -63,10 +70,15 @@
 -- only reachable from npc_fel_crystal's JustDied via the instance
 -- bridge — no caller exists on the Lua surface.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - the sub-10%-mana latch + whole drain machine: creature
---   GetPower(POWER_MANA)/GetMaxPower is not bridged on creatures
---   (only the player methods in lua_player.go); without it the
---   PHASE_DRAIN transition never fires.
+-- - the sub-10%-mana latch -> EVENT_DRAIN_LIFE now ported (below);
+--   the latch's EVENT_DRAIN_CRYSTAL 20s/25s leg is modeled as a
+--   flag-reset only (SelectNearestCrystal needs FindNearestCreature
+--   + MotionMaster, unbridged); the old "GetPower not bridged on
+--   creatures" claim is retracted (GetPowerPct is bridged on generic
+--   objects, engine/scripting/object.go). The heroic fork (DRAIN_
+--   CRYSTAL 10s/15s + DRAIN_MANA 46153) stays out — no difficulty
+--   bridge. The whole PHASE_DRAIN machine below stays out on
+--   missing motion/flag/kill legs.
 -- - EVENT_DRAIN_CRYSTAL -> SelectNearestCrystal():
 --   FindNearestCreature(NPC_FEL_CRYSTAL = 24722, 250.0f) + Talk(
 --   SAY_ENERGY) + Talk(EMOTE_CRYSTAL) + DoCast(crystal,
@@ -77,8 +89,8 @@
 --   44320, triggered) + EVENT_EMPOWER 10s — no MovementInform bridge.
 -- - EVENT_EMPOWER: Talk(SAY_EMPOWERED) + crystal KillSelf +
 --   MotionMaster Clear + MoveChase(victim) — no MotionMaster bridge.
--- - EVENT_DRAIN_LIFE: SelectTarget(Random, 0, 20.0f) -> DoCast(44294)
---   — no SelectTarget bridge (the_beast / doomwalker precedent).
+-- - EVENT_DRAIN_LIFE now ported (below); stale "no SelectTarget
+--   bridge" claim retracted (maiden_of_virtue precedent).
 -- - EVENT_DRAIN_MANA: SelectTarget(Random, 0, 45.0f) -> DoCast(46153)
 --   — no SelectTarget bridge, and the whole arm is heroic-gated (no
 --   difficulty bridge).
@@ -93,10 +105,12 @@ local SAY_KILL = 3
 local SAY_DEATH = 4
 
 local SPELL_FEL_EXPLOSION = 44314
+local SPELL_DRAIN_LIFE = 44294
 
 local ENTRY_SELIN_FIREHEART = 24723
 
 local timers = {}
+local drainScheduled = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -120,20 +134,59 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+local function randomTargetInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() and creature:IsWithinDist(p, range) then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+local function onDrainLife(creature, guid)
+    local target = randomTargetInRange(creature, 20)
+    if target then
+        creature:CastSpell(target, SPELL_DRAIN_LIFE)
+    end
+    schedule(guid, "drain_life", 10000, function() onDrainLife(creature, guid) end)
+end
+
+local function onDrainCrystalReset(_, guid)
+    drainScheduled[guid] = false
+end
+
+local function checkManaLatch(creature, guid)
+    if not drainScheduled[guid] and creature:GetPowerPct() < 10 then
+        drainScheduled[guid] = true
+        schedule(guid, "drain_life", {3000, 7000}, function() onDrainLife(creature, guid) end)
+        schedule(guid, "drain_crystal", {20000, 25000}, function() onDrainCrystalReset(creature, guid) end)
+    end
+end
+
 local function onFelExplosion(creature, guid)
     creature:CastSpell(creature, SPELL_FEL_EXPLOSION)
+    checkManaLatch(creature, guid)
     schedule(guid, "fel_explosion", 2000, function() onFelExplosion(creature, guid) end)
 end
 
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    drainScheduled[guid] = nil
     creature:Talk(SAY_AGGRO)
     schedule(guid, "fel_explosion", 2100, function() onFelExplosion(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    drainScheduled[guid] = nil
 end
 
 local function onTargetDied(_, creature, victim)
