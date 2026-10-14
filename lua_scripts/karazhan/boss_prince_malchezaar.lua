@@ -374,12 +374,11 @@ local function malchezaarDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    -- C++ UpdateAI checks HealthBelowPct (pre-damage health), not the
-    -- damaged variant.
-    local pct = health * 100 / maxHealth
-    if st.phase == PHASE_ONE and pct < 60 then
+    -- C++ UpdateAI checks HealthBelowPct on current health, not the damaged
+    -- variant; the integer floor form matches CalculatePct exactly.
+    if st.phase == PHASE_ONE and health < math.floor(maxHealth * 60 / 100) then
         startPhaseTwo(creature, guid)
-    elseif st.phase == PHASE_TWO and pct < 30 then
+    elseif st.phase == PHASE_TWO and health < math.floor(maxHealth * 30 / 100) then
         startPhaseThree(creature, guid)
     end
     return false, damage

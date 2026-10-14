@@ -187,19 +187,20 @@ local function moroesEnterCombat(event, creature, target)
 end
 
 -- Enrage: C++ UpdateAI checks HealthBelowPct(30) every tick. The damage
--- hook fires pre-application, so the post-damage health decides; strictly
--- below 30 like C++.
+-- C++ checks HealthBelowPct(30) in UpdateAI on current health (no damage
+-- projection); the engine fires event 9 pre-damage, so `health` is already
+-- the C++ value. Integer floor form matches CalculatePct exactly.
 local function moroesDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = moroesState[guid]
     if state == nil or state.enrage then
         return
     end
-    local maxHealth = creature:GetMaxHealth()
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 30 then
+    if health < math.floor(maxHealth * 30 / 100) then
         creature:CastSpell(creature, SPELL_FRENZY)
         state.enrage = true
     end

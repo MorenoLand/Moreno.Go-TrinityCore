@@ -154,11 +154,11 @@ local function midnightDamageTaken(event, creature, attacker, damage)
         newDamage = health - 1
     end
     local postHealth = health - newDamage
-    if state.phase == PHASE_NONE and postHealth * 100 / maxHealth < 95 then
+    if state.phase == PHASE_NONE and postHealth < math.floor(maxHealth * 95 / 100) then
         state.phase = PHASE_ATTUMEN_ENGAGES
         creature:Talk(EMOTE_CALL_ATTUMEN)
         creature:CastSpell(creature, SPELL_SUMMON_ATTUMEN)
-    elseif state.phase == PHASE_ATTUMEN_ENGAGES and postHealth * 100 / maxHealth < 25 then
+    elseif state.phase == PHASE_ATTUMEN_ENGAGES and postHealth < math.floor(maxHealth * 25 / 100) then
         state.phase = PHASE_MOUNTED
         creature:CastSpell(creature, SPELL_MOUNT, true)
     end
@@ -279,7 +279,7 @@ local function attumenDamageTaken(event, creature, attacker, damage)
     -- the cross-creature GUID wiring (SetGUID/NPC_MIDNIGHT) has no Lua
     -- bridge, so the mount cast is skipped — the mounted form's arms are
     -- covered by the 16152 entry when it exists in the world.
-    if state.phase == PHASE_ATTUMEN_ENGAGES and postHealth * 100 / maxHealth < 25 then
+    if state.phase == PHASE_ATTUMEN_ENGAGES and postHealth < math.floor(maxHealth * 25 / 100) then
         state.phase = PHASE_NONE
     end
     return false, newDamage

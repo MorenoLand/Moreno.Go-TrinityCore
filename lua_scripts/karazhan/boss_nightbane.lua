@@ -317,11 +317,11 @@ local function nightbaneDamageTaken(event, creature, attacker, damage)
         end
         return false, newDamage
     end
-    -- C++ uses HealthBelowPct (pre-damage health), NOT the damaged variant.
-    local pct = health * 100 / maxHealth
-    if (st.flyCount == 0 and pct < 75)
-            or (st.flyCount == 1 and pct < 50)
-            or (st.flyCount == 2 and pct < 25) then
+    -- C++ uses HealthBelowPct (pre-damage health), NOT the damaged variant;
+    -- the integer floor form matches CalculatePct exactly.
+    if (st.flyCount == 0 and health < math.floor(maxHealth * 75 / 100))
+            or (st.flyCount == 1 and health < math.floor(maxHealth * 50 / 100))
+            or (st.flyCount == 2 and health < math.floor(maxHealth * 25 / 100)) then
         startPhaseFly(creature, guid)
     end
     return false, newDamage
