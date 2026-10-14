@@ -8288,9 +8288,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spellMissingExplicitTargetMask in spellExplicitObjectTargetMask below
 	// (self-range strip unmodeled); the
 	// selection fallback is validated through the CheckExplicitTarget unit
-	// gates (explicitSelectionTargetOK, Spell.cpp:684-690); Go's non-harmful
-	// self default is wider than C++'s
-	// ALLY/PARTY/RAID-only self fallback. The IsPassive wrapper (Spell.cpp:5353-5360) is
+	// gates (explicitSelectionTargetOK, Spell.cpp:684-690) under the
+	// Spell.cpp:678-679 unit-mask gate, and the self default now fires only
+	// on the ALLY/PARTY/RAID mask bits (Spell.cpp:694-696) — the earlier
+	// wider non-harmful self default is retired. The IsPassive wrapper
+	// (Spell.cpp:5353-5360) is
 	// vacuous (passive spells are rejected at the lookup) and the
 	// m_originalCaster / GO-caster arm (5360-5364) is vacuous on the
 	// client-initiated path (the caster is always the session player; no
@@ -8315,7 +8317,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// adopted as the fallback explicit target only when it passes
 		// CheckExplicitTarget; otherwise the fallbacks continue below.
 		explicitUnitGUID = s.selection
-	} else if !isHarmfulSpell(spell) {
+	} else if spellExplicitUnitTargetMask(spell)&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0 {
+		// Spell::SetTargetMap (Spell.cpp:694-696): the self fallback fires
+		// only when the explicit mask carries the RAID/PARTY/ALLY bits — not
+		// for every non-harmful spell. A spell that needs a unit target but
+		// adopted none falls through to the null-target arm below and fails
+		// with SPELL_FAILED_BAD_TARGETS (SpellInfo.cpp:1784-1790).
 		hitTargets = append(hitTargets, s.playerGUID)
 	}
 	// SpellInfo::CheckExplicitTarget null-target arm (SpellInfo.cpp:1784-1790):

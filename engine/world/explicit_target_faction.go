@@ -257,6 +257,12 @@ func (s *session) explicitSelectionTargetOK(ctx context.Context, spell wotlk.Spe
 		return false
 	}
 	explicitMask := spellExplicitUnitTargetMask(spell)
+	// Spell::SetTargetMap (Spell.cpp:678-679): the selection/victim/self
+	// fallbacks run only when the explicit mask needs a unit target; a
+	// selection is never adopted for dest/GO/item-only spells.
+	if explicitMask&targetFlagUnitMask == 0 {
+		return false
+	}
 	assist := explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0
 	if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, assist) {
 		return false
