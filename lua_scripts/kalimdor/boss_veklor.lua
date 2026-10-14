@@ -14,15 +14,17 @@
 -- - Shadow Bolt 26006 (DoCastVictim): C++ ShadowBolt_Timer = 0
 --   (boss_twinemperors.cpp:503) fires on the first UpdateAI tick —
 --   first Lua cast at 1ms (CreateLuaEvent floor, runtime.go:1118),
---   then 2s repeat. The <45y MoveChase leg has no motion bridge;
---   ported as fixed-interval victim-cast (fankriss convention).
+--   then 2s repeat. C++ (lines 544-552): cast only when the
+--   victim is within 45y (else MoveChase at VEKLOR_DIST 20 — no
+--   motion bridge), with an unconditional 2s re-arm — modeled
+--   as a distance-gated cast with unconditional re-arm.
 -- - Blizzard 26607: C++ SelectTarget Random, 0, 45.0f, true ->
---   DoCast(target, SPELL_BLIZZARD), init urand(15s,20s) ->
---   urand(15s,30s). Random-player pick via GetPlayersInWorld
---   filtered by map/instance/alive (vem/maiden_of_virtue
---   convention); the 45y range has no distance bridge on the
---   Lua surface, and the raw GetPlayersInWorld pick (dead /
---   off-map targets) was fixed this tick.
+--   DoCast(target, SPELL_BLIZZARD) (boss_twinemperors.cpp:557),
+--   init urand(15s,20s), re-arm 15000 + rand32()%15000. The 45y
+--   eligibility gate is bridged (IsWithinDist — the old "no
+--   distance bridge" claim was stale, retracted this run), so
+--   the filtered random-player pick (vem/maiden_of_virtue
+--   convention) is C++-exact.
 -- - Berserk 26662 (CheckEnrage): DoCast self, init 15min ->
 --   repeat 60min. The IsNonMeleeSpellCast gate has no bridge —
 --   fixed timer.
@@ -84,12 +86,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ ShadowBolt leg: DoCastVictim(SPELL_SHADOWBOLT) when victim
--- within 45y (else MoveChase), 2s repeat. Motion leg: no bridge;
--- ported as fixed 2s victim-cast (fankriss convention).
+-- C++ ShadowBolt arm (boss_twinemperors.cpp:544-552): cast only
+-- when the victim is within 45y (else MoveChase at VEKLOR_DIST
+-- 20 — motion leg, no bridge); the 2s re-arm is unconditional
+-- on both arms.
 local function onShadowBolt(creature, guid)
     local victim = creature:GetVictim()
-    if victim then
+    if victim and creature:IsWithinDist(victim, 45) then
         creature:CastSpell(victim, SPELL_SHADOWBOLT)
     end
     schedule(guid, "sb", 2000, function()
@@ -97,23 +100,24 @@ local function onShadowBolt(creature, guid)
     end)
 end
 
--- C++ Blizzard arm: SelectTarget Random,0,45.0f,true ->
--- DoCast(target, SPELL_BLIZZARD), init urand(15000,20000) ->
--- urand(15000,30000). Filtered random-player pick (no 45y
--- bridge).
+-- C++ Blizzard arm (boss_twinemperors.cpp:554-560): SelectTarget
+-- Random,0,45.0f,true -> DoCast(target, SPELL_BLIZZARD), init
+-- urand(15000,20000), re-arm 15000 + rand32()%15000 ([15000,
+-- 29999]). The 45y eligibility gate is bridged (IsWithinDist —
+-- garaxxas precedent).
 local function onBlizzard(creature, guid)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
+                and not p:IsDead() and creature:IsWithinDist(p, 45) then
             candidates[#candidates + 1] = p
         end
     end
     if #candidates > 0 then
         creature:CastSpell(candidates[math.random(#candidates)], SPELL_BLIZZARD)
     end
-    schedule(guid, "blizzard", math.random(15000, 30000), function()
+    schedule(guid, "blizzard", math.random(15000, 29999), function()
         onBlizzard(creature, guid)
     end)
 end

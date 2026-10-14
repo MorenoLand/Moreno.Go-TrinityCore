@@ -21,19 +21,35 @@
 -- cold" hits boss_keristrasza.cpp only (registered from inside
 -- AddSC_boss_keristrasza, no separate loader lines); zero sql/ hits. No
 -- keristrasza lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied. No
--- timers in the ported arms; melee is engine-driven in Go (creature
--- combat tick), like C++ DoMeleeAttackIfReady.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset. Timers via
+-- CreateLuaEvent (maiden_of_virtue precedent); melee is
+-- engine-driven in Go (creature combat tick), like C++
+-- DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) + DoCastAOE(SPELL_INTENSE_COLD
 -- 48094) 2-arg (non-triggered) one-shot as creature:CastSpell(creature,
 -- spell) (event 1; boss_ai.go DoCastAOE self-cast convention —
 -- selin_fireheart / mr_smite precedent; the Oct-12 "no DoCastAOE
--- bridge" claim was wrong, retracted this run; the BossAI::
--- JustEngagedWith instance-bookkeeping leg has no bridge — tharon_ja
--- precedent — and the three events.ScheduleEvent legs (EVENT_CRYSTAL_
--- FIRE_BREATH 14s / EVENT_CRYSTAL_CHAINS_CRYSTALLIZE DUNGEON_MODE(30s,
--- 11s) / EVENT_TAIL_SWEEP 5s) have no timer-event bridge).
+-- bridge" claim was wrong, retracted in a prior run) + the three
+-- events.ScheduleEvent legs via CreateLuaEvent timers (maiden_
+-- of_virtue precedent; the Oct-12 "no timer-event bridge" claim was
+-- wrong, retracted this run): EVENT_CRYSTAL_FIRE_BREATH DoCastVictim
+-- (48096) non-triggered, 14s init / 14s repeat; EVENT_CRYSTAL_CHAINS_
+-- CRYSTALLIZE DoCast(me, SPELL_TAIL_SWEEP 50155) non-triggered
+-- self-cast, DUNGEON_MODE(30s,11s) -> 30s normal init, 5s repeat
+-- (ymiron normal-values precedent); EVENT_TAIL_SWEEP Talk(SAY_
+-- CRYSTAL_NOVA 4) + normal SelectTarget(Random,0,100.0f,true) ->
+-- DoCast(target, SPELL_CRYSTAL_CHAINS 50997) non-triggered, 5s
+-- init / 30s normal repeat — the heroic DoCast(me, SPELL_
+-- CRYSTALLIZE 48179) leg stays out (no IsHeroic bridge).
+-- The BossAI::JustEngagedWith instance-bookkeeping leg has no
+-- bridge — tharon_ja precedent.
+-- DamageTaken (event 9) — HealthBelowPctDamaged(25, damage)
+-- one-shot latch (per-GUID, reset on 1/2/23; loken convention)
+-- -> Talk(SAY_ENRAGE 2) + Talk(SAY_FRENZY 5) + DoCast(me,
+-- SPELL_ENRAGE 8599) 2-arg non-triggered self-cast (the Oct-12
+-- "no health-pct bridge" claim was wrong, retracted this run).
 -- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied bookkeeping has
 -- no bridge — tharon_ja precedent).
 -- KilledUnit — Talk(SAY_SLAY 1) (event 3 — C++-GATED: who->
@@ -46,17 +62,10 @@
 -- RemovePrison(CheckContainmentSpheres()) + _Reset() — no instance /
 -- GO-state / flag bridges (the containment-sphere prison machine is
 -- documented-only; see containment_sphere below).
--- DamageTaken — HealthBelowPctDamaged(25) -> Talk(SAY_ENRAGE 2) +
--- Talk(SAY_FRENZY 5) + DoCast(me, SPELL_ENRAGE 8599), one-shot latch —
--- no health-pct bridge.
--- UpdateAI — EVENT_CRYSTAL_FIRE_BREATH: DoCastVictim(SPELL_CRYSTALFIRE_
--- BREATH 48096), 14s repeat; EVENT_CRYSTAL_CHAINS_CRYSTALLIZE:
--- DoCast(me, SPELL_TAIL_SWEEP 50155), 5s repeat (DUNGEON_MODE init
--- 30s/11s); EVENT_TAIL_SWEEP: Talk(SAY_CRYSTAL_NOVA 4) + heroic
--- DoCast(me, SPELL_CRYSTALLIZE 48179) / normal SelectTarget(Random, 0,
--- 100.0f, true) -> DoCast(SPELL_CRYSTAL_CHAINS 50997), DUNGEON_MODE
--- (30s, 11s) repeat — no timer-event / random-target SelectTarget /
--- cast bridges.
+-- (EVENT_TAIL_SWEEP's heroic DoCast(me, SPELL_CRYSTALLIZE 48179)
+-- leg is the only UpdateAI arm staying out — no IsHeroic bridge;
+-- the Oct-12 "no timer-event / random-target / cast bridge"
+-- claims were wrong, retracted this run.)
 -- SetGUID(DATA_INTENSE_COLD) — _intenseColdList push, consumed only by
 -- achievement_intense_cold's OnCheck — no SetGUID / GetData bridge and
 -- no achievement bridge.
@@ -82,9 +91,119 @@ local ENTRY_KERISTRASZA = 26723
 
 local SAY_AGGRO = 0
 local SAY_SLAY  = 1
+local SAY_ENRAGE = 2
 local SAY_DEATH = 3
+local SAY_CRYSTAL_NOVA = 4
+local SAY_FRENZY = 5
 
 local SPELL_INTENSE_COLD = 48094 -- boss_keristrasza.cpp:38
+local SPELL_TAIL_SWEEP = 50155 -- boss_keristrasza.cpp:33
+local SPELL_CRYSTAL_CHAINS = 50997 -- boss_keristrasza.cpp:34
+local SPELL_ENRAGE = 8599 -- boss_keristrasza.cpp:35
+local SPELL_CRYSTALFIRE_BREATH = 48096 -- boss_keristrasza.cpp:36
+-- SPELL_CRYSTALLIZE = 48179 (boss_keristrasza.cpp:37) — heroic leg
+-- of EVENT_TAIL_SWEEP only; STAYS OUT (no IsHeroic bridge).
+
+local timers = {}
+local keristraszaEnraged = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- maiden_of_virtue precedent: random alive player in the instance
+-- within range (the C++ SelectTarget(Random, 0, range, true)
+-- eligibility gate, playerOnly = true).
+local function randomTargetInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() and creature:IsWithinDist(p, range) then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_CRYSTAL_FIRE_BREATH (cpp:185-188): DoCastVictim(48096)
+-- 1-arg (non-triggered), 14s init / 14s repeat.
+local function crystalFireBreathTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CRYSTALFIRE_BREATH)
+    schedule(guid, "crystalfirebreath", 14000, function()
+        crystalFireBreathTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_CRYSTAL_CHAINS_CRYSTALLIZE (cpp:189-192): DoCast(me,
+-- 50155) 2-arg (non-triggered) self-cast, DUNGEON_MODE(30s,11s) ->
+-- 30s normal init, 5s repeat.
+local function crystalChainsCrystallizeTick(creature, guid)
+    creature:CastSpell(creature, SPELL_TAIL_SWEEP)
+    schedule(guid, "crystalchainscrystallize", 5000, function()
+        crystalChainsCrystallizeTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_TAIL_SWEEP (cpp:193-200): Talk(SAY_CRYSTAL_NOVA 4)
+-- unconditional; the normal leg SelectTarget(Random,0,100.0f,true)
+-- -> DoCast(target, 50997) 2-arg (non-triggered); 5s init /
+-- 30s normal repeat (DUNGEON_MODE(30s,11s)). The heroic leg
+-- DoCast(me, SPELL_CRYSTALLIZE 48179) stays out (no IsHeroic).
+local function tailSweepTick(creature, guid)
+    creature:Talk(SAY_CRYSTAL_NOVA)
+    local target = randomTargetInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_CRYSTAL_CHAINS)
+    end
+    schedule(guid, "tailsweep", 30000, function()
+        tailSweepTick(creature, guid)
+    end)
+end
+
+-- C++ DamageTaken (cpp:160-169): if (!_enrage &&
+-- HealthBelowPctDamaged(25, damage)) { Talk(SAY_ENRAGE 2);
+-- Talk(SAY_FRENZY 5); DoCast(me, SPELL_ENRAGE 8599) 2-arg
+-- (non-triggered); _enrage = true }. The (health - damage)
+-- pre-application convention (loken) — event 9 fires
+-- pre-application.
+local function keristraszaDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if keristraszaEnraged[guid] then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if (creature:GetHealth() - damage) * 100 / maxHealth < 25 then
+        keristraszaEnraged[guid] = true
+        creature:Talk(SAY_ENRAGE)
+        creature:Talk(SAY_FRENZY)
+        creature:CastSpell(creature, SPELL_ENRAGE)
+    end
+end
 
 -- C++ JustEngagedWith (:95-103): Talk(SAY_AGGRO) then DoCastAOE(SPELL_
 -- INTENSE_COLD 48094) 2-arg (non-triggered) one-shot, then
@@ -92,17 +211,47 @@ local SPELL_INTENSE_COLD = 48094 -- boss_keristrasza.cpp:38
 -- precedent — no bridge). DoCastAOE lowers to self-cast
 -- creature:CastSpell(creature, spell) (boss_ai.go convention —
 -- selin_fireheart / mr_smite precedent; the Oct-12 "no DoCastAOE
--- bridge" claim was wrong, retracted this run). The AuraScript
--- (spell_intense_cold) periodic SetGUID leg has no bridge —
--- documented below, not wired.
+-- bridge" claim was wrong, retracted in a prior run). The three
+-- ScheduleEvent legs (cpp:101-103) ride CreateLuaEvent timers
+-- (maiden_of_virtue precedent). The AuraScript (spell_intense_cold)
+-- periodic SetGUID leg has no bridge — documented below, not wired.
 local function keristraszaEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    keristraszaEnraged[guid] = false
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_INTENSE_COLD)
+    -- C++ JustEngagedWith (cpp:101-103): the three ScheduleEvent
+    -- legs ride CreateLuaEvent timers (maiden precedent).
+    schedule(guid, "crystalfirebreath", 14000, function()
+        crystalFireBreathTick(creature, guid)
+    end)
+    schedule(guid, "crystalchainscrystallize", 30000, function()
+        crystalChainsCrystallizeTick(creature, guid)
+    end)
+    schedule(guid, "tailsweep", 5000, function()
+        tailSweepTick(creature, guid)
+    end)
+end
+
+-- C++ Reset/Initialize: _enrage = false (cpp:78) + timers gone
+-- with the events — cancel timers, drop the latch.
+local function keristraszaLeaveCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    keristraszaEnraged[guid] = false
+end
+
+local function keristraszaReset(event, creature)
+    keristraszaLeaveCombat(event, creature)
 end
 
 -- C++ JustDied: Talk(SAY_DEATH) (the _JustDied bookkeeping has no
 -- bridge — tharon_ja precedent).
 local function keristraszaDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    keristraszaEnraged[guid] = false
     creature:Talk(SAY_DEATH)
 end
 
@@ -115,5 +264,8 @@ local function keristraszaTargetDied(event, creature, victim)
 end
 
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 1, keristraszaEnterCombat)
+RegisterCreatureEvent(ENTRY_KERISTRASZA, 2, keristraszaLeaveCombat)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 3, keristraszaTargetDied)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 4, keristraszaDied)
+RegisterCreatureEvent(ENTRY_KERISTRASZA, 9, keristraszaDamageTaken)
+RegisterCreatureEvent(ENTRY_KERISTRASZA, 23, keristraszaReset)

@@ -57,16 +57,21 @@
 -- Seer (18836): greater PW shield 33147 5s then 40s (self-cast) /
 -- heal 33144 {25s,40s} then {15s,40s} (self-cast) / prayer of
 -- healing 33152 {45s,55s} then {35s,50s} (self-cast).
--- Krosh Firehand (18832): greater fireball 33051 every 2s —
--- the C++ within-30-yd IsWithinDist gate has no distance bridge,
--- so the timer floor (2s) drives the cast (documented);
+-- Krosh Firehand (18832): greater fireball 33051 — the 2s
+-- floor drives the timer arm, a 500ms distance poller the C++
+-- within-30-yd (3D) early-fire OR (boss_high_king_maulgar.cpp:
+-- 538-543; both arms re-arm 2000 — the old "no distance bridge"
+-- claim was stale, IsWithinDist is bridged, retracted this run);
 -- spell shield 33054 5s then 30s (C++-exact DoCastVictim; the
 -- InterruptNonMeleeSpells arm has no interrupt bridge, blocked);
 -- blast wave 33061 20s then 60s — the C++ threat-list-within-15-
--- yd pick has no threat/distance bridges, so a random alive
--- player in the instance is used (teron convention), non-
--- triggered on the pick, nil pick casts nothing (burn
--- convention); the InterruptNonMeleeSpells arm is blocked.
+-- yd (2D) pick: the threat-list half has no bridge, the 15-yd
+-- 2D half is bridged via IsWithinDist2d, so a random alive
+-- player in the instance within 15 yd (2D) is used (teron
+-- convention), non-triggered on the pick, the pick passes
+-- through on empty (C++ DoCast on nullptr casts — the burn
+-- nil-skip was wrong, removed this run); the
+-- InterruptNonMeleeSpells arm is blocked.
 -- All five: OnEnterCombat(1) resets per-GUID state and re-arms
 -- the combat timers (the DoZoneInCombat arms have no zone-combat
 -- bridge; the SetBossState(IN_PROGRESS) arms are blocked on the
@@ -165,6 +170,22 @@ end
 
 local function randomPlayer(creature)
     local candidates = playersInInstance(creature)
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(1, #candidates)]
+end
+
+-- krosh blast wave (boss_high_king_maulgar.cpp:560): the C++ 15-yd
+-- pick is 2D (IsWithinDist(me, 15, false)) — the threat-list half
+-- of the pick stays unbridged.
+local function randomPlayerInRange2d(creature, range)
+    local candidates = {}
+    for _, p in ipairs(playersInInstance(creature)) do
+        if creature:IsWithinDist2d(p, range) then
+            candidates[#candidates + 1] = p
+        end
+    end
     if #candidates == 0 then
         return nil
     end
@@ -526,14 +547,34 @@ RegisterCreatureEvent(NPC_BLINDEYE_THE_SEER, 23, blindeyeReset)
 
 -- Krosh Firehand arms.
 
--- C++ greater fireball: fires when the timer lapses OR the
--- victim is within 30 yd; the IsWithinDist gate has no distance
--- bridge, so the 2s timer floor drives the cast (documented).
+-- C++ greater fireball (boss_high_king_maulgar.cpp:538-543):
+-- fires when the timer lapses OR the victim is within 30 yd
+-- (3D); both arms re-arm 2000. The 2s floor drives the timer
+-- arm; a 500ms distance poller drives the early-fire arm —
+-- an early fire restarts both the floor and the poller.
+-- Deviation: Go has no UNIT_STATE_CASTING model, so in-range
+-- casts fire at poll cadence rather than the C++ per-tick rate
+-- (bounded in C++ by the cast-time gate) — documented.
+local kroshFireballPoll
 local function kroshFireball(creature, guid)
     creature:CastSpell(nil, SPELL_GREATER_FIREBALL)
     schedule(guid, "fireball", 2000, function()
         kroshFireball(creature, guid)
     end)
+    schedule(guid, "fireballpoll", 500, function()
+        kroshFireballPoll(creature, guid)
+    end)
+end
+
+kroshFireballPoll = function(creature, guid)
+    local victim = creature:GetVictim()
+    if victim and creature:IsWithinDist(victim, 30) then
+        kroshFireball(creature, guid)
+    else
+        schedule(guid, "fireballpoll", 500, function()
+            kroshFireballPoll(creature, guid)
+        end)
+    end
 end
 
 -- C++-exact: DoCastVictim(33054) (the InterruptNonMeleeSpells
@@ -545,16 +586,18 @@ local function kroshSpellShield(creature, guid)
     end)
 end
 
--- C++ blast wave: random threat-list target within 15 yd. The
--- threat-list and 15-yd picks have no bridges, so a random
--- alive player in the instance is used (teron convention); nil
--- pick casts nothing but keeps the schedule (burn convention).
--- The InterruptNonMeleeSpells arm has no interrupt bridge.
+-- C++ blast wave (boss_high_king_maulgar.cpp:553-570): random
+-- threat-list target within 15 yd (2D — IsWithinDist(me, 15,
+-- false) at line 560). The threat-list half has no bridge; the
+-- 15-yd 2D half does (IsWithinDist2d), so a random alive player
+-- in the instance within 15 yd (2D) is used (teron convention).
+-- C++ casts on the pick even when the list is empty (DoCast on
+-- nullptr is not a UnitAI early-out), so the pick passes through
+-- rather than being nil-skipped. The InterruptNonMeleeSpells
+-- arm has no interrupt bridge.
 local function kroshBlastWave(creature, guid)
-    local target = randomPlayer(creature)
-    if target then
-        creature:CastSpell(target, SPELL_BLAST_WAVE)
-    end
+    local target = randomPlayerInRange2d(creature, 15)
+    creature:CastSpell(target, SPELL_BLAST_WAVE)
     schedule(guid, "blastwave", 60000, function()
         kroshBlastWave(creature, guid)
     end)
