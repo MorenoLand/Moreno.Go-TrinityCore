@@ -36,20 +36,24 @@
 -- NPC_DK_UNDERSTUDY 16803 — the nalorakk player-gate variant, extended
 -- with the understudy-entry arm); EVENT_STRIKE —
 -- DoCastVictim(Unbalancing Strike 26613), 21s init, 6s repeat
--- (moroes precedent); JustDied Talk(SAY_DEATH 3) (event 4; the
--- RemoveCharmAuras / events.Reset / instance->SetBossState bookkeeping
--- has no bridge — tharon_ja precedent). All timers cancelled on
--- 2/4/23 (gargolmar precedent). No summon-arm Talk orphaning:
--- EVENT_KNIFE's target leg rides the unbridged SelectTarget.
+-- (moroes precedent); EVENT_SHOUT — DoCastAOE(Disrupting Shout 29107)
+-- 2-arg (non-triggered), 16s init, 16s repeat — lowered to self-cast
+-- creature:CastSpell(creature, spell) (boss_ai.go DoCastAOE self-cast
+-- convention — selin_fireheart / mr_smite precedent; the Oct-12 "no
+-- DoCastAOE bridge" claim was wrong, retracted this run); JustDied
+-- Talk(SAY_DEATH 3) + DoCastAOE(Hopeless 29125, triggered) as
+-- creature:CastSpell(creature, spell, true) (event 4; the amanitar
+-- OnDied-cast precedent; the RemoveCharmAuras / events.Reset /
+-- instance->SetBossState bookkeeping has no bridge — tharon_ja
+-- precedent). All timers cancelled on 2/4/23 (gargolmar precedent).
+-- No summon-arm Talk orphaning: EVENT_KNIFE's target leg rides the
+-- unbridged SelectTarget.
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_razuvious SpellHit — SPELL_UNDERSTUDY_TAUNT 29060 ->
 -- Talk(SAY_TAUNTED 2, caster) — SpellHit never fires in the Lua
--- surface (SpellHit ruling); JustDied — DoCastAOE(Hopeless 29125,
--- triggered) — no DoCastAOE bridge (terestian/shazzrah precedent) +
--- the summons RemoveCharmAuras leg — summon STRAND absent;
+-- surface (SpellHit ruling);
 -- JustEngagedWith EVENT_ATTACK (7s) — SetCombatMovement(true) +
--- MoveChase — no motion bridges; EVENT_SHOUT (16s init, 16s repeat) —
--- DoCastAOE(Disrupting Shout 29107) — no DoCastAOE bridge;
+-- MoveChase — no motion bridges;
 -- EVENT_KNIFE (10s init, randtime(10s,15s) repeat) —
 -- SelectTarget(Random, 0, 45.0f) -> DoCast(Jagged Knife 55550) — no
 -- random-target SelectTarget bridge (cairne/kazzak precedent);
@@ -78,6 +82,8 @@ local SAY_SLAY = 1
 local SAY_DEATH = 3
 
 local SPELL_UNBALANCING_STRIKE = 26613
+local SPELL_DISRUPTING_SHOUT = 29107 -- boss_razuvious.cpp:37
+local SPELL_HOPELESS = 29125 -- boss_razuvious.cpp:39
 
 local timers = {}
 
@@ -112,12 +118,27 @@ local function strikeTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SHOUT (:152-154): DoCastAOE(Disrupting Shout 29107) 2-arg
+-- (non-triggered); 16s init, 16s repeat. DoCastAOE lowers to self-cast
+-- creature:CastSpell(creature, spell) (boss_ai.go convention —
+-- selin_fireheart / mr_smite precedent; the old "no DoCastAOE bridge"
+-- claim was wrong).
+local function shoutTick(creature, guid)
+    creature:CastSpell(creature, SPELL_DISRUPTING_SHOUT)
+    schedule(guid, "shout", 16000, function()
+        shoutTick(creature, guid)
+    end)
+end
+
 local function razyviousEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "strike", 21000, function()
         strikeTick(creature, guid)
+    end)
+    schedule(guid, "shout", 16000, function()
+        shoutTick(creature, guid)
     end)
 end
 
@@ -139,6 +160,12 @@ end
 
 local function razyviousDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (:108-118): Talk(SAY_DEATH) then DoCastAOE(Hopeless
+    -- 29125, triggered) — the amanitar precedent (Go carries no
+    -- alive-gate, so the OnDied cast is faithful). The summons
+    -- RemoveCharmAuras + instance->SetBossState bookkeeping has no
+    -- bridge (tharon_ja precedent).
+    creature:CastSpell(creature, SPELL_HOPELESS, true)
     cancelTimers(creature:GetGUID())
 end
 

@@ -57,15 +57,22 @@
 -- difficulty gate (kelidan precedent); EVENT_DOORS_UNLOCK —
 -- summon-iteration gate machine — no summon bridge; EVENT_PHASE_TWO
 -- — SetPhase(PHASE_TWO) + SetReactState(REACT_PASSIVE) +
--- ResetThreatList + DoCastAOE(SPELL_TELEPORT_LIVE 28026) + Talk(
+-- ResetThreatList + DoCastAOE(SPELL_TELEPORT_LIVE 28026) 2-arg
+-- (non-triggered) + Talk(
 -- SAY_PHASE_TWO 4) + Talk(EMOTE_PHASE_TWO 7) + the EVENT_TELEPORT/
--- EVENT_HARVEST/EVENT_RESUME_ATTACK schedules — no phase / react-
--- state / threat-list / DoCastAOE bridges; EVENT_TELEPORT —
--- HealthBelowPct(30) gate + SetReactState + ResetThreatList +
--- DoCastAOE(SPELL_TELEPORT_LIVE/SPELL_TELEPORT_DEAD 28026/28025) —
--- no health-pct / react-state / threat / DoCastAOE bridges;
--- EVENT_HARVEST — DoCastAOE(SPELL_HARVEST_SOUL 28679, triggered) —
--- no DoCastAOE bridge (terestian/shazzrah precedent); EVENT_BOLT —
+-- EVENT_HARVEST/EVENT_RESUME_ATTACK schedules — stays OUT: no phase /
+-- react-state / threat-list bridges (the Oct-12 "no DoCastAOE bridge"
+-- claim is superseded by the phase-machine verdict);
+-- EVENT_TELEPORT — HealthBelowPct(30) gate + SetReactState +
+-- ResetThreatList + DoCastAOE(SPELL_TELEPORT_LIVE/SPELL_TELEPORT_DEAD
+-- 28026/28025) — stays OUT: no health-pct / react-state / threat
+-- bridges;
+-- EVENT_HARVEST — DoCastAOE(SPELL_HARVEST_SOUL 28679, triggered),
+-- 15s init/repeat — stays OUT: scheduled only in PHASE_TWO via
+-- EVENT_PHASE_TWO (:502-506) behind the unbridged wave machine; the
+-- phase machine has no bridge (porting from combat start would
+-- fabricate phase-one casts — the Oct-12 "no DoCastAOE bridge" claim
+-- is superseded by the phase-gating verdict); EVENT_BOLT —
 -- DoCastVictim(SPELL_SHADOW_BOLT 29317), 2s repeat — moroes-ready in
 -- isolation but its only scheduling legs are EVENT_RESUME_ATTACK from
 -- the unbridged EVENT_PHASE_TWO / EVENT_TELEPORT machine (porting it
@@ -85,17 +92,25 @@
 -- FindEligibleTarget — no bridges; EnterEvadeMode — cross-AI
 -- DoAction(ACTION_MINION_EVADE) on Gothik via DATA_GOTHIK — no
 -- instance / cross-AI bridges; JustDied — DoCastAOE(_deathNotify,
--- triggered) anchor spells (27892/27928/27935) — no DoCastAOE bridge.
+-- triggered) anchor spells (27892/27928/27935) — stays OUT: the
+-- entries are local-enum-only (boss_gothik.cpp:94-100), entry-
+-- unverifiable, no Go registration (npc_stinky_icc precedent).
 -- npc_gothik_minion_livingtrainee (16124): DoCastAOE(SPELL_DEATH_
--- PLAGUE 55604), 5-20ms init/repeat — no DoCastAOE bridge.
+-- PLAGUE 55604) 2-arg (non-triggered), 5-20ms init/repeat — stays
+-- OUT: entry-blocked (same local-enum bar; the Oct-12 "no DoCastAOE
+-- bridge" claim is superseded).
 -- npc_gothik_minion_livingknight (16125): DoCastAOE(SPELL_SHADOW_MARK
--- 27825), 5-10ms init, 15-20ms repeat — no DoCastAOE bridge.
+-- 27825) 2-arg (non-triggered), 5-10ms init, 15-20ms repeat — stays
+-- OUT: entry-blocked.
 -- npc_gothik_minion_livingrider (16126): DoCastAOE(SPELL_SHADOW_BOLT_
--- VOLLEY 27831), 5-10ms init, 10-15ms repeat — no DoCastAOE bridge.
+-- VOLLEY 27831) 2-arg (non-triggered), 5-10ms init, 10-15ms repeat —
+-- stays OUT: entry-blocked.
 -- npc_gothik_minion_spectraltrainee (16127): DoCastAOE(SPELL_ARCANE_
--- EXPLOSION 27989), 2s init/repeat — no DoCastAOE bridge.
+-- EXPLOSION 27989) 2-arg (non-triggered), 2s init/repeat — stays OUT:
+-- entry-blocked.
 -- npc_gothik_minion_spectralknight (16148): DoCastAOE(SPELL_WHIRLWIND
--- 56408), 15-25ms init, 20-25ms repeat — no DoCastAOE bridge.
+-- 56408) 2-arg (non-triggered), 15-25ms init, 20-25ms repeat — stays
+-- OUT: entry-blocked.
 -- npc_gothik_minion_spectralrider (16150): Unholy Frenzy (55648/
 -- RAID_MODE 27995) priority cast on a friendly knight > rider > horse
 -- > Gothik without the buff (DoFindFriendlyMissingBuff) — no
@@ -103,7 +118,8 @@
 -- 8-12ms init, 10-15ms repeat — moroes-ready in isolation but entry-
 -- blocked — joins the bridgeable-but-entry-blocked queue.
 -- npc_gothik_minion_spectralhorse (16149): DoCastAOE(SPELL_STOMP
--- 27993), 10-15ms init, 14-18ms repeat — no DoCastAOE bridge.
+-- 27993) 2-arg (non-triggered), 10-15ms init, 14-18ms repeat — stays
+-- OUT: entry-blocked.
 -- npc_gothik_trigger (16137): SpellHit anchor machine (ANCHOR_1_x ->
 -- ANCHOR_2_x -> SKULLS_x -> DoSummon) — SpellHit never fires in the
 -- Lua surface (SpellHit ruling); skull-pile selection via

@@ -44,6 +44,12 @@
 -- PRISON 47543) leg has no aura-removal bridge — documented, not wired.
 -- EVENT_WHIRLWIND — DoCast(me, SPELL_WHIRLWIND 38618), 6s/8s init,
 -- 19500ms/25s repeat.
+-- EVENT_FRIGHTENING_SHOUT — DoCastAOE(SPELL_FRIGHTENING_SHOUT 19134)
+-- 2-arg (non-triggered), ungated, randtime(13s,15s) init,
+-- randtime(45s,55s) repeat — lowered to self-cast creature:CastSpell(
+-- creature, spell) (boss_ai.go DoCastAOE self-cast convention —
+-- selin_fireheart / mr_smite precedent; the Oct-12 "no DoCastAOE
+-- bridge" claim was wrong, retracted this run).
 -- KilledUnit — Talk(SAY_KILL 1) (event 3 — C++-GATED:
 -- victim->GetTypeId() == TYPEID_PLAYER).
 -- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied bookkeeping has
@@ -56,9 +62,6 @@
 -- DoCast(SPELL_CHARGE 60067), 3s/4s init, 11s/15s repeat — no
 -- random-target SelectTarget bridge (cairne/kazzak via anubrekhan
 -- precedent).
--- EVENT_FRIGHTENING_SHOUT — DoCastAOE(SPELL_FRIGHTENING_SHOUT 19134),
--- 13s/15s init, 45s/55s repeat — no DoCastAOE bridge
--- (terestian/shazzrah precedent).
 
 local ENTRY_STOUTBEARD = 26796
 local ENTRY_KOLURG = 26798
@@ -69,6 +72,7 @@ local SAY_DEATH = 2
 
 local SPELL_BATTLE_SHOUT = 31403
 local SPELL_WHIRLWIND = 38618
+local SPELL_FRIGHTENING_SHOUT = 19134 -- boss_nexus_commanders.cpp:26
 
 local timers = {}
 
@@ -103,12 +107,25 @@ local function whirlwindTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_FRIGHTENING_SHOUT (:79-81): DoCastAOE(SPELL_FRIGHTENING_
+-- SHOUT 19134) 2-arg (non-triggered), ungated; init randtime(13s,15s),
+-- re-arm randtime(45s,55s). DoCastAOE lowers to self-cast
+-- creature:CastSpell(creature, spell) (boss_ai.go convention —
+-- selin_fireheart / mr_smite precedent; the Oct-12 "no DoCastAOE
+-- bridge" claim was wrong, retracted this run).
+local function frighteningShoutTick(creature, guid)
+    creature:CastSpell(creature, SPELL_FRIGHTENING_SHOUT)
+    schedule(guid, "frightening_shout", math.random(45000, 55000), function()
+        frighteningShoutTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) + DoCast(me, SPELL_BATTLE_SHOUT
--- 31403) + schedules EVENT_WHIRLWIND (6s, 8s). The RemoveAurasDueToSpell
--- (SPELL_FROZEN_PRISON 47543) leg has no aura-removal bridge; the
--- EVENT_CHARGE_COMMANDER / EVENT_FRIGHTENING_SHOUT scheduling legs are
--- unbridged (no random-target SelectTarget / no DoCastAOE bridges) —
--- documented, not wired.
+-- 31403) + schedules EVENT_WHIRLWIND (6s, 8s) + EVENT_FRIGHTENING_SHOUT
+-- (13s, 15s). The RemoveAurasDueToSpell (SPELL_FROZEN_PRISON 47543) leg
+-- has no aura-removal bridge; the EVENT_CHARGE_COMMANDER scheduling leg
+-- is unbridged (no random-target SelectTarget bridge) — documented,
+-- not wired.
 local function commandersEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_BATTLE_SHOUT)
@@ -116,6 +133,9 @@ local function commandersEnterCombat(event, creature, target)
     cancelTimers(guid)
     schedule(guid, "whirlwind", math.random(6, 8) * 1000, function()
         whirlwindTick(creature, guid)
+    end)
+    schedule(guid, "frightening_shout", math.random(13, 15) * 1000, function()
+        frighteningShoutTick(creature, guid)
     end)
 end
 

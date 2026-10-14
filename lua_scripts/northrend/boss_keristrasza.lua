@@ -25,13 +25,15 @@
 -- timers in the ported arms; melee is engine-driven in Go (creature
 -- combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the DoCastAOE(SPELL_
--- INTENSE_COLD 48094) leg has no DoCastAOE bridge — nexus_commanders
--- EVENT_FRIGHTENING_SHOUT precedent — the BossAI::JustEngagedWith
--- instance-bookkeeping leg has no bridge — tharon_ja precedent — and
--- the three events.ScheduleEvent legs (EVENT_CRYSTAL_FIRE_BREATH 14s /
--- EVENT_CRYSTAL_CHAINS_CRYSTALLIZE DUNGEON_MODE(30s, 11s) / EVENT_TAIL_
--- SWEEP 5s) have no timer-event bridge).
+-- JustEngagedWith — Talk(SAY_AGGRO 0) + DoCastAOE(SPELL_INTENSE_COLD
+-- 48094) 2-arg (non-triggered) one-shot as creature:CastSpell(creature,
+-- spell) (event 1; boss_ai.go DoCastAOE self-cast convention —
+-- selin_fireheart / mr_smite precedent; the Oct-12 "no DoCastAOE
+-- bridge" claim was wrong, retracted this run; the BossAI::
+-- JustEngagedWith instance-bookkeeping leg has no bridge — tharon_ja
+-- precedent — and the three events.ScheduleEvent legs (EVENT_CRYSTAL_
+-- FIRE_BREATH 14s / EVENT_CRYSTAL_CHAINS_CRYSTALLIZE DUNGEON_MODE(30s,
+-- 11s) / EVENT_TAIL_SWEEP 5s) have no timer-event bridge).
 -- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied bookkeeping has
 -- no bridge — tharon_ja precedent).
 -- KilledUnit — Talk(SAY_SLAY 1) (event 3 — C++-GATED: who->
@@ -82,13 +84,20 @@ local SAY_AGGRO = 0
 local SAY_SLAY  = 1
 local SAY_DEATH = 3
 
--- C++ JustEngagedWith: Talk(SAY_AGGRO) (the DoCastAOE(SPELL_INTENSE_
--- COLD 48094) leg has no DoCastAOE bridge — nexus_commanders
--- precedent — the BossAI::JustEngagedWith instance-bookkeeping leg has
--- no bridge — tharon_ja precedent — and the three events.ScheduleEvent
--- legs have no timer-event bridge).
+local SPELL_INTENSE_COLD = 48094 -- boss_keristrasza.cpp:38
+
+-- C++ JustEngagedWith (:95-103): Talk(SAY_AGGRO) then DoCastAOE(SPELL_
+-- INTENSE_COLD 48094) 2-arg (non-triggered) one-shot, then
+-- BossAI::JustEngagedWith (instance bookkeeping — tharon_ja
+-- precedent — no bridge). DoCastAOE lowers to self-cast
+-- creature:CastSpell(creature, spell) (boss_ai.go convention —
+-- selin_fireheart / mr_smite precedent; the Oct-12 "no DoCastAOE
+-- bridge" claim was wrong, retracted this run). The AuraScript
+-- (spell_intense_cold) periodic SetGUID leg has no bridge —
+-- documented below, not wired.
 local function keristraszaEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:CastSpell(creature, SPELL_INTENSE_COLD)
 end
 
 -- C++ JustDied: Talk(SAY_DEATH) (the _JustDied bookkeeping has no

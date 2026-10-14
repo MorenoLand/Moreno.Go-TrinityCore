@@ -83,11 +83,17 @@
 -- random-target bridges (cairne/kazzak precedent).
 -- EnterPhaseGround — phase-scheduler machinery for the unbridged
 -- legs below (no phase bridge).
--- EVENT_TAIL — DoCastAOE(Tail Sweep 55697) — no DoCastAOE bridge
--- (terestian/shazzrah precedent).
--- EVENT_DRAIN — DoCastAOE(Life Drain 28542) — same bar.
--- EVENT_BLIZZARD — DoCastAOE(Summon Blizzard 28560) + RAID_MODE(
--- 20s, 7s) repeat — same bar + no difficulty bridge (kelidan
+-- EVENT_TAIL — DoCastAOE(Tail Sweep 55697) 2-arg (non-triggered),
+-- randtime(7s,10s) init/repeat — stays OUT: scheduled with
+-- PHASE_GROUND only (:230/:301-303); the phase machine has no bridge
+-- (gothik precedent; the Oct-12 "no DoCastAOE bridge" claim is
+-- superseded by the phase-gating verdict).
+-- EVENT_DRAIN — CastDrain() -> DoCastAOE(Life Drain 28542) 2-arg
+-- (non-triggered), randtime(22s,28s) repeat — stays OUT: same
+-- PHASE_GROUND bar.
+-- EVENT_BLIZZARD — DoCastAOE(Summon Blizzard 28560) 2-arg
+-- (non-triggered) + RAID_MODE(20s, 7s) repeat — stays OUT: same
+-- PHASE_GROUND bar + the summon leg + no difficulty bridge (kelidan
 -- precedent).
 -- EVENT_FLIGHT — HealthAbovePct(10) + REACT_PASSIVE + AttackStop +
 -- MovePoint home — no health-pct / motion / react bridges.
@@ -97,12 +103,14 @@
 -- EVENT_ICEBOLT — DoCast(target, Icebolt 28522) over the stored
 -- GUID vector — the target selection is unbridged, so the leg is
 -- not ported (cairne/kazzak precedent).
--- EVENT_BREATH — DoCastAOE(Frost Missile 30101, visual) — no
--- DoCastAOE bridge.
--- EVENT_EXPLOSION — DoCastAOE(Frost Breath 28524 +
--- Frost Breath Anti-Cheat 29318) + instance
--- DoRemoveAurasDueToSpellOnPlayers(ICEBOLT) — no DoCastAOE /
--- instance-aura bridges.
+-- EVENT_BREATH — Talk(EMOTE_BREATH) + DoCastAOE(Frost Missile 30101,
+-- visual) 2-arg (non-triggered), chains EVENT_EXPLOSION 8s — stays
+-- OUT: scheduled with PHASE_FLIGHT only (:361-363/:376-380); the
+-- phase machine has no bridge.
+-- EVENT_EXPLOSION — DoCastAOE(Frost Breath 28524 + Frost Breath
+-- Anti-Cheat 29318) 2-arg (non-triggered) + instance
+-- DoRemoveAurasDueToSpellOnPlayers(ICEBOLT) — stays OUT: same
+-- PHASE_FLIGHT bar + the instance-aura leg has no bridge.
 -- EVENT_LAND — buffet DespawnOrUnsummon (cross-AI, no bridge) +
 -- hover/emote/phase legs (no hover / emote / phase bridges).
 -- EVENT_BIRTH — visible/flag/react legs (no bridges).

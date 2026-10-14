@@ -18,14 +18,28 @@
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_emerald_dragons" hits boss_emerald_dragons.cpp only (+ the
 -- loader decl/call lines). No emerald-dragons lua existed.
--- Eluna creature events: 1 OnEnterCombat.
--- Ported arms (C++-exact for all modeled arms) — the four identical
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
+-- 23 OnReset. Timers via CreateLuaEvent.
+-- Ported arms (C++-exact for all modeled arms) — the four
 -- JustEngagedWith arms (event 1 — the auriaya precedent; the
 -- WorldBossAI::JustEngagedWith legs have no bridges):
--- boss_ysondre JustEngagedWith — Talk(SAY_YSONDRE_AGGRO 0)
--- boss_lethon JustEngagedWith — Talk(SAY_LETHON_AGGRO 0)
--- boss_emeriss JustEngagedWith — Talk(SAY_EMERISS_AGGRO 0)
--- boss_taerar JustEngagedWith — Talk(SAY_TAERAR_AGGRO 0)
+-- boss_ysondre JustEngagedWith — Talk(SAY_YSONDRE_AGGRO 0) +
+-- EVENT_LIGHTNING_WAVE (DoCastVictim 24819, 12s init,
+-- randtime(10s,20s) repeat);
+-- boss_lethon JustEngagedWith — Talk(SAY_LETHON_AGGRO 0) +
+-- EVENT_SHADOW_BOLT_WHIRL (me->CastSpell(nullptr, 24834, false),
+-- non-triggered, 10s init, randtime(15s,30s) repeat — lowered to
+-- self-cast);
+-- boss_emeriss JustEngagedWith — Talk(SAY_EMERISS_AGGRO 0) +
+-- EVENT_VOLATILE_INFECTION (DoCastVictim 24928, 12s init, 120s
+-- repeat);
+-- boss_taerar JustEngagedWith — Talk(SAY_TAERAR_AGGRO 0) +
+-- EVENT_ARCANE_BLAST (DoCastVictim 24857, 12s init,
+-- randtime(7s,12s) repeat) + EVENT_BELLOWING_ROAR (DoCastVictim
+-- 22686, 30s init, randtime(20s,30s) repeat).
+-- (The Oct-12 "no-timer bridge" claim was wrong — CreateLuaEvent is
+-- a real bridge, retracted this run.) All timers cancelled on
+-- 2/4/23 (gargolmar precedent).
 -- DOCUMENTED-ONLY (in this header; only the four dragon entries
 -- registered):
 -- emerald_dragonAI Reset — DoCast(me, SPELL_MARK_OF_NATURE_AURA 25041,
@@ -62,11 +76,9 @@
 -- no-DamageTaken bridge; the SummonedCreatureDies _shades-- leg rides
 -- no-summon-death bridge; the UpdateAI banish/timeout machine rides
 -- no-timer / no-flag / no-react-state bridges.
--- The four dragon ExecuteEvent EVENT_LIGHTNING_WAVE (12s, then 10-20s) /
--- EVENT_SHADOW_BOLT_WHIRL (10s, then 15-30s) / EVENT_VOLATILE_INFECTION
--- (12s, then 120s) / EVENT_ARCANE_BLAST (12s, then 7-12s) /
--- EVENT_BELLOWING_ROAR (30s, then 20-30s) arms — no-timer / no-cast
--- bridges.
+-- The four dragon ExecuteEvent arms ported above (EVENT_LIGHTNING_WAVE
+-- / EVENT_SHADOW_BOLT_WHIRL / EVENT_VOLATILE_INFECTION /
+-- EVENT_ARCANE_BLAST / EVENT_BELLOWING_ROAR).
 -- npc_dream_fog — zero Talk; the _roamTimer 15-30s chase / 2.5s
 -- MoveRandom + MoveChase + SetWalk + walk-speed machine — no-movement /
 -- no-timer bridges — NOT registered.
@@ -88,14 +100,156 @@ local ENTRY_TAERAR  = 14890
 local SAY_AGGRO = 0 -- SAY_YSONDRE_AGGRO / SAY_LETHON_AGGRO /
                     -- SAY_EMERISS_AGGRO / SAY_TAERAR_AGGRO (all 0)
 
--- C++ boss_ysondre/boss_lethon/boss_emeriss/boss_taerar::JustEngagedWith:
--- Talk(SAY_*_AGGRO); WorldBossAI::JustEngagedWith(who) — the auriaya
--- precedent (the WorldBossAI legs have no bridges).
-local function dragonEnterCombat(event, creature, target)
-    creature:Talk(SAY_AGGRO)
+local SPELL_LIGHTNING_WAVE = 24819 -- boss_emerald_dragons.cpp:248 (Ysondre)
+local SPELL_SHADOW_BOLT_WHIRL = 24834 -- boss_emerald_dragons.cpp:337 (Lethon)
+local SPELL_VOLATILE_INFECTION = 24928 -- boss_emerald_dragons.cpp:475 (Emeriss)
+local SPELL_ARCANE_BLAST = 24857 -- boss_emerald_dragons.cpp:568 (Taerar)
+local SPELL_BELLOWING_ROAR = 22686 -- boss_emerald_dragons.cpp:563 (Taerar)
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
 end
 
-RegisterCreatureEvent(ENTRY_YSONDRE, 1, dragonEnterCombat)
-RegisterCreatureEvent(ENTRY_LETHON,  1, dragonEnterCombat)
-RegisterCreatureEvent(ENTRY_EMERISS, 1, dragonEnterCombat)
-RegisterCreatureEvent(ENTRY_TAERAR,  1, dragonEnterCombat)
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ boss_ysondre::ExecuteEvent (:299-301): DoCastVictim(SPELL_
+-- LIGHTNING_WAVE 24819) 2-arg (non-triggered); 12s init,
+-- randtime(10s,20s) repeat.
+local function lightningWaveTick(creature, guid)
+    creature:CastSpell(nil, SPELL_LIGHTNING_WAVE)
+    schedule(guid, "lightning_wave", math.random(10, 20) * 1000, function()
+        lightningWaveTick(creature, guid)
+    end)
+end
+
+-- C++ boss_lethon::ExecuteEvent (:399-401): me->CastSpell(nullptr,
+-- SPELL_SHADOW_BOLT_WHIRL 24834, false) — explicit non-triggered,
+-- no explicit target; 10s init, randtime(15s,30s) repeat. Lowered to
+-- self-cast creature:CastSpell(creature, spell) (boss_ai.go DoCastAOE
+-- self-cast convention — selin_fireheart / mr_smite precedent).
+local function shadowBoltWhirlTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SHADOW_BOLT_WHIRL)
+    schedule(guid, "shadow_bolt_whirl", math.random(15, 30) * 1000, function()
+        shadowBoltWhirlTick(creature, guid)
+    end)
+end
+
+-- C++ boss_emeriss::ExecuteEvent (:529-531): DoCastVictim(SPELL_
+-- VOLATILE_INFECTION 24928) 2-arg (non-triggered); 12s init, 120s
+-- repeat.
+local function volatileInfectionTick(creature, guid)
+    creature:CastSpell(nil, SPELL_VOLATILE_INFECTION)
+    schedule(guid, "volatile_infection", 120000, function()
+        volatileInfectionTick(creature, guid)
+    end)
+end
+
+-- C++ boss_taerar::ExecuteEvent (:649-651): DoCast(SPELL_ARCANE_BLAST
+-- 24857) 1-arg (DoCastVictim); 12s init, randtime(7s,12s) repeat.
+local function arcaneBlastTick(creature, guid)
+    creature:CastSpell(nil, SPELL_ARCANE_BLAST)
+    schedule(guid, "arcane_blast", math.random(7, 12) * 1000, function()
+        arcaneBlastTick(creature, guid)
+    end)
+end
+
+-- C++ boss_taerar::ExecuteEvent (:653-655): DoCast(SPELL_BELLOWING_
+-- ROAR 22686) 1-arg (DoCastVictim); 30s init, randtime(20s,30s)
+-- repeat.
+local function bellowingRoarTick(creature, guid)
+    creature:CastSpell(nil, SPELL_BELLOWING_ROAR)
+    schedule(guid, "bellowing_roar", math.random(20, 30) * 1000, function()
+        bellowingRoarTick(creature, guid)
+    end)
+end
+
+-- C++ boss_ysondre/boss_lethon/boss_emeriss/boss_taerar::JustEngagedWith:
+-- Talk(SAY_*_AGGRO); WorldBossAI::JustEngagedWith(who) — the auriaya
+-- precedent (the WorldBossAI legs have no bridges). Each dragon seeds
+-- its own timer arm(s) below (the Oct-12 "no-timer bridge" claim was
+-- wrong — CreateLuaEvent is a real bridge, retracted this run).
+local function ysondreEnterCombat(event, creature, target)
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "lightning_wave", 12000, function()
+        lightningWaveTick(creature, guid)
+    end)
+end
+
+local function lethonEnterCombat(event, creature, target)
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "shadow_bolt_whirl", 10000, function()
+        shadowBoltWhirlTick(creature, guid)
+    end)
+end
+
+local function emerissEnterCombat(event, creature, target)
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "volatile_infection", 12000, function()
+        volatileInfectionTick(creature, guid)
+    end)
+end
+
+local function taerarEnterCombat(event, creature, target)
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "arcane_blast", 12000, function()
+        arcaneBlastTick(creature, guid)
+    end)
+    schedule(guid, "bellowing_roar", 30000, function()
+        bellowingRoarTick(creature, guid)
+    end)
+end
+
+local function dragonLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function dragonDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+local function dragonReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_YSONDRE, 1, ysondreEnterCombat)
+RegisterCreatureEvent(ENTRY_YSONDRE, 2, dragonLeaveCombat)
+RegisterCreatureEvent(ENTRY_YSONDRE, 4, dragonDied)
+RegisterCreatureEvent(ENTRY_YSONDRE, 23, dragonReset)
+RegisterCreatureEvent(ENTRY_LETHON,  1, lethonEnterCombat)
+RegisterCreatureEvent(ENTRY_LETHON,  2, dragonLeaveCombat)
+RegisterCreatureEvent(ENTRY_LETHON,  4, dragonDied)
+RegisterCreatureEvent(ENTRY_LETHON,  23, dragonReset)
+RegisterCreatureEvent(ENTRY_EMERISS, 1, emerissEnterCombat)
+RegisterCreatureEvent(ENTRY_EMERISS, 2, dragonLeaveCombat)
+RegisterCreatureEvent(ENTRY_EMERISS, 4, dragonDied)
+RegisterCreatureEvent(ENTRY_EMERISS, 23, dragonReset)
+RegisterCreatureEvent(ENTRY_TAERAR,  1, taerarEnterCombat)
+RegisterCreatureEvent(ENTRY_TAERAR,  2, dragonLeaveCombat)
+RegisterCreatureEvent(ENTRY_TAERAR,  4, dragonDied)
+RegisterCreatureEvent(ENTRY_TAERAR,  23, dragonReset)

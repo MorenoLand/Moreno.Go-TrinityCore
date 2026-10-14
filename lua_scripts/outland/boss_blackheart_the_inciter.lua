@@ -19,8 +19,13 @@
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_blackheart_the_inciter::JustEngagedWith — Talk(SAY_AGGRO 1)
--- (line 92; event 1 — the auriaya precedent; the ScheduleEvent legs
--- ride the no-timer bridge and are documented-only below).
+-- (line 92; event 1 — the auriaya precedent) + schedules
+-- EVENT_WAR_STOMP (15s).
+-- EVENT_WAR_STOMP — DoCast(me, SPELL_WAR_STOMP 33707) 2-arg
+-- (non-triggered), ungated, 15s init, randtime(18s,24s) repeat
+-- (the Oct-12 "no-timer bridge" claim was wrong — CreateLuaEvent is a
+-- real bridge, retracted this run). All timers cancelled on 2/4/23
+-- (gargolmar precedent).
 -- boss_blackheart_the_inciter::KilledUnit — Talk(SAY_SLAY 2) (line
 -- 98) gated on who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated precedent (event 3).
@@ -36,13 +41,17 @@
 -- -- on zero, REACT_PASSIVE while any charmed player) driven from
 -- BlackheartCharmedPlayerAI::OnCharmed — no charmed-player-actor /
 -- no-instance bridges — documented-only.
--- boss_blackheart_the_inciter::UpdateAI — the whole timer machine
--- rides no-timer / no-cast / no-random-target bridges:
+-- boss_blackheart_the_inciter::UpdateAI — the timer machine:
 -- EVENT_INCITE_CHAOS (threat-list-size > 1 gate → ResetThreatList
--- + DoCast(me, SPELL_INCITE_CHAOS 33676), 40s cycle);
+-- + DoCast(me, SPELL_INCITE_CHAOS 33676), 40s cycle) stays OUT — the
+-- whole effect is SpellScript-delivered (spell_blackheart_incite_
+-- chaos HandleDummy cycles INCITE_SPELLS {33677, 33680, 33681, 33682,
+-- 33683} on hit units); a bare cast would fabricate a no-op cast bar
+-- (shazzrah precedent);
 -- EVENT_CHARGE_ATTACK (SelectTarget random → DoCast(target,
--- SPELL_CHARGE 33709), 15-25s cycle); EVENT_WAR_STOMP (DoCast(me,
--- SPELL_WAR_STOMP 33707), 18-24s cycle); DoMeleeAttackIfReady —
+-- SPELL_CHARGE 33709), 15-25s cycle) stays OUT — no random-target
+-- SelectTarget bridge (cairne/kazzak precedent);
+-- EVENT_WAR_STOMP ported above; DoMeleeAttackIfReady —
 -- documented-only.
 -- BlackheartCharmedPlayerAI (SimpleCharmedPlayerAI) —
 -- OnCharmed: instance GetGuidData(DATA_BLACKHEART_THE_INCITER) →
@@ -71,14 +80,66 @@ local SAY_AGGRO = 1
 local SAY_SLAY  = 2
 local SAY_DEATH = 4
 
--- C++ boss_blackheart_the_inciter::JustEngagedWith:
+local SPELL_WAR_STOMP = 33707 -- boss_blackheart_the_inciter.cpp:34
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_WAR_STOMP (:149-151): DoCast(me, SPELL_WAR_STOMP 33707)
+-- 2-arg (non-triggered), ungated; 15s init, randtime(18s,24s) repeat.
+local function warStompTick(creature, guid)
+    creature:CastSpell(creature, SPELL_WAR_STOMP)
+    schedule(guid, "war_stomp", math.random(18, 24) * 1000, function()
+        warStompTick(creature, guid)
+    end)
+end
+
+-- C++ boss_blackheart_the_inciter::JustEngagedWith (:85-87):
 -- events.ScheduleEvent(EVENT_INCITE_CHAOS, 20s);
 -- events.ScheduleEvent(EVENT_CHARGE_ATTACK, 5s);
 -- events.ScheduleEvent(EVENT_WAR_STOMP, 15s);
--- Talk(SAY_AGGRO); — the auriaya precedent (event 1; the
--- ScheduleEvent legs ride the no-timer bridge — documented-only).
+-- Talk(SAY_AGGRO); — the auriaya precedent (event 1). Only WAR_STOMP
+-- ports: INCITE_CHAOS is SpellScript-delivered (spell_blackheart_
+-- incite_chaos HandleDummy cycles 33677/33680/33681/33682/33683 on
+-- hit units — a bare cast would be a no-op cast bar, shazzrah
+-- precedent) and its threat-list-size>1 gate + ResetThreatList ride
+-- the same unbridged machine; CHARGE_ATTACK is random-target.
 local function blackheartEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "war_stomp", 15000, function()
+        warStompTick(creature, guid)
+    end)
+end
+
+local function blackheartLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function blackheartReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_blackheart_the_inciter::KilledUnit:
@@ -97,8 +158,11 @@ end
 -- bridge — documented-only).
 local function blackheartDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 1, blackheartEnterCombat)
+RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 2, blackheartLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 3, blackheartTargetDied)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 4, blackheartDied)
+RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 23, blackheartReset)

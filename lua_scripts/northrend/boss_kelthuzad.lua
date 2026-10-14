@@ -56,16 +56,22 @@
 -- SetPhase(PHASE_TWO) + NOT_SELECTABLE/immune/ReactState/ThreatList
 -- legs + Talk(EMOTE_PHASE_TWO 13) + the five phase-two event schedules
 -- — no phase / react-state / threat bridges; EVENT_FROSTBOLT_VOLLEY —
--- DoCastAOE(SPELL_FROSTBOLT_VOLLEY 28479) — no DoCastAOE bridge
--- (terestian/shazzrah precedent); EVENT_SHADOW_FISSURE —
+-- DoCastAOE(SPELL_FROSTBOLT_VOLLEY 28479) 2-arg (non-triggered),
+-- randtime(24s,28s) init, randtime(16s,18s) repeat — stays OUT:
+-- scheduled only in PHASE_TWO via EVENT_PHASE_TWO (:441/:449-452);
+-- the phase machine has no bridge (gothik precedent; the Oct-12 "no
+-- DoCastAOE bridge" claim is superseded by the phase-gating verdict); EVENT_SHADOW_FISSURE —
 -- SelectTarget(Random, 0, 0.0f, true) -> DoCast(SHADOW_FISSURE 27810) —
 -- no random-target SelectTarget bridge (cairne/kazzak precedent);
 -- EVENT_DETONATE_MANA — random mana-user SelectTarget ->
 -- DoCast(DETONATE_MANA 27819) — no random-target bridge;
 -- EVENT_FROST_BLAST — SelectTarget(Random, 1) -> DoCast(FROST_BLAST
 -- 27808) — no random-target bridge; EVENT_CHAINS —
--- DoCastAOE(SPELL_CHAINS_DUMMY 28408), 25-man only — no DoCastAOE
--- bridge + no difficulty bridge (kelidan precedent);
+-- DoCastAOE(SPELL_CHAINS_DUMMY 28408) 2-arg (non-triggered),
+-- randtime(60s,80s) init, 1min+randtime(0s,20s) repeat — stays OUT:
+-- scheduled only in PHASE_TWO via EVENT_PHASE_TWO + gated on
+-- Is25ManRaid (:447/:475-480); the phase machine and the difficulty
+-- gate have no bridge (kelidan precedent);
 -- EVENT_TRANSITION_REPLY — lich-king cross-AI Talk(SAY_ANSWER_REQUEST
 -- 3) via DATA_LICH_KING + the four KT portal GO states — instance
 -- model / no GO-state bridge; EVENT_TRANSITION_SUMMON —
@@ -80,9 +86,11 @@
 -- NOT_SELECTABLE + SetImmuneToPC(true) — no react-state / immunity
 -- bridges; EnterEvadeMode — portal GO-state legs — instance model;
 -- DoAction(ACTION_BEGIN_ENCOUNTER) — instance->SetBossState(BOSS_KELTHUZAD,
--- IN_PROGRESS) + DoCastAOE(SPELL_VISUAL_CHANNEL 29423) +
--- Talk(SAY_SUMMON_MINIONS 14) + SummonCreatureGroup ×7 + minion
--- pocket IDs — instance / summon / SetData bridges absent;
+-- IN_PROGRESS) + DoCastAOE(SPELL_VISUAL_CHANNEL 29423) 2-arg
+-- (non-triggered) + Talk(SAY_SUMMON_MINIONS 14) + SummonCreatureGroup ×7
+-- + minion pocket IDs — stays OUT: the instance/DoAction/summon machine
+-- has no bridge (the Oct-12 "no DoCastAOE bridge" claim is superseded
+-- by the instance-machine verdict);
 -- DoAction(ACTION_ABOMINATION_DIED) — cross-AI (guardians' entries are
 -- DB-side, no registration) — documented-only;
 -- GetAIForCharmedPlayer -> KelThuzadCharmedPlayerAI

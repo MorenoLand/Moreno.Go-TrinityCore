@@ -36,16 +36,21 @@
 -- bookkeeping has no bridge — tharon_ja precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- EVENT_DISRUPT (init randtime(15s,20s), repeat 11s) —
--- DoCastAOE(SPELL_SPELL_DISRUPTION 29310) — no DoCastAOE bridge
--- (terestian/shazzrah precedent).
+-- DoCastAOE(SPELL_SPELL_DISRUPTION 29310) 2-arg (non-triggered) —
+-- stays OUT: scheduled with PHASE_FIGHT only (:122/:156-157); the
+-- phase machine has no bridge (gothik precedent; the Oct-12 "no
+-- DoCastAOE bridge" claim is superseded by the phase-gating verdict).
 -- EVENT_FEVER (init randtime(10s,20s), repeat randtime(20s,25s)) —
--- DoCastAOE(SPELL_DECREPIT_FEVER 29998, 25-man 55011) — no DoCastAOE
--- bridge + no difficulty bridge (kelidan precedent).
+-- DoCastAOE(SPELL_DECREPIT_FEVER 29998, 25-man 55011) 2-arg
+-- (non-triggered) — stays OUT: same PHASE_FIGHT bar + no difficulty
+-- bridge (kelidan precedent).
 -- EVENT_DANCE (90s, PHASE_FIGHT-only) — the whole phase machine rides
 -- unbridged legs: SetPhase(PHASE_DANCE), SetReactState(REACT_PASSIVE)
 -- (no react-state bridge), AttackStop/StopMoving (no motion bridges),
 -- DoCast(SPELL_TELEPORT_SELF 30211), DoCastAOE(SPELL_PLAGUE_CLOUD
--- 29350) (no DoCastAOE bridge) — so Talk(SAY_TAUNT 2) and
+-- 29350) 2-arg (non-triggered) — the plague-cloud cast is
+-- PHASE_DANCE-gated behind the same unbridged phase flip, so it
+-- stays OUT too (gothik precedent) — so Talk(SAY_TAUNT 2) and
 -- Talk(EMOTE_DANCE 4) join it documented-only: arming the Talks alone
 -- would fire taunts outside the dance context (genuinely-bridgeable
 -- bar fails — king_dred RAPTOR_CALL precedent).
