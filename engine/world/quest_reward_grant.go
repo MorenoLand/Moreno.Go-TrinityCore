@@ -153,7 +153,19 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward commit failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
-	return s.applyQuestRewardGrants(ctx, view, questID, giverGUID, reward, grants, destroyedGUIDs, true)
+	if !s.applyQuestRewardGrants(ctx, view, questID, giverGUID, reward, grants, destroyedGUIDs, true) {
+		return false
+	}
+	// QuestHandler.cpp:330-335 — Eluna CREATURE_EVENT_ON_QUEST_REWARD
+	// (event 34) fires from the reward-completion switch arm AFTER the
+	// next-quest chain (SendQuestGiverQuestDetails) and ClearMenus, not
+	// before the grant: a script observing OnQuestReward sees the chain's
+	// auto-accept add already applied. The reward-choice index rides as the
+	// opt argument. Go previously fired the hooks at the top of the grant
+	// flow, ahead of every grant and the chain.
+	s.fireCreatureQuestHook(ctx, giverGUID, scripting.CreatureEventOnQuestReward, s.luaQuest(ctx, questID), reward)
+	s.fireGameObjectQuestHook(ctx, giverGUID, scripting.GameObjectEventOnQuestReward, s.luaQuest(ctx, questID), reward)
+	return true
 }
 
 // rewardTrackingQuest mirrors the TRACKING arm of Player::CompleteQuest
@@ -237,11 +249,6 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 	// C++ Player::RewardQuest (Player.cpp:15439-15448): the quest reward mail
 	// goes out as part of the reward flow, once the reward is committed.
 	s.sendQuestRewardMail(ctx, questID, giverGUID)
-	// Eluna CREATURE_EVENT_ON_QUEST_REWARD (event 34), fired from the
-	// reward-completion switch arm after the grant (QuestHandler.cpp:330-335);
-	// the reward-choice index rides as the opt argument.
-	s.fireCreatureQuestHook(ctx, giverGUID, scripting.CreatureEventOnQuestReward, s.luaQuest(ctx, questID), reward)
-	s.fireGameObjectQuestHook(ctx, giverGUID, scripting.GameObjectEventOnQuestReward, s.luaQuest(ctx, questID), reward)
 	for slot := range s.player.QuestLog {
 		if s.player.QuestLog[slot].QuestID == questID {
 			s.player.QuestLog[slot] = questLogEntry{}
@@ -427,7 +434,9 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 						s.fireGameObjectQuestHook(ctx, giverGUID, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, nextQuestID))
 						s.fireItemQuestHook(ctx, giverGUID, nextQuestID)
 					}
-					_ = s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), buildQuestGiverDetails(nextData, giverGUID, 0), true)
+					// GossipDef.cpp:411 — the chain details packet's InformUnit is
+					// the turner-in's current sharing info, not zero.
+					_ = s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), buildQuestGiverDetails(nextData, giverGUID, s.sharingQuestSender), true)
 				}
 			}
 		}

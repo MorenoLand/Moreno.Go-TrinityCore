@@ -288,7 +288,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 		s.debug("quest details failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
-	packet := buildQuestGiverDetails(data, guid, 0)
+	packet := buildQuestGiverDetails(data, guid, s.sharingQuestSender)
 	s.debug("quest details response", "account", s.accountName, "quest", questID)
 
 	// In TrinityCore Player.cpp:14836 and HandleQuestgiverQueryQuestOpcode

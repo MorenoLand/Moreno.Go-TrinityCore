@@ -34988,7 +34988,9 @@ func (s *session) handleEffectQuestStart(ctx context.Context, eff wotlk.SpellEff
 			}
 			targetSess.addQuestToPlayer(ctx, questID, 0)
 		}
-		details := buildQuestGiverDetails(data, targetGUID, 0)
+		// GossipDef.cpp:411 — InformUnit is the target's current sharing
+		// info (SpellEffects.cpp:5314 site), not zero.
+		details := buildQuestGiverDetails(data, targetGUID, targetSess.sharingQuestSender)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)
 	}
 }

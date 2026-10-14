@@ -1356,12 +1356,14 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 			continue
 		}
 
-		// QuestHandler.cpp:614-617 — the sharing info and the details screen
-		// are set for every receiver first; the details packet carries the
-		// receiver's own guid as the quest-giver npc, not the sharer's.
+		// QuestHandler.cpp:636 — the details packet's InformUnit field carries the
+		// receiver's sharing info (the sharer's GUID, set two lines above), not
+		// zero: PlayerMenu::SendQuestGiverQuestDetails reads InformUnit from
+		// GetPlayer()->GetPlayerSharingQuest() (GossipDef.cpp:411). The packet
+		// carries the receiver's own guid as the quest-giver npc.
 		receiver.sharingQuestID = questID
 		receiver.sharingQuestSender = s.playerGUID
-		details := buildQuestGiverDetails(data, receiver.playerGUID, 0)
+		details := buildQuestGiverDetails(data, receiver.playerGUID, s.playerGUID)
 		_ = receiver.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)
 		// QuestHandler.cpp:618-622 + 637-638 — the auto-accept arm: the gate
 		// is QUEST_FLAGS_AUTO_ACCEPT (0x00080000, QuestDef.h:151), not the
