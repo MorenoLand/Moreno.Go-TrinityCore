@@ -298,11 +298,16 @@ func (a *Archive) find(name string) (uint32, bool) {
 	hashA, hashB := hashString(name, 1), hashString(name, 2)
 	for offset := uint32(0); offset < uint32(len(a.hashes)); offset++ {
 		entry := a.hashes[(start+offset)%uint32(len(a.hashes))]
-		if entry.NameA == 0xFFFFFFFF && entry.NameB == 0xFFFFFFFF {
+		// C++ owner: dep/libmpq/libmpq/mpq.c libmpq__file_number stops the
+		// probe at the first entry whose block index is LIBMPQ_HASH_FREE
+		// (0xFFFFFFFF) and matches on the two name hashes alone — it never
+		// filters by locale, so a locale-tagged first hit resolves exactly
+		// like C++ instead of being skipped.
+		if entry.Block == 0xFFFFFFFF {
 			return 0, false
 		}
-		if entry.NameA == hashA && entry.NameB == hashB && (entry.Locale == 0 || entry.Locale == 0xFFFF) {
-			return entry.Block, entry.Block != 0xFFFFFFFF
+		if entry.NameA == hashA && entry.NameB == hashB {
+			return entry.Block, true
 		}
 	}
 	return 0, false

@@ -20,9 +20,9 @@ import (
 //   - First detected locale -> <output>/dbc/ (flat); further locales ->
 //     <output>/dbc/<lang>/.
 //   - Already-extracted files are SKIPPED (exists check), never overwritten.
-//   - component.wow-<lang>.txt (build info) is also extracted; Go has no
-//     client-build detection in the extractor, so that arm is a documented
-//     no-bridge delta.
+//   - component.wow-<lang>.txt (build info) is extracted per locale via the
+//     same archive set, always written (truncated) even when no archive
+//     contains it — mirroring C++ ExtractFile's unconditional fopen("wb").
 func ExtractDBC(input, output string) (int, error) {
 	locales := mpq.DetectLocales(input)
 	if len(locales) == 0 {
@@ -37,7 +37,11 @@ func ExtractDBC(input, output string) (int, error) {
 		if err := os.MkdirAll(destination, 0o755); err != nil {
 			return total, err
 		}
-		count, err := extractDBCFromArchives(mpq.LocaleArchives(input, lang), destination)
+		archives := mpq.LocaleArchives(input, lang)
+		if err := extractBuildInfo(archives, destination, lang); err != nil {
+			return total, err
+		}
+		count, err := extractDBCFromArchives(archives, destination)
 		total += count
 		if err != nil {
 			return total, err
@@ -63,6 +67,30 @@ func extractDBCWalkAll(input, output string) (int, error) {
 		return 0, err
 	}
 	return extractDBCFromArchives(archives, destination)
+}
+
+// extractBuildInfo mirrors the component.wow-<lang>.txt arm of C++
+// ExtractDBCFiles (System.cpp:1008-1014): the name is resolved through the
+// locale archive set in lookup-precedence order (highest first), exactly
+// like MPQFile, and the destination file is always written — C++
+// ExtractFile opens it with fopen("wb") unconditionally, so a missing MPQ
+// entry still leaves an empty file behind.
+func extractBuildInfo(archives []string, destination, lang string) error {
+	name := "component.wow-" + lang + ".txt"
+	var data []byte
+	for _, path := range archives {
+		archive, err := mpq.Open(path)
+		if err != nil {
+			continue
+		}
+		file, readErr := archive.ReadFile(name)
+		archive.Close()
+		if readErr == nil {
+			data = file
+			break
+		}
+	}
+	return os.WriteFile(filepath.Join(destination, name), data, 0o644)
 }
 
 // extractDBCFromArchives reads every .dbc from archives, which must already
