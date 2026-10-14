@@ -1003,6 +1003,16 @@ func (s *session) resetActivePetTalents(ctx context.Context) {
 	if len(talentSpells) == 0 {
 		return
 	}
+	// Pet::resetTalents (Pet.cpp:1629) clears AT_LOGIN_RESET_PET_TALENTS on
+	// every interactive reset (Player::ResetPetTalents -> pet->resetTalents),
+	// so a pending login-wipe set by `.reset pettalents` never double-wipes
+	// re-learned talents at the next login.
+	if _, err := cdb.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~16 WHERE guid = ?", s.playerGUID); err != nil {
+		s.debug("pet talent at-login flag clear failed", "account", s.accountName, "error", err)
+	}
+	if s.player != nil {
+		s.player.AtLogin &^= uint32(atLoginResetPetTalents)
+	}
 	for _, spell := range talentSpells {
 		if _, err := cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petNumber, spell); err != nil {
 			s.debug("pet talent spell removal failed", "account", s.accountName, "pet", petNumber, "spell", spell, "error", err)
