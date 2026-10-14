@@ -1984,6 +1984,150 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "silenced")
 		return true
 	}
+	// CheckCast early arms (Spell.cpp:5191-5246): C++ runs the
+	// cooldown/cheat/GCD/ended-BG/outdoors arms before the unit-caster
+	// block; internal C++ order is allow-only-ability -> cooldowns ->
+	// cheat -> GCD -> ended-BG -> outdoors/indoors. The GO-immunity arm
+	// (5181-5186, DONT_REPORT for CannotBeUsedUnderImmunity GOs under
+	// UNIT_FLAG_IMMUNE) is unbridged: nothing in Go ever sets the
+	// 0x80000000 immunity unit flag, and the per-type noDamageImmune
+	// gameobject_template fields have no Go model.
+	// CheckCast allow-only-ability gate (Spell::CheckCast, Spell.cpp:5193-5195):
+	// SPELL_AURA_ALLOW_ONLY_ABILITY (Bladestorm, Killing Spree —
+	// AuraEffect::HandleAuraAllowOnlyAbility, SpellAuraEffects.cpp:2423-2441)
+	// sets PLAYER_FLAGS PLAYER_ALLOW_ONLY_ABILITY (0x00800000, Player.h:356)
+	// while the aura is up, and CheckCast lets only triggered casts through
+	// in that state — a client-initiated cast reports
+	// SPELL_FAILED_SPELL_IN_PROGRESS. The !IsPassive wrapper and the
+	// TYPEID_PLAYER arm are vacuous here (passive spells are rejected at the
+	// lookup above; this is the client-initiated path only), and the
+	// TRIGGERED_IGNORE_CASTER_AURASTATE suppression is structural — this path
+	// never carries triggered flags. C++ relative order: first arm inside the
+	// cooldown block, ahead of the SpellHistory::IsReady loop below.
+	// The aura-side setter is bridged: SPELL_AURA_ALLOW_ONLY_ABILITY (263)
+	// sets the flag in applyAuraToTarget and clears it in removeAura when
+	// no other 263 aura remains, so this gate is live.
+	if s.player.PlayerFlags&playerFlagAllowOnlyAbility != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellInProgress), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "allow-only-ability flag set")
+		return true
+	}
+	// Potion leg of the CheckCast cooldown block (Spell::CheckCast,
+	// Spell.cpp:5198-5199): vacuous on this path — the arm requires m_CastItem,
+	// which is always nil here (item casts run through handleUseItem, never
+	// handleCastSpell). The live bridge sits on the m_CastItem path
+	// (handleUseItem, items.go) where s.lastPotionId != 0 plus an item that is
+	// a potion (ItemTemplate::IsPotion) or a cooldown-started-on-event spell
+	// (SpellInfo::IsCooldownStartedOnEvent) fails SPELL_FAILED_NOT_READY; the
+	// bank side (SpellHistory::HandleCooldowns) and the combat-end flush
+	// (Player::UpdatePotionCooldown) are already bridged. The
+	// !IsIgnoringCooldowns() arm is vacuous there: handleUseItem serves only
+	// client CMSG_USE_ITEM casts, never triggered ones. C++ relative order:
+	// second arm inside the cooldown block, ahead of the IsReady loop below.
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell == spellID && cd.End > nowUnix {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "on cooldown")
+			return true
+		}
+	}
+	if categoryID := spell.Category; categoryID != 0 {
+		for _, cooldown := range s.player.Cooldowns {
+			// SpellHistory::HasCooldown (SpellHistory.cpp:473-487): the
+			// category arm reads _categoryCooldowns alone, and
+			// SpellHistory::Update (SpellHistory.cpp:141-155) erases the
+			// _categoryCooldowns entry on CategoryEnd and the
+			// _spellCooldowns entry on CooldownEnd independently — a
+			// category cooldown can outlive the spell's own cooldown, so
+			// the spell arm's End must not gate this check.
+			if cooldown.Category == categoryID && cooldown.CategoryEnd > nowUnix {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
+				return true
+			}
+		}
+	}
+	// CheckCast cheat-spell gate (Spell::CheckCast, Spell.cpp:5223-5227):
+	// SPELL_ATTR7_IS_CHEAT_SPELL spells fail with SPELL_FAILED_CUSTOM_ERROR
+	// (172) plus the custom error SPELL_CUSTOM_ERROR_GM_ONLY (65) unless the
+	// caster carries UNIT_FIELD_FLAGS_2 UNIT_FLAG2_ALLOW_CHEAT_SPELLS
+	// (0x00040000, UnitDefines.h:178) — set by Player::SetGameMaster(true)
+	// (Player.cpp:2446), which Go mirrors as the .gm-on flag pair
+	// (playerExtraGMOn / playerFlagGM, commands.go:391). The WriteCastResultInfo
+	// customError leg (Spell.cpp:4073-4075) rides buildCastFailedParams.
+	// C++ relative order: after the cooldown block (5218), before the GCD
+	// check (5230); the IsPassive wrapper is vacuous here (passive spells are
+	// rejected at the lookup above).
+	if spell.AttributesEx7&spellAttr7IsCheatSpell != 0 &&
+		s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedCustomError, spellCustomErrorGMOnly), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cheat spell without gm mode")
+		return true
+	}
+	if s.isGCDActive(spell) {
+		// Spell::CheckCast (Spell.cpp:5227-5228): DISABLED_WHILE_ACTIVE spells
+		// report DONT_REPORT instead of NOT_READY on GCD. The
+		// TRIGGERED_IGNORE_GCD suppression arm is structural: this gate runs
+		// only on the non-triggered client path, while the triggered path
+		// (castSpellDirectWithOverrides) never consults GCD — matching C++
+		// TRIGGERED_FULL_MASK, which carries TRIGGERED_IGNORE_GCD
+		// (SpellDefines.h:134/153).
+		reason := spellFailedNotReady
+		if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
+			reason = spellFailedDontReport
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, reason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
+		return true
+	}
+	// CheckCast ended-battleground gate (Spell::CheckCast, Spell.cpp:5229-5235):
+	// once the battleground ends (STATUS_WAIT_LEAVE), only triggered casts
+	// are processed — a client-initiated cast reports
+	// SPELL_FAILED_DONT_REPORT (27). The !IsTriggered() and TYPEID_PLAYER
+	// arms are vacuous here (this is the client-initiated player path).
+	// Go's live-BG analog is the arena world model (battleground_arena.go):
+	// a registered participant of an arena whose status reached
+	// ArenaStatusWaitLeave hits the gate, mirroring the battleground.go
+	// leave-combat check. Non-arena battlegrounds have no end-lifecycle
+	// status model (ambient map-keyed states), so the gate never fires
+	// there — a documented delta. C++ relative order: right after the
+	// cheat-spell gate, ahead of the outdoors/indoors arms.
+	if s.server != nil && IsArenaMap(s.player.Map) {
+		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+			arena.mu.Lock()
+			_, inArena := arena.PlayerTeams[s.playerGUID]
+			ended := arena.Status == ArenaStatusWaitLeave
+			arena.mu.Unlock()
+			if inArena && ended {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "arena ended, waiting leave")
+				return true
+			}
+		}
+	}
+	// CheckCast outdoors/indoors arms (Spell::CheckCast, Spell.cpp:5236-5248):
+	// SPELL_ATTR0_OUTDOORS_ONLY (0x00008000) spells fail with
+	// SPELL_FAILED_ONLY_OUTDOORS (93) when the caster is not outdoors, and
+	// SPELL_ATTR0_INDOORS_ONLY (0x00004000) spells fail with
+	// SPELL_FAILED_ONLY_INDOORS (90) when the caster is outdoors. The
+	// TYPEID_PLAYER arm is vacuous here (client-initiated player path); the
+	// isLineOfSightCalcEnabled() gate is live by default in C++
+	// (IVMapManager constructor true, vmap.enableLOS=1) and has no Go
+	// config — Go's terrain LoS model is the standing analog, so the gate
+	// is always on here. IsOutdoors rides s.isOutdoors (the Map.cpp
+	// non-WMO fallback); the WMO arms have no Go model. C++ relative
+	// order: right after the ended-battleground gate, ahead of the
+	// form/stealth block.
+	if spell.Attributes&spellAttr0OutdoorsOnly != 0 && !s.isOutdoors() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyOutdoors), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires outdoors", "area", s.areaID)
+		return true
+	}
+	if spell.Attributes&spellAttr0IndoorsOnly != 0 && s.isOutdoors() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyIndoors), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires indoors", "area", s.areaID)
+		return true
+	}
 	// Shapeshift/stance requirements (SpellInfo::CheckShapeshift, SpellInfo.cpp:1455;
 	// gated in Spell::CheckCast at Spell.cpp:5247-5275, before the caster-state block):
 	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
@@ -2061,147 +2205,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot be used in combat", "result", spellFailedAffectingCombat)
 		return true
 	}
-	if spell.RequiresSpellFocus != 0 && !s.spellFocusFound(ctx, spell) {
-		s.sendCastFailed(ctx, castID, spell, spellFailedRequiresSpellFocus)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "no spell focus object in range", "focus", spell.RequiresSpellFocus)
-		return true
-	}
-	if s.isGCDActive(spell) {
-		// Spell::CheckCast (Spell.cpp:5227-5228): DISABLED_WHILE_ACTIVE spells
-		// report DONT_REPORT instead of NOT_READY on GCD. The
-		// TRIGGERED_IGNORE_GCD suppression arm is structural: this gate runs
-		// only on the non-triggered client path, while the triggered path
-		// (castSpellDirectWithOverrides) never consults GCD — matching C++
-		// TRIGGERED_FULL_MASK, which carries TRIGGERED_IGNORE_GCD
-		// (SpellDefines.h:134/153).
-		reason := spellFailedNotReady
-		if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
-			reason = spellFailedDontReport
-		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, reason), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
-		return true
-	}
-	// CheckCast allow-only-ability gate (Spell::CheckCast, Spell.cpp:5193-5195):
-	// SPELL_AURA_ALLOW_ONLY_ABILITY (Bladestorm, Killing Spree —
-	// AuraEffect::HandleAuraAllowOnlyAbility, SpellAuraEffects.cpp:2423-2441)
-	// sets PLAYER_FLAGS PLAYER_ALLOW_ONLY_ABILITY (0x00800000, Player.h:356)
-	// while the aura is up, and CheckCast lets only triggered casts through
-	// in that state — a client-initiated cast reports
-	// SPELL_FAILED_SPELL_IN_PROGRESS. The !IsPassive wrapper and the
-	// TYPEID_PLAYER arm are vacuous here (passive spells are rejected at the
-	// lookup above; this is the client-initiated path only), and the
-	// TRIGGERED_IGNORE_CASTER_AURASTATE suppression is structural — this path
-	// never carries triggered flags. C++ relative order: first arm inside the
-	// cooldown block, ahead of the SpellHistory::IsReady loop below.
-	// The aura-side setter is bridged: SPELL_AURA_ALLOW_ONLY_ABILITY (263)
-	// sets the flag in applyAuraToTarget and clears it in removeAura when
-	// no other 263 aura remains, so this gate is live.
-	if s.player.PlayerFlags&playerFlagAllowOnlyAbility != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellInProgress), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "allow-only-ability flag set")
-		return true
-	}
-	// Potion leg of the CheckCast cooldown block (Spell::CheckCast,
-	// Spell.cpp:5198-5199): vacuous on this path — the arm requires m_CastItem,
-	// which is always nil here (item casts run through handleUseItem, never
-	// handleCastSpell). The live bridge sits on the m_CastItem path
-	// (handleUseItem, items.go) where s.lastPotionId != 0 plus an item that is
-	// a potion (ItemTemplate::IsPotion) or a cooldown-started-on-event spell
-	// (SpellInfo::IsCooldownStartedOnEvent) fails SPELL_FAILED_NOT_READY; the
-	// bank side (SpellHistory::HandleCooldowns) and the combat-end flush
-	// (Player::UpdatePotionCooldown) are already bridged. The
-	// !IsIgnoringCooldowns() arm is vacuous there: handleUseItem serves only
-	// client CMSG_USE_ITEM casts, never triggered ones. C++ relative order:
-	// second arm inside the cooldown block, ahead of the IsReady loop below.
-	for _, cd := range s.player.Cooldowns {
-		if cd.Spell == spellID && cd.End > nowUnix {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "on cooldown")
-			return true
-		}
-	}
-	if categoryID := spell.Category; categoryID != 0 {
-		for _, cooldown := range s.player.Cooldowns {
-			// SpellHistory::HasCooldown (SpellHistory.cpp:473-487): the
-			// category arm reads _categoryCooldowns alone, and
-			// SpellHistory::Update (SpellHistory.cpp:141-155) erases the
-			// _categoryCooldowns entry on CategoryEnd and the
-			// _spellCooldowns entry on CooldownEnd independently — a
-			// category cooldown can outlive the spell's own cooldown, so
-			// the spell arm's End must not gate this check.
-			if cooldown.Category == categoryID && cooldown.CategoryEnd > nowUnix {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
-				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
-				return true
-			}
-		}
-	}
-	// CheckCast cheat-spell gate (Spell::CheckCast, Spell.cpp:5223-5227):
-	// SPELL_ATTR7_IS_CHEAT_SPELL spells fail with SPELL_FAILED_CUSTOM_ERROR
-	// (172) plus the custom error SPELL_CUSTOM_ERROR_GM_ONLY (65) unless the
-	// caster carries UNIT_FIELD_FLAGS_2 UNIT_FLAG2_ALLOW_CHEAT_SPELLS
-	// (0x00040000, UnitDefines.h:178) — set by Player::SetGameMaster(true)
-	// (Player.cpp:2446), which Go mirrors as the .gm-on flag pair
-	// (playerExtraGMOn / playerFlagGM, commands.go:391). The WriteCastResultInfo
-	// customError leg (Spell.cpp:4073-4075) rides buildCastFailedParams.
-	// C++ relative order: after the cooldown block (5218), before the GCD
-	// check (5230); the IsPassive wrapper is vacuous here (passive spells are
-	// rejected at the lookup above).
-	if spell.AttributesEx7&spellAttr7IsCheatSpell != 0 &&
-		s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedCustomError, spellCustomErrorGMOnly), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cheat spell without gm mode")
-		return true
-	}
-	// CheckCast ended-battleground gate (Spell::CheckCast, Spell.cpp:5229-5235):
-	// once the battleground ends (STATUS_WAIT_LEAVE), only triggered casts
-	// are processed — a client-initiated cast reports
-	// SPELL_FAILED_DONT_REPORT (27). The !IsTriggered() and TYPEID_PLAYER
-	// arms are vacuous here (this is the client-initiated player path).
-	// Go's live-BG analog is the arena world model (battleground_arena.go):
-	// a registered participant of an arena whose status reached
-	// ArenaStatusWaitLeave hits the gate, mirroring the battleground.go
-	// leave-combat check. Non-arena battlegrounds have no end-lifecycle
-	// status model (ambient map-keyed states), so the gate never fires
-	// there — a documented delta. C++ relative order: right after the
-	// cheat-spell gate, ahead of the outdoors/indoors arms.
-	if s.server != nil && IsArenaMap(s.player.Map) {
-		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
-			arena.mu.Lock()
-			_, inArena := arena.PlayerTeams[s.playerGUID]
-			ended := arena.Status == ArenaStatusWaitLeave
-			arena.mu.Unlock()
-			if inArena && ended {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
-				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "arena ended, waiting leave")
-				return true
-			}
-		}
-	}
-	// CheckCast outdoors/indoors arms (Spell::CheckCast, Spell.cpp:5236-5248):
-	// SPELL_ATTR0_OUTDOORS_ONLY (0x00008000) spells fail with
-	// SPELL_FAILED_ONLY_OUTDOORS (93) when the caster is not outdoors, and
-	// SPELL_ATTR0_INDOORS_ONLY (0x00004000) spells fail with
-	// SPELL_FAILED_ONLY_INDOORS (90) when the caster is outdoors. The
-	// TYPEID_PLAYER arm is vacuous here (client-initiated player path); the
-	// isLineOfSightCalcEnabled() gate is live by default in C++
-	// (IVMapManager constructor true, vmap.enableLOS=1) and has no Go
-	// config — Go's terrain LoS model is the standing analog, so the gate
-	// is always on here. IsOutdoors rides s.isOutdoors (the Map.cpp
-	// non-WMO fallback); the WMO arms have no Go model. C++ relative
-	// order: right after the ended-battleground gate, ahead of the
-	// form/stealth block.
-	if spell.Attributes&spellAttr0OutdoorsOnly != 0 && !s.isOutdoors() {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyOutdoors), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires outdoors", "area", s.areaID)
-		return true
-	}
-	if spell.Attributes&spellAttr0IndoorsOnly != 0 && s.isOutdoors() {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyIndoors), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires indoors", "area", s.areaID)
-		return true
-	}
 	// CheckCast moving/autorepeat arm (Spell::CheckCast, Spell.cpp:5316-5323):
 	// a moving player fails SPELL_FAILED_MOVING (51) when the cast is an
 	// auto-repeat spell (m_autoRepeat = SpellInfo::IsAutoRepeatRangedSpell,
@@ -2215,8 +2218,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// model (the interruptSpellsOnMovement note). The Spell::prepare
 	// channeled/cast-time gate below is a different arm (Spell.cpp:3139-3149);
 	// this one catches zero-cast-time NOT_SEATED and autorepeat casts.
-	// C++ relative order: immediately after the cheat-spell gate, inside the
-	// unit-caster block, ahead of the vehicle arm's no-bridge note.
+	// C++ relative order: inside the unit-caster block, after the caster-state
+	// arms, ahead of the vehicle arm's no-bridge note.
 	// The STUCK exemption keys on MOVEMENTFLAG_FALLING_FAR exactly
 	// (Spell.cpp:5319) — a /stuck cast while merely falling (0x1000) still
 	// fails; only the falling-far (knocked-back, 0x2000) state is exempt.
@@ -2697,6 +2700,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, reason), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "mounted cast blocked", "reason_code", reason)
+		return true
+	}
+	// CheckCast spell-focus arm (Spell.cpp:5477): after the mounted gate,
+	// before CheckItems — SearchSpellFocus over nearby gameobjects.
+	if spell.RequiresSpellFocus != 0 && !s.spellFocusFound(ctx, spell) {
+		s.sendCastFailed(ctx, castID, spell, spellFailedRequiresSpellFocus)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "no spell focus object in range", "focus", spell.RequiresSpellFocus)
 		return true
 	}
 	// Self-cast only spells (e.g. Demon Skin, Demon Armor, Ice Barrier) must always target the caster
