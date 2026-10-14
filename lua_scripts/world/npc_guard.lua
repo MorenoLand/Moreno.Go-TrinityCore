@@ -23,12 +23,15 @@
 -- who) gated on me->GetEntry() == NPC_CENARION_HOLD_INFANTRY — the
 -- event-1 auriaya precedent; the player target flattens through the
 -- moroes precedent (Lua Talk takes no target); the _combatScheduler
--- melee/spell legs have no-timer / no-cast bridges. Registered via
+-- melee/spell legs are SelectSpell machines (spell IDs unnamed in
+-- C++ — picked from the creature's spell list at runtime), not named
+-- timer events — no SelectSpell bridge. Registered via
 -- RegisterLuaBoss("npc_guard_generic", 15184).
 -- DOCUMENTED-ONLY:
 -- npc_guard_generic::Reset — the 10-minute _scheduler buff machine
 -- (SelectSpell SELECT_TARGET_ANY_FRIEND / SELECT_EFFECT_AURA self
--- buff + context.Repeat(Minutes(10))) — no-timer / no-cast bridges.
+-- buff + context.Repeat(Minutes(10))) — SelectSpell aura machine,
+-- spell unnamed in C++.
 -- npc_guard_generic::ReceiveEmote / DoReplyToTextEmote — the
 -- Stormwind 68/1976 + Orgrimmar 3296 emote reply machine
 -- (TEXT_EMOTE_KISS/WAVE/SALUTE/SHY/RUDE/CHICKEN -> EMOTE_ONESHOT_*
@@ -37,8 +40,8 @@
 -- machine (roll_chance_i(20) SELECT_TARGET_ANY_ENEMY DoCastVictim /
 -- AttackerStateUpdate) + the 5s spell machine (HealthBelowPct(30)
 -- 33%-chance SELECT_EFFECT_HEALING self-cast, else
--- SELECT_TARGET_ANY_ENEMY ranged DoCastVictim) — no-timer / no-cast
--- bridges.
+-- SELECT_TARGET_ANY_ENEMY ranged DoCastVictim) — SelectSpell machine,
+-- spell IDs unnamed in C++ (plus no random-target bridge).
 -- npc_guard_generic::UpdateAI — _scheduler.Update / UpdateVictim /
 -- _combatScheduler.Update legs — no bridges.
 -- npc_guard_shattrath_faction (NPC_ALDOR_VINDICATOR 18549 +
@@ -46,7 +49,8 @@
 -- 5s victim-gated DoCast(SPELL_BANISHED_SHATTRATH_S 36671 /
 -- SPELL_BANISHED_SHATTRATH_A 36642) + ObjectAccessor::GetUnit
 -- player-GUID 9s chain (SPELL_EXILE 39533 + SPELL_BANISH_TELEPORT
--- 36643 self-casts) — zero Talk; no-timer / no-cast bridges — NOT
+-- 36643 self-casts) — zero Talk; the 5s/9s ScheduleVanish chain rides
+-- the victim-track + ObjectAccessor GUID-lookup machine — NOT
 -- registered.
 
 local ENTRY_CENARION_HOLD_INFANTRY = 15184 -- NPC_CENARION_HOLD_INFANTRY

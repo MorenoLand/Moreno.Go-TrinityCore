@@ -83,13 +83,18 @@
 -- (NPC_VOLKHAN_ANVIL 28823, 1000.0f) -> delay timer -> phase 4;
 -- phase 4 SelectTarget(MaxThreat) MoveFollow -> phase 5; phase 5
 -- MAX_GOLEM 2 triggered SPELL_SUMMON_MOLTEN_GOLEM 52405 casts on
--- the anvil + m_bIsStriking = true -> phase 0 — no timer / motion /
--- cast / target-selection bridges.
+-- the anvil + m_bIsStriking = true -> phase 0 — the forge-strike
+-- sequence is a motion/target-selection machine (MovePoint :312,
+-- cross-creature Temper casts :324-325, triggered summon cast :349)
+-- with phase gating (PHASE_INTRO forge-cast :276-278, PHASE_NORMAL
+-- gates :126-129) — no motion / target-selection bridges.
 -- npc_molten_golem (NPC_MOLTEN_GOLEM 28695, local enum — no Talk
 -- arms anywhere: entry-verifiable but bridge-blocked, NO
 -- registration — the stormforged_lieutenant / npc_spark_of_ionar
 -- no-bridgeable-arms precedent): Reset (EVENT_BLAST / EVENT_IMMOLATION
--- schedules — no timer bridge); AttackStart (no bridges);
+-- schedules — entry 28695 bridge-blocked (local enum, no Go
+-- registration; BLAST/IMMOLATION would otherwise be
+-- CreateLuaEvent-portable); AttackStart (no bridges);
 -- DamageTaken (kill-shot -> UpdateEntry(NPC_BRITTLE_GOLEM 28681) +
 -- SetHealth(1) + damage = 0 + RemoveAllAuras + AttackStop +
 -- InterruptNonMeleeSpells + MotionMaster clear + m_bIsFrozen = true —
@@ -97,7 +102,8 @@
 -- brittle golem -> DespawnOrUnsummon — no SpellHit bridge);
 -- UpdateAI (EVENT_BLAST: DoCast(SPELL_BLAST_WAVE 23113), 20s;
 -- EVENT_IMMOLATION: DoCastVictim(SPELL_IMMOLATION_STRIKE 52433)
--- (C++ reschedules EVENT_BLAST at 5s — the C++ typo as written); m_bIsFrozen gate — no timer-event / cast bridges).
+-- (C++ reschedules EVENT_BLAST at 5s — the C++ typo as written);
+-- m_bIsFrozen gate — entry 28695 bridge-blocked as above).
 -- achievement_shatter_resistant (AchievementCriteriaScript
 -- OnCheck: target->GetAI()->GetData(DATA_SHATTER_RESISTANT 2042) <
 -- 5 — no GetData / achievement bridges; joins the

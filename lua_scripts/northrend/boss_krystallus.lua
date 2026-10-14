@@ -26,13 +26,15 @@
 -- at the time of the first-pass port; this file is the audited
 -- artifact of the 21:58 audit run.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
--- No timers in the ported arms; melee is engine-driven in Go
--- (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- Melee is engine-driven in Go (creature combat tick), like C++
+-- DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith passthrough and the five ScheduleEvent
--- legs have no bridges — the boss_bookkeeping precedent for the
--- former, no timer bridge for the latter).
+-- BossAI::JustEngagedWith passthrough has no bridge — the
+-- boss_bookkeeping precedent) + the EVENT_STOMP timer arm below.
+-- The Oct-12 "no-timer-bridge" claim is retracted for STOMP:
+-- CreateLuaEvent is the registered timer bridge (engine/scripting/
+-- runtime.go:798; maiden / bjarngrim-lieutenant convention).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER, then
 -- Talk(SAY_KILL 1) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
@@ -43,14 +45,23 @@
 -- 27977):
 -- Reset (_Reset() — no bridge).
 -- JustEngagedWith ScheduleEvent legs (EVENT_BOULDER_TOSS 3s/9s,
--- EVENT_GROUND_SLAM 15s/18s, EVENT_STOMP 20s/29s,
--- EVENT_GROUND_SPIKE 9s/14s heroic-only — no timer bridge).
+-- EVENT_GROUND_SLAM 15s/18s, EVENT_GROUND_SPIKE 9s/14s
+-- heroic-only — no bridge for the reasons below; EVENT_STOMP
+-- 20s/29s is PORTED).
 -- UpdateAI event machine — EVENT_BOULDER_TOSS (random-target
--- 50.0f DoCast(SPELL_BOULDER_TOSS 50843), 9s/15s);
+-- 50.0f DoCast(SPELL_BOULDER_TOSS 50843), 9s/15s — no
+-- random-target bridge: CastSpell(nil)=victim,
+-- CastSpell(creature)=self, no SelectTarget bridge);
 -- EVENT_GROUND_SPIKE (random-target 100.0f
--- DoCast(SPELL_GROUND_SPIKE 59750), 12s/17s); EVENT_GROUND_SLAM
--- (DoCast(SPELL_GROUND_SLAM 50827) + EVENT_SHATTER 10s, 15s/18s);
--- EVENT_STOMP (DoCast(SPELL_STOMP 48131), 20s/29s);
+-- DoCast(SPELL_GROUND_SPIKE 59750), 12s/17s — heroic-only, no
+-- heroic bridge, plus no random-target bridge);
+-- EVENT_GROUND_SLAM (DoCast(SPELL_GROUND_SLAM 50827) + schedules
+-- EVENT_SHATTER 10s, 15s/18s — SHATTER (50810) is
+-- SpellScript-delivered (see below); porting SLAM alone would
+-- leave SPELL_STONED (50812) unshattered — half-machine);
+-- EVENT_STOMP — PORTED (DoCast(me, SPELL_STOMP 48131)
+-- non-triggered self-cast, {20s,29s} init / {20s,29s} re-arm,
+-- zero gating legs — boss_krystallus.cpp:73/:108-110);
 -- EVENT_SHATTER (DoCast(SPELL_SHATTER 50810)) — the
 -- UNIT_STATE_CASTING gates and the DoMeleeAttackIfReady tail have
 -- no bridges. (enum Yells SAY_SHATTER = 3 is declared but never
@@ -70,10 +81,53 @@ local SAY_AGGRO = 0
 local SAY_KILL = 1
 local SAY_DEATH = 2
 
+local SPELL_STOMP = 48131
+
+-- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
+-- events 2/4/23) — the maiden / bjarngrim-lieutenant convention.
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ UpdateAI EVENT_STOMP: DoCast(me, SPELL_STOMP 48131)
+-- non-triggered self-cast, {20s,29s} init / {20s,29s} re-arm
+-- (boss_krystallus.cpp:73/:108-110) — zero gating legs.
+local function stompTick(creature, guid)
+    creature:CastSpell(creature, SPELL_STOMP)
+    schedule(guid, "stomp", {20000, 29000}, function()
+        stompTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: Talk(AGGRO) + BossAI passthrough +
--- ScheduleEvent legs — only the Talk arm is bridgeable.
+-- ScheduleEvent legs — the Talk arm and EVENT_STOMP are ported.
 local function krystallusEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "stomp", {20000, 29000}, function()
+        stompTick(creature, guid)
+    end)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -84,12 +138,19 @@ local function krystallusTargetDied(event, creature, victim)
     end
 end
 
+local function krystallusLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ JustDied: Talk(DEATH) + _JustDied() — only the Talk arm is
 -- bridgeable.
 local function krystallusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_KRYSTALLUS, 1, krystallusEnterCombat)
+RegisterCreatureEvent(ENTRY_KRYSTALLUS, 2, krystallusLeaveCombat)
 RegisterCreatureEvent(ENTRY_KRYSTALLUS, 3, krystallusTargetDied)
 RegisterCreatureEvent(ENTRY_KRYSTALLUS, 4, krystallusDied)
+RegisterCreatureEvent(ENTRY_KRYSTALLUS, 23, krystallusLeaveCombat)

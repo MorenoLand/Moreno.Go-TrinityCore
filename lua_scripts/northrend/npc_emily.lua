@@ -25,8 +25,10 @@
 -- 0 / SAY_WORGRAGGRO3 2 / SAY_VICTORY2 6 / SAY_VICTORY3 7 /
 -- SAY_VICTORY4 8 / SAY_QUEST_COMPLETE 12 + SummonCreature
 -- 26586/26590 + DoCast 47184 + EnterVehicle + faction swaps +
--- MovePoint/MoveFollow + DisappearAndDie legs) — no-escort /
--- no-timer / no-summon / no-cast / no-movement / no-faction bridges
+-- MovePoint/MoveFollow + DisappearAndDie legs) — the 27-waypoint
+-- EscortAI cinematic (WaypointReached, zone_grizzly_hills.cpp:81-175)
+-- has no escort-waypoint bridge; the single cast arm (DoCast 47184 on
+-- Mrfloppy, :116) is waypoint-18-gated, not timer-driven
 -- (thassarian/borean_tundra precedent); OnQuestAccept Talk
 -- SAY_QUEST_ACCEPT 11 + Start escort — no-quest-accept bridge.
 -- npc_mrfloppy: JustEngagedWith Talk arms are all cross-creature
@@ -47,13 +49,15 @@
 -- npc_venture_co_straggler (Smoke 'Em Out 12323/12324): Talk(SAY_SEO)
 -- rides EVENT_STRAGGLER_2 timer + MovePoint chain + DisappearAndDie;
 -- SpellHit SPELL_SMOKE_BOMB 49075 -> pacify + event chain; EVENT_CHOP
--- DoCastVictim SPELL_CHOP 43410 — no-timer / no-SpellHit / no-cast /
--- no-movement bridges.
+-- DoCastVictim SPELL_CHOP 43410 — the whole straggler chain is a
+-- scripted timer/MovePoint/SpellHit sequence with no bridge for the
+-- sequence machine (no-SpellHit / no-movement bridges).
 -- npc_lake_frog: Talk SAY_MAIDEN_0 / SAY_MAIDEN_1 ride
 -- EVENT_LAKEFROG_2/5 timers (SetEntry 33220 maiden transform,
 -- SPELL_MAIDEN_OF_ASHWOOD_LAKE_TRANSFORM 62550, gossip-flag
--- toggling, DespawnOrUnsummon) — no-timer / no-entry-update /
--- no-gossip bridges; ReceiveEmote TEXT_EMOTE_KISS + item 44986 /
+-- toggling, DespawnOrUnsummon) — the transform sequence rides
+-- EVENT_LAKEFROG timers + entry-update/gossip legs with no bridge
+-- for the sequence machine; ReceiveEmote TEXT_EMOTE_KISS + item 44986 /
 -- auras 62537/62574/62581 legs — no-emote / no-item bridges.
 -- npc_rocket_propelled_warhead: VehicleAI PassengerBoarded DoCast
 -- SPELL_VEHICLE_WARHEAD_FUSE + DoAction MovePoint chain — no

@@ -60,9 +60,12 @@
 -- boss_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING (the SpellHit-15-never-fires queue).
 -- boss_halion UpdateAI — Talk(SAY_METEOR_STRIKE 3) rides
--- EVENT_METEOR_STRIKE (no-timer-bridge); the EVENT_BREATH /
--- EVENT_ACTIVATE_FIREWALL / EVENT_FIERY_COMBUSTION DoCastSelf /
--- CastSpell legs ride no-cast bridges.
+-- EVENT_METEOR_STRIKE, phase-machine-gated (PHASE_ONE->TWO transition
+-- via 75%-health DamageTaken + controller SetData, boss_halion.cpp:
+-- 286-296); the EVENT_BREATH / EVENT_ACTIVATE_FIREWALL /
+-- EVENT_FIERY_COMBUSTION DoCastSelf / CastSpell legs ride the same
+-- phase machine (SetPhase :246/:288/:426/:477 + cross-creature
+-- controller SetData :260/:296/:667 — no phase-machine bridge).
 -- boss_twilight_halion JustEngagedWith — zero Talk (not registered);
 -- its scheduler / SendEncounterUnit legs ride absent bridges.
 -- boss_twilight_halion DamageTaken — Talk(SAY_PHASE_THREE 2) rides the
