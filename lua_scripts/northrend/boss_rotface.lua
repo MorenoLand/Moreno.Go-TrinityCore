@@ -66,9 +66,28 @@
 -- DB-side/script-name bound (no NPC_PRECIOUS constant in the ICC
 -- script tree).
 -- npc_little_ooze / npc_big_ooze — zero Talk lines — NOT
--- registered (the bronjahm npc_corrupted_soul_fragment precedent);
--- the combine / sticky-ooze DoCast and JustSummoned / JustDied
--- instance legs have no bridge.
+-- registered; bridgeable-in-principle but ENTRY-BLOCKED (the
+-- pit_of_saron flamebearer precedent): no NPC_LITTLE_OOZE /
+-- NPC_BIG_OOZE entry constants anywhere in-tree (this clone has
+-- no TDB; RegisterCreatureEvent needs an entry ID). The blocked
+-- arms: EVENT_STICKY_OOZE DoCastVictim(SPELL_STICKY_OOZE 69774)
+-- non-triggered, 5s init / 15s re-arm (:268-271 / :322-324);
+-- IsSummonedBy triggered self-cast aura arms (:249-251 / :287-291);
+-- the combine / unstable machinery is SpellScript/DoAction
+-- territory and stays out.
+-- npc_precious_icc — NOT registered, same entry-block (no
+-- NPC_PRECIOUS constant in-tree): blocked arms EVENT_DECIMATE
+-- DoCastVictim(71123) non-triggered / EVENT_MORTAL_WOUND
+-- DoCastVictim(71127) non-triggered {3s,7s} init (:345-348,
+-- same signatures as Stinky); EVENT_SUMMON_ZOMBIES 11x DoCastSelf(
+-- SPELL_AWAKEN_PLAGUED_ZOMBIES 71159) non-triggered OUT (summon
+-- leg, :394-400); JustDied cross-AI Talk(SAY_PRECIOUS_DIES 0)
+-- stays (no cross-AI bridge).
+-- Re-audit 2026-10-14: EVENT_VILE_GAS DoCastAOE(
+-- SPELL_VILE_GAS_TRIGGER 72285) non-triggered, 30s..35s re-arm
+-- (:220-222) is pure but HEROIC-GATED (scheduled only
+-- `if (IsHeroic())` :117-118; no IsHeroic bridge) — stays OUT;
+-- porting unconditionally would cast on normal too (unfaithful).
 -- The 10 spell scripts join the no-SpellScript-bridge queue (the
 -- boss_moragg optic-link precedent): spell_rotface_mutated_infection
 -- Talk(EMOTE_MUTATED_INFECTION 9) is cross-AI Talk riding a

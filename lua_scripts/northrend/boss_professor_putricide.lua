@@ -40,18 +40,39 @@
 -- are DB-side by construction. No putricide lua existed.
 --
 -- DOCUMENTED-BLOCKED (no registration beyond entry 36678):
--- boss_professor_putricide UpdateAI — Talk(SAY_BERSERK 12) rides
--- the EVENT_BERSERK scheduler leg (no-timer-bridge; the
--- boss_toravon precedent); Talk(EMOTE_UNSTABLE_EXPERIMENT 5)
--- rides EVENT_UNSTABLE_EXPERIMENT, Talk(EMOTE_MALLEABLE_GOO 9)
--- ×2 rides EVENT_MALLEABLE_GOO (25-man/10-man target-gate legs),
+-- boss_professor_putricide UpdateAI — PORTED (2026-10-13):
+-- EVENT_BERSERK single-fire 10min all phases — Talk(SAY_BERSERK
+-- 12) + DoCastSelf(SPELL_BERSERK2 47008) non-triggered
+-- (:266/:598-600); the old "no-timer-bridge" claim for this arm
+-- was stale doctrine (maiden CreateLuaEvent convention).
+-- Talk(EMOTE_UNSTABLE_EXPERIMENT 5) rides EVENT_UNSTABLE_EXPERIMENT
+-- (:612-615) — OUT: P1&&P2-gated, cancelled at the P2->P3
+-- transition (:531) — phase machine (gothik precedent). Talk(
+-- EMOTE_MALLEABLE_GOO 9) ×2 rides EVENT_MALLEABLE_GOO (:630-650)
+-- — OUT: random-target with -7.0f distance leg + raid-mode branch
+-- (no SelectTarget/Is25Man bridge) + P1->P2 phase-gated (:525).
 -- Talk(EMOTE_CHOKING_GAS_BOMB 10) rides EVENT_CHOKING_GAS_BOMB
--- (no-timer-bridge); Talk(SAY_FESTERGUT_DEATH 1) rides
--- EVENT_FESTERGUT_DIES and Talk(SAY_ROTFACE_DEATH 3) rides
--- EVENT_ROTFACE_DIES (no-timer-bridge); Talk(SAY_TRANSFORM_1 7)
--- / Talk(SAY_TRANSFORM_2 8) ride the EVENT_PHASE_TRANSITION
--- legs (no-timer-bridge); the Slime Puddle / Unbound Plague /
--- Mutated Plague DoCast legs have no-cast bridge.
+-- (:652-655) — OUT: P2/P3 phase-gated (:526). Talk(
+-- SAY_FESTERGUT_DEATH 1) rides EVENT_FESTERGUT_DIES (:579-581)
+-- and Talk(SAY_ROTFACE_DEATH 3) rides EVENT_ROTFACE_DIES
+-- (:590-592) — OUT: Talk-only + EnterEvadeMode, DoAction-phase
+-- driven. Talk(SAY_TRANSFORM_1 7) / Talk(SAY_TRANSFORM_2 8) ride
+-- the EVENT_PHASE_TRANSITION legs (:669-690) — OUT: phase machine.
+-- EVENT_SLIME_PUDDLE (:602-609) OUT: SelectTargetList random-target
+-- leg (:605, no SelectTarget bridge). EVENT_TEAR_GAS (:617-619)
+-- and EVENT_RESUME_ATTACK (:621-628) OUT: phase-transition machine
+-- (MovePoint + tear-gas chain). EVENT_UNBOUND_PLAGUE (:657-663)
+-- OUT: heroic-gated (:270) + NonTankTargetSelector condition leg
+-- (:658). EVENT_MUTATED_PLAGUE (:665-667) OUT: P3-gated (:530).
+-- EVENT_FESTERGUT_GOO (:583-588) OUT: heroic-gated (:431) +
+-- PHASE_FESTERGUT-driven + triggered MAX_TARGETS leg (:584).
+-- EVENT_ROTFACE_OOZE_FLOOD (:594-596) OUT: DoAction-phase-driven.
+-- DamageTaken 80%/35% latches (:512-528) OUT: machine-free in form
+-- but feed the full tear-gas/MovementInform phase machine.
+-- Header corrected 2026-10-14: the old "no-timer-bridge" blanket
+-- was disproved (CreateLuaEvent is a real registered bridge,
+-- engine/scripting/runtime.go:798); each arm is now classified
+-- individually against the C++.
 -- boss_professor_putricide DoAction — Talk(
 -- SAY_FESTERGUT_GASEOUS_BLIGHT 0) rides ACTION_FESTERGUT_GAS,
 -- Talk(SAY_ROTFACE_OOZE_FLOOD 2) rides ACTION_ROTFACE_OOZE, and

@@ -34,12 +34,36 @@
 -- SPELL_GASTRIC_BLOAT 72219) non-triggered, {12500,15000} init /
 -- {15000,17500} re-arm (maiden CreateLuaEvent convention);
 -- EVENT_BERSERK — single-fire 5min — Talk(SAY_BERSERK 8) +
--- DoCastSelf(SPELL_BERSERK2 47008) non-triggered. The inhale
--- counter / gaseous-blight aura-manipulation legs have no bridge.
+-- DoCastSelf(SPELL_BERSERK2 47008) non-triggered.
+-- PORTED (2026-10-14): EVENT_INHALE_BLIGHT — lua-local counter
+-- machine 0->3 (rotface-hasten precedent); non-3rd DoCastSelf(
+-- SPELL_INHALE_BLIGHT 69165) non-triggered; 3rd inhale Talk(
+-- EMOTE_WARN_PUNGENT_BLIGHT 5) + Talk(SAY_PUNGENT_BLIGHT 4) +
+-- DoCastSelf(SPELL_PUNGENT_BLIGHT 69195) non-triggered, counter
+-- reset, RescheduleEvent(EVENT_GAS_SPORE, 20s..25s); init
+-- {25000,30000}, re-arm {33500,35000} both branches (:184-207).
+-- OUT legs inside the arm: RemoveBlight() aura-removal (no
+-- RemoveAura bridge), gaseous-blight visual triggered casts
+-- (:202, aura legs without the removal bridge), DoAction(
+-- ACTION_FESTERGUT_GAS) cross-AI (:193-194).
+-- PORTED (2026-10-14): EVENT_GAS_SPORE — Talk(
+-- EMOTE_WARN_GAS_SPORE 3) + Talk(EMOTE_GAS_SPORE 2) + CastSpell(
+-- creature, SPELL_GAS_SPORE 69278) non-triggered; init
+-- {20000,25000}, re-arm {40000,45000} (:235-240). MAX_TARGETS
+-- spell-mod leg (:238) has no Lua bridge — the DB spell is
+-- raid-moded with the same 2/3 values, so the default cast is
+-- faithful. RescheduleEvent(EVENT_VILE_GAS) (:240) rides the OUT
+-- vile-gas event — dropped.
 -- npc_stinky_icc::JustDied — festergut->AI()->Talk(SAY_STINKY_DEAD
--- 0) is cross-AI Talk with no bridge, and npc_stinky_icc itself has
--- zero own Talk arms — NOT registered (the bronjahm
--- npc_corrupted_soul_fragment precedent).
+-- 0) is cross-AI Talk with no bridge; NOT registered. Bridgeable-
+-- in-principle but ENTRY-BLOCKED (the pit_of_saron flamebearer
+-- precedent): no NPC_STINKY entry constant anywhere in-tree (this
+-- clone has no TDB; RegisterCreatureEvent needs an entry ID).
+-- The blocked arms: JustEngagedWith DoCastSelf(SPELL_PLAGUE_STENCH
+-- 71805) 2-arg non-triggered (:304); EVENT_DECIMATE DoCastVictim(
+-- SPELL_DECIMATE 71123) non-triggered {20s,25s} init/re-arm
+-- (:321-323); EVENT_MORTAL_WOUND DoCastVictim(SPELL_MORTAL_WOUND
+-- 71127) non-triggered {3s,7s} init / {10s,12.5s} re-arm (:325-327).
 -- spell_festergut_pungent_blight::HandleScriptEffect —
 -- festergut->AI()->Talk(EMOTE_PUNGENT_BLIGHT 6) is cross-AI Talk
 -- riding a SpellScript — no-SpellScript-bridge queue (the
@@ -75,6 +99,13 @@ local SAY_BERSERK = 8
 
 local SPELL_GASTRIC_BLOAT = 72219
 local SPELL_BERSERK2 = 47008
+local SPELL_INHALE_BLIGHT = 69165
+local SPELL_PUNGENT_BLIGHT = 69195
+local SPELL_GAS_SPORE = 69278
+local EMOTE_WARN_PUNGENT_BLIGHT = 5
+local SAY_PUNGENT_BLIGHT = 4
+local EMOTE_WARN_GAS_SPORE = 3
+local EMOTE_GAS_SPORE = 2
 
 local timers = {}
 
@@ -97,6 +128,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ RescheduleEvent emulation: cancel one key's pending event
+-- (EVENT_GAS_SPORE rescheduled from the 3rd EVENT_INHALE_BLIGHT,
+-- boss_festergut.cpp:195).
+local function cancelTimer(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
 -- C++ EVENT_GASTRIC_BLOAT: DoCastVictim(SPELL_GASTRIC_BLOAT)
 -- non-triggered — init {12500,15000}, re-arm {15000,17500}
 -- (boss_festergut.cpp:94/:243-244); maiden CreateLuaEvent timer
@@ -113,6 +155,40 @@ local function onBerserk(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK2)
 end
 
+local inhale = {}
+
+-- C++ EVENT_INHALE_BLIGHT (:183-207): lua-local counter machine
+-- 0->3 (rotface-hasten precedent); non-3rd DoCastSelf(
+-- SPELL_INHALE_BLIGHT) non-triggered (:199); 3rd inhale Talk(
+-- EMOTE_WARN_PUNGENT_BLIGHT) + Talk(SAY_PUNGENT_BLIGHT) +
+-- DoCastSelf(SPELL_PUNGENT_BLIGHT) non-triggered (:189-191),
+-- counter reset, RescheduleEvent(EVENT_GAS_SPORE, 20s..25s)
+-- (:195). The :206 re-arm (33500ms..35s) applies to both branches.
+local function onInhaleBlight(creature, guid)
+    local count = inhale[guid] or 0
+    if count == 3 then
+        creature:Talk(EMOTE_WARN_PUNGENT_BLIGHT)
+        creature:Talk(SAY_PUNGENT_BLIGHT)
+        creature:CastSpell(creature, SPELL_PUNGENT_BLIGHT)
+        inhale[guid] = 0
+        cancelTimer(guid, "gas_spore")
+        schedule(guid, "gas_spore", {20000, 25000}, function() onGasSpore(creature, guid) end)
+    else
+        creature:CastSpell(creature, SPELL_INHALE_BLIGHT)
+        inhale[guid] = count + 1
+    end
+    schedule(guid, "inhale_blight", {33500, 35000}, function() onInhaleBlight(creature, guid) end)
+end
+
+-- C++ EVENT_GAS_SPORE (:235-240): Talk(EMOTE_WARN_GAS_SPORE) +
+-- Talk(EMOTE_GAS_SPORE) + self-cast SPELL_GAS_SPORE non-triggered.
+local function onGasSpore(creature, guid)
+    creature:Talk(EMOTE_WARN_GAS_SPORE)
+    creature:Talk(EMOTE_GAS_SPORE)
+    creature:CastSpell(creature, SPELL_GAS_SPORE)
+    schedule(guid, "gas_spore", {40000, 45000}, function() onGasSpore(creature, guid) end)
+end
+
 -- C++ boss_festergut::JustEngagedWith:
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent.
 local function festergutJustEngagedWith(event, creature, target)
@@ -121,16 +197,23 @@ local function festergutJustEngagedWith(event, creature, target)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "gastric_bloat", {12500, 15000}, function() onGastricBloat(creature, guid) end)
     schedule(guid, "berserk", 300000, function() onBerserk(creature, guid) end)
+    inhale[guid] = 0
+    schedule(guid, "inhale_blight", {25000, 30000}, function() onInhaleBlight(creature, guid) end)
+    schedule(guid, "gas_spore", {20000, 25000}, function() onGasSpore(creature, guid) end)
 end
 
 -- C++ Reset/JustDied _Reset()/_JustDied() timer machinery —
 -- cancel/re-arm on combat events (the maiden convention).
 local function festergutLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    inhale[guid] = nil
 end
 
 local function festergutReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    inhale[guid] = nil
 end
 
 -- C++ boss_festergut::KilledUnit:
