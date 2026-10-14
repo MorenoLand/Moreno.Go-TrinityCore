@@ -9915,26 +9915,39 @@ func init() {
 	// Svala Sorrowgrave (Utgarde Pinnacle) — boss_svala.cpp,
 	// AddSC_boss_svala() (loader decl 132 / call 327) — the FIRST group of
 	// the "// Utgarde Keep - Utgarde Pinnacle" block (utgarde_keep ->
-	// boss_svala).
-	// Bridgeable arms: JustEngagedWith unconditional Talk(SAY_AGGRO 2)
-	// (event 1 — the auriaya engage-port precedent), KilledUnit
-	// player-gated Talk(SAY_SLAY 3) (event 3 — the razuvious player-gated
-	// variant precedent), JustDied unconditional Talk(SAY_DEATH 4)
-	// (event 4 — the sjonnir JustDied-Talk precedent). The whole intro
-	// Talk machine (EVENT_INTRO_* timers, cross-creature Arthas talks),
-	// the EVENT_RITUAL_PREPARATION Talk(SAY_SACRIFICE_PLAYER), the phase
-	// transitions, spectator / ritual-channeler / scourge-hulk machines
-	// (no Talk arms), the spell_paralyze_pinnacle SpellScript and the
-	// achievement_incredible_hulk GetData check are bridge-blocked —
-	// documented in the lua header.
+	// boss_svala). Ported arms (lua_scripts/northrend/boss_svala.lua):
+	// JustEngagedWith unconditional Talk(SAY_AGGRO 2) (event 1 — the
+	// auriaya engage-port precedent), KilledUnit player-gated Talk
+	// (SAY_SLAY 3) (event 3 — the razuvious player-gated variant
+	// precedent), JustDied unconditional Talk(SAY_DEATH 4) (event 4 —
+	// the sjonnir JustDied-Talk precedent). Timer-driven cast ports
+	// (CreateLuaEvent): npc_scourge_hulk (26555) mightyBlow 48697 and
+	// volatileInfection 56785 — both ungated in its UpdateAI, non-
+	// triggered (the yogg_saron adds precedent). The NORMAL-phase-gated
+	// EVENT_SINISTER_STRIKE / EVENT_CALL_FLAMES arms stay out (the
+	// NORMAL/SACRIFICING phase machine has no bridges — the gothik
+	// precedent); the whole intro Talk machine (EVENT_INTRO_* timers,
+	// cross-creature Arthas talks), the EVENT_RITUAL_PREPARATION Talk
+	// (SAY_SACRIFICE_PLAYER) fused with the ritual summon machine, the
+	// ritual-channeler / spectator / spell_paralyze_pinnacle /
+	// achievement_incredible_hulk legs are bridge-blocked — documented
+	// in the lua header.
 	RegisterLuaBoss("boss_svala", 26668)
 	// AddSC_boss_palehoof: Gortok Palehoof (Utgarde Pinnacle) — ported arms
 	// (lua_scripts/northrend/boss_palehoof.lua): JustEngagedWith
 	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya engage-port
 	// precedent), KilledUnit player-gated Talk(SAY_SLAY 1) (event 3 — the
-	// razuvious player-gated variant precedent). The
-	// JustDied DoPlaySoundToSet(13467) has no Talk; the orb / awaken-spell /
-	// miniboss timer machines, the ACTION_* DoAction legs and the
+	// razuvious player-gated variant precedent). Timer-driven cast ports
+	// (CreateLuaEvent): boss EVENT_ARCING_SMASH 48260, EVENT_IMPALE 48261
+	// (random player), EVENT_WITHERING_ROAR 48256 — all ungated,
+	// non-triggered; the four miniboss timer kits (furbolg CRAZED /
+	// CHAIN_LIGHTNING / TERRIFYING_ROAR, worgen MORTAL_WOUND / ENRAGE /
+	// ENRAGE_2, rhino GORE / GRIEVOUS_WOUND / STOMP, jormungar ACID_SPIT
+	// / ACID_SPLATTER / POISON_BREATH) — all ungated in their
+	// ExecuteEvent switches, non-triggered (the yogg_saron adds
+	// precedent). The JustDied DoPlaySoundToSet(13467) has no Talk; the
+	// orb / awaken-spell / sphere GameObject / ACTION_* DoAction machine
+	// (timers schedule on combat start, documented deviation) and the
 	// SpellScriptLoader hooks are bridge-blocked — documented in the lua
 	// header.
 	RegisterLuaBoss("boss_palehoof", 26687)
@@ -9943,11 +9956,16 @@ func init() {
 	// player-gated Talk(SAY_KILL 1) (event 3 — the razuvious
 	// player-gated variant precedent), JustDied unconditional
 	// Talk(SAY_DEATH 3) (event 4 — the sjonnir JustDied-Talk precedent).
-	// Talk(SAY_AGGRO 0) rides DoAction(ACTION_START_ENCOUNTER) (event 1
-	// deliberately not registered), the SAY_DRAKE_BREATH /
-	// SAY_DRAKE_DEATH Talks, the whole flying-phase / harpoon / vehicle
-	// DoAction machine, the grauf spline-chain emotes (no MovementInform
-	// bridge), the ymirjar trash spell timers, the SpellScript /
+	// Timer-driven cast ports (CreateLuaEvent): the ymirjar trash kits —
+	// warrior HAMSTRING 48639 / STRIKE 48640, witch doctor SHADOW_BOLT
+	// 49084 / SHRINK 49089, harpooner NET 49092 (random player, 30y) /
+	// THROW 49091 — all ungated in their ScheduleTasks, non-triggered
+	// (the yogg_saron adds precedent). Talk(SAY_AGGRO 0) rides DoAction
+	// (ACTION_START_ENCOUNTER) (event 1 deliberately not registered),
+	// the SAY_DRAKE_BREATH / SAY_DRAKE_DEATH Talks, the ground-phase
+	// timer kits (ACTION_GAUNTLET_END-gated — the gothik precedent), the
+	// whole flying-phase / harpoon / vehicle DoAction machine, the grauf
+	// spline-chain emotes (no MovementInform bridge), the SpellScript /
 	// AuraScript hooks, the achievement GetData check and the area
 	// trigger are bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_skadi", 26693)
@@ -9957,10 +9975,15 @@ func init() {
 	// precedent), KilledUnit player-gated Talk(SAY_SLAY 1) (event 3 —
 	// the razuvious player-gated variant precedent), JustDied
 	// unconditional Talk(SAY_DEATH 2) (event 4 — the sjonnir
-	// JustDied-Talk precedent). The MovementInform POINT_BOAT summon
-	// Talks (SAY_SUMMON_BJORN/HALDOR/RANULF/TORGYN 3-6), the ancestor
-	// summon / channel / REACT_PASSIVE / EVENT_RESUME_COMBAT machine,
-	// the EVENT_* spell timer legs, the spell_dark_slash SpellScript
+	// JustDied-Talk precedent). Timer-driven cast ports (CreateLuaEvent):
+	// EVENT_BANE 48294, EVENT_FETID_ROT 48291, EVENT_DARK_SLASH 48292,
+	// EVENT_ANCESTORS_VENGEANCE 16939 — all ungated in ExecuteEvent,
+	// non-triggered (normal-mode DUNGEON_MODE values; the assembly_of_iron
+	// deviation precedent for the unbridged boat-phase DelayEvents leg).
+	// The MovementInform POINT_BOAT summon Talks
+	// (SAY_SUMMON_BJORN/HALDOR/RANULF/TORGYN 3-6), the ancestor summon /
+	// channel / REACT_PASSIVE / EVENT_RESUME_COMBAT machine and the four
+	// ancestor events (gothik-gated), the spell_dark_slash SpellScript
 	// OnHit hook and the achievement_kings_bane GetData check are
 	// bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_ymiron", 26861)
