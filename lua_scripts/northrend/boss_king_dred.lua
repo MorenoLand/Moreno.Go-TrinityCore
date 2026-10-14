@@ -31,13 +31,16 @@
 -- 48920), 20s init, 20s repeat (event 1 scheduler);
 -- EVENT_MANGLING_SLASH DoCastVictim(Mangling Slash 48873), 18500ms
 -- init, 18500ms repeat; EVENT_PIERCING_SLASH DoCastVictim(Piercing
--- Slash 48878), 15s init, 15s repeat. No Talk, no JustDied legs —
+-- Slash 48878), 15s init, 15s repeat; EVENT_BELLOWING_ROAR non-
+-- triggered DoCastAOE(Bellowing Roar 22686) -> self-cast CastSpell(
+-- creature, spell), 33s init, 33s repeat; EVENT_FEARSOME_ROAR non-
+-- triggered DoCastAOE(Fearsome Roar 48849) -> self-cast, randtime(
+-- 10s,20s) init, 10-20s repeat (sulfuron convention). Both roars
+-- carry no SpellScript and are not phase-gated, so the stale "no
+-- DoCastAOE bridge" claim was wrong (selin_fireheart convention).
+-- No Talk, no JustDied legs —
 -- C++ JustDied is only _JustDied() (instance bookkeeping, no bridge).
 -- Unmodeled (no bridges — documented, not wired):
--- EVENT_BELLOWING_ROAR — DoCastAOE(Bellowing Roar 22686), 33s init,
--- 33s repeat — no DoCastAOE bridge (terestian/shazzrah precedent).
--- EVENT_FEARSOME_ROAR — DoCastAOE(Fearsome Roar 48849), randtime(
--- 10s,20s) init, 10-20s repeat — no DoCastAOE bridge.
 -- EVENT_RAPTOR_CALL — DoCastVictim(SPELL_RAPTOR_CALL 59416, dummy) +
 -- me->SummonCreature(RAND(NPC_DRAKKARI_GUTRIPPER 26641 /
 -- NPC_DRAKKARI_SCYTHECLAW 26628), GetClosePoint(combatReach/3, 10.0f),
@@ -78,6 +81,8 @@ local ENTRY_KING_DRED = 27483
 local SPELL_GRIEVOUS_BITE = 48920
 local SPELL_MANGLING_SLASH = 48873
 local SPELL_PIERCING_SLASH = 48878
+local SPELL_BELLOWING_ROAR = 22686
+local SPELL_FEARSOME_ROAR = 48849
 
 local timers = {}
 
@@ -128,6 +133,28 @@ local function piercingSlashTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_BELLOWING_ROAR: non-triggered DoCastAOE(22686), 33s init,
+-- 33s repeat. Lowers to non-triggered self-cast (selin_fireheart
+-- DoCastAOE convention); 22686 carries no SpellScript and the arm is
+-- not phase-gated, so the stale "no DoCastAOE bridge" header claim was
+-- wrong.
+local function bellowingRoarTick(creature, guid)
+    creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
+    schedule(guid, "bellowingroar", 33000, function()
+        bellowingRoarTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_FEARSOME_ROAR: non-triggered DoCastAOE(48849),
+-- randtime(10s,20s) init, randtime(10s,20s) repeat (sulfuron
+-- convention for the C++ 10s,20s urand overload).
+local function fearsomeRoarTick(creature, guid)
+    creature:CastSpell(creature, SPELL_FEARSOME_ROAR)
+    schedule(guid, "fearsome_roar", math.random(10000, 20000), function()
+        fearsomeRoarTick(creature, guid)
+    end)
+end
+
 local function kingDredEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -139,6 +166,12 @@ local function kingDredEnterCombat(event, creature, target)
     end)
     schedule(guid, "piercingslash", 15000, function()
         piercingSlashTick(creature, guid)
+    end)
+    schedule(guid, "bellowingroar", 33000, function()
+        bellowingRoarTick(creature, guid)
+    end)
+    schedule(guid, "fearsome_roar", math.random(10000, 20000), function()
+        fearsomeRoarTick(creature, guid)
     end)
 end
 

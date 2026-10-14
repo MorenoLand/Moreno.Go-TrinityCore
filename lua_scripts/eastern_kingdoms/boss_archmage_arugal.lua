@@ -38,11 +38,13 @@
 --   that were not cast last, which is the same distribution.
 -- - EVENT_VOID_BOLT: 1s init -> 5s re-arm; DoCastVictim(7588) ->
 --   GetVictim + CastSpell (mr_smite convention).
+-- - EVENT_THUNDERSHOCK: 10s init -> 30s re-arm; non-triggered
+--   DoCastAOE(7803) lowers to self-cast CastSpell(creature, spell)
+--   (selin_fireheart DoCastAOE convention; 7803 has no SpellScript
+--   and the arm is not phase-gated).
 -- - KilledUnit: OnTargetDied(3) with victim:IsPlayer() guard ->
 --   Talk(SAY_SLAY) (vancleef/illidan convention).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - EVENT_THUNDERSHOCK: DoCastAOE(7803) has no bridge (shazzrah /
---   supremus precedent) — skipped.
 -- - SpellHitTarget: Talk(SAY_TRANSFORM) fires when SPELL_ARUGAL_CURSE
 --   (7621) lands, but event 15 (OnSpellHitTarget) is never fired by
 --   the Go engine (standing SpellHit/Summon blocker).
@@ -59,6 +61,7 @@ local SAY_SLAY = 3
 
 local SPELL_ARUGAL_CURSE = 7621
 local SPELL_VOIDBOLT = 7588
+local SPELL_THUNDERSHOCK = 7803
 local SPELL_TELE_SPAWN = 7586
 local SPELL_TELE_UPPER = 7587
 local SPELL_TELE_STAIRS = 7136
@@ -142,6 +145,16 @@ local function onVoidBolt(creature, guid)
     schedule(guid, "voidbolt", 5000, function() onVoidBolt(creature, guid) end)
 end
 
+-- C++ EVENT_THUNDERSHOCK: non-triggered DoCastAOE(7803), 10s init ->
+-- 30s re-arm. DoCastAOE lowers to non-triggered self-cast
+-- (selin_fireheart convention); 7803 carries no SpellScript and the
+-- arm is not phase-gated, so the stale "no DoCastAOE bridge" header
+-- claim was wrong.
+local function onThunderShock(creature, guid)
+    creature:CastSpell(creature, SPELL_THUNDERSHOCK)
+    schedule(guid, "thundershock", 30000, function() onThunderShock(creature, guid) end)
+end
+
 local function onTargetDied(_, creature, victim)
     if victim:IsPlayer() then
         creature:Talk(SAY_SLAY)
@@ -155,6 +168,7 @@ local function onEnterCombat(_, creature)
     schedule(guid, "curse", 7000, function() onCurse(creature, guid) end)
     schedule(guid, "teleport", 15000, function() onTeleport(creature, guid) end)
     schedule(guid, "voidbolt", 1000, function() onVoidBolt(creature, guid) end)
+    schedule(guid, "thundershock", 10000, function() onThunderShock(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

@@ -31,7 +31,9 @@
 -- HealthBelowPct(50) reads current health in UpdateAI — golemagg
 -- 704fb8e bug class, so the latch does NOT subtract the incoming
 -- damage) and not yet latched -> Talk(1) + non-triggered self-cast
--- 9438; per-GUID Lua state holds the once-guard (no HasAura bridge),
+-- 9438 + non-triggered DoCastAOE detonation 9435 (self-cast lowering,
+-- selin_fireheart convention); per-GUID Lua state holds the once-guard
+-- (no HasAura bridge),
 -- cleared on 2/4/23. OnDied/OnLeaveCombat/OnReset: cancel timers,
 -- clear the latch.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
@@ -40,9 +42,8 @@
 -- the damage hook rather than the next UpdateAI tick (tick timing
 -- deviation, documented); BossAI::JustEngagedWith and the
 -- DATA_ARCANIST_DOAN encounter bookkeeping have no instance-script
--- bridge — boss admission via the luaBossAI shim; DoCastAOE(detona-
--- tion 9435) has no bridge (shazzrah gate precedent — the explosion arm
--- is documented-only); C++ DoCastSelf(9438) default is non-triggered,
+-- bridge — boss admission via the luaBossAI shim; C++ DoCastSelf(9438)
+-- default is non-triggered,
 -- matching the ported cast.
 
 local ENTRY_ARCANIST_DOAN = 6487
@@ -176,8 +177,8 @@ end
 -- (arcane bubble 9438). Modeled on the pre-damage hook (event 9) with
 -- current-health semantics (golemagg 704fb8e bug class: HealthBelowPct
 -- reads current health, so no damage subtraction). The
--- DoCastAOE(detonation 9435) arm has no bridge (shazzrah gate
--- precedent) — documented-only.
+-- DoCastAOE(detonation 9435) arm rides the latch as non-triggered
+-- self-cast (selin_fireheart DoCastAOE convention).
 local function doanDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if bubbleLatched[guid] then
@@ -191,6 +192,12 @@ local function doanDamageTaken(event, creature, attacker, damage)
         bubbleLatched[guid] = true
         creature:Talk(SAY_SPECIALAE)
         creature:CastSpell(creature, SPELL_ARCANE_BUBBLE)
+        -- C++ UpdateAI below-50% arm: non-triggered DoCastAOE(detonation
+        -- 9435) rides the same latch after the bubble. 9435 carries no
+        -- SpellScript, so the stale "no DoCastAOE bridge" claim was
+        -- wrong — it lowers to non-triggered self-cast (selin_fireheart
+        -- DoCastAOE convention).
+        creature:CastSpell(creature, SPELL_DETONATION)
     end
 end
 
