@@ -53,6 +53,7 @@ type itemQueryData struct {
 	Flags                     uint32
 	Flags2                    uint32
 	BuyPrice                  int32
+	BuyCount                  uint32
 	SellPrice                 uint32
 	InventoryType             uint32
 	AllowableClass            uint32
@@ -132,7 +133,7 @@ func (s *session) handleItemQuerySingle(ctx context.Context, payload []byte) boo
 }
 
 func itemQueryColumns() []string {
-	columns := []string{"class", "subclass", "SoundOverrideSubclass", "name", "displayid", "Quality", "Flags", "FlagsExtra", "BuyPrice", "SellPrice", "InventoryType", "AllowableClass", "AllowableRace", "ItemLevel", "RequiredLevel", "RequiredSkill", "RequiredSkillRank", "requiredspell", "requiredhonorrank", "RequiredCityRank", "RequiredReputationFaction", "RequiredReputationRank", "maxcount", "stackable", "ContainerSlots", "StatsCount"}
+	columns := []string{"class", "subclass", "SoundOverrideSubclass", "name", "displayid", "Quality", "Flags", "FlagsExtra", "BuyPrice", "BuyCount", "SellPrice", "InventoryType", "AllowableClass", "AllowableRace", "ItemLevel", "RequiredLevel", "RequiredSkill", "RequiredSkillRank", "requiredspell", "requiredhonorrank", "RequiredCityRank", "RequiredReputationFaction", "RequiredReputationRank", "maxcount", "stackable", "ContainerSlots", "StatsCount"}
 	for index := 1; index <= itemStats; index++ {
 		columns = append(columns, "stat_type"+strconv.Itoa(index), "stat_value"+strconv.Itoa(index))
 	}
@@ -153,7 +154,7 @@ func (s *session) loadItemQueryData(ctx context.Context, entry uint32) (itemQuer
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return data, errors.New("world store unavailable")
 	}
-	var class, subclass, sound, display, quality, flags, flags2, buyPrice, sellPrice, inventoryType, allowableClass, allowableRace, itemLevel, requiredLevel, requiredSkill, requiredSkillRank, requiredSpell, requiredHonorRank, requiredCityRank, requiredReputationFaction, requiredReputationRank, maxCount, stackable, containerSlots, statsCount int64
+	var class, subclass, sound, display, quality, flags, flags2, buyPrice, buyCount, sellPrice, inventoryType, allowableClass, allowableRace, itemLevel, requiredLevel, requiredSkill, requiredSkillRank, requiredSpell, requiredHonorRank, requiredCityRank, requiredReputationFaction, requiredReputationRank, maxCount, stackable, containerSlots, statsCount int64
 	var name, description string
 	statTypes := make([]int64, itemStats)
 	statValues := make([]int64, itemStats)
@@ -176,7 +177,7 @@ func (s *session) loadItemQueryData(ctx context.Context, entry uint32) (itemQuer
 	socketContents := make([]int64, itemSockets)
 	var socketBonus, gemProperties, requiredDisenchantSkill, duration, itemLimitCategory, holidayID, flagsCustom int64
 	var armorDamageModifier float64
-	targets := []any{&class, &subclass, &sound, &name, &display, &quality, &flags, &flags2, &buyPrice, &sellPrice, &inventoryType, &allowableClass, &allowableRace, &itemLevel, &requiredLevel, &requiredSkill, &requiredSkillRank, &requiredSpell, &requiredHonorRank, &requiredCityRank, &requiredReputationFaction, &requiredReputationRank, &maxCount, &stackable, &containerSlots, &statsCount}
+	targets := []any{&class, &subclass, &sound, &name, &display, &quality, &flags, &flags2, &buyPrice, &buyCount, &sellPrice, &inventoryType, &allowableClass, &allowableRace, &itemLevel, &requiredLevel, &requiredSkill, &requiredSkillRank, &requiredSpell, &requiredHonorRank, &requiredCityRank, &requiredReputationFaction, &requiredReputationRank, &maxCount, &stackable, &containerSlots, &statsCount}
 	for index := range statTypes {
 		targets = append(targets, &statTypes[index], &statValues[index])
 	}
@@ -202,6 +203,7 @@ func (s *session) loadItemQueryData(ctx context.Context, entry uint32) (itemQuer
 	}
 	data.Entry, data.Class, data.SubClass, data.SoundOverrideSubclass, data.Name = entry, uint32(class), uint32(subclass), int32(sound), name
 	data.DisplayInfoID, data.Quality, data.Flags, data.Flags2, data.BuyPrice, data.SellPrice = uint32(display), uint32(quality), uint32(flags), uint32(flags2), int32(buyPrice), uint32(sellPrice)
+	data.BuyCount = uint32(buyCount)
 	data.InventoryType, data.AllowableClass, data.AllowableRace, data.ItemLevel, data.RequiredLevel = uint32(inventoryType), uint32(allowableClass), uint32(allowableRace), uint32(itemLevel), uint32(requiredLevel)
 	data.RequiredSkill, data.RequiredSkillRank, data.RequiredSpell, data.RequiredHonorRank, data.RequiredCityRank = uint32(requiredSkill), uint32(requiredSkillRank), uint32(requiredSpell), uint32(requiredHonorRank), uint32(requiredCityRank)
 	data.RequiredReputationFaction, data.RequiredReputationRank, data.MaxCount, data.Stackable, data.ContainerSlots = uint32(requiredReputationFaction), uint32(requiredReputationRank), int32(maxCount), int32(stackable), uint32(containerSlots)

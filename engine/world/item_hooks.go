@@ -28,6 +28,13 @@ func itemTemplateLiveFromQuery(data itemQueryData) scripting.ItemTemplateLive {
 		Stackable:      data.Stackable,
 		ContainerSlots: data.ContainerSlots,
 		StatsCount:     data.StatsCount,
+		Flags:          data.Flags,
+		BagFamily:      data.BagFamily,
+		StartQuest:     data.StartQuest,
+		ItemSet:        data.ItemSet,
+		BuyCount:       data.BuyCount,
+		RandomProperty: data.RandomProperty,
+		RandomSuffix:   data.RandomSuffix,
 	}
 	for index := range data.Spells {
 		if id := data.Spells[index].ID; id > 0 {

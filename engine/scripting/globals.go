@@ -349,10 +349,14 @@ type ItemTemplateLive struct {
 	Class, SubClass, DisplayInfoID    uint32
 	Quality, ItemLevel, RequiredLevel uint32
 	BuyPrice                          int32
+	BuyCount                          uint32
 	SellPrice, InventoryType          uint32
 	AllowableClass, AllowableRace     uint32
 	Stackable                         int32
 	ContainerSlots, StatsCount        uint32
+	Flags, BagFamily                  uint32
+	StartQuest, ItemSet               uint32
+	RandomProperty, RandomSuffix      int32
 	SpellIDs                          [5]uint32
 	SpellTriggers                     [5]uint32
 }
@@ -380,18 +384,37 @@ func itemMaxStackCount(stackable int32) uint32 {
 // an item is a bag exactly when its template inventory type is 18.
 const invTypeBag = 18
 
+// Template-class constants behind the ItemTemplate predicates
+// (ItemTemplate.h:153/245/296/303/320/444/445).
+const (
+	itemClassConsumable           = 0
+	itemClassTradeGoods           = 7
+	itemSubclassPotion            = 1
+	itemSubclassArmorEnchantment  = 14
+	itemSubclassWeaponEnchantment = 15
+	itemFlagConjured              = 0x00000002
+	bagFamilyMaskCurrencyTokens   = 0x00002000
+)
+
 // NewItemObject builds the Lua Item object surface for hooks that hand
 // scripts a live item (Eluna's Push(Item*) via ElunaTemplate): the GUID,
 // Entry and Count fields plus the template-read methods GetName,
 // GetQuality, GetClass, GetSubClass, GetDisplayId, GetItemLevel,
-// GetRequiredLevel, GetBuyPrice, GetSellPrice, GetInventoryType,
-// GetAllowableClass, GetAllowableRace, GetMaxStackCount, GetBagSize,
-// GetStatsCount, IsBag, GetSpellId and GetSpellTrigger (ItemMethods.h).
+// GetRequiredLevel, GetBuyPrice, GetBuyCount, GetSellPrice,
+// GetInventoryType, GetAllowableClass, GetAllowableRace, GetMaxStackCount,
+// GetBagSize, GetStatsCount, GetItemSet, GetRandomProperty,
+// GetRandomSuffix, HasQuest, IsBag, IsPotion,
+// IsWeaponVellum, IsArmorVellum, IsConjuredConsumable, IsCurrencyToken,
+// GetSpellId and GetSpellTrigger (ItemMethods.h).
 // The generic object methods supply GetEntry/GetGUID/GetGUIDLow/GetTypeId
-// (object.go). The instance-bound surface (GetOwner, GetSlot, GetBagSlot,
-// IsEquipped, IsBroken) and the mutating surface (SetOwner, SetBinding,
-// SetCount, SetEnchantment, ClearEnchantment, SaveToDB) have no Go
-// live-item model behind them and stay unbridged.
+// (object.go). The instance-bound surface (GetOwner, GetOwnerGUID,
+// GetSlot, GetBagSlot, GetEnchantmentId, IsEquipped, IsBroken, IsLocked,
+// IsBoundAccountWide, IsBoundByEnchant, IsNotBoundToPlayer, IsNotEmptyBag,
+// IsInBag, IsInTrade, CanBeTraded, GetItemLink — the item method's
+// enchantment/random-property/owner-level legs need the live item) and
+// the mutating surface (SetOwner, SetBinding, SetCount, SetEnchantment,
+// ClearEnchantment, SaveToDB) have no Go live-item model behind them and
+// stay unbridged.
 func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 	load := live.LoadTemplate
 	if load == nil {
@@ -482,6 +505,65 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 		"GetSpellTrigger": func(_ context.Context, args []any) ([]any, error) {
 			return templateSpell(args, func(t ItemTemplateLive, index uint32) uint32 { return t.SpellTriggers[index] })
 		},
+		// ItemTemplate::GetBuyCount (ItemMethods.h:510): pure template read.
+		"GetBuyCount": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.BuyCount }), nil
+		},
+		// ItemTemplate::GetItemSet (ItemMethods.h:625): pure template read.
+		"GetItemSet": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.ItemSet }), nil
+		},
+		// ItemTemplate::RandomProperty (ItemMethods.h:606): pure template read.
+		"GetRandomProperty": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.RandomProperty }), nil
+		},
+		// ItemTemplate::RandomSuffix (ItemMethods.h:613): pure template read.
+		"GetRandomSuffix": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any { return t.RandomSuffix }), nil
+		},
+		// Item::hasQuest (Item.h:175, ItemMethods.h:176): StartQuest == quest.
+		"HasQuest": func(_ context.Context, args []any) ([]any, error) {
+			quest, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			return templateValue(func(t ItemTemplateLive) any { return t.StartQuest == quest }), nil
+		},
+		// ItemTemplate::IsPotion (ItemTemplate.h:700): Class == 0 (CONSUMABLE)
+		// && SubClass == 1 (POTION).
+		"IsPotion": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any {
+				return t.Class == itemClassConsumable && t.SubClass == itemSubclassPotion
+			}), nil
+		},
+		// ItemTemplate::IsWeaponVellum (ItemTemplate.h:701): Class == 7
+		// (TRADE_GOODS) && SubClass == 15 (WEAPON_ENCHANTMENT).
+		"IsWeaponVellum": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any {
+				return t.Class == itemClassTradeGoods && t.SubClass == itemSubclassWeaponEnchantment
+			}), nil
+		},
+		// ItemTemplate::IsArmorVellum (ItemTemplate.h:702): Class == 7
+		// (TRADE_GOODS) && SubClass == 14 (ARMOR_ENCHANTMENT).
+		"IsArmorVellum": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any {
+				return t.Class == itemClassTradeGoods && t.SubClass == itemSubclassArmorEnchantment
+			}), nil
+		},
+		// ItemTemplate::IsConjuredConsumable (ItemTemplate.h:703):
+		// Class == 0 (CONSUMABLE) && Flags & ITEM_FLAG_CONJURED (0x2).
+		"IsConjuredConsumable": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any {
+				return t.Class == itemClassConsumable && t.Flags&itemFlagConjured != 0
+			}), nil
+		},
+		// ItemTemplate::IsCurrencyToken (ItemTemplate.h:684):
+		// BagFamily & BAG_FAMILY_MASK_CURRENCY_TOKENS (0x2000).
+		"IsCurrencyToken": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any {
+				return t.BagFamily&bagFamilyMaskCurrencyTokens != 0
+			}), nil
+		},
 	}
 	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}
 }
@@ -506,8 +588,10 @@ type MapLive struct {
 // methods (object.go) and the DBC-backed GetName/IsDungeon/IsRaid/IsArena/
 // IsBattleground come from the live MapLive (MapMethods.h). The remaining
 // Map surface (GetHeight/GetDifficulty/GetPlayerCount/GetAreaId(x,y,z)/
-// GetWorldObject/SetWeather/GetInstanceData/SaveInstanceData/GetPlayers)
-// needs a live Map* with grid/difficulty state and stays unbridged.
+// GetWorldObject/SetWeather/GetInstanceData/SaveInstanceData/GetPlayers,
+// plus IsEmpty (Map::isEmpty reads the live m_mapRefManager player refs)
+// and IsHeroic (Map::IsHeroic reads the live i_spawnMode difficulty))
+// needs a live Map* with grid/difficulty/ref state and stays unbridged.
 func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 	load := live.Load
 	if load == nil {
