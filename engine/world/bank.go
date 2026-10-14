@@ -229,25 +229,25 @@ func itemCanGoIntoBag(bagClass, bagSubClass uint32, itemBagFamily uint32) bool {
 	return false
 }
 
-// findFreeBankBagSlot ports the free-place bank-bag legs of Player::CanBankItem's
-// auto path (Player.cpp:11783-11830). The merge legs are moot (Go moves whole
-// items), so this runs the two free-place legs: for items with a BagFamily,
-// specialized family-matching bank bags are tried first, then plain
-// containers; items with no BagFamily only consider plain containers.
-// CanStoreItem_InBag's non_specialized gate (Player.cpp:10597) rejects
-// plain containers on the specialized pass and specialized bags on the plain
-// pass, and ItemCanGoIntoBag rejects family-mismatched bags (a sword never
-// lands in a soul bag). Empty bags nest in plain containers per ItemCanGoIntoBag's
-// plain arm.
-func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32) (int64, uint8, bool) {
+// findFreeBankBagSlot ports the bank-bag legs of Player::CanBankItem's auto
+// path (Player.cpp:11817-11852). The merge legs are moot (Go moves whole
+// items). With specializedOnly=true it runs the free-place special-bag leg
+// (non_specialized=false, Player.cpp:11817-11826): BagFamily items try
+// family-matching specialized bank bags FIRST, before the bank slots; with
+// false it runs the plain-container leg (non_specialized=true,
+// Player.cpp:11844-11852). CanStoreItem_InBag's non_specialized gate
+// (Player.cpp:10597) rejects plain containers on the specialized pass and
+// specialized bags on the plain pass, and ItemCanGoIntoBag rejects
+// family-mismatched bags (a sword never lands in a soul bag). Empty bags
+// nest in plain containers per ItemCanGoIntoBag's plain arm.
+func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32, specializedOnly bool) (int64, uint8, bool) {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil ||
 		s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return 0, 0, false
 	}
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
-	var itemBagFamily uint32
-	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(BagFamily, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&itemBagFamily)
+	itemBagFamily := s.itemBagFamilyOf(ctx, itemEntry)
 
 	maxBankBag := int(s.player.BankBagSlots)
 	if maxBankBag > 7 {
@@ -274,9 +274,12 @@ func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32) (in
 	isPlain := func(b bankBag) bool {
 		return b.class == itemClassContainer && b.subclass == itemSubClassContainer
 	}
-	// Pass 1 (Player.cpp:11786-11796): BagFamily items try specialized
-	// family-matching bags first.
-	if itemBagFamily != 0 {
+	// Pass 1 (Player.cpp:11817-11826): specialized family-matching bags
+	// (non_specialized=false leg), for BagFamily items.
+	if specializedOnly {
+		if itemBagFamily == 0 {
+			return 0, 0, false
+		}
 		for _, b := range bags {
 			if isPlain(b) || !itemCanGoIntoBag(b.class, b.subclass, itemBagFamily) {
 				continue
@@ -285,8 +288,10 @@ func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32) (in
 				return b.guid, slot, true
 			}
 		}
+		return 0, 0, false
 	}
-	// Pass 2 (Player.cpp:11822-11830): plain containers.
+	// Pass 3 (Player.cpp:11844-11852): plain containers
+	// (non_specialized=true leg).
 	for _, b := range bags {
 		if !isPlain(b) {
 			continue
@@ -296,6 +301,17 @@ func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32) (in
 		}
 	}
 	return 0, 0, false
+}
+
+// itemBagFamilyOf reads the item_template BagFamily mask used by the
+// free-place legs of CanBankItem / CanStoreItem (Player.cpp:11817,
+// 10844, 10878).
+func (s *session) itemBagFamilyOf(ctx context.Context, itemEntry uint32) uint32 {
+	var family uint32
+	if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(BagFamily, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&family)
+	}
+	return family
 }
 
 // handleAutoBankItem processes CMSG_AUTOBANK_ITEM (0x283).
@@ -370,33 +386,41 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 
 	var destBagKey int64 = 0
 	var destSlot uint8 = 0xFF
-	// The moved item's own slot scans as empty (Player.cpp:10663-10667).
-	if srcBagKey == 0 && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd {
-		delete(occupied, srcSlot)
-	}
-	for sl := bankSlotStart; sl <= bankSlotEnd; sl++ {
-		if !occupied[sl] {
-			destSlot = sl
-			break
+	// Pass 1 (Player.cpp:11817-11826): BagFamily items try the specialized
+	// family-matching bank bags BEFORE the bank slots.
+	if s.itemBagFamilyOf(ctx, uint32(itemEntry)) != 0 {
+		if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), true); ok {
+			destBagKey = bagKey
+			destSlot = slot
 		}
 	}
-
-	// dest==own-pos guard (BankHandler.cpp:79-83): with the own slot
-	// scanning as empty the search can resolve to it — answer
-	// EQUIP_ERR_NONE instead of moving.
-	if destBagKey == 0 && srcBagKey == 0 && destSlot == srcSlot && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd {
-		s.sendEquipError(equipErrNone, uint64(itemGUID))
-		return true
-	}
-
-	// 2. If 39..66 are full, check purchased bank bags (slots 67..73) with
-	// CanBankItem's auto-path bank-bag legs (Player.cpp:11783-11830):
-	// family-matching specialized bags first for BagFamily items, then plain
-	// containers. ItemCanGoIntoBag's plain arm accepts anything, so empty
-	// bags may nest in plain-container bank bags (bffff2c8's !srcIsBag gate
-	// was wrong — C++ has no bag-in-bag rejection on this path).
+	// Pass 2 (Player.cpp:11838-11842): bank slots 39..66.
 	if destSlot == 0xFF {
-		if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry)); ok {
+		// The moved item's own slot scans as empty (Player.cpp:10663-10667).
+		if srcBagKey == 0 && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd {
+			delete(occupied, srcSlot)
+		}
+		for sl := bankSlotStart; sl <= bankSlotEnd; sl++ {
+			if !occupied[sl] {
+				destSlot = sl
+				break
+			}
+		}
+
+		// dest==own-pos guard (BankHandler.cpp:79-83): with the own slot
+		// scanning as empty the search can resolve to it — answer
+		// EQUIP_ERR_NONE instead of moving.
+		if destBagKey == 0 && srcBagKey == 0 && destSlot == srcSlot && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd {
+			s.sendEquipError(equipErrNone, uint64(itemGUID))
+			return true
+		}
+	}
+	// Pass 3 (Player.cpp:11844-11852): plain non-specialized bank bags.
+	// ItemCanGoIntoBag's plain arm accepts anything, so empty bags may nest
+	// in plain-container bank bags (bffff2c8's !srcIsBag gate was wrong —
+	// C++ has no bag-in-bag rejection on this path).
+	if destSlot == 0xFF {
+		if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), false); ok {
 			destBagKey = bagKey
 			destSlot = slot
 		}
@@ -610,18 +634,28 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		}
 		var destBagKey int64 = 0
 		var destSlot uint8 = 0xFF
-		for sl := bankSlotStart; sl <= bankSlotEnd; sl++ {
-			if !occupied[sl] {
-				destSlot = sl
-				break
+		// Pass 1 (Player.cpp:11817-11826): BagFamily items try the
+		// specialized family-matching bank bags BEFORE the bank slots.
+		if s.itemBagFamilyOf(ctx, uint32(itemEntry)) != 0 {
+			if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), true); ok {
+				destBagKey = bagKey
+				destSlot = slot
 			}
 		}
-		// Bank-bag fallback with CanBankItem's auto-path legs
-		// (Player.cpp:11783-11830): family-matching specialized bags first
-		// for BagFamily items, then plain containers; ItemCanGoIntoBag's
-		// plain arm accepts anything, so empty bags may nest.
+		// Pass 2 (Player.cpp:11838-11842): bank slots 39..66.
 		if destSlot == 0xFF {
-			if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry)); ok {
+			for sl := bankSlotStart; sl <= bankSlotEnd; sl++ {
+				if !occupied[sl] {
+					destSlot = sl
+					break
+				}
+			}
+		}
+		// Pass 3 (Player.cpp:11844-11852): plain non-specialized bank
+		// bags; ItemCanGoIntoBag's plain arm accepts anything, so empty
+		// bags may nest.
+		if destSlot == 0xFF {
+			if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), false); ok {
 				destBagKey = bagKey
 				destSlot = slot
 			}
