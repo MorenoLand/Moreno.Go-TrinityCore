@@ -41,9 +41,11 @@
 -- phase machine has no bridge (gothik precedent; the Oct-12 "no
 -- DoCastAOE bridge" claim is superseded by the phase-gating verdict).
 -- EVENT_FEVER (init randtime(10s,20s), repeat randtime(20s,25s)) —
--- DoCastAOE(SPELL_DECREPIT_FEVER 29998, 25-man 55011) 2-arg
--- (non-triggered) — stays OUT: same PHASE_FIGHT bar + no difficulty
--- bridge (kelidan precedent).
+-- DoCastAOE(SPELL_DECREPIT_FEVER 29998) 2-arg (non-triggered) —
+-- stays OUT: same PHASE_FIGHT bar + no difficulty bridge (kelidan
+-- precedent). FIDELITY NOTE: the C++ hard-codes 29998 on both
+-- difficulties — the enum comment "// 25-man: 55011" is stale vs the
+-- C++ text; a future port must NOT raid-mode it.
 -- EVENT_DANCE (90s, PHASE_FIGHT-only) — the whole phase machine rides
 -- unbridged legs: SetPhase(PHASE_DANCE), SetReactState(REACT_PASSIVE)
 -- (no react-state bridge), AttackStop/StopMoving (no motion bridges),

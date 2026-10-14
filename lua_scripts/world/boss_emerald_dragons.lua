@@ -34,9 +34,11 @@
 -- EVENT_VOLATILE_INFECTION (DoCastVictim 24928, 12s init, 120s
 -- repeat);
 -- boss_taerar JustEngagedWith — Talk(SAY_TAERAR_AGGRO 0) +
--- EVENT_ARCANE_BLAST (DoCastVictim 24857, 12s init,
--- randtime(7s,12s) repeat) + EVENT_BELLOWING_ROAR (DoCastVictim
--- 22686, 30s init, randtime(20s,30s) repeat).
+-- EVENT_ARCANE_BLAST (DoCast 24857 1-arg — AISpellInfo resolves to
+-- AITARGET_VICTIM for the ranged nuke, so victim-cast; 12s init,
+-- randtime(7s,12s) repeat) + EVENT_BELLOWING_ROAR (DoCast 22686 1-arg
+-- — AISpellInfo stays AITARGET_SELF for the range-0 PBAOE, so
+-- self-cast; 30s init, randtime(20s,30s) repeat).
 -- (The Oct-12 "no-timer bridge" claim was wrong — CreateLuaEvent is
 -- a real bridge, retracted this run.) All timers cancelled on
 -- 2/4/23 (gargolmar precedent).
@@ -172,10 +174,12 @@ local function arcaneBlastTick(creature, guid)
 end
 
 -- C++ boss_taerar::ExecuteEvent (:653-655): DoCast(SPELL_BELLOWING_
--- ROAR 22686) 1-arg (DoCastVictim); 30s init, randtime(20s,30s)
--- repeat.
+-- ROAR 22686) 1-arg. The 1-arg DoCast resolves via AISpellInfo
+-- (UnitAI.cpp FillAISpellInfo): Bellowing Roar is a PBAOE with range
+-- 0, so the target stays AITARGET_SELF — self-cast. 30s init,
+-- randtime(20s,30s) repeat.
 local function bellowingRoarTick(creature, guid)
-    creature:CastSpell(nil, SPELL_BELLOWING_ROAR)
+    creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
     schedule(guid, "bellowing_roar", math.random(20, 30) * 1000, function()
         bellowingRoarTick(creature, guid)
     end)

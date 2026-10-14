@@ -49,8 +49,13 @@
 -- 33683} on hit units); a bare cast would fabricate a no-op cast bar
 -- (shazzrah precedent);
 -- EVENT_CHARGE_ATTACK (SelectTarget random → DoCast(target,
--- SPELL_CHARGE 33709), 15-25s cycle) stays OUT — no random-target
--- SelectTarget bridge (cairne/kazzak precedent);
+-- SPELL_CHARGE 33709), 5s init) stays OUT — no random-target
+-- SelectTarget bridge (cairne/kazzak precedent). C++ BUG NOTE: the
+-- arm re-arms EVENT_CHARGE (line 147), but the enum defines only
+-- EVENT_CHARGE_ATTACK — EVENT_CHARGE resolves to SharedDefines.h:3342
+-- (id 1003, MotionMaster generic) which the UpdateAI switch never
+-- handles. C++-exact behavior: charge fires ONCE at 5s, never re-arms
+-- (the "15-25s cycle" does not exist at runtime);
 -- EVENT_WAR_STOMP ported above; DoMeleeAttackIfReady —
 -- documented-only.
 -- BlackheartCharmedPlayerAI (SimpleCharmedPlayerAI) —

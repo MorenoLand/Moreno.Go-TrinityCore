@@ -108,9 +108,9 @@
 -- OUT: scheduled with PHASE_FLIGHT only (:361-363/:376-380); the
 -- phase machine has no bridge.
 -- EVENT_EXPLOSION — DoCastAOE(Frost Breath 28524 + Frost Breath
--- Anti-Cheat 29318) 2-arg (non-triggered) + instance
--- DoRemoveAurasDueToSpellOnPlayers(ICEBOLT) — stays OUT: same
--- PHASE_FLIGHT bar + the instance-aura leg has no bridge.
+-- Anti-Cheat 29318) 2-arg (non-triggered) — TWO casts, not one — +
+-- instance DoRemoveAurasDueToSpellOnPlayers(ICEBOLT) — stays OUT:
+-- same PHASE_FLIGHT bar + the instance-aura leg has no bridge.
 -- EVENT_LAND — buffet DespawnOrUnsummon (cross-AI, no bridge) +
 -- hover/emote/phase legs (no hover / emote / phase bridges).
 -- EVENT_BIRTH — visible/flag/react legs (no bridges).

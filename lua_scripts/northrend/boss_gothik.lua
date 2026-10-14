@@ -96,21 +96,21 @@
 -- entries are local-enum-only (boss_gothik.cpp:94-100), entry-
 -- unverifiable, no Go registration (npc_stinky_icc precedent).
 -- npc_gothik_minion_livingtrainee (16124): DoCastAOE(SPELL_DEATH_
--- PLAGUE 55604) 2-arg (non-triggered), 5-20ms init/repeat — stays
--- OUT: entry-blocked (same local-enum bar; the Oct-12 "no DoCastAOE
--- bridge" claim is superseded).
+-- PLAGUE 55604) 2-arg (non-triggered), urandms(5,20)=5-20s
+-- init/repeat — stays OUT: entry-blocked (same local-enum bar; the
+-- Oct-12 "no DoCastAOE bridge" claim is superseded).
 -- npc_gothik_minion_livingknight (16125): DoCastAOE(SPELL_SHADOW_MARK
--- 27825) 2-arg (non-triggered), 5-10ms init, 15-20ms repeat — stays
--- OUT: entry-blocked.
+-- 27825) 2-arg (non-triggered), urandms(5,10)=5-10s init,
+-- urandms(15,20)=15-20s repeat — stays OUT: entry-blocked.
 -- npc_gothik_minion_livingrider (16126): DoCastAOE(SPELL_SHADOW_BOLT_
--- VOLLEY 27831) 2-arg (non-triggered), 5-10ms init, 10-15ms repeat —
--- stays OUT: entry-blocked.
+-- VOLLEY 27831) 2-arg (non-triggered), urandms(5,10)=5-10s init,
+-- urandms(10,15)=10-15s repeat — stays OUT: entry-blocked.
 -- npc_gothik_minion_spectraltrainee (16127): DoCastAOE(SPELL_ARCANE_
 -- EXPLOSION 27989) 2-arg (non-triggered), 2s init/repeat — stays OUT:
 -- entry-blocked.
 -- npc_gothik_minion_spectralknight (16148): DoCastAOE(SPELL_WHIRLWIND
--- 56408) 2-arg (non-triggered), 15-25ms init, 20-25ms repeat — stays
--- OUT: entry-blocked.
+-- 56408) 2-arg (non-triggered), urandms(15,25)=15-25s init,
+-- urandms(20,25)=20-25s repeat — stays OUT: entry-blocked.
 -- npc_gothik_minion_spectralrider (16150): Unholy Frenzy (55648/
 -- RAID_MODE 27995) priority cast on a friendly knight > rider > horse
 -- > Gothik without the buff (DoFindFriendlyMissingBuff) — no
@@ -118,8 +118,8 @@
 -- 8-12ms init, 10-15ms repeat — moroes-ready in isolation but entry-
 -- blocked — joins the bridgeable-but-entry-blocked queue.
 -- npc_gothik_minion_spectralhorse (16149): DoCastAOE(SPELL_STOMP
--- 27993) 2-arg (non-triggered), 10-15ms init, 14-18ms repeat — stays
--- OUT: entry-blocked.
+-- 27993) 2-arg (non-triggered), urandms(10,15)=10-15s init,
+-- urandms(14,18)=14-18s repeat — stays OUT: entry-blocked.
 -- npc_gothik_trigger (16137): SpellHit anchor machine (ANCHOR_1_x ->
 -- ANCHOR_2_x -> SKULLS_x -> DoSummon) — SpellHit never fires in the
 -- Lua surface (SpellHit ruling); skull-pile selection via
