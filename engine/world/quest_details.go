@@ -251,19 +251,12 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 			return false
 		}
 	}
-	creature := s.luaCreature(ctx, guid)
-	var creatureEntry uint32
-	if creature != nil {
-		creatureEntry = objectUint32OrZero(creature, "Entry")
-	} else {
-		// Fallback: extract entry from packed GUID or look up spawn GUID
-		creatureEntry = uint32((guid >> 24) & 0x00FFFFFF)
-		if creatureEntry == 0 {
-			spawnGUID := uint32(guid & 0x00FFFFFF)
-			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
-		}
-	}
-	if creatureEntry == 0 || !s.creatureHasQuest(ctx, creatureEntry, questID) {
+	// TrinityCore HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:239-244)
+	// resolves TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT | TYPEMASK_ITEM and closes
+	// the menu unless the object starts the quest or is involved in it. Go
+	// previously resolved creatures only, so gameobject and item givers were
+	// always answered with a menu close.
+	if !s.questGiverObjectHasQuest(ctx, guid, questID) {
 		return s.sendGossipComplete()
 	}
 	// TrinityCore HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:233) gates the
@@ -306,7 +299,12 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	// / equip-error feedback missing).
 	var specialFlags int64
 	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
-	if specialFlags&4 != 0 && s.canAddQuest(ctx, questID, true) {
+	// Quest::IsAutoAccept (QuestDef.cpp:310-313) is HasFlag(QUEST_FLAGS_AUTO_ACCEPT);
+	// Quest::LoadQuestTemplateAddon (QuestDef.cpp:193) folds
+	// QUEST_SPECIAL_FLAGS_AUTO_ACCEPT (0x4) into _flags at load, so Go (raw DB
+	// read) must OR both legs. Go checked only the SpecialFlags leg, so quests
+	// flagged via quest_template.Flags never auto-accepted here.
+	if (data.Flags&questFlagsAutoAccept != 0 || specialFlags&4 != 0) && s.canAddQuest(ctx, questID, true) {
 		s.addQuestToPlayer(ctx, questID, guid)
 		// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
 		// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
@@ -530,7 +528,9 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	// QuestHandler.cpp:176-177 — the quest's source spell is cast triggered.
 	s.castQuestSourceSpell(ctx, questID)
 
-	// Refresh questgiver overhead status (Player::AddQuestAndCheckCompletion)
+	// Deliberate UX push (not C++: Player::AddQuest only sends SendQuestUpdate) —
+	// refresh the questgiver's overhead icon immediately so the "!" clears or
+	// updates without waiting for the client's next status query.
 	if guid != 0 {
 		var entry uint32
 		if creature := s.luaCreature(ctx, guid); creature != nil {
@@ -1093,6 +1093,55 @@ func (s *session) questgiverStartsQuest(ctx context.Context, guid uint64, questI
 		}
 	}
 	return false
+}
+
+// questGiverObjectHasQuest mirrors the object gate of
+// WorldSession::HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:239-244):
+// the details query accepts TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT | TYPEMASK_ITEM
+// and answers unless the object neither starts nor is involved in the quest.
+// Creature::hasInvolvedQuest / GameObject::hasInvolvedQuest read the
+// *_questender relations (Creature.cpp:1856, GameObject.cpp:1202);
+// Item::hasQuest is GetTemplate()->StartQuest == quest (Item.h:175).
+// TYPEMASK_UNIT excludes TYPEMASK_PLAYER, so player GUIDs always close.
+func (s *session) questGiverObjectHasQuest(ctx context.Context, guid uint64, questID uint32) bool {
+	db := s.server.WorldStore.DB
+	switch uint16(guid >> 48) {
+	case 0x0000: // player GUID: TYPEMASK_UNIT excludes TYPEMASK_PLAYER
+		return false
+	case 0xF110: // gameobject
+		entry := uint32((guid >> 24) & 0x00FFFFFF)
+		return questRelationExists(ctx, db, "gameobject_queststarter", entry, questID) ||
+			questRelationExists(ctx, db, "gameobject_questender", entry, questID)
+	case 0x4000: // item
+		var itemEntry uint32
+		itemLow := guid & 0x0000FFFFFFFFFFFF
+		if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return false
+		}
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? OR guid = ?", itemLow, guid).Scan(&itemEntry)
+		if itemEntry == 0 {
+			return false
+		}
+		var startQuest uint32
+		if err := db.QueryRowContext(ctx, "SELECT startquest FROM item_template WHERE entry = ?", itemEntry).Scan(&startQuest); err != nil {
+			return false
+		}
+		return startQuest == questID
+	default: // unit
+		creature := s.luaCreature(ctx, guid)
+		var creatureEntry uint32
+		if creature != nil {
+			creatureEntry = objectUint32OrZero(creature, "Entry")
+		} else {
+			// Fallback: extract entry from packed GUID or look up spawn GUID
+			creatureEntry = uint32((guid >> 24) & 0x00FFFFFF)
+			if creatureEntry == 0 {
+				spawnGUID := uint32(guid & 0x00FFFFFF)
+				_ = db.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
+			}
+		}
+		return creatureEntry != 0 && s.creatureHasQuest(ctx, creatureEntry, questID)
+	}
 }
 
 func (s *session) sendGossipComplete() bool {
