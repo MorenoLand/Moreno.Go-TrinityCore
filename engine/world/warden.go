@@ -180,14 +180,20 @@ func (m *wardenCheckMgr) loadChecks(ctx context.Context, worldDB *sql.DB, defaul
 		if (t == MpqCheck || t == MemCheck) && len(result) > 0 {
 			m.checkResults[id] = result
 		}
-		if address.Valid {
-			chk.Address = uint32(address.Int64)
+		if t == MemCheck || t == PageCheckA || t == PageCheckB {
+			if address.Valid {
+				chk.Address = uint32(address.Int64)
+			}
 		}
-		if length.Valid {
-			chk.Length = uint8(length.Int64)
+		if t == PageCheckA || t == PageCheckB {
+			if length.Valid {
+				chk.Length = uint8(length.Int64)
+			}
 		}
-		if str.Valid {
-			chk.Str = str.String
+		if t == MemCheck || t == MpqCheck || t == LuaEvalCheck || t == DriverCheck || t == ModuleCheck {
+			if str.Valid {
+				chk.Str = str.String
+			}
 		}
 		if comment.Valid && comment.String != "" {
 			chk.Comment = comment.String

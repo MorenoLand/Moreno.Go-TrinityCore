@@ -588,14 +588,24 @@ func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
 
 	buf := protocol.NewBuffer(64)
 	buf.WriteU64(vehicleGUID)
-	buf.WriteU16(0)     // pet family (0 for all vehicles)
-	buf.WriteU32(0)     // duration
-	buf.WriteU8(0)      // react state (REACT_PASSIVE = 0)
+	buf.WriteU16(0) // pet family (0 for all vehicles)
+	// Duration (Player.cpp:21188): temp-summon timer for summoned vehicles;
+	// Go has no summon-timer model on vehicle kits, and non-summoned vehicle
+	// bases carry 0 in C++ too.
+	buf.WriteU32(0)
+	// React state (Player.cpp:21190): vehicle->GetReactState(). Creatures
+	// default to REACT_AGGRESSIVE (Creature.cpp:257) and Go has no react-state
+	// model that could change it, so the C++ default is sent.
+	buf.WriteU8(2)      // REACT_AGGRESSIVE
 	buf.WriteU8(0)      // command state
 	buf.WriteU16(0x800) // disableActions (0x800 for all vehicles)
 
+	// Player.cpp:21193-21208: the bar carries MAX_CREATURE_SPELLS (8)
+	// creature spells packed with MAKE_UNIT_ACTION_BUTTON(spellId, i+8); the
+	// last two of the 10 slots are always zero. Spells past index 7 never
+	// reach the client in C++.
 	for i := 0; i < 10; i++ {
-		if i < len(spells) && spells[i] > 0 {
+		if i < 8 && i < len(spells) && spells[i] > 0 {
 			buf.WriteU32(spells[i] | (uint32(i+8) << 24))
 		} else {
 			buf.WriteU32(0)
