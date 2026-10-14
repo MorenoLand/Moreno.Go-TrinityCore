@@ -140,7 +140,7 @@ end
 local function healthBelowPct(creature, pct)
     local maxHealth = creature:GetMaxHealth()
     return maxHealth > 0
-        and creature:GetHealth() * 100 / maxHealth < pct
+        and creature:GetHealth() < math.floor(maxHealth * pct / 100)
 end
 
 local function bossTick(creature, guid)

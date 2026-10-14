@@ -97,7 +97,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 5 then
+    if creature:GetHealth() <= math.floor(maxHealth * 5 / 100) then
         state.deathCloud = true
         local victim = creature:GetVictim()
         if victim then

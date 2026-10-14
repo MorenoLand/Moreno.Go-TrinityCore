@@ -293,20 +293,20 @@ RegisterCreatureEvent(ENTRY_WARMAUL_SHAMAN, 1, function(_, creature)
     startPump(guid, creature, shamanTick)
 end)
 
--- C++ DamageTaken per entry — the strict-fraction pct
--- latches (shahraz precedent): health after this hit
--- strictly below the pct threshold.
+-- C++ DamageTaken per entry — HealthBelowPctDamaged(pct, damage):
+-- int64(health)-damage strictly below floor(maxHealth*pct/100),
+-- skipped on killing/overkill blows (health > damage).
 RegisterCreatureEvent(ENTRY_KIL_SORROW_DEATHSWORN, 9, function(_, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = states[guid]
     if not st or st.usedBloodthirst then
         return
     end
-    local maxHealth = creature:GetMaxHealth()
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 50 then
+    if health > damage and health - damage < math.floor(maxHealth * 50 / 100) then
         st.usedBloodthirst = true
         creature:CastSpell(nil, SPELL_BLOODTHIRST)
     end
@@ -318,11 +318,11 @@ RegisterCreatureEvent(ENTRY_GISELDA_THE_CRONE, 9, function(_, creature, attacker
     if not st or st.usedTransform then
         return
     end
-    local maxHealth = creature:GetMaxHealth()
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 65 then
+    if health > damage and health - damage < math.floor(maxHealth * 65 / 100) then
         st.usedTransform = true
         creature:CastSpell(nil, SPELL_GISELDA_TRANSFORM_DND)
     end
@@ -334,11 +334,11 @@ RegisterCreatureEvent(ENTRY_WARMAUL_SHAMAN, 9, function(_, creature, attacker, d
     if not st or st.usedHealing then
         return
     end
-    local maxHealth = creature:GetMaxHealth()
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 50 then
+    if health > damage and health - damage < math.floor(maxHealth * 50 / 100) then
         st.usedHealing = true
         creature:CastSpell(creature, SPELL_HEALING_WAVE)
     end

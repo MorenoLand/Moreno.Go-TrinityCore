@@ -211,7 +211,7 @@ local function belowPct(creature, pct)
     if maxHealth == 0 then
         return false
     end
-    return creature:GetHealth() * 100 / maxHealth < pct
+    return creature:GetHealth() < math.floor(maxHealth * pct / 100)
 end
 
 -- ================= Kalecgos (24850) =================

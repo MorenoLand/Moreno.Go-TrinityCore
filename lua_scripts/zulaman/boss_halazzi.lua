@@ -239,11 +239,11 @@ local function onCheck(creature, guid)
     local st = halazziState(guid)
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if st.phase == PHASE_LYNX and maxHealth > 0 then
-        if health * 100 / maxHealth < 25 * (3 - st.transformCount) then
+        if health < math.floor(maxHealth * (25 * (3 - st.transformCount)) / 100) then
             startSplit(creature, guid)
         end
     elseif st.phase == PHASE_HUMAN and maxHealth > 0 then
-        if health * 100 / maxHealth <= 20 then
+        if health < math.floor(maxHealth * 20 / 100) then
             st.phase = PHASE_MERGE
             cancelPhaseTimers(guid)
             creature:Talk(SAY_MERGE)

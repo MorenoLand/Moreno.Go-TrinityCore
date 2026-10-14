@@ -101,7 +101,7 @@ local function landslidePump(creature, guid)
         return
     end
     local maxHealth = creature:GetMaxHealth()
-    if maxHealth > 0 and creature:GetHealth() < maxHealth * 0.5 then
+    if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * 50 / 100) then
         st.timer = st.timer - 1000
         if st.timer <= 0 then
             creature:CastSpell(creature, SPELL_LANDSLIDE)
@@ -126,8 +126,8 @@ end
 
 -- C++: LandslideTimer starts at 0 and the HealthBelowPct(50) gate
 -- makes the first cast land on the first AI tick after health drops
--- below half. Eluna event 9 is pre-damage, so the crossing uses
--- projected health (jeklik convention); the cast fires at the crossing
+-- below half. Eluna event 9 is pre-damage, so the crossing is read
+-- on current health (jeklik convention); the cast fires at the crossing
 -- and the pump then tracks the 60s residual with C++ tick semantics.
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
@@ -138,7 +138,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() - damage < maxHealth * 0.5 then
+    if creature:GetHealth() < math.floor(maxHealth * 50 / 100) then
         landslide[guid] = { timer = 60000 }
         creature:CastSpell(creature, SPELL_LANDSLIDE)
         schedule(guid, "landslide_pump", 1000, function()

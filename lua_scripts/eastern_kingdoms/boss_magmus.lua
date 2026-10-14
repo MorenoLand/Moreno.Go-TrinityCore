@@ -18,8 +18,8 @@
 -- machine + DamageTaken phase latch):
 -- EVENT_FIERY_BURST: victim-cast FIERYBURST 13900, 5s init -> 6s;
 -- DamageTaken: HealthBelowPctDamaged(50, damage) one-shot phase-two
--- latch (moroes damage-taken convention: (GetHealth() - damage) * 100
--- / maxHealth < 50) -> schedules EVENT_WARSTOMP at 0s in PHASE_TWO;
+-- latch (int64(health)-damage < floor(maxHealth*50/100)) ->
+-- schedules EVENT_WARSTOMP at 0s in PHASE_TWO;
 -- EVENT_WARSTOMP: victim-cast WARSTOMP 24375, 0s init -> 8s.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally (maiden
@@ -103,7 +103,7 @@ local function onDamageTaken(_, creature, _, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 50 then
+    if creature:GetHealth() - damage < math.floor(maxHealth * 50 / 100) then
         state.phaseTwo = true
         schedule(guid, "warstomp", 0, function() onWarstomp(creature, guid) end)
     end

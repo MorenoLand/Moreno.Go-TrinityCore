@@ -215,8 +215,8 @@ RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 9, function(_, creature, attacke
     if maxHealth == 0 then
         return
     end
-    local afterHitPct = (creature:GetHealth() - damage) * 100 / maxHealth
-    if st.phase and afterHitPct < 50 then
+    local afterHit = creature:GetHealth() - damage
+    if st.phase and afterHit < math.floor(maxHealth * 50 / 100) then
         st.phase = false
         creature:Talk(EMOTE_SUMMON)
         creature:Talk(SAY_SUMMON)

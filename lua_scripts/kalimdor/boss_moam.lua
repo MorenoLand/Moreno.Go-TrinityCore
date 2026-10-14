@@ -140,7 +140,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() * 100 / maxHealth < 45 then
+    if creature:GetHealth() < math.floor(maxHealth * 45 / 100) then
         startStonePhase(creature, guid)
     end
 end

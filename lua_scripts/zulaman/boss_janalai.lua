@@ -180,7 +180,7 @@ local function janalaiDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if health * 100 / maxHealth < 25 then
+    if health < math.floor(maxHealth * 25 / 100) then
         local per = timers[guid]
         if per and per["enrage"] then
             RemoveEventById(per["enrage"])

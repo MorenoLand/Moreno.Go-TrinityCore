@@ -27,8 +27,8 @@
 -- EVENT_FROSTBOLT: victim-cast FROSTBOLT 46987, 4s init -> {4,12}s;
 -- JustEngagedWith Talk(SAY_AGGRO=0);
 -- DamageTaken: HealthBelowPctDamaged(40, damage) one-shot latch
--- (HasCastIceblock) -> self-cast ICEBLOCK 46604 (moroes damage-taken
--- convention: (GetHealth() - damage) * 100 / maxHealth < 40).
+-- (HasCastIceblock) -> self-cast ICEBLOCK 46604 (int64(health)-damage
+-- < floor(maxHealth*40/100)).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally and the in-loop
 -- casting-state re-check is dropped (maiden precedent).
@@ -138,7 +138,7 @@ local function onDamageTaken(_, creature, _, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 40 then
+    if creature:GetHealth() - damage < math.floor(maxHealth * 40 / 100) then
         creature:CastSpell(creature, SPELL_ICEBLOCK)
         state.iceblock = true
     end

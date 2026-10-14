@@ -264,12 +264,12 @@ RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 9, function(_, creature, attac
     if maxHealth == 0 then
         return
     end
-    local afterHitPct = (creature:GetHealth() - damage) * 100 / maxHealth
-    if st.phase1 and afterHitPct < 50 then
+    local afterHit = creature:GetHealth() - damage
+    if st.phase1 and afterHit < math.floor(maxHealth * 50 / 100) then
         st.phase1 = false
         creature:Talk(SAY_50_PERCENT_HP)
     end
-    if st.phase2 and afterHitPct < 20 then
+    if st.phase2 and afterHit < math.floor(maxHealth * 20 / 100) then
         st.phase2 = false
         creature:Talk(SAY_20_PERCENT_HP)
     end

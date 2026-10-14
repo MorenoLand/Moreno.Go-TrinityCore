@@ -82,19 +82,21 @@ local function onDamageTaken(_, creature, _, damage)
         state = { guards = false, h25 = false, h33 = false, h66 = false }
         latch[guid] = state
     end
-    local pct = (creature:GetHealth() - damage) * 100 / maxHealth
-    if not state.guards and pct <= 50 then
+    -- C++ DamageTaken HealthBelowPct(50/25/33/66) reads CURRENT
+    -- health (jeklik convention): health < floor(maxHealth*pct/100).
+    local health = creature:GetHealth()
+    if not state.guards and health < math.floor(maxHealth * 50 / 100) then
         state.guards = true
         creature:Talk(SAY_SUMMON)
         creature:CastSpell(creature, SPELL_VANCLEEFS_ALLIES)
     end
-    if not state.h25 and pct <= 25 then
+    if not state.h25 and health < math.floor(maxHealth * 25 / 100) then
         state.h25 = true
         creature:Talk(SAY_THREE)
-    elseif not state.h33 and pct <= 33 then
+    elseif not state.h33 and health < math.floor(maxHealth * 33 / 100) then
         state.h33 = true
         creature:Talk(SAY_TWO)
-    elseif not state.h66 and pct <= 66 then
+    elseif not state.h66 and health < math.floor(maxHealth * 66 / 100) then
         state.h66 = true
         creature:Talk(SAY_ONE)
     end

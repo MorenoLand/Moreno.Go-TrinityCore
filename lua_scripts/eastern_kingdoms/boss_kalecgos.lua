@@ -177,12 +177,12 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function healthPct(creature)
+local function healthBelowPct(creature, pct)
     local max = creature:GetMaxHealth()
     if max == 0 then
-        return 100
+        return false
     end
-    return creature:GetHealth() * 100 / max
+    return creature:GetHealth() < math.floor(max * pct / 100)
 end
 
 -- boss_kalecgos (24850) --
@@ -216,12 +216,12 @@ local function onKalecgosBlast(creature, guid)
 end
 
 local function onKalecgosCheck(creature, guid)
-    if not enraged[guid] and healthPct(creature) <= 10 then
+    if not enraged[guid] and healthBelowPct(creature, 10) then
         enraged[guid] = true
         creature:Talk(4)
         creature:CastSpell(creature, SPELL_ENRAGE, true)
     end
-    if healthPct(creature) <= 1 and not banished[guid] then
+    if healthBelowPct(creature, 1) and not banished[guid] then
         banished[guid] = true
         creature:CastSpell(creature, SPELL_BANISH, true)
         local per = timers[guid]
@@ -314,10 +314,10 @@ local function onSathCorruption(creature, guid)
 end
 
 local function onSathCheck(creature, guid)
-    if healthPct(creature) <= 10 and not enraged[guid] then
+    if healthBelowPct(creature, 10) and not enraged[guid] then
         enraged[guid] = true
     end
-    if healthPct(creature) <= 1 and not banished[guid] then
+    if healthBelowPct(creature, 1) and not banished[guid] then
         banished[guid] = true
         creature:CastSpell(creature, SPELL_BANISH, true)
     end
@@ -368,14 +368,16 @@ local function onHumanDamageTaken(_, creature, _, damage)
     if maxHealth == 0 then
         return
     end
-    local pct = (creature:GetHealth() - damage) * 100 / maxHealth
-    if stage == 1 and pct <= 75 then
+    -- C++ UpdateAI HealthBelowPct(75/50/10) on current health (jeklik
+    -- convention): health < floor(maxHealth*pct/100).
+    local health = creature:GetHealth()
+    if stage == 1 and health < math.floor(maxHealth * 75 / 100) then
         sayStage[guid] = 2
         creature:Talk(0)
-    elseif stage == 2 and pct <= 50 then
+    elseif stage == 2 and health < math.floor(maxHealth * 50 / 100) then
         sayStage[guid] = 3
         creature:Talk(1)
-    elseif stage == 3 and pct <= 10 then
+    elseif stage == 3 and health < math.floor(maxHealth * 10 / 100) then
         sayStage[guid] = 4
         creature:Talk(2)
     end

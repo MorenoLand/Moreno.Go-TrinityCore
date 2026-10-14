@@ -185,7 +185,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() * 100 / maxHealth < 30 then
+    if creature:GetHealth() < math.floor(maxHealth * 30 / 100) then
         creature:CastSpell(creature, SPELL_ENRAGE)
         state.enraged = true
     end

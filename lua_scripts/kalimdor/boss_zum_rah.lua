@@ -133,26 +133,27 @@ local function onDamageTaken(event, creature, attacker, damage)
     if flags == nil then
         return
     end
-    local maxHealth = creature:GetMaxHealth()
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
-    local pct = (creature:GetHealth() - damage) * 100 / maxHealth
-    if not flags.ward80 and pct < 80 then
+    -- C++ UpdateAI HealthBelowPct arms read CURRENT health
+    -- (jeklik convention): health < floor(maxHealth*pct/100).
+    if not flags.ward80 and health < math.floor(maxHealth * 80 / 100) then
         flags.ward80 = true
         creature:Talk(SAY_WARD)
         schedule(guid, "ward80", 1000, function()
             creature:CastSpell(creature, SPELL_WARD_OF_ZUM_RAH)
         end)
     end
-    if not flags.ward40 and pct < 40 then
+    if not flags.ward40 and health < math.floor(maxHealth * 40 / 100) then
         flags.ward40 = true
         creature:Talk(SAY_WARD)
         schedule(guid, "ward40", 1000, function()
             creature:CastSpell(creature, SPELL_WARD_OF_ZUM_RAH)
         end)
     end
-    if not flags.heal30 and pct < 30 then
+    if not flags.heal30 and health < math.floor(maxHealth * 30 / 100) then
         flags.heal30 = true
         schedule(guid, "heal30", 3000, function()
             creature:CastSpell(creature, SPELL_HEALING_WAVE)

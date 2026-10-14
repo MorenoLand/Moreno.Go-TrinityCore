@@ -117,12 +117,14 @@ local function onDamageTaken(_, creature, _, damage)
     if maxHealth == 0 then
         return
     end
-    local pct = (creature:GetHealth() - damage) * 100 / maxHealth
-    if stage == 0 and pct <= 66 then
+    -- C++ UpdateAI !HealthAbovePct(66/33) on current health (jeklik
+    -- convention): health <= floor(maxHealth*pct/100).
+    local health = creature:GetHealth()
+    if stage == 0 and health <= math.floor(maxHealth * 66 / 100) then
         phaseStage[guid] = 1
         creature:CastSpell(creature, SPELL_SMITE_STOMP)
         creature:Talk(SAY_PHASE_1)
-    elseif stage == 1 and pct <= 33 then
+    elseif stage == 1 and health <= math.floor(maxHealth * 33 / 100) then
         phaseStage[guid] = 2
         creature:CastSpell(creature, SPELL_SMITE_STOMP)
         creature:Talk(SAY_PHASE_2)
