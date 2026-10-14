@@ -1733,12 +1733,7 @@ func (s *session) handleLfdPlayerLockInfoRequest(ctx context.Context, payload []
 	buf.WriteU8(uint8(len(randomDungeons)))
 	for _, rd := range randomDungeons {
 		buf.WriteU32(rd.Entry())
-		buf.WriteU8(0)  // done
-		buf.WriteU32(0) // quest money
-		buf.WriteU32(0) // quest xp
-		buf.WriteU32(0) // unknown1
-		buf.WriteU32(0) // unknown2
-		buf.WriteU8(0)  // item rewards count
+		s.writeLFGRandomDungeonReward(ctx, buf, rd, uint8(s.player.Level))
 	}
 
 	buf.WriteU32(uint32(len(lockedDungeons)))
@@ -1756,6 +1751,86 @@ func (s *session) handleLfdPlayerLockInfoRequest(ctx context.Context, payload []
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_LFG_PLAYER_INFO), buf.Bytes(), true)
 	return true
+}
+
+// writeLFGRandomDungeonReward serializes the per-random-dungeon reward quest
+// block of SMSG_LFG_PLAYER_INFO.
+// Reference: WorldSession::HandleLfgPlayerLockInfoRequestOpcode (LFGHandler.cpp:154-222).
+// LFGMgr::GetRandomDungeonReward (DungeonFinding/LFGMgr.cpp) picks the first
+// lfg_dungeon_rewards row for the dungeon (entry bits 0-23, rows ordered by
+// maxLevel ASC) whose maxLevel reaches the player level; the block shows the
+// done flag when the player can no longer earn the quest (CanRewardQuest ==
+// false) and then falls back to the row's otherQuest, otherwise it writes a
+// zero quest block.
+func (s *session) writeLFGRandomDungeonReward(ctx context.Context, buf *protocol.Buffer, dungeon wotlk.LFGDungeon, level uint8) {
+	var firstQuest, otherQuest uint32
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT firstQuestId, otherQuestId FROM lfg_dungeon_rewards WHERE dungeonId = ? AND maxLevel >= ? ORDER BY maxLevel ASC LIMIT 1",
+			dungeon.ID, level).Scan(&firstQuest, &otherQuest)
+	}
+	var detail *questDetailData
+	done := false
+	if firstQuest != 0 {
+		if d, err := s.loadQuestDetailData(ctx, firstQuest); err == nil {
+			// Player::CanRewardQuest(quest, false) fails once the daily is
+			// turned in; it also fails while the quest is in progress, which
+			// the done flag mirrors here. (C++ checks completion requirements
+			// too; the Go side approximates with rewarded/can-take state.)
+			done = s.isQuestRewarded(ctx, firstQuest)
+			if canTake, err := s.canTakeQuest(ctx, firstQuest); err == nil && !canTake {
+				done = true
+			}
+			dd := d
+			detail = &dd
+			if done && otherQuest != 0 {
+				if od, err := s.loadQuestDetailData(ctx, otherQuest); err == nil {
+					dd = od
+					detail = &dd
+				}
+			}
+		}
+	}
+	if detail == nil {
+		buf.WriteU8(0)
+		buf.WriteU32(0)
+		buf.WriteU32(0)
+		buf.WriteU32(0)
+		buf.WriteU32(0)
+		buf.WriteU8(0)
+		return
+	}
+	if done {
+		buf.WriteU8(1)
+	} else {
+		buf.WriteU8(0)
+	}
+	// Quest::GetRewOrReqMoney writes as uint32; a negative required money
+	// wraps the same way on the wire.
+	buf.WriteU32(uint32(s.questRewOrReqMoney(*detail)))
+	buf.WriteU32(s.calculateQuestRewardXP(ctx, detail.ID, detail.RewardXPDifficulty))
+	buf.WriteU32(0)
+	buf.WriteU32(0)
+	count := uint8(0)
+	for _, item := range detail.RewardItems {
+		if item.ID != 0 {
+			count++
+		}
+	}
+	buf.WriteU8(count)
+	for _, item := range detail.RewardItems {
+		if item.ID == 0 {
+			continue
+		}
+		buf.WriteU32(item.ID)
+		var displayID uint32
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx,
+				"SELECT COALESCE(displayid, 0) FROM item_template WHERE entry = ?", item.ID).Scan(&displayID)
+		}
+		buf.WriteU32(displayID)
+		buf.WriteU32(item.Quantity)
+	}
 }
 
 // handleLfgProposalResult processes CMSG_LFG_PROPOSAL_RESULT (0x362).
