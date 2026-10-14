@@ -27,12 +27,13 @@
 -- creature:GetVictim()).
 -- EVENT_CLEAVE: victim-cast CLEAVE 20691, 14s init -> 7s loop (maiden
 -- convention).
--- Unmodeled: EVENT_HEX — gates on
--- SelectTarget(SelectTargetMethod::Random, 0, 100, true) then
--- DoCast(target, SPELL_HEX=16708); no SelectTarget bridge on the Lua
--- surface (doomwalker / kazzak / doomrel precedent). The hex arm is a
--- random-target mid-fight cast, not the combat trigger, so porting the
--- two victim-cast timers without it does not strand the fight.
+-- EVENT_HEX: random-player HEX 16708 — SelectTarget(Random, 0, 100,
+-- true) is playerOnly, ported via the keleseth GetPlayersInWorld
+-- precedent (same map/instance, alive, within 100yd); 8s init -> 15s
+-- loop, re-arm unconditional (C++ ScheduleEvent sits outside the target
+-- check), non-triggered DoCast(target). Caveat shared with the
+-- keleseth/thorim ports: C++ draws from the threat list (engaged
+-- units); the bridge can include nearby unengaged players.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and both
 -- in-loop casting gates are dropped (maiden precedent). The C++
@@ -42,6 +43,7 @@
 
 local SPELL_CURSEOFBLOOD = 24673
 local SPELL_CLEAVE = 20691
+local SPELL_HEX = 16708
 
 local ENTRY_SHADOW_HUNTER_VOSHGAJIN = 9236
 
@@ -82,11 +84,40 @@ local function onCleave(creature, guid)
     schedule(guid, "cleave", 7000, function() onCleave(creature, guid) end)
 end
 
+-- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
+-- keleseth GetPlayersInWorld precedent.
+local function randomPlayerInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_HEX: SelectTarget(Random, 0, 100, true) playerOnly,
+-- DoCast(target, 16708) non-triggered, 8s init, ScheduleEvent(15s)
+-- outside the target check (re-arm unconditional).
+local function onHex(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_HEX)
+    end
+    schedule(guid, "hex", 15000, function() onHex(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "curseofblood", 2000, function() onCurseOfBlood(creature, guid) end)
     schedule(guid, "cleave", 14000, function() onCleave(creature, guid) end)
+    schedule(guid, "hex", 8000, function() onHex(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

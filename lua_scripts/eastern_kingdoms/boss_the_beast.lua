@@ -24,18 +24,20 @@
 -- loop (maiden convention — DoCastVictim path, creature:GetVictim()).
 -- EVENT_TERRIFYING_ROAR: victim-cast TERRIFYINGROAR 14100, 23s init
 -- -> 20s loop (maiden convention).
--- EVENT_FIREBALL: victim-cast FIREBALL 16788, 8s init -> 8s..21s loop
--- (C++ urand(8s, 21s), C++-exact — twilight_corrupter precedent).
--- EVENT_FIREBLAST: victim-cast FIREBLAST 16144, 5s init -> 5s..8s loop
--- (C++ urand(5s, 8s), C++-exact — twilight_corrupter precedent).
--- Unmodeled: EVENT_IMMOLATE — gates on
--- SelectTarget(SelectTargetMethod::Random, 0, 100, true) then
--- DoCast(target, SPELL_IMMOLATE=15570); no SelectTarget bridge on the
--- Lua surface (doomwalker / kazzak / doomrel precedent). EVENT_BERSERKER_
--- CHARGE — gates on SelectTarget(Random, 0, 38, true) then
--- DoCast(target, SPELL_BERSERKER_CHARGE=16636); same bridge gap. Both
--- are random-target mid-fight casts, not the combat trigger, so porting
--- the four victim-cast timers without them does not strand the fight.
+-- EVENT_FIREBALL: victim-cast FIREBALL 16788, urand(8s, 21s) init ->
+-- 8s..21s loop (C++ ScheduleEvent(8s, 21s) / Repeat(8s, 21s), C++-exact
+-- — twilight_corrupter precedent).
+-- EVENT_FIREBLAST: victim-cast FIREBLAST 16144, urand(5s, 8s) init ->
+-- 5s..8s loop (C++ ScheduleEvent(5s, 8s) / Repeat(5s, 8s), C++-exact).
+-- EVENT_IMMOLATE: random-player IMMOLATE 15570 — SelectTarget(Random,
+-- 0, 100, true) is playerOnly, ported via the keleseth GetPlayersInWorld
+-- precedent (same map/instance, alive, within 100yd); 3s init -> 8s
+-- loop, re-arm unconditional (C++ Repeat sits outside the target
+-- check), non-triggered DoCast(target).
+-- EVENT_BERSERKER_CHARGE: random-player BERSERKER_CHARGE 16636 —
+-- SelectTarget(Random, 0, 38, true) is playerOnly (keleseth precedent,
+-- within 38yd); 2s init -> urand(15s, 23s) loop, re-arm unconditional,
+-- non-triggered DoCast(target).
 -- SetData(DATA_BEAST_ROOM / DATA_BEAST_REACHED) — gates on
 -- FindNearbyOrcs (GetCreatureListWithEntryInGrid NPC_BLACKHAND_ELITE
 -- 10317), ObjectAccessor::GetCreature, MotionMaster::MovePath /
@@ -58,6 +60,8 @@ local SPELL_FLAMEBREAK = 16785
 local SPELL_TERRIFYINGROAR = 14100
 local SPELL_FIREBALL = 16788
 local SPELL_FIREBLAST = 16144
+local SPELL_IMMOLATE = 15570
+local SPELL_BERSERKER_CHARGE = 16636
 
 local ENTRY_THE_BEAST = 10430
 
@@ -114,13 +118,56 @@ local function onFireblast(creature, guid)
     schedule(guid, "fireblast", 5000 + math.random(0, 3000), function() onFireblast(creature, guid) end)
 end
 
+-- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
+-- keleseth GetPlayersInWorld precedent. Caveat shared with the
+-- keleseth/thorim ports: C++ draws from the threat list (engaged
+-- units); the bridge can include nearby unengaged players.
+local function randomPlayerInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_IMMOLATE: SelectTarget(Random, 0, 100, true) playerOnly,
+-- DoCast(target, 15570) non-triggered, 3s init, Repeat(8s) outside the
+-- target check (re-arm unconditional).
+local function onImmolate(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_IMMOLATE)
+    end
+    schedule(guid, "immolate", 8000, function() onImmolate(creature, guid) end)
+end
+
+-- C++ EVENT_BERSERKER_CHARGE: SelectTarget(Random, 0, 38, true)
+-- playerOnly, DoCast(target, 16636) non-triggered, 2s init,
+-- Repeat(15s, 23s) outside the target check (re-arm unconditional).
+local function onBerserkerCharge(creature, guid)
+    local target = randomPlayerInRange(creature, 38)
+    if target then
+        creature:CastSpell(target, SPELL_BERSERKER_CHARGE)
+    end
+    schedule(guid, "berserkercharge", 15000 + math.random(0, 8000), function() onBerserkerCharge(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "flamebreak", 12000, function() onFlameBreak(creature, guid) end)
     schedule(guid, "terrifyingroar", 23000, function() onTerrifyingRoar(creature, guid) end)
-    schedule(guid, "fireball", 8000, function() onFireball(creature, guid) end)
-    schedule(guid, "fireblast", 5000, function() onFireblast(creature, guid) end)
+    schedule(guid, "fireball", 8000 + math.random(0, 13000), function() onFireball(creature, guid) end)
+    schedule(guid, "fireblast", 5000 + math.random(0, 3000), function() onFireblast(creature, guid) end)
+    schedule(guid, "immolate", 3000, function() onImmolate(creature, guid) end)
+    schedule(guid, "berserkercharge", 2000, function() onBerserkerCharge(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

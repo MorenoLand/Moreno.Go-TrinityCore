@@ -28,10 +28,14 @@
 -- precedent). The C++ scheduler is driven from JustEngagedWith and
 -- drained by UpdateAI; the port schedules from OnEnterCombat(1) and
 -- cancels on 2/4/23 (maiden convention).
--- Unmodeled (documented-only): EVENT_ENCAGE gates on SelectTarget(
--- Random, 0, 100, true) then DoCast(target, 16045, true); no
--- SelectTarget bridge on the Lua surface (the_beast / doomwalker /
--- kazzak precedent) — unmodeled, no timer ported. JustAppeared's
+-- EVENT_ENCAGE: random-player ENCAGE 16045 — SelectTarget(Random, 0,
+-- 100, true) is playerOnly, ported via the keleseth GetPlayersInWorld
+-- precedent (same map/instance, alive, within 100yd); urand(10s, 20s)
+-- init -> urand(6s, 12s) loop, re-arm unconditional, TRIGGERED
+-- DoCast(target, 16045, true). Nil-guard around the cast: C++ calls
+-- DoCast directly on the SelectTarget result (fizzles on null); the
+-- port guards instead of casting on nil.
+-- Unmodeled (documented-only): JustAppeared's
 -- DoCast(SPELL_ENCAGE_EMBERSEER 15282) and JustReachedHome's self-cast
 -- 15282 + SetImmuneToAll(true) have no spawn/evade bridges on the Lua
 -- surface. The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
@@ -40,6 +44,7 @@
 -- LOS") has no creature-list / zone-in-combat bridges.
 
 local SPELL_STRIKE = 15580
+local SPELL_ENCAGE = 16045
 
 local ENTRY_BLACKHAND_INCARCERATOR = 10316
 
@@ -75,10 +80,39 @@ local function onStrike(creature, guid)
     schedule(guid, "strike", 14000, function() onStrike(creature, guid) end)
 end
 
+-- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
+-- keleseth GetPlayersInWorld precedent.
+local function randomPlayerInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_ENCAGE: SelectTarget(Random, 0, 100, true) playerOnly,
+-- DoCast(target, 16045, true) TRIGGERED, ScheduleEvent(10s, 20s) init,
+-- Repeat(6s, 12s) outside any guard (re-arm unconditional).
+local function onEncage(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_ENCAGE, true)
+    end
+    schedule(guid, "encage", {6000, 12000}, function() onEncage(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "strike", 8000, function() onStrike(creature, guid) end)
+    schedule(guid, "encage", {10000, 20000}, function() onEncage(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

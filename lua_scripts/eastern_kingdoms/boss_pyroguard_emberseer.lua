@@ -23,6 +23,11 @@
 -- twilight_corrupter convention).
 -- EVENT_FIRENOVA: self-cast FIRENOVA 23462, 6s init -> 6s loop.
 -- EVENT_FLAMEBUFFET: self-cast FLAMEBUFFET 23341, 3s init -> 14s loop.
+-- EVENT_PYROBLAST: random-player PYROBLAST 17274 — SelectTarget(Random,
+-- 0, 100, true) is playerOnly, ported via the keleseth GetPlayersInWorld
+-- precedent (same map/instance, alive, within 100yd); 14s init -> 15s
+-- loop, re-arm unconditional (C++ Repeat sits outside the target
+-- check), non-triggered DoCast(target).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and both
 -- in-loop casting gates are dropped (maiden precedent). The C++
@@ -49,10 +54,7 @@
 -- YELL_FREE_OF_BONDS), clear flags, EVENT_ENTER_COMBAT at 2s)
 -- (instance / SpellHit / SelectTarget precedents: instance / the_beast /
 -- draenei_survivor).
--- EVENT_PYROBLAST: gates on SelectTarget(Random, 0, 100, true) then
--- DoCast(target, 17274); no SelectTarget bridge on the Lua surface
--- (the_beast / doomwalker / kazzak precedent) — unmodeled, no timer
--- ported. Reset's _Reset() and JustDied's _JustDied() are internal
+-- Reset's _Reset() and JustDied's _JustDied() are internal
 -- BossAI machinery covered by the cancel/re-arm on combat events
 -- (halycon precedent); JustDied's UpdateRunes(GO_STATE_READY) +
 -- instance->SetBossState(DONE) arms are instance-side — unmodeled
@@ -61,6 +63,7 @@
 local SPELL_FIRE_SHIELD = 13376
 local SPELL_FIRENOVA = 23462
 local SPELL_FLAMEBUFFET = 23341
+local SPELL_PYROBLAST = 17274
 
 local ENTRY_PYROGAURD_EMBERSEER = 9816
 
@@ -103,12 +106,41 @@ local function onFlameBuffet(creature, guid)
     schedule(guid, "flamebuffet", 14000, function() onFlameBuffet(creature, guid) end)
 end
 
+-- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
+-- keleseth GetPlayersInWorld precedent.
+local function randomPlayerInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_PYROBLAST: SelectTarget(Random, 0, 100, true) playerOnly,
+-- DoCast(target, 17274) non-triggered, 14s init, Repeat(15s) outside
+-- the target check (re-arm unconditional).
+local function onPyroblast(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_PYROBLAST)
+    end
+    schedule(guid, "pyroblast", 15000, function() onPyroblast(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "fireshield", 3000, function() onFireShield(creature, guid) end)
     schedule(guid, "firenova", 6000, function() onFireNova(creature, guid) end)
     schedule(guid, "flamebuffet", 3000, function() onFlameBuffet(creature, guid) end)
+    schedule(guid, "pyroblast", 14000, function() onPyroblast(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
