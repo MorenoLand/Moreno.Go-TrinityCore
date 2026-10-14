@@ -10146,57 +10146,52 @@ func init() {
 	// lua header.
 	RegisterLuaBoss("boss_devourer_of_souls", 36502)
 
-	// Forgemaster Garfrost (Pit of Saron) — bridgeable Talk arms ported
-	// from boss_forgemaster_garfrost.cpp; see
+	// Forgemaster Garfrost (Pit of Saron) — bridgeable Talk + timer-driven
+	// cast arms ported from boss_forgemaster_garfrost.cpp; see
 	// lua_scripts/northrend/boss_forgemaster_garfrost.lua.
-	// DamageTaken phase-change Talk legs (no health-pct bridge), the
-	// forge-jump MovementInform machine (no motion / equipment bridges),
-	// the SpellHitTarget _permafrostStack / GetData leg
-	// (no-SpellHit-bridge / no-GetData-bridge), the
-	// instance->GetGuidData(DATA_TYRANNUS) tyrannus->AI()->Talk leg (no
-	// instance bridge), the scheduler machine + SelectTarget(Random, 0)
-	// UpdateAI legs including Talk(SAY_THROW_SARONITE 5, target) and
-	// Talk(SAY_CAST_DEEP_FREEZE 6, target) (no-timer-bridge /
-	// no-random-target-SelectTarget), the spell_garfrost_permafrost
-	// SpellScript (no-SpellScript-bridge) and
-	// achievement_doesnt_go_to_eleven (unmodeled-achievement) are
-	// bridge-blocked — documented in the lua header.
+	// Timer arms port via CreateLuaEvent: engage permafrost 70326
+	// self-cast, throw-saronite 68788 random-player 7s/{12.5s,20s},
+	// event-9 DamageTaken phase latches (<=66% / <=33%, floored) with
+	// Talk(1)/Talk(2) + thundering-stomp 68771, forge-jump timer skeleton
+	// (1500ms -> 5000ms resume -> chilling-wave 68778 5s/4s phase-2-gated
+	// / deep-freeze 70381 10s/35s phase-3-gated). The Oct-2 stale
+	// no-timer-bridge / no-health-pct-bridge calls are retracted. The
+	// forge-jump MovementInform landing legs (forge-blade/forge-mace +
+	// equipment), SpellHitTarget/GetData permafrost-stack leg, the
+	// instance-driven tyrannus Talk, the permafrost SpellScript and the
+	// achievement are bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_forgemaster_garfrost", 36494)
 
-	// Krick (Pit of Saron) — bridgeable Talk arms ported from
-	// boss_krickandick.cpp; see
+	// Krick and Ick (Pit of Saron) — bridgeable Talk + timer-driven cast
+	// arms ported from boss_krickandick.cpp; see
 	// lua_scripts/northrend/boss_krickandick.lua.
-	// boss_ick (36476 Ick) carries no bridgeable own arms — its
-	// JustEngagedWith krick->AI()->Talk(SAY_KRICK_AGGRO) leg is
-	// instance-driven Talk on another creature's AI (no instance bridge)
-	// and its UpdateAI Talk legs (SAY_KRICK_BARRAGE_1/2,
-	// SAY_KRICK_POISON_NOVA, SAY_ICK_POISON_NOVA, SAY_KRICK_CHASE) ride
-	// scheduler event legs (no-timer-bridge), so 36476 is NOT registered
-	// (the bronjahm npc_corrupted_soul_fragment precedent). The krick
-	// MovementInform outro-flip, the EVENT_OUTRO_1..13 outro machine
-	// (timer-driven SAY_KRICK_OUTRO_3/5/8 plus instance-driven Jaina /
-	// Sylvanas / Tyrannus Talk legs), the DoAction threat store/reset
-	// and ACTION_OUTRO legs, the krick random-target casts, and the six
-	// SpellScript / AuraScript hooks (incl. spell_krick_pursuit's
-	// SAY_ICK_CHASE_1 spell-driven Talk) are bridge-blocked — documented
-	// in the lua header.
+	// boss_ick (36476 Ick) UpdateAI timer arms port via CreateLuaEvent:
+	// MIGHTY_KICK 69021 victim-cast 20s/25s, EVENT_SPECIAL
+	// {30s,35s}/{23s,28s} RAND selector (explosive-barrage 69263 AOE /
+	// poison-nova Talk(0)+AOE 68989 / pursuit 68987 self-cast). The Oct-2
+	// "no bridgeable own arms" call is retracted (stale no-timer-bridge
+	// doctrine) — 36476 IS registered, before 36477 in loader order
+	// (AddSC_boss_ick registers boss_ick first). The krick-cast toxic-waste
+	// / shadow-bolt arms, the krick instance-driven Talks, the outro
+	// machine, DoAction threat legs and the six SpellScript / AuraScript
+	// hooks are bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_ick", 36476)
 	RegisterLuaBoss("boss_krick", 36477)
-	// Scourgelord Tyrannus (Pit of Saron) — bridgeable Talk arms ported
-	// from boss_scourgelord_tyrannus.cpp; see
-	// lua_scripts/northrend/boss_scourgelord_tyrannus.lua.
-	// boss_rimefang (36661 Rimefang) carries zero own Talk lines (whole
-	// patrol / icy-blast / hoarfrost machine is scheduler-driven with no
-	// bridges), so 36661 is NOT registered (the bronjahm
-	// npc_corrupted_soul_fragment precedent). The tyrannus DoAction
-	// intro machine (Talk(SAY_TYRANNUS_INTRO_1 6) + EVENT_INTRO_1..3 /
-	// EVENT_COMBAT_START legs) has no-DoAction / no-timer bridges, and
-	// the UpdateAI combat machine's Talk legs (SAY_DARK_MIGHT_1/2,
-	// SAY_MARK_RIMEFANG_1/2) ride timer legs (no-timer-bridge; the
-	// boss_toravon precedent). player_overlord_brandAI plus the three
-	// spell scripts (overlord_brand, mark_of_rimefang,
-	// rimefang_icy_blast) and at_tyrannus_event_starter are
+	// Scourgelord Tyrannus + Rimefang (Pit of Saron) — bridgeable Talk +
+	// timer-driven cast arms ported from boss_scourgelord_tyrannus.cpp;
+	// see lua_scripts/northrend/boss_scourgelord_tyrannus.lua.
+	// Tyrannus combat arms port via CreateLuaEvent (overlord-brand 69172,
+	// forceful-smash 69155 -> unholy-power 69167 chain, mark-of-rimefang
+	// 69275 — all vehicle-ungated, intro exits before combat start);
+	// Rimefang EVENT_ICY_BLAST 69232 (15s/15s, ungated by the waypoint
+	// patrol) ports too, so 36661 IS registered — the Oct-2
+	// non-registration rested on the stale no-timer-bridge doctrine,
+	// retracted 2026-10-13. The intro machine (DoAction ACTION_START_INTRO
+	// + area trigger), the overlord-brand / mark-of-rimefang aura chains,
+	// the rimefang waypoint patrol and hoarfrost handoff are
 	// bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_tyrannus", 36658)
+	RegisterLuaBoss("boss_rimefang", 36661)
 	// Frostsworn General (Halls of Reflection) — bridgeable Talk arms
 	// ported from halls_of_reflection.cpp; see
 	// lua_scripts/northrend/npc_frostsworn_general.lua.
