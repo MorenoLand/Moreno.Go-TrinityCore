@@ -128,7 +128,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "DBC extraction failed: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Extracted and validated %d DBC files into %s\n", count, *output)
+		fmt.Printf("Extracted %d DBC files into %s\n", count, *output)
 	}
 	if *extractMask&4 != 0 {
 		camCount, err := wowdata.ExtractCameras(*input, *output)

@@ -37,6 +37,21 @@ func Open(path string) (*File, error) {
 }
 
 func Parse(data []byte) (*File, error) {
+	// C++ owners: the map_extractor's DBCFile::open
+	// (src/tools/map_extractor/dbcfile.cpp) and the server's DBCFileLoader
+	// (src/common/DataStores/DBCFileLoader.cpp). Both read the WDBC magic,
+	// the four header words, then recordSize*recordCount+stringSize bytes
+	// with the string table laid out directly after the records.
+	// DELTAS: the extractor's DBCFile::open rejects recordSize !=
+	// fieldCount*4 outright; the server's DBCFileLoader imposes no such
+	// gate (it strides by recordSize and offsets fields from the format
+	// string). Parse is shared by both paths, so it keeps the tolerant
+	// union: it rejects only recordSize > fieldCount*4 and the zero-size
+	// degenerate case. Real client DBCs always satisfy the strict
+	// equality, so the leniency is unreachable on real files.
+	// Record.String additionally requires NUL termination inside the
+	// string block where C++ getString returns the raw pointer (and would
+	// over-read); Go-safer, same on real files.
 	if len(data) < headerSize || string(data[:4]) != "WDBC" {
 		return nil, errors.New("invalid DBC header")
 	}

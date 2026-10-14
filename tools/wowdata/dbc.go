@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/dbc"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/mpq"
 )
 
@@ -18,6 +17,9 @@ import (
 //     never consulted for DBCs.
 //   - The .dbc name set is collected across the open archives, then each
 //     name is read via MPQFile (highest-precedence archive wins).
+//   - Each DBC is extracted by RAW BYTE COPY, exactly like C++ ExtractFile
+//     (System.cpp:966-980): content is never parsed or validated, so a
+//     malformed DBC is still written and counted.
 //   - First detected locale -> <output>/dbc/ (flat); further locales ->
 //     <output>/dbc/<lang>/.
 //   - Already-extracted files are SKIPPED (exists check), never overwritten.
@@ -178,10 +180,9 @@ func extractDBCFromArchives(archives []string, destination string) (int, error) 
 				archive.Close()
 				return written, fmt.Errorf("read %s from %s: %w", name, path, err)
 			}
-			if _, err := dbc.Parse(data); err != nil {
-				archive.Close()
-				return written, fmt.Errorf("invalid DBC %s: %w", name, err)
-			}
+			// C++ ExtractFile (System.cpp:966-980) is a raw byte copy: it
+			// never parses or validates DBC content, so a malformed DBC is
+			// still written and counted. No dbc.Parse gate here.
 			if err := os.WriteFile(dest, data, 0o644); err != nil {
 				archive.Close()
 				return written, err
