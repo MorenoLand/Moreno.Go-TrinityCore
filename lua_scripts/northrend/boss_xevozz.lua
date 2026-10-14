@@ -19,46 +19,67 @@
 -- Sole-source verified: whole-server-tree grep for "AddSC_boss_xevozz"
 -- hits boss_xevozz.cpp only (+ the loader decl/call lines); this
 -- clone carries no sql/ tree, so ScriptName bindings are DB-side by
--- construction. No xevozz lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDeath.
+-- construction.
+-- The stale "no-timer-bridge" doctrine is superseded by the
+-- CreateLuaEvent bridge (engine/scripting/runtime.go:798 — the
+-- archavon / maiden_of_virtue precedent): module-local GUID-keyed
+-- timers table, wipe on events 2 (leave combat), 4 (death), 23
+-- (evade). {minMs, maxMs} table delays carry the C++ Schedule /
+-- Repeat randtime ranges (both timer delays here are ranges).
+-- creature:CastSpell(creature, spell) = DoCastAOE / DoCast(me)
+-- (1/2-arg = non-triggered); creature:CastSpell(target, spell) =
+-- DoCast(target, spell) (2-arg = non-triggered).
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill,
+-- 4 OnDeath, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) — unconditional (the auriaya
--- engage-port precedent; the BossAI::JustEngagedWith passthrough leg
--- has no bridge).
+-- engage-port precedent); seeds the two combat timers below; the
+-- BossAI::JustEngagedWith passthrough leg has no bridge.
 -- KilledUnit — Talk(SAY_SLAY 1) player-gated (event 3 — the razuvious
 -- player-gated variant precedent).
 -- JustDied — Talk(SAY_DEATH 2) — unconditional (the sjonnir
--- JustDied-Talk precedent; the _JustDied() passthrough leg has no
--- bridge).
--- DOCUMENTED-ONLY (in this header; no registration beyond entry 29266):
+-- JustDied-Talk precedent); the _JustDied() passthrough leg has no
+-- bridge.
+-- ScheduleTasks ARCANE_BARRAGE_VOLLEY — DoCastAOE(SPELL_ARCANE_
+-- BARRAGE_VOLLEY 54202) = self-cast per the in-tree DoCastAOE
+-- convention (boss_ai.go); init {8s,10s} / Repeat {8s,10s} —
+-- unconditional re-arm.
+-- ScheduleTasks ARCANE_BUFFET — SelectTarget(Random, 0, 45.0f, true)
+-- -> DoCast(target, SPELL_ARCANE_BUFFET 54226), 2-arg =
+-- non-triggered; init {10s,11s} / Repeat {15s,20s} — unconditional
+-- re-arm. Random-player pool: GetPlayersInWorld, same map/instance,
+-- alive, within 45 yd (creature:GetDistance — the zuljin maxDist
+-- precedent).
+-- DOCUMENTED DEVIATIONS: none on the ported arms — both timers carry
+-- C++-exact timing and targeting. The UpdateAI
+-- DoMeleeAttackIfReady() leg has no bridge — melee is unmodeled.
+-- DOCUMENTED-ONLY (in this header; entry 29266 is the sole
+-- registration):
 -- SAY_SPAWN (3) and SAY_CHARGED (4) are never Talk()ed anywhere in the
--- file (dead enum text, the cyanigosa precedent; grep -c "Talk(" = 6
--- total, the 3 ported above plus the 3 below).
--- Talk(SAY_SUMMON_ENERGY 6) rides the SpellHit
--- SPELL_ARCANE_POWER / H_SPELL_ARCANE_POWER leg — no SpellHit bridge;
+-- file (dead enum text, the cyanigosa precedent).
+-- Talk(SAY_SUMMON_ENERGY 6) rides the SpellHit SPELL_ARCANE_POWER
+-- (54160) / H_SPELL_ARCANE_POWER (59474) leg — no SpellHit bridge;
 -- joins the no-SpellHit-bridge queue.
--- Talk(SAY_REPEAT_SUMMON 5) rides the ScheduleTasks ethereal-sphere
--- summon leg (5s -> 45-47s repeat, random summon-spell selection,
--- heroic 2.5s delayed second cast, 33-35s delayed DoAction
--- ACTION_SUMMON on the summons) — no timer bridge; joins the
--- no-timer-bridge queue (the boss_toravon precedent).
--- npc_ethereal_sphere (29271, not registered — DoAction only): its
--- Talk(SAY_ETHEREAL_SPHERE_SUMMON 0) rides the DoAction
--- ACTION_SUMMON leg — no DoAction bridge; joins the no-DoAction-
--- bridge queue. Its ScheduledTasks machine (1s scheduler, instance
--- GetCreature(DATA_XEVOZZ) within-3.0f -> ARCANE_POWER cast +
--- DespawnOrUnsummon), the Reset SPELL_POWER_BALL_VISUAL /
--- SPELL_POWER_BALL_DAMAGE_TRIGGER self-casts + 40s despawn, the
--- JustSummoned MoveFollow leg and the JustReachedHome
--- instance->SetData(DATA_HANDLE_CELLS, DATA_XEVOZZ) leg have no
--- bridges — the no-instance-GetCreature / no-MovementInform /
--- no-instance-SetData bridge queues.
--- The ScheduleTasks ARCANE_BARRAGE_VOLLEY AOE / ARCANE_BUFFET
--- random-target machine and the spell_xevozz_summon_players
--- SpellScript hook (OnEffectHitTarget SPELL_EFFECT_DUMMY ->
--- SPELL_MAGIC_PULL) join the no-timer-bridge / no-SpellScript-
--- bridge queues. The file carries a TODO ("Implement Ethereal Summon
--- Target").
+-- The ScheduleTasks ethereal-sphere summon leg (Talk(SAY_REPEAT_
+-- SUMMON 5), 5s init / 45-47s Repeat, random summon-spell pick from
+-- {54102, 54137, 54138} via DoCast(me, ...), heroic 2.5s delayed
+-- second cast, 33-35s delayed summons.DoAction(ACTION_SUMMON)) stays
+-- out: the DoCast(me, summonSpell) legs are summon legs (the summoned
+-- sphere entry 29271 carries the unbridged npc_ethereal_sphere AI —
+-- its ARCANE_POWER proximity machine, SAY_ETHEREAL_SPHERE_SUMMON
+-- DoAction Talk leg and Reset POWER_BALL_VISUAL / POWER_BALL_DAMAGE_
+-- TRIGGER self-casts have no bridges), the 33-35s delayed
+-- summons.DoAction(ACTION_SUMMON) is a DoAction leg, the second cast
+-- is IsHeroic()-gated (no difficulty bridge), and the Talk rides the
+-- same leg — the emalon EVENT_OVERCHARGE precedent (whole event out
+-- when its legs are unbridged). The JustSummoned MoveFollow leg
+-- joins the no-MovementInform bridge queue; the JustReachedHome
+-- instance->SetData(DATA_HANDLE_CELLS, DATA_XEVOZZ) leg joins the
+-- no-instance-SetData bridge queue.
+-- spell_xevozz_summon_players (SpellScript: OnEffectHitTarget
+-- SPELL_EFFECT_DUMMY -> SPELL_MAGIC_PULL 50770) joins the
+-- no-SpellScript-bridge queue. The file carries a TODO ("Implement
+-- Ethereal Summon Target").
 
 local ENTRY_XEVOZZ = 29266
 
@@ -66,11 +87,95 @@ local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
 
--- C++ boss_xevozzAI::JustEngagedWith: BossAI::JustEngagedWith(who)
--- (passthrough, no bridge); Talk(SAY_AGGRO) — unconditional (the auriaya
--- engage-port precedent).
+local SPELL_ARCANE_BARRAGE_VOLLEY = 54202
+local SPELL_ARCANE_BUFFET = 54226
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(Random, 0, 45.0f, true) — alive players on the same
+-- map/instance within 45 yd (the zuljin maxDist precedent).
+local function randomPlayer(creature, maxDist)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead()
+                and (maxDist == nil or creature:GetDistance(plr) <= maxDist) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ ScheduleTasks ARCANE_BARRAGE_VOLLEY: DoCastAOE(54202) =
+-- self-cast per the in-tree DoCastAOE convention; init {8s,10s} /
+-- Repeat {8s,10s} — re-armed unconditionally.
+local function barrageTick(creature, guid)
+    creature:CastSpell(creature, SPELL_ARCANE_BARRAGE_VOLLEY)
+    schedule(guid, "barrage", {8000, 10000}, function()
+        barrageTick(creature, guid)
+    end)
+end
+
+-- C++ ScheduleTasks ARCANE_BUFFET: SelectTarget(Random, 0, 45.0f,
+-- true) -> DoCast(target, 54226), 2-arg = non-triggered; init
+-- {10s,11s} / Repeat {15s,20s} — re-armed unconditionally.
+local function buffetTick(creature, guid)
+    local target = randomPlayer(creature, 45)
+    if target then
+        creature:CastSpell(target, SPELL_ARCANE_BUFFET)
+    end
+    schedule(guid, "buffet", {15000, 20000}, function()
+        buffetTick(creature, guid)
+    end)
+end
+
+-- C++ boss_xevozzAI::JustEngagedWith: Talk(SAY_AGGRO) — unconditional
+-- (the auriaya engage-port precedent); the two ScheduleTasks timers
+-- seed their combat timers below; the BossAI::JustEngagedWith
+-- passthrough leg has no bridge.
 local function xevozzEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "barrage", {8000, 10000}, function()
+        barrageTick(creature, guid)
+    end)
+    schedule(guid, "buffet", {10000, 11000}, function()
+        buffetTick(creature, guid)
+    end)
+end
+
+-- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
+-- convention).
+local function xevozzCancelCombatTimers(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: if (victim->GetTypeId() == TYPEID_PLAYER)
@@ -88,5 +193,8 @@ local function xevozzJustDied(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_XEVOZZ, 1, xevozzEnterCombat)
+RegisterCreatureEvent(ENTRY_XEVOZZ, 2, xevozzCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 3, xevozzKilledUnit)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 4, xevozzJustDied)
+RegisterCreatureEvent(ENTRY_XEVOZZ, 4, xevozzCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_XEVOZZ, 23, xevozzCancelCombatTimers)

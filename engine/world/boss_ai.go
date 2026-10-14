@@ -10074,48 +10074,48 @@ func init() {
 	// JustReachedHome SetData leg and the guard spell-timer machine
 	// are bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_erekem", 29315)
-	// AddSC_boss_ichoron: Ichoron (Violet Hold) — ported arms
-	// (lua_scripts/northrend/boss_ichoron.lua): JustEngagedWith
-	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya
-	// engage-port precedent), KilledUnit player-gated Talk(SAY_SLAY 1)
-	// (event 3 — the razuvious player-gated variant precedent),
-	// JustDied unconditional Talk(SAY_DEATH 2) (event 4 — the sjonnir
-	// JustDied-Talk precedent). The SAY_SPAWN enum entry is never
-	// Talk()ed (dead enum text); the Talk(SAY_SHATTER/EMOTE_SHATTER)
-	// and Talk(SAY_BUBBLE) legs ride DoAction ACTION_PROTECTIVE_BUBBLE_
-	// SHATTERED / ACTION_DRAINED (no DoAction bridge); Talk(SAY_ENRAGE)
-	// rides the UpdateAI HealthBelowPct(25) leg (no bridge); npc_ichor_
-	// globule carries zero Talk arms and is not registered; the Reset /
-	// ScheduleTasks / JustReachedHome-SetData / ACTION_WATER_GLOBULE_HIT
-	// / GetData(DATA_DEHYDRATION) machines, the four
-	// spell_ichoron_* SpellScript/AuraScript hooks and the
-	// achievement_dehydration GetData check are bridge-blocked —
-	// documented in the lua header.
+	// AddSC_boss_ichoron: Ichoron (Violet Hold) — timer-driven cast
+	// ports (lua_scripts/northrend/boss_ichoron.lua): water-bolt-volley
+	// DoCastAOE 54241 {10s,15s}, water-blast random-target 54237
+	// {6s,9s}, Reset triggered threat-proc 61732 on event 23; Talk
+	// 0/1/2 retained. The bubble-phase machine (shrink/bubble Async,
+	// shatter/DRAINED/enrage DoAction/health legs), globule machine,
+	// four SpellScript/AuraScript hooks and achievement_dehydration
+	// stay out — documented in the lua header.
 	RegisterLuaBoss("boss_ichoron", 29313)
-	// AddSC_boss_xevozz: Xevozz (Violet Hold) — ported arms
-	// (lua_scripts/northrend/boss_xevozz.lua): JustEngagedWith
-	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya
-	// engage-port precedent), KilledUnit player-gated Talk(SAY_SLAY 1)
-	// (event 3 — the razuvious player-gated variant precedent),
-	// JustDied unconditional Talk(SAY_DEATH 2) (event 4 — the sjonnir
-	// JustDied-Talk precedent). The SAY_SPAWN / SAY_CHARGED enum
-	// entries are never Talk()ed (dead enum text); Talk(SAY_SUMMON_
-	// ENERGY) rides the SpellHit leg (no SpellHit bridge) and
-	// Talk(SAY_REPEAT_SUMMON) rides the ScheduleTasks summon leg (no
-	// timer bridge); npc_ethereal_sphere (29271) is DoAction-only and
-	// not registered; the ScheduleTasks machine, the JustReachedHome /
-	// JustSummoned / sphere-ScheduledTasks machines, the Reset self-
-	// casts and the spell_xevozz_summon_players SpellScript hook are
-	// bridge-blocked — documented in the lua header.
+	// AddSC_boss_lavanthor: Lavanthor (Violet Hold) — timer-driven cast
+	// ports (lua_scripts/northrend/boss_lavanthor.lua): firebolt
+	// random-player 54235 1s/{5s,13s}, flame-breath DoCastVictim 54282
+	// 5s/{10s,15s}, lava-burn random-target 54249 10s/{15s,23s}; zero
+	// Talk lines in C++. The heroic cauterizing-flames leg stays out
+	// (no difficulty bridge) — documented in the lua header.
+	RegisterLuaBoss("boss_lavanthor", 29312)
+	// AddSC_boss_moragg: Moragg (Violet Hold) — timer-driven cast ports
+	// (lua_scripts/northrend/boss_moragg.lua): engage-immediate ray of
+	// pain 54438 + ray of suffering 54442 self-casts, optic-link
+	// random-player 54396 15s/25s, corrosive-saliva DoCastVictim 54527
+	// 5s/10s; zero Talk lines in C++. The spell_moragg_ray and
+	// spell_moragg_optic_link AuraScripts stay out (no AuraScript
+	// bridge — the optic-link stage/damage ramp and the ray periodic
+	// triggers are documented gaps) — documented in the lua header.
+	RegisterLuaBoss("boss_moragg", 29316)
+	// AddSC_boss_xevozz: Xevozz (Violet Hold) — timer-driven cast
+	// ports (lua_scripts/northrend/boss_xevozz.lua): arcane-barrage-
+	// volley DoCastAOE 54202 {8s,10s}/{8s,10s}, arcane-buffet random-
+	// player 45y 54226 {10s,11s}/{15s,20s}; Talk 0/1/2 retained. The
+	// ethereal-sphere summon leg (summon + DoAction + heroic gates),
+	// SpellHit SAY_SUMMON_ENERGY, MoveFollow/JustReachedHome instance
+	// legs and the SpellScript hook stay out — documented in the lua
+	// header.
 	RegisterLuaBoss("boss_xevozz", 29266)
 
-	// Zuramat the Obliterator (Violet Hold) — bridgeable Talk arms
-	// ported from boss_zuramat.cpp; see lua_scripts/northrend/
-	// boss_zuramat.lua. SAY_SPAWN / SAY_SHIELD / SAY_WHISPER are dead
-	// enum text (never Talk()ed); the JustReachedHome instance->SetData
-	// leg, the ScheduleTasks machine, the SummonedCreatureDies/Despawn
-	// + npc_void_sentry DoAction machine and the achievement_void_dance
-	// GetData check are bridge-blocked — documented in the lua header.
+	// Zuramat the Obliterator (Violet Hold) — timer-driven cast ports
+	// (lua_scripts/northrend/boss_zuramat.lua): void-shift random-
+	// player 60y 54361 9s/15s, shroud-of-darkness DoCastSelf 54524
+	// {18s,20s}/{18s,20s}; Talk 0/1/2 retained. The summon-void-sentry
+	// leg (unbridged sentry AI), the void_dance achievement and the
+	// JustReachedHome instance leg stay out — documented in the lua
+	// header.
 	RegisterLuaBoss("boss_zuramat", 29314)
 
 	// Bronjahm (Forge of Souls) — bridgeable Talk arms ported from
