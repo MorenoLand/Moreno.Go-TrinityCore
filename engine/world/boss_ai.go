@@ -9987,6 +9987,23 @@ func init() {
 	// OnHit hook and the achievement_kings_bane GetData check are
 	// bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_ymiron", 26861)
+	// AddSC_boss_archavon: Archavon the Stone Watcher (Vault of
+	// Archavon) — ported arms (lua_scripts/northrend/boss_archavon.lua):
+	// timer-driven cast ports (CreateLuaEvent, GUID-keyed timers, wipe on
+	// events 2/4/23): EVENT_ROCK_SHARDS 58678 (random player, 15s/15s),
+	// EVENT_CHOKING_CLOUD 58960 (random player, TRIGGERED) + Talk
+	// (EMOTE_LEAP 1, target) (30s/30s — the 10y min-range SelectTarget
+	// gate is unbridged), EVENT_STOMP 58663 + 3s EVENT_IMPALE 58666
+	// chain (45s re-arm; DoCastVictim), EVENT_BERSERK Talk(EMOTE_BERSERK
+	// 0) + DoCastSelf 47008 (5min one-shot) — all ungated in
+	// ExecuteEvent, non-triggered except Crushing Leap (the 2026-10-06
+	// "zero bridgeable arms" closure was stale "no-timer-bridge"
+	// doctrine). JustEngagedWith carries no Talk arms; no JustDied /
+	// KilledUnit / DamageTaken / DoAction arms exist. The
+	// spell_archavon_rock_shards SpellScript hook and the
+	// UNIT_STATE_CASTING gate are bridge-blocked — documented in the lua
+	// header.
+	RegisterLuaBoss("boss_archavon", 31125)
 	// AddSC_boss_cyanigosa: Cyanigosa (Violet Hold) — ported arms
 	// (lua_scripts/northrend/boss_cyanigosa.lua): JustEngagedWith
 	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya
