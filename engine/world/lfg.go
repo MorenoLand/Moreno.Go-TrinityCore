@@ -1754,6 +1754,61 @@ func (s *session) handleLfdPlayerLockInfoRequest(ctx context.Context, payload []
 	return true
 }
 
+// questXPRewardRaw mirrors Quest::GetXPReward (QuestDef.cpp:202-228): the raw
+// XP value written by HandleLfgPlayerLockInfoRequestOpcode, without the
+// RATE_XP_QUEST grant-time multiplier.
+func (s *session) questXPRewardRaw(ctx context.Context, questID, xpDiff uint32) uint32 {
+	// Quest::GetXPReward (QuestDef.cpp:202-228) is the raw wire value written
+	// by HandleLfgPlayerLockInfoRequestOpcode: the quest/player level
+	// diffFactor and RoundXPValue apply, but RATE_XP_QUEST never does — C++
+	// multiplies the rate only at grant time (Player.cpp:15401), so the
+	// rate-baked calculateQuestRewardXP helper must not be used here.
+	// CONFIG_MIN_QUEST_SCALED_XP_RATIO has no Go config knob and defaults to
+	// 0 upstream, so the floor arm stays inert.
+	if xpDiff >= 9 {
+		return 0
+	}
+	var qLevel int64
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT QuestLevel FROM quest_template WHERE entry = ?", questID).Scan(&qLevel)
+	}
+	playerLevel := int64(0)
+	if s.player != nil {
+		playerLevel = int64(s.player.Level)
+	}
+	if qLevel <= 0 {
+		qLevel = playerLevel
+	}
+	if qLevel < 1 {
+		qLevel = 1
+	} else if qLevel > 100 {
+		qLevel = 100
+	}
+	entry, ok := questXPDBC[uint32(qLevel)]
+	if !ok {
+		return 0
+	}
+	diffFactor := 2*(qLevel-playerLevel) + 20
+	if diffFactor < 1 {
+		diffFactor = 1
+	} else if diffFactor > 10 {
+		diffFactor = 10
+	}
+	return roundQuestXPValue(uint32(diffFactor) * entry[xpDiff] / 10)
+}
+
+// roundQuestXPValue mirrors Quest::RoundXPValue (QuestDef.cpp:504-514).
+func roundQuestXPValue(xp uint32) uint32 {
+	if xp <= 100 {
+		return 5 * ((xp + 2) / 5)
+	} else if xp <= 500 {
+		return 10 * ((xp + 5) / 10)
+	} else if xp <= 1000 {
+		return 25 * ((xp + 12) / 25)
+	}
+	return 50 * ((xp + 25) / 50)
+}
+
 // writeLFGRandomDungeonReward serializes the per-random-dungeon reward quest
 // block of SMSG_LFG_PLAYER_INFO.
 // Reference: WorldSession::HandleLfgPlayerLockInfoRequestOpcode (LFGHandler.cpp:154-222).
@@ -1774,20 +1829,31 @@ func (s *session) writeLFGRandomDungeonReward(ctx context.Context, buf *protocol
 	done := false
 	if firstQuest != 0 {
 		if d, err := s.loadQuestDetailData(ctx, firstQuest); err == nil {
-			// Player::CanRewardQuest(quest, false) fails once the daily is
-			// turned in; it also fails while the quest is in progress, which
-			// the done flag mirrors here. (C++ checks completion requirements
-			// too; the Go side approximates with rewarded/can-take state.)
+			// Player::CanRewardQuest(quest, false) (Player.cpp:15059) fails
+			// once the daily is turned in; the rewarded/can-take state mirrors
+			// the daily, level, skill and reputation arms. The quest-status arm
+			// is skipped for DF quests (Player.cpp:15066), so an in-progress
+			// daily still shows done=0 — a canTake failure from quest-log
+			// status alone must not set the flag.
 			done = s.isQuestRewarded(ctx, firstQuest)
 			if canTake, err := s.canTakeQuest(ctx, firstQuest); err == nil && !canTake {
-				done = true
+				if status, serr := s.characterQuestStatus(ctx, firstQuest); serr != nil || status == 0 {
+					done = true
+				}
 			}
 			dd := d
 			detail = &dd
-			if done && otherQuest != 0 {
-				if od, err := s.loadQuestDetailData(ctx, otherQuest); err == nil {
-					dd = od
-					detail = &dd
+			if done {
+				// LFGHandler.cpp:184: a done daily falls back to otherQuest,
+				// but GetQuestTemplate on a missing/zero otherQuest yields
+				// nullptr, which writes the zero block — not the first quest
+				// marked done.
+				detail = nil
+				if otherQuest != 0 {
+					if od, err := s.loadQuestDetailData(ctx, otherQuest); err == nil {
+						dd = od
+						detail = &dd
+					}
 				}
 			}
 		}
@@ -1809,7 +1875,7 @@ func (s *session) writeLFGRandomDungeonReward(ctx context.Context, buf *protocol
 	// Quest::GetRewOrReqMoney writes as uint32; a negative required money
 	// wraps the same way on the wire.
 	buf.WriteU32(uint32(s.questRewOrReqMoney(*detail)))
-	buf.WriteU32(s.calculateQuestRewardXP(ctx, detail.ID, detail.RewardXPDifficulty))
+	buf.WriteU32(s.questXPRewardRaw(ctx, detail.ID, detail.RewardXPDifficulty))
 	buf.WriteU32(0)
 	buf.WriteU32(0)
 	count := uint8(0)
