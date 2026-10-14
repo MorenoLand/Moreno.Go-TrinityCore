@@ -25,8 +25,9 @@
 --   Frenzy is false, so the 15s repeat arm here is a documented
 --   simplification.
 -- - Wyvern Sting 26180 (18-28s -> 15-32s): random player via
---   GetPlayersInWorld (maiden_of_virtue convention — C++ SelectTarget
---   Random has no bridge).
+--   GetPlayersInWorld filtered by map/instance/alive (maiden_of_virtue
+--   convention — C++ SelectTarget Random,0 has no distance limit, so
+--   none is applied; the old unfiltered pick could hit other zones).
 -- - Acid Spit 26050 (8s -> 5-10s): DoCastVictim (jeklik GetVictim +
 --   CastSpell convention).
 -- - Noxious Poison 26053 (10-20s -> 12-24s): DoCastVictim.
@@ -119,9 +120,10 @@ end
 -- C++ Wyvern_Timer: SelectTarget Random -> DoCast(target, 26180),
 -- init urand(18000,28000) -> urand(15000,32000).
 local function onWyvern(creature, guid)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local cands = {}
     for _, p in ipairs(GetPlayersInWorld()) do
-        if p and p:IsAlive() then
+        if p and p:IsAlive() and p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
             cands[#cands + 1] = p
         end
     end

@@ -25,8 +25,9 @@
 --   filter (players + pets only) is no-bridge (SpellScript has
 --   zero Lua usage, viscidus precedent) — documented-only.
 -- - True Fulfillment 785 (15s init -> 20-30s): random player via
---   GetPlayersInWorld (huhuran convention — C++ SelectTarget
---   Random 1, 45.0f, true has no bridge); the SpellScript charm
+--   GetPlayersInWorld filtered by map/instance/alive + 45.0f range
+--   (C++ SelectTarget Random 1, 45.0f, true; the old unfiltered pick
+--   could hit dead players in other zones); the SpellScript charm
 --   effect legs (dismount 61286 + 2313 recast) are no-bridge,
 --   documented-only.
 -- - Blink (30-45s init -> 10-30s): self-cast one of {4801, 8195,
@@ -117,12 +118,19 @@ end
 -- C++ EVENT_FULLFILMENT: SelectTarget Random,1,45.0f,true ->
 -- DoCast(target, SPELL_TRUE_FULFILLMENT), init 15000 ->
 -- urand(20000,30000). Random-player pick via GetPlayersInWorld
--- (huhuran convention).
+-- filtered map/instance/alive + 45.0f (C++ SelectTarget Random 1,
+-- 45.0f, true).
 local function onTrueFulfillment(creature, guid)
-    local players = GetPlayersInWorld()
-    if #players > 0 then
-        local target = players[math.random(#players)]
-        creature:CastSpell(target, SPELL_TRUE_FULFILLMENT)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local cands = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p and p:IsAlive() and p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and creature:IsWithinDist(p, 45.0) then
+            cands[#cands + 1] = p
+        end
+    end
+    if #cands > 0 then
+        creature:CastSpell(cands[math.random(#cands)], SPELL_TRUE_FULFILLMENT)
     end
     schedule(guid, "fulfillment", math.random(20000, 30000), function()
         onTrueFulfillment(creature, guid)

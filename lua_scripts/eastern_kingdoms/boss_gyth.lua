@@ -39,6 +39,9 @@
 -- in-loop casting gates are dropped (maiden precedent). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
+-- (RemoveEventById convention — CreateLuaEvent returns an integer id,
+-- not an object; the old :Cancel() method idiom errored at runtime and
+-- never cancelled)
 -- (maiden convention).
 -- Unmodeled (documented-only): Reset's instance arm
 -- (instance->GetBossState(DATA_GYTH) == IN_PROGRESS ->
@@ -72,7 +75,7 @@ local rendFired = {}
 local function schedule(guid, key, ms, fn)
     if timers[guid] then
         if timers[guid][key] then
-            timers[guid][key]:Cancel()
+            RemoveEventById(timers[guid][key])
         end
     else
         timers[guid] = {}
@@ -82,8 +85,8 @@ end
 
 local function cancelTimers(guid)
     if timers[guid] then
-        for _, ev in pairs(timers[guid]) do
-            ev:Cancel()
+        for _, id in pairs(timers[guid]) do
+            RemoveEventById(id)
         end
         timers[guid] = nil
     end
