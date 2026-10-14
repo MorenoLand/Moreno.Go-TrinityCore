@@ -2066,31 +2066,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "no spell focus object in range", "focus", spell.RequiresSpellFocus)
 		return true
 	}
-	// Caster-aura gate (Spell::CheckCasterAuras, Spell.cpp:6257-6389; called
-	// from Spell::CheckCast at Spell.cpp:5509): the caster's UNIT_FIELD_FLAGS
-	// CC state blocks the cast unless the spell is immune to caster auras
-	// (ATTR6), is usable while in that CC state (ATTR5 mechanic-mask check),
-	// or cancels the preventing aura effects. A set mechanic converts the
-	// result to SPELL_FAILED_PREVENTED_BY_MECHANIC with the mechanic as the
-	// extended packet param (WriteCastResultInfo, Spell.cpp:4102-4107).
-	// Client-initiated casts only — triggered casts go through
-	// castSpellDirect, not this path. C++ relative order places this right
-	// after the spell-focus check (Spell.cpp:5476-5509).
-	if result, mechanic := s.checkCasterAuras(spell); result != 0 {
-		payload := buildCastFailed(castID, spellID, result)
-		if result == spellFailedPreventedByMechanic {
-			payload = buildCastFailedParams(castID, spellID, result, mechanic)
-		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
-		return true
-	}
-	// CallScriptCheckCastHandlers (Spell.cpp:5515) is a no-op: Go has no
-	// SpellScript registry (the Lua runtime covers boss/zone creature
-	// scripts only), so the C++ m_loadedScripts loop iterates nothing and
-	// always returns SPELL_CAST_OK. C++ order places it between
-	// CheckCasterAuras and the dispel gate; that order is preserved by
-	// documenting it here.
 	if s.isGCDActive(spell) {
 		// Spell::CheckCast (Spell.cpp:5227-5228): DISABLED_WHILE_ACTIVE spells
 		// report DONT_REPORT instead of NOT_READY on GCD. The
@@ -2288,6 +2263,263 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell cast conditions not met", "failReason", failReason)
 		return true
+	}
+	targetGUID := uint64(0)
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		targetGUID = target.UnitGUID
+	} else if s.selection != 0 {
+		targetGUID = s.selection
+	}
+
+	// Cannot-target-self gate (SpellInfo::CheckTarget, SpellInfo.cpp:1637-1638):
+	// a spell with SPELL_ATTR1_CANT_TARGET_SELF rejects an explicit self-target
+	// with SPELL_FAILED_BAD_TARGETS. C++ compares caster == target; the caster
+	// is always the session player on this path, so targetGUID == s.playerGUID
+	// is the self case. Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// The visibility gate right below it (SpellInfo.cpp:1641-1642 — !HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE) &&
+	// !caster->CanSeeOrDetect(target, implicit)) is unbridged: Go has no CanSeeOrDetect
+	// model (no invisibility-level vs detect-invisibility-level comparison, no
+	// stealth-level vs detect-stealth skill machinery, and creature motions
+	// carry no aura state to answer "is the target stealthed"); the implicit-target
+	// stealth exemption has no Go analog either.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID != 0 && targetGUID == s.playerGUID {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot target self", "failReason", spellFailedBadTargets)
+		return true
+	}
+
+	// Cannot-target-in-combat gate (SpellInfo::CheckTarget, SpellInfo.cpp:1650):
+	// a spell with SPELL_ATTR1_CANT_TARGET_IN_COMBAT rejects a target that is
+	// in combat with SPELL_FAILED_TARGET_AFFECTING_COMBAT. Creature-target
+	// combat rides motion.InCombat; player-target combat rides the target
+	// session's UnitFlags (unitTargetInCombat). The UNIT_FLAG_PET_IN_COMBAT
+	// half has no bridge: Go tracks no pet-in-combat flag on player units.
+	// The ONLY_TARGET_GHOSTS arm right below it (SpellInfo.cpp:1654-1662 —
+	// HasAttribute(SPELL_ATTR3_ONLY_TARGET_GHOSTS) !=
+	// unitTarget->HasAuraType(SPELL_AURA_GHOST) → SPELL_FAILED_TARGET_NOT_GHOST
+	// / SPELL_FAILED_BAD_TARGETS) is unbridged: target-side aura state is
+	// unmodeled, so the Go target cannot answer "is the target a ghost". The
+	// CANT_TARGET_TAPPED arm (SpellInfo.cpp:1667-1670 — inside the caster !=
+	// unitTarget / player-caster block: SPELL_ATTR2_CANT_TARGET_TAPPED +
+	// creature hasLootRecipient && !isTappedBy(caster) →
+	// SPELL_FAILED_CANT_CAST_ON_TAPPED) is unbridged: Go has no
+	// loot-recipient/tapped-by model on creatures. Checked when a unit target
+	// exists, ahead of the caster != unitTarget block, matching C++ relative
+	// order (1650 ahead of 1667/1669).
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && targetGUID != 0 && s.unitTargetInCombat(targetGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAffectingCombat), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in combat", "failReason", spellFailedTargetAffectingCombat)
+		return true
+	}
+
+	// Pickpocket target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1669-1675):
+	// a spell with SPELL_ATTR0_CU_PICKPOCKET rejects player targets with
+	// SPELL_FAILED_BAD_TARGETS, and rejects creature targets whose creature-type
+	// mask excludes CREATURE_TYPEMASK_HUMANOID_OR_UNDEAD with
+	// SPELL_FAILED_TARGET_NO_POCKETS. C++ fills the custom attribute at load
+	// from SPELL_EFFECT_PICKPOCKET (SpellMgr.cpp:2719-2720); Go never populates
+	// that bit, so the effect scan is the load-time equivalent, checked
+	// alongside the spell_custom_attr row. Runs inside the caster != unitTarget
+	// block, so it only fires on a non-self unit target; the TYPEID_PLAYER
+	// caster arm is vacuous (the caster is always the session player on this
+	// path). Unknown/zero masks fail NO_POCKETS, like C++'s zero-mask & test.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if targetGUID != 0 && targetGUID != s.playerGUID {
+		if s.spellIsPickpocket(spell) {
+			failReason := spellFailedTargetNoPockets
+			if mask, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer {
+				failReason = spellFailedBadTargets
+			} else if mask&creatureTypeMaskHumanoidOrUndead != 0 {
+				failReason = 0
+			}
+			if failReason != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pickpocket target invalid", "failReason", failReason)
+				return true
+			}
+		}
+	}
+
+	// Disarm target-weapon gate (SpellInfo::CheckTarget, SpellInfo.cpp:1681-1692):
+	// a spell with Mechanic == MECHANIC_DISARM rejects an unarmed target with
+	// SPELL_FAILED_TARGET_NO_WEAPONS. Runs inside the caster != unitTarget
+	// block, so it only fires on a non-self unit target; the TYPEID_PLAYER
+	// caster arm is vacuous (the caster is always the session player on this
+	// path). The player-target leg (Player::GetWeaponForAttack(BASE_ATTACK))
+	// is bridged via targetPlayerHasMainHandWeapon — the equipped main-hand
+	// inventory query with the Item::IsBroken gate (MaxDurability > 0 and
+	// Durability == 0, the checkSpellRangedWeaponCast pattern), the same
+	// shape as mainHandWeaponIsDagger but for any ITEM_CLASS_WEAPON. The
+	// Player::IsUseEquipedWeapon(true) legs (Player.cpp:13657-13661) are
+	// unbridged: IsInFeralForm has no Go model (ShapeshiftForm carries no
+	// cat/bear/dire-bear form consts) and UNIT_FLAG_DISARMED has no Go
+	// UnitFlags bit. The creature leg (!UNIT_VIRTUAL_ITEM_SLOT_ID) is
+	// unbridged: creature motions carry no virtual-item model.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.Mechanic == mechanicDisarm && targetGUID != 0 && targetGUID != s.playerGUID {
+		if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer && !s.targetPlayerHasMainHandWeapon(ctx, targetGUID) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNoWeapons), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "disarm target unarmed", "failReason", spellFailedTargetNoWeapons)
+			return true
+		}
+	}
+
+	// Corpse-specific target checks (SpellInfo::CheckTarget, SpellInfo.cpp:1697-1710):
+	// documented no-bridge. The CORPSE_BONES reject, the owner rebind
+	// (unitTarget = ObjectAccessor::FindPlayer(corpse->GetOwnerGUID())), and
+	// the ownerless-corpse BAD_TARGETS reject all require a corpse-typed
+	// target — Go has no corpse-target model on the client path (targetGUID
+	// can only name units), so the ToCorpse() leg never fires. Sits ahead of
+	// the corpseOwner/unit section in C++ CheckTarget order.
+
+	// Only-target-players gate (SpellInfo::CheckTarget, SpellInfo.cpp:1712-1713):
+	// a spell with SPELL_ATTR3_ONLY_TARGET_PLAYERS rejects a non-player unit
+	// target with SPELL_FAILED_TARGET_NOT_PLAYER. Sits in the corpseOwner/unit
+	// section of C++ CheckTarget — after the caster != unitTarget block (the
+	// PICKPOCKET arm above) and before the creature-type gate (1728). The
+	// corpse-owner leg is vacuous: Go has no corpse-target model on the client
+	// path. Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0 && targetGUID != 0 {
+		if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); !isPlayer {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNotPlayer), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell only targets players", "failReason", spellFailedTargetNotPlayer)
+			return true
+		}
+	}
+
+	// Implicit crowd-control gate (SpellInfo::CheckTarget, SpellInfo.cpp:1718-1720):
+	// documented no-bridge. SPELL_ATTR6_CANT_TARGET_CROWD_CONTROLLED
+	// (0x00000100, SharedDefines.h:642) with !unitTarget->CanFreeMove()
+	// rejects crowd-controlled units — but only for implicit targets (chain
+	// and area targeting). handleCastSpell processes explicit client targets
+	// and Go has no CanFreeMove model (no root/snare/stun query on the
+	// target), so the arm has nothing to consult. Sits after the dead-target
+	// gate (1715-1716, bridged in the completion path) in C++ CheckTarget
+	// order.
+
+	// Target creature-type gate (SpellInfo::CheckTarget, SpellInfo.cpp:1728):
+	// sits ahead of the aura-state/aura-spell gates in C++ CheckTarget order.
+	// Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if failReason := s.checkTargetCreatureType(ctx, spell, targetGUID); failReason != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target creature type mismatch", "failReason", failReason)
+		return true
+	}
+
+	// Target aura spell requirements (SpellInfo::CheckTarget, SpellInfo.cpp:1769-1772):
+	// only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.TargetAuraSpell != 0 && targetGUID != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura missing", "aura", spell.TargetAuraSpell)
+		return true
+	}
+	if spell.ExcludeTargetAuraSpell != 0 && targetGUID != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura present", "aura", spell.ExcludeTargetAuraSpell)
+		return true
+	}
+	// Target aura state requirements (SpellInfo::CheckTarget, SpellInfo.cpp:1760-1766):
+	// only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// C++ skips these for vehicle casters and charmer-owned targets; Go has
+	// neither concept, so the check always applies here.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.TargetAuraState != 0 && targetGUID != 0 && !s.targetHasAuraState(ctx, targetGUID, spell.TargetAuraState, spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura state missing", "state", spell.TargetAuraState)
+		return true
+	}
+	if spell.ExcludeTargetAuraState != 0 && targetGUID != 0 && s.targetHasAuraState(ctx, targetGUID, spell.ExcludeTargetAuraState, spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura state present", "state", spell.ExcludeTargetAuraState)
+		return true
+	}
+
+	// Flying-target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1745-1747):
+	// an explicit unit target in flight rejects the cast with
+	// SPELL_FAILED_BAD_TARGETS unless the spell carries
+	// SPELL_ATTR0_CU_ALLOW_INFLIGHT_TARGET. Only checked when a unit target
+	// exists, like the sibling gates above.
+	if s.explicitTargetFlyingBlocked(spell, targetGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in flight", "target", targetGUID)
+		return true
+	}
+
+	// Unit-target positional block (Spell::CheckCast, Spell.cpp:5372-5401):
+	// in C++ the behind/facing/LOS arms sit inside the same `if (Unit*
+	// target = m_targets.GetUnitTarget())` block as the CheckTarget call,
+	// after it and ahead of the dest-LOS check (5400).
+	if targetGUID != 0 && targetGUID != s.playerGUID {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			// Behind/facing arms (Spell::CheckCast, Spell.cpp:5378-5389): in C++
+			// these sit right after the CheckTarget call inside the unit-target
+			// block, ahead of the unit-LOS arm.
+			customAttr := s.server.getSpellCustomAttr(spellID)
+			// 1. Behind target requirement (SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET = 0x20000):
+			// If target has caster in frontal 180° arc, caster is NOT behind target!
+			// Returns SPELL_FAILED_NOT_BEHIND = 57 ("You must be behind your target.").
+			if customAttr&SpellCustomAttrReqCasterBehindTarget != 0 {
+				if hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotBehind), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not behind target")
+					return true
+				}
+			}
+
+			// 2. Target facing caster requirement (SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER = 0x10000):
+			// Target must have caster in its frontal 180° arc (e.g. Gouge).
+			// Returns SPELL_FAILED_NOT_INFRONT = 61 ("You must be in front of your target.").
+			if customAttr&SpellCustomAttrReqTargetFacingCaster != 0 {
+				if !hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotInFront), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not facing caster")
+					return true
+				}
+			}
+
+			// Line-of-sight arm (Spell::CheckCast, Spell.cpp:5391-5401): the
+			// unit-target LOS leg of the CheckCast unit block, after the
+			// behind/facing arms in C++ relative order. Fails
+			// SPELL_FAILED_LINE_OF_SIGHT when the caster has no terrain LoS
+			// to the target, unless the spell ignores LoS. The
+			// m_caster->GetTypeId() != TYPEID_GAMEOBJECT wrapper is vacuous
+			// (client-initiated path: the caster is always the session
+			// player); the IsTriggered/m_triggeredByAuraSpell dynObj-origin
+			// arm is vacuous here (triggered casts ride
+			// castSpellDirectWithOverrides, which runs no CheckCast
+			// gauntlet). Documented no-bridge:
+			// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, nullptr,
+			// SPELL_DISABLE_LOS) — Go has no DisableMgr model, so the
+			// disable leg is unmodeled. The completion-path LOS
+			// revalidation (finishSpellCast) applies these attribute
+			// exemptions, matching Spell::_cast's CheckCast re-run
+			// (Spell.cpp:3328).
+			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
+				if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight")
+					return true
+				}
+			}
+		}
+	}
+
+	// Dest line-of-sight arm (Spell::CheckCast, Spell.cpp:5404-5413): spells
+	// with a destination target fail SPELL_FAILED_LINE_OF_SIGHT when the
+	// caster has no terrain LoS to the dest point, with the same LoS-ignoring
+	// attribute exemptions as the unit-target arm (the DisableMgr arm stays
+	// unmodeled here too).
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 && spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
+		if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight to dest")
+			return true
+		}
 	}
 	// CheckCast pet-presence gate (Spell::CheckCast, Spell.cpp:5413-5431):
 	// any effect with TargetA == TARGET_UNIT_PET (5) requires the caster's
@@ -2627,6 +2859,124 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// (autoshot resend dedup lives at the top of handleCastSpell per
+	// SpellHandler.cpp:420-430 — a same-spell/same-target resend is a
+	// silent ignore, never a toggle-off)
+
+	// CheckRange arms (Spell::CheckCast, Spell.cpp:5496-5499): run after the
+	// CheckItems block and before CheckPower, matching C++ relative order
+	// (CheckItems 5489 -> CheckRange 5496 -> CheckPower 5502) — "Triggered
+	// spells also have range check". The behind/facing/unit-LOS/dest-LOS
+	// arms ride the CheckTarget block above (Spell.cpp:5372-5413); only the
+	// pure range arms (unit, GO, dest) move here. The ammo leg stays in
+	// CheckItems (WEAPON_DAMAGE arm, Spell.cpp:7113-7178).
+	if targetGUID != 0 && targetGUID != s.playerGUID {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			pReach := float32(1.5)
+			if s.player.CombatReach > 0 {
+				pReach = s.player.CombatReach
+			}
+			dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
+			if spellID == 75 { // Auto Shot (TC: Range 114, SPELL_RANGE_RANGED)
+				minRange := calcMeleeRange(pReach, tgt.CombatReach)
+				if dist < minRange {
+					// Spell::CheckRange (Spell.cpp:6567-6569) fails min-range
+					// violations with SPELL_FAILED_OUT_OF_RANGE — the engine
+					// never emits SPELL_FAILED_TOO_CLOSE (the sole C++ emitter
+					// is the Death Grip script leg in spell_dk.cpp:2760).
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
+					return true
+				}
+				// Spell::GetMinMaxRange (Spell.cpp:6584-6630) has no Auto Shot
+				// special case: the max is the DBC max (35, Range 114) scaled
+				// by the REQ_AMMO weapon term (Spell.cpp:6628-6630), then
+				// SPELLMOD_RANGE (Spell.cpp:6632-6633), then the combat-reach
+				// rangeMod (Spell.cpp:6614-6620). The both-moving +8/3 term
+				// (Spell.cpp:6622-6625) stays unmodeled — Go tracks no target
+				// movement state on this path.
+				maxRange := 35.0 * s.rangedWeaponRangeMod(ctx, spell)
+				maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+				maxRange += float64(pReach) + float64(tgt.CombatReach)
+				if dist > maxRange {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
+					return true
+				}
+				// (ammo is the CheckItems WEAPON_DAMAGE arm, Spell.cpp:7113-7178,
+				// bridged at the CheckItems tail by checkSpellRangedWeaponCast —
+				// including the Requires-No-Aura-46699 exemption — so no
+				// second check rides the range arm here.)
+			} else if spellID == 5019 { // Shoot wand (Range 4)
+				// Same GetMinMaxRange terms as Auto Shot above
+				// (Spell.cpp:6584-6630): DBC max 30, REQ_AMMO weapon term
+				// (no-op — wands carry no REQ_AMMO attribute), SPELLMOD_RANGE,
+				// plus the combat-reach rangeMod.
+				maxRange := 30.0 * s.rangedWeaponRangeMod(ctx, spell)
+				maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+				maxRange += float64(pReach) + float64(tgt.CombatReach)
+				if dist > maxRange {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
+					return true
+				}
+			} else if rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex); ok {
+				// DBC-driven range check (TC Spell::CheckRange, strict=true):
+				// the GetMinMaxRange reach / REQ_AMMO / spellmod terms apply
+				// here exactly as at completion.
+				minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
+				if maxRange > 0 && dist > maxRange {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "out of range", "dist", dist, "max", maxRange)
+					return true
+				}
+				if minRange > 0 && dist < minRange {
+					// Spell::CheckRange (Spell.cpp:6567-6569): min-range
+					// violations fail with SPELL_FAILED_OUT_OF_RANGE, not
+					// TOO_CLOSE — this C++ tree's engine never emits
+					// SPELL_FAILED_TOO_CLOSE (sole emitter is the Death Grip
+					// script leg, spell_dk.cpp:2760).
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
+					return true
+				}
+			}
+
+			// Gameobject-target leg (Spell::CheckRange, Spell.cpp:6565-6569):
+			// sits between the unit-target and dest legs in C++ order. A GO
+			// target outside interact distance fails SPELL_FAILED_OUT_OF_RANGE.
+			if failCode := s.validateSpellGORange(ctx, spell, target); failCode != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "go out of range", "code", failCode)
+				return true
+			}
+
+			// 3. Caster facing target requirement (Spell::CheckRange,
+			// Spell.cpp:6559-6560): with SPELL_FACING_FLAG_INFRONT (0x1) the
+			// target must be within the caster's 180-degree frontal
+			// hemisphere — C++ calls HasInArc(M_PI), which with the default
+			// border of 2.0 spans +/-pi/2 (Position.cpp:120-136).
+			// Returns SPELL_FAILED_UNIT_NOT_INFRONT = 134 ("Target needs to
+			// be in front of you.").
+			if (spell.FacingCasterFlags&SpellFacingFlagInfront != 0) || spellID == 75 || spellID == 5019 {
+				if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, math.Pi) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnitNotInFront), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not in front")
+					return true
+				}
+			}
+
+		}
+	}
+
+	// Dest range arm (Spell::CheckRange, Spell.cpp:6571-6578): a destination
+	// target without a trajectory fails SPELL_FAILED_OUT_OF_RANGE when the
+	// dest point is outside the DBC min/max range. This is the strict
+	// CheckCast(true) recheck (Spell::cast, Spell.cpp:3100), so no tolerance
+	// applies. Implicit dest targets (filled by SetTargetMap) have no Go
+	// model at cast time — only the explicit wire dest is checked.
+	if failCode := s.validateSpellDestRange(ctx, spell, target, true); failCode != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "dest out of range", "code", failCode)
+		return true
+	}
 	// Spell::CheckPower (Spell.cpp:6651-6683; called from Spell::CheckCast at
 	// Spell.cpp:5502): runs after the CheckItems block, matching C++ CheckCast
 	// relative order (CheckItems 5489 -> CheckRange 5499 -> CheckPower 5502).
@@ -2670,6 +3020,31 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Caster-aura gate (Spell::CheckCasterAuras, Spell.cpp:6257-6389; called
+	// from Spell::CheckCast at Spell.cpp:5509): the caster's UNIT_FIELD_FLAGS
+	// CC state blocks the cast unless the spell is immune to caster auras
+	// (ATTR6), is usable while in that CC state (ATTR5 mechanic-mask check),
+	// or cancels the preventing aura effects. A set mechanic converts the
+	// result to SPELL_FAILED_PREVENTED_BY_MECHANIC with the mechanic as the
+	// extended packet param (WriteCastResultInfo, Spell.cpp:4102-4107).
+	// Client-initiated casts only — triggered casts go through
+	// castSpellDirect, not this path. C++ relative order places this right
+	// after CheckPower (Spell.cpp:5502), ahead of the script hook (5515).
+	if result, mechanic := s.checkCasterAuras(spell); result != 0 {
+		payload := buildCastFailed(castID, spellID, result)
+		if result == spellFailedPreventedByMechanic {
+			payload = buildCastFailedParams(castID, spellID, result, mechanic)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
+		return true
+	}
+	// CallScriptCheckCastHandlers (Spell.cpp:5515) is a no-op: Go has no
+	// SpellScript registry (the Lua runtime covers boss/zone creature
+	// scripts only), so the C++ m_loadedScripts loop iterates nothing and
+	// always returns SPELL_CAST_OK. C++ order places it between
+	// CheckCasterAuras and the dispel gate; that order is preserved by
+	// documenting it here.
 	// Per-effect CheckCast switch (Spell.cpp:5517-6012): runs after CheckPower,
 	// matching C++ CheckCast relative order (CheckPower 5502 ->
 	// CheckCasterAuras 5509 -> per-effect loop 5517). Assembled here in C++
@@ -2879,366 +3254,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "talent spec change after bg started", "failure", failure)
 		return true
 	}
-	targetGUID := uint64(0)
-	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
-		targetGUID = target.UnitGUID
-	} else if s.selection != 0 {
-		targetGUID = s.selection
-	}
-
-	// Cannot-target-self gate (SpellInfo::CheckTarget, SpellInfo.cpp:1637-1638):
-	// a spell with SPELL_ATTR1_CANT_TARGET_SELF rejects an explicit self-target
-	// with SPELL_FAILED_BAD_TARGETS. C++ compares caster == target; the caster
-	// is always the session player on this path, so targetGUID == s.playerGUID
-	// is the self case. Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
-	// The visibility gate right below it (SpellInfo.cpp:1641-1642 — !HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE) &&
-	// !caster->CanSeeOrDetect(target, implicit)) is unbridged: Go has no CanSeeOrDetect
-	// model (no invisibility-level vs detect-invisibility-level comparison, no
-	// stealth-level vs detect-stealth skill machinery, and creature motions
-	// carry no aura state to answer "is the target stealthed"); the implicit-target
-	// stealth exemption has no Go analog either.
-	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID != 0 && targetGUID == s.playerGUID {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot target self", "failReason", spellFailedBadTargets)
-		return true
-	}
-
-	// Cannot-target-in-combat gate (SpellInfo::CheckTarget, SpellInfo.cpp:1650):
-	// a spell with SPELL_ATTR1_CANT_TARGET_IN_COMBAT rejects a target that is
-	// in combat with SPELL_FAILED_TARGET_AFFECTING_COMBAT. Creature-target
-	// combat rides motion.InCombat; player-target combat rides the target
-	// session's UnitFlags (unitTargetInCombat). The UNIT_FLAG_PET_IN_COMBAT
-	// half has no bridge: Go tracks no pet-in-combat flag on player units.
-	// The ONLY_TARGET_GHOSTS arm right below it (SpellInfo.cpp:1654-1662 —
-	// HasAttribute(SPELL_ATTR3_ONLY_TARGET_GHOSTS) !=
-	// unitTarget->HasAuraType(SPELL_AURA_GHOST) → SPELL_FAILED_TARGET_NOT_GHOST
-	// / SPELL_FAILED_BAD_TARGETS) is unbridged: target-side aura state is
-	// unmodeled, so the Go target cannot answer "is the target a ghost". The
-	// CANT_TARGET_TAPPED arm (SpellInfo.cpp:1667-1670 — inside the caster !=
-	// unitTarget / player-caster block: SPELL_ATTR2_CANT_TARGET_TAPPED +
-	// creature hasLootRecipient && !isTappedBy(caster) →
-	// SPELL_FAILED_CANT_CAST_ON_TAPPED) is unbridged: Go has no
-	// loot-recipient/tapped-by model on creatures. Checked when a unit target
-	// exists, ahead of the caster != unitTarget block, matching C++ relative
-	// order (1650 ahead of 1667/1669).
-	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && targetGUID != 0 && s.unitTargetInCombat(targetGUID) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAffectingCombat), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in combat", "failReason", spellFailedTargetAffectingCombat)
-		return true
-	}
-
-	// Pickpocket target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1669-1675):
-	// a spell with SPELL_ATTR0_CU_PICKPOCKET rejects player targets with
-	// SPELL_FAILED_BAD_TARGETS, and rejects creature targets whose creature-type
-	// mask excludes CREATURE_TYPEMASK_HUMANOID_OR_UNDEAD with
-	// SPELL_FAILED_TARGET_NO_POCKETS. C++ fills the custom attribute at load
-	// from SPELL_EFFECT_PICKPOCKET (SpellMgr.cpp:2719-2720); Go never populates
-	// that bit, so the effect scan is the load-time equivalent, checked
-	// alongside the spell_custom_attr row. Runs inside the caster != unitTarget
-	// block, so it only fires on a non-self unit target; the TYPEID_PLAYER
-	// caster arm is vacuous (the caster is always the session player on this
-	// path). Unknown/zero masks fail NO_POCKETS, like C++'s zero-mask & test.
-	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if targetGUID != 0 && targetGUID != s.playerGUID {
-		if s.spellIsPickpocket(spell) {
-			failReason := spellFailedTargetNoPockets
-			if mask, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer {
-				failReason = spellFailedBadTargets
-			} else if mask&creatureTypeMaskHumanoidOrUndead != 0 {
-				failReason = 0
-			}
-			if failReason != 0 {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
-				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pickpocket target invalid", "failReason", failReason)
-				return true
-			}
-		}
-	}
-
-	// Disarm target-weapon gate (SpellInfo::CheckTarget, SpellInfo.cpp:1681-1692):
-	// a spell with Mechanic == MECHANIC_DISARM rejects an unarmed target with
-	// SPELL_FAILED_TARGET_NO_WEAPONS. Runs inside the caster != unitTarget
-	// block, so it only fires on a non-self unit target; the TYPEID_PLAYER
-	// caster arm is vacuous (the caster is always the session player on this
-	// path). The player-target leg (Player::GetWeaponForAttack(BASE_ATTACK))
-	// is bridged via targetPlayerHasMainHandWeapon — the equipped main-hand
-	// inventory query with the Item::IsBroken gate (MaxDurability > 0 and
-	// Durability == 0, the checkSpellRangedWeaponCast pattern), the same
-	// shape as mainHandWeaponIsDagger but for any ITEM_CLASS_WEAPON. The
-	// Player::IsUseEquipedWeapon(true) legs (Player.cpp:13657-13661) are
-	// unbridged: IsInFeralForm has no Go model (ShapeshiftForm carries no
-	// cat/bear/dire-bear form consts) and UNIT_FLAG_DISARMED has no Go
-	// UnitFlags bit. The creature leg (!UNIT_VIRTUAL_ITEM_SLOT_ID) is
-	// unbridged: creature motions carry no virtual-item model.
-	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.Mechanic == mechanicDisarm && targetGUID != 0 && targetGUID != s.playerGUID {
-		if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer && !s.targetPlayerHasMainHandWeapon(ctx, targetGUID) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNoWeapons), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "disarm target unarmed", "failReason", spellFailedTargetNoWeapons)
-			return true
-		}
-	}
-
-	// Corpse-specific target checks (SpellInfo::CheckTarget, SpellInfo.cpp:1697-1710):
-	// documented no-bridge. The CORPSE_BONES reject, the owner rebind
-	// (unitTarget = ObjectAccessor::FindPlayer(corpse->GetOwnerGUID())), and
-	// the ownerless-corpse BAD_TARGETS reject all require a corpse-typed
-	// target — Go has no corpse-target model on the client path (targetGUID
-	// can only name units), so the ToCorpse() leg never fires. Sits ahead of
-	// the corpseOwner/unit section in C++ CheckTarget order.
-
-	// Only-target-players gate (SpellInfo::CheckTarget, SpellInfo.cpp:1712-1713):
-	// a spell with SPELL_ATTR3_ONLY_TARGET_PLAYERS rejects a non-player unit
-	// target with SPELL_FAILED_TARGET_NOT_PLAYER. Sits in the corpseOwner/unit
-	// section of C++ CheckTarget — after the caster != unitTarget block (the
-	// PICKPOCKET arm above) and before the creature-type gate (1728). The
-	// corpse-owner leg is vacuous: Go has no corpse-target model on the client
-	// path. Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
-	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0 && targetGUID != 0 {
-		if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); !isPlayer {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNotPlayer), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell only targets players", "failReason", spellFailedTargetNotPlayer)
-			return true
-		}
-	}
-
-	// Implicit crowd-control gate (SpellInfo::CheckTarget, SpellInfo.cpp:1718-1720):
-	// documented no-bridge. SPELL_ATTR6_CANT_TARGET_CROWD_CONTROLLED
-	// (0x00000100, SharedDefines.h:642) with !unitTarget->CanFreeMove()
-	// rejects crowd-controlled units — but only for implicit targets (chain
-	// and area targeting). handleCastSpell processes explicit client targets
-	// and Go has no CanFreeMove model (no root/snare/stun query on the
-	// target), so the arm has nothing to consult. Sits after the dead-target
-	// gate (1715-1716, bridged in the completion path) in C++ CheckTarget
-	// order.
-
-	// Target creature-type gate (SpellInfo::CheckTarget, SpellInfo.cpp:1728):
-	// sits ahead of the aura-state/aura-spell gates in C++ CheckTarget order.
-	// Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
-	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if failReason := s.checkTargetCreatureType(ctx, spell, targetGUID); failReason != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target creature type mismatch", "failReason", failReason)
-		return true
-	}
-
-	// Target aura spell requirements (SpellInfo::CheckTarget, SpellInfo.cpp:1769-1772):
-	// only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
-	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.TargetAuraSpell != 0 && targetGUID != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura missing", "aura", spell.TargetAuraSpell)
-		return true
-	}
-	if spell.ExcludeTargetAuraSpell != 0 && targetGUID != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura present", "aura", spell.ExcludeTargetAuraSpell)
-		return true
-	}
-	// Target aura state requirements (SpellInfo::CheckTarget, SpellInfo.cpp:1760-1766):
-	// only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
-	// C++ skips these for vehicle casters and charmer-owned targets; Go has
-	// neither concept, so the check always applies here.
-	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.TargetAuraState != 0 && targetGUID != 0 && !s.targetHasAuraState(ctx, targetGUID, spell.TargetAuraState, spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura state missing", "state", spell.TargetAuraState)
-		return true
-	}
-	if spell.ExcludeTargetAuraState != 0 && targetGUID != 0 && s.targetHasAuraState(ctx, targetGUID, spell.ExcludeTargetAuraState, spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura state present", "state", spell.ExcludeTargetAuraState)
-		return true
-	}
-
-	// Flying-target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1745-1747):
-	// an explicit unit target in flight rejects the cast with
-	// SPELL_FAILED_BAD_TARGETS unless the spell carries
-	// SPELL_ATTR0_CU_ALLOW_INFLIGHT_TARGET. Only checked when a unit target
-	// exists, like the sibling gates above.
-	if s.explicitTargetFlyingBlocked(spell, targetGUID) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in flight", "target", targetGUID)
-		return true
-	}
-
-	// (autoshot resend dedup lives at the top of handleCastSpell per
-	// SpellHandler.cpp:420-430 — a same-spell/same-target resend is a
-	// silent ignore, never a toggle-off)
-
-	// Range and Ammo checks for ranged / auto-repeat spells (TC Spell::CheckCast)
-	if targetGUID != 0 && targetGUID != s.playerGUID {
-		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
-			pReach := float32(1.5)
-			if s.player.CombatReach > 0 {
-				pReach = s.player.CombatReach
-			}
-			dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
-			if spellID == 75 { // Auto Shot (TC: Range 114, SPELL_RANGE_RANGED)
-				minRange := calcMeleeRange(pReach, tgt.CombatReach)
-				if dist < minRange {
-					// Spell::CheckRange (Spell.cpp:6567-6569) fails min-range
-					// violations with SPELL_FAILED_OUT_OF_RANGE — the engine
-					// never emits SPELL_FAILED_TOO_CLOSE (the sole C++ emitter
-					// is the Death Grip script leg in spell_dk.cpp:2760).
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
-					return true
-				}
-				// Spell::GetMinMaxRange (Spell.cpp:6584-6630) has no Auto Shot
-				// special case: the max is the DBC max (35, Range 114) scaled
-				// by the REQ_AMMO weapon term (Spell.cpp:6628-6630), then
-				// SPELLMOD_RANGE (Spell.cpp:6632-6633), then the combat-reach
-				// rangeMod (Spell.cpp:6614-6620). The both-moving +8/3 term
-				// (Spell.cpp:6622-6625) stays unmodeled — Go tracks no target
-				// movement state on this path.
-				maxRange := 35.0 * s.rangedWeaponRangeMod(ctx, spell)
-				maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
-				maxRange += float64(pReach) + float64(tgt.CombatReach)
-				if dist > maxRange {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
-					return true
-				}
-				if s.player.AmmoID == 0 {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 75), true) // SPELL_FAILED_NO_AMMO = 75
-					return true
-				}
-			} else if spellID == 5019 { // Shoot wand (Range 4)
-				// Same GetMinMaxRange terms as Auto Shot above
-				// (Spell.cpp:6584-6630): DBC max 30, REQ_AMMO weapon term
-				// (no-op — wands carry no REQ_AMMO attribute), SPELLMOD_RANGE,
-				// plus the combat-reach rangeMod.
-				maxRange := 30.0 * s.rangedWeaponRangeMod(ctx, spell)
-				maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
-				maxRange += float64(pReach) + float64(tgt.CombatReach)
-				if dist > maxRange {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
-					return true
-				}
-			} else if rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex); ok {
-				// DBC-driven range check (TC Spell::CheckRange, strict=true):
-				// the GetMinMaxRange reach / REQ_AMMO / spellmod terms apply
-				// here exactly as at completion.
-				minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
-				if maxRange > 0 && dist > maxRange {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
-					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "out of range", "dist", dist, "max", maxRange)
-					return true
-				}
-				if minRange > 0 && dist < minRange {
-					// Spell::CheckRange (Spell.cpp:6567-6569): min-range
-					// violations fail with SPELL_FAILED_OUT_OF_RANGE, not
-					// TOO_CLOSE — this C++ tree's engine never emits
-					// SPELL_FAILED_TOO_CLOSE (sole emitter is the Death Grip
-					// script leg, spell_dk.cpp:2760).
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
-					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
-					return true
-				}
-			}
-
-			// Gameobject-target leg (Spell::CheckRange, Spell.cpp:6565-6569):
-			// sits between the unit-target and dest legs in C++ order. A GO
-			// target outside interact distance fails SPELL_FAILED_OUT_OF_RANGE.
-			if failCode := s.validateSpellGORange(ctx, spell, target); failCode != 0 {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
-				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "go out of range", "code", failCode)
-				return true
-			}
-
-			// Positional and facing checks (TrinityCore Spell::CheckCast, Spell.cpp:5200-5300)
-			customAttr := s.server.getSpellCustomAttr(spellID)
-			// 1. Behind target requirement (SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET = 0x20000):
-			// If target has caster in frontal 180° arc, caster is NOT behind target!
-			// Returns SPELL_FAILED_NOT_BEHIND = 57 ("You must be behind your target.").
-			if customAttr&SpellCustomAttrReqCasterBehindTarget != 0 {
-				if hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotBehind), true)
-					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not behind target")
-					return true
-				}
-			}
-
-			// 2. Target facing caster requirement (SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER = 0x10000):
-			// Target must have caster in its frontal 180° arc (e.g. Gouge).
-			// Returns SPELL_FAILED_NOT_INFRONT = 61 ("You must be in front of your target.").
-			if customAttr&SpellCustomAttrReqTargetFacingCaster != 0 {
-				if !hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotInFront), true)
-					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not facing caster")
-					return true
-				}
-			}
-
-			// 3. Caster facing target requirement (Spell::CheckRange,
-			// Spell.cpp:6559-6560): with SPELL_FACING_FLAG_INFRONT (0x1) the
-			// target must be within the caster's 180-degree frontal
-			// hemisphere — C++ calls HasInArc(M_PI), which with the default
-			// border of 2.0 spans +/-pi/2 (Position.cpp:120-136).
-			// Returns SPELL_FAILED_UNIT_NOT_INFRONT = 134 ("Target needs to
-			// be in front of you.").
-			if (spell.FacingCasterFlags&SpellFacingFlagInfront != 0) || spellID == 75 || spellID == 5019 {
-				if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, math.Pi) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnitNotInFront), true)
-					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not in front")
-					return true
-				}
-			}
-
-			// Line-of-sight arm (Spell::CheckCast, Spell.cpp:5391-5401): the
-			// unit-target LOS leg of the CheckCast unit block, after the
-			// behind/facing arms in C++ relative order. Fails
-			// SPELL_FAILED_LINE_OF_SIGHT when the caster has no terrain LoS
-			// to the target, unless the spell ignores LoS. The
-			// m_caster->GetTypeId() != TYPEID_GAMEOBJECT wrapper is vacuous
-			// (client-initiated path: the caster is always the session
-			// player); the IsTriggered/m_triggeredByAuraSpell dynObj-origin
-			// arm is vacuous here (triggered casts ride
-			// castSpellDirectWithOverrides, which runs no CheckCast
-			// gauntlet). Documented no-bridge:
-			// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, nullptr,
-			// SPELL_DISABLE_LOS) — Go has no DisableMgr model, so the
-			// disable leg is unmodeled. The completion-path LOS
-			// revalidation (finishSpellCast) applies these attribute
-			// exemptions, matching Spell::_cast's CheckCast re-run
-			// (Spell.cpp:3328).
-			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
-				if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
-					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight")
-					return true
-				}
-			}
-		}
-	}
-
-	// Dest range arm (Spell::CheckRange, Spell.cpp:6571-6578): a destination
-	// target without a trajectory fails SPELL_FAILED_OUT_OF_RANGE when the
-	// dest point is outside the DBC min/max range. This is the strict
-	// CheckCast(true) recheck (Spell::cast, Spell.cpp:3100), so no tolerance
-	// applies. Implicit dest targets (filled by SetTargetMap) have no Go
-	// model at cast time — only the explicit wire dest is checked.
-	if failCode := s.validateSpellDestRange(ctx, spell, target, true); failCode != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "dest out of range", "code", failCode)
-		return true
-	}
-
-	// Dest line-of-sight arm (Spell::CheckCast, Spell.cpp:5404-5413): spells
-	// with a destination target fail SPELL_FAILED_LINE_OF_SIGHT when the
-	// caster has no terrain LoS to the dest point, with the same LoS-ignoring
-	// attribute exemptions as the unit-target arm (the DisableMgr arm stays
-	// unmodeled here too).
-	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 && spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
-		if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight to dest")
-			return true
-		}
-	}
-
 	// Dispel check: if spell has only SPELL_EFFECT_DISPEL effects (and not area-targeting), verify target has dispellable auras
 
 	// Possess-pet / charm gates (Spell::CheckCast ApplyAuraName switch,
