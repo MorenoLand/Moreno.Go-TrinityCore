@@ -918,6 +918,73 @@ func (s *session) resetPetTalentsAtLogin(ctx context.Context) bool {
 	return true
 }
 
+// activePetLearnedTalentSpells returns the active pet's learned talent spell
+// IDs (pet_spell rows whose spell is a pet talent per the DBC set). Used as
+// the m_usedTalentCount>0 proxy for Player::ResetPetTalents (Player.cpp:9612)
+// and its gossip-option visibility gate (Player.cpp:14462).
+func (s *session) activePetLearnedTalentSpells(ctx context.Context) []uint32 {
+	petNumber := s.activePetNumber()
+	if petNumber == 0 || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
+		return nil
+	}
+	petTalents, err := s.server.Data.PetTalentSpells()
+	if err != nil {
+		s.debug("pet talent spell lookup failed", "account", s.accountName, "error", err)
+		return nil
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell FROM pet_spell WHERE guid = ?", petNumber)
+	if err != nil {
+		s.debug("pet talent spell query failed", "account", s.accountName, "pet", petNumber, "error", err)
+		return nil
+	}
+	defer rows.Close()
+	var spells []uint32
+	for rows.Next() {
+		var spell uint32
+		if rows.Scan(&spell) == nil {
+			if _, found := petTalents[spell]; found {
+				spells = append(spells, spell)
+			}
+		}
+	}
+	return spells
+}
+
+// resetActivePetTalents mirrors Player::ResetPetTalents (Player.cpp:9612) +
+// Pet::resetTalents (Pet.cpp:1629): the active hunter pet's learned talent
+// spells are removed and the pet talent/spell frames resent. No-op when there
+// is no active pet, the pet isn't a hunter pet, or it has no learned talent
+// spells (the m_usedTalentCount == 0 early return, which sends no client
+// packet). The creature-family PetTalentType check has no Go bridge — hunter
+// pets always carry a talent type in practice.
+func (s *session) resetActivePetTalents(ctx context.Context) {
+	petNumber := s.activePetNumber()
+	if petNumber == 0 || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	var petType int64
+	if err := cdb.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType); err != nil || petType != int64(petTypeHunter) {
+		return
+	}
+	talentSpells := s.activePetLearnedTalentSpells(ctx)
+	if len(talentSpells) == 0 {
+		return
+	}
+	for _, spell := range talentSpells {
+		if _, err := cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petNumber, spell); err != nil {
+			s.debug("pet talent spell removal failed", "account", s.accountName, "pet", petNumber, "spell", spell, "error", err)
+		}
+	}
+	// Pet::resetTalents ends with PetSpellInitialize + Player::ResetPetTalents
+	// with SendTalentsInfoData(true): resend the pet spell list and the talent
+	// frame.
+	if petGUID := s.petGUIDForNumber(petNumber); petGUID != 0 {
+		s.sendPetSpells(ctx, petNumber, 0, 1)
+	}
+	_ = s.sendTalentsInfo(true)
+}
+
 func ShouldTemporarilyUnsummonSavedPet(health, playerFlags, unitFlags, mountDisplay uint32, temporarySummon bool) bool {
 	return temporarySummon || health == 0 || playerFlags&playerFlagGhost != 0 || unitFlags&unitFlagMount != 0 || mountDisplay != 0
 }

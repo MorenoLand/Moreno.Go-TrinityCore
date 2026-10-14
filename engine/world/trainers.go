@@ -907,6 +907,45 @@ func (s *session) canResetTalents(ctx context.Context, trainerGUID uint64) bool 
 	return s.isTrainerValidForPlayer(uint32(tType), uint32(tReq))
 }
 
+// canResetPetTalents mirrors Creature::CanResetTalents (Creature.cpp:1303)
+// with pet=true: the creature must have a trainer row of type Pet
+// (Trainer::Type::Pet, Trainer.h:36), the player must be level 10+, and the
+// trainer must be valid for the player. Fail-closed when the world DB is
+// unavailable: C++ returns false when sObjectMgr->GetTrainer finds no row.
+func (s *session) canResetPetTalents(ctx context.Context, trainerGUID uint64) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var creatureEntry uint32
+	if creature := s.luaCreature(ctx, trainerGUID); creature != nil {
+		creatureEntry = objectUint32OrZero(creature, "Entry")
+	}
+	if creatureEntry == 0 {
+		creatureEntry = uint32((trainerGUID >> 24) & 0x00FFFFFF)
+	}
+	if creatureEntry == 0 {
+		spawnGUID := uint32(trainerGUID & 0x00FFFFFF)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
+	}
+	if creatureEntry == 0 {
+		return false
+	}
+	var tType, tReq int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
+		FROM trainer AS t
+		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
+		   OR t.Id = ? LIMIT 1`, creatureEntry, creatureEntry).Scan(&tType, &tReq); err != nil {
+		return false
+	}
+	if tType != 3 { // Trainer::Type::Pet (Trainer.h:36)
+		return false
+	}
+	if s.player.Level < 10 {
+		return false
+	}
+	return s.isTrainerValidForPlayer(uint32(tType), uint32(tReq))
+}
+
 func (s *session) isSpellFitByClassAndRace(spellID uint32) bool {
 	if s.player == nil {
 		return false

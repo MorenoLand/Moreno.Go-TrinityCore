@@ -175,18 +175,19 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 				return s.handleListStabledPets(ctx, stableBuf.Bytes())
 			}
 		}
-		// Reference Player::SendPreparedQuest (single-quest fast-open):
-		// If the NPC has no other gossip options and exactly 1 quest, auto-open it directly.
-		if defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 1 {
-			q := defaultMenu.Quests[0]
-			queryPayload := protocol.NewBuffer(12)
-			queryPayload.WriteU64(guid)
-			queryPayload.WriteU32(q.ID)
-			status, _ := s.characterQuestStatus(ctx, q.ID)
-			if status == questStatusComplete || status == questStatusIncomplete {
-				return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
-			}
-			return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
+		// Player::SendPreparedGossip (Player.cpp:14708): the single-quest
+		// fast-open (Player::SendPreparedQuest) applies only when the source
+		// lacks the GOSSIP flag. The gossip-hello path always carries the flag
+		// (gated above), so it always sends the menu; the questgiver-hello
+		// path fast-opens only for flagless questgivers.
+		if questPath && npcFlags&npcFlagGossip == 0 && defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 1 {
+			return s.fastOpenQuestGiverQuest(ctx, guid, defaultMenu.Quests[0])
+		}
+		// Player::SendPreparedGossip (Player.cpp:14708): a flagless questgiver
+		// with an empty quest menu answers nothing (SendPreparedQuest returns
+		// early on an empty menu) — no empty gossip window.
+		if questPath && npcFlags&npcFlagGossip == 0 && defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 0 {
+			return true
 		}
 		s.gossip = defaultMenu
 		if err := s.sendGossipMenu(); err != nil {
@@ -322,6 +323,10 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	if !ok {
 		return true
 	}
+	// Player::OnGossipSelect's OUTDOORPVP arm (Player.cpp:14618-14620) sends no
+	// close: the menu stays open. Capture the live menu so that arm can
+	// restore it below.
+	prevGossip := s.gossip
 	s.gossip = nil
 	s.gossipClosed = false
 	args := []any{uint32(2), s.luaPlayer(), creature, item.Sender, item.Action}
@@ -502,11 +507,10 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			}
 		} else if item.Action == 2 { // GOSSIP_OPTION_QUESTGIVER
 			// Player::OnGossipSelect (Player.cpp:14625-14628):
-			// PrepareQuestMenu(guid) + SendPreparedQuest(guid) — the quest-menu
-			// open. The single-quest fast-open mirrors the hello path's
-			// existing SendPreparedQuest approximation; multiple quests go out
-			// in the gossip message's quest section, same as the questgiver
-			// hello.
+			// PrepareQuestMenu(guid) + SendPreparedQuest(guid). An empty menu
+			// sends nothing, a single quest fast-opens, and multiple quests go
+			// out in SMSG_QUESTGIVER_QUEST_LIST — not in a gossip message (the
+			// gossip-message quest section is the hello path's shape).
 			if s.player != nil {
 				quests, qerr := s.loadCreatureQuestMenu(ctx, entry, s.player.Level)
 				if qerr != nil {
@@ -515,22 +519,10 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 					_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
 					return true
 				}
-				if len(quests) == 1 {
-					q := quests[0]
-					queryPayload := protocol.NewBuffer(12)
-					queryPayload.WriteU64(guid)
-					queryPayload.WriteU32(q.ID)
-					status, _ := s.characterQuestStatus(ctx, q.ID)
-					if status == questStatusComplete || status == questStatusIncomplete {
-						return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
-					}
-					return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
+				if !s.sendPreparedCreatureQuest(ctx, guid, entry, quests) {
+					return false
 				}
-				s.gossip = &gossipMenuState{SenderGUID: guid, MenuID: menuID, TitleID: 0x00FFFFFF, Items: make(map[uint32]gossipMenuItem), Quests: quests}
-				if sendErr := s.sendGossipMenu(); sendErr != nil {
-					s.debug("gossip questgiver menu response failed", "account", s.accountName, "entry", entry, "error", sendErr)
-					return true
-				}
+				s.gossipClosed = true
 			}
 		} else if item.Action == 7 { // GOSSIP_OPTION_SPIRITGUIDE
 			// Player::OnGossipSelect (Player.cpp:14677-14680): re-prepare the
@@ -570,11 +562,14 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.sendBattlefieldList(guid, 0, bgTypeID)
 		} else if item.Action == 17 { // GOSSIP_OPTION_UNLEARNPETTALENTS
 			// Player::OnGossipSelect (Player.cpp:14653-14656): SendCloseGossip
-			// before ResetPetTalents. Go's pet talents reset only at login —
-			// no interactive model — so only the close is bridged.
+			// before Player::ResetPetTalents (Player.cpp:9612) — the active
+			// hunter pet's learned talent spells are unlearned and the talent
+			// frames resent. The "Yes, please do." confirmation is
+			// data-driven (gossip menu text), not code.
 			if !s.sendGossipComplete() {
 				return false
 			}
+			s.resetActivePetTalents(ctx)
 		} else if item.Action == 18 { // GOSSIP_OPTION_LEARNDUALSPEC
 			// Player::OnGossipSelect (Player.cpp:14636-14646): gated on a
 			// single spec and CONFIG_MIN_DUALSPEC_LEVEL (40, World.cpp
@@ -600,8 +595,9 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			}
 		} else if item.Action == 19 { // GOSSIP_OPTION_OUTDOORPVP
 			// Player::OnGossipSelect (Player.cpp:14618-14620): routed to the
-			// OutdoorPvP manager, which has no Go model — the menu closes.
-			s.gossipClosed = true
+			// OutdoorPvP manager, which has no Go model — the gossip menu
+			// stays open (C++ sends no close on this arm).
+			s.gossip = prevGossip
 		}
 		// Player::OnGossipSelect (Player.cpp:14699): the BoxMoney charge lands
 		// after the option arms — early-return arms (invalid battlemaster
@@ -1002,8 +998,18 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 		if optionType == 15 { // GOSSIP_OPTION_ARMORER is "added in special mode" — never menu-listed
 			continue
 		}
-		if optionType == 17 { // GOSSIP_OPTION_UNLEARNPETTALENTS needs a hunter pet with talents; no interactive pet-talent model in Go
+		if optionType == 16 && !s.canResetTalents(ctx, creatureGUID) { // GOSSIP_OPTION_UNLEARNTALENTS: hidden when the creature can't reset talents (Player.cpp:14459)
 			continue
+		}
+		if optionType == 17 { // GOSSIP_OPTION_UNLEARNPETTALENTS (Player.cpp:14462)
+			// Hidden without an active hunter pet carrying learned talent
+			// spells, or when the creature isn't a valid pet-talent trainer
+			// (Creature::CanResetTalents(pet), Creature.cpp:1303). The
+			// m_spells.size()<=1 proxy is folded into the learned-talent
+			// check: a pet with no learned talents has nothing to unlearn.
+			if s.activePetNumber() == 0 || !s.canResetPetTalents(ctx, creatureGUID) || len(s.activePetLearnedTalentSpells(ctx)) == 0 {
+				continue
+			}
 		}
 		if optionType == 19 { // GOSSIP_OPTION_OUTDOORPVP: no OutdoorPvP manager in Go
 			continue
@@ -1125,22 +1131,22 @@ func (s *session) prepareGameObjectGossip(ctx context.Context, guid uint64, entr
 }
 
 // buildQuestGiverQuestList mirrors PlayerMenu::SendQuestGiverQuestList
-// (GossipDef.cpp:319-370): guid, the quest_greeting row keyed by
-// entry+TYPEID_GAMEOBJECT (or an empty title with zero emotes), then the
-// quest rows with the 3.3.3 autocomplete byte.
-func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, entry uint32, quests []gossipQuestItem) []byte {
+// (GossipDef.cpp:319-370): guid, the quest_greeting row keyed by entry and the
+// source's type (or an empty title with zero emotes), then the quest rows
+// with the 3.3.3 autocomplete byte.
+func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, entry uint32, greetType uint32, quests []gossipQuestItem) []byte {
 	title := ""
 	var emoteDelay, emoteType uint32
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var greetType, greetDelay int64
+		var greetEmoteType, greetEmoteDelay int64
 		var greeting string
 		// LoadQuestGreetings (ObjectMgr.cpp:6447): ID, Type, GreetEmoteType, GreetEmoteDelay, Greeting.
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx,
 			`SELECT GreetEmoteType, GreetEmoteDelay, Greeting FROM quest_greeting WHERE ID = ? AND Type = ? LIMIT 1`,
-			entry, typeIDGameObject).Scan(&greetType, &greetDelay, &greeting); err == nil {
+			entry, greetType).Scan(&greetEmoteType, &greetEmoteDelay, &greeting); err == nil {
 			title = greeting
 			// GossipDef.cpp:340-341: the packet carries delay then type.
-			emoteDelay, emoteType = uint32(greetDelay), uint32(greetType)
+			emoteDelay, emoteType = uint32(greetEmoteDelay), uint32(greetEmoteType)
 		}
 	}
 	entries := protocol.NewBuffer(64)
@@ -1184,6 +1190,22 @@ func (s *session) fastOpenQuestGiverQuest(ctx context.Context, guid uint64, q go
 	return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
 }
 
+// sendPreparedCreatureQuest mirrors Player::SendPreparedQuest
+// (Player.cpp:14808) for a creature source: an empty quest menu sends
+// nothing, a single quest fast-opens, and multiple quests go out in
+// SMSG_QUESTGIVER_QUEST_LIST keyed by the creature entry's quest greeting
+// (TYPEID_UNIT).
+func (s *session) sendPreparedCreatureQuest(ctx context.Context, guid uint64, entry uint32, quests []gossipQuestItem) bool {
+	switch len(quests) {
+	case 0:
+		return true
+	case 1:
+		return s.fastOpenQuestGiverQuest(ctx, guid, quests[0])
+	default:
+		return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_LIST), s.buildQuestGiverQuestList(ctx, guid, entry, typeIDUnit, quests), true) == nil
+	}
+}
+
 // sendPreparedGameObjectQuest mirrors Player::SendPreparedQuest
 // (Player.cpp:14808) for a gameobject source: an empty quest menu sends
 // nothing, a single quest fast-opens, and multiple quests go out in
@@ -1195,7 +1217,7 @@ func (s *session) sendPreparedGameObjectQuest(ctx context.Context, guid uint64, 
 	case 1:
 		return s.fastOpenQuestGiverQuest(ctx, guid, quests[0])
 	default:
-		return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_LIST), s.buildQuestGiverQuestList(ctx, guid, entry, quests), true) == nil
+		return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_LIST), s.buildQuestGiverQuestList(ctx, guid, entry, typeIDGameObject, quests), true) == nil
 	}
 }
 
