@@ -10417,15 +10417,29 @@ func init() {
 	// victim->GetTypeId() == TYPEID_PLAYER gated, entry-switched
 	// (event 3, the razuvious player-gated variant precedent);
 	// JustDied Talk(death text) entry-switched (event 4, the sjonnir
-	// JustDied-Talk precedent). No other bridgeable arm in the file:
+	// JustDied-Talk precedent); timer-driven cast arms port under the
+	// retracted no-timer-bridge doctrine (see the lua header): keleseth
+	// EVENT_BERSERK (DoCastSelf 50334 + Talk(EMOTE_KELESETH_BERSERK 4),
+	// 600000ms one-shot), EVENT_SHADOW_RESONANCE (Talk(
+	// SAY_KELESETH_SPECIAL 2) + DoCastSelf 71943, {10000,15000}ms),
+	// EVENT_SHADOW_LANCE (DoCastVictim 71405 base variant, 2000ms);
+	// taldaram EVENT_BERSERK (DoCastSelf 50334 +
+	// Talk(EMOTE_TALDARAM_BERSERK 5), 600000ms one-shot),
+	// EVENT_GLITTERING_SPARKS (DoCastVictim 71806, {15000,50000}ms),
+	// EVENT_CONJURE_FLAME (DoCastSelf 71718 base variant +
+	// Talk(SAY_TALDARAM_SPECIAL 2), {20000,30000}ms); valanar
+	// EVENT_BERSERK (DoCastSelf 50334 + Talk(SAY_VALANAR_BERSERK 5),
+	// 600000ms one-shot) — timers GUID-keyed via CreateLuaEvent,
+	// cancelled on events 2/4/23 (the falric idiom). Out legs:
 	// Talk(SelectInvocationSay()) rides ACTION_CAST_INVOCATION
 	// (no-DoAction bridge); the controller's EVENT_INVOCATION_OF_BLOOD
 	// Talk(textId) is cross-AI Talk on a scheduler leg (no bridge);
-	// keleseth Talk(EMOTE_KELESETH_BERSERK / SAY_KELESETH_SPECIAL),
-	// taldaram Talk(EMOTE_TALDARAM_FLAME / EMOTE_TALDARAM_BERSERK /
-	// SAY_TALDARAM_SPECIAL), valanar Talk(SAY_VALANAR_BERSERK /
-	// SAY_VALANAR_SPECIAL / EMOTE_VALANAR_SHOCK_VORTEX) ride
-	// scheduler legs (no-timer-bridge). boss_blood_council_controller
+	// the _isEmpowered variants (keleseth 71815, taldaram 72040,
+	// valanar 72039) ride the unbridged invocation machine; valanar
+	// EVENT_KINETIC_BOMB and the base EVENT_SHOCK_VORTEX leg are
+	// random-target SelectTarget casts (out); the heroic-gated
+	// shadow-prison engage casts have no IsHeroic bridge.
+	// boss_blood_council_controller
 	// has zero own Talk lines — not registered (the bronjahm
 	// npc_corrupted_soul_fragment precedent); npc_blood_queen_lana_thel
 	// Talk(SAY_INTRO_1) rides the ACTION_START_INTRO DoAction leg
@@ -10495,15 +10509,18 @@ func init() {
 	// ACTION_CAPTAIN_DIES DoAction leg (no-DoAction bridge);
 	// Talk(EMOTE_SVALNA_BROKEN_SHIELD 8) rides the SPELL_HURL_SPEAR
 	// SpellHit arm (event 15 never fires); Talk(EMOTE_SVALNA_IMPALE
-	// 7) rides the SpellHitTarget leg (no bridge);
-	// Talk(SAY_SVALNA_EVENT_START 0 / SAY_SVALNA_RESURRECT_CAPTAINS
-	// 2 / SAY_SVALNA_AGGRO 3) ride scheduler legs (no-timer-bridge).
-	// npc_crok_scourgebane (EscortAI) joins the escort queue (NOT
-	// registered); npc_frostwing_ymirjar_vrykul and
-	// npc_impaling_spear have zero Talk lines (NOT registered); the
-	// 3 spell scripts join the no-SpellScript-bridge queue and
-	// at_icc_start_frostwing_gauntlet the no-AreaTrigger queue —
-	// documented in the lua header. Tenth group of the
+	// 7) rides the SpellHitTarget leg (no bridge); JustEngagedWith
+	// DoCastSelf(SPELL_DIVINE_SURGE 71465, true) + the
+	// EVENT_SVALNA_COMBAT Talk(SAY_SVALNA_AGGRO 3) one-shot (9s) port
+	// under the CreateLuaEvent doctrine (event 1, the auriaya
+	// engage-port precedent); the impaling-spear
+	// scheduler leg (random-target, no bridge) and the gauntlet-action
+	// scheduler legs stay out (no-DoAction bridge; the gothik
+	// phase-machine precedent) — documented in the lua header.
+	// npc_impaling_spear (38248) has zero bridgeable arms (NOT
+	// registered); the 3 spell scripts join the no-SpellScript-bridge
+	// queue and at_icc_start_frostwing_gauntlet the no-AreaTrigger
+	// queue — documented in the lua header. Tenth group of the
 	// "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_sister_svalna", 37126)
 
@@ -10528,6 +10545,63 @@ func init() {
 	RegisterLuaBoss("npc_captain_brandon", 37123)
 	RegisterLuaBoss("npc_captain_grondel", 37124)
 	RegisterLuaBoss("npc_captain_rupert", 37125)
+
+	// npc_crok_scourgebane: Icecrown Citadel Frostwing Halls gauntlet
+	// escort, entry 37129 (icecrown_citadel.h NPC_CROK_SCOURGEBANE —
+	// kalecgos pass; binding instance-shimmed / DB-side). Ported arms
+	// in lua_scripts/northrend/boss_sister_svalna.lua: the
+	// Reset-seeded EVENT_SCOURGE_STRIKE (DoCastVictim 71488,
+	// {7500,12500}ms, re-armed {10000,14000}ms) and
+	// EVENT_DEATH_STRIKE (DoCastVictim 71489 gated on
+	// HealthBelowPct(20), {25000,30000}ms, re-armed {5000,10000}ms)
+	// re-keyed to event 1 (the falric idiom). The gauntlet intro /
+	// waypoint / DoAction / DamageTaken arms have no bridge —
+	// documented in the lua header. Tenth group of the
+	// "// Icecrown Citadel" block.
+	RegisterLuaBoss("npc_crok_scourgebane", 37129)
+
+	// npc_frostwing_ymirjar_vrykul (one entry per ymirjar type):
+	// 37132 battle maiden, 38125 deathbringer, 37127 frostbinder,
+	// 37134 huntress, 37133 warlord (icecrown_citadel.h
+	// NPC_YMIRJAR_* — kalecgos pass; bindings instance-shimmed /
+	// DB-side). Ported arms in
+	// lua_scripts/northrend/boss_sister_svalna.lua: the
+	// JustEngagedWith-seeded timer casts re-keyed to event 1 —
+	// frostbinder DoCastSelf 71270 + frozen orb (DoCastSelf 71274,
+	// {5000,10000}ms, re-armed {10000,20000}ms); battle maiden
+	// barbaric strike (DoCastVictim 71257, {5000,8000}ms, re-armed
+	// {2000,4000}ms) + adrenaline rush (AddAura 71258,
+	// {10000,20000}ms); warlord whirlwind (DoCastAOE 41056,
+	// {5000,8000}ms, re-armed {6000,12000}ms) + JustDied RemoveAura
+	// 71244 (event 4); huntress rapid shot (DoCastVictim 71251,
+	// {10000,20000}ms, re-armed {20000,30000}ms) + shoot
+	// (DoCastVictim 71253, 1000ms, re-armed 2000ms); deathbringer
+	// shadow bolt (DoCastVictim 71296, {6000,12000}ms, re-armed
+	// {5000,8000}ms) + death embrace (DoCastVictim 71299,
+	// {5000,10000}ms, re-armed {10000,20000}ms) — timers GUID-keyed
+	// via CreateLuaEvent, cancelled on events 2/4/23. The
+	// random-target / summon / OOC / 25man arms have no bridge —
+	// documented in the lua header. Tenth group of the
+	// "// Icecrown Citadel" block.
+	RegisterLuaBoss("npc_ymirjar_battle_maiden", 37132)
+	RegisterLuaBoss("npc_ymirjar_deathbringer", 38125)
+	RegisterLuaBoss("npc_ymirjar_frostbinder", 37127)
+	RegisterLuaBoss("npc_ymirjar_huntress", 37134)
+	RegisterLuaBoss("npc_ymirjar_warlord", 37133)
+
+	// npc_captain_* undead variants: 37491 Arnath, 37493 Brandon,
+	// 37494 Grondel, 37495 Rupert (icecrown_citadel.h
+	// NPC_CAPTAIN_*_UNDEAD — kalecgos pass; bindings DB-side). C++
+	// switches entry via UpdateEntry() on SPELL_REVIVE_CHAMPION hit
+	// without replacing the AI; Eluna dispatches by current entry,
+	// so the undead entries share the npc_argent_captains.lua
+	// handlers (event 1 idempotent; per-cast spell variants resolve
+	// via GetEntry()). Tenth group of the "// Icecrown Citadel"
+	// block.
+	RegisterLuaBoss("npc_captain_arnath_undead", 37491)
+	RegisterLuaBoss("npc_captain_brandon_undead", 37493)
+	RegisterLuaBoss("npc_captain_grondel_undead", 37494)
+	RegisterLuaBoss("npc_captain_rupert_undead", 37495)
 
 	// npc_the_lich_king_controller: Icecrown Citadel script, entry 16980
 	// (icecrown_citadel.h NPC_THE_LICH_KING_VALITHRIA — kalecgos pass; the
