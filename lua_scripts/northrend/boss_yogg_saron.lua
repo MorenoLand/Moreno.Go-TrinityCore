@@ -71,15 +71,28 @@
 -- bridge.
 -- Sara JustSummoned — Talk(SAY_SARA_DEATH_RAY) on
 -- NPC_DEATH_ORB summon — no JustSummoned bridge.
--- Sara timer Talks — Talk(SAY_SARA_TRANSFORM_2/3/4) on
--- EVENT_TRANSFORM_1/2/3 — no timer-event bridge; join the
--- no-timer-bridge queue.
--- Yogg-Saron timer Talks — Talk(SAY_YOGG_SARON_SPAWN) on
--- EVENT_YELL_BOW_DOWN; Talk(EMOTE_YOGG_SARON_EMPOWERING_SHADOWS)
--- on EVENT_SHADOW_BEACON; Talk(SAY_YOGG_SARON_DEAFENING_ROAR)
--- + Talk(EMOTE_YOGG_SARON_DEAFENING_ROAR) on
--- EVENT_DEAFENING_ROAR — no timer-event bridge; join the
--- no-timer-bridge queue.
+-- Sara timer Talks — 2026-10-14 retraction re-audit: none ported on
+-- combat-start timers; all six are phase-gated with unbridged schedule
+-- legs (stale "no-timer-bridge" claim RETRACTED — CreateLuaEvent is a
+-- real bridge; gating is the blocker, gothik precedent).
+-- EVENT_TRANSFORM_1/2/3 (:821-827, Talk 7/8 + full-heal/DoAction arm)
+-- — scheduled one-shot 4700/9500/14300ms from boss_saraAI::DamageTaken
+-- (:732-734, PHASE_TRANSFORM) on lethal damage with a
+-- damage=health-1 rewrite (:719-722), PHASE_ONE gate (:726), and
+-- cross-creature voice->AI()->DoAction(ACTION_PHASE_TRANSFORM)
+-- (:728-729); TRANSFORM_3 itself carries cross-creature
+-- DoAction(ACTION_PHASE_TWO) legs (:831/:833) — no
+-- DamageTaken / phase / DoAction bridges.
+-- Yogg-Saron timer Talks — EVENT_YELL_BOW_DOWN (:993-995, Talk id 0,
+-- one-shot 3s) fires from Reset (:935) on the voice's cross-creature
+-- summon-driven Reset with SetPhase(PHASE_TWO) (:935-945; yogg is
+-- PassiveAI, never enters combat) — no summon-driven-Reset bridge.
+-- EVENT_SHADOW_BEACON (:996-1000, DoCastAOE 64465 + Emote 7, 45s
+-- repeat) + EVENT_DEAFENING_ROAR (:1006-1011, DoCastAOE 64189 +
+-- Talk 4/Emote 5, {20s,25s} repeat) — scheduled from cross-creature
+-- DoAction(ACTION_PHASE_THREE) (:1024/:1027, PHASE_THREE), deafening
+-- roar additionally gated on Is25ManRaid + instance DATA_KEEPERS_COUNT
+-- (:1026) — no DoAction / instance-data bridges.
 -- Yogg-Saron DoAction(ACTION_PHASE_THREE) —
 -- Talk(SAY_YOGG_SARON_PHASE_3) — no DoAction bridge; joins
 -- the no-DoAction-bridge queue.

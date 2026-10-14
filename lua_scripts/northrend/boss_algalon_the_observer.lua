@@ -57,20 +57,30 @@
 -- SPELL_SELF_STUN self-cast, summons.DespawnAll, EVENT_OUTRO_START ...)
 -- — no Talk arm in this branch; a lone damage=0 return would strand the
 -- boss unkillable without the outro, so it is not modeled.
--- Timer Talks — Talk(SAY_ALGALON_INTRO_1 0) (EVENT_INTRO_1),
--- Talk(SAY_ALGALON_INTRO_2 1) (EVENT_INTRO_2),
--- Talk(SAY_ALGALON_INTRO_3 2) (EVENT_INTRO_3),
--- Talk(SAY_ALGALON_AGGRO 4) (EVENT_INTRO_TIMER_DONE, first pull),
--- Talk(SAY_ALGALON_COLLAPSING_STAR 5) +
--- Talk(EMOTE_ALGALON_COLLAPSING_STAR 6) (EVENT_SUMMON_COLLAPSING_STAR),
--- Talk(SAY_ALGALON_BIG_BANG 7) + Talk(EMOTE_ALGALON_BIG_BANG 8)
--- (EVENT_BIG_BANG), Talk(SAY_ALGALON_ASCEND 9)
--- (EVENT_ASCEND_TO_THE_HEAVENS),
--- Talk(EMOTE_ALGALON_COSMIC_SMASH 10) (EVENT_COSMIC_SMASH), the outro
--- Talks Talk(SAY_ALGALON_OUTRO_1..5 12..16) (EVENT_OUTRO_6..10) and the
--- despawn Talks Talk(SAY_ALGALON_DESPAWN_1..3 17..19)
--- (EVENT_DESPAWN_ALGALON_1..3) — the timer event machine has no bridge;
--- all join the no-timer-bridge queue.
+-- Timer Talks — 2026-10-14 retraction re-audit (C++ line refs): none
+-- ported on combat-start timers; every arm rides an unbridged machine
+-- (stale "no-timer-bridge" claim RETRACTED — CreateLuaEvent is a real
+-- bridge; the blocker is machine gating, gothik precedent).
+-- COLLAPSING_STAR (18s+introDelay, :594-599) — Talk 5/6 + SummonCreature x4;
+-- BIG_BANG (90s+introDelay, :601-616) — Talk 7/8 + SetPhase(PHASE_BIG_BANG)
+-- + constellation DoAction(ACTION_BIG_BANG) + DoCastAOE(64443): unbridged
+-- summon leg / phase machine; Talk-only ports would fire with no stars /
+-- no phase context — stay out (their cast companions live on other arms).
+-- Intro machine: Talk 0/1/2 (:529/:541/:546, EVENT_INTRO_1..3) chained under
+-- PHASE_ROLE_PLAY from DoAction(ACTION_START_INTRO) (:328, Brann-summoned
+-- pre-combat) — pre-combat roleplay, porting on combat-start timers would
+-- fabricate them mid-fight. EVENT_INTRO_TIMER_DONE (:560-584) has NO Talk
+-- arm (header correction this run) — pure machinery (SetPhase(NORMAL),
+-- constellation summons); Talk(AGGRO 4) fires in JustEngagedWith
+-- non-first-pull (:372) and EVENT_START_COMBAT (:555, 16s, first-pull only).
+-- Outro machine: Talk 12..16 (:664-682, EVENT_OUTRO_6..10) chained from the
+-- DamageTaken _fightWon branch (:483-495) via MovementInform spline arrival
+-- (:413) and a Brann-summon DoAction(:657-661) — unbridged; a Talk-only
+-- port would strand the boss without the outro.
+-- Despawn machine: Talk 17..19 (:689-697, 5s/17s/26s) on
+-- DoAction(EVENT_DESPAWN_ALGALON) — fired by the instance script on the
+-- one-hour instance timer (instance_ulduar.cpp:774/1009, ulduar.h:499), not
+-- combat — no bridge.
 -- npc_brann_bronzebeard_algalon (34064 entry-verifiable, ulduar.h line
 -- 230) — Talk(SAY_BRANN_ALGALON_INTRO_1 0) (EVENT_BRANN_SAY_INTRO_1),
 -- Talk(SAY_BRANN_ALGALON_INTRO_2 1) (DoAction ACTION_INTRO_2),

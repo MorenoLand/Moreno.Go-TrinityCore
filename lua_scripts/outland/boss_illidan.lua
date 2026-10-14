@@ -16,18 +16,39 @@
 -- enum (line 79). Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_illidan\b" hits boss_illidan.cpp (+ the loader decl/call
 -- lines) only.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
--- Ported arms (C++-exact for all modeled arms):
+-- 2026-10-14 retraction re-audit: this file is now a REGISTRATION-FREE
+-- audit record (registration removed 2026-10-12 — event 3 double-fired
+-- with lua_scripts/blacktemple/boss_illidan.lua, which is the PRIMARY
+-- port). The stale "no-timer-bridge" doctrine claims below are
+-- RETRACTED: CreateLuaEvent is a real registered bridge
+-- (engine/scripting/runtime.go:798); arms carry their real gating legs.
+-- Ported arms (C++-exact for all modeled arms — live in
+-- blacktemple/boss_illidan.lua, verified this run):
 -- boss_illidan_stormrageAI::KilledUnit — Talk(SAY_ILLIDAN_KILL 1)
 -- (line 520) gated on victim->GetTypeId() == TYPEID_PLAYER — the
 -- razuvious player-gated precedent (event 3).
--- DOCUMENTED-ONLY (in this header; only entry 22917 registered):
+-- EVENT_TAUNT (:500 sched {30s,60s} GROUP_PHASE_ALL; arm :1009-1011
+-- Talk(SAY_ILLIDAN_TAUNT 7), Repeat{30s,60s}) — plain ungated combat
+-- timer; GROUP_PHASE_ALL is never cancelled in the file (cancels target
+-- only PHASE_1/2/3/DEMON groups) — ported.
+-- EVENT_BERSERK (specialEvents :498 25min one-shot; arm :770-772
+-- Talk(SAY_ILLIDAN_ENRAGE 6) + DoCastSelf(SPELL_BERSERK 45078, true) —
+-- NO Repeat arm, one-shot confirmed) — never cancelled by the phase
+-- machine; specialEvents.Reset() only on evade (:547), outro (:638),
+-- death (:765) — maps to blacktemple's 2/4/23 cancels — ported as a
+-- 25min single-shot.
+-- DOCUMENTED-ONLY (in this header; no registrations):
 -- boss_illidan_stormrageAI::Reset — _Reset() + SummonCreatureGroup(1) +
 -- LoadEquipment(1) + sheath ROOT legs + instance akama intro leg —
 -- no-instance / no-equipment bridges — documented-only.
--- boss_illidan_stormrageAI::JustEngagedWith — no Talk: dual-wield +
--- music + EVENT_EVADE_CHECK/EVENT_BERSERK/EVENT_TAUNT schedules + phase-1
--- machine — no-timer / no-music bridges — documented-only.
+-- boss_illidan_stormrageAI::JustEngagedWith (:491-500) — no Talk arm:
+-- dual-wield + music GO (no-music bridge) + schedules —
+-- EVENT_EVADE_CHECK (:497 specialEvents, arm :782-784 EnterEvadeModeIfNeeded
+-- map-wide alive-player IsInBoundary scan — no bridge) stays out;
+-- EVENT_BERSERK / EVENT_TAUNT arms are ported in blacktemple (above);
+-- ScheduleEvents(GROUP_PHASE_1, GROUP_PHASE_1) (:499) — the phase-1
+-- machine whose 65%-health CancelEventGroup (:602) blacktemple bridges
+-- via its event-9 health-latch cancelPhaseSchedule.
 -- boss_illidan_stormrageAI::JustDied — no Talk: RemoveFlag +
 -- SetBossState(DONE) — no-instance bridge — documented-only.
 -- boss_illidan_stormrageAI::DamageTaken — health-lock intro (ACTION_START_OUTRO,
@@ -41,46 +62,90 @@
 -- ACTION_FLAME_DEAD / ACTION_FINALIZE_AIR_PHASE / ACTION_START_PHASE_4 /
 -- ACTION_ILLIDAN_CAGED / ACTION_START_OUTRO — no-action / no-instance /
 -- no-motion / no-cast bridges — documented-only.
--- boss_illidan_stormrageAI::UpdateAI + ExecuteSpecialEvents — the whole timer
--- machine (EVENT_START_INTRO/UNCONVINCED/PREPARED intro Talks 9/10/8,
--- EVENT_FLAME_CRASH/DRAW_SOUL/SHEAR/PARASITIC_SHADOWFIEND/MINIONS_WEAVE,
--- air-phase legs EVENT_FLY/THROW_WARGLAIVE x2/FACE_MIDDLE/
--- FLY_TO_RANDOM_PILLAR/FIREBALL/EYE_BLAST (Talk SAY_ILLIDAN_EYE_BLAST 4)/
--- DARK_BARRAGE/GLAIVE_EMOTE/RESUME_COMBAT, EVENT_AGONIZING_FLAMES,
--- EVENT_DEMON (Talk SAY_ILLIDAN_MORPH 5)/EVENT_DEMON_TEXT/
--- EVENT_SCHEDULE_DEMON_SPELLS/CANCEL_DEMON_FORM/RESUME_COMBAT_DEMON,
--- demon-form legs EVENT_SHADOW_BLAST/FLAME_BURST/SHADOW_DEMON,
--- phase-4 legs EVENT_SHADOW_PRISON_TEXT (Talk SAY_ILLIDAN_SHADOW_PRISON 11)/
--- EVENT_SUMMON_MAIEV/EVENT_CONFRONT_MAIEV_TEXT (Talk
--- SAY_ILLIDAN_CONFRONT_MAIEV 12)/EVENT_RESUME_COMBAT_PHASE_4/EVENT_FRENZY
--- (Talk SAY_ILLIDAN_FRENZY 13)/EVENT_TAUNT (Talk SAY_ILLIDAN_TAUNT 7),
--- outro legs EVENT_DEFEATED_TEXT (Talk SAY_ILLIDAN_DEFEATED 14)/
--- EVENT_QUIET_SUICIDE, specialEvents EVENT_BERSERK (Talk SAY_ILLIDAN_ENRAGE 6)/
--- EVENT_EVADE_CHECK) — no-timer / no-cast / no-summon / no-motion /
--- no-random-target bridges — documented-only.
+-- boss_illidan_stormrageAI::UpdateAI + ExecuteSpecialEvents — re-grounded
+-- 2026-10-14: phase/machine-gated stay-outs (gothik precedent — porting
+-- gated arms on combat-start timers fabricates behavior):
+-- GROUP_PHASE_1 arms (:528-531, cancelled :602 on the 65%-health
+-- ACTION_START_PHASE_2): EVENT_FLAME_CRASH (:828-830, DoCastVictim
+-- 40832), EVENT_DRAW_SOUL (:832-834, DoCastAOE 40904 — SpellScript-
+-- delivered, no bridge), EVENT_SHEAR (:836-838, DoCastVictim 41032),
+-- EVENT_PARASITIC_SHADOWFIEND (:840-843, random-target 41917 + summon-
+-- machine legs) — blacktemple ports them under its health-latch
+-- cancelPhaseSchedule; that phase modeling is standing design, not
+-- re-audited this tick.
+-- Air phase (all scheduled only from MovementInform(POINT_RANDOM_PILLAR)
+-- :676-680, downstream of the 65%-health ACTION_START_PHASE_2 :596-603):
+-- EVENT_FLY (:884)/MOVE_TO_WARGLAIVE_POINT (:851)/THROW_WARGLAIVE x2
+-- (:872-879)/FACE_MIDDLE (:896-900)/CHANGE_ORIENTATION (:881-882)/
+-- GLAIVE_EMOTE (:928-932)/RESUME_COMBAT (:934-940, music GO 11729),
+-- EVENT_FLY_TO_RANDOM_PILLAR (:888-894), EVENT_FIREBALL (:923-926,
+-- random-target 40598), EVENT_EYE_BLAST (:902-912, NPC summon leg +
+-- Talk SAY_ILLIDAN_EYE_BLAST 4 + DoCast 39908 + motion),
+-- EVENT_DARK_BARRAGE (:914-921, random-target 40585 + reschedule legs)
+-- — motion / summon / music / machine legs, no bridges.
+-- GROUP_PHASE_3 (from motion-gated RESUME_COMBAT :934-940, cancelled by
+-- EVENT_DEMON :947 / ACTION_START_PHASE_4 :624): EVENT_AGONIZING_FLAMES
+-- (:941-943, DoCastSelf 40834 — SpellScript-delivered, no bridge).
+-- EVENT_DEMON (:945-953, demon machine: SetControlled, _isDemon latch,
+-- LoadEquipment, DoCastSelf 40511 triggered, 1min12s CANCEL_DEMON_FORM,
+-- EVENT_SCHEDULE_DEMON_SPELLS threat reset + GROUP_PHASE_DEMON) /
+-- EVENT_DEMON_TEXT (:959-960, Talk SAY_ILLIDAN_MORPH 5) /
+-- EVENT_CANCEL_DEMON_FORM (:774-781) / EVENT_RESUME_COMBAT_DEMON
+-- (:962-967) / GROUP_PHASE_DEMON arms (:545-547 scheduled from the demon
+-- machine: EVENT_SHADOW_BLAST :977-979 DoCastVictim 41078;
+-- EVENT_FLAME_BURST :970-972 DoCastSelf 41126; EVENT_SHADOW_DEMON
+-- :974-975 DoCastSelf 41117 summon leg) — DoAction / flag / equipment /
+-- summon legs, no bridges.
+-- Phase 4 (30%-health ACTION_START_PHASE_4 :624-629/:747-760): EVENT_FRENZY
+-- (:1004-1007, DoCastSelf 40683 + Talk SAY_ILLIDAN_FRENZY 13, Repeat 40s),
+-- EVENT_SHADOW_PRISON_TEXT (:984-986, Talk SAY_ILLIDAN_SHADOW_PRISON 11,
+-- 500ms from :629) / EVENT_SUMMON_MAIEV (:988-992, summon 40403 +
+-- cross-creature) / EVENT_CONFRONT_MAIEV_TEXT (:994-996, Talk 12) /
+-- EVENT_RESUME_COMBAT_PHASE_4 (:998-1001, cross-creature summons.DoAction)
+-- — health-DoAction / summon / cross-creature legs, no bridges.
+-- Intro chain (ACTION_START_ENCOUNTER :576-586, cross-creature from Akama,
+-- PHASE_INTRO): EVENT_START_INTRO (:810-811, Talk SAY_ILLIDAN_DUPLICITY 8)/
+-- EVENT_UNCONVINCED (:813-815, Talk 9)/EVENT_PREPARED (:817-820, Talk 10)/
+-- EVENT_ENCOUNTER_START (:822-826, SetImmuneToAll + DoZoneInCombat +
+-- cross-creature akama DoAction) — action / cross-creature / pre-combat
+-- gating, no bridges.
+-- Outro (ACTION_START_OUTRO from DamageTaken death-latch :640-642):
+-- EVENT_DEFEATED_TEXT (:1013-1017, Talk SAY_ILLIDAN_DEFEATED 14 + music GO
+-- 11728 — no-music bridge) / EVENT_QUIET_SUICIDE (:1019-1030,
+-- DoCastSelf 3617 triggered + cross-creature akama DoAction +
+-- summons.DespawnIf instance-GUID) — no bridges.
+-- EVENT_MINIONS_WEAVE (:845-849, SummonMinions() — no summon bridge;
+-- ACTION_START_MINIONS_WEAVE-gated) — no bridges.
 -- boss_illidan_stormrageAI::MovementInform — POINT_THROW_GLAIVE /
 -- POINT_RANDOM_PILLAR / POINT_ILLIDAN_MIDDLE (glaive-returns leg) —
 -- no-motion / no-cast bridges — documented-only.
--- npc_akama_illidan — gossip handlers (GOSSIP_START_INTRO/FIGHT),
--- MovementInform Talks (SAY_AKAMA_FINISH 8 / SAY_AKAMA_BETRAYER 3), the
--- timer machine (EVENT_AKAMA_SAY_DOOR 0 / SAY_ALONE 1 / spirit ALONE Talks /
--- SAY_SALUTE 2 / SAY_FREE 4 / SAY_TIME_HAS_COME 5 / SAY_MINIONS 6 /
--- SAY_LIGHT 7), DamageTaken health-lock, ACTION_OPEN_DOOR/FREE/
--- START_ENCOUNTER/START_MINIONS/START_OUTRO legs — no-gossip /
--- no-motion / no-timer / no-instance / no-cast / no-action bridges —
--- documented-only (NOT registered — boss companion-AI precedent).
+-- npc_akama_illidan (NOT registered — boss companion-AI precedent) —
+-- gossip handlers (GOSSIP_START_INTRO/FIGHT, no-gossip bridge),
+-- MovementInform Talks (SAY_AKAMA_FINISH 8 / SAY_AKAMA_BETRAYER 3 —
+-- no-motion bridge), timer Talks (EVENT_AKAMA_SAY_DOOR 0 / SAY_ALONE 1 /
+-- spirit ALONE Talks / SAY_SALUTE 2 / SAY_FREE 4 / SAY_TIME_HAS_COME 5 /
+-- SAY_MINIONS 6 / SAY_LIGHT 7 :1232-1300 — companion not registered),
+-- teleport/minions legs (:1318-1329 — POINT_TELEPORT + DoCastSelf 41077
+-- SpellScript-delivered), EVENT_HEALING_POTION (:1309-1312 health-gated
+-- ACTION chain), EVENT_CHAIN_LIGHTNING (:1332-1334 PHASE_MINIONS
+-- action-gated), outro motion chain (:1336-1352 Talk 7 + DoCastSelf
+-- 41242 SpellScript-delivered), DamageTaken health-lock, ACTION legs
+-- (OPEN_DOOR/FREE/START_ENCOUNTER/START_MINIONS/START_OUTRO —
+-- no-action bridge) — documented-only.
 -- npc_parasitic_shadowfiend / npc_blade_of_azzinoth / npc_flame_of_azzinoth
 -- (JustDied ACTION_FLAME_DEAD leg) / npc_illidan_db_target /
 -- npc_shadow_demon / npc_cage_trap_trigger / npc_illidari_elite /
 -- npc_illidan_generic_fire — scheduler-driven add machines, all zero-Talk
 -- — no-timer / no-cast / no-instance / no-motion bridges — documented-only
 -- (NOT registered — boss companion-AI precedent).
--- npc_maiev — zero bridgeable arms: DamageTaken Talk(SAY_MAIEV_SHADOWSONG_DOWN
--- 4, me) is damage-gated, not one of the four bridgeable Talk sites;
--- DoAction ACTION_START_OUTRO Talk(SAY_MAIEV_SHADOWSONG_FINISHED 5) rides
--- no-action; JustAppeared/UpdateAI timer machine (APPEAR 1 / JUSTICE 2 /
--- TRAP 3 / TAUNT 0 / OUTRO 6 / FAREWELL 7) rides no-timer — documented-only
--- (NOT registered).
+-- npc_maiev (NOT registered) — DamageTaken Talk(SAY_MAIEV_SHADOWSONG_DOWN
+-- 4) is damage-gated (:1682-1686); DoAction ACTION_START_OUTRO
+-- Talk(SAY_MAIEV_SHADOWSONG_FINISHED 5) rides no-action; timer arms
+-- (:1688-1732 — APPEAR 1 / JUSTICE 2 / TRAP 3 with cross-creature illidan
+-- CAGED_TRAP_TELEPORT + DoCastSelf 40694 summon / SHADOW_STRIKE /
+-- THROW_DAGGER / TAUNT 0 / OUTRO 6 / FAREWELL 7 + DoCastSelf 41236 +
+-- despawn) ride the companion-not-registered / DoAction / summon legs —
+-- documented-only.
 -- 21 SpellScriptLoaders (spell_illidan_akama_teleport / akama_door_channel /
 -- draw_soul / parasitic_shadowfiend / parasitic_shadowfiend_proc /
 -- remove_parasitic_shadowfiend / throw_warglaive / tear_of_azzinoth_channel /
