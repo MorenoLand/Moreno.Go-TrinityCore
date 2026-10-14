@@ -124,14 +124,17 @@ end
 -- SPELL_ENERVATING_BRAND holders; 13s init, Repeat(26s). Deviation: no
 -- difficulty bridge, count fixed at the 10-man value of 2 (the
 -- jaraxxus/kelidan precedent); the aura-exclusion is bridged via
--- HasAura (the netherspite precedent).
+-- HasAura (the netherspite precedent); targets are picked without
+-- replacement (table.remove) — C++ re-runs SelectTarget per iteration
+-- with the -SPELL_ENERVATING_BRAND filter, so the same target is never
+-- picked twice (the putricide randomPlayers precedent).
 local function enervatingBrandTick(creature, guid)
     local candidates = randomTargetsNoBrand(creature, 45)
     for i = 1, 2 do
         if #candidates == 0 then
             break
         end
-        local target = candidates[math.random(#candidates)]
+        local target = table.remove(candidates, math.random(#candidates))
         creature:CastSpell(target, SPELL_ENERVATING_BRAND)
     end
     schedule(guid, "enervatingbrand", 26000, function()
