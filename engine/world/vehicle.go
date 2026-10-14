@@ -603,10 +603,15 @@ func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
 	// Player.cpp:21193-21208: the bar carries MAX_CREATURE_SPELLS (8)
 	// creature spells packed with MAKE_UNIT_ACTION_BUTTON(spellId, i+8); the
 	// last two of the 10 slots are always zero. Spells past index 7 never
-	// reach the client in C++.
+	// reach the client in C++. An empty/invalid slot still carries the i+8
+	// type byte (the u16(0)/u8(0)/u8(i+8) miss arm), not a bare zero; the
+	// condition-fail arm shares that shape but the condition manager has no
+	// Go bridge.
 	for i := 0; i < 10; i++ {
 		if i < 8 && i < len(spells) && spells[i] > 0 {
 			buf.WriteU32(spells[i] | (uint32(i+8) << 24))
+		} else if i < 8 {
+			buf.WriteU32(uint32(i+8) << 24)
 		} else {
 			buf.WriteU32(0)
 		}

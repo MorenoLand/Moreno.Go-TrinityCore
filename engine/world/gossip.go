@@ -1005,9 +1005,10 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 			// Hidden without an active hunter pet carrying learned talent
 			// spells, or when the creature isn't a valid pet-talent trainer
 			// (Creature::CanResetTalents(pet), Creature.cpp:1303). The
+			// getPetType()!=HUNTER_PET arm is the hunter-type query; the
 			// m_spells.size()<=1 proxy is folded into the learned-talent
 			// check: a pet with no learned talents has nothing to unlearn.
-			if s.activePetNumber() == 0 || !s.canResetPetTalents(ctx, creatureGUID) || len(s.activePetLearnedTalentSpells(ctx)) == 0 {
+			if s.activePetNumber() == 0 || !s.activePetIsHunterType(ctx) || !s.canResetPetTalents(ctx, creatureGUID) || len(s.activePetLearnedTalentSpells(ctx)) == 0 {
 				continue
 			}
 		}

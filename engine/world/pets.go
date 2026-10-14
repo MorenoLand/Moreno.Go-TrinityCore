@@ -950,6 +950,21 @@ func (s *session) activePetLearnedTalentSpells(ctx context.Context) []uint32 {
 	return spells
 }
 
+// activePetIsHunterType reports whether the active pet's stored type is
+// HUNTER_PET (PetDefines.h:32) — the getPetType()!=HUNTER_PET arm of the
+// GOSSIP_OPTION_UNLEARNPETTALENTS visibility gate (Player.cpp:14462).
+func (s *session) activePetIsHunterType(ctx context.Context) bool {
+	petNumber := s.activePetNumber()
+	if petNumber == 0 || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var petType int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType); err != nil {
+		return false
+	}
+	return petType == int64(petTypeHunter)
+}
+
 // resetActivePetTalents mirrors Player::ResetPetTalents (Player.cpp:9612) +
 // Pet::resetTalents (Pet.cpp:1629): the active hunter pet's learned talent
 // spells are removed and the pet talent/spell frames resent. No-op when there
