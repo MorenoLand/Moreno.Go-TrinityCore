@@ -30,13 +30,14 @@
 -- victim:GetObjectType() == "Player" — nalorakk precedent);
 -- JustDied Talk(EMOTE_ACTIVATE_ALTAR 7) + Talk(SAY_DEATH 2)
 -- (event 4).
+-- EVENT_GROUND_TREMOR (18s init, 10s repeat; 50% Talk(SAY_QUAKE 4)),
+-- EVENT_NUMBLING_SHOUT (10s init, 10s repeat),
+-- EVENT_DETERMINED_STAB (20s init, 8s repeat) — all DoCastAOE,
+-- ported as self-casts (creature:CastSpell(creature, spell): the
+-- DoCastAOE self-cast lowering — arugal precedent); the
+-- _transformed variant selection rides a local per-GUID latch set
+-- in transformTick, matching C++ SpellHit(55098).
 -- Unmodeled (no bridges — documented, not wired):
--- EVENT_GROUND_TREMOR / EVENT_NUMBLING_SHOUT / EVENT_DETERMINED_STAB
--- — all DoCastAOE (Ground Tremor 55142 / Quake 55101, Numbing Shout
--- 55106 / Numbing Roar 55100, Determined Stab 55104 / Determined
--- Gore 55102): no DoCastAOE bridge on the Lua surface (zero hits —
--- terestian / shazzrah precedent); the _transformed variant
--- selection is moot with the casts unbridged.
 -- EVENT_PHANTOM (Reset-scheduled 21s -> 20-25s, PHASE_INTRO only) —
 -- no phase bridge (SetPhase/IsInPhase zero hits on the Lua surface)
 -- and no faithful pre-pull Reset trigger, so the pre-pull summon
@@ -70,8 +71,15 @@ local EMOTE_ACTIVATE_ALTAR = 7
 local SPELL_MOJO_FRENZY = 55163
 local SPELL_TRANSFORMATION = 55098
 local SPELL_SUMMON_PHANTOM_TRANSFORM = 55097
+local SPELL_GROUND_TREMOR = 55142
+local SPELL_QUAKE = 55101
+local SPELL_NUMBING_SHOUT = 55106
+local SPELL_NUMBING_ROAR = 55100
+local SPELL_DETERMINED_STAB = 55104
+local SPELL_DETERMINED_GORE = 55102
 
 local timers = {}
+local transformed = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -101,11 +109,40 @@ end
 -- C++ SpellHit(55098) leg cancels the event once the transformation
 -- lands (see header), so no reschedule is the C++-exact behavior.
 local function transformTick(creature, guid)
-    timers[guid] = nil
+    transformed[guid] = true
     creature:Talk(EMOTE_BEGIN_TRANSFORM)
     creature:Talk(SAY_TRANSFORM)
     creature:CastSpell(creature, SPELL_TRANSFORMATION)
     creature:CastSpell(creature, SPELL_SUMMON_PHANTOM_TRANSFORM, true)
+end
+
+-- C++ EVENT_GROUND_TREMOR: DoCastAOE; 18s init, 10s repeat; 50%
+-- Talk(SAY_QUAKE); _transformed selects Quake 55101 over
+-- Ground Tremor 55142.
+local function tremorTick(creature, guid)
+    if math.random(2) == 1 then
+        creature:Talk(SAY_QUAKE)
+    end
+    creature:CastSpell(creature, transformed[guid] and SPELL_QUAKE or SPELL_GROUND_TREMOR)
+    schedule(guid, "tremor", 10000, function()
+        tremorTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_NUMBLING_SHOUT: DoCastAOE; 10s init, 10s repeat.
+local function numbingTick(creature, guid)
+    creature:CastSpell(creature, transformed[guid] and SPELL_NUMBING_ROAR or SPELL_NUMBING_SHOUT)
+    schedule(guid, "numbing", 10000, function()
+        numbingTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_DETERMINED_STAB: DoCastAOE; 20s init, 8s repeat.
+local function stabTick(creature, guid)
+    creature:CastSpell(creature, transformed[guid] and SPELL_DETERMINED_GORE or SPELL_DETERMINED_STAB)
+    schedule(guid, "stab", 8000, function()
+        stabTick(creature, guid)
+    end)
 end
 
 local function moorabiEnterCombat(event, creature, target)
@@ -113,6 +150,16 @@ local function moorabiEnterCombat(event, creature, target)
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_MOJO_FRENZY, true)
+    transformed[guid] = false
+    schedule(guid, "tremor", 18000, function()
+        tremorTick(creature, guid)
+    end)
+    schedule(guid, "numbing", 10000, function()
+        numbingTick(creature, guid)
+    end)
+    schedule(guid, "stab", 20000, function()
+        stabTick(creature, guid)
+    end)
     schedule(guid, "transform", 12000, function()
         transformTick(creature, guid)
     end)
@@ -120,6 +167,7 @@ end
 
 local function moorabiLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    transformed[creature:GetGUID()] = nil
 end
 
 local function moorabiTargetDied(event, creature, victim)
@@ -130,12 +178,14 @@ end
 
 local function moorabiDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    transformed[creature:GetGUID()] = nil
     creature:Talk(EMOTE_ACTIVATE_ALTAR)
     creature:Talk(SAY_DEATH)
 end
 
 local function moorabiReset(event, creature)
     cancelTimers(creature:GetGUID())
+    transformed[creature:GetGUID()] = nil
 end
 
 RegisterCreatureEvent(ENTRY_MOORABI, 1, moorabiEnterCombat)

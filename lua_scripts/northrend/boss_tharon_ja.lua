@@ -40,12 +40,16 @@
 -- 53463)) -> EVENT_GOING_SKELETAL (+6s: Talk(SAY_SKELETON 3) +
 -- me->RestoreDisplayId() + DoCastAOE(Clear Gift of Tharon'ja 53242,
 -- true) + events.Reset() + phase-1 re-arm). The phase transitions'
--- meaningful legs are the DoCastAOE casts — no DoCastAOE bridge
--- (terestian/shazzrah precedent); SetDisplayId/RestoreDisplayId
--- have no display bridge. Per the genuinely-bridgeable bar
--- (king_dred EVENT_RAPTOR_CALL), the chain is not armed: firing
--- the GOING_FLESH Talk fragment alone would play the flesh yell
--- without its C++ phase payload.
+-- meaningful legs are the DoCastAOE casts. The whole chain is an
+-- events.Reset()-driven internal machine (no SetPhase, but the arms
+-- only fire inside the chain); the DoCastAOE legs stay out:
+-- 49356/53463 are known-interrupted casts per the C++ file's own
+-- "Known Issues" note (fire-and-forget would fabricate completed
+-- casts), 53242's effect is its own SpellScript (aura removal),
+-- and the display legs have no bridge. Per the
+-- genuinely-bridgeable bar (king_dred EVENT_RAPTOR_CALL), the chain
+-- is not armed: firing the GOING_FLESH Talk fragment alone would
+-- play the flesh yell without its C++ phase payload.
 -- Phase-1 rotation (all gated by GOING_FLESH's events.Reset()):
 -- EVENT_CURSE_OF_LIFE — SelectTarget(Random) -> DoCast(Curse of
 -- Life 49527), 1s init, 10-15s repeat — random-target SelectTarget
@@ -62,12 +66,14 @@
 -- SelectTarget(Random) -> DoCast(Eye Beam 49544), 4-8s init, 4-6s
 -- repeat — random-target SelectTarget bridge absent;
 -- EVENT_POISON_CLOUD — DoCastAOE(Poison Cloud 49548), 6-7s init,
--- 10-12s repeat — no DoCastAOE bridge.
+-- 10-12s repeat — stays out: phase-2 machine-gated (fires only
+-- after GOING_FLESH's events.Reset()).
 -- Reset — _Reset() (instance bookkeeping, no bridge) +
 -- me->RestoreDisplayId() (no display bridge).
 -- JustDied — DoCastAOE(CLEAR_GIFT_OF_THARON_JA 53242, true) +
--- DoCastAOE(SPELL_ACHIEVEMENT_CHECK 61863, true) — no DoCastAOE
--- bridge.
+-- DoCastAOE(SPELL_ACHIEVEMENT_CHECK 61863, true) — both stay out:
+-- 53242's effect is SpellScript-delivered, 61863 is triggered
+-- with an unverifiable effect.
 -- UpdateAI HasUnitState(UNIT_STATE_CASTING) skip (twice — top of
 -- UpdateAI and inside the event loop) — no unit-state bridge.
 -- spell_tharon_ja_clear_gift_of_tharon_ja — SpellScript (53242:

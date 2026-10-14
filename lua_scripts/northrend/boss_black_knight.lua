@@ -70,8 +70,9 @@
 -- jedoga bar).
 -- boss_black_knight PHASE_GHOST legs — phase never arrives:
 -- uiDeathBiteTimer — DoCastAOE(Death's Bite 67808),
--- urand(2000,4000) — no DoCastAOE bridge (terestian/shazzrah
--- precedent); uiMarkedDeathTimer — SelectTarget(Random, 0, 100, true)
+-- urand(2000,4000) — stays out: PHASE_GHOST-gated behind the
+-- unbridged DamageTaken resurrect machine (gothik precedent);
+-- uiMarkedDeathTimer — SelectTarget(Random, 0, 100, true)
 -- -> DoCast(Marked for Death 67882), urand(5000,7000) — random-target
 -- bridge absent.
 -- boss_black_knight Reset — summons.DespawnAll() + SetDisplayId(native)

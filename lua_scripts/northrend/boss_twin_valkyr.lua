@@ -81,8 +81,9 @@
 -- machine: cross-AI sister->AI()->DoAction(ACTION_VORTEX /
 -- ACTION_PACT) or own DoAction for light stages (no cross-AI DoAction
 -- bridge); DoAction ACTION_VORTEX: Talk(EMOTE_VORTEX 3) + DoCastAOE(
--- Light Vortex 66046 / Dark Vortex 66058) (no DoCastAOE bridge —
--- terestian/shazzrah precedent); DoAction ACTION_PACT: Talk(
+-- Light Vortex 66046 / Dark Vortex 66058) (stays out: fires only via
+-- the unbridged cross-AI DoAction through fjola's 45s stage
+-- machine); DoAction ACTION_PACT: Talk(
 -- EMOTE_TWIN_PACT 4) + Talk(SAY_TWIN_PACT 5) + cross-AI sister cast
 -- Power of the Twins 65879 + DoCastSelf(Light Shield 65858 / Dark
 -- Shield 65874) + DoCastSelf(Light Twin Pact 65876 / Dark Twin Pact
@@ -108,13 +109,17 @@
 -- UpdateAI: SelectNearestPlayer(3.0f) -> DoCastAOE(Unleashed Dark
 -- 65808-helper RAID_MODE(65808,67172,67173,67174) / Unleashed Light
 -- 65795-helper RAID_MODE(65795,67238,67239,67240)) + MoveIdle +
--- DespawnOrUnsummon(1s), 500ms timer — no player-range scan / DoCastAOE
--- / despawn bridges; MovementInform POINT_MOTION_TYPE point 0: urand
+-- DespawnOrUnsummon(1s), 500ms timer — the DoCastAOE legs stay out
+-- behind the absent player-range scan (SelectNearestPlayer) +
+-- MoveIdle/DespawnOrUnsummon bridges; MovementInform
+-- POINT_MOTION_TYPE point 0: urand
 -- 1/4 re-move else DisappearAndDie (no MovementInform / despawn
 -- bridges) — documented-only.
 -- npc_bullet_controller (34743 — entry-unverifiable): Reset
--- DoCastAOE(Bullet Controller Periodic 66149) — no DoCastAOE bridge;
--- UpdateAI: UpdateVictim only — documented-only.
+-- DoCastAOE(Bullet Controller Periodic 66149) — stays out: the whole
+-- effect is the spell_bullet_controller AuraScript (shazzrah
+-- precedent) + entry-unverifiable; UpdateAI: UpdateVictim only —
+-- documented-only.
 -- spell_bullet_controller (AuraScript 66149 — also 68396 in C++ note):
 -- PeriodicTick -> caster casts Summon Periodic Light 66152 +
 -- Summon Periodic Dark 66153 (triggered, SPELLVALUE_MAX_TARGETS

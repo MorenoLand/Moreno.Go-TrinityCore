@@ -124,13 +124,15 @@
 -- phase-gated (PHASE_MOBILE) behind the unbridged submerge machine:
 -- wiring it without the machine means the worm never submerges and
 -- the rotation never swaps — jedoga over-cast bar; EVENT_SPEW —
--- DoCastAOE(66821 Molten Spew / 66818 Acid Spew) (no DoCastAOE bridge
--- — terestian/shazzrah precedent); EVENT_SLIME_POOL — DoCastSelf(
+-- DoCastAOE(66821 Molten Spew / 66818 Acid Spew) (stays out:
+-- PHASE_MOBILE-gated behind the unbridged submerge machine — gothik
+-- precedent); EVENT_SLIME_POOL — DoCastSelf(
 -- SUMMON_SLIME_POOL 66883) (summon STRAND absent — no Lua-surface
 -- consumer); EVENT_SPRAY — SelectTarget(Random,1,...,true) -> DoCast(
 -- 66902 Burning Spray / 66901 Paralytic Spray) (no random-target
--- bridge); EVENT_SWEEP — DoCastAOE(SPELL_SWEEP 66794) (no DoCastAOE
--- bridge); EVENT_SUBMERGE -> Submerge() — SetReactState(REACT_PASSIVE)
+-- bridge); EVENT_SWEEP — DoCastAOE(SPELL_SWEEP 66794) (stays out:
+-- PHASE_STATIONARY-gated behind the unbridged submerge machine);
+-- EVENT_SUBMERGE -> Submerge() — SetReactState(REACT_PASSIVE)
 -- + AttackStop + HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE) +
 -- DoCastSelf(66948 / 66936) + SetSpeedRate(8.0 / 1.1111) +
 -- DoCastSelf(GROUND_VISUAL_0 66969) + SetFlag(NON_ATTACKABLE |
@@ -140,8 +142,9 @@
 -- SPELL_HATE_TO_ZERO 63984) + RemoveFlag + SetReactState(AGGRESSIVE)
 -- + SelectTarget(Random) + MoveChase + SetDisplayId(
 -- modelStationary/modelMobile) + DoCastSelf(GROUND_VISUAL_1 68302)
--- (no aura / DoCastAOE / flag / react / random-target / motion /
--- display bridges); EVENT_ENGAGE — DoCloseDoorOrButton(DATA_MAIN_GATE)
+-- (63984's effect is the spell_yogg_saron_hate_to_zero SpellScript —
+-- shazzrah precedent; the rest rides the unbridged submerge-machine
+-- legs); EVENT_ENGAGE — DoCloseDoorOrButton(DATA_MAIN_GATE)
 -- + SetImmuneToPC(false) + SetPhase(PHASE_MOBILE) +
 -- SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (dreadscale, via
 -- MovementInform — no hook; no door / immune / phase / react / zone

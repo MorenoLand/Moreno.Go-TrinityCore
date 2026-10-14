@@ -23,6 +23,9 @@
 -- victim:GetObjectType()=="Player" — nalorakk precedent); JustDied
 -- Talk(SAY_DEATH 2) (event 4; the summons.clear() + _JustDied()
 -- instance-bookkeeping legs have no bridge).
+-- EVENT_SWARM — DoCastAOE(SPELL_SWARM 52440) self-cast +
+-- Talk(SAY_SWARM 3), 5s init, no repeat (C++ does not reschedule;
+-- one-shot timer).
 -- Unmodeled (no bridges — documented, not wired):
 -- The passive pre-fight model — ctor Reset leg SetReactState(REACT_PASSIVE)
 -- (no react-state bridge — drakkari_colossus precedent); JustAppeared
@@ -32,14 +35,16 @@
 -- MoveInLineOfSight passive-engage leg (JustEngagedWith(who) when passive
 -- and within attack distance) — behind the absent react-state bridge.
 -- EVENT_SEND_GROUP (DoCastAOE(SUBBOSS_AGGRO_TRIGGER 52343, triggered),
--- 70s repeat) — no DoCastAOE bridge (terestian/shazzrah precedent);
--- the trigger SpellScript's watcher-target selection (HandleTargets)
--- joins the no-SpellScript-binding queue (razelikh precedent).
+-- 70s repeat) — stays out: triggered cast behind the unbridged
+-- DoAction(ACTION_PET_ENGAGED) watcher machine, and the trigger's
+-- whole effect is the SpellScript watcher-target selection
+-- (HandleTargets — no SpellScript-binding bridge, razelikh
+-- precedent).
 -- EVENT_SWARM (DoCastAOE(SPELL_SWARM 52440) + Talk(SAY_SWARM 3), 5s
--- init, no repeat — C++ does not reschedule it) — no DoCastAOE bridge.
 -- EVENT_FRENZY (HealthBelowPct(10) _hadFrenzy latch -> DoCastSelf(Frenzy
 -- 28747) + DoCastAOE(CURSE_OF_FATIGUE 52592), 1s init, 15s repeat) —
--- no health-pct bridge (doomwalker precedent) + no DoCastAOE bridge.
+-- no health-pct bridge (doomwalker precedent); the DoCastAOE leg
+-- rides the same latch.
 -- The DoAction machine (no DoAction bridge — drakkari_colossus standing
 -- precedent — and the payload is instance-model anyway):
 -- -ACTION_GATEWATCHER_GREET (instance SetData(DATA_GATEWATCHER_GREET,1)
@@ -98,7 +103,8 @@
 -- (instance->GetCreature(DATA_KRIKTHIR)->getAttackerForHelper()
 -- AttackStart + gatewatcher->AI()->JustSummoned — instance model
 -- absent); skittering_infector JustDied DoCastAOE(ACID_SPLASH 52446) —
--- no DoCastAOE bridge (its InitializeAI is likewise instance-bound);
+-- stays out: host npc entry-unverifiable (summon STRAND absent) and
+-- its InitializeAI is likewise instance-bound;
 -- npc_gatewatcher_web_wrap (NullCreatureAI) JustDied -> summoner
 -- RemoveAurasDueToSpell(WEB_WRAP_WRAPPED 52087) — no aura-removal
 -- bridge (aeranas precedent) + summoner-unit bridge absent.
@@ -116,8 +122,10 @@ local ENTRY_KRIK_THIR = 28684
 
 local SAY_SLAY  = 1
 local SAY_DEATH = 2
+local SAY_SWARM = 3
 
 local SPELL_MIND_FLAY = 52586
+local SPELL_SWARM = 52440
 
 local timers = {}
 
@@ -152,11 +160,21 @@ local function mindFlayTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SWARM: DoCastAOE + Talk(SAY_SWARM 3); 5s init, no
+-- repeat (C++ does not reschedule it).
+local function swarmTick(creature)
+    creature:CastSpell(creature, SPELL_SWARM)
+    creature:Talk(SAY_SWARM)
+end
+
 local function krikThirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "mindflay", math.random(1000, 3000), function()
         mindFlayTick(creature, guid)
+    end)
+    schedule(guid, "swarm", 5000, function()
+        swarmTick(creature)
     end)
 end
 

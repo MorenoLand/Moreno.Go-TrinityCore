@@ -21,14 +21,16 @@
 -- the triggered port).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_amanitar: EVENT_BASH — DoCastVictim(Bash 57094);
--- JustEngagedWith-scheduled 10-14s init, rescheduled 7-12s. The
--- only bridgeable arm of the slice.
+-- JustEngagedWith-scheduled 10-14s init, rescheduled 7-12s;
+-- JustDied — DoCastAOE(Remove Mushroom Power 57283), self-cast
+-- (arugal precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- EVENT_MINI — SelectTarget(Random, 0, 0.0f, true, true,
 -- -SPELL_MINI 57055) -> DoCastAOE(Mini 57055) (30s repeat; 1s
--- repeat when no valid target): the random-target SelectTarget
--- bridge is absent (cairne/kazzak precedent) and there is no
--- DoCastAOE bridge (terestian/shazzrah precedent).
+-- repeat when no valid target): stays out on the random-target
+-- SelectTarget gate (cairne/kazzak precedent) — the self-cast
+-- lowering is port-pattern-ready (arugal precedent) but firing it
+-- ungated would fabricate target selection C++ never makes.
 -- EVENT_ROOT — SelectTarget(Random, 1, 100.0f, true) ->
 -- DoCast(target, Entangling Roots 57095, triggered) (10-15s
 -- repeat): random-target SelectTarget bridge absent.
@@ -48,10 +50,12 @@
 -- terestian precedent), instance
 -- DoRemoveAurasDueToSpellOnPlayers(Mini) (instance-script model
 -- absent — standing blocker), _DespawnAtEvade.
--- JustDied — _JustDied() instance bookkeeping only (no bridge),
--- DoCastAOE(Remove Mushroom Power 57283) (no DoCastAOE bridge),
--- instance DoRemoveAurasDueToSpellOnPlayers(Mini) (instance
--- model absent).
+-- JustDied — _JustDied() instance bookkeeping only (no bridge);
+-- DoCastAOE(Remove Mushroom Power 57283) ported as self-cast
+-- (creature:CastSpell(creature, 57283) — the Go creature-cast path
+-- carries no alive-gate on the caster, so the OnDied cast is
+-- faithful); instance DoRemoveAurasDueToSpellOnPlayers(Mini)
+-- (instance model absent).
 -- npc_amanitar_mushrooms — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
 -- (30391 NPC_HEALTHY_MUSHROOM / 30435 NPC_POISONOUS_MUSHROOM —
 -- ahnkahet.h kalecgos pass): zero registration. Reset leg —
@@ -66,11 +70,12 @@
 -- MoveInLineOfSight player-proximity poison leg (2.0f, _active
 -- latch): target RemoveAurasDueToSpell(Potent Fungus 56648) (no
 -- aura-removal bridge — aeranas precedent), DoCastAOE(Poisonous
--- Mushroom Poison Cloud 57061) (no DoCastAOE bridge),
+-- Mushroom Poison Cloud 57061) (stays out: summon STRAND absent),
 -- SetObjectScale(0.1f) (no scale bridge), DespawnOrUnsummon(4s)
 -- (no despawn bridge — terestian precedent). JustDied healthy
--- leg: DoCastAOE(Potent Fungus 56648, triggered) (no DoCastAOE
--- bridge). Joins the entry-verifiable-but-bridge-blocked queue.
+-- leg: DoCastAOE(Potent Fungus 56648, triggered) (stays out:
+-- behind the unbridged summon STRAND). Joins the
+-- entry-verifiable-but-bridge-blocked queue.
 -- spell_amanitar_potent_fungus — AuraScript (56648 Potent Fungus:
 -- on-apply, if the target HasAura(Mini 57055) remove it and drop
 -- the aura): no SpellScript/AuraScript binding bridge (razelikh
@@ -82,6 +87,7 @@
 local ENTRY_AMANITAR = 30258
 
 local SPELL_BASH = 57094
+local SPELL_REMOVE_MUSHROOM_POWER = 57283
 
 local timers = {}
 
@@ -132,6 +138,7 @@ end
 
 local function amanitarDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_REMOVE_MUSHROOM_POWER)
 end
 
 local function amanitarReset(event, creature)

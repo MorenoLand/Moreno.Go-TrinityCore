@@ -68,10 +68,10 @@
 -- DoCastVictim, moroes precedent — but phase-gated as above) —
 -- documented-only.
 -- EVENT_LEECHING_SWARM — Talk(SAY_LOCUST 3) + DoCastAOE(Leeching
--- Swarm 53467), 5-7s init, 25-28s repeat — no DoCastAOE bridge
--- (terestian / shazzrah precedent) + phase-gated — documented-only.
+-- Swarm 53467), 5-7s init, 25-28s repeat — phase-gated
+-- (PHASE_EMERGE — gothik precedent) — documented-only.
 -- EVENT_CARRION_BEETLES — DoCastAOE(Carrion Beetles 53520), 14-17s
--- init, 24-27s repeat — no DoCastAOE bridge + phase-gated —
+-- init, 24-27s repeat — phase-gated (PHASE_EMERGE) —
 -- documented-only.
 -- EVENT_IMPALE — DoCast(impaleTarget, Impale Damage 53454, triggered)
 -- 4s after SetGUID(GUID_TYPE_IMPALE) — the impale target arrives
@@ -133,7 +133,8 @@
 -- instance legs — instance model absent), JustDied
 -- ACTION_PET_DIED (DoAction bridge absent), EnterEvadeMode
 -- ACTION_PET_EVADE (DoAction bridge absent); darter InitializeAI
--- DoCastAOE(SPELL_DART 59349) (no DoCastAOE bridge); assassin
+-- DoCastAOE(SPELL_DART 59349) (stays out: entry-blocked — the darter
+-- has no C++ NPC constant, summoned DB-side); assassin
 -- InitializeAI MoveJump choreography (GetRandomPositionAround
 -- 10-30f + CreatureBoundary IsInBounds loop + MotionMaster MoveJump —
 -- no motion-master / boundary bridges) + DoCastSelf(

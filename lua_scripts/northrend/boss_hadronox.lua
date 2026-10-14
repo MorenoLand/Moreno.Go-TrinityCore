@@ -14,13 +14,19 @@
 -- creature:CastSpell(nil, spell) = DoCastVictim (moroes precedent).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler (gargolmar
 -- precedent); BossAI _Reset/_JustDied instance bookkeeping has no bridge.
--- Ported arms (C++-exact for the one modeled arm):
+-- Ported arms (C++-exact for the modeled arms):
 -- boss_hadronox: EVENT_PIERCE_ARMOR DoCastVictim(Pierce Armor 53418),
 -- randtime(4s,7s) init (C++ JustEngagedWith schedule), 10-15s repeat
 -- (math.random — slad_ran precedent). The C++ JustEngagedWith arms are
 -- independent schedulers: none of the unmodeled events gate PIERCE_ARMOR,
 -- and the missing arms do not change its timing, so the arm stands alone
 -- without the intro/movement machinery.
+-- EVENT_LEECH_POISON — DoCastAOE(Leech Poison 53030) self-cast,
+-- randtime(5s,7s) init, randtime(7s,9s) repeat (math.random); the
+-- AuraScript's heal-on-death leg (53800) stays out (no AuraScript
+-- bridge).
+-- EVENT_WEB_GRAB — DoCastAOE(Web Grab 57731) self-cast,
+-- randtime(13s,19s) init, randtime(20s,25s) repeat (math.random).
 -- Unmodeled (no bridges — documented, not wired):
 -- The whole pre-fight/step movement machine — InitializeAI
 -- SetReactState(REACT_AGGRESSIVE)/SetFloatValue bounding/combat reach
@@ -37,20 +43,20 @@
 -- summon STRAND + cross-AI SetData/DoAction bridges absent.
 -- MovementInform final-step: SetReactState(REACT_AGGRESSIVE) +
 -- DoCastAOE(WEB_FRONT_DOORS 53177) + DoCastAOE(WEB_SIDE_DOORS 53185)
--- + _doorsWebbed latch + DoZoneInCombat — motion-master bridge absent
--- anyway; no DoCastAOE bridge (terestian/shazzrah precedent).
+-- + _doorsWebbed latch + DoZoneInCombat — stays out: the whole arm
+-- fires on the unbridged motion-master step machine, and both
+-- spells' effects are delivered by the spell_hadronox_web_doors
+-- SpellScript (aura removal — shazzrah precedent).
 -- GetData(DATA_HADRONOX_ENTERED_COMBAT/DATA_HADRONOX_WEBBED_DOORS) +
 -- SetGUID(_anubar GUID list) + ObjectAccessor cross-AI — cross-AI
 -- GetData/SetGUID bridges absent.
 -- CanAIAttack 70.0f home-distance leash — no leash bridge.
 -- JustEngagedWith me->setActive(true) leg — no active-flag bridge.
 -- EVENT_LEECH_POISON (DoCastAOE(SPELL_LEECH_POISON 53030), 5-7s init,
--- 7-9s repeat) — no DoCastAOE bridge.
 -- EVENT_ACID_CLOUD (DoCast(SelectTarget(Random, 0, 100.0f), ACID_CLOUD
 -- 53400), 7-13s init, 16-23s repeat) — random-target SelectTarget
 -- bridge absent (cairne/kazzak precedent).
 -- EVENT_WEB_GRAB (DoCastAOE(SPELL_WEB_GRAB 57731), 13-19s init,
--- 20-25s repeat) — no DoCastAOE bridge.
 -- EVENT_PLAYER_CHECK (1s): GetCombatManager PvE-ref IsControlledByPlayer
 -- flip vs _lastPlayerCombatState -> instance->CheckRequiredBosses gate,
 -- Point-motion cancel + AttackStart(victim), else EnterEvadeMode(
@@ -135,6 +141,8 @@
 local ENTRY_HADRONOX = 28921
 
 local SPELL_PIERCE_ARMOR = 53418
+local SPELL_LEECH_POISON = 53030
+local SPELL_WEB_GRAB = 57731
 
 local timers = {}
 
@@ -169,11 +177,35 @@ local function pierceArmorTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_LEECH_POISON: DoCastAOE; randtime(5s,7s) init,
+-- randtime(7s,9s) repeat.
+local function leechPoisonTick(creature, guid)
+    creature:CastSpell(creature, SPELL_LEECH_POISON)
+    schedule(guid, "leechpoison", math.random(7000, 9000), function()
+        leechPoisonTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_WEB_GRAB: DoCastAOE; randtime(13s,19s) init,
+-- randtime(20s,25s) repeat.
+local function webGrabTick(creature, guid)
+    creature:CastSpell(creature, SPELL_WEB_GRAB)
+    schedule(guid, "webgrab", math.random(20000, 25000), function()
+        webGrabTick(creature, guid)
+    end)
+end
+
 local function hadronoxEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "piercearmor", math.random(4000, 7000), function()
         pierceArmorTick(creature, guid)
+    end)
+    schedule(guid, "leechpoison", math.random(5000, 7000), function()
+        leechPoisonTick(creature, guid)
+    end)
+    schedule(guid, "webgrab", math.random(13000, 19000), function()
+        webGrabTick(creature, guid)
     end)
 end
 

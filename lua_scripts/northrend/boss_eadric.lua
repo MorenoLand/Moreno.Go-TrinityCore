@@ -31,6 +31,10 @@
 -- independent of every unbridged leg (the bDone MovePoint block
 -- only runs after the unbridged DamageTaken evade; the timers all
 -- run under UpdateVictim).
+-- uiRadianceTimer — DoCastAOE(Radiance 66935) self-cast, 16s init,
+-- 16s repeat (ungated UpdateVictim arm); the
+-- spell_eadric_radiance target filter (front 2.5f / 40y cone) has
+-- no SpellScript bridge — modeled as the plain self-cast AOE.
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_eadric constructor — SetReactState(REACT_PASSIVE) +
 -- SetFlag(UNIT_FLAG_NON_ATTACKABLE) — no react-state / flag
@@ -51,8 +55,6 @@
 -- 66863) + DoCast(Hammer of the Righteous 66867), 25s repeat —
 -- random-target SelectTarget bridge absent (cairne/kazzak
 -- precedent).
--- boss_eadric uiRadianceTimer — DoCastAOE(Radiance 66935), 16s
--- repeat — no DoCastAOE bridge (terestian/shazzrah precedent).
 -- boss_paletress — zero registration. Constructor legs
 -- (SetReactState(REACT_PASSIVE) + SetFlag(NON_ATTACKABLE) +
 -- RestoreFaction) — no react/flag/faction bridges; Reset's
@@ -73,9 +75,10 @@
 -- HealthAbovePct one-shot (InterruptNonMeleeSpells +
 -- DoCastAOE(Holy Nova 66546, false) + DoCastSelf(Shield 66515) +
 -- DoCastAOE(Summon Memory 66545, false) + DoCastAOE(Confess
--- 66680, false)) — no health-pct bridge (doomwalker precedent)
--- + no DoCastAOE bridge; ungated emulation of the Shield
--- self-cast leg would over-cast vs C++ (jedoga precedent);
+-- 66680, false)) — the whole one-shot rides the unbridged
+-- HealthAbovePct(25) latch (doomwalker precedent); ungated
+-- emulation of the Shield self-cast leg would over-cast vs C++
+-- (jedoga precedent);
 -- JustSummoned MemoryGUID latch — summon STRAND absent
 -- (standing). Entry 34928 verifiable (trial_of_the_champion.h
 -- NPC_PALETRESS — kalecgos pass) but every combat arm rides an
@@ -124,6 +127,7 @@
 local ENTRY_EADRIC = 35119
 
 local SPELL_VENGEANCE = 66865
+local SPELL_RADIANCE = 66935
 
 local timers = {}
 
@@ -158,11 +162,25 @@ local function vengeanceTick(creature, guid)
     end)
 end
 
+-- C++ uiRadianceTimer: DoCastAOE(Radiance), 16s init, 16s repeat;
+-- ungated (plain UpdateVictim). The spell_eadric_radiance target
+-- filter (front 2.5f / 40y cone) has no Lua bridge — ported as the
+-- plain self-cast AOE.
+local function radianceTick(creature, guid)
+    creature:CastSpell(creature, SPELL_RADIANCE)
+    schedule(guid, "radiance", 16000, function()
+        radianceTick(creature, guid)
+    end)
+end
+
 local function eadricEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "vengeance", 10000, function()
         vengeanceTick(creature, guid)
+    end)
+    schedule(guid, "radiance", 16000, function()
+        radianceTick(creature, guid)
     end)
 end
 

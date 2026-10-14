@@ -89,10 +89,13 @@
 -- / SetDisableGravity) + flag / interrupt / stand-state + cross-AI
 -- DoAction + ObjectAccessor bridges absent — documented-only.
 -- DoAction(ACTION_SACRIFICE) (Talk(SAY_SACRIFICE 2) + DoCastAOE(
--- Sacrifice Beam 56150) — no DoCastAOE bridge (terestian / shazzrah
--- precedent) — + EVENT_END_PHASE_TWO re-schedule + EVENT_SUMMON_
--- VOLUNTEER reschedule): no DoAction bridge on the Lua surface
--- (drakkari_colossus standing precedent) — documented-only.
+-- Sacrifice Beam 56150) — the self-cast lowering is port-pattern-
+-- ready (arugal precedent), but the arm fires only through the
+-- unbridged cross-AI DoAction + phase-two sacrifice machine
+-- (gothik precedent) — + EVENT_END_PHASE_TWO re-schedule +
+-- EVENT_SUMMON_VOLUNTEER reschedule): no DoAction bridge on the
+-- Lua surface (drakkari_colossus standing precedent) —
+-- documented-only.
 -- JustSummoned (NPC_TWILIGHT_WORSHIPPER 30111 SetStandState(
 -- UNIT_STAND_STATE_KNEEL) + summons.Summon — no stand-state / cross-
 -- AI bridges), SummonedCreatureDies (initiate _initiatesKilled == 15

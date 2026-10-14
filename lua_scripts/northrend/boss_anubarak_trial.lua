@@ -98,8 +98,9 @@
 -- _sphereGUID latch (no ObjectAccessor / summon bridges).
 -- boss_anubarak_trial phase-3 leg — HealthBelowPct(30) (no
 -- health-pct bridge — doomwalker precedent) + DoCastAOE(
--- Leeching Swarm 66118) (no DoCastAOE bridge —
--- terestian/shazzrah precedent) + Talk(EMOTE_LEECHING_SWARM 6) +
+-- Leeching Swarm 66118) (stays out: PHASE_MELEE-gated, and the whole
+-- effect is the spell_anubarak_leeching_swarm AuraScript — shazzrah
+-- precedent) + Talk(EMOTE_LEECHING_SWARM 6) +
 -- Talk(SAY_LEECHING_SWARM 5) (ride the unbridged leg).
 -- boss_anubarak_trial JustDied's grid despawn of frost spheres
 -- and burrowers — no despawn bridge (terestian precedent).

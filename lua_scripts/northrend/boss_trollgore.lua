@@ -31,7 +31,9 @@
 -- boss_trollgore: JustEngagedWith Talk(SAY_AGGRO 0) (event 1 — the
 -- hook itself is bridged; its other legs — events.ScheduleEvent(
 -- EVENT_CONSUME 15s) and EVENT_CORPSE_EXPLODE 3s (DoCastAOE 49380 /
--- 49555 — no DoCastAOE bridge, terestian/shazzrah precedent) +
+-- 49555 — both spells' effects are delivered by their SpellScripts
+-- (consume buff / corpse-explode damage + despawn), so a bare
+-- self-cast would be a no-op cast bar — shazzrah precedent) +
 -- EVENT_SPAWN 30-40s (invader-summoner trigger casts — ObjectAccessor
 -- ::GetCreature(*me, instance->GetGuidData(DATA_TROLLGORE_INVADER_
 -- SUMMONER_1+i)) + instance GUID-data + cross-AI bridges absent;
@@ -46,9 +48,11 @@
 -- bookkeeping has no bridge).
 -- Unmodeled (no bridges — documented, not wired):
 -- EVENT_CONSUME — Talk(SAY_CONSUME 2) + DoCastAOE(Consume 49380),
--- 15s repeat — no DoCastAOE bridge (terestian/shazzrah precedent).
+-- 15s repeat — stays out: the consume buff is delivered by the
+-- spell_trollgore_consume SpellScript (shazzrah precedent).
 -- EVENT_CORPSE_EXPLODE — Talk(SAY_EXPLODE 3) + DoCastAOE(Corpse
--- Explode 49555), 15-19s repeat — no DoCastAOE bridge.
+-- Explode 49555), 15-19s repeat — stays out: damage + despawn are
+-- delivered by the spell_trollgore_corpse_explode AuraScript.
 -- EVENT_SPAWN — the invader-summoner world-trigger casts (
 -- trigger->CastSpell(trigger, RAND(SPELL_SUMMON_INVADER_A 49456 /
 -- _B 49457 / _C 49458), me->GetGUID()) over the three
@@ -72,7 +76,8 @@
 -- POINT_MOTION_TYPE, POINT_LANDING) -> me->Dismount() +
 -- SetImmuneToAll(false) + DoCastAOE(SPELL_INVADER_TAUNT 49405) —
 -- motion-master bridge absent; dismount/immune-all bridges absent;
--- no DoCastAOE bridge (terestian/shazzrah precedent). Joins the
+-- the taunt effect is SpellScript-delivered anyway
+-- (spell_trollgore_invader_taunt). Joins the
 -- entry-verifiable-but-bridge-blocked queue.
 -- spell_trollgore_consume (49380/59803 SpellScript: OnEffectHitTarget
 -- EFFECT_1 SCRIPT_EFFECT -> target->CastSpell(GetCaster(),
