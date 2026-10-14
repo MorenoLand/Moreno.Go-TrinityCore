@@ -200,16 +200,25 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Player::CanBankItem's auto path reaches CanStoreItem_InInventorySlots
+	// (Player.cpp:10654), whose top arm rejects a non-empty bag with
+	// EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS before any slot scan.
+	if s.itemIsNonemptyBag(ctx, uint64(itemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
+		return true
+	}
+	srcIsBag := s.itemIsBag(ctx, uint64(itemGUID))
+
 	// AUDIT vs Player::CanBankItem (Player.cpp:11671) auto path
 	// (NULL_BAG/NULL_SLOT): the remaining validation arms have no Go
 	// counterpart — m_lootGenerated (Go has no loot-on-item model),
 	// IsBindedNotWith (Go tracks no binding state), currency-token slots
 	// (Go has no hidden currency bag), and CanTakeMoreSimilarItems
-	// (stack-merge is unmodeled tree-wide; Go moves whole items). The
-	// dest==own-pos EQUIP_ERR_NONE guard (BankHandler.cpp:79-83) is a
-	// defensive no-op arm: the item's own slot stays occupied during
-	// CanBankItem's scan, so the auto path cannot resolve to it — Go's
-	// first-free-slot scan is the equivalent outcome.
+	// (stack-merge is unmodeled tree-wide; Go moves whole items).
+	// CanStoreItem_InInventorySlots treats the moved item's own slot as
+	// empty (Player.cpp:10663-10667), so a bank-src item CAN resolve dest
+	// to its own slot — the dest==own-pos EQUIP_ERR_NONE guard
+	// (BankHandler.cpp:79-83) is ported below, not a no-op.
 	// 1. Find free bank slot among 39..66
 	occupied := make(map[uint8]bool)
 	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot <= ?", s.playerGUID, bankSlotStart, bankSlotEnd)
@@ -225,6 +234,10 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 
 	var destBagKey int64 = 0
 	var destSlot uint8 = 0xFF
+	// The moved item's own slot scans as empty (Player.cpp:10663-10667).
+	if srcBagKey == 0 && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd {
+		delete(occupied, srcSlot)
+	}
 	for sl := bankSlotStart; sl <= bankSlotEnd; sl++ {
 		if !occupied[sl] {
 			destSlot = sl
@@ -232,8 +245,18 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
-	// 2. If 39..66 are full, check purchased bank bags (slots 67..73)
-	if destSlot == 0xFF && s.player.BankBagSlots > 0 {
+	// dest==own-pos guard (BankHandler.cpp:79-83): with the own slot
+	// scanning as empty the search can resolve to it — answer
+	// EQUIP_ERR_NONE instead of moving.
+	if destBagKey == 0 && srcBagKey == 0 && destSlot == srcSlot && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd {
+		s.sendEquipError(equipErrNone, uint64(itemGUID))
+		return true
+	}
+
+	// 2. If 39..66 are full, check purchased bank bags (slots 67..73).
+	// ItemCanGoIntoBag rejects bags inside bags, so a bag item never takes
+	// this leg (C++ exhausts the search and answers EQUIP_ERR_BANK_FULL).
+	if destSlot == 0xFF && s.player.BankBagSlots > 0 && !srcIsBag {
 		maxBankBag := int(s.player.BankBagSlots)
 		if maxBankBag > 7 {
 			maxBankBag = 7
@@ -255,7 +278,7 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 	}
 
 	if destSlot == 0xFF {
-		s.sendEquipError(equipErrInvFull, uint64(itemGUID))
+		s.sendEquipError(equipErrBankFull, uint64(itemGUID))
 		return true // Bank full
 	}
 
@@ -309,8 +332,10 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		return true
 	}
 
-	// Determine if item is in the bank (primary bank 39..66 or inside a bank bag)
-	isBank := (srcBagKey == 0 && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd)
+	// Player::IsBankPos (Player.cpp:10163-10172): bank item slots 39..66 AND
+	// bank bag slots 67..73 count as bank (arm 2), plus anything inside a
+	// bank bag (arm 3).
+	isBank := (srcBagKey == 0 && srcSlot >= bankSlotStart && srcSlot < bankBagSlotEnd)
 	if !isBank && srcBagKey != 0 {
 		var isBankBagCount int
 		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 67 AND slot <= 73 AND item = ?", s.playerGUID, srcBagKey).Scan(&isBankBagCount)
@@ -331,6 +356,8 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		}
 		return true
 	}
+	// ItemCanGoIntoBag rejects bags inside bags (see handleAutoBankItem).
+	srcIsBag := s.itemIsBag(ctx, uint64(itemGUID))
 
 	if isBank {
 		// Move from bank to backpack (slots 23..38), or into equipped bags (19..22)
@@ -397,7 +424,7 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 				break
 			}
 		}
-		if destSlot == 0xFF && s.player.BankBagSlots > 0 {
+		if destSlot == 0xFF && s.player.BankBagSlots > 0 && !srcIsBag {
 			maxBankBag := int(s.player.BankBagSlots)
 			if maxBankBag > 7 {
 				maxBankBag = 7
@@ -418,7 +445,7 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 			}
 		}
 		if destSlot == 0xFF {
-			s.sendEquipError(equipErrInvFull, uint64(itemGUID))
+			s.sendEquipError(equipErrBankFull, uint64(itemGUID))
 			return true // Bank full
 		}
 		if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID); err != nil {

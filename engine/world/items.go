@@ -1778,6 +1778,7 @@ const (
 	equipErrUniqueCantBeWrapped               = 47
 	equipErrBagsCantBeWrapped                 = 48
 	equipErrInvFull                           = 50
+	equipErrBankFull                          = 51 // C++ EQUIP_ERR_BANK_FULL (ItemDefines.h:77)
 	equipErrCouldntSplitItems                 = 27 // C++ EQUIP_ERR_COULDNT_SPLIT_ITEMS (ItemDefines.h:53)
 	equipErrTriedToSplitMoreThanCount         = 26 // C++ EQUIP_ERR_TRIED_TO_SPLIT_MORE_THAN_COUNT (ItemDefines.h:52)
 	equipErrAlreadyLooted                     = 49 // C++ EQUIP_ERR_ALREADY_LOOTED (ItemDefines.h:75)

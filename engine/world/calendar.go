@@ -1511,6 +1511,10 @@ func (s *session) handleCalendarEventRSVP(ctx context.Context, payload []byte) b
 		// status, the invite's rank, and the just-set status time.
 		sendCalendarEventStatusToRelatives(s.server, calendarEventRelativeSessions(ctx, s.server, eventID),
 			s.playerGUID, eventID, int64(evTime), evFlags, uint8(status), rank, now)
+
+		// CalendarHandler.cpp:663 — the RSVP clears the pending action on
+		// the responder's own client.
+		_ = s.write(uint16(protocol.OpcodeSMSG_CALENDAR_CLEAR_PENDING_ACTION), nil, true)
 	}
 	return s.sendCalendarCommandResult(CalendarOk)
 }
@@ -1534,8 +1538,9 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		var creator uint64
+		var evFlags uint32
 		if err := cdb.QueryRowContext(ctx,
-			"SELECT creator FROM calendar_events WHERE id = ?", eventID).Scan(&creator); err != nil {
+			"SELECT creator, flags FROM calendar_events WHERE id = ?", eventID).Scan(&creator, &evFlags); err != nil {
 			return s.sendCalendarCommandResult(CalendarErrorNoInvite)
 		}
 		if creator == inviteeGUID {
@@ -1545,13 +1550,16 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 		_, _ = cdb.ExecContext(ctx,
 			"DELETE FROM calendar_invites WHERE id = ? AND event = ?", inviteID, eventID)
 
-		// Send SMSG_CALENDAR_EVENT_INVITE_REMOVED
+		// SendCalendarEventInviteRemove (CalendarMgr.cpp:559-568): the event's
+		// flags (not 0), trailing u8(1), broadcast to every event relative.
 		remBuf := protocol.NewBuffer(24)
 		remBuf.WritePackedGUID(inviteeGUID)
 		remBuf.WriteU64(eventID)
-		remBuf.WriteU32(0) // flags
-		remBuf.WriteU8(0)  // clearPending
-		_ = s.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_REMOVED), remBuf.Bytes(), true)
+		remBuf.WriteU32(evFlags)
+		remBuf.WriteU8(1) // FIXME (CalendarMgr.cpp:565)
+		for _, t := range calendarEventRelativeSessions(ctx, s.server, eventID) {
+			_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_REMOVED), remBuf.Bytes(), true)
+		}
 	}
 	return s.sendCalendarCommandResult(CalendarOk)
 }
@@ -1598,6 +1606,12 @@ func (s *session) handleCalendarEventStatus(ctx context.Context, payload []byte)
 
 		sendCalendarEventStatusToRelatives(s.server, calendarEventRelativeSessions(ctx, s.server, eventID),
 			invInvitee, eventID, int64(evTime), evFlags, status, rank, statusTime)
+
+		// CalendarHandler.cpp:724 — the moderator-driven status change clears
+		// the pending action on the invitee's client, not the sender's.
+		if invSess := s.server.findSessionByGUID(invInvitee); invSess != nil {
+			_ = invSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_CLEAR_PENDING_ACTION), nil, true)
+		}
 	}
 	return s.sendCalendarCommandResult(CalendarOk)
 }
