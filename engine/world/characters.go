@@ -2729,7 +2729,8 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 	cdb := store.DB
 	var atLogin uint64
 	var oldRace, class uint8
-	if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class); err != nil {
+	var oldName string
+	if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class, name FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class, &oldName); err != nil {
 		return sendRaceChange(charCreateError)
 	}
 	// sObjectMgr->GetPlayerInfo(race, class): the race/class combination must
@@ -2747,6 +2748,20 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 	// Race change must stay on the same faction team (CharacterHandler.cpp:1687).
 	if teamForRace(oldRace) != teamForRace(race) {
 		return sendRaceChange(charCreateCharacterRaceOnly)
+	}
+	// CONFIG_CHARACTER_CREATING_DISABLED_RACEMASK
+	// (CharacterHandler.cpp:1695-1702): the shared callback gates the
+	// mask for race change too; gated on
+	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RACEMASK.
+	if !s.accountSkipRacemaskCheck(ctx) && s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
+		return sendRaceChange(charCreateError)
+	}
+	// HandleCharFactionOrRaceChangeCallback (CharacterHandler.cpp:1704):
+	// PreventRenameCharacterOnCustomization (default false) rejects any
+	// change-time rename with CHAR_NAME_FAILURE; C++ compares the raw
+	// packet name to the character cache name before normalization.
+	if s.server.Config.PreventRenameCharacterOnCustomization && newName != oldName {
+		return sendRaceChange(charNameFailure)
 	}
 	// normalizePlayerName (CharacterHandler.cpp:1709-1713): empty or
 	// invalid-UTF-8 answers CHAR_NAME_NO_NAME.
@@ -2840,6 +2855,23 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 	return true
 }
 
+// accountSkipRacemaskCheck reports whether the session bypasses the
+// CONFIG_CHARACTER_CREATING_DISABLED_RACEMASK gate via
+// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RACEMASK
+// (CharacterHandler.cpp:1695-1702); used by both race and faction
+// change handlers, which share the C++ callback.
+func (s *session) accountSkipRacemaskCheck(ctx context.Context) bool {
+	skip := false
+	if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		var permErr error
+		skip, permErr = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSkipCheckCharacterCreationRacemask)
+		if permErr != nil {
+			skip = false
+		}
+	}
+	return skip
+}
+
 // handleCharFactionChange processes CMSG_CHAR_FACTION_CHANGE (0x4D9).
 // Reference: WorldSession::HandleCharFactionOrRaceChange (CharacterHandler.cpp:1616).
 // Wire order (:1635-1642): guid, name, gender, skin, hairColor, hairStyle,
@@ -2875,7 +2907,8 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 	{
 		var atLogin uint64
 		var oldRace, class uint8
-		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class); err != nil {
+		var oldName string
+		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class, name FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class, &oldName); err != nil {
 			buf := protocol.NewBuffer(1)
 			buf.WriteU8(charCreateError)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
@@ -2911,16 +2944,15 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 		// (CharacterHandler.cpp:1695-1702): gated on
 		// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RACEMASK; mirrors the
 		// char-create mask check.
-		skipRacemaskCheck := false
-		if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-			var permErr error
-			skipRacemaskCheck, permErr = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSkipCheckCharacterCreationRacemask)
-			if permErr != nil {
-				skipRacemaskCheck = false
-			}
-		}
-		if !skipRacemaskCheck && s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
+		if !s.accountSkipRacemaskCheck(ctx) && s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
 			return sendFactionChange(charCreateError)
+		}
+		// HandleCharFactionOrRaceChangeCallback (CharacterHandler.cpp:1704):
+		// PreventRenameCharacterOnCustomization (default false) rejects any
+		// change-time rename with CHAR_NAME_FAILURE; C++ compares the raw
+		// packet name to the character cache name before normalization.
+		if s.server.Config.PreventRenameCharacterOnCustomization && newName != oldName {
+			return sendFactionChange(charNameFailure)
 		}
 		// normalizePlayerName (CharacterHandler.cpp:1709-1713): empty or
 		// invalid-UTF-8 answers CHAR_NAME_NO_NAME.
