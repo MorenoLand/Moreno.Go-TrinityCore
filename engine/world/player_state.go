@@ -1911,7 +1911,13 @@ func (s *session) updateOfflineItemLoadState(ctx context.Context, state *playerS
 		if uint32(item.flags)&itemInstanceFlagRefundable == 0 {
 			continue
 		}
-		if item.playedTime > 2*60*60 {
+		// Player::_LoadInventory (Player.cpp:18480-18493): an expired 2h
+		// refund window deletes the refund data and clears the refundable
+		// flag. Go's playedTime is the purchase-time T0 seed (see
+		// recordVendorRefund), so expiry is T0 + 2h < the owner's total
+		// played time — the same shape as soulboundTradeExpired, not the
+		// old accumulated-seconds read.
+		if item.playedTime+2*60*60 < int64(state.TotalPlayedTime) {
 			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), item.guid)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", item.guid, state.GUID)
 			changed = true

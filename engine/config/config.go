@@ -38,6 +38,7 @@ type Config struct {
 	WorldDatabaseInfo                       string
 	CharacterDatabaseInfo                   string
 	ServerLoginInfo                         bool
+	PreventRenameCharacterOnCustomization   bool
 	RealmAddress                            string
 	RealmServerPort                         int
 	WorldServerPort                         int
@@ -858,6 +859,8 @@ func (c *Config) set(key, value string) error {
 		c.CharacterDatabaseInfo = value
 	case "Server.LoginInfo":
 		return setBool(&c.ServerLoginInfo, key, value)
+	case "PreventRenameCharacterOnCustomization":
+		return setBool(&c.PreventRenameCharacterOnCustomization, key, value)
 	case "RealmAddress":
 		c.RealmAddress = value
 	case "RealmServerPort":

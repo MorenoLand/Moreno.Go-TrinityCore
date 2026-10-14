@@ -2629,6 +2629,14 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 		sendCustomize(charCreateError, false)
 		return true
 	}
+	// HandleCharCustomizeCallback (CharacterHandler.cpp:1421-1426):
+	// PreventRenameCharacterOnCustomization (default false) rejects any
+	// customize-time name change with CHAR_NAME_FAILURE; C++ compares the
+	// raw packet name before normalization.
+	if s.server.Config.PreventRenameCharacterOnCustomization && rawName != oldName {
+		sendCustomize(charNameFailure, false)
+		return true
+	}
 	if !utf8.ValidString(rawName) || name == "" {
 		sendCustomize(charNameNoName, false)
 		return true

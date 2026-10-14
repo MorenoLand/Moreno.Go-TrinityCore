@@ -711,6 +711,14 @@ func (s *session) recordVendorRefund(ctx context.Context, cdb *sql.DB, itemGUID 
 	// the bit is client-visible ("Refundable") and is what the sell silent-return,
 	// mail, guild-bank and load-time arms key off; the refund row alone never set it.
 	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags | ? WHERE guid = ?", int64(itemInstanceFlagRefundable), itemGUID)
+	// SendRefundInfo (Player.cpp:26539) answers GetTotalPlayedTime() -
+	// item->GetPlayedTime(): both accumulate over the same online intervals,
+	// so the wire value is exactly the owner's total played time at purchase
+	// (T0). Go has no per-tick accumulation, so seed T0 directly — the same
+	// seeding bindLootSoulboundTradeable uses for the BOP-tradeable window.
+	if s.player != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET playedTime = ? WHERE guid = ?", s.player.TotalPlayedTime, itemGUID)
+	}
 }
 
 // vendorItemListable mirrors the SendListInventory visibility filters
