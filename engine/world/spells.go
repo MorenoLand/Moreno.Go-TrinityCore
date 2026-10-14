@@ -2481,194 +2481,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotFishable), true)
 		return true
 	}
-	for _, effect := range spell.Effects {
-		if effect.Effect != 101 {
-			continue
-		}
-		if _, failure := s.checkPetFood(ctx, target.ItemGUID); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pet food validation", "failure", failure)
-			return true
-		}
-	}
-	// Learn-spell pet gates (Spell::CheckCast per-effect block,
-	// Spell.cpp:5570-5618): LEARN_SPELL on TargetA == TARGET_UNIT_PET and
-	// LEARN_PET_SPELL require the caster's pet and reject when the learn
-	// spell's own SpellLevel exceeds the pet's level.
-	if failure := s.checkLearnSpellCast(ctx, spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "learn spell pet validation", "failure", failure)
-		return true
-	}
-	// Apply-glyph duplicate gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5618-5627): socketing a glyph already active in the current
-	// talent spec fails with SPELL_FAILED_UNIQUE_GLYPH.
-	if failure := s.checkGlyphCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "duplicate glyph", "failure", failure)
-		return true
-	}
-	// Power burn/drain target gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5652-5660): a burn/drain effect fails with
-	// SPELL_FAILED_BAD_TARGETS when the unit target (not the caster) uses a
-	// power type other than the effect's MiscValue. C++ relative order places
-	// this right after the apply-glyph leg; the feed-pet leg runs earlier in
-	// Go — order only matters on simultaneous failures, documented.
-	if failure := s.checkPowerBurnDrainCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "power burn/drain target power-type mismatch", "failure", failure)
-		return true
-	}
-	// Charge gate (Spell::CheckCast per-effect block, Spell.cpp:5662-5706):
-	// a SPELL_EFFECT_CHARGE effect fails with SPELL_FAILED_ROOTED when the
-	// caster is rooted, SPELL_FAILED_DONT_REPORT when the spell needs an
-	// explicit unit target but carries none, or SPELL_FAILED_LINE_OF_SIGHT
-	// when that target is not in line of sight (the PathGenerator NOPATH
-	// arms stay unbridged — no navmesh). C++ relative order places this
-	// right after the burn/drain leg.
-	if failure := s.checkChargeCast(ctx, spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charge validation", "failure", failure)
-		return true
-	}
-	// Skinning gate (Spell::CheckCast per-effect block, Spell.cpp:5707-5724):
-	// a SPELL_EFFECT_SKINNING effect fails with SPELL_FAILED_BAD_TARGETS when
-	// the target is not a creature, SPELL_FAILED_TARGET_UNSKINNABLE when the
-	// corpse lacks the skinnable flag, SPELL_FAILED_TARGET_NOT_LOOTED when a
-	// non-critter corpse was not looted, and SPELL_FAILED_LOW_CASTLEVEL when
-	// the caster's loot skill is too low for the creature's level. C++
-	// relative order places this right after the charge leg.
-	if failure := s.checkSkinningCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skinning validation", "failure", failure)
-		return true
-	}
-	// Open-lock gate (Spell::CheckCast per-effect block, Spell.cpp:5725-5791):
-	// a SPELL_EFFECT_OPEN_LOCK effect with a gameobject or gameobject-item
-	// implicit target fails with SPELL_FAILED_BAD_TARGETS when the target is
-	// missing or not openable, SPELL_FAILED_LOW_CASTLEVEL when the caster's
-	// lock skill is too low, SPELL_FAILED_TRY_AGAIN on the
-	// orange-lockpick fail chance and on the battleground object arm, and
-	// SPELL_FAILED_BAD_TARGETS when CanOpenLock finds no key. C++ relative
-	// order places this right after the skinning leg.
-	if failure := s.checkOpenLockCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "open-lock validation", "failure", failure)
-		return true
-	}
-	// Resurrect-pet gate (Spell::CheckCast per-effect block, Spell.cpp:5792-5801):
-	// a SPELL_EFFECT_RESURRECT_PET effect fails with
-	// SPELL_FAILED_ALREADY_HAVE_SUMMON when the caster's guardian pet is
-	// alive. C++ relative order places this right after the open-lock leg.
-	if failure := s.checkResurrectPetCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "resurrect-pet validation", "failure", failure)
-		return true
-	}
-	// Generic-summon gate (Spell::CheckCast per-effect block, Spell.cpp:5802-5817):
-	// a SPELL_EFFECT_SUMMON effect whose SummonProperties Control is
-	// SUMMON_CATEGORY_PET fails with SPELL_FAILED_ALREADY_HAVE_SUMMON when
-	// the caster has a pet and the spell lacks SPELL_ATTR1_DISMISS_PET; the
-	// charm (puppet) arms have no Go bridge. C++ relative order places this
-	// right after the resurrect-pet leg.
-	if failure := s.checkSummonCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon validation", "failure", failure)
-		return true
-	}
-	// Create-tamed-pet gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5828-5836): a SPELL_EFFECT_CREATE_TAMED_PET effect fails
-	// with SPELL_FAILED_BAD_TARGETS when the unit target is not a player,
-	// and with SPELL_FAILED_ALREADY_HAVE_SUMMON when the targeted player
-	// already has a pet and the spell lacks SPELL_ATTR1_DISMISS_PET.
-	// C++ relative order places this right after the generic-summon leg.
-	if failure := s.checkCreateTamedPetCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "create-tamed-pet validation", "failure", failure)
-		return true
-	}
-	// Summon-pet gate (Spell::CheckCast per-effect block, Spell.cpp:5837-5873):
-	// a SPELL_EFFECT_SUMMON_PET effect fails with SPELL_FAILED_DONT_REPORT
-	// when the caster's stable holds a dead or untameable hunter pet for the
-	// effect's MiscValue entry, or no pet at all when MiscValue is 0; the
-	// pet self-stun (32752) and charm arms have no Go bridge. C++ relative
-	// order places this right after the create-tamed-pet leg.
-	if failure := s.checkSummonPetCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-pet validation", "failure", failure)
-		return true
-	}
-	// Summon-player gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5892-5928): a SPELL_EFFECT_SUMMON_PLAYER effect (ritual of
-	// summoning style) fails with SPELL_FAILED_BAD_TARGETS when the caster's
-	// selected target is not another player in the same group (except spell
-	// 48955), and the dungeon leg applies when the caster stands in a
-	// dungeon. C++ relative order places this right after the summon-pet leg.
-	if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-player validation", "failure", failure)
-		return true
-	}
-	// Recruit-a-friend summon gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5929-5943): a SPELL_EFFECT_SUMMON_RAF_FRIEND effect fails
-	// with SPELL_FAILED_BAD_TARGETS unless the selected player is
-	// recruiter-linked to the caster in either direction. C++ relative
-	// order places this right after the summon-player leg.
-	if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-raf-friend validation", "failure", failure)
-		return true
-	}
-	// Leap / teleport-units-face-caster gate (Spell::CheckCast per-effect
-	// block, Spell.cpp:5945-5954): a SPELL_EFFECT_LEAP or
-	// SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER effect fails with
-	// SPELL_FAILED_TRY_AGAIN when the caster is in a battleground whose
-	// status is not STATUS_IN_PROGRESS ("Do not allow to cast it before
-	// BG starts"). C++ relative order places this right after the
-	// recruit-a-friend leg.
-	if failure := s.checkLeapCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap/teleport-before-bg-start validation", "failure", failure)
-		return true
-	}
-	cost := s.calculateSpellPowerCost(spell)
-	pType := spell.PowerType
-	// Spell::CheckPower (Spell.cpp:6651-6656): health-as-power spells
-	// (PowerType == POWER_HEALTH, -2 in C++, 0xFFFFFFFE in Go's uint32
-	// field) fail with SPELL_FAILED_CASTER_AURASTATE when the caster's
-	// health is at or below the cost — and pass outright otherwise,
-	// without reaching the rune/power arms below. C++ applies the gate
-	// unconditionally (no cost > 0 guard). Runs ahead of the unknown-type
-	// arm, matching C++ relative order (health 6651 → unknown-type
-	// 6659 → rune 6665 → power amount 6673).
-	if spell.PowerType == 0xFFFFFFFE && s.player.Health <= cost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough health for health-cost spell", "failReason", spellFailedCasterAurastate)
-		return true
-	}
-	// Spell::CheckPower (Spell.cpp:6659-6663): a PowerType >= MAX_POWERS
-	// (7, SharedDefines.h:302) logs the TC error and fails with
-	// SPELL_FAILED_UNKNOWN (187 — "actually doesn't exist in client",
-	// SharedDefines.h:1169; C++ sends it anyway).
-	if pType != 0xFFFFFFFE && pType >= 7 {
-		s.debug("spells", "Spell::CheckPower: Unknown power type", "powerType", pType, "spell", spellID)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnknown), true)
-		return true
-	}
-	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
-	// PowerType == POWER_RUNE; RuneCostID (Spell.dbc field 226) was loaded
-	// in store.go but never read in world/ — the earlier "wired" claim was
-	// an overclaim. Genuine logic now: Spell::CheckRuneCost parity.
-	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "runes on cooldown")
-		return true
-	}
-	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
-		return true
-	}
 	// Target-item arm of Spell::CheckItems (Spell.cpp:6748-6754): runs before
 	// the reagent check, matching C++ CheckItems relative order. An item
 	// target that no longer resolves fails with SPELL_FAILED_ITEM_GONE;
@@ -2815,6 +2627,258 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Spell::CheckPower (Spell.cpp:6651-6683; called from Spell::CheckCast at
+	// Spell.cpp:5502): runs after the CheckItems block, matching C++ CheckCast
+	// relative order (CheckItems 5489 -> CheckRange 5499 -> CheckPower 5502).
+	// Client-initiated casts only — triggered casts go through castSpellDirect.
+	cost := s.calculateSpellPowerCost(spell)
+	pType := spell.PowerType
+	// Spell::CheckPower (Spell.cpp:6651-6656): health-as-power spells
+	// (PowerType == POWER_HEALTH, -2 in C++, 0xFFFFFFFE in Go's uint32
+	// field) fail with SPELL_FAILED_CASTER_AURASTATE when the caster's
+	// health is at or below the cost — and pass outright otherwise,
+	// without reaching the rune/power arms below. C++ applies the gate
+	// unconditionally (no cost > 0 guard). Runs ahead of the unknown-type
+	// arm, matching C++ relative order (health 6651 → unknown-type
+	// 6659 → rune 6665 → power amount 6673).
+	if spell.PowerType == 0xFFFFFFFE && s.player.Health <= cost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough health for health-cost spell", "failReason", spellFailedCasterAurastate)
+		return true
+	}
+	// Spell::CheckPower (Spell.cpp:6659-6663): a PowerType >= MAX_POWERS
+	// (7, SharedDefines.h:302) logs the TC error and fails with
+	// SPELL_FAILED_UNKNOWN (187 — "actually doesn't exist in client",
+	// SharedDefines.h:1169; C++ sends it anyway).
+	if pType != 0xFFFFFFFE && pType >= 7 {
+		s.debug("spells", "Spell::CheckPower: Unknown power type", "powerType", pType, "spell", spellID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnknown), true)
+		return true
+	}
+	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
+	// PowerType == POWER_RUNE; RuneCostID (Spell.dbc field 226) was loaded
+	// in store.go but never read in world/ — the earlier "wired" claim was
+	// an overclaim. Genuine logic now: Spell::CheckRuneCost parity.
+	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "runes on cooldown")
+		return true
+	}
+	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
+		return true
+	}
+
+	// Per-effect CheckCast switch (Spell.cpp:5517-6012): runs after CheckPower,
+	// matching C++ CheckCast relative order (CheckPower 5502 ->
+	// CheckCasterAuras 5509 -> per-effect loop 5517). Assembled here in C++
+	// case order: dispel 5520 -> learn 5574 -> glyph 5618 -> feed-pet 5628 ->
+	// power burn/drain 5652 -> charge 5662 -> skinning 5707 -> open lock 5729 ->
+	// resurrect pet 5793 -> summon 5805 -> create tamed pet 5828 -> summon pet
+	// 5839 -> summon player 5896 -> summon RAF friend 5932 -> leap 5947 ->
+	// steal beneficial buff 5957 -> leap back 5986 -> jump 6001 -> talent spec
+	// select 6012. The dispel/steal/leap-back/jump/talent-spec legs move here
+	// from their late position below the CheckTarget gates; the feed-pet leg
+	// moves after the glyph leg per C++ case order.
+	// Dispel check: if spell has only SPELL_EFFECT_DISPEL effects (and not area-targeting), verify target has dispellable auras
+	// Mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565) — first leg of
+	// the per-effect switch. The arm keys on m_targets.GetUnitTarget() — the
+	// wire unit target only (a missing wire unit target skips the arm;
+	// checkDispelPreCast returns 0 on 0).
+	wireUnitGUID := uint64(0)
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
+		wireUnitGUID = target.UnitGUID
+	}
+	if failReason := s.checkDispelPreCast(spell, wireUnitGUID); failReason != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to dispel")
+		return true
+	}
+	// Learn-spell pet gates (Spell::CheckCast per-effect block,
+	// Spell.cpp:5570-5618): LEARN_SPELL on TargetA == TARGET_UNIT_PET and
+	// LEARN_PET_SPELL require the caster's pet and reject when the learn
+	// spell's own SpellLevel exceeds the pet's level.
+	if failure := s.checkLearnSpellCast(ctx, spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "learn spell pet validation", "failure", failure)
+		return true
+	}
+	// Apply-glyph duplicate gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5618-5627): socketing a glyph already active in the current
+	// talent spec fails with SPELL_FAILED_UNIQUE_GLYPH.
+	if failure := s.checkGlyphCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "duplicate glyph", "failure", failure)
+		return true
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect != 101 {
+			continue
+		}
+		if _, failure := s.checkPetFood(ctx, target.ItemGUID); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pet food validation", "failure", failure)
+			return true
+		}
+	}
+	// Power burn/drain target gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5652-5660): a burn/drain effect fails with
+	// SPELL_FAILED_BAD_TARGETS when the unit target (not the caster) uses a
+	// power type other than the effect's MiscValue. C++ relative order places
+	// this right after the apply-glyph leg; the feed-pet leg runs earlier in
+	// Go — order only matters on simultaneous failures, documented.
+	if failure := s.checkPowerBurnDrainCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "power burn/drain target power-type mismatch", "failure", failure)
+		return true
+	}
+	// Charge gate (Spell::CheckCast per-effect block, Spell.cpp:5662-5706):
+	// a SPELL_EFFECT_CHARGE effect fails with SPELL_FAILED_ROOTED when the
+	// caster is rooted, SPELL_FAILED_DONT_REPORT when the spell needs an
+	// explicit unit target but carries none, or SPELL_FAILED_LINE_OF_SIGHT
+	// when that target is not in line of sight (the PathGenerator NOPATH
+	// arms stay unbridged — no navmesh). C++ relative order places this
+	// right after the burn/drain leg.
+	if failure := s.checkChargeCast(ctx, spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charge validation", "failure", failure)
+		return true
+	}
+	// Skinning gate (Spell::CheckCast per-effect block, Spell.cpp:5707-5724):
+	// a SPELL_EFFECT_SKINNING effect fails with SPELL_FAILED_BAD_TARGETS when
+	// the target is not a creature, SPELL_FAILED_TARGET_UNSKINNABLE when the
+	// corpse lacks the skinnable flag, SPELL_FAILED_TARGET_NOT_LOOTED when a
+	// non-critter corpse was not looted, and SPELL_FAILED_LOW_CASTLEVEL when
+	// the caster's loot skill is too low for the creature's level. C++
+	// relative order places this right after the charge leg.
+	if failure := s.checkSkinningCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skinning validation", "failure", failure)
+		return true
+	}
+	// Open-lock gate (Spell::CheckCast per-effect block, Spell.cpp:5725-5791):
+	// a SPELL_EFFECT_OPEN_LOCK effect with a gameobject or gameobject-item
+	// implicit target fails with SPELL_FAILED_BAD_TARGETS when the target is
+	// missing or not openable, SPELL_FAILED_LOW_CASTLEVEL when the caster's
+	// lock skill is too low, SPELL_FAILED_TRY_AGAIN on the
+	// orange-lockpick fail chance and on the battleground object arm, and
+	// SPELL_FAILED_BAD_TARGETS when CanOpenLock finds no key. C++ relative
+	// order places this right after the skinning leg.
+	if failure := s.checkOpenLockCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "open-lock validation", "failure", failure)
+		return true
+	}
+	// Resurrect-pet gate (Spell::CheckCast per-effect block, Spell.cpp:5792-5801):
+	// a SPELL_EFFECT_RESURRECT_PET effect fails with
+	// SPELL_FAILED_ALREADY_HAVE_SUMMON when the caster's guardian pet is
+	// alive. C++ relative order places this right after the open-lock leg.
+	if failure := s.checkResurrectPetCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "resurrect-pet validation", "failure", failure)
+		return true
+	}
+	// Generic-summon gate (Spell::CheckCast per-effect block, Spell.cpp:5802-5817):
+	// a SPELL_EFFECT_SUMMON effect whose SummonProperties Control is
+	// SUMMON_CATEGORY_PET fails with SPELL_FAILED_ALREADY_HAVE_SUMMON when
+	// the caster has a pet and the spell lacks SPELL_ATTR1_DISMISS_PET; the
+	// charm (puppet) arms have no Go bridge. C++ relative order places this
+	// right after the resurrect-pet leg.
+	if failure := s.checkSummonCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon validation", "failure", failure)
+		return true
+	}
+	// Create-tamed-pet gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5828-5836): a SPELL_EFFECT_CREATE_TAMED_PET effect fails
+	// with SPELL_FAILED_BAD_TARGETS when the unit target is not a player,
+	// and with SPELL_FAILED_ALREADY_HAVE_SUMMON when the targeted player
+	// already has a pet and the spell lacks SPELL_ATTR1_DISMISS_PET.
+	// C++ relative order places this right after the generic-summon leg.
+	if failure := s.checkCreateTamedPetCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "create-tamed-pet validation", "failure", failure)
+		return true
+	}
+	// Summon-pet gate (Spell::CheckCast per-effect block, Spell.cpp:5837-5873):
+	// a SPELL_EFFECT_SUMMON_PET effect fails with SPELL_FAILED_DONT_REPORT
+	// when the caster's stable holds a dead or untameable hunter pet for the
+	// effect's MiscValue entry, or no pet at all when MiscValue is 0; the
+	// pet self-stun (32752) and charm arms have no Go bridge. C++ relative
+	// order places this right after the create-tamed-pet leg.
+	if failure := s.checkSummonPetCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-pet validation", "failure", failure)
+		return true
+	}
+	// Summon-player gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5892-5928): a SPELL_EFFECT_SUMMON_PLAYER effect (ritual of
+	// summoning style) fails with SPELL_FAILED_BAD_TARGETS when the caster's
+	// selected target is not another player in the same group (except spell
+	// 48955), and the dungeon leg applies when the caster stands in a
+	// dungeon. C++ relative order places this right after the summon-pet leg.
+	if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-player validation", "failure", failure)
+		return true
+	}
+	// Recruit-a-friend summon gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5929-5943): a SPELL_EFFECT_SUMMON_RAF_FRIEND effect fails
+	// with SPELL_FAILED_BAD_TARGETS unless the selected player is
+	// recruiter-linked to the caster in either direction. C++ relative
+	// order places this right after the summon-player leg.
+	if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-raf-friend validation", "failure", failure)
+		return true
+	}
+	// Leap / teleport-units-face-caster gate (Spell::CheckCast per-effect
+	// block, Spell.cpp:5945-5954): a SPELL_EFFECT_LEAP or
+	// SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER effect fails with
+	// SPELL_FAILED_TRY_AGAIN when the caster is in a battleground whose
+	// status is not STATUS_IN_PROGRESS ("Do not allow to cast it before
+	// BG starts"). C++ relative order places this right after the
+	// recruit-a-friend leg.
+	if failure := s.checkLeapCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap/teleport-before-bg-start validation", "failure", failure)
+		return true
+	}
+
+	// Spellsteal check: SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126) fails at cast
+	// time when the target carries no stealable aura (Spell::CheckCast,
+	// Spell.cpp:5957-5984). Like the dispel arm above, this keys on
+	// m_targets.GetUnitTarget() — the wire unit target only. The s.selection
+	// fallback has no C++ analog at CheckCast time, so a missing wire unit
+	// target fails with SPELL_FAILED_BAD_TARGETS (Spell.cpp:5959), never
+	// scanning the selected unit's auras.
+	if failReason := s.checkStealPreCast(spell, wireUnitGUID); failReason != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to steal")
+		return true
+	}
+
+	// Leap-back / jump gate: SPELL_EFFECT_LEAP_BACK (138),
+	// SPELL_EFFECT_JUMP (41) and SPELL_EFFECT_JUMP_DEST (42) fail with
+	// SPELL_FAILED_ROOTED when the caster is rooted (Spell::CheckCast,
+	// Spell.cpp:5986-6006). C++ relative order places these right after the
+	// steal leg.
+	if failure := s.checkLeapBackCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap-back/jump while rooted", "failure", failure)
+		return true
+	}
+
+	// Talent spec select gate: SPELL_EFFECT_TALENT_SPEC_SELECT (162) fails
+	// with SPELL_FAILED_NOT_IN_BATTLEGROUND when the battleground has
+	// already started (Spell::CheckCast, Spell.cpp:6007-6013). C++ relative
+	// order places it right after the jump legs.
+	if failure := s.checkTalentSpecSelectCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "talent spec change after bg started", "failure", failure)
+		return true
+	}
 	targetGUID := uint64(0)
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 		targetGUID = target.UnitGUID
@@ -3176,54 +3240,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 
 	// Dispel check: if spell has only SPELL_EFFECT_DISPEL effects (and not area-targeting), verify target has dispellable auras
-	// Mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565). The arm keys
-	// on m_targets.GetUnitTarget() — the wire unit target only. The
-	// s.selection fallback above has no C++ analog at CheckCast time
-	// (CheckCast runs before SetTargetMap, Spell.cpp:3100), so a missing wire
-	// unit target skips the arm (checkDispelPreCast returns 0 on 0).
-	wireUnitGUID := uint64(0)
-	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
-		wireUnitGUID = target.UnitGUID
-	}
-	if failReason := s.checkDispelPreCast(spell, wireUnitGUID); failReason != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to dispel")
-		return true
-	}
-
-	// Spellsteal check: SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126) fails at cast
-	// time when the target carries no stealable aura (Spell::CheckCast,
-	// Spell.cpp:5957-5984). Like the dispel arm above, this keys on
-	// m_targets.GetUnitTarget() — the wire unit target only. The s.selection
-	// fallback has no C++ analog at CheckCast time, so a missing wire unit
-	// target fails with SPELL_FAILED_BAD_TARGETS (Spell.cpp:5959), never
-	// scanning the selected unit's auras.
-	if failReason := s.checkStealPreCast(spell, wireUnitGUID); failReason != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to steal")
-		return true
-	}
-
-	// Leap-back / jump gate: SPELL_EFFECT_LEAP_BACK (138),
-	// SPELL_EFFECT_JUMP (41) and SPELL_EFFECT_JUMP_DEST (42) fail with
-	// SPELL_FAILED_ROOTED when the caster is rooted (Spell::CheckCast,
-	// Spell.cpp:5986-6006). C++ relative order places these right after the
-	// steal leg.
-	if failure := s.checkLeapBackCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap-back/jump while rooted", "failure", failure)
-		return true
-	}
-
-	// Talent spec select gate: SPELL_EFFECT_TALENT_SPEC_SELECT (162) fails
-	// with SPELL_FAILED_NOT_IN_BATTLEGROUND when the battleground has
-	// already started (Spell::CheckCast, Spell.cpp:6007-6013). C++ relative
-	// order places it right after the jump legs.
-	if failure := s.checkTalentSpecSelectCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "talent spec change after bg started", "failure", failure)
-		return true
-	}
 
 	// Possess-pet / charm gates (Spell::CheckCast ApplyAuraName switch,
 	// Spell.cpp:6033-6087): SPELL_AURA_MOD_POSSESS_PET fails with
