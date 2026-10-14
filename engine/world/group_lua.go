@@ -396,6 +396,8 @@ func (s *Server) convertGroupToRaid(ctx context.Context, g *groupState) {
 func (s *Server) luaRemoveGroupMember(ctx context.Context, g *groupState, guid uint64, method uint8) bool {
 	s.groupsMu.RLock()
 	member := false
+	before := len(g.Members)
+	isLFG := g.IsLFG
 	for _, m := range g.Members {
 		if m.GUID == guid {
 			member = true
@@ -406,10 +408,20 @@ func (s *Server) luaRemoveGroupMember(ctx context.Context, g *groupState, guid u
 	if !member {
 		return false
 	}
-	// Group::RemoveMember (Group.cpp:744-749): the offline arm (player ==
-	// nullptr) disbands and returns false; the online arm returns true even
-	// when the removal disbands the group (:736-742).
-	online := s.findSessionByGUID(guid) != nil
+	// Group::RemoveMember (Group.cpp:588-589): LFG vote kicks are completed
+	// in scripts, so the arm returns before any removal — false only when
+	// the kicked member is the group's last (!m_memberSlots.empty()).
+	if isLFG && method == groupRemoveMethodKick {
+		return before >= 2
+	}
+	// Group.cpp:629-746: the bool reports the size arm, not the
+	// member's online state — true when the member count before removal
+	// exceeds the small-group threshold (1 for LFG, 2 otherwise; Go has
+	// no BG/BF groups), false when the removal disbands the group (:744-749).
+	threshold := 2
+	if isLFG {
+		threshold = 1
+	}
 	s.removeGroupMemberByGUID(ctx, g, guid, method)
-	return online
+	return before > threshold
 }

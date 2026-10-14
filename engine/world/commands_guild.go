@@ -226,14 +226,6 @@ func (s *session) guildDeleteMember(ctx context.Context, cdb *sql.DB, guildID ui
 	}
 }
 
-// disbandGuildByID delivers GE_DISBANDED, deletes the rows, and clears
-// every online member's session guild state. It carries no script hooks;
-// paths that need the C++ Disband hooks use disbandGuildWithLuaEvents.
-func (s *session) disbandGuildByID(ctx context.Context, guildID uint32) {
-	s.broadcastGuildEventTo(guildID, guildEventPayload(guildEventDisbanded, 0))
-	s.disbandGuildRows(ctx, guildID)
-}
-
 // disbandGuildRows deletes the guild rows and clears every online member's
 // session guild state. Split from disbandGuildByID so the Lua disband path
 // can broadcast GE_DISBANDED before the per-member sweep (Guild.cpp:1144).
