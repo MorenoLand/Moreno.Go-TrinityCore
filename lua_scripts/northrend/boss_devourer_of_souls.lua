@@ -14,8 +14,7 @@
 -- call 353 per northrend_script_loader.cpp — the FOURTH and LAST group of
 -- the "// Forge of Souls" block in AddNorthrendScripts(), immediately after
 -- AddSC_boss_bronjahm() (call 352); no call follows it in the Forge of
--- Souls block — the checkpoint sequence (boss_bronjahm ->
--- boss_devourer_of_souls) is followed).
+-- Souls block.
 -- Entries: 36502 Devourer of Souls (forge_of_souls.h NPC_DEVOURER, line 41)
 -- — entry-verifiable, registration proceeds (the nexus_commanders /
 -- malygos / sartharion kalecgos precedent); the CreatureScript ScriptName
@@ -27,77 +26,327 @@
 -- the loader decl/call lines); this clone carries no sql/ tree, so
 -- ScriptName bindings are DB-side by construction. No devourer lua
 -- existed.
--- Eluna creature events: 1 OnEnterCombat, 4 OnDeath. (No OnKill
--- registration: the KilledUnit Talk is display-ID gated with no bridge —
--- see below.)
--- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_FACE_AGGRO 0) — unconditional (the auriaya
--- engage-port precedent; the BossAI::JustEngagedWith passthrough leg, the
--- NPC_CRUCIBLE_OF_SOULS 60yd double-spawn guard SummonCreature leg and the
--- five events.ScheduleEvent legs have no bridge).
--- JustDied — Talk(SAY_FACE_DEATH 4) — unconditional (the sjonnir
--- JustDied-Talk precedent; the _JustDied() passthrough leg and the
--- instance->GetData(DATA_TEAM_IN_INSTANCE) outro-summon choreography have
--- no bridge).
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDeath,
+-- 23 OnReset. Timers via CreateLuaEvent (timers table keyed by creature
+-- GUID, cancelled on events 2/4/23 — the svala / yogg_saron convention);
+-- CastSpell(nil, id) = victim-cast, CastSpell(creature, id) = self-cast,
+-- CastSpell(target, id) = random-player cast; {min,max} delay = randtime
+-- range (the maiden_of_virtue / curator / nightbane / toravon / emalon /
+-- archavon convention). None of the ported arms is a TRIGGERED cast (all
+-- DoCast* are 1-2 arg, non-triggered). Melee is engine-driven in Go
+-- (creature combat tick), like C++ DoMeleeAttackIfReady; the
+-- HasUnitState(UNIT_STATE_CASTING) gates (:251) are unmodeled (no
+-- unit-state bridge — creature casts are packet-visual in Go).
+-- Ported arms (C++-exact for all modeled legs):
+-- JustEngagedWith (:160-169): Talk(SAY_FACE_AGGRO 0) — unconditional;
+-- seeds PHANTOM_BLAST 5000, MIRRORED_SOUL 8000, WELL_OF_SOULS 30000,
+-- UNLEASHED_SOULS 20000, WAILING_SOULS {60000,70000} ms.
+-- EVENT_PHANTOM_BLAST (:255-256): DoCastVictim(SPELL_PHANTOM_BLAST 68982)
+-- — victim-cast, non-triggered; re-arm 5000 unconditional.
+-- EVENT_MIRRORED_SOUL (:259-261): DoCastAOE(SPELL_MIRRORED_SOUL_TARGET_SELECTOR
+-- 69048) = self-cast; Talk(EMOTE_MIRRORED_SOUL 5) after the cast (C++
+-- order kept); re-arm {15000,30000}.
+-- EVENT_WELL_OF_SOULS (:264-266): SelectTarget(Random, 0) -> randomPlayer
+-- (the archavon GetPlayersInWorld precedent); DoCast(target,
+-- SPELL_WELL_OF_SOULS 68820), non-triggered; re-arm 20000 unconditional
+-- (the SelectTarget if only wraps the cast).
+-- EVENT_UNLEASHED_SOULS (:269-275): SelectTarget(Random, 0) ->
+-- DoCast(target, SPELL_UNLEASHED_SOULS 68939), non-triggered;
+-- Talk(SAY_FACE_UNLEASH_SOUL 7) + Talk(EMOTE_UNLEASH_SOUL 6) are
+-- unconditional in C++ (outside the target-if) and kept; re-arm 30000.
+-- (The SetDisplayId(DISPLAY_SORROW) leg is excluded — see below.)
+-- EVENT_WAILING_SOULS (:282-310): Talk(SAY_FACE_WAILING_SOUL 9) +
+-- Talk(EMOTE_WAILING_SOUL 8) (C++ order kept); DoCast(me,
+-- SPELL_WAILING_SOULS_STARTING 68912) = self-cast; random target ->
+-- DoCast(me, SPELL_WAILING_SOULS_BEAM 68875) (gated on a target being
+-- found, C++ :287-290); then the 15-tick chain (:313-316): first tick at
+-- 3000, DoCast(me, SPELL_WAILING_SOULS 68873) self-cast, re-arm 1000
+-- until 15 casts land (:319), then the phase ends and WAILING_SOULS
+-- re-arms at {60000,70000} (:326).
+-- Deviation (documented): C++ delays all other events by 18s during the
+-- wailing phase (:307); here the other arms keep their own beat but skip
+-- their casts/Talks while the wailing flag is set — beats stay
+-- phase-anchored instead of shifting 18s. No beam sweeps the facing
+-- (no SetFacingTo bridge).
+-- JustDied (:203): Talk(SAY_FACE_DEATH 4) — unconditional (the sjonnir
+-- JustDied-Talk precedent; the _JustDied() passthrough leg is unmodeled).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 36502):
--- KilledUnit Talk(textId) is player-gated BUT text-selected by
+-- KilledUnit (:230-247): player-gated BUT text-selected by
 -- me->GetDisplayId() (ANGER 30148 / SORROW 30149 / DESIRE 30150 ->
 -- SAY_FACE_ANGER_SLAY 1 / SAY_FACE_SORROW_SLAY 2 / SAY_FACE_DESIRE_SLAY 3)
--- — no display-ID bridge exists, so it does not port (the razuvious
--- player-gated variant precedent covers only unconditional Talk).
--- The JustDied outro loop (22 outroPositions team-swapped
--- instance->instance->SummonCreature spawns with MovePoint legs) and the
--- summon->AI()->Talk(SAY_JAINA_OUTRO / SAY_SYLVANAS_OUTRO 0) lines are
--- instance-driven Talk on other creatures' AI — no bridge
--- (the instance_violet_hold ScheduleCyanigosaIntro precedent).
--- Talk(EMOTE_MIRRORED_SOUL 5), Talk(SAY_FACE_UNLEASH_SOUL 7) +
--- Talk(EMOTE_UNLEASH_SOUL 6) and Talk(SAY_FACE_WAILING_SOUL 9) +
--- Talk(EMOTE_WAILING_SOUL 8) all ride scheduler-driven UpdateAI event
--- legs (EVENT_MIRRORED_SOUL / EVENT_UNLEASHED_SOULS / EVENT_WAILING_SOULS)
--- — no-timer-bridge queue (the boss_toravon precedent). The whole
--- scheduler machine (PHANTOM_BLAST 5s victim / MIRRORED_SOUL 15s-30s
--- AOE selector / WELL_OF_SOULS 20s random / UNLEASHED_SOULS 30s random +
--- SORROW-face flip + 5s FACE_ANGER restore / WAILING_SOULS 60s-70s DESIRE
--- phase: beamAngle PI/30-per-tick sweep, UNIT_STATE_ROOT + REACT_PASSIVE,
--- 15 TICK casts, MoveChase restore; the HasUnitState(UNIT_STATE_CASTING)
--- gates; DoMeleeAttackIfReady) and the Reset display/control/react-state
--- choreography (DISPLAY_ANGER + SetControlled(false, UNIT_STATE_ROOT) +
--- REACT_AGGRESSIVE) join the no-timer-bridge queue (the boss_toravon
--- precedent). SpellHitTarget H_SPELL_PHANTOM_BLAST -> threeFaced = false
--- and GetData(DATA_THREE_FACED) join the no-SpellHit-bridge /
--- no-GetData-bridge queues (the boss_zuramat precedent). The three
--- spell_devourer_of_souls_mirrored_soul* SpellScript/AuraScript hooks join
--- the no-SpellScript / no-AuraScript bridge queues (the boss_moragg
--- optic-link precedent). achievement_three_faced (OnCheck
--- target->ToCreature AI()->GetData(DATA_THREE_FACED)) joins the
--- unmodeled-achievement / no-GetData-bridge queue (the cyanigosa / ichoron
--- precedent). The file carries a @todo (model id 36503/36504 during
--- unleash soul; outro npc movement).
+-- — no display-ID bridge, does not port (the razuvious display-gated
+-- precedent).
+-- Reset (:150-153): SetControlled(false, UNIT_STATE_ROOT) +
+-- SetDisplayId(DISPLAY_ANGER) + SetReactState(REACT_AGGRESSIVE) —
+-- no display-ID / root / react-state bridge, does not port.
+-- JustEngagedWith NPC_CRUCIBLE_OF_SOULS 60yd double-spawn-guard
+-- SummonCreature leg (:163-164) — no Go summon bridge, does not port.
+-- EVENT_UNLEASHED_SOULS SetDisplayId(DISPLAY_SORROW) (:271) + the
+-- EVENT_FACE_ANGER 5s restore SetDisplayId(DISPLAY_ANGER) (:277-278) —
+-- display-ID machine with no bridge (visuals cannot be modeled), do not
+-- port.
+-- EVENT_WAILING_SOULS SetDisplayId(DISPLAY_DESIRE) (:282) and the
+-- phase-end restore (REACT_AGGRESSIVE + DISPLAY_ANGER + unroot +
+-- MoveChase, :322-324) — no display-ID / react / root / movement bridge,
+-- do not port.
+-- The wailing beam choreography (SetFacingToObject :288, beamAngle
+-- SetFacingTo :314, InterruptNonMeleeSpells :297,
+-- SetReactState(REACT_PASSIVE) :299, SetTarget(Empty) :302, motion
+-- Clear :304, SetControlled(true, UNIT_STATE_ROOT) :305) — no facing /
+-- interrupt / react / motion / root bridge, does not port.
+-- SpellHitTarget (:225-228): H_SPELL_PHANTOM_BLAST -> threeFaced = false
+-- — no SpellHit bridge, does not port.
+-- GetData(DATA_THREE_FACED) (:231-236) — no GetData bridge, does not port.
+-- The three spell_devourer_of_souls_mirrored_soul* SpellScript/AuraScript
+-- hooks (:365-473) — no SpellScript / AuraScript bridge (standing
+-- queues), do not port.
+-- achievement_three_faced (:475-493) — no GetData bridge, does not port.
+-- JustDied outro loop (:206-222): 22 outroPositions team-swapped
+-- instance->instance->SummonCreature spawns with MovePoint legs plus
+-- summon->AI()->Talk(SAY_JAINA_OUTRO / SAY_SYLVANAS_OUTRO 0, :218/220) —
+-- instance-driven Talk on other creatures with no bridge (the
+-- instance_violet_hold ScheduleCyanigosaIntro precedent), does not port.
+-- The file carries a @todo (model id 36503/36504 during unleash soul;
+-- outro npc movement).
 
 local ENTRY_DEVOURER = 36502
 
 local SAY_FACE_AGGRO = 0
 local SAY_FACE_DEATH = 4
+local EMOTE_MIRRORED_SOUL = 5
+local EMOTE_UNLEASH_SOUL = 6
+local SAY_FACE_UNLEASH_SOUL = 7
+local EMOTE_WAILING_SOUL = 8
+local SAY_FACE_WAILING_SOUL = 9
 
--- C++ boss_devourer_of_soulsAI::JustEngagedWith:
--- BossAI::JustEngagedWith(who) (passthrough, no bridge);
--- Talk(SAY_FACE_AGGRO) — unconditional; the NPC_CRUCIBLE_OF_SOULS
--- double-spawn-guard SummonCreature leg and the five ScheduleEvent legs
--- (PHANTOM_BLAST 5s / MIRRORED_SOUL 8s / WELL_OF_SOULS 30s /
--- UNLEASHED_SOULS 20s / WAILING_SOULS 60s-70s) have no bridge — the
--- auriaya engage-port precedent.
-local function devourerEnterCombat(event, creature, target)
-    creature:Talk(SAY_FACE_AGGRO)
+local SPELL_PHANTOM_BLAST = 68982
+local SPELL_MIRRORED_SOUL_TARGET_SELECTOR = 69048
+local SPELL_WELL_OF_SOULS = 68820
+local SPELL_UNLEASHED_SOULS = 68939
+local SPELL_WAILING_SOULS_STARTING = 68912
+local SPELL_WAILING_SOULS_BEAM = 68875
+local SPELL_WAILING_SOULS = 68873
+
+local timers = {}
+local devourerState = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
 end
 
--- C++ JustDied: _JustDied() (passthrough, no bridge);
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on the
+-- same map/instance, no distance filter (the keleseth / thorim
+-- GetPlayersInWorld precedent).
+local function randomPlayer(creature)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_PHANTOM_BLAST (:255-256): DoCastVictim(SPELL_PHANTOM_BLAST),
+-- victim-cast, non-triggered; re-arm unconditional, 5000ms.
+local function phantomBlastTick(creature, guid)
+    local state = devourerState[guid]
+    if state == nil then
+        return
+    end
+    if not state.wailing then
+        creature:CastSpell(nil, SPELL_PHANTOM_BLAST)
+    end
+    schedule(guid, "phantom", 5000, function()
+        phantomBlastTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_MIRRORED_SOUL (:259-261): DoCastAOE(SPELL_MIRRORED_SOUL_TARGET_SELECTOR)
+-- = self-cast; Talk(EMOTE_MIRRORED_SOUL) after the cast (C++ order kept);
+-- re-arm unconditional, {15000,30000}ms.
+local function mirroredSoulTick(creature, guid)
+    local state = devourerState[guid]
+    if state == nil then
+        return
+    end
+    if not state.wailing then
+        creature:CastSpell(creature, SPELL_MIRRORED_SOUL_TARGET_SELECTOR)
+        creature:Talk(EMOTE_MIRRORED_SOUL)
+    end
+    schedule(guid, "mirror", {15000, 30000}, function()
+        mirroredSoulTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_WELL_OF_SOULS (:264-266): DoCast(target, SPELL_WELL_OF_SOULS),
+-- non-triggered; re-arm unconditional (the SelectTarget if only wraps the
+-- cast), 20000ms.
+local function wellOfSoulsTick(creature, guid)
+    local state = devourerState[guid]
+    if state == nil then
+        return
+    end
+    if not state.wailing then
+        local target = randomPlayer(creature)
+        if target then
+            creature:CastSpell(target, SPELL_WELL_OF_SOULS)
+        end
+    end
+    schedule(guid, "well", 20000, function()
+        wellOfSoulsTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_UNLEASHED_SOULS (:269-275): DoCast(target,
+-- SPELL_UNLEASHED_SOULS), non-triggered; Talk(SAY_FACE_UNLEASH_SOUL) +
+-- Talk(EMOTE_UNLEASH_SOUL) are unconditional in C++ (outside the
+-- target-if) and kept; re-arm unconditional, 30000ms. The
+-- SetDisplayId(DISPLAY_SORROW) leg and the EVENT_FACE_ANGER 5s
+-- DISPLAY_ANGER restore (:277-278) are display-ID machine with no bridge
+-- and do not port.
+local function unleashedSoulsTick(creature, guid)
+    local state = devourerState[guid]
+    if state == nil then
+        return
+    end
+    if not state.wailing then
+        local target = randomPlayer(creature)
+        if target then
+            creature:CastSpell(target, SPELL_UNLEASHED_SOULS)
+        end
+        creature:Talk(SAY_FACE_UNLEASH_SOUL)
+        creature:Talk(EMOTE_UNLEASH_SOUL)
+    end
+    schedule(guid, "unleashed", 30000, function()
+        unleashedSoulsTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_WAILING_SOULS_TICK (:313-326): the 15-tick chain — first tick
+-- at 3000, DoCast(me, SPELL_WAILING_SOULS) self-cast, re-arm 1000 until 15
+-- casts land (:319), then the phase ends: the wailing flag drops and
+-- EVENT_WAILING_SOULS re-arms at {60000,70000} (:326). The beamAngle
+-- facing sweep (:314) has no bridge; the phase-end restore legs
+-- (REACT_AGGRESSIVE + DISPLAY_ANGER + unroot + MoveChase, :322-324) have
+-- no bridge and do not port.
+local function wailingSoulTick(creature, guid, remaining)
+    creature:CastSpell(creature, SPELL_WAILING_SOULS)
+    if remaining > 1 then
+        schedule(guid, "wailingtick", 1000, function()
+            wailingSoulTick(creature, guid, remaining - 1)
+        end)
+    else
+        local state = devourerState[guid]
+        if state then
+            state.wailing = false
+        end
+        schedule(guid, "wailing", {60000, 70000}, function()
+            wailingSoulsTick(creature, guid)
+        end)
+    end
+end
+
+-- C++ EVENT_WAILING_SOULS (:282-310): Talk(SAY_FACE_WAILING_SOUL) +
+-- Talk(EMOTE_WAILING_SOUL) (C++ order kept); DoCast(me,
+-- SPELL_WAILING_SOULS_STARTING) self-cast; random target ->
+-- DoCast(me, SPELL_WAILING_SOULS_BEAM), gated on a target being found
+-- (:287-290); sets the wailing flag (see the DelayEvents(18s) note in the
+-- header); starts the 15-tick chain at 3000ms (:309). The
+-- SetDisplayId(DISPLAY_DESIRE) leg (:282) and the beam/movement
+-- choreography (SetFacingToObject :288, InterruptNonMeleeSpells :297,
+-- REACT_PASSIVE :299, SetTarget(Empty) :302, motion Clear :304,
+-- SetControlled root :305) have no bridge and do not port.
+local function wailingSoulsTick(creature, guid)
+    local state = devourerState[guid]
+    if state == nil then
+        return
+    end
+    state.wailing = true
+    creature:Talk(SAY_FACE_WAILING_SOUL)
+    creature:Talk(EMOTE_WAILING_SOUL)
+    creature:CastSpell(creature, SPELL_WAILING_SOULS_STARTING)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(creature, SPELL_WAILING_SOULS_BEAM)
+    end
+    schedule(guid, "wailingtick", 3000, function()
+        wailingSoulTick(creature, guid, 15)
+    end)
+end
+
+-- C++ boss_devourer_of_soulsAI::JustEngagedWith (:160-169):
+-- Talk(SAY_FACE_AGGRO) — unconditional — plus the five ScheduleEvent seeds
+-- (PHANTOM_BLAST 5000 / MIRRORED_SOUL 8000 / WELL_OF_SOULS 30000 /
+-- UNLEASHED_SOULS 20000 / WAILING_SOULS {60000,70000}ms). The
+-- BossAI::JustEngagedWith passthrough leg and the NPC_CRUCIBLE_OF_SOULS
+-- double-spawn-guard SummonCreature leg (:163-164, no Go summon bridge)
+-- do not port.
+local function devourerEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    devourerState[guid] = {wailing = false}
+    creature:Talk(SAY_FACE_AGGRO)
+    schedule(guid, "phantom", 5000, function()
+        phantomBlastTick(creature, guid)
+    end)
+    schedule(guid, "mirror", 8000, function()
+        mirroredSoulTick(creature, guid)
+    end)
+    schedule(guid, "well", 30000, function()
+        wellOfSoulsTick(creature, guid)
+    end)
+    schedule(guid, "unleashed", 20000, function()
+        unleashedSoulsTick(creature, guid)
+    end)
+    schedule(guid, "wailing", {60000, 70000}, function()
+        wailingSoulsTick(creature, guid)
+    end)
+end
+
+-- Shared timer/state wipe for events 2/23/4 (the svala / yogg_saron
+-- convention).
+local function devourerCancelCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    devourerState[guid] = nil
+end
+
+-- C++ JustDied (:203): _JustDied() (passthrough, no bridge);
 -- Talk(SAY_FACE_DEATH) — unconditional — the sjonnir JustDied-Talk
 -- precedent; the DATA_TEAM_IN_INSTANCE outro-summon loop and the
 -- summon->AI()->Talk(SAY_JAINA_OUTRO / SAY_SYLVANAS_OUTRO) legs are
--- instance-driven Talk on other creatures with no bridge.
+-- instance-driven Talk on other creatures with no bridge and do not port.
 local function devourerJustDied(event, creature)
+    devourerCancelCombat(event, creature)
     creature:Talk(SAY_FACE_DEATH)
 end
 
 RegisterCreatureEvent(ENTRY_DEVOURER, 1, devourerEnterCombat)
+RegisterCreatureEvent(ENTRY_DEVOURER, 2, devourerCancelCombat)
 RegisterCreatureEvent(ENTRY_DEVOURER, 4, devourerJustDied)
+RegisterCreatureEvent(ENTRY_DEVOURER, 23, devourerCancelCombat)

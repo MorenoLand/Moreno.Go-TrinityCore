@@ -10118,15 +10118,15 @@ func init() {
 	// header.
 	RegisterLuaBoss("boss_zuramat", 29314)
 
-	// Bronjahm (Forge of Souls) — bridgeable Talk arms ported from
+	// Bronjahm (Forge of Souls) — full timer-arm port from
 	// boss_bronjahm.cpp; see lua_scripts/northrend/boss_bronjahm.lua.
-	// Talk(SAY_CORRUPT_SOUL) / Talk(SAY_SOUL_STORM) ride scheduler
-	// event legs (no-timer-bridge); the Reset / DamageTaken phase
-	// machine, JustSummoned soul-fragment handling,
-	// GetData(DATA_SOUL_POWER), the npc_corrupted_soul_fragment
-	// machine, the four SpellScript / AuraScript hooks and
-	// achievement_bronjahm_soul_power are bridge-blocked — documented
-	// in the lua header.
+	// Timer-port doctrine: MAGIC_BANE / SHADOW_BOLT / CORRUPT_SOUL /
+	// FEAR / the EVENT_SOULSTORM one-shot and the DamageTaken 30%-hp
+	// PHASE_1->PHASE_2 latch all ride CreateLuaEvent; Talk legs are
+	// C++-exact. The JustSummoned soul-fragment machine, GetData,
+	// npc_corrupted_soul_fragment (36535), the SpellScript/AuraScript
+	// hooks and the achievement remain bridge-blocked — documented in
+	// the lua header.
 	RegisterLuaBoss("boss_bronjahm", 36497)
 
 	// Devourer of Souls (Forge of Souls) — bridgeable Talk arms ported
