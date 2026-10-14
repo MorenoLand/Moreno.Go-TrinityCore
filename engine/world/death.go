@@ -1738,6 +1738,24 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	s.deathTimer = time.Time{}
 	s.removeAura(8326)
 	s.removeAura(20584)
+	// Player::ResurrectPlayer clears PLAYER_FLAGS_IS_OUT_OF_BOUNDS on every
+	// resurrect (Player.cpp:4688); repop is not the only path here — a
+	// resurrect request lands at the corpse, which can sit under the map.
+	s.player.PlayerFlags &^= playerFlagOutOfBounds
+	// Player::ResurrectPlayer restores health/powers (Player.cpp:4701-4707)
+	// before the visibility update and the Eluna hook — a Lua OnResurrect
+	// handler observes the restored values, not zero.
+	if restorePercent > 0 {
+		s.player.Health = uint32(float32(s.player.MaxHealth) * restorePercent)
+		s.player.Powers[0] = uint32(float32(s.player.MaxPowers[0]) * restorePercent) // mana
+		s.player.Powers[1] = 0                                                       // rage
+		s.player.Powers[3] = uint32(float32(s.player.MaxPowers[3]) * restorePercent) // energy
+	}
+	// Player::ResurrectPlayer (Player.cpp:4732): death strips the item
+	// obtain-spell auras (RemoveAllAurasOnDeath), so every resurrect recasts
+	// them — otherwise they stay missing until relog. Runs before the Eluna
+	// hook, matching the C++ CastAllObtainSpells -> OnResurrect order.
+	s.castAllObtainSpells(ctx)
 	// Eluna PLAYER_EVENT_ON_RESURRECT (36): Eluna::OnResurrect
 	// (PlayerHooks.cpp:94-99), (event, player), void (CallAllFunctions).
 	// Player::ResurrectPlayer (Player.cpp:4735) fires it after the visibility
@@ -1750,12 +1768,6 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 		s.convertCorpseToBones(ctx, false)
 	} else {
 		s.despawnCorpseObject()
-	}
-	if restorePercent > 0 {
-		s.player.Health = uint32(float32(s.player.MaxHealth) * restorePercent)
-		s.player.Powers[0] = uint32(float32(s.player.MaxPowers[0]) * restorePercent) // mana
-		s.player.Powers[1] = 0                                                       // rage
-		s.player.Powers[3] = uint32(float32(s.player.MaxPowers[3]) * restorePercent) // energy
 	}
 	s.persistResurrectionState(ctx)
 	s.sendPlayerUpdate()
