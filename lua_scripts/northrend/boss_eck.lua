@@ -8,7 +8,7 @@
 -- is instance-shimmed, the creature_template binding DB-side as
 -- usual).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
--- OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is
+-- OnDied, 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. C++ DoCast default is triggered=false
 -- (vaelastrasz convention): creature:CastSpell(nil, spell) =
@@ -29,9 +29,13 @@
 -- fireCreatureSpawned — phase_hunter precedent), so wiring it
 -- there would miss fresh spawns — not C++-exact, documented-only.
 -- DamageTaken: HealthBelowPctDamaged(20) -> RescheduleEvent
--- (EVENT_BERSERK, 1s) + _berserk latch — no health-pct bridge on
--- the Lua surface (doomwalker precedent), so the early-berserk leg
--- cannot be emulated; only the 60-90s timer rides the scheduler.
+-- (EVENT_BERSERK, 1s) + _berserk latch (PORTED — the old
+-- "no health-pct bridge" note was stale: event 9 carries damage and
+-- GetHealth()/GetMaxHealth() are available, the garfrost precedent).
+-- The _berserk latch rides the berserk timer's presence: berserkTick
+-- clears per["berserk"] when the 60-90s timer fires and timers are
+-- canceled on leave-combat/death/reset, so a pending "berserk" key
+-- means the early-berserk arm is live (C++ !\_berserk).
 -- EVENT_SPRING — SelectTarget(Random, 1, 35.0f, true) ->
 -- DoCast(target, RAND(SPELL_ECK_SPRING_1 55815,
 -- SPELL_ECK_SPRING_2 55837)), 8s init, 5-10s repeat: the
@@ -93,6 +97,28 @@ local function berserkTick(creature, guid)
     end
 end
 
+-- C++ DamageTaken (:77-84): HealthBelowPctDamaged(20, damage) (strict
+-- below, int64(health)-damage < floor(maxHealth*20/100) — event 9
+-- fires pre-damage, so health is the C++ GetHealth() value) ->
+-- RescheduleEvent(EVENT_BERSERK, 1s) + _berserk latch; the per-key
+-- schedule replace is the RescheduleEvent cancel+reschedule.
+local function eckDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local per = timers[guid]
+    if not per or not per["berserk"] then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if creature:GetHealth() - damage < math.floor(maxHealth * 20 / 100) then
+        schedule(guid, "berserk", 1000, function()
+            berserkTick(creature, guid)
+        end)
+    end
+end
+
 local function eckEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -122,4 +148,5 @@ end
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 1, eckEnterCombat)
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 2, eckLeaveCombat)
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 4, eckDied)
+RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 9, eckDamageTaken)
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 23, eckReset)

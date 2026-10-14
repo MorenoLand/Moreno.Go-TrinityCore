@@ -33,9 +33,10 @@
 -- Talk(EMOTE_REPAIR 14) + reschedules EVENT_SHUTDOWN 150s. Only the 150s
 -- timer path is modeled — the early 4s path is gated on the SpellHit-driven
 -- Shutdown counter (SPELL_OVERLOAD_CIRCUIT 62399 vehicle spellclick leg, no
--- bridge). Deviation: DelayEvents(20s, 0) on the other timers is not
--- emulated (no remaining-time tracking on the Lua timers); the
--- systems_shutdown AuraScript (stun/root + gathering-speed removal) and the
+-- bridge). NOTE: DelayEvents(20s, 0) at :431 is a C++ no-op
+-- (EventMap.cpp:111 early-returns on group 0), so the shutdown arm
+-- is fully C++-exact as ported.
+-- The systems_shutdown AuraScript (stun/root + gathering-speed removal) and the
 -- Shutout achievement flag have no bridges — documented. The
 -- ClearUnitState(UNIT_STATE_STUNNED | UNIT_STATE_ROOT) line in EVENT_REPAIR
 -- (:435) is likewise unmodeled — no unit-state bridge.
@@ -172,7 +173,8 @@ end
 -- triggered self-cast; then EVENT_REPAIR at 4s (:433-:437): Talk(EMOTE_REPAIR)
 -- + reschedules EVENT_SHUTDOWN 150s. Only the timer path is modeled; the
 -- early 4s path rides the SpellHit-driven Shutdown counter (no bridge).
--- DelayEvents(20s, 0) on the other timers is not emulated.
+-- DelayEvents(20s, 0) is a C++ no-op (EventMap.cpp:111 early-returns on
+-- group 0), so nothing needs emulation — C++-exact.
 local shutdownTick
 
 local function repairTick(creature, guid)
