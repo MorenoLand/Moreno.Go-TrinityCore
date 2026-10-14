@@ -157,8 +157,157 @@ end
 
 local function algalonReset(event, creature)
     algalonState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_ALGALON, 3, algalonTargetDied)
 RegisterCreatureEvent(ENTRY_ALGALON, 9, algalonDamageTaken)
 RegisterCreatureEvent(ENTRY_ALGALON, 23, algalonReset)
+
+-- Timer-driven cast arms (the maiden CreateLuaEvent convention —
+-- GUID-keyed timers table, cancel on events 2/4/23;
+-- CastSpell(nil, spell) = DoCastVictim victim-cast,
+-- CastSpell(creature, spell) = DoCastAOE/DoCastSelf self-cast). All four
+-- boss arms are scheduled in JustEngagedWith with NO phase/group args —
+-- valid in all phases (phase-arg arms like the voice-of-Yogg-Saron kit are
+-- the gothik-blocked kind; these are not). DOCUMENTED DEVIATIONS: (1)
+-- introDelay is 26500ms on true first pull / 8s on later pulls
+-- (:364-386); the _firstPull flag has no bridge, so the re-pull 8s path is
+-- used — timers fire ~18.5s early on a genuine first pull. (2)
+-- EVENT_ASCEND_TO_THE_HEAVENS schedules EVENT_EVADE 2.5s later
+-- (EnterEvadeMode — boss-state FAIL, no bridge); only the Talk+cast arm is
+-- ported, so the lua boss stays in combat ~2.5s past enrage. (3)
+-- EVENT_SUMMON_COLLAPSING_STAR (Talk 5/6 + four SummonCreature legs) is
+-- not ported: the summon leg has no bridge (the arlokk precedent) and a
+-- Talk-only port would fire with no stars. (4) EVENT_BIG_BANG stays out:
+-- the arm sets PHASE_BIG_BANG, orders constellation DoActions via a
+-- grid search and reschedules the phase restore — phase-machine legs block
+-- it (gothik precedent). (5) npc_living_constellation's
+-- EVENT_ARCANE_BARRAGE carries SPELLVALUE_MAX_TARGETS=1 which the
+-- three-arg CastSpell bridge cannot express (documented, same class as
+-- brightleaf's flux-stacks deviation).
+local SPELL_QUANTUM_STRIKE = 64395
+local SPELL_PHASE_PUNCH = 64412
+local SPELL_ASCEND_TO_THE_HEAVENS = 64487
+local SPELL_COSMIC_SMASH = 62301
+local SPELL_ARCANE_BARRAGE = 64599
+
+local ENTRY_LIVING_CONSTELLATION = 33052
+
+local SAY_ALGALON_ASCEND = 9
+local EMOTE_ALGALON_COSMIC_SMASH = 10
+
+-- Re-pull introDelay (:376); first-pull 26500ms unbridged — see (1) above.
+local INTRO_DELAY = 8000
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ boss_algalon_the_observerAI::EVENT_QUANTUM_STRIKE:
+-- DoCastVictim(SPELL_QUANTUM_STRIKE 64395) (non-triggered),
+-- 3500ms+introDelay init, Repeat(3s, 5s) (:392, :586-589 verified).
+local function quantumStrikeTick(creature, guid)
+    creature:CastSpell(nil, SPELL_QUANTUM_STRIKE)
+    schedule(guid, "quantumstrike", {3000, 5000}, function()
+        quantumStrikeTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_PHASE_PUNCH: DoCastVictim(SPELL_PHASE_PUNCH 64412)
+-- (non-triggered), 15500ms+introDelay init, Repeat(15500ms)
+-- (:393, :590-593 verified).
+local function phasePunchTick(creature, guid)
+    creature:CastSpell(nil, SPELL_PHASE_PUNCH)
+    schedule(guid, "phasepunch", 15500, function()
+        phasePunchTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_COSMIC_SMASH: Talk(EMOTE_ALGALON_COSMIC_SMASH 10) +
+-- DoCastAOE(SPELL_COSMIC_SMASH 62301) (non-triggered), 25s+introDelay
+-- init, Repeat(25500ms) (:397, :626-630 verified).
+local function cosmicSmashTick(creature, guid)
+    creature:Talk(EMOTE_ALGALON_COSMIC_SMASH)
+    creature:CastSpell(creature, SPELL_COSMIC_SMASH)
+    schedule(guid, "cosmicsmash", 25500, function()
+        cosmicSmashTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_ASCEND_TO_THE_HEAVENS: Talk(SAY_ALGALON_ASCEND 9) +
+-- DoCastAOE(SPELL_ASCEND_TO_THE_HEAVENS 64487) (non-triggered),
+-- 360s+introDelay init, one-shot (:396, :618-622 verified).
+local function ascendTick(creature, guid)
+    creature:Talk(SAY_ALGALON_ASCEND)
+    creature:CastSpell(creature, SPELL_ASCEND_TO_THE_HEAVENS)
+end
+
+local function algalonTimersStart(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "quantumstrike", 3500 + INTRO_DELAY, function()
+        quantumStrikeTick(creature, guid)
+    end)
+    schedule(guid, "phasepunch", 15500 + INTRO_DELAY, function()
+        phasePunchTick(creature, guid)
+    end)
+    schedule(guid, "cosmicsmash", 25000 + INTRO_DELAY, function()
+        cosmicSmashTick(creature, guid)
+    end)
+    schedule(guid, "ascend", 360000 + INTRO_DELAY, function()
+        ascendTick(creature, guid)
+    end)
+end
+
+local function algalonTimersStop(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_living_constellationAI::EVENT_ARCANE_BARRAGE:
+-- DoCastAOE(SPELL_ARCANE_BARRAGE 64599) with SPELLVALUE_MAX_TARGETS=1
+-- (non-triggered; the extra-args form, not the triggered bool), 2.5s init,
+-- Repeat(4s, 5s) — scheduled in Reset with no phase arg (:732, :794-800
+-- verified). The max-targets leg is unbridgeable — documented above.
+local function arcaneBarrageTick(creature, guid)
+    creature:CastSpell(creature, SPELL_ARCANE_BARRAGE)
+    schedule(guid, "arcanebarrage", {4000, 5000}, function()
+        arcaneBarrageTick(creature, guid)
+    end)
+end
+
+local function constellationEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "arcanebarrage", 2500, function()
+        arcaneBarrageTick(creature, guid)
+    end)
+end
+
+RegisterCreatureEvent(ENTRY_ALGALON, 1, algalonTimersStart)
+RegisterCreatureEvent(ENTRY_ALGALON, 2, algalonTimersStop)
+RegisterCreatureEvent(ENTRY_ALGALON, 4, algalonTimersStop)
+RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 1, constellationEnterCombat)
+RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 2, algalonTimersStop)
+RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 4, algalonTimersStop)
+RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 23, algalonTimersStop)

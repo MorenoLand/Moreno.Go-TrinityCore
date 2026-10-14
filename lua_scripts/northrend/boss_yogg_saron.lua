@@ -152,3 +152,172 @@ end
 
 RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 4, yoggSaronDied)
+
+-- Timer-driven cast arms (the maiden CreateLuaEvent convention —
+-- GUID-keyed timers table, cancel on events 2/4/23;
+-- CastSpell(creature, spell) = DoCastAOE/DoCastSelf self-cast,
+-- CastSpell(nil, spell) = DoCastVictim victim-cast; random targets via
+-- GetPlayersInWorld — the baltharus/thorim precedents). All four arms are
+-- ungated: no phase args on their schedules, no DoAction/MovementInform
+-- scheduling, no instance legs. The blocked arms — all of Sara's
+-- EVENT_SARAS_* timer casts (phase-arg PHASE_ONE + spellvalue
+-- target-selector legs on no-bridge SpellScripts), every voice-of-Yogg-Saron
+-- timer arm (instance-GUID/phase legs), every Yogg-Saron body timer arm
+-- (PHASE_TWO/PHASE_THREE-gated), the keeper arms (DoAction/phase-gated) —
+-- stay documented-only in the header above (the gothik precedent).
+local ENTRY_GUARDIAN_OF_YOGG_SARON = 33136
+local ENTRY_CORRUPTOR_TENTACLE = 33985
+local ENTRY_CRUSHER_TENTACLE = 33966
+local ENTRY_IMMORTAL_GUARDIAN = 33988
+
+local SPELL_DARK_VOLLEY = 63038
+local SPELL_BLACK_PLAGUE = 64153
+local SPELL_CURSE_OF_DOOM = 64157
+local SPELL_APATHY = 64156
+local SPELL_DRAINING_POISON = 64152
+local SPELL_DIMINISH_POWER = 64148
+local SPELL_DRAIN_LIFE = 64159
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function randomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ npc_guardian_of_yogg_saronAI::EVENT_DARK_VOLLEY:
+-- DoCastAOE(SPELL_DARK_VOLLEY 63038) (non-triggered), {10s,15s} init,
+-- {10s,15s} repeat — scheduled in Reset with no phase arg (:1198,
+-- :1215-1218 verified).
+local function darkVolleyTick(creature, guid)
+    creature:CastSpell(creature, SPELL_DARK_VOLLEY)
+    schedule(guid, "darkvolley", {10000, 15000}, function()
+        darkVolleyTick(creature, guid)
+    end)
+end
+
+local function guardianEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "darkvolley", {10000, 15000}, function()
+        darkVolleyTick(creature, guid)
+    end)
+end
+
+-- C++ npc_corruptor_tentacleAI::EVENT_CAST_RANDOM_SPELL: random-player
+-- DoCast(target, RAND(SPELL_BLACK_PLAGUE 64153, SPELL_CURSE_OF_DOOM
+-- 64157, SPELL_APATHY 64156, SPELL_DRAINING_POISON 64152))
+-- (non-triggered), 1ms init, 3s repeat — scheduled in Reset with no phase
+-- arg; SelectTarget(Random) carries no C++ range so any alive player on
+-- the same map+instance is eligible (:1264, :1284-1288 verified). The
+-- Reset-time DoCast(me, SPELL_TENTACLE_VOID_ZONE) + DoCastAOE(SPELL_ERUPT)
+-- legs are not timer-driven — not ported.
+local function corruptorTick(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        local spells = { SPELL_BLACK_PLAGUE, SPELL_CURSE_OF_DOOM, SPELL_APATHY, SPELL_DRAINING_POISON }
+        creature:CastSpell(target, spells[math.random(#spells)])
+    end
+    schedule(guid, "randomspell", 3000, function()
+        corruptorTick(creature, guid)
+    end)
+end
+
+local function corruptorEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "randomspell", 1, function()
+        corruptorTick(creature, guid)
+    end)
+end
+
+-- C++ npc_crusher_tentacleAI::EVENT_DIMINISH_POWER:
+-- DoCast(SPELL_DIMINISH_POWER 64148) (non-triggered self-cast), {6s,8s}
+-- init, {20s,30s} repeat — scheduled in Reset with no phase arg (:1370,
+-- :1389-1392 verified).
+local function diminishPowerTick(creature, guid)
+    creature:CastSpell(creature, SPELL_DIMINISH_POWER)
+    schedule(guid, "diminishpower", {20000, 30000}, function()
+        diminishPowerTick(creature, guid)
+    end)
+end
+
+local function crusherEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "diminishpower", {6000, 8000}, function()
+        diminishPowerTick(creature, guid)
+    end)
+end
+
+-- C++ npc_immortal_guardianAI::EVENT_DRAIN_LIFE:
+-- DoCast(SPELL_DRAIN_LIFE 64159) (non-triggered self-cast), {3s,13s} init,
+-- {20s,30s} repeat — scheduled in Reset with no phase arg (:1491,
+-- :1514-1517 verified).
+local function drainLifeTick(creature, guid)
+    creature:CastSpell(creature, SPELL_DRAIN_LIFE)
+    schedule(guid, "drainlife", {20000, 30000}, function()
+        drainLifeTick(creature, guid)
+    end)
+end
+
+local function immortalEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "drainlife", {3000, 13000}, function()
+        drainLifeTick(creature, guid)
+    end)
+end
+
+local function cancelAll(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 1, guardianEnterCombat)
+RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 23, cancelAll)
+RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 1, corruptorEnterCombat)
+RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 23, cancelAll)
+RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 1, crusherEnterCombat)
+RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 23, cancelAll)
+RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 1, immortalEnterCombat)
+RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 23, cancelAll)

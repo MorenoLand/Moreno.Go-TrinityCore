@@ -9809,10 +9809,13 @@ func init() {
 	// JustDied-Talk precedent). Sara's player-gated
 	// Talk(SAY_SARA_KILL 5) carries an additional
 	// !IsInEvadeMode() gate with no Lua bridge — event 3
-	// deliberately not registered. Voice/brain/tentacle/
-	// keeper/illusion creatures, the observation-ring gossip
-	// Talks, timer Talks and all thirty-three spell scripts
-	// are bridge-blocked — documented in the lua header.
+	// deliberately not registered. Voice/brain arms, the
+	// keeper/illusion/gossip legs, Sara's phase-gated timer
+	// arms and all thirty-three spell scripts are bridge-
+	// blocked — documented in the lua header. Timer-driven
+	// cast ports (CreateLuaEvent): guardian DARK_VOLLEY,
+	// corruptor random-spell, crusher DIMINISH_POWER, immortal
+	// DRAIN_LIFE — all ungated, non-triggered.
 	RegisterLuaBoss("boss_yogg_saron", 33134)
 	RegisterLuaBoss("boss_yogg_saron", 33288)
 	// Algalon the Observer (Ulduar) — boss_algalon_the_observer.cpp,
@@ -9829,12 +9832,15 @@ func init() {
 	// the _phaseTwo latch (event 9 — the moroes threshold+latch precedent).
 	// JustEngagedWith is _firstPull-gated (START_TIMER on first pull vs
 	// AGGRO later — no flag bridge, no single C++-exact yell), the 2.5%
-	// _fightWon damage=0 rides the unbridgeable outro machine, the intro /
-	// big-bang / cosmic-smash / collapsing-star / ascend / outro / despawn
-	// timer Talks, Brann's DoAction/MovementInform/timer Talks
-	// (NPC_BRANN_BRONZBEARD_ALG 34064), the collapsing-star _dying
-	// damage=0 (no Talk arm), the ten spell scripts and the GO script are
-	// bridge-blocked — documented in the lua header.
+	// _fightWon damage=0 rides the unbridgeable outro machine, the
+	// collapsing-star summon Talk-only pair and the big-bang phase-machine
+	// choreography are bridge-blocked — documented in the lua header.
+	// Timer-driven cast ports (CreateLuaEvent): QUANTUM_STRIKE,
+	// PHASE_PUNCH, COSMIC_SMASH (Talk 10 + cast), ASCEND_TO_THE_HEAVENS
+	// (Talk 9 + cast, one-shot — the 2.5s-later EVENT_EVADE leg has no
+	// bridge), constellation ARCANE_BARRAGE (SPELLVALUE_MAX_TARGETS=1
+	// unbridgeable) — all ungated, non-triggered; the intro timer base is
+	// the 8s re-pull path (the 26.5s first-pull intro is unbridged).
 	RegisterLuaBoss("boss_algalon_the_observer", 32871)
 	// Prince Keleseth (Utgarde Keep) — boss_keleseth.cpp,
 	// AddSC_boss_keleseth() (loader decl 126 / call 321) — the FIRST group
