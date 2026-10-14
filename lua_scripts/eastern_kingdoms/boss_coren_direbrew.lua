@@ -48,11 +48,14 @@
 -- SAY_INTRO/1/2 Talk arms, ACTION_ANTAGONIST_SAY_1/2/ HOSTILE relayed
 -- via EntryCheckPredicate + DoAction) — no summon/DoAction bridges
 -- (doomrel precedent for the Talk arms).
--- Unmodeled: npc_coren_direbrew_sisters (26764/26822 — the JustEngagedWith
--- arm is self-cast PORT_TO_COREN 52850 + control aura 47369/50278 then a
--- 2s->4s SelectTarget(Random) mug chuck 50276 — the chuck is the whole arm
--- and has no SelectTarget bridge, so no lua file; the control-aura ticks are
--- unported AuraScripts; documented-only).
+-- npc_coren_direbrew_sisters (26764/26822) — PORTED in
+-- npc_coren_direbrew_sisters.lua: JustEngagedWith self-cast PORT_TO_COREN
+-- 52850 + control aura 47369/50278, then a 2s->4s SelectTarget(Random, 0,
+-- 0.0f, false, true, -47331) mug chuck 50276, ported via the maiden/beast
+-- random-player convention (HasAura(47331) exclusion on the Lua surface;
+-- C++ playerOnly=false/withTank=true unmodeled — threat-list caveat);
+-- the control-aura ticks remain unported AuraScripts. The old "has no
+-- SelectTarget bridge, so no lua file" claim is retracted.
 -- Unmodeled: npc_direbrew_minion (faction latch + DoZoneInCombat + JustSummoned
 -- instance-GUID latch — no faction/instance bridges); npc_direbrew_antagonist
 -- (DoAction Talk/faction arms — no bridges).

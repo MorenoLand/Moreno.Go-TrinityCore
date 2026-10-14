@@ -42,10 +42,14 @@
 -- player have no bearer), so the fight starts when a player pulls.
 -- The option texts are approximated — the real strings live in the
 -- DB broadcast_text rows (vael precedent).
--- Unmodeled: EVENT_IMMOLATE (18s init -> 25s) -> SelectTarget(Random)
--- + DoCast(12742) — no SelectTarget bridge on the Lua surface
--- (doomwalker / kazzak / doomrel precedent — this file is the cited
--- unit); the timer chain is documented-only, not a no-op dead loop.
+-- Ported arms (C++ JustEngagedWith schedule + UpdateAI event machine):
+-- EVENT_IMMOLATE: random-player IMMOLATE 12742 — SelectTarget(Random,
+-- 0, 100.0f, true) playerOnly, ported via the keleseth/beast
+-- GetPlayersInWorld precedent (same map/instance, alive, within
+-- 100yd); 18s init -> 25s loop, re-arm unconditional (C++ Repeat
+-- outside the target check), non-triggered DoCast(target). The old
+-- "no SelectTarget bridge" claim (doomwalker / kazzak / doomrel
+-- precedent — this file was the cited unit) is retracted.
 -- Unmodeled: Reset's SetFaction(FACTION_FRIENDLY) /
 -- SetImmuneToPC(true) / UNIT_NPC_FLAG_GOSSIP flag machine (gated on
 -- instance DATA_GHOSTKILL >= 7), EnterEvadeMode's instance
@@ -72,6 +76,7 @@ local ENTRY_DOOMREL = 9039
 local SPELL_SHADOWBOLTVOLLEY = 15245
 local SPELL_CURSEOFWEAKNESS = 12493
 local SPELL_DEMONARMOR = 13787
+local SPELL_IMMOLATE = 12742
 local SPELL_SUMMON_VOIDWALKERS = 15092
 
 local GOSSIP_ICON_CHAT = 0
@@ -135,6 +140,36 @@ local function onDemonArmor(creature, guid)
     end)
 end
 
+-- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
+-- keleseth GetPlayersInWorld precedent. Caveat shared with the
+-- keleseth/thorim/beast ports: C++ draws from the threat list
+-- (engaged units); the bridge can include nearby unengaged players.
+local function randomPlayerInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_IMMOLATE: SelectTarget(Random, 0, 100.0f, true)
+-- playerOnly, DoCast(target, 12742) non-triggered, 18s init,
+-- Repeat(25s) outside the target check (re-arm unconditional).
+local function onImmolate(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_IMMOLATE)
+    end
+    schedule(guid, "immolate", 25000, function() onImmolate(creature, guid) end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     schedule(guid, "volley", 10000, function()
@@ -145,6 +180,9 @@ local function onEnterCombat(event, creature, target)
     end)
     schedule(guid, "armor", 16000, function()
         onDemonArmor(creature, guid)
+    end)
+    schedule(guid, "immolate", 18000, function()
+        onImmolate(creature, guid)
     end)
 end
 

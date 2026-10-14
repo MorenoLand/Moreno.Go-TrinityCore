@@ -85,17 +85,23 @@
 -- EnterEvadeMode: _EnterEvadeMode + instance->SetBossState(
 -- DATA_JARAXXUS, FAIL) + DespawnOrUnsummon (instance model +
 -- no despawn bridge — terestian precedent).
--- boss_jaraxxus EVENT_FEL_LIGHTNING — SelectTarget(Random,0,0.0f,true)
--- -> DoCast(Fel Lightning 66528), 17s init, urand(10s,30s) repeat —
--- no random-target SelectTarget bridge (cairne/kazzak precedent) —
--- documented-only.
--- boss_jaraxxus EVENT_INCINERATE_FLESH — SelectTarget(Random,1,...)
--- -> Talk(EMOTE_INCINERATE 5, target) + Talk(SAY_INCINERATE 6) +
--- DoCast(Incinerate Flesh 66237), 14s init, 23s repeat — same
--- random-target bar — documented-only.
--- boss_jaraxxus EVENT_LEGION_FLAME — SelectTarget(Random,1,...) ->
--- Talk(EMOTE_LEGION_FLAME 2, target) + DoCast(Legion Flame 66197),
--- 20s init, 30s repeat — same random-target bar — documented-only.
+-- boss_jaraxxus EVENT_FEL_LIGHTNING — PORTED: SelectTarget(
+-- Random,0,0.0f,true) (any-range -> 100, curator precedent) ->
+-- DoCast(Fel Lightning 66528) non-triggered, 17s init, urand(10s,30s)
+-- repeat, via the maiden/beast random-player convention. The old "no
+-- random-target SelectTarget bridge" claim (cairne/kazzak precedent)
+-- is retracted.
+-- boss_jaraxxus EVENT_INCINERATE_FLESH — PORTED: SelectTarget(
+-- Random,1,0.0f,true) (index-1 = exclude-victim idiom, approximated
+-- with a random pick — akilzon precedent) -> Talk(EMOTE_INCINERATE 5,
+-- target) + Talk(SAY_INCINERATE 6) + DoCast(Incinerate Flesh 66237)
+-- non-triggered, 14s init, 23s repeat. The "same random-target bar"
+-- claim is retracted.
+-- boss_jaraxxus EVENT_LEGION_FLAME — PORTED: SelectTarget(
+-- Random,1,0.0f,true) (index-1 exclude-victim, akilzon precedent) ->
+-- Talk(EMOTE_LEGION_FLAME 2, target) + DoCast(Legion Flame 66197)
+-- non-triggered, 20s init, 30s repeat. The "same random-target bar"
+-- claim is retracted.
 -- boss_jaraxxus EVENT_SUMMON_NETHER_PORTAL — Talk(EMOTE_NETHER_PORTAL
 -- 3) + Talk(SAY_MISTRESS_OF_PAIN 4) + DoCast(Nether Portal 66269),
 -- 20s init, 2min repeat — summon STRAND absent (no Lua-surface
@@ -122,7 +128,9 @@
 -- npc_fel_infernal (34815): Reset — instance-gated DespawnOrUnsummon
 -- + cross-AI JustSummoned (instance / cross-AI bridges absent) +
 -- scheduler SelectTarget(Random,0,0.0f,true) -> DoCast(Fel Streak
--- Visual 66493) every 15s (no random-target bridge) + DoCastSelf(
+-- Visual 66493) every 15s (random-target is bridged in isolation but
+-- the scheduler rides the unbridged summon gate — jedoga bar) +
+-- DoCastSelf(
 -- Lord Jaraxxus' Hittin' Ya 66327) (rides the instance gate — jedoga
 -- bar) — documented-only; joins the
 -- entry-verifiable-but-bridge-blocked queue. (C++ note carried: Fel
@@ -134,13 +142,14 @@
 -- absent; rides the unbridged summon gate (burrower precedent) —
 -- documented-only; joins the entry-verifiable-but-bridge-blocked
 -- queue.
--- npc_mistress_of_pain — zero registration beyond the Shivan Slash
--- arm: Reset — instance-gated DespawnOrUnsummon + cross-AI
--- JustSummoned + DoCastSelf(66327) + SetData(
--- DATA_MISTRESS_OF_PAIN_COUNT, INCREASE) (instance / cross-AI
--- bridges absent); JustEngagedWith EVENT_SPINNING_SPIKE:
--- SelectTarget(Random,0) -> DoCast(Spinning Spike 66283), 9s init,
--- 20s repeat — no random-target bridge; EVENT_MISTRESS_KISS:
+-- npc_mistress_of_pain — JustEngagedWith EVENT_SPINNING_SPIKE PORTED:
+-- SelectTarget(Random,0,0.0f,true) -> DoCast(Spinning Spike 66283)
+-- non-triggered, 9s init, 20s repeat (not heroic-gated — scheduled
+-- unconditionally; the "no random-target bridge" claim is retracted);
+-- Shivan Slash arm stays ported; Reset — instance-gated
+-- DespawnOrUnsummon + cross-AI JustSummoned + DoCastSelf(66327) +
+-- SetData(DATA_MISTRESS_OF_PAIN_COUNT, INCREASE) (instance / cross-AI
+-- bridges absent); EVENT_MISTRESS_KISS:
 -- DoCastSelf(Mistress' Kiss 66336), 15s init, 30s repeat — self-cast
 -- bridged in isolation but IsHeroic()-gated — no difficulty bridge
 -- (kelidan precedent); JustDied: SetData(
@@ -168,6 +177,14 @@ local SAY_BERSERK = 11
 local SPELL_FEL_FIREBALL = 66532
 local SPELL_NETHER_POWER = 66228
 local SPELL_BERSERK = 64238
+local SPELL_FEL_LIGHTNING = 66528
+local SPELL_INCINERATE_FLESH = 66237
+local SPELL_LEGION_FLAME = 66197
+local SPELL_SPINNING_SPIKE = 66283
+
+local EMOTE_INCINERATE = 5
+local SAY_INCINERATE = 6
+local EMOTE_LEGION_FLAME = 2
 
 local SPELL_SHIVAN_SLASH = 66378
 
@@ -195,6 +212,26 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, idx, 0.0f, true) playerOnly=true arms ride the
+-- keleseth GetPlayersInWorld precedent (0.0f = any-range, modeled with
+-- 100 — curator precedent). Caveat shared with the keleseth/thorim/
+-- beast ports: C++ draws from the threat list (engaged units); the
+-- bridge can include nearby unengaged players.
+local function randomPlayerInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ EVENT_FEL_FIREBALL: DoCastVictim(Fel Fireball 66532), 6s init,
 -- urand(11s,13s) repeat.
 local function fireballTick(creature, guid)
@@ -205,12 +242,57 @@ local function fireballTick(creature, guid)
 end
 
 -- C++ EVENT_NETHER_POWER: me->CastSpell(me, SPELL_NETHER_POWER, args)
--- (triggered, SPELLVALUE_AURA_STACK RAID_MODE(5,10) — the stack/trigger
--- args have no bridge), 22s init, 42s repeat.
+-- (TRIGGERED_FULL_MASK + SPELLVALUE_AURA_STACK RAID_MODE(5,10) — the
+-- stack mod has no bridge; the triggered flag is bridged), 22s init,
+-- 42s repeat.
 local function netherPowerTick(creature, guid)
-    creature:CastSpell(creature, SPELL_NETHER_POWER)
+    creature:CastSpell(creature, SPELL_NETHER_POWER, true)
     schedule(guid, "netherpower", 42000, function()
         netherPowerTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_FEL_LIGHTNING: SelectTarget(Random,0,0.0f,true) ->
+-- DoCast(Fel Lightning 66528) non-triggered, 17s init,
+-- Repeat(10s,30s) outside the target check (re-arm unconditional).
+local function felLightningTick(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_FEL_LIGHTNING)
+    end
+    schedule(guid, "fellightning", math.random(10000, 30000), function()
+        felLightningTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_INCINERATE_FLESH: SelectTarget(Random,1,0.0f,true) ->
+-- Talk(EMOTE_INCINERATE 5, target) + Talk(SAY_INCINERATE 6) +
+-- DoCast(Incinerate Flesh 66237) non-triggered, 14s init,
+-- Repeat(23s) outside the target check (re-arm unconditional).
+local function incinerateFleshTick(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:Talk(EMOTE_INCINERATE, target)
+        creature:Talk(SAY_INCINERATE)
+        creature:CastSpell(target, SPELL_INCINERATE_FLESH)
+    end
+    schedule(guid, "incinerateflesh", 23000, function()
+        incinerateFleshTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_LEGION_FLAME: SelectTarget(Random,1,0.0f,true) ->
+-- Talk(EMOTE_LEGION_FLAME 2, target) + DoCast(Legion Flame 66197)
+-- non-triggered, 20s init, Repeat(30s) outside the target check
+-- (re-arm unconditional).
+local function legionFlameTick(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:Talk(EMOTE_LEGION_FLAME, target)
+        creature:CastSpell(target, SPELL_LEGION_FLAME)
+    end
+    schedule(guid, "legionflame", 30000, function()
+        legionFlameTick(creature, guid)
     end)
 end
 
@@ -223,6 +305,15 @@ local function jaraxxusEnterCombat(event, creature, target)
     end)
     schedule(guid, "netherpower", 22000, function()
         netherPowerTick(creature, guid)
+    end)
+    schedule(guid, "fellightning", 17000, function()
+        felLightningTick(creature, guid)
+    end)
+    schedule(guid, "incinerateflesh", 14000, function()
+        incinerateFleshTick(creature, guid)
+    end)
+    schedule(guid, "legionflame", 20000, function()
+        legionFlameTick(creature, guid)
     end)
     -- C++ EVENT_ENRAGE: Talk(SAY_BERSERK) + DoCastSelf(Berserk 64238, triggered),
     -- 10min, fires once (never rescheduled).
@@ -266,11 +357,27 @@ local function shivanSlashTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SPINNING_SPIKE: SelectTarget(Random,0,0.0f,true) ->
+-- DoCast(Spinning Spike 66283) non-triggered, 9s init, Repeat(20s)
+-- outside the target check (re-arm unconditional).
+local function spinningSpikeTick(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_SPINNING_SPIKE)
+    end
+    schedule(guid, "spinningspike", 20000, function()
+        spinningSpikeTick(creature, guid)
+    end)
+end
+
 local function mistressEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "shivanslash", 4000, function()
         shivanSlashTick(creature, guid)
+    end)
+    schedule(guid, "spinningspike", 9000, function()
+        spinningSpikeTick(creature, guid)
     end)
 end
 
