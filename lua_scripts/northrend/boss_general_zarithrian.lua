@@ -25,7 +25,8 @@
 -- boss_general_zarithrian JustEngagedWith — Talk(SAY_AGGRO 0)
 -- (event 1 — the auriaya precedent; the BossAI::JustEngagedWith /
 -- events.ScheduleEvent(EVENT_CLEAVE / EVENT_INTIDMDATING_ROAR /
--- EVENT_SUMMON_ADDS [/EVENT_SUMMON_ADDS2]) legs have no bridges).
+-- EVENT_SUMMON_ADDS [/EVENT_SUMMON_ADDS2]) legs ride the maiden
+-- CreateLuaEvent convention now (ported 2026-10-13/14).
 -- boss_general_zarithrian KilledUnit — Talk(SAY_KILL 1) gated on
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
 -- player-gated variant precedent).
@@ -43,13 +44,20 @@
 -- add-registration leg (no summon-registry bridge).
 -- boss_general_zarithrian EnterEvadeMode — summons.DespawnAll() +
 -- _DespawnAtEvade() legs (no summon-registry / evade-model bridges).
--- boss_general_zarithrian UpdateAI — Talk(SAY_ADDS 2) rides
--- EVENT_SUMMON_ADDS (no-timer-bridge); the EVENT_SUMMON_ADDS2 stalker
--- CastSpell(SPELL_SUMMON_FLAMECALLER 74398) legs ride cross-creature
--- casts with no-cast / no-AreaTrigger bridges;
--- DoCastSelf(SPELL_INTIMIDATING_ROAR 74384) / DoCastVictim(
--- SPELL_CLEAVE_ARMOR 74367) legs have no-cast bridges;
--- DoMeleeAttackIfReady has no melee-model bridge.
+-- boss_general_zarithrian UpdateAI — 2026-10-14 retraction re-audit:
+-- stale "no-timer-bridge" claim RETRACTED (CreateLuaEvent is a real
+-- bridge); Talk(SAY_ADDS 2) rides EVENT_SUMMON_ADDS unconditionally
+-- (:128-129, Talk then [[fallthrough]]) and is now PORTED on
+-- 15s-init / 45s-repeat CreateLuaEvent (addsTick, below — the maiden
+-- precedent; the unbridged summon legs stay documented-only). The
+-- EVENT_SUMMON_ADDS/EVENT_SUMMON_ADDS2 stalker
+-- CastSpell(SPELL_SUMMON_FLAMECALLER 74398) legs ride
+-- instance->GetGuidData(DATA_ZARITHRIAN_SPAWN_STALKER_*) with no
+-- instance bridge — documented-only; EVENT_SUMMON_ADDS2 carries no
+-- Talk. DoCastSelf(SPELL_INTIMIDATING_ROAR 74384) /
+-- DoCastVictim(SPELL_CLEAVE_ARMOR 74367) now ported (roarTick /
+-- cleaveTick, 2026-10-13); DoMeleeAttackIfReady has no melee-model
+-- bridge.
 -- npc_onyx_flamecaller (NPC_ONYX_FLAMECALLER = 39814) — zero Talk
 -- lines in the file — NOT registered (the bronjahm
 -- npc_corrupted_soul_fragment precedent); its JustEngagedWith /
@@ -61,13 +69,14 @@
 -- MovementInform DoZoneInCombat leg rides no-movement-inform bridge;
 -- the IsSummonedBy zarithrian->AI()->JustSummoned(me) leg rides no
 -- cross-AI-summon bridge.
--- All 4 Talk() calls in the file accounted for (SAY_AGGRO 0 +
--- SAY_KILL 1 + SAY_DEATH 3 ported; SAY_ADDS 2 documented above).
+-- All 4 Talk() calls in the file accounted for and ported
+-- (SAY_AGGRO 0 + SAY_KILL 1 + SAY_ADDS 2 + SAY_DEATH 3).
 
 local ENTRY_GENERAL_ZARITHRIAN = 39746
 
 local SAY_AGGRO = 0
 local SAY_KILL  = 1
+local SAY_ADDS  = 2
 local SAY_DEATH = 3
 
 local SPELL_CLEAVE_ARMOR    = 74367
@@ -115,6 +124,22 @@ local function intimidatingRoarTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SUMMON_ADDS: Talk(SAY_ADDS 2) rides the event arm
+-- (:128-129 — Talk then [[fallthrough]] into the stalker summon legs);
+-- 15s init (JustEngagedWith :106), Repeat(45s) (:137). The stalker
+-- CastSpell(SPELL_SUMMON_FLAMECALLER 74398) legs ride
+-- instance->GetGuidData(DATA_ZARITHRIAN_SPAWN_STALKER_*) with no
+-- instance bridge — documented-only; the Talk arm is unconditional in
+-- the event and ports C++-exact on the maiden CreateLuaEvent
+-- convention (the 2026-10-14 retraction of the stale no-timer-bridge
+-- claim). EVENT_SUMMON_ADDS2 (25-man, 16s) carries no Talk.
+local function addsTick(creature, guid)
+    creature:Talk(SAY_ADDS)
+    schedule(guid, "adds", 45000, function()
+        addsTick(creature, guid)
+    end)
+end
+
 -- C++ boss_general_zarithrian::JustEngagedWith:
 -- BossAI::JustEngagedWith(who); Talk(SAY_AGGRO);
 -- events.ScheduleEvent(EVENT_CLEAVE, 8s);
@@ -122,9 +147,9 @@ end
 -- events.ScheduleEvent(EVENT_SUMMON_ADDS, 15s); [+ 16s 25-man
 -- EVENT_SUMMON_ADDS2] — the auriaya precedent; the cleave/roar
 -- timer legs ride the maiden CreateLuaEvent convention now (see
--- below). EVENT_SUMMON_ADDS (Talk(SAY_ADDS 2) + stalker-triggered
--- 74398 casts via instance GUIDs) stays documented-only: a Talk-only
--- port would fire with no adds spawning (visible fidelity deviation).
+-- below). The EVENT_SUMMON_ADDS stalker-triggered 74398 casts
+-- (instance GUID lookups, no instance bridge) stay documented-only;
+-- the Talk(SAY_ADDS 2) arm is now ported (addsTick, below).
 local function zarithrianEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -134,6 +159,9 @@ local function zarithrianEnterCombat(event, creature, target)
     end)
     schedule(guid, "roar", 14000, function()
         intimidatingRoarTick(creature, guid)
+    end)
+    schedule(guid, "adds", 15000, function()
+        addsTick(creature, guid)
     end)
 end
 

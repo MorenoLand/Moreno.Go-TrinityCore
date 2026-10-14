@@ -59,14 +59,23 @@
 -- Talk(SAY_BERSERK 10) + DoCastSelf(SPELL_BERSERK 26662)
 -- non-triggered (:160/:351-354); the "no-timer-bridge" block for
 -- this arm was stale doctrine (the boss_toravon precedent).
--- boss_blood_queen_lana_thel UpdateAI — remaining scheduler arms:
--- Talk(SAY_VAMPIRIC_BITE 1) rides EVENT_VAMPIRIC_BITE;
--- Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
--- EVENT_PACT_OF_THE_DARKFALLEN; Talk(EMOTE_SWARMING_SHADOWS 5,
--- target) / Talk(SAY_SWARMING_SHADOWS 4) ride
--- EVENT_SWARMING_SHADOWS (no-timer-bridge); the Blood Mirror /
--- Delirious Slash / Twilight Bloodbolt DoCast legs have no-cast
--- bridge.
+-- boss_blood_queen_lana_thel UpdateAI — 2026-10-14 retraction
+-- re-audit: the stale "no-timer-bridge" claim for the remaining
+-- scheduler arms is RETRACTED (CreateLuaEvent is a real bridge,
+-- engine/scripting/runtime.go:798); each arm is classified against
+-- the C++ individually (gothik precedent). Talk(SAY_VAMPIRIC_BITE 1)
+-- rides EVENT_VAMPIRIC_BITE (:356-368) — OUT: Talk fires inside the
+-- SelectRandomTarget-found branch (:365, random-target machine, no
+-- bridge). Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
+-- EVENT_PACT_OF_THE_DARKFALLEN (:407-420) — OUT: Talk fires only if
+-- targets.size() > 1 after SelectRandomTarget + RandomResize(2/3 by
+-- Is25ManRaid, :409-413, random-target machine, no bridge).
+-- Talk(EMOTE_SWARMING_SHADOWS 5, target) / Talk(SAY_SWARMING_SHADOWS
+-- 4) ride EVENT_SWARMING_SHADOWS (:421-428) — OUT: Talk fires only if
+-- SelectRandomTarget returns a player (random-target machine, no
+-- bridge; the emote's target leg has no targeted-Talk bridge either).
+-- The Blood Mirror / Delirious Slash / Twilight Bloodbolt DoCast legs
+-- have no-cast bridge.
 -- boss_blood_queen_lana_thel DoAction — ACTION_KILL_MINCHAR leg
 -- (no-DoAction bridge; the krick ACTION_OUTRO precedent); the
 -- EnterEvadeMode / SetGUID vampire-bloodbolt GUID-set bookkeeping
