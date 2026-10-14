@@ -419,6 +419,106 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// findFreeInventoryAutoSlot ports the free-place legs of Player::CanStoreItem's
+// auto path (NULL_BAG/NULL_SLOT; Player.cpp:11068-11125) for the bank ->
+// inventory move. The merge legs are moot (Go moves whole items), so this
+// runs the free-slot phase: for items with a BagFamily, keys go to the
+// keyring and currency tokens to the currency slots, then specialized
+// family-matching equipped bags 19..22 are tried before the backpack
+// (non_specialized=false pass, Player.cpp:11079-11088); then the backpack
+// slots 23..38 (Player.cpp:11104); then plain non-specialized containers
+// (non_specialized=true pass, Player.cpp:11107-11125). The non_specialized
+// gate rejects specialized bags on the plain pass, and ItemCanGoIntoBag
+// rejects family-mismatched bags on the specialized pass, so a sword never
+// lands in a soul bag and family items prefer their matching bags.
+func (s *session) findFreeInventoryAutoSlot(ctx context.Context, itemEntry uint32) (int64, uint8, bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil ||
+		s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0, 0xFF, false
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	var itemBagFamily uint32
+	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(BagFamily, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&itemBagFamily)
+
+	freeSlotInRange := func(first, last uint8) (uint8, bool) {
+		occupied := make(map[uint8]bool)
+		rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot <= ?", s.playerGUID, first, last)
+		if err != nil {
+			return 0, false
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var sl uint8
+			if rows.Scan(&sl) == nil {
+				occupied[sl] = true
+			}
+		}
+		for sl := first; sl <= last; sl++ {
+			if !occupied[sl] {
+				return sl, true
+			}
+		}
+		return 0, false
+	}
+
+	type invBag struct {
+		guid     int64
+		class    uint32
+		subclass uint32
+	}
+	bags := make([]invBag, 0, 4)
+	for _, eb := range s.getEquippedBags(ctx, s.playerGUID) {
+		var class, subclass uint32
+		if err := wdb.QueryRowContext(ctx, `SELECT COALESCE(class, 0), COALESCE(subclass, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, eb.guid).Scan(&class, &subclass); err != nil {
+			continue
+		}
+		bags = append(bags, invBag{guid: eb.guid, class: class, subclass: subclass})
+	}
+	isPlain := func(b invBag) bool {
+		return b.class == itemClassContainer && b.subclass == itemSubClassContainer
+	}
+
+	// Pass 1 (Player.cpp:11068-11088): BagFamily items try the keyring /
+	// currency slots, then family-matching specialized bags, first.
+	if itemBagFamily != 0 {
+		var first, last uint8
+		switch {
+		case itemBagFamily&bagFamilyMaskKeys != 0:
+			first, last = invSlotKeyringStart, invSlotKeyringEnd-1
+		case itemBagFamily&bagFamilyMaskCurrencyTokens != 0:
+			first, last = uint8(currencyTokenSlotStart), uint8(currencyTokenSlotEnd-1)
+		}
+		if last > first {
+			if slot, ok := freeSlotInRange(first, last); ok {
+				return 0, slot, true
+			}
+		}
+		for _, b := range bags {
+			if isPlain(b) || !itemCanGoIntoBag(b.class, b.subclass, itemBagFamily) {
+				continue
+			}
+			if slot, ok := s.freeInventorySlot(ctx, b.guid); ok {
+				return b.guid, slot, true
+			}
+		}
+	}
+	// Pass 2 (Player.cpp:11104): free backpack slot 23..38.
+	if slot, ok := freeSlotInRange(bagSlotStart, bagSlotEnd); ok {
+		return 0, slot, true
+	}
+	// Pass 3 (Player.cpp:11107-11125): plain non-specialized containers only.
+	for _, b := range bags {
+		if !isPlain(b) {
+			continue
+		}
+		if slot, ok := s.freeInventorySlot(ctx, b.guid); ok {
+			return b.guid, slot, true
+		}
+	}
+	return 0, 0xFF, false
+}
+
 // handleAutoStoreBankItem processes CMSG_AUTOSTORE_BANK_ITEM (0x282).
 // Reference: WorldSession::HandleAutoStoreBankItemOpcode (BankHandler.cpp:95).
 func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) bool {
@@ -482,43 +582,13 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		return true
 	}
 	if isBank {
-		// Move from bank to backpack (slots 23..38), or into equipped bags (19..22)
-		occupied := make(map[uint8]bool)
-		rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot <= ?", s.playerGUID, bagSlotStart, bagSlotEnd)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var sl uint8
-				if rows.Scan(&sl) == nil {
-					occupied[sl] = true
-				}
-			}
-		}
-		var destBagKey int64 = 0
-		var destSlot uint8 = 0xFF
-		for sl := bagSlotStart; sl <= bagSlotEnd; sl++ {
-			if !occupied[sl] {
-				destSlot = sl
-				break
-			}
-		}
-		if destSlot == 0xFF {
-			// Check equipped bags 19..22
-			for bagSlot := int(invSlotBagStart); bagSlot < int(invSlotBagEnd); bagSlot++ {
-				var bagGUID int64
-				_ = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, bagSlot).Scan(&bagGUID)
-				if bagGUID == 0 {
-					continue
-				}
-				freeSlot, ok := s.freeInventorySlot(ctx, bagGUID)
-				if ok {
-					destBagKey = bagGUID
-					destSlot = freeSlot
-					break
-				}
-			}
-		}
-		if destSlot == 0xFF {
+		// Move from bank to inventory uses CanStoreItem's auto-path slot
+		// order (Player.cpp:11068-11125): family items prefer the keyring /
+		// currency slots and family-matching specialized bags before the
+		// backpack, and specialized bags never take plain items on the
+		// final pass (non_specialized gate).
+		destBagKey, destSlot, ok := s.findFreeInventoryAutoSlot(ctx, uint32(itemEntry))
+		if !ok {
 			s.sendEquipError(equipErrInvFull, uint64(itemGUID))
 			return true // Inventory full
 		}
