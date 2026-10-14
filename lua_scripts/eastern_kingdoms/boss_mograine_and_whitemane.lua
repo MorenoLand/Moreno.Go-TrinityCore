@@ -56,7 +56,12 @@
 -- bookkeeping have no bridges (luaBossAI shim).
 -- Whitemane's sub-50% DamageTaken latch (HealthBelowPctDamaged(50,
 -- damage) — damaged class): cancel combat events, InterruptNonMeleeSpells,
--- DoCastAOE(deep sleep 9256) (no AoE-cast bridge), REACT_PASSIVE,
+-- DoCastAOE(deep sleep 9256) (the self-cast lowering exists per the
+-- selin_fireheart DoCastAOE convention, but the arm itself is an
+-- unbridged resurrection phase machine — no OnDamageTaken latch ported,
+-- and the MovePosition/MovePoint/MovementInform legs plus the
+-- SpellHitTarget cross-creature resurrection have no MotionMaster /
+-- SpellHit / instance-lookup bridges), REACT_PASSIVE,
 -- MotionMaster Clear, MovePosition(2yd, facing) + MovePoint(
 -- POINT_WHITEMANE_MOVE_TO_MOGRAINE 1) toward Mograine via
 -- instance->GetCreature(DATA_MOGRAINE) (no instance lookup or

@@ -47,7 +47,10 @@
 --   keeps schedule); 3640ms re-arm.
 -- - EVENT_CHAIN_REACTION: DoCastVictim(SPELL_SUMMON_TABLE 69218, triggered)
 --   -> CastSpell(victim, 69218, true); the DoCastAOE(SPELL_CHAIN_REACTION
---   68821) leg has no AoE-cast bridge (shazzrah precedent); 25s re-arm.
+--   68821) leg is a non-triggered self-cast (selin_fireheart DoCastAOE
+--   convention — the old "no AoE-cast bridge" claim was wrong); 25s
+--   re-arm. The summon-table leg's actual summon has no bridge, so no
+--   table spawns (documented).
 -- - DamageTaken: C++ `damage >= me->GetHealth()` is the lethal-blow class
 --   (darkreaver precedent, NOT the golemagg HealthBelowPct bug class):
 --   if _deadCount < 2, clamp the blow to health-1 via the event-9 second
@@ -161,11 +164,15 @@ local function getState(guid)
 end
 
 -- C++ EVENT_CHAIN_REACTION: triggered DoCastVictim(SPELL_SUMMON_TABLE)
--- + unbridgeable DoCastAOE(SPELL_CHAIN_REACTION); 25s re-arm.
+-- + non-triggered DoCastAOE(SPELL_CHAIN_REACTION) (self-cast,
+-- selin_fireheart DoCastAOE convention — the old "unbridgeable" claim
+-- was wrong); 25s re-arm. SPELL_SUMMON_TABLE's summon leg has no
+-- summon bridge, so the table never appears (documented).
 local function onChainReaction(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SUMMON_TABLE, true)
+        creature:CastSpell(creature, SPELL_CHAIN_REACTION)
     end
     schedule(guid, "chain", 25000, function() onChainReaction(creature, guid) end)
 end

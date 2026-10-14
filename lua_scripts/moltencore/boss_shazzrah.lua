@@ -15,8 +15,9 @@
 -- — the pick may land on a target already carrying it) / magic
 -- grounding 19714 24s then 35s, non-triggered self-cast / counterspell
 -- 19715 15s then {16s,20s}, non-triggered DoCastVictim / Gate of
--- Shazzrah 45s then 45s (threat-reset and DoCastAOE(23138) arms have no
--- bridges — see deviations): schedules the triggered arcane explosion
+-- Shazzrah 45s then 45s (ResetThreatList has no bridge; DoCastAOE(23138)
+-- ports as non-triggered self-cast, selin_fireheart convention — the
+-- SpellScript teleport/target-switch legs have no bridge): schedules the triggered arcane explosion
 -- 2s later (non-triggered DoCastVictim 19712, one-shot) and
 -- reschedules arcane explosion {3s,6s}. Nil-victim ticks cast nothing
 -- but keep the schedule (jeklik convention). OnDied(4)/
@@ -39,6 +40,7 @@ local SPELL_ARCANE_EXPLOSION = 19712
 local SPELL_SHAZZRAH_CURSE = 19713
 local SPELL_MAGIC_GROUNDING = 19714
 local SPELL_COUNTERSPELL = 19715
+local SPELL_SHAZZRAH_GATE_DUMMY = 23138
 
 local timers = {}
 
@@ -124,10 +126,14 @@ local function onCounterspell(creature, guid)
     end)
 end
 
--- C++ EVENT_SHAZZRAH_GATE: 45s then 45s. The ResetThreatList and
--- DoCastAOE(SPELL_SHAZZRAH_GATE_DUMMY) arms have no bridges — the
--- timer keeps the explosion interplay: one-shot triggered arcane
--- explosion 2s later and arcane explosion rescheduled {3s,6s}.
+-- C++ EVENT_SHAZZRAH_GATE: 45s then 45s. ResetThreatList has no
+-- bridge (no threat model); the DoCastAOE(SPELL_SHAZZRAH_GATE_DUMMY
+-- 23138) leg lowers to non-triggered self-cast (selin_fireheart
+-- DoCastAOE convention — the old "no bridge" claim was wrong). The
+-- spell_shazzrah_gate_dummy SpellScript (random area target, that
+-- target casts 23139 teleporting Shazzrah to it, then AttackStart) has
+-- no SpellScript bridge, so the cast fires visibly but the teleport +
+-- target switch never happen (vaelastrasz convention).
 local function onGateTriggeredExplosion(creature, guid)
     local victim = creature:GetVictim()
     if victim then
@@ -137,6 +143,7 @@ local function onGateTriggeredExplosion(creature, guid)
 end
 
 local function onShazzrahGate(creature, guid)
+    creature:CastSpell(creature, SPELL_SHAZZRAH_GATE_DUMMY)
     schedule(guid, "gateexplosion", 2000, function()
         onGateTriggeredExplosion(creature, guid)
     end)

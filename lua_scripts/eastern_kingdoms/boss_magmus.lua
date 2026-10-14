@@ -34,7 +34,10 @@
 -- Not ported (same file): npc_ironhand_guardian — its UpdateAI is gated
 -- entirely on _instance->GetData(TYPE_IRON_HALL) == NOT_STARTED
 -- (instance arm, no bridge) and fires DoCastAOE(SPELL_GOUTOFFLAME=15529)
--- Repeat 16s/21s — no AOE-cast bridge on the Lua surface. Documented-only.
+-- Repeat 16s/21s — the cast lowers to self-cast per the selin_fireheart
+-- DoCastAOE convention, but the whole AI is gated on the unbridged
+-- instance data (TYPE_IRON_HALL == NOT_STARTED), so no leg of the arm
+-- can be reached. Documented-only.
 
 local SPELL_FIERYBURST = 13900
 local SPELL_WARSTOMP = 24375
