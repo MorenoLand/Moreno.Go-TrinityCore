@@ -535,6 +535,10 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 		}
 		s.sendPlayerMoneyUpdate()
 	}
+	// Player::ActivateTaxiPathTo (Player.cpp:21580): the player leaves any
+	// vehicle before the flight starts — Go's exitVehicle mirrors
+	// Unit::_ExitVehicle and is a no-op when not mounted on a vehicle.
+	s.exitVehicle(ctx)
 	// Flight start tears the trade down: the client closes its trade window
 	// when the taxi map opens, but cheating tools can reopen it, so C++
 	// calls TradeCancel(true) unconditionally at flight start
@@ -853,6 +857,11 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 		reply(taxiErrNoSuchPath)
 		return
 	}
+	// Player.cpp:21580: the player leaves any vehicle before the flight
+	// starts (ExitVehicle in ActivateTaxiPathTo is unconditional on the
+	// npc==nullptr spell path too) — exitVehicle is a no-op when not
+	// mounted on a vehicle.
+	s.exitVehicle(ctx)
 	s.cancelTrade(true)
 	// Player.cpp:21588: resolve the hop through GetTaxiPath.
 	resolvedPath, _, hopFound, hopErr := s.server.Data.TaxiPathLinks(from, to)
