@@ -84,8 +84,11 @@
 -- (SetGUID leg: ObjectAccessor::GetUnit + _impaledPlayers latch, :147-:155)
 -- — documented-only.
 -- SpellHit(SPELL_TRANSFORM_BACK 55299) -> RemoveAurasDueToSpell(55297)
--- (:177-:181) — event 15 never fires (standing) + no aura-removal
--- bridge (aeranas precedent) — documented-only.
+-- (:177-:181) — the victim-side arm maps to event 14
+-- (CREATURE_EVENT_ON_HIT_BY_SPELL; 15 is the caster-side
+-- OnSpellHitTarget), which fires in Go, but there is no
+-- aura-removal bridge on the Lua surface (aeranas precedent) —
+-- documented-only.
 -- EnterEvadeMode summons.DespawnAll + _DespawnAtEvade (:111-:115) — no
 -- despawn bridge (terestian precedent) — documented-only.
 -- JustEngagedWith InterruptNonMeleeSpells — no bridge; BossAI

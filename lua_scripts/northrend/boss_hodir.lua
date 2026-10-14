@@ -284,13 +284,13 @@ end
 -- the Lua surface). The bare
 -- DoCast(SPELL_FLASH_FREEZE), and the whole
 -- EVENT_FLASH_FREEZE_EFFECT machinery (lines 462-470) have
--- no bridges. Repeat 25-35s is the C++-exact Talk cadence
--- from the EFFECT reschedule (line 470); init 45s
--- (line 382).
+-- no bridges. Talk-to-Talk cadence is 25.5-35.5s: the 500ms
+-- EVENT_FLASH_FREEZE_EFFECT leg (line 460) plus the 25-35s
+-- reschedule (line 470); init 45s (line 382).
 local function onFlashFreeze(creature, guid)
     creature:Talk(SAY_FLASH_FREEZE)
     creature:Talk(EMOTE_FREEZE)
-    schedule(guid, "flashfreeze", {25000, 35000}, function() onFlashFreeze(creature, guid) end)
+    schedule(guid, "flashfreeze", {25500, 35500}, function() onFlashFreeze(creature, guid) end)
 end
 
 -- C++ JustEngagedWith (lines 370-384): BossAI passthrough

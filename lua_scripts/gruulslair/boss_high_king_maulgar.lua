@@ -613,6 +613,15 @@ local function kroshEnterCombat(event, creature, target)
     schedule(guid, "fireball", 1000, function()
         kroshFireball(creature, guid)
     end)
+    -- C++: the distance OR runs on every UpdateAI tick from combat
+    -- start, so a victim within 30 yd at pull eats a first-tick
+    -- fireball (boss_high_king_maulgar.cpp:539). The poller starts
+    -- at pull, not at the first floor fire; schedule() replaces the
+    -- same-named arm, so an early fire supersedes the 1s floor arm
+    -- exactly like the single C++ timer re-armed on either arm.
+    schedule(guid, "fireballpoll", 1, function()
+        kroshFireballPoll(creature, guid)
+    end)
     schedule(guid, "spellshield", 5000, function()
         kroshSpellShield(creature, guid)
     end)
