@@ -1307,14 +1307,35 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 			continue
 		}
 
-		// QuestHandler.cpp:595-599 — Player::SatisfyQuestDay(quest, false):
-		// a receiver that already completed this daily today answers
-		// QUEST_PARTY_MSG_NOT_ELIGIBLE_TODAY before the CanTakeQuest gate.
-		// The dungeon-finder-quest arm has no Go model (documented delta,
-		// cf. satisfyQuestRepeatGates).
-		if data.Flags&questFlagsDaily != 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			var done int64
-			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_daily WHERE guid = ? AND quest = ?", receiver.playerGUID, questID).Scan(&done); err == nil && done > 0 {
+		// Player::SatisfyQuestDay (Player.cpp:15980-16008): daily and
+		// dungeon-finder quests answer QUEST_PARTY_MSG_NOT_ELIGIBLE_TODAY
+		// before the CanTakeQuest gate. A daily fails when the receiver
+		// already completed it today OR the daily roster is full
+		// (PLAYER_MAX_DAILY_QUESTS = 25, no free slot); a dungeon-finder
+		// quest fails only when already done today. The roster lives in
+		// the receiver's session state, kept current at every daily
+		// turn-in, exactly like C++'s PLAYER_FIELD_DAILY_QUESTS slots.
+		if isDFQuest := specialFlags&0x08 != 0; data.Flags&questFlagsDaily != 0 || isDFQuest {
+			eligible := true
+			if isDFQuest {
+				_, done := receiver.player.DungeonFinderQuests[questID]
+				eligible = !done
+			} else {
+				haveSlot := false
+				for _, id := range receiver.player.DailyQuests {
+					if id == questID {
+						eligible = false
+						break
+					}
+					if id == 0 {
+						haveSlot = true
+					}
+				}
+				if eligible && !haveSlot {
+					eligible = false
+				}
+			}
+			if !eligible {
 				s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgNotEligibleToday)
 				continue
 			}

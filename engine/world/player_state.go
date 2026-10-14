@@ -643,7 +643,16 @@ func (s *session) loadRewardedQuestState(ctx context.Context, state *playerState
 		if title > 0 && s.server.Data != nil {
 			if entry, found, terr := s.server.Data.CharTitle(uint32(title)); terr == nil && found {
 				if idx := entry.MaskID / 32; int(idx) < len(state.KnownTitles) {
-					state.KnownTitles[idx] |= uint32(1) << (entry.MaskID % 32)
+					bit := uint32(1) << (entry.MaskID % 32)
+					if state.KnownTitles[idx]&bit == 0 {
+						// Player::SetTitle (Player.cpp:24814): the SMSG_TITLE_EARNED
+						// packet fires whenever the MaskID bit is newly set.
+						state.KnownTitles[idx] |= bit
+						packet := protocol.NewBuffer(8)
+						packet.WriteU32(entry.MaskID)
+						packet.WriteU32(1) // 1 - earned, 0 - lost
+						_ = s.write(uint16(protocol.OpcodeSMSG_TITLE_EARNED), packet.Bytes(), true)
+					}
 				}
 			}
 		}

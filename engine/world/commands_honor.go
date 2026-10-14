@@ -283,7 +283,14 @@ func (t *session) grantHonor(ctx context.Context, honor int32, victimGUID uint64
 	if newValue < 0 {
 		newValue = 0
 	}
-	t.player.TotalHonorPoints = uint32(newValue) // Player::ModifyHonorPoints (Player.cpp:7069)
+	maxPoints := int64(75000) // CONFIG_MAX_HONOR_POINTS default (World.cpp:921)
+	if t.server != nil {
+		maxPoints = int64(t.server.Config.MaxHonorPoints)
+	}
+	if newValue > maxPoints {
+		newValue = maxPoints
+	}
+	t.player.TotalHonorPoints = uint32(newValue) // Player::ModifyHonorPoints (Player.cpp:7069) + SetHonorPoints cap (Player.cpp:7061)
 	if honor > 0 {
 		if t.player.TotalHonorPoints > 0 {
 			t.addKnownCurrency(t.player, itemHonorPointsID)

@@ -1012,16 +1012,24 @@ func (s *session) inArenaNow() bool {
 }
 
 // modifyQuestArenaPoints mirrors Player::ModifyArenaPoints (Player.cpp:7085):
-// the total clamps at zero and persists to characters.arenaPoints. The
-// player-account gate (AccountMgr::IsPlayerAccount, security SEC_PLAYER)
-// matches the C++ early return.
+// the total clamps at zero and at CONFIG_MAX_ARENA_POINTS (via SetArenaPoints,
+// Player.cpp:7061) and persists to characters.arenaPoints. The C++ call site
+// (Player.cpp:15435) and ModifyArenaPoints carry no account-security gate,
+// so GM accounts earn quest arena points like everyone else.
 func (s *session) modifyQuestArenaPoints(ctx context.Context, value int32) {
-	if s.player == nil || s.security != 0 {
+	if s.player == nil {
 		return
 	}
 	newValue := int64(s.player.ArenaPoints) + int64(value)
 	if newValue < 0 {
 		newValue = 0
+	}
+	maxPoints := int64(10000) // CONFIG_MAX_ARENA_POINTS default (World.cpp:942)
+	if s.server != nil {
+		maxPoints = int64(s.server.Config.MaxArenaPoints)
+	}
+	if newValue > maxPoints {
+		newValue = maxPoints
 	}
 	s.player.ArenaPoints = uint32(newValue)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
