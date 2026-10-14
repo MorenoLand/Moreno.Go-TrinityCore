@@ -16,8 +16,9 @@
 -- DoCast resolves its target via AISpellInfo and the spell script
 -- re-selects it (TARGET_UNIT_SRC_AREA_ENEMY +
 -- FlameLeviathanPursuedTargetSelector — salvaged demolisher/siege vehicles
--- in the Formation Grounds), so the Lua cast is targetless:
--- creature:CastSpell(nil, spell).
+-- in the Formation Grounds), so the Lua cast is self-targeted:
+-- creature:CastSpell(creature, spell) (the 03:44 tick corrected an earlier
+-- CastSpell(nil, ...) victim-cast misread).
 -- EVENT_MISSILE — DoCast(me, SPELL_MISSILE_BARRAGE 62400, true) (self-cast
 -- TRIGGERED), {1.5s,4s} randtime init / 2s re-arm (:280 / :406-:408); the
 -- 3-arg ScheduleEvent is the minTime/maxTime overload (EventMap.h:135).
@@ -26,6 +27,16 @@
 -- creature:CastSpell(creature, spell).
 -- EVENT_SPEED — DoCastAOE(SPELL_GATHERING_SPEED 62375) (non-triggered), 15s
 -- init / 15s re-arm (:283 / :414-:416).
+-- EVENT_SHUTDOWN — 150s init (:282), arm at :424-:432: Talk(SAY_OVERLOAD 11)
+-- + Talk(EMOTE_OVERLOAD 13) + me->CastSpell(me, SPELL_SYSTEMS_SHUTDOWN 62475,
+-- true) triggered self-cast; EVENT_REPAIR 4s later (:433-:437):
+-- Talk(EMOTE_REPAIR 14) + reschedules EVENT_SHUTDOWN 150s. Only the 150s
+-- timer path is modeled — the early 4s path is gated on the SpellHit-driven
+-- Shutdown counter (SPELL_OVERLOAD_CIRCUIT 62399 vehicle spellclick leg, no
+-- bridge). Deviation: DelayEvents(20s, 0) on the other timers is not
+-- emulated (no remaining-time tracking on the Lua timers); the
+-- systems_shutdown AuraScript (stun/root + gathering-speed removal) and the
+-- Shutout achievement flag have no bridges — documented.
 -- JustDied — Talk(SAY_DEATH 2) (event 4; :331; the _JustDied() passthrough
 -- and the flag/dynflag/npcflag cosmetics have no bridges).
 -- DOCUMENTED-ONLY (no registration beyond entry 33113):
@@ -35,13 +46,6 @@
 -- DoAction(1..4) tower-destruction legs with no SetData/DoAction bridge;
 -- porting Talk(0) unconditionally would mis-port the hardmode legs —
 -- documented, not registered.
--- EVENT_SHUTDOWN (150s init; Talk(SAY_OVERLOAD 11) + Talk(EMOTE_OVERLOAD 13)
--- + me->CastSpell(me, SPELL_SYSTEMS_SHUTDOWN 62475, true) + EVENT_REPAIR and
--- DelayEvents(20s, 0) legs, :424-:432; the early path at :386-:389 is gated
--- on the Shutdown counter) — overload leg: Shutdown is ++'d in SpellHit by
--- SPELL_OVERLOAD_CIRCUIT 62399 (vehicle spellclick leg, no vehicle/cast
--- bridge) and EVENT_REPAIR clears UNIT_STATE_STUNNED|ROOT (no unit-state
--- bridge).
 -- EVENT_SUMMON (1s init / 2s re-arm, :284 / :417-:422) — DoSummonFlyer
 -- NPC_MECHANOLIFT 33214 leg — no summon bridge.
 -- EVENT_THORIM_S_HAMMER / EVENT_MIMIRON_S_INFERNO / EVENT_HODIR_S_FURY /
@@ -89,11 +93,15 @@ local ENTRY_FLAME_LEVIATHAN = 33113
 
 local SAY_TARGET = 3
 local SAY_DEATH  = 2
+local SAY_OVERLOAD = 11
+local EMOTE_OVERLOAD = 13
+local EMOTE_REPAIR = 14
 
 local SPELL_PURSUED         = 62374
 local SPELL_GATHERING_SPEED = 62375
 local SPELL_FLAME_VENTS     = 62396
 local SPELL_MISSILE_BARRAGE = 62400
+local SPELL_SYSTEMS_SHUTDOWN = 62475
 
 local timers = {}
 
@@ -157,10 +165,34 @@ local function speedTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SHUTDOWN (150s init :282, arm :424-:432): Talk(SAY_OVERLOAD) +
+-- Talk(EMOTE_OVERLOAD) + me->CastSpell(me, SPELL_SYSTEMS_SHUTDOWN, true)
+-- triggered self-cast; then EVENT_REPAIR at 4s (:433-:437): Talk(EMOTE_REPAIR)
+-- + reschedules EVENT_SHUTDOWN 150s. Only the timer path is modeled; the
+-- early 4s path rides the SpellHit-driven Shutdown counter (no bridge).
+-- DelayEvents(20s, 0) on the other timers is not emulated.
+local shutdownTick
+
+local function repairTick(creature, guid)
+    creature:Talk(EMOTE_REPAIR)
+    schedule(guid, "shutdown", 150000, function()
+        shutdownTick(creature, guid)
+    end)
+end
+
+shutdownTick = function(creature, guid)
+    creature:Talk(SAY_OVERLOAD)
+    creature:Talk(EMOTE_OVERLOAD)
+    creature:CastSpell(creature, SPELL_SYSTEMS_SHUTDOWN, true)
+    schedule(guid, "repair", 4000, function()
+        repairTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: BossAI::JustEngagedWith + react state + ScheduleEvent
--- x6 + ActiveTower() — only the four unconditional timer casts are
--- bridgeable; the tower-condition aggro talk, EVENT_SHUTDOWN and
--- EVENT_SUMMON are documented-only.
+-- x6 + ActiveTower() — only the four unconditional timer casts and the
+-- EVENT_SHUTDOWN 150s timer path are bridgeable; the tower-condition aggro
+-- talk, the shutdown early path and EVENT_SUMMON are documented-only.
 local function flameLeviathanEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -175,6 +207,9 @@ local function flameLeviathanEnterCombat(event, creature, target)
     end)
     schedule(guid, "speed", 15000, function()
         speedTick(creature, guid)
+    end)
+    schedule(guid, "shutdown", 150000, function()
+        shutdownTick(creature, guid)
     end)
 end
 

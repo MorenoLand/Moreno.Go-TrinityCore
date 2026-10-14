@@ -49,7 +49,10 @@
 -- EVENT_FLASH_FREEZE (id 2; init 45s at line 382, arm at
 -- 453-455): Talk(SAY_FLASH_FREEZE 2) + Talk(EMOTE_FREEZE
 -- 7) only — the random-target SPELL_ICICLE_SNOWDRIFT loop
--- (lines 456-458), the bare DoCast(SPELL_FLASH_FREEZE
+-- (lines 456-458) stays out on bridge grounds: the CASTER is the random
+-- player (target->CastSpell(target, ...)), and CastSpell on the Lua
+-- surface is a creature-object method only (lua_creature_events.go:60) —
+-- no player-cast bridge. The bare DoCast(SPELL_FLASH_FREEZE
 -- 61968) (line 459, AI-target-driven per AISpellInfo), and
 -- the whole EVENT_FLASH_FREEZE_EFFECT machinery (lines
 -- 462-470: grid creature-list, SPELL_FLASH_FREEZE_VISUAL
@@ -65,6 +68,12 @@
 -- 485-488): Talk(SAY_BERSERK 5) + DoCast(me,
 -- SPELL_BERSERK 47008, true) -> CastSpell(creature, 47008,
 -- true); fires once (CancelEvent, line 488).
+-- EVENT_ICICLE (id 4; init 2s at line 379, arm at 448-451):
+-- SelectTarget(Random, 0, 100.0f, true) playerOnly=TRUE (jaraxxus /
+-- coren_direbrew precedent) -> DoCast(target, SPELL_ICICLE 62234)
+-- non-triggered, null-guarded like the C++ if; repeat 5500ms
+-- (RAID_MODE 10-man/normal value, no difficulty bridge; the re-arm
+-- ScheduleEvent sits outside the target check, so it is unconditional).
 -- KilledUnit — player-gated Talk(SAY_SLAY 1) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER, C++ lines 389-391 —
 -- the razuvious player-gated variant precedent).
@@ -105,9 +114,6 @@
 -- REACT_AGGRESSIVE / DoZoneInCombat / AttackStart) —
 -- zone-in / MotionMaster legs, no bridges (unreachable in
 -- Go: combat already started on event 1).
--- EVENT_ICICLE (id 4; lines 448-451): DoCast(target,
--- SPELL_ICICLE 62234) on SelectTarget(Random, 0, 100.0f)
--- — random-target leg; BLOCKED per doctrine.
 -- gettingColdInHere UpdateAI leg (lines 491-499:
 -- PvE-combat-ref iteration, SPELL_BITING_COLD_TRIGGERED
 -- 62039 aura-stack check, SetData(DATA_GETTING_COLD_IN_HERE))
@@ -196,6 +202,7 @@ local SPELL_BITING_COLD = 62038
 local SPELL_FREEZE = 62469
 local SPELL_FROZEN_BLOWS = 62478
 local SPELL_BERSERK = 47008
+local SPELL_ICICLE = 62234
 
 local timers = {}
 
@@ -218,6 +225,40 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, idx, range, true) playerOnly=true arms ride the
+-- jaraxxus GetPlayersInWorld precedent (0.0f = any-range modeled with
+-- 100 — curator precedent). Caveat shared with the keleseth/thorim/
+-- beast ports: C++ draws from the threat list (engaged units); the
+-- bridge can include nearby unengaged players.
+local function randomPlayerInRange(creature, range)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_ICICLE (id 4; init 2s at line 379, arm at 448-451):
+-- SelectTarget(Random, 0, 100.0f, true) playerOnly=TRUE ->
+-- DoCast(target, SPELL_ICICLE 62234), non-triggered, null-guarded like
+-- the C++ if; re-arm RAID_MODE(5500ms, 3500ms) unconditional — the
+-- ScheduleEvent sits outside the target check, so 5500ms (10-man/normal
+-- value; no difficulty bridge).
+local function onIcicle(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_ICICLE)
+    end
+    schedule(guid, "icicle", 5500, function() onIcicle(creature, guid) end)
+end
+
 -- C++ EVENT_FREEZE (lines 444-446): DoCastAOE(SPELL_FREEZE),
 -- 1-arg = non-triggered; init 25s (line 380), repeat 30-45s
 -- (line 446).
@@ -238,7 +279,9 @@ local function onBlows(creature, guid)
 end
 
 -- C++ EVENT_FLASH_FREEZE (lines 453-455): Talk-only port.
--- The random-target SPELL_ICICLE_SNOWDRIFT loop, the bare
+-- The random-target SPELL_ICICLE_SNOWDRIFT loop stays out on bridge
+-- grounds (caster is the random player; CastSpell is creature-only on
+-- the Lua surface). The bare
 -- DoCast(SPELL_FLASH_FREEZE), and the whole
 -- EVENT_FLASH_FREEZE_EFFECT machinery (lines 462-470) have
 -- no bridges. Repeat 25-35s is the C++-exact Talk cadence
@@ -260,6 +303,7 @@ local function hodirEnterCombat(event, creature, target)
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_BITING_COLD, true)
+    schedule(guid, "icicle", 2000, function() onIcicle(creature, guid) end)
     schedule(guid, "freeze", 25000, function() onFreeze(creature, guid) end)
     schedule(guid, "blows", {60000, 65000}, function() onBlows(creature, guid) end)
     schedule(guid, "flashfreeze", 45000, function() onFlashFreeze(creature, guid) end)
