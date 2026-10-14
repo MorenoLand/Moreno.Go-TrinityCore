@@ -25,22 +25,33 @@
 -- "achievement_assembly_i_choose_you") hits
 -- boss_assembly_of_iron.cpp only; zero sql/ hits for all seven.
 -- Audited 2026-10-05: lua port from the 10-02 run (a7021b3) re-verified
--- C++-exact — all 21 Talk arms accounted (9 ported / 12
+-- C++-exact — all 21 Talk arms accounted (14 ported / 7
 -- documented-only); loader decl 116 / call 311 re-confirmed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
--- OnDied.
+-- Re-audited 2026-10-13: timer/cast legs ported on the
+-- CreateLuaEvent convention (berserk x3, fusion punch, shield
+-- of runes, overload, steelbreaker engage high voltage) —
+-- phase-gated / random-target / summon / instance / movement
+-- legs stay documented-only.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_steelbreaker — JustEngagedWith: Talk(SAY_AGGRO 0)
--- (event 1; the BossAI::JustEngagedWith passthrough, the
--- DoCast SPELL_HIGH_VOLTAGE 61890 leg, the events.SetPhase
--- leg and the two ScheduleEvent legs (EVENT_BERSERK /
--- EVENT_FUSION_PUNCH) have no bridges — the auriaya
--- engage-port precedent); KilledUnit: player-gated
+-- (event 1 — the auriaya precedent); DoCast(me,
+-- SPELL_HIGH_VOLTAGE 61890) (non-triggered self-cast) at
+-- engage; EVENT_BERSERK (Talk(SAY_BERSERK 5) +
+-- DoCast(SPELL_BERSERK 47008) non-triggered self-cast, 15min
+-- init, one-shot); EVENT_FUSION_PUNCH
+-- (DoCastVictim(SPELL_FUSION_PUNCH 61903) non-triggered,
+-- melee-range gated, 15s init, {13s,22s} repeat) — the maiden
+-- CreateLuaEvent convention (the BossAI::JustEngagedWith
+-- passthrough and SetPhase legs have no bridges); KilledUnit:
+-- player-gated
 -- Talk(SAY_SLAY 1) (event 3; who->GetTypeId() ==
 -- TYPEID_PLAYER — the razuvious player-gated variant
 -- precedent — the twenty-sixth player-gated variant ported;
--- the phase == 3 DoCast SPELL_ELECTRICAL_CHARGE 61902 leg has
--- no bridge); JustDied: Talk(SAY_DEATH 3) (event 4; the
+-- the phase == 3 DoCast SPELL_ELECTRICAL_CHARGE 61902 leg is
+-- phase-gated — out per the gothik precedent); JustDied:
+-- Talk(SAY_DEATH 3) (event 4; the
 -- _JustDied() passthrough, the instance GetBossState DONE
 -- check, the DONE branch (Talk SAY_ENCOUNTER_DEFEATED 4 +
 -- DoCastAOE SPELL_KILL_CREDIT 65195), the SetLootRecipient
@@ -48,10 +59,15 @@
 -- bosses have no bridges — the sjonnir JustDied-Talk
 -- precedent).
 -- boss_runemaster_molgeim — JustEngagedWith: Talk(SAY_AGGRO
--- 0) (event 1; the BossAI::JustEngagedWith passthrough, the
--- SetPhase leg and the three ScheduleEvent legs
--- (EVENT_BERSERK / EVENT_SHIELD_OF_RUNES /
--- EVENT_RUNE_OF_POWER) have no bridges); KilledUnit:
+-- 0) (event 1 — the auriaya precedent); EVENT_BERSERK
+-- (Talk(SAY_BERSERK 6) + DoCast(SPELL_BERSERK 47008)
+-- non-triggered self-cast, 15min init, one-shot);
+-- EVENT_SHIELD_OF_RUNES (DoCast(me, SPELL_SHIELD_OF_RUNES
+-- 62274) non-triggered self-cast, 30s init, {27s,34s} repeat)
+-- — the maiden CreateLuaEvent convention (the
+-- BossAI::JustEngagedWith passthrough, SetPhase and
+-- EVENT_RUNE_OF_POWER legs have no bridges — rune of power
+-- rides a random-ally instance-GUID leg); KilledUnit:
 -- player-gated Talk(SAY_SLAY 1) (event 3; the twenty-seventh
 -- player-gated variant ported); JustDied: Talk(SAY_DEATH 4)
 -- (event 4; the _JustDied() passthrough, the instance
@@ -61,10 +77,16 @@
 -- cascade have no bridges — the sjonnir JustDied-Talk
 -- precedent).
 -- boss_stormcaller_brundir — JustEngagedWith: Talk(SAY_AGGRO
--- 0) (event 1; the BossAI::JustEngagedWith passthrough, the
--- SetPhase leg, the four ScheduleEvent legs (EVENT_BERSERK /
--- EVENT_CHAIN_LIGHTNING / EVENT_OVERLOAD /
--- EVENT_MOVE_POSITION) and the FindNearestCreature
+-- 0) (event 1 — the auriaya precedent); EVENT_BERSERK
+-- (Talk(SAY_BERSERK 6) + DoCast(SPELL_BERSERK 47008)
+-- non-triggered self-cast, 15min init, one-shot);
+-- EVENT_OVERLOAD (Talk(EMOTE_BRUNDIR_OVERLOAD 7) +
+-- Talk(SAY_BRUNDIR_SPECIAL 2) + DoCast(SPELL_OVERLOAD 61869)
+-- non-triggered self-cast, {60s,120s} init and repeat) — the
+-- maiden CreateLuaEvent convention (the
+-- BossAI::JustEngagedWith passthrough, SetPhase leg, the
+-- EVENT_CHAIN_LIGHTNING random-target and EVENT_MOVE_POSITION
+-- motion-machine legs, and the FindNearestCreature
 -- NPC_WORLD_TRIGGER 22515 trigger-GUID leg have no bridges);
 -- KilledUnit: player-gated Talk(SAY_SLAY 1) (event 3; the
 -- twenty-eighth player-gated variant ported); JustDied:
@@ -86,30 +108,39 @@
 -- — no DoAction bridge (joins the no-DoAction-bridge queue).
 -- GetData(DATA_PHASE_3 1) — no GetData bridge; consumer:
 -- achievement_assembly_i_choose_you below.
--- UpdateAI event machines — steelbreaker EVENT_FUSION_PUNCH
--- (SPELL_FUSION_PUNCH 61903); EVENT_STATIC_DISRUPTION
--- (SPELL_STATIC_DISRUPTION 44008, phase >= 2);
--- EVENT_OVERWHELMING_POWER (Talk(SAY_POWER 2) +
--- SPELL_OVERWHELMING_POWER 64637, phase >= 3); EVENT_BERSERK
--- (Talk(SAY_BERSERK 5) + SPELL_BERSERK 47008). molgeim
+-- DOCUMENTED-ONLY UpdateAI legs (blockers per arm):
+-- steelbreaker EVENT_STATIC_DISRUPTION
+-- (SPELL_STATIC_DISRUPTION 44008, random target, phase >= 2)
+-- and EVENT_OVERWHELMING_POWER (Talk(SAY_POWER 2) +
+-- SPELL_OVERWHELMING_POWER 64637, phase >= 3) — phase-gated,
+-- out per the gothik precedent (porting on combat-start
+-- timers would fabricate phase-1 casts). molgeim
 -- EVENT_RUNE_OF_POWER (SPELL_SUMMON_RUNE_OF_POWER 63513,
--- random ally target); EVENT_SHIELD_OF_RUNES
--- (SPELL_SHIELD_OF_RUNES 62274); EVENT_RUNE_OF_DEATH
--- (Talk(SAY_RUNE_DEATH 2) + SPELL_RUNE_OF_DEATH 62269, phase
--- >= 2); EVENT_RUNE_OF_SUMMONING (Talk(SAY_SUMMON 3) +
--- SPELL_RUNE_OF_SUMMONING 62273, phase >= 3); EVENT_BERSERK.
+-- random alive ally via instance GUIDs — note the C++ case-2
+-- copy-paste quirk fetching DATA_STEELBREAKER for the brundir
+-- slot); EVENT_RUNE_OF_DEATH (Talk(SAY_RUNE_DEATH 2) +
+-- SPELL_RUNE_OF_DEATH 62269, random target, phase >= 2);
+-- EVENT_RUNE_OF_SUMMONING (Talk(SAY_SUMMON 3) +
+-- SPELL_RUNE_OF_SUMMONING 62273, random target, phase >= 3).
 -- brundir EVENT_CHAIN_LIGHTNING (SPELL_CHAIN_LIGHTNING
--- 61879); EVENT_OVERLOAD (Talk(EMOTE_OVERLOAD 7) +
--- Talk(SAY_SPECIAL 2) + SPELL_OVERLOAD 61869);
--- EVENT_LIGHTNING_WHIRL (SPELL_LIGHTNING_WHIRL 61915, phase
--- >= 2); EVENT_LIGHTNING_TENDRILS (Talk(SAY_FLIGHT 3) +
--- SPELL_LIGHTNING_TENDRILS 61887 / VISUAL 61883 + hover /
--- flight / landing state machine, phase >= 3); EVENT_FLIGHT
--- / EVENT_ENDFLIGHT / EVENT_GROUND / EVENT_LAND /
--- EVENT_MOVE_POSITION — no timer-event / cast / summon /
--- phase / movement / hover / DoStartMovement / ResetThreatList
--- bridges; all timer-leg yells ride the unbridgeable event
--- machine.
+-- 61879, random target, 4s init, {7s,10s} repeat) — the
+-- baltharus enervating-brand HasAura pattern does not clearly
+-- apply (no aura exclusion in C++); random-target bridge
+-- absent. EVENT_LIGHTNING_WHIRL (SPELL_LIGHTNING_WHIRL
+-- 61915, phase >= 2); EVENT_LIGHTNING_TENDRILS
+-- (Talk(SAY_FLIGHT 3) + SPELL_LIGHTNING_TENDRILS 61887 /
+-- VISUAL 61883 + hover / flight / landing state machine,
+-- phase >= 3); EVENT_FLIGHT / EVENT_ENDFLIGHT / EVENT_GROUND
+-- / EVENT_LAND / EVENT_MOVE_POSITION — phase-gated /
+-- motion-master / hover / DoStartMovement / ResetThreatList
+-- machine, no bridges. Deviation note: the
+-- DoAction(ACTION_SUPERCHARGE) phase machine (phase++,
+-- SetFullHealth, SPELL_SUPERCHARGE 61920, event reschedules:
+-- fusion punch 15s / shield 27s / rune of power 25s /
+-- chain lightning {7s,12s} / overload {40s,50s}, plus
+-- phase >= 2 / 3 arm enables) has no DoAction bridge, so
+-- timers keep their combat-start schedules after a
+-- supercharge instead of the C++ reschedules.
 -- spell_shield_of_runes (62274 — AuraScript
 -- AfterEffectRemove: on non-expire removal the caster casts
 -- SPELL_SHIELD_OF_RUNES_BUFF 62277 — no AuraScript bridge;
@@ -134,18 +165,93 @@ local ENTRY_BRUNDIR = 32857
 local SAY_STEELBREAKER_AGGRO = 0
 local SAY_STEELBREAKER_SLAY = 1
 local SAY_STEELBREAKER_DEATH = 3
+local SAY_STEELBREAKER_BERSERK = 5
 local SAY_MOLGEIM_AGGRO = 0
 local SAY_MOLGEIM_SLAY = 1
 local SAY_MOLGEIM_DEATH = 4
+local SAY_MOLGEIM_BERSERK = 6
 local SAY_BRUNDIR_AGGRO = 0
 local SAY_BRUNDIR_SLAY = 1
+local SAY_BRUNDIR_SPECIAL = 2
 local SAY_BRUNDIR_DEATH = 4
+local SAY_BRUNDIR_BERSERK = 6
+local EMOTE_BRUNDIR_OVERLOAD = 7
 
--- C++ JustEngagedWith: BossAI passthrough + DoCast
--- SPELL_HIGH_VOLTAGE + SetPhase + ScheduleEvent legs — only
--- the Talk arm is bridgeable.
+local SPELL_BERSERK = 47008
+local SPELL_HIGH_VOLTAGE = 61890
+local SPELL_FUSION_PUNCH = 61903
+local SPELL_SHIELD_OF_RUNES = 62274
+local SPELL_OVERLOAD = 61869
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_FUSION_PUNCH: if IsWithinMeleeRange(victim)
+-- DoCastVictim(SPELL_FUSION_PUNCH 61903) (non-triggered),
+-- 15s init, {13s,22s} repeat; the cast is skipped when the
+-- victim is out of melee range but the timer still re-arms.
+local function fusionPunchTick(creature, guid)
+    local victim = creature:GetVictim()
+    if victim and creature:IsWithinDist(victim, 5) then
+        creature:CastSpell(victim, SPELL_FUSION_PUNCH)
+    end
+    schedule(guid, "fusionpunch", {13000, 22000}, function()
+        fusionPunchTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_BERSERK: Talk(SAY_BERSERK 5) +
+-- DoCast(SPELL_BERSERK 47008) (non-triggered self-cast),
+-- 15min init; the event is cancelled after firing.
+local function steelbreakerBerserkTick(creature, guid)
+    creature:Talk(SAY_STEELBREAKER_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK)
+end
+
+-- C++ boss_steelbreaker::JustEngagedWith: BossAI passthrough
+-- + DoCast(me, SPELL_HIGH_VOLTAGE 61890) (non-triggered
+-- self-cast) + SetPhase + ScheduleEvent(EVENT_BERSERK, 15min)
+-- + ScheduleEvent(EVENT_FUSION_PUNCH, 15s) + Talk(SAY_AGGRO).
 local function steelbreakerEnterCombat(event, creature, target)
     creature:Talk(SAY_STEELBREAKER_AGGRO)
+    creature:CastSpell(creature, SPELL_HIGH_VOLTAGE)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "berserk", 900000, function()
+        steelbreakerBerserkTick(creature, guid)
+    end)
+    schedule(guid, "fusionpunch", 15000, function()
+        fusionPunchTick(creature, guid)
+    end)
+end
+
+local function steelbreakerLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function steelbreakerReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -163,13 +269,50 @@ end
 -- SetLootRecipient + supercharge DoAction cascade — only the
 -- per-boss death Talk arm is bridgeable.
 local function steelbreakerDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_STEELBREAKER_DEATH)
 end
 
--- C++ JustEngagedWith: BossAI passthrough + SetPhase +
--- ScheduleEvent legs — only the Talk arm is bridgeable.
+-- C++ EVENT_SHIELD_OF_RUNES: DoCast(me,
+-- SPELL_SHIELD_OF_RUNES 62274) (non-triggered self-cast),
+-- 30s init, {27s,34s} repeat.
+local function shieldOfRunesTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SHIELD_OF_RUNES)
+    schedule(guid, "shieldofrunes", {27000, 34000}, function()
+        shieldOfRunesTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_BERSERK: Talk(SAY_BERSERK 6) +
+-- DoCast(SPELL_BERSERK 47008) (non-triggered self-cast),
+-- 15min init; the event is cancelled after firing.
+local function molgeimBerserkTick(creature, guid)
+    creature:Talk(SAY_MOLGEIM_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK)
+end
+
+-- C++ boss_runemaster_molgeim::JustEngagedWith: BossAI
+-- passthrough + SetPhase + ScheduleEvent(EVENT_BERSERK,
+-- 15min) + ScheduleEvent(EVENT_SHIELD_OF_RUNES, 30s) +
+-- ScheduleEvent(EVENT_RUNE_OF_POWER, 20s) + Talk(SAY_AGGRO).
 local function molgeimEnterCombat(event, creature, target)
     creature:Talk(SAY_MOLGEIM_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "berserk", 900000, function()
+        molgeimBerserkTick(creature, guid)
+    end)
+    schedule(guid, "shieldofrunes", 30000, function()
+        shieldOfRunesTick(creature, guid)
+    end)
+end
+
+local function molgeimLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function molgeimReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -186,14 +329,55 @@ end
 -- SetLootRecipient + supercharge DoAction cascade — only the
 -- per-boss death Talk arm is bridgeable.
 local function molgeimDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_MOLGEIM_DEATH)
 end
 
--- C++ JustEngagedWith: BossAI passthrough + SetPhase +
--- ScheduleEvent legs + FindNearestCreature NPC_WORLD_TRIGGER
--- trigger-GUID leg — only the Talk arm is bridgeable.
+-- C++ EVENT_OVERLOAD: Talk(EMOTE_BRUNDIR_OVERLOAD 7) +
+-- Talk(SAY_BRUNDIR_SPECIAL 2) + DoCast(SPELL_OVERLOAD 61869)
+-- (non-triggered self-cast), {60s,120s} init and repeat.
+local function overloadTick(creature, guid)
+    creature:Talk(EMOTE_BRUNDIR_OVERLOAD)
+    creature:Talk(SAY_BRUNDIR_SPECIAL)
+    creature:CastSpell(creature, SPELL_OVERLOAD)
+    schedule(guid, "overload", {60000, 120000}, function()
+        overloadTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_BERSERK: Talk(SAY_BERSERK 6) +
+-- DoCast(SPELL_BERSERK 47008) (non-triggered self-cast),
+-- 15min init; the event is cancelled after firing.
+local function brundirBerserkTick(creature, guid)
+    creature:Talk(SAY_BRUNDIR_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK)
+end
+
+-- C++ boss_stormcaller_brundir::JustEngagedWith: BossAI
+-- passthrough + SetPhase + ScheduleEvent(EVENT_MOVE_POSITION,
+-- 1s) + ScheduleEvent(EVENT_BERSERK, 15min) +
+-- ScheduleEvent(EVENT_CHAIN_LIGHTNING, 4s) +
+-- ScheduleEvent(EVENT_OVERLOAD, 60s, 120s) +
+-- FindNearestCreature(NPC_WORLD_TRIGGER 22515) leg +
+-- Talk(SAY_AGGRO).
 local function brundirEnterCombat(event, creature, target)
     creature:Talk(SAY_BRUNDIR_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "berserk", 900000, function()
+        brundirBerserkTick(creature, guid)
+    end)
+    schedule(guid, "overload", {60000, 120000}, function()
+        overloadTick(creature, guid)
+    end)
+end
+
+local function brundirLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function brundirReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -210,15 +394,22 @@ end
 -- SetLootRecipient + supercharge DoAction cascade — only the
 -- per-boss death Talk arm is bridgeable.
 local function brundirDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_BRUNDIR_DEATH)
 end
 
 RegisterCreatureEvent(ENTRY_STEELBREAKER, 1, steelbreakerEnterCombat)
+RegisterCreatureEvent(ENTRY_STEELBREAKER, 2, steelbreakerLeaveCombat)
 RegisterCreatureEvent(ENTRY_STEELBREAKER, 3, steelbreakerTargetDied)
 RegisterCreatureEvent(ENTRY_STEELBREAKER, 4, steelbreakerDied)
+RegisterCreatureEvent(ENTRY_STEELBREAKER, 23, steelbreakerReset)
 RegisterCreatureEvent(ENTRY_MOLGEIM, 1, molgeimEnterCombat)
+RegisterCreatureEvent(ENTRY_MOLGEIM, 2, molgeimLeaveCombat)
 RegisterCreatureEvent(ENTRY_MOLGEIM, 3, molgeimTargetDied)
 RegisterCreatureEvent(ENTRY_MOLGEIM, 4, molgeimDied)
+RegisterCreatureEvent(ENTRY_MOLGEIM, 23, molgeimReset)
 RegisterCreatureEvent(ENTRY_BRUNDIR, 1, brundirEnterCombat)
+RegisterCreatureEvent(ENTRY_BRUNDIR, 2, brundirLeaveCombat)
 RegisterCreatureEvent(ENTRY_BRUNDIR, 3, brundirTargetDied)
 RegisterCreatureEvent(ENTRY_BRUNDIR, 4, brundirDied)
+RegisterCreatureEvent(ENTRY_BRUNDIR, 23, brundirReset)

@@ -21,57 +21,97 @@
 -- "spell_ulduar_stone_grip_absorb", "spell_ulduar_stone_grip",
 -- "spell_kologarn_stone_shout",
 -- "spell_kologarn_summon_focused_eyebeam") hits
--- boss_kologarn.cpp only; zero sql/ hits for all nine. The
--- lua port below was written from a prior-session audit and
--- re-audited this run: all Talk arms and id claims verified
--- against the C++ (the xt002 22:38 / vezax 22:48 /
--- assembly_of_iron 22:54 precedent).
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
--- OnDied.
+-- boss_kologarn.cpp only; zero sql/ hits for all nine.
+-- Re-audited this run name-by-name against the C++ text:
+-- all Talk ids, spell ids, triggered flags, initial/re-arm
+-- timers, and gating context re-checked (line refs below).
+-- The stale "no timer-event / cast bridges" doctrine is
+-- disproved: CreateLuaEvent + CastSpell are real bridges
+-- (the baltharus convention). Timer-driven UNGATED arms port;
+-- vehicle/arm-gated arms stay out (the gothik precedent).
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the six
--- ScheduleEvent legs, the vehicle-kit DoZoneInCombat arms leg
--- and the BossAI::JustEngagedWith passthrough have no bridges
--- — the auriaya engage-port precedent).
--- KilledUnit — player-gated Talk(SAY_SLAY 1) (event 3;
--- who->GetTypeId() == TYPEID_PLAYER — the razuvious
--- player-gated variant precedent — the twenty-ninth
--- player-gated variant ported).
--- JustDied — Talk(SAY_DEATH 6) (event 4; the DoCast
+-- JustEngagedWith — Talk(SAY_AGGRO 0) (cpp:122, event 1; the
+-- vehicle-kit DoZoneInCombat arms leg and the
+-- BossAI::JustEngagedWith passthrough have no bridges — the
+-- auriaya engage-port precedent).
+-- KilledUnit — player-gated Talk(SAY_SLAY 1) (cpp:159, event
+-- 3; who->GetTypeId() == TYPEID_PLAYER — the razuvious
+-- player-gated variant precedent).
+-- JustDied — Talk(SAY_DEATH 6) (cpp:148, event 4; the DoCast
 -- SPELL_KOLOGARN_PACIFY 63726 leg, the MoveTargetedHome leg,
 -- the SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 -- leg, the SetCorpseDelay(604800) leg and the _JustDied()
 -- passthrough have no bridges — the sjonnir JustDied-Talk
 -- precedent).
+-- EVENT_ENRAGE — DoCast(SPELL_BERSERK 47008) (self-cast,
+-- non-triggered) + Talk(SAY_BERSERK 7) (cpp:279-281); 10min
+-- init from JustEngagedWith (cpp:129), one-shot (no re-arm).
+-- Rides the baltharus CreateLuaEvent convention (timers table
+-- keyed by GUID, cancelled on events 2/4/23); the C++
+-- UNIT_STATE_CASTING gate has no bridge, so timers fire
+-- unconditionally — the documented maiden deviation.
+-- EVENT_FOCUSED_EYEBEAM — DoCast(me,
+-- SPELL_SUMMON_FOCUSED_EYEBEAM 63342, true) (cpp:305-311) =
+-- triggered self-cast (CastSpell 3rd arg); 21s init from
+-- JustEngagedWith (cpp:128), re-arm
+-- ScheduleEvent(EVENT_FOCUSED_EYEBEAM, 15s, 35s) (cpp:311)
+-- via the {min,max} randtime table. Documented deviation: the
+-- SelectTarget(MaxDistance) leg only stores eyebeamTarget for
+-- the JustSummoned MoveChase leg (no summon/motion bridge);
+-- the cast itself is targetless, so it fires on the timer
+-- without the selection (in combat the selection effectively
+-- always succeeds).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 32930):
+-- Constructor (cpp:107-117) — RemoveFlag(NOT_SELECTABLE) +
+-- SetControlled(ROOT) + DoCast(SPELL_KOLOGARN_REDUCE_PARRY
+-- 64651) + SetCombatMovement(false) — no init bridge.
 -- Reset — _Reset() + RemoveFlag(NOT_SELECTABLE) +
 -- eyebeamTarget.Clear() — no bridges.
--- PassengerBoarded — Talk(SAY_LEFT_ARM_GONE 2) /
--- Talk(SAY_RIGHT_ARM_GONE 3) on arm detach, SPELL_ARM_DEAD_
--- DAMAGE 63629 + rubble stalker SPELL_FALLING_RUBBLE 63821 /
--- SPELL_SUMMON_RUBBLE 63633 + EVENT_STONE_SHOUT scheduling /
--- CRITERIA_DISARMED timed-achievement start legs, and the
--- attach branch (EVENT_STONE_SHOUT cancel + DoZoneInCombat) —
--- no PassengerBoarded bridge.
+-- PassengerBoarded — Talk(SAY_LEFT_ARM_GONE 2) (cpp:170) /
+-- Talk(SAY_RIGHT_ARM_GONE 3) (cpp:180) on arm detach, arm-damage
+-- SPELL_ARM_DEAD_DAMAGE 63629 + rubble-stalker
+-- SPELL_FALLING_RUBBLE 63821 / SPELL_SUMMON_RUBBLE 63633,
+-- EVENT_STONE_SHOUT scheduling (cpp:200) /
+-- CRITERIA_DISARMED timed-achievement start, and the attach
+-- branch (EVENT_STONE_SHOUT cancel + DoZoneInCombat) — no
+-- PassengerBoarded bridge.
 -- JustSummoned — focused-eyebeam visual casts
 -- (SPELL_FOCUSED_EYEBEAM_VISUAL_LEFT 63676 /
--- SPELL_FOCUSED_EYEBEAM_VISUAL_RIGHT 63702), NPC_RUBBLE
--- summon bookkeeping, REACT_PASSIVE + MoveChase(eyebeamTarget)
--- — no summon / react-state / motion-master bridges.
--- UpdateAI event machine — EVENT_MELEE_CHECK
--- (SPELL_PETRIFY_BREATH 62030); EVENT_SWEEP
--- (NPC_ARM_SWEEP_STALKER + SPELL_ARM_SWEEP 63766);
--- EVENT_SMASH (SPELL_TWO_ARM_SMASH 63356 / SPELL_ONE_ARM_
--- SMASH 63573); EVENT_STONE_SHOUT (SPELL_STONE_SHOUT 63716);
--- EVENT_ENRAGE (DoCast 47008 + Talk(SAY_BERSERK 7));
+-- SPELL_FOCUSED_EYEBEAM_VISUAL_RIGHT 63702 +
+-- SPELL_FOCUSED_EYEBEAM_PERIODIC 63347 /
+-- SPELL_FOCUSED_EYEBEAM_VISUAL 63369), NPC_RUBBLE summon
+-- bookkeeping, REACT_PASSIVE + MoveChase(eyebeamTarget) — no
+-- summon / react-state / motion-master bridges.
+-- UpdateAI arms that STAY OUT (gothik precedent: porting gated
+-- arms on combat-start timers would fabricate casts):
+-- EVENT_MELEE_CHECK (cpp:258-261) —
+-- DoCast(SPELL_PETRIFY_BREATH 62030) gated on
+-- !me->IsWithinMeleeRange(me->GetVictim()); no melee-range
+-- bridge.
+-- EVENT_SWEEP (cpp:263-266) — DoCast(sweep stalker,
+-- SPELL_ARM_SWEEP 63766, true) gated on left-arm presence
+-- (the PassengerBoarded `left` flag); no PassengerBoarded
+-- bridge, no FindNearestCreature bridge.
+-- EVENT_SMASH (cpp:268-273) —
+-- DoCastVictim(SPELL_TWO_ARM_SMASH 63356 / SPELL_ONE_ARM_SMASH
+-- 63573) gated on left/right arm presence; no bridge.
+-- EVENT_STONE_SHOUT (cpp:275-277) — scheduled ONLY by
+-- PassengerBoarded (cpp:200, +5s, re-arm 2s) when BOTH arms
+-- detach; not a combat-start event.
+-- EVENT_STONE_GRIP (cpp:294-302) — DoCast(SPELL_STONE_GRIP
+-- 62166) + Talk(SAY_GRAB_PLAYER 5) + Talk(EMOTE_STONE_GRIP 8)
+-- gated on right-arm presence (cpp:296); no bridge.
 -- EVENT_RESPAWN_LEFT_ARM / EVENT_RESPAWN_RIGHT_ARM
--- (InstallAccessory NPC_LEFT_ARM / NPC_RIGHT_ARM); EVENT_
--- STONE_GRIP (DoCast 62166 + Talk(SAY_GRAB_PLAYER 5) +
--- Talk(EMOTE_STONE_GRIP 8)); EVENT_FOCUSED_EYEBEAM
--- (SPELL_SUMMON_FOCUSED_EYEBEAM 63342) — no timer-event /
--- cast / vehicle / summon bridges; all timer-leg yells ride
--- the unbridgeable event machine.
+-- (cpp:282-292) — VehicleKit InstallAccessory(NPC_LEFT_ARM /
+-- NPC_RIGHT_ARM); no vehicle bridge.
+-- (say-text inventory: all nine yells accounted for — SAY_
+-- AGGRO/SLAY/DEATH ported, SAY_BERSERK ported this run,
+-- SAY_LEFT_ARM_GONE/SAY_RIGHT_ARM_GONE + SAY_GRAB_PLAYER/
+-- EMOTE_STONE_GRIP ride the unbridgeable PassengerBoarded /
+-- STONE_GRIP legs; SAY_SHOCKWAVE 4 is unused in the C++ AI.)
 -- spell_ulduar_rubble_summon (SCRIPT_EFFECT SpellScript: caster
 -- casts GetEffectValue() with originalCaster = instance
 -- GetGuidData(BOSS_KOLOGARN) — no SpellScript bridge; joins
@@ -107,12 +147,75 @@ local ENTRY_KOLOGARN = 32930
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 6
+local SAY_BERSERK = 7
 
--- C++ JustEngagedWith: six ScheduleEvent legs + vehicle-kit
--- DoZoneInCombat arms leg + BossAI passthrough — only the
--- Talk arm is bridgeable.
+local SPELL_SUMMON_FOCUSED_EYEBEAM = 63342
+local SPELL_BERSERK = 47008
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_FOCUSED_EYEBEAM: DoCast(me,
+-- SPELL_SUMMON_FOCUSED_EYEBEAM 63342, true) — triggered
+-- self-cast — 21s init, re-arm ScheduleEvent(15s, 35s).
+local function focusedEyebeamTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SUMMON_FOCUSED_EYEBEAM, true)
+    schedule(guid, "focusedeyebeam", {15000, 35000}, function()
+        focusedEyebeamTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_ENRAGE: DoCast(SPELL_BERSERK 47008) (self-cast) +
+-- Talk(SAY_BERSERK 7) — 10min init, one-shot (no re-arm).
+local function enrageTick(creature, guid)
+    creature:CastSpell(creature, SPELL_BERSERK)
+    creature:Talk(SAY_BERSERK)
+end
+
+-- C++ JustEngagedWith: Talk(SAY_AGGRO) + the two bridgeable
+-- event-scheduling legs (EVENT_FOCUSED_EYEBEAM 21s,
+-- EVENT_ENRAGE 10min); the vehicle-kit DoZoneInCombat arms leg
+-- and the BossAI::JustEngagedWith passthrough have no
+-- bridges.
 local function kologarnEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "focusedeyebeam", 21000, function()
+        focusedEyebeamTick(creature, guid)
+    end)
+    schedule(guid, "enrage", 600000, function()
+        enrageTick(creature, guid)
+    end)
+end
+
+local function kologarnLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function kologarnReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -127,9 +230,12 @@ end
 -- SetCorpseDelay + _JustDied() + Talk(SAY_DEATH) — only the
 -- Talk arm is bridgeable.
 local function kologarnDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
 RegisterCreatureEvent(ENTRY_KOLOGARN, 1, kologarnEnterCombat)
+RegisterCreatureEvent(ENTRY_KOLOGARN, 2, kologarnLeaveCombat)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 3, kologarnTargetDied)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 4, kologarnDied)
+RegisterCreatureEvent(ENTRY_KOLOGARN, 23, kologarnReset)
