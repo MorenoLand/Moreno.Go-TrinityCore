@@ -27,8 +27,11 @@
 -- UpdateAI below-50% latch (Talk(SAY_SPECIALAE 1) + non-triggered
 -- DoCastSelf arcane bubble 9438, once via the _healthAbove50Pct bool) is
 -- modeled on the pre-damage hook (moroes/chromaggus/golemagg
--- convention): current (pre-damage) health strictly below 50% (C++
--- HealthBelowPct(50) reads current health in UpdateAI — golemagg
+-- convention): current (pre-damage) health below the floored
+-- threshold health < floor(maxHealth*50/100) (C++ HealthBelowPct(50)
+-- = health < CalculatePct(maxHealth, 50); the old float form
+-- health*100/max < 50 fired up to 1 HP early at fractional
+-- boundaries — magtheridon fractional-threshold class; golemagg
 -- 704fb8e bug class, so the latch does NOT subtract the incoming
 -- damage) and not yet latched -> Talk(1) + non-triggered self-cast
 -- 9438 + non-triggered DoCastAOE detonation 9435 (self-cast lowering,
@@ -188,7 +191,8 @@ local function doanDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() * 100 / maxHealth < 50 then
+    local health = creature:GetHealth()
+    if health < math.floor(maxHealth * 50 / 100) then
         bubbleLatched[guid] = true
         creature:Talk(SAY_SPECIALAE)
         creature:CastSpell(creature, SPELL_ARCANE_BUBBLE)
