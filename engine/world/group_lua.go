@@ -409,10 +409,11 @@ func (s *Server) luaRemoveGroupMember(ctx context.Context, g *groupState, guid u
 		return false
 	}
 	// Group::RemoveMember (Group.cpp:588-589): LFG vote kicks are completed
-	// in scripts, so the arm returns before any removal — false only when
-	// the kicked member is the group's last (!m_memberSlots.empty()).
+	// in scripts, so the arm returns before any removal —
+	// !m_memberSlots.empty() evaluated pre-removal, which is always true
+	// for the member verified present above.
 	if isLFG && method == groupRemoveMethodKick {
-		return before >= 2
+		return true
 	}
 	// Group.cpp:629-746: the bool reports the size arm, not the
 	// member's online state — true when the member count before removal
