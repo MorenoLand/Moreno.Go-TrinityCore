@@ -22106,12 +22106,12 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 	// spells, and the UNIT_MOD_CAST_SPEED multiply for auras of spells
 	// carrying SPELL_ATTR5_HASTE_AFFECT_DURATION or affected by a
 	// SPELL_AURA_PERIODIC_HASTE (316) aura on the caster
-	// (hasPeriodicHasteAura). The compression math (divide by
-	// 1+hastePct/100) is the same ModSpellDurationTime fold startChannel
-	// uses.
+	// (hasPeriodicHasteAura). The compression math (multiply by the full
+	// UNIT_MOD_CAST_SPEED factor, unitModCastSpeedFactor) is the same
+	// ModSpellDurationTime fold startChannel uses.
 	if durationMs > 0 && (isChanneledSpell(spell) || spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell)) {
-		if hastePct := s.getSpellHastePct(); hastePct > 0 {
-			durationMs = uint32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
+		if f := s.unitModCastSpeedFactor(); f != 1.0 {
+			durationMs = uint32(float64(durationMs) * f)
 		}
 	}
 	if durationMs == 0 && eff.AuraPeriod > 0 {
@@ -22179,10 +22179,10 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 // and non-channeled auras carrying ATTR5_HASTE_AFFECT_DURATION or affected
 // by a SPELL_AURA_PERIODIC_HASTE (316) aura on the caster
 // (HasAuraTypeWithAffectMask, Unit.cpp:4689) multiply by
-// UNIT_MOD_CAST_SPEED, i.e. divide by 1+hastePct/100
-// (ApplyPercentModFloatVar, Unit.cpp:10842-10845). The int32() truncation
-// is the C++ cast; the floor of 1ms keeps a pathological mod from
-// producing a zero-period timer.
+// UNIT_MOD_CAST_SPEED (unitModCastSpeedFactor: rating divisor x 65/216
+// aura factor x 193/252 combat-slow factor; ApplyPercentModFloatVar,
+// Unit.cpp:10842-10845). The int32() truncation is the C++ cast; the floor
+// of 1ms keeps a pathological mod from producing a zero-period timer.
 func (s *session) foldPeriodicPeriod(spell wotlk.Spell, eff wotlk.SpellEffect) uint32 {
 	periodMs := eff.AuraPeriod
 	if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
@@ -22205,14 +22205,14 @@ func (s *session) foldPeriodicPeriod(spell wotlk.Spell, eff wotlk.SpellEffect) u
 				}
 				if spell.Attributes&spellAttr0Ability == 0 && spell.Attributes&spellAttr0Tradespell == 0 &&
 					spell.AttributesEx3&spellAttr3NoDoneBonus == 0 && spell.SpellFamilyName != 0 {
-					if hastePct := s.getSpellHastePct(); hastePct > 0 {
-						periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
+					if f := s.unitModCastSpeedFactor(); f != 1.0 {
+						periodMs = uint32(float64(periodMs) * f)
 					}
 				}
 			}
 		} else if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell) {
-			if hastePct := s.getSpellHastePct(); hastePct > 0 {
-				periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
+			if f := s.unitModCastSpeedFactor(); f != 1.0 {
+				periodMs = uint32(float64(periodMs) * f)
 			}
 		}
 		if periodMs == 0 {

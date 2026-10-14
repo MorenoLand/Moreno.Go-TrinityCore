@@ -251,6 +251,23 @@ func (s *session) castingSpeedNotStackLiveAmounts() []int32 {
 	return live
 }
 
+// unitModCastSpeedFactor mirrors the full UNIT_MOD_CAST_SPEED float as read
+// by the periodic-amplitude/duration arms (AuraEffect::CalculatePeriodic,
+// SpellAuraEffects.cpp:605-613; Spell::DoSpellEffectHit, Spell.cpp:2888-2891;
+// WorldObject::ModSpellDurationTime, Object.cpp:2498): the gear-rating
+// divisor composes multiplicatively with the 65/216 aura factor
+// (castingSpeedCastFactor, HandleModCastingSpeed, SpellAuraEffects.cpp:3933)
+// and the 193/252 combat-slow factor (combatSlowCastFactor,
+// HandleModCombatSpeedPct, SpellAuraEffects.cpp:3962-3967) — all three feed
+// Unit::ApplyCastTimePercentMod (Unit.cpp:10867-10876).
+func (s *session) unitModCastSpeedFactor() float64 {
+	factor := s.castingSpeedCastFactor() * s.combatSlowCastFactor()
+	if hastePct := s.getSpellHastePct(); hastePct > 0 {
+		factor /= 1.0 + hastePct/100.0
+	}
+	return factor
+}
+
 // castingSpeedCastFactor mirrors the cast-time arm of
 // AuraEffect::HandleModCastingSpeed (SpellAuraEffects.cpp:3933/3935) via
 // Unit::ApplyCastTimePercentMod (Unit.cpp:10867): each live 65/216 effect
