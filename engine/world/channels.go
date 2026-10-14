@@ -1121,6 +1121,12 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 	if !ok {
 		return false
 	}
+	// Reference: ChannelHandler.cpp HandleChannelPassword (:149) — a
+	// password longer than MAX_CHANNEL_PASS_STR (31) is silently dropped
+	// before the channel lookup (Channel::Password never runs).
+	if len(password) > 31 {
+		return true
+	}
 	// Reference: Channel::Password - the sender must be on the channel
 	// (CHAT_NOT_MEMBER_NOTICE) and a moderator (CHAT_NOT_MODERATOR_NOTICE),
 	// unless they hold RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR.
