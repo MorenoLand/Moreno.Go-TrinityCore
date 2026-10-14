@@ -1320,7 +1320,10 @@ func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, ins
 	}
 	s.motionMu.Lock()
 	healer := s.findCreatureMotionLocked(mapID, instanceID, healerGUID)
-	if healer == nil || healer.Health == 0 {
+	// SpellAuraEffects.cpp:5576 — the threat forward fires for any
+	// non-null caster (if (caster)); a dead creature caster still
+	// forwards, so there is no alive gate here.
+	if healer == nil {
 		s.motionMu.Unlock()
 		return
 	}

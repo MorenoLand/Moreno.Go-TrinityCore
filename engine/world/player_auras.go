@@ -330,7 +330,7 @@ func (s *session) loadGlyphAuras(state *playerState) {
 		if err != nil || !found {
 			continue
 		}
-		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, EffectMask: 0x01, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level, StoredCasterLevel: state.Level}
+		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, EffectMask: 0x01, ApplyResilience: true, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level, StoredCasterLevel: state.Level}
 		for _, effect := range spell.Effects {
 			if effect.Effect == 0 || effect.Aura == 0 {
 				continue

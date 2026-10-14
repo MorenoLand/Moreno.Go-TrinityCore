@@ -10331,7 +10331,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// Go — one executeSpellDamage per effect per target,
 					// the tree-wide convention).
 					if burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID, true); burned > 0 {
-						s.executeSpellDamage(effCtx, effectTarget, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
+						s.executeSpellDamage(effCtx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex)
 						// SpellEffects.cpp:1370-1373: the take-target-power
 						// log fires before the multiplier, with a zero gain.
 						burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: burned, powerType: uint32(eff.MiscValue)})
@@ -10913,13 +10913,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if drained := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, int32(amount), spellID, false); drained > 0 {
 						gainMultiplier := float32(0)
 						if effectTarget != s.playerGUID {
-							gain := int32(effectValueMultiplied(drained, eff.Amplitude))
+							gain := int32(effectValueMultiplied(drained, calcValueMultiplier(drainSpell, effectIndex, s)))
 							s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, gain)
 							// SpellEffects.cpp:1300: the drain gain rides
 							// Unit::EnergizeBySpell(caster, caster, ...) — log +
 							// assist-threat tail.
 							s.energizeBySpellTail(effCtx, drainSpell, spellID, s.playerGUID, eff.MiscValue, gain)
-							gainMultiplier = eff.Amplitude
+							gainMultiplier = calcValueMultiplier(drainSpell, effectIndex, s)
 						}
 						// SpellEffects.cpp:1305: the take-target-power log
 						// carries the drained amount with the value
@@ -15723,7 +15723,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// Spell::EffectPowerBurn (SpellEffects.cpp:1352): the power
 				// taken is `damage` (the HandleEffects CalculateDamage value).
 				if burned := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, eff.CalcValueForLevel(spell, casterLevel), spellID, true); burned > 0 {
-					s.executeSpellDamage(ctx, effectTarget, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
+					s.executeSpellDamage(ctx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex)
 					// SpellEffects.cpp:1370-1373: the take-target-power log
 					// fires before the multiplier, with a zero gain.
 					burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: burned, powerType: uint32(eff.MiscValue)})
@@ -20480,6 +20480,13 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	chargeModOwner := s.server.spellModOwnerSession(chargeMapID, chargeInstanceID, casterGUID)
 	chargeOwnerLocked := chargeModOwner != nil && chargeModOwner == s
 
+	// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450): captured at
+	// aura creation from the live caster's Unit::CanApplyResilience and
+	// read at every periodic tick (SpellAuras.h:167) — the tick does not
+	// re-resolve the caster. Computed before castMu is taken, like the
+	// charge fold above.
+	applyResilience := s.casterCanApplyResilience(casterGUID)
+
 	s.castMu.Lock()
 	if s.activeAuras == nil {
 		s.activeAuras = make(map[uint32]*activeAura)
@@ -20602,6 +20609,7 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		Slot:               slot,
 		Positive:           positive,
 		StoredCasterLevel:  casterLevel,
+		ApplyResilience:    applyResilience,
 		AuraInterruptFlags: auraInterruptFlags,
 		StackAmount:        stackAmount,
 		HideDuration:       hideDuration,
@@ -23366,6 +23374,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 
+		// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450): captured at
+		// aura creation from the live caster's Unit::CanApplyResilience and
+		// read at every periodic tick (SpellAuras.h:167) — the tick does not
+		// re-resolve the caster. Computed before castMu is taken.
+		applyResilience := s.casterCanApplyResilience(casterGUID)
+
 		targetSess.castMu.Lock()
 		if targetSess.auras == nil {
 			targetSess.auras = make(map[uint32]struct{})
@@ -23633,6 +23647,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			Positive:           positive,
 			CasterLevel:        s.player.Level,
 			StoredCasterLevel:  s.auraStoredCasterLevel(casterGUID, spell),
+			ApplyResilience:    applyResilience,
 			SingleTarget:       isSingleTargetAuraSpell(spell),
 			AuraInterruptFlags: spell.AuraInterruptFlags,
 			TriggerSpell:       eff.TriggerSpell,
@@ -24223,6 +24238,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// locks the mod owner's castMu itself. Go merges caster-agnostically,
 	// so the incoming caster feeds the fold on the merge path too.
 	creatureMaxCharges := s.server.calcAuraMaxCharges(spell, targetKey.Map, targetKey.InstanceID, casterGUID)
+	// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450): captured at
+	// aura creation from the live caster's Unit::CanApplyResilience and
+	// read at every periodic tick (SpellAuras.h:167). The stored caster
+	// GUID (creatureAuraCasterGUID) is the resolved one. Computed before
+	// auraMu is taken, like the charge fold above.
+	applyResilience := s.casterCanApplyResilience(creatureAuraCasterGUID(s, casterGUID))
 	s.server.auraMu.Lock()
 	if s.server.creatureAuras == nil {
 		s.server.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
@@ -24422,6 +24443,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		Positive:           positive,
 		CasterLevel:        creatureAuraCasterLevel(s, casterGUID, spell),
 		StoredCasterLevel:  creatureAuraCasterLevel(s, casterGUID, spell),
+		ApplyResilience:    applyResilience,
 		SingleTarget:       isSingleTargetAuraSpell(spell),
 		TriggerSpell:       eff.TriggerSpell,
 		StackAmount:        spell.StackAmount,
@@ -25367,12 +25389,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if triggering, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
 				if triggered, found, err := ts.server.Data.Spell(aura.TriggerSpell); err == nil && found {
 					if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
-						// A creature caster has no Go cast path; an
-						// offline player caster falls back to the
-						// target, matching the tree's cast-attribution
-						// delta on the replenish trigger lines.
 						if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
 							triggerCaster = casterSess
+						} else if uint16(aura.CasterGUID>>48) == 0 {
+							// SpellAuraEffects.cpp:5060 — the trigger casts from the
+							// aura caster when it needs one; when the caster unit is
+							// gone the if (Unit* triggerCaster) arm fails and no cast
+							// happens. HIGHGUID_PLAYER is 0, so a clear high word with
+							// no live session is an offline player caster — skip the
+							// cast. A creature caster has no Go cast path and keeps the
+							// target-cast delta noted on the replenish trigger lines.
+							return
 						}
 					}
 				}
@@ -25558,11 +25585,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
 		// damage; the isCrit arm now carries the real tick crit instead of
-		// the earlier hardcoded false. The caster gate mirrors
-		// Aura::CanApplyResilience -> Unit::CanApplyResilience
-		// (Unit.cpp:12333): wild-creature DoTs do not trigger resilience.
+		// the earlier hardcoded false. The caster gate is the aura's captured
+		// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450), not a live
+		// re-resolve: wild-creature DoTs do not trigger resilience.
 		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
-			ts.applyResilienceToDamage(ts.casterCanApplyResilience(aura.CasterGUID), &dmg, crit, CombatRatingCritTakenSpell)
+			ts.applyResilienceToDamage(aura.ApplyResilience, &dmg, crit, CombatRatingCritTakenSpell)
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1828) handles resist then absorb
 		// at the END of the tick pipeline — the earlier Go order resisted
@@ -26092,11 +26119,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
 		}
-		// Unit::CanApplyResilience (Unit.cpp:12333) caster gate: a DoT
-		// applied by a wild creature does not trigger resilience; player
-		// and player-owned-pet casters do.
+		// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450) caster gate:
+		// captured at aura creation — a DoT applied by a wild creature does
+		// not trigger resilience; player and player-owned-pet casters do.
 		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
-			ts.applyResilienceToDamage(ts.casterCanApplyResilience(aura.CasterGUID), &dmg, crit, CombatRatingCritTakenSpell)
+			ts.applyResilienceToDamage(aura.ApplyResilience, &dmg, crit, CombatRatingCritTakenSpell)
 		}
 		resisted := uint32(0)
 		if aura.SchoolMask > 1 && attLevel > 0 {
@@ -28569,7 +28596,13 @@ func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *sessio
 			// effect 1 re-rolls from the DBC with the caster's level.
 			manaFeedVal := uint32(0)
 			if len(tickSpell.Effects) > 1 {
-				if amt := tickSpell.Effects[1].CalcValueForLevel(tickSpell, uint32(caster.player.Level)); amt > 0 {
+				base := tickSpell.Effects[1].CalcValueForLevel(tickSpell, uint32(caster.player.Level))
+				// AuraEffect::CalculateAmount's ApplyEffectModifiers leg
+				// (SpellAuraEffects.cpp:402-516): the Mana Feed talent (30326)
+				// registers SPELLMOD_EFFECT2 (value 100) on Drain Mana, so the
+				// applied effect-1 amount that C++ GetAmount() reads carries the
+				// talent fold. The caster session folds its registered mods.
+				if amt := caster.applySpellMod(tickSpell, spellModEffect2, base); amt > 0 {
 					manaFeedVal = uint32(amt)
 				}
 			}

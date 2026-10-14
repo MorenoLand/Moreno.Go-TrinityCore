@@ -3413,6 +3413,10 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		periodMs = uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
 	}
 	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450): captured at
+		// aura creation from the live caster's Unit::CanApplyResilience, read
+		// at every periodic tick (SpellAuras.h:167). Computed before castMu.
+		applyResilience := s.casterCanApplyResilience(caster.GUID)
 		targetSess.castMu.Lock()
 		if targetSess.activeAuras == nil {
 			targetSess.activeAuras = make(map[uint32]*activeAura)
@@ -3449,7 +3453,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 			slot = uint8(len(targetSess.auraSlots))
 			targetSess.auraSlots[spell.ID] = slot
 		}
-		aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), StoredCasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
+		aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, ApplyResilience: applyResilience, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), StoredCasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.auras[spell.ID] = struct{}{}
 		// Unit::_AddAura single-target dance (Unit.cpp:3397-3420).
@@ -3495,6 +3499,10 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		return false
 	}
 	targetKey := creatureAuraKeyForTarget(target)
+	// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450): captured at
+	// aura creation from the live caster's Unit::CanApplyResilience.
+	// Computed before auraMu is taken.
+	applyResilience := s.casterCanApplyResilience(caster.GUID)
 	s.server.auraMu.Lock()
 	if s.server.activeCreatureAuras == nil {
 		s.server.activeCreatureAuras = make(map[creatureAuraKey]map[uint32]*activeAura)
@@ -3533,7 +3541,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		s.server.unregisterSingleCastAura(previous)
 	}
 	slot := uint8(len(s.server.activeCreatureAuras[targetKey]))
-	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, TargetKey: targetKey, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), StoredCasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
+	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, TargetKey: targetKey, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, ApplyResilience: applyResilience, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), StoredCasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
 	s.server.creatureAuras[targetKey][spell.ID] = struct{}{}
 	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420).
