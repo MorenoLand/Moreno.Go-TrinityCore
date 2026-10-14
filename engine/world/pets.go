@@ -3374,6 +3374,14 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 			newName, now, petNumber, s.playerGUID)
 		// PetHandler.cpp:624 removes the flag after a successful rename.
 		delete(s.petRenameAllowed, petGUID)
+		// PetHandler.cpp:672: the rename refreshes UNIT_FIELD_PET_NAME_TIMESTAMP
+		// on the live pet — the client re-queries the pet name when the field
+		// changes. Go builds the pet update block once at spawn, so push the
+		// field explicitly with the same timestamp the name-query response
+		// carries (savetime).
+		if s.server != nil {
+			s.server.broadcastCreatureValuesUpdateInInstance(s.player.Map, s.player.InstanceID, petGUID, map[int]uint32{unitFieldPetNameTimestamp: uint32(now)})
+		}
 		// PetHandler.cpp:649-662: declined names persist in
 		// character_pet_declinedname (id, owner, genitive..prepositional).
 		// ObjectMgr::CheckDeclinedNames' declension match has no Go bridge
@@ -3461,8 +3469,11 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	if s.player == nil || petGUID == 0 || petGUID != s.player.PetGUID {
 		return true
 	}
+	// PetHandler.cpp:475: count is 2 only when the packet is exactly 24
+	// bytes (8 guid + 2x(4 pos + 4 data)); a longer malformed packet still
+	// carries a single pair in C++.
 	count := 1
-	if len(payload) >= 24 {
+	if len(payload) == 24 {
 		count = 2
 	}
 	cdb := s.server.CharactersStore.DB
@@ -3569,8 +3580,18 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		if p.action > 0 && petNumber > 0 {
 			if p.actType == 0xC1 { // ACT_ENABLED (autocast enabled)
 				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 1 WHERE guid = ? AND spell = ?", petNumber, p.action)
+				// PetHandler.cpp:553-577: the set-action path runs the same
+				// ToggleAutocast arms as the autocast opcode, so the live
+				// motion's autocast list follows the bar immediately — the
+				// pet autocasts the spell without waiting for a relog.
+				if s.server != nil {
+					s.server.onPetToggleAutocast(s.player.Map, s.player.InstanceID, petGUID, p.action, true)
+				}
 			} else if p.actType == 0x81 { // ACT_DISABLED (autocast disabled)
 				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 0 WHERE guid = ? AND spell = ?", petNumber, p.action)
+				if s.server != nil {
+					s.server.onPetToggleAutocast(s.player.Map, s.player.InstanceID, petGUID, p.action, false)
+				}
 			}
 		}
 	}
