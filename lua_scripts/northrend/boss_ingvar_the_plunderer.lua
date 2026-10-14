@@ -26,17 +26,49 @@
 -- DB-side by construction. This header is the audited-artifact record
 -- for the existing port (9df78d1, Oct 2 10:06 UTC) — re-verified this
 -- run; the first-pass "no ingvar lua existed" claim was stale.
--- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied,
--- 9 OnDamageTaken, 23 OnReset.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill,
+-- 4 OnDied, 9 OnDamageTaken, 23 OnReset.
+-- Timer bridge: CreateLuaEvent harness (engine/scripting/runtime.go:798),
+-- GUID-keyed timers table, cancel on events 2/4/23 (the
+-- maiden_of_virtue / moroes / curator / nightbane / hodir precedent) —
+-- the Oct-2 "no-timer-bridge" doctrine is STALE and disproved.
+-- CastSpell(nil, spell) = DoCastVictim; CastSpell(creature, spell) =
+-- DoCastSelf; DoCastAOE lowers to self-cast (boss_ai.go DoCastAOE
+-- lowering; the selin_fireheart / mr_smite precedent). The 3rd CastSpell
+-- arg is the C++ DoCast 3rd arg (2-arg / 1-arg overloads =
+-- non-triggered). {min,max} table delay = randtime range. Phase gating:
+-- the four PHASE_HUMAN arms are scheduled unconditionally in
+-- JustEngagedWith (C++ lines 165-168); the EventMap phase gate is
+-- modeled in Lua by canceling all timers on the feign-death
+-- DamageTaken latch (PHASE_HUMAN -> PHASE_EVENT, C++ lines 124-138),
+-- after which the human arms never fire again in C++ either.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1, human entry only); the
+-- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1, human entry only) +
+-- the four JustEngagedWith ScheduleEvent legs (C++ lines 165-168); the
 -- C++ early return on PHASE_EVENT / PHASE_UNDEAD is modeled with the
 -- engaged latch below — yell once per pull cycle, silent on the phase-2
--- re-engage (the auriaya engage-port precedent).
+-- re-engage (the auriaya engage-port precedent); BossAI passthrough has
+-- no bridge.
+-- EVENT_CLEAVE (id 1; init 6-12s at C++ line 165, arm at 215-216):
+-- DoCastVictim(SPELL_CLEAVE 42724), 1-arg = non-triggered ->
+-- CastSpell(nil, 42724); repeat 6-12s (line 216).
+-- EVENT_SMASH (id 2; init 12-17s at C++ line 168, arm at 227-228):
+-- DoCastAOE(SPELL_SMASH 42669), 1-arg = non-triggered ->
+-- CastSpell(creature, 42669); repeat 12-16s (line 228).
+-- EVENT_STAGGERING_ROAR (id 3; init 18-21s at C++ line 166, arm at
+-- 219-220): DoCast(me, SPELL_STAGGERING_ROAR 42708), 2-arg =
+-- non-triggered -> CastSpell(creature, 42708); repeat 18-22s (line 220).
+-- EVENT_ENRAGE (id 4; init 7-14s at C++ line 167, arm at 223-224):
+-- DoCast(me, SPELL_ENRAGE 42705), 2-arg = non-triggered ->
+-- CastSpell(creature, 42705); repeat 7-14s (line 224).
 -- DamageTaken — Talk(SAY_DEATH 2) when damage >= GetHealth() while in
 -- PHASE_HUMAN (the feign-death yell) (event 9, human entry only); the
 -- feignDead latch mirrors the PHASE_HUMAN -> PHASE_EVENT transition so
--- the yell fires exactly once (the moroes threshold+latch precedent).
+-- the yell fires exactly once (the moroes threshold+latch precedent);
+-- the latch also cancels the human timers (the phase gate above) — the
+-- RemoveAllAuras / DoCast SPELL_INGVAR_FEIGN_DEATH 42795 /
+-- non-attackable/immune flags / the damage = 0 rewrite in PHASE_EVENT
+-- have no bridges.
 -- JustDied — Talk(SAY_DEATH 2) unconditional (event 4, both entries —
 -- the real (undead-phase) death yell; the sjonnir JustDied-Talk
 -- precedent).
@@ -44,29 +76,59 @@
 -- phase gate in C++; the razuvious player-gated variant precedent; the
 -- lua victim nil-guard follows the hodir port convention — Eluna event
 -- 3 always carries a victim, C++-exactness unaffected).
+-- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
+-- are packet-visual), so timers fire unconditionally — melee stays
+-- engine-driven, like C++ DoMeleeAttackIfReady (the hodir /
+-- maiden_of_virtue precedent).
 -- DOCUMENTED-ONLY (in this header; no registrations beyond entries 23954
 -- / 23980):
--- EVENT_JUST_TRANSFORMED Talk(SAY_AGGRO) (the phase-2 aggro yell) and the
--- EVENT_CLEAVE / EVENT_SMASH / EVENT_STAGGERING_ROAR / EVENT_ENRAGE /
--- EVENT_DARK_SMASH / EVENT_DREADFUL_ROAR / EVENT_WOE_STRIKE /
--- EVENT_SHADOW_AXE spell casts + ShadowAxe target selection — the timer
--- event machine has no bridge; joins the no-timer-bridge queue.
--- The feign-death DamageTaken legs (RemoveAllAuras, DoCast
--- SPELL_INGVAR_FEIGN_DEATH, non-attackable/immune flags) and the damage =
--- 0 rewrite in PHASE_EVENT — no bridges.
--- DoAction(ACTION_START_PHASE_2) / StartZombiePhase (UpdateEntry to 23980,
--- transform cast) — no DoAction bridge.
+-- All PHASE_UNDEAD arms — EVENT_DARK_SMASH (DoCastVictim
+-- SPELL_DARK_SMASH 42723, init 14-18s line 187 / arm lines 242-243,
+-- repeat 12-16s), EVENT_DREADFUL_ROAR (DoCast(me,
+-- SPELL_DREADFUL_ROAR 42729, init 0ms line 188 / arm lines 246-247,
+-- repeat 18-22s), EVENT_WOE_STRIKE (DoCastVictim SPELL_WOE_STRIKE
+-- 42730, init 10-14s line 189 / arm lines 250-251, repeat 10-14s),
+-- EVENT_SHADOW_AXE (SelectTarget(Random,1) DoCast(target,
+-- SPELL_SHADOW_AXE_SUMMON 42748), init 30s line 190 / arm lines
+-- 254-256, repeat 30s) — scheduled only from ScheduleSecondPhase (lines
+-- 185-191), which runs on EVENT_JUST_TRANSFORMED (lines 231-236) after
+-- StartZombiePhase, which runs on DoAction(ACTION_START_PHASE_2) (lines
+-- 143-155), which is invoked by npc_annhylde_the_caller's
+-- EVENT_RESURRECT_2 arm (line 349) — DoAction / MotionMaster /
+-- instance-GuidData legs, no bridges; the whole phase-2 machine (the
+-- phase-machine gating doctrine, gothik precedent) is unbridgeable; the
+-- SHADOW_AXE arm additionally has a summon leg.
+-- EVENT_SUMMON_BANSHEE (DoCast(me, SPELL_SUMMON_BANSHEE 42912),
+-- scheduled at PHASE_EVENT from DamageTaken line 127 / arm lines
+-- 237-238) — PHASE_EVENT-gated summon leg; unbridgeable.
+-- EVENT_JUST_TRANSFORMED Talk(SAY_AGGRO) + ScheduleSecondPhase +
+-- DoZoneInCombat (lines 231-236) — phase-machine / zone-in legs, no
+-- bridges; the phase-2 aggro yell is DoAction-gated.
+-- DoAction(ACTION_START_PHASE_2) / StartZombiePhase (RemoveAura feign
+-- death, DoCast(me, SPELL_INGVAR_TRANSFORM 42796, true), UpdateEntry to
+-- 23980 — lines 149-155) — DoAction / UpdateEntry / cross-entry legs,
+-- no bridges.
 -- npc_annhylde_the_caller (24068 NPC_ANNHYLDE_THE_CALLER, line 58) —
--- Talk(YELL_RESURRECT 0) in MovementInform, plus the cross-creature
--- resurrect machine (instance GetGuidData(DATA_INGVAR), beams, heals,
--- DoAction(ACTION_START_PHASE_2)) — MovementInform / instance-GuidData /
--- cross-creature bridges missing; no registration.
+-- Talk(YELL_RESURRECT 0) in MovementInform (line 304), plus the
+-- cross-creature resurrect machine (MovementInform legs at lines 302-316:
+-- instance GetGuidData(DATA_INGVAR), SPELL_SCOURG_RESURRECTION_DUMMY
+-- 42862 / BEAM 42857 casts; EVENT_RESURRECT_1 at lines 336-344:
+-- SPELL_SCOURG_RESURRECTION_HEAL 42704 cast; EVENT_RESURRECT_2 at lines
+-- 346-350: RemoveAuras SPELL_SCOURG_RESURRECTION_DUMMY 42862 +
+-- DoAction(ACTION_START_PHASE_2), MovePoint legs at lines 318-320/352) —
+-- MovementInform / instance-GuidData / MotionMaster / DoAction bridges
+-- missing; no registration.
 -- npc_ingvar_throw_dummy (NPC_THROW_TARGET 23996, line 57) — no Talk arms
--- (charge / periodic-damage / despawn machine) — no bridges; no
+-- (FindNearestCreature / MoveCharge Reset legs at lines 384-395,
+-- MovementInform EFFECT_MOTION_TYPE charge leg at lines 396-402:
+-- CastSpell(me, SPELL_SHADOW_AXE_PERIODIC_DAMAGE 42750, true) +
+-- DespawnOrUnsummon) — MotionMaster / despawn legs, no bridges; no
 -- registration.
--- spell_ingvar_summon_banshee (SpellScript OnDestinationTargetSelect) /
--- spell_ingvar_woe_strike (AuraScript proc) — no SpellScript / AuraScript
--- bridges; join the no-SpellScript / no-AuraScript-bridge queues.
+-- spell_ingvar_summon_banshee (SpellScript OnDestinationTargetSelect,
+-- lines 407-427) / spell_ingvar_woe_strike (AuraScript proc,
+-- SPELL_WOE_STRIKE_EFFECT 42739, lines 430-476) — no SpellScript /
+-- AuraScript bridges; join the no-SpellScript / no-AuraScript-bridge
+-- queues.
 
 local ENTRY_INGVAR = 23954
 local ENTRY_INGVAR_UNDEAD = 23980
@@ -74,6 +136,35 @@ local ENTRY_INGVAR_UNDEAD = 23980
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
+
+local SPELL_CLEAVE = 42724
+local SPELL_SMASH = 42669
+local SPELL_STAGGERING_ROAR = 42708
+local SPELL_ENRAGE = 42705
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
 
 -- Per-creature state mirroring the AI members / EventMap phases:
 -- engaged — C++ JustEngagedWith sets PHASE_HUMAN on the first engage;
@@ -93,27 +184,70 @@ local function getState(guid)
     return state
 end
 
--- C++ boss_ingvar_the_plundererAI::JustEngagedWith: if in PHASE_EVENT or
--- PHASE_UNDEAD return; BossAI::JustEngagedWith(who) (passthrough, no
--- bridge); Talk(SAY_AGGRO); SetPhase(PHASE_HUMAN). The engaged latch
--- models the phase gate — C++-exact: one yell per pull cycle, silent on
--- the phase-2 re-engage (the auriaya engage-port precedent).
+-- C++ EVENT_CLEAVE (lines 215-216): DoCastVictim(SPELL_CLEAVE 42724),
+-- 1-arg = non-triggered -> CastSpell(nil, 42724); init 6-12s (line
+-- 165), repeat 6-12s (line 216).
+local function cleaveTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CLEAVE)
+    schedule(guid, "cleave", {6000, 12000}, function() cleaveTick(creature, guid) end)
+end
+
+-- C++ EVENT_SMASH (lines 227-228): DoCastAOE(SPELL_SMASH 42669) lowers
+-- to self-cast, 1-arg = non-triggered -> CastSpell(creature, 42669);
+-- init 12-17s (line 168), repeat 12-16s (line 228).
+local function smashTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SMASH)
+    schedule(guid, "smash", {12000, 16000}, function() smashTick(creature, guid) end)
+end
+
+-- C++ EVENT_STAGGERING_ROAR (lines 219-220): DoCast(me,
+-- SPELL_STAGGERING_ROAR 42708), 2-arg = non-triggered ->
+-- CastSpell(creature, 42708); init 18-21s (line 166), repeat 18-22s
+-- (line 220).
+local function roarTick(creature, guid)
+    creature:CastSpell(creature, SPELL_STAGGERING_ROAR)
+    schedule(guid, "roar", {18000, 22000}, function() roarTick(creature, guid) end)
+end
+
+-- C++ EVENT_ENRAGE (lines 223-224): DoCast(me, SPELL_ENRAGE 42705),
+-- 2-arg = non-triggered -> CastSpell(creature, 42705); init 7-14s
+-- (line 167), repeat 7-14s (line 224).
+local function enrageTick(creature, guid)
+    creature:CastSpell(creature, SPELL_ENRAGE)
+    schedule(guid, "enrage", {7000, 14000}, function() enrageTick(creature, guid) end)
+end
+
+-- C++ boss_ingvar_the_plundererAI::JustEngagedWith (lines 159-170): if
+-- in PHASE_EVENT or PHASE_UNDEAD return; BossAI::JustEngagedWith(who)
+-- (passthrough, no bridge); Talk(SAY_AGGRO); SetPhase(PHASE_HUMAN);
+-- the four ScheduleEvent legs become CreateLuaEvent timers below. The
+-- engaged latch models the phase gate — C++-exact: one yell per pull
+-- cycle, silent on the phase-2 re-engage (the auriaya engage-port
+-- precedent).
 local function ingvarEnterCombat(event, creature, target)
     local state = getState(creature:GetGUID())
     if state.engaged then
         return
     end
     state.engaged = true
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "cleave", {6000, 12000}, function() cleaveTick(creature, guid) end)
+    schedule(guid, "smash", {12000, 17000}, function() smashTick(creature, guid) end)
+    schedule(guid, "roar", {18000, 21000}, function() roarTick(creature, guid) end)
+    schedule(guid, "enrage", {7000, 14000}, function() enrageTick(creature, guid) end)
 end
 
--- C++ DamageTaken: if (damage >= me->GetHealth() &&
+-- C++ DamageTaken (lines 122-140): if (damage >= me->GetHealth() &&
 -- events.IsInPhase(PHASE_HUMAN)) { <unbridgeable feign-death legs>;
 -- Talk(SAY_DEATH); } — the engaged gate mirrors the PHASE_HUMAN
 -- requirement, the feignDead latch the one-shot transition (the moroes
--- threshold+latch precedent); the PHASE_EVENT damage = 0 rewrite has no
--- bridge. Registered on the human entry only — the arm is unreachable
--- for the undead entry in C++ (PHASE_HUMAN is never re-entered).
+-- threshold+latch precedent); cancelTimers mirrors the EventMap phase
+-- gate — the human timers never fire again once PHASE_EVENT starts.
+-- The PHASE_EVENT damage = 0 rewrite has no bridge. Registered on the
+-- human entry only — the arm is unreachable for the undead entry in C++
+-- (PHASE_HUMAN is never re-entered).
 local function ingvarDamageTaken(event, creature, attacker, damage)
     local state = getState(creature:GetGUID())
     if state.feignDead or not state.engaged then
@@ -121,14 +255,20 @@ local function ingvarDamageTaken(event, creature, attacker, damage)
     end
     if damage >= creature:GetHealth() then
         state.feignDead = true
+        cancelTimers(creature:GetGUID())
         creature:Talk(SAY_DEATH)
     end
+end
+
+local function ingvarLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ JustDied: _JustDied() (passthrough, no bridge); Talk(SAY_DEATH) —
 -- unconditional — the sjonnir JustDied-Talk precedent. Fires on the real
 -- (undead-phase) death; the feign-death yell rides event 9 above.
 local function ingvarJustDied(event, creature)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
@@ -143,10 +283,12 @@ local function ingvarKilledUnit(event, creature, victim)
 end
 
 local function ingvarReset(event, creature)
+    cancelTimers(creature:GetGUID())
     ingvarState[creature:GetGUID()] = nil
 end
 
 RegisterCreatureEvent(ENTRY_INGVAR, 1, ingvarEnterCombat)
+RegisterCreatureEvent(ENTRY_INGVAR, 2, ingvarLeaveCombat)
 RegisterCreatureEvent(ENTRY_INGVAR, 9, ingvarDamageTaken)
 RegisterCreatureEvent(ENTRY_INGVAR, 3, ingvarKilledUnit)
 RegisterCreatureEvent(ENTRY_INGVAR, 4, ingvarJustDied)

@@ -9849,10 +9849,16 @@ func init() {
 	// Bridgeable arms: JustEngagedWith unconditional Talk(SAY_START_COMBAT
 	// 1) (event 1 — the auriaya engage-port precedent; the runemage /
 	// strategist guard AttackStart leg has no bridge), JustDied
-	// Talk(SAY_DEATH 5) (event 4 — the sjonnir JustDied-Talk precedent).
-	// The EVENT_SUMMON_SKELETONS / EVENT_FROST_TOMB timer Talks, the
-	// targeted frost-tomb emote, npc_frost_tomb / npc_vrykul_skeleton (no
-	// Talk arms), the spell_frost_tomb AuraScript and the
+	// Talk(SAY_DEATH 5) (event 4 — the sjonnir JustDied-Talk precedent),
+	// EVENT_SHADOWBOLT DoCastVictim(43667) non-triggered {2s,3s}/{2s,3s},
+	// EVENT_FROST_TOMB random player 100y without the 48400 aura:
+	// Talk(3)+Talk(4, target)+DoCast(target, 42672, true)+target
+	// self-cast 42714, true, {14s,19s}/{14s,19s} (re-arm outside the
+	// target check, C++-exact) — all on the CreateLuaEvent timer
+	// convention (GUID-keyed timers, cancel on events 2/4/23). The
+	// EVENT_SUMMON_SKELETONS Talk is fused with the summon (zarithrian
+	// precedent), npc_frost_tomb / npc_vrykul_skeleton ride summon /
+	// DoAction / instance legs, the spell_frost_tomb AuraScript and the
 	// achievement_on_the_rocks GetData check are bridge-blocked —
 	// documented in the lua header.
 	RegisterLuaBoss("boss_keleseth", 23953)
@@ -9861,41 +9867,49 @@ func init() {
 	// decl 127 / call 322) — the SECOND group of the "// Utgarde Keep -
 	// Utgarde Keep" block (boss_keleseth -> boss_skarvald_dalronn).
 	// Bridgeable arms: Skarvald JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1 — the auriaya engage-port precedent), both bosses'
-	// KilledUnit player-gated Talk(SAY_KILL 3) (event 3 — the razuvious
-	// player-gated variant precedent); the !IsInGhostForm gates are
-	// satisfied structurally (ghost entries 27390 / 27389 not registered,
-	// no bridgeable arms). Dalronn's aggro Talk rides the 5s
-	// EVENT_DELAYED_AGGRO_SAY timer (event 1 deliberately NOT registered
-	// — an immediate yell would deviate from C++), the
-	// JustDied died-first/death split is instance-GuidData /
-	// cross-creature-gated, the EVENT_DEATH_RESPONSE response Talk is
-	// DoAction/timer-gated, and the enrage/spell-cast legs carry no Talk
-	// arms — all bridge-blocked, documented in the lua header.
+	// (event 1), EVENT_SKARVALD_CHARGE one-shot 5s DoCast(target, 43651)
+	// non-triggered on a random 5-30yd unit (C++-exact: the :208 re-arm
+	// schedules the global EVENT_CHARGE = 1003, which never matches the
+	// ExecuteEvent switch — the arm fires once), EVENT_STONE_STRIKE
+	// DoCastVictim(48583) non-triggered 10s/{5s,10s}, DamageTaken enrage
+	// latch DoCast(me, 48193) non-triggered at 15% (event 9); Dalronn
+	// EVENT_SHADOW_BOLT random player 45y DoCast(target, 43649)
+	// non-triggered 1s/2.1s, EVENT_DEBILITATE random player 50y
+	// DoCast(target, 43650) non-triggered 5s/{5s,10s}, 5s one-shot
+	// Talk(SAY_AGGRO 0) (EVENT_DELAYED_AGGRO_SAY); both bosses'
+	// KilledUnit player-gated Talk(SAY_KILL 3) (event 3); the
+	// !IsInGhostForm gates are satisfied structurally (ghost entries
+	// 27390 / 27389 not registered). The JustDied died-first/death
+	// split is instance-GuidData / cross-creature-gated, the
+	// EVENT_DEATH_RESPONSE Talk is DoAction-gated, and Dalronn's
+	// EVENT_SUMMON_SKELETONS is a heroic summon leg — all
+	// bridge-blocked, documented in the lua header.
 	RegisterLuaBoss("boss_skarvald_the_constructor", 24200)
 	RegisterLuaBoss("boss_dalronn_the_controller", 24201)
 	// Ingvar the Plunderer (Utgarde Keep) — boss_ingvar_the_plunderer.cpp,
 	// AddSC_boss_ingvar_the_plunderer() (loader decl 128 / call 323) — the
 	// THIRD group of the "// Utgarde Keep - Utgarde Keep" block
 	// (boss_skarvald_dalronn -> boss_ingvar_the_plunderer).
-	// Bridgeable arms: JustEngagedWith Talk(SAY_AGGRO 0) (event 1, human
-	// entry only — the PHASE_EVENT/PHASE_UNDEAD early return is modeled
-	// with the engaged latch, the auriaya engage-port precedent),
-	// DamageTaken feign-death Talk(SAY_DEATH 2) (event 9, human entry only
-	// — the feignDead latch mirrors the PHASE_HUMAN -> PHASE_EVENT
-	// transition, the moroes threshold+latch precedent), JustDied
-	// Talk(SAY_DEATH 2) unconditional (event 4, both entries — the sjonnir
-	// JustDied-Talk precedent), KilledUnit player-gated Talk(SAY_SLAY 1)
-	// (event 3, both entries — the razuvious player-gated variant
-	// precedent). The undead entry 23980 is registered because phase-2
-	// kills and the real death yell fire on it. The
-	// EVENT_JUST_TRANSFORMED aggro yell + all spell-cast timer arms, the
-	// feign-death damage=0 rewrite, DoAction(ACTION_START_PHASE_2),
-	// npc_annhylde_the_caller (MovementInform YELL_RESURRECT /
-	// instance-GuidData / cross-creature resurrect machine),
-	// npc_ingvar_throw_dummy (no Talk arms) and the two spell scripts
-	// (SpellScript / AuraScript) are bridge-blocked — documented in the
-	// lua header.
+	// Bridgeable arms (human entry only): JustEngagedWith Talk(SAY_AGGRO
+	// 0) (event 1 — the PHASE_EVENT/PHASE_UNDEAD early return is modeled
+	// with the engaged latch), EVENT_CLEAVE DoCastVictim(42724)
+	// {6s,12s}/{6s,12s}, EVENT_SMASH DoCastAOE-as-self-cast(42669)
+	// {12s,17s}/{12s,16s}, EVENT_STAGGERING_ROAR DoCast(me, 42708)
+	// {18s,21s}/{18s,22s}, EVENT_ENRAGE DoCast(me, 42705)
+	// {7s,14s}/{7s,14s} (all non-triggered, all on the CreateLuaEvent
+	// timer convention); DamageTaken feign-death Talk(SAY_DEATH 2)
+	// (event 9 — the feignDead latch mirrors the PHASE_HUMAN ->
+	// PHASE_EVENT transition and cancels the human timers, which is the
+	// EventMap phase gate C++-exact); JustDied Talk(SAY_DEATH 2)
+	// unconditional (event 4, both entries); KilledUnit player-gated
+	// Talk(SAY_SLAY 1) (event 3, both entries). The undead entry 23980 is
+	// registered because phase-2 kills and the real death yell fire on
+	// it. All PHASE_UNDEAD arms (dark smash, dreadful roar, woe strike,
+	// shadow axe), EVENT_SUMMON_BANSHEE, EVENT_JUST_TRANSFORMED, the
+	// DoAction(ACTION_START_PHASE_2) machine, npc_annhylde_the_caller
+	// (MovementInform / instance-GuidData / cross-creature resurrect
+	// machine) and the two spell scripts are bridge-blocked — documented
+	// in the lua header.
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23954)
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23980)
 	// Svala Sorrowgrave (Utgarde Pinnacle) — boss_svala.cpp,
