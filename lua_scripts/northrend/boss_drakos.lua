@@ -23,14 +23,32 @@
 -- inside AddSC_boss_drakos, no separate loader lines); zero sql/
 -- hits. No drakos lua existed.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. No timers in the ported arms;
--- melee is engine-driven in Go (creature combat tick), like C++
--- DoMeleeAttackIfReady.
+-- OnTargetDied, 4 OnDied, 23 OnReset. Driven by CreateLuaEvent
+-- timers; melee is engine-driven in Go (creature combat tick), like
+-- C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the BossAI::
 -- JustEngagedWith instance-bookkeeping leg has no instance bridge —
--- tharon_ja precedent; the three events.ScheduleEvent legs have no
--- timer-event bridge).
+-- tharon_ja precedent). The two cast ScheduleEvent legs are ported
+-- as CreateLuaEvent timers seeded here, cancel on 2/4/23 (the
+-- krystallus/bjarngrim convention).
+-- EVENT_MAGIC_PULL — DoCast(SPELL_MAGIC_PULL 51336) + postPull=true
+-- + 15s init / 15s repeat (boss_drakos.cpp:76/:113-116) — PORTED.
+-- Targeting resolved via UnitAI::DoCast(uint32) -> AISpellInfo
+-- (UnitAI.cpp:113-164): FillAISpellInfo (UnitAI.cpp:189-234) leaves
+-- target at AITARGET_SELF unless GetMaxRange(false) != 0 — 51336 is
+-- range 0 yards (Self), so the C++ cast is self-cast ->
+-- creature:CastSpell(creature, 51336). The pull payload (Dummy
+-- server-script effect) is engine-undelivered — documented
+-- deviation. postPull kept as a per-GUID latch for machine
+-- fidelity (its only consumer, BOMB_SUMMON's count, is unported).
+-- EVENT_STOMP — Talk(SAY_STOMP 4) + DoCast(SPELL_THUNDERING_STOMP
+-- 50774) + 15s init / 15s repeat (boss_drakos.cpp:77/:118-121) —
+-- PORTED, same AISpellInfo resolution — 50774 is range 0 yards
+-- (Self) -> self-cast -> creature:CastSpell(creature, 50774).
+-- (The 2026-10-14 02:58 "PORTABLE-CONDITIONAL / UNRESOLVED
+-- targeting" verdict is retracted: both spells are range-0, so
+-- AITARGET_SELF is mechanical, not asserted.)
 -- KilledUnit — Talk(SAY_KILL 1) (event 3 — C++-UNCONDITIONAL: the
 -- Talk fires for any victim; no nalorakk gate here — the anubrekhan
 -- unconditional variant).
@@ -40,16 +58,11 @@
 -- ACHIEV_TIMED_START_EVENT 18153) leg has no achievement bridge —
 -- kelthuzad/thaddius precedent).
 -- Unmodeled (no bridges — documented, not wired):
--- Reset — Initialize() (postPull=false) + _Reset() + the three
--- events.ScheduleEvent legs (EVENT_MAGIC_PULL 15s / EVENT_STOMP 15s
--- / EVENT_BOMB_SUMMON 2s) — no timer-event / instance bridges.
+-- Reset — Initialize() (postPull=false) + _Reset() — no instance
+-- bridge; the cast ScheduleEvent legs are ported above.
 -- UpdateAI — EVENT_BOMB_SUMMON: for i <= (postPull ? 3 : 0)
 -- SummonCreature(NPC_UNSTABLE_SPHERE 28166, GetRandomNearPosition)
--- + 2s repeat — no summon bridge (summon STRAND absent);
--- EVENT_MAGIC_PULL: DoCast(SPELL_MAGIC_PULL 51336) + postPull=true +
--- 15s repeat — no cast bridge; EVENT_STOMP: Talk(SAY_STOMP 4) +
--- DoCast(SPELL_THUNDERING_STOMP 50774) + 15s repeat — no
--- timer-event/cast bridges.
+-- + 2s repeat — no summon bridge (summon STRAND absent).
 -- npc_unstable_sphere — entry-unverifiable (28166, local-enum-only)
 -- — no registration, no lua; its arms are documented here only:
 -- Reset — SetReactState(REACT_PASSIVE) + MoveRandom(40.0f) + AddAura(
@@ -64,12 +77,77 @@ local ENTRY_DRAKOS = 27654
 local SAY_AGGRO = 0
 local SAY_KILL = 1
 local SAY_DEATH = 2
+local SAY_STOMP = 4
+
+local SPELL_MAGIC_PULL = 51336
+local SPELL_THUNDERING_STOMP = 50774
+
+local timers = {}
+local postPull = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+    postPull[guid] = nil
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ UpdateAI EVENT_MAGIC_PULL (boss_drakos.cpp:113-116):
+-- DoCast(SPELL_MAGIC_PULL 51336) self-cast (AISpellInfo-resolved,
+-- see header) + postPull=true, 15s init -> 15s loop.
+local function magicPullTick(creature, guid)
+    creature:CastSpell(creature, SPELL_MAGIC_PULL)
+    postPull[guid] = true
+    schedule(guid, "pull", 15000, function()
+        magicPullTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_STOMP (boss_drakos.cpp:118-121): Talk(SAY_STOMP)
+-- + DoCast(SPELL_THUNDERING_STOMP 50774) self-cast, 15s init ->
+-- 15s loop.
+local function stompTick(creature, guid)
+    creature:Talk(SAY_STOMP)
+    creature:CastSpell(creature, SPELL_THUNDERING_STOMP)
+    schedule(guid, "stomp", 15000, function()
+        stompTick(creature, guid)
+    end)
+end
 
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) (the BossAI::JustEngagedWith
 -- instance-bookkeeping leg has no instance bridge — tharon_ja
--- precedent).
+-- precedent); the Reset ScheduleEvent legs (boss_drakos.cpp:76-78)
+-- are ported as engage-seeded timers (krystallus convention).
 local function drakosEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "pull", 15000, function()
+        magicPullTick(creature, guid)
+    end)
+    schedule(guid, "stomp", 15000, function()
+        stompTick(creature, guid)
+    end)
+end
+
+local function drakosLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL) — C++-UNCONDITIONAL: the Talk fires
@@ -85,8 +163,11 @@ end
 -- kelthuzad/thaddius precedent).
 local function drakosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_DRAKOS, 1, drakosEnterCombat)
+RegisterCreatureEvent(ENTRY_DRAKOS, 2, drakosLeaveCombat)
 RegisterCreatureEvent(ENTRY_DRAKOS, 3, drakosTargetDied)
 RegisterCreatureEvent(ENTRY_DRAKOS, 4, drakosDied)
+RegisterCreatureEvent(ENTRY_DRAKOS, 23, drakosLeaveCombat)

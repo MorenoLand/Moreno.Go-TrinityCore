@@ -78,11 +78,15 @@
 -- -> 35s/50s loop — PORTED as CreateLuaEvent {35000,
 -- 50000} + Talk(2) + CastSpell(creature, 51170).
 -- EVENT_SUMMON_LEY_WHELP 3x DoCast(SPELL_SUMMON_LEY_WHELP
--- 51175) self-cast, 15s/30s init -> 15s/30s loop — PORTED
--- as CreateLuaEvent {15000, 30000} + 3x CastSpell(creature,
--- 51175); the C++ JustSummoned ignores ley whelps (:160-170
--- handles only planar anomalies), so the summon is
--- engine/spell-DB-delivered exactly like the C++ DoCast.
+-- 51175) self-cast, 15s/30s init -> 15s/30s loop — REMOVED
+-- 2026-10-14 (was ported in 65324e59): the "engine/spell-DB-
+-- delivered" claim is disproved — the engine's creature-cast path
+-- (castCreatureSpellInternal, boss_ai.go) has no SPELL_EFFECT_SUMMON
+-- (28) delivery leg (GO packet + effect-50 Transmitted +
+-- spell_linked + event hooks only), so the arm was a packet-only
+-- no-op — the shazzrah no-op-cast precedent. No summon bridge
+-- (summon STRAND absent); joins drakos BOMB_SUMMON in the
+-- stay-out queue.
 -- The UNIT_STATE_CASTING gates have no bridge (documented
 -- deviation); DoMeleeAttackIfReady is engine-driven.
 -- DamageTaken — heroic-only phase-shift machine: health
@@ -118,7 +122,6 @@ local SAY_ENRAGE = 2
 local SPELL_ARCANE_BARRAGE = 50804
 local SPELL_ARCANE_VOLLEY = 51153
 local SPELL_ENRAGED_ASSAULT = 51170
-local SPELL_SUMMON_LEY_WHELP = 51175
 
 local timers = {}
 
@@ -173,19 +176,6 @@ local function enragedAssaultTick(creature, guid)
     end)
 end
 
--- C++ EVENT_SUMMON_LEY_WHELP (:228-232): 3x DoCast(51175)
--- self-cast, non-triggered, 15s/30s init -> 15s/30s loop; the
--- summon is engine/spell-DB-delivered (C++ JustSummoned
--- ignores ley whelps).
-local function leyWhelpTick(creature, guid)
-    creature:CastSpell(creature, SPELL_SUMMON_LEY_WHELP)
-    creature:CastSpell(creature, SPELL_SUMMON_LEY_WHELP)
-    creature:CastSpell(creature, SPELL_SUMMON_LEY_WHELP)
-    schedule(guid, "whelps", {15000, 30000}, function()
-        leyWhelpTick(creature, guid)
-    end)
-end
-
 -- C++ JustEngagedWith: BossAI::JustEngagedWith(who) +
 -- Talk(SAY_AGGRO) + drake-vehicle achievement-void legs (no
 -- bridges) — the Talk arm is unconditional.
@@ -201,9 +191,6 @@ local function eregosEnterCombat(event, creature, target)
     end)
     schedule(guid, "enraged", {35000, 50000}, function()
         enragedAssaultTick(creature, guid)
-    end)
-    schedule(guid, "whelps", {15000, 30000}, function()
-        leyWhelpTick(creature, guid)
     end)
 end
 

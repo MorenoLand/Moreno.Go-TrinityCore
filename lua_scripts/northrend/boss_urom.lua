@@ -32,8 +32,13 @@
 -- identical to nalorakk / kelthuzad / gothik / thaddius /
 -- keristrasza).
 -- JustDied — Talk(SAY_DEATH 6) (event 4; the _JustDied bookkeeping
--- has no bridge — tharon_ja precedent; the DoCastSelf(
--- SPELL_DEATH_SPELL) leg has no cast bridge).
+-- has no bridge — tharon_ja precedent). The DoCastSelf(
+-- SPELL_DEATH_SPELL 50415, true) leg STAYS OUT, decided 2026-10-14:
+-- the triggered cast bridge exists (CastSpell(creature, id, true)),
+-- but the engine's creature-cast path has no SPELL_EFFECT_SUMMON
+-- (28) delivery leg (castCreatureSpellInternal, boss_ai.go: GO
+-- packet + effect-50 Transmitted + spell_linked + event hooks only)
+-- — the shazzrah no-op-cast precedent.
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith / StartAttack — the Talk arms are _platform-
 -- state-gated, not stateless: on the first three engages
@@ -73,9 +78,13 @@
 -- health-gated, no bridges.
 -- SpellHit — SPELL_SUMMON_MENAGERIE(3) x3: SetHomePosition (three
 -- platform coords) + LeaveCombat (RemoveAllAuras + CombatStop +
--- EngagementOver) + DoCastSelf(SPELL_EVOCATE 51602) — no SpellHit /
--- home-position / aura / cast bridges (joins the SpellHit-15-never-
--- fires queue with the other never-bridged SpellHit handlers).
+-- EngagementOver) + DoCastSelf(SPELL_EVOCATE 51602, true) — STAY-
+-- OUT, decided 2026-10-14: all three payload legs are unbridged (no
+-- SetHomePosition / leave-combat / aura-application bridges on the
+-- Lua creature object; the creature cast path has no
+-- spellEffectApplyAura delivery leg), and the trigger path
+-- (StartAttack's self-cast of the menagerie spells) is itself
+-- unported, so event 14 could never fire these IDs.
 -- spell_urom_frostbomb — AuraScript OnPeriodic (EFFECT_1 SPELL_AURA_
 -- PERIODIC_DAMAGE): heroic + IsInCombat gate -> caster CastSpell(
 -- target, SPELL_FROST_BUFFET 58025) — no AuraScript bridge (the
@@ -96,8 +105,9 @@ local function uromTargetDied(event, creature, victim)
 end
 
 -- C++ JustDied: Talk(SAY_DEATH) (the _JustDied bookkeeping has no
--- bridge — tharon_ja precedent; the DoCastSelf(SPELL_DEATH_SPELL)
--- leg has no cast bridge).
+-- bridge — tharon_ja precedent; the DoCastSelf(SPELL_DEATH_SPELL
+-- 50415, true) leg stays out — no SPELL_EFFECT_SUMMON delivery leg
+-- on the engine's creature-cast path, shazzrah precedent).
 local function uromDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end

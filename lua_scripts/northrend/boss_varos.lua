@@ -36,8 +36,9 @@
 -- tharon_ja precedent).
 -- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied bookkeeping
 -- has no bridge — tharon_ja precedent; the DoCast(me,
--- SPELL_DEATH_SPELL, true) leg has no cast bridge — the urom
--- precedent).
+-- SPELL_DEATH_SPELL 50415, true) leg STAYS OUT — the urom verdict:
+-- the triggered cast bridge exists, but the engine's creature-cast
+-- path has no SPELL_EFFECT_SUMMON (28) delivery leg).
 -- Unmodeled (no bridges — documented, not wired):
 -- InitializeAI — DoCast(me, SPELL_CENTRIFUGE_SHIELD 50053) gated
 -- on instance->GetBossState(DATA_DRAKOS) != DONE — no instance /
@@ -195,9 +196,10 @@ local function varosCombatEnd(event, creature)
 end
 
 -- C++ JustDied: _JustDied() + Talk(SAY_DEATH) + DoCast(me,
--- SPELL_DEATH_SPELL, true) — the _JustDied bookkeeping has no
--- bridge (tharon_ja precedent); the DoCast leg has no cast
--- bridge (urom precedent).
+-- SPELL_DEATH_SPELL 50415, true) — the _JustDied bookkeeping has no
+-- bridge (tharon_ja precedent); the DoCast leg stays out (urom
+-- verdict: no SPELL_EFFECT_SUMMON delivery leg on the engine's
+-- creature-cast path).
 local function varosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
