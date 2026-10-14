@@ -30,27 +30,76 @@
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_lady_deathwhisper" hits boss_lady_deathwhisper.cpp
 -- only (+ the loader decl/call lines); this clone carries no sql/
--- tree, so ScriptName bindings are DB-side by construction. No
--- deathwhisper lua existed.
+-- tree, so ScriptName bindings are DB-side by construction.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill
+-- (player-gated), 4 OnDied, 23 OnReset. Timers via CreateLuaEvent
+-- (GUID-keyed, cancelled on events 2/23); melee is engine-driven in Go.
 --
--- DOCUMENTED-BLOCKED (no registration beyond entries 36855 /
--- 38472 / 38485):
+-- DOCTRINE RETRACTION (2026-10-13): the earlier port of this file
+-- ported Talk arms only under the disproved "no-timer-bridge" doctrine.
+-- CreateLuaEvent is a real registered bridge
+-- (engine/scripting/runtime.go:798); timer-driven cast arms port on the
+-- maiden_of_virtue / moroes / curator / nightbane convention (see the
+-- marrowgar retraction this run). Phase/machine gating is the real
+-- blocker (the gothik precedent), not timers.
+--
+-- PORTED ARMS (C++-exact for all modeled arms):
+-- boss JustEngagedWith (:281-342): Talk(SAY_AGGRO 7) (:338), then
+--   DoCastSelf(SPELL_MANA_BARRIER 70842, true) TRIGGERED (:340); the
+--   CheckRequiredBosses evade branch, DoZoneInCombat,
+--   instance->SetBossState, scheduler.CancelGroup(GROUP_INTRO) and
+--   RemoveAurasDueToSpell(SHADOW_CHANNELING) legs have no bridge. The
+--   phase-independent scheduler seed ports: 10-min EVENT_BERSERK —
+--   DoCastSelf(SPELL_BERSERK 26662) non-triggered + Talk(SAY_BERSERK 15)
+--   (:296-300), one-shot. The phase-one scheduler seeds stay out:
+--   SummonWaveP1 (summon machine), Shadow Bolt / Death and Decay
+--   (random-target SelectTarget), Dominate Mind (random-target
+--   SelectTargetList + difficulty gate), DoImproveCultist (cross-creature
+--   machine) — see documented-only.
+-- npc_cult_fanatic (37890, icecrown_citadel.h:175) — C++ schedules in
+--   Reset() (:601-615); re-keyed to the add's own OnEnterCombat
+--   (summoned mid-combat with immediate AttackStart, boss JustSummoned
+--   :484-488; the scheduler only runs with a victim :663-668):
+--   SPELL_VAMPIRIC_MIGHT 70674 self-cast 17s/25s (:603);
+--   SPELL_SHADOW_CLEAVE 70670 victim-cast 12s/14s (:608);
+--   SPELL_NECROTIC_STRIKE 70659 victim-cast 10s/17s (:613) — all
+--   non-triggered. The SetValidator !UNIT_STATE_CASTING gate has no
+--   bridge (maiden precedent: timers fire unconditionally).
+-- npc_cult_adherent (37949, icecrown_citadel.h:178) — same Reset→engage
+--   re-key (:693-710): SPELL_DEATHCHILL 5s/2500ms victim-cast —
+--   entry-conditional DoCastVictim(SPELL_DEATHCHILL_BLAST 70906) when
+--   GetEntry() == 38136 else DoCastVictim(SPELL_DEATHCHILL_BOLT 70594)
+--   (:696-698); SPELL_SHROUD_OF_THE_OCCULT 70768 self-cast 15s/10s
+--   (:703) — all non-triggered. The empowered entry change rides the
+--   unbridged SpellHit leg (:717), so the Blast branch is dormant until
+--   that leg bridges — documented.
+-- npc_darnavan (38472/38485) — C++ Reset() EventMap (:838-844) re-keyed
+--   to OnEnterCombat: SPELL_BLADESTORM 65947 self-cast 10s/{90s,100s}
+--   (:912); SPELL_INTIMIDATING_SHOUT 65930 self-cast {20s,25s}/{90s,120s}
+--   (:919); SPELL_MORTAL_STRIKE 65926 victim-cast {25s,30s}/{15s,30s}
+--   (:923); SPELL_SUNDER_ARMOR 65936 victim-cast {5s,8s}/{3s,7s} (:930)
+--   — all non-triggered (DoCast 1-arg = self per UnitAI.cpp:113). The
+--   CHARGE / SHATTERING_THROW re-arm flags (:893-907) carry no casts —
+--   conditional legs, out.
+--
+-- DOCUMENTED-ONLY (registrations: 36855 / 37890 / 37949 / 38472 /
+-- 38485):
 -- boss_lady_deathwhisper DoAction(ACTION_START_INTRO) —
 -- Talk(SAY_INTRO_1 0) rides a DoAction leg with no bridge (the
 -- krick ACTION_OUTRO precedent); Talk(SAY_INTRO_2 1 .. SAY_INTRO_7
--- 6) ride the intro scheduler machine — timer-driven
--- (no-timer-bridge; the boss_toravon precedent).
+-- 6) ride the intro scheduler machine (intro machine — no bridge).
 -- boss_lady_deathwhisper JustEngagedWith scheduler legs —
--- Talk(SAY_BERSERK 15) rides a 10-minute scheduler task
--- (no-timer-bridge); Talk(SAY_DOMINATE_MIND 10) rides a scheduler
--- task with random-target SelectTargetList
--- (no-timer-bridge / no-random-target-SelectTarget queues);
--- SummonWaveP1 / Shadow Bolt / DoImproveCultist scheduler tasks
--- with Talk(SAY_DARK_EMPOWERMENT 11 / SAY_DARK_TRANSFORMATION 12)
--- (no-timer-bridge; DoCast legs have no-cast bridge); the
+-- Talk(SAY_BERSERK 15) is PORTED (10-min berserk timer, above);
+-- Talk(SAY_DOMINATE_MIND 10) rides a scheduler task with
+-- random-target SelectTargetList (no random-target bridge) and a
+-- difficulty gate (!= 10-man normal, :307); SummonWaveP1 /
+-- Shadow Bolt / DoImproveCultist scheduler tasks with
+-- Talk(SAY_DARK_EMPOWERMENT 11 / SAY_DARK_TRANSFORMATION 12) ride
+-- summon / random-target / cross-creature machines (no bridge); the
 -- CheckRequiredBosses / EnterEvadeMode / instance->DoCastSpellOnPlayers
 -- / DoZoneInCombat / instance->SetBossState legs have no instance
--- bridge.
+-- bridge. SPELL_DEATH_AND_DECAY 71001 (:303-305) rides a random-target
+-- SelectTarget leg (no bridge).
 -- boss_lady_deathwhisper DamageTaken — Talk(SAY_PHASE_2 8) +
 -- Talk(EMOTE_PHASE_2 9) ride the mana-power pct gate of the phase
 -- transition (no health-pct bridge; the garfrost precedent);
@@ -64,12 +113,16 @@
 -- another creature riding instance legs (no instance bridge).
 -- Talk(SAY_ANIMATE_DEAD 13) is called by
 -- ladyDeathwhisper->AI()->Talk from inside the npc_cult_fanatic /
--- npc_cult_adherent summon-death scheduler legs — timer-driven
--- (no-timer-bridge).
--- npc_cult_fanatic / npc_cult_adherent / npc_vengeful_shade — zero
--- own Talk lines; cast / shadow-bolt / transformation / feign-death
--- legs have no bridge — NOT registered (the bronjahm
--- npc_corrupted_soul_fragment precedent).
+-- npc_cult_adherent summon-death scheduler legs (SpellHit timer legs
+-- — no SpellHit bridge).
+-- npc_vengeful_shade (38222) — zero own Talk lines; the
+-- VengefulBlast passive / KillSelf / SpellHitTarget legs have no
+-- bridge — NOT registered (the bronjahm npc_corrupted_soul_fragment
+-- precedent). npc_cult_fanatic / npc_cult_adherent ARE registered
+-- (timer arms ported above); their SpellHit transformation /
+-- martyrdom legs (:617-660 / :712-752) stay out (no SpellHit bridge),
+-- as do the CURSE_OF_TORPOR random-target leg (:707-710) and the
+-- darnavan CHARGE / SHATTERING_THROW conditional legs (:893-907).
 -- spell_deathwhisper_mana_barrier /
 -- spell_deathwhisper_dominated_mind /
 -- spell_deathwhisper_vampiric_might join the no-AuraScript-bridge
@@ -78,24 +131,89 @@
 -- no-SpellScript-bridge queue.
 -- at_lady_deathwhisper_entrance joins the unbridged-area-trigger
 -- queue (the pit_of_saron cavern-triggers precedent).
--- All 19 Talk() calls in the file accounted for (19 = lady intro
--- 0-6 (7) + berserk 15 + dominate 10 + aggro 7 + death 16 + kill
--- 14 + phase-2 8 + emote 9 + dark 11/12 (1) + animate-dead 13 (2)
--- + darnavan rescued 1 (1) + darnavan aggro 0 (1)).
+-- All 19 Talk() calls in the file accounted for (19 = ported: lady
+-- aggro 7 + kill 14 + death 16 + berserk 15 + darnavan aggro 0;
+-- documented-only: intro 0-6 (7) + dominate 10 + phase-2 8 + emote 9
+-- + dark 11/12 (1) + animate-dead 13 (2) + darnavan rescued 1 (1)).
 
 local ENTRY_LADY_DEATHWHISPER = 36855
+local ENTRY_CULT_FANATIC = 37890 -- icecrown_citadel.h:175
+local ENTRY_CULT_ADHERENT = 37949 -- icecrown_citadel.h:178
+local ENTRY_EMPOWERED_ADHERENT = 38136 -- icecrown_citadel.h:179
 local ENTRY_DARNAVAN_10 = 38472
 local ENTRY_DARNAVAN_25 = 38485
 
 local SAY_AGGRO = 7
 local SAY_KILL = 14
 local SAY_DEATH = 16
+local SAY_BERSERK = 15
 local SAY_DARNAVAN_AGGRO = 0
 
--- C++ boss_lady_deathwhisper::JustEngagedWith: Talk(SAY_AGGRO) — the
--- auriaya engage-port precedent.
+local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
+local SPELL_MANA_BARRIER = 70842
+local SPELL_VAMPIRIC_MIGHT = 70674
+local SPELL_SHADOW_CLEAVE = 70670
+local SPELL_NECROTIC_STRIKE = 70659
+local SPELL_DEATHCHILL_BOLT = 70594
+local SPELL_DEATHCHILL_BLAST = 70906
+local SPELL_SHROUD_OF_THE_OCCULT = 70768
+local SPELL_BLADESTORM = 65947
+local SPELL_INTIMIDATING_SHOUT = 65930
+local SPELL_MORTAL_STRIKE = 65926
+local SPELL_SUNDER_ARMOR = 65936
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+-- bronjahm-style: re-scheduling a key replaces the pending timer, so each
+-- named arm has exactly one live timer at a time.
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ :296-300 phase-independent scheduler: DoCastSelf(SPELL_BERSERK)
+-- non-triggered + Talk(SAY_BERSERK 15) — 10min one-shot.
+local function onBerserk(creature, guid)
+    creature:CastSpell(creature, SPELL_BERSERK)
+    creature:Talk(SAY_BERSERK)
+end
+
+-- C++ boss_lady_deathwhisper::JustEngagedWith (:281-342): the
+-- CheckRequiredBosses evade branch has no bridge; the phase-one
+-- scheduler seeds (SummonWaveP1 / Shadow Bolt / DoImproveCultist) stay
+-- out (summon / random-target / cross-creature machines). Talk(SAY_AGGRO)
+-- (:338) then DoCastSelf(SPELL_MANA_BARRIER, true) TRIGGERED (:340).
 local function deathwhisperJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    creature:CastSpell(creature, SPELL_MANA_BARRIER, true)
+    schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
+end
+
+local function deathwhisperLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function deathwhisperReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_lady_deathwhisper::KilledUnit:
@@ -107,20 +225,139 @@ local function deathwhisperKilledUnit(event, creature, victim)
     end
 end
 
--- C++ boss_lady_deathwhisper::JustDied: Talk(SAY_DEATH) — the
--- sjonnir JustDied-Talk precedent.
+-- C++ boss_lady_deathwhisper::JustDied: Talk(SAY_DEATH) — the sjonnir
+-- JustDied-Talk precedent.
 local function deathwhisperJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
--- C++ npc_darnavan::JustEngagedWith: Talk(SAY_DARNAVAN_AGGRO) —
--- the auriaya engage-port precedent.
+-- C++ npc_cult_fanatic Reset() scheduler (:601-615), re-keyed to the
+-- add's own OnEnterCombat (summoned mid-combat with immediate AttackStart,
+-- boss JustSummoned :484-488; the scheduler only runs with a victim
+-- :663-668). All three arms non-triggered; the SetValidator
+-- !UNIT_STATE_CASTING gate has no bridge (maiden precedent).
+local function onVampiricMight(creature, guid)
+    creature:CastSpell(creature, SPELL_VAMPIRIC_MIGHT)
+    schedule(guid, "vampiric", 25000, function() onVampiricMight(creature, guid) end)
+end
+
+local function onShadowCleave(creature, guid)
+    creature:CastSpell(nil, SPELL_SHADOW_CLEAVE)
+    schedule(guid, "cleave", 14000, function() onShadowCleave(creature, guid) end)
+end
+
+local function onNecroticStrike(creature, guid)
+    creature:CastSpell(nil, SPELL_NECROTIC_STRIKE)
+    schedule(guid, "strike", 17000, function() onNecroticStrike(creature, guid) end)
+end
+
+local function fanaticEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "vampiric", 17000, function() onVampiricMight(creature, guid) end)
+    schedule(guid, "cleave", 12000, function() onShadowCleave(creature, guid) end)
+    schedule(guid, "strike", 10000, function() onNecroticStrike(creature, guid) end)
+end
+
+local function fanaticLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function fanaticReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_cult_adherent Reset() scheduler (:693-710), same re-key.
+local function onDeathchill(creature, guid)
+    -- C++ :696-698 — entry-conditional: the empowered adherent casts the
+    -- Blast variant, otherwise the Bolt. The entry change rides the
+    -- unbridged SpellHit leg (:717), so the Blast branch is dormant
+    -- until that leg bridges.
+    if creature:GetEntry() == ENTRY_EMPOWERED_ADHERENT then
+        creature:CastSpell(nil, SPELL_DEATHCHILL_BLAST)
+    else
+        creature:CastSpell(nil, SPELL_DEATHCHILL_BOLT)
+    end
+    schedule(guid, "deathchill", 2500, function() onDeathchill(creature, guid) end)
+end
+
+local function onShroudOfTheOccult(creature, guid)
+    creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
+    schedule(guid, "shroud", 10000, function() onShroudOfTheOccult(creature, guid) end)
+end
+
+local function adherentEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "deathchill", 5000, function() onDeathchill(creature, guid) end)
+    schedule(guid, "shroud", 15000, function() onShroudOfTheOccult(creature, guid) end)
+end
+
+local function adherentLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function adherentReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_darnavan::JustEngagedWith: Talk(SAY_DARNAVAN_AGGRO) — the
+-- auriaya engage-port precedent. The Reset() EventMap (:838-844) is
+-- re-keyed to OnEnterCombat: all four arms non-triggered (DoCast 1-arg
+-- = self per UnitAI.cpp:113). The CHARGE / SHATTERING_THROW re-arm
+-- flags (:893-907) carry no casts — conditional legs, out.
+local function onDarnavanBladestorm(creature, guid)
+    creature:CastSpell(creature, SPELL_BLADESTORM)
+    schedule(guid, "bladestorm", {90000, 100000}, function() onDarnavanBladestorm(creature, guid) end)
+end
+
+local function onDarnavanShout(creature, guid)
+    creature:CastSpell(creature, SPELL_INTIMIDATING_SHOUT)
+    schedule(guid, "shout", {90000, 120000}, function() onDarnavanShout(creature, guid) end)
+end
+
+local function onDarnavanMortalStrike(creature, guid)
+    creature:CastSpell(nil, SPELL_MORTAL_STRIKE)
+    schedule(guid, "mortal", {15000, 30000}, function() onDarnavanMortalStrike(creature, guid) end)
+end
+
+local function onDarnavanSunderArmor(creature, guid)
+    creature:CastSpell(nil, SPELL_SUNDER_ARMOR)
+    schedule(guid, "sunder", {3000, 7000}, function() onDarnavanSunderArmor(creature, guid) end)
+end
+
 local function darnavanJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     creature:Talk(SAY_DARNAVAN_AGGRO)
+    schedule(guid, "bladestorm", 10000, function() onDarnavanBladestorm(creature, guid) end)
+    schedule(guid, "shout", {20000, 25000}, function() onDarnavanShout(creature, guid) end)
+    schedule(guid, "mortal", {25000, 30000}, function() onDarnavanMortalStrike(creature, guid) end)
+    schedule(guid, "sunder", {5000, 8000}, function() onDarnavanSunderArmor(creature, guid) end)
+end
+
+local function darnavanLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function darnavanReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 1, deathwhisperJustEngagedWith)
+RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 2, deathwhisperLeaveCombat)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 3, deathwhisperKilledUnit)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 4, deathwhisperJustDied)
+RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 23, deathwhisperReset)
+RegisterCreatureEvent(ENTRY_CULT_FANATIC, 1, fanaticEnterCombat)
+RegisterCreatureEvent(ENTRY_CULT_FANATIC, 2, fanaticLeaveCombat)
+RegisterCreatureEvent(ENTRY_CULT_FANATIC, 23, fanaticReset)
+RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 1, adherentEnterCombat)
+RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 2, adherentLeaveCombat)
+RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 23, adherentReset)
 RegisterCreatureEvent(ENTRY_DARNAVAN_10, 1, darnavanJustEngagedWith)
+RegisterCreatureEvent(ENTRY_DARNAVAN_10, 2, darnavanLeaveCombat)
+RegisterCreatureEvent(ENTRY_DARNAVAN_10, 23, darnavanReset)
 RegisterCreatureEvent(ENTRY_DARNAVAN_25, 1, darnavanJustEngagedWith)
+RegisterCreatureEvent(ENTRY_DARNAVAN_25, 2, darnavanLeaveCombat)
+RegisterCreatureEvent(ENTRY_DARNAVAN_25, 23, darnavanReset)

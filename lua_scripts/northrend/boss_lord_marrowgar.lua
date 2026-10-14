@@ -28,7 +28,25 @@
 -- the loader decl/call lines); this clone carries no sql/ tree, so
 -- ScriptName bindings are DB-side by construction. No marrowgar lua
 -- existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnKill (player-gated), 4 OnDied.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill
+-- (player-gated), 4 OnDied, 23 OnReset. Timers via CreateLuaEvent
+-- (GUID-keyed, cancelled on events 2/4/23); melee is engine-driven in Go
+-- (creature combat tick), like C++ DoMeleeAttackIfReady (:276).
+--
+-- DOCTRINE RETRACTION (2026-10-13): the earlier port of this file
+-- treated the whole EventMap machine as unbridgeable under the
+-- "no-timer-bridge" doctrine and ported Talk arms only. That doctrine is
+-- disproved and stale — CreateLuaEvent is a real registered bridge
+-- (engine/scripting/runtime.go:798), and timer-driven cast arms port on
+-- the maiden_of_virtue / moroes / curator / nightbane convention:
+-- timers table keyed by creature GUID, cancelled on Eluna events 2
+-- (leave combat), 4 (death), 23 (reset); CastSpell(nil, spellId) =
+-- victim-cast (bridge falls back to TargetGUID); CastSpell(creature,
+-- spellId) = self-cast (the DoCastAOE convention, boss_ai.go DoCastAOE);
+-- CastSpell(target, spellId) = explicit-target cast; TRIGGERED casts pass
+-- true as the third CastSpell arg. Phase/machine gating is the real
+-- blocker (the gothik precedent), not timers.
+--
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_lord_marrowgar JustEngagedWith — Talk(SAY_AGGRO 1) (event 1 —
 -- the auriaya engage-port precedent; the me->setActive(true),
@@ -42,6 +60,11 @@
 -- boss_lord_marrowgar JustDied — Talk(SAY_DEATH 5) (event 4 — the
 -- sjonnir JustDied-Talk precedent; the _JustDied BossAI helper has
 -- no bridge by construction). Melee engine-driven.
+-- boss_lord_marrowgar UpdateAI EVENT_ENRAGE (:261-263) — DoCast(me,
+-- SPELL_BERSERK 26662, true) + Talk(SAY_BERSERK 6), cast-before-Talk
+-- kept; 10min one-shot seeded on engage, no phase/machine/random-
+-- target gates (the festergut/rotface/putricide/sindragosa berserk
+-- precedent; TRIGGERED self-cast).
 -- DOCUMENTED-ONLY (in this header; only entry 36612 registered):
 -- npc_coldflame (36672) and npc_bone_spike (36619) expose zero own
 -- Talk lines in their classes; their legs (IsSummonedBy
@@ -50,22 +73,28 @@
 -- PassengerBoarded spline leg, DATA_BONED_ACHIEVEMENT instance
 -- SetData leg) have no bridges — not registered (the bronjahm
 -- npc_corrupted_soul_fragment precedent).
--- boss_lord_marrowgar Reset scheduler legs — EVENT_ENABLE_BONE_SLICE
--- / EVENT_BONE_SPIKE_GRAVEYARD / EVENT_COLDFLAME /
--- EVENT_WARN_BONE_STORM / EVENT_ENRAGE — no-timer-bridge queue (the
--- boss_toravon precedent); the aura-removal / speed-rate legs have
--- no bridge.
--- boss_lord_marrowgar UpdateAI — the whole EventMap machine — no
--- bridges: EVENT_WARN_BONE_STORM legs carry Talk(EMOTE_BONE_STORM 7)
--- and the SPELL_BONE_STORM self-cast; EVENT_BONE_STORM_BEGIN carries
+-- boss_lord_marrowgar Reset scheduler legs (:148-152) — only
+-- EVENT_ENRAGE ports (above); EVENT_ENABLE_BONE_SLICE /
+-- EVENT_BONE_SPIKE_GRAVEYARD / EVENT_COLDFLAME / EVENT_WARN_BONE_STORM
+-- stay out (see UpdateAI). The RemoveAurasDueToSpell(SPELL_BONE_STORM
+-- 69076 / SPELL_BERSERK 26662) (:145-146) and speed-rate legs have no
+-- bridge — documented deviation, consistent with the other berserk
+-- ports (sindragosa/festergut/rotface/putricide).
+-- boss_lord_marrowgar UpdateAI — the EventMap machine: arms with
+-- unbridged phase/machine legs stay out (the gothik precedent).
+-- EVENT_WARN_BONE_STORM legs carry Talk(EMOTE_BONE_STORM 7)
+-- and the SPELL_BONE_STORM self-cast but enter the bone-storm phase
+-- machine (DelayEvents, schedules BEGIN, speed/move legs);
+-- EVENT_BONE_STORM_BEGIN carries
 -- Talk(SAY_BONE_STORM 2), aura-duration and 3x speed legs;
 -- EVENT_BONE_STORM_MOVE carries random-NonTank SelectTarget +
 -- MovePoint legs (no-random-target-SelectTarget / no-motion
 -- queues); EVENT_BONE_STORM_END carries movement removal,
 -- MoveChase and event-reschedule legs; EVENT_BONE_SPIKE_GRAVEYARD /
--- EVENT_COLDFLAME carry DoCast / DoCastAOE legs (no-cast bridge);
--- EVENT_ENRAGE carries DoCast SPELL_BERSERK + Talk(SAY_BERSERK 6) —
--- all timer-driven (no-timer-bridge); the UNIT_STATE_CASTING gate,
+-- EVENT_COLDFLAME carry DoCast / DoCastAOE legs but both summon
+-- npc_bone_spike / npc_coldflame (vehicle/passenger/spline machines,
+-- no summon bridge); EVENT_ENRAGE is PORTED (ungated one-shot, above);
+-- the UNIT_STATE_CASTING gate,
 -- bone-storm-aura gate, bone-slice DoCastVictim legs and
 -- DoMeleeAttackIfReady have no bridge. JustReachedHome
 -- instance-SetBossState(FAIL) and DATA_BONED_ACHIEVEMENT-reset legs
@@ -83,20 +112,67 @@
 -- spell_marrowgar_bone_storm / spell_marrowgar_bone_slice join the
 -- no-SpellScript-bridge queue, and spell_marrowgar_coldflame_damage
 -- joins the no-AuraScript-bridge queue.
--- All 8 Talk() calls in the file accounted for (8 = aggro 1 + kill
--- 4 + death 5 + enter-zone 0 + bone-storm 2 + bonespike 3 +
--- berserk 6 + emote-bone-storm 7).
+-- All 8 Talk() calls in the file accounted for (8 = ported: aggro 1
+-- + kill 4 + death 5 + berserk 6; documented-only: enter-zone 0 +
+-- bone-storm 2 + bonespike 3 + emote-bone-storm 7).
 
 local ENTRY_LORD_MARROWGAR = 36612
 
 local SAY_AGGRO = 1
 local SAY_KILL = 4
 local SAY_DEATH = 5
+local SAY_BERSERK = 6
+
+local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ :261-263 EVENT_ENRAGE: DoCast(me, SPELL_BERSERK, true) +
+-- Talk(SAY_BERSERK 6) — 10min one-shot, no phase/machine/random-target
+-- gates (the festergut/rotface/putricide/sindragosa berserk precedent);
+-- TRIGGERED self-cast, cast-before-Talk kept.
+local function onEnrage(creature, guid)
+    creature:CastSpell(creature, SPELL_BERSERK, true)
+    creature:Talk(SAY_BERSERK)
+end
 
 -- C++ boss_lord_marrowgar::JustEngagedWith: Talk(SAY_AGGRO) — the
--- auriaya engage-port precedent.
+-- auriaya engage-port precedent. The EventMap seeds (:148-152) —
+-- only EVENT_ENRAGE ports (the rest are summon/phase-machine legs).
 local function marrowgarJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "enrage", 600000, function() onEnrage(creature, guid) end)
+end
+
+-- C++ Reset() event machinery — cancel/re-arm on combat events (the
+-- maiden convention).
+local function marrowgarLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function marrowgarReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_lord_marrowgar::KilledUnit:
@@ -115,5 +191,7 @@ local function marrowgarJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 1, marrowgarJustEngagedWith)
+RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 2, marrowgarLeaveCombat)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 3, marrowgarKilledUnit)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 4, marrowgarJustDied)
+RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 23, marrowgarReset)
