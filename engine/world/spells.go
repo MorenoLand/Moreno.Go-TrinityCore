@@ -22172,7 +22172,10 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 // (talents) applies first via the spellmod owner; then haste compression —
 // channeled auras route through ModSpellDurationTime (Object.cpp:2475-2495:
 // SPELLMOD_CASTING_TIME then the UNIT_MOD_CAST_SPEED multiply; channeled
-// without ATTR5_HASTE_AFFECT_DURATION early-returns with no compression),
+// without ATTR5_HASTE_AFFECT_DURATION early-returns with no compression, and
+// the multiply itself is gated on !(ABILITY || TRADESPELL || NO_DONE_BONUS)
+// with a SpellFamilyName for player casters (Object.cpp:2488-2494; the
+// REQ_AMMO ranged-attack-speed arm has no Go model),
 // and non-channeled auras carrying ATTR5_HASTE_AFFECT_DURATION or affected
 // by a SPELL_AURA_PERIODIC_HASTE (316) aura on the caster
 // (HasAuraTypeWithAffectMask, Unit.cpp:4689) multiply by
@@ -22189,11 +22192,22 @@ func (s *session) foldPeriodicPeriod(spell wotlk.Spell, eff wotlk.SpellEffect) u
 		periodMs = uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
 		if isChanneledSpell(spell) {
 			if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 {
+				// WorldObject::ModSpellDurationTime (Object.cpp:2475-2500):
+				// SPELLMOD_CASTING_TIME applies on the spellmod owner for
+				// every channeled + ATTR5_HASTE_AFFECT_DURATION spell; the
+				// UNIT_MOD_CAST_SPEED compression after it is gated on
+				// !(ATTR0_ABILITY || ATTR0_TRADESPELL ||
+				// ATTR3_NO_DONE_BONUS) with a SpellFamilyName for player
+				// casters (the REQ_AMMO ranged-attack-speed arm has no Go
+				// model).
 				if modded := s.applySpellMod(spell, spellModCastingTime, int32(periodMs)); modded > 0 {
 					periodMs = uint32(modded)
 				}
-				if hastePct := s.getSpellHastePct(); hastePct > 0 {
-					periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
+				if spell.Attributes&spellAttr0Ability == 0 && spell.Attributes&spellAttr0Tradespell == 0 &&
+					spell.AttributesEx3&spellAttr3NoDoneBonus == 0 && spell.SpellFamilyName != 0 {
+					if hastePct := s.getSpellHastePct(); hastePct > 0 {
+						periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
+					}
 				}
 			}
 		} else if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell) {
