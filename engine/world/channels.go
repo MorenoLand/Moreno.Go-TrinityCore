@@ -1541,26 +1541,33 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 		ownerTransferred = true
 	}
 	members := s.server.channelMembersSnapshot(ch)
-	channelFlags, channelID := ch.Flags, ch.ID
 	s.server.channelsMu.Unlock()
 	notice := channelPlayerKickedNotice
 	if ban && !alreadyBanned {
 		notice = channelPlayerBannedNotice
 	}
-	// Reference: Channel::KickOrBan (Channel.cpp) - the kicked/banned
+	// Reference: Channel::KickOrBan (Channel.cpp:341-352) - the kicked/banned
 	// broadcast is suppressed when the acting session holds
 	// RBAC_PERM_SILENTLY_JOIN_CHANNEL; the removal itself always runs.
 	if !s.silentlyJoinChannel() {
 		_ = target.sendChannelNotify(notice, name, &channelNotifyTwoGUID{Victim: victimGUID, Moderator: s.playerGUID})
 		for _, m := range members {
 			_ = m.sendChannelNotify(notice, name, &channelNotifyTwoGUID{Victim: victimGUID, Moderator: s.playerGUID})
-			if ownerTransferred {
-				_ = m.sendChannelNotify(channelModeChangeNotice, name, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: oldFlags, NewFlags: newFlags})
-				_ = m.sendChannelNotify(channelOwnerChangedNotice, name, &channelNotifyGUID{GUID: s.playerGUID})
-			}
 		}
 	}
-	_ = target.sendChannelNotify(channelYouLeftNotice, name, &channelNotifyChannel{Flags: channelFlags, ID: channelID})
+	// Reference: Channel::SetOwner (Channel.cpp:777-805, exclaim defaults
+	// true) - the mode-change + owner-changed broadcasts are NOT gated on
+	// RBAC_PERM_SILENTLY_JOIN_CHANNEL; they always fire to every remaining
+	// member. KickOrBan likewise never sends a you-left notice to the
+	// kicked/banned target - bad->LeftChannel (Player.cpp:5178) is a silent
+	// server-side list removal; the victim gets the PlayerKicked/PlayerBanned
+	// notice only.
+	if ownerTransferred {
+		for _, m := range members {
+			_ = m.sendChannelNotify(channelModeChangeNotice, name, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: oldFlags, NewFlags: newFlags})
+			_ = m.sendChannelNotify(channelOwnerChangedNotice, name, &channelNotifyGUID{GUID: s.playerGUID})
+		}
+	}
 	return true
 }
 
