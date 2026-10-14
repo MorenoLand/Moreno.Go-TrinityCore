@@ -72,8 +72,7 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT t.Id, COALESCE(t.Type, 0), COALESCE(t.Requirement, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
 		FROM trainer AS t
 		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
-		   OR t.Id = ?
-		LIMIT 1`, creatureEntry, creatureEntry).Scan(&trainerID, &tType, &tReq, &greet)
+		LIMIT 1`, creatureEntry).Scan(&trainerID, &tType, &tReq, &greet)
 	if err == nil {
 		foundTrainer = true
 		if greet.Valid && greet.String != "" {
@@ -359,8 +358,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	var foundTrainer bool
 	err = wdb.QueryRowContext(ctx, `SELECT t.Id, COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
 		FROM trainer AS t
-		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
-		   OR t.Id = ? LIMIT 1`, creatureEntry, creatureEntry).Scan(&trainerID, &tType, &tReq)
+		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?) LIMIT 1`, creatureEntry).Scan(&trainerID, &tType, &tReq)
 	if err == nil {
 		foundTrainer = true
 		if !s.isTrainerValidForPlayer(uint32(tType), uint32(tReq)) {
@@ -894,8 +892,7 @@ func (s *session) canResetTalents(ctx context.Context, trainerGUID uint64) bool 
 	var tType, tReq int64
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
 		FROM trainer AS t
-		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
-		   OR t.Id = ? LIMIT 1`, creatureEntry, creatureEntry).Scan(&tType, &tReq); err != nil {
+		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?) LIMIT 1`, creatureEntry).Scan(&tType, &tReq); err != nil {
 		return false
 	}
 	if tType != 0 { // Trainer::Type::Class (Trainer.h:33)
@@ -933,8 +930,7 @@ func (s *session) canResetPetTalents(ctx context.Context, trainerGUID uint64) bo
 	var tType, tReq int64
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
 		FROM trainer AS t
-		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
-		   OR t.Id = ? LIMIT 1`, creatureEntry, creatureEntry).Scan(&tType, &tReq); err != nil {
+		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?) LIMIT 1`, creatureEntry).Scan(&tType, &tReq); err != nil {
 		return false
 	}
 	if tType != 3 { // Trainer::Type::Pet (Trainer.h:36)
