@@ -119,13 +119,19 @@ end
 -- DoCast(target, SPELL_TRUE_FULFILLMENT), init 15000 ->
 -- urand(20000,30000). Random-player pick via GetPlayersInWorld
 -- filtered map/instance/alive + 45.0f (C++ SelectTarget Random 1,
--- 45.0f, true).
+-- 45.0f, true). The C++ position=1 arm skips the first entry in
+-- MaxThreat order (the current victim/tank, UnitAI.h:162-163)
+-- before the player/range predicate, so the tank is excluded
+-- here via GetVictim (malchezaar precedent); threat-list-empty
+-- no-cast falls out of the empty-candidates arm.
 local function onTrueFulfillment(creature, guid)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local cands = {}
     for _, p in ipairs(GetPlayersInWorld()) do
         if p and p:IsAlive() and p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and creature:IsWithinDist(p, 45.0) then
+                and creature:IsWithinDist(p, 45.0) and p:GetGUID() ~= victimGuid then
             cands[#cands + 1] = p
         end
     end
