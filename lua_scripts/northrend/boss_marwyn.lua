@@ -1,65 +1,234 @@
 -- Marwyn (Halls of Reflection) — Lua port of
 -- src/server/scripts/Northrend/FrozenHalls/HallsOfReflection/boss_marwyn.cpp
--- (2 scripts — boss_marwyn (CreatureScript via boss_horAI (custom
--- HallsOfReflection base AI wrapping GetHallsOfReflectionAI),
--- DATA_MARWYN = 1) + spell_marwyn_shared_suffering (SpellScriptLoader,
--- AuraScript hook); both registered from inside AddSC_boss_marwyn();
--- loader decl 169 / call 364 per northrend_script_loader.cpp — the
--- FOURTH and LAST group of the "// Halls of Reflection" block in
--- AddNorthrendScripts(), immediately after AddSC_boss_falric() (call
--- 363) — verified from the loader this run; the checkpoint sequence
--- (boss_falric -> boss_marwyn) is followed; the block CLOSES here).
+-- (178 lines incl. license; 2 scripts — boss_marwyn (CreatureScript via
+-- boss_horAI, DATA_MARWYN = 1) + spell_marwyn_shared_suffering
+-- (SpellScriptLoader, AuraScript AfterEffectRemove); both registered
+-- from inside AddSC_boss_marwyn(); loader decl 169 / call 364 per
+-- northrend_script_loader.cpp — the FOURTH and LAST group of the
+-- "// Halls of Reflection" block in AddNorthrendScripts(), immediately
+-- after AddSC_boss_falric() (call 363); the next call is
+-- AddSC_boss_lord_marrowgar() (the "// Icecrown Citadel" block) — the
+-- block CLOSES here).
 -- Entry: 38113 Marwyn (halls_of_reflection.h NPC_MARWYN, line 72;
--- instance_halls_of_reflection.cpp OnCreatureCreate binds case
--- NPC_MARWYN, line 133) — entry-verifiable, registration proceeds (the
--- nexus_commanders kalecgos precedent); the CreatureScript ScriptName
--- binding is DB-side as usual.
+-- DATA_MARWYN = 1, halls_of_reflection.h line 38; instance binding is
+-- DB-side as usual).
 -- Sole-source verified: whole-server-tree grep for "AddSC_boss_marwyn"
 -- hits boss_marwyn.cpp only (+ the loader decl/call lines); this clone
 -- carries no sql/ tree, so ScriptName bindings are DB-side by
--- construction. No marwyn lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnKill (player-gated), 4 OnDied.
--- Ported arms (C++-exact for all modeled arms):
--- boss_marwyn JustEngagedWith — Talk(SAY_AGGRO 0) (event 1 — the auriaya
--- engage-port precedent; the DoZoneInCombat, instance->SetBossState
--- IN_PROGRESS and four ScheduleEvent legs have no bridge).
--- boss_marwyn KilledUnit — Talk(SAY_SLAY 1) player-gated (event 3 — the
--- razuvious player-gated variant precedent; the eleventh ported
--- variant, ninth identical to
--- nalorakk/kelthuzad/gothik/thaddius/garfrost/krick/tyrannus/falric).
--- boss_marwyn JustDied — Talk(SAY_DEATH 2) (event 4 — the sjonnir
--- JustDied-Talk precedent; the events.Reset and instance->SetBossState
--- DONE legs have no bridge). Melee engine-driven.
--- DOCUMENTED-ONLY (in this header; only entry 38113 registered):
--- boss_marwyn Reset — boss_horAI::Reset passthrough — no bridge by
 -- construction.
--- boss_marwyn JustEngagedWith scheduler legs — EVENT_OBLITERATE 8s-13s
--- / EVENT_WELL_OF_CORRUPTION 12s / EVENT_CORRUPTED_FLESH 20s /
--- EVENT_SHARED_SUFFERING 14s-15s — no-timer-bridge queue (the
--- boss_toravon precedent).
--- boss_marwyn UpdateAI — the whole EventMap machine (OBLITERATE
--- victim-cast; WELL_OF_CORRUPTION / SHARED_SUFFERING random-target
--- casts; CORRUPTED_FLESH AoE with Talk(SAY_CORRUPTED_FLESH 3) riding the
--- timer leg) — no-timer-bridge / no-random-target-SelectTarget queues;
--- the UNIT_STATE_CASTING gate, DoCast / DoCastVictim / DoCastAOE and
--- DoMeleeAttackIfReady legs have no bridge.
--- spell_marwyn_shared_suffering (AuraScript — AfterEffectRemove
--- remaining-damage forward to SPELL_SHARED_SUFFERING_DISPEL 72373) —
--- no-AuraScript bridge (the boss_moragg optic-link precedent).
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill,
+-- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent ({min,max} table =
+-- randtime range); melee is engine-driven in Go (creature combat tick),
+-- like C++ DoMeleeAttackIfReady (:125).
+--
+-- DOCTRINE RETRACTION (2026-10-13): the Oct-13 port of this file treated
+-- the whole EventMap machine as unbridgeable under the "no-timer-bridge"
+-- doctrine and ported Talk arms only. That doctrine is disproved and
+-- stale — CreateLuaEvent is a real registered bridge
+-- (engine/scripting/runtime.go:1101), and timer-driven cast arms port on
+-- the maiden_of_virtue / moroes / curator / nightbane convention:
+-- timers table keyed by creature GUID, cancelled on Eluna events 2
+-- (leave combat), 4 (death), 23 (reset); CastSpell(nil, spellId) =
+-- victim-cast (bridge falls back to TargetGUID); CastSpell(creature,
+-- spellId) = self-cast (the DoCastAOE convention); CastSpell(target,
+-- spellId) = explicit-target cast; {min,max} delay = randtime range;
+-- TRIGGERED casts pass true as the third CastSpell arg. None of the
+-- ported arms here is a TRIGGERED cast (every C++ DoCast is 1-2 arg,
+-- non-triggered).
+--
+-- PORTED ARMS (C++ line refs; all C++-exact for the modeled arms):
+-- JustEngagedWith (:65-74) — Talk(SAY_AGGRO 0) (:67); seeds
+--   EVENT_OBLITERATE {8000,13000}ms (:71), EVENT_WELL_OF_CORRUPTION
+--   12000ms (:72), EVENT_CORRUPTED_FLESH 20000ms (:73),
+--   EVENT_SHARED_SUFFERING {14000,15000}ms (:74).
+-- EVENT_OBLITERATE (:102-105) — DoCastVictim(SPELL_OBLITERATE 72360)
+--   non-triggered; CastSpell(nil, ...) is the victim-cast convention;
+--   re-arm {8000,13000}ms (:104).
+-- EVENT_WELL_OF_CORRUPTION (:106-110) — SelectTarget(Random, 0, 100.0f,
+--   true): random alive player WITHIN 100 yd (creature:IsWithinDist is
+--   the bridged distance check — the maiden / kiljaeden precedent);
+--   if found, DoCast(target, SPELL_WELL_OF_CORRUPTION 72362)
+--   non-triggered; re-arm 13000ms unconditional (:109, outside the
+--   target-if).
+-- EVENT_CORRUPTED_FLESH (:111-115) — Talk(SAY_CORRUPTED_FLESH 3) (:112)
+--   fires UNCONDITIONALLY in C++; DoCastAOE(SPELL_CORRUPTED_FLESH
+--   72363) is self-cast non-triggered (:113); re-arm 20000ms (:114).
+-- EVENT_SHARED_SUFFERING (:116-120) — SelectTarget(Random, 0, 0.0f,
+--   true): random alive player, 0.0f = no distance filter (the
+--   keleseth / thorim / garfrost GetPlayersInWorld precedent); if
+--   found, DoCast(target, SPELL_SHARED_SUFFERING 72368) non-triggered;
+--   re-arm {14000,15000}ms unconditional (:119, outside the target-if).
+-- KilledUnit (:84-88) — Talk(SAY_SLAY 1) player-gated (:87), the
+--   razuvious player-gated variant precedent.
+-- JustDied (:77-82) — Talk(SAY_DEATH 2) (:79) unconditional, the
+--   sjonnir JustDied-Talk precedent; events.Reset (:80) = timer
+--   cancellation (initState).
+--
+-- DOCUMENTED-ONLY (no registration beyond entry 38113):
+-- Reset (:60-63) — boss_horAI::Reset passthrough (see below).
+-- boss_horAI base (boss_horAI.h:27-33 / boss_horAI.cpp) — the
+--   ctor/Reset/DoAction/JustSummoned passthroughs have no bridge; none
+--   carries Marwyn-specific logic.
+-- JustEngagedWith :68 DoZoneInCombat — no bridge.
+-- JustEngagedWith :69 / JustDied :81 instance->SetBossState
+--   (DATA_MARWYN, IN_PROGRESS / DONE) — no instance-state bridge.
+-- UpdateAI :97 me->HasUnitState(UNIT_STATE_CASTING) gate — no
+--   unit-state bridge; timers fire unconditionally (the maiden
+--   precedent; creature casts are packet-visual in Go).
+-- UpdateAI :125 DoMeleeAttackIfReady — engine-driven in Go, no bridge
+--   needed.
+-- spell_marwyn_shared_suffering (:141-168, SpellScriptLoader:
+--   AfterEffectRemove on EFFECT_0 SPELL_AURA_PERIODIC_DAMAGE
+--   (:164) — on AURA_REMOVE_BY_ENEMY_SPELL the remaining
+--   damage (amount * remainingTicks) is forwarded as a TRIGGERED cast
+--   of SPELL_SHARED_SUFFERING_DISPEL 72373 with
+--   SPELLVALUE_BASE_POINT1 = remainingDamage (:150-159)) — no
+--   AuraScript bridge (the boss_moragg optic-link precedent), stays in
+--   the standing queue.
+--
+-- DEVIATIONS FROM C++ (documented; every other value C++-exact):
+-- Random-target helper: GetPlayersInWorld alive-player scan on the same
+--   map/instance (the keleseth / thorim precedent); C++ applies no
+--   threat-order weighting and playerOnly = true, so the pool is every
+--   alive player — no approximation beyond the C++ select rules.
+-- No-qualifier corner: with zero qualifying players the C++ target-if
+--   skips Talk + cast but still re-arms (:109/:119 outside the if) —
+--   replicated: re-arm runs even when no target qualifies.
+-- UNIT_STATE_CASTING gate (see documented-only): timers fire
+--   unconditionally like the maiden precedent; two arms firing on the
+--   same tick both cast, where C++ would serialize them.
 
 local ENTRY_MARWYN = 38113
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
+local SAY_CORRUPTED_FLESH = 3
 
--- C++ boss_marwynAI::JustEngagedWith: Talk(SAY_AGGRO) — the auriaya
--- engage-port precedent.
-local function marwynJustEngagedWith(event, creature, target)
-    creature:Talk(SAY_AGGRO)
+local SPELL_OBLITERATE = 72360
+local SPELL_WELL_OF_CORRUPTION = 72362
+local SPELL_CORRUPTED_FLESH = 72363
+local SPELL_SHARED_SUFFERING = 72368
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
 end
 
--- C++ boss_marwynAI::KilledUnit: if (who->GetTypeId() != TYPEID_PLAYER)
+-- bronjahm-style: re-scheduling a key replaces the pending timer, so each
+-- named arm has exactly one live timer at a time.
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function initState(guid)
+    cancelTimers(guid)
+end
+
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, 0.0f, true) — random
+-- alive player on the same map/instance; no distance filter (0.0f) —
+-- the keleseth / thorim / garfrost GetPlayersInWorld precedent.
+local function randomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- Same pool with a distance filter (creature:IsWithinDist is the
+-- bridged distance check — the maiden / kiljaeden precedent); used for
+-- the 100.0f WELL_OF_CORRUPTION target.
+local function randomPlayerInRange(creature, dist)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() and creature:IsWithinDist(p, dist) then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ :102-105 EVENT_OBLITERATE: DoCastVictim(72360) non-triggered;
+-- re-arm {8000,13000}ms.
+local function onObliterate(creature, guid)
+    creature:CastSpell(nil, SPELL_OBLITERATE)
+    schedule(guid, "obliterate", {8000, 13000}, function() onObliterate(creature, guid) end)
+end
+
+-- C++ :106-110 EVENT_WELL_OF_CORRUPTION: random alive player within 100
+-- yd (:107 SelectTarget Random, 0, 100.0f, true); DoCast(target, 72362)
+-- non-triggered; re-arm 13000ms unconditional (:109, outside the target-if).
+local function onWellOfCorruption(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_WELL_OF_CORRUPTION)
+    end
+    schedule(guid, "well", 13000, function() onWellOfCorruption(creature, guid) end)
+end
+
+-- C++ :111-115 EVENT_CORRUPTED_FLESH: Talk(SAY_CORRUPTED_FLESH)
+-- unconditional (:112); DoCastAOE(72363) is self-cast non-triggered
+-- (the DoCastAOE convention); re-arm 20000ms (:114).
+local function onCorruptedFlesh(creature, guid)
+    creature:Talk(SAY_CORRUPTED_FLESH)
+    creature:CastSpell(creature, SPELL_CORRUPTED_FLESH)
+    schedule(guid, "corruptedflesh", 20000, function() onCorruptedFlesh(creature, guid) end)
+end
+
+-- C++ :116-120 EVENT_SHARED_SUFFERING: random alive player, no distance
+-- filter (:117 SelectTarget Random, 0, 0.0f, true); DoCast(target,
+-- 72368) non-triggered; re-arm {14000,15000}ms unconditional (:119,
+-- outside the target-if).
+local function onSharedSuffering(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_SHARED_SUFFERING)
+    end
+    schedule(guid, "sharedsuffering", {14000, 15000}, function() onSharedSuffering(creature, guid) end)
+end
+
+-- C++ :65-74 JustEngagedWith: Talk(SAY_AGGRO) (:67); seeds the four
+-- timers (:71-74). DoZoneInCombat (:68) and instance->SetBossState
+-- IN_PROGRESS (:69) have no bridge (see header).
+local function marwynJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    initState(guid)
+    creature:Talk(SAY_AGGRO)
+    schedule(guid, "obliterate", {8000, 13000}, function() onObliterate(creature, guid) end)
+    schedule(guid, "well", 12000, function() onWellOfCorruption(creature, guid) end)
+    schedule(guid, "corruptedflesh", 20000, function() onCorruptedFlesh(creature, guid) end)
+    schedule(guid, "sharedsuffering", {14000, 15000}, function() onSharedSuffering(creature, guid) end)
+end
+
+-- C++ :84-88 KilledUnit: if (who->GetTypeId() != TYPEID_PLAYER)
 -- return; Talk(SAY_SLAY) — the razuvious player-gated variant precedent.
 local function marwynKilledUnit(event, creature, victim)
     if victim:GetObjectType() == "Player" then
@@ -67,12 +236,24 @@ local function marwynKilledUnit(event, creature, victim)
     end
 end
 
--- C++ boss_marwynAI::JustDied: Talk(SAY_DEATH) — the sjonnir
--- JustDied-Talk precedent.
+-- C++ :77-82 JustDied: Talk(SAY_DEATH) (:79) — the sjonnir
+-- JustDied-Talk precedent; events.Reset (:80) = timer cancellation;
+-- instance->SetBossState DONE (:81) has no bridge (see header).
 local function marwynJustDied(event, creature, killer)
+    initState(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
+local function marwynLeaveCombat(event, creature)
+    initState(creature:GetGUID())
+end
+
+local function marwynReset(event, creature)
+    initState(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_MARWYN, 1, marwynJustEngagedWith)
+RegisterCreatureEvent(ENTRY_MARWYN, 2, marwynLeaveCombat)
 RegisterCreatureEvent(ENTRY_MARWYN, 3, marwynKilledUnit)
 RegisterCreatureEvent(ENTRY_MARWYN, 4, marwynJustDied)
+RegisterCreatureEvent(ENTRY_MARWYN, 23, marwynReset)
