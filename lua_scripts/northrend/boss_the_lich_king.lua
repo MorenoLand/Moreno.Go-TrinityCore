@@ -96,13 +96,26 @@
 -- DoAction ACTION_FROSTMOURNE_INTRO scheduler) and
 -- Talk(SAY_TERENAS_OUTRO_1..2 0..1) (EVENT_OUTRO_TERENAS_TALK_1..2,
 -- IsSummonedBy scheduler) — no-DoAction + no-timer bridges.
--- npc_shambling_horror_icc / npc_raging_spirit /
+-- PORTED (2026-10-13 retraction re-audit): npc_shambling_horror_icc
+-- (37698) — SHOCKWAVE 72149 self-cast {20s,25s} init/re-arm
+-- (:1303/:1331-1332); ENRAGE 72143 self-cast {11s,14s}/{20s,25s}
+-- (:1304/:1335-1337 — the 1s cast-fail recheck leg is unmodelable,
+-- documented);
+-- npc_raging_spirit (36701) — SOUL_SHRIEK 69242 DoCastAOE
+-- {12s,15s} init/re-arm, modeled as self-cast (the DoCastAOE
+-- self-cast convention :1367/:1420-1421) + Reset one-shots
+-- DoCastSelf(SPELL_PLAGUE_AVOIDANCE 72846, triggered) +
+-- DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL 69197, triggered)
+-- (:1368-1369, the curator engage-cast precedent);
+-- npc_spirit_warden (36824) — SOUL_RIP 69397 victim-cast
+-- {12s,15s}/{23s,27s} (:1833/:1855-1856) + Reset one-shot
+-- DoCastSelf(SPELL_DARK_HUNGER 69383) non-triggered (:1835).
 -- npc_valkyr_shadowguard / npc_strangulate_vehicle /
--- npc_spirit_warden / npc_spirit_bomb / npc_broken_frostmourne — zero
--- Talk lines — NOT registered (the bronjahm
--- npc_corrupted_soul_fragment precedent); the raging_spirit and
--- spirit_warden JustDied legs and the valkyr / strangulate / bomb /
--- frostmourne UpdateAI machines ride unbridged legs.
+-- npc_spirit_bomb / npc_broken_frostmourne — zero Talk lines —
+-- NOT registered (the bronjahm npc_corrupted_soul_fragment
+-- precedent); the valkyr grab/life-siphon (SpellScript +
+-- MovementInform), strangulate vehicle, bomb and frostmourne UpdateAI
+-- machines ride unbridged legs.
 -- The 31 spell/aura legs + the generic spell_trigger_spell_from_caster
 -- with-args leg join the no-SpellScript-bridge / no-AuraScript-bridge
 -- queues (the boss_moragg optic-link precedent);
@@ -129,11 +142,21 @@
 -- terenas scheduler)).
 
 local ENTRY_THE_LICH_KING = 36597
+local ENTRY_SHAMBLING_HORROR = 37698
+local ENTRY_RAGING_SPIRIT = 36701
+local ENTRY_SPIRIT_WARDEN = 36824
 
 local SAY_LK_KILL = 10
 local SAY_LK_BERSERK = 11
 
 local SPELL_BERSERK2 = 47008
+local SPELL_HORROR_SHOCKWAVE = 72149
+local SPELL_HORROR_ENRAGE = 72143
+local SPELL_SOUL_SHRIEK = 69242
+local SPELL_PLAGUE_AVOIDANCE = 72846
+local SPELL_RAGING_SPIRIT_VISUAL = 69197
+local SPELL_DARK_HUNGER = 69383
+local SPELL_SOUL_RIP = 69397
 
 local timers = {}
 
@@ -198,3 +221,75 @@ RegisterCreatureEvent(ENTRY_THE_LICH_KING, 1, lichKingJustEngagedWith)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 2, lichKingLeaveCombat)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 3, lichKingKilledUnit)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)
+
+-- C++ npc_shambling_horror_icc: Reset seeds EVENT_SHOCKWAVE {20s,25s}
+-- and EVENT_ENRAGE {11s,14s} (:1303-1304).
+local function onHorrorShockwave(creature, guid)
+    creature:CastSpell(creature, SPELL_HORROR_SHOCKWAVE)
+    schedule(guid, "horror_shockwave", {20000, 25000}, function() onHorrorShockwave(creature, guid) end)
+end
+
+local function onHorrorEnrage(creature, guid)
+    creature:CastSpell(creature, SPELL_HORROR_ENRAGE)
+    schedule(guid, "horror_enrage", {20000, 25000}, function() onHorrorEnrage(creature, guid) end)
+end
+
+local function shamblingHorrorJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "horror_shockwave", {20000, 25000}, function() onHorrorShockwave(creature, guid) end)
+    schedule(guid, "horror_enrage", {11000, 14000}, function() onHorrorEnrage(creature, guid) end)
+end
+
+local function shamblingHorrorLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_raging_spirit: Reset — DoCastSelf(SPELL_PLAGUE_AVOIDANCE,
+-- true) + DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL, true) one-shots,
+-- EVENT_SOUL_SHRIEK {12s,15s} (:1367-1369/:1420-1421); the
+-- REACT_PASSIVE -> EVENT_SET_AGRESSIVE 2s leg has no bridge.
+local function onSoulShriek(creature, guid)
+    creature:CastSpell(creature, SPELL_SOUL_SHRIEK)
+    schedule(guid, "soul_shriek", {12000, 15000}, function() onSoulShriek(creature, guid) end)
+end
+
+local function ragingSpiritJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:CastSpell(creature, SPELL_PLAGUE_AVOIDANCE, true)
+    creature:CastSpell(creature, SPELL_RAGING_SPIRIT_VISUAL, true)
+    schedule(guid, "soul_shriek", {12000, 15000}, function() onSoulShriek(creature, guid) end)
+end
+
+local function ragingSpiritLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_spirit_warden: Reset — DoCastSelf(SPELL_DARK_HUNGER)
+-- one-shot, EVENT_SOUL_RIP {12s,15s} (:1833-1835/:1855-1856).
+local function onSoulRip(creature, guid)
+    creature:CastSpell(nil, SPELL_SOUL_RIP)
+    schedule(guid, "soul_rip", {23000, 27000}, function() onSoulRip(creature, guid) end)
+end
+
+local function spiritWardenJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:CastSpell(creature, SPELL_DARK_HUNGER)
+    schedule(guid, "soul_rip", {12000, 15000}, function() onSoulRip(creature, guid) end)
+end
+
+local function spiritWardenLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 1, shamblingHorrorJustEngagedWith)
+RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 2, shamblingHorrorLeaveCombat)
+RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 23, shamblingHorrorLeaveCombat)
+RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 1, ragingSpiritJustEngagedWith)
+RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 2, ragingSpiritLeaveCombat)
+RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 23, ragingSpiritLeaveCombat)
+RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 1, spiritWardenJustEngagedWith)
+RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 2, spiritWardenLeaveCombat)
+RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 23, spiritWardenLeaveCombat)

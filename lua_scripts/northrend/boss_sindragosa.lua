@@ -57,11 +57,23 @@
 -- EVENT_BERSERK — single-fire 10min — Talk(EMOTE_BERSERK_RAID 11) +
 -- Talk(SAY_BERSERK 9) + DoCastSelf(SPELL_BERSERK 26662) non-triggered
 -- (:242/:458-460), bare timer across all phases.
+-- PORTED (2026-10-13 retraction re-audit): Reset() —
+-- DoCastSelf(SPELL_TANK_MARKER 71039, triggered) (:241);
+-- DamageTaken 35% latch — Talk(SAY_PHASE_2 6) +
+-- DoCastSelf(SPELL_MYSTIC_BUFFET 70128, triggered) via a 1s
+-- one-shot timer (the EVENT_THIRD_PHASE_CHECK leg :403-410 /
+-- :548-553; CancelEvent(EVENT_AIR_PHASE) is moot — no air-phase
+-- timers exist in this port; RescheduleEvent(EVENT_ICY_GRIP) rides
+-- the unbridged icy-grip leg); EVENT_ICE_TOMB — CastSpell(nil,
+-- SPELL_ICE_TOMB_TARGET 69712, triggered) init {7s,10s} / re-arm
+-- {16s,23s} (:515-518/:551 — the air-phase retry loop is
+-- vacuously satisfied with no air-phase machine; the SPELLVALUE_
+-- MAX_TARGETS(1) spell-mod leg has no bridge, default cast
+-- faithful).
 -- boss_sindragosa UpdateAI — the land/air phase machine gates cleave /
--- tail-smash / frost-breath / icy-grip / unchained-magic / ice-tomb /
+-- tail-smash / frost-breath / icy-grip / unchained-magic /
 -- frost-bomb legs (phase-machine rule — porting bare timers would
--- fabricate air-phase casts); Talk(SAY_PHASE_2 6) rides
--- EVENT_THIRD_PHASE_CHECK, air-phase-gated — all unbridged.
+-- fabricate air-phase casts) — all unbridged.
 -- SAY_RESPITE_FOR_A_TORMENTED_SOUL 4 is declared in the text enum
 -- but never referenced by a Talk() call — dead text evidence.
 -- boss_sindragosa DoAction — ACTION_START_FROSTWYRM intro machine
@@ -104,6 +116,13 @@ local SAY_KILL = 8
 local SAY_DEATH = 10
 local SAY_BERSERK = 9
 local EMOTE_BERSERK_RAID = 11
+local SAY_PHASE_2 = 6
+
+local SPELL_TANK_MARKER = 71039
+local SPELL_MYSTIC_BUFFET = 70128
+local SPELL_ICE_TOMB_TARGET = 69712
+
+local sindragosaThirdPhase = {}
 
 local SPELL_FROST_AURA = 70084
 local SPELL_PERMAEATING_CHILL = 70109
@@ -139,6 +158,24 @@ local function onBerserk(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
 
+-- C++ EVENT_ICE_TOMB: CastSpell(nullptr, SPELL_ICE_TOMB_TARGET,
+-- TRIGGERED_FULL_MASK) — victim-less cast (:515-518), re-arm
+-- {16s,23s}.
+local function onIceTomb(creature, guid)
+    creature:CastSpell(nil, SPELL_ICE_TOMB_TARGET, true)
+    schedule(guid, "ice_tomb", {16000, 23000}, function() onIceTomb(creature, guid) end)
+end
+
+-- C++ EVENT_THIRD_PHASE_CHECK: Talk(SAY_PHASE_2) +
+-- DoCastSelf(SPELL_MYSTIC_BUFFET, true); seeds EVENT_ICE_TOMB
+-- {7s,10s} — the _isInAirPhase leg is vacuously true (no air-phase
+-- machine in this port).
+local function onThirdPhaseCheck(creature, guid)
+    creature:Talk(SAY_PHASE_2)
+    creature:CastSpell(creature, SPELL_MYSTIC_BUFFET, true)
+    schedule(guid, "ice_tomb", {7000, 10000}, function() onIceTomb(creature, guid) end)
+end
+
 -- C++ boss_sindragosa::JustEngagedWith:
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
 -- CheckRequiredBosses evade branch (:269-275) has no bridge.
@@ -161,6 +198,22 @@ end
 
 local function sindragosaReset(event, creature)
     cancelTimers(creature:GetGUID())
+    sindragosaThirdPhase[creature:GetGUID()] = nil
+    -- C++ Reset(): DoCastSelf(SPELL_TANK_MARKER, true) (:241),
+    -- unconditional one-shot.
+    creature:CastSpell(creature, SPELL_TANK_MARKER, true)
+end
+
+-- C++ boss_sindragosa::DamageTaken: !_isThirdPhase && !HealthAbovePct(35)
+-- — single-flip latch (gothik precedent); schedules
+-- EVENT_THIRD_PHASE_CHECK 1s (:403-410).
+local function sindragosaDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if not sindragosaThirdPhase[guid] and creature:GetHealthPct() < 35 then
+        sindragosaThirdPhase[guid] = true
+        schedule(guid, "third_phase_check", 1000, function() onThirdPhaseCheck(creature, guid) end)
+    end
+    return true, damage
 end
 
 -- C++ boss_sindragosa::KilledUnit:
@@ -182,4 +235,5 @@ RegisterCreatureEvent(ENTRY_SINDRAGOSA, 1, sindragosaJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 2, sindragosaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 3, sindragosaKilledUnit)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 4, sindragosaJustDied)
+RegisterCreatureEvent(ENTRY_SINDRAGOSA, 9, sindragosaDamageTaken)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 23, sindragosaReset)

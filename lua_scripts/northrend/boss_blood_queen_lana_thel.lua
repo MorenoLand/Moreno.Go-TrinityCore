@@ -54,9 +54,12 @@
 -- 7) rides the POINT_AIR movement-inform leg (no MovementInform
 -- bridge); the air-phase machine (MovePoint / SetDisableGravity /
 -- SetReactState / scheduler reschedule legs) has no bridge.
--- boss_blood_queen_lana_thel UpdateAI — Talk(EMOTE_BERSERK_RAID
--- 12 / SAY_BERSERK 10) rides the EVENT_BERSERK scheduler leg
--- (no-timer-bridge; the boss_toravon precedent);
+-- PORTED (2026-10-13 retraction re-audit): EVENT_BERSERK —
+-- single-fire 330s — Talk(EMOTE_BERSERK_RAID 12) +
+-- Talk(SAY_BERSERK 10) + DoCastSelf(SPELL_BERSERK 26662)
+-- non-triggered (:160/:351-354); the "no-timer-bridge" block for
+-- this arm was stale doctrine (the boss_toravon precedent).
+-- boss_blood_queen_lana_thel UpdateAI — remaining scheduler arms:
 -- Talk(SAY_VAMPIRIC_BITE 1) rides EVENT_VAMPIRIC_BITE;
 -- Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
 -- EVENT_PACT_OF_THE_DARKFALLEN; Talk(EMOTE_SWARMING_SHADOWS 5,
@@ -92,6 +95,40 @@ local ENTRY_BLOOD_QUEEN_LANA_THEL = 37955
 local SAY_AGGRO = 0
 local SAY_KILL = 8
 local SAY_DEATH = 11
+local SAY_BERSERK = 10
+local EMOTE_BERSERK_RAID = 12
+
+local SPELL_BERSERK = 26662
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_BERSERK: 330s single-fire — Talk(EMOTE_BERSERK_RAID) +
+-- Talk(SAY_BERSERK) + DoCastSelf(SPELL_BERSERK) non-triggered
+-- (:160/:351-354), ungated one-shot.
+local function onBerserk(creature, guid)
+    creature:Talk(EMOTE_BERSERK_RAID)
+    creature:Talk(SAY_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK)
+end
 
 local SPELL_SHROUD_OF_SORROW = 70986
 local SPELL_FRENZIED_BLOODTHIRST_VISUAL = 71949
@@ -102,6 +139,8 @@ local SPELL_CLEAR_ALL_STATUS_AILMENTS = 70939
 -- CheckRequiredBosses evade branch (:174-180) has no bridge (same
 -- accepted deviation as the Talk).
 local function lanaThelJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ :188-190 — triggered self-cast auras (curator engage-cast
     -- precedent): DoCast(me, SPELL_SHROUD_OF_SORROW, true) +
@@ -110,6 +149,17 @@ local function lanaThelJustEngagedWith(event, creature, target)
     creature:CastSpell(creature, SPELL_SHROUD_OF_SORROW, true)
     creature:CastSpell(creature, SPELL_FRENZIED_BLOODTHIRST_VISUAL, true)
     creature:CastSpell(creature, SPELL_CLEAR_ALL_STATUS_AILMENTS, true)
+    schedule(guid, "berserk", 330000, function() onBerserk(creature, guid) end)
+end
+
+-- C++ Reset() timer machinery — cancel/re-arm on combat events
+-- (the maiden convention).
+local function lanaThelLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function lanaThelReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_blood_queen_lana_thel::KilledUnit:
@@ -128,5 +178,7 @@ local function lanaThelJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 1, lanaThelJustEngagedWith)
+RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 2, lanaThelLeaveCombat)
+RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 23, lanaThelReset)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 3, lanaThelKilledUnit)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 4, lanaThelJustDied)

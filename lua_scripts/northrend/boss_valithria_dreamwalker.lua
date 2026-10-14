@@ -72,21 +72,32 @@
 -- exists in the file).
 -- npc_the_lich_king_controller Reset scheduler legs (5 summon-timer
 -- schedules), JustSummoned phase-mask / DoZoneInCombat legs, UpdateAI
--- summoner machine and the 5 DoCastSelf SPELL_TIMER_* legs (no-timer /
--- no-cast / no-movement bridges); JustReachedHome me->setActive(false)
--- (no bridge).
+-- summoner machine and the 5 DoCastSelf SPELL_TIMER_* legs
+-- (70915/70912/70914/70916/70913) — the whole summon effect rides the
+-- spell_dreamwalker_summoner SpellScript + instance-GUID force-cast
+-- machine (no-SpellScript bridge; the summon-machine rule);
+-- JustReachedHome me->setActive(false) (no bridge).
 -- npc_green_dragon_combat_trigger (38752) — no Talk; the DoAction
 -- ACTION_ENTER_COMBAT / ACTION_SETUP_ARCHMAGES / ACTION_DEATH machine
 -- (no-DoAction bridge) — NOT registered.
--- npc_risen_archmage (37868) / npc_blazing_skeleton (36791) /
--- npc_suppresser (37863) — zero Talk lines; their UpdateAI DoCastSelf
--- legs, the suppresser MovementInform CHASE_MOTION_TYPE leg (no
--- MovementInform bridge), summoner SpellHitTarget knockback legs (event
--- 15 never fires) — NOT registered.
+-- PORTED (2026-10-13 retraction re-audit): npc_risen_archmage
+-- (37868) — FROSTBOLT_VOLLEY 70759 self-cast {5s,15s}/{8s,15s};
+-- MANA_VOID 71179 random-player {20s,25s}/{20s,25s} (the POWER_MANA
+-- type filter has no bridge — moroes approximation, dist>15.0f kept);
+-- COLUMN_OF_FROST 70704 random-player {10s,20s}/{15s,25s},
+-- dist>10.0f (:646-648/:705-721); npc_blazing_skeleton (36791) —
+-- FIREBALL 70754 victim-cast {2s,4s}/{2s,4s}, !IsWithinMeleeRange
+-- gated (5-yd check, the venoxis precedent); LEY_WASTE 69325
+-- self-cast {15s,20s}/{15s,20s} (:745-749/:760-773).
+-- npc_suppresser (37863) — zero Talk lines; SUPPRESSION 70588 is
+-- MovementInform CHASE_MOTION_TYPE-driven (no bridge) — NOT
+-- registered.
 -- PORTED (2026-10-13): npc_blistering_zombie (37934) JustDied —
 -- DoCastSelf(SPELL_ACID_BURST 70744, triggered); npc_gluttonous_abomination
 -- (37886) JustDied — DoCastSelf(SPELL_ROT_WORM_SPAWNER 70675, triggered)
 -- unless killed by Valithria (event 4; the_black_morass killer-gate precedent).
+-- PORTED (2026-10-13 retraction re-audit): npc_gluttonous_abomination —
+-- GUT_SPRAY 70633 self-cast {10s,13s} init/re-arm (:871-872/:899).
 -- npc_dream_portal (37945) / npc_dream_cloud (entry DB-side, no header
 -- constant) — zero Talk lines; portal JustSummoned delayed-cast event
 -- legs (ValithriaDelayedCastEvent / ValithriaAuraRemoveEvent — no
@@ -108,6 +119,135 @@ local SAY_VALITHRIA_DEATH = 4
 
 local SPELL_ACID_BURST = 70744
 local SPELL_ROT_WORM_SPAWNER = 70675
+
+local ENTRY_RISEN_ARCHMAGE = 37868
+local ENTRY_BLAZING_SKELETON = 36791
+
+local SPELL_GUT_SPRAY = 70633
+local SPELL_FROSTBOLT_VOLLEY = 70759
+local SPELL_MANA_VOID = 71179
+local SPELL_COLUMN_OF_FROST = 70704
+local SPELL_FIREBALL = 70754
+local SPELL_LEY_WASTE = 69325
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ random alive player with a minimum distance, on the same
+-- map (the falric / keleseth / thorim GetPlayersInWorld precedent).
+local function randomPlayer(creature, minDist)
+    local candidates = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:IsAlive() and creature:GetMap() == p:GetMap()
+                and creature:GetDistance(p) > minDist then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ npc_gluttonous_abomination::JustEngagedWith (Reset seeds the
+-- same timers; the maiden engage-hook convention): EVENT_GUT_SPRAY —
+-- DoCastSelf(SPELL_GUT_SPRAY) non-triggered, {10s,13s}/{10s,13s}
+-- (:871-872/:899).
+local function onGutSpray(creature, guid)
+    creature:CastSpell(creature, SPELL_GUT_SPRAY)
+    schedule(guid, "gut_spray", {10000, 13000}, function() onGutSpray(creature, guid) end)
+end
+
+local function gluttonousAbominationJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "gut_spray", {10000, 13000}, function() onGutSpray(creature, guid) end)
+end
+
+local function gluttonousAbominationLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_risen_archmage::Reset — EVENT_FROSTBOLT_VOLLEY {5s,15s},
+-- EVENT_MANA_VOID {20s,25s}, EVENT_COLUMN_OF_FROST {10s,20s}
+-- (:646-648).
+local function onFrostboltVolley(creature, guid)
+    creature:CastSpell(creature, SPELL_FROSTBOLT_VOLLEY)
+    schedule(guid, "frostbolt_volley", {8000, 15000}, function() onFrostboltVolley(creature, guid) end)
+end
+
+local function onManaVoid(creature, guid)
+    local target = randomPlayer(creature, 15.0)
+    if target then
+        creature:CastSpell(target, SPELL_MANA_VOID)
+    end
+    schedule(guid, "mana_void", {20000, 25000}, function() onManaVoid(creature, guid) end)
+end
+
+local function onColumnOfFrost(creature, guid)
+    local target = randomPlayer(creature, 10.0)
+    if target then
+        creature:CastSpell(target, SPELL_COLUMN_OF_FROST)
+    end
+    schedule(guid, "column_of_frost", {15000, 25000}, function() onColumnOfFrost(creature, guid) end)
+end
+
+local function risenArchmageJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "frostbolt_volley", {5000, 15000}, function() onFrostboltVolley(creature, guid) end)
+    schedule(guid, "mana_void", {20000, 25000}, function() onManaVoid(creature, guid) end)
+    schedule(guid, "column_of_frost", {10000, 20000}, function() onColumnOfFrost(creature, guid) end)
+end
+
+local function risenArchmageLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_blazing_skeleton::Reset — EVENT_FIREBALL {2s,4s},
+-- EVENT_LEY_WASTE {15s,20s} (:745-749); fireball gated on
+-- !IsWithinMeleeRange — 5-yd check (the venoxis precedent).
+local function onFireball(creature, guid)
+    local victim = creature:GetVictim()
+    if victim and creature:GetDistance(victim) > 5 then
+        creature:CastSpell(nil, SPELL_FIREBALL)
+    end
+    schedule(guid, "fireball", {2000, 4000}, function() onFireball(creature, guid) end)
+end
+
+local function onLeyWaste(creature, guid)
+    creature:CastSpell(creature, SPELL_LEY_WASTE)
+    schedule(guid, "ley_waste", {15000, 20000}, function() onLeyWaste(creature, guid) end)
+end
+
+local function blazingSkeletonJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "fireball", {2000, 4000}, function() onFireball(creature, guid) end)
+    schedule(guid, "ley_waste", {15000, 20000}, function() onLeyWaste(creature, guid) end)
+end
+
+local function blazingSkeletonLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
 
 -- C++ npc_the_lich_king_controller::JustEngagedWith:
 -- Talk(SAY_LICH_KING_INTRO) — the auriaya engage-port precedent.
@@ -175,3 +315,12 @@ RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 9, valithriaDamageTaken)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 23, valithriaReset)
 RegisterCreatureEvent(ENTRY_BLISTERING_ZOMBIE, 4, blisteringZombieJustDied)
 RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 4, gluttonousAbominationJustDied)
+RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 1, gluttonousAbominationJustEngagedWith)
+RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 2, gluttonousAbominationLeaveCombat)
+RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 23, gluttonousAbominationLeaveCombat)
+RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 1, risenArchmageJustEngagedWith)
+RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 2, risenArchmageLeaveCombat)
+RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 23, risenArchmageLeaveCombat)
+RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 1, blazingSkeletonJustEngagedWith)
+RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 2, blazingSkeletonLeaveCombat)
+RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 23, blazingSkeletonLeaveCombat)
