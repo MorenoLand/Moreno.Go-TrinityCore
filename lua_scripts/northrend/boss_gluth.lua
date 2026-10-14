@@ -63,11 +63,17 @@
 -- AttackStop + MoveCloserAndStop — no summon / cross-AI / react-state
 -- / motion bridges; EVENT_KILL_ZOMBIE_SINGLE — DoCast(ZOMBIE_CHOW_
 -- SEARCH_SINGLE 28239) + react-state / speed restore legs — no
--- bridges; EVENT_SEARCH_ZOMBIE_MULTI — DoCastAOE(ZOMBIE_CHOW_SEARCH_
--- MULTI 28404) — no DoCastAOE bridge; DoAction(ACTION_DECIMATE_EVENT)
--- — cross-AI SetData(DECIMATED) over summons — no bridges; MovementInform
--- — MoveIdle — no motion bridge; the whole zombie state machine
--- (STATE_GLUTH_EATING / zombie GUID persistence) — no state bridge.
+-- bridges; EVENT_SEARCH_ZOMBIE_MULTI — the per-zombie DoCastAOE(
+-- ZOMBIE_CHOW_SEARCH_MULTI 28404) fires only when the summons-list
+-- scan finds an alive zombie >18.0 yards out and is skipped while
+-- STATE_GLUTH_EATING (the 20x one-shot 3s*i schedule rides the
+-- EVENT_DECIMATE arm). DoCastAOE itself bridges to self-cast
+-- (boss_ai.go convention) — the real blocker is the summon-list /
+-- zombie-proximity conditional gating, not the cast; DoAction(
+-- ACTION_DECIMATE_EVENT) — cross-AI SetData(DECIMATED) over summons
+-- — no bridges; MovementInform — MoveIdle — no motion bridge;
+-- the whole zombie state machine (STATE_GLUTH_EATING / zombie GUID
+-- persistence) — no state bridge.
 -- spell_gluth_decimate (28374/54426): HandleScriptEffect -> Decimate
 -- damage 28375 via CastSpellBP0 + HandleEvent -> DoAction(
 -- ACTION_DECIMATE_EVENT) — no SpellScript binding bridge (razelikh

@@ -16,7 +16,10 @@
 -- "AddSC_boss_ambassador_hellmaw" hits boss_ambassador_hellmaw.cpp
 -- (+ the loader decl/call lines) only. No ambassador_hellmaw lua
 -- existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied. Timers ride the CreateLuaEvent convention
+-- (timers table keyed by GUID, cancel on 2/4 — the gargolmar
+-- precedent); melee is engine-driven in Go (creature combat tick).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_ambassador_hellmawAI::JustEngagedWith — Talk(SAY_AGGRO 1)
 -- (line 119; event 1 — the auriaya precedent; the
@@ -31,10 +34,12 @@
 -- the no-instance bridge (documented-only).
 -- DOCUMENTED-ONLY (in this header; only entry 18731 registered):
 -- boss_ambassador_hellmawAI::Reset — _events.Reset() +
--- _instance->SetBossState(NOT_STARTED) + ScheduleEvent
--- (EVENT_CORROSIVE_ACID 5-10s, EVENT_FEAR 25-30s, EVENT_BERSERK 3min
--- heroic-only) + DoAction(ACTION_AMBASSADOR_HELLMAW_BANISH) —
--- no-timer / no-instance bridges — documented-only.
+-- _instance->SetBossState(NOT_STARTED) (no-instance bridge) +
+-- DoAction(ACTION_AMBASSADOR_HELLMAW_BANISH) (instance-driven,
+-- unbridged) + the ScheduleEvent inits (EVENT_CORROSIVE_ACID 5-10s,
+-- EVENT_FEAR 25-30s — now the ported timers' init values;
+-- EVENT_BERSERK 3min heroic-only stays out — no heroic bridge)
+-- — documented-only.
 -- boss_ambassador_hellmawAI::DoAction INTRO leg —
 -- hellmaw->AI()->DoAction(ACTION_AMBASSADOR_HELLMAW_INTRO) is called
 -- from instance_shadow_labyrinth.cpp:137 (the InstanceMapScript —
@@ -51,13 +56,24 @@
 -- boss_ambassador_hellmawAI::MoveInLineOfSight — HasAura
 -- (SPELL_BANISH) gate then EscortAI::MoveInLineOfSight — no-escort
 -- bridge — documented-only.
--- boss_ambassador_hellmawAI::UpdateEscortAI — the whole machine
--- rides no-timer / no-cast / no-random-target / no-heroic-mode
--- bridges: HasAura(SPELL_BANISH) → EnterEvadeMode(EVADE_REASON_OTHER);
--- EVENT_CORROSIVE_ACID DoCastVictim(SPELL_CORROSIVE_ACID 33551)
--- 15-25s cycle; EVENT_FEAR DoCastAOE(SPELL_FEAR 33547) 20-35s cycle;
--- EVENT_BERSERK heroic-only DoCast(me, SPELL_ENRAGE 34970,
--- triggered); DoMeleeAttackIfReady — documented-only.
+-- boss_ambassador_hellmawAI::UpdateEscortAI — PORTED arms (the
+-- old "no-timer" doctrine was wrong — these are phase-ungated
+-- UpdateVictim timer arms, bridgeable on the CreateLuaEvent
+-- convention): EVENT_CORROSIVE_ACID — DoCastVictim(
+-- SPELL_CORROSIVE_ACID 33551) non-triggered, 5-10s init (Reset) /
+-- 15-25s re-arm (switch) — the moroes precedent; EVENT_FEAR —
+-- DoCastAOE(SPELL_FEAR 33547) as self-cast creature:CastSpell(
+-- creature, spell) (boss_ai.go DoCastAOE convention — the old "no
+-- DoCastAOE bridge" claim was wrong), non-triggered, 25-30s init
+-- (Reset) / 20-35s re-arm (switch); neither has a SpellScript (no
+-- shazzrah-style delivered effect); the HasAura(SPELL_BANISH) →
+-- EnterEvadeMode gate is unreachable in the Lua combat context
+-- (DoIntro removes the aura pre-combat; the DoAction INTRO leg is
+-- instance-driven, unbridged).
+-- STAYS OUT: EVENT_BERSERK — heroic-only (IsHeroic() gate, no
+-- heroic bridge), one-shot DoCast(me, SPELL_ENRAGE 34970, triggered),
+-- 3min (Reset) — documented-only; DoMeleeAttackIfReady is
+-- engine-driven in Go.
 -- All 4 Talk() calls in the file accounted for (3 ported above +
 -- SAY_INTRO 0 DoAction-driven documented above; SAY_HELP 2 unused).
 
@@ -67,12 +83,70 @@ local SAY_AGGRO = 1
 local SAY_SLAY  = 3
 local SAY_DEATH = 4
 
+local SPELL_CORROSIVE_ACID = 33551
+local SPELL_FEAR           = 33547
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_CORROSIVE_ACID: DoCastVictim(SPELL_CORROSIVE_ACID 33551)
+-- non-triggered, 5-10s init / 15-25s re-arm (Reset schedules, the
+-- switch re-arms).
+local function corrosiveAcidTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CORROSIVE_ACID)
+    schedule(guid, "acid", {15000, 25000}, function()
+        corrosiveAcidTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_FEAR: DoCastAOE(SPELL_FEAR 33547) as self-cast,
+-- non-triggered, 25-30s init / 20-35s re-arm.
+local function fearTick(creature, guid)
+    creature:CastSpell(creature, SPELL_FEAR)
+    schedule(guid, "fear", {20000, 35000}, function()
+        fearTick(creature, guid)
+    end)
+end
+
 -- C++ boss_ambassador_hellmawAI::JustEngagedWith:
 -- _instance->SetBossState(DATA_AMBASSADOR_HELLMAW, IN_PROGRESS);
 -- Talk(SAY_AGGRO); — the auriaya precedent (the SetBossState leg has
 -- no-instance bridge and is documented-only).
 local function hellmawEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "acid", {5000, 10000}, function()
+        corrosiveAcidTick(creature, guid)
+    end)
+    schedule(guid, "fear", {25000, 30000}, function()
+        fearTick(creature, guid)
+    end)
+end
+
+local function hellmawLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_ambassador_hellmawAI::KilledUnit:
@@ -91,8 +165,10 @@ end
 -- SetBossState leg has no-instance bridge).
 local function hellmawDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 1, hellmawEnterCombat)
+RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 2, hellmawLeaveCombat)
 RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 3, hellmawTargetDied)
 RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 4, hellmawDied)

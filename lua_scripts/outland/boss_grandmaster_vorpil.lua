@@ -18,14 +18,21 @@
 -- whole-server-tree grep for "AddSC_boss_grandmaster_vorpil" hits
 -- boss_grandmaster_vorpil.cpp (+ the loader decl/call lines) only.
 -- No grandmaster_vorpil lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied. Timers ride the CreateLuaEvent convention
+-- (timers table keyed by GUID, cancel on 2/4 — the gargolmar
+-- precedent); melee is engine-driven in Go (creature combat tick).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_grandmaster_vorpilAI::JustEngagedWith — Talk(SAY_AGGRO 1)
--- (line 149; event 1 — the auriaya precedent; the ScheduleEvent legs
--- (EVENT_SHADOWBOLT_VOLLEY 7-14s / heroic-only EVENT_BANISH 15s /
--- EVENT_DRAW_SHADOWS 45s / EVENT_SUMMON_TRAVELER 90s) + SummonPortals()
--- ride the no-timer / no-summon bridges and are documented-only
--- below).
+-- (line 149; event 1 — the auriaya precedent) + SummonPortals() +
+-- PORTED timer arm: EVENT_SHADOWBOLT_VOLLEY — DoCast(me,
+-- SPELL_SHADOWBOLT_VOLLEY 33841) non-triggered self-cast,
+-- randtime(7s,14s) init / randtime(15s,30s) re-arm (JustEngagedWith
+-- :149 / switch :178-181); the arm is ungated (UpdateVictim +
+-- UNIT_STATE_CASTING only) and 33841 has no SpellScript — the old
+-- "no-timer" claim was wrong. (The 6s EVENT_SHADOWBOLT_VOLLEY
+-- reschedule inside the unported EVENT_DRAW_SHADOWS leg :203 is
+-- unreachable while draw_shadows stays out — documented below.)
 -- boss_grandmaster_vorpilAI::KilledUnit — Talk(SAY_SLAY 3) (line
 -- 131) gated on who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated precedent (event 3).
@@ -38,8 +45,9 @@
 -- boss_grandmaster_vorpilAI::spawnVoidTraveler — SummonCreature
 -- (NPC_VOID_TRAVELER 19226, random VoidPortalCoords) + the one-shot
 -- _helpYell Talk(SAY_HELP 2) (line 123) — rides the
--- EVENT_SUMMON_TRAVELER timer machine — no-summon / no-timer
--- bridges — documented-only.
+-- EVENT_SUMMON_TRAVELER timer machine — no SummonCreature
+-- binding — documented-only (the timer leg bridges; the summon
+-- leg doesn't).
 -- boss_grandmaster_vorpilAI::SummonPortals — 5x SummonCreature
 -- (NPC_VOID_PORTAL 19224 at VoidPortalCoords) + SPELL_VOID_PORTAL_VISUAL
 -- 33569 visual cast — no-summon / no-cast bridges —
@@ -50,24 +58,38 @@
 -- fire site is the aggro-engage branch, not a 100-unit sighting —
 -- fire-site mismatch (shaffar/maladaar precedent), zero
 -- RegisterCreatureEvent(27) usage in lua_scripts/ — documented-only.
--- boss_grandmaster_vorpilAI::UpdateAI — the whole timer machine
--- rides no-timer / no-cast / no-random-target bridges:
--- EVENT_SHADOWBOLT_VOLLEY (DoCast(me, SPELL_SHADOWBOLT_VOLLEY
--- 33841), 15-30s cycle); heroic-only EVENT_BANISH (SelectTarget
--- random 30f → DoCast(target, SPELL_BANISH 38791), 15s cycle);
--- EVENT_DRAW_SHADOWS (teleports every alive non-banished player to
--- VorpilPosition, UpdatePosition, DoCast SPELL_DRAW_SHADOWS 33563
--- triggered + SPELL_RAIN_OF_FIRE 33617 / heroic 39363, 30s cycle);
--- EVENT_SUMMON_TRAVELER (spawnVoidTraveler, 10s cycle, 5s when
--- HealthBelowPct(20)); DoMeleeAttackIfReady — documented-only.
+-- boss_grandmaster_vorpilAI::UpdateAI — the remaining timer
+-- machine (EVENT_SHADOWBOLT_VOLLEY ported above) stays out on
+-- evidence-based legs, not the old blanket "no-timer" claim:
+-- heroic-only EVENT_BANISH (SelectTarget random 30f → DoCast(
+-- target, SPELL_BANISH 38791), 15s cycle) — IsHeroic() gate, no
+-- heroic bridge; EVENT_DRAW_SHADOWS (teleports every alive
+-- non-banished player to VorpilPosition + me->UpdatePosition() —
+-- no Teleport/UpdatePosition bridge in engine/scripting/object.go and
+-- the teleport IS the mechanic; DoCast(me, SPELL_DRAW_SHADOWS 33563,
+-- triggered) + DoCast(me, SPELL_RAIN_OF_FIRE 33617) —
+-- H_SPELL_RAIN_OF_FIRE 39363 is a dead constant, no IsHeroic branch
+-- exists in this arm — 45s init / 30s cycle; this leg also
+-- reschedules EVENT_SHADOWBOLT_VOLLEY at 6s (:203), unreachable while
+-- it stays out); EVENT_SUMMON_TRAVELER (spawnVoidTraveler →
+-- SummonCreature(NPC_VOID_TRAVELER 19226, TEMPSUMMON_CORPSE_TIMED_DESPAWN,
+-- 5s) — no Summon binding; effective first traveler ~5s
+-- (SummonPortals() schedules EVENT_SUMMON_TRAVELER at 5s —
+-- ScheduleEvent is a plain multimap insert, so the 5s and 90s events
+-- both pend), 10s cycle with an ADDITIONAL 5s event scheduled below
+-- 20% health (not a 5s replacement); the SAY_HELP (2) one-shot
+-- _helpYell latch rides the same machine); DoMeleeAttackIfReady is
+-- engine-driven in Go.
 -- npc_voidtraveler (NPC_VOID_TRAVELER = 19226) — zero Talk calls;
--- UpdateAI follow/sacrifice machine: GetGuidData
--- (DATA_GRANDMASTER_VORPIL) Vorpil lookup, MoveFollow, at 3 yards
--- DoCast(me, SPELL_SACRIFICE 33587, false) then _sacrificed —
--- DoCastAOE(SPELL_EMPOWERING_SHADOWS 33783, true) +
--- DoCast(me, SPELL_SHADOW_NOVA 33846, true) + KillSelf — no-instance
--- / no-cast / no-motion bridges — documented-only (NOT registered;
--- shaffar-beacon precedent).
+-- the UpdateAI follow/sacrifice machine: Vorpil lookup via
+-- _instance->GetGuidData(DATA_GRANDMASTER_VORPIL) (no-instance
+-- bridge), MoveFollow (no motion bridge), DoCast(me,
+-- SPELL_SACRIFICE 33587, false) at 3 yards, then on _sacrificed:
+-- DoCastAOE(SPELL_EMPOWERING_SHADOWS 33783, true) + DoCast(me,
+-- SPELL_SHADOW_NOVA 33846, true) + me->KillSelf() (no KillSelf
+-- binding). The casts bridge (self-cast convention) but the follow /
+-- instance-lookup / kill legs don't — documented-only (NOT
+-- registered; shaffar-beacon precedent).
 -- All Talk() calls in the file accounted for (3 ported above;
 -- SAY_HELP 2 rides the traveler timer machine — documented-only;
 -- SAY_INTRO 0 — documented-only above).
@@ -78,16 +100,63 @@ local SAY_AGGRO = 1
 local SAY_SLAY  = 3
 local SAY_DEATH = 4
 
+local SPELL_SHADOWBOLT_VOLLEY = 33841
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_SHADOWBOLT_VOLLEY: DoCast(me, SHADOWBOLT_VOLLEY 33841)
+-- non-triggered self-cast, randtime(7s,14s) init / randtime(15s,30s)
+-- re-arm.
+local function shadowboltVolleyTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SHADOWBOLT_VOLLEY)
+    schedule(guid, "volley", {15000, 30000}, function()
+        shadowboltVolleyTick(creature, guid)
+    end)
+end
+
 -- C++ boss_grandmaster_vorpilAI::JustEngagedWith:
 -- events.ScheduleEvent(EVENT_SHADOWBOLT_VOLLEY, 7s, 14s);
 -- if (IsHeroic()) events.ScheduleEvent(EVENT_BANISH, 15s);
 -- events.ScheduleEvent(EVENT_DRAW_SHADOWS, 45s);
 -- events.ScheduleEvent(EVENT_SUMMON_TRAVELER, 90s);
 -- Talk(SAY_AGGRO); SummonPortals(); — the auriaya precedent
--- (event 1; the ScheduleEvent legs + SummonPortals() ride the
--- no-timer / no-summon bridges — documented-only).
+-- (event 1; the EVENT_SHADOWBOLT_VOLLEY leg is ported above; the
+-- remaining ScheduleEvent legs (heroic-only banish / draw_shadows /
+-- summon_traveler) + SummonPortals() ride the documented-only
+-- bridges — see the header).
 local function vorpilEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "volley", {7000, 14000}, function()
+        shadowboltVolleyTick(creature, guid)
+    end)
+end
+
+local function vorpilLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_grandmaster_vorpilAI::KilledUnit:
@@ -106,8 +175,10 @@ end
 -- bridge — documented-only).
 local function vorpilDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 1, vorpilEnterCombat)
+RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 2, vorpilLeaveCombat)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 3, vorpilTargetDied)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 4, vorpilDied)

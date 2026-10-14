@@ -37,8 +37,8 @@
 -- ScheduleEvent calls (lava strike / flame tsunami / call tenebron /
 -- shadron / vesperon) have no bridges — the tharon_ja / malygos
 -- BossAI-bookkeeping and no-cast / no-timer-event precedents).
--- EVENT_CLEAVE_ATTACK — DoCastVictim(SPELL_CLEAVE 56909) 2-arg
--- non-triggered, 7s init / {7s,10s} re-arm (:174 / :461-:464).
+-- EVENT_CLEAVE_ATTACK — DoCastVictim(SPELL_CLEAVE 56909) 1-arg
+-- non-triggered, 7s init / {7s,10s} re-arm (:175 / :461-:464).
 -- EVENT_FLAME_BREATH — Talk(SAY_SARTHARION_BREATH 2) +
 -- DoCastVictim(SPELL_FLAME_BREATH 56908) non-triggered, 20s init /
 -- {25s,35s} re-arm (:176 / :452-:456).
