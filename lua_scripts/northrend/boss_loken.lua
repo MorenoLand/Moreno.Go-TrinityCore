@@ -21,7 +21,9 @@
 -- AddSC_boss_loken() only; whole-server-tree grep for
 -- "spell_loken_pulsing_shockwave" hits boss_loken.cpp only; zero
 -- sql/ hits for either. No loken lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
+-- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied, 9
+-- OnDamageTaken (lua_creature_events.go fires (event, creature, attacker,
+-- damage) pre-application — the moroes convention).
 -- No timers in the ported arms; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
@@ -38,6 +40,17 @@
 -- bookkeeping passthrough and
 -- instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_PULSING_SHOCKWAVE_AURA
 -- 59414) have no bridges).
+-- DamageTaken — the health-pct one-shot machine (event 9): C++
+-- DamageTaken arms Talk(SAY_75HEALTH 5 / SAY_50HEALTH 6 /
+-- SAY_25HEALTH 7) when HealthBelowPctDamaged(100 - 25 *
+-- _healthAmountModifier, damage), then ++_healthAmountModifier;
+-- _healthAmountModifier resets to 1 in Reset()/Initialize
+-- (boss_loken.cpp:94/:180-198). PORTED as a per-GUID latch with
+-- the moroes pre-application convention: (health - damage)
+-- decides, one arm per DamageTaken call like the C++ if, latch
+-- reset on events 1/2/23. The "no DamageTaken bridge" header
+-- claim was stale (event 9 fires on the Lua surface) and is
+-- retracted.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28923):
 -- boss_loken Reset / Initialize (_healthAmountModifier = 1 flag +
@@ -59,12 +72,14 @@
 -- self at 20-21s); EVENT_RESUME_PULSING_SHOCKWAVE
 -- (DoCast(me, SPELL_PULSING_SHOCKWAVE_AURA 59414, triggered) +
 -- ClearUnitState(UNIT_STATE_CASTING) + DoCast(me,
--- SPELL_PULSING_SHOCKWAVE 52961, triggered)) — no timer-event /
--- cast / target-selection bridges; Talk arms 3 and 9 ride the
--- unmodeled machine.
--- DamageTaken — the health-pct one-shot machine (SAY_75HEALTH 5 /
--- SAY_50HEALTH 6 / SAY_25HEALTH 7 via _healthAmountModifier stepping
--- 100-25*n) — no DamageTaken bridge.
+-- SPELL_PULSING_SHOCKWAVE 52961, triggered)) — STAYS OUT: the
+-- legs are the blocker, not the timer bridge (CreateLuaEvent
+-- exists) — EVENT_LIGHTNING_NOVA's
+-- RemoveAurasDueToSpell(SPELL_PULSING_SHOCKWAVE 52961) has no
+-- aura-removal bridge, EVENT_RESUME's ClearUnitState has no bridge,
+-- and EVENT_ARC_LIGHTNING gates on SelectTarget(Random). Talk arms
+-- 3 and 9 ride the unmodeled machine.
+
 -- spell_loken_pulsing_shockwave (SpellScript OnEffectHitTarget
 -- CalculateDamage: damage *= distance2d when > 1.0f,
 -- SPELL_PULSING_SHOCKWAVE 52961 EFFECT_0) — no SpellScript bridge;
@@ -75,12 +90,16 @@ local ENTRY_LOKEN = 28923
 local SAY_AGGRO = 2
 local SAY_SLAY = 4
 local SAY_DEATH = 8
+local SAY_75HEALTH = 5
+local SAY_50HEALTH = 6
+local SAY_25HEALTH = 7
 
 -- C++ JustEngagedWith: BossAI bookkeeping + Talk(AGGRO) +
 -- SetPhase(PHASE_NORMAL) + three ScheduleEvent legs +
 -- DoStartTimedAchievement — only the Talk arm is bridgeable.
 local function lokenEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    lokenResetMod(creature:GetGUID())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -91,6 +110,37 @@ local function lokenTargetDied(event, creature, victim)
     end
 end
 
+-- C++ DamageTaken (boss_loken.cpp:180-198):
+-- if (HealthBelowPctDamaged(100 - 25*_healthAmountModifier, damage))
+-- { Talk(SAY_75/50/25HEALTH by case 1/2/3); ++_healthAmountModifier; }
+-- _healthAmountModifier starts at 1 in Reset()/Initialize (:94), so
+-- the latch resets on combat events; one arm per call like the C++
+-- if. (health - damage) decides per the moroes pre-application
+-- convention.
+local lokenHealthMod = {}
+
+local SAY_BY_MOD = { [1] = SAY_75HEALTH, [2] = SAY_50HEALTH, [3] = SAY_25HEALTH }
+
+local function lokenDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local mod = lokenHealthMod[guid] or 1
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if (creature:GetHealth() - damage) * 100 / maxHealth < (100 - 25 * mod) then
+        local say = SAY_BY_MOD[mod]
+        if say then
+            creature:Talk(say)
+        end
+        lokenHealthMod[guid] = mod + 1
+    end
+end
+
+local function lokenResetMod(guid)
+    lokenHealthMod[guid] = 1
+end
+
 -- C++ JustDied: Talk(DEATH) + _JustDied() +
 -- DoRemoveAurasDueToSpellOnPlayers(PULSING_SHOCKWAVE_AURA 59414) —
 -- only the Talk arm is bridgeable.
@@ -99,5 +149,8 @@ local function lokenDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_LOKEN, 1, lokenEnterCombat)
+RegisterCreatureEvent(ENTRY_LOKEN, 2, function(e, c) lokenResetMod(c:GetGUID()) end)
 RegisterCreatureEvent(ENTRY_LOKEN, 3, lokenTargetDied)
 RegisterCreatureEvent(ENTRY_LOKEN, 4, lokenDied)
+RegisterCreatureEvent(ENTRY_LOKEN, 9, lokenDamageTaken)
+RegisterCreatureEvent(ENTRY_LOKEN, 23, function(e, c) lokenResetMod(c:GetGUID()) end)

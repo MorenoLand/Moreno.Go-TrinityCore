@@ -25,16 +25,20 @@
 -- "achievement_abuse_the_ooze" hits boss_sjonnir.cpp only; zero
 -- sql/ hits for all four. boss_sjonnir.lua is the audited
 -- port artifact for this unit (entry 27978 bridgeable arms).
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
--- OnDied. No timers in the ported arms; melee is engine-driven
--- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 23 OnReset. Driven by CreateLuaEvent
+-- timers; melee is engine-driven in Go (creature combat tick),
+-- like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
 -- CheckRequiredBosses / EnterEvadeMode gate has no
 -- required-bosses bridge; the BossAI::JustEngagedWith passthrough
--- and the six ScheduleEvent legs have no bridges — the
--- boss_bookkeeping precedent for the passthrough, no timer
--- bridge for the legs).
+-- has no bridge (boss_bookkeeping precedent); the six
+-- ScheduleEvent legs seed the timer machine — CreateLuaEvent
+-- is the timer bridge (the stale "no timer bridge for the legs"
+-- claim is retracted), and the seed moves to OnEnterCombat(1)
+-- with cancel on 2/4/23 (krystallus/bjarngrim/halion
+-- convention).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER,
 -- then Talk(SAY_SLAY 1) — PORTED (event 3; the razuvious
 -- player-gated variant precedent: victim nil-guard,
@@ -48,17 +52,31 @@
 -- DoAction(ACTION_OOZE_DEAD 1) / GetData(DATA_ABUSE_THE_OOZE 2)
 -- — abuseTheOoze counter — no DoAction / GetData bridge
 -- (consumer: achievement_abuse_the_ooze below).
--- UpdateAI event machine — EVENT_CHAIN_LIGHTNING (random-target
--- DoCast 50830, 10s/15s); EVENT_LIGHTNING_SHIELD (self 50831);
--- EVENT_STATIC_CHARGE (DoCastVictim 50834, 20s/25s);
--- EVENT_LIGHTNING_RING (self 51849, 30s/35s); EVENT_SUMMON
--- (health-tier PipeLocations summon: FORGED_IRON_DWARF 27982 /
--- FORGED_IRON_TROGG 27979 / MALFORMED_OOZE 27981 / EARTHEN_DWARF
--- 27980, TEMPSUMMON_CORPSE_TIMED_DESPAWN 30s, 20s reschedule);
--- EVENT_FRENZY (triggered FRENZY 28747); the UNIT_STATE_CASTING
--- gates and the DoMeleeAttackIfReady tail have no bridges —
--- no timer-event / cast / target-selection / health-pct /
--- summon bridges.
+-- UpdateAI event machine (boss_sjonnir.cpp:144-200), PORTED arms:
+-- EVENT_LIGHTNING_SHIELD DoCast(me, SPELL_LIGHTING_SHIELD 50831)
+-- non-triggered, one-shot 20s/25s, no re-arm — PORTED as a
+-- one-shot CreateLuaEvent + CastSpell(creature, 50831).
+-- EVENT_STATIC_CHARGE DoCastVictim(SPELL_STATIC_CHARGE 50834)
+-- non-triggered, 20s/25s init -> 20s/25s loop — PORTED as
+-- CreateLuaEvent + CastSpell(nil, 50834).
+-- EVENT_LIGHTNING_RING DoCast(me, SPELL_LIGHTING_RING 51849)
+-- non-triggered, 30s/35s init -> 30s/35s loop — PORTED as
+-- CreateLuaEvent + CastSpell(creature, 51849) (51849’s 2s
+-- periodic trigger of 50841 is spell-data-driven, no script
+-- leg). The UNIT_STATE_CASTING gates have no bridge (documented
+-- deviation); DoMeleeAttackIfReady is engine-driven.
+-- STAY-OUT: EVENT_CHAIN_LIGHTNING DoCast(target, 50830)
+-- gates on SelectTarget(Random, 0, 100, true) — no
+-- random-target bridge (porting as victim-cast would fabricate
+-- targeting; the C++ re-arms even when no target is found, so a
+-- victim-only port diverges further); EVENT_SUMMON health-tier
+-- (75/50/25%) PipeLocations summon machine (FORGED_IRON_DWARF
+-- 27982 / FORGED_IRON_TROGG 27979 / MALFORMED_OOZE 27981 /
+-- EARTHEN_DWARF 27980, TEMPSUMMON_CORPSE_TIMED_DESPAWN 30s, 20s
+-- reschedule) — no SummonCreature bridge (the health-tier
+-- latch alone can’t be ported without the summon cast);
+-- EVENT_FRENZY DoCast(me, SPELL_FRENZY 28747, true) —
+-- triggered self-cast, no triggered-cast bridge.
 -- npc_malformed_ooze (CreatureScript via
 -- GetHallsOfStoneAI<npc_malformed_oozeAI> (ScriptedAI);
 -- NPC_MALFORMED_OOZE = 27981, local enum in boss_sjonnir.cpp —
@@ -85,11 +103,75 @@ local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
 
+local SPELL_LIGHTING_SHIELD = 50831
+local SPELL_STATIC_CHARGE = 50834
+local SPELL_LIGHTING_RING = 51849
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_STATIC_CHARGE (:173-175): DoCastVictim(50834)
+-- non-triggered, 20s/25s init -> 20s/25s loop.
+local function staticChargeTick(creature, guid)
+    creature:CastSpell(nil, SPELL_STATIC_CHARGE)
+    schedule(guid, "staticCharge", {20000, 25000}, function()
+        staticChargeTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_LIGHTNING_RING (:177-179): DoCast(me, 51849)
+-- non-triggered, 30s/35s init -> 30s/35s loop; the 2s periodic
+-- trigger of 50841 is spell-data-driven.
+local function lightningRingTick(creature, guid)
+    creature:CastSpell(creature, SPELL_LIGHTING_RING)
+    schedule(guid, "lightningRing", {30000, 35000}, function()
+        lightningRingTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: Talk(AGGRO) + required-bosses gate +
 -- BossAI passthrough + ScheduleEvent legs — only the Talk arm is
 -- bridgeable.
 local function sjonnirEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+-- C++ EVENT_LIGHTNING_SHIELD (:170-172): DoCast(me, 50831)
+-- non-triggered, one-shot 20s/25s, no re-arm.
+    schedule(guid, "lightningShield", {20000, 25000}, function()
+        creature:CastSpell(creature, SPELL_LIGHTING_SHIELD)
+    end)
+    schedule(guid, "staticCharge", {20000, 25000}, function()
+        staticChargeTick(creature, guid)
+    end)
+    schedule(guid, "lightningRing", {30000, 35000}, function()
+        lightningRingTick(creature, guid)
+    end)
+end
+
+local function sjonnirCombatEnd(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -104,8 +186,11 @@ end
 -- bridgeable.
 local function sjonnirDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_SJONNIR, 1, sjonnirEnterCombat)
+RegisterCreatureEvent(ENTRY_SJONNIR, 2, sjonnirCombatEnd)
 RegisterCreatureEvent(ENTRY_SJONNIR, 3, sjonnirTargetDied)
 RegisterCreatureEvent(ENTRY_SJONNIR, 4, sjonnirDied)
+RegisterCreatureEvent(ENTRY_SJONNIR, 23, sjonnirCombatEnd)

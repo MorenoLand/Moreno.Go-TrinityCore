@@ -26,9 +26,10 @@
 -- "spell_varos_energize_core_area_entry" hits boss_varos.cpp only
 -- (registered from inside AddSC_boss_varos, no separate loader
 -- lines); zero sql/ hits. No varos lua existed.
--- Eluna creature events: 1 OnEnterCombat, 4 OnDied. No timers in
--- the ported arms; melee is engine-driven in Go (creature combat
--- tick), like C++ DoMeleeAttackIfReady.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
+-- OnDied, 23 OnReset. Driven by CreateLuaEvent timers; melee is
+-- engine-driven in Go (creature combat tick), like C++
+-- DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
 -- BossAI::JustEngagedWith instance-bookkeeping leg has no bridge —
@@ -42,21 +43,38 @@
 -- on instance->GetBossState(DATA_DRAKOS) != DONE — no instance /
 -- cast bridges; the react-state / flag / immunity arms live in the
 -- spell_varos_centrifuge_shield AuraScript below, also unbridged.
--- Reset — _Reset() + events.ScheduleEvent(EVENT_AMPLIFY_MAGIC,
--- 20s/25s) + events.ScheduleEvent(EVENT_ENERGIZE_CORES_VISUAL, 5s)
--- + events.ScheduleEvent(EVENT_CALL_AZURE, 15s/30s) + Initialize()
--- (member state) — no timer-event / instance bridges.
+-- Reset — _Reset() + the three ScheduleEvent legs (AMPLIFY_MAGIC
+-- 20s/25s, ENERGIZE_CORES_VISUAL 5s, CALL_AZURE 15s/30s) +
+-- Initialize() member state — the timer bridge is CreateLuaEvent
+-- (the stale "no timer-event bridge" claim is retracted); the
+-- ports seed from OnEnterCombat(1) and cancel on 2/4/23 per the
+-- krystallus/bjarngrim/halion convention. The out-of-combat Reset
+-- seed is unmodeled (maiden precedent).
 -- UpdateAI — the energize-cores / azure-captain / amplify-magic
--- event machine: EVENT_ENERGIZE_CORES DoCast(me,
--- SPELL_ENERGIZE_CORES 50785); EVENT_ENERGIZE_CORES_VISUAL
--- firstCoreEnergize latch (coreEnergizeOrientation = own
--- orientation) then NormalizeOrientation(-2.0f) per fire +
--- DoCast(me, SPELL_ENERGIZE_CORES_VISUAL 62136); EVENT_CALL_AZURE
--- DoCast(me, SPELL_CALL_AZURE_RING_CAPTAIN 51002) + Talk(SAY_AZURE
--- 1) + Talk(SAY_AZURE_EMOTE 2); EVENT_AMPLIFY_MAGIC DoCastVictim(
--- SPELL_CALL_AMPLIFY_MAGIC 51054) — no timer-event / cast /
--- random-target bridges; the UNIT_STATE_CASTING gates have no
--- bridge; DoMeleeAttackIfReady is engine-driven.
+-- event machine (boss_varos.cpp:119-155), PORTED arms:
+-- EVENT_AMPLIFY_MAGIC DoCastVictim(SPELL_CALL_AMPLIFY_MAGIC 51054)
+-- non-triggered, 20s/25s init -> 17s/20s loop — PORTED as
+-- CreateLuaEvent + CastSpell(nil, 51054) (GetVictim nil-guard not
+-- needed: CastSpell(nil) resolves the victim in-engine, bjarngrim
+-- lieutenant precedent).
+-- EVENT_ENERGIZE_CORES_VISUAL DoCast(me,
+-- SPELL_ENERGIZE_CORES_VISUAL 62136) non-triggered, 5s loop —
+-- PORTED as CreateLuaEvent + CastSpell(creature, 62136). The
+-- firstCoreEnergize / coreEnergizeOrientation latch is unmodeled:
+-- its only consumer is the spell_varos_energize_core_area
+-- SpellScripts’ orientation filter (no SpellScript bridge).
+-- EVENT_CALL_AZURE Talk(SAY_AZURE 1) + Talk(SAY_AZURE_EMOTE 2),
+-- 15s/30s init -> 20s/25s loop — PORTED on a CreateLuaEvent
+-- timer; the DoCast(me, SPELL_CALL_AZURE_RING_CAPTAIN 51002) leg
+-- STAYS OUT: SPELL_EFFECT_SEND_EVENT driving the azure-captain
+-- summon machinery — no summon/event-send bridge.
+-- EVENT_ENERGIZE_CORES DoCast(me, SPELL_ENERGIZE_CORES 50785)
+-- one-shot 4s after each VISUAL then CancelEvent — STAYS OUT:
+-- the spell’s area targeting is SpellScript-filtered (the cone
+-- filter above, no bridge) so a bare cast would hit the wrong
+-- targets — shazzrah no-op-cast precedent; the 4s chain dies
+-- with this stay-out. The UNIT_STATE_CASTING gates have no bridge
+-- (documented deviation); DoMeleeAttackIfReady is engine-driven.
 -- npc_azure_ring_captain — ENTRY-UNVERIFIABLE, documented-only
 -- (the entry-unverifiable queue, eleventh script group after
 -- npc_unstable_sphere; the local enum holds only
@@ -94,11 +112,86 @@ local ENTRY_VAROS = 27447
 
 local SAY_AGGRO = 0
 local SAY_DEATH = 3
+local SAY_AZURE = 1
+local SAY_AZURE_EMOTE = 2
+
+local SPELL_ENERGIZE_CORES_VISUAL = 62136
+local SPELL_CALL_AMPLIFY_MAGIC = 51054
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_AMPLIFY_MAGIC (:145-148): DoCastVictim(51054)
+-- non-triggered, 20s/25s init -> 17s/20s loop.
+local function amplifyTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CALL_AMPLIFY_MAGIC)
+    schedule(guid, "amplify", {17000, 20000}, function()
+        amplifyTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_ENERGIZE_CORES_VISUAL (:125-136): DoCast(me, 62136)
+-- non-triggered, 5s loop. The orientation latch is unmodeled
+-- (SpellScript-only consumer); the 4s EVENT_ENERGIZE_CORES chain
+-- dies with the 50785 stay-out.
+local function energizeVisualTick(creature, guid)
+    creature:CastSpell(creature, SPELL_ENERGIZE_CORES_VISUAL)
+    schedule(guid, "energizeVisual", 5000, function()
+        energizeVisualTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_CALL_AZURE (:138-143): Talk(SAY_AZURE) +
+-- Talk(SAY_AZURE_EMOTE), 15s/30s init -> 20s/25s loop. The 51002
+-- summon leg stays out (no summon/event-send bridge).
+local function azureTick(creature, guid)
+    creature:Talk(SAY_AZURE)
+    creature:Talk(SAY_AZURE_EMOTE)
+    schedule(guid, "azure", {20000, 25000}, function()
+        azureTick(creature, guid)
+    end)
+end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith(who) +
 -- Talk(SAY_AGGRO) — the Talk arm is unconditional.
 local function varosEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "amplify", {20000, 25000}, function()
+        amplifyTick(creature, guid)
+    end)
+    schedule(guid, "energizeVisual", 5000, function()
+        energizeVisualTick(creature, guid)
+    end)
+    schedule(guid, "azure", {15000, 30000}, function()
+        azureTick(creature, guid)
+    end)
+end
+
+local function varosCombatEnd(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ JustDied: _JustDied() + Talk(SAY_DEATH) + DoCast(me,
@@ -107,7 +200,9 @@ end
 -- bridge (urom precedent).
 local function varosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_VAROS, 1, varosEnterCombat)
-RegisterCreatureEvent(ENTRY_VAROS, 4, varosDied)
+RegisterCreatureEvent(ENTRY_VAROS, 2, varosCombatEnd)
+RegisterCreatureEvent(ENTRY_VAROS, 23, varosCombatEnd)
