@@ -35134,13 +35134,15 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	// zeros teleported every accepted player resurrection to map 0 (0,0,0).
 	// The m_corpseTarget arm has no Go model (no corpse targets on the client
 	// path — spells.go target check notes); appliedAura is 0 on this path.
-	s.sendResurrectLog(spell.ID, s.playerGUID, targetGUID)
 	targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
 	// Spell::SendResurrectRequest (Spell.cpp:4693-4709): the fourth byte
 	// overrides the corpse-reclaim delay for spells carrying
 	// SPELL_ATTR3_IGNORE_RESURRECTION_TIMER; spiritHealer stays false for
 	// player casters and the name stays empty (client resolves by GUID).
+	// The request goes first: C++ SendDirectMessages it during the effect
+	// while the log is only flushed in FinishTargetProcessing (Spell.cpp:3612).
 	targetSess.sendResurrectRequest(s.playerGUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
+	s.sendResurrectLog(spell.ID, s.playerGUID, targetGUID)
 }
 
 // sendResurrectLog mirrors Spell::ExecuteLogEffectResurrect

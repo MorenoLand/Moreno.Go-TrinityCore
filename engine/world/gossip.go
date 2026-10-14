@@ -393,15 +393,20 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				// Spell::ExecuteLogEffectResurrect (Spell.cpp:4617-4621) as
 				// flushed by SendLogExecute: caster is the creature, and the
 				// log broadcasts to nearby like C++ (was session-only).
-				s.sendResurrectLog(17251, guid, s.playerGUID)
 				// SetResurrectRequestData WorldRelocates the caster: the
 				// stored location is the spirit healer's position (the accept
 				// path teleports the ghost there before resurrecting).
 				s.setResurrectRequestData(guid, objectUint32OrZero(creature, "Map"), x, y, z, health, mana, 0)
 				// Spell::SendResurrectRequest (Spell.cpp:4693-4709): creature
 				// caster name, spirit-healer sickness flag set, reclaim-timer
-				// override from the spell's attributes.
+				// override from the spell's attributes. The request goes first:
+				// C++ SendDirectMessages it during EffectResurrect while the
+				// log is only flushed in FinishTargetProcessing (Spell.cpp:3612).
 				s.sendResurrectRequest(guid, name, true, !ignoreReclaim)
+				// Spell::ExecuteLogEffectResurrect (Spell.cpp:4617-4621) as
+				// flushed by SendLogExecute: caster is the creature, and the
+				// log broadcasts to nearby like C++ (was session-only).
+				s.sendResurrectLog(17251, guid, s.playerGUID)
 				s.gossipClosed = true
 			}
 		} else if item.Action == 4 { // GOSSIP_OPTION_TAXIVENDOR
@@ -907,7 +912,7 @@ type loadedGossipOption struct {
 }
 
 // trainerValidForCreature mirrors the GOSSIP_OPTION_TRAINER visibility gate in
-// Player::PrepareGossipMenu (Player.cpp:14478-14489): the option is hidden (and
+// Player::PrepareGossipMenu (Player.cpp:14449-14455): the option is hidden (and
 // C++ logs a sql error) when the creature has no trainer row or the trainer is
 // not valid for the player. Same lookup as sendTrainerList.
 func (s *session) trainerValidForCreature(ctx context.Context, creatureEntry uint32) bool {
@@ -918,8 +923,7 @@ func (s *session) trainerValidForCreature(ctx context.Context, creatureEntry uin
 	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
 		FROM trainer AS t
 		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
-		   OR t.Id = ?
-		LIMIT 1`, creatureEntry, creatureEntry).Scan(&tType, &tReq)
+		LIMIT 1`, creatureEntry).Scan(&tType, &tReq)
 	if err != nil {
 		return false
 	}

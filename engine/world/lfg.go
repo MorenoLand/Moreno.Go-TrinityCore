@@ -1821,9 +1821,27 @@ func roundQuestXPValue(xp uint32) uint32 {
 func (s *session) writeLFGRandomDungeonReward(ctx context.Context, buf *protocol.Buffer, dungeon wotlk.LFGDungeon, level uint8) {
 	var firstQuest, otherQuest uint32
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx,
-			"SELECT firstQuestId, otherQuestId FROM lfg_dungeon_rewards WHERE dungeonId = ? AND maxLevel >= ? ORDER BY maxLevel ASC LIMIT 1",
-			dungeon.ID, level).Scan(&firstQuest, &otherQuest)
+		// Mirror LFGMgr::GetRandomDungeonReward (LFGMgr.cpp:1725-1737): the
+		// reward pointer is assigned BEFORE the maxLevel break check, so when
+		// the player out-levels every row the last (highest-maxLevel) row is
+		// used instead of no reward. Rows load ordered by maxLevel ASC
+		// (LFGMgr.cpp:135), so keep the last row seen and break on the first
+		// row that reaches the player level.
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx,
+			"SELECT firstQuestId, otherQuestId, maxLevel FROM lfg_dungeon_rewards WHERE dungeonId = ? ORDER BY maxLevel ASC",
+			dungeon.ID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var maxLevel uint8
+				if scanErr := rows.Scan(&firstQuest, &otherQuest, &maxLevel); scanErr != nil {
+					break
+				}
+				if maxLevel >= level {
+					break
+				}
+			}
+		}
 	}
 	var detail *questDetailData
 	done := false
