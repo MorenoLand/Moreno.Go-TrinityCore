@@ -738,26 +738,20 @@ func (w *wardenSession) handleCheckResult(data []byte) error {
 		case MemCheck:
 			memRes, err := r.ReadU8()
 			if err != nil || memRes != 0 {
-				if checkFailed == 0 {
-					checkFailed = id
-				}
+				checkFailed = id
 				continue
 			}
 			expected, _ := mgr.getCheckResult(id)
 			got, err := r.Read(len(expected))
 			if err != nil || !bytes.Equal(got, expected) {
-				if checkFailed == 0 {
-					checkFailed = id
-				}
+				checkFailed = id
 				continue
 			}
 
 		case PageCheckA, PageCheckB, DriverCheck, ModuleCheck:
 			res, err := r.ReadU8()
 			if err != nil || res != 0xE9 {
-				if checkFailed == 0 {
-					checkFailed = id
-				}
+				checkFailed = id
 				continue
 			}
 
@@ -773,17 +767,13 @@ func (w *wardenSession) handleCheckResult(data []byte) error {
 		case MpqCheck:
 			mpqRes, err := r.ReadU8()
 			if err != nil || mpqRes != 0 {
-				if checkFailed == 0 {
-					checkFailed = id
-				}
+				checkFailed = id
 				continue
 			}
 			gotSha, err := r.Read(sha1.Size)
 			expected, _ := mgr.getCheckResult(id)
 			if err != nil || !bytes.Equal(gotSha, expected) {
-				if checkFailed == 0 {
-					checkFailed = id
-				}
+				checkFailed = id
 				continue
 			}
 		}
@@ -872,7 +862,11 @@ func (w *wardenSession) update(diff time.Duration) {
 			if w.clientResponseTimer > maxDelay {
 				w.session.server.Logger.Warn("exceeded Warden module response delay - disconnecting client",
 					"account", w.session.accountName)
-				w.applyPenalty(nil, "Warden module response delay exceeded")
+				// Warden::Update kicks unconditionally here (Warden::KickPlayer),
+				// it is NOT routed through the configured check-fail action.
+				if w.session.conn != nil {
+					_ = w.session.conn.Close()
+				}
 				return
 			}
 			w.clientResponseTimer += diff
