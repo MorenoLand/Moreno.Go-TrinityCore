@@ -52,10 +52,12 @@
 --   phase-independent scheduler seed ports: 10-min EVENT_BERSERK —
 --   DoCastSelf(SPELL_BERSERK 26662) non-triggered + Talk(SAY_BERSERK 15)
 --   (:296-300), one-shot. The phase-one scheduler seeds stay out:
---   SummonWaveP1 (summon machine), Shadow Bolt / Death and Decay
---   (random-target SelectTarget), Dominate Mind (random-target
---   SelectTargetList + difficulty gate), DoImproveCultist (cross-creature
---   machine) — see documented-only.
+--   SummonWaveP1 (summon machine); Shadow Bolt / Death and Decay —
+--   SelectTarget(Random) with default playerOnly=FALSE (UnitAI.h:170),
+--   pets/totems eligible, so the player-only bridge would fabricate
+--   targeting (the dagran precedent); Dominate Mind (random-target
+--   SelectTargetList + difficulty gate — no difficulty bridge);
+--   DoImproveCultist (cross-creature machine) — see documented-only.
 -- npc_cult_fanatic (37890, icecrown_citadel.h:175) — C++ schedules in
 --   Reset() (:601-615); re-keyed to the add's own OnEnterCombat
 --   (summoned mid-combat with immediate AttackStart, boss JustSummoned
@@ -103,9 +105,12 @@
 -- boss_lady_deathwhisper DamageTaken — Talk(SAY_PHASE_2 8) +
 -- Talk(EMOTE_PHASE_2 9) ride the mana-power pct gate of the phase
 -- transition (no health-pct bridge; the garfrost precedent);
--- the mana-barrier aura legs and phase-2 scheduler machine
--- (Frostbolt / Frostbolt Volley / Touch of Insignificance /
--- Summon Spirits casts) have no bridge.
+-- the mana-barrier aura legs have no bridge. The DamageTaken
+-- phase-2 transition + Frostbolt / Frostbolt Volley GROUP_TWO seeds
+-- PORTED 2026-10-14 (event-9 latch; Touch of Insignificance stays
+-- out — victim-targeted AddAura has no bridge, the Lua AddAura is
+-- self-only; Summon Spirits stays out — creature-cast path has no
+-- SPELL_EFFECT_SUMMON delivery leg, the eregos precedent).
 -- boss_lady_deathwhisper JustDied — the Full House achievement
 -- legs, the DaranavanMoveEvent, faction/ReactState legs, and
 -- KilledMonsterCredit(NPC_DARNAVAN_CREDIT) group loop have no
@@ -147,10 +152,14 @@ local SAY_AGGRO = 7
 local SAY_KILL = 14
 local SAY_DEATH = 16
 local SAY_BERSERK = 15
+local SAY_PHASE_2 = 8 -- boss_lady_deathwhisper.cpp:43
+local EMOTE_PHASE_2 = 9 -- :44
 local SAY_DARNAVAN_AGGRO = 0
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_MANA_BARRIER = 70842
+local SPELL_FROSTBOLT = 71420 -- :66
+local SPELL_FROSTBOLT_VOLLEY = 72905 -- :67
 local SPELL_VAMPIRIC_MIGHT = 70674
 local SPELL_SHADOW_CLEAVE = 70670
 local SPELL_NECROTIC_STRIKE = 70659
@@ -163,6 +172,10 @@ local SPELL_MORTAL_STRIKE = 65926
 local SPELL_SUNDER_ARMOR = 65936
 
 local timers = {}
+
+-- C++ _phase (PHASE_ONE=2 / PHASE_TWO=3, :141-142); Lua-side latch for
+-- the event-9 phase-2 transition (loken event-9 precedent).
+local deathwhisperPhase = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -195,25 +208,88 @@ local function onBerserk(creature, guid)
     creature:Talk(SAY_BERSERK)
 end
 
+-- C++ DamageTaken phase-2 transition (:407-417): gate
+-- _phase == PHASE_ONE && damage > me->GetPower(POWER_MANA); then
+-- Talk(SAY_PHASE_2 8) + Talk(EMOTE_PHASE_2 9), damage -= mana,
+-- RemoveAurasDueToSpell(MANA_BARRIER), CancelGroup(GROUP_ONE), seed
+-- GROUP_TWO. Dropped legs: DoStartMovement / ResetThreatList (no
+-- motion/threat bridges), SetPower(MANA, 0) (no SetPower bridge —
+-- no behavioral effect: the gate latches on PHASE_TWO).
+-- FIDELITY CAVEAT: the mana_barrier AuraScript is unbridged, so in Go
+-- mana never drains and damage > mana fires only on a single hit
+-- exceeding her full mana pool — the transition condition is C++-exact,
+-- but it will rarely fire live until the engine models the barrier.
+local function frostboltTick(creature, guid)
+    -- C++ :423-427 GROUP_TWO: DoCastVictim(SPELL_FROSTBOLT), 12s init,
+    -- Repeat() (12s loop).
+    creature:CastSpell(nil, SPELL_FROSTBOLT)
+    schedule(guid, "frostbolt", 12000, function()
+        frostboltTick(creature, guid)
+    end)
+end
+
+local function frostboltVolleyTick(creature, guid)
+    -- C++ :428-432 GROUP_TWO: DoCastAOE(SPELL_FROSTBOLT_VOLLEY),
+    -- self-cast (boss_ai.go:4783 convention), 20s init, Repeat()
+    -- (20s loop).
+    creature:CastSpell(creature, SPELL_FROSTBOLT_VOLLEY)
+    schedule(guid, "frostboltvolley", 20000, function()
+        frostboltVolleyTick(creature, guid)
+    end)
+end
+
+local function deathwhisperDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if deathwhisperPhase[guid] == 3 then
+        return
+    end
+    local mana = creature:GetPower()
+    if damage > mana then
+        deathwhisperPhase[guid] = 3
+        creature:Talk(SAY_PHASE_2)
+        creature:Talk(EMOTE_PHASE_2)
+        creature:RemoveAura(SPELL_MANA_BARRIER)
+        -- C++ CancelGroup(GROUP_ONE): no GROUP_ONE timer is ported for
+        -- her GUID (berserk is phase-independent), so nothing to cancel.
+        schedule(guid, "frostbolt", 12000, function()
+            frostboltTick(creature, guid)
+        end)
+        schedule(guid, "frostboltvolley", 20000, function()
+            frostboltVolleyTick(creature, guid)
+        end)
+        local newDamage = damage - mana
+        if newDamage ~= damage then
+            return true, newDamage
+        end
+    end
+end
+
 -- C++ boss_lady_deathwhisper::JustEngagedWith (:281-342): the
 -- CheckRequiredBosses evade branch has no bridge; the phase-one
--- scheduler seeds (SummonWaveP1 / Shadow Bolt / DoImproveCultist) stay
--- out (summon / random-target / cross-creature machines). Talk(SAY_AGGRO)
+-- scheduler seeds stay out: SummonWaveP1 (summon machine), Shadow Bolt
+-- / Death and Decay (playerOnly=FALSE default — dagran precedent),
+-- Dominate Mind (difficulty gate), DoImproveCultist (cross-creature
+-- machine). Talk(SAY_AGGRO)
 -- (:338) then DoCastSelf(SPELL_MANA_BARRIER, true) TRIGGERED (:340).
 local function deathwhisperJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    deathwhisperPhase[guid] = 2 -- PHASE_ONE (:290)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_MANA_BARRIER, true)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
 end
 
 local function deathwhisperLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    deathwhisperPhase[guid] = nil
 end
 
 local function deathwhisperReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    deathwhisperPhase[guid] = nil
 end
 
 -- C++ boss_lady_deathwhisper::KilledUnit:
@@ -348,6 +424,7 @@ RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 1, deathwhisperJustEngagedWith)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 2, deathwhisperLeaveCombat)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 3, deathwhisperKilledUnit)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 4, deathwhisperJustDied)
+RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 9, deathwhisperDamageTaken)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 23, deathwhisperReset)
 RegisterCreatureEvent(ENTRY_CULT_FANATIC, 1, fanaticEnterCombat)
 RegisterCreatureEvent(ENTRY_CULT_FANATIC, 2, fanaticLeaveCombat)

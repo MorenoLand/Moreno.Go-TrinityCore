@@ -92,8 +92,11 @@
 -- ACTION_ENABLE_FIRE_BOMB / ACTION_DISABLE_FIRE_BOMB /
 -- ACTION_ACTIVE_SNOBOLD — cross-AI DoAction-gated (no bridge);
 -- EVENT_FIRE_BOMB — SelectTarget(Random,0,0.0f,true) -> CastSpell(
--- SPELL_FIRE_BOMB 66313), 12s/25s init, 20s/30s repeat (no
--- random-target bridge — cairne/kazzak precedent); EVENT_BATTER /
+-- SPELL_FIRE_BOMB 66313), 12s/25s init, 20s/30s repeat — port-ready
+-- in isolation (the random-target bridge exists), but stays out
+-- because the cancel/re-arm machine is unbridged (cross-AI DoAction
+-- ENABLE/DISABLE, MountOnBoss vehicle entry, EVENT_THROW's throw-off):
+-- porting it alone would over-cast (jedoga bar); EVENT_BATTER /
 -- EVENT_HEAD_CRACK — DoCast(vehicleBase, 66408 / 66407) else
 -- DoCastVictim (DoCastVictim legs port-pattern-ready in isolation but
 -- fire only via the vehicle/SetGUID/SetCombatMovement machine —

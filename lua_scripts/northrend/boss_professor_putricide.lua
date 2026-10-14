@@ -58,8 +58,14 @@
 -- (:590-592) — OUT: Talk-only + EnterEvadeMode, DoAction-phase
 -- driven. Talk(SAY_TRANSFORM_1 7) / Talk(SAY_TRANSFORM_2 8) ride
 -- the EVENT_PHASE_TRANSITION legs (:669-690) — OUT: phase machine.
--- EVENT_SLIME_PUDDLE (:602-609) OUT: SelectTargetList random-target
--- leg (:605, no SelectTarget bridge). EVENT_TEAR_GAS (:617-619)
+-- EVENT_SLIME_PUDDLE (:602-609) PORTED 2026-10-14: SelectTargetList(
+-- 2, Random, 0, 0.0f, playerOnly=TRUE) -> up to 2 random players x
+-- DoCast(target, SPELL_SLIME_PUDDLE_TRIGGER 70341) non-triggered,
+-- 10s init (:267), Repeat(35s) OUTSIDE the target-empty guard
+-- (re-arm unconditional); the stale "no SelectTarget bridge" claim
+-- for this arm is retracted (maiden/jaraxxus GetPlayersInWorld
+-- precedent, any-range modeled with 100 — curator precedent).
+-- EVENT_TEAR_GAS (:617-619)
 -- and EVENT_RESUME_ATTACK (:621-628) OUT: phase-transition machine
 -- (MovePoint + tear-gas chain). EVENT_UNBOUND_PLAGUE (:657-663)
 -- OUT: heroic-gated (:270) + NonTankTargetSelector condition leg
@@ -119,6 +125,7 @@ local SAY_BERSERK = 12
 local SPELL_OOZE_TANK_PROTECTION = 71770
 local SPELL_MUTATED_PLAGUE_CLEAR = 72618
 local SPELL_BERSERK2 = 47008
+local SPELL_SLIME_PUDDLE_TRIGGER = 70341
 
 local timers = {}
 
@@ -141,6 +148,40 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ EVENT_SLIME_PUDDLE: SelectTargetList(2, Random, 0, 0.0f,
+-- playerOnly=TRUE) -> DoCast(target, SPELL_SLIME_PUDDLE_TRIGGER
+-- 70341) non-triggered per target, 10s init (:267), Repeat(35s)
+-- outside the target-empty guard (re-arm unconditional — the
+-- ScheduleEvent at :608 runs even when the list is empty).
+-- Caveat (keleseth/thorim/jaraxxus): C++ draws from the threat
+-- list (engaged units); the bridge can include nearby unengaged
+-- players. The 30s transition delay (events.DelayEvents(30s),
+-- ACTION_CHANGE_PHASE) rides the unported phase machine.
+local function randomPlayers(creature, range, count)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    local targets = {}
+    for i = 1, math.min(count, #candidates) do
+        targets[i] = table.remove(candidates, math.random(#candidates))
+    end
+    return targets
+end
+
+local function slimePuddleTick(creature, guid)
+    for _, target in ipairs(randomPlayers(creature, 100, 2)) do
+        creature:CastSpell(target, SPELL_SLIME_PUDDLE_TRIGGER)
+    end
+    schedule(guid, "slimepuddle", 35000, function()
+        slimePuddleTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_BERSERK: 10min single-fire, all phases — Talk(SAY_BERSERK) +
 -- DoCast(me, SPELL_BERSERK2) non-triggered (:266/:598-600).
 local function onBerserk(creature, guid)
@@ -159,6 +200,8 @@ local function putricideJustEngagedWith(event, creature, target)
     -- (triggered self-cast).
     creature:CastSpell(creature, SPELL_OOZE_TANK_PROTECTION, true)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
+    -- C++ :267 — events.ScheduleEvent(EVENT_SLIME_PUDDLE, 10s).
+    schedule(guid, "slimepuddle", 10000, function() slimePuddleTick(creature, guid) end)
 end
 
 -- C++ Reset/_Reset() timer machinery — cancel/re-arm on combat

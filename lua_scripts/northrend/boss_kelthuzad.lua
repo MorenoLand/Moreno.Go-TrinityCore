@@ -56,7 +56,7 @@
 -- SetPhase(PHASE_TWO) + NOT_SELECTABLE/immune/ReactState/ThreatList
 -- legs + Talk(EMOTE_PHASE_TWO 13) + the five phase-two event schedules
 -- — no phase / react-state / threat bridges; EVENT_FROSTBOLT_VOLLEY —
--- DoCastAOE(SPELL_FROSTBOLT_VOLLEY 28479) 2-arg (non-triggered),
+-- DoCastAOE(SPELL_FROSTBOLT_VOLLEY 28479) single-arg (triggered=false is the default),
 -- randtime(24s,28s) init, randtime(16s,18s) repeat — stays OUT:
 -- scheduled only in PHASE_TWO via EVENT_PHASE_TWO (:441/:449-452);
 -- the phase machine has no bridge (gothik precedent; the Oct-12 "no
@@ -67,7 +67,7 @@
 -- DoCast(DETONATE_MANA 27819) — no random-target bridge;
 -- EVENT_FROST_BLAST — SelectTarget(Random, 1) -> DoCast(FROST_BLAST
 -- 27808) — no random-target bridge; EVENT_CHAINS —
--- DoCastAOE(SPELL_CHAINS_DUMMY 28408) 2-arg (non-triggered),
+-- DoCastAOE(SPELL_CHAINS_DUMMY 28408) single-arg (triggered=false is the default),
 -- randtime(60s,80s) init, 1min+randtime(0s,20s) repeat — stays OUT:
 -- scheduled only in PHASE_TWO via EVENT_PHASE_TWO + gated on
 -- Is25ManRaid (:447/:475-480); the phase machine and the difficulty
