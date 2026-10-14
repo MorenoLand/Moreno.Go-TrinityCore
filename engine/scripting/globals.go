@@ -393,6 +393,7 @@ const (
 	itemSubclassArmorEnchantment  = 14
 	itemSubclassWeaponEnchantment = 15
 	itemFlagConjured              = 0x00000002
+	itemFlagBoundToAccount        = 0x08000000
 	bagFamilyMaskCurrencyTokens   = 0x00002000
 )
 
@@ -403,13 +404,13 @@ const (
 // GetRequiredLevel, GetBuyPrice, GetBuyCount, GetSellPrice,
 // GetInventoryType, GetAllowableClass, GetAllowableRace, GetMaxStackCount,
 // GetBagSize, GetStatsCount, GetItemSet, GetRandomProperty,
-// GetRandomSuffix, HasQuest, IsBag, IsPotion,
+// GetRandomSuffix, HasQuest, IsBag, IsPotion, IsBoundAccountWide,
 // IsWeaponVellum, IsArmorVellum, IsConjuredConsumable, IsCurrencyToken,
 // GetSpellId and GetSpellTrigger (ItemMethods.h).
 // The generic object methods supply GetEntry/GetGUID/GetGUIDLow/GetTypeId
 // (object.go). The instance-bound surface (GetOwner, GetOwnerGUID,
 // GetSlot, GetBagSlot, GetEnchantmentId, IsEquipped, IsBroken, IsLocked,
-// IsBoundAccountWide, IsBoundByEnchant, IsNotBoundToPlayer, IsNotEmptyBag,
+// IsBoundByEnchant, IsNotBoundToPlayer, IsNotEmptyBag,
 // IsInBag, IsInTrade, CanBeTraded, GetItemLink — the item method's
 // enchantment/random-property/owner-level legs need the live item) and
 // the mutating surface (SetOwner, SetBinding, SetCount, SetEnchantment,
@@ -564,6 +565,14 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 				return t.BagFamily&bagFamilyMaskCurrencyTokens != 0
 			}), nil
 		},
+		// Item::IsBoundAccountWide (ItemMethods.h:32 via ItemTemplate.h:179):
+		// Flags & ITEM_FLAG_IS_BOUND_TO_ACCOUNT (0x08000000) — pure
+		// template read despite the instance-sounding name.
+		"IsBoundAccountWide": func(context.Context, []any) ([]any, error) {
+			return templateValue(func(t ItemTemplateLive) any {
+				return t.Flags&itemFlagBoundToAccount != 0
+			}), nil
+		},
 	}
 	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}
 }
@@ -589,8 +598,8 @@ type MapLive struct {
 // IsBattleground come from the live MapLive (MapMethods.h). The remaining
 // Map surface (GetHeight/GetDifficulty/GetPlayerCount/GetAreaId(x,y,z)/
 // GetWorldObject/SetWeather/GetInstanceData/SaveInstanceData/GetPlayers,
-// plus IsEmpty (Map::isEmpty reads the live m_mapRefManager player refs)
-// and IsHeroic (Map::IsHeroic reads the live i_spawnMode difficulty))
+// plus IsEmpty (Map::isEmpty reads the live loaded-grid list, not player
+// count) and IsHeroic (Map::IsHeroic reads the live i_spawnMode difficulty))
 // needs a live Map* with grid/difficulty/ref state and stays unbridged.
 func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 	load := live.Load
