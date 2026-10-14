@@ -110,7 +110,9 @@ end
 -- DoCast(me, SPELL_FRENZIED_RAGE) with default args (non-triggered),
 -- IsEnraged = true.
 -- Eluna event 9 fires pre-damage, so the projected-health check subtracts
--- the incoming damage (jeklik precedent — C++-exact).
+-- the incoming damage. C++ HealthBelowPctDamaged compares against the
+-- floored integer threshold (ironaya convention) — the fractional
+-- (health - damage) * 100 < 30 * maxHealth form fired up to 1 HP early.
 local function akuMaiDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = akuMaiState(guid)
@@ -121,7 +123,7 @@ local function akuMaiDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (health - damage) * 100 < 30 * maxHealth then
+    if health - damage < math.floor(maxHealth * 30 / 100) then
         st.enraged = true
         creature:CastSpell(creature, SPELL_FRENZIED_RAGE, false)
     end

@@ -213,17 +213,18 @@ local function onSWPain(creature, guid)
     if st == nil or st.phase == PHASE_TWO then
         return
     end
-    local target = nil
     if st.phase == PHASE_ONE then
         -- C++ DoCastVictim — the tank, nil falls back to current victim.
-        target = nil
+        creature:CastSpell(nil, SPELL_SW_PAIN)
     else
-        -- C++ SelectTarget(Random, 1, 100, true): random non-tank. No
-        -- threat model, so a random alive player excluding the current
-        -- victim (C++ position 1 = never on the tank).
-        target = randomAlivePlayer(creature, true)
+        -- C++ SelectTarget(Random, 1, 100, true): random non-tank. C++
+        -- guards if (target) and skips the cast with no second target,
+        -- so a nil pick must NOT fall back to the victim (the tank).
+        local target = randomAlivePlayer(creature, true)
+        if target then
+            creature:CastSpell(target, SPELL_SW_PAIN)
+        end
     end
-    creature:CastSpell(target, SPELL_SW_PAIN)
     schedule(guid, "swpain", 20000, function() onSWPain(creature, guid) end)
 end
 
