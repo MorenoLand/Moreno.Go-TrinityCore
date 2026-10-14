@@ -35134,7 +35134,7 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	// zeros teleported every accepted player resurrection to map 0 (0,0,0).
 	// The m_corpseTarget arm has no Go model (no corpse targets on the client
 	// path — spells.go target check notes); appliedAura is 0 on this path.
-	s.sendResurrectLog(spell.ID, targetGUID)
+	s.sendResurrectLog(spell.ID, s.playerGUID, targetGUID)
 	targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
 	// Spell::SendResurrectRequest (Spell.cpp:4693-4709): the fourth byte
 	// overrides the corpse-reclaim delay for spells carrying
@@ -35147,12 +35147,12 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 // (Spell.cpp:4618-4622) as flushed by SendLogExecute (Spell.cpp:4523-4552):
 // SMSG_SPELLLOGEXECUTE carrying the effect id, the InitEffectExecuteData
 // target counter, and the resurrected player's packed GUID.
-func (s *session) sendResurrectLog(spellID uint32, targetGUID uint64) {
+func (s *session) sendResurrectLog(spellID uint32, casterGUID uint64, targetGUID uint64) {
 	if s == nil || s.player == nil {
 		return
 	}
 	log := protocol.NewBuffer(32)
-	log.WritePackedGUID(s.playerGUID)
+	log.WritePackedGUID(casterGUID)
 	log.WriteU32(spellID)
 	log.WriteU32(1)
 	log.WriteU32(spellEffectResurrect)

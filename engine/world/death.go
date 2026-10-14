@@ -2203,7 +2203,7 @@ func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
 		// EffectResurrectNew (SpellEffects.cpp:246-275) logs the effect,
 		// stores the request at the caster's location, and sends the request
 		// whose reclaim-delay byte is !HasAttribute(IGNORE_RESURRECTION_TIMER).
-		s.sendResurrectLog(spell.ID, s.playerGUID)
+		s.sendResurrectLog(spell.ID, s.playerGUID, s.playerGUID)
 		s.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
 		s.sendResurrectRequest(s.playerGUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
 		return
@@ -2243,7 +2243,7 @@ func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellE
 		// EffectResurrectNew (SpellEffects.cpp:246-275) logs the effect,
 		// stores the request at the caster's location, and sends the request
 		// whose reclaim-delay byte is !HasAttribute(IGNORE_RESURRECTION_TIMER).
-		s.sendResurrectLog(spell.ID, targetGUID)
+		s.sendResurrectLog(spell.ID, s.playerGUID, targetGUID)
 		targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
 		targetSess.sendResurrectRequest(s.playerGUID, "", false, ignoreReclaimTimer)
 	}

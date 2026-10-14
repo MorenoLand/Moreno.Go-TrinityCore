@@ -391,16 +391,9 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				y, _ := objectFloat32Field(creature, "Y")
 				z, _ := objectFloat32Field(creature, "Z")
 				// Spell::ExecuteLogEffectResurrect (Spell.cpp:4617-4621) as
-				// flushed by SendLogExecute: caster is the creature here, not
-				// the player sendResurrectLog assumes.
-				log := protocol.NewBuffer(32)
-				log.WritePackedGUID(guid)
-				log.WriteU32(17251)
-				log.WriteU32(1)
-				log.WriteU32(spellEffectResurrect)
-				log.WriteU32(1)
-				log.WritePackedGUID(s.playerGUID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+				// flushed by SendLogExecute: caster is the creature, and the
+				// log broadcasts to nearby like C++ (was session-only).
+				s.sendResurrectLog(17251, guid, s.playerGUID)
 				// SetResurrectRequestData WorldRelocates the caster: the
 				// stored location is the spirit healer's position (the accept
 				// path teleports the ghost there before resurrecting).
