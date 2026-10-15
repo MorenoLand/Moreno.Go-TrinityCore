@@ -70,9 +70,12 @@
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - Intercept machine (GetCombatManager().GetPvECombatRefs() loop:
 --   nobody IsWithinMeleeRange -> DoCast(SelectTarget(Random, 0),
---   SPELL_INTERCEPT_STUN 27577), 500ms init -> 10000ms loop) — gates
---   on the combat-manager melee-range loop AND SelectTarget (the_
---   beast / doomwalker precedent), so no timer was ported for it.
+--   SPELL_INTERCEPT_STUN 27577), 500ms init -> 10000ms loop) —
+--   re-keyed 2026-10-15 (timer doctrine): the timer leg bridges
+--   (CreateLuaEvent is live) but the payload gates on the
+--   combat-manager melee-range loop AND SelectTarget (the_beast /
+--   doomwalker precedent — both absent), so the machine stays out;
+--   the stale "no timer bridge" claim is corrected.
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature

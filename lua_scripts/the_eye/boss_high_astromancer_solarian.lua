@@ -81,7 +81,9 @@
 --    1000 for non-player (pet) picks — the threat list has no
 --    bridge, the player pool makes that arm unreachable;
 --    non-triggered DoCast(target, SPELL_WRATH_OF_THE_
---    ASTROMANCER 42783) (C++-exact), re-arm 25000 (C++-exact).
+--    ASTROMANCER 42783) (C++-exact), re-arm 25000 on a player
+--    pick; no pick leaves the timer expired for a next-tick
+--    retry (C++-exact).
 -- 5. Portal transition arm (Phase1_Timer 50000): the whole
 --    Phase 2/3 portal machine — the UpdatePosition teleports,
 --    the NPC_ASTROMANCER_SOLARIAN_SPOTLIGHT 18928 /
@@ -267,14 +269,20 @@ local function combatTick(creature, guid)
         end
         -- 4. Wrath-of-the-astromancer arm — 15000 init:
         -- non-triggered cast on a random non-victim player,
-        -- re-arm 25000 (C++-exact; the non-player 1s re-arm has
-        -- no threat-list bridge — unreachable in this model).
+        -- re-arm 25000 on a player pick; no pick leaves the
+        -- timer expired for a next-tick retry (C++-exact; the
+        -- non-player 1s re-arm has no threat-list bridge —
+        -- unreachable in this model).
         if st.wrathOfAstromancerTimer <= 1000 then
             local target = randomNonVictimPlayer(creature)
             if target then
                 creature:CastSpell(target, SPELL_WRATH_OF_THE_ASTROMANCER)
+                st.wrathOfAstromancerTimer = 25000
             end
-            st.wrathOfAstromancerTimer = 25000
+            -- No target: the C++ leaves the timer expired so
+            -- the arm retries on the next tick (C++-exact);
+            -- the non-player 1s re-arm has no threat-list
+            -- bridge — unreachable in this model.
         else
             st.wrathOfAstromancerTimer = st.wrathOfAstromancerTimer - 1000
         end

@@ -63,14 +63,18 @@
 -- combat events (halycon precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - Polymorph machine (DoCast(SelectTarget(Random, 0), 13323) 1000ms
---   init -> 20000ms loop) — gates on SelectTarget (the_beast /
---   doomwalker precedent), so no timer was ported for it.
+--   init -> 20000ms loop) — re-keyed 2026-10-15 (timer doctrine):
+--   the timer leg bridges (CreateLuaEvent is live) but the payload
+--   gates on SelectTarget (no random-target bridge on the Lua
+--   surface — the_beast / doomwalker precedent), so the machine
+--   stays out; the stale "no timer bridge" claim is corrected.
 -- - Blizzard machine (DoCast(SelectTarget(Random, 0), 44178) 8000ms
---   init -> 8000ms loop) — same SelectTarget bridge absent.
+--   init -> 8000ms loop) — same: timer bridges, SelectTarget
+--   bridge absent, stays out.
 -- - Blink machine (GetCombatManager().GetPvECombatRefs() loop:
 --   anybody IsWithinMeleeRange -> DoCast(me, SPELL_BLINK 14514),
---   8000ms init -> 8000ms loop) — no combat-manager / melee-range
---   bridge on the Lua surface, so no timer was ported for it.
+--   8000ms init -> 8000ms loop) — re-keyed: timer bridges, but the
+--   combat-manager / melee-range legs have no bridge, stays out.
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature

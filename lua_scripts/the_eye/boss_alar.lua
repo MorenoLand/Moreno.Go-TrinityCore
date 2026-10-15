@@ -72,14 +72,19 @@
 --    precedent), only the TRIGGERED DoCast(me, SPELL_REBIRTH_
 --    2 35369, true) is bridged (C++-exact; the bounding-
 --    radius/display/flag arms have no bridges — unmodeled).
--- 4. Phase 1 arms: platforms-move cycle — 0 init then 30000+
---    rand()%5000: the platform MovePoints, the ember
---    DoSpawnCreature and the cur_wp bookkeeping have no
---    movement/summon bridge (steamrigger / omor precedents);
---    the only bridgeable output is the 20% branch — urand(0,
+-- 4. Phase 1 arms: platforms-move cycle — 0 init, cur_wp = 4
+--    (C++ Initialize(), modeled as state): cur_wp == 4 ->
+--    forced WE_PLATFORM move, re-arm 30000+rand()%5000, no
+--    quill roll (C++-exact); else the 20% branch — urand(0,
 --    4) == 0 (C++-exact): TRIGGERED DoCast(me, SPELL_FLAME_
---    QUILLS 34229, true) (C++-exact, the WE_QUILL arm). The
---    phase-1 !IsThreatened() evade arm has no threat model —
+--    QUILLS 34229, true) (the WE_QUILL arm, C++-exact), then
+--    the 10s WE_DUMMY wait before the next platform decision
+--    (C++-exact); else next platform (cur_wp = 3 -> 0),
+--    re-arm 30000+rand()%5000 (C++-exact). The platform
+--    MovePoints, the ember DoSpawnCreature and the WE_DUMMY
+--    movement-completion arms have no movement/summon bridge
+--    (steamrigger / omor precedents). The phase-1
+--    !IsThreatened() evade arm has no threat model —
 --    unmodeled (nightbane precedent).
 -- 5. Phase 2 arms (C++ arm order): charge — 30s: non-
 --    triggered DoCast(target, SPELL_CHARGE 35412) on a random
@@ -101,8 +106,12 @@
 -- current health while phase 1 and no WaitEvent pending:
 -- the rewrite zeroes the hit (C++ damage = 0 — the shim's
 -- second-return damage rewrite, combat.go:508), the latch
--- fires once (!WaitEvent — C++-exact), the phase-1 schedule
--- is dropped and the WE_DIE -> WE_REVIVE sequence starts.
+-- fires once (!WaitEvent — C++-exact for the WE_DIE /
+-- WE_REVIVE window via st.dying and for the 10s post-quill
+-- WE_DUMMY window via st.quillWait; the platform-movement
+-- windows are unknowable without a movement bridge —
+-- documented approximation), the phase-1 schedule is
+-- dropped and the WE_DIE -> WE_REVIVE sequence starts.
 -- OnDied(4): cleanup (the _JustDied arm is instance-blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the C++ Reset() observable remainder — the
@@ -299,10 +308,34 @@ local function combatTick(creature, guid)
         -- quills branch (C++-exact); the movement/summon arms
         -- have no bridge.
         if st.platform <= 1000 then
-            if math.random(0, 4) == 0 then
+            st.quillWait = false
+            if st.curWp == 4 then
+                -- WE_PLATFORM with no quill roll: the forced
+                -- platform move after a quill (cur_wp = 4) or
+                -- the initial state (C++-exact); the MovePoint
+                -- itself has no movement bridge.
+                st.curWp = 0
+                st.platform = 30000 + math.random(0, 4999)
+            elseif math.random(0, 4) == 0 then
+                -- WE_QUILL: the 20% branch — urand(0, 4) == 0
+                -- (C++-exact): TRIGGERED flame quills, then
+                -- the 10s WE_DUMMY wait before the next
+                -- platform decision (C++-exact).
                 creature:CastSpell(creature, SPELL_FLAME_QUILLS, true)
+                st.curWp = 4
+                st.quillWait = true
+                st.platform = 10000
+            else
+                -- WE_PLATFORM: next platform in the cycle
+                -- (C++-exact); the MovePoint/ember-summon arms
+                -- have no movement/summon bridge.
+                if st.curWp == 3 then
+                    st.curWp = 0
+                else
+                    st.curWp = st.curWp + 1
+                end
+                st.platform = 30000 + math.random(0, 4999)
             end
-            st.platform = 30000 + math.random(0, 4999)
         else
             st.platform = st.platform - 1000
         end
@@ -351,6 +384,8 @@ RegisterCreatureEvent(ENTRY_ALAR, 1, function(_, creature)
         phase = 1,
         berserk = 1200000,
         platform = 0,
+        curWp = 4,
+        quillWait = false,
         dying = false,
         dive = nil,
     }
@@ -386,6 +421,12 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
         return
     end
     if st.dying then
+        return 0, 0
+    end
+    if st.quillWait then
+        -- C++ DamageTaken !WaitEvent guard: during the 10s
+        -- post-quill WE_DUMMY wait lethal hits are absorbed
+        -- without starting the rebirth sequence (C++-exact).
         return 0, 0
     end
     if st.phase == 1 and damage >= creature:GetHealth() then

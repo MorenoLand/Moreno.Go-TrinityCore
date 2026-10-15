@@ -53,7 +53,13 @@
 -- emerald_dragonAI UpdateAI — the SPELL_SUMMON_PLAYER 24776 max-threat
 -- pull + DoMeleeAttackIfReady legs (no bridges); the base event machine
 -- (EVENT_SEEPING_FOG 120-150s DoCast pair, EVENT_NOXIOUS_BREATH 7.5-15s,
--- EVENT_TAIL_SWEEP 2s) rides no-timer / no-cast bridges.
+-- EVENT_TAIL_SWEEP 2s) — re-keyed 2026-10-15 (timer doctrine): the
+-- timer and cast legs bridge (CreateLuaEvent / CastSpell are live);
+-- the machine stays out because the payloads ride unbridged legs —
+-- the SPELL_SUMMON_PLAYER 24776 max-threat pull (no threat /
+-- random-target bridge — the_beast / doomwalker precedent) and the
+-- RemoveFlag / SetReactState legs. The stale "no-timer / no-cast"
+-- claim is corrected.
 -- emerald_dragonAI KilledUnit — who->CastSpell(who, SPELL_MARK_OF_NATURE
 -- 25040, triggered) gated on victim->GetTypeId() == TYPEID_PLAYER —
 -- zero Talk, does not port: the C++ caster is the victim (a player
@@ -81,17 +87,24 @@
 -- 24841/24842/24843 + DoCast SPELL_SHADE 24313 + NOT_SELECTABLE /
 -- NON_ATTACKABLE flags + REACT_PASSIVE + 60s _banishedTimer) —
 -- no-DamageTaken bridge; the SummonedCreatureDies _shades-- leg rides
--- no-summon-death bridge; the UpdateAI banish/timeout machine rides
--- no-timer / no-flag / no-react-state bridges.
+-- no-summon-death bridge; the UpdateAI banish/timeout machine —
+-- re-keyed 2026-10-15 (timer doctrine): the timer and cast legs
+-- bridge, but the machine stays out on the no-flag / no-react-state
+-- / no-summon bridges. The stale "no-timer" claim is corrected.
 -- The four dragon ExecuteEvent arms ported above (EVENT_LIGHTNING_WAVE
 -- / EVENT_SHADOW_BOLT_WHIRL / EVENT_VOLATILE_INFECTION /
 -- EVENT_ARCANE_BLAST / EVENT_BELLOWING_ROAR).
--- npc_dream_fog — zero Talk; the _roamTimer 15-30s chase / 2.5s
--- MoveRandom + MoveChase + SetWalk + walk-speed machine — no-movement /
--- no-timer bridges — NOT registered.
--- npc_spirit_shade — zero Talk; the IsSummonedBy MoveFollow +
--- MovementInform dark-offering cast + 1s DespawnOrUnsummon machine —
--- no-movement / no-cast / no-despawn bridges — NOT registered.
+-- npc_dream_fog — zero Talk; NOT registered: the _roamTimer 15-30s
+-- chase / 2.5s MoveRandom + MoveChase + SetWalk + walk-speed machine
+-- — re-keyed 2026-10-15 (timer doctrine): no-movement bridge is the
+-- true blocker (the timer leg bridges); with no registered Lua file
+-- the class stays out. The stale "no-timer" claim is corrected.
+-- npc_spirit_shade — zero Talk; NOT registered: the IsSummonedBy
+-- MoveFollow + MovementInform dark-offering cast + 1s
+-- DespawnOrUnsummon machine — no-movement / no-summon-death /
+-- no-despawn bridges are the true blockers (the timer and cast legs
+-- bridge); with no registered Lua file the class stays out. The
+-- stale "no-timer / no-cast" claim is corrected.
 -- spell_dream_fog_sleep + spell_mark_of_nature (SpellScriptLoaders) —
 -- no-SpellScript bridge — NOT registered.
 -- All Talk() calls in the file accounted for (4 ported above +

@@ -56,12 +56,17 @@
 -- - JustEngagedWith's DoCast(me, SPELL_SUMMON_IMP 44163) — summon
 --   bridge absent (razorgore precedent), so no imp was ported.
 -- - Seed-of-corruption machine (DoCast(SelectTarget(Random, 0), 44141)
---   2000ms init -> 10000ms loop) — gates on SelectTarget (the_beast /
---   doomwalker precedent), so no timer was ported for it.
+--   2000ms init -> 10000ms loop) — re-keyed 2026-10-15 (timer
+--   doctrine): the timer leg bridges (CreateLuaEvent is live) but
+--   the payload gates on SelectTarget (no random-target bridge —
+--   the_beast / doomwalker precedent), so the machine stays out;
+--   the stale "no timer bridge" claim is corrected.
 -- - Curse-of-agony machine (DoCast(SelectTarget(Random, 0), 14875)
---   1000ms init -> 13000ms loop) — same SelectTarget bridge absent.
+--   1000ms init -> 13000ms loop) — same: timer bridges,
+--   SelectTarget bridge absent, stays out.
 -- - Fear machine (DoCast(SelectTarget(Random, 0), 38595) 10000ms init
---   -> 10000ms loop) — same SelectTarget bridge absent.
+--   -> 10000ms loop) — same: timer bridges, SelectTarget bridge
+--   absent, stays out.
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature

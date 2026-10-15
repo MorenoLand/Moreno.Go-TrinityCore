@@ -78,23 +78,33 @@
 -- DoCast(SPELL_BLINK 34605) — stays OUT: the interrupt/motion legs
 -- have no bridge (the blink teleport effect has no lua-bridge model);
 -- EVENT_FIREBALL / EVENT_FROSTBOLT / EVENT_FROST_NOVA ported above.
--- npc_ethereal_beacon (18431) — zero Talk; the JustEngagedWith
--- cross-creature leg (FindNearestCreature(NPC_SHAFFAR 18344, 100f) +
--- AttackStart(who) when shaffar not in combat) rides no-cross-creature
--- / no-summon bridges; the EVENT_APPRENTICE 20s/10s
--- DoCast(SPELL_ETHEREAL_APPRENTICE 32372, triggered) +
--- DespawnOrUnsummon + EVENT_ARCANE_BOLT 1s DoCastVictim(SPELL_ARCANE_
--- BOLT 15254) 2-4.5s machine rides no-timer / no-cast /
--- no-despawn bridges — NOT registered.
--- npc_ethereal_apprentice — zero Talk; the alternating
--- EVENT_ETHEREAL_APPRENTICE_FIREBOLT (SPELL_FIREBOLT 32369) /
--- EVENT_ETHEREAL_APPRENTICE_FROSTBOLT (SPELL_FROSTBOLT 32370)
--- 3s-ping-pong triggered-victim-cast machine rides no-timer /
--- no-cast bridges — NOT registered.
--- npc_yor — zero Talk; the EVENT_DOUBLE_BREATH
--- DoCastVictim(SPELL_DOUBLE_BREATH 38361) 6-9s distance-gated
--- (ATTACK_DISTANCE) + DoMeleeAttackIfReady machine rides no-timer /
--- no-cast bridges — NOT registered.
+-- npc_ethereal_beacon (18431) — zero Talk; NOT registered (no Lua
+-- file for 18431/18430/yor): re-keyed 2026-10-15 (timer doctrine) —
+-- the timer and cast legs bridge (CreateLuaEvent / CastSpell are
+-- live), but the machines stay out on the real legs: the
+-- JustEngagedWith cross-creature leg (FindNearestCreature(NPC_SHAFFAR
+-- 18344, 100f) + AttackStart(who) when shaffar not in combat) has no
+-- cross-creature bridge; EVENT_APPRENTICE (DUNGEON_MODE 20s/10s —
+-- DoCast(SPELL_ETHEREAL_APPRENTICE 32372, triggered, summons 18430))
+-- rides the missing summon bridge and the DespawnOrUnsummon leg has
+-- no despawn bridge; EVENT_ARCANE_BOLT (1s init -> 2-4.5s loop,
+-- non-triggered victim cast) would bridge but has no registered
+-- creature to host it. The stale "no-timer / no-cast" claim is
+-- corrected — the absence of registrations is the true blocker.
+-- npc_ethereal_apprentice (18430) — zero Talk; NOT registered:
+-- the alternating EVENT_ETHEREAL_APPRENTICE_FIREBOLT (SPELL_FIREBOLT
+-- 32369, triggered) / EVENT_ETHEREAL_APPRENTICE_FROSTBOLT (SPELL_
+-- FROSTBOLT 32370, triggered) 3s-ping-pong victim-cast machine —
+-- timer + triggered-cast legs would bridge (CastSpell(target, spell,
+-- true)), but with no registered Lua file the whole class stays out.
+-- The stale "no-timer / no-cast" claim is corrected.
+-- npc_yor — zero Talk; NOT registered: the EVENT_DOUBLE_BREATH
+-- 6-9s machine (IsWithinDist(victim, ATTACK_DISTANCE)-gated
+-- non-triggered DoCastVictim(SPELL_DOUBLE_BREATH 38361) +
+-- DoMeleeAttackIfReady) — timer + cast legs would bridge, but the
+-- melee-range distance gate has no bridge (alar precedent) and no
+-- registered Lua file hosts the class. The stale "no-timer /
+-- no-cast" claim is corrected.
 -- All Talk() calls in the file accounted for (3 ported above +
 -- SAY_INTRO 0 MoveInLineOfSight + SAY_SUMMON 3 EVENT_BEACON machine
 -- documented above).

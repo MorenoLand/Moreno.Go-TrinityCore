@@ -56,8 +56,11 @@
 -- - The vanish machine (DoCast(me, SPELL_VANISH 44290) 2000ms init
 --   -> 30000ms loop; SelectTarget(Random, 0) -> ResetThreatList() +
 --   AddThreat(unit, 1000.0f), InVanish = true, Wait_Timer = 10000)
---   — gates on SelectTarget + threat-list bridges (the_beast /
---   doomwalker precedent), so no timer was ported for it.
+--   — re-keyed 2026-10-15 (timer doctrine): the timer leg bridges
+--   (CreateLuaEvent is live) but the payload gates on SelectTarget
+--   + threat-list bridges (the_beast / doomwalker precedent —
+--   absent), so the machine stays out; the stale "no timer bridge"
+--   claim is corrected.
 -- - The InVanish leg (Wait_Timer -> DoCastVictim(SPELL_BACKSTAB
 --   15657, true) + DoCastVictim(SPELL_KIDNEY_SHOT 27615, true) +
 --   me->SetVisible(true), InVanish = false; melee skipped while
