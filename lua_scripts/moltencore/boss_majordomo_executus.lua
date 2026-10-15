@@ -147,6 +147,11 @@ local function onTeleport(creature, guid)
     end)
 end
 
+-- Forward declaration: majordomoEnterCombat's timer closures reference
+-- onAegisPump textually before its local definition; without this the
+-- name compiles to a global and the aegis pump stream calls nil.
+local onAegisPump
+
 local function majordomoEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)

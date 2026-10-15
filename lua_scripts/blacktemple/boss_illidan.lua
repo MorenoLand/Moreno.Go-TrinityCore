@@ -386,6 +386,15 @@ local function getIllidanState(guid)
     return state
 end
 
+-- Forward declarations: armPhase1's timer closures reference
+-- onFlameCrash/onDrawSoul/onShear/onParasitic textually before their
+-- local definitions; without these the names compile to globals and
+-- the phase-1 event streams call nil.
+local onFlameCrash
+local onDrawSoul
+local onShear
+local onParasitic
+
 -- C++ ScheduleEvents(GROUP_PHASE_1, group): the first-fire times
 -- are 30s/34s/10s/26s.
 local function armPhase1(creature, guid)
@@ -552,6 +561,11 @@ end
 -- C++ armPhaseSchedule helper: GROUP_PHASE_3 = phase-1 arms +
 -- agonizing + the 60s one-shot demon arm; GROUP_PHASE_4 adds
 -- frenzy.
+-- Forward declaration: armPhaseSchedule's timer closure references
+-- onDemon textually before its local definition; without this the name
+-- compiles to a global and the 60s demon-form stream calls nil.
+local onDemon
+
 local function armPhaseSchedule(creature, guid, phase)
     armPhase1(creature, guid)
     if phase >= PHASE_3 then
@@ -625,6 +639,11 @@ local function onEyeBlast(creature, guid)
     cancelTimer(guid, "darkBarrage")
     creature:Talk(SAY_ILLIDAN_EYE_BLAST)
 end
+
+-- Forward declaration: onDarkBarrage's timer closure references
+-- onPillar textually before its local definition; without this the name
+-- compiles to a global and the 30s pillar cycle stream calls nil.
+local onPillar
 
 -- C++ EVENT_DARK_BARRAGE: non-triggered 40585 on a random alive
 -- player within 150 yd; re-arms eye blast 5s and extends the

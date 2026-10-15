@@ -116,6 +116,11 @@ local function onLivingBomb(creature, guid)
     end)
 end
 
+-- Forward declaration: baronGeddonEnterCombat's timer closures reference
+-- onArmageddonPump textually before its local definition; without this
+-- the name compiles to a global and the armageddon pump stream calls nil.
+local onArmageddonPump
+
 local function baronGeddonEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)

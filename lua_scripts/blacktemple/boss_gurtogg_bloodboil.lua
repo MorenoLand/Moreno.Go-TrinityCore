@@ -328,6 +328,11 @@ local function onChargePlayer(creature, guid)
     end
 end
 
+-- Forward declaration: onStartPhase2's timer closure references
+-- onChangePhase textually before its local definition; without this the
+-- name compiles to a global and the 60s phase-change stream calls nil.
+local onChangePhase
+
 -- C++ EVENT_START_PHASE_2: pick the fel rage target; the whole
 -- fel rage series follows. On no target: drop back to phase 1 and
 -- re-arm the phase-1 schedule + change-phase at 60s (C++-exact).

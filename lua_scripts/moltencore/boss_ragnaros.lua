@@ -230,6 +230,12 @@ end
 -- back. The C++ faction/emote/flag/AttackStart arms have no bridges;
 -- the sons-of-flame counter never advances (no summon bridge), so
 -- the >8-adds early-emerge arm is unmodeled.
+-- Forward declaration: onEmerge's timer closures reference onSubmerge
+-- textually before its local definition; without this the name compiles
+-- to a global and the 3-minute submerge stream calls nil (Ragnaros
+-- would never submerge).
+local onSubmerge
+
 local function onEmerge(creature, guid)
     getState(guid)
     schedule(guid, "eruption", 20000 + math.random(0, 25000), function()
