@@ -357,11 +357,11 @@ local function batriderBomb(creature, guid)
             batriderBomb(creature, guid)
         end, 5000)
     else
-        -- C++ leaves the timer armed and retries on the next UpdateAI
-        -- tick — no target means no cast and an immediate retry.
+        -- C++ leaves _bombTimer armed (expired) and retries on the next
+        -- UpdateAI tick: re-arm at 1ms so the next pump tick retries.
         batTimers[guid] = CreateLuaEvent(function()
             batriderBomb(creature, guid)
-        end, 1000)
+        end, 1)
     end
 end
 

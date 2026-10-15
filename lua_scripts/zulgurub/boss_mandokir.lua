@@ -153,7 +153,9 @@ end
 -- the health gate, C++-exact).
 local function onMortalStrike(creature, guid)
     local victim = creature:GetVictim()
-    if victim and victim:GetHealthPct() < 50 then
+    -- C++ HealthBelowPct(50) = strict health < trunc(max*50/100); the float
+    -- bridge fires 1 HP early on odd maxHealth, so use the floor boundary.
+    if victim and victim:GetHealth() < math.floor(victim:GetMaxHealth() * 50 / 100) then
         creature:CastSpell(victim, SPELL_MORTAL_STRIKE, true)
     end
     schedule(guid, "mortalstrike", math.random(12000, 18000), function()
