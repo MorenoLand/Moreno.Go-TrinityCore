@@ -48,10 +48,13 @@
 -- precedent). All timers cancelled on 2/4/23 (gargolmar precedent).
 -- No summon-arm Talk orphaning: EVENT_KNIFE's target leg rides the
 -- unbridged SelectTarget.
+-- boss_razuvious SpellHit (event 14, CREATURE_EVENT_ON_HIT_BY_SPELL —
+-- fires from the Go spell path, boss_ai.go:1885 / spells.go:9427; the
+-- old "SpellHit never fires in the Lua surface" ruling was stale):
+-- SPELL_UNDERSTUDY_TAUNT 29060 -> Talk(SAY_TAUNTED 2, caster) — the
+-- MC'd understudy's taunt is player-driven through the creature cast
+-- path, so the trigger is live in Go.
 -- Unmodeled (no bridges — documented, not wired):
--- boss_razuvious SpellHit — SPELL_UNDERSTUDY_TAUNT 29060 ->
--- Talk(SAY_TAUNTED 2, caster) — SpellHit never fires in the Lua
--- surface (SpellHit ruling);
 -- JustEngagedWith EVENT_ATTACK (7s) — SetCombatMovement(true) +
 -- MoveChase — no motion bridges;
 -- EVENT_KNIFE (10s init, randtime(10s,15s) repeat) —
@@ -80,8 +83,10 @@ local ENTRY_DK_UNDERSTUDY = 16803
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 3
+local SAY_TAUNTED = 2
 
 local SPELL_UNBALANCING_STRIKE = 26613
+local SPELL_UNDERSTUDY_TAUNT = 29060 -- boss_razuvious.cpp:40
 local SPELL_DISRUPTING_SHOUT = 29107 -- boss_razuvious.cpp:37
 local SPELL_HOPELESS = 29125 -- boss_razuvious.cpp:39
 
@@ -173,8 +178,16 @@ local function razyviousReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ SpellHit: hit by SPELL_UNDERSTUDY_TAUNT 29060 -> Talk(SAY_TAUNTED 2, caster).
+local function razyviousSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_UNDERSTUDY_TAUNT then
+        creature:Talk(SAY_TAUNTED, caster)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 1, razyviousEnterCombat)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 2, razyviousLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 3, razyviousTargetDied)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 4, razyviousDied)
+RegisterCreatureEvent(ENTRY_RAZUVIOUS, 14, razyviousSpellHit)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 23, razyviousReset)

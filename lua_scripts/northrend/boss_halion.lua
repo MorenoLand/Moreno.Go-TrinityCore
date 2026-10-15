@@ -74,7 +74,11 @@
 -- DoCastSelf SPELL_TWILIGHT_PHASING / controller SetData(PHASE_TWO)
 -- legs ride absent bridges.
 -- boss_halion SpellHit — Talk(SAY_REGENERATE 0) rides
--- SPELL_TWILIGHT_MENDING (the SpellHit-15-never-fires queue).
+-- SPELL_TWILIGHT_MENDING 75509 — stays out: the trigger is the
+-- unported npc_halion_controller's EVENT_TWILIGHT_MENDING cast
+-- (boss_halion.cpp:732-735), so event 14 can never fire with
+-- this ID (the old "SpellHit-15-never-fires" label was stale —
+-- event 14 fires from the Go spell path).
 -- boss_halion UpdateAI — Talk(SAY_METEOR_STRIKE 3) rides
 -- EVENT_METEOR_STRIKE, phase-machine-gated (PHASE_ONE->TWO transition
 -- via 75%-health DamageTaken + controller SetData, boss_halion.cpp:
@@ -102,8 +106,10 @@
 -- DoCastSelf SPELL_TWILIGHT_DIVISION / controller SetData legs ride
 -- absent bridges.
 -- boss_twilight_halion SpellHit — Talk(SAY_REGENERATE 0) rides
--- SPELL_TWILIGHT_MENDING (the SpellHit-15-never-fires queue); the
--- ACTION_MONITOR_CORPOREALITY DoAction leg rides no-DoAction bridge.
+-- SPELL_TWILIGHT_MENDING 75509 — stays out on the same unported-
+-- controller trigger (boss_halion.cpp:732-735); the SPELL_TWILIGHT_
+-- DIVISION -> controller DoAction(ACTION_MONITOR_CORPOREALITY)
+-- leg rides the no-DoAction bridge.
 -- boss_twilight_halion JustDied — zero Talk; the DoCastSelf
 -- (SPELL_CLEAR_DEBUFFS 75396) cast leg is PORTED (twilightHalionDied,
 -- boss_halion.cpp:599-605 — the halion->LowerPlayerDamageReq /

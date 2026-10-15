@@ -92,10 +92,12 @@
 --   bridges.
 -- - SpellHit(10347) on boss and minions (the whole awaken
 --   sequence: Talk(SAY_AGGRO), 4s/5s waking-up timers,
---   AttackStart(instance->GetGuidData(0))): CreatureEventOn
---   SpellHitTarget = 15 never fires in the Go engine
---   (stratholme finding) — STRAND; registering the timers
---   without the SpellHit arm would be a firesworn stub.
+--   AttackStart(instance->GetGuidData(0))): stays out — the
+--   trigger is the unported instance_uldaman.cpp ActivateArchaedas
+--   self-cast (instance_uldaman.cpp:260-268), so event 14 can
+--   never fire with this ID (the old "event 15 never fires"
+--   label was stale — the C++ hook is void SpellHit = event 14,
+--   which fires from the Go spell path).
 -- - uiWallMinionTimer 10s -> instance->SetData(DATA_MINIONS,
 --   IN_PROGRESS): instance-model blocked; the timer alone
 --   would be a firesworn stub.

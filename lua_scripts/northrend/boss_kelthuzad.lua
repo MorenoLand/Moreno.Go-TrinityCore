@@ -47,8 +47,12 @@
 -- precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- SpellHit — SPELL_CHAINS_DUMMY 28408 -> Talk(SAY_CHAINS 10) +
--- SelectTargetList(3, Random) -> DoCast(CHains 28410) — SpellHit never
--- fires in the Lua surface (SpellHit ruling); EVENT_SKELETON /
+-- SelectTargetList(3, Random) -> DoCast(CHains 28410) — stays out:
+-- the trigger is the unported phase-two EVENT_CHAINS arm
+-- (boss_kelthuzad.cpp:446; no phase bridge, and this file models
+-- no timers), so event 14 can never fire with this ID (the old
+-- "SpellHit never fires in the Lua surface" ruling was stale —
+-- event 14 fires from the Go spell path). EVENT_SKELETON /
 -- EVENT_BANSHEE / EVENT_ABOMINATION — SummonCreature (summon STRAND
 -- absent); EVENT_DESPAWN_MINIONS — summons DespawnOrUnsummon +
 -- Talk(SAY_AGGRO 7) — summon/despawn bridges absent (Talk not ported

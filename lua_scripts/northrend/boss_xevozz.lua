@@ -58,8 +58,11 @@
 -- SAY_SPAWN (3) and SAY_CHARGED (4) are never Talk()ed anywhere in the
 -- file (dead enum text, the cyanigosa precedent).
 -- Talk(SAY_SUMMON_ENERGY 6) rides the SpellHit SPELL_ARCANE_POWER
--- (54160) / H_SPELL_ARCANE_POWER (59474) leg — no SpellHit bridge;
--- joins the no-SpellHit-bridge queue.
+-- (54160) / H_SPELL_ARCANE_POWER (59474) leg — stays out: the
+-- trigger is the unregistered npc_ethereal_sphere's proximity
+-- DoCastAOE (boss_xevozz.cpp:224-241), so event 14 can never fire
+-- with these IDs (the old "no SpellHit bridge" label was stale —
+-- event 14 fires from the Go spell path).
 -- The ScheduleTasks ethereal-sphere summon leg (Talk(SAY_REPEAT_
 -- SUMMON 5), 5s init / 45-47s Repeat, random summon-spell pick from
 -- {54102, 54137, 54138} via DoCast(me, ...), heroic 2.5s delayed

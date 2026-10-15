@@ -76,10 +76,16 @@
 -- health / timer-event bridges. UpdateAI (phase-one arcane
 -- event machine, vortex handling, power-spark handling,
 -- phase-three disk/scion machine) — no timer-event / cast /
--- phase bridges. SpellHit (SPELL_POWER_SPARK_MALYGOS Talk
--- SAY_BUFF_SPARK 14 + despawn the spark; SPELL_MALYGOS_BERSERK
--- Talk EMOTE_HIT_BERSERKER_TIMER) — no SpellHit / cast
--- bridges (joins the SpellHit-15-never-fires queue).
+-- phase bridges. SpellHit — SPELL_POWER_SPARK_MALYGOS 56152
+-- (Talk SAY_BUFF_SPARK 14 + despawn the spark) stays out: the
+-- trigger is Malygos's MoveInLineOfSight arm (no LOS bridge —
+-- next bullet), so event 14 can never fire with this ID;
+-- SPELL_MALYGOS_BERSERK 47008 -> Talk(EMOTE_HIT_BERSERKER_TIMER
+-- 19) is PORTED (event 14): the trigger is the self-cast
+-- SPELL_BERSERK 60670 aura (ported at engage above), whose
+-- 10-minute effect delivers 47008 to Malygos — event 14 fires
+-- from the Go spell path (boss_ai.go:1885; the old
+-- "SpellHit-15-never-fires" ruling was stale).
 -- MoveInLineOfSight (power-spark proximity -> cast
 -- SPELL_POWER_SPARK_MALYGOS) — no LOS bridge.
 -- npc_portal_eoe (NPC_PORTAL_TRIGGER 30118) — SpellHit
@@ -147,6 +153,8 @@ local SAY_DEATH = 17
 -- (UnitAI.cpp default target self); the periodic aura itself carries the
 -- 10-minute berserk timer, so the faithful port casts it once at engage.
 local SPELL_BERSERK = 60670
+local SPELL_MALYGOS_BERSERK = 47008 -- boss_malygos.cpp:106
+local EMOTE_HIT_BERSERKER_TIMER = 19
 
 -- C++ JustEngagedWith (boss_malygos.cpp :563-:579): me->setActive(true) +
 -- instance->CheckRequiredBosses gate +
@@ -167,5 +175,13 @@ local function malygosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ SpellHit: hit by SPELL_MALYGOS_BERSERK 47008 -> Talk(EMOTE_HIT_BERSERKER_TIMER 19).
+local function malygosSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_MALYGOS_BERSERK then
+        creature:Talk(EMOTE_HIT_BERSERKER_TIMER)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
 RegisterCreatureEvent(ENTRY_MALYGOS, 4, malygosDied)
+RegisterCreatureEvent(ENTRY_MALYGOS, 14, malygosSpellHit)
