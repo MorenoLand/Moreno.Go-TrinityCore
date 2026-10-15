@@ -688,6 +688,13 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				s.server.fireCreatureTargetDied(ctx, pet, victim)
 			}
 			s.fireCreatureDied(ctx, motion)
+			// Death clears the assistance state with the engagement: the
+			// flag re-arms at the next engage (the Unit::AttackStop reset
+			// twin, Unit.cpp:5783) and the pending delayed assist dies.
+			motion.AlreadyCallAssistance = false
+			motion.AssistAt = time.Time{}
+			motion.AssistVictim = 0
+			motion.Assistants = nil
 			// BossAI::_JustDied (ScriptedCreature.cpp:512-518): native death
 			// hook after the Eluna event-23/4 fire, matching the
 			// Eluna-first/native-second order used at respawn (kill.go:865).

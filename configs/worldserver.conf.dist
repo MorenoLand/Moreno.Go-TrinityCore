@@ -3354,6 +3354,19 @@ NoGrayAggro.Above = 0
 NoGrayAggro.Below = 0
 
 #
+#     CreatureFamily.Assistance.Radius / CreatureFamily.Assistance.Delay
+#        Description: When a creature enters combat it calls nearby
+#                     same-faction creatures for assistance
+#                     (Creature::CallAssistance). Radius is the search range
+#                     in yards (0 disables the search); Delay is the
+#                     milliseconds before the gathered assistants engage.
+#        Default:     10.0 / 1500 - (Blizzlike)
+#
+
+CreatureFamily.Assistance.Radius = 10.0
+CreatureFamily.Assistance.Delay = 1500
+
+#
 #    PreventRenameCharacterOnCustomization
 #        Description: If option is set to 1, player can not rename the character in character customization.
 #                     Applies to all character customization commands.

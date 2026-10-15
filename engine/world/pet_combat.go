@@ -1226,6 +1226,14 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				tapPlayer, tapGroup = owner.playerGUID, owner.groupID
 			}
 			newlyTapped := s.recordCreatureTap(cMotion, tapPlayer, tapGroup, damage, cMotion.Health)
+			// Unit::DealDamage (Unit.cpp:905-906): the victim's threat
+			// manager adds threat for the attacker — the pet, not its
+			// owner. The add runs even on the killing blow (C++ order);
+			// the death branch below clears the table right after.
+			if cMotion.ThreatMgr == nil {
+				cMotion.ThreatMgr = NewThreatManager(cMotion)
+			}
+			cMotion.ThreatMgr.AddThreat(motion.GUID, float32(damage), true)
 			if damage >= cMotion.Health {
 				// Snapshot the pre-kill target for the death chain, like the
 				// player swing path's getCombatTarget-before-damage.
@@ -4507,7 +4515,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			if targetMotion.ThreatMgr == nil {
 				targetMotion.ThreatMgr = NewThreatManager(targetMotion)
 			}
-			targetMotion.ThreatMgr.AddThreat(caster.OwnerGUID, float32(damage), false)
+			targetMotion.ThreatMgr.AddThreat(caster.GUID, float32(damage), false)
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 			if next, changed := s.server.addCreatureRageLocked(targetMotion, targetMotion.Level, damage); changed {
 				rageNext, rageChanged = next, true

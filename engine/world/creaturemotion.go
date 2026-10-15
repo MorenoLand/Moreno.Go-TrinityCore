@@ -128,6 +128,20 @@ type creatureMotion struct {
 	TargetGUID uint64
 	InCombat   bool
 	LastAttack time.Time
+	// AlreadyCallAssistance mirrors Creature::m_AlreadyCallAssistance
+	// (Creature.cpp:2404): Unit::Attack (Unit.cpp:5737) fires
+	// Creature::CallAssistance once per engagement; the flag resets on real
+	// combat stop (Unit::AttackStop, Unit.cpp:5783 — bridged in
+	// triggerCreatureEvade) and on death (onCreatureKilled).
+	AlreadyCallAssistance bool
+	// AssistAt/AssistVictim/Assistants mirror the AssistDelayEvent queued by
+	// Creature::CallAssistance (Creature.h:523-536, Creature.cpp:2402-2425):
+	// after CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY the gathered assistants
+	// re-check Creature::CanAssistTo and engage the victim. Fired from
+	// stepCreatureMotion; cleared on evade and death.
+	AssistAt     time.Time
+	AssistVictim uint64
+	Assistants   []uint64
 	// LastDamaged mirrors Creature::m_lastDamagedTime as stamped by the
 	// evade arm of Unit::DealDamage (Unit.cpp:900-907): direct (melee,
 	// ranged, spell-direct) hits with damage > 0 reset it to now +
@@ -911,6 +925,189 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		// cast once at the engage victim, non-triggered; the AICOND_COMBAT
 		// event pre-arm ran inside the motion lock above.
 		s.castAggroConditionSpells(ctx, fireMotion, firePlayerGUID)
+	}
+	// Unit::Attack (Unit.cpp:5737) fires Creature::CallAssistance on every
+	// attack — the flag gates it to once per engagement — so the radius
+	// assist arms on every triggerCreatureAggro call, not just fresh
+	// engages. fireMotion may be nil when the spawn lookup failed.
+	s.callCreatureAssistance(ctx, fireMotion)
+}
+
+// callCreatureAssistance mirrors Creature::CallAssistance
+// (Creature.cpp:2402-2425): once per engagement (m_AlreadyCallAssistance,
+// gated here; reset on combat stop and death), same-faction, aggressive,
+// unengaged creatures within CONFIG_CREATURE_FAMILY_ASSISTANCE_RADIUS
+// (default 10.0) and in the caller's line of sight are gathered
+// (AnyAssistCreatureInRangeCheck, GridNotifiers.h:1263-1288); after
+// CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY (default 1500ms) the
+// AssistDelayEvent arm re-checks Creature::CanAssistTo per assistant and
+// engages the victim with a zero-threat seed (Unit::EngageWithTarget,
+// Unit.cpp:8429-8438). The C++ m_Events queue has no Go analog: the pending
+// assist rides the caller motion (AssistAt/AssistVictim/Assistants) and
+// fires from stepCreatureMotion. The !IsPet() && !IsCharmed() leg
+// (Creature.cpp:2404) is the OwnerGUID==0 twin — pets and charmed creatures
+// never reach this funnel. The IsNPCBotOrPet() exclusion (Unit.cpp:5737)
+// is vacuous: NPC bots are not creature motions.
+func (s *Server) callCreatureAssistance(ctx context.Context, caller *creatureMotion) {
+	if s == nil || caller == nil || caller.OwnerGUID != 0 {
+		return
+	}
+	radius := s.Config.CreatureFamilyAssistanceRadius
+	delayMs := s.Config.CreatureFamilyAssistanceDelay
+	if delayMs == 0 {
+		delayMs = 1500
+	}
+	// Resolve the victim's session before taking motionMu: findSessionByGUID
+	// takes sessionsMu, and sessionsMu is never taken under motionMu.
+	mapID, instanceID, callerGUID, targetGUID := caller.Map, caller.InstanceID, caller.GUID, caller.TargetGUID
+	var enemy playerPos
+	enemyOK := false
+	if targetGUID != 0 {
+		if sess := s.findSessionByGUID(targetGUID); sess != nil && sess.player != nil &&
+			sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+			enemy = playerPosForAssist(sess)
+			enemyOK = true
+		}
+	}
+	s.motionMu.Lock()
+	m := s.findCreatureMotionLocked(mapID, instanceID, callerGUID)
+	if m == nil || m.AlreadyCallAssistance || m.TargetGUID == 0 || !enemyOK || m.TargetGUID != enemy.GUID {
+		s.motionMu.Unlock()
+		return
+	}
+	// Creature::CallAssistance (Creature.cpp:2404-2406): the flag is set
+	// even when the radius check below skips the search.
+	m.AlreadyCallAssistance = true
+	if radius > 0 {
+		motions := s.motionMapLocked(m.Map, m.InstanceID)
+		for guid, a := range motions {
+			if guid == m.GUID || a == nil {
+				continue
+			}
+			if !canCreatureAssistTo(s, a, m, enemy) {
+				continue
+			}
+			// AnyAssistCreatureInRangeCheck (GridNotifiers.h:1277-1280):
+			// 3D distance, no combat-reach slop, absolute value.
+			if distance3D(m.X, m.Y, m.Z, a.X, a.Y, a.Z) > radius {
+				continue
+			}
+			// GridNotifiers.h:1282-1284: the caller must see the assistant.
+			if !s.hasLineOfSight(m.Map, m.X, m.Y, m.Z, a.X, a.Y, a.Z) {
+				continue
+			}
+			m.Assistants = append(m.Assistants, guid)
+		}
+		if len(m.Assistants) > 0 {
+			m.AssistAt = time.Now().Add(time.Duration(delayMs) * time.Millisecond)
+			m.AssistVictim = m.TargetGUID
+		}
+	}
+	s.motionMu.Unlock()
+}
+
+// playerPosForAssist builds the minimal playerPos the assist hostility check
+// needs (isAttackableFaction reads FactionTemplate, Race, Class and
+// Reputations), mirroring the battleground.go:1682 construction.
+func playerPosForAssist(sess *session) playerPos {
+	p := playerPos{GUID: sess.playerGUID}
+	if sess.player != nil {
+		p.FactionTemplate = sess.effectiveFactionTemplate(sess.player.Race)
+		p.Race = sess.player.Race
+		p.Class = sess.player.Class
+		p.Reputations = playerReputationMap(sess.player.Reputations)
+	}
+	return p
+}
+
+// canCreatureAssistTo mirrors Creature::CanAssistTo (Creature.cpp:2458-2496,
+// checkfaction=true path). Caller holds motionMu. The enemy-evading leg
+// (Creature.cpp:2468-2470) is vacuous: enemies through this funnel are
+// players, which never carry evade state.
+func canCreatureAssistTo(s *Server, assistant, caller *creatureMotion, enemy playerPos) bool {
+	if s == nil || assistant == nil || caller == nil || assistant == caller {
+		return false
+	}
+	// REACT_AGGRESSIVE (Creature.cpp:2462); the civilian arm
+	// (Creature.cpp:2475) folds into the same gate — civilian maps to
+	// passive in creatureReactState.
+	if isCreaturePassive(assistant) {
+		return false
+	}
+	// we don't need help from zombies (Creature.cpp:2465); evade mode
+	// (Creature.cpp:2468).
+	if assistant.Health == 0 || assistant.Evading {
+		return false
+	}
+	// UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_SELECTABLE ||
+	// IsImmuneToNPC (Creature.cpp:2477). UNIT_FLAG_NOT_SELECTABLE is
+	// 0x02000000 (UnitDefines.h:137).
+	if assistant.UnitFlags&(unitFlagNonAttackable|0x02000000|unitFlagImmuneToNPC) != 0 {
+		return false
+	}
+	// skip fighting creature (Creature.cpp:2480); only free creatures
+	// (Creature.cpp:2483) — pets/charmed carry OwnerGUID.
+	if assistant.InCombat || assistant.OwnerGUID != 0 {
+		return false
+	}
+	// only from same creature faction (Creature.cpp:2486-2490).
+	if assistant.Faction != caller.Faction {
+		return false
+	}
+	// skip non hostile to enemy creatures (Creature.cpp:2493-2495).
+	if !s.isAttackableFaction(assistant.Faction, enemy) {
+		return false
+	}
+	return true
+}
+
+// fireCreatureAssistance runs the AssistDelayEvent arm
+// (Creature.h:523-536, Creature.cpp:226-243) from stepCreatureMotion: the
+// whole event no-ops when the victim no longer resolves
+// (ObjectAccessor::GetUnit, Creature.cpp:228); each assistant that still
+// passes CanAssistTo is marked SetNoCallAssistance(true) so assistants
+// never cascade-call (Creature.cpp:237), then engages through the normal
+// funnel. C++ engages via Unit::EngageWithTarget and reaches AtEngage /
+// JustEngagedWith on the next AI tick (CreatureAI::EngagementStart);
+// Go fuses that into the engage, matching its other engage sites.
+func (s *Server) fireCreatureAssistance(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
+	if s == nil || motion == nil {
+		return
+	}
+	var enemy playerPos
+	enemyOK := false
+	for i := range players {
+		if players[i].GUID == motion.AssistVictim {
+			if players[i].Sess == nil || players[i].Sess.player == nil || players[i].IsDead || players[i].Sess.isDeadOrGhost() {
+				break
+			}
+			enemy, enemyOK = players[i], true
+			break
+		}
+	}
+	s.motionMu.Lock()
+	victimGUID := motion.AssistVictim
+	assistants := motion.Assistants
+	motion.AssistAt = time.Time{}
+	motion.AssistVictim = 0
+	motion.Assistants = nil
+	var qualified []uint64
+	if enemyOK && victimGUID != 0 {
+		for _, guid := range assistants {
+			a := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, guid)
+			if a == nil {
+				continue
+			}
+			if !canCreatureAssistTo(s, a, motion, enemy) {
+				continue
+			}
+			a.AlreadyCallAssistance = true
+			qualified = append(qualified, guid)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, guid := range qualified {
+		s.triggerCreatureAggro(ctx, guid, victimGUID)
 	}
 }
 
@@ -1806,6 +2003,12 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	}
 	motion.InCombat = false
 	motion.TargetGUID = 0
+	// Unit::AttackStop (Unit.cpp:5783): combat stop resets the assistance
+	// flag, and the pending AssistDelayEvent dies with the engagement.
+	motion.AlreadyCallAssistance = false
+	motion.AssistAt = time.Time{}
+	motion.AssistVictim = 0
+	motion.Assistants = nil
 	// CombatAI::Reset (CombatAI.cpp:64-67): evade clears the AI event
 	// schedule; the next engage re-arms it via the JustEngagedWith pre-arm.
 	motion.SpellEventTimes = nil
@@ -2216,6 +2419,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.WaitUntil = motion.MoveEnds
 			return
 		}
+	}
+
+	// Creature::CallAssistance's delayed arm (AssistDelayEvent, Creature.h:523-536,
+	// Creature.cpp:226-243): after CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY the
+	// gathered assistants re-check CanAssistTo and engage the victim. Fires
+	// from the caller's combat tick; pets never carry a pending assist.
+	if !motion.AssistAt.IsZero() && motion.OwnerGUID == 0 && !now.Before(motion.AssistAt) {
+		s.fireCreatureAssistance(ctx, motion, players, now)
 	}
 
 	// 1. If currently in combat with a target:
@@ -3348,7 +3559,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		walk = point.MoveType == 0 // WAYPOINT_MOVE_TYPE_WALK (WaypointDefines.h:26); default RUN
 		speed = creatureSplineVelocity(motion, walk)
 		if point.Delay > 0 {
-			wait = time.Duration(point.Delay) * time.Second
+			// WaypointNode::delay is a uint32 millisecond count
+			// (WaypointDefines.h:52), consumed by TimeTracker::Reset as
+			// Milliseconds (WaypointMovementGenerator.cpp:247) — the DB
+			// value is already ms, not seconds.
+			wait = time.Duration(point.Delay) * time.Millisecond
 		}
 		// WaypointMovementGenerator::StartMove (WaypointMovementGenerator.cpp):
 		// "if (waypoint.orientation && waypoint.delay) init.SetFacing(waypoint.orientation)"
