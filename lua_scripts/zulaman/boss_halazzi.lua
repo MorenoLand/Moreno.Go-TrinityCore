@@ -362,8 +362,14 @@ local function halazziReset(event, creature)
     local guid = creature:GetGUID()
     halazziResetState(guid)
     -- C++ Reset: triggered dual-wield self-cast, then EnterPhase(LYNX).
-    creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
-    enterPhase(creature, guid, PHASE_LYNX)
+    -- Event 23 also fires on death (engine reset-then-died order,
+    -- lua_creature_events.go) but the C++ AI Reset() never runs on death;
+    -- without the gate the corpse would take a phantom dual-wield cast
+    -- and a SetHealth from enterPhase.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
+        enterPhase(creature, guid, PHASE_LYNX)
+    end
 end
 
 -- C++ DamageTaken: lethal damage is zeroed outside the enrage phase.

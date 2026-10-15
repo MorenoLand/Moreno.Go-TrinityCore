@@ -212,8 +212,12 @@ local function sindragosaReset(event, creature)
     cancelTimers(creature:GetGUID())
     sindragosaThirdPhase[creature:GetGUID()] = nil
     -- C++ Reset(): DoCastSelf(SPELL_TANK_MARKER, true) (:241),
-    -- unconditional one-shot.
-    creature:CastSpell(creature, SPELL_TANK_MARKER, true)
+    -- unconditional one-shot. The engine fires event 23 on death too
+    -- (Eluna reset-then-died order, lua_creature_events.go) but the C++
+    -- AI Reset() never runs on death, so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_TANK_MARKER, true)
+    end
 end
 
 -- C++ boss_sindragosa::DamageTaken: !_isThirdPhase && !HealthAbovePct(35)
