@@ -32,16 +32,20 @@
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
 -- player-gated variant precedent).
 -- DOCUMENTED-ONLY (in this header; only entry 39751 registered):
--- boss_baltharus_the_warborn DoAction — Talk(SAY_CLONE 3) rides
--- ACTION_CLONE (no-DoAction bridge).
+-- boss_baltharus_the_warborn DoAction ACTION_CLONE — ported inline
+-- (self-call from the boss's own UpdateAI scheduler: DoCastSelf
+-- CLEAR_DEBUFFS 34098 triggered + CLONE 74511 triggered +
+-- REPELLING_WAVE 74509 + Talk(SAY_CLONE 3)); the EVENT_CLONE timer
+-- rides the DamageTaken 50% latch below.
 -- boss_baltharus_the_warborn UpdateAI scheduler — Talk(SAY_BALTHARUS_INTRO
 -- 0) rides EVENT_INTRO_TALK (no-timer-bridge; the EVENT_INTRO_TALK leg
 -- itself rides DoAction(ACTION_INTRO_BALTHARUS) issued by
 -- at_baltharus_plateau — no cross-AI-DoAction bridge; the
 -- EVENT_CLEAVE / EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND /
--- EVENT_SUMMONS_ATTACK / EVENT_CLONE DoCastSelf legs have no-cast
--- bridge). EVENT_CLEAVE / EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND
--- ported 2026-10-13 on the maiden CreateLuaEvent convention (see below).
+-- EVENT_SUMMONS_ATTACK legs have no summon bridge). EVENT_CLEAVE /
+-- EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND ported 2026-10-13 on
+-- the maiden CreateLuaEvent convention (see below); EVENT_CLONE
+-- ported 2026-10-14 via the DamageTaken latch below.
 -- npc_baltharus_the_warborn_clone (39899) — zero Talk lines (NOT
 -- registered, the bronjahm npc_corrupted_soul_fragment precedent); the
 -- DamageTaken DATA_BALTHARUS_SHARED_HEALTH leg and the JustDied
@@ -51,20 +55,25 @@
 -- HandleSiphonedMight: aura-caster CastSpell SPELL_SIPHONED_MIGHT) —
 -- joins the standing no-SpellScript-bridge queue.
 -- All 5 Talk() calls in the file accounted for (SAY_AGGRO 1 +
--- SAY_DEATH 4 + SAY_KILL 2 ported; SAY_CLONE 3 + SAY_BALTHARUS_INTRO 0
+-- SAY_DEATH 4 + SAY_KILL 2 + SAY_CLONE 3 ported; SAY_BALTHARUS_INTRO 0
 -- documented above).
 
 local ENTRY_BALTHARUS_THE_WARBORN = 39751
 
 local SAY_AGGRO = 1
 local SAY_KILL  = 2
+local SAY_CLONE = 3
 local SAY_DEATH = 4
 
 local SPELL_CLEAVE           = 40504
 local SPELL_BLADE_TEMPEST    = 75125
 local SPELL_ENERVATING_BRAND = 74502
+local SPELL_CLEAR_DEBUFFS    = 34098
+local SPELL_CLONE            = 74511
+local SPELL_REPELLING_WAVE   = 74509
 
 local timers = {}
+local cloneCount = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -173,11 +182,15 @@ local function baltharusEnterCombat(event, creature, target)
 end
 
 local function baltharusLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    cloneCount[guid] = nil
 end
 
 local function baltharusReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    cloneCount[guid] = nil
 end
 
 -- C++ boss_baltharus_the_warborn::KilledUnit:
@@ -186,6 +199,35 @@ end
 local function baltharusKilledUnit(event, creature, victim)
     if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
+    end
+end
+
+-- C++ boss_baltharus_the_warborn::DamageTaken -> EVENT_CLONE (1ms) ->
+-- DoAction(ACTION_CLONE): DoCastSelf(SPELL_CLEAR_DEBUFFS 34098, true) +
+-- DoCastSelf(SPELL_CLONE 74511, true) + DoCastSelf(SPELL_REPELLING_WAVE
+-- 74509) + Talk(SAY_CLONE 3). 10-man thresholds only (no difficulty
+-- bridge — the jaraxxus/kelidan precedent): _cloneCount == 0 and
+-- HealthBelowPctDamaged(50, damage), fired as the 1ms scheduled clone
+-- leg; the C++ event-9 hook is pre-damage, so GetHealth() here is the
+-- pre-damage value C++ compares against.
+local function baltharusDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if not cloneCount[guid] then
+        cloneCount[guid] = 0
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if cloneCount[guid] == 0
+            and (creature:GetHealth() - damage) * 100 < maxHealth * 50 then
+        cloneCount[guid] = 1
+        schedule(guid, "clone", 1, function()
+            creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS, true)
+            creature:CastSpell(creature, SPELL_CLONE, true)
+            creature:CastSpell(creature, SPELL_REPELLING_WAVE)
+            creature:Talk(SAY_CLONE)
+        end)
     end
 end
 
@@ -205,4 +247,5 @@ RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 1, baltharusEnterCombat)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 2, baltharusLeaveCombat)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 3, baltharusKilledUnit)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 4, baltharusDied)
+RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 9, baltharusDamageTaken)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 23, baltharusReset)

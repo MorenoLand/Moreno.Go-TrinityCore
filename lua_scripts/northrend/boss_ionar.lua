@@ -51,8 +51,9 @@
 -- CallBackSparks — ObjectAccessor GUID loop, SetSpeedRate(MOVE_RUN,
 -- 2.0f), MovePoint(DATA_POINT_CALLBACK 0) per alive spark,
 -- DespawnOrUnsummon on dead — no ObjectAccessor / motion bridges.
--- DamageTaken — uiDamage = 0 when !me->IsVisible() — no
--- DamageTaken bridge.
+-- DamageTaken — uiDamage = 0 when !me->IsVisible() — the event-9
+-- bridge is live; the arm stays out on the missing visibility bridge
+-- (no IsVisible in the Lua surface).
 -- JustSummoned — NPC_SPARK_OF_IONAR 28926 SummonList latch +
 -- SPELL_SPARK_VISUAL_TRIGGER 52667 self-cast + random-target
 -- SetInCombatWith + MoveFollow — no summon-list / cast /
@@ -86,7 +87,8 @@
 -- precedent): Reset (REACT_PASSIVE — no react bridge);
 -- MovementInform POINT_MOTION_TYPE / DATA_POINT_CALLBACK
 -- DespawnOrUnsummon — no motion bridge; DamageTaken uiDamage = 0 —
--- no DamageTaken bridge; UpdateAI boss-state-gated
+-- unregistered (the spark summon machine is unported — trigger-path
+-- grounds); UpdateAI boss-state-gated
 -- DespawnOrUnsummon + uiCheckTimer distance-to-Ionar
 -- (> DATA_MAX_SPARK_DISTANCE 90) MovePoint callback machine via
 -- instance->GetGuidData(DATA_IONAR) — no timer / instance / motion

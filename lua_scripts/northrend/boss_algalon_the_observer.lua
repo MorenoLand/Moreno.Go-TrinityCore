@@ -88,8 +88,11 @@
 -- MovementInform / timer-gated; no bridges; no registration.
 -- npc_collapsing_starAI DamageTaken — the _dying latch damage=0 rewrite +
 -- SPELL_BLACK_HOLE_SPAWN_VISUAL / SPELL_SUMMON_BLACK_HOLE self-casts —
--- no Talk arm; no bridges; no registration (NPC_COLLAPSING_STAR 32955
--- entry-verifiable, ulduar.h line 234).
+-- no Talk arm; the casts themselves are bridgeable (triggered
+-- self-cast), but the star is never summoned in Go
+-- (EVENT_SUMMON_COLLAPSING_STAR unported — no summon bridge), so the
+-- arm stays out on trigger-path grounds; no registration
+-- (NPC_COLLAPSING_STAR 32955 entry-verifiable, ulduar.h line 234).
 -- npc_living_constellation / npc_black_hole — no Talk arms; no
 -- registrations (NPC_LIVING_CONSTELLATION 33052 / NPC_BLACK_HOLE 32953
 -- entry-verifiable, ulduar.h lines 232 / 235).
