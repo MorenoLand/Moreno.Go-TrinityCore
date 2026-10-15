@@ -40,9 +40,11 @@
 --   "implicitly targets the Guardian" channel leg — no cast-target /
 --   AoE-to-guardian bridge; _Reset() is instance bookkeeping (blocked).
 -- - SpellHitTarget(SPELL_CORRUPTION_OF_TIME_CHANNEL): the guardian
---   self-casts SPELL_CORRUPTION_OF_TIME_TARGET 60451, triggered. No
---   SpellHitTarget / SpellInfo bridge (SpellHit-15-never-fires standing
---   queue).
+--   self-casts SPELL_CORRUPTION_OF_TIME_TARGET 60451, triggered. Stays
+--   out on trigger-path grounds: Reset's channel cast (DoCastAOE 60422,
+--   "implicitly targets the Guardian") is unported — no cast-target /
+--   AoE-to-guardian bridge — so event 15 never fires for it in Go
+--   (event 15 itself is live — boss_ai.go:1904).
 -- - JustDied's FindNearestCreature legs: NPC_GUARDIAN_OF_TIME 32281
 --   within 100.0f -> RemoveAurasDueToSpell(60451) + DespawnOrUnsummon
 --   (5s); NPC_TIME_RIFT 28409 within 100.0f -> DespawnOrUnsummon() —

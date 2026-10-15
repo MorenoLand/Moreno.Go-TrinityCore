@@ -132,8 +132,11 @@
 --   Talk(SAY_MARK_OF_THE_FALLEN_CHAMPION 8) rides the
 --   SPELL_MARK_OF_THE_FALLEN_CHAMPION case of the SpellHitTarget
 --   switch; the 72255/72444/72445/72446 triggered-mark cases cast
---   SPELL_BLOOD_LINK_DUMMY — SpellHit never fires in the Lua surface
---   (the SpellHit ruling; the faerlina precedent).
+--   SPELL_BLOOD_LINK_DUMMY — stays out on trigger-path grounds: the
+--   72293 mark cast rides the unported ACTION_MARK_OF_THE_FALLEN_CHAMPION
+--   DoAction machine (no DoAction / random-target bridges; its trigger
+--   is an unbridged AuraScript), so event 15 never fires for it in Go
+--   (event 15 itself is live — boss_ai.go:1904).
 -- boss_deathbringer_saurfang intro machine — Talk(
 --   SAY_INTRO_ALLIANCE_2 0 / SAY_INTRO_ALLIANCE_3 1 /
 --   SAY_INTRO_ALLIANCE_6 2 / SAY_INTRO_ALLIANCE_7 3 /

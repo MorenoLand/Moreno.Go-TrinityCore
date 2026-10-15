@@ -57,7 +57,10 @@
 -- bridge, terestian precedent; _DespawnAtEvade) — documented-only.
 -- SpellHit(SPELL_SUBBOSS_AGGRO_TRIGGER) -> DoZoneInCombat and
 -- SpellHitTarget(SPELL_SUBBOSS_AGGRO_TRIGGER) -> Talk(SAY_SEND_GROUP 5)
--- — event 15 never fires (standing).
+-- — stays out on trigger-path grounds: the trigger cast (EVENT_SEND_GROUP
+-- DoCastAOE 52343) is unported behind the unbridged DoAction watcher
+-- machine, so event 15 never fires for it in Go (event 15 itself is
+-- live — boss_ai.go:1904).
 -- npc_watcher_gashra / npc_watcher_narjil / npc_watcher_silthik —
 -- ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (28730 / 28729 / 28731 from
 -- azjol_nerub.h — kalecgos pass): zero registration. Their whole

@@ -50,10 +50,13 @@
 --   DUMMY 52736, hostile) pushes the target's GUID into _stepTargets and
 --   reschedules EVENT_TIME_STEP at 500ms; the event then charges (DoCast
 --   triggered SPELL_TIME_STEP_CHARGE 52737) a random remaining target,
---   falling back to the victim when the list empties. No SpellHitTarget /
---   SpellInfo bridge and no ObjectAccessor GUID-lookup bridge exist
---   (SpellHit-15-never-fires standing queue), so the whole step machine
---   is documented, not wired.
+--   falling back to the victim when the list empties. Stays out: the
+--   ported dummy cast is a self-cast (DoCastAOE lowered), so no hostile
+--   hit targets exist in Go; the me->IsHostileTo(target) gate has no
+--   bridge, and the charge consumer needs an ObjectAccessor GUID-lookup
+--   bridge that does not exist. Event 15 itself is live
+--   (boss_ai.go:1904) — the blockers are the gate and the consumer, not
+--   the hook.
 -- - Yell enum 0/1 are undeclared in C++; SAY_TIME_WARP (2) and SAY_SLAY
 --   (3) are the only Talked lines.
 

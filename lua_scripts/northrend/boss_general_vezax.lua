@@ -70,7 +70,11 @@
 -- smellSaronite / animusDead / vaporCount init — no bridges.
 -- SpellHitTarget — SPELL_SHADOW_CRASH_HIT 62659
 -- TYPEID_PLAYER leg -> shadowDodger = false (consumer:
--- achievement_shadowdodger below) — no SpellHit bridge.
+-- achievement_shadowdodger below) — stays out on trigger-path grounds:
+-- the EVENT_SHADOW_CRASH 62660 cast is unported (no random-target /
+-- target-search bridge), so event 15 never fires for it in Go (event 15
+-- itself is live — boss_ai.go:1904); the achievement consumer has no
+-- GetData bridge besides.
 -- GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
 -- 31813188 — no GetData bridge; consumers: the two
 -- achievements below); DoAction(ACTION_VAPORS_DIE 1 /

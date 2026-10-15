@@ -68,7 +68,11 @@
 -- DoCast(mograine, SCARLET_RESURRECTION 9232) (no MovementInform/
 -- scheduler-cross-creature bridge), SpellHitTarget -> MograineResurrected:
 -- Talk(SAY_WH_RESURRECT 2), reschedule heal/shield/smite, _canDie=true,
--- REACT_AGGRESSIVE, MoveChase victim (no SpellHitTarget bridge). Damage
+-- REACT_AGGRESSIVE, MoveChase victim — stays out on trigger-path
+-- grounds: the resurrection cast itself is unported (see above), so
+-- event 15 never fires for it in Go (event 15 itself is live —
+-- boss_ai.go:1904); the REACT_AGGRESSIVE / MoveChase legs are bridgeless
+-- besides. Damage
 -- negation while !_canDie unmodeled — the Lua leaves her killable below
 -- 50% (documented divergence). Dominate mind 14515 is declared in the
 -- C++ spell enum but never cast by either AI.

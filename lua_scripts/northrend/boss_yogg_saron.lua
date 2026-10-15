@@ -67,8 +67,10 @@
 -- cannot model it — bridge-blocked.
 -- Sara SpellHitTarget — Talk(SAY_SARA_FERVOR_HIT /
 -- SAY_SARA_BLESSING_HIT / SAY_SARA_PSYCHOSIS_HIT) gated on
--- roll_chance_i(30) and !PHASE_TRANSFORM — no SpellHit
--- bridge.
+-- roll_chance_i(30) and !PHASE_TRANSFORM — stays out on trigger-path
+-- grounds: the EVENT_SARAS_FERVOR / BLESSING / ANGER casts are unported
+-- and the phase gate has no bridge, so event 15 never fires for them in
+-- Go (event 15 itself is live — boss_ai.go:1904).
 -- Sara JustSummoned — Talk(SAY_SARA_DEATH_RAY) on
 -- NPC_DEATH_ORB summon — no JustSummoned bridge.
 -- Sara timer Talks — 2026-10-14 retraction re-audit: none ported on

@@ -12,7 +12,7 @@
 -- shadowfang_keep.cpp as the only source of "archmage_arugal" for
 -- the script (loader lines only otherwise).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. Driven by CreateLuaEvent
+-- OnTargetDied, 4 OnDied, 15 OnSpellHitTarget, 23 OnReset. Driven by CreateLuaEvent
 -- timers; melee is engine-driven in Go (creature combat tick), like
 -- C++ DoMeleeAttackIfReady. The C++ UNIT_STATE_CASTING gate has no
 -- bridge (maiden precedent), so timers fire unconditionally. The C++
@@ -44,10 +44,11 @@
 --   and the arm is not phase-gated).
 -- - KilledUnit: OnTargetDied(3) with victim:IsPlayer() guard ->
 --   Talk(SAY_SLAY) (vancleef/illidan convention).
+-- - SpellHitTarget: Talk(SAY_TRANSFORM 2) fires when SPELL_ARUGAL_CURSE
+--   (7621) lands (event 15; the curse cast is ported in onCurse, so the
+--   trigger is live in Go — the old "event 15 never fires" note was
+--   stale; event 15 fires from the Go spell path, boss_ai.go:1904).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - SpellHitTarget: Talk(SAY_TRANSFORM) fires when SPELL_ARUGAL_CURSE
---   (7621) lands, but event 15 (OnSpellHitTarget) is never fired by
---   the Go engine (standing SpellHit/Summon blocker).
 -- - AttackStart -> AttackStartCaster(who, 100.0f): no attack-start
 --   bridge on the Lua surface.
 -- - The BossAI(creature, BOSS_ARUGAL) constructor and
@@ -57,6 +58,7 @@
 local ENTRY_ARUGAL = 4275
 
 local SAY_AGGRO = 1
+local SAY_TRANSFORM = 2
 local SAY_SLAY = 3
 
 local SPELL_ARUGAL_CURSE = 7621
@@ -181,8 +183,20 @@ local function onReset(_, creature)
     onCombatEnd(nil, creature)
 end
 
+-- C++ SpellHitTarget: SPELL_ARUGAL_CURSE (7621) lands on a target ->
+-- Talk(SAY_TRANSFORM 2), ungated. Event 15
+-- (CREATURE_EVENT_ON_SPELL_HIT_TARGET) fires on the caster's bindings
+-- from the Go spell path (boss_ai.go:1904); the curse cast is ported
+-- (onCurse), so the trigger is live.
+local function onSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_ARUGAL_CURSE then
+        creature:Talk(SAY_TRANSFORM)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ARUGAL, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_ARUGAL, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_ARUGAL, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_ARUGAL, 4, onCombatEnd)
 RegisterCreatureEvent(ENTRY_ARUGAL, 23, onReset)
+RegisterCreatureEvent(ENTRY_ARUGAL, 15, onSpellHitTarget)

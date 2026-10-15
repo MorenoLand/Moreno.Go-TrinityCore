@@ -41,9 +41,11 @@
 -- vexallus local-machine precedent); the Vile Gas DoCast leg is
 -- heroic-gated (no IsHeroic bridge).
 -- boss_rotface SpellHitTarget — Talk(SAY_SLIME_SPRAY 3) rides the
--- SPELL_SLIME_SPRAY case of the SpellHitTarget switch —
--- no-SpellHit-bridge queue (the SpellHit-15-never-fires queue
--- family).
+-- SPELL_SLIME_SPRAY case of the SpellHitTarget switch — stays out on
+-- trigger-path grounds: the slime-spray cast rides the unported
+-- EVENT_SLIME_SPRAY scheduler leg (random-target + DoSummon, no
+-- bridges), so event 15 never fires for it in Go (event 15 itself is
+-- live — boss_ai.go:1904).
 -- boss_rotface JustEngagedWith instance legs —
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
 -- DoZoneInCombat (no instance bridge) and
