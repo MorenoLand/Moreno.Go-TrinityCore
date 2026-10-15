@@ -108,7 +108,7 @@ func (s *session) playerCannotEnterMap(ctx context.Context, mapID uint32) mapEnt
 		return check
 	}
 	group := s.server.findGroupByID(s.groupID)
-	if group != nil && group.DBID != 0 && group.GroupType&groupTypeBattleground == 0 {
+	if group != nil && group.DBID != 0 && !group.isBGGroup() {
 		groupDifficulty := uint32(group.DungeonDiff)
 		if entry.IsRaid() {
 			groupDifficulty = uint32(group.RaidDiff)

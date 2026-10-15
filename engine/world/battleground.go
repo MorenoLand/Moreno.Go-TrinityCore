@@ -952,6 +952,12 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		entry.ArenaFaction = 1 - uint8(team)
 		s.bgData.InstanceID = entry.InstanceID
 		s.bgData.Team = uint16(team)
+		// Battleground::AddPlayer (Battleground.cpp:980-1029) ends with
+		// AddOrSetPlayerToCorrectBgGroup (Battleground.cpp:1028): the
+		// entrant joins their team's BG raid (created on first join).
+		// PlayerAddedToBGCheckIfBGIsRunning has no Go model (no live BG
+		// status machine), so only the group arm is wired here.
+		s.server.addOrSetPlayerToCorrectBGGroup(s)
 		s.sendBattlefieldStatus(uint8(slot))
 		s.debug("battlefield port accept", "account", s.accountName, "bg", bgTypeID, "instance", entry.InstanceID)
 	}
@@ -1476,6 +1482,11 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// 0 (Player.h:1906), mirrored by s.bgData.InstanceID.
 	wasInBattleground := !fromLogout && s.bgData.InstanceID != 0
 	if wasInBattleground {
+		// Battleground::RemovePlayer (Battleground.cpp:894-900): drop the
+		// player from the team's BG raid; the last member out disbands the
+		// raid and clears its slot. Runs before the InstanceID zeroing
+		// below, which the removal reads.
+		s.server.removePlayerFromBGRaid(s)
 		// Battleground.cpp:918-920: SetBattlegroundId(0,
 		// BATTLEGROUND_TYPE_NONE) + SetBGTeam(0). The bgTypeID=NONE term has
 		// no Go field, and SetBGTeam's arena-faction reset dies with the

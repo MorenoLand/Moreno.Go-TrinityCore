@@ -1013,12 +1013,13 @@ func (s *Server) guildChatListenAllowed(target *session, officer bool) bool {
 // CHAT_MSG_PARTY/PARTY_LEADER/RAID/RAID_LEADER/RAID_WARNING arms of
 // WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:395-528). Non-group
 // chat types always pass; group chat silently fails (no packet) when the gates
-// fail. Go has no original-group (pre-battleground) model, so the
-// battleground-group exclusion applies to the session's current group; the
-// original-group preference stays a documented delta; the
-// CHAT_MSG_BATTLEGROUND/BATTLEGROUND_LEADER arms below resolve against the
-// sender's current group, with the battleground-group formation model (the
-// groupTypeBattleground bit) still unassigned.
+// fail. The original (pre-battleground) group is stashed on BG-raid join
+// (session.originalGroupID, mirroring Player::m_originalGroup) and
+// restored on BG leave, so the battleground-group exclusion applies to the
+// session's current group; the CHAT_MSG_BATTLEGROUND/BATTLEGROUND_LEADER
+// arms below resolve against the sender's current group via
+// Group::isBGGroup (the BG-raid back-pointer, wired by
+// addOrSetPlayerToCorrectBGGroup on battleground entry).
 func (s *session) groupChatAllowed(chatType uint8) bool {
 	switch chatType {
 	case chatParty, chatPartyLeader, chatRaid, chatRaidLeader, chatRaidWarning, chatBattleground, chatBattleLeader:
@@ -1032,17 +1033,18 @@ func (s *session) groupChatAllowed(chatType uint8) bool {
 	if group == nil {
 		return false
 	}
-	// Reference: Group::isBGGroup — Go keys battleground groups by the
-	// groupTypeBattleground bit (Group.h:213, Group.cpp).
-	isBGGroup := group.GroupType&groupTypeBattleground != 0
+	// Reference: Group::isBGGroup (Group.cpp:2466) keys on the m_bgGroup
+	// back-pointer — set by SetBattlegroundGroup from
+	// Battleground::SetBgRaid — not on the GROUPTYPE_BG bit, which the
+	// formation path never assigns.
+	isBGGroup := group.isBGGroup()
 	switch chatType {
 	case chatBattleground:
 		// Reference: the CHAT_MSG_BATTLEGROUND arm (ChatHandler.cpp:517-534)
 		// — "battleground raid is always in Player->GetGroup(), never in
 		// GetOriginalGroup()": the sender's current group must be a
-		// battleground group. No battleground-group assignment model exists
-		// yet (no code sets groupTypeBattleground), so the arm is armed but
-		// unreachable until battleground group formation lands.
+		// battleground group (Group::isBGGroup, the BG-raid back-pointer
+		// assigned by addOrSetPlayerToCorrectBGGroup on BG entry).
 		return isBGGroup
 	case chatBattleLeader:
 		// Reference: the CHAT_MSG_BATTLEGROUND_LEADER arm
@@ -1127,6 +1129,12 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	// sender's typed language never reaches the wire. The chat hook still sees
 	// the typed language (it fires before this point in handleMessageChat).
 	if (chatType == chatGuild || chatType == chatOfficer) && language != languageAddon {
+		language = languageUniversal
+	}
+	// Reference: Channel::Say (Channel.cpp:684-686) — with
+	// AllowTwoSide.Interaction.Channel on, channel messages go out in
+	// LANG_UNIVERSAL (no addon exception in the C++ arm).
+	if chatType == chatChannel && s.Config.AllowTwoSideInteractionChannel {
 		language = languageUniversal
 	}
 	// Party/raid chat is group-scoped (ChatHandler.cpp:395-528); hoist the

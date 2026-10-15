@@ -629,7 +629,16 @@ func channelKey(name string) string {
 
 func (s *session) scopedChannelKey(name string) string {
 	key := channelKey(name)
-	if s == nil || s.player == nil || s.twoSideChannelInteraction() {
+	if s == nil || s.player == nil {
+		return key
+	}
+	// Reference: ChannelMgr::forTeam (ChannelMgr.cpp:108-121) — the channel
+	// key space is shared cross-faction (the alliance manager) when
+	// AllowTwoSide.Interaction.Channel is on, and team-scoped otherwise.
+	// The RBAC permission (RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL) gates
+	// only cross-faction member operations (Channel.cpp:467/562/748),
+	// never the keying.
+	if s.server != nil && s.server.Config.AllowTwoSideInteractionChannel {
 		return key
 	}
 	return strconv.FormatUint(uint64(playerTeam(s.player.Race)), 10) + ":" + key
@@ -1457,7 +1466,10 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 }
 
 // twoSideChannelInteraction resolves the reference
-// RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL permission (id 26) for channel use.
+// RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL permission (id 26) for channel
+// member operations against cross-faction targets (Channel.cpp:467/562/748).
+// It does NOT gate channel keying: ChannelMgr::forTeam (ChannelMgr.cpp:108)
+// keys on the AllowTwoSide.Interaction.Channel config bool instead.
 func (s *session) twoSideChannelInteraction() bool {
 	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil || !s.authed {
 		return false

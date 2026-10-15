@@ -39,10 +39,22 @@ type groupState struct {
 	GroupType     uint8
 	IsRaid        bool
 	IsLFG         bool
-	LFGDungeonID  uint32
-	LFGKicksLeft  uint8     // LfgGroupData::m_KicksLeft (LFGGroupData.h:28); reset to LFG_GROUP_MAX_KICKS on new LFG groups
-	TargetIcons   [8]uint64 // raid target icons, index=icon, value=target GUID
-	counter       uint32
+	// bgRaidInstance mirrors Group::m_bgGroup (Groups/Group.h, Group.cpp:2466):
+	// non-zero while this group is a battleground's per-team raid. C++
+	// keys Group::isBGGroup() on the m_bgGroup back-pointer (set by
+	// SetBattlegroundGroup from Battleground::SetBgRaid), NOT on the
+	// GROUPTYPE_BG bit — the bit is never assigned on the formation path
+	// (Group::Create's GROUPTYPE_BGRAID arm fires only because the
+	// back-pointer is already set when SetBgRaid precedes Create).
+	bgRaidInstance uint32
+	// bgRaidTeam is the m_BgRaids slot index this group occupies
+	// (0 alliance / 1 horde), so disband can unlink the exact slot like
+	// Group::~Group (Group.cpp:73-82) does via SetBgRaid(team, nullptr).
+	bgRaidTeam   uint8
+	LFGDungeonID uint32
+	LFGKicksLeft uint8     // LfgGroupData::m_KicksLeft (LFGGroupData.h:28); reset to LFG_GROUP_MAX_KICKS on new LFG groups
+	TargetIcons  [8]uint64 // raid target icons, index=icon, value=target GUID
+	counter      uint32
 	// MaxEnchantingLevel mirrors Group::m_maxEnchantingLevel: the highest
 	// enchanting skill among members. Group::GroupLoot/NeedBeforeGreed gate
 	// the disenchant roll option on m_maxEnchantingLevel >=
@@ -141,6 +153,12 @@ func (g *groupState) rotateLooter(srv *Server, mapID, instanceID uint32, x, y, z
 		}
 	}
 	g.LooterGUID = 0
+}
+
+// isBGGroup mirrors Group::isBGGroup (Group.cpp:2466): it tests the
+// battleground back-pointer, not the GROUPTYPE_BG bit.
+func (g *groupState) isBGGroup() bool {
+	return g != nil && g.bgRaidInstance != 0
 }
 
 func (g *groupState) isLeader(guid uint64) bool {

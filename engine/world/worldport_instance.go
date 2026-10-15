@@ -93,7 +93,7 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 		return selection, false, nil
 	}
 	group := s.server.findGroupByID(s.groupID)
-	canBindGroup := group != nil && group.DBID != 0 && group.GroupType&groupTypeBattleground == 0
+	canBindGroup := group != nil && group.DBID != 0 && !group.isBGGroup()
 	groupDBID := uint32(0)
 	groupDifficulty := playerDifficulty
 	if group != nil {

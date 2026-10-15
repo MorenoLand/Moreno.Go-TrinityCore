@@ -175,18 +175,22 @@ type Server struct {
 	vehicleAccessories        map[uint32][]VehicleAccessory
 	groupsMu                  sync.RWMutex
 	groups                    map[uint64]*groupState // groupID -> groupState
-	motionMu                  sync.Mutex
-	instanceCreatureMotion    map[instanceAdmissionKey]map[uint64]*creatureMotion
-	formationMu               sync.RWMutex
-	formationRows             map[uint32]formationRow // creature_formations by member low GUID (FormationMgr::_creatureGroupMap)
-	formationLeaders          map[uint32][]uint32     // leader low GUID -> member low GUIDs
-	formationLoaded           bool
-	creatureRespawns          map[uint32]creatureRespawn
-	instanceCreatureRespawns  map[instanceAdmissionKey]map[uint32]creatureRespawn
-	transportMu               sync.Mutex
-	transports                map[uint32]*continentTransport
-	lootMu                    sync.Mutex
-	creatureLoot              map[lootObjectKey]*activeLootState
+	// bgRaids mirrors Battleground::m_BgRaids (Battlegrounds/Battleground.h):
+	// per battleground-instance group IDs of the two per-team raids,
+	// index 0 = alliance, 1 = horde. Guarded by groupsMu with groups.
+	bgRaids                  map[uint32][2]uint64
+	motionMu                 sync.Mutex
+	instanceCreatureMotion   map[instanceAdmissionKey]map[uint64]*creatureMotion
+	formationMu              sync.RWMutex
+	formationRows            map[uint32]formationRow // creature_formations by member low GUID (FormationMgr::_creatureGroupMap)
+	formationLeaders         map[uint32][]uint32     // leader low GUID -> member low GUIDs
+	formationLoaded          bool
+	creatureRespawns         map[uint32]creatureRespawn
+	instanceCreatureRespawns map[instanceAdmissionKey]map[uint32]creatureRespawn
+	transportMu              sync.Mutex
+	transports               map[uint32]*continentTransport
+	lootMu                   sync.Mutex
+	creatureLoot             map[lootObjectKey]*activeLootState
 	// goSkillupLists mirrors GameObject::m_SkillupList (GameObject.h:190-199):
 	// the players (low GUIDs) that already took their one lockpicking
 	// skill-up from a given GO (Spell::EffectOpenLock, SpellEffects.cpp:2042-2055).
@@ -534,6 +538,13 @@ type session struct {
 	guildInviterGUID   uint64
 	groupID            uint64 // GUID of the group this player is in (0 = no group)
 	pendingGroupLeader uint64 // GUID of the player who invited us (0 = no invite pending)
+	// originalGroupID/originalSubGroup mirror Player::m_originalGroup
+	// (Player.h): the pre-battleground group stashed by
+	// Player::SetBattlegroundOrBattlefieldRaid (Player.cpp:24486) when the
+	// player joins a BG raid, restored by
+	// Player::RemoveFromBattlegroundOrBattlefieldRaid (Player.cpp:24496).
+	originalGroupID  uint64
+	originalSubGroup uint8
 	// groupStatsDue/Init/Snapshot back the SMSG_PARTY_MEMBER_STATS delta
 	// system: Player::SendUpdateToOutOfRangeGroupMembers (Player.cpp:23054)
 	// on Player::Update's 5s m_groupUpdateTimer (Player.cpp:1349-1354).
@@ -710,7 +721,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), playerLimit: c.PlayerLimit, disconnectTimes: make(map[uint32]int64), hiddenGameObjects: make(map[uint64]struct{}), auctionGetAllThrottle: make(map[uint64]int64), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), singleCastAuras: make(map[uint64][]singleCastEntry), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), pickpocketLootRestore: make(map[lootObjectKey]int64), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), lfgBoots: make(map[uint64]*lfgPlayerBoot), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel), worldstates: make(map[uint32]uint64)}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), playerLimit: c.PlayerLimit, disconnectTimes: make(map[uint32]int64), hiddenGameObjects: make(map[uint64]struct{}), auctionGetAllThrottle: make(map[uint64]int64), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), singleCastAuras: make(map[uint64][]singleCastEntry), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), bgRaids: make(map[uint32][2]uint64), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), pickpocketLootRestore: make(map[lootObjectKey]int64), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), lfgBoots: make(map[uint64]*lfgPlayerBoot), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel), worldstates: make(map[uint32]uint64)}
 	server.ticketsEnabled.Store(true)
 	server.ticketsLastChange.Store(time.Now().Unix())
 	if c.IPLocationFile != "" {
