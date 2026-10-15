@@ -185,7 +185,7 @@ end
 
 -- C++ KilledUnit: player victim -> Talk(SAY_SLAY).
 local function shahrazTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end

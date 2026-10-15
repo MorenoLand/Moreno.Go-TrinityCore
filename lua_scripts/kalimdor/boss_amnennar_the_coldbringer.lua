@@ -169,7 +169,7 @@ end
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
-    if victim and victim:IsPlayer() then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end)

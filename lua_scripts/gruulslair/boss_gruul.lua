@@ -10,7 +10,7 @@
 -- C++ ScriptName is "boss_gruul" per CreatureScript("boss_gruul")
 -- in AddSC_boss_gruul. Talk lines used: SAY_AGGRO=0 (pull),
 -- SAY_SLAY=3 (kill — player-gated in C++, C++-exact via
--- victim:IsPlayer()), SAY_DEATH=4 (death), EMOTE_GROW=5 (growth);
+-- victim:GetObjectType() == "Player"), SAY_DEATH=4 (death), EMOTE_GROW=5 (growth);
 -- SAY_SLAM=1 and SAY_SHATTER=2 are defined in the C++ Yells enum
 -- but never called anywhere in the file — unused enum members,
 -- documented only. Eluna creature events: 1 OnEnterCombat, 2
@@ -249,9 +249,9 @@ local function gruulLeaveCombat(event, creature)
     resetState(creature:GetGUID())
 end
 
--- C++ KilledUnit: TYPEID_PLAYER gate (C++-exact via IsPlayer()).
+-- C++ KilledUnit: TYPEID_PLAYER gate (C++-exact via GetObjectType() == "Player").
 local function gruulTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end

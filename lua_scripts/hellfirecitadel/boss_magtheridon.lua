@@ -13,7 +13,7 @@
 -- 17256 Hellfire Channeler, 17516 Magtheridon Room. Talk lines
 -- used: SAY_TAUNT=0 (banished taunt), SAY_FREE=1 (break free),
 -- SAY_SLAY=2 (kill — player-gated in C++, C++-exact via
--- victim:IsPlayer()), SAY_BANISHED=3 (shadow cage), SAY_COLLAPSE
+-- victim:GetObjectType() == "Player"), SAY_BANISHED=3 (shadow cage), SAY_COLLAPSE
 -- =4 (30% collapse), SAY_DEATH=5 (death), EMOTE_WEAKEN=6
 -- (unmodeled — the DoAction arm that fires it is cross-creature
 -- blocked, below), EMOTE_NEARLY_FREE=7 (unmodeled — the
@@ -65,7 +65,7 @@
 -- Damage is NOT rewritten (C++-exact — the arm only gates on
 -- the 30% line). OnSpellHit(14): hit by 30168 (shadow cage) ->
 -- Talk(SAY_BANISHED) (muru-portal event-14 precedent). OnTarget-
--- Died(3): victim:IsPlayer() -> Talk(SAY_SLAY) (C++-exact
+-- Died(3): victim:GetObjectType() == "Player" -> Talk(SAY_SLAY) (C++-exact
 -- TYPEID gate, gruul convention). OnDied(4): Talk(SAY_DEATH) +
 -- cleanup (the _JustDied arm and the instance MANTICRON_CUBE
 -- disable are blocked). OnLeaveCombat(2)/OnReset(23): cancel
@@ -322,9 +322,9 @@ local function magtheridonSpellHit(event, creature, caster, spellId)
     end
 end
 
--- C++ KilledUnit: TYPEID_PLAYER gate (C++-exact via IsPlayer()).
+-- C++ KilledUnit: TYPEID_PLAYER gate (C++-exact via GetObjectType() == "Player").
 local function magtheridonTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end

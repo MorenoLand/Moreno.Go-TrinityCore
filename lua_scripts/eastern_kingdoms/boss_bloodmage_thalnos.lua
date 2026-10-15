@@ -17,7 +17,7 @@
 -- (all non-triggered DoCastVictim -> GetVictim + CastSpell; nil-victim
 -- ticks cast nothing but keep the schedule — jeklik convention).
 -- KilledUnit: Talk(SAY_KILL 2) only when the victim is a player
--- (C++ TYPEID_PLAYER gate -> victim:IsPlayer(), illidan convention).
+-- (C++ TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", illidan convention).
 -- The DamageTaken arm fires once when post-damage health drops strictly
 -- below 35% (C++ HealthBelowPctDamaged(35, damage) — damaged class,
 -- NOT the golemagg 704fb8e current-health bug class): Talk(SAY_HEALTH
@@ -151,9 +151,9 @@ local function thalnosReset(event, creature)
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL 2) only when the victim is a player
--- (TYPEID_PLAYER gate -> victim:IsPlayer(), illidan convention).
+-- (TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", illidan convention).
 local function thalnosTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end

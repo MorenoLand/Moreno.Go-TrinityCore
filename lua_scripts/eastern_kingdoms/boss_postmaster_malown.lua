@@ -42,7 +42,7 @@
 --   CastSpell(victim, spell, true) (triggered, moroes/maiden convention);
 --   nil victim keeps the schedule.
 -- - KilledUnit: Talk(SAY_KILL 0) only when the victim is a player
---   (C++ TYPEID_PLAYER gate -> victim:IsPlayer(), illidan convention).
+--   (C++ TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", illidan convention).
 -- Unmodeled (documented-only, no bridges):
 -- - BossAI::Reset() (empty body in C++) + BossAI::JustEngagedWith +
 --   TYPE_MALOWN bookkeeping (luaBossAI shim).
@@ -168,9 +168,9 @@ local function onEnterCombat(event, creature)
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL 0) only when the victim is a player
--- (TYPEID_PLAYER gate -> victim:IsPlayer(), illidan convention).
+-- (TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", illidan convention).
 local function onTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end

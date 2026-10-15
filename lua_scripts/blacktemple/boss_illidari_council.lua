@@ -340,7 +340,7 @@ end
 -- 30% random-other-member Talk(SAY_COUNCIL_COMNT) has no cross-
 -- creature bridge — skipped.
 local function memberTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_COUNCIL_SLAY)
     end
 end

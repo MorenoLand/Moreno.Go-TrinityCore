@@ -56,10 +56,15 @@
 -- EVENT_TAIL_SWEEP 2s) rides no-timer / no-cast bridges.
 -- emerald_dragonAI KilledUnit — who->CastSpell(who, SPELL_MARK_OF_NATURE
 -- 25040, triggered) gated on victim->GetTypeId() == TYPEID_PLAYER —
--- zero Talk, no player-cast bridge.
+-- zero Talk, does not port: the C++ caster is the victim (a player
+-- self-cast on a corpse); the Lua CastSpell path casts from the
+-- creature with no caster override (blessed-banner precedent), and
+-- spells 25040/24904 have no Go effect implementation (spell_
+-- mark_of_nature SpellScript NOT registered, below) — a port would
+-- broadcast a cast with no mechanical effect.
 -- boss_emeriss KilledUnit — DoCast(who, SPELL_PUTRID_MUSHROOM 24904,
--- triggered) gated on player victim — zero Talk, no player-targeted
--- cast bridge (rides on the base KilledUnit leg above).
+-- triggered) gated on player victim — same victim-self-cast / no-
+-- effect grounds (rides on the base KilledUnit leg above).
 -- boss_ysondre DamageTaken — Talk(SAY_YSONDRE_SUMMON_DRUIDS 1) rides
 -- the 25%-per-stage DamageTaken machine (10x triggered
 -- SPELL_SUMMON_DRUID_SPIRITS 24795 casts) — no-DamageTaken bridge.

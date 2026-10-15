@@ -204,9 +204,9 @@ end
 -- C++ boss_nexusprince_shaffarAI::KilledUnit:
 -- if (victim->GetTypeId() == TYPEID_PLAYER) Talk(SAY_SLAY) — the
 -- razuvious player-gated precedent (event 3 — the illidan
--- victim:IsPlayer() convention).
+-- victim:GetObjectType() == "Player" convention).
 local function shaffarTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end

@@ -168,9 +168,9 @@ local SAY_ILLIDAN_KILL = 1
 -- C++ boss_illidan_stormrageAI::KilledUnit:
 -- if (victim->GetTypeId() == TYPEID_PLAYER) Talk(SAY_ILLIDAN_KILL) — the
 -- razuvious player-gated precedent (event 3 — the illidan
--- victim:IsPlayer() convention).
+-- victim:GetObjectType() == "Player" convention).
 local function illidanTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_ILLIDAN_KILL)
     end
 end

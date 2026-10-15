@@ -17,7 +17,7 @@
 -- pain 2767) -> GetVictim + CastSpell, nil-victim ticks cast nothing
 -- but keep the schedule (jeklik convention), re-arm {5s,15s}.
 -- KilledUnit: Talk(SAY_KILL 3) only when the victim is a player
--- (C++ TYPEID_PLAYER gate -> victim:IsPlayer(), illidan convention).
+-- (C++ TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", illidan convention).
 -- The DamageTaken latches use the _yellCount staircase: when
 -- post-damage health drops strictly below 60%
 -- (HealthBelowPctDamaged(60, damage) — the thalnos/azshir damaged
@@ -96,7 +96,7 @@ local function vishasCombatEnd(event, creature)
 end
 
 local function vishasTargetDied(event, creature, victim)
-    if victim and victim:IsPlayer() then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end

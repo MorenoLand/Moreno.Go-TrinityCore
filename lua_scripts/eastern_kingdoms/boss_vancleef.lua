@@ -24,7 +24,7 @@
 --   OnEnterCombat (1) (maiden convention); the summons.DoZoneInCombat()
 --   leg strands on the unbridged summon surface (dark-rider precedent).
 -- - KilledUnit's Talk(SAY_KILL) with the TYPEID_PLAYER gate ->
---   OnTargetDied (3) with a victim:IsPlayer() gate (illidan convention).
+--   OnTargetDied (3) with a victim:GetObjectType() == "Player" gate (illidan convention).
 -- - DamageTaken's health latches (balinda OnDamageTaken(9) convention —
 --   the handler fires with a fresh creature object built from live motion,
 --   so (health - damage) is the genuine post-hit percent): 50% crossing
@@ -103,7 +103,7 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onTargetDied(_, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end

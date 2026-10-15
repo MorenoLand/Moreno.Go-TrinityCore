@@ -126,7 +126,7 @@
 -- cancel the demon-spell timers, triggered self-cast 40511,
 -- resume-demon 12s re-arms the phase schedule (the ResetThreatList
 -- and equipment arms have no bridges)). OnTargetDied(3):
--- Talk(SAY_ILLIDAN_KILL), IsPlayer gate (terestian convention).
+-- Talk(SAY_ILLIDAN_KILL), GetObjectType() == "Player" gate (terestian convention).
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers, drop
 -- per-GUID state (the Reset summon-group/equipment/sheath/root/
 -- gravity arms and the akama-intro DoAction have no bridges; the
@@ -838,7 +838,7 @@ end
 -- C++ KilledUnit: Talk(SAY_ILLIDAN_KILL), TYPEID_PLAYER gate
 -- (terestian convention).
 local function illidanTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_ILLIDAN_KILL)
     end
 end

@@ -171,7 +171,7 @@ end
 -- C++ KilledUnit: player victim -> ChaseNewVictim's bridgeable legs
 -- (aura strip + speed-timer rearm; target switch has no bridge).
 local function onTargetDied(event, creature, victim)
-    if victim == nil or not victim:IsPlayer() then
+    if victim == nil or victim:GetObjectType() ~= "Player" then
         return
     end
     local guid = creature:GetGUID()

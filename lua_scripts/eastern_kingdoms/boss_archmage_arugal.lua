@@ -42,7 +42,7 @@
 --   DoCastAOE(7803) lowers to self-cast CastSpell(creature, spell)
 --   (selin_fireheart DoCastAOE convention; 7803 has no SpellScript
 --   and the arm is not phase-gated).
--- - KilledUnit: OnTargetDied(3) with victim:IsPlayer() guard ->
+-- - KilledUnit: OnTargetDied(3) with victim:GetObjectType() == "Player" guard ->
 --   Talk(SAY_SLAY) (vancleef/illidan convention).
 -- - SpellHitTarget: Talk(SAY_TRANSFORM 2) fires when SPELL_ARUGAL_CURSE
 --   (7621) lands (event 15; the curse cast is ported in onCurse, so the
@@ -158,7 +158,7 @@ local function onThunderShock(creature, guid)
 end
 
 local function onTargetDied(_, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end

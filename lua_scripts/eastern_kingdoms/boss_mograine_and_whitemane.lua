@@ -16,7 +16,7 @@
 -- non-triggered DoCastVictim -> GetVictim + CastSpell, nil-victim keeps
 -- schedule, jeklik convention; urand(10s,15s) initial -> math.random,
 -- sulfuron convention). KilledUnit: Talk(SAY_MO_KILL 1) only when the
--- victim is a player (TYPEID_PLAYER gate -> victim:IsPlayer(), herod
+-- victim is a player (TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", herod
 -- convention), gated by the 5s _killYellTimer (Reset(0s) in Reset means
 -- available immediately — modeled with a per-GUID one-shot clear,
 -- fairbanks heal-cooldown pattern; C++ _Reset() does NOT touch the
@@ -153,7 +153,7 @@ end
 
 -- C++ KilledUnit (both bosses): player-gated yell, 5s _killYellTimer.
 local function onTargetDied(event, creature, victim, sayKill)
-    if not victim:IsPlayer() then
+    if victim:GetObjectType() ~= "Player" then
         return
     end
     local guid = creature:GetGUID()

@@ -14,7 +14,7 @@
 -- creature_template ScriptName bindings are DB-side (no TDB in
 -- this workspace).
 -- Talk lines used: SAY_AGGRO=1 (pull), SAY_SLAY=2 (kill — the
--- C++ has a TYPEID_PLAYER gate, modeled via victim:IsPlayer()),
+-- C++ has a TYPEID_PLAYER gate, modeled via victim:GetObjectType() == "Player"),
 -- SAY_DEAD=3 (death); SAY_SUMMON=0 is defined but never called
 -- anywhere in the file (unused enum member, documented only,
 -- gruul precedent).
@@ -39,7 +39,7 @@
 -- winds 31718 9s init then {10s,15s} — random alive player
 -- within 35 yd, cast or skip, re-arm (C++-exact); the Heroic
 -- second cast unmodeled (below). OnTargetDied(3): victim:
--- IsPlayer() -> Talk(SAY_SLAY) (C++-exact). OnDied(4): Talk(
+-- GetObjectType() == "Player" -> Talk(SAY_SLAY) (C++-exact). OnDied(4): Talk(
 -- SAY_DEAD) + cleanup (the _JustDied arm is instance-blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the _Reset arm is instance-blocked). Melee is engine-
@@ -205,7 +205,7 @@ RegisterCreatureEvent(ENTRY_THESPIA, 2, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_THESPIA, 3, function(_, creature, victim)
-    if victim and victim:IsPlayer() then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end)

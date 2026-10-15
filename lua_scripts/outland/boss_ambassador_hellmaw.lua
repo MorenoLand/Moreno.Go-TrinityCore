@@ -152,9 +152,9 @@ end
 -- C++ boss_ambassador_hellmawAI::KilledUnit:
 -- if (who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_SLAY) — the
 -- razuvious player-gated precedent (event 3 — the illidan
--- victim:IsPlayer() convention).
+-- victim:GetObjectType() == "Player" convention).
 local function hellmawTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end

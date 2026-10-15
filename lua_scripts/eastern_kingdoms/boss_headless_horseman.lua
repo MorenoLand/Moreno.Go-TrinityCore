@@ -32,7 +32,7 @@
 --   DoCastVictim -> GetVictim + CastSpell (mr_smite convention),
 --   C++-exact 13s init / Repeat(6s, 12s).
 -- - KilledUnit's Talk(SAY_KILL_PLAYER) with the TYPEID_PLAYER gate ->
---   OnTargetDied (3) with a victim:IsPlayer() gate (illidan convention).
+--   OnTargetDied (3) with a victim:GetObjectType() == "Player" gate (illidan convention).
 -- - JustDied's Talk(SAY_DEATH) + DoCastSelf(SPELL_HEADLESS_HORSEMAN_
 --   BURNING_COSMETIC) -> OnDied (4) (maiden precedent: cancel timers,
 --   then the death arm); the cosmetic cast is packet-visual like all
@@ -168,7 +168,7 @@ local function onCombatEnd(_, creature)
 end
 
 local function onTargetDied(_, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL_PLAYER)
     end
 end

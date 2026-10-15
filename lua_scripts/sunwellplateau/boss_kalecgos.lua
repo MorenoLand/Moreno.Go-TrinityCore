@@ -315,7 +315,7 @@ end
 
 -- C++ KilledUnit: player victim + 50% roll -> Talk(SAY_EVIL_SLAY).
 local function kalecgosTargetDied(event, creature, victim)
-    if victim:IsPlayer() and math.random(1, 2) == 1 then
+    if victim:GetObjectType() == "Player" and math.random(1, 2) == 1 then
         creature:Talk(SAY_EVIL_SLAY)
     end
 end
@@ -539,7 +539,7 @@ end
 -- C++ KilledUnit: player victim -> Talk(SAY_SATH_SLAY). The killed-
 -- kalecgos-human evade relay has no bridge — skipped.
 local function sathrovarrTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SATH_SLAY)
     end
 end

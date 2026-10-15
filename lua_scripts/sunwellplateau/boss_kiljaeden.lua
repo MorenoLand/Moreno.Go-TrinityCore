@@ -840,7 +840,7 @@ local function reflectionEnterCombat(event, creature)
     cancelTimers(guid)
     local class = 0
     local victim = creature:GetVictim()
-    if victim and victim:IsPlayer() then
+    if victim and victim:GetObjectType() == "Player" then
         class = victim:GetClass()
     end
     reflectionState[guid] = { class = class }

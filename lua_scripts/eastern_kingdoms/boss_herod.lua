@@ -20,7 +20,7 @@
 -- nothing but keep the schedule — jeklik convention). Whirlwind's
 -- first cast also fires Talk(SAY_WHIRLWIND 1).
 -- KilledUnit: Talk(SAY_KILL 3) only when the victim is a player
--- (C++ TYPEID_PLAYER gate -> victim:IsPlayer(), illidan convention).
+-- (C++ TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", illidan convention).
 -- The DamageTaken enrage latch fires once when post-damage health
 -- drops strictly below 30% (C++ HealthBelowPctDamaged(30, damage) —
 -- damaged class, the same class as the thalnos/azshir latches, NOT
@@ -134,9 +134,9 @@ local function herodReset(event, creature)
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL 3) only when the victim is a player
--- (TYPEID_PLAYER gate -> victim:IsPlayer(), illidan convention).
+-- (TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", illidan convention).
 local function herodTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end

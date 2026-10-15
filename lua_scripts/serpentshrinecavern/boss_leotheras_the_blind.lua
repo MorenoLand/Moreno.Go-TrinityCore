@@ -15,7 +15,7 @@
 -- convention), SAY_SWITCH_TO_DEMON=1 (demon switch), SAY_INNER_
 -- DEMONS=2 (inner-demon summon), SAY_DEMON_SLAY=3 / SAY_NIGHTELF_
 -- SLAY=4 (kill — TYPEID_PLAYER gate, modeled via victim:
--- IsPlayer()), SAY_FINAL_FORM=5 (15% split), SAY_FREE=6 (demon
+-- GetObjectType() == "Player"), SAY_FINAL_FORM=5 (15% split), SAY_FREE=6 (demon
 -- copy engage), SAY_DEATH=7 (death). All eight are referenced in
 -- the file.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
@@ -71,7 +71,7 @@
 -- floored integer threshold — GetHealthPct() < 15 fired up to 1 HP early)
 -- -> isFinalForm=true, demonForm=false, Talk(SAY_FINAL_FORM)
 -- (the DoSpawnCreature(DEMON_FORM 21875) copy arm has no summon
--- bridge — unmodeled, below). OnTargetDied(3): victim:IsPlayer()
+-- bridge — unmodeled, below). OnTargetDied(3): victim:GetObjectType() == "Player"
 -- -> Talk(demonForm and SAY_DEMON_SLAY or SAY_NIGHTELF_SLAY)
 -- (C++-exact per-form slay). OnDied(4): Talk(SAY_DEATH) +
 -- cleanup (the demon-copy despawn is cross-creature blocked; the
@@ -87,7 +87,7 @@
 -- blast — if the timer fires AND the victim is within 30 yd ->
 -- CastSpell(victim, 37674), re-arm 3000 (the re-arm sits inside
 -- the range gate here, unlike the boss form — C++-exact). On-
--- TargetDied(3): victim:IsPlayer() -> Talk(SAY_DEMON_SLAY).
+-- TargetDied(3): victim:GetObjectType() == "Player" -> Talk(SAY_DEMON_SLAY).
 -- OnDied(4): cleanup (the post-mortem triggered self-cast of
 -- 8149 — the blizzlike disappear — is unmodeled; a dead unit has
 -- no cast bearer in the Lua model). OnLeaveCombat(2)/OnReset(23):
@@ -370,7 +370,7 @@ end
 -- C++ KilledUnit: TYPEID_PLAYER gate -> per-form slay line.
 local function leotherasTargetDied(event, creature, victim)
     local st = leotherasState[creature:GetGUID()]
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         if st and st.demonForm then
             creature:Talk(SAY_DEMON_SLAY)
         else
@@ -439,7 +439,7 @@ end
 
 -- C++ KilledUnit: TYPEID_PLAYER gate -> Talk(SAY_DEMON_SLAY).
 local function demonTargetDied(event, creature, victim)
-    if victim:IsPlayer() then
+    if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_DEMON_SLAY)
     end
 end
