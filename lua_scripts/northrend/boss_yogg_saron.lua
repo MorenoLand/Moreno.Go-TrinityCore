@@ -188,7 +188,14 @@ local SPELL_BLACK_PLAGUE = 64153
 local SPELL_CURSE_OF_DOOM = 64157
 local SPELL_APATHY = 64156
 local SPELL_DRAINING_POISON = 64152
-local SPELL_DIMINISH_POWER = 64148
+local SPELL_DIMINISH_POWER = 64145
+local SPELL_DIMINSH_POWER = 64148
+local SPELL_CRUSH = 64146
+local SPELL_TENTACLE_VOID_ZONE = 64017
+local SPELL_FOCUSED_ANGER = 57688
+local SPELL_ERUPT = 64144
+local SPELL_EMPOWERED = 64161
+local SPELL_RECENTLY_SPAWNED = 64497
 local SPELL_DRAIN_LIFE = 64159
 
 local timers = {}
@@ -256,7 +263,7 @@ end
 -- arg; SelectTarget(Random) carries no C++ range so any alive player on
 -- the same map+instance is eligible (:1264, :1284-1288 verified). The
 -- Reset-time DoCast(me, SPELL_TENTACLE_VOID_ZONE) + DoCastAOE(SPELL_ERUPT)
--- legs are not timer-driven — not ported.
+-- legs are ported on event 23 (corruptorReset).
 local function corruptorTick(creature, guid)
     local target = randomPlayer(creature)
     if target then
@@ -276,10 +283,20 @@ local function corruptorEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ npc_corruptor_tentacleAI::Reset (:1260-1265): non-triggered
+-- one-shots DoCast(me, SPELL_TENTACLE_VOID_ZONE 64017) +
+-- DoCastAOE(SPELL_ERUPT 64144) ride event 23.
+local function corruptorReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_TENTACLE_VOID_ZONE)
+    creature:CastSpell(creature, SPELL_ERUPT)
+end
+
 -- C++ npc_crusher_tentacleAI::EVENT_DIMINISH_POWER:
--- DoCast(SPELL_DIMINISH_POWER 64148) (non-triggered self-cast), {6s,8s}
+-- DoCast(SPELL_DIMINISH_POWER 64145) (non-triggered self-cast), {6s,8s}
 -- init, {20s,30s} repeat — scheduled in Reset with no phase arg (:1370,
--- :1389-1392 verified).
+-- :1389-1392 verified). (SPELL_DIMINSH_POWER 64148 is a different enum
+-- entry — the typo'd name — cast once in Reset, see crusherReset.)
 local function diminishPowerTick(creature, guid)
     creature:CastSpell(creature, SPELL_DIMINISH_POWER)
     schedule(guid, "diminishpower", {20000, 30000}, function()
@@ -293,6 +310,21 @@ local function crusherEnterCombat(event, creature, target)
     schedule(guid, "diminishpower", {6000, 8000}, function()
         diminishPowerTick(creature, guid)
     end)
+end
+
+-- C++ npc_crusher_tentacleAI::Reset (:1362-1368): five non-triggered
+-- one-shots — DoCast(me, SPELL_CRUSH 64146), DoCast(me,
+-- SPELL_TENTACLE_VOID_ZONE 64017), DoCast(me, SPELL_DIMINSH_POWER 64148),
+-- DoCast(me, SPELL_FOCUSED_ANGER 57688), DoCastAOE(SPELL_ERUPT 64144) —
+-- ride event 23 (halion Reset one-shot precedent); the SetCombatMovement
+-- leg has no bridge.
+local function crusherReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_CRUSH)
+    creature:CastSpell(creature, SPELL_TENTACLE_VOID_ZONE)
+    creature:CastSpell(creature, SPELL_DIMINSH_POWER)
+    creature:CastSpell(creature, SPELL_FOCUSED_ANGER)
+    creature:CastSpell(creature, SPELL_ERUPT)
 end
 
 -- C++ npc_immortal_guardianAI::EVENT_DRAIN_LIFE:
@@ -314,6 +346,16 @@ local function immortalEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ npc_immortal_guardianAI::Reset (:1489-1493): non-triggered
+-- one-shots DoCast(me, SPELL_EMPOWERED 64161) + DoCast(me,
+-- SPELL_RECENTLY_SPAWNED 64497) ride event 23; the DamageTaken 1% floor
+-- has no health bridge.
+local function immortalReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_EMPOWERED)
+    creature:CastSpell(creature, SPELL_RECENTLY_SPAWNED)
+end
+
 local function cancelAll(event, creature)
     cancelTimers(creature:GetGUID())
 end
@@ -325,12 +367,12 @@ RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 23, cancelAll)
 RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 1, corruptorEnterCombat)
 RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 4, cancelAll)
-RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 23, cancelAll)
+RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 23, corruptorReset)
 RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 1, crusherEnterCombat)
 RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 4, cancelAll)
-RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 23, cancelAll)
+RegisterCreatureEvent(ENTRY_CRUSHER_TENTACLE, 23, crusherReset)
 RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 1, immortalEnterCombat)
 RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 4, cancelAll)
-RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 23, cancelAll)
+RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 23, immortalReset)
