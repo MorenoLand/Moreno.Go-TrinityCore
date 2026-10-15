@@ -1447,6 +1447,30 @@ func (s *session) canInteractWithCreature(ctx context.Context, creature *scripti
 	if s.isInFlight() {
 		return false
 	}
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2343-2345): a creature under
+	// control (UNIT_FIELD_CHARMEDBY set) cannot be interacted with. C++ sets
+	// CHARMEDBY only in Unit::SetCharm (Unit.cpp:6229), so player pets — owned,
+	// never charmed — keep passing this gate; Go's charm twin lives on the
+	// motion record (charmCreature, creaturemotion.go:1752-1766).
+	//
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2352-2354): an unfriendly or
+	// worse creature (GetReactionTo <= REP_UNFRIENDLY) rejects the interaction;
+	// creatureToPlayerRank ports the creature->player GetReactionTo tail
+	// (Object.cpp:2795-2842) including the at-war neutral clamp.
+	if guid, ok := objectUint64Field(creature, "GUID"); ok {
+		if motion := s.findCreatureMotion(guid); motion != nil {
+			if motion.Charmed {
+				return false
+			}
+			player := playerPos{Race: s.player.Race, Class: s.player.Class, Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+			if s.server != nil {
+				player.FactionTemplate = s.effectiveFactionTemplate(s.player.Race)
+			}
+			if s.creatureToPlayerRank(motion.Faction, player) <= 2 {
+				return false
+			}
+		}
+	}
 	mapID, mapOK := objectUint32Field(creature, "Map")
 	x, xOK := objectFloat32Field(creature, "X")
 	y, yOK := objectFloat32Field(creature, "Y")
