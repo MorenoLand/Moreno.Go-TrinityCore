@@ -18686,7 +18686,12 @@ func (s *session) queueNextSwingSpell(castID uint8, spellID uint32, spell wotlk.
 	s.nextSwing = &queuedNextSwing{CastID: castID, SpellID: spellID, Spell: spell, Target: target, CastItemGUID: castItemGUID, CastItemEntry: castItemEntry}
 	s.castMu.Unlock()
 	if old != nil {
-		s.cancelGlobalCooldown(old.SpellID)
+		// Spell::cancel PREPARING arm (Spell.cpp:3218-3224) without the
+		// GCD refund: Spell::CancelGlobalCooldown (Spell.cpp:8264-8277)
+		// returns early unless the cancelled spell is the CURRENT_GENERIC_SPELL,
+		// and the queued spell lives in the CURRENT_MELEE_SPELL slot — so the
+		// old spell's GCD category is left untouched; SendInterrupted(0) and
+		// SendCastResult(INTERRUPTED) are ungated and still go out.
 		s.sendInterrupted(old.CastID, old.SpellID, 0)
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(old.CastID, old.SpellID, spellFailedInterrupted), true)
 	}
@@ -18711,7 +18716,10 @@ func (s *session) cancelNextSwingSpell() {
 	if q == nil {
 		return
 	}
-	s.cancelGlobalCooldown(q.SpellID)
+	// Same CURRENT_GENERIC_SPELL gate as above (Spell.cpp:8264-8277): the
+	// queued on-next-swing spell is in the CURRENT_MELEE_SPELL slot, so
+	// cancelling it refunds no GCD; only SendInterrupted(0) and
+	// SendCastResult(INTERRUPTED) fire.
 	s.sendInterrupted(q.CastID, q.SpellID, 0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(q.CastID, q.SpellID, spellFailedInterrupted), true)
 }
