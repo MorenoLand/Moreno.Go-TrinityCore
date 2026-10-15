@@ -4291,7 +4291,7 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 			} else {
 				var minMoney, maxMoney int64
 				_ = lootSource.QueryRowContext(ctx, "SELECT MinMoneyLoot, MaxMoneyLoot FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&minMoney, &maxMoney)
-				loot.Money = generateMoneyLootValue(minMoney, maxMoney)
+				loot.Money = s.server.generateMoneyLootValue(minMoney, maxMoney)
 				s.server.fillLootTemplate(ctx, lootSource, "item_loot_template", int64(itemEntry), lootModeDefault, loot)
 				// FillNotNormalLootFor (Loot.cpp:246-266) auto-stores
 				// currency-token rows straight into the opener's bags.

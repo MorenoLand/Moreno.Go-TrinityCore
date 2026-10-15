@@ -239,6 +239,12 @@ type creatureMotion struct {
 	// == 0): set when the corpse's loot window fully empties, cleared on
 	// respawn. Consulted by the skinning CheckCast gate (spells.go).
 	Looted bool
+	// LootMode mirrors Creature::m_LootMode (Creature.h:224/482 — the
+	// bitmask of loot modes whose rows are lootable, default
+	// LOOT_MODE_DEFAULT). Scripts change it via Set/Add/RemoveLootMode
+	// (no Lua binding yet); the kill fill passes it to the template fill
+	// and the money roll (Unit.cpp:11250/11257-11258).
+	LootMode uint16
 	// TapPlayerGUID/TapGroupID mirror Creature::SetLootRecipient
 	// (Creature.cpp:1328-1355): the first player-attributed damager
 	// (charmer/owner-resolved, so pet hits credit the owner) claims the
@@ -688,6 +694,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 		}
 		motion = &creatureMotion{
 			GUID:        key,
+			LootMode:    lootModeDefault,
 			Entry:       entry,
 			Map:         mapID,
 			InstanceID:  instanceID,
@@ -834,6 +841,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			}
 			motion = &creatureMotion{
 				GUID:       creatureGUID,
+				LootMode:   lootModeDefault,
 				Entry:      entry,
 				Map:        uint32(mapID),
 				InstanceID: instanceID,

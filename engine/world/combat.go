@@ -2663,6 +2663,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	} else {
 		motion := &creatureMotion{
 			GUID:       target.GUID,
+			LootMode:   lootModeDefault,
 			Entry:      uint32(entry),
 			Map:        target.Map,
 			InstanceID: s.player.InstanceID,

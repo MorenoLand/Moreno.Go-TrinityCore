@@ -81,6 +81,16 @@ type Config struct {
 	FocusRate                               float64
 	RateHonor                               float64
 	RateRepairCost                          float64
+	RateDropItemPoor                        float64 // CONFIG_RATE_DROP_ITEM_POOR (World.cpp:537, "Rate.Drop.Item.Poor", default 1)
+	RateDropItemNormal                      float64 // CONFIG_RATE_DROP_ITEM_NORMAL (World.cpp:538, "Rate.Drop.Item.Normal", default 1)
+	RateDropItemUncommon                    float64 // CONFIG_RATE_DROP_ITEM_UNCOMMON (World.cpp:539, "Rate.Drop.Item.Uncommon", default 1)
+	RateDropItemRare                        float64 // CONFIG_RATE_DROP_ITEM_RARE (World.cpp:540, "Rate.Drop.Item.Rare", default 1)
+	RateDropItemEpic                        float64 // CONFIG_RATE_DROP_ITEM_EPIC (World.cpp:541, "Rate.Drop.Item.Epic", default 1)
+	RateDropItemLegendary                   float64 // CONFIG_RATE_DROP_ITEM_LEGENDARY (World.cpp:542, "Rate.Drop.Item.Legendary", default 1)
+	RateDropItemArtifact                    float64 // CONFIG_RATE_DROP_ITEM_ARTIFACT (World.cpp:543, "Rate.Drop.Item.Artifact", default 1)
+	RateDropItemReferenced                  float64 // CONFIG_RATE_DROP_ITEM_REFERENCED (World.cpp:544, "Rate.Drop.Item.Referenced", default 1)
+	RateDropItemReferencedAmount            float64 // CONFIG_RATE_DROP_ITEM_REFERENCED_AMOUNT (World.cpp:545, "Rate.Drop.Item.ReferencedAmount", default 1)
+	RateDropMoney                           float64 // CONFIG_RATE_DROP_MONEY (World.cpp:546, "Rate.Drop.Money", default 1)
 	GMFreezeAuraDuration                    uint32
 	EnableMmaps                             bool
 	MaxGroupXPDistance                      float64
@@ -329,6 +339,16 @@ func Default() Config {
 	c.FocusRate = 1
 	c.RateHonor = 1
 	c.RateRepairCost = 1
+	c.RateDropItemPoor = 1
+	c.RateDropItemNormal = 1
+	c.RateDropItemUncommon = 1
+	c.RateDropItemRare = 1
+	c.RateDropItemEpic = 1
+	c.RateDropItemLegendary = 1
+	c.RateDropItemArtifact = 1
+	c.RateDropItemReferenced = 1
+	c.RateDropItemReferencedAmount = 1
+	c.RateDropMoney = 1
 	c.GMFreezeAuraDuration = 0
 	c.EnableMmaps = true
 	c.MaxGroupXPDistance = 74
@@ -517,6 +537,16 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_WILDERNESS"] = "Rate.Rest.Offline.InWilderness"
 	values["MORENOCORE_RATE_FOCUS"] = "Rate.Focus"
 	values["MORENOCORE_RATE_HONOR"] = "Rate.Honor"
+	values["MORENOCORE_RATE_DROP_ITEM_POOR"] = "Rate.Drop.Item.Poor"
+	values["MORENOCORE_RATE_DROP_ITEM_NORMAL"] = "Rate.Drop.Item.Normal"
+	values["MORENOCORE_RATE_DROP_ITEM_UNCOMMON"] = "Rate.Drop.Item.Uncommon"
+	values["MORENOCORE_RATE_DROP_ITEM_RARE"] = "Rate.Drop.Item.Rare"
+	values["MORENOCORE_RATE_DROP_ITEM_EPIC"] = "Rate.Drop.Item.Epic"
+	values["MORENOCORE_RATE_DROP_ITEM_LEGENDARY"] = "Rate.Drop.Item.Legendary"
+	values["MORENOCORE_RATE_DROP_ITEM_ARTIFACT"] = "Rate.Drop.Item.Artifact"
+	values["MORENOCORE_RATE_DROP_ITEM_REFERENCED"] = "Rate.Drop.Item.Referenced"
+	values["MORENOCORE_RATE_DROP_ITEM_REFERENCED_AMOUNT"] = "Rate.Drop.Item.ReferencedAmount"
+	values["MORENOCORE_RATE_DROP_MONEY"] = "Rate.Drop.Money"
 	values["MORENOCORE_RATE_REPAIRCOST"] = "Rate.RepairCost"
 	values["MORENOCORE_GM_FREEZE_AURA_DURATION"] = "GM.FreezeAuraDuration"
 	values["MORENOCORE_ENABLE_MMAPS"] = "EnableMmaps"
@@ -993,6 +1023,26 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.FocusRate, key, value)
 	case "Rate.Honor":
 		return setFloat64(&c.RateHonor, key, value)
+	case "Rate.Drop.Item.Poor":
+		return setFloat64(&c.RateDropItemPoor, key, value)
+	case "Rate.Drop.Item.Normal":
+		return setFloat64(&c.RateDropItemNormal, key, value)
+	case "Rate.Drop.Item.Uncommon":
+		return setFloat64(&c.RateDropItemUncommon, key, value)
+	case "Rate.Drop.Item.Rare":
+		return setFloat64(&c.RateDropItemRare, key, value)
+	case "Rate.Drop.Item.Epic":
+		return setFloat64(&c.RateDropItemEpic, key, value)
+	case "Rate.Drop.Item.Legendary":
+		return setFloat64(&c.RateDropItemLegendary, key, value)
+	case "Rate.Drop.Item.Artifact":
+		return setFloat64(&c.RateDropItemArtifact, key, value)
+	case "Rate.Drop.Item.Referenced":
+		return setFloat64(&c.RateDropItemReferenced, key, value)
+	case "Rate.Drop.Item.ReferencedAmount":
+		return setFloat64(&c.RateDropItemReferencedAmount, key, value)
+	case "Rate.Drop.Money":
+		return setFloat64(&c.RateDropMoney, key, value)
 	case "Rate.RepairCost":
 		// World.cpp:555-558: Rate.RepairCost must be >= 0; negatives become 0.
 		if err := setFloat64(&c.RateRepairCost, key, value); err != nil {

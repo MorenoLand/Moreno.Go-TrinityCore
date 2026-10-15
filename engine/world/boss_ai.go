@@ -251,6 +251,7 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 			offset := float32((i+1)*2) - 3.0
 			bgMotion := &creatureMotion{
 				GUID:       bgGUID,
+				LootMode:   lootModeDefault,
 				Entry:      636,
 				Map:        m.Map,
 				InstanceID: m.InstanceID,

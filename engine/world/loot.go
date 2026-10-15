@@ -290,9 +290,59 @@ type lootTemplateRow struct {
 // LootMgr.cpp:375-397/421-426). table is one of the *_loot_template tables;
 // loot must be freshly cleared — slot counters restart at 0 and
 // NormalSlotCount is set on return.
+// lootTemplateRatesAllowed mirrors the rates flag of the C++ loot stores
+// (LootMgr.cpp:44-55): every template store rolls world rates except the
+// reference, mail, and spell stores. A referenced template inherits the
+// outer fill's flag — LootTemplate::Process (LootMgr.cpp:587-591) passes
+// the caller's rate through the recursion — so fillLootTemplateDepth
+// threads the top-level flag down instead of re-deriving it per table.
+func lootTemplateRatesAllowed(table string) bool {
+	switch table {
+	case "reference_loot_template", "mail_loot_template", "spell_loot_template":
+		return false
+	}
+	return true
+}
+
+// lootReferenceDropRate mirrors the reference arm of LootStoreItem::Roll
+// (LootMgr.cpp:287-289): RATE_DROP_ITEM_REFERENCED scales the reference
+// row's chance only when the fill's rates flag is set.
+func (s *Server) lootReferenceDropRate(rates bool) float64 {
+	if !rates {
+		return 1
+	}
+	return s.Config.RateDropItemReferenced
+}
+
+// lootQualityDropRate mirrors the qualityToRate table (LootMgr.cpp:33-42)
+// applied by LootStoreItem::Roll (LootMgr.cpp:291): the row chance scales
+// by the world rate of the item template's quality. qualityToRate covers
+// qualities 0..6 (poor..artifact); C++ zero-initializes index 7 (heirloom)
+// to Rates(0) — no loot row carries heirloom quality, so it rides rate 1
+// here rather than an unrelated enum slot.
+func (s *Server) lootQualityDropRate(quality uint32) float64 {
+	switch quality {
+	case 0:
+		return s.Config.RateDropItemPoor
+	case 1:
+		return s.Config.RateDropItemNormal
+	case 2:
+		return s.Config.RateDropItemUncommon
+	case 3:
+		return s.Config.RateDropItemRare
+	case 4:
+		return s.Config.RateDropItemEpic
+	case 5:
+		return s.Config.RateDropItemLegendary
+	case 6:
+		return s.Config.RateDropItemArtifact
+	}
+	return 1
+}
+
 func (s *Server) fillLootTemplate(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState) {
 	var slot, qidx uint8
-	s.fillLootTemplateDepth(ctx, wdb, table, lootID, lootMode, loot, &slot, &qidx, 0, 0)
+	s.fillLootTemplateDepth(ctx, wdb, table, lootID, lootMode, loot, &slot, &qidx, 0, 0, lootTemplateRatesAllowed(table))
 	loot.NormalSlotCount = slot
 }
 
@@ -466,7 +516,7 @@ func (s *Server) lootMaxDuplicates(mapID uint32, raidDifficulty uint8) uint8 {
 	return 1
 }
 
-func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState, slot, qidx *uint8, groupSel uint8, depth int) {
+func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState, slot, qidx *uint8, groupSel uint8, depth int, rates bool) {
 	switch table {
 	case "creature_loot_template", "gameobject_loot_template", "skinning_loot_template",
 		"pickpocketing_loot_template", "reference_loot_template", "spell_loot_template",
@@ -500,16 +550,18 @@ func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table s
 			if groupSel != 0 {
 				continue
 			}
-			if !lootRowTakesChance(row.chance) {
+			if !lootRowTakesChance(row.chance, s.lootReferenceDropRate(rates)) {
 				continue
 			}
 			// Reference multiplicator: maxcount loops over the referenced
 			// template (LootMgr.cpp:587-591); the reference row's own groupid
 			// selects the group inside the referenced template.
-			// RATE_DROP_ITEM_REFERENCED and
-			// RATE_DROP_ITEM_REFERENCED_AMOUNT have no Go model.
-			for n := uint32(0); n < row.maxCount; n++ {
-				s.fillLootTemplateDepth(ctx, wdb, "reference_loot_template", int64(row.reference), lootMode, loot, slot, qidx, row.groupID, depth+1)
+			// RATE_DROP_ITEM_REFERENCED_AMOUNT scales the loop bound —
+			// unconditional in C++ (the config defaults to 1), not gated
+			// on the rates flag.
+			maxcount := uint32(float64(row.maxCount) * s.Config.RateDropItemReferencedAmount)
+			for n := uint32(0); n < maxcount; n++ {
+				s.fillLootTemplateDepth(ctx, wdb, "reference_loot_template", int64(row.reference), lootMode, loot, slot, qidx, row.groupID, depth+1, rates)
 			}
 			continue
 		}
@@ -517,7 +569,7 @@ func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table s
 			continue
 		}
 		if row.groupID == 0 {
-			if !lootRowTakesChance(row.chance) {
+			if !lootRowTakesChance(row.chance, s.lootQualityDropRate(row.quality)) {
 				continue
 			}
 			s.addLootTemplateRow(ctx, wdb, loot, slot, qidx, row)
@@ -607,14 +659,16 @@ func lootItemCopies(loot *activeLootState, itemID uint32) uint8 {
 	return n
 }
 
-// lootRowTakesChance mirrors LootStoreItem::Roll (LootMgr.cpp:281-295) minus
-// the world rates (RATE_DROP_ITEM_REFERENCED and the qualityToRate table have
-// no Go model): a flat roll against the row chance.
-func lootRowTakesChance(chance float64) bool {
+// lootRowTakesChance mirrors LootStoreItem::Roll (LootMgr.cpp:281-295): a
+// flat roll against the row chance scaled by the rate multiplier — the
+// quality rate for plain rows, RATE_DROP_ITEM_REFERENCED for reference
+// rows (the callers pick the arm). Grouped entries roll without rates
+// (LootGroup::Roll, LootMgr.cpp:375-397, has no rate arm).
+func lootRowTakesChance(chance, rateMult float64) bool {
 	if chance >= 100 {
 		return true
 	}
-	return rand.Float64()*100 < chance
+	return rand.Float64()*100 < chance*rateMult
 }
 
 // addLootTemplateRow mirrors the count/stack arms of Loot::AddItem
@@ -1630,15 +1684,20 @@ func rollLootObjectKey(roll *activeGroupRoll) lootObjectKey {
 // the maxAmount<=minAmount arm takes maxAmount (not minAmount), and a zero
 // max means no money at all. The (maxAmount-minAmount)>=32700 arm is a
 // 32-bit urand overflow guard with no Go analog (rand.Intn runs on 64-bit
-// ints), and RATE_DROP_MONEY has no Go model (rate 1).
-func generateMoneyLootValue(minGold, maxGold int64) uint32 {
+// ints). All three arms scale by RATE_DROP_MONEY (worldserver.conf
+// Rate.Drop.Money, default 1).
+func (s *Server) generateMoneyLootValue(minGold, maxGold int64) uint32 {
+	rate := 1.0
+	if s != nil {
+		rate = s.Config.RateDropMoney
+	}
 	if maxGold <= 0 {
 		return 0
 	}
 	if maxGold > minGold {
-		return uint32(minGold + int64(rand.Intn(int(maxGold-minGold+1))))
+		return uint32(float64(minGold+int64(rand.Intn(int(maxGold-minGold+1)))) * rate)
 	}
-	return uint32(maxGold)
+	return uint32(float64(maxGold) * rate)
 }
 
 func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, lootType uint8, maxDist float64) bool {
@@ -1785,7 +1844,7 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	// (the C++ lootMode>0 gate has no Go model; lootable GOs always qualify).
 	var addonMinGold, addonMaxGold int64
 	if err = wdb.QueryRowContext(ctx, `SELECT COALESCE(mingold, 0), COALESCE(maxgold, 0) FROM gameobject_template_addon WHERE entry = ?`, entry).Scan(&addonMinGold, &addonMaxGold); err == nil {
-		if money := generateMoneyLootValue(addonMinGold, addonMaxGold); money != 0 {
+		if money := s.server.generateMoneyLootValue(addonMinGold, addonMaxGold); money != 0 {
 			loot.Money = money
 		}
 	}
@@ -1926,16 +1985,23 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	var minGold, maxGold, lootID int64
 	_ = wdb.QueryRowContext(ctx, "SELECT minGold, maxGold FROM creature_template WHERE entry = ? LIMIT 1", creatureEntry).Scan(&minGold, &maxGold)
 	_ = wdb.QueryRowContext(ctx, "SELECT lootid FROM creature_template WHERE entry = ? LIMIT 1", creatureEntry).Scan(&lootID)
-	loot.Money = generateMoneyLootValue(minGold, maxGold)
-	// Unit.cpp:11257-11258 (creature kill-time fill): the creature_loot_template
+	// Unit.cpp:11250/11257-11258 (creature kill-time fill): the fill passes
+	// creature->GetLootMode() — the motion's loot-mode bitmask (Creature.h:224,
+	// default LOOT_MODE_DEFAULT) — and money rolls only when the mode is
+	// non-zero (GetLootMode() > 0). A zero mode adds no rows either: the
+	// lootMode filter (row.lootMode&lootMode) drops every row.
+	lootMode := uint32(lootModeDefault)
+	if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); motion != nil && motion.LootMode != 0 {
+		lootMode = uint32(motion.LootMode)
+	}
+	if lootMode != 0 {
+		loot.Money = s.server.generateMoneyLootValue(minGold, maxGold)
+	}
+	// Unit.cpp:11257 (creature kill-time fill): the creature_loot_template
 	// fill runs ONLY when lootid != 0 — no entry fallback (mirrors the 11:59
-	// gameobject chest bridge at Player.cpp:8607). A zero-lootid creature still
-	// rolls money (GetLootMode() > 0; Go has no loot modes, so unconditionally).
-	// Loot::FillLoot (Loot.cpp:188) drives LootTemplate::Process over the
-	// creature template; Go has no creature loot modes, so the default mode
-	// (Unit.cpp:11250 passes creature->GetLootMode() in C++).
+	// gameobject chest bridge at Player.cpp:8607).
 	if lootID != 0 {
-		s.server.fillLootTemplate(ctx, wdb, "creature_loot_template", lootID, lootModeDefault, loot)
+		s.server.fillLootTemplate(ctx, wdb, "creature_loot_template", lootID, lootMode, loot)
 	}
 	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 	// Loot::FillLoot group arm (Loot.cpp:214-219): the creature kill fill
@@ -2117,7 +2183,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 			// fill has no group model, so a zero chance is never a grouped
 			// equal-chanced entry — !lootRowTakesChance drops it, matching
 			// the template path's roll-time skip.
-			if tplHasTemplate == 0 || minCount == 0 || maxCount < minCount || (chance != 0 && chance < 0.000001) || !lootRowTakesChance(chance) {
+			if tplHasTemplate == 0 || minCount == 0 || maxCount < minCount || (chance != 0 && chance < 0.000001) || !lootRowTakesChance(chance, s.server.lootQualityDropRate(uint32(quality))) {
 				continue
 			}
 			count := uint32(minCount)
@@ -2192,14 +2258,16 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 				continue
 			}
 			if row.reference > 0 {
-				if !lootRowTakesChance(row.chance) {
+				if !lootRowTakesChance(row.chance, s.server.lootReferenceDropRate(true)) {
 					continue
 				}
 				// LootTemplate::Process (LootMgr.cpp:587-591): the reference
-				// row's maxcount loops the referenced template, the row's
-				// groupid selecting the group inside it.
-				for n := uint32(0); n < row.maxCount; n++ {
-					s.server.fillLootTemplateDepth(ctx, s.server.WorldStore.DB, "reference_loot_template", int64(row.reference), lootMode, loot, &qslot, &qidx, row.groupID, 0)
+				// row's maxcount loops the referenced template — scaled by
+				// RATE_DROP_ITEM_REFERENCED_AMOUNT — the row's groupid
+				// selecting the group inside it.
+				maxcount := uint32(float64(row.maxCount) * s.server.Config.RateDropItemReferencedAmount)
+				for n := uint32(0); n < maxcount; n++ {
+					s.server.fillLootTemplateDepth(ctx, s.server.WorldStore.DB, "reference_loot_template", int64(row.reference), lootMode, loot, &qslot, &qidx, row.groupID, 0, true)
 				}
 				continue
 			}
@@ -2209,7 +2277,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 				// rows share it; no shipped fishing template uses groups.
 				continue
 			}
-			if !lootRowTakesChance(row.chance) {
+			if !lootRowTakesChance(row.chance, s.server.lootQualityDropRate(row.quality)) {
 				continue
 			}
 			s.server.addLootTemplateRow(ctx, s.server.WorldStore.DB, loot, &qslot, &qidx, row)
@@ -2521,6 +2589,32 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	return nil
 }
 
+// lootMasterListAnchor resolves the Group::MasterLoot source position
+// (Group.cpp:1435-1447): Player::IsAtGroupRewardDistance measures from the
+// looted object (Player.cpp:24160), not the master looter — creature/
+// vehicle loot from the live motion, static gameobjects from the
+// gameobject row. Returns false when the source can't be resolved.
+func (s *Server) lootMasterListAnchor(ctx context.Context, loot *activeLootState) (float32, float32, float32, bool) {
+	if s == nil || loot == nil {
+		return 0, 0, 0, false
+	}
+	switch uint16(loot.TargetGUID >> 48) {
+	case 0xF130, 0xF150:
+		if motion := s.findCreatureMotion(loot.MapID, loot.InstanceID, loot.TargetGUID); motion != nil {
+			return motion.X, motion.Y, motion.Z, true
+		}
+	case 0xF110:
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			low := uint32(loot.TargetGUID & 0xFFFFFFFF)
+			var x, y, z float32
+			if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT position_x, position_y, position_z FROM gameobject WHERE guid = ? LIMIT 1`, low).Scan(&x, &y, &z); err == nil {
+				return x, y, z, true
+			}
+		}
+	}
+	return 0, 0, 0, false
+}
+
 func (s *session) sendLootMasterList(loot *activeLootState) {
 	if s.server == nil || s.groupID == 0 {
 		return
@@ -2531,20 +2625,26 @@ func (s *session) sendLootMasterList(loot *activeLootState) {
 	if grp == nil || grp.LootMethod != 2 { // 2 = MASTER_LOOT
 		return
 	}
+	// Group::MasterLoot (Group.cpp:1435-1447): the master-looter list
+	// carries the members at Player::IsAtGroupRewardDistance (Player.cpp:24160)
+	// of the looted object — same map and instance as the source, within
+	// MaxGroupXPDistance (default 74, not 100). The caller is the member, so
+	// a dead member's distance is measured from their corpse
+	// (groupRewardAnchorPos), not the ghost.
+	ax, ay, az, ok := s.server.lootMasterListAnchor(context.Background(), loot)
+	if !ok {
+		// Unresolvable source: keep the master-looter anchor rather than
+		// sending no list at all.
+		ax, ay, az = s.player.X, s.player.Y, s.player.Z
+	}
 	members := s.server.getGroupSessions(s.groupID)
 	var nearMembers []*session
 	for _, m := range members {
-		// Group::MasterLoot (Group.cpp:1435-1447): the master-looter list
-		// carries the members at Player::IsAtGroupRewardDistance
-		// (Player.cpp:24160) of the looted object — same map and instance,
-		// within MaxGroupXPDistance (default 74, not 100). The caller is the
-		// member, so a dead member's distance is measured from their corpse
-		// (groupRewardAnchorPos), not the ghost.
-		if m.player == nil || m.player.Map != s.player.Map || m.player.InstanceID != s.player.InstanceID {
+		if m.player == nil || m.player.Map != loot.MapID || m.player.InstanceID != loot.InstanceID {
 			continue
 		}
 		mx, my, mz := groupRewardAnchorPos(m)
-		if distance3D(mx, my, mz, s.player.X, s.player.Y, s.player.Z) <= s.server.Config.MaxGroupXPDistance {
+		if distance3D(mx, my, mz, ax, ay, az) <= s.server.Config.MaxGroupXPDistance {
 			nearMembers = append(nearMembers, m)
 		}
 	}
@@ -4753,10 +4853,11 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 // the whole disenchant_loot_template — every chance-rolled material is
 // stored, a per-material equip error skips just that material
 // (Player.cpp:25030-25057), and the disenchant cast credits the winner with
-// ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL 13262 (Group.cpp:1654). A full bag
-// mails the materials in C++ (SendItemRetrievalMail); Go has no player-mail
-// bridge (item 13 partial), so a winner who stores nothing falls back to the
-// RollWinner path and can take the item on a later loot open.
+// ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL 13262 (Group.cpp:1654). The arm first
+// probes CanStoreNewItem for the ORIGINAL rolled item (Group.cpp:1657): when
+// it doesn't fit, every rolled mat is mailed (SendItemRetrievalMail,
+// Player.cpp:26689) with the probe's equip error instead of riding the
+// store loop.
 func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRoll, winnerGUID uint64, winnerSess *session) {
 	// Group.cpp:1654 — the disenchant cast credits the connected winner.
 	winnerSess.updateAchievementCriteria(criteriaTypeCastSpell, 13262, 0)
@@ -4798,23 +4899,38 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 	}
 
 	storedAny := false
-	for _, m := range mats {
-		res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, m.item, m.count)
-		if err != nil {
-			winnerSess.sendEquipError(equipErrInvFull, 0)
-			continue
+	mailed := false
+	// Group::CountTheRoll (Group.cpp:1657-1669): the disenchant arm probes
+	// CanStoreNewItem for the ORIGINAL rolled item first. When it doesn't
+	// fit, the win skips AutoStoreLoot entirely — every rolled mat is mailed
+	// (SendItemRetrievalMail) with the probe's equip error, and the row is
+	// consumed like a stored win.
+	if gate := winnerSess.canStoreNewItem(ctx, winnerGUID, roll.ItemEntry, roll.ItemCount); gate != equipErrOk {
+		mailed = true
+		for _, m := range mats {
+			winnerSess.sendEquipError(gate, 0)
+			s.sendItemRetrievalMail(ctx, winnerGUID, m.item, m.count)
 		}
-		storedAny = true
-		_ = winnerSess.sendInventoryItems(ctx)
-		winnerSess.sendPlayerUpdate()
-		slotForPush := uint32(res.Slot)
-		if res.IsStack {
-			slotForPush = 0xFFFFFFFF
+	}
+	if !mailed {
+		for _, m := range mats {
+			res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, m.item, m.count)
+			if err != nil {
+				winnerSess.sendEquipError(equipErrInvFull, 0)
+				continue
+			}
+			storedAny = true
+			_ = winnerSess.sendInventoryItems(ctx)
+			winnerSess.sendPlayerUpdate()
+			slotForPush := uint32(res.Slot)
+			if res.IsStack {
+				slotForPush = 0xFFFFFFFF
+			}
+			_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, m.item, m.count, res.InventoryCount), true)
 		}
-		_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, m.item, m.count, res.InventoryCount), true)
 	}
 
-	if len(mats) == 0 || !storedAny {
+	if !mailed && (len(mats) == 0 || !storedAny) {
 		s.lootMu.Lock()
 		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
 			if qi, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {

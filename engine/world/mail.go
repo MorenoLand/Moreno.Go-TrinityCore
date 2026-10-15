@@ -1712,3 +1712,42 @@ func (srv *Server) sweepExpiredMails(ctx context.Context) {
 		}
 	}
 }
+
+// sendItemRetrievalMail mirrors Player::SendItemRetrievalMail
+// (Player.cpp:26689): a MAIL_CREATURE sender (34337, The Postmaster) mails a
+// freshly minted item — the Group::CountTheRoll disenchant arm's full-bag
+// fallback (Group.cpp:1664-1669).
+func (s *Server) sendItemRetrievalMail(ctx context.Context, receiverGUID uint64, itemEntry, count uint32) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil ||
+		s.CharactersStore == nil || s.CharactersStore.DB == nil ||
+		itemEntry == 0 || count == 0 {
+		return
+	}
+	var exists int
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ?", itemEntry).Scan(&exists); err != nil {
+		return
+	}
+	nextItemGUID := int64(s.generateItemGUID())
+	if nextItemGUID <= 0 {
+		return
+	}
+	cdb := s.CharactersStore.DB
+	// Item::CreateItem (Item.cpp:996) seeds proto->Duration at once on the
+	// minted item.
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count, duration) VALUES (?, ?, ?, ?, ?)",
+		nextItemGUID, itemEntry, receiverGUID, count, s.itemTemplateDuration(ctx, itemEntry)); err != nil {
+		return
+	}
+	now := time.Now().Unix()
+	nextMailID := s.generateMailID()
+	// MailDraft("Recovered Item", "...") (Player.cpp:26692);
+	// MailSender(MAIL_CREATURE, 34337) (Player.cpp:26691);
+	// MailDraft::SendMailTo (Mail.cpp:187-230): the non-GM 30-day expiry arm.
+	_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+		VALUES (?, 3, 41, 0, 34337, ?, 'Recovered Item', 'We recovered a lost item in the twisting nether and noted that it was yours.$B$BPlease find said object enclosed.', 1, ?, ?, 0, 0, 0)`,
+		nextMailID, receiverGUID, now+mailSendExpireDelay(false, 0), now)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, nextItemGUID, receiverGUID)
+	if sess := s.findSessionByGUID(receiverGUID); sess != nil {
+		sess.sendMailNotify(receiverGUID)
+	}
+}
