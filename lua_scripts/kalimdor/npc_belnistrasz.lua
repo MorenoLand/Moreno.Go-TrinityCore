@@ -32,20 +32,27 @@
 --   Talk(SAY_QUEST_ACCEPTED 0). The rest (RemoveFlag questgiver,
 --   SetFaction escorted, MovePath(PATH_ESCORT 871710) escort run) has
 --   no bridges — documented-only.
--- - Engage (C++ JustEngagedWith): C++-faithful: channeling (never set
---   here — MovementInform has no bridge) -> Talk(SAY_WATCH_OUT 7);
---   else arm Fireball at 1s and Frost Nova at {8s,12s}, and with
---   urand(0,100) > 40 -> Talk(SAY_AGGRO 6). C++ Talk takes the
---   target player; the bridge broadcasts (deviation, documented).
+-- - Engage (C++ JustEngagedWith): arms Fireball at 1s and Frost Nova
+--   at {8s,12s}, and with urand(0,100) > 40 -> Talk(SAY_AGGRO 6);
+--   channeling (never set here — MovementInform has no bridge) ->
+--   Talk(SAY_WATCH_OUT 7) (C++ targeted-player Talk broadcasts here;
+--   deviation, documented). C++ UpdateAI gates ALL combat events on
+--   eventInProgress (UpdateAI opens `if (!eventInProgress) return;`),
+--   so a pre-quest-3525 engage produces zero casts: the fire legs
+--   below re-schedule their frozen lines without casting until the
+--   quest-accept latch is set. Timers re-armed on engage but the latch
+--   is never wiped (C++ Reset skips the latch once set).
 -- - Fireball (EVENT_FIREBALL): DoCastVictim(SPELL_FIREBALL 9053),
---   non-triggered (2-arg DoCastVictim); init 1s -> repeat 8s
---   unconditional (nil-victim keeps schedule — jeklik convention;
---   C++ returns WITHOUT re-arming when UNIT_STATE_CASTING or no
---   victim, mal_ganis precedent, documented deviation).
+--   non-triggered (2-arg DoCastVictim); init 1s -> repeat 8s; gated on
+--   the quest-accept latch (C++ UpdateAI !eventInProgress early
+--   return): frozen lines re-schedule without casting. Nil-victim keeps
+--   the schedule — jeklik convention (C++ returns WITHOUT re-arming
+--   when UNIT_STATE_CASTING or no victim, mal_ganis precedent,
+--   documented deviation).
 -- - Frost Nova (EVENT_FROST_NOVA): DoCastAOE(SPELL_FROST_NOVA 11831)
 --   resolves to self-cast (kazrogal/illidan precedent), non-triggered;
---   init {8s,12s} -> repeat 15s; same victimless/casting-gate
---   deviation as Fireball.
+--   init {8s,12s} -> repeat 15s; same quest-latch gate and
+--   victimless/casting-gate deviation as Fireball.
 -- - LeaveCombat (event 2): cancel timers (C++ UpdateAI early-return
 --   without victim never clears scheduled events, but the hyjal.lua
 --   convention clears timers on leave-combat; no timer re-arm
@@ -125,6 +132,15 @@ end
 -- (jeklik convention; C++ returns without re-arming when casting or
 -- victimless — mal_ganis precedent, documented deviation).
 local function onFireball(creature, guid)
+    -- C++ UpdateAI returns before events.Update() while
+    -- !eventInProgress (razorfen_downs.cpp); the scheduled line stays
+    -- frozen and never fires. Re-schedule without casting.
+    if not getState(guid).eventInProgress then
+        schedule(guid, "fireball", 8000, function()
+            onFireball(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIREBALL)
@@ -137,6 +153,14 @@ end
 -- C++ EVENT_FROST_NOVA: DoCastAOE(11831) -> self-cast (kazrogal/illidan
 -- precedent); re-arm 15s unconditional, same blocked-gate deviation.
 local function onFrostNova(creature, guid)
+    -- C++ UpdateAI gate: no fire while !eventInProgress; frozen line
+    -- re-scheduled without casting (same as Fireball).
+    if not getState(guid).eventInProgress then
+        schedule(guid, "frostnova", 15000, function()
+            onFrostNova(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROST_NOVA)
     schedule(guid, "frostnova", 15000, function()
         onFrostNova(creature, guid)
@@ -148,7 +172,10 @@ end
 -- player variant has no bridge).
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
-    clearState(guid)
+    -- C++ Reset() skips everything once eventInProgress latches true,
+    -- so the quest-accept latch survives engage/evade; never wipe state
+    -- here (C++ JustEngagedWith re-arms the timers unconditionally).
+    cancelTimers(guid)
     local st = getState(guid)
     if st.channeling then
         creature:Talk(SAY_WATCH_OUT)

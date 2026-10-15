@@ -20,12 +20,23 @@ local SPELL_DEPTH_CHARGE_TRAP = 38576
 local PROXIMITY_YARDS = 5
 local DESPAWN_DELAY_MS = 1000
 
+local despawnPending = {}
+
 local function onMoveInLOS(event, creature, player)
     if creature:IsWithinDistInMap(player, PROXIMITY_YARDS) then
+        -- C++ casts on every MoveInLineOfSight with a player in range;
+        -- the WeMustDie latch gates only the despawn. Arm the despawn
+        -- once per creature so repeated proximity fires within the 1s
+        -- window don't stack redundant untracked Despawn timers.
         creature:CastSpell(player, SPELL_DEPTH_CHARGE_TRAP)
-        CreateLuaEvent(function()
-            creature:Despawn()
-        end, DESPAWN_DELAY_MS)
+        local guid = creature:GetGUID()
+        if not despawnPending[guid] then
+            despawnPending[guid] = true
+            CreateLuaEvent(function()
+                despawnPending[guid] = nil
+                creature:Despawn()
+            end, DESPAWN_DELAY_MS)
+        end
     end
     return true
 end
