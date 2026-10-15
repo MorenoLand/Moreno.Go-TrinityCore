@@ -1218,19 +1218,56 @@ func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, ent
 }
 
 // fastOpenQuestGiverQuest mirrors the single-quest arm of
-// Player::SendPreparedQuest (Player.cpp:14812-14843) through the same
-// status-routed approximation the creature questgiver paths use: a
-// completable/incomplete quest opens the reward window, anything else the
-// quest details.
+// Player::SendPreparedQuest (Player.cpp:14812-14843). A questIcon==4 quest
+// takes the turn-in arm (Player.cpp:14820), routed through the existing
+// complete-quest packet path, which models the RequestItems open
+// (QuestHandler.cpp:520-565) behind its interact gates. Otherwise the
+// giver object must start or involve the quest (Player.cpp:14826-14831)
+// or the menu closes; auto-accept quests are added on view behind
+// CanAddQuest(msg=true) and CanTakeQuest(msg=true) (Player.cpp:14833-14834);
+// autocomplete (+repeatable, non-daily/weekly) or AUTOCOMPLETE-flagged
+// quests open the reward window (Player.cpp:14836-14838); the rest open
+// the quest details unconditionally (Player.cpp:14840).
 func (s *session) fastOpenQuestGiverQuest(ctx context.Context, guid uint64, q gossipQuestItem) bool {
-	queryPayload := protocol.NewBuffer(12)
-	queryPayload.WriteU64(guid)
-	queryPayload.WriteU32(q.ID)
-	status, _ := s.characterQuestStatus(ctx, q.ID)
-	if status == questStatusComplete || status == questStatusIncomplete {
-		return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
+	questID := q.ID
+	if q.Icon == 4 {
+		queryPayload := protocol.NewBuffer(12)
+		queryPayload.WriteU64(guid)
+		queryPayload.WriteU32(questID)
+		status, _ := s.characterQuestStatus(ctx, questID)
+		if status == questStatusComplete || status == questStatusIncomplete {
+			return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
+		}
+		return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
 	}
-	return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
+	view, err := s.loadQuestRewardView(ctx, questID)
+	if err != nil {
+		s.debug("quest fast-open failed", "account", s.accountName, "quest", questID, "error", err)
+		return false
+	}
+	if !s.questGiverObjectHasQuest(ctx, guid, questID) {
+		return s.sendGossipComplete()
+	}
+	// Quest::IsAutoAccept folds the quest_template_addon SpecialFlags leg
+	// into quest_template.Flags at load (QuestDef.cpp:193), so Go ORs both
+	// legs like the query opcode does.
+	flags := view.Detail.Flags
+	var specialFlags int64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	}
+	if flags&questFlagsAutoAccept != 0 || specialFlags&4 != 0 {
+		if canTake, terr := s.canTakeQuest(ctx, questID); terr == nil && canTake && s.canAddQuest(ctx, questID, true) {
+			s.addQuestToPlayer(ctx, questID, guid)
+			s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
+			s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, questID))
+			s.fireItemQuestHook(ctx, guid, questID)
+		}
+	}
+	if (s.questIsAutoComplete(ctx, questID, flags) && s.questIsRepeatable(ctx, questID) && flags&(questFlagsDaily|questFlagsWeekly) == 0) || flags&questAutoCompleteFlags != 0 {
+		return s.sendQuestRequestItems(view, guid, s.canCompleteRepeatableQuest(ctx, questID, view, true), true)
+	}
+	return s.sendQuestGiverQuestDetails(ctx, guid, view.Detail)
 }
 
 // sendPreparedCreatureQuest mirrors Player::SendPreparedQuest

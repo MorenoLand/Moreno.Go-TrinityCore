@@ -288,8 +288,6 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 		s.debug("quest details failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
-	packet := buildQuestGiverDetails(data, guid, s.sharingQuestSender)
-	s.debug("quest details response", "account", s.accountName, "quest", questID)
 
 	// In TrinityCore Player.cpp:14836 and HandleQuestgiverQueryQuestOpcode
 	// (QuestHandler.cpp:257), if quest is AutoAccept, add it upon viewing
@@ -334,6 +332,16 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 		return s.sendQuestRequestItems(view, guid, canComplete, true)
 	}
 
+	return s.sendQuestGiverQuestDetails(ctx, guid, data)
+}
+
+// sendQuestGiverQuestDetails mirrors Player::SendQuestGiverQuestDetails
+// (PlayerMenu): the raw quest-details packet with no CanTakeQuest gate.
+// The query opcode calls it after its own gates; the single-quest fast-open
+// arm of Player::SendPreparedQuest (Player.cpp:14840) calls it directly.
+func (s *session) sendQuestGiverQuestDetails(ctx context.Context, guid uint64, data questDetailData) bool {
+	packet := buildQuestGiverDetails(data, guid, s.sharingQuestSender)
+	s.debug("quest details response", "account", s.accountName, "quest", data.ID)
 	return s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), packet, true) == nil
 }
 
