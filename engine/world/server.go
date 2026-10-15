@@ -1290,6 +1290,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.sweepIdleConnections(now)
 			s.updateArenaBattles(now)
 			s.updateAVBattles(now)
+			s.TickWG(ctx, diff)
 			s.updateEOTSBattles(now)
 			s.updateSABattles(now)
 			s.updateInstanceScriptTicks(ctx, diff)

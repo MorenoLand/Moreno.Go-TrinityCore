@@ -151,11 +151,13 @@ func (s *Server) restoreVendorStockFor(vendor, item, slot, extendedCost, amount 
 
 func (s *Server) restoreVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost, amount uint32) {
 	s.vendorMu.Lock()
-	// Go-only rollback path (C++ has no equivalent): mirror the purchase arm
-	// and restart the clock from the rollback, keeping consume/restore symmetric.
+	// Go-only rollback path (C++ has no equivalent: the decrement runs only
+	// after successful item creation, Player.cpp:21875-21877, so a failed
+	// buy never touches the counter or the clock). Restore the count but
+	// leave Updated alone — the restock clock keeps running from the
+	// purchase boundary.
 	if stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item}]; stock != nil {
 		stock.Current += int32(amount)
-		stock.Updated = time.Now()
 	}
 	s.vendorMu.Unlock()
 }
@@ -315,6 +317,9 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		return true
 	}
 	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagVendor)) {
+		// ItemHandler.cpp:612-618 — interact failure answers
+		// SMSG_SELL_ITEM with SELL_ERR_CANT_FIND_VENDOR (null guids).
+		s.sendSellError(0, 0, sellErrCantFindVendor)
 		return true
 	}
 	// ItemHandler.cpp:622-623 (SendListInventory) — listing a vendor's stock strips a faked death.
@@ -452,6 +457,10 @@ func (s *session) handleBuyItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	count, err := reader.ReadU32()
+	// Player.cpp:21904-21906: the wire uint32 count truncates to the uint8
+	// parameter at the BuyItemFromVendorSlot call boundary; the <1 cheat
+	// normalization runs on the truncated value.
+	count &= 0xFF
 	if err != nil || count == 0 {
 		count = 1
 	}
@@ -493,6 +502,9 @@ func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool 
 		return false
 	}
 	count, err := reader.ReadU32()
+	// Player.cpp:21904-21906: truncation to uint8 at the call boundary,
+	// then the <1 cheat normalization — same as the plain-buy path.
+	count &= 0xFF
 	if err != nil || count == 0 {
 		count = 1
 	}
@@ -533,8 +545,17 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	if s.isDeadOrGhost() {
 		return true
 	}
+	// Player.cpp:21914-21919: a client item id with no template answers
+	// BUY_ERR_CANT_FIND_ITEM with a null creature guid, ahead of the
+	// interact check.
+	if _, ok := s.server.getItemStoreTemplateInfo(ctx, itemEntry); !ok {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, itemEntry, buyErrCantFindItem), true)
+		return true
+	}
 	if !s.canInteractWithNPC(ctx, uint64(vendorGUID), uint64(unitNPCFlagVendor)) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(uint64(vendorGUID), itemEntry, 5), true)
+		// Player.cpp:21945-21952: the interact-fail arm passes nullptr —
+		// SMSG_BUY_FAILED carries guid 0, not the vendor's.
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, itemEntry, 5), true)
 		return true
 	}
 	vendorEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
@@ -1034,8 +1055,8 @@ func (s *session) vendorRefusesSale(ctx context.Context, vendorGUID uint64) bool
 
 // sendSellError mirrors Player::SendSellError (Player.cpp:13646): SMSG_SELL_ITEM
 // carries the vendor GUID (0 when the vendor itself is the problem), the item
-// GUID, and the SellResult byte. Success sends result 0, which C++ never emits
-// (HandleSellItemOpcode sends nothing on success) and the client ignores.
+// GUID, and the SellResult byte. It is error-only — neither C++ nor Go sends
+// it on success (HandleSellItemOpcode sends nothing then).
 func (s *session) sendSellError(vendorGUID, itemGUID uint64, result uint8) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, itemGUID, result), true)
 }
@@ -1149,12 +1170,18 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		} else {
 			bbItemGUID = uint64(time.Now().UnixNano() & 0x7FFFFFFF)
 		}
-		// Item::CloneItem semantics: the split-off stack copies every field of
-		// the source item — only the guid and the split count differ.
+		// Item::CloneItem (Item.cpp:1022-1036): the split-off stack copies
+		// creator, giftcreator, duration and the random property id; flags
+		// lose ITEM_FIELD_FLAG_REFUNDABLE (0x1000) |
+		// ITEM_FIELD_FLAG_BOP_TRADEABLE (0x100); charges, enchantments,
+		// durability, playedTime and text are NOT copied — the clone is a
+		// fresh item otherwise (durability = template max).
+		var maxDurability int64
+		_ = wdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&maxDurability)
 		_, _ = cdb.ExecContext(ctx, `INSERT INTO item_instance
-			(guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
-			SELECT ?, itemEntry, owner_guid, creatorGuid, ?, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text
-			FROM item_instance WHERE guid = ?`, bbItemGUID, count, itemGUID)
+			(guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
+			SELECT ?, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, ?, duration, 0, flags & ~0x1100, '', randomPropertyId, ?, 0, ''
+			FROM item_instance WHERE guid = ?`, bbItemGUID, count, maxDurability, itemGUID)
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(count), false)
 
@@ -1190,12 +1217,21 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	}
 
 	fullBBGUID := bbItemGUID | (uint64(0x4000) << 48)
+	// Player::AddItemToBuyBackSlot (Player.cpp:13533-13542): the timestamp
+	// is session played-time seconds + 30 hours (108000), both read on the
+	// server game-time clock (GameTime::GetGameTime) — never wall-clock.
+	var sessionPlayedSec uint32
+	if s.loginGameTimeMS > 0 {
+		if now := gameTimeMS(); now > s.loginGameTimeMS {
+			sessionPlayedSec = (now - s.loginGameTimeMS) / 1000
+		}
+	}
 	s.buyback[slot] = &buybackSlot{
 		ItemGUID:  fullBBGUID,
 		ItemEntry: uint32(itemEntry),
 		Count:     uint32(count),
 		Price:     earned,
-		Timestamp: uint32(time.Now().Unix()),
+		Timestamp: uint32(sessionPlayedSec + 108000),
 	}
 	if s.currentBuybackSlot < 11 {
 		s.currentBuybackSlot++
@@ -1311,7 +1347,9 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		s.despawnItem(oldItemGUID)
 	}
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, entry.ItemEntry, entry.Count, entry.Count), true)
+	// ItemHandler.cpp:518-533 — a successful buyback sends no packet at
+	// all (ModifyMoney -> RemoveItemFromBuyBackSlot -> StoreItem); the
+	// inventory/money updates below are the only client traffic.
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("buyback item purchased", "account", s.accountName, "item", entry.ItemEntry, "merged", merged)
@@ -1319,45 +1357,14 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) loadBuybackState(ctx context.Context, guid uint64) {
-	for index := range s.buyback {
-		s.buyback[index] = nil
-	}
-	s.currentBuybackSlot = 0
-	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
-	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.guid, ii.itemEntry, ii.count
-		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot BETWEEN 74 AND 85 ORDER BY ci.slot`, guid)
-	if err != nil {
-		return
-	}
-	for rows.Next() {
-		var slot, itemGUID, itemEntry, count int64
-		if rows.Scan(&slot, &itemGUID, &itemEntry, &count) != nil || slot < 74 || slot > 85 || itemGUID <= 0 || itemEntry <= 0 {
-			continue
-		}
-		price := int64(0)
-		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SellPrice FROM item_template WHERE entry = ?", itemEntry).Scan(&price)
-		}
-		if price < 0 {
-			price = 0
-		}
-		eslot := int(slot - 74)
-		s.buyback[eslot] = &buybackSlot{ItemGUID: uint64(itemGUID) | (uint64(0x4000) << 48), ItemEntry: uint32(itemEntry), Count: uint32(count), Price: uint32(price) * uint32(count), Timestamp: uint32(time.Now().Unix())}
-	}
-	rows.Close()
-	if rows.Err() != nil {
-		return
-	}
-	for index := range s.buyback {
-		if s.buyback[index] == nil {
-			s.currentBuybackSlot = uint8(index)
-			return
-		}
-	}
-	s.currentBuybackSlot = 11
+	// Player::_SaveInventory (Player.cpp:19947-19977): buyback item rows are
+	// deleted on EVERY save, so they never persist — buyback lives only in
+	// server memory for the session. Any rows found in slots 74-85 here are
+	// crash leftovers; delete them instead of resurrecting. (The old code
+	// rebuilt them with a recomputed template SellPrice and a fresh
+	// wall-clock timestamp — both wrong: C++ fixes the price at sell time
+	// (Player.cpp:13539) and the timestamp is session played-time + 30h.)
+	_ = s.clearBuybackState(ctx)
 }
 
 func buildBuyFailed(vendorGUID uint64, itemEntry uint32, result uint8) []byte {

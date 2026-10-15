@@ -2900,7 +2900,17 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 			return true
 		}
 	}
-	if high := uint16(s.activeLoot.TargetGUID >> 48); high != 0xF110 {
+	if high := uint16(s.activeLoot.TargetGUID >> 48); high == 0x4000 {
+		// HandleLootMoneyOpcode (LootHandler.cpp:134-139) Item arm: money in
+		// a container item's loot is taken with no distance or permission
+		// gate and is never shared (shareMoney=false). A container the
+		// player no longer holds (Player::GetItemByGuid null) leaves loot
+		// null — C++ skips the money block silently, so Go returns here.
+		if !s.lootItemStillHeld(ctx, s.activeLoot.TargetGUID) {
+			return true
+		}
+		shareMoney = false
+	} else if high != 0xF110 {
 		target, ok := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
 		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
 		entry := uint32((s.activeLoot.TargetGUID >> 24) & 0x00FFFFFF)

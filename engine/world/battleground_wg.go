@@ -24,6 +24,7 @@ const (
 	WGNoWarDuration         = 150 * time.Minute // 2.5 hours peace
 	WGSouthTowerTimePenalty = 10 * time.Minute  // 10 minutes removed when all 3 south towers fall
 	WGStartGroupingDuration = 15 * time.Minute  // 15 minutes before war
+	wgResurrectInterval     = 30 * time.Second  // RESURRECTION_INTERVAL (Battlefield.cpp:191-199)
 
 	// Teams
 	WGTeamAlliance uint32 = 0
@@ -254,6 +255,17 @@ type wgBattlegroundState struct {
 	PlayerRanks       map[uint64]uint32 // playerGUID -> rank spell ID (Recruit, Corporal, Lieutenant)
 	PlayerKillsInRank map[uint64]uint32 // playerGUID -> kills in current rank towards next promotion (0..5)
 	Vehicles          map[uint64]uint32 // vehicleGUID -> team
+
+	// ReviveQueue is the Wintergrasp spirit-healer revive queue
+	// (playerGUID -> spirit-guide GUID). C++ fans the queue out per
+	// graveyard (BfGraveyard::m_ResurrectQueue, Battlefield.cpp:605-627);
+	// Go keeps the single battlefield-level queue since it models no
+	// graveyard list.
+	ReviveQueue map[uint64]uint64
+	// LastResurrectTimer mirrors Battlefield::m_LastResurrectTimer
+	// (Battlefield.cpp:62,191-199): time until the next 30-second
+	// resurrection wave; answered to CMSG_AREA_SPIRIT_HEALER_QUERY.
+	LastResurrectTimer time.Duration
 
 	StatsWonA uint32
 	StatsDefA uint32
@@ -818,29 +830,119 @@ func (s *Server) UpdateWGTenacity() {
 // TickWG processes periodic Wintergrasp timer countdown and state transitions.
 // Reference: BattlefieldMgr::Update (BattlefieldMgr.cpp:155-164) — disabled
 // battlefields are skipped entirely.
-func (s *Server) TickWG(delta time.Duration) {
+func (s *Server) TickWG(ctx context.Context, delta time.Duration) {
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()
 	if !wg.Enabled {
 		wg.mu.Unlock()
 		return
 	}
+	// Battlefield::Update (Battlefield.cpp:191-199): the spirit-healer
+	// resurrect timer ticks on every update, war or peace; each
+	// RESURRECTION_INTERVAL every graveyard resurrects its queue.
+	var queued map[uint64]uint64
+	wg.LastResurrectTimer -= delta
+	if wg.LastResurrectTimer <= 0 {
+		wg.LastResurrectTimer = wgResurrectInterval
+		if len(wg.ReviveQueue) != 0 {
+			queued = wg.ReviveQueue
+			wg.ReviveQueue = make(map[uint64]uint64)
+		}
+	}
 	if wg.Timer > delta {
 		wg.Timer -= delta
 		wg.mu.Unlock()
-		return
-	}
-	wg.Timer = 0
-	isActive := wg.IsActive
-	defenderTeam := wg.DefenderTeam
-	wg.mu.Unlock()
-
-	if isActive {
-		// Wartime timer expired -> Defenders win!
-		s.EndWGBattle(true)
 	} else {
-		// Peace timer expired -> Start war!
-		s.StartWGBattle(defenderTeam)
+		wg.Timer = 0
+		isActive := wg.IsActive
+		defenderTeam := wg.DefenderTeam
+		wg.mu.Unlock()
+
+		if isActive {
+			// Wartime timer expired -> Defenders win!
+			s.EndWGBattle(true)
+		} else {
+			// Peace timer expired -> Start war!
+			s.StartWGBattle(defenderTeam)
+		}
+	}
+	if len(queued) != 0 {
+		s.resurrectWGQueuedPlayers(ctx, queued)
+	}
+}
+
+// inWintergraspBattlefield mirrors BattlefieldMgr::GetBattlefieldToZoneId
+// (BattlefieldMgr.cpp:121-133): the battlefield answers the spirit-healer
+// opcodes for the player's zone id, and only while enabled.
+func (s *session) inWintergraspBattlefield() bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return false
+	}
+	if s.player.Zone != WGZoneID {
+		return false
+	}
+	wg := s.server.getOrCreateWGState()
+	wg.mu.Lock()
+	enabled := wg.Enabled
+	wg.mu.Unlock()
+	return enabled
+}
+
+// queueWGSpiritRevive mirrors Battlefield::AddPlayerToResurrectQueue
+// (Battlefield.cpp:605-616): the ghost joins the Wintergrasp revive queue.
+// It reports whether the insert was fresh — BfGraveyard::AddPlayer
+// (Battlefield.cpp:618-627) casts SPELL_WAITING_FOR_RESURRECT only then.
+func (s *Server) queueWGSpiritRevive(playerGUID, spiritGUID uint64) bool {
+	wg := s.getOrCreateWGState()
+	wg.mu.Lock()
+	if wg.ReviveQueue == nil {
+		wg.ReviveQueue = make(map[uint64]uint64)
+	}
+	_, dup := wg.ReviveQueue[playerGUID]
+	wg.ReviveQueue[playerGUID] = spiritGUID
+	wg.mu.Unlock()
+	return !dup
+}
+
+// wgSpiritHealerTimeLeftMs mirrors Battlefield::SendAreaSpiritHealerQueryOpcode
+// (Battlefield.cpp:635-641): SMSG_AREA_SPIRIT_HEALER_TIME carries the spirit
+// guide's GUID and m_LastResurrectTimer, the milliseconds until the next
+// 30-second wave.
+func (s *Server) wgSpiritHealerTimeLeftMs() uint32 {
+	wg := s.getOrCreateWGState()
+	wg.mu.Lock()
+	left := wg.LastResurrectTimer
+	wg.mu.Unlock()
+	if left < 0 {
+		left = 0
+	}
+	return uint32(left / time.Millisecond)
+}
+
+// resurrectWGQueuedPlayers mirrors BfGraveyard::Resurrect
+// (Battlefield.cpp:697-723): the queued ghosts gain the resurrection visual,
+// ResurrectPlayer(1.0), 6962 + SPELL_SPIRIT_HEAL_MANA (44535), and their
+// corpses become bones. C++ also has the graveyard's spirit guide cast
+// SPELL_SPIRIT_HEAL (22012) on itself; Go omits that cast — the guide
+// creature is not resolved — following the BG wave-resurrect convention.
+// The no-longer-a-ghost skip is Go-original: C++ has no such check, but the
+// queue only ever holds ghosts.
+func (s *Server) resurrectWGQueuedPlayers(ctx context.Context, queued map[uint64]uint64) {
+	for pGUID := range queued {
+		sess := s.findSessionByGUID(pGUID)
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil {
+			continue
+		}
+		if sess.player.PlayerFlags&playerFlagGhost == 0 {
+			continue
+		}
+		sess.applyAura(24171) // SPELL_RESURRECTION_VISUAL
+		sess.resurrectPlayer(ctx, 1.0)
+		sess.applyAura(6962)
+		sess.applyAura(44535) // SPELL_SPIRIT_HEAL_MANA
+		sess.removeAura(2584) // SPELL_WAITING_FOR_RESURRECT
+		sess.spawnCorpseBones(ctx)
+		sess.debug("wintergrasp wave resurrected ghost", "account", sess.accountName, "guid", pGUID)
 	}
 }
 
@@ -1032,20 +1134,22 @@ func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 	defer s.wgMu.Unlock()
 	if s.wgState == nil {
 		wg := &wgBattlegroundState{
-			MapID:             WGMapID,
-			ZoneID:            WGZoneID,
-			IsActive:          false,
-			DefenderTeam:      WGTeamAlliance,
-			Timer:             WGNoWarDuration,
-			TotalDuration:     WGNoWarDuration,
-			EndTime:           time.Now().Add(WGNoWarDuration),
-			Enabled:           true,
-			Winner:            -1,
-			PlayersInWar:      make(map[uint64]uint32),
-			PlayersInQueue:    make(map[uint64]uint32),
-			PlayerRanks:       make(map[uint64]uint32),
-			PlayerKillsInRank: make(map[uint64]uint32),
-			Vehicles:          make(map[uint64]uint32),
+			MapID:              WGMapID,
+			ZoneID:             WGZoneID,
+			IsActive:           false,
+			DefenderTeam:       WGTeamAlliance,
+			Timer:              WGNoWarDuration,
+			TotalDuration:      WGNoWarDuration,
+			EndTime:            time.Now().Add(WGNoWarDuration),
+			Enabled:            true,
+			Winner:             -1,
+			PlayersInWar:       make(map[uint64]uint32),
+			PlayersInQueue:     make(map[uint64]uint32),
+			PlayerRanks:        make(map[uint64]uint32),
+			PlayerKillsInRank:  make(map[uint64]uint32),
+			Vehicles:           make(map[uint64]uint32),
+			ReviveQueue:        make(map[uint64]uint64),
+			LastResurrectTimer: wgResurrectInterval,
 		}
 		wg.initWorkshops()
 		wg.initTowers()

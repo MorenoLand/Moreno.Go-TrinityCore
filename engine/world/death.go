@@ -2383,10 +2383,16 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 	if !s.creatureIsSpiritService(ctx, guid, npcFlagSpiritService) {
 		return true
 	}
-	if !s.inBattlegroundWaveMap() {
-		return true
+	// MiscHandler.cpp:1468-1477: the query routes through the live
+	// Battleground AND, independently, through the Battlefield owning the
+	// player's zone (Battlefield::SendAreaSpiritHealerQueryOpcode,
+	// Battlefield.cpp:635-641).
+	if s.inBattlegroundWaveMap() {
+		s.sendAreaSpiritHealerTime(guid, s.server.spiritWaveTimeLeftMs())
 	}
-	s.sendAreaSpiritHealerTime(guid, s.server.spiritWaveTimeLeftMs())
+	if s.inWintergraspBattlefield() {
+		s.sendAreaSpiritHealerTime(guid, s.server.wgSpiritHealerTimeLeftMs())
+	}
 	return true
 }
 
@@ -2413,29 +2419,45 @@ func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byt
 	if !s.creatureIsSpiritService(ctx, guid, npcFlagSpiritService) {
 		return true
 	}
-	if !s.inBattlegroundWaveMap() {
-		return true
-	}
-	s.server.spiritWaveMu.Lock()
-	if s.server.spiritReviveQueue == nil {
-		s.server.spiritReviveQueue = make(map[uint64]uint64)
-	}
-	s.server.spiritReviveQueue[s.playerGUID] = guid
-	s.server.spiritWaveMu.Unlock()
+	// MiscHandler.cpp:1484-1500: the queue opcode routes through the live
+	// Battleground AND the Battlefield independently
+	// (Battlefield::AddPlayerToResurrectQueue, Battlefield.cpp:605-616).
+	if s.inBattlegroundWaveMap() {
+		s.server.spiritWaveMu.Lock()
+		if s.server.spiritReviveQueue == nil {
+			s.server.spiritReviveQueue = make(map[uint64]uint64)
+		}
+		s.server.spiritReviveQueue[s.playerGUID] = guid
+		s.server.spiritWaveMu.Unlock()
 
-	s.applyAura(2584) // SPELL_WAITING_FOR_RESURRECT
+		s.applyAura(2584) // SPELL_WAITING_FOR_RESURRECT
+	}
+	if s.inWintergraspBattlefield() {
+		// BfGraveyard::AddPlayer (Battlefield.cpp:618-627): the waiting
+		// aura lands only on a fresh queue insert.
+		if s.server.queueWGSpiritRevive(s.playerGUID, guid) {
+			s.applyAura(2584) // SPELL_WAITING_FOR_RESURRECT
+		}
+	}
 	return true
 }
 
 // handleHearthAndResurrect mirrors WorldSession::HandleHearthAndResurrect (MiscHandler.cpp:1505):
-// if flying, ignore. Battlefield ask-to-leave has no Go battlefield system yet.
-// If the player's area has AREA_FLAG_WINTERGRASP_2, repop the player (creating a corpse if needed),
+// if flying, ignore. A player in a battlefield zone never reaches the
+// Wintergrasp-flag repop arm: Battlefield::PlayerAskToLeave
+// (Battlefield.cpp:382-387) teleports them to Dalaran (571, 5804.1499,
+// 624.7710, 647.7670, 1.64) and returns. Otherwise, if the player's area
+// has AREA_FLAG_WINTERGRASP_2, repop the player (creating a corpse if needed),
 // resurrect with 100% health and powers, and teleport to the homebind location.
 func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
 	if s.isInFlight() {
+		return true
+	}
+	if s.inWintergraspBattlefield() {
+		s.teleportTo(WGMapID, 5804.1499, 624.7710, 647.7670, 1.64)
 		return true
 	}
 	// MiscHandler.cpp:1517-1518: the Wintergrasp flag is read from the
