@@ -4586,6 +4586,20 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 		}
 	}
 	if haveType && goType == GameObjectTypeGoober && goState != nil {
+		// The goober special case calls the full GameObject::Use
+		// (SpellEffects.cpp:1891-1895), so its head arms run here too:
+		// CannotBeUsedUnderImmunity, the mounted dismount and
+		// PlayerTalkClass->ClearMenus (GameObject.cpp:1491-1505) before
+		// the gossip-hello hook and the template-cooldown gate, like
+		// the CMSG_GAMEOBJ_USE path.
+		goTpl := s.loadGameObjectTemplateData(ctx, entry)
+		if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.isTotalImmune() {
+			return
+		}
+		if !goIsUsableMounted(goState.Type, goTpl) {
+			s.removeAurasByType(spellAuraMounted)
+		}
+		s.gossip = nil
 		if s.fireGameObjectGossipHelloHook(ctx, goGUID) {
 			return
 		}
@@ -4596,6 +4610,11 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 		return
 	}
 	if goState != nil {
+		// PlayerTalkClass->ClearMenus runs unconditionally in
+		// Spell::SendLoot (SpellEffects.cpp:1897), before the Eluna
+		// OnGossipHello hook — the hook itself only clears when a
+		// handler is registered.
+		s.gossip = nil
 		// Spell::SendLoot hook leg (SpellEffects.cpp:1897-1905): ClearMenus,
 		// Eluna OnGossipHello, OnGameObjectUse (event 14), then the AI
 		// OnGossipHello — all before the type switch. A true return from
