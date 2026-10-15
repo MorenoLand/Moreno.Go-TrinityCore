@@ -842,6 +842,70 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		motion := luaTapMotion()
 		return motion != nil && motion.PlayerDamageReq == 0
 	})
+	// GetLootMode is CreatureMethods::GetLootMode (CreatureMethods.h:881-885):
+	// Creature::GetLootMode (Creature.h:224) returns the m_LootMode bitmask.
+	methods["GetLootMode"] = luaNoArgs(func() any {
+		motion := luaTapMotion()
+		if motion == nil {
+			return uint32(lootModeDefault)
+		}
+		return uint32(motion.LootMode)
+	})
+	// HasLootMode is CreatureMethods::HasLootMode (CreatureMethods.h:395-401):
+	// Creature::HasLootMode (Creature.h:225) tests (m_LootMode & lootMode) != 0.
+	methods["HasLootMode"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := luaTapMotion()
+		return []any{motion != nil && motion.LootMode&uint16(mode) != 0}, nil
+	}
+	// mutateLootMode applies fn to the live creature motion's LootMode bitmask
+	// (Creature::m_LootMode, Creature.h:482) under the motion lock.
+	mutateLootMode := func(fn func(*creatureMotion)) {
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID); motion != nil {
+			fn(motion)
+		}
+		s.server.motionMu.Unlock()
+	}
+	// SetLootMode is CreatureMethods::SetLootMode (CreatureMethods.h:935-942):
+	// Creature::SetLootMode (Creature.h:226) assigns m_LootMode.
+	methods["SetLootMode"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mutateLootMode(func(motion *creatureMotion) { motion.LootMode = uint16(mode) })
+		return nil, nil
+	}
+	// AddLootMode is CreatureMethods::AddLootMode (CreatureMethods.h:1318-1327):
+	// Creature::AddLootMode (Creature.h:227) ORs the mode in.
+	methods["AddLootMode"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mutateLootMode(func(motion *creatureMotion) { motion.LootMode |= uint16(mode) })
+		return nil, nil
+	}
+	// RemoveLootMode is CreatureMethods::RemoveLootMode (CreatureMethods.h:1305-1316):
+	// Creature::RemoveLootMode (Creature.h:228) clears the mode bits.
+	methods["RemoveLootMode"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mutateLootMode(func(motion *creatureMotion) { motion.LootMode &^= uint16(mode) })
+		return nil, nil
+	}
+	// ResetLootMode is CreatureMethods::ResetLootMode (CreatureMethods.h:1297-1301):
+	// Creature::ResetLootMode (Creature.h:229) restores LOOT_MODE_DEFAULT.
+	methods["ResetLootMode"] = func(_ context.Context, _ []any) ([]any, error) {
+		mutateLootMode(func(motion *creatureMotion) { motion.LootMode = lootModeDefault })
+		return nil, nil
+	}
 	// HasSpell is CreatureMethods::HasSpell (CreatureMethods.h:287-294):
 	// Creature::HasSpell (Creature.cpp:2730-2733) scans m_spells — Go's
 	// motion.Spells slice.
