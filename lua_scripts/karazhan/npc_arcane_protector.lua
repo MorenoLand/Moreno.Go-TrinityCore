@@ -81,7 +81,11 @@ end
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_INVI)
+    -- C++ Reset(): DoCast(me, SPELL_INVI) is Reset-only (karazhan.cpp).
+    -- Alive-gated; the timer cancel rides the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_INVI)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

@@ -178,8 +178,13 @@ local function onReset(event, creature)
     local st = getState(guid)
     cancelTimers(guid)
     if not st.eventInProgress then
-        if not creature:HasAura(SPELL_ARCANE_INTELLECT) then
-            creature:CastSpell(creature, SPELL_ARCANE_INTELLECT)
+        -- C++ npc_belnistraszAI::Reset(): DoCastSelf(ARCANE_INTELLECT)
+        -- is Reset-only (razorfen_downs.cpp). Alive-gated; the timer
+        -- cancel and latch reset ride the death leg deliberately.
+        if creature:IsAlive() then
+            if not creature:HasAura(SPELL_ARCANE_INTELLECT) then
+                creature:CastSpell(creature, SPELL_ARCANE_INTELLECT)
+            end
         end
         st.channeling = false
     end

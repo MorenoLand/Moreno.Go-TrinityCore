@@ -341,7 +341,12 @@ end
 -- self-cast is bridgeable.
 local function galDarahReset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_HEARTH_BEAM_VISUAL, true)
+    -- C++ Reset(): DoCastAOE(SPELL_HEARTH_BEAM_VISUAL, true) is Reset-only
+    -- (boss_gal_darah.cpp). Alive-gated; the timer cancel rides the death
+    -- leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_HEARTH_BEAM_VISUAL, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 1, galDarahEnterCombat)

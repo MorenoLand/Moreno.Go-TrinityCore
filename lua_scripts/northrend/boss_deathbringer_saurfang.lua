@@ -362,11 +362,17 @@ local function saurfangReset(event, creature)
         return
     end
     saurfangState[guid] = { frenzied = false, dead = false }
-    creature:CastSpell(creature, SPELL_ZERO_POWER, true)
-    creature:CastSpell(creature, SPELL_BLOOD_LINK, true)
-    creature:CastSpell(creature, SPELL_BLOOD_POWER, true)
-    creature:CastSpell(creature, SPELL_MARK_OF_THE_FALLEN_CHAMPION_S, true)
-    creature:CastSpell(creature, SPELL_RUNE_OF_BLOOD_S, true)
+    -- C++ Reset(): DoCastSelf(ZERO_POWER/BLOOD_LINK/BLOOD_POWER/
+    -- MARK_OF_THE_FALLEN_CHAMPION_S/RUNE_OF_BLOOD_S) are Reset-only
+    -- (boss_deathbringer_saurfang.cpp). Alive-gated; the timer cancel and
+    -- state reset ride the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_ZERO_POWER, true)
+        creature:CastSpell(creature, SPELL_BLOOD_LINK, true)
+        creature:CastSpell(creature, SPELL_BLOOD_POWER, true)
+        creature:CastSpell(creature, SPELL_MARK_OF_THE_FALLEN_CHAMPION_S, true)
+        creature:CastSpell(creature, SPELL_RUNE_OF_BLOOD_S, true)
+    end
     creature:RemoveAura(SPELL_BERSERK)
     creature:RemoveAura(SPELL_FRENZY)
 end

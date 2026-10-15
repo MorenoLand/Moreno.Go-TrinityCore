@@ -138,7 +138,10 @@ end
 -- the BossAI::Reset instance bookkeeping has no bridge.
 local function magmadarReset(event, creature)
     magmadarResetState(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_MAGMA_SPIT, true)
+    -- Reset-only arm (boss_magmadar.cpp); alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_MAGMA_SPIT, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_MAGMADAR, 1, magmadarEnterCombat)

@@ -282,7 +282,11 @@ end
 -- leg. Split from event 2 so the cast fires once on the reset path.
 local function twilightHalionReset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS)
+    -- C++ Reset(): DoCastSelf(SPELL_CLEAR_DEBUFFS) is Reset-only
+    -- (boss_halion.cpp); alive-gated. The event-4 death arm below stays.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS)
+    end
 end
 
 -- C++ boss_twilight_halion::JustDied: _events.Reset() +

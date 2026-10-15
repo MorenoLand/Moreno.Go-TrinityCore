@@ -189,7 +189,12 @@ end
 -- true) — triggered self-cast.
 local function ichoronReset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_THREAT_PROC, true)
+    -- C++ Reset(): DoCast(me, SPELL_THREAT_PROC, true) is Reset-only
+    -- (boss_ichoron.cpp). Alive-gated; the timer cancel rides the death
+    -- leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_THREAT_PROC, true)
+    end
 end
 
 -- Shared timer wipe for events 2/4.

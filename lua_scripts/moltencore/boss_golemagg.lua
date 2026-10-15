@@ -139,7 +139,10 @@ end
 -- the BossAI::Reset instance bookkeeping has no bridge.
 local function golemaggReset(event, creature)
     golemaggResetState(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_MAGMASPLASH, true)
+    -- Reset-only arm (boss_golemagg.cpp); alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_MAGMASPLASH, true)
+    end
 end
 
 -- C++ DamageTaken: current (pre-damage) health strictly below 10%

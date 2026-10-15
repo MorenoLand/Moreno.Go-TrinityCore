@@ -301,8 +301,10 @@ local function deathwhisperReset(event, creature)
     deathwhisperPhase[guid] = nil
     -- C++ Reset() (:226): unconditional non-triggered self-cast of the
     -- phase-1 channeling aura (removed on engage via
-    -- RemoveAurasDueToSpell, :340).
-    creature:CastSpell(creature, SPELL_SHADOW_CHANNELING)
+    -- RemoveAurasDueToSpell, :340). Reset-only; alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SHADOW_CHANNELING)
+    end
 end
 
 -- C++ boss_lady_deathwhisper::KilledUnit:

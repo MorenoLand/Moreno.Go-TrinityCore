@@ -18,7 +18,10 @@ local SPELL_MANA_BITE = 29908
 local function onReset(event, creature)
     -- C++ Reset: DoCast(me, SPELL_MANA_BITE) is non-triggered
     -- (DoCast default triggered=false — vaelastrasz convention).
-    creature:CastSpell(creature, SPELL_MANA_BITE)
+    -- Reset-only (karazhan.cpp); alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_MANA_BITE)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 23, onReset)

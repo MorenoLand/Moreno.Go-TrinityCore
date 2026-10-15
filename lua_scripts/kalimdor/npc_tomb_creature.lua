@@ -96,14 +96,19 @@ end
 -- Proc 12254 for Tomb Reaver).
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
-    local entry = creature:GetEntry()
-    if entry == ENTRY_TOMB_FIEND then
-        if not creature:HasAura(SPELL_POISON_PROC) then
-            creature:CastSpell(creature, SPELL_POISON_PROC)
-        end
-    elseif entry == ENTRY_TOMB_REAVER then
-        if not creature:HasAura(SPELL_VIRULENT_POISON_PROC) then
-            creature:CastSpell(creature, SPELL_VIRULENT_POISON_PROC)
+    -- C++ Reset(): entry-gated DoCast(POISON_PROC/VIRULENT_POISON_PROC)
+    -- is Reset-only (razorfen_downs.cpp). Alive-gated; the timer cancel
+    -- rides the death leg deliberately.
+    if creature:IsAlive() then
+        local entry = creature:GetEntry()
+        if entry == ENTRY_TOMB_FIEND then
+            if not creature:HasAura(SPELL_POISON_PROC) then
+                creature:CastSpell(creature, SPELL_POISON_PROC)
+            end
+        elseif entry == ENTRY_TOMB_REAVER then
+            if not creature:HasAura(SPELL_VIRULENT_POISON_PROC) then
+                creature:CastSpell(creature, SPELL_VIRULENT_POISON_PROC)
+            end
         end
     end
 end

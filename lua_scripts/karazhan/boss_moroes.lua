@@ -291,7 +291,11 @@ end
 
 local function dorotheaReset(event, creature)
     guestReset(event, creature)
-    creature:CastSpell(creature, SPELL_SHADOWFORM, true)
+    -- C++ Reset(): DoCast(me, SHADOWFORM, true) is Reset-only
+    -- (boss_moroes.cpp). Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SHADOWFORM, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_DOROTHEA, 1, dorotheaEnterCombat)
