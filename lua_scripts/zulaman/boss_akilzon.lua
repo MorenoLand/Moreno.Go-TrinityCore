@@ -138,21 +138,23 @@ local function onCallLightning(creature, guid)
     end)
 end
 
--- C++ EVENT_ELECTRICAL_STORM: random alive player within 50 yd (evade if
--- none — no evade bridge, so a missing target is a no-op); target casts
+-- C++ EVENT_ELECTRICAL_STORM: random alive player within 50 yd; nil
+-- target returns out of the case BEFORE the 60s re-arm (EnterEvadeMode
+-- in C++ — no evade bridge, so the storm simply stops). Target casts
 -- 44007 on self (no player CastSpell bridge — skipped), boss
 -- DoCast(target, 43648) non-triggered; cloud SummonTrigger skipped (no
 -- summon model). The EVENT_STORM_SEQUENCE arm is never scheduled in this
 -- C++ tree (see the local-tree defect note above), so no sequence runs.
--- Repeats 60s and re-arms EVENT_RAIN (weather has no bridge — skipped).
+-- Repeats 60s and re-arms EVENT_RAIN (weather has no bridge — skipped)
+-- on the found-target leg only.
 local function onElectricalStorm(creature, guid)
     local target = randomPlayerInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_ELECTRICAL_STORM)
+        schedule(timers, guid, "storm", 60000, function()
+            onElectricalStorm(creature, guid)
+        end)
     end
-    schedule(timers, guid, "storm", 60000, function()
-        onElectricalStorm(creature, guid)
-    end)
 end
 
 -- C++ EVENT_ENRAGE: Talk(SAY_ENRAGE); DoCast(me, BERSERK, true); repeat

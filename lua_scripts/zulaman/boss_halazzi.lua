@@ -194,15 +194,16 @@ end
 
 -- C++ shock (human/enrage phases): random target; earthshock when the
 -- target is casting, flameshock otherwise. No cast-state model — the
--- flameshock branch always runs. Repeat {10s,15s}.
+-- flameshock branch always runs. The {10s,15s} re-arm lives inside the
+-- if(target) leg (nil target retries next tick with no re-arm).
 local function onShock(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_FLAMESHOCK)
+        schedule(timers, guid, "shock", math.random(10000, 15000), function()
+            onShock(creature, guid)
+        end)
     end
-    schedule(timers, guid, "shock", math.random(10000, 15000), function()
-        onShock(creature, guid)
-    end)
 end
 
 -- C++ totem (human/enrage phases): DoCast(me, SUMMON_TOTEM) — the totem
@@ -243,7 +244,7 @@ local function onCheck(creature, guid)
             startSplit(creature, guid)
         end
     elseif st.phase == PHASE_HUMAN and maxHealth > 0 then
-        if health < math.floor(maxHealth * 20 / 100) then
+        if health <= math.floor(maxHealth * 20 / 100) then  -- C++: !HealthAbovePct(20), fires at <=20%
             st.phase = PHASE_MERGE
             cancelPhaseTimers(guid)
             creature:Talk(SAY_MERGE)

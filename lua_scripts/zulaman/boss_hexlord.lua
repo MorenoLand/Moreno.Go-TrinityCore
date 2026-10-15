@@ -36,8 +36,9 @@
 -- Adds: Thurg — bloodlust 43578 15s then 12s (friendly-buff scan has no
 -- bearer, cast skipped, 12s cycle kept), cleave 15496 10s then 12s on
 -- victim; Alyson Antille — flash heal 43575 skipped (friendly scan has
--- no bearer), so the C++ else-branch dispel magic 43577 fires every
--- 2.5s tick on a random alive player; Gazakroth — firebolt 43584 2s
+-- no bearer), and the dispel magic 43577 else-branch fires only on the
+-- urand(0,1)==0 leg (~50% of 2.5s ticks) on a random alive player
+-- (the friendly leg has no bridge); Gazakroth — firebolt 43584 2s
 -- then 700ms on victim; Lord Raadan — thunderclap 43583 13s then 12s / flame breath
 -- 43582 8s then 12s on victim; Darkheart — psychic wail 43590 8s then
 -- 12s on victim; Slither — venom spit 43579 5s then 2.5s on a random
@@ -353,18 +354,22 @@ local ADD_ARMS = {
     [ENTRY_ALYSON] = {
         -- C++ flashheal arm: DoSelectLowestHpFriendly(99, 30000) has no
         -- bearer (treated as no heal target, so the else branch runs
-        -- every tick); the else branch always dispels — the urand(0,1)
-        -- only picks between the lowest-hp-friendly and random-enemy
-        -- scans, both arms calling DoCast(SPELL_DISPEL_MAGIC, false).
-        -- Only the random-enemy leg has a bridge (randomAlivePlayer,
-        -- SelectTarget Random has no range gate), so dispel fires every
-        -- 2.5s tick on a random alive player. The commented-out
+        -- friendly leg has no bridge); the C++ else branch casts
+        -- DoCast(SPELL_DISPEL_MAGIC, false) on whichever scan wins the
+        -- urand(0,1) — ~50% of 2.5s ticks dispel a random alive player
+        -- (randomAlivePlayer; SelectTarget Random has no range gate),
+        -- the friendly-leg ticks are skipped. The commented-out
         -- MoveChase fallback is dead C++ code, not modeled.
         { key = "flashheal", first = 2500, min = 2500, max = 2500,
           fire = function(creature)
-              local target = randomAlivePlayer(creature, math.huge)
-              if target then
-                  creature:CastSpell(target, SPELL_DISPEL_MAGIC, false)
+              -- C++ urand(0,1): the lowest-hp-friendly leg (50%) has no
+              -- bridge so the cast is skipped; only the random-enemy leg
+              -- dispels.
+              if math.random(0, 1) == 0 then
+                  local target = randomAlivePlayer(creature, math.huge)
+                  if target then
+                      creature:CastSpell(target, SPELL_DISPEL_MAGIC, false)
+                  end
               end
           end },
         -- The commented-out dispelmagic_timer arm is dead C++ code.
