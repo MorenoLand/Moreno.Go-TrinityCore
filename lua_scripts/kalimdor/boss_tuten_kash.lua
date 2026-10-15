@@ -99,7 +99,9 @@ end
 
 -- C++ EVENT_WEB_SPRAY: SelectTarget(Random, 0, 100, false) ->
 -- DoCast(target, 12252) under !target->HasAura(); reschedule
--- {6s,8s} unconditional.
+-- {6s,8s} unconditional. playerOnly=false makes pets/totems eligible
+-- targets in C++; ported as player-only (no Lua bridge enumerates
+-- non-player units) — documented approximation.
 local function onWebSpray(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target and not target:HasAura(SPELL_WEB_SPRAY) then

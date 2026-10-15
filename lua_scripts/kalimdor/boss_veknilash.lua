@@ -79,26 +79,26 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_UNBALANCING_STRIKE: DoCastVictim(SPELL_UNBALANCING_STRIKE),
--- init urand(8000,18000) -> urand(8000,20000).
+-- init urand(8000,18000) -> 8000 + rand32()%12000 = [8000,19999].
 local function onUnbalancingStrike(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_UNBALANCING_STRIKE)
     end
-    schedule(guid, "us", math.random(8000, 20000), function()
+    schedule(guid, "us", math.random(8000, 19999), function()
         onUnbalancingStrike(creature, guid)
     end)
 end
 
 -- C++ EVENT_UPPERCUT: DoCast on random melee-range target, init
--- urand(14000,29000) -> urand(15000,30000). No range/SelectTarget
+-- urand(14000,29000) -> 15000 + rand32()%15000 = [15000,29999]. No range/SelectTarget
 -- bridge; ported as victim-cast (kri convention).
 local function onUppercut(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_UPPERCUT)
     end
-    schedule(guid, "uppercut", math.random(15000, 30000), function()
+    schedule(guid, "uppercut", math.random(15000, 29999), function()
         onUppercut(creature, guid)
     end)
 end

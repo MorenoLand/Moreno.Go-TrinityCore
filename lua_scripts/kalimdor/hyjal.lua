@@ -119,12 +119,13 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ TARGETTYPE_RANDOM: SelectTarget(SelectTargetMethod::Random, 0) =
--- DefaultTargetSelector(me, dist=0, playerOnly=false, withTank=false, 0):
--- the tank (main-threat) is EXCLUDED via _exception, and dist=0 means no
--- range cap (UnitAI.h comment: "if 0: ignored"; UnitAI.cpp:259-285
--- verified). Ported as a random alive player in 100yd excluding the
--- current victim — tank exclusion C++-exact, 100yd cap the documented
--- janalai approximation of the uncapped threat-list pick.
+-- SelectTarget(targetType, offset=0, dist=0, playerOnly=false,
+-- withTank=TRUE (default), aura=0) (UnitAI.h:170): the tank IS a valid
+-- pick (no _exception at offset 0), and dist=0 means no range cap.
+-- Ported as a random alive player in 100yd INCLUDING the current victim —
+-- victim-inclusion C++-exact; 100yd cap and player-only candidacy are the
+-- documented janalai approximations of the uncapped threat-list pick
+-- (no Lua bridge enumerates pets/totems).
 local function randomPlayerInRange(creature, maxDist, excludeVictim)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local victim = creature:GetVictim()
@@ -155,7 +156,7 @@ local function onSpell(creature, guid, name, idx)
     elseif spec.target == "victim" then
         target = creature:GetVictim()
     else
-        target = randomPlayerInRange(creature, 100, true)
+        target = randomPlayerInRange(creature, 100, false)
     end
     if target and not target:IsDead() then
         creature:CastSpell(target, spec.spell)

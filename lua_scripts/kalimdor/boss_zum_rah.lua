@@ -133,9 +133,15 @@ local function onDamageTaken(event, creature, attacker, damage)
     if flags == nil then
         return
     end
-    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return
+    end
+    -- event 9 fires before the hit lands: project the post-hit health the
+    -- C++ post-damage UpdateAI tick would read, floored at 0.
+    local health = creature:GetHealth() - damage
+    if health < 0 then
+        health = 0
     end
     -- C++ UpdateAI HealthBelowPct arms read CURRENT health
     -- (jeklik convention): health < floor(maxHealth*pct/100).
@@ -164,6 +170,7 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    hpFlags[guid] = { ward80 = false, ward40 = false, heal30 = false }
     creature:Talk(SAY_SANCT_INVADE)
     schedule(guid, "shadowbolt", 1000, function()
         onShadowBolt(creature, guid)

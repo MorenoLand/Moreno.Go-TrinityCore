@@ -97,6 +97,7 @@ end
 -- urand(25000,40000). Init 30000.
 -- The per-3-7s random-target switch during whirlwind is no-bridge
 -- (SelectTarget/AttackStart).
+local startWhirlwind
 local function endWhirlwind(creature, guid)
     local s = st(guid)
     s.whirlwind = false
@@ -105,7 +106,7 @@ local function endWhirlwind(creature, guid)
     end)
 end
 
-function startWhirlwind(creature, guid)
+startWhirlwind = function(creature, guid)
     local s = st(guid)
     s.whirlwind = true
     creature:CastSpell(creature, SPELL_WHIRLWIND)
