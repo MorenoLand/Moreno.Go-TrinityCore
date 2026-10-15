@@ -36,7 +36,10 @@
 -- Talk(EMOTE_SHADOW_NOVA, on target) + Talk(YELL_SHADOW_NOVA,
 -- even on nil pick — C++-exact) (the
 -- !SisterDeath gate is always true on this path; the emote's C++
--- target arm has no target bridge — felmyst convention) /
+-- target arm is bridged — Talk(id, target) via the whisperTarget arm
+-- (engine/world/creature_text.go:62; C++-exact, non-whisper rows
+-- ignore the target) — both emote calls pass the target
+-- (boss_eredar_twins.cpp:254, 597) /
 -- confounding blow 45256 25s then {20s,25s}, non-triggered on a
 -- random alive player in the instance, nil pick keeps the schedule
 -- / enrage 46587 6min one-shot: Talk(YELL_ENRAGE), non-triggered
@@ -203,7 +206,7 @@ local function sacrolashShadowNova(creature, guid)
     local target = pickRandomPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_NOVA)
-        creature:Talk(EMOTE_SHADOW_NOVA)
+        creature:Talk(EMOTE_SHADOW_NOVA, target)
     end
     creature:Talk(YELL_SHADOW_NOVA)
     -- C++ 30000 + rand32()%5000 is exclusive-top [30000,34999].
@@ -299,7 +302,7 @@ local function alythessConflagration(creature, guid)
     local target = pickRandomPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_CONFLAGRATION)
-        creature:Talk(EMOTE_CONFLAGRATION)
+        creature:Talk(EMOTE_CONFLAGRATION, target)
     end
     creature:Talk(YELL_CANFLAGRATION)
     schedule(guid, "blaze", 4000, function()

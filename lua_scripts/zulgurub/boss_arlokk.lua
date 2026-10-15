@@ -52,7 +52,10 @@
 -- PASSIVE arms skipped (the phase stays damageable); no stat-modifier
 -- bridge — the C++ damage +/-35% hack skipped; no movement model —
 -- the Reset MovePoint, vanish MovePoint, and AttackStart arms skipped;
--- Talk has no target bridge — SAY_FEAST_PROWLER plays as a plain yell.
+-- Talk(id, target) is bridged (the whisperTarget arm, engine/world/
+-- creature_text.go:62 — C++-exact; non-whisper rows ignore the
+-- target, whisper rows route to that player only) — SAY_FEAST_PROWLER
+-- passes the mark target (boss_arlokk.cpp:227).
 
 local ENTRY_ARLOKK = 14515
 local ENTRY_PROWLER = 15101
@@ -162,7 +165,7 @@ local function onMarkOfArlokk(creature, guid)
     local target = randomPlayer(creature) or creature:GetVictim()
     if target then
         creature:CastSpell(target, SPELL_MARK_OF_ARLOKK, true)
-        creature:Talk(SAY_FEAST_PROWLER)
+        creature:Talk(SAY_FEAST_PROWLER, target)
     end
     schedule(timers, guid, "mark", math.random(120000, 130000), function()
         onMarkOfArlokk(creature, guid)

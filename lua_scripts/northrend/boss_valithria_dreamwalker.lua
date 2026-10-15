@@ -59,11 +59,13 @@
 -- Talk(SAY_VALITHRIA_DEATH 4) rides the DamageTaken death-negated leg
 -- (damage = 0, _justDied flag — she never actually dies; the trigger
 -- DoAction(ACTION_DEATH) cross-AI leg has no bridge);
--- Talk(SAY_VALITHRIA_ENTER_COMBAT 0) rides UpdateAI EVENT_INTRO_TALK
--- (scheduled from the DoAction ACTION_ENTER_COMBAT leg — no-DoAction and
--- no-timer bridges);
--- Talk(SAY_VALITHRIA_BERSERK 6) rides UpdateAI EVENT_BERSERK (heroic-only
--- scheduler leg — no-timer-bridge);
+-- Talk(SAY_VALITHRIA_ENTER_COMBAT 0) rides UpdateAI EVENT_INTRO_TALK /
+-- Talk(SAY_VALITHRIA_BERSERK 6) rides UpdateAI EVENT_BERSERK (heroic-only)
+-- — both schedules fire from DoAction ACTION_ENTER_COMBAT (:305-313),
+-- which is itself DoAction'ed from the bridge-blocked engagement chain
+-- (:505-512: instance GUID fetch + DoZoneInCombat + SetBossState) — no
+-- DoAction bridge (the timer bridge is CreateLuaEvent, live — the leg
+-- origin is the blocker, not the timer);
 -- Talk(SAY_VALITHRIA_DREAM_PORTAL 1) rides UpdateAI EVENT_DREAM_PORTAL
 -- (non-heroic scheduler leg; the SUMMON_PORTAL DoCast legs have no-cast
 -- bridge).
