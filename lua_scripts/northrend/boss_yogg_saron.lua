@@ -51,14 +51,10 @@
 -- the player SPELL_SANITY / SPELL_INSANE aura removal have
 -- no bridges — the sjonnir JustDied-Talk precedent).
 -- DOCUMENTED-ONLY (in this header; no registrations beyond
--- entries 33134 and 33288):
--- Sara KilledUnit — player-gated Talk(SAY_SARA_KILL 5)
--- (victim->GetTypeId() == TYPEID_PLAYER) AND
--- !me->IsInEvadeMode(); the player gate is bridgeable (the
--- razuvious precedent) but the evade gate is not — no
--- IsInEvadeMode in the Lua creature surface — so event 3
--- is NOT registered; a partial port would deviate from
--- C++ (yelling while evading), and C++-exactness wins.
+-- entries 33134 and 33288), except the Sara KilledUnit below —
+-- player-gated AND !IsInEvadeMode-gated Talk(SAY_SARA_KILL 5),
+-- PORTED on event 3 (it was documented-only until the IsInEvadeMode
+-- bridge was re-verified; C++-exact):
 -- Sara DamageTaken — lethal (damage >= health) is NOT a
 -- death rewrite: damage = health - 1 (survive with 1 hp)
 -- and Talk(SAY_SARA_TRANSFORM_1) fires only in PHASE_ONE
@@ -144,6 +140,7 @@ local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
 
 local SAY_SARA_AGGRO = 2
+local SAY_SARA_KILL = 5
 local SAY_YOGG_SARON_DEATH = 6
 
 -- C++ JustEngagedWith (boss_saraAI, ScriptedAI):
@@ -152,6 +149,15 @@ local SAY_YOGG_SARON_DEATH = 6
 -- precedent.
 local function saraEnterCombat(event, creature, target)
     creature:Talk(SAY_SARA_AGGRO)
+end
+
+-- C++ boss_saraAI::KilledUnit:
+-- if (victim->GetTypeId() == TYPEID_PLAYER && !me->IsInEvadeMode())
+--     Talk(SAY_SARA_KILL) — both gates bridgeable.
+local function saraKilledUnit(event, creature, victim)
+    if victim:GetObjectType() == "Player" and not creature:IsInEvadeMode() then
+        creature:Talk(SAY_SARA_KILL)
+    end
 end
 
 -- C++ JustDied (boss_yogg_saronAI, PassiveAI):
@@ -164,6 +170,7 @@ local function yoggSaronDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
+RegisterCreatureEvent(ENTRY_SARA, 3, saraKilledUnit)
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 4, yoggSaronDied)
 
 -- Timer-driven cast arms (the maiden CreateLuaEvent convention —

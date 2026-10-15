@@ -48,9 +48,11 @@
 -- controller->KillSelf() legs have no bridges).
 -- boss_twilight_halion KilledUnit — Talk(SAY_KILL 6) gated on
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
--- player-gated variant precedent; the SPELL_LEAVE_TWILIGHT_REALM cast
--- leg has no-cast bridge). Material halion has no KilledUnit arm —
--- SAY_KILL lives on the twilight AI only.
+-- player-gated variant precedent) + the UNGATED triggered victim-cast
+-- SPELL_LEAVE_TWILIGHT_REALM 74812 ("victims should not be in the
+-- twilight realm" — the arlokk CastSpell(victim, id, true) idiom).
+-- Material halion has no KilledUnit arm — SAY_KILL lives on the
+-- twilight AI only.
 -- boss_twilight_halion timer arms — PORTED via the CreateLuaEvent
 -- harness (GUID-keyed timers table, cancel on events 2/4/23 — the
 -- krystallus / bjarngrim-lieutenant convention), armed from
@@ -160,12 +162,15 @@ end
 
 -- C++ boss_twilight_halion::KilledUnit:
 -- if (victim->GetTypeId() == TYPEID_PLAYER)
---     Talk(SAY_KILL) — the razuvious player-gated variant precedent.
+--     Talk(SAY_KILL) — the razuvious player-gated variant precedent;
+-- me->CastSpell(victim, SPELL_LEAVE_TWILIGHT_REALM, true) — UNGATED
+-- (fires for any victim type), triggered victim-cast — the arlokk idiom.
 -- Material halion has no KilledUnit arm.
 local function twilightHalionKilledUnit(event, creature, victim)
     if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
+    creature:CastSpell(victim, SPELL_LEAVE_TWILIGHT_REALM, true)
 end
 
 RegisterCreatureEvent(ENTRY_HALION, 1, halionEnterCombat)
@@ -176,6 +181,7 @@ local SPELL_CLEAVE      = 74524
 local SPELL_DARK_BREATH = 74806
 local SPELL_TAIL_LASH   = 74531
 local SPELL_CLEAR_DEBUFFS = 75396
+local SPELL_LEAVE_TWILIGHT_REALM = 74812
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the krystallus / bjarngrim-lieutenant convention.

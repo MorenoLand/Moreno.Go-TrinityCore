@@ -72,8 +72,12 @@
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 36502):
 -- KilledUnit (:230-247): player-gated BUT text-selected by
 -- me->GetDisplayId() (ANGER 30148 / SORROW 30149 / DESIRE 30150 ->
--- SAY_FACE_ANGER_SLAY 1 / SAY_FACE_SORROW_SLAY 2 / SAY_FACE_DESIRE_SLAY 3)
--- — no display-ID bridge, does not port (the razuvious display-gated
+-- SAY_FACE_ANGER_SLAY 1 / SAY_FACE_SORROW_SLAY 2 / SAY_FACE_DESIRE_SLAY 3).
+-- creature:GetDisplayId() EXISTS in the Lua surface but returns the DB
+-- template display only — the C++ mutates the RUNTIME display at Reset
+-- (:152) and in the wailing/unleashed-souls phase arms (:271/:278/:282/
+-- :323), which Go never tracks, so the gate would read a constant and
+-- pick the wrong text; does not port (the razuvious display-gated
 -- precedent).
 -- Reset (:150-153): SetControlled(false, UNIT_STATE_ROOT) +
 -- SetDisplayId(DISPLAY_ANGER) + SetReactState(REACT_AGGRESSIVE) —
