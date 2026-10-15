@@ -1436,7 +1436,7 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 				if petCaster != nil {
 					s.applyPetAura(ctx, petCaster, silenceSpell, silenceEff, dispellerGUID, 5000, 0)
 				} else {
-					casterSess.applyAuraToTarget(ctx, dispellerGUID, silenceSpell, silenceEff, -1, 5000, 0, 0, 32, nil, false, silenceCasterGUID, false, 0, false)
+					casterSess.applyAuraToTarget(ctx, dispellerGUID, silenceSpell, silenceEff, -1, 5000, 0, 0, 32, nil, false, silenceCasterGUID, false, 0, false, nil)
 				}
 			}
 
@@ -2376,7 +2376,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		if stealCasterGUID == 0 {
 			stealCasterGUID = s.playerGUID
 		}
-		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, -1, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask, nil, true, stealCasterGUID, false, 0, false)
+		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, -1, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask, nil, true, stealCasterGUID, false, 0, false, nil)
 		// C++ AuraCreateInfo/SetLoadedState twin (Unit.cpp:4015-4033): the
 		// fresh stolen aura carries the victim aura's live effect mask,
 		// per-effect amounts, recalculate mask, crit chance and

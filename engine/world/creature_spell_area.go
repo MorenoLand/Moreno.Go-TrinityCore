@@ -211,7 +211,7 @@ func (s *session) applyCreatureLinkedApplyArms(ctx context.Context, targetGUID u
 			if bp := eff.CalcValueForLevel(linked, casterLevel); bp > 0 {
 				amount = uint32(bp)
 			}
-			s.applyAuraToTarget(ctx, targetGUID, linked, eff, effIndex, durationMs, eff.AuraPeriod, amount, linked.SchoolMask, castMerged, false, caster, false, 0, false)
+			s.applyAuraToTarget(ctx, targetGUID, linked, eff, effIndex, durationMs, eff.AuraPeriod, amount, linked.SchoolMask, castMerged, false, caster, false, 0, false, nil)
 		}
 	}
 }

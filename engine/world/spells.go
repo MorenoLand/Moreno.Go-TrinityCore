@@ -8089,15 +8089,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// revalidation: a health cost drained mid-cast fails with
 	// SPELL_FAILED_CASTER_AURASTATE, ahead of the rune/power arms per C++
 	// arm order.
-	if spell.PowerType == 0xFFFFFFFE && s.player.Health <= cost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
-		s.sendInterrupted(castID, spellID, 0)
-		return
-	}
-	if pType < 7 && cost > 0 && s.player.Powers[pType] < cost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
-		s.sendInterrupted(castID, spellID, 0) // Spell::_cast cleanupSpell (Spell.cpp:3330-3334): CheckCast failure at completion sends SendCastResult + SendInterrupted(0)
-		return
+	// Spell::CheckPower (Spell.cpp:6644-6646): an item cast never fails a
+	// power check — C++ zeroes m_powerCost for item casts in prepare
+	// (Spell.cpp:3093) and CheckPower returns SPELL_CAST_OK immediately
+	// when m_CastItem is set. castItemGUID != 0 is the Go item-cast marker.
+	if castItemGUID == 0 {
+		if spell.PowerType == 0xFFFFFFFE && s.player.Health <= cost {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
+			s.sendInterrupted(castID, spellID, 0)
+			return
+		}
+		if pType < 7 && cost > 0 && s.player.Powers[pType] < cost {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
+			s.sendInterrupted(castID, spellID, 0) // Spell::_cast cleanupSpell (Spell.cpp:3330-3334): CheckCast failure at completion sends SendCastResult + SendInterrupted(0)
+			return
+		}
 	}
 	// Spell::_cast re-runs CheckCast at completion; runes spent mid-cast
 	// must fail the cast too (Spell::CheckPower rune check, Spell.cpp:6665).
@@ -8953,8 +8959,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 		if cost > 0 {
-			// Re-validation above guarantees sufficient power; C++ TakePower deducts.
-			s.player.Powers[pType] -= cost
+			// Unit::ModifyPower clamps at 0 (Unit.cpp:8519-8605): the
+			// completion revalidation above ran long before this deduction
+			// (hit-rolls, cooldowns, DB I/O), so concurrent combat can drain
+			// the pool below cost — a raw uint32 subtract would wrap to
+			// ~4.29B and persist to characters.
+			if s.player.Powers[pType] >= cost {
+				s.player.Powers[pType] -= cost
+			} else {
+				s.player.Powers[pType] = 0
+			}
 			// Spell::TakePower (Spell.cpp:4870-4872): set the five second
 			// timer when mana is spent. C++ gates on powerType == POWER_MANA
 			// (0) && m_powerCost > 0; the timer starts at cast completion
@@ -8979,10 +8993,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	// Spell::TakePower (Spell.cpp:4852-4856): POWER_HEALTH (-2 in C++,
 	// 0xFFFFFFFE in Go's uint32 field) deducts from health, not the power
-	// array. CheckPower above guarantees health > cost, so the clamp is
-	// unnecessary. Gated on takePower like every other TakePower arm.
+	// array. Unit::ModifyHealth clamps at 0 (Unit.cpp:8519-8605) — same
+	// wrap risk as the power arm above. Gated on takePower like every
+	// other TakePower arm.
 	if takePower && pType == 0xFFFFFFFE && cost > 0 {
-		s.player.Health -= cost
+		if s.player.Health >= cost {
+			s.player.Health -= cost
+		} else {
+			s.player.Health = 0
+		}
 		s.sendPlayerUpdate()
 		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", s.player.Health, s.playerGUID)
@@ -10532,7 +10551,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false, 0, false)
+					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
 				}
 				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
 				// reflected chain jump resolves its unit to the caster, so a
@@ -10540,7 +10559,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// caster — the same victim-selection arms as the loop above.
 				if len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
 					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
-					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false)
+					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self + dead-target request chain
 				s.applySelfResurrectEffect(spell)
@@ -11994,7 +12013,7 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if schoolMask == 0 {
 		schoolMask = 1
 	}
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond)}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: time.Now()}
 	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 
@@ -15878,7 +15897,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if schoolMask == 0 {
 					schoolMask = 1
 				}
-				s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura)
+				s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura, nil)
 			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 				// Spell::EffectHeal (SpellEffects.cpp:1393-1418): addhealth =
 				// damage (the HandleEffects CalculateDamage value, same twin
@@ -15957,7 +15976,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
-		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, auraCasterGUID, false, castItemGUID, triggeredByAura)
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, auraCasterGUID, false, castItemGUID, triggeredByAura, nil)
 	}
 
 	// Spell::handle_immediate (Spell.cpp:3568-3591): channeled spells start
@@ -23546,7 +23565,11 @@ func creatureAuraCasterLevel(s *session, casterGUID uint64, spell wotlk.Spell) u
 	return uint8(spell.SpellLevel)
 }
 
-func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64, triggeredByAura bool) {
+// applyAuraToTarget applies spell/eff as an aura on targetGUID. A non-nil
+// periodicInitialDelay overrides the first periodic-tick delay computed by
+// periodicTickInitialDelay (the dynobj target-map pass aligns new applications
+// to the dynobj's shared amplitude schedule); nil keeps the default.
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64, triggeredByAura bool, periodicInitialDelay *uint32) {
 	if s.player == nil {
 		return
 	}
@@ -24448,7 +24471,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// the tick timer — the mount-flight aura above had PeriodMs zeroed
 		// and previously kept a spurious no-op timer.
 		if aura.PeriodMs > 0 {
-			targetSess.schedulePlayerPeriodicTickInitial(aura, aura.PeriodMs, periodicTickInitialDelay(spell, aura.PeriodMs))
+			initialDelay := periodicTickInitialDelay(spell, aura.PeriodMs)
+			if periodicInitialDelay != nil && initialDelay != 0 {
+				initialDelay = *periodicInitialDelay
+			}
+			targetSess.schedulePlayerPeriodicTickInitial(aura, aura.PeriodMs, initialDelay)
 		}
 		// Aura constructor (SpellAuras.cpp:431-437): spells with
 		// ManaPerSecond start the 1s power-upkeep timer (m_timeCla).
@@ -24944,7 +24971,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 
 	if aura.PeriodMs > 0 {
-		s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, periodicTickInitialDelay(spell, aura.PeriodMs))
+		initialDelay := periodicTickInitialDelay(spell, aura.PeriodMs)
+		if periodicInitialDelay != nil && initialDelay != 0 {
+			initialDelay = *periodicInitialDelay
+		}
+		s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, initialDelay)
 	}
 	// Aura constructor (SpellAuras.cpp:431-437): spells with
 	// ManaPerSecond start the 1s power-upkeep timer (m_timeCla).
@@ -25088,7 +25119,7 @@ func (s *session) applyAuraLinkedAurasAtApply(ctx context.Context, spellID uint3
 			if bp := eff.CalcValueForLevel(linked, casterLevel); bp > 0 {
 				amount = uint32(bp)
 			}
-			casterSess.applyAuraToTarget(ctx, s.playerGUID, linked, eff, effIndex, durationMs, eff.AuraPeriod, amount, linked.SchoolMask, castMerged, false, caster, false, 0, false)
+			casterSess.applyAuraToTarget(ctx, s.playerGUID, linked, eff, effIndex, durationMs, eff.AuraPeriod, amount, linked.SchoolMask, castMerged, false, caster, false, 0, false, nil)
 		}
 	}
 }

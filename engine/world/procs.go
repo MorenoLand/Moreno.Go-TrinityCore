@@ -2896,7 +2896,7 @@ func (s *session) procRaidProcFromCharge(ctx context.Context, aura *activeAura, 
 				// caster (CastSpellExtraArgs, SpellAuraEffects.cpp:5791,
 				// 5828-5830); Go's apply path takes the amount directly and
 				// the explicit caster GUID.
-				s.applyAuraToTarget(ctx, targetGUID, auraSpell, *eff, effIndex, durationMs, eff.AuraPeriod, amount, schoolMask, nil, false, casterGUID, false, 0, true)
+				s.applyAuraToTarget(ctx, targetGUID, auraSpell, *eff, effIndex, durationMs, eff.AuraPeriod, amount, schoolMask, nil, false, casterGUID, false, 0, true, nil)
 				// aura->SetCharges(jumps) on the freshly jumped aura
 				// (SpellAuraEffects.cpp:5798-5799).
 				if ts := s.server.findSessionByGUID(targetGUID); ts != nil {

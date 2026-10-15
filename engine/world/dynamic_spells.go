@@ -32,7 +32,18 @@ type dynamicSpellObjectState struct {
 	AuraAmount                uint32
 	AuraSchoolMask            uint8
 	NextAuraTick              time.Time
-	DespawnTimer              *time.Timer
+	// NextTargetMapPass is the next UpdateTargetMap pass deadline. C++
+	// refreshes the dynobj target map every UPDATE_TARGET_MAP_INTERVAL
+	// (500ms, SpellAuras.h:43) — applying the debuff to newcomers via
+	// DynObjAura::UpdateOwner(apply=true) (SpellAuras.cpp:812-823) and
+	// stripping leavers (SpellAuras.cpp:663-684) — independent of the
+	// damage amplitude. NextAuraTick carries the dynobj's single shared
+	// AuraEffect timer schedule (SpellAuras.cpp:815-843): all registered
+	// applications tick simultaneously at one amplitude, so newly applied
+	// auras align their first tick to it instead of starting their own
+	// period timer.
+	NextTargetMapPass time.Time
+	DespawnTimer      *time.Timer
 	// ExpiresAt is the wall-clock deadline the DespawnTimer was armed for;
 	// Spell::DelayedChannel's dynobj->Delay arm (Spell.cpp:7324-7326)
 	// shortens it on channel pushback.
@@ -138,6 +149,14 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	}
 }
 
+// dynobjTargetMapInterval mirrors UPDATE_TARGET_MAP_INTERVAL
+// (SpellAuras.h:43): the dynobj refreshes its target map every 500ms —
+// applying the aura debuff to newcomers (DynObjAura::UpdateOwner(apply=true),
+// SpellAuras.cpp:812-823) and stripping leavers (SpellAuras.cpp:663-684) —
+// independent of the damage amplitude, which ticks on the dynobj's single
+// shared AuraEffect timer (SpellAuras.cpp:815-843).
+const dynobjTargetMapInterval = 500 * time.Millisecond
+
 func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	if s == nil {
 		return
@@ -145,10 +164,17 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	s.objectsMu.Lock()
 	objects := make([]*dynamicSpellObjectState, 0, len(s.dynamicSpellObjects))
 	for _, object := range s.dynamicSpellObjects {
-		if object == nil || object.AuraPeriodMs == 0 || now.Before(object.NextAuraTick) {
+		if object == nil || object.AuraPeriodMs == 0 {
 			continue
 		}
-		object.NextAuraTick = now.Add(time.Duration(object.AuraPeriodMs) * time.Millisecond)
+		period := time.Duration(object.AuraPeriodMs) * time.Millisecond
+		for !now.Before(object.NextAuraTick) {
+			object.NextAuraTick = object.NextAuraTick.Add(period)
+		}
+		if now.Before(object.NextTargetMapPass) {
+			continue
+		}
+		object.NextTargetMapPass = now.Add(dynobjTargetMapInterval)
 		objects = append(objects, object)
 	}
 	s.objectsMu.Unlock()
@@ -171,14 +197,22 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 		}
 		spellID := uint32(object.SpellID)
 		// Aura::UpdateTargetMap's removal arm (SpellAuras.cpp:663-684):
-		// applications whose targets left the area are removed. The 500ms
-		// C++ cadence is coarser here — removal rides the aura period tick.
+		// applications whose targets left the area are removed on the 500ms
+		// target-map pass, like C++.
 		for holderGUID := range object.AuraHolders {
 			if _, ok := inRadius[holderGUID]; ok {
 				continue
 			}
 			s.expireDynobjHolderAura(object, holderGUID, spellID)
 			delete(object.AuraHolders, holderGUID)
+		}
+		// The newly applied aura's first tick aligns to the dynobj's shared
+		// amplitude schedule (SpellAuras.cpp:815-843) instead of starting a
+		// private period timer: a target entering just before a tick takes
+		// damage almost immediately, and all applications tick in phase.
+		sharedDelayMs := uint32(0)
+		if d := object.NextAuraTick.Sub(now); d > 0 {
+			sharedDelayMs = uint32(d / time.Millisecond)
 		}
 		for _, targetGUID := range areaTargets {
 			if _, ok := inRadius[targetGUID]; !ok {
@@ -187,7 +221,7 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			if caster.hasDynamicAreaAura(targetGUID, object.SpellData.ID) {
 				continue
 			}
-			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, -1, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0, false)
+			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, -1, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0, false, &sharedDelayMs)
 			if object.AuraHolders == nil {
 				object.AuraHolders = make(map[uint64]struct{})
 			}
