@@ -110,10 +110,11 @@ local function cleaveTick(creature, guid)
     end)
 end
 
--- C++ EVENT_BLADE_TEMPEST: DoCastSelf(SPELL_BLADE_TEMPEST 75125)
--- (non-triggered), 18s init, Repeat(24s).
+-- C++ EVENT_BLADE_TEMPEST: DoCastVictim(SPELL_BLADE_TEMPEST 75125)
+-- (non-triggered), 18s init, Repeat(24s); the spell is a self-centered
+-- AoE, so the victim target is C++-form-exact (the cleaveTick idiom).
 local function bladeTempestTick(creature, guid)
-    creature:CastSpell(creature, SPELL_BLADE_TEMPEST)
+    creature:CastSpell(nil, SPELL_BLADE_TEMPEST)
     schedule(guid, "bladetempest", 24000, function()
         bladeTempestTick(creature, guid)
     end)
