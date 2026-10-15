@@ -2486,11 +2486,11 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	guid, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	rawName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	// SendCharRename appends guid+name only on success; failures send the u8 code alone.
 	// The name echoed back is the normalized one C++ stored (renameInfo->Name),
@@ -2536,22 +2536,21 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 		}
 	}
 	// The character must belong to this account, carry AT_LOGIN_RENAME, and
-	// the new name must be free (CHAR_SEL_FREE_NAME, :1141).
+	// the new name must be free — one atomic statement (CHAR_SEL_FREE_NAME,
+	// CharacterHandler.cpp:1141): an empty result (not your character OR the
+	// name is taken) answers CHAR_CREATE_ERROR (48), per the async callback
+	// (CharacterHandler.cpp:1155-1159).
+	row, err := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_FREE_NAME"), guid, s.accountID, newName)
+	var rowGuid uint32
+	var oldName string
 	var atLogin uint64
-	if err := store.DB.QueryRowContext(ctx, "SELECT at_login FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin); err != nil {
+	if err != nil || row.Scan(&rowGuid, &oldName, &atLogin) != nil {
 		sendRename(charCreateError, false, "")
 		return true
 	}
 	if atLogin&atLoginRename == 0 {
 		sendRename(charCreateError, false, "")
 		return true
-	}
-	if row, err := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); err == nil {
-		var one int
-		if row.Scan(&one) == nil {
-			sendRename(charCreateNameInUse, false, "")
-			return true
-		}
 	}
 	_, _ = store.ExecStatement(ctx, database.StatementID("CHAR_UPD_CHAR_NAME_AT_LOGIN"), newName, atLogin&^atLoginRename, guid)
 	_, _ = store.ExecStatement(ctx, database.StatementID("CHAR_DEL_DECLINED_NAME"), guid)

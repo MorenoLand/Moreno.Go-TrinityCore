@@ -2190,10 +2190,13 @@ func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) b
 	var killsToday, todayContrib, yestContrib, lifetimeHK uint32
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		charLow := uint32(targetGUID & 0x00FFFFFF)
-		var hp, tk, hk, thp, yhp int64
-		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT totalHonorPoints, todayKills, totalKills, todayHonorPoints, yesterdayHonorPoints FROM characters WHERE guid = ?`, charLow).Scan(&hp, &tk, &hk, &thp, &yhp); err == nil {
+		var hp, tk, yk, hk, thp, yhp int64
+		// PLAYER_FIELD_KILLS packs todayKills (low u16) + yesterdayKills
+		// (high u16) (Player.cpp:17569-17570); the packet sends the full u32
+		// (MiscHandler.cpp:1063).
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT totalHonorPoints, todayKills, yesterdayKills, totalKills, todayHonorPoints, yesterdayHonorPoints FROM characters WHERE guid = ?`, charLow).Scan(&hp, &tk, &yk, &hk, &thp, &yhp); err == nil {
 			honorPoints = uint8(hp)
-			killsToday = uint32(tk)
+			killsToday = uint32(tk) | uint32(yk)<<16
 			lifetimeHK = uint32(hk)
 			todayContrib = uint32(thp)
 			yestContrib = uint32(yhp)
@@ -5322,11 +5325,11 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 	// GUID, followed by the name string.
 	petitionGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	newName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	if newName == "" {
 		// HandlePetitionRenameGuild (PetitionsHandler.cpp:342-354): an

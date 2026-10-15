@@ -1536,10 +1536,15 @@ func inventoryTypeToSlot(invType uint8) uint8 {
 // members missing a name row fall back to item_template at load time. The
 // item_set_names_locale fallback has no Go analog (enUS-only session locale).
 func (s *session) handleItemNameQuery(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:839): drop when no player is logged in —
+	// the reference never answers the query for a playerless session.
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	r := protocol.NewReader(payload)
 	itemID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	_, _ = r.ReadU64() // skip guid
 

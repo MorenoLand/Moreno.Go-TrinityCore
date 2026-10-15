@@ -19,7 +19,7 @@ func (s *session) handleBattlemasterHello(ctx context.Context, payload []byte) b
 	r := protocol.NewReader(payload)
 	bmGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// WorldSession::HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:41-45): the
@@ -27,6 +27,10 @@ func (s *session) handleBattlemasterHello(ctx context.Context, payload []byte) b
 	if !s.canInteractWithNPC(ctx, bmGUID, uint64(unitNPCFlagBattlemaster)) {
 		return true
 	}
+
+	// BattleGroundHandler.cpp:47-48: the battlemaster pauses its movement and
+	// re-bases its home position on hello.
+	s.pauseCreatureMotionForHello(bmGUID)
 
 	// BattleGroundHandler.cpp:47 — the battleground type is derived server-side from the
 	// battlemaster's creature entry (BattlegroundMgr::GetBattleMasterBG: battlemaster_entry.entry
@@ -896,7 +900,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 	// a port accept with no invite instance is answered with silence. This is also the
 	// Go form of the "cheating?" IsInvitedForBattlegroundQueueType gate
 	// (BattleGroundHandler.cpp:453-454).
-	if action == 1 && entry.InstanceID == 0 {
+	if action != 0 && entry.InstanceID == 0 {
 		return true
 	}
 
@@ -926,7 +930,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		}
 	}
 
-	if action == 1 {
+	if action != 0 {
 		// Freeze debuff (BattleGroundHandler.cpp:450-451 — HasAura(9454) → silent return).
 		if s.hasAura(freezeAuraSpellID) {
 			return true
@@ -975,9 +979,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		s.server.addOrSetPlayerToCorrectBGGroup(s)
 		s.sendBattlefieldStatus(uint8(slot))
 		s.debug("battlefield port accept", "account", s.accountName, "bg", bgTypeID, "instance", entry.InstanceID)
-	}
-
-	if action == 0 {
+	} else {
 		// Arena leave gate (BattleGroundHandler.cpp:493-494): leaving an arena past
 		// STATUS_WAIT_QUEUE is answered with silence.
 		if entry.IsArena && entry.Status > BGStatusWaitQueue {
@@ -1035,7 +1037,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 // Reference: WorldSession::HandleBattlefieldStatusOpcode (BattleGroundHandler.cpp:546).
 func (s *session) handleBattlefieldStatus(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	for slot := uint8(0); slot < uint8(len(s.bgQueues)); slot++ {
 		// C++ sends no packet for slots with no queue type

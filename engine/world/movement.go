@@ -259,7 +259,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	guid, err := b.ReadPackedGUID()
 	if err != nil {
 		s.debug("movement rejected", "account", s.accountName, "reason", "malformed guid", "opcode", opcode)
-		return false
+		return true
 	}
 	if guid != s.playerGUID {
 		prefix := payload
@@ -272,7 +272,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	info, err := readMovementInfo(b)
 	if err != nil {
 		s.debug("movement rejected", "account", s.accountName, "reason", "malformed movement", "opcode", opcode, "error", err)
-		return false
+		return true
 	}
 	info.GUID = guid
 	if !validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
@@ -1155,16 +1155,23 @@ func (s *session) handleForceSpeedChangeAck(opcode uint16, ctx context.Context, 
 		return true
 	}
 	b := protocol.NewReader(payload)
-	guid, _ := b.ReadPackedGUID()
+	guid, err := b.ReadPackedGUID()
 	// now can skip not our packet
-	if guid != s.playerGUID {
+	if err != nil || guid != s.playerGUID {
 		return true
 	}
-	_, _ = b.ReadU32() // ack counter, unused
+	if _, err := b.ReadU32(); err != nil { // ack counter, unused
+		return true
+	}
 	// The movement info is parsed but not applied, matching C++ which never
 	// assigns it to m_movementInfo here.
-	_, _ = readMovementInfo(b)
-	newspeed, _ := b.ReadF32()
+	if _, err := readMovementInfo(b); err != nil {
+		return true
+	}
+	newspeed, err := b.ReadF32()
+	if err != nil {
+		return true
+	}
 	moveType, ok := forcedSpeedAckMoveType(opcode)
 	if !ok {
 		return true
@@ -1191,17 +1198,12 @@ func (s *session) handleForceSpeedChangeAck(opcode uint16, ctx context.Context, 
 	current := s.movementSpeeds()[moveType]
 	if math.Abs(float64(current-newspeed)) > 0.01 {
 		if current > newspeed {
-			// client under-reports: re-send the correct speed
-			// (Unit::SetSpeedRate leg, MovementHandler.cpp:505-509)
+			// client under-reports: log only. C++ calls
+			// SetSpeedRate(move_type, GetSpeedRate(move_type)) with the
+			// unchanged rate (MovementHandler.cpp:508-509), which early-
+			// returns in Unit::SetSpeedRate (Unit.cpp:8827) — no packet is
+			// sent and the forced-speed-change bookkeeping is untouched.
 			s.debug("force speed change corrected", "account", s.accountName, "moveType", moveType, "expected", current, "acked", newspeed)
-			// C++ re-sends via SetSpeedRate(move_type, GetSpeedRate(move_type)):
-			// same type, same rate. The GM-override store holds the last
-			// rate the server forced for walk/run/runBack/swim/flight.
-			if moveType >= 0 && moveType < len(speedForceOpcodes) {
-				if opcodes := speedForceOpcodes[moveType]; opcodes[0] != 0 {
-					s.sendRuntimeMovementSpeed(opcodes[0], opcodes[1], current, moveType == moveTypeRun)
-				}
-			}
 		} else {
 			// client over-reports its speed: cheating
 			s.debug("force speed change mismatch, kicking", "account", s.accountName, "moveType", moveType, "expected", current, "acked", newspeed)
