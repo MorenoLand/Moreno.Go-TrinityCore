@@ -75,21 +75,31 @@
 -- cast bridges); the UpdateAI EVENT_FREE_MOVEMENT machine (no
 -- motion bridge).
 -- npc_tenebron — Reset (base); JustEngagedWith (base +
--- ScheduleEvent EVENT_HATCH_EGGS 30s — no timer bridge);
--- UpdateAI EVENT_HATCH_EGGS -> OpenPortal — no timer bridge.
+-- ScheduleEvent EVENT_HATCH_EGGS 30s); UpdateAI EVENT_HATCH_EGGS ->
+-- OpenPortal (obsidian_sanctum.cpp:451-453) — the timer bridge is
+-- live (CreateLuaEvent), but the payload is OpenPortal only:
+-- instance-gated egg summons (no summon / GO-grid-search /
+-- instance bridges), so the timer arm stays out (the stale
+-- "no timer bridge" claim is re-keyed: payload-unbridged, not
+-- timer-unbridged).
 -- npc_shadron — Reset (base + aura strips
 -- SPELL_TWILIGHT_TORMENT_VESP 57948 / SPELL_GIFT_OF_TWILIGTH_SHA
 -- 57835 + SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) — no aura /
 -- instance bridges); JustEngagedWith (base + ScheduleEvent
--- EVENT_ACOLYTE_SHADRON 1min — no timer bridge); UpdateAI
--- EVENT_ACOLYTE_SHADRON (instance-gated OpenPortal +
--- SetBossState(DATA_PORTAL_OPEN, IN_PROGRESS) — no timer /
--- instance bridges).
+-- EVENT_ACOLYTE_SHADRON 1min); UpdateAI EVENT_ACOLYTE_SHADRON
+-- (obsidian_sanctum.cpp:519-531: instance-gated OpenPortal +
+-- SetBossState(DATA_PORTAL_OPEN, IN_PROGRESS)) — all payload legs
+-- unbridged (no summon / instance bridges); timer arm stays out.
 -- npc_vesperon — Reset (base); JustEngagedWith (base +
--- ScheduleEvent EVENT_ACOLYTE_VESPERON 1min — no timer bridge);
--- UpdateAI EVENT_ACOLYTE_VESPERON (instance-gated OpenPortal +
--- DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP 57948) — no timer /
--- instance / cast bridges).
+-- ScheduleEvent EVENT_ACOLYTE_VESPERON 1min); UpdateAI
+-- EVENT_ACOLYTE_VESPERON (obsidian_sanctum.cpp:590-597:
+-- instance-gated OpenPortal + DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP
+-- 57948), 60s/70s re-arm) — PORTED this run (tormentTick): the
+-- victim-cast leg rides the live timer and CastSpell(nil, spell)
+-- bridges. Documented deviation: the DATA_PORTAL_OPEN IN_PROGRESS
+-- gate and the OpenPortal summon legs have no instance / summon
+-- bridges, so in Lua the cast fires every 60-70s while the drake
+-- lives instead of being skipped by the instance gate.
 -- npc_acolyte_of_shadron (NPC_ACOLYTE_OF_SHADRON 31218,
 -- entry-verifiable from the local enum) — Reset
 -- (DespawnOrUnsummon(28s), instance-gated AddAura gift-of-twilight
@@ -142,6 +152,7 @@ local SAY_DEATH  = 2
 local SAY_BREATH = 3
 
 local SPELL_SHADOW_BREATH = 57570
+local SPELL_TWILIGHT_TORMENT_VESP = 57948
 
 local timers = {}
 
@@ -178,11 +189,27 @@ local function shadowBreathTick(creature, guid)
     end)
 end
 
+-- C++ npc_vesperon::UpdateAI EVENT_ACOLYTE_VESPERON
+-- (obsidian_sanctum.cpp:590-597): instance-gated OpenPortal +
+-- DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP 57948), non-triggered,
+-- re-arm {60s,70s} — the victim-cast leg only; the DATA_PORTAL_OPEN
+-- gate and OpenPortal summon legs have no bridges (documented
+-- deviation in header).
+local function tormentTick(creature, guid)
+    creature:CastSpell(nil, SPELL_TWILIGHT_TORMENT_VESP)
+    schedule(guid, "torment", {60000, 70000}, function()
+        tormentTick(creature, guid)
+    end)
+end
+
 -- C++ dummy_dragonAI::JustEngagedWith: Talk(SAY_AGGRO) +
 -- DoZoneInCombat + ScheduleEvent(EVENT_SHADOW_FISSURE,
 -- EVENT_SHADOW_BREATH) — the Talk and the shadow-breath timer are
 -- bridgeable; the rest are machine / target-selection legs with no
--- bridges.
+-- bridges. Plus the per-drake engage timers: EVENT_HATCH_EGGS
+-- (tenebron) and EVENT_ACOLYTE_SHADRON (shadron) payloads are
+-- unbridged; EVENT_ACOLYTE_VESPERON (vesperon) ports the
+-- victim-cast leg only (tormentTick, 1min init).
 local function dragonEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -190,6 +217,11 @@ local function dragonEnterCombat(event, creature, target)
     schedule(guid, "shadowbreath", 20000, function()
         shadowBreathTick(creature, guid)
     end)
+    if creature:GetEntry() == ENTRY_VESPERON then
+        schedule(guid, "torment", 60000, function()
+            tormentTick(creature, guid)
+        end)
+    end
 end
 
 local function dragonLeaveCombat(event, creature)
