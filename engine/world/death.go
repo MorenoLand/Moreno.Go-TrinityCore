@@ -2188,9 +2188,13 @@ func (s *session) getResurrectionSpellId(ctx context.Context) uint32 {
 	return spellID
 }
 
-// spellHasCooldown mirrors the spell-id arm of SpellHistory::HasCooldown
-// (SpellHistory.cpp:473-487): the per-spell cooldown entry only, not the
-// category arm.
+// spellHasCooldown mirrors SpellHistory::HasCooldown (SpellHistory.cpp:473-487)
+// with the default ignoreCategoryCooldown=false: the per-spell entry, then
+// the category arm. The category comes from the DBC spell row
+// (GetCooldownDurations' category out-param); the category-cooldown horizon
+// is the max CategoryEnd across entries sharing that category — the Go
+// per-spell entries each carry the C++ _categoryCooldowns map entry, so any
+// live one blocks like the map lookup does.
 func (s *session) spellHasCooldown(spellID uint32) bool {
 	if s.player == nil {
 		return false
@@ -2198,6 +2202,20 @@ func (s *session) spellHasCooldown(spellID uint32) bool {
 	nowUnix := time.Now().Unix()
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID && cd.End > nowUnix {
+			return true
+		}
+	}
+	category := uint32(0)
+	if s.server != nil && s.server.Data != nil {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			category = spell.Category
+		}
+	}
+	if category == 0 {
+		return false
+	}
+	for _, cd := range s.player.Cooldowns {
+		if cd.Category == category && cd.CategoryEnd > nowUnix {
 			return true
 		}
 	}

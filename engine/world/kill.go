@@ -651,6 +651,37 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		// pointed at the dying unit are lost — every holder's bank is
 		// cleared (ClearComboPointHolders).
 		s.server.clearComboPointHolders(target.GUID)
+		// Unit::Kill's party-kill broadcast (Unit.cpp:11208-11232): when
+		// the killing blow lands and the creature's player-damage
+		// requirement is satisfied
+		// (Creature::IsDamageEnoughForLootingAndReward, Creature.h:322),
+		// the killer's group receives SMSG_PARTYKILLLOG {killer, victim};
+		// a solo killer gets it direct, plus the no-group-looter
+		// SMSG_LOOT_LIST for the creature via SendMessageToSet. The
+		// cross-map loot-recipient fallback (Unit.cpp:11178-11199) is
+		// unreachable in Go — taps are set by same-map hits — so the
+		// killer session is always the C++ `player`. The victim-side
+		// exploit arm (player-owned pet victim) never reaches this
+		// funnel; only wild-creature kills land here. The group looter
+		// election itself stays lazy at loot-open (loot.go).
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			if motion.PlayerDamageReq == 0 || motion.FlagsExtra&creatureFlagExtraNoPlayerDamageReq != 0 {
+				killLog := protocol.NewBuffer(16)
+				killLog.WriteU64(s.playerGUID)
+				killLog.WriteU64(target.GUID)
+				if s.groupID != 0 {
+					s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_PARTYKILLLOG), killLog.Bytes())
+				} else {
+					_ = s.write(uint16(protocol.OpcodeSMSG_PARTYKILLLOG), killLog.Bytes(), true)
+					noLooter := protocol.NewBuffer(10)
+					noLooter.WriteU64(target.GUID)
+					noLooter.WriteU8(0)
+					noLooter.WriteU8(0)
+					_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes(), true)
+					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes(), s)
+				}
+			}
+		}
 	}
 	creatureEntry := uint32((target.GUID >> 24) & 0xFFFFFF)
 	guid := uint32(target.GUID & 0x00FFFFFF)
