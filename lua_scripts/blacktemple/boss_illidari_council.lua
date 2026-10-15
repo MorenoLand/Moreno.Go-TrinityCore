@@ -424,12 +424,13 @@ local function gathiosAura(creature, guid)
 end
 
 -- C++ JustEngagedWith + ScheduleEvents: the SetCombatPulseDelay/
--- setActive/DoZoneInCombat arms have no bridges; triggered
--- self-cast seal of blood 41459 one-time; the five cycle arms.
+-- setActive/DoZoneInCombat arms have no bridges; non-triggered
+-- self-cast seal of blood 41459 one-time (C++ DoCastSelf literal
+-- form = TRIGGERED_NONE); the five cycle arms.
 local function gathiosEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_SEAL_OF_BLOOD, true)
+    creature:CastSpell(creature, SPELL_SEAL_OF_BLOOD)
     schedule(guid, "gathios_bless", 20000, function()
         gathiosBless(creature, guid)
     end)
