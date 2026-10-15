@@ -2531,6 +2531,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 {
 				motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 			}
+			// Spell::handle_immediate channel arms (Spell.cpp:3569-3596),
+			// the inline-path twin of the castCreatureSpellInternal arm in
+			// boss_ai.go: a channeled cast holds UNIT_STATE_CASTING for the
+			// channel duration on top of the cast time, and
+			// CombatAI::UpdateAI's early-out (CombatAI.cpp:97) skips both the
+			// spell event and the melee swing for the whole channel. Most
+			// channeled creature spells are instant-cast, so the cast-time
+			// stamp above is empty for them — without this extension the
+			// motion would swing or fire the next spell event mid-channel.
+			// The re-arm below keeps ticking during the channel exactly as
+			// C++'s EventMap does past the early-out return.
+			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); isChanneledSpell(dueSpell) && s != nil && s.Data != nil {
+				if dur, ok, derr := s.Data.SpellDuration(dueSpell.DurationIndex, 1); derr == nil && ok && dur > 0 {
+					if channelUntil := now.Add(time.Duration(castMs+uint32(dur)) * time.Millisecond); channelUntil.After(motion.CastingUntil) {
+						motion.CastingUntil = channelUntil
+					}
+				}
+			}
 			s.rearmAISpell(motion, dueSpell, spellID, now)
 			// CombatAI::UpdateAI (CombatAI.cpp:90-106): a fired spell event
 			// and the melee swing are mutually exclusive per tick — the
