@@ -1841,10 +1841,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	if s.isDeadOrGhost() {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterDead), true)
-		return true
-	}
+	// The dead-caster gate lives below the spell lookup: Spell::CheckCast
+	// (Spell.cpp:5174-5177) exempts passive and CASTABLE_WHILE_DEAD spells,
+	// which need the spell record.
 	// Confused/fleeing/charmed casters are NOT rejected here: C++ has no
 	// blanket gate for these states. Spell::CheckCasterAuras
 	// (Spell.cpp:6257-6389, called below at the C++ CheckCast position)
@@ -1877,6 +1876,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	spell, found, err := s.server.Data.Spell(spellID)
 	if err != nil {
 		s.debug("spell lookup failed", "account", s.accountName, "spell", spellID, "error", err)
+		return true
+	}
+	// Spell::CheckCast (Spell.cpp:5174-5177): the death-state arm rejects a
+	// dead caster only when the spell is not passive and lacks
+	// SPELL_ATTR0_CASTABLE_WHILE_DEAD (the client path never carries
+	// triggered flags, so the triggered half of the C++ gate is vacuous
+	// here). The gate sits after the spell lookup — the old pre-lookup
+	// gate made CASTABLE_WHILE_DEAD dead code on the client path (a dead
+	// player casting Shaman Reincarnation got SPELL_FAILED_CASTER_DEAD
+	// where C++ lets it through the rest of CheckCast).
+	if s.isDeadOrGhost() && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterDead), true)
 		return true
 	}
 	// HandleCastSpellOpcode (SpellHandler.cpp:420-430): the client resends
@@ -8522,6 +8533,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Unit.cpp:2002/2048 (split damage), and the bot_bm_ai sites (creature
 	// casters).
 	var missStatus []protocol.SpellMissStatus
+	// Spell::AddUnitTarget (Spell.cpp:2152): every AoE-selected target rolls
+	// the reflect arm of WorldObject::SpellHitResult (Object.cpp:2641-2648)
+	// individually — the reflect aura is consumed per target and each
+	// reflected target gets its own 1.5x return trip (Spell.cpp:2183-2184).
+	// The wire-target reflect blocks below are gated !areaSpell, so area
+	// targets never rolled reflect here before this; they took full
+	// effects and the reflector's aura was never consumed.
+	var reflectedAoETrips []uint64
+	if areaSpell || friendlyAreaSpell || entryAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell {
+		var aoeMisses []protocol.SpellMissStatus
+		hitTargets, reflectedAoETrips, aoeMisses = s.rollAreaTargetReflect(ctx, spell, hitTargets)
+		missStatus = append(missStatus, aoeMisses...)
+	}
 	isReflected := false
 	// reflectSourceGUID is the pre-retarget unit target of a reflected cast
 	// (Spell.cpp:2174-2188 keeps the reflector as the TargetInfo target;
@@ -10193,6 +10217,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex, false, true)
+				}
+				// Spell::AddUnitTarget per-target reflect (Spell.cpp:2152,
+				// 2174-2188): each AoE-selected target that reflected cleanly
+				// resolves its own return trip on the caster — one unscaled
+				// hit per reflected target (no chain falloff for AoE), with
+				// the same avoidance arm as the reflected jumps above.
+				for range reflectedAoETrips {
+					aoeReflectedDamage := damage
+					if weaponDamageEffect {
+						aoeReflectedDamage = chainScaledAmount(s.weaponDmgEffectBase(effCtx, spell, wd), chainMult, 0)
+					}
+					if isAreaDamageEffect && aoeReflectedDamage > 0 {
+						if avoid := s.aoeDamageAvoidanceMultiplier(effCtx, s.playerGUID, aoeSchoolMask); avoid != 1 {
+							aoeReflectedDamage = uint32(float64(aoeReflectedDamage) * avoid)
+						}
+					}
+					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, aoeReflectedDamage, effectIndex, false, true)
 				}
 			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
 				// Spell::EffectHeal (SpellEffects.cpp:1399): the damage<0
@@ -20083,6 +20124,72 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 		}
 	}
 	return protocol.SpellMissNone
+}
+
+// rollAreaTargetReflect runs the per-target reflect arm of
+// WorldObject::SpellHitResult (Object.cpp:2641-2648) over AoE-selected
+// targets (Spell::AddUnitTarget, Spell.cpp:2152 rolls for every target,
+// including AoE-selected ones — the wire-target reflect blocks above are
+// gated !areaSpell, so area targets never rolled this). Reflected targets
+// leave the kept list (no outbound effects) and ride MissStatus with their
+// ReflectResult; clean (NONE) reflects resolve the return trip to the
+// caster (Spell.cpp:2174-2188), returned as trips for the damage loop.
+// The reflect aura is consumed per target by the roll, like C++ (the
+// arrival-time ProcReflectDelayed arm below is armed per player reflector).
+// Reflect verdicts other than NONE null the return trip's _spellHitTarget
+// (Spell.cpp:2350, 7740-7743): the caster takes nothing, so only NONE
+// trips are returned.
+func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, targets []uint64) (kept []uint64, trips []uint64, misses []protocol.SpellMissStatus) {
+	kept = make([]uint64, 0, len(targets))
+	for _, guid := range targets {
+		reflected := false
+		var targetSess *session
+		if s.server != nil {
+			targetSess = s.server.findSessionByGUID(guid)
+		}
+		if targetSess != nil {
+			if spellReflectOffered(spell, s, guid, targetSess) && targetSess.checkSpellReflection(spell) {
+				reflected = true
+			}
+		} else if s.server != nil {
+			if tgt, ok := s.getCombatTarget(ctx, guid); ok &&
+				s.creatureReflectOffered(spell, tgt.Faction) &&
+				s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
+				reflected = true
+			}
+		}
+		if !reflected {
+			kept = append(kept, guid)
+			continue
+		}
+		// Spell::AddUnitTarget (Spell.cpp:2178): ReflectResult is the
+		// caster's own SpellHitResult, which can only be IMMUNE or NONE.
+		status := s.spellReflectReturnStatus(spell)
+		misses = append(misses, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissReflect, ReflectStatus: status})
+		if status != protocol.SpellMissNone {
+			continue
+		}
+		trips = append(trips, guid)
+		if targetSess != nil {
+			// ProcReflectDelayed (Spell.cpp:2181): at outbound-missile
+			// arrival the reflector's taken-side auras proc with
+			// PROC_HIT_REFLECT — mirrors the wire-target doReflect timer.
+			reflectorGUID := guid
+			procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, guid)
+			procTriggered := s.triggeredNoProcEvents > 0
+			procSpell := spell
+			procCasterGUID := s.playerGUID
+			time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
+				if s.server == nil {
+					return
+				}
+				if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
+					rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
+				}
+			})
+		}
+	}
+	return kept, trips, misses
 }
 
 // persistentAreaTickMissed rolls the per-tick miss for auras applied by a

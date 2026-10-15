@@ -3015,11 +3015,27 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			})
 		}
 	}
+	// Spell::PreprocessTarget (Spell.cpp:2350) and DoSpellHitOnUnit
+	// (Spell.cpp:7740-7743): a non-NONE ReflectResult nulls _spellHitTarget,
+	// so no unit resolves and the caster takes nothing — the reflector's
+	// entry rides MissStatus in the GO packet, but no effect leg runs for
+	// it. Only clean (NONE) reflects retarget the return trip to the pet.
+	reflectNulled := make(map[uint64]bool, len(reflectTrips))
+	for _, trip := range reflectTrips {
+		if trip.status != protocol.SpellMissNone {
+			reflectNulled[trip.victimGUID] = true
+		}
+	}
 	// resolveReflectTarget maps a reflected victim to the pet for the
 	// effect legs below — the return trip's _spellHitTarget is the caster
 	// (Spell.cpp:2350, 7740-7743), so damage, heal, dispel, aura and
-	// trigger effects all land on the pet instead of the reflector.
+	// trigger effects all land on the pet instead of the reflector. A
+	// nulled victim (non-NONE ReflectResult) resolves to 0 and every
+	// effect leg below skips it.
 	resolveReflectTarget := func(guid uint64) uint64 {
+		if reflectNulled[guid] {
+			return 0
+		}
 		if reflectedSet[guid] {
 			return motion.GUID
 		}
@@ -3128,17 +3144,27 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			return d
 		}
-		s.executePetSpellDamage(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, petDamageFor(resolveReflectTarget(targetGUID)), schoolMask, triggered)
+		if rt := resolveReflectTarget(targetGUID); rt != 0 {
+			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered)
+		}
 		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
 		// enemy takes its own hit — the per-target miss roll, resistance,
 		// absorb and kill legs run per target inside
 		// executePetSpellDamage, matching DoTargetSpellHit per target.
 		for _, areaHit := range areaHits {
-			s.executePetSpellDamage(ctx, motion, resolveReflectTarget(areaHit.GUID), spell.ID, petDamageFor(resolveReflectTarget(areaHit.GUID)), schoolMask, triggered)
+			if rt := resolveReflectTarget(areaHit.GUID); rt != 0 {
+				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered)
+			}
 		}
 	}
 	for i, effect := range spell.Effects {
 		if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
+			// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
+			// ReflectResult nulls _spellHitTarget, so the heal leg never
+			// runs for the nulled victim (resolveReflectTarget returns 0).
+			if resolveReflectTarget(targetGUID) == 0 {
+				continue
+			}
 			// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
 			// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
 			// the uint32 wrap must never turn a negative rolled value into
@@ -3200,6 +3226,12 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
 			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
 				triggerTarget := target
+				if reflectNulled[target.UnitGUID] {
+					// Spell.cpp:2350 — nulled reflect victim: the trigger
+					// leg's _spellHitTarget resolves no unit, so the
+					// trigger spell does not fire.
+					continue
+				}
 				if reflectedSet[target.UnitGUID] {
 					triggerTarget.UnitGUID = motion.GUID
 				}
@@ -3207,7 +3239,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 		if effect.Effect == spellEffectDispel {
-			s.executePetSpellDispel(ctx, motion, resolveReflectTarget(targetGUID), spell, effect, reflectedSet[targetGUID])
+			if rt := resolveReflectTarget(targetGUID); rt != 0 {
+				s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[targetGUID])
+			}
 		}
 		if effect.Effect == spellEffectDispelMechanic {
 			// Spell::EffectDispelMechanic (SpellEffects.cpp:4733-4756):
@@ -3216,8 +3250,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// dispatches it per unit target (SpellEffects.cpp:177) and the
 			// player path bridges it (spells.go case 108). Reflection
 			// maps the victim to the pet like the 38 arm above
-			// (Spell.cpp:2350, 7740-7743).
-			s.handleEffectDispelMechanic(ctx, resolveReflectTarget(targetGUID), spell, effect)
+			// (Spell.cpp:2350, 7740-7743); a nulled victim skips it.
+			if rt := resolveReflectTarget(targetGUID); rt != 0 {
+				s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+			}
 		}
 		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
@@ -3227,6 +3263,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
 			durationMs := petAuraDuration(s.server, auraSpell, motion)
 			victimGUID := resolveReflectTarget(targetGUID)
+			if victimGUID == 0 {
+				// Spell.cpp:2350 — nulled reflect victim: no aura leg.
+				continue
+			}
 			var victim combatTarget
 			if ct, ok := s.getCombatTarget(ctx, victimGUID); ok {
 				victim = ct
@@ -3248,6 +3288,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(areaHit.GUID)
+					if aVictimGUID == 0 {
+						continue
+					}
 					var aVictim combatTarget
 					if ct, ok := s.getCombatTarget(ctx, aVictimGUID); ok {
 						aVictim = ct
