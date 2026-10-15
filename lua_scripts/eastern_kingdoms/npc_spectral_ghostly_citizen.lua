@@ -36,8 +36,11 @@
 --   bridge, herod precedent) — tracking the latch alone would be a
 --   stub, so it is not registered).
 -- - ReceiveEmote (dance -> EnterEvadeMode; rude -> DoCast(player,
---   SPELL_SLAP = 6754) within 5yd else EMOTE_ONESHOT_RUDE;
---   wave/bow/kiss -> emote commands) — no emote bridge fires.
+--   SPELL_SLAP = 6754) within 5yd else EMOTE_ONESHOT_RUDE): dance has no
+--   EnterEvadeMode bridge and the slap's 5yd gate needs the player's X/Y
+--   (player surface exposes only GetZ) — both documented-only. The three
+--   ungated visual arms (wave/bow/kiss -> emote commands) ARE ported via
+--   event 8 + creature:PerformEmote (see onReceiveEmote).
 -- - GetStratholmeAI -> GetInstanceAI leg (instance-model blocked,
 --   standing).
 
@@ -46,6 +49,31 @@ local ENTRY_GHOSTLY_CITIZEN = 10385
 
 local SPELL_HAUNTING_PHANTOM = 16336
 local SPELL_DEBILITATING_TOUCH = 16333
+
+-- C++ ReceiveEmote (stratholme.cpp:297-320, npc_spectral_ghostly_citizenAI):
+-- event 8 fires in the Go engine (emote.go:210) with
+-- (event, creature, player, textEmote). Text-emote IDs from
+-- SharedDefines.h, oneshot IDs from the same file's Emote enum;
+-- creature:PerformEmote == Unit::HandleEmoteCommand (lua_objects.go:375).
+local TEXT_EMOTE_BOW = 17
+local TEXT_EMOTE_KISS = 58
+local TEXT_EMOTE_WAVE = 101
+
+local EMOTE_ONESHOT_BOW = 2
+local EMOTE_ONESHOT_WAVE = 3
+local EMOTE_ONESHOT_FLEX = 23
+
+-- C++-exact for the three ungated arms: wave -> ONESHOT_WAVE,
+-- bow -> ONESHOT_BOW, kiss -> ONESHOT_FLEX.
+local function onReceiveEmote(_, creature, _, textEmote)
+    if textEmote == TEXT_EMOTE_WAVE then
+        creature:PerformEmote(EMOTE_ONESHOT_WAVE)
+    elseif textEmote == TEXT_EMOTE_BOW then
+        creature:PerformEmote(EMOTE_ONESHOT_BOW)
+    elseif textEmote == TEXT_EMOTE_KISS then
+        creature:PerformEmote(EMOTE_ONESHOT_FLEX)
+    end
+end
 
 local timers = {}
 
@@ -133,5 +161,6 @@ for _, entry in ipairs({ ENTRY_SPECTRAL_CITIZEN, ENTRY_GHOSTLY_CITIZEN }) do
     RegisterCreatureEvent(entry, 1, onEnterCombat)
     RegisterCreatureEvent(entry, 2, onCombatEnd)
     RegisterCreatureEvent(entry, 4, onCombatEnd)
+    RegisterCreatureEvent(entry, 8, onReceiveEmote)
     RegisterCreatureEvent(entry, 23, onReset)
 end
