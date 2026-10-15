@@ -184,6 +184,8 @@ local ENTRY_CRUSHER_TENTACLE = 33966
 local ENTRY_IMMORTAL_GUARDIAN = 33988
 
 local SPELL_DARK_VOLLEY = 63038
+local SPELL_SHADOW_NOVA = 62714
+local SPELL_SHADOW_NOVA_2 = 65719
 local SPELL_BLACK_PLAGUE = 64153
 local SPELL_CURSE_OF_DOOM = 64157
 local SPELL_APATHY = 64156
@@ -360,9 +362,18 @@ local function cancelAll(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_guardian_of_yogg_saronAI::JustDied (:1190-1194): non-triggered
+-- DoCastAOE(SPELL_SHADOW_NOVA 62714) + DoCastAOE(SPELL_SHADOW_NOVA_2
+-- 65719) — self-cast form per the darkVolleyTick DoCastAOE convention.
+local function guardianDied(event, creature, killer)
+    creature:CastSpell(creature, SPELL_SHADOW_NOVA)
+    creature:CastSpell(creature, SPELL_SHADOW_NOVA_2)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 1, guardianEnterCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 2, cancelAll)
-RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 4, guardianDied)
 RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 23, cancelAll)
 RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 1, corruptorEnterCombat)
 RegisterCreatureEvent(ENTRY_CORRUPTOR_TENTACLE, 2, cancelAll)

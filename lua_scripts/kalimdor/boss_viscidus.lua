@@ -46,8 +46,8 @@
 --   him under 5% hp — all cross-AI/instance legs, no bridge. Per
 --   the no-placeholder-Lua rule, no npc_glob_of_viscidus.lua file
 --   is created (cthun tentacle precedent needs real content).
--- - JustDied: self-cast VISCIDUS_SUICIDE 26003 + _JustDied()
---   instance legs — no bridge (no OnDied self-cast precedent).
+-- - JustDied: the VISCIDUS_SUICIDE 26003 self-cast is ported (event
+--   4); summons.DespawnAll() + _JustDied() instance legs — no bridge.
 -- - EnterEvadeMode: summons.DespawnAll() + instance leg.
 -- - BossAI ctor leg DATA_VISCIDUS and _Reset() — instance bridge,
 --   standing.
@@ -56,6 +56,7 @@ local ENTRY = 15299
 local SPELL_POISON_SHOCK      = 25993
 local SPELL_POISONBOLT_VOLLEY = 25991
 local SPELL_TOXIN             = 26575
+local SPELL_VISCIDUS_SUICIDE  = 26003
 
 local timers = {}
 
@@ -121,7 +122,11 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_viscidusAI::JustDied (:203-208): non-triggered self-cast
+-- SPELL_VISCIDUS_SUICIDE (2-arg DoCast(me, ...)); the summons.DespawnAll()
+-- + _JustDied() instance legs have no bridge.
 local function onDied(event, creature, killer)
+    creature:CastSpell(creature, SPELL_VISCIDUS_SUICIDE)
     cancelTimers(creature:GetGUID())
 end
 

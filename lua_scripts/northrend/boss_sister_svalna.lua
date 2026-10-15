@@ -214,6 +214,9 @@ local SAY_SVALNA_AGGRO = 3
 local SAY_SVALNA_KILL = 4
 local SAY_SVALNA_DEATH = 6
 
+local SAY_CAPTAIN_DEATH = 0
+local SAY_CAPTAIN_SECOND_DEATH = 3
+
 local SPELL_DIVINE_SURGE = 71465
 
 local SPELL_SCOURGE_STRIKE = 71488
@@ -478,4 +481,34 @@ for _, entry in ipairs(YMIRJAR_ENTRIES) do
     RegisterCreatureEvent(entry, 2, ymirjarLeaveCombat)
     RegisterCreatureEvent(entry, 4, ymirjarDied)
     RegisterCreatureEvent(entry, 23, ymirjarReset)
+end
+
+-- C++ npc_argent_captainAI::JustDied (:820-829): the _firstDeath latch
+-- (true at construction) — first death Talk(SAY_CAPTAIN_DEATH 0) and
+-- flips the latch; later deaths Talk(SAY_CAPTAIN_SECOND_DEATH 3). The
+-- latch is per-AI-instance and survives in-place resurrection, so it is
+-- keyed by GUID and never cleared on events 2/23 (a fresh spawn gets a
+-- fresh GUID, matching the ctor). The 4 captain entries are Go-side
+-- registered (boss_ai.go RegisterLuaBoss lines).
+local captainFirstDeath = {}
+
+local CAPTAIN_ENTRIES = {
+    NPC_CAPTAIN_ARNATH,
+    NPC_CAPTAIN_BRANDON,
+    NPC_CAPTAIN_GRONDEL,
+    NPC_CAPTAIN_RUPERT,
+}
+
+local function captainDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    if captainFirstDeath[guid] ~= false then
+        captainFirstDeath[guid] = false
+        creature:Talk(SAY_CAPTAIN_DEATH)
+    else
+        creature:Talk(SAY_CAPTAIN_SECOND_DEATH)
+    end
+end
+
+for _, entry in ipairs(CAPTAIN_ENTRIES) do
+    RegisterCreatureEvent(entry, 4, captainDied)
 end
