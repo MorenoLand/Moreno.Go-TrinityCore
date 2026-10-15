@@ -26,8 +26,10 @@
 --   within 40 (C++ SelectTargetMethod::Random, 0, 40, true — janalai
 --   randomPlayerInRange convention) init 10s -> [11000,30999]. All four are
 --   DoCast without the triggered flag (non-triggered, jeklik convention);
---   nil/dead target leaves the C++ timer expired so the next tick retries
---   — modeled as a 1s retry (batrider bomb precedent).
+--   every arm re-arms unconditionally on the firing tick — Icebolt's
+--   DoCast(SelectTarget(...)) is null-safe and its timer re-arms even on
+--   a nil target (boss_rage_winterchill.cpp UpdateAI); Talk(SAY_*) fires
+--   after the cast unconditionally.
 -- - Engage (C++ JustEngagedWith, non-instance leg): Talk SAY_ONAGGRO (4).
 -- - KilledUnit: Talk SAY_ONSLAY (1), no target gate in C++ (shade_of_aran
 --   precedent) — event 3.
@@ -121,20 +123,16 @@ local function onSpell(creature, guid, idx)
     else
         target = randomPlayerInRange(creature, spec.randomDist)
     end
-    if target and not target:IsDead() then
+    if target then
         creature:CastSpell(target, spec.spell)
-        if spec.say then
-            creature:Talk(spec.say)
-        end
-        schedule(guid, "spell" .. idx,
-            math.random(spec.rlo, spec.rhi), function()
-                onSpell(creature, guid, idx)
-            end)
-    else
-        schedule(guid, "spell" .. idx, 1000, function()
+    end
+    if spec.say then
+        creature:Talk(spec.say)
+    end
+    schedule(guid, "spell" .. idx,
+        math.random(spec.rlo, spec.rhi), function()
             onSpell(creature, guid, idx)
         end)
-    end
 end
 
 local function onEnterCombat(event, creature, target)

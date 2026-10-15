@@ -104,10 +104,18 @@ local function onSweep(creature, guid)
         if victim then
             creature:CastSpell(victim, SPELL_SWEEP)
         end
+        schedule(guid, "sweep", math.random(15000, 30000), function()
+            onSweep(creature, guid)
+        end)
+    else
+        -- C++ keeps decrementing Sweep_Timer while submerged; an
+        -- expiry wraps the uint32 and kills the arm for the rest of
+        -- combat (boss_ouro.cpp UpdateAI). Mirror by dropping the key.
+        local per = timers[guid]
+        if per then
+            per["sweep"] = nil
+        end
     end
-    schedule(guid, "sweep", math.random(15000, 30000), function()
-        onSweep(creature, guid)
-    end)
 end
 
 -- C++ SandBlast_Timer (!Submerged): DoCastVictim(SPELL_SANDBLAST),
@@ -119,10 +127,17 @@ local function onSandBlast(creature, guid)
         if victim then
             creature:CastSpell(victim, SPELL_SANDBLAST)
         end
+        schedule(guid, "sandblast", math.random(20000, 35000), function()
+            onSandBlast(creature, guid)
+        end)
+    else
+        -- Same uint32-underflow kill as Sweep_Timer (boss_ouro.cpp
+        -- UpdateAI): drop the key, no re-arm.
+        local per = timers[guid]
+        if per then
+            per["sandblast"] = nil
+        end
     end
-    schedule(guid, "sandblast", math.random(20000, 35000), function()
-        onSandBlast(creature, guid)
-    end)
 end
 
 -- C++ Back_Timer (Submerged): RemoveFlag/SetFaction legs are

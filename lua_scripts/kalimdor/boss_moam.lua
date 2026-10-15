@@ -71,29 +71,27 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ DoAction(ACTION_STONE_PHASE_END): remove Energize, schedule
--- next stone phase at 90s, clear the stone-phase flag.
-local function endStonePhase(creature, guid)
-    creature:RemoveAura(SPELL_ENERGIZE)
-    local state = moamState[guid]
-    if state then
-        state.stonePhase = false
-    end
-    schedule(guid, "stonephase", 90000, function()
-        startStonePhase(creature, guid)
-    end)
-end
+-- Forward declaration: startStonePhase's "stonephaseend" closure
+-- calls endStonePhase before its definition (malown precedent).
+local endStonePhase
 
 -- C++ DoAction(ACTION_STONE_PHASE_START): summon the three mana
--- fiends + Energize, schedule stone phase end at 90s.
+-- fiends + Energize, schedule stone phase end at 90s. While
+-- _isStonePhase, UpdateAI acts only on EVENT_STONE_PHASE_END — a
+-- mid-phase EVENT_STONE_PHASE is silently consumed, never re-fired
+-- (boss_moam.cpp UpdateAI) — so drop any still-pending "stonephase"
+-- timer here (DamageTaken can trigger the phase before the
+-- engage-armed 90s timer elapses).
 local function startStonePhase(creature, guid)
     local state = moamState[guid]
     if state == nil then
         return
     end
-    -- C++ re-fires ACTION_STONE_PHASE_START even mid-stone-phase
-    -- (EVENT_STONE_PHASE keeps its 90s Reset cadence; ScheduleEvent
-    -- dedups, and schedule() replaces by key the same way).
+    local per = timers[guid]
+    if per and per["stonephase"] then
+        RemoveEventById(per["stonephase"])
+        per["stonephase"] = nil
+    end
     state.stonePhase = true
     creature:CastSpell(creature, SPELL_SUMMON_MANA_FIEND_1)
     creature:CastSpell(creature, SPELL_SUMMON_MANA_FIEND_2)
@@ -101,6 +99,19 @@ local function startStonePhase(creature, guid)
     creature:CastSpell(creature, SPELL_ENERGIZE)
     schedule(guid, "stonephaseend", 90000, function()
         endStonePhase(creature, guid)
+    end)
+end
+
+-- C++ DoAction(ACTION_STONE_PHASE_END): remove Energize, schedule
+-- next stone phase at 90s, clear the stone-phase flag.
+endStonePhase = function(creature, guid)
+    creature:RemoveAura(SPELL_ENERGIZE)
+    local state = moamState[guid]
+    if state then
+        state.stonePhase = false
+    end
+    schedule(guid, "stonephase", 90000, function()
+        startStonePhase(creature, guid)
     end)
 end
 

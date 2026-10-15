@@ -12,8 +12,9 @@
 -- Entry: ruins_of_ahnqiraj.h:46 names NPC_OSSIRIAN = 15339; the
 -- creature_template ScriptName binding stays DB-side.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 9 OnDamageTaken, 14 OnSpellHit, 23
--- OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
+-- OnTargetDied, 4 OnDied, 14 OnSpellHit, 23 OnReset (no event-9
+-- handler: C++ has no health latch). Timers via CreateLuaEvent;
+-- melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: schedule SILENCE (30s), CYCLONE (20s), STOMP (30s);
@@ -98,16 +99,11 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ EVENT_SILENCE: DoCastAOE(25195), init 30s -> 20-30s.
--- No AoE bridge; cast on each live player in the instance.
+-- C++ EVENT_SILENCE: DoCastAOE(25195), init 30s -> 20-30s
+-- (DoCastAOE lowers to a self-cast; the spell's own AoE targeting
+-- resolves the victims).
 local function onSilence(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            creature:CastSpell(p, SPELL_CURSE_OF_TONGUES)
-        end
-    end
+    creature:CastSpell(creature, SPELL_CURSE_OF_TONGUES)
     schedule(guid, "silence", math.random(20000, 30000), function()
         onSilence(creature, guid)
     end)
@@ -136,6 +132,12 @@ end
 -- weakness is present; checked on a 5s timer (no per-tick UpdateAI
 -- in Lua).
 local function checkSupreme(creature, guid)
+    -- C++ re-checks every UpdateAI tick; the 5s leg must stay armed
+    -- even when the aura (or a weakness) is present, or the periodic
+    -- check dies after the first pass.
+    schedule(guid, "supreme", 5000, function()
+        checkSupreme(creature, guid)
+    end)
     if creature:HasAura(SPELL_SUPREME) then
         return
     end
@@ -146,9 +148,6 @@ local function checkSupreme(creature, guid)
     end
     creature:CastSpell(creature, SPELL_SUPREME)
     creature:Talk(0)
-    schedule(guid, "supreme", 5000, function()
-        checkSupreme(creature, guid)
-    end)
 end
 
 -- C++ UpdateAI no-kiting leg: victim at 60-120yd -> SPELL_SUMMON.

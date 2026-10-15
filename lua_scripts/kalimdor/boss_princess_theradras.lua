@@ -113,8 +113,9 @@ end
 -- C++ RepulsiveGaze: DoCastVictim(21869), non-triggered, init 23s
 -- -> 20s.
 local function onRepulsiveGaze(creature, guid)
+    -- C++ DoCastVictim null-guards only (UnitAI.cpp) — no alive gate.
     local victim = creature:GetVictim()
-    if victim and not victim:IsDead() then
+    if victim then
         creature:CastSpell(victim, SPELL_REPULSIVE_GAZE)
     end
     schedule(guid, "repulsivegaze", 20000, function()
