@@ -120,7 +120,7 @@ local function bossTick(creature, guid)
     -- triggered self-cast, root=true afterwards (C++-exact,
     -- rokmar frenzy once-guard precedent).
     if not st.root and creature:GetHealthPct() <= 20 then
-        creature:CastSpell(nil, SPELL_FOUL_SPORES)
+        creature:CastSpell(creature, SPELL_FOUL_SPORES)
         st.root = true
     end
 

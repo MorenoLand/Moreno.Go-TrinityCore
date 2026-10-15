@@ -116,7 +116,7 @@ local function bossTick(creature, guid)
     -- DoCastAOE (non-triggered self-cast, supremus precedent),
     -- re-arm {20s,30s} (C++-exact).
     if st.ensnaringMoss <= 1000 then
-        creature:CastSpell(nil, SPELL_ENSNARING_MOSS)
+        creature:CastSpell(creature, SPELL_ENSNARING_MOSS)
         st.ensnaringMoss = math.random(20000, 30000)
     else
         st.ensnaringMoss = st.ensnaringMoss - 1000
@@ -126,7 +126,7 @@ local function bossTick(creature, guid)
     -- (non-triggered self-cast, supremus precedent), re-arm
     -- {14s,18s} (C++-exact).
     if st.waterSpit <= 1000 then
-        creature:CastSpell(nil, SPELL_WATER_SPIT)
+        creature:CastSpell(creature, SPELL_WATER_SPIT)
         st.waterSpit = math.random(14000, 18000)
     else
         st.waterSpit = st.waterSpit - 1000
@@ -136,7 +136,7 @@ local function bossTick(creature, guid)
     -- HealthBelowPct(10)) — DoCast(me) non-triggered self-cast
     -- (C++-exact).
     if not st.frenzyUsed and creature:GetHealthPct() < 10 then
-        creature:CastSpell(nil, SPELL_FRENZY)
+        creature:CastSpell(creature, SPELL_FRENZY)
         st.frenzyUsed = true
     end
 end

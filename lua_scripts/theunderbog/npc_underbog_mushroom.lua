@@ -91,7 +91,7 @@ local function mushroomTick(creature, guid)
     -- every 3s — non-triggered self-cast (C++ DoCast default,
     -- vaelastrasz convention).
     if st.grow <= 1000 then
-        creature:CastSpell(nil, SPELL_GROW)
+        creature:CastSpell(creature, SPELL_GROW)
         st.grow = 3000
     else
         st.grow = st.grow - 1000
@@ -115,8 +115,8 @@ RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 5, function(_, creature)
     -- C++ Reset arms, fired on spawn (frozen-core precedent):
     -- triggered self casts of putrid mushroom and spore cloud
     -- (C++-exact arm order).
-    creature:CastSpell(nil, SPELL_PUTRID_MUSHROOM, true)
-    creature:CastSpell(nil, SPELL_SPORE_CLOUD, true)
+    creature:CastSpell(creature, SPELL_PUTRID_MUSHROOM, true)
+    creature:CastSpell(creature, SPELL_SPORE_CLOUD, true)
     timers[guid] = CreateLuaEvent(function()
         mushroomTick(creature, guid)
     end, 1000, 0)

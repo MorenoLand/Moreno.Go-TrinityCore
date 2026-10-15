@@ -113,7 +113,7 @@ local function bossTick(creature, guid)
     -- (C++-exact).
     if st.stoneskin <= 1000 then
         if creature:GetHealthPct() < 100 then
-            creature:CastSpell(nil, SPELL_TAINTED_STONESKIN_TOTEM)
+            creature:CastSpell(creature, SPELL_TAINTED_STONESKIN_TOTEM)
         end
         st.stoneskin = 30000
     else
@@ -123,7 +123,7 @@ local function bossTick(creature, guid)
     -- Tainted earthgrab totem 31981: 20s one-shot, DoCast(me)
     -- (C++-exact, no re-arm).
     if st.earthgrab <= 1000 then
-        creature:CastSpell(nil, SPELL_TAINTED_EARTHGRAB_TOTEM)
+        creature:CastSpell(creature, SPELL_TAINTED_EARTHGRAB_TOTEM)
         st.earthgrab = 999999
     else
         st.earthgrab = st.earthgrab - 1000
@@ -132,7 +132,7 @@ local function bossTick(creature, guid)
     -- Corrupted nova totem 31991: 60s one-shot, DoCast(me)
     -- (C++-exact, no re-arm).
     if st.nova <= 1000 then
-        creature:CastSpell(nil, SPELL_CORRUPTED_NOVA_TOTEM)
+        creature:CastSpell(creature, SPELL_CORRUPTED_NOVA_TOTEM)
         st.nova = 999999
     else
         st.nova = st.nova - 1000
@@ -141,7 +141,7 @@ local function bossTick(creature, guid)
     -- Mennu's healing ward 34980: {14s,25s}, DoCast(me),
     -- re-arm {14s,25s} (C++-exact).
     if st.healingWard <= 1000 then
-        creature:CastSpell(nil, SPELL_MENNUS_HEALING_WARD)
+        creature:CastSpell(creature, SPELL_MENNUS_HEALING_WARD)
         st.healingWard = math.random(14000, 25000)
     else
         st.healingWard = st.healingWard - 1000

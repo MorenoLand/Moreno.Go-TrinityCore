@@ -142,9 +142,9 @@ RegisterCreatureEvent(ENTRY_AHUNE, 1, function(_, creature)
     -- directly on engage): DoCastSelf(SPELL_STAND),
     -- DoCastSelf(SPELL_AHUNE_SPANKY_HANDS), DoCastSelf
     -- (SPELL_AHUNES_SHIELD), C++-exact arm order.
-    creature:CastSpell(nil, SPELL_STAND)
-    creature:CastSpell(nil, SPELL_AHUNE_SPANKY_HANDS)
-    creature:CastSpell(nil, SPELL_AHUNES_SHIELD)
+    creature:CastSpell(creature, SPELL_STAND)
+    creature:CastSpell(creature, SPELL_AHUNE_SPANKY_HANDS)
+    creature:CastSpell(creature, SPELL_AHUNES_SHIELD)
     states[guid] = freshState()
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)

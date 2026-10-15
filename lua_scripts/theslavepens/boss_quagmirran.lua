@@ -140,7 +140,7 @@ local function bossTick(creature, guid)
     -- (non-triggered self-cast, supremus precedent), re-arm
     -- {20s,25s} (C++-exact).
     if st.acidSpray <= 1000 then
-        creature:CastSpell(nil, SPELL_ACID_SPRAY)
+        creature:CastSpell(creature, SPELL_ACID_SPRAY)
         st.acidSpray = math.random(20000, 25000)
     else
         st.acidSpray = st.acidSpray - 1000
@@ -173,7 +173,7 @@ local function bossTick(creature, guid)
     -- Poison bolt volley 34780: 31s init then 24s — DoCast(me)
     -- non-triggered self-cast (C++-exact), re-arm 24000.
     if st.poisonBoltVolley <= 1000 then
-        creature:CastSpell(nil, SPELL_POISON_BOLT_VOLLEY)
+        creature:CastSpell(creature, SPELL_POISON_BOLT_VOLLEY)
         st.poisonBoltVolley = 24000
     else
         st.poisonBoltVolley = st.poisonBoltVolley - 1000
