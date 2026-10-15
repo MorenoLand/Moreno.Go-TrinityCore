@@ -40,7 +40,7 @@
 -- other units, cast on the tank"). Sear nova 38445 20-60s then
 -- 20-60s, DoCastVictim (C++-exact). Enrage 24318 600s then 90s
 -- repeat, non-triggered self-cast (C++-exact). Blessing of the
--- Tides: once-guarded at <75% health (C++-exact) — non-
+-- Tides: once-guarded at <=75% health (C++-exact) — non-
 -- triggered self-cast 38449; the C++ "at least one advisor
 -- alive" precondition has no cross-creature bridge (the advisor
 -- DoAction EventSharkkis/Tidalvess/CaribdisDeath relays and the
@@ -244,11 +244,11 @@ local function karathressTick(creature, guid)
         st.enrage = 90000
     end
 
-    -- Blessing of the Tides: once-guarded at <75% health. The
+    -- Blessing of the Tides: once-guarded at <=75% health. The
     -- C++ at-least-one-advisor-alive precondition has no cross-
     -- creature bridge; the me->Yell(raw string) arm has no
     -- raw-text speech bridge.
-    if not st.blessingOfTides and creature:GetHealthPct() < 75 then
+    if not st.blessingOfTides and creature:GetHealthPct() <= 75 then
         st.blessingOfTides = true
         creature:CastSpell(creature, SPELL_BLESSING_OF_THE_TIDES)
         creature:PlayDirectSound(SOUND_GAIN_BLESSING_OF_TIDES)
