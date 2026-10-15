@@ -112,7 +112,9 @@
 -- (the curator engage-cast precedent);
 -- npc_spirit_warden (36824) — SOUL_RIP 69397 victim-cast
 -- {12s,15s}/{23s,27s} (:1833/:1855-1856) + Reset one-shot
--- DoCastSelf(SPELL_DARK_HUNGER 69383) non-triggered (:1835).
+-- 1-arg DoCast(SPELL_DARK_HUNGER 69383) non-triggered (:1835) —
+-- target resolved from DBC AISpellInfo (UnitAI.cpp:113), kept as
+-- self-cast (self-buff aura).
 -- npc_valkyr_shadowguard / npc_strangulate_vehicle /
 -- npc_spirit_bomb / npc_broken_frostmourne — zero Talk lines —
 -- NOT registered (the bronjahm npc_corrupted_soul_fragment
@@ -282,8 +284,10 @@ local function ragingSpiritLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ npc_spirit_warden: Reset — DoCastSelf(SPELL_DARK_HUNGER)
--- one-shot, EVENT_SOUL_RIP {12s,15s} (:1833-1835/:1855-1856).
+-- C++ npc_spirit_warden: Reset — 1-arg DoCast(SPELL_DARK_HUNGER)
+-- one-shot, EVENT_SOUL_RIP {12s,15s} (:1833-1835/:1855-1856);
+-- fires in Reset in C++, keyed to event 1 (engage) here per the
+-- Reset re-key convention (target resolves via AISpellInfo).
 local function onSoulRip(creature, guid)
     creature:CastSpell(nil, SPELL_SOUL_RIP)
     schedule(guid, "soul_rip", {23000, 27000}, function() onSoulRip(creature, guid) end)

@@ -116,9 +116,10 @@
 --   machine (scheduled from DoAction legs, :411/:417) — the
 --   gothik phase-machine precedent.
 -- boss_sister_svalna JustEngagedWith EVENT_IMPALING_SPEAR
---   (:359, 40-50s, re-arm 20-25s, :500-505) — the SelectTarget(
---   Random, 1, ...) leg has no bridge; the DoCast(me,
---   SPELL_AETHER_SHIELD 71463) sub-leg rides the same event.
+--   (:359, 40-50s, re-arm 20-25s, :500-509) — PORTED: self-cast
+--   AETHER_SHIELD 71463 then victim-cast IMPALING_SPEAR 71443 on
+--   a map-wide random player; the -71443 aura-exclusion leg and
+--   the offset-1 tank-skip are documented unbridged caveats.
 -- boss_sister_svalna JustEngagedWith EVENT_AETHER_SHIELD
 --   (:360, 100-110s) — scheduled but has NO case in the UpdateAI
 --   switch: dead event, nothing to port (upstream finding).
@@ -160,11 +161,11 @@
 -- npc_crok_scourgebane SetGUID / WaypointReached / WaypointStarted
 --   (:591-689) — gauntlet waypoint machine, no bridge.
 -- npc_frostwing_ymirjar_vrykul UpdateAI random-target arms —
---   EVENT_YMIRJAR_TWISTED_WINDS (71306),
---   EVENT_YMIRJAR_ICE_TRAP (71249), EVENT_YMIRJAR_VOLLEY (71252),
---   EVENT_YMIRJAR_BANISH (71298): all SelectTarget(Random, ...)
---   legs, no bridge; EVENT_YMIRJAR_SUMMON (71303) is a summon
---   machine (+ _events.DelayEvents(2s) leg, no bridge).
+--   EVENT_YMIRJAR_TWISTED_WINDS (71306), EVENT_YMIRJAR_ICE_TRAP
+--   (71249), EVENT_YMIRJAR_VOLLEY (71252), EVENT_YMIRJAR_BANISH
+--   (71298) PORTED via the map-wide randomPlayerTarget pool
+--   (the skadi precedent); EVENT_YMIRJAR_SUMMON (71303) stays
+--   parked (summon machine + _events.DelayEvents(2s) leg).
 -- npc_frostwing_ymirjar_vrykul Reset (:1189-1213) — the
 --   RemoveAurasDueToSpell(SPELL_ARCTIC_CHILL) leg has no aura
 --   bridge on this path; the OOC EVENT_YMIRJAR_SPIRIT_STREAM
@@ -233,6 +234,13 @@ local SPELL_YMIRJAR_SHADOW_BOLT = 71296
 local SPELL_DEATH_EMBRACE = 71299
 local SPELL_WARLORDS_PRESENCE = 71244
 
+local SPELL_TWISTED_WINDS = 71306
+local SPELL_ICE_TRAP = 71249
+local SPELL_VOLLEY = 71252
+local SPELL_BANISH = 71298
+local SPELL_IMPALING_SPEAR = 71443
+local SPELL_AETHER_SHIELD = 71463
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -259,14 +267,48 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- boss_skadi randomPlayerTarget precedent: map/instance-scoped
+-- alive-player pool, optional max-distance filter. C++
+-- SelectTarget offset-1 tank-skip and aura-exclusion legs have
+-- no bridge; the pool caveat is documented, not blocking.
+local function randomPlayerTarget(creature, maxDist)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead()
+                and (not maxDist or creature:IsWithinDist(plr, maxDist)) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ boss_sister_svalna::JustEngagedWith :353-362 — DoCastSelf(
 -- SPELL_DIVINE_SURGE, true) is a TRIGGERED self-cast; the
--- EVENT_SVALNA_COMBAT seed (9s) is a one-shot Talk arm. The
--- EVENT_IMPALING_SPEAR (40-50s) arm is random-target gated (no
--- bridge); EVENT_AETHER_SHIELD (100-110s) is a dead event (no
--- case in the UpdateAI switch).
+-- EVENT_SVALNA_COMBAT seed (9s) is a one-shot Talk arm.
+-- EVENT_IMPALING_SPEAR (:359 40-50s; :500-509) — SelectTarget(
+-- Random, 1, 0.0f, true, true, -SPELL_IMPALING_SPEAR 71443) ->
+-- DoCast(me, SPELL_AETHER_SHIELD 71463) then DoCast(target,
+-- SPELL_IMPALING_SPEAR 71443), re-arm 20-25s unconditional
+-- (re-scheduled outside the target guard). The -71443
+-- aura-exclusion leg and the offset-1 tank-skip are documented
+-- unbridged caveats, not blockers.
 local function onSvalnaCombat(creature)
     creature:Talk(SAY_SVALNA_AGGRO)
+end
+
+local function onSvalnaImpalingSpear(creature, guid)
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(creature, SPELL_AETHER_SHIELD)
+        creature:CastSpell(target, SPELL_IMPALING_SPEAR)
+    end
+    schedule(guid, "impaling", {20000, 25000},
+        function() onSvalnaImpalingSpear(creature, guid) end)
 end
 
 local function svalnaEnterCombat(event, creature, target)
@@ -274,6 +316,8 @@ local function svalnaEnterCombat(event, creature, target)
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_DIVINE_SURGE, true)
     schedule(guid, "combat", 9000, function() onSvalnaCombat(creature) end)
+    schedule(guid, "impaling", {40000, 50000},
+        function() onSvalnaImpalingSpear(creature, guid) end)
 end
 
 local function svalnaLeaveCombat(event, creature)
@@ -421,6 +465,58 @@ local function onYmirjarDeathEmbrace(creature, guid)
         function() onYmirjarDeathEmbrace(creature, guid) end)
 end
 
+-- C++ EVENT_YMIRJAR_TWISTED_WINDS :1315-1317 — SelectTarget(
+-- Random, 0, 0.f, true) -> DoCast(target, SPELL_TWISTED_WINDS
+-- 71306), Repeat {10s,20s} unconditional (outside the target
+-- guard); seeded :1249 {10s,20s} on the frostbinder.
+local function onYmirjarTwistedWinds(creature, guid)
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_TWISTED_WINDS)
+    end
+    schedule(guid, "twisted", {10000, 20000},
+        function() onYmirjarTwistedWinds(creature, guid) end)
+end
+
+-- C++ EVENT_YMIRJAR_ICE_TRAP :1336-1339 — SelectTarget(Random, 1,
+-- 20.0f, true) -> DoCast(target, SPELL_ICE_TRAP 71249), Repeat
+-- {15s,20s} unconditional; seeded :1260 {5s,10s} on the
+-- huntress.
+local function onYmirjarIceTrap(creature, guid)
+    local target = randomPlayerTarget(creature, 20)
+    if target then
+        creature:CastSpell(target, SPELL_ICE_TRAP)
+    end
+    schedule(guid, "icetrap", {15000, 20000},
+        function() onYmirjarIceTrap(creature, guid) end)
+end
+
+-- C++ EVENT_YMIRJAR_VOLLEY :1341-1344 — SelectTarget(Random, 1,
+-- 40.0f, true) -> DoCast(target, SPELL_VOLLEY 71252), Repeat
+-- {10s,20s} unconditional; seeded :1261 {20s,30s} on the
+-- huntress.
+local function onYmirjarVolley(creature, guid)
+    local target = randomPlayerTarget(creature, 40)
+    if target then
+        creature:CastSpell(target, SPELL_VOLLEY)
+    end
+    schedule(guid, "volley", {10000, 20000},
+        function() onYmirjarVolley(creature, guid) end)
+end
+
+-- C++ EVENT_YMIRJAR_BANISH :1358-1361 — SelectTarget(Random, 1,
+-- 20.0f, true) -> DoCast(target, SPELL_BANISH 71298), Repeat
+-- {10s,20s} unconditional; seeded :1267 {10s,20s} on the
+-- deathbringer.
+local function onYmirjarBanish(creature, guid)
+    local target = randomPlayerTarget(creature, 20)
+    if target then
+        creature:CastSpell(target, SPELL_BANISH)
+    end
+    schedule(guid, "banish", {10000, 20000},
+        function() onYmirjarBanish(creature, guid) end)
+end
+
 local function ymirjarEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -429,6 +525,8 @@ local function ymirjarEnterCombat(event, creature, target)
         creature:CastSpell(creature, SPELL_ARCTIC_CHILL)
         schedule(guid, "frozen", {5000, 10000},
             function() onYmirjarFrozenOrb(creature, guid) end)
+        schedule(guid, "twisted", {10000, 20000},
+            function() onYmirjarTwistedWinds(creature, guid) end)
     elseif entry == ENTRY_YMIRJAR_BATTLE_MAIDEN then
         schedule(guid, "barbaric", {5000, 8000},
             function() onYmirjarBarbaricStrike(creature, guid) end)
@@ -440,6 +538,10 @@ local function ymirjarEnterCombat(event, creature, target)
     elseif entry == ENTRY_YMIRJAR_HUNTRESS then
         schedule(guid, "rapid", {10000, 20000},
             function() onYmirjarRapidShot(creature, guid) end)
+        schedule(guid, "icetrap", {5000, 10000},
+            function() onYmirjarIceTrap(creature, guid) end)
+        schedule(guid, "volley", {20000, 30000},
+            function() onYmirjarVolley(creature, guid) end)
         schedule(guid, "shoot", 1000,
             function() onYmirjarShoot(creature, guid) end)
     elseif entry == ENTRY_YMIRJAR_DEATHBRINGER then
@@ -447,6 +549,8 @@ local function ymirjarEnterCombat(event, creature, target)
             function() onYmirjarShadowBolt(creature, guid) end)
         schedule(guid, "embrace", {5000, 10000},
             function() onYmirjarDeathEmbrace(creature, guid) end)
+        schedule(guid, "banish", {10000, 20000},
+            function() onYmirjarBanish(creature, guid) end)
     end
 end
 
