@@ -15,10 +15,10 @@
 -- target has no cast leg.
 -- Eluna creature events: 5 OnSpawn, 23 OnReset, 14 OnHitBySpell,
 -- 9 OnDamageTaken, 2 OnLeaveCombat, 4 OnDied.
--- Spells (TournamentDummy enum :173-187): SPELL_CHARGE_DEFEND 64100,
+-- Spells (TournamentDummy enum :169-191): SPELL_CHARGE_DEFEND 64100,
 -- SPELL_RANGED_DEFEND 62719, SPELL_PLAYER_BREAK_SHIELD 62626,
 -- SPELL_PLAYER_CHARGE 62874, SPELL_CHARGE_CREDIT 62658.
--- Ported arm 1 (C++ Reset() :212-219 -> EVENT_DUMMY_RECAST_DEFEND
+-- Ported arm 1 (C++ Reset() :214-221 -> EVENT_DUMMY_RECAST_DEFEND
 -- :278-294): Reset-seeded 5s repeating timer (first fire 5s after
 -- reset — C++ schedules, not immediate); the 33272 leg:
 -- if (!me->HasAura(SPELL_CHARGE_DEFEND)) DoCast(me, 64100, true) —
@@ -26,7 +26,7 @@
 -- then isVulnerable=false (:293) and the 5s re-arm. The
 -- SetControlled(STUNNED) Reset leg has no control-state bridge
 -- (documented).
--- Ported arm 2 (C++ SpellHit :232-270): receive-side event 14 is
+-- Ported arm 2 (C++ SpellHit :237-269): receive-side event 14 is
 -- engine-fired (boss_ai.go / spells.go) — the "no-SpellHit bridge"
 -- doctrine is stale. if (spellId == 62626 SPELL_PLAYER_BREAK_SHIELD)
 -- if (!HasAura(64100) && !HasAura(62719)) isVulnerable = true
@@ -100,7 +100,7 @@ local function onRecastDefend(creature, guid)
     schedule(guid, "recast_defend", RECAST_INTERVAL, function() onRecastDefend(creature, guid) end)
 end
 
--- C++ Reset() :212-219: Initialize() (isVulnerable=false) + schedule
+-- C++ Reset() :214-221: Initialize() (isVulnerable=false) + schedule
 -- EVENT_DUMMY_RECAST_DEFEND 5s (first fire delayed, not immediate).
 local function dummySpawnOrReset(event, creature)
     local guid = creature:GetGUID()
@@ -113,7 +113,7 @@ local function dummyLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ SpellHit :232-270 (33272): 62626 break-shield -> vulnerable
+-- C++ SpellHit :237-269 (33272): 62626 break-shield -> vulnerable
 -- latch (dual HasAura gate :267-269); 62874 charge -> credit cast on
 -- the caster while vulnerable.
 local function dummySpellHit(event, creature, caster, spellId)

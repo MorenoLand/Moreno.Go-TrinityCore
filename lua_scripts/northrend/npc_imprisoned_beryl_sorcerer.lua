@@ -9,17 +9,18 @@
 -- Entry: NPC_IMPRISONED_BERYL_SORCERER = 25478 (ImprisionedBerylSorcerer
 -- enum :1180, C++-verifiable).
 -- Eluna creature events: 5 OnSpawn, 23 OnReset, 14 OnHitBySpell,
--- 2 OnLeaveCombat, 4 OnDied.
--- Ported arm 1 (C++ UpdateAI rebuff raw timer :1206-1214): rebuff inits
--- 0 (Initialize :1198, Reset :1203 calls Initialize) so the first fire
+-- 4 OnDied (no OnLeaveCombat: the C++ timer runs out of combat).
+-- Ported arm 1 (C++ UpdateAI rebuff raw timer :1212-1221): rebuff inits
+-- 0 (Initialize :1196, Reset :1201 calls Initialize) so the first fire
 -- is immediate on spawn/reset, then every 180000ms; the UpdateAI tick
--- is ungated (UpdateVictim() result unused — the timer runs out of
--- combat too, so no LeaveCombat cancel beyond the standard 2/4 drop).
+-- is ungated (UpdateVictim() result discarded — the timer runs out of
+-- combat too, so there is NO LeaveCombat cancel; death (event 4)
+-- cancels because C++ UpdateAI stops on death).
 -- if (!me->HasAura(SPELL_COSMETIC_ENSLAVE_CHAINS_SELF 45631, :1090))
 -- DoCast(me, 45631) — 2-arg non-triggered self-cast; the HasAura gate
 -- is the bridged creature:HasAura (gunship precedent).
--- Ported arm 2 (C++ SpellHit :1224-1232 -> GotStinged :1234-1253):
--- player-caster gate (caster->ToPlayer(), :1226) via the
+-- Ported arm 2 (C++ SpellHit :1232-1240 -> GotStinged :1242-1261):
+-- player-caster gate (caster->ToPlayer(), :1234) via the
 -- caster:GetObjectType()=="Player" convention (nalorakk precedent);
 -- the event-14 receive-side bridge is engine-fired for player casts
 -- (spells.go) — the "no-SpellHit bridge" doctrine is stale. spellId
@@ -28,10 +29,10 @@
 -- SPELL_PROTOTYPE_NEURAL_NEEDLE -> DoCastSelf(48254
 -- SPELL_PROTOTYPE_NEURAL_NEEDLE_IMPACT) — DoCastSelf is the 2-arg
 -- non-triggered self-cast, unconditional in GotStinged (fires before
--- the quest gate :1238).
+-- the quest gate :1247).
 -- Unmodeled: GotStinged quest-11648 status gate + step computation
--- (caster->GetAuraCount(45634) / GetAuraCount(48252)+7, :1244-1248)
--- + Talk(step, caster) + KilledMonsterCredit(25478) (:1250/:1258) —
+-- (caster->GetAuraCount(45634) / GetAuraCount(48252)+7, :1250-1255)
+-- + Talk(step, caster) + KilledMonsterCredit(25478) (:1260/:1258) —
 -- no quest-status / aura-count / kill-credit bridges; the JustEngagedWith
 -- empty override; Reset's REACT_PASSIVE leg (no react-state bridge —
 -- the creature is passive in DB anyway).
@@ -70,7 +71,7 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ :1206-1214 rebuff arm: !HasAura(45631) -> DoCast(me, 45631)
+-- C++ :1212-1220 rebuff arm: !HasAura(45631) -> DoCast(me, 45631)
 -- non-triggered; re-arm 180000ms.
 local function onRebuff(creature, guid)
     if not creature:HasAura(SPELL_COSMETIC_ENSLAVE_CHAINS_SELF) then
@@ -87,11 +88,15 @@ local function berylSorcererSpawnOrReset(event, creature)
     onRebuff(creature, guid)
 end
 
-local function berylSorcererLeaveCombat(event, creature)
+-- C++ UpdateAI (zone_borean_tundra.cpp:1212-1221) discards
+-- UpdateVictim()'s result, so the rebuff timer deliberately ticks in
+-- and out of combat — no LeaveCombat cancel. Death stops the C++
+-- UpdateAI, so the timer dies with the creature (event 4 only).
+local function berylSorcererDied(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ SpellHit :1224-1232 -> GotStinged :1234-1236: player-caster gate,
+-- C++ SpellHit :1232-1240 -> GotStinged :1242-1244: player-caster gate,
 -- then the unconditional DoCastSelf impact leg per spell id.
 local function berylSorcererSpellHit(event, creature, caster, spellId)
     if not caster or caster:GetObjectType() ~= "Player" then
@@ -107,5 +112,4 @@ end
 RegisterCreatureEvent(ENTRY_IMPRISONED_BERYL_SORCERER, 5, berylSorcererSpawnOrReset)
 RegisterCreatureEvent(ENTRY_IMPRISONED_BERYL_SORCERER, 23, berylSorcererSpawnOrReset)
 RegisterCreatureEvent(ENTRY_IMPRISONED_BERYL_SORCERER, 14, berylSorcererSpellHit)
-RegisterCreatureEvent(ENTRY_IMPRISONED_BERYL_SORCERER, 2, berylSorcererLeaveCombat)
-RegisterCreatureEvent(ENTRY_IMPRISONED_BERYL_SORCERER, 4, berylSorcererLeaveCombat)
+RegisterCreatureEvent(ENTRY_IMPRISONED_BERYL_SORCERER, 4, berylSorcererDied)

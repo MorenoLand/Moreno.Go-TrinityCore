@@ -136,11 +136,15 @@ local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelPump(guid)
     creature:Talk(SAY_AGGRO)
-    lecraftState[guid] = {
-        hemorrhageTimer = math.random(5000, 8000),
-        kidneyShotTimer = math.random(12000, 15000),
-        textCounter = 1, -- C++ ctor/Reset value; the SpellHit ladder latches here
-    }
+    -- C++ JustEngagedWith (zone_dragonblight.cpp:617-624) re-schedules
+    -- the two timers and Talks but does NOT touch _textCounter /
+    -- _playerGUID (only Reset() clears them) — preserve any pre-combat
+    -- SpellHit latch state across combat entry.
+    local st = lecraftState[guid] or {}
+    st.hemorrhageTimer = math.random(5000, 8000)
+    st.kidneyShotTimer = math.random(12000, 15000)
+    st.textCounter = st.textCounter or 1 -- C++ ctor value; the SpellHit ladder latches here
+    lecraftState[guid] = st
     lecraftPump[guid] = CreateLuaEvent(function()
         combatTick(creature, guid)
     end, 1000, 0)

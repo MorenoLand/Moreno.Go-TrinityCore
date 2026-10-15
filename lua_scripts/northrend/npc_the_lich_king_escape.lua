@@ -25,7 +25,7 @@
 --   the escape chase). Event 9 fires pre-application, so
 --   creature:GetHealth() is the pre-damage value, exactly like C++'s
 --   me->GetHealth() in the hook.
--- EnterEvadeMode (:1305-1312) — the _despawn once-latch (GUID-keyed, the
+-- EnterEvadeMode (:1305-1316) — the _despawn once-latch (GUID-keyed, the
 --   svalna captain precedent), DoPlaySoundToSet(SOUND_LK_FURY_OF_FROSTMOURNE
 --   17224) = creature:PlayDirectSound (ScriptedAI::DoPlaySoundToSet calls
 --   source->PlayDirectSound — ScriptedCreature.cpp:188-200, broadcast-to-set
@@ -33,7 +33,7 @@
 --   and DoCastAOE(SPELL_FURY_OF_FROSTMOURNE 70063) = self-cast (the file's
 --   DoCastAOE idiom), in C++ order. The instance SetBossState(FAIL) /
 --   StopMoving / DespawnOrUnsummon(12s) legs have no bridge — documented below.
--- KilledUnit (:1251-1257) — player-gated
+-- KilledUnit (:1251-1255) — player-gated
 --   (victim:GetObjectType() == "Player", the razuvious precedent)
 --   DoPlaySoundToSet(RAND(SOUND_LK_SLAY_1 17214, SOUND_LK_SLAY_2 17215)) =
 --   creature:PlayDirectSound(math.random(SOUND_LK_SLAY_1, SOUND_LK_SLAY_2)).
@@ -50,7 +50,7 @@
 -- MovementInform (:1204-1231) — MoveChase / Harvest Soul on the
 --   instance-GUID escape leader + gunship movement: no-MovementInform
 --   / no-instance-GetGuidData bridges.
--- EnterEvadeMode (:1305-1312) — the _despawn latch, Fury-of-Frostmourne
+-- EnterEvadeMode (:1305-1316) — the _despawn latch, Fury-of-Frostmourne
 --   sound, and cast are ported above; the instance SetBossState(FAIL) /
 --   StopMoving / DespawnOrUnsummon(12s) legs have no bridge.
 -- JustSummoned / SummonedCreatureDies (:1233-1250) — summon bookkeeping
@@ -79,7 +79,7 @@ local function lichKingEscapeDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ npc_the_lich_king_escape_horAI::EnterEvadeMode (:1305-1312):
+-- C++ npc_the_lich_king_escape_horAI::EnterEvadeMode (:1305-1316):
 -- DoPlaySoundToSet(SOUND_LK_FURY_OF_FROSTMOURNE 17224) — PlayDirectSound
 -- (the DoPlaySoundToSet ≡ PlayDirectSound identity above), then
 -- DoCastAOE(SPELL_FURY_OF_FROSTMOURNE 70063) non-triggered — self-cast
@@ -96,7 +96,7 @@ local function lichKingEscapeLeaveCombat(event, creature)
     creature:CastSpell(creature, SPELL_FURY_OF_FROSTMOURNE)
 end
 
--- C++ npc_the_lich_king_escape_horAI::KilledUnit (:1251-1257):
+-- C++ npc_the_lich_king_escape_horAI::KilledUnit (:1251-1255):
 -- player-gated DoPlaySoundToSet(RAND(SOUND_LK_SLAY_1 17214,
 -- SOUND_LK_SLAY_2 17215)) — PlayDirectSound; math.random(17214, 17215)
 -- matches RAND's two-sound pick. Event 3 is CREATURE_EVENT_ON_TARGET_DIED,

@@ -43,7 +43,7 @@
 --   3000ms (:1589), FLAMESTRIKE 72169 at 6000ms (:1590), FROSTBOLT
 --   72166 at 9000ms (:1591), CHAINS_OF_ICE 72121 at 12000ms (:1592),
 --   HALLUCINATION 72342 at 40000ms one-shot (:1593).
--- EVENT_FIREBALL (:1599-1603) — random player within 40 yd, cast
+-- EVENT_FIREBALL (:1610-1614) — random player within 40 yd, cast
 --   72163 (:1612), re-arm 15000ms.
 -- EVENT_FLAMESTRIKE (:1604-1608) — random player within 40 yd, cast
 --   72169 (:1617), re-arm 15000ms.
@@ -57,7 +57,7 @@
 --   72326 at 23000ms (:1691), DEADLY_POISON 72329 at 5000ms (:1692),
 --   ENVENOMED_DAGGER_THROW 72333 at 10000ms (:1693), KIDNEY_SHOT
 --   72335 at 12000ms (:1694).
--- EVENT_SHADOW_STEP (:1702-1706) — random player within 100 yd
+-- EVENT_SHADOW_STEP (:1710-1714) — random player within 100 yd
 --   (:1711), cast 72326 (:1712), re-arm 8000ms (:1713).
 -- EVENT_DEADLY_POISON (:1707-1710) — victim-cast 72329 (:1716),
 --   re-arm 10000ms (:1717).
@@ -77,7 +77,7 @@
 -- npc_tortured_rifleman JustEngagedWith (:1805-1811) — SHOOT 72208 at
 --   1ms (:1806), CURSED_ARROW 72222 at 7000ms (:1807), FROST_TRAP
 --   72215 at 10000ms (:1808), ICE_SHOT 72268 at 15000ms (:1809).
--- EVENT_SHOOT (:1817-1821) — random player within 40 yd, cast 72208
+-- EVENT_SHOOT (:1825-1829) — random player within 40 yd, cast 72208
 --   (:1827), re-arm 2000ms (:1828).
 -- EVENT_CURSED_ARROW (:1822-1826) — random player within 40 yd, cast
 --   72222 (:1832), re-arm 10000ms (:1833).
@@ -239,7 +239,7 @@ local function priestEngaged(event, creature, target)
 end
 
 -- Phantom mage ---------------------------------------------------------
--- C++ :1599-1603: random player 40 yd, cast 72163, re-arm 15000.
+-- C++ :1610-1614: random player 40 yd, cast 72163, re-arm 15000.
 local function mageFireball(creature, guid)
     if not alive(guid) then return end
     local target = randomPlayer(creature, 40)
@@ -298,7 +298,7 @@ local function mageEngaged(event, creature, target)
 end
 
 -- Shadowy mercenary ----------------------------------------------------
--- C++ :1702-1706: random player 100 yd, cast 72326, re-arm 8000.
+-- C++ :1710-1714: random player 100 yd, cast 72326, re-arm 8000.
 local function mercenaryShadowStep(creature, guid)
     if not alive(guid) then return end
     local target = randomPlayer(creature, 100)
@@ -374,7 +374,7 @@ local function footmanEngaged(event, creature, target)
 end
 
 -- Tortured rifleman ----------------------------------------------------
--- C++ :1817-1821: random player 40 yd, cast 72208, re-arm 2000.
+-- C++ :1825-1829: random player 40 yd, cast 72208, re-arm 2000.
 local function riflemanShoot(creature, guid)
     if not alive(guid) then return end
     local target = randomPlayer(creature, 40)

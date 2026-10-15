@@ -32,12 +32,13 @@
 -- SAY_FEUGEN_SLAY 1) (event 3 — C++-GATED: victim->GetTypeId() ==
 -- TYPEID_PLAYER — nalorakk/kelthuzad player-gate variant). The
 -- magneticPullTimer DoCastSelf(SPELL_MAGNETIC_PULL 54517) leg is
--- documented-only: the pull's whole effect lives in
--- spell_thaddius_magnetic_pull's OnCast HandleCast (threat-table
--- swap + SPELL_MAGNETIC_PULL_EFFECT 28337), and there is no
--- SpellScript binding bridge (razelikh precedent) — wiring the
--- orphaned cast would deviate from C++ (gluth's DoCast(28239/
--- 28404)-into-SpellScript documented-only precedent). All timers
+-- documented-only: the cast itself is C++ (:20s/:20s arm), but the
+-- pull's whole effect lives in spell_thaddius_magnetic_pull's OnCast
+-- HandleCast (threat-table swap + SPELL_MAGNETIC_PULL_EFFECT 28337),
+-- and there is no SpellScript binding bridge (razelikh precedent) —
+-- so it is the effect, not the cast, that lacks a bridge (gluth's
+-- DoCast(28239/28404)-into-SpellScript documented-only precedent).
+-- All timers
 -- cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- npc_feugen: InitializeAI — the tesla-coil GO SetGoState(GO_STATE_

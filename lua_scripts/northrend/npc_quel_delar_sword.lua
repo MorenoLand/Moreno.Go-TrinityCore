@@ -25,11 +25,11 @@
 -- JustEngagedWith (:2622-2627) — EVENT_QUEL_DELAR_HEROIC_STRIKE at
 --   4000ms (:2623), EVENT_QUEL_DELAR_BLADESTORM at 6000ms (:2624),
 --   EVENT_QUEL_DELAR_WHIRLWIND at 6000ms (:2625).
--- EVENT_QUEL_DELAR_BLADESTORM (:2697-2702) — self-cast
+-- EVENT_QUEL_DELAR_BLADESTORM (:2700-2703) — self-cast
 --   SPELL_BLADESTORM 67541 (:2701), re-arm 10000ms (:2702).
--- EVENT_QUEL_DELAR_HEROIC_STRIKE (:2703-2706) — victim-cast
+-- EVENT_QUEL_DELAR_HEROIC_STRIKE (:2704-2707) — victim-cast
 --   SPELL_HEROIC_STRIKE 29426 (:2705), re-arm 6000ms (:2706).
--- EVENT_QUEL_DELAR_WHIRLWIND (:2707-2710) — DoCastAOE(SPELL_WHIRLWIND
+-- EVENT_QUEL_DELAR_WHIRLWIND (:2708-2711) — DoCastAOE(SPELL_WHIRLWIND
 --   67716) (:2709), self-cast, re-arm 1000ms (:2710).
 --
 -- DOCUMENTED-ONLY:
@@ -38,11 +38,11 @@
 --   (:2676-2680), EVENT_QUEL_DELAR_LAND (:2681-2686),
 --   EVENT_QUEL_DELAR_FIGHT (:2687-2695) with the MoveTakeoff /
 --   MoveCirclePath / MoveLand / MovePoint legs and the frostmourne-bunny
---   Talk (:2669) — no movement bridge; the SetImmuneToAll(true)
---   pre-fight leg (:2614-2619, cleared at :2693) has no bridge either,
---   so a sword engaged before its scripted landing would cast earlier
---   than C++ — a fidelity gap on the unmodeled gating, not a
---   fabricated cast (the arms themselves are engage-gated in C++ too).
+--   Talk (:2669) — no movement bridge. (The old header's
+--   SetImmuneToAll(true) pre-fight leg (:2614-2619, cleared at :2693)
+--   does not exist in the C++ — only SetImmuneToAll(false) at :2619
+--   and :2687 — so its "fidelity gap" claim is retracted as
+--   unfounded; the engage-gated arms are C++-exact.)
 -- Reset's DoCast(SPELL_WHIRLWIND_VISUAL 70300) (:2614-2616) fires on
 --   the C++ spawn path; Go fires events 23/5 only on the respawn path
 --   (engine/world/lua_creature_events.go:368-395), so the leg is

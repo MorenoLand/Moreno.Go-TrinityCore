@@ -51,7 +51,7 @@
 -- npc_frostsworn_general JustDied — Talk(SAY_DEATH 1) (event 4 — the
 -- sjonnir JustDied-Talk precedent).
 -- npc_frostsworn_general JustEngagedWith — EVENT_SHIELD 69222 at
---   5000ms and EVENT_SPIKE 69184 at 14000ms (C++ :1909-1917).
+--   5000ms and EVENT_SPIKE 69184 at 14000ms (C++ :1905-1913).
 -- EVENT_SHIELD (:1929-1933) — random player within 45 yd (:1930),
 --   cast 69222 (:1931), re-arm {8000,12000}ms (:1932).
 -- EVENT_SPIKE (:1934-1938) — random player within 45 yd (:1935),
@@ -183,7 +183,7 @@ local function generalSpikeTick(creature, guid)
     schedule(guid, "spike", {15000, 20000}, function() generalSpikeTick(creature, guid) end)
 end
 
--- C++ npc_frostsworn_generalAI::JustEngagedWith :1909-1917:
+-- C++ npc_frostsworn_generalAI::JustEngagedWith :1905-1913:
 -- Talk(SAY_AGGRO) (the auriaya engage-port precedent), DoZoneInCombat
 -- (no bridge), EVENT_SHIELD at 5000ms, EVENT_SPIKE at 14000ms
 -- (EVENT_CLONE's SummonClones leg is documented-only).
