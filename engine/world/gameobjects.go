@@ -868,11 +868,15 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 				return true
 			}
 		}
-		// RemoveAurasByType(SPELL_AURA_MOUNTED) has no Go mounted-aura model
-		// (documented); AddUse() has no Go use-count model (documented).
+		// RemoveAurasByType(SPELL_AURA_MOUNTED) (GameObject.cpp:1918) runs
+		// unconditionally in the arm — even when allowMounted (data3) kept
+		// the player mounted through the Use() head's !IsUsableMounted gate.
+		s.removeAurasByType(spellAuraMounted)
+		// AddUse() has no Go use-count model (documented).
 		if tpl[0] != 0 { // spellcaster.spellId (data0)
-			// C++ casts with the GO as caster at the end of Use(); Go's
-			// castSpellDirect casts as the player (documented).
+			// Use() tail: spellCaster defaults to the user, so the user
+			// casts on themselves (GameObject.cpp:1487,2092); Go's
+			// castSpellDirect casts as the player on the player — exact.
 			s.castSpellDirect(ctx, tpl[0], s.playerGUID)
 		}
 
