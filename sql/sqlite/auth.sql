@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS `logs_ip_actions` (
 `comment` TEXT,
 PRIMARY KEY (`id`)
 );
+CREATE TABLE IF NOT EXISTS `rbac_permissions` (
+`id` INTEGER  NOT NULL DEFAULT '0',
+`name` TEXT NOT NULL,
+PRIMARY KEY (`id`)
+);
 CREATE TABLE IF NOT EXISTS `rbac_account_permissions` (
 `accountId` INTEGER  NOT NULL,
 `permissionId` INTEGER  NOT NULL,
@@ -126,11 +131,7 @@ CONSTRAINT `fk__rbac_linked_permissions__rbac_permissions2` FOREIGN KEY (`linked
 );
 CREATE INDEX IF NOT EXISTS `rbac_linked_permissions__fk__rbac_linked_permissions__rbac_permissions1` ON `rbac_linked_permissions` (`id`);
 CREATE INDEX IF NOT EXISTS `rbac_linked_permissions__fk__rbac_linked_permissions__rbac_permissions2` ON `rbac_linked_permissions` (`linkedId`);
-CREATE TABLE IF NOT EXISTS `rbac_permissions` (
-`id` INTEGER  NOT NULL DEFAULT '0',
-`name` TEXT NOT NULL,
-PRIMARY KEY (`id`)
-);
+
 CREATE TABLE IF NOT EXISTS `realmcharacters` (
 `realmid` INTEGER  NOT NULL DEFAULT '0',
 `acctid` INTEGER  NOT NULL,

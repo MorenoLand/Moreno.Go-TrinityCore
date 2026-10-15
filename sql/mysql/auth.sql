@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS `logs_ip_actions` (
   `comment` text COMMENT 'Allows users to add a comment',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='Used to log ips of individual actions';
+CREATE TABLE IF NOT EXISTS `rbac_permissions` (
+  `id` int unsigned NOT NULL DEFAULT '0' COMMENT 'Permission id',
+  `name` varchar(100) NOT NULL COMMENT 'Permission name',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='Permission List';
 CREATE TABLE IF NOT EXISTS `rbac_account_permissions` (
   `accountId` int unsigned NOT NULL COMMENT 'Account id',
   `permissionId` int unsigned NOT NULL COMMENT 'Permission id',
@@ -126,11 +131,7 @@ CREATE TABLE IF NOT EXISTS `rbac_linked_permissions` (
   CONSTRAINT `fk__rbac_linked_permissions__rbac_permissions1` FOREIGN KEY (`id`) REFERENCES `rbac_permissions` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT,
   CONSTRAINT `fk__rbac_linked_permissions__rbac_permissions2` FOREIGN KEY (`linkedId`) REFERENCES `rbac_permissions` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='Permission - Linked Permission relation';
-CREATE TABLE IF NOT EXISTS `rbac_permissions` (
-  `id` int unsigned NOT NULL DEFAULT '0' COMMENT 'Permission id',
-  `name` varchar(100) NOT NULL COMMENT 'Permission name',
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='Permission List';
+
 CREATE TABLE IF NOT EXISTS `realmcharacters` (
   `realmid` int unsigned NOT NULL DEFAULT '0',
   `acctid` int unsigned NOT NULL,
