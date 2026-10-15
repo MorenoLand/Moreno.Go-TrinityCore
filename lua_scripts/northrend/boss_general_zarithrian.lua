@@ -60,15 +60,21 @@
 -- bridge.
 -- npc_onyx_flamecaller (NPC_ONYX_FLAMECALLER = 39814) — zero Talk
 -- lines in the file — NOT registered (the bronjahm
--- npc_corrupted_soul_fragment precedent); its JustEngagedWith /
--- UpdateAI scheduler legs (EVENT_BLAST_NOVA / SPELL_BLAST_NOVA 74392
--- DoCastAOE; EVENT_LAVA_GOUT / SPELL_LAVA_GOUT 74394 DoCastVictim,
--- the 3-cast gating) ride no-timer / no-cast bridges; the Reset
--- MoveAlongSplineChain(POINT_GENERAL_ROOM, SPLINE_GENERAL_EAST /
--- SPLINE_GENERAL_WEST) leg rides no-motion-master bridge; the
--- MovementInform DoZoneInCombat leg rides no-movement-inform bridge;
--- the IsSummonedBy zarithrian->AI()->JustSummoned(me) leg rides no
--- cross-AI-summon bridge.
+-- npc_corrupted_soul_fragment precedent: the add never spawns in-engine
+-- because its only summon path is the unbridged stalker
+-- CastSpell(SPELL_SUMMON_FLAMECALLER 74398) legs
+-- (instance->GetGuidData(DATA_ZARITHRIAN_SPAWN_STALKER_*), no instance
+-- bridge)). Its timer arms are bridgeable and documented here for the
+-- day the summon path lands: JustEngagedWith seeds EVENT_BLAST_NOVA
+-- 17s + EVENT_LAVA_GOUT 3s (:200-204); BLAST_NOVA 74392 —
+-- DoCastAOE = self-cast `CastSpell(creature, 74392)` (non-triggered,
+-- :226-229), Repeat(15s, 20s); LAVA_GOUT 74394 — DoCastVictim =
+-- `CastSpell(nil, 74394)` (non-triggered, :246-256) with the 3-cast
+-- latch (_lavaGoutCount >= 3 -> reset + 8s re-arm; else cast, count++,
+-- 1s re-arm). NOT portable: Reset MoveAlongSplineChain
+-- (POINT_GENERAL_ROOM) (no-motion-master bridge), MovementInform
+-- DoZoneInCombat (no-movement-inform bridge), IsSummonedBy
+-- zarithrian->AI()->JustSummoned(me) (no cross-AI-summon bridge).
 -- All 4 Talk() calls in the file accounted for and ported
 -- (SAY_AGGRO 0 + SAY_KILL 1 + SAY_ADDS 2 + SAY_DEATH 3).
 
@@ -125,8 +131,8 @@ local function intimidatingRoarTick(creature, guid)
 end
 
 -- C++ EVENT_SUMMON_ADDS: Talk(SAY_ADDS 2) rides the event arm
--- (:128-129 — Talk then [[fallthrough]] into the stalker summon legs);
--- 15s init (JustEngagedWith :106), Repeat(45s) (:137). The stalker
+-- (:141-142 — Talk then [[fallthrough]] into the stalker summon legs);
+-- 15s init (JustEngagedWith :97), Repeat(45s) (:151). The stalker
 -- CastSpell(SPELL_SUMMON_FLAMECALLER 74398) legs ride
 -- instance->GetGuidData(DATA_ZARITHRIAN_SPAWN_STALKER_*) with no
 -- instance bridge — documented-only; the Talk arm is unconditional in
@@ -144,7 +150,7 @@ end
 -- BossAI::JustEngagedWith(who); Talk(SAY_AGGRO);
 -- events.ScheduleEvent(EVENT_CLEAVE, 8s);
 -- events.ScheduleEvent(EVENT_INTIDMDATING_ROAR, 14s);
--- events.ScheduleEvent(EVENT_SUMMON_ADDS, 15s); [+ 16s 25-man
+-- events.ScheduleEvent(EVENT_SUMMON_ADDS, 15s) (:97); [+ 16s 25-man
 -- EVENT_SUMMON_ADDS2] — the auriaya precedent; the cleave/roar
 -- timer legs ride the maiden CreateLuaEvent convention now (see
 -- below). The EVENT_SUMMON_ADDS stalker-triggered 74398 casts

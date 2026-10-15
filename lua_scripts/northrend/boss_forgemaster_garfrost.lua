@@ -287,12 +287,11 @@ end
 -- bridge): the physical jump and its MovementInform landing legs do not
 -- port (see header); the C++-exact 5000ms MovementInform ->
 -- EVENT_RESUME_ATTACK delay (:171) is preserved, with the landing
+-- assumed at forge-jump fire.
 -- Forward declaration: onForgeJump's resume closure references
 -- onResumeAttack before its local def below; without this the
 -- closure would bind a nil global (festergut/moam nil-call class).
 local onResumeAttack
-
--- assumed at forge-jump fire.
 local function onForgeJump(creature, guid)
     local st = garfrostState[guid]
     if not st then

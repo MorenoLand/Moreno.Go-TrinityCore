@@ -64,18 +64,32 @@
 -- scheduler arms is RETRACTED (CreateLuaEvent is a real bridge,
 -- engine/scripting/runtime.go:798); each arm is classified against
 -- the C++ individually (gothik precedent). Talk(SAY_VAMPIRIC_BITE 1)
--- rides EVENT_VAMPIRIC_BITE (:356-368) — OUT: Talk fires inside the
--- SelectRandomTarget-found branch (:365, random-target machine, no
--- bridge). Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
+-- rides EVENT_VAMPIRIC_BITE (:356-368) — OUT: the pick is
+-- deterministic, targets.front() of the sorted threat list after
+-- stripping the tank and offtank (:359-361) — not random — and the arm
+-- then fires cross-unit TRIGGERED_FULL_MASK self-casts plus a
+-- SpellScript chain (:362-368, no cross-unit / no-SpellScript bridge);
+-- the event is seeded once (:161) with NO re-arm (one-shot).
+-- Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
 -- EVENT_PACT_OF_THE_DARKFALLEN (:407-420) — OUT: Talk fires only if
 -- targets.size() > 1 after SelectRandomTarget + RandomResize(2/3 by
 -- Is25ManRaid, :409-413, random-target machine, no bridge).
--- Talk(EMOTE_SWARMING_SHADOWS 5, target) / Talk(SAY_SWARMING_SHADOWS
--- 4) ride EVENT_SWARMING_SHADOWS (:421-428) — OUT: Talk fires only if
--- SelectRandomTarget returns a player (random-target machine, no
--- bridge; the emote's target leg has no targeted-Talk bridge either).
+-- PORTED this tick: EVENT_SWARMING_SHADOWS (:421-428) —
+-- Talk(SAY_SWARMING_SHADOWS 4) + DoCast(target, SPELL_SWARMING_SHADOWS
+-- 71264) (2-arg = non-triggered, :426); 30500ms seed (:166) /
+-- unconditional 30500ms re-arm (:427). The targeted
+-- Talk(EMOTE_SWARMING_SHADOWS 5, target) leg has no targeted-Talk
+-- bridge — dropped (documented). Pool caveat: C++ picks from the
+-- threat list excluding the main tank AND offtank (:478-507); the port
+-- uses the alive same-map/instance player pool excluding the victim
+-- (only threat-listed units qualify in practice; the offtank
+-- exclusion is unmodeled).
 -- The Blood Mirror / Delirious Slash / Twilight Bloodbolt DoCast legs
--- have no-cast bridge.
+-- ride cross-unit triggered casts (Blood Mirror), the deterministic
+-- offtank-pick machine (Delirious Slash), the Fly air-phase gate and
+-- Is25ManRaid() gates (Twilight Bloodbolt) — OUT; the old "no-cast
+-- bridge" wording was stale doctrine (DoCastAOE/CastSpell bridges
+-- exist; the blockers are the gates, not the cast).
 -- boss_blood_queen_lana_thel DoAction — ACTION_KILL_MINCHAR leg
 -- (no-DoAction bridge; the krick ACTION_OUTRO precedent); the
 -- EnterEvadeMode / SetGUID vampire-bloodbolt GUID-set bookkeeping
@@ -107,8 +121,10 @@ local SAY_WIPE = 9
 local SAY_DEATH = 11
 local SAY_BERSERK = 10
 local EMOTE_BERSERK_RAID = 12
+local SAY_SWARMING_SHADOWS = 4
 
 local SPELL_BERSERK = 26662
+local SPELL_SWARMING_SHADOWS = 71264
 
 local timers = {}
 
@@ -129,6 +145,41 @@ local function schedule(guid, key, delay, fn)
         timers[guid] = per
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Random-player pool excluding the tank (the netherspite
+-- randomNonTankPlayerInRange precedent, map-wide here): alive
+-- same-map/instance players minus the victim.
+local function randomNonTankPlayerAnywhere(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ :421-428 EVENT_SWARMING_SHADOWS: if (target =
+-- SelectRandomTarget(false)) { Talk(EMOTE_SWARMING_SHADOWS, target);
+-- Talk(SAY_SWARMING_SHADOWS); DoCast(target, SPELL_SWARMING_SHADOWS)
+-- (2-arg = non-triggered) }; ScheduleEvent(EVENT_SWARMING_SHADOWS,
+-- 30500ms) — unconditional re-arm. The targeted Talk(5) leg is
+-- dropped (no targeted-Talk bridge); Talk(4) + the cast port.
+local function swarmingShadowsTick(creature, guid)
+    local target = randomNonTankPlayerAnywhere(creature)
+    if target ~= nil then
+        creature:Talk(SAY_SWARMING_SHADOWS)
+        creature:CastSpell(target, SPELL_SWARMING_SHADOWS)
+    end
+    schedule(guid, "swarming", 30500, function() swarmingShadowsTick(creature, guid) end)
 end
 
 -- C++ EVENT_BERSERK: 330s single-fire — Talk(EMOTE_BERSERK_RAID) +
@@ -160,6 +211,7 @@ local function lanaThelJustEngagedWith(event, creature, target)
     creature:CastSpell(creature, SPELL_FRENZIED_BLOODTHIRST_VISUAL, true)
     creature:CastSpell(creature, SPELL_CLEAR_ALL_STATUS_AILMENTS, true)
     schedule(guid, "berserk", 330000, function() onBerserk(creature, guid) end)
+    schedule(guid, "swarming", 30500, function() swarmingShadowsTick(creature, guid) end)
 end
 
 -- C++ Reset() timer machinery — cancel/re-arm on combat events
@@ -184,6 +236,7 @@ end
 -- C++ boss_blood_queen_lana_thel::JustDied:
 -- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
 local function lanaThelJustDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 

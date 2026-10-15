@@ -58,7 +58,7 @@
 -- stays out (the gothik precedent).
 --
 -- PORTED ARMS (C++-exact for all modeled arms):
--- BloodPrincesBossAI::JustEngagedWith (:458-462) — the scheduler seeds
+-- BloodPrincesBossAI::JustEngagedWith (:455) — the scheduler seeds
 -- only (SetCombatPulseDelay/setActive/DoZoneInCombat have no bridge):
 -- keleseth: EVENT_BERSERK 600000ms (:622), EVENT_SHADOW_RESONANCE
 -- {10000,15000}ms (:623), EVENT_SHADOW_LANCE 2000ms (:624);
@@ -91,7 +91,7 @@
 -- the razuvious player-gated variant precedent): keleseth
 -- SAY_KELESETH_KILL 3, taldaram SAY_TALDARAM_KILL 4, valanar
 -- SAY_VALANAR_KILL 4.
--- BloodPrincesBossAI::JustDied (:469-486) — Talk(death text)
+-- BloodPrincesBossAI::JustDied (:466-486) — Talk(death text)
 -- entry-switched (event 4, the sjonnir JustDied-Talk precedent):
 -- keleseth SAY_KELESETH_DEATH 5, taldaram EMOTE_TALDARAM_DEATH 6,
 -- valanar SAY_VALANAR_DEATH 6.
@@ -102,7 +102,7 @@
 -- SetBossState / DoCastSelf(SPELL_INVOCATION_OF_BLOOD_VALANAR 70952) /
 -- the roll_chance_i(50) _invocationOrder build / EVENT_INVOCATION_OF_BLOOD
 -- seed :289) has no instance bridge; UpdateAI EVENT_INVOCATION_OF_BLOOD
--- (:378-398) cross-AI DoAction + Talk(textId) on the rotated prince is
+-- (:373-398) cross-AI DoAction + Talk(textId) on the rotated prince is
 -- the invocation rotation machine — no bridge; NOT registered (the
 -- bronjahm npc_corrupted_soul_fragment precedent).
 -- BloodPrincesBossAI::DoAction (:549-580) — Talk(SelectInvocationSay())
@@ -131,13 +131,24 @@
 -- {15000,25000}ms (:735-737) — _isEmpowered-gated, out (modeled as
 -- base 71718 with the base re-arm {20000,30000}ms).
 -- valanar EVENT_KINETIC_BOMB (:818-824) — SelectTarget(Random, 1, 0.0f,
--- true) DoCast(target, SPELL_KINETIC_BOMB_TARGET 72053) +
--- Talk(SAY_VALANAR_SPECIAL 2) — random-target SelectTarget cast, out.
--- valanar EVENT_SHOCK_VORTEX (:825-838) — empowered leg
+-- true) -> DoCast(target, SPELL_KINETIC_BOMB_TARGET 72053) (:822,
+-- 2-arg = non-triggered) + Talk(SAY_VALANAR_SPECIAL 2) (:822, Talk
+-- AFTER the cast, C++ order); re-arm {18000,24000}ms unconditional
+-- (:823, the Repeat sits outside the target-pick if); seed
+-- {18000,24000}ms (:763). NOT _isEmpowered-gated — PORTED this tick
+-- (kineticBombTick, below). Pool caveat: C++ offset 1 skips the
+-- MaxThreat-ordered head (UnitAI.h:172-174, i.e. the tank); the port
+-- uses the alive same-map/instance player pool excluding the victim
+-- (the netherspite precedent; only threat-listed units qualify in
+-- practice).
+-- valanar EVENT_SHOCK_VORTEX (:826-838) — the EMPOWERED leg
 -- DoCastSelf(SPELL_EMPOWERED_SHOCK_VORTEX 72039) +
--- Talk(EMOTE_VALANAR_SHOCK_VORTEX 3) is _isEmpowered-gated; the base
--- leg DoCast(target, SPELL_SHOCK_VORTEX 72037) is random-target
--- SelectTarget — both out.
+-- Talk(EMOTE_VALANAR_SHOCK_VORTEX 3) + Repeat(30s) is
+-- _isEmpowered-gated — stays OUT; the BASE leg DoCast(target,
+-- SPELL_SHOCK_VORTEX 72037) (:834, 2-arg = non-triggered, no Talk)
+-- on the same random pick — re-arm {18000,23000}ms unconditional
+-- (:835); seed {15000,20000}ms (:764) — PORTED this tick
+-- (shockVortexTick, below) with the same tank-excluding pool.
 -- keleseth/taldaram/valanar JustSummoned (:634-642, :697-710,
 -- :770-789) — summon reposition / random-target summon + chase /
 -- movement-and-cast machines — no bridge, out.
@@ -150,9 +161,9 @@
 -- aura/visual setup, not timer arms; the explode/despawn/chase legs
 -- ride movement informs and scheduler DoActions — no bridge, NOT
 -- registered.
--- UpdateAI UNIT_STATE_CASTING gates (:371-372, :652-653, :717-718,
--- :798-799) — no unit-state bridge; timers fire unconditionally (the
--- maiden precedent).
+-- UpdateAI UNIT_STATE_CASTING gates (:366/:401, :651/:675,
+-- :807/:844) — no unit-state bridge; timers fire unconditionally
+-- (the maiden precedent).
 -- Heroic-gated engage casts: keleseth :628-629
 -- DoCastSelf(SPELL_SHADOW_PRISON 72998, true) +
 -- DoCastSelf(SPELL_SHADOW_PRISON_DUMMY 73001); taldaram :693 and
@@ -183,6 +194,7 @@ local SAY_KELESETH_SPECIAL = 2
 local EMOTE_KELESETH_BERSERK = 4
 local EMOTE_TALDARAM_BERSERK = 5
 local SAY_TALDARAM_SPECIAL = 2
+local SAY_VALANAR_SPECIAL = 2
 local SAY_VALANAR_BERSERK = 5
 
 -- Spells enum: SPELL_BERSERK = 26662 (icecrown_citadel.h:33 shared
@@ -196,6 +208,8 @@ local SPELL_SHADOW_RESONANCE = 71943
 local SPELL_SHADOW_LANCE = 71405
 local SPELL_GLITTERING_SPARKS = 71806
 local SPELL_CONJURE_FLAME = 71718
+local SPELL_KINETIC_BOMB_TARGET = 72053
+local SPELL_SHOCK_VORTEX = 72037
 
 -- entry-switched kill texts (C++ BloodPrincesBossAI::KilledUnit :505):
 -- keleseth SAY_KELESETH_KILL = 3, taldaram SAY_TALDARAM_KILL = 4,
@@ -239,6 +253,26 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Random-player pool excluding the tank (the netherspite
+-- randomNonTankPlayerInRange precedent, map-wide here: C++ passes
+-- dist 0.0f): alive same-map/instance players minus the victim.
+local function randomNonTankPlayerAnywhere(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ :658-661 keleseth EVENT_BERSERK: DoCastSelf(SPELL_BERSERK)
@@ -306,7 +340,7 @@ end
 -- C++ boss_prince_keleseth_icc::ScheduleEvents :622-624 —
 -- EVENT_BERSERK 600000ms, EVENT_SHADOW_RESONANCE {10000,15000}ms,
 -- EVENT_SHADOW_LANCE 2000ms (the IsHeroic shadow-prison legs :628-629
--- have no IsHeroic bridge). JustEngagedWith (:458-462) otherwise has
+-- have no IsHeroic bridge). JustEngagedWith (:455) otherwise has
 -- no bridgeable leg.
 local function kelesethEnterCombat(event, creature)
     local guid = creature:GetGUID()
@@ -316,7 +350,7 @@ local function kelesethEnterCombat(event, creature)
     schedule(guid, "lance", 2000, function() onKelesethLance(creature, guid) end)
 end
 
--- C++ boss_prince_taldaram_icc::ScheduleEvents :689-691 —
+-- C++ boss_prince_taldaram_icc::ScheduleEvents :687 —
 -- EVENT_BERSERK 600000ms, EVENT_GLITTERING_SPARKS {12000,15000}ms,
 -- EVENT_CONJURE_FLAME 20000ms (the IsHeroic shadow-prison leg :693 has
 -- no IsHeroic bridge).
@@ -328,14 +362,46 @@ local function taldaramEnterCombat(event, creature)
     schedule(guid, "conjure", 20000, function() onTaldaramConjure(creature, guid) end)
 end
 
--- C++ boss_prince_valanar_icc::ScheduleEvents :763 —
--- EVENT_BERSERK 600000ms (EVENT_KINETIC_BOMB and EVENT_SHOCK_VORTEX
--- are random-target/_isEmpowered-gated, out; the IsHeroic shadow-prison
--- leg :767 has no IsHeroic bridge).
+-- C++ :818-824 valanar EVENT_KINETIC_BOMB: if (target =
+-- SelectTarget(Random, 1, 0.0f, true)) { DoCast(target,
+-- SPELL_KINETIC_BOMB_TARGET 72053) (2-arg = non-triggered);
+-- Talk(SAY_VALANAR_SPECIAL 2) }; events.Repeat(Seconds(18),
+-- Seconds(24)) — unconditional re-arm (outside the if); seed
+-- {18000,24000}ms (:763).
+local function onValanarKineticBomb(creature, guid)
+    local target = randomNonTankPlayerAnywhere(creature)
+    if target ~= nil then
+        creature:CastSpell(target, SPELL_KINETIC_BOMB_TARGET)
+        creature:Talk(SAY_VALANAR_SPECIAL)
+    end
+    schedule(guid, "kineticbomb", {18000, 24000}, function() onValanarKineticBomb(creature, guid) end)
+end
+
+-- C++ :826-838 valanar EVENT_SHOCK_VORTEX base leg (else branch,
+-- _isEmpowered false): if (target = SelectTarget(Random, 1, 0.0f,
+-- true)) DoCast(target, SPELL_SHOCK_VORTEX 72037) (2-arg =
+-- non-triggered, no Talk on the base leg); events.Repeat(Seconds(18),
+-- Seconds(23)) — unconditional re-arm; seed {15000,20000}ms (:764).
+-- The empowered leg (DoCastSelf 72039 + Talk(EMOTE 3) + 30s) is
+-- _isEmpowered-gated and stays out.
+local function onValanarShockVortex(creature, guid)
+    local target = randomNonTankPlayerAnywhere(creature)
+    if target ~= nil then
+        creature:CastSpell(target, SPELL_SHOCK_VORTEX)
+    end
+    schedule(guid, "shockvortex", {18000, 23000}, function() onValanarShockVortex(creature, guid) end)
+end
+
+-- C++ boss_prince_valanar_icc::ScheduleEvents :761-765 —
+-- EVENT_BERSERK 600000ms, EVENT_KINETIC_BOMB {18000,24000}ms,
+-- EVENT_SHOCK_VORTEX {15000,20000}ms (the IsHeroic shadow-prison leg
+-- :767 has no IsHeroic bridge).
 local function valanarEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "berserk", 600000, function() onValanarBerserk(creature) end)
+    schedule(guid, "kineticbomb", {18000, 24000}, function() onValanarKineticBomb(creature, guid) end)
+    schedule(guid, "shockvortex", {15000, 20000}, function() onValanarShockVortex(creature, guid) end)
 end
 
 -- C++ BloodPrincesBossAI::KilledUnit :505-521:
@@ -347,7 +413,7 @@ local function princesKilledUnit(event, creature, victim)
     end
 end
 
--- C++ BloodPrincesBossAI::JustDied :469-486:
+-- C++ BloodPrincesBossAI::JustDied :466-486:
 -- switch (me->GetEntry()) Talk(death text) — the sjonnir
 -- JustDied-Talk precedent.
 local function princesJustDied(event, creature)

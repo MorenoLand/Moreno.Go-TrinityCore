@@ -6,7 +6,7 @@
 -- inside AddSC_boss_archavon() — loader decl 139 / call 334, the FIRST
 -- group of the "// Vault of Archavon" block in AddNorthrendScripts()).
 -- Entries: 31125 Archavon the Stone Watcher (vault_of_archavon.h
--- NPC_ARCHAVON, line 37); DATA_ARCHAVON = 0 (vault_of_archavon.h
+-- NPC_ARCHAVON, line 38); DATA_ARCHAVON = 0 (vault_of_archavon.h
 -- line 30). NPC_ARCHAVON_WARDER 32353 (boss_archavon.cpp enum
 -- Creatures) is never referenced by any arm in this file — no legs use
 -- it (no summon machine exists). Sole-source verified: "boss_archavon"
@@ -35,7 +35,7 @@
 -- calls are carried by the event-1 CreateLuaEvent scheduling below
 -- (the xt002 precedent); BossAI::JustEngagedWith(who) passthrough and
 -- the zero Talk arms are unmodeled.
--- EVENT_ROCK_SHARDS (:93-98) — SelectTarget(Random, 0) (:95, no
+-- EVENT_ROCK_SHARDS (:94-98) — SelectTarget(Random, 0) (:95, no
 -- distance filter) -> DoCast(target, SPELL_ROCK_SHARDS 58678) (:96,
 -- 2-arg = non-triggered) -> CastSpell(target, 58678); re-arm 15s
 -- (:97). Random-player pool: GetPlayersInWorld, same map/instance,
@@ -61,23 +61,23 @@
 -- hodir 5min+ one-shot berserk precedent).
 -- DOCUMENTED DEVIATIONS:
 -- The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates (pre-check
--- :87-88 and the per-event :120 return) have no bridge — casts fire
+-- :87-88 and the per-event :123-124 return) have no bridge — casts fire
 -- unconditionally on their timers (the hodir UNIT_STATE_CASTING
 -- precedent).
 -- EVENT_CHOKING_CLOUD's SelectTarget min-range gate (-10.0f = skip
--- targets within 10y, :101) has no bridge — the cast fires on any
+-- targets within 10y, :100) has no bridge — the cast fires on any
 -- alive same-map/instance player (the thorim colossus
 -- MaxDistance->random documented-deviation precedent).
 -- DOCUMENTED-ONLY (in this header; entry 31125 is the sole
 -- registration):
--- spell_archavon_rock_shards (SpellScriptLoader :141-176;
+-- spell_archavon_rock_shards (SpellScriptLoader :138-182;
 -- spell_archavon_rock_shards_SpellScript OnEffectHit HandleScript
--- :160-170 — the "// 58941 - Rock Shards" :140 hook firing the four
+-- :158-172 — the "// 58941 - Rock Shards" :137 hook firing the four
 -- visual/damage self-casts 58689/58692/58695/58696, triggered) — no
 -- SpellScript bridge; joins the no-SpellScript-bridge queue.
 -- NPC_ARCHAVON_WARDER 32353 — unreferenced by every arm in this file
 -- (no summon legs).
--- DoMeleeAttackIfReady() (:121) — no bridge.
+-- DoMeleeAttackIfReady() (:126) — no bridge.
 -- No JustDied, no KilledUnit, no DamageTaken, no DoAction, no
 -- MovementInform, no EnterEvadeMode override exist on this AI —
 -- events 3/4 on the creature carry only the timer wipe.
@@ -119,7 +119,8 @@ end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
 -- the same map/instance, no distance filter (the keleseth / thorim
--- GetPlayersInWorld precedent).
+-- GetPlayersInWorld precedent); only threat-listed units qualify in
+-- practice.
 local function randomPlayer(creature)
     local mapId = creature:GetMapId()
     local instanceId = creature:GetInstanceId()
@@ -136,7 +137,7 @@ local function randomPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
--- C++ EVENT_ROCK_SHARDS (:93-98): DoCast(target, SPELL_ROCK_SHARDS),
+-- C++ EVENT_ROCK_SHARDS (:94-98): DoCast(target, SPELL_ROCK_SHARDS),
 -- 2-arg = non-triggered; re-arm unconditional (the SelectTarget if only
 -- wraps the cast, :95-96), 15s.
 local function rockShardsTick(creature, guid)

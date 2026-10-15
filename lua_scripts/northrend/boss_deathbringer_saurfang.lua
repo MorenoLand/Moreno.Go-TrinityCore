@@ -121,14 +121,14 @@
 --   RemoveAurasDueToSpell(SPELL_BERSERK / SPELL_FRENZY) via the
 --   RemoveAura bridge (the arlokk / bronjahm idiom). The _Reset() /
 --   SetPower(ENERGY, 0) / SetPhase bookkeeping legs have no bridge.
---   Mirrors the `if (_dead) return;` early-out (:259-260): after the
+--   Mirrors the `if (_dead) return;` early-out (:277-278): after the
 --   fight-won leg the reset casts are skipped.
 -- JustDied (:315-317) is EMPTY in C++ — event 4 only cancels timers
 --   and clears state (the sjonnir JustDied-Talk precedent does NOT
 --   apply; SAY_DEATH 13 rides the DamageTaken fight-won leg above).
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 37813):
--- boss_deathbringer_saurfang SpellHitTarget (:447-477) —
+-- boss_deathbringer_saurfang SpellHitTarget (:413-435) —
 --   Talk(SAY_MARK_OF_THE_FALLEN_CHAMPION 8) rides the
 --   SPELL_MARK_OF_THE_FALLEN_CHAMPION case of the SpellHitTarget
 --   switch; the 72255/72444/72445/72446 triggered-mark cases cast
@@ -142,10 +142,10 @@
 --   SAY_INTRO_ALLIANCE_6 2 / SAY_INTRO_ALLIANCE_7 3 /
 --   SAY_INTRO_HORDE_2 4 / SAY_INTRO_HORDE_4 5 /
 --   SAY_INTRO_HORDE_9 6) ride the EVENT_INTRO_* scheduler machine
---   (:540-571, intro phase machine — the gothik precedent); the
---   DoAction(PHASE_INTRO_A/H / ACTION_CONTINUE_INTRO) legs (:582-603)
+--   (:463-492, intro phase machine — the gothik precedent); the
+--   DoAction(PHASE_INTRO_A/H / ACTION_CONTINUE_INTRO) legs (:548-590)
 --   have no DoAction bridge (the krick ACTION_OUTRO precedent); the
---   ACTION_MARK_OF_THE_FALLEN_CHAMPION leg (:604-615) is a
+--   ACTION_MARK_OF_THE_FALLEN_CHAMPION leg (:580-592) is a
 --   random-target SelectTarget with an aura-exclusion filter +
 --   DoCast — no DoAction bridge, no random-target bridge, and its
 --   trigger (the blood-link aura periodic tick) is an AuraScript
@@ -155,8 +155,8 @@
 --   machine: random-target AttackStart, SPELL_BLOOD_LINK_BEAST 72176
 --   + SPELL_RESISTANT_SKIN 72723 triggered casts on the summon,
 --   summons.Summon, DoZoneInCombat — no summon / cross-creature
---   bridge. SummonedCreatureDies (:413-416), MovementInform
---   (:418-424, instance GO leg), AttackStart/CanAIAttack transport
+--   bridge. SummonedCreatureDies (:400-404), MovementInform
+--   (:406-411, instance GO leg), AttackStart/CanAIAttack transport
 --   legs, EnterEvadeMode/JustReachedHome instance legs
 --   (SetBossState FAIL / DoRemoveAurasDueToSpellOnPlayers) — no
 --   instance / motion bridges.
@@ -332,8 +332,16 @@ end
 -- DoRemoveAurasDueToSpellOnPlayers legs have no instance bridge;
 -- the !_introDone DoCastSelf(SPELL_GRIP_OF_AGONY) exploit leg
 -- (:293-298) rides the unbridged intro DoAction machine.
+-- C++ JustEngagedWith starts with `if (_dead) return;` (:277-278): after
+-- the fight-won leg the whole engage sequence (Talk, seeds, reset
+-- casts) is skipped. The check must come BEFORE initState, which
+-- would otherwise reset dead=false.
 local function saurfangJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
+    local st = saurfangState[guid]
+    if st and st.dead then
+        return
+    end
     initState(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "beasts", 30000, function() onSummonBloodBeast(creature, guid) end)
@@ -352,7 +360,7 @@ end
 -- five TRIGGERED self-casts (:264-268) and the
 -- RemoveAurasDueToSpell(SPELL_BERSERK / SPELL_FRENZY) removals via
 -- the RemoveAura bridge (the arlokk / bronjahm idiom). Mirrors the
--- `if (_dead) return;` early-out (:259-260): after the fight-won
+-- `if (_dead) return;` early-out (:277-278): after the fight-won
 -- leg the reset casts are skipped.
 local function saurfangReset(event, creature)
     local guid = creature:GetGUID()

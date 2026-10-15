@@ -41,16 +41,23 @@
 -- 0) rides EVENT_INTRO_TALK (no-timer-bridge; the EVENT_INTRO_TALK leg
 -- itself rides DoAction(ACTION_INTRO_BALTHARUS) issued by
 -- at_baltharus_plateau — no cross-AI-DoAction bridge; the
--- EVENT_CLEAVE / EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND /
--- EVENT_SUMMONS_ATTACK legs have no summon bridge). EVENT_CLEAVE /
--- EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND ported 2026-10-13 on
+-- EVENT_SUMMONS_ATTACK leg (summons.DoZoneInCombat
+-- (NPC_BALTHARUS_THE_WARBORN_CLONE), no summon bridge)). EVENT_CLEAVE
+-- / EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND ported 2026-10-13 on
 -- the maiden CreateLuaEvent convention (see below); EVENT_CLONE
--- ported 2026-10-14 via the DamageTaken latch below.
--- npc_baltharus_the_warborn_clone (39899) — zero Talk lines (NOT
--- registered, the bronjahm npc_corrupted_soul_fragment precedent); the
--- DamageTaken DATA_BALTHARUS_SHARED_HEALTH leg and the JustDied
--- Unit::Kill(baltharus) leg ride instance/actor bridges that don't
--- exist.
+-- ported 2026-10-14 via the DamageTaken latch below; the clone's own
+-- AI (entry 39899) is now registered this tick (see below).
+-- npc_baltharus_the_warborn_clone (39899) — zero Talk lines —
+-- REGISTERED this tick: the boss's ported SPELL_CLONE 74511 cast
+-- spawns it in-engine, so it enters combat with the clone scheduler
+-- (:255-264: CLEAVE 11s / BLADE_TEMPEST 15s / ENERVATING_BRAND 10s;
+-- arms :293-308 — pure timer legs, no phase/summon/DoAction legs).
+-- Deviation: blade tempest is DoCastVICTIM on the clone (:300-303,
+-- victim-cast, NOT the boss's DoCastSelf). The DamageTaken
+-- DATA_BALTHARUS_SHARED_HEALTH write (:270-275), the JustDied
+-- Unit::Kill(baltharus) leg (:277-282), and the UpdateAI shared-health
+-- read (:290) ride instance/actor bridges that don't exist —
+-- documented-only.
 -- spell_baltharus_enervating_brand_trigger (SpellScript, OnHit
 -- HandleSiphonedMight: aura-caster CastSpell SPELL_SIPHONED_MIGHT) —
 -- joins the standing no-SpellScript-bridge queue.
@@ -59,6 +66,7 @@
 -- documented above).
 
 local ENTRY_BALTHARUS_THE_WARBORN = 39751
+local ENTRY_BALTHARUS_CLONE = 39899
 
 local SAY_AGGRO = 1
 local SAY_KILL  = 2
@@ -97,13 +105,23 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ passes withTank=false on both boss (:207-211) and clone
+-- (:304-308) ENERVATING_BRAND picks (UnitAI.h:170: SelectTarget(..., playerOnly,
+-- withTank, aura) — the call passes true, false, -SPELL_ENERVATING_BRAND), so
+-- the current victim (the tank) is excluded. Random-player pool: alive
+-- same-map/instance players in range without the brand aura, excluding the
+-- victim (only threat-listed units qualify in practice; the erekem
+-- deviation note).
 local function randomTargetsNoBrand(creature, range)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
                 and not plr:IsDead() and creature:IsWithinDist(plr, range)
-                and not plr:HasAura(SPELL_ENERVATING_BRAND) then
+                and not plr:HasAura(SPELL_ENERVATING_BRAND)
+                and plr:GetGUID() ~= victimGuid then
             candidates[#candidates + 1] = plr
         end
     end
@@ -125,6 +143,16 @@ local function bladeTempestTick(creature, guid)
     creature:CastSpell(creature, SPELL_BLADE_TEMPEST)
     schedule(guid, "bladetempest", 24000, function()
         bladeTempestTick(creature, guid)
+    end)
+end
+
+-- C++ clone EVENT_BLADE_TEMPEST (:300-303): DoCastVictim
+-- (SPELL_BLADE_TEMPEST 75125) (non-triggered), 15s init, Repeat(24s) —
+-- VICTIM-cast, the deviation from the boss's DoCastSelf (:204).
+local function cloneBladeTempestTick(creature, guid)
+    creature:CastSpell(nil, SPELL_BLADE_TEMPEST)
+    schedule(guid, "clonebladetempest", 24000, function()
+        cloneBladeTempestTick(creature, guid)
     end)
 end
 
@@ -248,3 +276,45 @@ RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 3, baltharusKilledUnit)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 4, baltharusDied)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 9, baltharusDamageTaken)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 23, baltharusReset)
+
+-- C++ npc_baltharus_the_warborn_clone::JustEngagedWith (:255-264):
+-- DoZoneInCombat(); events.Reset();
+-- events.ScheduleEvent(EVENT_CLEAVE, 11s);
+-- events.ScheduleEvent(EVENT_BLADE_TEMPEST, 15s);
+-- events.ScheduleEvent(EVENT_ENERVATING_BRAND, 10s). The clone's cleave
+-- is DoCastVictim (:296-299) = the boss's cleaveTick; brand (:304-308)
+-- is the same no-brand pool = enervatingBrandTick.
+local function cloneEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "cleave", 11000, function()
+        cleaveTick(creature, guid)
+    end)
+    schedule(guid, "clonebladetempest", 15000, function()
+        cloneBladeTempestTick(creature, guid)
+    end)
+    schedule(guid, "enervatingbrand", 10000, function()
+        enervatingBrandTick(creature, guid)
+    end)
+end
+
+local function cloneLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function cloneReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_baltharus_the_warborn_clone::JustDied (:277-282): _JustDied()
+-- + Unit::Kill(baltharus) — both legs ride instance/actor bridges that
+-- don't exist; timers are cancelled so the clone's scheduler doesn't
+-- fire on the corpse.
+local function cloneDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 1, cloneEnterCombat)
+RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 2, cloneLeaveCombat)
+RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 4, cloneDied)
+RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 23, cloneReset)

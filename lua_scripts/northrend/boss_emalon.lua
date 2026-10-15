@@ -6,7 +6,7 @@
 -- AddNorthrendScripts(), northrend_script_loader.cpp).
 -- Entries: 33993 Emalon the Storm Watcher (vault_of_archavon.h
 -- NPC_EMALON, line 39; DATA_EMALON boss slot); 33998 Tempest Minion
--- (boss_emalon.cpp enum Npcs :57-60 — header carries no minion id).
+-- (boss_emalon.cpp enum Npcs :54-57 — header carries no minion id).
 -- The stale "no-timer-bridge" doctrine is superseded by the
 -- CreateLuaEvent bridge (engine/scripting/runtime.go:798 — the
 -- archavon / maiden_of_virtue precedent): module-local GUID-keyed
@@ -23,7 +23,7 @@
 -- 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_emalon.cpp):
--- boss_emalonAI::JustEngagedWith (:106-124) — the four ScheduleEvent
+-- boss_emalonAI::JustEngagedWith (:102-120) — the four ScheduleEvent
 -- calls seed the combat timers below; the summons-list
 -- minion-AttackStart leg and the BossAI::JustEngagedWith(who)
 -- passthrough are unmodeled.
@@ -32,7 +32,7 @@
 -- 64213) (:138, 2-arg = non-triggered) -> CastSpell(target, 64213);
 -- re-arm unconditional (:139), 25s. Random-player pool:
 -- GetPlayersInWorld, same map/instance, alive (the keleseth / thorim
--- precedent).
+-- precedent); only threat-listed units qualify in practice.
 -- EVENT_LIGHTNING_NOVA (:141-143) — DoCastAOE(SPELL_LIGHTNING_NOVA
 -- 64216) (:142) = self-cast per the in-tree DoCastAOE convention
 -- (boss_ai.go) -> CastSpell(creature, 64216); re-arm 40s (:143).
@@ -40,7 +40,7 @@
 -- 2-arg = non-triggered) -> CastSpell(creature, 26662); Talk
 -- (EMOTE_BERSERK 2) (:160) -> creature:Talk(2); cast-before-Talk kept;
 -- 6min one-shot, no re-arm (:116).
--- npc_tempest_minionAI::JustEngagedWith (:223-233) — schedules
+-- npc_tempest_minionAI::JustEngagedWith (:219-229) — schedules
 -- EVENT_SHOCK at 20s (:222); the DoZoneInCombat() and the
 -- instance->GetGuidData(DATA_EMALON) pEmalon AttackStart legs are
 -- unmodeled.
@@ -50,7 +50,7 @@
 -- DOCUMENTED DEVIATIONS: none on the ported arms — all four boss
 -- timers and the minion shock timer carry C++-exact timing and
 -- targeting. The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates
--- (:133, :170) and DoMeleeAttackIfReady() (:174) have no bridge —
+-- (:129, :166) and DoMeleeAttackIfReady() (:170) have no bridge —
 -- casts fire unconditionally on their timers (the hodir
 -- UNIT_STATE_CASTING precedent).
 -- DOCUMENTED-ONLY (in this header; entries 33993 / 33998):
@@ -59,21 +59,21 @@
 -- SelectRandomContainerElement); the minion->CastSpell(me,
 -- SPELL_OVERCHARGED, true) + SetFullHealth() legs and the Talk
 -- (EMOTE_OVERCHARGE 0) riding it all stay out.
--- boss_emalonAI::Reset (:89-95) — four SummonCreature
+-- boss_emalonAI::Reset (:85-91) — four SummonCreature
 -- (NPC_TEMPEST_MINION, TEMPSUMMON_CORPSE_DESPAWN) at TempestMinions[]
 -- positions: no SummonCreature bridge.
--- boss_emalonAI::JustSummoned (:97-104) — minion AttackStart leg: no
+-- boss_emalonAI::JustSummoned (:93-100) — minion AttackStart leg: no
 -- bridge.
--- npc_tempest_minionAI::JustDied (:211-221) — instance->
+-- npc_tempest_minionAI::JustDied (:207-217) — instance->
 -- GetGuidData(DATA_EMALON) respawn leg (Emalon re-summons the minion,
 -- Talk EMOTE_MINION_RESPAWN 1): instance-script bridge missing.
 -- npc_tempest_minionAI::UpdateAI overcharge self-stack loop
--- (:246-267) — GetAura stack count (creature:HasAura is
+-- (:242-263) — GetAura stack count (creature:HasAura is
 -- boolean-only), DoCast(me, SPELL_OVERCHARGED) every 2s,
 -- SPELL_OVERCHARGED_BLAST 64219 at 10 stacks: no GetAura stack-count
 -- bridge.
--- SetFullHealth (:156) and DespawnOrUnsummon (:263): no bridges.
--- DoZoneInCombat() (:225): no bridge.
+-- SetFullHealth (:152) and DespawnOrUnsummon (:259): no bridges.
+-- DoZoneInCombat() (:221): no bridge.
 
 local ENTRY_EMALON = 33993
 local ENTRY_TEMPEST_MINION = 33998
@@ -159,7 +159,7 @@ local function emalonBerserkTick(creature, guid)
     creature:Talk(EMOTE_BERSERK)
 end
 
--- C++ boss_emalonAI::JustEngagedWith (:106-124): the ScheduleEvent
+-- C++ boss_emalonAI::JustEngagedWith (:102-120): the ScheduleEvent
 -- calls seed the combat timers below (5s / 40s / 6min; EVENT_OVERCHARGE
 -- 45s stays out — documented in the header).
 local function emalonEnterCombat(event, creature)
@@ -196,7 +196,7 @@ local function shockTick(creature, guid)
     end)
 end
 
--- C++ npc_tempest_minionAI::JustEngagedWith (:223-233): EVENT_SHOCK
+-- C++ npc_tempest_minionAI::JustEngagedWith (:219-229): EVENT_SHOCK
 -- scheduled at 20s (:222). The DoZoneInCombat and instance legs are
 -- unmodeled (documented in the header).
 local function minionEnterCombat(event, creature)

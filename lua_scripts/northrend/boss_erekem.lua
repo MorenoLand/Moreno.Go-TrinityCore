@@ -87,6 +87,8 @@
 -- (DATA_EREKEM_GUARD_1/2) + CheckGuardAuras (:102-135) ->
 -- DoCastAOE(SPELL_BREAK_BONDS 59463), 10s re-arm on a hit / 500ms
 -- poll: instance-GUID / cross-creature machine unbridged.
+-- Reset() SetCanDualWield(false) (:68) — phase-machine arm (see
+-- below), unmodeled.
 -- Phase machine (:169-181) — _phase 0->1 on !CheckGuardAlive()
 -- (:137-150, instance GetGuidData legs): SetCanDualWield(true),
 -- DoCast(me, SPELL_WINDFURY 54493, true) (triggered — phase-gated,
