@@ -163,18 +163,17 @@ end
 local function onDamageTaken(_, creature, _, damage)
     local guid = creature:GetGUID()
     local postDamageHealth = creature:GetHealth() - damage
+    if not usedPotion[guid] then
+        if postDamageHealth < math.floor(creature:GetMaxHealth() * 25 / 100) then
+            usedPotion[guid] = true
+            creature:CastSpell(creature, SPELL_HEALING_POTION)
+        end
+    end
     if not hasIceBlocked[guid] then
-        if postDamageHealth < creature:GetMaxHealth() * 35 / 100 then
+        if postDamageHealth < math.floor(creature:GetMaxHealth() * 35 / 100) then
             hasIceBlocked[guid] = true
             creature:CastSpell(creature, SPELL_ICE_BLOCK)
         end
-    end
-    if usedPotion[guid] then
-        return
-    end
-    if postDamageHealth < creature:GetMaxHealth() * 25 / 100 then
-        usedPotion[guid] = true
-        creature:CastSpell(creature, SPELL_HEALING_POTION)
     end
 end
 

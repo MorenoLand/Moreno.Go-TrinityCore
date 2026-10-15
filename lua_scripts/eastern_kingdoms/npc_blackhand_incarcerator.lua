@@ -18,11 +18,12 @@
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI combat
 -- event machine):
--- EVENT_STRIKE: victim-cast STRIKE 15580, 8s init -> 14s loop
--- (maiden convention — DoCastVictim path, creature:GetVictim()).
--- C++ init ScheduleEvent(EVENT_STRIKE, 8s, 16s) and loop Repeat(
--- Seconds(14), Seconds(23)) are urand ranges; the recurring-timer
--- convention uses the lower bound for both (halycon precedent).
+-- EVENT_STRIKE: victim-cast STRIKE 15580, urand(8s,16s) init ->
+-- urand(14s,23s) loop (maiden convention — DoCastVictim path,
+-- creature:GetVictim(); inclusive {min,max} CreateLuaEvent ranges for
+-- ScheduleEvent/Repeat urand semantics — halycon lower-bound
+-- precedent retired for this file by the triggered-flag+timer-re-arm
+-- sweep).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally (maiden
 -- precedent). The C++ scheduler is driven from JustEngagedWith and
@@ -78,7 +79,7 @@ local function onStrike(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_STRIKE, true)
     end
-    schedule(guid, "strike", 14000, function() onStrike(creature, guid) end)
+    schedule(guid, "strike", {14000,23000}, function() onStrike(creature, guid) end)
 end
 
 -- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
@@ -112,7 +113,7 @@ end
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "strike", 8000, function() onStrike(creature, guid) end)
+    schedule(guid, "strike", {8000,16000}, function() onStrike(creature, guid) end)
     schedule(guid, "encage", {10000, 20000}, function() onEncage(creature, guid) end)
 end
 

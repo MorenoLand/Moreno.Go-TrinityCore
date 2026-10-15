@@ -50,10 +50,12 @@
 -- Timers start on OnEnterCombat(1), cancelled on OnLeaveCombat(2)/
 -- OnDied(4)/OnReset(23) (maiden convention).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
--- packet-visual), so the timers fire unconditionally and the in-loop
--- casting gates are dropped (maiden precedent). The C++ scheduler is
--- driven from UpdateAI after UpdateVictim; the port schedules from
--- OnEnterCombat(1) and cancels on 2/4/23 (maiden convention).
+-- packet-visual), so the in-loop casting gates are dropped (maiden
+-- precedent). The C++ scheduler is driven from UpdateAI after
+-- UpdateVictim, and the port keeps that gate: every arm nil-guards
+-- GetVictim (sheep retries at 1ms, jeklik precedent) instead of
+-- firing unconditionally. Timers schedule from OnEnterCombat(1) and
+-- cancel on 2/4/23 (maiden convention).
 -- Reset() Initialize() / boss_priestess_lackey_commonAI::Reset() /
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
@@ -133,6 +135,10 @@ local function onFelIronBomb(creature, guid)
 end
 
 local function onHighExplosiveSheep(creature, guid)
+    if not creature:GetVictim() then
+        schedule(guid, "sheep", 1, function() onHighExplosiveSheep(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_HIGH_EXPLOSIVE_SHEEP)
     schedule(guid, "sheep", 65000, function() onHighExplosiveSheep(creature, guid) end)
 end
@@ -157,7 +163,7 @@ local function onDamageTaken(_, creature, _, damage)
         return
     end
     local postDamageHealth = creature:GetHealth() - damage
-    if postDamageHealth < creature:GetMaxHealth() * 25 / 100 then
+    if postDamageHealth < math.floor(creature:GetMaxHealth() * 25 / 100) then
         usedPotion[guid] = true
         creature:CastSpell(creature, SPELL_HEALING_POTION)
     end
