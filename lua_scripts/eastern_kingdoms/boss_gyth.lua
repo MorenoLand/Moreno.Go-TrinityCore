@@ -134,7 +134,10 @@ local function onDamageTaken(_, creature, _, damage)
     if rendFired[guid] then
         return
     end
-    if creature:GetHealth() - damage < creature:GetMaxHealth() * 0.05 then
+    -- HealthBelowPct(5): strict health < trunc(max*5/100) = math.floor
+    -- boundary, not the float product (fires 1 HP early at fractional
+    -- boundaries).
+    if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 5 / 100) then
         rendFired[guid] = true
         creature:CastSpell(creature, SPELL_SUMMON_REND)
     end

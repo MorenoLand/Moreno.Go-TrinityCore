@@ -164,8 +164,13 @@ local function onWingClip(creature, guid)
     local victim = creature:GetVictim()
     if victim and creature:IsWithinDist(victim, 5) then
         creature:CastSpell(victim, SPELL_WING_CLIP)
+        schedule(guid, "wingclip", 4000, function() onWingClip(creature, guid) end)
+    else
+        -- C++ only decrements the timer inside the ATTACK_DISTANCE
+        -- gate, so an out-of-range tick must not reset the 4s window;
+        -- retry on the next pump tick instead (jeklik precedent).
+        schedule(guid, "wingclip", 1, function() onWingClip(creature, guid) end)
     end
-    schedule(guid, "wingclip", 4000, function() onWingClip(creature, guid) end)
 end
 
 local function onEnterCombat(_, creature)
@@ -189,7 +194,10 @@ local function onDamageTaken(_, creature, _, damage)
         return
     end
     local postDamageHealth = creature:GetHealth() - damage
-    if postDamageHealth < creature:GetMaxHealth() * 25 / 100 then
+    -- HealthBelowPct(25): strict health < trunc(max*25/100), so the
+    -- boundary is math.floor, not the float product (1-HP off at
+    -- fractional boundaries).
+    if postDamageHealth < math.floor(creature:GetMaxHealth() * 25 / 100) then
         usedPotion[guid] = true
         creature:CastSpell(creature, SPELL_HEALING_POTION)
     end
