@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -79,6 +80,14 @@ type worldChannel struct {
 	Moderators map[uint64]struct{}
 	Muted      map[uint64]struct{}
 	Banned     map[uint64]struct{}
+	// Reference: Channel (Channel.h) — _channelTeam (C++ TeamId: 0 alliance,
+	// 1 horde), _ownershipEnabled and the _isDirty/_nextActivityUpdateTime
+	// persistence pair that ChannelMgr::SaveToDB / Channel::UpdateChannelInDB
+	// flush to the channels table when PreserveCustomChannels is on.
+	Team               uint32
+	OwnershipEnabled   bool
+	Dirty              bool
+	NextActivityUpdate time.Time
 }
 
 func (s *session) handleJoinChannel(payload []byte) bool {
@@ -155,6 +164,12 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		if channelID == 0 {
 			channel.Owner = s.playerGUID
 			channel.Moderators[s.playerGUID] = struct{}{}
+			// Reference: ChannelMgr::CreateCustomChannel calls SetDirty so
+			// the new channel is flushed by the next UpdateChannelInDB pass;
+			// the custom-channel ctor sets _announceEnabled/_ownershipEnabled.
+			channel.Team = channelPersistTeam(s)
+			channel.OwnershipEnabled = true
+			channel.Dirty = true
 		}
 		s.server.channels[key] = channel
 	}
@@ -595,6 +610,7 @@ func channelTakeOwnershipLocked(ch *worldChannel) (newOwner *session, oldFlags, 
 	}
 	oldFlags = ch.memberFlags(newOwner.playerGUID)
 	ch.Owner = newOwner.playerGUID
+	ch.Dirty = true
 	ch.Moderators[newOwner.playerGUID] = struct{}{}
 	return newOwner, oldFlags, ch.memberFlags(newOwner.playerGUID)
 }
@@ -1147,6 +1163,7 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 		return true
 	}
 	ch.Password = password
+	ch.Dirty = true
 	members := s.server.channelMembersSnapshot(ch)
 	s.server.channelsMu.Unlock()
 	for _, m := range members {
@@ -1207,6 +1224,7 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 	oldFlags := ch.memberFlags(target.playerGUID)
 	ch.Owner = target.playerGUID
 	ch.Moderators[target.playerGUID] = struct{}{}
+	ch.Dirty = true
 	newFlags := ch.memberFlags(target.playerGUID)
 	members := s.server.channelMembersSnapshot(ch)
 	s.server.channelsMu.Unlock()
@@ -1534,6 +1552,9 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	if ban {
 		_, alreadyBanned = ch.Banned[victimGUID]
 		ch.Banned[victimGUID] = struct{}{}
+		if !alreadyBanned {
+			ch.Dirty = true
+		}
 	}
 	// Reference: Channel::KickOrBan - when the owner is removed from a custom
 	// channel the acting moderator becomes the new owner.
@@ -1640,6 +1661,7 @@ func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	delete(ch.Banned, targetGUID)
+	ch.Dirty = true
 	members := s.server.channelMembersSnapshot(ch)
 	s.server.channelsMu.Unlock()
 	for _, m := range members {
@@ -1675,6 +1697,7 @@ func (s *session) handleChannelAnnouncements(ctx context.Context, payload []byte
 		return true
 	}
 	ch.Announce = !ch.Announce
+	ch.Dirty = true
 	notice := channelAnnouncementsOnNotice
 	if !ch.Announce {
 		notice = channelAnnouncementsOffNotice

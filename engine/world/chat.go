@@ -1015,12 +1015,13 @@ func (s *Server) guildChatListenAllowed(target *session, officer bool) bool {
 // chat types always pass; group chat silently fails (no packet) when the gates
 // fail. Go has no original-group (pre-battleground) model, so the
 // battleground-group exclusion applies to the session's current group; the
-// original-group preference stays a documented delta, as do the
-// CHAT_MSG_BATTLEGROUND/BATTLEGROUND_LEADER arms, which need the BG-group
-// model that Go does not assign yet.
+// original-group preference stays a documented delta; the
+// CHAT_MSG_BATTLEGROUND/BATTLEGROUND_LEADER arms below resolve against the
+// sender's current group, with the battleground-group formation model (the
+// groupTypeBattleground bit) still unassigned.
 func (s *session) groupChatAllowed(chatType uint8) bool {
 	switch chatType {
-	case chatParty, chatPartyLeader, chatRaid, chatRaidLeader, chatRaidWarning:
+	case chatParty, chatPartyLeader, chatRaid, chatRaidLeader, chatRaidWarning, chatBattleground, chatBattleLeader:
 	default:
 		return true
 	}
@@ -1035,6 +1036,21 @@ func (s *session) groupChatAllowed(chatType uint8) bool {
 	// groupTypeBattleground bit (Group.h:213, Group.cpp).
 	isBGGroup := group.GroupType&groupTypeBattleground != 0
 	switch chatType {
+	case chatBattleground:
+		// Reference: the CHAT_MSG_BATTLEGROUND arm (ChatHandler.cpp:517-534)
+		// — "battleground raid is always in Player->GetGroup(), never in
+		// GetOriginalGroup()": the sender's current group must be a
+		// battleground group. No battleground-group assignment model exists
+		// yet (no code sets groupTypeBattleground), so the arm is armed but
+		// unreachable until battleground group formation lands.
+		return isBGGroup
+	case chatBattleLeader:
+		// Reference: the CHAT_MSG_BATTLEGROUND_LEADER arm
+		// (ChatHandler.cpp:535-551) adds the group-leader gate.
+		if !isBGGroup {
+			return false
+		}
+		return group.isLeader(s.playerGUID)
 	case chatParty, chatPartyLeader:
 		// C++: without an original group, the current group must not be a
 		// battleground group; party-leader chat requires the group leader.
@@ -1116,7 +1132,7 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	// Party/raid chat is group-scoped (ChatHandler.cpp:395-528); hoist the
 	// group lookup so the per-target filter below stays cheap.
 	var chatGroup *groupState
-	if chatType == chatParty || chatType == chatPartyLeader || chatType == chatRaid || chatType == chatRaidLeader || chatType == chatRaidWarning {
+	if chatType == chatParty || chatType == chatPartyLeader || chatType == chatRaid || chatType == chatRaidLeader || chatType == chatRaidWarning || chatType == chatBattleground || chatType == chatBattleLeader {
 		chatGroup = s.findGroupByID(source.groupID)
 	}
 	// Reference: the CHAT_MSG_PARTY/PARTY_LEADER arm calls
@@ -1190,6 +1206,14 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			// broadcast to the group only (ChatHandler.cpp:470-528) — the
 			// raid-group / leader / assistant gates already ran in
 			// groupChatAllowed before broadcast.
+			if source.groupID == 0 || value.groupID != source.groupID {
+				continue
+			}
+		} else if chatType == chatBattleground || chatType == chatBattleLeader {
+			// Reference: the CHAT_MSG_BATTLEGROUND/BATTLEGROUND_LEADER arms
+			// (ChatHandler.cpp:517-551) broadcast to the whole group with no
+			// subgroup restriction; the BG-group / leader gates already ran
+			// in groupChatAllowed before broadcast.
 			if source.groupID == 0 || value.groupID != source.groupID {
 				continue
 			}

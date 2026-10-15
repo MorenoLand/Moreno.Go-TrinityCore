@@ -1174,6 +1174,30 @@ MailDeliveryDelay = 3600
 CleanOldMailTime = 4
 
 #
+#    PreserveCustomChannels
+#        Description: Store custom chat channel settings like password, automatic ownership handout
+#                     or ban list in the database. Needs to be enabled to save custom
+#                     world/trade/etc. channels that have automatic ownership handout disabled.
+#        Default:     0 - (Disabled)
+
+#PreserveCustomChannels = 0
+
+#
+#    PreserveCustomChannelDuration
+#        Description: Time in days an unused channel with automatic ownership handout enabled
+#                     stays in the database before being deleted.
+#        Default:     14
+
+#PreserveCustomChannelDuration = 14
+
+#
+#    PreserveCustomChannelInterval
+#        Description: Interval (in minutes) at which custom channel data is saved to the database
+#        Default:     5 minutes
+
+#PreserveCustomChannelInterval = 5
+
+#
 #    SkillChance.Prospecting
 #        Description: Allow skill increase from prospecting.
 #        Default:     0 - (Disabled)

@@ -656,6 +656,11 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	guid := uint32(target.GUID & 0x00FFFFFF)
 	now := time.Now()
 
+	// Unit::Kill's dungeon instance-binding block (Unit.cpp:11404-11425):
+	// an INSTANCE_BIND-flagged creature killed in a raid/heroic dungeon
+	// permanently binds every player in the instance (and their group).
+	s.maybePermBindInstance(ctx, target, creatureEntry)
+
 	// Eluna CREATURE_EVENT_ON_DIED (4), with the event-23 On_Reset pre-fire
 	// (Eluna::JustDied, CreatureHooks.cpp:143-152). The motion is already
 	// at Health 0 with the lootable flag set by every kill path, matching

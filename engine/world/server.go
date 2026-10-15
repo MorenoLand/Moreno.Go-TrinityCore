@@ -743,6 +743,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 	s.loadClientCacheVersion(ctx)
 	s.repairGuildRankOverrides(ctx)
+	s.loadCustomChannels(ctx)
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
 	}
@@ -761,6 +762,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadStoredContainerLoot(ctx)
 	go s.runWorldTick(ctx)
 	go s.runMailSweepLoop(ctx)
+	go s.runChannelSaveLoop(ctx)
 	return nil
 }
 
