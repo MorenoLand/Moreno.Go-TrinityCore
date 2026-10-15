@@ -1354,6 +1354,20 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 		// Dissolve like Group::RemoveMember does for a 1-member group.
 		delete(s.groups, g.ID)
 	}
+	// C++ Group::RemoveMember (Group.cpp:710-720): when the removed member
+	// was the leader, the first remaining CONNECTED member is promoted via
+	// ChangeLeader — the offline slot-drop path must run the same arm as
+	// removeSessionFromGroup. The full ChangeLeader path runs after unlock.
+	leaderWasRemoved := g.LeaderGUID == guid
+	var leaderCandidate uint64
+	if leaderWasRemoved && !disbanded {
+		for _, m := range g.Members {
+			if cs := s.findSessionByGUID(m.GUID); cs != nil && cs.player != nil {
+				leaderCandidate = m.GUID
+				break
+			}
+		}
+	}
 	s.groupsMu.Unlock()
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
@@ -1363,7 +1377,13 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 		s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		return
 	}
-	s.broadcastGroupList(g)
+	if leaderWasRemoved && leaderCandidate != 0 {
+		if !s.setGroupLeader(g, leaderCandidate) {
+			s.broadcastGroupList(g)
+		}
+	} else {
+		s.broadcastGroupList(g)
+	}
 }
 
 // handleGroupSetLeader processes CMSG_GROUP_SET_LEADER (0x078).

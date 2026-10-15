@@ -74,6 +74,8 @@ type Server struct {
 	ipLocations             *iplocation.Store
 	worldstatesMu           sync.RWMutex
 	worldstates             map[uint32]uint64
+	guildResetMu            sync.Mutex
+	nextGuildReset          int64
 	sessionsMu              sync.RWMutex
 	sessions                map[*session]struct{}
 	autoBalanceMu           sync.RWMutex
@@ -1281,6 +1283,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			// Player::Update (Player.cpp:1096-1113): the timed-quest timers
 			// tick down on the player update; expiry calls FailQuest.
 			s.updateTimedQuests(ctx, diff)
+			s.updateGuildDailyResets(ctx, now)
 			s.updatePendingInstanceBinds(ctx, diff)
 			s.updateSpiritHealerResurrectWaves(ctx, now)
 			s.updateCorpseExpiry(ctx)

@@ -12,6 +12,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -31,38 +32,39 @@ type guildMemberInfo struct {
 }
 
 const (
-	guildEventPromotion        uint8  = 0
-	guildEventDemotion         uint8  = 1
-	guildEventJoined           uint8  = 3
-	guildEventLeft             uint8  = 4
-	guildEventRemoved          uint8  = 5
-	guildEventLeaderChanged    uint8  = 7
-	guildEventDisbanded        uint8  = 8
-	guildEventRankUpdated      uint8  = 10
-	guildEventRankDeleted      uint8  = 11
-	guildEventSignedOn         uint8  = 12
-	guildEventSignedOff        uint8  = 13
-	guildEventBankTabPurchased uint8  = 15
-	guildEventBankTabUpdated   uint8  = 16
-	guildEventBankMoneySet     uint8  = 17
-	guildEventMotd             uint8  = 2
-	grRightEmpty               uint32 = 0x00000040
-	guildRightSetMOTD          uint32 = 0x00001040
-	guildRightModifyGuildInfo  uint32 = 0x00010040
-	guildRightEPNote           uint32 = 0x00002040
-	guildRightEOffNote         uint32 = 0x00008040
-	guildRightViewOfficerNote  uint32 = 0x00004000
-	guildRightInvite           uint32 = 0x00000050
-	guildRightRemove           uint32 = 0x00000060
-	guildRightPromote          uint32 = 0x000000C0
-	guildRightDemote           uint32 = 0x00000140
-	guildRightWithdrawRepair   uint32 = 0x00040000
-	guildRightWithdrawGold     uint32 = 0x00080000
-	guildRightGChatListen      uint32 = 0x00000041
-	guildRightGChatSpeak       uint32 = 0x00000042
-	guildRightAll              uint32 = 0x001DF1FF
-	guildRanksMaxCount         int    = 10
-	guildRanksMinCount         int    = 5
+	guildEventPromotion              uint8  = 0
+	guildEventDemotion               uint8  = 1
+	guildEventJoined                 uint8  = 3
+	guildEventLeft                   uint8  = 4
+	guildEventRemoved                uint8  = 5
+	guildEventLeaderChanged          uint8  = 7
+	guildEventDisbanded              uint8  = 8
+	guildEventRankUpdated            uint8  = 10
+	guildEventRankDeleted            uint8  = 11
+	guildEventSignedOn               uint8  = 12
+	guildEventSignedOff              uint8  = 13
+	guildEventBankTabPurchased       uint8  = 15
+	guildEventBankTabUpdated         uint8  = 16
+	guildEventBankMoneySet           uint8  = 17
+	guildEventBankTabAndMoneyUpdated uint8  = 18
+	guildEventMotd                   uint8  = 2
+	grRightEmpty                     uint32 = 0x00000040
+	guildRightSetMOTD                uint32 = 0x00001040
+	guildRightModifyGuildInfo        uint32 = 0x00010040
+	guildRightEPNote                 uint32 = 0x00002040
+	guildRightEOffNote               uint32 = 0x00008040
+	guildRightViewOfficerNote        uint32 = 0x00004000
+	guildRightInvite                 uint32 = 0x00000050
+	guildRightRemove                 uint32 = 0x00000060
+	guildRightPromote                uint32 = 0x000000C0
+	guildRightDemote                 uint32 = 0x00000140
+	guildRightWithdrawRepair         uint32 = 0x00040000
+	guildRightWithdrawGold           uint32 = 0x00080000
+	guildRightGChatListen            uint32 = 0x00000041
+	guildRightGChatSpeak             uint32 = 0x00000042
+	guildRightAll                    uint32 = 0x001DF1FF
+	guildRanksMaxCount               int    = 10
+	guildRanksMinCount               int    = 5
 )
 
 func guildEventPayload(eventType uint8, guid uint64, params ...string) []byte {
@@ -2673,23 +2675,29 @@ func guildConsumeBankWithdraw(ctx context.Context, q guildWithdrawExecutor, play
 	if err != nil || gbright&0x01 == 0 || slotPerDay == 0 {
 		return false
 	}
-	if slotPerDay != 0xFFFFFFFF {
-		tabCol := fmt.Sprintf("tab%d", tabID)
-		var exists int
-		_ = q.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&exists)
-		if exists == 0 {
-			if _, err := q.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", playerGUID); err != nil {
-				return false
-			}
-		}
-		var currentWithdrawn uint32
-		_ = q.QueryRowContext(ctx, "SELECT "+tabCol+" FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&currentWithdrawn)
-		if currentWithdrawn >= slotPerDay {
+	// Guild::BankMoveItemData::HasWithdrawRights (Guild.cpp:866-876) gates on
+	// _GetMemberRemainingSlots != 0; _GetMemberRemainingSlots (Guild.cpp:2586)
+	// returns int32(SlotPerDay) - withdrawn when positive, else 0. The int32
+	// conversion is load-bearing: a 0xFFFFFFFF SlotPerDay wraps to -1, so the
+	// remaining slots are never positive and the withdraw is DENIED — it is
+	// not unlimited. Only the guildmaster rank (handled above) is unlimited.
+	var currentWithdrawn uint32
+	_ = q.QueryRowContext(ctx, "SELECT "+fmt.Sprintf("tab%d", tabID)+" FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&currentWithdrawn)
+	if int32(slotPerDay)-int32(currentWithdrawn) <= 0 {
+		return false
+	}
+	var exists int
+	_ = q.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&exists)
+	if exists == 0 {
+		if _, err := q.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", playerGUID); err != nil {
 			return false
 		}
-		if _, err := q.ExecContext(ctx, "UPDATE guild_member_withdraw SET "+tabCol+" = "+tabCol+" + 1 WHERE guid = ?", playerGUID); err != nil {
-			return false
-		}
+	}
+	// Guild::_UpdateMemberWithdrawSlots (Guild.cpp:2609): the counter only
+	// increments once HasWithdrawRights passed, so reaching this point means
+	// the increment runs.
+	if _, err := q.ExecContext(ctx, "UPDATE guild_member_withdraw SET "+fmt.Sprintf("tab%d", tabID)+" = "+fmt.Sprintf("tab%d", tabID)+" + 1 WHERE guid = ?", playerGUID); err != nil {
+		return false
 	}
 	return true
 }
@@ -2726,12 +2734,15 @@ func (s *session) checkGuildBankMoneyWithdraw(ctx context.Context, guildID uint3
 	if err != nil || bankMoneyPerDay == 0 {
 		return false
 	}
-	if bankMoneyPerDay != 0xFFFFFFFF {
-		var currentWithdrawn uint32
-		_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&currentWithdrawn)
-		if currentWithdrawn+amount > bankMoneyPerDay {
-			return false
-		}
+	// Guild::HandleMemberWithdrawMoney (Guild.cpp:1738): the gate is
+	// uint32(_GetMemberRemainingMoney) < amount, and _GetMemberRemainingMoney
+	// (Guild.cpp:2600) is int32(BankMoneyPerDay) - withdrawn when positive,
+	// else 0. The int32 conversion is load-bearing: 0xFFFFFFFF wraps to -1,
+	// so the remaining money is never positive and the withdraw is DENIED.
+	var currentWithdrawn uint32
+	_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&currentWithdrawn)
+	if remaining := int32(bankMoneyPerDay) - int32(currentWithdrawn); remaining <= 0 || uint32(remaining) < amount {
+		return false
 	}
 	return true
 }
@@ -2796,10 +2807,10 @@ func (s *session) guildBankWithdrawMoneyForRepair(ctx context.Context, guildID u
 		var perDay, withdrawn uint32
 		_ = cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rank).Scan(&perDay)
 		_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
-		// Same allowance form as checkGuildBankMoneyWithdraw:
-		// withdrawn+amount > perDay denies; C++ _GetMemberRemainingMoney
-		// (Guild.cpp:2600) clamps non-positive remainders to 0.
-		if withdrawn+amount > perDay {
+		// Same gate as checkGuildBankMoneyWithdraw (Guild.cpp:1738/2600):
+		// uint32(int32(BankMoneyPerDay) - withdrawn) < amount denies; the
+		// int32 wrap makes 0xFFFFFFFF deny rather than unlimited.
+		if remaining := int32(perDay) - int32(withdrawn); remaining <= 0 || uint32(remaining) < amount {
 			return false
 		}
 	}
@@ -5438,3 +5449,72 @@ func (s *session) sendSaveGuildEmblemResult(errCode uint32) {
 }
 
 const CHARTER_DISPLAY_ID = 16161
+
+// worldStateGuildDailyResetTime is WS_GUILD_DAILY_RESET_TIME
+// (SharedDefines.h:3870): the persisted next guild daily-cap reset epoch.
+const worldStateGuildDailyResetTime uint32 = 20006
+
+// updateGuildDailyResets ports the World::Update ResetGuildCap arm
+// (World.cpp:2367) and World::ResetGuildCap (World.cpp:3456-3462): when the
+// game time passes the next guild reset, the reset time advances by one day,
+// the worldstate is persisted, and the daily caps are reset. The reset time
+// itself is initialized by World::InitGuildResetTime (World.cpp:3393-3417):
+// the stored worldstate is kept when it lies in the future, otherwise the
+// next reset is the coming Guild.ResetHour boundary (minus a day when the
+// stored time is stale), and a missing worldstate is persisted.
+func (s *Server) updateGuildDailyResets(ctx context.Context, now time.Time) {
+	s.guildResetMu.Lock()
+	if s.nextGuildReset == 0 {
+		gtime := int64(s.getWorldState(worldStateGuildDailyResetTime))
+		curTime := now.Unix()
+		resetHour := uint32(6) // CONFIG_GUILD_RESET_HOUR default (Guild.ResetHour)
+		if s.Config.GuildResetHour > 0 && s.Config.GuildResetHour <= 23 {
+			resetHour = s.Config.GuildResetHour
+		}
+		local := now.Local() // C++ InitGuildResetTime uses localtime_r
+		nextDayReset := time.Date(local.Year(), local.Month(), local.Day(), int(resetHour), 0, 0, 0, local.Location()).Unix()
+		if curTime >= nextDayReset {
+			nextDayReset += 86400
+		}
+		if gtime < curTime {
+			s.nextGuildReset = nextDayReset - 86400
+		} else {
+			s.nextGuildReset = nextDayReset
+		}
+		if gtime == 0 {
+			s.setWorldState(ctx, worldStateGuildDailyResetTime, uint64(s.nextGuildReset))
+		}
+	}
+	fire := now.Unix() > s.nextGuildReset
+	if fire {
+		s.nextGuildReset += 86400
+		s.setWorldState(ctx, worldStateGuildDailyResetTime, uint64(s.nextGuildReset))
+	}
+	s.guildResetMu.Unlock()
+	if !fire {
+		return
+	}
+	s.resetGuildDailyCaps(ctx)
+}
+
+// resetGuildDailyCaps ports GuildMgr::ResetTimes (GuildMgr.cpp:400-406):
+// TRUNCATE guild_member_withdraw, then every guild runs Guild::ResetTimes
+// (Guild.cpp:2941-2946) — Member::ResetValues zeroes the per-member daily
+// counters and GE_BANK_TAB_AND_MONEY_UPDATED is broadcast to the guild.
+// The Go server keeps no in-memory per-member withdraw counters (every read
+// goes through guild_member_withdraw), so the DELETE is the ResetValues
+// equivalent and the broadcast is the _BroadcastEvent arm.
+func (s *Server) resetGuildDailyCaps(ctx context.Context) {
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GUILD_MEMBER_WITHDRAW"))
+	}
+	payload := guildEventPayload(guildEventBankTabAndMoneyUpdated, 0)
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.player.GuildID == 0 {
+			continue
+		}
+		_ = sess.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), payload, true)
+	}
+}

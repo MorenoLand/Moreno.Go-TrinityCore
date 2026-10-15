@@ -1236,6 +1236,15 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			target.debug("chat delivery failed", "account", target.accountName, "error", err)
 		}
 	}
+	// Reference: Player::Whisper (Player.cpp:21035-21041) — the
+	// CHAT_MSG_WHISPER_INFORM echo is sent to the sender unconditionally
+	// (except for addon messages); when whispering yourself the target
+	// loop above only delivers the CHAT_MSG_WHISPER packet, so the inform
+	// is sent here to match.
+	if chatType == chatWhisper && language != languageAddon && receiver != nil && receiver == source {
+		payload := protocol.BuildChatMessageWithOptions(chatWhisperInform, language, source.playerGUID, source.playerGUID, message, channel, false, "", source.chatTag())
+		_ = source.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+	}
 }
 
 func (s *session) chatTag() uint8 {
