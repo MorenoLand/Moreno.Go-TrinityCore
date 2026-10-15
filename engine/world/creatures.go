@@ -101,6 +101,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	}
 	var eventArgs []any
 	eventClause := gameEventSpawnClause("gec.eventEntry", s.activeEventList(ctx), &eventArgs)
+	// IsSpiritService (Unit.h:1021) tests the live UNIT_NPC_FLAGS
+	// (template | spawn npcflag override), so the ghost-visibility predicate
+	// uses COALESCE(NULLIF(c.npcflag,0),t.npcflag,0), not the template
+	// column alone.
 	fullQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
 		COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), NULLIF(t.modelid2, 0), NULLIF(t.modelid3, 0), NULLIF(t.modelid4, 0), 1),
 		t.faction, (t.npcflag | ` + npcFlagExpr + `), t.unit_flags, t.dynamicflags,
@@ -120,7 +124,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		LEFT JOIN game_event_creature AS gec ON gec.guid = c.guid
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
 		AND (` + phaseClause + `)
-		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
+		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(NULLIF(c.npcflag, 0), t.npcflag, 0) & 0xC000) = 0))
 		AND ` + eventClause + `
 		ORDER BY c.guid`
 	queryArgs := make([]any, 0, len(selectArgs)+9+len(eventArgs)+len(phaseOverrideArgs))
@@ -139,7 +143,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			JOIN creature_template AS t ON t.entry = c.id
 			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
 			AND (` + phaseClause + `)
-			AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
+			AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(NULLIF(c.npcflag, 0), t.npcflag, 0) & 0xC000) = 0))
 			ORDER BY c.guid`
 		fallbackArgs := []any{state.Map, float64(state.X) - distance, float64(state.X) + distance, float64(state.Y) - distance, float64(state.Y) + distance, isGM, phaseMask}
 		fallbackArgs = append(fallbackArgs, phaseOverrideArgs...)

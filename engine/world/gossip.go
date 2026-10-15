@@ -63,7 +63,7 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 		s.debug("gossip hello unknown", "account", s.accountName, "guid", guid)
 		return true
 	}
-	if !s.canInteractWithCreature(creature) {
+	if !s.canInteractWithCreature(ctx, creature) {
 		s.debug("gossip hello out of interaction range", "account", s.accountName, "guid", guid)
 		return true
 	}
@@ -299,7 +299,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	if creature == nil {
 		return true
 	}
-	if !s.canInteractWithCreature(creature) {
+	if !s.canInteractWithCreature(ctx, creature) {
 		s.debug("gossip selection out of interaction range", "account", s.accountName, "guid", guid)
 		return true
 	}
@@ -1327,7 +1327,7 @@ func (s *session) sendGossipMenu() error {
 	return s.write(uint16(protocol.OpcodeSMSG_GOSSIP_MESSAGE), buildGossipMessage(*s.gossip), true)
 }
 
-func (s *session) canInteractWithCreature(creature *scripting.Object) bool {
+func (s *session) canInteractWithCreature(ctx context.Context, creature *scripting.Object) bool {
 	if s == nil || s.player == nil || creature == nil {
 		return false
 	}
@@ -1347,6 +1347,23 @@ func (s *session) canInteractWithCreature(creature *scripting.Object) bool {
 	}
 	if xOK && yOK && zOK && distance3D(s.player.X, s.player.Y, s.player.Z, x, y, z) > 5.0 {
 		return false
+	}
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2332): a dead player
+	// cannot interact unless the template is ghost-visible
+	// (CREATURE_TYPE_FLAG_GHOST_VISIBLE, SharedDefines.h:2730).
+	if s.player.Health == 0 || s.player.PlayerFlags&playerFlagGhost != 0 {
+		entry, ok := objectUint32Field(creature, "Entry")
+		if !ok {
+			return false
+		}
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var typeFlags int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?`, entry).Scan(&typeFlags); err == nil {
+				if uint32(typeFlags)&creatureTypeFlagGhostVisible == 0 {
+					return false
+				}
+			}
+		}
 	}
 	return true
 }

@@ -248,6 +248,12 @@ type playerState struct {
 	// from gameTimeMS; zero means no sanctuary recorded.
 	LastSanctuaryTime uint32
 	repopOnLogin      bool
+	// loadedCorpseRow is set by restoreLoadedCorpseState's dead arm when the
+	// corpse table still holds a row for the player: Player::LoadCorpse
+	// (Player.cpp:18301-18313) keeps that row as-is (reclaim delay counts
+	// from its original time, PvP type preserved), so buildPlayerRepop must
+	// not convert+rewrite it at login.
+	loadedCorpseRow bool
 	// corpseX/Y/Z mirror Player::GetCorpse() (m_corpse): while the player is
 	// dead, C++ distance checks that anchor on the player (e.g.
 	// Player::IsAtGroupRewardDistance, Player.cpp:24160-24173) measure from
@@ -2915,7 +2921,11 @@ func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerSta
 	if s == nil || state == nil || state.AtLogin&uint32(atLoginResurrect) != 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
-	if state.Health != 0 {
+	// Player::LoadCorpse (Player.cpp:18303): bones conversion on login is
+	// gated on IsAlive(), and Go ghosts carry Health=1 (death.go:1127), so
+	// the health check must also exclude the ghost flag — otherwise a ghost
+	// logging in on its corpse's map deletes the reclaimable corpse row.
+	if state.Health != 0 && state.PlayerFlags&playerFlagGhost == 0 {
 		var corpseMap int64
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId FROM corpse WHERE guid = ? AND corpseType <> ? LIMIT 1", state.GUID, corpseTypeBones).Scan(&corpseMap); err == nil && ShouldConvertLoadedCorpseToBones(state.Map, uint32(corpseMap), true) {
 			s.loadedCorpseBones = true
@@ -2926,6 +2936,10 @@ func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerSta
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, corpseType FROM corpse WHERE guid = ? AND corpseType <> ? LIMIT 1", state.GUID, corpseTypeBones).Scan(&corpseMap, &corpseType); err != nil {
 		return
 	}
+	// The row survives login untouched (Player::LoadCorpse,
+	// Player.cpp:18301-18313); mark it so buildPlayerRepop skips the
+	// convert+rewrite that a fresh death performs.
+	state.loadedCorpseRow = true
 	state.PlayerFlags |= playerFlagGhost
 	state.repopOnLogin = true
 	state.PlayerFieldBytes &^= playerFieldByteReleaseTimer

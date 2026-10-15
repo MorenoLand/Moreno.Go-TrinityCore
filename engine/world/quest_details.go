@@ -443,7 +443,7 @@ func (s *session) canInteractWithQuestGiver(ctx context.Context, guid uint64) bo
 		return true
 	default:
 		creature := s.luaCreature(ctx, guid)
-		if creature == nil || !s.canInteractWithCreature(creature) {
+		if creature == nil || !s.canInteractWithCreature(ctx, creature) {
 			return false
 		}
 		return objectUint32OrZero(creature, "NPCFlags")&npcFlagQuestgiver != 0

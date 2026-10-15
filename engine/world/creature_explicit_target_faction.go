@@ -18,6 +18,7 @@ import (
 const (
 	creatureTypeFlagTreatAsRaidUnit uint32 = 0x04000000 // CREATURE_TYPE_FLAG_TREAT_AS_RAID_UNIT (SharedDefines.h:2755)
 	creatureTypeFlagCanAssist       uint32 = 0x00001000 // CREATURE_TYPE_FLAG_CAN_ASSIST (SharedDefines.h:2743)
+	creatureTypeFlagGhostVisible    uint32 = 0x00000002 // CREATURE_TYPE_FLAG_GHOST_VISIBLE (SharedDefines.h:2730)
 	factionTemplateFlagContested    uint32 = 0x00001000 // FACTION_TEMPLATE_FLAG_CONTESTED_GUARD (DBCEnums.h:320)
 )
 

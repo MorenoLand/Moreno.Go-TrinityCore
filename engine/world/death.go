@@ -1100,8 +1100,15 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	// DEATH_BONES configs) instead of only deleting the row.
 	// convertCorpseToBones is the Go analog; it early-returns when no row
 	// exists, matching ConvertCorpseToBones' GetCorpseByPlayer miss.
-	s.convertCorpseToBones(ctx, false)
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && !bgLootable {
+	// Player::LoadCorpse (Player.cpp:18301-18313): a dead login keeps the
+	// existing corpse row as-is — its reclaim delay counts from the original
+	// time and its PvP type is preserved — instead of the convert+rewrite a
+	// fresh death performs.
+	keepCorpseRow := s.player.repopOnLogin && s.player.loadedCorpseRow
+	if !keepCorpseRow {
+		s.convertCorpseToBones(ctx, false)
+	}
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && !bgLootable && !keepCorpseRow {
 		// Column order mirrors SaveToDB (Corpse.cpp:102-119): the dynFlags
 		// 0 is exact — Player::CreateCorpse never sets CORPSE_FIELD_DYNAMIC_FLAGS
 		// on a fresh corpse — and instanceId is the map's instance id

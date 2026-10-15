@@ -2849,6 +2849,27 @@ func (s *Server) clearLootState(mapID, instanceID uint32, guids ...uint64) {
 	s.lootMu.Unlock()
 }
 
+// addLootMoney mirrors Player::ModifyMoney's positive arm
+// (Player.cpp:22821-22840): an amount that would push the player past
+// MAX_MONEY_AMOUNT is rejected outright (no partial add); the client gets
+// EQUIP_ERR_TOO_MUCH_GOLD. The loot gold itself is still consumed —
+// HandleLootMoneyOpcode zeroes loot->gold regardless of the cap outcome.
+// On a successful add, Player::SetMoney fires the HIGHEST_GOLD_VALUE_OWNED
+// criteria (Player.cpp:22842-22846).
+func (s *session) addLootMoney(amount uint32) bool {
+	if s == nil || s.player == nil || amount == 0 {
+		return amount == 0
+	}
+	if s.player.Money < maxMoneyAmount-amount {
+		s.player.Money += amount
+		s.updateAchievementCriteria(criteriaTypeHighestGoldValue, 0, s.player.Money)
+		return true
+	}
+	// sScriptMgr->OnPlayerMoneyLimit has no Go script bridge.
+	s.sendEquipError(equipErrTooMuchGold, 0)
+	return false
+}
+
 func (s *session) handleLootMoney(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.activeLoot == nil || s.activeLoot.Money == 0 {
 		return true
@@ -2934,14 +2955,18 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	if len(nearMembers) > 1 && shareMoney {
 		copperPerPlayer := copper / uint32(len(nearMembers))
 		for _, m := range nearMembers {
-			m.player.Money += copperPerPlayer
-			m.questMoneyChanged(ctx)
+			// Player::ModifyMoney (Player.cpp:22827-22838): the add is
+			// rejected outright past the cap, but the notify + LOOT_MONEY
+			// criteria still fire (LootHandler.cpp:183-195).
+			if m.addLootMoney(copperPerPlayer) {
+				m.questMoneyChanged(ctx)
+				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", m.player.Money, m.playerGUID)
+				}
+			}
 			// HandleLootMoneyOpcode (LootHandler.cpp:104): the achievement
 			// fires per recipient, including the split path.
 			m.updateAchievementCriteria(criteriaTypeLootMoney, 0, copperPerPlayer)
-			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", m.player.Money, m.playerGUID)
-			}
 			notify := protocol.NewBuffer(5)
 			notify.WriteU32(copperPerPlayer)
 			notify.WriteU8(0) // 0 = "Your share is..."
@@ -2949,12 +2974,13 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 			m.sendPlayerUpdate()
 		}
 	} else {
-		s.player.Money += copper
-		s.questMoneyChanged(ctx)
-		s.updateAchievementCriteria(criteriaTypeLootMoney, 0, copper)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		if s.addLootMoney(copper) {
+			s.questMoneyChanged(ctx)
+			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+			}
 		}
+		s.updateAchievementCriteria(criteriaTypeLootMoney, 0, copper)
 		notify := protocol.NewBuffer(5)
 		notify.WriteU32(copper)
 		notify.WriteU8(1) // 1 = "You loot..."
