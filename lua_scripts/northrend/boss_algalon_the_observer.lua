@@ -168,6 +168,30 @@ local function algalonTargetDied(event, creature, victim)
     end
 end
 
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
 local function algalonReset(event, creature)
     algalonState[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
@@ -212,30 +236,6 @@ local EMOTE_ALGALON_COSMIC_SMASH = 10
 
 -- Re-pull introDelay (:376); first-pull 26500ms unbridged — see (1) above.
 local INTRO_DELAY = 8000
-
-local timers = {}
-
-local function cancelTimers(guid)
-    local per = timers[guid]
-    if per then
-        for _, id in pairs(per) do
-            RemoveEventById(id)
-        end
-        timers[guid] = nil
-    end
-end
-
-local function schedule(guid, key, delay, fn)
-    local per = timers[guid]
-    if not per then
-        per = {}
-        timers[guid] = per
-    end
-    if per[key] then
-        RemoveEventById(per[key])
-    end
-    per[key] = CreateLuaEvent(fn, delay)
-end
 
 -- C++ boss_algalon_the_observerAI::EVENT_QUANTUM_STRIKE:
 -- DoCastVictim(SPELL_QUANTUM_STRIKE 64395) (non-triggered),
