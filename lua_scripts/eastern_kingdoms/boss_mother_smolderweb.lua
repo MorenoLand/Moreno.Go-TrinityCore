@@ -24,8 +24,8 @@
 -- EVENT_CRYSTALIZE: self-cast CRYSTALIZE 16104, 20s init -> 15s loop
 -- (DoCast(me, spell) path, creature:CastSpell(creature, spell)).
 -- EVENT_MOTHERS_MILK: self-cast MOTHERSMILK 16468, 10s init ->
--- 5s loop (C++ range 5s,12500ms uses the lower bound,
--- recurring-timer convention).
+-- {5s,12.5s} loop (C++ ScheduleEvent(EVENT_MOTHERS_MILK, 5s, 12500ms)
+-- inclusive range; CreateLuaEvent {min,max} table is inclusive).
 -- DamageTaken: GetHealth() <= damage (lethal hit) -> self-cast
 -- SUMMON_SPIRE_SPIDERLING 16103 (DoCast(me, 16103, true)). C++-exact
 -- condition; one-shot per-guid flag (the fight cannot outlive the
@@ -73,7 +73,7 @@ end
 
 local function onMothersMilk(creature, guid)
     creature:CastSpell(creature, SPELL_MOTHERSMILK)
-    schedule(guid, "milk", 5000, function() onMothersMilk(creature, guid) end)
+    schedule(guid, "milk", {5000, 12500}, function() onMothersMilk(creature, guid) end)
 end
 
 local function onEnterCombat(_, creature)

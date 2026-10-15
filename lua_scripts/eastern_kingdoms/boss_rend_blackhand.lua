@@ -23,14 +23,15 @@
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI event
 -- machine):
--- EVENT_WHIRLWIND: self-cast WHIRLWIND 13736, 13s init -> 13s loop
--- (C++ urand(13s,15s) init / urand(13s,18s) loop — ranges use the
--- lower bound, halycon recurring-timer convention).
--- EVENT_CLEAVE: victim-cast CLEAVE 15284, 15s init -> 10s loop
--- (C++ urand(15s,17s) init / urand(10s,14s) loop — lower bound).
--- EVENT_MORTAL_STRIKE: victim-cast MORTAL_STRIKE 16856, 17s init ->
--- 14s loop (C++ urand(17s,19s) init / urand(14s,16s) loop — lower
--- bound). Victim casts are GetVictim nil-guarded (incarcerator
+-- EVENT_WHIRLWIND: self-cast WHIRLWIND 13736, {13s,15s} init ->
+-- {13s,18s} loop (C++ ScheduleEvent(EVENT_WHIRLWIND, 13s, 15s) init /
+-- (EVENT_WHIRLWIND, 13s, 18s) loop, inclusive; CreateLuaEvent {min,max}
+-- table is inclusive).
+-- EVENT_CLEAVE: victim-cast CLEAVE 15284, {15s,17s} init ->
+-- {10s,14s} loop (C++ inclusive ranges; CreateLuaEvent {min,max}).
+-- EVENT_MORTAL_STRIKE: victim-cast MORTAL_STRIKE 16856, {17s,19s}
+-- init -> {14s,16s} loop (C++ inclusive ranges; CreateLuaEvent
+-- {min,max}). Victim casts are GetVictim nil-guarded (incarcerator
 -- convention).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and both
@@ -87,7 +88,7 @@ end
 
 local function onWhirlwind(creature, guid)
     creature:CastSpell(creature, SPELL_WHIRLWIND)
-    schedule(guid, "whirlwind", 13000, function() onWhirlwind(creature, guid) end)
+    schedule(guid, "whirlwind", {13000, 18000}, function() onWhirlwind(creature, guid) end)
 end
 
 local function onCleave(creature, guid)
@@ -95,7 +96,7 @@ local function onCleave(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
     end
-    schedule(guid, "cleave", 10000, function() onCleave(creature, guid) end)
+    schedule(guid, "cleave", {10000, 14000}, function() onCleave(creature, guid) end)
 end
 
 local function onMortalStrike(creature, guid)
@@ -103,15 +104,15 @@ local function onMortalStrike(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_MORTAL_STRIKE)
     end
-    schedule(guid, "mortalstrike", 14000, function() onMortalStrike(creature, guid) end)
+    schedule(guid, "mortalstrike", {14000, 16000}, function() onMortalStrike(creature, guid) end)
 end
 
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "whirlwind", 13000, function() onWhirlwind(creature, guid) end)
-    schedule(guid, "cleave", 15000, function() onCleave(creature, guid) end)
-    schedule(guid, "mortalstrike", 17000, function() onMortalStrike(creature, guid) end)
+    schedule(guid, "whirlwind", {13000, 15000}, function() onWhirlwind(creature, guid) end)
+    schedule(guid, "cleave", {15000, 17000}, function() onCleave(creature, guid) end)
+    schedule(guid, "mortalstrike", {17000, 19000}, function() onMortalStrike(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

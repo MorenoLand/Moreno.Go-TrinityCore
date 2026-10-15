@@ -117,9 +117,11 @@ local function onDamageTaken(_, creature, _, damage)
     if maxHealth == 0 then
         return
     end
-    -- C++ UpdateAI !HealthAbovePct(66/33) on current health (jeklik
-    -- convention): health <= floor(maxHealth*pct/100).
-    local health = creature:GetHealth()
+    -- C++ UpdateAI !HealthAbovePct(66/33) on current (post-damage)
+    -- health (jeklik convention): health <= floor(maxHealth*pct/100).
+    -- Eluna event 9 fires pre-application, so the port subtracts the
+    -- incoming damage to get the genuine post-hit health.
+    local health = creature:GetHealth() - damage
     if stage == 0 and health <= math.floor(maxHealth * 66 / 100) then
         phaseStage[guid] = 1
         creature:CastSpell(creature, SPELL_SMITE_STOMP)
