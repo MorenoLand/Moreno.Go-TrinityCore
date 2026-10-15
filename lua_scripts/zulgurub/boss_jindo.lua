@@ -257,9 +257,11 @@ local function shadeReset(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ npc_shade_of_jindoAI::Reset (boss_jindo.cpp): re-arm the shadow
     -- shock timer (Initialize) and self-cast invisibility 24307 triggered.
-    -- Reset runs at spawn and on evade; the cast does NOT belong on
-    -- enter-combat.
-    creature:CastSpell(creature, SPELL_INVISIBLE, true)
+    -- Reset runs at spawn and on evade, never on death; the cast does NOT
+    -- belong on enter-combat or on the corpse.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_INVISIBLE, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_SHADE, 1, shadeEnterCombat)

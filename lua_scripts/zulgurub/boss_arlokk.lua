@@ -350,9 +350,13 @@ local function prowlerEnterCombat(event, creature, target)
     creature:RemoveAura(SPELL_SNEAK_2)
 end
 
+-- C++ Reset (boss_arlokk.cpp:353-370): the sneak casts are spawn/evade-only,
+-- never run on death; they do not belong on the corpse.
 local function prowlerReset(event, creature)
-    creature:CastSpell(creature, SPELL_SNEAK_1)
-    creature:CastSpell(creature, SPELL_SNEAK_2)
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SNEAK_1)
+        creature:CastSpell(creature, SPELL_SNEAK_2)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_PROWLER, 1, prowlerEnterCombat)

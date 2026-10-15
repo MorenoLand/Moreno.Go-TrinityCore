@@ -288,11 +288,14 @@ local function entropiusCleanup(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset: triggered self-cast 46223 (constructor/cosmetic arm).
+-- C++ Reset (boss_muru.cpp:144-148): triggered self-cast 46223 — spawn/evade-only,
+-- never runs on death; the cast does not belong on the corpse.
 local function entropiusReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_ENTROPIUS_COSMETIC_SPAWN, true)
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_ENTROPIUS_COSMETIC_SPAWN, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_ENTROPIUS, 1, entropiusEnterCombat)
