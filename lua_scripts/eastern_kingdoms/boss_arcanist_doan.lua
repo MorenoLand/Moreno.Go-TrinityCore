@@ -26,19 +26,16 @@
 -- re-arm is unconditional, matching C++ Repeat outside the if). The
 -- UpdateAI below-50% latch (Talk(SAY_SPECIALAE 1) + non-triggered
 -- DoCastSelf arcane bubble 9438, once via the _healthAbove50Pct bool) is
--- modeled on the pre-damage hook (moroes/chromaggus/golemagg
--- convention): current (pre-damage) health below the floored
--- threshold health < floor(maxHealth*50/100) (C++ HealthBelowPct(50)
--- = health < CalculatePct(maxHealth, 50); the old float form
--- health*100/max < 50 fired up to 1 HP early at fractional
--- boundaries — magtheridon fractional-threshold class; golemagg
--- 704fb8e bug class, so the latch does NOT subtract the incoming
--- damage) and not yet latched -> Talk(1) + non-triggered self-cast
--- 9438 + non-triggered DoCastAOE detonation 9435 (self-cast lowering,
--- selin_fireheart convention); per-GUID Lua state holds the once-guard
--- (no HasAura bridge),
--- cleared on 2/4/23. OnDied/OnLeaveCombat/OnReset: cancel timers,
--- clear the latch.
+-- modeled on the pre-damage hook: (pre-damage health - incoming damage)
+-- below the floored threshold (C++ HealthBelowPct(50) in UpdateAI reads
+-- post-damage current health, boss_arcanist_doan.cpp:103 — so damage IS
+-- subtracted, HealthBelowPctDamaged semantics, magmus precedent; the
+-- golemagg 704fb8e no-subtraction rule applies only where C++ reads
+-- pre-damage health in AI::DamageTaken) and not yet latched -> Talk(1)
+-- + non-triggered self-cast 9438 + non-triggered DoCastAOE detonation
+-- 9435 (self-cast lowering, selin_fireheart convention); per-GUID Lua
+-- state holds the once-guard (no HasAura bridge), cleared on 2/4/23.
+-- OnDied/OnLeaveCombat/OnReset: cancel timers, clear the latch.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no UNIT_STATE bridge — timers fire
 -- unconditionally (jeklik convention); the below-50% latch fires on
@@ -175,11 +172,12 @@ local function doanReset(event, creature)
     doanResetState(creature:GetGUID())
 end
 
--- C++ UpdateAI below-50% arm: current health strictly below 50% and
--- not yet latched -> Talk(SAY_SPECIALAE) + non-triggered DoCastSelf
--- (arcane bubble 9438). Modeled on the pre-damage hook (event 9) with
--- current-health semantics (golemagg 704fb8e bug class: HealthBelowPct
--- reads current health, so no damage subtraction). The
+-- C++ UpdateAI below-50% arm: post-damage current health strictly
+-- below 50% (boss_arcanist_doan.cpp:103) and not yet latched ->
+-- Talk(SAY_SPECIALAE) + non-triggered DoCastSelf (arcane bubble 9438).
+-- Modeled on the pre-damage hook (event 9) as (health - damage) <
+-- floor(max*50/100) — HealthBelowPctDamaged semantics (magmus
+-- precedent); no-subtraction would fire up to one hit late. The
 -- DoCastAOE(detonation 9435) arm rides the latch as non-triggered
 -- self-cast (selin_fireheart DoCastAOE convention).
 local function doanDamageTaken(event, creature, attacker, damage)
@@ -192,7 +190,13 @@ local function doanDamageTaken(event, creature, attacker, damage)
         return
     end
     local health = creature:GetHealth()
-    if health < math.floor(maxHealth * 50 / 100) then
+    -- C++ reads HealthBelowPct(50) in UpdateAI (post-damage current
+    -- health, boss_arcanist_doan.cpp:103), so the pre-damage hook
+    -- subtracts the incoming damage (HealthBelowPctDamaged semantics,
+    -- magmus precedent). The golemagg 704fb8e no-subtraction rule does
+    -- NOT apply here: there C++ reads pre-damage health in AI::DamageTaken,
+    -- here it reads post-damage health in UpdateAI.
+    if health - damage < math.floor(maxHealth * 50 / 100) then
         bubbleLatched[guid] = true
         creature:Talk(SAY_SPECIALAE)
         creature:CastSpell(creature, SPELL_ARCANE_BUBBLE)

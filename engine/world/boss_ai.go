@@ -7257,9 +7257,12 @@ func init() {
 	// boss_vem (Vem, entry 15544 — Bug Trio): Charge 26561 on
 	// random player via GetPlayersInWorld (15-27s -> 8-16s; the
 	// AttackStart leg has no bridge); Knockback 26027 on victim
-	// (8-20s -> 15-25s; threat modify has no bridge); Enrage 34624
-	// self-cast after 120s (latched). Unwired: JustDied instance
-	// legs. Full analysis in lua_scripts/kalimdor/boss_vem.lua.
+	// (8-20s -> 15-25s; threat modify has no bridge). Enrage 34624
+	// is NOT ported: dead code in this tree — the else-branch at
+	// boss_bug_trio.cpp:219 decrements Charge_Timer instead of
+	// Enrage_Timer, so it never ticks down and the cast never fires.
+	// Unwired: JustDied instance legs. Full analysis in
+	// lua_scripts/kalimdor/boss_vem.lua.
 	RegisterLuaBoss("boss_vem", 15544)
 
 	// boss_yauj (Princess Yauj, entry 15543 — Bug Trio): Fear 19408

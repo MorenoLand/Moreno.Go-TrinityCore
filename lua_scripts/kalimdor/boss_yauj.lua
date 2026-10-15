@@ -3,7 +3,9 @@
 -- (boss_yaujAI : public BossAI(creature, DATA_BUG_TRIO); GetAI via
 -- GetAQ40AI<boss_yaujAI>(creature); registered in AddSC_bug_trio();
 -- kalimdor loader decl 91 — fifth "// Temple of ahn'qiraj" group).
--- Entry: 15543 = NPC_YAUJ (worker-verified).
+-- Entry: 15543 (no NPC_YAUJ constant exists in temple_of_ahnqiraj.h —
+-- only NPC_VEM = 15544 and NPC_KRI = 15511; binding is DB-side via
+-- RegisterTempleOfAhnQirajCreatureAI).
 -- Ported: Fear 19408 on victim (12-24s -> 20s; the ResetThreatList
 -- leg has no bridge — zero usage in lua_scripts).
 -- Documented-only: Heal 25807 (target selection via instance
