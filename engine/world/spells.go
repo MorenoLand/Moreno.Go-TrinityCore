@@ -30302,16 +30302,32 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 		if meets, err := s.meetSpellClickConditions(ctx, clickEntry, click.spellID, targetGUID); err != nil || !meets {
 			continue
 		}
-		// Unit::HandleSpellClick (Unit.cpp:12982): the caster is the clicker
-		// only under NPC_CLICK_CAST_CASTER_CLICKER (0x01, SharedDefines.h:723);
-		// otherwise the creature casts, which has no Go model — no-bridge.
-		if click.castFlags&0x01 == 0 {
-			continue
-		}
-
+		// Unit::HandleSpellClick (Unit.cpp:12982,12999): the caster is the
+		// clicker only under NPC_CLICK_CAST_CASTER_CLICKER (0x01,
+		// SharedDefines.h:723); otherwise the clicked creature casts the
+		// row's spell with TRIGGERED_NONE (CastSpellExtraArgs() default).
+		// The creature-caster arm rides castCreatureSpellInternal — the
+		// same CheckCast gauntlet the Lua creature:CastSpell path runs —
+		// against the clicked unit's motion (pets resolve their own
+		// motion; a missing motion drops the row, the C++ IsInMap arm).
+		// The NPC_CLICK_CAST_ORIG_CASTER_OWNER (0x04) original-caster arm
+		// (Unit.cpp:13001,13035-13036) has no Go model —
+		// castCreatureSpellInternal carries no original-caster concept —
+		// so the dynobject/gameobject cancel cleanup keyed on it stays a
+		// documented delta.
 		targetUnit := targetGUID
 		if click.castFlags&0x02 != 0 { // NPC_CLICK_CAST_TARGET_CLICKER
 			targetUnit = s.playerGUID
+		}
+		if click.castFlags&0x01 == 0 {
+			casterMotion := motion
+			if isPet {
+				casterMotion = s.findCreatureMotion(targetGUID)
+			}
+			if casterMotion != nil {
+				s.server.castCreatureSpell(ctx, casterMotion, click.spellID, targetUnit)
+			}
+			continue
 		}
 
 		if s.server.Data != nil {
