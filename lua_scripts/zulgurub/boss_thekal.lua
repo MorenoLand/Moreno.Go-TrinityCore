@@ -122,7 +122,10 @@ local timers = {}
 local encounters = {}
 
 local function nowMs()
-    return math.floor(os.clock() * 1000)
+    -- GetCurrTime is wall-clock ms (Eluna global, engine globals.go:941);
+    -- os.clock() is CPU time and stalls while the server idles, which would
+    -- corrupt the due/remaining math used by delayTimers.
+    return GetCurrTime()
 end
 
 local function cancelTimers(guid)
