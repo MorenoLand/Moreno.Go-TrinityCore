@@ -1072,7 +1072,8 @@ func (s *session) handleQueryNextMailTime(ctx context.Context) bool {
 	}
 	// TrinityCore HandleQueryNextMailTime: unread and already delivered mails
 	// (checked & MAIL_CHECK_MASK_READ) == 0 are listed once per sender (max 3
-	// entries); when none exist the client is told -DAY so no mail icon shows.
+	// entries); NextMailTime is 0.0f whenever unReadMails > 0, and -DAY
+	// (no mail icon) only when the unread counter itself is zero.
 	type nextMailEntry struct {
 		Sender      uint64
 		AltSender   uint32
@@ -1120,7 +1121,10 @@ func (s *session) handleQueryNextMailTime(ctx context.Context) bool {
 		}
 	}
 	buf := protocol.NewBuffer(32)
-	if len(entries) > 0 {
+	// Reference: MailHandler.cpp:623-624 — NextMailTime is gated on
+	// unReadMails > 0, so it is 0.0f even when the Next list is empty;
+	// -DAY is sent only when the counter itself is zero.
+	if s.unreadMails > 0 {
 		buf.WriteF32(0) // NextMailTime: mail is ready now
 	} else {
 		buf.WriteF32(-86400) // -DAY: no unread mail, hides the notification

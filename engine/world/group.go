@@ -1885,8 +1885,10 @@ const targetIconCount = 8
 // handleGroupRaidConvert processes CMSG_GROUP_RAID_CONVERT (0x28E).
 // TrinityCore: WorldSession::HandleGroupRaidConvertOpcode.
 func (s *session) handleGroupRaidConvert(ctx context.Context, _ []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:785): the reference logs and drops the
+	// packet when no player is logged in — the connection stays open.
 	if !s.playerLoaded || s.groupID == 0 {
-		return false
+		return true
 	}
 	// HandleGroupRaidConvertOpcode (GroupHandler.cpp:578): no conversion
 	// from inside a battleground
@@ -2155,6 +2157,7 @@ func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte
 	// rebroadcast unconditionally (SendUpdate runs after ToggleGroupMemberFlag
 	// even for a no-op toggle).
 	member := false
+	var memberFlags uint8
 	for i := range grp.Members {
 		if grp.Members[i].GUID == guid {
 			if apply != 0 {
@@ -2162,6 +2165,7 @@ func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte
 			} else {
 				grp.Members[i].Flags &^= memberFlagAssistant
 			}
+			memberFlags = grp.Members[i].Flags
 			member = true
 			break
 		}
@@ -2169,6 +2173,11 @@ func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte
 	s.server.groupsMu.Unlock()
 
 	if member {
+		// Group::SetGroupMemberFlag (Group.cpp:2619) persists the flag to the
+		// DB (CHAR_UPD_GROUP_MEMBER_FLAG) before the broadcast.
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_UPD_GROUP_MEMBER_FLAG"), memberFlags, guid)
+		}
 		s.server.broadcastGroupList(grp)
 	}
 	return true
@@ -2777,6 +2786,13 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 			WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ?`,
 			s.playerGUID, mapID, difficulty).Scan(&curState, &permanent)
 		if err != nil || permanent == 0 {
+			return true
+		}
+		// CalendarHandler.cpp:793: GetBoundInstance(mapId, difficulty,
+		// includeExpired = toggleExtend == 1) excludes an already-expired bind
+		// when toggling extend OFF — that arm is a no-op, not a resurrection
+		// of the bind to NORMAL.
+		if toggleExtend == 0 && curState == 0 {
 			return true
 		}
 		// CalendarHandler.cpp:802-806: !toggleExtend or an already-expired

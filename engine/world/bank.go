@@ -89,7 +89,7 @@ func (s *session) canUseBank(ctx context.Context, bankerGUID uint64) bool {
 // Reference: WorldSession::HandleBankerActivateOpcode (BankHandler.cpp:46).
 func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	// NPC::Hello::Read (NPCPackets.cpp:20-23) does `_worldPacket >> Unit`;
@@ -97,7 +97,7 @@ func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool
 	// (ObjectGuid.cpp:76-80), not a packed one.
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// BankHandler.cpp:46-53 (HandleBankerActivateOpcode): the NPC must be
 	// interactable as a banker (UNIT_NPC_FLAG_BANKER), otherwise silent drop.
@@ -120,7 +120,7 @@ func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool
 // Reference: WorldSession::HandleBuyBankSlotOpcode (BankHandler.cpp:138).
 func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	// Bank::BuyBankSlot::Read (BankPackets.cpp:32-35) does
@@ -128,7 +128,7 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 	// (ObjectGuid.cpp:76-80), not packed.
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -318,16 +318,16 @@ func (s *session) itemBagFamilyOf(ctx context.Context, itemEntry uint32) uint32 
 // Reference: WorldSession::HandleAutoBankItemOpcode (BankHandler.cpp:62).
 func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	srcBag, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	srcSlot, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// BankHandler.cpp:66-70: silent drop without an interactable banker —
@@ -547,16 +547,16 @@ func (s *session) findFreeInventoryAutoSlot(ctx context.Context, itemEntry uint3
 // Reference: WorldSession::HandleAutoStoreBankItemOpcode (BankHandler.cpp:95).
 func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	srcBag, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	srcSlot, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// BankHandler.cpp:99-103: silent drop without an interactable banker.
@@ -670,8 +670,6 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 	}
 	if isBank {
 		s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), true)
-	} else {
-		s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), false)
 	}
 
 	if srcBagKey == 0 && srcSlot < equipSlotEnd {
