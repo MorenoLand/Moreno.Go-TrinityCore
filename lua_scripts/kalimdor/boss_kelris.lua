@@ -16,9 +16,11 @@
 -- UNIT_STATE_CASTING gate in Go, so timers fire unconditionally (maiden
 -- precedent).
 -- Ported arms:
--- - Reset (23, C++-exact for the C++ Reset / JustReachedHome channeling
---   legs): self-cast SPELL_BLACKFATHOM_CHANNELING 8734 (non-triggered,
---   DoCastSelf).
+-- - Reset (23): self-cast SPELL_BLACKFATHOM_CHANNELING 8734 (non-triggered,
+--   DoCastSelf) — C++ casts it again at JustReachedHome, ported below on
+--   event 24 (this tick; the old "one cast covers both" note was
+--   C++-inexact — C++ auras are cleared by RemoveAurasOnEvade and the
+--   cast is re-applied at the home-move completion).
 -- - JustEngagedWith: Talk SAY_AGGRO(0); RemoveAurasDueToSpell(8734);
 --   Mind Blast 15587 DoCastVictim, init {2s,5s} -> repeat {7s,9s}
 --   (C++-exact; jeklik GetVictim + CastSpell convention, non-triggered).
@@ -118,10 +120,15 @@ local function kelrisDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
--- C++ Reset / JustReachedHome: DoCastSelf(SPELL_BLACKFATHOM_CHANNELING).
--- Eluna event 23 is the only Lua-modelable reset hook.
+-- C++ Reset: DoCastSelf(SPELL_BLACKFATHOM_CHANNELING).
 local function kelrisOnReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_BLACKFATHOM_CHANNELING)
+end
+
+-- C++ JustReachedHome: the same ungated DoCastSelf(SPELL_BLACKFATHOM_CHANNELING)
+-- at the home-move completion (event 24), non-triggered like the Reset leg.
+local function kelrisReachHome(event, creature)
     creature:CastSpell(creature, SPELL_BLACKFATHOM_CHANNELING)
 end
 
@@ -142,3 +149,4 @@ RegisterCreatureEvent(ENTRY_KELRIS, 1, kelrisEnterCombat)
 RegisterCreatureEvent(ENTRY_KELRIS, 2, kelrisLeaveCombat)
 RegisterCreatureEvent(ENTRY_KELRIS, 4, kelrisDied)
 RegisterCreatureEvent(ENTRY_KELRIS, 23, kelrisOnReset)
+RegisterCreatureEvent(ENTRY_KELRIS, 24, kelrisReachHome)

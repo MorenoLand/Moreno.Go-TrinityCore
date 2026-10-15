@@ -56,8 +56,10 @@
 -- SPELL_EVOCATE 51602) leg is ported on OnReset(23) (the Reset bullet's
 -- earlier "no cast bridge" line was stale — creature:CastSpell is
 -- established in-tree); _Reset() has no bridge.
--- JustReachedHome — DoCastSelf(SPELL_EVOCATE 51602) — no cast
--- bridge.
+-- JustReachedHome — DoCastSelf(SPELL_EVOCATE 51602) — ported below
+-- on event 24 (this tick; the old "no cast bridge" note was stale —
+-- the Reset leg's port above already uses the established CastSpell
+-- bridge).
 -- EnterEvadeMode — gated on _platform > 2 (center only): _EnterEvade-
 -- Mode + NearTeleportTo(1118.3101, 1080.3800, 508.3610, 4.25) or
 -- MoveTargetedHome + Reset + events.Reset — no evade / teleport /
@@ -124,6 +126,15 @@ local function uromReset(event, creature)
     creature:CastSpell(creature, SPELL_EVOCATE)
 end
 
+-- C++ JustReachedHome (boss_urom.cpp:142-145): DoCastSelf(SPELL_EVOCATE)
+-- — the same ungated self-cast as the Reset leg, fired at the home-move
+-- completion (C++ HomeMovementGenerator::DoFinalize). Non-triggered,
+-- matching the Reset port.
+local function uromReachHome(event, creature)
+    creature:CastSpell(creature, SPELL_EVOCATE)
+end
+
 RegisterCreatureEvent(ENTRY_UROM, 3, uromTargetDied)
 RegisterCreatureEvent(ENTRY_UROM, 4, uromDied)
 RegisterCreatureEvent(ENTRY_UROM, 23, uromReset)
+RegisterCreatureEvent(ENTRY_UROM, 24, uromReachHome)

@@ -36,15 +36,18 @@
 -- DoCast directly on the SelectTarget result (fizzles on null); the
 -- port guards instead of casting on nil.
 -- Unmodeled (documented-only): JustAppeared's
--- DoCast(SPELL_ENCAGE_EMBERSEER 15282) and JustReachedHome's self-cast
--- 15282 + SetImmuneToAll(true) have no spawn/evade bridges on the Lua
--- surface. The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
+-- DoCast(SPELL_ENCAGE_EMBERSEER 15282) is not wired here — OnSpawn (event
+-- 5) is a live fire site but the JustAppeared class has its own scan
+-- pending; JustReachedHome's self-cast 15282 is ported below on event 24
+-- (this tick — the old "no evade bridge" note was stale), and
+-- SetImmuneToAll(true) has no bridge. The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
 -- NPC_BLACKHAND_INCARCERATOR 10316, 60.0f -> DoZoneInCombat each —
 -- "Had to do this because CallForHelp will ignore any npcs without
 -- LOS") has no creature-list / zone-in-combat bridges.
 
 local SPELL_STRIKE = 15580
 local SPELL_ENCAGE = 16045
+local SPELL_ENCAGE_EMBERSEER = 15282
 
 local ENTRY_BLACKHAND_INCARCERATOR = 10316
 
@@ -119,7 +122,17 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_blackhand_incarceratorAI::JustReachedHome: UnitAI::DoCast(15282)
+-- resolves via AISpellInfo target AITARGET_SELF to a self-cast, so this is
+-- creature:CastSpell(creature, 15282) on event 24 (OnReachHome fires at the
+-- same point as C++ HomeMovementGenerator::DoFinalize). The
+-- me->SetImmuneToAll(true) leg has no bridge and stays out.
+local function onReachHome(_, creature)
+    creature:CastSpell(creature, SPELL_ENCAGE_EMBERSEER)
+end
+
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 4, onCombatEnd)
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 24, onReachHome)

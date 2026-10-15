@@ -46,10 +46,10 @@
 -- instance->SetData(DATA_BLOOD_QUICKENING_STATE, DONE) /
 -- RewardPlayerAndGroupAtEvent / FindNearestCreature minchar legs
 -- have no instance bridge.
--- boss_blood_queen_lana_thel JustReachedHome — Talk(SAY_WIPE 9)
--- rides with the unbridged instance->SetBossState(FAIL) leg; no
--- event-24 port precedent exists in the lua set, so it is
--- documented here rather than wired.
+-- boss_blood_queen_lana_thel JustReachedHome — the Talk(SAY_WIPE 9) leg
+-- is ported below on event 24 (this tick — the old "no event-24 port
+-- precedent" note was stale); the SetDisableGravity / REACT_AGGRESSIVE
+-- / instance->SetBossState(FAIL) legs have no bridges and stay out.
 -- boss_blood_queen_lana_thel MovementInform — Talk(SAY_AIR_PHASE
 -- 7) rides the POINT_AIR movement-inform leg (no MovementInform
 -- bridge); the air-phase machine (MovePoint / SetDisableGravity /
@@ -103,6 +103,7 @@ local ENTRY_BLOOD_QUEEN_LANA_THEL = 37955
 
 local SAY_AGGRO = 0
 local SAY_KILL = 8
+local SAY_WIPE = 9
 local SAY_DEATH = 11
 local SAY_BERSERK = 10
 local EMOTE_BERSERK_RAID = 12
@@ -186,8 +187,17 @@ local function lanaThelJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_blood_queen_lana_thel::JustReachedHome: the Talk(SAY_WIPE 9)
+-- leg is ungated and fires at the home-move completion (event 24); the
+-- SetDisableGravity(false) / REACT_AGGRESSIVE / instance FAIL legs ride
+-- the no-gravity / no-react-state / no-instance bridges and stay out.
+local function lanaThelReachHome(event, creature)
+    creature:Talk(SAY_WIPE)
+end
+
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 1, lanaThelJustEngagedWith)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 2, lanaThelLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 23, lanaThelReset)
+RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 24, lanaThelReachHome)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 3, lanaThelKilledUnit)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 4, lanaThelJustDied)

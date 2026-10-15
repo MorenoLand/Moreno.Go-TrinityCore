@@ -63,9 +63,12 @@
 -- JustDied (:105-109) — Talk(SAY_DEATH 2) (:108) unconditional.
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 36497):
--- The ctor / JustReachedHome SPELL_SOULSTORM_CHANNEL 69008 pre-fight casts
---   (:80, :95) have no ctor/JustReachedHome bridge; the removal on engage
---   is ported, so the channel visual clears exactly like C++.
+-- The ctor SPELL_SOULSTORM_CHANNEL 69008 pre-fight cast (:80) has no
+--   ctor bridge; JustReachedHome's cast (:95) is ported below on event 24
+--   (this tick — the old "no JustReachedHome bridge" note was stale:
+--   OnReachHome fires at the same point as C++ HomeMovementGenerator::
+--   DoFinalize). The removal on engage is ported, so the channel visual
+--   clears exactly like C++.
 -- The JustSummoned soul-fragment machine (:128-136 — summons.Summon, the
 --   REACT_PASSIVE leg :133, MoveFollow :134, PURPLE_BANISH_VISUAL self-cast
 --   :135) rides the no-summon-list / no-movement bridges, so ported
@@ -285,3 +288,12 @@ RegisterCreatureEvent(ENTRY_BRONJAHM, 3, bronjahmKilledUnit)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 4, bronjahmJustDied)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 9, bronjahmDamageTaken)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 23, bronjahmReset)
+
+-- C++ boss_bronjahmAI::JustReachedHome (:94-96): _JustReachedHome() is
+-- instance bookkeeping (no bridge); DoCast(me, SPELL_SOULSTORM_CHANNEL,
+-- true) is a TRIGGERED self-cast, ported via the Eluna third-arg
+-- triggered convention. Event 24 fires after the home-move completes.
+local function bronjahmReachHome(event, creature)
+    creature:CastSpell(creature, SPELL_SOULSTORM_CHANNEL, true)
+end
+RegisterCreatureEvent(ENTRY_BRONJAHM, 24, bronjahmReachHome)

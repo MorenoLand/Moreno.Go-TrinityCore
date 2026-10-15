@@ -101,9 +101,11 @@
 --   rand32()%40, rand32()%40, 0, 0, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT,
 --   15s) every 1500ms, WispCount >= 30 -> me->KillSelf() — no summon
 --   bridge. Timer not armed.
--- - ACTION_CHANNEL_WORLD_TREE on JustReachedHome: re-cast of the
---   pre-combat drain (covered at spawn via event 5; evade-home recast
---   documented).
+-- - ACTION_CHANNEL_WORLD_TREE on JustReachedHome: the same inlined
+--   triggered self-cast (39140) as the OnSpawn(5) port, ported below on
+--   event 24 (this tick — the old "evade-home recast documented-only"
+--   note was stale; self-DoAction = inline at the ported call site,
+--   baltharus precedent).
 -- - JustSummoned GUID legs (ANCIENT_WISP AttackStart on the boss,
 --   DOOMFIRE_SPIRIT GUID capture) — no summon model.
 -- - npc_doomfire (NPC_DOOMFIRE 18095): DamageTaken zeroes damage — no
@@ -378,6 +380,14 @@ local function onSpawn(event, creature)
     creature:CastSpell(creature, SPELL_DRAIN_WORLD_TREE, true)
 end
 
+-- C++ boss_archimondeAI::JustReachedHome: DoAction(ACTION_CHANNEL_WORLD_TREE)
+-- — the self-DoAction inlines to the same DoCastAOE(39140, triggered) ->
+-- triggered self-cast as the OnSpawn leg (event 24 fires at the
+-- home-move completion).
+local function onReachHome(event, creature)
+    creature:CastSpell(creature, SPELL_DRAIN_WORLD_TREE, true)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -467,5 +477,6 @@ RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, onKilledUnit)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 5, onSpawn)
+RegisterCreatureEvent(ENTRY, 24, onReachHome)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)

@@ -86,6 +86,7 @@ local LINE_SLAY_ZOMBIE = 39
 
 local SPELL_HOLY_LIGHT = 52444
 local SPELL_EXORCISM   = 52445
+local SPELL_DEVOTION_AURA = 52442
 
 local NPC_RISEN_ZOMBIE = 27737
 
@@ -155,6 +156,17 @@ local function onReset(event, creature)
     cancelPump(creature:GetGUID())
 end
 
+-- C++ npc_arthas_stratholmeAI::JustReachedHome: the
+-- if (!me->HasAura(SPELL_DEVOTION_AURA)) DoCastSelf(SPELL_DEVOTION_AURA)
+-- leg is ungated and bridgeable (HasAura + CastSpell bridges) on event 24;
+-- the _progressRP / _resumeMovement / _afterCombat legs ride the unported
+-- RP/spline-chain machine and stay out (documented in the header).
+local function onReachHome(event, creature)
+    if not creature:HasAura(SPELL_DEVOTION_AURA) then
+        creature:CastSpell(creature, SPELL_DEVOTION_AURA)
+    end
+end
+
 local function onDied(event, creature, killer)
     cancelPump(creature:GetGUID())
 end
@@ -168,3 +180,4 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+RegisterCreatureEvent(ENTRY, 24, onReachHome)
