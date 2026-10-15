@@ -687,13 +687,19 @@ RegisterCreatureEvent(ENTRY_FELFIRE_FIEND, 23, fiendCleanup)
 local function armageddonReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_ARMAGEDDON_VISUAL, true)
-    schedule(guid, "visual2", 9000, function()
-        creature:CastSpell(creature, SPELL_ARMAGEDDON_VISUAL2, true)
-        schedule(guid, "trigger", 5000, function()
-            creature:CastSpell(creature, SPELL_ARMAGEDDON_TRIGGER, true)
+    -- C++ npc_armageddonAI::Reset() only calls Initialize(); the visual/visual2/
+    -- trigger chain is driven by UpdateAI's uiTimer (boss_kiljaeden.cpp:1142), which
+    -- never ticks on a corpse. The whole chain is alive-gated so the death-leg ev23
+    -- fire creates no phantom visuals on the corpse; cancelTimers rides the death leg.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_ARMAGEDDON_VISUAL, true)
+        schedule(guid, "visual2", 9000, function()
+            creature:CastSpell(creature, SPELL_ARMAGEDDON_VISUAL2, true)
+            schedule(guid, "trigger", 5000, function()
+                creature:CastSpell(creature, SPELL_ARMAGEDDON_TRIGGER, true)
+            end)
         end)
-    end)
+    end
 end
 
 local function armageddonCleanup(event, creature)

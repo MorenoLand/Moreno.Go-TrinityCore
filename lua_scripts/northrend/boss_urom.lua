@@ -123,7 +123,11 @@ end
 -- port-pattern-ready — self-cast on the reset path (halion
 -- twilightHalionReset precedent).
 local function uromReset(event, creature)
-    creature:CastSpell(creature, SPELL_EVOCATE)
+    -- C++ boss_uromAI::Reset(): DoCastSelf(SPELL_EVOCATE) is Reset-only
+    -- (boss_urom.cpp). Alive-gated; the death-leg ev23 fire is phantom.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_EVOCATE)
+    end
 end
 
 -- C++ JustReachedHome (boss_urom.cpp:142-145): DoCastSelf(SPELL_EVOCATE)

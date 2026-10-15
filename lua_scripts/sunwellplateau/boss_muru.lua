@@ -329,7 +329,12 @@ RegisterCreatureEvent(ENTRY_PORTAL, 23, portalReset)
 -- C++ constructor (Initialize): triggered self-cast 45934.
 local function darkFiendReset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_DARKFIEND_SKIN, true)
+    -- C++ npc_dark_fiendAI constructor (Initialize): triggered self-cast
+    -- SPELL_DARKFIEND_SKIN (boss_muru.cpp:407) — spawn-only, never runs on death.
+    -- Alive-gated; cancelTimers rides the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_DARKFIEND_SKIN, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_DARK_FIEND, 23, darkFiendReset)
@@ -392,10 +397,17 @@ end
 local function blackholeReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_BLACKHOLE_SUMMON_VISUAL)
-    schedule(guid, "visual", 1000, function()
-        blackholeVisualStep0(creature, guid)
-    end)
+    -- C++ npc_black_holeAI::Reset(): DoCast(BLACKHOLE_SUMMON_VISUAL) + 15s
+    -- DisappearAndDie / 1s aggressive-visual loop schedules (boss_muru.cpp:524).
+    -- Timer-creation legs delivering Reset-arm payloads are gated too: C++ AI
+    -- UpdateAI never ticks on a corpse, so neither the visual nor the phantom
+    -- DisappearAndDie schedule can fire post-death. cancelTimers rides the death leg.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_BLACKHOLE_SUMMON_VISUAL)
+        schedule(guid, "visual", 1000, function()
+            blackholeVisualStep0(creature, guid)
+        end)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_BLACKHOLE, 23, blackholeReset)

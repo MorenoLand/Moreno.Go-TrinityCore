@@ -185,8 +185,12 @@ end
 -- and ResetLootMode/loot-mode legs ride unbridged phase/timer/loot
 -- machines (the gothik phase-gating precedent).
 local function yoggSaronReset(event, creature)
-    creature:CastSpell(creature, SPELL_SHADOWY_BARRIER_YOGG)
-    creature:CastSpell(creature, SPELL_KNOCK_AWAY)
+    -- C++ boss_yogg_saronAI::Reset(): DoCast(me, SHADOWY_BARRIER_YOGG);
+    -- DoCast(me, KNOCK_AWAY) (boss_yogg_saron.cpp:931-937). Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SHADOWY_BARRIER_YOGG)
+        creature:CastSpell(creature, SPELL_KNOCK_AWAY)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
@@ -318,8 +322,13 @@ end
 -- DoCastAOE(SPELL_ERUPT 64144) ride event 23.
 local function corruptorReset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_TENTACLE_VOID_ZONE)
-    creature:CastSpell(creature, SPELL_ERUPT)
+    -- C++ npc_corruptor_tentacleAI::Reset(): DoCast(me, TENTACLE_VOID_ZONE);
+    -- DoCastAOE(ERUPT) (boss_yogg_saron.cpp). Alive-gated; cancelTimers
+    -- rides the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_TENTACLE_VOID_ZONE)
+        creature:CastSpell(creature, SPELL_ERUPT)
+    end
 end
 
 -- C++ npc_crusher_tentacleAI::EVENT_DIMINISH_POWER:
@@ -350,11 +359,16 @@ end
 -- leg has no bridge.
 local function crusherReset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_CRUSH)
-    creature:CastSpell(creature, SPELL_TENTACLE_VOID_ZONE)
-    creature:CastSpell(creature, SPELL_DIMINSH_POWER)
-    creature:CastSpell(creature, SPELL_FOCUSED_ANGER)
-    creature:CastSpell(creature, SPELL_ERUPT)
+    -- C++ npc_crusher_tentacleAI::Reset(): DoCast(me, CRUSH/TENTACLE_VOID_ZONE/
+    -- DIMINSH_POWER/FOCUSED_ANGER); DoCastAOE(ERUPT) (boss_yogg_saron.cpp).
+    -- Alive-gated; cancelTimers rides the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_CRUSH)
+        creature:CastSpell(creature, SPELL_TENTACLE_VOID_ZONE)
+        creature:CastSpell(creature, SPELL_DIMINSH_POWER)
+        creature:CastSpell(creature, SPELL_FOCUSED_ANGER)
+        creature:CastSpell(creature, SPELL_ERUPT)
+    end
 end
 
 -- C++ npc_immortal_guardianAI::EVENT_DRAIN_LIFE:
@@ -382,8 +396,13 @@ end
 -- has no health bridge.
 local function immortalReset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_EMPOWERED)
-    creature:CastSpell(creature, SPELL_RECENTLY_SPAWNED)
+    -- C++ npc_immortal_guardianAI::Reset(): DoCast(me, EMPOWERED);
+    -- DoCast(me, RECENTLY_SPAWNED) (boss_yogg_saron.cpp). Alive-gated;
+    -- cancelTimers rides the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_EMPOWERED)
+        creature:CastSpell(creature, SPELL_RECENTLY_SPAWNED)
+    end
 end
 
 local function cancelAll(event, creature)

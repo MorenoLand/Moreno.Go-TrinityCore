@@ -234,7 +234,12 @@ end
 -- trail trigger 45399 (C++-exact); the NOT_SELECTABLE flag and
 -- bounding-radius arms have no bridges.
 local function trailReset(event, creature)
-    creature:CastSpell(creature, SPELL_TRAIL_TRIGGER, true)
+    -- C++ npc_felmyst_trail constructor arm: triggered self-cast of the trail
+    -- trigger (boss_felmyst.lua:233 header) — spawn-only in C++, never on death.
+    -- Alive-gated so the death-leg ev23 fire is not phantom.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_TRAIL_TRIGGER, true)
+    end
 end
 
 RegisterCreatureEvent(NPC_FELMYST, 1, felmystEnterCombat)

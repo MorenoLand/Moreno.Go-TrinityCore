@@ -207,7 +207,12 @@ local function brutallusReset(event, creature)
     local guid = creature:GetGUID()
     brutallusResetState(guid)
     brutallusState[guid] = { enraged = false }
-    creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
+    -- C++ boss_brutallusAI::Reset(): DoCast(me, SPELL_DUAL_WIELD, true)
+    -- (boss_brutallus.cpp:113). Alive-gated; the state reset rides the
+    -- death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
+    end
 end
 
 RegisterCreatureEvent(NPC_BRUTALLUS, 1, brutallusEnterCombat)

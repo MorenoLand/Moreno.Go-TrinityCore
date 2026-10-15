@@ -36,7 +36,11 @@ local ENTRIES_HIDDEN_CULTIST = { 25827, 25248, 25828 }
 -- C++ Reset() :1514 — non-triggered self-cast of the shroud visual,
 -- one-shot per spawn / reset.
 local function hiddenCultistSpawnOrReset(event, creature)
-    creature:CastSpell(creature, SPELL_SHROUD_OF_THE_DEATH_CULTIST)
+    -- C++ npc_hidden_cultistAI::Reset(): DoCast(SPELL_SHROUD_OF_THE_DEATH_CULTIST)
+    -- (zone_borean_tundra.cpp). Alive-gated so the death-leg ev23 fire is not phantom.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SHROUD_OF_THE_DEATH_CULTIST)
+    end
 end
 
 for _, entry in ipairs(ENTRIES_HIDDEN_CULTIST) do

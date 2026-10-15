@@ -106,8 +106,14 @@ local BLESSED_BANNER_ENTRY = 30891
 -- engages, so the fragment is one-shot per spawn / reset;
 -- no timers, no per-GUID state.
 local function onSpawnOrReset(_, creature)
-    creature:CastSpell(creature, SPELL_THREAT_PULSE)
-    creature:Talk(BANNER_SAY)
+    -- C++ npc_blessed_bannerAI::Reset(): DoCast(SPELL_THREAT_PULSE) +
+    -- Talk(BANNER_SAY) (zone_icecrown.cpp). Alive-gated so the death-leg
+    -- ev23 fire (banner self-despawns in JustDied) is not phantom; the
+    -- 3s EVENT_SPAWN summon leg is unported (no summon bridge).
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_THREAT_PULSE)
+        creature:Talk(BANNER_SAY)
+    end
 end
 
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 5, onSpawnOrReset)

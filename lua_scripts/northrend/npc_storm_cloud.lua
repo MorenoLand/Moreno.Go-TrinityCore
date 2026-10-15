@@ -122,7 +122,11 @@ local STORM_CLOUD_ENTRY = 29939
 -- self-cast of the storm visual — one-shot per spawn / reset,
 -- no timers, no per-GUID state.
 local function onSpawnOrReset(_, creature)
-    creature:CastSpell(creature, SPELL_STORM_VISUAL, true)
+    -- Alive-gated: the death-leg ev23 fire would be a phantom cast; the
+    -- ev5 (spawn) leg still fires since a fresh spawn is always alive.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_STORM_VISUAL, true)
+    end
 end
 
 RegisterCreatureEvent(STORM_CLOUD_ENTRY, 5, onSpawnOrReset)
