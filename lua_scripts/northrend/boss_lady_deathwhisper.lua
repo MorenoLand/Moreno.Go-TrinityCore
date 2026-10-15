@@ -44,20 +44,23 @@
 -- blocker (the gothik precedent), not timers.
 --
 -- PORTED ARMS (C++-exact for all modeled arms):
--- boss JustEngagedWith (:281-342): Talk(SAY_AGGRO 7) (:338), then
---   DoCastSelf(SPELL_MANA_BARRIER 70842, true) TRIGGERED (:340); the
---   CheckRequiredBosses evade branch, DoZoneInCombat,
---   instance->SetBossState, scheduler.CancelGroup(GROUP_INTRO) and
---   RemoveAurasDueToSpell(SHADOW_CHANNELING) legs have no bridge. The
---   phase-independent scheduler seed ports: 10-min EVENT_BERSERK —
---   DoCastSelf(SPELL_BERSERK 26662) non-triggered + Talk(SAY_BERSERK 15)
---   (:296-300), one-shot. The phase-one scheduler seeds stay out:
---   SummonWaveP1 (summon machine); Shadow Bolt / Death and Decay —
---   SelectTarget(Random) with default playerOnly=FALSE (UnitAI.h:170),
---   pets/totems eligible, so the player-only bridge would fabricate
---   targeting (the dagran precedent); Dominate Mind (random-target
---   SelectTargetList + difficulty gate — no difficulty bridge);
---   DoImproveCultist (cross-creature machine) — see documented-only.
+-- boss JustEngagedWith (:281-342): Talk(SAY_AGGRO 7) (:338),
+-- RemoveAurasDueToSpell(SHADOW_CHANNELING) (:339), then
+-- DoCastSelf(SPELL_MANA_BARRIER 70842, true) TRIGGERED (:340). The
+-- CheckRequiredBosses evade branch, DoZoneInCombat,
+-- instance->SetBossState, scheduler.CancelGroup(GROUP_INTRO) legs have
+-- no bridge. Phase-INDEPENDENT scheduler arms ported:
+-- SPELL_BERSERK 26662 self-cast 10min one-shot + Talk(SAY_BERSERK 15)
+-- (:296-300); SPELL_DEATH_AND_DECAY 71001 — no GROUP arg, survives
+-- phase transition (:301-306): random-target cast init 17s / re-arm
+-- {22s,30s} unconditional (:305-306). Phase-ONE GROUP_ONE arm ported:
+-- SPELL_SHADOW_BOLT 71254 (:318-326) — init 2s / re-arm {2450ms,3600ms}
+-- unconditional, cancelled at the phase-2 transition
+-- (CancelGroup(GROUP_ONE) :419). The other phase-one scheduler seeds
+-- stay out: SummonWaveP1 (summon machine); Dominate Mind
+-- (random-target SelectTargetList + difficulty gate — no difficulty
+-- bridge); DoImproveCultist (cross-creature machine) — see
+-- documented-only.
 -- npc_cult_fanatic (37890, icecrown_citadel.h:175) — C++ schedules in
 --   Reset() (:601-615); re-keyed to the add's own OnEnterCombat
 --   (summoned mid-combat with immediate AttackStart, boss JustSummoned
@@ -74,7 +77,13 @@
 --   (:696-698); SPELL_SHROUD_OF_THE_OCCULT 70768 self-cast 15s/10s
 --   (:703) — all non-triggered. The empowered entry change rides the
 --   unbridged SpellHit leg (:717), so the Blast branch is dormant until
---   that leg bridges — documented.
+--   that leg bridges — documented. The SetValidator
+--   !UNIT_STATE_CASTING gate has no bridge (maiden precedent: timers
+--   fire unconditionally).
+--   SPELL_CURSE_OF_TORPOR 71237 (:706-710, ported): DoCast(target,
+--   non-triggered) on SelectTarget(Random, 1) (offset 1 skips the
+--   MaxThreat head, UnitAI.h:172-174 — tank-skip unbridged, the
+--   netherspite precedent); init 15s / re-arm 18s unconditional.
 -- npc_darnavan (38472/38485) — C++ Reset() EventMap (:838-844) re-keyed
 --   to OnEnterCombat: SPELL_BLADESTORM 65947 self-cast 10s/{90s,100s}
 --   (:912); SPELL_INTIMIDATING_SHOUT 65930 self-cast {20s,25s}/{90s,120s}
@@ -102,8 +111,7 @@
 -- summon / random-target / cross-creature machines (no bridge); the
 -- CheckRequiredBosses / EnterEvadeMode / instance->DoCastSpellOnPlayers
 -- / DoZoneInCombat / instance->SetBossState legs have no instance
--- bridge. SPELL_DEATH_AND_DECAY 71001 (:303-305) rides a random-target
--- SelectTarget leg (no bridge).
+-- bridge.
 -- boss_lady_deathwhisper DamageTaken — Talk(SAY_PHASE_2 8) +
 -- Talk(EMOTE_PHASE_2 9) ride the mana-power pct gate of the phase
 -- transition (no health-pct bridge; the garfrost precedent);
@@ -128,9 +136,12 @@
 -- precedent). npc_cult_fanatic / npc_cult_adherent ARE registered
 -- (timer arms ported above); their SpellHit transformation /
 -- martyrdom legs (:617-660 / :712-752) stay out (no SpellHit bridge),
--- as do the CURSE_OF_TORPOR random-target leg (:707-710) and the
--- darnavan SHATTERING_THROW conditional leg (:893-898, immunity
--- gate — no bridge); darnavan CHARGE leg PORTED (charge-poll).
+-- as do the darnavan SHATTERING_THROW conditional leg (:893-898,
+-- immunity gate — no bridge); darnavan CHARGE leg PORTED
+-- (charge-poll). Boss scheduler SetValidator (:216-219:
+-- !UNIT_STATE_CASTING unless intro) and the adherent validator
+-- (:691-692) have no bridge — timers fire unconditionally (maiden
+-- precedent).
 -- spell_deathwhisper_mana_barrier /
 -- spell_deathwhisper_dominated_mind /
 -- spell_deathwhisper_vampiric_might join the no-AuraScript-bridge
@@ -139,10 +150,10 @@
 -- no-SpellScript-bridge queue.
 -- at_lady_deathwhisper_entrance joins the unbridged-area-trigger
 -- queue (the pit_of_saron cavern-triggers precedent).
--- All 19 Talk() calls in the file accounted for (19 = ported: lady
--- aggro 7 + kill 14 + death 16 + berserk 15 + darnavan aggro 0;
--- documented-only: intro 0-6 (7) + dominate 10 + phase-2 8 + emote 9
--- + dark 11/12 (1) + animate-dead 13 (2) + darnavan rescued 1 (1)).
+-- All 19 Talk() calls in the file accounted for (19 = ported (7): lady
+-- aggro 7 + berserk 15 + phase-2 8 + emote 9 + kill 14 + death 16 +
+-- darnavan aggro 0; documented-only (12): intro 0-6 (7) + dominate 10
+-- + dark 11/12 (2) + animate-dead 13 (2) + darnavan rescued 1 (1)).
 
 local ENTRY_LADY_DEATHWHISPER = 36855
 local ENTRY_CULT_FANATIC = 37890 -- icecrown_citadel.h:175
@@ -170,6 +181,9 @@ local SPELL_NECROTIC_STRIKE = 70659
 local SPELL_DEATHCHILL_BOLT = 70594
 local SPELL_DEATHCHILL_BLAST = 70906
 local SPELL_SHROUD_OF_THE_OCCULT = 70768
+local SPELL_DEATH_AND_DECAY = 71001 -- :63
+local SPELL_SHADOW_BOLT = 71254 -- :62
+local SPELL_CURSE_OF_TORPOR = 71237 -- :102 (adherent)
 local SPELL_BLADESTORM = 65947
 local SPELL_INTIMIDATING_SHOUT = 65930
 local SPELL_MORTAL_STRIKE = 65926
@@ -210,11 +224,61 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- lavanthor / the_beast precedent: map-wide same-instance alive-player
+-- pool standing in for SelectTarget(Random) threat-list selection.
+-- FIDELITY CAVEAT: C++ SelectTarget defaults playerOnly=FALSE
+-- (UnitAI.h:170), so the pool can include pets/totems — Lua's
+-- player-only enumeration is the documented approximation (the
+-- tuten_kash precedent); no Lua unit-enumeration bridge.
+local function randomPlayer(creature)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ :296-300 phase-independent scheduler: DoCastSelf(SPELL_BERSERK)
 -- non-triggered + Talk(SAY_BERSERK 15) — 10min one-shot.
 local function onBerserk(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(SAY_BERSERK)
+end
+
+-- C++ :301-306 phase-INDEPENDENT (no GROUP arg — survives the
+-- CancelGroup(GROUP_ONE) at phase transition): DoCast(target,
+-- SPELL_DEATH_AND_DECAY 71001) non-triggered on SelectTarget(Random);
+-- init 17s, re-arm {22s,30s} unconditional (outside the target if).
+local function onDeathAndDecay(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_DEATH_AND_DECAY)
+    end
+    schedule(guid, "deathanddecay", {22000, 30000}, function()
+        onDeathAndDecay(creature, guid)
+    end)
+end
+
+-- C++ :318-326 phase-ONE only (GROUP_ONE, cancelled at the phase
+-- transition :419): DoCast(target, SPELL_SHADOW_BOLT 71254)
+-- non-triggered on SelectTarget(Random); init 2s, re-arm
+-- {2450ms,3600ms} unconditional.
+local function onShadowBolt(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_SHADOW_BOLT)
+    end
+    schedule(guid, "shadowbolt", {2450, 3600}, function()
+        onShadowBolt(creature, guid)
+    end)
 end
 
 -- C++ DamageTaken phase-2 transition (:407-417): gate
@@ -258,8 +322,14 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         creature:Talk(SAY_PHASE_2)
         creature:Talk(EMOTE_PHASE_2)
         creature:RemoveAura(SPELL_MANA_BARRIER)
-        -- C++ CancelGroup(GROUP_ONE): no GROUP_ONE timer is ported for
-        -- her GUID (berserk is phase-independent), so nothing to cancel.
+        -- C++ CancelGroup(GROUP_ONE) (:419): the shadowbolt arm dies at
+        -- the phase transition; deathanddecay is phase-independent and
+        -- rides the normal cancelTimers on 2/4/23.
+        local per = timers[guid]
+        if per and per["shadowbolt"] then
+            RemoveEventById(per["shadowbolt"])
+            per["shadowbolt"] = nil
+        end
         schedule(guid, "frostbolt", 12000, function()
             frostboltTick(creature, guid)
         end)
@@ -285,8 +355,13 @@ local function deathwhisperJustEngagedWith(event, creature, target)
     cancelTimers(guid)
     deathwhisperPhase[guid] = 2 -- PHASE_ONE (:290)
     creature:Talk(SAY_AGGRO)
+    -- C++ :339 — the channeling aura is stripped on engage (re-cast on
+    -- Reset, :226; the RemoveAura bridge).
+    creature:RemoveAura(SPELL_SHADOW_CHANNELING)
     creature:CastSpell(creature, SPELL_MANA_BARRIER, true)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
+    schedule(guid, "deathanddecay", 17000, function() onDeathAndDecay(creature, guid) end)
+    schedule(guid, "shadowbolt", 2000, function() onShadowBolt(creature, guid) end)
 end
 
 local function deathwhisperLeaveCombat(event, creature)
@@ -317,8 +392,10 @@ local function deathwhisperKilledUnit(event, creature, victim)
 end
 
 -- C++ boss_lady_deathwhisper::JustDied: Talk(SAY_DEATH) — the sjonnir
--- JustDied-Talk precedent.
+-- JustDied-Talk precedent. cancelTimers stops the 10-min berserk +
+-- deathanddecay + (phase-1) shadowbolt arms from firing on the corpse.
 local function deathwhisperJustDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
@@ -377,11 +454,25 @@ local function onShroudOfTheOccult(creature, guid)
     schedule(guid, "shroud", 10000, function() onShroudOfTheOccult(creature, guid) end)
 end
 
+-- C++ :706-710: DoCast(target, SPELL_CURSE_OF_TORPOR) non-triggered on
+-- SelectTarget(Random, 1) — offset-1 skips the MaxThreat head, so the
+-- tank is excluded (tank-skip unbridged: the netherspite precedent;
+-- the pool stays map-wide with the pets/totems caveat documented on
+-- randomPlayer); init 15s, re-arm 18s unconditional.
+local function onCurseOfTorpor(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_CURSE_OF_TORPOR)
+    end
+    schedule(guid, "torpor", 18000, function() onCurseOfTorpor(creature, guid) end)
+end
+
 local function adherentEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "deathchill", 5000, function() onDeathchill(creature, guid) end)
     schedule(guid, "shroud", 15000, function() onShroudOfTheOccult(creature, guid) end)
+    schedule(guid, "torpor", 15000, function() onCurseOfTorpor(creature, guid) end)
 end
 
 local function adherentLeaveCombat(event, creature)

@@ -42,9 +42,10 @@
 -- The optic-link SelectTarget 50.0f distance filter (:81) has no
 -- bridge — the randomPlayer pool (alive same-map/instance players,
 -- the keleseth / thorim precedent) ignores distance.
--- The UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-check has no
--- bridge — casts fire unconditionally on their timers (the hodir
--- precedent).
+-- FIDELITY NOTE: C++ UpdateAI (:64-69) gates on UpdateVictim() only —
+-- there is NO HasUnitState(UNIT_STATE_CASTING) pre-check in
+-- boss_moragg.cpp; Lua's unconditional timer firing matches the C++
+-- exactly (earlier header wrongly claimed a phantom gate).
 -- DOCUMENTED-ONLY (in this header; entry 29316):
 -- spell_moragg_ray (AuraScript: OnEffectPeriodic on the ray auras —
 -- picks SelectTarget(Random, 0, 45.0f, true) and CastSpell(target,

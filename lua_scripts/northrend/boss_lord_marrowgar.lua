@@ -173,6 +173,11 @@ end
 
 local function marrowgarReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset() :147: RemoveAurasDueToSpell(SPELL_BERSERK) — the
+    -- RemoveAura bridge exists (boss_lady_deathwhisper.lua precedent);
+    -- without this an evade after a 10-min fight keeps the berserk aura
+    -- in Lua. BONE_STORM removal + SetSpeedRate have no bridge.
+    creature:RemoveAura(SPELL_BERSERK)
 end
 
 -- C++ boss_lord_marrowgar::KilledUnit:
@@ -185,8 +190,10 @@ local function marrowgarKilledUnit(event, creature, victim)
 end
 
 -- C++ boss_lord_marrowgar::JustDied: Talk(SAY_DEATH) — the sjonnir
--- JustDied-Talk precedent.
+-- JustDied-Talk precedent. cancelTimers stops the 10-min berserk timer
+-- from firing on the corpse.
 local function marrowgarJustDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 

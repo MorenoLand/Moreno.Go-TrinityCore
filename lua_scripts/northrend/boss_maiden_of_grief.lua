@@ -56,7 +56,9 @@
 -- ACHIEV_GOOD_GRIEF_START_EVENT) — no achievement bridge.
 -- UpdateAI EVENT_PARTING_SORROW (random-target
 -- DoCast(SPELL_PARTING_SORROW 59723), 30s/40s re-arm, :108-111) —
--- no random-target bridge; EVENT_PILLAR_OF_WOE — PORTED
+-- SelectTarget(Random, 0, 0.0f, true) is bridgeable (randomPlayer pool,
+-- lavanthor precedent) but the arm is IsHeroic()-gated (:65-66) with no
+-- difficulty bridge — stays parked (the cyanigosa heroic precedent). EVENT_PILLAR_OF_WOE — PORTED
 -- (pillarTick — the "no random-target bridge" claim was stale, C++
 -- :123-128; the UNIT_STATE_CASTING gate and the DoMeleeAttackIfReady
 -- tail have no bridges.

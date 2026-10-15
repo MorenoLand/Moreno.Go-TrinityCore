@@ -148,9 +148,10 @@ local SPELL_PURSUIT = 68987
 local timers = {}
 
 local function nowMs()
-    -- GetCurrTime is wall-clock ms (Eluna global, engine globals.go:941);
-    -- os.clock() is CPU time and stalls while the server idles, which would
-    -- corrupt the due/remaining math used by delayTimers.
+    -- GetCurrTime is wall-clock ms (Eluna global, registered at
+    -- engine/scripting/runtime.go:784); os.clock() is CPU time and
+    -- stalls while the server idles, which would corrupt the
+    -- due/remaining math used by delayTimers.
     return GetCurrTime()
 end
 
