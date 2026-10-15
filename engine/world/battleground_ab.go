@@ -244,6 +244,36 @@ func (s *Server) handleABBannerUse(ctx context.Context, sess *session, guid uint
 		return false
 	}
 
+	return s.clickABNode(ab, nodeID, sess)
+}
+
+// abNodeIDNearPlayer mirrors the node scan in
+// BattlegroundAB::EventPlayerClickedOnFlag (BattlegroundAB.cpp:418-430): the
+// clicked flagstand resolves to the first node whose banner position is
+// within 10 yards of the player. The generic flagstand arm
+// (useFlagstandGameObject) relies on this since flagstand entries like
+// 15001-15005 carry no node ID.
+func abNodeIDNearPlayer(ab *abBattlegroundState, sess *session) (uint32, bool) {
+	if ab == nil || sess == nil || sess.player == nil {
+		return 0, false
+	}
+	for nodeID := uint32(0); nodeID < ABNodeMax; nodeID++ {
+		node := &ab.Nodes[nodeID]
+		if distance3D(sess.player.X, sess.player.Y, sess.player.Z, node.X, node.Y, node.Z) <= 10.0 {
+			return nodeID, true
+		}
+	}
+	return 0, false
+}
+
+// clickABNode is the node-click core of BattlegroundAB::EventPlayerClickedOnFlag
+// (BattlegroundAB.cpp:210-310), shared by the banner entries and the generic
+// GAMEOBJECT_TYPE_FLAGSTAND arm (which resolves the node by proximity).
+func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *session) bool {
+	if s == nil || ab == nil || sess == nil || sess.player == nil || nodeID >= ABNodeMax {
+		return false
+	}
+
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 

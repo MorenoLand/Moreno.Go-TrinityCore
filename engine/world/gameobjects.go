@@ -445,6 +445,50 @@ func packGameObjectRotation(x, y, z, w float32) uint64 {
 	return uint64(packedZ | packedY<<21 | packedX<<42)
 }
 
+// goCannotBeUsedUnderImmunity mirrors GameObjectTemplate::CannotBeUsedUnderImmunity
+// (GameObjectData.h:497-513): per-type noDamageImmune template fields; chests
+// can never be opened while immune (C++ hardcodes true for GAMEOBJECT_TYPE_CHEST).
+func goCannotBeUsedUnderImmunity(goType uint8, tpl [24]uint32) bool {
+	switch goType {
+	case GameObjectTypeDoor: // door.noDamageImmune (data3)
+		return tpl[3] != 0
+	case GameObjectTypeButton: // button.noDamageImmune (data4)
+		return tpl[4] != 0
+	case GameObjectTypeQuestGiver: // questgiver.noDamageImmune (data5)
+		return tpl[5] != 0
+	case GameObjectTypeChest:
+		return true
+	case GameObjectTypeGoober: // goober.noDamageImmune (data11)
+		return tpl[11] != 0
+	case GameObjectTypeFlagStand: // flagstand.noDamageImmune (data5)
+		return tpl[5] != 0
+	case GameObjectTypeFlagDrop: // flagdrop.noDamageImmune (data3)
+		return tpl[3] != 0
+	}
+	return false
+}
+
+// goIsUsableMounted mirrors GameObjectTemplate::IsUsableMounted
+// (GameObjectData.h:436-449): mailbox is always usable mounted, barber chairs
+// never, the rest read their type's allowMounted template field.
+func goIsUsableMounted(goType uint8, tpl [24]uint32) bool {
+	switch goType {
+	case GameObjectTypeMailbox:
+		return true
+	case GameObjectTypeBarberChair:
+		return false
+	case GameObjectTypeQuestGiver: // questgiver.allowMounted (data8)
+		return tpl[8] != 0
+	case GameObjectTypeText: // text.allowMounted (data3)
+		return tpl[3] != 0
+	case GameObjectTypeGoober: // goober.allowMounted (data17)
+		return tpl[17] != 0
+	case GameObjectTypeSpellCaster: // spellcaster.allowMounted (data3)
+		return tpl[3] != 0
+	}
+	return true
+}
+
 // handleGameObjectUse processes CMSG_GAMEOBJ_USE (0x0B1).
 // Reference: WorldSession::HandleGameObjectUseOpcode (SpellHandler.cpp:300) -> GameObject::Use (GameObject.cpp:1290).
 // admitGameObjectUse applies the GameObject::Use template-cooldown gate
@@ -682,6 +726,22 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
+	// GameObject::Use head arms (GameObject.cpp:1491-1509): the
+	// CannotBeUsedUnderImmunity gate, the mounted dismount, and
+	// PlayerTalkClass->ClearMenus() all run before the gossip hooks and the
+	// template-cooldown gate, for every GO type. The immunity gate reads the
+	// raw UNIT_FLAG_IMMUNE flag in C++; Go models the same immunity through
+	// live auras, so isTotalImmune() is the established twin (used the same
+	// way by canUseBattlegroundObject).
+	goTpl := s.loadGameObjectTemplateData(ctx, entry)
+	if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.isTotalImmune() {
+		return true
+	}
+	if !goIsUsableMounted(goState.Type, goTpl) {
+		s.removeAurasByType(spellAuraMounted)
+	}
+	s.gossip = nil
+
 	// Eluna GOSSIP_EVENT_ON_HELLO (1) for the gameobject_gossip bindings,
 	// fired at the head of GameObject::Use (GameObject.cpp:1502) after the
 	// interact gates (HandleGameObjectUseOpcode, SpellHandler.cpp:300) and
@@ -740,14 +800,23 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		if tpl[3] != 0 { // trap.spellId (data3)
 			s.castSpellDirect(ctx, tpl[3], s.playerGUID)
 		}
-		// trap.cooldown (data5) feeds m_cooldownTime in C++; Go has no GO
-		// cooldown-time model, so no cooldown is modeled (documented).
 		if tpl[4] == 1 { // type == 1: deactivate after trigger
 			// GO_JUST_DEACTIVATED has no Go analog; the instance copy is
 			// hidden and a despawn goes out to viewers.
 			s.server.setGameObjectHiddenInInstance(goState.Map, goState.InstanceID, guid, true)
 			s.server.broadcastGameObjectDespawn(goState.Map, guid)
 		}
+		// The C++ TRAP arm re-arms m_cooldownTime with the template cooldown
+		// or a 4-second default (GameObject.cpp:1543); admitGameObjectUse only
+		// re-armed when data5 != 0, so a zero-cooldown trap stayed instantly
+		// reusable in Go.
+		trapCD := tpl[5] // trap.cooldown (data5), seconds
+		if trapCD == 0 {
+			trapCD = 4
+		}
+		s.server.objectsMu.Lock()
+		goState.CooldownUntilMS = time.Now().UnixMilli() + int64(trapCD)*1000
+		s.server.objectsMu.Unlock()
 
 	case GameObjectTypeChair:
 		s.useGameObjectChair(ctx, goState, entry)
@@ -812,6 +881,14 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 			spellID = 61994 // Ritual of Summoning
 		}
 		s.castSpellDirect(ctx, spellID, s.playerGUID)
+
+	case GameObjectTypeFlagStand, GameObjectTypeFlagDrop:
+		// GameObject::Use GAMEOBJECT_TYPE_FLAGSTAND / FLAGDROP arms
+		// (GameObject.cpp:1958-2041). Flag entries owned by the battleground
+		// delegates (WSG/EotS flags, AB banners) never reach here; this
+		// covers the rest (e.g. the Arathi Basin flagstand entries
+		// 15001-15005).
+		s.useFlagstandGameObject(ctx, guid, entry, goState)
 
 	case GameObjectTypeBarberChair:
 		// GameObject::Use GAMEOBJECT_TYPE_BARBER_CHAIR arm
@@ -992,6 +1069,46 @@ func (s *session) useSummoningRitual(ctx context.Context, goState *dynamicGameOb
 	}
 }
 
+// useFlagstandGameObject mirrors the GAMEOBJECT_TYPE_FLAGSTAND and
+// GAMEOBJECT_TYPE_FLAGDROP arms of GameObject::Use (GameObject.cpp:1958-2041).
+// The use runs the Player::CanUseBattlegroundObject gate
+// (Player.cpp:24691-24708: GO faction friendliness, no total damage immunity,
+// no recently-dropped-flag debuff, player alive), then the vehicle gate, then
+// strips stealth/invisibility auras, then dispatches to the battleground's
+// EventPlayerClickedOnFlag. C++ resolves the AB node by proximity
+// (BattlegroundAB.cpp:418-430), which the flagstand entries 15001-15005 rely
+// on since the banner delegates only intercept the 180087-180119 entries.
+func (s *session) useFlagstandGameObject(ctx context.Context, guid uint64, entry uint32, goState *dynamicGameObjectState) {
+	if s == nil || s.server == nil || s.player == nil || goState == nil {
+		return
+	}
+	if !s.canUseBattlegroundObject(guid) {
+		return
+	}
+	// player->GetVehicle() (GameObject.cpp:1967, 2008).
+	if s.player.VehicleGUID != 0 {
+		return
+	}
+	// RemoveAurasByType(SPELL_AURA_MOD_STEALTH / SPELL_AURA_MOD_INVISIBILITY)
+	// (GameObject.cpp:1973-1974, 2013-2014).
+	s.removeAurasByType(spellAuraStealth)
+	s.removeAurasByType(spellAuraInvisibility)
+
+	// Battleground* bg = player->GetBattleground(): Go dispatches on the BG
+	// map the player stands on. Only Arathi Basin has flagstand entries
+	// outside the delegates' lists; other maps' flag entries are all
+	// intercepted above, so a non-AB flagstand here is a silent no-op.
+	if s.player.Map != ABMapID {
+		return
+	}
+	ab := s.server.getOrCreateABState(s.player.Map)
+	nodeID, ok := abNodeIDNearPlayer(ab, s)
+	if !ok {
+		return
+	}
+	s.server.clickABNode(ab, nodeID, s)
+}
+
 // handleGameObjectReportUse processes CMSG_GAMEOBJ_REPORT_USE (0x481).
 // Reference: WorldSession::HandleGameobjectReportUse (SpellHandler.cpp:318).
 // This is the opcode that carries ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT in
@@ -1090,20 +1207,27 @@ func (s *session) loadGooberTemplate(ctx context.Context, entry uint32) gooberTe
 	return tpl
 }
 
-// loadGameObjectTemplateData fetches gameobject_template data0..data7 for the
+// loadGameObjectTemplateData fetches gameobject_template data0..data23 for the
 // GameObject::Use arms that read type-specific template fields
-// (GameObjectData.h:110-372).
-func (s *session) loadGameObjectTemplateData(ctx context.Context, entry uint32) [8]uint32 {
-	var data [8]uint32
+// (GameObjectData.h:110-372); the wide tail covers goober (noDamageImmune at
+// data11, allowMounted at data17) and questgiver.allowMounted (data8).
+func (s *session) loadGameObjectTemplateData(ctx context.Context, entry uint32) [24]uint32 {
+	var data [24]uint32
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return data
 	}
-	var d [8]int64
+	var d [24]int64
 	err := s.server.WorldStore.DB.QueryRowContext(ctx,
 		`SELECT COALESCE(Data0, 0), COALESCE(Data1, 0), COALESCE(Data2, 0), COALESCE(Data3, 0),
-			COALESCE(Data4, 0), COALESCE(Data5, 0), COALESCE(Data6, 0), COALESCE(Data7, 0)
+			COALESCE(Data4, 0), COALESCE(Data5, 0), COALESCE(Data6, 0), COALESCE(Data7, 0),
+			COALESCE(Data8, 0), COALESCE(Data9, 0), COALESCE(Data10, 0), COALESCE(Data11, 0),
+			COALESCE(Data12, 0), COALESCE(Data13, 0), COALESCE(Data14, 0), COALESCE(Data15, 0),
+			COALESCE(Data16, 0), COALESCE(Data17, 0), COALESCE(Data18, 0), COALESCE(Data19, 0),
+			COALESCE(Data20, 0), COALESCE(Data21, 0), COALESCE(Data22, 0), COALESCE(Data23, 0)
 		FROM gameobject_template WHERE entry = ? LIMIT 1`, entry).
-		Scan(&d[0], &d[1], &d[2], &d[3], &d[4], &d[5], &d[6], &d[7])
+		Scan(&d[0], &d[1], &d[2], &d[3], &d[4], &d[5], &d[6], &d[7],
+			&d[8], &d[9], &d[10], &d[11], &d[12], &d[13], &d[14], &d[15],
+			&d[16], &d[17], &d[18], &d[19], &d[20], &d[21], &d[22], &d[23])
 	if err != nil {
 		return data
 	}
