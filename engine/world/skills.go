@@ -342,8 +342,11 @@ func (s *session) handleLearnPreviewTalents(ctx context.Context, payload []byte)
 // handleUnlearnSkill processes CMSG_UNLEARN_SKILL (0x202).
 // Reference: WorldSession::HandleUnlearnSkillOpcode (SkillHandler.cpp:93).
 func (s *session) handleUnlearnSkill(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:645): the reference logs and drops the
+	// packet when no player is logged in (WorldSession.cpp:
+	// LogUnexpectedOpcode arm) — the connection stays open.
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	skillID, err := r.ReadU32()

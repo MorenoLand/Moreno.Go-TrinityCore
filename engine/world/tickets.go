@@ -110,6 +110,12 @@ func ticketChatLogDecompress(blob []byte, decompressedSize uint32) ([]byte, erro
 // handleGMTicketSystemStatus processes CMSG_GMTICKET_SYSTEMSTATUS (0x21A).
 // Reference: WorldSession::HandleGMTicketSystemStatusOpcode (TicketHandler.cpp:185).
 func (s *session) handleGMTicketSystemStatus(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:669): the reference drops the packet
+	// when no player is logged in (WorldSession.cpp: LogUnexpectedOpcode
+	// arm) — logged and dropped, connection left open.
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	// TicketHandler.cpp:188: the answer reflects the live queue status —
 	// the Go .ticket togglesystem flips server.ticketsEnabled, so a
 	// disabled queue must answer DISABLED, not the previously hardcoded
@@ -126,6 +132,11 @@ func (s *session) handleGMTicketSystemStatus(ctx context.Context, payload []byte
 // handleGMTicketGetTicket processes CMSG_GMTICKET_GETTICKET (0x211).
 // Reference: WorldSession::HandleGMTicketGetTicketOpcode (TicketHandler.cpp:170) and TicketMgr::SendTicket (TicketMgr.cpp:446).
 func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:661): drop when no player is logged in,
+	// like the reference (WorldSession.cpp: LogUnexpectedOpcode arm).
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	s.sendQueryTimeResponse()
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && s.player != nil {
@@ -208,6 +219,12 @@ func (s *session) sendGMResponseReceived(ticketID uint32, message, response stri
 // handleGMTicketCreate processes CMSG_GMTICKET_CREATE (0x205).
 // Reference: WorldSession::HandleGMTicketCreateOpcode (TicketHandler.cpp:34).
 func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:648): the reference never dispatches
+	// without a player (WorldSession.cpp: LogUnexpectedOpcode arm) — an
+	// authed-but-playerless session must drop, not panic on s.player.Name.
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	// TicketHandler.cpp:37-45: the queue-disabled and LevelReq.Ticket gates
 	// fire before any parsing — the packet is never inspected on these arms,
 	// so no hyperlink validation runs there either.
@@ -327,6 +344,11 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 // handleGMTicketUpdate processes CMSG_GMTICKET_UPDATETEXT (0x207).
 // Reference: WorldSession::HandleGMTicketUpdateOpcode (TicketHandler.cpp:130).
 func (s *session) handleGMTicketUpdate(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:650): drop when no player is logged in,
+	// like the reference (WorldSession.cpp: LogUnexpectedOpcode arm).
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	r := protocol.NewReader(payload)
 	message, _ := r.ReadCString()
 
@@ -368,6 +390,11 @@ func (s *session) handleGMTicketUpdate(ctx context.Context, payload []byte) bool
 // handleGMTicketDelete processes CMSG_GMTICKET_DELETETICKET (0x217).
 // Reference: WorldSession::HandleGMTicketDeleteOpcode (TicketHandler.cpp:155).
 func (s *session) handleGMTicketDelete(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:666): drop when no player is logged in,
+	// like the reference (WorldSession.cpp: LogUnexpectedOpcode arm).
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	// TicketHandler.cpp:155: the delete only acts on an existing open
 	// ticket, then re-sends the (now empty) ticket state.
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -528,9 +555,10 @@ func (s *session) handleGMReportLag(ctx context.Context, payload []byte) bool {
 }
 
 // CMSG_GMTICKETSYSTEM_TOGGLE (0x29A) is STATUS_NEVER in
-// Opcodes.cpp:797 — the C++ server never dispatches it, so no Go handler
-// is registered. The queue toggle lives in the .ticket togglesystem GM
-// command (commands_ticket.go), matching cs_ticket.cpp.
+// Opcodes.cpp:797 — the C++ server logs and drops it without dispatching,
+// so Go routes it to the handle_null discard arm in server.go. The queue
+// toggle lives in the .ticket togglesystem GM command (commands_ticket.go),
+// matching cs_ticket.cpp.
 
 // handleBug processes CMSG_BUG (0x1CA).
 // Reference: WorldSession::HandleBugOpcode (MiscHandler.cpp:551).

@@ -4,26 +4,29 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 173 / 88720 | — |
+| Server source files / lines | 1410 / 710273 | 316 / 261895 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 727 | 0 |
-| Client behavioral opcode bindings (reference, non-NULL) | 430 | — | — |
-| Go session handler definitions | — | 430 | — |
-| Go trivial session handlers (`return true/false`) | — | 0 | — |
+| Client behavioral opcode bindings (reference, non-NULL) | 427 | — | — |
+| Go session handler definitions | — | 899 | — |
+| Go trivial session handlers (`return true/false`) | — | 3 | — |
 | Go registered opcodes with static test references | — | 0 | — |
 | Achievement criteria types | 124 | 124 | 0 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 0 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
-| Script source files / lines | 707 / 316814 | 6 / 2498 | — |
-| Test source files / lines | 9 / 1390 | 0 / 0 | — |
+| Script source files / lines | 707 / 316814 | 6 / 3637 | — |
+| Test source files / lines | 9 / 1390 | 1 / 26 | — |
 
 ## Missing behavioral client opcode handlers
 
 No missing symbols detected.
 ## Go session handlers with trivial return bodies
 
-No missing symbols detected.
+- `handleCompleteCinematic (characters.go:1883)`
+- `handleNextCinematicCamera (characters.go:1861)`
+- `handleRaidReadyCheckFinished (group.go:2058)`
+
 ## Go registered opcodes without static test references
 
 - `CMSG_ACCEPT_LEVEL_GRANT`
@@ -1054,6 +1057,12 @@ No missing symbols detected.
 - `UMSG_UPDATE_GROUP_MEMBERS`
 - `UMSG_UPDATE_GUILD`
 
+## Reference client opcodes registered server-side (Handle_ServerSide, never dispatched to a session handler)
+
+- `CMSG_GMTICKETSYSTEM_TOGGLE`
+- `MSG_MOVE_GRAVITY_CHNG`
+- `MSG_MOVE_HOVER`
+
 ## Handle_NULL status audit
 
 | Opcode | Reference status | Classification | Required evidence |
@@ -1374,7 +1383,7 @@ No missing symbols detected.
 
 | Reference tool | Go path | Status |
 | --- | --- | --- |
-| `map_extractor` | `tools/mapextractor` | source present; fixture verification pending |
+| `map_extractor` | `tools/mapextractor` | contains explicit scaffold/not implemented path |
 | `vmap4_extractor` | `tools/vmap4extractor` | behavioral gaps detected |
 | `vmap4_assembler` | `tools/vmap4assembler` | source present; fixture verification pending |
 | `mmaps_generator` | `tools/mmaps-generator` | contains explicit scaffold/not implemented path |

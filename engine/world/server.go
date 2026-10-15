@@ -3481,7 +3481,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 
-		case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE), uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE), uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), uint32(protocol.OpcodeMSG_MOVE_HOVER), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH), uint32(protocol.OpcodeMSG_MOVE_START_ASCEND), uint32(protocol.OpcodeMSG_MOVE_START_DESCEND), uint32(protocol.OpcodeMSG_MOVE_STOP_ASCEND), uint32(protocol.OpcodeMSG_MOVE_GRAVITY_CHNG):
+		case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE), uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE), uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH), uint32(protocol.OpcodeMSG_MOVE_START_ASCEND), uint32(protocol.OpcodeMSG_MOVE_START_DESCEND), uint32(protocol.OpcodeMSG_MOVE_STOP_ASCEND):
 			if !state.authed || !state.handleMovement(ctx, header.Opcode, payload) {
 				return
 			}
@@ -3606,6 +3606,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeCMSG_GM_SHOW_COMPLAINTS),
 			uint32(protocol.OpcodeCMSG_GM_SILENCE),
 			uint32(protocol.OpcodeCMSG_GM_SUMMONMOB),
+			// CMSG_GMTICKETSYSTEM_TOGGLE (0x29A) is a STATUS_NEVER
+			// DEFINE_SERVER_OPCODE_HANDLER (Opcodes.cpp:797): the reference
+			// logs and drops it without dispatching, like Handle_NULL.
+			uint32(protocol.OpcodeCMSG_GMTICKETSYSTEM_TOGGLE),
 			uint32(protocol.OpcodeCMSG_GM_TEACH),
 			uint32(protocol.OpcodeCMSG_GM_UBERINVIS),
 			uint32(protocol.OpcodeCMSG_GM_UNSQUELCH),
@@ -3746,6 +3750,12 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeMSG_GM_SHOWLABEL),
 			uint32(protocol.OpcodeMSG_GM_SUMMON),
 			uint32(protocol.OpcodeMSG_MOVE_FEATHER_FALL),
+			// MSG_MOVE_GRAVITY_CHNG (0x4D2) and MSG_MOVE_HOVER (0x0F7) are
+			// STATUS_NEVER DEFINE_SERVER_OPCODE_HANDLERs (Opcodes.cpp:1365,
+			// Opcodes.cpp:378): dropped without dispatch in the reference,
+			// not routed to the movement handler.
+			uint32(protocol.OpcodeMSG_MOVE_GRAVITY_CHNG),
+			uint32(protocol.OpcodeMSG_MOVE_HOVER),
 			uint32(protocol.OpcodeMSG_MOVE_KNOCK_BACK),
 			uint32(protocol.OpcodeMSG_MOVE_ROOT),
 			uint32(protocol.OpcodeMSG_MOVE_UNROOT),
@@ -3787,7 +3797,9 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeUMSG_UPDATE_GROUP_INFO),
 			uint32(protocol.OpcodeUMSG_UPDATE_GROUP_MEMBERS),
 			uint32(protocol.OpcodeUMSG_UPDATE_GUILD):
-			// Intentionally discarded per TrinityCore Handle_NULL
+			// Intentionally discarded per TrinityCore Handle_NULL and the
+			// STATUS_NEVER server-opcode registrations (Handle_ServerSide):
+			// logged and dropped, never dispatched, connection left open.
 			state.debug("handle_null client opcode ignored", "account", state.accountName, "opcode", opcodeName(header.Opcode))
 
 		default:
@@ -4934,7 +4946,7 @@ func (s *session) handleUpdateAccountData(ctx context.Context, payload []byte) b
 		var eraseErr error
 		if globalAccountDataMask&(1<<typeID) != 0 {
 			_, eraseErr = s.server.CharactersStore.ExecStatement(ctx, "CHAR_REP_ACCOUNT_DATA", s.accountID, typeID, 0, "")
-		} else if s.playerLoaded {
+		} else if s.playerGUID != 0 {
 			_, eraseErr = s.server.CharactersStore.ExecStatement(ctx, "CHAR_REP_PLAYER_ACCOUNT_DATA", s.playerGUID, typeID, 0, "")
 		}
 		if eraseErr != nil {
@@ -4961,7 +4973,10 @@ func (s *session) handleUpdateAccountData(ctx context.Context, payload []byte) b
 	var result sql.Result
 	if globalAccountDataMask&(1<<typeID) != 0 {
 		result, err = s.server.CharactersStore.ExecStatement(ctx, "CHAR_REP_ACCOUNT_DATA", s.accountID, typeID, timestamp, data)
-	} else if s.playerLoaded {
+		// WorldSession.cpp:828: character account data keys on the
+		// session's stored GUID (m_GUIDLow), which survives logout — a
+		// NULL _player post-logout still writes.
+	} else if s.playerGUID != 0 {
 		result, err = s.server.CharactersStore.ExecStatement(ctx, "CHAR_REP_PLAYER_ACCOUNT_DATA", s.playerGUID, typeID, timestamp, data)
 	}
 	_ = result
@@ -4988,7 +5003,7 @@ func (s *session) handleRequestAccountData(ctx context.Context, payload []byte) 
 	var data []byte
 	if globalAccountDataMask&(1<<typeID) != 0 {
 		err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT time, data FROM account_data WHERE accountId = ? AND type = ?", s.accountID, typeID).Scan(&timestamp, &data)
-	} else if s.playerLoaded {
+	} else if s.playerGUID != 0 {
 		err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT time, data FROM character_account_data WHERE guid = ? AND type = ?", s.playerGUID, typeID).Scan(&timestamp, &data)
 	} else {
 		err = sql.ErrNoRows

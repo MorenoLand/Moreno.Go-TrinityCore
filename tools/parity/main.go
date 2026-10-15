@@ -30,6 +30,7 @@ var (
 	goSessionHandlerPattern           = regexp.MustCompile(`(?ms)func\s+\(s\s+\*session\)\s+(handle[A-Z][A-Za-z0-9_]*)\s*\([^{}]*\)\s*[^{}]*\{\s*return\s+(true|false)\s*\}`)
 	goSessionHandlerDefinitionPattern = regexp.MustCompile(`(?m)func\s+\(s\s+\*session\)\s+(handle[A-Z][A-Za-z0-9_]*)\s*\(`)
 	nullOpcodeAuditPattern            = regexp.MustCompile(`(?m)DEFINE_HANDLER\(\s*([A-Z0-9_]+)\s*,\s*(STATUS_[A-Z0-9_]+)[^;\n]*Handle_NULL`)
+	serverOpcodePattern               = regexp.MustCompile(`DEFINE_SERVER_OPCODE_HANDLER\(\s*([A-Z0-9_]+)`)
 	statementSQLPattern               = regexp.MustCompile(`(?s)PrepareStatement\(\s*([A-Z0-9_]+)\s*,\s*(.*?)(?:,\s*CONNECTION|\);)`)
 	stringLitPattern                  = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 	goStatementSQLPattern             = regexp.MustCompile(`ID:\s*"([A-Z0-9_]+)"\s*,\s*SQL:\s*"((?:[^"\\]|\\.)*)"`)
@@ -99,11 +100,19 @@ func buildReport(reference, repo string) (string, error) {
 		return "", err
 	}
 	refNullOpcodes = clientOpcodes(refNullOpcodes)
+	refServerOpcodes, err := matches(filepath.Join(reference, "src", "server"), serverOpcodePattern, func(path string) bool { return filepath.Base(path) == "Opcodes.cpp" })
+	if err != nil {
+		return "", err
+	}
+	// DEFINE_SERVER_OPCODE_HANDLER binds Handle_ServerSide (never a
+	// WorldSession handler, STATUS_NEVER/STATUS_UNHANDLED by static
+	// assert) — these are not behavioral client bindings.
+	refServerOpcodes = clientOpcodes(refServerOpcodes)
 	nullAudit, err := nullOpcodeAudit(filepath.Join(reference, "src", "server"))
 	if err != nil {
 		return "", err
 	}
-	refBehavioralOpcodes := difference(refOpcodes, refNullOpcodes)
+	refBehavioralOpcodes := difference(difference(refOpcodes, refNullOpcodes), refServerOpcodes)
 	refStatementSQL, err := statementDetails(filepath.Join(reference, "src", "server"), statementSQLPattern, nil)
 	if err != nil {
 		return "", err
@@ -175,6 +184,7 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "## Go session handlers with trivial return bodies\n\n%s\n", list(goTrivialHandlers))
 	fmt.Fprintf(&report, "## Go registered opcodes without static test references\n\n%s\n", list(difference(goOpcodes, goTestOpcodes)))
 	fmt.Fprintf(&report, "## Reference client opcodes intentionally bound to Handle_NULL\n\n%s\n", list(refNullOpcodes))
+	fmt.Fprintf(&report, "## Reference client opcodes registered server-side (Handle_ServerSide, never dispatched to a session handler)\n\n%s\n", list(refServerOpcodes))
 	fmt.Fprintf(&report, "## Handle_NULL status audit\n\n| Opcode | Reference status | Classification | Required evidence |\n| --- | --- | --- | --- |\n")
 	for _, entry := range nullAudit {
 		classification, evidence := nullAuditClassification(entry.Status)
@@ -328,6 +338,88 @@ func matches(root string, pattern *regexp.Regexp, filter func(string) bool) ([]s
 	return result, nil
 }
 
+// stripGoComments removes // line comments and /* block comments from Go
+// source while leaving string literals, raw strings, and rune literals
+// intact. The dispatch-table extractor matches case clauses with a
+// colon-terminated pattern; a colon inside a reference comment (for
+// example "Opcodes.cpp:797") would truncate the clause and drop every
+// opcode listed after the comment, so comments must go first.
+func stripGoComments(text string) string {
+	var out strings.Builder
+	out.Grow(len(text))
+	runes := []rune(text)
+	i := 0
+	for i < len(runes) {
+		c := runes[i]
+		switch c {
+		case '/':
+			if i+1 < len(runes) && runes[i+1] == '/' {
+				for i < len(runes) && runes[i] != '\n' {
+					i++
+				}
+				continue
+			}
+			if i+1 < len(runes) && runes[i+1] == '*' {
+				i += 2
+				for i+1 < len(runes) && !(runes[i] == '*' && runes[i+1] == '/') {
+					i++
+				}
+				i += 2
+				continue
+			}
+			out.WriteRune(c)
+			i++
+		case '"':
+			out.WriteRune(c)
+			i++
+			for i < len(runes) {
+				out.WriteRune(runes[i])
+				if runes[i] == '\\' && i+1 < len(runes) {
+					out.WriteRune(runes[i+1])
+					i += 2
+					continue
+				}
+				if runes[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+		case '`':
+			out.WriteRune(c)
+			i++
+			for i < len(runes) && runes[i] != '`' {
+				out.WriteRune(runes[i])
+				i++
+			}
+			if i < len(runes) {
+				out.WriteRune(runes[i])
+				i++
+			}
+		case '\'':
+			out.WriteRune(c)
+			i++
+			for i < len(runes) {
+				out.WriteRune(runes[i])
+				if runes[i] == '\\' && i+1 < len(runes) {
+					out.WriteRune(runes[i+1])
+					i += 2
+					continue
+				}
+				if runes[i] == '\'' {
+					i++
+					break
+				}
+				i++
+			}
+		default:
+			out.WriteRune(c)
+			i++
+		}
+	}
+	return out.String()
+}
+
 func goHandlers(root string) ([]string, error) {
 	values := make(map[string]struct{})
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -341,7 +433,7 @@ func goHandlers(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		text := string(data)
+		text := stripGoComments(string(data))
 		for _, clause := range goCasePattern.FindAllStringSubmatch(text, -1) {
 			if len(clause) <= 1 {
 				continue
