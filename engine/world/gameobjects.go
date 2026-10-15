@@ -527,14 +527,30 @@ func (s *session) admitGameObjectUse(entry uint32, goState *dynamicGameObjectSta
 func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry uint32, goState *dynamicGameObjectState) {
 	// GameObject::Use GAMEOBJECT_TYPE_GOOBER arm (GameObject.cpp:1630-1696).
 	tpl := s.loadGooberTemplate(ctx, entry)
-	// Page text is shown before the quest-gate break, like C++.
+	// GameObject::Use GAMEOBJECT_TYPE_GOOBER arm (GameObject.cpp): the
+	// pageId and gossipID arms are exclusive — the page shows or the gossip
+	// menu opens, never both.
 	if tpl.pageID != 0 {
 		buf := protocol.NewBuffer(8)
 		buf.WriteU64(guid)
 		_ = s.write(uint16(protocol.OpcodeSMSG_GAMEOBJECT_PAGETEXT), buf.Bytes(), true)
+	} else if tpl.gossipID != 0 {
+		// PrepareGossipMenu(gossipID) with showQuests=false, then
+		// SendPreparedGossip (GameObject.cpp GOOBER arm): the menu lists
+		// only GOSSIP_OPTION_GOSSIP options for goober sources
+		// (Player.cpp:14474-14484), and the arm continues into the quest
+		// gate / kill credit / spell below rather than returning.
+		s.gossipClosed = false
+		gossipMenu, gerr := s.prepareGameObjectGossip(ctx, guid, entry, tpl.gossipID, s.gameObjectDefaultGossipMenuID(ctx, entry, GameObjectTypeGoober), false)
+		if gerr != nil {
+			s.debug("goober gossip load failed", "account", s.accountName, "entry", entry, "menu", tpl.gossipID, "error", gerr)
+		} else {
+			s.gossip = gossipMenu
+			if serr := s.sendGossipMenu(); serr != nil {
+				s.debug("goober gossip response failed", "account", s.accountName, "entry", entry, "error", serr)
+			}
+		}
 	}
-	// The goober gossip menu needs a gameobject gossip source; Go's gossip
-	// path is creature-only, so the gossipID arm is unmodeled (documented).
 	// The eventId script-start arm has no Go event-script model (documented).
 	// The quest gate: with a questId and no incomplete quest, C++ breaks
 	// out of the switch — no kill credit, no state change, no spell.

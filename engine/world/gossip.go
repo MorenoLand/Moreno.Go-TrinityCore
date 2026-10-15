@@ -266,7 +266,13 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	if uint16(guid>>48) == 0x4000 {
 		return s.handleItemGossipSelectOption(ctx, reader, guid, listID)
 	}
-	if s.gossip == nil || s.gossip.SenderGUID != guid || s.gossip.MenuID != menuID {
+	// HandleGossipSelectOptionOpcode (MiscHandler.cpp:131-136): the sender
+	// gate is the only cheat check shared by every arm; the menuId check
+	// runs up front only for the player arm (MiscHandler.cpp:146-151) —
+	// for creature/gameobject sources it lives inside
+	// Player::OnGossipSelect (Player.cpp:14565-14569), after the Eluna/AI
+	// hooks fire, so a stale-menu select still reaches the hooks.
+	if s.gossip == nil || s.gossip.SenderGUID != guid {
 		s.debug("gossip selection rejected", "account", s.accountName, "guid", guid, "menu", menuID, "list", listID)
 		return true
 	}
@@ -290,7 +296,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	// GossipSendMenu, so selects on them must route here rather than drop at
 	// the creature lookup.
 	if uint16(guid>>48) == 0xF110 {
-		return s.handleGameObjectGossipSelect(ctx, guid, item, code)
+		return s.handleGameObjectGossipSelect(ctx, guid, menuID, item, code)
 	}
 	if guid == s.playerGUID {
 		return s.handlePlayerGossipSelect(ctx, menuID, item, code)
@@ -338,6 +344,14 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
+		// Player::OnGossipSelect (Player.cpp:14565-14569): the menuId gate
+		// runs after the Eluna/AI hooks — a stale select fires the hooks
+		// but never reaches the native arms, and the live menu stays open.
+		if menuID != prevGossip.MenuID {
+			s.debug("gossip selection rejected: stale menu", "account", s.accountName, "guid", guid, "menu", menuID)
+			s.gossip = prevGossip
+			return true
+		}
 		// Player::OnGossipSelect (Player.cpp:14595-14601): the option's
 		// BoxMoney is checked for sufficiency up front — insufficient funds
 		// send BUY_ERR_NOT_ENOUGHT_MONEY and close the menu — but the charge
@@ -553,6 +567,9 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			bgTypeID := s.battlemasterBGType(ctx, entry)
 			if bgTypeID == battlegroundTypeNone {
 				s.debug("gossip battlefield invalid creature", "account", s.accountName, "entry", entry)
+				// C++ logs and returns before the BoxMoney charge with the
+				// menu still live — restore it instead of dropping it.
+				s.gossip = prevGossip
 				return true
 			}
 			s.gossipClosed = true
@@ -609,10 +626,10 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
-		s.gossipClosed = true
-		if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
-			return false
-		}
+		// Player::OnGossipSelect arms that send no packet leave the live
+		// menu open (C++ never closes the menu for them) — restore it
+		// instead of closing the client's window.
+		s.gossip = prevGossip
 	}
 	s.debug("gossip selection handled", "account", s.accountName, "entry", entry, "list", listID)
 	return true
@@ -622,7 +639,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 // gameobject GUID — the gameobject arm of
 // WorldSession::HandleGossipSelectOptionOpcode (MiscHandler.cpp:131-136,
 // 168-173, 198-204).
-func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64, item gossipMenuItem, code string) bool {
+func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64, menuID uint32, item gossipMenuItem, code string) bool {
 	if !s.playerLoaded || s.player == nil || s.server == nil {
 		return true
 	}
@@ -650,9 +667,22 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	// feign-death strip runs after the gameobject validation, before the
 	// Eluna select hook.
 	s.removeFakeDeath()
+	// The select hook nils the live menu before firing (like the creature
+	// path), so capture it for the menuId gate and the no-close restore
+	// below.
+	prevGossip := s.gossip
 	// Eluna::OnGossipSelect[Code] fires before the native arms; a Lua false
 	// return skips them (MiscHandler.cpp:198-204).
 	if s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code) {
+		return true
+	}
+	// Player::OnGossipSelect (Player.cpp:14565-14569): for gameobject
+	// sources the menuId gate runs after the hook — a stale select fires
+	// the hook but never reaches the native arms, and the live menu stays
+	// open.
+	if menuID != prevGossip.MenuID {
+		s.debug("gameobject gossip selection rejected: stale menu", "account", s.accountName, "entry", entry, "menu", menuID)
+		s.gossip = prevGossip
 		return true
 	}
 	// Player::OnGossipSelect (Player.cpp:14580-14600): gameobjects accept
@@ -716,10 +746,10 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 		s.sendPlayerUpdate()
 	}
 	if s.gossip == nil && !s.gossipClosed {
-		s.gossipClosed = true
-		if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
-			return false
-		}
+		// Player::OnGossipSelect arms that send no packet leave the live
+		// menu open (C++ never closes the menu for them) — restore it
+		// instead of closing the client's window.
+		s.gossip = prevGossip
 	}
 	s.debug("gameobject gossip selection handled", "account", s.accountName, "entry", entry)
 	return true
@@ -735,9 +765,15 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 // player, sender, action, code-or-nil) with no cancel semantics
 // (CallAllFunctions). There are no native arms on this path.
 func (s *session) handlePlayerGossipSelect(ctx context.Context, menuID uint32, item gossipMenuItem, code string) bool {
+	// MiscHandler.cpp:146-151: the player arm rejects when the guid isn't
+	// the player's own or the menuId no longer matches, before the
+	// feign-death strip and the hooks.
+	if s.gossip == nil || s.gossip.MenuID != menuID {
+		s.debug("player gossip selection rejected: stale menu", "account", s.accountName, "menu", menuID)
+		return true
+	}
 	// MiscHandler.cpp:162-164 (HandleGossipSelectOptionOpcode) — the
-	// feign-death strip runs after the player-arm validation (the caller
-	// matched guid and menuId), before dispatch.
+	// feign-death strip runs after the player-arm validation, before dispatch.
 	s.removeFakeDeath()
 	s.gossip = nil
 	codeArg := any(nil)
