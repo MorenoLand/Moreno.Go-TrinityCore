@@ -73,10 +73,12 @@
 -- SAY_CAPTAIN_FINAL) were already documented in the
 -- instance_halls_of_reflection audit.
 -- npc_the_lich_king_escape_hor KilledUnit — DoPlaySoundToSet
--- (SOUND_LK_SLAY_1/2) has no sound bridge (the npc_fel_geyser
--- precedent); the ungated DamageTaken clamp is now ported in
--- npc_the_lich_king_escape.lua; the SetData(DATA_ICEWALL) summon/Talk
--- machine and MovementInform legs have no bridges.
+-- (SOUND_LK_SLAY_1/2) is ported via creature:PlayDirectSound in
+-- npc_the_lich_king_escape.lua (22:19 tick; the old no-sound-
+-- bridge note is stale); the ungated DamageTaken clamp is now
+-- ported in npc_the_lich_king_escape.lua; the SetData(DATA_
+-- ICEWALL) summon/Talk machine and MovementInform legs have no
+-- bridges.
 -- npc_uther_quel_delar UpdateAI EVENT_UTHER_1..9 Talk machine
 -- (SAY_UTHER_QUEL_DELAR_1..6) rides Reset/DoAction/MovementInform
 -- sequence legs with no bridges; the DamageTaken clamp is now ported

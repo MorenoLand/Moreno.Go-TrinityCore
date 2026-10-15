@@ -63,7 +63,11 @@
 -- instance (C++ SelectTarget(Random, 0) — teron convention) /
 -- taunt Talk(SAY_ILLIDAN_TAUNT) 30s then {30s,60s}. The 10s evade
 -- check has no boundary bridge — skipped; the music controller
--- arms have no sound bridge; SetCanDualWield has no bridge.
+-- arms ride instance->GetGameObject(DATA_ILLIDAN_MUSIC_CONTROLLER)
+-- (no instance-script bridge — the bridge gap is the controller
+-- fetch, not the sound: WorldObject::PlayDirectMusic = SMSG_PLAY_
+-- MUSIC, which gameobject:PlayMusic sends); SetCanDualWield has no
+-- bridge.
 -- OnDamageTaken(9, pre-damage hook): lethal from anyone but self
 -- (C++-exact guard) -> damage rewritten to health-1; if !_dead:
 -- _isDemon -> cancel all timers, non-triggered self-cast demon

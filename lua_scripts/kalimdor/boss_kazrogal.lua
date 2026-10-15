@@ -36,8 +36,8 @@
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): Talk
 --   SAY_ONSLAY (0); no TYPEID gate in C++ (shade_of_aran precedent).
 -- - Death (C++ JustDied, non-instance leg): hyjal_trashAI::JustDied is
---   instance bookkeeping (blocked, standing); DoPlaySoundToSet(me, 11018)
---   has no sound bridge (gurtogg precedent, standing).
+--   instance bookkeeping (blocked, standing); DoPlaySoundToSet(me,
+--   11018) is ported via creature:PlayDirectSound in onDied.
 -- Unmodeled (documented-only, no bridges):
 -- - The IsEvent escort machine: the go-flagged first-UpdateAI block adds
 --   8 C++-verbatim waypoints (5492.91,-2404.61,1462.63 /
@@ -158,7 +158,11 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied (non-instance leg): DoPlaySoundToSet(me, SOUND_ONDEATH
+-- 11018) = creature:PlayDirectSound (SMSG_PLAY_SOUND); the IsEvent
+-- instance SetData(DONE) leg is blocked on the instance-script model.
 local function onDied(event, creature, killer)
+    creature:PlayDirectSound(11018)
     cancelTimers(creature:GetGUID())
 end
 

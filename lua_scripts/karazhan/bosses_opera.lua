@@ -41,8 +41,9 @@
 -- is not registered: movement-only AI, no combat hooks ever fire.
 -- npc_grandmother (17603) is not registered: the gossip select's only
 -- effects are the wolf summon (no bearer) and self-despawn — registering
--- it would strand the event (nightbane-urn precedent). The wolf's death
--- sound (9275) has no sound bridge on the motion creature. Julianne's and
+-- it would strand the event (nightbane-urn precedent). The wolf's
+-- death sound (9275) is ported via creature:PlayDirectSound in
+-- wolfDied (SMSG_PLAY_SOUND = WorldObject::PlayDirectSound). Julianne's and
 -- Romulo's pre-combat EntryYell/AggroYell timers have no Lua-modelable
 -- pre-combat tick (their NON_ATTACKABLE/faction arms have no bridge
 -- either). Julianne's SpellHit(DRINK_POISON) arm is folded into the
@@ -498,9 +499,9 @@ RegisterCreatureEvent(ENTRY_CRONE, 23, croneLeaveCombat)
 -- which fear/swipe are frozen (no threat model: the GetThreat/
 -- ModifyThreatByPercent/AddThreat juggling is skipped), then 40s calm.
 -- Terrifying howl 30752 on the victim every 25-35s; wide swipe 30761 on
--- the victim every 25-30s (first 5s); neither ticks while chasing. The
--- death sound (9275) has no sound bridge; the SetBossState(DONE) arm has
--- no instance-script model.
+-- the victim every 25-30s (first 5s); neither ticks while chasing.
+-- The death sound (9275) is ported via PlayDirectSound in wolfDied;
+-- the SetBossState(DONE) arm has no instance-script model.
 local WOLF_SAY_AGGRO = 0
 local WOLF_SAY_SLAY = 1
 local WOLF_SAY_HOOD = 2
@@ -599,8 +600,12 @@ local function wolfTargetDied(event, creature, victim)
     end
 end
 
+-- C++ boss_bigbadwolf::JustDied: DoPlaySoundToSet(me, SOUND_WOLF_DEATH
+-- 9275) = creature:PlayDirectSound (SMSG_PLAY_SOUND); the
+-- SetBossState(DONE) arm has no instance-script model. Cleanup.
 local function wolfDied(event, creature, killer)
     local guid = creature:GetGUID()
+    creature:PlayDirectSound(9275)
     cancelTimers(guid)
     wolfState[guid] = nil
 end

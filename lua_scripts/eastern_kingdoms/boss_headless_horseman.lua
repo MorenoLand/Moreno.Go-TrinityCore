@@ -47,8 +47,8 @@
 -- the instance-script model; the SummonCreature(NPC_SIR_THOMAS) leg has
 -- no summon bridge (dark-rider precedent); the LFG FinishDungeon leg has
 -- no LFG bridge. JustEngagedWith's SetCombatPulseDelay/setActive legs
--- have no bridges; its EVENT_RANDOM_LAUGH arm has no sound bridge
--- (DoPlaySoundToSet — gurtogg precedent, boss_ai.go:834); its
+-- have no bridges; its EVENT_RANDOM_LAUGH arm is ported as the
+-- onLaugh timer via creature:PlayDirectSound (SMSG_PLAY_SOUND); its
 -- head->AI()->DoZoneInCombat() leg hangs off the instance-script model.
 -- Unmodeled (documented-only — no bridges on the Lua surface):
 -- - DamageTaken's phase-transition latch (damage negation + StartPhase's
@@ -147,9 +147,20 @@ local function onCleave(creature, guid)
     schedule(guid, "cleave", math.random(6000, 12000), function() onCleave(creature, guid) end)
 end
 
+local LAUGH_SOUNDS = { 11975, 11965, 11976 }
+
+-- C++ EVENT_RANDOM_LAUGH: DoPlaySoundToSet(me, random laugh) =
+-- creature:PlayDirectSound (SMSG_PLAY_SOUND); initial {30s,60s},
+-- re-arm {30s,60s} (C++-exact).
+local function onLaugh(creature, guid)
+    creature:PlayDirectSound(LAUGH_SOUNDS[math.random(3)])
+    schedule(guid, "laugh", math.random(30000, 60000), function() onLaugh(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     schedule(guid, "cleave", 13000, function() onCleave(creature, guid) end)
+    schedule(guid, "laugh", math.random(30000, 60000), function() onLaugh(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

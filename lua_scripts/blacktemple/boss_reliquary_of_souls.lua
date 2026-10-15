@@ -103,8 +103,10 @@
 -- SEETHE=3) + triggered seethe 41364 self-cast — the
 -- GetThreat/victim-GUID arms have no threat bridge), FREED_2
 -- Talk(ANGER_SAY_FREED_2=1) on the 1s..3min one-shot; JustDied:
--- DoPlaySoundToSet(11401) (no sound bridge) + reliquary ACTION_
--- KILL_SELF (blocked). Talk lines ANGER_SAY_FREED=0 / ANGER_SAY_
+-- DoPlaySoundToSet(11401) would be creature:PlayDirectSound (the
+-- bridge is live — gurtogg precedent) but the essence AIs are
+-- unregistered: blocked on the no-essence-entry stay-out, not on
+-- the sound bridge + reliquary ACTION_KILL_SELF (blocked). Talk lines ANGER_SAY_FREED=0 / ANGER_SAY_
 -- FREED_2=1 / ANGER_SAY_SEETHE=2 / ANGER_EMOTE_SEETHE=3 /
 -- ANGER_SAY_SPITE=5.
 -- The four aura/spell scripts have no bridges (standing gaps):

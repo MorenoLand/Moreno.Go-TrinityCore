@@ -9,8 +9,11 @@
 -- ScriptName binding is DB-side (no TDB in this workspace).
 -- npc_lady_sylvanas_windrunner — the combat rotation is bridgeable
 -- in principle (omen 1s-pump pattern: JustEngagedWith aggro sound
--- 5886 — no sound bridge; EVENT_SUMMON_SKELETON 20s self-cast
--- 59711, EVENT_BLACK_ARROW 15s DoCastVictim 59712, EVENT_SHOOT 8s
+-- 5886 — bridgeable via creature:PlayDirectSound, the bridge is
+-- live (gurtogg precedent), but the creature is unregistered:
+-- blocked on the no-NPC_-entry-constant stay-out, not on sound;
+-- EVENT_SUMMON_SKELETON 20s self-cast 59711, EVENT_BLACK_ARROW 15s
+-- DoCastVictim 59712, EVENT_SHOOT 8s
 -- DoCastVictim 59710, EVENT_MULTI_SHOT 10s DoCastVictim 59713,
 -- EVENT_FADE 30s self-cast 20672 + blink self-cast 29211 with the
 -- 10-yd multishot sub-arm — re-arms 30-35s / 20-30s / 15-20s /

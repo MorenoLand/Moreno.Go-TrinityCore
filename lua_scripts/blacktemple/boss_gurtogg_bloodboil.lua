@@ -10,8 +10,8 @@
 -- the creature_template ScriptName binding is DB-side — no TDB in
 -- this workspace, so only the C++-side naming is verified). Talk
 -- lines used: SAY_AGGRO=0 (pull), SAY_SLAY=1 (kill, player-only),
--- SAY_SPECIAL=2 (eject), SAY_ENRAGE=3 (berserk, 50%); JustDied has
--- no Talk — only the unmodeled death sound (11439).
+-- SAY_SPECIAL=2 (eject), SAY_ENRAGE=3 (berserk, 50%); JustDied:
+-- no Talk — the death sound (11439) is ported via PlayDirectSound.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
@@ -19,8 +19,9 @@
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat:
 -- Talk(SAY_AGGRO), arm berserk 45078 10min one-shot, non-triggered
 -- self-cast (C++ DoCast resolves AITARGET_SELF — UnitAI.cpp) + 50%
--- Talk(SAY_ENRAGE) (the alternative DoPlaySoundToSet(11437) arm has
--- no sound bridge, opera convention) / change phase 60s / phase 1
+-- Talk(SAY_ENRAGE) (the alternative DoPlaySoundToSet(11437) arm is
+-- ported via creature:PlayDirectSound in onBerserk) / change phase
+-- 60s / phase 1
 -- bloodboil 42005 10s then 10s, non-triggered self-cast (the
 -- bloodboil target-filter SpellScript, 5 nearest, has no SpellScript
 -- bridge) / arcing smash 40457 10s then 10s, non-triggered
@@ -61,9 +62,9 @@
 -- AddThreat(oldThreat) victim-restore arms have no threat bridge
 -- and are unmodeled, so the GUID state is simply cleared
 -- (C++ Initialize). OnTargetDied(3): Talk(SAY_SLAY), TYPEID_PLAYER
--- gate (terestian convention). OnDied(4): nothing modeled — the
--- _JustDied instance arm is blocked on the instance-script model
--- and the DoPlaySoundToSet(11439) arm has no sound bridge. OnLeave-
+-- gate (terestian convention). OnDied(4): _JustDied instance arm is
+-- blocked on the instance-script model; the DoPlaySoundToSet(11439)
+-- arm is ported via creature:PlayDirectSound. OnLeave-
 -- Combat(2)/OnReset(23): cancel timers, drop per-GUID state. The
 -- Reset ApplySpellImmune(false) arms have no bridge; the
 -- EnterEvadeMode _DespawnAtEvade arm has no despawn bridge
@@ -262,12 +263,14 @@ local function onBewilderingStrike(creature, guid)
 end
 
 -- C++ EVENT_BERSERK: non-triggered self-cast 45078 (AITARGET_SELF
--- per UnitAI.cpp), one-shot; 50% Talk(SAY_ENRAGE), else the
--- DoPlaySoundToSet(11437) arm which has no sound bridge.
+-- per UnitAI.cpp), one-shot; 50% Talk(SAY_ENRAGE), else
+-- DoPlaySoundToSet(11437) = creature:PlayDirectSound.
 local function onBerserk(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK, false)
     if math.random(2) == 1 then
         creature:Talk(SAY_ENRAGE)
+    else
+        creature:PlayDirectSound(11437)
     end
 end
 
@@ -430,9 +433,10 @@ local function gurtoggTargetDied(event, creature, victim)
 end
 
 -- C++ JustDied: _JustDied (instance bookkeeping — blocked on the
--- instance-script model) + DoPlaySoundToSet(11439) (no sound
--- bridge). Nothing modeled — cleanup only.
+-- instance-script model) + DoPlaySoundToSet(11439) = creature:
+-- PlayDirectSound (SMSG_PLAY_SOUND). Death cleanup + sound.
 local function gurtoggDied(event, creature, killer)
+    creature:PlayDirectSound(11439)
     gurtoggResetState(creature:GetGUID())
 end
 
