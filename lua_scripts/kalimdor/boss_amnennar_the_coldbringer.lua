@@ -118,17 +118,26 @@ end
 -- honest approximation (shade_of_aran precedent). Frost Spectres
 -- 12642 summon arms are documented-only (no summon bridge).
 local function healthPump(creature, guid, st)
-    local pct = creature:GetHealthPct()
-    if pct <= 60 and not st.hp60 then
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 then
+        schedule(guid, "pump", 1000, function()
+            healthPump(creature, guid, st)
+        end)
+        return
+    end
+    -- C++ HealthBelowPct(p) = strict health < floor(maxHealth*p/100)
+    -- (Unit::HealthBelowPct truncates); the old float GetHealthPct()<=p
+    -- fired 1 HP early at integer boundaries.
+    if not st.hp60 and health < math.floor(maxHealth * 60 / 100) then
         st.hp60 = true
         creature:Talk(SAY_SUMMON60)
         -- DoCastVictim(12642) summon effect: no bridge, not wired.
     end
-    if pct <= 50 and not st.hp50 then
+    if not st.hp50 and health < math.floor(maxHealth * 50 / 100) then
         st.hp50 = true
         creature:Talk(SAY_HP)
     end
-    if pct <= 30 and not st.hp30 then
+    if not st.hp30 and health < math.floor(maxHealth * 30 / 100) then
         st.hp30 = true
         creature:Talk(SAY_SUMMON30)
         -- DoCastVictim(12642) summon effect: no bridge, not wired.
