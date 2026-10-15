@@ -39,6 +39,12 @@
 -- boss_grandmaster_vorpilAI::JustDied — Talk(SAY_DEATH 4) (line
 -- 137) — the sjonnir self-Talk precedent (event 4; the _JustDied()
 -- instance leg rides the no-instance bridge — documented-only).
+-- boss_grandmaster_vorpilAI::MoveInLineOfSight — the _intro
+-- one-shot Talk(SAY_INTRO 0) (line 159) — PORTED as
+-- vorpilMoveInLOS on event 27 (per-GUID _intro latch, latch
+-- cleared on 2/4; C++ Reset() re-latch lands on leave-combat);
+-- returns nil so the default aggro engage proceeds, matching
+-- the C++ BossAI::MoveInLineOfSight(who) call at :155.
 -- DOCUMENTED-ONLY (in this header; only entry 18732 registered):
 -- boss_grandmaster_vorpilAI::Reset — _Reset() + _intro/_helpYell
 -- reset — no-instance bridge — documented-only.
@@ -54,10 +60,22 @@
 -- documented-only.
 -- boss_grandmaster_vorpilAI::MoveInLineOfSight — the _intro
 -- one-shot Talk(SAY_INTRO 0) (line 159) gated on player within
--- 100.0f + LOS + valid-attack-target — event 27 exists but its
--- fire site is the aggro-engage branch, not a 100-unit sighting —
--- fire-site mismatch (shaffar/maladaar precedent), zero
--- RegisterCreatureEvent(27) usage in lua_scripts/ — documented-only.
+-- 100.0f + LOS + valid-attack-target — PORTED on event 27
+-- (CREATURE_EVENT_ON_MOVE_IN_LOS): Go's fire site is the
+-- aggro-engage branch ("about to aggro a player it has
+-- sighted"), which is a SUBSET of the C++ trigger — at fire
+-- time dist <= aggro range (<=45) < 100, LOS already verified,
+-- and the fire site's isAttackableFaction/canCreatureStartAttack
+-- gates are the IsValidAttackTarget equivalent, so every C++
+-- gate holds at fire time. Deliberate deviations: the intro
+-- fires at aggro acquisition instead of the 100-yard sighting,
+-- and the Talk lands just before the engage instead of just
+-- after the BossAI::MoveInLineOfSight(who) call (C++ :155-159
+-- calls the base FIRST). The old "fire-site mismatch /
+-- documented-only" note was stale — the depth_charge precedent
+-- registers event 27, and the gargolmar taunt arm is the one
+-- genuinely unfirable here (its else-branch fires only when the
+-- player is NOT engaged).
 -- boss_grandmaster_vorpilAI::UpdateAI — the remaining timer
 -- machine (EVENT_SHADOWBOLT_VOLLEY ported above) stays out on
 -- evidence-based legs, not the old blanket "no-timer" claim:
@@ -96,6 +114,7 @@
 
 local ENTRY_GRANDMASTER_VORPIL = 18732 -- NPC_GRANDMASTER_VORPIL (shadow_labyrinth.h)
 
+local SAY_INTRO = 0
 local SAY_AGGRO = 1
 local SAY_SLAY  = 3
 local SAY_DEATH = 4
@@ -103,6 +122,7 @@ local SAY_DEATH = 4
 local SPELL_SHADOWBOLT_VOLLEY = 33841
 
 local timers = {}
+local introSeen = {} -- per-GUID _intro latch (C++ _intro, :159)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -156,7 +176,9 @@ local function vorpilEnterCombat(event, creature, target)
 end
 
 local function vorpilLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    introSeen[guid] = nil
 end
 
 -- C++ boss_grandmaster_vorpilAI::KilledUnit:
@@ -175,10 +197,31 @@ end
 -- bridge — documented-only).
 local function vorpilDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    introSeen[guid] = nil
+end
+
+-- C++ boss_grandmaster_vorpilAI::MoveInLineOfSight (:155-161):
+-- BossAI::MoveInLineOfSight(who) first, then the _intro one-shot
+-- Talk(SAY_INTRO 0) when the player is within 100.0f + LOS +
+-- valid-attack-target. Go's event-27 fire site (aggro-engage
+-- branch) is a subset of the C++ trigger: dist <= aggro range at
+-- fire time makes the 100.0f gate vacuous (kept for shape
+-- fidelity), LOS and the attack-target gates already hold. Return
+-- nil so the engage proceeds — C++ calls the base, the
+-- depth_charge return-true precedent does not apply.
+local function vorpilMoveInLOS(event, creature, player)
+    local guid = creature:GetGUID()
+    if not introSeen[guid]
+            and creature:IsWithinDistInMap(player, 100.0) then
+        introSeen[guid] = true
+        creature:Talk(SAY_INTRO)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 1, vorpilEnterCombat)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 2, vorpilLeaveCombat)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 3, vorpilTargetDied)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 4, vorpilDied)
+RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 27, vorpilMoveInLOS)

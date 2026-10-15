@@ -23,9 +23,15 @@
 -- fired from the C++ JustDied, C++-exact), SAY_HEAL = 1
 -- (health < 40% — fired once from the yelledForHeal arm,
 -- C++-exact); SAY_TAUNT = 0 fires only from the
--- MoveInLineOfSight 60yd proximity arm — no LoS-aggro
--- bridge (fel orc convert precedent), unreachable in this
--- model.
+-- MoveInLineOfSight 60yd proximity arm's ELSE branch — which
+-- fires only when the player is within 60y but OUTSIDE attack
+-- radius or without LOS, i.e. exactly when the creature does NOT
+-- engage. Go's event-27 fire site IS the aggro-engage branch
+-- where attackRadius/LOS already hold, so the else-branch
+-- condition can never be true at the fire site (fel orc convert
+-- precedent sharpened to trigger-path grounds by the 22:58
+-- MoveInLOS-arm scan — not a missing bridge, a genuinely
+-- unfirable branch). Unreachable in this model.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via
 -- CreateLuaEvent (per-GUID scheduler pump); melee is
@@ -69,9 +75,13 @@
 -- shim (instance_hellfire_ramparts.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_WATCHKEEPER_
 -- GARGOLMAR = 0 bookkeeping in Reset/JustEngagedWith/
--- JustDied skipped); no LoS-aggro bridge — the
--- MoveInLineOfSight SAY_TAUNT arm (and the whole AttackStart
--- proximity machine) unmodeled, so SAY_TAUNT is unreachable;
+-- JustDied skipped); the MoveInLineOfSight SAY_TAUNT arm (and
+-- the whole AttackStart proximity machine) unmodeled on
+-- trigger-path grounds — the taunt's else-branch fires only when
+-- the player is NOT engaged (within 60y but outside attack
+-- radius / no LOS), while Go's event-27 fire site is the
+-- aggro-engage branch where those conditions already hold, so
+-- SAY_TAUNT is unreachable;
 -- the ScriptData "SD%Complete: 80" caveats are upstream,
 -- documented, not bridged: the "missing adds to heal him"
 -- machine has no summon arms in the C++ at all, and the
@@ -212,8 +222,13 @@ RegisterCreatureEvent(ENTRY_GARGOLMAR, 1, function(_, creature)
     end, 1000, 0)
 end)
 
--- No LoS-aggro bridge: the MoveInLineOfSight SAY_TAUNT arm
--- has no hook in this model (fel orc convert precedent).
+-- The MoveInLineOfSight SAY_TAUNT arm stays out on trigger-path
+-- grounds (22:58 MoveInLOS-arm scan): its else-branch fires only
+-- when the player is within 60y but outside attack radius /
+-- without LOS — exactly when the creature does NOT engage —
+-- while Go's event-27 fire site is the aggro-engage branch where
+-- those conditions already hold, so the branch can never fire
+-- (fel orc convert precedent).
 
 RegisterCreatureEvent(ENTRY_GARGOLMAR, 2, function(_, creature)
     resetBoss(creature:GetGUID())

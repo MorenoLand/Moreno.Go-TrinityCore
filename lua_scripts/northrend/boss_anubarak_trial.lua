@@ -45,8 +45,13 @@
 -- boss_ai.go entry — npc entries register in the lua file only
 -- (terestian precedent: Kil'rek 17229 / fiendish imp 17267).
 -- Unmodeled (no bridges — documented, not wired):
--- boss_anubarak_trial MoveInLineOfSight Talk(SAY_INTRO 0) — no
--- MoveInLineOfSight hook on the Lua surface.
+-- boss_anubarak_trial MoveInLineOfSight Talk(SAY_INTRO 0) —
+-- dead arm: _intro initializes true (:176) and is only ever set
+-- false inside the unreachable branch itself (:219), so the Talk
+-- never fires in C++ (22:58 MoveInLOS-arm scan verified this —
+-- the old "no hook on the Lua surface" note was stale; event 27
+-- exists, depth_charge precedent — but wiring a Talk C++ never
+-- emits would fabricate behavior).
 -- boss_anubarak_trial JustReachedHome — instance->SetBossState(
 -- DATA_ANUBARAK, FAIL) (instance-script model absent, standing) +
 -- SummonCreature(NPC_SCARAB) x10 (summon STRAND absent, standing).

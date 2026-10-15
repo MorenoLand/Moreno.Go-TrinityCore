@@ -39,17 +39,31 @@
 -- razuvious player-gated precedent (event 3).
 -- boss_nexusprince_shaffarAI::JustDied — Talk(SAY_DEAD 4) (line
 -- 166) — the sjonnir self-Talk precedent (event 4).
+-- boss_nexusprince_shaffarAI::MoveInLineOfSight — the
+-- _hasTaunted one-shot Talk(SAY_INTRO 0) (line 101) — PORTED as
+-- shaffarMoveInLOS on event 27 (per-GUID latch, latch cleared on
+-- 2/4/23 — C++ Reset() :83 re-latches); returns true to veto the
+-- default aggro engage, matching the C++ body which never calls
+-- the base (depth_charge precedent).
 -- DOCUMENTED-ONLY (in this header; only entry 18344 registered):
 -- boss_nexusprince_shaffarAI::Reset — the three initial beacon
 -- SummonCreature(NPC_BEACON 18431, TEMPSUMMON_CORPSE_TIMED_DESPAWN
 -- 2h) legs — no-summon bridge (shirrak precedent).
 -- boss_nexusprince_shaffarAI::MoveInLineOfSight — Talk(SAY_INTRO 0)
--- (line 131) one-shot _hasTaunted-gated on a player within 100.0f —
--- the maladaar precedent: event 27 exists in the engine but its fire
--- site is the aggro-engage branch ("when the creature is about to
--- aggro a player it has sighted"), not a 100-unit sighting — fire-site
--- mismatch, zero RegisterCreatureEvent(27) precedent in lua_scripts/
--- — documented-only.
+-- (line 101) one-shot _hasTaunted-gated on a player within 100.0f —
+-- PORTED on event 27 (CREATURE_EVENT_ON_MOVE_IN_LOS): Go's fire
+-- site is the aggro-engage branch ("about to aggro a player it has
+-- sighted"), which is a SUBSET of the C++ trigger — at fire time
+-- dist <= aggro range (<=45) < 100 and who is always a player, so
+-- both C++ gates hold. The C++ body never calls
+-- ScriptedAI::MoveInLineOfSight(who), so the handler returns true
+-- to veto the default engage (depth_charge precedent), matching
+-- C++ where the boss never aggroes by sight. The old
+-- "fire-site mismatch / documented-only" note (the maladaar
+-- precedent) was stale: event 27 fires live from the Go aggro
+-- path (creaturemotion.go), and the gargolmar taunt arm is the one
+-- genuinely unfirable here (its else-branch fires only when the
+-- player is NOT engaged).
 -- boss_nexusprince_shaffarAI::JustSummoned — beacon
 -- CastSpell(SPELL_ETHEREAL_BEACON_VISUAL 32368) + Random-SelectTarget
 -- AttackStart legs — no-cast / no-random-target / no-cross-creature
@@ -87,6 +101,7 @@
 
 local ENTRY_SHAFFAR = 18344 -- NPC_SHAFFAR (Creatures enum)
 
+local SAY_INTRO = 0
 local SAY_AGGRO = 1
 local SAY_SLAY  = 2
 local SAY_DEAD  = 4
@@ -95,6 +110,7 @@ local SPELL_FROSTBOLT = 32364 -- boss_nexusprince_shaffar.cpp:42
 local SPELL_FROSTNOVA = 32365 -- boss_nexusprince_shaffar.cpp:44
 
 local timers = {}
+local taunted = {} -- per-GUID _hasTaunted latch (C++ _hasTaunted, :184)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -174,11 +190,15 @@ local function shaffarEnterCombat(event, creature, target)
 end
 
 local function shaffarLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    taunted[guid] = nil
 end
 
 local function shaffarReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    taunted[guid] = nil
 end
 
 -- C++ boss_nexusprince_shaffarAI::KilledUnit:
@@ -195,7 +215,26 @@ end
 -- sjonnir self-Talk precedent (event 4).
 local function shaffarDied(event, creature, killer)
     creature:Talk(SAY_DEAD)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    taunted[guid] = nil
+end
+
+-- C++ boss_nexusprince_shaffarAI::MoveInLineOfSight (:99-105):
+-- the _hasTaunted one-shot Talk(SAY_INTRO 0) when a player is
+-- within 100.0f; the body never calls the base AI, so the boss
+-- never engages by sight in C++. Go's event-27 fire site is a
+-- subset of the C++ trigger (dist <= aggro range < 100, who always
+-- a player), so both gates hold at fire time. Return true to veto
+-- the default engage — the depth_charge precedent — matching C++.
+local function shaffarMoveInLOS(event, creature, player)
+    local guid = creature:GetGUID()
+    if not taunted[guid]
+            and creature:IsWithinDistInMap(player, 100.0) then
+        taunted[guid] = true
+        creature:Talk(SAY_INTRO)
+    end
+    return true
 end
 
 RegisterCreatureEvent(ENTRY_SHAFFAR, 1, shaffarEnterCombat)
@@ -203,3 +242,4 @@ RegisterCreatureEvent(ENTRY_SHAFFAR, 2, shaffarLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 3, shaffarTargetDied)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 4, shaffarDied)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 23, shaffarReset)
+RegisterCreatureEvent(ENTRY_SHAFFAR, 27, shaffarMoveInLOS)
