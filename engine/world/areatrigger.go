@@ -43,14 +43,13 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	}
 
 	// 2b. Script hook arm
-	// Reference: MiscHandler.cpp:678 (sScriptMgr->OnAreaTrigger -> Eluna
-	// OnAreaTrigger, ServerHooks.cpp:115-125): TRIGGER_EVENT_ON_TRIGGER =
-	// 24 fires after the radius validation with (event, player, triggerId);
-	// a boolean true return vetoes the quest/tavern/BG/teleport arms.
+	// Reference: ScriptMgr::OnAreaTrigger (ScriptMgr.cpp:1702-1713): an
+	// Eluna true return makes ScriptMgr return false, so the quest/tavern/
+	// BG/teleport arms below CONTINUE — only a native AreaTriggerScript
+	// true vetoes them. Go has no native AreaTrigger scripts, so the Lua
+	// hook fires but never vetoes (the old code had this inverted).
 	if s.server != nil && s.server.Features != nil && s.server.Features.Scripts != nil {
-		if results, hookErr := s.server.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventAreaTrigger, s.luaPlayer(), triggerID); hookErr == nil && luaHookVeto(results) {
-			return true
-		}
+		_, _ = s.server.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventAreaTrigger, s.luaPlayer(), triggerID)
 	}
 
 	wdb := s.server.WorldStore.DB

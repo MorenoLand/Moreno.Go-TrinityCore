@@ -154,8 +154,11 @@ func (s *session) handleGameObjectQuery(ctx context.Context, payload []byte) boo
 		return s.write(uint16(protocol.OpcodeSMSG_GAMEOBJECT_QUERY_RESPONSE), buildGameObjectQueryResponse(gameObjectQueryData{Entry: entry}, false), true) == nil
 	}
 	if err != nil {
+		// HandleGameObjectQueryOpcode (QueryHandler.cpp:119-142) always
+		// answers — a DB failure answers the 0x80000000 deny like the
+		// creature arm above instead of dropping the packet.
 		s.debug("gameobject query failed", "account", s.accountName, "entry", entry, "error", err)
-		return false
+		return s.write(uint16(protocol.OpcodeSMSG_GAMEOBJECT_QUERY_RESPONSE), buildGameObjectQueryResponse(gameObjectQueryData{Entry: entry}, false), true) == nil
 	}
 	s.debug("gameobject query response", "account", s.accountName, "entry", entry, "name", data.Name)
 	return s.write(uint16(protocol.OpcodeSMSG_GAMEOBJECT_QUERY_RESPONSE), buildGameObjectQueryResponse(data, true), true) == nil

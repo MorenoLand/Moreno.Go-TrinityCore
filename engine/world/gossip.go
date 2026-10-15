@@ -373,7 +373,11 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// SMSG_GOSSIP_COMPLETE to stay wire-faithful. The cast visual
 			// (SMSG_SPELL_START/GO from the creature) has no Go bridge; the
 			// mechanic is what lands here.
-			if s.isDeadOrGhost() && s.resurrection == nil && s.player != nil && npcFlags&npcFlagSpiritHealer != 0 {
+			// Player::OnGossipSelect GOSSIP_OPTION_SPIRITHEALER arm
+			// (Player.cpp:14621-14624): casts 17251 on isDead() only — no
+			// npcflag check (the menu option is already gated by the
+			// flag at menu build) and no pending-request check.
+			if s.isDeadOrGhost() && s.player != nil {
 				pct := uint32(50)
 				ignoreReclaim := false
 				if s.server != nil && s.server.Data != nil {
@@ -1055,8 +1059,18 @@ func (s *session) loadGameObjectGossipOptions(ctx context.Context, menuID, entry
 	if err != nil {
 		return nil, err
 	}
+	// Player::PrepareGossipMenu GO arm (Player.cpp:14474-14484): a gameobject
+	// source lists only GOSSIP_OPTION_GOSSIP (1), and only for the
+	// questgiver/goober types — every other option type is hidden.
+	goType := uint8(0)
+	if s.server != nil {
+		goType = s.server.gameObjectTemplateType(entry)
+	}
 	options := make([]loadedGossipOption, 0, 32)
 	for _, row := range optionRows {
+		if uint32(row.optionType) != 1 || (goType != GameObjectTypeQuestGiver && goType != GameObjectTypeGoober) {
+			continue
+		}
 		meets, err := s.meetGossipOptionConditions(ctx, menuID, uint32(row.id), entry, guid)
 		if err != nil {
 			return nil, err

@@ -44,8 +44,11 @@ func (s *session) handleNpcTextQuery(ctx context.Context, payload []byte) bool {
 	if errors.Is(err, sql.ErrNoRows) || (err != nil && missingTable(err)) {
 		options = defaultNPCTextOptions()
 	} else if err != nil {
+		// HandleNpcTextQueryOpcode (QueryHandler.cpp:192-253) always sends
+		// the packet — fall through to the "Greetings $N" default instead
+		// of dropping it.
 		s.debug("npc text query failed", "account", s.accountName, "text", textID, "error", err)
-		return false
+		options = defaultNPCTextOptions()
 	}
 	s.debug("npc text response", "account", s.accountName, "text", textID, "guid", guid)
 	return s.write(uint16(protocol.OpcodeSMSG_NPC_TEXT_UPDATE), buildNPCTextUpdate(textID, options), true) == nil

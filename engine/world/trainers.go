@@ -288,6 +288,14 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 		}
 	}
 
+	// NPCHandler.cpp:103-122 (SendTrainerList): a GetTrainer(entry) miss
+	// logs and returns with no packet. The legacy npc_trainer and
+	// class-trainer fallbacks above cover custom/test spawns deliberately;
+	// when they produce nothing either, stay silent instead of answering
+	// an empty list.
+	if !foundTrainer && len(spells) == 0 {
+		return true
+	}
 	packet := protocol.NewBuffer(8 + 4 + 4 + len(spells)*38 + len(greeting) + 1)
 	packet.WriteU64(trainerGUID)
 	packet.WriteU32(trainerType)

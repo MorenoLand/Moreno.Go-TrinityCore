@@ -96,6 +96,7 @@ type dynamicGameObjectState struct {
 	IconName        string
 	Flags           uint32
 	Faction         uint32
+	PhaseMask       uint32 // gameobject.phaseMask (InSamePhase gate, GameObject.cpp:2760)
 	Data1           uint32
 	ParentRotation  [4]float32
 	AutoCloseTimer  *time.Timer
@@ -549,6 +550,31 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 
 }
 
+// gameObjectInteractionDistance mirrors GameObject::GetInteractionDistance
+// (GameObject.cpp:2639-2672): the locked-GO spell-range leg lives in the
+// lock-spell path; the flat 10.0-yard standard here covers only the
+// unlocked/mailbox/guildbank non-blizzlike-10.0 arms.
+func gameObjectInteractionDistance(goType uint8) float64 {
+	switch goType {
+	case GameObjectTypeAreaDamage:
+		return 0.0
+	case GameObjectTypeQuestGiver, GameObjectTypeText, GameObjectTypeFlagStand, GameObjectTypeFlagDrop, GameObjectTypeMiniGame:
+		return 5.5555553
+	case GameObjectTypeBinder, GameObjectTypeMailbox, GameObjectTypeGuildBank:
+		return 10.0
+	case GameObjectTypeChair, GameObjectTypeBarberChair:
+		return 3.0
+	case GameObjectTypeFishingNode:
+		return 100.0
+	case GameObjectTypeFishingHole:
+		return 20.5 // 20.0 + CONTACT_DISTANCE
+	case GameObjectTypeCamera, GameObjectTypeMapObject, GameObjectTypeDungeonDifficulty, GameObjectTypeDestructibleBuilding, GameObjectTypeDoor:
+		return 5.0
+	default:
+		return 5.0 // INTERACTION_DISTANCE
+	}
+}
+
 func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return false
@@ -562,6 +588,12 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	// HandleGameObjectUseOpcode (SpellHandler.cpp:300) before obj->Use, so
 	// the BG-flag delegate arms are gated too.
 	if s.isInFlight() {
+		return true
+	}
+	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2366): !IsInWorld()
+	// returns nullptr — a player still on a loading screen (far teleport in
+	// flight, worldReady false) silently ignores the opcode.
+	if !s.worldReady.Load() {
 		return true
 	}
 
@@ -619,21 +651,28 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 
 	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry, s.player.Map, s.player.InstanceID)
 	if err != nil || goState == nil {
-		return false
+		// HandleGameObjectUseOpcode (SpellHandler.cpp:304): a null
+		// GetGameObjectIfCanInteractWith result silently returns — stale
+		// GUIDs occur naturally (despawned GOs), and dropping the
+		// connection for one was a Go-only client kill.
+		return true
 	}
 
-	// Range check: GameObject::GetInteractionDistance (GameObject.cpp:2639)
-	// grants the fishing node (bobber, up to ~30y cast range) 100 yards and
-	// the fishing hole 20.0+CONTACT_DISTANCE (20.5); every other type keeps
-	// the 10.0-yard standard interaction distance.
-	maxUseDist := 10.0
-	switch goState.Type {
-	case GameObjectTypeFishingNode:
-		maxUseDist = 100.0
-	case GameObjectTypeFishingHole:
-		maxUseDist = 20.5
-	}
+	// GameObject::IsWithinDistInMap (GameObject.cpp:2760-2763): IsInMap &&
+	// InSamePhase && AtInteractDistance — the range gate below is the
+	// AtInteractDistance leg (GetInteractionDistance table).
+	maxUseDist := gameObjectInteractionDistance(goState.Type)
 	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > maxUseDist {
+		return true
+	}
+	// InSamePhase leg (Object.h:324): a zero stored mask is the C++
+	// PHASEMASK_NORMAL default. A forged opcode could otherwise loot or
+	// quest-credit a phased-out GO.
+	goPhase := goState.PhaseMask
+	if goPhase == 0 {
+		goPhase = 1
+	}
+	if goPhase&s.currentPlayerPhaseMask() == 0 {
 		return true
 	}
 
@@ -673,20 +712,14 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		s.useQuestGiverGameObject(ctx, guid, entry)
 
 	case GameObjectTypeChest:
-		// Chests open through the lock path: the client casts Opening and
-		// Spell::EffectOpenLock answers Spell::SendLoot(guid, LOOT_SKINNING)
-		// (SpellEffects.cpp:2031), so the window carries LOOT_SKINNING (not
-		// LOOT_CORPSE) and SendLoot's shouldLootRelease LOOT_SKINNING arm
-		// allows 20 yards (Player.cpp:8545-8550). The previous-loot release
-		// and dead-player drop mirror the handleLoot head they replace
-		// (Player.cpp:8526-8527, LootHandler.cpp:232-233).
-		if s.isDeadOrGhost() {
-			return true
-		}
-		if prev := s.activeLoot; prev != nil {
-			s.doLootRelease(prev)
-		}
-		return s.openGameObjectLoot(ctx, guid, lootTypeSkinning, 20.0)
+		// GameObject::Use has no GAMEOBJECT_TYPE_CHEST arm (the
+		// GameObject.cpp:1484-2087 switch skips type 3): right-clicking a
+		// chest is a silent no-op in C++. Chest loot opens only through the
+		// lock path — the client casts Opening and Spell::EffectOpenLock
+		// answers Spell::SendLoot(guid, LOOT_SKINNING)
+		// (SpellEffects.cpp:2023-2031), which carries the CanOpenLock
+		// lock/skill/key gate (Spell.cpp:7793). The old arm opened loot
+		// here directly, bypassing that gate for locked chests.
 
 	case GameObjectTypeFishingNode, GameObjectTypeFishingHole:
 		if goState.Type == GameObjectTypeFishingNode {
@@ -978,18 +1011,33 @@ func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte)
 	if s.isInFlight() {
 		return true
 	}
+	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2366): !IsInWorld()
+	// silently ignores the opcode (see the CMSG_GAMEOBJ_USE arm).
+	if !s.worldReady.Load() {
+		return true
+	}
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	lowGUID := uint32(guid & 0x00FFFFFF)
 	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry, s.player.Map, s.player.InstanceID)
 	if err != nil || goState == nil {
-		return false
+		// HandleGameobjectReportUse (SpellHandler.cpp:318): a null
+		// GetGameObjectIfCanInteractWith result silently returns — same
+		// stale-GUID disconnect fix as the CMSG_GAMEOBJ_USE arm.
+		return true
 	}
 	// The GetGameObjectIfCanInteractWith gates (Player.cpp:2363): the "Point"
-	// icon and interaction range gates apply here as in C++.
+	// icon, InSamePhase and interaction range gates apply here as in C++.
 	if goState.IconName == "Point" {
 		return true
 	}
-	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
+	goPhase := goState.PhaseMask
+	if goPhase == 0 {
+		goPhase = 1
+	}
+	if goPhase&s.currentPlayerPhaseMask() == 0 {
+		return true
+	}
+	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > gameObjectInteractionDistance(goState.Type) {
 		return true
 	}
 	// Eluna GAMEOBJECT_EVENT_ON_USE (event 14), fired from
@@ -1162,14 +1210,14 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 		return nil, nil
 	}
 
-	var goMap, goState, goType, displayID, data1 int64
+	var goMap, goState, goType, displayID, data1, phaseMask int64
 	var goX, goY, goZ, goO, size float64
 	var iconName string
 	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.state,
-		t.type, t.displayId, t.size, COALESCE(t.data1, 0), COALESCE(t.IconName, '')
+		t.type, t.displayId, t.size, COALESCE(t.data1, 0), COALESCE(t.IconName, ''), COALESCE(g.phaseMask, 0)
 		FROM gameobject AS g
 		JOIN gameobject_template AS t ON t.entry = g.id
-		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &goO, &goState, &goType, &displayID, &size, &data1, &iconName)
+		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &goO, &goState, &goType, &displayID, &size, &data1, &iconName, &phaseMask)
 	if err != nil {
 		return nil, err
 	}
@@ -1190,6 +1238,7 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 		DisplayID:   uint32(displayID),
 		Size:        float32(size),
 		IconName:    iconName,
+		PhaseMask:   uint32(phaseMask),
 		Data1:       uint32(data1),
 	}
 	if dyn.Type == GameObjectTypeFishingHole {
