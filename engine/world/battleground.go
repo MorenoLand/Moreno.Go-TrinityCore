@@ -134,7 +134,7 @@ func (s *session) handleBattlefieldList(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	bgTypeID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	fromWhere, _ := r.ReadU8()
 
@@ -169,7 +169,22 @@ func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID u
 	buf.WriteU32(0) // winHonor
 	buf.WriteU32(0) // winArena
 	buf.WriteU32(0) // lossHonor
-	buf.WriteU8(0)  // isRandom
+	isRandom := bgTypeID == battlegroundRB
+	if isRandom {
+		buf.WriteU8(1)
+	} else {
+		buf.WriteU8(0)
+	}
+	if isRandom {
+		if s.randomBGWinner {
+			buf.WriteU8(1)
+		} else {
+			buf.WriteU8(0)
+		}
+		buf.WriteU32(0) // winHonor_Random
+		buf.WriteU32(0) // winArena_Random
+		buf.WriteU32(0) // lossHonor_Random
+	}
 	buf.WriteU32(0) // count of active instances
 	return s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_LIST), buf.Bytes(), true) == nil
 }

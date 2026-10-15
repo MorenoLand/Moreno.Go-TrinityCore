@@ -156,7 +156,7 @@ func (s *session) sendNewMailNotification(ctx context.Context) {
 	}
 	var unread int64
 	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail
-		WHERE receiver = ? AND deliver_time <= ? AND expire_time > ? AND (COALESCE(checked, 0) & 1) = 0`, s.playerGUID, time.Now().Unix(), time.Now().Unix()).Scan(&unread)
+		WHERE receiver = ? AND deliver_time <= ? AND (COALESCE(checked, 0) & 1) = 0`, s.playerGUID, time.Now().Unix()).Scan(&unread)
 	if err != nil || unread == 0 {
 		if err == nil {
 			s.unreadMails = 0
@@ -175,10 +175,13 @@ func (s *session) loadMailState(ctx context.Context) {
 	}
 	now := time.Now().Unix()
 	var unread, next int64
+	// Reference: Player::UpdateNextMailTimeAndUnreads (Player.cpp:3124-3139) —
+	// neither the unread recount nor the next-delivery minimum filters on
+	// expiry; expired-but-unswept mail still counts.
 	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT
-		COALESCE(SUM(CASE WHEN deliver_time <= ? AND expire_time > ? AND (COALESCE(checked, 0) & 1) = 0 THEN 1 ELSE 0 END), 0),
-		COALESCE(MIN(CASE WHEN deliver_time > ? AND expire_time > ? THEN deliver_time END), 0)
-		FROM mail WHERE receiver = ?`, now, now, now, now, s.playerGUID).Scan(&unread, &next)
+		COALESCE(SUM(CASE WHEN deliver_time <= ? AND (COALESCE(checked, 0) & 1) = 0 THEN 1 ELSE 0 END), 0),
+		COALESCE(MIN(CASE WHEN deliver_time > ? THEN deliver_time END), 0)
+		FROM mail WHERE receiver = ?`, now, now, s.playerGUID).Scan(&unread, &next)
 	if err != nil {
 		return
 	}
@@ -285,12 +288,16 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	// The row query below limits to the first 50, so the total comes from a separate
 	// count with the same filters; on count failure the packet is skipped (the
 	// C++ side never fails this read, so a best-effort skip beats a wrong total).
+	// Reference: MailHandler.cpp:539-563 — HandleGetMailList filters only on
+	// deleted/undelivered; expired-but-unswept mail of the connected player is
+	// still listed (ReturnOrDeleteOldMails(true) skips connected receivers,
+	// ObjectMgr.cpp:6290), so there is no expire_time predicate here.
 	var totalMails int64
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail WHERE receiver = ? AND deliver_time <= ? AND expire_time > ?`, s.playerGUID, now, now).Scan(&totalMails); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail WHERE receiver = ? AND deliver_time <= ?`, s.playerGUID, now).Scan(&totalMails); err != nil {
 		return true
 	}
 	rows, err := db.QueryContext(ctx, `SELECT id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, expire_time, deliver_time, money, cod, checked
-		FROM mail WHERE receiver = ? AND deliver_time <= ? AND expire_time > ? ORDER BY id DESC LIMIT 50`, s.playerGUID, now, now)
+		FROM mail WHERE receiver = ? AND deliver_time <= ? ORDER BY id DESC LIMIT 50`, s.playerGUID, now)
 	if err != nil {
 		return true
 	}
@@ -318,9 +325,6 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 			COD:          uint32(cod),
 			Checked:      uint32(checked),
 			MailTemplate: s.loadMailTemplateID(tmpl),
-		}
-		if m.Stationery == 0 {
-			m.Stationery = 41 // Standard default letter stationery
 		}
 		mails = append(mails, m)
 	}
@@ -416,10 +420,10 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	packetLen := 5 // U32 total + U8 count header already accounted
 	var entries [][]byte
 	for _, m := range mails {
+		// Reference: MailListEntry::MailListEntry (MailPackets.cpp:163) —
+		// DaysLeft is the raw (expire_time - now) / DAY with no clamp, so an
+		// expired-but-unswept mail reports negative days like the C++ list.
 		daysLeft := float32(m.ExpireTime-now) / 86400.0
-		if daysLeft < 0 {
-			daysLeft = 0
-		}
 		msgBuf := protocol.NewBuffer(128)
 		msgBuf.WriteU32(m.ID)
 		msgBuf.WriteU8(m.MessageType)
@@ -541,9 +545,12 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if !s.canOpenMailBox(ctx, mailboxGUID) {
 		return true
 	}
+	// Reference: WorldSession::Update (WorldSession.cpp:427-432) — a truncated
+	// packet throws ByteBufferException and is skipped with the connection
+	// kept; Go drops the packet the same way (return true), never closes it.
 	targetName, err := reader.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	// Reference: MailHandler.cpp:59-60 — an empty target is a silent no-op
 	// (the C++ arm returns without a mail result; Go keeps the connection).
@@ -552,11 +559,11 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	}
 	subject, err := reader.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	body, err := reader.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	stationery, err := reader.ReadU32()
 	if err != nil {

@@ -1508,8 +1508,14 @@ func (s *session) handleGuildAddRank(ctx context.Context, payload []byte) bool {
 	}
 	r := protocol.NewReader(payload)
 	rankName, err := r.ReadCString()
-	if err != nil || rankName == "" {
+	if err != nil {
 		return false
+	}
+	// GuildAddRank::Read (GuildPackets.h:287): Name is String<15,
+	// NoHyperlinks> — an overlong name throws in C++ and the packet is
+	// skipped, so skip here too instead of writing it to the DB.
+	if len(rankName) > 15 {
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -1529,7 +1535,7 @@ func (s *session) handleGuildAddRank(ctx context.Context, payload []byte) bool {
 	// a rank, and a non-leader is fully silent (no command result).
 	var rankCount int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rankCount)
-	if rankCount >= int64(guildRanksMaxCount) || uint64(leaderGUID) != s.playerGUID {
+	if rankCount >= int64(guildRanksMaxCount) || !s.isGuildLeader(ctx, leaderGUID) {
 		return true
 	}
 
@@ -1588,7 +1594,7 @@ func (s *session) handleGuildDelRank(ctx context.Context) bool {
 	// or if the actor is not the leader — all fully silent.
 	var rankCount int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rankCount)
-	if rankCount <= int64(guildRanksMinCount) || uint64(leaderGUID) != s.playerGUID {
+	if rankCount <= int64(guildRanksMinCount) || !s.isGuildLeader(ctx, leaderGUID) {
 		return true
 	}
 
@@ -1633,6 +1639,10 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	// GuildHandler.cpp:179 passes packet.RankID (u32) into the uint8 rankId
+	// parameter of HandleSetRankInfo — an implicit mod-256 truncation, so
+	// a rankID of 256 wraps to the guildmaster rank exactly like C++.
+	rankID &= 0xFF
 	rights, err := r.ReadU32()
 	if err != nil {
 		return false
@@ -1640,6 +1650,12 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	rankName, err := r.ReadCString()
 	if err != nil {
 		return false
+	}
+	// GuildSetRankPermissions::Read (GuildPackets.h:281): RankName is
+	// String<15, NoHyperlinks> — an overlong name throws in C++ and the
+	// packet is skipped.
+	if len(rankName) > 15 {
+		return true
 	}
 	goldLimit, _ := r.ReadU32()
 	tabFlags := make([]uint32, guildBankMaxTabs)
@@ -1673,23 +1689,31 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	// Guild::HandleSetRankInfo (Guild.cpp:1416-1417): only the leader can
 	// modify ranks; denial sends GUILD_COMMAND_CHANGE_RANK (16) +
 	// ERR_GUILD_PERMISSIONS — unlike add/remove, this one is NOT silent.
-	if uint64(leaderGUID) != s.playerGUID {
+	if !s.isGuildLeader(ctx, leaderGUID) {
 		s.sendGuildCommandResult(guildCmdChangeRank, "", errGuildPermissions)
 		return true
 	}
 
 	// RankInfo::SetRights (Guild.cpp:315-318): rank 0 (guildmaster) keeps
-	// GR_RIGHT_ALL no matter what the packet carries.
+	// GR_RIGHT_ALL no matter what the packet carries; RankInfo::
+	// SetBankMoneyPerDay (Guild.cpp:329-330) forces
+	// GUILD_WITHDRAW_MONEY_UNLIMITED (0xFFFFFFFF) for rank 0 as well.
 	if rankID == 0 {
 		rights = guildRightAll
+		goldLimit = guildWithdrawSlotUnlimited
 	}
-	res, execErr := cdb.ExecContext(ctx, "UPDATE guild_rank SET rname = ?, rights = ?, BankMoneyPerDay = ? WHERE guildid = ? AND rid = ?",
-		rankName, rights, goldLimit, guildID, rankID)
-	if execErr != nil {
-		return true
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	// Guild::HandleSetRankInfo (Guild.cpp:1418): the rank row must exist
+	// (GetRankInfo hit). A packet that changes nothing still broadcasts
+	// GE_RANK_UPDATED in C++, so gate on existence rather than
+	// RowsAffected.
+	var rankHit int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rankID).Scan(&rankHit)
+	if rankHit == 0 {
 		return true // GetRankInfo miss -> silent (Guild.cpp:1418)
+	}
+	if _, execErr := cdb.ExecContext(ctx, "UPDATE guild_rank SET rname = ?, rights = ?, BankMoneyPerDay = ? WHERE guildid = ? AND rid = ?",
+		rankName, rights, goldLimit, guildID, rankID); execErr != nil {
+		return true
 	}
 
 	// Guild::_SetRankBankTabRightsAndSlots (Guild.cpp:2541-2548): only tabs
@@ -1729,8 +1753,6 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handleGuildSetPublicNote processes CMSG_GUILD_SET_PUBLIC_NOTE (0x234).
-// Reference: WorldSession::HandleGuildSetPublicNoteOpcode (GuildHandler.cpp:146).
 // guildRankRightsMasked returns the setter's guild-rank rights masked with
 // right, via the exact Guild::_HasRankRight form (Guild.cpp:2388: denied
 // iff (rights & right) == GR_RIGHT_EMPTY). A missing rank row masks to
@@ -1749,6 +1771,25 @@ func (s *session) guildRankRightsMasked(ctx context.Context, right uint32) uint3
 	return rights & right
 }
 
+// isGuildLeader mirrors Guild::_IsLeader (Guild.cpp:2485-2492): the sender
+// is the leader when their GUID matches the guild's leaderguid, or when
+// their member rank is the guildmaster rank (0).
+func (s *session) isGuildLeader(ctx context.Context, leaderGUID int64) bool {
+	if uint64(leaderGUID) == s.playerGUID {
+		return true
+	}
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var rank int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&rank); err != nil {
+		return false
+	}
+	return rank == 0
+}
+
+// handleGuildSetPublicNote processes CMSG_GUILD_SET_PUBLIC_NOTE (0x234).
+// Reference: WorldSession::HandleGuildSetPublicNoteOpcode (GuildHandler.cpp:146).
 func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
@@ -1758,7 +1799,16 @@ func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) 
 	if err != nil || targetName == "" {
 		return false
 	}
-	note, _ := r.ReadCString()
+	note, err := r.ReadCString()
+	if err != nil {
+		return false
+	}
+	// GuildSetMemberNote::Read (GuildPackets.h:319): Note is String<31,
+	// NoHyperlinks> — an overlong note throws in C++ and the packet is
+	// skipped, so skip here too instead of writing it to the DB.
+	if len(note) > 31 {
+		return true
+	}
 
 	// WorldSession::HandleGuildSetPublicNoteOpcode (GuildHandler.cpp:146):
 	// normalizePlayerName gates the handler; the member lookup is an exact,
@@ -1815,7 +1865,16 @@ func (s *session) handleGuildSetOfficerNote(ctx context.Context, payload []byte)
 	if err != nil || targetName == "" {
 		return false
 	}
-	note, _ := r.ReadCString()
+	note, err := r.ReadCString()
+	if err != nil {
+		return false
+	}
+	// GuildSetMemberNote::Read (GuildPackets.h:319): Note is String<31,
+	// NoHyperlinks> — an overlong note throws in C++ and the packet is
+	// skipped, so skip here too instead of writing it to the DB.
+	if len(note) > 31 {
+		return true
+	}
 
 	// WorldSession::HandleGuildSetOfficerNoteOpcode (GuildHandler.cpp:156):
 	// normalizePlayerName gates the handler; the member lookup is an exact,

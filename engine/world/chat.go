@@ -1324,17 +1324,23 @@ func (s *session) handleChatIgnored(payload []byte) bool {
 	b := protocol.NewReader(payload)
 	targetGUID, err := b.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	_, err = b.ReadU8() // unk (spam reporting flag in reference)
 	if err != nil {
-		return false
+		return true
 	}
 	targetSess := s.server.findSessionByGUID(targetGUID)
 	if targetSess == nil || !targetSess.worldReady.Load() || targetSess.player == nil {
 		return true
 	}
-	msg := protocol.BuildChatMessageWithOptions(chatIgnored, languageUniversal, s.playerGUID, s.playerGUID, s.player.Name, "", false, "", s.chatTag())
-	_ = targetSess.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), msg, true)
+	opcode := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
+	senderName := ""
+	if s.gmMessage {
+		opcode = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
+		senderName = s.player.Name
+	}
+	msg := protocol.BuildChatMessageWithOptions(chatIgnored, languageUniversal, s.playerGUID, s.playerGUID, s.player.Name, "", s.gmMessage, senderName, s.chatTag())
+	_ = targetSess.write(opcode, msg, true)
 	return true
 }
