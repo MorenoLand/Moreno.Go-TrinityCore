@@ -36,13 +36,21 @@
 --   grid enumeration + SetFaction + threat-victim AttackStart +
 --   AddAura — no bridges.
 -- - KilledUnit/JustEngagedWith/JustDied DoPlaySoundToSet
---   (SOUND_VN_AGGRO 8661 / KILL 8662 / DEATH 8660): no sound
---   bridge; zero Talk() in C++.
+--   (SOUND_VN_AGGRO 8661 / KILL 8662 / DEATH 8660): ported via
+--   creature:PlayDirectSound (the sound bridge is live —
+--   DoPlaySoundToSet == PlayDirectSound, ScriptedCreature.cpp).
+--   The !pOtherBoss->IsInCombat() aggro gate and the cross-AI
+--   DontYellWhenDead death latch have no cross-AI bridge, so
+--   aggro/death sounds play per-creature; zero Talk() in C++.
 local ENTRY = 15275
 
 local SPELL_UNBALANCING_STRIKE = 26613
 local SPELL_UPPERCUT = 26007
 local SPELL_BERSERK = 26662
+
+local SOUND_VN_DEATH = 8660
+local SOUND_VN_AGGRO = 8661
+local SOUND_VN_KILL = 8662
 
 local timers = {}
 local flags = {}
@@ -109,6 +117,10 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     flags[guid] = {}
+    -- C++ JustEngagedWith: DoPlaySoundToSet(me, SOUND_VN_AGGRO 8661)
+    -- behind the !pOtherBoss->IsInCombat() gate (cross-AI — no
+    -- bridge); per-creature port.
+    creature:PlayDirectSound(SOUND_VN_AGGRO)
     schedule(guid, "us", math.random(8000, 18000), function()
         onUnbalancingStrike(creature, guid)
     end)
@@ -128,6 +140,21 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ KilledUnit: DoPlaySoundToSet(me, SOUND_VN_KILL 8662), ungated.
+local function onKilledUnit(event, creature, victim)
+    creature:PlayDirectSound(SOUND_VN_KILL)
+end
+
+-- C++ JustDied: DoPlaySoundToSet(me, SOUND_VN_DEATH 8660) behind the
+-- cross-AI DontYellWhenDead latch (no cross-AI bridge — plays
+-- per-creature); _JustDied() is the instance-model leg.
+local function onDied(event, creature, killer)
+    creature:PlayDirectSound(SOUND_VN_DEATH)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY, 3, onKilledUnit)
+RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)

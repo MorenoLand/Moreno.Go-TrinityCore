@@ -71,9 +71,10 @@
 -- DoAction (:178-193, ACTION_CRAZY_CAT_LADY 0 / ACTION_DEFENDER_DIED
 -- 1) / GetData (:195-204, DATA_NINE_LIVES 30763077 /
 -- DATA_CRAZY_CAT_LADY 30063007) — no DoAction / GetData bridges.
--- JustDied (:206-212) — DoPlaySoundToSet(15476) + SendEncounterUnit
--- disengage + HandleCats(false); no Talk arms; event 4 models only
--- the timer wipe.
+-- JustDied (:206-212) — DoPlaySoundToSet(15476) ported via
+-- creature:PlayDirectSound (dedicated auriayaDied); the
+-- SendEncounterUnit disengage + HandleCats(false) legs have no
+-- instance/grid bridges; no Talk arms.
 -- EnterEvadeMode (:214-218) — SendEncounterUnit disengage + BossAI
 -- leg — no bridge.
 -- EVENT_SWARNING_GUARDIAN (:255-258) — DoCast(target,
@@ -123,6 +124,8 @@ local SPELL_TERRIFYING_SCREECH = 64386
 local SPELL_DEFENDER_TRIGGER   = 64448
 local SPELL_ACTIVATE_DEFENDER  = 64449
 local SPELL_BERSERK            = 47008
+
+local SOUND_AURIAYA_DEATH = 15476
 local SPELL_RIP_FLESH          = 64375
 
 local timers = {}
@@ -264,10 +267,19 @@ local function sentryEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ boss_auriayaAI::JustDied (:206-212): DoPlaySoundToSet(me,
+-- AURIAYA_DEATH_SOUNDID 15476), ungated; the _JustDied() /
+-- SendEncounterUnit disengage / HandleCats(false) legs have no
+-- instance/grid bridges.
+local function auriayaDied(event, creature, killer)
+    creature:PlayDirectSound(SOUND_AURIAYA_DEATH)
+    cancelCombatTimers(event, creature)
+end
+
 RegisterCreatureEvent(ENTRY_AURIAYA, 1, auriayaEnterCombat)
 RegisterCreatureEvent(ENTRY_AURIAYA, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_AURIAYA, 3, auriayaTargetDied)
-RegisterCreatureEvent(ENTRY_AURIAYA, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_AURIAYA, 4, auriayaDied)
 RegisterCreatureEvent(ENTRY_AURIAYA, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 1, sentryEnterCombat)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 2, cancelCombatTimers)

@@ -120,8 +120,9 @@
 -- DOCUMENTED-ONLY (in this header; no registration beyond the five
 -- entries above):
 -- boss_palehoof JustDied (:250-256) — DoPlaySoundToSet(PALEHOOF_SOUND_
--- DEATH 13467) with no Talk + instance/SendEncounterUnit legs — no
--- sound / instance bridges; joins the no-sound / documented-only queue.
+-- DEATH 13467) with no Talk ported via creature:PlayDirectSound
+-- (dedicated palehoofDied); the instance SetBossState(DONE) +
+-- SendEncounterUnit disengage legs have no instance bridges.
 -- PalehoofMinionsBossAI Reset (:329-335) — DoCastSelf(SPELL_FREEZE
 -- 16245, true) is triggered — triggered casts stay out (the emerald
 -- MARK_OF_NATURE_AURA precedent); the unfreeze/DoZoneInCombat legs
@@ -133,6 +134,8 @@
 -- no-AuraScript-bridge queues.
 
 local ENTRY_GORTOK_PALEHOOF = 26687
+
+local SOUND_PALEHOOF_DEATH = 13467
 local ENTRY_FRENZIED_WORGEN = 26683
 local ENTRY_RAVENOUS_FURBOLG = 26684
 local ENTRY_MASSIVE_JORMUNGAR = 26685
@@ -365,10 +368,19 @@ local function jormungarEnterCombat(event, creature)
     schedule(guid, "poisonbreath", 13000, poisonBreathTick)
 end
 
+-- C++ boss_palehoofAI::JustDied (:250-256): events.Reset() +
+-- instance->SetBossState(DATA_GORTOK_PALEHOOF, DONE) (no instance
+-- bridge) + DoPlaySoundToSet(me, PALEHOOF_SOUND_DEATH 13467) +
+-- SendEncounterUnit disengage (no bridge); no Talk arms.
+local function palehoofDied(event, creature, killer)
+    creature:PlayDirectSound(SOUND_PALEHOOF_DEATH)
+    cancelCombatTimers(event, creature)
+end
+
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 1, palehoofEnterCombat)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 3, palehoofKilledUnit)
-RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 4, palehoofDied)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 1, furbolgEnterCombat)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 2, cancelCombatTimers)

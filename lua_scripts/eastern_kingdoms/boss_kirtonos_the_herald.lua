@@ -63,12 +63,17 @@
 --   (no equipment bridge); UNIT_FLAG_NON_ATTACKABLE/NOT_SELECTABLE and
 --   REACT_PASSIVE/REACT_AGGRESSIVE flag legs (no flag/react-state
 --   bridges — koltira / eye_of_acherus precedents).
--- - go_brazier_of_the_herald::OnGossipHello (GameObjectScript): the
---   UseDoorOrButton / PlayDirectSound(SOUND_SCREECH = 557) arms have no
---   bridges and the player->SummonCreature(NPC_KIRTONOS, PosSummon[0],
---   TEMPSUMMON_DEAD_DESPAWN, 15min) arm has no summon bridge — skipped.
+-- - go_brazier_of_the_herald::OnGossipHello (GameObjectScript, registered
+--   by new go_brazier_of_the_herald): me->UseDoorOrButton() and
+--   player->SummonCreature(NPC_KIRTONOS, PosSummon[0],
+--   TEMPSUMMON_DEAD_DESPAWN, 15min) have no door/summon bridges —
+--   skipped; me->PlayDirectSound(SOUND_SCREECH = 557) is ported via
+--   go:PlayDirectSound on the brazier GO gossip hook (onBrazierGossip).
 
 local ENTRY_KIRTONOS = 10506
+
+local GO_BRAZIER_OF_THE_HERALD = 175564
+local SOUND_SCREECH = 557
 
 local SPELL_SWOOP = 18144
 local SPELL_WING_FLAP = 12882
@@ -194,7 +199,19 @@ local function onReset(_, creature)
     initState(guid)
 end
 
+-- go_brazier_of_the_herald::OnGossipHello
+-- (boss_kirtonos_the_herald.cpp:290-294): me->UseDoorOrButton()
+-- (no door bridge) + me->PlayDirectSound(SOUND_SCREECH, 0) +
+-- player->SummonCreature(NPC_KIRTONOS, PosSummon[0],
+-- TEMPSUMMON_DEAD_DESPAWN, 15min) (no summon bridge).
+local function onBrazierGossip(_, player, go)
+    go:PlayDirectSound(SOUND_SCREECH)
+    return true
+end
+
 RegisterCreatureEvent(ENTRY_KIRTONOS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_KIRTONOS, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_KIRTONOS, 4, onCombatEnd)
 RegisterCreatureEvent(ENTRY_KIRTONOS, 23, onReset)
+
+RegisterGameObjectGossipEvent(GO_BRAZIER_OF_THE_HERALD, 1, onBrazierGossip)

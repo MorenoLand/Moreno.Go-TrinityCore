@@ -45,8 +45,9 @@
 -- alive" precondition has no cross-creature bridge (the advisor
 -- DoAction EventSharkkis/Tidalvess/CaribdisDeath relays and the
 -- advisors' GUID bookkeeping live in the instance script), and
--- the me->Yell(raw string)/DoPlaySoundToSet(11278) arms have no
--- yell/sound bridges (gurtogg convention) — all documented.
+-- the me->Yell(raw string) arm has no raw-text speech bridge
+-- (gurtogg convention) — documented; DoPlaySoundToSet(11278) is
+-- ported via creature:PlayDirectSound.
 -- OnTargetDied(3): Talk(SAY_SLAY) (C++-exact — no TYPEID gate).
 -- OnDied(4): Talk(SAY_DEATH) + cleanup (the SetData(FATHOMLORD_
 -- KARATHRESSEVENT, DONE) arm is instance-blocked; the Seer Olum
@@ -116,14 +117,17 @@
 -- threat/nearest-creature bridges — the spitfire-totem target
 -- relay, the advisor MoveTargetedHome respawn arms and the
 -- cataclysmic-bolt tank-pick threat arm approximated (random
--- alive non-victim player pick); no yell/sound bridges — the
--- blessing yell + sound arms unmodeled; no UNIT_STATE bridge —
+-- alive non-victim player pick); no raw-yell bridge — the
+-- blessing yell (raw string) stays unmodeled while the sound arm
+-- is ported via creature:PlayDirectSound; no UNIT_STATE bridge —
 -- timers fire unconditionally (jeklik convention).
 
 local SPELL_CATACLYSMIC_BOLT = 38441
 local SPELL_SEAR_NOVA = 38445
 local SPELL_ENRAGE = 24318
 local SPELL_BLESSING_OF_THE_TIDES = 38449
+
+local SOUND_GAIN_BLESSING_OF_TIDES = 11278
 
 local SPELL_LEECHING_THROW = 29436
 local SPELL_THE_BEAST_WITHIN = 38373
@@ -242,11 +246,12 @@ local function karathressTick(creature, guid)
 
     -- Blessing of the Tides: once-guarded at <75% health. The
     -- C++ at-least-one-advisor-alive precondition has no cross-
-    -- creature bridge; the Yell + DoPlaySoundToSet arms have no
-    -- yell/sound bridges.
+    -- creature bridge; the me->Yell(raw string) arm has no
+    -- raw-text speech bridge.
     if not st.blessingOfTides and creature:GetHealthPct() < 75 then
         st.blessingOfTides = true
         creature:CastSpell(creature, SPELL_BLESSING_OF_THE_TIDES)
+        creature:PlayDirectSound(SOUND_GAIN_BLESSING_OF_TIDES)
     end
 end
 

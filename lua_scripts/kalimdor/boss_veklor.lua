@@ -52,13 +52,21 @@
 --   to melee when attacking"): motion bridge absent.
 -- - Custom AttackStart (melee-less aggro): motion bridge absent.
 -- - KilledUnit/JustEngagedWith/JustDied DoPlaySoundToSet
---   (SOUND_VL_AGGRO 8657 / KILL 8658 / DEATH 8659): no sound
---   bridge; zero Talk() in C++.
+--   (SOUND_VL_AGGRO 8657 / KILL 8658 / DEATH 8659): ported via
+--   creature:PlayDirectSound (the sound bridge is live —
+--   DoPlaySoundToSet == PlayDirectSound, ScriptedCreature.cpp).
+--   The !pOtherBoss->IsInCombat() aggro gate and the cross-AI
+--   DontYellWhenDead death latch have no cross-AI bridge, so
+--   aggro/death sounds play per-creature; zero Talk() in C++.
 local ENTRY = 15276
 
 local SPELL_SHADOWBOLT = 26006
 local SPELL_BLIZZARD = 26607
 local SPELL_BERSERK = 26662
+
+local SOUND_VL_AGGRO = 8657
+local SOUND_VL_KILL = 8658
+local SOUND_VL_DEATH = 8659
 
 local timers = {}
 local flags = {}
@@ -136,6 +144,10 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     flags[guid] = {}
+    -- C++ JustEngagedWith: DoPlaySoundToSet(me, SOUND_VL_AGGRO 8657)
+    -- behind the !pOtherBoss->IsInCombat() gate (cross-AI — no
+    -- bridge); per-creature port.
+    creature:PlayDirectSound(SOUND_VL_AGGRO)
     schedule(guid, "sb", 1, function()
         onShadowBolt(creature, guid)
     end)
@@ -155,6 +167,21 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ KilledUnit: DoPlaySoundToSet(me, SOUND_VL_KILL 8658), ungated.
+local function onKilledUnit(event, creature, victim)
+    creature:PlayDirectSound(SOUND_VL_KILL)
+end
+
+-- C++ JustDied: DoPlaySoundToSet(me, SOUND_VL_DEATH 8659) behind the
+-- cross-AI DontYellWhenDead latch (no cross-AI bridge — plays
+-- per-creature); _JustDied() is the instance-model leg.
+local function onDied(event, creature, killer)
+    creature:PlayDirectSound(SOUND_VL_DEATH)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY, 3, onKilledUnit)
+RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)

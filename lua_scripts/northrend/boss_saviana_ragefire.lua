@@ -29,8 +29,8 @@
 -- DOCUMENTED-ONLY (in this header; only entry 39747 registered):
 -- boss_saviana_ragefire JustDied — _JustDied() instance leg (no
 -- instance-script bridge) + DoPlaySoundToSet(me, SOUND_ID_DEATH
--- 17531) (no play-sound bridge); zero Talk lines in the arm — NOT
--- a bridgeable Talk event.
+-- 17531) ported via creature:PlayDirectSound (savianaDied);
+-- zero Talk lines in the arm.
 -- boss_saviana_ragefire MovementInform — Talk(SAY_CONFLAGRATION 1)
 -- rides POINT_FLIGHT (no-movement-inform bridge); the POINT_LAND /
 -- POINT_LAND_GROUND / POINT_TAKEOFF MotionMaster legs have no
@@ -65,6 +65,8 @@ local SAY_KILL  = 3
 local EMOTE_ENRAGED      = 2
 local SPELL_ENRAGE       = 78722
 local SPELL_FLAME_BREATH = 74403
+
+local SOUND_ID_DEATH = 17531
 
 local timers = {}
 
@@ -141,7 +143,10 @@ end
 
 -- Harness-only: no C++ JustDied Talk (only DoPlaySoundToSet, no
 -- play-sound bridge) — cancels the engage timers.
+-- C++ boss_saviana_ragefireAI::JustDied: _JustDied() (instance leg —
+-- no bridge) + DoPlaySoundToSet(me, SOUND_ID_DEATH 17531), ungated.
 local function savianaDied(event, creature, killer)
+    creature:PlayDirectSound(SOUND_ID_DEATH)
     cancelTimers(creature:GetGUID())
 end
 
