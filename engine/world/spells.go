@@ -15234,6 +15234,40 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 	}
+	// Spell::prepare (Spell.cpp:3139-3149): the moving-cast arm carries no
+	// triggered-flags guard -- a triggered cast with cast time, or a channeled
+	// one that is not move-allowed (SpellInfo::IsMoveAllowedChannel), fails
+	// SPELL_FAILED_MOVING when the player is moving and the spell carries
+	// SPELL_INTERRUPT_FLAG_MOVEMENT. The charmed-by-creature exemption and
+	// the TYPEID_PLAYER arm are vacuous here (no charm model; this path is
+	// player-only). calculateSpellCastTime mirrors CalcCastTime (mods then
+	// haste, spell_stats.go); the .cheat casttime zeroing rides the same arm
+	// as the client path. The wire reason is DONT_REPORT:
+	// Spell::SendCastResult rewrites every failure under
+	// TRIGGERED_DONT_REPORT_CAST_ERROR (Spell.cpp:4171-4172), which the
+	// full-mask triggered path always carries.
+	triggeredCastTimeMs := s.calculateSpellCastTime(spell)
+	if s.player != nil && s.player.ActiveCheats&cheatCasttime != 0 {
+		triggeredCastTimeMs = 0
+	}
+	if (isChanneledSpell(spell) || triggeredCastTimeMs > 0) && s.isMoving && spell.InterruptFlags&spellInterruptFlagMovement != 0 {
+		if triggeredCastTimeMs > 0 || !spellIsMoveAllowedChannel(spell) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+			s.debug("triggered cast failed", "account", s.accountName, "spell", spellID, "reason", "casting while moving")
+			return
+		}
+	}
+	// Spell::_cast (Spell.cpp:3303-3312): as of 3.0.2 the caster's pets begin
+	// attacking the owner's target immediately when the owner casts a harmful
+	// spell -- no triggered-flags guard, so triggered casts signal too. C++
+	// runs this before the CheckCast revalidation, so it fires even when the
+	// cast then fails; m_targets.GetUnitTarget() is the explicit unit target
+	// here (targetGUID), ahead of SelectSpellTargets redirect arms below.
+	// The DefenseType gate is the DmgClass convention (SpellInfo.cpp:856);
+	// triggerPetOwnerAttacked already drops the self-target case.
+	if spell.DefenseType != spellDamageClassNone && targetGUID != 0 && s.server != nil && s.player != nil {
+		s.server.triggerPetOwnerAttacked(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
+	}
 	hitTargets := []uint64{targetGUID}
 	spellTargetFlags := protocol.SpellTargetFlagUnitWireMask
 	if firstLogin {
@@ -15281,7 +15315,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (Spell.cpp:1111) fails the triggered cast the same way.
 	spellTarget, destOK := s.resolveImplicitSpellDestination(ctx, spell, spellID, spellTarget)
 	if !destOK {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
 		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
 		return
 	}
@@ -15312,7 +15346,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			nearby, ok = s.spellEntryNearbyGOTarget(ctx, spell, spellID)
 		}
 		if !ok {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
 			s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target")
 			return
 		}
@@ -15408,10 +15442,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 		if !hasTarget {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
 			s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "channeled spell with no targets")
 			return
 		}
+	}
+	// Spell::_cast (Spell.cpp:3416-3420): SPELL_ATTR1_DISMISS_PET dismisses
+	// the caster's active pet at cast time -- no triggered-flags guard, so
+	// triggered casts dismiss too. Placed after target selection like C++,
+	// ahead of the cooldown-packet and SendSpellGo legs below. unsummonPet
+	// no-ops when no pet is active, matching the GetPetGUID arm.
+	if spell.AttributesEx&spellAttr1DismissPet != 0 {
+		s.unsummonPet(ctx, petSaveNotInSlot)
 	}
 	// Cast flags mirror Spell::SendSpellGo for a triggered player cast
 	// (Spell.cpp:4283-4330): PENDING for triggered non-auto-repeat casts with

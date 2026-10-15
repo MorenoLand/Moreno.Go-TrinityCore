@@ -93,6 +93,9 @@ local function schedule(guid, key, delay, fn)
         per = {}
         timers[guid] = per
     end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
     per[key] = CreateLuaEvent(fn, delay)
 end
 
