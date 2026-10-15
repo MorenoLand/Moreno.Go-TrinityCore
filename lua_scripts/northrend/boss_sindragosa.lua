@@ -100,14 +100,15 @@
 -- with-args legs join the no-SpellScript-bridge /
 -- no-AuraScript-bridge queues (the boss_moragg optic-link
 -- precedent).
--- All 11 Talk() calls in the file accounted for (11 =
+-- All 6 Talk() calls in the file accounted for (6 =
 -- SAY_AGGRO 0 (1) + SAY_DEATH 10 (1) + SAY_KILL 8 (1) +
 -- EMOTE_BERSERK_RAID 11 (1, scheduler) + SAY_BERSERK 9 (1,
--- scheduler) + SAY_UNCHAINED_MAGIC 1 (1, scheduler) +
--- EMOTE_WARN_BLISTERING_COLD 2 (1, scheduler) +
--- SAY_BLISTERING_COLD 3 (1, scheduler) + SAY_AIR_PHASE 5 (1,
--- scheduler) + SAY_PHASE_2 6 (1, scheduler) +
--- EMOTE_WARN_FROZEN_ORB 7 (1, cross-AI spell leg)).
+-- scheduler) + SAY_PHASE_2 6 (1, scheduler)).
+-- The phase-machine Talk legs (SAY_UNCHAINED_MAGIC 1,
+-- EMOTE_WARN_BLISTERING_COLD 2, SAY_BLISTERING_COLD 3,
+-- SAY_AIR_PHASE 5) were never ported to code — porting bare
+-- timers would fabricate air-phase casts (phase-machine rule
+-- above).
 
 local ENTRY_SINDRAGOSA = 36853
 

@@ -158,6 +158,7 @@ local SAY_DARNAVAN_AGGRO = 0
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_MANA_BARRIER = 70842
+local SPELL_SHADOW_CHANNELING = 43897 -- :226 Reset self-cast
 local SPELL_FROSTBOLT = 71420 -- :66
 local SPELL_FROSTBOLT_VOLLEY = 72905 -- :67
 local SPELL_VAMPIRIC_MIGHT = 70674
@@ -290,6 +291,10 @@ local function deathwhisperReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     deathwhisperPhase[guid] = nil
+    -- C++ Reset() (:226): unconditional non-triggered self-cast of the
+    -- phase-1 channeling aura (removed on engage via
+    -- RemoveAurasDueToSpell, :340).
+    creature:CastSpell(creature, SPELL_SHADOW_CHANNELING)
 end
 
 -- C++ boss_lady_deathwhisper::KilledUnit:
