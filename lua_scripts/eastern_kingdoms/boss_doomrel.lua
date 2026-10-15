@@ -200,7 +200,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     -- approximation (vael precedent). Flag clears on Reset(23)
     -- C++-exact (Reset calls Initialize()).
     local guid = creature:GetGUID()
-    if not voidwalkersSummoned[guid] and creature:GetHealthPct() <= 50 then
+    if not voidwalkersSummoned[guid] and creature:GetHealth() <= math.floor(creature:GetMaxHealth() * 50 / 100) then
         voidwalkersSummoned[guid] = true
         local victim = creature:GetVictim()
         if victim then
