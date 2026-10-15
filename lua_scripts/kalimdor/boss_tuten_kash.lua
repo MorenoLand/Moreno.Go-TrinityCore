@@ -138,10 +138,14 @@ end
 -- guards (Thrash 8876, Virulent Poison 12254).
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
-    if not creature:HasAura(SPELL_THRASH) then
+    -- C++ Reset: non-triggered self-casts gated on !HasAura
+    -- (Reset-only arms, boss_tuten_kash.cpp). Event 23 fires on
+    -- death too (engine reset-then-died order) but C++ Reset()
+    -- never runs on death, so both are alive-gated.
+    if creature:IsAlive() and not creature:HasAura(SPELL_THRASH) then
         creature:CastSpell(creature, SPELL_THRASH)
     end
-    if not creature:HasAura(SPELL_VIRULENT_POISON) then
+    if creature:IsAlive() and not creature:HasAura(SPELL_VIRULENT_POISON) then
         creature:CastSpell(creature, SPELL_VIRULENT_POISON)
     end
 end

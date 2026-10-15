@@ -109,7 +109,11 @@ end
 local function lordAlexeiBarovReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    if not auraApplied[guid] then
+    -- C++ Reset: non-triggered DoCast(me, SPELL_UNHOLY_AURA) only if
+    -- !HasAura (Reset-only arm; the latch models "aura present"). Event 23
+    -- fires on death too (engine reset-then-died order) but the C++ Reset()
+    -- never runs on death, so the cast is alive-gated.
+    if creature:IsAlive() and not auraApplied[guid] then
         creature:CastSpell(creature, SPELL_UNHOLY_AURA, false)
         auraApplied[guid] = true
     end

@@ -123,7 +123,14 @@ end
 -- C++ Reset: DoCastSelf(SPELL_BLACKFATHOM_CHANNELING).
 local function kelrisOnReset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_BLACKFATHOM_CHANNELING)
+    -- C++ Reset: non-triggered DoCastSelf (Reset-only arm,
+    -- boss_kelris.cpp; the JustReachedHome leg rides the separate
+    -- ev24 handler). Event 23 fires on death too (engine
+    -- reset-then-died order) but C++ Reset() never runs on death,
+    -- so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_BLACKFATHOM_CHANNELING)
+    end
 end
 
 -- C++ JustReachedHome: the same ungated DoCastSelf(SPELL_BLACKFATHOM_CHANNELING)

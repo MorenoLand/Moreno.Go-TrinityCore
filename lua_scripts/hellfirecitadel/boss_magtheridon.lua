@@ -222,11 +222,19 @@ local function magtheridonReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     magState[guid] = nil
-    creature:CastSpell(creature, SPELL_SHADOW_CAGE_C)
-    magState[guid] = { phase = "banish", channelers = 5 }
-    schedule(guid, "taunt", math.random(240000, 300000), function()
-        magtheridonTaunt(creature, guid)
-    end)
+    -- The cast and the taunt scheduling are Reset-only arms
+    -- (boss_magtheridon.cpp; C++ BossAI::_JustDied cancels the
+    -- scheduler, so they never fire after death). Event 23 fires on
+    -- death too (engine reset-then-died order), so both are
+    -- alive-gated; the timer cancel and state legs ride the death
+    -- leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SHADOW_CAGE_C)
+        magState[guid] = { phase = "banish", channelers = 5 }
+        schedule(guid, "taunt", math.random(240000, 300000), function()
+            magtheridonTaunt(creature, guid)
+        end)
+    end
 end
 
 local function magtheridonCleave(creature, guid)
@@ -382,7 +390,13 @@ local function channelerReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     chanState[guid] = nil
-    creature:CastSpell(creature, SPELL_SHADOW_GRASP_C)
+    -- C++ Reset: non-triggered self-cast (Reset-only arm,
+    -- boss_magtheridon.cpp). Event 23 fires on death too (engine
+    -- reset-then-died order) but C++ Reset() never runs on death,
+    -- so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SHADOW_GRASP_C)
+    end
 end
 
 -- C++ JustEngagedWith: the magtheridon DoAction relay is
@@ -436,11 +450,19 @@ local function roomReset(event, creature)
         RemoveEventById(per)
         roomTimers[guid] = nil
     end
-    creature:CastSpell(creature, SPELL_DEBRIS_VISUAL)
-    roomTimers[guid] = CreateLuaEvent(function()
-        creature:CastSpell(creature, SPELL_DEBRIS_DAMAGE)
-        roomTimers[guid] = nil
-    end, 5000)
+    -- C++ Reset: non-triggered self-cast 30632, then 5s ->
+    -- non-triggered DoCastAOE self-cast 30631 (Reset-only arms;
+    -- the C++ scheduler never updates on a corpse). Event 23
+    -- fires on death too (engine reset-then-died order), so the
+    -- cast and the 5s timer that delivers it are alive-gated;
+    -- the timer cancel rides the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_DEBRIS_VISUAL)
+        roomTimers[guid] = CreateLuaEvent(function()
+            creature:CastSpell(creature, SPELL_DEBRIS_DAMAGE)
+            roomTimers[guid] = nil
+        end, 5000)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_MAGTHERIDON_ROOM, 23, roomReset)

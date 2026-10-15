@@ -322,7 +322,12 @@ local function maulgarReset(event, creature)
     local guid = creature:GetGUID()
     maulgarResetState(guid)
     maulgarState[guid] = { phase2 = false }
-    creature:CastSpell(creature, SPELL_DUAL_WIELD)
+    -- C++ Reset: non-triggered DoCast(me, SPELL_DUAL_WIELD) (Reset-only
+    -- arm); ev23 fires on death too (engine reset-then-died order) but
+    -- C++ Reset() never runs on death, so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_DUAL_WIELD)
+    end
 end
 
 RegisterCreatureEvent(NPC_MAULGAR, 1, maulgarEnterCombat)

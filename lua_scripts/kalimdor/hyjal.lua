@@ -196,7 +196,11 @@ end
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    if creature:GetEntry() == ENTRY_JAINA then
+    -- C++ hyjalAI::Reset: triggered DoCast(me, SPELL_BRILLIANCE_AURA)
+    -- for JAINA (Reset-only arm, hyjalAI.cpp). Event 23 fires on
+    -- death too (engine reset-then-died order) but C++ Reset()
+    -- never runs on death, so the cast is alive-gated.
+    if creature:IsAlive() and creature:GetEntry() == ENTRY_JAINA then
         creature:CastSpell(creature, SPELL_BRILLIANCE_AURA, true)
     end
 end

@@ -140,7 +140,12 @@ end
 local function rasFrostwhisperReset(event, creature)
     local guid = creature:GetGUID()
     rasFrostwhisperResetState(guid)
-    creature:CastSpell(creature, SPELL_ICE_ARMOR)
+    -- C++ Reset: non-triggered DoCast(me, 18100) (Reset-only arm); ev23
+    -- fires on death too (engine reset-then-died order) but C++ Reset()
+    -- never runs on death, so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_ICE_ARMOR)
+    end
 end
 
 local function rasFrostwhisperEnterCombat(event, creature, target)

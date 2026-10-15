@@ -239,7 +239,12 @@ local function soulReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     soulState[guid] = nil
-    creature:CastSpell(creature, SPELL_ENSLAVED_SOUL_PASSIVE, true)
+    -- C++ npc_enslaved_soul::Reset: triggered self-cast 41535 (Reset-only arm).
+    -- Event 23 fires on death too (engine reset-then-died order) but the C++
+    -- Reset() never runs on death, so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_ENSLAVED_SOUL_PASSIVE, true)
+    end
 end
 
 local function soulClear(guid)

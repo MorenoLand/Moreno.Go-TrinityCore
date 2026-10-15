@@ -203,7 +203,12 @@ local function mograineReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     killYellOnCooldown[guid] = nil
-    creature:CastSpell(creature, SPELL_RETRIBUTION_AURA, true)
+    -- C++ Reset: triggered self-cast (Reset-only arm); ev23 fires on death
+    -- too (engine reset-then-died order) but C++ Reset() never runs on
+    -- death, so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_RETRIBUTION_AURA, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_MOGRAINE, 1, mograineEnterCombat)
@@ -281,7 +286,12 @@ local function whitemaneReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     killYellOnCooldown[guid] = nil
-    creature:CastSpell(creature, SPELL_RETRIBUTION_AURA)
+    -- C++ Reset: non-triggered self-cast (Reset-only arm); ev23 fires on
+    -- death too (engine reset-then-died order) but C++ Reset() never runs
+    -- on death, so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_RETRIBUTION_AURA)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_WHITEMANE, 1, whitemaneEnterCombat)
