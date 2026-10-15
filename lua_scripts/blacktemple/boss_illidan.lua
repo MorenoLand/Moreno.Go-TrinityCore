@@ -971,7 +971,13 @@ end
 local function flameReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_FLAME_TEAR_OF_AZZINOTH, true)
+    -- C++ flame Reset(): DoCastSelf(SPELL_FLAME_TEAR_OF_AZZINOTH, true)
+    -- is Reset-only (boss_illidan.cpp; react/scheduler legs unbridged).
+    -- The cast is alive-gated; the timer cancel rides the death leg
+    -- deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_FLAME_TEAR_OF_AZZINOTH, true)
+    end
 end
 
 local function flameCleanup(event, creature)
@@ -991,7 +997,11 @@ RegisterCreatureEvent(ENTRY_FLAME_OF_AZZINOTH, 23, flameReset)
 -- convention; the MovementInform aura-removal arm has no movement
 -- bridge).
 local function dbTargetReset(event, creature)
-    creature:CastSpell(creature, SPELL_EYE_BLAST_TRIGGER, false)
+    -- C++ Reset(): DoCastSelf(SPELL_EYE_BLAST_TRIGGER), non-triggered,
+    -- Reset-only (boss_illidan.cpp). Alive-gated like bladeReset.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_EYE_BLAST_TRIGGER, false)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_DB_TARGET, 23, dbTargetReset)
@@ -1117,7 +1127,13 @@ RegisterCreatureEvent(ENTRY_MAIEV, 23, maievCleanup)
 -- sound, the tear-of-azzinoth summon chain and the boss-state
 -- despawn check have no sound/summon/instance bridges).
 local function bladeReset(event, creature)
-    creature:CastSpell(creature, SPELL_BIRTH, true)
+    -- C++ blade Reset(): DoCastSelf(SPELL_BIRTH, true) is Reset-only
+    -- (boss_illidan.cpp). Event 23 also fires on death (Eluna
+    -- reset-then-died order, lua_creature_events.go) but the C++ AI
+    -- Reset() never runs on death, so the cast is alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_BIRTH, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_BLADE_OF_AZZINOTH, 23, bladeReset)
@@ -1129,6 +1145,9 @@ RegisterCreatureEvent(ENTRY_BLADE_OF_AZZINOTH, 23, bladeReset)
 
 -- C++ Reset entry switch, all triggered self-casts (C++-exact).
 local function genericFireReset(event, creature)
+    -- C++ Reset() entry switch, all triggered self-casts, Reset-only
+    -- (boss_illidan.cpp). Alive-gated like bladeReset.
+    if not creature:IsAlive() then return end
     local entry = creature:GetEntry()
     if entry == ENTRY_DEMON_FIRE then
         creature:CastSpell(creature, SPELL_DEMON_FIRE, true)

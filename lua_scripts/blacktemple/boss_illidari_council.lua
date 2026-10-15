@@ -361,7 +361,12 @@ end
 local function memberReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:CastSpell(creature, SPELL_BALANCE_OF_POWER, true)
+    -- C++ IllidariCouncilBossAI::Reset(): DoCastSelf(BALANCE_OF_POWER,
+    -- true) is Reset-only (boss_illidari_council.cpp). Alive-gated; the
+    -- timer cancel rides the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_BALANCE_OF_POWER, true)
+    end
 end
 
 ------------------------------------------------------------------
@@ -530,8 +535,14 @@ local function zerevorReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bossState(guid).canUseArcaneExplosion = true
-    creature:CastSpell(creature, SPELL_BALANCE_OF_POWER, true)
-    creature:CastSpell(creature, SPELL_DAMPEN_MAGIC)
+    -- C++ zerevor Reset(): base (BALANCE_OF_POWER, true) + DoCastSelf
+    -- (SPELL_DAMPEN_MAGIC), non-triggered, both Reset-only
+    -- (boss_illidari_council.cpp). Casts alive-gated; timer cancel and
+    -- the state latch ride the death leg deliberately.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_BALANCE_OF_POWER, true)
+        creature:CastSpell(creature, SPELL_DAMPEN_MAGIC)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_ZEREVOR, 1, zerevorEnterCombat)
