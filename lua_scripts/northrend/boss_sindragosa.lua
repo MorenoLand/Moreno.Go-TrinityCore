@@ -82,15 +82,16 @@
 -- spell_sindragosa_ice_tomb_target::HandleSindragosaTalk —
 -- creatureCaster->AI()->Talk(EMOTE_WARN_FROZEN_ORB 7, GetHitUnit())
 -- is cross-AI Talk (no cross-AI-Talk bridge).
--- npc_ice_tomb (36980) / npc_spinestalker (37534) /
--- npc_rimefang_icc (37533) / npc_sindragosa_trash (37531
--- NPC_FROSTWARDEN_HANDLER, 37532 NPC_FROSTWING_WHELP) — zero Talk
--- lines — NOT registered (the bronjahm npc_corrupted_soul_fragment
--- precedent); ice tomb's SetGUID / DoAction
--- ACTION_TRIGGER_ASPHYXIATION / GUID-bookkeeping legs, spinestalker
--- / rimefang intro DoAction machines, and the trash Reset /
--- JustAppeared / SetData instance legs ride bridges that do not
--- exist.
+-- npc_ice_tomb (36980) — zero Talk lines — NOT registered (the
+-- bronjahm npc_corrupted_soul_fragment precedent); its SetGUID /
+-- DoAction ACTION_TRIGGER_ASPHYXIATION / GUID-bookkeeping legs ride
+-- bridges that do not exist. npc_spinestalker (37534) /
+-- npc_rimefang_icc (37533) / npc_sindragosa_trash handler (37531)
+-- ARE registered — their pure timer arms are PORTED below (the
+-- maiden CreateLuaEvent precedent); their intro DoAction flight
+-- machines and the trash JustAppeared / SetData instance legs stay
+-- out (no-DoAction / no-motion / no-instance bridges). The
+-- frostwing whelp (37532) carries no timer arms — NOT registered.
 -- at_sindragosa_lair joins the no-AreaTrigger bridge queue (the
 -- boss_anubrekhan at_anubrekhan_entrance precedent);
 -- achievement_all_you_can_eat joins the
@@ -111,6 +112,9 @@
 -- above).
 
 local ENTRY_SINDRAGOSA = 36853
+local ENTRY_SPINESTALKER = 37534 -- icecrown_citadel.h:305
+local ENTRY_RIMEFANG = 37533 -- icecrown_citadel.h:306
+local ENTRY_FROSTWARDEN_HANDLER = 37531 -- icecrown_citadel.h:307
 
 local SAY_AGGRO = 0
 local SAY_KILL = 8
@@ -128,6 +132,13 @@ local sindragosaThirdPhase = {}
 local SPELL_FROST_AURA = 70084
 local SPELL_PERMAEATING_CHILL = 70109
 local SPELL_BERSERK = 26662
+local SPELL_BELLOWING_ROAR = 36922 -- :80
+local SPELL_CLEAVE_SPINESTALKER = 40505 -- :81
+local SPELL_TAIL_SWEEP = 71370 -- :82
+local SPELL_FROST_BREATH_RIMEFANG = 71386 -- :85
+local SPELL_FROST_AURA_RIMEFANG = 71387 -- :86
+local SPELL_ORDER_WHELP = 71357 -- :92
+local SPELL_CONCUSSIVE_SHOCK = 71337 -- :93
 
 local timers = {}
 
@@ -232,9 +243,106 @@ local function sindragosaJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- PORTED (2026-10-14): npc_spinestalker (37534) — Reset timer seeds
+-- re-keyed to OnEnterCombat (the deathwhisper fanatic precedent):
+-- EVENT_BELLOWING_ROAR DoCastSelf(SPELL_BELLOWING_ROAR) non-triggered
+-- {20s,25s} -> {25s,30s} (:661/:737-739); EVENT_CLEAVE_SPINESTALKER
+-- DoCastVictim(SPELL_CLEAVE_SPINESTALKER) non-triggered {10s,15s} ->
+-- {10s,15s} (:662/:741-743); EVENT_TAIL_SWEEP
+-- DoCastSelf(SPELL_TAIL_SWEEP) non-triggered {8s,12s} -> {22s,25s}
+-- (:663/:745-747). Pure timer arms — no phase, random-target, or
+-- summon gating (the maiden CreateLuaEvent precedent); the
+-- UpdateVictim/UNIT_STATE_CASTING gates have no bridge (timers fire
+-- unconditionally, the maiden precedent). The intro
+-- ACTION_START_FROSTWYRM flight machine stays out (no-DoAction /
+-- no-motion bridges).
+local function onSpinestalkerRoar(creature, guid)
+    creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
+    schedule(guid, "roar", {25000, 30000}, function() onSpinestalkerRoar(creature, guid) end)
+end
+
+local function onSpinestalkerCleave(creature, guid)
+    creature:CastSpell(nil, SPELL_CLEAVE_SPINESTALKER)
+    schedule(guid, "cleave", {10000, 15000}, function() onSpinestalkerCleave(creature, guid) end)
+end
+
+local function onSpinestalkerTailSweep(creature, guid)
+    creature:CastSpell(creature, SPELL_TAIL_SWEEP)
+    schedule(guid, "tailsweep", {22000, 25000}, function() onSpinestalkerTailSweep(creature, guid) end)
+end
+
+local function spinestalkerEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "roar", {20000, 25000}, function() onSpinestalkerRoar(creature, guid) end)
+    schedule(guid, "cleave", {10000, 15000}, function() onSpinestalkerCleave(creature, guid) end)
+    schedule(guid, "tailsweep", {8000, 12000}, function() onSpinestalkerTailSweep(creature, guid) end)
+end
+
+-- PORTED (2026-10-14): npc_rimefang_icc (37533) — JustEngagedWith
+-- DoCastSelf(SPELL_FROST_AURA_RIMEFANG, true) (:850-853) +
+-- EVENT_FROST_BREATH_RIMEFANG DoCastSelf(SPELL_FROST_BREATH)
+-- non-triggered {12s,15s} -> {35s,40s} (:791/:868-871). The
+-- EVENT_ICY_BLAST flight machine stays out (no-motion bridge); the
+-- intro flight machine stays out (no-DoAction bridge).
+local function onRimefangFrostBreath(creature, guid)
+    creature:CastSpell(creature, SPELL_FROST_BREATH_RIMEFANG)
+    schedule(guid, "frostbreath", {35000, 40000}, function() onRimefangFrostBreath(creature, guid) end)
+end
+
+local function rimefangEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:CastSpell(creature, SPELL_FROST_AURA_RIMEFANG, true)
+    schedule(guid, "frostbreath", {12000, 15000}, function() onRimefangFrostBreath(creature, guid) end)
+end
+
+-- PORTED (2026-10-14): npc_sindragosa_trash (37531 handler only) —
+-- Reset timer seeds re-keyed to OnEnterCombat:
+-- EVENT_FROSTWARDEN_ORDER_WHELP DoCastSelf(SPELL_ORDER_WHELP)
+-- non-triggered 3s -> 3s (:943/:994-996);
+-- EVENT_CONCUSSIVE_SHOCK DoCastSelf(SPELL_CONCUSSIVE_SHOCK)
+-- non-triggered {8s,10s} -> {10s,13s} (:944/:998-1000). The whelp
+-- (37532) carries no timer arms — NOT registered. The
+-- JustAppeared / SetData instance legs stay out (no instance
+-- bridge).
+local function onHandlerOrderWhelp(creature, guid)
+    creature:CastSpell(creature, SPELL_ORDER_WHELP)
+    schedule(guid, "orderwhelp", 3000, function() onHandlerOrderWhelp(creature, guid) end)
+end
+
+local function onHandlerConcussiveShock(creature, guid)
+    creature:CastSpell(creature, SPELL_CONCUSSIVE_SHOCK)
+    schedule(guid, "concussive", {10000, 13000}, function() onHandlerConcussiveShock(creature, guid) end)
+end
+
+local function handlerEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "orderwhelp", 3000, function() onHandlerOrderWhelp(creature, guid) end)
+    schedule(guid, "concussive", {8000, 10000}, function() onHandlerConcussiveShock(creature, guid) end)
+end
+
+local function addLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function addReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 1, sindragosaJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 2, sindragosaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 3, sindragosaKilledUnit)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 4, sindragosaJustDied)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 9, sindragosaDamageTaken)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 23, sindragosaReset)
+RegisterCreatureEvent(ENTRY_SPINESTALKER, 1, spinestalkerEnterCombat)
+RegisterCreatureEvent(ENTRY_SPINESTALKER, 2, addLeaveCombat)
+RegisterCreatureEvent(ENTRY_SPINESTALKER, 23, addReset)
+RegisterCreatureEvent(ENTRY_RIMEFANG, 1, rimefangEnterCombat)
+RegisterCreatureEvent(ENTRY_RIMEFANG, 2, addLeaveCombat)
+RegisterCreatureEvent(ENTRY_RIMEFANG, 23, addReset)
+RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 1, handlerEnterCombat)
+RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 2, addLeaveCombat)
+RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 23, addReset)

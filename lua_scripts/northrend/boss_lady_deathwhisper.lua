@@ -81,8 +81,10 @@
 --   (:919); SPELL_MORTAL_STRIKE 65926 victim-cast {25s,30s}/{15s,30s}
 --   (:923); SPELL_SUNDER_ARMOR 65936 victim-cast {5s,8s}/{3s,7s} (:930)
 --   — all non-triggered (DoCast 1-arg = self per UnitAI.cpp:113). The
---   CHARGE / SHATTERING_THROW re-arm flags (:893-907) carry no casts —
---   conditional legs, out.
+--   CHARGE conditional leg (:899-904) is PORTED via a 1s
+--   charge-poll (darnavanCanCharge latch, 20s re-arm :928); the
+--   SHATTERING_THROW leg (:893-898) stays out — its
+--   IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL) gate has no bridge.
 --
 -- DOCUMENTED-ONLY (registrations: 36855 / 37890 / 37949 / 38472 /
 -- 38485):
@@ -127,7 +129,8 @@
 -- (timer arms ported above); their SpellHit transformation /
 -- martyrdom legs (:617-660 / :712-752) stay out (no SpellHit bridge),
 -- as do the CURSE_OF_TORPOR random-target leg (:707-710) and the
--- darnavan CHARGE / SHATTERING_THROW conditional legs (:893-907).
+-- darnavan SHATTERING_THROW conditional leg (:893-898, immunity
+-- gate — no bridge); darnavan CHARGE leg PORTED (charge-poll).
 -- spell_deathwhisper_mana_barrier /
 -- spell_deathwhisper_dominated_mind /
 -- spell_deathwhisper_vampiric_might join the no-AuraScript-bridge
@@ -171,12 +174,17 @@ local SPELL_BLADESTORM = 65947
 local SPELL_INTIMIDATING_SHOUT = 65930
 local SPELL_MORTAL_STRIKE = 65926
 local SPELL_SUNDER_ARMOR = 65936
+local SPELL_CHARGE = 65927 -- :901 DoCastVictim, non-triggered
 
 local timers = {}
 
 -- C++ _phase (PHASE_ONE=2 / PHASE_TWO=3, :141-142); Lua-side latch for
 -- the event-9 phase-2 transition (loken event-9 precedent).
 local deathwhisperPhase = {}
+
+-- C++ npc_darnavan::_canCharge (Initialize :831, re-armed by
+-- EVENT_DARNAVAN_CHARGE 20s :928); per-GUID latch.
+local darnavanCanCharge = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -385,8 +393,28 @@ end
 -- C++ npc_darnavan::JustEngagedWith: Talk(SAY_DARNAVAN_AGGRO) — the
 -- auriaya engage-port precedent. The Reset() EventMap (:838-844) is
 -- re-keyed to OnEnterCombat: all four arms non-triggered (DoCast 1-arg
--- = self per UnitAI.cpp:113). The CHARGE / SHATTERING_THROW re-arm
--- flags (:893-907) carry no casts — conditional legs, out.
+-- = self per UnitAI.cpp:113).
+-- C++ npc_darnavan::UpdateAI :899-904 — CHARGE conditional leg ported:
+-- when _canCharge and the victim is outside melee range,
+-- DoCastVictim(SPELL_CHARGE 65927) fires and the flag re-arms 20s
+-- later (EVENT_DARNAVAN_CHARGE :928). IsWithinMeleeRange is modeled
+-- via creature:GetDistance (the skeram precedent). The _canShatter /
+-- SHATTERING_THROW leg (:893-898) stays out — the
+-- IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL) gate has no bridge.
+local function onDarnavanChargePoll(creature, guid)
+    if darnavanCanCharge[guid] then
+        local victim = creature:GetVictim()
+        if victim and creature:GetDistance(victim) > 5.0 then
+            creature:CastSpell(nil, SPELL_CHARGE)
+            darnavanCanCharge[guid] = false
+            schedule(guid, "chargerearm", 20000, function()
+                darnavanCanCharge[guid] = true
+            end)
+        end
+    end
+    schedule(guid, "chargepoll", 1000, function() onDarnavanChargePoll(creature, guid) end)
+end
+
 local function onDarnavanBladestorm(creature, guid)
     creature:CastSpell(creature, SPELL_BLADESTORM)
     schedule(guid, "bladestorm", {90000, 100000}, function() onDarnavanBladestorm(creature, guid) end)
@@ -415,14 +443,20 @@ local function darnavanJustEngagedWith(event, creature, target)
     schedule(guid, "shout", {20000, 25000}, function() onDarnavanShout(creature, guid) end)
     schedule(guid, "mortal", {25000, 30000}, function() onDarnavanMortalStrike(creature, guid) end)
     schedule(guid, "sunder", {5000, 8000}, function() onDarnavanSunderArmor(creature, guid) end)
+    darnavanCanCharge[guid] = true -- C++ Initialize :831
+    schedule(guid, "chargepoll", 1000, function() onDarnavanChargePoll(creature, guid) end)
 end
 
 local function darnavanLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    darnavanCanCharge[guid] = nil
 end
 
 local function darnavanReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    darnavanCanCharge[guid] = nil
 end
 
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 1, deathwhisperJustEngagedWith)
