@@ -290,6 +290,9 @@ end
 -- at 3000, DoCast(me, SPELL_WAILING_SOULS) self-cast, re-arm 1000 until 15
 -- casts land (:319), then the phase ends and EVENT_WAILING_SOULS
 -- re-arms at {60000,70000} (:326). The beamAngle
+-- Forward-declared: the 60-70s re-arm closure in wailingSoulTick below
+-- fires after this chunk loads, and the local def lands later in the file.
+local wailingSoulsTick
 -- facing sweep (:314) has no bridge; the phase-end restore legs
 -- (REACT_AGGRESSIVE + DISPLAY_ANGER + unroot + MoveChase, :322-324) have
 -- no bridge and do not port.
@@ -317,7 +320,9 @@ end
 -- choreography (SetFacingToObject :288, InterruptNonMeleeSpells :297,
 -- REACT_PASSIVE :299, SetTarget(Empty) :302, motion Clear :304,
 -- SetControlled root :305) have no bridge and do not port.
-local function wailingSoulsTick(creature, guid)
+-- Assigned to the forward-declared upvalue (moam precedent): `local function`
+-- here would shadow it and leave the re-arm closure bound to nil.
+wailingSoulsTick = function(creature, guid)
     local state = devourerState[guid]
     if state == nil then
         return

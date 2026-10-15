@@ -98,9 +98,10 @@
 -- melee keeps swinging (C++ :212 gates DoMeleeAttackIfReady on phase-1;
 -- the phase-2 melee stop has no bridge); IsWithinMeleeRange has no bridge
 -- — 5 yd via IsWithinDist approximates the phase-1 shadow-bolt melee gate
--- (the kiljaeden precedent); DamageTaken hook is pre-application, so the
--- post-damage health decides, strictly at/below 30 like C++ !HealthAbovePct
--- (the moroes convention).
+-- (the kiljaeden precedent); DamageTaken fires pre-application and the C++ arm
+-- (boss_bronjahm.cpp:117-118) reads the same pre-application health (Unit.cpp:701
+-- runs the hook before the health reduction), so plain GetHealth() is exact;
+-- !HealthAbovePct(30) is health <= floor(max*30/100), inclusive of exactly-30.
 
 local ENTRY_BRONJAHM = 36497
 
@@ -239,7 +240,7 @@ end
 -- C++ :117-125 DamageTaken: PHASE_1->PHASE_2 flip when !HealthAbovePct(30)
 -- is a simple latch (no summon lists, MoveFollow, or DoAction legs), so it
 -- ports. C++ takes uint32& /*damage*/ (unnamed) — the check is on CURRENT
--- health, no damage projection (floored <30 form, = HealthBelowPct(30)).
+-- health, no damage projection (floored <=30 form, = !HealthAbovePct(30) exactly).
 -- Self-cast TELEPORT 68988 (:122); schedule EVENT_FEAR {12000,16000}ms
 -- (:123) and the EVENT_SOULSTORM one-shot at 100ms (:124), both phase-2.
 local function bronjahmDamageTaken(event, creature, attacker, damage)
@@ -251,7 +252,7 @@ local function bronjahmDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() < math.floor(maxHealth * 30 / 100) then
+    if creature:GetHealth() <= math.floor(maxHealth * 30 / 100) then
         phase2[guid] = true
         creature:CastSpell(creature, SPELL_TELEPORT)
         schedule(guid, "fear", {12000, 16000}, function() onFear(creature, guid) end)
