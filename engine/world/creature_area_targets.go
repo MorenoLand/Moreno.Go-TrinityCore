@@ -636,30 +636,37 @@ func (s *Server) serverCreatureReflectReturnStatus(ctx context.Context, motion *
 // via serverCreatureReflectReturnStatus (IMMUNE arms only); it rides the GO
 // packet's miss status — this path applies no damage legs, so there is no
 // return-trip funnel to consume it.
-func (s *Server) serverCastCreatureReflectVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (bool, uint8) {
+// The evaded return reports a creature victim in evade mode:
+// WorldObject::SpellHitResult (Object.cpp:2637-2639) returns
+// SPELL_MISS_EVADE ahead of the reflect roll, so an evading creature
+// never rolls (or consumes) its reflect aura.
+func (s *Server) serverCastCreatureReflectVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (reflected bool, evaded bool, status uint8) {
 	if s == nil || m == nil || targetGUID == 0 || targetGUID == m.GUID {
-		return false, protocol.SpellMissNone
+		return false, false, protocol.SpellMissNone
 	}
 	if !spellCanBeReflected(spell) {
-		return false, protocol.SpellMissNone
+		return false, false, protocol.SpellMissNone
 	}
 	if spell.AttributesCu&spellAttr0CuNegativeMask == 0 && s.creatureFriendlyToTarget(m, targetGUID) {
-		return false, protocol.SpellMissNone
+		return false, false, protocol.SpellMissNone
 	}
 	if ts := s.findSessionByGUID(targetGUID); ts != nil {
 		if !ts.checkSpellReflection(spell) {
-			return false, protocol.SpellMissNone
+			return false, false, protocol.SpellMissNone
 		}
 	} else {
+		if s.isCreatureEvadingInInstance(m.Map, m.InstanceID, targetGUID) {
+			return false, true, protocol.SpellMissNone
+		}
 		var key creatureAuraKey
 		if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
 			key = creatureAuraKeyForMotion(tm)
 		}
 		if !s.creatureCheckSpellReflection(key, spell) {
-			return false, protocol.SpellMissNone
+			return false, false, protocol.SpellMissNone
 		}
 	}
-	return true, s.serverCreatureReflectReturnStatus(ctx, m, spell)
+	return true, false, s.serverCreatureReflectReturnStatus(ctx, m, spell)
 }
 
 // armCastCreatureReflectProcDelayed mirrors the ProcReflectDelayed arm

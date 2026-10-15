@@ -36,6 +36,14 @@ type spellCooldown struct {
 	Category    uint32
 	End         int64
 	CategoryEnd int64
+	// OnHold mirrors SpellHistory::CooldownEntry::OnHold
+	// (SpellHistory.h:56): an infinity (+1 month) cooldown parked by
+	// StartCooldown(..., onHold=true) for cooldown-started-on-event
+	// spells while their aura/minion/gameobject is active. It blocks
+	// recast like any entry but is excluded from the DB save
+	// (SpellHistory.cpp:130) and is released by SendCooldownEvent when
+	// the aura/minion/object goes away.
+	OnHold bool
 }
 
 func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState) error {

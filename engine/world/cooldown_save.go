@@ -18,6 +18,12 @@ func (s *session) savePlayerCooldowns(ctx context.Context, tx *sql.Tx, state *pl
 	now := time.Now().Unix()
 	cooldowns := make([]spellCooldown, 0, len(latest))
 	for _, cooldown := range latest {
+		// SpellHistory::SaveToDB (SpellHistory.cpp:130) skips onHold
+		// (infinity) entries: they are rebuilt from the live
+		// aura/minion/gameobject on login, never restored from the DB.
+		if cooldown.OnHold {
+			continue
+		}
 		if cooldown.End >= now {
 			cooldowns = append(cooldowns, cooldown)
 		}

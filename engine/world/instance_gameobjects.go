@@ -482,6 +482,18 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 	if state == nil {
 		return
 	}
+	// Unit::RemoveGameObject (Unit.cpp:5246-5251): removing a game object
+	// created by a cooldown-started-on-event spell releases the owner's
+	// infinity cooldown via SendCooldownEvent. The recast arm in
+	// handleEffectSummonObject nulls the spell id before despawning, so a
+	// same-spell recast never releases here.
+	if state.SpellID != 0 && state.OwnerGUID != 0 && s.Data != nil {
+		if owner := s.findSessionByGUID(state.OwnerGUID); owner != nil && owner.playerGUID == state.OwnerGUID {
+			if spell, found, err := s.Data.Spell(state.SpellID); err == nil && found && s.spellIsCooldownStartedOnEvent(spell) {
+				owner.sendSpellCooldownEvent(spell)
+			}
+		}
+	}
 	if state.OwnerGUID != 0 && !state.FishingHandled {
 		if owner := s.findSessionByGUID(state.OwnerGUID); owner != nil {
 			_ = owner.write(uint16(protocol.OpcodeSMSG_FISH_ESCAPED), nil, true)

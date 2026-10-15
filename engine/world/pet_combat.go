@@ -2973,6 +2973,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// arrival — creature reflectors have no Go event-list model, so only
 	// player reflectors arm it (same as the player-path doReflect).
 	reflectedSet := map[uint64]bool{}
+	evadedSet := map[uint64]bool{}
 	type petReflectTrip struct {
 		victimGUID uint64
 		status     uint8
@@ -2982,7 +2983,12 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if guid == 0 || reflectedSet[guid] {
 			continue
 		}
-		if ok, status := s.petSpellReflectVerdict(ctx, motion, spell, guid); ok {
+		reflected, evaded, status := s.petSpellReflectVerdict(ctx, motion, spell, guid)
+		if evaded {
+			evadedSet[guid] = true
+			continue
+		}
+		if reflected {
 			reflectedSet[guid] = true
 			reflectTrips = append(reflectTrips, petReflectTrip{victimGUID: guid, status: status})
 		}
@@ -2991,10 +2997,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	packetHits := make([]uint64, 0, len(hitTargets)+1)
 	petHitListed := false
 	for _, guid := range hitTargets {
-		if reflectedSet[guid] {
+		if reflectedSet[guid] || evadedSet[guid] {
 			continue
 		}
 		packetHits = append(packetHits, guid)
+	}
+	for guid := range evadedSet {
+		missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
 	}
 	for _, trip := range reflectTrips {
 		missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.victimGUID, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
@@ -3033,7 +3042,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// nulled victim (non-NONE ReflectResult) resolves to 0 and every
 	// effect leg below skips it.
 	resolveReflectTarget := func(guid uint64) uint64 {
-		if reflectNulled[guid] {
+		if reflectNulled[guid] || evadedSet[guid] {
 			return 0
 		}
 		if reflectedSet[guid] {
@@ -3826,12 +3835,16 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 // status nulls the return trip (Spell.cpp:2350, 7740-7743): the GO
 // packet still reports REFLECT with the status, but the pet takes
 // nothing.
-func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, targetGUID uint64) (bool, uint8) {
+// The evaded return reports a creature victim in evade mode:
+// WorldObject::SpellHitResult (Object.cpp:2637-2639) returns
+// SPELL_MISS_EVADE ahead of the reflect roll, so an evading creature
+// never rolls (or consumes) its reflect aura.
+func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, targetGUID uint64) (reflected bool, evaded bool, status uint8) {
 	if s == nil || s.server == nil || motion == nil || targetGUID == 0 || targetGUID == motion.GUID {
-		return false, protocol.SpellMissNone
+		return false, false, protocol.SpellMissNone
 	}
 	if !spellCanBeReflected(spell) {
-		return false, protocol.SpellMissNone
+		return false, false, protocol.SpellMissNone
 	}
 	targetSess := s.server.findSessionByGUID(targetGUID)
 	offered := false
@@ -3845,12 +3858,15 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 		offered = s.creatureReflectOffered(spell, targetFaction)
 	}
 	if !offered {
-		return false, protocol.SpellMissNone
+		return false, false, protocol.SpellMissNone
 	}
-	reflected := false
+	reflected = false
 	if targetSess != nil {
 		reflected = targetSess.checkSpellReflection(spell)
 	} else {
+		if s.player != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
+			return false, true, protocol.SpellMissNone
+		}
 		var key creatureAuraKey
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 			key = creatureAuraKeyForTarget(tgt)
@@ -3858,15 +3874,15 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 		reflected = s.server.creatureCheckSpellReflection(key, spell)
 	}
 	if !reflected {
-		return false, protocol.SpellMissNone
+		return false, false, protocol.SpellMissNone
 	}
 	if s.creatureTargetImmuneToSpell(ctx, motion.GUID, spell, s, motion.Faction) {
-		return true, protocol.SpellMissImmune
+		return true, false, protocol.SpellMissImmune
 	}
 	if spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForMotion(motion), spell, spell.SchoolMask) {
-		return true, protocol.SpellMissImmune
+		return true, false, protocol.SpellMissImmune
 	}
-	return true, protocol.SpellMissNone
+	return true, false, protocol.SpellMissNone
 }
 
 // firePetSpellDoneSideProcs evaluates the done-side proc leg of

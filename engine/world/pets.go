@@ -1071,6 +1071,15 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		s.player.CritterGUID = petGUID
 		s.player.CritterPetID = petID
 	}
+	// Unit::SetMinion add-arm (Unit.cpp:6098-6100): a minion created by a
+	// cooldown-started-on-event spell parks the owner's infinity (onHold)
+	// cooldown. createdBySpell was read from character_pet above; a zero
+	// value means no creating spell.
+	if createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) && s.server != nil && s.server.Data != nil {
+		if minionSpell, found, err := s.server.Data.Spell(uint32(createdBySpell)); err == nil && found && s.server.spellIsCooldownStartedOnEvent(minionSpell) {
+			s.startSpellCooldownOnHold(ctx, minionSpell, 0)
+		}
+	}
 	if petHappiness < 0 {
 		petHappiness = 0
 	} else if petHappiness > int64(petHappinessMax) {
@@ -1490,6 +1499,17 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 	s.player.PetGUID = 0
 	s.player.PetNumber = 0
 	s.sendPlayerUpdate()
+	// Unit::SetMinion remove-arm (Unit.cpp:6137-6139): removing a minion
+	// created by a cooldown-started-on-event spell releases the owner's
+	// infinity cooldown via SendCooldownEvent.
+	if petID != 0 && s.server != nil && s.server.Data != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var createdBySpell int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0) FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&createdBySpell); err == nil && createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
+			if minionSpell, found, serr := s.server.Data.Spell(uint32(createdBySpell)); serr == nil && found && s.server.spellIsCooldownStartedOnEvent(minionSpell) {
+				s.sendSpellCooldownEvent(minionSpell)
+			}
+		}
+	}
 	s.debug("pet unsummoned", "account", s.accountName, "petID", petID, "mode", mode)
 }
 

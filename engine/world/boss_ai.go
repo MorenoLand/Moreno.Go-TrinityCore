@@ -1374,6 +1374,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// Reflect verdicts collected by the AddUnitTarget arm below; read by
 	// the GO send and the per-hit legs after the spellKnown block.
 	var reflectedTargets map[uint64]uint8
+	var evadedTargets map[uint64]bool
 	if spellKnown {
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
 		// Spell::CheckCast unit-cooldown arm (Spell.cpp:5207-5211): a
@@ -1709,7 +1710,15 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// the same way the inline path skips their per-hit legs.
 		if len(hitTargets) > 0 {
 			for _, guid := range hitTargets {
-				if ok, status := s.serverCastCreatureReflectVerdict(ctx, m, spellInfo, guid); ok {
+				reflected, evaded, status := s.serverCastCreatureReflectVerdict(ctx, m, spellInfo, guid)
+				if evaded {
+					if evadedTargets == nil {
+						evadedTargets = map[uint64]bool{}
+					}
+					evadedTargets[guid] = true
+					continue
+				}
+				if reflected {
 					if reflectedTargets == nil {
 						reflectedTargets = map[uint64]uint8{}
 					}
@@ -1817,16 +1826,22 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if sendGoPacket {
 		packetHits := hitTargets
 		var missStatus []protocol.SpellMissStatus
-		if len(reflectedTargets) > 0 {
+		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 {
 			packetHits = make([]uint64, 0, len(hitTargets))
 			for _, guid := range hitTargets {
 				if _, ok := reflectedTargets[guid]; ok {
+					continue
+				}
+				if evadedTargets[guid] {
 					continue
 				}
 				packetHits = append(packetHits, guid)
 			}
 			for guid, status := range reflectedTargets {
 				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissReflect, ReflectStatus: status})
+			}
+			for guid := range evadedTargets {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
 			}
 		}
 		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, spellTarget)
@@ -1900,7 +1915,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// precede 2652). Gated on spellKnown and a real hit target: C++ only
 	// reaches these arms with a SpellInfo and a non-null _spellHitTarget.
 	if spellKnown && targetGUID != 0 {
-		if _, reflected := reflectedTargets[targetGUID]; !reflected {
+		if _, reflected := reflectedTargets[targetGUID]; !reflected && !evadedTargets[targetGUID] {
 			s.fireCreatureSpellHitTarget(ctx, m, targetGUID, spellID)
 		}
 	}
@@ -1913,10 +1928,13 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// _cast without a SpellInfo.
 	if spellKnown {
 		unreflectedHits := hitTargets
-		if len(reflectedTargets) > 0 {
+		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 {
 			unreflectedHits = make([]uint64, 0, len(hitTargets))
 			for _, guid := range hitTargets {
 				if _, ok := reflectedTargets[guid]; ok {
+					continue
+				}
+				if evadedTargets[guid] {
 					continue
 				}
 				unreflectedHits = append(unreflectedHits, guid)

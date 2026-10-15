@@ -8658,6 +8658,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// only damage effects.
 			hitTargets = nil
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+		} else if targetSess == nil && s.server != nil && s.player != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
+			// WorldObject::SpellHitResult (Object.cpp:2637-2639): an
+			// evading creature reports SPELL_MISS_EVADE ahead of the
+			// reflect roll, so its reflect aura is never offered or
+			// consumed.
+			hitTargets = nil
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissEvade}}
 		} else if targetSess == nil && s.creatureReflectOffered(spell, targetFaction) && s.server.creatureCheckSpellReflection(creatureAuraKeyForPlayer(*s.player, targetGUID), spell) {
 			// Creature victims roll the same reflect arm over their
 			// activeCreatureAuras (Object.cpp:2641-2648 applies to any
@@ -9036,52 +9043,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// combat ends (Player::UpdatePotionCooldown, Player.cpp:22215).
 	if castItemEntry != 0 && (s.server.isPotionItem(ctx, castItemEntry) || s.server.spellIsCooldownStartedOnEvent(spell)) {
 		s.lastPotionId = castItemEntry
-	} else if applyCooldown && (spell.RecoveryTime > 0 || categoryRecoveryTime > 0) {
-		cooldownMs, categoryCooldownMs := int32(spell.RecoveryTime), int32(categoryRecoveryTime)
-		// SpellHistory::StartCooldown (SpellHistory.cpp:313-319): SPELLMOD_COOLDOWN
-		// folds over the cooldown and — unless ATTR6_IGNORE_CATEGORY_COOLDOWN_MODS —
-		// the category cooldown. The spell-mod taking window is live here
-		// (endSpellModTaking is deferred at the _cast tail), so applySpellMod
-		// mirrors the ApplySpellMod(spellInfo->Id, SPELLMOD_COOLDOWN, ..., spell)
+	} else if applyCooldown && !s.server.spellIsCooldownStartedOnEvent(spell) && (spell.RecoveryTime > 0 || categoryRecoveryTime > 0) {
+		// SpellHistory::HandleCooldowns (SpellHistory.cpp:184):
+		// cooldown-started-on-event spells take no cooldown at cast time
+		// regardless of item — the lock is the onHold marker armed when
+		// the aura/minion/gameobject lands (Aura::_ApplyForTarget,
+		// SpellAuras.cpp:579). The spell-mod taking window is live here
+		// (endSpellModTaking is deferred at the _cast tail), so the
+		// SPELLMOD_COOLDOWN fold inside startRealSpellCooldown mirrors
+		// the ApplySpellMod(spellInfo->Id, SPELLMOD_COOLDOWN, ..., spell)
 		// calls, which also run with a non-null taking spell.
-		cooldownMs = s.applySpellMod(spell, spellModCooldown, cooldownMs)
-		if spell.AttributesEx6&spellAttr6IgnoreCategoryCooldownMods == 0 {
-			categoryCooldownMs = s.applySpellMod(spell, spellModCooldown, categoryCooldownMs)
-		}
-		// SpellHistory::StartCooldown (SpellHistory.cpp:321-330):
-		// SPELL_AURA_MOD_COOLDOWN (aura 196, only 24818 Noxious Breath) adds
-		// to the cooldown of the caster's own spells only, and the modded
-		// value rides SMSG_SPELL_COOLDOWN (needsCooldownPacket).
-		needsCooldownPacket := false
-		if auraMod := s.totalAuraModifier(spellAuraModCooldown); auraMod != 0 && playerHasSpell(s.player, spellID) {
-			needsCooldownPacket = true
-			cooldownMs += auraMod * 1000
-		}
-		if cooldownMs < 0 {
-			cooldownMs = 0
-		}
-		if categoryCooldownMs < 0 {
-			categoryCooldownMs = 0
-		}
-		if cooldownMs > 0 || categoryCooldownMs > 0 {
-			cooldownEnd := now.Unix()
-			if categoryCooldownMs > 0 {
-				cooldownEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
-			}
-			if cooldownMs > 0 {
-				cooldownEnd = now.Add(time.Duration(cooldownMs) * time.Millisecond).Unix()
-			}
-			moddedCategoryEnd := now.Unix()
-			if categoryCooldownMs > 0 {
-				moddedCategoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
-			}
-			s.replaceSpellCooldownEntry(spellCooldown{Spell: spellID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
-			if needsCooldownPacket {
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, uint32(cooldownMs)), true)
-			} else if spell.RecoveryTime > 0 {
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, spell.RecoveryTime), true)
-			}
-		}
+		s.startRealSpellCooldown(spell, int32(spell.RecoveryTime), int32(categoryRecoveryTime), categoryID, now)
 	}
 	if applyCooldown && spellID == 8690 {
 		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
@@ -20171,10 +20143,19 @@ func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, 
 				reflected = true
 			}
 		} else if s.server != nil {
-			if tgt, ok := s.getCombatTarget(ctx, guid); ok &&
-				s.creatureReflectOffered(spell, tgt.Faction) &&
-				s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
-				reflected = true
+			if tgt, ok := s.getCombatTarget(ctx, guid); ok {
+				// WorldObject::SpellHitResult (Object.cpp:2637-2639):
+				// an evading creature reports SPELL_MISS_EVADE ahead of
+				// the reflect roll — it leaves the kept list with an
+				// EVADE miss instead of rolling (and consuming) reflect.
+				if s.player != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, guid) {
+					misses = append(misses, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
+					continue
+				}
+				if s.creatureReflectOffered(spell, tgt.Faction) &&
+					s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
+					reflected = true
+				}
 			}
 		}
 		if !reflected {
@@ -21236,6 +21217,18 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 		}
 	}
 	s.castMu.Unlock()
+	// Aura::_UnapplyForTarget (SpellAuras.cpp:611-613): removing a
+	// cooldown-started-on-event aura releases the caster's infinity
+	// cooldown via SendCooldownEvent — the SMSG_COOLDOWN_EVENT packet
+	// plus the real finite cooldown. A caster with no live session has
+	// no live cooldown list to release (onHold entries are never saved).
+	if auraWasPresent && removedCasterGUID != 0 && s.server != nil && s.server.Data != nil {
+		if casterSess := s.server.findSessionByGUID(removedCasterGUID); casterSess != nil && casterSess.playerGUID == removedCasterGUID {
+			if auraSpell, found, err := s.server.Data.Spell(spellID); err == nil && found && s.server.spellIsCooldownStartedOnEvent(auraSpell) {
+				casterSess.sendSpellCooldownEvent(auraSpell)
+			}
+		}
+	}
 	if removedEffectMask != 0 {
 		s.dropSpellMods(spellID)
 		s.removeOwnerPetAuraEffects(context.Background(), spellID, removedEffectMask)
@@ -24030,6 +24023,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
 		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
+		// Aura::_ApplyForTarget (SpellAuras.cpp:579-584): a player caster
+		// whose aura spell starts its cooldown on event parks an infinity
+		// (onHold) cooldown entry that blocks recast while the aura is
+		// active. Fires per target application like C++; the entry
+		// overwrite is idempotent.
+		if casterGUID != 0 && s.server.spellIsCooldownStartedOnEvent(spell) {
+			if casterSess := s.server.findSessionByGUID(casterGUID); casterSess != nil && casterSess.playerGUID == casterGUID {
+				casterSess.startSpellCooldownOnHold(ctx, spell, castItemGUID)
+			}
+		}
 		// AuraEffect::ApplySpellMod on fresh apply / replace
 		// (SpellAuraEffects.cpp:755): the replaced aura's modifiers leave
 		// before the new aura's register.
@@ -29858,6 +29861,132 @@ func buildCooldownEvent(casterGUID uint64, spellID uint32) []byte {
 	return buf.Bytes()
 }
 
+// infinityCooldownDuration mirrors SpellHistory::InfinityCooldownDelay
+// (SpellHistory.cpp:30): +1 month (30 days) marks an onHold cooldown
+// entry. The login packet's infinity check uses MONTH/2 (15 days,
+// SpellHistory.cpp:243); any entry at or past it serializes as the
+// infinity form (1 / 0x80000000).
+const infinityCooldownDuration = 30 * 24 * time.Hour
+
+// startSpellCooldownOnHold mirrors the onHold arm of
+// SpellHistory::StartCooldown (SpellHistory.cpp:296-304, 336-356): a
+// cooldown-started-on-event spell parks an infinity entry that blocks
+// recast while its aura/minion/gameobject is active. No spell mods run
+// on this path (C++ skips the mod block when onHold) and no
+// SMSG_SPELL_COOLDOWN is sent (needsCooldownPacket stays false). The
+// cast item entry rides the entry like C++'s castItem arm
+// (SpellAuras.cpp:579-584).
+func (s *session) startSpellCooldownOnHold(ctx context.Context, spell wotlk.Spell, castItemGUID uint64) {
+	if s == nil || s.player == nil {
+		return
+	}
+	now := time.Now()
+	nowUnix := now.Unix()
+	infEnd := now.Add(infinityCooldownDuration).Unix()
+	// StartCooldown onHold arm: catrecTime = categoryCooldown > 0 ? inf :
+	// curTime; recTime = cooldown > 0 ? inf : catrecTime. No entry when
+	// both are non-positive (recTime == curTime skips AddCooldown).
+	categoryEnd := nowUnix
+	if spell.CategoryRecoveryTime > 0 {
+		categoryEnd = infEnd
+	}
+	end := categoryEnd
+	if spell.RecoveryTime > 0 {
+		end = infEnd
+	}
+	if end == nowUnix {
+		return
+	}
+	entry := spellCooldown{Spell: spell.ID, Category: spell.Category, End: end, CategoryEnd: categoryEnd, OnHold: true}
+	if castItemGUID != 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var itemEntry uint32
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", castItemGUID).Scan(&itemEntry); err == nil {
+			entry.Item = itemEntry
+		}
+	}
+	s.replaceSpellCooldownEntry(entry)
+}
+
+// sendSpellCooldownEvent mirrors SpellHistory::SendCooldownEvent
+// (SpellHistory.cpp:364-392): the SMSG_COOLDOWN_EVENT packet for the
+// spell, the category-holder arm (a different spell holding this
+// category's cooldown fires its own event and starts its real cooldown
+// first), then the real finite cooldown starts server-side via
+// startRealSpellCooldown.
+func (s *session) sendSpellCooldownEvent(spell wotlk.Spell) {
+	if s == nil || s.player == nil {
+		return
+	}
+	now := time.Now()
+	if spell.Category != 0 {
+		nowUnix := now.Unix()
+		for _, cd := range s.player.Cooldowns {
+			if cd.Category == spell.Category && cd.Spell != spell.ID && cd.CategoryEnd > nowUnix {
+				_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, cd.Spell), true)
+				if s.server != nil && s.server.Data != nil {
+					if holder, found, err := s.server.Data.Spell(cd.Spell); err == nil && found {
+						s.startRealSpellCooldown(holder, int32(holder.RecoveryTime), int32(holder.CategoryRecoveryTime), holder.Category, now)
+					}
+				}
+				break
+			}
+		}
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, spell.ID), true)
+	s.startRealSpellCooldown(spell, int32(spell.RecoveryTime), int32(spell.CategoryRecoveryTime), spell.Category, now)
+}
+
+// startRealSpellCooldown mirrors the tail of SpellHistory::StartCooldown
+// (SpellHistory.cpp:306-361): the SPELLMOD_COOLDOWN fold over cooldown
+// and category cooldown, the SPELL_AURA_MOD_COOLDOWN arm on the caster's
+// own spells, the negative clamp, the both-zero early return, the entry
+// write, and the conditional SMSG_SPELL_COOLDOWN (needsCooldownPacket
+// carries the modded value; otherwise the raw DBC RecoveryTime rides the
+// packet when positive).
+func (s *session) startRealSpellCooldown(spell wotlk.Spell, cooldownMs, categoryCooldownMs int32, categoryID uint32, now time.Time) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if cooldownMs >= 0 {
+		cooldownMs = s.applySpellMod(spell, spellModCooldown, cooldownMs)
+	}
+	if categoryCooldownMs >= 0 && spell.AttributesEx6&spellAttr6IgnoreCategoryCooldownMods == 0 {
+		categoryCooldownMs = s.applySpellMod(spell, spellModCooldown, categoryCooldownMs)
+	}
+	needsCooldownPacket := false
+	if auraMod := s.totalAuraModifier(spellAuraModCooldown); auraMod != 0 && playerHasSpell(s.player, spell.ID) {
+		needsCooldownPacket = true
+		cooldownMs += auraMod * 1000
+	}
+	if cooldownMs < 0 {
+		cooldownMs = 0
+	}
+	if categoryCooldownMs < 0 {
+		categoryCooldownMs = 0
+	}
+	if cooldownMs == 0 && categoryCooldownMs == 0 {
+		return
+	}
+	nowUnix := now.Unix()
+	cooldownEnd := nowUnix
+	if categoryCooldownMs > 0 {
+		cooldownEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+	}
+	if cooldownMs > 0 {
+		cooldownEnd = now.Add(time.Duration(cooldownMs) * time.Millisecond).Unix()
+	}
+	moddedCategoryEnd := nowUnix
+	if categoryCooldownMs > 0 {
+		moddedCategoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+	}
+	s.replaceSpellCooldownEntry(spellCooldown{Spell: spell.ID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
+	if needsCooldownPacket {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spell.ID, uint32(cooldownMs)), true)
+	} else if spell.RecoveryTime > 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spell.ID, spell.RecoveryTime), true)
+	}
+}
+
 // buildClearCooldown packs SMSG_CLEAR_COOLDOWN: the cleared spell id, then
 // the cooldown owner's GUID. SpellHistory::ResetCooldown(itr, update=true)
 // (SpellHistory.cpp:441-454) and SpellHistory::SendClearCooldowns
@@ -32542,6 +32671,13 @@ func (s *session) handleEffectSummonObject(ctx context.Context, spell wotlk.Spel
 	// unitCaster->m_ObjectSlot[slot] = go->GetGUID(); ExecuteLogEffectSummonObject.
 	s.player.ObjectSlots[slot] = dyn.GUID
 	s.sendSummonObjectLog(spell.ID, eff.Effect, dyn.GUID)
+	// Unit::AddGameObject (Unit.cpp:5220-5225): a game object created by a
+	// cooldown-started-on-event spell parks the owner's infinity (onHold)
+	// cooldown. The recast arm above nulls the old object's spell id
+	// before despawning it, so no spurious release fires there.
+	if s.server.spellIsCooldownStartedOnEvent(spell) {
+		s.startSpellCooldownOnHold(ctx, spell, 0)
+	}
 	// Documented no-bridge: GAMEOBJECT_LEVEL (Go's dynamic GO state carries no
 	// level field) and the quaternion rotation from the caster's orientation
 	// (the wild-summon bridge, handleEffectSummonObjectWild, already ships the
