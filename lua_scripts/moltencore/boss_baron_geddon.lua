@@ -6,7 +6,7 @@
 -- "boss_baron_geddon" per AddSC_boss_baron_geddon). One Talk line:
 -- EMOTE_SERVICE = 0, spoken on the armageddon arm.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
+-- 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat arms
 -- inferno 19695 45s then 45s, non-triggered self-cast (C++ DoCast
@@ -16,8 +16,8 @@
 -- bridge — the pick may land on a target already carrying it) /
 -- living bomb 20475 35s then 35s, non-triggered on a random alive
 -- player in the instance. Nil-target ticks cast nothing but keep the
--- schedule (jeklik convention). OnDamageTaken(9, pre-damage hook):
--- post-damage health strictly below 2% -> Talk(EMOTE_SERVICE=0) +
+-- schedule (jeklik convention). Per-tick UpdateAI armageddon check
+-- (Lua 1s pump): health at-or-below 2% -> Talk(EMOTE_SERVICE=0) +
 -- non-triggered self-cast armageddon 20478, C++-exact (no once-guard:
 -- C++ re-casts and re-Talks every UpdateAI tick below 2%). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cancel timers.

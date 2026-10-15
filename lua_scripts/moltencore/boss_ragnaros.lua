@@ -25,7 +25,9 @@
 -- then 2500ms non-triggered DoCastVictim (the melee-range gate has
 -- no bridge — the cast fires unconditionally and the once-only
 -- Talk(SAY_MAGMABURST) fires on the first tick; see deviations) /
--- submerge 3min then 3min (see below). Nil-victim ticks cast nothing
+-- submerge: 3min init, then 3min up-phase cycles (the C++ re-arm
+-- freezes during the 90s banish — 270s submerge-to-submerge real;
+-- see below). Nil-victim ticks cast nothing
 -- but keep the schedule (jeklik convention). OnTargetDied(3): 25%
 -- Talk(SAY_KILL). OnDied/OnLeaveCombat/OnReset: cancel timers and
 -- clear per-GUID state (C++ Reset re-initializes the AI state).
@@ -208,7 +210,9 @@ end
 
 -- C++: while banished, UpdateAI returns before events.Update — the
 -- event map freezes. Modeled as: submerge cancels the six combat
--- timers, emerge re-arms them with the C++ re-arm (not init) delays.
+-- timers and arms only the 90s emerge; emerge re-arms the combat
+-- timers with the C++ re-arm (not init) delays and re-arms the
+-- 3min submerge (its full C++ remainder survives the banish freeze).
 local function cancelCombatTimers(guid)
     local per = timers[guid]
     if per then
@@ -246,14 +250,22 @@ local function onEmerge(creature, guid)
     schedule(guid, "magmablast", 2500, function()
         onMagmaBlast(creature, guid)
     end)
+    -- C++ EVENT_SUBMERGE 3min re-arm: it freezes during the 90s banish,
+    -- so the full 3min remains at emerge — arm it here, not at submerge.
+    schedule(guid, "submerge", 180000, function()
+        onSubmerge(creature, guid)
+    end)
 end
 
--- C++ EVENT_SUBMERGE (only when not already banished — the 3min re-arm
--- outlives the 90s banish, so it can't fire twice): Talk(SAY_
--- REINFORCEMENTS1) the first time / SAY_REINFORCEMENTS2 later;
--- combat timers cancelled, _emergeTimer 90s armed; re-arm 3min. The
--- summon (8 sons of flame), threat reset, faction/flag/emote/react/
--- immobilize arms have no bridges.
+-- C++ EVENT_SUBMERGE: Talk(SAY_REINFORCEMENTS1) the first time /
+-- SAY_REINFORCEMENTS2 later; combat timers cancelled, _isBanished set,
+-- _emergeTimer 90s armed, then the 3min EVENT_SUBMERGE re-arm is
+-- scheduled — but UpdateAI returns before events.Update while banished,
+-- so the re-arm freezes for the 90s banish and fires 270s after the
+-- previous submerge in real time. The port models the freeze as
+-- cancel + re-arm: submerge arms only the 90s emerge; emerge re-arms
+-- the 3min submerge. The summon (8 sons of flame), threat reset,
+-- faction/flag/emote/react/immobilize arms have no bridges.
 local function onSubmerge(creature, guid)
     local s = getState(guid)
     if not s.hasSubmergedOnce then
@@ -265,9 +277,6 @@ local function onSubmerge(creature, guid)
     cancelCombatTimers(guid)
     schedule(guid, "emerge", 90000, function()
         onEmerge(creature, guid)
-    end)
-    schedule(guid, "submerge", 180000, function()
-        onSubmerge(creature, guid)
     end)
 end
 

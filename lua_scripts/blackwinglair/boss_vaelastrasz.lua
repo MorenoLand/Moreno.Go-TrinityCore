@@ -22,7 +22,7 @@
 -- silently consumes unmatched speech events). OnEnterCombat: self-cast
 -- essence of the red 23513 (the C++ SetHealth(30%) and
 -- ResetPlayerDamageReq arms have no bridge), then arm cleave 19983
--- 10s then 15s (triggered DoCastVictim, C++-exact) / flame breath
+-- 10s then 15s (non-triggered DoCastVictim, C++-exact) / flame breath
 -- 23461 15s then {8s,14s} (non-triggered DoCastVictim, C++-exact) /
 -- fire nova 23462 20s then 15s (non-triggered DoCastVictim, C++-exact)
 -- / tail swipe inert re-arm 15s (the DoCastVictim arm is commented
