@@ -48,10 +48,11 @@
 -- Fireball_Timer reset to 4000 (C++-exact). Melee is
 -- engine-driven.
 -- OnDied(4): cleanup (the _JustDied arm is instance-
--- blocked). OnLeaveCombat(2)/OnReset(23): cancel the pump,
--- drop per-GUID state (the Reset() observable remainder —
--- the Initialize() re-latch — lands on OnEnterCombat; the
--- _Reset arm is instance-blocked).
+-- blocked). OnLeaveCombat(2)/OnReset(23): cancel the pump
+-- and apply the C++ Reset() = Initialize() re-latch
+-- (fireball 4000 / fly 45000; the ctor-only flight /
+-- bellowingRoar / coneOfFire fields keep their values —
+-- the _Reset arm is instance-blocked).
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI
 -- shim (instance_hellfire_ramparts.cpp stays blocked on the
@@ -108,11 +109,26 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
+local function evadeBoss(guid)
+    -- C++ Reset() = Initialize() only: re-latch the
+    -- Initialize() timers (fireball 4000 / fly 45000); the
+    -- ctor-only flight / bellowingRoar / coneOfFire fields
+    -- keep their values (C++ boss_nazanAI ctor vs Reset()).
+    cancelPump(guid)
+    local st = states[guid]
+    if st then
+        st.fireball = 4000
+        st.fly = 45000
+    end
+end
+
 -- C++ ctor + Initialize() values (the BossAI ctor instance
 -- arms are instance blocked, so the whole engagement
 -- schedule lands on OnEnterCombat — broggok precedent):
--- flight true / bellowingRoar 0 / coneOfFire 0 /
--- fireball 4000 / fly 45000 / turn 0.
+-- flight true / bellowingRoar 0 / fireball 4000 / fly
+-- 45000 / turn 0; coneOfFire is 0 at spawn in C++ but the
+-- land arm re-latches 12000 before the land-phase block
+-- can consume it, so 12000 here is behaviorally exact.
 local function freshState()
     return {
         flight = true,
@@ -162,10 +178,12 @@ local function bossTick(creature, guid)
         -- Flight phase: the Turn_Timer waypoint hops have
         -- no movement bridge (documented above); the only
         -- bridgeable arm is the Fly_Timer 45s timeout —
-        -- Talk(EMOTE), land, ConeOfFire 12000 (C++-exact).
+        -- Talk(EMOTE), land, ConeOfFire 12000 (C++-exact;
+        -- the expiry test is strict `<`, leotheras
+        -- precedent).
         -- The Vazruden-alive/<20% early-land condition has
         -- no cross-creature bridge.
-        if st.fly <= 1000 then
+        if st.fly < 1000 then
             st.flight = false
             st.coneOfFire = 12000
             creature:Talk(EMOTE)
@@ -191,8 +209,16 @@ end
 
 RegisterCreatureEvent(ENTRY_NAZAN, 1, function(_, creature)
     local guid = creature:GetGUID()
-    resetBoss(guid)
-    states[guid] = freshState()
+    cancelPump(guid)
+    if not states[guid] then
+        -- Fresh spawn or post-death re-engage: C++ ctor +
+        -- Initialize() state.
+        states[guid] = freshState()
+    end
+    -- Re-engage after evade resumes the Reset()-retained
+    -- state (the Initialize() re-latch landed on the evade
+    -- hook; C++ Reset() does not re-latch the ctor-only
+    -- flight field, so a landed Nazan stays landed).
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)
     end, 1000, 0)
@@ -201,13 +227,15 @@ end)
 -- No event 3: the C++ has no KilledUnit override.
 
 RegisterCreatureEvent(ENTRY_NAZAN, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    evadeBoss(creature:GetGUID())
 end)
 
 RegisterCreatureEvent(ENTRY_NAZAN, 4, function(_, creature)
+    -- Death: full state drop — respawn re-engages with
+    -- fresh ctor state (C++-exact).
     resetBoss(creature:GetGUID())
 end)
 
 RegisterCreatureEvent(ENTRY_NAZAN, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    evadeBoss(creature:GetGUID())
 end)

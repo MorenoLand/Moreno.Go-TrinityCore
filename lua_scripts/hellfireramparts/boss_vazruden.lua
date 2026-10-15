@@ -21,11 +21,11 @@
 -- SAY_KILL = 2 (kill — the C++ KilledUnit override gates on
 -- victim->GetEntry() != NPC_VAZRUDEN, C++-exact via the
 -- victim object the engine passes to event 3), SAY_DIE = 3
--- (death — fired from the C++ JustDied; the C++ killer !=
--- me gate excludes only the DisappearAndDie suicide path,
--- which has no bridge in this model — the wipe yell lives
--- on the evade hook, so Talk(SAY_DIE) on OnDied is
--- C++-equivalent for the reachable paths).
+-- (death — fired from the C++ JustDied; JustDied is only
+-- reached from Unit::Kill, never from DisappearAndDie /
+-- ForcedDespawn, so the C++ `killer && killer != me` gate
+-- excludes Kill(nullptr) / Kill(self) deaths; the killer
+-- rides event 4's 3rd arg in this engine).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via
 -- CreateLuaEvent (per-GUID scheduler pump); melee is
@@ -54,7 +54,8 @@
 -- reset by C++ Reset() on the same evade, so the yell fires
 -- on the evade hook; the DisappearAndDie arm has no
 -- bridge, omor SAY_WIPE-on-evade precedent, C++-exact).
--- OnDied(4): Talk(SAY_DIE) + cleanup (the _JustDied arm is
+-- OnDied(4): Talk(SAY_DIE) gated on killer ~= me
+-- (C++-exact) + cleanup (the _JustDied arm is
 -- instance-blocked). OnReset(23): cancel the pump, drop
 -- per-GUID state (the Reset() observable remainder — the
 -- Initialize() re-latch — lands on OnEnterCombat; the
@@ -98,8 +99,9 @@ end
 
 -- C++ Initialize() values (the BossAI ctor instance arms are
 -- instance blocked, so the whole engagement schedule lands
--- on OnEnterCombat — broggok precedent): revenge 4000 /
--- wipeSaid false.
+-- on OnEnterCombat — broggok precedent): revenge 4000
+-- (the WipeSaid latch lives on the evade hook, where the
+-- C++ UnsummonCheck no-victim arm's yell was remodeled).
 local function freshState()
     return {
         revenge = 4000,
@@ -152,8 +154,13 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN, 3, function(_, creature, victim)
     end
 end)
 
-RegisterCreatureEvent(ENTRY_VAZRUDEN, 4, function(_, creature)
-    creature:Talk(SAY_DIE)
+RegisterCreatureEvent(ENTRY_VAZRUDEN, 4, function(_, creature, killer)
+    -- C++ JustDied: `if (killer && killer != me)
+    -- Talk(SAY_DIE)` — the killer rides event 4's 3rd arg
+    -- in this engine (lua_creature_events.go).
+    if killer and killer:GetGUID() ~= creature:GetGUID() then
+        creature:Talk(SAY_DIE)
+    end
     resetBoss(creature:GetGUID())
 end)
 
