@@ -41,6 +41,10 @@
 -- The SelectTarget distance filters (40.0f :68, 50.0f :81) have no
 -- bridge — the randomPlayer pool (alive same-map/instance players,
 -- the keleseth / thorim precedent) ignores distance.
+-- C++ SelectTarget defaults playerOnly=FALSE (UnitAI.h:170), so the
+-- lava-burn pool (:82) can include pets/totems; Lua's player-only
+-- enumeration is the documented approximation (the tuten_kash
+-- precedent) — no Lua unit-enumeration bridge.
 -- The UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-check has no
 -- bridge — casts fire unconditionally on their timers (the hodir
 -- precedent).

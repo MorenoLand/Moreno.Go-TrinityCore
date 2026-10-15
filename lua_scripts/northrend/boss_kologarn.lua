@@ -57,12 +57,12 @@
 -- triggered self-cast (CastSpell 3rd arg); 21s init from
 -- JustEngagedWith (cpp:128), re-arm
 -- ScheduleEvent(EVENT_FOCUSED_EYEBEAM, 15s, 35s) (cpp:311)
--- via the {min,max} randtime table. Documented deviation: the
--- SelectTarget(MaxDistance) leg only stores eyebeamTarget for
--- the JustSummoned MoveChase leg (no summon/motion bridge);
--- the cast itself is targetless, so it fires on the timer
--- without the selection (in combat the selection effectively
--- always succeeds).
+-- via the {min,max} randtime table, unconditional even when the
+-- cast is skipped. Documented deviation: the SelectTarget
+-- (MaxDistance) gate (cpp:304) is emulated as a null-selection
+-- skip via anyAlivePlayer (GetPlayersInWorld bridge, the vezax
+-- precedent); the stored eyebeamTarget for the JustSummoned
+-- MoveChase leg has no summon/motion bridge.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 32930):
 -- Constructor (cpp:107-117) — RemoveFlag(NOT_SELECTABLE) +
@@ -176,11 +176,32 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ EVENT_FOCUSED_EYEBEAM: the cast is gated on
+-- if (Unit* u = SelectTarget(MaxDistance, 0, 0, true)) (cpp:306-309):
+-- a null selection skips the cast but the re-arm (cpp:311) stays
+-- unconditional. The selection only stores eyebeamTarget for the
+-- unbridged JustSummoned MoveChase leg, so it is emulated as a
+-- null-selection skip via anyAlivePlayer; the GetPlayersInWorld
+-- bridge (the vezax precedent) has no threat-list/dist filters.
+local function anyAlivePlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            return true
+        end
+    end
+    return false
+end
+
 -- C++ EVENT_FOCUSED_EYEBEAM: DoCast(me,
 -- SPELL_SUMMON_FOCUSED_EYEBEAM 63342, true) — triggered
--- self-cast — 21s init, re-arm ScheduleEvent(15s, 35s).
+-- self-cast — 21s init, re-arm ScheduleEvent(15s, 35s) (cpp:311),
+-- unconditional even when the SelectTarget gate skips the cast.
 local function focusedEyebeamTick(creature, guid)
-    creature:CastSpell(creature, SPELL_SUMMON_FOCUSED_EYEBEAM, true)
+    if anyAlivePlayer(creature) then
+        creature:CastSpell(creature, SPELL_SUMMON_FOCUSED_EYEBEAM, true)
+    end
     schedule(guid, "focusedeyebeam", {15000, 35000}, function()
         focusedEyebeamTick(creature, guid)
     end)
