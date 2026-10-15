@@ -226,8 +226,12 @@ local function onBrandonCrusaderStrike(creature, guid)
         function() onBrandonCrusaderStrike(creature, guid) end)
 end
 
+-- C++ HealthBelowPct(20) is health < floor(max*20/100) (Unit.h:872);
+-- the float GetHealthPct() bridge fires up to 1 HP early, so the
+-- integer floor form is used (the valithria / garfrost boundary
+-- precedent).
 local function onBrandonDivineShield(creature, guid)
-    if creature:GetHealthPct() < 20 then
+    if creature:GetHealth() < math.floor(creature:GetMaxHealth() * 20 / 100) then
         creature:CastSpell(creature, SPELL_DIVINE_SHIELD)
     end
     schedule(guid, "divine", 500,

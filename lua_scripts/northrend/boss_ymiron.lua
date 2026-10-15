@@ -58,14 +58,14 @@
 --   DUNGEON_MODE({60s,65s},{45s,50s}) — no difficulty bridge; normal-
 --   mode values 60s / {60s,65s} used (the vazruden / thespia
 --   precedent).
--- JustDied (:268-272) — Talk(SAY_DEATH 2) — unconditional (the sjonnir
+-- JustDied (:277) — Talk(SAY_DEATH 2) — unconditional (the sjonnir
 -- JustDied-Talk precedent; the _JustDied() passthrough leg has no
 -- bridge).
--- KilledUnit (:274-278) — Talk(SAY_SLAY 1) player-gated (event 3 — the
+-- KilledUnit (:283) — Talk(SAY_SLAY 1) player-gated (event 3 — the
 -- razuvious player-gated variant precedent).
 -- DOCUMENTED DEVIATION: the ancestor phase machine is unbridged — the
 -- DamageTaken health-threshold latch (100 - DUNGEON_MODE(20,25) *
--- HealthAmountModifier pct, :252-267): InterruptNonMeleeSpells +
+-- HealthAmountModifier pct, :208-230): InterruptNonMeleeSpells +
 -- DoCast(me, SPELL_SCREAMS_OF_THE_DEAD 51750) + AttackStop +
 -- REACT_PASSIVE + MovePoint(POINT_BOAT) + boat-ghost despawns +
 -- events.CancelEvent(prev ancestor event) +
@@ -75,7 +75,8 @@
 -- DoCast(ancestor, SPELL_CHANNEL_YMIRON_TO_SPIRIT 48307) +
 -- ancestor->CastSpell(me, SPELL_CHANNEL_SPIRIT_TO_YMIRON 48316, true) ->
 -- EVENT_RESUME_COMBAT (REACT_AGGRESSIVE + ancestor event 5s later,
--- :202-219) chain has no bridges — so timers keep their combat-start
+-- :252-255; MovementInform :165-184, DamageTaken latch :208-230)
+-- chain has no bridges — so timers keep their combat-start
 -- schedules through the ancestor phases (the assembly_of_iron
 -- DoAction-reschedule deviation precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 26861):
@@ -84,7 +85,7 @@
 -- (DoCastVictim SPELL_SPIRIT_STRIKE 48423, 5s), EVENT_RANULF_SPIRIT_
 -- BURST (DoCast(me, SPELL_SPIRIT_BURST 48529), 10s), EVENT_TORGYN_
 -- SUMMON_AVENGING_SPIRITS (4x DoCast(SPELL_SUMMON_AVENGING_SPIRIT
--- 48592), 15s) (:232-265) — fire only after the unbridged
+-- 48592), 15s) (:256-271) — fire only after the unbridged
 -- MovementInform/EVENT_RESUME_COMBAT machine (the gothik precedent).
 -- Stay out.
 -- Talk(SAY_SUMMON_BJORN 3 / SAY_SUMMON_HALDOR 4 / SAY_SUMMON_RANULF 5 /

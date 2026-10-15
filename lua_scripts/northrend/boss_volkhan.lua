@@ -57,8 +57,9 @@
 -- DespawnGolem (ObjectAccessor GUID loop over m_lGolemGUIDList,
 -- DespawnOrUnsummon — no ObjectAccessor / summon-list bridges).
 -- ShatterGolem (the brittle-golem-only CastSpell(SPELL_SHATTER
--- 52429) + GolemsShattered increment machine — no cast /
--- summon-list bridges).
+-- 52429) + GolemsShattered increment machine, :175-193 — the real
+-- blocker is the summon-list/ObjectAccessor cross-creature chain,
+-- not the cast form).
 -- JustSummoned (NPC_MOLTEN_GOLEM 28695 SummonList latch +
 -- random-target MoveFollow + non-triggered SPELL_HEAT 52387
 -- cast via the CastSpellExtraArgs overload with SetOriginalCaster
@@ -80,9 +81,11 @@
 -- window, and the m_bCanShatterGolem -> EVENT_SHATTER ->
 -- ShatterGolem cross-creature chain has no summon-list bridge;
 -- EVENT_SHATTER (ShatterGolem + 3s reschedule); EVENT_FORGE_CAST
--- (DoCast(SPELL_FORGE_VISUAL 52654), 15s, PHASE_INTRO only) — no
--- timer-event / cast bridges; the Talk arms 2, 6, 5 ride the
--- unmodeled machine.
+-- (DoCast(SPELL_FORGE_VISUAL 52654), 15s, PHASE_INTRO only,
+-- :276-278): the real blocker is the Reset-seeded out-of-combat
+-- PHASE_INTRO origin (Reset :119-120, phase-restricted reschedule
+-- — no Reset-phase bridge), not the timer/cast form; the Talk
+-- arms 2, 6, 5 ride the unmodeled machine.
 -- UpdateAI forge summon-phase machine: the m_uiHealthAmountModifier
 -- health check (HealthBelowPct(100-20*m_uiHealthAmountModifier) ->
 -- Talk(SAY_FORGE 1) + interrupt + m_bHasTemper = true + phase 1);
@@ -96,22 +99,30 @@
 -- cross-creature Temper casts :324-325, triggered summon cast :349)
 -- with phase gating (PHASE_INTRO forge-cast :276-278, PHASE_NORMAL
 -- gates :126-129) — no motion / target-selection bridges.
--- npc_molten_golem (NPC_MOLTEN_GOLEM 28695, local enum — no Talk
--- arms anywhere: entry-verifiable but bridge-blocked, NO
--- registration — the stormforged_lieutenant / npc_spark_of_ionar
--- no-bridgeable-arms precedent): Reset (EVENT_BLAST / EVENT_IMMOLATION
--- schedules — entry 28695 bridge-blocked (local enum, no Go
--- registration; BLAST/IMMOLATION would otherwise be
--- CreateLuaEvent-portable); AttackStart (no bridges);
--- DamageTaken (kill-shot -> UpdateEntry(NPC_BRITTLE_GOLEM 28681) +
--- SetHealth(1) + damage = 0 + RemoveAllAuras + AttackStop +
--- InterruptNonMeleeSpells + MotionMaster clear + m_bIsFrozen = true —
--- no DamageTaken bridge); SpellHit (SPELL_SHATTER 52429 dummy on a
--- brittle golem -> DespawnOrUnsummon — no SpellHit bridge);
--- UpdateAI (EVENT_BLAST: DoCast(SPELL_BLAST_WAVE 23113), 20s;
--- EVENT_IMMOLATION: DoCastVictim(SPELL_IMMOLATION_STRIKE 52433)
--- (C++ reschedules EVENT_BLAST at 5s — the C++ typo as written);
--- m_bIsFrozen gate — entry 28695 bridge-blocked as above).
+-- npc_molten_golem (NPC_MOLTEN_GOLEM 28695) — TIMER ARMS PORTED
+-- (boss_volkhan.cpp:391-479, npc_molten_golemAI): entry 28695
+-- registered below.
+-- EVENT_BLAST (:467-469): DoCast(me, SPELL_BLAST_WAVE 23113)
+-- non-triggered -> creature:CastSpell(creature, 23113); 20s init,
+-- unconditional 20s re-arm.
+-- EVENT_IMMOLATION (:471-474): DoCastVictim(SPELL_IMMOLATION_STRIKE
+-- 52433) non-triggered -> creature:CastSpell(nil, 52433); 5s init;
+-- C++ reschedules EVENT_BLAST (not EVENT_IMMOLATION) at 5s — the C++
+-- typo replicated as written (the same "blast" timer key is
+-- overwritten, matching EventMap.ScheduleEvent overwrite).
+-- DamageTaken kill-shot latch (:430-451): damage >= GetHealth() ->
+-- damage = 0 + m_bIsFrozen = true — PORTED via event 9 (the thekal
+-- kill-shot precedent: return false, 0). Timers canceled on the
+-- latch; frozen flag cleared on event 23 (C++ Reset -> Initialize).
+-- DOCUMENTED DEVIATIONS: C++ SetHealth(1) has no bridge — the golem
+-- keeps its pre-kill-shot health (unkillable either way: every
+-- later kill-shot is zeroed, matching the C++ 1-HP freeze);
+-- UpdateEntry(NPC_BRITTLE_GOLEM 28681) has no bridge — the frozen
+-- golem keeps its molten model (cosmetic).
+-- AttackStart (:411-424: m_bIsFrozen-gated MoveChase) — no motion
+-- bridge; melee is engine-driven in Go like DoMeleeAttackIfReady.
+-- SpellHit (:454-461: SPELL_SHATTER 52429 dummy on a brittle golem
+-- -> DespawnOrUnsummon — no SpellHit bridge). Stay out.
 -- achievement_shatter_resistant (AchievementCriteriaScript
 -- OnCheck: target->GetAI()->GetData(DATA_SHATTER_RESISTANT 2042) <
 -- 5 — no GetData / achievement bridges; joins the
@@ -147,3 +158,109 @@ end
 RegisterCreatureEvent(ENTRY_VOLKHAN, 1, volkhanEnterCombat)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 3, volkhanTargetDied)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 4, volkhanDied)
+
+-- npc_molten_golem (28695) — PORTED timer arms (boss_volkhan.cpp:391-479).
+local ENTRY_MOLTEN_GOLEM = 28695
+local SPELL_BLAST_WAVE = 23113
+local SPELL_IMMOLATION_STRIKE = 52433
+
+-- GUID-keyed timers + frozen flag (C++ m_bIsFrozen, :405).
+local golemTimers = {}
+local golemFrozen = {}
+
+local function golemCancelTimers(guid)
+    local per = golemTimers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        golemTimers[guid] = nil
+    end
+end
+
+local function golemSchedule(guid, key, delay, fn)
+    local per = golemTimers[guid]
+    if not per then
+        per = {}
+        golemTimers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ UpdateAI :467-469: EVENT_BLAST — DoCast(me, SPELL_BLAST_WAVE)
+-- non-triggered, unconditional 20s re-arm.
+local function golemBlastTick(creature, guid)
+    if golemFrozen[guid] then return end
+    creature:CastSpell(creature, SPELL_BLAST_WAVE)
+    golemSchedule(guid, "blast", 20000, function()
+        golemBlastTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI :471-474: EVENT_IMMOLATION — DoCastVictim(
+-- SPELL_IMMOLATION_STRIKE) non-triggered; C++ reschedules
+-- EVENT_BLAST at 5s (the C++ typo as written) — the same "blast"
+-- key overwrites the blast timer, matching EventMap overwrite.
+local function golemImmolationTick(creature, guid)
+    if golemFrozen[guid] then return end
+    creature:CastSpell(nil, SPELL_IMMOLATION_STRIKE)
+    golemSchedule(guid, "blast", 5000, function()
+        golemBlastTick(creature, guid)
+    end)
+end
+
+-- C++ Reset/Initialize :398-403 schedules both timers; they tick only
+-- in combat (UpdateAI :455). Lua re-keys to event 1 per the tree
+-- convention (halion / moroes).
+local function golemEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    golemCancelTimers(guid)
+    golemSchedule(guid, "blast", 20000, function()
+        golemBlastTick(creature, guid)
+    end)
+    golemSchedule(guid, "immolation", 5000, function()
+        golemImmolationTick(creature, guid)
+    end)
+end
+
+local function golemLeaveCombat(event, creature)
+    golemCancelTimers(creature:GetGUID())
+end
+
+local function golemDied(event, creature, killer)
+    golemCancelTimers(creature:GetGUID())
+end
+
+-- C++ DamageTaken :430-451: kill-shot (damage >= GetHealth()) ->
+-- SetHealth(1) + damage = 0 + UpdateEntry(28681) + RemoveAllAuras +
+-- AttackStop + InterruptNonMeleeSpells + MotionMaster clear +
+-- m_bIsFrozen = true. Event 9 fires pre-application with the damage
+-- (fireCreatureDamageTaken, lua_creature_events.go); the boolean +
+-- damage rewrite is the thekal kill-shot precedent. No SetHealth /
+-- UpdateEntry / Interrupt bridges — the frozen flag + damage
+-- zeroing carry the semantics (see header deviations).
+local function golemDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if damage >= creature:GetHealth() then
+        golemFrozen[guid] = true
+        golemCancelTimers(guid)
+        return false, 0
+    end
+end
+
+-- C++ Reset :407-410 -> Initialize: m_bIsFrozen = false +
+-- reschedules (timers re-arm on the next event 1).
+local function golemReset(event, creature)
+    local guid = creature:GetGUID()
+    golemFrozen[guid] = nil
+    golemCancelTimers(guid)
+end
+
+RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 1, golemEnterCombat)
+RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 2, golemLeaveCombat)
+RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 4, golemDied)
+RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 9, golemDamageTaken)
+RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 23, golemReset)

@@ -1,6 +1,6 @@
 -- Apothecary Hanes (Howling Fjord) --
 -- Lua port of src/server/scripts/Northrend/zone_howling_fjord.cpp
--- (npc_apothecary_hanesAI — UpdateAI healing-potion health arm
+-- (npc_Apothecary_HanesAI — UpdateAI healing-potion health arm
 -- only). Zone-script unit per northrend_script_loader.cpp order
 -- (grizzly_hills done; howling_fjord: npc_daegarn, npc_mindless_
 -- abomination, spell_mindless_abomination_explosion_fx_master,
