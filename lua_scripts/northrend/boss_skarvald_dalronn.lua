@@ -177,7 +177,9 @@ end
 -- C++ EVENT_SKARVALD_CHARGE (lines 205-209): DoCast(target, SPELL_CHARGE),
 -- 2-arg = non-triggered, random target 5-30yd; one-shot 5s (line 197) —
 -- the line-208 re-arm targets the global EVENT_CHARGE (1003), never the
--- arm, so it does not re-fire in C++ either.
+-- arm, so it does not re-fire in C++ either. The C++ predicate measures
+-- 2D distance (GetDistance2d, :93-98); Lua randomPlayer uses 3D
+-- GetDistance (5-30 bounds match; edge-case-only drift).
 local function chargeTick(creature, guid)
     local target = randomPlayer(creature, 5, 30)
     if target then

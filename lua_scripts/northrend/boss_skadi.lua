@@ -216,7 +216,8 @@ end
 -- C++ npc_ymirjar_witch_doctorAI::ScheduleTasks (:576-588):
 -- DoCastVictim(SPELL_SHADOW_BOLT 49084) non-triggered, init 2s,
 -- Repeat() = 2s; DoCastVictim(SPELL_SHRINK 49089) non-triggered, init
--- {20s,34s}, Repeat() = {20s,34s}.
+-- {20s,34s} — the randtime pick is made ONCE at Schedule; arg-less
+-- Repeat() reuses that fixed duration (TaskScheduler.h:483-486).
 local function witchDoctorEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -224,12 +225,13 @@ local function witchDoctorEnterCombat(event, creature)
         creature:CastSpell(nil, SPELL_SHADOW_BOLT)
         schedule(guid, "shadowbolt", 2000, shadowBoltTick)
     end
+    local shrinkDelay = math.random(20000, 34000)
     local function shrinkTick()
         creature:CastSpell(nil, SPELL_SHRINK)
-        schedule(guid, "shrink", {20000, 34000}, shrinkTick)
+        schedule(guid, "shrink", shrinkDelay, shrinkTick)
     end
     schedule(guid, "shadowbolt", 2000, shadowBoltTick)
-    schedule(guid, "shrink", {20000, 34000}, shrinkTick)
+    schedule(guid, "shrink", shrinkDelay, shrinkTick)
 end
 
 -- C++ npc_ymirjar_harpoonerAI::ScheduleTasks (:607-619):

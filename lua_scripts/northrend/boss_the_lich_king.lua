@@ -100,13 +100,16 @@
 -- (37698) — SHOCKWAVE 72149 self-cast {20s,25s} init/re-arm
 -- (:1303/:1331-1332); ENRAGE 72143 self-cast {11s,14s}/{20s,25s}
 -- (:1304/:1335-1337 — the 1s cast-fail recheck leg is unmodelable,
--- documented);
+-- documented); the heroic-only DamageTaken frenzy latch (:1308-1313,
+-- SPELL_FRENZY 28747 triggered at HealthBelowPctDamaged(20)) stays
+-- parked — no difficulty bridge (the tharon_ja heroic-59228 precedent);
 -- npc_raging_spirit (36701) — SOUL_SHRIEK 69242 DoCastAOE
 -- {12s,15s} init/re-arm, modeled as self-cast (the DoCastAOE
 -- self-cast convention :1367/:1420-1421) + Reset one-shots
 -- DoCastSelf(SPELL_PLAGUE_AVOIDANCE 72846, triggered) +
--- DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL 69197, triggered)
--- (:1368-1369, the curator engage-cast precedent);
+-- DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL 69197, triggered) (:1368-1369)
+-- + DoCastSelf(SPELL_BOSS_HITTIN_YA 73878, triggered) (:1374)
+-- (the curator engage-cast precedent);
 -- npc_spirit_warden (36824) — SOUL_RIP 69397 victim-cast
 -- {12s,15s}/{23s,27s} (:1833/:1855-1856) + Reset one-shot
 -- DoCastSelf(SPELL_DARK_HUNGER 69383) non-triggered (:1835).
@@ -155,6 +158,7 @@ local SPELL_HORROR_ENRAGE = 72143
 local SPELL_SOUL_SHRIEK = 69242
 local SPELL_PLAGUE_AVOIDANCE = 72846
 local SPELL_RAGING_SPIRIT_VISUAL = 69197
+local SPELL_BOSS_HITTIN_YA = 73878
 local SPELL_DARK_HUNGER = 69383
 local SPELL_SOUL_RIP = 69397
 local SPELL_KILL_FROSTMOURNE_PLAYERS = 75127
@@ -252,8 +256,9 @@ local function shamblingHorrorLeaveCombat(event, creature)
 end
 
 -- C++ npc_raging_spirit: Reset — DoCastSelf(SPELL_PLAGUE_AVOIDANCE,
--- true) + DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL, true) one-shots,
--- EVENT_SOUL_SHRIEK {12s,15s} (:1367-1369/:1420-1421); the
+-- true) + DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL, true) +
+-- DoCastSelf(SPELL_BOSS_HITTIN_YA 73878, true) one-shots,
+-- EVENT_SOUL_SHRIEK {12s,15s} (:1367-1374/:1420-1421); the
 -- REACT_PASSIVE -> EVENT_SET_AGRESSIVE 2s leg has no bridge.
 -- C++ DoAction(ACTION_DISABLE_RAGING) (:1377-1386, _events.Reset() on
 -- Frostmourne-phase entry, issued by the boss AI :1066) has no bridge —
@@ -269,6 +274,7 @@ local function ragingSpiritJustEngagedWith(event, creature, target)
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_PLAGUE_AVOIDANCE, true)
     creature:CastSpell(creature, SPELL_RAGING_SPIRIT_VISUAL, true)
+    creature:CastSpell(creature, SPELL_BOSS_HITTIN_YA, true)
     schedule(guid, "soul_shriek", {12000, 15000}, function() onSoulShriek(creature, guid) end)
 end
 
