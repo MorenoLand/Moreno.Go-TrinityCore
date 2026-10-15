@@ -970,39 +970,57 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	}
 
 	now := time.Now().Unix()
-	// C++ HandleAuctionListBidderItems (AuctionHouseHandler.cpp:665-690):
-	// the client-requested outbidded auctions are written FIRST, in
-	// client-sent order, then AuctionHouseObject::BuildListBidderItems
-	// (AuctionHouseMgr.cpp:671-680) appends every auction the player has bid
-	// on (the auctionbidders set), not just ones where they are the current
-	// top bidder. C++ lists an auction twice when it appears in both; Go
-	// dedupes (a C++ quirk the client merely tolerates).
 	var auctions []auctionRecord
-	seenIDs := make(map[uint32]bool)
+	var count, totalcount uint32
 	auctionSelect := `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid`
 	for _, oid := range outbidIDs {
 		for _, a := range scanAuctionRows(ctx, cdb, auctionSelect+` WHERE ah.id = ? AND ah.time > ? LIMIT 1`, oid, now) {
-			if !seenIDs[a.ID] {
-				seenIDs[a.ID] = true
-				auctions = append(auctions, a)
-			}
+			auctions = append(auctions, a)
+			count++
+			totalcount++
 		}
 	}
-	for _, a := range scanAuctionRows(ctx, cdb, auctionSelect+` WHERE ah.id IN (SELECT id FROM auctionbidders WHERE bidderguid = ?) AND ah.time > ?`, s.playerGUID, now) {
-		if !seenIDs[a.ID] {
-			seenIDs[a.ID] = true
-			auctions = append(auctions, a)
+	bidderRows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
+		FROM auctionhouse AS ah
+		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
+		WHERE ah.id IN (SELECT id FROM auctionbidders WHERE bidderguid = ?) AND ah.time > ?
+		ORDER BY ah.id ASC`, s.playerGUID, now)
+	if err == nil {
+		defer bidderRows.Close()
+		for bidderRows.Next() {
+			var id, iGuid, owner, buyout, expTime, bidder, lastBid, startBid, deposit int64
+			var iTmpl, itemCount sql.NullInt64
+			if err := bidderRows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &itemCount); err != nil {
+				continue
+			}
+			totalcount++
+			if iTmpl.Valid && itemCount.Valid {
+				auctions = append(auctions, auctionRecord{
+					ID:         uint32(id),
+					ItemGUID:   uint64(iGuid),
+					ItemEntry:  uint32(iTmpl.Int64),
+					ItemCount:  uint32(itemCount.Int64),
+					Owner:      uint64(owner),
+					Buyout:     uint32(buyout),
+					ExpireTime: expTime,
+					Bidder:     uint64(bidder),
+					Bid:        uint32(lastBid),
+					StartBid:   uint32(startBid),
+					Deposit:    uint32(deposit),
+				})
+				count++
+			}
 		}
 	}
 
 	packet := protocol.NewBuffer(12 + len(auctions)*120)
-	packet.WriteU32(uint32(len(auctions)))
+	packet.WriteU32(count)
 	for _, a := range auctions {
 		writeAuctionInfo(packet, a)
 	}
-	packet.WriteU32(uint32(len(auctions)))
+	packet.WriteU32(totalcount)
 	packet.WriteU32(300)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_BIDDER_LIST_RESULT), packet.Bytes(), true)
 	return true

@@ -5486,6 +5486,7 @@ func (s *session) handleSetAmmo(ctx context.Context, payload []byte) bool {
 	} else {
 		// Player::RemoveAmmo (Player.cpp:12118-12126).
 		s.player.AmmoID = 0
+		s.player.AmmoDPS = 0
 	}
 	_ = s.calculatePlayerStats(ctx, s.player)
 	s.sendPlayerUpdate()

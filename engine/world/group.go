@@ -608,7 +608,7 @@ func (s *session) currentGroupStatsChanged(ctx context.Context) protocol.PartyMe
 			cur.Status |= memberStatusDead
 		}
 	}
-	if tp.PlayerFlags&0x02 != 0 {
+	if tp.PVPFlags&0x01 != 0 {
 		cur.Status |= memberStatusPvP
 	}
 	if tp.PVPFlags&0x04 != 0 {
@@ -2210,18 +2210,24 @@ func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte)
 	}
 
 	var found bool
+	var movedGUID uint64
 	for i := range grp.Members {
 		if strings.EqualFold(grp.Members[i].Name, name) {
 			if grp.Members[i].SubGroup != groupNr {
 				grp.Members[i].SubGroup = groupNr
+				movedGUID = grp.Members[i].GUID
 				found = true
 			}
 			break
 		}
 	}
+	bgRaid := grp.bgRaidInstance != 0
 	s.server.groupsMu.Unlock()
 
 	if found {
+		if !bgRaid && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_UPD_GROUP_MEMBER_SUBGROUP"), groupNr, movedGUID)
+		}
 		s.server.broadcastGroupList(grp)
 	}
 	return true
@@ -2993,7 +2999,7 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 			status |= memberStatusDead
 		}
 	}
-	if tp.PlayerFlags&0x02 != 0 {
+	if tp.PVPFlags&0x01 != 0 {
 		status |= memberStatusPvP
 	}
 	if tp.PVPFlags&0x04 != 0 {

@@ -29724,11 +29724,7 @@ func (s *session) handleCancelAutoRepeatSpell(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	s.autoRepeatSpell = 0
-	s.autoRepeatTarget = 0
-	buf := protocol.NewBuffer(9)
-	buf.WritePackedGUID(s.playerGUID)
-	_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+	s.cancelAutoRepeatOnInterrupt()
 	return true
 }
 

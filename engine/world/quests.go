@@ -1449,9 +1449,9 @@ func (s *session) handleQuestPushResult(ctx context.Context, payload []byte) boo
 				sharerSess.sendPushToPartyResponse(s.playerGUID, msg)
 			}
 		}
-		s.sharingQuestID = 0
-		s.sharingQuestSender = 0
 	}
+	s.sharingQuestID = 0
+	s.sharingQuestSender = 0
 	return true
 }
 

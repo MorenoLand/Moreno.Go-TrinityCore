@@ -2276,7 +2276,7 @@ func (s *session) teachPetSpell(ctx context.Context, spellID uint32) {
 }
 
 var stableSlotPrices = []uint32{
-	500,     // 5s
+	1000,    // 10s
 	50000,   // 5g
 	500000,  // 50g
 	1500000, // 150g
@@ -2322,7 +2322,7 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 	// and the cap gate is MaxStabledPets < MAX_PET_STABLES (PetDefines.h:36);
 	// MaxStabledPets is characters.stable_slots (loaded at player_state.go:2914,
 	// saved with the character row). The purchase persists, and the Go price
-	// table keeps its standing order [5s, 5g, 50g, 150g].
+	// table keeps the DBC order [10s, 5g, 50g, 150g].
 	if s.player.StableSlots >= uint8(len(stableSlotPrices)) {
 		s.sendPetStableResult(stableErrStable)
 		return true
@@ -2485,8 +2485,10 @@ const npcFlagStablemaster = 0x00400000
 
 // checkStableMaster mirrors WorldSession::CheckStableMaster
 // (PetHandler.cpp:437-460): the player opening their own stable needs GM
-// state OR SPELL_AURA_OPEN_STABLE (292); a stablemaster creature must carry
-// the STABLEMASTER flag.
+// state OR SPELL_AURA_OPEN_STABLE (292); a stablemaster creature must pass
+// Player::GetNPCIfCanInteractWith (Player.cpp:2314-2359: in-world, not in
+// flight, alive, carries STABLEMASTER, not charmed, not hostile, within
+// interact distance) via canInteractWithNPC.
 func (s *session) checkStableMaster(ctx context.Context, guid uint64) bool {
 	if guid == s.playerGUID {
 		if s.player.ExtraFlags&playerExtraGMOn != 0 {
@@ -2501,7 +2503,7 @@ func (s *session) checkStableMaster(ctx context.Context, guid uint64) bool {
 		}
 		return false
 	}
-	return s.creatureHasNpcFlag(ctx, guid, npcFlagStablemaster)
+	return s.canInteractWithNPC(ctx, guid, uint64(npcFlagStablemaster))
 }
 
 // checkStabledPetTameable mirrors the exotic-pet arm shared by
@@ -2578,7 +2580,7 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	if s.player.Health == 0 || !s.checkStableMaster(ctx, npcGUID) {
+	if s.isDeadOrGhost() || !s.checkStableMaster(ctx, npcGUID) {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
@@ -2701,7 +2703,7 @@ func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool 
 	}
 	var stabledSlot int64
 	var stabledEntry uint32
-	err = cdb.QueryRowContext(ctx, "SELECT slot, entry FROM character_pet WHERE owner = ? AND id = ? AND slot > 0", s.playerGUID, petNumber).Scan(&stabledSlot, &stabledEntry)
+	err = cdb.QueryRowContext(ctx, "SELECT slot, entry FROM character_pet WHERE owner = ? AND id = ? AND slot > 0 AND slot < 100", s.playerGUID, petNumber).Scan(&stabledSlot, &stabledEntry)
 	if err != nil {
 		s.sendPetStableResult(stableErrStable)
 		return true
@@ -2741,7 +2743,7 @@ func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool 
 			return true
 		}
 	}
-	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ?", time.Now().Unix(), s.playerGUID, petNumber); err != nil {
+	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ? AND slot > 0 AND slot < 100", time.Now().Unix(), s.playerGUID, petNumber); err != nil {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
@@ -2779,7 +2781,7 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 	}
 	var stabledSlot int64
 	var stabledEntry uint32
-	if err := cdb.QueryRowContext(ctx, "SELECT slot, entry FROM character_pet WHERE owner = ? AND id = ? AND slot > 0", s.playerGUID, petNumber).Scan(&stabledSlot, &stabledEntry); err != nil {
+	if err := cdb.QueryRowContext(ctx, "SELECT slot, entry FROM character_pet WHERE owner = ? AND id = ? AND slot > 0 AND slot < 100", s.playerGUID, petNumber).Scan(&stabledSlot, &stabledEntry); err != nil {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
@@ -2822,7 +2824,7 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	result, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ? AND slot > 0", time.Now().Unix(), s.playerGUID, petNumber)
+	result, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ? AND slot > 0 AND slot < 100", time.Now().Unix(), s.playerGUID, petNumber)
 	if err != nil {
 		s.sendPetStableResult(stableErrStable)
 		return true
@@ -4067,13 +4069,22 @@ func (s *session) sendStabledPets(ctx context.Context, npcGUID uint64) {
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		// NPCHandler.cpp:336-353: the current pet is listed first with the
-		// active flag. Go has no unslotted-hunter-pet concept (C++ :343).
+		// active flag; with no current pet the single unslotted hunter pet
+		// (GetUnslottedHunterPet, PetDefines.h:116-119) shows as active.
 		var cur petInfo
 		if err := cdb.QueryRowContext(ctx, "SELECT id, entry, level, name FROM character_pet WHERE owner = ? AND slot = 0 LIMIT 1", s.playerGUID).Scan(&cur.ID, &cur.Entry, &cur.Level, &cur.Name); err == nil {
 			cur.Flags = 1
 			pets = append(pets, cur)
+		} else if unslotted, uerr := s.queryUnslottedStablePets(ctx, cdb); uerr == nil && len(unslotted) == 1 && unslotted[0].petType == int64(petTypeHunter) {
+			var up petInfo
+			if err := cdb.QueryRowContext(ctx, "SELECT id, entry, level, name FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, unslotted[0].petID).Scan(&up.ID, &up.Entry, &up.Level, &up.Name); err == nil {
+				up.Flags = 1
+				pets = append(pets, up)
+			}
 		}
-		rows, err := cdb.QueryContext(ctx, "SELECT id, entry, level, name FROM character_pet WHERE owner = ? AND slot > 0 ORDER BY slot", s.playerGUID)
+		// NPCHandler.cpp:355-365: only StabledPets (slots 1..4) list with
+		// flag 2; slot-100 unslotted rows never appear here.
+		rows, err := cdb.QueryContext(ctx, "SELECT id, entry, level, name FROM character_pet WHERE owner = ? AND slot > 0 AND slot < 100 ORDER BY slot", s.playerGUID)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {

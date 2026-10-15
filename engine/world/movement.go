@@ -585,7 +585,7 @@ func (s *session) handleSetActiveMover(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	s.debug("active mover received", "account", s.accountName, "guid", guid, "expected", s.playerGUID)
 	return true
