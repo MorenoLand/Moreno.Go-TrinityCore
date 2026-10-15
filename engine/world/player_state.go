@@ -5201,10 +5201,10 @@ func (s *session) handleShowingCloak(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	show := true
-	if len(payload) > 0 {
-		show = payload[0] != 0
+	if len(payload) == 0 {
+		return true
 	}
+	show := payload[0] != 0
 	const playerFlagsHideCloak = 0x800
 	if show {
 		s.player.PlayerFlags &^= playerFlagsHideCloak
@@ -5221,10 +5221,10 @@ func (s *session) handleShowingHelm(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	show := true
-	if len(payload) > 0 {
-		show = payload[0] != 0
+	if len(payload) == 0 {
+		return true
 	}
+	show := payload[0] != 0
 	const playerFlagsHideHelm = 0x400
 	if show {
 		s.player.PlayerFlags &^= playerFlagsHideHelm

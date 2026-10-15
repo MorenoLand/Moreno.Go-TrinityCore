@@ -4595,7 +4595,10 @@ func (s *session) durabilityRepairCost(ctx context.Context, entry, lost uint32, 
 // handleRepairItem processes CMSG_REPAIR_ITEM (0x1F8 / 0x2A8).
 // Reference: WorldSession::HandleRepairItemOpcode (NPCHandler.cpp:717).
 func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
+	// NPCHandler.cpp:724 (HandleRepairItemOpcode): the packet carries
+	// npcGUID + itemGUID + guildBank (8+8+1); a short payload throws out of
+	// the read and the repair never runs — drop, never close.
+	if !s.playerLoaded || s.player == nil || len(payload) < 17 {
 		return true
 	}
 	r := protocol.NewReader(payload)
@@ -4704,10 +4707,13 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			`SELECT ii.guid, ii.itemEntry, ii.durability
 			 FROM character_inventory AS ci
 			 JOIN item_instance AS ii ON ii.guid = ci.item
+			 LEFT JOIN character_inventory AS cbag
+			   ON cbag.guid = ci.guid AND cbag.bag = 0 AND cbag.item = ci.bag
 			 WHERE ci.guid = ?
 			   AND ((ci.bag = 0 AND ci.slot < ?)
 			        OR ci.bag IN (SELECT item FROM character_inventory
-			                      WHERE guid = ? AND bag = 0 AND slot >= ? AND slot < ?))`,
+			                      WHERE guid = ? AND bag = 0 AND slot >= ? AND slot < ?))
+			 ORDER BY CASE WHEN ci.bag = 0 THEN 0 ELSE 1 END, COALESCE(cbag.slot, 0), ci.slot`,
 			s.playerGUID, invSlotItemEnd, s.playerGUID, invSlotBagStart, invSlotBagEnd)
 		if err == nil {
 			for rows.Next() {
@@ -4719,12 +4725,10 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			rows.Close()
 
 			var toRepair []repairItem
-			var totalCost uint32
 			for _, it := range rawItems {
 				maxD := getMaxDurability(it.entry)
 				if maxD > it.curD {
 					cost := s.durabilityRepairCost(ctx, it.entry, maxD-it.curD, discountMod)
-					totalCost += cost
 					toRepair = append(toRepair, repairItem{guid: it.guid, cost: cost, maxD: maxD})
 				}
 			}
@@ -4747,14 +4751,26 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 						_ = s.sendInventoryItems(ctx)
 						s.sendPlayerUpdate()
 					}
-				} else if s.player.Money >= totalCost {
-					s.player.Money -= totalCost
-					_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+				} else {
+					// Player::DurabilityRepairAll -> Player::DurabilityRepair
+					// (Player.cpp:5089-5096): each item is gated on the
+					// player's money INDEPENDENTLY — affordable items are
+					// repaired and deducted one by one in slot order; an
+					// unaffordable item stays damaged and the loop continues.
+					// NOT all-or-nothing.
+					repaired := false
 					for _, item := range toRepair {
-						_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", item.maxD, item.guid)
+						if s.player.Money >= item.cost {
+							s.player.Money -= item.cost
+							_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", item.maxD, item.guid)
+							repaired = true
+						}
 					}
-					_ = s.sendInventoryItems(ctx)
-					s.sendPlayerUpdate()
+					if repaired {
+						_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+						_ = s.sendInventoryItems(ctx)
+						s.sendPlayerUpdate()
+					}
 				}
 			}
 		}

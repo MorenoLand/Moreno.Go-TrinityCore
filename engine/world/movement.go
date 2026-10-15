@@ -1356,8 +1356,11 @@ func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool
 	if s.player.Health == 0 || (s.player.UnitFlags&unitFlagInCombat != 0) {
 		return true
 	}
+	// MovementHandler.cpp:620-621: the packet reads (summoner GUID + agree
+	// byte) happen before SummonIfPossible is entered — a truncated payload
+	// throws out of the read, so the pending summon is NOT cleared; the
+	// request stays pending and the player can answer again.
 	if len(payload) < 9 {
-		s.clearSummonPending()
 		return true
 	}
 	r := protocol.NewReader(payload)

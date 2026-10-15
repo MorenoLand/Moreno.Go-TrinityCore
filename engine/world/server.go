@@ -4812,7 +4812,7 @@ func (s *session) handleSetActionBarToggles(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	toggles, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	if s.player != nil {
 		s.player.ActionBars = uint32(toggles)

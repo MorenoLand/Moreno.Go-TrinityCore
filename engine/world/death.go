@@ -2105,17 +2105,19 @@ func (s *session) handleSelfRes(ctx context.Context) bool {
 	if spellID == 0 {
 		return true
 	}
+	// SpellHandler.cpp:607-611 (HandleSelfResOpcode): the cast goes first
+	// and PLAYER_SELF_RES_SPELL is cleared unconditionally after it — even
+	// when the spell id resolves to nothing (C++ CastSpell no-ops on an
+	// unknown id and the clear still runs).
+	if s.server.Data != nil {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{}, 0, 0, nil)
+		} else {
+			s.debug("self resurrect spell lookup failed", "account", s.accountName, "spell", spellID, "found", found, "error", err)
+		}
+	}
 	s.player.SelfResSpell = 0
 	s.sendPlayerUpdate()
-	if s.server.Data == nil {
-		return true
-	}
-	spell, found, err := s.server.Data.Spell(spellID)
-	if err != nil || !found {
-		s.debug("self resurrect spell lookup failed", "account", s.accountName, "spell", spellID, "found", found, "error", err)
-		return true
-	}
-	s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{}, 0, 0, nil)
 	return true
 }
 

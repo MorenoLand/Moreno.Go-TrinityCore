@@ -491,6 +491,10 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 		}
 	}
 
+	// Player::ResetTalents (Player.cpp:4019): the pet is dismissed before
+	// talents are unlearned (RemovePet(nullptr, PET_SAVE_NOT_IN_SLOT, true)).
+	s.unsummonPet(ctx, petSaveNotInSlot)
+
 	// Player::ResetTalents unlearns every known rank spell of every class
 	// talent via RemoveSpell (Player.cpp:4019-4053): the spell row is dropped
 	// (persisted by _SaveSpells) and its auras stripped, and the search arm
@@ -524,14 +528,20 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	if _, err := cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup); err != nil {
 		s.debug("talent reset persistence failed", "account", s.accountName, "error", err)
 	}
-	if cost > 0 {
-		s.player.Money -= cost
-		s.questMoneyChanged(ctx)
+	if !free {
+		if cost > 0 {
+			s.player.Money -= cost
+			s.questMoneyChanged(ctx)
+		}
 		s.player.ResetTalentsCost = cost
 		s.player.ResetTalentsTime = uint32(time.Now().Unix())
+		// Player::ResetTalents (Player.cpp:4061-4066): the gold-spent and
+		// talent-reset achievement criteria fire when the reset is not free,
+		// even when the charged cost is zero (NoResetTalentsCost config) —
+		// free resets (at-login, GM command) update neither.
 		s.updateAchievementCriteria(criteriaTypeGoldSpentForTalents, 0, cost)
+		s.updateAchievementCriteria(criteriaTypeTalentResets, 0, 1)
 	}
-	s.updateAchievementCriteria(criteriaTypeTalentResets, 0, 1)
 	if _, err := cdb.ExecContext(ctx, "UPDATE characters SET resettalents_cost = ?, resettalents_time = ?, money = ? WHERE guid = ?", s.player.ResetTalentsCost, s.player.ResetTalentsTime, s.player.Money, s.playerGUID); err != nil {
 		s.debug("talent reset cost persistence failed", "account", s.accountName, "error", err)
 	}
