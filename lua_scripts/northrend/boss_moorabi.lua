@@ -21,11 +21,13 @@
 -- Frenzy 55163, triggered); EVENT_TRANFORMATION (12s init): Talk
 -- (EMOTE_BEGIN_TRANSFORM 5) + Talk(SAY_TRANSFORM 3) +
 -- DoCastSelf(Transformation 55098) + DoCastSelf(Summon Phantom
--- Transform 55097, triggered) — single-fire, no reschedule: C++
--- SpellHit(55098) cancels EVENT_TRANFORMATION on the transformation
--- landing (event 15 never fires on the Lua surface — standing), so
--- one transform cast is the C++-exact observable behavior; the
--- _transformed flag is emulation-internal and has no other modeled
+-- Transform 55097, triggered) — single-fire: C++ re-arms 10s until
+-- SpellHit(55098) LANDS (sets _transformed, Talk(EMOTE_TRANSFORMED),
+-- cancels the event, :128-136) — no SpellHit bridge exists on the Lua
+-- surface, so a 10s re-arm would re-cast the transformation forever;
+-- the leg is modeled single-fire with the landing Talk(
+-- EMOTE_TRANSFORMED 6) emulated at cast time (see transformTick).
+-- The _transformed flag is emulation-internal and has no other modeled
 -- reader. KilledUnit Talk(SAY_SLAY 1) player-gated (event 3,
 -- victim:GetObjectType() == "Player" — nalorakk precedent);
 -- JustDied Talk(EMOTE_ACTIVATE_ALTAR 7) + Talk(SAY_DEATH 2)
@@ -105,15 +107,21 @@ end
 
 -- C++ EVENT_TRANFORMATION: 12s init, Talk(EMOTE_BEGIN_TRANSFORM) +
 -- Talk(SAY_TRANSFORM) + DoCastSelf(TRANSFORMATION) +
--- DoCastSelf(SUMMON_PHANTOM_TRANSFORM, triggered). Single-fire: the
--- C++ SpellHit(55098) leg cancels the event once the transformation
--- lands (see header), so no reschedule is the C++-exact behavior.
+-- DoCastSelf(SUMMON_PHANTOM_TRANSFORM, triggered); the C++
+-- Repeat(10s) (:171) runs until SpellHit(55098) LANDS, at which point
+-- SpellHit sets _transformed, fires Talk(EMOTE_TRANSFORMED), and
+-- cancels the event (:128-136) — no SpellHit bridge exists on the Lua
+-- surface, so a re-arm would re-cast the transformation forever; the
+-- leg stays single-fire with the landing Talk(EMOTE_TRANSFORMED)
+-- emulated at cast time and the header's old "no reschedule is
+-- C++-exact" claim corrected.
 local function transformTick(creature, guid)
     transformed[guid] = true
     creature:Talk(EMOTE_BEGIN_TRANSFORM)
     creature:Talk(SAY_TRANSFORM)
     creature:CastSpell(creature, SPELL_TRANSFORMATION)
     creature:CastSpell(creature, SPELL_SUMMON_PHANTOM_TRANSFORM, true)
+    creature:Talk(EMOTE_TRANSFORMED)
 end
 
 -- C++ EVENT_GROUND_TREMOR: DoCastAOE; 18s init, 10s repeat; 50%

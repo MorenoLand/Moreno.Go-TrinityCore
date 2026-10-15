@@ -231,7 +231,7 @@ end
 -- C++ :84-88 KilledUnit: if (who->GetTypeId() != TYPEID_PLAYER)
 -- return; Talk(SAY_SLAY) — the razuvious player-gated variant precedent.
 local function marwynKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end

@@ -40,6 +40,7 @@
 -- bookkeeping passthrough and
 -- instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_PULSING_SHOCKWAVE_AURA
 -- 59414) have no bridges).
+-- EVENT_ARC_LIGHTNING — PORTED (see UpdateAI note above).
 -- DamageTaken — the health-pct one-shot machine (event 9): C++
 -- DamageTaken arms Talk(SAY_75HEALTH 5 / SAY_50HEALTH 6 /
 -- SAY_25HEALTH 7) when HealthBelowPctDamaged(100 - 25 *
@@ -63,8 +64,11 @@
 -- bridge.
 -- EVENT_INTRO_DIALOGUE (Talk(SAY_INTRO_2 1) +
 -- events.SetPhase(PHASE_NORMAL)) — no timer-event bridge.
--- UpdateAI timer machine: EVENT_ARC_LIGHTNING (random-target
--- DoCast(SPELL_ARC_LIGHTNING 52921), 15-16s); EVENT_LIGHTNING_NOVA
+-- UpdateAI timer machine: EVENT_ARC_LIGHTNING — PORTED
+-- (SelectTarget(Random, 0) -> DoCast(SPELL_ARC_LIGHTNING 52921)
+-- non-triggered, 15s init / {15s,16s} re-arm, boss_loken.cpp:150-153
+-- / :109; the player-only pool documents the playerOnly=FALSE
+-- approximation, lavanthor precedent). EVENT_LIGHTNING_NOVA
 -- (Talk(SAY_NOVA 3) + Talk(EMOTE_NOVA 9) +
 -- DoCastAOE(SPELL_LIGHTNING_NOVA 52960) +
 -- RemoveAurasDueToSpell(SPELL_PULSING_SHOCKWAVE 52961) + reschedule
@@ -77,8 +81,7 @@
 -- exists) — EVENT_LIGHTNING_NOVA's
 -- RemoveAurasDueToSpell(SPELL_PULSING_SHOCKWAVE 52961) has no
 -- aura-removal bridge, EVENT_RESUME's ClearUnitState has no bridge,
--- and EVENT_ARC_LIGHTNING gates on SelectTarget(Random). Talk arms
--- 3 and 9 ride the unmodeled machine.
+-- Talk arms 3 and 9 ride the unmodeled machine.
 
 -- spell_loken_pulsing_shockwave (SpellScript OnEffectHitTarget
 -- CalculateDamage: damage *= distance2d when > 1.0f,
@@ -94,12 +97,81 @@ local SAY_75HEALTH = 5
 local SAY_50HEALTH = 6
 local SAY_25HEALTH = 7
 
+local SPELL_ARC_LIGHTNING = 52921
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- random alive player in the instance (anyAlivePlayer / vezax
+-- precedent); C++ SelectTarget(Random, 0) = dist 0 unlimited range,
+-- playerOnly default false — the player-only pool is the lavanthor
+-- documented approximation.
+local function randomPlayerTarget(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- forward declaration: lokenEnterCombat calls this before the local
+-- def below; a `local function` there would leave the call bound to
+-- a nil global (the postmaster_malown / festergut bomb class).
+local lokenResetMod
+
 -- C++ JustEngagedWith: BossAI bookkeeping + Talk(AGGRO) +
 -- SetPhase(PHASE_NORMAL) + three ScheduleEvent legs +
 -- DoStartTimedAchievement — only the Talk arm is bridgeable.
+-- C++ UpdateAI EVENT_ARC_LIGHTNING (boss_loken.cpp:150-153):
+-- SelectTarget(Random, 0) -> DoCast(SPELL_ARC_LIGHTNING 52921),
+-- 2-arg = non-triggered; init 15s (:109), unconditional re-arm
+-- {15s,16s} (:153).
+local function arcTick(creature, guid)
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_ARC_LIGHTNING)
+    end
+    schedule(guid, "arc", math.random(15000, 16000), function()
+        arcTick(creature, guid)
+    end)
+end
+
 local function lokenEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     lokenResetMod(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "arc", 15000, function()
+        arcTick(creature, guid)
+    end)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -137,7 +209,7 @@ local function lokenDamageTaken(event, creature, attacker, damage)
     end
 end
 
-local function lokenResetMod(guid)
+lokenResetMod = function(guid)
     lokenHealthMod[guid] = 1
 end
 
@@ -146,11 +218,12 @@ end
 -- only the Talk arm is bridgeable.
 local function lokenDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_LOKEN, 1, lokenEnterCombat)
-RegisterCreatureEvent(ENTRY_LOKEN, 2, function(e, c) lokenResetMod(c:GetGUID()) end)
+RegisterCreatureEvent(ENTRY_LOKEN, 2, function(e, c) lokenResetMod(c:GetGUID()) cancelTimers(c:GetGUID()) end)
 RegisterCreatureEvent(ENTRY_LOKEN, 3, lokenTargetDied)
 RegisterCreatureEvent(ENTRY_LOKEN, 4, lokenDied)
 RegisterCreatureEvent(ENTRY_LOKEN, 9, lokenDamageTaken)
-RegisterCreatureEvent(ENTRY_LOKEN, 23, function(e, c) lokenResetMod(c:GetGUID()) end)
+RegisterCreatureEvent(ENTRY_LOKEN, 23, function(e, c) lokenResetMod(c:GetGUID()) cancelTimers(c:GetGUID()) end)

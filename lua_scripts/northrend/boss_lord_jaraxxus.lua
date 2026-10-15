@@ -102,14 +102,11 @@
 -- Talk(EMOTE_LEGION_FLAME 2, target) + DoCast(Legion Flame 66197)
 -- non-triggered, 20s init, 30s repeat. The "same random-target bar"
 -- claim is retracted.
--- boss_jaraxxus EVENT_SUMMON_NETHER_PORTAL — Talk(EMOTE_NETHER_PORTAL
--- 3) + Talk(SAY_MISTRESS_OF_PAIN 4) + DoCast(Nether Portal 66269),
--- 20s init, 2min repeat — summon STRAND absent (no Lua-surface
--- consumer without summoning) — documented-only.
--- boss_jaraxxus EVENT_SUMMON_INFERNAL_ERUPTION — Talk(
--- EMOTE_INFERNAL_ERUPTION 7) + Talk(SAY_INFERNAL_ERUPTION 8) +
--- DoCast(Infernal Eruption 66258), 1min20s init, 2min repeat —
--- summon STRAND absent — documented-only.
+-- boss_jaraxxus EVENT_SUMMON_NETHER_PORTAL — PORTED
+-- (netherPortalTick; the summon STRAND stays out — no Lua-surface
+-- consumer without summoning — documented-only).
+-- boss_jaraxxus EVENT_SUMMON_INFERNAL_ERUPTION — PORTED (infernalTick;
+-- the volcano/infernal summon STRANDs stay out — documented-only).
 -- npc_legion_flame (34784): Reset — instance->GetBossState(
 -- DATA_JARAXXUS) != IN_PROGRESS -> DespawnOrUnsummon (instance model
 -- + no despawn bridge); else cross-AI jaraxxus->AI()->JustSummoned
@@ -181,10 +178,16 @@ local SPELL_FEL_LIGHTNING = 66528
 local SPELL_INCINERATE_FLESH = 66237
 local SPELL_LEGION_FLAME = 66197
 local SPELL_SPINNING_SPIKE = 66283
+local SPELL_NETHER_PORTAL = 66269
+local SPELL_INFERNAL_ERUPTION = 66258
 
 local EMOTE_INCINERATE = 5
 local SAY_INCINERATE = 6
 local EMOTE_LEGION_FLAME = 2
+local EMOTE_NETHER_PORTAL = 3
+local SAY_MISTRESS_OF_PAIN = 4
+local EMOTE_INFERNAL_ERUPTION = 7
+local SAY_INFERNAL_ERUPTION = 8
 
 local SPELL_SHIVAN_SLASH = 66378
 
@@ -296,6 +299,34 @@ local function legionFlameTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SUMMON_NETHER_PORTAL (boss_lord_jaraxxus.cpp:241-245):
+-- Talk(EMOTE_NETHER_PORTAL) + Talk(SAY_MISTRESS_OF_PAIN) + DoCast(
+-- SPELL_NETHER_PORTAL 66269), 20s init (:142), unconditional
+-- events.Repeat(2min) (:245); the summon STRAND stays out (no
+-- Lua-surface consumer without summoning — documented-only).
+local function netherPortalTick(creature, guid)
+    creature:Talk(EMOTE_NETHER_PORTAL)
+    creature:Talk(SAY_MISTRESS_OF_PAIN)
+    creature:CastSpell(creature, SPELL_NETHER_PORTAL)
+    schedule(guid, "netherportal", 120000, function()
+        netherPortalTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_SUMMON_INFERNAL_ERUPTION (:247-251): Talk(
+-- EMOTE_INFERNAL_ERUPTION) + Talk(SAY_INFERNAL_ERUPTION) + DoCast(
+-- SPELL_INFERNAL_ERUPTION 66258), 1min20s init (:143), unconditional
+-- events.Repeat(2min) (:251); the volcano/infernal summon STRANDs stay
+-- out — documented-only.
+local function infernalTick(creature, guid)
+    creature:Talk(EMOTE_INFERNAL_ERUPTION)
+    creature:Talk(SAY_INFERNAL_ERUPTION)
+    creature:CastSpell(creature, SPELL_INFERNAL_ERUPTION)
+    schedule(guid, "infernal", 120000, function()
+        infernalTick(creature, guid)
+    end)
+end
+
 local function jaraxxusEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -314,6 +345,12 @@ local function jaraxxusEnterCombat(event, creature, target)
     end)
     schedule(guid, "legionflame", 20000, function()
         legionFlameTick(creature, guid)
+    end)
+    schedule(guid, "netherportal", 20000, function()
+        netherPortalTick(creature, guid)
+    end)
+    schedule(guid, "infernal", 80000, function()
+        infernalTick(creature, guid)
     end)
     -- C++ EVENT_ENRAGE: Talk(SAY_BERSERK) + DoCastSelf(Berserk 64238, triggered),
     -- 10min, fires once (never rescheduled).

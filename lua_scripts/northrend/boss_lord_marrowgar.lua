@@ -179,7 +179,7 @@ end
 -- if (victim->GetTypeId() == TYPEID_PLAYER) Talk(SAY_KILL) — the
 -- razuvious player-gated variant precedent.
 local function marrowgarKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end

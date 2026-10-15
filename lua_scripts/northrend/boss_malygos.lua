@@ -47,7 +47,7 @@
 -- CheckRequiredBosses / EnterEvadeMode / SetBossState /
 -- DoStartTimedAchievement legs have no bridges —
 -- the tharon_ja BossAI-bookkeeping precedent). The berserk is a
--- non-triggered self-cast at engage (2-arg DoCast, UnitAI.cpp default
+-- non-triggered self-cast at engage (1-arg DoCast, UnitAI.cpp default
 -- target self) -- the aura carries the 10-min timer itself.
 -- KilledUnit — C++-GATED on who->GetTypeId() == TYPEID_PLAYER,
 -- then Talk(SAY_KILLED_PLAYER_P_ONE 3 / P_TWO 8 / P_THREE 15)

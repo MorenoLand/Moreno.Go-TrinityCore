@@ -59,7 +59,9 @@
 --   48260), 1-arg = non-triggered -> CastSpell(nil, 48260); init 7s,
 --   Repeat(7s).
 --   EVENT_IMPALE (arm :240-244): SelectTarget(SelectTargetMethod::Random,
---   0) — position 0, dist 0 = unlimited range, playerOnly default true —
+--   0) — position 0, dist 0 = unlimited range, playerOnly default
+--   FALSE (UnitAI.h:170) — the player-only pool is the lavanthor
+--   documented approximation —
 --   -> DoCast(target, SPELL_IMPALE 48261), 2-arg = non-triggered ->
 --   CastSpell(target, 48261); init 11s, Repeat(10s,15s).
 --   EVENT_WITHERING_ROAR (arm :245-248): DoCastSelf(SPELL_WITHERING_ROAR
@@ -89,7 +91,10 @@
 --   boss_ferocious_rhino (26686), ScheduleTasks :464-466, arms :473-485:
 --   EVENT_GORE DoCastVictim(SPELL_GORE 48130) -> CastSpell(nil, 48130),
 --   init 10s, Repeat(19s); EVENT_GRIEVOUS_WOUND SelectTarget(Random, 1)
---   — position 1, dist 0 = unlimited, playerOnly default true —
+--   — position 1, dist 0 = unlimited, playerOnly default FALSE
+--   (UnitAI.h:170) — the player-only pool is the lavanthor documented
+--   approximation; the offset-1 top-threat skip (UnitAI.h:172-174) has
+--   no threat-list bridge (ioc dagger-throw precedent) —
 --   DoCast(target, SPELL_GRIEVOUS_WOUND 48105), 2-arg = non-triggered
 --   -> CastSpell(target, 48105), init 12s, Repeat(18s); EVENT_STOMP
 --   DoCastSelf(SPELL_STOMP 48131) -> CastSpell(creature, 48131), init
@@ -213,37 +218,6 @@ local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ boss_palehoofAI::JustEngagedWith (:221-229): Talk(SAY_AGGRO) —
--- unconditional (the auriaya engage-port precedent; BossAI::JustEngagedWith
--- passthrough and the SendEncounterUnit leg have no bridges) — plus the
--- three event-schedule inits (:226-228) carried on event 1 on the xt002
--- precedent.
-local function palehoofEnterCombat(event, creature, target)
-    creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
-    schedule(guid, "arcingsmash", 7000, function()
-        arcingSmashTick(creature, guid)
-    end)
-    schedule(guid, "impale", 11000, function()
-        impaleTick(creature, guid)
-    end)
-    schedule(guid, "witheringroar", 12000, function()
-        witheringRoarTick(creature, guid)
-    end)
-end
-
--- C++ KilledUnit (:269-273): if (who->GetTypeId() == TYPEID_PLAYER)
--- Talk(SAY_SLAY) — the razuvious player-gated variant precedent; the
--- nil-guard is the hodir-port convention (Eluna event 3 always carries a
--- victim, so C++-exactness is unaffected).
-local function palehoofKilledUnit(event, creature, victim)
-    if victim == nil or victim:GetObjectType() ~= "Player" then
-        return
-    end
-    creature:Talk(SAY_SLAY)
-end
-
 -- C++ EVENT_ARCING_SMASH arm (:236-239): DoCastVictim(SPELL_ARCING_SMASH
 -- 48260), 1-arg = non-triggered; init 7s, Repeat(7s).
 local function arcingSmashTick(creature, guid)
@@ -274,6 +248,37 @@ local function witheringRoarTick(creature, guid)
     schedule(guid, "witheringroar", 11000, function()
         witheringRoarTick(creature, guid)
     end)
+end
+
+-- C++ boss_palehoofAI::JustEngagedWith (:221-229): Talk(SAY_AGGRO) —
+-- unconditional (the auriaya engage-port precedent; BossAI::JustEngagedWith
+-- passthrough and the SendEncounterUnit leg have no bridges) — plus the
+-- three event-schedule inits (:226-228) carried on event 1 on the xt002
+-- precedent.
+local function palehoofEnterCombat(event, creature, target)
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "arcingsmash", 7000, function()
+        arcingSmashTick(creature, guid)
+    end)
+    schedule(guid, "impale", 11000, function()
+        impaleTick(creature, guid)
+    end)
+    schedule(guid, "witheringroar", 12000, function()
+        witheringRoarTick(creature, guid)
+    end)
+end
+
+-- C++ KilledUnit (:269-273): if (who->GetTypeId() == TYPEID_PLAYER)
+-- Talk(SAY_SLAY) — the razuvious player-gated variant precedent; the
+-- nil-guard is the hodir-port convention (Eluna event 3 always carries a
+-- victim, so C++-exactness is unaffected).
+local function palehoofKilledUnit(event, creature, victim)
+    if victim == nil or victim:GetObjectType() ~= "Player" then
+        return
+    end
+    creature:Talk(SAY_SLAY)
 end
 
 -- C++ boss_ravenous_furbolgAI::ScheduleTasks (:377-379) — ungated;

@@ -38,10 +38,10 @@
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; BossAI::JustEngagedWith
 -- instance-bookkeeping leg has no bridge — tharon_ja precedent) +
 -- DoCast(me, SPELL_BATTLE_SHOUT 31403) as creature:CastSpell(creature,
--- SPELL_BATTLE_SHOUT) + schedules EVENT_WHIRLWIND (6s, 8s); the
--- EVENT_CHARGE_COMMANDER / EVENT_FRIGHTENING_SHOUT scheduling legs are
--- documented below, not wired; the RemoveAurasDueToSpell(SPELL_FROZEN_
--- PRISON 47543) leg has no aura-removal bridge — documented, not wired.
+-- SPELL_BATTLE_SHOUT) + schedules EVENT_CHARGE_COMMANDER ({3s,4s}) +
+-- EVENT_WHIRLWIND (6s, 8s); the EVENT_FRIGHTENING_SHOUT scheduling leg
+-- is PORTED below; the RemoveAurasDueToSpell(SPELL_FROZEN_PRISON 47543)
+-- leg has no aura-removal bridge — documented, not wired.
 -- EVENT_WHIRLWIND — DoCast(me, SPELL_WHIRLWIND 38618), 6s/8s init,
 -- 19500ms/25s repeat.
 -- EVENT_FRIGHTENING_SHOUT — DoCastAOE(SPELL_FRIGHTENING_SHOUT 19134)
@@ -58,10 +58,10 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith — RemoveAurasDueToSpell(SPELL_FROZEN_PRISON 47543)
 -- (no aura-removal bridge — boss_amanitar / boss_anub_arak precedent).
--- EVENT_CHARGE_COMMANDER — SelectTarget(Random, 0, 100.0f, true) ->
--- DoCast(SPELL_CHARGE 60067), 3s/4s init, 11s/15s repeat — no
--- random-target SelectTarget bridge (cairne/kazzak via anubrekhan
--- precedent).
+-- EVENT_CHARGE_COMMANDER — PORTED (see chargeTick; the "no
+-- random-target SelectTarget bridge" claim was stale — the C++
+-- playerOnly=TRUE pool is exactly what the Lua alive-player pool
+-- models, moragg palehoof precedent).
 
 local ENTRY_STOUTBEARD = 26796
 local ENTRY_KOLURG = 26798
@@ -73,6 +73,7 @@ local SAY_DEATH = 2
 local SPELL_BATTLE_SHOUT = 31403
 local SPELL_WHIRLWIND = 38618
 local SPELL_FRIGHTENING_SHOUT = 19134 -- boss_nexus_commanders.cpp:26
+local SPELL_CHARGE = 60067 -- boss_nexus_commanders.cpp:25
 
 local timers = {}
 
@@ -98,6 +99,39 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- random alive player within maxDist of the creature in the instance
+-- (moragg palehoof randomPlayerTarget precedent); C++
+-- SelectTarget(Random, 0, 100.0f, true): playerOnly TRUE — the only
+-- SelectTarget arm in this batch whose pool is C++-exact.
+local function randomPlayerTarget(creature, maxDist)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, maxDist) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_CHARGE_COMMANDER (boss_nexus_commanders.cpp:70-73):
+-- SelectTarget(Random, 0, 100.0f, true) -> DoCast(SPELL_CHARGE 60067),
+-- 2-arg = non-triggered; init {3s,4s} (:61), unconditional re-arm
+-- {11s,15s}.
+local function chargeTick(creature, guid)
+    local target = randomPlayerTarget(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_CHARGE)
+    end
+    schedule(guid, "charge", math.random(11000, 15000), function()
+        chargeTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_WHIRLWIND: DoCast(me, SPELL_WHIRLWIND 38618), 6s/8s init,
 -- 19500ms/25s repeat.
 local function whirlwindTick(creature, guid)
@@ -121,16 +155,18 @@ local function frighteningShoutTick(creature, guid)
 end
 
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) + DoCast(me, SPELL_BATTLE_SHOUT
--- 31403) + schedules EVENT_WHIRLWIND (6s, 8s) + EVENT_FRIGHTENING_SHOUT
--- (13s, 15s). The RemoveAurasDueToSpell (SPELL_FROZEN_PRISON 47543) leg
--- has no aura-removal bridge; the EVENT_CHARGE_COMMANDER scheduling leg
--- is unbridged (no random-target SelectTarget bridge) — documented,
--- not wired.
+-- 31403) + schedules EVENT_CHARGE_COMMANDER ({3s,4s}) + EVENT_WHIRLWIND
+-- (6s, 8s) + EVENT_FRIGHTENING_SHOUT (13s, 15s). The
+-- RemoveAurasDueToSpell (SPELL_FROZEN_PRISON 47543) leg has no
+-- aura-removal bridge — documented, not wired.
 local function commandersEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_BATTLE_SHOUT)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "charge", math.random(3000, 4000), function()
+        chargeTick(creature, guid)
+    end)
     schedule(guid, "whirlwind", math.random(6, 8) * 1000, function()
         whirlwindTick(creature, guid)
     end)

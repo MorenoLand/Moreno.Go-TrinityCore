@@ -56,11 +56,10 @@
 -- ACHIEV_GOOD_GRIEF_START_EVENT) — no achievement bridge.
 -- UpdateAI EVENT_PARTING_SORROW (random-target
 -- DoCast(SPELL_PARTING_SORROW 59723), 30s/40s re-arm, :108-111) —
--- no random-target bridge; EVENT_PILLAR_OF_WOE (random-target
--- DoCast(SPELL_PILLAR_OF_WOE 50761) else DoCastVictim, 5s/25s
--- re-arm, :123-128) — no random-target bridge; the
--- UNIT_STATE_CASTING gate and the DoMeleeAttackIfReady tail have no
--- bridges.
+-- no random-target bridge; EVENT_PILLAR_OF_WOE — PORTED
+-- (pillarTick — the "no random-target bridge" claim was stale, C++
+-- :123-128; the UNIT_STATE_CASTING gate and the DoMeleeAttackIfReady
+-- tail have no bridges.
 
 local ENTRY_MAIDEN_OF_GRIEF = 27975
 
@@ -71,6 +70,7 @@ local SAY_STUN = 3
 
 local SPELL_STORM_OF_GRIEF = 50752
 local SPELL_SHOCK_OF_SORROW = 50760
+local SPELL_PILLAR_OF_WOE = 50761
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the maiden / bjarngrim-lieutenant convention.
@@ -126,6 +126,43 @@ end
 -- seed the timer machine here: the C++ EventMap only ticks once
 -- UpdateAI runs with a victim, so engage-seeding is
 -- behavior-identical (the krystallus precedent).
+-- random alive player in the instance (anyAlivePlayer / vezax
+-- precedent); C++ SelectTarget(Random, 1, 0.0f, true) — the offset-1
+-- top-threat skip has no threat-list bridge (ioc dagger-throw
+-- precedent), so the tank stays in the pool; the else-leg DoCastVictim
+-- (:127) becomes the nil-target cast below.
+local function randomPlayerTarget(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ UpdateAI EVENT_PILLAR_OF_WOE (boss_maiden_of_grief.cpp:123-128):
+-- SelectTarget(Random, 1, 0.0f, true) -> DoCast(SPELL_PILLAR_OF_WOE
+-- 50761), else DoCastVictim(SPELL_PILLAR_OF_WOE) — both 2-arg =
+-- non-triggered; init {5s,15s} (:69), unconditional re-arm {5s,25s}
+-- (:128).
+local function pillarTick(creature, guid)
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_PILLAR_OF_WOE)
+    else
+        creature:CastSpell(nil, SPELL_PILLAR_OF_WOE)
+    end
+    schedule(guid, "pillar", math.random(5000, 25000), function()
+        pillarTick(creature, guid)
+    end)
+end
+
 local function maidenEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -135,6 +172,9 @@ local function maidenEnterCombat(event, creature, target)
     end)
     schedule(guid, "shock", {20000, 25000}, function()
         shockTick(creature, guid)
+    end)
+    schedule(guid, "pillar", math.random(5000, 15000), function()
+        pillarTick(creature, guid)
     end)
 end
 
