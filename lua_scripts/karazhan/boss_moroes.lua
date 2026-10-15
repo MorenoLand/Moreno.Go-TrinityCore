@@ -104,15 +104,19 @@ local function randomTargetInRange(creature, range)
     return candidates[math.random(#candidates)]
 end
 
--- Blind: SelectTarget(MinDistance, playerOnly) approximated as the nearest
--- alive player; C++ has no range cap and may pick a dead target, neither of
--- which has a sane Go mapping here.
+-- Blind: SelectTarget(MinDistance, 0, 0.0f, true, false) — the 5th arg
+-- withTank=false (UnitAI.h:170) excludes the tank; approximated as the
+-- nearest alive player that is not the current victim.
 local function nearestTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local best, bestDist = nil, nil
     for _, p in ipairs(playersInInstance(creature)) do
-        local dist = creature:GetDistance(p)
-        if bestDist == nil or dist < bestDist then
-            best, bestDist = p, dist
+        if p:GetGUID() ~= victimGuid then
+            local dist = creature:GetDistance(p)
+            if bestDist == nil or dist < bestDist then
+                best, bestDist = p, dist
+            end
         end
     end
     return best
@@ -278,6 +282,10 @@ local function dorotheaSwPain(creature, guid)
     if target then
         creature:CastSpell(target, SPELL_SWPAIN)
         schedule(guid, "swpain", 7000, function() dorotheaSwPain(creature, guid) end)
+    else
+        -- C++ leaves the expired timer armed, retrying next tick; a 1s
+        -- poll is the CreateLuaEvent analogue.
+        schedule(guid, "swpain", 1000, function() dorotheaSwPain(creature, guid) end)
     end
 end
 
@@ -291,11 +299,9 @@ end
 
 local function dorotheaReset(event, creature)
     guestReset(event, creature)
-    -- C++ Reset(): DoCast(me, SHADOWFORM, true) is Reset-only
-    -- (boss_moroes.cpp). Alive-gated.
-    if creature:IsAlive() then
-        creature:CastSpell(creature, SPELL_SHADOWFORM, true)
-    end
+    -- C++ Reset(): DoCast(me, SHADOWFORM, true) unconditionally
+    -- (boss_moroes.cpp).
+    creature:CastSpell(creature, SPELL_SHADOWFORM, true)
 end
 
 RegisterCreatureEvent(ENTRY_DOROTHEA, 1, dorotheaEnterCombat)

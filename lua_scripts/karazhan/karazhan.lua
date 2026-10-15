@@ -1,5 +1,6 @@
 -- Karazhan zone file — Lua port of
--- src/server/scripts/EasternKingdoms/Karazhan/karazhan.cpp
+-- src/server/scripts/EasternKingdoms/Karazhan/karazhan.cpp and
+-- src/server/scripts/EasternKingdoms/Karazhan/instance_karazhan.cpp
 -- (karazhan.h). Entries: npc_barnes 16812 (wowhead npc=16812/barnes),
 -- npc_image_of_medivh 17651 (wowhead cata npc=17651/image-of-medivh);
 -- the TDB creature_template ScriptName bindings are DB-side (no TDB in

@@ -16,7 +16,8 @@
 -- SPELL_SUMMON_ATTUMEN (29714) and SPELL_SUMMON_ATTUMEN_MOUNTED (29799)
 -- are visual-only casts and the Eluna events 19/22 (JustSummoned/
 -- IsSummonedBy) never fire — the SetGUID/_midnightGUID/_attumenGUID wiring,
--- the summon health-max merge, the DoZoneInCombat call, and the
+-- the summon health-max merge, the DoZoneInCombat call, the
+-- summon->AI()->Talk(SAY_APPEAR) greeting, and the
 -- summoner-entry phase assignments have no bridge. Approximation: the
 -- phase that C++ IsSummonedBy would set before combat (ATTUMEN_ENGAGES for
 -- 15550, MOUNTED for 16152) is set in OnEnterCombat keyed on entry, which
@@ -244,6 +245,13 @@ local function attumenEnterCombat(event, creature, target)
         -- phase and smoke are armed here on entry.
         state.phase = PHASE_MOUNTED
         creature:CastSpell(creature, SPELL_SPAWN_SMOKE)
+        -- C++ BossAI::JustEngagedWith unconditionally runs ScheduleTasks(),
+        -- so the mounted form keeps the shadowcleave / intangible-presence /
+        -- SAY_RANDOM arms; the charge + knockdown legs come from
+        -- IsSummonedBy(summoner 15550).
+        schedule(guid, "shadowcleave", {15000, 25000}, function() onShadowCleave(creature, guid) end)
+        schedule(guid, "intangible", {25000, 45000}, function() onIntangiblePresence(creature, guid) end)
+        schedule(guid, "randomsay", {30000, 60000}, function() onRandomSay(creature, guid) end)
         schedule(guid, "charge", {10000, 25000}, function() onCharge(creature, guid) end)
         schedule(guid, "knockdown", {25000, 35000}, function() onMountedKnockdown(creature, guid) end)
     else
@@ -305,6 +313,9 @@ local function attumenTargetDied(event, creature, victim)
 end
 
 local function attumenDied(event, creature, killer)
+    -- C++ JustDied -> _JustDied -> scheduler.CancelAll(): the timers must
+    -- not keep firing on the corpse.
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 

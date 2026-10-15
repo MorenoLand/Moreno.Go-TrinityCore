@@ -280,11 +280,28 @@ onNetherbreath = function(creature, guid)
     schedule(guid, "netherbreath", { 5000, 7000 }, function() onNetherbreath(creature, guid) end)
 end
 
+local function randomNonTankPlayerInRange(creature, maxDist)
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local candidates = {}
+    for _, p in ipairs(playersInInstance(creature)) do
+        if p:GetGUID() ~= victimGuid and creature:GetDistance(p) <= maxDist then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 local function onVoidZone(creature, guid)
     if netherState[guid] == nil then
         return
     end
-    local target = randomAlivePlayerInRange(creature, 45)
+    -- C++ SelectTarget(Random, 1, 45, true): offset 1 skips the first
+    -- MaxThreat-ordered entry, i.e. the tank (UnitAI.h:172-174).
+    local target = randomNonTankPlayerInRange(creature, 45)
     if target ~= nil then
         creature:CastSpell(target, SPELL_VOIDZONE, true)
     end

@@ -36,8 +36,9 @@
 -- unconditionally, the standing convention for these ports. The
 -- InfernalCleanupTimer (47s) is initialized in C++ Initialize but has no
 -- arm in UpdateAI — no Lua timer, C++-exact. Enfeeble's tank exclusion
--- uses GetVictim (no threat list); range gates (100 yd SelectTarget) are
--- skipped since the bridge exposes no player coordinates. The phase-3
+-- uses GetVictim (no threat list); Enfeeble itself is threat-list-based
+-- with no range cap, while Amplify Damage and phase-3 SW:Pain use the
+-- 100 yd SelectTarget cap (creature:GetDistance). The phase-3
 -- Shadow Nova clamp (re-arm to EnfeebleTimer+5s when >35s out) is modeled
 -- with os.time deadlines recorded at arm time. The phase-2 SWPain freeze
 -- (C++ neither fires nor decrements the timer in phase 2, preserving the
@@ -103,7 +104,7 @@ local function alivePlayers(creature)
     return out
 end
 
-local function randomAlivePlayer(creature, excludeVictim)
+local function randomAlivePlayer(creature, excludeVictim, maxDist)
     local victimGuid = nil
     if excludeVictim then
         local victim = creature:GetVictim()
@@ -112,7 +113,8 @@ local function randomAlivePlayer(creature, excludeVictim)
     local candidates = alivePlayers(creature)
     local out = {}
     for _, p in ipairs(candidates) do
-        if p:GetGUID() ~= victimGuid then
+        if p:GetGUID() ~= victimGuid
+                and (maxDist == nil or creature:GetDistance(p) <= maxDist) then
             out[#out + 1] = p
         end
     end
@@ -217,10 +219,10 @@ local function onSWPain(creature, guid)
         -- C++ DoCastVictim — the tank, nil falls back to current victim.
         creature:CastSpell(nil, SPELL_SW_PAIN)
     else
-        -- C++ SelectTarget(Random, 1, 100, true): random non-tank. C++
-        -- guards if (target) and skips the cast with no second target,
-        -- so a nil pick must NOT fall back to the victim (the tank).
-        local target = randomAlivePlayer(creature, true)
+        -- C++ SelectTarget(Random, 1, 100, true): random non-tank within
+        -- 100 yd. C++ guards if (target) and skips the cast with no second
+        -- target, so a nil pick must NOT fall back to the victim (the tank).
+        local target = randomAlivePlayer(creature, true, 100)
         if target then
             creature:CastSpell(target, SPELL_SW_PAIN)
         end
@@ -251,7 +253,8 @@ local function onAmplifyDamage(creature, guid)
     if st == nil or st.phase ~= PHASE_THREE then
         return
     end
-    local target = randomAlivePlayer(creature)
+    -- C++ SelectTarget(Random, 0, 100, true): tank included, 100 yd cap.
+    local target = randomAlivePlayer(creature, false, 100)
     if target ~= nil then
         creature:CastSpell(target, SPELL_AMPLIFY_DAMAGE)
     end
@@ -374,11 +377,14 @@ local function malchezaarDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    -- C++ UpdateAI checks HealthBelowPct on current health, not the damaged
-    -- variant; the integer floor form matches CalculatePct exactly.
-    if st.phase == PHASE_ONE and health < math.floor(maxHealth * 60 / 100) then
+    -- C++ UpdateAI checks HealthBelowPct on the post-damage health; the
+    -- event-9 hook is pre-damage, so project (health - damage) (zum_rah
+    -- precedent). HealthBelowPct(pct) is strict < trunc(max*pct/100)
+    -- (Unit.h:872-875); the integer floor form matches CalculatePct.
+    local postDamage = math.max(health - damage, 0)
+    if st.phase == PHASE_ONE and postDamage < math.floor(maxHealth * 60 / 100) then
         startPhaseTwo(creature, guid)
-    elseif st.phase == PHASE_TWO and health < math.floor(maxHealth * 30 / 100) then
+    elseif st.phase == PHASE_TWO and postDamage < math.floor(maxHealth * 30 / 100) then
         startPhaseThree(creature, guid)
     end
     return false, damage

@@ -149,7 +149,11 @@ local SPELL_WATERBOLT = 31012
 local SPELL_SCREAM = 31013
 
 local function dorotheeWaterbolt(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    -- C++ SelectTarget(Random, 0): playerOnly=false, no range cap — pets
+    -- and totems are eligible; the map-wide pool (no alive filter either,
+    -- matching SelectTarget's no-alive-check) is the faithful lowering.
+    local candidates = playersOnMap(creature)
+    local target = #candidates > 0 and candidates[math.random(#candidates)] or nil
     if target then
         creature:CastSpell(target, SPELL_WATERBOLT)
     end
@@ -276,7 +280,8 @@ local function strawmanLeaveCombat(event, creature)
 end
 
 local function strawmanTargetDied(event, creature, victim)
-    if victim and victim:GetObjectType() == "Player" then
+    -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
+    if victim ~= nil then
         creature:Talk(STRAWMAN_SAY_SLAY)
     end
 end
@@ -348,7 +353,8 @@ local function tinheadLeaveCombat(event, creature)
 end
 
 local function tinheadTargetDied(event, creature, victim)
-    if victim and victim:GetObjectType() == "Player" then
+    -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
+    if victim ~= nil then
         creature:Talk(TINHEAD_SAY_SLAY)
     end
 end
@@ -427,7 +433,8 @@ local function roarLeaveCombat(event, creature)
 end
 
 local function roarTargetDied(event, creature, victim)
-    if victim and victim:GetObjectType() == "Player" then
+    -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
+    if victim ~= nil then
         creature:Talk(ROAR_SAY_SLAY)
     end
 end
@@ -477,7 +484,8 @@ local function croneLeaveCombat(event, creature)
 end
 
 local function croneTargetDied(event, creature, victim)
-    if victim and victim:GetObjectType() == "Player" then
+    -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
+    if victim ~= nil then
         creature:Talk(CRONE_SAY_SLAY)
     end
 end
@@ -512,38 +520,50 @@ local SPELL_WIDE_SWIPE = 30761
 
 local wolfState = {}
 
-local function wolfFear(creature, guid)
+-- Forward declarations: wolfArmFear/wolfArmSwipe closures call these
+-- (postmaster_malown precedent — a plain local-def-after-use would bind
+-- a nil global).
+local wolfFear, wolfSwipe
+
+-- C++ freezes FearTimer/SwipeTimer with their remainders while the wolf
+-- chases (bosses_opera.cpp:952 "if (IsChasing) return;"). CreateLuaEvent
+-- has no pause, so the fire-times are banked in the state (os.time
+-- seconds, malchezaar clamp precedent) and the timers are cancelled at
+-- chase start, then re-armed with the remainders at chase end.
+local function wolfArmFear(creature, guid, delayMs)
     local st = wolfState[guid]
-    if st ~= nil and st.chasing then
-        schedule(guid, "fear", 1000, function()
-            wolfFear(creature, guid)
-        end)
-        return
+    if st ~= nil then
+        st.fearAt = os.time() + delayMs / 1000
     end
-    local victim = creature:GetVictim()
-    if victim then
-        creature:CastSpell(victim, SPELL_TERRIFYING_HOWL)
-    end
-    schedule(guid, "fear", math.random(25000, 35000), function()
+    schedule(guid, "fear", delayMs, function()
         wolfFear(creature, guid)
     end)
 end
 
-local function wolfSwipe(creature, guid)
+local function wolfArmSwipe(creature, guid, delayMs)
     local st = wolfState[guid]
-    if st ~= nil and st.chasing then
-        schedule(guid, "swipe", 1000, function()
-            wolfSwipe(creature, guid)
-        end)
-        return
+    if st ~= nil then
+        st.swipeAt = os.time() + delayMs / 1000
     end
+    schedule(guid, "swipe", delayMs, function()
+        wolfSwipe(creature, guid)
+    end)
+end
+
+wolfFear = function(creature, guid)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_TERRIFYING_HOWL)
+    end
+    wolfArmFear(creature, guid, math.random(25000, 35000))
+end
+
+wolfSwipe = function(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WIDE_SWIPE)
     end
-    schedule(guid, "swipe", math.random(25000, 30000), function()
-        wolfSwipe(creature, guid)
-    end)
+    wolfArmSwipe(creature, guid, math.random(25000, 30000))
 end
 
 local function wolfChase(creature, guid)
@@ -558,6 +578,11 @@ local function wolfChase(creature, guid)
             creature:Talk(WOLF_SAY_HOOD)
             creature:CastSpell(target, SPELL_LITTLE_RED_RIDING_HOOD, true)
             st.chasing = true
+            -- Freeze fear/swipe with remainders (C++-exact).
+            local now = os.time()
+            st.fearRemain = st.fearAt ~= nil and math.max(st.fearAt - now, 0) or 0
+            st.swipeRemain = st.swipeAt ~= nil and math.max(st.swipeAt - now, 0) or 0
+            cancelKeys(guid, { "fear", "swipe" })
         end
         -- C++ leaves ChaseTimer armed, so a null target retries on the
         -- next tick; only a successful chase starts the 20s chase timer.
@@ -566,6 +591,11 @@ local function wolfChase(creature, guid)
         end)
     else
         st.chasing = false
+        -- Restore the banked remainders; CreateLuaEvent floors at 1ms
+        -- (nightbane precedent).
+        wolfArmFear(creature, guid, math.max(st.fearRemain * 1000, 1))
+        wolfArmSwipe(creature, guid, math.max(st.swipeRemain * 1000, 1))
+        st.fearRemain, st.swipeRemain = nil, nil
         schedule(guid, "chase", 40000, function()
             wolfChase(creature, guid)
         end)
@@ -580,12 +610,8 @@ local function wolfEnterCombat(event, creature, target)
     schedule(guid, "chase", 30000, function()
         wolfChase(creature, guid)
     end)
-    schedule(guid, "fear", math.random(25000, 35000), function()
-        wolfFear(creature, guid)
-    end)
-    schedule(guid, "swipe", 5000, function()
-        wolfSwipe(creature, guid)
-    end)
+    wolfArmFear(creature, guid, math.random(25000, 35000))
+    wolfArmSwipe(creature, guid, 5000)
 end
 
 local function wolfLeaveCombat(event, creature)
@@ -595,7 +621,8 @@ local function wolfLeaveCombat(event, creature)
 end
 
 local function wolfTargetDied(event, creature, victim)
-    if victim and victim:GetObjectType() == "Player" then
+    -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
+    if victim ~= nil then
         creature:Talk(WOLF_SAY_SLAY)
     end
 end
@@ -624,9 +651,11 @@ RegisterCreatureEvent(ENTRY_WOLF, 23, wolfLeaveCombat)
 -- alive or dead — C++ SelectTarget(Random, 0) has no distance/alive
 -- filter, unlike blinding passion's (Random, 0, 100, true)) every 5-30s, eternal affection 30878 on self every 45-60s (C++
 -- casts it on Romulo half the time once he is up; he never spawns, so it
--- always lands on Julianne). Lethal damage in this phase is absorbed:
--- Talk(SAY_JULIANNE_DEATH01 = 2), a triggered drink-poison 30907 visual on
--- self, and 2.5s later she fakes death; 10s after that Romulo would be
+-- always lands on Julianne). Lethal damage in this phase is absorbed: the
+-- combat arms freeze at the lethal blow (C++ IsFakingDeath), DoCast(self,
+-- drink-poison 30907, 2-arg non-triggered) then SpellHit fires
+-- Talk(SAY_JULIANNE_DEATH01 = 2), and 2.5s later she fakes death; 10s
+-- after that Romulo would be
 -- summoned — no summon model, so the encounter stalls here unless a
 -- Romulo has entered combat by other means (the link is picked up then).
 -- Phase ROMULO: Romulo fights — backward lunge 30815 on a random alive
@@ -768,7 +797,8 @@ local function julianneLeaveCombat(event, creature)
 end
 
 local function julianneTargetDied(event, creature, victim)
-    if victim and victim:GetObjectType() == "Player" then
+    -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
+    if victim ~= nil then
         creature:Talk(JULIANNE_SAY_SLAY)
     end
 end
@@ -788,18 +818,26 @@ end
 -- fireCreatureDamageTaken).
 local function julianneDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    if raj.julianneFaking then
-        return false, 0
-    end
+    -- C++ DamageTaken checks damage < GetHealth() FIRST: non-lethal hits
+    -- pass through even while faking; only lethal blows take the branches.
     if damage < creature:GetHealth() then
         return false, damage
     end
     if raj.phase == PHASE_JULIANNE then
+        -- A lethal blow already drinking returns early with damage nulled
+        -- (C++: damage = 0 then the IsFakingDeath return).
+        if raj.julianneFaking then
+            return false, 0
+        end
         raj.julianneFaking = true
+        -- C++ sets IsFakingDeath immediately at the lethal blow, so the
+        -- combat arms freeze via UpdateAI's early return from that moment;
+        -- the 2.5s DrinkPoisonTimer only handles the PretendToDie visual
+        -- and the phase flip (bosses_opera.cpp:1140-1146, 1488+).
+        juliannePretendDie(creature, guid)
         creature:Talk(JULIANNE_SAY_DEATH01)
         creature:CastSpell(creature, SPELL_DRINK_POISON)
         schedule(guid, "drinkpoison", 2500, function()
-            juliannePretendDie(creature, guid)
             raj.phase = PHASE_ROMULO
             schedule(guid, "summonromulo", 10000, function()
                 -- No summon model: Romulo never spawns. If one has entered
@@ -968,7 +1006,8 @@ local function romuloLeaveCombat(event, creature)
 end
 
 local function romuloTargetDied(event, creature, victim)
-    if victim and victim:GetObjectType() == "Player" then
+    -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
+    if victim ~= nil then
         creature:Talk(ROMULO_SAY_SLAY)
     end
 end
@@ -986,13 +1025,15 @@ end
 -- C++ boss_romuloAI::DamageTaken, same event-9 second-return convention.
 local function romuloDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    if raj.romuloFaking then
-        return false, 0
-    end
+    -- C++ checks damage < GetHealth() first: non-lethal hits pass through
+    -- even while faking.
     if damage < creature:GetHealth() then
         return false, damage
     end
     if raj.phase == PHASE_ROMULO then
+        if raj.romuloFaking then
+            return false, 0
+        end
         creature:Talk(ROMULO_SAY_DEATH)
         raj.romuloFaking = true
         raj.romuloDead = true
