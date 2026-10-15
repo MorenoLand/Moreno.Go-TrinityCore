@@ -111,6 +111,11 @@
 -- controller's unbridged invocation cast (no bridge); the
 -- ACTION_REMOVE_INVOCATION health/aura reset rides the controller's
 -- cross-AI DoAction (no bridge).
+-- BloodPrincesBossAI::JustAppeared (:488) — instance DATA_INTRO gate
+-- (feign-death 71598 self-cast while the intro is not done) + SetHealth
+-- (_spawnHealth) has no instance bridge; NOT registered (the intro
+-- machine itself is unbridged — bronjahm npc_corrupted_soul_fragment
+-- precedent).
 -- BloodPrincesBossAI::DamageTaken (:494-501) — non-empowered damage
 -- nullification (damage = 0 unless _isEmpowered) is gated on the
 -- unbridged invocation machine — unmodeled (event 9 is read-only in

@@ -14,7 +14,7 @@
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
 -- (blackrock_spire.h:129-132).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
+-- 5 OnSpawn, 23 OnReset, 24 OnReachHome. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI combat
 -- event machine):
@@ -35,12 +35,10 @@
 -- DoCast(target, 16045, true). Nil-guard around the cast: C++ calls
 -- DoCast directly on the SelectTarget result (fizzles on null); the
 -- port guards instead of casting on nil.
--- Unmodeled (documented-only): JustAppeared's
--- DoCast(SPELL_ENCAGE_EMBERSEER 15282) is not wired here — OnSpawn (event
--- 5) is a live fire site but the JustAppeared class has its own scan
--- pending; JustReachedHome's self-cast 15282 is ported below on event 24
--- (this tick — the old "no evade bridge" note was stale), and
--- SetImmuneToAll(true) has no bridge. The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
+-- JustAppeared's DoCast(SPELL_ENCAGE_EMBERSEER 15282) is ported below on
+-- event 5 (OnSpawn; storm_cloud convention — Go fires 5 on the respawn
+-- path). JustReachedHome's self-cast 15282 is ported below on event 24,
+-- and SetImmuneToAll(true) has no bridge. The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
 -- NPC_BLACKHAND_INCARCERATOR 10316, 60.0f -> DoZoneInCombat each —
 -- "Had to do this because CallForHelp will ignore any npcs without
 -- LOS") has no creature-list / zone-in-combat bridges.
@@ -134,5 +132,13 @@ end
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 4, onCombatEnd)
+-- C++ npc_blackhand_incarceratorAI::JustAppeared: DoCast(SPELL_ENCAGE_EMBERSEER)
+-- is UnitAI::DoCast(me, 15282) — a self-cast, triggered=false, so
+-- creature:CastSpell(creature, 15282) on event 5 (storm_cloud convention).
+local function onSpawn(_, creature)
+    creature:CastSpell(creature, SPELL_ENCAGE_EMBERSEER)
+end
+
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 23, onCombatEnd)
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 24, onReachHome)
+RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 5, onSpawn)
