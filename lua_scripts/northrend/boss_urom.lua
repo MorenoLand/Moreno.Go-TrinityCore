@@ -51,9 +51,11 @@
 -- (no _platform / random-shuffle-group state bridge, no summon
 -- bridge (summon STRAND absent), no cast bridge).
 -- Reset — SetControlled(false, UNIT_STATE_ROOT) + SetDisableGravity
--- (false) + SetReactState(REACT_AGGRESSIVE) + DoCastSelf(
--- SPELL_EVOCATE 51602) + _Reset() — no react-state / gravity /
--- control / cast / instance bridges.
+-- (false) + SetReactState(REACT_AGGRESSIVE) — no react-state /
+-- gravity / control / instance bridges; the ungated DoCastSelf(
+-- SPELL_EVOCATE 51602) leg is ported on OnReset(23) (the Reset bullet's
+-- earlier "no cast bridge" line was stale — creature:CastSpell is
+-- established in-tree); _Reset() has no bridge.
 -- JustReachedHome — DoCastSelf(SPELL_EVOCATE 51602) — no cast
 -- bridge.
 -- EnterEvadeMode — gated on _platform > 2 (center only): _EnterEvade-
@@ -96,6 +98,8 @@ local ENTRY_UROM = 27655
 local SAY_PLAYER_KILL = 7
 local SAY_DEATH = 6
 
+local SPELL_EVOCATE = 51602
+
 -- C++ KilledUnit: Talk(SAY_PLAYER_KILL) only when who->GetTypeId()
 -- == TYPEID_PLAYER (nalorakk / kelthuzad player-gate variant).
 local function uromTargetDied(event, creature, victim)
@@ -112,5 +116,14 @@ local function uromDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ Reset (boss_urom.cpp:132-140): the root/gravity/react legs have
+-- no bridges, but the DoCastSelf(SPELL_EVOCATE) leg is ungated and
+-- port-pattern-ready — self-cast on the reset path (halion
+-- twilightHalionReset precedent).
+local function uromReset(event, creature)
+    creature:CastSpell(creature, SPELL_EVOCATE)
+end
+
 RegisterCreatureEvent(ENTRY_UROM, 3, uromTargetDied)
 RegisterCreatureEvent(ENTRY_UROM, 4, uromDied)
+RegisterCreatureEvent(ENTRY_UROM, 23, uromReset)

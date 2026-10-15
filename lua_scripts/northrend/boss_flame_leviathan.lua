@@ -70,7 +70,9 @@
 -- boss_flame_leviathan_seat (33114) — PassengerBoarded vehicle legs ->
 -- Talk(SAY_PLAYER_RIDING 10) — no vehicle / cross-AI Talk bridge.
 -- boss_flame_leviathan_defense_cannon — SPELL_NAPALM 63666 timer leg is
--- vehicle-gated random-target (CanAIAttack) — no vehicle/target bridges.
+-- vehicle-gated random-target (CanAIAttack) — no vehicle/target bridges;
+-- Reset DoCast(me, AURA_STEALTH_DETECTION 18950) rides the same
+-- unregistered-cannon stay-out.
 -- boss_flame_leviathan_defense_turret (33142, ulduar.h line 114) /
 -- boss_flame_leviathan_overload_device (33143, ulduar.h line 115) /
 -- boss_flame_leviathan_safety_container (33218) / npc_mechanolift (33214) /
