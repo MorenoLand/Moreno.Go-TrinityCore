@@ -40,7 +40,7 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ ctor /
 -- Reset() values (Weak=false, Materialize=false,
 -- Drained=false, ManaBurnTimer 5000+rand32()%3*1000 —
--- 5-8s; the WeakPercent = 25+rand32()%16 init belongs to the
+-- 5-7s (5000 + rand32()%3*1000); the WeakPercent = 25+rand32()%16 init belongs to the
 -- unmodeled quest arm, see deviations; the C++ Reset()
 -- entry-restore arm (UpdateEntry(18879) when drained) has no
 -- entry-update bridge — unmodeled) + 1s scheduler pump; the
@@ -51,7 +51,7 @@
 -- MATERIALIZE 34804) (C++-exact; in C++ it fires on the
 -- first UpdateAI regardless of combat state — the Lua pump
 -- is combat-only, so it fires at the first combat tick, see
--- deviations); mana-burn arm — 5-8s init then 8-18s: if a
+-- deviations); mana-burn arm — 5-7s init then 8-18s: if a
 -- threat target has mana: non-triggered DoCast(random mana
 -- target, SPELL_MANA_BURN 13321) (C++-exact — the C++ picks
 -- a random mana-holder from the threat list; the Lua model
@@ -162,14 +162,14 @@ local function combatTick(creature, guid)
         st.materialized = true
     end
 
-    -- Mana-burn arm — 5-8s init then 8-18s: cast on a random
+    -- Mana-burn arm — 5-7s init then 8-18s: cast on a random
     -- mana-holder, re-arm regardless (C++-exact); empty
     -- list: re-arm 3500 (C++-exact).
     if st.manaBurnTimer <= 1000 then
         local target = randomManaPlayer(creature)
         if target then
             creature:CastSpell(target, SPELL_MANA_BURN)
-            st.manaBurnTimer = 8000 + math.random(0, 9999)
+            st.manaBurnTimer = math.random(8000, 18000)
         else
             st.manaBurnTimer = 3500
         end

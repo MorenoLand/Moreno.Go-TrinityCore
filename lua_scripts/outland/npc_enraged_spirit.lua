@@ -42,10 +42,10 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ JustEngagedWith
 -- values (the C++ Reset() override is empty — the timer
 -- re-latch lands on OnEnterCombat, gargolmar precedent).
--- Earth spirit (21050): stormTimer 3000-7000 init (3s+0-4s)
+-- Earth spirit (21050): stormTimer 3000-4000 init (randtime 3s-4s)
 -- then 6000-9000: non-triggered DoCastVictim(SPELL_FIERY_
 -- BOULDER 38498) (C++-exact), re-arm 6-9s regardless.
--- Fire spirit (21061): stormTimer 2000-12000 init (2s+0-10s)
+-- Fire spirit (21061): stormTimer 2000-10000 init (randtime 2s-10s)
 -- then 6000-12000: non-triggered DoCastVictim(SPELL_FEL_
 -- FIREBALL 36247) (C++-exact), re-arm 6-12s regardless.
 -- Air spirit (21060): chainLightningTimer 10000 init:
@@ -187,12 +187,12 @@ local function onEnterCombat(_, creature)
         -- has no aura-state bridge — unmodeled (phase_hunter
         -- precedent; deviation in the header).
         st.stormSpell = SPELL_FEL_FIREBALL
-        st.stormTimer = 2000 + math.random(0, 10000)
+        st.stormTimer = math.random(2000, 10000)
         st.stormReArm = function() return 6000 + math.random(0, 6000) end
     elseif entry == ENTRY_ENRAGED_EARTH_SPIRIT then
         -- Same aura-gate deviation as fire (see above).
         st.stormSpell = SPELL_FIERY_BOULDER
-        st.stormTimer = 3000 + math.random(0, 4000)
+        st.stormTimer = math.random(3000, 4000)
         st.stormReArm = function() return 6000 + math.random(0, 3000) end
     elseif entry == ENTRY_ENRAGED_AIR_SPIRIT then
         st.chainLightningTimer = 10000

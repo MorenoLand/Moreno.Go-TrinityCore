@@ -42,12 +42,15 @@
 -- boss_grandmaster_vorpilAI::MoveInLineOfSight — the _intro
 -- one-shot Talk(SAY_INTRO 0) (line 159) — PORTED as
 -- vorpilMoveInLOS on event 27 (per-GUID _intro latch, latch
--- cleared on 2/4; C++ Reset() re-latch lands on leave-combat);
+-- cleared on 4 (death = respawn = fresh ctor state) only; C++
+-- Reset() calls Initialize() which re-latches _helpYell only —
+-- _intro is ctor-set and never re-armed on evade);
 -- returns nil so the default aggro engage proceeds, matching
 -- the C++ BossAI::MoveInLineOfSight(who) call at :155.
 -- DOCUMENTED-ONLY (in this header; only entry 18732 registered):
--- boss_grandmaster_vorpilAI::Reset — _Reset() + _intro/_helpYell
--- reset — no-instance bridge — documented-only.
+-- boss_grandmaster_vorpilAI::Reset — _Reset() + Initialize()
+-- (_helpYell only; _intro is ctor-set and survives evade) —
+-- no-instance bridge — documented-only.
 -- boss_grandmaster_vorpilAI::spawnVoidTraveler — SummonCreature
 -- (NPC_VOID_TRAVELER 19226, random VoidPortalCoords) + the one-shot
 -- _helpYell Talk(SAY_HELP 2) (line 123) — rides the
@@ -178,7 +181,6 @@ end
 local function vorpilLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    introSeen[guid] = nil
 end
 
 -- C++ boss_grandmaster_vorpilAI::KilledUnit:
