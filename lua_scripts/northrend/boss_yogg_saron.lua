@@ -50,6 +50,10 @@
 -- sara/brain DisappearAndDie, keeper EnterEvadeMode — and
 -- the player SPELL_SANITY / SPELL_INSANE aura removal have
 -- no bridges — the sjonnir JustDied-Talk precedent).
+-- Reset — DoCast(me, SPELL_SHADOWY_BARRIER_YOGG 63894) +
+-- DoCast(me, SPELL_KNOCK_AWAY 64022), both non-triggered and ungated
+-- (:936-937), ported on event 23 (the urom evocate-reset precedent);
+-- the _events phase/timer and loot-mode legs stay documented-only.
 -- DOCUMENTED-ONLY (in this header; no registrations beyond
 -- entries 33134 and 33288), except the Sara KilledUnit below —
 -- player-gated AND !IsInEvadeMode-gated Talk(SAY_SARA_KILL 5),
@@ -143,6 +147,9 @@ local SAY_SARA_AGGRO = 2
 local SAY_SARA_KILL = 5
 local SAY_YOGG_SARON_DEATH = 6
 
+local SPELL_SHADOWY_BARRIER_YOGG = 63894
+local SPELL_KNOCK_AWAY = 64022
+
 -- C++ JustEngagedWith (boss_saraAI, ScriptedAI):
 -- Talk(SAY_SARA_AGGRO) + three ScheduleEvent legs — only
 -- the Talk arm is bridgeable; the auriaya engage-port
@@ -169,9 +176,21 @@ local function yoggSaronDied(event, creature, killer)
     creature:Talk(SAY_YOGG_SARON_DEATH)
 end
 
+-- C++ boss_yogg_saronAI::Reset :931-945 — DoCast(me,
+-- SPELL_SHADOWY_BARRIER_YOGG) + DoCast(me, SPELL_KNOCK_AWAY), both
+-- non-triggered and ungated (the urom evocate-reset precedent); the
+-- _events Reset/SetPhase(PHASE_TWO)/ScheduleEvent(EVENT_YELL_BOW_DOWN)
+-- and ResetLootMode/loot-mode legs ride unbridged phase/timer/loot
+-- machines (the gothik phase-gating precedent).
+local function yoggSaronReset(event, creature)
+    creature:CastSpell(creature, SPELL_SHADOWY_BARRIER_YOGG)
+    creature:CastSpell(creature, SPELL_KNOCK_AWAY)
+end
+
 RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
 RegisterCreatureEvent(ENTRY_SARA, 3, saraKilledUnit)
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 4, yoggSaronDied)
+RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
 
 -- Timer-driven cast arms (the maiden CreateLuaEvent convention —
 -- GUID-keyed timers table, cancel on events 2/4/23;

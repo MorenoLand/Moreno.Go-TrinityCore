@@ -122,6 +122,10 @@
 -- boss_palehoof JustDied (:250-256) — DoPlaySoundToSet(PALEHOOF_SOUND_
 -- DEATH 13467) with no Talk + instance/SendEncounterUnit legs — no
 -- sound / instance bridges; joins the no-sound / documented-only queue.
+-- PalehoofMinionsBossAI Reset (:329-335) — DoCastSelf(SPELL_FREEZE
+-- 16245, true) is triggered — triggered casts stay out (the emerald
+-- MARK_OF_NATURE_AURA precedent); the unfreeze/DoZoneInCombat legs
+-- ride the unbridged DoAction machine (see DEVIATION above).
 -- The orb / awaken-spell / sphere DoAction machine (see DEVIATION
 -- above), spell_palehoof_crazed / spell_palehoof_crazed_effect /
 -- spell_palehoof_awaken_subboss / spell_palehoof_awaken_gortok

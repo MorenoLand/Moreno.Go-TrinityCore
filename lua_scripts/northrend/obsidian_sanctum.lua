@@ -100,7 +100,9 @@
 -- instance bridges; no bridgeable arms (no Talk arms).
 -- npc_acolyte_of_vesperon (NPC_ACOLYTE_OF_VESPERON 31219) —
 -- same verdict: Reset / JustDied / UpdateAI melee legs all
--- aura / cast / instance-gated — no bridgeable arms.
+-- aura / cast / instance-gated — no bridgeable arms (the Reset
+-- DoCast(me, SPELL_TWILIGHT_TORMENT_VESP_ACO 58853) :725 is
+-- non-triggered but rides the unregistered-creature stay-out).
 -- npc_twilight_eggs (NPC_TWILIGHT_EGG 30882 /
 -- NPC_SARTHARION_TWILIGHT_EGG 31204) — Reset (aura +
 -- ScheduleEvent EVENT_TWILIGHT_EGGS 20s), SpawnWhelps (whelp
