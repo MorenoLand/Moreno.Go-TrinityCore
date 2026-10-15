@@ -141,27 +141,6 @@ func (s *Server) consumeVendorStockForGUID(vendorGUID uint64, item, slot, extend
 	return stock.Current, true
 }
 
-func (s *Server) restoreVendorStock(vendor, item uint32, amount uint32) {
-	s.restoreVendorStockForGUID(uint64(vendor), item, 0, 0, amount)
-}
-
-func (s *Server) restoreVendorStockFor(vendor, item, slot, extendedCost, amount uint32) {
-	s.restoreVendorStockForGUID(uint64(vendor), item, slot, extendedCost, amount)
-}
-
-func (s *Server) restoreVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost, amount uint32) {
-	s.vendorMu.Lock()
-	// Go-only rollback path (C++ has no equivalent: the decrement runs only
-	// after successful item creation, Player.cpp:21875-21877, so a failed
-	// buy never touches the counter or the clock). Restore the count but
-	// leave Updated alone — the restock clock keeps running from the
-	// purchase boundary.
-	if stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item}]; stock != nil {
-		stock.Current += int32(amount)
-	}
-	s.vendorMu.Unlock()
-}
-
 func (s *session) handleListInventory(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -552,6 +531,18 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, itemEntry, buyErrCantFindItem), true)
 		return true
 	}
+	// Player.cpp:21922-21943: the AllowableClass/Bonding gate and the
+	// Flags2 faction gate run BEFORE the interact check — a class-locked
+	// item answers BUY_ERR_CANT_FIND_ITEM with a null guid here, not a
+	// money or stock error from the later arms.
+	if early, ok := s.vendorTemplateMap(ctx, []int64{int64(itemEntry)})[int64(itemEntry)]; ok {
+		if accessResult, allowed := s.vendorItemAccess(uint32(early.allowableClass), uint32(early.bonding), uint32(early.flagsExtra)); !allowed {
+			if accessResult >= 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, itemEntry, uint8(accessResult)), true)
+			}
+			return true
+		}
+	}
 	if !s.canInteractWithNPC(ctx, uint64(vendorGUID), uint64(unitNPCFlagVendor)) {
 		// Player.cpp:21945-21952: the interact-fail arm passes nullptr —
 		// SMSG_BUY_FAILED carries guid 0, not the vendor's.
@@ -589,28 +580,32 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		return true
 	}
 	maxCount, incrTime, extCost := row.maxCount, row.incrTime, row.extCost
-	buyPrice, buyCount, flagsExtra, allowableClass, bonding := tmpl.buyPrice, tmpl.buyCount, tmpl.flagsExtra, tmpl.allowableClass, tmpl.bonding
+	buyPrice, buyCount, flagsExtra := tmpl.buyPrice, tmpl.buyCount, tmpl.flagsExtra
 	requiredReputationFaction, requiredReputationRank := tmpl.reqRepFaction, tmpl.reqRepRank
 	if buyCount <= 0 {
 		buyCount = 1
+	}
+	// Player.cpp:22041-22049: a count whose BuyPrice product would pass
+	// MAX_MONEY_AMOUNT is clamped (cheat log) and the reduced buy completes —
+	// never a silent abort.
+	goldRequired := extCost == 0 || flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) != 0
+	if goldRequired && buyPrice > 0 {
+		if moneyCap := maxMoneyAmount / uint32(buyPrice); count > moneyCap {
+			s.debug("vendor buy count clamped to MAX_MONEY_AMOUNT", "account", s.accountName, "item", itemEntry, "count", count)
+			if moneyCap == 0 {
+				return true
+			}
+			count = uint32(uint8(moneyCap))
+		}
 	}
 	amount := uint64(count) * uint64(buyCount)
 	if amount > uint64(^uint32(0)) {
 		return true
 	}
-	accessResult, allowed := s.vendorItemAccess(uint32(allowableClass), uint32(bonding), uint32(flagsExtra))
-	if !allowed {
-		if accessResult >= 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, uint8(accessResult)), true)
-		}
-		return true
-	}
 	// Player.cpp:22063-22085: price = pProto->BuyPrice * count; then
 	// price = uint32(floor(price * GetReputationPriceDiscount(creature))) — the discount is floored
 	// on the TOTAL, not the unit price, so multi-count buys can differ by whole coppers from the
-	// floored-unit form. IsGoldRequired gates the whole block; the MAX_MONEY_AMOUNT cheat clamp on
-	// count is deliberately not replicated (Go drops the overflowing buy silently).
-	goldRequired := extCost == 0 || flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) != 0
+	// floored-unit form. IsGoldRequired gates the whole block.
 	var totalCost uint32
 	if goldRequired && buyPrice > 0 {
 		if uint64(buyPrice) > uint64(^uint32(0))/uint64(count) {
@@ -618,7 +613,9 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		}
 		totalCost = uint32(math.Floor(float64(float32(uint32(buyPrice)*count) * s.vendorReputationPriceDiscount(ctx, vendorEntry))))
 	}
-	remainingStock := int32(-1)
+	// Player.cpp:21983-21995: the stock pre-check is feasibility only — the
+	// counter itself moves after the item exists (Player.cpp:21873-21877),
+	// so a failed buy never touches the count or the restock clock.
 	if maxCount > 0 {
 		current := s.server.currentVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
 		if current < int32(amount) {
@@ -647,56 +644,110 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrNotEnoughMoney), true)
 		return true
 	}
-	// Player.cpp:22085-22095: buying into an equipment slot requires a single item —
-	// the EQUIP_ERR_ITEM_CANT_BE_EQUIPPED gate runs after the money check. Placement
-	// into the requested bag/slot itself is unmodeled (the item auto-stores), so the
-	// EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT arm is unreachable after the bagslot sanity
-	// check in handleBuyItemInSlot.
-	if bag == 0 && bagSlot < uint8(equipSlotEnd) && uint64(buyCount)*uint64(count) != 1 {
-		s.sendEquipError(equipErrItemCantBeEquipped, 0)
-		return true
-	}
-	if maxCount > 0 {
-		var ok bool
-		remainingStock, ok = s.server.consumeVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount))
-		if !ok {
-			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrItemAlreadySold), true)
+	// Player.cpp:22063-22081: the destination arms — no position (or an
+	// inventory position) stores, an equipment position equips, anything
+	// else answers EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT. Placement of the
+	// stored item into the requested bag/slot stays unmodeled (it
+	// auto-stores); only the arm selection is bridged.
+	store := true
+	var equipSlot uint8
+	switch {
+	case bag == vendorNullBag && bagSlot == vendorNullSlot, isVendorInventoryPos(bag, bagSlot):
+		store = true
+	case isVendorEquipmentPos(bag, bagSlot):
+		// Player.cpp:22069-22073: buying into an equipment slot requires a
+		// single item.
+		if uint64(buyCount)*uint64(count) != 1 {
+			s.sendEquipError(equipErrItemCantBeEquipped, 0)
 			return true
 		}
-	}
-	res, err := s.storeOrStackItem(ctx, s.playerGUID, itemEntry, uint32(amount))
-	if err != nil {
-		if maxCount > 0 {
-			s.server.restoreVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount))
-		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantCarryMore), true)
+		store = false
+		equipSlot = bagSlot
+	default:
+		s.sendEquipError(equipErrItemDoesntGoToSlot, 0)
 		return true
 	}
-	if extendedCost.ID != 0 {
-		if err := s.destroyVendorExtendedCostItems(ctx, extendedCost, count); err != nil {
-			s.rollbackVendorStoredItem(ctx, res, uint32(amount))
-			if maxCount > 0 {
-				s.server.restoreVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount))
-			}
-			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
+	// Player::_StoreOrEquipNewItem (Player.cpp:21842-21849): the
+	// CanStoreNewItem/CanEquipNewItem feasibility check runs BEFORE any
+	// payment — a full inventory answers the equip error with no charge.
+	if store {
+		if errCode := s.canStoreVendorItem(ctx, itemEntry, uint32(amount)); errCode != equipErrOk {
+			s.sendEquipError(errCode, 0)
 			return true
 		}
+	} else if errCode := s.canEquipVendorItem(ctx, itemEntry, equipSlot); errCode != equipErrOk {
+		s.sendEquipError(errCode, 0)
+		return true
 	}
+	// Player.cpp:21853-21871: payment runs BEFORE the item is created — a
+	// store failure keeps the payment; there is no rollback arm.
 	s.player.Money -= totalCost
 	s.questMoneyChanged(ctx)
 	if extendedCost.ID != 0 {
 		s.player.TotalHonorPoints -= extendedCost.HonorPoints * count
 		s.player.ArenaPoints -= extendedCost.ArenaPoints * count
 	}
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ?, arenaPoints = ?, totalHonorPoints = ? WHERE guid = ?", s.player.Money, s.player.ArenaPoints, s.player.TotalHonorPoints, s.playerGUID)
+	}
+	if extendedCost.ID != 0 {
+		if err := s.destroyVendorExtendedCostItems(ctx, extendedCost, count); err != nil {
+			// C++ destroys the turnins with no error arm and no rollback —
+			// the payment above is kept and the client gets no packet.
+			s.debug("vendor extended-cost destroy failed after payment", "account", s.accountName, "item", itemEntry, "err", err)
+			_ = s.sendInventoryItems(ctx)
+			s.sendPlayerUpdate()
+			return true
+		}
+	}
+	var itemGUID uint64
+	var clientBag uint8
+	var pushSlot uint32
+	var inventoryCount uint32
+	var pushStacked bool
+	if store {
+		res, err := s.storeOrStackItem(ctx, s.playerGUID, itemEntry, uint32(amount))
+		if err != nil || res == nil {
+			// Player.cpp:21869-21877: the item is created after payment; a
+			// null item skips the stock decrement and both packets while
+			// _StoreOrEquipNewItem still returns true — payment kept.
+			s.debug("vendor item store failed after payment", "account", s.accountName, "item", itemEntry, "err", err)
+			_ = s.sendInventoryItems(ctx)
+			s.sendPlayerUpdate()
+			return true
+		}
+		itemGUID, clientBag, inventoryCount, pushStacked = res.ItemGUID, res.ClientBag, res.InventoryCount, res.IsStack
+		pushSlot = uint32(res.Slot)
+		if res.IsStack {
+			pushSlot = 0xFFFFFFFF
+		}
+	} else {
+		guid, ok := s.equipVendorItem(ctx, itemEntry, equipSlot)
+		if !ok {
+			s.debug("vendor item equip failed after payment", "account", s.accountName, "item", itemEntry, "slot", equipSlot)
+			_ = s.sendInventoryItems(ctx)
+			s.sendPlayerUpdate()
+			return true
+		}
+		itemGUID, clientBag, pushSlot, inventoryCount = guid, vendorNullBag, uint32(equipSlot), 1
+	}
+	// Player.cpp:21873-21877: UpdateVendorItemCurrentCount runs only inside
+	// if (it) — after the item exists.
+	remainingStock := int32(-1)
+	if maxCount > 0 {
+		remainingStock, _ = s.server.consumeVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount))
+	}
+	if !store {
+		// Player.cpp:21887: the equip arm runs AutoUnequipOffhandIfNeed.
+		s.autoUnequipOffhandIfNeeded(ctx)
+	}
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		// Player.cpp:21888-21896 — the refundable arm has no amount gate: any
 		// ExtendedCost + ITEM_FLAG_ITEM_PURCHASE_RECORD + maxstack-1 buy flags the
 		// created item refundable (the template/stackable gates live inside
 		// recordVendorRefund).
 		if extendedCost.ID != 0 {
-			s.recordVendorRefund(ctx, cdb, res.ItemGUID, itemEntry, totalCost, uint32(extCost))
+			s.recordVendorRefund(ctx, cdb, itemGUID, itemEntry, totalCost, uint32(extCost))
 		}
 	}
 	newCount := vendorPacketStock(remainingStock)
@@ -708,15 +759,153 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	// writes; the slot is 0xFFFFFFFF when the items stacked onto an
 	// existing pile (item->GetCount() != count arm), matching the loot
 	// path's slotForPush convention.
-	slotForPush := uint32(res.Slot)
-	if res.IsStack {
-		slotForPush = 0xFFFFFFFF
-	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, res.ClientBag, slotForPush, itemEntry, uint32(amount), res.InventoryCount, res.IsStack), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, clientBag, pushSlot, itemEntry, uint32(amount), inventoryCount, pushStacked), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
-	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "extended_cost", extCost, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
+	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "extended_cost", extCost, "equip", !store)
 	return true
+}
+
+// isVendorInventoryPos mirrors Player::IsInventoryPos (Player.cpp:10141)
+// for the buy-destination arms: (NULL_BAG, NULL_SLOT), backpack slots
+// 23..38, bag contents 19..22, keyring/currency 86..117. Go's
+// vendorBuyBagSlot maps the player GUID to bag 0 where C++ uses
+// INVENTORY_SLOT_BAG_0 (255), so the 255-bag arms shift to bag 0.
+func isVendorInventoryPos(bag, bagSlot uint8) bool {
+	if bag == vendorNullBag && bagSlot == vendorNullSlot {
+		return true
+	}
+	if bag == 0 && (bagSlot == vendorNullSlot || (bagSlot >= invSlotItemStart && bagSlot < invSlotItemEnd)) {
+		return true
+	}
+	if bag >= invSlotBagStart && bag < invSlotBagEnd {
+		return true
+	}
+	if bag == 0 && bagSlot >= invSlotKeyringStart && bagSlot < invSlotKeyringEnd {
+		return true
+	}
+	return false
+}
+
+// isVendorEquipmentPos mirrors Player::IsEquipmentPos (Player.cpp:10154)
+// for the buy-destination arms: (bag 255, slot < 19) and the bag slots
+// (255, 19..22). Go bag 0 is the player-GUID resolution of C++ bag 255.
+func isVendorEquipmentPos(bag, bagSlot uint8) bool {
+	return bag == 0 && bagSlot < invSlotBagEnd
+}
+
+// canStoreVendorItem mirrors the feasibility half of
+// Player::CanStoreNewItem as _StoreOrEquipNewItem uses it
+// (Player.cpp:21843-21849): partial-pile merge space first, then free
+// slots for the new stacks — a pure check that mutates nothing.
+func (s *session) canStoreVendorItem(ctx context.Context, itemEntry, amount uint32) uint8 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return equipErrInventoryFull
+	}
+	maxStack := uint32(1)
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var stackable int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1) FROM item_template WHERE entry = ?", itemEntry).Scan(&stackable); err == nil && stackable > 1 {
+			maxStack = uint32(stackable)
+		}
+	}
+	remaining := amount
+	if _, _, _, _, pileCount, pileMax, ok := s.findStackableInventorySlot(ctx, s.playerGUID, itemEntry); ok && pileCount < pileMax {
+		if space := pileMax - pileCount; space >= remaining {
+			return equipErrOk
+		} else {
+			remaining -= space
+		}
+	}
+	var newStacks uint32
+	for r := remaining; r > 0; {
+		take := maxStack
+		if take > r {
+			take = r
+		}
+		newStacks++
+		r -= take
+	}
+	if uint32(len(s.collectFreeInventorySlots(ctx, s.playerGUID, newStacks))) < newStacks {
+		return equipErrInventoryFull
+	}
+	return equipErrOk
+}
+
+// canEquipVendorItem mirrors the feasibility half of
+// Player::CanEquipNewItem(slot, dest, item, swap=false) as
+// _StoreOrEquipNewItem uses it (Player.cpp:21843-21849, 11445-11457,
+// 11515): the requested equipment slot must accept the item's
+// InventoryType, and with swap=false an occupied slot fails with
+// EQUIP_ERR_NO_EQUIPMENT_SLOT_AVAILABLE instead of swapping. Deeper
+// CanEquipItem checks (level, skill, unique-equipped) have no Go model
+// and are not replicated here.
+func (s *session) canEquipVendorItem(ctx context.Context, itemEntry uint32, equipSlot uint8) uint8 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return equipErrItemCantBeEquipped
+	}
+	var invType int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(InventoryType, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&invType); err != nil {
+		return equipErrItemCantBeEquipped
+	}
+	if !s.isSlotValidForItem(uint8(invType), equipSlot) {
+		return equipErrItemCantBeEquipped
+	}
+	var existing int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, equipSlot).Scan(&existing); err == nil && existing != 0 {
+		return equipErrNoEquipmentSlotAvailable
+	}
+	return equipErrOk
+}
+
+// equipVendorItem mirrors Player::EquipNewItem (Player.cpp:12299-12310)
+// for the bStore=false arm of _StoreOrEquipNewItem: a single fresh item
+// (the equipment arm requires BuyCount*count == 1) created directly at
+// the equipment slot. Feasibility must be checked first via
+// canEquipVendorItem.
+func (s *session) equipVendorItem(ctx context.Context, itemEntry uint32, equipSlot uint8) (uint64, bool) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0, false
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	var maxDurability int64 = 100
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&maxDurability); err != nil || maxDurability <= 0 {
+		maxDurability = 100
+	}
+	// Item::Create (Item.cpp:291) seeds ITEM_FIELD_DURATION from the
+	// template at once, like the store path.
+	newItemDuration := s.server.itemTemplateDuration(ctx, itemEntry)
+	var baseGUID int64
+	if reserved, ok := s.server.generateItemGUIDRange(1); ok {
+		baseGUID = int64(reserved)
+	} else {
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM item_instance").Scan(&baseGUID)
+	}
+	if baseGUID < 0 {
+		baseGUID = 0
+	}
+	newGUID := uint64(baseGUID) + 1
+	if _, err := cdb.ExecContext(ctx, `INSERT INTO item_instance
+		(guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
+		VALUES (?, ?, ?, 0, 1, ?, '', 0, '', 0, ?, 0, '')`,
+		newGUID, itemEntry, s.playerGUID, newItemDuration, maxDurability); err != nil {
+		return 0, false
+	}
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, equipSlot, newGUID); err != nil {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", newGUID)
+		return 0, false
+	}
+	// Player::EquipNewItem: obtain spells, the duration time-update,
+	// RECEIVE_EPIC_ITEM criteria and the quest check.
+	s.applyItemObtainSpells(ctx, itemEntry, newGUID, true)
+	if newItemDuration > 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(newGUID|(uint64(0x4000)<<48), uint32(newItemDuration)), true)
+	}
+	s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, itemEntry, 1)
+	s.adjustQuestItemCount(ctx, itemEntry, 1, true)
+	s.syncEquipmentCache(ctx)
+	return newGUID, true
 }
 
 func (s *session) recordVendorRefund(ctx context.Context, cdb *sql.DB, itemGUID uint64, itemEntry, paidMoney, extendedCost uint32) {
@@ -974,30 +1163,6 @@ func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql
 	return nil
 }
 
-func (s *session) rollbackVendorStoredItem(ctx context.Context, result *inventoryStoreResult, count uint32) {
-	if result == nil || count == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
-	}
-	cdb := s.server.CharactersStore.DB
-	var itemEntry int64
-	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", result.ItemGUID).Scan(&itemEntry)
-	// Undo a partial merge into a pre-existing pile first (C++ never placed
-	// anything on the failed path — CanStoreNewItem is feasibility-only).
-	if result.StackFillGUID != 0 && result.StackFillAmount > 0 {
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ? AND count >= ?", result.StackFillAmount, result.StackFillGUID, result.StackFillAmount)
-	}
-	if !result.IsStack {
-		// Delete every new stack the grant created.
-		for _, g := range append([]uint64{result.ItemGUID}, result.ExtraItemGUIDs...) {
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, g)
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", g)
-		}
-	}
-	if itemEntry > 0 {
-		s.adjustQuestItemCount(ctx, uint32(itemEntry), count, false)
-	}
-}
-
 func (s *session) maxPersonalArenaRating(ctx context.Context, minSlot uint32) uint32 {
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return 0
@@ -1225,6 +1390,12 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		if now := gameTimeMS(); now > s.loginGameTimeMS {
 			sessionPlayedSec = (now - s.loginGameTimeMS) / 1000
 		}
+	}
+	// Player::RemoveItemFromBuyBackSlot (Player.cpp:13586-13588): the freed
+	// slot becomes the current buyback slot whenever the current slot is
+	// still occupied — this runs on every add, not just on evictions.
+	if s.currentBuybackSlot < 12 && s.buyback[s.currentBuybackSlot] != nil {
+		s.currentBuybackSlot = uint8(slot)
 	}
 	s.buyback[slot] = &buybackSlot{
 		ItemGUID:  fullBBGUID,

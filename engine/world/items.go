@@ -1845,6 +1845,7 @@ const (
 	// C++ EQUIP_ERR_CANT_EQUIP_SKILL (ItemDefines.h:28); the pre-existing
 	equipErrCantEquipSkill                    = 2
 	equipErrItemDoesntGoToSlot                = 3  // C++ EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT (ItemDefines.h:29); was 2 by a stale mislabel, which sent the CANT_EQUIP_SKILL client text on every slot error.
+	equipErrNoEquipmentSlotAvailable          = 9  // C++ EQUIP_ERR_NO_EQUIPMENT_SLOT_AVAILABLE (ItemDefines.h:35): CanEquipItem with swap=false on an occupied slot.
 	equipErrNoRequiredProficiency             = 8  // C++ EQUIP_ERR_NO_REQUIRED_PROFICIENCY (ItemDefines.h:34)
 	equipErrYouCanNeverUseThatItem            = 10 // C++ EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM (ItemDefines.h:36)
 	equipErrDontOwnThatItem                   = 32 // C++ EQUIP_ERR_DONT_OWN_THAT_ITEM (ItemDefines.h:58)
