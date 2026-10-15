@@ -127,7 +127,9 @@ end
 
 -- C++ ScheduleTasks VOID_SHIFT: SelectTarget(Random, 0, 60.0f, true)
 -- -> DoCast(target, 54361), 2-arg = non-triggered; init 9s / Repeat
--- 15s — re-armed unconditionally.
+-- 15s — re-armed unconditionally; threat-list-vs-player-pool caveat
+-- (the_beast/opera-Julianne precedent): C++ picks from the threat
+-- list, the Lua pool is map-wide players.
 local function voidShiftTick(creature, guid)
     local target = randomPlayer(creature, 60)
     if target then

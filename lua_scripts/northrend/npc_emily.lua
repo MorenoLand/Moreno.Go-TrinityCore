@@ -12,9 +12,10 @@
 -- (NPC_EMILY). The creature_template ScriptName binding is DB-side
 -- (no TDB in this workspace).
 -- Eluna creature events: 1 OnEnterCombat. The C++ overrides no
--- KilledUnit / JustDied (no events 3/4); no SpellHit / DoAction /
--- gossip arms (no events 14/27/31); no OnReset work worth wiring
--- (GUID clears only).
+-- KilledUnit / JustDied (no events 3/4); no SpellHit arm (event 14,
+-- runtime.go:195-214), no MoveInLOS (event 27) or QuestAccept (event
+-- 31) arm for emily; DoAction has no Eluna event at all — no bridge;
+-- no OnReset work worth wiring (GUID clears only).
 -- Fight shape (C++-exact for all modeled arms):
 -- OnEnterCombat(1): Talk(SAY_RANDOMAGGRO 4, no target — C++ calls
 -- Talk(4) with no who) — the event-1 auriaya precedent. The AI
@@ -48,10 +49,18 @@
 -- SPELL_KILL_CREDIT 48813 — no-SpellHit bridge (fizzule precedent).
 -- npc_venture_co_straggler (Smoke 'Em Out 12323/12324): Talk(SAY_SEO)
 -- rides EVENT_STRAGGLER_2 timer + MovePoint chain + DisappearAndDie;
--- SpellHit SPELL_SMOKE_BOMB 49075 -> pacify + event chain; EVENT_CHOP
--- DoCastVictim SPELL_CHOP 43410 — the whole straggler chain is a
--- scripted timer/MovePoint/SpellHit sequence with no bridge for the
--- sequence machine (no-SpellHit / no-movement bridges).
+-- SpellHit SPELL_SMOKE_BOMB 49075 -> pacify + event chain — the
+-- SpellHit/MovePoint sequence genuinely stays out (no-SpellHit /
+-- no-movement bridges). EVENT_CHOP (DoCastVictim SPELL_CHOP 43410,
+-- 2-arg non-triggered, JustEngagedWith init (3s,6s), unconditional
+-- Repeat(10s,12s), zone_grizzly_hills.cpp:572-574/:610-616) is
+-- SEPARABLE from the SpellHit chain (scheduled in JustEngagedWith
+-- independently, not gated on the SpellHit flip) and would bridge in
+-- isolation — but the straggler carries NO entry constant anywhere in
+-- the C++ tree (DB ScriptName binding only, unverifiable), so no
+-- entry-verifiable registration can be wired (laughing-skull
+-- precedent) — full spec documented here for the day the entry is
+-- confirmed; not ported.
 -- npc_lake_frog: Talk SAY_MAIDEN_0 / SAY_MAIDEN_1 ride
 -- EVENT_LAKEFROG_2/5 timers (SetEntry 33220 maiden transform,
 -- SPELL_MAIDEN_OF_ASHWOOD_LAKE_TRANSFORM 62550, gossip-flag

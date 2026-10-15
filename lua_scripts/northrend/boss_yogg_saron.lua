@@ -101,8 +101,16 @@
 -- Yogg-Saron SpellHit — Val'anyr loot-mode leg (no Talk) —
 -- no SpellHit bridge.
 -- Voice of Yogg-Saron (33280, ulduar.h line 203) —
--- JustEngagedWith has no Talk arm; JustDied has no Talk
--- arm (summons.Despawn + _JustDied() only); EnterEvadeMode
+-- PORTED: JustEngagedWith DoCast(me, SPELL_SANITY_PERIODIC 63786)
+-- (2-arg self, non-triggered, ungated, :525) + the 15s
+-- EVENT_LOCK_DOOR DoCast(me, SPELL_INSANE_PERIODIC 64554)
+-- one-shot (:556-557, no phase arg on the schedule) — both ride
+-- event 1 with the SetInCombatWith keeper / DoCastAOE(
+-- SPELL_SUMMON_GUARDIAN_2, spellvalue) / EVENT_EXTINGUISH_ALL_LIFE /
+-- EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON schedule legs left
+-- documented-only (no instance / summon / spellvalue bridges —
+-- the assembly_of_iron keeper-combat precedent); JustDied has no
+-- Talk arm (summons.Despawn + _JustDied() only); EnterEvadeMode
 -- Talk(WHISPER_VOICE_PHASE_1_WIPE, player) rides a
 -- player-loop wipe leg (RemoveAurasDueToSpell SPELL_SANITY
 -- / SPELL_INSANE) gated on PHASE_ONE — no wipe / aura /
@@ -111,29 +119,39 @@
 -- EVENT_EXTINGUISH_ALL_LIFE; EMOTE_YOGG_SARON_MADNESS +
 -- SAY_YOGG_SARON_MADNESS on EVENT_ILLUSION) ride the
 -- unbridgeable voice event machine (the mimiron
--- cross-creature precedent) — no registration.
--- Brain of Yogg-Saron (33890, ulduar.h line 218) —
+-- cross-creature precedent).
+-- Brain of Yogg-Saron (33890, ulduar.h line 218) — Reset
+-- DoCast(me, SPELL_MATCH_HEALTH 64066) PORTED below (event 23);
 -- DamageTaken has no Talk arm (aura/flag/DoAction legs
 -- only); DoAction ACTION_INDUCE_MADNESS /
--- ACTION_TENTACLE_KILLED have no Talk arms — no
--- registration.
+-- ACTION_TENTACLE_KILLED have no Talk arms.
 -- npc_observation_ring_keeper — Talk(SAY_KEEPER_CHOSEN_1/2,
 -- player) gated on OnGossipSelect menuId 10333 — no
--- gossip-select bridge; no registration (observation-ring
+-- gossip-select bridge; Reset one-shots PORTED below (event
+-- 23); (observation-ring
 -- keeper entries 33213 / 33241 / 33242 / 33244 entry-verifiable,
 -- ulduar.h lines 199-202).
 -- npc_yogg_saron_keeper (33410 / 33411 / 33412 / 33413,
--- ulduar.h lines 205-208) — no Talk arms — no registration.
+-- ulduar.h lines 205-208) — no Talk arms — Reset + JustEnteredCombat
+-- one-shots PORTED below (events 23 / 1).
 -- npc_yogg_saron_illusions / npc_garona /
 -- npc_turned_champion / npc_laughing_skull — roleplay
 -- Talks (SAY_CHAMBER_ROLEPLAY_1-5 / SAY_ICECROWN_ROLEPLAY_1-6 /
 -- SAY_STORMWIND_ROLEPLAY_1-7) fire from IsSummonedBy /
 -- the illusion UpdateAI timer machine on instance
--- DATA_ILLUSION — no bridges; no registrations.
+-- DATA_ILLUSION — no bridges; no registrations. (Turned
+-- champion's Reset DoCast(SPELL_VERTEX_COLOR_BLACK 39662)
+-- one-shot is PORTED below — event 23 — not roleplay-gated.)
 -- Tentacle / cloud / guardian creatures (33136 / 33292 /
 -- 33943 / 33966 / 33983 / 33985 / 33988 / 34072, ulduar.h
 -- lines 198 / 204 / 219 / 221 / 222 / 223 / 224 / 226) —
--- no bridgeable Talk arms — no registrations.
+-- guardian (33136) / corruptor (33985) / crusher (33966) /
+-- immortal (33988) timer + Reset arms registered below;
+-- constrictor (33983) Reset one-shots DoCast(me,
+-- SPELL_TENTACLE_VOID_ZONE_2 64384) + DoCastAOE(SPELL_ERUPT
+-- 64144), influence (33943) Reset entry-conditional DoCast(me,
+-- 64013/64010), ominous cloud (33292) Reset DoCast(me,
+-- SPELL_OMINOUS_CLOUD_VISUAL 63084) PORTED below (event 23).
 -- The Talk arms inside SpellScripts / AuraScripts —
 -- Talk(EMOTE_OMINOUS_CLOUD_PLAYER_TOUCH) in
 -- spell_yogg_saron_boil_ominously (HandleDummy);
@@ -209,7 +227,12 @@ RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
 -- target-selector legs on no-bridge SpellScripts), every voice-of-Yogg-Saron
 -- timer arm (instance-GUID/phase legs), every Yogg-Saron body timer arm
 -- (PHASE_TWO/PHASE_THREE-gated), the keeper arms (DoAction/phase-gated) —
--- stay documented-only in the header above (the gothik precedent).
+-- stay documented-only in the header above (the gothik precedent);
+-- voice EVENT_LOCK_DOOR + JustEngagedWith one-shots, constrictor /
+-- influence / ominous-cloud / brain / turned-champion / observation-ring
+-- and yogg-keeper Reset one-shots, and keeper JustEnteredCombat
+-- entry-gated one-shots are ungated (no phase args, no DoAction /
+-- phase-machine legs) and ride event 1/23 below.
 local ENTRY_GUARDIAN_OF_YOGG_SARON = 33136
 local ENTRY_CORRUPTOR_TENTACLE = 33985
 local ENTRY_CRUSHER_TENTACLE = 33966
@@ -295,7 +318,10 @@ end
 -- 64157, SPELL_APATHY 64156, SPELL_DRAINING_POISON 64152))
 -- (non-triggered), 1ms init, 3s repeat — scheduled in Reset with no phase
 -- arg; SelectTarget(Random) carries no C++ range so any alive player on
--- the same map+instance is eligible (:1264, :1284-1288 verified). The
+-- the same map+instance is eligible (:1264, :1284-1288 verified);
+-- threat-list-vs-player-pool caveat (the_beast/opera-Julianne
+-- precedent): C++ picks from the threat list, the pool is map-wide
+-- players. The
 -- Reset-time DoCast(me, SPELL_TENTACLE_VOID_ZONE) + DoCastAOE(SPELL_ERUPT)
 -- legs are ported on event 23 (corruptorReset).
 local function corruptorTick(creature, guid)
@@ -434,3 +460,256 @@ RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 1, immortalEnterCombat)
 RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 23, immortalReset)
+
+-- ===== Slice-E ungated one-shot ports (2026-10-15) =====
+-- All arms below are ungated in C++: no phase args on their
+-- schedules, no DoAction/MovementInform/phase-machine legs, no
+-- instance legs — the stale "no-timer bridge" / "no random-target
+-- bridge" / DoCastAOE doctrines retracted under the
+-- CreateLuaEvent / DoCastAOE≡self-cast conventions (the gothik
+-- phase-gating precedent).
+
+local ENTRY_VOICE_OF_YOGG_SARON = 33280
+local ENTRY_CONSTRICTOR_TENTACLE = 33983
+local ENTRY_INFLUENCE_TENTACLE = 33943
+local ENTRY_SUIT_OF_ARMOR = 33433
+local ENTRY_OMINOUS_CLOUD = 33292
+local ENTRY_BRAIN_OF_YOGG_SARON = 33890
+local ENTRY_TURNED_CHAMPION = 33962
+local ENTRY_OBSERVATION_RING_KEEPER_HODIR = 33213
+local ENTRY_OBSERVATION_RING_KEEPER_FREYA = 33241
+local ENTRY_OBSERVATION_RING_KEEPER_THORIM = 33242
+local ENTRY_OBSERVATION_RING_KEEPER_MIMIRON = 33244
+local ENTRY_KEEPER_FREYA = 33410
+local ENTRY_KEEPER_HODIR = 33411
+local ENTRY_KEEPER_MIMIRON = 33412
+local ENTRY_KEEPER_THORIM = 33413
+
+local SPELL_SANITY_PERIODIC = 63786
+local SPELL_INSANE_PERIODIC = 64554
+local SPELL_TENTACLE_VOID_ZONE_2 = 64384
+local SPELL_NONDESCRIPT_1 = 64013
+local SPELL_NONDESCRIPT_2 = 64010
+local SPELL_OMINOUS_CLOUD_VISUAL = 63084
+local SPELL_MATCH_HEALTH = 64066
+local SPELL_VERTEX_COLOR_BLACK = 39662
+local SPELL_SIMPLE_TELEPORT_KEEPERS = 12980
+local SPELL_KEEPER_ACTIVE = 62647
+local SPELL_RESILIENCE_OF_NATURE = 62670
+local SPELL_SANITY_WELL_SUMMON = 64170
+local SPELL_FORTITUDE_OF_FROST = 62650
+local SPELL_HODIRS_PROTECTIVE_GAZE = 64174
+local SPELL_FURY_OF_THE_STORM = 62702
+local SPELL_SPEED_OF_INVENTION = 62671
+
+-- C++ boss_voice_of_yogg_saronAI::JustEngagedWith (:518-529):
+-- DoCast(me, SPELL_SANITY_PERIODIC 63786) (2-arg self, non-triggered,
+-- ungated, :525) + events.ScheduleEvent(EVENT_LOCK_DOOR, 15s) (no
+-- phase arg, :525). The SetInCombatWith keeper machine (:518-519),
+-- the DoCastAOE(SPELL_SUMMON_GUARDIAN_2, spellvalue) leg, and the
+-- EVENT_EXTINGUISH_ALL_LIFE / EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON
+-- schedules ride unbridged instance/summon/phase machines
+-- (assembly_of_iron / gothik precedents) — documented-only.
+local function voiceEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ JustEngagedWith: DoCast(me, SPELL_SANITY_PERIODIC)
+    -- (boss_yogg_saron.cpp:525). Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SANITY_PERIODIC)
+    end
+    -- C++ EVENT_LOCK_DOOR: one-shot 15s -> DoCast(me,
+    -- SPELL_INSANE_PERIODIC) (:556-557); the companion
+    -- instance->SetBossState(BOSS_YOGG_SARON, IN_PROGRESS) leg has no
+    -- instance bridge — cast only.
+    schedule(guid, "lockdoor", 15000, function()
+        if creature:IsAlive() then
+            creature:CastSpell(creature, SPELL_INSANE_PERIODIC)
+        end
+    end)
+end
+
+-- C++ npc_constrictor_tentacleAI::Reset (:1317-1320): non-triggered
+-- one-shots DoCast(me, SPELL_TENTACLE_VOID_ZONE_2 64384) +
+-- DoCastAOE(SPELL_ERUPT 64144) — self-cast form per the
+-- DoCastAOE≡self-cast convention (boss_ai.go lowering). Event 23
+-- (the halion/corruptor/crusher Reset precedent). The JustSummoned
+-- LUNGE leg (triggered, voice-side :663) stays out.
+local function constrictorReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ Reset: DoCast(me, TENTACLE_VOID_ZONE_2); DoCastAOE(ERUPT)
+    -- (boss_yogg_saron.cpp:1318-1319). Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_TENTACLE_VOID_ZONE_2)
+        creature:CastSpell(creature, SPELL_ERUPT)
+    end
+end
+
+-- C++ npc_influence_tentacleAI::Reset (:1419-1423): DoCast(me,
+-- me->GetEntry() == NPC_SUIT_OF_ARMOR (33433, ulduar.h:209) ?
+-- SPELL_NONDESCRIPT_1 64013 : SPELL_NONDESCRIPT_2 64010) (2-arg,
+-- non-triggered, ungated) — event 23; both entries registered (the
+-- conditional proves the script serves both; bindings are DB-side).
+-- JustDied DoAction(ACTION_TENTACLE_KILLED) stays out.
+local function influenceReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ Reset: DoCast(me, GetEntry()==NPC_SUIT_OF_ARMOR ?
+    -- NONDESCRIPT_1 : NONDESCRIPT_2) (boss_yogg_saron.cpp:1422).
+    -- Alive-gated.
+    if creature:IsAlive() then
+        if creature:GetEntry() == ENTRY_SUIT_OF_ARMOR then
+            creature:CastSpell(creature, SPELL_NONDESCRIPT_1)
+        else
+            creature:CastSpell(creature, SPELL_NONDESCRIPT_2)
+        end
+    end
+end
+
+-- C++ npc_ominous_cloudAI::Reset (:1158-1162): DoCast(me,
+-- SPELL_OMINOUS_CLOUD_VISUAL 63084) (2-arg, non-triggered, ungated)
+-- — event 23. The DoAction MoveCirclePath leg stays out.
+local function ominousCloudReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ Reset: DoCast(me, OMINOUS_CLOUD_VISUAL)
+    -- (boss_yogg_saron.cpp:1160). Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_OMINOUS_CLOUD_VISUAL)
+    end
+end
+
+-- C++ boss_brain_of_yogg_saronAI::Reset (:1061-1066): DoCast(me,
+-- SPELL_MATCH_HEALTH 64066) (2-arg, non-triggered, ungated) —
+-- event 23. The RemoveFlag/SetImmuneToPC/_summons.DespawnAll legs
+-- and DamageTaken legs (:1070-1080, triggered casts + DoAction
+-- machine) stay out.
+local function brainReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ Reset: DoCast(me, MATCH_HEALTH)
+    -- (boss_yogg_saron.cpp:1065). Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_MATCH_HEALTH)
+    end
+end
+
+-- C++ npc_turned_championAI::Reset (:1908-1912): DoCast(
+-- SPELL_VERTEX_COLOR_BLACK 39662) (1-arg self, non-triggered,
+-- ungated) — event 23. MovementInform emote + DoAction(
+-- ACTION_START_ROLEPLAY) stay out.
+local function turnedChampionReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ Reset: DoCast(VERTEX_COLOR_BLACK)
+    -- (boss_yogg_saron.cpp:1911). Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_VERTEX_COLOR_BLACK)
+    end
+end
+
+-- C++ npc_observation_ring_keeperAI::Reset (:1543-1548): DoCast(
+-- SPELL_SIMPLE_TELEPORT_KEEPERS 12980) + DoCast(
+-- SPELL_KEEPER_ACTIVE 62647) (1-arg self, non-triggered, ungated)
+-- — event 23 for all four entries (33213/33241/33242/33244,
+-- ulduar.h:199-202). OnGossipSelect summon + Talk legs stay out.
+local function observationKeeperReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ Reset: DoCast(SIMPLE_TELEPORT_KEEPERS);
+    -- DoCast(KEEPER_ACTIVE) (boss_yogg_saron.cpp:1546-1547).
+    -- Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SIMPLE_TELEPORT_KEEPERS)
+        creature:CastSpell(creature, SPELL_KEEPER_ACTIVE)
+    end
+end
+
+-- C++ npc_yogg_saron_keeperAI::Reset (:1605-1612): DoCast(
+-- SPELL_KEEPER_ACTIVE 62647) (1-arg self, non-triggered, ungated)
+-- — event 23. The _events Reset/SetPhase, SetReactState,
+-- RemoveAllAuras legs and the Freya sanity-well GetCreatureList
+-- cleanup ride unbridged machines.
+local function yoggKeeperReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ Reset: DoCast(KEEPER_ACTIVE)
+    -- (boss_yogg_saron.cpp:1610). Alive-gated.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_KEEPER_ACTIVE)
+    end
+end
+
+-- C++ npc_yogg_saron_keeperAI::JustEnteredCombat (:1614-1639):
+-- entry-gated 1-arg non-triggered one-shots: Freya (33410)
+-- SPELL_RESILIENCE_OF_NATURE 62670 + SPELL_SANITY_WELL_SUMMON 64170;
+-- Hodir (33411) SPELL_FORTITUDE_OF_FROST 62650 +
+-- SPELL_HODIRS_PROTECTIVE_GAZE 64174; Thorim (33413)
+-- SPELL_FURY_OF_THE_STORM 62702; Mimiron (33412)
+-- SPELL_SPEED_OF_INVENTION 62671 — the auriaya engage-port
+-- precedent. The voice-driven SetInCombatWith combat-entry leg
+-- (:518-519) has no bridge — documented deviation (assembly_of_iron
+-- precedent); keeper IsSummonedBy SIMPLE_TELEPORT_KEEPERS (:1600)
+-- stays out.
+local function keeperEnterCombat(event, creature, target)
+    -- C++ JustEnteredCombat: entry-gated one-shots
+    -- (boss_yogg_saron.cpp:1618-1637). Alive-gated.
+    if creature:IsAlive() then
+        local entry = creature:GetEntry()
+        if entry == ENTRY_KEEPER_FREYA then
+            creature:CastSpell(creature, SPELL_RESILIENCE_OF_NATURE)
+            creature:CastSpell(creature, SPELL_SANITY_WELL_SUMMON)
+        elseif entry == ENTRY_KEEPER_HODIR then
+            creature:CastSpell(creature, SPELL_FORTITUDE_OF_FROST)
+            creature:CastSpell(creature, SPELL_HODIRS_PROTECTIVE_GAZE)
+        elseif entry == ENTRY_KEEPER_THORIM then
+            creature:CastSpell(creature, SPELL_FURY_OF_THE_STORM)
+        elseif entry == ENTRY_KEEPER_MIMIRON then
+            creature:CastSpell(creature, SPELL_SPEED_OF_INVENTION)
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 1, voiceEnterCombat)
+RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 23, constrictorReset)
+RegisterCreatureEvent(ENTRY_INFLUENCE_TENTACLE, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_INFLUENCE_TENTACLE, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_INFLUENCE_TENTACLE, 23, influenceReset)
+RegisterCreatureEvent(ENTRY_SUIT_OF_ARMOR, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_SUIT_OF_ARMOR, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_SUIT_OF_ARMOR, 23, influenceReset)
+RegisterCreatureEvent(ENTRY_OMINOUS_CLOUD, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_OMINOUS_CLOUD, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_OMINOUS_CLOUD, 23, ominousCloudReset)
+RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 23, brainReset)
+RegisterCreatureEvent(ENTRY_TURNED_CHAMPION, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_TURNED_CHAMPION, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_TURNED_CHAMPION, 23, turnedChampionReset)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_HODIR, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_HODIR, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_HODIR, 23, observationKeeperReset)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_FREYA, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_FREYA, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_FREYA, 23, observationKeeperReset)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_THORIM, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_THORIM, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_THORIM, 23, observationKeeperReset)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_MIMIRON, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_MIMIRON, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_MIMIRON, 23, observationKeeperReset)
+RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 1, keeperEnterCombat)
+RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 23, yoggKeeperReset)
+RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 1, keeperEnterCombat)
+RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 23, yoggKeeperReset)
+RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 1, keeperEnterCombat)
+RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 23, yoggKeeperReset)
+RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 1, keeperEnterCombat)
+RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 2, cancelAll)
+RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 23, yoggKeeperReset)

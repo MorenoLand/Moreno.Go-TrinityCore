@@ -19,18 +19,23 @@
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_blackheart_the_inciter::JustEngagedWith — Talk(SAY_AGGRO 1)
--- (line 92; event 1 — the auriaya precedent) + schedules
--- EVENT_WAR_STOMP (15s).
+-- (line 89; event 1 — the auriaya precedent) + schedules
+-- EVENT_WAR_STOMP (15s) + EVENT_CHARGE_ATTACK (5s, one-shot).
 -- EVENT_WAR_STOMP — DoCast(me, SPELL_WAR_STOMP 33707) 2-arg
 -- (non-triggered), ungated, 15s init, randtime(18s,24s) repeat
 -- (the Oct-12 "no-timer bridge" claim was wrong — CreateLuaEvent is a
 -- real bridge, retracted this run). All timers cancelled on 2/4/23
 -- (gargolmar precedent).
+-- EVENT_CHARGE_ATTACK — DoCast(target, SPELL_CHARGE 33709) 2-arg
+-- (non-triggered), ungated, SelectTarget(Random, 0) offset-0 pool,
+-- 5s init, ONE-SHOT (the C++ 15-25s re-arm is a verified no-op —
+-- EVENT_CHARGE=1003 unhandled by the UpdateAI switch) — ported on a
+-- fire-once CreateLuaEvent from event 1.
 -- boss_blackheart_the_inciter::KilledUnit — Talk(SAY_SLAY 2) (line
--- 98) gated on who->GetTypeId() == TYPEID_PLAYER — the razuvious
+-- 95) gated on who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated precedent (event 3).
 -- boss_blackheart_the_inciter::JustDied — Talk(SAY_DEATH 4) (line
--- 104) — the sjonnir self-Talk precedent (event 4; the _JustDied()
+-- 101) — the sjonnir self-Talk precedent (event 4; the _JustDied()
 -- instance leg rides the no-instance bridge — documented-only).
 -- DOCUMENTED-ONLY (in this header; only entry 18667 registered):
 -- boss_blackheart_the_inciter::Reset — me->SetReactState
@@ -48,13 +53,16 @@
 -- chaos HandleDummy cycles INCITE_SPELLS {33677, 33680, 33681, 33682,
 -- 33683} on hit units); a bare cast would fabricate a no-op cast bar
 -- (shazzrah precedent);
--- EVENT_CHARGE_ATTACK (SelectTarget random → DoCast(target,
--- SPELL_CHARGE 33709), 5s init) stays OUT — no random-target
--- SelectTarget bridge (cairne/kazzak precedent). C++ BUG NOTE: the
--- arm re-arms EVENT_CHARGE (line 147), but the enum defines only
--- EVENT_CHARGE_ATTACK — EVENT_CHARGE resolves to SharedDefines.h:3342
--- (id 1003, MotionMaster generic) which the UpdateAI switch never
--- handles. C++-exact behavior: charge fires ONCE at 5s, never re-arms
+-- EVENT_CHARGE_ATTACK — PORTED above: SelectTarget(Random, 0)
+-- → DoCast(target, SPELL_CHARGE 33709) (2-arg, non-triggered,
+-- offset 0 — tank INCLUDED, the_beast/opera-Julianne random-pool
+-- convention with the threat-list-vs-player-pool caveat), 5s init,
+-- ONE-SHOT. C++ BUG (verified): the arm re-arms EVENT_CHARGE (line
+-- 147), but the enum defines only EVENT_CHARGE_ATTACK —
+-- EVENT_CHARGE resolves to SharedDefines.h:3342 (id 1003,
+-- MotionMaster generic; MotionMaster.h:173 default arg) which the
+-- UpdateAI switch (cases 1/2/3 only) never handles — the re-arm is
+-- a verified no-op, so charge fires ONCE at 5s and never re-arms
 -- (the "15-25s cycle" does not exist at runtime);
 -- EVENT_WAR_STOMP ported above; DoMeleeAttackIfReady —
 -- documented-only.
@@ -86,6 +94,7 @@ local SAY_SLAY  = 2
 local SAY_DEATH = 4
 
 local SPELL_WAR_STOMP = 33707 -- boss_blackheart_the_inciter.cpp:34
+local SPELL_CHARGE = 33709 -- boss_blackheart_the_inciter.cpp:33
 
 local timers = {}
 
@@ -111,13 +120,47 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, ...) — the map-wide random-player pool
+-- (the_beast / opera-Julianne convention): C++ picks from the threat
+-- list, the Lua pool is all alive players on the same map+instance —
+-- threat-list-vs-player-pool caveat applies (netherspite precedent).
+local function randomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ EVENT_WAR_STOMP (:149-151): DoCast(me, SPELL_WAR_STOMP 33707)
--- 2-arg (non-triggered), ungated; 15s init, randtime(18s,24s) repeat.
+-- 2-arg (non-triggered), ungated; 15s init, randtime(18s,24s) repeat
+-- (millisecond granularity — the {min,max} table form, not
+-- math.random(18,24)*1000).
 local function warStompTick(creature, guid)
     creature:CastSpell(creature, SPELL_WAR_STOMP)
-    schedule(guid, "war_stomp", math.random(18, 24) * 1000, function()
+    schedule(guid, "war_stomp", {18000, 24000}, function()
         warStompTick(creature, guid)
     end)
+end
+
+-- C++ EVENT_CHARGE_ATTACK (:144-147): if (Unit* target =
+-- SelectTarget(SelectTargetMethod::Random, 0)) DoCast(target,
+-- SPELL_CHARGE 33709) (2-arg, non-triggered), 5s init, ONE-SHOT —
+-- the arm's re-arm schedules EVENT_CHARGE (SharedDefines.h:3342,
+-- id 1003) which the UpdateAI switch never handles (verified
+-- no-op). Threat-list-vs-player-pool caveat applies.
+local function blackheartChargeTick(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_CHARGE)
+    end
 end
 
 -- C++ boss_blackheart_the_inciter::JustEngagedWith (:85-87):
@@ -125,17 +168,23 @@ end
 -- events.ScheduleEvent(EVENT_CHARGE_ATTACK, 5s);
 -- events.ScheduleEvent(EVENT_WAR_STOMP, 15s);
 -- Talk(SAY_AGGRO); — the auriaya precedent (event 1). Only WAR_STOMP
--- ports: INCITE_CHAOS is SpellScript-delivered (spell_blackheart_
--- incite_chaos HandleDummy cycles 33677/33680/33681/33682/33683 on
--- hit units — a bare cast would be a no-op cast bar, shazzrah
+-- and CHARGE_ATTACK port: INCITE_CHAOS is SpellScript-delivered (spell_
+-- blackheart_incite_chaos HandleDummy cycles 33677/33680/33681/33682/
+-- 33683 on hit units — a bare cast would be a no-op cast bar, shazzrah
 -- precedent) and its threat-list-size>1 gate + ResetThreatList ride
--- the same unbridged machine; CHARGE_ATTACK is random-target.
+-- the same unbridged machine; CHARGE_ATTACK is PORTED below as a
+-- fire-once one-shot (its C++ 15-25s re-arm is a verified no-op).
 local function blackheartEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "war_stomp", 15000, function()
         warStompTick(creature, guid)
+    end)
+    -- C++ JustEngagedWith: events.ScheduleEvent(EVENT_CHARGE_ATTACK,
+    -- 5s) — one-shot (the re-arm is a verified C++ no-op, see above).
+    schedule(guid, "charge", 5000, function()
+        blackheartChargeTick(creature, guid)
     end)
 end
 

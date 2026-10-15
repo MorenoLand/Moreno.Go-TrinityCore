@@ -61,24 +61,6 @@
 -- (NPC_VOID_PORTAL 19224 at VoidPortalCoords) + SPELL_VOID_PORTAL_VISUAL
 -- 33569 visual cast — no-summon / no-cast bridges —
 -- documented-only.
--- boss_grandmaster_vorpilAI::MoveInLineOfSight — the _intro
--- one-shot Talk(SAY_INTRO 0) (line 159) gated on player within
--- 100.0f + LOS + valid-attack-target — PORTED on event 27
--- (CREATURE_EVENT_ON_MOVE_IN_LOS): Go's fire site is the
--- aggro-engage branch ("about to aggro a player it has
--- sighted"), which is a SUBSET of the C++ trigger — at fire
--- time dist <= aggro range (<=45) < 100, LOS already verified,
--- and the fire site's isAttackableFaction/canCreatureStartAttack
--- gates are the IsValidAttackTarget equivalent, so every C++
--- gate holds at fire time. Deliberate deviations: the intro
--- fires at aggro acquisition instead of the 100-yard sighting,
--- and the Talk lands just before the engage instead of just
--- after the BossAI::MoveInLineOfSight(who) call (C++ :155-159
--- calls the base FIRST). The old "fire-site mismatch /
--- documented-only" note was stale — the depth_charge precedent
--- registers event 27, and the gargolmar taunt arm is the one
--- genuinely unfirable here (its else-branch fires only when the
--- player is NOT engaged).
 -- boss_grandmaster_vorpilAI::UpdateAI — the remaining timer
 -- machine (EVENT_SHADOWBOLT_VOLLEY ported above) stays out on
 -- evidence-based legs, not the old blanket "no-timer" claim:
@@ -91,7 +73,7 @@
 -- triggered) + DoCast(me, SPELL_RAIN_OF_FIRE 33617) —
 -- H_SPELL_RAIN_OF_FIRE 39363 is a dead constant, no IsHeroic branch
 -- exists in this arm — 45s init / 30s cycle; this leg also
--- reschedules EVENT_SHADOWBOLT_VOLLEY at 6s (:203), unreachable while
+-- reschedules EVENT_SHADOWBOLT_VOLLEY at 6s (:198), unreachable while
 -- it stays out); EVENT_SUMMON_TRAVELER (spawnVoidTraveler →
 -- SummonCreature(NPC_VOID_TRAVELER 19226, TEMPSUMMON_CORPSE_TIMED_DESPAWN,
 -- 5s) — no Summon binding; effective first traveler ~5s
@@ -111,9 +93,9 @@
 -- binding). The casts bridge (self-cast convention) but the follow /
 -- instance-lookup / kill legs don't — documented-only (NOT
 -- registered; shaffar-beacon precedent).
--- All Talk() calls in the file accounted for (3 ported above;
--- SAY_HELP 2 rides the traveler timer machine — documented-only;
--- SAY_INTRO 0 — documented-only above).
+-- All Talk() calls in the file accounted for (4 ported above —
+-- aggro/slay/death/intro; SAY_HELP 2 rides the traveler timer
+-- machine — documented-only).
 
 local ENTRY_GRANDMASTER_VORPIL = 18732 -- NPC_GRANDMASTER_VORPIL (shadow_labyrinth.h)
 

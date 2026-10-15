@@ -44,7 +44,17 @@
 -- The undead spell variants (the IsUndead macro legs) resolve at
 -- cast time via creature:GetEntry() — the undead entry is the
 -- observable IsUndead state — since the SPELL_REVIVE_CHAMPION
--- SpellHit flip itself has no bridge.
+-- SpellHit flip itself has no bridge. CAVEAT: IsUndead is a private
+-- AI bool set only by the unbridged SpellHit (:898); a
+-- directly-spawned undead entry behaves as living in C++ (skips all
+-- the IsUndead Reset gates) while the Lua entry-resolution treats it
+-- as undead — no bridge can read the private bool, entry-resolution
+-- is the best available approximation; and revived captains skip
+-- C++ Reset entirely (setDeathState(JUST_RESPAWNED),
+-- Creature.cpp:2117-2153 — Reset only via Creature::Respawn :2198)
+-- so they gain no new timers until the next evade/respawn, while Lua
+-- re-seeds the event-1 timers — documented, no bridge for the
+-- SpellHit revive signal.
 --
 -- PORTED ARMS (C++ line refs; all C++-exact for the modeled arms):
 -- npc_argent_captainAI::KilledUnit (:832-836) — victim->GetTypeId()
@@ -55,7 +65,12 @@
 --   second death -> Talk(SAY_CAPTAIN_SECOND_DEATH 3) (event 4,
 --   the sjonnir JustDied-Talk precedent; per-GUID state seeded on
 --   event 1, cleared on event 23 — the event-23 analogue of the
---   ACTION_RESET_EVENT _firstDeath reset, :853-855).
+--   ACTION_RESET_EVENT _firstDeath reset, :853-855; DIVERGENCE: C++
+--   clears _firstDeath ONLY on DoAction(ACTION_RESET_EVENT) from the
+--   gauntlet respawner on wipe (:853-855), so after a plain evade with
+--   no gauntlet reset C++'s next death Talks 3 while Lua re-seeds
+--   firstDeath on event 1 and Talks 0 — documented, no bridge for the
+--   gauntlet-wipe signal).
 -- npc_captain_arnath::Reset (:942-950) + UpdateAI (:952-1006) —
 --   Reset-seeded EVENT_ARNATH_SMITE {3000,6000}ms re-keyed to
 --   event 1: DoCastVictim(SPELL_SMITE) — SPELL_SMITE_NORMAL 71546
@@ -68,9 +83,26 @@
 --   {6000,12000}ms; EVENT_BRANDON_DIVINE_SHIELD 500ms re-arm ->
 --   gated on HealthBelowPct(20) -> DoCast(me, SPELL_DIVINE_SHIELD
 --   71550) (the 500ms re-arm sits outside the health-if,
---   :1041-1043); EVENT_BRANDON_JUDGEMENT_OF_COMMAND
+--   :1043-1046); EVENT_BRANDON_JUDGEMENT_OF_COMMAND
 --   {8000,13000}ms -> DoCastVictim(SPELL_JUDGEMENT_OF_COMMAND
 --   71551), re-arm {8000,13000}ms.
+-- npc_captain_grondel::Reset (:1075-1083) + UpdateAI (:1085-1125)
+--   — EVENT_GRONDEL_CONFLAGRATION (IsUndead-gated Reset seed
+--   {12000,17000}ms, re-keyed to event 1) — SelectTarget(Random, 0,
+--   0.0f, true) DoCast(target, SPELL_CONFLAGRATION 71785) (2-arg,
+--   non-triggered, offset 0 — tank INCLUDED, the_beast /
+--   opera-Julianne random-pool convention with the
+--   threat-list-vs-player-pool caveat) — re-arm {10000,15000}ms
+--   unconditional (outside the target-if); resolved at event 1 by
+--   current entry (the undead entry is the observable IsUndead
+--   state — the smite-leg precedent).
+-- npc_captain_rupert::Reset (:1134-1140) + UpdateAI (:1142-1180)
+--   — EVENT_RUPERT_FEL_IRON_BOMB (Reset seed {15000,20000}ms,
+--   re-keyed to event 1) — SelectTarget(Random, 0) DoCast(target,
+--   SPELL_FEL_IRON_BOMB) (2-arg, non-triggered, offset 0) —
+--   SPELL_FEL_IRON_BOMB_NORMAL 71592 / SPELL_FEL_IRON_BOMB_UNDEAD
+--   71787 selected by current entry at cast time — re-arm
+--   {15000,20000}ms unconditional (outside the target-if).
 -- npc_captain_grondel::Reset (:1075-1083) + UpdateAI (:1085-1125)
 --   — Reset-seeded timers re-keyed to event 1:
 --   EVENT_GRONDEL_CHARGE_CHECK 500ms re-arm ->
@@ -83,7 +115,7 @@
 -- DOCUMENTED-ONLY (no bridgeable arm):
 -- npc_argent_captainAI::SpellHit (:894-934) — Talk(
 --   SAY_CAPTAIN_RESURRECTED 1) rides the SPELL_REVIVE_CHAMPION
---   SpellHit arm (event 15 never fires; the anub_arak precedent);
+--   SpellHit arm (event 14 per runtime.go:195-214 never fires; the anub_arak precedent);
 --   the UpdateEntry / DoCastSelf(SPELL_UNDEATH 70089, true) legs
 --   have no bridge.
 -- npc_argent_captainAI::DoAction (:838-857) —
@@ -91,27 +123,32 @@
 --   ACTION_RESET_EVENT bookkeeping legs (no-DoAction bridge).
 -- npc_argent_captainAI::JustEngagedWith (:859-864) —
 --   SetHomePosition / DoZoneInCombat legs (no bridge).
--- npc_captain_arnath EVENT_ARNATH_FLASH_HEAL (:962-966,
+-- npc_argent_captainAI::EnterEvadeMode (:869-892) —
+--   MoveFollow + far-visible/active legs (no movement bridge).
+-- npc_captain_arnath EVENT_ARNATH_FLASH_HEAL (:966-969,
 --   {4000,7000}ms, re-arm {6000,9000}ms) — DoCast on the
---   FindFriendlyCreature() most-HP-missing search (no friendly
---   search bridge); EVENT_ARNATH_PW_SHIELD (:967-973, {8000,14000}
---   ms, re-arm {15000,20000}ms) — DoFindFriendlyMissingBuff list +
---   random element (no bridge); EVENT_ARNATH_DOMINATE_MIND
---   (:979-983, {22000,27000}ms, re-arm {28000,37000}ms) —
---   SelectTarget(Random) + Is25ManRaid() + IsUndead gate (no
---   bridge).
+--   FindFriendlyCreature() most-HP-missing search (:990-997, no
+--   friendly search bridge); EVENT_ARNATH_PW_SHIELD (:971-975,
+--   {8000,14000}ms, re-arm {15000,20000}ms) — DoFindFriendlyMissingBuff
+--   list + random element (no bridge); EVENT_ARNATH_DOMINATE_MIND
+--   (:982-985, {22000,27000}ms, re-arm {28000,37000}ms) —
+--   SelectTarget(Random, 1) offset-1 tank-skip + Is25ManRaid() +
+--   IsUndead Reset gate (:948-949) — stays out.
 -- npc_captain_brandon EVENT_BRANDON_HAMMER_OF_BETRAYAL
---   (:1057-1061, {25000,30000}ms, re-arm {45000,60000}ms) —
---   SelectTarget(Random) + IsUndead gate (no bridge).
--- npc_captain_grondel EVENT_GRONDEL_CONFLAGRATION
---   (:1116-1120, {12000,17000}ms, re-arm {10000,15000}ms) —
---   SelectTarget(Random) + IsUndead gate (no bridge).
--- npc_captain_rupert UpdateAI (:1142-1180) — EVENT_RUPERT_FEL_IRON_
---   BOMB (71592/71787, {15000,20000}ms), EVENT_RUPERT_MACHINE_GUN
---   (71594/71788, {25000,30000}ms), EVENT_RUPERT_ROCKET_LAUNCH
---   (71590/71786, {10000,15000}ms): all three are SelectTarget(
---   Random, ...) casts — no bridge — so rupert ports Talk arms
---   only.
+--   (:1052-1055, {25000,30000}ms, re-arm {45000,60000}ms) —
+--   SelectTarget(Random, 1) offset-1 tank-skip + IsUndead Reset gate
+--   (:1021-1022) — stays out.
+-- npc_captain_grondel EVENT_GRONDEL_CONFLAGRATION is PORTED
+--   above (offset 0, bridgeable); the remaining grondel arms are
+--   all ported.
+-- npc_captain_rupert UpdateAI (:1142-1180) —
+--   EVENT_RUPERT_MACHINE_GUN (:1161-1164, 71594/71788,
+--   {25000,30000}ms init) and EVENT_RUPERT_ROCKET_LAUNCH
+--   (:1166-1169, 71590/71786, {10000,15000}ms init) — both
+--   SelectTarget(Random, 1) offset-1 tank-skip casts (the offset-1
+--   tank-skip-no-bridge blocker, netherspite precedent) — stay out.
+--   EVENT_RUPERT_FEL_IRON_BOMB is PORTED above (offset 0,
+--   bridgeable).
 -- All base-AI Talk() calls accounted for (4 = SAY_CAPTAIN_DEATH
 --   0 (1) + SAY_CAPTAIN_SECOND_DEATH 3 (1) + SAY_CAPTAIN_KILL 2
 --   (1) + SAY_CAPTAIN_RESURRECTED 1 (1, SpellHit)); the 4
@@ -146,6 +183,29 @@ local SPELL_JUDGEMENT_OF_COMMAND = 71551
 local SPELL_CHARGE = 71553
 local SPELL_MORTAL_STRIKE = 71552
 local SPELL_SUNDER_ARMOR = 71554
+
+local SPELL_CONFLAGRATION = 71785
+local SPELL_FEL_IRON_BOMB_NORMAL = 71592
+local SPELL_FEL_IRON_BOMB_UNDEAD = 71787
+
+-- C++ SelectTarget(Random, ...) — the map-wide random-player pool
+-- (the_beast / opera-Julianne convention): C++ picks from the threat
+-- list, the Lua pool is all alive players on the same map+instance —
+-- threat-list-vs-player-pool caveat applies (netherspite precedent).
+local function randomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
 
 local timers = {}
 
@@ -281,6 +341,22 @@ local function onGrondelSunderArmor(creature, guid)
         function() onGrondelSunderArmor(creature, guid) end)
 end
 
+-- C++ npc_captain_grondel::Reset :1081-1082 (IsUndead-gated) seeds
+-- EVENT_GRONDEL_CONFLAGRATION {12000,17000}ms; UpdateAI :1111-1114:
+-- if (Unit* target = SelectTarget(SelectTargetMethod::Random, 0,
+-- 0.0f, true)) DoCast(target, SPELL_CONFLAGRATION 71785) (2-arg,
+-- non-triggered, offset 0 — tank INCLUDED), re-arm {10000,15000}ms
+-- unconditional (outside the target-if). The IsUndead Reset gate
+-- resolves via the current entry (the smite-leg precedent).
+local function onGrondelConflagration(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_CONFLAGRATION)
+    end
+    schedule(guid, "conflagration", {10000, 15000},
+        function() onGrondelConflagration(creature, guid) end)
+end
+
 local function grondelEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -291,16 +367,45 @@ local function grondelEnterCombat(event, creature, target)
         function() onGrondelMortalStrike(creature, guid) end)
     schedule(guid, "sunder", {3000, 12000},
         function() onGrondelSunderArmor(creature, guid) end)
+    -- C++ Reset :1081: if (IsUndead) ScheduleEvent(EVENT_GRONDEL_
+    -- CONFLAGRATION, 12s, 17s) — entry-resolved (the smite-leg
+    -- precedent).
+    if creature:GetEntry() == ENTRY_CAPTAIN_GRONDEL_UNDEAD then
+        schedule(guid, "conflagration", {12000, 17000},
+            function() onGrondelConflagration(creature, guid) end)
+    end
+end
+
+-- C++ npc_captain_rupert::Reset :1137 seeds EVENT_RUPERT_FEL_IRON_BOMB
+-- {15000,20000}ms; UpdateAI :1157-1159: if (Unit* target =
+-- SelectTarget(SelectTargetMethod::Random, 0)) DoCast(target,
+-- SPELL_FEL_IRON_BOMB) (2-arg, non-triggered, offset 0 — tank
+-- INCLUDED), re-arm {15000,20000}ms unconditional (outside the
+-- target-if). SPELL_FEL_IRON_BOMB macro (IsUndead ? 71787 : 71592)
+-- resolves by current entry at cast time (the smite-leg precedent).
+local function onRupertFelIronBomb(creature, guid)
+    local spell = SPELL_FEL_IRON_BOMB_NORMAL
+    if creature:GetEntry() == ENTRY_CAPTAIN_RUPERT_UNDEAD then
+        spell = SPELL_FEL_IRON_BOMB_UNDEAD
+    end
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, spell)
+    end
+    schedule(guid, "felironbomb", {15000, 20000},
+        function() onRupertFelIronBomb(creature, guid) end)
 end
 
 -- C++ npc_captain_rupert::Reset :1134-1140 + UpdateAI :1142-1180
--- — all three arms (fel iron bomb / machine gun / rocket launch)
--- are SelectTarget(Random, ...) casts with no bridge; rupert
--- ports Talk arms only.
+-- — EVENT_RUPERT_FEL_IRON_BOMB is PORTED above (offset 0,
+-- bridgeable); EVENT_RUPERT_MACHINE_GUN and
+-- EVENT_RUPERT_ROCKET_LAUNCH stay out (offset-1 tank-skip).
 local function rupertEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     getCaptainState(guid)
+    schedule(guid, "felironbomb", {15000, 20000},
+        function() onRupertFelIronBomb(creature, guid) end)
 end
 
 local function captainLeaveCombat(event, creature)
