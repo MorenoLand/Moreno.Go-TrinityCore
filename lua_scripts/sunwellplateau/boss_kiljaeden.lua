@@ -126,9 +126,10 @@
 -- after firing). The AddThreat lock-on arm has no threat bridge.
 -- OnReset(23)/OnLeaveCombat(2)/OnDied(4): timer/state cleanup.
 -- Armageddon Target (25735). OnReset(23): triggered self-cast
--- armageddon visual 45911, 9s later triggered 45914, 5s later
--- triggered 45909 (C++-exact chain); the DespawnOrUnsummon arm has
--- no despawn bridge — documented. (The KJ-side armageddon-target
+-- armageddon visual 45911, ~1 tick later triggered 45914 (C++ case
+-- 0 leaves uiTimer=0), 9s later triggered 45909 (C++-exact chain);
+-- the trailing 5000ms is the DespawnOrUnsummon wait (no despawn
+-- bridge — documented). (The KJ-side armageddon-target
 -- summon arm is summon-blocked — above.)
 -- Sinister Reflection (25708). OnEnterCombat(1): read the
 -- victim's class (player-only; unclassed victims get no spells —
@@ -342,12 +343,14 @@ local function newKjState()
         isInDarkness = false,
         isWaiting = false,
         waitTimer = 0,
+        orbActivated = false,
     }
 end
 
--- C++ ChangeTimers(status, WTimer), 1:1. OrbActivated is always
--- false in this model (the orbs-empower cross-creature arm is
--- unmodeled), so that rule is a no-op here.
+-- C++ ChangeTimers(status, WTimer), 1:1, including the
+-- `if (OrbActivated) TimerIsDeactivated[TIMER_ORBS_EMPOWER]=true`
+-- one-shot-per-phase latch (the EmpowerOrb call itself is
+-- cross-creature blocked; the latch is mirrored).
 local function changeTimers(st, status, wTimer)
     for _, name in ipairs(TIMER_ORDER) do
         st.off[name] = status
@@ -362,6 +365,9 @@ local function changeTimers(st, status, wTimer)
     if st.phase == PHASE_SACRIFICE then
         st.off.shieldorb = true
     end
+    if st.orbActivated then
+        st.off.orbsempower = true
+    end
 end
 
 -- C++ EnterNextPhase(), 1:1, plus KJ's own speech rows at their
@@ -369,6 +375,7 @@ end
 -- blocked — header).
 local function enterNextPhase(creature, guid, st, phase)
     st.phase = phase
+    st.orbActivated = false
     changeTimers(st, true, 0)
     st.off.shadowspike = false
     st.t.shadowspike = 100
@@ -463,7 +470,8 @@ local function fireTimer(creature, st, name)
     elseif name == "orbsempower" then
         -- The EmpowerOrb call targets boss_kalecgos_kj via the
         -- instance script — cross-creature blocked; mirror the
-        -- C++ OrbActivated=true deactivation.
+        -- C++ OrbActivated=true one-shot-per-phase deactivation.
+        st.orbActivated = true
         st.off.orbsempower = true
     end
 end
@@ -693,9 +701,13 @@ local function armageddonReset(event, creature)
     -- fire creates no phantom visuals on the corpse; cancelTimers rides the death leg.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_ARMAGEDDON_VISUAL, true)
-        schedule(guid, "visual2", 9000, function()
+        -- C++ case 0 leaves uiTimer at 0, so VISUAL2 fires on the next
+        -- UpdateAI tick (100ms here); case 1 sets uiTimer=9000 before
+        -- the TRIGGER cast; the final uiTimer=5000 is the
+        -- DespawnOrUnsummon wait (no despawn bridge — header).
+        schedule(guid, "visual2", 100, function()
             creature:CastSpell(creature, SPELL_ARMAGEDDON_VISUAL2, true)
-            schedule(guid, "trigger", 5000, function()
+            schedule(guid, "trigger", 9000, function()
                 creature:CastSpell(creature, SPELL_ARMAGEDDON_TRIGGER, true)
             end)
         end)

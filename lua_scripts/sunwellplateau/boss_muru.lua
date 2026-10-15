@@ -83,10 +83,11 @@
 -- kalecgos teleport-back event-14 precedent). The JustSummoned
 -- arm (triggered 45989 summoner visual + 1.5s-delayed self-cast
 -- 45988 summon-void-sentinel, driving the void-sentinel chain)
--- is summon-blocked — unmodeled. Dark Fiend (25744). OnReset(23):
+-- is summon-blocked — unmodeled. Dark Fiend (25744). OnSpawn(5):
 -- triggered self-cast darkfiend skin 45934 (C++-exact — the
--- constructor/Initialize arm; the SetDisplayId/REACT_PASSIVE arms
--- have no display/react bridges). The 2s arm (REACT_AGGRESSIVE
+-- constructor/Initialize arm, which has no Reset() override (the
+-- class never re-casts it on evade); the SetDisplayId/REACT_PASSIVE
+-- arms have no display/react bridges). The 2s arm (REACT_AGGRESSIVE
 -- + RemoveFlag(NOT_SELECTABLE) + summoner-GUID random-target
 -- AttackStart) has no react/flag/cross-creature/movement bridges
 -- — skipped; the 3s 500ms-repeat proximity arm (victim within
@@ -330,17 +331,18 @@ RegisterCreatureEvent(ENTRY_PORTAL, 23, portalReset)
 -- ================= Dark Fiend (25744) =================
 
 -- C++ constructor (Initialize): triggered self-cast 45934.
-local function darkFiendReset(event, creature)
-    cancelTimers(creature:GetGUID())
+local function darkFiendSpawn(event, creature)
     -- C++ npc_dark_fiendAI constructor (Initialize): triggered self-cast
-    -- SPELL_DARKFIEND_SKIN (boss_muru.cpp:407) — spawn-only, never runs on death.
-    -- Alive-gated; cancelTimers rides the death leg deliberately.
+    -- SPELL_DARKFIEND_SKIN (boss_muru.cpp:407) — spawn-only ctor arm
+    -- (no Reset() override: never re-cast on evade), so bound to event
+    -- 5. Alive-gated; cancelTimers rides the death leg deliberately.
+    cancelTimers(creature:GetGUID())
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_DARKFIEND_SKIN, true)
     end
 end
 
-RegisterCreatureEvent(ENTRY_DARK_FIEND, 23, darkFiendReset)
+RegisterCreatureEvent(ENTRY_DARK_FIEND, 5, darkFiendSpawn)
 
 -- ================= Void Sentinel (25772) =================
 

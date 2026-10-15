@@ -90,14 +90,16 @@
 -- MoveInLineOfSight bridge — the fight starts on pull (ragnaros-
 -- intro convention). The no-victim threat handoff from the sister
 -- and the sister AttackStart relays have no cross-creature/threat
--- bridges — unmodeled. Shadow Image (25214). OnReset(23):
--- triggered self-cast image visual 45263 (C++-exact); the NOT_
--- SELECTABLE flag arm has no flag bridge. OnEnterCombat(1): arm
+-- bridges — unmodeled. Shadow Image (25214). OnReset(23): the NOT_
+-- SELECTABLE flag arm has no flag bridge — Reset never casts the
+-- visual (C++:678-682 sets only the flag; the cast lives in the
+-- per-tick HasAura arm, C++:712). OnEnterCombat(1): arm
 -- shadow fury 45270 {5s,20s} then 10s, non-triggered self-cast /
 -- dark strike 45271 3s then 3s, non-triggered DoCastVictim (nil
 -- ticks cast nothing but keep the schedule); a 10s visual-
--- maintenance check re-applies 45263 triggered if missing (the C++
--- per-tick HasAura arm, approximated). The 15s KillSelf arm has no
+-- maintenance check re-applies 45263 non-triggered if missing (the
+-- C++ per-tick HasAura arm — DoCast(me,45263) takes no triggered
+-- arg — approximated). The 15s KillSelf arm has no
 -- kill bridge — the image persists past 15s in this model. The
 -- sacrolash-side DoSpawnCreature summon has no summon bridge, so
 -- images arrive only via DB-side spawns — registered anyway for
