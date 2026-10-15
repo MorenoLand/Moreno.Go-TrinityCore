@@ -39,6 +39,11 @@
 --   there is no HasAura bridge, so the toggle state rides a per-guid Lua
 --   latch (arlokk convention): latch clear -> DoCast(me, 16467),
 --   latch set; latch set -> creature:RemoveAura(16467), latch clear.
+--   Evade caveat: reset() clears the Lua latch but the transform aura is
+--   never removed on evade, so on re-engage the toggle fires the wrong
+--   way for one cycle (C++'s HasAura read would remove the persisted
+--   aura); self-corrects on the next 16-18s tick. No bridge exists to
+--   read or clear the aura on evade.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally (maiden precedent);
 -- the transform arm's SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID) staff

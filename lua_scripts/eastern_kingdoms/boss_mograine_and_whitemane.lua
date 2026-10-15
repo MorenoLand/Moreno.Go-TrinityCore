@@ -18,9 +18,10 @@
 -- sulfuron convention). KilledUnit: Talk(SAY_MO_KILL 1) only when the
 -- victim is a player (TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", herod
 -- convention), gated by the 5s _killYellTimer (Reset(0s) in Reset means
--- available immediately — modeled with a per-GUID one-shot clear,
--- fairbanks heal-cooldown pattern; C++ _Reset() does NOT touch the
--- timer, so the flag is cleared only on event 23). OnReset cancels
+-- available immediately — modeled with a per-GUID one-shot clear routed
+-- through schedule() so OnReset's cancelTimers clears the pending clear
+-- exactly like C++'s Reset(0s) TimeTracker; C++ _Reset() does NOT touch
+-- the timer, so the flag is cleared only on event 23). OnReset cancels
 -- timers + clears the yell flag + self-casts retribution aura 8990
 -- (C++ DoCastSelf(..., true) triggered — Lua CastSpell(creature, spell, true)).
 -- Whitemane: OnEnterCombat Talk(SAY_WH_INTRO 0) + 5s scheduler gate ->
@@ -162,9 +163,9 @@ local function onTargetDied(event, creature, victim, sayKill)
     end
     killYellOnCooldown[guid] = true
     creature:Talk(sayKill)
-    CreateLuaEvent(function()
+    schedule(guid, "killYell", 5000, function()
         killYellOnCooldown[guid] = nil
-    end, 5000)
+    end)
 end
 
 -- Mograine ---------------------------------------------------------------

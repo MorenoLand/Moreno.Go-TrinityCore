@@ -27,20 +27,20 @@
 -- EVENT_SHADOW_WRATH: victim-cast SPELL_SHADOW_WRATH 27286, 9s init
 -- (urand(9s,18s)) -> 19s loop (urand(19s,24s)); victim nil-guarded
 -- (incarcerator convention).
--- Frenzy-40 latch: HealthBelowPct(40) one-shot -> self-cast SPELL_FRENZY
--- 8269 + Talk(EMOTE_FRENZY=0) + CancelEvent(EVENT_SUMMON_SPECTRAL_ASSASSIN)
--- (C++-exact: the summon timer is dropped, not re-armed).
--- Frenzy-15 latch: HealthBelowPct(15) one-shot -> self-cast SPELL_FRENZY
--- 8269 + Talk(EMOTE_FRENZY=0) + ScheduleEvent(EVENT_SHADOW_BOLT_VOLLEY,
--- 7s, 14s). EVENT_SHADOW_BOLT_VOLLEY never fires before this latch.
+-- Frenzy-40 latch: HealthBelowPct(40) = health < floor(max*40/100)
+-- one-shot -> self-cast SPELL_FRENZY 8269 + CancelEvent(EVENT_SUMMON_
+-- SPECTRAL_ASSASSIN) (C++-exact: the summon timer is dropped, not
+-- re-armed; C++ emits no Talk here — EMOTE_FRENZY is enum-only).
+-- Frenzy-15 latch: HealthBelowPct(15) = health < floor(max*15/100)
+-- one-shot -> self-cast SPELL_FRENZY 8269 + ScheduleEvent(EVENT_SHADOW_
+-- BOLT_VOLLEY, 7s, 14s). EVENT_SHADOW_BOLT_VOLLEY never fires before
+-- this latch.
 -- EVENT_SHADOW_BOLT_VOLLEY: victim-cast SPELL_SHADOW_BOLT_VOLLEY 27382,
 -- 7s init (urand(7s,14s)) -> 4s loop (urand(4s,6s)).
 -- The two frenzy latches ride OnDamageTaken(9) with per-guid one-shot
 -- flags reset on OnEnterCombat(1) (gyth convention); C++ checks the
 -- latches in UpdateAI even out of combat, but the only state transition
 -- into sub-40%/sub-15% is damage, so the damage-event latch is faithful.
--- Talk(EMOTE_FRENZY) fires once per latch (maiden-of-virtue convention;
--- creature:Talk is bridged in lua_creature_events.go).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and both
 -- in-loop casting gates are dropped (maiden precedent). The C++
@@ -62,8 +62,6 @@ local SPELL_FRENZY = 8269
 local SPELL_SUMMON_SPECTRAL_ASSASSIN = 27249
 local SPELL_SHADOW_BOLT_VOLLEY = 27382
 local SPELL_SHADOW_WRATH = 27286
-
-local EMOTE_FRENZY = 0
 
 local timers = {}
 local frenzy40 = {}
@@ -133,18 +131,16 @@ end
 local function onDamageTaken(_, creature, _, damage)
     local guid = creature:GetGUID()
     if not frenzy40[guid] then
-        if creature:GetHealth() - damage < creature:GetMaxHealth() * 0.40 then
+        if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 40 / 100) then
             frenzy40[guid] = true
             creature:CastSpell(creature, SPELL_FRENZY)
-            creature:Talk(EMOTE_FRENZY)
             cancelKey(guid, "summon")
         end
     end
     if not frenzy15[guid] then
-        if creature:GetHealth() - damage < creature:GetMaxHealth() * 0.15 then
+        if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 15 / 100) then
             frenzy15[guid] = true
             creature:CastSpell(creature, SPELL_FRENZY)
-            creature:Talk(EMOTE_FRENZY)
             schedule(guid, "volley", 7000, function() onShadowBoltVolley(creature, guid) end)
         end
     end
