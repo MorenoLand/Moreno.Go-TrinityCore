@@ -102,8 +102,14 @@
 -- boss_twilight_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING (the SpellHit-15-never-fires queue); the
 -- ACTION_MONITOR_CORPOREALITY DoAction leg rides no-DoAction bridge.
--- boss_twilight_halion JustDied — zero Talk (halion->LowerPlayerDamageReq
--- / Unit::Kill / controller->KillSelf legs ride absent bridges).
+-- boss_twilight_halion JustDied — zero Talk; the DoCastSelf
+-- (SPELL_CLEAR_DEBUFFS 75396) cast leg is PORTED (twilightHalionDied,
+-- boss_halion.cpp:599-605 — the halion->LowerPlayerDamageReq /
+-- Unit::Kill / controller->KillSelf legs ride absent bridges).
+-- boss_twilight_halion Reset — the DoCastSelf
+-- (SPELL_CLEAR_DEBUFFS 75396) cast leg is PORTED (twilightHalionReset,
+-- event 23, boss_halion.cpp:586-592 — the _summons / _events /
+-- Initialize legs ride absent bridges).
 -- npc_halion_controller (40146) — its intro machine issues cross-AI
 -- Talk(SAY_INTRO 1) on the summoned halion, plus the corporeality
 -- machine's Talk(EMOTE_CORPOREALITY_TOT 4 / TIT 3 on twilight halion,
@@ -169,6 +175,7 @@ RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 3, twilightHalionKilledUnit)
 local SPELL_CLEAVE      = 74524
 local SPELL_DARK_BREATH = 74806
 local SPELL_TAIL_LASH   = 74531
+local SPELL_CLEAR_DEBUFFS = 75396
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the krystallus / bjarngrim-lieutenant convention.
@@ -256,11 +263,25 @@ local function twilightHalionLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_twilight_halion::Reset: _summons.DespawnAll() +
+-- _events.Reset() + Initialize() + DoCastSelf(SPELL_CLEAR_DEBUFFS)
+-- (non-triggered, boss_halion.cpp:586-592) — the summon/timer/
+-- Initialize legs have no bridges; the cast is the C++-exact tail
+-- leg. Split from event 2 so the cast fires once on the reset path.
+local function twilightHalionReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS)
+end
+
+-- C++ boss_twilight_halion::JustDied: _events.Reset() +
+-- _summons.DespawnAll() + DoCastSelf(SPELL_CLEAR_DEBUFFS)
+-- (non-triggered, boss_halion.cpp:599-605).
 local function twilightHalionDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS)
 end
 
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 1, twilightHalionEnterCombat)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 2, twilightHalionLeaveCombat)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 4, twilightHalionDied)
-RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 23, twilightHalionLeaveCombat)
+RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 23, twilightHalionReset)
