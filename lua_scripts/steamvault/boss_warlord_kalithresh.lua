@@ -153,7 +153,7 @@ local function bossTick(creature, guid)
     -- Spell reflection 31534: 10s then 15000+rand32()%10000,
     -- DoCast(me) (C++-exact).
     if st.reflection <= 1000 then
-        creature:CastSpell(nil, SPELL_SPELL_REFLECTION)
+        creature:CastSpell(creature, SPELL_SPELL_REFLECTION)
         st.reflection = 15000 + math.random(0, 9999)
     else
         st.reflection = st.reflection - 1000

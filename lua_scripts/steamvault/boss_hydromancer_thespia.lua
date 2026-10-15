@@ -48,7 +48,7 @@
 -- per-GUID reset (waterBoltVolley {3s,6s}) + 1s pump (a port of
 -- the UpdateAI event processing; the !UpdateVictim early return
 -- collapses into the pump, which only runs in combat). Pump:
--- water bolt volley 34449 — creature:CastSpell(nil, 34449)
+-- water bolt volley 34449 — creature:CastSpell(creature, 34449)
 -- non-triggered self-cast (C++ DoCast(me)), re-arm {7s,12s}
 -- (C++-exact; the UNIT_STATE_CASTING early return has no unit-
 -- state bridge, so the event fires even on the pump tick a C++
@@ -184,7 +184,7 @@ end
 local function elementalTick(creature, guid)
     -- Water bolt volley 34449: non-triggered self-cast, re-arm
     -- {7s,12s} (C++-exact; header).
-    creature:CastSpell(nil, SPELL_WATER_BOLT_VOLLEY)
+    creature:CastSpell(creature, SPELL_WATER_BOLT_VOLLEY)
     elementalTimers[guid] = CreateLuaEvent(function()
         elementalTick(creature, guid)
     end, 7000 + math.random(0, 5000), 1)
