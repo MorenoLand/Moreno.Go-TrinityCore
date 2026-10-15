@@ -30,10 +30,11 @@
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI event
 -- machine):
 -- SPELL_REND: victim-cast 16509, 17s init -> 8s loop
--- (C++ urand(17s,20s) init / urand(8s,10s) loop — ranges use the
--- lower bound, halycon recurring-timer convention).
+-- (C++ urand(17s,20s) init / urand(8s,10s) loop — inclusive {min,max}
+-- table-range bridge, rend_blackhand convention).
 -- SPELL_STRIKE: victim-cast 15580, 10s init -> 8s loop
--- (C++ urand(10s,12s) init / urand(8s,10s) loop — lower bound).
+-- (C++ urand(10s,12s) init / urand(8s,10s) loop — inclusive {min,max}
+-- table-range bridge, rend_blackhand convention).
 -- Talk(SAY_AGGRO) fires once on combat entry (maiden-of-virtue
 -- convention; creature:Talk is bridged in lua_creature_events.go).
 -- Victim casts are GetVictim nil-guarded (incarcerator convention).
@@ -80,7 +81,7 @@ local function onRend(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_REND)
     end
-    schedule(guid, "rend", 8000, function() onRend(creature, guid) end)
+    schedule(guid, "rend", {8000, 10000}, function() onRend(creature, guid) end)
 end
 
 local function onStrike(creature, guid)
@@ -88,15 +89,15 @@ local function onStrike(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_STRIKE)
     end
-    schedule(guid, "strike", 8000, function() onStrike(creature, guid) end)
+    schedule(guid, "strike", {8000, 10000}, function() onStrike(creature, guid) end)
 end
 
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
-    schedule(guid, "rend", 17000, function() onRend(creature, guid) end)
-    schedule(guid, "strike", 10000, function() onStrike(creature, guid) end)
+    schedule(guid, "rend", {17000, 20000}, function() onRend(creature, guid) end)
+    schedule(guid, "strike", {10000, 12000}, function() onStrike(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

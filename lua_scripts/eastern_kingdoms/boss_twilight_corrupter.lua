@@ -45,10 +45,9 @@
 -- Talk(textId, victim) targets the victim; the Go Talk bridge
 -- takes a textId only (broadcast to nearby, C++-exact for the
 -- line played) — documented deviation; at 3 kills DoCast(me,
--- SPELL_LEVEL_UP 24312, true) — the triggered flag has no
--- distinct bridge (castCreatureSpell broadcasts the same path
--- either way, boss_ai.go:445) — documented deviation — then
--- KillCount = 0.
+-- SPELL_LEVEL_UP 24312, true) — C++ explicit-triggered, passed as the
+-- 3rd arg (the bridge maps true to TRIGGERED_IGNORE_POWER_AND_REAGENT_COST
+-- only, boss_ai.go:445 — documented partial parity) — then KillCount = 0.
 -- OnReset(23): full per-GUID state drop (C++ Reset: _events.
 -- Reset() + KillCount = 0 — C++-exact). OnLeaveCombat(2) and
 -- OnDied(4): cancel the pump + drop per-GUID state (gargolmar /
@@ -174,7 +173,7 @@ local function onTargetDied(_, creature, victim)
     st.killCount = st.killCount + 1
     creature:Talk(YELL_KILL)
     if st.killCount == 3 then
-        creature:CastSpell(creature, SPELL_LEVEL_UP)
+        creature:CastSpell(creature, SPELL_LEVEL_UP, true)
         st.killCount = 0
     end
 end

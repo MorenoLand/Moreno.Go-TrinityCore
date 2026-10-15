@@ -9,17 +9,17 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady. No Talk lines.
 --
 -- Modeled arms (C++-exact where bridges exist):
--- Initialize() runs in the AI ctor AND Reset() — both timers reset to 20s
--- on Reset (modeled by cancelling + re-arming on events 2/4/23, since the
--- C++ timers only tick while UpdateVictim() returns true, i.e. in combat;
--- arming on EnterCombat matches the first post-pull tick).
+-- Initialize() runs in the AI ctor AND Reset() — the timer VALUES reset to
+-- 20s, but they tick only while UpdateVictim() returns true, i.e. in
+-- combat; modeled by cancelling on events 2/4/23 and arming on
+-- EnterCombat (which matches the first post-pull tick).
 -- UpdateAI UpdateVictim gate: timers fire only in combat (barthilas
 -- precedent).
 -- HolyLight 25263: 20s->20s; on fire, self-cast ONLY when own health is
 -- strictly below 20% (HealthBelowPct — current-health read). C++ re-arms
 -- 20s only inside the health gate; when the gate fails the timer stays
--- elapsed and re-checks every UpdateAI tick — modeled as a 1s poll
--- (dathrohan transform granularity precedent, documented).
+-- elapsed and re-checks every UpdateAI tick — modeled as a 1ms re-arm
+-- (jeklik gate-retry precedent, documented).
 -- DivineShield 13874: 20s->40s; same gate shape, fires strictly below 5%.
 -- Both arms are non-triggered DoCast(me) -> CastSpell(creature, spell),
 -- nil-victim n/a (self-cast).
@@ -69,7 +69,7 @@ end
 
 -- C++ HolyLight_Timer: cast + re-arm 20s only when HealthBelowPct(20);
 -- gate failure leaves the timer elapsed and re-checks every AI tick,
--- approximated here by a 1s poll (documented granularity trade-off).
+-- approximated here by a 1ms re-arm (jeklik gate-retry precedent).
 local function onHolyLight(creature, guid)
     if healthBelowPct(creature, 20) then
         creature:CastSpell(creature, SPELL_HOLY_LIGHT)
@@ -77,7 +77,7 @@ local function onHolyLight(creature, guid)
             onHolyLight(creature, guid)
         end)
     else
-        schedule(guid, "holyLight", 1000, function()
+        schedule(guid, "holyLight", 1, function()
             onHolyLight(creature, guid)
         end)
     end
@@ -92,7 +92,7 @@ local function onDivineShield(creature, guid)
             onDivineShield(creature, guid)
         end)
     else
-        schedule(guid, "divineShield", 1000, function()
+        schedule(guid, "divineShield", 1, function()
             onDivineShield(creature, guid)
         end)
     end
@@ -124,9 +124,11 @@ local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset calls Initialize(): both timers back to 20s.
+-- C++ Reset calls Initialize(): both timer VALUES back to 20s, but values are
+-- inert until combat (timers tick only behind UpdateVictim()); cancel-only
+-- here, EnterCombat arms.
 local function onReset(event, creature)
-    armTimers(creature)
+    cancelTimers(creature:GetGUID())
 end
 
 local SH_ENTRIES = { 17910, 17911, 17912, 17913, 17914 }
