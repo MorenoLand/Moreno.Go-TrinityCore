@@ -460,19 +460,17 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 	}
 }
 
-// checkTempSummonExpiry twins the TempSummon::Update timed arms
-// (TemporarySummon.cpp:66-170): a temporary-duration guardian's despawn
-// timer freezes while it is in combat (reset to the full lifetime — the
-// TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT / TIMED_OR_CORPSE / TIMED_OR_DEAD
-// arms, TemporarySummon.cpp:91-106, 133-168) and fires out of combat.
+// checkTempSummonExpiry twins the TempSummon::Update TEMPSUMMON_TIMED_DESPAWN
+// arm (TemporarySummon.cpp:80-89): spell-duration guardians stamped at spawn
+// get m_type = TEMPSUMMON_TIMED_DESPAWN via InitStats (TemporarySummon.cpp:175-183),
+// whose timer decrements UNCONDITIONALLY — even in combat — and fires at
+// spawn+lifetime regardless of combat state. Only the OUT_OF_COMBAT / TIMED_OR_
+// variants freeze the timer in combat; those types are not produced by the
+// spell-summon path, so no combat-reset arm is modeled here.
 // Returns true when the timer fired and the guardian was unsummoned — the
 // caller must stop driving the motion.
 func (s *Server) checkTempSummonExpiry(ctx context.Context, motion *creatureMotion, now time.Time) bool {
 	if s == nil || motion == nil || motion.TempSummonLifetime <= 0 {
-		return false
-	}
-	if motion.InCombat {
-		motion.TempSummonExpiresAt = now.Add(motion.TempSummonLifetime)
 		return false
 	}
 	if now.Before(motion.TempSummonExpiresAt) {
