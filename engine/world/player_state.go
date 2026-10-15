@@ -5293,12 +5293,12 @@ func (s *session) handleTogglePvP(ctx context.Context, payload []byte) bool {
 			s.player.PlayerFlags &^= playerFlagInPVP
 			s.player.PlayerFlags |= playerFlagPVPTimer
 		}
-	} else if s.player.PlayerFlags&playerFlagInPVP != 0 {
-		s.player.PlayerFlags &^= playerFlagInPVP
-		s.player.PlayerFlags |= playerFlagPVPTimer
 	} else {
-		s.player.PlayerFlags |= playerFlagInPVP
-		s.player.PlayerFlags &^= playerFlagPVPTimer
+		// MiscHandler.cpp:495-496: each flag toggles independently — from
+		// (IN_PVP=0, PVP_TIMER=0) this yields (1,1), not the complementary
+		// pair the old code produced.
+		s.player.PlayerFlags ^= playerFlagInPVP
+		s.player.PlayerFlags ^= playerFlagPVPTimer
 	}
 	// MiscHandler.cpp:496-505: post-flag arms. IsPvP() is the unit PvP byte
 	// flag (PVPFlags bit 0x01), pvpInfo.EndTimer is s.pvpEnd, pvpInfo.IsHostile
@@ -5307,7 +5307,6 @@ func (s *session) handleTogglePvP(ctx context.Context, payload []byte) bool {
 		if s.player.PVPFlags&0x01 == 0 || !s.pvpEnd.IsZero() {
 			s.player.PVPFlags |= 0x01
 			s.pvpEnd = time.Time{}
-			s.player.PlayerFlags &^= playerFlagPVPTimer
 		}
 	} else if !s.pvpHostile && s.player.PVPFlags&0x01 != 0 {
 		s.pvpEnd = time.Now()

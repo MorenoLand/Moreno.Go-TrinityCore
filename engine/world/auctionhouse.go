@@ -191,7 +191,7 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	// operator>>(ObjectGuid&) reads a raw uint64, not a packed GUID).
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true // truncation: drop, never close (WorldSession.cpp:427-432)
 	}
 	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagAuctioneer)) {
 		return true
@@ -414,7 +414,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	auctioneer, _ := reader.ReadU64()
 	itemCount, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true // truncation: drop, never close
 	}
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:132-138): more than
 	// MAX_AUCTION_ITEMS answers ERR_AUCTION_DATABASE_ERROR with auction id 0.
@@ -428,7 +428,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		// Raw 8-byte item GUIDs (AuctionHouseHandler.cpp:139: recvData >> itemGUIDs[i]).
 		rawItemGUID, rerr := reader.ReadU64()
 		if rerr != nil {
-			return false
+			return true // truncation: drop, never close
 		}
 		itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
 		if itemGUID == 0 {
@@ -436,7 +436,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		}
 		stackCount, rerr := reader.ReadU32()
 		if rerr != nil {
-			return false
+			return true // truncation: drop, never close
 		}
 		// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:144-150): a zero
 		// guid, a zero count, or a count above 1000 is silently dropped.
@@ -646,11 +646,11 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	auctioneer, _ := reader.ReadU64()
 	auctionID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true // truncation: drop, never close
 	}
 	price, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true // truncation: drop, never close
 	}
 	// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:436): cheater guard,
 	// silently dropped.
@@ -1022,7 +1022,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	s.removeFakeDeath()
 	auctionID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true // truncation: drop, never close
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {

@@ -293,17 +293,21 @@ func (s *session) sendResyncRunes() error {
 // handleLearnTalent processes CMSG_LEARN_TALENT (0x251).
 // Reference: WorldSession::HandleLearnTalentOpcode (SkillHandler.cpp:27).
 func (s *session) handleLearnTalent(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:724): the reference logs and drops the
+	// packet when no player is logged in — the connection stays open.
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
+	// WorldSession.cpp:427-432: a truncated packet throws and is skipped
+	// with the connection kept; Go drops the same way (return true).
 	talentID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	requestedRank, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	s.learnTalent(ctx, talentID, requestedRank)
@@ -314,23 +318,25 @@ func (s *session) handleLearnTalent(ctx context.Context, payload []byte) bool {
 // handleLearnPreviewTalents processes CMSG_LEARN_PREVIEW_TALENTS (0x4C1).
 // Reference: WorldSession::HandleLearnPreviewTalents (SkillHandler.cpp:36).
 func (s *session) handleLearnPreviewTalents(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:1348): drop, never close.
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
+	// Truncation drops per WorldSession.cpp:427-432, like handleLearnTalent.
 	talentsCount, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	for i := uint32(0); i < talentsCount && i < maxTalentsCount; i++ {
 		talentID, err := r.ReadU32()
 		if err != nil {
-			return false
+			return true
 		}
 		talentRank, err := r.ReadU32()
 		if err != nil {
-			return false
+			return true
 		}
 		s.learnTalent(ctx, talentID, talentRank)
 	}

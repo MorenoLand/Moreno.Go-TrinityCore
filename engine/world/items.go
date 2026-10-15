@@ -1565,10 +1565,16 @@ func (s *session) handleItemNameQuery(ctx context.Context, payload []byte) bool 
 // handleItemTextQuery processes CMSG_ITEM_TEXT_QUERY (0x243).
 // Reference: WorldSession::HandleItemTextQuery (ItemHandler.cpp:1211).
 func (s *session) handleItemTextQuery(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:710): drop when no player is logged in —
+	// the reference never answers the query for a playerless session.
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	r := protocol.NewReader(payload)
+	// Truncation drops per WorldSession.cpp:427-432, never closes.
 	rawItemGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
 	if itemGUID == 0 {
