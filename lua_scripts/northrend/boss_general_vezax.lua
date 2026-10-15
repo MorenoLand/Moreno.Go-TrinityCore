@@ -50,10 +50,25 @@
 -- EVENT_SURGE_OF_DARKNESS (:188-193) — Talk
 -- (EMOTE_SURGE_OF_DARKNESS 8) + Talk(SAY_SURGE_OF_DARKNESS 2) +
 -- DoCast(me, SPELL_SURGE_OF_DARKNESS 62662) 2-arg non-triggered,
--- 60s init (:146), re-arm {50s,70s} (:192) — no phase/machine
--- leg touches it (the vapor hard-mode leg only cancels
--- EVENT_SARONITE_VAPORS and EVENT_SEARING_FLAMES) — Talk order
+-- 60s init (:146), re-arm {50s,70s} (:192) — Talk order
 -- (emote, say, cast) kept.
+-- EVENT_SHADOW_CRASH (:164-173) — CheckPlayersInRange(4/9,
+-- 15.0f, 50.0f) / SelectTarget(Random, 150.0f, true) +
+-- DoCast(target, SPELL_SHADOW_CRASH 62660) 2-arg non-triggered,
+-- init {8s,10s} (:142), re-arm {8s,12s} (:171) — bridged via the
+-- freya/gal_darah GetPlayersInWorld candidate-selection
+-- precedent; the RAID_MODE count gate has no difficulty bridge
+-- and is approximated as "any alive player in the 15-50y ring"
+-- (fallback: random player within 150y); cast if target.
+-- EVENT_SEARING_FLAMES (:174-176) — DoCastAOE
+-- (SPELL_SEARING_FLAMES 62661) 2-arg non-triggered self-cast,
+-- 12s init (:143), re-arm {14s,17500ms} (:176) — the hard-mode
+-- cancel leg (:206) stays out with the unported vapor machine.
+-- EVENT_MARK_OF_THE_FACELESS (:178-187) —
+-- CheckPlayersInRange / SelectTarget(Random, 150.0f, true) +
+-- DoCast(target, SPELL_MARK_OF_THE_FACELESS 63276) 2-arg
+-- non-triggered, init {35s,40s} (:144), re-arm {35s,45s} (:185) —
+-- same candidate-selection bridge as SHADOW_CRASH.
 -- EVENT_BERSERK (:209-212) — Talk(SAY_BERSERK 4) + DoCast(me,
 -- SPELL_BERSERK 26662) 2-arg non-triggered, 600s init (:147), no
 -- re-arm — Talk-before-cast order kept.
@@ -70,11 +85,10 @@
 -- smellSaronite / animusDead / vaporCount init — no bridges.
 -- SpellHitTarget — SPELL_SHADOW_CRASH_HIT 62659
 -- TYPEID_PLAYER leg -> shadowDodger = false (consumer:
--- achievement_shadowdodger below) — stays out on trigger-path grounds:
--- the EVENT_SHADOW_CRASH 62660 cast is unported (no random-target /
--- target-search bridge), so event 15 never fires for it in Go (event 15
--- itself is live — boss_ai.go:1904); the achievement consumer has no
--- GetData bridge besides.
+-- achievement_shadowdodger below) — stays out on trigger-path grounds
+-- (event 15 never fires for it in Go — event 15 itself is live,
+-- boss_ai.go:1904); the achievement consumer has no GetData bridge
+-- besides. The EVENT_SHADOW_CRASH 62660 cast itself IS ported above.
 -- GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
 -- 31813188 — no GetData bridge; consumers: the two
 -- achievements below); DoAction(ACTION_VAPORS_DIE 1 /
@@ -83,20 +97,6 @@
 -- CheckShamanisticRage — HasSpell(SPELL_SHAMANTIC_RAGE)
 -- player-scan -> SPELL_CORRUPTED_RAGE — no map-player-scan
 -- bridge.
--- EVENT_SHADOW_CRASH (:164-173) — CheckPlayersInRange(4/9,
--- 15.0f, 50.0f) / SelectTarget(Random, 150.0f) +
--- DoCast(target, SPELL_SHADOW_CRASH 62660), init {8s,10s}
--- (:142), re-arm {8s,12s} — random-target selection leg — no
--- target-search bridge; left out.
--- EVENT_SEARING_FLAMES (:174-177) — DoCastAOE
--- (SPELL_SEARING_FLAMES 62661), re-arm {14s,17500ms} — canceled
--- by the unbridgeable vapor hard-mode leg (animus phases; the
--- task-named exclusion) and rescheduled by the unbridgeable
--- ACTION_ANIMUS_DIE DoAction leg — left out.
--- EVENT_MARK_OF_THE_FACELESS (:178-187) —
--- CheckPlayersInRange / SelectTarget(Random) + DoCast(target,
--- SPELL_MARK_OF_THE_FACELESS 63276), init {35s,40s} (:144),
--- re-arm {35s,45s} — random-target selection leg; left out.
 -- EVENT_SARONITE_VAPORS (:194-208) — DoCast
 -- (SPELL_SUMMON_SARONITE_VAPORS 63081) self-cast (2-arg
 -- DoCast(uint32) resolves SELF — UnitAI.cpp:113), 30s init
@@ -154,6 +154,9 @@ local EMOTE_SURGE_OF_DARKNESS = 8
 
 local SPELL_AURA_OF_DESPAIR = 62692
 local SPELL_SURGE_OF_DARKNESS = 62662
+local SPELL_SHADOW_CRASH = 62660
+local SPELL_SEARING_FLAMES = 62661
+local SPELL_MARK_OF_THE_FACELESS = 63276
 local SPELL_BERSERK = 26662
 
 local timers = {}
@@ -201,6 +204,79 @@ local function berserkTick(creature)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
 
+-- C++ SelectTarget player arms (the freya/gal_darah GetPlayersInWorld
+-- candidate-selection precedent; the gal_darah threat-list caveat holds).
+-- EVENT_SHADOW_CRASH / EVENT_MARK_OF_THE_FACELESS select via
+-- CheckPlayersInRange(RAID_MODE(4,9), 15.0f, 50.0f) with fallback
+-- SelectTarget(Random, 0, 150.0f, true) (:164-187). The RAID_MODE
+-- count gate has no difficulty bridge, so the primary leg is
+-- approximated as "any alive player in the 15-50y ring"; the 150y
+-- fallback leg is exact.
+local function vezaxRandomTarget(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local ring, wide = {}, {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            local dist = creature:GetDistance(plr)
+            if dist >= 15 and dist <= 50 then
+                ring[#ring + 1] = plr
+            end
+            if dist <= 150 then
+                wide[#wide + 1] = plr
+            end
+        end
+    end
+    if #ring > 0 then
+        return ring[math.random(#ring)]
+    end
+    if #wide > 0 then
+        return wide[math.random(#wide)]
+    end
+    return nil
+end
+
+-- C++ EVENT_SHADOW_CRASH (:164-173): CheckPlayersInRange /
+-- SelectTarget(Random, 150.0f) + DoCast(target, SPELL_SHADOW_CRASH
+-- 62660) (2-arg non-triggered); init {8s,10s} (:142), unconditional
+-- re-arm {8s,12s} (:171); cast only if a target was found.
+local function shadowCrashTick(creature, guid)
+    local target = vezaxRandomTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_SHADOW_CRASH)
+    end
+    schedule(guid, "shadow_crash", {8000, 12000}, function()
+        shadowCrashTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_SEARING_FLAMES (:174-176): DoCastAOE(SPELL_SEARING_FLAMES
+-- 62661) (2-arg non-triggered) — the boss_ai.go DoCastAOE self-cast
+-- lowering; 12s init (:143), unconditional re-arm {14s,17500ms}
+-- (:176). The hard-mode cancel leg (:206) stays out with the
+-- unported vapor hard-mode machine (unreachable in this model).
+local function searingFlamesTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SEARING_FLAMES)
+    schedule(guid, "searing_flames", {14000, 17500}, function()
+        searingFlamesTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_MARK_OF_THE_FACELESS (:178-187): CheckPlayersInRange /
+-- SelectTarget(Random, 150.0f) + DoCast(target,
+-- SPELL_MARK_OF_THE_FACELESS 63276) (2-arg non-triggered); init
+-- {35s,40s} (:144), unconditional re-arm {35s,45s} (:185); cast
+-- only if a target was found.
+local function markOfTheFacelessTick(creature, guid)
+    local target = vezaxRandomTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_MARK_OF_THE_FACELESS)
+    end
+    schedule(guid, "mark", {35000, 45000}, function()
+        markOfTheFacelessTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith (:134-148): BossAI passthrough + Talk
 -- (SAY_AGGRO) + DoCast(me, SPELL_AURA_OF_DESPAIR 62692) (:139,
 -- 2-arg non-triggered self-cast) + CheckShamanisticRage +
@@ -213,6 +289,15 @@ local function vezaxEnterCombat(event, creature, target)
     cancelTimers(guid)
     schedule(guid, "surge", 60000, function()
         surgeOfDarknessTick(creature, guid)
+    end)
+    schedule(guid, "shadow_crash", {8000, 10000}, function()
+        shadowCrashTick(creature, guid)
+    end)
+    schedule(guid, "searing_flames", 12000, function()
+        searingFlamesTick(creature, guid)
+    end)
+    schedule(guid, "mark", {35000, 40000}, function()
+        markOfTheFacelessTick(creature, guid)
     end)
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature)

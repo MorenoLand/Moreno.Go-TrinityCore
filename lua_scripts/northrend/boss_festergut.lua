@@ -148,14 +148,21 @@ local function onGastricBloat(creature, guid)
     schedule(guid, "gastric_bloat", {15000, 17500}, function() onGastricBloat(creature, guid) end)
 end
 
--- C++ EVENT_BERSERK: single-fire 5min — Talk(SAY_BERSERK) +
--- DoCastSelf(SPELL_BERSERK2) non-triggered (:93/:247-248).
+-- C++ EVENT_BERSERK: single-fire 5min — DoCastSelf
+-- (SPELL_BERSERK2) non-triggered then Talk(SAY_BERSERK)
+-- (:93/:246-248); cast-before-talk order kept.
 local function onBerserk(creature, guid)
-    creature:Talk(SAY_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK2)
+    creature:Talk(SAY_BERSERK)
 end
 
 local inhale = {}
+
+-- Forward declaration: onInhaleBlight's pungent-blight re-arm
+-- closure references onGasSpore before its local def below;
+-- without this the closure would bind a nil global (moam/
+-- malown/algalon/devourer_of_souls nil-call class).
+local onGasSpore
 
 -- C++ EVENT_INHALE_BLIGHT (:183-207): lua-local counter machine
 -- 0->3 (rotface-hasten precedent); non-3rd DoCastSelf(
@@ -182,7 +189,7 @@ end
 
 -- C++ EVENT_GAS_SPORE (:235-240): Talk(EMOTE_WARN_GAS_SPORE) +
 -- Talk(EMOTE_GAS_SPORE) + self-cast SPELL_GAS_SPORE non-triggered.
-local function onGasSpore(creature, guid)
+onGasSpore = function(creature, guid)
     creature:Talk(EMOTE_WARN_GAS_SPORE)
     creature:Talk(EMOTE_GAS_SPORE)
     creature:CastSpell(creature, SPELL_GAS_SPORE)
@@ -225,9 +232,16 @@ local function festergutKilledUnit(event, creature, victim)
     end
 end
 
--- C++ boss_festergut::JustDied:
--- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
+-- C++ boss_festergut::JustDied: _JustDied() resets the EventMap
+-- (boss_festergut.cpp:132) + Talk(SAY_DEATH) — the sjonnir
+-- JustDied-Talk precedent. The timers must be cancelled here:
+-- CreateLuaEvent timers have no death auto-cancel, so the
+-- self-re-arming inhale/gas-spore/gastric-bloat legs would keep
+-- firing on the corpse (the devourer death-cancel precedent).
 local function festergutJustDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    inhale[guid] = nil
     creature:Talk(SAY_DEATH)
 end
 

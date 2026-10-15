@@ -287,6 +287,11 @@ end
 -- bridge): the physical jump and its MovementInform landing legs do not
 -- port (see header); the C++-exact 5000ms MovementInform ->
 -- EVENT_RESUME_ATTACK delay (:171) is preserved, with the landing
+-- Forward declaration: onForgeJump's resume closure references
+-- onResumeAttack before its local def below; without this the
+-- closure would bind a nil global (festergut/moam nil-call class).
+local onResumeAttack
+
 -- assumed at forge-jump fire.
 local function onForgeJump(creature, guid)
     local st = garfrostState[guid]
@@ -299,7 +304,7 @@ end
 -- C++ :233-239 EVENT_RESUME_ATTACK: phase-2 seeds EVENT_CHILLING_WAVE at
 -- 5s (:235), phase-3 seeds EVENT_DEEP_FREEZE at 10s (:237); the
 -- AttackStart(me->GetVictim()) leg (:238) is engine-driven in Go.
-local function onResumeAttack(creature, guid)
+onResumeAttack = function(creature, guid)
     local st = garfrostState[guid]
     if not st then
         return
@@ -341,10 +346,12 @@ end
 
 -- C++ :132-152 DamageTaken: simple phase latch (the bronjahm precedent).
 -- C++ takes uint32& /*damage*/ (unnamed) — the !HealthAbovePct(66/33)
--- checks are on CURRENT health, no damage projection; the floored
--- <66 / <33 forms equal HealthBelowPct(66/33). The first leg returns
--- after flipping (:141), so one hit from >66% to <33% flips only to
--- phase 2 — replicated here.
+-- checks are on CURRENT health, no damage projection.
+-- HealthAbovePct(pct) = health > CountPctFromMaxHealth(pct)
+-- (Unit.h:874), so !above <=> health <= floor(0.pct*max): the floored
+-- <= forms below are exact; a strict < would fire one hit late at the
+-- exact boundary. The first leg returns after flipping (:141), so one
+-- hit from >66% to <=33% flips only to phase 2 — replicated here.
 local function garfrostDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = garfrostState[guid]
@@ -356,11 +363,11 @@ local function garfrostDamageTaken(event, creature, attacker, damage)
         return
     end
     local health = creature:GetHealth()
-    if st.phase == PHASE_ONE and health < math.floor(maxHealth * 66 / 100) then
+    if st.phase == PHASE_ONE and health <= math.floor(maxHealth * 66 / 100) then
         doPhaseFlip(creature, guid, PHASE_TWO, SAY_PHASE2)
         return
     end
-    if st.phase == PHASE_TWO and health < math.floor(maxHealth * 33 / 100) then
+    if st.phase == PHASE_TWO and health <= math.floor(maxHealth * 33 / 100) then
         doPhaseFlip(creature, guid, PHASE_THREE, SAY_PHASE3)
         return
     end
