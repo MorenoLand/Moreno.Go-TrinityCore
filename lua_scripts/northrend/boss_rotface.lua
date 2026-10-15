@@ -171,7 +171,7 @@ end
 
 -- C++ boss_rotface::JustEngagedWith:
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
--- CheckRequiredBosses evade branch (:130-135) has no bridge.
+-- CheckRequiredBosses evade branch (:126-130) has no bridge.
 local function rotfaceJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)

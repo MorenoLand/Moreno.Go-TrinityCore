@@ -62,7 +62,7 @@
 -- boss_sister_svalna::JustEngagedWith (:353-362) — DoCastSelf(
 --   SPELL_DIVINE_SURGE 71465, true) (:357) = TRIGGERED self-cast
 --   on engage; events.ScheduleEvent(EVENT_SVALNA_COMBAT, 9s)
---   (:358) -> Talk(SAY_SVALNA_AGGRO 3) (:496-499; the SetReactState
+--   (:358) -> Talk(SAY_SVALNA_AGGRO 3) (:499-502; the SetReactState
 --   leg has no bridge) modeled as a 9000ms one-shot.
 --   The crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA 5) leg (:355-356)
 --   is cross-AI Talk (no bridge).

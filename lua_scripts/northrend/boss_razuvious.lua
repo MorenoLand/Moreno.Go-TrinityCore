@@ -37,7 +37,7 @@
 -- with the understudy-entry arm); EVENT_STRIKE —
 -- DoCastVictim(Unbalancing Strike 26613), 21s init, 6s repeat
 -- (moroes precedent); EVENT_SHOUT — DoCastAOE(Disrupting Shout 29107)
--- 2-arg (non-triggered), 16s init, 16s repeat — lowered to self-cast
+-- 1-arg DoCastAOE (triggered defaults false), 16s init, 16s repeat — lowered to self-cast
 -- creature:CastSpell(creature, spell) (boss_ai.go DoCastAOE self-cast
 -- convention — selin_fireheart / mr_smite precedent; the Oct-12 "no
 -- DoCastAOE bridge" claim was wrong, retracted this run); JustDied
@@ -122,7 +122,7 @@ local function strikeTick(creature, guid)
     end)
 end
 
--- C++ EVENT_SHOUT (:152-154): DoCastAOE(Disrupting Shout 29107) 2-arg
+-- C++ EVENT_SHOUT (:152-154): DoCastAOE(Disrupting Shout 29107) 1-arg (triggered defaults false)
 -- (non-triggered); 16s init, 16s repeat. DoCastAOE lowers to self-cast
 -- creature:CastSpell(creature, spell) (boss_ai.go convention —
 -- selin_fireheart / mr_smite precedent; the old "no DoCastAOE bridge"

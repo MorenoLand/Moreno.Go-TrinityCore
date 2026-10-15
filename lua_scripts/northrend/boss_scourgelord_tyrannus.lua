@@ -48,7 +48,7 @@
 -- JustReachedHome InstallAllAccessories :322-326) have no bridge and stay
 -- out — documented below.
 -- Ported arms (C++ line refs; C++-exact for all modeled arms):
--- Tyrannus JustEngagedWith (:166) — Talk(SAY_AGGRO 8); the
+-- Tyrannus JustEngagedWith (:164) — Talk(SAY_AGGRO 8); the
 --   EVENT_COMBAT_START seed legs (:250-252) land here because Eluna event 1
 --   fires when DoZoneInCombat() (:249) puts Tyrannus in combat — the
 --   faithful combat-start anchor: OVERLORD_BRAND 69172 {5000,7000}ms,
@@ -66,9 +66,9 @@
 --   SelectTarget(Random, 1, 0.0f, true) -> random alive player; if found,
 --   Talk(SAY_MARK_RIMEFANG_2 12, target) (whisper-target bridge) +
 --   DoCast(target, 69275); re-arm {24000,26000}ms.
--- Tyrannus KilledUnit (:190) — Talk(SAY_SLAY 9) player-gated (the
+-- Tyrannus KilledUnit (:187) — Talk(SAY_SLAY 9) player-gated (the
 --   razuvious player-gated variant precedent).
--- Tyrannus JustDied (:195) — Talk(SAY_DEATH 10); timers cancelled (the
+-- Tyrannus JustDied (:193) — Talk(SAY_DEATH 10); timers cancelled (the
 --   sjonnir JustDied-Talk precedent).
 -- Rimefang DoAction(ACTION_START_RIMEFANG) (:328-336) — the EVENT_ICY_BLAST
 --   seed (15s, :335) lands on Rimefang's own Eluna event 1, which fires
@@ -107,7 +107,7 @@
 -- Tyrannus AttackStart NON_ATTACKABLE gate (:169-176), EnterEvadeMode
 --   (:178-186: instance SetBossState(FAIL) + rimefang EnterEvadeMode +
 --   DespawnOrUnsummon) — no bridges.
--- Tyrannus JustDied instance legs (:195-206) — SetBossState(DONE) +
+-- Tyrannus JustDied instance legs (:193-206) — SetBossState(DONE) +
 --   TEMPSUMMON_DEAD_DESPAWN + rimefang->AI()->DoAction(ACTION_END_COMBAT)
 --   — no instance / DoAction bridges.
 -- The Overlord Brand aura chain — spell_tyrannus_overlord_brand
@@ -136,7 +136,7 @@
 -- at_tyrannus_event_starter (:541-560) — unbridged area-trigger queue.
 -- Upstream C++ findings: EVENT_INTRO_1 (:232-234) is a dead case — its only
 -- leg is a commented-out Talk(SAY_GORKUN_INTRO_2); the SAY_GORKUN_*
--- (:37-39), SAY_JAYNA_OUTRO_* (:53-55) and SAY_SYLVANAS_OUTRO_* (:58-59)
+-- (:34-36), SAY_JAYNA_OUTRO_* (:53-55) and SAY_SYLVANAS_OUTRO_* (:58-59)
 -- yells are never Talked in this TU (the outro Talk legs live in
 -- instance_pit_of_saron.cpp); EVENT_HOARFROST re-schedules unconditionally
 -- on every mark-aura apply with no duplicate guard (:346).
@@ -220,6 +220,7 @@ end
 
 -- C++ :259-261 EVENT_FORCEFUL_SMASH: DoCastVictim(69155) victim-cast,
 -- non-triggered; chains EVENT_UNHOLY_POWER at 1000ms (no direct re-arm).
+local unholyPowerTick
 local function forcefulSmashTick(creature, guid)
     creature:CastSpell(nil, SPELL_FORCEFUL_SMASH)
     schedule(guid, "unholy", 1000, function() unholyPowerTick(creature, guid) end)
@@ -228,7 +229,7 @@ end
 -- C++ :263-267 EVENT_UNHOLY_POWER: Talk(13), Talk(14) (C++ order kept),
 -- DoCast(me, 69167) self-cast, non-triggered; re-arms EVENT_FORCEFUL_SMASH
 -- {40000,48000}ms.
-local function unholyPowerTick(creature, guid)
+unholyPowerTick = function(creature, guid)
     creature:Talk(SAY_DARK_MIGHT_1)
     creature:Talk(SAY_DARK_MIGHT_2)
     creature:CastSpell(creature, SPELL_UNHOLY_POWER)
@@ -248,7 +249,7 @@ local function markOfRimefangTick(creature, guid)
     schedule(guid, "mark", {24000, 26000}, function() markOfRimefangTick(creature, guid) end)
 end
 
--- C++ :166 JustEngagedWith: Talk(SAY_AGGRO); the :250-252 EVENT_COMBAT_START
+-- C++ :164 JustEngagedWith: Talk(SAY_AGGRO); the :250-252 EVENT_COMBAT_START
 -- seed legs land here — Eluna event 1 fires at the same combat-start moment
 -- (DoZoneInCombat :249).
 local function tyrannusEnterCombat(event, creature, target)
@@ -260,7 +261,7 @@ local function tyrannusEnterCombat(event, creature, target)
     schedule(guid, "mark", {25000, 27000}, function() markOfRimefangTick(creature, guid) end)
 end
 
--- C++ :190 KilledUnit: player-gated Talk(SAY_SLAY) — the razuvious
+-- C++ :187 KilledUnit: player-gated Talk(SAY_SLAY) — the razuvious
 -- player-gated variant precedent.
 local function tyrannusKilledUnit(event, creature, victim)
     if victim:GetObjectType() == "Player" then
@@ -273,7 +274,7 @@ local function tyrannusCancelCombat(event, creature)
     initState(creature:GetGUID())
 end
 
--- C++ :195 JustDied: Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent;
+-- C++ :193 JustDied: Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent;
 -- timers cancelled.
 local function tyrannusJustDied(event, creature)
     initState(creature:GetGUID())

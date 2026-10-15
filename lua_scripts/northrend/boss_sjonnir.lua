@@ -52,7 +52,7 @@
 -- DoAction(ACTION_OOZE_DEAD 1) / GetData(DATA_ABUSE_THE_OOZE 2)
 -- — abuseTheOoze counter — no DoAction / GetData bridge
 -- (consumer: achievement_abuse_the_ooze below).
--- UpdateAI event machine (boss_sjonnir.cpp:144-200), PORTED arms:
+-- UpdateAI event machine (boss_sjonnir.cpp:151-208), PORTED arms:
 -- EVENT_LIGHTNING_SHIELD DoCast(me, SPELL_LIGHTING_SHIELD 50831)
 -- non-triggered, one-shot 20s/25s, no re-arm — PORTED as a
 -- one-shot CreateLuaEvent + CastSpell(creature, 50831).
@@ -75,8 +75,9 @@
 -- EARTHEN_DWARF 27980, TEMPSUMMON_CORPSE_TIMED_DESPAWN 30s, 20s
 -- reschedule) — no SummonCreature bridge (the health-tier
 -- latch alone can’t be ported without the summon cast);
--- EVENT_FRENZY DoCast(me, SPELL_FRENZY 28747, true) —
--- triggered self-cast, no triggered-cast bridge.
+-- EVENT_FRENZY DoCast(me, SPELL_FRENZY 28747, true) — PORTED (event 1;
+-- triggered self-cast one-shot, no re-arm; the stale "no triggered-cast
+-- bridge" claim is retracted — the bridge is CastSpell(creature, spell, true).
 -- npc_malformed_ooze (CreatureScript via
 -- GetHallsOfStoneAI<npc_malformed_oozeAI> (ScriptedAI);
 -- NPC_MALFORMED_OOZE = 27981, local enum in boss_sjonnir.cpp —
@@ -106,6 +107,7 @@ local SAY_DEATH = 2
 local SPELL_LIGHTING_SHIELD = 50831
 local SPELL_STATIC_CHARGE = 50834
 local SPELL_LIGHTING_RING = 51849
+local SPELL_FRENZY = 28747
 
 local timers = {}
 
@@ -167,6 +169,11 @@ local function sjonnirEnterCombat(event, creature, target)
     end)
     schedule(guid, "lightningRing", {30000, 35000}, function()
         lightningRingTick(creature, guid)
+    end)
+-- C++ EVENT_FRENZY (:196-199): DoCast(me, 28747, true) triggered self-cast,
+-- single-fire (no reschedule in the case), seeded at 5min (:114).
+    schedule(guid, "frenzy", 300000, function()
+        creature:CastSpell(creature, SPELL_FRENZY, true)
     end)
 end
 

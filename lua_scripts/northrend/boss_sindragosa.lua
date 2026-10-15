@@ -49,7 +49,7 @@
 -- player-gated variant precedent).
 -- boss_sindragosa JustDied — Talk(SAY_DEATH 10) (event 4 — the
 -- sjonnir JustDied-Talk precedent; the DoCastAOE
--- FROST_INFUSION_CREDIT heroic leg has no-cast bridge).
+-- FROST_INFUSION_CREDIT heroic leg is gated on Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE) (:262-264); no difficulty/aura bridge).
 -- DOCUMENTED-ONLY (in this header; only entry 36853 registered):
 -- PORTED (2026-10-13): JustEngagedWith — DoCastSelf(
 -- SPELL_FROST_AURA 70084) + DoCastSelf(SPELL_PERMAEATING_CHILL 70109)
@@ -225,7 +225,7 @@ end
 -- EVENT_THIRD_PHASE_CHECK 1s (:403-410).
 local function sindragosaDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    if not sindragosaThirdPhase[guid] and creature:GetHealthPct() < 35 then
+    if not sindragosaThirdPhase[guid] and creature:GetHealthPct() <= 35 then
         sindragosaThirdPhase[guid] = true
         schedule(guid, "third_phase_check", 1000, function() onThirdPhaseCheck(creature, guid) end)
     end
