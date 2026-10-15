@@ -88,6 +88,8 @@ local function st(guid)
     return s
 end
 
+local onPoisonBolt
+
 -- C++ Frenzy_Timer: !Frenzy -> DoCast(me, 26051), Talk(0),
 -- Frenzy = true, PoisonBolt_Timer = 3000, -> urand(25000,35000).
 local function onFrenzy(creature, guid)
@@ -161,7 +163,7 @@ end
 
 -- C++ PoisonBolt_Timer: fires only while Frenzy or Berserk;
 -- DoCastVictim(26052), -> 3000. Init 4000.
-function onPoisonBolt(creature, guid)
+onPoisonBolt = function(creature, guid)
     local s = st(guid)
     if s.frenzy or s.berserk then
         local victim = creature:GetVictim()

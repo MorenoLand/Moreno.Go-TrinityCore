@@ -132,12 +132,23 @@ local function onWideSlash(creature, guid)
     end)
 end
 
--- C++ EVENT_TRASH: DoCast(me, 3391), fired once at 1s; it reschedules
--- EVENT_WIDE_SLASH at 15s (C++-verbatim, not a repeat of itself).
+-- C++ ScheduleEvent is a pure multimap insert (EventMap.cpp:44) — the
+-- TRASH arm's 15s wide slash is a SECOND independent 11s line stacked on
+-- the 11s init line, so it gets its own timer key (schedule() cancels the
+-- key, i.e. RescheduleEvent semantics).
+local function onWideSlash2(creature, guid)
+    creature:CastSpell(creature, SPELL_WIDE_SLASH)
+    schedule(guid, "wideslash2", 11000, function()
+        onWideSlash2(creature, guid)
+    end)
+end
+
+-- C++ EVENT_TRASH: DoCast(me, 3391), fired once at 1s; it seeds the second
+-- wide-slash line at 15s (C++-verbatim, not a repeat of itself).
 local function onTrash(creature, guid)
     creature:CastSpell(creature, SPELL_TRASH)
-    schedule(guid, "wideslash", 15000, function()
-        onWideSlash(creature, guid)
+    schedule(guid, "wideslash2", 15000, function()
+        onWideSlash2(creature, guid)
     end)
 end
 

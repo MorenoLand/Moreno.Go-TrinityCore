@@ -21,7 +21,7 @@
 -- - Mortal Wound 28467 on the victim (C++ DoCastVictim, non-triggered),
 --   init urand(10000,15000) -> urand(10000,20000).
 -- Unmodeled (documented-only, no bridges):
--- - SpawnSpawns_Timer (urand 6000-12000 init -> urand 30000-60000):
+-- - SpawnSpawns_Timer (urand 15000-45000 init -> urand 30000-60000):
 --   SummonSpawn(random target via SelectTarget Random) 1-3 times —
 --   DoSpawnCreature(15630, offset coords, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT)
 --   has zero Lua usage (cthun precedent — no bridge), and SelectTarget

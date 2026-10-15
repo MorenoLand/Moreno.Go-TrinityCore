@@ -97,7 +97,9 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() <= math.floor(maxHealth * 5 / 100) then
+    -- C++ !HealthAbovePct(5) is read post-damage in UpdateAI; event 9
+    -- fires pre-damage (engine/world/combat.go:1274), so project the blow.
+    if creature:GetHealth() - damage <= math.floor(maxHealth * 5 / 100) then
         state.deathCloud = true
         local victim = creature:GetVictim()
         if victim then
