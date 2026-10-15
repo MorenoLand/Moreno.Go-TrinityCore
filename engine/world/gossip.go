@@ -1180,6 +1180,7 @@ func (s *session) prepareGameObjectGossip(ctx context.Context, guid uint64, entr
 func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, entry uint32, greetType uint32, quests []gossipQuestItem) []byte {
 	title := ""
 	var emoteDelay, emoteType uint32
+	greetingFound := false
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		var greetEmoteType, greetEmoteDelay int64
 		var greeting string
@@ -1190,6 +1191,27 @@ func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, ent
 			title = greeting
 			// GossipDef.cpp:340-341: the packet carries delay then type.
 			emoteDelay, emoteType = uint32(greetEmoteDelay), uint32(greetEmoteType)
+			greetingFound = true
+		}
+	}
+	// Player::SendPreparedQuest (Player.cpp:14855-14880): with no
+	// quest_greeting row, a creature source falls back to its NPC gossip
+	// text title (Text_0, else Text_1) and the first emote from
+	// GetGossipTextId(creature); a gameobject source keeps the empty title
+	// and zero emotes. npc_text locale overrides are unmodeled with the
+	// rest of the no-locale divergence.
+	if !greetingFound && greetType == typeIDUnit && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var gossipMenuID int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT gossip_menu_id FROM creature_template WHERE entry = ?", entry).Scan(&gossipMenuID); err == nil && gossipMenuID != 0 {
+			if textID, terr := s.loadGossipMenuTitleID(ctx, uint32(gossipMenuID), entry, guid); terr == nil {
+				if options, oerr := s.loadNPCText(ctx, textID); oerr == nil && len(options) > 0 {
+					emoteDelay, emoteType = options[0].Emotes[0].Delay, options[0].Emotes[0].ID
+					title = options[0].Text0
+					if title == "" {
+						title = options[0].Text1
+					}
+				}
+			}
 		}
 	}
 	entries := protocol.NewBuffer(64)
