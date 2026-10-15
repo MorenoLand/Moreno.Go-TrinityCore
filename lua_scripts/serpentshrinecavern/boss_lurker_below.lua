@@ -177,6 +177,22 @@ local function playersInInstance(creature)
     return found
 end
 
+-- Raw map player list (dead players included): the CheckTimer
+-- melee-range scan iterates the raw PlayerList with no alive
+-- check — a corpse in melee range sets InRange=true and
+-- suppresses waterbolt (boss_lurker_below.cpp:270-280). The
+-- random-target arms keep the alive-only pick above.
+local function playersInInstanceRaw(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            found[#found + 1] = p
+        end
+    end
+    return found
+end
+
 -- C++ SelectTarget(Random, 0): random alive player in the
 -- instance.
 local function pickRandomAlivePlayer(creature)
@@ -266,10 +282,11 @@ local function lurkerTick(creature, guid)
         end
 
         -- CheckTimer 15s then 2s: melee-range scan via the
-        -- 5-yd player stand-in (header).
+        -- 5-yd player stand-in (header). Uses the raw player list:
+        -- C++ has no alive check, so dead players count.
         if st.check <= 1000 then
             st.inRange = false
-            for _, p in ipairs(playersInInstance(creature)) do
+            for _, p in ipairs(playersInInstanceRaw(creature)) do
                 if creature:GetDistance(p) <= MELEE_RANGE_STANDIN then
                     st.inRange = true
                     break

@@ -273,11 +273,14 @@ local function leotherasTick(creature, guid)
     end
 
     -- Berserk: 10min one-shot, EnrageUsed-guarded (C++-exact),
-    -- non-triggered self-cast.
-    if st.berserk <= 1000 and not st.enrageUsed then
+    -- non-triggered self-cast. C++ fires at Berserk_Timer < diff
+    -- (strict, boss_leotheras_the_blind.cpp:467): at 1s pump the
+    -- 600000 timer reaches exactly 1000 then 0, firing on the 0
+    -- tick — `<= 1000` fired ~1s early.
+    if st.berserk < 1000 and not st.enrageUsed then
         creature:CastSpell(creature, SPELL_BERSERK)
         st.enrageUsed = true
-    elseif st.berserk > 1000 then
+    elseif st.berserk >= 1000 then
         st.berserk = st.berserk - 1000
     end
 
