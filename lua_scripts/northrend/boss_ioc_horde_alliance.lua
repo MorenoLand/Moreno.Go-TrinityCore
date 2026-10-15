@@ -25,6 +25,7 @@ local ENTRY_OVERLORD_AGMAR = 34922
 
 local SPELL_BRUTAL_STRIKE = 58460 -- BossSpells :34
 local SPELL_CRUSHING_LEAP = 68506 -- BossSpells :36
+local SPELL_DAGGER_THROW  = 67280 -- BossSpells :25
 
 local timers = {}
 
@@ -44,7 +45,30 @@ local function schedule(guid, key, delay, fn)
         per = {}
         timers[guid] = per
     end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(SelectTargetMethod::Random, 1) — alive players on
+-- the same map/instance; the offset-1 top-threat skip
+-- (UnitAI.h:162-166) has no bridge — the pool picks uniformly among
+-- alive players (the ichoron / keleseth-thorim precedent).
+local function randomPlayer(creature)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ :90-99 EVENT_BRUTAL_STRIKE: DoCastVictim(SPELL_BRUTAL_STRIKE)
@@ -64,6 +88,18 @@ local function onCrushingLeap(creature, guid)
     schedule(guid, "crushing_leap", 25000, function() onCrushingLeap(creature, guid) end)
 end
 
+-- C++ :100-103 EVENT_DAGGER_THROW: if (Unit* target =
+-- SelectTarget(Random, 1)) DoCast(target, SPELL_DAGGER_THROW), 2-arg
+-- (non-triggered); init 7s / unconditional re-arm 7s (re-arms even on
+-- nil target — the rage_winterchill precedent).
+local function onDaggerThrow(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_DAGGER_THROW)
+    end
+    schedule(guid, "dagger_throw", 7000, function() onDaggerThrow(creature, guid) end)
+end
+
 -- C++ boss_ioc_horde_alliance::JustEngagedWith (:72-78): the EventMap
 -- seeds — only BRUTAL_STRIKE and CRUSHING_LEAP port (below).
 local function iocBossJustEngagedWith(event, creature, target)
@@ -71,6 +107,7 @@ local function iocBossJustEngagedWith(event, creature, target)
     cancelTimers(guid)
     schedule(guid, "brutal_strike", 5000, function() onBrutalStrike(creature, guid) end)
     schedule(guid, "crushing_leap", 15000, function() onCrushingLeap(creature, guid) end)
+    schedule(guid, "dagger_throw", 7000, function() onDaggerThrow(creature, guid) end)
 end
 
 -- C++ Reset()/LeaveCombat/JustDied event machinery — cancel/re-arm on
@@ -90,8 +127,9 @@ local function iocBossDied(event, creature, killer)
 end
 
 -- Documented-only arms (no bridge):
--- EVENT_DAGGER_THROW (:100-103): SelectTarget(Random, 1) + DoCast(target,
--- 67280), init 7s / re-arm 7s — random-target SelectTarget has no bridge.
+-- EVENT_DAGGER_THROW (:100-103): PORTED above via the randomPlayer pool
+-- (the ichoron / keleseth-thorim precedent); the offset-1 top-threat
+-- skip (UnitAI.h:162-166) has no bridge — documented deviation.
 -- EVENT_CHECK_RANGE (:108-113): init 1s / re-arm 1s; home-distance >
 -- 25.0f -> DoCast(me, SPELL_RAGE 66776) else RemoveAurasDueToSpell(66776)
 -- — the distance gate needs me->GetHomePosition(), which has no lua

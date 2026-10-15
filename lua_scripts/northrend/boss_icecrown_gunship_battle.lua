@@ -45,14 +45,15 @@
 -- non-triggered, re-arm {25s,30s} (:1544-1546);
 -- EVENT_WOUNDING_STRIKE {8s,10s} —
 -- DoCastVictim(SPELL_WOUNDING_STRIKE 69651) non-triggered, re-arm
--- {9s,13s} (:1548-1550). The :1530-1531 skip-while-casting /
+-- {9s,13s} (:1548-1550). The :1533 skip-while-casting /
 -- already-bladestorming gate: the UNIT_STATE_CASTING leg has no bridge
 -- (maiden precedent); the self-aura gate IS bridged — the callback
 -- delays 1s instead of firing while HasAura(69652).
 -- npc_gunship_boarding_add DamageTaken (:1455-1464):
 -- SPELL_DESPERATE_RESOLVE 69647 at 25% — DoCast(me, 69647, true)
 -- TRIGGERED, one-shot _usedDesperateResolve latch (per-GUID table,
--- cleared on events 2/23) — the moroes-frenzy pattern.
+-- per-creature-lifetime: C++ sets it only in the AI constructor, so it
+-- survives evade — the moroes-frenzy pattern).
 -- npc_gunship_rocketeer UpdateAI (:1619-1632): SPELL_ROCKET_ARTILLERY —
 -- DoCastAOE(entry == 36978 and 70609 or 69678, true) TRIGGERED on a 9s
 -- SpellHistory cooldown loop. Lua emulation: engage-immediate cast +
@@ -181,7 +182,7 @@ end
 -- C++ :1544-1546 EVENT_BLADESTORM: DoCastAOE(SPELL_BLADESTORM)
 -- non-triggered, re-arm {25s,30s}.
 local function onBladestorm(creature, guid)
-    -- C++ :1530-1531 skips while casting or already bladestorming; the
+    -- C++ :1533 skips while casting or already bladestorming; the
     -- UNIT_STATE_CASTING leg has no bridge (maiden precedent) but the
     -- self-aura gate is bridged — delay 1s instead of firing into it.
     if creature:HasAura(SPELL_BLADESTORM) then
@@ -235,10 +236,14 @@ local function boardingAddDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ _usedDesperateResolve is set only in the
+-- npc_gunship_boarding_addAI constructor (:1377-1381); no Reset()
+-- override exists in the gunship_npc_AI -> npc_gunship_boarding_addAI
+-- chain, so the spent latch SURVIVES evade in C++. The per-GUID table
+-- is keyed per creature spawn (fresh GUID per respawn), so it is never
+-- cleared here — event 2/23 only cancel timers.
 local function boardingAddReset(event, creature)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
-    desperateUsed[guid] = nil
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ npc_gunship_rocketeer UpdateAI (:1619-1632): DoCastAOE(entry == 36978
@@ -280,9 +285,11 @@ RegisterCreatureEvent(ENTRY_MURADIN, 9, captainDamageTaken)
 RegisterCreatureEvent(ENTRY_MURADIN, 23, captainReset)
 RegisterCreatureEvent(ENTRY_KOR_KRON_SERGEANT, 1, leaderEnterCombat)
 RegisterCreatureEvent(ENTRY_KOR_KRON_SERGEANT, 2, leaderLeaveCombat)
+RegisterCreatureEvent(ENTRY_KOR_KRON_SERGEANT, 9, boardingAddDamageTaken)
 RegisterCreatureEvent(ENTRY_KOR_KRON_SERGEANT, 23, leaderReset)
 RegisterCreatureEvent(ENTRY_SKYBREAKER_SERGEANT, 1, leaderEnterCombat)
 RegisterCreatureEvent(ENTRY_SKYBREAKER_SERGEANT, 2, leaderLeaveCombat)
+RegisterCreatureEvent(ENTRY_SKYBREAKER_SERGEANT, 9, boardingAddDamageTaken)
 RegisterCreatureEvent(ENTRY_SKYBREAKER_SERGEANT, 23, leaderReset)
 RegisterCreatureEvent(ENTRY_KOR_KRON_REAVER, 2, boardingAddReset)
 RegisterCreatureEvent(ENTRY_KOR_KRON_REAVER, 9, boardingAddDamageTaken)

@@ -70,11 +70,15 @@
 -- — PORTED as CreateLuaEvent {10000, 11000} + CastSpell(nil,
 -- 52780), cancel on 2/4/23 (the stale "no timer-event / cast
 -- bridges" claim is retracted for this arm).
--- STAY-OUT: uiStaticOverloadTimer random-target
--- DoCast(SPELL_STATIC_OVERLOAD 52658), 5-6s init/re-arm —
--- gates on SelectTarget(Random, 0) (boss_ionar.cpp:261-263) with
--- no random-target bridge; substituting a victim-cast would
--- deviate from the C++.
+-- uiStaticOverloadTimer — PORTED: DoCast(target,
+-- SPELL_STATIC_OVERLOAD 52658), 2-arg non-triggered, urand(5s,6s)
+-- init -> urand(5s,6s) re-arm (boss_ionar.cpp:260-266), cast only
+-- when SelectTarget(Random, 0) (boss_ionar.cpp:261-263) finds a
+-- target, re-arm unconditional (the rage_winterchill precedent).
+-- Random-target modeled via the randomPlayer pool (the ichoron /
+-- keleseth-thorim precedent); C++ omits the playerOnly flag, so the
+-- player-only pool is the documented deviation (same as the ichoron
+-- water-blast deviation).
 -- UpdateAI disperse health check — !bHasDispersed &&
 -- HealthBelowPct(uiDisperseHealth) (45 + urand(0,10)):
 -- Talk(SAY_SPLIT 1) + InterruptNonMeleeSpells +
@@ -101,6 +105,7 @@ local SAY_SLAY = 2
 local SAY_DEATH = 3
 
 local SPELL_BALL_LIGHTNING = 52780
+local SPELL_STATIC_OVERLOAD = 52658
 
 local timers = {}
 
@@ -126,12 +131,45 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
+-- the same map/instance; no distance filter on this arm — the
+-- randomPlayer pool (the ichoron / keleseth-thorim precedent).
+local function randomPlayer(creature)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ uiBallLightningTimer (:270-274): DoCastVictim(52780)
 -- non-triggered, urand(10s, 11s) init -> urand(10s, 11s) loop.
 local function ballLightningTick(creature, guid)
     creature:CastSpell(nil, SPELL_BALL_LIGHTNING)
     schedule(guid, "ballLightning", {10000, 11000}, function()
         ballLightningTick(creature, guid)
+    end)
+end
+
+-- C++ uiStaticOverloadTimer (:260-266): if (Unit* target =
+-- SelectTarget(Random, 0)) DoCast(target, SPELL_STATIC_OVERLOAD),
+-- 2-arg non-triggered; urand(5s,6s) init / unconditional
+-- urand(5s,6s) re-arm.
+local function staticOverloadTick(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_STATIC_OVERLOAD)
+    end
+    schedule(guid, "staticOverload", {5000, 6000}, function()
+        staticOverloadTick(creature, guid)
     end)
 end
 
@@ -144,6 +182,9 @@ local function ionarEnterCombat(event, creature, target)
     cancelTimers(guid)
     schedule(guid, "ballLightning", {10000, 11000}, function()
         ballLightningTick(creature, guid)
+    end)
+    schedule(guid, "staticOverload", {5000, 6000}, function()
+        staticOverloadTick(creature, guid)
     end)
 end
 

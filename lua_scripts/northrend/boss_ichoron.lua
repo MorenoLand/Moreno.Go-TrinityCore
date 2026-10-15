@@ -205,7 +205,7 @@ end
 -- C++ KilledUnit (:162-165): player-gated Talk(SAY_SLAY) — the
 -- razuvious player-gated variant precedent.
 local function ichoronKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end

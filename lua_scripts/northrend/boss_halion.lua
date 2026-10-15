@@ -34,14 +34,24 @@
 -- AUDITED this run — COMPLETE (see accounting below).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
--- boss_halion JustEngagedWith — Talk(SAY_AGGRO 2)
--- (event 1 — the auriaya precedent; the events.Reset /
--- events.SetPhase(PHASE_ONE) / BossAI::JustEngagedWith / DoCastSelf
--- SPELL_TWILIGHT_PRECISION / EVENT_ACTIVATE_FIREWALL / EVENT_BREATH /
--- EVENT_CLEAVE / EVENT_TAIL_LASH / EVENT_FIERY_COMBUSTION /
--- EVENT_METEOR_STRIKE ScheduleEvent / SendEncounterUnit /
--- controller->AI()->SetData(DATA_FIGHT_PHASE, PHASE_ONE) legs have no
--- bridges).
+-- boss_halion JustEngagedWith — Talk(SAY_AGGRO 2) + the three
+-- phase-ungated timer arms (event 1 — the auriaya precedent):
+-- EVENT_CLEAVE — DoCastVictim(SPELL_CLEAVE 74524) non-triggered,
+-- randtime(6s,10s) init / randtime(8s,10s) re-arm ->
+-- creature:CastSpell(nil, SPELL_CLEAVE); EVENT_TAIL_LASH —
+-- DoCastAOE(SPELL_TAIL_LASH 74531) non-triggered, randtime(7s,12s)
+-- init / randtime(11s,16s) re-arm -> creature:CastSpell(creature,
+-- SPELL_TAIL_LASH) (the DoCastAOE self-cast lowering); EVENT_BREATH —
+-- DoCastSelf(SPELL_FLAME_BREATH 74525) non-triggered, randtime(5s,15s)
+-- init / randtime(16s,25s) re-arm -> creature:CastSpell(creature,
+-- SPELL_FLAME_BREATH) (boss_halion.cpp:251-253/:335-344); the 75%
+-- DamageTaken PHASE_TWO transition stops all three via
+-- halionDamageTaken (event 9 — the bronjahm latch precedent); the
+-- events.Reset / events.SetPhase(PHASE_ONE) / BossAI::JustEngagedWith /
+-- DoCastSelf SPELL_TWILIGHT_PRECISION / EVENT_ACTIVATE_FIREWALL /
+-- EVENT_FIERY_COMBUSTION / EVENT_METEOR_STRIKE ScheduleEvent /
+-- SendEncounterUnit / controller->AI()->SetData(DATA_FIGHT_PHASE,
+-- PHASE_ONE) legs have no bridges).
 -- boss_halion JustDied — Talk(SAY_DEATH 5)
 -- (event 4 — the sjonnir precedent; the _JustDied() instance leg and
 -- the cross-creature twilightHalion->KillSelf() /
@@ -67,12 +77,17 @@
 -- 12s init (armed in the C++ constructor, :420) / randtime(12s,16s)
 -- re-arm (:529-532) -> creature:CastSpell(creature, SPELL_TAIL_LASH)
 -- — the DoCastAOE self-cast lowering (boss_ai.go convention).
--- DOCUMENTED-ONLY (in this header; only entries 39863 and 40142
+-- DOCUMENTED-ONLY (in this header; entries 39863 and 40142
 -- registered):
--- boss_halion DamageTaken — Talk(SAY_PHASE_TWO 4) rides the 75% health
--- transition (no-DamageTaken bridge); the UNIT_FLAG_NOT_SELECTABLE /
--- DoCastSelf SPELL_TWILIGHT_PHASING / controller SetData(PHASE_TWO)
--- legs ride absent bridges.
+-- boss_halion DamageTaken — PORTED (event 9, pre-damage): the 75%
+-- PHASE_TWO transition — Talk(SAY_PHASE_TWO 4) + stop of the three
+-- phase-one timer arms on post-damage health < 75% max
+-- (boss_halion.cpp:286-296; HealthBelowPctDamaged strict-<, signed,
+-- unclamped — the zum_rah pre-damage latch precedent). The never-die
+-- damage cap (damage = health-1 while not PHASE_THREE) rides the
+-- unbridged phase machine and stays out; the UNIT_FLAG_NOT_SELECTABLE /
+-- CastStop / DoCastSelf SPELL_TWILIGHT_PHASING / controller
+-- SetData(PHASE_TWO) legs ride absent bridges.
 -- boss_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING 75509 — stays out: the trigger is the
 -- unported npc_halion_controller's EVENT_TWILIGHT_MENDING cast
@@ -82,10 +97,12 @@
 -- boss_halion UpdateAI — Talk(SAY_METEOR_STRIKE 3) rides
 -- EVENT_METEOR_STRIKE, phase-machine-gated (PHASE_ONE->TWO transition
 -- via 75%-health DamageTaken + controller SetData, boss_halion.cpp:
--- 286-296); the EVENT_BREATH / EVENT_ACTIVATE_FIREWALL /
--- EVENT_FIERY_COMBUSTION DoCastSelf / CastSpell legs ride the same
--- phase machine (SetPhase :246/:288/:426/:477 + cross-creature
--- controller SetData :260/:296/:667 — no phase-machine bridge).
+-- 286-296); the EVENT_ACTIVATE_FIREWALL / EVENT_FIERY_COMBUSTION
+-- DoCastSelf / CastSpell legs ride the same phase machine (SetPhase
+-- :246/:288/:426/:477 + cross-creature controller SetData
+-- :260/:296/:667 — no phase-machine bridge). EVENT_BREATH /
+-- EVENT_CLEAVE / EVENT_TAIL_LASH are PORTED above (phase-ungated
+-- engage arms, stopped by the 75% latch).
 -- boss_twilight_halion JustEngagedWith — zero Talk; the three
 -- phase-ungated timer arms are PORTED (see twilightHalionEnterCombat
 -- below). C++ UpdateAI has no phase early-return (boss_halion.cpp:
@@ -110,14 +127,15 @@
 -- controller trigger (boss_halion.cpp:732-735); the SPELL_TWILIGHT_
 -- DIVISION -> controller DoAction(ACTION_MONITOR_CORPOREALITY)
 -- leg rides the no-DoAction bridge.
--- boss_twilight_halion JustDied — zero Talk; the DoCastSelf
--- (SPELL_CLEAR_DEBUFFS 75396) cast leg is PORTED (twilightHalionDied,
--- boss_halion.cpp:599-605 — the halion->LowerPlayerDamageReq /
+-- boss_twilight_halion JustDied — zero Talk; the
+-- DoCastSelf(SPELL_CLEAR_DEBUFFS 75396) arm at boss_halion.cpp:599-605
+-- is npc_halion_controllerAI::JustDied (entry 40146, unregistered),
+-- NOT twilight halion's — stays out (the halion->LowerPlayerDamageReq /
 -- Unit::Kill / controller->KillSelf legs ride absent bridges).
--- boss_twilight_halion Reset — the DoCastSelf
--- (SPELL_CLEAR_DEBUFFS 75396) cast leg is PORTED (twilightHalionReset,
--- event 23, boss_halion.cpp:586-592 — the _summons / _events /
--- Initialize legs ride absent bridges).
+-- boss_twilight_halion Reset — EMPTY in C++ (boss_halion.cpp:436);
+-- the DoCastSelf(SPELL_CLEAR_DEBUFFS 75396) arm at :586-592 is
+-- npc_halion_controllerAI::Reset (entry 40146, unregistered) — stays
+-- out (the _summons / _events / Initialize legs ride absent bridges).
 -- npc_halion_controller (40146) — its intro machine issues cross-AI
 -- Talk(SAY_INTRO 1) on the summoned halion, plus the corporeality
 -- machine's Talk(EMOTE_CORPOREALITY_TOT 4 / TIT 3 on twilight halion,
@@ -145,48 +163,14 @@ local ENTRY_TWILIGHT_HALION = 40142
 
 local SAY_INTRO    = 1 -- (documented-only, rides the controller's cross-AI intro)
 local SAY_AGGRO    = 2
+local SAY_PHASE_TWO = 4
 local SAY_DEATH    = 5
 local SAY_KILL     = 6 -- twilight halion only
 
--- C++ boss_halion::JustEngagedWith:
--- Talk(SAY_AGGRO); events.Reset(); events.SetPhase(PHASE_ONE);
--- BossAI::JustEngagedWith(who); me->AddAura(SPELL_TWILIGHT_PRECISION, me);
--- events.ScheduleEvent(EVENT_ACTIVATE_FIREWALL, 5s); [breath/cleave/
--- tail_lash/fiery_combustion/meteor_strike] — the auriaya precedent
--- (the non-Talk legs have no bridges).
-local function halionEnterCombat(event, creature, target)
-    creature:Talk(SAY_AGGRO)
-end
-
--- C++ boss_halion::JustDied:
--- _JustDied(); Talk(SAY_DEATH) — the sjonnir precedent (the
--- _JustDied() instance leg and the cross-creature KillSelf legs have
--- no bridges).
-local function halionDied(event, creature, killer)
-    creature:Talk(SAY_DEATH)
-end
-
--- C++ boss_twilight_halion::KilledUnit:
--- if (victim->GetTypeId() == TYPEID_PLAYER)
---     Talk(SAY_KILL) — the razuvious player-gated variant precedent;
--- me->CastSpell(victim, SPELL_LEAVE_TWILIGHT_REALM, true) — UNGATED
--- (fires for any victim type), triggered victim-cast — the arlokk idiom.
--- Material halion has no KilledUnit arm.
-local function twilightHalionKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
-        creature:Talk(SAY_KILL)
-    end
-    creature:CastSpell(victim, SPELL_LEAVE_TWILIGHT_REALM, true)
-end
-
-RegisterCreatureEvent(ENTRY_HALION, 1, halionEnterCombat)
-RegisterCreatureEvent(ENTRY_HALION, 4, halionDied)
-RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 3, twilightHalionKilledUnit)
-
 local SPELL_CLEAVE      = 74524
 local SPELL_DARK_BREATH = 74806
+local SPELL_FLAME_BREATH = 74525
 local SPELL_TAIL_LASH   = 74531
-local SPELL_CLEAR_DEBUFFS = 75396
 local SPELL_LEAVE_TWILIGHT_REALM = 74812
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
@@ -214,6 +198,130 @@ local function schedule(guid, key, delay, fn)
     end
     per[key] = CreateLuaEvent(fn, delay)
 end
+
+-- Material-halion phase-one timer arms (C++ UpdateAI :335-344):
+-- EVENT_CLEAVE — DoCastVictim(SPELL_CLEAVE 74524) non-triggered,
+-- randtime(6s,10s) init / randtime(8s,10s) re-arm.
+local function matCleaveTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CLEAVE)
+    schedule(guid, "mat_cleave", {8000, 10000}, function()
+        matCleaveTick(creature, guid)
+    end)
+end
+
+-- EVENT_TAIL_LASH — DoCastAOE(SPELL_TAIL_LASH 74531) non-triggered,
+-- randtime(7s,12s) init / randtime(11s,16s) re-arm — the DoCastAOE
+-- self-cast lowering (boss_ai.go convention).
+local function matTailLashTick(creature, guid)
+    creature:CastSpell(creature, SPELL_TAIL_LASH)
+    schedule(guid, "mat_tail_lash", {11000, 16000}, function()
+        matTailLashTick(creature, guid)
+    end)
+end
+
+-- EVENT_BREATH — DoCastSelf(SPELL_FLAME_BREATH 74525) non-triggered,
+-- randtime(5s,15s) init / randtime(16s,25s) re-arm (distinct from the
+-- twilight DARK_BREATH 74806 below).
+local function matBreathTick(creature, guid)
+    creature:CastSpell(creature, SPELL_FLAME_BREATH)
+    schedule(guid, "mat_breath", {16000, 25000}, function()
+        matBreathTick(creature, guid)
+    end)
+end
+
+-- 75% phase-two latch (C++ boss_halion::DamageTaken :286-296 —
+-- pre-damage event 9; the zum_rah latch precedent).
+local phaseTwo = {}
+
+-- C++ boss_halion::JustEngagedWith :242-262:
+-- Talk(SAY_AGGRO); events.Reset(); events.SetPhase(PHASE_ONE);
+-- BossAI::JustEngagedWith(who); me->AddAura(SPELL_TWILIGHT_PRECISION, me);
+-- events.ScheduleEvent(EVENT_ACTIVATE_FIREWALL, 5s);
+-- events.ScheduleEvent(EVENT_BREATH, randtime(5s,15s));
+-- events.ScheduleEvent(EVENT_CLEAVE, randtime(6s,10s));
+-- events.ScheduleEvent(EVENT_TAIL_LASH, randtime(7s,12s));
+-- events.ScheduleEvent(EVENT_FIERY_COMBUSTION, randtime(15s,18s));
+-- events.ScheduleEvent(EVENT_METEOR_STRIKE, 18s) + SendEncounterUnit +
+-- controller->AI()->SetData(DATA_FIGHT_PHASE, PHASE_ONE). The three
+-- phase-ungated timer arms port below; the firewall / fiery_combustion /
+-- meteor_strike / precision-aura / encounter-frame / controller legs
+-- have no bridges (documented above).
+local function halionEnterCombat(event, creature, target)
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    phaseTwo[guid] = nil
+    schedule(guid, "mat_cleave", {6000, 10000}, function()
+        matCleaveTick(creature, guid)
+    end)
+    schedule(guid, "mat_tail_lash", {7000, 12000}, function()
+        matTailLashTick(creature, guid)
+    end)
+    schedule(guid, "mat_breath", {5000, 15000}, function()
+        matBreathTick(creature, guid)
+    end)
+end
+
+local function halionCombatEnd(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    phaseTwo[guid] = nil
+end
+
+-- C++ boss_halion::DamageTaken :286-296:
+-- HealthBelowPctDamaged(75, damage) && IsInPhase(PHASE_ONE) ->
+-- events.SetPhase(PHASE_TWO); Talk(SAY_PHASE_TWO); me->CastStop();
+-- UNIT_FLAG_NOT_SELECTABLE; DoCastSelf(SPELL_TWILIGHT_PHASING);
+-- controller->AI()->SetData(DATA_FIGHT_PHASE, PHASE_TWO). The Talk +
+-- the stop of the phase-one timer arms port; the flag / CastStop /
+-- phasing-cast / controller legs have no bridges. The never-die
+-- damage cap (damage = health-1 while not PHASE_THREE) rides the
+-- unbridged phase machine and stays out.
+local function halionDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if phaseTwo[guid] then
+        return
+    end
+    local health = creature:GetHealth()
+    local postHealth = 0
+    if health > damage then
+        postHealth = health - damage
+    end
+    if postHealth * 100 < creature:GetMaxHealth() * 75 then
+        phaseTwo[guid] = true
+        creature:Talk(SAY_PHASE_TWO)
+        cancelTimers(guid)
+    end
+end
+
+-- C++ boss_halion::JustDied :267:
+-- _JustDied(); Talk(SAY_DEATH) — the sjonnir precedent (the
+-- _JustDied() instance leg and the cross-creature KillSelf legs have
+-- no bridges).
+local function halionDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+    creature:Talk(SAY_DEATH)
+end
+
+-- C++ boss_twilight_halion::KilledUnit :439-445:
+-- if (victim->GetTypeId() == TYPEID_PLAYER)
+--     Talk(SAY_KILL) — the razuvious player-gated variant precedent;
+-- me->CastSpell(victim, SPELL_LEAVE_TWILIGHT_REALM, true) — UNGATED
+-- (fires for any victim type), triggered victim-cast — the arlokk idiom.
+-- Material halion has no KilledUnit arm.
+local function twilightHalionKilledUnit(event, creature, victim)
+    if victim:GetObjectType() == "Player" then
+        creature:Talk(SAY_KILL)
+    end
+    creature:CastSpell(victim, SPELL_LEAVE_TWILIGHT_REALM, true)
+end
+
+RegisterCreatureEvent(ENTRY_HALION, 1, halionEnterCombat)
+RegisterCreatureEvent(ENTRY_HALION, 2, halionCombatEnd)
+RegisterCreatureEvent(ENTRY_HALION, 4, halionDied)
+RegisterCreatureEvent(ENTRY_HALION, 9, halionDamageTaken)
+RegisterCreatureEvent(ENTRY_HALION, 23, halionCombatEnd)
+RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 3, twilightHalionKilledUnit)
 
 -- C++ UpdateAI EVENT_CLEAVE: DoCastVictim(SPELL_CLEAVE 74524)
 -- non-triggered, 3s init / randtime(7s,10s) re-arm
@@ -275,26 +383,20 @@ local function twilightHalionLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ boss_twilight_halion::Reset: _summons.DespawnAll() +
--- _events.Reset() + Initialize() + DoCastSelf(SPELL_CLEAR_DEBUFFS)
--- (non-triggered, boss_halion.cpp:586-592) — the summon/timer/
--- Initialize legs have no bridges; the cast is the C++-exact tail
--- leg. Split from event 2 so the cast fires once on the reset path.
+-- C++ boss_twilight_halion::Reset is EMPTY (boss_halion.cpp:436) —
+-- the DoCastSelf(SPELL_CLEAR_DEBUFFS) arm at :586-592 is
+-- npc_halion_controllerAI::Reset (entry 40146, unregistered). Event 23
+-- only cancels timers.
 local function twilightHalionReset(event, creature)
     cancelTimers(creature:GetGUID())
-    -- C++ Reset(): DoCastSelf(SPELL_CLEAR_DEBUFFS) is Reset-only
-    -- (boss_halion.cpp); alive-gated. The event-4 death arm below stays.
-    if creature:IsAlive() then
-        creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS)
-    end
 end
 
 -- C++ boss_twilight_halion::JustDied: _events.Reset() +
--- _summons.DespawnAll() + DoCastSelf(SPELL_CLEAR_DEBUFFS)
--- (non-triggered, boss_halion.cpp:599-605).
+-- _summons.DespawnAll() (boss_halion.cpp:448-466) — the
+-- DoCastSelf(SPELL_CLEAR_DEBUFFS) arm at :599-605 is
+-- npc_halion_controllerAI::JustDied (entry 40146, unregistered).
 local function twilightHalionDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
-    creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS)
 end
 
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 1, twilightHalionEnterCombat)
