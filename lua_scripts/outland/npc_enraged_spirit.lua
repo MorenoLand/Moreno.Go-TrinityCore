@@ -49,8 +49,10 @@
 -- then 6000-12000: non-triggered DoCastVictim(SPELL_FEL_
 -- FIREBALL 36247) (C++-exact), re-arm 6-12s regardless.
 -- Air spirit (21060): chainLightningTimer 10000 init:
--- non-triggered DoCastVictim(SPELL_CHAIN_LIGHTNING 12058)
--- (C++-exact), then hurricaneTimer 3000-5000: non-triggered
+-- non-triggered DoCastVictim(SPELL_CHAIN_LIGHTNING 16006)
+-- (C++-exact — the arm names the file-scope Earthmender enum's
+-- SPELL_CHAIN_LIGHTNING (16006), not the Enraged_Dpirits enum's
+-- SPELL_AIR_SPIRIT_CHAIN_LIGHTNING (12058))
 -- DoCastVictim(SPELL_HURRICANE 32717) (C++-exact), then
 -- chainLightningTimer 15000-20000 (C++-exact chain/hurricane
 -- alternation). Water spirit (21059): stormTimer 0-1000
@@ -100,7 +102,7 @@
 local SPELL_STORMBOLT = 38032
 local SPELL_FEL_FIREBALL = 36247
 local SPELL_FIERY_BOULDER = 38498
-local SPELL_CHAIN_LIGHTNING = 12058
+local SPELL_CHAIN_LIGHTNING = 16006
 local SPELL_HURRICANE = 32717
 local SPELL_ENRAGE = 8599
 

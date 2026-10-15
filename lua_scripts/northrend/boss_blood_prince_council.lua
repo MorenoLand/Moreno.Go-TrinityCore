@@ -180,11 +180,13 @@ local EMOTE_TALDARAM_BERSERK = 5
 local SAY_TALDARAM_SPECIAL = 2
 local SAY_VALANAR_BERSERK = 5
 
--- Spells enum: SPELL_BERSERK = 50334 (ScriptedAI/BossAI; verified in
--- this tree), SPELL_SHADOW_RESONANCE = 71943,
+-- Spells enum: SPELL_BERSERK = 26662 (icecrown_citadel.h:33 shared
+-- enum — the owning C++ script resolves DoCastSelf(SPELL_BERSERK)
+-- through that header; 50334 was the PlayerAI troll-racial Berserk,
+-- never a boss cast), SPELL_SHADOW_RESONANCE = 71943,
 -- SPELL_SHADOW_LANCE = 71405, SPELL_GLITTERING_SPARKS = 71806,
 -- SPELL_CONJURE_FLAME = 71718.
-local SPELL_BERSERK = 50334
+local SPELL_BERSERK = 26662
 local SPELL_SHADOW_RESONANCE = 71943
 local SPELL_SHADOW_LANCE = 71405
 local SPELL_GLITTERING_SPARKS = 71806
