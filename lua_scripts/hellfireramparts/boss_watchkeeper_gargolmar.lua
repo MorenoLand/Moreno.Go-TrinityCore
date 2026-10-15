@@ -192,7 +192,7 @@ local function bossTick(creature, guid)
     -- C++-exact).
     if st.retaliation then
         if st.retaliationT <= 1000 then
-            creature:CastSpell(nil, SPELL_RETALIATION)
+            creature:CastSpell(creature, SPELL_RETALIATION)
             st.retaliationT = 30000
         else
             st.retaliationT = st.retaliationT - 1000

@@ -56,8 +56,8 @@ local ENTRY_FROZEN_CORE = 25865
 -- C++ ctor Initialize(): the two self casts. The react-state
 -- and regenerate-health arms have no bridges.
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 5, function(_, creature)
-    creature:CastSpell(nil, SPELL_FROZEN_CORE_GETS_HIT)
-    creature:CastSpell(nil, SPELL_ICE_SPEAR_AURA)
+    creature:CastSpell(creature, SPELL_FROZEN_CORE_GETS_HIT)
+    creature:CastSpell(creature, SPELL_ICE_SPEAR_AURA)
 end)
 
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 2, function(_, creature)
@@ -67,8 +67,8 @@ end)
 -- (C++-exact order); the Unit::Kill(me, ahune) arm is
 -- cross-creature blocked.
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 4, function(_, creature)
-    creature:CastSpell(nil, SPELL_SUMMON_LOOT_MISSILE)
-    creature:CastSpell(nil, SPELL_MINION_DESPAWNER)
+    creature:CastSpell(creature, SPELL_SUMMON_LOOT_MISSILE)
+    creature:CastSpell(creature, SPELL_MINION_DESPAWNER)
 end)
 
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 23, function(_, creature)
