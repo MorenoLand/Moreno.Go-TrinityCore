@@ -40,19 +40,23 @@
 -- the pump).
 -- Pump: blast wave 30600 — fires only while blastCount is
 -- set: 16s after burning maul then 5s later (2 casts total,
--- C++-exact bookkeeping), non-triggered DoCastSelf
--- (C++-exact); burning maul 30598: 25s init then 40s —
--- Talk(EMOTE_ENRAGE), non-triggered DoCastSelf (C++-exact),
--- re-arm 40000, blastWave = 16000, blastCount = 1
+-- C++-exact bookkeeping), non-triggered self-cast (C++ DoCast(me),
+-- C++-exact — the old CastSpell(nil, ...) arm was DoCastVictim-
+-- shaped in the Go engine: nil falls back to the combat victim;
+-- retargeted this run, same class on the three self-cast arms
+-- below); burning maul 30598: 25s init then 40s —
+-- Talk(EMOTE_ENRAGE), non-triggered self-cast (C++ DoCast(me),
+-- C++-exact), re-arm 40000, blastWave = 16000, blastCount = 1
 -- (C++-exact); reset threat 30s init then {25s,40s} —
 -- bookkeeping only (the C++ arm's DoYellForThreat head-talk
 -- sequence and the ResetThreatList/AddThreat calls have no
 -- bridges, so the pick-and-reset is unmodeled), re-arm
 -- regardless (C++-exact); fear 30584: 8s init then {15s,35s}
--- — non-triggered DoCastSelf (C++ DoCast(me), C++-exact),
+-- — non-triggered self-cast (C++ DoCast(me), C++-exact),
 -- re-arm {15s,35s} regardless (C++-exact); thunderclap
--- 30633: 15s init then {15s,30s} — non-triggered DoCastSelf
--- (C++-exact), re-arm {15s,30s} regardless (C++-exact).
+-- 30633: 15s init then {15s,30s} — non-triggered self-cast
+-- (C++ DoCast(me), C++-exact), re-arm {15s,30s} regardless
+-- (C++-exact).
 -- OnDied(4): cleanup (the _JustDied arm is instance-blocked;
 -- the head Talk(YELL_DIE_L)/SetData(SETDATA_YELL) death
 -- relay is cross-creature blocked). OnLeaveCombat(2)/
@@ -145,10 +149,11 @@ local function bossTick(creature, guid)
 
     -- Blast wave 30600: fires only while blastCount is set —
     -- 16s after burning maul then 5s later, 2 casts total
-    -- (C++-exact bookkeeping), non-triggered DoCastSelf.
+    -- (C++-exact bookkeeping), non-triggered self-cast
+    -- (C++ DoCast(me) — the nil arm fell back to the victim).
     if st.blastCount > 0 then
         if st.blastWave <= 1000 then
-            creature:CastSpell(nil, SPELL_BLAST_WAVE)
+            creature:CastSpell(creature, SPELL_BLAST_WAVE)
             st.blastCount = st.blastCount + 1
             if st.blastCount == 3 then
                 st.blastCount = 0
@@ -161,13 +166,14 @@ local function bossTick(creature, guid)
     end
 
     -- Burning maul 30598: 25s init then 40s — Talk(EMOTE_
-    -- ENRAGE), non-triggered DoCastSelf (C++-exact), re-arm
+    -- ENRAGE), non-triggered self-cast (C++ DoCast(me), C++-exact),
+    -- re-arm
     -- 40000, blastWave = 16000, blastCount = 1 (C++-exact).
     -- The heroic 36056 variant has no difficulty bridge
     -- (thespia precedent).
     if st.burningMaul <= 1000 then
         creature:Talk(EMOTE_ENRAGE)
-        creature:CastSpell(nil, SPELL_BURNING_MAUL)
+        creature:CastSpell(creature, SPELL_BURNING_MAUL)
         st.burningMaul = 40000
         st.blastWave = 16000
         st.blastCount = 1
@@ -186,20 +192,21 @@ local function bossTick(creature, guid)
     end
 
     -- Fear 30584: 8s init then {15s,35s} — non-triggered
-    -- DoCastSelf (C++ DoCast(me), C++-exact), re-arm
+    -- self-cast (C++ DoCast(me), C++-exact), re-arm
     -- regardless (C++-exact).
     if st.fear <= 1000 then
-        creature:CastSpell(nil, SPELL_FEAR)
+        creature:CastSpell(creature, SPELL_FEAR)
         st.fear = math.random(15000, 34999)
     else
         st.fear = st.fear - 1000
     end
 
     -- Thunderclap 30633: 15s init then {15s,30s} —
-    -- non-triggered DoCastSelf (C++-exact), re-arm regardless
+    -- non-triggered self-cast (C++ DoCast(me), C++-exact),
+    -- re-arm regardless
     -- (C++-exact).
     if st.thunderclap <= 1000 then
-        creature:CastSpell(nil, SPELL_THUNDERCLAP)
+        creature:CastSpell(creature, SPELL_THUNDERCLAP)
         st.thunderclap = math.random(15000, 29999)
     else
         st.thunderclap = st.thunderclap - 1000
