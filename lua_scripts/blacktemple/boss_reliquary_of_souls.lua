@@ -120,6 +120,11 @@
 -- luaBossAI shim (BossAI::JustEngagedWith/JustDied and the
 -- DATA_RELIQUARY_OF_SOULS / DATA_ESSENCE_OF_*/DATA_RELIQUARY_
 -- COMBAT_TRIGGER bookkeeping arms skipped).
+-- KilledUnit (event 3, CREATURE_EVENT_ON_TARGET_DIED — live in Go via
+-- fireCreatureTargetDied in engine/world/lua_creature_events.go):
+-- Talk(SUFF_SAY_SLAY = 1), player-gated
+-- (victim:GetObjectType() == "Player", the razuvious precedent) —
+-- ported below.
 
 local ENTRY_RELIQUARY_OF_SOULS = 22856
 local ENTRY_ENSLAVED_SOUL = 23469
@@ -134,6 +139,8 @@ local SPELL_ENSLAVED_SOUL_PASSIVE = 41535
 local SPELL_SOUL_RELEASE = 41542
 
 local PHASE_SUFFERING, PHASE_DESIRE, PHASE_ANGER = 1, 2, 3
+
+local SUFF_SAY_SLAY = 1
 
 local timers = {}
 local reliquaryState = {}
@@ -282,8 +289,17 @@ local function triggerDamageTaken(event, creature, attacker, damage)
     return false, 0
 end
 
+-- C++ boss_reliquary_of_souls::KilledUnit — player-gated
+-- Talk(SUFF_SAY_SLAY 1).
+local function reliquaryTargetDied(event, creature, victim)
+    if victim:GetObjectType() == "Player" then
+        creature:Talk(SUFF_SAY_SLAY)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 1, reliquaryEnterCombat)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 2, reliquaryLeaveCombat)
+RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 3, reliquaryTargetDied)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 4, reliquaryDied)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 23, reliquaryReset)
 

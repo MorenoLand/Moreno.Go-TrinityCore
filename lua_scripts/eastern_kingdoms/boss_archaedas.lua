@@ -77,6 +77,11 @@
 -- - Stone Keeper OnDied(4): DoCast(me, 9874, true) triggered ->
 --   creature:CastSpell(creature, SPELL_SELF_DESTRUCT, true)
 --   (headless_horseman / omen onDied self-cast precedent).
+-- - Archaedas KilledUnit (event 3, CREATURE_EVENT_ON_TARGET_DIED —
+--   live in Go via fireCreatureTargetDied in
+--   engine/world/lua_creature_events.go): Talk(SAY_KILL = 3),
+--   unconditional (the C++ ignores the victim). The old
+--   "no KilledUnit bridge" note was stale.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - Archaedas Reset's instance->SetData(0, 5) respawn-minions
 --   leg + FACTION_FRIENDLY / NOT_SELECTABLE / ROOT legs +
@@ -91,9 +96,6 @@
 --   SpellHitTarget = 15 never fires in the Go engine
 --   (stratholme finding) — STRAND; registering the timers
 --   without the SpellHit arm would be a firesworn stub.
--- - KilledUnit Talk(SAY_KILL = 3): no KilledUnit bridge in
---   engine/scripting (no CreatureEvent id declared) — queued
---   (standing).
 -- - uiWallMinionTimer 10s -> instance->SetData(DATA_MINIONS,
 --   IN_PROGRESS): instance-model blocked; the timer alone
 --   would be a firesworn stub.
@@ -129,6 +131,8 @@ local NPC_STONE_KEEPER = 4857
 
 local SPELL_GROUND_TREMOR = 6524
 local SPELL_SELF_DESTRUCT = 9874
+
+local SAY_KILL = 3
 
 local timers = {}
 
@@ -173,8 +177,15 @@ local function onStoneKeeperDied(event, creature)
     creature:CastSpell(creature, SPELL_SELF_DESTRUCT, true)
 end
 
+-- C++ boss_archaedas::KilledUnit — Talk(SAY_KILL), unconditional
+-- (the C++ body ignores the victim).
+local function onArchaedasTargetDied(event, creature, victim)
+    creature:Talk(SAY_KILL)
+end
+
 RegisterCreatureEvent(NPC_ARCHAEDAS, 1, onArchaedasCombatStart)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 2, onArchaedasCombatEnd)
+RegisterCreatureEvent(NPC_ARCHAEDAS, 3, onArchaedasTargetDied)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 4, onArchaedasCombatEnd)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 23, onArchaedasCombatEnd)
 RegisterCreatureEvent(NPC_STONE_KEEPER, 4, onStoneKeeperDied)
