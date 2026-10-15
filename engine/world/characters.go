@@ -3471,7 +3471,15 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		s.server.broadcastFriendStatus(s.playerGUID, friendsResultOffline, 0, 0, 0)
 	}
 	if s.player != nil && s.player.PetGUID != 0 {
-		s.unsummonPet(ctx, petSaveAsCurrent)
+		// C++ TempSummons are never saved: a still-active spell-duration
+		// guardian is destroyed at logout without a character_pet row
+		// (TempSummon::UnSummon, TemporarySummon.cpp:250-304) rather than
+		// persisted for the next login to resurrect.
+		if s.activePetIsTemporaryGuardian(ctx) {
+			s.despawnTemporaryGuardian(ctx)
+		} else {
+			s.unsummonPet(ctx, petSaveAsCurrent)
+		}
 	}
 	var firstErr error
 	if err := s.savePlayerState(ctx, 0, true); err != nil {

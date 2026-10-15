@@ -317,8 +317,139 @@ func (ai *vancleefAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMo
 	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 4, 0)
 }
 
+// evadeDespawn records a BossAI::_DespawnAtEvade removal awaiting its
+// delayed respawn (ScriptedCreature.cpp:596-617: DespawnOrUnsummon(0s,
+// delayToRespawn)). The motion is deleted from the world; the motion sweep
+// skips the GUID while the record is pending so the spawn query does not
+// recreate it early, and processEvadeDespawns re-arms it at expiry.
+type evadeDespawn struct {
+	GUID       uint64 // motion GUID (creatureWorldGUID)
+	DBGuid     uint32 // creature.guid
+	Entry      uint32
+	Map        uint32
+	InstanceID uint32
+	At         time.Time
+}
+
+// despawnAtEvade ports the DespawnOrUnsummon(0s, delayToRespawn) half of
+// BossAI::_DespawnAtEvade (ScriptedCreature.cpp:596-617): the creature
+// leaves the world now and respawns after delay. The instance
+// SetBossState(FAIL) arm has no Go model (no instance boss-state —
+// documented at boss_ai.go:17-66). Threat teardown already ran in the evade
+// funnel ahead of OnEvade.
+func (s *Server) despawnAtEvade(ctx context.Context, m *creatureMotion, delay time.Duration) {
+	if s == nil || m == nil {
+		return
+	}
+	rec := evadeDespawn{
+		GUID:       m.GUID,
+		DBGuid:     uint32(m.GUID & 0x00FFFFFF),
+		Entry:      uint32((m.GUID >> 24) & 0x00FFFFFF),
+		Map:        m.Map,
+		InstanceID: m.InstanceID,
+		At:         time.Now().Add(delay),
+	}
+	s.motionMu.Lock()
+	delete(s.motionMapLocked(m.Map, m.InstanceID), m.GUID)
+	if s.evadeDespawns == nil {
+		s.evadeDespawns = make(map[uint64]evadeDespawn)
+	}
+	s.evadeDespawns[m.GUID] = rec
+	s.motionMu.Unlock()
+	// The client drops the object now; processEvadeDespawns re-creates it
+	// at expiry.
+	destroyBuf := protocol.NewBuffer(9)
+	destroyBuf.WriteU64(m.GUID)
+	destroyBuf.WriteU8(0)
+	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+	// Eluna::OnRemoveFromWorld (CreatureHooks.cpp:80-85,
+	// CREATURE_EVENT_ON_REMOVE (37)) fires from Creature::RemoveFromWorld
+	// (Creature.cpp:314) when a creature leaves the world.
+	s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
+}
+
+// processEvadeDespawns re-arms expired _DespawnAtEvade removals; called
+// from the world tick next to processCreatureRespawns.
+func (s *Server) processEvadeDespawns(ctx context.Context, now time.Time) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	s.motionMu.Lock()
+	var due []evadeDespawn
+	for guid, rec := range s.evadeDespawns {
+		if !now.Before(rec.At) {
+			due = append(due, rec)
+			delete(s.evadeDespawns, guid)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, rec := range due {
+		s.respawnEvadedCreature(ctx, rec)
+	}
+}
+
+// respawnEvadedCreature re-materializes a despawnAtEvade removal at its
+// spawn position at full health — the DespawnOrUnsummon respawn half —
+// with a create block so clients re-see the boss, then the Eluna spawn
+// hook and the native AI reset (Creature::Respawn, Creature.cpp:2156-2215:
+// ai->Reset()).
+func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
+	var moveType, model, npcFlags int64
+	var faction, dynFlags uint32
+	var wander, walkSpeed, runSpeed, x, y, z, orientation, scale, mana float64
+	err := s.WorldStore.DB.QueryRowContext(ctx,
+		`SELECT c.MovementType, c.wander_distance, COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
+			c.position_x, c.position_y, c.position_z, c.orientation,
+			COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), NULLIF(t.modelid2, 0), NULLIF(t.modelid3, 0), NULLIF(t.modelid4, 0), 1),
+			t.npcflag, t.scale, c.curmana, COALESCE(t.faction, 0), COALESCE(t.dynamicflags, 0)
+			FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ?`,
+		rec.DBGuid).Scan(&moveType, &wander, &walkSpeed, &runSpeed, &x, &y, &z, &orientation, &model, &npcFlags, &scale, &mana, &faction, &dynFlags)
+	if err != nil {
+		return
+	}
+	motion := s.motionFor(ctx, rec.DBGuid, rec.Entry, rec.Map, rec.InstanceID,
+		float32(x), float32(y), float32(z), float32(orientation),
+		uint32(moveType), wander, float32(walkSpeed), float32(runSpeed), 0)
+	if motion == nil {
+		return
+	}
+	motion.Health = motion.MaxHealth
+	// Re-create the object client-side: build the spawn block from the DB
+	// row overlaid with the live motion state.
+	spawn := creatureSpawn{GUID: rec.DBGuid, Entry: rec.Entry, Map: rec.Map,
+		X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation),
+		Model: uint32(model), NPCFlags: uint32(npcFlags), Scale: float32(scale), Mana: uint32(mana)}
+	stats := s.loadCreatureStats(ctx, rec.Entry)
+	spawn.MaxHealth, spawn.Health = stats.MaxHealth, stats.MaxHealth
+	spawn.Faction, spawn.DynamicFlags = faction, dynFlags
+	spawn.UnitFlags = stats.UnitFlags
+	spawn.Level = stats.Level
+	s.applyCreatureMotionToSpawn(playerState{Map: rec.Map, InstanceID: rec.InstanceID}, &spawn)
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, nil))
+	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+		s.broadcastToInstance(rec.Map, rec.InstanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+	}
+	s.fireCreatureSpawned(ctx, motion)
+	if motion.BossAI != nil {
+		motion.BossAI.OnReset(ctx, s, motion)
+	}
+}
+
 func (ai *vancleefAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {
+	// BossAI::EnterEvadeMode (boss_vancleef.cpp:78-84): summons.DespawnAll()
+	// + _DespawnAtEvade() (ScriptedCreature.cpp:596-617): DespawnOrUnsummon
+	// (0s, 30s) + instance SetBossState(FAIL). Go has no instance boss-state
+	// model (documented at boss_ai.go:17-66), so the FAIL arm is a documented
+	// delta; the despawn twin removes the boss from the world for the C++
+	// 30s and re-arms it through respawnEvadedBoss below. The evade
+	// funnel's home-return is skipped via EvadeDespawnUntil (see
+	// triggerCreatureEvade).
+	ai.despawnSummons(ctx, s, m)
 	ai.OnReset(ctx, s, m)
+	if s != nil && m != nil {
+		s.despawnAtEvade(ctx, m, 30*time.Second)
+	}
 }
 
 // OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518): the
@@ -398,8 +529,9 @@ func (ai *mrSmiteAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) 
 }
 
 func (ai *mrSmiteAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
-	// SAY_AGGRO = 0: "You there, check out that noise!"
-	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Mr. Smite", 0, 0)
+	// boss_mr_smite.cpp:105-107: JustEngagedWith is empty — the C++ tree
+	// has no aggro yell (only SAY_PHASE_1/2 at :157/:160), so the former
+	// "check out that noise" broadcast was fabricated.
 }
 
 func (ai *mrSmiteAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {

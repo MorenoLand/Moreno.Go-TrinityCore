@@ -2134,7 +2134,7 @@ func (s *session) replayPetFocusAura(ctx context.Context, spellID uint32) error 
 		}
 		s.server.auraMu.Unlock()
 	}()
-	s.server.updatePetRuntime(time.Now(), petFocusRegenInterval)
+	s.server.updatePetRuntime(ctx, time.Now(), petFocusRegenInterval)
 	s.server.motionMu.Lock()
 	actualPower := motion.Powers[2]
 	s.server.motionMu.Unlock()

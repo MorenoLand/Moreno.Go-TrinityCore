@@ -187,10 +187,13 @@ type Server struct {
 	formationLoaded          bool
 	creatureRespawns         map[uint32]creatureRespawn
 	instanceCreatureRespawns map[instanceAdmissionKey]map[uint32]creatureRespawn
-	transportMu              sync.Mutex
-	transports               map[uint32]*continentTransport
-	lootMu                   sync.Mutex
-	creatureLoot             map[lootObjectKey]*activeLootState
+	// evadeDespawns tracks BossAI::_DespawnAtEvade removals awaiting their
+	// delayed respawn (boss_ai.go), keyed by motion GUID.
+	evadeDespawns map[uint64]evadeDespawn
+	transportMu   sync.Mutex
+	transports    map[uint32]*continentTransport
+	lootMu        sync.Mutex
+	creatureLoot  map[lootObjectKey]*activeLootState
 	// goSkillupLists mirrors GameObject::m_SkillupList (GameObject.h:190-199):
 	// the players (low GUIDs) that already took their one lockpicking
 	// skill-up from a given GO (Spell::EffectOpenLock, SpellEffects.cpp:2042-2055).
@@ -1282,7 +1285,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateTimeSync(now)
 			s.updateMailDeliveries(ctx, now.Unix())
 			s.updateActiveCreatures(ctx)
-			s.updatePetRuntime(now, diff)
+			s.updatePetRuntime(ctx, now, diff)
 			s.updateDynamicSpellAuras(ctx, now)
 			s.updatePlayerCombat(ctx)
 			s.updateContestedPvP(now)
@@ -1292,6 +1295,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateLFGBootVotes(now)
 			s.updateRestedBonuses(ctx, now)
 			s.processCreatureRespawns(ctx, now)
+			s.processEvadeDespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)
 			// Player::Update (Player.cpp:1096-1113): the timed-quest timers
 			// tick down on the player update; expiry calls FailQuest.

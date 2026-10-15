@@ -24893,6 +24893,23 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 					s.server.castCreatureSpellInternal(ctx, m, 51581, targetGUID, true)
 				}
 			}
+		case 34026:
+			// Kill Command (SpellAuraEffects.cpp:4367-4386): the dummy
+			// aura lands on the hunter; the arm requires an active pet
+			// (target->GetGuardianPet(), else it breaks) and stamps the
+			// 34027/58914 stack machinery — 3 stacks (34027's DBC
+			// StackAmount). The hunter-side 34027 aura is unmodeled in
+			// Go; the pet-side 58914 stacks ride
+			// motion.KillCommandStacks, consumed on the pet's attacks
+			// (spell_hun_kill_command_pet::HandleProc,
+			// spell_hunter.cpp:677-690). The proc's damage leg rides
+			// DBC proc data not verifiable in this tree — tracked but
+			// not yet applied.
+			if targetGUID == s.playerGUID && s.player != nil && s.player.PetGUID != 0 {
+				if pm := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, s.player.PetGUID); pm != nil {
+					pm.KillCommandStacks = 3
+				}
+			}
 		}
 	}
 	// AuraEffect::HandleAuraControlVehicle apply leg

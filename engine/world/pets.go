@@ -1213,6 +1213,17 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			// time.
 			rangeMin, rangeMax := s.server.petPhysicalDamageRange(s, pm)
 			minDmg, maxDmg = float32(rangeMin), float32(rangeMax)
+			// Spell::EffectSummonType (SpellEffects.cpp:2214-2215) stamps the
+			// creating spell's duration on the summon; TempSummon::InitStats
+			// (TemporarySummon.cpp:168-173) banks it as m_lifetime/m_timer.
+			// Only temporary-duration spells stamp — permanent pets keep a
+			// zero lifetime and skip the expiry sweep.
+			if createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
+				if lifetime := s.petSpellSummonLifetime(uint32(createdBySpell)); lifetime > 0 {
+					pm.TempSummonLifetime = lifetime
+					pm.TempSummonExpiresAt = time.Now().Add(lifetime)
+				}
+			}
 		}
 		s.server.motionMu.Unlock()
 		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, fieldStats, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO, apBase, apMods, apMult, minDmg, maxDmg)
@@ -1490,6 +1501,15 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 	buf.WriteU64(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 
+	// Pet::Remove (Pet.cpp:717) -> CombatStop (Unit.cpp:9845) ->
+	// EndAllPvECombat (CombatManager.cpp:344-350) ->
+	// RemoveMeFromThreatLists (ThreatManager.cpp:690-697): the dismissed
+	// pet drops as a victim from every other unit's threat table
+	// immediately, with SMSG_THREAT_REMOVE and top-victim reselect — the
+	// motion delete below is not enough (stale victim until next tick).
+	if s.server != nil && petGUID != 0 {
+		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, petGUID)
+	}
 	if s.server != nil {
 		s.server.motionMu.Lock()
 		delete(s.server.motionMapLocked(s.player.Map, s.player.InstanceID), petGUID)
@@ -1546,6 +1566,76 @@ func (s *session) petSpellHasTemporaryDuration(spellID uint32) bool {
 	}
 	duration, found, err := s.server.Data.SpellDuration(spell.DurationIndex, 1)
 	return err == nil && found && duration > 0
+}
+
+// petSpellSummonLifetime returns the TempSummon::m_lifetime twin
+// (TemporarySummon.cpp:168-173, InitStats) for a spell that summons a
+// temporary-duration guardian: the spell's SpellDuration.dbc duration
+// (Spell::EffectSummonType, SpellEffects.cpp:2214-2215). Zero for spells
+// that do not summon temporary guardians.
+func (s *session) petSpellSummonLifetime(spellID uint32) time.Duration {
+	if !s.petSpellHasTemporaryDuration(spellID) || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return 0
+	}
+	duration, found, err := s.server.Data.SpellDuration(spell.DurationIndex, 1)
+	if err != nil || !found || duration <= 0 {
+		return 0
+	}
+	return time.Duration(duration) * time.Millisecond
+}
+
+// activePetIsTemporaryGuardian reports whether the player's active pet is
+// a spell-duration guardian (TempSummon twin): C++ keeps such summons on
+// owner death (TempSummon::Update, TemporarySummon.cpp:66-170, has no
+// owner-death arm; only Totem::Update, Totem.cpp:47-57, unsummons on
+// owner death). The motion stamp is the primary source; the
+// CreatedBySpell duration discriminator backs it when the motion is not
+// registered (e.g. mid-teleport).
+func (s *session) activePetIsTemporaryGuardian(ctx context.Context) bool {
+	if s == nil || s.player == nil || s.player.PetGUID == 0 || s.server == nil {
+		return false
+	}
+	if motion := s.findCreatureMotion(s.player.PetGUID); motion != nil {
+		return motion.TempSummonLifetime > 0
+	}
+	petID := s.activePetNumber()
+	if petID == 0 || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var createdBySpell int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0) FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&createdBySpell); err != nil || createdBySpell <= 0 || createdBySpell > int64(^uint32(0)) {
+		return false
+	}
+	return s.petSpellHasTemporaryDuration(uint32(createdBySpell))
+}
+
+// despawnTemporaryGuardian destroys the player's active spell-duration
+// guardian without saving it: C++ TempSummons are never persisted, so the
+// character_pet row is deleted rather than saved
+// (TempSummon::UnSummon, TemporarySummon.cpp:250-304).
+func (s *session) despawnTemporaryGuardian(ctx context.Context) {
+	if s == nil || s.player == nil || s.player.PetGUID == 0 || s.server == nil {
+		return
+	}
+	if motion := s.findCreatureMotion(s.player.PetGUID); motion != nil {
+		s.server.expireTempSummonGuardian(ctx, motion)
+		return
+	}
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		if petID := s.activePetNumber(); petID != 0 {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ?", petID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ?", petID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell_cooldown WHERE guid = ?", petID)
+		}
+	}
+	s.player.PetGUID = 0
+	s.player.PetNumber = 0
+	s.sendPlayerUpdate()
 }
 
 func (s *session) resummonTemporaryPet(ctx context.Context) {

@@ -459,7 +459,7 @@ func advancePetRuntime(state PetRuntimeState, diff time.Duration, focusGain int3
 	return state, fields
 }
 
-func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
+func (s *Server) updatePetRuntime(ctx context.Context, now time.Time, diff time.Duration) {
 	if s == nil || diff <= 0 {
 		return
 	}
@@ -498,6 +498,13 @@ func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 	s.motionMu.Unlock()
 	for _, petMotion := range motions {
 		motion := petMotion.motion
+		// TempSummon::Update timed arms (TemporarySummon.cpp:66-170): the
+		// guardian despawn sweep runs on the live per-tick pet sweep — pet
+		// motions never reach updatePetMotion through updateActiveCreatures
+		// (it only steps DB-spawned creatures), so the sweep is shared here.
+		if s.checkTempSummonExpiry(ctx, motion, now) {
+			continue
+		}
 		s.motionMu.Lock()
 		if s.findCreatureMotionLocked(petMotion.mapID, petMotion.instanceID, motion.GUID) != motion || motion.Health == 0 {
 			s.motionMu.Unlock()

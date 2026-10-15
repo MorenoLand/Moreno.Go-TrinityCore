@@ -460,9 +460,81 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 	}
 }
 
+// checkTempSummonExpiry twins the TempSummon::Update timed arms
+// (TemporarySummon.cpp:66-170): a temporary-duration guardian's despawn
+// timer freezes while it is in combat (reset to the full lifetime — the
+// TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT / TIMED_OR_CORPSE / TIMED_OR_DEAD
+// arms, TemporarySummon.cpp:91-106, 133-168) and fires out of combat.
+// Returns true when the timer fired and the guardian was unsummoned — the
+// caller must stop driving the motion.
+func (s *Server) checkTempSummonExpiry(ctx context.Context, motion *creatureMotion, now time.Time) bool {
+	if s == nil || motion == nil || motion.TempSummonLifetime <= 0 {
+		return false
+	}
+	if motion.InCombat {
+		motion.TempSummonExpiresAt = now.Add(motion.TempSummonLifetime)
+		return false
+	}
+	if now.Before(motion.TempSummonExpiresAt) {
+		return false
+	}
+	s.expireTempSummonGuardian(ctx, motion)
+	return true
+}
+
+// expireTempSummonGuardian is the TempSummon::UnSummon twin
+// (TemporarySummon.cpp:250-304) for timed guardians: the client object is
+// destroyed, the motion removed, and the character_pet row deleted — C++
+// TempSummons are never saved, so expiry must leave no row for a
+// login/logout resummon to resurrect. Robust to a missing owner session:
+// the server-side teardown proceeds and the owner's PetGUID cleanup is
+// skipped when the owner is offline.
+func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	ownerGUID, petID := motion.OwnerGUID, motion.PetID
+	s.motionMu.Lock()
+	if s.findCreatureMotionLocked(mapID, instanceID, guid) != motion {
+		s.motionMu.Unlock()
+		return
+	}
+	delete(s.motionMapLocked(mapID, instanceID), guid)
+	s.motionMu.Unlock()
+	s.clearCreatureAuras(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: guid})
+	destroyBuf := protocol.NewBuffer(9)
+	destroyBuf.WriteU64(guid)
+	destroyBuf.WriteU8(0)
+	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil && petID != 0 {
+		cdb := s.CharactersStore.DB
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet WHERE id = ? AND owner = ?", petID, ownerGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ?", petID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ?", petID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell_cooldown WHERE guid = ?", petID)
+	}
+	if owner := s.findSessionByGUID(ownerGUID); owner != nil {
+		owner.removeOwnerPetAuraSourcesOnPetChange(ctx, guid)
+		if owner.player != nil && owner.player.PetGUID == guid {
+			owner.player.PetGUID = 0
+			owner.player.PetNumber = 0
+			owner.sendPlayerUpdate()
+			buf := protocol.NewBuffer(8)
+			buf.WriteU64(0)
+			_ = owner.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+		}
+	}
+}
+
 // updatePetMotion is the per-tick AI driver for active player pets.
 func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
 	if s == nil || motion == nil || motion.OwnerGUID == 0 {
+		return
+	}
+	// TempSummon::Update timed arms (TemporarySummon.cpp:66-170): the
+	// guardian despawn sweep. A fired timer ends the motion's tick.
+	if s.checkTempSummonExpiry(ctx, motion, now) {
 		return
 	}
 
@@ -619,6 +691,54 @@ func (s *Server) findNearbyPetHostile(pet *creatureMotion, maxDist float32, play
 	return 0
 }
 
+// consumeKillCommandStack ports spell_hun_kill_command_pet::HandleProc
+// (spell_hunter.cpp:677-690): a Kill Command-empowered pet attack consumes
+// one 58914 stack and one of the owner's 34027 stacks (PreventDefaultAction
+// skips the default charge drop). The hunter-side 34027 aura is unmodeled
+// in Go, so only the pet-side stack is tracked.
+func consumeKillCommandStack(motion *creatureMotion) {
+	if motion != nil && motion.KillCommandStacks > 0 {
+		motion.KillCommandStacks--
+	}
+}
+
+// petSelectNextTarget ports PetAI::SelectNextTarget (PetAI.cpp:253-283):
+// after the pet's victim dies, the pet retargets — its own attacker first
+// (so it doesn't drag a bunch of targets to the owner), then the owner's
+// attacker, then the owner's victim. Passive pets do no next-target
+// selection, and attackers under breakable-by-damage crowd control are
+// skipped (PetAI.cpp:258-260, 266-268). The aggressive auto-select tail
+// has no bridge — Go pets never auto-acquire (documented in the aggro
+// audit) — and the owner's victim leg folds into the owner-attacker scan:
+// Go tracks no separate owner-victim, a creature the owner is fighting
+// carries the owner as its target/threat victim in this model.
+func (s *Server) petSelectNextTarget(motion *creatureMotion, ownerGUID uint64) uint64 {
+	if s == nil || motion == nil || motion.PetReact == PetReactPassive {
+		return 0
+	}
+	var petAttackers, ownerAttackers []uint64
+	s.motionMu.Lock()
+	for guid, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+		if m == nil || guid == motion.GUID || m.Health == 0 || !m.InCombat {
+			continue
+		}
+		if m.TargetGUID == motion.GUID {
+			petAttackers = append(petAttackers, guid)
+		} else if ownerGUID != 0 && m.TargetGUID == ownerGUID {
+			ownerAttackers = append(ownerAttackers, guid)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, candidates := range [][]uint64{petAttackers, ownerAttackers} {
+		for _, guid := range candidates {
+			if !s.petVictimHasBreakableCC(motion, guid, false, nil) {
+				return guid
+			}
+		}
+	}
+	return 0
+}
+
 // petCombatPursuitAndAttack handles pathing towards and attacking the pet's target.
 func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creatureMotion, owner *playerPos, now time.Time) {
 	// Look up target
@@ -658,6 +778,22 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	// dead" (Object.cpp:2935-2937): ghosts carry Health=1 in Go (death.go:473)
 	// but IsAlive() is false in C++ (deathState CORPSE).
 	if !targetFound || targetHealth == 0 || (isTargetPlayer && targetSess != nil && targetSess.isDeadOrGhost()) {
+		// PetAI::KilledUnit (PetAI.cpp:232-248): when the victim DIED (not
+		// merely lost), the pet AttackStops and tries SelectNextTarget
+		// before returning — its own attacker first, then the owner's
+		// attacker, then the owner's victim — instead of disengaging.
+		if targetFound && targetHealth == 0 && owner != nil {
+			if next := s.petSelectNextTarget(motion, owner.GUID); next != 0 {
+				stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
+				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+				motion.TargetGUID = next
+				motion.InCombat = true
+				motion.Moving = true
+				startPkt := buildAttackStart(motion.GUID, next)
+				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+				return
+			}
+		}
 		motion.TargetGUID = 0
 		motion.InCombat = false
 		motion.Moving = false
@@ -762,12 +898,16 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 				s.executePetMeleeAttack(ctx, motion, owner.Sess, targetGUID, isTargetPlayer, targetSess, targetHealth, targetArmor, targetLevel, now)
 				motion.LastAttack = now
 			}
-
-			// Autocast spells (suppressed by the breakable-CC arm above).
-			if len(motion.AutocastSpells) > 0 && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 3*time.Second) {
-				s.executePetAutocast(ctx, motion, targetGUID, now)
-			}
 		}
+	}
+	// PetAI::UpdateAI autocast (PetAI.cpp:96-196): the leg runs every tick —
+	// not gated on melee range (ranged pet spells fire while chasing; the
+	// per-spell range check lives in petCanAutoCastTarget) and with no fixed
+	// throttle (gated on the pet GCD + per-spell cooldown inside
+	// executePetAutocast, PetAI.cpp:124-131). Suppressed by the
+	// breakable-CC arm above, like the swing.
+	if !ccHoldAttacks && len(motion.AutocastSpells) > 0 {
+		s.executePetAutocast(ctx, motion, targetGUID, now)
 	}
 }
 
@@ -1234,6 +1374,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				cMotion.ThreatMgr = NewThreatManager(cMotion)
 			}
 			cMotion.ThreatMgr.AddThreat(motion.GUID, float32(damage), true)
+			consumeKillCommandStack(motion)
 			if damage >= cMotion.Health {
 				// Snapshot the pre-kill target for the death chain, like the
 				// player swing path's getCombatTarget-before-damage.
@@ -4510,12 +4651,18 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			if targetMotion.ThreatMgr != nil {
 				targetMotion.ThreatMgr.ClearThreat()
 			}
+			// ThreatManager::ClearAllThreat always sends SendClearAllThreatToClients
+			// (ThreatManager.cpp:483-490) — every other death path pairs the
+			// ClearThreat with the SMSG_THREAT_CLEAR broadcast; the pet-spell
+			// kill path omitted it, leaving client threat UIs stale.
+			s.server.broadcastThreatClearInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID)
 		} else {
 			targetMotion.Health -= damage
 			if targetMotion.ThreatMgr == nil {
 				targetMotion.ThreatMgr = NewThreatManager(targetMotion)
 			}
 			targetMotion.ThreatMgr.AddThreat(caster.GUID, float32(damage), false)
+			consumeKillCommandStack(caster)
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 			if next, changed := s.server.addCreatureRageLocked(targetMotion, targetMotion.Level, damage); changed {
 				rageNext, rageChanged = next, true

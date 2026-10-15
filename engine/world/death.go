@@ -533,7 +533,14 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	// raised-ghoul pet model). Placed before the penalty/achievement legs,
 	// matching the C++ relative order. Skipped while the spirit form holds.
 	if !spiritOfRedemption {
-		s.unsummonPet(ctx, petSaveNotInSlot)
+		// TempSummon::Update (TemporarySummon.cpp:66-170) has no
+		// owner-death arm: a spell-duration guardian outlives its dead
+		// owner, unlike the genuine pet RemovePet dismisses (Player.cpp:
+		// 1412). Totems keep their owner-death unsummon below
+		// (Totem::Update, Totem.cpp:47-57).
+		if !s.activePetIsTemporaryGuardian(ctx) {
+			s.unsummonPet(ctx, petSaveNotInSlot)
+		}
 		// Totem::Update (Totem.cpp:47-57): a totem unsummons when its
 		// owner is not alive. Go runs no per-totem update tick, so the
 		// owner-death unsummon lands in the JUST_DIED cascade next to the
@@ -789,7 +796,11 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
 	s.cancelNextSwingSpell()
-	s.unsummonPet(ctx, petSaveNotInSlot)
+	// The deferred cascade keeps the same guardian exemption as the
+	// immediate one above (TempSummon::Update has no owner-death arm).
+	if !s.activePetIsTemporaryGuardian(ctx) {
+		s.unsummonPet(ctx, petSaveNotInSlot)
+	}
 	// Deferred Totem::Update owner-death unsummon (Totem.cpp:47-57),
 	// landing with the deferred JUST_DIED cascade.
 	s.destroyAllTotems()
@@ -1394,9 +1405,12 @@ func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 	// guards, before the pet dismissal and the ghost conversion.
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventRepop, s.luaPlayer())
 	// WorldSession::HandleRepopRequest, MiscHandler.cpp:87-89 — dismiss any
-	// pet before the repop (e.g. a warlock re-summon while dead); RemoveGhoul
-	// has no Go analog (see killPlayer).
-	s.unsummonPet(ctx, petSaveNotInSlot)
+	// pet before the repop (e.g. a warlock re-summon while dead); C++ calls
+	// RemovePet, which never touches TempSummons, so temporary guardians
+	// survive the repop like they survive the JUST_DIED cascade.
+	if !s.activePetIsTemporaryGuardian(ctx) {
+		s.unsummonPet(ctx, petSaveNotInSlot)
+	}
 	s.buildPlayerRepop(ctx, false)
 	s.repopAtGraveyard(ctx)
 	return true

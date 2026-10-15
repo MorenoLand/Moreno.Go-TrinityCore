@@ -111,6 +111,12 @@ type creatureMotion struct {
 	PetID          uint32
 	PetType        uint8
 	PetNextLevelXP uint32
+	// KillCommandStacks is the pet-side half of the Kill Command (34026)
+	// stack machinery: the 58914 dummy-aura stacks stamped at 34026 apply
+	// (SpellAuraEffects.cpp:4367-4386) and consumed on the pet's attacks
+	// (spell_hun_kill_command_pet::HandleProc, spell_hunter.cpp:677-690).
+	// The hunter-side 34027 aura is unmodeled in Go.
+	KillCommandStacks uint8
 	// PetOwnerArmorBonus snapshots the 35% owner-armor leg folded into the
 	// pet's armor (Guardian::UpdateArmor, StatSystem.cpp:1323-1324): the
 	// offline-owner fallback when the live owner-armor resolution finds no
@@ -213,6 +219,21 @@ type creatureMotion struct {
 	// (creatureReact* / PetReact* both 0/1/2).
 	CharmOldReact uint8
 	PetCommand    uint8 // 0: stay, 1: follow, 2: attack
+	// TempSummonLifetime is the TempSummon::m_lifetime twin
+	// (TemporarySummon.cpp:168-173, InitStats): the creating spell's
+	// duration stamped at summon for temporary-duration guardians
+	// (Spell::EffectSummonType, SpellEffects.cpp:2214-2215). Zero for
+	// permanent pets, so the expiry sweep ignores them.
+	TempSummonLifetime time.Duration
+	// TempSummonExpiresAt is the wall-clock twin of TempSummon::m_timer
+	// (TemporarySummon.cpp:66-170, Update): while the guardian is in
+	// combat it resets to now + TempSummonLifetime (the
+	// TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT / TIMED_OR_CORPSE /
+	// TIMED_OR_DEAD arms, TemporarySummon.cpp:91-106, 133-168); out of
+	// combat the tick unsummons the guardian once now passes it
+	// (TempSummon::UnSummon, TemporarySummon.cpp:250-304 — C++ TempSummons
+	// are never saved, so the character_pet row is deleted on expiry).
+	TempSummonExpiresAt time.Time
 
 	// Looted mirrors Loot::isLooted (Loot.h:236 — gold == 0 && unlootedCount
 	// == 0): set when the corpse's loot window fully empties, cleared on
@@ -721,6 +742,13 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 		if moveType == 2 {
 			motion.PathID = s.loadCreaturePathID(ctx, guid, entry)
 			motion.Points = s.loadWaypoints(ctx, motion.PathID)
+			// WaypointMovementGenerator::DoInitialize
+			// (WaypointMovementGenerator.cpp:118-120): StopMoving +
+			// _nextMoveTime.Reset(1000) — the patroller holds 1s before
+			// launching its first leg.
+			if len(motion.Points) > 0 {
+				motion.WaitUntil = time.Now().Add(time.Second)
+			}
 		}
 		motions[key] = motion
 		created = true
@@ -1739,6 +1767,11 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
+	// Unit::SetCharmedBy -> CombatStop (Unit.cpp:11799) pairs the
+	// charmed unit's own ClearAllThreat above with RemoveMeFromThreatLists
+	// (ThreatManager.cpp:690-697): the charmed creature also drops as a
+	// victim from every other unit's threat table, with SMSG_THREAT_REMOVE.
+	s.removeThreatVictimFromAllLists(key.Map, key.InstanceID, key.GUID)
 	// CharmInfo::InitCharmCreateSpells (Unit.cpp:10003-10050): passive charm
 	// spells (MAX_SPELL_CHARM = 4, like the packet addlist) are cast on the
 	// charmed unit as triggered self-casts at charm time.
@@ -2000,6 +2033,12 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	if motion.BossAI != nil {
 		s.clearInstanceEncounter(motion)
 		motion.BossAI.OnEvade(ctx, s, motion)
+		// BossAI::_DespawnAtEvade (ScriptedCreature.cpp:596-617): the AI
+		// removed the creature from the world (despawnAtEvade) instead of
+		// evading home — the evade-home return below does not run.
+		if s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID) == nil {
+			return
+		}
 	}
 	motion.InCombat = false
 	motion.TargetGUID = 0
@@ -2187,6 +2226,15 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				continue
 			}
 			seenCreatures[spawnKey] = struct{}{}
+			// BossAI::_DespawnAtEvade (boss_ai.go): a pending delayed
+			// respawn suppresses the sweep — the boss stays out of the
+			// world until processEvadeDespawns re-arms it.
+			s.motionMu.Lock()
+			_, evadePending := s.evadeDespawns[creatureWorldGUID(uint32(guid), uint32(entry))]
+			s.motionMu.Unlock()
+			if evadePending {
+				continue
+			}
 			if curHealth <= 0 {
 				continue
 			}
@@ -2293,6 +2341,38 @@ func (s *Server) triggerCreatureAlert(ctx context.Context, motion *creatureMotio
 	_ = ctx
 }
 
+// waypointNodeArrival ports WaypointMovementGenerator::OnArrived
+// (WaypointMovementGenerator.cpp:238-262). The C++ arrival hook calls
+// AI->MovementInform(WAYPOINT_MOTION_TYPE, _currentNode); Eluna::MovementInform
+// (CreatureHooks.cpp:182-190) turns it into CREATURE_EVENT_ON_REACH_WP (6)
+// with (type=2, id=node index). The veto return gates ScriptedAI::MovementInform
+// — a provable no-op here (only PetAI overrides MovementInform, for
+// POINT_MOTION_TYPE pet returns, and pets never run waypoint generators), so it
+// is discarded like the ON_REACH_HOME arm in the evade section. NextIdx was
+// advanced at launch, so the arrived node is (NextIdx-1) mod len.
+// WaypointMovementGenerator::StartMove: "if (waypoint.orientation &&
+// waypoint.delay) init.SetFacing(waypoint.orientation)" — the node's facing
+// applies at arrival, only when both are set (0 orientation is the DB default
+// meaning "no facing"). The client-side turn rode the Final_Angle arm of the
+// SMSG_MONSTER_MOVE packet at launch; this sets the logical orientation to
+// match, the way X/Y/Z already jump. _nextMoveTime.Reset(waypoint.delay)
+// observes the node delay AFTER arrival; WaypointNode::delay is a uint32
+// millisecond count (WaypointDefines.h:52), consumed by TimeTracker::Reset as
+// Milliseconds (WaypointMovementGenerator.cpp:247).
+func (s *Server) waypointNodeArrival(ctx context.Context, motion *creatureMotion, at time.Time) {
+	if motion.MoveType != 2 || len(motion.Points) == 0 {
+		return
+	}
+	arrived := (motion.NextIdx - 1 + len(motion.Points)) % len(motion.Points)
+	s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachWP, uint32(waypointMotionType), uint32(arrived))
+	point := motion.Points[arrived]
+	if point.Orientation != 0 && point.Delay > 0 {
+		motion.Orientation = point.Orientation
+	}
+	if point.Delay > 0 {
+		motion.WaitUntil = at.Add(time.Duration(point.Delay) * time.Millisecond)
+	}
+}
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
 	if motion == nil {
 		return
@@ -3482,30 +3562,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		motion.Moving = false
 		motion.WaitUntil = motion.MoveEnds
-		if motion.MoveType == 2 && len(motion.Points) > 0 {
-			// WaypointMovementGenerator::OnArrived (WaypointMovementGenerator.cpp):
-			// the C++ arrival hook calls AI->MovementInform(WAYPOINT_MOTION_TYPE,
-			// _currentNode); Eluna::MovementInform (CreatureHooks.cpp:182-190) turns
-			// it into CREATURE_EVENT_ON_REACH_WP (6) with (type=2, id=node index).
-			// Go's CreatureEventOnReachWP was defined but never fired, so any Lua
-			// patrol/escort script registered on event 6 was dead. NextIdx was
-			// advanced at launch, so the arrived node is (NextIdx-1) mod len.
-			// The veto return gates ScriptedAI::MovementInform — a provable no-op
-			// here (only PetAI overrides MovementInform, for POINT_MOTION_TYPE pet
-			// returns, and pets never run waypoint generators), so it is discarded
-			// like the ON_REACH_HOME arm in the evade section.
-			arrived := (motion.NextIdx - 1 + len(motion.Points)) % len(motion.Points)
-			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachWP, uint32(waypointMotionType), uint32(arrived))
-			// WaypointMovementGenerator::StartMove: "if (waypoint.orientation &&
-			// waypoint.delay) init.SetFacing(waypoint.orientation)" — the node's
-			// facing applies at arrival, only when both are set (0 orientation is
-			// the DB default meaning "no facing"). The client-side turn rode the
-			// Final_Angle arm of the SMSG_MONSTER_MOVE packet at launch; this sets
-			// the logical orientation to match, the way X/Y/Z already jump.
-			if point := motion.Points[arrived]; point.Orientation != 0 && point.Delay > 0 {
-				motion.Orientation = point.Orientation
-			}
-		}
+		// WaypointMovementGenerator::OnArrived (WaypointMovementGenerator.cpp:238-262):
+		// the arrival event, node facing, and the post-arrival node delay.
+		s.waypointNodeArrival(ctx, motion, motion.MoveEnds)
 	}
 	if now.Before(motion.WaitUntil) {
 		return
@@ -3558,13 +3617,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		destX, destY, destZ = point.X, point.Y, point.Z
 		walk = point.MoveType == 0 // WAYPOINT_MOVE_TYPE_WALK (WaypointDefines.h:26); default RUN
 		speed = creatureSplineVelocity(motion, walk)
-		if point.Delay > 0 {
-			// WaypointNode::delay is a uint32 millisecond count
-			// (WaypointDefines.h:52), consumed by TimeTracker::Reset as
-			// Milliseconds (WaypointMovementGenerator.cpp:247) — the DB
-			// value is already ms, not seconds.
-			wait = time.Duration(point.Delay) * time.Millisecond
-		}
+
 		// WaypointMovementGenerator::StartMove (WaypointMovementGenerator.cpp):
 		// "if (waypoint.orientation && waypoint.delay) init.SetFacing(waypoint.orientation)"
 		// — the destination facing rides the spline's Final_Angle arm only when
@@ -3618,8 +3671,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// and IDLE never wanders.
 		return
 	}
-	moveDist := math.Hypot(float64(destX-motion.X), float64(destY-motion.Y))
+	// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the leg
+	// duration covers the vertical component too (flying patrols, cliff
+	// ramps), not just the 2D projection.
+	moveDist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)
 	if moveDist < 0.5 {
+		// MoveSpline.cpp:145-149 launches even a degenerate spline (1ms)
+		// and WaypointMovementGenerator::OnArrived fires normally
+		// (WaypointMovementGenerator.cpp:238-262): the arrival event, node
+		// facing, and node delay all still apply. NextIdx was already
+		// advanced above, so the atomic-spline model synthesizes the
+		// arrival directly instead of silently dropping the node.
+		if motion.MoveType == 2 {
+			motion.X, motion.Y, motion.Z = destX, destY, destZ
+			motion.HomeX, motion.HomeY, motion.HomeZ = destX, destY, destZ
+			motion.Moving = false
+			s.waypointNodeArrival(ctx, motion, now)
+		}
 		return
 	}
 	if motion.MoveType == 1 {
