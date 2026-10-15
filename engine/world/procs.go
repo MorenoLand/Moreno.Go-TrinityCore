@@ -1326,9 +1326,9 @@ func spellFinishPhaseProcTypeMask(spell wotlk.Spell) uint32 {
 // (Go has no creature casters; m_originalCaster is the casting player).
 // Documented deltas: the hit mask is the cast's accumulated m_hitMask
 // (s.castProcHitMask, ORed per target in procSpellHitAuraTriggers /
-// procSpellHealAuraTriggers, Spell.cpp:2603), normalized to
-// PROC_HIT_NORMAL when no target crit (Spell.cpp:3744) — the empty-target
-// arm (Spell.cpp:3605) seeds the same value.
+// procSpellHealAuraTriggers, Spell.cpp:2603), carried RAW — the
+// PROC_HIT_NORMAL normalization (Spell.cpp:3541-3543) is a _cast-phase leg
+// only; the empty-target arm (Spell.cpp:3605) seeds PROC_HIT_NORMAL.
 // The generated proc model (spellProcEntryFor, mirroring SpellMgr.cpp:1828)
 // only carries PROC_SPELL_PHASE_HIT, so like a C++ build with no
 // spell_proc DB rows bearing PHASE_FINISH, the event currently triggers
@@ -1347,20 +1347,19 @@ func (s *session) procSpellFinishAuraTriggers(ctx context.Context, spell wotlk.S
 		schoolMask = 1
 	}
 	spellCopy := spell
-	// Spell::_handle_finish_phase (Spell.cpp:3744): the event carries the
-	// cast's accumulated m_hitMask, normalized to PROC_HIT_NORMAL when no
-	// target crit — the empty-target arm (Spell.cpp:3604-3605) seeds the
-	// same value, so a targetless cast lands on NORMAL either way.
-	hitMask := s.castProcHitMask
-	if hitMask&procHitCritical == 0 {
-		hitMask |= procHitNormal
-	}
+	// Spell::_handle_finish_phase (Spell.cpp:3777) carries the cast's
+	// accumulated m_hitMask RAW — the PROC_HIT_NORMAL normalization
+	// (Spell.cpp:3541-3543) is a _cast-phase leg only. A cast whose targets
+	// were all e.g. fully resisted lands on the FINISH event with just
+	// PROC_HIT_FULL_RESIST (createProcHitMask sets no hit/crit bit for
+	// nullified damage, Unit.cpp:10232-10241); the empty-target arm
+	// (Spell.cpp:3604-3605) seeds PROC_HIT_NORMAL before any processing.
 	s.procAuraTriggerLoop(ctx, 0, procEventInfo{
 		typeMask:       typeMask,
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeMaskAll,
 		spellPhaseMask: procSpellPhaseFinish,
-		hitMask:        hitMask,
+		hitMask:        s.castProcHitMask,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 		actorGUID:      s.playerGUID,
@@ -1377,8 +1376,8 @@ func (s *session) procSpellFinishAuraTriggers(ctx context.Context, spell wotlk.S
 // (the prepareDataForTriggerSystem fill, else the magic/none positivity
 // split) at both _cast legs (Spell.cpp:3529-3542 vs 3764-3776). The hit mask
 // is the cast's accumulated m_hitMask (s.castProcHitMask), normalized to
-// PROC_HIT_NORMAL when no target crit (Spell.cpp:3537-3538) — the same
-// bridge as the PHASE_FINISH leg above.
+// PROC_HIT_NORMAL when no target crit (Spell.cpp:3537-3538) — the _cast
+// leg normalizes; the FINISH leg carries the mask raw (Spell.cpp:3777).
 // The m_originalCaster early-return gate is vacuous here (every cast runs on
 // a player session; Go has no creature casters), and the CreatureAI
 // OnSpellCastFinished hook has no bridge (no creature casters or AI). The

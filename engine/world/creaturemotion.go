@@ -2707,10 +2707,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					canParry = false
 					canDodge = false
 				}
-				// A victim mid cast-bar cast cannot avoid (Unit.cpp:2219-2224:
+				// A victim mid cast cannot avoid (Unit.cpp:2219-2224:
 				// victim->IsNonMeleeSpellCast(false); UNIT_STATE_CONTROLLED has
 				// no Go unit-state model, stays unbridged).
-				if target.Sess.genericCastInProgress() {
+				if target.Sess.nonMeleeCastInProgress() {
 					canDodge = false
 					canParry = false
 					canBlock = false
@@ -2763,10 +2763,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// Unit::RollMeleeOutcomeAgainst's casting/cc'd victim arm
 			// (Unit.cpp:2238-2242): a victim that is casting or controlled
 			// (confused/stunned/fleeing) cannot dodge/parry/block. Player
-			// victims bridge the cast half via genericCastInProgress, creature
+			// victims bridge the cast half via nonMeleeCastInProgress, creature
 			// victims via motion.CastingUntil; the CONTROLLED half bridges via
 			// the 5/7/12 aura twin (victimIsControlled).
-			if isPlayerVictim && target.Sess != nil && (target.Sess.genericCastInProgress() || victimIsControlled(s, true, target.Sess, combatTarget{})) {
+			if isPlayerVictim && target.Sess != nil && (target.Sess.nonMeleeCastInProgress() || victimIsControlled(s, true, target.Sess, combatTarget{})) {
 				canDodge = false
 				canParry = false
 				canBlock = false

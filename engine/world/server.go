@@ -1555,8 +1555,9 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		// !IsInCombat() || IsPolymorphed() || m_baseHealthRegen ||
 		// HasAuraType(116) || HasAuraType(161); the spirit-based addValue
 		// (Player.cpp:2248-2258) also runs in combat when the player carries
-		// SPELL_AURA_MOD_REGEN_DURING_COMBAT (116), scaled by
-		// ApplyPct(addValue, GetTotalAuraModifier(116)); the flat
+		// SPELL_AURA_MOD_REGEN_DURING_COMBAT (116): the aura amount is the
+		// percent of the spirit regen applied in combat (Player.cpp:2253-2254
+		// ApplyPct); the flat
 		// SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (161) bonus runs in and out
 		// of combat (Player.cpp:2265). The polymorphed addValue,
 		// m_baseHealthRegen, regen-percent / MOD_REGEN flat terms, and the

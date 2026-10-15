@@ -3594,6 +3594,22 @@ func (s *session) genericCastInProgress() bool {
 	return s.activeCast != nil && !s.activeCast.Cancelled
 }
 
+// nonMeleeCastInProgress is the Unit::RollMeleeOutcomeAgainst arm of
+// Unit::IsNonMeleeSpellCast(false) (Unit.cpp:2238-2242 -> 3182-3210): with
+// the roll's default flags (skipChanneled=false, skipAutorepeat=false) both
+// the cast-bar cast and the channeled cast suppress the victim's
+// dodge/parry/block. Go arms activeCast only for the cast-bar phase and
+// activeChannel for the channel phase, so both are checked. The autorepeat
+// arm has no Go model and stays unbridged.
+func (s *session) nonMeleeCastInProgress() bool {
+	if s.genericCastInProgress() {
+		return true
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	return s.activeChannel != nil && !s.activeChannel.Stopped
+}
+
 // autoShotNonBlockingCast is the C++ isAutoshoot exception in
 // Unit::IsNonMeleeSpellCast (Unit.cpp:3192-3195): a new Auto Shot (75) cast
 // is not blocked by an in-progress cast-bar cast carrying
