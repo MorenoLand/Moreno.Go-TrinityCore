@@ -486,6 +486,21 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	// durability) still run at the original death: the C++ flow gates only
 	// setDeathState(JUST_DIED) on spiritOfRedemption.
 	spiritOfRedemption := s.hasSpiritOfRedemptionTalent()
+	// Player::KillPlayer (Player.cpp:4771-4772): a flying player who is not
+	// on a transport starts a fall — "don't create corpse at this moment,
+	// player might be falling" (Player.cpp:4797), so the corpse spawns at
+	// ground level at release. The Go bridge forces the client's fall state
+	// (the SMSG_MOVE_NORMAL_FALL + MSG_MOVE_FALLING broadcast precedent from
+	// the feather-fall remove leg); the client lands and MSG_MOVE_FALL_LAND
+	// carries the grounded position. Skipped while the spirit form holds:
+	// Unit::Kill gates setDeathState(JUST_DIED) on spiritOfRedemption, so
+	// KillPlayer only runs at the deferred death.
+	if !spiritOfRedemption && s.player.TransportGUID == 0 {
+		if mi, ok := s.lastMovementInfoSnapshot(); ok && mi.Flags&movementFlying != 0 {
+			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_NORMAL_FALL))
+			s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_FALL_LAND, movementFalling)
+		}
+	}
 	// ThreatManager::RemoveMeFromThreatLists on the dead player
 	// (ThreatManager.cpp:690-697, reached on player death through
 	// Unit::setDeathState → CombatStop, Unit.cpp:8901-8907): a dead
@@ -1702,12 +1717,15 @@ func (s *session) deleteCorpseDataForResetBinds(ctx context.Context, charGUID ui
 }
 
 // resurrectPlayer mirrors Player::ResurrectPlayer (Player.cpp:4682) with the
-// C++ default applySickness=true: every caller that does not explicitly pass
-// false inflicts resurrection sickness on level 11+ characters. The only
-// false arm in the tree is ResurrectUsingRequestDataImpl (Player.cpp:24228),
+// C++ default applySickness=false (Player.h:1698): only the spirit-healer
+// path inflicts resurrection sickness (NPCHandler.cpp:221, bridged by the
+// explicit true arm at handleSpiritHealerActivate). Battleground joins/exits,
+// BG spirit waves, corpse reclaim, WG hearth resurrects, teleport revives,
+// area-trigger revives and GM .revive all resurrect clean.
+// ResurrectUsingRequestDataImpl (Player.cpp:24228) is the same false arm,
 // bridged by resurrectPlayerNoSickness.
 func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
-	s.resurrectPlayerWithBones(ctx, restorePercent, false, true)
+	s.resurrectPlayerWithBones(ctx, restorePercent, false, false)
 }
 
 // resurrectPlayerNoSickness mirrors the ResurrectUsingRequestDataImpl arm
@@ -2269,7 +2287,7 @@ func (s *session) handleEffectSelfResurrect(ctx context.Context, spell wotlk.Spe
 			mana = uint32(float32(s.player.MaxPowers[0]) * float32(damage) / 100)
 		}
 	}
-	s.resurrectPlayerWithBones(ctx, 0, true, true)
+	s.resurrectPlayerWithBones(ctx, 0, true, false)
 	s.player.Health = health
 	s.player.Powers[0] = mana
 	s.player.Powers[1] = 0
@@ -2497,9 +2515,9 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 	if hasCorpse {
 		corpseGrave, corpseGraveFound = s.server.closestGraveyard(ctx, corpse.X, corpse.Y, corpse.Z, corpse.MapID, s.player.Zone, playerTeam(s.player.Race))
 	}
-	s.resurrectPlayer(ctx, 0.5)
+	s.resurrectPlayerWithBones(ctx, 0.5, false, true)
 	s.durabilityLossAll(ctx, 0.25, true)
-	// Resurrection sickness is applied inside resurrectPlayer (the
+	// Resurrection sickness is applied inside resurrectPlayerWithBones (the
 	// ResurrectPlayer(0.5f, true) arm, NPCHandler.cpp:221), matching the
 	// reference order: sickness before the durability loss.
 	s.spawnCorpseBones(ctx)

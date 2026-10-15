@@ -4021,10 +4021,15 @@ func (s *Server) startGroupLootRoll(ctx context.Context, sourceGUID uint64, slot
 	}
 
 	if grp != nil && grp.LootMethod == 3 && len(eligible) > 0 && canRollFailTotal == len(eligible) {
+		// Group::Roll::Roll (Group.cpp:45-48): the roll captures the row's
+		// randomPropertyId/randomSuffix and ships them on every roll packet.
+		var rollRandomSuffix, rollRandomPropID uint32
 		if cLoot := s.creatureLoot[objectKey]; cLoot != nil {
 			if li, ok := cLoot.Items[uint8(slot)]; ok {
 				li.IsBlocked = true
 				cLoot.Items[uint8(slot)] = li
+				rollRandomSuffix = li.RandomSuffix
+				rollRandomPropID = uint32(li.RandomPropertyID)
 			}
 		}
 		s.lootMu.Unlock()
@@ -4034,8 +4039,8 @@ func (s *Server) startGroupLootRoll(ctx context.Context, sourceGUID uint64, slot
 			buf.WriteU32(slot)
 			buf.WriteU64(m.playerGUID)
 			buf.WriteU32(itemEntry)
-			buf.WriteU32(0) // randomSuffix
-			buf.WriteU32(0) // randomPropId
+			buf.WriteU32(rollRandomSuffix) // randomSuffix
+			buf.WriteU32(rollRandomPropID) // randomPropId
 			buf.WriteU8(128)
 			buf.WriteU8(rollPass)
 			buf.WriteU8(1) // autoPass
@@ -4069,6 +4074,11 @@ func (s *Server) startGroupLootRoll(ctx context.Context, sourceGUID uint64, slot
 		if li, ok := cLoot.Items[uint8(slot)]; ok {
 			li.IsBlocked = true
 			cLoot.Items[uint8(slot)] = li
+			// Group::Roll::Roll (Group.cpp:45-48): the roll captures the
+			// row's randomPropertyId/randomSuffix; the win path stores with
+			// the property (Group.cpp:1559).
+			roll.RandomSuffix = li.RandomSuffix
+			roll.RandomPropID = uint32(li.RandomPropertyID)
 		}
 	}
 	s.groupRolls[rollKey] = roll
@@ -4093,8 +4103,8 @@ func (s *Server) startGroupLootRoll(ctx context.Context, sourceGUID uint64, slot
 			buf.WriteU32(slot)
 			buf.WriteU64(m.playerGUID)
 			buf.WriteU32(itemEntry)
-			buf.WriteU32(0) // randomSuffix
-			buf.WriteU32(0) // randomPropId
+			buf.WriteU32(roll.RandomSuffix) // randomSuffix
+			buf.WriteU32(roll.RandomPropID) // randomPropId
 			buf.WriteU8(128)
 			buf.WriteU8(rollPass)
 			if isGroupLoot {
@@ -4119,7 +4129,7 @@ func (s *Server) startGroupLootRoll(ctx context.Context, sourceGUID uint64, slot
 			}
 		}
 
-		buf := buildLootStartRollPacket(rollItemGUID, mapID, slot, itemEntry, 0, 0, itemCount, 60000, memberMask)
+		buf := buildLootStartRollPacket(rollItemGUID, mapID, slot, itemEntry, roll.RandomSuffix, roll.RandomPropID, itemCount, 60000, memberMask)
 		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf, true)
 	}
 
@@ -4256,6 +4266,11 @@ func (s *Server) startGroupQuestLootRoll(ctx context.Context, sourceGUID uint64,
 		if qi, ok := cLoot.QuestItems[qidx]; ok {
 			qi.IsBlocked = true
 			cLoot.QuestItems[qidx] = qi
+			// Group::Roll::Roll (Group.cpp:45-48): quest-slot rolls capture
+			// the row's randoms too; the win path stores with the property
+			// (Group.cpp:1632).
+			roll.RandomSuffix = qi.RandomSuffix
+			roll.RandomPropID = uint32(qi.RandomPropertyID)
 		}
 	}
 	s.groupRolls[rollKey] = roll
@@ -4283,8 +4298,8 @@ func (s *Server) startGroupQuestLootRoll(ctx context.Context, sourceGUID uint64,
 			buf.WriteU32(qslot)
 			buf.WriteU64(m.playerGUID)
 			buf.WriteU32(itemEntry)
-			buf.WriteU32(0) // randomSuffix
-			buf.WriteU32(0) // randomPropId
+			buf.WriteU32(roll.RandomSuffix) // randomSuffix
+			buf.WriteU32(roll.RandomPropID) // randomPropId
 			buf.WriteU8(128)
 			buf.WriteU8(rollPass)
 			buf.WriteU8(0) // autoPass
@@ -4306,7 +4321,7 @@ func (s *Server) startGroupQuestLootRoll(ctx context.Context, sourceGUID uint64,
 			}
 		}
 
-		buf := buildLootStartRollPacket(rollItemGUID, mapID, qslot, itemEntry, 0, 0, itemCount, 60000, memberMask)
+		buf := buildLootStartRollPacket(rollItemGUID, mapID, qslot, itemEntry, roll.RandomSuffix, roll.RandomPropID, itemCount, 60000, memberMask)
 		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf, true)
 	}
 
@@ -4647,6 +4662,13 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 	}
 	_ = winnerSess.sendInventoryItems(ctx)
 	winnerSess.sendPlayerUpdate()
+	// Group.cpp:1559/1632: StoreNewItem's randomPropertyId arm — the
+	// delivered win carries the roll's captured random property, exactly
+	// like the normal-take path (storeTakenLootRow). Quest-slot wins carry
+	// it too (Group.cpp:1632); disenchant wins never reach here.
+	if roll.RandomPropID != 0 && res != nil && !res.IsStack && res.ItemGUID != 0 {
+		_, _ = s.CharactersStore.DB.ExecContext(ctx, `UPDATE item_instance SET randomPropertyId = ? WHERE guid = ?`, int32(roll.RandomPropID), res.ItemGUID)
+	}
 	// Group.cpp:1567/1634: the winner's item carries the row's allowed looters
 	// into StoreNewItem, whose Player.cpp:12147 arm binds the BoP-tradeable
 	// window. Quest-slot wins carry no allowed looters (C++ never populates
@@ -4906,30 +4928,12 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 				return true
 			}
 		}
-		var itemEntry uint32
-		if loot := s.server.creatureLoot[rollKey.Object]; loot != nil {
-			if li, ok := loot.Items[uint8(itemSlot)]; ok {
-				itemEntry = li.ItemEntry
-			}
-		}
+		// Group::CountRollVote (Group.cpp:1453-1455): a vote on a roll that
+		// no longer exists returns silently — no vote recorded, no
+		// broadcast. The need/greed achievement credit above already ran,
+		// matching HandleLootRoll's unconditional switch
+		// (GroupHandler.cpp:483-490).
 		s.server.lootMu.Unlock()
-
-		rollNumber := uint8(128) // pass
-		if rollType > 0 {
-			rollNumber = uint8(rand.Intn(100) + 1) // 1..100
-		}
-
-		buf := protocol.NewBuffer(35)
-		buf.WriteU64(itemGUID)     // sourceGuid (guid of loot object)
-		buf.WriteU32(itemSlot)     // slot
-		buf.WriteU64(s.playerGUID) // targetGuid (rolling player)
-		buf.WriteU32(itemEntry)    // itemEntryId
-		buf.WriteU32(0)            // randomSuffix
-		buf.WriteU32(0)            // randomPropId
-		buf.WriteU8(rollNumber)    // rollNumber
-		buf.WriteU8(rollType)      // rollType (0: pass, 1: need, 2: greed, 3: disenchant)
-		buf.WriteU8(0)             // autoPass
-		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
 		return true
 	}
 	if roll.GroupID != s.groupID || roll.MapID != s.player.Map || roll.InstanceID != s.player.InstanceID {
