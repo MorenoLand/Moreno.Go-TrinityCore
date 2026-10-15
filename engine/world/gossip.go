@@ -1362,6 +1362,23 @@ func (s *session) canInteractWithCreature(ctx context.Context, creature *scripti
 	if xOK && yOK && zOK && distance3D(s.player.X, s.player.Y, s.player.Z, x, y, z) > 5.0 {
 		return false
 	}
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2335-2337): a dead creature
+	// cannot be interacted with unless the template allows it
+	// (CREATURE_TYPE_FLAG_CAN_INTERACT_WHILE_DEAD, SharedDefines.h:2736).
+	if health, healthOK := objectUint32Field(creature, "Health"); healthOK && health == 0 {
+		entry, ok := objectUint32Field(creature, "Entry")
+		if !ok {
+			return false
+		}
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var typeFlags int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?`, entry).Scan(&typeFlags); err == nil {
+				if uint32(typeFlags)&creatureTypeFlagInteractDead == 0 {
+					return false
+				}
+			}
+		}
+	}
 	// Player::GetNPCIfCanInteractWith (Player.cpp:2332): a dead player
 	// cannot interact unless the template is ghost-visible
 	// (CREATURE_TYPE_FLAG_GHOST_VISIBLE, SharedDefines.h:2730).

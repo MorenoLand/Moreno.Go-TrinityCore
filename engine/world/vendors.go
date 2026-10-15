@@ -100,12 +100,21 @@ func (s *Server) currentVendorStockForGUID(vendorGUID uint64, item, slot, extend
 	if stock.Current > maxCount {
 		stock.Current = maxCount
 	}
+	// Creature::GetVendorItemCurrentCount (Creature.cpp:2907):
+	// lastIncrementTime is reset to the current time (ptime), not to the
+	// last increment boundary — the next restock step lands a full
+	// incrtime after the query that observed the increment.
+	applyVendorRestockLocked(stock, maxCount, increment, buyCount, time.Now())
+	return stock.Current
+}
+
+// applyVendorRestockLocked applies pending restock steps to a vendor stock
+// entry under the caller's vendorMu hold. Creature::UpdateVendorItemCurrentCount
+// (Creature.cpp:2936-2944) runs this same arm before subtracting the purchase,
+// so the stock read and the subtract are one atomic step — a restock boundary
+// crossed during buy validation still grants the increments.
+func applyVendorRestockLocked(stock *vendorStockState, maxCount int32, increment time.Duration, buyCount uint32, now time.Time) {
 	if increment > 0 && stock.Current < maxCount {
-		// Creature::GetVendorItemCurrentCount (Creature.cpp:2907):
-		// lastIncrementTime is reset to the current time (ptime), not to the
-		// last increment boundary — the next restock step lands a full
-		// incrtime after the query that observed the increment.
-		now := time.Now()
 		steps := int32(now.Sub(stock.Updated) / increment)
 		if steps > 0 {
 			stock.Current += steps * int32(buyCount)
@@ -115,29 +124,43 @@ func (s *Server) currentVendorStockForGUID(vendorGUID uint64, item, slot, extend
 			stock.Updated = now
 		}
 	}
-	return stock.Current
 }
 
-func (s *Server) consumeVendorStock(vendor, item uint32, amount uint32) (int32, bool) {
-	return s.consumeVendorStockForGUID(uint64(vendor), item, 0, 0, amount)
+func (s *Server) consumeVendorStock(vendor, item uint32, amount uint32, maxCount int32, increment time.Duration, buyCount uint32) (int32, bool) {
+	return s.consumeVendorStockForGUID(uint64(vendor), item, 0, 0, amount, maxCount, increment, buyCount)
 }
 
-func (s *Server) consumeVendorStockFor(vendor, item, slot, extendedCost, amount uint32) (int32, bool) {
-	return s.consumeVendorStockForGUID(uint64(vendor), item, slot, extendedCost, amount)
+func (s *Server) consumeVendorStockFor(vendor, item, slot, extendedCost, amount uint32, maxCount int32, increment time.Duration, buyCount uint32) (int32, bool) {
+	return s.consumeVendorStockForGUID(uint64(vendor), item, slot, extendedCost, amount, maxCount, increment, buyCount)
 }
 
-func (s *Server) consumeVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost, amount uint32) (int32, bool) {
+func (s *Server) consumeVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost, amount uint32, maxCount int32, increment time.Duration, buyCount uint32) (int32, bool) {
 	s.vendorMu.Lock()
 	defer s.vendorMu.Unlock()
-	stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item}]
-	if stock == nil || stock.Current < int32(amount) {
+	if s.vendorStock == nil {
+		s.vendorStock = make(map[vendorStockKey]*vendorStockState)
+	}
+	key := vendorStockKey{VendorGUID: vendorGUID, Item: item}
+	stock := s.vendorStock[key]
+	if stock == nil {
+		stock = &vendorStockState{Current: maxCount, Updated: time.Now()}
+		s.vendorStock[key] = stock
+	}
+	if stock.Current > maxCount {
+		stock.Current = maxCount
+	}
+	// Creature::UpdateVendorItemCurrentCount (Creature.cpp:2936-2944): pending
+	// restock increments apply BEFORE the purchase subtracts, in one step.
+	now := time.Now()
+	applyVendorRestockLocked(stock, maxCount, increment, buyCount, now)
+	if stock.Current < int32(amount) {
 		return 0, false
 	}
 	stock.Current -= int32(amount)
-	// Creature::UpdateVendorItemCurrentCount (Creature.cpp:2944): a purchase
-	// resets lastIncrementTime to now — the restock clock restarts from the
-	// purchase, it does not continue from the pre-purchase boundary.
-	stock.Updated = time.Now()
+	// Creature.cpp:2944: a purchase resets lastIncrementTime to now — the
+	// restock clock restarts from the purchase, it does not continue from
+	// the pre-purchase boundary.
+	stock.Updated = now
 	return stock.Current, true
 }
 
@@ -414,7 +437,11 @@ func vendorPacketStock(current int32) uint32 {
 }
 
 func (s *session) handleBuyItem(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 14 {
+	// CMSG_BUY_ITEM (ItemHandler.cpp:579-590): vendorguid(8) + item(4) +
+	// slot(4) + count(4) + unk1(1) = 21 bytes on the wire. A short packet is
+	// a malformed/cheat read — C++ streams past the count into garbage, so
+	// the safe server arm is silence, like the 0-slot cheat arm below.
+	if !s.playerLoaded || s.player == nil || len(payload) < 21 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
@@ -735,7 +762,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	// if (it) — after the item exists.
 	remainingStock := int32(-1)
 	if maxCount > 0 {
-		remainingStock, _ = s.server.consumeVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount))
+		remainingStock, _ = s.server.consumeVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
 	}
 	if !store {
 		// Player.cpp:21887: the equip arm runs AutoUnequipOffhandIfNeed.
@@ -834,26 +861,69 @@ func (s *session) canStoreVendorItem(ctx context.Context, itemEntry, amount uint
 
 // canEquipVendorItem mirrors the feasibility half of
 // Player::CanEquipNewItem(slot, dest, item, swap=false) as
-// _StoreOrEquipNewItem uses it (Player.cpp:21843-21849, 11445-11457,
-// 11515): the requested equipment slot must accept the item's
-// InventoryType, and with swap=false an occupied slot fails with
-// EQUIP_ERR_NO_EQUIPMENT_SLOT_AVAILABLE instead of swapping. Deeper
-// CanEquipItem checks (level, skill, unique-equipped) have no Go model
-// and are not replicated here.
+// _StoreOrEquipNewItem uses it (Player.cpp:21843-21849), in C++ arm order
+// (Player.cpp:11445-11515): the CanTakeMoreSimilarItems max-count term
+// (11470-11472, 10404-10429), FindEquipSlot (11492), the CanUseItem chain
+// (11502-11504: the level gate at 11867-11868, then the itemCanUse arms via
+// canUseItemResult), the swap=false occupied slot (11506-11508), and
+// CanEquipUniqueItem (11529-11547).
+//
+// Not modeled: the not_loading in-game arms (stunned/charmed/combat weapon
+// change — Go has no unit-state model); the ScalingStatDistribution MaxLevel
+// arm (no SSD model); the CanUseItem dead arm (unreachable — the buy-path
+// interact gate requires a living player); the ItemLimitCategory sub-terms of
+// both checks (ItemLimitCategory.dbc absent from this server, like
+// guildPlayerSimilarItemCap); the socketed-gem arm of CanEquipUniqueItem (a
+// fresh vendor item has no enchantments); the quiver class arm and the
+// offhand-polearm arm (single-item rarities).
 func (s *session) canEquipVendorItem(ctx context.Context, itemEntry uint32, equipSlot uint8) uint8 {
-	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return equipErrItemCantBeEquipped
 	}
-	var invType int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(InventoryType, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&invType); err != nil {
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	var invType, maxCount, flags int64
+	var itemClass, itemSubClass, itemTplFlags2 int64
+	var allowableClass, allowableRace int64
+	var reqLevel, reqSkill, reqSkillRank, reqSpell, holidayID, quality, reqRepFaction, reqRepRank int64
+	var itemSpellIDs [5]int64
+	if err := wdb.QueryRowContext(ctx, `SELECT COALESCE(InventoryType, 0), COALESCE(MaxCount, 0), COALESCE(Flags, 0), Class, SubClass, Flags2, AllowableClass, AllowableRace, RequiredLevel, RequiredSkill, RequiredSkillRank, RequiredSpell, HolidayId, Quality, RequiredReputationFaction, RequiredReputationRank, spellid_1, spellid_2, spellid_3, spellid_4, spellid_5 FROM item_template WHERE entry = ? LIMIT 1`, itemEntry).Scan(&invType, &maxCount, &flags, &itemClass, &itemSubClass, &itemTplFlags2, &allowableClass, &allowableRace, &reqLevel, &reqSkill, &reqSkillRank, &reqSpell, &holidayID, &quality, &reqRepFaction, &reqRepRank, &itemSpellIDs[0], &itemSpellIDs[1], &itemSpellIDs[2], &itemSpellIDs[3], &itemSpellIDs[4]); err != nil {
 		return equipErrItemCantBeEquipped
+	}
+	// Player::CanTakeMoreSimilarItems max-count term (Player.cpp:10421-10430):
+	// one more of the entry over MaxCount fails with
+	// EQUIP_ERR_CANT_CARRY_MORE_OF_THIS. The count is character-inventory-wide
+	// (GetItemCount with inBankAlso=true, Player.cpp:9914); the item being
+	// equipped is fresh, so no skip exclusion is needed (C++ skips pItem).
+	if maxCount > 0 && maxCount != 2147483647 {
+		var owned int64
+		if err := cdb.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, itemEntry).Scan(&owned); err == nil && owned+1 > maxCount {
+			return equipErrCantCarryMoreOfThis
+		}
 	}
 	if !s.isSlotValidForItem(uint8(invType), equipSlot) {
 		return equipErrItemCantBeEquipped
 	}
+	// Player::CanUseItem (Player.cpp:11867-11868): the level gate fires ahead
+	// of every other use arm; the remaining arms are canUseItemResult's.
+	if s.player.Level < uint8(reqLevel) {
+		return equipErrCantEquipLevelI
+	}
+	if errCode := s.canUseItemResult(ctx, itemEntry, uint32(itemClass), uint32(itemSubClass), uint32(itemTplFlags2), allowableClass, allowableRace, uint32(reqSkill), uint32(reqSkillRank), uint32(reqSpell), uint32(holidayID), uint32(quality), uint32(reqRepFaction), uint32(reqRepRank), itemSpellIDs); errCode != equipErrOk {
+		return errCode
+	}
 	var existing int64
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, equipSlot).Scan(&existing); err == nil && existing != 0 {
+	if err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, equipSlot).Scan(&existing); err == nil && existing != 0 {
 		return equipErrNoEquipmentSlotAvailable
+	}
+	// Player::CanEquipUniqueItem (Player.cpp:25331-25339): a
+	// ITEM_FLAG_UNIQUE_EQUIPPABLE item whose entry is already equipped
+	// anywhere fails with EQUIP_ERR_ITEM_UNIQUE_EQUIPABLE.
+	if uint32(flags)&itemFlagUniqueEquippable != 0 {
+		var dupe int64
+		if err := cdb.QueryRowContext(ctx, `SELECT 1 FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19 AND ii.itemEntry = ? LIMIT 1`, s.playerGUID, itemEntry).Scan(&dupe); err == nil {
+			return equipErrItemUniqueEquipable
+		}
 	}
 	return equipErrOk
 }
