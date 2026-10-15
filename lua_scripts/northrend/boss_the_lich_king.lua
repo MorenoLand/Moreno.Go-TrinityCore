@@ -157,6 +157,7 @@ local SPELL_PLAGUE_AVOIDANCE = 72846
 local SPELL_RAGING_SPIRIT_VISUAL = 69197
 local SPELL_DARK_HUNGER = 69383
 local SPELL_SOUL_RIP = 69397
+local SPELL_KILL_FROSTMOURNE_PLAYERS = 75127
 
 local timers = {}
 
@@ -197,9 +198,14 @@ local function lichKingJustEngagedWith(event, creature, target)
 end
 
 -- C++ _Reset() timer machinery — cancel/re-arm on combat events
--- (the maiden convention).
+-- (the maiden convention). C++ boss_the_lich_king::EnterEvadeMode
+-- (:594): DoCastAOE(SPELL_KILL_FROSTMOURNE_PLAYERS 75127) non-triggered,
+-- ungated — modeled as self-cast (file's DoCastAOE idiom, line 104).
+-- The tirion-despawn / strangulate-vehicle teleport-back / summons
+-- DespawnAll / _DespawnAtEvade legs have no bridge — documented.
 local function lichKingLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_KILL_FROSTMOURNE_PLAYERS)
 end
 
 local function lichKingReset(event, creature)

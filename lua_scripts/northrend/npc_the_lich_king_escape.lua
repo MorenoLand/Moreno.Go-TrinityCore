@@ -38,12 +38,21 @@
 --   / no-instance-GetGuidData bridges.
 -- KilledUnit (:1252-1257) — DoPlaySoundToSet(SOUND_LK_SLAY_1/2): no
 --   sound bridge.
--- EnterEvadeMode (:1305-1312) — instance SetBossState(FAIL) leg: no
---   instance bridge.
+-- EnterEvadeMode (:1305-1312) — the _despawn latch + Fury of
+--   Frostmourne cast are ported (above); the instance SetBossState(FAIL)
+--   / StopMoving / DoPlaySoundToSet(SOUND_LK_FURY_OF_FROSTMOURNE) /
+--   DespawnOrUnsummon(12s) legs have no bridge.
 -- JustSummoned / SummonedCreatureDies (:1233-1250) — summon bookkeeping
 --   with no summon-list bridge.
 
 local ENTRY_LICH_KING_ESCAPE = 36954
+
+local SPELL_FURY_OF_FROSTMOURNE = 70063
+
+-- C++ _despawn latch (member, ctor-false, set on first evade-fire, never
+-- reset): GUID-keyed, never cleared on 2/23 — a respawn mints a fresh GUID,
+-- matching the ctor (the svalna captain precedent).
+local evadeFired = {}
 
 -- C++ DamageTaken :1198-1202 — the clamp keeps the Lich King alive
 -- through the escape; return the replacement damage as the second
@@ -55,4 +64,20 @@ local function lichKingEscapeDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ npc_the_lich_king_escape_horAI::EnterEvadeMode (:1305-1312):
+-- DoCastAOE(SPELL_FURY_OF_FROSTMOURNE 70063) non-triggered, ungated apart
+-- from the _despawn once-latch — modeled as self-cast (the file's
+-- DoCastAOE idiom). The instance SetBossState(FAIL) / StopMoving /
+-- DoPlaySoundToSet / DespawnOrUnsummon(12s) legs have no bridge —
+-- documented below.
+local function lichKingEscapeLeaveCombat(event, creature)
+    local guid = creature:GetGUID()
+    if evadeFired[guid] then
+        return
+    end
+    evadeFired[guid] = true
+    creature:CastSpell(creature, SPELL_FURY_OF_FROSTMOURNE)
+end
+
+RegisterCreatureEvent(ENTRY_LICH_KING_ESCAPE, 2, lichKingEscapeLeaveCombat)
 RegisterCreatureEvent(ENTRY_LICH_KING_ESCAPE, 9, lichKingEscapeDamageTaken)

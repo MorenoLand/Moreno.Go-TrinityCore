@@ -91,8 +91,9 @@
 -- KAELTHAS_INTRO)-gated (instance arm — no bridge); the intro talks
 -- are unreached (vaelastrasz gossip precedent). JustDied's
 -- instance->SetBossState(DONE) has no bridge (instance precedent).
--- EnterEvadeMode's ClearFlight + summons.DespawnAll + _DespawnAtEvade
--- has no evade bridge. JustSummoned's arcane-sphere MoveFollow and
+-- EnterEvadeMode's ClearFlight cast is ported (above); the
+-- summons.DespawnAll + _DespawnAtEvade legs have no bridge.
+-- JustSummoned's arcane-sphere MoveFollow and
 -- flame-strike-trigger dummy-cast arms have no summon/MotionMaster
 -- bridges (the_beast precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
@@ -215,6 +216,20 @@ local function onEnterCombat(_, creature)
     schedule(guid, "phoenix", 12000, function() onPhoenix(creature, guid) end)
 end
 
+-- C++ boss_felblood_kaelthas::EnterEvadeMode (:168):
+-- DoCastAOE(SPELL_CLEAR_FLIGHT 44232, true) TRIGGERED, ungated — modeled
+-- as triggered self-cast (the in-tree CastSpell(..., true) idiom). The
+-- summons.DespawnAll / _DespawnAtEvade legs have no bridge — documented.
+-- Event 2 gets a dedicated handler (the urom split precedent) so the cast
+-- fires on evade only, not on death/reset.
+local function onLeaveCombat(_, creature)
+    local guid = creature:GetGUID()
+    creature:CastSpell(creature, SPELL_CLEAR_FLIGHT, true)
+    cancelTimers(guid)
+    phaseTwo[guid] = nil
+    outroFired[guid] = nil
+end
+
 local function onCombatEnd(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -265,7 +280,7 @@ local function onDamageTaken(_, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_KAELTHAS, 1, onEnterCombat)
-RegisterCreatureEvent(ENTRY_KAELTHAS, 2, onCombatEnd)
+RegisterCreatureEvent(ENTRY_KAELTHAS, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 4, onCombatEnd)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 23, onCombatEnd)
