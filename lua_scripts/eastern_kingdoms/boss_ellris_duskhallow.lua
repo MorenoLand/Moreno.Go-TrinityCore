@@ -36,6 +36,19 @@
 -- Shadow-bolt machine: DoCastVictim(SPELL_SHADOW_BOLT 12471) 3000ms
 -- init -> 5000ms loop, GetVictim nil-guarded (incarcerator
 -- convention).
+-- Seed-of-corruption machine: DoCast(SelectTarget(Random, 0), SPELL_
+-- SEED_OF_CORRUPTION 44141) 2000ms init -> 10000ms loop,
+-- unconditional re-arm (boss_priestess_delrissa.cpp:648-653).
+-- Curse-of-agony machine: DoCast(SelectTarget(Random, 0), SPELL_
+-- CURSE_OF_AGONY 14875) 1000ms init -> 13000ms loop, unconditional
+-- re-arm (:655-660).
+-- Fear machine: DoCast(SelectTarget(Random, 0), SPELL_FEAR 38595)
+-- 10000ms init -> 10000ms loop, unconditional re-arm (:662-667). All
+-- three target via the map-wide random-player pool (GetPlayersInWorld
+-- filtered by map/instance, opera-Julianne precedent); caveat: C++
+-- picks from the threat list (pets/totems eligible, non-threat
+-- players excluded) — the accepted the_beast/nethekurse/opera/teron
+-- approximation.
 -- Healing-potion latch (common-AI UpdateAI arm: !UsedPotion &&
 -- HealthBelowPct(25) -> DoCast(me, SPELL_HEALING_POTION 15503),
 -- UsedPotion = true): via OnDamageTaken(9), per-guid one-shot,
@@ -55,18 +68,6 @@
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - JustEngagedWith's DoCast(me, SPELL_SUMMON_IMP 44163) — summon
 --   bridge absent (razorgore precedent), so no imp was ported.
--- - Seed-of-corruption machine (DoCast(SelectTarget(Random, 0), 44141)
---   2000ms init -> 10000ms loop) — re-keyed 2026-10-15 (timer
---   doctrine): the timer leg bridges (CreateLuaEvent is live) but
---   the payload gates on SelectTarget (no random-target bridge —
---   the_beast / doomwalker precedent), so the machine stays out;
---   the stale "no timer bridge" claim is corrected.
--- - Curse-of-agony machine (DoCast(SelectTarget(Random, 0), 14875)
---   1000ms init -> 13000ms loop) — same: timer bridges,
---   SelectTarget bridge absent, stays out.
--- - Fear machine (DoCast(SelectTarget(Random, 0), 38595) 10000ms init
---   -> 10000ms loop) — same: timer bridges, SelectTarget bridge
---   absent, stays out.
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature
@@ -83,6 +84,9 @@
 local SPELL_IMMOLATE = 44267
 local SPELL_SHADOW_BOLT = 12471
 local SPELL_HEALING_POTION = 15503
+local SPELL_SEED_OF_CORRUPTION = 44141
+local SPELL_CURSE_OF_AGONY = 14875
+local SPELL_FEAR = 38595
 
 local ENTRY_ELLRIS_DUSKHALLOW = 24558
 
@@ -111,6 +115,44 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0) default selector: any player on the map
+-- (opera-Julianne playersOnMap precedent; DefaultTargetSelector has
+-- no alive or distance filter).
+local function playersOnMap(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
+            found[#found + 1] = plr
+        end
+    end
+    return found
+end
+
+local function onSeedOfCorruption(creature, guid)
+    local candidates = playersOnMap(creature)
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_SEED_OF_CORRUPTION)
+    end
+    schedule(guid, "seedofcorruption", 10000, function() onSeedOfCorruption(creature, guid) end)
+end
+
+local function onCurseOfAgony(creature, guid)
+    local candidates = playersOnMap(creature)
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_CURSE_OF_AGONY)
+    end
+    schedule(guid, "curseofagony", 13000, function() onCurseOfAgony(creature, guid) end)
+end
+
+local function onFear(creature, guid)
+    local candidates = playersOnMap(creature)
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_FEAR)
+    end
+    schedule(guid, "fear", 10000, function() onFear(creature, guid) end)
+end
+
 local function onImmolate(creature, guid)
     local victim = creature:GetVictim()
     if victim then
@@ -133,6 +175,9 @@ local function onEnterCombat(_, creature)
     usedPotion[guid] = false
     schedule(guid, "immolate", 6000, function() onImmolate(creature, guid) end)
     schedule(guid, "shadowbolt", 3000, function() onShadowBolt(creature, guid) end)
+    schedule(guid, "seedofcorruption", 2000, function() onSeedOfCorruption(creature, guid) end)
+    schedule(guid, "curseofagony", 1000, function() onCurseOfAgony(creature, guid) end)
+    schedule(guid, "fear", 10000, function() onFear(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

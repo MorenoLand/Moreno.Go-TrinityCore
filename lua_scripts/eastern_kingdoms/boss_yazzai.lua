@@ -39,6 +39,18 @@
 -- Ice-lance machine: DoCastVictim(SPELL_ICE_LANCE 46194) 12000ms
 -- init -> 12000ms loop, GetVictim nil-guarded (incarcerator
 -- convention).
+-- Polymorph machine: DoCast(SelectTarget(Random, 0), SPELL_POLYMORPH
+-- 13323) 1000ms init -> 20000ms loop, the re-arm inside the C++ pick
+-- guard (boss_priestess_delrissa.cpp:817-820): re-arms only on a
+-- successful pick; on a failed pick the expired timer retries next
+-- tick, modeled as a 1s re-poll (moroes dorotheaSwPain precedent).
+-- Blizzard machine: DoCast(SelectTarget(Random, 0), SPELL_BLIZZARD
+-- 44178) 8000ms init -> 8000ms loop, unconditional re-arm
+-- (:828-834). Both target via the map-wide random-player pool
+-- (GetPlayersInWorld filtered by map/instance, opera-Julianne
+-- precedent); caveat: C++ picks from the threat list (pets/totems
+-- eligible, non-threat players excluded) — the accepted
+-- the_beast/nethekurse/opera/teron approximation.
 -- Ice-block latch (UpdateAI arm: HealthBelowPct(35) && !HasIceBlocked
 -- -> DoCast(me, SPELL_ICE_BLOCK 27619), HasIceBlocked = true): via
 -- OnDamageTaken(9), per-guid one-shot, post-damage health check (gyth
@@ -62,15 +74,6 @@
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Polymorph machine (DoCast(SelectTarget(Random, 0), 13323) 1000ms
---   init -> 20000ms loop) — re-keyed 2026-10-15 (timer doctrine):
---   the timer leg bridges (CreateLuaEvent is live) but the payload
---   gates on SelectTarget (no random-target bridge on the Lua
---   surface — the_beast / doomwalker precedent), so the machine
---   stays out; the stale "no timer bridge" claim is corrected.
--- - Blizzard machine (DoCast(SelectTarget(Random, 0), 44178) 8000ms
---   init -> 8000ms loop) — same: timer bridges, SelectTarget
---   bridge absent, stays out.
 -- - Blink machine (GetCombatManager().GetPvECombatRefs() loop:
 --   anybody IsWithinMeleeRange -> DoCast(me, SPELL_BLINK 14514),
 --   8000ms init -> 8000ms loop) — re-keyed: timer bridges, but the
@@ -93,6 +96,8 @@ local SPELL_CONE_OF_COLD = 38384
 local SPELL_ICE_LANCE = 46194
 local SPELL_ICE_BLOCK = 27619
 local SPELL_HEALING_POTION = 15503
+local SPELL_POLYMORPH = 13323
+local SPELL_BLIZZARD = 44178
 
 local ENTRY_YAZZAI = 24561
 
@@ -120,6 +125,38 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(Random, 0) default selector: any player on the map
+-- (opera-Julianne playersOnMap precedent; DefaultTargetSelector has
+-- no alive or distance filter).
+local function playersOnMap(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
+            found[#found + 1] = plr
+        end
+    end
+    return found
+end
+
+local function onPolymorph(creature, guid)
+    local candidates = playersOnMap(creature)
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_POLYMORPH)
+        schedule(guid, "polymorph", 20000, function() onPolymorph(creature, guid) end)
+    else
+        schedule(guid, "polymorph", 1000, function() onPolymorph(creature, guid) end)
+    end
+end
+
+local function onBlizzard(creature, guid)
+    local candidates = playersOnMap(creature)
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_BLIZZARD)
+    end
+    schedule(guid, "blizzard", 8000, function() onBlizzard(creature, guid) end)
 end
 
 local function onFrostbolt(creature, guid)
@@ -154,6 +191,8 @@ local function onEnterCombat(_, creature)
     schedule(guid, "frostbolt", 3000, function() onFrostbolt(creature, guid) end)
     schedule(guid, "coneofcold", 10000, function() onConeOfCold(creature, guid) end)
     schedule(guid, "icelance", 12000, function() onIceLance(creature, guid) end)
+    schedule(guid, "polymorph", 1000, function() onPolymorph(creature, guid) end)
+    schedule(guid, "blizzard", 8000, function() onBlizzard(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
