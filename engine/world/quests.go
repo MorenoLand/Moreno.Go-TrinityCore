@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -299,6 +300,19 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 	if questFlags&0x00008000 != 0 {
 		var count int64
 		if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_weekly WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&count) == nil && count > 0 {
+			return false, nil
+		}
+	}
+	// Player::SatisfyQuestDay (Player.cpp:15980-16008), wired through
+	// Player::CanTakeQuest (Player.cpp:14941): a QUEST_FLAGS_DAILY quest
+	// fails when already done today or when the 25/day roster is full.
+	// (The dungeon-finder daily arm has no Go model — documented delta.)
+	if questFlags&0x00001000 != 0 {
+		var done, total int64
+		if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&done) == nil && done > 0 {
+			return false, nil
+		}
+		if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_daily WHERE guid = ?", s.playerGUID).Scan(&total) == nil && total >= 25 {
 			return false, nil
 		}
 	}
@@ -1780,9 +1794,15 @@ func (s *session) canCompleteQuest(ctx context.Context, questID uint32) bool {
 	}
 
 	// Player::CanCompleteQuest (Player.cpp:15021-15022): a timed quest whose
-	// timer has run out (Timer == 0) cannot be completed.
+	// timer has run out (q_status.Timer == 0, the remaining-ms countdown)
+	// cannot be completed. The Go log slot carries the absolute expiry
+	// epoch instead (quest-log TIME field, like the C++ DB timer), so the
+	// equivalent check is Timer <= now; restoreTimedQuests already pins
+	// expired quests to Timer=1, which this arm catches before the tick
+	// fails them.
 	var timedSpecial int64
-	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&timedSpecial); err == nil && timedSpecial&questSpecialFlagsTimed != 0 && entry.Timer == 0 {
+	now := uint32(time.Now().Unix())
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&timedSpecial); err == nil && timedSpecial&questSpecialFlagsTimed != 0 && entry.Timer <= now {
 		return false
 	}
 

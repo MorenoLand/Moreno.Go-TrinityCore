@@ -101,6 +101,14 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		return true
 	}
 	if s.isQuestRewarded(ctx, questID) {
+		// QuestHandler.cpp:306 — a failed CanRewardQuest(quest, true)
+		// re-sends the OfferReward screen instead of dropping silently.
+		// The cheat gate above (QuestHandler.cpp:293-300) still silently
+		// drops non-autocomplete quests; only an auto-complete quest can
+		// reach this arm with a rewarded status.
+		if s.questIsAutoComplete(ctx, questID, view.Detail.Flags) {
+			_ = s.sendQuestOfferReward(view, giverGUID, true)
+		}
 		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "already rewarded")
 		return true
 	}
