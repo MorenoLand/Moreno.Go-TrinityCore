@@ -521,6 +521,19 @@ func (s *session) isBagEmpty(ctx context.Context, bagItemGUID int64) bool {
 	return count == 0
 }
 
+// itemInsideBag mirrors the contents scan in Player::SwapItem's
+// loot-release arm (Player.cpp:13455-13483): the moved bag's interior
+// rows (character_inventory.bag keyed on the bag's item GUID) are
+// scanned for the given item GUID.
+func (s *session) itemInsideBag(ctx context.Context, bagItemGUID, itemGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || bagItemGUID == 0 || itemGUID == 0 {
+		return false
+	}
+	var n int
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_inventory WHERE guid = ? AND bag = ? AND item = ?", s.playerGUID, int64(bagItemGUID), int64(itemGUID)).Scan(&n)
+	return n > 0
+}
+
 func (s *session) itemIsBag(ctx context.Context, itemGUID uint64) bool {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return false
@@ -1303,6 +1316,26 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	}
 
 	s.swapInventoryCoordinates(ctx, srcItemGUID, srcBagKey, int64(srcSlot), dstItemGUID, dstBagKey, int64(dstSlot))
+	// Player::SwapItem (Player.cpp:13452-13483): after the swap, "if
+	// player is moving bags and is looting an item inside this bag
+	// release the loot". IsBagPos(src)/IsBagPos(dst) picks the bag at
+	// the moved slot; its contents are scanned for the open loot's
+	// item GUID (an open creature loot can never match an item GUID,
+	// so the LootItemGUID != 0 gate is the exact reachable arm). The
+	// C++ arm runs on the post-swap state, and Go's swap leaves bag
+	// contents untouched, so the check runs here after the commit.
+	if loot := s.activeLoot; loot != nil && loot.LootItemGUID != 0 {
+		srcIsBagSlot := srcBagKey == 0 && ((srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot <= 73))
+		dstIsBagSlot := dstBagKey == 0 && ((dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) || (dstSlot >= 67 && dstSlot <= 73))
+		released := false
+		if srcIsBagSlot && srcItemGUID != 0 && s.itemInsideBag(ctx, uint64(srcItemGUID), loot.LootItemGUID) {
+			s.doLootRelease(loot)
+			released = true
+		}
+		if !released && dstIsBagSlot && dstItemGUID != 0 && s.activeLoot != nil && s.itemInsideBag(ctx, uint64(dstItemGUID), loot.LootItemGUID) {
+			s.doLootRelease(s.activeLoot)
+		}
+	}
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
