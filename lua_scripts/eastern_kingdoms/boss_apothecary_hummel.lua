@@ -172,8 +172,8 @@ local function onChainReaction(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SUMMON_TABLE, true)
-        creature:CastSpell(creature, SPELL_CHAIN_REACTION)
     end
+    creature:CastSpell(creature, SPELL_CHAIN_REACTION)
     schedule(guid, "chain", 25000, function() onChainReaction(creature, guid) end)
 end
 

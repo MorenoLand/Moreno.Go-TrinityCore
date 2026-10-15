@@ -147,6 +147,11 @@ end
 -- C++ EVENT_CHECK_POSSESSED: 1s polling leg. Player gone (nil GUID
 -- lookup, ObjectAccessor::GetPlayer parity): the event is consumed with
 -- no re-arm (C++-exact) — the possess chain dies until Reset.
+-- Forward declaration: onPossess and onCheckPossessed recurse into each
+-- other (doan precedent — Lua locals are only visible after declaration).
+local onCheckPossessed
+local onPossess
+
 onCheckPossessed = function(creature, guid)
     local st = state[guid]
     if not st or not st.possessedGuid then
@@ -157,7 +162,7 @@ onCheckPossessed = function(creature, guid)
         return
     end
     if not target:HasAura(SPELL_POSSESSED)
-            or target:GetHealth() * 100 < target:GetMaxHealth() * 50 then
+            or target:GetHealth() < math.floor(target:GetMaxHealth() * 50 / 100) then
         target:RemoveAura(SPELL_POSSESS)
         target:RemoveAura(SPELL_POSSESSED)
         creature:RemoveAura(SPELL_POSSESS_INV)
@@ -168,14 +173,10 @@ onCheckPossessed = function(creature, guid)
     end
 end
 
--- Forward declaration: onPossess and onCheckPossessed recurse into each
--- other (doan precedent — Lua locals are only visible after declaration).
-local onCheckPossessed
-
 -- C++ EVENT_SPELL_POSSESS: random non-victim player pick; triggered
 -- casts on pick + invisibility self-cast + GUID latch + immediate check
 -- scheduling; no pick -> Repeat(20s, 30s).
-local function onPossess(creature, guid)
+onPossess = function(creature, guid)
     local victim = creature:GetVictim()
     local target = randomAlivePlayerExcluding(creature, victim and victim:GetGUID() or nil)
     if target then

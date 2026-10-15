@@ -160,7 +160,7 @@ local function onDamageTaken(_, creature, _, damage)
         return
     end
     local postDamageHealth = creature:GetHealth() - damage
-    if postDamageHealth < creature:GetMaxHealth() * 25 / 100 then
+    if postDamageHealth < math.floor(creature:GetMaxHealth() * 25 / 100) then
         usedPotion[guid] = true
         creature:CastSpell(creature, SPELL_HEALING_POTION)
     end
