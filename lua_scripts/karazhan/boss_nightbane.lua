@@ -151,19 +151,25 @@ local function onDistractingAsh(creature, guid)
     -- C++ arms this once (no repeat); a fly phase or evade cancels it.
 end
 
--- C++ SetupGroundPhase. Cleave's first schedule is 0s — it fires on the
--- first event pass, so it is cast directly (CreateLuaEvent needs >= 1ms).
+-- C++ SetupGroundPhase. The 4-arg ScheduleEvent(id, min, max, GROUP)
+-- overload resolves to the (minTime, maxTime, group) form
+-- (EventMap.h:135) and draws randtime(min, max) = urand inclusive
+-- (EventMap.cpp:47-49), so the initial schedules are ranges here, not
+-- fixed delays. Cleave's range bottoms at 0s — CreateLuaEvent floors at
+-- 1ms (runtime.go: createLuaEvent rejects minDelay < 1), so {1,15000}
+-- is the exact representable form. Bellowing Roar and Distracting Ash
+-- are fixed single schedules in C++.
 local function setupGroundPhase(creature, guid)
     local st = nightbaneState[guid]
     if st == nil then
         return
     end
     st.phase = PHASE_GROUND
-    onCleave(creature, guid)
-    schedule(guid, "g_tailsweep", 4000, function() onTailSweep(creature, guid) end)
+    schedule(guid, "g_cleave", {1, 15000}, function() onCleave(creature, guid) end)
+    schedule(guid, "g_tailsweep", {4000, 23000}, function() onTailSweep(creature, guid) end)
     schedule(guid, "g_roar", 48000, function() onBellowingRoar(creature, guid) end)
-    schedule(guid, "g_charredearth", 12000, function() onCharredEarth(creature, guid) end)
-    schedule(guid, "g_smoldering", 26000, function() onSmolderingBreath(creature, guid) end)
+    schedule(guid, "g_charredearth", {12000, 18000}, function() onCharredEarth(creature, guid) end)
+    schedule(guid, "g_smoldering", {26000, 30000}, function() onSmolderingBreath(creature, guid) end)
     schedule(guid, "g_ash", 82000, function() onDistractingAsh(creature, guid) end)
 end
 
