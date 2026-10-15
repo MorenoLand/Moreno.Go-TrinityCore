@@ -81,11 +81,13 @@
 -- trigger is Malygos's MoveInLineOfSight arm (no LOS bridge —
 -- next bullet), so event 14 can never fire with this ID;
 -- SPELL_MALYGOS_BERSERK 47008 -> Talk(EMOTE_HIT_BERSERKER_TIMER
--- 19) is PORTED (event 14): the trigger is the self-cast
--- SPELL_BERSERK 60670 aura (ported at engage above), whose
--- 10-minute effect delivers 47008 to Malygos — event 14 fires
--- from the Go spell path (boss_ai.go:1885; the old
--- "SpellHit-15-never-fires" ruling was stale).
+-- 19) stays out: the trigger is the self-cast SPELL_BERSERK 60670
+-- aura's 10-minute tick delivering 47008, but the Go creature-cast
+-- path applies no aura effects ("no aura-application site at cast
+-- completion", boss_ai.go) — the 60670 engage cast applies nothing,
+-- so 47008 is never delivered and event 14 can never fire with
+-- this ID (re-audit 2026-10-15: the 22:34 "trigger live in Go"
+-- claim was wrong).
 -- MoveInLineOfSight (power-spark proximity -> cast
 -- SPELL_POWER_SPARK_MALYGOS) — no LOS bridge.
 -- npc_portal_eoe (NPC_PORTAL_TRIGGER 30118) — SpellHit
@@ -153,8 +155,6 @@ local SAY_DEATH = 17
 -- (UnitAI.cpp default target self); the periodic aura itself carries the
 -- 10-minute berserk timer, so the faithful port casts it once at engage.
 local SPELL_BERSERK = 60670
-local SPELL_MALYGOS_BERSERK = 47008 -- boss_malygos.cpp:106
-local EMOTE_HIT_BERSERKER_TIMER = 19
 
 -- C++ JustEngagedWith (boss_malygos.cpp :563-:579): me->setActive(true) +
 -- instance->CheckRequiredBosses gate +
@@ -175,13 +175,5 @@ local function malygosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
--- C++ SpellHit: hit by SPELL_MALYGOS_BERSERK 47008 -> Talk(EMOTE_HIT_BERSERKER_TIMER 19).
-local function malygosSpellHit(event, creature, caster, spellId)
-    if spellId == SPELL_MALYGOS_BERSERK then
-        creature:Talk(EMOTE_HIT_BERSERKER_TIMER)
-    end
-end
-
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
 RegisterCreatureEvent(ENTRY_MALYGOS, 4, malygosDied)
-RegisterCreatureEvent(ENTRY_MALYGOS, 14, malygosSpellHit)
