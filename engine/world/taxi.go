@@ -791,8 +791,13 @@ func objectFloat32Field(object *scripting.Object, name string) (float32, bool) {
 }
 
 // handleEnableTaxi processes CMSG_ENABLETAXI (0x493).
+// handleEnableTaxi is an alias for CMSG_TAXIQUERYAVAILABLENODES: C++
+// (Opcodes.cpp:1302) binds CMSG_ENABLETAXI to
+// WorldSession::HandleTaxiQueryAvailableNodes, which learns an unknown
+// node and opens the taxi window — the client uses both opcodes for the
+// same interaction, so both route to handleTaxiQueryAvailableNodes.
 func (s *session) handleEnableTaxi(ctx context.Context, payload []byte) bool {
-	return s.handleTaxiNodeStatusQuery(ctx, payload)
+	return s.handleTaxiQueryAvailableNodes(ctx, payload)
 }
 
 // handleSetTaxiBenchmarkMode processes CMSG_SET_TAXI_BENCHMARK_MODE (0x389).
@@ -821,8 +826,9 @@ func (s *session) handleSetTaxiBenchmarkMode(ctx context.Context, payload []byte
 // single hop resolves through GetTaxiPath, the wide mount lookup applies
 // (npc == nullptr allows it), insufficient money replies
 // ERR_TAXINOTENOUGHMONEY, and the flight starts with the first hop's cost
-// charged. The logout/stun/root arms have no Go model (documented delta);
-// the generic/autorepeat/channeled interrupt arm is vacuous — the effect
+// charged. The logout/stun/root/combat busy arms are the shared vector-arm
+// gates (Player.cpp:21517-21523), same as the handler path; the
+// generic/autorepeat/channeled interrupt arm is vacuous — the effect
 // fires at HIT_TARGET after its own cast completed.
 func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffect) {
 	if s == nil || !s.playerLoaded || s.player == nil || s.server == nil || s.server.Data == nil {
@@ -842,8 +848,10 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 		return
 	}
 	// Player.cpp:21517: no flight while logging out, in combat, stunned or
-	// rooted. Only the combat arm has a Go model.
-	if s.isInCombat() {
+	// rooted — the busy gate runs before the npc check, so it applies to
+	// the spell case too (path-id overload delegates to the vector arm
+	// with npc == nullptr).
+	if !s.logoutAt.IsZero() || s.isInCombat() || s.player.UnitFlags&unitFlagStunned != 0 || s.rooted {
 		reply(taxiErrPlayerBusy)
 		return
 	}
