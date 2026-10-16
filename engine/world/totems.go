@@ -1317,12 +1317,16 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 
 	// Send SMSG_TOTEM_CREATED with 0 duration to clear totem bar icon
 	// (packed zero GUID = single 0x00 mask byte, same parse as C++).
-	resp := protocol.NewBuffer(17)
-	resp.WriteU8(slotID)
-	resp.WritePackedGUID(0)
-	resp.WriteU32(0)
-	resp.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_TOTEM_CREATED), resp.Bytes(), true)
+	// C++ is a silent no-op on an empty slot (SpellHandler.cpp:591-594),
+	// so the clear packet only goes out when a totem was actually matched.
+	if matched {
+		resp := protocol.NewBuffer(17)
+		resp.WriteU8(slotID)
+		resp.WritePackedGUID(0)
+		resp.WriteU32(0)
+		resp.WriteU32(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TOTEM_CREATED), resp.Bytes(), true)
+	}
 
 	// Totem::UnSummon (Totem.cpp:150-162) removes the totem from the world;
 	// the client's creature object goes away via the normal destroy path.

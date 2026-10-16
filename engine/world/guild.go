@@ -4581,7 +4581,7 @@ func (s *session) handleQueryGuildBankText(ctx context.Context, payload []byte) 
 	r := protocol.NewReader(payload)
 	tabID, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// Reference: WorldSession::HandleGuildBankTextQuery (GuildHandler.cpp:
@@ -4622,11 +4622,11 @@ func (s *session) handleSetGuildBankText(ctx context.Context, payload []byte) bo
 	r := protocol.NewReader(payload)
 	tabID, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	tabText, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// Reference: Guild::BankTab::SetText (Guild.cpp:450-459): utf8truncate
@@ -4642,8 +4642,12 @@ func (s *session) handleSetGuildBankText(ctx context.Context, payload []byte) bo
 			// broadcasts the GuildBankTextQueryResult (MSG_QUERY_GUILD_BANK_TEXT,
 			// tab + text, no guid) to all online guild members. A GetBankTab
 			// miss writes nothing and broadcasts nothing.
-			if res, execErr := cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabText = ? WHERE guildid = ? AND TabId = ?", tabText, guildID, tabID); execErr == nil {
-				if n, _ := res.RowsAffected(); n > 0 {
+			if _, execErr := cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabText = ? WHERE guildid = ? AND TabId = ?", tabText, guildID, tabID); execErr == nil {
+				// Guild.cpp:2379-2386: SendText broadcasts whenever the tab
+				// exists, even on unchanged text — zero RowsAffected is not
+				// the gate.
+				var tabExists int
+				if selErr := cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_bank_tab WHERE guildid = ? AND TabId = ? LIMIT 1", guildID, tabID).Scan(&tabExists); selErr == nil {
 					buf := protocol.NewBuffer(64 + len(tabText))
 					buf.WriteU8(tabID)
 					buf.WriteCString(tabText)

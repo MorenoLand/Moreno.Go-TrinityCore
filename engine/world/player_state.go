@@ -5408,7 +5408,7 @@ func (s *session) handleGrantLevel(ctx context.Context, payload []byte) bool {
 		code = referAFriendErrTargetTooHigh
 	case targetSess.player.Level >= recruitAFriendMaxBonusLevel:
 		code = referAFriendErrGrantLevelMaxI
-	case !s.inSameGroupAs(targetSess):
+	case s.groupID != targetSess.groupID:
 		code = referAFriendErrNotInGroup
 	}
 	if code != referAFriendErrNone {

@@ -1493,9 +1493,9 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 		questgivers = append(questgivers, questgiver{guid: creatureWorldGUID(uint32(guid), uint32(entry)), entry: uint32(entry), faction: uint32(faction), enderTable: "creature_questender", starterTable: "creature_queststarter"})
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil {
-		return false
-	}
+	// A mid-iteration DB error has no C++ equivalent (C++ sweeps in-memory
+	// objects); keep the partial results instead of disconnecting.
+	_ = rows.Err()
 	objectRows, objectErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT g.guid, g.id, g.position_x, g.position_y, g.position_z
 		FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id
 		WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? AND t.type = 2
