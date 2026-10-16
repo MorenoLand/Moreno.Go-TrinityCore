@@ -58,6 +58,15 @@ const (
 	WSWorldStateMaxCaptures       uint32 = 1601
 	WSWorldStateHordeFlagState    uint32 = 2338
 	WSWorldStateAllianceFlagState uint32 = 2339
+	// BG_WS_FLAG_UNK_ALLIANCE/HORDE (BattlegroundWS.h:75-76): 1 while the flag
+	// is carried, uint32(-1) while it lies on the ground, 0 otherwise —
+	// updated by the pickup/drop/capture arms, not the flag-state worldstates.
+	WSWorldStateFlagUnkAlliance uint32 = 1545
+	WSWorldStateFlagUnkHorde    uint32 = 1546
+	// BG_WS_STATE_TIMER / BG_WS_STATE_TIMER_ACTIVE (BattlegroundWS.h:83-84):
+	// the 25-minute match clock driven by PostUpdateImpl (cpp:87-110).
+	WSWorldStateTimer       uint32 = 4248
+	WSWorldStateTimerActive uint32 = 4247
 )
 
 type wsgBattlegroundState struct {
@@ -87,6 +96,21 @@ type wsgBattlegroundState struct {
 	// (Focused Assault) at 10 minutes -> 2 (Brutal Assault) at 15.
 	StalemateTimer *time.Timer
 	StalemateStage uint8
+	// LastFlagCaptureTeam mirrors _lastFlagCaptureTeam (BattlegroundWS.h:267):
+	// written by SetLastFlagCapture on every capture (BattlegroundWS.cpp:352),
+	// zeroed by Reset (cpp:744-745), and the tiebreak source for the 27-minute
+	// timeout end (cpp:97-99). Go teams: 0 = alliance, 1 = horde.
+	LastFlagCaptureTeam uint32
+	// MinutesElapsed mirrors _minutesElapsed (BattlegroundWS.h:275);
+	// PostUpdateImpl increments it once per minute past the 3-minute mark
+	// (BattlegroundWS.cpp:106-109).
+	MinutesElapsed uint8
+	// MatchStartTime / MatchMinuteTimer are the Go form of GetStartTime() for
+	// the timeout arm (PostUpdateImpl, BattlegroundWS.cpp:87-110): Go has no
+	// StartingEventCloseDoors or STATUS_IN_PROGRESS, so the clock arms lazily
+	// on the first flag interaction of the match.
+	MatchStartTime   time.Time
+	MatchMinuteTimer *time.Timer
 }
 
 func isWSGFlag(entry uint32) bool {
@@ -149,6 +173,9 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.setGameObjectHidden(guid, true)
 				s.broadcastGameObjectDespawn(sess.player.Map, guid)
 				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnPlayer)
+				// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:478):
+				// UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, 1) on pickup.
+				s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, "The Alliance flag was picked up by "+sess.player.Name+"!")
 			}
 		} else if team == 0 {
@@ -162,6 +189,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				wsg.HordeCarrierGUID = 0
 				wsg.HordeFlagState = WSGFlagStateWaitRespawn
 				wsg.AllianceScore++
+				// BattlegroundWS::EventPlayerCapturedFlag
+				// (BattlegroundWS.cpp:352): SetLastFlagCapture(player->GetTeam())
+				// — the tiebreak source for the 27-minute timeout end.
+				wsg.LastFlagCaptureTeam = 0
 
 				s.rewardBGEndReputation(sess.player.Map, 0, WSGFactionSilverwingSentinels, WSGReputationCapture)
 				s.rewardBGEndHonor(sess.player.Map, 0, 2)
@@ -178,6 +209,12 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Warsong flag!")
 				if wsg.AllianceScore >= wsg.MaxScore {
+					// EventPlayerCapturedFlag's winner arm (BattlegroundWS.cpp:361-365):
+					// clear the flag worldstates before EndBattleground.
+					s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 0)
+					s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 0)
+					s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
+					s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
 					s.endWSGVictory(wsg, sess.player.Map, 0)
 				}
 			}
@@ -196,6 +233,9 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.setGameObjectHidden(guid, true)
 				s.broadcastGameObjectDespawn(sess.player.Map, guid)
 				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnPlayer)
+				// BattlegroundWS::EventPlayerClickedOnFlag: UpdateWorldState
+				// (BG_WS_FLAG_UNK_HORDE, 1) on pickup (BattlegroundWS.cpp:494).
+				s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, "The Warsong flag was picked up by "+sess.player.Name+"!")
 			}
 		} else if team == 1 {
@@ -209,6 +249,9 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				wsg.AllianceCarrierGUID = 0
 				wsg.AllianceFlagState = WSGFlagStateWaitRespawn
 				wsg.HordeScore++
+				// BattlegroundWS::EventPlayerCapturedFlag
+				// (BattlegroundWS.cpp:352): SetLastFlagCapture(player->GetTeam()).
+				wsg.LastFlagCaptureTeam = 1
 
 				s.rewardBGEndReputation(sess.player.Map, 1, WSGFactionWarsongOutriders, WSGReputationCapture)
 				s.rewardBGEndHonor(sess.player.Map, 1, 2)
@@ -223,6 +266,11 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 0)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Alliance flag!")
 				if wsg.HordeScore >= wsg.MaxScore {
+					// EventPlayerCapturedFlag's winner arm (BattlegroundWS.cpp:361-365).
+					s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 0)
+					s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 0)
+					s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
+					s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
 					s.endWSGVictory(wsg, sess.player.Map, 1)
 				}
 			}
@@ -254,6 +302,9 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			sess.applyAura(WSGSpellSilverwingFlag)
 			sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellSilverwingFlagPicked)
 			s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnPlayer)
+			// EventPlayerClickedOnFlag, ground-pickup leg (BattlegroundWS.cpp:526):
+			// UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, 1).
+			s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 1)
 			s.broadcastBattlegroundMessage(sess.player.Map, "The Alliance flag was picked up by "+sess.player.Name+"!")
 		}
 
@@ -282,6 +333,9 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			sess.applyAura(WSGSpellWarsongFlag)
 			sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellWarsongFlagPicked)
 			s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnPlayer)
+			// EventPlayerClickedOnFlag, ground-pickup leg (BattlegroundWS.cpp:565):
+			// UpdateWorldState(BG_WS_FLAG_UNK_HORDE, 1).
+			s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 1)
 			s.broadcastBattlegroundMessage(sess.player.Map, "The Warsong flag was picked up by "+sess.player.Name+"!")
 		}
 	}
@@ -291,6 +345,11 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 	// Stalemate-debuff state machine (BattlegroundWS.cpp:155-192): re-arm or
 	// tear down after this flag interaction.
 	s.refreshWSGStalemate(wsg, sess.player.Map)
+
+	// Match clock (BattlegroundWS::PostUpdateImpl timer arms, cpp:87-110):
+	// the 25-minute countdown anchors on the first flag interaction of the
+	// match (Go has no StartingEventCloseDoors/STATUS_IN_PROGRESS).
+	s.armWSGMatchTimer(wsg, sess.player.Map)
 
 	return true
 }
@@ -380,6 +439,9 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 		})
 
 		s.broadcastWorldState(mapID, WSWorldStateAllianceFlagState, WSGFlagStateOnGround)
+		// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:449-457):
+		// UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, uint32(-1)) on drop.
+		s.broadcastWorldState(mapID, WSWorldStateFlagUnkAlliance, 0xFFFFFFFF)
 		s.broadcastBattlegroundMessage(mapID, "The Alliance flag was dropped by "+sess.player.Name+"!")
 
 		if wsg.AllianceReturnTimer != nil {
@@ -430,6 +492,9 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 		})
 
 		s.broadcastWorldState(mapID, WSWorldStateHordeFlagState, WSGFlagStateOnGround)
+		// BattlegroundWS::EventPlayerDroppedFlag: UpdateWorldState
+		// (BG_WS_FLAG_UNK_HORDE, uint32(-1)) on drop (BattlegroundWS.cpp:449-457).
+		s.broadcastWorldState(mapID, WSWorldStateFlagUnkHorde, 0xFFFFFFFF)
 		s.broadcastBattlegroundMessage(mapID, "The Warsong flag was dropped by "+sess.player.Name+"!")
 
 		if wsg.HordeReturnTimer != nil {
@@ -554,6 +619,77 @@ func (s *Server) broadcastBattlegroundMessage(mapID uint32, message string) {
 	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload)
 }
 
+// sendWSGInitWorldStatesTo serializes the live WSG world states into
+// SMSG_INIT_WORLD_STATES. Reference: BattlegroundWS::FillInitialWorldStates
+// (BattlegroundWS.cpp:820-858): live capture scores (1581/1582), the
+// flag-unk states (1545/1546: 1 while carried, -1 on the ground, 0
+// otherwise), the max captures (1601), the timer states (4247 active + 4248
+// minutes remaining while the match clock runs), and the flag states
+// (2338/2339: 2 while carried, 1 otherwise). 1547=2 is preserved from the
+// previous static init block — the C++ header comments it out
+// (BattlegroundWS.h:77) and FillInitialWorldStates never sends it, but it was
+// already on the wire for this map.
+func (s *Server) sendWSGInitWorldStatesTo(sess *session) {
+	if sess == nil || sess.player == nil {
+		return
+	}
+	wsg := s.getOrCreateWSGState(sess.player.Map)
+	if wsg == nil {
+		return
+	}
+	wsg.mu.Lock()
+	defer wsg.mu.Unlock()
+
+	unk := func(flagState uint32) int32 {
+		switch flagState {
+		case WSGFlagStateOnPlayer:
+			return 1
+		case WSGFlagStateOnGround:
+			return -1
+		default:
+			return 0
+		}
+	}
+	flagShown := func(flagState uint32) int32 {
+		if flagState == WSGFlagStateOnPlayer {
+			return 2
+		}
+		return 1
+	}
+
+	worldStates := [][2]int32{
+		{int32(WSWorldStateAllianceCaptures), int32(wsg.AllianceScore)},
+		{int32(WSWorldStateHordeCaptures), int32(wsg.HordeScore)},
+		{int32(WSWorldStateFlagUnkAlliance), unk(wsg.AllianceFlagState)},
+		{int32(WSWorldStateFlagUnkHorde), unk(wsg.HordeFlagState)},
+		{1547, 2},
+		{int32(WSWorldStateMaxCaptures), int32(wsg.MaxScore)},
+	}
+	if wsg.MatchMinuteTimer != nil {
+		worldStates = append(worldStates,
+			[2]int32{int32(WSWorldStateTimerActive), 1},
+			[2]int32{int32(WSWorldStateTimer), int32(25) - int32(wsg.MinutesElapsed)},
+		)
+	} else {
+		worldStates = append(worldStates, [2]int32{int32(WSWorldStateTimerActive), 0})
+	}
+	worldStates = append(worldStates,
+		[2]int32{int32(WSWorldStateHordeFlagState), flagShown(wsg.HordeFlagState)},
+		[2]int32{int32(WSWorldStateAllianceFlagState), flagShown(wsg.AllianceFlagState)},
+	)
+
+	packet := protocol.NewBuffer(16 + len(worldStates)*8)
+	packet.WriteI32(int32(sess.player.Map))
+	packet.WriteI32(int32(sess.player.Zone))
+	packet.WriteI32(0)
+	packet.WriteU16(uint16(len(worldStates)))
+	for _, ws := range worldStates {
+		packet.WriteI32(ws[0])
+		packet.WriteI32(ws[1])
+	}
+	_ = sess.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), packet.Bytes(), true)
+}
+
 // endWSGVictory runs the Warsong Gulch end-of-match rewards.
 // Reference: BattlegroundWS::EndBattleground (BattlegroundWS.cpp:755): the
 // winning team gets GetBonusHonorFromKill(m_HonorWinKills), then BOTH teams
@@ -562,28 +698,13 @@ func (s *Server) broadcastBattlegroundMessage(mapID uint32, message string) {
 // BattlegroundWS.cpp:733-743); Go has no BG-weekend model, so the non-weekend
 // defaults apply.
 //
-// The caller's wsg.mu is held (both callers are the flag-capture arms of
-// handleWSGFlagUse).
+// The caller's wsg.mu is held (the flag-capture arms of handleWSGFlagUse and
+// endWSGTimeout).
 func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningTeam uint32) {
-	// Reference: Battleground::EndBattleground (Battleground.cpp:667) sets the
-	// winner and the instance leaves STATUS_IN_PROGRESS, so the _flagsTimer
-	// arm (BattlegroundWS::PostUpdateImpl, BattlegroundWS.cpp:112-122) never
-	// ticks again. Go models the respawn/return windows as time.AfterFunc, so
-	// stop every armed flag timer here under the caller's wsg.mu (the lock is
-	// also held by the timer callbacks, so Stop never races a running
-	// callback). The winning capture arms a respawn timer just before this
-	// runs, so it must be cancelled here or it would unhide the flag and
-	// broadcast "The flags were placed!" into the finished battle.
-	for _, timer := range [5]**time.Timer{
-		&wsg.AllianceWaitRespawnTimer, &wsg.HordeWaitRespawnTimer,
-		&wsg.AllianceReturnTimer, &wsg.HordeReturnTimer,
-		&wsg.StalemateTimer,
-	} {
-		if *timer != nil {
-			(*timer).Stop()
-			*timer = nil
-		}
-	}
+	s.stopWSGMatchTimers(wsg)
+	// EventPlayerCapturedFlag's winner arm (BattlegroundWS.cpp:366): the match
+	// clock stops showing once the battle ends.
+	s.broadcastWorldState(mapID, WSWorldStateTimerActive, 0)
 	// The match is over: the stalemate-debuff state machine
 	// (BattlegroundWS.cpp:155-192) ends with the instance. Carrier auras are
 	// already stripped by the capturing arm's removal (BattlegroundWS.cpp:303-306,
@@ -597,6 +718,111 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 	s.rewardBGEndHonor(mapID, winningTeam, 1)
 	s.rewardBGEndHonor(mapID, 0, 2)
 	s.rewardBGEndHonor(mapID, 1, 2)
+}
+
+// stopWSGMatchTimers stops every armed WSG timer under the caller's wsg.mu.
+// Reference: Battleground::EndBattleground (Battleground.cpp:667) sets the
+// winner and the instance leaves STATUS_IN_PROGRESS, so the PostUpdateImpl
+// arms (BattlegroundWS.cpp:87-192) never tick again. Go models the windows as
+// time.AfterFunc, so each must be stopped explicitly (the lock is also held by
+// the timer callbacks, so Stop never races a running callback). The winning
+// capture arms a respawn timer just before this runs, so it must be cancelled
+// here or it would unhide the flag and broadcast "The flags were placed!" into
+// the finished battle.
+func (s *Server) stopWSGMatchTimers(wsg *wsgBattlegroundState) {
+	for _, timer := range [6]**time.Timer{
+		&wsg.AllianceWaitRespawnTimer, &wsg.HordeWaitRespawnTimer,
+		&wsg.AllianceReturnTimer, &wsg.HordeReturnTimer,
+		&wsg.StalemateTimer,
+		&wsg.MatchMinuteTimer,
+	} {
+		if *timer != nil {
+			(*timer).Stop()
+			*timer = nil
+		}
+	}
+}
+
+// endWSGTimeout is the 27-minute timeout arm of BattlegroundWS::PostUpdateImpl
+// (BattlegroundWS.cpp:87-104). The caller's wsg.mu is held (fired from
+// wsgMatchMinute).
+func (s *Server) endWSGTimeout(wsg *wsgBattlegroundState, mapID uint32) {
+	ally, horde := wsg.AllianceScore, wsg.HordeScore
+	switch {
+	case ally == 0 && horde == 0:
+		// No one scored - result is tie (cpp:91-92: EndBattleground(0)).
+		s.endWSGTie(wsg, mapID)
+	case ally == 0:
+		// Horde has more points and thus wins (cpp:93-95).
+		s.endWSGVictory(wsg, mapID, 1)
+	case horde == 0:
+		// Alliance has > 0, Horde has 0, alliance wins (cpp:96-97).
+		s.endWSGVictory(wsg, mapID, 0)
+	case horde == ally:
+		// Team score equal, winner is team that scored the last flag
+		// (cpp:97-99: EndBattleground(_lastFlagCaptureTeam)).
+		s.endWSGVictory(wsg, mapID, wsg.LastFlagCaptureTeam)
+	case horde > ally:
+		// Last but not least, check who has the higher score (cpp:100-103).
+		s.endWSGVictory(wsg, mapID, 1)
+	default:
+		s.endWSGVictory(wsg, mapID, 0)
+	}
+}
+
+// endWSGTie is the C++ EndBattleground(0) neutral-winner arm
+// (Battleground.cpp:667-688: SetWinner(PVP_TEAM_NEUTRAL), no win broadcast).
+// The win bonus is gated on winner==ALLIANCE/HORDE so a tie pays only the
+// end honor to both teams (BattlegroundWS::EndBattleground, cpp:755+).
+// The caller's wsg.mu is held.
+func (s *Server) endWSGTie(wsg *wsgBattlegroundState, mapID uint32) {
+	s.stopWSGMatchTimers(wsg)
+	s.broadcastWorldState(mapID, WSWorldStateTimerActive, 0)
+	wsg.StalemateStage = 0
+	s.rewardBGEndHonor(mapID, 0, 2)
+	s.rewardBGEndHonor(mapID, 1, 2)
+}
+
+// armWSGMatchTimer starts the 25-minute match clock on the first flag
+// interaction of a match. Reference: BattlegroundWS::StartingEventCloseDoors
+// (BattlegroundWS.cpp:213-214: UpdateWorldState(BG_WS_STATE_TIMER_ACTIVE, 1),
+// UpdateWorldState(BG_WS_STATE_TIMER, 25)). Go has no doors phase or
+// STATUS_IN_PROGRESS, so the clock anchors lazily here. The caller's wsg.mu
+// is held (handleWSGFlagUse).
+func (s *Server) armWSGMatchTimer(wsg *wsgBattlegroundState, mapID uint32) {
+	if !wsg.MatchStartTime.IsZero() {
+		return
+	}
+	wsg.MatchStartTime = time.Now()
+	s.broadcastWorldState(mapID, WSWorldStateTimerActive, 1)
+	s.broadcastWorldState(mapID, WSWorldStateTimer, 25)
+	wsg.MatchMinuteTimer = time.AfterFunc(time.Minute, func() {
+		s.wsgMatchMinute(wsg, mapID, 1)
+	})
+}
+
+// wsgMatchMinute is the event-driven Go form of the timer arms of
+// BattlegroundWS::PostUpdateImpl (BattlegroundWS.cpp:87-110). C++ shows
+// 25-1=24 once 3 minutes have elapsed (cpp:106-109: ++_minutesElapsed,
+// UpdateWorldState(BG_WS_STATE_TIMER, 25 - _minutesElapsed)) and ends the
+// match at 27 minutes (cpp:87-104). The minute chain reproduces that cadence
+// exactly: ticks 1-2 are silent, ticks 3-26 broadcast 27-minute, tick 27 ends
+// the match. The callback takes wsg.mu.
+func (s *Server) wsgMatchMinute(wsg *wsgBattlegroundState, mapID uint32, minute uint8) {
+	wsg.mu.Lock()
+	defer wsg.mu.Unlock()
+	wsg.MatchMinuteTimer = nil
+	if minute >= 27 {
+		s.endWSGTimeout(wsg, mapID)
+		return
+	}
+	if minute >= 3 {
+		wsg.MinutesElapsed = minute - 2
+		s.broadcastWorldState(mapID, WSWorldStateTimer, uint32(27-minute))
+	}
+	wsg.MatchMinuteTimer = time.AfterFunc(time.Minute, func() {
+		s.wsgMatchMinute(wsg, mapID, minute+1)
+	})
 }
 
 // wsgPrematureWinner is the score-compare leg of

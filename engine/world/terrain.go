@@ -527,6 +527,11 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		s.updateLocalChannels(s.player.Zone)
 		s.sendLoadedGroup()
 		_ = s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(*s.player, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true)
+		if s.player.Map == WSGMapID {
+			// BattlegroundWS::FillInitialWorldStates (BattlegroundWS.cpp:820-858):
+			// the live WSG world states follow the generic init block.
+			s.server.sendWSGInitWorldStatesTo(s)
+		}
 	}
 	if oldZone != s.player.Zone || oldArea != areaID {
 		s.triggerPlayerEvent(ctx, scripting.PlayerEventUpdateZone, s.luaPlayer(), s.player.Zone, areaID)

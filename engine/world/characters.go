@@ -1055,6 +1055,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true); err != nil {
 		return false
 	}
+	if state.Map == WSGMapID {
+		// BattlegroundWS::FillInitialWorldStates (BattlegroundWS.cpp:820-858):
+		// the live WSG world states follow the generic init block.
+		s.server.sendWSGInitWorldStatesTo(s)
+	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
 	s.resetTimeSync()
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
@@ -4012,17 +4017,6 @@ func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arena
 	worldStates := [][2]int32{{2264, 0}, {2263, 0}, {2262, 0}, {2261, 0}, {2260, 0}, {2259, 0}, {3191, season}, {3901, previousSeason}}
 	if state.Map == 530 {
 		worldStates = append(worldStates, [2]int32{2495, 0}, [2]int32{2493, 15}, [2]int32{2491, 15})
-	} else if state.Map == 489 {
-		worldStates = append(worldStates,
-			[2]int32{1581, 0}, // WS_FLAG_CAPTURES_ALLIANCE
-			[2]int32{1582, 0}, // WS_FLAG_CAPTURES_HORDE
-			[2]int32{1545, 0},
-			[2]int32{1546, 0},
-			[2]int32{1547, 2},
-			[2]int32{1601, 3}, // WS_FLAG_MAX_CAPTURES
-			[2]int32{2338, 1}, // WS_FLAG_STATE_HORDE (1 = base)
-			[2]int32{2339, 1}, // WS_FLAG_STATE_ALLIANCE (1 = base)
-		)
 	} else if state.Map == 529 {
 		worldStates = append(worldStates,
 			[2]int32{1767, 0},
