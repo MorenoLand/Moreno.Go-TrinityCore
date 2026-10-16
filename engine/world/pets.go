@@ -439,6 +439,24 @@ type pSpell struct {
 	active uint8
 }
 
+// petLearnActiveState bridges the ACT_DECIDE arm of Pet::addSpell
+// (Pet.cpp:1404-1411): an autocastable spell (SpellInfo::IsAutocastable,
+// SpellInfo.cpp:1101-1108 — not passive, no
+// SPELL_ATTR1_UNAUTOCASTABLE_BY_PET) stores ACT_DISABLED; everything else
+// stores ACT_PASSIVE. pet_spell.active is packed verbatim into
+// SMSG_PET_SPELLS (action << 24), so the wrong state makes a castable
+// pet spell show as passive (unusable) or auto-cast from the start.
+func (s *session) petLearnActiveState(spellID uint32) uint8 {
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found &&
+			spell.Attributes&spellAttributePassive == 0 &&
+			spell.AttributesEx&spellAttr1UnautocastableByPet == 0 {
+			return petActionDisabled
+		}
+	}
+	return petActionPassive
+}
+
 // learnPetFamilyPassives bridges Pet::LearnPetPassives (Pet.cpp:1883-1902):
 // the pet's creature family (creature_template.family) resolves passive
 // spells via the DBC-built sPetFamilySpellsStore twin
@@ -465,7 +483,7 @@ func (s *session) learnPetFamilyPassives(ctx context.Context, petID uint32, entr
 		return
 	}
 	for _, spellID := range passives {
-		_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petID, spellID)
+		_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petID, spellID, s.petLearnActiveState(spellID))
 	}
 }
 
@@ -2267,7 +2285,7 @@ func (s *session) teachPetSpell(ctx context.Context, spellID uint32) {
 		petNumber = s.petNumberForGUID(s.player.PetGUID)
 	}
 	if petNumber != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petNumber, spellID)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petNumber, spellID, s.petLearnActiveState(spellID))
 	}
 	learnedBuf := protocol.NewBuffer(4)
 	learnedBuf.WriteU32(spellID)
@@ -3455,7 +3473,7 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petNumber, oldSpell)
 		unlearned = append(unlearned, oldSpell)
 	}
-	_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petNumber, spellID)
+	_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petNumber, spellID, s.petLearnActiveState(spellID))
 	s.server.motionMu.Lock()
 	for _, oldSpell := range unlearned {
 		for j, sp := range motion.Spells {

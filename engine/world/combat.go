@@ -1557,6 +1557,10 @@ func (s *session) takeAmmo(ctx context.Context, spell wotlk.Spell) (consumed, ou
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 		s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
 		s.player.AmmoID = 0
+		// Player::RemoveAmmo (Player.cpp:12118-12126) clears the derived
+		// m_ammoDPS alongside PLAYER_AMMO_ID — same as the empty-row arm
+		// above; otherwise the stale AmmoDPS bonus survives the last shot.
+		s.player.AmmoDPS = 0
 		_ = s.calculatePlayerStats(ctx, s.player)
 		s.sendPlayerUpdate()
 		return true, true
