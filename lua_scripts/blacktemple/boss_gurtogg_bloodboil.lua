@@ -331,6 +331,9 @@ end
 -- Forward declaration: onStartPhase2's timer closure references
 -- onChangePhase textually before its local definition; without this the
 -- name compiles to a global and the 60s phase-change stream calls nil.
+-- The definition below MUST stay a bare `function` (assigning this
+-- upvalue) — a `local function` would shadow it and leave the 60s
+-- no-fel-rage-target stream calling nil (fixed 2026-10-16).
 local onChangePhase
 
 -- C++ EVENT_START_PHASE_2: pick the fel rage target; the whole
@@ -384,7 +387,7 @@ end
 -- the phase-1 set; the threat/AttackStart victim-restore and the
 -- ApplySpellImmune arms have no bridges — the GUID state is
 -- cleared (C++ Initialize).
-local function onChangePhase(creature, guid)
+function onChangePhase(creature, guid)
     local st = state[guid]
     if not st then
         return

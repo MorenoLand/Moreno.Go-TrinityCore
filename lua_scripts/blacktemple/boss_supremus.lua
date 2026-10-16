@@ -45,7 +45,11 @@
 -- (BossAI::JustEngagedWith and the DATA_SUPREMUS bookkeeping arms
 -- skipped); no threat model — the ResetThreatList/AddThreat
 -- (1,000,000 on the charge target) arms and the threat-list pick
--- for hateful strike have no bridge, so the strike target is
+-- for hateful strike: ClearThreatList IS bridged (lua_objects.go:389)
+-- but the arm is intentionally skipped — the C++ pairs it with the
+-- unbridged AddThreat(1e6) top-up, and clearing alone would leave the
+-- Go threat table empty/victimless, a state the C++ never produces;
+-- the strike target is
 -- approximated by the highest-health alive player in the instance
 -- within 5 yd (melee range) of the boss; no summon model — the
 -- volcanic summon 40276 never spawns a volcano add and the molten
@@ -205,8 +209,12 @@ end
 
 -- C++ EVENT_SWITCH_TARGET: non-triggered charge 41581 on the charge
 -- target + Talk(EMOTE_NEW_TARGET); repeat 10s unconditional
--- (C++-exact). The ResetThreatList/AddThreat arms have no threat
--- bridge — only the cast and the Talk are kept. Chase-phase only.
+-- (C++-exact). The ResetThreatList/AddThreat arms are skipped:
+-- ClearThreatList is bridged (lua_objects.go:389) but the C++ arm
+-- pairs it with the unbridged AddThreat(target, 1e6) top-up — clearing
+-- alone would leave the threat table empty/victimless (Go
+-- ClearThreat also zeroes currentVictim), a state the C++ never
+-- produces; only the cast and the Talk are kept. Chase-phase only.
 local function onSwitchTarget(creature, guid)
     local target = chargeTarget(creature)
     if target then
@@ -222,7 +230,10 @@ end
 -- aura; the taunt-immune drops and the volcano summons' DoAction
 -- have no bridges); CHASE otherwise (arms volcano/switch-target,
 -- non-triggered self-cast snare; the taunt-immune raise has no
--- bridge). The ResetThreatList/DoZoneInCombat arms have no bridge.
+-- bridge). The ResetThreatList/DoZoneInCombat arms are skipped:
+-- ClearThreatList is bridged but DoZoneInCombat has no bridge, and the
+-- C++-exact threat result is unknowable without one (the GO table
+-- would otherwise be emptied with no re-target).
 -- EVENT_SWITCH_PHASE is re-armed 60s unconditional (C++-exact).
 -- NOTE (2026-10-13): the opposite-phase timer cancels above are
 -- LOCAL-TREE-exact. Stock TC's EventMap keeps phase-mismatched
