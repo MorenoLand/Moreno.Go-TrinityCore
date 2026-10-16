@@ -3214,8 +3214,8 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 
 	// HandleClientCastFlags (SpellHandler.cpp:50-72): castFlags & 0x02 carries
 	// elevation, speed, and an optional embedded movement block AFTER the
-	// targets block. Go has no in-tree consumer for a movement stream carried
-	// inside a use-item packet, so the bytes are consumed, not bridged.
+	// targets block. C++ routes the movement block through
+	// HandleMovementOpcodes so the position update is not lost.
 	if castFlags&0x02 != 0 {
 		if _, err = r.ReadF32(); err != nil { // elevation
 			return true
@@ -3228,11 +3228,16 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			return true
 		}
 		if hasMovementData != 0 {
-			if _, err = r.ReadU32(); err != nil { // movement opcode
+			moveOpcode, merr := r.ReadU32()
+			if merr != nil {
 				return true
 			}
-			if _, err = r.Read(r.Remaining()); err != nil { // movement payload
+			movePayload, merr := r.Read(r.Remaining())
+			if merr != nil {
 				return true
+			}
+			if !s.handleMovement(ctx, moveOpcode, movePayload) {
+				return false
 			}
 		}
 	}
