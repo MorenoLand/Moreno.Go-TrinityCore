@@ -101,13 +101,14 @@ const (
 	AVCreatureBalinda   uint32 = 11949 // Alliance Captain
 	AVCreatureGalvangar uint32 = 11947 // Horde Captain
 
-	// Mine Creatures
-	AVCreatureIrondeepBoss1  uint32 = 13099
-	AVCreatureIrondeepBoss2  uint32 = 13096
-	AVCreatureIrondeepBoss3  uint32 = 13097
-	AVCreatureColdtoothBoss1 uint32 = 13098
-	AVCreatureColdtoothBoss2 uint32 = 13094
-	AVCreatureColdtoothBoss3 uint32 = 13095
+	// Mine Creatures (BattlegroundAV.cpp:146-149 / BattlegroundAV.h:1061-1108:
+	// the _4 bosses flip mine ownership; the old values were ordinary miners)
+	AVCreatureIrondeepBoss1  uint32 = 11657 // Morloch
+	AVCreatureIrondeepBoss2  uint32 = 13078
+	AVCreatureIrondeepBoss3  uint32 = 13079
+	AVCreatureColdtoothBoss1 uint32 = 11677
+	AVCreatureColdtoothBoss2 uint32 = 13086
+	AVCreatureColdtoothBoss3 uint32 = 13088
 
 	// World States
 	AVWorldStateAllianceScore     uint32 = 3127
@@ -202,7 +203,9 @@ type avNodeState struct {
 	Owner        uint8 // 0: Neutral, 1: Alliance, 2: Horde
 	State        uint8 // 0: Controlled, 1: ContestedAlliance, 2: ContestedHorde, 3: Destroyed
 	PrevOwner    uint8 // Owner before contest
+	TotalOwner   uint8 // == m_Nodes[].TotalOwner: last team to fully own the node (BattlegroundAV.cpp:1457-1460)
 	CaptureTimer *time.Timer
+	TimerGen     uint64 // node-timer generation: a fired-but-blocked stale callback returns early on mismatch
 	BannerGUID   uint64
 	BannerEntry  uint32
 	X, Y, Z      float32
@@ -223,6 +226,7 @@ type avBattlegroundState struct {
 	AllianceCaptainAlive   bool
 	HordeCaptainAlive      bool
 	CaptainBuffTimerMs     [2]int64     // == m_CaptainBuffTimer[2]: countdown-by-diff to the next team buff cast
+	InformedNearVictory    [2]bool      // == m_IsInformedNearVictory[2] (BattlegroundAV.cpp:281): one-shot near-lose broadcast
 	QuestStatus            [2][9]uint32 // == m_Team_QuestStatus[2][9]: AV quest turn-in counters (BattlegroundAV.h:1484)
 	Nodes                  [AVNodeMax]avNodeState
 	Mines                  [2]avMineState
@@ -286,10 +290,14 @@ func (s *Server) getOrCreateAVState(mapID uint32) *avBattlegroundState {
 			HordeReinforcements:    AVMaxReinforcements,
 			AllianceCaptainAlive:   true,
 			HordeCaptainAlive:      true,
-			CaptureDuration:        AVDefaultCaptureDuration,
-			MineTickDuration:       AVDefaultMineTickDuration,
-			Winner:                 -1,
-			StopTicker:             make(chan struct{}),
+			// Reference: BattlegroundAV::ResetBGSubclass (BattlegroundAV.cpp:1471):
+			// m_CaptainBuffTimer[i] = 120000 + urand(0, 4)* 60 — the *60 is a
+			// genuine upstream quirk against the "0-4 minutes" comment.
+			CaptainBuffTimerMs: [2]int64{120000 + int64(rand.Intn(5))*60, 120000 + int64(rand.Intn(5))*60},
+			CaptureDuration:    AVDefaultCaptureDuration,
+			MineTickDuration:   AVDefaultMineTickDuration,
+			Winner:             -1,
+			StopTicker:         make(chan struct{}),
 		}
 		// Initialize nodes
 		for i := uint32(0); i < AVNodeMax; i++ {
@@ -307,6 +315,7 @@ func (s *Server) getOrCreateAVState(mapID uint32) *avBattlegroundState {
 				Owner:       initOwner,
 				State:       AVNodeStateControlled,
 				PrevOwner:   AVTeamNeutral, // == C++ InitNode's PrevOwner = 0 (BattlegroundAV.cpp:1457)
+				TotalOwner:  initOwner,     // == C++ InitNode's TotalOwner = team (BattlegroundAV.cpp:1454)
 				BannerEntry: bannerEntry,
 				X:           avNodeCoords[i][0],
 				Y:           avNodeCoords[i][1],
@@ -395,16 +404,6 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 		return true
 	}
 
-	// Mine supply check
-	if entry == AVObjectMineSupplyN {
-		s.changeAVMineOwner(av, AVNorthMine, uint8(teamForRace(sess.player.Race)+1))
-		return true
-	}
-	if entry == AVObjectMineSupplyS {
-		s.changeAVMineOwner(av, AVSouthMine, uint8(teamForRace(sess.player.Race)+1))
-		return true
-	}
-
 	// Find closest node to player
 	nodeID := uint32(AVNodeMax)
 	minDist := float64(1000000.0)
@@ -454,6 +453,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					node.CaptureTimer.Stop()
 					node.CaptureTimer = nil
 				}
+				node.TimerGen++
 				// Reference: BattlegroundAV::DefendNode (BattlegroundAV.cpp:1467):
 				// PrevOwner = Owner, and C++'s Owner is the assaulter at this point.
 				node.PrevOwner = AVTeamAlliance
@@ -470,6 +470,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					node.CaptureTimer.Stop()
 					node.CaptureTimer = nil
 				}
+				node.TimerGen++
 				// Reference: BattlegroundAV::DefendNode (BattlegroundAV.cpp:1467):
 				// PrevOwner = Owner, and C++'s Owner is the assaulter at this point.
 				node.PrevOwner = AVTeamHorde
@@ -503,12 +504,17 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 			}
 		case AVNodeStateContestedAlliance:
 			if playerTeam == AVTeamHorde {
-				if node.PrevOwner == AVTeamHorde {
+				// Reference: BattlegroundAV::EventPlayerDefendsPoint
+				// (BattlegroundAV.cpp:882-886): a neutral-TotalOwner node
+				// (only ever Snowfall) is handled by the assault code, never
+				// defended — it falls through to the re-assault arm below.
+				if node.PrevOwner == AVTeamHorde && node.TotalOwner != AVTeamNeutral {
 					// Horde defends
 					if node.CaptureTimer != nil {
 						node.CaptureTimer.Stop()
 						node.CaptureTimer = nil
 					}
+					node.TimerGen++
 					// Reference: BattlegroundAV::DefendNode (BattlegroundAV.cpp:1467):
 					// PrevOwner = Owner, and C++'s Owner is the assaulter at this point.
 					node.PrevOwner = AVTeamAlliance
@@ -518,17 +524,24 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVDefended(av.MapID, sess.accountName, nodeID, playerTeam)
 				} else {
-					// Horde re-assaults
+					// Horde re-assaults. The neutral-TotalOwner leg of the
+					// guard above mirrors BattlegroundAV::EventPlayerDefendsPoint
+					// (BattlegroundAV.cpp:882-886): a node that has never been
+					// fully owned is handled by the assault code, never defended.
 					if node.CaptureTimer != nil {
 						node.CaptureTimer.Stop()
 					}
+					node.TimerGen++
+					// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1437):
+					// the re-assault reads PrevOwner before assignment — after a
+					// first assault on neutral Snowfall that is still neutral,
+					// so BG_AV_SNOWFALL_FIRSTCAP applies; PrevOwner then takes
+					// the first assaulter (C++ reads Owner, which the first
+					// assault set to the assaulter).
+					firstCap := node.PrevOwner == AVTeamNeutral
+					node.PrevOwner = AVTeamAlliance
 					node.State = AVNodeStateContestedHorde
-					// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1414):
-					// on a re-assault of an already-assaulted node, C++ reads
-					// PrevOwner before assignment, and it holds the first
-					// assaulter (a real team, never neutral), so the timer is
-					// always BG_AV_CAPTIME, never BG_AV_SNOWFALL_FIRSTCAP.
-					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, false)
+					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, firstCap)
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
@@ -536,12 +549,17 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 			}
 		case AVNodeStateContestedHorde:
 			if playerTeam == AVTeamAlliance {
-				if node.PrevOwner == AVTeamAlliance {
+				// Reference: BattlegroundAV::EventPlayerDefendsPoint
+				// (BattlegroundAV.cpp:882-886): a neutral-TotalOwner node
+				// (only ever Snowfall) is handled by the assault code, never
+				// defended — it falls through to the re-assault arm below.
+				if node.PrevOwner == AVTeamAlliance && node.TotalOwner != AVTeamNeutral {
 					// Alliance defends
 					if node.CaptureTimer != nil {
 						node.CaptureTimer.Stop()
 						node.CaptureTimer = nil
 					}
+					node.TimerGen++
 					// Reference: BattlegroundAV::DefendNode (BattlegroundAV.cpp:1467):
 					// PrevOwner = Owner, and C++'s Owner is the assaulter at this point.
 					node.PrevOwner = AVTeamHorde
@@ -551,17 +569,24 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVDefended(av.MapID, sess.accountName, nodeID, playerTeam)
 				} else {
-					// Alliance re-assaults
+					// Alliance re-assaults. The neutral-TotalOwner leg of the
+					// guard above mirrors BattlegroundAV::EventPlayerDefendsPoint
+					// (BattlegroundAV.cpp:882-886): a node that has never been
+					// fully owned is handled by the assault code, never defended.
 					if node.CaptureTimer != nil {
 						node.CaptureTimer.Stop()
 					}
+					node.TimerGen++
+					// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1437):
+					// the re-assault reads PrevOwner before assignment — after a
+					// first assault on neutral Snowfall that is still neutral,
+					// so BG_AV_SNOWFALL_FIRSTCAP applies; PrevOwner then takes
+					// the first assaulter (C++ reads Owner, which the first
+					// assault set to the assaulter).
+					firstCap := node.PrevOwner == AVTeamNeutral
+					node.PrevOwner = AVTeamHorde
 					node.State = AVNodeStateContestedAlliance
-					// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1414):
-					// on a re-assault of an already-assaulted node, C++ reads
-					// PrevOwner before assignment, and it holds the first
-					// assaulter (a real team, never neutral), so the timer is
-					// always BG_AV_CAPTIME, never BG_AV_SNOWFALL_FIRSTCAP.
-					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, false)
+					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, firstCap)
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
@@ -577,6 +602,10 @@ func (s *Server) startAVNodeCaptureTimer(av *avBattlegroundState, nodeID uint32,
 	if node.CaptureTimer != nil {
 		node.CaptureTimer.Stop()
 	}
+	// Stale-callback race: a timer that already fired may be blocked on av.mu
+	// while Stop runs under it; the generation check in the callback drops it.
+	node.TimerGen++
+	gen := node.TimerGen
 	duration := av.CaptureDuration
 	if duration <= 0 {
 		duration = AVDefaultCaptureDuration
@@ -592,13 +621,23 @@ func (s *Server) startAVNodeCaptureTimer(av *avBattlegroundState, nodeID uint32,
 		av.mu.Lock()
 		defer av.mu.Unlock()
 
+		if node.TimerGen != gen {
+			return // superseded by a re-arm or defend Stop
+		}
 		if av.Winner >= 0 {
 			return
 		}
 
 		if node.IsTower {
 			// Tower burn timer expired -> tower is destroyed!
+			// Reference: BattlegroundAV::DestroyNode (BattlegroundAV.cpp:1446-1452):
+			// TotalOwner = PrevOwner = Owner, and C++'s Owner is the assaulter
+			// (AssaultNode set it at assault time) — Go's Owner still holds the
+			// defender, so it is set to the capturing team here for the
+			// destroyer-control worldstate arm above.
 			node.State = AVNodeStateDestroyed
+			node.Owner = capturingTeam
+			node.TotalOwner = capturingTeam
 			loserTeam := node.PrevOwner
 			s.updateAVScore(av, loserTeam, -int32(AVReinforcementsTower))
 			// Reference: BattlegroundAV::EventPlayerDestroyedPoint (BattlegroundAV.cpp:565):
@@ -619,6 +658,10 @@ func (s *Server) startAVNodeCaptureTimer(av *avBattlegroundState, nodeID uint32,
 			// Graveyard timer expired -> becomes fully controlled by capturing team
 			node.State = AVNodeStateControlled
 			node.Owner = capturingTeam
+			// Reference: BattlegroundAV::DestroyNode (BattlegroundAV.cpp:1448-1449):
+			// TotalOwner = PrevOwner = Owner (the capturer) on a completed capture.
+			node.PrevOwner = capturingTeam
+			node.TotalOwner = capturingTeam
 			s.updateAVNodeBanner(av, nodeID)
 			s.updateAVNodeWorldStates(av, nodeID)
 			teamName := "Alliance"
@@ -709,8 +752,14 @@ func (s *Server) updateAVNodeWorldStates(av *avBattlegroundState, nodeID uint32)
 	case AVNodeStateContestedHorde:
 		s.broadcastWorldState(av.MapID, info.HordeAssault, 1)
 	case AVNodeStateDestroyed:
-		if info.Destroyed != 0 {
-			s.broadcastWorldState(av.MapID, info.Destroyed, 1)
+		// Reference: BattlegroundAV::UpdateNodeWorldState (BattlegroundAV.cpp:1066-1069):
+		// Control = (owner == team && state >= POINT_DESTROYED) — the destroyed
+		// tower keeps the destroyer's Control WS lit; the Destroyed WS IDs are
+		// never broadcast by C++.
+		if node.Owner == AVTeamAlliance {
+			s.broadcastWorldState(av.MapID, info.AllianceControl, 1)
+		} else if node.Owner == AVTeamHorde {
+			s.broadcastWorldState(av.MapID, info.HordeControl, 1)
 		}
 	}
 }
@@ -779,6 +828,12 @@ func (s *Server) updateAVScore(av *avBattlegroundState, team uint8, delta int32)
 		s.broadcastWorldState(av.MapID, AVWorldStateAllianceScore, av.AllianceReinforcements)
 		if av.AllianceReinforcements == 0 {
 			s.endAV(av, 1) // Horde wins
+		} else if delta < 0 && !av.InformedNearVictory[0] && av.AllianceReinforcements < AVNearLoseThreshold {
+			// Reference: BattlegroundAV::UpdateScore (BattlegroundAV.cpp:274-282):
+			// one-shot near-lose broadcast (broadcast_text 23210; sound 8456
+			// has no Go sound model, same as the AB near-victory arm).
+			av.InformedNearVictory[0] = true
+			s.broadcastBattlegroundMessage(av.MapID, "The Alliance is near defeat!")
 		}
 	} else if team == AVTeamHorde {
 		current := int32(av.HordeReinforcements) + delta
@@ -791,6 +846,11 @@ func (s *Server) updateAVScore(av *avBattlegroundState, team uint8, delta int32)
 		s.broadcastWorldState(av.MapID, AVWorldStateHordeScore, av.HordeReinforcements)
 		if av.HordeReinforcements == 0 {
 			s.endAV(av, 0) // Alliance wins
+		} else if delta < 0 && !av.InformedNearVictory[1] && av.HordeReinforcements < AVNearLoseThreshold {
+			// Reference: BattlegroundAV::UpdateScore (BattlegroundAV.cpp:274-282):
+			// one-shot near-lose broadcast (broadcast_text 23211).
+			av.InformedNearVictory[1] = true
+			s.broadcastBattlegroundMessage(av.MapID, "The Horde is near defeat!")
 		}
 	}
 }

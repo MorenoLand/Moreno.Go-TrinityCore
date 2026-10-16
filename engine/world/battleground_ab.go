@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // Arathi Basin (AB) Constants mirroring TrinityCore BattlegroundAB.h / BattlegroundAB.cpp.
@@ -34,6 +36,7 @@ const (
 	ABWorldStateMaxResources      uint32 = 1780
 	ABWorldStateBasesAlliance     uint32 = 1779
 	ABWorldStateBasesHorde        uint32 = 1778
+	ABWorldStateWarningResources  uint32 = 1955
 
 	// Per-tick award thresholds from BattlegroundAB::Startup (BattlegroundAB.cpp:606-607).
 	// Go has no BG-weekend model, so the non-weekend values are used, matching the
@@ -578,6 +581,66 @@ func (s *Server) updateABNodeWorldStates(ab *abBattlegroundState, nodeID uint32)
 		}
 		s.broadcastWorldState(ab.MapID, abNodeWorldStates[nodeID][st], val)
 	}
+}
+
+// sendABInitWorldStatesTo serializes the live Arathi Basin world states into
+// SMSG_INIT_WORLD_STATES. Reference: BattlegroundAB::FillInitialWorldStates
+// (BattlegroundAB.cpp:306-340): node icons (1842..1846, 1 while neutral),
+// node state rows (1767..1795 via the per-node plusArray, 1 on the active
+// row), occupied-base counts (1779/1778), resources max (1780=1600) and
+// warning (1955=1400) plus the live team scores (1776/1777), and 1861=2.
+// The generic static init block no longer carries map 529 — same pattern as
+// the WSG/EotS live senders.
+func (s *Server) sendABInitWorldStatesTo(sess *session) {
+	if sess == nil || sess.player == nil {
+		return
+	}
+	ab := s.getOrCreateABState(sess.player.Map)
+	if ab == nil {
+		return
+	}
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+
+	worldStates := make([][2]int32, 0, 32)
+	// Node icons: (m_Nodes[node] == 0) ? 1 : 0
+	for node := uint32(0); node < ABNodeMax; node++ {
+		val := int32(0)
+		if ab.Nodes[node].State == ABNodeStateNeutral {
+			val = 1
+		}
+		worldStates = append(worldStates, [2]int32{int32(abNodeWorldStates[node][0]), val})
+	}
+	// Node occupied states: NODESTATES[node]+plusArray[itr] for itr 1..4.
+	for node := uint32(0); node < ABNodeMax; node++ {
+		for st := uint32(1); st < 5; st++ {
+			val := int32(0)
+			if ab.Nodes[node].State == st {
+				val = 1
+			}
+			worldStates = append(worldStates, [2]int32{int32(abNodeWorldStates[node][st]), val})
+		}
+	}
+	worldStates = append(worldStates,
+		[2]int32{int32(ABWorldStateBasesAlliance), int32(ab.AllianceBasesCount)},
+		[2]int32{int32(ABWorldStateBasesHorde), int32(ab.HordeBasesCount)},
+		[2]int32{int32(ABWorldStateMaxResources), int32(ABMaxResources)},
+		[2]int32{int32(ABWorldStateWarningResources), int32(abNearVictoryScore)},
+		[2]int32{int32(ABWorldStateAllianceResources), int32(ab.AllianceResources)},
+		[2]int32{int32(ABWorldStateHordeResources), int32(ab.HordeResources)},
+		[2]int32{1861, 2},
+	)
+
+	packet := protocol.NewBuffer(16 + len(worldStates)*8)
+	packet.WriteI32(int32(sess.player.Map))
+	packet.WriteI32(int32(sess.player.Zone))
+	packet.WriteI32(0)
+	packet.WriteU16(uint16(len(worldStates)))
+	for _, ws := range worldStates {
+		packet.WriteI32(ws[0])
+		packet.WriteI32(ws[1])
+	}
+	_ = sess.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), packet.Bytes(), true)
 }
 
 func (s *Server) announceABAssault(mapID uint32, playerName string, nodeID uint32, team uint32) {

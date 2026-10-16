@@ -129,6 +129,25 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 				protocol.BuildAreaTriggerMessage("Only The "+teamName+" can use that portal"), true)
 		}
 	}
+	// 4d. Alterac Valley exit portals
+	// Reference: BattlegroundAV::HandleAreaTrigger (BattlegroundAV.cpp:508-535):
+	// 95/2608 is the alliance exit, 2606 the horde exit; the wrong team gets
+	// the portal message instead of leaving. 3326-3331 are C++ no-ops — no arms
+	// to port. No STATUS_IN_PROGRESS gate here: Go's AV state has no
+	// start/stop lifecycle (same convention as the AB arm above).
+	if s.player.Map == AVMapID && (triggerID == 95 || triggerID == 2608 || triggerID == 2606) {
+		allianceExit := triggerID != 2606
+		if teamForRace(s.player.Race) == 0 && allianceExit || teamForRace(s.player.Race) == 1 && !allianceExit {
+			s.handleLeaveBattlefield(ctx, nil, false, false)
+		} else {
+			teamName := "Alliance"
+			if !allianceExit {
+				teamName = "Horde"
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_AREA_TRIGGER_MESSAGE),
+				protocol.BuildAreaTriggerMessage("Only The "+teamName+" can use that portal"), true)
+		}
+	}
 	// Like the arena arm above (MiscHandler.cpp:697-700), the BG arm does not
 	// return: execution continues to the teleport arm below.
 

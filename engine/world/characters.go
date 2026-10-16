@@ -1065,6 +1065,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		// the live EotS world states follow the generic init block.
 		s.server.sendEOTSInitWorldStatesTo(s)
 	}
+	if state.Map == ABMapID {
+		// BattlegroundAB::FillInitialWorldStates (BattlegroundAB.cpp:306-340):
+		// the live AB world states follow the generic init block.
+		s.server.sendABInitWorldStatesTo(s)
+	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
 	s.resetTimeSync()
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
@@ -4022,41 +4027,6 @@ func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arena
 	worldStates := [][2]int32{{2264, 0}, {2263, 0}, {2262, 0}, {2261, 0}, {2260, 0}, {2259, 0}, {3191, season}, {3901, previousSeason}}
 	if state.Map == 530 {
 		worldStates = append(worldStates, [2]int32{2495, 0}, [2]int32{2493, 15}, [2]int32{2491, 15})
-	} else if state.Map == 529 {
-		worldStates = append(worldStates,
-			[2]int32{1767, 0},
-			[2]int32{1768, 0},
-			[2]int32{1769, 0},
-			[2]int32{1770, 0},
-			[2]int32{1772, 0},
-			[2]int32{1773, 0},
-			[2]int32{1774, 0},
-			[2]int32{1775, 0},
-			[2]int32{1776, 0}, // Resources Ally
-			[2]int32{1777, 0}, // Resources Horde
-			[2]int32{1778, 0},
-			[2]int32{1779, 0},
-			[2]int32{1780, 1600}, // BG_AB_OP_RESOURCES_MAX
-			[2]int32{1782, 0},
-			[2]int32{1783, 0},
-			[2]int32{1784, 0},
-			[2]int32{1785, 0},
-			[2]int32{1787, 0},
-			[2]int32{1788, 0},
-			[2]int32{1789, 0},
-			[2]int32{1790, 0},
-			[2]int32{1792, 0},
-			[2]int32{1793, 0},
-			[2]int32{1794, 0},
-			[2]int32{1795, 0},
-			[2]int32{1842, 1},
-			[2]int32{1843, 1},
-			[2]int32{1844, 1},
-			[2]int32{1845, 1},
-			[2]int32{1846, 1},
-			[2]int32{1861, 2},
-			[2]int32{1955, 1400}, // BG_AB_OP_RESOURCES_WARNING
-		)
 	} else if state.Map == 566 {
 		worldStates = append(worldStates,
 			[2]int32{2753, 0},
