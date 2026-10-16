@@ -100,6 +100,12 @@ func (t *TransportTrajectory) Position(progress uint32) (uint32, float32, float3
 		frame := &t.frames[index]
 		if timer >= frame.arrival {
 			if frame.point.Flags == 2 && timer < frame.departure {
+				if frame.teleport {
+					next := &t.frames[(index+1)%len(t.frames)]
+					if transportPointMap(next.point) != transportPointMap(frame.point) {
+						return transportFramePosition(*next)
+					}
+				}
 				return transportFramePosition(*frame)
 			}
 			if timer >= frame.departure && timer < frame.nextArrival {
@@ -140,9 +146,6 @@ func (t *TransportTrajectory) Position(progress uint32) (uint32, float32, float3
 			}
 		}
 		index = (index + 1) % len(t.frames)
-		if t.frames[index].teleport {
-			index = (index + 1) % len(t.frames)
-		}
 	}
 	return transportFramePosition(t.frames[0])
 }

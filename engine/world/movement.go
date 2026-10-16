@@ -1374,10 +1374,12 @@ func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool
 		s.clearSummonPending()
 		return true
 	}
-	// Player::SummonIfPossible (Player.cpp:23835-23836): an expired request
-	// is silently ignored and the expire field is left as-is (already past),
-	// not reset — the request reads expired either way.
-	if !s.summonExpire.IsZero() && time.Now().After(s.summonExpire) {
+	// Player::SummonIfPossible (Player.cpp:23835-23838): without a live
+	// pending request the accept is ignored and the expire field is left
+	// as-is — m_summon_expire < GameTime::GetGameTime() also holds when no
+	// request was ever sent (expire 0), so a forged accept with nothing
+	// pending must not teleport.
+	if !s.hasSummonPending() {
 		return true
 	}
 
