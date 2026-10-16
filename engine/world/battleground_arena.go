@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -66,7 +67,9 @@ const (
 	SpellLastManStanding   uint32 = 26549
 	SpellShadowSight       uint32 = 34709
 	SpellWarlDemonicCircle uint32 = 48018
-	SpellDSWaterSpout      uint32 = 57090
+	SpellDSWaterSpout      uint32 = 58873
+	SpellDSFlush           uint32 = 57405
+	SpellDSFlushKnockback  uint32 = 61698
 
 	// Broadcast Texts
 	ArenaTextStartOneMinute      uint32 = 15740
@@ -91,13 +94,33 @@ const (
 	ArenaAutoLeaveDelay      = 120 * time.Second
 	ArenaTimeLimitPointsLoss = -16
 
-	// Ring of Valor fire/pillar preamble (BattlegroundRV.h:84-87):
-	// StartingEventOpenDoors sets OPEN_FENCES + FIRST_TIMER 20133ms, the fire
+	// Ring of Valor fire/pillar preamble (BattlegroundRV.h:84-87):	// StartingEventOpenDoors sets OPEN_FENCES + FIRST_TIMER 20133ms, the fire
 	// opens, CLOSE_FIRE_TIMER 5000ms closes it, FIRE_TO_PILLAR_TIMER 20000ms
 	// later the first TogglePillarCollision fires, then PILLAR_SWITCH_TIMER
 	// 25000ms repeats it.
 	RVPillarFirstSwitchDelay = (20133 + 5000 + 20000) * time.Millisecond
 	RVPillarSwitchInterval   = 25 * time.Second
+
+	// Dalaran Sewers waterfall / pipe-knockback timing (BattlegroundDS.h:63-75).
+	// The header notes these values are not blizzlike; they are kept verbatim.
+	DSWaterfallTimerMin       = 30 * time.Second
+	DSWaterfallTimerMax       = 60 * time.Second
+	DSWaterfallWarningTime    = 5 * time.Second
+	DSWaterfallDuration       = 30 * time.Second
+	DSWaterfallKnockbackEvery = 1500 * time.Millisecond
+	DSPipeKnockbackFirstDelay = 5 * time.Second
+	DSPipeKnockbackDelay      = 3 * time.Second
+	DSPipeKnockbackTotalCount = 2
+
+	// Dalaran Sewers event ids (BattlegroundDS.h:77-85). The knockback repeat
+	// is tracked with DSKnockbackAt and the pipe knockback with DSPipeAt/
+	// DSPipeCount; BG_DS_EVENT_PIPE_KNOCKBACK is never scheduled in C++
+	// (commented out in StartingEventOpenDoors), so it has no Go arm either.
+	DSEventWaterfallWarning   uint8 = 1
+	DSEventWaterfallOn        uint8 = 2
+	DSEventWaterfallOff       uint8 = 3
+	DSEventWaterfallKnockback uint8 = 4
+	DSEventPipeKnockback      uint8 = 5
 
 	// Buff GameObjects (Shadow Sight)
 	ArenaGOShadowSight1 uint32 = 184663
@@ -124,6 +147,9 @@ const (
 	ArenaGODS_Door2  uint32 = 192643
 	ArenaGODS_Water1 uint32 = 194395
 	ArenaGODS_Water2 uint32 = 191877
+
+	// Dalaran Sewers (617) knockback creature (BattlegroundDS.h:48-52)
+	ArenaGODS_NPCWaterSpout uint32 = 28567
 
 	// Ring of Valor (618) GameObjects
 	ArenaGORV_Elevator1  uint32 = 194582
@@ -266,9 +292,19 @@ type arenaBattlegroundState struct {
 	GoldTotal  uint32
 
 	DoorsRemoved        bool
+	BEDoorsRemoveAt     time.Time
 	ShadowSightSpawned  bool
 	RVPillarCollision   bool
 	RVPillarSwitchTimer time.Time
+
+	// Dalaran Sewers waterfall / pipe-knockback machine
+	// (BattlegroundDS::PostUpdateImpl, BattlegroundDS.cpp:37-87).
+	DSWaterfallEvent  uint8
+	DSWaterfallAt     time.Time
+	DSWaterfallActive bool
+	DSKnockbackAt     time.Time
+	DSPipeCount       uint8
+	DSPipeAt          time.Time
 
 	AnnouncedOneMinute      bool
 	AnnouncedThirtySeconds  bool
@@ -467,11 +503,9 @@ func (s *Server) sendArenaInitialWorldStates(sess *session) {
 	mapID := arena.MapID
 	arena.mu.RUnlock()
 
-	// Alive player counts
-	sess.sendWorldState(ArenaWorldStateAlivePlayersGreen, greenAlive)
-	sess.sendWorldState(ArenaWorldStateAlivePlayersGold, goldAlive)
-
-	// Map-specific display world states
+	// C++ order (BattlegroundDS.cpp:138-142, BattlegroundBE.cpp:84-88): the
+	// map-specific show state is emplaced first, then Arena::FillInitialWorld-
+	// States appends the alive-player counts.
 	switch mapID {
 	case ArenaMapNagrand:
 		sess.sendWorldState(ArenaWorldStateShowNagrand, 1)
@@ -484,6 +518,10 @@ func (s *Server) sendArenaInitialWorldStates(sess *session) {
 	case ArenaMapRingOfValor:
 		sess.sendWorldState(ArenaWorldStateShowRingOfValor, 1)
 	}
+
+	// Alive player counts (Arena::FillInitialWorldStates, Arena.cpp:106-111)
+	sess.sendWorldState(ArenaWorldStateAlivePlayersGreen, greenAlive)
+	sess.sendWorldState(ArenaWorldStateAlivePlayersGold, goldAlive)
 }
 
 // updateArenaWorldState broadcasts a world state update to all players on the arena map.
@@ -636,6 +674,44 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 	arena.Status = ArenaStatusInProgress
 	arena.MatchStartTime = time.Now()
 	arena.RVPillarSwitchTimer = time.Now().Add(RVPillarFirstSwitchDelay)
+
+	// Blade's Edge (BattlegroundBE::StartingEventOpenDoors): the two starting
+	// doors are removed 5s after the match begins (BattlegroundBE.cpp:49-57).
+	// Go arenas spawn no gameobjects, so only the removal state is tracked.
+	if arena.MapID == ArenaMapBladesEdge {
+		arena.DoorsRemoved = false
+		arena.BEDoorsRemoveAt = time.Now().Add(ArenaDoorRemovalDelay)
+	}
+	// Dalaran Sewers (BattlegroundDS::StartingEventOpenDoors): reset the pipe
+	// knockback count/timer and arm the first waterfall warning. The water-
+	// door toggles and water-spout triggered self-casts (58873/57405) have no
+	// Go model, so the timing machine is tracked and the physical arms are
+	// skipped.
+	if arena.MapID == ArenaMapDalaranSewers {
+		arena.DSPipeCount = 0
+		arena.DSPipeAt = time.Now().Add(DSPipeKnockbackFirstDelay)
+		arena.DSWaterfallEvent = DSEventWaterfallWarning
+		arena.DSWaterfallAt = time.Now().Add(dsWaterfallRandomDelay())
+		arena.DSWaterfallActive = false
+	}
+	// Nagrand Arena (BattlegroundNA::StartingEventOpenDoors) and Ruins of
+	// Lordaeron (BattlegroundRL::StartingEventOpenDoors): the two starting
+	// doors are removed 5s after the match begins (BattlegroundNA.cpp:56-64,
+	// BattlegroundRL.cpp:56-64). Go arenas spawn no gameobjects, so only
+	// the removal state is tracked.
+	if arena.MapID == ArenaMapNagrand || arena.MapID == ArenaMapRuinsOfLordaeron {
+		arena.DoorsRemoved = false
+		time.AfterFunc(ArenaDoorRemovalDelay, func() {
+			// PostUpdateImpl gate (BattlegroundNA.cpp:29-34,
+			// BattlegroundRL.cpp:29-34): the REMOVE_DOORS event only fires
+			// while the match is in progress.
+			arena.mu.Lock()
+			defer arena.mu.Unlock()
+			if arena.Status == ArenaStatusInProgress {
+				arena.DoorsRemoved = true
+			}
+		})
+	}
 	arena.mu.Unlock()
 
 	s.broadcastArenaStartText(arena.MapID, ArenaTextStartBattleHasBegun, "The arena battle has begun!")
@@ -1109,9 +1185,16 @@ func (s *session) handleArenaAreaTrigger(triggerID, mapID uint32) {
 		switch triggerID {
 		case 5347, 5348:
 			// BattlegroundDS::HandleAreaTrigger: the pipe area strips Demonic
-			// Circle and resets the pipe knockback count; Go has no
-			// pipe-knockback model, so the count reset is a no-op.
+			// Circle; if the pipe knockback has already been performed, the
+			// count resets so the player is kicked into the arena again.
 			s.removeAura(SpellWarlDemonicCircle)
+			if arena := s.server.findArenaState(mapID, 0); arena != nil {
+				arena.mu.Lock()
+				if arena.DSPipeCount >= DSPipeKnockbackTotalCount {
+					arena.DSPipeCount = 0
+				}
+				arena.mu.Unlock()
+			}
 		}
 	case ArenaMapNagrand:
 		// 4536, 4537: swallowed buff triggers, no-op in C++ and Go.
@@ -1193,6 +1276,23 @@ func (s *Server) updateArenaTick(arena *arenaBattlegroundState, now time.Time) {
 			}
 			arena.mu.Unlock()
 		}
+
+		// Dalaran Sewers waterfall / pipe-knockback machine
+		// (BattlegroundDS::PostUpdateImpl, BattlegroundDS.cpp:37-87).
+		if arena.MapID == ArenaMapDalaranSewers {
+			s.updateDSWaterfall(arena, now)
+		}
+
+		// Blade's Edge door removal (BattlegroundBE::PostUpdateImpl): the
+		// REMOVE_DOORS event deletes starting doors 0-1 five seconds after
+		// the match begins (BattlegroundBE.cpp:49-57).
+		if arena.MapID == ArenaMapBladesEdge {
+			arena.mu.Lock()
+			if !arena.DoorsRemoved && !arena.BEDoorsRemoveAt.IsZero() && !now.Before(arena.BEDoorsRemoveAt) {
+				arena.DoorsRemoved = true
+			}
+			arena.mu.Unlock()
+		}
 	} else if status == ArenaStatusWaitLeave {
 		// Battleground::_ProcessLeave (Battleground.cpp:506-528) plus the
 		// m_SetDeleteThis sweep (Battleground.cpp:164-186,
@@ -1207,5 +1307,60 @@ func (s *Server) updateArenaTick(arena *arenaBattlegroundState, now time.Time) {
 		} else if !endTime.IsZero() && now.Sub(endTime) >= ArenaTimeToAutoRemove {
 			s.processArenaLeave(arena)
 		}
+	}
+}
+
+// dsWaterfallRandomDelay rolls the 30-60s waterfall re-arm delay
+// (ScheduleEvent(..., BG_DS_WATERFALL_TIMER_MIN, BG_DS_WATERFALL_TIMER_MAX)).
+func dsWaterfallRandomDelay() time.Duration {
+	return DSWaterfallTimerMin + time.Duration(rand.Int63n(int64(DSWaterfallTimerMax-DSWaterfallTimerMin)))
+}
+
+// updateDSWaterfall drives the Dalaran Sewers waterfall / pipe-knockback
+// machine from BattlegroundDS::PostUpdateImpl (BattlegroundDS.cpp:37-87) on
+// the 1s arena tick. The C++ EventMap arms are reproduced in order:
+// WATERFALL_WARNING (30-60s) -> 5s warning -> WATERFALL_ON (30s, knockback
+// every 1.5s) -> WATERFALL_OFF -> re-arm WARNING. The DoorClose/DoorOpen water
+// toggles and the water-spout triggered self-casts (58873/57405) have no Go
+// model: Go arenas spawn no gameobjects and expose no server-side creature-
+// cast API, so the machine tracks timing state only.
+func (s *Server) updateDSWaterfall(arena *arenaBattlegroundState, now time.Time) {
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+
+	// Pipe knockback loop (BattlegroundDS.cpp:78-93): first cast 5s after
+	// match start, then every 3s, DSPipeKnockbackTotalCount casts total.
+	if arena.DSPipeCount < DSPipeKnockbackTotalCount && !arena.DSPipeAt.IsZero() && !now.Before(arena.DSPipeAt) {
+		arena.DSPipeCount++
+		arena.DSPipeAt = now.Add(DSPipeKnockbackDelay)
+	}
+
+	// Waterfall knockback repeat (BG_DS_EVENT_WATERFALL_KNOCKBACK): every
+	// 1.5s while the waterfall is on; cancelled at WATERFALL_OFF by clearing
+	// DSWaterfallActive (BattlegroundDS.cpp:72-75, 70).
+	if arena.DSWaterfallActive && !arena.DSKnockbackAt.IsZero() && !now.Before(arena.DSKnockbackAt) {
+		arena.DSKnockbackAt = now.Add(DSWaterfallKnockbackEvery)
+	}
+
+	// Waterfall event machine (BattlegroundDS.cpp:44-76).
+	if arena.DSWaterfallEvent == 0 || arena.DSWaterfallAt.IsZero() || now.Before(arena.DSWaterfallAt) {
+		return
+	}
+	switch arena.DSWaterfallEvent {
+	case DSEventWaterfallWarning:
+		// Add the water (DoorClose WATER_2, no Go model); warn for 5s.
+		arena.DSWaterfallEvent = DSEventWaterfallOn
+		arena.DSWaterfallAt = now.Add(DSWaterfallWarningTime)
+	case DSEventWaterfallOn:
+		// Active collision and start knockback timer (DoorClose WATER_1).
+		arena.DSWaterfallEvent = DSEventWaterfallOff
+		arena.DSWaterfallAt = now.Add(DSWaterfallDuration)
+		arena.DSWaterfallActive = true
+		arena.DSKnockbackAt = now.Add(DSWaterfallKnockbackEvery)
+	case DSEventWaterfallOff:
+		// Remove collision and water (DoorOpen WATER_1/WATER_2).
+		arena.DSWaterfallActive = false
+		arena.DSWaterfallEvent = DSEventWaterfallWarning
+		arena.DSWaterfallAt = now.Add(dsWaterfallRandomDelay())
 	}
 }

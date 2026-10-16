@@ -212,6 +212,25 @@ const (
 	ICSpellQuarry      = 68720
 	ICSpellParachute   = 66656
 
+	// BattlegroundIC.h Spells: achievement credit spells cast triggered on the
+	// killer (Mowed Down, 68357) and on the player at the back-door trigger
+	// (Back Door Job, 68502).
+	ICSpellDestroyedVehicleAchievement uint32 = 68357
+	ICSpellBackDoorJobAchievement      uint32 = 68502
+
+	// BattlegroundIC.h IC_OBJECTIVE_ASSAULT_BASE / IC_OBJECTIVE_DEFEND_BASE:
+	// BG_OBJECTIVE_CAPTURE objective ids credited on assault/defend clicks.
+	ICObjectiveAssaultBase uint32 = 245
+	ICObjectiveDefendBase  uint32 = 246
+
+	// BattlegroundIC.h RESOURCE_HONOR_AMOUNT: honor per resource tick.
+	ICResourceHonorAmount uint32 = 12
+
+	// BattlegroundIC::HandleAreaTrigger trigger ids: 5555 is the Horde
+	// back-door trigger (Alliance keep), 5535 the Alliance one (Horde keep).
+	ICAreaTriggerBackDoorHorde    uint32 = 5555
+	ICAreaTriggerBackDoorAlliance uint32 = 5535
+
 	ICGateDefaultMaxHealth uint32 = 120000
 )
 
@@ -273,6 +292,12 @@ type icNodeState struct {
 	Timer        time.Duration
 	CaptureTimer *time.Timer
 	Banners      [4]uint32 // ControlledA, ContestedA, ControlledH, ContestedH
+	// ContestTeam mirrors BattlegroundIC's nodePoint.faction during the 60s
+	// contested window: the team that clicked last. C++ sets faction to the
+	// contesting team on click (EventPlayerClickedOnFlag) and GetClosestGraveyard
+	// keys off it, so the contesting team's ghosts use the node GY while the
+	// banner is grey. ICTeamNeutral when no contest is running.
+	ContestTeam uint32
 }
 
 // closestICGraveyard mirrors BattlegroundIC::GetClosestGraveyard: every node
@@ -301,6 +326,12 @@ func (s *Server) closestICGraveyard(x, y float32, team uint32) (wotlk.WorldSafeL
 	factions := make([]uint32, ICMaxNodes)
 	for i := range ic.Nodes {
 		factions[i] = ic.Nodes[i].Faction
+		// BattlegroundIC::EventPlayerClickedOnFlag sets nodePoint.faction to the
+		// contesting team on click, and GetClosestGraveyard keys off it: while
+		// the banner is contested, the contesting team's ghosts use the node GY.
+		if st := ic.Nodes[i].State; (st == ICNodeStateConflictA || st == ICNodeStateConflictH) && ic.Nodes[i].ContestTeam != ICTeamNeutral {
+			factions[i] = ic.Nodes[i].ContestTeam
+		}
 	}
 	ic.mu.Unlock()
 
@@ -348,6 +379,7 @@ type icBattlegroundState struct {
 	Winner                 int8 // -1: ongoing, 0: Alliance, 1: Horde
 	VehiclesDestroyed      map[uint64]uint32
 	StopTicker             chan struct{}
+	ResourceAccumMs        int64 // ms accumulated toward the next 45s resource tick
 }
 
 func isICGameObject(entry uint32) bool {
@@ -443,52 +475,59 @@ func (s *Server) getOrCreateICState(mapID uint32) *icBattlegroundState {
 func (ic *icBattlegroundState) initNodes() {
 	// 0: Refinery
 	ic.Nodes[ICNodeRefinery] = icNodeState{
-		NodeType: ICNodeRefinery,
-		Faction:  ICTeamNeutral,
-		State:    ICNodeStateUncontrolled,
-		Banners:  [4]uint32{ICGameObjectBannerRefineryA, ICGameObjectBannerRefineryACont, ICGameObjectBannerRefineryH, ICGameObjectBannerRefineryHCont},
+		NodeType:    ICNodeRefinery,
+		Faction:     ICTeamNeutral,
+		State:       ICNodeStateUncontrolled,
+		Banners:     [4]uint32{ICGameObjectBannerRefineryA, ICGameObjectBannerRefineryACont, ICGameObjectBannerRefineryH, ICGameObjectBannerRefineryHCont},
+		ContestTeam: ICTeamNeutral,
 	}
 	// 1: Quarry
 	ic.Nodes[ICNodeQuarry] = icNodeState{
-		NodeType: ICNodeQuarry,
-		Faction:  ICTeamNeutral,
-		State:    ICNodeStateUncontrolled,
-		Banners:  [4]uint32{ICGameObjectBannerQuarryA, ICGameObjectBannerQuarryACont, ICGameObjectBannerQuarryH, ICGameObjectBannerQuarryHCont},
+		NodeType:    ICNodeQuarry,
+		Faction:     ICTeamNeutral,
+		State:       ICNodeStateUncontrolled,
+		Banners:     [4]uint32{ICGameObjectBannerQuarryA, ICGameObjectBannerQuarryACont, ICGameObjectBannerQuarryH, ICGameObjectBannerQuarryHCont},
+		ContestTeam: ICTeamNeutral,
 	}
 	// 2: Docks
 	ic.Nodes[ICNodeDocks] = icNodeState{
-		NodeType: ICNodeDocks,
-		Faction:  ICTeamNeutral,
-		State:    ICNodeStateUncontrolled,
-		Banners:  [4]uint32{ICGameObjectBannerDocksA, ICGameObjectBannerDocksACont, ICGameObjectBannerDocksH, ICGameObjectBannerDocksHCont},
+		NodeType:    ICNodeDocks,
+		Faction:     ICTeamNeutral,
+		State:       ICNodeStateUncontrolled,
+		Banners:     [4]uint32{ICGameObjectBannerDocksA, ICGameObjectBannerDocksACont, ICGameObjectBannerDocksH, ICGameObjectBannerDocksHCont},
+		ContestTeam: ICTeamNeutral,
 	}
 	// 3: Hangar
 	ic.Nodes[ICNodeHangar] = icNodeState{
-		NodeType: ICNodeHangar,
-		Faction:  ICTeamNeutral,
-		State:    ICNodeStateUncontrolled,
-		Banners:  [4]uint32{ICGameObjectBannerHangarA, ICGameObjectBannerHangarACont, ICGameObjectBannerHangarH, ICGameObjectBannerHangarHCont},
+		NodeType:    ICNodeHangar,
+		Faction:     ICTeamNeutral,
+		State:       ICNodeStateUncontrolled,
+		Banners:     [4]uint32{ICGameObjectBannerHangarA, ICGameObjectBannerHangarACont, ICGameObjectBannerHangarH, ICGameObjectBannerHangarHCont},
+		ContestTeam: ICTeamNeutral,
 	}
 	// 4: Workshop
 	ic.Nodes[ICNodeWorkshop] = icNodeState{
-		NodeType: ICNodeWorkshop,
-		Faction:  ICTeamNeutral,
-		State:    ICNodeStateUncontrolled,
-		Banners:  [4]uint32{ICGameObjectBannerWorkshopA, ICGameObjectBannerWorkshopACont, ICGameObjectBannerWorkshopH, ICGameObjectBannerWorkshopHCont},
+		NodeType:    ICNodeWorkshop,
+		Faction:     ICTeamNeutral,
+		State:       ICNodeStateUncontrolled,
+		Banners:     [4]uint32{ICGameObjectBannerWorkshopA, ICGameObjectBannerWorkshopACont, ICGameObjectBannerWorkshopH, ICGameObjectBannerWorkshopHCont},
+		ContestTeam: ICTeamNeutral,
 	}
 	// 5: Graveyard A (Alliance Keep)
 	ic.Nodes[ICNodeGraveyardA] = icNodeState{
-		NodeType: ICNodeGraveyardA,
-		Faction:  ICTeamAlliance,
-		State:    ICNodeStateControlledA,
-		Banners:  [4]uint32{ICGameObjectBannerGraveyardA_A, ICGameObjectBannerGraveyardA_ACont, ICGameObjectBannerGraveyardA_H, ICGameObjectBannerGraveyardA_HCont},
+		NodeType:    ICNodeGraveyardA,
+		Faction:     ICTeamAlliance,
+		State:       ICNodeStateControlledA,
+		Banners:     [4]uint32{ICGameObjectBannerGraveyardA_A, ICGameObjectBannerGraveyardA_ACont, ICGameObjectBannerGraveyardA_H, ICGameObjectBannerGraveyardA_HCont},
+		ContestTeam: ICTeamNeutral,
 	}
 	// 6: Graveyard H (Horde Keep)
 	ic.Nodes[ICNodeGraveyardH] = icNodeState{
-		NodeType: ICNodeGraveyardH,
-		Faction:  ICTeamHorde,
-		State:    ICNodeStateControlledH,
-		Banners:  [4]uint32{ICGameObjectBannerGraveyardH_A, ICGameObjectBannerGraveyardH_ACont, ICGameObjectBannerGraveyardH_H, ICGameObjectBannerGraveyardH_HCont},
+		NodeType:    ICNodeGraveyardH,
+		Faction:     ICTeamHorde,
+		State:       ICNodeStateControlledH,
+		Banners:     [4]uint32{ICGameObjectBannerGraveyardH_A, ICGameObjectBannerGraveyardH_ACont, ICGameObjectBannerGraveyardH_H, ICGameObjectBannerGraveyardH_HCont},
+		ContestTeam: ICTeamNeutral,
 	}
 }
 
@@ -533,7 +572,7 @@ func (s *Server) handleICGameObjectUse(ctx context.Context, sess *session, guid 
 	playerTeam := teamForRace(sess.player.Race)
 
 	if nodeID, ok := ic.getNodeByBannerEntry(entry); ok {
-		s.interactWithICBanner(ic, nodeID, playerTeam, sess.player.Name)
+		s.interactWithICBanner(ic, nodeID, playerTeam, sess)
 		return true
 	}
 
@@ -547,9 +586,10 @@ func (s *Server) handleICGameObjectUse(ctx context.Context, sess *session, guid 
 
 // interactWithICBanner implements the 1-minute assault/defend lifecycle for Isle of Conquest nodes.
 // Reference: BattlegroundIC::EventPlayerClickedOnFlag (BattlegroundIC.cpp:421-500).
-func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, team uint32, playerName string) {
+func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, team uint32, sess *session) {
 	node := &ic.Nodes[nodeID]
 	nodeName := icNodeNames[nodeID]
+	playerName := sess.player.Name
 	teamName := "Alliance"
 	if team == ICTeamHorde {
 		teamName = "Horde"
@@ -577,6 +617,7 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 			node.CaptureTimer.Stop()
 			node.CaptureTimer = nil
 		}
+		node.ContestTeam = ICTeamNeutral
 		if team == ICTeamAlliance {
 			node.State = ICNodeStateControlledA
 		} else {
@@ -584,6 +625,9 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 		}
 		s.sendICNodeWorldState(ic, nodeID)
 		s.broadcastBattlegroundMessage(ic.MapID, fmt.Sprintf("%s has defended %s for the %s!", playerName, nodeName, teamName))
+		// BattlegroundIC::EventPlayerClickedOnFlag (BattlegroundIC.cpp:475-479):
+		// UpdatePlayerScore(player, SCORE_BASES_DEFENDED, 1).
+		s.creditBGObjectiveCapture(sess.playerGUID, ICObjectiveDefendBase)
 		return
 	}
 
@@ -592,6 +636,7 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 		node.CaptureTimer.Stop()
 		node.CaptureTimer = nil
 	}
+	node.ContestTeam = team
 
 	if team == ICTeamAlliance {
 		node.State = ICNodeStateConflictA
@@ -600,6 +645,9 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 	}
 	s.sendICNodeWorldState(ic, nodeID)
 	s.broadcastBattlegroundMessage(ic.MapID, fmt.Sprintf("%s has assaulted %s for the %s!", playerName, nodeName, teamName))
+	// BattlegroundIC::EventPlayerClickedOnFlag (BattlegroundIC.cpp:457-464):
+	// UpdatePlayerScore(player, SCORE_BASES_ASSAULTED, 1).
+	s.creditBGObjectiveCapture(sess.playerGUID, ICObjectiveAssaultBase)
 
 	// Start 60s capture timer
 	node.CaptureTimer = time.AfterFunc(ic.BannerCaptureDuration, func() {
@@ -618,12 +666,20 @@ func (s *Server) resolveICNodeCapture(ic *icBattlegroundState, nodeID uint8, tea
 
 	node := &ic.Nodes[nodeID]
 	node.Faction = team
+	node.ContestTeam = ICTeamNeutral
 	if team == ICTeamAlliance {
 		node.State = ICNodeStateControlledA
 	} else {
 		node.State = ICNodeStateControlledH
 	}
 	s.sendICNodeWorldState(ic, nodeID)
+
+	// BattlegroundIC::HandleCapturedNodes (BattlegroundIC.cpp:653-661): capturing
+	// the quarry/refinery casts the buff on the capturing team and strips it from
+	// the enemy team.
+	if nodeID == ICNodeQuarry || nodeID == ICNodeRefinery {
+		s.syncICNodeAuraTeam(ic, nodeID, team)
+	}
 
 	nodeName := icNodeNames[nodeID]
 	teamName := "Alliance"
@@ -634,7 +690,7 @@ func (s *Server) resolveICNodeCapture(ic *icBattlegroundState, nodeID uint8, tea
 }
 
 // DamageICGate applies damage to an IoC fortress gate, transitioning to Damaged and Destroyed.
-// Reference: BattlegroundIC::DestroyGate (BattlegroundIC.cpp:520-560).
+// Reference: BattlegroundIC::DestroyGate (BattlegroundIC.cpp:797-860).
 func (s *Server) DamageICGate(mapID uint32, gateID uint8, damage uint32, attacker *session) {
 	if s == nil || gateID >= ICMaxGates {
 		return
@@ -680,7 +736,7 @@ func (s *Server) DamageICGate(mapID uint32, gateID uint8, damage uint32, attacke
 }
 
 // handleICPlayerDeath decrements team reinforcements on death.
-// Reference: BattlegroundIC::HandleKillPlayer (BattlegroundIC.cpp:406-420).
+// Reference: BattlegroundIC::HandleKillPlayer (BattlegroundIC.cpp:405-419).
 func (s *Server) handleICPlayerDeath(sess *session) {
 	if s == nil || sess == nil || sess.player == nil || sess.player.Map != ICMapID {
 		return
@@ -717,7 +773,7 @@ func (s *Server) handleICPlayerDeath(sess *session) {
 }
 
 // handleICCreatureKilled handles Boss kills (Halford Wyrmbane & Overlord Agmar) and vehicle destruction.
-// Reference: BattlegroundIC::HandleKillUnit (BattlegroundIC.cpp:382-405).
+// Reference: BattlegroundIC::HandleKillUnit (BattlegroundIC.cpp:382-403).
 func (s *Server) handleICCreatureKilled(sess *session, creatureEntry uint32) {
 	if s == nil || sess == nil || sess.player == nil || sess.player.Map != ICMapID {
 		return
@@ -751,6 +807,11 @@ func (s *Server) handleICCreatureKilled(sess *session, creatureEntry uint32) {
 	case ICCreatureDemolisher, ICCreatureSiegeEngineA, ICCreatureSiegeEngineH,
 		ICCreatureGlaiveThrowerA, ICCreatureGlaiveThrowerH, ICCreatureCatapult:
 		ic.VehiclesDestroyed[sess.playerGUID]++
+		// BattlegroundIC::HandleKillUnit (BattlegroundIC.cpp:401-404): destroying
+		// a vehicle casts SPELL_DESTROYED_VEHICLE_ACHIEVEMENT (68357) triggered on
+		// the killer — the "Mowed Down" credit. Triggered casts credit via the
+		// CAST_SPELL criterion (spells.go:16087), so credit it directly.
+		sess.updateAchievementCriteria(criteriaTypeCastSpell, ICSpellDestroyedVehicleAchievement, 1)
 		s.broadcastBattlegroundMessage(ic.MapID, fmt.Sprintf("%s has destroyed a siege vehicle!", sess.player.Name))
 	}
 }
@@ -810,7 +871,11 @@ func (s *Server) applyICNodeAuras(sess *session) {
 
 // TickICResources generates passive reinforcements (+1 every 45s) for controlled Refinery and Quarry.
 // Reference: BattlegroundIC::PostUpdateImpl / IC_RESOURCE_TIME (BattlegroundIC.cpp:205-219).
-func (s *Server) TickICResources(ic *icBattlegroundState) {
+// Driven by updateICBattles on the world tick (BattlegroundMgr::Update sweeps
+// instances every BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL = 1000ms,
+// BattlegroundMgr.cpp:94 / BattlegroundMgr.h:38). C++ applies no upper clamp
+// to the reinforcement counter, so neither does this.
+func (s *Server) TickICResources(ic *icBattlegroundState, elapsedMs int64) {
 	if ic == nil {
 		return
 	}
@@ -821,20 +886,153 @@ func (s *Server) TickICResources(ic *icBattlegroundState) {
 		return
 	}
 
+	tickMs := int64(ic.ResourceTickDuration / time.Millisecond)
+	if tickMs <= 0 {
+		tickMs = int64(ICResourceTickDuration / time.Millisecond)
+	}
+	ic.ResourceAccumMs += elapsedMs
+	if ic.ResourceAccumMs < tickMs {
+		return
+	}
+	ic.ResourceAccumMs -= tickMs
+
 	for _, nodeID := range []uint8{ICNodeRefinery, ICNodeQuarry} {
 		node := &ic.Nodes[nodeID]
 		if node.State == ICNodeStateControlledA {
-			if ic.AllianceReinforcements < ICMaxReinforcements {
-				ic.AllianceReinforcements++
-				s.updateICWorldState(ic.MapID, ICWorldStateAllianceReinforcements, ic.AllianceReinforcements)
-			}
+			ic.AllianceReinforcements++
+			s.updateICWorldState(ic.MapID, ICWorldStateAllianceReinforcements, ic.AllianceReinforcements)
+			// BattlegroundIC::PostUpdateImpl (BattlegroundIC.cpp:212):
+			// RewardHonorToTeam(RESOURCE_HONOR_AMOUNT, faction).
+			s.grantICTeamHonor(ic, ICTeamAlliance, ICResourceHonorAmount)
 		} else if node.State == ICNodeStateControlledH {
-			if ic.HordeReinforcements < ICMaxReinforcements {
-				ic.HordeReinforcements++
-				s.updateICWorldState(ic.MapID, ICWorldStateHordeReinforcements, ic.HordeReinforcements)
-			}
+			ic.HordeReinforcements++
+			s.updateICWorldState(ic.MapID, ICWorldStateHordeReinforcements, ic.HordeReinforcements)
+			s.grantICTeamHonor(ic, ICTeamHorde, ICResourceHonorAmount)
 		}
 	}
+}
+
+// updateICBattles ticks every live IoC state, driving the 45s resource tick.
+// Same 1s cadence convention as updateArenaBattles/updateAVBattles/
+// updateEOTSBattles/updateSABattles; wired from the world tick in server.go.
+func (s *Server) updateICBattles(now time.Time) {
+	if s == nil {
+		return
+	}
+	if !s.icTickLast.IsZero() && now.Sub(s.icTickLast) < time.Second {
+		return
+	}
+	var elapsedMs int64 = 1000
+	if !s.icTickLast.IsZero() {
+		elapsedMs = now.Sub(s.icTickLast).Milliseconds()
+	}
+	s.icTickLast = now
+	s.icMu.RLock()
+	battles := make([]*icBattlegroundState, 0, len(s.icState))
+	for _, ic := range s.icState {
+		battles = append(battles, ic)
+	}
+	s.icMu.RUnlock()
+	for _, ic := range battles {
+		s.TickICResources(ic, elapsedMs)
+	}
+}
+
+// grantICTeamHonor mirrors Battleground::RewardHonorToTeam: raw honor to every
+// worldReady session on the IoC map on the given team (0 Alliance, 1 Horde).
+// The per-session call is rewardHonorPoints == Player::RewardHonor(nullptr, 1,
+// honor), the same tail grantICWinnerHonor uses.
+func (s *Server) grantICTeamHonor(ic *icBattlegroundState, team uint32, honor uint32) {
+	if s == nil || ic == nil || honor == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == ic.MapID && teamForRace(sess.player.Race) == team {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.rewardHonorPoints(context.Background(), honor)
+	}
+}
+
+// syncICNodeAuraTeam mirrors the quarry/refinery arms of
+// BattlegroundIC::HandleCapturedNodes (BattlegroundIC.cpp:653-661): the buff is
+// cast on the capturing team and stripped from the enemy team at capture time.
+func (s *Server) syncICNodeAuraTeam(ic *icBattlegroundState, nodeID uint8, team uint32) {
+	if s == nil || ic == nil {
+		return
+	}
+	var spellID uint32
+	switch nodeID {
+	case ICNodeQuarry:
+		spellID = ICSpellQuarry
+	case ICNodeRefinery:
+		spellID = ICSpellOilRefinery
+	default:
+		return
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == ic.MapID {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		if teamForRace(sess.player.Race) == team {
+			sess.applyAura(spellID)
+		} else {
+			sess.removeAura(spellID)
+		}
+	}
+}
+
+// handleICBackDoorTrigger mirrors BattlegroundIC::HandleAreaTrigger
+// (BattlegroundIC.cpp:270-291): trigger 5555 (Horde, at the Alliance keep) /
+// 5535 (Alliance, at the Horde keep) casts SPELL_BACK_DOOR_JOB_ACHIEVEMENT
+// (68502) triggered on the player when none of the enemy's three gates is
+// destroyed yet. The triggered cast credits via the CAST_SPELL criterion
+// (spells.go:16087), so credit it directly. STATUS_IN_PROGRESS maps to the Go
+// Winner < 0 gate.
+func (s *Server) handleICBackDoorTrigger(sess *session, triggerID uint32) {
+	if s == nil || sess == nil || sess.player == nil {
+		return
+	}
+	team := teamForRace(sess.player.Race)
+	if triggerID == ICAreaTriggerBackDoorHorde && team != ICTeamHorde {
+		return
+	}
+	if triggerID == ICAreaTriggerBackDoorAlliance && team != ICTeamAlliance {
+		return
+	}
+	ic := s.getOrCreateICState(sess.player.Map)
+	if ic == nil {
+		return
+	}
+	ic.mu.Lock()
+	if ic.Winner >= 0 {
+		ic.mu.Unlock()
+		return
+	}
+	gates := ic.Gates
+	ic.mu.Unlock()
+	var check []uint8
+	if team == ICTeamHorde {
+		check = []uint8{ICAllianceFrontGate, ICAllianceWestGate, ICAllianceEastGate}
+	} else {
+		check = []uint8{ICHordeFrontGate, ICHordeWestGate, ICHordeEastGate}
+	}
+	for _, g := range check {
+		if gates[g].State == ICGateDestroyed {
+			return
+		}
+	}
+	sess.updateAchievementCriteria(criteriaTypeCastSpell, ICSpellBackDoorJobAchievement, 1)
 }
 
 func (s *Server) endIC(ic *icBattlegroundState, winner int8) {
@@ -872,6 +1070,10 @@ func (s *Server) handleICPlayerLeave(sess *session) {
 	if s == nil || sess == nil || sess.player == nil || sess.player.Map != ICMapID {
 		return
 	}
+	// BattlegroundIC::RemovePlayer (BattlegroundIC.cpp:261-268) strips the
+	// quarry/refinery buffs when the player leaves the battleground.
+	sess.removeAura(ICSpellQuarry)
+	sess.removeAura(ICSpellOilRefinery)
 }
 
 func (s *Server) sendICNodeWorldState(ic *icBattlegroundState, nodeID uint8) {

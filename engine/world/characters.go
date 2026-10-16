@@ -1070,6 +1070,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		// the live AB world states follow the generic init block.
 		s.server.sendABInitWorldStatesTo(s)
 	}
+	if state.Map == ICMapID {
+		// BattlegroundIC::FillInitialWorldStates (BattlegroundIC.cpp:293-305):
+		// the live IoC world states follow the generic init block.
+		s.server.sendICInitialWorldStates(s)
+		// BattlegroundIC::AddPlayer (BattlegroundIC.cpp:249-259): entering the
+		// battleground applies the quarry/refinery buffs when the player's team
+		// controls those nodes.
+		s.server.applyICNodeAuras(s)
+	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
 	s.resetTimeSync()
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {

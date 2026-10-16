@@ -158,6 +158,7 @@ type Server struct {
 	avTickLast                time.Time
 	eotsTickLast              time.Time
 	saTickLast                time.Time
+	icTickLast                time.Time
 	wgMu                      sync.RWMutex
 	wgState                   *wgBattlegroundState
 	totemMu                   sync.RWMutex
@@ -1332,6 +1333,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.TickWG(ctx, diff)
 			s.updateEOTSBattles(now)
 			s.updateSABattles(now)
+			s.updateICBattles(now)
 			s.updateInstanceScriptTicks(ctx, diff)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}

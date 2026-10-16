@@ -148,6 +148,15 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 				protocol.BuildAreaTriggerMessage("Only The "+teamName+" can use that portal"), true)
 		}
 	}
+	// 4e. Isle of Conquest back-door achievement
+	// Reference: BattlegroundIC::HandleAreaTrigger (BattlegroundIC.cpp:270-291):
+	// 5555 (Horde, at the Alliance keep) / 5535 (Alliance, at the Horde keep)
+	// credit the Back Door Job achievement when none of the enemy's three gates
+	// is destroyed. Like the arms above, this does not return: execution
+	// continues to the teleport arm below.
+	if s.player.Map == ICMapID && (triggerID == ICAreaTriggerBackDoorHorde || triggerID == ICAreaTriggerBackDoorAlliance) {
+		s.server.handleICBackDoorTrigger(s, triggerID)
+	}
 	// Like the arena arm above (MiscHandler.cpp:697-700), the BG arm does not
 	// return: execution continues to the teleport arm below.
 

@@ -542,6 +542,15 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 			// the live AB world states follow the generic init block.
 			s.server.sendABInitWorldStatesTo(s)
 		}
+		if s.player.Map == ICMapID {
+			// BattlegroundIC::FillInitialWorldStates (BattlegroundIC.cpp:293-305):
+			// the live IoC world states follow the generic init block.
+			s.server.sendICInitialWorldStates(s)
+			// BattlegroundIC::AddPlayer (BattlegroundIC.cpp:249-259): entering the
+			// battleground applies the quarry/refinery buffs when the player's team
+			// controls those nodes.
+			s.server.applyICNodeAuras(s)
+		}
 	}
 	if oldZone != s.player.Zone || oldArea != areaID {
 		s.triggerPlayerEvent(ctx, scripting.PlayerEventUpdateZone, s.luaPlayer(), s.player.Zone, areaID)
