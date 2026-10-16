@@ -11148,6 +11148,19 @@ func init() {
 	RegisterLuaBoss("npc_hidden_cultist", 25827)
 	RegisterLuaBoss("npc_hidden_cultist", 25248)
 	RegisterLuaBoss("npc_hidden_cultist", 25828)
+	// npc_counselor_talbot (Borean Tundra, Last Rites quest chain) —
+	// ported arms in lua_scripts/northrend/npc_counselor_talbot.lua:
+	// Initialize()/Reset() timer seeds -> OnEnterCombat CreateLuaEvent
+	// arms (ShadowBolt 15537 urand(5s,12s), Deflection 51009
+	// urand(20s,25s), SoulBlast 50992 urand(12s,18s), all non-triggered
+	// DoCastVictim; UpdateVictim-gated in C++ so combat-start seeding
+	// is faithful). The GetAreaId()==4125 gate is unbridged but
+	// behaviorally nil — Talbot is a fixed-coords quest summon.
+	// bCheck/FindNearestCreature GUID latch, MovementInform thassarian
+	// latch, and JustDied ObjectAccessor/motion/reward legs are
+	// documented-only (no bridges). Entry 25301 verifiable from the
+	// C++ LastRites enum (zone_borean_tundra.cpp:413).
+	RegisterLuaBoss("npc_counselor_talbot", 25301)
 	// npc_tournament_training_dummy (Icecrown, Argent Tournament) —
 	// ported arms in lua_scripts/northrend/npc_tournament_training_dummy.lua:
 	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, !HasAura(64100)
