@@ -210,6 +210,29 @@ func (s *session) handleBattlefieldList(ctx context.Context, payload []byte) boo
 }
 
 func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID uint32) bool {
+	// Reference: BattlegroundMgr::BuildBattlegroundListPacket (BattlegroundMgr.cpp:638-659) —
+	// the winner/loser reward kills come from the 6 Battleground.Reward* configs
+	// (World.cpp:1445-1450: RewardWinnerHonorFirst=30, RewardWinnerHonorLast=15,
+	// RewardWinnerArenaFirst=25, RewardWinnerArenaLast=0, RewardLoserHonorFirst=5,
+	// RewardLoserHonorLast=5) selected on Player::GetRandomWinner, and the honor
+	// rewards scale with the player's level via Trinity::Honor::hk_honor_at_level
+	// (Formulas.h:34-44: ceil(level*1.55*kills)). The random-reward repeat block
+	// re-writes the same computed values.
+	var winHonor, winArena, lossHonor uint32
+	if s != nil && s.server != nil && s.player != nil {
+		cfg := &s.server.Config
+		winnerKills := cfg.BGRewardWinnerHonorFirst
+		winnerArena := cfg.BGRewardWinnerArenaFirst
+		loserKills := cfg.BGRewardLoserHonorFirst
+		if s.randomBGWinner {
+			winnerKills = cfg.BGRewardWinnerHonorLast
+			winnerArena = cfg.BGRewardWinnerArenaLast
+			loserKills = cfg.BGRewardLoserHonorLast
+		}
+		winHonor = uint32(math.Ceil(float64(s.player.Level) * 1.55 * float64(winnerKills)))
+		winArena = winnerArena
+		lossHonor = uint32(math.Ceil(float64(s.player.Level) * 1.55 * float64(loserKills)))
+	}
 	buf := protocol.NewBuffer(64)
 	buf.WriteU64(bmGUID)
 	buf.WriteU8(fromWhere)
@@ -221,9 +244,9 @@ func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID u
 	} else {
 		buf.WriteU8(0)
 	}
-	buf.WriteU32(0) // winHonor
-	buf.WriteU32(0) // winArena
-	buf.WriteU32(0) // lossHonor
+	buf.WriteU32(winHonor)
+	buf.WriteU32(winArena)
+	buf.WriteU32(lossHonor)
 	isRandom := bgTypeID == battlegroundRB
 	if isRandom {
 		buf.WriteU8(1)
@@ -236,9 +259,9 @@ func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID u
 		} else {
 			buf.WriteU8(0)
 		}
-		buf.WriteU32(0) // winHonor_Random
-		buf.WriteU32(0) // winArena_Random
-		buf.WriteU32(0) // lossHonor_Random
+		buf.WriteU32(winHonor)
+		buf.WriteU32(winArena)
+		buf.WriteU32(lossHonor)
 	}
 	buf.WriteU32(0) // count of active instances
 	return s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_LIST), buf.Bytes(), true) == nil

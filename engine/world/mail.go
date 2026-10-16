@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -536,6 +537,15 @@ func (s *session) mailSenderCharacterExists(ctx context.Context, senderGUID uint
 	return cdb.QueryRowContext(ctx, "SELECT 1 FROM characters WHERE guid = ? LIMIT 1", senderGUID).Scan(&one) == nil
 }
 
+// validMailPacketString mirrors the WorldPackets::String<N,
+// Strings::NoHyperlinks> validators (PacketUtilities.h:55-106): at most N
+// bytes, valid UTF-8, and no '|' (NoHyperlinks throws IllegalHyperlinkException
+// when the value contains one). Violations throw InvalidStringValueException
+// (a ByteBufferException), so the packet is dropped, never closed.
+func validMailPacketString(value string, maxBytes int) bool {
+	return len(value) <= maxBytes && utf8.ValidString(value) && !strings.Contains(value, "|")
+}
+
 func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
 		return true
@@ -561,8 +571,20 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return true
 	}
+	// Reference: MailPackets.h:132-133 — Subject is String<255,
+	// Strings::NoHyperlinks>, Body is String<7999, Strings::NoHyperlinks>;
+	// the ByteSize + Utf8 + NoHyperlinks validators (PacketUtilities.h:55-106)
+	// throw InvalidStringValueException (a ByteBufferException), so the
+	// dispatcher (WorldSession.cpp:427-432) drops the packet with the
+	// connection open; Go drops it the same way.
+	if !validMailPacketString(subject, 255) {
+		return true
+	}
 	body, err := reader.ReadCString()
 	if err != nil {
+		return true
+	}
+	if !validMailPacketString(body, 7999) {
 		return true
 	}
 	stationery, err := reader.ReadU32()
