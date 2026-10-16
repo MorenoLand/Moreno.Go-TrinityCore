@@ -172,7 +172,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellSilverwingFlagPicked)
 				s.setGameObjectHidden(guid, true)
 				s.broadcastGameObjectDespawn(sess.player.Map, guid)
-				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnPlayer)
+				// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:480):
+				// UpdateFlagState(HORDE, BG_WS_FLAG_STATE_ON_PLAYER) — the
+				// worldstate is indexed by the carrying team, not the flag.
+				s.wsgUpdateFlagState(sess.player.Map, 1, WSGFlagStateOnPlayer)
 				// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:478):
 				// UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, 1) on pickup.
 				s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 1)
@@ -205,7 +208,9 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				// then UpdatePlayerScore — this credit follows the captures
 				// worldstate broadcast, mirroring that order).
 				s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
-				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
+				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:346):
+				// UpdateFlagState(player->GetTeam(), 1) — capturer's team index.
+				s.wsgUpdateFlagState(sess.player.Map, 0, WSGFlagStateOnBase)
 				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Warsong flag!")
 				if wsg.AllianceScore >= wsg.MaxScore {
@@ -232,7 +237,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellWarsongFlagPicked)
 				s.setGameObjectHidden(guid, true)
 				s.broadcastGameObjectDespawn(sess.player.Map, guid)
-				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnPlayer)
+				// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:498):
+				// UpdateFlagState(ALLIANCE, BG_WS_FLAG_STATE_ON_PLAYER) — the
+				// worldstate is indexed by the carrying team, not the flag.
+				s.wsgUpdateFlagState(sess.player.Map, 0, WSGFlagStateOnPlayer)
 				// BattlegroundWS::EventPlayerClickedOnFlag: UpdateWorldState
 				// (BG_WS_FLAG_UNK_HORDE, 1) on pickup (BattlegroundWS.cpp:494).
 				s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 1)
@@ -262,7 +270,9 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				// objective credit, after the team-score worldstate like the
 				// C++ UpdateTeamScore -> UpdatePlayerScore order.
 				s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
-				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
+				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:346):
+				// UpdateFlagState(player->GetTeam(), 1) — capturer's team index.
+				s.wsgUpdateFlagState(sess.player.Map, 1, WSGFlagStateOnBase)
 				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 0)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Alliance flag!")
 				if wsg.HordeScore >= wsg.MaxScore {
@@ -288,7 +298,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			if wsg.AllianceBaseGUID != 0 {
 				s.setGameObjectHidden(wsg.AllianceBaseGUID, false)
 			}
-			s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
+			// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:513):
+			// UpdateFlagState(HORDE, BG_WS_FLAG_STATE_WAIT_RESPAWN) — the team
+			// that had carried the flag, not the flag's own team.
+			s.wsgUpdateFlagState(sess.player.Map, 1, WSGFlagStateOnBase)
 			// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_RETURNS arm
 			// (BattlegroundWS.cpp:788-791): the return credits
 			// ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE with
@@ -301,7 +314,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			wsg.AllianceCarrierGUID = sess.playerGUID
 			sess.applyAura(WSGSpellSilverwingFlag)
 			sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellSilverwingFlagPicked)
-			s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnPlayer)
+			// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:528):
+			// UpdateFlagState(HORDE, BG_WS_FLAG_STATE_ON_PLAYER) — the
+			// worldstate is indexed by the carrying team, not the flag.
+			s.wsgUpdateFlagState(sess.player.Map, 1, WSGFlagStateOnPlayer)
 			// EventPlayerClickedOnFlag, ground-pickup leg (BattlegroundWS.cpp:526):
 			// UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, 1).
 			s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 1)
@@ -320,7 +336,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			if wsg.HordeBaseGUID != 0 {
 				s.setGameObjectHidden(wsg.HordeBaseGUID, false)
 			}
-			s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
+			// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:546):
+			// UpdateFlagState(ALLIANCE, BG_WS_FLAG_STATE_WAIT_RESPAWN) — the
+			// team that had carried the flag, not the flag's own team.
+			s.wsgUpdateFlagState(sess.player.Map, 0, WSGFlagStateOnBase)
 			// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_RETURNS arm
 			// (BattlegroundWS.cpp:788-791): WS_OBJECTIVE_RETURN_FLAG objective
 			// credit for the returning player.
@@ -332,7 +351,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			wsg.HordeCarrierGUID = sess.playerGUID
 			sess.applyAura(WSGSpellWarsongFlag)
 			sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellWarsongFlagPicked)
-			s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnPlayer)
+			// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:561):
+			// UpdateFlagState(ALLIANCE, BG_WS_FLAG_STATE_ON_PLAYER) — the
+			// worldstate is indexed by the carrying team, not the flag.
+			s.wsgUpdateFlagState(sess.player.Map, 0, WSGFlagStateOnPlayer)
 			// EventPlayerClickedOnFlag, ground-pickup leg (BattlegroundWS.cpp:565):
 			// UpdateWorldState(BG_WS_FLAG_UNK_HORDE, 1).
 			s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 1)
@@ -360,7 +382,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 // RespawnFlag(team, true) returns it to base with the BG_WS_TEXT_FLAGS_PLACED
 // broadcast. The caller's wsg.mu is held; team is 0 Alliance, 1 Horde.
 func (s *Server) startWSGFlagRespawnTimer(wsg *wsgBattlegroundState, mapID uint32, team uint32) {
-	arm := func(timer **time.Timer, state *uint32, baseGUID *uint64, worldStateID uint32) {
+	arm := func(timer **time.Timer, state *uint32, baseGUID *uint64) {
 		if *timer != nil {
 			(*timer).Stop()
 		}
@@ -373,15 +395,16 @@ func (s *Server) startWSGFlagRespawnTimer(wsg *wsgBattlegroundState, mapID uint3
 				if *baseGUID != 0 {
 					s.setGameObjectHidden(*baseGUID, false)
 				}
-				s.broadcastWorldState(mapID, worldStateID, WSGFlagStateOnBase)
+				// BattlegroundWS::RespawnFlag (cpp:242-262) sends no worldstate —
+				// the capture arm's capturer-team=1 value stands.
 				s.broadcastBattlegroundMessage(mapID, "The flags were placed!")
 			}
 		})
 	}
 	if team == 0 {
-		arm(&wsg.AllianceWaitRespawnTimer, &wsg.AllianceFlagState, &wsg.AllianceBaseGUID, WSWorldStateAllianceFlagState)
+		arm(&wsg.AllianceWaitRespawnTimer, &wsg.AllianceFlagState, &wsg.AllianceBaseGUID)
 	} else {
-		arm(&wsg.HordeWaitRespawnTimer, &wsg.HordeFlagState, &wsg.HordeBaseGUID, WSWorldStateHordeFlagState)
+		arm(&wsg.HordeWaitRespawnTimer, &wsg.HordeFlagState, &wsg.HordeBaseGUID)
 	}
 }
 
@@ -404,8 +427,9 @@ func (s *Server) handleWSGPlayerDeath(sess *session) {
 
 // dropWSGCarriedFlag drops the Warsong flag carried by sess, mirroring
 // BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:289): the
-// carried flag object spawns at the player's feet, the worldstate flips
-// to on-ground, and the flag-return timer starts. The wsg mutex must be held.
+// carried flag object spawns at the player's feet, the dropper's team flag
+// worldstate (2338/2339) flips to 1 per UpdateFlagState (cpp:448), and the
+// flag-return timer starts. The wsg mutex must be held.
 func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, mapID uint32, x, y, z float32) {
 	if wsg == nil || sess == nil {
 		return
@@ -438,7 +462,10 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 			IsRuntimeSpawn: true,
 		})
 
-		s.broadcastWorldState(mapID, WSWorldStateAllianceFlagState, WSGFlagStateOnGround)
+		// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:448):
+		// UpdateFlagState(player->GetTeam(), 1) — the dropper's team index,
+		// value 1 (C++ never sends 3/on-ground on the wire).
+		s.wsgUpdateFlagState(mapID, teamForRace(sess.player.Race), WSGFlagStateOnBase)
 		// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:449-457):
 		// UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, uint32(-1)) on drop.
 		s.broadcastWorldState(mapID, WSWorldStateFlagUnkAlliance, 0xFFFFFFFF)
@@ -457,7 +484,8 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 				if wsg.AllianceBaseGUID != 0 {
 					s.setGameObjectHidden(wsg.AllianceBaseGUID, false)
 				}
-				s.broadcastWorldState(mapID, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
+				// BattlegroundWS::RespawnFlagAfterDrop (cpp:266-286) sends no
+				// worldstate — the drop arm's carrier-team=1 value stands.
 				s.broadcastBattlegroundMessage(mapID, "The Alliance flag was returned to its base!")
 			}
 		})
@@ -491,7 +519,10 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 			IsRuntimeSpawn: true,
 		})
 
-		s.broadcastWorldState(mapID, WSWorldStateHordeFlagState, WSGFlagStateOnGround)
+		// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:448):
+		// UpdateFlagState(player->GetTeam(), 1) — the dropper's team index,
+		// value 1 (C++ never sends 3/on-ground on the wire).
+		s.wsgUpdateFlagState(mapID, teamForRace(sess.player.Race), WSGFlagStateOnBase)
 		// BattlegroundWS::EventPlayerDroppedFlag: UpdateWorldState
 		// (BG_WS_FLAG_UNK_HORDE, uint32(-1)) on drop (BattlegroundWS.cpp:449-457).
 		s.broadcastWorldState(mapID, WSWorldStateFlagUnkHorde, 0xFFFFFFFF)
@@ -510,7 +541,8 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 				if wsg.HordeBaseGUID != 0 {
 					s.setGameObjectHidden(wsg.HordeBaseGUID, false)
 				}
-				s.broadcastWorldState(mapID, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
+				// BattlegroundWS::RespawnFlagAfterDrop (cpp:266-286) sends no
+				// worldstate — the drop arm's carrier-team=1 value stands.
 				s.broadcastBattlegroundMessage(mapID, "The Warsong flag was returned to its base!")
 			}
 		})
@@ -536,6 +568,7 @@ func (s *Server) handleWSGPlayerLeave(sess *session) {
 	defer wsg.mu.Unlock()
 
 	mapID := sess.player.Map
+	team := teamForRace(sess.player.Race) // 0 = Alliance, 1 = Horde
 	if wsg.AllianceCarrierGUID == sess.playerGUID {
 		sess.removeAura(WSGSpellSilverwingFlag)
 		// BattlegroundWS::RemovePlayer -> EventPlayerDroppedFlag: the stalemate
@@ -547,7 +580,11 @@ func (s *Server) handleWSGPlayerLeave(sess *session) {
 		if wsg.AllianceBaseGUID != 0 {
 			s.setGameObjectHidden(wsg.AllianceBaseGUID, false)
 		}
-		s.broadcastWorldState(mapID, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
+		// Return-to-base is the Go standing simplification (C++
+		// BattlegroundWS::RemovePlayer drops via EventPlayerDroppedFlag);
+		// the worldstate follows the UpdateFlagState(player->GetTeam(), 1)
+		// carrier-team convention (BattlegroundWS.cpp:448).
+		s.wsgUpdateFlagState(mapID, team, WSGFlagStateOnBase)
 		s.broadcastBattlegroundMessage(mapID, "The Alliance flag was returned to its base!")
 	}
 
@@ -562,7 +599,7 @@ func (s *Server) handleWSGPlayerLeave(sess *session) {
 		if wsg.HordeBaseGUID != 0 {
 			s.setGameObjectHidden(wsg.HordeBaseGUID, false)
 		}
-		s.broadcastWorldState(mapID, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
+		s.wsgUpdateFlagState(mapID, team, WSGFlagStateOnBase)
 		s.broadcastBattlegroundMessage(mapID, "The Warsong flag was returned to its base!")
 	}
 
@@ -609,6 +646,23 @@ func (s *Server) broadcastWorldState(mapID uint32, variableID, value uint32) {
 	buf.WriteU32(variableID)
 	buf.WriteU32(value)
 	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_UPDATE_WORLD_STATE), buf.Bytes())
+}
+
+// wsgUpdateFlagState mirrors BattlegroundWS::UpdateFlagState
+// (BattlegroundWS.cpp:602-608): the flag worldstates 2338/2339 are indexed by
+// the ACTING player's team (2339 Alliance, 2338 Horde), NOT by the flag's own
+// team — C++ passes player->GetTeam() at every call site (pickup, drop,
+// return, capture). Values are 2 while the acting team carries a flag
+// (BG_WS_FLAG_STATE_ON_PLAYER) and literal 1 for every other transition
+// (drop/return/capture pass BG_WS_FLAG_STATE_WAIT_RESPAWN=1); Go's
+// WSGFlagStateOnBase is numerically 1 and carries that wire value. team is
+// 0 = Alliance, 1 = Horde.
+func (s *Server) wsgUpdateFlagState(mapID uint32, team uint32, value uint32) {
+	if team == 0 {
+		s.broadcastWorldState(mapID, WSWorldStateAllianceFlagState, value)
+	} else {
+		s.broadcastWorldState(mapID, WSWorldStateHordeFlagState, value)
+	}
 }
 
 func (s *Server) broadcastBattlegroundMessage(mapID uint32, message string) {
