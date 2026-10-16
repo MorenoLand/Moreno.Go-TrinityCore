@@ -5729,7 +5729,8 @@ func (s *session) handleRequestRaidInfo(ctx context.Context) bool {
 	rows, err := cdb.QueryContext(ctx, `SELECT i.map, i.difficulty, i.id, COALESCE(ci.extendState, 0), i.resettime
 		FROM character_instance ci
 		JOIN instance i ON i.id = ci.instance
-		WHERE ci.guid = ? AND ci.permanent = 1`, s.playerGUID)
+		WHERE ci.guid = ? AND ci.permanent = 1
+		ORDER BY i.difficulty, i.map`, s.playerGUID)
 	if err == nil {
 		for rows.Next() {
 			var mapID, diff, instID, extendState, resetTime int64

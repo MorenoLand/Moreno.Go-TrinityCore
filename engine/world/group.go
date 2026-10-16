@@ -2054,7 +2054,7 @@ func (s *session) handleGroupRaidConvert(ctx context.Context, _ []byte) bool {
 // handlePartyAssignment processes MSG_PARTY_ASSIGNMENT (0x38E).
 // Sets main assist / main tank flags.
 // TrinityCore: WorldSession::HandlePartyAssignmentOpcode.
-func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool {
+func (s *session) handlePartyAssignment(ctx context.Context, payload []byte) bool {
 	// STATUS_LOGGEDIN (Opcodes.cpp:876): the reference logs and drops the
 	// packet when no player is logged in — the connection stays open.
 	if !s.playerLoaded || s.groupID == 0 {
@@ -2099,6 +2099,8 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 	}
 	// Group::SetGroupMemberFlag (Group.cpp:2589) carries its own SendUpdate;
 	// it applies only in raid groups for a member GUID.
+	toggled := false
+	var memberFlags uint8
 	if flag != 0 {
 		// GroupHandler.cpp:671-678 — the unique flag is cleared from all
 		// members first, unconditionally (a no-op in non-raid groups).
@@ -2116,12 +2118,25 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 					if apply {
 						g.Members[i].Flags |= flag
 					}
+					memberFlags = g.Members[i].Flags
+					toggled = true
 					break
 				}
 			}
 		}
 	}
 	srv.groupsMu.Unlock()
+	if toggled {
+		// Group::SetGroupMemberFlag (Group.cpp:2619) persists the toggled
+		// flags to the DB (CHAR_UPD_GROUP_MEMBER_FLAG) before broadcasting.
+		if srv.CharactersStore != nil && srv.CharactersStore.DB != nil {
+			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_UPD_GROUP_MEMBER_FLAG"), memberFlags, guid)
+		}
+		// Group.cpp:2623 — SetGroupMemberFlag broadcasts its own SendUpdate;
+		// the handler's group->SendUpdate() (GroupHandler.cpp:684) follows,
+		// so the raid-toggle path emits two SMSG_GROUP_LIST broadcasts.
+		srv.broadcastGroupList(g)
+	}
 	// GroupHandler.cpp:684 — group->SendUpdate() is unconditional; it runs
 	// even for unknown assignment values and non-raid groups.
 	srv.broadcastGroupList(g)
