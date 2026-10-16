@@ -2088,9 +2088,11 @@ func (s *session) resolveItemUseSpell(ctx context.Context, itemEntry uint32, dbI
 		&spellIDs[3], &spellTriggers[3], &spellIDs[4], &spellTriggers[4]); err != nil {
 		return 0, nil
 	}
-	// Special learning case (Player.cpp:8235-8250).
+	// Special learning case (Player.cpp:8235-8250): the base-point value is
+	// the raw spellid_2 row (SpellEffects.cpp:2406-2424 learns exactly it),
+	// not spellid_2 - 1.
 	if spellIDs[0] == 483 || spellIDs[0] == 55884 {
-		bp := int32(spellIDs[1]) - 1
+		bp := int32(spellIDs[1])
 		return uint32(spellIDs[0]), &bp
 	}
 	spellKnown := func(id uint32) bool {
@@ -3196,7 +3198,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if glyphIndex < 6 {
 		s.targetGlyphSlot = uint8(glyphIndex)
 	}
-	_, err = r.ReadU8() // castFlags
+	castFlags, err := r.ReadU8()
 	if err != nil {
 		return true
 	}
@@ -3209,6 +3211,31 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	}
 
 	target, _ := protocol.ReadSpellTargetData(r)
+
+	// HandleClientCastFlags (SpellHandler.cpp:50-72): castFlags & 0x02 carries
+	// elevation, speed, and an optional embedded movement block AFTER the
+	// targets block. Go has no in-tree consumer for a movement stream carried
+	// inside a use-item packet, so the bytes are consumed, not bridged.
+	if castFlags&0x02 != 0 {
+		if _, err = r.ReadF32(); err != nil { // elevation
+			return true
+		}
+		if _, err = r.ReadF32(); err != nil { // speed
+			return true
+		}
+		hasMovementData, merr := r.ReadU8()
+		if merr != nil {
+			return true
+		}
+		if hasMovementData != 0 {
+			if _, err = r.ReadU32(); err != nil { // movement opcode
+				return true
+			}
+			if _, err = r.Read(r.Remaining()); err != nil { // movement payload
+				return true
+			}
+		}
+	}
 
 	// Validate item existence in specified bag and slot
 	bagKey, ok := s.inventoryBagKey(ctx, bagIndex)
@@ -3236,7 +3263,8 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	}
 	rawItemGUID := uint64(dbItemGUID)
 	fullItemGUID := rawItemGUID | (uint64(0x4000) << 48)
-	if itemGUID != 0 && itemGUID != rawItemGUID && itemGUID != fullItemGUID {
+	// SpellHandler.cpp:98-103 — the wire GUID must match exactly, zero included.
+	if itemGUID != rawItemGUID && itemGUID != fullItemGUID {
 		s.sendEquipError(equipErrItemNotFound, itemGUID)
 		return true
 	}
@@ -3308,6 +3336,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		if (bonding == 1 || bonding == 3 || bonding == 4) && itemInstanceFlags&int64(itemInstanceFlagSoulbound) == 0 {
 			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags | ? WHERE guid = ?", uint32(itemInstanceFlagSoulbound), rawItemGUID)
 		}
+	}
+	// SpellHandler.cpp:107-112 — a missing template row is ITEM_NOT_FOUND,
+	// not a silent fall-through to the hooks/cast arms.
+	if !tplOK {
+		s.sendEquipError(equipErrItemNotFound, fullItemGUID)
+		return true
 	}
 
 	// Spell::CheckCast cooldown block (Spell.cpp:5187-5221) lives on the
@@ -4239,8 +4273,14 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 		wrapped = giftCount > 0
 	}
 	var tplFlags, lockID int64
+	tplFound := false
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Flags, LockID FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&tplFlags, &lockID)
+		tplFound = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Flags, LockID FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&tplFlags, &lockID) == nil
+	}
+	// SpellHandler.cpp:212-217 — a missing template row is ITEM_NOT_FOUND.
+	if !tplFound {
+		s.sendEquipError(equipErrItemNotFound, uint64(itemGUID))
+		return true
 	}
 	if tplFlags&0x4 == 0 && !wrapped {
 		s.sendEquipError(equipErrCantDoRightNow, uint64(itemGUID))
@@ -4259,8 +4299,14 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 		var giftEntry, giftFlags uint32
 		err := cdb.QueryRowContext(ctx, "SELECT entry, flags FROM character_gifts WHERE item_guid = ?", itemGUID).Scan(&giftEntry, &giftFlags)
 		if err == nil && giftEntry > 0 {
-			// Unwrapping: restore original entry, flags, and delete gift record
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ? WHERE guid = ?", giftEntry, giftFlags, itemGUID)
+			// Unwrapping: restore original entry, flags, and delete gift record.
+			// SpellHandler.cpp:286-289 — the entry is set first, so durability
+			// is reset to the RESTORED entry's MaxDurability.
+			var giftMaxDur uint32
+			if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ? LIMIT 1", giftEntry).Scan(&giftMaxDur)
+			}
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ?, durability = ? WHERE guid = ?", giftEntry, giftFlags, giftMaxDur, itemGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_gifts WHERE item_guid = ?", itemGUID)
 			_ = s.sendInventoryItems(ctx)
 			return true

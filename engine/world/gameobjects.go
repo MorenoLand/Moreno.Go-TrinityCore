@@ -469,8 +469,9 @@ func goCannotBeUsedUnderImmunity(goType uint8, tpl [24]uint32) bool {
 }
 
 // goIsUsableMounted mirrors GameObjectTemplate::IsUsableMounted
-// (GameObjectData.h:436-449): mailbox is always usable mounted, barber chairs
-// never, the rest read their type's allowMounted template field.
+// (GameObjectData.h:436-448): mailbox is always usable mounted, barber chairs
+// never, questgiver/text/goober/spellcaster read their type's allowMounted
+// template field; everything else defaults to not usable mounted.
 func goIsUsableMounted(goType uint8, tpl [24]uint32) bool {
 	switch goType {
 	case GameObjectTypeMailbox:
@@ -486,7 +487,7 @@ func goIsUsableMounted(goType uint8, tpl [24]uint32) bool {
 	case GameObjectTypeSpellCaster: // spellcaster.allowMounted (data3)
 		return tpl[3] != 0
 	}
-	return true
+	return false
 }
 
 // handleGameObjectUse processes CMSG_GAMEOBJ_USE (0x0B1).
@@ -553,11 +554,19 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 	}
 	// The eventId script-start arm has no Go event-script model (documented).
 	// The quest gate: with a questId and no incomplete quest, C++ breaks
-	// out of the switch — no kill credit, no state change, no spell.
+	// out of the switch — no kill credit, no state change, no spell. The
+	// gate only applies when the quest template exists (GameObject.cpp:1658:
+	// sObjectMgr->GetQuestTemplate(questId)); a bogus questId never blocks.
 	if tpl.questID != 0 {
-		status, _ := s.characterQuestStatus(ctx, tpl.questID)
-		if status != questStatusIncomplete {
-			return
+		questExists := false
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			questExists = characterQuestTemplateExists(ctx, s.server.WorldStore.DB, tpl.questID)
+		}
+		if questExists {
+			status, _ := s.characterQuestStatus(ctx, tpl.questID)
+			if status != questStatusIncomplete {
+				return
+			}
 		}
 	}
 	// Player::KillCreditGO: group members at group reward distance share
@@ -662,46 +671,6 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	// (HandleGameobjectReportUse, SpellHandler.cpp:318), not by CMSG_GAMEOBJ_USE.
 	lowGUID := uint32(guid & 0x00FFFFFF)
 
-	// Delegate Warsong Gulch flags to WSG state machine
-	if s.server != nil && isWSGFlag(entry) {
-		return s.server.handleWSGFlagUse(ctx, s, guid, entry)
-	}
-
-	// Delegate Arathi Basin banners to AB state machine
-	if s.server != nil && isABBanner(entry) {
-		return s.server.handleABBannerUse(ctx, s, guid, entry)
-	}
-
-	// Delegate Eye of the Storm flags and banners to EotS state machine
-	if s.server != nil && isEOTSGameObject(entry) {
-		return s.server.handleEOTSGameObjectUse(ctx, s, guid, entry)
-	}
-
-	// Delegate Alterac Valley banners to AV state machine
-	if s.server != nil && isAVGameObject(entry) {
-		return s.server.handleAVGameObjectUse(ctx, s, guid, entry)
-	}
-
-	// Delegate Strand of the Ancients objects to SA state machine
-	if s.server != nil && isSAGameObject(entry) {
-		return s.server.handleSAGameObjectUse(ctx, s, guid, entry)
-	}
-
-	// Delegate Isle of Conquest objects to IC state machine
-	if s.server != nil && isICGameObject(entry) {
-		return s.server.handleICGameObjectUse(ctx, s, guid, entry)
-	}
-
-	// Delegate Arena objects to Arena state machine
-	if s.server != nil && isArenaGameObject(entry) {
-		return s.server.handleArenaGameObjectUse(ctx, s, guid, entry)
-	}
-
-	// Delegate Wintergrasp objects to WG state machine
-	if s.server != nil && isWGGameObject(entry) {
-		return s.server.handleWGGameObjectUse(ctx, s, guid, entry)
-	}
-
 	if s.server == nil {
 		return true
 	}
@@ -769,6 +738,52 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 
 	if !s.admitGameObjectUse(entry, goState) {
 		return true
+	}
+
+	// Battleground/objective delegates sit AFTER the interact gates
+	// (GetGameObjectIfCanInteractWith, Player.cpp:2363-2386) and the
+	// GameObject::Use head arms (immunity, dismount, ClearMenus, gossip hooks,
+	// template cooldown — GameObject.cpp:1491-1518), which all run before the
+	// FLAGSTAND/FLAGDROP arms (GameObject.cpp:1958-2041). Forged opcodes can
+	// no longer click a flag from any distance/phase.
+	// Delegate Warsong Gulch flags to WSG state machine
+	if s.server != nil && isWSGFlag(entry) {
+		return s.server.handleWSGFlagUse(ctx, s, guid, entry)
+	}
+
+	// Delegate Arathi Basin banners to AB state machine
+	if s.server != nil && isABBanner(entry) {
+		return s.server.handleABBannerUse(ctx, s, guid, entry)
+	}
+
+	// Delegate Eye of the Storm flags and banners to EotS state machine
+	if s.server != nil && isEOTSGameObject(entry) {
+		return s.server.handleEOTSGameObjectUse(ctx, s, guid, entry)
+	}
+
+	// Delegate Alterac Valley banners to AV state machine
+	if s.server != nil && isAVGameObject(entry) {
+		return s.server.handleAVGameObjectUse(ctx, s, guid, entry)
+	}
+
+	// Delegate Strand of the Ancients objects to SA state machine
+	if s.server != nil && isSAGameObject(entry) {
+		return s.server.handleSAGameObjectUse(ctx, s, guid, entry)
+	}
+
+	// Delegate Isle of Conquest objects to IC state machine
+	if s.server != nil && isICGameObject(entry) {
+		return s.server.handleICGameObjectUse(ctx, s, guid, entry)
+	}
+
+	// Delegate Arena objects to Arena state machine
+	if s.server != nil && isArenaGameObject(entry) {
+		return s.server.handleArenaGameObjectUse(ctx, s, guid, entry)
+	}
+
+	// Delegate Wintergrasp objects to WG state machine
+	if s.server != nil && isWGGameObject(entry) {
+		return s.server.handleWGGameObjectUse(ctx, s, guid, entry)
 	}
 
 	switch goState.Type {
@@ -991,10 +1006,17 @@ func (s *session) useSummoningRitual(ctx context.Context, goState *dynamicGameOb
 	if goState.OwnerGUID != 0 {
 		ownerSess = srv.playerSessionForGUID(goState.OwnerGUID)
 	}
+	// C++ re-resolves the stored owner GUID first (GameObject.cpp:1816-1825):
+	// a set-but-offline owner does not count, so the current user takes
+	// ownership.
+	var storedOwnerSess *session
+	if rid := goState.RitualOwnerGUID; rid != 0 {
+		storedOwnerSess = srv.playerSessionForGUID(rid)
+	}
 	srv.objectsMu.Lock()
 	// Ritual owner is set for GOs without an owner (not summoned); the first
-	// user becomes the owner (GameObject.cpp:1816-1820).
-	if goState.RitualOwnerGUID == 0 && ownerSess == nil {
+	// user becomes the owner (GameObject.cpp:1816-1825).
+	if ownerSess == nil && storedOwnerSess == nil {
 		goState.RitualOwnerGUID = s.playerGUID
 	}
 	ritualOwnerGUID := goState.RitualOwnerGUID

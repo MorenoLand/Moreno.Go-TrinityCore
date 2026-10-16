@@ -1862,15 +1862,34 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	if clientCastFlags&0x02 != 0 {
 		// SpellCastTargets m_elevation / m_speed (HandleClientCastFlags,
-		// SpellHandler.cpp:30): projectile data consumed by
-		// SelectImplicitTrajTargets (Spell.cpp:1626). The optional
-		// embedded movement block C++ reads next has no Go consumer —
-		// movement arrives via the standalone movement opcodes.
+		// SpellHandler.cpp:50-72): projectile data consumed by
+		// SelectImplicitTrajTargets (Spell.cpp:1626).
 		if target.TrajElevation, err = reader.ReadF32(); err != nil {
 			return true
 		}
 		if target.TrajSpeed, err = reader.ReadF32(); err != nil {
 			return true
+		}
+		// The optional embedded movement block: a hasMovementData byte,
+		// then a uint32 movement opcode whose payload is the rest of this
+		// packet. C++ routes it through HandleMovementOpcodes so the
+		// position update is not lost.
+		var hasMovementData uint8
+		if hasMovementData, err = reader.ReadU8(); err != nil {
+			return true
+		}
+		if hasMovementData != 0 {
+			var moveOpcode uint32
+			if moveOpcode, err = reader.ReadU32(); err != nil {
+				return true
+			}
+			var movePayload []byte
+			if movePayload, err = reader.Read(reader.Remaining()); err != nil {
+				return true
+			}
+			if !s.handleMovement(ctx, moveOpcode, movePayload) {
+				return false
+			}
 		}
 	}
 	spell, found, err := s.server.Data.Spell(spellID)
@@ -1940,6 +1959,21 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 		lockAllowed = s.spellForLockMatchesCast(ctx, spellID, goGUID)
 	}
+	// HandleCastSpellOpcode (SpellHandler.cpp:434-444): positive spells
+	// auto-select the aura rank for the wire unit target's level BEFORE the
+	// Spell object is built (SpellInfo::GetAuraRankForLevel,
+	// SpellInfo.cpp:3283-3319), so cast time, power cost, cooldown, CheckCast
+	// and the completion path all run on the downranked row. The unlearned
+	// and trigger arms above intentionally keep the original id, matching
+	// C++ arm order.
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
+			if ds, ok := s.server.spellAuraRankForLevel(spellID, tgt.Level); ok && ds.ID != spellID {
+				spellID = ds.ID
+				spell = ds
+			}
+		}
+	}
 	// The clientside-periodic-trigger arm (SpellHandler.cpp:403-407): a
 	// SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (48) aura whose effect
 	// triggers this spell allows the cast as fully triggered
@@ -1948,6 +1982,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// seeds its implicit target selection, matching C++ keeping the client
 	// targets while skipping the CheckCast gauntlet.
 	if !learned && !gmMode && !vehicleSpell && !lockAllowed && s.playerHasPeriodicTriggerAura(spellID) {
+		// Spell::prepare (Spell.cpp:3074-3080): the DisableMgr gate has no
+		// trigger exemption — it fires for the TRIGGERED_FULL_MASK arm too.
+		if s.spellDisabledForCaster(ctx, spellID) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellUnavailable), true)
+			return true
+		}
 		var wireTarget uint64
 		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
 			wireTarget = target.UnitGUID
