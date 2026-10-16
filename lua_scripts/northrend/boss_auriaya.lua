@@ -60,8 +60,9 @@
 -- non-triggered, 6s init (:293), re-arm {10s,12s}. The
 -- JustEngagedWith SetWalk(false) / Reset SetWalk(true) legs have
 -- no movement bridge; the Reset one-shot self-buff
--- SPELL_STRENGHT_OF_THE_PACK 64369 (triggered, :287) is not
--- timer-driven; EVENT_SAVAGE_POUNCE (:322-330) needs the
+-- SPELL_STRENGHT_OF_THE_PACK 64369 (triggered, :287) is ported
+-- below on event 23 (reset arm, not a timer); EVENT_SAVAGE_POUNCE
+-- (:322-330) needs the
 -- CatsTargetSelector random-target leg — unbridged; JustDied (:298)
 -- -> instance GetCreature(BOSS_AURIAYA) -> DoAction
 -- (ACTION_CRAZY_CAT_LADY 0) — no instance / DoAction bridges.
@@ -88,8 +89,11 @@
 -- (PHASE_NONE/PHASE_COMBAT :111-112) and its timer legs
 -- (EVENT_RUSH :389-393, EVENT_START_COMBAT :384, respawn chain
 -- :395-415) ride CatsTargetSelector random-target selection; the
--- DamageTaken (:427-446) feign-death machinery has no health /
--- aura bridges; JustDied (:448-453) DoAction(ACTION_DEFENDER_DIED)
+-- DamageTaken (:427-446) feign-death machinery — health (GetHealth/
+-- GetMaxHealth) and aura (creature:HasAura) bridges exist, but the
+-- unit stays blocked on unbridged SetReactState/SetAuraStack/flag/
+-- AttackStop/threat/gravity legs and no creature entry — NO
+-- registration; JustDied (:448-453) DoAction(ACTION_DEFENDER_DIED)
 -- has no DoAction bridge; no creature entry in C++ evidence —
 -- NO registration.
 -- npc_swarming_guardian — the 1s scheduler self-cast
@@ -127,6 +131,7 @@ local SPELL_BERSERK            = 47008
 
 local SOUND_AURIAYA_DEATH = 15476
 local SPELL_RIP_FLESH          = 64375
+local SPELL_STRENGHT_OF_THE_PACK = 64369
 
 local timers = {}
 
@@ -267,6 +272,15 @@ local function sentryEnterCombat(event, creature, target)
     end)
 end
 
+-- npc_sanctum_sentry::Reset (:284-288): _events.Reset() (the
+-- cancelCombatTimers arm) + DoCastSelf(SPELL_STRENGHT_OF_THE_PACK
+-- 64369, triggered, 3rd arg true = C++-exact) — the
+-- me->SetWalk(true) leg has no movement bridge (separable).
+local function sentryReset(event, creature)
+    cancelCombatTimers(event, creature)
+    creature:CastSpell(creature, SPELL_STRENGHT_OF_THE_PACK, true)
+end
+
 -- C++ boss_auriayaAI::JustDied (:206-212): DoPlaySoundToSet(me,
 -- AURIAYA_DEATH_SOUNDID 15476), ungated; the _JustDied() /
 -- SendEncounterUnit disengage / HandleCats(false) legs have no
@@ -284,4 +298,4 @@ RegisterCreatureEvent(ENTRY_AURIAYA, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 1, sentryEnterCombat)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 4, cancelCombatTimers)
-RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 23, sentryReset)

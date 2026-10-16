@@ -192,6 +192,34 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: health})
 		return nil, nil
 	}
+	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
+	// map spawn mode fixed when the instance was created. The Go
+	// instance table stores exactly that difficulty per instance id
+	// (worldport_instance.go writes it at creation), so this reads the
+	// row instead of approximating from a session. Non-instance maps
+	// (InstanceID 0) and missing rows default to false, like C++ normal
+	// mode. Formula is Map::IsHeroic (Map.cpp:4249-4252): raids heroic
+	// at difficulty >= 2 (10-man heroic), dungeons at >= 1.
+	methods["IsHeroic"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if motion.InstanceID == 0 {
+			return []any{false}, nil
+		}
+		var difficulty int64
+		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+			_ = s.CharactersStore.DB.QueryRowContext(ctx,
+				"SELECT difficulty FROM instance WHERE id = ?", motion.InstanceID).Scan(&difficulty)
+		}
+		isRaid := false
+		if s.Data != nil {
+			if entry, found, err := s.Data.Map(motion.Map); err == nil && found {
+				isRaid = entry.IsRaid()
+			}
+		}
+		if isRaid {
+			return []any{difficulty >= 2}, nil
+		}
+		return []any{difficulty >= 1}, nil
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{
 		"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry,
 		"Map": state.Map, "MapId": state.Map,

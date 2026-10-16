@@ -167,8 +167,10 @@
 -- Heroic-gated engage casts: keleseth :628-629
 -- DoCastSelf(SPELL_SHADOW_PRISON 72998, true) +
 -- DoCastSelf(SPELL_SHADOW_PRISON_DUMMY 73001); taldaram :693 and
--- valanar :767 DoCastSelf(SPELL_SHADOW_PRISON 72998, true) — no
--- IsHeroic bridge (the rotface heroic-gated precedent).
+-- valanar :767 DoCastSelf(SPELL_SHADOW_PRISON 72998, true) —
+-- creature:IsHeroic() bridges ScriptedAI::_isHeroic (per-instance
+-- difficulty from the instance table row; the rotface heroic-gated
+-- precedent now has a bridge).
 -- The 6 spell scripts join the no-SpellScript-bridge queue, the 5 aura
 -- scripts the no-AuraScript-bridge queue, and
 -- at_blood_prince_council_start_intro the no-AreaTrigger bridge queue
@@ -210,6 +212,8 @@ local SPELL_GLITTERING_SPARKS = 71806
 local SPELL_CONJURE_FLAME = 71718
 local SPELL_KINETIC_BOMB_TARGET = 72053
 local SPELL_SHOCK_VORTEX = 72037
+local SPELL_SHADOW_PRISON = 72998
+local SPELL_SHADOW_PRISON_DUMMY = 73001
 
 -- entry-switched kill texts (C++ BloodPrincesBossAI::KilledUnit :505):
 -- keleseth SAY_KELESETH_KILL = 3, taldaram SAY_TALDARAM_KILL = 4,
@@ -339,12 +343,16 @@ end
 
 -- C++ boss_prince_keleseth_icc::ScheduleEvents :622-624 —
 -- EVENT_BERSERK 600000ms, EVENT_SHADOW_RESONANCE {10000,15000}ms,
--- EVENT_SHADOW_LANCE 2000ms (the IsHeroic shadow-prison legs :628-629
--- have no IsHeroic bridge). JustEngagedWith (:455) otherwise has
--- no bridgeable leg.
+-- EVENT_SHADOW_LANCE 2000ms + the IsHeroic-gated shadow-prison
+-- legs :628-629 (creature:IsHeroic() now bridged).
+-- JustEngagedWith (:455) otherwise has no bridgeable leg.
 local function kelesethEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if creature:IsHeroic() then
+        creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
+        creature:CastSpell(creature, SPELL_SHADOW_PRISON_DUMMY)
+    end
     schedule(guid, "berserk", 600000, function() onKelesethBerserk(creature) end)
     schedule(guid, "resonance", {10000, 15000}, function() onKelesethResonance(creature, guid) end)
     schedule(guid, "lance", 2000, function() onKelesethLance(creature, guid) end)
@@ -352,11 +360,14 @@ end
 
 -- C++ boss_prince_taldaram_icc::ScheduleEvents :687 —
 -- EVENT_BERSERK 600000ms, EVENT_GLITTERING_SPARKS {12000,15000}ms,
--- EVENT_CONJURE_FLAME 20000ms (the IsHeroic shadow-prison leg :693 has
--- no IsHeroic bridge).
+-- EVENT_CONJURE_FLAME 20000ms + the IsHeroic-gated shadow-prison
+-- leg :693 (creature:IsHeroic() now bridged).
 local function taldaramEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if creature:IsHeroic() then
+        creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
+    end
     schedule(guid, "berserk", 600000, function() onTaldaramBerserk(creature) end)
     schedule(guid, "sparks", {12000, 15000}, function() onTaldaramSparks(creature, guid) end)
     schedule(guid, "conjure", 20000, function() onTaldaramConjure(creature, guid) end)
@@ -394,11 +405,14 @@ end
 
 -- C++ boss_prince_valanar_icc::ScheduleEvents :761-765 —
 -- EVENT_BERSERK 600000ms, EVENT_KINETIC_BOMB {18000,24000}ms,
--- EVENT_SHOCK_VORTEX {15000,20000}ms (the IsHeroic shadow-prison leg
--- :767 has no IsHeroic bridge).
+-- EVENT_SHOCK_VORTEX {15000,20000}ms + the IsHeroic-gated
+-- shadow-prison leg :767 (creature:IsHeroic() now bridged).
 local function valanarEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if creature:IsHeroic() then
+        creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
+    end
     schedule(guid, "berserk", 600000, function() onValanarBerserk(creature) end)
     schedule(guid, "kineticbomb", {18000, 24000}, function() onValanarKineticBomb(creature, guid) end)
     schedule(guid, "shockvortex", {15000, 20000}, function() onValanarShockVortex(creature, guid) end)

@@ -72,8 +72,11 @@
 -- unit-state bridge absent.
 -- DamageTaken NPC safeguard (non-player damage, HealthBelowPct(70):
 -- HealthBelowPctDamaged(5) -> damage=0 else damage *= (GetHealthPct()-5)/
--- 65) — no DamageTaken hook (npc_unkor_the_ruthless precedent) + no
--- health-pct bridge (doomwalker precedent).
+-- 65) — Eluna event 9 (DamageTaken) IS bridged and GetHealth/
+-- GetMaxHealth exist, so HealthBelowPct(70)/HealthBelowPctDamaged(5)
+-- are now computable; the unit stays blocked on its unregistered
+-- owner + unbridged DoAction/MovePoint engage model, not on the
+-- health/DamageTaken surface.
 -- JustSummoned summons.Summon leg — summon STRAND absent.
 -- npc_anub_ar_crusher — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (28922 from
 -- the file's Creatures enum — NPC_CRUSHER — kalecgos pass): zero
