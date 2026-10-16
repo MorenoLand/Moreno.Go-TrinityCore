@@ -67,6 +67,11 @@ const (
 	charCreateCharacterRaceOnly    = 67
 	charNameFailure                = 88
 	charNameNoName                 = 89
+	charNameTooShort               = 90 // CHAR_NAME_TOO_SHORT (SharedDefines.h:3457)
+	charNameTooLong                = 91 // CHAR_NAME_TOO_LONG (SharedDefines.h:3458)
+	charNameInvalidCharacter       = 92 // CHAR_NAME_INVALID_CHARACTER (SharedDefines.h:3459)
+	charNameMixedLanguages         = 93 // CHAR_NAME_MIXED_LANGUAGES (SharedDefines.h:3460)
+	charNameThreeConsecutive       = 98 // CHAR_NAME_THREE_CONSECUTIVE (SharedDefines.h:3465)
 	charNameReserved               = 95
 	charDeleteSuccess              = 71
 	charDeleteFailed               = 72
@@ -2055,6 +2060,36 @@ func sendCharacterResult(s *session, opcode uint16, result uint8) bool {
 	return s.write(opcode, []byte{result}, true) == nil
 }
 
+// checkPlayerName mirrors ObjectMgr::CheckPlayerName
+// (Globals/ObjectMgr.cpp) in check order: too long, too short, mixed
+// languages, three consecutive — the codes C++ forwards verbatim to
+// SendCharCustomize (CharacterHandler.cpp:1433-1437). The isValidString
+// language-class check has no bridge; Go rejects non-letter runes, which
+// C++ also rejects (its extended-latin/cyrillic/east-asian arms all fail on
+// non-letters with numericOrSpace=false), so the code mapping is exact on
+// the rejected set. Returns 0 on success.
+func checkPlayerName(name string) uint8 {
+	runes := []rune(name)
+	if len(runes) > 12 { // MAX_PLAYER_NAME (ObjectMgr.h:904)
+		return charNameTooLong
+	}
+	if len(runes) < 2 { // CONFIG_MIN_PLAYER_NAME default 2 (World.cpp:804)
+		return charNameTooShort
+	}
+	for _, r := range runes {
+		if !unicode.IsLetter(r) {
+			return charNameMixedLanguages
+		}
+	}
+	lower := []rune(strings.ToLower(name)) // C++ wstrToLower before the check
+	for i := 2; i < len(lower); i++ {
+		if lower[i] == lower[i-1] && lower[i] == lower[i-2] {
+			return charNameThreeConsecutive
+		}
+	}
+	return 0
+}
+
 func validCharacterName(name string) bool {
 	runes := []rune(name)
 	if len(runes) < 2 || len(runes) > 12 {
@@ -2648,8 +2683,13 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 		sendCustomize(charNameNoName, false)
 		return true
 	}
-	if !validCharacterName(name) {
-		sendCustomize(charNameFailure, false)
+	// ObjectMgr::CheckPlayerName (Globals/ObjectMgr.cpp) returns distinct
+	// codes forwarded verbatim (CharacterHandler.cpp:1433-1437); the
+	// normalizePlayerName gate above already converted invalid-UTF-8 to
+	// CHAR_NAME_NO_NAME, matching C++ (ObjectMgr.cpp: normalizePlayerName
+	// fails -> NO_NAME before CheckPlayerName runs).
+	if code := checkPlayerName(name); code != 0 {
+		sendCustomize(code, false)
 		return true
 	}
 	// ObjectMgr::IsReservedName (ObjectMgr.cpp:8515-8524): lowercased exact

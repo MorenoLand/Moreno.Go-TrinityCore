@@ -30890,16 +30890,22 @@ func (s *session) handleUpdateMissileTrajectory(ctx context.Context, payload []b
 	// in-flight generic spell's src/dst, elevation, and speed. Go tracks only the
 	// player's own cast (no pet/charmed-unit cast model); anything else is ignored.
 	s.castMu.Lock()
+	// MiscHandler.cpp:1556-1561: the whole tail of the handler (target
+	// mutation AND the moveStop movement arm) is gated on the in-flight
+	// generic spell resolving to the same spell id with both src and dst
+	// set; an unmatched packet is rfinish'd out before moveStop.
+	castMatched := false
 	if cast := s.activeCast; cast != nil && !cast.Cancelled && guid == s.playerGUID && cast.SpellID == spellID &&
 		cast.Target.Flags&protocol.SpellTargetFlagSourceLocation != 0 && cast.Target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
 		cast.Target.Source.X, cast.Target.Source.Y, cast.Target.Source.Z = fireX, fireY, fireZ
 		cast.Target.Destination.X, cast.Target.Destination.Y, cast.Target.Destination.Z = impactX, impactY, impactZ
 		cast.Target.TrajElevation = elevation
 		cast.Target.TrajSpeed = speed
+		castMatched = true
 	}
 	s.castMu.Unlock()
 
-	if moveStop != 0 && r.Remaining() >= 4 {
+	if moveStop != 0 && castMatched && r.Remaining() >= 4 {
 		opcode, _ := r.ReadU32()
 		s.handleMovement(ctx, opcode, payload[r.Position():])
 	}

@@ -3397,18 +3397,18 @@ const maxPetTalentRank = 5
 // family PetTalentMask / tier-point / prereq gates have no Go model yet
 // (no usedTalentCount, no CreatureFamily entry) and stay documented
 // deviations.
-func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID uint64, talentID uint32, talentRank uint32) {
+func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID uint64, talentID uint32, talentRank uint32) bool {
 	if petNumber == 0 || talentRank >= maxPetTalentRank || s == nil || s.server == nil ||
 		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
-		return
+		return false
 	}
 	tEntry, ok, err := s.server.Data.Talent(talentID)
 	if err != nil || !ok {
-		return
+		return false
 	}
 	motion := s.controlledPetMotion(petGUID)
 	if motion == nil {
-		return
+		return false
 	}
 	known := [maxPetTalentRank]bool{}
 	for i := 0; i < maxPetTalentRank; i++ {
@@ -3430,19 +3430,22 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 		}
 	}
 	if int(talentRank) <= curMax {
-		return
+		return false
 	}
 	spellID := tEntry.SpellRank[talentRank]
 	if spellID == 0 {
 		s.debug("pet learn talent missing spell", "account", s.accountName, "talent", talentID, "rank", talentRank)
-		return
+		return false
 	}
 	for _, sp := range motion.Spells {
 		if sp == spellID {
-			return
+			return false
 		}
 	}
 	cdb := s.server.CharactersStore.DB
+	// Pet::addSpell's talent arm (Pet.cpp) displaces the other known ranks of
+	// the talent via removeSpell — silent, no SMSG_PET_UNLEARNED_SPELL (that
+	// packet only goes out from Pet::unlearnSpell, never called here).
 	var unlearned []uint32
 	for i := 0; i < int(talentRank); i++ {
 		if !known[i] {
@@ -3451,9 +3454,6 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 		oldSpell := tEntry.SpellRank[i]
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petNumber, oldSpell)
 		unlearned = append(unlearned, oldSpell)
-		unlearnBuf := protocol.NewBuffer(4)
-		unlearnBuf.WriteU32(oldSpell)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_UNLEARNED_SPELL), unlearnBuf.Bytes(), true)
 	}
 	_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petNumber, spellID)
 	s.server.motionMu.Lock()
@@ -3470,10 +3470,11 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 	learnedBuf := protocol.NewBuffer(4)
 	learnedBuf.WriteU32(spellID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_LEARNED_SPELL), learnedBuf.Bytes(), true)
+	return true
 }
 
 func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool {
-	if len(payload) < 16 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
 		return true
 	}
 	r := protocol.NewReader(payload)
@@ -3481,11 +3482,12 @@ func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool
 	talentID, _ := r.ReadU32()
 	rank, _ := r.ReadU32()
 	petNumber := s.petNumberForGUID(petGUID)
-	s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank)
+	learned := s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank)
 	// PetHandler.cpp:852-861: SendTalentsInfoData(true) runs even when the
-	// learn was a silent no-op. PetSpellInitialize only fires for a real pet.
+	// learn was a silent no-op. PetSpellInitialize (Pet::learnSpell) fires
+	// only when the spell was actually added.
 	s.sendTalentsInfo(true)
-	if petNumber != 0 {
+	if learned {
 		s.sendPetSpells(ctx, petNumber, 0, 1)
 	}
 	s.debug("pet learn talent", "account", s.accountName, "pet", petNumber, "talent", talentID, "rank", rank)
@@ -4133,13 +4135,18 @@ func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []by
 	// PetHandler.cpp:864-884: the client sends at most 24 talents, rounded up
 	// to a 30-entry cap.
 	const maxPreviewPetTalents = 30
+	anyLearned := false
 	for i := uint32(0); i < talentCount && i < maxPreviewPetTalents && r.Remaining() >= 8; i++ {
 		talentID, _ := r.ReadU32()
 		rank, _ := r.ReadU32()
-		s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank)
+		if s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank) {
+			anyLearned = true
+		}
 	}
 	s.sendTalentsInfo(true)
-	s.sendPetSpells(ctx, petNumber, 0, 1)
+	if anyLearned {
+		s.sendPetSpells(ctx, petNumber, 0, 1)
+	}
 	s.debug("pet preview talents learned", "account", s.accountName, "pet", petGUID, "count", talentCount)
 	return true
 }

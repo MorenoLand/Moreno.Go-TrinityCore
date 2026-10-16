@@ -1001,6 +1001,22 @@ func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []
 	return true
 }
 
+// controlsVehicle reports whether the session's player is the controller of
+// the vehicle they ride: the Go bridge for the GetCharmedGUID() gate
+// (VehicleHandler.cpp:33-38) — charm is granted on boarding a seat carrying
+// the CAN_CONTROL flag (VehicleSeatEntry::CanControl, DBCEnums.h:463).
+func (s *session) controlsVehicle() bool {
+	if s == nil || s.player == nil || s.server == nil || s.player.VehicleGUID == 0 {
+		return false
+	}
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
+	if kit == nil {
+		return false
+	}
+	_, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
+	return seatInfo != nil && seatInfo.CanControl()
+}
+
 // handleDismissControlledVehicle processes CMSG_DISMISS_CONTROLLED_VEHICLE (0x46D).
 // Reference: WorldSession::HandleDismissControlledVehicle (VehicleHandler.cpp:27-50).
 // Packet layout: packed charmed-vehicle GUID, MovementInfo.
@@ -1008,9 +1024,14 @@ func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	// The GetCharmedGUID() gate (VehicleHandler.cpp:33-38) has no bridge —
-	// Go tracks no charmed-unit model; the in-vehicle gate inside exitVehicle
-	// is the Go form.
+	// The GetCharmedGUID() gate (VehicleHandler.cpp:33-38) runs before any
+	// packet read: a packet from a non-charming player is rfinish'd out and
+	// never reaches ExitVehicle. The Go bridge is the control-seat check — a
+	// passenger on a non-control seat (or anyone off a vehicle) is dropped
+	// the same way.
+	if !s.controlsVehicle() {
+		return true
+	}
 	if len(payload) > 0 {
 		b := protocol.NewReader(payload)
 		if _, err := b.ReadPackedGUID(); err == nil {
@@ -1065,7 +1086,7 @@ func playerVehicleEntryAllowed(player, target *session) bool {
 	return distance3D(player.player.X, player.player.Y, player.player.Z, target.player.X, target.player.Y, target.player.Z) <= interactionDistance
 }
 
-// handleRequestVehicleExit processes CMSG_REQUEST_VEHICLE_EXIT (0x46F).
+// handleRequestVehicleExit processes CMSG_REQUEST_VEHICLE_EXIT (0x476).
 // Reference: WorldSession::HandleRequestVehicleExit (VehicleHandler.cpp:190-205).
 func (s *session) handleRequestVehicleExit(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
@@ -1083,7 +1104,7 @@ func (s *session) handleRequestVehicleExit(ctx context.Context, payload []byte) 
 	return true
 }
 
-// handleRequestVehicleNextSeat processes CMSG_REQUEST_VEHICLE_NEXT_SEAT (0x470).
+// handleRequestVehicleNextSeat processes CMSG_REQUEST_VEHICLE_NEXT_SEAT (0x478).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:77).
 func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
@@ -1105,12 +1126,12 @@ func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []by
 			return true
 		}
 	}
-	s.player.VehicleSeat++
-	s.sendPlayerUpdate()
+	// VehicleHandler.cpp:56-60: no vehicle base -> rfinish + return, no
+	// seat mutation and no update sent.
 	return true
 }
 
-// handleRequestVehiclePrevSeat processes CMSG_REQUEST_VEHICLE_PREV_SEAT (0x471).
+// handleRequestVehiclePrevSeat processes CMSG_REQUEST_VEHICLE_PREV_SEAT (0x477).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:74).
 func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
@@ -1132,10 +1153,8 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 			return true
 		}
 	}
-	if s.player.VehicleSeat > 0 {
-		s.player.VehicleSeat--
-		s.sendPlayerUpdate()
-	}
+	// VehicleHandler.cpp:56-60: no vehicle base -> rfinish + return, no
+	// seat mutation and no update sent.
 	return true
 }
 

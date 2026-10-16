@@ -638,6 +638,20 @@ func (s *session) hiddenAchievement(achievementID uint32) bool {
 	return found && entry.Flags&achievementFlagHidden != 0
 }
 
+// knownAchievement mirrors the `!achievement` arm of
+// AchievementMgr::BuildAllDataPacket (AchievementMgr.cpp:1603-1605): earned
+// rows whose DBC entry is gone are skipped, not sent.
+func (s *session) knownAchievement(achievementID uint32) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	_, found := achievementIndex.achieveByID[achievementID]
+	achievementIndex.mu.RUnlock()
+	return found
+}
+
 // realmAchievementCompleted mirrors the CONDITION_REALM_ACHIEVEMENT arm of
 // ConditionMgr::IsFitToRequirements (ConditionMgr.cpp) via
 // AchievementGlobalMgr::IsRealmCompleted and LoadCompletedAchievements
@@ -711,7 +725,10 @@ func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []
 	// (MiscHandler.cpp:1415) reads a PACKED guid (>> guid.ReadAsPacked()).
 	targetGUID, err := r.ReadPackedGUID()
 	if err != nil {
-		return false
+		// ByteBuffer overread in C++ drops the packet with the session
+		// open (WorldSession.cpp:421-432); returning false here closes
+		// the connection via the defer in server.go Handle.
+		return true
 	}
 
 	// ObjectAccessor::GetPlayer + IsWithinDistInMap(INSPECT_DISTANCE) +
@@ -759,7 +776,7 @@ func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []
 	packet.WritePackedGUID(targetGUID)
 	ids := make([]uint32, 0, len(earned))
 	for id := range earned {
-		if s.hiddenAchievement(id) {
+		if !s.knownAchievement(id) || s.hiddenAchievement(id) {
 			continue
 		}
 		ids = append(ids, id)
