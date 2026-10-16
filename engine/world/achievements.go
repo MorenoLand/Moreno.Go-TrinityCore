@@ -1377,6 +1377,13 @@ func (s *session) completeAchievement(achievementID uint32) {
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s)
 		}
+		// AchievementMgr::SendAchievementEarned (AchievementMgr.cpp:684-698):
+		// realm-first achievements broadcast SMSG_SERVER_FIRST_ACHIEVEMENT
+		// globally — the earner's team sees the name as a clickable chat
+		// link (linkType=1), the other team as a plain string (linkType=0).
+		if hasEntry && entry.Flags&(achievementFlagRealmFirstReach|achievementFlagRealmFirstKill) != 0 {
+			s.broadcastRealmFirstAchievement(achievementID)
+		}
 	}
 	s.debug("achievement earned", "account", s.accountName, "guid", s.playerGUID, "achievement", achievementID)
 
@@ -1397,6 +1404,31 @@ func (s *session) completeAchievement(achievementID uint32) {
 	// Reference: AchievementMgr::CompletedAchievement mails the configured
 	// achievement_reward row (AchievementMgr.cpp:1544-1578).
 	s.sendAchievementRewardMail(achievementID)
+}
+
+// broadcastRealmFirstAchievement mirrors the realm-first arm of
+// AchievementMgr::SendAchievementEarned (AchievementMgr.cpp:684-698):
+// SMSG_SERVER_FIRST_ACHIEVEMENT carries the earner's name (C-string), the
+// raw player GUID, the achievement ID, and a link-type flag. It goes to the
+// whole realm: linkType=1 for the earner's team (clickable chat link),
+// linkType=0 for the other team (plain string).
+func (s *session) broadcastRealmFirstAchievement(achievementID uint32) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	team := teamForRace(s.player.Race)
+	for linkTeam := uint32(0); linkTeam < 2; linkTeam++ {
+		packet := protocol.NewBuffer(0)
+		packet.WriteCString(s.player.Name)
+		packet.WriteU64(s.playerGUID)
+		packet.WriteU32(achievementID)
+		if linkTeam == team {
+			packet.WriteU32(1)
+		} else {
+			packet.WriteU32(0)
+		}
+		s.server.broadcastToTeam(uint16(protocol.OpcodeSMSG_SERVER_FIRST_ACHIEVEMENT), packet.Bytes(), linkTeam)
+	}
 }
 
 // achievementCriteriaCount is used by tests to inspect the index size.

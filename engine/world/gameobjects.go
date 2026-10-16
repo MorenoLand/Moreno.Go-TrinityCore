@@ -1134,12 +1134,16 @@ func (s *session) useFlagstandGameObject(ctx context.Context, guid uint64, entry
 // This is the opcode that carries ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT in
 // C++; CMSG_GAMEOBJ_USE (HandleGameObjectUseOpcode) never updates it.
 func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN dispatch never reaches the handler without a player
+	// (WorldSession.cpp:305-330: requeue/skip, conn open), and truncated
+	// reads throw ByteBufferException -> per-packet drop (WorldSession.cpp:425-432)
+	// — conn stays open in both cases, so drop (true), never close (false).
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
-		return false
+		return true
 	}
 	guid, err := readObjectGUID(payload)
 	if err != nil || guid == 0 {
-		return false
+		return true
 	}
 	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2371): a player in
 	// flight cannot interact with gameobjects — the gate fires inside

@@ -2509,15 +2509,10 @@ func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
 	}
 	s.buildPlayerRepop(ctx, false)
 	s.resurrectPlayer(ctx, 1.0)
-	destMap := s.player.HomebindMap
-	destX := s.player.HomebindX
-	destY := s.player.HomebindY
-	destZ := s.player.HomebindZ
-	if destMap == 0 && destX == 0 && destY == 0 && destZ == 0 {
-		destMap = s.player.Map
-		destX, destY, destZ = s.player.X, s.player.Y, s.player.Z
-	}
-	s.teleportTo(destMap, destX, destY, destZ, s.player.Orientation)
+	// MiscHandler.cpp:1519: TeleportTo(m_homebind...) runs unconditionally —
+	// no stay-in-place fallback when the homebind is zero (the old
+	// all-zero guard was an invented arm with no C++ counterpart).
+	s.teleportTo(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.player.Orientation)
 	return true
 }
 

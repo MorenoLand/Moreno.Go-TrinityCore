@@ -64,6 +64,25 @@ func (s *Server) broadcastMessageChatAll(msg string) {
 	}
 }
 
+// broadcastToTeam mirrors sWorld->SendGlobalMessage(&data, nullptr, team): a
+// packet to every in-game session of the given team (0 = Alliance, 1 = Horde).
+func (s *Server) broadcastToTeam(opcode uint16, payload []byte, team uint32) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess != nil && sess.worldReady.Load() && sess.player != nil && teamForRace(sess.player.Race) == team {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		_ = target.write(opcode, payload, true)
+	}
+}
+
 // broadcastMessageChatGM mirrors sWorld->SendGMText: a CHAT_MSG_SYSTEM line
 // to sessions holding RBAC_PERM_RECEIVE_GLOBAL_GM_TEXTMESSAGE (44), matching
 // the sendGlobalGMMessage filter.

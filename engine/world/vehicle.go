@@ -950,12 +950,9 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 		}
 	}
 
-	if next {
-		s.player.VehicleSeat++
-	} else if s.player.VehicleSeat > 0 {
-		s.player.VehicleSeat--
-	}
-	s.sendPlayerUpdate()
+	// No vehicle kit (VehicleHandler.cpp:56-60): C++ silently drops when the
+	// vehicle base is unavailable — the old VehicleSeat++/-- fallback was an
+	// invented state mutation with no C++ counterpart.
 	return true
 }
 
