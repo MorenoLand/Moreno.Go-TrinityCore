@@ -294,7 +294,9 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	victim, err := reader.ReadU64()
+	// CombatPackets.cpp:21-24: CMSG_ATTACK_SWING carries the victim as a
+	// packed ObjectGuid (mask byte + non-zero bytes), not a full u64.
+	victim, err := reader.ReadPackedGUID()
 	if err != nil {
 		s.debug("attack rejected", "account", s.accountName, "error", err)
 		return true
@@ -307,6 +309,13 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		// goes to the session only, not the surrounding set.
 		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(s.playerGUID, 0, false), true)
 		return true
+	}
+	// WorldObject::IsValidAttackTarget (Object.cpp:2936-2938): attacking
+	// yourself is never valid; the handler answers with SMSG_ATTACK_STOP
+	// (HandleAttackSwingOpcode, CombatHandler.cpp:40-43).
+	if victim == s.playerGUID {
+		s.attackTarget = 0
+		return s.sendAttackStop(victim, false) == nil
 	}
 	// WorldObject::IsValidAttackTarget GM/invisibility legs (Object.cpp:2945-2947)
 	// via HandleAttackSwingOpcode (CombatHandler.cpp): a GM-mode or GM-invisible
@@ -399,13 +408,11 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if s.attackTarget != 0 {
-		// Unit::Attack (Unit.cpp:5707): switching target interrupts
+		// Unit::Attack (Unit.cpp:5701-5708): switching target interrupts
 		// CURRENT_MELEE_SPELL — the queued next-swing spell never lands on
-		// the new target.
+		// the new target — but sends no SMSG_ATTACK_STOP for the old
+		// target; the switch is announced by the SMSG_ATTACK_START below.
 		s.cancelNextSwingSpell()
-		if err := s.sendAttackStop(s.attackTarget, false); err != nil {
-			return false
-		}
 	}
 	s.attackTarget = victim
 	s.lastCombatTime = time.Now()
@@ -2312,9 +2319,10 @@ func (s *session) sendAttackStop(victim uint64, nowDead bool) error {
 }
 
 func buildAttackStart(attacker, victim uint64) []byte {
+	// CombatPackets.cpp:26-32: AttackStart writes both guids packed.
 	packet := protocol.NewBuffer(16)
-	packet.WriteU64(attacker)
-	packet.WriteU64(victim)
+	packet.WritePackedGUID(attacker)
+	packet.WritePackedGUID(victim)
 	return packet.Bytes()
 }
 
