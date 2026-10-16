@@ -559,6 +559,9 @@ func (s *session) handleGMSurveySubmit(ctx context.Context, payload []byte) bool
 // handleGMReportLag processes CMSG_GM_REPORT_LAG (0x502).
 // Reference: WorldSession::HandleReportLag (TicketHandler.cpp:248).
 func (s *session) handleGMReportLag(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if len(payload) < 20 {
 		return true
 	}

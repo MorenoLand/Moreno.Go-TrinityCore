@@ -869,7 +869,7 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 	}
 	mailID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -918,11 +918,11 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	}
 	mailID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	attachID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -1015,7 +1015,7 @@ func (s *session) handleMailDelete(ctx context.Context, payload []byte) bool {
 	}
 	mailID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
@@ -1050,7 +1050,7 @@ func (s *session) handleMailMarkAsRead(ctx context.Context, payload []byte) bool
 	}
 	mailID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		res, _ := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE mail SET checked = (checked | 1) WHERE id = ? AND receiver = ?", mailID, s.playerGUID)

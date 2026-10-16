@@ -1189,7 +1189,7 @@ func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool 
 }
 
 // handleQueryQuestsCompleted processes CMSG_QUERY_QUESTS_COMPLETED (0x500).
-// Reference: WorldSession::HandleQuestQueryCompletedQuests (QuestHandler.cpp:588).
+// Reference: WorldSession::HandleQueryQuestsCompleted (QuestHandler.cpp:676).
 func (s *session) handleQueryQuestsCompleted(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
