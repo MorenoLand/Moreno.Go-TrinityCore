@@ -859,12 +859,19 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		return true
 	}
 	r := protocol.NewReader(payload)
+	// Wire (GroupHandler.cpp:66-67): CString name then a skipped uint32. A
+	// truncated packet throws in C++ and the handler drops it silently; only
+	// a present-but-empty name answers ERR_BAD_PLAYER_NAME_S.
 	memberName, err := r.ReadCString()
-	if err != nil || memberName == "" {
+	if err != nil {
+		return true
+	}
+	if _, err = r.ReadU32(); err != nil {
+		return true
+	}
+	if memberName == "" {
 		return s.sendPartyResult(partyOpInvite, memberName, errBadPlayerNameS)
 	}
-	// skip uint32 unk
-	_, _ = r.ReadU32()
 
 	// Can't invite yourself
 	if toLower(memberName) == toLower(s.player.Name) {
@@ -982,8 +989,13 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 
 // handleGroupAccept processes CMSG_GROUP_ACCEPT (0x072).
 // TrinityCore: WorldSession::HandleGroupAcceptOpcode.
-func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
+func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.pendingGroupLeader == 0 {
+		return true
+	}
+	// Wire (GroupHandler.cpp:221): the leading u32 is skipped, but a
+	// truncated packet throws in C++ and the handler drops it silently.
+	if len(payload) < 4 {
 		return true
 	}
 	leaderGUID := s.pendingGroupLeader
