@@ -47,20 +47,27 @@
 -- NPC_BLACK_HOLE / NPC_ALGALON_VOID_ZONE_VISUAL_STALKER, the stalker
 -- KillAllEvents sweep, EVENT_SUMMON_COLLAPSING_STAR cancel, the four
 -- worm-hole summons) have no bridges — documented only.
--- DOCUMENTED-ONLY (in this header; no registration beyond entry 32871):
+-- DOCUMENTED-ONLY (in this header; ENTRY_LIVING_CONSTELLATION 33052 is
+-- registered too — entry-verifiable):
 -- JustEngagedWith — the _firstPull flag chooses Talk(SAY_ALGALON_START_TIMER
 -- 3) (first pull, 26.5s intro) vs Talk(SAY_ALGALON_AGGRO 4) (later pulls)
--- — no bridge for the construction/instance flag; event 1 deliberately
--- NOT registered (no single C++-exact yell).
+-- — no bridge for the construction/instance flag; event 1 IS registered
+-- (algalonTimersStart — combat-start timer gate) but the intro Talks are
+-- not ported (no single C++-exact yell).
 -- DamageTaken _fightWon branch — (health - damage) below 2.5% of max:
 -- damage = 0 + the outro event machine (REACT_PASSIVE, AttackStop,
 -- SPELL_SELF_STUN self-cast, summons.DespawnAll, EVENT_OUTRO_START ...)
 -- — no Talk arm in this branch; a lone damage=0 return would strand the
 -- boss unkillable without the outro, so it is not modeled.
--- Timer Talks — 2026-10-14 retraction re-audit (C++ line refs): none
--- ported on combat-start timers; every arm rides an unbridged machine
+-- Timer Talks — 2026-10-14 retraction re-audit (C++ line refs): algalon's
+-- own quantum strike / phase punch / cosmic smash / ascend arms ARE ported
+-- on combat-start timers (event 1, C++-exact inits :392-397, header
+-- corrected 2026-10-16); every other arm rides an unbridged machine
 -- (stale "no-timer-bridge" claim RETRACTED — CreateLuaEvent is a real
--- bridge; the blocker is machine gating, gothik precedent).
+-- bridge; the blocker is machine gating, gothik precedent). The
+-- constellation's Arcane Barrage is also ported on an enter-combat timer
+-- (event 1): 2.5s init + {4s,5s} repeat C++-exact (:732) but the Lua anchor
+-- is EnterCombat where C++ anchors at Reset — anchor deviation noted.
 -- COLLAPSING_STAR (18s+introDelay, :594-599) — Talk 5/6 + SummonCreature x4;
 -- BIG_BANG (90s+introDelay, :601-616) — Talk 7/8 + SetPhase(PHASE_BIG_BANG)
 -- + constellation DoAction(ACTION_BIG_BANG) + DoCastAOE(64443): unbridged
@@ -301,7 +308,9 @@ end
 -- DoCastAOE(SPELL_ARCANE_BARRAGE 64599) with SPELLVALUE_MAX_TARGETS=1
 -- (non-triggered; the extra-args form, not the triggered bool), 2.5s init,
 -- Repeat(4s, 5s) — scheduled in Reset with no phase arg (:732, :794-800
--- verified). The max-targets leg is unbridgeable — documented above.
+-- verified). Lua anchors the first schedule at EnterCombat (event 1),
+-- C++ at Reset — value C++-exact, anchor deviation documented. The
+-- max-targets leg is unbridgeable — documented above.
 local function arcaneBarrageTick(creature, guid)
     creature:CastSpell(creature, SPELL_ARCANE_BARRAGE)
     schedule(guid, "arcanebarrage", {4000, 5000}, function()

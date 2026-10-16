@@ -53,11 +53,11 @@
 -- The whole combat rotation is phase-gated through events.SetPhase /
 -- phase-group scheduling (PHASE_EMERGE / PHASE_SUBMERGE) and the
 -- phase flips are driven by unbridged arms (DamageTaken
--- HealthBelowPctDamaged(_nextSubmerge) submerge gate — no health-pct
--- bridge (doomwalker precedent) + no DamageTaken hook
--- (npc_unkor_the_ruthless precedent); SpellHit(SPELL_SUBMERGE
--- 53421) submerge payload — SpellHit event 15 never fires
--- (standing); DoAction(ACTION_PET_DIED) re-emerge — no DoAction
+-- HealthBelowPctDamaged(_nextSubmerge) submerge gate — the gate's
+-- bridges exist (event 9 + GetHealthPct) but SetPhase/flag/summon
+-- legs are unbridged; SpellHit(SPELL_SUBMERGE 53421) submerge
+-- payload — event 14 (OnHitBySpell, target-side) fires, but the
+-- trigger cast is phase-machine-blocked; DoAction(ACTION_PET_DIED) re-emerge — no DoAction
 -- bridge (drakkari_colossus precedent) + cross-AI SetGUID/GUID_TYPE_
 -- PET bridge absent) — no phase bridge (gal_darah / moorabi
 -- precedent), so ungated timers would over-cast versus C++ (Pound
@@ -79,7 +79,8 @@
 -- SetGUID bridge) — documented-only.
 -- EVENT_SUBMERGE — Talk(SAY_SUBMERGE 4) + DoCastSelf(Submerge
 -- 53421), rescheduled 0s by DamageTaken at the 75/50/25% crossings
--- — no health-pct + no DamageTaken hook bridges — documented-only.
+-- (event 9 + GetHealthPct bridges exist; the SetPhase/flag machine
+-- is blocked) — documented-only.
 -- EVENT_DARTER / EVENT_ASSASSIN / EVENT_GUARDIAN / EVENT_VENOMANCER
 -- (the submerge pet waves — trigger->CastSpell(trigger,
 -- SPELL_SUMMON_DARTER 53599 / _ASSASSIN 53609 / _GUARDIAN 53614 /
@@ -93,7 +94,7 @@
 -- SetGUID(GUID_TYPE_PET -> JustSummoned, GUID_TYPE_IMPALE ->
 -- EVENT_IMPALE 4s) / DoAction(ACTION_PET_DIED -> last-pet-died
 -- re-emerge: RemoveAurasDueToSpell(SUBMERGE 53421 / IMPALE_AURA
--- 53456) (no aura-removal bridge — aeranas precedent), RemoveFlag,
+-- 53456) (RemoveAura bridged — aeranas precedent stale), RemoveFlag,
 -- DoCastSelf(EMERGE 53500), SetPhase(PHASE_EMERGE) + re-armed POUND/
 -- LEECHING_SWARM/CARRION_BEETLES (phase-gated); ACTION_PET_EVADE ->
 -- EnterEvadeMode) — no cross-AI SetGUID / DoAction bridges —
@@ -103,17 +104,17 @@
 -- DamageTaken: HasAura(SUBMERGE) damage=0 / the
 -- HealthBelowPctDamaged(_nextSubmerge, damage) -> RescheduleEvent(
 -- EVENT_SUBMERGE, 0s, 0, PHASE_EMERGE) gate with the _nextSubmerge
--- -= 25 stepping — no DamageTaken hook + no health-pct bridge —
--- documented-only.
+-- -= 25 stepping (gate itself bridgeable — event 9 + GetHealthPct;
+-- the phase machine is not) — documented-only.
 -- SpellHit(SPELL_SUBMERGE 53421) payload: SetFlag(NON_ATTACKABLE |
 -- NOT_SELECTABLE) (no flag bridge), RemoveAurasDueToSpell(
--- LEECHING_SWARM) (no aura-removal bridge), DoCastSelf(IMPALE_AURA
--- 53456, true) (bridged in isolation — creature:CastSpell(creature,
--- spell) — but the trigger is event 15), SetPhase(PHASE_SUBMERGE)
--- + the 50%/25%/0% _nextSubmerge pet-count machine (_assassinCount
--- 4->6->6, _guardianCount 2, _venomancerCount 0->2->2, third wave
--- arms EVENT_DARTER) — event 15 never fires (standing) —
--- documented-only.
+-- LEECHING_SWARM) (RemoveAura bridged — aeranas precedent stale),
+-- DoCastSelf(IMPALE_AURA 53456, true) (bridged in isolation —
+-- creature:CastSpell(creature, spell) — but the trigger cast is
+-- blocked), SetPhase(PHASE_SUBMERGE) + the 50%/25%/0% _nextSubmerge
+-- pet-count machine (_assassinCount 4->6->6, _guardianCount 2,
+-- _venomancerCount 0->2->2, third wave arms EVENT_DARTER) — event 14
+-- fires; the phase/flag/pet machine stays unbridged — documented-only.
 -- UpdateAI UNIT_STATE_CASTING skip — no unit-state bridge.
 -- npc_anubarak_anub_ar_darter / _assassin / _guardian / _venomancer
 -- / npc_anubarak_impale_target — ENTRY UNVERIFIABLE (no NPC
@@ -141,7 +142,7 @@
 -- ASSASSIN_VISUAL 53611, triggered) (bridged in isolation —
 -- creature:CastSpell(creature, spell) — but gated by the unbridged
 -- jump) + MovementInform(EVENT_JUMP) -> RemoveAurasDueToSpell(
--- ASSASSIN_VISUAL) (no aura-removal bridge) + DoZoneInCombat;
+-- ASSASSIN_VISUAL) (RemoveAura bridged — precedent stale) + DoZoneInCombat;
 -- impale_target InitializeAI DoCastSelf(IMPALE_VISUAL 53455) +
 -- DespawnOrUnsummon(6s) + cross-AI SetGUID(GUID_TYPE_IMPALE)
 -- (no despawn / SetGUID bridges).
