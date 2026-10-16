@@ -950,7 +950,7 @@ func (s *Server) resurrectWGQueuedPlayers(ctx context.Context, queued map[uint64
 // Reference: BattlefieldWG::ProcessEvent (BattlefieldWG.cpp:1247-1281).
 func (s *Server) handleWGGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
-		return false
+		return true
 	}
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()

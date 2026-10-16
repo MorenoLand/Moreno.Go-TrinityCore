@@ -641,7 +641,7 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	}
 	guid, err := readObjectGUID(payload)
 	if err != nil || guid == 0 {
-		return false
+		return true
 	}
 	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2371): a player in
 	// flight cannot interact with gameobjects — the gate fires inside

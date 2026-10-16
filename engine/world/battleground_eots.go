@@ -210,11 +210,11 @@ func (s *Server) getOrCreateEOTSState(mapID uint32) *eotsBattlegroundState {
 
 func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
-		return false
+		return true
 	}
 	eots := s.getOrCreateEOTSState(sess.player.Map)
 	if eots == nil {
-		return false
+		return true
 	}
 
 	eots.mu.Lock()
@@ -299,7 +299,7 @@ func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, gui
 	// 3. Tower Banner interaction
 	towerID, ok := getEOTSTowerIDFromBannerEntry(entry)
 	if !ok || towerID >= EOTSTowerMax {
-		return false
+		return true
 	}
 
 	tower := &eots.Towers[towerID]

@@ -517,11 +517,11 @@ func (ic *icBattlegroundState) getNodeByBannerEntry(entry uint32) (uint8, bool) 
 // Reference: BattlegroundIC::EventPlayerClickedOnFlag (BattlegroundIC.cpp:421-500).
 func (s *Server) handleICGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
-		return false
+		return true
 	}
 	ic := s.getOrCreateICState(sess.player.Map)
 	if ic == nil {
-		return false
+		return true
 	}
 	ic.mu.Lock()
 	defer ic.mu.Unlock()

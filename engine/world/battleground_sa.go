@@ -302,11 +302,11 @@ func (sa *saBattlegroundState) canInteractWithObject(entry uint32) bool {
 // Reference: BattlegroundSA::EventPlayerClickedOnFlag / TitanRelicActivated (BattlegroundSA.cpp:780-958).
 func (s *Server) handleSAGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
-		return false
+		return true
 	}
 	sa := s.getOrCreateSAState(sess.player.Map)
 	if sa == nil {
-		return false
+		return true
 	}
 	sa.mu.Lock()
 	defer sa.mu.Unlock()

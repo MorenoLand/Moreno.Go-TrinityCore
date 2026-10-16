@@ -232,16 +232,16 @@ func (s *Server) getOrCreateABState(mapID uint32) *abBattlegroundState {
 // Mirrors TrinityCore BattlegroundAB::EventPlayerClickedOnFlag (BattlegroundAB.cpp:210-310).
 func (s *Server) handleABBannerUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
-		return false
+		return true
 	}
 	ab := s.getOrCreateABState(sess.player.Map)
 	if ab == nil {
-		return false
+		return true
 	}
 
 	nodeID, ok := getABNodeIDFromBannerEntry(entry)
 	if !ok || nodeID >= ABNodeMax {
-		return false
+		return true
 	}
 
 	return s.clickABNode(ab, nodeID, sess)
@@ -271,7 +271,7 @@ func abNodeIDNearPlayer(ab *abBattlegroundState, sess *session) (uint32, bool) {
 // GAMEOBJECT_TYPE_FLAGSTAND arm (which resolves the node by proximity).
 func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *session) bool {
 	if s == nil || ab == nil || sess == nil || sess.player == nil || nodeID >= ABNodeMax {
-		return false
+		return true
 	}
 
 	ab.mu.Lock()

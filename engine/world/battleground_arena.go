@@ -1019,7 +1019,7 @@ func (s *Server) buildArenaPvPLogDataPacket(arena *arenaBattlegroundState) []byt
 // handleArenaGameObjectUse processes clicks on arena gameobjects (such as Shadow Sight).
 func (s *Server) handleArenaGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil || !IsArenaMap(sess.player.Map) {
-		return false
+		return true
 	}
 
 	switch entry {
@@ -1030,7 +1030,7 @@ func (s *Server) handleArenaGameObjectUse(ctx context.Context, sess *session, gu
 		s.broadcastArenaMessage(sess.player.Map, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
 		return true
 	default:
-		return false
+		return true
 	}
 }
 

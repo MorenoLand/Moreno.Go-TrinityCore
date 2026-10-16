@@ -381,11 +381,11 @@ func (s *Server) handleAVQuestComplete(sess *session, questID uint32) {
 // handleAVGameObjectUse processes player interaction with AV banners and mine supplies.
 func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
-		return false
+		return true
 	}
 	av := s.getOrCreateAVState(sess.player.Map)
 	if av == nil {
-		return false
+		return true
 	}
 
 	av.mu.Lock()

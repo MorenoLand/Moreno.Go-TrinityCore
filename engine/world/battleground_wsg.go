@@ -102,11 +102,11 @@ func (s *Server) getOrCreateWSGState(mapID uint32) *wsgBattlegroundState {
 
 func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
-		return false
+		return true
 	}
 	wsg := s.getOrCreateWSGState(sess.player.Map)
 	if wsg == nil {
-		return false
+		return true
 	}
 
 	wsg.mu.Lock()
