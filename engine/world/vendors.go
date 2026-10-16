@@ -362,6 +362,17 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		if !s.vendorItemListable(uint32(allowableClass), uint32(bonding), uint32(flagsExtra)) {
 			continue
 		}
+		if buyCount <= 0 {
+			buyCount = 1
+		}
+		// ItemHandler.cpp:670-674 — the sold-out check runs before the
+		// conditions check, so GetVendorItemCurrentCount observes (and
+		// advances the restock clock of) even condition-gated rows; non-GMs
+		// never see sold-out rows.
+		inStock := s.server.currentVendorStockForGUID(vendorGUID, uint32(item), slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
+		if inStock == 0 && !isGM {
+			continue
+		}
 		if meets, err := s.meetVendorItemConditions(ctx, creatureEntry, uint32(item), vendorGUID); err != nil || !meets {
 			continue
 		}
@@ -370,13 +381,6 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 			//   ? uint32(floor(itemTemplate->BuyPrice * discountMod)) : 0 — discount floored on the
 			//   unit price in the list, unlike the buy path which floors it on the total.
 			buyPrice = int64(math.Floor(float64(float32(buyPrice) * s.vendorReputationPriceDiscount(ctx, creatureEntry))))
-		}
-		if buyCount <= 0 {
-			buyCount = 1
-		}
-		inStock := s.server.currentVendorStockForGUID(vendorGUID, uint32(item), slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
-		if inStock == 0 && !isGM {
-			continue
 		}
 		items = append(items, vendorItemRecord{
 			Slot:          slot,
@@ -705,7 +709,14 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 			return true
 		}
 	} else if errCode := s.canEquipVendorItem(ctx, itemEntry, equipSlot); errCode != equipErrOk {
-		s.sendEquipError(errCode, 0)
+		// Player::SendEquipError (Player.cpp:13601-13608): the
+		// EQUIP_ERR_CANT_EQUIP_LEVEL_I arm appends the template's
+		// RequiredLevel as a trailing uint32.
+		if errCode == equipErrCantEquipLevelI {
+			s.sendEquipErrorWithRequiredLevel(ctx, itemEntry)
+		} else {
+			s.sendEquipError(errCode, 0)
+		}
 		return true
 	}
 	// Player.cpp:21853-21871: payment runs BEFORE the item is created — a
@@ -1539,8 +1550,9 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		// ItemHandler.cpp:517-533: the SAME item object is stored back into the
 		// inventory (Player::StoreItem(dest, pItem, true)) — enchantments,
 		// durability and all other fields survive the round trip. A stackable
-		// buyback item merges into an existing partial pile when it fits fully,
-		// per the CanStoreItem merge arm.
+		// buyback item fills an existing partial pile first and any remainder
+		// keeps the buyback item's identity in a free slot, per the
+		// CanStoreItem/StoreItem dest arms (Player.cpp:10470+).
 		cdb := s.server.CharactersStore.DB
 		if cdb == nil {
 			s.sendEquipError(equipErrInvFull, entry.ItemGUID)
@@ -1552,16 +1564,42 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, 0, buyErrCantFindItem), true)
 			return false, true
 		}
-		if _, _, _, pileGUID, pileCount, pileMax, ok := s.findStackableInventorySlot(ctx, s.playerGUID, entry.ItemEntry); ok && pileCount+entry.Count <= pileMax {
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count + ? WHERE guid = ?", entry.Count, pileGUID)
+		// Player::CanStoreItem is all-or-nothing: the full dest (pile fill,
+		// then one free slot for any remainder) is computed before anything
+		// mutates, so a missing free slot fails with no partial fill applied.
+		var fillGUID uint64
+		var fillAmount uint32
+		remainder := entry.Count
+		if _, _, _, pileGUID, pileCount, pileMax, ok := s.findStackableInventorySlot(ctx, s.playerGUID, entry.ItemEntry); ok && pileCount < pileMax {
+			fillAmount = pileMax - pileCount
+			if fillAmount > remainder {
+				fillAmount = remainder
+			}
+			if fillAmount > 0 {
+				fillGUID = pileGUID
+				remainder -= fillAmount
+			}
+		}
+		var freeBagKey int64
+		var freeSlot uint8
+		if remainder > 0 {
+			var ok bool
+			freeBagKey, _, freeSlot, ok = s.findFreeInventorySlot(ctx, s.playerGUID)
+			if !ok {
+				s.sendEquipError(equipErrInvFull, entry.ItemGUID)
+				return false, true
+			}
+		}
+		if fillAmount > 0 {
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count + ? WHERE guid = ?", fillAmount, fillGUID)
+		}
+		if remainder == 0 {
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, 74+eslot)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", bbRowGUID)
 			return true, false
 		}
-		freeBagKey, _, freeSlot, ok := s.findFreeInventorySlot(ctx, s.playerGUID)
-		if !ok {
-			s.sendEquipError(equipErrInvFull, entry.ItemGUID)
-			return false, true
+		if fillAmount > 0 {
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", remainder, bbRowGUID)
 		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND bag = 0 AND slot = ? AND item = ?",
 			freeBagKey, freeSlot, s.playerGUID, 74+eslot, bbRowGUID)
@@ -1635,4 +1673,22 @@ func buildSellResult(vendorGUID, itemGUID uint64, result uint8) []byte {
 	buf.WriteU64(itemGUID)
 	buf.WriteU8(result)
 	return buf.Bytes()
+}
+
+// sendEquipErrorWithRequiredLevel mirrors the EQUIP_ERR_CANT_EQUIP_LEVEL_I
+// arm of Player::SendEquipError (Player.cpp:13601-13608): the failure packet
+// appends the item template's RequiredLevel as a trailing uint32 so the
+// client can render "You must reach level %d to use that item."
+func (s *session) sendEquipErrorWithRequiredLevel(ctx context.Context, itemEntry uint32) {
+	var reqLevel int64
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RequiredLevel, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&reqLevel)
+	}
+	buf := protocol.NewBuffer(22)
+	buf.WriteU8(equipErrCantEquipLevelI)
+	buf.WriteU64(0)
+	buf.WriteU64(0)
+	buf.WriteU8(0)
+	buf.WriteU32(uint32(reqLevel))
+	_ = s.write(uint16(protocol.OpcodeSMSG_INVENTORY_CHANGE_FAILURE), buf.Bytes(), true)
 }
