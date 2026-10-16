@@ -1166,7 +1166,7 @@ func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	name, err := r.ReadCString()
 	if err != nil || toLower(name) == toLower(s.player.Name) {
-		return false
+		return true
 	}
 	// Player::CanUninviteFromGroup (Player.cpp:24422-24424): no group
 	// answers (PARTY_OP_UNINVITE, ERR_NOT_IN_GROUP).
@@ -1226,7 +1226,7 @@ func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	guid, err := r.ReadU64()
 	if err != nil || guid == s.playerGUID {
-		return false
+		return true
 	}
 	// CMSG_GROUP_UNINVITE_GUID carries the kick reason after the guid
 	// (GroupHandler.cpp:297); it rides into the boot proposal packet.
@@ -1413,7 +1413,7 @@ func (s *session) handleGroupSetLeader(_ context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	guid, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	srv := s.server
@@ -1692,22 +1692,22 @@ func (s *session) handleLootMethod(_ context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	lootMethod, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	masterLooter, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	lootThreshold, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	if lootMethod > 4 {
-		return false
+		return true
 	}
 	if lootThreshold < 2 || lootThreshold > 6 {
-		return false
+		return true
 	}
 
 	srv := s.server
@@ -1752,11 +1752,11 @@ func (s *session) handleMinimapPing(_ context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	x, err := r.ReadF32()
 	if err != nil {
-		return false
+		return true
 	}
 	y, err := r.ReadF32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	buf := protocol.NewBuffer(16)
@@ -1785,7 +1785,7 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 	r := protocol.NewReader(payload)
 	x, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 
 	srv := s.server
@@ -1824,7 +1824,7 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 
 	guid, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// Player targets must resolve to a connected, non-hostile player
@@ -2098,7 +2098,7 @@ func (s *session) handleReadyCheck(ctx context.Context, payload []byte) bool {
 		// Answer from a group member
 		state, err := r.ReadU8()
 		if err != nil {
-			return false
+			return true
 		}
 		b := protocol.NewBuffer(9)
 		b.WriteU64(s.playerGUID)
@@ -2154,14 +2154,14 @@ func (s *session) handleRandomRoll(_ context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	minimum, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	maximum, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if minimum > maximum || maximum > randomRollMax {
-		return false
+		return true
 	}
 	rolled := minimum + uint32(rand.Intn(int(maximum-minimum)+1))
 

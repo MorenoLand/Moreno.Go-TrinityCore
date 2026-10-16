@@ -73,8 +73,9 @@ const bgWaitSampleCount = 10
 
 // bgQueueWaitRing is the Go form of BattlegroundQueue's m_WaitTimes ring
 // (BattlegroundQueue.h:133): the last bgWaitSampleCount join->invite wait
-// times with a running sum. C++ keys by team+bracket; Go keys the ring map
-// by battleground type id only (no Go bracket-team queue model).
+// times with a running sum. C++ keys [team][bracket]; Go keys by
+// battleground type id + team (the bracket id is PvPDifficulty.dbc RangeIndex
+// data with no in-tree source, so the bracket dimension is not modeled).
 type bgQueueWaitRing struct {
 	samples [bgWaitSampleCount]uint32
 	next    int
@@ -82,19 +83,45 @@ type bgQueueWaitRing struct {
 	sum     uint64
 }
 
+// bgWaitKey is the Go form of the m_WaitTimes [team][bracket] key
+// (BattlegroundQueue.h:133) without the bracket dimension: battleground type
+// id plus the C++ team_index (TEAM_ALLIANCE = 0, TEAM_HORDE = 1).
+type bgWaitKey struct {
+	bgTypeID uint32
+	team     uint8
+}
+
+// bgWaitTeamIndex ports the team_index selection shared by
+// PlayerInvitedToBGUpdateAverageWaitTime and GetAverageQueueWaitTime
+// (BattlegroundQueue.cpp:244-254, 269-278): TEAM_ALLIANCE (0) by default;
+// non-arena queues key by the queued group's team, arenas by the rated flag.
+func bgWaitTeamIndex(isArena, isRated bool, team uint32) uint8 {
+	if isArena {
+		if isRated {
+			return 1 // TEAM_HORDE for rated arenas (BattlegroundQueue.cpp:252)
+		}
+		return 0
+	}
+	if team == 1 { // TEAM_HORDE
+		return 1
+	}
+	return 0
+}
+
 // recordBGQueueWait ports BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
 // (BattlegroundQueue.cpp:242): the new wait overwrites the oldest sample and
 // the running sum is kept exact.
-func (s *Server) recordBGQueueWait(bgTypeID uint32, waitMs uint32) {
+func (s *Server) recordBGQueueWait(bgTypeID uint32, team uint8, waitMs uint32) {
 	s.bgWaitMu.Lock()
 	defer s.bgWaitMu.Unlock()
 	if s.bgWaitTimes == nil {
-		s.bgWaitTimes = make(map[uint32]*bgQueueWaitRing)
+		s.bgWaitTimes = make(map[bgWaitKey]*bgQueueWaitRing)
 	}
-	ring := s.bgWaitTimes[bgTypeID]
+	key := bgWaitKey{bgTypeID: bgTypeID, team: team}
+	ring := s.bgWaitTimes[key]
 	if ring == nil {
 		ring = &bgQueueWaitRing{}
-		s.bgWaitTimes[bgTypeID] = ring
+		s.bgWaitTimes[key] = ring
 	}
 	ring.sum -= uint64(ring.samples[ring.next])
 	ring.samples[ring.next] = waitMs
@@ -108,10 +135,10 @@ func (s *Server) recordBGQueueWait(bgTypeID uint32, waitMs uint32) {
 // averageBGQueueWait ports BattlegroundQueue::GetAverageQueueWaitTime
 // (BattlegroundQueue.cpp:266-285): 0 while fewer than bgWaitSampleCount
 // samples exist ("not available"), then the ring mean.
-func (s *Server) averageBGQueueWait(bgTypeID uint32) uint32 {
+func (s *Server) averageBGQueueWait(bgTypeID uint32, team uint8) uint32 {
 	s.bgWaitMu.Lock()
 	defer s.bgWaitMu.Unlock()
-	ring := s.bgWaitTimes[bgTypeID]
+	ring := s.bgWaitTimes[bgWaitKey{bgTypeID: bgTypeID, team: team}]
 	if ring == nil || ring.count < bgWaitSampleCount {
 		return 0
 	}
@@ -332,10 +359,17 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 		return true
 	}
 
+	// BattleGroundHandler.cpp:126-132 — player is using the dungeon finder →
+	// ERR_LFG_CANT_USE_BATTLEGROUND (-13), ahead of the RBAC arm.
+	if isLFGUsing(s, s.playerGUID) {
+		s.sendJoinedBGResult(groupJoinBattlegroundLFGCantUse)
+		return true
+	}
+
 	// BattleGroundHandler.cpp:133-139 — !CanJoinToBattleground(bg) → ERR_BATTLEGROUND_JOIN_TIMED_OUT.
 	// Player::CanJoinToBattleground (Player.cpp:22503) gates on RBAC_PERM_JOIN_RANDOM_BG for
 	// random queues and RBAC_PERM_JOIN_NORMAL_BG otherwise (battlemaster joins are never
-	// arenas); the isUsingLfg arm ahead of it has no Go per-session model (tree-wide delta).
+	// arenas).
 	if bgTypeID == battlegroundRB {
 		if !s.canJoinRandomBG {
 			s.sendJoinedBGResult(groupJoinBattlegroundTimedOut)
@@ -476,6 +510,10 @@ func battlemasterMaxGroupSize(srv *Server, bgTypeID uint32) (uint32, bool) {
 // STATUS_WAIT_JOIN and sending the invite dialog.
 const bgSimulatedInviteDelay = 15 * time.Second
 
+// bgInviteAcceptWindow mirrors INVITE_ACCEPT_WAIT_TIME (Battleground.h:150):
+// the invite expires this long after the pop, freeing the queue slot.
+const bgInviteAcceptWindow = 60 * time.Second
+
 // simulateBGQueueInvite arms the queue-pop simulation for one queued slot:
 // after bgSimulatedInviteDelay the entry flips to STATUS_WAIT_JOIN with the
 // given instance id (0 → a fresh synthetic id is minted at fire time) and
@@ -513,6 +551,28 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		e.Status = BGStatusWaitJoin
 		s.sendBattlefieldStatus(uint8(slot))
 		s.debug("simulated battleground invite", "account", s.accountName, "bg", bgTypeID, "slot", slot, "instance", instanceID)
+		// BGQueueRemoveEvent::Execute (BattlegroundQueue.cpp:1060-1103): the
+		// invite expires bgInviteAcceptWindow after the pop — the slot is
+		// freed, a STATUS_NONE packet goes out, and the no-enter deserter
+		// type is tracked. The slot/instance/join-time guard is the Go form
+		// of IsPlayerInvited's remove-time match.
+		inviteID := instanceID
+		time.AfterFunc(bgInviteAcceptWindow, func() {
+			if s == nil || !s.playerLoaded || s.player == nil {
+				return
+			}
+			if slot < 0 || slot >= len(s.bgQueues) {
+				return
+			}
+			exp := &s.bgQueues[slot]
+			if !exp.Active || exp.IsArena || exp.Status != BGStatusWaitJoin || exp.BgTypeID != bgTypeID || !exp.JoinTime.Equal(joinTime) || exp.InstanceID != inviteID {
+				return
+			}
+			s.bgQueues[slot] = bgQueueEntry{}
+			s.sendBattlefieldStatus(uint8(slot))
+			s.trackBGDeserter(context.Background(), bgDesertionTypeNoEnter)
+			s.debug("simulated battleground invite expired", "account", s.accountName, "bg", bgTypeID, "slot", slot)
+		})
 	})
 }
 
@@ -588,6 +648,10 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 		case memberFreeBGQueueIndex(member) == -1:
 			// no free slot → ERR_BATTLEGROUND_TOO_MANY_QUEUES (Group.cpp:2079-2080)
 			err = groupJoinTooManyQueues
+		case isLFGUsing(s, member.playerGUID):
+			// member is using the dungeon finder → ERR_LFG_CANT_USE_BATTLEGROUND
+			// (Group.cpp:2084-2085)
+			err = groupJoinBattlegroundLFGCantUse
 		case member.hasAura(freezeAuraSpellID):
 			// freeze → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2085-2086)
 			err = groupJoinBattlegroundFailed
@@ -1199,9 +1263,11 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
 		// (BattlegroundQueue.cpp:242): the port accept is Go's invite point (Go
 		// models no STATUS_WAIT_JOIN state), so the join->port wait feeds the
-		// average-wait ring read back by sendBattlefieldStatus.
+		// average-wait ring read back by sendBattlefieldStatus. The team index
+		// follows the shared selection (BattlegroundQueue.cpp:244-254):
+		// non-arena keys by the queued player's team, arenas by the rated flag.
 		if entry.Status == BGStatusWaitQueue && !entry.JoinTime.IsZero() {
-			s.server.recordBGQueueWait(entry.BgTypeID, uint32(time.Since(entry.JoinTime).Milliseconds()))
+			s.server.recordBGQueueWait(entry.BgTypeID, bgWaitTeamIndex(entry.IsArena, entry.IsRated, teamForRace(s.player.Race)), uint32(time.Since(entry.JoinTime).Milliseconds()))
 		}
 
 		// STATUS_IN_PROGRESS leg (BattleGroundHandler.cpp:468-482): the slot data
@@ -1347,8 +1413,10 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	case BGStatusWaitQueue:
 		// BattlegroundQueue::GetAverageQueueWaitTime (BattlegroundQueue.cpp:266):
 		// 0 until bgWaitSampleCount invites have been seen, then the ring mean.
-		// The previous hardcoded 120000 was Go-original.
-		buf.WriteU32(s.server.averageBGQueueWait(entry.BgTypeID))
+		// The previous hardcoded 120000 was Go-original. The team index follows
+		// the shared selection (BattlegroundQueue.cpp:269-278): non-arena keys
+		// by the queued player's team, arenas by the rated flag.
+		buf.WriteU32(s.server.averageBGQueueWait(entry.BgTypeID, bgWaitTeamIndex(entry.IsArena, entry.IsRated, teamForRace(s.player.Race))))
 		timeInQueue := uint32(time.Since(entry.JoinTime).Milliseconds())
 		buf.WriteU32(timeInQueue)
 	case BGStatusWaitJoin:
@@ -1356,10 +1424,10 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 		buf.WriteU64(0)
 		// time to remove: C++ sends getMSTimeDiff(now, ginfo.RemoveInviteTime)
 		// (BattleGroundHandler.cpp:585), with RemoveInviteTime = invite +
-		// INVITE_ACCEPT_WAIT_TIME (60000, Battleground.h:150). The simulated
+		// INVITE_ACCEPT_WAIT_TIME (Battleground.h:150). The simulated
 		// invite fires this status immediately, so the full accept window
 		// stands.
-		buf.WriteU32(60000) // time to remove
+		buf.WriteU32(uint32(bgInviteAcceptWindow.Milliseconds())) // time to remove
 	case BGStatusInProgress:
 		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)

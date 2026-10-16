@@ -658,9 +658,15 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 				if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
 					// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
 					// (BattlegroundQueue.cpp:242): the arena match start is the
-					// invite point for arena queues.
+					// invite point for arena queues. C++ keys arenas by the
+					// rated flag (BattlegroundQueue.cpp:251-253): rated ->
+					// TEAM_HORDE, else TEAM_ALLIANCE.
 					if sess.bgQueues[i].Status == BGStatusWaitQueue && !sess.bgQueues[i].JoinTime.IsZero() {
-						s.recordBGQueueWait(sess.bgQueues[i].BgTypeID, uint32(time.Since(sess.bgQueues[i].JoinTime).Milliseconds()))
+						teamIdx := uint8(0)
+						if sess.bgQueues[i].IsRated {
+							teamIdx = 1
+						}
+						s.recordBGQueueWait(sess.bgQueues[i].BgTypeID, teamIdx, uint32(time.Since(sess.bgQueues[i].JoinTime).Milliseconds()))
 					}
 					sess.bgQueues[i].Status = BGStatusInProgress
 					sess.bgQueues[i].StartTime = arena.MatchStartTime

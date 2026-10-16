@@ -297,7 +297,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	victim, err := reader.ReadU64()
 	if err != nil {
 		s.debug("attack rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	target, ok := s.getCombatTarget(ctx, victim)
 	if !ok {
@@ -2277,7 +2277,7 @@ func (s *session) handleSetSheathed(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	state, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// HandleSetSheathedOpcode (CombatHandler.cpp:73-78): sheath states at or
 	// past MAX_SHEATH_STATE are logged and dropped without touching state.

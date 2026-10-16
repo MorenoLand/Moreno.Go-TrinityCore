@@ -858,11 +858,11 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 	reader := protocol.NewReader(payload)
 	rawItemGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	dstSlot, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	if dstSlot >= equipSlotEnd {
 		return true
@@ -1705,7 +1705,7 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	rawItemGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
 	if itemGUID == 0 {
@@ -3171,34 +3171,34 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	bagIndex, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	slot, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	castCount, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	spellID, err := r.ReadU32() // packet spellId: read for protocol, ignored for casting (Player::CastItemUseSpell resolves server-side)
 	if err != nil {
-		return false
+		return true
 	}
 	itemGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	glyphIndex, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if glyphIndex < 6 {
 		s.targetGlyphSlot = uint8(glyphIndex)
 	}
 	_, err = r.ReadU8() // castFlags
 	if err != nil {
-		return false
+		return true
 	}
 	if glyphIndex >= 6 {
 		// SpellHandler.cpp:95-99 — glyphIndex >= MAX_GLYPH_SLOT_INDEX (6) is a
@@ -3597,19 +3597,19 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	srcBag, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	srcSlot, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	dstBag, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	dstSlot, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	count, err := reader.ReadU32()
 	if err != nil || count == 0 || (srcBag == dstBag && srcSlot == dstSlot) {
@@ -4398,7 +4398,7 @@ func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool 
 	r := protocol.NewReader(payload)
 	pageID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// QueryHandler.cpp:286: while (pageID) — a zero page id sends nothing at all,
@@ -5567,11 +5567,11 @@ func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bo
 	r := protocol.NewReader(payload)
 	setGuid, err := r.ReadPackedGUID()
 	if err != nil {
-		return false
+		return true
 	}
 	index, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if index >= maxEquipmentSetIndex {
 		// C++ silently drops an out-of-range set index (HandleEquipmentSetSave,
@@ -5580,11 +5580,11 @@ func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bo
 	}
 	name, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	iconName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 
 	var sentItems [19]uint64
@@ -5761,7 +5761,7 @@ func (s *session) handleEquipmentSetDelete(ctx context.Context, payload []byte) 
 	r := protocol.NewReader(payload)
 	setGuid, err := r.ReadPackedGUID()
 	if err != nil {
-		return false
+		return true
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
