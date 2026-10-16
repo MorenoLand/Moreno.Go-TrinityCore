@@ -651,6 +651,42 @@ func (s *Store) ValidateAppearance(race, class, gender, hairID, hairColor, faceI
 	return false, true, nil
 }
 
+type BarberShopStyleEntry struct {
+	ID   uint32
+	Type uint32
+	Race uint32
+	Sex  uint32
+	Data uint32
+}
+
+func (s *Store) BarberShopStyle(id uint32) (BarberShopStyleEntry, bool, error) {
+	file, err := s.File("BarberShopStyle")
+	if err != nil {
+		return BarberShopStyleEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return BarberShopStyleEntry{}, false, nil
+	}
+	styleType, err := record.Uint32(1)
+	if err != nil {
+		return BarberShopStyleEntry{}, false, err
+	}
+	race, err := record.Uint32(37)
+	if err != nil {
+		return BarberShopStyleEntry{}, false, err
+	}
+	sex, err := record.Uint32(38)
+	if err != nil {
+		return BarberShopStyleEntry{}, false, err
+	}
+	data, err := record.Uint32(39)
+	if err != nil {
+		return BarberShopStyleEntry{}, false, err
+	}
+	return BarberShopStyleEntry{ID: id, Type: styleType, Race: race, Sex: sex, Data: data}, true, nil
+}
+
 func (s *Store) Class(id uint32) (Class, bool, error) {
 	file, err := s.File("ChrClasses")
 	if err != nil {

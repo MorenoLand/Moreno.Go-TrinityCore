@@ -5455,12 +5455,43 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 		return true
 	}
 
+	// CharacterHandler.cpp:1281-1311: the client sends BarberShopStyle row
+	// ids; the applied values are the rows' Data fields. A missing row (or a
+	// row with the wrong type/race/sex) is a silent reject; the skin row is
+	// optional (nil keeps the current skin). Without BarberShopStyle.dbc the
+	// raw values pass through, per the ValidateAppearance known=false
+	// convention.
+	newHair, newFacial, newSkin := uint8(hair), uint8(facialHair), s.player.Skin
+	skinChange := skinColor > 0
+	if s.server != nil && s.server.Data != nil {
+		bsHair, hairFound, herr := s.server.Data.BarberShopStyle(hair)
+		bsFacial, facialFound, ferr := s.server.Data.BarberShopStyle(facialHair)
+		bsSkin, skinFound, serr := s.server.Data.BarberShopStyle(skinColor)
+		if herr == nil && ferr == nil && serr == nil {
+			if !hairFound || bsHair.Type != 0 || bsHair.Race != uint32(s.player.Race) || bsHair.Sex != uint32(s.player.Gender) {
+				return true
+			}
+			if !facialFound || bsFacial.Type != 2 || bsFacial.Race != uint32(s.player.Race) || bsFacial.Sex != uint32(s.player.Gender) {
+				return true
+			}
+			if skinFound && (bsSkin.Type != 3 || bsSkin.Race != uint32(s.player.Race) || bsSkin.Sex != uint32(s.player.Gender)) {
+				return true
+			}
+			newHair, newFacial = uint8(bsHair.Data), uint8(bsFacial.Data)
+			skinChange = skinFound
+			if skinFound {
+				newSkin = uint8(bsSkin.Data)
+			}
+			if valid, known, verr := s.server.Data.ValidateAppearance(s.player.Race, s.player.Class, s.player.Gender, newHair, uint8(color), s.player.Face, newFacial, newSkin); verr == nil && known && !valid {
+				return true
+			}
+		}
+	}
+
 	// CharacterHandler.cpp:1314-1322: the player must be sitting on a barber
 	// chair within 5.0f (stand state UNIT_STAND_STATE_SIT_LOW_CHAIR (4) +
 	// chairheight = data0 of the chair template), else
 	// SendBarberShopResult(BARBER_SHOP_RESULT_NOT_ON_CHAIR) (=2).
-	// (The BarberShopStyleEntry type/race/sex validation at :1281-1311 stays
-	// a documented gap: no BarberShopStyle/CharSections DBC bridge in Go.)
 	foundChair := false
 	var chairHeight uint8
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
@@ -5500,7 +5531,7 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 	if s.server != nil && s.server.Data != nil {
 		if base, found, _ := s.server.Data.GtBarberShopCostBase(uint32(s.player.Level)); found {
 			cost = barberShopCost(curHair, curColor, curFacial, curSkin,
-				uint8(hair), uint8(color), uint8(facialHair), uint8(skinColor), base)
+				newHair, uint8(color), newFacial, newSkin, skinChange, base)
 		}
 	}
 
@@ -5526,11 +5557,11 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 	}
 	s.updateAchievementCriteria(criteriaTypeGoldSpentAtBarber, 0, cost)
 
-	s.player.HairStyle = uint8(hair)
+	s.player.HairStyle = newHair
 	s.player.HairColor = uint8(color)
-	s.player.FacialStyle = uint8(facialHair)
-	if skinColor > 0 {
-		s.player.Skin = uint8(skinColor)
+	s.player.FacialStyle = newFacial
+	if skinChange {
+		s.player.Skin = newSkin
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -5560,8 +5591,8 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 // skin changes; no change at all costs nothing. newSkinID == 0 means the
 // client sent no skin entry (the C++ null newSkin), so the skin term is
 // skipped.
-func barberShopCost(curHair, curColor, curFacial, curSkin, newHair, newColor, newFacial, newSkinID uint8, base float32) uint32 {
-	if curHair == newHair && curColor == newColor && curFacial == newFacial && (newSkinID == 0 || newSkinID == curSkin) {
+func barberShopCost(curHair, curColor, curFacial, curSkin, newHair, newColor, newFacial, newSkin uint8, skinChange bool, base float32) uint32 {
+	if curHair == newHair && curColor == newColor && curFacial == newFacial && (!skinChange || newSkin == curSkin) {
 		return 0
 	}
 	cost := float32(0)
@@ -5574,7 +5605,7 @@ func barberShopCost(curHair, curColor, curFacial, curSkin, newHair, newColor, ne
 	if curFacial != newFacial {
 		cost += base * 0.75
 	}
-	if newSkinID != 0 && curSkin != newSkinID {
+	if skinChange && curSkin != newSkin {
 		cost += base * 0.75
 	}
 	return uint32(cost)

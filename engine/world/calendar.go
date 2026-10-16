@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"strconv"
 	"time"
 
@@ -528,8 +529,90 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 		buf.WriteI32(r.offset)
 	}
 
-	// Holidays count
-	buf.WriteU32(0)
+	// Holidays: CalendarHandler.cpp:149-175 — sGameEventMgr->modifiedHolidays
+	// is the sorted id list of holidays carrying rows in the world
+	// `holiday_dates` table (GameEventMgr::LoadHolidayDates,
+	// GameEventMgr.cpp:965-1010): each row overrides HolidaysEntry.Date[date_id]
+	// (and Duration[0] when nonzero). Holidays.dbc supplies the remaining
+	// fields; a holiday_dates row for an unknown DBC id is skipped like C++.
+	type holidayDateOverride struct {
+		dateID   uint8
+		date     uint32
+		duration uint32
+	}
+	holidayOrder := []uint32{}
+	holidayOverrides := map[uint32][]holidayDateOverride{}
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		if hrows, herr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT id, date_id, date_value, holiday_duration FROM holiday_dates`); herr == nil {
+			defer hrows.Close()
+			for hrows.Next() {
+				var hid, dateValue, dur uint32
+				var did uint8
+				if herr := hrows.Scan(&hid, &did, &dateValue, &dur); herr != nil || did >= 26 {
+					continue
+				}
+				if _, seen := holidayOverrides[hid]; !seen {
+					holidayOrder = append(holidayOrder, hid)
+				}
+				holidayOverrides[hid] = append(holidayOverrides[hid], holidayDateOverride{dateID: did, date: dateValue, duration: dur})
+			}
+		}
+	}
+	sort.Slice(holidayOrder, func(i, j int) bool { return holidayOrder[i] < holidayOrder[j] })
+
+	holidayBuf := protocol.NewBuffer(64 * len(holidayOrder))
+	holidayCount := uint32(0)
+	if len(holidayOrder) > 0 && s.server != nil && s.server.Data != nil {
+		if hfile, herr := s.server.Data.File("Holidays"); herr == nil {
+			for _, hid := range holidayOrder {
+				rec, ok := hfile.Find(hid)
+				if !ok {
+					continue
+				}
+				region, _ := rec.Uint32(37)
+				looping, _ := rec.Uint32(38)
+				priority, _ := rec.Uint32(52)
+				filterType, _ := rec.Int32(53)
+				texture, _ := rec.String(51)
+				var dates [26]uint32
+				for j := range dates {
+					dates[j], _ = rec.Uint32(11 + j)
+				}
+				var durations [10]uint32
+				for j := range durations {
+					durations[j], _ = rec.Uint32(1 + j)
+				}
+				var calFlags [10]uint32
+				for j := range calFlags {
+					calFlags[j], _ = rec.Uint32(39 + j)
+				}
+				for _, ov := range holidayOverrides[hid] {
+					dates[ov.dateID] = ov.date
+					if ov.duration != 0 {
+						durations[0] = ov.duration
+					}
+				}
+				holidayBuf.WriteU32(hid)
+				holidayBuf.WriteU32(region)
+				holidayBuf.WriteU32(looping)
+				holidayBuf.WriteU32(priority)
+				holidayBuf.WriteU32(uint32(filterType))
+				for _, d := range dates {
+					holidayBuf.WriteU32(d)
+				}
+				for _, d := range durations {
+					holidayBuf.WriteU32(d)
+				}
+				for _, f := range calFlags {
+					holidayBuf.WriteU32(f)
+				}
+				holidayBuf.WriteCString(texture)
+				holidayCount++
+			}
+		}
+	}
+	buf.WriteU32(holidayCount)
+	buf.Write(holidayBuf.Bytes())
 
 	return s.write(uint16(protocol.OpcodeSMSG_CALENDAR_SEND_CALENDAR), buf.Bytes(), true) == nil
 }
@@ -1720,7 +1803,7 @@ func (s *session) handleCalendarEventModeratorStatus(ctx context.Context, payloa
 // (CalendarMgr.cpp:666-673). C++ sends no SMSG_CALENDAR_EVENT_STATUS here.
 func (s *session) handleCalendarEventSignup(ctx context.Context, payload []byte) bool {
 	if len(payload) < 9 {
-		return s.sendCalendarCommandResult(CalendarErrorInternal)
+		return true
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -1816,7 +1899,7 @@ func (s *session) handleCalendarEventSignup(ctx context.Context, payload []byte)
 		// CalendarMgr::SendCalendarClearPendingAction.
 		_ = s.write(uint16(protocol.OpcodeSMSG_CALENDAR_CLEAR_PENDING_ACTION), nil, true)
 	}
-	return s.sendCalendarCommandResult(CalendarOk)
+	return true
 }
 
 // handleCalendarComplain processes CMSG_CALENDAR_COMPLAIN (0x446).
