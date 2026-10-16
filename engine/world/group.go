@@ -317,6 +317,8 @@ func (s *session) sendLoadedGroup() {
 		return
 	}
 	if group := s.server.findGroupByID(s.groupID); group != nil {
+		// CharacterHandler.cpp:863: group->ResetMaxEnchantingLevel() on login.
+		refreshGroupMaxEnchantingLevel(s.server, group)
 		s.server.broadcastGroupList(group)
 	}
 }

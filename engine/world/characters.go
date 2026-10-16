@@ -1248,6 +1248,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
 		if s.resetTalents(ctx, true) {
 			_ = s.sendTalentsInfo(false)
+			// CharacterHandler.cpp:891-896: SendNotification(LANG_RESET_TALENTS)
+			// follows the talents-info resend after a reset.
+			s.sendNotification("All talents have been reset.")
 			s.player.AtLogin &^= uint32(atLoginResetTalents)
 			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~4 WHERE guid = ?", s.playerGUID)

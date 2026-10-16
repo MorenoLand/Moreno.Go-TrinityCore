@@ -233,6 +233,10 @@ func (s *session) handleSetFactionInactive(ctx context.Context, payload []byte) 
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_reputation SET flags = ? WHERE guid = ? AND faction = ?", reputation.Flags, s.playerGUID, reputation.FactionID)
 		}
+		// ReputationMgr::SetInactive (ReputationMgr.cpp:521): the flag change
+		// sets needSend, flushed immediately as SMSG_SET_FACTION_STANDING
+		// (SendState, ReputationMgr.cpp:184-209).
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{*reputation}, false), true)
 		s.debug("faction inactive state changed", "account", s.accountName, "faction", reputation.FactionID, "inactive", inactive != 0)
 		return true
 	}
@@ -282,6 +286,9 @@ func (s *session) handleSetFactionAtWar(ctx context.Context, payload []byte) boo
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_reputation SET flags = ? WHERE guid = ? AND faction = ?", reputation.Flags, s.playerGUID, reputation.FactionID)
 		}
+		// ReputationMgr::SetAtWar (ReputationMgr.cpp:493): the flag change sets
+		// needSend, flushed immediately as SMSG_SET_FACTION_STANDING.
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{*reputation}, false), true)
 		s.debug("faction war state changed", "account", s.accountName, "faction", reputation.FactionID, "at_war", flag != 0)
 		return true
 	}
@@ -334,9 +341,15 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 	cdb := s.server.CharactersStore.DB
 	for i := range s.player.Reputations {
 		if s.player.Reputations[i].FactionID == factionID {
+			oldRank := reputationRank(int64(totalReputationStanding(s.player.Reputations[i])))
 			s.player.Reputations[i].Standing += amount
 			_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.playerGUID, factionID)
 			totalStanding := totalReputationStanding(s.player.Reputations[i])
+			// ReputationMgr::SetReputation (ReputationMgr.cpp:369): the changed
+			// faction is reported to the client immediately via SendState as
+			// SMSG_SET_FACTION_STANDING; _sendFactionIncreased is the rank
+			// step-up (ReputationMgr.cpp:405-406).
+			_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{s.player.Reputations[i]}, reputationRank(int64(totalStanding)) > oldRank), true)
 			if totalStanding > 0 {
 				s.setAchievementCriteria(criteriaTypeGainReputation, factionID, uint32(totalStanding))
 				if totalStanding >= 9000 {
@@ -363,6 +376,10 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 	}
 	s.player.Reputations = append(s.player.Reputations, rep)
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, amount, factionFlagVisible)
+	// ReputationMgr::SetReputation (ReputationMgr.cpp:369): new factions are
+	// reported immediately as well ("only this faction gets reported to
+	// client, even if it has no own visible standing").
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{rep}, reputationRank(int64(amount)) > reputationRank(0)), true)
 	s.questReputationChanged(ctx, factionID)
 }
 
