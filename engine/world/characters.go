@@ -3256,6 +3256,47 @@ func (s *session) handleCompleteMovie(ctx context.Context, payload []byte) bool 
 // handleComplain processes CMSG_COMPLAIN (0x3C7).
 // Reference: WorldSession::HandleComplainOpcode (MiscHandler.cpp:1151).
 func (s *session) handleComplain(ctx context.Context, payload []byte) bool {
+	r := protocol.NewReader(payload)
+	spamType, err := r.ReadU8()
+	if err != nil {
+		return true
+	}
+	spammerGUID, err := r.ReadPackedGUID()
+	if err != nil {
+		return true
+	}
+	var unk1, unk2, unk3, unk4 uint32
+	var description string
+	switch spamType {
+	case 0: // mail spam: const 0, mail id, const 0 (MiscHandler.cpp:1165)
+		if unk1, err = r.ReadU32(); err != nil {
+			return true
+		}
+		if unk2, err = r.ReadU32(); err != nil {
+			return true
+		}
+		if unk3, err = r.ReadU32(); err != nil {
+			return true
+		}
+	case 1: // chat spam: language, message type, channel id, time, description (MiscHandler.cpp:1171)
+		if unk1, err = r.ReadU32(); err != nil {
+			return true
+		}
+		if unk2, err = r.ReadU32(); err != nil {
+			return true
+		}
+		if unk3, err = r.ReadU32(); err != nil {
+			return true
+		}
+		if unk4, err = r.ReadU32(); err != nil {
+			return true
+		}
+		if description, err = r.ReadCString(); err != nil {
+			return true
+		}
+	}
+	s.debug("report spam", "account", s.accountName, "type", spamType, "spammer", spammerGUID,
+		"unk1", unk1, "unk2", unk2, "unk3", unk3, "unk4", unk4, "message", description)
 	buf := protocol.NewBuffer(1)
 	buf.WriteU8(0) // complain result: 0 = complaint received
 	return s.write(uint16(protocol.OpcodeSMSG_COMPLAIN_RESULT), buf.Bytes(), true) == nil

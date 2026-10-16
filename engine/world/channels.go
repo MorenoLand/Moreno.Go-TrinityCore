@@ -343,7 +343,7 @@ func (s *session) handleChannelList(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	name, err := reader.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	key := s.scopedChannelKey(name)
 	s.server.channelsMu.RLock()
@@ -1723,16 +1723,11 @@ func (s *session) handleChannelAnnouncements(ctx context.Context, payload []byte
 }
 
 // handleChannelVoiceOn processes CMSG_CHANNEL_VOICE_ON (0x3D6).
-// Reference: ChannelHandler.cpp HandleChannelVoiceOn calls Channel::Voice,
-// which is an empty body in the reference - a true no-op.
+// Reference: VoiceChatHandler.cpp:31 (WorldSession::HandleChannelVoiceOnOpcode):
+// the C++ body only logs; recvData is unused, so this is a true no-op.
 func (s *session) handleChannelVoiceOn(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || len(payload) > 0 {
-		if len(payload) > 0 {
-			r := protocol.NewReader(payload)
-			if _, err := r.ReadCString(); err != nil {
-				return false
-			}
-		}
+	if !s.playerLoaded {
+		return true
 	}
 	return true
 }
@@ -1747,7 +1742,7 @@ func (s *session) handleChannelModerate(ctx context.Context, payload []byte) boo
 	return true
 }
 
-// handleGetChannelMemberCount processes CMSG_GET_CHANNEL_MEMBER_COUNT (0x3D3).
+// handleGetChannelMemberCount processes CMSG_GET_CHANNEL_MEMBER_COUNT (0x3D4).
 // Reference: HandleGetChannelMemberCount only answers channels the player is
 // on: name, channel flags, member count.
 func (s *session) handleGetChannelMemberCount(ctx context.Context, payload []byte) bool {
@@ -1757,7 +1752,7 @@ func (s *session) handleGetChannelMemberCount(ctx context.Context, payload []byt
 	r := protocol.NewReader(payload)
 	channelName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	s.server.channelsMu.RLock()
 	ch := s.server.channels[s.scopedChannelKey(channelName)]
@@ -1792,10 +1787,10 @@ func (s *session) handleDeclineChannelInvite(ctx context.Context, payload []byte
 func (s *session) handleSetActiveVoiceChannel(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	if _, err := r.ReadU32(); err != nil {
-		return false
+		return true
 	}
 	if _, err := r.ReadCString(); err != nil {
-		return false
+		return true
 	}
 	return true
 }
