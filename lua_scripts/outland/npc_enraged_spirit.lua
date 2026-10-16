@@ -28,7 +28,7 @@
 -- dead code (the luaBossAI shim admits only registered
 -- entries).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
--- 9 OnDamageTaken (the enrage latch), 23 OnReset. No event
+-- 9 OnDamageTaken (the enrage gate), 23 OnReset. No event
 -- 3 — the C++ overrides no KilledUnit; no event 4 — the
 -- JustDied arm is unbridgeable (see deviations); no event
 -- 14 — no SpellHit override.
@@ -42,12 +42,19 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ JustEngagedWith
 -- values (the C++ Reset() override is empty — the timer
 -- re-latch lands on OnEnterCombat, gargolmar precedent).
--- Earth spirit (21050): stormTimer 3000-4000 init (randtime 3s-4s)
--- then 6000-9000: non-triggered DoCastVictim(SPELL_FIERY_
--- BOULDER 38498) (C++-exact), re-arm 6-9s regardless.
--- Fire spirit (21061): stormTimer 2000-10000 init (randtime 2s-10s)
--- then 6000-12000: non-triggered DoCastVictim(SPELL_FEL_
--- FIREBALL 36247) (C++-exact), re-arm 6-12s regardless.
+-- Earth spirit (21050): engage — same !HasAura(SPELL_FEL_
+-- FIRE_AURA 36006) gated non-triggered DoCastSelf + AddAura
+-- as fire (C++-exact JustEngagedWith); stormTimer 3000-4000
+-- init (randtime 3s-4s) then 6000-9000: non-triggered
+-- DoCastVictim(SPELL_FIERY_BOULDER 38498) (C++-exact),
+-- re-arm 6-9s regardless.
+-- Fire spirit (21061): engage — if !HasAura(SPELL_FEL_FIRE_
+-- AURA 36006): non-triggered DoCastSelf + AddAura (the aura
+-- is the spell's whole effect — gurtogg precedent; C++-exact
+-- JustEngagedWith gate); stormTimer 2000-10000 init
+-- (randtime 2s-10s) then 6000-12000: non-triggered
+-- DoCastVictim(SPELL_FEL_FIREBALL 36247) (C++-exact), re-arm
+-- 6-12s regardless.
 -- Air spirit (21060): chainLightningTimer 10000 init:
 -- non-triggered DoCastVictim(SPELL_CHAIN_LIGHTNING 16006)
 -- (C++-exact — the arm names the file-scope Earthmender enum's
@@ -61,11 +68,15 @@
 -- 17-23s regardless.
 -- OnDamageTaken(9) — the C++ UpdateAI per-tick enrage latch
 -- (fire + air only): HealthBelowPctDamaged(35) — health
--- after this hit strictly below 35% (shahraz precedent) and
--- a used_enrage latch (the !GetAura(SPELL_ENRAGE) check has
--- no aura-state bridge — phase_hunter precedent — so the
--- dispel re-cast arm is unmodeled, see deviations):
--- non-triggered DoCastSelf(SPELL_ENRAGE 8599) (C++-exact).
+-- after this hit strictly below 35% (shahraz precedent) —
+-- lands on OnDamageTaken (nagrand_banner precedent); the
+-- C++-exact !GetAura(SPELL_ENRAGE) gate runs via
+-- creature:HasAura (the per-GUID usedEnrage latch was a
+-- stand-in from the stale "no aura-state bridge" era —
+-- golemagg precedent) and AddAura reproduces the aura the
+-- engine cast path cannot apply (gurtogg precedent), so a
+-- dispel re-arms the cast exactly like C++: non-triggered
+-- DoCastSelf(SPELL_ENRAGE 8599) (C++-exact).
 -- Melee is engine-driven in Go (creature combat tick), like
 -- C++ DoMeleeAttackIfReady.
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
@@ -73,10 +84,7 @@
 -- OnSpawn — millhouse note — so both hooks land the same
 -- reset).
 -- Deliberate deviations (all await engine bridges): no
--- aura-state bridge — the JustEngagedWith !GetAura(SPELL_
--- FEL_FIRE_AURA 36006) gated self-cast (fire + earth) and
--- the enrage latch's !GetAura(SPELL_ENRAGE) re-cast arm
--- unmodeled (phase_hunter precedent); no summon bridge —
+-- summon bridge —
 -- the JustDied DoSpawnCreature soul arms (NPC_EARTHEN_SOUL
 -- 21073 / NPC_FIERY_SOUL 21097 / NPC_ENRAGED_AIRY_SOUL
 -- 21116 / NPC_ENRAGED_WATERY_SOUL 21109) and the earth
@@ -101,6 +109,7 @@
 
 local SPELL_STORMBOLT = 38032
 local SPELL_FEL_FIREBALL = 36247
+local SPELL_FEL_FIRE_AURA = 36006
 local SPELL_FIERY_BOULDER = 38498
 local SPELL_CHAIN_LIGHTNING = 16006
 local SPELL_HURRICANE = 32717
@@ -177,20 +186,33 @@ local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelPump(guid)
     local entry = creature:GetEntry()
-    local st = { entry = entry, usedEnrage = false }
+    local st = { entry = entry }
     if entry == ENTRY_ENRAGED_WATER_SPIRIT then
         st.stormSpell = SPELL_STORMBOLT
         st.stormTimer = math.random(0, 1000)
         st.stormReArm = function() return 17000 + math.random(0, 6000) end
     elseif entry == ENTRY_ENRAGED_FIRE_SPIRIT then
-        -- The !GetAura(SPELL_FEL_FIRE_AURA) gated self-cast
-        -- has no aura-state bridge — unmodeled (phase_hunter
-        -- precedent; deviation in the header).
+        -- C++ JustEngagedWith: non-triggered DoCastSelf(SPELL_
+        -- FEL_FIRE_AURA) when the aura is missing — the engine
+        -- cast path applies no auras, so AddAura reproduces the
+        -- resulting aura state (gurtogg precedent); the gate is
+        -- then C++-exact, recasting on re-engage after evade or
+        -- dispel (the phase_hunter "no aura-state bridge" note
+        -- was stale — HasAura/AddAura are bridged).
+        if not creature:HasAura(SPELL_FEL_FIRE_AURA) then
+            creature:CastSpell(creature, SPELL_FEL_FIRE_AURA)
+            creature:AddAura(SPELL_FEL_FIRE_AURA)
+        end
         st.stormSpell = SPELL_FEL_FIREBALL
         st.stormTimer = math.random(2000, 10000)
         st.stormReArm = function() return 6000 + math.random(0, 6000) end
     elseif entry == ENTRY_ENRAGED_EARTH_SPIRIT then
-        -- Same aura-gate deviation as fire (see above).
+        -- Same JustEngagedWith aura-gated self-cast as fire
+        -- (C++-exact — see above).
+        if not creature:HasAura(SPELL_FEL_FIRE_AURA) then
+            creature:CastSpell(creature, SPELL_FEL_FIRE_AURA)
+            creature:AddAura(SPELL_FEL_FIRE_AURA)
+        end
         st.stormSpell = SPELL_FIERY_BOULDER
         st.stormTimer = math.random(3000, 4000)
         st.stormReArm = function() return 6000 + math.random(0, 3000) end
@@ -215,14 +237,15 @@ end
 -- lands on OnDamageTaken (nagrand_banner precedent): C++-exact
 -- HealthBelowPct(35) = post-damage health < floor(max*35/100)
 -- (ironaya convention); the killing blow is excluded (UpdateAI never
--- runs when dead — chromaggus precedent). used latch stands in for
--- the !GetAura re-cast arm (no aura-state bridge —
--- phase_hunter precedent).
+-- runs when dead — chromaggus precedent). The C++-exact
+-- !GetAura(SPELL_ENRAGE) gate runs via creature:HasAura —
+-- the per-GUID usedEnrage latch was a stand-in from the stale
+-- "no aura-state bridge" era (golemagg precedent).
 for _, entry in ipairs({ ENTRY_ENRAGED_FIRE_SPIRIT, ENTRY_ENRAGED_AIR_SPIRIT }) do
     RegisterCreatureEvent(entry, 9, function(_, creature, attacker, damage)
         local guid = creature:GetGUID()
         local st = spiritState[guid]
-        if not st or st.usedEnrage then
+        if not st then
             return
         end
         local maxHealth = creature:GetMaxHealth()
@@ -230,10 +253,17 @@ for _, entry in ipairs({ ENTRY_ENRAGED_FIRE_SPIRIT, ENTRY_ENRAGED_AIR_SPIRIT }) 
             return
         end
         local health = creature:GetHealth()
+        -- C++-exact !GetAura(SPELL_ENRAGE) gate via
+        -- creature:HasAura — the per-GUID usedEnrage latch was a
+        -- stand-in from the stale "no aura-state bridge" era
+        -- (golemagg precedent); AddAura reproduces the aura the
+        -- engine cast path cannot apply (gurtogg precedent), so a
+        -- dispel re-arms the cast exactly like C++.
         if damage < health
-            and (health - damage) < math.floor(maxHealth * 35 / 100) then
-            st.usedEnrage = true
+            and (health - damage) < math.floor(maxHealth * 35 / 100)
+            and not creature:HasAura(SPELL_ENRAGE) then
             creature:CastSpell(creature, SPELL_ENRAGE)
+            creature:AddAura(SPELL_ENRAGE)
         end
     end)
 end
