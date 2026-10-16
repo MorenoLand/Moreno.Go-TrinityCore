@@ -17,7 +17,7 @@ func (s *session) handleArenaTeamQuery(ctx context.Context, payload []byte) bool
 	r := protocol.NewReader(payload)
 	teamID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -70,7 +70,7 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	teamID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -256,7 +256,7 @@ func (s *session) handleArenaTeamInvite(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	teamID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	invitedName, err := r.ReadCString()
 	if err != nil {
@@ -447,7 +447,7 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 	r := protocol.NewReader(payload)
 	teamID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -557,7 +557,7 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	teamID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	name, err := r.ReadCString()
 	if err != nil {
@@ -649,7 +649,7 @@ func (s *session) handleArenaTeamDisband(ctx context.Context, payload []byte) bo
 	r := protocol.NewReader(payload)
 	teamID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -714,7 +714,7 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	teamID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	name, err := r.ReadCString()
 	if err != nil {

@@ -1391,7 +1391,7 @@ func closestGraveyardCandidate(locations []wotlk.WorldSafeLoc, mapID uint32, map
 func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	if _, err := reader.ReadU8(); err != nil {
-		return false
+		return true
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -1924,11 +1924,11 @@ func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) b
 	// stored resurrecter and resurrection requests silently failed.
 	resurrecter, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	response, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -2039,7 +2039,7 @@ func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool 
 	reader := protocol.NewReader(payload)
 	// MiscPackets.cpp:229: _worldPacket >> CorpseGUID — raw 8-byte read.
 	if _, err := reader.ReadU64(); err != nil {
-		return false
+		return true
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -2442,7 +2442,7 @@ func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byt
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true

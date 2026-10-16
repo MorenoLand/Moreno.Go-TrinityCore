@@ -4551,7 +4551,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET last_ip = ? WHERE id = ?", remoteAddress(s.conn), account.ID); err != nil {
-		return false
+		return true
 	}
 	s.authed = true
 	s.accountID = account.ID
@@ -4918,7 +4918,7 @@ func (s *session) handleTutorialFlag(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
 	data, err := b.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	index := data / 32
 	if index < 8 {
@@ -4948,7 +4948,7 @@ func (s *session) handlePing(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
 	ping, err := b.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	latency, err := b.ReadU32()
 	if err != nil {
@@ -4966,7 +4966,7 @@ func (s *session) handlePing(ctx context.Context, payload []byte) bool {
 			s.overSpeedPings++
 			if s.server != nil && s.server.Config.MaxOverSpeedPings != 0 && s.overSpeedPings > s.server.Config.MaxOverSpeedPings {
 				if s.server.AuthStore == nil {
-					return false
+					return true
 				}
 				skip, permErr := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSkipCheckOverSpeedPing)
 				if permErr != nil {
@@ -5255,7 +5255,7 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 	guids, err := readObjectGUIDCandidates(payload)
 	if err != nil {
 		s.debug("name query rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	requestedGUID := guids[0]
 	var name string
@@ -5359,7 +5359,7 @@ func (s *session) handlePlayedTime(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	trigger, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	var total, level int64
 	if s.playerLoaded && s.player != nil {
@@ -5369,7 +5369,7 @@ func (s *session) handlePlayedTime(ctx context.Context, payload []byte) bool {
 		err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT totaltime, leveltime FROM characters WHERE guid = ? AND account = ?", s.playerGUID, s.accountID).Scan(&total, &level)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			s.debug("played time query failed", "account", s.accountName, "error", err)
-			return false
+			return true
 		}
 	}
 	packet := protocol.NewBuffer(9)
@@ -5383,7 +5383,7 @@ func (s *session) handleZoneUpdate(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	zone, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -5394,7 +5394,7 @@ func (s *session) handleZoneUpdate(ctx context.Context, payload []byte) bool {
 	s.streamNearbyObjects(ctx)
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ZONE", zone, s.playerGUID); err != nil {
 		s.debug("zone update failed", "account", s.accountName, "zone", zone, "error", err)
-		return false
+		return true
 	}
 	return true
 }
@@ -5461,11 +5461,11 @@ func (s *session) handleSetActionButton(ctx context.Context, payload []byte) boo
 	reader := protocol.NewReader(payload)
 	button, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	data, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if button >= 144 || !s.playerLoaded || s.player == nil {
 		return true
@@ -5508,7 +5508,7 @@ func (s *session) handleSetActionButton(ctx context.Context, payload []byte) boo
 	}
 	if err != nil {
 		s.debug("action button update failed", "account", s.accountName, "button", button, "error", err)
-		return false
+		return true
 	}
 	return true
 }
@@ -5517,15 +5517,15 @@ func (s *session) handleUpdateAccountData(ctx context.Context, payload []byte) b
 	reader := protocol.NewReader(payload)
 	typeID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	timestamp, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	decompressedSize, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if typeID >= 8 {
 		return true
@@ -5542,7 +5542,7 @@ func (s *session) handleUpdateAccountData(ctx context.Context, payload []byte) b
 		}
 		if eraseErr != nil {
 			s.debug("account data erase failed", "account", s.accountName, "type", typeID, "error", eraseErr)
-			return false
+			return true
 		}
 		response := protocol.NewBuffer(8)
 		response.WriteU32(typeID)
@@ -5554,7 +5554,7 @@ func (s *session) handleUpdateAccountData(ctx context.Context, payload []byte) b
 	}
 	compressed, err := reader.Read(reader.Remaining())
 	if err != nil {
-		return false
+		return true
 	}
 	data, err := decompressAccountData(compressed, decompressedSize)
 	if err != nil {
@@ -5573,7 +5573,7 @@ func (s *session) handleUpdateAccountData(ctx context.Context, payload []byte) b
 	_ = result
 	if err != nil {
 		s.debug("account data update failed", "account", s.accountName, "type", typeID, "error", err)
-		return false
+		return true
 	}
 	response := protocol.NewBuffer(8)
 	response.WriteU32(typeID)
@@ -5585,7 +5585,7 @@ func (s *session) handleRequestAccountData(ctx context.Context, payload []byte) 
 	reader := protocol.NewReader(payload)
 	typeID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if typeID >= 8 {
 		return true
@@ -5604,11 +5604,11 @@ func (s *session) handleRequestAccountData(ctx context.Context, payload []byte) 
 		data = nil
 	} else if err != nil {
 		s.debug("account data request failed", "account", s.accountName, "type", typeID, "error", err)
-		return false
+		return true
 	}
 	compressed, err := compressAccountData(data)
 	if err != nil {
-		return false
+		return true
 	}
 	packet := protocol.NewBuffer(24 + len(compressed))
 	if s.playerLoaded {

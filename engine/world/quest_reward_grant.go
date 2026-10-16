@@ -114,7 +114,7 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	}
 	status, err := s.characterQuestStatus(ctx, questID)
 	if err != nil {
-		return false
+		return true
 	}
 	// QuestHandler.cpp:293-300 — this packet never transitions quest state;
 	// the client confirms the turn-in through the request-reward packet first.
@@ -138,7 +138,7 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		return true
 	}
 	if complete, itemErr := s.hasQuestRequiredItems(ctx, view.RequiredItems); itemErr != nil {
-		return false
+		return true
 	} else if !complete {
 		return true
 	}
@@ -159,7 +159,7 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	}
 	if err != nil {
 		s.debug("quest reward commit failed", "account", s.accountName, "quest", questID, "error", err)
-		return false
+		return true
 	}
 	if !s.applyQuestRewardGrants(ctx, view, questID, giverGUID, reward, grants, destroyedGUIDs, true) {
 		return false

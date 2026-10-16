@@ -902,7 +902,7 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 			err := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&teamID)
 			if err != nil {
 				if !errors.Is(err, sql.ErrNoRows) {
-					return false
+					return true
 				}
 				// WorldSession::SendNotInArenaTeamPacket (ArenaTeamHandler.cpp:414):
 				// SMSG_ARENA_ERROR (0x376), u32(0) + u8(type) — "You are not in a %uv%u arena team".
@@ -984,7 +984,7 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 			if cdb := s.server.CharactersStore.DB; cdb != nil {
 				dbErr := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&leaderTeamID)
 				if dbErr != nil && !errors.Is(dbErr, sql.ErrNoRows) {
-					return false
+					return true
 				}
 			}
 		}
@@ -1051,7 +1051,7 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 			dbErr := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&teamID)
 			if dbErr != nil {
 				if !errors.Is(dbErr, sql.ErrNoRows) {
-					return false
+					return true
 				}
 				buf := protocol.NewBuffer(5)
 				buf.WriteU32(0)
@@ -1606,11 +1606,11 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 	r := protocol.NewReader(payload)
 	battleID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	accepted, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 
 	if accepted != 0 {

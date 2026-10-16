@@ -218,7 +218,7 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	var entry uint32
 	if creature := s.luaCreature(ctx, guid); creature != nil {
@@ -1152,7 +1152,7 @@ func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool 
 	r := protocol.NewReader(payload)
 	count, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// QueryHandler.cpp:323-324: more than MAX_QUEST_LOG_SIZE (25) quest ids is a
 	// silent drop — no packet at all.
@@ -1165,7 +1165,7 @@ func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool 
 	for i := uint32(0); i < count; i++ {
 		questID, err := r.ReadU32()
 		if err != nil {
-			return false
+			return true
 		}
 		if _, dup := seen[questID]; dup {
 			continue

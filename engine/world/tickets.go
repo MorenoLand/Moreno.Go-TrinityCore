@@ -597,24 +597,24 @@ func (s *session) handleBug(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	suggestion, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// CMSG_BUG carries contentLen/typeLen prefixes, but the strings parse
 	// null-terminated (ByteBuffer::operator>>(std::string) = ReadCString);
 	// C++ reads the lengths and ignores them for parsing.
 	if _, err = r.ReadU32(); err != nil {
-		return false
+		return true
 	}
 	content, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	if _, err = r.ReadU32(); err != nil {
-		return false
+		return true
 	}
 	typeStr, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

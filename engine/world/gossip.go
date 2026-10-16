@@ -187,7 +187,7 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 		s.gossip = defaultMenu
 		if err := s.sendGossipMenu(); err != nil {
 			s.debug("gossip hello response failed", "account", s.accountName, "entry", entry, "error", err)
-			return false
+			return true
 		}
 	}
 	s.debug("npc hello handled", "account", s.accountName, "entry", entry, "questPath", questPath)
@@ -439,30 +439,30 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// SMSG_BINDER_CONFIRM (Player.cpp:9597-9600) — the bind lands on
 			// CMSG_BINDER_ACTIVATE.
 			if !s.sendGossipComplete() {
-				return false
+				return true
 			}
 			bind := protocol.NewBuffer(8)
 			bind.WriteU64(guid)
 			if err := s.write(uint16(protocol.OpcodeSMSG_BINDER_CONFIRM), bind.Bytes(), true); err != nil {
-				return false
+				return true
 			}
 		} else if item.Action == 9 { // GOSSIP_OPTION_BANKER
 			s.gossipClosed = true
 			bank := protocol.NewBuffer(8)
 			bank.WriteU64(guid)
 			if err := s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true); err != nil {
-				return false
+				return true
 			}
 		} else if item.Action == 11 { // GOSSIP_OPTION_TABARDDESIGNER
 			// Player::OnGossipSelect (Player.cpp:14669-14671): SendCloseGossip
 			// before MSG_TABARDVENDOR_ACTIVATE.
 			if !s.sendGossipComplete() {
-				return false
+				return true
 			}
 			tabard := protocol.NewBuffer(8)
 			tabard.WriteU64(guid)
 			if err := s.write(uint16(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE), tabard.Bytes(), true); err != nil {
-				return false
+				return true
 			}
 		} else if item.Action == 13 { // GOSSIP_OPTION_AUCTIONEER
 			// Player::OnGossipSelect (Player.cpp:14672-14674) routes through
@@ -481,7 +481,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// (SMSG_GOSSIP_COMPLETE) goes out BEFORE SendTalentWipeConfirm —
 			// the menu must close before the wipe-confirm dialog opens.
 			if !s.sendGossipComplete() {
-				return false
+				return true
 			}
 			wipeBuf := protocol.NewBuffer(12)
 			wipeBuf.WriteU64(guid)
@@ -494,7 +494,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			}
 			wipeBuf.WriteU32(wipeCost)
 			if err := s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), wipeBuf.Bytes(), true); err != nil {
-				return false
+				return true
 			}
 		} else if item.Action == 1 || item.Action == 20 { // GOSSIP_OPTION_GOSSIP / GOSSIP_OPTION_DUALSPEC_INFO
 			// Player::OnGossipSelect (Player.cpp:14604-14615): the POI fires
@@ -557,7 +557,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// runs before SendPetitionShowList. Go has no petition-show model
 			// (only arena-charter deletion), so only the close is bridged.
 			if !s.sendGossipComplete() {
-				return false
+				return true
 			}
 		} else if item.Action == 12 { // GOSSIP_OPTION_BATTLEFIELD
 			// Player::OnGossipSelect (Player.cpp:14684-14696): the battleground
@@ -581,7 +581,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// frames resent. The "Yes, please do." confirmation is
 			// data-driven (gossip menu text), not code.
 			if !s.sendGossipComplete() {
-				return false
+				return true
 			}
 			s.resetActivePetTalents(ctx)
 		} else if item.Action == 18 { // GOSSIP_OPTION_LEARNDUALSPEC
@@ -790,7 +790,7 @@ func (s *session) handlePlayerGossipSelect(ctx context.Context, menuID uint32, i
 	}
 	s.gossipClosed = true
 	if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
-		return false
+		return true
 	}
 	return true
 }

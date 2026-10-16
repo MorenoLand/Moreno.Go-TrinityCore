@@ -133,7 +133,7 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return false
+		return true
 	}
 
 	// BankHandler.cpp:141-146: the banker must be usable first, otherwise the

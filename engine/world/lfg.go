@@ -758,7 +758,7 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	result, entry := s.server.Features.LFG.Join(s.playerGUID, roles8, storeDungeons, comment)
 	s.debug("lfg join", "account", s.accountName, "result", result, "dungeons", entry.Dungeons)
 	if err := s.sendLFGJoinResult(result, uint32(LFGStateNone)); err != nil {
-		return false
+		return true
 	}
 	if result == LFGJoinOK {
 		// The join-queue update carries the requested (possibly replaced)
@@ -818,12 +818,12 @@ func (s *session) handleLFGGetStatus() bool {
 	cleared.Comment = ""
 	if s.groupID != 0 {
 		if err := s.sendLFGUpdateParty(LFGUpdateStatus, entry); err != nil {
-			return false
+			return true
 		}
 		return s.sendLFGUpdatePlayer(LFGUpdateStatus, cleared) == nil
 	}
 	if err := s.sendLFGUpdatePlayer(LFGUpdateStatus, entry); err != nil {
-		return false
+		return true
 	}
 	return s.sendLFGUpdateParty(LFGUpdateStatus, cleared) == nil
 }

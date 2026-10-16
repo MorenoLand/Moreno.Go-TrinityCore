@@ -1835,11 +1835,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	castID, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	spellID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// The dead-caster gate lives below the spell lookup: Spell::CheckCast
 	// (Spell.cpp:5174-5177) exempts passive and CASTABLE_WHILE_DEAD spells,
@@ -1853,12 +1853,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// (Spell.cpp:6043-6076).
 	clientCastFlags, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	target, err := protocol.ReadSpellTargetData(reader)
 	if err != nil {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "malformed targets", "error", err)
-		return false
+		return true
 	}
 	if clientCastFlags&0x02 != 0 {
 		// SpellCastTargets m_elevation / m_speed (HandleClientCastFlags,
@@ -1867,10 +1867,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// embedded movement block C++ reads next has no Go consumer —
 		// movement arrives via the standalone movement opcodes.
 		if target.TrajElevation, err = reader.ReadF32(); err != nil {
-			return false
+			return true
 		}
 		if target.TrajSpeed, err = reader.ReadF32(); err != nil {
-			return false
+			return true
 		}
 	}
 	spell, found, err := s.server.Data.Spell(spellID)
@@ -19097,7 +19097,7 @@ func (s *session) handleCancelChanneling(payload []byte) bool {
 	r := protocol.NewReader(payload)
 	channelSpell, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.interruptCurrentChannel()
@@ -19160,7 +19160,7 @@ func (s *session) handleCancelAura(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	spellID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// WorldSession::HandleCancelAuraOpcode (SpellHandler.cpp:455).
 	if s.server == nil || s.server.Data == nil {
@@ -30776,7 +30776,7 @@ func (s *session) handleRemoveGlyph(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	slot, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if slot >= 6 {
 		return true

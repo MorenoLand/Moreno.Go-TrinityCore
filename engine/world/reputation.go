@@ -205,11 +205,11 @@ func (s *session) handleSetFactionInactive(ctx context.Context, payload []byte) 
 	reader := protocol.NewReader(payload)
 	listID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	inactive, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	for index := range s.player.Reputations {
 		reputation := &s.player.Reputations[index]
@@ -246,11 +246,11 @@ func (s *session) handleSetFactionAtWar(ctx context.Context, payload []byte) boo
 	reader := protocol.NewReader(payload)
 	listID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	flag, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	for index := range s.player.Reputations {
 		reputation := &s.player.Reputations[index]

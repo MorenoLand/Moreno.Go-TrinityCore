@@ -26,55 +26,55 @@ func (s *session) handleWho(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	levelMin, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	levelMax, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	packetPlayerName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	packetGuildName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	raceMask, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	classMask, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	zonesCount, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if zonesCount > 10 {
-		return false
+		return true
 	}
 	zoneIDs := make([]uint32, zonesCount)
 	for i := uint32(0); i < zonesCount; i++ {
 		zid, err := r.ReadU32()
 		if err != nil {
-			return false
+			return true
 		}
 		zoneIDs[i] = zid
 	}
 	strCount, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if strCount > 4 {
-		return false
+		return true
 	}
 	searchStrings := make([]string, strCount)
 	for i := uint32(0); i < strCount; i++ {
 		str, err := r.ReadCString()
 		if err != nil {
-			return false
+			return true
 		}
 		searchStrings[i] = strings.ToLower(str)
 	}
@@ -248,7 +248,7 @@ func (s *session) handleWhoIs(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	charName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	if s.server.AuthStore == nil || s.server.AuthStore.DB == nil {
 		s.sendNotification("You do not have permission to use that command.")
@@ -498,7 +498,7 @@ func (s *session) handleInspect(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	targetGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	targetSession := s.server.findSessionByGUID(targetGUID)
 	if targetSession == nil || !targetSession.worldReady.Load() || targetSession.player == nil {

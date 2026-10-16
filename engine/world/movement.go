@@ -162,13 +162,13 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	b := protocol.NewReader(payload)
 	guid, err := b.ReadPackedGUID()
 	if err != nil {
-		return false
+		return true
 	}
 	if _, err := b.ReadU32(); err != nil {
-		return false
+		return true
 	}
 	if _, err := b.ReadU32(); err != nil {
-		return false
+		return true
 	}
 	if !s.nearTeleportPending || guid != s.playerGUID {
 		return true
@@ -626,10 +626,10 @@ func (s *session) handleTimeSyncResponse(payload []byte) bool {
 	if s.playerLoaded && !s.questStatusSent {
 		s.questStatusSent = true
 		if !s.sendQuestgiverStatusMultiple(context.Background()) {
-			return false
+			return true
 		}
 		if !s.sendTaxiNodeStatusMultiple(context.Background()) {
-			return false
+			return true
 		}
 	}
 	return true

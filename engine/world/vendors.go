@@ -175,7 +175,7 @@ func (s *session) handleListInventory(ctx context.Context, payload []byte) bool 
 	reader := protocol.NewReader(payload)
 	vendorGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	return s.sendVendorList(ctx, vendorGUID)
 }
@@ -447,15 +447,15 @@ func (s *session) handleBuyItem(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	vendorGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	itemEntry, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	slot, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// ItemHandler.cpp:585-589 — a 0 slot is a cheating attempt answered with
 	// silence, ahead of the interact check inside BuyItemFromVendorSlot.
@@ -484,15 +484,15 @@ func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool 
 	reader := protocol.NewReader(payload)
 	vendorGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	itemEntry, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	slot, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// ItemHandler.cpp:546-549 — the 0-slot cheat arm runs before bag
 	// resolution and the interact check, matching the plain-buy path.
@@ -505,7 +505,7 @@ func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool 
 	}
 	bagSlot, err := reader.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	count, err := reader.ReadU32()
 	// Player.cpp:21904-21906: truncation to uint8 at the call boundary,
@@ -1303,11 +1303,11 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	vendorGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	rawItemGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// ItemHandler.cpp:379 — empty item GUID is silently ignored.
 	if rawItemGUID == 0 {
@@ -1316,7 +1316,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	// CMSG_SELL_ITEM carries count as uint32 (ItemHandler.cpp:376).
 	count, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
@@ -1497,7 +1497,7 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	vendorGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// ItemHandler.cpp:497-502 — vendor not found or not interactable.
 	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagVendor)) {

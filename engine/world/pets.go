@@ -2319,7 +2319,7 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 	r := protocol.NewReader(payload)
 	npcGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// NPCHandler.cpp:566-570 (HandleBuyStableSlot): CheckStableMaster gates
 	// the purchase; a failed check answers STABLE_ERR_STABLE.
@@ -2333,7 +2333,7 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return false
+		return true
 	}
 
 	// NPCHandler.cpp:575-586: the slot price is StableSlotPrices[MaxStabledPets+1]
@@ -2378,7 +2378,7 @@ func (s *session) handleDismissCritter(ctx context.Context, payload []byte) bool
 	r := protocol.NewReader(payload)
 	critterGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// PetHandler.cpp:51: _player->GetCritterGUID() == pet->GetGUID() gate.
 	if critterGUID == 0 || critterGUID != s.player.CritterGUID {
@@ -2462,7 +2462,7 @@ func (s *session) handlePetAbandon(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	petGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	petNumber := s.petNumberForGUID(petGUID)
 	if petNumber == 0 || s.server == nil || s.server.CharactersStore == nil {
@@ -2596,7 +2596,7 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	npcGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	if s.isDeadOrGhost() || !s.checkStableMaster(ctx, npcGUID) {
 		s.sendPetStableResult(stableErrStable)
@@ -2701,11 +2701,11 @@ func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool 
 	r := protocol.NewReader(payload)
 	npcGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	petNumber, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if !s.checkStableMaster(ctx, npcGUID) {
 		s.sendPetStableResult(stableErrStable)
@@ -2779,11 +2779,11 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	npcGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	petNumber, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if !s.checkStableMaster(ctx, npcGUID) {
 		s.sendPetStableResult(stableErrStable)
@@ -2890,11 +2890,11 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	petGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	action, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	var targetGUID uint64
 	if len(payload) >= 20 {
@@ -3271,20 +3271,20 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	petGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	castCount, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	spellID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	castFlags, _ := r.ReadU8()
 	target, targetErr := protocol.ReadSpellTargetData(r)
 	if targetErr != nil {
-		return false
+		return true
 	}
 	if castFlags&0x02 != 0 {
 		_, _ = r.ReadF32()
@@ -3521,11 +3521,11 @@ func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	petNumber, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	petGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	buf := protocol.NewBuffer(64)
@@ -3702,7 +3702,7 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	petGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// PetHandler.cpp:433-438: the GUID must be the player's first controlled
 	// pet — the Go action-bar model is the active pet's DB row, so charmed
@@ -3912,15 +3912,15 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 	r := protocol.NewReader(payload)
 	petGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	spellID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	state, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	petNumber := s.petNumberForGUID(petGUID)
 	// PetHandler.cpp:709-727: C++ returns without touching pet_spell/abdata
@@ -4053,7 +4053,7 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	npcGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// NPCHandler.cpp:293-295: not a stablemaster -> silent drop.
 	if !s.checkStableMaster(ctx, npcGUID) {

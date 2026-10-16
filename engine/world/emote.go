@@ -91,15 +91,15 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	textEmote, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	emoteNum, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	targetGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// C++ (ChatHandler.cpp:699): Eluna PLAYER_EVENT_ON_TEXT_EMOTE (24) fires
 	// from ScriptMgr::OnPlayerTextEmote right after the payload read, before

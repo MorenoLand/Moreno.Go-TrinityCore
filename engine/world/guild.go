@@ -664,7 +664,7 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	targetName, err := reader.ReadCString()
 	if err != nil || targetName == "" {
-		return false
+		return true
 	}
 	// WorldSession::HandleGuildInviteOpcode (GuildHandler.cpp:43):
 	// normalizePlayerName gates the handler; Guild::HandleInviteMember
@@ -937,7 +937,7 @@ func (s *session) handleGuildMotd(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	motd, err := reader.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -1046,7 +1046,7 @@ func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	targetName, err := r.ReadCString()
 	if err != nil || targetName == "" {
-		return false
+		return true
 	}
 	// WorldSession::HandleGuildPromoteOpcode (GuildHandler.cpp:95):
 	// normalizePlayerName gates the handler — the normalized name is then
@@ -1140,7 +1140,7 @@ func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	targetName, err := r.ReadCString()
 	if err != nil || targetName == "" {
-		return false
+		return true
 	}
 	// WorldSession::HandleGuildDemoteOpcode (GuildHandler.cpp:104):
 	// normalizePlayerName gates the handler — the normalized name is then
@@ -1243,7 +1243,7 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	newMasterName, err := r.ReadCString()
 	if err != nil || newMasterName == "" {
-		return false
+		return true
 	}
 	// WorldSession::HandleGuildSetGuildMaster (GuildHandler.cpp:129):
 	// normalizePlayerName gates the handler, and Guild::GetMember
@@ -1324,7 +1324,7 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	removee, err := r.ReadCString()
 	if err != nil || removee == "" {
-		return false
+		return true
 	}
 	// WorldSession::HandleGuildRemoveOpcode (GuildHandler.cpp:51):
 	// normalizePlayerName gates the handler — the normalized name is what
@@ -1509,7 +1509,7 @@ func (s *session) handleGuildAddRank(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	rankName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	// GuildAddRank::Read (GuildPackets.h:287): Name is String<15,
 	// NoHyperlinks> — an overlong name throws in C++ and the packet is
@@ -1637,7 +1637,7 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	rankID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// GuildHandler.cpp:179 passes packet.RankID (u32) into the uint8 rankId
 	// parameter of HandleSetRankInfo — an implicit mod-256 truncation, so
@@ -1645,11 +1645,11 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	rankID &= 0xFF
 	rights, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	rankName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	// GuildSetRankPermissions::Read (GuildPackets.h:281): RankName is
 	// String<15, NoHyperlinks> — an overlong name throws in C++ and the
@@ -1663,12 +1663,12 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	for i := range tabFlags {
 		f, ferr := r.ReadU32()
 		if ferr != nil {
-			return false
+			return true
 		}
 		tabFlags[i] = f
 		l, lerr := r.ReadU32()
 		if lerr != nil {
-			return false
+			return true
 		}
 		tabLimits[i] = l
 	}
@@ -1797,11 +1797,11 @@ func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) 
 	r := protocol.NewReader(payload)
 	targetName, err := r.ReadCString()
 	if err != nil || targetName == "" {
-		return false
+		return true
 	}
 	note, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	// GuildSetMemberNote::Read (GuildPackets.h:319): Note is String<31,
 	// NoHyperlinks> — an overlong note throws in C++ and the packet is
@@ -1863,11 +1863,11 @@ func (s *session) handleGuildSetOfficerNote(ctx context.Context, payload []byte)
 	r := protocol.NewReader(payload)
 	targetName, err := r.ReadCString()
 	if err != nil || targetName == "" {
-		return false
+		return true
 	}
 	note, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	// GuildSetMemberNote::Read (GuildPackets.h:319): Note is String<31,
 	// NoHyperlinks> — an overlong note throws in C++ and the packet is
@@ -2103,7 +2103,7 @@ func (s *session) handleInspectArenaTeams(ctx context.Context, payload []byte) b
 	r := protocol.NewReader(payload)
 	targetGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// ObjectAccessor::FindPlayer - target must be online (ArenaTeamHandler.cpp:44-46)
@@ -2283,7 +2283,7 @@ func (s *session) handleGuildBankerActivate(ctx context.Context, payload []byte)
 	r := protocol.NewReader(payload)
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	fullUpdate := uint8(1)
 	if len(payload) >= 9 {
@@ -2309,11 +2309,11 @@ func (s *session) handleGuildBankQueryTab(ctx context.Context, payload []byte) b
 	r := protocol.NewReader(payload)
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	tabID, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	// The FullUpdate flag exists in the client packet (GuildPackets.h:415)
 	// but is deliberately ignored below: WorldSession::HandleGuildBankQueryTab
@@ -2322,7 +2322,7 @@ func (s *session) handleGuildBankQueryTab(ctx context.Context, payload []byte) b
 	// content if it already received a bank list in this session).
 	if len(payload) >= 10 {
 		if _, err = r.ReadU8(); err != nil {
-			return false
+			return true
 		}
 	}
 
@@ -2929,7 +2929,7 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	r := protocol.NewReader(payload)
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// Reference: WorldSession::HandleGuildBankSwapItems (GuildHandler.cpp:
 	// 307-308): no interactable guild-bank gameobject -> silent return,
@@ -2939,7 +2939,7 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	}
 	bankOnly, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 
 	guildID := s.player.GuildID
@@ -2970,32 +2970,32 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	if bankOnly != 0 {
 		bankTab, err = r.ReadU8()
 		if err != nil {
-			return false
+			return true
 		}
 		bankSlot, err := r.ReadU8()
 		if err != nil {
-			return false
+			return true
 		}
 		if _, err = r.ReadU32(); err != nil {
-			return false
+			return true
 		}
 		bankTab1, err := r.ReadU8()
 		if err != nil {
-			return false
+			return true
 		}
 		bankSlot1, err := r.ReadU8()
 		if err != nil {
-			return false
+			return true
 		}
 		if _, err = r.ReadU32(); err != nil {
-			return false
+			return true
 		}
 		if _, err = r.ReadU8(); err != nil { // AutoStore is consumed but unused for BankOnly
-			return false
+			return true
 		}
 		bankItemCount, err := r.ReadU32()
 		if err != nil {
-			return false
+			return true
 		}
 
 		if int64(bankTab) >= purchasedTabs || int64(bankTab1) >= purchasedTabs || bankSlot >= guildBankMaxSlots || bankSlot1 >= guildBankMaxSlots {
@@ -3037,18 +3037,18 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	} else {
 		bankTab, err = r.ReadU8()
 		if err != nil {
-			return false
+			return true
 		}
 		bankSlot, err := r.ReadU8()
 		if err != nil {
-			return false
+			return true
 		}
 		if _, err = r.ReadU32(); err != nil {
-			return false
+			return true
 		}
 		autoStoreByte, err := r.ReadU8()
 		if err != nil {
-			return false
+			return true
 		}
 		autoStore := autoStoreByte != 0
 
@@ -3060,26 +3060,26 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		var splitCount uint32
 		if autoStore {
 			if _, err = r.ReadU32(); err != nil { // BankItemCount is parsed but the handler uses split amount zero for AutoStore
-				return false
+				return true
 			}
 			if toSlot, err = r.ReadU8(); err != nil {
-				return false
+				return true
 			}
 			if _, err = r.ReadU32(); err != nil { // StackCount is parsed but ignored by the handler for AutoStore
-				return false
+				return true
 			}
 		} else {
 			if containerSlot, err = r.ReadU8(); err != nil {
-				return false
+				return true
 			}
 			if containerItemSlot, err = r.ReadU8(); err != nil {
-				return false
+				return true
 			}
 			if toSlot, err = r.ReadU8(); err != nil {
-				return false
+				return true
 			}
 			if splitCount, err = r.ReadU32(); err != nil {
-				return false
+				return true
 			}
 		}
 
@@ -4097,11 +4097,11 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	tabID, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// Reference: WorldSession::HandleGuildBankBuyTab (GuildHandler.cpp:344):
@@ -4205,19 +4205,19 @@ func (s *session) handleGuildBankUpdateTab(ctx context.Context, payload []byte) 
 	r := protocol.NewReader(payload)
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	tabID, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	name, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	icon, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// Reference: WorldSession::HandleGuildBankUpdateTab (GuildHandler.cpp:
@@ -4285,11 +4285,11 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 	r := protocol.NewReader(payload)
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	amount, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// Reference: WorldSession::HandleGuildBankDepositMoney (GuildHandler.cpp:
 	// 289-290): the banker-interact gate runs before the money checks.
@@ -4347,7 +4347,7 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 	r := protocol.NewReader(payload)
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	amount, err := r.ReadU32()
 	if err != nil || amount == 0 {
@@ -4863,7 +4863,7 @@ func (s *session) handlePetitionShowSignatures(ctx context.Context, payload []by
 	// PetitionsHandler.cpp:223 — `recvData >> petitionGuid`: raw 8-byte GUID.
 	petitionGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// PetitionsHandler.cpp:234-236: a guild-charter show-signatures request
 	// from a player already in a guild is silently dropped — the gate lives
@@ -4891,7 +4891,7 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 	// PetitionsHandler.cpp:266 — `recvData >> petitionguid`: raw 8-byte GUID.
 	petitionGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -4956,7 +4956,7 @@ func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
 	// 8-byte GUID; the u8 unk tail carries no data (Go ignores the tail).
 	petitionGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -5049,7 +5049,7 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	// PetitionsHandler.cpp:592 — `recvData >> petitionguid`: raw 8-byte GUID.
 	petitionGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -5421,7 +5421,7 @@ func (s *session) handleTabardVendorActivate(ctx context.Context, payload []byte
 	r := protocol.NewReader(payload)
 	vendorGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// NPCHandler.cpp:62-67: the NPC must be interactable as a tabard
 	// designer (UNIT_NPC_FLAG_TABARDDESIGNER), otherwise silent drop.

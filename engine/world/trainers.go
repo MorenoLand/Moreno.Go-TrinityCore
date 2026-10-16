@@ -31,7 +31,7 @@ func (s *session) handleTrainerList(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	trainerGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	return s.sendTrainerList(ctx, trainerGUID)
 }
@@ -326,11 +326,11 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	reader := protocol.NewReader(payload)
 	trainerGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	spellID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// Reference: WorldSession::HandleTrainerBuySpellOpcode (NPCHandler.cpp:125-148)
 	// gates interaction first (silent return), then Trainer::TeachSpell

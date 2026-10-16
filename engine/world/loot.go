@@ -1865,7 +1865,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	// LootHandler.cpp:230: recvData >> guid — a raw 8-byte read, not packed.
 	targetGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	wdb := s.server.WorldStore.DB
 	if wdb == nil {
@@ -2301,7 +2301,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	s.activeLoot = loot
 	s.interruptCurrentCast()
 	if err := s.sendLootResponse(ctx, loot); err != nil {
-		return false
+		return true
 	}
 	// The fishing-hole use-count and loot-state transitions moved to the
 	// release arm (releaseGameObjectLoot): C++ counts the use on DoLootRelease
@@ -3594,7 +3594,7 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	// LootHandler.cpp:250: recvData >> guid — raw 8-byte read, not packed.
 	targetGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	if s.activeLoot == nil || s.activeLoot.TargetGUID != targetGUID {
 		return true

@@ -240,15 +240,15 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	questID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if len(payload) > 12 {
 		if _, err := reader.ReadU8(); err != nil {
-			return false
+			return true
 		}
 	}
 	// TrinityCore HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:239-244)
@@ -273,7 +273,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	if canTake, err := s.canTakeQuest(ctx, questID); err != nil || !canTake {
 		if err != nil {
 			s.debug("quest details failed", "account", s.accountName, "quest", questID, "error", err)
-			return false
+			return true
 		}
 		// Go's canTakeQuest does not report which Satisfy* check failed, so the
 		// generic INVALIDREASON_DONT_HAVE_REQ goes out where C++ sends the specific
@@ -286,7 +286,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	}
 	if err != nil {
 		s.debug("quest details failed", "account", s.accountName, "quest", questID, "error", err)
-		return false
+		return true
 	}
 
 	// In TrinityCore Player.cpp:14836 and HandleQuestgiverQueryQuestOpcode
@@ -323,7 +323,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 		view, err := s.loadQuestRewardView(ctx, questID)
 		if err != nil {
 			s.debug("quest details failed", "account", s.accountName, "quest", questID, "error", err)
-			return false
+			return true
 		}
 		canComplete := s.canCompleteQuest(ctx, questID)
 		if len(view.RequiredItems) == 0 && canComplete {
@@ -462,15 +462,15 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	questID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if len(payload) > 12 {
 		if _, err := reader.ReadU32(); err != nil {
-			return false
+			return true
 		}
 	}
 	if !s.questgiverStartsQuest(ctx, guid, questID) {

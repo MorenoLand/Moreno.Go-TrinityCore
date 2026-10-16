@@ -54,7 +54,7 @@ func (s *session) handleCreatureQuery(ctx context.Context, payload []byte) bool 
 	s.debug("creature query received", "account", s.accountName, "entry", entry, "guid", guid, "payload_len", len(payload))
 	if err != nil {
 		s.debug("creature query rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	data, err := s.loadCreatureQueryData(ctx, entry)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -146,7 +146,7 @@ func (s *session) handleGameObjectQuery(ctx context.Context, payload []byte) boo
 	entry, _, err := readQueryEntryAndGUID(payload)
 	if err != nil {
 		s.debug("gameobject query rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	data, err := s.loadGameObjectQueryData(ctx, entry)
 	if errors.Is(err, sql.ErrNoRows) {

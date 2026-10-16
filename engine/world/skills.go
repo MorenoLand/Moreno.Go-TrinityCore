@@ -357,7 +357,7 @@ func (s *session) handleUnlearnSkill(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	skillID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
 	// SkillHandler.cpp:99: the skill must exist in SkillRaceClassInfo for this

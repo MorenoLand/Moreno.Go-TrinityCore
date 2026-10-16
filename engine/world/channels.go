@@ -97,21 +97,21 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	channelID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if _, err = reader.ReadU8(); err != nil {
-		return false
+		return true
 	}
 	if _, err = reader.ReadU8(); err != nil {
-		return false
+		return true
 	}
 	name, err := reader.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	password, err := reader.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	if name == "" || (name[0] >= '0' && name[0] <= '9') {
 		return s.sendChannelNotify(channelInvalidNameNotice, name, nil) == nil
@@ -224,7 +224,7 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		}
 	}
 	if err := s.sendChannelNotify(channelYouJoinedNotice, channelName, &channelNotifyChannel{Flags: channelFlagsValue, ID: channelIDValue}); err != nil {
-		return false
+		return true
 	}
 	// Reference: Channel::JoinNotify (Channel.cpp:822-840) — constant channels
 	// broadcast SMSG_USERLIST_ADD to all-but-one, custom channels
@@ -249,11 +249,11 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	channelID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	name, err := reader.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	if channelID == 0 && name == "" {
 		return true
@@ -318,7 +318,7 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 		}
 	}
 	if err := s.sendChannelNotify(channelYouLeftNotice, channelName, &channelNotifyChannel{Flags: channelFlagsValue, ID: channelIDValue}); err != nil {
-		return false
+		return true
 	}
 	// Reference: Channel::LeaveNotify (Channel.cpp:842-860) — SMSG_USERLIST_REMOVE
 	// to all-but-one (constant) or all (custom); the leaver is already erased
@@ -1144,7 +1144,7 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 	}
 	name, password, ok := readChannelCommand(payload)
 	if !ok {
-		return false
+		return true
 	}
 	// Reference: ChannelHandler.cpp HandleChannelPassword (:149) — a
 	// password longer than MAX_CHANNEL_PASS_STR (31) is silently dropped
@@ -1195,7 +1195,7 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 	}
 	name, targetName, ok := readChannelCommand(payload)
 	if !ok {
-		return false
+		return true
 	}
 	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
 		return true
@@ -1255,7 +1255,7 @@ func (s *session) handleChannelOwner(ctx context.Context, payload []byte) bool {
 	}
 	name, _, ok := readChannelCommand(payload)
 	if !ok {
-		return false
+		return true
 	}
 	s.server.channelsMu.RLock()
 	ch := s.server.channels[s.scopedChannelKey(name)]
@@ -1401,7 +1401,7 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 	}
 	name, targetName, ok := readChannelCommand(payload)
 	if !ok {
-		return false
+		return true
 	}
 	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
 		return true
@@ -1632,7 +1632,7 @@ func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 	}
 	name, targetName, ok := readChannelCommand(payload)
 	if !ok {
-		return false
+		return true
 	}
 	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
 		return true
@@ -1690,7 +1690,7 @@ func (s *session) handleChannelAnnouncements(ctx context.Context, payload []byte
 	}
 	name, _, ok := readChannelCommand(payload)
 	if !ok {
-		return false
+		return true
 	}
 	s.server.channelsMu.Lock()
 	ch := s.server.channels[s.scopedChannelKey(name)]

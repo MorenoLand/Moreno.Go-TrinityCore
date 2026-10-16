@@ -163,7 +163,7 @@ func (s *session) handleTaxiNodeStatusQuery(ctx context.Context, payload []byte)
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// TrinityCore SendTaxiStatus: ignore non-flightmasters and units with no
 	// resolvable node instead of answering "known" for everything.
@@ -273,7 +273,7 @@ func (s *session) handleTaxiQueryAvailableNodes(ctx context.Context, payload []b
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	// TaxiHandler.cpp:69-74 (HandleTaxiQueryAvailableNodes): the flightmaster
 	// interact gate fires first — a non-flightmaster GUID is silently
@@ -400,7 +400,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	reply := func(code uint32) bool {
 		packet := protocol.NewBuffer(4)
@@ -447,11 +447,11 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 		// ERR_TAXINOTVISITED too, not just an unvisited source.
 		sourceNode, err := reader.ReadU32()
 		if err != nil {
-			return false
+			return true
 		}
 		destNode, err := reader.ReadU32()
 		if err != nil {
-			return false
+			return true
 		}
 		if !s.isTaxiCheater() && (!s.isTaxiMaskNodeKnown(sourceNode) || !s.isTaxiMaskNodeKnown(destNode)) {
 			return reply(taxiErrNotVisited)

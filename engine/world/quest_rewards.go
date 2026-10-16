@@ -26,11 +26,11 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	reader := protocol.NewReader(payload)
 	giverGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	questID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	entry, ok := s.questGiverEnder(ctx, giverGUID, questID)
 	if !ok {
@@ -44,7 +44,7 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	}
 	status, err := s.characterQuestStatus(ctx, questID)
 	if err != nil {
-		return false
+		return true
 	}
 	// QuestHandler.cpp:531-538 — the cheat gate mirrors the turn-in twin from
 	// the 07:20 tick: a complete-quest packet for a quest the player never
@@ -65,7 +65,7 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
-		return false
+		return true
 	}
 	// QuestHandler.cpp:520-565 — this packet never changes quest state: the
 	// status transition happens only in the request-reward handler, gated by
@@ -84,7 +84,7 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 		if canComplete && len(view.RequiredItems) != 0 {
 			canComplete, err = s.hasQuestRequiredItems(ctx, view.RequiredItems)
 			if err != nil {
-				return false
+				return true
 			}
 		}
 		s.debug("quest request items", "account", s.accountName, "entry", entry, "quest", questID, "complete", canComplete)
@@ -97,7 +97,7 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 		// confirms through the request-reward packet.
 		canComplete, err = s.hasQuestRequiredItems(ctx, view.RequiredItems)
 		if err != nil {
-			return false
+			return true
 		}
 	}
 	if canComplete && len(view.RequiredItems) == 0 {
@@ -142,11 +142,11 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	reader := protocol.NewReader(payload)
 	giverGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	questID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if _, ok := s.questGiverEnder(ctx, giverGUID, questID); !ok {
 		return true
@@ -159,7 +159,7 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	}
 	status, err := s.characterQuestStatus(ctx, questID)
 	if err != nil {
-		return false
+		return true
 	}
 	// QuestHandler.cpp:385 — the transition is gated by CanCompleteQuest
 	// (Player.cpp:14970) alone, not by the current status: the autocomplete
@@ -172,7 +172,7 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
-		return false
+		return true
 	}
 	if status != questStatusComplete || s.isQuestRewarded(ctx, questID) {
 		return true
@@ -180,7 +180,7 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	if len(view.RequiredItems) != 0 {
 		complete, itemErr := s.hasQuestRequiredItems(ctx, view.RequiredItems)
 		if itemErr != nil {
-			return false
+			return true
 		}
 		if !complete {
 			return true

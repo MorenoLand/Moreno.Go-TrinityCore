@@ -52,7 +52,7 @@ func (s *session) handleSetSelection(payload []byte) bool {
 	selection, err := b.ReadU64()
 	if err != nil {
 		s.debug("selection rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	s.selection = selection
 	if s.player != nil {

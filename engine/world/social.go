@@ -354,7 +354,7 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	friendName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	friendNote, _ := r.ReadCString()
 	// C++ normalizePlayerName (ObjectMgr.cpp:141-149) fails on an empty name
@@ -396,7 +396,7 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 			_ = s.sendFriendStatus(friendsResultNotFound, 0, "")
 			return true
 		}
-		return false
+		return true
 	}
 	if friendGUID == s.playerGUID {
 		_ = s.sendFriendStatus(friendsResultSelf, s.playerGUID, "")
@@ -459,7 +459,7 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	// SetFriendNote stores the (48-code-point truncated) note.
 	friendNote = truncateSocialNote(friendNote)
 	if err := upsertSocialContact(ctx, cdb, s.playerGUID, friendGUID, socialFlagFriend, friendNote, false); err != nil {
-		return false
+		return true
 	}
 
 	_ = s.sendFriendStatus(result, friendGUID, friendNote)
@@ -477,11 +477,11 @@ func (s *session) handleDelFriend(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	friendGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return false
+		return true
 	}
 	// Clear friend flag; delete if no other flags remain
 	_, _ = cdb.ExecContext(ctx,
@@ -505,7 +505,7 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	ignoreName, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	// Same empty-name silent return as the add-friend arm
 	// (SocialHandler.cpp:131-134): an empty name is not a malformed packet.
@@ -537,7 +537,7 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 			_ = s.sendFriendStatus(friendsResultIgnoreNotFound, 0, "")
 			return true
 		}
-		return false
+		return true
 	}
 	if ignoreGUID == s.playerGUID {
 		_ = s.sendFriendStatus(friendsResultIgnoreSelf, s.playerGUID, "")
@@ -560,7 +560,7 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 	// TrinityCore: AddToSocialList ORs SOCIAL_FLAG_IGNORED into any existing
 	// row without touching the note.
 	if err := upsertSocialContact(ctx, cdb, s.playerGUID, ignoreGUID, socialFlagIgnored, "", true); err != nil {
-		return false
+		return true
 	}
 	_ = s.sendFriendStatus(friendsResultIgnoreAdded, ignoreGUID, "")
 	return true
@@ -577,11 +577,11 @@ func (s *session) handleDelIgnore(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	ignoreGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return false
+		return true
 	}
 	_, _ = cdb.ExecContext(ctx,
 		"UPDATE character_social SET flags = flags & ~2 WHERE guid = ? AND friend = ?",
@@ -604,14 +604,14 @@ func (s *session) handleSetContactNotes(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	friendGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	note, _ := r.ReadCString()
 	// TrinityCore: SetFriendNote truncates to 48 code points (utf8truncate).
 	note = truncateSocialNote(note)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return false
+		return true
 	}
 	_, _ = cdb.ExecContext(ctx,
 		"UPDATE character_social SET note = ? WHERE guid = ? AND friend = ?",

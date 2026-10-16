@@ -357,7 +357,7 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 	reader := protocol.NewReader(payload)
 	targetGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	if s.trade != nil {
 		return true
@@ -493,7 +493,7 @@ func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	gold, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// Reference: TradeData::SetMoney (TradeData.cpp:93-110). No-change is a
 	// silent no-op (no un-accept, no update); insufficient funds answers

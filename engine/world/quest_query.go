@@ -75,7 +75,7 @@ func (s *session) handleQuestQuery(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	questID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	data, err := s.loadQuestQueryData(ctx, questID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -83,7 +83,7 @@ func (s *session) handleQuestQuery(ctx context.Context, payload []byte) bool {
 	}
 	if err != nil {
 		s.debug("quest query failed", "account", s.accountName, "quest", questID, "error", err)
-		return false
+		return true
 	}
 	s.debug("quest query response", "account", s.accountName, "quest", questID)
 	return s.write(uint16(protocol.OpcodeSMSG_QUEST_QUERY_RESPONSE), buildQuestQueryResponse(data), true) == nil
