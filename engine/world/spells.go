@@ -31747,10 +31747,20 @@ func (s *session) delayCurrentCast() {
 		s.interruptCurrentChannel()
 		return
 	}
-	if cast.InterruptFlg&spellInterruptPushBack == 0 || cast.Pushbacks >= maxSpellPushbacks {
+	if cast.InterruptFlg&spellInterruptPushBack == 0 {
 		s.castMu.Unlock()
 		return
 	}
+	// Spell::Delayed (Spell.cpp:7252) / Spell::IsDelayableNoMore
+	// (Spell.h:606-612): a delay charge is consumed on every hit that
+	// reaches the delay arm — before the pushback-reduction computation —
+	// so a fully-resisted pushback (delayReduce >= 100) still burns one of
+	// the two delays. The counter saturates at 2 (no increment once >= 2).
+	if cast.Pushbacks >= maxSpellPushbacks {
+		s.castMu.Unlock()
+		return
+	}
+	cast.Pushbacks++
 	reduction := s.getPushbackReductionLocked(s.spellRowOrZero(cast.SpellID))
 	if reduction >= 100 {
 		s.castMu.Unlock()
@@ -31774,7 +31784,6 @@ func (s *session) delayCurrentCast() {
 	if int64(remainingMs)+int64(delayMs) > int64(cast.CastTimeMs) {
 		delayMs = int32(int64(cast.CastTimeMs) - int64(remainingMs))
 	}
-	cast.Pushbacks++
 	newRemaining := time.Duration(remainingMs+delayMs) * time.Millisecond
 	cast.StartAt = time.Now().Add(-(time.Duration(cast.CastTimeMs)*time.Millisecond - newRemaining))
 	if cast.Timer != nil {
@@ -31823,10 +31832,20 @@ func (s *session) delayCurrentChannel() {
 	}
 	s.castMu.Lock()
 	channel := s.activeChannel
-	if channel == nil || channel.Stopped || channel.Spell.ChannelInterrupt&channelFlagDelay == 0 || channel.Pushbacks >= maxSpellPushbacks {
+	if channel == nil || channel.Stopped || channel.Spell.ChannelInterrupt&channelFlagDelay == 0 {
 		s.castMu.Unlock()
 		return
 	}
+	// Spell::DelayedChannel (Spell.cpp:7294) / Spell::IsDelayableNoMore
+	// (Spell.h:606-612): same charge ordering as Spell::Delayed — a hit
+	// reaching the delay arm consumes one of the two delay charges before
+	// the pushback-reduction computation, so a fully-resisted pushback
+	// (delayReduce >= 100) still burns it. Counter saturates at 2.
+	if channel.Pushbacks >= maxSpellPushbacks {
+		s.castMu.Unlock()
+		return
+	}
+	channel.Pushbacks++
 	reduction := s.getPushbackReductionLocked(channel.Spell)
 	if reduction >= 100 {
 		s.castMu.Unlock()
@@ -31847,7 +31866,6 @@ func (s *session) delayCurrentChannel() {
 	} else {
 		channel.Remaining -= time.Duration(delayMs) * time.Millisecond
 	}
-	channel.Pushbacks++
 	remaining := channel.Remaining
 	if channel.Timer != nil {
 		channel.Timer.Reset(remaining)

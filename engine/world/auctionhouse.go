@@ -91,6 +91,12 @@ func auctionDeposit(sellPrice int64, timeHr, count uint32, depositRate float64) 
 	if i > 0 {
 		deposit += uint32(remainderBase * float32(i) * float32(timeHr))
 	}
+	// C++ GetAuctionDeposit (AuctionHouseMgr.cpp:116-119): the deposit is
+	// floored to AH_MINIMUM_DEPOSIT * RATE_AUCTION_DEPOSIT — a near-worthless
+	// item (or a 1-copper sell price) still costs the 100-copper minimum.
+	if minDeposit := uint32(100 * rate); deposit < minDeposit {
+		return minDeposit
+	}
 	return deposit
 }
 
@@ -641,6 +647,11 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
+	// C++ AuctionHouseObject::Update runs on the world tick and prunes
+	// expired auctions from the in-memory map, so the bid lookup can never
+	// hit one; the Go model sweeps on handler entry instead, so the sweep
+	// runs here too before the auction row is read.
+	s.expireAuctions(ctx)
 	reader := protocol.NewReader(payload)
 	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:432: recvData >> auctioneer).
 	auctioneer, _ := reader.ReadU64()
@@ -720,7 +731,14 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	// for the invoice body/timePacker fields (worldserver.conf "MailDeliveryDelay", default 3600).
 	mailDelay := int64(s.server.Config.MailDeliveryDelay)
 
-	s.setAchievementCriteria(criteriaTypeHighestAuctionBid, 0, price)
+	// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:521,573): the
+	// highest-bid criterion records the price on a normal bid and the
+	// buyout on a buyout — never an over-bid above the buyout.
+	if isBuyout {
+		s.setAchievementCriteria(criteriaTypeHighestAuctionBid, 0, uint32(buyout))
+	} else {
+		s.setAchievementCriteria(criteriaTypeHighestAuctionBid, 0, price)
+	}
 	if isBuyout {
 		// Buyout success!
 		// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:522-526): the
@@ -1030,6 +1048,9 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
+	// Same world-tick pruning note as handleAuctionPlaceBid: an expired
+	// auction is already settled before the cancel lookup runs.
+	s.expireAuctions(ctx)
 	reader := protocol.NewReader(payload)
 	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:580: recvData >> auctioneer).
 	auctioneer, _ := reader.ReadU64()
@@ -1223,11 +1244,10 @@ func (s *session) expireAuctions(ctx context.Context) {
 				continue
 			}
 			// C++ :242-257: the item goes back by mail only when the owner is
-			// connected or has an account; otherwise the item row is deleted.
-			// (The auction-bot IsBotChar term has no Go model.)
-			var ownerProbe int
-			if s.server.findSessionByGUID(uint64(a.owner)) == nil &&
-				cdb.QueryRowContext(ctx, "SELECT 1 FROM characters WHERE guid = ? LIMIT 1", a.owner).Scan(&ownerProbe) != nil {
+			// connected or has a nonzero account ((owner || owner_accId));
+			// otherwise the item row is deleted. (The auction-bot IsBotChar
+			// term has no Go model.)
+			if !s.auctionCharExists(ctx, uint64(a.owner)) {
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", a.itemGUID)
 				continue
 			}
@@ -1240,6 +1260,14 @@ func (s *session) expireAuctions(ctx context.Context) {
 			s.notifyAuctionOwner(uint64(a.owner), uint32(a.id), 0, uint32(a.itemTmpl))
 		}
 	}
+	// C++ AuctionHouseObject::Update (AuctionHouseMgr.cpp:660-664): the
+	// auction row is cleared "in any case" — even when a mail arm bailed on
+	// a missing item. The sweep query above only sees auctions whose item
+	// row still exists, so itemless auctions past the sweep horizon are
+	// cleared here explicitly, their bidder rows with them (C++
+	// AuctionEntry::DeleteFromDB removes both).
+	_, _ = cdb.ExecContext(ctx, `DELETE FROM auctionhouse WHERE time <= ? AND itemguid NOT IN (SELECT guid FROM item_instance)`, now+60)
+	_, _ = cdb.ExecContext(ctx, `DELETE FROM auctionbidders WHERE id NOT IN (SELECT id FROM auctionhouse)`)
 }
 
 func (s *session) sendAuctionBidderNotification(location, auctionID uint32, bidderGUID uint64, bidSum, diff, itemEntry uint32) {

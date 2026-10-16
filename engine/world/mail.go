@@ -219,10 +219,18 @@ func (s *session) updateMailDeliveries(ctx context.Context, now int64) {
 	if s == nil || !s.playerLoaded || s.nextMailDelivery == 0 || now < s.nextMailDelivery {
 		return
 	}
+	// Reference: Player::Update (Player.cpp:1039-1046) — the undelivered-mail
+	// arm fires once: SendNewMail + ++unReadMails, then m_nextMailDelivereTime
+	// is zeroed ("It will be recalculate at mailbox open"); a second pending
+	// delivery does not re-notify. The recount below stands in for the
+	// ++unReadMails (the value is identical), and the timer is zeroed here —
+	// it is re-armed by mailbox open / login (loadMailState) or by a newly
+	// arriving delayed mail (notifyMailAvailable).
 	s.loadMailState(ctx)
 	if s.unreadMails > 0 {
 		s.sendNewMailNotification(ctx)
 	}
+	s.nextMailDelivery = 0
 }
 
 func (s *Server) updateMailDeliveries(ctx context.Context, now int64) {
@@ -1443,8 +1451,9 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 
 		var senderGUID, receiverGUID int64
 		var messageType int
+		var mailTemplateID int64
 		var deliverTime int64
-		err := cdb.QueryRowContext(ctx, "SELECT sender, receiver, messageType, deliver_time FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&senderGUID, &receiverGUID, &messageType, &deliverTime)
+		err := cdb.QueryRowContext(ctx, "SELECT sender, receiver, messageType, mailTemplateId, deliver_time FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&senderGUID, &receiverGUID, &messageType, &mailTemplateID, &deliverTime)
 		if err != nil {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailReturnedToSender, mailErrInternalError, 0, 0, 0), true)
 			return true
@@ -1503,7 +1512,13 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 			// MAIL_STATIONERY_DEFAULT unconditionally — the MailSender(Player*)
 			// GM-stationery arm never fires on this path. checked = 2 is
 			// MAIL_CHECK_MASK_RETURNED (Mail.h:48).
-			_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
+			// Reference: MailHandler.cpp:380-383 — HandleMailReturnToSender
+			// rebuilds the draft from the mail template id
+			// (MailDraft(m->mailTemplateId, false)) when one is set, so the
+			// returned row's subject/body are cleared and the client reads the
+			// letter text from MailTemplate.dbc; a plain mail keeps its
+			// subject/body.
+			returnQuery := `UPDATE mail SET
 				receiver = ?,
 				sender = ?,
 				messageType = 0,
@@ -1511,8 +1526,12 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 				checked = 2,
 				deliver_time = ?,
 				expire_time = ?,
-				cod = 0
-				WHERE id = ?`, senderGUID, receiverGUID, mailSenderStationery(false), deliverTime, expireTime, mailID)
+				cod = 0`
+			if mailTemplateID != 0 {
+				returnQuery += `, subject = '', body = ''`
+			}
+			returnQuery += ` WHERE id = ?`
+			_, _ = cdb.ExecContext(ctx, returnQuery, senderGUID, receiverGUID, mailSenderStationery(false), deliverTime, expireTime, mailID)
 
 			s.sendMailNotify(uint64(senderGUID))
 		} else {
@@ -1642,13 +1661,17 @@ func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, gu
 			hasItems = 1
 		}
 		// C++ rebuilds the row through MailDraft::SendMailTo: MAIL_NORMAL,
-		// MAIL_STATIONERY_DEFAULT, the template id carried over, subject/body
-		// reloaded from the template draft when mailTemplateId is set. Go has
-		// no mail-template text model, so the original subject/body are kept
-		// (the same standing choice as the expiry sweep's return path).
+		// MAIL_STATIONERY_DEFAULT, the template id carried over, and
+		// MailDraft(mailTemplateId, false) (Player.cpp:4283-4284) carries
+		// empty subject/body when a template id is set — the client reads the
+		// letter text from MailTemplate.dbc.
+		subject, body := m.subject, m.body
+		if m.templateID != 0 {
+			subject, body = "", ""
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
 			VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 2)`,
-			nextMailID, mailSenderStationery(false), m.templateID, guid, m.sender, m.subject, m.body, hasItems, expireTime, deliverTime, m.money); err != nil {
+			nextMailID, mailSenderStationery(false), m.templateID, guid, m.sender, subject, body, hasItems, expireTime, deliverTime, m.money); err != nil {
 			return err
 		}
 		for _, itemGUID := range itemGUIDs {
