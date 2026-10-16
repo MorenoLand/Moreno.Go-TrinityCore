@@ -140,6 +140,19 @@ func (g *bgGroupQueueInfo) removeQueuedPlayer(guid uint64) {
 // bgSelectionPool is the Go form of BattlegroundQueue::SelectionPool
 // (BattlegroundQueue.h:113-126): the per-side group list the matchmaker builds when
 // filling a battleground, with the running head-count of selected players.
+//
+// MATCHMAKER (BattlegroundQueue.cpp:500-1000): the pure selection arms below port
+// FillPlayersToBG, CheckPremadeMatch, CheckNormalMatch, CheckSkirmishForSameFaction
+// and the rated-arena team selection in BattlegroundQueueUpdate as free functions
+// over caller-held group slices (queue order). They have no live caller yet — the
+// per-session sim (battleground.go handleBattlemasterJoin) never cross-matches
+// players — and the BattlegroundQueueUpdate orchestration itself stays unported:
+// it needs live BG instances (sBattlegroundMgr free-slot queue, CreateNewBattleground,
+// StartBattleground), as does InviteGroupToBG (cpp:432-498 — bg instance ids,
+// invited counters, arena-team ids, per-player invite events). BattlegroundQueue::UpdateEvents
+// (cpp:764-767, m_events.Update) is covered on the Go side by the per-session timers
+// in simulateBGQueueInvite (battleground.go), same as BGQueueInviteEvent/BGQueueRemoveEvent.
+// GetPlayersInQueue (cpp:427-430) is a SelectionPool counter read and adds nothing.
 type bgSelectionPool struct {
 	selectedGroups []*bgGroupQueueInfo
 	players        uint32
