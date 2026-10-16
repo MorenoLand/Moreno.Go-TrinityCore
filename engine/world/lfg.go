@@ -1121,7 +1121,7 @@ func (s *Server) lfgBootVote(ctx context.Context, voter *session, accept bool) {
 		// this group — a member who left mid-vote is not re-removed.
 		if g2 := s.findGroupByID(groupID); g2 != nil {
 			if vs := s.findSessionByGUID(victimGUID); vs != nil && vs.groupID == groupID {
-				_ = vs.removeFromGroup(g2, vs, groupRemoveMethodKickLFG)
+				_ = vs.removeFromGroup(ctx, g2, vs, groupRemoveMethodKickLFG)
 			} else if vs == nil {
 				s.removeGroupMemberByGUID(ctx, g2, victimGUID, groupRemoveMethodKickLFG)
 			}

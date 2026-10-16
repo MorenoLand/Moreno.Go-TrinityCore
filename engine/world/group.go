@@ -1230,9 +1230,6 @@ func (s *session) handleGroupUninvite(ctx context.Context, payload []byte) bool 
 		// Group::GetMemberGUID (Group.cpp:2533) also matches offline members.
 		return s.kickOfflineGroupMember(ctx, g, name, 0)
 	}
-	if target.playerGUID == g.LeaderGUID {
-		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
-	}
 	// HandleGroupUninviteOpcode (GroupHandler.cpp:352-360) checks group
 	// membership before pending invites: only a member rides RemoveFromGroup;
 	// a pending invite into this group is withdrawn instead, and anyone else
@@ -1244,7 +1241,7 @@ func (s *session) handleGroupUninvite(ctx context.Context, payload []byte) bool 
 		}
 		return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
 	}
-	return s.removeFromGroup(g, target, groupRemoveMethodKick)
+	return s.removeFromGroup(ctx, g, target, groupRemoveMethodKick)
 }
 
 // handleGroupUninviteGUID processes CMSG_GROUP_UNINVITE_GUID (0x076).
@@ -1312,7 +1309,7 @@ func (s *session) handleGroupUninviteGUID(ctx context.Context, payload []byte) b
 		}
 		return s.sendPartyResult(partyOpUninvite, "", errTargetNotInGroup)
 	}
-	return s.removeFromGroup(g, target, groupRemoveMethodKick)
+	return s.removeFromGroup(ctx, g, target, groupRemoveMethodKick)
 }
 
 // groupHasMember reports whether guid holds a member slot in g.
@@ -1399,10 +1396,18 @@ func (s *session) kickOfflineGroupMember(ctx context.Context, g *groupState, nam
 // OnGroupRemoveMember before the removal (Group.cpp:569) and OnGroupDisband
 // when its tail disbands the group; the Lua group object is snapshotted at
 // the C++ fire point and the hooks fire after the lock is released.
-func (s *session) removeFromGroup(g *groupState, target *session, method uint8) bool {
+// removeFromGroup detaches an online member, mirroring Group::RemoveMember
+// (Group.cpp:565-731): slot removal, enchanting reevaluate, loot-roll
+// withdrawal, KICK-only SMSG_GROUP_UNINVITE, the empty SMSG_GROUP_LIST for the
+// removed player, leader rotation via ChangeLeader, SendUpdate, and the
+// disband tail (Disband runs with the removed member still in the slot list,
+// so every connected member INCLUDING the removed one gets
+// SMSG_GROUP_DESTROYED + an empty list).
+func (s *session) removeFromGroup(ctx context.Context, g *groupState, target *session, method uint8) bool {
 	srv := s.server
 	srv.groupsMu.Lock()
 	groupObj := groupLuaObject(s.server, g)
+	wasLeader := target.playerGUID == g.LeaderGUID
 	// Remove the target member
 	for i, m := range g.Members {
 		if m.GUID == target.playerGUID {
@@ -1419,23 +1424,28 @@ func (s *session) removeFromGroup(g *groupState, target *session, method uint8) 
 	srv.homebindIfInstance(target)
 	srv.onPlayerLeaveGroupRolls(target.playerGUID, g.ID)
 
-	// Send SMSG_GROUP_UNINVITE to the kicked player
-	_ = target.write(uint16(protocol.OpcodeSMSG_GROUP_UNINVITE), nil, true)
-
 	disbanded := len(g.Members) <= 1
-	if disbanded {
-		// Disband the group
-		delete(srv.groups, g.ID)
-		if len(g.Members) == 1 {
-			if last := srv.findSessionByGUID(g.Members[0].GUID); last != nil {
-				last.groupID = 0
-				// SMSG_GROUP_DESTROYED
-				_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-				// Also send empty group list to clear UI
-				emptyList := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: g.Members[0].GUID}, g.Members[0].GUID, 0)
-				_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
+	// Group::RemoveMember (Group.cpp:710-720): when the removed member was the
+	// leader, the first remaining CONNECTED member is promoted via
+	// ChangeLeader — same arm as the offline slot-drop path in
+	// removeGroupMemberByGUID.
+	var leaderCandidate uint64
+	if wasLeader && !disbanded {
+		for _, m := range g.Members {
+			if cs := srv.findSessionByGUID(m.GUID); cs != nil && cs.player != nil {
+				leaderCandidate = m.GUID
+				break
 			}
 		}
+	}
+	// Disband walk covers the removed player too (RemoveMember else-arm).
+	notifyGUIDs := make([]uint64, 0, len(g.Members)+1)
+	notifyGUIDs = append(notifyGUIDs, target.playerGUID)
+	for _, m := range g.Members {
+		notifyGUIDs = append(notifyGUIDs, m.GUID)
+	}
+	if disbanded {
+		delete(srv.groups, g.ID)
 	}
 	srv.groupsMu.Unlock()
 
@@ -1444,10 +1454,62 @@ func (s *session) removeFromGroup(g *groupState, target *session, method uint8) 
 
 	srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, target.playerGUID, method)
 	if disbanded {
+		// Group::Disband (Group.cpp:859-907): SMSG_GROUP_DESTROYED + an empty
+		// SMSG_GROUP_LIST for every connected member including the removed
+		// one; SMSG_GROUP_UNINVITE never goes out on this path.
+		for _, guid := range notifyGUIDs {
+			if sess := srv.findSessionByGUID(guid); sess != nil {
+				sess.groupID = 0
+				// Group::Disband (Group.cpp:908): _homebindIfInstance runs
+				// for every connected member, same as on single removal.
+				srv.homebindIfInstance(sess)
+				_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
+				emptyList := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
+				_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
+			}
+		}
+		// Group::RemoveAllInvites (Group.cpp:375-382) and the Disband DB tail
+		// (Group.cpp:912-934): CHAR_DEL_GROUP_MEMBER_ALL, CHAR_DEL_GROUP,
+		// CHAR_DEL_LFG_DATA.
+		disbandSet := make(map[uint64]struct{}, len(notifyGUIDs))
+		for _, guid := range notifyGUIDs {
+			disbandSet[guid] = struct{}{}
+		}
+		srv.sessionsMu.Lock()
+		for sess := range srv.sessions {
+			if _, ok := disbandSet[sess.pendingGroupLeader]; ok {
+				sess.pendingGroupLeader = 0
+			}
+		}
+		srv.sessionsMu.Unlock()
+		if srv.CharactersStore != nil && srv.CharactersStore.DB != nil {
+			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER_ALL"), g.DBID)
+			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
+			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_LFG_DATA"), g.DBID)
+		}
 		srv.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		return true
 	}
-	srv.broadcastGroupList(g)
+
+	// Group::RemoveMember (Group.cpp:632-640): the removed player gets
+	// SMSG_GROUP_UNINVITE only on KICK/KICK_LFG; every removal (incl. LEAVE)
+	// is followed by the empty SMSG_GROUP_LIST.
+	if method == groupRemoveMethodKick || method == groupRemoveMethodKickLFG {
+		_ = target.write(uint16(protocol.OpcodeSMSG_GROUP_UNINVITE), nil, true)
+	}
+	emptyList := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: target.playerGUID}, target.playerGUID, 0)
+	_ = target.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
+
+	if leaderCandidate != 0 {
+		// setGroupLeader runs the full Group::ChangeLeader arm (old-leader
+		// flag clear, new-leader flag set, assistant strip,
+		// SMSG_GROUP_SET_LEADER) and broadcasts the updated list.
+		if !srv.setGroupLeader(g, leaderCandidate) {
+			srv.broadcastGroupList(g)
+		}
+	} else {
+		srv.broadcastGroupList(g)
+	}
 	return true
 }
 
@@ -1458,7 +1520,7 @@ func (s *session) removeFromGroup(g *groupState, target *session, method uint8) 
 // reaches the Eluna event like the C++ sScriptMgr->OnGroupRemoveMember arm.
 func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, guid uint64, method uint8) {
 	if sess := s.findSessionByGUID(guid); sess != nil {
-		sess.removeFromGroup(g, sess, method)
+		sess.removeFromGroup(ctx, g, sess, method)
 		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
 		}
@@ -1730,64 +1792,13 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	// The C++ server never fires ACHIEVEMENT_CRITERIA_TYPE_LFG_ABANDON
 	// (LFGMgr.cpp has no criteria updates outside FinishDungeon), so
 	// leaving an LFG group grants nothing.
-	if g.LeaderGUID == s.playerGUID {
-		// Leader disbands the entire group. C++ HandleGroupDisbandOpcode
-		// routes this through RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE)
-		// (GroupHandler.cpp:424), whose RemoveMember tail disbands via
-		// Group::Disband (Group.cpp:857) — the shared disbandGroup covers
-		// the per-member detach, invite withdrawal, DB and LFG cleanup in
-		// C++ order (OnGroupDisband before the detach).
-		srv.groupsMu.Unlock()
-		srv.disbandGroup(ctx, g, false)
-	} else {
-		// Non-leader leaves: C++ HandleGroupDisbandOpcode calls
-		// Player::RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE) (GroupHandler.cpp:424).
-		groupObj := groupLuaObject(s.server, g)
-		for i, m := range g.Members {
-			if m.GUID == s.playerGUID {
-				g.Members = append(g.Members[:i], g.Members[i+1:]...)
-				break
-			}
-		}
-		// Group::RemoveMember (Group.cpp:677) reevaluates m_maxEnchantingLevel
-		// when the leaving player had enchanting skill or was offline; the
-		// full recompute is equivalent unconditionally.
-		refreshGroupMaxEnchantingLevel(srv, g)
-		s.groupID = 0
-		srv.onPlayerLeaveGroupRolls(s.playerGUID, g.ID)
-		disbanded := len(g.Members) <= 1
-		var lastGUID uint64
-		if disbanded {
-			if len(g.Members) == 1 {
-				lastGUID = g.Members[0].GUID
-			}
-			delete(srv.groups, g.ID)
-			srv.groupsMu.Unlock()
-			if lastGUID != 0 {
-				if last := srv.findSessionByGUID(lastGUID); last != nil {
-					last.groupID = 0
-					_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-					emptyG := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: lastGUID}, lastGUID, 0)
-					_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyG, true)
-				}
-			}
-		} else {
-			srv.groupsMu.Unlock()
-			srv.broadcastGroupList(g)
-		}
-		// C++ Group::RemoveMember fires OnGroupRemoveMember (Group.cpp:569);
-		// its tail disbands the group (firing OnGroupDisband) when the
-		// member count drops to 1 or fewer.
-		// LFGGroupScript::OnRemoveMember native arms (LFGScripts.cpp:183-228).
-		srv.lfgGroupMemberRemoved(g, s, groupRemoveMethodLeave)
-		srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, s.playerGUID, uint8(groupRemoveMethodLeave))
-		if disbanded {
-			srv.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
-		}
-	}
-
+	// GroupHandler.cpp:421-425 — leader and non-leader arms both answer
+	// PARTY_OP_LEAVE first, then ride Group::RemoveMember
+	// (GROUP_REMOVEMETHOD_LEAVE); the tail disbands via Group::Disband
+	// (Group.cpp:857) when the count drops to 1 or fewer.
+	srv.groupsMu.Unlock()
 	_ = s.sendPartyResult(partyOpLeave, name, errPartyResultOK)
-	return true
+	return s.removeFromGroup(ctx, g, s, groupRemoveMethodLeave)
 }
 
 // handleLootMethod processes CMSG_LOOT_METHOD (0x07A).
