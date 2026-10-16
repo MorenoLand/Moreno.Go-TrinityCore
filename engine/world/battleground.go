@@ -514,6 +514,11 @@ const bgSimulatedInviteDelay = 15 * time.Second
 // the invite expires this long after the pop, freeing the queue slot.
 const bgInviteAcceptWindow = 60 * time.Second
 
+// bgInvitationRemindTime mirrors INVITATION_REMIND_TIME (Battleground.h:149):
+// BGQueueInviteEvent (BattlegroundQueue.cpp:471-476, 1018-1043) re-sends the
+// invite dialog this long after the pop if the player still hasn't responded.
+const bgInvitationRemindTime = 20 * time.Second
+
 // simulateBGQueueInvite arms the queue-pop simulation for one queued slot:
 // after bgSimulatedInviteDelay the entry flips to STATUS_WAIT_JOIN with the
 // given instance id (0 → a fresh synthetic id is minted at fire time) and
@@ -551,6 +556,30 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		e.Status = BGStatusWaitJoin
 		s.sendBattlefieldStatus(uint8(slot))
 		s.debug("simulated battleground invite", "account", s.accountName, "bg", bgTypeID, "slot", slot, "instance", instanceID)
+		// BGQueueInviteEvent::Execute (BattlegroundQueue.cpp:1018-1043):
+		// INVITATION_REMIND_TIME after the pop, if the player is still
+		// invited and hasn't responded, the invite dialog goes out again.
+		// The slot/instance/join-time guard is the Go form of
+		// IsPlayerInvited's instance+remove-time match: it drops the re-send
+		// if the slot was left, reused, or the invite already expired.
+		// (The re-sent packet carries the full accept window, not C++'s
+		// INVITE_ACCEPT_WAIT_TIME - INVITATION_REMIND_TIME: threading a
+		// remaining-time would need pop-time state Go doesn't keep.)
+		remindID := instanceID
+		time.AfterFunc(bgInvitationRemindTime, func() {
+			if s == nil || !s.playerLoaded || s.player == nil {
+				return
+			}
+			if slot < 0 || slot >= len(s.bgQueues) {
+				return
+			}
+			rem := &s.bgQueues[slot]
+			if !rem.Active || rem.IsArena || rem.Status != BGStatusWaitJoin || rem.BgTypeID != bgTypeID || !rem.JoinTime.Equal(joinTime) || rem.InstanceID != remindID {
+				return
+			}
+			s.sendBattlefieldStatus(uint8(slot))
+			s.debug("simulated battleground invite re-sent", "account", s.accountName, "bg", bgTypeID, "slot", slot)
+		})
 		// BGQueueRemoveEvent::Execute (BattlegroundQueue.cpp:1060-1103): the
 		// invite expires bgInviteAcceptWindow after the pop — the slot is
 		// freed, a STATUS_NONE packet goes out, and the no-enter deserter
@@ -634,16 +663,17 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 		case memberBGQueueIndex(member, bgTypeID) != -1:
 			// member already in this queue → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2067-2068)
 			err = groupJoinBattlegroundFailed
-		case member.inRandomBGQueue():
-			// member in the random queue → ERR_IN_RANDOM_BG (Group.cpp:2080-2081; non-arena
-			// battlemaster joins only, so the BATTLEGROUND_AA exclusion never fires)
+		case bgTypeID != battlegroundAA && member.inRandomBGQueue():
+			// member in the random queue → ERR_IN_RANDOM_BG (Group.cpp:2080; skipped for
+			// arena queues — GetTypeID() == BATTLEGROUND_AA)
 			err = groupJoinInRandomBG
 		case bgTypeID == battlegroundRB && member.inNonArenaBGQueue():
 			// joining random while the member is queued elsewhere → ERR_IN_NON_RANDOM_BG
 			// (Group.cpp:2082-2083)
 			err = groupJoinInNonRandomBG
-		case member.hasAura(deserterSpellBG):
-			// deserter → ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS (Group.cpp:2076-2077)
+		case bgTypeID != battlegroundAA && member.hasAura(deserterSpellBG):
+			// deserter → ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS (Group.cpp:2086; skipped
+			// for arena queues — GetTypeID() == BATTLEGROUND_AA)
 			err = groupJoinBattlegroundDeserters
 		case memberFreeBGQueueIndex(member) == -1:
 			// no free slot → ERR_BATTLEGROUND_TOO_MANY_QUEUES (Group.cpp:2079-2080)
@@ -1251,10 +1281,11 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 			s.setBattlegroundEntryPoint()
 		}
 
-		// !_player->IsAlive() → ResurrectPlayer(1.0f)
-		// (BattleGroundHandler.cpp:459-463).
+		// !_player->IsAlive() → ResurrectPlayer(1.0f) + SpawnCorpseBones()
+		// (BattleGroundHandler.cpp:461-465).
 		if s.isDeadOrGhost() {
 			s.resurrectPlayer(ctx, 1.0)
+			s.spawnCorpseBones(ctx)
 		}
 
 		// Stop taxi flight at port (BattleGroundHandler.cpp:465-466).
@@ -1301,36 +1332,14 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		if entry.IsArena && entry.Status > BGStatusWaitQueue {
 			return true
 		}
-		// BattleGroundHandler.cpp:496-507: leaving a rated arena queue while
-		// invited counts as a loss — ArenaTeam::MemberLost (ArenaTeam.cpp:805)
-		// via the two-arg overload, so MatchmakerRatingChange defaults to -12
-		// (ArenaTeam.h:178). The personal rating takes the loss-mod arm vs the
-		// opponents' MMR; Go keeps no queue-time opponent MMR, so it is 0 (a
-		// forfeit). ModifyMatchmakerRating persists to character_arena_stats;
-		// week/season games increment (not wins); the SetArenaTeamInfoField
-		// unit-field updates have no Go model. The HIGHEST_PERSONAL_RATING
-		// criteria update is max-keeping, == C++ UpdateAchievementCriteria.
-		if entry.IsArena && entry.IsRated && entry.InstanceID != 0 {
-			cdb := s.server.CharactersStore.DB
-			if cdb == nil {
-				return true
-			}
-			if teamID := arenaTeamIDForSlot(ctx, cdb, s.playerGUID, uint32(entry.ArenaType)); teamID != 0 {
-				var personal uint32
-				_ = cdb.QueryRowContext(ctx, "SELECT personalRating FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID).Scan(&personal)
-				mod := arenaTeamRatingLossMod(personal, 0, s.server.Config.ArenaLoseRatingModifier)
-				newPersonal := personal
-				if mod < 0 && uint32(-mod) >= newPersonal {
-					newPersonal = 0
-				} else {
-					newPersonal = uint32(int32(newPersonal) + mod)
-				}
-				_, _ = cdb.ExecContext(ctx, "UPDATE arena_team_member SET personalRating = ?, weekGames = weekGames + 1, seasonGames = seasonGames + 1 WHERE arenaTeamId = ? AND guid = ?", newPersonal, teamID, s.playerGUID)
-				s.server.applyArenaMMRChange(ctx, s.playerGUID, arenaTeamSlotByType(uint32(entry.ArenaType)), -12)
-				s.setAchievementCriteria(criteriaTypeHighestPersonalRating, 0, newPersonal)
-				s.debug("rated arena queue leave: personal rating loss applied", "account", s.accountName, "team", teamID, "loss", -mod)
-			}
-		}
+		// BattleGroundHandler.cpp:496-507: the rated-arena loss arm never fires
+		// in C++ — it resolves the arena team via
+		// GetArenaTeamById(ginfo.Team), but GroupQueueInfo::Team is the
+		// faction side (BattlegroundQueue.h:43, set from leader->GetTeam()
+		// at BattlegroundQueue.cpp:146), not the arena-team id (that is
+		// GroupQueueInfo::ArenaTeamId, BattlegroundQueue.h:47), so the
+		// lookup misses and MemberLost is never called. No rating loss is
+		// applied here, C++-faithful.
 		// BattleGroundHandler.cpp:515-521: track a player who refuses the BG
 		// invite by leaving the queue. Battleground::isBattleground() excludes
 		// arenas, and entry.InstanceID != 0 is Go's "invited to a live
