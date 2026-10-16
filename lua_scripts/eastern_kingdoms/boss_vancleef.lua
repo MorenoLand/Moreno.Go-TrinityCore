@@ -34,22 +34,25 @@
 --   -> Talk(SAY_TWO = 3); 25% crossing -> Talk(SAY_THREE = 5). The C++
 --   checks the 50% leg in its own if, then 25/33/66 in an else-if chain —
 --   replicated exactly; latches are one-shot per guid (init on 1/5/23).
+-- - Reset's DoCastSelf(SPELL_DUAL_WIELD = 674, true) +
+--   DoCastSelf(SPELL_THRASH = 12787, true) -> onReset (23), alive-gated
+--   (jindo/magmadar precedent: C++ Reset runs at spawn and on evade,
+--   never on death; Go's 23 fires on respawn and evade, matching this
+--   boss's C++ Reset path); the triggered flag is exact via CastSpell's
+--   third arg (moroes precedent).
 -- Deviations from C++: the 50%-leg DoCastSelf(5200) spell's entire effect
 -- is summoning allies — no summon bridge exists on the Lua surface
 -- (dark-rider precedent), so only the cast arm is ported (creature casts
 -- are packet-visual, maiden precedent); the allies never materialize.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Reset's DoCastSelf(SPELL_DUAL_WIELD = 674, true) +
---   DoCastSelf(SPELL_THRASH = 12787, true) — Reset self-casts are stranded
---   halves (rageclaw/phoenix_tk precedent: C++ Reset also runs at spawn
---   Initialize, while Lua OnReset (23) fires only on the reset/evade path;
---   no single faithful trigger).
 -- - SummonBlackguards()'s DoSummon(NPC_BLACKGUARD = 636, the two
 --   BlackguardPositions, 1min, TEMPSUMMON_CORPSE_TIMED_DESPAWN) x2 — no
 --   summon bridge (dark-rider precedent).
 -- - EnterEvadeMode's summons.DespawnAll() + _DespawnAtEvade() — no
 --   summon/despawn bridge (dark-rider precedent).
 
+local SPELL_DUAL_WIELD = 674
+local SPELL_THRASH = 12787
 local SPELL_VANCLEEFS_ALLIES = 5200
 
 local SAY_AGGRO = 0
@@ -124,6 +127,14 @@ end
 
 local function onReset(_, creature)
     initState(creature:GetGUID())
+    -- C++ Reset's one-shot triggered self-casts (jindo/magmadar
+    -- precedent): alive-gated, since C++ Reset runs at spawn and on
+    -- evade, never on death — while Go's 23 also fires on death
+    -- (fireCreatureDied, Eluna parity).
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
+        creature:CastSpell(creature, SPELL_THRASH, true)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_VANCLEEF, 1, onEnterCombat)
