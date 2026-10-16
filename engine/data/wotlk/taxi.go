@@ -133,6 +133,44 @@ func (s *Store) TaxiNetworkMask() ([taxiMaskSize]uint32, error) {
 	return network.mask, nil
 }
 
+// FactionTaxiMask mirrors the sHordeTaxiNodesMask / sAllianceTaxiNodesMask /
+// sDeathKnightTaxiNodesMask build (DBCStores.cpp:589-632): nodes on the valid
+// flight network bucketed by MountCreatureID — [0] serves Horde, [1] serves
+// Alliance, and the 32981 Ebon Hold mount serves death knights of either
+// faction (nodes 315 and 333 are DK-fixed like C++).
+func (s *Store) FactionTaxiMask(horde bool, deathKnight bool) ([taxiMaskSize]uint32, error) {
+	network, err := s.taxiNetwork()
+	if err != nil {
+		return [taxiMaskSize]uint32{}, err
+	}
+	var mask [taxiMaskSize]uint32
+	for _, node := range network.nodes {
+		if node.ID == 0 || !node.HasOutgoingPath {
+			continue
+		}
+		hordeMount, allianceMount := node.MountCreatureID[0], node.MountCreatureID[1]
+		if node.ID == 315 || node.ID == 333 {
+			allianceMount = taxiDKSpecialMount
+		}
+		field := (node.ID - 1) / 32
+		if field >= taxiMaskSize {
+			continue
+		}
+		sub := uint32(1) << ((node.ID - 1) % 32)
+		teamMount := hordeMount
+		if !horde {
+			teamMount = allianceMount
+		}
+		if teamMount != 0 && teamMount != taxiDKSpecialMount {
+			mask[field] |= sub
+		}
+		if deathKnight && (hordeMount == taxiDKSpecialMount || allianceMount == taxiDKSpecialMount) {
+			mask[field] |= sub
+		}
+	}
+	return mask, nil
+}
+
 // NearestTaxiNode mirrors ObjectMgr::GetNearestTaxiNode: closest network node
 // on the map whose mount list serves the team (0 = Horde, 1 = Alliance; the
 // 32981 Ebon Hold mount serves everyone).

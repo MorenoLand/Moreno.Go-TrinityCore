@@ -2898,6 +2898,13 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 	return true
 }
 
+// RACEMASK_ALLIANCE / RACEMASK_HORDE (SharedDefines.h:118-122): races
+// 1,3,4,7,11 and 2,5,6,8,10 as 1<<(race-1) bitmasks.
+const (
+	raceMaskAlliance = uint32(1<<0 | 1<<2 | 1<<3 | 1<<6 | 1<<10) // 0x44D
+	raceMaskHorde    = uint32(1<<1 | 1<<4 | 1<<5 | 1<<7 | 1<<9)  // 0x2B2
+)
+
 func teamForRace(race uint8) uint32 {
 	switch race {
 	case 1, 3, 4, 7, 11: // Alliance: Human, Dwarf, Night Elf, Gnome, Draenei
@@ -3131,7 +3138,9 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 		var atLogin uint64
 		var oldRace, class uint8
 		var oldName string
-		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class, name FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class, &oldName); err != nil {
+		var level uint8
+		var knownTitles sql.NullString
+		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class, name, level, knownTitles FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class, &oldName, &level, &knownTitles); err != nil {
 			buf := protocol.NewBuffer(1)
 			buf.WriteU8(charCreateError)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
@@ -3238,6 +3247,56 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 		if err != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
 				newName, gender, skin, face, hairStyle, hairColor, facialHair, race, guid)
+		}
+
+		// Delete all flypaths and rebuild the faction taximask when above
+		// level 7 (CharacterHandler.cpp:1845-1881): numFullTaximasks =
+		// min(level/7, 11) faction-mask words, the remaining words zeroed.
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET taxi_path = '' WHERE guid = ?", guid)
+		if level > 7 && s.server != nil && s.server.Data != nil {
+			if factionMask, terr := s.server.Data.FactionTaxiMask(newTeam == 1, class == classDeathKnight); terr == nil {
+				numFull := int(level) / 7
+				if numFull > 11 {
+					numFull = 11
+				}
+				parts := make([]string, 14)
+				for i := range parts {
+					if i < numFull {
+						parts[i] = strconv.FormatUint(uint64(factionMask[i]), 10)
+					} else {
+						parts[i] = "0"
+					}
+				}
+				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET taximask = ? WHERE guid = ?", strings.Join(parts, " "), guid)
+			}
+		}
+
+		// Reset guild (CharacterHandler.cpp:1884-1891): gated on
+		// !CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD. An offline non-leader
+		// member is erased like Guild::DeleteMember's _DeleteMemberFromDB; a
+		// leader crowns the lowest-rank remaining member
+		// (Guild::_SetLeaderGUID, Guild.cpp:2521) or disbands when alone
+		// (Guild.cpp:2285-2302). Player::LeaveAllArenaTeams
+		// (Player.cpp:21461) erases the member rows — the arena-captain gate
+		// above guarantees the character is never a captain here.
+		if !s.server.Config.AllowTwoSideInteractionGuild {
+			var changeGuildID, changeLeaderGUID int64
+			if gerr := cdb.QueryRowContext(ctx, `SELECT gm.guildid, g.leaderguid FROM guild_member AS gm
+				JOIN guild AS g ON g.guildid = gm.guildid WHERE gm.guid = ? LIMIT 1`, guid).Scan(&changeGuildID, &changeLeaderGUID); gerr == nil && changeGuildID != 0 {
+				if uint64(changeLeaderGUID) == guid {
+					var newLeader int64
+					if lerr := cdb.QueryRowContext(ctx, "SELECT guid FROM guild_member WHERE guildid = ? AND guid != ? ORDER BY rank ASC LIMIT 1", changeGuildID, guid).Scan(&newLeader); lerr == nil && newLeader != 0 {
+						_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 0 WHERE guildid = ? AND guid = ?", changeGuildID, newLeader)
+						_, _ = cdb.ExecContext(ctx, "UPDATE guild SET leaderguid = ? WHERE guildid = ?", newLeader, changeGuildID)
+						_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ?", guid)
+					} else {
+						execGuildDisband(ctx, cdb, changeGuildID)
+					}
+				} else {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ?", guid)
+				}
+			}
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE guid = ?", guid)
 		}
 
 		// Delete friends list and social interactions: only when the account
@@ -3385,8 +3444,94 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 				var standing int32
 				err := cdb.QueryRowContext(ctx, "SELECT standing FROM character_reputation WHERE faction = ? AND guid = ?", pair.oldID, guid).Scan(&standing)
 				if err == nil {
+					// CharacterHandler.cpp:2035-2057: the swap preserves the
+					// final reputation — the stored delta is re-based from
+					// the old faction's base standing (old race/class) to
+					// the new faction's base standing (new race/class), via
+					// ObjectMgr::GetBaseReputationOf.
+					newDBRep := standing
+					if s.server != nil && s.server.Data != nil {
+						if oldRep, found, rerr := s.server.Data.Reputation(pair.oldID, oldRace, class); rerr == nil && found {
+							if newRep, found2, rerr2 := s.server.Data.Reputation(pair.newID, race, class); rerr2 == nil && found2 {
+								newDBRep = standing + oldRep.BaseStanding - newRep.BaseStanding
+							}
+						}
+					}
 					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_reputation WHERE faction = ? AND guid = ?", pair.newID, guid)
-					_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET faction = ? WHERE faction = ? AND guid = ?", pair.newID, pair.oldID, guid)
+					_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET faction = ?, standing = ? WHERE faction = ? AND guid = ?", pair.newID, newDBRep, pair.oldID, guid)
+				}
+			}
+		}
+
+		// Mark all rewarded quests as "active" (CharacterHandler.cpp:1968),
+		// then disable old-faction specific quests (:1971-2002): rewarded
+		// quests whose AllowableRaces exclude the new team's race mask go
+		// inactive.
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_queststatus_rewarded SET active = 1 WHERE guid = ?", guid)
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			newRaceMask := uint32(raceMaskAlliance) // RACEMASK_ALLIANCE (SharedDefines.h:118)
+			if newTeam == 1 {
+				newRaceMask = uint32(raceMaskHorde) // RACEMASK_HORDE
+			}
+			if qtRows, qterr := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ID, AllowableRaces FROM quest_template"); qterr == nil {
+				for qtRows.Next() {
+					var questID, allowRaces uint32
+					if qtRows.Scan(&questID, &allowRaces) == nil && allowRaces&newRaceMask == 0 {
+						_, _ = cdb.ExecContext(ctx, "UPDATE character_queststatus_rewarded SET active = 0 WHERE quest = ? AND guid = ?", questID, guid)
+					}
+				}
+				qtRows.Close()
+			}
+		}
+
+		// Title conversion (CharacterHandler.cpp:2094-2135): the knownTitles
+		// bitfield swaps each old-faction title bit for its new-faction
+		// counterpart via player_factionchange_titles + CharTitles MaskID,
+		// and the chosen title is reset
+		// (CHAR_RES_CHAR_TITLES_FACTION_CHANGE).
+		if knownTitles.Valid && strings.TrimSpace(knownTitles.String) != "" && s.server != nil && s.server.Data != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			const knownTitleWords = 6 // KNOWN_TITLES_SIZE*2 (Player.h:410)
+			titleMasks := make([]uint32, knownTitleWords)
+			for i, tok := range strings.Fields(knownTitles.String) {
+				if i >= knownTitleWords {
+					break
+				}
+				if v, perr := strconv.ParseUint(tok, 10, 32); perr == nil {
+					titleMasks[i] = uint32(v)
+				}
+			}
+			if titleRows, tterr := s.server.WorldStore.DB.QueryContext(ctx, "SELECT alliance_id, horde_id FROM player_factionchange_titles"); tterr == nil {
+				convertedPairs := 0
+				for titleRows.Next() {
+					var allianceID, hordeID uint32
+					if titleRows.Scan(&allianceID, &hordeID) != nil {
+						continue
+					}
+					aTitle, aFound, aerr := s.server.Data.CharTitle(allianceID)
+					hTitle, hFound, herr := s.server.Data.CharTitle(hordeID)
+					if aerr != nil || herr != nil || !aFound || !hFound {
+						continue
+					}
+					convertedPairs++
+					oldBit, newBit := aTitle.MaskID, hTitle.MaskID
+					if newTeam == 0 { // Alliance: horde bit -> alliance bit
+						oldBit, newBit = hTitle.MaskID, aTitle.MaskID
+					}
+					if oldBit/32 < knownTitleWords && newBit/32 < knownTitleWords &&
+						titleMasks[oldBit/32]&(uint32(1)<<(oldBit%32)) != 0 {
+						titleMasks[oldBit/32] &^= uint32(1) << (oldBit % 32)
+						titleMasks[newBit/32] |= uint32(1) << (newBit % 32)
+					}
+				}
+				titleRows.Close()
+				if convertedPairs > 0 {
+					var sb strings.Builder
+					for _, m := range titleMasks {
+						sb.WriteString(strconv.FormatUint(uint64(m), 10))
+						sb.WriteByte(' ')
+					}
+					_, _ = cdb.ExecContext(ctx, "UPDATE characters SET knownTitles = ? WHERE guid = ?", sb.String(), guid)
+					_, _ = cdb.ExecContext(ctx, "UPDATE characters SET chosenTitle = 0 WHERE guid = ?", guid)
 				}
 			}
 		}
