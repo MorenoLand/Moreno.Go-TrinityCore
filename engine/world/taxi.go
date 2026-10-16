@@ -102,13 +102,15 @@ func (s *session) loadTaxiMask(raw sql.NullString) {
 	}
 }
 
-// nearestCreatureTaxiNode finds the flight node nearest to the creature, as
-// ObjectMgr::GetNearestTaxiNode does using the unit's world position.
+// nearestCreatureTaxiNode mirrors WorldSession::SendTaxiStatus
+// (TaxiHandler.cpp:23-45): a creature that exists, is not hostile to the
+// player, and carries the flightmaster flag yields its nearest taxi node —
+// C++ applies no interact-range gate here (ObjectAccessor::GetCreature has
+// no distance check), so the 5-yard canInteractWithNPC check must not run
+// on this path. Callers that need the interact gate (taxi activation, menu)
+// apply it themselves first, exactly like the C++ handlers do.
 func (s *session) nearestCreatureTaxiNode(ctx context.Context, guid uint64) (uint32, bool) {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return 0, false
-	}
-	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagFlightmaster)) {
 		return 0, false
 	}
 	creature := s.luaCreature(ctx, guid)
@@ -119,8 +121,8 @@ func (s *session) nearestCreatureTaxiNode(ctx context.Context, guid uint64) (uin
 		return 0, false
 	}
 	// TrinityCore SendTaxiStatus: a hostile flight master gets no answer
-	// (TaxiHandler.cpp:28: unit->IsHostileTo(player)). NearestTaxiNode's
-	// caller in sendTaxiNodeStatusMultiple already applies the same gate.
+	// (TaxiHandler.cpp:28: unit->IsHostileTo(player)), and C++ applies no
+	// interact-range gate on this path.
 	low := uint32(guid & 0x00FFFFFF)
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	var faction int64
@@ -165,8 +167,8 @@ func (s *session) handleTaxiNodeStatusQuery(ctx context.Context, payload []byte)
 	if err != nil {
 		return true
 	}
-	// TrinityCore SendTaxiStatus: ignore non-flightmasters and units with no
-	// resolvable node instead of answering "known" for everything.
+	// TaxiHandler.cpp:23-45 (SendTaxiStatus): the status query answers for
+	// any existing, non-hostile flightmaster — no interact-range gate.
 	node, ok := s.nearestCreatureTaxiNode(ctx, guid)
 	if !ok {
 		return true
@@ -293,7 +295,10 @@ func (s *session) handleTaxiQueryAvailableNodes(ctx context.Context, payload []b
 }
 
 // learnNewTaxiNode mirrors WorldSession::SendLearnNewTaxiNode: discovers the
-// nearest node, stores it and notifies the client; true when learned.
+// nearest node, stores it and notifies the client; true when learned. C++
+// SendLearnNewTaxiNode applies no interact gate of its own (both callers —
+// HandleTaxiQueryAvailableNodes and the gossip TAXIVENDOR arm — gate first),
+// so the ungated lookup is the faithful one.
 func (s *session) learnNewTaxiNode(ctx context.Context, guid uint64) bool {
 	node, ok := s.nearestCreatureTaxiNode(ctx, guid)
 	if !ok {

@@ -746,6 +746,12 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		}
 	}
 
+	// Unit::_EnterVehicle (Unit.cpp:13088-13099): boarding a different
+	// vehicle exits the current one first; same-vehicle re-entry keeps it.
+	if s.player.VehicleGUID != 0 && s.player.VehicleGUID != vehicleGUID {
+		s.exitVehicle(ctx)
+	}
+
 	s.dropBattlegroundFlagIfCarried()
 	s.player.MountDisplayID = 0
 
@@ -903,8 +909,9 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 	if err != nil {
 		return true
 	}
-	// vehicle_base->m_movementInfo = movementInfo (VehicleHandler.cpp:113):
-	// no bridge — Go has no creature-unit model behind a vehicle base.
+	// vehicle_base->m_movementInfo = movementInfo (VehicleHandler.cpp:87):
+	// parsed for wire fidelity, then discarded — the creature motion model
+	// carries position but no m_movementInfo equivalent to store it on.
 	if _, err := readMovementInfo(b); err != nil {
 		return true
 	}
@@ -916,23 +923,35 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 	if err != nil {
 		return true
 	}
+	seatID := int8(seatByte)
 
 	// if (vehicle_base->GetGUID() != guid) return (VehicleHandler.cpp:116-117).
 	if s.player.VehicleGUID == 0 || vehGUID != s.player.VehicleGUID {
 		return true
 	}
 
-	// Accessory arm (VehicleHandler.cpp:119-123): boarding a seat on another
-	// unit's vehicle via HandleSpellClick — no bridge, Go has no
-	// creature-unit/spell-click model.
+	// Accessory arm (VehicleHandler.cpp:100-104): boarding a seat on another
+	// unit's vehicle via Unit::HandleSpellClick(GetPlayer(), seatId).
 	if accessory != 0 {
+		if s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+				// The CanSwitchFromSeat pre-gate (VehicleHandler.cpp:63-64)
+				// applies to the accessory arm too.
+				_, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
+				if seatInfo != nil && seatInfo.CanSwitchFromSeat() {
+					if targetKit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, accessory); targetKit != nil && targetKit.HasEmptySeat(seatID) {
+						s.spellClickEnterVehicleSeat(ctx, accessory, seatID)
+					}
+				}
+			}
+		}
 		return true
 	}
 
-	// ChangeSeat(-1, seatId > 0): previous/next empty seat (VehicleHandler.cpp:118).
-	// The CanSwitchFromSeat pre-gate (VehicleHandler.cpp:60-67) lives inside
+	// ChangeSeat(-1, seatId > 0): previous/next empty seat (VehicleHandler.cpp:99).
+	// The CanSwitchFromSeat pre-gate (VehicleHandler.cpp:63-64) lives inside
 	// VehicleKit.SwitchSeat.
-	next := int8(seatByte) > 0
+	next := seatID > 0
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if nextSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, next); ok {
@@ -1000,14 +1019,18 @@ func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []
 
 // controlsVehicle reports whether the session's player is the controller of
 // the vehicle they ride: the Go bridge for the GetCharmedGUID() gate
-// (VehicleHandler.cpp:33-38) — charm is granted on boarding a seat carrying
-// the CAN_CONTROL flag (VehicleSeatEntry::CanControl, DBCEnums.h:463).
+// (VehicleHandler.cpp:33-38). The CHARM_TYPE_VEHICLE charm is granted on
+// boarding a seat carrying the CAN_CONTROL flag, but only when the vehicle
+// base is a creature (VehicleJoinEvent::Execute, Vehicle.cpp:871-881 —
+// SetCharmedBy is gated on GetTypeId() == TYPEID_UNIT). A player vehicle
+// base never charms its controller, so its dismiss packet dies at the C++
+// gate the same way.
 func (s *session) controlsVehicle() bool {
 	if s == nil || s.player == nil || s.server == nil || s.player.VehicleGUID == 0 {
 		return false
 	}
 	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
-	if kit == nil {
+	if kit == nil || kit.IsPlayer {
 		return false
 	}
 	_, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
@@ -1042,7 +1065,7 @@ func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []
 	return true
 }
 
-// handlePlayerVehicleEnter processes CMSG_PLAYER_VEHICLE_ENTER (0x46E).
+// handlePlayerVehicleEnter processes CMSG_PLAYER_VEHICLE_ENTER (0x4A8).
 // Reference: WorldSession::HandleEnterPlayerVehicle (VehicleHandler.cpp:129-149).
 func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
@@ -1181,14 +1204,25 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 	if s.player.VehicleGUID == 0 {
 		return true
 	}
-	// VehicleHandler.cpp:116-121: the switch only fires when the packet
-	// names the current vehicle base; otherwise C++ tries the spell-click
-	// arm on the named unit, which has no Go bridge.
+	// VehicleHandler.cpp:108-121: when the packet names a different vehicle
+	// base, C++ boards the named unit's vehicle through
+	// Unit::HandleSpellClick(GetPlayer(), seatId).
 	if vehGUID != s.player.VehicleGUID {
+		if s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+				// CanSwitchFromSeat pre-gate (VehicleHandler.cpp:63-64).
+				_, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
+				if seatInfo != nil && seatInfo.CanSwitchFromSeat() {
+					if targetKit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehGUID); targetKit != nil && targetKit.HasEmptySeat(seat) {
+						s.spellClickEnterVehicleSeat(ctx, vehGUID, seat)
+					}
+				}
+			}
+		}
 		return true
 	}
 
-	if s.server != nil && s.player.VehicleGUID != 0 {
+	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, seat); switched {
 				s.player.VehicleSeat = assigned
@@ -1203,7 +1237,128 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 		}
 	}
 
-	s.player.VehicleSeat = seat
-	s.sendPlayerUpdate()
+	// Unit::ChangeSeat (Unit.cpp:13135-13136): with no vehicle kit the change
+	// is a no-op — never a seat assignment.
 	return true
+}
+
+// spellClickEnterVehicleSeat mirrors the seatId arm of Unit::HandleSpellClick
+// (Unit.cpp:12982-13045): the vehicle seat-change handlers board the player
+// onto a seat of another unit's vehicle through its npc_spellclick_spells
+// rows (VehicleHandler.cpp:100-104, 118-121). The caller runs the
+// HasEmptySeat gate; the seat amount rides the spell cast as
+// SPELLVALUE_BASE_POINT0+i = seatId+1 on the CONTROL_VEHICLE effect
+// (Unit.cpp:13029-13031), and the aura apply leg boards the caster at
+// amount-1 (spells.go HandleAuraControlVehicle leg).
+func (s *session) spellClickEnterVehicleSeat(ctx context.Context, vehUnitGUID uint64, seatID int8) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehUnitGUID)
+	// Unit::HandleSpellClick (Unit.cpp:12985): the click entry is the kit's
+	// creature entry; entry 0 has no npc_spellclick_spells rows, matching the
+	// C++ empty-bounds no-op.
+	if kit == nil || kit.CreatureEntry == 0 {
+		return
+	}
+	clickEntry := kit.CreatureEntry
+
+	// SpellClickInfo::IsFitToRequirements (ObjectMgr.cpp:194-224), following
+	// the established handleSpellClick approximations: userType >=
+	// SPELL_CLICK_USER_MAX (4) is skipped at DB load in C++; for creature
+	// units FRIEND means not hostile and RAID/PARTY never match (creatures
+	// are never in groups); the pet arm hits the this==unit case so every
+	// userType passes.
+	isPet := s.player.PetGUID != 0 && vehUnitGUID == s.player.PetGUID
+	motion := s.findCreatureMotion(vehUnitGUID)
+
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell_id, cast_flags, user_type FROM npc_spellclick_spells WHERE npc_entry = ?", clickEntry)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type spellClick struct {
+		spellID   uint32
+		castFlags uint8
+		userType  uint8
+	}
+	var clicks []spellClick
+	for rows.Next() {
+		var sp, cf, ut uint32
+		if err := rows.Scan(&sp, &cf, &ut); err == nil && sp > 0 {
+			clicks = append(clicks, spellClick{spellID: sp, castFlags: uint8(cf), userType: uint8(ut)})
+		}
+	}
+
+	haveData := s.server.Data != nil
+	for _, click := range clicks {
+		if click.userType >= 4 {
+			continue
+		}
+		if !isPet && motion != nil {
+			switch click.userType {
+			case 1: // SPELL_CLICK_USER_FRIEND
+				player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+				if s.server.isHostileFaction(motion.Faction, player) {
+					continue
+				}
+			case 2, 3: // SPELL_CLICK_USER_RAID / SPELL_CLICK_USER_PARTY
+				continue
+			}
+		}
+		// ConditionMgr::IsObjectMeetingSpellClickConditions
+		// (ConditionMgr.cpp:1008).
+		if meets, err := s.meetSpellClickConditions(ctx, clickEntry, click.spellID, vehUnitGUID); err != nil || !meets {
+			continue
+		}
+		// Seat arm (Unit.cpp:13006-13024): the spell must carry a
+		// SPELL_AURA_CONTROL_VEHICLE effect — C++ logs a sql error and
+		// continues otherwise.
+		if !haveData {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(click.spellID)
+		if err != nil || !found || len(spell.Effects) == 0 {
+			continue
+		}
+		effIndex := -1
+		for i, eff := range spell.Effects {
+			if eff.Aura == spellAuraControlVehicle {
+				effIndex = i
+				break
+			}
+		}
+		if effIndex < 0 {
+			continue
+		}
+		if click.castFlags&0x01 == 0 {
+			// NPC_CLICK_CAST_CASTER_CLICKER unset: the creature casts. With
+			// caster==target the C++ aura apply is a no-op
+			// (SpellAuraEffects.cpp:2975); the reverse arm (the creature
+			// boarding the clicker's own kit) has no Go model —
+			// AddPassenger is player-only — so the row is skipped.
+			continue
+		}
+		targetGUID := vehUnitGUID
+		if click.castFlags&0x02 != 0 { // NPC_CLICK_CAST_TARGET_CLICKER
+			targetGUID = s.playerGUID
+		}
+		// Only effect effIndex is overridden; the other base points ride
+		// the inverse of the funnel's DieSides adjustment
+		// (castSpellDirectWithOverrides, Spell.cpp:7871-7877) so they land
+		// back on their DBC values.
+		bp := make([]int32, len(spell.Effects))
+		for j, e := range spell.Effects {
+			bp[j] = e.BasePoints
+			if e.DieSides != 0 {
+				bp[j]++
+			}
+		}
+		bp[effIndex] = int32(seatID) + 1
+		if spell.Effects[effIndex].DieSides != 0 {
+			bp[effIndex]++
+		}
+		s.castSpellDirectWithBasePoints(ctx, click.spellID, targetGUID, bp)
+	}
 }
