@@ -5109,19 +5109,11 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// If player already voted on this roll, ignore duplicate
-	if _, voted := roll.Votes[s.playerGUID]; voted {
-		s.server.lootMu.Unlock()
-		return true
-	}
-
-	// Group::CountRollVote (Group.cpp:1452-1494): the vote switch has no
-	// default arm — a rollType outside 0..3 (pass/need/greed/disenchant)
-	// records no vote, counts nothing, and fires no achievement.
-	if rollType > rollDisenchant {
-		s.server.lootMu.Unlock()
-		return true
-	}
+	// Group::CountRollVote (Group.cpp:1452-1494) has no re-vote guard and
+	// no default arm: a second vote from the same player re-runs the switch
+	// (double-counting the totals and re-broadcasting), and a rollType
+	// outside 0..3 records no vote but still reaches the totals check
+	// below, which can resolve the roll.
 
 	// In Need Before Greed, verify that player can need if they chose NEED (TC GroupHandler.cpp:487)
 	if rollType == rollNeed && s.groupID != 0 {
@@ -5148,22 +5140,25 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		rollType = rollPass
 	}
 
-	roll.Votes[s.playerGUID] = rollType
+	voteRecorded := false
+	if rollType <= rollDisenchant {
+		roll.Votes[s.playerGUID] = rollType
 
-	switch rollType {
-	case 0:
-		roll.TotalPass++
-	case 1:
-		roll.TotalNeed++
-	case 2:
-		roll.TotalGreed++
-	case 3: // DISENCHANT shares the greed total (Group.cpp:1484).
-		// C++ HandleLootRoll fires no achievement for a disenchant vote
-		// (the NEED/GREED-only switch, GroupHandler.cpp:483-490); the
-		// disenchant cast credits the winner at delivery (Group.cpp:1654).
-		roll.TotalGreed++
-	default:
-		roll.TotalGreed++
+		switch rollType {
+		case 0:
+			roll.TotalPass++
+		case 1:
+			roll.TotalNeed++
+		case 2:
+			roll.TotalGreed++
+		case 3: // DISENCHANT shares the greed total (Group.cpp:1484).
+			// C++ HandleLootRoll fires no achievement for a disenchant vote
+			// (the NEED/GREED-only switch, GroupHandler.cpp:483-490); the
+			// disenchant cast credits the winner at delivery (Group.cpp:1654).
+			roll.TotalGreed++
+		}
+
+		voteRecorded = true
 	}
 
 	itemEntry := roll.ItemEntry
@@ -5172,27 +5167,29 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	totalDone := (roll.TotalPass + roll.TotalNeed + roll.TotalGreed) >= roll.TotalPlayersRolling
 	s.server.lootMu.Unlock()
 
-	voteRollNumber := uint8(128)
-	voteRollType := rollType
-	if rollType == 1 { // NEED
-		voteRollNumber = 0
-		voteRollType = 0
-	} else if rollType == 0 { // PASS
-		voteRollNumber = 128
-		voteRollType = 0
-	}
+	if voteRecorded {
+		voteRollNumber := uint8(128)
+		voteRollType := rollType
+		if rollType == 1 { // NEED
+			voteRollNumber = 0
+			voteRollType = 0
+		} else if rollType == 0 { // PASS
+			voteRollNumber = 128
+			voteRollType = 0
+		}
 
-	buf := protocol.NewBuffer(35)
-	buf.WriteU64(0) // Group.cpp:1471-1486 — CountRollVote broadcasts ObjectGuid::Empty
-	buf.WriteU32(itemSlot)
-	buf.WriteU64(s.playerGUID)
-	buf.WriteU32(itemEntry)
-	buf.WriteU32(randomSuffix)
-	buf.WriteU32(randomPropID)
-	buf.WriteU8(voteRollNumber)
-	buf.WriteU8(voteRollType)
-	buf.WriteU8(0) // autoPass
-	s.server.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+		buf := protocol.NewBuffer(35)
+		buf.WriteU64(0) // Group.cpp:1471-1486 — CountRollVote broadcasts ObjectGuid::Empty
+		buf.WriteU32(itemSlot)
+		buf.WriteU64(s.playerGUID)
+		buf.WriteU32(itemEntry)
+		buf.WriteU32(randomSuffix)
+		buf.WriteU32(randomPropID)
+		buf.WriteU8(voteRollNumber)
+		buf.WriteU8(voteRollType)
+		buf.WriteU8(0) // autoPass
+		s.server.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+	}
 
 	if totalDone {
 		// Group::CountRollVote passes nullptr for allowedMap (Group.cpp:1493).
