@@ -141,7 +141,13 @@ type abBattlegroundState struct {
 	HonorTicsAccum       [2]uint32 // resource points banked toward the next trickle-honor award
 	RepTicsAccum         [2]uint32 // resource points banked toward the next trickle-rep award
 	NearVictoryAnnounced bool
-	StopAccumulation     chan struct{}
+	// Scores500Disadvantage is the Go form of m_TeamScores500Disadvantage
+	// (BattlegroundAB.h:315): the one-way latch BattlegroundAB::PostUpdateImpl
+	// (BattlegroundAB.cpp:174-177) trips for the trailing team whenever the
+	// other team's lead exceeds 500. Gates the resilient_victory achievement
+	// script (BattlegroundAB.cpp:707-713).
+	Scores500Disadvantage [2]bool
+	StopAccumulation      chan struct{}
 }
 
 func isABBanner(entry uint32) bool {
@@ -560,6 +566,13 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 					s.announceABVictory(ab.MapID, 0)
 				}
 				s.broadcastWorldState(ab.MapID, ABWorldStateAllianceResources, ab.AllianceResources)
+				// update achievement flags (BattlegroundAB.cpp:174-177): the
+				// alliance score just ticked up, so the horde 500-point
+				// disadvantage latch trips when the lead exceeds 500. One-way
+				// latch — C++ clears it only in Reset (BattlegroundAB.cpp:608-609).
+				if ab.AllianceResources > ab.HordeResources+500 {
+					ab.Scores500Disadvantage[1] = true
+				}
 			}
 		}
 	}
@@ -580,6 +593,13 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 					s.announceABVictory(ab.MapID, 1)
 				}
 				s.broadcastWorldState(ab.MapID, ABWorldStateHordeResources, ab.HordeResources)
+				// update achievement flags (BattlegroundAB.cpp:174-177): the
+				// horde score just ticked up, so the alliance 500-point
+				// disadvantage latch trips when the lead exceeds 500. One-way
+				// latch — C++ clears it only in Reset (BattlegroundAB.cpp:608-609).
+				if ab.HordeResources > ab.AllianceResources+500 {
+					ab.Scores500Disadvantage[0] = true
+				}
 			}
 		}
 	}

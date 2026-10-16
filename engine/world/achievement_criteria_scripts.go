@@ -193,9 +193,25 @@ func checkAchievementCriteriaScript(name string, source, target *session) bool {
 		}
 		return target.isPlayerMounted()
 
+	case "achievement_resilient_victory": // achievement_scripts.cpp:25-37
+		// BattlegroundAB::CheckAchievementCriteriaMeet(BG_CRITERIA_CHECK_RESILIENT_VICTORY):
+		// the player's own team holds the 500-point disadvantage latch
+		// (BattlegroundAB.cpp:707-713).
+		if source == nil || source.player == nil {
+			return false
+		}
+		if !sessionInBattlegroundType(source, 3) { // BATTLEGROUND_AB
+			return false
+		}
+		ab := source.server.getOrCreateABState(battlegroundMapForType(3))
+		if ab == nil {
+			return false
+		}
+		ab.mu.Lock()
+		defer ab.mu.Unlock()
+		return ab.Scores500Disadvantage[teamForRace(source.player.Race)]
+
 	// The remaining registrations are unportable without their Go state:
-	// - achievement_resilient_victory: BattlegroundAB's m_TeamScores500Disadvantage
-	//   latch (BattlegroundAB.cpp:707-713) has no Go twin.
 	// - achievement_bg_sa_defense_of_ancients / achievement_not_even_a_scratch:
 	//   BattlegroundSA's _allVehiclesAlive / _gateDestroyed (BattlegroundSA.cpp:1040-1049)
 	//   have no Go twin.
@@ -203,8 +219,7 @@ func checkAchievementCriteriaScript(name string, source, target *session) bool {
 	//   achievement_bg_sa_artillery: GetVehicleCreatureBase entry checks; Go has no
 	//   vehicle model. C++ returns false when the checks can't be met; without the
 	//   state, false is the only honest verdict, so these are fail-closed.
-	case "achievement_resilient_victory",
-		"achievement_bg_sa_defense_of_ancients",
+	case "achievement_bg_sa_defense_of_ancients",
 		"achievement_not_even_a_scratch",
 		"achievement_bg_ic_glaive_grave",
 		"achievement_bg_ic_mowed_down",

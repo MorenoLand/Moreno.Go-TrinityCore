@@ -20,6 +20,15 @@ const (
 	WSGSpellSilverwingFlag uint32 = 23335 // Carried by Horde
 	WSGSpellWarsongFlag    uint32 = 23333 // Carried by Alliance
 
+	// Stalemate debuff (BattlegroundWS.h:154-155): when both flags are kept
+	// simultaneously, carriers gain Focused Assault after 10 minutes and
+	// Brutal Assault after 15 total (BattlegroundWS.cpp:158-192).
+	WSGSpellFocusedAssault uint32 = 46392
+	WSGSpellBrutalAssault  uint32 = 46393
+
+	wsgStalemateStage1Delay = 10 * time.Minute
+	wsgStalemateStage2Delay = 5 * time.Minute // stage 2 fires at 15 minutes total
+
 	WSGFlagStateOnBase   uint32 = 1
 	WSGFlagStateOnPlayer uint32 = 2
 	WSGFlagStateOnGround uint32 = 3
@@ -37,6 +46,12 @@ const (
 	WSGFactionSilverwingSentinels uint32 = 890 // Alliance WSG reputation faction
 	WSGFactionWarsongOutriders    uint32 = 889 // Horde WSG reputation faction
 	WSGReputationCapture          uint32 = 35  // m_ReputationCapture non-weekend (BattlegroundWS.cpp:740); Go has no BG-weekend model
+
+	// BG-objective ids credited by BattlegroundWS::UpdatePlayerScore
+	// (BattlegroundWS.cpp:779-793): flag captures credit WS_OBJECTIVE_CAPTURE_FLAG,
+	// flag returns credit WS_OBJECTIVE_RETURN_FLAG (BattlegroundWS.h:160-161).
+	WSGObjectiveCaptureFlag uint32 = 42
+	WSGObjectiveReturnFlag  uint32 = 44
 
 	WSWorldStateAllianceCaptures  uint32 = 1581
 	WSWorldStateHordeCaptures     uint32 = 1582
@@ -66,6 +81,12 @@ type wsgBattlegroundState struct {
 	// base BG_WS_FLAG_RESPAWN_TIME after a capture via RespawnFlag(team, true).
 	AllianceWaitRespawnTimer *time.Timer
 	HordeWaitRespawnTimer    *time.Timer
+	// StalemateTimer/StalemateStage are the Go form of _flagSpellForceTimer +
+	// _flagDebuffState (BattlegroundWS.h:274, BattlegroundWS.cpp:155-192): the
+	// one-shot timer armed while both flags are kept, escalating 0 -> 1
+	// (Focused Assault) at 10 minutes -> 2 (Brutal Assault) at 15.
+	StalemateTimer *time.Timer
+	StalemateStage uint8
 }
 
 func isWSGFlag(entry uint32) bool {
@@ -134,6 +155,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			// Alliance player touches own base flag while carrying Horde flag -> Capture!
 			if wsg.HordeCarrierGUID == sess.playerGUID && wsg.AllianceFlagState == WSGFlagStateOnBase {
 				sess.removeAura(WSGSpellWarsongFlag)
+				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:303-306):
+				// the stalemate debuff leaves with the capturing keeper.
+				sess.removeAura(WSGSpellFocusedAssault)
+				sess.removeAura(WSGSpellBrutalAssault)
 				wsg.HordeCarrierGUID = 0
 				wsg.HordeFlagState = WSGFlagStateWaitRespawn
 				wsg.AllianceScore++
@@ -142,6 +167,13 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.rewardBGEndHonor(sess.player.Map, 0, 2)
 
 				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceCaptures, wsg.AllianceScore)
+				// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_CAPTURES arm
+				// (BattlegroundWS.cpp:779-787): the capture credits
+				// ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE with
+				// WS_OBJECTIVE_CAPTURE_FLAG (C++ calls UpdateTeamScore first,
+				// then UpdatePlayerScore — this credit follows the captures
+				// worldstate broadcast, mirroring that order).
+				s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
 				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
 				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Warsong flag!")
@@ -170,6 +202,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			// Horde player touches own base flag while carrying Alliance flag -> Capture!
 			if wsg.AllianceCarrierGUID == sess.playerGUID && wsg.HordeFlagState == WSGFlagStateOnBase {
 				sess.removeAura(WSGSpellSilverwingFlag)
+				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:320-323):
+				// the stalemate debuff leaves with the capturing keeper.
+				sess.removeAura(WSGSpellFocusedAssault)
+				sess.removeAura(WSGSpellBrutalAssault)
 				wsg.AllianceCarrierGUID = 0
 				wsg.AllianceFlagState = WSGFlagStateWaitRespawn
 				wsg.HordeScore++
@@ -178,6 +214,11 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.rewardBGEndHonor(sess.player.Map, 1, 2)
 
 				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeCaptures, wsg.HordeScore)
+				// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_CAPTURES arm
+				// (BattlegroundWS.cpp:779-787): WS_OBJECTIVE_CAPTURE_FLAG
+				// objective credit, after the team-score worldstate like the
+				// C++ UpdateTeamScore -> UpdatePlayerScore order.
+				s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
 				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
 				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 0)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Alliance flag!")
@@ -200,6 +241,11 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.setGameObjectHidden(wsg.AllianceBaseGUID, false)
 			}
 			s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
+			// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_RETURNS arm
+			// (BattlegroundWS.cpp:788-791): the return credits
+			// ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE with
+			// WS_OBJECTIVE_RETURN_FLAG.
+			s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveReturnFlag)
 			s.broadcastBattlegroundMessage(sess.player.Map, "The Alliance flag was returned to its base by "+sess.player.Name+"!")
 		} else {
 			// Enemy pickup
@@ -224,6 +270,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.setGameObjectHidden(wsg.HordeBaseGUID, false)
 			}
 			s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
+			// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_RETURNS arm
+			// (BattlegroundWS.cpp:788-791): WS_OBJECTIVE_RETURN_FLAG objective
+			// credit for the returning player.
+			s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveReturnFlag)
 			s.broadcastBattlegroundMessage(sess.player.Map, "The Warsong flag was returned to its base by "+sess.player.Name+"!")
 		} else {
 			// Enemy pickup
@@ -237,6 +287,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 	}
 
 	sess.removeAurasWithInterruptFlags(auraInterruptFlagEnterPvPCombat)
+
+	// Stalemate-debuff state machine (BattlegroundWS.cpp:155-192): re-arm or
+	// tear down after this flag interaction.
+	s.refreshWSGStalemate(wsg, sess.player.Map)
 
 	return true
 }
@@ -299,6 +353,10 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 	}
 	if wsg.AllianceCarrierGUID == sess.playerGUID {
 		sess.removeAura(WSGSpellSilverwingFlag)
+		// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:418-421):
+		// the stalemate debuff leaves with the dropper.
+		sess.removeAura(WSGSpellFocusedAssault)
+		sess.removeAura(WSGSpellBrutalAssault)
 		wsg.AllianceCarrierGUID = 0
 		wsg.AllianceFlagState = WSGFlagStateOnGround
 
@@ -345,6 +403,10 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 
 	if wsg.HordeCarrierGUID == sess.playerGUID {
 		sess.removeAura(WSGSpellWarsongFlag)
+		// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:432-435):
+		// the stalemate debuff leaves with the dropper.
+		sess.removeAura(WSGSpellFocusedAssault)
+		sess.removeAura(WSGSpellBrutalAssault)
 		wsg.HordeCarrierGUID = 0
 		wsg.HordeFlagState = WSGFlagStateOnGround
 
@@ -388,6 +450,10 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 			}
 		})
 	}
+
+	// Stalemate-debuff state machine (BattlegroundWS.cpp:155-192): the drop
+	// ends any both-kept window.
+	s.refreshWSGStalemate(wsg, mapID)
 }
 
 func (s *Server) handleWSGPlayerLeave(sess *session) {
@@ -407,6 +473,10 @@ func (s *Server) handleWSGPlayerLeave(sess *session) {
 	mapID := sess.player.Map
 	if wsg.AllianceCarrierGUID == sess.playerGUID {
 		sess.removeAura(WSGSpellSilverwingFlag)
+		// BattlegroundWS::RemovePlayer -> EventPlayerDroppedFlag: the stalemate
+		// debuff leaves with the leaving keeper (BattlegroundWS.cpp:418-421).
+		sess.removeAura(WSGSpellFocusedAssault)
+		sess.removeAura(WSGSpellBrutalAssault)
 		wsg.AllianceCarrierGUID = 0
 		wsg.AllianceFlagState = WSGFlagStateOnBase
 		if wsg.AllianceBaseGUID != 0 {
@@ -418,6 +488,10 @@ func (s *Server) handleWSGPlayerLeave(sess *session) {
 
 	if wsg.HordeCarrierGUID == sess.playerGUID {
 		sess.removeAura(WSGSpellWarsongFlag)
+		// BattlegroundWS::RemovePlayer -> EventPlayerDroppedFlag: the stalemate
+		// debuff leaves with the leaving keeper (BattlegroundWS.cpp:432-435).
+		sess.removeAura(WSGSpellFocusedAssault)
+		sess.removeAura(WSGSpellBrutalAssault)
 		wsg.HordeCarrierGUID = 0
 		wsg.HordeFlagState = WSGFlagStateOnBase
 		if wsg.HordeBaseGUID != 0 {
@@ -426,6 +500,10 @@ func (s *Server) handleWSGPlayerLeave(sess *session) {
 		s.broadcastWorldState(mapID, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
 		s.broadcastBattlegroundMessage(mapID, "The Warsong flag was returned to its base!")
 	}
+
+	// Stalemate-debuff state machine (BattlegroundWS.cpp:155-192): the leave
+	// ends any both-kept window.
+	s.refreshWSGStalemate(wsg, mapID)
 }
 
 func (s *Server) getWSGFlagCarriers(mapID uint32) []*session {
@@ -496,15 +574,21 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 	// callback). The winning capture arms a respawn timer just before this
 	// runs, so it must be cancelled here or it would unhide the flag and
 	// broadcast "The flags were placed!" into the finished battle.
-	for _, timer := range [4]**time.Timer{
+	for _, timer := range [5]**time.Timer{
 		&wsg.AllianceWaitRespawnTimer, &wsg.HordeWaitRespawnTimer,
 		&wsg.AllianceReturnTimer, &wsg.HordeReturnTimer,
+		&wsg.StalemateTimer,
 	} {
 		if *timer != nil {
 			(*timer).Stop()
 			*timer = nil
 		}
 	}
+	// The match is over: the stalemate-debuff state machine
+	// (BattlegroundWS.cpp:155-192) ends with the instance. Carrier auras are
+	// already stripped by the capturing arm's removal (BattlegroundWS.cpp:303-306,
+	// 320-323); only the stage bookkeeping needs clearing here.
+	wsg.StalemateStage = 0
 	teamName := "Alliance"
 	if winningTeam == 1 {
 		teamName = "Horde"
@@ -513,4 +597,111 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 	s.rewardBGEndHonor(mapID, winningTeam, 1)
 	s.rewardBGEndHonor(mapID, 0, 2)
 	s.rewardBGEndHonor(mapID, 1, 2)
+}
+
+// wsgPrematureWinner is the score-compare leg of
+// BattlegroundWS::GetPrematureWinner (BattlegroundWS.cpp:861-869): the team
+// ahead on flag captures wins a premature finish. Team ids match the rest of
+// the Go WSG model (0 = alliance, 1 = horde). The tie fallthrough in C++ calls
+// Battleground::GetPrematureWinner (Battleground.cpp:344-352), the
+// min-players-per-team roster check — Go has no live BG-instance roster, so
+// that base arm stays unported and a tie reports no winner. No live caller
+// yet: Go has no premature-finish countdown
+// (Battleground::_ProcessProgress / m_PrematureCountDown).
+func wsgPrematureWinner(wsg *wsgBattlegroundState) (uint32, bool) {
+	if wsg == nil {
+		return 0, false
+	}
+	if wsg.AllianceScore > wsg.HordeScore {
+		return 0, true
+	}
+	if wsg.HordeScore > wsg.AllianceScore {
+		return 1, true
+	}
+	return 0, false
+}
+
+// refreshWSGStalemate is the event-driven Go form of the stalemate-debuff arm
+// of BattlegroundWS::PostUpdateImpl (BattlegroundWS.cpp:158-192). C++ ticks
+// _flagSpellForceTimer while both flags are kept and escalates _flagDebuffState
+// at 10/15 minutes; Go arms a one-shot timer at each both-kept transition and
+// re-checks the both-kept condition at fire time (a mid-window flap cancels
+// and re-arms from zero on the next transition, matching the C++ reset in the
+// else arm, BattlegroundWS.cpp:184-192). Call with wsg.mu held after any
+// flag-state change.
+func (s *Server) refreshWSGStalemate(wsg *wsgBattlegroundState, mapID uint32) {
+	if wsg == nil {
+		return
+	}
+	bothKept := wsg.AllianceFlagState == WSGFlagStateOnPlayer && wsg.HordeFlagState == WSGFlagStateOnPlayer
+	if bothKept {
+		if wsg.StalemateTimer == nil && wsg.StalemateStage == 0 {
+			wsg.StalemateTimer = time.AfterFunc(wsgStalemateStage1Delay, func() {
+				s.wsgStalemateStage(wsg, mapID, 1)
+			})
+		}
+		return
+	}
+	if wsg.StalemateTimer != nil {
+		wsg.StalemateTimer.Stop()
+		wsg.StalemateTimer = nil
+	}
+	if wsg.StalemateStage != 0 {
+		wsg.StalemateStage = 0
+		s.removeWSGAssaultAuras(wsg)
+	}
+}
+
+// wsgStalemateStage fires the stalemate timer: stage 1 casts Focused Assault on
+// both keepers after 10 minutes (BattlegroundWS.cpp:161-168) and re-arms for
+// stage 2; stage 2 swaps to Brutal Assault after 15 minutes total
+// (BattlegroundWS.cpp:169-182). Missing keepers are skipped, like C++'s
+// FindPlayer null arms.
+func (s *Server) wsgStalemateStage(wsg *wsgBattlegroundState, mapID uint32, stage uint8) {
+	wsg.mu.Lock()
+	defer wsg.mu.Unlock()
+	wsg.StalemateTimer = nil
+	if wsg.AllianceFlagState != WSGFlagStateOnPlayer || wsg.HordeFlagState != WSGFlagStateOnPlayer {
+		wsg.StalemateStage = 0
+		return
+	}
+	carriers := [2]uint64{wsg.AllianceCarrierGUID, wsg.HordeCarrierGUID}
+	if stage == 1 && wsg.StalemateStage == 0 {
+		for _, guid := range carriers {
+			if carrier := s.findSessionByGUID(guid); carrier != nil {
+				carrier.applyAura(WSGSpellFocusedAssault)
+			}
+		}
+		wsg.StalemateStage = 1
+		wsg.StalemateTimer = time.AfterFunc(wsgStalemateStage2Delay, func() {
+			s.wsgStalemateStage(wsg, mapID, 2)
+		})
+		return
+	}
+	if stage == 2 && wsg.StalemateStage == 1 {
+		for _, guid := range carriers {
+			if carrier := s.findSessionByGUID(guid); carrier != nil {
+				carrier.removeAura(WSGSpellFocusedAssault)
+				carrier.applyAura(WSGSpellBrutalAssault)
+			}
+		}
+		wsg.StalemateStage = 2
+	}
+}
+
+// removeWSGAssaultAuras strips the stalemate auras from both flag carriers,
+// the Go form of the aura-removal arms in EventPlayerDroppedFlag
+// (BattlegroundWS.cpp:418-421, 432-435), EventPlayerCapturedFlag
+// (BattlegroundWS.cpp:303-306, 320-323), and the PostUpdateImpl else arm
+// (BattlegroundWS.cpp:184-192).
+func (s *Server) removeWSGAssaultAuras(wsg *wsgBattlegroundState) {
+	for _, guid := range [2]uint64{wsg.AllianceCarrierGUID, wsg.HordeCarrierGUID} {
+		if guid == 0 {
+			continue
+		}
+		if carrier := s.findSessionByGUID(guid); carrier != nil {
+			carrier.removeAura(WSGSpellFocusedAssault)
+			carrier.removeAura(WSGSpellBrutalAssault)
+		}
+	}
 }
