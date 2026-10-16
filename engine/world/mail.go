@@ -617,15 +617,38 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		ItemGUID uint64
 	}
 	attachments := make([]itemAttachment, 0, attachCount)
+	readErr := false
 	for i := uint8(0); i < attachCount; i++ {
-		slot, _ := reader.ReadU8()
-		itemGUID, _ := reader.ReadU64()
+		slot, err := reader.ReadU8()
+		if err != nil {
+			readErr = true
+			break
+		}
+		itemGUID, err := reader.ReadU64()
+		if err != nil {
+			readErr = true
+			break
+		}
 		attachments = append(attachments, itemAttachment{Slot: slot, ItemGUID: itemGUID})
 	}
 	// Reference: MailPackets.h:129-130 — SendMoney and Cod are int32 on the
 	// wire; a negative value is a cheat attempt, not a large payment.
-	sendMoney, _ := reader.ReadI32()
-	codValue, _ := reader.ReadI32()
+	sendMoney, err := reader.ReadI32()
+	if err != nil {
+		readErr = true
+	}
+	codValue, err := reader.ReadI32()
+	if err != nil {
+		readErr = true
+	}
+	// Reference: MailPackets.cpp:189-190 — SendMail::Read skips a trailing
+	// u64 + u8 after Cod; any short read throws ByteBufferException and the
+	// handler never runs (WorldSession.cpp:427-432), so Go drops the packet
+	// on any read error or fewer than 9 trailing bytes instead of mailing
+	// with zeroed money/cod.
+	if readErr || reader.Remaining() < 9 {
+		return true
+	}
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -821,10 +844,19 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		s.player.Money = 0
 	}
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	// Reference: Player::ModifyMoney -> SetMoney -> MoneyChanged
+	// (Player.cpp:22847-22850, 16859-16886) — spending money can complete
+	// money-required quests.
+	s.questMoneyChanged(ctx)
 	// The GM-trade log arms (MailHandler.cpp:246-260: RBAC_PERM_LOG_GM_TRADE
 	// outCommand lines for mailed items/money) have no Go RBAC wiring — the
 	// same standing delta as the RBAC_PERM_TWO_SIDE_INTERACTION_MAIL arm.
-	s.updateAchievementCriteria(criteriaTypeGoldSpentForMail, 0, postageFee)
+	// Reference: AchievementMgr::UpdateAchievementCriteria
+	// (AchievementMgr.cpp:759-765) — game masters earn no achievement
+	// credit; the GM gate lives inside the C++ criteria update.
+	if !isGameMaster {
+		s.updateAchievementCriteria(criteriaTypeGoldSpentForMail, 0, postageFee)
+	}
 	now := time.Now().Unix()
 	// TrinityCore HandleSendMail (MailHandler.cpp:264-276) takes deliver_delay =
 	// CONFIG_MAIL_DELIVERY_DELAY when the mail carries attachments to a character on
@@ -883,7 +915,12 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
-	s.sendMailNotify(uint64(receiverGUID))
+	// Reference: Player::AddNewMailDeliverTime (Player.cpp:3141-3146) —
+	// SMSG_RECEIVED_MAIL fires only when deliver_time <= now; a future
+	// (cross-account, delayed) mail only advances m_nextMailDelivereTime.
+	if deliverTime <= now {
+		s.sendMailNotify(uint64(receiverGUID))
+	}
 	s.debug("mail sent successfully", "from", s.accountName, "to", targetName, "mail_id", nextMailID)
 	return true
 }
@@ -985,8 +1022,13 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	// before the inventory-space term (EQUIP_ERR_INVENTORY_FULL).
 	templateFound, maxCount := s.mailItemTemplateMaxCount(ctx, uint32(itemEntry))
 	ownedCount := s.mailOwnedItemCount(ctx, uint32(itemEntry))
+	// Reference: Player::CanStoreItem (Player.cpp:10470+) merges into an
+	// existing partial stack before demanding a free slot; Go tries the
+	// same order so a full inventory with a fitting partial stack stores.
+	_, _, _, mergeItemGUID, mergeCount, mergeMax, mergeOK := s.findStackableInventorySlot(ctx, s.playerGUID, uint32(itemEntry))
+	mergeFits := mergeOK && uint64(mergeCount)+uint64(itemCount) <= uint64(mergeMax)
 	freeBagKey, freeClientBag, freeSlot, ok := s.findFreeInventorySlot(ctx, s.playerGUID)
-	if equipErr := mailStoreEquipError(templateFound, maxCount, ownedCount, uint32(itemCount), ok); equipErr != equipErrOk {
+	if equipErr := mailStoreEquipError(templateFound, maxCount, ownedCount, uint32(itemCount), mergeFits || ok); equipErr != equipErrOk {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailErrEquipError, uint32(equipErr), 0, 0), true)
 		return true
 	}
@@ -1017,9 +1059,23 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		s.sendPlayerMoneyUpdate()
 	}
 
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, attachID)
-	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, attachID)
+	if mergeFits {
+		// Reference: Player::StoreItem (Player.cpp:12169+) — a merged item is
+		// destroyed and its count folds into the existing stack row.
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", mergeCount+uint32(itemCount), mergeItemGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", attachID)
+	} else {
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, attachID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, attachID)
+	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), true)
+	// Reference: Player::MoveItemToInventory (Player.cpp:12624) credits
+	// ACHIEVEMENT_CRITERIA_TYPE_RECEIVE_EPIC_ITEM on every inventory store;
+	// the GM gate lives inside UpdateAchievementCriteria
+	// (AchievementMgr.cpp:759-765).
+	if s.player.ExtraFlags&playerExtraGMOn == 0 {
+		s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, uint32(itemEntry), uint32(itemCount))
+	}
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ? AND item_guid = ?", mailID, attachID)
 	// Check if any items left
 	var remainingCount int64
@@ -1035,7 +1091,9 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) handleMailDelete(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+	// Reference: MailPackets.cpp:231-236 — MailDelete::Read reads Mailbox + MailID +
+	// DeleteReason (int32) = 16 bytes; 12-15B payloads throw and drop like C++.
+	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
@@ -1431,7 +1489,9 @@ func mailReturnNeedItemDelay(hasItems, senderOnline bool, returnerAccount, sende
 // handleMailReturnToSender processes CMSG_MAIL_RETURN_TO_SENDER (0x248).
 // Reference: WorldSession::HandleMailReturnToSender (MailHandler.cpp:351).
 func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+	// Reference: MailPackets.cpp:197-202 — MailReturnToSender::Read reads Mailbox (8) +
+	// MailID (4) + SenderGUID (8) = 20 bytes; 12-19B payloads throw and drop like C++.
+	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
 		return true
 	}
 	r := protocol.NewReader(payload)
