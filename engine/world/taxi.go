@@ -422,7 +422,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 		// CMSG_ACTIVATETAXIEXPRESS: guid (8), nodeCount (4), nodes... (nodeCount * 4).
 		nodeCount, err := reader.ReadU32()
 		if err != nil || len(payload) < int(12+nodeCount*4) {
-			return reply(taxiErrNoSuchPath)
+			return true // truncated express list: the C++ overread throws and the session drops with no reply
 		}
 		if nodeCount == 0 {
 			return true // HandleActivateTaxiExpressOpcode: empty node list returns silently
@@ -430,7 +430,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 		for i := uint32(0); i < nodeCount; i++ {
 			node, err := reader.ReadU32()
 			if err != nil {
-				return reply(taxiErrNoSuchPath)
+				return true // truncated node: drop, no reply
 			}
 			if !s.isTaxiMaskNodeKnown(node) && !s.isTaxiCheater() {
 				return reply(taxiErrNotVisited)
@@ -463,17 +463,26 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	// Player::ActivateTaxiPathTo (Player.cpp:21517-21558): the pre-flight
 	// state gates fire after the handler's interact/known-node gates, in
 	// C++ order. Logging-out, in-combat, stunned or rooted answers
-	// ERR_TAXIPLAYERBUSY (7); mounted answers ERR_TAXIPLAYERALREADYMOUNTED
-	// (8); a non-melee cast in progress answers ERR_TAXIPLAYERBUSY (7).
-	// The shapeshift arm (ERR_TAXIPLAYERSHAPESHIFTED, 9) has no Go bridge:
-	// Unit::IsInDisallowedMountForm (Unit.cpp:9170) needs the
-	// SpellShapeshiftForm DBC flags plus the display-info chain, and Go
-	// only tracks the raw form id.
+	// ERR_TAXIPLAYERBUSY (7); a possessed/mind-controlled player
+	// (UNIT_FLAG_REMOVE_CLIENT_CONTROL, :21527-21528) drops silently;
+	// mounted answers ERR_TAXIPLAYERALREADYMOUNTED (8); a shapeshifted
+	// player answers ERR_TAXIPLAYERSHAPESHIFTED (9, :21535-21539); a
+	// non-melee cast in progress answers ERR_TAXIPLAYERBUSY (7).
+	// IsInDisallowedMountForm (Unit.cpp:9171) consults the
+	// SpellShapeshiftForm DBC flags and the display chain — Go tracks only
+	// the raw form id, so any active form answers 9, exact for every form
+	// whose DBC flags lack the mount-allowed bit.
 	if !s.logoutAt.IsZero() || s.isInCombat() || s.player.UnitFlags&unitFlagStunned != 0 || s.rooted {
 		return reply(taxiErrPlayerBusy)
 	}
+	if s.player.UnitFlags&unitFlagRemoveClientControl != 0 {
+		return true
+	}
 	if s.player.MountDisplayID != 0 {
 		return reply(taxiErrAlreadyMounted)
+	}
+	if s.player.ShapeshiftForm != 0 {
+		return reply(taxiErrShapeshifted)
 	}
 	if s.genericCastInProgress() {
 		return reply(taxiErrPlayerBusy)
@@ -504,6 +513,16 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 		pathIDs = append(pathIDs, pathID)
 		rawTotal += uint64(hopPrice)
 	}
+	// SendDoFlight mount gate (Player.cpp:21610-21616) fires BEFORE the
+	// money gate: no mount model for the source node answers
+	// ERR_TAXIUNSPECIFIEDSERVERERROR even when the player is also broke.
+	mount := uint32(0)
+	if mountDisplay, merr := s.server.Data.TaxiNodeMount(sourceNode, s.playerAlliance()); merr == nil {
+		mount = mountDisplay
+	}
+	if mount == 0 {
+		return reply(taxiErrUnspecified)
+	}
 	// Player::ActivateTaxiPathTo (Player.cpp:21624-21631): the reputation
 	// discount (GetReputationPriceDiscount, 1.0 below Friendly, -5% per rank
 	// above) applies to the summed multi-hop cost; the money gate is against
@@ -516,15 +535,6 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	totalCost := uint32(math.Ceil(float64(rawTotal) * discount))
 	if uint64(s.player.Money) < uint64(totalCost) {
 		return reply(taxiErrNotEnoughMoney)
-	}
-	// SendDoFlight mount gate (Player.cpp:21610-21616): no mount model for
-	// the source node on the npc path answers ERR_TAXIUNSPECIFIEDSERVERERROR.
-	mount := uint32(0)
-	if mountDisplay, merr := s.server.Data.TaxiNodeMount(sourceNode, s.playerAlliance()); merr == nil {
-		mount = mountDisplay
-	}
-	if mount == 0 {
-		return reply(taxiErrUnspecified)
 	}
 	if totalCost > 0 {
 		s.player.Money -= totalCost

@@ -1721,22 +1721,17 @@ func (s *Server) updateCorpseExpiry(ctx context.Context) {
 	s.expireOldCorpses(ctx)
 }
 
-// deleteCorpseDataForResetBinds mirrors Map::DeleteCorpseData as run from the
-// instance-reset path (InstanceSaveMgr.cpp:618, Map.cpp:4182): every
-// non-permanent dungeon bind the reset drops gets its corpse rows deleted via
-// CHAR_DEL_CORPSES_FROM_MAP, so no corpse survives the reset. The registered
-// statement existed but was never called. Binds are read before the caller
-// deletes the character_instance rows.
-func (s *session) deleteCorpseDataForResetBinds(ctx context.Context, charGUID uint64) {
+// deleteCorpseDataForMap mirrors Map::DeleteCorpseData as run when an
+// instance map unloads during reset (Map.cpp:4182): corpse rows for the
+// reset (map, instance) pair go with the map (CHAR_DEL_CORPSES_FROM_MAP).
+// The CMSG_RESET_INSTANCES handlers never delete corpses directly — only
+// the per-map unload does — so callers gate this on the reset actually
+// emptying the map.
+func (s *session) deleteCorpseDataForMap(ctx context.Context, mapID, instanceID uint32) {
 	if s == nil || s.server == nil || s.server.CharactersStore == nil {
 		return
 	}
-	for _, b := range s.instanceBindsForCharacter(ctx, charGUID) {
-		if b.permanent || !s.isDungeonMap(b.mapID) {
-			continue
-		}
-		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSES_FROM_MAP", b.mapID, b.instanceID)
-	}
+	_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSES_FROM_MAP", mapID, instanceID)
 }
 
 // resurrectPlayer mirrors Player::ResurrectPlayer (Player.cpp:4682) with the

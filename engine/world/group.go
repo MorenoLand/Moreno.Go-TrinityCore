@@ -2277,13 +2277,23 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM group_instance WHERE guid = ? AND instance = ? AND permanent = 0", grp.DBID, r.instanceID)
 				}
+				// Group::ResetInstances (Group.cpp:2206-2272): a reset that
+				// empties the map unloads it — corpse rows go with the map
+				// (Map::DeleteCorpseData, Map.cpp:4182) and offline members'
+				// saved positions move to the instance-entrance graveyard
+				// (:2256-2272). C++ fails the reset when any player is inside
+				// (InstanceMap::Reset, Map.cpp:4076); Go models map presence
+				// by online players, so both arms fire when nobody is in it.
+				if s.isDungeonMap(r.mapID) && !s.mapHasOnlinePlayers(r.mapID) {
+					s.deleteCorpseDataForMap(ctx, r.mapID, r.instanceID)
+					s.repositionOfflineGroupMembersToEntrance(ctx, grp, r.mapID)
+				}
 				resetBuf := protocol.NewBuffer(4)
 				resetBuf.WriteU32(r.mapID)
-				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
-			}
-			// Corpse rows still go with the maps (Map::DeleteCorpseData).
-			for _, mem := range grp.Members {
-				s.deleteCorpseDataForResetBinds(ctx, mem.GUID)
+				// SMSG_INSTANCE_RESET goes to the requester only: C++ fans it
+				// out to the whole group only when InstancesResetAnnounce is
+				// true (Group.cpp:2221-2231; default false, World.cpp:1456).
+				_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
 			}
 			return true
 		}
@@ -2323,6 +2333,57 @@ func groupMemberInsideMap(sessions []*session, mapID uint32) bool {
 	return false
 }
 
+// mapHasOnlinePlayers is the Go analog of sMapMgr->FindMap returning a map:
+// Go has no loaded-map registry, so a map counts as present when any
+// connected session has its player on it.
+func (s *session) mapHasOnlinePlayers(mapID uint32) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	for sess := range s.server.sessions {
+		if sess != nil && sess.playerLoaded && sess.player != nil && sess.player.Map == mapID {
+			return true
+		}
+	}
+	return false
+}
+
+// repositionOfflineGroupMembersToEntrance mirrors the offline-member arm of
+// Group::ResetInstances (Group.cpp:2256-2272): every group member with no
+// connected session has their characters row moved to the closest graveyard
+// of the instance entrance (CHAR_UPD_CHARACTER_POSITION_BY_MAPID,
+// CharacterDatabase.cpp:405). The zone column uses the graveyard map's root
+// area — Go has no Zone2MapCoordinates bridge for sMapMgr->GetZoneId.
+func (s *session) repositionOfflineGroupMembersToEntrance(ctx context.Context, grp *groupState, mapID uint32) {
+	if s == nil || s.server == nil || s.player == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || grp == nil {
+		return
+	}
+	entranceMap, ex, ey, ez, eo, ok := s.instanceGoBackTrigger(ctx, mapID)
+	if !ok {
+		return
+	}
+	grave, graveFound := s.server.closestGraveyard(ctx, ex, ey, ez, entranceMap, 0, playerTeam(s.player.Race))
+	if !graveFound {
+		return
+	}
+	zoneID := uint32(0)
+	if s.server.Data != nil {
+		if mapEntry, entryFound, err := s.server.Data.Map(grave.MapID); err == nil && entryFound {
+			zoneID = s.server.rootAreaID(mapEntry.AreaTableID)
+		}
+	}
+	for _, mem := range grp.Members {
+		if s.server.findSessionByGUID(mem.GUID) != nil {
+			continue
+		}
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE characters SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ?, zone = ?, trans_x = 0, trans_y = 0, trans_z = 0, transguid = 0, taxi_path = '', cinematic = 1 WHERE guid = ? AND map = ?",
+			grave.X, grave.Y, grave.Z, eo, grave.MapID, zoneID, mem.GUID, mapID)
+	}
+}
+
 // resettableBinds filters bind rows the way Player::ResetInstances /
 // Group::ResetInstances iterate them (Player.cpp:20648, Group.cpp:2192):
 // only binds at the current difficulty, only resettable (non-permanent)
@@ -2360,9 +2421,20 @@ func (s *session) resetCharacterBinds(ctx context.Context, charGUID uint64, curD
 		return nil
 	}
 	cdb := s.server.CharactersStore.DB
-	s.deleteCorpseDataForResetBinds(ctx, charGUID)
 	var out []uint32
 	for _, r := range binds {
+		// Player::ResetInstances (Player.cpp:20670-20674): a loaded map that
+		// won't reset — players inside — keeps its bind silently. Go models
+		// map presence by online players.
+		if s.mapHasOnlinePlayers(r.mapID) {
+			continue
+		}
+		// A successful reset unloads the map and corpse rows go with it
+		// (Map::DeleteCorpseData, Map.cpp:4182). No graveyard arm on the
+		// solo path (Player.cpp:20648-20686).
+		if s.isDungeonMap(r.mapID) {
+			s.deleteCorpseDataForMap(ctx, r.mapID, r.instanceID)
+		}
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ? AND permanent = 0", charGUID, r.instanceID)
 		out = append(out, r.mapID)
 	}

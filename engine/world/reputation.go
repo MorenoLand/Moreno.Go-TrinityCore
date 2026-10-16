@@ -179,7 +179,7 @@ func (s *session) handleSetWatchedFaction(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	fact, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true // truncated: drop, do not close
 	}
 	s.player.WatchedFaction = fact
 	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldWatchedFaction: fact})
