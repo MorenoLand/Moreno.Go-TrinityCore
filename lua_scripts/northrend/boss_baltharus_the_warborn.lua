@@ -79,6 +79,7 @@ local SPELL_ENERVATING_BRAND = 74502
 local SPELL_CLEAR_DEBUFFS    = 34098
 local SPELL_CLONE            = 74511
 local SPELL_REPELLING_WAVE   = 74509
+local SPELL_SPAWN_EFFECT     = 64195
 
 local timers = {}
 local cloneCount = {}
@@ -302,8 +303,14 @@ local function cloneLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_baltharus_the_warborn_clone::Reset
+-- (boss_baltharus_the_warborn.cpp:249-253): DoCastSelf
+-- (SPELL_SPAWN_EFFECT 64195) (non-triggered) + SetReactState
+-- (REACT_DEFENSIVE) — the react-state leg has no bridge
+-- (documented deviation).
 local function cloneReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_SPAWN_EFFECT)
 end
 
 -- C++ npc_baltharus_the_warborn_clone::JustDied (:277-282): _JustDied()

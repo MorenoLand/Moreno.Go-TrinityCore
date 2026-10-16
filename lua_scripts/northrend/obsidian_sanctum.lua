@@ -132,10 +132,10 @@
 -- entry-unverifiable queue (the npc_image_belgaristrasz precedent);
 -- Reset / UpdateAI (DoCastAOE(SPELL_VOID_BLAST 57581) +
 -- RemoveAllAuras + KillSelf) — no aura / cast bridges regardless.
--- npc_twilight_whelp — Reset (RemoveAllAuras + DoZoneInCombat +
--- ScheduleEvent EVENT_FADE_ARMOR 1s), UpdateAI (DoCastVictim
--- SPELL_FADE_ARMOR 60708) — no aura / timer / cast bridges; no
--- bridgeable arms.
+-- npc_twilight_whelp — PORTED 2026-10-16: the EVENT_FADE_ARMOR
+-- timer leg is bridgeable (CreateLuaEvent; see whelpEnterCombat /
+-- fadeArmorTick below); Reset's RemoveAllAuras + DoZoneInCombat
+-- legs have no bridges (documented deviation).
 -- achievement_twilight_assist / achievement_twilight_duo /
 -- achievement_twilight_zone (target->GetAI()->GetData
 -- (TWILIGHT_ACHIEVEMENTS) >= 1 / >= 2 / == 3 — Sartharion's
@@ -153,6 +153,10 @@ local SAY_BREATH = 3
 
 local SPELL_SHADOW_BREATH = 57570
 local SPELL_TWILIGHT_TORMENT_VESP = 57948
+local SPELL_FADE_ARMOR = 60708
+
+local ENTRY_TWILIGHT_WHELP = 30890
+local ENTRY_SARTHARION_TWILIGHT_WHELP = 31214
 
 local timers = {}
 
@@ -256,4 +260,45 @@ for _, entry in ipairs({ ENTRY_TENEBRON, ENTRY_SHADRON, ENTRY_VESPERON }) do
     RegisterCreatureEvent(entry, 3, dragonTargetDied)
     RegisterCreatureEvent(entry, 4, dragonDied)
     RegisterCreatureEvent(entry, 23, dragonReset)
+end
+
+-- C++ npc_twilight_whelp::Reset (obsidian_sanctum.cpp:983-988):
+-- RemoveAllAuras + DoZoneInCombat legs have no bridges (documented
+-- deviation); the bridgeable leg is ScheduleEvent(EVENT_FADE_ARMOR,
+-- 1s), seeded here on event 1 per the svalna precedent (Reset-seeded
+-- timers re-keyed to combat start). UpdateAI ExecuteEvent:
+-- DoCastVictim(SPELL_FADE_ARMOR 60708) (non-triggered), re-arm
+-- {5s,10s}, UpdateVictim()-gated.
+local function fadeArmorTick(creature, guid)
+    creature:CastSpell(nil, SPELL_FADE_ARMOR)
+    schedule(guid, "fadearmor", {5000, 10000}, function()
+        fadeArmorTick(creature, guid)
+    end)
+end
+
+local function whelpEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "fadearmor", 1000, function()
+        fadeArmorTick(creature, guid)
+    end)
+end
+
+local function whelpLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function whelpDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+local function whelpReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+for _, entry in ipairs({ ENTRY_TWILIGHT_WHELP, ENTRY_SARTHARION_TWILIGHT_WHELP }) do
+    RegisterCreatureEvent(entry, 1, whelpEnterCombat)
+    RegisterCreatureEvent(entry, 2, whelpLeaveCombat)
+    RegisterCreatureEvent(entry, 4, whelpDied)
+    RegisterCreatureEvent(entry, 23, whelpReset)
 end
