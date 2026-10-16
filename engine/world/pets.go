@@ -2296,7 +2296,7 @@ const (
 // Reference: WorldSession::HandleBuyStableSlot (NPCHandler.cpp:563).
 func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	npcGUID, err := r.ReadU64()

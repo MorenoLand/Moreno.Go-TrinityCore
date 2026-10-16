@@ -1612,7 +1612,7 @@ func objectUint64Field(object *scripting.Object, name string) (uint64, bool) {
 // Spell::EffectBind (SpellEffects.cpp:5710-5725), Player::SendBindPointUpdate (Player.cpp:17359-17366).
 func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	npcGUID, err := r.ReadU64()

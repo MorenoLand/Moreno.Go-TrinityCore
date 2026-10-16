@@ -11,7 +11,7 @@ import (
 // Reference: WorldSession::HandleAreaTriggerOpcode (MiscHandler.cpp:645-780).
 func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	triggerID, err := r.ReadU32()

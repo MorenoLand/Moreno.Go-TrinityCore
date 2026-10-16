@@ -637,7 +637,7 @@ func gameObjectInteractionDistance(goType uint8) float64 {
 
 func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
-		return false
+		return true
 	}
 	guid, err := readObjectGUID(payload)
 	if err != nil || guid == 0 {

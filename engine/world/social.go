@@ -334,7 +334,7 @@ func (s *Server) broadcastFriendStatus(playerGUID uint64, result uint8, zone, le
 // -----------------------------------------------------------------
 func (s *session) handleContactList(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	flags, _ := r.ReadU32()
@@ -349,7 +349,7 @@ func (s *session) handleContactList(ctx context.Context, payload []byte) bool {
 // -----------------------------------------------------------------
 func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	friendName, err := r.ReadCString()
@@ -472,7 +472,7 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 // -----------------------------------------------------------------
 func (s *session) handleDelFriend(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	friendGUID, err := r.ReadU64()
@@ -500,7 +500,7 @@ func (s *session) handleDelFriend(ctx context.Context, payload []byte) bool {
 // -----------------------------------------------------------------
 func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	ignoreName, err := r.ReadCString()
@@ -572,7 +572,7 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 // -----------------------------------------------------------------
 func (s *session) handleDelIgnore(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	ignoreGUID, err := r.ReadU64()
@@ -599,7 +599,7 @@ func (s *session) handleDelIgnore(ctx context.Context, payload []byte) bool {
 // -----------------------------------------------------------------
 func (s *session) handleSetContactNotes(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	friendGUID, err := r.ReadU64()

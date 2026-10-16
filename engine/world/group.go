@@ -854,7 +854,7 @@ func (s *Server) getGroupSessions(groupID uint64) []*session {
 // TrinityCore: WorldSession::HandleGroupInviteOpcode.
 func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	memberName, err := r.ReadCString()
@@ -982,7 +982,7 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 // TrinityCore: WorldSession::HandleGroupAcceptOpcode.
 func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.pendingGroupLeader == 0 {
-		return false
+		return true
 	}
 	leaderGUID := s.pendingGroupLeader
 	s.pendingGroupLeader = 0
@@ -1111,7 +1111,7 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 // TrinityCore: WorldSession::HandleGroupDeclineOpcode.
 func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 	if !s.playerLoaded || s.pendingGroupLeader == 0 {
-		return false
+		return true
 	}
 	leaderGUID := s.pendingGroupLeader
 	s.pendingGroupLeader = 0
@@ -1161,7 +1161,7 @@ func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 // TrinityCore: WorldSession::HandleGroupUninviteOpcode.
 func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	name, err := r.ReadCString()
@@ -1221,7 +1221,7 @@ func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 // TrinityCore: WorldSession::HandleGroupUninviteGuidOpcode.
 func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	guid, err := r.ReadU64()
@@ -1408,7 +1408,7 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 // TrinityCore: WorldSession::HandleGroupSetLeaderOpcode.
 func (s *session) handleGroupSetLeader(_ context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.groupID == 0 {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	guid, err := r.ReadU64()
@@ -1562,7 +1562,7 @@ func (s *Server) disbandGroup(ctx context.Context, g *groupState, hideDestroy bo
 // TrinityCore: WorldSession::HandleGroupDisbandOpcode.
 func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	if !s.playerLoaded {
-		return false
+		return true
 	}
 	// A pending invite the player initiated but never formed is the inviter's
 	// cancelable group (HandleGroupDisbandOpcode's grpInvite arm): withdraw
@@ -1683,11 +1683,11 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	return true
 }
 
-// handleLootMethod processes CMSG_LOOT_METHOD (0x09A).
+// handleLootMethod processes CMSG_LOOT_METHOD (0x07A).
 // TrinityCore: WorldSession::HandleLootMethodOpcode.
 func (s *session) handleLootMethod(_ context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.groupID == 0 {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	lootMethod, err := r.ReadU32()
@@ -1747,7 +1747,7 @@ func (s *session) handleLootMethod(_ context.Context, payload []byte) bool {
 // Sends a map ping to all group members.
 func (s *session) handleMinimapPing(_ context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.groupID == 0 {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	x, err := r.ReadF32()
@@ -1780,7 +1780,7 @@ func (s *session) handleMinimapPing(_ context.Context, payload []byte) bool {
 // TrinityCore: WorldSession::HandleRaidTargetUpdateOpcode.
 func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.groupID == 0 {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	x, err := r.ReadU8()
@@ -2020,7 +2020,7 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 // TrinityCore: WorldSession::HandleRaidReadyCheckOpcode (GroupHandler.cpp:687).
 func (s *session) handleReadyCheck(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.groupID == 0 || s.server == nil {
-		return false
+		return true
 	}
 	srv := s.server
 	srv.groupsMu.RLock()
@@ -2149,7 +2149,7 @@ const randomRollMax = 10000
 // TrinityCore: WorldSession::HandleRandomRollOpcode.
 func (s *session) handleRandomRoll(_ context.Context, payload []byte) bool {
 	if !s.playerLoaded {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	minimum, err := r.ReadU32()

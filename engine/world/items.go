@@ -3161,7 +3161,7 @@ func (s *session) consumableTargetVitals(targetGUID uint64) (health, maxHealth u
 
 func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	// Player cannot use items while dead (SpellHandler.cpp:194)
 	if s.player.Health == 0 {
@@ -5562,7 +5562,7 @@ func reserveEquipmentSetGUID(id uint64) {
 // (ObjectMgr.cpp:7356).
 func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	setGuid, err := r.ReadPackedGUID()
@@ -5756,7 +5756,7 @@ func (s *session) sendEquipmentSetList(ctx context.Context) {
 // Reference: WorldSession::HandleEquipmentSetDelete (CharacterHandler.cpp:1544).
 func (s *session) handleEquipmentSetDelete(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	setGuid, err := r.ReadPackedGUID()
@@ -5774,7 +5774,7 @@ func (s *session) handleEquipmentSetDelete(ctx context.Context, payload []byte) 
 // Reference: WorldSession::HandleEquipmentSetUse (CharacterHandler.cpp:1554).
 func (s *session) handleEquipmentSetUse(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 

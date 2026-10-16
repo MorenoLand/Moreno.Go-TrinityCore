@@ -21,7 +21,7 @@ const (
 // Reference: WorldSession::HandleWhoOpcode (MiscHandler.cpp:233).
 func (s *session) handleWho(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	levelMin, err := r.ReadU32()
@@ -493,7 +493,7 @@ func (s *session) talentsForGroup(ctx context.Context, charGUID uint64, group ui
 
 func (s *session) handleInspect(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	targetGUID, err := r.ReadU64()
