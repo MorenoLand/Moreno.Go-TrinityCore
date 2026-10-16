@@ -989,7 +989,7 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 
 	// Can't accept your own invite
 	if leaderGUID == s.playerGUID {
-		return false
+		return true
 	}
 
 	leaderSess := s.server.findSessionByGUID(leaderGUID)
@@ -1020,7 +1020,7 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 		// existing group does not (HandleGroupAcceptOpcode)
 		if leaderSess == nil || leaderSess.player == nil {
 			srv.groupsMu.Unlock()
-			return false
+			return true
 		}
 		// Create new group
 		g = &groupState{
@@ -1044,7 +1044,7 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 	if groupIsFull(g) {
 		srv.groupsMu.Unlock()
 		_ = s.sendPartyResult(partyOpInvite, "", errGroupFull)
-		return false
+		return true
 	}
 
 	// Group::AddMember subgroup placement (Group.cpp:404-422): raid joiners
@@ -1064,7 +1064,7 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 			// IsFull gate (under 40 members a subgroup is always free);
 			// kept as the C++-exact backstop.
 			srv.groupsMu.Unlock()
-			return false
+			return true
 		}
 	}
 
@@ -1118,7 +1118,7 @@ func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 
 	leaderSess := s.server.findSessionByGUID(leaderGUID)
 	if leaderSess == nil || leaderSess.player == nil {
-		return false
+		return true
 	}
 	// SMSG_GROUP_DECLINE: player name cstring
 	name := ""
@@ -1421,7 +1421,7 @@ func (s *session) handleGroupSetLeader(_ context.Context, payload []byte) bool {
 	g := srv.groups[s.groupID]
 	if g == nil || g.LeaderGUID != s.playerGUID {
 		srv.groupsMu.Unlock()
-		return false
+		return true
 	}
 	srv.groupsMu.Unlock()
 	return srv.setGroupLeader(g, guid)
@@ -1446,7 +1446,7 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 	newLeader := s.findSessionByGUID(guid)
 	if !found || newLeader == nil || newLeader.player == nil {
 		s.groupsMu.Unlock()
-		return false
+		return true
 	}
 	groupObj := groupLuaObject(s, g)
 	oldLeader := g.LeaderGUID
@@ -1580,7 +1580,7 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 		s.server.sessionsMu.RUnlock()
 	}
 	if s.groupID == 0 && !hasOutgoingInvite {
-		return false
+		return true
 	}
 
 	// HandleGroupDisbandOpcode (GroupHandler.cpp:410): no disband from inside
@@ -1612,7 +1612,7 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	if g == nil {
 		s.groupID = 0
 		srv.groupsMu.Unlock()
-		return false
+		return true
 	}
 
 	name := ""
@@ -1715,11 +1715,11 @@ func (s *session) handleLootMethod(_ context.Context, payload []byte) bool {
 	g := srv.groups[s.groupID]
 	if g == nil || g.LeaderGUID != s.playerGUID {
 		srv.groupsMu.Unlock()
-		return false
+		return true
 	}
 	if g.IsLFG { // C++ HandleLootMethodOpcode: isLFGGroup() -> return
 		srv.groupsMu.Unlock()
-		return false
+		return true
 	}
 	if lootMethod == 2 { // MASTER_LOOT: master looter must be a group member
 		masterIsMember := false
@@ -1731,7 +1731,7 @@ func (s *session) handleLootMethod(_ context.Context, payload []byte) bool {
 		}
 		if !masterIsMember {
 			srv.groupsMu.Unlock()
-			return false
+			return true
 		}
 	}
 	g.LootMethod = uint8(lootMethod)
@@ -1793,7 +1793,7 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 	g := srv.groups[s.groupID]
 	if g == nil {
 		srv.groupsMu.Unlock()
-		return false
+		return true
 	}
 
 	if x == 0xFF {
@@ -1819,7 +1819,7 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 	raidGateOK := !g.IsRaid || g.isLeaderOrAssistant(s.playerGUID)
 	srv.groupsMu.Unlock()
 	if !raidGateOK {
-		return false
+		return true
 	}
 
 	guid, err := r.ReadU64()
@@ -1842,7 +1842,7 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 			hostile = tTeam != 0 && sTeam != 0 && tTeam != sTeam
 		}
 		if hostile {
-			return false
+			return true
 		}
 	}
 
@@ -1850,7 +1850,7 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 	g = srv.groups[s.groupID]
 	if g == nil || x >= targetIconCount {
 		srv.groupsMu.Unlock()
-		return false
+		return true
 	}
 	// Group::SetTargetIcon: clear the GUID from any other slot first (each
 	// clear broadcasts its own packet), then set and broadcast.
@@ -1906,7 +1906,7 @@ func (s *session) handleGroupRaidConvert(ctx context.Context, _ []byte) bool {
 	// HandleGroupRaidConvertOpcode (GroupHandler.cpp:578): no conversion
 	// from inside a battleground
 	if s.bgData.InstanceID != 0 {
-		return false
+		return true
 	}
 	srv := s.server
 	srv.groupsMu.RLock()
@@ -1920,7 +1920,7 @@ func (s *session) handleGroupRaidConvert(ctx context.Context, _ []byte) bool {
 	// GroupHandler.cpp:583-584 — conversion needs the leader and at least
 	// two members.
 	if !leader || memberCount < 2 {
-		return false
+		return true
 	}
 	// GroupHandler.cpp:587-588 — the party result goes to the client BEFORE
 	// the conversion, and the conversion cannot fail (C++ Group::ConvertToRaid
@@ -2027,14 +2027,14 @@ func (s *session) handleReadyCheck(ctx context.Context, payload []byte) bool {
 	g := srv.groups[s.groupID]
 	srv.groupsMu.RUnlock()
 	if g == nil {
-		return false
+		return true
 	}
 
 	r := protocol.NewReader(payload)
 	if len(payload) == 0 {
 		// Request — must be leader or assistant
 		if !g.isLeaderOrAssistant(s.playerGUID) {
-			return false
+			return true
 		}
 		b := protocol.NewBuffer(8)
 		b.WriteU64(s.playerGUID)
