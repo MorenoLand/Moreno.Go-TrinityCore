@@ -656,6 +656,12 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 			// Update queue status
 			for i := 0; i < len(sess.bgQueues); i++ {
 				if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
+					// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
+					// (BattlegroundQueue.cpp:242): the arena match start is the
+					// invite point for arena queues.
+					if sess.bgQueues[i].Status == BGStatusWaitQueue && !sess.bgQueues[i].JoinTime.IsZero() {
+						s.recordBGQueueWait(sess.bgQueues[i].BgTypeID, uint32(time.Since(sess.bgQueues[i].JoinTime).Milliseconds()))
+					}
 					sess.bgQueues[i].Status = BGStatusInProgress
 					sess.bgQueues[i].StartTime = arena.MatchStartTime
 					sess.sendBattlefieldStatus(uint8(i))

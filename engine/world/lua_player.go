@@ -326,7 +326,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
 	methods["SendAreaTriggerMessage"] = s.luaMessageMethod()
 	methods["SendNotification"] = s.luaMessageMethod()
-	methods["Teleport"] = func(_ context.Context, args []any) ([]any, error) {
+	methods["Teleport"] = func(lctx context.Context, args []any) ([]any, error) {
 		if len(args) < 5 {
 			return nil, fmt.Errorf("Teleport requires map and position")
 		}
@@ -349,7 +349,13 @@ func (s *session) luaPlayer() *scripting.Object {
 		packet.WriteF32(state.Y)
 		packet.WriteF32(state.Z)
 		packet.WriteF32(state.Orientation)
-		return nil, s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
+		if err := s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true); err != nil {
+			return nil, err
+		}
+		// Player::TeleportTo (Player.cpp:1878): SendSavedInstances follows
+		// SMSG_NEW_WORLD on a far teleport.
+		s.sendSavedInstances(lctx)
+		return nil, nil
 	}
 	// TeleportNear is the same-map arm of Teleport: it runs the
 	// near-teleport path (movement.go nearTeleportMove — the Go analog of

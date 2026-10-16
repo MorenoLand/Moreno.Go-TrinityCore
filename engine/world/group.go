@@ -1828,11 +1828,13 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 	}
 
 	// Player targets must resolve to a connected, non-hostile player
-	// (HandleRaidTargetUpdateOpcode's guid.IsPlayer() arm). HIGHGUID_PLAYER is
-	// 0, so clear high bits mark a player GUID — the same test C++ uses; an
-	// empty GUID qualifies and misses the lookup, matching the C++ silent
-	// return. Hostility is the playerTeam analog (FFA/duel edges unmodeled).
-	if uint16(guid>>48) == 0 {
+	// (HandleRaidTargetUpdateOpcode's guid.IsPlayer() arm). IsPlayer() is
+	// !IsEmpty() && GetHigh() == HighGuid::Player (ObjectGuid.h:171), so an
+	// empty GUID skips the lookup arm entirely and proceeds to clear the icon
+	// slot via Group::SetTargetIcon. HIGHGUID_PLAYER is 0, so clear high bits
+	// mark a player GUID. Hostility is the playerTeam analog (FFA/duel edges
+	// unmodeled).
+	if guid != 0 && uint16(guid>>48) == 0 {
 		target := srv.findSessionByGUID(guid)
 		hostile := target == nil || target.player == nil || s.player == nil
 		if !hostile {
@@ -1858,8 +1860,11 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 	}
 	var updates []iconUpdate
 	if guid != 0 {
+		// Group::SetTargetIcon (Group.cpp:1690) clears every slot holding the
+		// GUID — including the target slot itself — via the
+		// SetTargetIcon(i, Empty, Empty) recursion, then sets slot x.
 		for i := range g.TargetIcons {
-			if uint8(i) != x && g.TargetIcons[i] == guid {
+			if g.TargetIcons[i] == guid {
 				g.TargetIcons[i] = 0
 				updates = append(updates, iconUpdate{uint8(i), 0})
 			}
@@ -1871,7 +1876,15 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 	for _, u := range updates {
 		b := protocol.NewBuffer(18)
 		b.WriteU8(0)
-		b.WriteU64(s.playerGUID)
+		// Clear packets broadcast through the SetTargetIcon(i, Empty, Empty)
+		// recursion (Group.cpp:1696), so they carry who=0
+		// (uint64(ObjectGuid::Empty), ObjectGuid.h:137); only the final set
+		// names the setter.
+		who := s.playerGUID
+		if u.guid == 0 {
+			who = 0
+		}
+		b.WriteU64(who)
 		b.WriteU8(u.icon)
 		b.WriteU64(u.guid)
 		srv.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_RAID_TARGET_UPDATE), b.Bytes())
@@ -1991,7 +2004,7 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 
 // handleReadyCheck processes MSG_RAID_READY_CHECK (0x322).
 // TrinityCore: WorldSession::HandleRaidReadyCheckOpcode (GroupHandler.cpp:687).
-func (s *session) handleReadyCheck(_ context.Context, payload []byte) bool {
+func (s *session) handleReadyCheck(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.groupID == 0 || s.server == nil {
 		return false
 	}
@@ -2014,21 +2027,59 @@ func (s *session) handleReadyCheck(_ context.Context, payload []byte) bool {
 		pkt := b.Bytes()
 		srv.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_RAID_READY_CHECK), pkt)
 
-		// Offline ready check: send not-ready (0) for any offline members to leaders/assistants
+		// Offline ready check — Group::OfflineReadyCheck (Group.cpp:1848) walks
+		// m_memberSlots, which still holds offline members, and broadcasts
+		// MSG_RAID_READY_CHECK_CONFIRM (guid, 0) to leaders/assistants for
+		// every member with no connected session. Go's g.Members is
+		// online-only (removeSessionFromGroup detaches on logout), so the DB
+		// group_member roster supplies the offline GUIDs.
 		srv.sessionsMu.RLock()
-		for _, m := range g.Members {
-			if srv.findSessionByGUID(m.GUID) == nil {
-				bOffline := protocol.NewBuffer(9)
-				bOffline.WriteU64(m.GUID)
-				bOffline.WriteU8(0) // 0 = not ready
-				for sess := range srv.sessions {
-					if sess.groupID == s.groupID && g.isLeaderOrAssistant(sess.playerGUID) {
-						_ = sess.write(uint16(protocol.OpcodeMSG_RAID_READY_CHECK_CONFIRM), bOffline.Bytes(), true)
-					}
-				}
+		connected := make(map[uint64]struct{}, len(srv.sessions))
+		var leaders []*session
+		for sess := range srv.sessions {
+			if sess.worldReady.Load() && sess.player != nil {
+				connected[sess.playerGUID] = struct{}{}
+			}
+			if sess.groupID == s.groupID && g.isLeaderOrAssistant(sess.playerGUID) {
+				leaders = append(leaders, sess)
 			}
 		}
 		srv.sessionsMu.RUnlock()
+		sendNotReady := func(guid uint64) {
+			bOffline := protocol.NewBuffer(9)
+			bOffline.WriteU64(guid)
+			bOffline.WriteU8(0) // 0 = not ready
+			for _, sess := range leaders {
+				_ = sess.write(uint16(protocol.OpcodeMSG_RAID_READY_CHECK_CONFIRM), bOffline.Bytes(), true)
+			}
+		}
+		for _, m := range g.Members {
+			if _, ok := connected[m.GUID]; !ok {
+				sendNotReady(m.GUID)
+			}
+		}
+		if srv.CharactersStore != nil && srv.CharactersStore.DB != nil && g.DBID != 0 {
+			rows, err := srv.CharactersStore.DB.QueryContext(ctx, `SELECT memberGuid FROM group_member WHERE guid = ?`, g.DBID)
+			if err == nil {
+				inMembers := make(map[uint64]struct{}, len(g.Members))
+				for _, m := range g.Members {
+					inMembers[m.GUID] = struct{}{}
+				}
+				for rows.Next() {
+					var memberGUID uint64
+					if rows.Scan(&memberGUID) != nil {
+						continue
+					}
+					if _, ok := inMembers[memberGUID]; ok {
+						continue
+					}
+					if _, ok := connected[memberGUID]; !ok {
+						sendNotReady(memberGUID)
+					}
+				}
+				_ = rows.Close()
+			}
+		}
 	} else {
 		// Answer from a group member
 		state, err := r.ReadU8()
@@ -2263,7 +2314,7 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 			groupSessions := s.server.getGroupSessions(s.groupID)
 			// The handler calls only group->ResetInstances: the GROUP's binds
 			// (group_instance) are reset, not each member's own binds.
-			for _, r := range resettableBinds(s.server, s.instanceBindsForGroup(ctx, grp.DBID), grp.DungeonDiff, true) {
+			for _, r := range resettableBinds(s.server, s.instanceBindsForGroup(ctx, grp.DBID), grp.DungeonDiff, true, false) {
 				if groupMemberInsideMap(groupSessions, r.mapID) {
 					// Loaded map with players inside: the reset fails and the
 					// bind is kept (Group::ResetInstances SendResetInstanceFailed
@@ -2303,7 +2354,7 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 	// (Player.cpp:20648). C++ has no inside-instance check and no failure arm
 	// on this path (a solo instance "should not have any players inside");
 	// SendResetInstanceSuccess is sent per reset map.
-	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.DungeonDifficulty, true) {
+	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.DungeonDifficulty, true, false) {
 		resetBuf := protocol.NewBuffer(4)
 		resetBuf.WriteU32(mapID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
@@ -2387,23 +2438,24 @@ func (s *session) repositionOfflineGroupMembersToEntrance(ctx context.Context, g
 // resettableBinds filters bind rows the way Player::ResetInstances /
 // Group::ResetInstances iterate them (Player.cpp:20648, Group.cpp:2192):
 // only binds at the current difficulty, only resettable (non-permanent)
-// saves. For INSTANCE_RESET_ALL (resetAll, non-raid) C++ additionally skips
-// raid maps and skips everything when the difficulty is heroic
-// (Player.cpp:20658-20667: "the reset all instances method can only reset
-// normal maps").
-func resettableBinds(srv *Server, rows []instanceBindRow, curDiff uint8, resetAll bool) []instanceBindRow {
+// saves. Player.cpp:20654 / Group.cpp:2191 skip binds whose raid-ness
+// mismatches the call's isRaid for every method: a dungeon difficulty
+// change never touches raid binds and a raid difficulty change never
+// touches dungeon binds. For INSTANCE_RESET_ALL (resetAll, always
+// isRaid=false) C++ additionally skips everything when the difficulty is
+// heroic (Player.cpp:20658-20667: "the reset all instances method can only
+// reset normal maps").
+func resettableBinds(srv *Server, rows []instanceBindRow, curDiff uint8, resetAll, isRaid bool) []instanceBindRow {
 	var out []instanceBindRow
 	for _, r := range rows {
 		if r.difficulty != curDiff || r.permanent {
 			continue
 		}
-		if resetAll {
-			if curDiff == 1 { // DUNGEON_DIFFICULTY_HEROIC
-				continue
-			}
-			if raidMapID(srv, r.mapID) {
-				continue
-			}
+		if raidMapID(srv, r.mapID) != isRaid {
+			continue
+		}
+		if resetAll && curDiff == 1 { // DUNGEON_DIFFICULTY_HEROIC
+			continue
 		}
 		out = append(out, r)
 	}
@@ -2415,8 +2467,8 @@ func resettableBinds(srv *Server, rows []instanceBindRow, curDiff uint8, resetAl
 // deleted from character_instance (corpse rows go with the maps) and the
 // reset map ids are returned in DB order for the SendResetInstanceSuccess
 // arms (Player.cpp:20674, :20686).
-func (s *session) resetCharacterBinds(ctx context.Context, charGUID uint64, curDiff uint8, resetAll bool) []uint32 {
-	binds := resettableBinds(s.server, s.instanceBindsForCharacter(ctx, charGUID), curDiff, resetAll)
+func (s *session) resetCharacterBinds(ctx context.Context, charGUID uint64, curDiff uint8, resetAll, isRaid bool) []uint32 {
+	binds := resettableBinds(s.server, s.instanceBindsForCharacter(ctx, charGUID), curDiff, resetAll, isRaid)
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil
 	}
@@ -2450,7 +2502,7 @@ func (s *session) resetGroupBinds(ctx context.Context, grp *groupState, isRaid b
 	if isRaid {
 		curDiff = grp.RaidDiff
 	}
-	binds := resettableBinds(s.server, s.instanceBindsForGroup(ctx, grp.DBID), curDiff, false)
+	binds := resettableBinds(s.server, s.instanceBindsForGroup(ctx, grp.DBID), curDiff, false, isRaid)
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil
 	}
@@ -2499,9 +2551,12 @@ func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte
 		return true
 	}
 	r := protocol.NewReader(payload)
+	// len(payload) >= 4 is guarded above, so this read cannot fail; a
+	// short read would drop the packet with the connection open
+	// (WorldSession.cpp:432), never close it.
 	mode, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// mode >= MAX_DUNGEON_DIFFICULTY (3: 0=Normal, 1=Heroic, 2=Epic,
 	// DBCEnums.h:294) is silently dropped, never clamped
@@ -2522,10 +2577,6 @@ func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte
 		if grp == nil || grp.LeaderGUID != s.playerGUID {
 			return true
 		}
-		// Group::ResetInstances is a no-op for BG/BF groups.
-		if grp.GroupType&0x01 != 0 {
-			return true
-		}
 		groupSessions := s.server.getGroupSessions(s.groupID)
 		for _, memSess := range groupSessions {
 			// == !groupGuy->IsInWorld() -> return.
@@ -2537,19 +2588,24 @@ func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte
 				return true
 			}
 		}
-		// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, false, _player).
-		for _, mapID := range s.resetGroupBinds(ctx, grp, false) {
-			resetBuf := protocol.NewBuffer(4)
-			resetBuf.WriteU32(mapID)
-			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+		// Group::ResetInstances is a no-op for BG/BF groups
+		// (Group.cpp:2179-2180), but the difficulty is set even then
+		// (MiscHandler.cpp:1315-1316).
+		if grp.GroupType&0x01 == 0 {
+			// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, false, _player).
+			for _, mapID := range s.resetGroupBinds(ctx, grp, false) {
+				resetBuf := protocol.NewBuffer(4)
+				resetBuf.WriteU32(mapID)
+				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+			}
 		}
-		// group->SetDungeonDifficulty (Group.cpp:2116): persist the group row
-		// (BG groups skip persistence), then every member gets
-		// SetDungeonDifficulty + SendDungeonDifficulty(true).
+		// group->SetDungeonDifficulty (Group.cpp:2116): the in-memory set
+		// and the member echo run for every group type; only the DB
+		// persist is skipped for BG/BF groups.
 		s.server.groupsMu.Lock()
 		grp.DungeonDiff = uint8(mode)
 		s.server.groupsMu.Unlock()
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		if grp.GroupType&0x01 == 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE `groups` SET difficulty = ? WHERE guid = ?", mode, grp.DBID)
 		}
 		for _, memSess := range groupSessions {
@@ -2564,7 +2620,7 @@ func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte
 	// Solo path: _player->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY,
 	// false) then SetDungeonDifficulty; C++ sends no difficulty echo back
 	// on the solo path.
-	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.DungeonDifficulty, false) {
+	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.DungeonDifficulty, false, false) {
 		resetBuf := protocol.NewBuffer(4)
 		resetBuf.WriteU32(mapID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
@@ -2580,9 +2636,12 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 		return true
 	}
 	r := protocol.NewReader(payload)
+	// len(payload) >= 4 is guarded above, so this read cannot fail; a
+	// short read would drop the packet with the connection open
+	// (WorldSession.cpp:432), never close it.
 	mode, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	// mode >= MAX_RAID_DIFFICULTY (4: 0=10N, 1=25N, 2=10H, 3=25H,
 	// DBCEnums.h:295) is silently dropped, never clamped
@@ -2604,10 +2663,6 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 		if grp == nil || grp.LeaderGUID != s.playerGUID {
 			return true
 		}
-		// Group::ResetInstances is a no-op for BG/BF groups.
-		if grp.GroupType&0x01 != 0 {
-			return true
-		}
 		groupSessions := s.server.getGroupSessions(s.groupID)
 		for _, memSess := range groupSessions {
 			// == !groupGuy->IsInWorld() -> return.
@@ -2619,19 +2674,24 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 				return true
 			}
 		}
-		// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, true, _player).
-		for _, mapID := range s.resetGroupBinds(ctx, grp, true) {
-			resetBuf := protocol.NewBuffer(4)
-			resetBuf.WriteU32(mapID)
-			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+		// Group::ResetInstances is a no-op for BG/BF groups
+		// (Group.cpp:2179-2180), but the difficulty is set even then
+		// (MiscHandler.cpp:1380-1381).
+		if grp.GroupType&0x01 == 0 {
+			// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, true, _player).
+			for _, mapID := range s.resetGroupBinds(ctx, grp, true) {
+				resetBuf := protocol.NewBuffer(4)
+				resetBuf.WriteU32(mapID)
+				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+			}
 		}
-		// group->SetRaidDifficulty (Group.cpp:2140): persist the group row
-		// (BG groups skip persistence), then every member gets
-		// SetRaidDifficulty + SendRaidDifficulty(true).
+		// group->SetRaidDifficulty (Group.cpp:2140): the in-memory set and
+		// the member echo run for every group type; only the DB persist is
+		// skipped for BG/BF groups.
 		s.server.groupsMu.Lock()
 		grp.RaidDiff = uint8(mode)
 		s.server.groupsMu.Unlock()
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		if grp.GroupType&0x01 == 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE `groups` SET raiddifficulty = ? WHERE guid = ?", mode, grp.DBID)
 		}
 		for _, memSess := range groupSessions {
@@ -2646,7 +2706,7 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 	// Solo path: _player->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY,
 	// true) then SetRaidDifficulty; C++ sends no difficulty echo back
 	// on the solo path.
-	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.RaidDifficulty, false) {
+	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.RaidDifficulty, false, true) {
 		resetBuf := protocol.NewBuffer(4)
 		resetBuf.WriteU32(mapID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)

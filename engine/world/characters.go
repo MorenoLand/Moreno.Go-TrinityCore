@@ -1290,20 +1290,28 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	} else {
 		state.PVPFlags &^= 0x04
 	}
+	// No friendly-area clear of the unit PvP byte here: C++ UpdatePvPState
+	// (Player.cpp:22153) never clears the flag on zone change — a flagged
+	// player keeps it until the 5-minute toggle-off timer fires
+	// (Player::UpdatePvPFlag, Player.cpp:20768; the creaturemotion expiry
+	// tick), which is what the pvpEnd countdown below models.
 	if state.PlayerFlags&playerFlagInPVP != 0 || (hostile && state.PlayerFlags&playerFlagGM == 0) {
 		state.PVPFlags |= 0x01
-	} else if !hostile {
-		state.PVPFlags &^= 0x01
 	}
 	s.pvpHostile = hostile
-	if hostile || state.PlayerFlags&playerFlagInPVP != 0 {
-		s.pvpEnd = time.Time{}
-		state.PlayerFlags &^= playerFlagPVPTimer
-	} else if state.PVPFlags&0x01 != 0 {
-		if s.pvpEnd.IsZero() {
-			s.pvpEnd = time.Now()
-			state.PlayerFlags |= playerFlagPVPTimer
+	// Player::UpdatePvPState (Player.cpp:22153): hostile areas force PvP on
+	// (UpdatePvP(true, true) = SetPvP(true) + EndTimer = 0) when the player is
+	// not flagged or a toggle-off timer is running; friendly areas start the
+	// toggle-off countdown only for flagged players without the manual IN_PVP
+	// flag. PLAYER_FLAGS_PVP_TIMER is a manual-toggle artifact
+	// (MiscHandler.cpp:491, Player.cpp:20779) and is never touched here.
+	if hostile {
+		if state.PVPFlags&0x01 == 0 || !s.pvpEnd.IsZero() {
+			state.PVPFlags |= 0x01
+			s.pvpEnd = time.Time{}
 		}
+	} else if state.PVPFlags&0x01 != 0 && state.PlayerFlags&playerFlagInPVP == 0 && s.pvpEnd.IsZero() {
+		s.pvpEnd = time.Now()
 	}
 	resting := playerRestingInZoneArea(uint8(team), zone.Flags, area.Flags, hostile, sanctuary) || s.inTavernResting()
 	s.setRestingFlag(state, resting)

@@ -456,7 +456,10 @@ func (s *session) handleGMResponseResolve(ctx context.Context, payload []byte) b
 // handleGMSurveySubmit processes CMSG_GMSURVEY_SUBMIT (0x32A).
 // Reference: WorldSession::HandleGMSurveySubmit (TicketHandler.cpp:194).
 func (s *session) handleGMSurveySubmit(ctx context.Context, payload []byte) bool {
-	if len(payload) < 4 {
+	// STATUS_LOGGEDIN (Opcodes.cpp:941): the C++ never runs the handler
+	// with a null player — WorldSession.cpp:312-324 requeues or skips the
+	// packet with the connection open.
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
 	}
 	r := protocol.NewReader(payload)
@@ -486,15 +489,32 @@ func (s *session) handleGMSurveySubmit(ctx context.Context, payload []byte) bool
 				// twice for one survey.
 				seen := make(map[uint32]bool)
 				valid := true
-				for i := 0; i < 10 && r.Remaining() >= 5 && valid; i++ {
-					qID, _ := r.ReadU32()
+				for i := 0; i < 10 && valid; i++ {
+					// TicketHandler.cpp:207-213: the sub-survey reads are
+					// unconditional (up to 10 records); a truncated packet
+					// throws ByteBufferException in C++ and the whole
+					// submit is dropped — mirror that by aborting without
+					// committing on any short read (WorldSession.cpp:432).
+					qID, err := r.ReadU32()
+					if err != nil {
+						valid = false
+						break
+					}
 					// TicketHandler.cpp:212: a zero sub-survey id ends the
 					// list — the trailing bytes are the survey comment.
 					if qID == 0 {
 						break
 					}
-					ans, _ := r.ReadU8()
-					comm, _ := r.ReadCString()
+					ans, err := r.ReadU8()
+					if err != nil {
+						valid = false
+						break
+					}
+					comm, err := r.ReadCString()
+					if err != nil {
+						valid = false
+						break
+					}
 					if seen[qID] {
 						continue
 					}
@@ -510,12 +530,17 @@ func (s *session) handleGMSurveySubmit(ctx context.Context, payload []byte) bool
 				var finalComment string
 				if valid {
 					// TicketHandler.cpp:228: the trailing comment belongs to the
-					// survey row itself.
-					finalComment, _ = r.ReadCString()
-					// TicketHandler.cpp:234: an invalid hyperlink in the
-					// survey comment drops the submit.
-					if finalComment != "" && !s.validateHyperlinksAndMaybeKick(ctx, finalComment) {
+					// survey row itself; a truncated tail drops the whole
+					// submit, like the C++ ByteBufferException arm.
+					if fc, ferr := r.ReadCString(); ferr != nil {
 						valid = false
+					} else {
+						finalComment = fc
+						// TicketHandler.cpp:234: an invalid hyperlink in the
+						// survey comment drops the submit.
+						if finalComment != "" && !s.validateHyperlinksAndMaybeKick(ctx, finalComment) {
+							valid = false
+						}
 					}
 				}
 				if valid {

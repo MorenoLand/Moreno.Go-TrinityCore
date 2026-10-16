@@ -1542,7 +1542,14 @@ func (s *session) takeAmmo(ctx context.Context, spell wotlk.Spell) (consumed, ou
 	var itemGUID, count int64
 	err := cdb.QueryRowContext(ctx, "SELECT ii.guid, ii.count FROM character_inventory ci JOIN item_instance ii ON ci.item = ii.guid WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count > 0 LIMIT 1", s.playerGUID, ammoEntry).Scan(&itemGUID, &count)
 	if err != nil {
+		// The ammo row is gone (mirrors the CheckItems empty-ammo
+		// PLAYER_AMMO_ID = 0 leg, Spell.cpp:7173); clear the id AND the
+		// derived DPS like the last-count arm below — otherwise the stale
+		// AmmoDPS bonus survives with no ammo equipped.
 		s.player.AmmoID = 0
+		s.player.AmmoDPS = 0
+		_ = s.calculatePlayerStats(ctx, s.player)
+		s.sendPlayerUpdate()
 		return false, true
 	}
 	if count <= 1 {

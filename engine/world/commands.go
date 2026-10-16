@@ -355,6 +355,9 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 			packet.WriteF32(orientation)
 		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
+		// Player::TeleportTo (Player.cpp:1878): SendSavedInstances follows
+		// every far teleport's SMSG_NEW_WORLD.
+		s.sendSavedInstances(context.Background())
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

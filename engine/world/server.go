@@ -84,6 +84,12 @@ type Server struct {
 	autoBalanceLFG          []wotlk.LFGDungeon
 	autoBalanceBosses       map[uint32]struct{}
 	autoBalanceBossesLoaded bool
+	// bgWaitMu/bgWaitTimes mirror BattlegroundQueue's m_WaitTimes ring
+	// (BattlegroundQueue.h:133, COUNT_OF_PLAYERS_TO_AVERAGE_WAIT_TIME=10):
+	// the last 10 join->invite waits per BG type, feeding the
+	// SMSG_BATTLEFIELD_STATUS average-wait field (BattlegroundQueue.cpp:266).
+	bgWaitMu    sync.Mutex
+	bgWaitTimes map[uint32]*bgQueueWaitRing
 	// spellBonusOnce/spellBonus mirror SpellMgr::mSpellBonusMap
 	// (SpellMgr.cpp:1888): spell_bonus_data rows cached on first use by
 	// Server.spellBonusData, for the damage-done coefficient leg.

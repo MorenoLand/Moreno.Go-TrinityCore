@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // This file ports AddSC_instance_commandscript (cs_instance.cpp, whole file
@@ -139,6 +141,33 @@ func instanceResettable(r instanceBindRow) string {
 		return "no"
 	}
 	return "yes"
+}
+
+// sendSavedInstances mirrors Player::SendSavedInstances (Player.cpp:19248):
+// SMSG_UPDATE_INSTANCE_OWNERSHIP carries u32(hasBeenSaved) — whether the
+// player has any permanent bind — and then one SMSG_UPDATE_LAST_INSTANCE
+// (u32 mapId) goes out per permanent bound instance, difficulty order then
+// map order like the C++ BoundInstancesMap walk. C++ fires it after every
+// far teleport's SMSG_NEW_WORLD (Player.cpp:1878).
+func (s *session) sendSavedInstances(ctx context.Context) {
+	ob := protocol.NewBuffer(4)
+	var maps []uint32
+	for _, b := range s.instanceBindsForCharacter(ctx, s.playerGUID) {
+		if b.permanent {
+			maps = append(maps, b.mapID)
+		}
+	}
+	if len(maps) > 0 {
+		ob.WriteU32(1)
+	} else {
+		ob.WriteU32(0)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_UPDATE_INSTANCE_OWNERSHIP), ob.Bytes(), true)
+	for _, mapID := range maps {
+		lb := protocol.NewBuffer(4)
+		lb.WriteU32(mapID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_UPDATE_LAST_INSTANCE), lb.Bytes(), true)
+	}
 }
 
 // yesNo renders a bool as the "yes"/"no" literals the C++ bind lines use.

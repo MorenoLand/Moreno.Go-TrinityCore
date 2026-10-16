@@ -1611,7 +1611,10 @@ func (s *session) handleItemRefundInfo(ctx context.Context, payload []byte) bool
 	r := protocol.NewReader(payload)
 	rawItemGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		// Truncated packet: C++ recvData >> guid throws ByteBufferException,
+		// caught in WorldSession::Update ("Skipped packet") — the packet is
+		// dropped and the connection stays open.
+		return true
 	}
 	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
 	if itemGUID == 0 {

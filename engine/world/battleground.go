@@ -67,6 +67,57 @@ const (
 	bgDesertionTypeInviteLogout uint8 = 4 // player is invited to join and logs out
 )
 
+// bgWaitSampleCount mirrors COUNT_OF_PLAYERS_TO_AVERAGE_WAIT_TIME
+// (BattlegroundQueue.h:31).
+const bgWaitSampleCount = 10
+
+// bgQueueWaitRing is the Go form of BattlegroundQueue's m_WaitTimes ring
+// (BattlegroundQueue.h:133): the last bgWaitSampleCount join->invite wait
+// times with a running sum. C++ keys by team+bracket; Go keys the ring map
+// by battleground type id only (no Go bracket-team queue model).
+type bgQueueWaitRing struct {
+	samples [bgWaitSampleCount]uint32
+	next    int
+	count   int
+	sum     uint64
+}
+
+// recordBGQueueWait ports BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
+// (BattlegroundQueue.cpp:242): the new wait overwrites the oldest sample and
+// the running sum is kept exact.
+func (s *Server) recordBGQueueWait(bgTypeID uint32, waitMs uint32) {
+	s.bgWaitMu.Lock()
+	defer s.bgWaitMu.Unlock()
+	if s.bgWaitTimes == nil {
+		s.bgWaitTimes = make(map[uint32]*bgQueueWaitRing)
+	}
+	ring := s.bgWaitTimes[bgTypeID]
+	if ring == nil {
+		ring = &bgQueueWaitRing{}
+		s.bgWaitTimes[bgTypeID] = ring
+	}
+	ring.sum -= uint64(ring.samples[ring.next])
+	ring.samples[ring.next] = waitMs
+	ring.sum += uint64(waitMs)
+	ring.next = (ring.next + 1) % bgWaitSampleCount
+	if ring.count < bgWaitSampleCount {
+		ring.count++
+	}
+}
+
+// averageBGQueueWait ports BattlegroundQueue::GetAverageQueueWaitTime
+// (BattlegroundQueue.cpp:266-285): 0 while fewer than bgWaitSampleCount
+// samples exist ("not available"), then the ring mean.
+func (s *Server) averageBGQueueWait(bgTypeID uint32) uint32 {
+	s.bgWaitMu.Lock()
+	defer s.bgWaitMu.Unlock()
+	ring := s.bgWaitTimes[bgTypeID]
+	if ring == nil || ring.count < bgWaitSampleCount {
+		return 0
+	}
+	return uint32(ring.sum / bgWaitSampleCount)
+}
+
 // trackBGDeserter records a battleground desertion row — the Go form of
 // CHAR_INS_DESERTER_TRACK ("INSERT INTO battleground_deserters (guid, type,
 // datetime) VALUES (?, ?, NOW())", CharacterDatabase.cpp:596). It fires only
@@ -243,6 +294,13 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 		return true
 	}
 
+	// BattleGroundHandler.cpp:121-124 — no PvPDifficulty bracket for the
+	// requester's level → silent return (both arms).
+	if bgBracketIndex(uint32(s.player.Level)) < 0 {
+		s.debug("battlemaster join rejected: no pvp bracket for level", "account", s.accountName, "level", s.player.Level)
+		return true
+	}
+
 	// The solo-only checks below (deserter, duplicate queue, free slots, freeze) live in the
 	// !joinAsGroup arm of HandleBattlemasterJoinOpcode (BattleGroundHandler.cpp:131-193); the
 	// group arm re-checks per member through Group::CanJoinBattlegroundQueue (Group.cpp:2024).
@@ -317,15 +375,18 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 		return true
 	}
 
+	joinTime := time.Now()
 	s.bgQueues[slot] = bgQueueEntry{
 		Active:     true,
 		BgTypeID:   bgTypeID,
 		InstanceID: instanceID,
-		JoinTime:   time.Now(),
+		JoinTime:   joinTime,
 		Status:     BGStatusWaitQueue,
 	}
 
 	s.sendBattlefieldStatus(uint8(slot))
+	// No live matchmaker: simulate the queue pop (see simulateBGQueueInvite).
+	s.simulateBGQueueInvite(slot, joinTime, 0)
 	s.debug("queued for battleground", "account", s.accountName, "bg", bgTypeID, "slot", slot)
 	return true
 }
@@ -342,6 +403,95 @@ const groupJoinBattlegroundFailed = int32(-12)
 // (SharedDefines.h:3703 — "You cannot queue for a battleground or arena while
 // using the dungeon system.").
 const groupJoinBattlegroundLFGCantUse = int32(-13)
+
+// groupJoinBattlegroundNone mirrors ERR_BATTLEGROUND_NONE (SharedDefines.h:3691 —
+// "not show anything"): the over-MaxGroupSize answer.
+const groupJoinBattlegroundNone = int32(-1)
+
+// groupJoinBattlegroundRangeIndex mirrors ERR_BATTLEGROUND_JOIN_RANGE_INDEX
+// (SharedDefines.h:3700 — "Cannot join the queue unless all members of your
+// party are in the same battleground level range.").
+const groupJoinBattlegroundRangeIndex = int32(-10)
+
+// bgBracketIndex mirrors the PvPDifficulty.dbc bracket lookup behind
+// GetBattlegroundBracketByLevel: WotLK battlegrounds use the standard
+// 10-level brackets 10-19 … 70-79 plus 80. A level outside every bracket
+// (GetBattlegroundBracketByLevel returns null) yields -1.
+func bgBracketIndex(level uint32) int {
+	if level < 10 || level > 80 {
+		return -1
+	}
+	return int((level - 1) / 10)
+}
+
+// battlemasterMaxGroupSize reads the BattlemasterList.dbc MaxGroupSize field
+// (DBCStructure.h:303 — field 28) behind Group::CanJoinBattlegroundQueue's
+// memberscount > bgEntry->MaxGroupSize arm (Group.cpp:2035-2037).
+func battlemasterMaxGroupSize(srv *Server, bgTypeID uint32) (uint32, bool) {
+	if srv == nil || srv.Data == nil {
+		return 0, false
+	}
+	file, err := srv.Data.File("BattlemasterList")
+	if err != nil {
+		return 0, false
+	}
+	rec, found := file.Find(bgTypeID)
+	if !found {
+		return 0, false
+	}
+	size, err := rec.Uint32(28)
+	if err != nil {
+		return 0, false
+	}
+	return size, true
+}
+
+// bgSimulatedInviteDelay is the stand-in for the C++ matchmaker
+// (BattlegroundQueue::Update → InviteGroupToBG): Go keeps no live
+// battleground world or cross-player matchmaking, so a queued entry is
+// "popped" after this delay with a synthetic instance id, flipping it to
+// STATUS_WAIT_JOIN and sending the invite dialog.
+const bgSimulatedInviteDelay = 15 * time.Second
+
+// simulateBGQueueInvite arms the queue-pop simulation for one queued slot:
+// after bgSimulatedInviteDelay the entry flips to STATUS_WAIT_JOIN with the
+// given instance id (0 → a fresh synthetic id is minted at fire time) and
+// the client gets the invite via SMSG_BATTLEFIELD_STATUS. The join-time
+// guard drops the invite if the slot was left or reused meanwhile.
+func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID uint32) {
+	if s == nil || slot < 0 || slot >= len(s.bgQueues) {
+		return
+	}
+	entry := &s.bgQueues[slot]
+	if !entry.Active || entry.IsArena || entry.Status != BGStatusWaitQueue {
+		return
+	}
+	bgTypeID := entry.BgTypeID
+	time.AfterFunc(bgSimulatedInviteDelay, func() {
+		if s == nil || !s.playerLoaded || s.player == nil {
+			return
+		}
+		if slot < 0 || slot >= len(s.bgQueues) {
+			return
+		}
+		e := &s.bgQueues[slot]
+		// Slot left or reused: the join time no longer matches.
+		if !e.Active || e.IsArena || e.Status != BGStatusWaitQueue || e.BgTypeID != bgTypeID || !e.JoinTime.Equal(joinTime) {
+			return
+		}
+		if instanceID == 0 {
+			instanceID = uint32(time.Now().Unix())
+		}
+		// The C++ pop's IsInvitedToBGInstanceGUID: a fresh instance id (no
+		// live BG world backs it — the port itself stays no-bridge,
+		// battleground.go handleBattlefieldPort).
+		e.InstanceID = instanceID
+		e.MapID = battlegroundMapForType(bgTypeID)
+		e.Status = BGStatusWaitJoin
+		s.sendBattlefieldStatus(uint8(slot))
+		s.debug("simulated battleground invite", "account", s.accountName, "bg", bgTypeID, "slot", slot, "instance", instanceID)
+	})
+}
 
 // handleBattlemasterJoinGroup processes the joinAsGroup arm of CMSG_BATTLEMASTER_JOIN.
 // Reference: WorldSession::HandleBattlemasterJoinOpcode, group branch
@@ -363,6 +513,14 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 		return
 	}
 
+	// Group::CanJoinBattlegroundQueue (Group.cpp:2035-2037): more members
+	// than the BattlemasterList MaxGroupSize → ERR_BATTLEGROUND_NONE
+	// ("not show anything"), broadcast to every member.
+	if maxSize, ok := battlemasterMaxGroupSize(s.server, bgTypeID); ok && uint32(len(grp.Members)) > maxSize {
+		s.sendGroupJoinBGResult(grp.Members, groupJoinBattlegroundNone)
+		return
+	}
+
 	// Member sessions in group order (leader first), mirroring the C++ GroupReference walk.
 	members := make([]*session, 0, len(grp.Members))
 	for _, m := range grp.Members {
@@ -373,6 +531,7 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 	// failing member decides err, which is then broadcast to every member.
 	err := int32(bgTypeID) // success: positive values are indexes in BattlemasterList.dbc (SharedDefines.h:3689)
 	leaderTeam := teamForRace(s.player.Race)
+	leaderBracket := bgBracketIndex(uint32(s.player.Level))
 	for _, member := range members {
 		switch {
 		case member == nil || !member.playerLoaded || member.player == nil:
@@ -385,6 +544,10 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 		case teamForRace(member.player.Race) != leaderTeam:
 			// cross-faction → ERR_BATTLEGROUND_JOIN_TIMED_OUT (Group.cpp:2056-2058)
 			err = groupJoinBattlegroundTimedOut
+		case bgBracketIndex(uint32(member.player.Level)) != leaderBracket:
+			// not in the same battleground level bracket →
+			// ERR_BATTLEGROUND_JOIN_RANGE_INDEX (Group.cpp:2059-2062)
+			err = groupJoinBattlegroundRangeIndex
 		case memberBGQueueIndex(member, bgTypeID) != -1:
 			// member already in this queue → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2067-2068)
 			err = groupJoinBattlegroundFailed
@@ -423,13 +586,19 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 	// to each member (BattleGroundHandler.cpp:243-258). avgTime comes from
 	// GetAverageQueueWaitTime; Go keeps no queue wait stats, so sendBattlefieldStatus answers
 	// the hardcoded average — same documented delta as the solo arm.
+	// One shared synthetic instance id for the simulated pop, like the
+	// C++ GroupQueueInfo's single IsInvitedToBGInstanceGUID.
+	simInstanceID := uint32(time.Now().Unix())
 	for _, member := range members {
 		slot := memberFreeBGQueueIndex(member)
 		if slot == -1 {
 			continue
 		}
-		member.bgQueues[slot] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: instanceID, JoinTime: time.Now(), Status: BGStatusWaitQueue}
+		joinTime := time.Now()
+		member.bgQueues[slot] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: instanceID, JoinTime: joinTime, Status: BGStatusWaitQueue}
 		member.sendBattlefieldStatus(uint8(slot))
+		// No live matchmaker: simulate the queue pop (see simulateBGQueueInvite).
+		member.simulateBGQueueInvite(slot, joinTime, simInstanceID)
 	}
 	s.sendGroupJoinBGResult(grp.Members, err)
 	s.debug("group queued for battleground", "account", s.accountName, "bg", bgTypeID, "members", len(members))
@@ -856,9 +1025,12 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 	// (BattleGroundHandler.cpp:382) — QUEUE_2v2/3v3/5v5 for arenas.
 	arenaType, _ := r.ReadU8()
 	_, _ = r.ReadU8() // unk2
+	// len(payload) >= 9 is guarded above, so this read cannot fail; a
+	// short read drops the packet with the connection open
+	// (WorldSession.cpp:432), never closes it.
 	bgTypeID, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	_, _ = r.ReadU16() // unk
 	action, _ := r.ReadU8()
@@ -904,6 +1076,12 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 	// Go form of the "cheating?" IsInvitedForBattlegroundQueueType gate
 	// (BattleGroundHandler.cpp:453-454).
 	if action != 0 && entry.InstanceID == 0 {
+		return true
+	}
+
+	// BattleGroundHandler.cpp:421-423 — no PvPDifficulty bracket for the
+	// player's level → silent return.
+	if bgBracketIndex(uint32(s.player.Level)) < 0 {
 		return true
 	}
 
@@ -956,6 +1134,14 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 
 		// Stop taxi flight at port (BattleGroundHandler.cpp:465-466).
 		s.finishTaxiFlight()
+
+		// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
+		// (BattlegroundQueue.cpp:242): the port accept is Go's invite point (Go
+		// models no STATUS_WAIT_JOIN state), so the join->port wait feeds the
+		// average-wait ring read back by sendBattlefieldStatus.
+		if entry.Status == BGStatusWaitQueue && !entry.JoinTime.IsZero() {
+			s.server.recordBGQueueWait(entry.BgTypeID, uint32(time.Since(entry.JoinTime).Milliseconds()))
+		}
 
 		// STATUS_IN_PROGRESS leg (BattleGroundHandler.cpp:468-482): the slot data
 		// C++ keeps across the port — SetBattlegroundId (instance) and SetBGTeam
@@ -1098,13 +1284,21 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	buf.WriteU32(entry.Status) // STATUS_WAIT_QUEUE = 1
 	switch entry.Status {
 	case BGStatusWaitQueue:
-		buf.WriteU32(120000) // average wait time ms
+		// BattlegroundQueue::GetAverageQueueWaitTime (BattlegroundQueue.cpp:266):
+		// 0 until bgWaitSampleCount invites have been seen, then the ring mean.
+		// The previous hardcoded 120000 was Go-original.
+		buf.WriteU32(s.server.averageBGQueueWait(entry.BgTypeID))
 		timeInQueue := uint32(time.Since(entry.JoinTime).Milliseconds())
 		buf.WriteU32(timeInQueue)
 	case BGStatusWaitJoin:
 		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)
-		buf.WriteU32(120000) // time to remove
+		// time to remove: C++ sends getMSTimeDiff(now, ginfo.RemoveInviteTime)
+		// (BattleGroundHandler.cpp:585), with RemoveInviteTime = invite +
+		// INVITE_ACCEPT_WAIT_TIME (60000, Battleground.h:150). The simulated
+		// invite fires this status immediately, so the full accept window
+		// stands.
+		buf.WriteU32(60000) // time to remove
 	case BGStatusInProgress:
 		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)
