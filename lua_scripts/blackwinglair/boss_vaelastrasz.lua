@@ -30,7 +30,8 @@
 -- caster 18173 15s then 15s (triggered cast on a random alive
 -- mana-using player in the instance that is not the current victim —
 -- C++ picks a non-pet mana user without the aura; players are never
--- pets and HasAura has no bridge, so those two filters drop) /
+-- pets, so the pet filter drops, and player:HasAura(18173) applies
+-- the no-duplicate filter) /
 -- burning adrenaline tank 18173 45s then 45s (triggered self-cast on
 -- the victim, C++ me->CastSpell(victim, ..., true) — non-victim-safe).
 -- Nil-target ticks cast nothing but keep the schedule (jeklik
@@ -59,8 +60,9 @@
 -- tracked across the speech; GetHealthPct has no pre/post-damage
 -- distinction — the 15% yell gate is pre-damage; the burning
 -- adrenaline caster-arm HasAura(SPELL_BURNINGADRENALINE) no-duplicate
--- filter and the non-pet SelectTarget filter have no bridge — the
--- debuff may re-land on a target that already has it; the
+-- filter is bridged via player:HasAura(18173); the non-pet
+-- SelectTarget filter drops (candidates are players only, never
+-- pets); the
 -- spell_vael_burning_adrenaline AuraScript (OnAuraRemove of EFFECT_2
 -- -> self-cast SPELL_BURNINGADRENALINE_EXPLOSION 23478) is not modeled
 -- (standing AuraScript gap).
@@ -172,7 +174,8 @@ local function onBurningAdrenalineCaster(creature, guid)
     local victim = creature:GetVictim()
     local candidates = {}
     for _, p in ipairs(alivePlayersInInstance(creature)) do
-        if p ~= victim and p:GetPowerType() == POWER_MANA then
+        if p ~= victim and p:GetPowerType() == POWER_MANA
+                and not p:HasAura(SPELL_BURNINGADRENALINE) then
             candidates[#candidates + 1] = p
         end
     end

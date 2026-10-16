@@ -36,14 +36,10 @@
 --   {34s, 48s} init -> {44s, 48s} re-arm.
 -- - SPELL_KIRTONOS_TRANSFORM: 20s init -> {16s, 18s} re-arm toggle. The
 --   C++ arm reads me->HasAura(16467) and removes or applies the aura;
---   there is no HasAura bridge, so the toggle state rides a per-guid Lua
---   latch (arlokk convention): latch clear -> DoCast(me, 16467),
---   latch set; latch set -> creature:RemoveAura(16467), latch clear.
---   Evade caveat: reset() clears the Lua latch but the transform aura is
---   never removed on evade, so on re-engage the toggle fires the wrong
---   way for one cycle (C++'s HasAura read would remove the persisted
---   aura); self-corrects on the next 16-18s tick. No bridge exists to
---   read or clear the aura on evade.
+--   creature:HasAura is bridged, so the toggle reads the real aura
+--   state C++-exact. The old per-guid latch's evade caveat is gone:
+--   C++ EnterEvadeMode despawns the boss without touching the aura,
+--   so a fresh re-summon starts aura-clean exactly as C++ does.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally (maiden precedent);
 -- the transform arm's SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID) staff
@@ -90,7 +86,6 @@ local SPELL_CURSE_OF_TONGUES = 12889
 local SPELL_DOMINATE_MIND = 14515
 
 local timers = {}
-local transformed = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -100,10 +95,6 @@ local function cancelTimers(guid)
         end
         timers[guid] = nil
     end
-end
-
-local function initState(guid)
-    transformed[guid] = false
 end
 
 local function schedule(guid, key, delay, fn)
@@ -169,16 +160,14 @@ local function onDominateMind(creature, guid)
 end
 
 -- C++ EVENT_KIRTONOS_TRANSFORM: HasAura(16467) -> RemoveAura + ground
--- legs; else DoCast(me, 16467) + staff + fly legs. No HasAura / fly /
--- equipment bridges, so the toggle rides a Lua latch (arlokk
--- convention) and only the aura is applied/removed.
+-- legs; else DoCast(me, 16467) + staff + fly legs. No fly / equipment
+-- bridges — only the aura itself is applied/removed. creature:HasAura
+-- is bridged, so the toggle reads the real aura state C++-exact.
 local function onTransform(creature, guid)
-    if transformed[guid] then
+    if creature:HasAura(SPELL_KIRTONOS_TRANSFORM) then
         creature:RemoveAura(SPELL_KIRTONOS_TRANSFORM)
-        transformed[guid] = false
     else
         creature:CastSpell(creature, SPELL_KIRTONOS_TRANSFORM)
-        transformed[guid] = true
     end
     schedule(guid, "transform", math.random(16000, 18000), function() onTransform(creature, guid) end)
 end
@@ -186,7 +175,6 @@ end
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    initState(guid)
     schedule(guid, "swoop", 8000, function() onSwoop(creature, guid) end)
     schedule(guid, "wingflap", 15000, function() onWingFlap(creature, guid) end)
     schedule(guid, "piercearmor", 18000, function() onPierceArmor(creature, guid) end)
@@ -204,7 +192,6 @@ end
 local function onReset(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    initState(guid)
 end
 
 -- go_brazier_of_the_herald::OnGossipHello

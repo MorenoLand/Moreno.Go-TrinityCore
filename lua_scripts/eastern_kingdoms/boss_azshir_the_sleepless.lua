@@ -20,7 +20,7 @@
 -- below 50% (C++ HealthBelowPctDamaged(50, damage) — damaged class,
 -- NOT the golemagg 704fb8e current-health bug class): non-triggered
 -- DoCastVictim(soul siphon 7290) + 20s re-arming EVENT_SOUL_SIPHON
--- timer; per-GUID Lua state holds the once-guard (no HasAura bridge),
+-- timer; per-GUID Lua state holds the once-guard (models the C++ _siphon bool; not an aura check — HasAura irrelevant),
 -- cleared on 2/4/23. OnDied/OnLeaveCombat/OnReset: cancel timers,
 -- clear the latch.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and

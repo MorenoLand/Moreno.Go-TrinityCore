@@ -59,7 +59,9 @@
 -- && != 4677 (Silver Covenant) gate (no area-ID bridge —
 -- talbot precedent), IsHostileTo + isInBackInMap(who, 5.0f)
 -- gates (no proximity / facing bridges), HasAura(63987/63986)
--- trespasser gates (no HasAura bridge — dalaran precedent),
+-- trespasser gates (player:HasAura is bridged — lua_player.go:203;
+-- still blocked by the proximity / area-ID / facing / team /
+-- player-self-cast bridges),
 -- GetTeamId() == TEAM_ALLIANCE branch (no team bridge —
 -- dalaran precedent), who->CastSpell(who, 63987/63986, true)
 -- self-cast on the player (no player-self-cast path from a
@@ -77,7 +79,10 @@
 -- fizzule precedent — and no player-target / vehicle-base
 -- cast path); Reset -> EVENT_DUMMY_RECAST_DEFEND 5s (DoCast(me,
 -- 64100) / stack-gated DoCast(me, 62719), both gated on HasAura
--- — no HasAura bridge; a blind 5s recast would double-apply —
+-- (creature:HasAura is now bridged — the 64100 boolean leg is
+-- expressible, but the 62719 leg needs GetStackAmount/GetDuration,
+-- which are unbridged, so a blind 5s recast would still
+-- double-apply —
 -- not C++-exact — borean imprisoned_beryl_sorcerer precedent);
 -- the stunned control (SetControlled UNIT_STATE_STUNNED — no
 -- unit-state bridge — twilight_corrupter precedent);

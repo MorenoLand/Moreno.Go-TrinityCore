@@ -34,7 +34,9 @@
 -- pre-damage health in AI::DamageTaken) and not yet latched -> Talk(1)
 -- + non-triggered self-cast 9438 + non-triggered DoCastAOE detonation
 -- 9435 (self-cast lowering, selin_fireheart convention); per-GUID Lua
--- state holds the once-guard (no HasAura bridge), cleared on 2/4/23.
+-- state holds the once-guard (C++-exact: the C++ arm uses the
+-- _healthAbove50Pct bool, not an aura query — a HasAura re-cast
+-- guard would wrongly re-arm the bubble on dispel), cleared on 2/4/23.
 -- OnDied/OnLeaveCombat/OnReset: cancel timers, clear the latch.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no UNIT_STATE bridge — timers fire

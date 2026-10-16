@@ -106,7 +106,10 @@
 --   instance->SetData(DATA_WAVE_COUNT, NOT_STARTED) leg has no
 --   instance bridge; the _events.Reset() half is covered by the
 --   event-2 timer cancel. phantom_mage's HasAura(AURA_HALLUCINATION
---   72343) evade guard (:1584-1587) has no HasAura bridge.
+--   72343) evade guard (:1583-1587) IS bridged — creature:HasAura
+--   (engine/world/lua_objects.go) — so mageEvade skips the evade
+--   (event 2 returns true to veto the Go base evade, event 23 keeps
+--   the timers) while the hallucination aura is up.
 -- ghostly_priest EVENT_DARK_MENDING (:1547-1559) —
 --   DoSelectLowestHpFriendly(40, ...) (:1550) targets a missing-HP
 --   friendly CREATURE ally; Lua exposes only GetPlayersInWorld, no
@@ -138,6 +141,7 @@ local SPELL_FLAMESTRIKE           = 72169
 local SPELL_FROSTBOLT             = 72166
 local SPELL_CHAINS_OF_ICE         = 72121
 local SPELL_HALLUCINATION         = 72342
+local AURA_HALLUCINATION          = 72343
 local SPELL_SHADOW_STEP           = 72326
 local SPELL_DEADLY_POISON         = 72329
 local SPELL_ENVENOMED_DAGGER_THROW = 72333
@@ -297,6 +301,23 @@ local function mageEngaged(event, creature, target)
     schedule(guid, "hallucination", 40000, function() mageHallucination(creature, guid) end)
 end
 
+-- C++ npc_phantom_mageAI::EnterEvadeMode (:1583-1587): while the mage
+-- has the hallucination aura up, the whole base evade is skipped —
+-- returning true from the event-2 handler vetoes the Go base evade
+-- (threat clear, move home, reset; engine/world/creaturemotion.go
+-- triggerCreatureEvade), and the event-23 timer cancel is skipped too
+-- so the mage's timers (the port's _events) keep running, like C++.
+-- creature:HasAura is bridged (engine/world/lua_objects.go:228).
+local function mageEvade(event, creature)
+    if creature:HasAura(AURA_HALLUCINATION) then
+        if event == 2 then
+            return true
+        end
+        return
+    end
+    cancelTimers(creature:GetGUID())
+end
+
 -- Shadowy mercenary ----------------------------------------------------
 -- C++ :1710-1714: random player 100 yd, cast 72326, re-arm 8000.
 local function mercenaryShadowStep(creature, guid)
@@ -431,9 +452,9 @@ RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 4, onLeaveOrDiedOrReset)
 RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 23, onLeaveOrDiedOrReset)
 
 RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 1, mageEngaged)
-RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 2, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 2, mageEvade)
 RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 4, onLeaveOrDiedOrReset)
-RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 23, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 23, mageEvade)
 
 RegisterCreatureEvent(ENTRY_SHADOWY_MERCENARY, 1, mercenaryEngaged)
 RegisterCreatureEvent(ENTRY_SHADOWY_MERCENARY, 2, onLeaveOrDiedOrReset)

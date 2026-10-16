@@ -10,9 +10,9 @@
 -- engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): OnReset: self-cast
--- unholy aura 17467 only if the aura is absent (no HasAura bridge —
--- per-guid Lua latch, kirtonos/arlokk convention; cleared on 2/4/23
--- when the aura drops). OnEnterCombat: immolate 20294 (triggered
+-- unholy aura 17467 only if the aura is absent (creature:HasAura —
+-- no latch; re-applies after dispel). OnEnterCombat: immolate 20294
+-- (triggered
 -- DoCast on a random alive player within 100yd incl. victim, 7s->12s)
 -- / veil of shadow 17820 (triggered DoCastVictim, 15s->20s);
 -- nil-victim/nil-pick ticks cast nothing but keep the schedule
@@ -31,7 +31,6 @@ local SPELL_VEIL_OF_SHADOW = 17820
 local SPELL_UNHOLY_AURA = 17467
 
 local timers = {}
-local auraApplied = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -99,23 +98,20 @@ end
 
 local function lordAlexeiBarovResetState(guid)
     cancelTimers(guid)
-    auraApplied[guid] = nil
 end
 
 -- C++ Reset: _Reset() + non-triggered DoCast(me, SPELL_UNHOLY_AURA)
--- only if !me->HasAura(SPELL_UNHOLY_AURA). No HasAura bridge — the
--- latch models "aura present" (kirtonos convention); it clears on
--- 2/4/23 when the aura is lost, so re-apply after the next reset.
+-- only if !me->HasAura(SPELL_UNHOLY_AURA). creature:HasAura bridge
+-- (lua_objects.go:228) — no latch needed; re-applies after dispel.
 local function lordAlexeiBarovReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ Reset: non-triggered DoCast(me, SPELL_UNHOLY_AURA) only if
-    -- !HasAura (Reset-only arm; the latch models "aura present"). Event 23
-    -- fires on death too (engine reset-then-died order) but the C++ Reset()
-    -- never runs on death, so the cast is alive-gated.
-    if creature:IsAlive() and not auraApplied[guid] then
+    -- !HasAura (Reset-only arm). Event 23 fires on death too (engine
+    -- reset-then-died order) but the C++ Reset() never runs on death,
+    -- so the cast is alive-gated.
+    if creature:IsAlive() and not creature:HasAura(SPELL_UNHOLY_AURA) then
         creature:CastSpell(creature, SPELL_UNHOLY_AURA, false)
-        auraApplied[guid] = true
     end
 end
 
