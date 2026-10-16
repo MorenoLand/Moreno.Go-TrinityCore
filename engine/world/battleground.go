@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -913,6 +914,40 @@ func (s *session) battlegroundDisabled(ctx context.Context, entry uint32) bool {
 	return db.QueryRowContext(ctx, "SELECT 1 FROM disables WHERE sourceType = ? AND entry = ?", disableTypeBattleground, entry).Scan(&one) == nil
 }
 
+// arenaQueueAnnounceJoinText / arenaQueueAnnounceExitText are the enUS
+// formats of LANG_ARENA_QUEUE_ANNOUNCE_WORLD_JOIN (718) and
+// LANG_ARENA_QUEUE_ANNOUNCE_WORLD_EXIT (719), recalled from TDB — no
+// trinity_string seed exists in-tree, so verify the prose against TDB when one
+// is seeded. The argument shape is C++-exact: team name, arenaType, arenaType,
+// arenaTeamRating (BattlegroundQueue.cpp:166-170, 360-362).
+const (
+	arenaQueueAnnounceJoinText = "Arena team %s has joined the %dv%d queue with rating %d."
+	arenaQueueAnnounceExitText = "Arena team %s has left the %dv%d queue with rating %d."
+)
+
+// arenaTeamAnnounceInfo resolves the arena-team name and join-time rating for
+// the queue announce arms (BattlegroundQueue.cpp:166-170, 360-362): a
+// GetArenaTeamById miss → not ok, silent like C++. The rating clamps to 1,
+// mirroring BattleGroundHandler.cpp:721-722 (arenaRating <= 0 → 1).
+func arenaTeamAnnounceInfo(ctx context.Context, s *session, teamID uint32) (string, uint32, bool) {
+	if s == nil || s.server == nil || teamID == 0 {
+		return "", 0, false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return "", 0, false
+	}
+	var name string
+	var rating uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT name, rating FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&name, &rating); err != nil {
+		return "", 0, false
+	}
+	if rating == 0 {
+		rating = 1
+	}
+	return name, rating, true
+}
+
 // handleBattlemasterJoinArena processes CMSG_BATTLEMASTER_JOIN_ARENA (0x358).
 // Reference: WorldSession::HandleBattlemasterJoinArena (BattleGroundHandler.cpp:610).
 func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byte) bool {
@@ -1009,6 +1044,7 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 		return true
 	}
 
+	var ratedTeamID uint32
 	if isRated != 0 {
 		// BattleGroundHandler.cpp:714-722 — a rated queue requires a real arena team:
 		// GetArenaTeamId(arenaslot) + sArenaTeamMgr->GetArenaTeamById null →
@@ -1016,8 +1052,7 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 		// missing-membership and the deleted-team cases (same query shape as
 		// commands.go:3902, the sCharacterCache->GetCharacterArenaTeamIdByGuid mirror).
 		if cdb := s.server.CharactersStore.DB; cdb != nil {
-			var teamID uint32
-			err := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&teamID)
+			err := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&ratedTeamID)
 			if err != nil {
 				if !errors.Is(err, sql.ErrNoRows) {
 					return true
@@ -1031,24 +1066,45 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 				s.debug("rated arena join rejected: no arena team", "account", s.accountName, "type", arenaType)
 				return true
 			}
-			s.debug("rated arena join", "account", s.accountName, "type", arenaType, "team", teamID)
+			s.debug("rated arena join", "account", s.accountName, "type", arenaType, "team", ratedTeamID)
+		}
+	}
+
+	// BattlegroundQueue::AddGroup's arena-join world announce (cpp:166-170)
+	// reads ginfo->ArenaTeamRating; resolve the team's name and join-time
+	// rating here (BattleGroundHandler.cpp:711-723 builds the solo ginfo from
+	// the joiner's team) so the queue entry carries both.
+	var ratedTeamName string
+	var ratedTeamRating uint32
+	if isRated != 0 && ratedTeamID != 0 {
+		if name, rating, ok := arenaTeamAnnounceInfo(ctx, s, ratedTeamID); ok {
+			ratedTeamName, ratedTeamRating = name, rating
 		}
 	}
 
 	joinTime := time.Now()
 	s.bgQueues[slot] = bgQueueEntry{
-		Active:       true,
-		BgTypeID:     battlegroundAA, // BATTLEGROUND_AA (All Arenas)
-		InstanceID:   0,
-		JoinTime:     joinTime,
-		Status:       BGStatusWaitQueue,
-		ArenaType:    arenaType,
-		IsArena:      true,
-		IsRated:      isRated != 0,
-		ArenaFaction: 0,
+		Active:          true,
+		BgTypeID:        battlegroundAA, // BATTLEGROUND_AA (All Arenas)
+		InstanceID:      0,
+		JoinTime:        joinTime,
+		Status:          BGStatusWaitQueue,
+		ArenaType:       arenaType,
+		IsArena:         true,
+		IsRated:         isRated != 0,
+		ArenaFaction:    0,
+		ArenaTeamID:     ratedTeamID,
+		ArenaTeamRating: ratedTeamRating,
 	}
 
 	s.sendBattlefieldStatus(uint8(slot))
+	// BattlegroundQueue::AddGroup (cpp:166-170): the arena-join world announce
+	// fires when the group is added — gated on Arena.QueueAnnouncer.Enable
+	// (C++ default false), broadcast via broadcastMessageChatAll (the
+	// sWorld->SendWorldText analog).
+	if ratedTeamName != "" && s.server.Config.ArenaQueueAnnouncerEnable {
+		s.server.broadcastMessageChatAll(fmt.Sprintf(arenaQueueAnnounceJoinText, ratedTeamName, arenaType, arenaType, ratedTeamRating))
+	}
 	// No live matchmaker: simulate the arena queue pop (see simulateArenaQueueInvite).
 	s.simulateArenaQueueInvite(slot, joinTime, 0)
 	s.debug("queued for arena", "account", s.accountName, "slot", slot, "type", arenaType, "rated", isRated != 0)
@@ -1087,6 +1143,10 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 	}
 
 	// Group::CanJoinBattlegroundQueue (Group.cpp:2027): LFG group → ERR_LFG_CANT_USE_BATTLEGROUND.
+	// The leader's arena team id (BattleGroundHandler.cpp:711 — the requester's
+	// GetArenaTeamId(arenaslot)) is hoisted to function scope: the queue-entry
+	// stamping and the AddGroup world announce below need it past the err check.
+	var leaderTeamID uint32
 	err := int32(battlegroundAA) // success: positive values are indexes in BattlemasterList.dbc (SharedDefines.h:3689)
 	if grp.IsLFG {
 		err = groupJoinBattlegroundLFGCantUse
@@ -1100,7 +1160,6 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 		// The rated team-id arm (Group.cpp:2071-2073) compares each member against the
 		// reference player's team; the reference is the group leader here.
 		leaderBracket := bgBracketIndex(uint32(s.player.Level))
-		var leaderTeamID uint32
 		if isRated {
 			if cdb := s.server.CharactersStore.DB; cdb != nil {
 				dbErr := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&leaderTeamID)
@@ -1200,6 +1259,17 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 	// One shared synthetic instance id for the simulated pop, like the
 	// C++ GroupQueueInfo's single IsInvitedToBGInstanceGUID — the group
 	// lands in the same arena instance.
+	// BattlegroundQueue::AddGroup's arena-join world announce (cpp:166-170)
+	// reads ginfo->ArenaTeamRating; the single group ginfo is built from the
+	// leader's team (BattleGroundHandler.cpp:711-723), so resolve the name and
+	// join-time rating once here and stamp every member entry with it.
+	var groupTeamName string
+	var groupTeamRating uint32
+	if isRated && leaderTeamID != 0 {
+		if name, rating, ok := arenaTeamAnnounceInfo(ctx, s, leaderTeamID); ok {
+			groupTeamName, groupTeamRating = name, rating
+		}
+	}
 	simInstanceID := uint32(time.Now().Unix())
 	for _, m := range grp.Members {
 		member := s.server.findSessionByGUID(m.GUID)
@@ -1212,21 +1282,30 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 		}
 		joinTime := time.Now()
 		member.bgQueues[slot] = bgQueueEntry{
-			Active:       true,
-			BgTypeID:     battlegroundAA, // BATTLEGROUND_AA (All Arenas)
-			InstanceID:   0,
-			JoinTime:     joinTime,
-			Status:       BGStatusWaitQueue,
-			ArenaType:    arenaType,
-			IsArena:      true,
-			IsRated:      isRated,
-			ArenaFaction: 0,
+			Active:          true,
+			BgTypeID:        battlegroundAA, // BATTLEGROUND_AA (All Arenas)
+			InstanceID:      0,
+			JoinTime:        joinTime,
+			Status:          BGStatusWaitQueue,
+			ArenaType:       arenaType,
+			IsArena:         true,
+			IsRated:         isRated,
+			ArenaFaction:    0,
+			ArenaTeamID:     leaderTeamID,
+			ArenaTeamRating: groupTeamRating,
+			ArenaGroupJoin:  true,
 		}
 		member.sendBattlefieldStatus(uint8(slot))
 		// No live matchmaker: simulate the arena queue pop (see simulateArenaQueueInvite).
 		member.simulateArenaQueueInvite(slot, joinTime, simInstanceID)
 	}
 	s.sendGroupJoinBGResult(grp.Members, err)
+	// BattlegroundQueue::AddGroup (cpp:166-170): the arena-join world announce
+	// fires once per group (the single ginfo), gated on
+	// Arena.QueueAnnouncer.Enable (C++ default false).
+	if groupTeamName != "" && s.server.Config.ArenaQueueAnnouncerEnable {
+		s.server.broadcastMessageChatAll(fmt.Sprintf(arenaQueueAnnounceJoinText, groupTeamName, arenaType, arenaType, groupTeamRating))
+	}
 	s.debug("group queued for arena", "account", s.accountName, "type", arenaType, "rated", isRated, "members", len(grp.Members))
 	return true
 }
@@ -1457,6 +1536,20 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// invite implies one of those states.
 		if !entry.IsArena && entry.InstanceID != 0 {
 			s.trackBGDeserter(ctx, bgDesertionTypeLeaveQueue)
+		}
+		// BattlegroundQueue::RemovePlayer (BattlegroundQueue.cpp:360-362): the
+		// rated-exit world announce — it fires when the last player leaves a
+		// rated arena queue (group->Players.empty() after the erase). The
+		// per-session sim can know the group is empty only for solo joins (a
+		// solo ginfo holds exactly this player); group joins need the shared
+		// m_QueuedGroups container to detect the last leaver (see
+		// battleground_queue.go). Gated on Arena.QueueAnnouncer.Enable (C++
+		// default false); the GetArenaTeamById miss → silent guard rides in
+		// arenaTeamAnnounceInfo.
+		if entry.IsArena && entry.IsRated && entry.ArenaType != 0 && !entry.ArenaGroupJoin && entry.ArenaTeamID != 0 && s.server.Config.ArenaQueueAnnouncerEnable {
+			if name, _, ok := arenaTeamAnnounceInfo(ctx, s, entry.ArenaTeamID); ok {
+				s.server.broadcastMessageChatAll(fmt.Sprintf(arenaQueueAnnounceExitText, name, entry.ArenaType, entry.ArenaType, entry.ArenaTeamRating))
+			}
 		}
 		// Leave queue
 		s.bgQueues[slot] = bgQueueEntry{}

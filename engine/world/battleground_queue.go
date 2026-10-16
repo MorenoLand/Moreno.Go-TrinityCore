@@ -8,21 +8,31 @@ package world
 // arm of BattlegroundQueue::RemovePlayer, plus the invite-selection pool
 // (BattlegroundQueue.cpp:64-124).
 //
-// NOT ported (unported dependencies): BattlegroundQueue::AddGroup's arena-join
-// world announce (BattlegroundQueue.cpp:166-170 — sWorld->SendWorldText with
-// LANG_ARENA_QUEUE_ANNOUNCE_WORLD_JOIN, CONFIG_ARENA_QUEUE_ANNOUNCER_ENABLE,
-// sArenaTeamMgr->GetArenaTeamById; no announce path or arena-team registry is
-// wired into the Go queue); the m_QueuedGroups push (BattlegroundQueue.cpp:198)
-// and the queue-status announce (BattlegroundQueue.cpp:201-235 —
-// CONFIG_BATTLEGROUND_QUEUE_ANNOUNCER_ENABLE/_PLAYERONLY plus
-// bg->GetMinPlayersPerTeam; Go has MinLvl/MaxLvl only via bgTemplateLevels and
-// no announcer configs); BattlegroundQueue::RemovePlayer's container arms
+// PORTED: BattlegroundQueue::AddGroup's arena-join world announce
+// (BattlegroundQueue.cpp:166-170) — the Arena.QueueAnnouncer.Enable config
+// (engine/config), the arena_team name+rating lookup (the
+// sArenaTeamMgr->GetArenaTeamById analog) and broadcastMessageChatAll (the
+// sWorld->SendWorldText analog) all exist; wired in battleground.go for both
+// the solo and group rated-join paths. The 718/719 enUS texts are recalled
+// from TDB (unseeded in-tree — verify when trinity_string is seeded).
+// PORTED (solo only): the rated-exit world announce
+// (BattlegroundQueue.cpp:360-362) — the solo ginfo empties when the leaver
+// goes, so handleBattlefieldPort's leave-queue arm announces for
+// !ArenaGroupJoin entries; the group last-leaver detection needs the shared
+// m_QueuedGroups container and stays unported.
+// NOT ported (unported dependencies): the m_QueuedGroups push
+// (BattlegroundQueue.cpp:198) and the queue-status announce
+// (BattlegroundQueue.cpp:201-235 — CONFIG_BATTLEGROUND_QUEUE_ANNOUNCER_ENABLE/_PLAYERONLY):
+// qAlliance/qHorde count every queued group in the bracket's normal queues
+// and need the server-level m_QueuedGroups containers the per-session sim
+// deliberately replaces — no dead container is added. BattlegroundQueue::RemovePlayer's
+// container arms
 // (BattlegroundQueue.cpp:288-407): the m_QueuedPlayers lookup (:294-303), the
 // bracket search (:310-331 — brackets scanned high to low, premade+normal slots
 // of the group's own team stepped by PVP_TEAMS_COUNT), the m_QueuedPlayers
 // erase (:357), the invited-count decrease (:352-354 — needs a live BG
-// instance from sBattlegroundMgr; the Go sim is per-session), the rated-exit
-// world announce (:360-362), the MemberLost/OfflineMemberLost rated arm
+// instance from sBattlegroundMgr; the Go sim is per-session), the
+// MemberLost/OfflineMemberLost rated arm
 // (:365-376 — arena_team.go has no MemberLost), the empty-group container
 // erase (:380-384), and the recursive rated-group removal with its STATUS_NONE
 // status packet (:389-406 — needs session queue slots). All of those need the

@@ -187,6 +187,9 @@ type Config struct {
 	AllowMultipleGuildMaster                bool
 	ArenaSeasonID                           uint32
 	ArenaSeasonInProgress                   bool
+	ArenaQueueAnnouncerEnable               bool
+	BattlegroundQueueAnnouncerEnable        bool
+	BattlegroundQueueAnnouncerPlayerOnly    bool
 	ArenaLoseRatingModifier                 float64
 	ArenaWinRatingModifier1                 float64
 	ArenaWinRatingModifier2                 float64
@@ -597,6 +600,15 @@ func (c *Config) ApplyEnv() {
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_BATTLEGROUND_TRACK_DESERTERS"); ok {
 		_ = c.set("Battleground.TrackDeserters.Enable", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_ARENA_QUEUE_ANNOUNCER_ENABLE"); ok {
+		_ = c.set("Arena.QueueAnnouncer.Enable", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_BATTLEGROUND_QUEUE_ANNOUNCER_ENABLE"); ok {
+		_ = c.set("Battleground.QueueAnnouncer.Enable", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_BATTLEGROUND_QUEUE_ANNOUNCER_PLAYERONLY"); ok {
+		_ = c.set("Battleground.QueueAnnouncer.PlayerOnly", value)
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_BATTLEGROUND_CAST_DESERTER"); ok {
 		_ = c.set("Battleground.CastDeserter", value)
@@ -1277,6 +1289,12 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.ArenaWinRatingModifier2, key, value)
 	case "Arena.ArenaMatchmakerRatingModifier":
 		return setFloat64(&c.ArenaMatchmakerRatingModifier, key, value)
+	case "Arena.QueueAnnouncer.Enable":
+		return setBool(&c.ArenaQueueAnnouncerEnable, key, value)
+	case "Battleground.QueueAnnouncer.Enable":
+		return setBool(&c.BattlegroundQueueAnnouncerEnable, key, value)
+	case "Battleground.QueueAnnouncer.PlayerOnly":
+		return setBool(&c.BattlegroundQueueAnnouncerPlayerOnly, key, value)
 	case "Warden.Enabled":
 		return setBool(&c.WardenEnabled, key, value)
 	case "Warden.NumInjectionChecks":
