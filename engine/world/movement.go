@@ -598,11 +598,11 @@ func (s *session) handleTimeSyncResponse(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	counter, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	clientTime, err := reader.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	s.debug("time sync response", "account", s.accountName, "counter", counter, "client_time", clientTime)
 	// MovementHandler.cpp:658-689 — responses to unknown counters are dropped.

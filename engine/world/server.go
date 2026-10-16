@@ -4419,8 +4419,10 @@ func (s *session) handleReadyForAccountDataTimes() bool {
 func (s *session) handleRealmSplit(payload []byte) bool {
 	response, err := buildRealmSplit(payload)
 	if err != nil {
+		// Truncated parse: drop the packet but keep the connection open
+		// (C++ WorldSession.cpp:425-432 catches ByteBufferException and skips).
 		s.debug("realm split rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_REALM_SPLIT), response, true); err != nil {
 		s.debug("realm split response failed", "account", s.accountName, "error", err)

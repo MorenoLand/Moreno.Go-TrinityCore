@@ -1937,21 +1937,23 @@ func (s *session) handleGroupRaidConvert(ctx context.Context, _ []byte) bool {
 // Sets main assist / main tank flags.
 // TrinityCore: WorldSession::HandlePartyAssignmentOpcode.
 func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:876): the reference logs and drops the
+	// packet when no player is logged in — the connection stays open.
 	if !s.playerLoaded || s.groupID == 0 {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	assignment, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	applyByte, err := r.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	guid, err := r.ReadU64()
 	if err != nil {
-		return false
+		return true
 	}
 	apply := applyByte != 0
 
@@ -1959,45 +1961,57 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 	srv.groupsMu.Lock()
 	g := srv.groups[s.groupID]
 	// HandlePartyAssignmentOpcode (GroupHandler.cpp:652) gates on leader-or-
-	// assistant; main-assist/main-tank go through Group::SetGroupMemberFlag,
-	// which refuses non-raid groups ("only available in raid groups",
-	// Group.cpp). The trailing group->SendUpdate() stays unconditional like
-	// C++ (broadcast runs even for an unknown assignment value).
-	if g == nil || !g.IsRaid || !g.isLeaderOrAssistant(s.playerGUID) {
+	// assistant; the gate drops the packet without closing the connection.
+	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
 		srv.groupsMu.Unlock()
-		return false
-	}
-	const (
-		assignMainAssist = 0
-		assignMainTank   = 1
-	)
-	clearFlag := uint8(0)
-	setFlag := uint8(0)
-	switch assignment {
-	case assignMainAssist:
-		clearFlag = memberFlagMainAssist
-		setFlag = memberFlagMainAssist
-	case assignMainTank:
-		clearFlag = memberFlagMainTank
-		setFlag = memberFlagMainTank
-	default:
-		srv.groupsMu.Unlock()
-		srv.broadcastGroupList(g)
 		return true
 	}
-	// Clear flag from all members first
-	for i := range g.Members {
-		g.Members[i].Flags &^= clearFlag
+	// GroupAssignment (Group.h:79-80): GROUP_ASSIGN_MAINTANK = 0,
+	// GROUP_ASSIGN_MAINASSIST = 1.
+	const (
+		assignMainTank   = 0
+		assignMainAssist = 1
+	)
+	flag := uint8(0)
+	switch assignment {
+	case assignMainTank:
+		flag = memberFlagMainTank
+	case assignMainAssist:
+		flag = memberFlagMainAssist
 	}
-	if apply {
+	// Group::SetGroupMemberFlag (Group.cpp:2589) carries its own SendUpdate;
+	// it applies only in raid groups for a member GUID, so it broadcasts only
+	// on that path.
+	setBroadcast := false
+	if flag != 0 {
+		// GroupHandler.cpp:671-678 — the unique flag is cleared from all
+		// members first, unconditionally (a no-op in non-raid groups).
 		for i := range g.Members {
-			if g.Members[i].GUID == guid {
-				g.Members[i].Flags |= setFlag
-				break
+			g.Members[i].Flags &^= flag
+		}
+		if g.IsRaid {
+			for i := range g.Members {
+				if g.Members[i].GUID == guid {
+					// Group.cpp:2602-2613 — uniqueness is re-enforced, then
+					// the flag is toggled on the target member.
+					for j := range g.Members {
+						g.Members[j].Flags &^= flag
+					}
+					if apply {
+						g.Members[i].Flags |= flag
+					}
+					setBroadcast = true
+					break
+				}
 			}
 		}
 	}
 	srv.groupsMu.Unlock()
+	if setBroadcast {
+		srv.broadcastGroupList(g)
+	}
+	// GroupHandler.cpp:684 — group->SendUpdate() is unconditional; it runs
+	// even for unknown assignment values and non-raid groups.
 	srv.broadcastGroupList(g)
 	return true
 }
