@@ -995,6 +995,7 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 	leaderSess := s.server.findSessionByGUID(leaderGUID)
 
 	srv := s.server
+	var createdLeaderSess *session
 	srv.groupsMu.Lock()
 
 	var g *groupState
@@ -1030,13 +1031,21 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 			LootMethod:    3, // Group Loot default in retail / TrinityCore
 			LootThreshold: 2, // uncommon
 			LooterGUID:    leaderGUID,
-			DungeonDiff:   1,
-			RaidDiff:      1,
+			// Group::Create (Group.cpp:187-188) copies the leader's
+			// difficulties; DUNGEON_DIFFICULTY_NORMAL and
+			// RAID_DIFFICULTY_10MAN_NORMAL are both 0.
+			DungeonDiff: leaderSess.player.DungeonDifficulty,
+			RaidDiff:    leaderSess.player.RaidDifficulty,
 		}
 		g.Members = append(g.Members, groupMember{GUID: leaderGUID, Name: leaderSess.player.Name})
 		refreshGroupMaxEnchantingLevel(srv, g)
 		srv.groups[g.ID] = g
 		leaderSess.groupID = g.ID
+		// Group::Create (Group.cpp:158) sets PLAYER_FLAGS_GROUP_LEADER on
+		// the leader at creation; the update packet goes out after the
+		// group lock is released, like setGroupLeader.
+		leaderSess.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(leaderSess.player.PlayerFlags, true)
+		createdLeaderSess = leaderSess
 	}
 
 	// Group::IsFull arm (HandleGroupAcceptOpcode:243-247) fires before the
@@ -1073,6 +1082,9 @@ func (s *session) handleGroupAccept(ctx context.Context, _ []byte) bool {
 	s.groupID = g.ID
 	groupObj := groupLuaObject(s.server, g)
 	srv.groupsMu.Unlock()
+	if createdLeaderSess != nil {
+		createdLeaderSess.sendPlayerUpdate()
+	}
 
 	// Group::AddMember (Group.cpp:451): re-adding a player recomputes instance
 	// validity — rejoining the same group inside a dungeon cancels a running
@@ -1136,16 +1148,13 @@ func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 	if leaderSess.groupID != 0 {
 		inviteGroup = s.server.findGroupByID(leaderSess.groupID)
 	} else {
-		// Inviter offline: locate their group by membership scan.
+		// Inviter offline: locate the group they lead by scan — the decline
+		// only ever touches the inviter's own group (HandleGroupDeclineOpcode's
+		// GetGroupInvite arm), never a group they merely belong to.
 		s.server.groupsMu.RLock()
 		for _, g := range s.server.groups {
-			for _, m := range g.Members {
-				if m.GUID == leaderGUID {
-					inviteGroup = g
-					break
-				}
-			}
-			if inviteGroup != nil {
+			if g.LeaderGUID == leaderGUID {
+				inviteGroup = g
 				break
 			}
 		}
@@ -1159,13 +1168,13 @@ func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 
 // handleGroupUninvite processes CMSG_GROUP_UNINVITE (0x075) - by name.
 // TrinityCore: WorldSession::HandleGroupUninviteOpcode.
-func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
+func (s *session) handleGroupUninvite(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	name, err := r.ReadCString()
-	if err != nil || toLower(name) == toLower(s.player.Name) {
+	if err != nil || name == "" || toLower(name) == toLower(s.player.Name) {
 		return true
 	}
 	// Player::CanUninviteFromGroup (Player.cpp:24422-24424): no group
@@ -1204,22 +1213,29 @@ func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 
 	target := s.server.findSessionByName(name)
 	if target == nil {
-		return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
+		// Group::GetMemberGUID (Group.cpp:2533) also matches offline members.
+		return s.kickOfflineGroupMember(ctx, g, name, 0)
 	}
 	if target.playerGUID == g.LeaderGUID {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
 	}
-	// A pending invite issued by this leader can be withdrawn
-	if target.pendingGroupLeader == s.playerGUID {
-		target.pendingGroupLeader = 0
-		return true
+	// HandleGroupUninviteOpcode (GroupHandler.cpp:352-360) checks group
+	// membership before pending invites: only a member rides RemoveFromGroup;
+	// a pending invite into this group is withdrawn instead, and anyone else
+	// answers ERR_TARGET_NOT_IN_GROUP_S.
+	if !groupHasMember(g, target.playerGUID) {
+		if s.server.groupInviteeOf(target, g) {
+			target.pendingGroupLeader = 0
+			return true
+		}
+		return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
 	}
 	return s.removeFromGroup(g, target, groupRemoveMethodKick)
 }
 
 // handleGroupUninviteGUID processes CMSG_GROUP_UNINVITE_GUID (0x076).
 // TrinityCore: WorldSession::HandleGroupUninviteGuidOpcode.
-func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) bool {
+func (s *session) handleGroupUninviteGUID(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
@@ -1265,17 +1281,99 @@ func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) boo
 
 	target := s.server.findSessionByGUID(guid)
 	if target == nil {
-		return s.sendPartyResult(partyOpUninvite, "", errTargetNotInGroup)
+		// Group::IsMember (Group.cpp) also matches offline members.
+		return s.kickOfflineGroupMember(ctx, g, "", guid)
 	}
 	if target.playerGUID == g.LeaderGUID {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
 	}
-	// A pending invite issued by this leader can be withdrawn
-	if target.pendingGroupLeader == s.playerGUID {
-		target.pendingGroupLeader = 0
-		return true
+	// HandleGroupUninviteGuidOpcode (GroupHandler.cpp:317-326) checks group
+	// membership before pending invites: only a member rides RemoveFromGroup;
+	// a pending invite into this group is withdrawn instead, and anyone else
+	// answers ERR_TARGET_NOT_IN_GROUP_S.
+	if !groupHasMember(g, target.playerGUID) {
+		if s.server.groupInviteeOf(target, g) {
+			target.pendingGroupLeader = 0
+			return true
+		}
+		return s.sendPartyResult(partyOpUninvite, "", errTargetNotInGroup)
 	}
 	return s.removeFromGroup(g, target, groupRemoveMethodKick)
+}
+
+// groupHasMember reports whether guid holds a member slot in g.
+func groupHasMember(g *groupState, guid uint64) bool {
+	if g == nil {
+		return false
+	}
+	for _, m := range g.Members {
+		if m.GUID == guid {
+			return true
+		}
+	}
+	return false
+}
+
+// groupInviteeOf reports whether target holds a pending invite into g: the
+// invite was issued by a session whose group is g. An invite issued while the
+// inviter was groupless belongs to their ephemeral group, not g.
+func (s *Server) groupInviteeOf(target *session, g *groupState) bool {
+	if s == nil || target == nil || g == nil || target.pendingGroupLeader == 0 {
+		return false
+	}
+	inviter := s.findSessionByGUID(target.pendingGroupLeader)
+	return inviter != nil && inviter.groupID == g.ID
+}
+
+// kickOfflineGroupMember kicks an offline member of a DB-persisted group.
+// Group::GetMemberGUID (Group.cpp:2533) and Group::IsMember match offline
+// members in m_memberSlots and Player::RemoveFromGroup (Group.cpp:565-731)
+// drops them: DB row delete, enchanting reevaluate, leader promotion, and a
+// disband when fewer than 2 slots remain. Go's roster is online-only, so the
+// group_member roster supplies the offline member; player-formed groups keep
+// no offline roster (DBID 0) and answer ERR_TARGET_NOT_IN_GROUP_S. Exactly
+// one of name/guid identifies the target.
+func (s *session) kickOfflineGroupMember(ctx context.Context, g *groupState, name string, guid uint64) bool {
+	srv := s.server
+	if srv == nil || srv.CharactersStore == nil || srv.CharactersStore.DB == nil || g.DBID == 0 {
+		return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
+	}
+	db := srv.CharactersStore.DB
+	var memberGUID uint64
+	if guid != 0 {
+		var one int64
+		if err := db.QueryRowContext(ctx, `SELECT 1 FROM group_member WHERE guid = ? AND memberGuid = ? LIMIT 1`, g.DBID, guid).Scan(&one); err != nil {
+			return s.sendPartyResult(partyOpUninvite, "", errTargetNotInGroup)
+		}
+		memberGUID = guid
+	} else {
+		var found int64
+		if err := db.QueryRowContext(ctx, `SELECT gm.memberGuid FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid WHERE gm.guid = ? AND c.name = ? LIMIT 1`, g.DBID, name).Scan(&found); err != nil {
+			return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
+		}
+		memberGUID = uint64(found)
+	}
+	if memberGUID == g.LeaderGUID {
+		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
+	}
+	if _, err := srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), memberGUID); err != nil {
+		return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
+	}
+	srv.groupsMu.Lock()
+	groupObj := groupLuaObject(srv, g)
+	// Group::RemoveMember (Group.cpp:676): an offline removal reevaluates
+	// the enchanting level unconditionally.
+	refreshGroupMaxEnchantingLevel(srv, g)
+	srv.groupsMu.Unlock()
+	srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, memberGUID, groupRemoveMethodKick)
+	// Group::RemoveMember (Group.cpp:731): fewer than 2 slots left disbands.
+	var remaining int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_member WHERE guid = ?`, g.DBID).Scan(&remaining); err == nil && remaining < 2 {
+		srv.disbandGroup(ctx, g, false)
+		return true
+	}
+	srv.broadcastGroupList(g)
+	return true
 }
 
 // removeFromGroup removes target from the group, dissolving if the group
@@ -1453,13 +1551,8 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 	oldSess := s.findSessionByGUID(oldLeader)
 	g.LeaderGUID = guid
 
-	// Move new leader to front of members list
-	for i, m := range g.Members {
-		if m.GUID == guid {
-			g.Members[0], g.Members[i] = g.Members[i], g.Members[0]
-			break
-		}
-	}
+	// Group::ChangeLeader (Group.cpp:752-819) does not reorder the member
+	// slots, so the roster keeps its order and only the leader GUID changes.
 	// Group::ChangeLeader (Group.cpp:813): the new leader loses assistant
 	// status when promoted.
 	for i := range g.Members {
@@ -1980,9 +2073,7 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 		flag = memberFlagMainAssist
 	}
 	// Group::SetGroupMemberFlag (Group.cpp:2589) carries its own SendUpdate;
-	// it applies only in raid groups for a member GUID, so it broadcasts only
-	// on that path.
-	setBroadcast := false
+	// it applies only in raid groups for a member GUID.
 	if flag != 0 {
 		// GroupHandler.cpp:671-678 — the unique flag is cleared from all
 		// members first, unconditionally (a no-op in non-raid groups).
@@ -2000,16 +2091,12 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 					if apply {
 						g.Members[i].Flags |= flag
 					}
-					setBroadcast = true
 					break
 				}
 			}
 		}
 	}
 	srv.groupsMu.Unlock()
-	if setBroadcast {
-		srv.broadcastGroupList(g)
-	}
 	// GroupHandler.cpp:684 — group->SendUpdate() is unconditional; it runs
 	// even for unknown assignment values and non-raid groups.
 	srv.broadcastGroupList(g)

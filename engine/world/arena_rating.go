@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"math"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -66,32 +67,37 @@ func arenaTeamRatingLossMod(ownRating, opponentRating uint32, loseMod float64) i
 }
 
 // CalculateArenaPoints calculates the weekly Arena Points awarded for a given rating and bracket type.
-// Mirrors TrinityCore ArenaTeam::FinishWeek (ArenaTeam.cpp:320-360).
-func CalculateArenaPoints(rating uint32, teamType uint32) uint32 {
+// Mirrors TrinityCore ArenaTeam::GetPoints (ArenaTeam.cpp:622-646).
+func CalculateArenaPoints(rating uint32, teamType uint32, seasonID uint32) uint32 {
 	if rating <= 150 {
 		return 0
 	}
 
 	var points float64
 	if rating <= 1500 {
-		points = 0.22*float64(rating) + 14.0
+		// Seasons before 6 use the linear formula; season 6+ awards a flat
+		// 344 points (ArenaTeam.cpp:631-634).
+		if seasonID < 6 {
+			points = 0.22*float64(rating) + 14.0
+		} else {
+			points = 344
+		}
 	} else {
 		points = 1511.26 / (1.0 + 1639.28*math.Exp(-0.00412*float64(rating)))
 	}
 
-	// Bracket multiplier: 2v2: 76%, 3v3: 88%, 5v5: 100%
+	// Bracket multiplier: 2v2: 76%, 3v3: 88%; 5v5 and unknown types are
+	// unpenalized == C++ (ArenaTeam.cpp:638-641).
 	switch teamType {
 	case ArenaTeamType2v2:
 		points *= 0.76
 	case ArenaTeamType3v3:
 		points *= 0.88
-	case ArenaTeamType5v5:
-		points *= 1.00
-	default:
-		points *= 0.76
 	}
 
-	return uint32(math.Round(points))
+	// C++ truncates via (uint32) cast (ArenaTeam.cpp:645); there is no
+	// rounding. RATE_ARENA_POINTS (1.0 default) has no Go config knob.
+	return uint32(points)
 }
 
 // RecordArenaMatchResult applies rating and win/loss statistics to participating arena teams and members.
@@ -157,11 +163,7 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 		return 0, 0, err
 	}
 	if int32(winRating)+winnerChange >= 0 {
-		for _, guid := range winnerMembers {
-			if sess := s.findSessionByGUID(guid); sess != nil {
-				sess.setAchievementCriteria(criteriaTypeHighestTeamRating, 0, newWinRating)
-			}
-		}
+		s.creditArenaTeamRatingCriteria(ctx, cdb, winnerTeamID, newWinRating)
 	}
 
 	// Update losing team.
@@ -173,11 +175,7 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 		return 0, 0, err
 	}
 	if int32(loseRating)+loserChange >= 0 {
-		for _, guid := range loserMembers {
-			if sess := s.findSessionByGUID(guid); sess != nil {
-				sess.setAchievementCriteria(criteriaTypeHighestTeamRating, 0, newLoseRating)
-			}
-		}
+		s.creditArenaTeamRatingCriteria(ctx, cdb, loserTeamID, newLoseRating)
 	}
 
 	// ArenaTeam::MemberWon: personal change is GetRatingMod(personal, opponent
@@ -215,6 +213,27 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 	s.broadcastArenaTeamStats(loserTeamID, newLoseRating)
 
 	return winnerChange, -loserChange, nil
+}
+
+// creditArenaTeamRatingCriteria mirrors the achievement leg of
+// ArenaTeam::FinishGame (ArenaTeam.cpp:743-754): HIGHEST_TEAM_RATING fires for
+// every online member of the team when the rating did not floor — not just
+// the match participants.
+func (s *Server) creditArenaTeamRatingCriteria(ctx context.Context, cdb *sql.DB, teamID uint32, rating uint32) {
+	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mGUID int64
+		if rows.Scan(&mGUID) != nil {
+			continue
+		}
+		if sess := s.findSessionByGUID(uint64(mGUID)); sess != nil {
+			sess.setAchievementCriteria(criteriaTypeHighestTeamRating, 0, rating)
+		}
+	}
 }
 
 // avgArenaMatchmakerRating averages the participants' stored MMR for the slot;
@@ -291,10 +310,19 @@ func (s *Server) broadcastArenaTeamStats(teamID, rating uint32) {
 	sBuf.WriteU32(seasonWins)
 	sBuf.WriteU32(rank)
 
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if sess.authed && sess.worldReady.Load() {
+	// ArenaTeam::NotifyStatsChanged (ArenaTeam.cpp:495-501): the stats packet
+	// goes to online team members only — not every session on the server.
+	rows, err := s.CharactersStore.DB.QueryContext(context.Background(), "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mGUID int64
+		if rows.Scan(&mGUID) != nil {
+			continue
+		}
+		if sess := s.findSessionByGUID(uint64(mGUID)); sess != nil && sess.player != nil {
 			_ = sess.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_STATS), sBuf.Bytes(), true)
 		}
 	}
@@ -336,25 +364,28 @@ func (s *Server) FlushWeeklyArenaPoints(ctx context.Context) (totalGranted uint3
 			continue
 		}
 
-		// Qualification check (TrinityCore ArenaTeam::FinishWeek):
+		// Qualification check (TrinityCore ArenaTeam::UpdateArenaPointsHelper,
+		// ArenaTeam.cpp:886-911):
 		// 1. Team must have played at least 10 games this week
 		// 2. Member must have played at least 30% of team's games
-		// 3. Member personal rating must be within 150 of team rating
+		// (ceil'd in C++; the integer comparison is equivalent)
 		if rec.teamWeekGames < ArenaMinTeamGamesForPoints {
 			continue
 		}
 		if float64(rec.memberWeekGame) < float64(rec.teamWeekGames)*ArenaMinPlayerGameRatio {
 			continue
 		}
-		effectiveRating := rec.personalRating
-		if rec.teamRating < effectiveRating {
-			effectiveRating = rec.teamRating
-		}
+
+		// ArenaTeam::GetPoints (ArenaTeam.cpp:627): the points rating is the
+		// member's personal rating when it sits more than 150 below the team
+		// rating, otherwise the team rating. There is no skip arm — a member
+		// far below the team still earns points at their own rating.
+		pointsRating := rec.teamRating
 		if rec.teamRating > rec.personalRating && rec.teamRating-rec.personalRating > ArenaMaxPersonalRatingDiff {
-			continue
+			pointsRating = rec.personalRating
 		}
 
-		points := CalculateArenaPoints(effectiveRating, rec.teamType)
+		points := CalculateArenaPoints(pointsRating, rec.teamType, s.Config.ArenaSeasonID)
 		if points > playerMaxPoints[rec.playerGUID] {
 			playerMaxPoints[rec.playerGUID] = points
 		}

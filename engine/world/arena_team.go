@@ -510,7 +510,7 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 	// the leave event or a further command result on this path. The
 	// union of the per-member DelMember queue-cleanup legs runs first
 	// (ArenaTeam::Disband == ArenaTeam.cpp:374-383).
-	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), 0)
+	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), 0, true)
 	if s.playerGUID == uint64(captainGUID) {
 		rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
 		if err == nil {
@@ -536,7 +536,7 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 	// then the member row is erased and the leaver gets QUIT_S
 	// (ArenaTeam.cpp:357); the handler sends it again below
 	// (ArenaTeamHandler.cpp:261).
-	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), s.groupID)
+	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), s.groupID, false)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID)
 	s.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
 	// BroadcastEvent(ERR_ARENA_TEAM_LEAVE_SS) == C++ (ArenaTeamHandler.cpp:260):
@@ -625,7 +625,7 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 	if ms := s.server.findSessionByGUID(uint64(memberGUID)); ms != nil {
 		removedGroupID = ms.groupID
 	}
-	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), removedGroupID)
+	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), removedGroupID, false)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, memberGUID)
 	if ms := s.server.findSessionByGUID(uint64(memberGUID)); ms != nil && ms.player != nil {
 		ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
@@ -686,7 +686,7 @@ func (s *session) handleArenaTeamDisband(ctx context.Context, payload []byte) bo
 	// iterates zero members and no event packet ever hits the wire — skipping it
 	// is C++-exact, not a gap. The union of the per-member DelMember
 	// queue-cleanup legs runs first.
-	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), 0)
+	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), 0, true)
 	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
 	if err == nil {
 		for rows.Next() {
@@ -774,11 +774,15 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 // (not invited — IsInvitedToBGInstanceGUID, Go's entry.InstanceID == 0
 // convention) arena queue entries of this team's type for every online member
 // sharing the removed player's group, each answered with a STATUS_NONE
-// battlefield-status packet. A groupID of 0 cleans every online member's
-// group instead — the union of the per-member DelMember legs that
+// battlefield-status packet. A null C++ group — the removed player is offline
+// or groupless — clears nothing, so groupID 0 with clearAll unset is a no-op;
+// clearAll selects the union of the per-member DelMember legs that
 // ArenaTeam::Disband runs (ArenaTeam.cpp:374-383).
-func (s *session) clearArenaTeamGroupQueues(ctx context.Context, cdb *sql.DB, teamID uint32, arenaType uint8, groupID uint64) {
+func (s *session) clearArenaTeamGroupQueues(ctx context.Context, cdb *sql.DB, teamID uint32, arenaType uint8, groupID uint64, clearAll bool) {
 	if cdb == nil {
+		return
+	}
+	if !clearAll && groupID == 0 {
 		return
 	}
 	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
@@ -795,7 +799,7 @@ func (s *session) clearArenaTeamGroupQueues(ctx context.Context, cdb *sql.DB, te
 		if ms == nil || ms.groupID == 0 {
 			continue
 		}
-		if groupID != 0 && ms.groupID != groupID {
+		if !clearAll && ms.groupID != groupID {
 			continue
 		}
 		for i := range ms.bgQueues {

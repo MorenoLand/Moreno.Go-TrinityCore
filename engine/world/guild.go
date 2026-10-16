@@ -4672,7 +4672,7 @@ const (
 	guildCharterCost   = 1000 // 10s
 )
 
-// handlePetitionBuy processes CMSG_PETITION_BUY (0x1B6).
+// handlePetitionBuy processes CMSG_PETITION_BUY (0x1BD).
 // Reference: WorldSession::HandlePetitionBuyOpcode (PetitionsHandler.cpp:48).
 func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
@@ -5316,7 +5316,7 @@ func (s *session) handlePetitionDecline(ctx context.Context, payload []byte) boo
 	return true
 }
 
-// handlePetitionRename processes MSG_PETITION_RENAME (0x1C1).
+// handlePetitionRename processes MSG_PETITION_RENAME (0x2C1).
 // Reference: WorldSession::HandlePetitionRenameGuild (PetitionsHandler.cpp:322).
 func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
