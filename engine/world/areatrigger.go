@@ -16,7 +16,9 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	triggerID, err := r.ReadU32()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 
 	// 1. In-flight check: players in flight ignore area triggers

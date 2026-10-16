@@ -501,7 +501,9 @@ func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool 
 	}
 	bagGUID, err := reader.ReadU64()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 	bagSlot, err := reader.ReadU8()
 	if err != nil {
@@ -1508,7 +1510,9 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	s.removeFakeDeath()
 	slot, err := r.ReadU32()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 
 	// Player::GetItemFromBuyBackSlot (Player.cpp:13550-13557): slots outside

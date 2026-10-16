@@ -1433,7 +1433,9 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 	}
 	mailID, err := r.ReadU32()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

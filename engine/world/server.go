@@ -4948,7 +4948,11 @@ func (s *session) handlePing(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
 	ping, err := b.ReadU32()
 	if err != nil {
-		return true
+		// Truncated ping closes the connection: WorldSocket::ReadDataHandler
+		// (WorldSocket.cpp:315-324) catches ByteBufferException and returns
+		// ReadDataHandlerResult::Error, and OnRead calls CloseSocket on any
+		// non-Ok result (WorldSocket.cpp:196-204).
+		return false
 	}
 	latency, err := b.ReadU32()
 	if err != nil {

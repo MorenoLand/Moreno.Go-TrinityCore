@@ -338,7 +338,9 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return false
+		// No C++ equivalent: BankHandler.cpp has no nil-store arm and never
+		// disconnects — drop, conn open.
+		return true
 	}
 
 	srcBagKey, ok := s.inventoryBagKey(ctx, srcBag)
@@ -432,7 +434,8 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 	}
 
 	if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID); err != nil {
-		return false
+		// C++ BankHandler.cpp:62-136 plain-returns every arm — drop, conn open.
+		return true
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), false)
 	if srcBagKey == 0 && srcSlot < equipSlotEnd {
@@ -566,7 +569,9 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return false
+		// No C++ equivalent: BankHandler.cpp has no nil-store arm and never
+		// disconnects — drop, conn open.
+		return true
 	}
 
 	srcBagKey, ok := s.inventoryBagKey(ctx, srcBag)
@@ -617,7 +622,8 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 			return true // Inventory full
 		}
 		if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID); err != nil {
-			return false
+			// C++ BankHandler.cpp:62-136 plain-returns every arm — drop, conn open.
+			return true
 		}
 	} else {
 		// Move from player bags to bank
@@ -665,7 +671,8 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 			return true // Bank full
 		}
 		if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID); err != nil {
-			return false
+			// C++ BankHandler.cpp:62-136 plain-returns every arm — drop, conn open.
+			return true
 		}
 	}
 	if isBank {

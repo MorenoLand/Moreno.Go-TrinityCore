@@ -118,21 +118,27 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		s.debug("character enumeration cleanup failed", "account", s.accountName, "error", err)
 	}
 	rows, err := s.server.CharactersStore.QueryStatement(ctx, "CHAR_SEL_ENUM", 0, s.accountID)
+	// WorldSession::HandleCharEnum (CharacterHandler.cpp:225-232): a null query
+	// result skips the row loop but the empty SMSG_CHAR_ENUM is still sent —
+	// the session stays open, so a query failure drops through to the send below.
+	queryOK := err == nil
 	if err != nil {
 		s.debug("character enumeration query failed", "account", s.accountName, "error", err)
-		return false
+	} else {
+		defer rows.Close()
 	}
-	defer rows.Close()
 	packet := protocol.NewBuffer(1 + 128)
 	packet.WriteU8(0)
 	s.legitimate = make(map[uint64]struct{})
 	s.characterNames = make(map[uint64]enumCharacter)
 	characters := make([]enumCharacter, 0)
-	for rows.Next() {
+	for queryOK && rows.Next() {
 		character, err := scanEnumCharacter(rows)
 		if err != nil {
+			// Player::BuildEnumData failure skips the row in C++
+			// (CharacterHandler.cpp:239-249) — keep the packet valid, session open.
 			s.debug("character enumeration scan failed", "account", s.accountName, "error", err)
-			return false
+			continue
 		}
 		if character.Race == 0 || character.Class == 0 || character.Gender > 2 {
 			continue
@@ -159,11 +165,12 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		}
 		characters = append(characters, character)
 	}
-	if err := rows.Err(); err != nil {
-		s.debug("character enumeration rows failed", "account", s.accountName, "error", err)
-		return false
+	if queryOK {
+		if err := rows.Err(); err != nil {
+			s.debug("character enumeration rows failed", "account", s.accountName, "error", err)
+		}
+		rows.Close()
 	}
-	rows.Close()
 	count := uint8(0)
 	for _, character := range characters {
 		s.loadEnumEquipment(ctx, &character)
@@ -177,7 +184,9 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		}
 	}
 	if err := packet.Put(0, []byte{count}); err != nil {
-		return false
+		// C++ data.put<uint8>(0, num) cannot fail; a corrupt in-memory packet is
+		// dropped, never a disconnect.
+		return true
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_CHAR_ENUM), packet.Bytes(), true); err != nil {
 		s.debug("character enumeration response failed", "account", s.accountName, "error", err)
@@ -251,7 +260,9 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
 	name, err := b.ReadCString()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 	// normalizePlayerName (CharacterHandler.cpp:377): the name C++ validates
 	// and stores is the normalized form (lowercased, first letter upper);
@@ -267,7 +278,9 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	for i := range values {
 		values[i], err = b.ReadU8()
 		if err != nil {
-			return false
+			// Truncated packet: WorldSession::Update catches ByteBufferException
+			// and skips the packet (WorldSession.cpp:425-432).
+			return true
 		}
 	}
 	race, class, gender := values[0], values[1], values[2]
@@ -320,8 +333,11 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
 		}
 		var deathKnights int64
+		// C++ guards every create-path scalar query with `if (result)`
+		// (CharacterHandler.cpp:420-452,476-521): a failed query leaves the zero
+		// value and creation proceeds — never a disconnect.
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ? AND class = ?", s.accountID, class).Scan(&deathKnights); err != nil {
-			return false
+			s.debug("character create death-knight count failed", "account", s.accountName, "error", err)
 		}
 		if deathKnights >= int64(s.server.Config.DeathKnightsPerRealm) {
 			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
@@ -332,7 +348,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 			// characters WHERE account = ?") has no class filter: every
 			// account row, death knights included, feeds the level check.
 			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT MAX(level) FROM characters WHERE account = ?", s.accountID).Scan(&maxLevel); err != nil {
-				return false
+				s.debug("character create max-level query failed", "account", s.accountName, "error", err)
 			}
 			if !maxLevel.Valid || maxLevel.Int64 < int64(required) {
 				return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateLevelRequirement)
@@ -340,14 +356,21 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		}
 	}
 	row, err := s.server.CharactersStore.QueryRowStatement(ctx, "CHAR_SEL_CHECK_NAME", name)
+	// CharacterHandler.cpp:420-424: a null name-check result falls through as
+	// "name free" — a failed check never disconnects.
+	nameInUse := false
 	if err != nil {
-		return false
+		s.debug("character create name check failed", "account", s.accountName, "error", err)
+	} else {
+		var exists int64
+		if serr := row.Scan(&exists); serr == nil {
+			nameInUse = true
+		} else if !errors.Is(serr, sql.ErrNoRows) {
+			s.debug("character create name scan failed", "account", s.accountName, "error", serr)
+		}
 	}
-	var exists int64
-	if err := row.Scan(&exists); err == nil {
+	if nameInUse {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 50)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return false
 	}
 	var spawn struct {
 		Map, Zone            uint32
@@ -357,15 +380,19 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		if errors.Is(err, sql.ErrNoRows) {
 			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 49)
 		}
-		return false
+		// No C++ equivalent: the spawn row is loaded in-memory at startup there.
+		// Drop so the client can retry; the session stays open.
+		return true
 	}
 	// CharacterHandler.cpp:430-440: the account limit counts characters across
 	// all realms via LOGIN_SEL_SUM_REALM_CHARACTERS
 	// ("SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?"), not this
 	// realm's rows — a NULL sum (no rows) counts as zero like C++ GetDouble().
 	var realmChars sql.NullFloat64
+	// CharacterHandler.cpp:434-438: a null SUM result counts as zero and the
+	// account-limit check proceeds — never a disconnect.
 	if err := s.server.AuthStore.QueryRowContext(ctx, "SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?", s.accountID).Scan(&realmChars); err != nil {
-		return false
+		s.debug("character create realm-character sum failed", "account", s.accountName, "error", err)
 	}
 	accountCharacters := 0.0
 	if realmChars.Valid {
@@ -375,8 +402,10 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateAccountLimit)
 	}
 	var realmCharacterCount int64
+	// CharacterHandler.cpp:449-463: a null CHAR_SEL_SUM_CHARS result leaves
+	// CharCount at zero and the per-realm check proceeds — never a disconnect.
 	if err := s.server.CharactersStore.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ?", s.accountID).Scan(&realmCharacterCount); err != nil {
-		return false
+		s.debug("character create realm count failed", "account", s.accountName, "error", err)
 	}
 	if realmCharacterCount >= int64(s.server.Config.CharactersPerRealm) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateServerLimit)
@@ -393,12 +422,17 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 				return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreatePvpTeamsViolation)
 			}
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			return false
+			// CharacterHandler.cpp:505-521: the team check lives inside
+			// `if (result)` — a failed query skips it, never a disconnect.
+			s.debug("character create team check failed", "account", s.accountName, "error", err)
 		}
 	}
 	guid, err := s.server.allocateCharacterGUID(ctx)
 	if err != nil {
-		return false
+		// No C++ equivalent: GUID generation is in-memory there. Drop so the
+		// client can retry; the session stays open.
+		s.debug("character create GUID allocation failed", "account", s.accountName, "error", err)
+		return true
 	}
 
 	startLevel := uint8(1)
@@ -464,14 +498,18 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 
 	var realmCharacters sql.NullInt64
 	if err := s.server.AuthStore.QueryRowContext(ctx, "SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?", s.accountID).Scan(&realmCharacters); err != nil {
-		return false
+		// Post-create bookkeeping: the character row already exists. Drop so
+		// the client retries; the session stays open.
+		s.debug("character create post-create realm sum failed", "account", s.accountName, "error", err)
+		return true
 	}
 	count := uint32(1)
 	if realmCharacters.Valid && realmCharacters.Int64 > 0 {
 		count = uint32(realmCharacters.Int64) + 1
 	}
 	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_REP_REALM_CHARACTERS", count, s.accountID, s.server.RealmID); err != nil {
-		return false
+		s.debug("character create post-create realm update failed", "account", s.accountName, "error", err)
+		return true
 	}
 	s.legitimate[guid] = struct{}{}
 	return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 47)
@@ -504,7 +542,9 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
 	guid, err := b.ReadU64()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 	// WorldSession::HandleCharDeleteOpcode (CharacterHandler.cpp:641-646): a
 	// character loaded in any session cannot be deleted (silent return, no
@@ -551,7 +591,7 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	}
 	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return false
+		return true
 	}
 	defer tx.Rollback()
 	// CalendarMgr::RemoveAllPlayerEventsAndInvites (CalendarMgr.cpp:285-293):
@@ -587,7 +627,7 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	// HandleCharDeleteOpcode calendar arm (CharacterHandler.cpp:699): shared
 	// by both delete methods.
 	if err := deleteCharacterPrelude(ctx, tx, guid); err != nil {
-		return false
+		return true
 	}
 	if deleteMethod == charDeleteUnlink {
 		// Player::DeleteFromDB CHAR_DELETE_UNLINK (Player.cpp:4537-4543,
@@ -596,14 +636,14 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		// Owned state, mails, pets and social rows are kept, and npcbot
 		// owners are not reset (REMOVE-only per Player.cpp:4532).
 		if _, err := tx.ExecContext(ctx, "UPDATE characters SET deleteInfos_Name = name, deleteInfos_Account = account, deleteDate = UNIX_TIMESTAMP(), name = '', account = 0 WHERE guid = ?", guid); err != nil {
-			return false
+			return true
 		}
 		// CharacterHandler.cpp:689: OnPlayerDelete fires before the DB
 		// reference is removed (successful delete only). Eluna carries the
 		// guidlow (uint32).
 		s.triggerPlayerEvent(ctx, scripting.PlayerEventCharacterDelete, uint32(guid))
 		if err := tx.Commit(); err != nil {
-			return false
+			return true
 		}
 		delete(s.legitimate, guid)
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), charDeleteSuccess)
@@ -626,20 +666,20 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	// before any owned-state rows are wiped, so the re-homed items survive
 	// the item_instance-by-owner cleanup below.
 	if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
-		return false
+		return true
 	}
 	if err := deleteCharacterOwnedState(ctx, tx, guid, s.server.Config.DeletedCharacterTicketTrace); err != nil {
-		return false
+		return true
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
-		return false
+		return true
 	}
 	// CharacterHandler.cpp:689: OnPlayerDelete fires before the DB
 	// reference is removed (successful delete only). Eluna carries the
 	// guidlow (uint32).
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventCharacterDelete, uint32(guid))
 	if err := tx.Commit(); err != nil {
-		return false
+		return true
 	}
 	s.releaseNpcBotOwnerCache(guid)
 	for _, contactGUID := range deletedContacts {
@@ -682,7 +722,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	b := protocol.NewReader(payload)
 	guid, err := b.ReadU64()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 	if _, ok := s.legitimate[guid]; !ok {
 		return false
@@ -696,14 +738,19 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.initialLoginPending = true
 	mapEntry, mapFound, err := s.server.Data.Map(state.Map)
 	if err != nil || !mapFound {
-		return false
+		// Player::LoadFromDB relocates to homebind on a bad map
+		// (Player.cpp:17578-17586) — never a kick. Drop; the session stays open.
+		return true
 	}
 	loginSelection = worldportInstanceSelection{MapID: state.Map, InstanceID: state.InstanceID}
 	if mapEntry.IsDungeon() {
 		var canCreate bool
 		loginSelection, canCreate, err = s.resolveWorldportInstance(ctx, state, mapEntry)
 		if err != nil {
-			return false
+			// C++ holder-init failure is a plain return (CharacterHandler.cpp
+			// :725-728) and AddPlayerToMap failure teleports (:830-838) —
+			// never a close. Drop; the session stays open.
+			return true
 		}
 		if !canCreate {
 			if loginSelection.Reserved {
@@ -711,11 +758,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				loginSelection.Reserved = false
 			}
 			if err := s.recoverLoginInstanceMapFailure(ctx, &state); err != nil {
-				return false
+				return true
 			}
 			mapEntry, mapFound, err = s.server.Data.Map(state.Map)
 			if err != nil || !mapFound {
-				return false
+				return true
 			}
 			loginSelection = worldportInstanceSelection{MapID: state.Map, InstanceID: state.InstanceID}
 		} else {
@@ -729,7 +776,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.prepareLoginResurrection(ctx, &state)
 	mounts, err := s.loadMountState(ctx, guid)
 	if err != nil {
-		return false
+		// Login-stage DB failure: C++ holder-init failure is a plain return
+		// (CharacterHandler.cpp:725-728), never a kick. Drop; session open.
+		return true
 	}
 	s.mounts = mounts
 	s.loadBuybackState(ctx, guid)
@@ -768,11 +817,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				loginSelection.Reserved = false
 			}
 			if err := s.recoverLoginInstanceMapFailure(ctx, &state); err != nil {
-				return false
+				return true
 			}
 			mapEntry, mapFound, err = s.server.Data.Map(state.Map)
 			if err != nil || !mapFound || mapEntry.IsDungeon() {
-				return false
+				return true
 			}
 			loginSelection = worldportInstanceSelection{MapID: state.Map, InstanceID: state.InstanceID}
 			s.player = &state
@@ -833,19 +882,19 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	updates, err := s.server.buildPlayerUpdate(state)
 	if err != nil {
-		return false
+		return true
 	}
 	attachedTransport, err := s.server.buildAttachedTransportUpdate(ctx, state)
 	if err != nil {
-		return false
+		return true
 	}
 	attachedTransportPassengers, err := s.server.buildAttachedTransportPassengerUpdates(ctx, state, s)
 	if err != nil {
-		return false
+		return true
 	}
 	attachedTransportPlayers, attachedTransportPlayerGUIDs, err := s.server.buildAttachedTransportPlayerUpdates(state, s.playerGUID, s)
 	if err != nil {
-		return false
+		return true
 	}
 	s.captureUpdatePackets = true
 	s.capturedUpdatePackets = nil
@@ -871,18 +920,18 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	initialUpdate, err := protocol.MergeUpdatePackets(initialUpdatePackets...)
 	if err != nil || initialUpdate == nil {
-		return false
+		return true
 	}
 	if s.server.TraceRecorder != nil {
 		payload := initialUpdate.Payload.Bytes()
 		if initialUpdate.Opcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
 			payload, err = protocol.DecompressUpdatePayload(payload)
 			if err != nil {
-				return false
+				return true
 			}
 		}
 		if len(s.loginCreateBlock) == 0 || !bytes.Contains(payload, s.loginCreateBlock) {
-			return false
+			return true
 		}
 	}
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
@@ -892,7 +941,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.server.broadcastPlayerCreate(state, s)
 	mapTransportUpdates, err := s.server.buildMapTransportUpdates(state, state.TransportGUID)
 	if err != nil {
-		return false
+		return true
 	}
 	if mapTransportUpdates != nil {
 		if err := s.write(mapTransportUpdates.Opcode, mapTransportUpdates.Payload.Bytes(), true); err != nil {
@@ -901,7 +950,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	if loginSelection.CreateSave || loginSelection.BindPlayer || loginSelection.BindGroup || loginSelection.UnbindPlayerInstanceID != 0 {
 		if err := s.persistWorldportInstance(ctx, loginSelection); err != nil {
-			return false
+			// C++ DB execs are fire-and-forget (CharacterHandler.cpp:843-847) —
+			// never a close. Drop; the session stays open.
+			return true
 		}
 		loginInstanceCommitted = true
 		if loginSelection.Reserved {
@@ -938,20 +989,20 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		wg.Wait()
 		if creatureErr != nil {
 			s.debug("nearby creature load failed", "account", s.accountName, "error", creatureErr)
-			return false
+			return true
 		}
 		if goErr != nil {
 			s.debug("nearby gameobjects load failed", "account", s.accountName, "error", goErr)
-			return false
+			return true
 		}
 		if corpseErr != nil {
 			s.debug("nearby corpses load failed", "account", s.accountName, "error", corpseErr)
-			return false
+			return true
 		}
 		packet, err := protocol.MergeUpdatePackets(nearbyPlayers, nearbyCreatures, nearbyGameObjects, nearbyCorpses)
 		if err != nil {
 			s.debug("nearby visibility merge failed", "account", s.accountName, "error", err)
-			return false
+			return true
 		}
 		if packet != nil {
 			if err := s.write(packet.Opcode, packet.Payload.Bytes(), true); err != nil {
@@ -1042,11 +1093,13 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
-		return false
+		// CharacterHandler.cpp:843-847: the online-status execs are
+		// fire-and-forget — never a close. Drop; the session stays open.
+		return true
 	}
 	s.debug("world login stage", "stage", "character-online-complete", "guid", guid)
 	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
-		return false
+		return true
 	}
 	s.gameTimeStartedAt = time.Now()
 	// CharacterHandler.cpp:856: pCurrChar->SetInGameTime(GameTime::GetGameTimeMS()):

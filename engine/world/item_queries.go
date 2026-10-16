@@ -117,7 +117,9 @@ func (s *session) handleItemQuerySingle(ctx context.Context, payload []byte) boo
 	entry, err := reader.ReadU32()
 	if err != nil {
 		s.debug("item query rejected", "account", s.accountName, "error", err)
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 	data, err := s.loadItemQueryData(ctx, entry)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -126,7 +128,9 @@ func (s *session) handleItemQuerySingle(ctx context.Context, payload []byte) boo
 	}
 	if err != nil {
 		s.debug("item query failed", "account", s.accountName, "entry", entry, "error", err)
-		return false
+		// HandleItemQuerySingleOpcode (ItemHandler.cpp:316-335) is an in-memory
+		// lookup with no disconnect arm — drop, conn open.
+		return true
 	}
 	s.debug("item query response", "account", s.accountName, "entry", entry, "name", data.Name)
 	return s.write(uint16(protocol.OpcodeSMSG_ITEM_QUERY_SINGLE_RESPONSE), buildItemQueryResponse(data, true), true) == nil

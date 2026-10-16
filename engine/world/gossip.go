@@ -1617,7 +1617,9 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	r := protocol.NewReader(payload)
 	npcGUID, err := r.ReadU64()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 	// NPCHandler.cpp:247-256 (HandleBinderActivateOpcode): dead or
 	// not-in-world players are silently dropped before the interact check.

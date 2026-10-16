@@ -2406,7 +2406,9 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		// Truncated packet: WorldSession::Update catches ByteBufferException and
+		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
+		return true
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true
