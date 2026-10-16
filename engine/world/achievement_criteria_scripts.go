@@ -211,17 +211,48 @@ func checkAchievementCriteriaScript(name string, source, target *session) bool {
 		defer ab.mu.Unlock()
 		return ab.Scores500Disadvantage[teamForRace(source.player.Race)]
 
+	case "achievement_bg_sa_defense_of_ancients": // achievement_scripts.cpp:199-211
+		// BattlegroundSA::CheckAchievementCriteriaMeet(BG_CRITERIA_CHECK_DEFENSE_OF_THE_ANCIENTS):
+		// the player is a defender and no gate has been destroyed
+		// (BattlegroundSA.cpp:1061-1066).
+		if source == nil || source.player == nil {
+			return false
+		}
+		if !sessionInBattlegroundType(source, 9) { // BATTLEGROUND_SA
+			return false
+		}
+		sa := source.server.getOrCreateSAState(battlegroundMapForType(9))
+		if sa == nil {
+			return false
+		}
+		sa.mu.Lock()
+		defer sa.mu.Unlock()
+		return teamForRace(source.player.Race) != sa.Attackers && !sa.GateDestroyed
+
+	case "achievement_not_even_a_scratch": // achievement_scripts.cpp:244-256
+		// BattlegroundSA::CheckAchievementCriteriaMeet(BG_CRITERIA_CHECK_NOT_EVEN_A_SCRATCH):
+		// all of the player's team's demolishers are still alive
+		// (BattlegroundSA.cpp:1061-1066).
+		if source == nil || source.player == nil {
+			return false
+		}
+		if !sessionInBattlegroundType(source, 9) { // BATTLEGROUND_SA
+			return false
+		}
+		sa := source.server.getOrCreateSAState(battlegroundMapForType(9))
+		if sa == nil {
+			return false
+		}
+		sa.mu.Lock()
+		defer sa.mu.Unlock()
+		return sa.DemolishersAlive[teamForRace(source.player.Race)]
+
 	// The remaining registrations are unportable without their Go state:
-	// - achievement_bg_sa_defense_of_ancients / achievement_not_even_a_scratch:
-	//   BattlegroundSA's _allVehiclesAlive / _gateDestroyed (BattlegroundSA.cpp:1040-1049)
-	//   have no Go twin.
 	// - achievement_bg_ic_glaive_grave / achievement_bg_ic_mowed_down /
 	//   achievement_bg_sa_artillery: GetVehicleCreatureBase entry checks; Go has no
 	//   vehicle model. C++ returns false when the checks can't be met; without the
 	//   state, false is the only honest verdict, so these are fail-closed.
-	case "achievement_bg_sa_defense_of_ancients",
-		"achievement_not_even_a_scratch",
-		"achievement_bg_ic_glaive_grave",
+	case "achievement_bg_ic_glaive_grave",
 		"achievement_bg_ic_mowed_down",
 		"achievement_bg_sa_artillery":
 		return false

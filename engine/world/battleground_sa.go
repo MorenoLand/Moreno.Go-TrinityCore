@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -62,7 +63,6 @@ const (
 	SAGameObjectGatePurple  uint32 = 190723 // Gate of the Purple Amethyst
 	SAGameObjectGateAncient uint32 = 192549 // Chamber of Ancient Relics
 	SAGameObjectTitanRelic  uint32 = 192834 // Titan Relic
-	SAGameObjectTitanRelic2 uint32 = 192829 // Titan Relic alternate entry
 
 	// Graveyard Flags
 	// Banners: Right (191306 A / 191305 H), Left (191308 A / 191307 H), Central (191310 A / 191309 H)
@@ -118,6 +118,10 @@ const (
 	SASoundVictoryAlliance       uint32 = 15907
 	SASoundVictoryHorde          uint32 = 15906
 
+	// Spells
+	SASpellEndOfRound  uint32 = 52459 // SPELL_END_OF_ROUND (BattlegroundSA.h:72)
+	SASpellPreparation uint32 = 44521 // SPELL_PREPARATION (Battleground.h:136)
+
 	// Default Gate Health
 	SAGateDefaultMaxHealth uint32 = 100000
 )
@@ -172,9 +176,11 @@ type saBattlegroundState struct {
 	GatesDestroyed       map[uint64]uint32
 	StopTicker           chan struct{}
 	// RoundTwoWarnTimer models BattlegroundSA::PostUpdateImpl's InitSecondRound /
-	// UpdateWaitTimer arm: 5s into the second warmup the "round 2 starts in one
-	// minute" broadcast fires (BG_SA_TEXT_ROUND_TWO_START_ONE_MINUTE); at 30s the
-	// half-minute broadcast fires (BG_SA_TEXT_ROUND_TWO_START_HALF_MINUTE).
+	// UpdateWaitTimer arm (BattlegroundSA.cpp:321-337): 5s into the second warmup
+	// the "round 2 starts in one minute" broadcast fires
+	// (BG_SA_TEXT_ROUND_TWO_START_ONE_MINUTE); while the timer runs the tick
+	// returns early and TotalTime does not advance. At 30s the half-minute
+	// broadcast fires (BG_SA_TEXT_ROUND_TWO_START_HALF_MINUTE).
 	RoundTwoWarnTimer     time.Duration
 	RoundTwoWarned        bool
 	RoundTwoHalfMinWarned bool
@@ -189,7 +195,6 @@ func isSAGameObject(entry uint32) bool {
 		SAGameObjectGatePurple,
 		SAGameObjectGateAncient,
 		SAGameObjectTitanRelic,
-		SAGameObjectTitanRelic2,
 		SAGameObjectFlagRightA,
 		SAGameObjectFlagRightH,
 		SAGameObjectFlagLeftA,
@@ -265,10 +270,11 @@ func (sa *saBattlegroundState) defenders() uint32 {
 	return SATeamAlliance
 }
 
-// canInteractWithObject enforces TrinityCore gate-unlocking prerequisites:
-// - Left and Right flags require Green Gate OR Blue Gate destroyed.
-// - Central flag requires Red Gate OR Purple Gate destroyed.
-// - Titan Relic requires Yellow Gate AND Ancient Gate destroyed.
+// canInteractWithObject enforces TrinityCore gate-unlocking prerequisites.
+// Left and Right flags require Green Gate OR Blue Gate destroyed. The Central
+// flag case falls through into the Left/Right arm, so it also requires Green
+// Gate OR Blue Gate destroyed on top of Red Gate OR Purple Gate. The Titan
+// Relic case falls through both flag arms.
 // Reference: BattlegroundSA::CanInteractWithObject (BattlegroundSA.cpp:737-760).
 func (sa *saBattlegroundState) canInteractWithObject(entry uint32) bool {
 	greenDestroyed := sa.Gates[SAGateGreen].State == SAGateDestroyed
@@ -284,9 +290,9 @@ func (sa *saBattlegroundState) canInteractWithObject(entry uint32) bool {
 		return greenDestroyed || blueDestroyed
 
 	case SAGameObjectFlagCentralA, SAGameObjectFlagCentralH:
-		return redDestroyed || purpleDestroyed
+		return (redDestroyed || purpleDestroyed) && (greenDestroyed || blueDestroyed)
 
-	case SAGameObjectTitanRelic, SAGameObjectTitanRelic2:
+	case SAGameObjectTitanRelic:
 		// Reference: BattlegroundSA::CanInteractWithObject (BattlegroundSA.cpp:737-760):
 		// the TITAN_RELIC case falls through into CENTRAL_FLAG and then LEFT/RIGHT_FLAG,
 		// so the relic needs yellow AND ancient destroyed plus red-or-purple plus
@@ -342,7 +348,7 @@ func (s *Server) handleSAGameObjectUse(ctx context.Context, sess *session, guid 
 			sa.captureGraveyard(s, SACentralCapturableGY, playerTeam, sess.player.Name)
 		}
 
-	case SAGameObjectTitanRelic, SAGameObjectTitanRelic2:
+	case SAGameObjectTitanRelic:
 		if !sa.canInteractWithObject(entry) {
 			return true
 		}
@@ -418,6 +424,11 @@ func (sa *saBattlegroundState) activateTitanRelic(s *Server, sess *session) {
 		sa.RoundTwoHalfMinWarned = false
 		sa.resetObjects()
 		s.sendSAAllWorldStates(sa)
+		// Reference: BattlegroundSA::TitanRelicActivated round-one arm
+		// (BattlegroundSA.cpp:941-942): SPELL_END_OF_ROUND is cast on both teams
+		// after the round swap.
+		s.applyTeamAura(sa.MapID, SATeamAlliance, SASpellEndOfRound)
+		s.applyTeamAura(sa.MapID, SATeamHorde, SASpellEndOfRound)
 
 		s.broadcastBattlegroundMessage(sa.MapID, fmt.Sprintf("Round 1 finished! Round 2 will begin shortly. The %s will now attack!", sa.attackerTeamName()))
 	} else if sa.Status == SAStatusRoundTwo {
@@ -488,6 +499,27 @@ func (s *Server) DamageGate(mapID uint32, gateID uint8, damage uint32, attacker 
 
 		if attacker != nil {
 			sa.GatesDestroyed[attacker.playerGUID]++
+			// Reference: BattlegroundSA::ProcessEvent destroyed arm
+			// (BattlegroundSA.cpp:597-630): the invoker scores the wall and earns
+			// GetBonusHonorFromKill(1), except when the paired gate is already
+			// destroyed (green/blue and red/purple pairs).
+			rewardHonor := true
+			switch gateID {
+			case SAGateGreen:
+				rewardHonor = sa.Gates[SAGateBlue].State != SAGateDestroyed
+			case SAGateBlue:
+				rewardHonor = sa.Gates[SAGateGreen].State != SAGateDestroyed
+			case SAGateRed:
+				rewardHonor = sa.Gates[SAGatePurple].State != SAGateDestroyed
+			case SAGatePurple:
+				rewardHonor = sa.Gates[SAGateRed].State != SAGateDestroyed
+			}
+			if rewardHonor {
+				honor := uint32(math.Ceil(float64(min(bgMaxLevelForMap(s, mapID), 80)) * 1.55))
+				if honor > 0 {
+					attacker.rewardHonorPoints(context.Background(), honor)
+				}
+			}
 		}
 	}
 }
@@ -505,6 +537,21 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 		return
 	}
 
+	// Reference: BattlegroundSA::PostUpdateImpl's InitSecondRound/UpdateWaitTimer
+	// arm (BattlegroundSA.cpp:321-337): while the second-round wait timer runs,
+	// the tick returns early and TotalTime does NOT advance; when it elapses the
+	// "round 2 starts in one minute" broadcast fires and the tick continues.
+	if sa.RoundTwoWarnTimer > 0 {
+		sa.RoundTwoWarnTimer -= delta
+		if sa.RoundTwoWarnTimer > 0 {
+			return
+		}
+		if !sa.RoundTwoWarned {
+			sa.RoundTwoWarned = true
+			s.broadcastBattlegroundMessage(sa.MapID, "Round 2 will begin in one minute!")
+		}
+	}
+
 	sa.TotalTime += delta
 
 	switch sa.Status {
@@ -514,6 +561,7 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 			sa.Status = SAStatusRoundOne
 			sa.TotalTime = 0
 			sa.TimerEnabled = true
+			s.startSARoundTimedAchievement(sa)
 			s.broadcastBattlegroundMessage(sa.MapID, "Round 1 has begun! Destroy the gates and reach the Titan Relic!")
 			s.sendSAAllWorldStates(sa)
 		}
@@ -526,15 +574,9 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 			sa.EndRoundTimer = sa.RoundLength
 		}
 
-		// Reference: BattlegroundSA::PostUpdateImpl's InitSecondRound/UpdateWaitTimer
-		// arm plus the 30s SignaledRoundTwoHalfMin arm (BattlegroundSA.cpp:319-438).
-		if sa.RoundTwoWarnTimer > 0 {
-			sa.RoundTwoWarnTimer -= delta
-			if sa.RoundTwoWarnTimer <= 0 && !sa.RoundTwoWarned {
-				sa.RoundTwoWarned = true
-				s.broadcastBattlegroundMessage(sa.MapID, "Round 2 will begin in one minute!")
-			}
-		}
+		// Reference: BattlegroundSA::PostUpdateImpl's SignaledRoundTwoHalfMin arm
+		// (BattlegroundSA.cpp:319-438): 30s into the second warmup the half-minute
+		// broadcast fires.
 		if !sa.RoundTwoHalfMinWarned && sa.TotalTime >= 30*time.Second {
 			sa.RoundTwoHalfMinWarned = true
 			s.broadcastBattlegroundMessage(sa.MapID, "Round 2 will begin in 30 seconds!")
@@ -544,6 +586,11 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 			sa.Status = SAStatusRoundTwo
 			sa.TotalTime = 0
 			sa.TimerEnabled = true
+			s.startSARoundTimedAchievement(sa)
+			// Reference: BattlegroundSA::PostUpdateImpl second-warmup arm
+			// (BattlegroundSA.cpp:366-367): the Preparation aura cast during the
+			// warmups is removed from every player when round 2 starts.
+			s.removeSAAuraFromMap(sa.MapID, SASpellPreparation)
 			s.broadcastBattlegroundMessage(sa.MapID, "Round 2 has begun! You must beat the first round's time to claim victory!")
 			s.sendSAAllWorldStates(sa)
 		}
@@ -553,10 +600,13 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 		// Check round 1 timer expiration (Defenders held for full 10m)
 		if sa.TotalTime >= sa.RoundLength {
 			// Reference: BattlegroundSA::PostUpdateImpl round-one expiry arm
-			// (BattlegroundSA.cpp:319-438): RoundScores[0].winner = Attackers (the
-			// round-one attackers, who failed to reach the relic in time), then the
-			// roles swap and the second warmup starts with the 5s round-two warning
-			// timer armed (UpdateWaitTimer = 5000, InitSecondRound = true).
+			// (BattlegroundSA.cpp:319-438): SPELL_END_OF_ROUND is cast on both
+			// teams, RoundScores[0].winner = Attackers (the round-one attackers,
+			// who failed to reach the relic in time), then the roles swap and the
+			// second warmup starts with the 5s round-two warning timer armed
+			// (UpdateWaitTimer = 5000, InitSecondRound = true).
+			s.applyTeamAura(sa.MapID, SATeamAlliance, SASpellEndOfRound)
+			s.applyTeamAura(sa.MapID, SATeamHorde, SASpellEndOfRound)
 			sa.RoundScores[0].Winner = sa.Attackers
 			sa.RoundScores[0].Time = sa.RoundLength
 
@@ -577,6 +627,10 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 		s.sendSATime(sa)
 		// Check round 2 timer expiration
 		if sa.TotalTime >= sa.EndRoundTimer {
+			// Reference: BattlegroundSA::PostUpdateImpl round-two expiry arm
+			// (BattlegroundSA.cpp:319-438): SPELL_END_OF_ROUND on both teams.
+			s.applyTeamAura(sa.MapID, SATeamAlliance, SASpellEndOfRound)
+			s.applyTeamAura(sa.MapID, SATeamHorde, SASpellEndOfRound)
 			sa.RoundScores[1].Winner = sa.defenders()
 			sa.RoundScores[1].Time = sa.RoundLength
 
@@ -589,6 +643,45 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 				s.endSA(sa, int8(sa.RoundScores[1].Winner))
 			}
 		}
+	}
+}
+
+// startSARoundTimedAchievement mirrors Battleground::StartTimedAchievement
+// (Battleground.cpp:1782-1787) as called from BattlegroundSA::PostUpdateImpl
+// (BattlegroundSA.cpp:349,374): every player in the BG starts the round's timed
+// achievement (23748 when Alliance attacks, 21702 when Horde attacks).
+func (s *Server) startSARoundTimedAchievement(sa *saBattlegroundState) {
+	eventID := uint32(23748)
+	if sa.Attackers == SATeamHorde {
+		eventID = 21702
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == sa.MapID {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.startTimedAchievement(timedTypeEvent, eventID)
+	}
+}
+
+// removeSAAuraFromMap removes an aura from every worldReady session on the SA
+// map: the Go analog of the per-player RemoveAurasDueToSpell loop in
+// BattlegroundSA::PostUpdateImpl (BattlegroundSA.cpp:366-367).
+func (s *Server) removeSAAuraFromMap(mapID, spellID uint32) {
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.removeAura(spellID)
 	}
 }
 
@@ -809,23 +902,27 @@ func (s *Server) sendSAInitialWorldStates(sess *session) {
 }
 
 func (s *Server) sendSAInitialWorldStatesToSession(sa *saBattlegroundState, sess *session) {
+	// Reference: BattlegroundSA::FillInitialWorldStates (BattlegroundSA.cpp:446-475).
+	// Wire order matches C++ exactly: gates ancient, yellow, green, blue, red,
+	// purple; bonus timer; attack flags; enable timer + timer digits (0, sent on
+	// first update); graveyards; tokens.
 	allyAttacks := boolToUint32(sa.Attackers == SATeamAlliance)
 	hordeAttacks := boolToUint32(sa.Attackers == SATeamHorde)
 
 	// Gates
-	for i := 0; i < SAMaxGates; i++ {
+	for _, i := range [SAMaxGates]uint8{SAGateAncient, SAGateYellow, SAGateGreen, SAGateBlue, SAGateRed, SAGatePurple} {
 		sess.sendWorldState(saGates[i].WorldState, uint32(sa.Gates[i].State))
 	}
 
-	// Roles & Tokens
-	sess.sendWorldState(SAWorldStateAllyAttacks, allyAttacks)
+	sess.sendWorldState(SAWorldStateBonusTimer, 0)
 	sess.sendWorldState(SAWorldStateHordeAttacks, hordeAttacks)
-	sess.sendWorldState(SAWorldStateRightAttTokenAll, allyAttacks)
-	sess.sendWorldState(SAWorldStateLeftAttTokenAll, allyAttacks)
-	sess.sendWorldState(SAWorldStateRightAttTokenHrd, hordeAttacks)
-	sess.sendWorldState(SAWorldStateLeftAttTokenHrd, hordeAttacks)
-	sess.sendWorldState(SAWorldStateHordeDefenceToken, allyAttacks)
-	sess.sendWorldState(SAWorldStateAllianceDefenceToken, hordeAttacks)
+	sess.sendWorldState(SAWorldStateAllyAttacks, allyAttacks)
+
+	// Time will be sent on first update...
+	sess.sendWorldState(SAWorldStateEnableTimer, boolToUint32(sa.TimerEnabled))
+	sess.sendWorldState(SAWorldStateTimerMins, 0)
+	sess.sendWorldState(SAWorldStateTimerSecTens, 0)
+	sess.sendWorldState(SAWorldStateTimerSecDecs, 0)
 
 	// Graveyards
 	sess.sendWorldState(SAWorldStateRightGYHorde, boolToUint32(sa.Graveyards[SARightCapturableGY] == SATeamHorde))
@@ -835,9 +932,13 @@ func (s *Server) sendSAInitialWorldStatesToSession(sa *saBattlegroundState, sess
 	sess.sendWorldState(SAWorldStateLeftGYAlliance, boolToUint32(sa.Graveyards[SALeftCapturableGY] == SATeamAlliance))
 	sess.sendWorldState(SAWorldStateCenterGYAlliance, boolToUint32(sa.Graveyards[SACentralCapturableGY] == SATeamAlliance))
 
-	// Timers
-	sess.sendWorldState(SAWorldStateEnableTimer, boolToUint32(sa.TimerEnabled))
-	sess.sendWorldState(SAWorldStateBonusTimer, 0)
+	// Tokens
+	sess.sendWorldState(SAWorldStateHordeDefenceToken, allyAttacks)
+	sess.sendWorldState(SAWorldStateAllianceDefenceToken, hordeAttacks)
+	sess.sendWorldState(SAWorldStateLeftAttTokenHrd, hordeAttacks)
+	sess.sendWorldState(SAWorldStateRightAttTokenHrd, hordeAttacks)
+	sess.sendWorldState(SAWorldStateRightAttTokenAll, allyAttacks)
+	sess.sendWorldState(SAWorldStateLeftAttTokenAll, allyAttacks)
 }
 
 func boolToUint32(b bool) uint32 {

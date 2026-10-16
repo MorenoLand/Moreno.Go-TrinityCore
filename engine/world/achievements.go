@@ -1130,6 +1130,7 @@ func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
 // second deadline; expiry resets the criteria progress, notifies the client
 // with SMSG_CRITERIA_DELETED, and removes the persisted row.
 const (
+	timedTypeEvent       = 1
 	timedTypeQuest       = 2
 	timedTypeSpellCast   = 5
 	timedTypeSpellTarget = 6

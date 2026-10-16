@@ -220,6 +220,26 @@ type wgGateState struct {
 	Name       string
 }
 
+// wgWallState mirrors the BATTLEFIELD_WG_OBJECTTYPE_WALL entries of
+// WGGameObjectBuilding (BattlefieldWG.cpp:88-108): the 20 keep walls plus the
+// 3 walls with passage, in spawn-array order. Walls are defender-team buildings
+// with no tower warning texts; C++ emits their worldstates in the
+// BuildingsInZone block of FillInitialWorldStates ahead of the towers.
+type wgWallState struct {
+	Entry      uint32
+	WorldState uint32
+	State      uint8 // 0: Intact, 1: Damaged, 2: Destroyed
+}
+
+var wgWallBuildings = [][2]uint32{
+	{190219, 3749}, {190220, 3750}, {191795, 3764}, {191796, 3772},
+	{191799, 3762}, {191800, 3766}, {191801, 3770}, {191802, 3751},
+	{191803, 3752}, {191804, 3767}, {191806, 3769}, {191807, 3759},
+	{191808, 3760}, {191809, 3761}, {190369, 3753}, {190370, 3758},
+	{190371, 3754}, {190372, 3757}, {190374, 3755}, {190376, 3756},
+	{191797, 3765}, {191798, 3771}, {191805, 3768},
+}
+
 // Wintergrasp battlefield state
 type wgBattlegroundState struct {
 	mu sync.Mutex
@@ -239,6 +259,7 @@ type wgBattlegroundState struct {
 	Workshops         [WGMaxWorkshops]wgWorkshopState
 	Towers            [WGMaxTowers]wgTowerState
 	Gates             [2]wgGateState // 0: Fortress Gate, 1: Vault Gate
+	Walls             []wgWallState
 	RelicInteractible bool
 	BrokenSouthTowers uint32
 
@@ -248,7 +269,7 @@ type wgBattlegroundState struct {
 	MaxVehiclesHorde    uint32
 
 	TenacityTeam  int8 // -1: neutral, 0: Alliance, 1: Horde
-	TenacityStack uint32
+	TenacityStack int32
 
 	PlayersInWar      map[uint64]uint32 // playerGUID -> team
 	PlayersInQueue    map[uint64]uint32 // playerGUID -> team; mirrors Battlefield::m_PlayersInQueue[team] (Battlefield.h)
@@ -318,6 +339,10 @@ func (wg *wgBattlegroundState) initGates() {
 	wg.Gates = [2]wgGateState{
 		{Entry: WGGameObjectFortressGate, WorldState: WGWorldStateFortressGate, State: 0, Name: "Wintergrasp Fortress Gate"},
 		{Entry: WGGameObjectVaultGate, WorldState: WGWorldStateVaultGate, State: 0, Name: "Vault of Archavon Gate"},
+	}
+	wg.Walls = make([]wgWallState, len(wgWallBuildings))
+	for i, b := range wgWallBuildings {
+		wg.Walls[i] = wgWallState{Entry: b[0], WorldState: b[1], State: 0}
 	}
 	wg.RelicInteractible = false
 	wg.BrokenSouthTowers = 0
@@ -414,6 +439,7 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	wg.EndTime = time.Now().Add(WGNoWarDuration)
 
 	// Reward players
+	// Reference: BattlefieldWG::OnBattleEnd (BattlefieldWG.cpp:651-760).
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil {
@@ -425,12 +451,17 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 			pTeam = teamForRace(sess.player.Race)
 		}
 
-		// Remove wartime auras
+		// Remove wartime auras (BattlefieldWG::RemoveAurasFromPlayer,
+		// BattlefieldWG.cpp:1049-1059)
 		sess.removeAura(WGSpellRecruit)
 		sess.removeAura(WGSpellCorporal)
 		sess.removeAura(WGSpellLieutenant)
 		sess.removeAura(WGSpellTenacity)
 		sess.removeAura(WGSpellTowerControl)
+		sess.removeAura(WGSpellSpiritualImmunity)
+		sess.removeAura(WGSpellGreatHonor)
+		sess.removeAura(WGSpellGreaterHonor)
+		sess.removeAura(WGSpellGreatestHonor)
 
 		if pTeam == winningTeam {
 			sess.applyAura(WGSpellEssenceOfWintergrasp)
@@ -439,6 +470,14 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 				sess.completeAchievement(WGAchievementWinWG)
 				if !endByTimer && remainingBattleTime <= 10*time.Second {
 					sess.completeAchievement(WGAchievementWinWGTimer10)
+				}
+				// Complete victory quests (Player::AreaExploredOrEventHappens,
+				// BattlefieldWG.cpp:719-720)
+				for _, questID := range [2]uint32{WGQuestVictoryAlliance, WGQuestVictoryHorde} {
+					if status, _ := sess.characterQuestStatus(context.Background(), questID); status == questStatusIncomplete {
+						sess.sendQuestComplete(questID)
+						sess.completeQuest(context.Background(), questID)
+					}
 				}
 			}
 			if pTeam == WGTeamAlliance {
@@ -451,10 +490,17 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		} else if pTeam == losingTeam {
 			sess.removeAura(WGSpellEssenceOfWintergrasp)
 			sess.applyAura(WGSpellDefeatReward)
-			if pTeam == WGTeamAlliance {
-				sess.removeAura(WGSpellAllianceControlPhaseShift)
-			} else {
-				sess.removeAura(WGSpellHordeControlPhaseShift)
+			if !endByTimer {
+				// On a relic capture every player swaps to the new defender's
+				// control phase shift (BattlefieldWG.cpp:747-757); on a
+				// successful defense the shifts are untouched.
+				if winningTeam == WGTeamAlliance {
+					sess.removeAura(WGSpellHordeControlPhaseShift)
+					sess.applyAura(WGSpellAllianceControlPhaseShift)
+				} else {
+					sess.removeAura(WGSpellAllianceControlPhaseShift)
+					sess.applyAura(WGSpellHordeControlPhaseShift)
+				}
 			}
 		}
 	}
@@ -614,6 +660,19 @@ func (s *Server) DamageWGBuilding(entry uint32) bool {
 	wg.mu.Lock()
 	defer wg.mu.Unlock()
 
+	// Reference: BfWGGameObjectBuilding::Damaged (BattlefieldWG.cpp:1453-1475):
+	// walls are defender-team buildings with no tower warning texts.
+	for i := range wg.Walls {
+		if wg.Walls[i].Entry == entry {
+			if wg.Walls[i].State == 0 {
+				wg.Walls[i].State = 1 // Damaged
+				s.updateWGWorldState(wg.Walls[i].WorldState, uint32(wgBuildingState(1, wg.DefenderTeam)))
+				return true
+			}
+			return false
+		}
+	}
+
 	for i := range wg.Towers {
 		if wg.Towers[i].Entry == entry {
 			if wg.Towers[i].State == 0 {
@@ -649,6 +708,20 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 	wg.mu.Lock()
 	defer wg.mu.Unlock()
 
+	// Reference: BfWGGameObjectBuilding::Destroyed (BattlefieldWG.cpp:1477-1509):
+	// walls are defender-team buildings with no tower warning texts and no
+	// tower counters.
+	for i := range wg.Walls {
+		if wg.Walls[i].Entry == entry {
+			if wg.Walls[i].State != 2 {
+				wg.Walls[i].State = 2 // Destroyed
+				s.updateWGWorldState(wg.Walls[i].WorldState, uint32(wgBuildingState(2, wg.DefenderTeam)))
+				return true
+			}
+			return false
+		}
+	}
+
 	for i := range wg.Towers {
 		if wg.Towers[i].Entry == entry {
 			if wg.Towers[i].State != 2 {
@@ -674,13 +747,18 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 					}
 					s.sessionsMu.RUnlock()
 
-					// Tower-destroy achievement credit to defenders in war.
+					// Tower-destroy achievement and quest credit to defenders in war.
+					// Reference: BattlefieldWG::UpdatedDestroyedTowerCount
+					// (BattlefieldWG.cpp:1204-1245): defenders gain a Tower Control
+					// stack, KilledMonsterCredit(QUEST_CREDIT_TOWERS_DESTROYED)
+					// and the tower-destroy achievement.
 					for guid, team := range wg.PlayersInWar {
 						if team != wg.DefenderTeam {
 							continue
 						}
 						if sess := s.findSessionByGUID(guid); sess != nil {
 							sess.completeAchievement(WGAchievementTowerDestroy)
+							sess.creditQuestKills(context.Background(), WGQuestCreditTowersDestroyed, 0)
 						}
 					}
 
@@ -776,31 +854,35 @@ func (s *Server) UpdateWGTenacity() {
 		// C++ divides the integer counts FIRST (uint32 division), then casts
 		// to float: (float(hordePlayers / alliancePlayers) - 1) * 4.
 		if allyCount < hordeCount {
-			newStack = int32(float32(hordeCount/allyCount)-1.0) * 4
+			newStack = int32((float32(hordeCount/allyCount) - 1.0) * 4)
 		} else if hordeCount < allyCount {
 			newStack = int32((1.0 - float32(allyCount/hordeCount)) * 4.0)
 		}
 	}
 
-	if newStack == int32(wg.TenacityStack) && ((newStack > 0 && wg.TenacityTeam == 0) || (newStack < 0 && wg.TenacityTeam == 1) || (newStack == 0 && wg.TenacityTeam == -1)) {
+	// Reference: BattlefieldWG::UpdateTenacity (BattlefieldWG.cpp:1301-1312):
+	// the stored stack is the raw uncapped value; only the applied aura is
+	// capped at 20.
+	if newStack == wg.TenacityStack {
 		return
 	}
+	wg.TenacityStack = newStack
 
 	var teamToBuff int8 = -1
-	absStack := uint32(0)
+	absStack := newStack
+	if absStack < 0 {
+		absStack = -absStack
+	}
 	if newStack > 0 {
 		teamToBuff = 0 // Alliance
-		absStack = uint32(newStack)
 	} else if newStack < 0 {
 		teamToBuff = 1 // Horde
-		absStack = uint32(-newStack)
 	}
 	if absStack > 20 {
 		absStack = 20
 	}
 
 	wg.TenacityTeam = teamToBuff
-	wg.TenacityStack = absStack
 
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
@@ -1190,6 +1272,11 @@ func (s *Server) sendWGInitWorldStatesTo(sess *session) {
 	}
 	wg := s.getOrCreateWGState()
 
+	// Reference: BattlefieldWG::FillInitialWorldStates (BattlefieldWG.cpp:1155-1181).
+	// Wire order matches C++ exactly: stats, attacker/defender, active/show,
+	// the two clocks, vehicle counts, the BuildingsInZone block (walls, keep
+	// towers, passage walls, south towers, gates), then the workshops in
+	// vector order (NE, NW, SE, SW, Keep West, Keep East).
 	worldStates := [][2]int32{
 		{int32(WGWorldStateDefendedA), int32(wg.StatsDefA)},
 		{int32(WGWorldStateDefendedH), int32(wg.StatsDefH)},
@@ -1199,19 +1286,22 @@ func (s *Server) sendWGInitWorldStatesTo(sess *session) {
 		{int32(WGWorldStateDefender), int32(wg.DefenderTeam)},
 		{int32(WGWorldStateActive), boolToInt32(!wg.IsActive)},
 		{int32(WGWorldStateShowWorldState), boolToInt32(wg.IsActive)},
-		{int32(WGWorldStateVehicleH), int32(wg.VehiclesHorde)},
-		{int32(WGWorldStateMaxVehicleH), int32(wg.MaxVehiclesHorde)},
-		{int32(WGWorldStateVehicleA), int32(wg.VehiclesAlliance)},
-		{int32(WGWorldStateMaxVehicleA), int32(wg.MaxVehiclesAlliance)},
 	}
 
 	clockVal := int32(time.Now().Unix() + int64(wg.Timer.Seconds()))
 	worldStates = append(worldStates, [2]int32{int32(WGWorldStateClock1), clockVal})
 	worldStates = append(worldStates, [2]int32{int32(WGWorldStateClock2), clockVal})
 
-	// Workshop states
-	for _, ws := range wg.Workshops {
-		worldStates = append(worldStates, [2]int32{int32(ws.WorldState), int32(wgBuildingState(0, ws.TeamControl))})
+	worldStates = append(worldStates,
+		[2]int32{int32(WGWorldStateVehicleH), int32(wg.VehiclesHorde)},
+		[2]int32{int32(WGWorldStateMaxVehicleH), int32(wg.MaxVehiclesHorde)},
+		[2]int32{int32(WGWorldStateVehicleA), int32(wg.VehiclesAlliance)},
+		[2]int32{int32(WGWorldStateMaxVehicleA), int32(wg.MaxVehiclesAlliance)},
+	)
+
+	// Wall states (defender-team buildings, no tower warnings)
+	for _, w := range wg.Walls {
+		worldStates = append(worldStates, [2]int32{int32(w.WorldState), int32(wgBuildingState(w.State, wg.DefenderTeam))})
 	}
 
 	// Tower states
@@ -1222,6 +1312,12 @@ func (s *Server) sendWGInitWorldStatesTo(sess *session) {
 	// Gate states
 	for _, gt := range wg.Gates {
 		worldStates = append(worldStates, [2]int32{int32(gt.WorldState), int32(wgBuildingState(gt.State, wg.DefenderTeam))})
+	}
+
+	// Workshop states
+	for _, id := range [WGMaxWorkshops]uint8{WGWorkshopNE, WGWorkshopNW, WGWorkshopSE, WGWorkshopSW, WGWorkshopKeepWest, WGWorkshopKeepEast} {
+		ws := &wg.Workshops[id]
+		worldStates = append(worldStates, [2]int32{int32(ws.WorldState), int32(wgBuildingState(0, ws.TeamControl))})
 	}
 
 	packet := protocol.NewBuffer(16 + len(worldStates)*8)
