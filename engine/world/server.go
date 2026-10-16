@@ -3492,7 +3492,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GROUP_CANCEL), uint32(protocol.OpcodeCMSG_TELEPORT_TO_UNIT), uint32(protocol.OpcodeCMSG_UNUSED5):
-			if !state.authed || !state.playerLoaded {
+			if !state.authed {
 				return
 			}
 			state.debug("reference logged-in no-op", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))

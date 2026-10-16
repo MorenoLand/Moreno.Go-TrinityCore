@@ -1065,6 +1065,13 @@ func (s *Server) lfgBootVote(ctx context.Context, voter *session, accept bool) {
 		s.groupsMu.Unlock()
 		return
 	}
+	if _, ok := boot.votes[voter.playerGUID]; !ok {
+		// LFGMgr::UpdateBoot (LFGMgr.cpp:1452): std::map::operator[] value-inserts
+		// LFG_ANSWER_DENY (0) for a voter missing from the boot table (e.g. joined
+		// the group after the vote started); the cheat check then discards the
+		// vote, but the inserted entry counts in SMSG_LFG_BOOT_PROPOSAL_UPDATE.
+		boot.votes[voter.playerGUID] = LFGAnswerDeny
+	}
 	if boot.votes[voter.playerGUID] != LFGAnswerPending { // cheat check: no double vote
 		s.groupsMu.Unlock()
 		return
@@ -1737,6 +1744,7 @@ func (s *session) handleLfdPlayerLockInfoRequest(ctx context.Context, payload []
 
 	bufSize := 5 + len(randomDungeons)*22 + len(lockedDungeons)*8
 	buf := protocol.NewBuffer(bufSize)
+	sort.Slice(randomDungeons, func(i, j int) bool { return randomDungeons[i].Entry() < randomDungeons[j].Entry() })
 	buf.WriteU8(uint8(len(randomDungeons)))
 	for _, rd := range randomDungeons {
 		buf.WriteU32(rd.Entry())
@@ -1927,13 +1935,16 @@ func (s *session) writeLFGRandomDungeonReward(ctx context.Context, buf *protocol
 // handleLfgProposalResult processes CMSG_LFG_PROPOSAL_RESULT (0x362).
 // Reference: WorldSession::HandleLfgProposalResultOpcode (LFGHandler.cpp:68).
 func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) bool {
+	if s.playerGUID == 0 {
+		return true
+	}
 	if len(payload) < 5 {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	proposalID, _ := r.ReadU32()
 	acceptVal, _ := r.ReadU8()
-	accept := acceptVal != 0
+	accept := int8(acceptVal) > 0
 	s.debug("lfg proposal result", "account", s.accountName, "proposal", proposalID, "accept", accept)
 
 	if s.server == nil || s.server.Features == nil || s.server.Features.LFG == nil {
@@ -2202,15 +2213,20 @@ func (s *session) handleSearchLfgLeave(ctx context.Context, payload []byte) bool
 // handleSetLfgComment processes CMSG_SET_LFG_COMMENT (0x366).
 // Reference: WorldSession::HandleLfgSetCommentOpcode (LFGHandler.cpp:122).
 func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool {
+	if s.playerGUID == 0 {
+		return true
+	}
 	r := protocol.NewReader(payload)
-	comment, _ := r.ReadCString()
+	comment, err := r.ReadCString()
+	if err != nil {
+		return true
+	}
 	if s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
 		lfg := s.server.Features.LFG
 		lfg.mu.Lock()
-		if entry, ok := lfg.queue[s.playerGUID]; ok {
-			entry.Comment = comment
-			lfg.queue[s.playerGUID] = entry
-		}
+		entry := lfg.queue[s.playerGUID]
+		entry.Comment = comment
+		lfg.queue[s.playerGUID] = entry
 		lfg.mu.Unlock()
 	}
 	s.debug("lfg set comment", "account", s.accountName, "comment", comment)

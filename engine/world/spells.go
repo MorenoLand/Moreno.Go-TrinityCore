@@ -29697,6 +29697,7 @@ func (s *session) handleCancelMountAura(payload []byte) bool {
 	if s.player.MountDisplayID != 0 {
 		s.player.MountDisplayID = 0
 		s.sendPlayerMountUpdate()
+		s.sendPlayerCollisionHeight()
 		s.sendPlayerDismount()
 	}
 	return true
@@ -29737,7 +29738,7 @@ func (s *session) handleCancelTempEnchantment(ctx context.Context, payload []byt
 	r := protocol.NewReader(payload)
 	eslot, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -29745,7 +29746,8 @@ func (s *session) handleCancelTempEnchantment(ctx context.Context, payload []byt
 	}
 	// ItemHandler.cpp:1151 — applies only to equipped items
 	// (Player::IsEquipmentPos(INVENTORY_SLOT_BAG_0, eslot), bag 0 slots < 19).
-	if eslot >= uint32(equipSlotEnd) {
+	slot8 := uint8(eslot)
+	if slot8 >= equipSlotEnd {
 		return true
 	}
 	var instanceGUID int64
@@ -29754,7 +29756,7 @@ func (s *session) handleCancelTempEnchantment(ctx context.Context, payload []byt
 		FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
-		s.playerGUID, eslot).Scan(&instanceGUID, &enchStr)
+		s.playerGUID, slot8).Scan(&instanceGUID, &enchStr)
 	if err != nil || instanceGUID == 0 {
 		return true
 	}
@@ -29768,11 +29770,10 @@ func (s *session) handleCancelTempEnchantment(ctx context.Context, payload []byt
 	if tempID == 0 {
 		return true
 	}
-	// Player::ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, false) +
-	// item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT): zero the slot's three
-	// fields, then recompute the equipped stat mods (syncEquipmentCache is
-	// the same call the imbue path makes after writeItemEnchantmentSlot).
-	s.writeItemEnchantmentSlot(ctx, uint64(instanceGUID), 1, 0, 0)
+	// ItemHandler.cpp:1162 — the handler only calls ApplyEnchantment(item,
+	// TEMP_ENCHANTMENT_SLOT, false); it does NOT ClearEnchantment, so the
+	// enchantment fields stay as stored. Recompute the equipped stat mods
+	// with the enchant's effects removed.
 	s.syncEquipmentCache(ctx)
 	return true
 }
