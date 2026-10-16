@@ -29,7 +29,9 @@
 -- precedent). C++ has no JustEngagedWith override for Thaddius —
 -- SAY_AGGRO (1) fires from EVENT_TRANSITION_3, not from combat start —
 -- so no event 1 handler here. There are no modelable timers:
--- EVENT_SHIFT is DoCastAOE (no bridge), and EVENT_CHAIN /
+-- EVENT_SHIFT is DoCastAOE (bridged as self-cast per the boss_ai.go
+-- DoCastAOE lowering — selin_fireheart / mr_smite precedent), and
+-- EVENT_CHAIN /
 -- EVENT_BERSERK are scheduled only from EVENT_TRANSITION_3, which
 -- belongs to the unbridged phase machine (gothik's EVENT_BOLT
 -- trigger-blocked precedent — porting them from combat start would
@@ -78,8 +80,9 @@
 -- SAY_AGGRO rides the unportable leg (vortex — not ported orphaned);
 -- EVENT_ENABLE_BALL_LIGHTNING / EVENT_ENGAGE — no react-state /
 -- phase bridges; EVENT_SHIFT — CastStop + DoCastAOE(SPELL_POLARITY_
--- SHIFT 28089) + the EVENT_SHIFT_TALK/EVENT_SHIFT schedules — no
--- DoCastAOE bridge (terestian/shazzrah precedent); EVENT_SHIFT_TALK
+-- SHIFT 28089) + the EVENT_SHIFT_TALK/EVENT_SHIFT schedules —
+-- DoCastAOE is bridged as self-cast, but the arm rides the unbridged
+-- EVENT_TRANSITION_3 phase-machine schedule; EVENT_SHIFT_TALK
 -- — Talk(SAY_ELECT 3) + Talk(EMOTE_POLARITY_SHIFTED 6) — rides the
 -- unportable leg (vortex); EVENT_CHAIN — DoCastVictim(SPELL_CHAIN_
 -- LIGHTNING 28167), 10s/20s init, randtime(10s,20s) repeat with the

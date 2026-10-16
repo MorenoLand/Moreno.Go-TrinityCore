@@ -37,12 +37,14 @@
 -- motion-master bridge.
 -- boss_saviana_ragefire UpdateAI — Talk(EMOTE_ENRAGED 2) +
 -- EVENT_ENRAGE ported 2026-10-13 on the maiden CreateLuaEvent
--- convention (see below); the EVENT_FLIGHT
--- / EVENT_CONFLAGRATION / EVENT_AIR_MOVEMENT / EVENT_LAND_GROUND
--- DoCastSelf / DoCastVictim / MoveTakeoff / MovePoint / MoveLand /
--- events.Repeat legs have no-cast / no-motion-master / no-timer
--- bridges; the EnterEvadeMode _DespawnAtEvade() leg has no
--- evade-model bridge.
+-- convention (see below); the EVENT_FLIGHT / EVENT_AIR_MOVEMENT /
+-- EVENT_LAND_GROUND legs ride the MotionMaster (no motion-master
+-- bridge) and EVENT_CONFLAGRATION (:173 — DoCastSelf(SPELL_CONFLA-
+-- GRATION 74452, true)) stays out because it is scheduled only from
+-- MovementInform(POINT_FLIGHT) (:113): an air-phase-gated cast behind
+-- the unbridged flight machine (the gothik precedent) — the cast and
+-- timer bridges exist, the phase machine is the blocker; the
+-- EnterEvadeMode _DespawnAtEvade() leg has no evade-model bridge.
 -- spell_saviana_conflagration_init (74452) — SpellScript:
 -- FilterTargets (OnObjectAreaTargetSelect, EFFECT_0,
 -- TARGET_UNIT_SRC_AREA_ENEMY; remove non-players; RandomResize
