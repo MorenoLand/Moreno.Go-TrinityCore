@@ -6517,7 +6517,10 @@ func (s *session) handleSetFactionCheat(ctx context.Context, payload []byte) boo
 // handleWorldTeleport processes CMSG_WORLD_TELEPORT (0x008).
 // Reference: WorldSession::HandleWorldTeleportOpcode (MiscHandler.cpp:1070).
 func (s *session) handleWorldTeleport(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
+	// WorldPackets::Misc::WorldTeleport::Read (MiscPackets.cpp:197): Time u32
+	// + MapID u32 + Pos XYZ + Facing = 24 bytes; a short packet fails
+	// deserialization server-side, so the gate is the full 24.
+	if !s.playerLoaded || s.player == nil || len(payload) < 24 {
 		return true
 	}
 

@@ -2034,7 +2034,7 @@ func (s *session) loadCorpse(ctx context.Context) (corpseRecord, bool) {
 // handleReclaimCorpse mirrors WorldSession::HandleReclaimCorpse: a ghost in
 // range of its own resurrectable corpse after the reclaim delay elapses is
 // resurrected (half health/mana, full in battlegrounds) and the corpse is
-// turned into bones. The arena guard has no Go arena system yet.
+// turned into bones. Arenas block the reclaim via battlegroundTypeForMap.
 func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	// MiscPackets.cpp:229: _worldPacket >> CorpseGUID — raw 8-byte read.
@@ -2050,6 +2050,16 @@ func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool 
 	if s.player.PlayerFlags&playerFlagGhost == 0 {
 		return true
 	}
+	// MiscHandler.cpp:581-583: no corpse reclaim in arenas. Player::InArena()
+	// (Player.cpp:23647) == the active Battleground template isArena();
+	// battlegroundTypeForMap derives the same template property from the BG
+	// map (arena maps 559/562/572/617/618), and bgData.InstanceID != 0 marks
+	// a session inside a BG instance.
+	if s.bgData.InstanceID != 0 {
+		if _, _, isArena, ok := battlegroundTypeForMap(s.player.Map); ok && isArena {
+			return true
+		}
+	}
 	corpse, ok := s.loadCorpse(ctx)
 	if !ok {
 		return true
@@ -2064,8 +2074,8 @@ func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool 
 	// WorldSession::HandleReclaimCorpse (MiscHandler.cpp:576-603): battleground
 	// corpse reclaims resurrect at full health/mana (ResurrectPlayer(1.0f)),
 	// everywhere else at half. InBattleground() is the session BG instance id
-	// (Player.h:1906); the arena reclaim block stays documented unbridged (no
-	// Go arena system).
+	// (Player.h:1906); the arena block is handled above via
+	// battlegroundTypeForMap.
 	restore := float32(0.5)
 	if s.bgData.InstanceID != 0 {
 		restore = 1.0
@@ -2398,10 +2408,12 @@ func (s *session) inBattlegroundWaveMap() bool {
 }
 
 // handleAreaSpiritHealerQuery mirrors WorldSession::HandleAreaSpiritHealerQueryOpcode
-// (MiscHandler.cpp:1459): the creature must exist and offer spirit service
-// (== GetMap()->GetCreature + IsSpiritService; C++ performs no interact/distance
-// check here). The time packet is answered only in a battleground context —
-// C++ sends it only via the live Battleground / Battlefield, otherwise silence.
+// (MiscHandler.cpp:1459): the creature must exist on the player's map and offer
+// spirit service (== GetMap()->GetCreature + IsSpiritService; C++ performs no
+// interact/distance check here). The existence gate is luaCreature — spirit
+// healers never enter the motion system. The time packet is answered only in
+// a battleground context — C++ sends it only via the live Battleground /
+// Battlefield, otherwise silence.
 func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
@@ -2411,6 +2423,14 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 		return true
 	}
 	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	// MiscHandler.cpp:1466-1472: GetMap()->GetCreature(guid) must resolve —
+	// a fabricated spirit-healer guid is silently dropped. Spirit healers
+	// are excluded from the motion system (creaturemotion.go spawn filter),
+	// so luaCreature — the static-spawn resolver on the player's map, same
+	// one the gossip path uses — is the existence gate here.
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.luaCreature(ctx, guid) == nil {
 		return true
 	}
 	if !s.creatureIsSpiritService(ctx, guid, npcFlagSpiritService) {

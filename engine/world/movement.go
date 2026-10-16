@@ -230,6 +230,13 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed movement", "error", err)
 		return true
 	}
+	// MiscHandler.cpp:1393: the trailing unk2 float is skipped BEFORE the
+	// flag copy — a packet truncated here throws in C++ and the flags are
+	// never applied, so a short read must drop without copying.
+	if _, err := b.ReadF32(); err != nil {
+		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed unk2")
+		return true
+	}
 	// The copied flags come from the sanitizing ReadMovementInfo in C++, so
 	// the ack runs the same anti-cheat pass before the copy.
 	info.Flags &^= movementRoot

@@ -30321,7 +30321,15 @@ func (s *session) handleFarSight(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if payload[0] != 0 {
-		if s.server.findDynamicSpellObject(s.player.FarsightGUID) == nil {
+		// Player::GetViewpoint (Player.cpp:24684) resolves PLAYER_FARSIGHT via
+		// ObjectAccessor::GetObjectByTypeMask with TYPEMASK_SEER
+		// (ObjectGuid.h:56 = PLAYER|UNIT|DYNAMICOBJECT): bind sight stores a
+		// unit GUID here, so the dynamic-object lookup alone false-negatives
+		// and misfires the non-existing-seer debug arm. Creature motions and
+		// player sessions complete the mask.
+		if s.server.findDynamicSpellObject(s.player.FarsightGUID) == nil &&
+			s.findCreatureMotion(s.player.FarsightGUID) == nil &&
+			s.server.findSessionByGUID(s.player.FarsightGUID) == nil {
 			s.debug("far sight: requests non-existing seer", "account", s.accountName, "farsight", s.player.FarsightGUID)
 		}
 	}
