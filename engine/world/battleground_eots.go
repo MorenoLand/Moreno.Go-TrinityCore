@@ -30,6 +30,13 @@ const (
 
 	EOTSSpellNetherstormFlag uint32 = 34976
 
+	// Objective ID credited by BattlegroundEY::UpdatePlayerScore on
+	// SCORE_FLAG_CAPTURES (BattlegroundEY.cpp:825-827; BattlegroundEY.h:246)
+	// into ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE. The credit lands
+	// in EventPlayerCapturedFlag, with the flag capture — not on tower
+	// captures.
+	EOTSObjectiveCaptureFlag uint32 = 183
+
 	EOTSMaxResources uint32 = 1600
 
 	// World States
@@ -224,6 +231,13 @@ func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, gui
 		return true // Match ended
 	}
 
+	// BattlegroundEY::HandleAreaTrigger (BattlegroundEY.cpp:395): dead
+	// players cannot trigger flag captures ("hack code, must be removed
+	// later" in C++; the gate still stands in-tree).
+	if sess.isDeadOrGhost() {
+		return true
+	}
+
 	team := teamForRace(sess.player.Race) // 0 = Alliance, 1 = Horde
 
 	// 1. Center Flag Pickup
@@ -351,7 +365,9 @@ func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, gui
 }
 
 func (s *Server) captureEOTSFlag(eots *eotsBattlegroundState, sess *session, team uint32) {
-	s.creditBGObjectiveCapture(sess.playerGUID, 0xFFFFFFFF) // flag capture objective
+	// BattlegroundEY::UpdatePlayerScore(SCORE_FLAG_CAPTURES)
+	// (BattlegroundEY.cpp:825-827) -> EY_OBJECTIVE_CAPTURE_FLAG (183).
+	s.creditBGObjectiveCapture(sess.playerGUID, EOTSObjectiveCaptureFlag)
 	sess.removeAura(EOTSSpellNetherstormFlag)
 	// Reference: BattlegroundEY::EventPlayerCapturedFlag
 	// (BattlegroundEY.cpp:784) strips ENTER_PVP_COMBAT auras on capture too.
@@ -690,4 +706,25 @@ func (s *Server) getEOTSFlagCarriers(mapID uint32) []*session {
 		}
 	}
 	return carriers
+}
+
+// eotsPrematureWinner is the score-compare leg of BattlegroundEY::GetPrematureWinner
+// (BattlegroundEY.cpp:935-942): the team ahead on victory points wins a premature
+// finish. Team ids match the rest of the Go EotS model (0 = alliance, 1 = horde).
+// The tie fallthrough in C++ calls Battleground::GetPrematureWinner
+// (Battleground.cpp:344-352), the min-players-per-team roster check — Go has no
+// live BG-instance roster, so that base arm stays unported and a tie reports no
+// winner. No live caller yet: Go has no premature-finish countdown
+// (Battleground::_ProcessProgress / m_PrematureCountDown).
+func eotsPrematureWinner(eots *eotsBattlegroundState) (uint32, bool) {
+	if eots == nil {
+		return 0, false
+	}
+	if eots.AllianceResources > eots.HordeResources {
+		return 0, true
+	}
+	if eots.HordeResources > eots.AllianceResources {
+		return 1, true
+	}
+	return 0, false
 }

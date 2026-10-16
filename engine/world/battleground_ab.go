@@ -41,6 +41,21 @@ const (
 	abHonorTicsThreshold uint32 = 260  // BG_AB_NotABBGWeekendHonorTicks
 	abRepTicsThreshold   uint32 = 160  // BG_AB_NotABBGWeekendReputationTicks
 	abNearVictoryScore   uint32 = 1400 // BG_AB_WARNING_NEAR_VICTORY_SCORE
+
+	// Objective IDs credited by BattlegroundAB::UpdatePlayerScore
+	// (BattlegroundAB.h:205-206) into
+	// ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE: SCORE_BASES_ASSAULTED
+	// -> AB_OBJECTIVE_ASSAULT_BASE, SCORE_BASES_DEFENDED ->
+	// AB_OBJECTIVE_DEFEND_BASE. The credit lands on the banner click (the
+	// score update), never on capture completion.
+	ABObjectiveAssaultBase uint32 = 122
+	ABObjectiveDefendBase  uint32 = 123
+
+	// Quest-reward spells cast on the capturing team by
+	// BattlegroundAB::_NodeOccupied (BattlegroundAB.cpp:371-380; IDs from
+	// Battleground.h:96-97).
+	ABSpellQuestReward4Bases uint32 = 24061
+	ABSpellQuestReward5Bases uint32 = 24064
 )
 
 var abNodeNames = [ABNodeMax]string{
@@ -314,6 +329,9 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 		s.updateABNodeBanner(ab, nodeID)
 		s.updateABNodeWorldStates(ab, nodeID)
 		s.announceABAssault(ab.MapID, sess.player.Name, nodeID, team)
+		// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
+		// (BattlegroundAB.cpp:226) -> AB_OBJECTIVE_ASSAULT_BASE.
+		s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
 
 	case ABNodeStateControlledAlliance:
 		if team == 1 { // Horde assaults Alliance-controlled node
@@ -328,6 +346,9 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 			s.updateABNodeBanner(ab, nodeID)
 			s.updateABNodeWorldStates(ab, nodeID)
 			s.announceABAssault(ab.MapID, sess.player.Name, nodeID, team)
+			// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
+			// (BattlegroundAB.cpp:297) -> AB_OBJECTIVE_ASSAULT_BASE.
+			s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
 		}
 
 	case ABNodeStateControlledHorde:
@@ -343,6 +364,9 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 			s.updateABNodeBanner(ab, nodeID)
 			s.updateABNodeWorldStates(ab, nodeID)
 			s.announceABAssault(ab.MapID, sess.player.Name, nodeID, team)
+			// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
+			// (BattlegroundAB.cpp:297) -> AB_OBJECTIVE_ASSAULT_BASE.
+			s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
 		}
 
 	case ABNodeStateContestedHorde:
@@ -360,6 +384,9 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 				s.updateABNodeBanner(ab, nodeID)
 				s.updateABNodeWorldStates(ab, nodeID)
 				s.announceABDefended(ab.MapID, sess.player.Name, nodeID, team)
+				// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_DEFENDED)
+				// (BattlegroundAB.cpp:262) -> AB_OBJECTIVE_DEFEND_BASE.
+				s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveDefendBase)
 			} else {
 				// Re-contested for Alliance
 				node.State = ABNodeStateContestedAlliance
@@ -367,6 +394,9 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 				s.updateABNodeBanner(ab, nodeID)
 				s.updateABNodeWorldStates(ab, nodeID)
 				s.announceABAssault(ab.MapID, sess.player.Name, nodeID, team)
+				// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
+				// (BattlegroundAB.cpp:244) -> AB_OBJECTIVE_ASSAULT_BASE.
+				s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
 			}
 		}
 
@@ -385,6 +415,9 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 				s.updateABNodeBanner(ab, nodeID)
 				s.updateABNodeWorldStates(ab, nodeID)
 				s.announceABDefended(ab.MapID, sess.player.Name, nodeID, team)
+				// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_DEFENDED)
+				// (BattlegroundAB.cpp:262) -> AB_OBJECTIVE_DEFEND_BASE.
+				s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveDefendBase)
 			} else {
 				// Re-contested for Horde
 				node.State = ABNodeStateContestedHorde
@@ -392,6 +425,9 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 				s.updateABNodeBanner(ab, nodeID)
 				s.updateABNodeWorldStates(ab, nodeID)
 				s.announceABAssault(ab.MapID, sess.player.Name, nodeID, team)
+				// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
+				// (BattlegroundAB.cpp:244) -> AB_OBJECTIVE_ASSAULT_BASE.
+				s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
 			}
 		}
 	}
@@ -435,22 +471,59 @@ func (s *Server) completeABNodeCapture(mapID, nodeID uint32, team uint32) {
 		node.State = ABNodeStateControlledAlliance
 		node.PrevState = ABNodeStateControlledAlliance
 		ab.AllianceBasesCount++
-		s.creditBGObjectiveCapture(node.AssaultedBy, nodeID)
+		// No objective credit here: BattlegroundAB::UpdatePlayerScore fires the
+		// AB_OBJECTIVE_ASSAULT_BASE credit on the banner click (the
+		// EventPlayerClickedOnFlag arms above), never on the node-timer
+		// expiry (BattlegroundAB.cpp:115-180 has no UpdatePlayerScore leg).
 		ab.AllianceAccumMs = 0
 		s.broadcastWorldState(ab.MapID, ABWorldStateBasesAlliance, ab.AllianceBasesCount)
 		s.updateABNodeBanner(ab, nodeID)
 		s.updateABNodeWorldStates(ab, nodeID)
 		s.announceABTaken(ab.MapID, nodeID, team)
+		s.applyABQuestRewards(ab, team)
 	} else if team == 1 && node.State == ABNodeStateContestedHorde {
 		node.State = ABNodeStateControlledHorde
 		node.PrevState = ABNodeStateControlledHorde
 		ab.HordeBasesCount++
-		s.creditBGObjectiveCapture(node.AssaultedBy, nodeID)
+		// No objective credit here: see the alliance arm above.
 		ab.HordeAccumMs = 0
 		s.broadcastWorldState(ab.MapID, ABWorldStateBasesHorde, ab.HordeBasesCount)
 		s.updateABNodeBanner(ab, nodeID)
 		s.updateABNodeWorldStates(ab, nodeID)
 		s.announceABTaken(ab.MapID, nodeID, team)
+		s.applyABQuestRewards(ab, team)
+	}
+}
+
+// applyABQuestRewards ports the quest-reward arms of BattlegroundAB::_NodeOccupied
+// (BattlegroundAB.cpp:371-380): when a node capture completes, the capturing team
+// gets SPELL_AB_QUEST_REWARD_5_BASES (24064) at 5 captured nodes and
+// SPELL_AB_QUEST_REWARD_4_BASES (24061) at 4 (Battleground.h:96-97; both arms
+// fire at 5, in this order). capturedNodes counts nodes occupied by the team
+// with no node-timer running (m_NodeTimers[i] == 0), so the just-completed
+// node counts — its timer was cleared on entry. CastSpellOnTeam's per-player
+// loop is the Go team-aura bridge (applyTeamAura); the spirit-guide spawn,
+// aura-trigger creature (SPELL_HONORABLE_DEFENDER_25Y) and RelocateDeadPlayers
+// arms of _NodeOccupied/_NodeDeOccupied stay unported (no Go creature/spawn
+// or graveyard model), as does GetClosestGraveyard. Called with ab.mu held.
+func (s *Server) applyABQuestRewards(ab *abBattlegroundState, team uint32) {
+	if s == nil || ab == nil {
+		return
+	}
+	capturedNodes := 0
+	for i := range ab.Nodes {
+		n := &ab.Nodes[i]
+		if n.CaptureTimer == nil &&
+			((team == 0 && n.State == ABNodeStateControlledAlliance) ||
+				(team == 1 && n.State == ABNodeStateControlledHorde)) {
+			capturedNodes++
+		}
+	}
+	if capturedNodes >= 5 {
+		s.applyTeamAura(ab.MapID, team, ABSpellQuestReward5Bases)
+	}
+	if capturedNodes >= 4 {
+		s.applyTeamAura(ab.MapID, team, ABSpellQuestReward4Bases)
 	}
 }
 
@@ -679,4 +752,34 @@ func (s *Server) announceABVictory(mapID uint32, winningTeam uint32) {
 	s.rewardBGEndHonor(mapID, 0, 1)
 	s.rewardBGEndHonor(mapID, 1, 1)
 	s.creditBattlegroundWin(mapID, winningTeam)
+}
+
+// abPrematureWinner is the node-count leg of BattlegroundAB::GetPrematureWinner
+// (BattlegroundAB.cpp:613-631): the team holding more occupied bases wins a
+// premature finish. Team ids match the rest of the Go AB model (0 = alliance,
+// 1 = horde). The tie fallthrough in C++ calls Battleground::GetPrematureWinner
+// (Battleground.cpp:344-352), the min-players-per-team roster check — Go has no
+// live BG-instance roster, so that base arm stays unported and a tie reports no
+// winner. No live caller yet: Go has no premature-finish countdown
+// (Battleground::_ProcessProgress / m_PrematureCountDown).
+func abPrematureWinner(ab *abBattlegroundState) (uint32, bool) {
+	if ab == nil {
+		return 0, false
+	}
+	ally, horde := 0, 0
+	for i := range ab.Nodes {
+		switch ab.Nodes[i].State {
+		case ABNodeStateControlledAlliance:
+			ally++
+		case ABNodeStateControlledHorde:
+			horde++
+		}
+	}
+	if ally > horde {
+		return 0, true
+	}
+	if horde > ally {
+		return 1, true
+	}
+	return 0, false
 }

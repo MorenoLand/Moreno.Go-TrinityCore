@@ -966,6 +966,29 @@ func (s *Server) tickAVCaptainBuffs(av *avBattlegroundState, elapsedMs int64) {
 	}
 }
 
+// applyTeamAura is the general Go analog of Battleground::CastSpellOnTeam's
+// per-team player loop (Battleground.cpp:619-624): every worldReady session
+// on the map on the given team (0 Alliance, 1 Horde) gets the spell applied
+// with the spell's own duration (C++ casts the spell, triggered=false, so
+// the DBC duration stands). The duration-explicit applyAVTeamAura below
+// stays for the AV captain arms, whose C++ comment pins the buff duration.
+func (s *Server) applyTeamAura(mapID, team, spellID uint32) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && teamForRace(sess.player.Race) == team {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.applyAura(spellID)
+	}
+}
+
 // applyAVTeamAura applies an aura to every worldReady session on the AV map on the
 // given team (0 Alliance, 1 Horde): the Go analog of Battleground::CastSpellOnTeam's
 // per-team player loop (Battleground.cpp:619-624), using the same session selection

@@ -107,6 +107,31 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// 4c. Arathi Basin exit portals
+	// Reference: BattlegroundAB::HandleAreaTrigger (BattlegroundAB.cpp:259-270):
+	// 3948 is the alliance exit, 3949 the horde exit; the wrong team gets the
+	// portal message instead of leaving. The remaining trigger set in that
+	// switch (3866/3867/3868/3869/3870/4020/4021/4674) is commented out in C++
+	// and falls through to the empty Battleground::HandleAreaTrigger — no
+	// arms to port. No STATUS_IN_PROGRESS gate here: Go's AB state has no
+	// start/stop lifecycle, and leaving the zone mid-simulation is still the
+	// correct action.
+	if s.player.Map == ABMapID && (triggerID == 3948 || triggerID == 3949) {
+		allianceExit := triggerID == 3948
+		if teamForRace(s.player.Race) == 0 && allianceExit || teamForRace(s.player.Race) == 1 && !allianceExit {
+			s.handleLeaveBattlefield(ctx, nil, false, false)
+		} else {
+			teamName := "Alliance"
+			if !allianceExit {
+				teamName = "Horde"
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_AREA_TRIGGER_MESSAGE),
+				protocol.BuildAreaTriggerMessage("Only The "+teamName+" can use that portal"), true)
+		}
+	}
+	// Like the arena arm above (MiscHandler.cpp:697-700), the BG arm does not
+	// return: execution continues to the teleport arm below.
+
 	// 5. Teleport trigger
 	// Reference: MiscHandler.cpp:705-779 (areatrigger_teleport)
 	var targetMap int64
