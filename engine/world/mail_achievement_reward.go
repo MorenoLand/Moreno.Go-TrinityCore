@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -12,8 +13,13 @@ import (
 // MailSender(MAIL_CREATURE, Sender): MailDraft(MailTemplateId) when a mail
 // template is set, otherwise MailDraft(Subject, Body). A configured item is
 // created (Item::CreateItem), saved, and attached. The subject/body default
-// to the enUS columns; achievement_reward_locale overrides for non-enUS
-// sessions have no Go model.
+// to the enUS columns; achievement_reward_locale overrides apply for non-enUS
+// sessions (AchievementMgr.cpp:1547-1564).
+// localeNames mirrors Common.cpp's localeNames table (indexed by
+// LocaleConstant, enUS 0 .. ruRU 8): the DB *_locale tables carry the locale
+// as one of these names, matched via GetLocaleByName.
+var localeNames = []string{"enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "esMX", "ruRU"}
+
 func (s *session) sendAchievementRewardMail(achievementID uint32) {
 	ctx := context.Background()
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil ||
@@ -33,6 +39,21 @@ func (s *session) sendAchievementRewardMail(achievementID uint32) {
 		// MailDraft(mailTemplateId): subject/body stored empty, rendered
 		// from MailTemplate.dbc.
 		subject, body = "", ""
+	} else if s.locale != 0 && int(s.locale) < len(localeNames) {
+		// AchievementMgr.cpp:1547-1564: for a non-enUS session, the
+		// achievement_reward_locale Subject/Text override the base row;
+		// ObjectMgr::GetLocaleString (ObjectMgr.h:1568) only assigns
+		// non-empty localized strings.
+		var locSubject, locBody sql.NullString
+		if err := wdb.QueryRowContext(ctx, "SELECT Subject, Body FROM achievement_reward_locale WHERE ID = ? AND Locale = ?",
+			achievementID, localeNames[s.locale]).Scan(&locSubject, &locBody); err == nil {
+			if locSubject.Valid && locSubject.String != "" {
+				subject = locSubject.String
+			}
+			if locBody.Valid && locBody.String != "" {
+				body = locBody.String
+			}
+		}
 	}
 	now := time.Now().Unix()
 	nextMailID := s.server.generateMailID()

@@ -311,6 +311,11 @@ type session struct {
 	// (CALENDAR_CREATE_EVENT_COOLDOWN = 5s).
 	calendarEventCooldown int64
 	gmChat                bool
+	// locale mirrors WorldSession::m_sessionDbLocaleIndex
+	// (WorldSession.h:1198, WorldSocket.cpp:267 -> WorldSession.cpp:132):
+	// the session's LocaleConstant index from account.locale (0 = enUS),
+	// used for localized name/text selection (e.g. achievement_reward_locale).
+	locale uint8
 	// gmVisibilityDetect mirrors Player::m_serverSideVisibilityDetect for
 	// SERVERSIDE_VISIBILITY_GM (Object.cpp WorldObject::CanSeeOrDetect, the
 	// "GM visibility off or hidden NPC" arm): nonzero (the account security,
@@ -723,6 +728,10 @@ type account struct {
 	MuteTime    int64
 	Security    uint8
 	Expansion   uint8
+	// Locale mirrors WorldSession's account locale (WorldSocket.cpp:267,
+	// WorldSession.cpp:131-132): the raw account.locale column, taken as a
+	// LocaleConstant index (0 = enUS). A missing/legacy column leaves 0.
+	Locale uint8
 }
 
 func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settings ...config.Config) *Server {
@@ -3949,6 +3958,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeSMSG_DEBUG_AISTATE),
 			uint32(protocol.OpcodeSMSG_DEBUG_LIST_TARGETS),
 			uint32(protocol.OpcodeSMSG_DEBUG_SERVER_GEO),
+			// SMSG_DEFENSE_MESSAGE (0x33A) is a STATUS_NEVER server-to-client opcode
+			// (Opcodes.cpp:957): the reference builds it in DefenseMessageBuilder
+			// (OutdoorPvP.cpp:42-46: u32 zoneId, u32 text.length(), cstring) from
+			// OutdoorPvP::SendDefenseMessage (OutdoorPvP.cpp:658-663), called by the
+			// OutdoorPvP zone scripts on tower/capture flips (OutdoorPvPEP.cpp:109,
+			// OutdoorPvPHP.cpp:214, OutdoorPvPNA.cpp:259, OutdoorPvPTF.cpp:322,
+			// OutdoorPvPZM.cpp:136). Go has no OutdoorPvP manager or capture-point
+			// code, so the arm stays null.
 			uint32(protocol.OpcodeSMSG_DEFENSE_MESSAGE),
 			uint32(protocol.OpcodeSMSG_DESTROY_OBJECT),
 			uint32(protocol.OpcodeSMSG_DESTRUCTIBLE_BUILDING_DAMAGE),
@@ -4564,6 +4581,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.isRecruiter = accountIsRecruiter(ctx, s.server.AuthStore.DB, account.ID)
 	s.security = account.Security
 	s.muteTime = account.MuteTime
+	s.locale = account.Locale
 	s.gmChat = false
 	s.gmMessage = false
 	if s.gmMessage, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionCommandGMChat); err != nil {
@@ -5086,12 +5104,16 @@ func loadAccount(ctx context.Context, store *database.Store, username string, re
 	var result account
 	var locked int64
 	var expansion sql.NullInt64
-	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion FROM account WHERE username = ? AND session_key_auth IS NOT NULL LIMIT 1"
+	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion, locale FROM account WHERE username = ? AND session_key_auth IS NOT NULL LIMIT 1"
 	if store.Backend == database.BackendSQLite {
-		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion FROM account WHERE UPPER(username) = UPPER(?) AND session_key_auth IS NOT NULL LIMIT 1"
+		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion, locale FROM account WHERE UPPER(username) = UPPER(?) AND session_key_auth IS NOT NULL LIMIT 1"
 	}
 	var muteTime sql.NullInt64
-	err := store.DB.QueryRowContext(ctx, query, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS, &muteTime, &expansion)
+	var locale sql.NullInt64
+	// WorldSocket.cpp:267: the locale column is taken raw into the session's
+	// LocaleConstant index; a legacy account table without the column falls
+	// through to the legacy query below, which leaves Locale at 0 (enUS).
+	err := store.DB.QueryRowContext(ctx, query, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS, &muteTime, &expansion, &locale)
 	if err != nil {
 		fallbackQuery := "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? AND session_key_auth IS NOT NULL LIMIT 1"
 		if store.Backend == database.BackendSQLite {
@@ -5108,6 +5130,9 @@ func loadAccount(ctx context.Context, store *database.Store, username string, re
 	}
 	if muteTime.Valid {
 		result.MuteTime = muteTime.Int64
+	}
+	if locale.Valid {
+		result.Locale = uint8(locale.Int64)
 	}
 	result.Locked = locked != 0
 	// WorldSocket.cpp:283 (AccountInfo ctor): the expansion column is taken raw —

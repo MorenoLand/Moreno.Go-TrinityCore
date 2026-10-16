@@ -3,14 +3,32 @@ package world
 // Battleground queue membership structures, ported from
 // src/server/game/Battlegrounds/BattlegroundQueue.h. The queue wait-time ring
 // (m_WaitTimes) already lives in battleground.go; this file covers the queued
-// player/group records and the invite-selection pool (BattlegroundQueue.cpp:64-124).
+// player/group records, the pure arms of BattlegroundQueue::AddGroup (ginfo
+// construction, queue index math, per-player wiring) and the per-player erase
+// arm of BattlegroundQueue::RemovePlayer, plus the invite-selection pool
+// (BattlegroundQueue.cpp:64-124).
 //
-// NOT ported (unported dependencies): BattlegroundQueue::AddGroup
-// (BattlegroundQueue.cpp:133-238) walks Group*/Player* and calls into the
-// world announcer config, ChatHandler and the BG template registry — no Go
-// forms of those exist; BattlegroundQueue::RemovePlayer (BattlegroundQueue.cpp:288)
-// mutates the queued containers plus the invite events, which ride on the same
-// Group*/Player* machinery; BGQueueInviteEvent/BGQueueRemoveEvent
+// NOT ported (unported dependencies): BattlegroundQueue::AddGroup's arena-join
+// world announce (BattlegroundQueue.cpp:166-170 — sWorld->SendWorldText with
+// LANG_ARENA_QUEUE_ANNOUNCE_WORLD_JOIN, CONFIG_ARENA_QUEUE_ANNOUNCER_ENABLE,
+// sArenaTeamMgr->GetArenaTeamById; no announce path or arena-team registry is
+// wired into the Go queue); the m_QueuedGroups push (BattlegroundQueue.cpp:198)
+// and the queue-status announce (BattlegroundQueue.cpp:201-235 —
+// CONFIG_BATTLEGROUND_QUEUE_ANNOUNCER_ENABLE/_PLAYERONLY plus
+// bg->GetMinPlayersPerTeam; Go has MinLvl/MaxLvl only via bgTemplateLevels and
+// no announcer configs); BattlegroundQueue::RemovePlayer's container arms
+// (BattlegroundQueue.cpp:288-407): the m_QueuedPlayers lookup (:294-303), the
+// bracket search (:310-331 — brackets scanned high to low, premade+normal slots
+// of the group's own team stepped by PVP_TEAMS_COUNT), the m_QueuedPlayers
+// erase (:357), the invited-count decrease (:352-354 — needs a live BG
+// instance from sBattlegroundMgr; the Go sim is per-session), the rated-exit
+// world announce (:360-362), the MemberLost/OfflineMemberLost rated arm
+// (:365-376 — arena_team.go has no MemberLost), the empty-group container
+// erase (:380-384), and the recursive rated-group removal with its STATUS_NONE
+// status packet (:389-406 — needs session queue slots). All of those need the
+// server-level m_QueuedPlayers/m_QueuedGroups containers that the per-session
+// sim (battleground.go handleBattlemasterJoin) deliberately replaces — no dead
+// container is added here. BGQueueInviteEvent/BGQueueRemoveEvent
 // (BattlegroundQueue.cpp:471-476, 1018-1103) are already bridged in Go by the
 // timers in simulateBGQueueInvite (battleground.go).
 
@@ -59,6 +77,65 @@ const (
 	bgQueueInvitationBalanced  uint8 = 1 // teams balanced: N+1 vs N players
 	bgQueueInvitationEven      uint8 = 2 // teams even: N vs N players
 )
+
+// bgQueueGroupIndex ports the queue-slot computation in BattlegroundQueue::AddGroup
+// (BattlegroundQueue.cpp:156-160): non-rated, non-premade groups land in the normal
+// slots (PVP_TEAMS_COUNT == 2 == bgQueueNormalAlliance), rated and premade groups in
+// the premade slots; Horde takes the +1 slot of its pair. team is the C++ Team enum
+// value (teamAlliance/teamHorde), as stored on bgGroupQueueInfo.team.
+func bgQueueGroupIndex(isRated, isPremade bool, team uint32) uint8 {
+	index := uint8(0)
+	if !isRated && !isPremade {
+		index += bgQueueNormalAlliance
+	}
+	if team == teamHorde {
+		index++
+	}
+	return index
+}
+
+// newBGGroupQueueInfo ports the ginfo construction in BattlegroundQueue::AddGroup
+// (BattlegroundQueue.cpp:138-151) plus the per-player wiring (BattlegroundQueue.cpp:173-194):
+// every member GUID gets a bgQueuePlayerInfo whose LastOnlineTime equals the join
+// time, with its GroupInfo back-pointer set, mirrored into the record's players map
+// (the C++ m_QueuedPlayers map itself is server-level and stays unported — see the
+// file header). leaderTeam is leader->GetTeam() (BattlegroundQueue.cpp:146), the C++
+// Team enum value (teamAlliance/teamHorde); opponents ratings start at 0
+// (BattlegroundQueue.cpp:150-151). The m_QueuedGroups push (BattlegroundQueue.cpp:198)
+// and both announce blocks (:166-170, :201-235) are documented-unported above.
+func newBGGroupQueueInfo(bgTypeID uint32, arenaType uint8, arenaTeamID uint32, isRated bool, arenaRating, matchmakerRating, previousOpponentsTeamID uint32, leaderTeam uint32, memberGUIDs []uint64) *bgGroupQueueInfo {
+	now := gameTimeMS()
+	ginfo := &bgGroupQueueInfo{
+		team:                      leaderTeam,
+		bgTypeID:                  bgTypeID,
+		isRated:                   isRated,
+		arenaType:                 arenaType,
+		arenaTeamID:               arenaTeamID,
+		joinTime:                  now,
+		removeInviteTime:          0,
+		isInvitedToBGInstanceGUID: 0,
+		arenaTeamRating:           arenaRating,
+		arenaMatchmakerRating:     matchmakerRating,
+		opponentsTeamRating:       0,
+		opponentsMatchmakerRating: 0,
+		previousOpponentsTeamID:   previousOpponentsTeamID,
+		players:                   make(map[uint64]*bgQueuePlayerInfo, len(memberGUIDs)),
+	}
+	for _, guid := range memberGUIDs {
+		plInfo := &bgQueuePlayerInfo{lastOnlineTime: now, groupInfo: ginfo}
+		ginfo.players[guid] = plInfo
+	}
+	return ginfo
+}
+
+// removeQueuedPlayer ports the per-player erase arm of BattlegroundQueue::RemovePlayer
+// (BattlegroundQueue.cpp:347-349): the player's record leaves the group's player map.
+// The surrounding container arms — the bracket search (:310-331), the m_QueuedPlayers
+// erase (:357), and the empty-group delete (:380-384) — need the server-level queue
+// containers and stay documented-unported in the file header.
+func (g *bgGroupQueueInfo) removeQueuedPlayer(guid uint64) {
+	delete(g.players, guid)
+}
 
 // bgSelectionPool is the Go form of BattlegroundQueue::SelectionPool
 // (BattlegroundQueue.h:113-126): the per-side group list the matchmaker builds when
