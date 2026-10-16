@@ -30501,7 +30501,7 @@ func (s *session) handleTotemDestroyed(ctx context.Context, payload []byte) bool
 	return true
 }
 
-// handleSpellClick processes CMSG_SPELLCLICK (0x410).
+// handleSpellClick processes CMSG_SPELLCLICK (0x3F8).
 // Reference: WorldSession::HandleSpellClick (SpellHandler.cpp:616) -> Unit::HandleSpellClick (Unit.cpp:12982).
 func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {

@@ -1804,10 +1804,16 @@ func (s *session) handleVoiceSessionEnable(ctx context.Context, payload []byte) 
 }
 
 // handleSetChannelWatch processes CMSG_SET_CHANNEL_WATCH (0x3EF).
+// Reference: WorldSession::HandleSetChannelWatch (ChannelHandler.cpp:343)
+// has a commented-out body — pure no-op. Truncated reads drop with the
+// connection open (WorldSession.cpp:425-427).
 func (s *session) handleSetChannelWatch(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	r := protocol.NewReader(payload)
 	if _, err := r.ReadCString(); err != nil {
-		return false
+		return true
 	}
 	return true
 }
