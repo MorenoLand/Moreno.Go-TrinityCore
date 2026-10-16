@@ -487,10 +487,10 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	if s.genericCastInProgress() {
 		return reply(taxiErrPlayerBusy)
 	}
-	nearest, ok := s.nearestCreatureTaxiNode(ctx, guid)
-	if !ok {
-		return reply(taxiErrNoVendorNearby)
-	}
+	// No ERR_TAXINOVENDORNEARBY arm here: the enum value exists in
+	// SharedDefines.h but no server path sends it — ActivateTaxiPathTo
+	// never consults the flightmaster's own node, only the packet's
+	// source node (Player.cpp:21562-21567).
 	if s.server.Data == nil {
 		return reply(taxiErrUnspecified)
 	}
@@ -564,7 +564,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	// delta — so the first hop's path is what takes off.
 	previousTaxiPath := s.player.TaxiPath
 	s.player.TaxiPath = strings.Join([]string{strconv.FormatUint(uint64(s.taxiFlightMasterFaction(ctx, guid)), 10), strconv.FormatUint(uint64(sourceNode), 10), strconv.FormatUint(uint64(destNode), 10)}, " ") + " "
-	if !s.startTaxiFlight(pathIDs[0], mount, nearest == sourceNode) {
+	if !s.startTaxiFlight(pathIDs[0], mount) {
 		s.player.TaxiPath = previousTaxiPath
 	}
 	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
@@ -634,7 +634,7 @@ func (s *session) continueTaxiFlight() {
 }
 
 // startTaxiFlight mounts the player and broadcasts the taxi spline.
-func (s *session) startTaxiFlight(pathID, mountDisplay uint32, takeoff bool) bool {
+func (s *session) startTaxiFlight(pathID, mountDisplay uint32) bool {
 	return s.startTaxiFlightFrom(pathID, mountDisplay, 0)
 }
 
@@ -881,9 +881,13 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 	// mounted on a vehicle.
 	s.exitVehicle(ctx)
 	s.cancelTrade(true)
-	// Player.cpp:21588: resolve the hop through GetTaxiPath.
+	// Player.cpp:21588: resolve the hop through GetTaxiPath. A missing
+	// sourcepath answers ERR_TAXIUNSPECIFIEDSERVERERROR (Player.cpp:21613);
+	// the mount-0 allowance is spell-case-only and checked implicitly by
+	// skipping the mount gate below.
 	resolvedPath, _, hopFound, hopErr := s.server.Data.TaxiPathLinks(from, to)
 	if hopErr != nil || !hopFound || resolvedPath == 0 {
+		reply(taxiErrUnspecified)
 		return
 	}
 	// Player.cpp:21611: wide mount lookup for the spell case (npc == nil).

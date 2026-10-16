@@ -131,7 +131,7 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
-		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, objectUint32OrZero(creature, "GossipMenuID"), true)
+		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, objectUint32OrZero(creature, "GossipMenuID"), true, true)
 		if err != nil {
 			s.debug("default gossip load failed", "account", s.accountName, "entry", entry, "error", err)
 			s.gossipClosed = true
@@ -503,7 +503,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				s.sendGossipPOI(ctx, item.ActionPoiID)
 			}
 			if item.ActionMenuID != 0 {
-				defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID, false)
+				defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID, false, false)
 				if loadErr != nil {
 					s.debug("gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
 					s.gossipClosed = true
@@ -539,7 +539,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// Player::OnGossipSelect (Player.cpp:14677-14680): re-prepare the
 			// creature's default gossip menu without the quest list
 			// (PrepareGossipMenu(source) passes showQuests=false).
-			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, 0, false)
+			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, 0, false, false)
 			if loadErr != nil {
 				s.debug("gossip spiritguide menu load failed", "account", s.accountName, "entry", entry, "error", loadErr)
 				s.gossipClosed = true
@@ -594,7 +594,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			if s.player != nil && s.player.TalentGroupsCount == 1 && s.player.Level >= 40 {
 				s.castSpellDirect(ctx, 63680, s.playerGUID)
 				s.castSpellDirect(ctx, 63624, s.playerGUID)
-				defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, item.ActionMenuID, false)
+				defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, item.ActionMenuID, false, false)
 				if loadErr != nil {
 					s.debug("gossip dualspec menu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
 					s.gossipClosed = true
@@ -838,12 +838,7 @@ func (s *session) handleItemGossipSelectOption(ctx context.Context, reader *prot
 	return true
 }
 
-func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry, npcFlags, menuID uint32, isDefaultMenu bool) (*gossipMenuState, error) {
-	// TrinityCore PrepareGossipMenu learns an unknown flight node and aborts
-	// the menu build; the map itself opens through the taxi option afterwards.
-	if npcFlags&unitNPCFlagFlightmaster != 0 && s.learnNewTaxiNode(ctx, guid) {
-		return nil, nil
-	}
+func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry, npcFlags, menuID uint32, isDefaultMenu, showQuests bool) (*gossipMenuState, error) {
 	menu := &gossipMenuState{SenderGUID: guid, MenuID: menuID, TitleID: 0x00FFFFFF, Items: make(map[uint32]gossipMenuItem)}
 	titleID, err := s.loadGossipMenuTitleID(ctx, menuID, entry, guid)
 	if err != nil {
@@ -863,6 +858,16 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 			return nil, err
 		}
 	}
+	// Player::PrepareGossipMenu (Player.cpp:14465-14468): a TAXIVENDOR option
+	// that survives the npcflag/condition gates learns an unknown flight node
+	// and aborts the menu build; the flight map opens through the taxi option
+	// afterwards. The arm is per-option, not per-creature — a flightmaster
+	// hello whose menu holds no taxivendor option still shows its menu.
+	for _, option := range options {
+		if option.Item.Action == 4 && s.learnNewTaxiNode(ctx, guid) {
+			return nil, nil
+		}
+	}
 	for _, option := range options {
 		if option.Item.Action == 6 && !s.isDeadOrGhost() {
 			continue
@@ -875,7 +880,10 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 		}
 		menu.Items[option.ID] = option.Item
 	}
-	if npcFlags&0x00000002 != 0 && s.player != nil {
+	// Player::PrepareGossipMenu (Player.cpp:14380-14384): the quest menu is
+	// prepared only when showQuests is set — gossip submenus opened from
+	// OnGossipSelect (showQuests=false) carry no quest list.
+	if showQuests && npcFlags&0x00000002 != 0 && s.player != nil {
 		quests, err := s.loadCreatureQuestMenu(ctx, entry, s.player.Level)
 		if err != nil {
 			return nil, err
@@ -1019,7 +1027,10 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 		id, icon, optionType, requiredFlags := row.id, row.icon, row.optionType, row.requiredFlags
 		actionMenuID, actionPoiID, coded, boxMoney := row.actionMenuID, row.actionPoiID, row.coded, row.boxMoney
 		message, boxMessage := row.message, row.boxMessage
-		if requiredFlags != 0 && uint32(requiredFlags)&npcFlags == 0 {
+		// Player::PrepareGossipMenu (Player.cpp:14392): the npcflag gate
+		// has no zero-flag exemption — an option with OptionNpcFlag 0 never
+		// shows for a creature source.
+		if uint32(requiredFlags)&npcFlags == 0 {
 			continue
 		}
 		if optionType == 2 { // GOSSIP_OPTION_QUESTGIVER is handled via QuestMenu, not as a gossip text item

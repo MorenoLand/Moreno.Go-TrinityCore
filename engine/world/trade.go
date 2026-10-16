@@ -103,7 +103,12 @@ func (s *session) setTradeSpell(spellID uint32, castItemGUID uint64) {
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		s.trade.Partner.trade.Accepted = false
 		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
-		s.notifyTradeUpdate()
+		// Reference: TradeData::SetSpell (TradeData.cpp:91-92) runs
+		// Update(true) before Update(false): the trader's session receives
+		// the extended update carrying the owner's data first, then the
+		// owner's own session receives the own-data view.
+		s.trade.Partner.sendTradeStatusExtended(true)
+		s.sendTradeStatusExtended(false)
 	}
 }
 
@@ -1330,6 +1335,21 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			if !execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", partner.playerGUID, s.playerGUID, it.ItemGUID) {
 				return
 			}
+			// Reference: TradeHandler.cpp:225-230 (moveItems) — a
+			// BOP-tradeable item rebases CREATE_PLAYED_TIME onto the new
+			// owner's played-time clock so the 2h soulbound-trade window
+			// survives the owner change: new = receiverTotal -
+			// (giverTotal - old).
+			var bopFlags, played int64
+			if err := tx.QueryRowContext(ctx, "SELECT flags, COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?", it.ItemGUID).Scan(&bopFlags, &played); err == nil && bopFlags&int64(itemInstanceFlagBOPTradeable) != 0 {
+				newPlayed := int64(partner.player.TotalPlayedTime) - (int64(s.player.TotalPlayedTime) - played)
+				if newPlayed < 0 {
+					newPlayed = 0
+				}
+				if !execTx("UPDATE item_instance SET playedTime = ? WHERE guid = ?", newPlayed, it.ItemGUID) {
+					return
+				}
+			}
 			// Player::MoveItemFromInventory (Player.cpp:12588-12595) runs
 			// Item::SetNotRefundable on every traded item: the refundable
 			// flag is cleared and the refund DB row deleted.
@@ -1350,6 +1370,18 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			// on each traded item (TradeHandler.cpp:488).
 			if !execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", s.playerGUID, partner.playerGUID, it.ItemGUID) {
 				return
+			}
+			// BOP-tradeable played-time rebase onto the new owner's clock
+			// (TradeHandler.cpp:225-230, mirror of the giver's arm above).
+			var bopFlags, played int64
+			if err := tx.QueryRowContext(ctx, "SELECT flags, COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?", it.ItemGUID).Scan(&bopFlags, &played); err == nil && bopFlags&int64(itemInstanceFlagBOPTradeable) != 0 {
+				newPlayed := int64(s.player.TotalPlayedTime) - (int64(partner.player.TotalPlayedTime) - played)
+				if newPlayed < 0 {
+					newPlayed = 0
+				}
+				if !execTx("UPDATE item_instance SET playedTime = ? WHERE guid = ?", newPlayed, it.ItemGUID) {
+					return
+				}
 			}
 			// Player::MoveItemFromInventory (Player.cpp:12588-12595) runs
 			// Item::SetNotRefundable on every traded item: the refundable
@@ -1512,19 +1544,12 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS_EXTENDED), buf.Bytes(), true)
 }
 
-func (s *session) notifyTradeUpdate() {
-	s.sendTradeStatusExtended(false)
-	if s.trade != nil && s.trade.Partner != nil {
-		s.trade.Partner.sendTradeStatusExtended(true)
-	}
-}
-
 // notifyTradePartnerUpdate mirrors TradeData::Update(true)
 // (TradeData.cpp:119-125): only the trader's (partner's) session receives
 // the extended update carrying the changer's data. The SetItem/SetMoney
 // paths use this — C++ sends no extended update back to the changing
 // player's own client there (SetSpell is the only path that updates both
-// sides, and it keeps notifyTradeUpdate).
+// sides, and it keeps the two-call order in setTradeSpell).
 func (s *session) notifyTradePartnerUpdate() {
 	if s.trade != nil && s.trade.Partner != nil {
 		s.trade.Partner.sendTradeStatusExtended(true)
