@@ -411,6 +411,11 @@ func (sa *saBattlegroundState) activateTitanRelic(s *Server, sess *session) {
 		sa.RoundScores[0].Winner = sa.Attackers
 		sa.RoundScores[0].Time = sa.TotalTime
 
+		// Reference: BattlegroundSA::TitanRelicActivated round-one arm
+		// (BattlegroundSA.cpp:912-918): Storm the Beach (1310) criteria update
+		// runs for the round-one attackers BEFORE the Attackers swap.
+		s.updateSAStormTheBeachCriteria(sa, sa.Attackers)
+
 		// Swap attacker/defender roles
 		sa.Attackers = sa.defenders()
 		sa.Status = SAStatusSecondWarmup
@@ -434,6 +439,11 @@ func (sa *saBattlegroundState) activateTitanRelic(s *Server, sess *session) {
 	} else if sa.Status == SAStatusRoundTwo {
 		sa.RoundScores[1].Winner = sa.Attackers
 		sa.RoundScores[1].Time = sa.TotalTime
+
+		// Reference: BattlegroundSA::TitanRelicActivated round-two arm
+		// (BattlegroundSA.cpp:933-939): Storm the Beach (1310) criteria update
+		// for the round-two attackers.
+		s.updateSAStormTheBeachCriteria(sa, sa.Attackers)
 
 		// Determine winner based on time to capture
 		if sa.RoundScores[0].Time == sa.RoundScores[1].Time {
@@ -665,6 +675,25 @@ func (s *Server) startSARoundTimedAchievement(sa *saBattlegroundState) {
 	s.sessionsMu.RUnlock()
 	for _, sess := range targets {
 		sess.startTimedAchievement(timedTypeEvent, eventID)
+	}
+}
+
+// updateSAStormTheBeachCriteria mirrors the "Achievement Storm the Beach
+// (1310)" loop in BattlegroundSA::TitanRelicActivated (BattlegroundSA.cpp:912-918,
+// 933-939): when a round ends with a relic capture, every player on the
+// attackers' team in the BG updates the BE_SPELL_TARGET criteria for 65246.
+func (s *Server) updateSAStormTheBeachCriteria(sa *saBattlegroundState, attackers uint32) {
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == sa.MapID &&
+			teamForRace(sess.player.Race) == attackers {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.updateAchievementCriteria(criteriaTypeBeSpellTarget, 65246, 1)
 	}
 }
 
