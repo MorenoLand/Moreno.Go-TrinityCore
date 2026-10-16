@@ -1963,9 +1963,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// auto-select the aura rank for the wire unit target's level BEFORE the
 	// Spell object is built (SpellInfo::GetAuraRankForLevel,
 	// SpellInfo.cpp:3283-3319), so cast time, power cost, cooldown, CheckCast
-	// and the completion path all run on the downranked row. The unlearned
-	// and trigger arms above intentionally keep the original id, matching
-	// C++ arm order.
+	// and the completion path all run on the downranked row. C++ runs the
+	// unlearned-spell arms (SpellHandler.cpp:392-410) BEFORE this rank
+	// selection, so the periodic-trigger aura check below keys on the wire
+	// spell id while the DisableMgr gate and the cast itself use the
+	// downranked row.
+	wireSpellID := spellID
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 		if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
 			if ds, ok := s.server.spellAuraRankForLevel(spellID, tgt.Level); ok && ds.ID != spellID {
@@ -1981,7 +1984,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// is Go's Unit::CastSpell(id, triggered=true); the wire unit target
 	// seeds its implicit target selection, matching C++ keeping the client
 	// targets while skipping the CheckCast gauntlet.
-	if !learned && !gmMode && !vehicleSpell && !lockAllowed && s.playerHasPeriodicTriggerAura(spellID) {
+	if !learned && !gmMode && !vehicleSpell && !lockAllowed && s.playerHasPeriodicTriggerAura(wireSpellID) {
 		// Spell::prepare (Spell.cpp:3074-3080): the DisableMgr gate has no
 		// trigger exemption — it fires for the TRIGGERED_FULL_MASK arm too.
 		if s.spellDisabledForCaster(ctx, spellID) {
@@ -30996,6 +30999,38 @@ func (s *session) handleUpdateProjectilePosition(ctx context.Context, payload []
 	hitY, _ := r.ReadF32()
 	hitZ, _ := r.ReadF32()
 
+	// SpellHandler.cpp:832: the caster must resolve to a unit the player can
+	// see (ObjectAccessor::GetUnit). The session player covers the
+	// player-caster case (ObjectGuid operator>> is raw-u64 per ObjectGuid.cpp:76,
+	// so the u64 read is the exact wire format); luaCreature covers static
+	// creature spawns. An unresolvable guid drops like C++'s null return.
+	casterOK := casterGuid == s.playerGUID
+	if !casterOK && s.server != nil && s.luaCreature(ctx, casterGuid) != nil {
+		casterOK = true
+	}
+	if !casterOK {
+		s.debug("update projectile position", "account", s.accountName, "guid", casterGuid, "reason", "unknown caster")
+		return true
+	}
+
+	// SpellHandler.cpp:836-844: FindCurrentSpellBySpellId + HasDst + ModDst +
+	// RecalculateDelayMomentForDst have no Go model (no in-flight spell
+	// registry, no spell-flight-delay machinery) — those arms are documented
+	// no-bridge. The SMSG_SET_PROJECTILE_POSITION broadcast (SpellHandler.cpp:846-853)
+	// is bridgeable: u64 caster, u8 castCount, 3xf32, sent to the caster's
+	// set including self (SendMessageToSet(&data, true) == self write plus
+	// broadcastToNearby skipping self).
+	buf := protocol.NewBuffer(21)
+	buf.WriteU64(casterGuid)
+	buf.WriteU8(castCount)
+	buf.WriteF32(hitX)
+	buf.WriteF32(hitY)
+	buf.WriteF32(hitZ)
+	pkt := buf.Bytes()
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_PROJECTILE_POSITION), pkt, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SET_PROJECTILE_POSITION), pkt, s)
+	}
 	s.debug("update projectile position", "account", s.accountName, "guid", casterGuid, "spell", spellID, "castCount", castCount, "hit", []float32{hitX, hitY, hitZ})
 	return true
 }

@@ -4311,7 +4311,7 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 			if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ? LIMIT 1", giftEntry).Scan(&giftMaxDur)
 			}
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ?, durability = ? WHERE guid = ?", giftEntry, giftFlags, giftMaxDur, itemGUID)
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ?, durability = ?, giftCreatorGuid = 0 WHERE guid = ?", giftEntry, giftFlags, giftMaxDur, itemGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_gifts WHERE item_guid = ?", itemGUID)
 			_ = s.sendInventoryItems(ctx)
 			return true
@@ -4591,7 +4591,7 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 			wrappedEntry = 21831
 		}
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_gifts (guid, item_guid, entry, flags) VALUES (?, ?, ?, ?)", s.playerGUID, targetGUID, targetEntry, targetInstanceFlags)
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ? WHERE guid = ?", wrappedEntry, uint32(itemInstanceFlagWrapped), targetGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ?, giftCreatorGuid = ? WHERE guid = ?", wrappedEntry, uint32(itemInstanceFlagWrapped), s.playerGUID, targetGUID)
 		s.adjustQuestItemCount(ctx, uint32(targetEntry), 1, false)
 		s.adjustQuestItemCount(ctx, wrappedEntry, 1, true)
 		_ = s.sendInventoryItems(ctx)
