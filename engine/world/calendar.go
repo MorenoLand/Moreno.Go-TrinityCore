@@ -538,7 +538,7 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 // Reference: WorldSession::HandleCalendarGetNumPending (CalendarHandler.cpp:665).
 func (s *session) handleCalendarGetNumPending(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	var count uint32 = 0
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
