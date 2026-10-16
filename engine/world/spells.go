@@ -19057,6 +19057,23 @@ func (s *session) handleCancelCast(payload []byte) bool {
 	}
 	s.castMu.Unlock()
 
+	// Unit::InterruptNonMeleeSpells (Unit.cpp:3212-3222) checks
+	// CURRENT_CHANNELED_SPELL last: a CMSG_CANCEL_CAST naming the channeled
+	// spell interrupts it. Unit::InterruptSpell (Unit.cpp:3140-3168) and
+	// Spell::cancel (Spell.cpp:3210-3254) carry no CANT_CANCEL gate on this
+	// path — the attribute gate lives only in the CMSG_CANCEL_CHANNELLING
+	// and CMSG_CANCEL_AURA handlers — so the channel falls here
+	// unconditionally; interruptCurrentChannel emits the
+	// SendChannelUpdate(0) -> SendInterrupted -> SendCastResult(INTERRUPTED)
+	// sequence exactly.
+	s.castMu.Lock()
+	channel := s.activeChannel
+	s.castMu.Unlock()
+	if channel != nil && !channel.Stopped && channel.SpellID == spellID {
+		s.interruptCurrentChannel()
+		return true
+	}
+
 	// No active cast (or a different spell is casting): C++ sends nothing, but
 	// the cast-failed result still goes out so a client stuck on a cast bar
 	// for this spell id can clear it.
@@ -19083,9 +19100,9 @@ func (s *session) handleCancelCast(payload []byte) bool {
 //     has no bridge: Go
 //     has no per-cast Spell object to hold applied mods (standing gap noted in
 //     spellmod.go). A CMSG_CANCEL_CAST naming a channeled spell id also
-//     interrupts the channel in C++ (InterruptNonMeleeSpells always checks
-//     CURRENT_CHANNELED_SPELL); Go only interrupts channels on
-//     CMSG_CANCEL_CHANNELLING, which is the opcode the client actually sends.
+//     interrupts the channel (InterruptNonMeleeSpells always checks
+//     CURRENT_CHANNELED_SPELL): handleCancelCast carries that arm ahead of
+//     its no-match tail, with no CANT_CANCEL gate on this path.
 //   - originalCaster RemoveDynObject/RemoveGameObject: Go has no gameobject
 //     casters; every cast is a player session.
 //   - the finish(false) tail: subsumed — activeCast is already nilled inline
