@@ -3740,6 +3740,7 @@ func (s *session) clearDuelState(partner *session) {
 	s.duelPartner = 0
 	s.duelInitiator = false
 	s.duelCountdown = false
+	s.duelMounted = false
 	s.duelOutOfBounds = time.Time{}
 
 	// Clean up fields on partner
@@ -3752,6 +3753,7 @@ func (s *session) clearDuelState(partner *session) {
 		partner.duelPartner = 0
 		partner.duelInitiator = false
 		partner.duelCountdown = false
+		partner.duelMounted = false
 		partner.duelOutOfBounds = time.Time{}
 	}
 }

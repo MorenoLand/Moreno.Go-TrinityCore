@@ -843,6 +843,14 @@ func (s *session) playerHasAura(spellID uint32) bool {
 // achievement_criteria_data database rules before awarding criteria progress,
 // mirroring AchievementMgr::ConditionsSatisfied and AchievementCriteriaDataSet::Meets.
 func (s *session) meetsCriteriaRequirements(criterion achievementCriteriaEntry, miscValue1, miscValue2 uint32) bool {
+	return s.meetsCriteriaRequirementsWithTarget(criterion, miscValue1, miscValue2, nil)
+}
+
+// meetsCriteriaRequirementsWithTarget is the target-aware form of
+// meetsCriteriaRequirements: DATA_TYPE_SCRIPT gates (achievement_scripts.cpp)
+// evaluate against the kill target when the criteria fires from a kill.
+// C++: ScriptMgr::OnCriteriaCheck(scriptId, source, target).
+func (s *session) meetsCriteriaRequirementsWithTarget(criterion achievementCriteriaEntry, miscValue1, miscValue2 uint32, target *session) bool {
 	if s.player == nil {
 		return false
 	}
@@ -938,6 +946,12 @@ func (s *session) meetsCriteriaRequirements(criterion achievementCriteriaEntry, 
 			if miscValue1 != rule.Value1 {
 				return false
 			}
+		case criteriaDataTypeScript: // 11
+			// AchievementCriteriaScript gate (scripts/World/achievement_scripts.cpp);
+			// without this, script-gated criteria were silently auto-passed.
+			if !checkAchievementCriteriaScript(rule.ScriptName, s, target) {
+				return false
+			}
 		}
 	}
 
@@ -948,6 +962,12 @@ func (s *session) meetsCriteriaRequirements(criterion achievementCriteriaEntry, 
 // asset by quantity, mirroring AchievementMgr::UpdateAchievementCriteria for
 // the counter-style criteria this server tracks.
 func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantity uint32) {
+	s.updateAchievementCriteriaWithTarget(criterionType, asset, quantity, nil)
+}
+
+// updateAchievementCriteriaWithTarget threads the kill target to the
+// DATA_TYPE_SCRIPT gate (C++ OnCheck's Unit* target).
+func (s *session) updateAchievementCriteriaWithTarget(criterionType, asset uint32, quantity uint32, target *session) {
 	if s.player == nil || s.server == nil {
 		return
 	}
@@ -974,7 +994,7 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 	}
 
 	for _, criterion := range matched {
-		s.applyCriteriaProgress(criterion, quantity, asset)
+		s.applyCriteriaProgressWithTarget(criterion, quantity, asset, target)
 	}
 }
 
@@ -982,10 +1002,16 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 // earned/requirements gates, counter advance, client update, DB persist,
 // and completion check shared by every criteria advance path.
 func (s *session) applyCriteriaProgress(criterion achievementCriteriaEntry, quantity, asset uint32) {
+	s.applyCriteriaProgressWithTarget(criterion, quantity, asset, nil)
+}
+
+// applyCriteriaProgressWithTarget threads the kill target to the
+// DATA_TYPE_SCRIPT gate (C++ OnCheck's Unit* target).
+func (s *session) applyCriteriaProgressWithTarget(criterion achievementCriteriaEntry, quantity, asset uint32, target *session) {
 	if _, done := s.earnedAchievements[criterion.AchievementID]; done {
 		return
 	}
-	if !s.meetsCriteriaRequirements(criterion, quantity, asset) {
+	if !s.meetsCriteriaRequirementsWithTarget(criterion, quantity, asset, target) {
 		return
 	}
 	progress := s.criteriaProgress[criterion.ID]
@@ -1018,7 +1044,10 @@ func (s *session) applyCriteriaProgress(criterion achievementCriteriaEntry, quan
 // documented deltas. The old arena-end approximation (crediting from the
 // scoreboard at arena close) had no C++ counterpart — C++ credits only
 // per-kill — and is removed.
-func (s *session) creditKillingBlowCriteria() {
+// creditKillingBlowCriteria mirrors the per-kill GET_KILLING_BLOWS leg;
+// victim is the kill target for the DATA_TYPE_SCRIPT gate (nil for creature
+// kills, where C++ target->ToPlayer() is null and the checks fail).
+func (s *session) creditKillingBlowCriteria(victim *session) {
 	if s.player == nil || s.server == nil {
 		return
 	}
@@ -1033,7 +1062,7 @@ func (s *session) creditKillingBlowCriteria() {
 	matched := achievementIndex.byType[criteriaTypeGetKillingBlows]
 	achievementIndex.mu.RUnlock()
 	for _, criterion := range matched {
-		s.applyCriteriaProgress(criterion, 1, criterion.Asset)
+		s.applyCriteriaProgressWithTarget(criterion, 1, criterion.Asset, victim)
 	}
 }
 
@@ -1478,12 +1507,14 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 		_, _ = killer.server.CharactersStore.DB.Exec("UPDATE characters SET totalKills = ?, todayKills = ? WHERE guid = ?", killer.player.TotalKills, killer.player.TodayKills, killer.playerGUID)
 	}
 	killer.sendPlayerUpdate()
-	killer.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
+	// The victim threads through to the DATA_TYPE_SCRIPT gate
+	// (achievement_killed_exp_or_honor_target, achievement_scripts.cpp:282).
+	killer.updateAchievementCriteriaWithTarget(criteriaTypeHonorableKill, 0, 1, victim)
 	// EARN_HONORABLE_KILL is PROGRESS_SET to lifetime kills (AchievementMgr.cpp:1039),
 	// not an accumulate; HONORABLE_KILL_AT_AREA is keyed by area id (Player.cpp:6945).
 	killer.setAchievementCriteria(criteriaTypeEarnHonorableKill, 0, killer.player.TotalKills)
 	if killer.areaID > 0 {
-		killer.updateAchievementCriteria(criteriaTypeHKAtArea, killer.areaID, 1)
+		killer.updateAchievementCriteriaWithTarget(criteriaTypeHKAtArea, killer.areaID, 1, victim)
 	}
 	victim.updateAchievementCriteria(criteriaTypeKilledByPlayer, 0, 1)
 	killer.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)

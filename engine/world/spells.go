@@ -9286,8 +9286,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
 	s.startTimedAchievement(timedTypeSpellCast, spellID)
 
-	// Reference SpellEffects.cpp:3858-3874: Spell 7266 (Duel)
-	if spellID == 7266 && targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
+	// Reference SpellEffects.cpp:3858-3874: Spell 7266 (Duel). Spell 62875 is the
+	// Argent Tournament joust duel — same EffectDuel path, with DuelInfo::IsMounted
+	// captured (SpellEffects.cpp:3866-3868).
+	if (spellID == 7266 || spellID == 62875) && targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
 		if partner := s.server.findSessionByGUID(targetGUID); partner != nil && partner.player != nil {
 			// Spell::EffectDuel (SpellEffects.cpp:3805-3823): an already-dueling
 			// caster or target, or a target ignoring the caster, drops the
@@ -9304,6 +9306,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			s.duelPartner = targetGUID
 			partner.duelPartner = s.playerGUID
+			// SpellEffects.cpp:3866-3868: isMounted = (spellId == 62875).
+			s.duelMounted = spellID == 62875
+			partner.duelMounted = spellID == 62875
 			// Spell::EffectDuel (SpellEffects.cpp:3867-3868): the caster is the
 			// initiator on both DuelInfo records; only the challenged accepts.
 			s.duelInitiator = true

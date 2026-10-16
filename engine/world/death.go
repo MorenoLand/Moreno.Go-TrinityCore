@@ -649,7 +649,7 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	s.procKillAuraTriggers(ctx, killerGUID, killerGUID, procFlagKilled, attackerHonorTarget)
 	s.procKillAuraTriggers(ctx, s.playerGUID, s.playerGUID, procFlagDeath, true)
 	if killer != nil {
-		killer.creditKillingBlowCriteria()
+		killer.creditKillingBlowCriteria(s)
 	}
 	// Player::setDeathState JUST_DIED (Player.cpp:1411-1416) + the Unit::Kill
 	// Spirit of Redemption arm (Unit.cpp:11302-11310): the priceless-

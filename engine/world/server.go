@@ -458,6 +458,10 @@ type session struct {
 	// when this session cast the duel challenge (Spell::EffectDuel). Only the
 	// challenged party may accept (DuelHandler.cpp:27).
 	duelInitiator bool
+	// duelMounted is the DuelInfo::IsMounted analog (Player.h:241): captured at
+	// duel challenge time — true only for the Argent Tournament joust duel spell
+	// 62875 (SpellEffects.cpp:3866-3868). Read by achievement_tilted.
+	duelMounted bool
 	// duelCountdown is the DUEL_STATE_COUNTDOWN analog: the accept was
 	// processed and the 3s StartTime is ticking (DuelHandler.cpp:44-49).
 	duelCountdown    bool

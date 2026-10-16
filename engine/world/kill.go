@@ -930,7 +930,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				actorGUID:      victim.GUID,
 			})
 		}
-		s.creditKillingBlowCriteria()
+		s.creditKillingBlowCriteria(nil)
 
 		// Boss_Announcer::OnCreatureKill (Custom/cs_worldboss_kill_announce.cpp:20-32):
 		// fires from Unit::Kill's ScriptMgr hook block (Unit.cpp:11468-11482),
