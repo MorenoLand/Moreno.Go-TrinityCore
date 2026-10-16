@@ -87,12 +87,13 @@ const (
 	ArenaWorldStateShowRingOfValor   uint32 = 3610
 
 	// Timers & Limits
-	ArenaWarmupLength        = 60 * time.Second
-	ArenaMatchTimeLimit      = 47 * time.Minute
-	ArenaDoorRemovalDelay    = 5 * time.Second
-	ArenaShadowSightDelay    = 60 * time.Second
-	ArenaAutoLeaveDelay      = 120 * time.Second
-	ArenaTimeLimitPointsLoss = -16
+	ArenaWarmupLength              = 60 * time.Second
+	ArenaMatchTimeLimit            = 47 * time.Minute
+	ArenaDoorRemovalDelay          = 5 * time.Second
+	ArenaShadowSightRespawnDelay   = 120 * time.Second // buff respawn NA/RL/BE/DS: AddObject respawn param 120 (replaces wrong unused 60s const)
+	ArenaShadowSightRespawnDelayRV = 90 * time.Second  // buff respawn RV: BattlegroundRV::StartingEventOpenDoors (BattlegroundRV.cpp:71-72)
+	ArenaAutoLeaveDelay            = 120 * time.Second
+	ArenaTimeLimitPointsLoss       = -16
 
 	// Ring of Valor fire/pillar preamble (BattlegroundRV.h:84-87):	// StartingEventOpenDoors sets OPEN_FENCES + FIRST_TIMER 20133ms, the fire
 	// opens, CLOSE_FIRE_TIMER 5000ms closes it, FIRE_TO_PILLAR_TIMER 20000ms
@@ -1104,10 +1105,33 @@ func (s *Server) handleArenaGameObjectUse(ctx context.Context, sess *session, gu
 		s.setGameObjectHidden(guid, true)
 		s.broadcastGameObjectDespawn(sess.player.Map, guid)
 		s.broadcastArenaMessage(sess.player.Map, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
+		s.scheduleArenaShadowSightRespawn(sess.player.Map, guid)
 		return true
 	default:
 		return true
 	}
+}
+
+// scheduleArenaShadowSightRespawn arms the Shadow Sight buff respawn at the
+// C++ respawn delay (120s NA/RL/BE/DS, 90s RV — see ArenaShadowSightRespawnDelay
+// consts). The unhide re-enables the buff click, mirroring the C++ respawn of
+// the buff gameobject; setGameObjectHidden(false) is the established respawn
+// primitive (EOTS/WSG flag-return precedent). A fire landing after the match
+// ended is a no-op (EOTS respawn-timer battle-over gate).
+func (s *Server) scheduleArenaShadowSightRespawn(mapID uint32, guid uint64) {
+	delay := ArenaShadowSightRespawnDelay
+	if mapID == ArenaMapRingOfValor {
+		delay = ArenaShadowSightRespawnDelayRV
+	}
+	time.AfterFunc(delay, func() {
+		if s == nil {
+			return
+		}
+		if arena := s.findArenaState(mapID, 0); arena != nil && arena.Winner != ArenaTeamNone {
+			return
+		}
+		s.setGameObjectHidden(guid, false)
+	})
 }
 
 // updateArenaDamageScore updates damage done for a player in the arena score table.

@@ -605,6 +605,94 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 	})
 }
 
+// simulateArenaQueueInvite arms the arena queue-pop simulation for one queued
+// arena slot, mirroring simulateBGQueueInvite for the arena legs of the C++
+// matchmaker: the per-session sim stands in for the opposing-team matchmaking
+// the C++ Update() performs (rated: BattlegroundQueue.cpp:955-1010; skirmish
+// similarly needs a second team). At pop time it mirrors
+// sBattlegroundMgr->CreateNewBattleground (BattlegroundQueue.cpp:983) by
+// getting/creating the arena state, then invites the player
+// (BattlegroundQueue::InviteGroupToBG, BattlegroundQueue.cpp:432 — the
+// single-player sim takes no side; the arena team is the wire value the
+// port-accept arm computes). The remind and expire timers mirror
+// BGQueueInviteEvent::Execute (BattlegroundQueue.cpp:1018-1043) and
+// BGQueueRemoveEvent::Execute (BattlegroundQueue.cpp:1060-1103); the expire
+// arm skips the no-enter deserter tracking — the C++ arm gates it on
+// bg->isBattleground(), which excludes arenas.
+func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanceID uint32) {
+	if s == nil || slot < 0 || slot >= len(s.bgQueues) {
+		return
+	}
+	entry := &s.bgQueues[slot]
+	if !entry.Active || !entry.IsArena || entry.Status != BGStatusWaitQueue {
+		return
+	}
+	time.AfterFunc(bgSimulatedInviteDelay, func() {
+		if s == nil || !s.playerLoaded || s.player == nil {
+			return
+		}
+		if slot < 0 || slot >= len(s.bgQueues) {
+			return
+		}
+		e := &s.bgQueues[slot]
+		// Slot left or reused: the join time no longer matches.
+		if !e.Active || !e.IsArena || e.Status != BGStatusWaitQueue || e.BgTypeID != battlegroundAA || !e.JoinTime.Equal(joinTime) {
+			return
+		}
+		if instanceID == 0 {
+			instanceID = uint32(time.Now().Unix())
+		}
+		// The C++ pop's IsInvitedToBGInstanceGUID: a fresh instance id (the
+		// arena state created here is the Go form of the C++ pop's new
+		// Battleground object).
+		e.InstanceID = instanceID
+		e.MapID = battlegroundMapForType(battlegroundAA)
+		e.Status = BGStatusWaitJoin
+		s.server.getOrCreateArenaState(e.MapID, e.InstanceID, e.ArenaType, e.IsRated)
+		s.sendBattlefieldStatus(uint8(slot))
+		s.debug("simulated arena invite", "account", s.accountName, "slot", slot, "type", e.ArenaType, "rated", e.IsRated, "instance", instanceID)
+		// BGQueueInviteEvent::Execute (BattlegroundQueue.cpp:1018-1043):
+		// INVITATION_REMIND_TIME after the pop, if the player is still
+		// invited and hasn't responded, the invite dialog goes out again.
+		remindID := instanceID
+		time.AfterFunc(bgInvitationRemindTime, func() {
+			if s == nil || !s.playerLoaded || s.player == nil {
+				return
+			}
+			if slot < 0 || slot >= len(s.bgQueues) {
+				return
+			}
+			rem := &s.bgQueues[slot]
+			if !rem.Active || !rem.IsArena || rem.Status != BGStatusWaitJoin || rem.BgTypeID != battlegroundAA || !rem.JoinTime.Equal(joinTime) || rem.InstanceID != remindID {
+				return
+			}
+			s.sendBattlefieldStatus(uint8(slot))
+			s.debug("simulated arena invite re-sent", "account", s.accountName, "slot", slot)
+		})
+		// BGQueueRemoveEvent::Execute (BattlegroundQueue.cpp:1060-1103): the
+		// invite expires INVITE_ACCEPT_WAIT_TIME after the pop — the slot is
+		// freed and a STATUS_NONE packet goes out. No no-enter deserter
+		// tracking: the C++ arm gates it on bg->isBattleground(), which
+		// excludes arenas.
+		inviteID := instanceID
+		time.AfterFunc(bgInviteAcceptWindow, func() {
+			if s == nil || !s.playerLoaded || s.player == nil {
+				return
+			}
+			if slot < 0 || slot >= len(s.bgQueues) {
+				return
+			}
+			exp := &s.bgQueues[slot]
+			if !exp.Active || !exp.IsArena || exp.Status != BGStatusWaitJoin || exp.BgTypeID != battlegroundAA || !exp.JoinTime.Equal(joinTime) || exp.InstanceID != inviteID {
+				return
+			}
+			s.bgQueues[slot] = bgQueueEntry{}
+			s.sendBattlefieldStatus(uint8(slot))
+			s.debug("simulated arena invite expired", "account", s.accountName, "slot", slot)
+		})
+	})
+}
+
 // handleBattlemasterJoinGroup processes the joinAsGroup arm of CMSG_BATTLEMASTER_JOIN.
 // Reference: WorldSession::HandleBattlemasterJoinOpcode, group branch
 // (BattleGroundHandler.cpp:212-258) and Group::CanJoinBattlegroundQueue (Group.cpp:2024).
@@ -947,11 +1035,12 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 		}
 	}
 
+	joinTime := time.Now()
 	s.bgQueues[slot] = bgQueueEntry{
 		Active:       true,
 		BgTypeID:     battlegroundAA, // BATTLEGROUND_AA (All Arenas)
 		InstanceID:   0,
-		JoinTime:     time.Now(),
+		JoinTime:     joinTime,
 		Status:       BGStatusWaitQueue,
 		ArenaType:    arenaType,
 		IsArena:      true,
@@ -960,6 +1049,8 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	}
 
 	s.sendBattlefieldStatus(uint8(slot))
+	// No live matchmaker: simulate the arena queue pop (see simulateArenaQueueInvite).
+	s.simulateArenaQueueInvite(slot, joinTime, 0)
 	s.debug("queued for arena", "account", s.accountName, "slot", slot, "type", arenaType, "rated", isRated != 0)
 	return true
 }
@@ -1106,6 +1197,10 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 	// sendBattlefieldStatus answers the hardcoded average — same documented delta as the
 	// battlemaster group arm. bg->SetRated(isRated) has no Go template model; the rating
 	// rides on the queue entry, the solo-arm convention.
+	// One shared synthetic instance id for the simulated pop, like the
+	// C++ GroupQueueInfo's single IsInvitedToBGInstanceGUID — the group
+	// lands in the same arena instance.
+	simInstanceID := uint32(time.Now().Unix())
 	for _, m := range grp.Members {
 		member := s.server.findSessionByGUID(m.GUID)
 		if member == nil || !member.playerLoaded || member.player == nil {
@@ -1115,11 +1210,12 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 		if slot == -1 {
 			continue
 		}
+		joinTime := time.Now()
 		member.bgQueues[slot] = bgQueueEntry{
 			Active:       true,
 			BgTypeID:     battlegroundAA, // BATTLEGROUND_AA (All Arenas)
 			InstanceID:   0,
-			JoinTime:     time.Now(),
+			JoinTime:     joinTime,
 			Status:       BGStatusWaitQueue,
 			ArenaType:    arenaType,
 			IsArena:      true,
@@ -1127,6 +1223,8 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 			ArenaFaction: 0,
 		}
 		member.sendBattlefieldStatus(uint8(slot))
+		// No live matchmaker: simulate the arena queue pop (see simulateArenaQueueInvite).
+		member.simulateArenaQueueInvite(slot, joinTime, simInstanceID)
 	}
 	s.sendGroupJoinBGResult(grp.Members, err)
 	s.debug("group queued for arena", "account", s.accountName, "type", arenaType, "rated", isRated, "members", len(grp.Members))
@@ -1326,6 +1424,16 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		s.server.addOrSetPlayerToCorrectBGGroup(s)
 		s.sendBattlefieldStatus(uint8(slot))
 		s.debug("battlefield port accept", "account", s.accountName, "bg", bgTypeID, "instance", entry.InstanceID)
+		// Arena::AddPlayer (Arena.cpp:74): on the port accept, admit the
+		// player into the arena state the pop created. entry.ArenaFaction
+		// carries the C++ SetBGTeam wire value (1 alliance / 0 horde ==
+		// ArenaTeamGold / ArenaTeamGreen), which addPlayerToArena takes as
+		// the arena team. The state lookup re-finds the pop-created state
+		// (getOrCreateArenaState is idempotent).
+		if entry.IsArena {
+			arena := s.server.getOrCreateArenaState(entry.MapID, entry.InstanceID, entry.ArenaType, entry.IsRated)
+			s.server.addPlayerToArena(s, entry.ArenaFaction, arena)
+		}
 	} else {
 		// Arena leave gate (BattleGroundHandler.cpp:493-494): leaving an arena past
 		// STATUS_WAIT_QUEUE is answered with silence.

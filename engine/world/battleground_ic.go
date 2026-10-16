@@ -631,6 +631,26 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 		return
 	}
 
+	// COUNTER-CONTEST ON A NEVER-CAPTURED NODE: contested by the enemy with no
+	// previous owner (Faction neutral — the C++ last_entry is the neutral banner,
+	// BattlegroundIC.h:893). BattlegroundIC::GetNextBanner
+	// (BattlegroundIC.cpp:527-545) then returns the neutral banner, so neither
+	// the assault arm (cpp:444-464) nor the defend arm (cpp:465-479) fires: the
+	// 60s timer from the first click KEEPS RUNNING (it is not restarted), no
+	// assault score is credited, and no broadcast goes out. The banner object is
+	// swapped back to neutral while the worldstate rows stay on the previous
+	// conflict (UpdateNodeWorldState matches none of the four faction banners),
+	// and nodePoint.faction takes the clicking team — mirrored here by keeping
+	// State and the live CaptureTimer while moving ContestTeam to the clicker.
+	// The capture then resolves to the clicker at the ORIGINAL deadline: the
+	// Update arm reads the current faction (BattlegroundIC.cpp:175), which is
+	// why resolveICNodeCapture reads ContestTeam at fire time.
+	if ((team == ICTeamAlliance && node.State == ICNodeStateConflictH) ||
+		(team == ICTeamHorde && node.State == ICNodeStateConflictA)) && node.Faction == ICTeamNeutral {
+		node.ContestTeam = team
+		return
+	}
+
 	// ASSAULTING: Node is uncontrolled, controlled by enemy, or contested
 	if node.CaptureTimer != nil {
 		node.CaptureTimer.Stop()
@@ -649,14 +669,19 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 	// UpdatePlayerScore(player, SCORE_BASES_ASSAULTED, 1).
 	s.creditBGObjectiveCapture(sess.playerGUID, ICObjectiveAssaultBase)
 
-	// Start 60s capture timer
+	// Start 60s capture timer. The callback resolves to the ContestTeam live
+	// at fire time (see the counter-contest arm above): C++ reads
+	// nodePoint.faction at expiry, not the team that armed the timer.
 	node.CaptureTimer = time.AfterFunc(ic.BannerCaptureDuration, func() {
-		s.resolveICNodeCapture(ic, nodeID, team)
+		s.resolveICNodeCapture(ic, nodeID)
 	})
 }
 
-// resolveICNodeCapture finalizes ownership after 60s without defense.
-func (s *Server) resolveICNodeCapture(ic *icBattlegroundState, nodeID uint8, team uint32) {
+// resolveICNodeCapture finalizes ownership after 60s without defense. The
+// capturing team is the ContestTeam live at fire time — C++ reads
+// nodePoint.faction at expiry (BattlegroundIC.cpp:175), which a counter-click
+// on a never-captured node moves without restarting the timer.
+func (s *Server) resolveICNodeCapture(ic *icBattlegroundState, nodeID uint8) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
@@ -665,6 +690,10 @@ func (s *Server) resolveICNodeCapture(ic *icBattlegroundState, nodeID uint8, tea
 	}
 
 	node := &ic.Nodes[nodeID]
+	team := node.ContestTeam
+	if team == ICTeamNeutral {
+		return
+	}
 	node.Faction = team
 	node.ContestTeam = ICTeamNeutral
 	if team == ICTeamAlliance {

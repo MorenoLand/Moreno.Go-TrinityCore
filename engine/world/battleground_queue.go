@@ -30,7 +30,10 @@ package world
 // sim (battleground.go handleBattlemasterJoin) deliberately replaces — no dead
 // container is added here. BGQueueInviteEvent/BGQueueRemoveEvent
 // (BattlegroundQueue.cpp:471-476, 1018-1103) are already bridged in Go by the
-// timers in simulateBGQueueInvite (battleground.go).
+// timers in simulateBGQueueInvite (battleground.go); the arena legs of those
+// events are mirrored by simulateArenaQueueInvite, which also carries the
+// BattlegroundMgr::CreateNewBattleground pop arm (BattlegroundQueue.cpp:983)
+// and the Arena::AddPlayer admit on port accept.
 
 // bgQueuePlayerInfo is the Go form of PlayerQueueInfo (BattlegroundQueue.h:33-38):
 // per-player data for someone waiting in the battleground queue.
