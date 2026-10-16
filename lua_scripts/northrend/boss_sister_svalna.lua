@@ -75,6 +75,31 @@
 --   6) (:337) unconditional, the sjonnir JustDied-Talk precedent;
 --   the CaptainSurviveTalk cross-AI event legs (:340-350) ride the
 --   absent instance / cross-AI bridges.
+-- PORTED (2026-10-16): npc_captain_brandon::Reset :1015-1023 +
+--   UpdateAI :1039-1051 and npc_captain_grondel::Reset :1075-1082 +
+--   UpdateAI :1099-1111 — Reset-seeded timers re-keyed to event 1,
+--   registered for both the living and undead entries (same
+--   struct/AI survives UpdateEntry): brandon
+--   EVENT_BRANDON_CRUSADER_STRIKE {6s,10s} -> DoCastVictim(
+--   SPELL_CRUSADER_STRIKE 71549), re-arm {6s,12s};
+--   EVENT_BRANDON_JUDGEMENT_OF_COMMAND {8s,13s} -> DoCastVictim(
+--   SPELL_JUDGEMENT_OF_COMMAND 71551), re-arm {8s,13s}; grondel
+--   EVENT_GRONDEL_CHARGE_CHECK 500ms -> DoCastVictim(SPELL_CHARGE
+--   71553), re-arm 500ms unconditional;
+--   EVENT_GRONDEL_MORTAL_STRIKE {8s,14s} -> DoCastVictim(
+--   SPELL_MORTAL_STRIKE 71552), re-arm {10s,15s};
+--   EVENT_GRONDEL_SUNDER_ARMOR {3s,12s} -> DoCastVictim(
+--   SPELL_SUNDER_ARMOR 71554), re-arm {5s,17s}. The
+--   npc_argent_captainAI SpellHit SPELL_UNDEATH 70053->70089 arm
+--   (:895-921: setDeathState(JUST_RESPAWNED) + UpdateEntry remap +
+--   DoCastSelf(SPELL_UNDEATH 70089, true)) is blocked on the
+--   setDeathState/UpdateEntry machine legs (no bridges) — event 14
+--   OnHitBySpell is bridged (boss_ai.go:2033) but the cast alone,
+--   without the entry swap, would be C++-inexact — documented-only.
+-- EVENT_BRANDON_DIVINE_SHIELD (500ms poll +
+--   HealthBelowPct(20) gate) and the IsUndead random-target legs
+--   (EVENT_BRANDON_HAMMER_OF_BETRAYAL, EVENT_GRONDEL_CONFLAGRATION)
+--   stay parked (not in the docast-missing scan set).
 -- npc_crok_scourgebane::Reset (:544-551) + UpdateEscortAI
 --   (:754-761) — Reset-seeded timers re-keyed to event 1:
 --   EVENT_SCOURGE_STRIKE {7500,12500}ms -> DoCastVictim(
@@ -209,6 +234,10 @@ local NPC_CAPTAIN_ARNATH = 37122
 local NPC_CAPTAIN_BRANDON = 37123
 local NPC_CAPTAIN_GRONDEL = 37124
 local NPC_CAPTAIN_RUPERT = 37125
+local NPC_CAPTAIN_ARNATH_UNDEAD = 37491 -- icecrown_citadel.h:274
+local NPC_CAPTAIN_BRANDON_UNDEAD = 37493 -- icecrown_citadel.h:275
+local NPC_CAPTAIN_GRONDEL_UNDEAD = 37494 -- icecrown_citadel.h:276
+local NPC_CAPTAIN_RUPERT_UNDEAD = 37495 -- icecrown_citadel.h:277
 
 local SAY_SVALNA_KILL_CAPTAIN = 1
 local SAY_SVALNA_AGGRO = 3
@@ -233,6 +262,12 @@ local SPELL_YMIRJAR_SHOOT = 71253
 local SPELL_YMIRJAR_SHADOW_BOLT = 71296
 local SPELL_DEATH_EMBRACE = 71299
 local SPELL_WARLORDS_PRESENCE = 71244
+
+local SPELL_CRUSADER_STRIKE = 71549 -- :1040
+local SPELL_JUDGEMENT_OF_COMMAND = 71551 -- :1049
+local SPELL_CHARGE = 71553 -- :1100
+local SPELL_MORTAL_STRIKE = 71552 -- :1104
+local SPELL_SUNDER_ARMOR = 71554 -- :1108
 
 local SPELL_TWISTED_WINDS = 71306
 local SPELL_ICE_TRAP = 71249
@@ -587,13 +622,116 @@ for _, entry in ipairs(YMIRJAR_ENTRIES) do
     RegisterCreatureEvent(entry, 23, ymirjarReset)
 end
 
+-- C++ npc_captain_brandon::Reset :1015-1023 + UpdateAI :1039-1051 —
+-- Reset-seeded timers re-keyed to event 1 (the Reset re-key
+-- convention): EVENT_BRANDON_CRUSADER_STRIKE {6s,10s} ->
+-- DoCastVictim(SPELL_CRUSADER_STRIKE 71549), re-arm {6s,12s};
+-- EVENT_BRANDON_JUDGEMENT_OF_COMMAND {8s,13s} ->
+-- DoCastVictim(SPELL_JUDGEMENT_OF_COMMAND 71551), re-arm
+-- {8s,13s}. The undead entry (37493) runs the same struct/AI
+-- (UpdateEntry keeps the AI instance) — same seeds, same arms.
+-- The EVENT_BRANDON_DIVINE_SHIELD 500ms poll (HealthBelowPct(20)
+-- gate) and the IsUndead EVENT_BRANDON_HAMMER_OF_BETRAYAL
+-- random-target leg are not in the scan set — left out.
+local function onBrandonCrusaderStrike(creature, guid)
+    creature:CastSpell(nil, SPELL_CRUSADER_STRIKE)
+    schedule(guid, "crusader", {6000, 12000},
+        function() onBrandonCrusaderStrike(creature, guid) end)
+end
+
+local function onBrandonJudgementOfCommand(creature, guid)
+    creature:CastSpell(nil, SPELL_JUDGEMENT_OF_COMMAND)
+    schedule(guid, "judgement", {8000, 13000},
+        function() onBrandonJudgementOfCommand(creature, guid) end)
+end
+
+local function brandonEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "crusader", {6000, 10000},
+        function() onBrandonCrusaderStrike(creature, guid) end)
+    schedule(guid, "judgement", {8000, 13000},
+        function() onBrandonJudgementOfCommand(creature, guid) end)
+end
+
+-- C++ npc_captain_grondel::Reset :1075-1082 + UpdateAI :1099-1111 —
+-- Reset-seeded timers re-keyed to event 1:
+-- EVENT_GRONDEL_CHARGE_CHECK 500ms -> DoCastVictim(SPELL_CHARGE
+-- 71553), re-arm 500ms unconditional (the poll sits outside any
+-- guard); EVENT_GRONDEL_MORTAL_STRIKE {8s,14s} ->
+-- DoCastVictim(SPELL_MORTAL_STRIKE 71552), re-arm {10s,15s};
+-- EVENT_GRONDEL_SUNDER_ARMOR {3s,12s} -> DoCastVictim(
+-- SPELL_SUNDER_ARMOR 71554), re-arm {5s,17s}. The undead entry
+-- (37494) runs the same struct/AI — same seeds, same arms. The
+-- IsUndead EVENT_GRONDEL_CONFLAGRATION random-target leg is not
+-- in the scan set — left out.
+local function onGrondelCharge(creature, guid)
+    creature:CastSpell(nil, SPELL_CHARGE)
+    schedule(guid, "charge", 500,
+        function() onGrondelCharge(creature, guid) end)
+end
+
+local function onGrondelMortalStrike(creature, guid)
+    creature:CastSpell(nil, SPELL_MORTAL_STRIKE)
+    schedule(guid, "mortal", {10000, 15000},
+        function() onGrondelMortalStrike(creature, guid) end)
+end
+
+local function onGrondelSunderArmor(creature, guid)
+    creature:CastSpell(nil, SPELL_SUNDER_ARMOR)
+    schedule(guid, "sunder", {5000, 17000},
+        function() onGrondelSunderArmor(creature, guid) end)
+end
+
+local function grondelEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "charge", 500,
+        function() onGrondelCharge(creature, guid) end)
+    schedule(guid, "mortal", {8000, 14000},
+        function() onGrondelMortalStrike(creature, guid) end)
+    schedule(guid, "sunder", {3000, 12000},
+        function() onGrondelSunderArmor(creature, guid) end)
+end
+
+local function captainCombatLeave(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function captainCombatReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local BRANDON_ENTRIES = {
+    NPC_CAPTAIN_BRANDON,
+    NPC_CAPTAIN_BRANDON_UNDEAD,
+}
+
+for _, entry in ipairs(BRANDON_ENTRIES) do
+    RegisterCreatureEvent(entry, 1, brandonEnterCombat)
+    RegisterCreatureEvent(entry, 2, captainCombatLeave)
+    RegisterCreatureEvent(entry, 23, captainCombatReset)
+end
+
+local GRONDEL_ENTRIES = {
+    NPC_CAPTAIN_GRONDEL,
+    NPC_CAPTAIN_GRONDEL_UNDEAD,
+}
+
+for _, entry in ipairs(GRONDEL_ENTRIES) do
+    RegisterCreatureEvent(entry, 1, grondelEnterCombat)
+    RegisterCreatureEvent(entry, 2, captainCombatLeave)
+    RegisterCreatureEvent(entry, 23, captainCombatReset)
+end
+
 -- C++ npc_argent_captainAI::JustDied (:820-829): the _firstDeath latch
 -- (true at construction) — first death Talk(SAY_CAPTAIN_DEATH 0) and
 -- flips the latch; later deaths Talk(SAY_CAPTAIN_SECOND_DEATH 3). The
 -- latch is per-AI-instance and survives in-place resurrection, so it is
 -- keyed by GUID and never cleared on events 2/23 (a fresh spawn gets a
--- fresh GUID, matching the ctor). The 4 captain entries are Go-side
--- registered (boss_ai.go RegisterLuaBoss lines).
+-- fresh GUID, matching the ctor). All 8 captain entries (living +
+-- undead) are Go-side registered (boss_ai.go RegisterLuaBoss
+-- lines); event 4 captainDied is registered for all 8.
 local captainFirstDeath = {}
 
 local CAPTAIN_ENTRIES = {
@@ -601,6 +739,10 @@ local CAPTAIN_ENTRIES = {
     NPC_CAPTAIN_BRANDON,
     NPC_CAPTAIN_GRONDEL,
     NPC_CAPTAIN_RUPERT,
+    NPC_CAPTAIN_ARNATH_UNDEAD,
+    NPC_CAPTAIN_BRANDON_UNDEAD,
+    NPC_CAPTAIN_GRONDEL_UNDEAD,
+    NPC_CAPTAIN_RUPERT_UNDEAD,
 }
 
 local function captainDied(event, creature, killer)
