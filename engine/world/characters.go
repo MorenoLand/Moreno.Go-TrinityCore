@@ -546,6 +546,41 @@ func (s *session) initializeCreatedPlayerStats(ctx context.Context, guid uint64,
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, power1 = ? WHERE guid = ?", totalHealth, totalMana, guid)
 }
 
+// refreshRealmCharacterCount mirrors World::UpdateRealmCharCount
+// (World.cpp:3200-3222), called at the end of Player::DeleteFromDB
+// (Player.cpp:4558-4560) on the char-delete path — updateRealmChars defaults
+// true and both the REMOVE and UNLINK arms reach it. The account's row in the
+// login realmcharacters table is replaced with the live character count; the
+// char-create account-limit gate reads that row (CharacterHandler.cpp:434-442),
+// so a delete without the refresh leaves a stale inflated count.
+func (s *session) refreshRealmCharacterCount(ctx context.Context, accountID uint32) {
+	if s == nil || s.server == nil || accountID == 0 {
+		return
+	}
+	store := s.server.CharactersStore
+	if store == nil || store.DB == nil {
+		return
+	}
+	// CHAR_SEL_CHARACTER_COUNT (SELECT account, COUNT(guid) ... GROUP BY
+	// account) yields no row when the account holds no characters — C++ skips
+	// the replace then, so the refresh is skipped here too.
+	row, err := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHARACTER_COUNT"), accountID)
+	var acct uint32
+	var count uint64
+	if err != nil || row.Scan(&acct, &count) != nil {
+		return
+	}
+	if s.server.AuthStore == nil || s.server.AuthStore.DB == nil {
+		return
+	}
+	// LOGIN_REP_REALM_CHARACTERS (REPLACE INTO realmcharacters
+	// (numchars, acctid, realmid) VALUES (?, ?, ?)); C++ narrows the count
+	// to uint8.
+	_, _ = s.server.AuthStore.DB.ExecContext(ctx,
+		"REPLACE INTO realmcharacters (numchars, acctid, realmid) VALUES (?, ?, ?)",
+		uint8(count), accountID, s.server.RealmID)
+}
+
 func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
 	guid, err := b.ReadU64()
@@ -653,6 +688,7 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		if err := tx.Commit(); err != nil {
 			return true
 		}
+		s.refreshRealmCharacterCount(ctx, accountID)
 		delete(s.legitimate, guid)
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), charDeleteSuccess)
 	}
@@ -689,6 +725,7 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	if err := tx.Commit(); err != nil {
 		return true
 	}
+	s.refreshRealmCharacterCount(ctx, accountID)
 	s.releaseNpcBotOwnerCache(guid)
 	for _, contactGUID := range deletedContacts {
 		if sess := s.server.findSessionByGUID(contactGUID); sess != nil && sess.worldReady.Load() {
@@ -696,7 +733,7 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		}
 	}
 	delete(s.legitimate, guid)
-	return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), 71)
+	return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), charDeleteSuccess)
 }
 
 func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (success bool) {
@@ -2691,10 +2728,11 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 		sendRename(charNameNoName, false, "")
 		return true
 	}
-	// ObjectMgr::CheckPlayerName approximation (validCharacterName covers the
-	// length/alphabet arms).
-	if !validCharacterName(newName) {
-		sendRename(charNameFailure, false, "")
+	// ObjectMgr::CheckPlayerName (CharacterHandler.cpp:1124-1128): the
+	// specific failure code is forwarded verbatim to SendCharRename — not
+	// collapsed to CHAR_NAME_FAILURE (88).
+	if res := checkPlayerName(newName); res != 0 {
+		sendRename(res, false, "")
 		return true
 	}
 	store := s.server.CharactersStore
@@ -3667,6 +3705,23 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		// the MOVE_UNROOT leg is skipped (Player.cpp:4662-4663).
 		s.buildPlayerRepop(ctx, true)
 		s.repopAtGraveyard(ctx)
+	} else if s.player != nil && s.hasAuraType(spellAuraSpiritOfRedemption) {
+		// WorldSession::LogoutPlayer (WorldSession.cpp:518-525): a priest who
+		// died with Spirit of Redemption and logs out inside the spirit form
+		// is killed outright — the shapeshift is stripped and the deferred
+		// death runs before the repop legs. The 27827 remove leg fires
+		// completeSpiritOfRedemptionDeath ("die at aura end").
+		s.removeAurasByType(spellAuraModShapeshift)
+		s.removeAura(spiritOfRedemptionSpellID)
+		s.buildPlayerRepop(ctx, true)
+		s.repopAtGraveyard(ctx)
+	} else if s.hasPendingBind() {
+		// WorldSession::LogoutPlayer (WorldSession.cpp:528-532): a pending
+		// instance-lock bind is answered at logout — repop at the graveyard
+		// and clear the pending bind (no BuildPlayerRepop: the player is
+		// alive, so no corpse/repop state is built).
+		s.repopAtGraveyard(ctx)
+		s.setPendingBind(0, 0, 0, 0)
 	}
 	if s.playerLoaded && s.player != nil {
 		// WorldSession::LogoutPlayer (WorldSession.cpp:548-557): a player who
