@@ -1803,12 +1803,8 @@ func (s *session) handleSetActiveVoiceChannel(ctx context.Context, payload []byt
 // handleVoiceSessionEnable processes CMSG_VOICE_SESSION_ENABLE (0x3AF).
 func (s *session) handleVoiceSessionEnable(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
-	if _, err := r.ReadU8(); err != nil {
-		return false
-	}
-	if _, err := r.ReadU8(); err != nil {
-		return false
-	}
+	_, _ = r.ReadU8()
+	_, _ = r.ReadU8()
 	return true
 }
 
