@@ -491,51 +491,57 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	// HandleLfgJoinOpcode (LFGHandler.cpp:51): joining requires the
-	// dungeon-finder or raid-browser option enabled. The group-leader
-	// cheating gate has no Go counterpart — the queue here is per-player
-	// by design, so grouped non-leaders may still queue (documented
-	// model delta).
+	// HandleLfgJoinOpcode (LFGHandler.cpp:51-56): joining requires the
+	// dungeon-finder or raid-browser option enabled, and a grouped non-leader
+	// is silently dropped when the group is full (MAXGROUPSIZE) or not an LFG group.
 	if s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil &&
 		s.server.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
 		return true
 	}
+	if s.groupID != 0 && s.server != nil {
+		if grp := s.server.getGroup(s.groupID); grp != nil && grp.LeaderGUID != s.playerGUID &&
+			(len(grp.Members) == maxGroupSize || !grp.IsLFG) {
+			return true
+		}
+	}
+	// Truncated reads are dropped, never close: C++ ByteBuffer exceptions are
+	// caught in WorldSession::Update as "Skipped packet" (WorldSession.cpp:425-430).
 	b := protocol.NewReader(payload)
 	roles, err := b.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	if _, err := b.ReadBool(); err != nil {
-		return false
+		return true
 	}
 	if _, err := b.ReadBool(); err != nil {
-		return false
+		return true
 	}
 	count, err := b.ReadU8()
 	if err != nil || count > 50 {
-		return false
+		return true
 	}
 	dungeons := make([]uint32, 0, count)
 	for index := uint8(0); index < count; index++ {
 		dungeon, readErr := b.ReadU32()
 		if readErr != nil {
-			return false
+			return true
 		}
 		dungeons = append(dungeons, dungeon&0x00FFFFFF)
 	}
 	needsCount, err := b.ReadU8()
 	if err != nil {
-		return false
+		return true
 	}
 	if needsCount > 16 || b.Remaining() < int(needsCount) {
-		return false
+		return true
 	}
 	if _, err := b.Read(int(needsCount)); err != nil {
-		return false
+		return true
 	}
 	comment, err := b.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 	if len(comment) > 255 {
 		comment = comment[:255]

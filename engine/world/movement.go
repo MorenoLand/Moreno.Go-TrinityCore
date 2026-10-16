@@ -215,18 +215,20 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 		return true
 	}
 	b := protocol.NewReader(payload)
+	// Truncated reads are dropped, never close: C++ ByteBufferPositionException
+	// is caught in WorldSession::Update (WorldSession.cpp:425-430) as "Skipped packet".
 	if _, err := b.ReadPackedGUID(); err != nil {
 		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed guid")
-		return false
+		return true
 	}
 	if _, err := b.ReadU32(); err != nil {
 		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed unk")
-		return false
+		return true
 	}
 	info, err := readMovementInfo(b)
 	if err != nil {
 		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed movement", "error", err)
-		return false
+		return true
 	}
 	// The copied flags come from the sanitizing ReadMovementInfo in C++, so
 	// the ack runs the same anti-cheat pass before the copy.

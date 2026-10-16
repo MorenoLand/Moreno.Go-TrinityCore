@@ -715,7 +715,7 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // guid
+	guid, _ := r.ReadU64() // arena battlemaster guid
 	arenaSlot, _ := r.ReadU8()
 	asGroup, _ := r.ReadU8()
 	isRated, _ := r.ReadU8()
@@ -725,6 +725,12 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	// gates only InBattleground). Player::InBattleground is m_bgData.bgInstanceID != 0
 	// (Player.h:1906), mirrored by s.bgData.InstanceID (spells.go:2000 precedent).
 	if s.bgData.InstanceID != 0 {
+		return true
+	}
+
+	// BattleGroundHandler.cpp:621-623 — GetNPCIfCanInteractWith(guid,
+	// UNIT_NPC_FLAG_BATTLEMASTER) miss → silent return.
+	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagBattlemaster)) {
 		return true
 	}
 
@@ -751,16 +757,29 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 		return true
 	}
 
+	// BattleGroundHandler.cpp:663-665 — no PvPDifficulty bracket for the level →
+	// silent return (both arms).
+	if bgBracketIndex(uint32(s.player.Level)) < 0 {
+		s.debug("arena join rejected: no pvp bracket for level", "account", s.accountName, "level", s.player.Level)
+		return true
+	}
+
 	// BattleGroundHandler.cpp:699-709 — the asGroup arm computes err through
 	// Group::CanJoinBattlegroundQueue instead of the solo checks below.
 	if asGroup != 0 {
 		return s.handleBattlemasterJoinArenaGroup(ctx, arenaType, arenaSlot, isRated != 0)
 	}
 
+	// BattleGroundHandler.cpp:672-678 — player is using the dungeon finder →
+	// ERR_LFG_CANT_USE_BATTLEGROUND (-13), ahead of the RBAC arm.
+	if isLFGUsing(s, s.playerGUID) {
+		s.sendJoinedBGResult(groupJoinBattlegroundLFGCantUse)
+		return true
+	}
+
 	// BattleGroundHandler.cpp:680-686 — !CanJoinToBattleground(bg) → ERR_BATTLEGROUND_JOIN_FAILED.
 	// The AA template isArena(), so Player::CanJoinToBattleground (Player.cpp:22503) gates on
-	// RBAC_PERM_JOIN_ARENAS; the isUsingLfg arm ahead of it has no Go per-session model
-	// (tree-wide delta).
+	// RBAC_PERM_JOIN_ARENAS.
 	if !s.canJoinArenas {
 		s.sendJoinedBGResult(groupJoinBattlegroundFailed)
 		return true
@@ -832,6 +851,16 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 // (SharedDefines.h:3693 — "Incorrect party size for this arena.").
 const arenaTeamPartySize = int32(-3)
 
+// isLFGUsing bridges Player::isUsingLfg (GetState(guid) != LFG_STATE_NONE).
+// Go's LFGManager tracks the queued map only, so the queued state is covered.
+func isLFGUsing(s *session, guid uint64) bool {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.LFG == nil {
+		return false
+	}
+	_, using := s.server.Features.LFG.Status(guid)
+	return using
+}
+
 // handleBattlemasterJoinArenaGroup processes the asGroup arm of CMSG_BATTLEMASTER_JOIN_ARENA.
 // Reference: WorldSession::HandleBattlemasterJoinArena, group branch
 // (BattleGroundHandler.cpp:700-788) with Group::CanJoinBattlegroundQueue (Group.cpp:2024)
@@ -862,6 +891,7 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 
 		// The rated team-id arm (Group.cpp:2071-2073) compares each member against the
 		// reference player's team; the reference is the group leader here.
+		leaderBracket := bgBracketIndex(uint32(s.player.Level))
 		var leaderTeamID uint32
 		if isRated {
 			if cdb := s.server.CharactersStore.DB; cdb != nil {
@@ -890,6 +920,10 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 				// the RBAC CanJoinToBattleground arm between them has no Go RBAC model —
 				// the battlemaster group-arm documented delta.
 				err = groupJoinBattlegroundTimedOut
+			case bgBracketIndex(uint32(member.player.Level)) != leaderBracket:
+				// member not in the leader's level bracket → ERR_BATTLEGROUND_JOIN_RANGE_INDEX
+				// (Group.cpp:2059-2062)
+				err = groupJoinBattlegroundRangeIndex
 			case isRated && s.arenaTeamIDOfMember(ctx, member, arenaType) != leaderTeamID:
 				// rated arena team id mismatch → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2071-2073)
 				err = groupJoinBattlegroundFailed
@@ -900,6 +934,10 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 			case memberFreeBGQueueIndex(member) == -1:
 				// no free slot → ERR_BATTLEGROUND_TOO_MANY_QUEUES (Group.cpp:2079-2080)
 				err = groupJoinTooManyQueues
+			case isLFGUsing(s, member.playerGUID):
+				// member is using the dungeon finder → ERR_LFG_CANT_USE_BATTLEGROUND
+				// (Group.cpp:2081-2083)
+				err = groupJoinBattlegroundLFGCantUse
 			case member.hasAura(freezeAuraSpellID):
 				// freeze → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2085-2086)
 				err = groupJoinBattlegroundFailed

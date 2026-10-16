@@ -117,9 +117,13 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 	buf.WriteU32(aType)
 	for _, m := range members {
 		buf.WriteU64(m.guid)
+		// C++: uint8(player ? player->GetLevel() : 0) — live level of the
+		// connected player, 0 when offline (ArenaTeam.cpp:449).
 		online := uint8(0)
-		if s.server.findSessionByGUID(m.guid) != nil {
+		var level uint8
+		if ms := s.server.findSessionByGUID(m.guid); ms != nil && ms.player != nil {
 			online = 1
+			level = ms.player.Level
 		}
 		buf.WriteU8(online)
 		buf.WriteCString(m.name)
@@ -128,12 +132,7 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 			captainFlag = 0
 		}
 		buf.WriteU32(captainFlag)
-		// C++: uint8(player ? player->GetLevel() : 0) — offline members send level 0 (ArenaTeam.cpp:449).
-		if online == 1 {
-			buf.WriteU8(m.level)
-		} else {
-			buf.WriteU8(0)
-		}
+		buf.WriteU8(level)
 		buf.WriteU8(m.class)
 		buf.WriteU32(m.weekGames)
 		buf.WriteU32(m.weekWins)
@@ -261,7 +260,9 @@ func (s *session) handleArenaTeamInvite(ctx context.Context, payload []byte) boo
 	}
 	invitedName, err := r.ReadCString()
 	if err != nil {
-		return false
+		// Truncated name: C++ throws ByteBufferPositionException -> packet
+		// skipped, connection kept (WorldSession.cpp:425). Drop, never close.
+		return true
 	}
 	// C++ normalizePlayerName fails on invalid UTF-8 (ObjectMgr.cpp:147) and
 	// the handler returns silently (ArenaTeamHandler.cpp:94-96); Go's
@@ -560,7 +561,9 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 	}
 	name, err := r.ReadCString()
 	if err != nil {
-		return false
+		// Truncated name: C++ throws ByteBufferPositionException -> packet
+		// skipped, connection kept (WorldSession.cpp:425). Drop, never close.
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -715,7 +718,9 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 	}
 	name, err := r.ReadCString()
 	if err != nil {
-		return false
+		// Truncated name: C++ throws ByteBufferPositionException -> packet
+		// skipped, connection kept (WorldSession.cpp:425). Drop, never close.
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB

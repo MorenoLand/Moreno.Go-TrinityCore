@@ -5094,10 +5094,8 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 				gemPropsKnown[i] = true
 			}
 		}
-		if gemEnchants[i] == 0 && gemPropID != 0 {
-			gemEnchants[i] = gemPropID
-			gemColors[i] = 14 // match red/yellow/blue by default
-		}
+		// ItemHandler.cpp: GemEnchants[i] = GemProps[i] ? GemProps[i]->EnchantID : 0 —
+		// on DBC miss the slot is cleared, never fabricated.
 	}
 
 	// Parse existing 36 ints from enchantments column
@@ -5162,15 +5160,10 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	// Slot 2: Sock 1 (index 6)
 	// Slot 3: Sock 2 (index 9)
 	// Slot 4: Sock 3 (index 12)
-	if gemEnchants[0] != 0 {
-		enchants[6] = gemEnchants[0]
-	}
-	if gemEnchants[1] != 0 {
-		enchants[9] = gemEnchants[1]
-	}
-	if gemEnchants[2] != 0 {
-		enchants[12] = gemEnchants[2]
-	}
+	// C++ clears ALL socket enchants first, then sets only nonzero GemEnchants[i].
+	enchants[6] = gemEnchants[0]
+	enchants[9] = gemEnchants[1]
+	enchants[12] = gemEnchants[2]
 
 	// Check socket bonus match
 	bonusMatches := true
@@ -5202,18 +5195,9 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	newEncStr := strings.Join(encParts, " ")
 	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", newEncStr, rawTargetGUID)
 
-	// Send SMSG_SOCKET_GEMS_RESULT (0x50B) first per TrinityCore HandleSocketOpcode
-	resBuf := protocol.NewBuffer(24)
-	resBuf.WriteU64(itemGUID)
-	resBuf.WriteU32(enchants[6])
-	resBuf.WriteU32(enchants[9])
-	resBuf.WriteU32(enchants[12])
-	resBuf.WriteU32(enchants[15])
-	_ = s.write(uint16(protocol.OpcodeSMSG_SOCKET_GEMS_RESULT), resBuf.Bytes(), true)
-
-	// Consume the socketed gems
+	// Consume the socketed gems — only when GemEnchants[i] resolved (ItemHandler.cpp:1119).
 	for index, gemGUID := range gemGUIDs {
-		if gemGUID != 0 {
+		if gemGUID != 0 && gemEnchants[index] != 0 {
 			rawGemGUID := gemGUID & 0x0000FFFFFFFFFFFF
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", rawGemGUID, s.playerGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", rawGemGUID)
@@ -5225,6 +5209,16 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	// ItemHandler.cpp:1139-1140: socketing clears the BOP-tradeable window
 	// (RemoveTradeableItem has no twin; ClearSoulboundTradeable bridged).
 	s.clearSoulboundTradeable(ctx, rawTargetGUID)
+
+	// SMSG_SOCKET_GEMS_RESULT (0x50B) goes LAST per HandleSocketOpcode's
+	// itemTarget->SendUpdateSockets() (ItemHandler.cpp:1142).
+	resBuf := protocol.NewBuffer(24)
+	resBuf.WriteU64(itemGUID)
+	resBuf.WriteU32(enchants[6])
+	resBuf.WriteU32(enchants[9])
+	resBuf.WriteU32(enchants[12])
+	resBuf.WriteU32(enchants[15])
+	_ = s.write(uint16(protocol.OpcodeSMSG_SOCKET_GEMS_RESULT), resBuf.Bytes(), true)
 
 	if targetBag == 0 && targetSlot < equipSlotEnd {
 		s.syncEquipmentCache(ctx)
