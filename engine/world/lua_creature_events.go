@@ -111,6 +111,87 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(s, nil, motion.GUID, methods)
+	// Eluna event handlers call creature/victim methods that the
+	// session-bound luaCreature also exposes; without them every
+	// RegisterCreatureEvent handler calling e.g. creature:IsInEvadeMode()
+	// or victim:GetObjectType() nil-calls and aborts mid-arm. The Go
+	// backing state is the same (motion fields, the server aura maps),
+	// so these are exact twins of the lua_objects.go bindings, not new
+	// semantics.
+	// GetObjectType mirrors the session-bound binding: a motion creature
+	// is always a Creature (players arrive as luaPlayer objects).
+	methods["GetObjectType"] = luaNoArgs(func() any { return "Creature" })
+	// IsInEvadeMode is CreatureMethods::IsInEvadeMode: motion.Evading —
+	// the creature is returning to its spawn position from combat
+	// (session-bound twin at lua_objects.go).
+	methods["IsInEvadeMode"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		evading := motion.Evading
+		s.motionMu.Unlock()
+		return []any{evading}, nil
+	}
+	auraKey := func() creatureAuraKey {
+		return creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
+	}
+	// HasAura / RemoveAura / AddAura mirror the session-bound creature
+	// bindings: the Go aura model is keyed by creatureAuraKey, which the
+	// motion carries, so no session is needed.
+	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		_, found := s.creatureAuras[key][spell]
+		if !found {
+			_, found = s.activeCreatureAuras[key][spell]
+		}
+		s.auraMu.Unlock()
+		return []any{found}, nil
+	}
+	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.removeCreatureAura(auraKey(), spell)
+		return nil, nil
+	}
+	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		if s.creatureAuras == nil {
+			s.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
+		}
+		if s.creatureAuras[key] == nil {
+			s.creatureAuras[key] = make(map[uint32]struct{})
+		}
+		s.creatureAuras[key][spell] = struct{}{}
+		s.auraMu.Unlock()
+		return nil, nil
+	}
+	// SetHealth mirrors the session-bound binding: clamp, write the
+	// motion, broadcast the values update.
+	methods["SetHealth"] = func(_ context.Context, args []any) ([]any, error) {
+		health, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		if health > motion.MaxHealth {
+			health = motion.MaxHealth
+		}
+		motion.Health = health
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: health})
+		return nil, nil
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{
 		"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry,
 		"Map": state.Map, "MapId": state.Map,

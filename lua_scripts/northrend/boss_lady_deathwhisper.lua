@@ -68,8 +68,23 @@
 --   SPELL_VAMPIRIC_MIGHT 70674 self-cast 17s/25s (:603);
 --   SPELL_SHADOW_CLEAVE 70670 victim-cast 12s/14s (:608);
 --   SPELL_NECROTIC_STRIKE 70659 victim-cast 10s/17s (:613) — all
---   non-triggered. The SetValidator !UNIT_STATE_CASTING gate has no
---   bridge (maiden precedent: timers fire unconditionally).
+--   non-triggered. CORRECTION (2026-10-16): the IsCasting bridge EXISTS
+--   but always returns false for creatures (no cast state,
+--   engine/world/lua_objects.go) — the SetValidator always passes, so
+--   timers firing unconditionally is C++-net-equal, not a missing leg.
+--   SpellHit arm PORTED 2026-10-16 (event 14,
+--   CREATURE_EVENT_ON_HIT_BY_SPELL — the earlier "no SpellHit bridge"
+--   claim was stale; engine/world/spells.go:9477, boss_ai.go:2033):
+--   case SPELL_DARK_TRANSFORMATION_T (70895, :622-625) —
+--   DoCastSelf(SPELL_DARK_TRANSFORMATION 70900) non-triggered; the
+--   InterruptNonMeleeSpells(true) leg has no bridge on the
+--   event-creature method set (net no-op in Go: packet-only casts).
+--   The other fanatic SpellHit legs stay out per-arm: :626-629
+--   FULL_HEAL rides UpdateEntry (no bridge); :631-635 martyrdom rides
+--   SetReactState/AttackStop (no bridges); the :640-660 2s/6s reanimate
+--   scheduler rides UpdateEntry + SetFlag(UNIT_FIELD_FLAGS) + the
+--   instance-legged ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD)
+--   (no instance bridge).
 -- npc_cult_adherent (37949, icecrown_citadel.h:178) — same Reset→engage
 --   re-key (:693-710): SPELL_DEATHCHILL 5s/2500ms victim-cast —
 --   entry-conditional DoCastVictim(SPELL_DEATHCHILL_BLAST 70906) when
@@ -77,9 +92,17 @@
 --   (:696-698); SPELL_SHROUD_OF_THE_OCCULT 70768 self-cast 15s/10s
 --   (:703) — all non-triggered. The empowered entry change rides the
 --   unbridged SpellHit leg (:717), so the Blast branch is dormant until
---   that leg bridges — documented. The SetValidator
---   !UNIT_STATE_CASTING gate has no bridge (maiden precedent: timers
---   fire unconditionally).
+--   that leg bridges — documented. CORRECTION (2026-10-16): the
+--   IsCasting bridge EXISTS but always returns false for creatures (no
+--   cast state, engine/world/lua_objects.go) — the adherent
+--   SetValidator always passes, so timers firing unconditionally is
+--   C++-net-equal, not a missing leg.
+--   SpellHit arms stay out per-arm (event 14 dispatch IS bridged — the
+--   earlier "no SpellHit bridge" claim was stale): :724-725
+--   DARK_MARTYRDOM_ADHERENT rides SetReactState/AttackStop (no
+--   bridges); the :731-752 2s/6s reanimate scheduler rides UpdateEntry
+--   + SetFlag(UNIT_FIELD_FLAGS) + the instance-legged boss Talk
+--   (no bridges).
 --   SPELL_CURSE_OF_TORPOR 71237 (:706-710, ported): DoCast(target,
 --   non-triggered) on SelectTarget(Random, 1) (offset 1 skips the
 --   MaxThreat head, UnitAI.h:172-174 — tank-skip unbridged, the
@@ -128,17 +151,27 @@
 -- another creature riding instance legs (no instance bridge).
 -- Talk(SAY_ANIMATE_DEAD 13) is called by
 -- ladyDeathwhisper->AI()->Talk from inside the npc_cult_fanatic /
--- npc_cult_adherent summon-death scheduler legs (SpellHit timer legs
--- — no SpellHit bridge).
+-- npc_cult_adherent summon-death scheduler legs (still out — the
+-- UpdateEntry/SetFlag/instance blockers above, not SpellHit dispatch).
 -- npc_vengeful_shade (38222) — zero own Talk lines; the
 -- VengefulBlast passive / KillSelf / SpellHitTarget legs have no
 -- bridge — NOT registered (the bronjahm npc_corrupted_soul_fragment
 -- precedent). npc_cult_fanatic / npc_cult_adherent ARE registered
--- (timer arms ported above); their SpellHit transformation /
--- martyrdom legs (:617-660 / :712-752) stay out (no SpellHit bridge),
--- as do the darnavan SHATTERING_THROW conditional leg (:893-898,
--- immunity gate — no bridge); darnavan CHARGE leg PORTED
--- (charge-poll). Boss scheduler SetValidator (:216-219:
+-- (timer arms ported above); the fanatic SpellHit transformation arm
+-- (:622-625) is PORTED 2026-10-16 — event 14
+-- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
+-- (engine/world/spells.go:9477, boss_ai.go:2033), so the earlier
+-- "no SpellHit bridge" claim was stale; their remaining SpellHit legs
+-- (:626-660 / :724-752) stay out per-arm (UpdateEntry,
+-- SetReactState/AttackStop, SetFlag(UNIT_FIELD_FLAGS), the
+-- instance-legged ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) — no
+-- bridges), as do the darnavan SHATTERING_THROW conditional leg
+-- (:893-898, immunity gate — no bridge); darnavan CHARGE leg PORTED
+-- (charge-poll). CORRECTION (2026-10-16): the IsCasting bridge EXISTS
+-- but always returns false for creatures (no cast state,
+-- engine/world/lua_objects.go) — the validators always pass, so the
+-- boss scheduler and adherent SetValidator "no bridge" claims above
+-- are restated as net-no-ops, not missing legs. Boss scheduler SetValidator (:216-219:
 -- !UNIT_STATE_CASTING unless intro) and the adherent validator
 -- (:691-692) have no bridge — timers fire unconditionally (maiden
 -- precedent).
@@ -175,6 +208,8 @@ local SPELL_MANA_BARRIER = 70842
 local SPELL_SHADOW_CHANNELING = 43897 -- :226 Reset self-cast
 local SPELL_FROSTBOLT = 71420 -- :66
 local SPELL_FROSTBOLT_VOLLEY = 72905 -- :67
+local SPELL_DARK_TRANSFORMATION_T = 70895 -- :71 (boss trigger)
+local SPELL_DARK_TRANSFORMATION = 70900 -- :86
 local SPELL_VAMPIRIC_MIGHT = 70674
 local SPELL_SHADOW_CLEAVE = 70670
 local SPELL_NECROTIC_STRIKE = 70659
@@ -435,6 +470,30 @@ local function fanaticReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_cult_fanatic::SpellHit (:618-646) — bridged as event 14
+-- CREATURE_EVENT_ON_HIT_BY_SPELL (engine/world/spells.go:9477,
+-- boss_ai.go:2033), args (event, creature, caster, spellid); fires per
+-- non-NONE effect per creature hit target — the C++ switch is per
+-- effect index in the target's EffectMask (Spell.cpp:3557-3562), so Go
+-- matches the C++ over-fire semantics.
+-- PORTED arm — case SPELL_DARK_TRANSFORMATION_T (70895, :622-625):
+-- DoCastSelf(SPELL_DARK_TRANSFORMATION 70900) non-triggered.
+-- InterruptNonMeleeSpells(true) has no bridge on the event-creature
+-- method set (StopSpellCast lives only on the session-scoped gossip
+-- creature; Go creature casts are packet-only with no cast state, so
+-- the interrupt is a net no-op anyway — engine/world/lua_objects.go).
+-- BLOCKED arms in the same switch: :626-629 FULL_HEAL rides
+-- UpdateEntry(NPC_DEFORMED_FANATIC) — no UpdateEntry bridge; :631-635
+-- DARK_MARTYRDOM rides SetReactState/AttackStop — no bridges; the
+-- :640-660 2s/6s reanimate scheduler legs ride UpdateEntry +
+-- SetFlag(UNIT_FIELD_FLAGS) + the instance-legged
+-- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) (no instance bridge).
+local function fanaticSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_DARK_TRANSFORMATION_T then
+        creature:CastSpell(creature, SPELL_DARK_TRANSFORMATION)
+    end
+end
+
 -- C++ npc_cult_adherent Reset() scheduler (:693-710), same re-key.
 local function onDeathchill(creature, guid)
     -- C++ :696-698 — entry-conditional: the empowered adherent casts the
@@ -560,6 +619,7 @@ RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 9, deathwhisperDamageTaken)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 23, deathwhisperReset)
 RegisterCreatureEvent(ENTRY_CULT_FANATIC, 1, fanaticEnterCombat)
 RegisterCreatureEvent(ENTRY_CULT_FANATIC, 2, fanaticLeaveCombat)
+RegisterCreatureEvent(ENTRY_CULT_FANATIC, 14, fanaticSpellHit)
 RegisterCreatureEvent(ENTRY_CULT_FANATIC, 23, fanaticReset)
 RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 1, adherentEnterCombat)
 RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 2, adherentLeaveCombat)

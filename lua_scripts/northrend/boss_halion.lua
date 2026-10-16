@@ -83,11 +83,16 @@
 -- PHASE_TWO transition — Talk(SAY_PHASE_TWO 4) + stop of the three
 -- phase-one timer arms on post-damage health < 75% max
 -- (boss_halion.cpp:286-296; HealthBelowPctDamaged strict-<, signed,
--- unclamped — the zum_rah pre-damage latch precedent). The never-die
--- damage cap (damage = health-1 while not PHASE_THREE) rides the
--- unbridged phase machine and stays out; the UNIT_FLAG_NOT_SELECTABLE /
--- CastStop / DoCastSelf SPELL_TWILIGHT_PHASING / controller
--- SetData(PHASE_TWO) legs ride absent bridges.
+-- unclamped — the zum_rah pre-damage latch precedent). PORTED this run:
+-- the DoCastSelf(SPELL_TWILIGHT_PHASING 74808) leg at :293 is now cast
+-- as creature:CastSpell(creature, SPELL_TWILIGHT_PHASING) at the latch
+-- (non-triggered DoCastSelf lowering — the header's old "phasing-cast
+-- rides absent bridges" claim was stale; CastSpell is bridged). The
+-- never-die damage cap (damage = health-1 while not PHASE_THREE) rides
+-- the unbridged phase machine and stays out; the UNIT_FLAG_NOT_
+-- SELECTABLE / CastStop / controller SetData(PHASE_TWO) legs ride
+-- absent bridges (no SetFlag / CastStop / cross-creature-SetData
+-- methods — verified in engine/world/lua_objects.go this run).
 -- boss_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING 75509 — stays out: the trigger is the
 -- unported npc_halion_controller's EVENT_TWILIGHT_MENDING cast
@@ -113,11 +118,23 @@
 -- EVENT_SOUL_CONSUMPTION 74792 stays out: SelectTarget Random with
 -- SPELL_TWILIGHT_REALM aura filter + TRIGGERED_IGNORE_SET_FACING —
 -- no random-target / target-filter bridges (no-bridge queues).
--- Constructor-side legs (DUSK_SHROUD / COPY_DAMAGE auras, health
--- sync, phase-mask / react-state / combat flags) ride absent
--- bridges; TAIL_LASH's 12s constructor-arm is documented as a
--- spawn->engage drift on the first tick only (twilight halion
--- spawns in combat, so the delta is near-zero).
+-- Constructor-side legs (boss_twilight_halionAI ctor, :405-421): DUSK_
+-- SHROUD 75476's triggered self-cast is bridgeable
+-- (creature:CastSpell(creature, id, true)) but the ctor fires at
+-- creature creation and this runtime's CREATURE_EVENT_ON_SPAWN (5)
+-- fires only on the respawn path — never on first summon or grid
+-- activation (engine/world/lua_creature_events.go fireCreatureSpawned
+-- comment) — so there is no faithful construction-time hook; stays
+-- out. COPY_DAMAGE auras stay out: the C++ uses explicit cross-creature
+-- AddAura (halion->AddAura(SPELL_COPY_DAMAGE, me) to dodge
+-- SPELL_ATTR6_CANT_TARGET_SELF) and the other body is unreachable from
+-- Lua (no cross-creature bridge; the Lua AddAura bridge is self-only).
+-- Health sync / phase-mask / react-state / combat-flag legs ride absent
+-- bridges (no SetPhaseMask / SetReactState / SetFlag methods —
+-- verified in engine/world/lua_objects.go this run); TAIL_LASH's 12s
+-- constructor-arm is documented as a spawn->engage drift on the first
+-- tick only (twilight halion spawns in combat, so the delta is
+-- near-zero).
 -- boss_twilight_halion DamageTaken — Talk(SAY_PHASE_THREE 2) rides the
 -- 50% health transition (no-DamageTaken bridge); the
 -- DoCastSelf SPELL_TWILIGHT_DIVISION / controller SetData legs ride
@@ -157,6 +174,17 @@
 -- x2 + SAY_METEOR_STRIKE 3 + SAY_PHASE_THREE 2 + SAY_INTRO 1 +
 -- EMOTE_CORPOREALITY_TOT/TIT/POT/PIP + EMOTE_WARN_LASER 0 +
 -- SAY_SPHERE_PULSE 1 documented above).
+-- Missing-cast audit 2026-10-16 (all 11): PORTED — 74808
+-- SPELL_TWILIGHT_PHASING (:293, halionDamageTaken 75% latch). BLOCKED —
+-- 75476 DUSK_SHROUD (:414, twilight ctor, no construction hook); 75063
+-- TWILIGHT_DIVISION (:479, 50% transition, twilight phase machine
+-- unmodeled); 74805 SUMMON_EXIT_PORTALS (:677), 76006 COSMETIC_FIRE_
+-- PILLAR (:710), 76010 FIERY_EXPLOSION (:726) — npc_halion_controller
+-- (40146, unregistered) DoAction/event arms, triggers instance-side;
+-- 74648 AOE_DAMAGE (:1006), 74713 FIRE_AURA_1 (:1007), 74641 COUNTDOWN
+-- (:1024), 40031 BIRTH_NO_VISUAL (:1025), 74718 FIRE_AURA_2 (:1079) —
+-- npc_meteor_strike_initial / npc_meteor_strike (unregistered), all
+-- hanging off the phase-machine-gated boss EVENT_METEOR_STRIKE arm.
 
 local ENTRY_HALION = 39863
 local ENTRY_TWILIGHT_HALION = 40142
@@ -172,6 +200,7 @@ local SPELL_DARK_BREATH = 74806
 local SPELL_FLAME_BREATH = 74525
 local SPELL_TAIL_LASH   = 74531
 local SPELL_LEAVE_TWILIGHT_REALM = 74812
+local SPELL_TWILIGHT_PHASING = 74808 -- C++ enum :111 ("Phase spell from phase 1 to phase 2")
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the krystallus / bjarngrim-lieutenant convention.
@@ -273,8 +302,13 @@ end
 -- events.SetPhase(PHASE_TWO); Talk(SAY_PHASE_TWO); me->CastStop();
 -- UNIT_FLAG_NOT_SELECTABLE; DoCastSelf(SPELL_TWILIGHT_PHASING);
 -- controller->AI()->SetData(DATA_FIGHT_PHASE, PHASE_TWO). The Talk +
--- the stop of the phase-one timer arms port; the flag / CastStop /
--- phasing-cast / controller legs have no bridges. The never-die
+-- the stop of the phase-one timer arms + the DoCastSelf
+-- SPELL_TWILIGHT_PHASING 74808 cast port (non-triggered ->
+-- creature:CastSpell(creature, SPELL_TWILIGHT_PHASING) — the DoCastSelf
+-- lowering, same idiom as the BREATH self-casts); the flag / CastStop /
+-- controller SetData legs ride absent bridges (no SetFlag / CastStop /
+-- cross-creature SetData methods — verified in
+-- engine/world/lua_objects.go this run). The never-die
 -- damage cap (damage = health-1 while not PHASE_THREE) rides the
 -- unbridged phase machine and stays out.
 local function halionDamageTaken(event, creature, attacker, damage)
@@ -290,6 +324,7 @@ local function halionDamageTaken(event, creature, attacker, damage)
     if postHealth * 100 < creature:GetMaxHealth() * 75 then
         phaseTwo[guid] = true
         creature:Talk(SAY_PHASE_TWO)
+        creature:CastSpell(creature, SPELL_TWILIGHT_PHASING)
         cancelTimers(guid)
     end
 end

@@ -55,9 +55,12 @@
 -- Eluna creature events: 3 OnKill.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_the_lich_king KilledUnit — Talk(SAY_LK_KILL 10) gated on
--- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
--- player-gated variant precedent; the !me->IsInEvadeMode() and
--- !events.IsInPhase(PHASE_OUTRO) legs have no bridges).
+-- victim->GetTypeId() == TYPEID_PLAYER && !me->IsInEvadeMode()
+-- (event 3 — the razuvious player-gated variant + the yogg_saron
+-- IsInEvadeMode precedent; the IsInEvadeMode bridge was re-verified
+-- this run (engine/world/lua_objects.go:623) and the evade leg ported
+-- 2026-10-16; the !events.IsInPhase(PHASE_OUTRO) leg still has no
+-- bridge).
 -- DOCUMENTED-ONLY (in this header; only entry 36597 registered):
 -- boss_the_lich_king DoAction — Talk(SAY_LK_INTRO_1 0) rides
 -- ACTION_START_ENCOUNTER; Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic)
@@ -78,11 +81,47 @@
 -- EVENT_HARVEST_SOULS); Talk(SAY_LK_QUAKE 5) (EVENT_QUAKE,
 -- EVENT_QUAKE_2); Talk(SAY_LK_SUMMON_VALKYR 6) (EVENT_SUMMON_VALKYR);
 -- Talk(SAY_LK_OUTRO_1..8 14..21) (EVENT_OUTRO_TALK_1..8);
--- Talk(SAY_LK_BERSERK 11) (EVENT_BERSERK) — all timer-driven
--- (no-timer-bridge; the boss_toravon precedent); the intro/outro
+-- Talk(SAY_LK_BERSERK 11) (EVENT_BERSERK) — all timer-driven;
+-- the "no-timer-bridge" note is RETRACTED this run (2026-10-16) —
+-- the timer bridge (CreateLuaEvent) exists and is used in this file;
+-- the gated arms stay unported because the phase machine
+-- (PHASE_INTRO/PHASE_ONE/PHASE_TWO/PHASE_TRANSITION/PHASE_OUTRO/
+-- PHASE_FROSTMOURNE) has no Lua model, not because timers lack a
+-- bridge (the gothik counterpoint: no invented phase-agnostic
+-- timers); the intro/outro
 -- movement machines, DoCast summon legs, phase SetPhase legs, and the
 -- JustDied SPELL_PLAY_MOVIE / MoveFall / light-override legs ride
 -- bridges that do not exist.
+-- MISSING-CAST TRIAGE (2026-10-16; C++ line cites from
+-- boss_the_lich_king.cpp) — all 12 BLOCKED, none ported:
+-- 68981 SPELL_REMORSELESS_WINTER_1 (:849) / 72259
+-- SPELL_REMORSELESS_WINTER_2 (:863) — DoCastSelf in MovementInform
+-- case POINT_CENTER_1 / POINT_CENTER_2 (Remorseless Winter channel
+-- opener, transition-phase entry); no MovementInform bridge — same
+-- unbridged arm as the documented SAY_LK_REMORSELESS_WINTER legs.
+-- 73213 SPELL_EMOTE_SHOUT_NO_SHEATH (:929) — DoCastSelf non-triggered
+-- in case EVENT_EMOTE_CAST_SHOUT, scheduled +7s/+18s in PHASE_INTRO;
+-- porting on a bare engage timer would fabricate intro-phase casts
+-- mid-combat (no phase machine).
+-- 70372 SPELL_SUMMON_SHAMBLING_HORROR (:947, PHASE_ONE, 1min re-arm),
+-- 70358 SPELL_SUMMON_DRUDGE_GHOULS (:952, PHASE_ONE, 30s re-arm),
+-- 70541 SPELL_INFEST (:956, PHASE_ONE seeded, re-arms PHASE_ONE or
+-- PHASE_TWO by current phase), 69409 SPELL_SOUL_REAPER (:973,
+-- DoCastVictim, PHASE_TWO_THREE, 33-35s re-arm) — phase-gated timer
+-- arms (JustEngagedWith :578-581 seeds the PHASE_ONE set); a
+-- phase-agnostic engage timer would fabricate phase-2/3/transition
+-- casts — the gothik counterpoint, no invented phase machines.
+-- 71797 SPELL_LIGHTS_BLESSING (:1263, case EVENT_OUTRO_BLESS) — cast
+-- by npc_tirion_fordring_tft on itself (outro); tirion not registered
+-- in this file — wrong creature.
+-- 74352 SPELL_WINGS_OF_THE_DAMNED (:1455, val'kyr Reset, non-triggered),
+-- 73501 SPELL_VALKYR_TRANSFORM (:1522, val'kyr MovementInform
+-- POINT_SIPHON), 73488 SPELL_LIFE_SIPHON (:1562, val'kyr
+-- EVENT_LIFE_SIPHON DoCastVictim) — cast by npc_valkyr_shadowguard,
+-- not the boss; val'kyr not registered in this file — wrong creature.
+-- 69382 SPELL_LIGHTS_FAVOR (:1704, terenas DoAction
+-- ACTION_FROSTMOURNE_INTRO) — cast by npc_terenas_menethil on itself;
+-- terenas not registered in this file — wrong creature.
 -- npc_tirion_fordring_tft (NPC_HIGHLORD_TIRION_FORDRING_LK 38995) —
 -- NOT registered: Talk(SAY_TIRION_INTRO_1 0) rides DoAction
 -- ACTION_CONTINUE_INTRO (no-DoAction bridge); Talk(SAY_TIRION_INTRO_2
@@ -225,9 +264,9 @@ end
 -- if (victim->GetTypeId() == TYPEID_PLAYER &&
 --     !me->IsInEvadeMode() && !events.IsInPhase(PHASE_OUTRO))
 --     Talk(SAY_LK_KILL) — the razuvious player-gated variant precedent
--- (the evade and phase legs have no bridges).
+-- (the evade leg ported 2026-10-16; the phase leg has no bridge).
 local function lichKingKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
+    if victim:GetObjectType() == "Player" and not creature:IsInEvadeMode() then
         creature:Talk(SAY_LK_KILL)
     end
 end
