@@ -2469,6 +2469,12 @@ func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byt
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// MiscHandler.cpp:1489-1491: the queue opcode shares the query opcode's
+	// existence gate — a guid with no spawned creature on the player's map
+	// is dropped even when its template carries the spirit-service flag.
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.luaCreature(ctx, guid) == nil {
+		return true
+	}
 	if !s.creatureIsSpiritService(ctx, guid, npcFlagSpiritService) {
 		return true
 	}

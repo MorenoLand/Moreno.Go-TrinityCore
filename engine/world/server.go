@@ -5426,11 +5426,16 @@ func (s *session) handleZoneUpdate(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	s.updateLocalChannels(zone)
-	_, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, zone)
+	// MiscHandler.cpp:518 ("use server side data") + Player::UpdatePosition
+	// (Player.cpp:6468-6473): the reported zone is only a hint — the zone the
+	// update machinery runs on comes from GetZoneAndAreaId on the player's
+	// server-side coordinates. zoneAndAreaID computes exactly that, so the
+	// channel walk gets the server-side zone, not the client value.
+	zoneID, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, zone)
+	s.updateLocalChannels(zoneID)
 	s.exploreArea(ctx, areaID)
 	s.streamNearbyObjects(ctx)
-	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ZONE", zone, s.playerGUID); err != nil {
+	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ZONE", zoneID, s.playerGUID); err != nil {
 		s.debug("zone update failed", "account", s.accountName, "zone", zone, "error", err)
 		return true
 	}
