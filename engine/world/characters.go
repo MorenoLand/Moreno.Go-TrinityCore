@@ -264,16 +264,6 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		// skips the packet (WorldSession.cpp:425-432) — drop, conn open.
 		return true
 	}
-	// normalizePlayerName (CharacterHandler.cpp:377): the name C++ validates
-	// and stores is the normalized form (lowercased, first letter upper);
-	// empty/invalid-UTF-8 answers CHAR_NAME_NO_NAME.
-	if !utf8.ValidString(name) {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameNoName)
-	}
-	name = normalizePlayerName(name)
-	if name == "" {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameNoName)
-	}
 	values := make([]uint8, 9)
 	for i := range values {
 		values[i], err = b.ReadU8()
@@ -284,9 +274,6 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		}
 	}
 	race, class, gender := values[0], values[1], values[2]
-	if race == 0 || class == 0 || gender > 2 {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
-	}
 	if disabled := s.server.Config.CharacterCreatingDisabled; disabled != 0 {
 		team := raceTeam(race)
 		if (team == 1 && disabled&1 != 0) || (team == 2 && disabled&2 != 0) {
@@ -309,6 +296,26 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	}
 	if s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+	}
+	// CharacterHandler.cpp:277-377: every packet field is parsed up front,
+	// but name normalization runs after the creation-mask gates — a disabled
+	// faction or race/class mask answers CHAR_CREATE_DISABLED even for a
+	// malformed name, == C++ error precedence. The race/class/gender
+	// hardening gate has no C++ twin (a zero race fails the ChrRaces lookup
+	// below with the same CHAR_CREATE_FAILED code); it sits here so the mask
+	// gates keep C++ precedence on malformed packets.
+	if race == 0 || class == 0 || gender > 2 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
+	}
+	// normalizePlayerName: the name C++ validates and stores is the
+	// normalized form (lowercased, first letter upper); empty/invalid-UTF-8
+	// answers CHAR_NAME_NO_NAME.
+	if !utf8.ValidString(name) {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameNoName)
+	}
+	name = normalizePlayerName(name)
+	if name == "" {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameNoName)
 	}
 	// ObjectMgr::CheckPlayerName approximation (CharacterHandler.cpp:381-386):
 	// validCharacterName covers the length/alphabet arms; runs after the
@@ -372,18 +379,6 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if nameInUse {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 50)
 	}
-	var spawn struct {
-		Map, Zone            uint32
-		X, Y, Z, Orientation float32
-	}
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT map, zone, position_x, position_y, position_z, orientation FROM playercreateinfo WHERE race = ? AND class = ?", race, class).Scan(&spawn.Map, &spawn.Zone, &spawn.X, &spawn.Y, &spawn.Z, &spawn.Orientation); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 49)
-		}
-		// No C++ equivalent: the spawn row is loaded in-memory at startup there.
-		// Drop so the client can retry; the session stays open.
-		return true
-	}
 	// CharacterHandler.cpp:430-440: the account limit counts characters across
 	// all realms via LOGIN_SEL_SUM_REALM_CHARACTERS
 	// ("SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?"), not this
@@ -426,6 +421,22 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 			// `if (result)` — a failed query skips it, never a disconnect.
 			s.debug("character create team check failed", "account", s.accountName, "error", err)
 		}
+	}
+	// Player::Create reads the playercreateinfo spawn row; a missing
+	// race/class row fails creation with CHAR_CREATE_ERROR, == C++. It runs
+	// after every handler-level gate, so the query moved here from ahead of
+	// the account-limit checks.
+	var spawn struct {
+		Map, Zone            uint32
+		X, Y, Z, Orientation float32
+	}
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT map, zone, position_x, position_y, position_z, orientation FROM playercreateinfo WHERE race = ? AND class = ?", race, class).Scan(&spawn.Map, &spawn.Zone, &spawn.X, &spawn.Y, &spawn.Z, &spawn.Orientation); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateError)
+		}
+		// No C++ equivalent: the spawn row is loaded in-memory at startup there.
+		// Drop so the client can retry; the session stays open.
+		return true
 	}
 	guid, err := s.server.allocateCharacterGUID(ctx)
 	if err != nil {
@@ -496,18 +507,15 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	s.createStarterActions(ctx, guid, race, class)
 	s.createStarterOutfit(ctx, guid, race, class, gender)
 
-	var realmCharacters sql.NullInt64
-	if err := s.server.AuthStore.QueryRowContext(ctx, "SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?", s.accountID).Scan(&realmCharacters); err != nil {
+	// CharacterHandler.cpp:556-562: LOGIN_REP_REALM_CHARACTERS stores the
+	// per-realm character count + 1 — CharCount came from CHAR_SEL_SUM_CHARS
+	// on this realm (realmCharacterCount above), not the all-realm SUM that
+	// feeds the account-limit check. Writing the all-realm sum inflated this
+	// realm's row and could falsely trip CHAR_CREATE_ACCOUNT_LIMIT later.
+	count := uint32(realmCharacterCount) + 1
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_REP_REALM_CHARACTERS", count, s.accountID, s.server.RealmID); err != nil {
 		// Post-create bookkeeping: the character row already exists. Drop so
 		// the client retries; the session stays open.
-		s.debug("character create post-create realm sum failed", "account", s.accountName, "error", err)
-		return true
-	}
-	count := uint32(1)
-	if realmCharacters.Valid && realmCharacters.Int64 > 0 {
-		count = uint32(realmCharacters.Int64) + 1
-	}
-	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_REP_REALM_CHARACTERS", count, s.accountID, s.server.RealmID); err != nil {
 		s.debug("character create post-create realm update failed", "account", s.accountName, "error", err)
 		return true
 	}
@@ -1565,6 +1573,56 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.triggerMapEntryEvent(ctx)
 	s.fireInstancePlayerEnter(ctx)
 	s.streamDynamicSpellObjects()
+	// WorldSession::HandleMoveWorldportAck corpse/instance legs
+	// (MovementHandler.cpp:149-179): a ghost re-entering the dungeon where
+	// their corpse lies is resurrected at half health with the corpse
+	// converted to bones. The corpse-row read mirrors the area-trigger
+	// failure arm in sendAreaTriggerEntryFailure (map_admission.go), which
+	// covers MiscHandler.cpp:771-777; this arm covers the successful
+	// far-teleport completion, which Go previously skipped entirely.
+	if mapEntry.IsDungeon() && s.isDeadOrGhost() && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var corpseMap int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId FROM corpse WHERE guid = ?", s.playerGUID).Scan(&corpseMap); err == nil && uint32(corpseMap) == state.Map {
+			s.resurrectPlayer(ctx, 0.5)
+			s.spawnCorpseBones(ctx)
+		}
+	}
+	// MovementHandler.cpp:160-179 (HandleMoveWorldportAck): with an
+	// instance_template row for the destination (mInstance), warn about the
+	// scheduled reset via SMSG_RAID_INSTANCE_MESSAGE / RAID_INSTANCE_WELCOME
+	// when the MapDifficulty reset window is set (the DBC RaidDuration field
+	// feeds C++ MapDifficulty::resetTime, DBCStores.cpp:443) and a global
+	// reset time exists (the instance_reset table is the
+	// InstanceSaveManager::GetResetTimeFor analog, CHAR_INS_GLOBAL_INSTANCE_RESETTIME).
+	// Instance validity is then recomputed one-directional (false only),
+	// mirroring the C++ arm; the homebind timer in homebind.go acts on it.
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var instanceRow int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM instance_template WHERE map = ?", state.Map).Scan(&instanceRow); err == nil {
+			diff := uint32(s.player.DungeonDifficulty)
+			if mapEntry.IsRaid() {
+				diff = uint32(s.player.RaidDifficulty)
+			}
+			if mapDiff, found, derr := s.server.Data.MapDifficulty(state.Map, diff); derr == nil && found && mapDiff.RaidDuration != 0 {
+				var resetTime int64
+				if rerr := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT resettime FROM instance_reset WHERE mapid = ? AND difficulty = ?", state.Map, diff).Scan(&resetTime); rerr == nil && resetTime > 0 {
+					if now := time.Now().Unix(); resetTime > now {
+						buf := protocol.NewBuffer(18)
+						buf.WriteU32(4) // RAID_INSTANCE_WELCOME (Player.h:636)
+						buf.WriteU32(state.Map)
+						buf.WriteU32(diff)
+						buf.WriteU32(uint32(resetTime - now))
+						buf.WriteU8(0) // is locked
+						buf.WriteU8(0) // is extended
+						_ = s.write(uint16(protocol.OpcodeSMSG_RAID_INSTANCE_MESSAGE), buf.Bytes(), true)
+					}
+				}
+			}
+			if g := s.server.getGroup(s.groupID); !s.checkInstanceValidity(ctx, g) {
+				s.instanceValid = false
+			}
+		}
+	}
 	// WorldSession::HandleMoveWorldportAck mount-allow leg (MovementHandler.cpp):
 	// allowMount = !IsDungeon() || IsBattlegroundOrArena(), overridden by the
 	// instance_template.allowMount row when present; a worldport into a
