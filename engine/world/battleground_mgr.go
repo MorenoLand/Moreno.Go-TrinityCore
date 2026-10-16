@@ -95,3 +95,77 @@ func buildPlayerJoinedBattlegroundPacket(guid uint64) []byte {
 	buf.WriteU64(guid)
 	return buf.Bytes()
 }
+
+// BattlegroundMgr instance-lifecycle arms, ported from
+// src/server/game/Battlegrounds/BattlegroundMgr.cpp. CreateNewBattleground
+// (BattlegroundMgr.cpp:351-440) resolves the queued type through
+// GetRandomBG, copies the BG template via the per-type switch, then runs the
+// setup sequence: SetBracket, SetInstanceID (sMapMgr->GenerateInstanceId),
+// SetClientInstanceID (CreateClientVisibleInstanceId, ported above),
+// Reset -> SetStatus(STATUS_WAIT_JOIN), SetArenaType, SetTypeID(original),
+// SetRandomTypeID(resolved), SetRated, SetRandom, and the arena max-players
+// arm below. AddBattleground (BattlegroundMgr.cpp:1015-1019) and
+// RemoveBattleground (BattlegroundMgr.cpp:1021-1024) are container ops over
+// bgDataStore[typeId].m_Battlegrounds[instanceId]; all three need live BG
+// instances plus the template store, and none has a Go twin.
+//
+// NOT ported: the GetBattlegroundTemplate registry lookup and template-copy
+// switch (BattlegroundMgr.cpp:355-408); GetRandomBG (BattlegroundMgr.cpp:968-
+// 990 — weighted pick over the BattlemasterEntry MapID list, same missing
+// registry; the weighted-pick kernel itself is ported below); the Set*/Reset
+// wiring chain (BattlegroundMgr.cpp:417-422); LoadBattlegroundTemplates
+// (BattlegroundMgr.cpp:518-571 — battleground_template DB rows with DisableMgr
+// and BattlemasterList.dbc gating, min/max player and level validation,
+// per-type constructor switch) and the CreateBattleground template-init
+// wiring (BattlegroundMgr.cpp:444-503 — map id, locale name, start
+// positions, level range, script id). Go has no battleground template store
+// and no battleground_template/DBC ingestion path; the template registry is
+// a standalone future project, and GetRandomBG needs it for its MapID/Weight
+// inputs.
+
+// arenaMaxPlayersPerTeam is the Go form of the arena max-players arm of
+// BattlegroundMgr::CreateNewBattleground (BattlegroundMgr.cpp:424-438):
+// 2v2/3v3/5v5 set maxPlayersPerTeam to 2/3/5, and SetMaxPlayers is called
+// with perTeam * 2.
+func arenaMaxPlayersPerTeam(arenaType uint8) uint32 {
+	switch arenaType {
+	case ArenaType2v2:
+		return 2
+	case ArenaType3v3:
+		return 3
+	case ArenaType5v5:
+		return 5
+	}
+	return 0
+}
+
+// bgInstanceIsRandom is the Go form of the random-flag arm of
+// BattlegroundMgr::CreateNewBattleground (BattlegroundMgr.cpp:415): a new
+// instance is random when the resolved type differs from the queued
+// (original) type and the BG is not an arena.
+func bgInstanceIsRandom(resolvedBgTypeID, originalBgTypeID uint32, isArena bool) bool {
+	return resolvedBgTypeID != originalBgTypeID && !isArena
+}
+
+// weightedRandomIndex is the Go form of the selection kernel behind
+// Trinity::Containers::SelectRandomWeightedContainerElement
+// (src/common/Utilities/Containers.h:136-141) and urandweighted
+// (src/common/Utilities/Random.cpp:87-91 — std::discrete_distribution over
+// the weight array): index i is picked with probability w_i / sum. The
+// caller supplies the uniform [0,1) roll, matching the seeded
+// RandomEngine draw in C++. BattlegroundMgr::GetRandomBG uses it over the
+// BattlemasterEntry MapID list with each candidate's Weight.
+func weightedRandomIndex(weights []float64, roll float64) int {
+	sum := 0.0
+	for _, w := range weights {
+		sum += w
+	}
+	pick := roll * sum
+	for i, w := range weights {
+		pick -= w
+		if pick < 0 {
+			return i
+		}
+	}
+	return len(weights) - 1
+}
