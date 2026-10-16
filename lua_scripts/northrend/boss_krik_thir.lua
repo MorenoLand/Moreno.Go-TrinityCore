@@ -43,8 +43,10 @@
 -- EVENT_SWARM (DoCastAOE(SPELL_SWARM 52440) + Talk(SAY_SWARM 3), 5s
 -- EVENT_FRENZY (HealthBelowPct(10) _hadFrenzy latch -> DoCastSelf(Frenzy
 -- 28747) + DoCastAOE(CURSE_OF_FATIGUE 52592), 1s init, 15s repeat) —
--- no health-pct bridge (doomwalker precedent); the DoCastAOE leg
--- rides the same latch.
+-- PORTED (2026-10-16): the latch lives in creature:GetHealth()-based
+-- post-damage math inside krikThirDamageTaken (event 9; the halion
+-- HealthBelowPctDamaged precedent); DoCastAOE leg rendered as
+-- self-cast per convention.
 -- The DoAction machine (no DoAction bridge — drakkari_colossus standing
 -- precedent — and the payload is instance-model anyway):
 -- -ACTION_GATEWATCHER_GREET (instance SetData(DATA_GATEWATCHER_GREET,1)
@@ -129,6 +131,8 @@ local SAY_SWARM = 3
 
 local SPELL_MIND_FLAY = 52586
 local SPELL_SWARM = 52440
+local SPELL_FRENZY = 28747
+local SPELL_CURSE_OF_FATIGUE = 52592
 
 local timers = {}
 
@@ -170,6 +174,43 @@ local function swarmTick(creature)
     creature:Talk(SAY_SWARM)
 end
 
+-- C++ EVENT_FRENZY :282-286 — DoCastSelf(SPELL_FRENZY 28747) +
+-- DoCastAOE(SPELL_CURSE_OF_FATIGUE 52592) rendered as self-cast, 1s
+-- init, 15s repeat.
+local function frenzyTick(creature, guid)
+    creature:CastSpell(creature, SPELL_FRENZY)
+    creature:CastSpell(creature, SPELL_CURSE_OF_FATIGUE)
+    schedule(guid, "frenzy", 15000, function()
+        frenzyTick(creature, guid)
+    end)
+end
+
+-- C++ boss_krik_thirAI::UpdateAI :258-262 — HealthBelowPct(10) sets
+-- _hadFrenzy and schedules EVENT_FRENZY. The per-tick check reads
+-- post-damage health, so the event-9 hook computes it explicitly
+-- (the halion HealthBelowPctDamaged precedent). C++ Reset() clears
+-- _hadFrenzy (:154); leave-combat / died lead back through Reset in
+-- the Go engine, so the latch is cleared on all three.
+local hadFrenzy = {}
+
+local function krikThirDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if hadFrenzy[guid] then
+        return
+    end
+    local health = creature:GetHealth()
+    local postHealth = 0
+    if health > damage then
+        postHealth = health - damage
+    end
+    if postHealth * 100 < creature:GetMaxHealth() * 10 then
+        hadFrenzy[guid] = true
+        schedule(guid, "frenzy", 1000, function()
+            frenzyTick(creature, guid)
+        end)
+    end
+end
+
 local function krikThirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -182,7 +223,9 @@ local function krikThirEnterCombat(event, creature, target)
 end
 
 local function krikThirLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    hadFrenzy[guid] = nil
 end
 
 local function krikThirTargetDied(event, creature, victim)
@@ -192,16 +235,21 @@ local function krikThirTargetDied(event, creature, victim)
 end
 
 local function krikThirDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    hadFrenzy[guid] = nil
     creature:Talk(SAY_DEATH)
 end
 
 local function krikThirReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    hadFrenzy[guid] = nil
 end
 
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 1, krikThirEnterCombat)
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 2, krikThirLeaveCombat)
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 3, krikThirTargetDied)
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 4, krikThirDied)
+RegisterCreatureEvent(ENTRY_KRIK_THIR, 9, krikThirDamageTaken)
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 23, krikThirReset)
