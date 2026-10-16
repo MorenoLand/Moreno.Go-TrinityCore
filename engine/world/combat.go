@@ -318,8 +318,13 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		return s.sendAttackStop(victim, false) == nil
 	}
 	if target.Health == 0 {
+		// CombatHandler.cpp:40-43: a dead target fails IsValidAttackTarget and
+		// answers SMSG_ATTACK_STOP via SendAttackStop(enemy). The
+		// SMSG_ATTACKSWING_DEADTARGET sender (Player::SendAttackSwingDeadTarget,
+		// Player.cpp:20585) has no callers in this revision, so C++ never
+		// emits that packet on this path.
 		s.attackTarget = 0
-		return s.write(uint16(protocol.OpcodeSMSG_ATTACK_SWING_DEAD_TARGET), nil, true) == nil
+		return s.sendAttackStop(victim, false) == nil
 	}
 	// WorldObject::IsValidAttackTarget's "can't attack dead" leg
 	// (Object.cpp:2935-2937): ghosts model IsAlive()==false with Health=1,
@@ -370,6 +375,19 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
+	// Unit::Attack (Unit.cpp:5660-5662): a mounted player cannot attack — the
+	// call returns false silently (no packet), so this sits after the handler's
+	// AttackStop gates and ahead of the attack tail.
+	if s.isPlayerMounted() {
+		s.attackTarget = 0
+		return true
+	}
+	// Unit::Attack (Unit.cpp:5680-5683): remove SPELL_AURA_MOD_UNATTACKABLE at
+	// attack (non-interruptible stun auras that still forbid attacking are
+	// stripped here); this runs before the same-target no-op below.
+	if s.hasAuraType(spellAuraModUnattackable) {
+		s.removeAurasByType(spellAuraModUnattackable)
+	}
 	// C++ Unit::Attack (Unit.cpp:5650-5760): re-pressing T on the current
 	// victim while melee-attacking is a no-op (returns false, no packet);
 	// it never swings and never touches the attack timer. Swings come
@@ -381,6 +399,10 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if s.attackTarget != 0 {
+		// Unit::Attack (Unit.cpp:5707): switching target interrupts
+		// CURRENT_MELEE_SPELL — the queued next-swing spell never lands on
+		// the new target.
+		s.cancelNextSwingSpell()
 		if err := s.sendAttackStop(s.attackTarget, false); err != nil {
 			return false
 		}
@@ -2217,17 +2239,6 @@ func (s *session) handleAttackStop() bool {
 	}
 	victim := s.attackTarget
 	s.attackTarget = 0
-	// The auto-repeat cancel is Go's wire bridge for CMSG_CANCEL_AUTO_REPEAT_SPELL
-	// (SpellHandler.cpp:553), which has no routed handler of its own, so it stays
-	// unconditional here — C++ InterruptSpell(CURRENT_AUTOREPEAT_SPELL) is separate
-	// from Unit::AttackStop.
-	if s.autoRepeatSpell != 0 {
-		s.autoRepeatSpell = 0
-		s.autoRepeatTarget = 0
-		buf := protocol.NewBuffer(9)
-		buf.WritePackedGUID(s.playerGUID)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
-	}
 	if victim == 0 {
 		// Unit::AttackStop (Unit.cpp:5763-5766): a CMSG_ATTACKSTOP arriving while
 		// not attacking returns false before SendMeleeAttackStop and before the
