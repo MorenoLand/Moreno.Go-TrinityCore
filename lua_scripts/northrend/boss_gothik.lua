@@ -115,15 +115,16 @@
 -- RAID_MODE 27995) priority cast on a friendly knight > rider > horse
 -- > Gothik without the buff (DoFindFriendlyMissingBuff) — no
 -- targeted-friendly-cast bridge; DoCastVictim(SPELL_DRAIN_LIFE 27994),
--- 8-12ms init, 10-15ms repeat — moroes-ready in isolation but entry-
--- blocked — joins the bridgeable-but-entry-blocked queue.
+-- urandms(8,12) = 8-12s init, urandms(10,15) = 10-15s repeat —
+-- moroes-ready in isolation but entry-blocked — joins the
+-- bridgeable-but-entry-blocked queue.
 -- npc_gothik_minion_spectralhorse (16149): DoCastAOE(SPELL_STOMP
 -- 27993) 2-arg (non-triggered), urandms(10,15)=10-15s init,
 -- urandms(14,18)=14-18s repeat — stays OUT: entry-blocked.
 -- npc_gothik_trigger (16137): SpellHit anchor machine (ANCHOR_1_x ->
--- ANCHOR_2_x -> SKULLS_x -> DoSummon) — SpellHit never fires in the
--- Lua surface (SpellHit ruling); skull-pile selection via
--- CGUID_TRIGGER + urand(8,12) — no bridges.
+-- ANCHOR_2_x -> SKULLS_x -> DoSummon) — event 14 fires but the arm
+-- roots at a DoSummon skull-pile selection via CGUID_TRIGGER +
+-- urand(8,12) — no summon bridge; stays OUT.
 -- spell_gothik_shadow_bolt_volley (SpellScript 27831: FilterTargets
 -- removes shadow-marked targets) — no SpellScript binding bridge
 -- (razelikh precedent) — joins the SpellScript/AuraScript queue.

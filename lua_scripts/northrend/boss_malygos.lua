@@ -55,6 +55,17 @@
 -- PHASE_THREE) with a 5s kill-spam filter — DOCUMENTED-ONLY:
 -- the phase-select has no bridge (no phase model in Lua), so no
 -- faithful port exists.
+-- npc_arcane_overload (NPC_ARCANE_OVERLOAD 30282, own file
+-- npc_arcane_overload.lua, registered via
+-- engine/world/boss_ai.go:RegisterLuaBoss("npc_arcane_overload",
+-- 30282)): SpellHit SPELL_ARCANE_BOMB_TRIGGER (56430) ->
+-- DoCastAOE SPELL_ARCANE_BOMB_KNOCKBACK_DAMAGE (56431, triggered) +
+-- DoCastSelf SPELL_ARCANE_OVERLOAD_1 (56432, triggered), in C++ order
+-- via event 14 (event, creature, caster, spellid) with the exact
+-- triggered flags; gated on the trigger spell ID (the C++ SpellHit
+-- if) — C++ boss_malygos.cpp :1478-:1484. Note: Go fires event 14
+-- once per non-NONE spell effect, C++ once per spell hit; 56430 is
+-- single-arm so the deviation is theoretical for this entry.
 -- JustDied — Talk(SAY_DEATH 17) (event 4; the _JustDied
 -- bookkeeping has no bridge — tharon_ja precedent; the
 -- GetGuidData DATA_GIFT_BOX_BUNNY_GUID -> SummonGameObject
@@ -115,11 +126,12 @@
 -- arcane barrage machine), JustDied increments Malygos
 -- DATA_SUMMON_DEATHS — no timer-event / instance /
 -- target-selection bridges. npc_arcane_overload
--- (NPC_ARCANE_OVERLOAD 30282) — IsSummonedBy ->
--- SetGUID DATA_LAST_OVERLOAD_GUID; DoAction phase-gated
--- DespawnOrUnsummon; SpellHit SPELL_ARCANE_BOMB_TRIGGER ->
--- SPELL_ARCANE_BOMB_KNOCKBACK_DAMAGE + SPELL_ARCANE_OVERLOAD_1
--- — no summon / despawn / SpellHit bridges. npc_wyrmrest_-
+-- (NPC_ARCANE_OVERLOAD 30282) — the SpellHit SPELL_ARCANE_BOMB_TRIGGER
+-- -> SPELL_ARCANE_BOMB_KNOCKBACK_DAMAGE + SPELL_ARCANE_OVERLOAD_1
+-- arm IS PORTED (event 14, own file npc_arcane_overload.lua — see
+-- the Ported arms section above); IsSummonedBy -> SetGUID
+-- DATA_LAST_OVERLOAD_GUID and the phase-gated DespawnOrUnsummon
+-- legs — no summon / despawn / instance bridges. npc_wyrmrest_-
 -- skytalon (NPC_WYRMREST_SKYTALON 30161) — VehicleAI phase-three
 -- disk machine: IsSummonedBy -> MovePoint cycle; SpellHit
 -- shock-lance legs; PassengerBoarded player machine — no

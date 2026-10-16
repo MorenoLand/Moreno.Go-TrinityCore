@@ -9131,9 +9131,10 @@ func init() {
 	// EVENT_ARCANE_BARRAGE machine, JustDied increments
 	// DATA_SUMMON_DEATHS — no timer-event / instance / target-selection
 	// bridges); npc_arcane_overload (NPC_ARCANE_OVERLOAD 30282 — SetGUID
-	// DATA_LAST_OVERLOAD_GUID / phase-gated DespawnOrUnsummon / SpellHit
-	// SPELL_ARCANE_BOMB_TRIGGER legs — no summon / despawn / SpellHit
-	// bridges); npc_wyrmrest_skytalon (NPC_WYRMREST_SKYTALON 30161 —
+	// DATA_LAST_OVERLOAD_GUID / phase-gated DespawnOrUnsummon legs — no
+	// summon / despawn / instance bridges; the SpellHit
+	// SPELL_ARCANE_BOMB_TRIGGER arm IS ported (event 14, see below));
+	// npc_wyrmrest_skytalon (NPC_WYRMREST_SKYTALON 30161 —
 	// VehicleAI phase-three disk machine — no vehicle / motion /
 	// passenger bridges); npc_static_field (NPC_VORTEX_TRIGGER 30090 —
 	// no bridge); the 17 SpellScript / AuraScript handlers (portal beam,
@@ -9147,6 +9148,18 @@ func init() {
 	// == NPC_HOVER_DISK_MELEE gate — no achievement bridge, joins the
 	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_malygos", 28859)
+
+	// npc_arcane_overload (Eye of Eternity) — fight logic in
+	// lua_scripts/northrend/npc_arcane_overload.lua.
+	// Ported arms (C++-exact): SpellHit SPELL_ARCANE_BOMB_TRIGGER 56430 ->
+	// DoCastAOE SPELL_ARCANE_BOMB_KNOCKBACK_DAMAGE 56431 (triggered) +
+	// DoCastSelf SPELL_ARCANE_OVERLOAD_1 56432 (triggered), in C++ order
+	// (event 14, gated on the trigger spell ID; both with the exact
+	// triggered flag).
+	// Documented-only: IsSummonedBy instance->SetGUID
+	// DATA_LAST_OVERLOAD_GUID / phase-gated DespawnOrUnsummon legs — no
+	// instance / phase / despawn bridges.
+	RegisterLuaBoss("npc_arcane_overload", 30282)
 
 	// Sartharion (28860), Obsidian Sanctum —
 	// lua_scripts/northrend/boss_sartharion.lua.
