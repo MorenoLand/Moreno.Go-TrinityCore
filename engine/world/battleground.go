@@ -203,7 +203,10 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	_, _ = r.ReadU64() // guid
 	bgTypeID, err := r.ReadU32()
 	if err != nil {
-		return false
+		// Truncated read: the len(payload) < 17 gate above makes this
+		// unreachable, but a malformed packet drops (WorldSession.cpp:427-432),
+		// never closes.
+		return true
 	}
 	instanceID, _ := r.ReadU32()
 	joinAsGroup, _ := r.ReadU8()
@@ -1417,6 +1420,27 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// C++ WorldSession::HandleBattlefieldLeaveOpcode (BattleGroundHandler.cpp:528)
+	// denies leaving a battleground while in combat unless the BG is already in
+	// STATUS_WAIT_LEAVE, and it does so BEFORE _player->LeaveBattleground() — so a
+	// combat-deny casts no deserter and tracks nothing (Player.cpp:22479-22499 live
+	// inside LeaveBattleground). The check therefore runs ahead of the deserter
+	// arms below. Go's live-BG analog is the arena world model
+	// (battleground_arena.go): a registered participant of a live arena whose
+	// status is not ArenaStatusWaitLeave cannot leave while in combat
+	// (Unit::IsInCombat == session.isInCombat, combat.go:1924). Queue-leave is
+	// never gated: C++'s port action==0 arm has no combat check.
+	if s.server != nil && IsArenaMap(s.player.Map) && s.isInCombat() {
+		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+			arena.mu.Lock()
+			_, inArena := arena.PlayerTeams[s.playerGUID]
+			waitLeave := arena.Status == ArenaStatusWaitLeave
+			arena.mu.Unlock()
+			if inArena && !waitLeave {
+				return true
+			}
+		}
+	}
 	// Player::LeaveBattleground (Player.cpp:22490-22499): leaving a live
 	// battleground while inside it is tracked. Battleground::isBattleground()
 	// excludes arenas; Go keeps no live BG instances, so an active non-arena
@@ -1448,24 +1472,6 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 			if e.Active && !e.IsArena && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitJoin) {
 				s.trackBGDeserter(ctx, bgDesertionTypeLeaveBG)
 				break
-			}
-		}
-	}
-	// C++ WorldSession::HandleBattlefieldLeaveOpcode (BattleGroundHandler.cpp:528)
-	// denies leaving a battleground while in combat unless the BG is already in
-	// STATUS_WAIT_LEAVE. Go's live-BG analog is the arena world model
-	// (battleground_arena.go): a registered participant of a live arena whose
-	// status is not ArenaStatusWaitLeave cannot leave while in combat
-	// (Unit::IsInCombat == session.isInCombat, combat.go:1924). Queue-leave is
-	// never gated: C++'s port action==0 arm has no combat check.
-	if s.server != nil && IsArenaMap(s.player.Map) && s.isInCombat() {
-		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
-			arena.mu.Lock()
-			_, inArena := arena.PlayerTeams[s.playerGUID]
-			waitLeave := arena.Status == ArenaStatusWaitLeave
-			arena.mu.Unlock()
-			if inArena && !waitLeave {
-				return true
 			}
 		}
 	}
@@ -1632,8 +1638,10 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 // handleBattlegroundPlayerPositions processes MSG_BATTLEGROUND_PLAYER_POSITIONS (0x2E9).
 // Reference: WorldSession::HandleBattlegroundPlayerPositionsOpcode (BattlegroundHandler.cpp:262).
 func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:876): pre-player packets are dropped with the
+	// connection open (WorldSession.cpp:427-432), never closed.
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	// Reference BattlegroundHandler.cpp:266-268:
 	// Only respond if player is inside a battleground or arena instance/map

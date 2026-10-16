@@ -1484,7 +1484,9 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 
 	for _, pGUID := range visuals {
 		if sess := s.findSessionByGUID(pGUID); sess != nil && sess.worldReady.Load() && sess.player != nil && sess.player.PlayerFlags&playerFlagGhost != 0 {
-			sess.applyAura(24171) // SPELL_RESURRECTION_VISUAL
+			// Battleground.cpp:312: the resurrection visual lands as a triggered
+			// CastSpell, not an aura — use the instant visual-cast path.
+			sess.castVisualSpell(24171) // SPELL_RESURRECTION_VISUAL
 		}
 	}
 	for _, item := range due {

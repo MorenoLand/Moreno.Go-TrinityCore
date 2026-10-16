@@ -1919,7 +1919,7 @@ func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool 
 	r := protocol.NewReader(payload)
 	infoText, err := r.ReadCString()
 	if err != nil {
-		return false
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -1948,12 +1948,10 @@ func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool 
 	if rights&guildRightModifyGuildInfo == grRightEmpty {
 		return true
 	}
-	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET info = ? WHERE guildid = ?", infoText, guildID)
-
-	// ScriptMgr::OnGuildInfoChanged (Guild.cpp:1334): fires after the info
-	// changes and before the DB save — the UPDATE above is the save, and the
-	// fired string is the same either way.
+	// Guild::HandleSetInfo (Guild.cpp:1332-1339): the info is set, then
+	// ScriptMgr::OnGuildInfoChanged fires, and the DB save comes last.
 	s.fireGuildEvent(ctx, scripting.GuildEventOnInfoChange, s.luaGuildObject(ctx, uint32(guildID)), infoText)
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET info = ? WHERE guildid = ?", infoText, guildID)
 	return true
 }
 

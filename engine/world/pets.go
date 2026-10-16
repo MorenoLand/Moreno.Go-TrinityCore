@@ -483,9 +483,9 @@ func getPetSpellsForLevel(entry uint32, level uint32) []pSpell {
 			}
 		}
 		if bestRank != nil {
-			active := uint8(0)
+			active := uint8(petActionDisabled)
 			if bestRank.autocast {
-				active = 1
+				active = uint8(petActionEnabled)
 			}
 			result = append(result, pSpell{id: bestRank.spellID, active: active})
 		}
@@ -3838,11 +3838,17 @@ func (s *session) syncPetSpellAutocast(ctx context.Context, petID uint32, spellI
 	}
 	cdb := s.server.CharactersStore.DB
 
-	// Update pet_spell table
-	res, err := cdb.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", active, petID, spellID)
+	// Pet::ToggleAutocast (Pet.cpp:1808-1824): pet_spell.active stores the
+	// ActiveStates action type (ACT_ENABLED/ACT_DISABLED), not the raw
+	// packet byte.
+	dbActive := uint8(petActionDisabled)
+	if active != 0 {
+		dbActive = uint8(petActionEnabled)
+	}
+	res, err := cdb.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", dbActive, petID, spellID)
 	if err == nil {
 		if rows, _ := res.RowsAffected(); rows == 0 {
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petID, spellID, active)
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petID, spellID, dbActive)
 		}
 	}
 
