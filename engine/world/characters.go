@@ -1060,6 +1060,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		// the live WSG world states follow the generic init block.
 		s.server.sendWSGInitWorldStatesTo(s)
 	}
+	if state.Map == EOTSMapID {
+		// BattlegroundEY::FillInitialWorldStates (BattlegroundEY.cpp:834-874):
+		// the live EotS world states follow the generic init block.
+		s.server.sendEOTSInitWorldStatesTo(s)
+	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
 	s.resetTimeSync()
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
@@ -4079,8 +4084,8 @@ func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arena
 			[2]int32{2757, 1},
 			[2]int32{2770, 1},
 			[2]int32{2769, 1},
-			[2]int32{2749, 0}, // Resources Ally
 			[2]int32{2750, 0}, // Resources Horde
+			[2]int32{2749, 0}, // Resources Ally
 			[2]int32{2565, 142},
 			[2]int32{2720, 0},
 			[2]int32{2719, 0},

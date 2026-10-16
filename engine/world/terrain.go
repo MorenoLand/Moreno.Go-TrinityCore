@@ -532,6 +532,11 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 			// the live WSG world states follow the generic init block.
 			s.server.sendWSGInitWorldStatesTo(s)
 		}
+		if s.player.Map == EOTSMapID {
+			// BattlegroundEY::FillInitialWorldStates (BattlegroundEY.cpp:834-874):
+			// the live EotS world states follow the generic init block.
+			s.server.sendEOTSInitWorldStatesTo(s)
+		}
 	}
 	if oldZone != s.player.Zone || oldArea != areaID {
 		s.triggerPlayerEvent(ctx, scripting.PlayerEventUpdateZone, s.luaPlayer(), s.player.Zone, areaID)

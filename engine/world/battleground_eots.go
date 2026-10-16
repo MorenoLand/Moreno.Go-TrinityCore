@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // Eye of the Storm (EotS) Constants mirroring TrinityCore BattlegroundEY.h / BattlegroundEY.cpp.
@@ -80,12 +82,13 @@ var eotsTowerNames = [EOTSTowerMax]string{
 }
 
 // Tower WorldState icons:
-// Index in eotsTowerWorldStates: 0=Neutral, 1=ControlledAlliance, 2=ControlledHorde
+// Index in eotsTowerWorldStates: 0=Neutral, 1=ControlledAlliance, 2=ControlledHorde.
+// Per C++ BattlegroundEY.h:60-79 and FillInitialWorldStates (BattlegroundEY.cpp:846-866).
 var eotsTowerWorldStates = [EOTSTowerMax][3]uint32{
-	{2724, 2722, 2723}, // Mage Tower
-	{2727, 2725, 2726}, // Draenei Ruins
-	{2730, 2728, 2729}, // Blood Elf Tower
-	{2733, 2731, 2732}, // Fel Reaver Ruins
+	{2728, 2730, 2729}, // Mage Tower
+	{2731, 2732, 2733}, // Draenei Ruins
+	{2722, 2723, 2724}, // Blood Elf Tower
+	{2725, 2726, 2727}, // Fel Reaver Ruins
 }
 
 // Banner GameObject entries:
@@ -559,6 +562,84 @@ func (s *Server) updateEOTSTowerWorldStates(eots *eotsBattlegroundState, towerID
 		}
 		s.broadcastWorldState(eots.MapID, eotsTowerWorldStates[towerID][st], val)
 	}
+}
+
+// sendEOTSInitWorldStatesTo serializes the live Eye of the Storm world states into
+// SMSG_INIT_WORLD_STATES. Reference: BattlegroundEY::FillInitialWorldStates
+// (BattlegroundEY.cpp:834-874): team point (tower) counts (2753/2752), the
+// conflict/unk states (2742-2735, always 0), the per-tower control triples,
+// the netherstorm flag state (2757: 1 while the flag is on its base), the
+// top-stats visibility (2770/2769), the live team resources (2750/2749),
+// and the constants 2565=142, 2720/2719/2718=0, 3085=379. Go models tower
+// ownership as neutral/controlled only (no C++ contested flashing states),
+// so UNCONTROL == state==Neutral and each CONTROL == state==that team.
+func (s *Server) sendEOTSInitWorldStatesTo(sess *session) {
+	if sess == nil || sess.player == nil {
+		return
+	}
+	eots := s.getOrCreateEOTSState(sess.player.Map)
+	if eots == nil {
+		return
+	}
+	eots.mu.Lock()
+	defer eots.mu.Unlock()
+
+	towerOwned := func(towerID, state uint32) int32 {
+		if eots.Towers[towerID].State == state {
+			return 1
+		}
+		return 0
+	}
+	flagShown := int32(0)
+	if eots.FlagState == EOTSFlagStateAtCenter {
+		flagShown = 1
+	}
+
+	worldStates := [][2]int32{
+		{int32(EOTSWorldStateBasesHorde), int32(eots.HordeTowersCount)},
+		{int32(EOTSWorldStateBasesAlliance), int32(eots.AllianceTowersCount)},
+		{2742, 0},
+		{2741, 0},
+		{2740, 0},
+		{2739, 0},
+		{2738, 0},
+		{2737, 0},
+		{2736, 0},
+		{2735, 0},
+		{2733, towerOwned(EOTSTowerDraenei, EOTSTowerStateControlledHorde)},
+		{2732, towerOwned(EOTSTowerDraenei, EOTSTowerStateControlledAlliance)},
+		{2731, towerOwned(EOTSTowerDraenei, EOTSTowerStateNeutral)},
+		{2730, towerOwned(EOTSTowerMage, EOTSTowerStateControlledAlliance)},
+		{2729, towerOwned(EOTSTowerMage, EOTSTowerStateControlledHorde)},
+		{2728, towerOwned(EOTSTowerMage, EOTSTowerStateNeutral)},
+		{2727, towerOwned(EOTSTowerFelReaver, EOTSTowerStateControlledHorde)},
+		{2726, towerOwned(EOTSTowerFelReaver, EOTSTowerStateControlledAlliance)},
+		{2725, towerOwned(EOTSTowerFelReaver, EOTSTowerStateNeutral)},
+		{2724, towerOwned(EOTSTowerBloodElf, EOTSTowerStateControlledHorde)},
+		{2723, towerOwned(EOTSTowerBloodElf, EOTSTowerStateControlledAlliance)},
+		{2722, towerOwned(EOTSTowerBloodElf, EOTSTowerStateNeutral)},
+		{int32(EOTSWorldStateFlagState), flagShown},
+		{int32(EOTSWorldStateFlagStateHorde), 1},
+		{int32(EOTSWorldStateFlagStateAlliance), 1},
+		{int32(EOTSWorldStateHordeResources), int32(eots.HordeResources)},
+		{int32(EOTSWorldStateAllianceResources), int32(eots.AllianceResources)},
+		{2565, 142},
+		{2720, 0},
+		{2719, 0},
+		{2718, 0},
+		{3085, 379},
+	}
+
+	packet := protocol.NewBuffer(16 + len(worldStates)*8)
+	packet.WriteI32(int32(sess.player.Map))
+	packet.WriteI32(int32(sess.player.Zone))
+	packet.WriteI32(0)
+	packet.WriteU16(uint16(len(worldStates)))
+	for _, ws := range worldStates {
+		packet.WriteI32(ws[0])
+		packet.WriteI32(ws[1])
+	}
+	_ = sess.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), packet.Bytes(), true)
 }
 
 // TickResources advances continuous resource generation for elapsed milliseconds.
