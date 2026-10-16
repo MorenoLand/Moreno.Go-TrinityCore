@@ -33,9 +33,15 @@ package world
 // erase (:357), the invited-count decrease (:352-354 — needs a live BG
 // instance from sBattlegroundMgr; the Go sim is per-session), the
 // MemberLost/OfflineMemberLost rated arm
-// (:365-376 — arena_team.go has no MemberLost), the empty-group container
-// erase (:380-384), and the recursive rated-group removal with its STATUS_NONE
-// status packet (:389-406 — needs session queue slots). All of those need the
+// (:365-376 — the loss mechanism exists (arena_rating.go's MemberLost shape,
+// applyArenaMMRChange) but the arm's input, the opponent's matchmaker rating
+// (group->OpponentsMatchmakerRating, wired by the rated matchmaker the
+// per-session sim never runs), is unfabricable; the BattleGroundHandler :496-507
+// twin looks up GetArenaTeamById(ginfo.Team) and misses — see battleground.go),
+// the empty-group container
+// erase (:380-384). The recursive rated-group removal with its STATUS_NONE
+// status packet (:389-406) is PORTED in battleground.go's leave-queue arm via
+// the group roster (findGroupByID) and per-member slot clears. All of the rest need the
 // server-level m_QueuedPlayers/m_QueuedGroups containers that the per-session
 // sim (battleground.go handleBattlemasterJoin) deliberately replaces — no dead
 // container is added here. BGQueueInviteEvent/BGQueueRemoveEvent
@@ -115,7 +121,9 @@ func bgQueueGroupIndex(isRated, isPremade bool, team uint32) uint8 {
 // file header). leaderTeam is leader->GetTeam() (BattlegroundQueue.cpp:146), the C++
 // Team enum value (teamAlliance/teamHorde); opponents ratings start at 0
 // (BattlegroundQueue.cpp:150-151). The m_QueuedGroups push (BattlegroundQueue.cpp:198)
-// and both announce blocks (:166-170, :201-235) are documented-unported above.
+// and the queue-status announce (:201-235) stay unported — see the file header;
+// the arena-join world announce (:166-170) is PORTED in battleground.go's solo and
+// group rated-join paths.
 func newBGGroupQueueInfo(bgTypeID uint32, arenaType uint8, arenaTeamID uint32, isRated bool, arenaRating, matchmakerRating, previousOpponentsTeamID uint32, leaderTeam uint32, memberGUIDs []uint64) *bgGroupQueueInfo {
 	now := gameTimeMS()
 	ginfo := &bgGroupQueueInfo{

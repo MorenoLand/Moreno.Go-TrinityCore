@@ -1537,16 +1537,44 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		if !entry.IsArena && entry.InstanceID != 0 {
 			s.trackBGDeserter(ctx, bgDesertionTypeLeaveQueue)
 		}
+		// BattlegroundQueue::RemovePlayer (BattlegroundQueue.cpp:389-406):
+		// leaving a rated arena queue removes the whole group — recursive,
+		// uninvited only. Each removed member's slot is cleared and a
+		// STATUS_NONE packet goes out (the BuildBattlegroundStatusPacket
+		// STATUS_NONE arm); entry.InstanceID == 0 is the Go form of
+		// !IsInvitedToBGInstanceGUID. Invited groups keep the rest queued,
+		// and solo joins have no group to cascade.
+		groupEmptied := !entry.ArenaGroupJoin
+		if entry.IsArena && entry.IsRated && entry.ArenaGroupJoin && entry.InstanceID == 0 {
+			if grp := s.server.findGroupByID(s.groupID); grp != nil {
+				groupEmptied = true
+				for _, m := range grp.Members {
+					if m.GUID == s.playerGUID {
+						continue
+					}
+					member := s.server.findSessionByGUID(m.GUID)
+					if member == nil || !member.playerLoaded || member.player == nil {
+						continue
+					}
+					for i := range member.bgQueues {
+						e := &member.bgQueues[i]
+						if e.Active && e.IsArena && e.IsRated && e.ArenaGroupJoin && e.InstanceID == 0 && e.Status == BGStatusWaitQueue && e.ArenaType == entry.ArenaType && e.ArenaTeamID == entry.ArenaTeamID {
+							member.bgQueues[i] = bgQueueEntry{}
+							member.sendBattlefieldStatus(uint8(i))
+						}
+					}
+				}
+			}
+		}
 		// BattlegroundQueue::RemovePlayer (BattlegroundQueue.cpp:360-362): the
 		// rated-exit world announce — it fires when the last player leaves a
-		// rated arena queue (group->Players.empty() after the erase). The
-		// per-session sim can know the group is empty only for solo joins (a
-		// solo ginfo holds exactly this player); group joins need the shared
-		// m_QueuedGroups container to detect the last leaver (see
-		// battleground_queue.go). Gated on Arena.QueueAnnouncer.Enable (C++
-		// default false); the GetArenaTeamById miss → silent guard rides in
-		// arenaTeamAnnounceInfo.
-		if entry.IsArena && entry.IsRated && entry.ArenaType != 0 && !entry.ArenaGroupJoin && entry.ArenaTeamID != 0 && s.server.Config.ArenaQueueAnnouncerEnable {
+		// rated arena queue (group->Players.empty() after the erase). Solo
+		// joins always empty their ginfo; group joins empty it via the
+		// recursive removal above (uninvited only — invited groups keep the
+		// rest queued, so no announce). Gated on Arena.QueueAnnouncer.Enable
+		// (C++ default false); the GetArenaTeamById miss → silent guard rides
+		// in arenaTeamAnnounceInfo.
+		if entry.IsArena && entry.IsRated && entry.ArenaType != 0 && entry.ArenaTeamID != 0 && groupEmptied && s.server.Config.ArenaQueueAnnouncerEnable {
 			if name, _, ok := arenaTeamAnnounceInfo(ctx, s, entry.ArenaTeamID); ok {
 				s.server.broadcastMessageChatAll(fmt.Sprintf(arenaQueueAnnounceExitText, name, entry.ArenaType, entry.ArenaType, entry.ArenaTeamRating))
 			}
