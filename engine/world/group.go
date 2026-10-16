@@ -2695,11 +2695,13 @@ func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte
 		// (Group.cpp:2179-2180), but the difficulty is set even then
 		// (MiscHandler.cpp:1315-1316).
 		if grp.GroupType&0x01 == 0 {
-			// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, false, _player).
+			// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, false, _player):
+			// SMSG_INSTANCE_RESET goes to the requester only (Group.cpp:2221-2231;
+			// InstancesResetAnnounce defaults false, World.cpp:1456).
 			for _, mapID := range s.resetGroupBinds(ctx, grp, false) {
 				resetBuf := protocol.NewBuffer(4)
 				resetBuf.WriteU32(mapID)
-				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+				_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
 			}
 		}
 		// group->SetDungeonDifficulty (Group.cpp:2116): the in-memory set
@@ -2781,11 +2783,13 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 		// (Group.cpp:2179-2180), but the difficulty is set even then
 		// (MiscHandler.cpp:1380-1381).
 		if grp.GroupType&0x01 == 0 {
-			// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, true, _player).
+			// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, true, _player):
+			// SMSG_INSTANCE_RESET goes to the requester only (Group.cpp:2221-2231;
+			// InstancesResetAnnounce defaults false, World.cpp:1456).
 			for _, mapID := range s.resetGroupBinds(ctx, grp, true) {
 				resetBuf := protocol.NewBuffer(4)
 				resetBuf.WriteU32(mapID)
-				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+				_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
 			}
 		}
 		// group->SetRaidDifficulty (Group.cpp:2140): the in-memory set and
