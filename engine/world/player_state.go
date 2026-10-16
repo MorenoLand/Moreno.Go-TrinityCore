@@ -5319,22 +5319,22 @@ func (s *session) handleTogglePvP(ctx context.Context, payload []byte) bool {
 // Reference: WorldSession::HandleAcceptGrantLevel (ReferAFriendHandler.cpp:67).
 func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	granterGUID, err := r.ReadPackedGUID()
 	if err != nil || granterGUID == 0 {
-		return false
+		return true
 	}
 	granter := s.server.findSessionByGUID(granterGUID)
 	if granter == nil || granter.player == nil || !granter.playerLoaded {
-		return false
+		return true
 	}
 	if s.accountID != granter.recruiterID {
-		return false
+		return true
 	}
 	if granter.player.GrantableLevels == 0 {
-		return false
+		return true
 	}
 
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -5343,19 +5343,24 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 	granter.player.GrantableLevels--
 	granter.sendPlayerUpdate()
 
-	s.player.Level++
-	s.player.MaxHealth = 200 + uint32(s.player.Level)*50
-	s.player.Health = s.player.MaxHealth
-	if s.player.Powers[0] > 0 || s.player.MaxPowers[0] > 0 {
-		s.player.MaxPowers[0] = 100 + uint32(s.player.Level)*40
-		s.player.Powers[0] = s.player.MaxPowers[0]
+	var oldMana uint32
+	if len(s.player.MaxPowers) > 0 {
+		oldMana = s.player.MaxPowers[0]
 	}
-
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, health = ? WHERE guid = ?", s.player.Level, s.player.Health, s.playerGUID)
+	// WorldSession::HandleAcceptGrantLevel ends in
+	// _player->GiveLevel(_player->GetLevel() + 1) (ReferAFriendHandler.cpp:85),
+	// the full Player::GiveLevel sequence, not a stat hand-roll.
+	s.applyLevelUp(ctx, s.player.MaxHealth, oldMana)
+	// Player::GiveLevel (Player.cpp:2781-2788): the recruited player gains a
+	// grantable level on even levels below
+	// CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL; the RAF byte flag rides
+	// on playerFieldBytesValue via GrantableLevels.
+	if s.recruiterID != 0 && s.player.Level < recruitAFriendMaxBonusLevel && s.player.Level%2 == 0 {
+		s.player.GrantableLevels++
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET grantableLevels = grantableLevels + 1 WHERE guid = ?", s.playerGUID)
+		}
 	}
-
-	s.updatePetOnLevelUp(ctx)
 	s.sendPlayerUpdate()
 	s.debug("level granted", "account", s.accountName, "level", s.player.Level, "granter", granterGUID)
 	return true
@@ -5430,34 +5435,61 @@ func (s *session) handleGrantLevel(ctx context.Context, payload []byte) bool {
 // Reference: WorldSession::HandleAlterAppearance (CharacterHandler.cpp:1274).
 func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
-		return false
+		return true
 	}
 	r := protocol.NewReader(payload)
 	hair, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	color, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	facialHair, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 	skinColor, err := r.ReadU32()
 	if err != nil {
-		return false
+		return true
 	}
 
-	// The barber-chair proximity arm (FindNearestGameObjectOfType(
-	// GAMEOBJECT_TYPE_BARBER_CHAIR, 5.0f) + stand-state check, :1314-1322)
-	// and the BarberShopStyleEntry type/race/sex validation (:1281-1311)
-	// have no Go bridge (no DBC barber-shop store, no type-filtered
-	// gameobject scan); the appearance fields apply unconditionally here.
-	// C++ validates and charges BEFORE applying; the previous Go code
-	// mutated the model first, which also made barberShopCost compare the
-	// new values against themselves and always return 0 (free haircuts).
+	// CharacterHandler.cpp:1314-1322: the player must be sitting on a barber
+	// chair within 5.0f (stand state UNIT_STAND_STATE_SIT_LOW_CHAIR (4) +
+	// chairheight = data0 of the chair template), else
+	// SendBarberShopResult(BARBER_SHOP_RESULT_NOT_ON_CHAIR) (=2).
+	// (The BarberShopStyleEntry type/race/sex validation at :1281-1311 stays
+	// a documented gap: no BarberShopStyle/CharSections DBC bridge in Go.)
+	foundChair := false
+	var chairHeight uint8
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		px, py, pz := s.player.X, s.player.Y, s.player.Z
+		s.scanNearbyGameObjectsAt(ctx, s.player.Map, s.player.InstanceID, px, py, 5.0, func(g nearbyGameObject) {
+			if foundChair {
+				return
+			}
+			dx, dy, dz := g.x-px, g.y-py, g.z-pz
+			if dx*dx+dy*dy+dz*dz > 25.0 {
+				return
+			}
+			var goType uint8
+			var data0 uint32
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+				`SELECT type, COALESCE(Data0, 0) FROM gameobject_template WHERE entry = ? LIMIT 1`, g.entry).
+				Scan(&goType, &data0); err != nil || goType != GameObjectTypeBarberChair {
+				return
+			}
+			foundChair = true
+			chairHeight = uint8(data0)
+		})
+	}
+	if !foundChair || s.player.StandState != 4+chairHeight {
+		res := protocol.NewBuffer(4)
+		res.WriteU32(2) // BARBER_SHOP_RESULT_NOT_ON_CHAIR (WorldSession.h:258)
+		_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
+		return true
+	}
 
 	// Player::GetBarberShopCost (Player.cpp:24716): the barber charges by
 	// gtBarberShopCostBase.dbc at the player's level; a missing row is

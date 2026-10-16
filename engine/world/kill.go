@@ -1270,65 +1270,7 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 			break
 		}
 		s.player.XP -= needed
-		oldHP := s.player.MaxHealth
-		oldMana := s.player.MaxPowers[0]
-		oldStats := s.player.Stats
-		oldLevel := s.player.Level
-		s.player.Level++
-		s.setAchievementCriteria(criteriaTypeReachLevel, uint32(s.player.Level), uint32(s.player.Level))
-		// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
-		s.autoBalanceOnLevelChanged()
-		_ = s.calculatePlayerStats(ctx, s.player)
-		s.player.Health = s.player.MaxHealth
-		if len(s.player.MaxPowers) > 0 {
-			s.player.Powers[0] = s.player.MaxPowers[0]
-		}
-		healthDelta := uint32(0)
-		if s.player.MaxHealth > oldHP {
-			healthDelta = s.player.MaxHealth - oldHP
-		}
-		manaDelta := uint32(0)
-		if s.player.MaxPowers[0] > oldMana {
-			manaDelta = s.player.MaxPowers[0] - oldMana
-		}
-		// SMSG_LEVELUP_INFO: 56 bytes (level, healthDelta, 7 powerDeltas, 5 statDeltas)
-		levelPacket := protocol.NewBuffer(56)
-		levelPacket.WriteU32(uint32(s.player.Level))
-		levelPacket.WriteU32(healthDelta)
-		levelPacket.WriteU32(manaDelta) // PowerDelta[0] (Mana)
-		for i := 1; i < 7; i++ {
-			levelPacket.WriteU32(0) // PowerDelta[1..6]
-		}
-		for i := 0; i < 5; i++ {
-			statDelta := uint32(0)
-			if s.player.Stats[i] > oldStats[i] {
-				statDelta = s.player.Stats[i] - oldStats[i]
-			}
-			levelPacket.WriteU32(statDelta) // StatDelta[0..4]: Str, Agi, Sta, Int, Spi
-		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_LEVELUP_INFO), levelPacket.Bytes(), true)
-		for i := range s.player.Skills {
-			maxSkill := uint16(s.player.Level) * 5
-			if s.player.Skills[i].Max < maxSkill && s.player.Skills[i].Max > 0 {
-				s.player.Skills[i].Max = maxSkill
-			}
-		}
-		if s.player.Level >= 10 {
-			_ = s.sendTalentsInfo(false)
-		}
-		s.updatePetOnLevelUp(ctx)
-		// Reference: Player::GiveLevel mails level rewards from mail_level_reward
-		// (Player.cpp:2768) once per reached level.
-		s.sendLevelUpMail(ctx, s.player.Level)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, xp = ?, health = ? WHERE guid = ?", s.player.Level, s.player.XP, s.player.Health, s.playerGUID)
-			for _, sk := range s.player.Skills {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET max = ? WHERE guid = ? AND skill = ?", sk.Max, s.playerGUID, sk.Skill)
-			}
-		}
-		// Player::GiveLevel (Player.cpp:2787): OnPlayerLevelChanged fires once
-		// per level gained, after the level-up processing.
-		s.fireLevelChangedHook(ctx, oldLevel)
+		s.applyLevelUp(ctx, s.player.MaxHealth, s.player.MaxPowers[0])
 	}
 	s.sendPlayerUpdate()
 	grantPetXP()
@@ -1921,4 +1863,69 @@ func (s *session) handleEffectKillCreditGroup(ctx context.Context, targetGUID ui
 		}
 		m.grantKillCreditMonster(ctx, entry, targetGUID)
 	}
+}
+
+// applyLevelUp runs one Player::GiveLevel step (Player.cpp:2694-2795): the
+// level increment, reach-level criteria, stat recalculation, SMSG_LEVELUP_INFO
+// with health/power/stat deltas, skill/talent updates, pet sync, level-reward
+// mail, DB persist, and the level-changed hook. oldHP/oldMana are the
+// pre-level MaxHealth/MaxPowers[0] used for the packet deltas.
+func (s *session) applyLevelUp(ctx context.Context, oldHP, oldMana uint32) {
+	oldStats := s.player.Stats
+	oldLevel := s.player.Level
+	s.player.Level++
+	s.setAchievementCriteria(criteriaTypeReachLevel, uint32(s.player.Level), uint32(s.player.Level))
+	// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
+	s.autoBalanceOnLevelChanged()
+	_ = s.calculatePlayerStats(ctx, s.player)
+	s.player.Health = s.player.MaxHealth
+	if len(s.player.MaxPowers) > 0 {
+		s.player.Powers[0] = s.player.MaxPowers[0]
+	}
+	healthDelta := uint32(0)
+	if s.player.MaxHealth > oldHP {
+		healthDelta = s.player.MaxHealth - oldHP
+	}
+	manaDelta := uint32(0)
+	if s.player.MaxPowers[0] > oldMana {
+		manaDelta = s.player.MaxPowers[0] - oldMana
+	}
+	// SMSG_LEVELUP_INFO: 56 bytes (level, healthDelta, 7 powerDeltas, 5 statDeltas)
+	levelPacket := protocol.NewBuffer(56)
+	levelPacket.WriteU32(uint32(s.player.Level))
+	levelPacket.WriteU32(healthDelta)
+	levelPacket.WriteU32(manaDelta) // PowerDelta[0] (Mana)
+	for i := 1; i < 7; i++ {
+		levelPacket.WriteU32(0) // PowerDelta[1..6]
+	}
+	for i := 0; i < 5; i++ {
+		statDelta := uint32(0)
+		if s.player.Stats[i] > oldStats[i] {
+			statDelta = s.player.Stats[i] - oldStats[i]
+		}
+		levelPacket.WriteU32(statDelta) // StatDelta[0..4]: Str, Agi, Sta, Int, Spi
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_LEVELUP_INFO), levelPacket.Bytes(), true)
+	for i := range s.player.Skills {
+		maxSkill := uint16(s.player.Level) * 5
+		if s.player.Skills[i].Max < maxSkill && s.player.Skills[i].Max > 0 {
+			s.player.Skills[i].Max = maxSkill
+		}
+	}
+	if s.player.Level >= 10 {
+		_ = s.sendTalentsInfo(false)
+	}
+	s.updatePetOnLevelUp(ctx)
+	// Reference: Player::GiveLevel mails level rewards from mail_level_reward
+	// (Player.cpp:2768) once per reached level.
+	s.sendLevelUpMail(ctx, s.player.Level)
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, xp = ?, health = ? WHERE guid = ?", s.player.Level, s.player.XP, s.player.Health, s.playerGUID)
+		for _, sk := range s.player.Skills {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET max = ? WHERE guid = ? AND skill = ?", sk.Max, s.playerGUID, sk.Skill)
+		}
+	}
+	// Player::GiveLevel (Player.cpp:2787): OnPlayerLevelChanged fires once
+	// per level gained, after the level-up processing.
+	s.fireLevelChangedHook(ctx, oldLevel)
 }
