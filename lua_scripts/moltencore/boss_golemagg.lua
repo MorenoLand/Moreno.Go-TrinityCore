@@ -22,11 +22,11 @@
 -- the schedule (jeklik convention). OnDamageTaken(9, pre-damage
 -- hook): current (pre-damage) health strictly below 10%
 -- (C++ HealthBelowPct(10) — the engine's event 9 fires before damage is
--- applied, matching C++ Unit::DealDamage) and not yet enraged
+-- applied, matching C++ Unit::DealDamage) and not HasAura(19953)
 -- -> triggered self-cast enrage 19953, arm earthquake 19798 3s then
--- 3s, non-triggered DoCastVictim (the C++ HasAura(SPELL_ENRAGE)
--- once-guard is kept as per-GUID Lua state — no HasAura bridge).
--- OnDied/OnLeaveCombat/OnReset: cancel timers, clear the enrage flag.
+-- 3s, non-triggered DoCastVictim (C++-exact once-guard via the
+-- creature HasAura bridge, engine/world/lua_objects.go).
+-- OnDied/OnLeaveCombat/OnReset: cancel timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no UNIT_STATE bridge — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
@@ -50,7 +50,6 @@ local SPELL_EARTHQUAKE = 19798
 local SPELL_ENRAGE = 19953
 
 local timers = {}
-local enraged = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -124,7 +123,6 @@ end
 
 local function golemaggResetState(guid)
     cancelTimers(guid)
-    enraged[guid] = nil
 end
 
 local function golemaggLeaveCombat(event, creature)
@@ -148,13 +146,12 @@ end
 -- C++ DamageTaken: current (pre-damage) health strictly below 10%
 -- (HealthBelowPct(10) = GetHealth() < floor(max*10/100) — the engine's
 -- event 9 fires before damage is applied, matching C++ Unit::DealDamage)
--- and not already enraged -> triggered self-cast enrage 19953 and arm
--- the earthquake cycle (C++-exact; the C++ HasAura(SPELL_ENRAGE)
--- once-guard is kept as per-GUID Lua state — no HasAura bridge, so a
--- dispelled enrage never re-casts: accepted edge).
+-- and not HasAura(SPELL_ENRAGE) -> triggered self-cast enrage 19953
+-- and arm the earthquake cycle (C++-exact; the creature HasAura bridge
+-- means a dispelled enrage re-casts, matching C++).
 local function golemaggDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    if enraged[guid] then
+    if creature:HasAura(SPELL_ENRAGE) then
         return
     end
     local maxHealth = creature:GetMaxHealth()
@@ -162,7 +159,6 @@ local function golemaggDamageTaken(event, creature, attacker, damage)
         return
     end
     if creature:GetHealth() < math.floor(maxHealth * 10 / 100) then
-        enraged[guid] = true
         creature:CastSpell(creature, SPELL_ENRAGE, true)
         schedule(guid, "earthquake", 3000, function()
             onEarthquake(creature, guid)

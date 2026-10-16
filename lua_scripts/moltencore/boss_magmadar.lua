@@ -14,9 +14,9 @@
 -- non-triggered self-cast (C++ DoCast default is triggered=false —
 -- vaelastrasz convention) / panic 19408 20s then 35s, non-triggered
 -- DoCastVictim / lava bomb 19428 12s then 12s, non-triggered on a
--- random alive player in the instance (the C++ -SPELL_LAVA_BOMB
--- no-aura filter has no HasAura bridge — the pick may land on a
--- target already carrying it). Nil-target ticks cast nothing but keep
+-- random alive player in the instance without the lava-bomb aura
+-- (C++ -SPELL_LAVA_BOMB no-aura filter, player HasAura bridge).
+-- Nil-target ticks cast nothing but keep
 -- the schedule (jeklik convention). OnDied/OnLeaveCombat(2)/
 -- OnReset(23): cancel timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
@@ -80,15 +80,16 @@ local function onPanic(creature, guid)
 end
 
 -- C++ EVENT_LAVA_BOMB: non-triggered cast 19428 on a random alive
--- player in the instance (the C++ -SPELL_LAVA_BOMB no-aura filter has
--- no HasAura bridge — the pick may land on a target already carrying
--- it); re-arm 12s.
+-- player in the instance without the lava-bomb aura (C++ -SPELL_LAVA_BOMB
+-- no-aura filter via the player HasAura bridge, engine/world/lua_player.go);
+-- re-arm 12s.
 local function randomAlivePlayer(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local players = {}
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
+                and not p:IsDead()
+                and not p:HasAura(SPELL_LAVA_BOMB) then
             players[#players + 1] = p
         end
     end

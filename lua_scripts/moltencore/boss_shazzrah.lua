@@ -10,9 +10,10 @@
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat arms
 -- arcane explosion 19712 6s then {4s,7s}, non-triggered DoCastVictim /
 -- Shazzrah's curse 19713 10s then {25s,30s}, non-triggered on a random
--- alive player in the instance (wushoolay randomAlivePlayer helper;
--- the C++ -SPELL_SHAZZRAH_CURSE no-aura filter has no HasAura bridge
--- — the pick may land on a target already carrying it) / magic
+-- alive player in the instance without the curse aura (wushoolay
+-- randomAlivePlayer helper plus the C++ -SPELL_SHAZZRAH_CURSE no-aura
+-- filter via the player HasAura bridge, engine/world/lua_player.go) /
+-- magic
 -- grounding 19714 24s then 35s, non-triggered self-cast / counterspell
 -- 19715 15s then {16s,20s}, non-triggered DoCastVictim / Gate of
 -- Shazzrah 45s then 45s (ResetThreatList has no bridge; DoCastAOE(23138)
@@ -79,13 +80,15 @@ local function onArcaneExplosion(creature, guid)
 end
 
 -- C++ EVENT_SHAZZRAH_CURSE: non-triggered cast 19713 on a random alive
--- player in the instance; re-arm {25s,30s}.
+-- player in the instance without aura 19713 (C++ -SPELL_SHAZZRAH_CURSE
+-- filter); nil pick casts nothing but keeps the schedule; re-arm {25s,30s}.
 local function randomAlivePlayer(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local players = {}
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
+                and not p:IsDead()
+                and not p:HasAura(SPELL_SHAZZRAH_CURSE) then
             players[#players + 1] = p
         end
     end
