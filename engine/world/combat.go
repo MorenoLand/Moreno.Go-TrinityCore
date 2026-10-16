@@ -3391,6 +3391,13 @@ func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool 
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// DuelHandler.cpp:55-57: C++ reads a raw 8-byte guid from the wire even
+	// though it is unused — a short packet throws and the duel is left
+	// untouched, so the read comes before the state checks.
+	r := protocol.NewReader(payload)
+	if _, err := r.ReadU64(); err != nil {
+		return true
+	}
 	// DuelHandler.cpp:59-60: no duel requested or already completed -> silent
 	// return (no SMSG_DUEL_COMPLETE).
 	if s.duelPartner == 0 {
@@ -3416,7 +3423,8 @@ func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool 
 		}
 		// DuelHandler.cpp:68: the surrendering player casts 7267 (beg) on
 		// themselves BEFORE DuelComplete(DUEL_WON). The damage-win path
-		// never casts it — DuelComplete's DUEL_WON arm only casts 52852
+		// casts it the same way at its own call site (Unit.cpp:972, in
+		// duelDefeatOnDamage); DuelComplete itself only casts 52852
 		// (victory cheer) on the winner (Player.cpp:7398-7400).
 		s.castVisualSpell(7267)
 		s.endDuel(true, s.duelPartner, false)
@@ -3636,8 +3644,8 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 			}
 		}
 		// 7267 (beg) is NOT cast here: DuelHandler.cpp:68 casts it on the
-		// surrendering player only, before DuelComplete(DUEL_WON); the
-		// damage-win path never casts it (handleDuelCancelled emits it).
+		// surrendering player, and Unit.cpp:972 casts it on the damage-win
+		// loser — both at their own call sites before DuelComplete(DUEL_WON).
 		if loserSess != nil {
 			loserSess.updateAchievementCriteria(criteriaTypeLoseDuel, 0, 1)
 		}
@@ -3717,6 +3725,21 @@ func duelDefeatOnDamage(victim *session, attackerPlayerGUID uint64, damage, heal
 		if opp == nil {
 			opp = victim
 		}
+		// Unit.cpp:969-970: the duel-win path combat-stops both duelists
+		// (CombatStopWithPets(true) — non-melee interrupt, attack stop, pet
+		// stop) before the beg cast and DuelComplete, exactly like the
+		// /forfeit path in HandleDuelCancelledOpcode.
+		opp.interruptCurrentCast()
+		opp.interruptCurrentChannel()
+		opp.stopControlledPetCombat()
+		victim.interruptCurrentCast()
+		victim.interruptCurrentChannel()
+		victim.stopControlledPetCombat()
+		// Unit.cpp:972: the damage-win path casts 7267 (beg) on the loser
+		// before DuelComplete(DUEL_WON), same as the /forfeit arm
+		// (DuelHandler.cpp:68); the cast lives at the call sites, never
+		// inside DuelComplete.
+		victim.castVisualSpell(7267)
 		opp.endDuel(true, victim.duelPartner, false)
 	}
 	return true
