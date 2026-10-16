@@ -3219,7 +3219,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return false
+		return true
 	}
 
 	var dbItemGUID int64
