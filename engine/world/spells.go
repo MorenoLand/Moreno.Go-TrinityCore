@@ -30808,7 +30808,11 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 	// SkillHandler.cpp:76-78 (HandleTalentWipeConfirm) — the feign-death
 	// strip runs after the CanResetTalents gate, before ResetTalents.
 	s.removeFakeDeath()
-	if len(s.player.Talents) == 0 || !s.resetTalents(ctx, false) {
+	// Player::ResetTalents (Player.cpp:3992-4004) runs even when no talents
+	// are spent: the AT_LOGIN_RESET_TALENTS clear happens before the
+	// no-talents-spent arm, so the handler must not short-circuit on an
+	// empty talent map — the (0,0) answer is identical either way.
+	if !s.resetTalents(ctx, false) {
 		// Player::ResetTalents returns false when no talents are spent
 		// (Player.cpp:3998) or the escalating cost cannot be paid
 		// (Player.cpp:4013): the handler answers (0,0) — "you have not any
