@@ -113,33 +113,42 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	if name == "" || (name[0] >= '0' && name[0] <= '9') {
-		return s.sendChannelNotify(channelInvalidNameNotice, name, nil) == nil
-	}
-	if len(name) > 31 || len(password) > 31 || strings.Contains(name, "|") {
-		return true
-	}
-	key := s.scopedChannelKey(name)
-	flags := channelFlags(channelID, name)
-	// Reference: WorldSession::HandleJoinChannel (ChannelHandler.cpp:38-49) —
-	// unknown built-in channel IDs are silently dropped, and
-	// Player::CanJoinConstantChannelInZone (Player.cpp:5159-5171) rejects
-	// zone-dependent channels (General/Trade/LocalDefense/GuildRecruitment)
-	// inside arena instances, plus the guild-recruitment channel for players
-	// already in a guild. Channel IDs are ChatChannels.dbc rows:
-	// 1 General, 2 Trade, 3 LocalDefense, 22 WorldDefense, 23
-	// GuildRecruitment, 24 LookingForGroup.
+	// Reference: WorldSession::HandleJoinChannel (ChannelHandler.cpp:46-52) —
+	// the channelId/zone gate runs BEFORE the name check: unknown channel
+	// IDs and out-of-zone constant channels are silently dropped even when
+	// the name would also be invalid.
 	// Reference: Player::CanJoinConstantChannelInZone (Player.cpp:5159-5171) —
 	// zone-dependent channels (General/Trade/LocalDefense/GuildRecruitment)
 	// are refused inside arena instances, city-only channels
 	// (Trade/GuildRecruitment/LFG) outside cities, and GuildRecruitment for
 	// players already in a guild; unknown channel IDs are refused.
+	// Channel IDs are ChatChannels.dbc rows: 1 General, 2 Trade, 3
+	// LocalDefense, 22 WorldDefense, 23 GuildRecruitment, 24 LookingForGroup.
 	// ChannelHandler.cpp gates both join (:46-49) and leave (:112-115) on it,
 	// silently in both cases.
 	if channelID != 0 && (s.player == nil || !s.constantChannelZoneAllowed(channelID)) {
 		s.debug("channel join rejected: zone gate", "account", s.accountName, "id", channelID)
 		return true
 	}
+	if name == "" || (name[0] >= '0' && name[0] <= '9') {
+		return s.sendChannelNotify(channelInvalidNameNotice, name, nil) == nil
+	}
+	// Reference: ChannelHandler.cpp:60-72 — an over-long password is a silent
+	// drop, then DisallowHyperlinksAndMaybeKick (any '|' in the name is a
+	// silent drop here; the Go port never strict-kicks), then the
+	// custom-channel name over-length check, which applies only when
+	// channelId is 0.
+	if len(password) > 31 {
+		return true
+	}
+	if strings.Contains(name, "|") {
+		return true
+	}
+	if channelID == 0 && len(name) > 31 {
+		return true
+	}
+	key := s.scopedChannelKey(name)
+	flags := channelFlags(channelID, name)
 	s.server.channelsMu.Lock()
 	if s.server.channels == nil {
 		s.server.channels = make(map[string]*worldChannel)
@@ -345,7 +354,16 @@ func (s *session) handleChannelList(payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	key := s.scopedChannelKey(name)
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.RLock()
 	channel := s.server.channels[key]
 	if channel == nil {
@@ -1083,8 +1101,18 @@ func (c *worldChannel) findMemberByName(name string) *session {
 // a moderator (CHAT_NOT_MODERATOR_NOTICE) unless they hold
 // RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR.
 func (s *session) channelCommandGuard(name string) (*worldChannel, bool) {
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return nil, false
+	}
+	name = resolved
 	s.server.channelsMu.RLock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return nil, false
@@ -1155,8 +1183,18 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 	// Reference: Channel::Password - the sender must be on the channel
 	// (CHAT_NOT_MEMBER_NOTICE) and a moderator (CHAT_NOT_MODERATOR_NOTICE),
 	// unless they hold RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR.
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -1200,8 +1238,18 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
 		return true
 	}
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -1257,8 +1305,18 @@ func (s *session) handleChannelOwner(ctx context.Context, payload []byte) bool {
 	if !ok {
 		return true
 	}
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.RLock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return true
@@ -1299,13 +1357,23 @@ func (s *session) channelSetMode(payload []byte, moderator, set bool) bool {
 	}
 	name, targetName, ok := readChannelCommand(payload)
 	if !ok {
-		return false
+		return true
 	}
 	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
 		return true
 	}
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -1406,8 +1474,18 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
 		return true
 	}
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.RLock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return true
@@ -1433,7 +1511,7 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	s.server.channelsMu.RLock()
-	ch = s.server.channels[s.scopedChannelKey(name)]
+	ch = s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return true
@@ -1522,13 +1600,23 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	}
 	name, targetName, ok := readChannelCommand(payload)
 	if !ok {
-		return false
+		return true
 	}
 	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
 		return true
 	}
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -1556,7 +1644,7 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	}
 	victimGUID := target.playerGUID
 	delete(ch.Members, target)
-	removeChannelKeyLocked(target, target.scopedChannelKey(name))
+	removeChannelKeyLocked(target, key)
 	// Reference: Channel::KickOrBan - the banned broadcast fires only from
 	// the first arm (ban && !IsBanned(victim)); re-banning an already-banned
 	// on-channel member falls through to the kicked broadcast.
@@ -1637,8 +1725,18 @@ func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
 		return true
 	}
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -1692,8 +1790,18 @@ func (s *session) handleChannelAnnouncements(ctx context.Context, payload []byte
 	if !ok {
 		return true
 	}
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, name)
+	if !ok {
+		return true
+	}
+	name = resolved
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[s.scopedChannelKey(name)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -1754,8 +1862,18 @@ func (s *session) handleGetChannelMemberCount(ctx context.Context, payload []byt
 	if err != nil {
 		return true
 	}
+	// Reference: every Channel.cpp command resolves the packet channel name
+	// with ChannelMgr::GetChannelForPlayerByNamePart — a case-insensitive
+	// prefix match over the sender's joined channels — never an exact key
+	// lookup. name is rebound to the canonical channel name from here on
+	// (ChannelNameBuilder echoes channel->GetName in every notice).
+	key, resolved, ok := s.server.resolveChannelNamePart(s, channelName)
+	if !ok {
+		return true
+	}
+	channelName = resolved
 	s.server.channelsMu.RLock()
-	ch := s.server.channels[s.scopedChannelKey(channelName)]
+	ch := s.server.channels[key]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return true

@@ -67,7 +67,7 @@ func (s *session) handleEmote(ctx context.Context, payload []byte) bool {
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for member := range s.server.sessions {
-		if !member.worldReady.Load() || member.player == nil || member.player.Map != s.player.Map {
+		if !member.worldReady.Load() || member.player == nil || member.player.Map != s.player.Map || member.player.InstanceID != s.player.InstanceID {
 			continue
 		}
 		_ = member.write(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), true)
@@ -113,14 +113,13 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 	if !found {
 		return true
 	}
-	// Reference: WorldSession::HandleTextEmoteOpcode (ChatHandler.cpp:696-698
-	// then the criteria call after the broadcast) — the
-	// ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE update runs only after the EmotesText
-	// lookup succeeds; C++ returns early on an invalid text emote id before
-	// the criteria update. The quantity stays 1: Go's additive progress model
-	// has no SET-type analog, and the C++ quantity 0 is ignored there (C++
-	// sets the counter to 1 via miscValue1 != 0 in AchievementMgr.cpp).
-	s.updateAchievementCriteria(criteriaTypeDoEmote, textEmote, 1)
+	// Reference: WorldSession::HandleTextEmoteOpcode (ChatHandler.cpp:736-738)
+	// — the ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE update runs after the text
+	// emote broadcast (it also runs only when the EmotesText lookup succeeds;
+	// C++ returns early on an invalid text emote id before the criteria
+	// update). The quantity stays 1: Go's additive progress model has no
+	// SET-type analog, and the C++ quantity 0 is ignored there (C++ sets the
+	// counter to 1 via miscValue1 != 0 in AchievementMgr.cpp).
 	visualEmote, err := entry.Uint32(2)
 	if err != nil {
 		return true
@@ -196,10 +195,11 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		}
 	}
 	s.server.sessionsMu.RUnlock()
-	// Eluna CREATURE_EVENT_ON_RECEIVE_EMOTE (8): ChatHandler.cpp:741-742
+	s.updateAchievementCriteria(criteriaTypeDoEmote, textEmote, 1)
+	// Eluna CREATURE_EVENT_ON_RECEIVE_EMOTE (8): ChatHandler.cpp:740-742
 	// fires Creature::ReceiveEmote -> AI()->ReceiveEmote(player, text_emote)
-	// after the text-emote broadcast (ahead of the achievement criteria
-	// update). C++ resolves the target with ObjectAccessor::GetUnit and only
+	// after the achievement criteria update. C++ resolves the target with
+	// ObjectAccessor::GetUnit and only
 	// fires for TYPEID_UNIT targets with an AI; the Go twin resolves a live
 	// creature motion. The boolean gates only ScriptedAI::ReceiveEmote, an
 	// empty base (CreatureAI.h:168) — a provable no-op — so the veto is not
