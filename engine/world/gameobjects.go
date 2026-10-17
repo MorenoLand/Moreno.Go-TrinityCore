@@ -599,14 +599,22 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 	} else {
 		s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
 	}
-	// m_cooldownTime = GetGameTimeMS() + GetAutoCloseTime()
-	// (GameObject.cpp:1689): the raw template value is consumed as
-	// milliseconds against the ms game clock. The GO_ACTIVATED update arm
-	// fires at the next tick and the GO_JUST_DEACTIVATED arm re-readies the
-	// state when the template carries a lockId or an autoCloseTime
-	// (GameObject.cpp:797-798) — a lockId-only goober re-readies
-	// immediately, like the C++ next-tick transition; otherwise the goober
-	// stays ACTIVE and is immediately reusable, so no reset is scheduled.
+	// GameObject.cpp:1689: m_cooldownTime = GetGameTimeMS() +
+	// GetAutoCloseTime(). The arm OVERWRITES the head gate's data6 re-arm
+	// (admitGameObjectUse), so the effective re-use block window is the
+	// raw autoCloseTime (data3, milliseconds) — not data6 seconds. A goober
+	// with cooldown=30/autoCloseTime=2000 blocks re-use for 2s in C++;
+	// without this overwrite Go blocked it for 30s. When data6 is 0 the
+	// head gate never fires and this write is inert, like C++.
+	s.server.objectsMu.Lock()
+	goState.CooldownUntilMS = time.Now().UnixMilli() + int64(tpl.autoCloseTime)
+	s.server.objectsMu.Unlock()
+	// The GO_ACTIVATED update arm fires at the next tick and the
+	// GO_JUST_DEACTIVATED arm re-readies the state when the template
+	// carries a lockId or an autoCloseTime (GameObject.cpp:797-798) — a
+	// lockId-only goober re-readies immediately, like the C++ next-tick
+	// transition; otherwise the goober stays ACTIVE and is immediately
+	// reusable, so no reset is scheduled.
 	if tpl.autoCloseTime > 0 {
 		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, time.Duration(tpl.autoCloseTime)*time.Millisecond, false)
 	} else if tpl.lockID != 0 {
@@ -1302,7 +1310,10 @@ func (s *session) loadGameObjectTemplateData(ctx context.Context, entry uint32) 
 
 // useGameObjectChair mirrors the GAMEOBJECT_TYPE_CHAIR arm of GameObject::Use
 // (GameObject.cpp:1550-1629): the player teleports to the nearest free slot
-// along the chair's orthogonal axis and sits.
+// along the chair's orthogonal axis and sits. C++ teleports with
+// TELE_TO_NOT_LEAVE_TRANSPORT | TELE_TO_NOT_LEAVE_COMBAT |
+// TELE_TO_NOT_UNSUMMON_PET; Go's teleportTo stops combat and may unsummon
+// the pet (documented, same as the barber-chair arm).
 func (s *session) useGameObjectChair(ctx context.Context, goState *dynamicGameObjectState, entry uint32) {
 	if s.server == nil || s.player == nil {
 		return
