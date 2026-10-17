@@ -1275,23 +1275,27 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, c.name FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
 		WHERE gm.guildid = ? AND c.name = ? LIMIT 1`, guildID, newMasterName).Scan(&newLeaderGUID, &newLeaderName)
-	if err != nil || newLeaderGUID == 0 || uint64(newLeaderGUID) == s.playerGUID {
+	if err != nil || newLeaderGUID == 0 {
 		return true
 	}
 
+	// Guild::HandleSetLeader (Guild.cpp:1363-1379): _SetLeaderGUID runs
+	// first — leaderguid moves and the new leader takes GR_GUILDMASTER (0)
+	// via Member::ChangeRank, which player->SetRank's the connected player
+	// — then the old leader drops to GR_OFFICER (1). The write order matters:
+	// targeting yourself leaves you at rank 1 in C++ (the officer demotion
+	// lands after the no-op guildmaster assignment), and the
+	// GE_LEADER_CHANGED broadcast fires with the name twice.
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET leaderguid = ? WHERE guildid = ?", newLeaderGUID, guildID)
-	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 1 WHERE guid = ? AND guildid = ?", s.playerGUID, guildID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 0 WHERE guid = ? AND guildid = ?", newLeaderGUID, guildID)
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 1 WHERE guid = ? AND guildid = ?", s.playerGUID, guildID)
 
-	// Guild::HandleSetLeader (Guild.cpp:1373): the old leader drops to
-	// GR_OFFICER (Guild.h:72) through Member::ChangeRank, which also
-	// player->SetRank's the connected player — the new leader takes rank 0.
-	s.player.GuildRank = 1
-	s.sendPlayerUpdate()
 	if newLeaderSess := s.server.findSessionByGUID(uint64(newLeaderGUID)); newLeaderSess != nil && newLeaderSess.player != nil {
 		newLeaderSess.player.GuildRank = 0
 		newLeaderSess.sendPlayerUpdate()
 	}
+	s.player.GuildRank = 1
+	s.sendPlayerUpdate()
 
 	// Guild::HandleSetLeader (Guild.cpp:1379):
 	// _BroadcastEvent(GE_LEADER_CHANGED, ObjectGuid::Empty, player->GetName(),
