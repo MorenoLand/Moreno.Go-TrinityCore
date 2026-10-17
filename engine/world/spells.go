@@ -8584,6 +8584,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// or TARGET (61) reference: area around the last/explicit target.
 		hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, target, hitTargets)
 	}
+	// Spell::SelectSpellTargets (Spell.cpp:789-800): a channeled spell whose
+	// target selection produced no unit, gameobject, or item targets and no
+	// destination fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS. The check runs
+	// inside SelectSpellTargets during _cast (Spell.cpp:3410) - before
+	// TakePower/TakeReagents (3452), SendSpellCooldown, HandleLaunchPhase and
+	// SendSpellGo - so a targetless channeled cast spends nothing and sends no
+	// GO packet. It sits here, right after the selection block and ahead of
+	// the persistent-area spawn and the hit-result rolls below: C++ keeps
+	// AddUnitTarget-time misses in m_UniqueTargetInfo (never removes
+	// pre-gate), and Go likewise removes nothing before the reflect rolls,
+	// so a non-empty hitTargets here is exactly the non-empty-containers
+	// case; the dest flag already carries resolveImplicitSpellDestination.
+	if isChanneledSpell(spell) && len(hitTargets) == 0 && target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "channeled spell with no targets")
+		return
+	}
 	s.spawnPersistentAreaAura(ctx, spell, target)
 	targetGUID := uint64(0)
 	if len(hitTargets) > 0 {
@@ -9208,19 +9225,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	casterGUID := s.playerGUID
 	if castItemGUID != 0 {
 		casterGUID = castItemGUID | (uint64(0x4000) << 48)
-	}
-	// Spell::SelectSpellTargets (Spell.cpp:789-807): a channeled spell whose
-	// target selection produced no unit, gameobject, or item targets and no
-	// destination fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS. The check runs
-	// inside SelectSpellTargets during _cast (Spell.cpp:3410), before
-	// TakePower/TakeReagents and SendSpellGo, so no SMSG_SPELL_GO is sent.
-	// Go carries only the unit half of SpellCastTargets (gameobject/item
-	// targets are unmodeled) and counts missed targets via missStatus, the
-	// same way C++ keeps misses in m_UniqueTargetInfo.
-	if isChanneledSpell(spell) && len(hitTargets)+len(missStatus) == 0 && target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
-		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "channeled spell with no targets")
-		return
 	}
 	// Spell::SendSpellGo (Spell.cpp:4302-4315, 4343-4366): the Death Knight
 	// rune arm sets CAST_FLAG_NO_GCD ("not needed, but Blizzard sends it")

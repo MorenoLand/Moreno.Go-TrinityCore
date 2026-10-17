@@ -5726,13 +5726,12 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 		err := cdb.QueryRowContext(ctx, "SELECT entry, flags FROM character_gifts WHERE item_guid = ?", itemGUID).Scan(&giftEntry, &giftFlags)
 		if err == nil && giftEntry > 0 {
 			// Unwrapping: restore original entry, flags, and delete gift record.
-			// SpellHandler.cpp:286-289 — the entry is set first, so durability
-			// is reset to the RESTORED entry's MaxDurability.
-			var giftMaxDur uint32
-			if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ? LIMIT 1", giftEntry).Scan(&giftMaxDur)
-			}
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ?, durability = ?, giftCreatorGuid = 0 WHERE guid = ?", giftEntry, giftFlags, giftMaxDur, itemGUID)
+			// SpellHandler.cpp:284-289 — SetEntry only writes OBJECT_FIELD_ENTRY
+			// (Object.h:85), and the MaxDurability write targets
+			// ITEM_FIELD_MAXDURABILITY, never current durability: Go reads max
+			// durability from the template at the use sites, so the durability
+			// column stays untouched, exactly like C++.
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ?, giftCreatorGuid = 0 WHERE guid = ?", giftEntry, giftFlags, itemGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_gifts WHERE item_guid = ?", itemGUID)
 			_ = s.sendInventoryItems(ctx)
 			return true
