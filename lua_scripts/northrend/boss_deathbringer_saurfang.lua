@@ -91,7 +91,8 @@
 --   (72385/72441/72442/72443) lives in the SpellScript (no bridge).
 -- EVENT_BERSERK (:516-519) — DoCastSelf(SPELL_BERSERK 26662)
 --   non-triggered + Talk(SAY_BERSERK 12), cast-before-Talk kept;
---   one-shot seeded on engage (the marrowgar berserk precedent).
+--   one-shot seeded on engage with the IsHeroic() ? 360s : 480s seed
+--   (:305) via creature:IsHeroic() (the marrowgar berserk precedent).
 -- KilledUnit (:344-348) — Talk(SAY_KILL 10) player-gated, the
 --   razuvious player-gated variant precedent.
 -- DamageTaken (:350-378) — the never-die damage cap (damage =
@@ -147,9 +148,11 @@
 --   have no DoAction bridge (the krick ACTION_OUTRO precedent); the
 --   ACTION_MARK_OF_THE_FALLEN_CHAMPION leg (:580-592) is a
 --   random-target SelectTarget with an aura-exclusion filter +
---   DoCast — no DoAction bridge, no random-target bridge, and its
---   trigger (the blood-link aura periodic tick) is an AuraScript
---   (no bridge); the _fallenChampionCastCount /
+--   DoCast — out on no DoAction bridge and its unbridged trigger
+--   (the blood-link aura periodic tick is an AuraScript, no bridge);
+--   random-target itself IS bridgeable (randomPlayer) and the aura
+--   exclusion IS bridgeable (creature HasAura, lua_objects.go:228),
+--   but the machine stays out. The _fallenChampionCastCount /
 --   GetData(DATA_MADE_A_MESS) achievement legs ride with it.
 -- boss_deathbringer_saurfang JustSummoned (:395-411) — summon
 --   machine: random-target AttackStart, SPELL_BLOOD_LINK_BEAST 72176
@@ -200,14 +203,14 @@
 -- 11..14 (10) + muradin 0/1/2/3 (4)).
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
--- EVENT_BERSERK seed: C++ IsHeroic() ? 360s : 480s (:305); no
---   difficulty bridge (the faerlina precedent) — ported at the
---   non-heroic 480000ms. Heroic fights enrage 2min early vs C++.
--- EVENT_SCENT_OF_BLOOD (heroic-only, :520-526) not ported at all:
---   no difficulty bridge + no summon-list bridge for the
---   !summons.empty() gate.
+-- EVENT_SCENT_OF_BLOOD (:520-526) not ported at all: the arm body is
+--   gated on !summons.empty() (no summon-list bridge) — scheduling
+--   it on heroic via IsHeroic() would fire EMOTE_SCENT_OF_BLOOD and
+--   the AoE unconditionally, wrong on 10-man and wrong whenever the
+--   beast wave is fully dead.
 -- EVENT_SUMMON_BLOOD_BEAST 25-man trio (72356/72357/72358) not
---   ported: no difficulty bridge (the faerlina precedent).
+--   ported: Is25ManRaid unbridged (the IsHeroic bridge covers
+--   normal/heroic, not 10/25-man).
 -- The UNIT_STATE_CASTING gate in UpdateAI (:534-535) has no bridge
 --   (the maiden precedent: timers fire unconditionally).
 -- The intro exploit-engage DoCastSelf(SPELL_GRIP_OF_AGONY) leg
@@ -284,9 +287,12 @@ end
 -- C++ :493-502 EVENT_SUMMON_BLOOD_BEAST: 2x DoCastSelf(
 -- SPELL_SUMMON_BLOOD_BEAST+i10 72172/72173) non-triggered, then
 -- Talk(SAY_BLOOD_BEASTS 9); re-arm 40s unconditional. The 25-man
--- trio (72356+i25, :495-497) stays out: no difficulty bridge. The
--- heroic-only EVENT_SCENT_OF_BLOOD schedule (:500-501) stays out:
--- no difficulty bridge + no summon-list bridge for !summons.empty().
+-- trio (72356+i25, :495-497) stays out: Is25ManRaid unbridged
+-- (10/25-man is a separate axis from IsHeroic normal/heroic).
+-- The heroic-only EVENT_SCENT_OF_BLOOD schedule (:500-501) stays
+-- out on the !summons.empty() gate (no summon-list bridge); the
+-- IsHeroic() schedule gate is bridgeable but the arm body would fire
+-- unconditional otherwise.
 local function onSummonBloodBeast(creature, guid)
     creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST)
     creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST + 1)
@@ -296,9 +302,9 @@ end
 
 -- C++ :516-519 EVENT_BERSERK: DoCastSelf(SPELL_BERSERK 26662)
 -- non-triggered + Talk(SAY_BERSERK 12), cast-before-Talk kept;
--- one-shot. Seed is 480000ms: C++ IsHeroic() ? 360s : 480s (:305)
--- has no difficulty bridge — ported at the non-heroic value
--- (documented deviation).
+-- one-shot. Seed IsHeroic() ? 360000 : 480000 (:305) rides
+-- creature:IsHeroic() (engine/world/lua_creature_events.go:203, the
+-- cyanigosa mana-destruction precedent).
 local function onBerserk(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(SAY_BERSERK)
@@ -345,7 +351,8 @@ local function saurfangJustEngagedWith(event, creature, target)
     initState(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "beasts", 30000, function() onSummonBloodBeast(creature, guid) end)
-    schedule(guid, "berserk", 480000, function() onBerserk(creature, guid) end)
+    -- C++ :305 seed: IsHeroic() ? 360s : 480s rides creature:IsHeroic()
+    schedule(guid, "berserk", creature:IsHeroic() and 360000 or 480000, function() onBerserk(creature, guid) end)
     schedule(guid, "boiling", 15500, function() onBoilingBlood(creature, guid) end)
     schedule(guid, "nova", 17000, function() onBloodNova(creature, guid) end)
     schedule(guid, "rune", 20000, function() onRuneOfBlood(creature, guid) end)

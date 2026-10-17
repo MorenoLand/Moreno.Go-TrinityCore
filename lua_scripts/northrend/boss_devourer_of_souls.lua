@@ -98,7 +98,10 @@
 -- Clear :304, SetControlled(true, UNIT_STATE_ROOT) :305) — no facing /
 -- interrupt / react / motion / root bridge, does not port.
 -- SpellHitTarget (:225-228): H_SPELL_PHANTOM_BLAST -> threeFaced = false
--- — no SpellHit bridge, does not port.
+-- — event 15 IS a live SpellHitTarget bridge (boss_ai.go:1904), but the
+-- latch feeds only GetData(DATA_THREE_FACED) (:231-236, no GetData bridge)
+-- and achievement_three_faced (no achievement bridge), so registering 15
+-- would be dead code; does not port.
 -- GetData(DATA_THREE_FACED) (:231-236) — no GetData bridge, does not port.
 -- The three spell_devourer_of_souls_mirrored_soul* SpellScript/AuraScript
 -- hooks (:365-473) — no SpellScript / AuraScript bridge (standing

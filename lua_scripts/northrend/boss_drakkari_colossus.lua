@@ -19,48 +19,57 @@
 -- the triggered port).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_drakkari_colossus: EVENT_MIGHTY_BLOW — DoCastVictim(Mighty
--- Blow 54719); Reset-scheduled 10-30s init, rescheduled 5-15s. The
--- only bridgeable arm of the slice.
+-- Blow 54719); Reset-scheduled 10-30s init, rescheduled 5-15s.
+-- JustEngagedWith — me->RemoveAura(SPELL_FREEZE_ANIM 16245) (:132)
+-- rides the creature:RemoveAura bridge (the saurfang/arlokk idiom);
+-- the Freeze Anim aura is cast only by the unported DoAction machine,
+-- so in Go the removal is a faithful no-op that keeps the arm C++-
+-- shaped for the day the freeze machine lands.
 -- Unmodeled (no bridges — documented, not wired):
--- DamageTaken phase machine (HealthBelowPct(50/5) gates — no
--- health-pct bridge (doomwalker precedent); the phase flip +
--- ACTION_FREEZE_COLOSSUS + ACTION_SUMMON_ELEMENTAL legs sit behind
--- the absent DoAction bridge, and the immunity/react/movement
--- legs behind SetImmuneToPC / SetReactState / motion-master
--- bridges).
+-- DamageTaken phase machine (HealthBelowPct(50/5) gates ARE bridgeable
+-- via creature:GetHealthPct() — the sindragosa.lua:231 generic-fallback
+-- precedent, so the old "no health-pct bridge" claim is stale; the
+-- machine stays out because the payload is ACTION_FREEZE_COLOSSUS +
+-- ACTION_SUMMON_ELEMENTAL (no DoAction bridge), SetImmuneToPC(true) /
+-- REACT_PASSIVE / MoveIdle legs (no immune/react/motion bridges), and
+-- the damage=0 leg must not fire without the phase machine behind
+-- it).
 -- DoAction legs: ACTION_SUMMON_ELEMENTAL — DoCastSelf(Emerge
 -- 54850) is bridged but has no Lua fire site (no DoAction bridge,
 -- standing); ACTION_FREEZE_COLOSSUS — Clear/MoveIdle motion,
 -- REACT_PASSIVE, SetImmuneToPC(true), DoCastSelf(Freeze Anim
 -- 16245), all unbridged; ACTION_UNFREEZE_COLOSSUS — immune/react
 -- flips + DoZoneInCombat behind the same absent bridges.
--- JustEngagedWith — RemoveAura(SPELL_FREEZE_ANIM): aura-removal
--- bridge absent (aeranas precedent). JustDied — _JustDied()
--- instance bookkeeping only, no bridge. Reset INTRO_DONE leg —
--- cross-AI GetData/SetData bridge absent.
+-- JustDied — _JustDied() instance bookkeeping only, no bridge.
+-- Reset INTRO_DONE leg — cross-AI GetData/SetData bridge absent
+-- (the Reset RemoveAura(SPELL_FREEZE_ANIM) rides the INTRO_DONE
+-- gate, so it stays out with it).
 -- JustSummoned DoZoneInCombat(summon) — no summon bridge.
--- boss_drakkari_elemental — ENTRY UNVERIFIABLE (no
--- NPC_DRAKKARI_ELEMENTAL constant anywhere in the C++ sources;
--- enum only names spells/texts; belnistrasz/willix precedent — no
--- invented identifiers): zero registration. Port-pattern-ready but
--- entry-blocked arms: EVENT_SURGE (5-15s) — DoCastSelf(Surge
--- Visual 54827) + random-target DoCast(Surge 54801) (SelectTarget
--- Random bridge absent — cairne/kazzak precedent, so even the
--- cast leg is unmodelable); JustDied Talk(EMOTE_ACTIVATE_ALTAR 1)
--- + Unit::Kill(colossus) via instance->GetCreature — Talk bridged
--- but the kill payload is behind the absent cross-instance
--- creature lookup (entry-blocked anyway); DamageTaken HealthBelowPct
--- (50) -> cross-AI GetData(DATA_COLOSSUS_PHASE) + DoAction
--- (ACTION_RETURN_TO_COLOSSUS) (bridges absent); EnterEvadeMode
--- DespawnOrUnsummon (no despawn bridge — terestian precedent);
--- SpellHitTarget(54878 Merge) -> cross-AI DoAction
--- (ACTION_UNFREEZE_COLOSSUS) + self-despawn (event-15-never-fires
--- + bridges absent). Reset's AddAura(Mojo Volley 54849, self)
--- has no AddAura bridge. Joins the bridgeable-but-entry-blocked
--- queue.
--- npc_living_mojo — ENTRY UNVERIFIABLE (same file evidence — the
--- file names only texts/spells; the mojo's own entry is DB-side
--- only; belnistrasz/willix precedent): zero registration.
+-- boss_drakkari_elemental — ENTRY UNVERIFIABLE (gundrak.h
+-- GDCreatureIds has no NPC_DRAKKARI_ELEMENTAL; the .cpp enum names
+-- only spells/texts; belnistrasz/willix precedent — no invented
+-- identifiers): zero registration. Port-pattern-ready but
+-- entry-blocked arms: EVENT_SURGE (5-15s) — DoCastSelf(Surge Visual
+-- 54827) + randomPlayer-targeted DoCast(Surge 54801) (random-target
+-- IS bridgeable — the archavon precedent — so the whole arm is
+-- pattern-ready); JustDied Talk(EMOTE_ACTIVATE_ALTAR 1) (Talk is
+-- bridgeable; the Unit::Kill(colossus) payload needs cross-instance
+-- creature lookup, no bridge); DamageTaken HealthBelowPct(50) ->
+-- cross-AI GetData(DATA_COLOSSUS_PHASE) + DoAction
+-- (ACTION_RETURN_TO_COLOSSUS) (GetData/DoAction bridges absent);
+-- EnterEvadeMode DespawnOrUnsummon (creature:Despawn IS bridged —
+-- lua_objects.go:1126, so the old "no despawn bridge" claim is
+-- stale); SpellHitTarget(54878 Merge) — event 15 IS live
+-- (boss_ai.go:1904), but the payload is cross-AI DoAction
+-- (ACTION_UNFREEZE_COLOSSUS) + self-despawn (DoAction bridge
+-- absent); Reset's AddAura(Mojo Volley 54849, self) — creature:
+-- AddAura IS bridged (lua_creature_events.go:161), so the old "no
+-- AddAura bridge" claim is stale. Joins the bridgeable-but-entry-
+-- blocked queue.
+-- npc_living_mojo — ENTRY UNVERIFIABLE (gundrak.h GDCreatureIds names
+-- only colossus 29307 / slad_ran / moorabi / gal_darah / eck / misc;
+-- no NPC_DRAKKARI_ELEMENTAL or NPC_LIVING_MOJO constant exists in the
+-- C++ sources; belnistrasz/willix precedent): zero registration.
 -- Port-pattern-ready but entry-blocked arms: JustEngagedWith
 -- DoCastVictim(Mojo Wave 55626, 2s init, 15s repeat) +
 -- DoCastVictim(Mojo Puddle 55627, 7s init, 18s repeat) — the exact
@@ -77,6 +86,7 @@
 local ENTRY_DRAKKARI_COLOSSUS = 29307
 
 local SPELL_MIGHTY_BLOW = 54719
+local SPELL_FREEZE_ANIM = 16245
 
 local timers = {}
 
@@ -112,9 +122,12 @@ local function mightyBlowTick(creature, guid)
     end)
 end
 
+-- C++ :129-133 JustEngagedWith: BossAI leg unmodeled, then
+-- me->RemoveAura(SPELL_FREEZE_ANIM) via the RemoveAura bridge.
 local function colossusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:RemoveAura(SPELL_FREEZE_ANIM)
     schedule(guid, "mightyblow", math.random(10000, 30000), function()
         mightyBlowTick(creature, guid)
     end)
