@@ -1684,7 +1684,9 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 
 	// Update player homebind location
 	s.player.HomebindMap = s.player.Map
-	s.player.HomebindZone = s.player.Zone
+	// SpellEffects.cpp:5704-5710 (Spell::EffectBind): SetHomebind takes
+	// player->GetAreaId() — the subzone area id, not the root zone.
+	s.player.HomebindZone = s.areaID
 	s.player.HomebindX = s.player.X
 	s.player.HomebindY = s.player.Y
 	s.player.HomebindZ = s.player.Z

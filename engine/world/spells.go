@@ -34839,7 +34839,7 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 // which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per player target. The
 // homebind moves to the spell destination when the cast has one, otherwise
 // to the target's position; the area id is the effect MiscValue when set,
-// else the target's zone (Go has no subzone area model, matching the
+// else the target's subzone area id (session.areaID, matching the
 // innkeeper bind path's HomebindZone usage). Player::SetHomebind persists
 // via UPDATE character_homebind (Player.cpp:17342-17357); the bind point
 // update and player-bound packets mirror SendBindPointUpdate and the
@@ -34856,7 +34856,9 @@ func (s *session) handleEffectBind(ctx context.Context, eff wotlk.SpellEffect, t
 		if targetSess == nil || targetSess.player == nil {
 			continue
 		}
-		areaID := targetSess.player.Zone
+		// SpellEffects.cpp:5704-5710: the area id starts from
+		// player->GetAreaId() — the subzone area id, not the root zone.
+		areaID := targetSess.areaID
 		if eff.MiscValue != 0 {
 			areaID = uint32(eff.MiscValue)
 		}

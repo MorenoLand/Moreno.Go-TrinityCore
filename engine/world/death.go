@@ -2603,7 +2603,11 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 	var corpseGrave wotlk.WorldSafeLoc
 	corpseGraveFound := false
 	if hasCorpse {
-		corpseGrave, corpseGraveFound = s.server.closestGraveyard(ctx, corpse.X, corpse.Y, corpse.Z, corpse.MapID, s.player.Zone, playerTeam(s.player.Race))
+		// ObjectMgr.cpp:6864-6867 (GetClosestGraveyard): the zone is derived
+		// from the corpse's coordinates (sMapMgr->GetZoneId), not the ghost's
+		// current zone.
+		corpseZone, _ := s.server.zoneAndAreaID(corpse.MapID, corpse.X, corpse.Y, corpse.Z, s.player.Zone)
+		corpseGrave, corpseGraveFound = s.server.closestGraveyard(ctx, corpse.X, corpse.Y, corpse.Z, corpse.MapID, corpseZone, playerTeam(s.player.Race))
 	}
 	s.resurrectPlayerWithBones(ctx, 0.5, false, true)
 	s.durabilityLossAll(ctx, 0.25, true)
