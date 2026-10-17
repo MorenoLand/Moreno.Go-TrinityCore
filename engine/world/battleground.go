@@ -687,8 +687,19 @@ func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanc
 			if !exp.Active || !exp.IsArena || exp.Status != BGStatusWaitJoin || exp.BgTypeID != battlegroundAA || !exp.JoinTime.Equal(joinTime) || exp.InstanceID != inviteID {
 				return
 			}
+			// BGQueueRemoveEvent::Execute (BattlegroundQueue.cpp:1090) calls RemovePlayer on
+			// invite expiry, and RemovePlayer fires the rated-exit world announce when the group
+			// empties (BattlegroundQueue.cpp:357-362). Solo joins empty their group here; group
+			// last-leaver detection needs the shared queue container (leave-arm convention).
+			announceExit := !exp.ArenaGroupJoin && exp.IsRated && exp.ArenaType != 0 && exp.ArenaTeamID != 0 && s.server.Config.ArenaQueueAnnouncerEnable
+			teamID, teamRating, arenaType := exp.ArenaTeamID, exp.ArenaTeamRating, exp.ArenaType
 			s.bgQueues[slot] = bgQueueEntry{}
 			s.sendBattlefieldStatus(uint8(slot))
+			if announceExit {
+				if name, _, ok := arenaTeamAnnounceInfo(context.Background(), s, teamID); ok {
+					s.server.broadcastMessageChatAll(fmt.Sprintf(arenaQueueAnnounceExitText, name, arenaType, arenaType, teamRating))
+				}
+			}
 			s.debug("simulated arena invite expired", "account", s.accountName, "slot", slot)
 		})
 	})
@@ -1450,11 +1461,13 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		}
 
 		// !_player->InBattleground() → SetBattlegroundEntryPoint
-		// (BattleGroundHandler.cpp:456-457). The Go "in battleground" test is the
-		// current map; setBattlegroundEntryPoint (battleground_entry.go) is the
-		// faithful SetBattlegroundEntryPoint port: taxi-path store, dungeon →
-		// graveyard, mount-spell capture.
-		if _, _, _, inBattlefield := battlegroundTypeForMap(s.player.Map); !inBattlefield {
+		// (BattleGroundHandler.cpp:456-457); InBattleground is
+		// m_bgData.bgInstanceID != 0 (Player.h:1906), so a player porting
+		// from one battleground into another keeps the original entry
+		// point. setBattlegroundEntryPoint (battleground_entry.go) is the
+		// faithful SetBattlegroundEntryPoint port: taxi-path store,
+		// dungeon → graveyard, mount-spell capture.
+		if s.bgData.InstanceID == 0 {
 			s.setBattlegroundEntryPoint()
 		}
 
@@ -2158,18 +2171,16 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 	// Player::CanReportAfkDueToLimit (Player.cpp:22514-22521): a player can complain
 	// about 15 people per 5 minutes. The window resets on a 5-minute timer
 	// (Player::UpdateAfkReport, Player.cpp:20715-20721), evaluated lazily here.
+	// The budget is consumed only for a fresh, non-debuffed report: C++ short-circuits
+	// CanReportAfkDueToLimit() after the duplicate/aura arms (Player.cpp:22532), so
+	// duplicate or already-debuffed reports cost the reporter nothing.
 	now := time.Now()
 	s.writeMu.Lock()
 	if now.After(s.afkReportWindowEnd) {
 		s.afkReportWindowEnd = now.Add(5 * time.Minute)
 		s.afkReportedCount = 0
 	}
-	allowed := s.afkReportedCount < 15
-	s.afkReportedCount++
 	s.writeMu.Unlock()
-	if !allowed {
-		return true
-	}
 
 	// Player::ReportedAfkBy (Player.cpp:22531-22542): no duplicate reporters, and no
 	// report against a target already carrying Idle (43680) or Inactive (43681). On
@@ -2180,14 +2191,28 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 		targetSess.afkReporters = make(map[uint64]struct{})
 	}
 	_, dup := targetSess.afkReporters[s.playerGUID]
-	if !dup && !targetSess.hasAura(43680) && !targetSess.hasAura(43681) {
-		targetSess.afkReporters[s.playerGUID] = struct{}{}
-	}
-	reportCount := len(targetSess.afkReporters)
-	if reportCount >= 3 {
-		targetSess.afkReporters = make(map[uint64]struct{})
-	}
+	fresh := !dup && !targetSess.hasAura(43680) && !targetSess.hasAura(43681)
+	existing := len(targetSess.afkReporters)
 	targetSess.writeMu.Unlock()
+
+	allowed := false
+	if fresh {
+		s.writeMu.Lock()
+		allowed = s.afkReportedCount < 15
+		s.afkReportedCount++
+		s.writeMu.Unlock()
+	}
+
+	reportCount := existing
+	if fresh && allowed {
+		targetSess.writeMu.Lock()
+		targetSess.afkReporters[s.playerGUID] = struct{}{}
+		reportCount = len(targetSess.afkReporters)
+		if reportCount >= 3 {
+			targetSess.afkReporters = make(map[uint64]struct{})
+		}
+		targetSess.writeMu.Unlock()
+	}
 
 	s.debug("reported player for pvp afk", "account", s.accountName, "target", targetGUID, "reports", reportCount)
 	if reportCount >= 3 {
