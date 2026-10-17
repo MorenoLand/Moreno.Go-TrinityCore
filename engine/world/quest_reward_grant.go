@@ -133,19 +133,30 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "quest not visible to start")
 		return true
 	}
-	if len(view.Detail.ChoiceItems) > 0 && (reward >= uint32(len(view.Detail.ChoiceItems)) || view.Detail.ChoiceItems[reward].ID == 0) {
-		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reward", reward, "reason", "choice unavailable")
-		return true
-	}
+	// QuestHandler.cpp:284 — only reward >= QUEST_REWARD_CHOICES_COUNT (6) is
+	// rejected up front; an in-range index with an empty slot
+	// (RewardChoiceItemId[reward] == 0) simply grants no choice item
+	// (Player::CanRewardQuest, Player.cpp:15171; Player::RewardQuest,
+	// Player.cpp:15383). commitQuestReward already skips out-of-range and
+	// empty choice slots, so no extra availability gate belongs here.
 	if complete, itemErr := s.hasQuestRequiredItems(ctx, view.RequiredItems); itemErr != nil {
 		return true
 	} else if !complete {
+		// QuestHandler.cpp:306-307 — a failed CanRewardQuest(quest, true)
+		// re-sends the OfferReward screen instead of dropping silently; the
+		// DELIVER arm also answers EQUIP_ERR_ITEM_NOT_FOUND (msg=true,
+		// Player.cpp:15092).
+		s.sendEquipError(equipErrItemNotFound, 0)
+		_ = s.sendQuestOfferReward(view, giverGUID, true)
 		return true
 	}
 	// Player::CanRewardQuest (Player.cpp:15094-15095): a quest that requires
-	// money cannot be turned in without it (silent on this arm).
+	// money cannot be turned in without it — like the item arm above, the
+	// failure re-sends the OfferReward screen (QuestHandler.cpp:306-307),
+	// with no equip error on the money arm.
 	if moneyRew := s.questRewOrReqMoney(view.Detail); moneyRew < 0 && s.player.Money < uint32(-int64(moneyRew)) {
 		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "insufficient money")
+		_ = s.sendQuestOfferReward(view, giverGUID, true)
 		return true
 	}
 	grants, destroyedGUIDs, err := s.commitQuestReward(ctx, view, reward)

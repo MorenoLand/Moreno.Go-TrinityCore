@@ -126,8 +126,23 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 	s.gossip = nil
 	s.gossipClosed = false
 	if s.server.Features != nil && s.server.Features.Scripts != nil {
-		if _, err := s.server.Features.Scripts.Trigger(ctx, "creature_gossip:"+strconv.FormatUint(uint64(entry), 10), 1, uint32(1), s.luaPlayer(), creature); err != nil {
-			s.debug("gossip hello hook failed", "account", s.accountName, "entry", entry, "error", err)
+		hookKind := "creature_gossip:" + strconv.FormatUint(uint64(entry), 10)
+		values, terr := s.server.Features.Scripts.Trigger(ctx, hookKind, 1, uint32(1), s.luaPlayer(), creature)
+		if terr != nil {
+			s.debug("gossip hello hook failed", "account", s.accountName, "entry", entry, "error", terr)
+		}
+		// Eluna::OnGossipHello (GossipHooks.cpp:107-114) returns
+		// CallAllFunctionsBool(..., true): true — vetoing the default menu —
+		// when at least one hook is registered and no hook returned boolean
+		// false. Both HandleQuestgiverHelloOpcode (QuestHandler.cpp:78) and
+		// HandleGossipHelloOpcode (NPCHandler.cpp:147) return early on that
+		// true. A script that sent its own menu already set s.gossip, so
+		// this arm only changes the hook-registered-but-menu-unsent case
+		// (C++ shows nothing; previously Go fell through to the default
+		// menu).
+		if s.server.Features.Scripts.HasHook(hookKind, 1) && !luaCancelled(values) {
+			s.debug("gossip hello vetoed by lua", "account", s.accountName, "entry", entry)
+			return true
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {

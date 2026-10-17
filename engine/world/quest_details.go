@@ -458,7 +458,52 @@ func (s *session) canInteractWithQuestGiver(ctx context.Context, guid uint64) bo
 	}
 }
 
+// checkPlayerQuestGiverGates mirrors the player-giver arm of
+// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:138-151):
+// when the accept arrives with a player's GUID (a quest shared through the
+// details dialog carries the sharer's GUID in InformUnit), the giver must be
+// online, the taker's sharing info must name this giver (or be unset), the
+// giver must be able to share the quest, and both must be in the same group
+// (Player::IsInSameRaidWith — same group in Go's model).
+func (s *session) checkPlayerQuestGiverGates(ctx context.Context, giverGUID uint64, questID uint32) bool {
+	if s.server == nil {
+		return false
+	}
+	giver := s.server.findSessionByGUID(giverGUID)
+	if giver == nil || giver.player == nil {
+		return false
+	}
+	if s.sharingQuestSender != 0 && s.sharingQuestSender != giverGUID {
+		return false
+	}
+	if !giver.canShareQuest(ctx, questID) {
+		return false
+	}
+	if s.groupID == 0 || giver.groupID != s.groupID {
+		return false
+	}
+	return true
+}
+
+// canShareQuest mirrors Player::CanShareQuest (Player.cpp:16145): the quest
+// must carry QUEST_FLAGS_SHARABLE and the giver must have it active. The
+// pool-availability arm has no Go model.
+func (s *session) canShareQuest(ctx context.Context, questID uint32) bool {
+	data, err := s.loadQuestDetailData(ctx, questID)
+	if err != nil || data.Flags&questFlagsSharable == 0 {
+		return false
+	}
+	st, _ := s.characterQuestStatus(ctx, questID)
+	return st != 0
+}
+
 func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byte) bool {
+	// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:121):
+	// recvData >> guid >> questId >> startCheat throws on a short read, so
+	// the handler aborts silently. Go accepted 12-byte payloads and proceeded.
+	if len(payload) < 16 {
+		return true
+	}
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
@@ -468,12 +513,20 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	if err != nil {
 		return true
 	}
-	if len(payload) > 12 {
-		if _, err := reader.ReadU32(); err != nil {
-			return true
-		}
+	// startCheat is debug-log only in C++; read it so the wire stays exact.
+	if _, err := reader.ReadU32(); err != nil {
+		return true
 	}
-	if !s.questgiverStartsQuest(ctx, guid, questID) {
+	// QuestHandler.cpp:138-151 — the giver can be a player: accepting a quest
+	// shared through the details dialog arrives with the sharer's GUID (the
+	// packet's InformUnit), not a creature's. The player arm runs its own
+	// gates before CanInteractWithQuestGiver and skips the hasQuest check.
+	if high := uint16(guid >> 48); high == 0x0000 && guid != 0 {
+		if !s.checkPlayerQuestGiverGates(ctx, guid, questID) {
+			s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "guid", guid, "reason", "player giver gates failed")
+			return s.rejectQuestgiverAccept()
+		}
+	} else if !s.questgiverStartsQuest(ctx, guid, questID) {
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "guid", guid, "reason", "questgiver does not start quest")
 		return s.rejectQuestgiverAccept()
 	}

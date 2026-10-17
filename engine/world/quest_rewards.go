@@ -177,15 +177,13 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	if status != questStatusComplete || s.isQuestRewarded(ctx, questID) {
 		return true
 	}
-	if len(view.RequiredItems) != 0 {
-		complete, itemErr := s.hasQuestRequiredItems(ctx, view.RequiredItems)
-		if itemErr != nil {
-			return true
-		}
-		if !complete {
-			return true
-		}
-	}
+	// QuestHandler.cpp:385-392 — the offer follows the status alone: an
+	// already-complete quest answers the offer dialog even when
+	// CanCompleteQuest is now false (Player.cpp:15060 — the INCOMPLETE arm is
+	// the only true path, so a complete quest with since-lost required items
+	// still gets the dialog). Go re-checked the required items here and
+	// dropped those re-requests; the check is also redundant on the
+	// transition path, where canCompleteQuest already verified the items.
 	return s.sendQuestOfferReward(view, giverGUID, true)
 }
 
