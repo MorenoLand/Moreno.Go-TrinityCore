@@ -5525,7 +5525,7 @@ func (s *session) handleTabardVendorActivate(ctx context.Context, payload []byte
 	return true
 }
 
-// handleSaveGuildEmblem processes MSG_SAVE_GUILD_EMBLEM (0x1FB).
+// handleSaveGuildEmblem processes MSG_SAVE_GUILD_EMBLEM (0x1F1).
 // Reference: WorldSession::HandleSaveGuildEmblemOpcode (GuildHandler.cpp:205)
 // and Guild::HandleSetEmblem (Guild.cpp:1341): guildless -> ERR_GUILDEMBLEM_NOGUILD,
 // non-leader -> ERR_GUILDEMBLEM_NOTGUILDMASTER, insufficient money ->

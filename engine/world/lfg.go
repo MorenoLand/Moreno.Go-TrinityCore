@@ -87,7 +87,7 @@ const (
 	LFGTeleportErrorPlayerDead      uint32 = 1
 	LFGTeleportErrorFalling         uint32 = 2
 	LFGTeleportErrorInVehicle       uint32 = 3
-	LFGTeleportErrorFatigue         uint32 = 4
+	LFGTeleportErrorFatigue         uint32 = 0 // LFGMgr.h:91 = 0 ("Original - 4"): the fatigue arm assigns 0, so the != OK check never fires — no SMSG_LFG_TELEPORT_DENIED, teleport proceeds.
 	LFGTeleportErrorInvalidLocation uint32 = 6
 	LFGTeleportErrorCharming        uint32 = 8
 
@@ -163,6 +163,7 @@ type LFGManager struct {
 	solo            bool
 	options         uint32
 	queue           map[uint64]LFGQueueEntry
+	comments        map[uint64]string
 	roleChecks      map[uint64]*LfgRoleCheck
 	proposals       map[uint32]*LFGProposal
 	nextProposalID  uint32
@@ -174,6 +175,7 @@ func NewLFGManager(soloEnable bool) *LFGManager {
 		soloEnable: soloEnable,
 		options:    1, // "DungeonFinder.OptionsMask" default (World.cpp:1436)
 		queue:      make(map[uint64]LFGQueueEntry),
+		comments:   make(map[uint64]string),
 		roleChecks: make(map[uint64]*LfgRoleCheck),
 		proposals:  make(map[uint32]*LFGProposal),
 	}
@@ -254,6 +256,24 @@ func (m *LFGManager) Leave(guid uint64) bool {
 	}
 	delete(m.queue, guid)
 	return true
+}
+
+// SetComment mirrors LFGMgr::SetComment (LFGMgr.cpp:1984-1988): the comment
+// lives in the per-player store, created on demand, so it persists for
+// non-queued players and survives LeaveLfg (C++ never clears PlayersStore on
+// leave). The live queue entry is updated too so later updates built from it
+// carry the new comment, like C++'s GetComment reads.
+func (m *LFGManager) SetComment(guid uint64, comment string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.comments == nil {
+		m.comments = make(map[uint64]string)
+	}
+	m.comments[guid] = comment
+	if entry, ok := m.queue[guid]; ok {
+		entry.Comment = comment
+		m.queue[guid] = entry
+	}
 }
 
 func (m *LFGManager) Status(guid uint64) (LFGQueueEntry, bool) {
@@ -578,20 +598,34 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		}
 		return true
 	}
-	// LFGMgr::JoinLfg (LFGMgr.cpp:422-428): a grouped LFG mid-dungeon
+	// LFGMgr::JoinLfg (LFGMgr.cpp:422-429): a grouped LFG mid-dungeon
 	// re-queue (isContinue) cannot change dungeons — the requested set is
 	// replaced by the group's current dungeon (grp.LFGDungeonID is the
 	// GetDungeon(gguid) analog, set at proposal accept like C++'s SetDungeon
-	// at LFGMgr.cpp:1147) before the requirement gates run.
+	// at LFGMgr.cpp:1147). The replacement is unconditional: a zero group
+	// dungeon flows into the type loop as LFG_JOIN_DUNGEON_INVALID.
 	isContinue := false
 	joinDungeons := filtered
 	if s.groupID != 0 && s.server != nil {
 		if grp := s.server.getGroup(s.groupID); grp != nil && grp.IsLFG && grp.LFGState != LFGStateFinishedDungeon {
 			isContinue = true
-			if grp.LFGDungeonID != 0 {
-				joinDungeons = []uint32{grp.LFGDungeonID}
-			}
+			joinDungeons = []uint32{grp.LFGDungeonID}
 		}
+	}
+	// LFGMgr::JoinLfg takes dungeons as LfgDungeonSet (std::set): the set is
+	// deduped and sorted from the start, so the type loop (LFGMgr.cpp:527-557)
+	// sees each dungeon once in ascending order — two identical random slots
+	// collapse to one instead of failing LFG_JOIN_DUNGEON_INVALID, and the
+	// first failing dungeon is the lowest id.
+	deduped := append([]uint32(nil), joinDungeons...)
+	sort.Slice(deduped, func(i, j int) bool { return deduped[i] < deduped[j] })
+	joinDungeons = uniqueUint32(deduped)
+	if s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
+		// LFGMgr::JoinLfg (LFGMgr.cpp:431-437): a re-join removes the existing
+		// queue entry BEFORE the requirement gates run — a re-join that then
+		// fails a gate leaves the player out of the queue (old queue time
+		// lost). The removal is silent: C++ emits no update packet for it.
+		s.server.Features.LFG.Leave(s.playerGUID)
 	}
 	// LFGMgr::JoinLfg requirement gates (LFGMgr.cpp:440-466), solo-player arms
 	// in C++ order; the group-member arms follow at LFGMgr.cpp:467-526.
@@ -739,8 +773,10 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		}
 		return s.sendLFGJoinResultWithLocks(result, uint32(LFGStateNone), lockMap) == nil
 	}
-	// LFGMgr::JoinLfg (LFGMgr.cpp:577-581): raid-browser joins queue nothing —
-	// the raid path ends here silently.
+	// LFGMgr::JoinLfg (LFGMgr.cpp:583-589): the comment is stored before the
+	// raid early-return — raid-browser joins queue nothing but the comment
+	// persists in the player store.
+	s.server.Features.LFG.SetComment(s.playerGUID, comment)
 	if isRaid {
 		return true
 	}
@@ -792,10 +828,31 @@ func (s *session) handleLFGLeave() bool {
 			return true
 		}
 	}
-	// LFGMgr::LeaveLfg (LFGMgr.cpp:714-749): the removed-from-queue update
-	// goes out only from the QUEUED arm — a leave with nothing queued sends
-	// nothing.
-	if !s.server.Features.LFG.Leave(s.playerGUID) {
+	// LFGMgr::LeaveLfg (LFGMgr.cpp:714-751): the QUEUED arm acts on the group
+	// when the leaver is grouped — every member leaves the queue and each
+	// member receives the REMOVED_FROM_QUEUE party update. (The queue stays
+	// per-player in Go, so "the group is queued" means any member holds an
+	// entry.) A leave with nothing queued sends nothing. The mid-dungeon arm
+	// (newState = oldState for DUNGEON/FINISHED_DUNGEON) needs no code: Go
+	// never resets the group's LFG state on leave.
+	lfg := s.server.Features.LFG
+	if s.groupID != 0 && s.server != nil {
+		removed := false
+		for _, ms := range s.server.getGroupSessions(s.groupID) {
+			if lfg.Leave(ms.playerGUID) {
+				removed = true
+			}
+		}
+		if !removed {
+			return true
+		}
+		s.debug("lfg leave", "account", s.accountName)
+		for _, ms := range s.server.getGroupSessions(s.groupID) {
+			_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: ms.playerGUID, State: LFGStateNone})
+		}
+		return true
+	}
+	if !lfg.Leave(s.playerGUID) {
 		return true
 	}
 	s.debug("lfg leave", "account", s.accountName)
@@ -812,16 +869,21 @@ func (s *session) handleLFGGetStatus() bool {
 	// solo players receive the player update first, then the cleared party
 	// update. The group-queue model has no Go counterpart, so the party
 	// send carries the player's own queue entry (documented delta).
+	// LFGMgr::GetLfgStatus (LFGMgr.cpp:2202-2206) builds the update with the
+	// 4-arg ctor whose comment defaults to "" — both packets carry an empty
+	// comment, only the second has dungeons cleared.
+	noComment := entry
+	noComment.Comment = ""
 	cleared := entry
 	cleared.Dungeons = nil
 	cleared.Comment = ""
 	if s.groupID != 0 {
-		if err := s.sendLFGUpdateParty(LFGUpdateStatus, entry); err != nil {
+		if err := s.sendLFGUpdateParty(LFGUpdateStatus, noComment); err != nil {
 			return true
 		}
 		return s.sendLFGUpdatePlayer(LFGUpdateStatus, cleared) == nil
 	}
-	if err := s.sendLFGUpdatePlayer(LFGUpdateStatus, entry); err != nil {
+	if err := s.sendLFGUpdatePlayer(LFGUpdateStatus, noComment); err != nil {
 		return true
 	}
 	return s.sendLFGUpdateParty(LFGUpdateStatus, cleared) == nil
@@ -1281,9 +1343,9 @@ func (s *session) teleportToBGEntryPoint() {
 	s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
 }
 
-func (s *session) teleportToLFGDungeon(dungeonID uint32, fromOpcode bool) {
+func (s *session) teleportToLFGDungeon(dungeonID uint32, fromOpcode bool) bool {
 	if s.player == nil {
-		return
+		return false
 	}
 	inDungeon := false
 	if s.server != nil && s.server.Data != nil {
@@ -1328,9 +1390,11 @@ func (s *session) teleportToLFGDungeon(dungeonID uint32, fromOpcode bool) {
 	// C++ carries no fixed duration — the aura is stripped on map change —
 	// and Go has no map-change hook, so a 2h practical cap stands in.
 	luck := s.server.lfgSelectedRandomDungeon(s.playerGUID)
-	if s.teleportTo(mapID, x, y, z, ori) && luck {
+	ok := s.teleportTo(mapID, x, y, z, ori)
+	if ok && luck {
 		s.applyAuraWithDuration(lfgSpellLuckOfTheDraw, 7200000)
 	}
+	return ok
 }
 
 func (s *session) sendLFGRoleCheckUpdate(roleCheck *LfgRoleCheck) error {
@@ -1442,13 +1506,20 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 	targetSess := s.server.findSessionByGUID(guid)
 	var level uint8 = 80
 	var expansion uint8 = s.accountExpansion
+	var race, dungeonDifficulty, raidDifficulty uint8
 	if targetSess != nil {
 		if targetSess.player != nil {
 			level = targetSess.player.Level
+			race = targetSess.player.Race
+			dungeonDifficulty = targetSess.player.DungeonDifficulty
+			raidDifficulty = targetSess.player.RaidDifficulty
 		}
 		expansion = targetSess.accountExpansion
 	} else if guid == s.playerGUID && s.player != nil {
 		level = s.player.Level
+		race = s.player.Race
+		dungeonDifficulty = s.player.DungeonDifficulty
+		raidDifficulty = s.player.RaidDifficulty
 	}
 
 	// 1. Check bound instances from character_instance JOIN instance
@@ -1477,18 +1548,29 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 		}
 	}
 
-	// 2. Check access requirements (e.g. min item level)
-	accessReqItemLevel := make(map[boundKey]uint32)
+	// 2. Access requirements (LFGMgr.cpp:1878-1896): the full row is read —
+	// item_level, achievement, quest_A/H, item/item2 — keyed by
+	// (map, difficulty) like C++'s GetAccessRequirement.
+	type accessRequirement struct {
+		itemLevel   uint32
+		achievement uint32
+		questA      uint32
+		questH      uint32
+		item        uint32
+		item2       uint32
+	}
+	accessReqs := make(map[boundKey]accessRequirement)
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		rows, err := s.server.WorldStore.DB.Query(
-			"SELECT mapId, difficulty, item_level FROM access_requirement WHERE item_level > 0",
+			"SELECT mapId, difficulty, item_level, achievement, quest_A, quest_H, item, item2 FROM access_requirement",
 		)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
-				var mapID, diff, itemLvl uint32
-				if err := rows.Scan(&mapID, &diff, &itemLvl); err == nil {
-					accessReqItemLevel[boundKey{mapID: mapID, difficulty: diff}] = itemLvl
+				var mapID, diff uint32
+				var ar accessRequirement
+				if err := rows.Scan(&mapID, &diff, &ar.itemLevel, &ar.achievement, &ar.questA, &ar.questH, &ar.item, &ar.item2); err == nil {
+					accessReqs[boundKey{mapID: mapID, difficulty: diff}] = ar
 				}
 			}
 		}
@@ -1540,24 +1622,117 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 		denyJoin = !s.canJoinDungeonFinder()
 	}
 
-	for _, dungeon := range allDungeons {
-		if dungeon.TypeID == LFGDungeonTypeRandom {
-			continue
+	// DisableMgr::IsDisabledFor(DISABLE_TYPE_MAP/DISABLE_TYPE_LFG_MAP, map,
+	// player) (DisableMgr.cpp:373-392): the disables-table flags are
+	// difficulty-mode bits (DUNGEON_STATUSFLAG_* = 1<<difficulty,
+	// SharedDefines.h:3730-3736); the target's own dungeon/raid difficulty
+	// selects the bit. GetDownscaledMapDifficultyData has no Go twin
+	// (documented delta).
+	type disableKey struct {
+		sourceType uint32
+		entry      uint32
+	}
+	disableFlags := make(map[disableKey]uint32)
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		rows, err := s.server.WorldStore.DB.Query(
+			"SELECT sourceType, entry, flags FROM disables WHERE sourceType IN (2, 8)",
+		)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var sourceType, entry, flags uint32
+				if err := rows.Scan(&sourceType, &entry, &flags); err == nil {
+					k := disableKey{sourceType: sourceType, entry: entry}
+					disableFlags[k] |= flags
+				}
+			}
 		}
+	}
+	mapDisabled := func(sourceType uint32, mapID uint32, isRaid bool) bool {
+		flags, ok := disableFlags[disableKey{sourceType: sourceType, entry: mapID}]
+		if !ok {
+			return false
+		}
+		diff := dungeonDifficulty
+		if isRaid {
+			diff = raidDifficulty
+		}
+		return flags&(1<<diff) != 0
+	}
+
+	charStore := s.server.CharactersStore
+	hasAchievement := func(achievementID uint32) bool {
+		if charStore == nil || charStore.DB == nil {
+			return false
+		}
+		var one int
+		return charStore.DB.QueryRow("SELECT 1 FROM character_achievement WHERE guid = ? AND achievement = ?", guid, achievementID).Scan(&one) == nil
+	}
+	questRewarded := func(questID uint32) bool {
+		if charStore == nil || charStore.DB == nil {
+			return false
+		}
+		var n int64
+		if err := charStore.DB.QueryRow("SELECT COUNT(1) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ? AND active = 1", guid, questID).Scan(&n); err == nil {
+			return n > 0
+		}
+		return false
+	}
+	hasItem := func(entry uint32) bool {
+		if charStore == nil || charStore.DB == nil {
+			return false
+		}
+		var owned int64
+		if err := charStore.DB.QueryRow(`SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci
+			JOIN item_instance ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ii.itemEntry = ?`, guid, entry).Scan(&owned); err == nil {
+			return owned > 0
+		}
+		return false
+	}
+	isAlliance := isAllianceRace(race)
+
+	// LFGMgr::GetLockedDungeons (LFGMgr.cpp:1840-1905) arm order: denyJoin,
+	// expansion, DISABLE_TYPE_MAP, DISABLE_TYPE_LFG_MAP, bound instance,
+	// min/max level, seasonal, access requirements. The iteration covers
+	// every dungeon including randoms (LFGMgr.cpp:272 fills
+	// CachedDungeonMapStore[0] with all ids).
+	for _, dungeon := range allDungeons {
+		mapID := uint32(dungeon.MapID)
+		bk := boundKey{mapID: mapID, difficulty: dungeon.Difficulty}
+		isRaid := dungeon.TypeID == LFGDungeonTypeRaid
 
 		var lockData uint32
 		if denyJoin {
 			lockData = LFGLockStatusRaidLocked
 		} else if dungeon.ExpansionLevel > uint32(expansion) {
 			lockData = LFGLockStatusInsufficientExpansion
+		} else if mapDisabled(2, mapID, isRaid) {
+			lockData = LFGLockStatusRaidLocked
+		} else if mapDisabled(8, mapID, isRaid) {
+			lockData = LFGLockStatusRaidLocked
+		} else if dungeon.Difficulty > 0 && boundInstances[bk] {
+			lockData = LFGLockStatusRaidLocked
 		} else if uint32(level) < dungeon.MinLevel {
 			lockData = LFGLockStatusTooLowLevel
 		} else if dungeon.MaxLevel > 0 && uint32(level) > dungeon.MaxLevel {
 			lockData = LFGLockStatusTooHighLevel
-		} else if dungeon.Difficulty > 0 && boundInstances[boundKey{mapID: uint32(dungeon.MapID), difficulty: dungeon.Difficulty}] {
-			lockData = LFGLockStatusRaidLocked
-		} else if reqILvl, ok := accessReqItemLevel[boundKey{mapID: uint32(dungeon.MapID), difficulty: dungeon.Difficulty}]; ok && reqILvl > 0 && avgItemLevel < float32(reqILvl) {
-			lockData = LFGLockStatusTooLowGearScore
+		} else if dungeon.Flags&lfgFlagSeasonal != 0 && !s.server.lfgSeasonActive(dungeon.ID) {
+			lockData = LFGLockStatusNotInSeason
+		} else if ar, ok := accessReqs[bk]; ok {
+			if ar.itemLevel > 0 && avgItemLevel < float32(ar.itemLevel) {
+				lockData = LFGLockStatusTooLowGearScore
+			} else if ar.achievement != 0 && !hasAchievement(ar.achievement) {
+				lockData = LFGLockStatusMissingAchievement
+			} else if isAlliance && ar.questA != 0 && !questRewarded(ar.questA) {
+				lockData = LFGLockStatusQuestNotCompleted
+			} else if !isAlliance && ar.questH != 0 && !questRewarded(ar.questH) {
+				lockData = LFGLockStatusQuestNotCompleted
+			} else if ar.item != 0 && !hasItem(ar.item) && (ar.item2 == 0 || !hasItem(ar.item2)) {
+				lockData = LFGLockStatusMissingItem
+			} else if ar.item == 0 && ar.item2 != 0 && !hasItem(ar.item2) {
+				lockData = LFGLockStatusMissingItem
+			}
 		}
 
 		if lockData != 0 {
@@ -1566,6 +1741,27 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 	}
 
 	return locks
+}
+
+// lfgSeasonActive mirrors LFGMgr::IsSeasonActive (LFGMgr.cpp:2208-2221):
+// seasonal dungeons 285-288 are active only while their holiday runs
+// (holiday ids from SharedDefines.h:2787-2802).
+func (s *Server) lfgSeasonActive(dungeonID uint32) bool {
+	var holiday int64
+	switch dungeonID {
+	case 285: // The Headless Horseman
+		holiday = 324 // HOLIDAY_HALLOWS_END
+	case 286: // The Frost Lord Ahune
+		holiday = 341 // HOLIDAY_FIRE_FESTIVAL
+	case 287: // Coren Direbrew
+		holiday = 372 // HOLIDAY_BREWFEST
+	case 288: // The Crown Chemical Co.
+		holiday = 423 // HOLIDAY_LOVE_IS_IN_THE_AIR
+	default:
+		return false
+	}
+	_, ok := s.cachedActiveGameHolidays(context.Background())[holiday]
+	return ok
 }
 
 // lfgJoinDungeon carries the DBC metadata GetCompatibleDungeons needs for
@@ -1736,7 +1932,10 @@ func (s *session) handleLfdPlayerLockInfoRequest(ctx context.Context, payload []
 		allDungeons, err := s.server.Data.LFGDungeons()
 		if err == nil {
 			for _, d := range allDungeons {
-				if d.TypeID == LFGDungeonTypeRandom {
+				// LFGMgr::GetRandomAndSeasonalDungeons (LFGMgr.cpp:2288-2297):
+				// seasonal dungeons join the list while their season is active.
+				if d.TypeID == LFGDungeonTypeRandom ||
+					(d.Flags&lfgFlagSeasonal != 0 && s.server.lfgSeasonActive(d.ID)) {
 					if d.ExpansionLevel <= uint32(s.accountExpansion) &&
 						d.MinLevel <= uint32(s.player.Level) &&
 						(d.MaxLevel == 0 || uint32(s.player.Level) <= d.MaxLevel) {
@@ -2189,7 +2388,13 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	s.teleportToLFGDungeon(lfgDungeonID, true)
+	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1572-1578): a failed TeleportTo
+	// reports LFG_TELEPORTERROR_INVALID_LOCATION.
+	if !s.teleportToLFGDungeon(lfgDungeonID, true) {
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(LFGTeleportErrorInvalidLocation)
+		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED), packet.Bytes(), true)
+	}
 	return true
 }
 
@@ -2229,18 +2434,11 @@ func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	if s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
-		lfg := s.server.Features.LFG
-		lfg.mu.Lock()
-		// HandleLfgSetCommentOpcode -> LFGMgr::SetComment (LFGMgr.cpp:1984)
-		// writes the player-data comment only; it never creates queue state,
-		// so a comment from a non-queued player must not materialize a queue
-		// entry (that phantom entry would make a later Leave emit a bogus
-		// REMOVED_FROM_QUEUE and inflate the queue dump).
-		if entry, ok := lfg.queue[s.playerGUID]; ok {
-			entry.Comment = comment
-			lfg.queue[s.playerGUID] = entry
-		}
-		lfg.mu.Unlock()
+		// HandleLfgSetCommentOpcode -> LFGMgr::SetComment (LFGMgr.cpp:1984):
+		// PlayersStore[guid] creates the entry, so the comment persists for
+		// non-queued players and survives LeaveLfg; it never materializes
+		// queue state.
+		s.server.Features.LFG.SetComment(s.playerGUID, comment)
 	}
 	s.debug("lfg set comment", "account", s.accountName, "comment", comment)
 	return true
