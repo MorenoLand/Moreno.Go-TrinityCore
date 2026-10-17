@@ -85,15 +85,19 @@
 -- register): Reset — SetWalk(true) + MOVEMENTFLAG_FLYING +
 -- SetReactState(REACT_AGGRESSIVE); SpellHitTarget — SPELL_ICE_BEAM
 -- 49549 -> target CastSpell(SPELL_SUMMON_ARCANE_BEAM 51017, true)
--- + me->DespawnOrUnsummon() (joins the SpellHit-15-never-fires
--- queue); UpdateAI — DoMeleeAttackIfReady only; MovementInform
+-- + me->DespawnOrUnsummon() — NOTE: SpellHitTarget (event 15) IS
+-- dispatched in the current runtime (runtime.go:201 /
+-- boss_ai.go:2052); the leg stays out because 51017 is a summon with
+-- no spell-effect delivery leg (urom verdict) and DespawnOrUnsummon
+-- has no Lua binding, not because the event never fires; UpdateAI — DoMeleeAttackIfReady only; MovementInform
 -- (POINT_MOTION_TYPE / ACTION_CALL_DRAGON_EVENT) — MoveIdle +
 -- DoCast(target, SPELL_ICE_BEAM) (the target-GUID leg); DoAction(
 -- ACTION_CALL_DRAGON_EVENT) — varos via instance GetGuidData(
 -- DATA_VAROS) -> SelectTarget(Random) -> REACT_PASSIVE +
 -- MovePoint(victim + 20.0f z) (the ACTION_CALL_DRAGON_EVENT = 1
--- oculus.h leg) — no instance / motion / react-state / SpellHit /
--- random-target bridges.
+-- oculus.h leg) — no instance / motion / react-state / despawn /
+-- random-target bridges (event 15 fires; the SpellHit legs stay out
+-- on the summon/despawn blockers above).
 -- spell_varos_centrifuge_shield — AuraScript OnApply / OnRemove
 -- (EFFECT_0 SPELL_AURA_DUMMY): apply -> caster flags gate ->
 -- SetReactState(REACT_PASSIVE) + SetFlag(SWIMMING|UNK_6) +

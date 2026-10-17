@@ -29,15 +29,20 @@
 -- JustEngagedWith schedules are independent, none of the unmodeled
 -- events gate them):
 -- boss_trollgore: JustEngagedWith Talk(SAY_AGGRO 0) (event 1 — the
--- hook itself is bridged; its other legs — events.ScheduleEvent(
--- EVENT_CONSUME 15s) and EVENT_CORPSE_EXPLODE 3s (DoCastAOE 49380 /
--- 49555 — both spells' effects are delivered by their SpellScripts
--- (consume buff / corpse-explode damage + despawn), so a bare
--- self-cast would be a no-op cast bar — shazzrah precedent) +
+-- hook itself is bridged; all five engage-scheduled events are
+-- independent of the unmodeled legs);
+-- EVENT_CONSUME Talk(SAY_CONSUME 2) + DoCastAOE(Consume 49380),
+-- self-cast, 15s init / 15s repeat — the consume-buff stacking is
+-- SpellScript-delivered (no bridge); yell + cast cadence ported
+-- C++-exact, buff leg stays out (documented-only below);
+-- EVENT_CORPSE_EXPLODE Talk(SAY_EXPLODE 3) + DoCastAOE(Corpse Explode
+-- 49555), self-cast, 3s init / 15-19s repeat — damage (49618) +
+-- despawn are AuraScript-delivered (no bridge); yell + cast cadence
+-- ported C++-exact, damage leg stays out (documented-only below);
 -- EVENT_SPAWN 30-40s (invader-summoner trigger casts — ObjectAccessor
 -- ::GetCreature(*me, instance->GetGuidData(DATA_TROLLGORE_INVADER_
 -- SUMMONER_1+i)) + instance GUID-data + cross-AI bridges absent;
--- instance model absent anyway) — documented-only below);
+-- instance model absent anyway) — documented-only below;
 -- EVENT_CRUSH DoCastVictim(Crush 49639), randtime(1s,5s) init,
 -- 10-15s repeat (math.random — slad_ran precedent);
 -- EVENT_INFECTED_WOUND DoCastVictim(Infected Wound 49637),
@@ -47,12 +52,12 @@
 -- JustDied Talk(SAY_DEATH 4) (event 4; _JustDied instance
 -- bookkeeping has no bridge).
 -- Unmodeled (no bridges — documented, not wired):
--- EVENT_CONSUME — Talk(SAY_CONSUME 2) + DoCastAOE(Consume 49380),
--- 15s repeat — stays out: the consume buff is delivered by the
--- spell_trollgore_consume SpellScript (shazzrah precedent).
--- EVENT_CORPSE_EXPLODE — Talk(SAY_EXPLODE 3) + DoCastAOE(Corpse
--- Explode 49555), 15-19s repeat — stays out: damage + despawn are
--- delivered by the spell_trollgore_corpse_explode AuraScript.
+-- The consume-buff leg of EVENT_CONSUME (SPELL_CONSUME_BUFF 49381
+-- stacking via spell_trollgore_consume SpellScript) and the
+-- damage+despawn leg of EVENT_CORPSE_EXPLODE (49618 via the
+-- spell_trollgore_corpse_explode AuraScript) — no SpellScript/
+-- AuraScript binding bridge (razelikh precedent); the yells + cast
+-- cadence are ported, these effect legs stay out.
 -- EVENT_SPAWN — the invader-summoner world-trigger casts (
 -- trigger->CastSpell(trigger, RAND(SPELL_SUMMON_INVADER_A 49456 /
 -- _B 49457 / _C 49458), me->GetGUID()) over the three
@@ -98,10 +103,14 @@ local ENTRY_TROLLGORE = 26630
 
 local SAY_AGGRO = 0
 local SAY_KILL = 1
+local SAY_CONSUME = 2
+local SAY_EXPLODE = 3
 local SAY_DEATH = 4
 
 local SPELL_CRUSH = 49639
 local SPELL_INFECTED_WOUND = 49637
+local SPELL_CONSUME = 49380
+local SPELL_CORPSE_EXPLODE = 49555
 
 local timers = {}
 
@@ -146,6 +155,28 @@ local function infectedWoundTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_CONSUME: Talk(SAY_CONSUME) + DoCastAOE (self-cast); 15s
+-- init, 15s repeat. The consume-buff stacking is SpellScript-delivered
+-- (no bridge) — yell + cast cadence ported C++-exact.
+local function consumeTick(creature, guid)
+    creature:Talk(SAY_CONSUME)
+    creature:CastSpell(creature, SPELL_CONSUME)
+    schedule(guid, "consume", 15000, function()
+        consumeTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_CORPSE_EXPLODE: Talk(SAY_EXPLODE) + DoCastAOE (self-cast);
+-- 3s init, 15-19s repeat. Damage (49618) + despawn are
+-- AuraScript-delivered (no bridge) — yell + cast cadence C++-exact.
+local function corpseExplodeTick(creature, guid)
+    creature:Talk(SAY_EXPLODE)
+    creature:CastSpell(creature, SPELL_CORPSE_EXPLODE)
+    schedule(guid, "corpseexplode", math.random(15000, 19000), function()
+        corpseExplodeTick(creature, guid)
+    end)
+end
+
 local function trollgoreEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -155,6 +186,12 @@ local function trollgoreEnterCombat(event, creature, target)
     end)
     schedule(guid, "infectedwound", math.random(10000, 60000), function()
         infectedWoundTick(creature, guid)
+    end)
+    schedule(guid, "consume", 15000, function()
+        consumeTick(creature, guid)
+    end)
+    schedule(guid, "corpseexplode", 3000, function()
+        corpseExplodeTick(creature, guid)
     end)
 end
 
