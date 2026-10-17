@@ -2259,6 +2259,14 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 		}
 		lfg.mu.Unlock()
 
+		// LFGMgr::UpdateRoleCheck (LFGMgr.cpp:811) computes sendRoleChosen
+		// from the check's state BEFORE this answer is applied: the packet
+		// only goes out while a role check is actually in progress. With no
+		// check running C++ sends nothing here.
+		preState := uint32(LFGRoleCheckDefault)
+		if existing := lfg.GetRoleCheck(s.groupID); existing != nil {
+			preState = existing.State
+		}
 		rc := lfg.UpdateRoleCheck(s.groupID, s.playerGUID, roles)
 		if rc != nil {
 			grp := s.server.getGroup(s.groupID)
@@ -2273,20 +2281,26 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
 					buildLFGUpdateParty(LFGUpdateAddedToQueue, LFGQueueEntry{Dungeons: rc.Dungeons, State: LFGStateQueued}))
 			}
+			if preState != LFGRoleCheckDefault {
+				// LFGMgr::SendLfgRoleChosen (LFGMgr.cpp:2094-2098):
+				// SMSG_LFG_ROLE_CHOSEN (guid, ready, roles) unicast to each
+				// role-check member's session, not a group broadcast.
+				packet := protocol.NewBuffer(13)
+				packet.WriteU64(s.playerGUID)
+				if roles > 0 {
+					packet.WriteU8(1)
+				} else {
+					packet.WriteU8(0)
+				}
+				packet.WriteU32(uint32(roles))
+				pkt := packet.Bytes()
+				for memberGUID := range rc.Roles {
+					if ms := s.server.findSessionByGUID(memberGUID); ms != nil {
+						_ = ms.write(uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN), pkt, true)
+					}
+				}
+			}
 		}
-	}
-
-	// SMSG_LFG_ROLE_CHOSEN (0x2BB): guid (8), ready (1), roles (4)
-	packet := protocol.NewBuffer(13)
-	packet.WriteU64(s.playerGUID)
-	if roles > 0 {
-		packet.WriteU8(1)
-	} else {
-		packet.WriteU8(0)
-	}
-	packet.WriteU32(uint32(roles))
-	if s.server != nil {
-		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN), packet.Bytes())
 	}
 	return true
 }
