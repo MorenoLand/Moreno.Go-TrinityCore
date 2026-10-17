@@ -11506,15 +11506,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.consumeExtraAttacks(context.Background(), spellExtraAttackVictim(target, explicitUnitGUID))
 				}
 				s.procSpellFinishAuraTriggers(context.Background(), spell)
-				s.stopAttackOnSpellFinish(spell)
-				// Spell::finish (Spell.cpp:3961-3964): the potion flush
-				// runs on the delayed branch too — handle_delayed's last
-				// tick (next_time == 0) calls _handle_finish_phase then
-				// finish(true). Kept in the immediate path's finish order
-				// (stop attack, then the flush); C++ runs the flush just
-				// before STOP_ATTACK_TARGET — packet-order only, the two
-				// operations are independent.
+				// Spell::finish (Spell.cpp:3959-3983): the banked-potion flush
+				// (3959-3964) runs ahead of the attack stop (3978-3983),
+				// the same relative order as the immediate path and
+				// finishChannel.
 				s.updatePotionCooldown(ctx, spell)
+				s.stopAttackOnSpellFinish(spell)
 			})
 			// Spell::handle_delayed (Spell.cpp:3629) no-bridge legs, noted:
 			//   - UpdatePointers() fail -> finish(false): the arrival closure
@@ -11653,20 +11650,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// ranged casts (the per-tick Volley casts have no triggered exemption
 	// on this leg); Go has no per-tick triggered casts (channelTick
 	// applies tick damage directly), so ticks consume no ammo.
+	// Spell::handle_immediate tail (Spell.cpp:3616-3623): TakeCastItem at
+	// 3619 runs ahead of the Volley tail TakeAmmo at 3622-3623 — the charge
+	// is spent here after the finish-phase legs, then the tail ammo, in C++
+	// order. The delayed branch spends at delay start above and returns
+	// before this tail, so there is no double spend.
+	s.spendCastItemCharges(ctx, spell, castItemGUID, castItemEntry)
 	if isChanneledSpell(spell) && isRangedWeaponSpell(spell) {
 		s.takeAmmo(ctx, spell)
 	}
-	// Spell::handle_immediate tail (Spell.cpp:3619): the cast-item charge is
-	// spent here, after the finish-phase legs and (for Volley) the tail
-	// TakeAmmo, matching C++ TakeCastItem-then-TakeAmmo order. The delayed
-	// branch spends at delay start above and returns before this tail, so
-	// there is no double spend.
-	s.spendCastItemCharges(ctx, spell, castItemGUID, castItemEntry)
 	// Spell::handle_immediate (Spell.cpp:3625): finish(true) runs only when
 	// m_spellState != SPELL_STATE_CASTING — channeled spells skip it at cast
 	// completion and run these legs at natural channel end instead (Go's
 	// finishChannel, which already covers both).
+	// Spell::finish (Spell.cpp:3959-3983): the banked-potion flush
+	// (3959-3964) runs ahead of the SPELL_ATTR0_STOP_ATTACK_TARGET attack
+	// stop (3978-3983) — the same relative order as the delayed branch and
+	// finishChannel; the m_triggeredByAuraSpell gate (3961) is vacuous
+	// (finishSpellCast serves the client cast path only).
 	if !isChanneledSpell(spell) {
+		s.updatePotionCooldown(ctx, spell)
 		s.stopAttackOnSpellFinish(spell)
 	}
 
@@ -11705,9 +11708,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// flush is a finish(true) leg (Spell.cpp:3959-3964), so the same
 	// handle_immediate gate (Spell.cpp:3625) applies: channeled spells run
 	// it at natural channel end (finishChannel), not at cast completion.
-	if !isChanneledSpell(spell) {
-		s.updatePotionCooldown(ctx, spell)
-	}
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 	s.resetCastCooldownCheat(spellID)
 	s.procSpellCastPhaseAuraTriggers(ctx, spell)
