@@ -248,6 +248,7 @@ type playerState struct {
 	// from gameTimeMS; zero means no sanctuary recorded.
 	LastSanctuaryTime uint32
 	repopOnLogin      bool
+	debugAreaTriggers bool // Player::isDebugAreaTriggers (Player.h:2159): .debug areatriggers toggle (cs_debug.cpp:432); HandleAreaTriggerOpcode reports reached triggers (MiscHandler.cpp:675)
 	// loadedCorpseRow is set by restoreLoadedCorpseState's dead arm when the
 	// corpse table still holds a row for the player: Player::LoadCorpse
 	// (Player.cpp:18301-18313) keeps that row as-is (reclaim delay counts
@@ -434,7 +435,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		return playerState{}, err
 	}
 	if s.server.Data != nil {
-		if valid, known, appearanceErr := s.server.Data.ValidateAppearance(state.Race, state.Class, state.Gender, state.HairStyle, state.HairColor, state.Face, state.FacialStyle, state.Skin); appearanceErr == nil && known && !valid {
+		if valid, known, appearanceErr := s.server.Data.ValidateAppearance(state.Race, state.Class, state.Gender, state.HairStyle, state.HairColor, state.Face, state.FacialStyle, state.Skin, false); appearanceErr == nil && known && !valid {
 			return playerState{}, fmt.Errorf("invalid character appearance for guid %d", guid)
 		}
 	}
@@ -5491,7 +5492,7 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 			if skinFound {
 				newSkin = uint8(bsSkin.Data)
 			}
-			if valid, known, verr := s.server.Data.ValidateAppearance(s.player.Race, s.player.Class, s.player.Gender, newHair, uint8(color), s.player.Face, newFacial, newSkin); verr == nil && known && !valid {
+			if valid, known, verr := s.server.Data.ValidateAppearance(s.player.Race, s.player.Class, s.player.Gender, newHair, uint8(color), s.player.Face, newFacial, newSkin, false); verr == nil && known && !valid {
 				return true
 			}
 		}

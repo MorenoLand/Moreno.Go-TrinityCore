@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -44,7 +45,16 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// 2b. Script hook arm
+	// 2b. Debug area-trigger reporting
+	// Reference: MiscHandler.cpp:675 — isDebugAreaTriggers (toggled by
+	// .debug areatriggers, cs_debug.cpp:432) reports the reached trigger id
+	// (LANG_DEBUG_AREATRIGGER_REACHED, 1204; unseeded in-tree, so plain
+	// prose like the other unseeded LANG_* notices).
+	if s.player.debugAreaTriggers {
+		s.sendSysMessage(fmt.Sprintf("Area Trigger Reached: %d", triggerID))
+	}
+
+	// 2c. Script hook arm
 	// Reference: ScriptMgr::OnAreaTrigger (ScriptMgr.cpp:1702-1713): an
 	// Eluna true return makes ScriptMgr return false, so the quest/tavern/
 	// BG/teleport arms below CONTINUE — only a native AreaTriggerScript

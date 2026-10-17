@@ -813,6 +813,44 @@ func cheatOnOff(enabled bool) string {
 	return "OFF"
 }
 
+// handleCmdDebug mirrors the debug_commandscript table (cs_debug.cpp:99):
+// the "debug" root with the areatriggers arm, gated on
+// RBAC_PERM_COMMAND_DEBUG (RBAC.h:214, Console::No).
+func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
+	if s.player == nil {
+		return true
+	}
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .debug areatriggers")
+		return true
+	}
+	switch strings.ToLower(args[0]) {
+	case "areatriggers":
+		s.handleDebugAreaTriggers(ctx)
+	default:
+		s.sendSysMessage("Syntax: .debug areatriggers")
+	}
+	return true
+}
+
+// handleDebugAreaTriggers mirrors HandleDebugAreaTriggersCommand
+// (cs_debug.cpp:432): a bare toggle — while set, HandleAreaTriggerOpcode
+// reports each reached trigger id (MiscHandler.cpp:675). The trinity_string
+// texts (1202/1203) are unseeded in-tree, so plain prose stands in like the
+// other unseeded LANG_* notices.
+func (s *session) handleDebugAreaTriggers(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	s.player.debugAreaTriggers = !s.player.debugAreaTriggers
+	if s.player.debugAreaTriggers {
+		s.sendSysMessage("Now debug Area Triggers")
+	} else {
+		s.sendSysMessage("Now no debug Area Triggers")
+	}
+}
+
 // handleCmdCheat mirrors cheat_commandscript::GetCommands (cs_cheat.cpp:44):
 // the "cheat" root with the god, casttime, cooldown, power, waterwalk,
 // status, taxi and explore arms, each gated on its RBAC_PERM_COMMAND_CHEAT_*
@@ -6356,6 +6394,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
 	root.add("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(ctx, args); return true }, []string{"chat", "fly", "ingame", "list", "visible", "on", "off"}, map[string]string{"vis": "visible"})
 	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"god", "casttime", "cooldown", "power", "waterwalk", "status", "taxi", "explore"}, nil)
+	root.add("debug", func(ctx context.Context, args []string) bool { return s.handleCmdDebug(ctx, args) }, []string{"areatriggers"}, nil)
 	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, []string{"add", "del", "name", "group"}, nil)
 	root.add("ticket", func(ctx context.Context, args []string) bool { s.handleCmdTicket(ctx, args); return true }, []string{"assign", "close", "closedlist", "comment", "complete", "delete", "escalate", "escalatedlist", "list", "onlinelist", "reset", "response", "togglesystem", "unassign", "viewid", "viewname"}, nil)
 	root.add("titles", func(ctx context.Context, args []string) bool { s.handleCmdTitles(ctx, args); return true }, []string{"add", "current", "remove", "set"}, nil)

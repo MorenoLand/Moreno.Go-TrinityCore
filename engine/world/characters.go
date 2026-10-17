@@ -153,7 +153,7 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 			}
 		}
 		if s.server.Data != nil {
-			if valid, known, appearanceErr := s.server.Data.ValidateAppearance(character.Race, character.Class, character.Gender, character.HairStyle, character.HairColor, character.Face, character.FacialStyle, character.Skin); appearanceErr == nil && known && !valid {
+			if valid, known, appearanceErr := s.server.Data.ValidateAppearance(character.Race, character.Class, character.Gender, character.HairStyle, character.HairColor, character.Face, character.FacialStyle, character.Skin, false); appearanceErr == nil && known && !valid {
 				character.Skin, character.Face, character.HairStyle, character.HairColor, character.FacialStyle = 0, 0, 0, 0, 0
 				// Player.cpp:1460-1466: the at-login flag DB write only runs
 				// when the flag is not already set.
@@ -2884,7 +2884,7 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 	// Player::ValidateAppearance (:1413) — unknown combos are a bridge gap
 	// (ValidateAppearance returns known=false without DBC data); treat a
 	// known-invalid combo as CHAR_CREATE_ERROR.
-	if valid, known, aerr := s.server.Data.ValidateAppearance(race, class, oldGender, hairStyle, hairColor, face, facialHair, skin); aerr == nil && known && !valid {
+	if valid, known, aerr := s.server.Data.ValidateAppearance(race, class, oldGender, hairStyle, hairColor, face, facialHair, skin, true); aerr == nil && known && !valid {
 		sendCustomize(charCreateError, false)
 		return true
 	}
@@ -3047,9 +3047,12 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 	if newName == "" {
 		return sendRaceChange(charNameNoName)
 	}
-	// ObjectMgr::CheckPlayerName approximation (CharacterHandler.cpp:1715-1719).
-	if !validCharacterName(newName) {
-		return sendRaceChange(charNameFailure)
+	// ObjectMgr::CheckPlayerName (CharacterHandler.cpp:1715-1719): the
+	// specific ResponseCode rides back (TOO_LONG, TOO_SHORT,
+	// MIXED_LANGUAGES, THREE_CONSECUTIVE) — the same checkPlayerName the
+	// rename/customize handlers use.
+	if code := checkPlayerName(newName); code != 0 {
+		return sendRaceChange(code)
 	}
 	// IsReservedName arm (CharacterHandler.cpp:1722-1726): gated on
 	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME; answers
@@ -3240,11 +3243,12 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 		if newName == "" {
 			return sendFactionChange(charNameNoName)
 		}
-		// ObjectMgr::CheckPlayerName approximation
-		// (CharacterHandler.cpp:1715-1719): validCharacterName covers the
-		// length/alphabet arms.
-		if !validCharacterName(newName) {
-			return sendFactionChange(charNameFailure)
+		// ObjectMgr::CheckPlayerName (CharacterHandler.cpp:1715-1719): the
+		// specific ResponseCode rides back (TOO_LONG, TOO_SHORT,
+		// MIXED_LANGUAGES, THREE_CONSECUTIVE) — the same checkPlayerName the
+		// rename/customize handlers use.
+		if code := checkPlayerName(newName); code != 0 {
+			return sendFactionChange(code)
 		}
 		// IsReservedName arm (CharacterHandler.cpp:1722-1726): gated on
 		// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME; answers
@@ -3285,9 +3289,13 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 			spawnX, spawnY, spawnZ, spawnO = 1633.33, -4439.11, 15.7588, 0.0
 		}
 
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_homebind SET mapId = ?, zoneId = ?, posX = ?, posY = ?, posZ = ? WHERE guid = ?",
-			spawnMap, spawnZone, spawnX, spawnY, spawnZ, guid)
-		_, err := cdb.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, at_login = (at_login | %d) & ~%d WHERE guid = ?", atLoginResurrect, atLoginChangeFaction),
+		// CharacterHandler.cpp:1900-1918: C++ deletes and re-inserts the
+		// homebind row (CHAR_DEL_PLAYER_HOMEBIND + CHAR_INS_PLAYER_HOMEBIND),
+		// so a missing row is recreated, not silently skipped.
+		_, _ = cdb.ExecContext(ctx, `INSERT INTO character_homebind (guid, mapId, zoneId, posX, posY, posZ) VALUES (?, ?, ?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE mapId = VALUES(mapId), zoneId = VALUES(zoneId), posX = VALUES(posX), posY = VALUES(posY), posZ = VALUES(posZ)`,
+			guid, spawnMap, spawnZone, spawnX, spawnY, spawnZ)
+		_, err := cdb.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, trans_x = 0, trans_y = 0, trans_z = 0, transguid = 0, cinematic = 1, at_login = (at_login | %d) & ~%d WHERE guid = ?", atLoginResurrect, atLoginChangeFaction),
 			newName, gender, skin, face, hairStyle, hairColor, facialHair, race, spawnMap, spawnZone, spawnX, spawnY, spawnZ, spawnO, guid)
 		if err != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
@@ -3295,22 +3303,35 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 		}
 
 		// Delete all flypaths and rebuild the faction taximask when above
-		// level 7 (CharacterHandler.cpp:1845-1881): numFullTaximasks =
-		// min(level/7, 11) faction-mask words, the remaining words zeroed.
+		// level 7 (CharacterHandler.cpp:1842-1881): the stream writes exactly
+		// 12 words — numFullTaximasks = min(level/7, 11) faction-mask words,
+		// the rest zeroed. The death-knight extra mask is cast through uint8
+		// (uint8 deathKnightExtraNode, CharacterHandler.cpp:1856), so only
+		// its low 8 bits survive the OR — DK flight nodes at bit >= 8 (Ebon
+		// Hold 315, Shadow Vault 333) are silently dropped in C++.
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET taxi_path = '' WHERE guid = ?", guid)
 		if level > 7 && s.server != nil && s.server.Data != nil {
-			if factionMask, terr := s.server.Data.FactionTaxiMask(newTeam == 1, class == classDeathKnight); terr == nil {
+			factionMask, terr := s.server.Data.FactionTaxiMask(newTeam == 1, false)
+			var dkMask [14]uint32
+			var derr error
+			if class == classDeathKnight {
+				dkMask, derr = s.server.Data.DeathKnightTaxiMask()
+			}
+			if terr == nil && (class != classDeathKnight || derr == nil) {
 				numFull := int(level) / 7
 				if numFull > 11 {
 					numFull = 11
 				}
-				parts := make([]string, 14)
+				parts := make([]string, 12)
 				for i := range parts {
+					var word uint32
 					if i < numFull {
-						parts[i] = strconv.FormatUint(uint64(factionMask[i]), 10)
-					} else {
-						parts[i] = "0"
+						word = factionMask[i]
+						if class == classDeathKnight {
+							word |= uint32(uint8(dkMask[i]))
+						}
 					}
+					parts[i] = strconv.FormatUint(uint64(word), 10)
 				}
 				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET taximask = ? WHERE guid = ?", strings.Join(parts, " "), guid)
 			}

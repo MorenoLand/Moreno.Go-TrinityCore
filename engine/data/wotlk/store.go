@@ -602,7 +602,14 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, CreatureType: creatureType, ResSicknessSpellID: resSickness, CinematicSequence: cinematic, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
 }
 
-func (s *Store) ValidateAppearance(race, class, gender, hairID, hairColor, faceID, facialHair, skinColor uint8) (bool, bool, error) {
+// ValidateAppearance mirrors Player::ValidateAppearance (Player.cpp:27097):
+// each matched CharSections entry must clear the death-knight-exclusive
+// flag for non-DKs, and when create is true (character creation/customize
+// paths, e.g. CharacterHandler.cpp:1407) it must also carry
+// SECTION_FLAG_PLAYER (0x01, DBCStructure.h:319) — barbershop-only sections
+// are rejected there. The barber (CharacterHandler.cpp:1296) passes
+// create=false.
+func (s *Store) ValidateAppearance(race, class, gender, hairID, hairColor, faceID, facialHair, skinColor uint8, create bool) (bool, bool, error) {
 	sections, err := s.File("CharSections")
 	if err != nil {
 		return true, false, err
@@ -624,7 +631,13 @@ func (s *Store) ValidateAppearance(race, class, gender, hairID, hairColor, faceI
 			variationIndex, variationErr := record.Uint32(8)
 			colorIndex, colorErr := record.Uint32(9)
 			if rErr == nil && gErr == nil && baseErr == nil && flagsErr == nil && variationErr == nil && colorErr == nil && r == uint32(race) && g == uint32(gender) && base == sectionType && variationIndex == variation && colorIndex == color {
-				return class == 6 || flags&0x04 == 0
+				if class != 6 && flags&0x04 != 0 {
+					return false
+				}
+				if create && flags&0x01 == 0 {
+					return false
+				}
+				return true
 			}
 		}
 		return false

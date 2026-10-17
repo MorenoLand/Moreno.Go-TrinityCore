@@ -171,6 +171,34 @@ func (s *Store) FactionTaxiMask(horde bool, deathKnight bool) ([taxiMaskSize]uin
 	return mask, nil
 }
 
+// DeathKnightTaxiMask mirrors the sDeathKnightTaxiNodesMask build
+// (DBCStores.cpp:589-632): the words of nodes whose MountCreatureID is the
+// death-knight special mount (32981) in either slot, on the valid flight
+// network. It is ORed into the faction mask word-by-word at the
+// CharacterHandler.cpp:1856 faction-change site through a uint8 cast, so
+// callers must truncate each word to its low 8 bits themselves.
+func (s *Store) DeathKnightTaxiMask() ([taxiMaskSize]uint32, error) {
+	network, err := s.taxiNetwork()
+	if err != nil {
+		return [taxiMaskSize]uint32{}, err
+	}
+	var mask [taxiMaskSize]uint32
+	for _, node := range network.nodes {
+		if node.ID == 0 || !node.HasOutgoingPath {
+			continue
+		}
+		if node.MountCreatureID[0] != taxiDKSpecialMount && node.MountCreatureID[1] != taxiDKSpecialMount {
+			continue
+		}
+		field := (node.ID - 1) / 32
+		if field >= taxiMaskSize {
+			continue
+		}
+		mask[field] |= uint32(1) << ((node.ID - 1) % 32)
+	}
+	return mask, nil
+}
+
 // NearestTaxiNode mirrors ObjectMgr::GetNearestTaxiNode: closest network node
 // on the map whose mount list serves the team (0 = Horde, 1 = Alliance; the
 // 32981 Ebon Hold mount serves everyone).

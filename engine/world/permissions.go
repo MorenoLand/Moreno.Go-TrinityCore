@@ -205,6 +205,9 @@ const permissionCommandCheatTaxi uint32 = 298
 // permissionCommandCheatWaterwalk mirrors rbac::RBAC_PERM_COMMAND_CHEAT_WATERWALK (RBAC.h:213).
 const permissionCommandCheatWaterwalk uint32 = 299
 
+// permissionCommandDebug mirrors rbac::RBAC_PERM_COMMAND_DEBUG (RBAC.h:214).
+const permissionCommandDebug uint32 = 300
+
 // permissionCommandDeserterBGAdd mirrors rbac::RBAC_PERM_COMMAND_DESERTER_BG_ADD (RBAC.h:216).
 const permissionCommandDeserterBGAdd uint32 = 343
 
