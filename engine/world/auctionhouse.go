@@ -417,7 +417,13 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:122: recvData >> auctioneer).
 	// The NPC interact check sits AFTER the max-money gate in C++
 	// (AuctionHouseHandler.cpp:164-169), not up front — see below.
-	auctioneer, _ := reader.ReadU64()
+	// AuctionHouseHandler.cpp:122: the auctioneer read throws on a short
+	// packet, so a 4-7 byte payload is silently dropped — the itemsCount
+	// read below must not run (and answer) on those bytes.
+	auctioneer, err := reader.ReadU64()
+	if err != nil {
+		return true // truncation: drop, never close
+	}
 	itemCount, err := reader.ReadU32()
 	if err != nil {
 		return true // truncation: drop, never close
@@ -608,6 +614,12 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 				s.despawnItem(uint64(itemGUID))
 			} else {
 				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", stackCounts[j], itemGUID)
+				// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:405): the
+				// clone path fires Player::ItemRemovedQuestCheck for each
+				// partially-consumed stack with that stack's listed count.
+				// Fully-consumed stacks and the whole-item path
+				// (AuctionHouseHandler.cpp:293-341) fire nothing.
+				s.adjustQuestItemCount(ctx, uint32(itemEntry), stackCounts[j], false)
 			}
 		}
 		auctionItemGUID = newGUID
@@ -620,7 +632,10 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), auctionItemGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", auctionItemGUID)
 	}
-	s.adjustQuestItemCount(ctx, uint32(itemEntry), finalCount, false)
+	// C++ HandleAuctionSellItem: the whole-item path (AuctionHouseHandler.cpp:293-341)
+	// fires no ItemRemovedQuestCheck — the moved item keeps its quest counts.
+	// The clone path fires per partially-consumed stack inside the loop above
+	// (AuctionHouseHandler.cpp:405).
 	now := time.Now().Unix()
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:254): auctionTime =
 	// uint32(etime_seconds * Rate.Auction.Time); the auction's expire time is
