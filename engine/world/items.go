@@ -3737,6 +3737,185 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// spell copy (Store.Spell returns a value).
 			spell.Effects[0].BasePoints = *learnBasePoint
 		}
+		// CheckCast early arms (Spell.cpp:5181-5353) on the m_CastItem
+		// path: item casts are TRIGGERED_NONE prepares
+		// (Player::CastItemUseSpell, Player.cpp:8232; Spell::prepare,
+		// Spell.cpp:3096-3099), so every early arm fires here exactly as on
+		// the client path — C++ runs these before the explicit-target check
+		// (5353), which is why this block sits ahead of the adoption below.
+		// The GO-immunity arm (5181-5186, DONT_REPORT for
+		// CannotBeUsedUnderImmunity GOs under UNIT_FLAG_IMMUNE) is
+		// unbridged like on the client path: nothing in Go ever sets the
+		// 0x80000000 immunity unit flag. The cooldown/IsReady and potion
+		// legs of the same block (5188-5221) live later in this chain with
+		// the CheckItems arms, per the established item-path order.
+		if spell.Attributes&spellAttributePassive == 0 {
+			// CheckCast allow-only-ability gate (Spell.cpp:5193-5195):
+			// SPELL_AURA_ALLOW_ONLY_ABILITY (263) sets PLAYER_FLAGS
+			// PLAYER_ALLOW_ONLY_ABILITY while the aura is up, and CheckCast
+			// lets only triggered casts through in that state. Item casts
+			// are TRIGGERED_NONE, so a client-initiated item cast reports
+			// SPELL_FAILED_SPELL_IN_PROGRESS.
+			if s.player.PlayerFlags&playerFlagAllowOnlyAbility != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedSpellInProgress), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "allow-only-ability flag set")
+				return true
+			}
+			// CheckCast cheat-spell gate (Spell.cpp:5223-5227):
+			// SPELL_ATTR7_IS_CHEAT_SPELL spells fail with
+			// SPELL_FAILED_CUSTOM_ERROR plus the custom error
+			// SPELL_CUSTOM_ERROR_GM_ONLY unless the caster carries
+			// UNIT_FLAG2_ALLOW_CHEAT_SPELLS (mirrored by the .gm-on flag
+			// pair, commands.go:391). The WriteCastResultInfo customError
+			// leg (Spell.cpp:4073-4075) rides buildCastFailedParams.
+			if spell.AttributesEx7&spellAttr7IsCheatSpell != 0 &&
+				s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castCount, spellID, spellFailedCustomError, spellCustomErrorGMOnly), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "cheat spell without gm mode")
+				return true
+			}
+		}
+		// CheckCast ended-battleground gate (Spell.cpp:5229-5235): once the
+		// battleground ends (STATUS_WAIT_LEAVE), only triggered casts are
+		// processed — item casts are TRIGGERED_NONE, so they report
+		// SPELL_FAILED_DONT_REPORT. Go's live-BG analog is the arena world
+		// model (battleground_arena.go), mirroring the client path;
+		// non-arena battlegrounds have no end-lifecycle status model, so the
+		// gate never fires there — the same documented delta.
+		if s.server != nil && IsArenaMap(s.player.Map) {
+			if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+				arena.mu.Lock()
+				_, inArena := arena.PlayerTeams[s.playerGUID]
+				ended := arena.Status == ArenaStatusWaitLeave
+				arena.mu.Unlock()
+				if inArena && ended {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedDontReport), true)
+					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "arena ended, waiting leave")
+					return true
+				}
+			}
+		}
+		// CheckCast outdoors/indoors arms (Spell.cpp:5236-5248):
+		// SPELL_ATTR0_OUTDOORS_ONLY spells fail with
+		// SPELL_FAILED_ONLY_OUTDOORS when the caster is not outdoors, and
+		// SPELL_ATTR0_INDOORS_ONLY spells fail with
+		// SPELL_FAILED_ONLY_INDOORS when the caster is outdoors. The
+		// isLineOfSightCalcEnabled() gate is live by default in C++ and has
+		// no Go config; IsOutdoors rides s.isOutdoors like the client path.
+		if spell.Attributes&spellAttr0OutdoorsOnly != 0 && !s.isOutdoors() {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedOnlyOutdoors), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires outdoors")
+			return true
+		}
+		if spell.Attributes&spellAttr0IndoorsOnly != 0 && s.isOutdoors() {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedOnlyIndoors), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires indoors")
+			return true
+		}
+		// Shapeshift/stance requirements (SpellInfo::CheckShapeshift,
+		// SpellInfo.cpp:1455; gated in Spell::CheckCast at
+		// Spell.cpp:5247-5275): strict is true for item casts (prepare
+		// calls CheckCast(true)), and item casts are TRIGGERED_NONE, so the
+		// TRIGGERED_IGNORE_SHAPESHIFT wrapper is vacuous.
+		if !s.hasIgnoreShapeshiftAura(spell) {
+			if shapeResult := s.checkShapeshiftCast(spell); shapeResult != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, shapeResult), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "shapeshift requirement not met", "result", shapeResult)
+				return true
+			}
+			// ONLY_STEALTHED arm (Spell.cpp:5271-5272): requires a live
+			// SPELL_AURA_MOD_STEALTH aura, failing
+			// SPELL_FAILED_ONLY_STEALTHED.
+			if spell.Attributes&spellAttr0OnlyStealthed != 0 && !s.hasAuraType(spellAuraStealth) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedOnlyStealthed), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "requires stealth")
+				return true
+			}
+		}
+		// Spell-family block gate (Spell.cpp:5277-5278): a caster carrying a
+		// SPELL_AURA_BLOCK_SPELL_FAMILY aura effect whose MiscValue matches
+		// the spell's SpellFamilyName fails with
+		// SPELL_FAILED_SPELL_UNAVAILABLE.
+		if s.spellFamilyBlockedByAura(spell) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedSpellUnavailable), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell family blocked by aura")
+			return true
+		}
+		// Caster aura-state block (Spell.cpp:5279-5312): item casts are
+		// TRIGGERED_NONE, so the TRIGGERED_IGNORE_CASTER_AURASTATE wrapper
+		// is vacuous and the caster-state requirements fire.
+		if spell.CasterAuraState != 0 && !s.hasAuraState(spell.CasterAuraState, spell) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterAuraState), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura state missing", "state", spell.CasterAuraState)
+			return true
+		}
+		if spell.ExcludeCasterAuraState != 0 && s.hasAuraState(spell.ExcludeCasterAuraState, spell) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterAuraState), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura state present", "state", spell.ExcludeCasterAuraState)
+			return true
+		}
+		if spell.CasterAuraSpell != 0 && !s.hasAura(spell.CasterAuraSpell) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterAuraState), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura missing", "aura", spell.CasterAuraSpell)
+			return true
+		}
+		if spell.ExcludeCasterAuraSpell != 0 && s.hasAura(spell.ExcludeCasterAuraSpell) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterAuraState), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura present", "aura", spell.ExcludeCasterAuraSpell)
+			return true
+		}
+		// Caster-state reqCombat arm (Spell.cpp:5311-5312): a spell that
+		// cannot be used in combat fails with SPELL_FAILED_AFFECTING_COMBAT
+		// when the caster is in combat, unless a
+		// SPELL_AURA_ABILITY_IGNORE_AURASTATE effect with MiscValue == 1
+		// exempts it.
+		if !s.auraStateReqCombatExempt(spell) && s.player != nil &&
+			s.player.UnitFlags&unitFlagInCombat != 0 && spell.Attributes&spellAttr0CantUsedInCombat != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedAffectingCombat), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot be used in combat")
+			return true
+		}
+		// CheckCast moving/autorepeat arm (Spell.cpp:5316-5323): a moving
+		// player fails SPELL_FAILED_MOVING for auto-repeat spells
+		// (SPELL_ATTR2_AUTOREPEAT_FLAG) or spells whose auras interrupt on
+		// standing up (AURA_INTERRUPT_FLAG_NOT_SEATED — food, drink).
+		// SPELL_EFFECT_STUCK spells are exempt while falling far; the
+		// charmer-is-creature trust hack is vacuous (no charmed-caster
+		// model).
+		if s.isMoving &&
+			!(s.isFallingFar && len(spell.Effects) > 0 && spell.Effects[0].Effect == spellEffectStuck) &&
+			(spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 || spell.AuraInterruptFlags&auraInterruptFlagNotSeated != 0) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedMoving), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "moving autorepeat or not-seated cast")
+			return true
+		}
+		// CheckCast vehicle arm (Spell.cpp:5332-5336):
+		// SpellInfo::CheckVehicle gates spells cast while the caster rides a
+		// vehicle; the TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE wrapper
+		// is vacuous for TRIGGERED_NONE item casts.
+		if failure := s.checkVehicleCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "vehicle seat restriction", "failure", failure)
+			return true
+		}
+		// CheckCast conditions block (Spell.cpp:5337-5348): the per-spell
+		// database conditions on the cast itself
+		// (CONDITION_SOURCE_TYPE_SPELL), evaluated against the wire target
+		// like C++ (m_targets before CheckExplicitTarget) — which is why
+		// this arm runs ahead of the adoption below. A failed condition's
+		// ErrorType wins (SPELL_FAILED_CUSTOM_ERROR also carries
+		// ErrorTextId via buildCastFailedParams), else
+		// SPELL_FAILED_CASTER_AURASTATE when there is no failed condition or
+		// no ConditionTarget, else SPELL_FAILED_BAD_TARGETS.
+		if failReason, customErr := s.checkSpellCastConditions(ctx, spellID, target); failReason != 0 {
+			payload := buildCastFailed(castCount, spellID, failReason)
+			if failReason == spellFailedCustomError {
+				payload = buildCastFailedParams(castCount, spellID, failReason, customErr)
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell cast conditions not met", "failReason", failReason)
+			return true
+		}
 		// Spell::InitExplicitTargets (Spell.cpp:659-700) +
 		// SpellInfo::CheckExplicitTarget (Spell.cpp:5353-5367) on the
 		// m_CastItem path: item casts run the same Spell constructor, so the
@@ -4463,6 +4642,107 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		if failReason := s.checkDispelPreCast(spell, target.UnitGUID); failReason != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to dispel")
+			return true
+		}
+		// Spell::CheckCast per-effect switch (Spell.cpp:5567+) on the
+		// m_CastItem path: item casts run the full CheckCast via prepare
+		// (Spell.cpp:3096-3099), so every per-effect arm fires here too —
+		// none of them ran on the item path before this strip. They ride
+		// the same session bridges as the client path, in C++ case order:
+		// learn -> learn-pet -> glyph -> feed-pet -> power-burn/drain ->
+		// charge -> skinning -> open-lock -> resurrect-pet -> summon ->
+		// create-tamed-pet -> summon-pet -> summon-player -> raf-friend ->
+		// leap -> steal -> leap-back/jump -> talent-spec-select. C++
+		// relative order: right after the dispel pre-check (5513-5560), at
+		// the tail of CheckCast.
+		if failure := s.checkLearnSpellCast(ctx, spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "learn spell pet validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkGlyphCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "duplicate glyph", "failure", failure)
+			return true
+		}
+		for _, effect := range spell.Effects {
+			if effect.Effect != 101 /* SPELL_EFFECT_FEED_PET (SharedDefines.h:912) */ {
+				continue
+			}
+			if _, failure := s.checkPetFood(ctx, target.ItemGUID); failure != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "pet food validation", "failure", failure)
+				return true
+			}
+		}
+		if failure := s.checkPowerBurnDrainCast(spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "power burn/drain target power-type mismatch", "failure", failure)
+			return true
+		}
+		if failure := s.checkChargeCast(ctx, spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "charge validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkSkinningCast(spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "skinning validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkOpenLockCast(spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "open-lock validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkResurrectPetCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "resurrect-pet validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkSummonCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkCreateTamedPetCast(spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "create-tamed-pet validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkSummonPetCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-pet validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-player validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-raf-friend validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkLeapCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap/teleport-before-bg-start validation", "failure", failure)
+			return true
+		}
+		if failReason := s.checkStealPreCast(spell, target.UnitGUID); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to steal")
+			return true
+		}
+		if failure := s.checkLeapBackCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap-back/jump while rooted", "failure", failure)
+			return true
+		}
+		if failure := s.checkTalentSpecSelectCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "talent-spec-select in active bg", "failure", failure)
 			return true
 		}
 		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
