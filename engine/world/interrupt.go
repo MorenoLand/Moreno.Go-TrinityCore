@@ -10,7 +10,7 @@ import (
 
 const (
 	spellEffectInterruptCast      = 68   // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
-	spellInterruptFlagInterrupt   = 0x01 // SPELL_INTERRUPT_FLAG_INTERRUPT (SharedDefines.h:1120)
+	spellInterruptFlagInterrupt   = 0x08 // SPELL_INTERRUPT_FLAG_INTERRUPT (SpellDefines.h:33)
 	channelInterruptFlagInterrupt = 0x08 // CHANNEL_INTERRUPT_FLAG_INTERRUPT (SharedDefines.h:1126)
 	spellPreventionTypeSilence    = 1    // SPELL_PREVENTION_TYPE_SILENCE (SharedDefines.h:1134)
 	spellPreventionTypePacify     = 2    // SPELL_PREVENTION_TYPE_PACIFY (SharedDefines.h:1135)
@@ -108,12 +108,15 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 		canInterrupt := true
 		schoolMask := uint32(1)
 
-		if targetSess.activeCast.InterruptFlg != 0 && (targetSess.activeCast.InterruptFlg&spellInterruptFlagInterrupt == 0) {
+		// SpellEffects.cpp:3533-3535: the unconditional InterruptFlags bit
+		// test — a zero InterruptFlags (or one lacking the INTERRUPT bit)
+		// is not interruptible, no != 0 guard.
+		if targetSess.activeCast.InterruptFlg&spellInterruptFlagInterrupt == 0 {
 			canInterrupt = false
 		}
 		if s.server != nil && s.server.Data != nil {
 			if curSpellInfo, found, _ := s.server.Data.Spell(curSpellID); found {
-				if curSpellInfo.InterruptFlags != 0 && (curSpellInfo.InterruptFlags&spellInterruptFlagInterrupt == 0) {
+				if curSpellInfo.InterruptFlags&spellInterruptFlagInterrupt == 0 {
 					canInterrupt = false
 				}
 				// SpellEffects.cpp:3530-3532: the interrupted spell must be
@@ -153,7 +156,9 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 
 		if s.server.Data != nil {
 			if curSpellInfo, found, _ := s.server.Data.Spell(curSpellID); found {
-				if curSpellInfo.ChannelInterrupt != 0 && (curSpellInfo.ChannelInterrupt&channelInterruptFlagInterrupt == 0) {
+				// SpellEffects.cpp:3535: the ChannelInterruptFlags bit test
+				// is likewise unconditional.
+				if curSpellInfo.ChannelInterrupt&channelInterruptFlagInterrupt == 0 {
 					canInterrupt = false
 				}
 				// Same PreventionType gate as the generic arm above
