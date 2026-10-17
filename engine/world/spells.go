@@ -19221,6 +19221,33 @@ func (s *session) cancelAuraRemovable(spellID uint32) bool {
 		spellIsPositive(spell)
 }
 
+// cancelAuraOwnedByPlayer mirrors the RemoveOwnedAura ownership gate in
+// WorldSession::HandleCancelAuraOpcode (SpellHandler.cpp:481, Unit.cpp:3703):
+// the cancel only removes auras the player owns — a buff another unit cast
+// on the player is left alone. Item-cast self buffs carry the cast item's
+// GUID in the caster slot (spells.go:15243), so those fall back to the
+// player's own inventory (inventoryItemEntryByGUID); a zero caster is the
+// session's own application (C++ Aura defaults a null caster to the owner).
+func (s *session) cancelAuraOwnedByPlayer(spellID uint32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	s.castMu.Unlock()
+	if aura == nil || aura.Stopped {
+		return false
+	}
+	if aura.CasterGUID == s.playerGUID || aura.CasterGUID == 0 {
+		return true
+	}
+	if aura.ItemGUID != 0 {
+		_, ok := s.inventoryItemEntryByGUID(aura.ItemGUID)
+		return ok
+	}
+	return false
+}
+
 func (s *session) handleCancelAura(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	spellID, err := reader.ReadU32()
@@ -19257,8 +19284,12 @@ func (s *session) handleCancelAura(payload []byte) bool {
 		return true
 	}
 	// WorldSession::HandleCancelAuraOpcode (SpellHandler.cpp:481): the
-	// player-cancel removal is AURA_REMOVE_BY_CANCEL, not the default mode.
-	s.removeAuraWithMode(spellID, auraRemoveByCancel)
+	// player-cancel removal is AURA_REMOVE_BY_CANCEL, not the default mode,
+	// and RemoveOwnedAura only removes auras the player owns — a buff
+	// another unit cast on the player is left alone (Unit.cpp:3703).
+	if s.cancelAuraOwnedByPlayer(spellID) {
+		s.removeAuraWithMode(spellID, auraRemoveByCancel)
+	}
 	// If spell being removed is a resource tracker, see if player was
 	// tracking both (herbs / minerals) and remove the other
 	if s.server != nil && s.server.Config.AllowTrackBothResources && spellHasAura(spell, spellAuraTrackResources) {
@@ -19269,7 +19300,9 @@ func (s *session) handleCancelAura(payload []byte) bool {
 			}
 		}
 		for _, trackedID := range tracked {
-			s.removeAuraWithMode(trackedID, auraRemoveByCancel)
+			if s.cancelAuraOwnedByPlayer(trackedID) {
+				s.removeAuraWithMode(trackedID, auraRemoveByCancel)
+			}
 		}
 	}
 	return true
@@ -21388,24 +21421,32 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	}
 	// Unit::Dismount (Unit.cpp:8365-8415) as reached from
 	// AuraEffect::HandleAuraMounted's remove leg (SpellAuraEffects.cpp:2613-2624):
-	// display cleared, UNIT_FLAG_MOUNT dropped, SMSG_DISMOUNT broadcast. The
-	// flag/display gate is Unit::Dismount's `if (!IsMounted()) return;` early
-	// return — Go reaches this block only via nested removeAura calls once the
-	// flag is already cleared. C++ dismounts on every mounted-aura removal
-	// (then RemoveAurasByType(SPELL_AURA_MOUNTED) clears the rest); Go dismounts
-	// once the last mounted aura leaves — SMSG_DISMOUNT fires at most once per
-	// dismount either way. The vehicle-kit teardown leg has no bridge.
-	if wasMounted && !s.hasAuraType(spellAuraMounted) && s.player != nil &&
-		(s.player.UnitFlags&unitFlagMount != 0 || s.player.MountDisplayID != 0) {
-		s.player.MountDisplayID = 0
-		s.sendPlayerMountUpdate()
-		s.sendPlayerDismount()
-		// Unit::Dismount's RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_MOUNTED)
-		// runs after the SMSG_DISMOUNT broadcast, matching this placement.
-		s.removeAurasWithInterruptFlags(auraInterruptFlagNotMounted)
-		// ResummonPetTemporaryUnSummonedIfAny: the arena pet-unstun leg has no
-		// bridge; the charm-unstun leg has no charm model.
-		s.resummonTemporaryPet(context.Background())
+	// Dismount() first — display cleared, UNIT_FLAG_MOUNT dropped,
+	// SMSG_MOVE_SET_COLLISION_HGT + SMSG_DISMOUNT (Unit::Dismount,
+	// Unit.cpp:8365-8385) — then the REAL-mode nested
+	// RemoveAurasByType(SPELL_AURA_MOUNTED) strips every remaining mounted
+	// aura with the default mode (the broomstick/Headless-Horseman
+	// anti-stuck leg). The flag/display gate is Dismount's `if
+	// (!IsMounted()) return;` early return, so the packets fire at most
+	// once per dismount and the nested strip terminates.
+	if wasMounted && s.player != nil {
+		if s.player.UnitFlags&unitFlagMount != 0 || s.player.MountDisplayID != 0 {
+			s.player.MountDisplayID = 0
+			s.sendPlayerMountUpdate()
+			s.sendPlayerCollisionHeight()
+			s.sendPlayerDismount()
+			// Unit::Dismount's RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_MOUNTED)
+			// runs after the SMSG_DISMOUNT broadcast, matching this placement.
+			s.removeAurasWithInterruptFlags(auraInterruptFlagNotMounted)
+			// ResummonPetTemporaryUnSummonedIfAny: the arena pet-unstun leg has no
+			// bridge; the charm-unstun leg has no charm model.
+			s.resummonTemporaryPet(context.Background())
+		}
+		for _, a := range s.loadedAuras() {
+			if a != nil && !a.Stopped && a.AuraType == spellAuraMounted {
+				s.removeAura(a.SpellID)
+			}
+		}
 	}
 	if (wasTransform || wasShapeshift) && s.player != nil {
 		s.refreshTransformDisplay(context.Background())
@@ -29755,15 +29796,12 @@ func (s *session) handleCancelMountAura(payload []byte) bool {
 	for _, aura := range s.loadedAuras() {
 		// WorldSession::HandleCancelMountAuraOpcode (SpellHandler.cpp:544):
 		// RemoveAurasByType(MOUNTED) with the voluntary-cancel predicate.
+		// The dismount visuals ride the removeAura mounted-aura remove leg
+		// (Unit::Dismount, Unit.cpp:8365); the nested all-mounted-auras
+		// strip there covers the broomstick/Headless-Horseman case.
 		if aura != nil && aura.AuraType == spellAuraMounted && s.cancelAuraRemovable(aura.SpellID) {
 			s.removeAura(aura.SpellID)
 		}
-	}
-	if s.player.MountDisplayID != 0 {
-		s.player.MountDisplayID = 0
-		s.sendPlayerMountUpdate()
-		s.sendPlayerCollisionHeight()
-		s.sendPlayerDismount()
 	}
 	return true
 }
@@ -29771,15 +29809,17 @@ func (s *session) handleCancelMountAura(payload []byte) bool {
 // handleCancelGrowthAura processes CMSG_CANCEL_GROWTH_AURA (0x29B).
 // Reference: WorldSession::HandleCancelGrowthAuraOpcode (SpellHandler.cpp:535).
 // C++ removes all SPELL_AURA_MOD_SCALE auras with the voluntary-cancel
-// predicate; Go has no MOD_SCALE aura application model (no such aura rows
-// ever exist), so resetting the tracked scale is the whole arm.
+// predicate (RemoveAura default mode); the visible scale is folded live
+// from the remaining 61/239 auras (auraObjectScale), and removeAura's tail
+// sends the player update, so no explicit scale write is needed.
 func (s *session) handleCancelGrowthAura(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	if s.scale != 1.0 {
-		s.scale = 1.0
-		s.sendPlayerUpdate()
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && aura.AuraType == spellAuraModScale && s.cancelAuraRemovable(aura.SpellID) {
+			s.removeAura(aura.SpellID)
+		}
 	}
 	return true
 }
