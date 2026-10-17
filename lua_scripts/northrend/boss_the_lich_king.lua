@@ -126,7 +126,9 @@
 -- NOT registered: Talk(SAY_TIRION_INTRO_1 0) rides DoAction
 -- ACTION_CONTINUE_INTRO (no-DoAction bridge); Talk(SAY_TIRION_INTRO_2
 -- 1) (EVENT_INTRO_TALK_1) and Talk(SAY_TIRION_OUTRO_1 2)
--- (EVENT_OUTRO_TALK_1) are scheduler-driven (no-timer-bridge); the
+-- (EVENT_OUTRO_TALK_1) are scheduler-driven on the PHASE_INTRO /
+-- PHASE_OUTRO machines (CreateLuaEvent exists, but the unbridged
+-- phase/machine drivers gate them — gothik counterpoint); the
 -- OnGossipSelect intro kick, MovementInform, and SpellHit legs have no
 -- bridges (the bronjahm npc_corrupted_soul_fragment precedent).
 -- npc_terenas_menethil (NPC_TERENAS_MENETHIL_FROSTMOURNE 36823,
@@ -134,14 +136,26 @@
 -- Talk(SAY_TERENAS_INTRO_1..3 0..2) (EVENT_FROSTMOURNE_TALK_1..3,
 -- DoAction ACTION_FROSTMOURNE_INTRO scheduler) and
 -- Talk(SAY_TERENAS_OUTRO_1..2 0..1) (EVENT_OUTRO_TERENAS_TALK_1..2,
--- IsSummonedBy scheduler) — no-DoAction + no-timer bridges.
--- PORTED (2026-10-13 retraction re-audit): npc_shambling_horror_icc
+-- IsSummonedBy scheduler) — no-DoAction bridge; the timer bridge
+-- exists but the phase/DoAction/summon-machine drivers gate every arm
+-- (gothik counterpoint).
+-- PORTED (2026-10-17 timer re-sweep; in-house spot-verified vs C++
+-- :1308-1313 + runtime before applying; delegated audit reconciled):
+-- npc_shambling_horror_icc's heroic-only DamageTaken frenzy latch —
+-- the "no difficulty bridge" header claim was STALE (IsHeroic is
+-- bridged, lua_creature_events.go:203; event 9 DamageTaken fires
+-- pre-application with attacker+damage, lua_creature_events.go:303).
+-- HealthBelowPctDamaged(20, damage) ≡ post-damage health below
+-- floor(maxHealth*20/100) (algalon precedent); the _frenzied latch
+-- never clears (ctor-only init, Reset doesn't touch it) so the
+-- GUID-keyed table is never cleared — not in the leave-combat or
+-- reset handlers. No damage return needed.
 -- (37698) — SHOCKWAVE 72149 self-cast {20s,25s} init/re-arm
 -- (:1303/:1331-1332); ENRAGE 72143 self-cast {11s,14s}/{20s,25s}
 -- (:1304/:1335-1337 — the 1s cast-fail recheck leg is unmodelable,
--- documented); the heroic-only DamageTaken frenzy latch (:1308-1313,
--- SPELL_FRENZY 28747 triggered at HealthBelowPctDamaged(20)) stays
--- parked — no difficulty bridge (the tharon_ja heroic-59228 precedent);
+-- documented); the heroic-only DamageTaken frenzy latch
+-- (:1308-1313, SPELL_FRENZY 28747 triggered at
+-- HealthBelowPctDamaged(20))
 -- npc_raging_spirit (36701) — SOUL_SHRIEK 69242 DoCastAOE
 -- {12s,15s} init/re-arm, modeled as self-cast (the DoCastAOE
 -- self-cast convention :1367/:1420-1421) + Reset one-shots
@@ -196,6 +210,7 @@ local SAY_LK_BERSERK = 11
 local SPELL_BERSERK2 = 47008
 local SPELL_HORROR_SHOCKWAVE = 72149
 local SPELL_HORROR_ENRAGE = 72143
+local SPELL_HORROR_FRENZY = 28747
 local SPELL_SOUL_SHRIEK = 69242
 local SPELL_PLAGUE_AVOIDANCE = 72846
 local SPELL_RAGING_SPIRIT_VISUAL = 69197
@@ -299,6 +314,31 @@ local function shamblingHorrorLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_shambling_horror_icc DamageTaken (:1308-1313): first time,
+-- heroic only, when post-damage health drops below 20% of max,
+-- latch and DoCastSelf(SPELL_FRENZY 28747, true). The latch is
+-- ctor-only — never cleared, so the GUID-keyed table survives
+-- leave-combat/reset (algalon threshold+latch precedent).
+local horrorFrenzied = {}
+
+local function shamblingHorrorDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if horrorFrenzied[guid] then
+        return
+    end
+    if not creature:IsHeroic() then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 20 / 100) then
+        horrorFrenzied[guid] = true
+        creature:CastSpell(creature, SPELL_HORROR_FRENZY, true)
+    end
+end
+
 -- C++ npc_raging_spirit: Reset — DoCastSelf(SPELL_PLAGUE_AVOIDANCE,
 -- true) + DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL, true) +
 -- DoCastSelf(SPELL_BOSS_HITTIN_YA 73878, true) one-shots,
@@ -348,6 +388,7 @@ end
 
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 1, shamblingHorrorJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 2, shamblingHorrorLeaveCombat)
+RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 9, shamblingHorrorDamageTaken)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 23, shamblingHorrorLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 1, ragingSpiritJustEngagedWith)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 2, ragingSpiritLeaveCombat)
