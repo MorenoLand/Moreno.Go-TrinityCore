@@ -1862,11 +1862,13 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	var mapID uint32
 	var ownerGUID uint64
 	var fishingHandled bool
+	var goType uint8
 	removed := false
 	if dyn, ok := s.dynamicGameObjects[guid]; ok && dyn != nil {
 		mapID = dyn.Map
 		ownerGUID = dyn.OwnerGUID
 		fishingHandled = dyn.FishingHandled
+		goType = dyn.Type
 		removed = true
 		if dyn.AutoCloseTimer != nil {
 			dyn.AutoCloseTimer.Stop()
@@ -1878,7 +1880,9 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	}
 	s.objectsMu.Unlock()
 
-	if ownerGUID != 0 && !fishingHandled {
+	// SMSG_FISH_ESCAPED is the FISHINGNODE bite-timeout arm only
+	// (GameObject.cpp:577-592), like the instance despawn twin below.
+	if goType == GameObjectTypeFishingNode && ownerGUID != 0 && !fishingHandled {
 		if owner := s.findSessionByGUID(ownerGUID); owner != nil {
 			_ = owner.write(uint16(protocol.OpcodeSMSG_FISH_ESCAPED), nil, true)
 		}

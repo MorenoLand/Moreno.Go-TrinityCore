@@ -514,7 +514,11 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 			}
 		}
 	}
-	if state.OwnerGUID != 0 && !state.FishingHandled {
+	// SMSG_FISH_ESCAPED fires only for fishing bobbers, on the uncaught
+	// bite-timeout arm (GameObject.cpp:577-592: FISHINGNODE with the owner
+	// link still live and the catch never handled) — never for other owned
+	// runtime GOs (rituals, slot summons).
+	if state.Type == GameObjectTypeFishingNode && state.OwnerGUID != 0 && !state.FishingHandled {
 		if owner := s.findSessionByGUID(state.OwnerGUID); owner != nil {
 			_ = owner.write(uint16(protocol.OpcodeSMSG_FISH_ESCAPED), nil, true)
 		}

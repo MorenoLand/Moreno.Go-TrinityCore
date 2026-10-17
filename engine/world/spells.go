@@ -4592,6 +4592,29 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	if goGUID == 0 {
 		return
 	}
+	entry := uint32((goGUID >> 24) & 0xFFFFFF)
+	lowGUID := uint32(goGUID & 0x00FFFFFF)
+	goState, _ := s.server.getOrLoadGameObjectState(ctx, goGUID, lowGUID, entry, s.player.Map, s.player.InstanceID)
+	var goType uint8
+	haveType := false
+	if goState != nil {
+		goType, haveType = goState.Type, true
+	} else if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var t int64
+		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+			"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&t); err == nil {
+			goType, haveType = uint8(t), true
+		}
+	}
+	goTpl := s.loadGameObjectTemplateData(ctx, entry)
+	// Spell::EffectOpenLock head gate (SpellEffects.cpp:1969): a GO whose
+	// template CannotBeUsedUnderImmunity matches cannot be opened while the
+	// caster is immune (UNIT_FLAG_IMMUNE) — silent return before the BG
+	// arms, the lock check, SendLoot and the skill-up leg. Immunity itself
+	// rides the live-aura twin like the CMSG path (gameobjects.go).
+	if haveType && goCannotBeUsedUnderImmunity(goType, goTpl) && s.isTotalImmune() {
+		return
+	}
 	// Spell::EffectOpenLock skill-up leg (SpellEffects.cpp:2038-2056): a
 	// successful non-item cast grows the lock's gathering skill once per
 	// GO per player — the GO's m_SkillupList (GameObject.h:190-199). The
@@ -4625,31 +4648,14 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	// SPELL_FOCUS linked-trap arm and the CHEST eventId/linked-trap arms have
 	// no Go trap or event-script model (documented); chests fall through to
 	// the loot window like C++.
-	entry := uint32((goGUID >> 24) & 0xFFFFFF)
-	lowGUID := uint32(goGUID & 0x00FFFFFF)
-	goState, _ := s.server.getOrLoadGameObjectState(ctx, goGUID, lowGUID, entry, s.player.Map, s.player.InstanceID)
-	var goType uint8
-	haveType := false
-	if goState != nil {
-		goType, haveType = goState.Type, true
-	} else if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var t int64
-		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
-			"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&t); err == nil {
-			goType, haveType = uint8(t), true
-		}
-	}
 	if haveType && goType == GameObjectTypeGoober && goState != nil {
 		// The goober special case calls the full GameObject::Use
-		// (SpellEffects.cpp:1891-1895), so its head arms run here too:
-		// CannotBeUsedUnderImmunity, the mounted dismount and
-		// PlayerTalkClass->ClearMenus (GameObject.cpp:1491-1505) before
-		// the gossip-hello hook and the template-cooldown gate, like
-		// the CMSG_GAMEOBJ_USE path.
-		goTpl := s.loadGameObjectTemplateData(ctx, entry)
-		if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.isTotalImmune() {
-			return
-		}
+		// (SpellEffects.cpp:1891-1895), so its head arms run here too —
+		// the CannotBeUsedUnderImmunity arm already fired at the
+		// EffectOpenLock head gate above (SpellEffects.cpp:1969); the
+		// mounted dismount and PlayerTalkClass->ClearMenus
+		// (GameObject.cpp:1491-1505) run before the gossip-hello hook
+		// and the template-cooldown gate, like the CMSG_GAMEOBJ_USE path.
 		if !goIsUsableMounted(goState.Type, goTpl) {
 			s.removeAurasByType(spellAuraMounted)
 		}
@@ -32926,7 +32932,7 @@ func (s *session) handleEffectSummonObject(ctx context.Context, spell wotlk.Spel
 		z = s.player.Z
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
-	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, SpellID: spell.ID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: uint8(goType), DisplayID: uint32(displayID), Size: float32(size), ParentRotation: [4]float32{0, 0, 0, 1}, Faction: s.server.raceFaction(s.player.Race), IsRuntimeSpawn: true}
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spell.ID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: uint8(goType), DisplayID: uint32(displayID), Size: float32(size), ParentRotation: [4]float32{0, 0, 0, 1}, Faction: s.server.raceFaction(s.player.Race), IsRuntimeSpawn: true} // OwnerGUID: Unit::AddGameObject (Unit.cpp:5208-5213)
 	// GameObject::SetRespawnTime(duration/IN_MILLISECONDS)
 	// (SpellEffects.cpp:4257): the object's lifetime is the spell duration; a
 	// non-positive duration leaves it persistent like C++.
