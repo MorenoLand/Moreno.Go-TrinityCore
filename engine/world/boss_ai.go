@@ -2365,9 +2365,40 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 		owner.onCreatureKilled(ctx, killedTarget, m)
 		return
 	}
-	// No charmer/owner player: the minimal death registration. Unit::Kill
-	// fires the death-aura strip (Unit.cpp:11320) ahead of the hooks even
-	// here.
+	// No charmer/owner player: the minimal death registration. Unit::Kill's
+	// KILL/KILLED/DEATH proc loops (Unit.cpp:11257-11279) fire first, while
+	// the victim's auras are still present — "Proc auras on death - must be
+	// before aura/combat remove" — then the death-aura strip (Unit.cpp:11320)
+	// runs ahead of the hooks. The KILL leg runs on the attacker's auras and
+	// the KILLED leg on the victim's, both gated on the victim not being a
+	// critter; the DEATH leg is unconditional. The pet/totem-owner arm
+	// (Unit.cpp:11257-11263) is vacuous here: a no-owner attacker has no
+	// player owner unit, and a creature-owned pet/totem has no Go owner
+	// motion to proc — kill.go's owner-path arm covers the player-owned
+	// case, and the pet's own aura leg stays unmodeled there too.
+	if tm.CreatureType != creatureTypeCritter {
+		s.fireCreatureMeleeAuraProcs(ctx, m, tm.GUID, procEventInfo{
+			typeMask:       procFlagKill,
+			spellTypeMask:  procSpellTypeMaskAll,
+			spellPhaseMask: procSpellPhaseNone,
+			hitMask:        procHitNone,
+			actorGUID:      m.GUID,
+		})
+		s.fireCreatureMeleeAuraProcs(ctx, tm, m.GUID, procEventInfo{
+			typeMask:       procFlagKilled,
+			spellTypeMask:  procSpellTypeMaskAll,
+			spellPhaseMask: procSpellPhaseNone,
+			hitMask:        procHitNone,
+			actorGUID:      tm.GUID,
+		})
+	}
+	s.fireCreatureMeleeAuraProcs(ctx, tm, tm.GUID, procEventInfo{
+		typeMask:       procFlagDeath,
+		spellTypeMask:  procSpellTypeMaskAll,
+		spellPhaseMask: procSpellPhaseNone,
+		hitMask:        procHitNone,
+		actorGUID:      tm.GUID,
+	})
 	deathKey := creatureAuraKeyForMotion(tm)
 	s.auraMu.Lock()
 	var deathAuras []*activeAura
