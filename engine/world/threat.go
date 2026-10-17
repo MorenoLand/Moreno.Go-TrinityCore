@@ -1321,8 +1321,15 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 // Formula mirrors TrinityCore Unit::SendHealSpellLog and Unit::DoAttack (Unit.cpp:6550-6580):
 // Base threat = effectiveHeal * 0.5 * healerThreatMultiplier.
 // Threat is divided equally by the number of engaged creatures.
-func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, targetGUID uint64, effectiveHeal uint32, ignoreModifiers bool) {
+func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, targetGUID uint64, effectiveHeal uint32, ignoreModifiers bool, spellID uint32) {
 	if s == nil || healerGUID == 0 || effectiveHeal == 0 {
+		return
+	}
+
+	// ThreatManager::ForwardThreatForAssistingMe step 1
+	// (ThreatManager.cpp:664-665): a SPELL_ATTR1_NO_THREAT spell generates no
+	// assist threat at all.
+	if spellHasNoThreatAttr(s.Data, spellID) {
 		return
 	}
 
@@ -1357,8 +1364,15 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 // distribution for a creature healer (SpellAuraEffects.cpp:5411-5412 fires for
 // creature casters too). Creature healers carry no healing-threat-multiplier
 // model, so the factor is 1.0 and there is no in-combat flag leg.
-func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, instanceID uint32, healerGUID, targetGUID uint64, effectiveHeal uint32) {
+func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, instanceID uint32, healerGUID, targetGUID uint64, effectiveHeal uint32, spellID uint32) {
 	if s == nil || healerGUID == 0 || effectiveHeal == 0 {
+		return
+	}
+
+	// ThreatManager::ForwardThreatForAssistingMe step 1
+	// (ThreatManager.cpp:664-665): a SPELL_ATTR1_NO_THREAT spell generates no
+	// assist threat at all.
+	if spellHasNoThreatAttr(s.Data, spellID) {
 		return
 	}
 	s.motionMu.Lock()

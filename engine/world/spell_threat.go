@@ -315,6 +315,37 @@ func spellSuppressesInitialThreat(spell wotlk.Spell) bool {
 	return false
 }
 
+// spellHasNoThreatAttr mirrors the ThreatManager::ForwardThreatForAssistingMe
+// step-1 shortcut (ThreatManager.cpp:664-665): a SPELL_ATTR1_NO_THREAT spell
+// generates no assist threat at all. A missing spell record degrades to
+// "has threat" — C++ always has the SpellInfo at these call sites.
+func spellHasNoThreatAttr(data *wotlk.Store, spellID uint32) bool {
+	if data == nil || spellID == 0 {
+		return false
+	}
+	sp, found, err := data.Spell(spellID)
+	if err != nil || !found {
+		return false
+	}
+	return sp.AttributesEx&spellAttr1NoThreat != 0
+}
+
+// unitInCombatLocked reports whether the unit is in combat: the motionMu-held
+// variant of creatureSpellTargetInCombat (boss_ai.go) for callers that already
+// hold the lock. Caller holds motionMu; findSessionByGUID takes sessionsMu,
+// which follows the same motionMu -> sessionsMu ordering the threat forwards
+// below already use.
+func (s *Server) unitInCombatLocked(mapID, instanceID uint32, guid uint64) bool {
+	if s == nil {
+		return false
+	}
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return ts.attackTarget != 0 || ts.player.UnitFlags&unitFlagInCombat != 0
+	}
+	motion := s.findCreatureMotionLocked(mapID, instanceID, guid)
+	return motion != nil && motion.InCombat
+}
+
 // handleSpellInitialThreat mirrors Spell::HandleThreatSpells (Spell.cpp:5096-5151).
 // Every cast with initial aggro adds spell_threat-row threat
 // (flatMod + apPctMod * base attack power) or, without a row, the spell's
@@ -359,7 +390,33 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	} else if !spellSuppressesInitialThreat(spell) {
 		threat += float32(spell.SpellLevel)
 	}
+	positive := !isHarmfulSpell(spell)
 	if threat == 0 {
+		// Spell::TargetInfo::DoTargetSpellHit (Spell.cpp:2762-2766): the
+		// friendly-assist arm fires even when the computed initial threat is
+		// zero — a 0.0f ForwardThreatForAssistingMe with ignoreModifiers=true
+		// and a null spell on each in-combat friendly hit target. The zero
+		// add still creates the threat refs and engages the target's
+		// attackers with the caster (ThreatManager.cpp:379-410); negative
+		// spells have no such arm (the C++ zero leg is friendly-only), and
+		// HandleThreatSpells itself returns early on zero threat for both
+		// signs (Spell.cpp:5119-5120). m_originalCaster is the caster for a
+		// direct player cast (Spell.cpp:570-576), which is the session player
+		// here. Missed targets are not covered: the arm lives in
+		// DoTargetSpellHit, which only runs for hits.
+		if positive {
+			s.server.motionMu.Lock()
+			for _, targetGUID := range hitTargets {
+				if targetGUID == 0 {
+					continue
+				}
+				if !s.server.unitInCombatLocked(s.player.Map, s.player.InstanceID, targetGUID) {
+					continue
+				}
+				s.forwardInitialAssistThreatLocked(0, targetGUID)
+			}
+			s.server.motionMu.Unlock()
+		}
 		return
 	}
 	// Spell.cpp:5123: the defined bonus is distributed among all unique
@@ -369,8 +426,6 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 		return
 	}
 	threat /= float32(totalTargets)
-
-	positive := !isHarmfulSpell(spell)
 	// The positive path runs through ForwardThreatForAssistingMe without
 	// ignoreModifiers, so each recipient's AddThreat folds
 	// ThreatManager::CalculateModifiedThreat (ThreatManager.cpp:606-659):
@@ -461,6 +516,87 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	}
 	motion.InCombat = true
 	motion.Moving = true
+}
+
+// addDrainGainThreat runs the HandlePeriodicManaLeechAuraTick gain arm
+// (SpellAuraEffects.cpp:5489-5491): target->GetThreatManager().AddThreat(
+// caster, gainedAmount * 0.5f, GetSpellInfo(), true) — a direct add on the
+// drain victim's own threat list crediting the drainer, not the heal-style
+// assist distribution: draining a creature makes it threaten the drainer.
+// ignoreModifiers=true skips CalculateModifiedThreat; ignoreRedirects stays
+// false so the caster's redirect registry consumes (splitThreatRedirects,
+// ThreatManager.cpp:347-373). Step 1 (ThreatManager.cpp:308-317): NO_THREAT
+// spells add nothing, and NO_INITIAL_AGGRO adds nothing while the victim is
+// not engaged (motion.InCombat is the engagement proxy). The vehicle leg has
+// no Go analog (no vehicle model). Victims that cannot have a threat list
+// (players included) take combat state only (ThreatManager.cpp:328-339).
+func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tickSpell wotlk.Spell, tickKnown bool, gained uint32) {
+	if s == nil || s.server == nil || s.player == nil || targetGUID == 0 || gained == 0 {
+		return
+	}
+	// ThreatManager::AddThreat step 1 (ThreatManager.cpp:308-317). tickSpell
+	// carries the DBC record when known; otherwise fall back to a store
+	// lookup on the aura's spell id.
+	noThreat, noInitialAggro := false, false
+	if tickKnown {
+		noThreat = tickSpell.AttributesEx&spellAttr1NoThreat != 0
+		noInitialAggro = tickSpell.AttributesEx3&spellAttr3NoInitialAggro != 0
+	} else if s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(auraSpellID); err == nil && found {
+			noThreat = sp.AttributesEx&spellAttr1NoThreat != 0
+			noInitialAggro = sp.AttributesEx3&spellAttr3NoInitialAggro != 0
+		}
+	}
+	if noThreat {
+		return
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+	if motion == nil {
+		s.server.motionMu.Unlock()
+		return
+	}
+	if noInitialAggro && !motion.InCombat {
+		s.server.motionMu.Unlock()
+		return
+	}
+	// ThreatManager::AddThreat's SetInCombatWith leg (ThreatManager.cpp:379):
+	// the add engages both sides. The !CanHaveThreatList() early leg
+	// (ThreatManager.cpp:328-339) takes combat state only, no threat refs.
+	if !motionCanHaveThreatList(motion) {
+		motion.InCombat = true
+		if s.player.UnitFlags&unitFlagInCombat == 0 {
+			s.player.UnitFlags |= unitFlagInCombat
+		}
+		s.server.motionMu.Unlock()
+		s.sendPlayerUpdate()
+		return
+	}
+	if motion.ThreatMgr == nil {
+		motion.ThreatMgr = NewThreatManager(motion)
+	}
+	threat := float32(gained) * 0.5
+	dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
+	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+	threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
+	switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+	if rSwitched {
+		switched, newVictim = true, rVictim
+	}
+	if switched && newVictim != motion.TargetGUID {
+		motion.TargetGUID = newVictim
+		entries := motion.ThreatMgr.SortedEntries()
+		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+	} else {
+		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
+	}
+	motion.InCombat = true
+	motion.Moving = true
+	if s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
+	}
+	s.server.motionMu.Unlock()
+	s.sendPlayerUpdate()
 }
 
 // forwardInitialAssistThreatLocked mirrors

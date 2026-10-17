@@ -703,13 +703,9 @@ func (s *session) totemHealPulseTick(ctx context.Context, def TotemDef, totem *a
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", target.player.Health, target.playerGUID)
 	}
 	if effectiveHeal > 0 {
-		noThreat := false
-		if healKnown {
-			noThreat = healSpell.AttributesEx&spellAttr1NoThreat != 0
-		}
-		if !noThreat {
-			s.server.distributeCreatureHealingThreat(ctx, totem.Map, totem.InstanceID, totem.TotemGUID, target.playerGUID, effectiveHeal)
-		}
+		// The ThreatManager.cpp:664-665 NO_THREAT shortcut is checked
+		// inside distributeCreatureHealingThreat.
+		s.server.distributeCreatureHealingThreat(ctx, totem.Map, totem.InstanceID, totem.TotemGUID, target.playerGUID, effectiveHeal, def.PulseSpell)
 	}
 	// Periodic-heal procs (SpellAuraEffects.cpp:5423-5433): %-based ticks
 	// never proc — the totem pulse is a flat heal, so that gate is vacuous.
