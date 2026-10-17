@@ -22,6 +22,11 @@
 -- EVENT_SPIT DoCastVictim(Eck Spit 55814, 10s init, 6-14s repeat),
 -- EVENT_BERSERK DoCastSelf(Eck Berserk 55816, 60-90s init,
 -- single fire — C++ does not reschedule after it fires).
+-- EVENT_SPRING DoCast(target, RAND(55815, 55837)) + 8s init / 5-10s
+-- repeat — PORTED (the 2026-10-14 "random-target SelectTarget bridge
+-- absent / cairne-kazzak precedent" verdict is retracted: randomPlayer
+-- is the in-tree bridge (anomalus spark port); the offset-1 MaxThreat
+-- skip is modeled via the GetVictim top-threat proxy).
 -- Unmodeled (no bridges — documented, not wired):
 -- The BossAI ctor Talk(EMOTE_SPAWN 0) fires at AI construction
 -- (first grid spawn); the only OnSpawn hook on the Go Lua surface
@@ -37,17 +42,14 @@
 -- _berserk = true in both), cleared by cancelTimers (C++ Initialize/
 -- Reset). The pending "berserk" per-key means the early arm is live
 -- (C++ !_berserk).
--- EVENT_SPRING — SelectTarget(Random, 1, 35.0f, true) ->
--- DoCast(target, RAND(SPELL_ECK_SPRING_1 55815,
--- SPELL_ECK_SPRING_2 55837)), 8s init, 5-10s repeat: the
--- random-target SelectTarget bridge is absent (cairne/kazzak
--- precedent), so the cast leg is unmodelable — documented-only.
 
 local ENTRY_ECK_THE_FEROCIOUS = 29932
 
 local SPELL_ECK_BITE    = 55813
 local SPELL_ECK_SPIT    = 55814
 local SPELL_ECK_BERSERK = 55816
+local SPELL_ECK_SPRING_1 = 55815
+local SPELL_ECK_SPRING_2 = 55837
 
 local timers = {}
 -- C++ _berserk bool model: true once the early-berserk DamageTaken arm
@@ -106,6 +108,48 @@ local function berserkTick(creature, guid)
     end
 end
 
+-- C++ SelectTarget(Random, 1, 35.0f, true) — random alive player on
+-- the same map/instance within 35y (keleseth / thorim / archavon
+-- GetPlayersInWorld precedent), skipping the first entry in MaxThreat
+-- order for Random (UnitAI.h:163-166); the current victim is the
+-- top-threat proxy. Only threat-listed units qualify in practice.
+local function randomNonTankPlayer(creature, maxDist)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local victimGuid = 0
+    local victim = creature:GetVictim()
+    if victim then
+        victimGuid = victim:GetGUID()
+    end
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:GetDistance(plr) <= maxDist
+                and plr:GetGUID() ~= victimGuid then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_SPRING: SelectTarget(Random, 1, 35.0f, true) ->
+-- DoCast(target, RAND(SPELL_ECK_SPRING_1, SPELL_ECK_SPRING_2)),
+-- non-triggered; 8s init, 5-10s repeat. No cast when no candidate
+-- (C++ SelectTarget returns null when the threat list is empty past
+-- the offset).
+local function springTick(creature, guid)
+    local target = randomNonTankPlayer(creature, 35)
+    if target then
+        creature:CastSpell(target, ({SPELL_ECK_SPRING_1, SPELL_ECK_SPRING_2})[math.random(1, 2)])
+    end
+    schedule(guid, "spring", math.random(5000, 10000), function()
+        springTick(creature, guid)
+    end)
+end
+
 -- C++ DamageTaken (:77-84): HealthBelowPctDamaged(20, damage) (strict
 -- below, int64(health)-damage < floor(maxHealth*20/100) — event 9
 -- fires pre-damage, so health is the C++ GetHealth() value) ->
@@ -138,6 +182,9 @@ local function eckEnterCombat(event, creature, target)
     end)
     schedule(guid, "spit", 10000, function()
         spitTick(creature, guid)
+    end)
+    schedule(guid, "spring", 8000, function()
+        springTick(creature, guid)
     end)
     schedule(guid, "berserk", math.random(60000, 90000), function()
         berserkTick(creature, guid)

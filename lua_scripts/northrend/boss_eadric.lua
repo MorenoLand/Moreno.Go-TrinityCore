@@ -35,6 +35,12 @@
 -- 16s repeat (ungated UpdateVictim arm); the
 -- spell_eadric_radiance target filter (front 2.5f / 40y cone) has
 -- no SpellScript bridge — modeled as the plain self-cast AOE.
+-- uiHammerJusticeTimer — InterruptNonMeleeSpells (unwired, no bridge)
+-- + SelectTarget(Random, 0, 250, true) -> DoCast(target, Hammer of
+-- Justice 66863) + DoCast(target, Hammer of the Righteous 66867),
+-- 25s init / 25s repeat — PORTED (the "random-target SelectTarget
+-- bridge absent / cairne-kazzak" verdict is retracted: randomPlayer
+-- is the in-tree bridge — anomalus spark port).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_eadric constructor — SetReactState(REACT_PASSIVE) +
 -- SetFlag(UNIT_FLAG_NON_ATTACKABLE) — no react-state / flag
@@ -50,11 +56,6 @@
 -- precedent).
 -- boss_eadric bDone-reset MovePoint(0, 746.87, 665.87, 411.75)
 -- leg — no motion-master bridge.
--- boss_eadric uiHammerJusticeTimer — InterruptNonMeleeSpells +
--- SelectTarget(Random, 0, 250, true) -> DoCast(Hammer of Justice
--- 66863) + DoCast(Hammer of the Righteous 66867), 25s repeat —
--- random-target SelectTarget bridge absent (cairne/kazzak
--- precedent).
 -- boss_paletress — zero registration. Constructor legs
 -- (SetReactState(REACT_PASSIVE) + SetFlag(NON_ATTACKABLE) +
 -- RestoreFaction) — no react/flag/faction bridges; Reset's
@@ -65,13 +66,18 @@
 -- bridges; DamageTaken / MovementInform — same bridges absent as
 -- boss_eadric; uiHolyFireTimer — SelectTarget(Random, 0, 250,
 -- true) -> DoCast(Holy Fire 66538), 9-12s init, 13s shielded /
--- 9-12s unshielded repeat — random-target SelectTarget bridge
--- absent; uiHolySmiteTimer — SelectTarget(Random, 0, 250, true) ->
--- DoCast(Smite 66536), 5-7s init, 9s shielded / 5-7s unshielded
--- repeat — random-target SelectTarget bridge absent; Renew
+-- 9-12s unshielded repeat; uiHolySmiteTimer — SelectTarget(Random,
+-- 0, 250, true) -> DoCast(Smite 66536), 5-7s init, 9s shielded /
+-- 5-7s unshielded repeat — the random-target bridge now EXISTS
+-- (randomPlayer, anomalus precedent), but both timers'
+-- shielded/unshielded re-arms ride the 25%-health one-shot's Shield
+-- product (unported: SpellScript riders + InterruptNonMeleeSpells +
+-- no instance model), so porting the casts without the machine would
+-- mis-model the repeat branches; Renew
 -- machine (HasAura(SPELL_SHIELD) gate -> urand(0,1) self-cast
--- Renew 66537 / cross-AI DoCast(pMemory, Renew)) — no aura
--- bridge + cross-AI ObjectAccessor bridge absent; the 25%
+-- Renew 66537 / cross-AI DoCast(pMemory, Renew)) — the HasAura leg IS
+-- bridged (lua_objects.go:228) but the cross-AI ObjectAccessor leg is
+-- absent and Shield itself is unported (one-shot machine); the 25%
 -- HealthAbovePct one-shot (InterruptNonMeleeSpells +
 -- DoCastAOE(Holy Nova 66546, false) + DoCastSelf(Shield 66515) +
 -- DoCastAOE(Summon Memory 66545, false) + DoCastAOE(Confess
@@ -94,8 +100,9 @@
 -- 66552), 7s init, 7s repeat; uiOldWoundsTimer —
 -- SelectTarget(Random, 0) -> DoCast(Old Wounds 66620), 12s
 -- repeat; uiShadowPastTimer — SelectTarget(Random, 1) ->
--- DoCast(Shadows Past 66619), 5s repeat — random-target
--- SelectTarget bridge absent. JustDied cross-AI leg
+-- DoCast(Shadows Past 66619), 5s repeat — the random-target bridge
+-- now EXISTS (randomPlayer) but npc_memory has zero registration
+-- (entry-unverifiable). JustDied cross-AI leg
 -- (ToTempSummon()->GetSummonerUnit()->GetAI()->SetData(1, 0)) —
 -- no cross-AI SetData bridge (drakkari_colossus precedent).
 -- npc_argent_soldier — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
@@ -128,6 +135,8 @@ local ENTRY_EADRIC = 35119
 
 local SPELL_VENGEANCE = 66865
 local SPELL_RADIANCE = 66935
+local SPELL_HAMMER_JUSTICE = 66863
+local SPELL_HAMMER_RIGHTEOUS = 66867
 
 local timers = {}
 
@@ -173,6 +182,44 @@ local function radianceTick(creature, guid)
     end)
 end
 
+-- C++ SelectTarget(Random, 0, 250, true) — random alive player on the
+-- same map/instance within 250y (keleseth / thorim / archavon
+-- GetPlayersInWorld precedent; the C++ target->IsAlive() re-check is
+-- subsumed by the alive filter). Only threat-listed units qualify in
+-- practice.
+local function randomPlayer(creature, maxDist)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:GetDistance(plr) <= maxDist then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ uiHammerJusticeTimer: InterruptNonMeleeSpells (no interrupt
+-- bridge — maiden precedent, documented unwired) + SelectTarget ->
+-- DoCast(target, Hammer of Justice 66863) + DoCast(target, Hammer of
+-- the Righteous 66867), non-triggered; 25s init, 25s repeat. No cast
+-- when no candidate (C++ SelectTarget returns null on an empty
+-- threat list).
+local function hammerJusticeTick(creature, guid)
+    local target = randomPlayer(creature, 250)
+    if target then
+        creature:CastSpell(target, SPELL_HAMMER_JUSTICE)
+        creature:CastSpell(target, SPELL_HAMMER_RIGHTEOUS)
+    end
+    schedule(guid, "hammer", 25000, function()
+        hammerJusticeTick(creature, guid)
+    end)
+end
+
 local function eadricEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -181,6 +228,9 @@ local function eadricEnterCombat(event, creature, target)
     end)
     schedule(guid, "radiance", 16000, function()
         radianceTick(creature, guid)
+    end)
+    schedule(guid, "hammer", 25000, function()
+        hammerJusticeTick(creature, guid)
     end)
 end
 
