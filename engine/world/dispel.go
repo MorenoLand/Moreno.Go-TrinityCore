@@ -385,6 +385,22 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 	if s.server == nil || s.player == nil {
 		return nil
 	}
+
+	// Unit::GetDispellableAuraList (Unit.cpp:4608-4612): the positivity gate
+	// keys on unitTarget->IsFriendlyTo(m_caster) — the full faction-template
+	// reaction, not just the own-pet carve-out. A friendly non-pet creature
+	// (e.g. a quest NPC) must have its debuffs stripped, not its buffs; the
+	// old pet-only heuristic inverted the gate for every other friendly
+	// creature. The pet-caster twin rides the owner's faction template
+	// (pets inherit it, like the session-side isFriendlyToTarget model).
+	// Computed ahead of auraMu: findCreatureMotion takes motionMu.
+	isFriendly := false
+	if s.player.PetGUID != 0 && s.player.PetGUID == creatureGUID {
+		isFriendly = true
+	} else if motion := s.findCreatureMotion(creatureGUID); motion != nil {
+		caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+		isFriendly = s.server.isFriendlyFaction(motion.Faction, caster)
+	}
 	s.server.auraMu.Lock()
 
 	auras := s.server.activeCreatureAuras[creatureAuraKeyForPlayer(*s.player, creatureGUID)]
@@ -400,11 +416,6 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 		if blight, ok := auras[spellUnholyBlight]; ok && blight != nil && !blight.Stopped {
 			dispelMask &^= (1 << DispelDisease)
 		}
-	}
-
-	isFriendly := false
-	if s.player != nil && s.player.PetGUID != 0 && s.player.PetGUID == creatureGUID {
-		isFriendly = true
 	}
 
 	// The per-aura dispel chance (Aura::CalcDispelChance) folds the aura
