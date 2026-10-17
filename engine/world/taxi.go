@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -500,7 +501,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 		}
 		nodes = []uint32{sourceNode, destNode}
 	}
-	sourceNode, destNode := nodes[0], nodes[len(nodes)-1]
+	sourceNode := nodes[0]
 
 	// Player::ActivateTaxiPathTo (Player.cpp:21517-21558): the pre-flight
 	// state gates fire after the handler's interact/known-node gates, in
@@ -546,6 +547,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	// ObjectMgr::GetTaxiPath lookup); a missing hop clears the destinations
 	// and returns false with NO reply — silent, like the C++ arm.
 	var pathIDs []uint32
+	var hopPrices []uint64
 	var rawTotal uint64
 	for i := 1; i < len(nodes); i++ {
 		pathID, hopPrice, found, herr := s.server.Data.TaxiPathLinks(nodes[i-1], nodes[i])
@@ -553,6 +555,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 			return true
 		}
 		pathIDs = append(pathIDs, pathID)
+		hopPrices = append(hopPrices, uint64(hopPrice))
 		rawTotal += uint64(hopPrice)
 	}
 	// SendDoFlight mount gate (Player.cpp:21610-21616) fires BEFORE the
@@ -565,27 +568,16 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	if mount == 0 {
 		return reply(taxiErrUnspecified)
 	}
-	// Player::ActivateTaxiPathTo (Player.cpp:21624-21631): the reputation
-	// discount (GetReputationPriceDiscount, 1.0 below Friendly, -5% per rank
-	// above) applies to the summed multi-hop cost; the money gate is against
-	// the discounted total. C++ deducts the first leg at departure and each
-	// later leg on arrival (FlightPathMovementGenerator.cpp:121-122); Go has
-	// no intermediate arrival events — its single spline always runs to the
-	// final node — so the full discounted total is taken at departure. Same
-	// total for a completed flight.
+	// Player::ActivateTaxiPathTo (Player.cpp:21624-21631, 21644-21651): the
+	// reputation discount applies to the summed multi-hop cost and the money
+	// gate runs against the discounted total — but the deduction itself is
+	// per-leg: the first leg at departure, each later leg on arrival at its
+	// hop (FlightPathMovementGenerator.cpp:117-128), every leg ceiled
+	// individually (FlightPathMovementGenerator.cpp:224).
 	discount := s.reputationPriceDiscount(ctx, guid)
 	totalCost := uint32(math.Ceil(float64(rawTotal) * discount))
 	if uint64(s.player.Money) < uint64(totalCost) {
 		return reply(taxiErrNotEnoughMoney)
-	}
-	if totalCost > 0 {
-		s.player.Money -= totalCost
-		s.questMoneyChanged(ctx)
-		s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, totalCost)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-		}
-		s.sendPlayerMoneyUpdate()
 	}
 	// Player::ActivateTaxiPathTo (Player.cpp:21580): the player leaves any
 	// vehicle before the flight starts — Go's exitVehicle mirrors
@@ -599,18 +591,19 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	// SendDoFlight (TaxiHandler.cpp:117-119) strips a faked death at flight
 	// start, after the ActivateTaxiPathTo money deduction.
 	s.removeFakeDeath()
-	// SendDoFlight runs the TaxiPathNode spline as a flying monster move
-	// (Flying 0x2000 | Catmullrom 0x40000 per MoveSplineFlag); C++ flies
-	// sourcepath (the FIRST hop, Player.cpp:21683) and chains the rest via
-	// path-switch events Go has no model for — the standing single-spline
-	// delta — so the first hop's path is what takes off.
+	// SendDoFlight (Player.cpp:21683): C++ merges every hop into one
+	// FlightPathMovementGenerator path (LoadPath) and chains the legs
+	// server-side via path-switch events; the client only ever sees one
+	// spline per map segment (GetPathAtMapEnd). beginTaxiFlight builds that
+	// model — including the departure deduction of the first leg.
 	previousTaxiPath := s.player.TaxiPath
-	s.player.TaxiPath = strings.Join([]string{strconv.FormatUint(uint64(s.taxiFlightMasterFaction(ctx, guid)), 10), strconv.FormatUint(uint64(sourceNode), 10), strconv.FormatUint(uint64(destNode), 10)}, " ") + " "
-	if !s.startTaxiFlight(pathIDs[0], mount) {
+	faction := s.taxiFlightMasterFaction(ctx, guid)
+	s.player.TaxiPath = formatTaxiPath(faction, nodes)
+	if !s.beginTaxiFlight(ctx, nodes, pathIDs, hopPrices, discount, faction, mount, 0, true) {
 		s.player.TaxiPath = previousTaxiPath
 	}
 	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
-	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "source", sourceNode, "dest", destNode, "cost", totalCost)
+	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "nodes", nodes, "cost", totalCost)
 	return reply(taxiErrOK)
 }
 
@@ -650,62 +643,344 @@ func (s *session) continueTaxiFlight() {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
+	// PlayerTaxi::SaveTaxiDestinationsToString: "faction n0 n1 ..."; the
+	// hop-boundary rewrites keep nodes[0] as the current source, so a relog
+	// resumes the current hop with the remaining chain intact — the C++
+	// LoadTaxiDestinationsFromString + ContinueTaxiFlight pair.
 	nodes := strings.Fields(s.player.TaxiPath)
 	if len(nodes) < 3 {
 		return
 	}
-	source, sourceErr := strconv.ParseUint(nodes[1], 10, 32)
-	destination, destinationErr := strconv.ParseUint(nodes[2], 10, 32)
-	if sourceErr != nil || destinationErr != nil {
+	faction, factionErr := strconv.ParseUint(nodes[0], 10, 32)
+	if factionErr != nil {
 		return
 	}
-	pathID, _, found, err := s.server.Data.TaxiPathLinks(uint32(source), uint32(destination))
-	if err != nil || !found {
+	nodeIDs := make([]uint32, 0, len(nodes)-1)
+	for _, token := range nodes[1:] {
+		node, nodeErr := strconv.ParseUint(token, 10, 32)
+		if nodeErr != nil {
+			return
+		}
+		nodeIDs = append(nodeIDs, uint32(node))
+	}
+	if len(nodeIDs) < 2 {
 		return
 	}
-	// Player::ContinueTaxiFlight (Player.cpp:21728) resolves the mount with
-	// the wide alternate-team lookup.
-	mount := s.taxiMountDisplayID(context.Background(), uint32(source), true)
+	var pathIDs []uint32
+	var hopPrices []uint64
+	for i := 1; i < len(nodeIDs); i++ {
+		pathID, hopPrice, found, err := s.server.Data.TaxiPathLinks(nodeIDs[i-1], nodeIDs[i])
+		if err != nil || !found || pathID == 0 {
+			return
+		}
+		pathIDs = append(pathIDs, pathID)
+		hopPrices = append(hopPrices, uint64(hopPrice))
+	}
+	// Player::ContinueTaxiFlight (Player.cpp:21720-21728) resolves the mount
+	// with the wide alternate-team lookup on the current source.
+	mount := s.taxiMountDisplayID(context.Background(), nodeIDs[0], true)
 	if mount == 0 {
 		return
 	}
-	points, err := s.server.Data.TaxiPathPoints(pathID)
+	// FlightPathMovementGenerator::LoadPath recomputes the discount from the
+	// stored flight-master faction template; the current hop was already
+	// charged before the logout, so remaining legs charge on arrival.
+	discount := s.reputationDiscountForFactionTemplate(uint32(faction))
+	points, err := s.server.Data.TaxiPathPoints(pathIDs[0])
 	if err != nil || len(points) == 0 {
 		return
 	}
-	startNode := taxiResumeStartNode(points, s.player.Map, s.player.X, s.player.Y, s.player.Z)
-	s.startTaxiFlightFrom(pathID, mount, startNode)
+	resumePt := taxiResumeStartNode(points, s.player.Map, s.player.X, s.player.Y, s.player.Z)
+	previousTaxiPath := s.player.TaxiPath
+	if !s.beginTaxiFlight(context.Background(), nodeIDs, pathIDs, hopPrices, discount, uint32(faction), mount, resumePt, false) {
+		s.player.TaxiPath = previousTaxiPath
+	}
 }
 
-// startTaxiFlight mounts the player and broadcasts the taxi spline.
-func (s *session) startTaxiFlight(pathID, mountDisplay uint32) bool {
-	return s.startTaxiFlightFrom(pathID, mountDisplay, 0)
+// taxiSplineIDSource hands out SMSG_MONSTER_MOVE spline ids; the client
+// echoes the id in CMSG_MOVE_SPLINE_DONE so the ack can be matched to the
+// flight segment it closes.
+var taxiSplineIDSource uint32
+
+// taxiHop is one resolved node-pair leg of a taxi flight. It mirrors a
+// FlightPathMovementGenerator::_pointsForPathSwitch entry
+// (FlightPathMovementGenerator.cpp:224): the raw (pre-discount) hop price
+// plus the merged-spline bookkeeping LoadPath builds around it.
+type taxiHop struct {
+	pathID   uint32
+	rawPrice uint64
+	endDist  float64 // cumulative merged-spline distance at this hop's last vertex
+	endPt    int     // merged-point index of this hop's last vertex
 }
 
-func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int) bool {
-	points, err := s.server.Data.TaxiPathPoints(pathID)
-	if err != nil || len(points) == 0 {
+// taxiSegment is one map-uniform run of the merged spline: the C++
+// GetPathAtMapEnd() slice (FlightPathMovementGenerator.cpp:184-196). Each
+// segment gets its own client spline; the client acks each with
+// CMSG_MOVE_SPLINE_DONE and the server far-teleports between segments
+// (HandleMoveSplineDoneOpcode, TaxiHandler.cpp:214-233).
+type taxiSegment struct {
+	startPt, endPt int // [startPt, endPt) into taxiFlight.points
+}
+
+// taxiFlight is the live multi-hop flight model: the C++ m_taxi destination
+// deque (nodes) plus the merged FlightPathMovementGenerator path (points).
+type taxiFlight struct {
+	faction   uint32
+	mount     uint32
+	discount  float64
+	nodes     []uint32 // remaining destinations; nodes[0] is the current source
+	hops      []taxiHop
+	points    []wotlk.TaxiSplinePoint
+	cumDist   []float64 // cumDist[i] = flight distance from takeoff to points[i]
+	segments  []taxiSegment
+	splineIDs []uint32
+	segIdx    int
+	hopIdx    int
+}
+
+// taxiDiscountedLeg mirrors the per-leg ceil in
+// FlightPathMovementGenerator::LoadPath (FlightPathMovementGenerator.cpp:224).
+func taxiDiscountedLeg(rawPrice uint64, discount float64) uint32 {
+	return uint32(math.Ceil(float64(rawPrice) * discount))
+}
+
+// formatTaxiPath mirrors PlayerTaxi::SaveTaxiDestinationsToString
+// (PlayerTaxi.cpp:151-163): "faction n0 n1 ... " with the trailing space.
+func formatTaxiPath(faction uint32, nodes []uint32) string {
+	var sb strings.Builder
+	sb.WriteString(strconv.FormatUint(uint64(faction), 10))
+	for _, n := range nodes {
+		sb.WriteByte(' ')
+		sb.WriteString(strconv.FormatUint(uint64(n), 10))
+	}
+	sb.WriteByte(' ')
+	return sb.String()
+}
+
+// mergeTaxiHopPoints concatenates each hop's TaxiPathNode vertices into one
+// spline — the Go twin of FlightPathMovementGenerator::LoadPath's merged
+// _path (FlightPathMovementGenerator.cpp:196-222). LoadPath shortens the
+// merged path with a 40-yard (X/Y, same-map) proximity rule; the observable
+// effect at hop joints is that the shared flightmaster node collapses to a
+// single vertex, which the dedup below reproduces. It also returns each
+// hop's end vertex index (the _pointsForPathSwitch PathIndex) and the
+// cumulative flight distance at every vertex for arrival timing.
+func mergeTaxiHopPoints(store *wotlk.Store, pathIDs []uint32, startX, startY, startZ float32) ([]wotlk.TaxiSplinePoint, []int, []float64, bool) {
+	var points []wotlk.TaxiSplinePoint
+	endPts := make([]int, 0, len(pathIDs))
+	for i, pathID := range pathIDs {
+		pts, err := store.TaxiPathPoints(pathID)
+		if err != nil || len(pts) == 0 {
+			return nil, nil, nil, false
+		}
+		start := 0
+		if i > 0 && len(points) > 0 {
+			tail := points[len(points)-1]
+			for start < len(pts)-1 {
+				dx := pts[start].X - tail.X
+				dy := pts[start].Y - tail.Y
+				if pts[start].MapID != tail.MapID || dx*dx+dy*dy > 40*40 {
+					break
+				}
+				start++
+			}
+		}
+		points = append(points, pts[start:]...)
+		endPts = append(endPts, len(points)-1)
+	}
+	cumDist := make([]float64, len(points))
+	prevX, prevY, prevZ := startX, startY, startZ
+	for i, p := range points {
+		dx := float64(p.X - prevX)
+		dy := float64(p.Y - prevY)
+		dz := float64(p.Z - prevZ)
+		d := math.Sqrt(dx*dx + dy*dy + dz*dz)
+		if i == 0 {
+			cumDist[0] = d
+		} else {
+			cumDist[i] = cumDist[i-1] + d
+		}
+		prevX, prevY, prevZ = p.X, p.Y, p.Z
+	}
+	return points, endPts, cumDist, true
+}
+
+// validTaxiFlight reports whether f is still the session's live flight.
+func (s *session) validTaxiFlight(f *taxiFlight) bool {
+	s.taxiMu.Lock()
+	defer s.taxiMu.Unlock()
+	return f != nil && s.taxiFlight == f && s.inFlight && s.player != nil
+}
+
+// currentTaxiFlight returns the live flight, if any.
+func (s *session) currentTaxiFlight() *taxiFlight {
+	s.taxiMu.Lock()
+	defer s.taxiMu.Unlock()
+	if !s.inFlight {
+		return nil
+	}
+	return s.taxiFlight
+}
+
+// chargeTaxiLegAmount deducts one hop's price: the C++ ModifyMoney(-cost)
+// (Player.cpp:21668, FlightPathMovementGenerator.cpp:121-122), which clamps
+// at zero instead of failing — the departure gate already ran.
+func (s *session) chargeTaxiLegAmount(ctx context.Context, cost uint32) {
+	if cost == 0 || s == nil || s.player == nil {
+		return
+	}
+	if s.player.Money < cost {
+		s.player.Money = 0
+	} else {
+		s.player.Money -= cost
+	}
+	s.questMoneyChanged(ctx)
+	s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, cost)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	}
+	s.sendPlayerMoneyUpdate()
+}
+
+// beginTaxiFlight starts (or resumes) a multi-hop taxi flight: the Go twin of
+// Player::ActivateTaxiPathTo's DO FLIGHT arm plus
+// FlightPathMovementGenerator::LoadPath/DoReset. nodes[0] is the current
+// source; prices[i] is the raw hop price for nodes[i]->nodes[i+1]. resumePt
+// trims that many merged vertices (Player::ContinueTaxiFlight's startNode
+// search); chargeFirstHop mirrors the departure firstcost deduction (false
+// on the ContinueTaxiFlight path, whose current hop was already charged).
+func (s *session) beginTaxiFlight(ctx context.Context, nodes []uint32, pathIDs []uint32, prices []uint64, discount float64, faction, mount uint32, resumePt int, chargeFirstHop bool) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || len(nodes) < 2 || len(pathIDs) != len(nodes)-1 || len(prices) != len(pathIDs) {
 		return false
 	}
-	if startNode > 0 && startNode < len(points) {
-		points = points[startNode:]
+	points, endPts, cumDist, ok := mergeTaxiHopPoints(s.server.Data, pathIDs, s.player.X, s.player.Y, s.player.Z)
+	if !ok || len(points) == 0 {
+		return false
 	}
-	if mountDisplay != 0 {
-		s.player.MountDisplayID = mountDisplay
+	if resumePt > 0 {
+		if resumePt >= len(points) || resumePt > endPts[0] {
+			return false
+		}
+		points = points[resumePt:]
+		for i := range endPts {
+			endPts[i] -= resumePt
+		}
+		rebased := make([]float64, len(cumDist)-resumePt)
+		for i := range rebased {
+			rebased[i] = cumDist[resumePt+i] - cumDist[resumePt]
+		}
+		cumDist = rebased
+	}
+	var segments []taxiSegment
+	segStart := 0
+	for i := 1; i < len(points); i++ {
+		if points[i].MapID != points[i-1].MapID {
+			segments = append(segments, taxiSegment{segStart, i})
+			segStart = i
+		}
+	}
+	segments = append(segments, taxiSegment{segStart, len(points)})
+	f := &taxiFlight{
+		faction:   faction,
+		mount:     mount,
+		discount:  discount,
+		nodes:     append([]uint32(nil), nodes...),
+		points:    points,
+		cumDist:   cumDist,
+		segments:  segments,
+		splineIDs: make([]uint32, len(segments)),
+	}
+	f.hops = make([]taxiHop, len(pathIDs))
+	for i := range pathIDs {
+		f.hops[i] = taxiHop{pathID: pathIDs[i], rawPrice: prices[i], endPt: endPts[i], endDist: cumDist[endPts[i]]}
+	}
+	s.taxiMu.Lock()
+	s.taxiFlight = f
+	s.inFlight = true
+	s.taxiMu.Unlock()
+	if chargeFirstHop {
+		// Player::ActivateTaxiPathTo (Player.cpp:21668): the first leg is
+		// deducted at departure; later legs on hop arrival.
+		s.chargeTaxiLegAmount(ctx, taxiDiscountedLeg(prices[0], discount))
+	}
+	return s.sendTaxiSegment(f, 0)
+}
+
+// sendTaxiSegment flies one map-uniform segment: the SMSG_MONSTER_MOVE for
+// the C++ DoReset spline slice (FlightPathMovementGenerator.cpp:93-114).
+// It pins the server position to the segment end and schedules the hop
+// arrival timers inside the segment plus the segment-end timer.
+func (s *session) sendTaxiSegment(f *taxiFlight, segIdx int) bool {
+	s.taxiMu.Lock()
+	live := s.taxiFlight == f && s.inFlight && s.player != nil && f.segIdx == segIdx && segIdx < len(f.segments)
+	hopIdx := f.hopIdx
+	s.taxiMu.Unlock()
+	if !live {
+		return false
+	}
+	seg := f.segments[segIdx]
+	pts := f.points[seg.startPt:seg.endPt]
+	if len(pts) == 0 {
+		return false
+	}
+	if f.mount != 0 {
+		s.player.MountDisplayID = f.mount
 		s.sendPlayerMountUpdate()
 	}
-	packet := protocol.NewBuffer(32 + len(points)*12)
+	splineID := atomic.AddUint32(&taxiSplineIDSource, 1)
+	s.taxiMu.Lock()
+	f.splineIDs[segIdx] = splineID
+	s.taxiMu.Unlock()
+	s.sendTaxiMonsterMove(pts, splineID)
+	last := pts[len(pts)-1]
+	s.player.X, s.player.Y, s.player.Z = last.X, last.Y, last.Z
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(),
+			"UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ? WHERE guid = ?",
+			s.player.Map, last.X, last.Y, last.Z, s.playerGUID)
+	}
+	segBase := 0.0
+	if seg.startPt > 0 {
+		segBase = f.cumDist[seg.startPt]
+	}
+	segDist := f.cumDist[seg.endPt-1] - segBase
+	if segDist <= 0 {
+		segDist = 1
+	}
+	segDuration := time.Duration(segDist/28.0*1000) * time.Millisecond
+	if segDuration < 500*time.Millisecond {
+		segDuration = 500 * time.Millisecond
+	}
+	for h := hopIdx; h < len(f.hops); h++ {
+		endPt := f.hops[h].endPt
+		if endPt < seg.startPt || endPt >= seg.endPt-1 {
+			continue
+		}
+		delay := time.Duration((f.cumDist[endPt] - segBase) / segDist * float64(segDuration))
+		hop, sg := h, segIdx
+		time.AfterFunc(delay, func() { s.onTaxiHopArrival(f, sg, hop) })
+	}
+	sg := segIdx
+	time.AfterFunc(segDuration, func() { s.onTaxiSegmentEnd(f, sg) })
+	return true
+}
+
+// sendTaxiMonsterMove broadcasts one flight spline: SMSG_MONSTER_MOVE with
+// Flying | Catmullrom (MoveSplineFlag), the C++ SendDoFlight/MoveTaxiFlight
+// spline launch (TaxiHandler.cpp:115-125, MotionMaster.cpp:983-1005).
+func (s *session) sendTaxiMonsterMove(pts []wotlk.TaxiSplinePoint, splineID uint32) {
+	packet := protocol.NewBuffer(32 + len(pts)*12)
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU8(0) // MOVEMENTFLAG2_UNK7
 	packet.WriteF32(s.player.X)
 	packet.WriteF32(s.player.Y)
 	packet.WriteF32(s.player.Z)
-	packet.WriteU32(uint32(time.Now().UnixMilli())) // SplineID
-	packet.WriteU8(0)                               // MonsterMoveNormal
-	packet.WriteU32(0x00042000)                     // Flying | Catmullrom
+	packet.WriteU32(splineID)
+	packet.WriteU8(0)           // MonsterMoveNormal
+	packet.WriteU32(0x00042000) // Flying | Catmullrom
 	total := float64(0)
 	prevX, prevY, prevZ := s.player.X, s.player.Y, s.player.Z
-	for _, point := range points {
+	for _, point := range pts {
 		total += math.Sqrt(float64((point.X-prevX)*(point.X-prevX) + (point.Y-prevY)*(point.Y-prevY) + (point.Z-prevZ)*(point.Z-prevZ)))
 		prevX, prevY, prevZ = point.X, point.Y, point.Z
 	}
@@ -717,46 +992,142 @@ func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int
 		duration = 500
 	}
 	packet.WriteU32(duration)
-	packet.WriteU32(uint32(len(points)))
-	for _, point := range points {
+	packet.WriteU32(uint32(len(pts)))
+	for _, point := range pts {
 		packet.WriteF32(point.X)
 		packet.WriteF32(point.Y)
 		packet.WriteF32(point.Z)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
-	last := points[len(points)-1]
-	s.player.X, s.player.Y, s.player.Z = last.X, last.Y, last.Z
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET position_x = ?, position_y = ?, position_z = ? WHERE guid = ?", last.X, last.Y, last.Z, s.playerGUID)
+}
+
+// onTaxiHopArrival fires when the flight reaches a hop's last vertex: the Go
+// twin of the DoUpdate path-switch pop (FlightPathMovementGenerator.cpp:117-128)
+// — NextTaxiDestination advances the deque and the next leg's price is deducted.
+func (s *session) onTaxiHopArrival(f *taxiFlight, segIdx, hop int) {
+	s.taxiMu.Lock()
+	if s.taxiFlight != f || !s.inFlight || s.player == nil || f.segIdx != segIdx || f.hopIdx != hop || hop+1 >= len(f.hops) {
+		s.taxiMu.Unlock()
+		return
 	}
-	s.inFlight = true
-	// Dismount when the flight window elapses.
-	taxiPath := s.player.TaxiPath
-	time.AfterFunc(time.Duration(duration)*time.Millisecond, func() {
-		s.inFlight = false
-		if s.player != nil && s.player.TaxiPath == taxiPath {
-			s.player.TaxiPath = ""
-		}
-		// HandleMoveSplineDoneOpcode (TaxiHandler.cpp:241-247): on taxi
-		// arrival the fall info resets and a hostile-zone landing earns
-		// Honorless Target (2479, triggered). The zone state refreshes here
-		// because Go pins the arrival position at flight start and the client
-		// sends no movement mid-flight, so s.pvpHostile would otherwise be
-		// stale from the departure zone.
-		if s.player != nil {
-			s.updateZoneAndArea(context.Background(), true)
-			s.lastFallZ, s.lastFallTime = s.player.Z, 0
-			if s.pvpHostile {
-				s.castSpellDirect(context.Background(), 2479, s.playerGUID)
-			}
-		}
-		if s.currentPlayer() != nil {
-			s.player.MountDisplayID = 0
-			s.sendPlayerMountUpdate()
-		}
-		s.clearTaxiBenchmarkMode()
-	})
+	next := hop + 1
+	f.hopIdx = next
+	if len(f.nodes) > 1 {
+		f.nodes = f.nodes[1:]
+	}
+	s.player.TaxiPath = formatTaxiPath(f.faction, f.nodes)
+	cost := taxiDiscountedLeg(f.hops[next].rawPrice, f.discount)
+	s.taxiMu.Unlock()
+	s.chargeTaxiLegAmount(context.Background(), cost)
+	s.debug("taxi hop arrival", "account", s.accountName, "hop", next, "cost", cost)
+}
+
+// popTaxiHop completes the current hop when the segment-end handler catches
+// a boundary the arrival timer missed: same NextTaxiDestination + charge as
+// onTaxiHopArrival. It never pops the final hop — the final leg was charged
+// at its start boundary and nothing follows it.
+func (s *session) popTaxiHop(f *taxiFlight) bool {
+	s.taxiMu.Lock()
+	if s.taxiFlight != f || !s.inFlight || s.player == nil || f.hopIdx >= len(f.hops)-1 {
+		s.taxiMu.Unlock()
+		return false
+	}
+	next := f.hopIdx + 1
+	f.hopIdx = next
+	if len(f.nodes) > 1 {
+		f.nodes = f.nodes[1:]
+	}
+	s.player.TaxiPath = formatTaxiPath(f.faction, f.nodes)
+	cost := taxiDiscountedLeg(f.hops[next].rawPrice, f.discount)
+	s.taxiMu.Unlock()
+	s.chargeTaxiLegAmount(context.Background(), cost)
 	return true
+}
+
+// onTaxiSegmentEnd runs when a segment's spline completes — driven by the
+// segment timer or the client's CMSG_MOVE_SPLINE_DONE, whichever wins the
+// race (the loser sees the claimed segIdx and drops out). It completes hops
+// ending at the boundary, then either far-teleports onto the next segment
+// (HandleMoveSplineDoneOpcode's far-teleport arm, TaxiHandler.cpp:214-233)
+// or runs the final arrival.
+func (s *session) onTaxiSegmentEnd(f *taxiFlight, segIdx int) {
+	s.taxiMu.Lock()
+	if s.taxiFlight != f || !s.inFlight || f.segIdx != segIdx || segIdx >= len(f.segments) {
+		s.taxiMu.Unlock()
+		return
+	}
+	f.segIdx++ // claim the transition; concurrent losers see the mismatch
+	seg := f.segments[segIdx]
+	s.taxiMu.Unlock()
+	for {
+		s.taxiMu.Lock()
+		more := f.hopIdx < len(f.hops)-1 && f.hops[f.hopIdx].endPt < seg.endPt
+		s.taxiMu.Unlock()
+		if !more || !s.popTaxiHop(f) {
+			break
+		}
+	}
+	if segIdx == len(f.segments)-1 {
+		s.finishTaxiArrival(f)
+		return
+	}
+	// The flight may have been interrupted while the hops were settling;
+	// never teleport a dead flight.
+	s.taxiMu.Lock()
+	alive := s.taxiFlight == f && s.inFlight
+	s.taxiMu.Unlock()
+	if !alive {
+		return
+	}
+	// Far-teleport arm: the next segment is on another map. C++ teleports to
+	// the first node past the map boundary (SetCurrentNodeAfterTeleport +
+	// SkipCurrentNode, then TeleportTo to the destination continent); the
+	// new spline is what carries the client onward.
+	nextSeg := f.segments[segIdx+1]
+	pt := f.points[nextSeg.startPt]
+	if s.player != nil {
+		s.player.Map = uint32(pt.MapID)
+		s.player.InstanceID = 0
+		s.player.X, s.player.Y, s.player.Z = pt.X, pt.Y, pt.Z
+		s.updateZoneAndArea(context.Background(), true)
+	}
+	s.debug("taxi far teleport", "account", s.accountName, "map", pt.MapID, "x", pt.X, "y", pt.Y, "z", pt.Z)
+	s.sendTaxiSegment(f, segIdx+1)
+}
+
+// finishTaxiArrival runs the final-arrival arms:
+// FlightPathMovementGenerator::DoFinalize (FlightPathMovementGenerator.cpp:154-178:
+// dismount, benchmark clear) plus the HandleMoveSplineDoneOpcode final arm
+// (TaxiHandler.cpp:236-247: fall info reset, hostile-zone Honorless Target).
+func (s *session) finishTaxiArrival(f *taxiFlight) {
+	s.taxiMu.Lock()
+	if s.taxiFlight != f {
+		s.taxiMu.Unlock()
+		return
+	}
+	s.taxiFlight = nil
+	s.inFlight = false
+	s.taxiMu.Unlock()
+	if s.player == nil {
+		return
+	}
+	s.player.TaxiPath = ""
+	// HandleMoveSplineDoneOpcode (TaxiHandler.cpp:241-247): on taxi arrival
+	// the fall info resets and a hostile-zone landing earns Honorless Target
+	// (2479, triggered). The zone state refreshes here because Go pins the
+	// arrival position at flight start and the client sends no movement
+	// mid-flight, so s.pvpHostile would otherwise be stale from the
+	// departure zone.
+	s.updateZoneAndArea(context.Background(), true)
+	s.lastFallZ, s.lastFallTime = s.player.Z, 0
+	if s.pvpHostile {
+		s.castSpellDirect(context.Background(), 2479, s.playerGUID)
+	}
+	if s.currentPlayer() != nil {
+		s.player.MountDisplayID = 0
+		s.sendPlayerMountUpdate()
+	}
+	s.clearTaxiBenchmarkMode()
 }
 
 // isInFlight mirrors Unit::IsInFlight (UNIT_STATE_IN_FLIGHT).
@@ -778,12 +1149,18 @@ func (s *session) clearTaxiBenchmarkMode() {
 	}
 }
 
-// finishTaxiFlight mirrors Player::FinishTaxiFlight.
+// finishTaxiFlight mirrors Player::FinishTaxiFlight: it interrupts the
+// flight (teleports, BG entry, logout, ...). Pending hop/segment timers die
+// on the flight-pointer check.
 func (s *session) finishTaxiFlight() {
-	if !s.inFlight {
+	s.taxiMu.Lock()
+	wasInFlight := s.inFlight
+	s.taxiFlight = nil
+	s.inFlight = false
+	s.taxiMu.Unlock()
+	if !wasInFlight || s.player == nil {
 		return
 	}
-	s.inFlight = false
 	s.player.TaxiPath = ""
 	if s.currentPlayer() != nil && s.player.MountDisplayID != 0 {
 		s.player.MountDisplayID = 0
@@ -957,19 +1334,12 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 		return
 	}
 	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
-	if price > 0 {
-		s.player.Money -= price
-		s.questMoneyChanged(ctx)
-		s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, price)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-		}
-		s.sendPlayerMoneyUpdate()
-	}
 	// Player.cpp:21645: the spell case records no flight-master faction (0).
+	// The single hop's raw price is charged at departure (the firstcost arm);
+	// the spell path never discounts (npc == nullptr, Player.cpp:21644).
 	previousTaxiPath := s.player.TaxiPath
-	s.player.TaxiPath = strings.Join([]string{"0", strconv.FormatUint(uint64(from), 10), strconv.FormatUint(uint64(to), 10)}, " ") + " "
-	if !s.startTaxiFlightFrom(pathID, mount, 0) {
+	s.player.TaxiPath = formatTaxiPath(0, []uint32{from, to})
+	if !s.beginTaxiFlight(ctx, []uint32{from, to}, []uint32{pathID}, []uint64{uint64(price)}, 1.0, 0, mount, 0, true) {
 		s.player.TaxiPath = previousTaxiPath
 		return
 	}

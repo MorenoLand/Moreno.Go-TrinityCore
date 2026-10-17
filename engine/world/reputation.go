@@ -510,7 +510,6 @@ func (s *session) spellFactionEntryExists(factionID uint32) bool {
 // resolved to its FactionTemplate.dbc faction; anything unresolvable keeps
 // the 1.0 no-discount default.
 func (s *session) reputationPriceDiscount(ctx context.Context, npcGUID uint64) float64 {
-	const neutralRank = 3 // REP_NEUTRAL (SharedDefines.h:209-220)
 	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil ||
 		s.server.WorldStore.DB == nil || s.server.Data == nil {
 		return 1.0
@@ -531,7 +530,20 @@ func (s *session) reputationPriceDiscount(ctx context.Context, npcGUID uint64) f
 	if templateID <= 0 {
 		return 1.0
 	}
-	ft, ok, err := s.server.Data.FactionTemplate(uint32(templateID))
+	return s.reputationDiscountForFactionTemplate(uint32(templateID))
+}
+
+// reputationDiscountForFactionTemplate mirrors
+// Player::GetReputationPriceDiscount(FactionTemplateEntry const*)
+// (Player.cpp:23679-23688): 1.0 at or below neutral, -5% per rank above.
+// FlightPathMovementGenerator::LoadPath recomputes the discount from the
+// stored flight-master faction template when a flight resumes after relog.
+func (s *session) reputationDiscountForFactionTemplate(templateID uint32) float64 {
+	const neutralRank = 3 // REP_NEUTRAL (SharedDefines.h:209-220)
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 1.0
+	}
+	ft, ok, err := s.server.Data.FactionTemplate(templateID)
 	if err != nil || !ok || ft.Faction == 0 {
 		return 1.0
 	}

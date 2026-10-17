@@ -591,6 +591,8 @@ type session struct {
 	criteriaProgress   map[uint32]*criteriaProgressState
 	timedCriteria      map[uint32]*time.Timer
 	inFlight           bool
+	taxiFlight         *taxiFlight
+	taxiMu             sync.Mutex // guards taxiFlight, inFlight and flight progress
 	buyback            [12]*buybackSlot
 	currentBuybackSlot uint8
 	arenaTeamInvited   uint32

@@ -840,6 +840,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.rooted = false
 	s.playerLocked = false
 	s.inFlight = false
+	s.taxiFlight = nil
 	s.gossip = nil
 	s.gossipClosed = false
 	s.breathTimer = -1

@@ -1372,14 +1372,25 @@ func (s *session) handleMoveSplineDone(ctx context.Context, payload []byte) bool
 	// (taxi.go), so applying the client-reported coordinates here would let a
 	// forged SPLINE_DONE teleport the player.
 	_, _ = readMovementInfo(b)
-	if s.inFlight {
-		s.inFlight = false
-		if s.player != nil {
-			s.player.MountDisplayID = 0
-			s.sendPlayerMountUpdate()
-			s.sendPlayerUpdate()
-			s.clearTaxiBenchmarkMode()
+	splineID, _ := b.ReadU32()
+	// TaxiHandler.cpp:201-247: in a taxi flight the client acks each map
+	// segment's spline. A segment ack runs the same transition as the segment
+	// timer — the far-teleport arm (:214-233) when more segments remain, the
+	// final-arrival arm (:236-247) on the last one — and whichever wins the
+	// race claims the transition; the loser drops out. A stale ack for an
+	// already-advanced segment matches no live spline id and is ignored.
+	if f := s.currentTaxiFlight(); f != nil {
+		s.taxiMu.Lock()
+		match := f.segIdx < len(f.splineIDs) && f.splineIDs[f.segIdx] == splineID
+		segIdx := f.segIdx
+		s.taxiMu.Unlock()
+		if match {
+			s.onTaxiSegmentEnd(f, segIdx)
 		}
+		return true
+	}
+	if s.inFlight {
+		s.finishTaxiFlight()
 	}
 	return true
 }
