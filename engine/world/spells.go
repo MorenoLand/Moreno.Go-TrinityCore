@@ -29835,10 +29835,14 @@ func (s *session) handleCancelTempEnchantment(ctx context.Context, payload []byt
 	if tempID == 0 {
 		return true
 	}
-	// ItemHandler.cpp:1162 — the handler only calls ApplyEnchantment(item,
-	// TEMP_ENCHANTMENT_SLOT, false); it does NOT ClearEnchantment, so the
-	// enchantment fields stay as stored. Recompute the equipped stat mods
+	// ItemHandler.cpp:1162-1166 — ApplyEnchantment(item,
+	// TEMP_ENCHANTMENT_SLOT, false), then item->ClearEnchantment
+	// zeroes the slot's fields (enchantment id, duration, charges:
+	// indices 3-5 of the column). Recompute the equipped stat mods
 	// with the enchant's effects removed.
+	fields[3], fields[4], fields[5] = "0", "0", "0"
+	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?",
+		strings.Join(fields, " "), instanceGUID)
 	s.syncEquipmentCache(ctx)
 	return true
 }

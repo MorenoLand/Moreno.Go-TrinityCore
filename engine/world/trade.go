@@ -688,8 +688,21 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	if cdb == nil {
 		return true
 	}
+	// Reference: TradeHandler.cpp:759 — C++ resolves the (bag, slot) pair
+	// with Player::GetItemByPos, where bag is the client container index
+	// (255 = INVENTORY_SLOT_BAG_0 for backpack/equipment, 19..22 for the
+	// equipped bags). The character_inventory.bag column stores bagKey 0
+	// for the backpack and the bag item's GUID for bag contents, so the
+	// raw client byte must be translated first (inventoryBagKey,
+	// items.go:3600); an untranslatable bag answers TRADE_CANCELED exactly
+	// like C++'s null GetItemByPos return.
+	bagKey, ok := s.inventoryBagKey(ctx, bag)
+	if !ok {
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+		return true
+	}
 	var itemGUID int64
-	err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? LIMIT 1", s.playerGUID, bag, slot).Scan(&itemGUID)
+	err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? LIMIT 1", s.playerGUID, bagKey, slot).Scan(&itemGUID)
 	if err != nil || itemGUID == 0 {
 		// Missing item (cheating, can't fail with correct client operations): C++ answers
 		// TRADE_STATUS_TRADE_CANCELED (TradeHandler.cpp:760-765).
@@ -706,11 +719,14 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	var durability, randomPropertyID int64
 	var encStr sql.NullString
 	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, creatorGuid, enchantments, durability, randomPropertyId FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &creatorGUID, &encStr, &durability, &randomPropertyID)
-	if tradeSlot < tradeSlotTradedCount && (flags&1 != 0) {
-		// Soulbound items cannot be placed in traded slots
-		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
-		return true
-	}
+	// NOTE: no blanket soulbound rejection here. C++ runs the single
+	// Item::CanBeTraded(false, true) gate (TradeHandler.cpp:760-765), whose
+	// soulbound arm admits BOP-tradeable items (Item.cpp:724:
+	// IsSoulBound() && (!IsBOPTradeable() || !trade)); the
+	// tradeItemCanBeTraded arm below mirrors exactly that, and the
+	// taplist arm further down answers TRADE_STATUS_NOT_ON_TAPLIST for a
+	// BOP-tradeable item offered to a trader outside its allowed-looter
+	// set (TradeHandler.cpp:774-780).
 	var enchantID uint32
 	var gemSocketIDs [3]uint32
 	var enchantFields []string
@@ -872,15 +888,15 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	s.trade.Accepted = true
 
 	// Accept-time distance check, in C++ position (TradeHandler.cpp:270-277):
-	// the acceptor alone is answered TARGET_TO_FAR, their accept is undone
-	// with a BACK_TO_TRADE notice to themselves (TradeData::SetAccepted(false)
-	// with forTrader=false -> the owner's session), and the trade window stays
-	// open — the partner is not notified and neither side tears down.
+	// the acceptor alone is answered TARGET_TO_FAR, and the accept is undone
+	// via my_trade->SetAccepted(false, true): forTrader=true routes the
+	// BACK_TO_TRADE notice to the trader (partner), not to the acceptor.
+	// The trade window stays open — neither side tears down.
 	// C++ uses IsWithinDistInMap(..., false): 2D at TRADE_DISTANCE.
 	if partner.player == nil || s.player.Map != partner.player.Map || distance2D(s.player.X, s.player.Y, partner.player.X, partner.player.Y) > tradeDistance {
 		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0, 0)
 		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		return true
 	}
 

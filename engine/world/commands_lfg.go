@@ -131,13 +131,28 @@ func (s *session) handleLfgGroupInfoCommand(ctx context.Context, name string) {
 	nameTarget := ""
 	guidTarget := uint64(0)
 	if name != "" {
-		playerSess = s.sessionForPlayerName(normalizePlayerName(name))
+		normalized := normalizePlayerName(name)
+		playerSess = s.sessionForPlayerName(normalized)
 		if playerSess == nil {
-			s.sendSysMessage("Player not found.")
-			return
+			// HandleLfgGroupInfoCommand (cs_lfg.cpp:96-104): an offline named
+			// player still resolves through the character DB
+			// (CHAR_SEL_GROUP_MEMBER); only a wholly unknown name reports
+			// not-found.
+			if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+				s.sendSysMessage("Player not found.")
+				return
+			}
+			var charGUID uint64
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", normalized).Scan(&charGUID); err != nil || charGUID == 0 {
+				s.sendSysMessage("Player not found.")
+				return
+			}
+			nameTarget = normalized
+			guidTarget = charGUID
+		} else {
+			nameTarget = playerSess.player.Name
+			guidTarget = playerSess.playerGUID
 		}
-		nameTarget = playerSess.player.Name
-		guidTarget = playerSess.playerGUID
 	} else {
 		playerSess = s.lookupSelectedPlayer()
 		if playerSess == nil {

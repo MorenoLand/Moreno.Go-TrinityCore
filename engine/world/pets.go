@@ -4169,7 +4169,7 @@ func (s *session) sendStabledPets(ctx context.Context, npcGUID uint64) {
 }
 
 // handleLearnPreviewTalentsPet processes CMSG_LEARN_PREVIEW_TALENTS_PET (0x4C2).
-// Reference: WorldSession::HandleLearnPreviewTalentsPet (PetHandler.cpp:430).
+// Reference: WorldSession::HandleLearnPreviewTalentsPet (PetHandler.cpp:864-884).
 func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []byte) bool {
 	if len(payload) < 12 {
 		return true
@@ -4182,18 +4182,14 @@ func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []by
 	// PetHandler.cpp:864-884: the client sends at most 24 talents, rounded up
 	// to a 30-entry cap.
 	const maxPreviewPetTalents = 30
-	anyLearned := false
 	for i := uint32(0); i < talentCount && i < maxPreviewPetTalents && r.Remaining() >= 8; i++ {
 		talentID, _ := r.ReadU32()
 		rank, _ := r.ReadU32()
-		if s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank) {
-			anyLearned = true
-		}
+		s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank)
 	}
+	// PetHandler.cpp:882 — the C++ handler learns the talents and answers
+	// SendTalentsInfoData(true) only; it never sends pet spells here.
 	s.sendTalentsInfo(true)
-	if anyLearned {
-		s.sendPetSpells(ctx, petNumber, 0, 1)
-	}
 	s.debug("pet preview talents learned", "account", s.accountName, "pet", petGUID, "count", talentCount)
 	return true
 }

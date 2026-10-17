@@ -1343,6 +1343,44 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// canChangeEquipStateInCombat mirrors ItemTemplate::CanChangeEquipStateInCombat
+// (ItemTemplate.cpp:35-50): relics, shields and holdables (by inventory type)
+// and weapons/projectiles (by class) may change equip state in combat.
+func canChangeEquipStateInCombat(invType, class uint32) bool {
+	switch invType {
+	case invTypeRelic, 14, 23: // INVTYPE_RELIC, INVTYPE_SHIELD, INVTYPE_HOLDABLE (ItemTemplate.h:275-289)
+		return true
+	}
+	switch class {
+	case itemClassWeapon, itemClassProjectile: // ITEM_CLASS_WEAPON, ITEM_CLASS_PROJECTILE (ItemTemplate.h:296-302)
+		return true
+	}
+	return false
+}
+
+// unequipCombatError mirrors the combat/arena legs of Player::CanUnequipItem
+// (Player.cpp:11646-11654): gear that cannot change equip state in combat
+// answers EQUIP_ERR_NOT_IN_COMBAT while in combat, or
+// EQUIP_ERR_NOT_DURING_ARENA_MATCH in a live arena. Returns equipErrOk when
+// the move is allowed. The IsCharmed leg (Player.cpp:11643-11644) has no Go
+// player model and stays unbridged. The in-arena proxy is the active arena
+// queue entry past the wait queue (arena_team.go documents the
+// established/in-progress leg mapping), the same proxy handleUseItem uses.
+func (s *session) unequipCombatError(invType, class uint32) uint8 {
+	if canChangeEquipStateInCombat(invType, class) {
+		return equipErrOk
+	}
+	if s.isInCombat() {
+		return equipErrNotInCombat
+	}
+	for i := range s.bgQueues {
+		if e := &s.bgQueues[i]; e.Active && e.IsArena && e.Status == BGStatusInProgress {
+			return equipErrNotDuringArenaMatch
+		}
+	}
+	return equipErrOk
+}
+
 func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 3 {
 		return true
@@ -1363,7 +1401,7 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	err := db.QueryRowContext(ctx, `SELECT ci.item, ii.count, ii.itemEntry FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bagKey, slot).Scan(&itemGUID, &currentCount, &itemEntry)
-	// HandleDestroyItemOpcode (ItemHandler.cpp:292-295): a missing item
+	// HandleDestroyItemOpcode (ItemHandler.cpp:294-297): a missing item
 	// answers EQUIP_ERR_ITEM_NOT_FOUND — C++ CanUnequipItem returns
 	// EQUIP_ERR_OK for empty slots, so the error lands regardless of
 	// position.
@@ -1371,21 +1409,51 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
-	// HandleDestroyItemOpcode (ItemHandler.cpp:300-305): items flagged
-	// ITEM_FLAG_NO_USER_DESTROY (ItemTemplate.h:157, 0x20) answer
-	// EQUIP_ERR_CANT_DROP_SOULBOUND instead of being destroyed.
+	var tplFlags, tplInvType, tplClass int64
+	tplFound := false
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var tplFlags int64
-		if ferr := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&tplFlags); ferr == nil && tplFlags&0x20 != 0 {
-			s.sendEquipError(equipErrCantDropSoulbound, 0)
-			return true
+		if ferr := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0), COALESCE(InventoryType, 0), COALESCE(Class, 0) FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&tplFlags, &tplInvType, &tplClass); ferr == nil {
+			tplFound = true
 		}
 	}
-	if bagKey == 0 && ((slot >= invSlotBagStart && slot < invSlotBagEnd) || (slot >= 67 && slot <= 73)) {
-		if !s.isBagEmpty(ctx, itemGUID) {
-			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
+	// HandleDestroyItemOpcode (ItemHandler.cpp:283-291): equipment and bag
+	// positions run Player::CanUnequipItem(pos, false) before the not-found
+	// and flag arms. The empty-slot arm is already covered above; the
+	// failure arms below are its remaining legs (Player.cpp:11626-11662).
+	if bagKey == 0 && (slot < equipSlotEnd || (slot >= invSlotBagStart && slot < invSlotBagEnd) || (slot >= 67 && slot <= 73)) {
+		// A missing template row answers EQUIP_ERR_ITEM_NOT_FOUND
+		// (Player.cpp:11634-11636).
+		if !tplFound {
+			s.sendEquipError(equipErrItemNotFound, 0)
 			return true
 		}
+		// m_lootGenerated (Player.cpp:11640-11641).
+		if s.server.containerLootGenerated(uint64(itemGUID)) {
+			s.sendEquipError(equipErrAlreadyLooted, uint64(itemGUID))
+			return true
+		}
+		// IsCharmed (Player.cpp:11643-11644) has no Go player model —
+		// documented gap, not bridged.
+		// Combat (Player.cpp:11646-11654): gear that cannot change equip
+		// state in combat refuses while in combat or a live arena.
+		if msg := s.unequipCombatError(uint32(tplInvType), uint32(tplClass)); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(itemGUID))
+			return true
+		}
+		// Non-empty bag (Player.cpp:11656-11658, swap=false).
+		if (slot >= invSlotBagStart && slot < invSlotBagEnd) || (slot >= 67 && slot <= 73) {
+			if !s.isBagEmpty(ctx, itemGUID) {
+				s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
+				return true
+			}
+		}
+	}
+	// HandleDestroyItemOpcode (ItemHandler.cpp:299-303): items flagged
+	// ITEM_FLAG_NO_USER_DESTROY (ItemTemplate.h:157, 0x20) answer
+	// EQUIP_ERR_CANT_DROP_SOULBOUND instead of being destroyed.
+	if tplFound && tplFlags&0x20 != 0 {
+		s.sendEquipError(equipErrCantDropSoulbound, 0)
+		return true
 	}
 	removedCount := uint32(count)
 	if count == 0 || currentCount <= int64(count) {
@@ -1894,6 +1962,7 @@ const (
 	equipErrBankFull                          = 51 // C++ EQUIP_ERR_BANK_FULL (ItemDefines.h:77)
 	equipErrCouldntSplitItems                 = 27 // C++ EQUIP_ERR_COULDNT_SPLIT_ITEMS (ItemDefines.h:53)
 	equipErrTriedToSplitMoreThanCount         = 26 // C++ EQUIP_ERR_TRIED_TO_SPLIT_MORE_THAN_COUNT (ItemDefines.h:52)
+	equipErrItemCantStack                     = 19 // C++ EQUIP_ERR_ITEM_CANT_STACK (ItemDefines.h:45): Item::CanBeMergedPartlyWith different-entry arm.
 	equipErrAlreadyLooted                     = 49 // C++ EQUIP_ERR_ALREADY_LOOTED (ItemDefines.h:75)
 	equipErrTooMuchGold                       = 77
 	equipErrItemMaxLimitCategoryCountExceeded = 84
@@ -3714,15 +3783,20 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if dstGUID != 0 {
-		if dstEntry != srcEntry {
-			_ = tx.Rollback()
-			return true
-		}
-		// Item::CanBeMergedPartlyWith (Item.cpp:782-84): a stack whose loot
-		// was generated cannot be the merge target.
+		// Item::CanBeMergedPartlyWith (Item.cpp:782-797) arm order:
+		// m_lootGenerated first, then the different-entry / full-stack
+		// EQUIP_ERR_ITEM_CANT_STACK arms.
 		if s.server.containerLootGenerated(uint64(dstGUID)) {
 			_ = tx.Rollback()
 			s.sendEquipError(equipErrAlreadyLooted, uint64(dstGUID))
+			return true
+		}
+		if dstEntry != srcEntry {
+			// Item::CanBeMergedPartlyWith (Item.cpp:788-790): a different
+			// entry at the destination answers EQUIP_ERR_ITEM_CANT_STACK —
+			// not a silent drop.
+			_ = tx.Rollback()
+			s.sendEquipError(equipErrItemCantStack, uint64(srcGUID))
 			return true
 		}
 		var maxStack int64 = 1
@@ -3731,6 +3805,13 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 		}
 		if maxStack < 1 {
 			maxStack = 1
+		}
+		// Item::CanBeMergedPartlyWith (Item.cpp:792-794): a full destination
+		// stack answers EQUIP_ERR_ITEM_CANT_STACK — no spill.
+		if dstCount >= maxStack {
+			_ = tx.Rollback()
+			s.sendEquipError(equipErrItemCantStack, uint64(srcGUID))
+			return true
 		}
 		if dstCount+int64(count) > maxStack {
 			// CanStoreItem_InSpecificSlot (Player.cpp:10560-69): the target
@@ -3799,7 +3880,7 @@ func (s *session) handleAutoStoreBagItem(ctx context.Context, payload []byte) bo
 		return true
 	}
 	srcBag, srcSlot, dstBag := payload[0], payload[1], payload[2]
-	itemGUID, _, _, err := s.inventoryItemAt(ctx, srcBag, srcSlot)
+	itemGUID, itemEntry, _, err := s.inventoryItemAt(ctx, srcBag, srcSlot)
 	if err != nil || itemGUID == 0 {
 		return true
 	}
@@ -3814,14 +3895,38 @@ func (s *session) handleAutoStoreBagItem(ctx context.Context, payload []byte) bo
 		s.sendEquipError(equipErrItemDoesntGoToSlot, 0)
 		return true
 	}
-	// HandleAutoStoreBagItemOpcode (ItemHandler.cpp:731-737): the
-	// CanUnequipItem arm covers equipment/bag positions; the Go bag
+	// HandleAutoStoreBagItemOpcode (ItemHandler.cpp:733-742): the
+	// CanUnequipItem arm covers equipment/bag positions
+	// (Player::IsEquipmentPos/IsBagPos, Player.cpp:11626-11662). The bag
 	// approximation covers bag slots 19..22 and bank bag slots 67..73
-	// (Player::IsBagPos, Player.cpp:10174-82).
+	// (Player::IsBagPos, Player.cpp:10174-82); the equipment legs below are
+	// the m_lootGenerated and combat arms (the IsCharmed leg has no Go
+	// player model).
 	isBagSlot := srcBagKey == 0 && ((srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot < 74))
 	if isBagSlot {
 		if !s.isBagEmpty(ctx, itemGUID) {
 			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
+			return true
+		}
+	}
+	if srcBagKey == 0 && srcSlot < equipSlotEnd {
+		var invType, class int64
+		tplFound := false
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			if ferr := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(InventoryType, 0), COALESCE(Class, 0) FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&invType, &class); ferr == nil {
+				tplFound = true
+			}
+		}
+		if !tplFound {
+			s.sendEquipError(equipErrItemNotFound, 0)
+			return true
+		}
+		if s.server.containerLootGenerated(uint64(itemGUID)) {
+			s.sendEquipError(equipErrAlreadyLooted, uint64(itemGUID))
+			return true
+		}
+		if msg := s.unequipCombatError(uint32(invType), uint32(class)); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(itemGUID))
 			return true
 		}
 	}
@@ -4518,8 +4623,10 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Equipped items cannot be wrapped
-	if itemBag == 0 && itemSlot < equipSlotEnd {
+	// Equipped items cannot be wrapped (ItemHandler.cpp:870-873:
+	// Item::IsEquipped is IsEquipmentPos of the stored position — the
+	// packet bag byte is 0 or INVENTORY_SLOT_BAG_0 (255)).
+	if (itemBag == 0 || itemBag == invSlotBag0) && itemSlot < equipSlotEnd {
 		s.sendEquipError(equipErrEquippedCantBeWrapped, uint64(targetGUID))
 		return true
 	}
@@ -4536,8 +4643,10 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 			return true
 		}
 
-		// ItemHandler.cpp:882: bags cannot be wrapped.
-		if targetErr == nil && targetData.Class == itemClassContainer {
+		// ItemHandler.cpp:882: bags cannot be wrapped. Item::IsBag
+		// (Item.h:102) is InventoryType == INVTYPE_BAG (18), not the
+		// container class — quivers/ammo pouches (class QUIVER) count.
+		if targetErr == nil && targetData.InventoryType == uint32(itemInventoryTypeBag) {
 			s.sendEquipError(equipErrBagsCantBeWrapped, uint64(targetGUID))
 			return true
 		}
@@ -5127,7 +5236,11 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 			WHERE ci.guid = ? AND (ci.item = ? OR ii.guid = ?) LIMIT 1`,
 			s.playerGUID, rawGemGUID, rawGemGUID).Scan(&gemEntry)
 		if err != nil {
-			return true
+			// ItemHandler.cpp:982-984 — a nonzero gem guid whose item is
+			// not in the inventory resolves Gems[i] to nullptr; the
+			// placement loop then skips the iteration (GemProps[i]==
+			// nullptr) and the socket is cleared, never a reject.
+			continue
 		}
 		gemEntries[i] = gemEntry
 

@@ -529,14 +529,12 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		}
 		dungeons = append(dungeons, dungeon&0x00FFFFFF)
 	}
-	needsCount, err := b.ReadU8()
-	if err != nil {
+	// LFGJoin::Read (LFGPackets.cpp:28-30): the needs count byte is skipped
+	// and exactly 3 needs bytes follow ("hardcoded to 3 in client").
+	if _, err := b.ReadU8(); err != nil {
 		return true
 	}
-	if needsCount > 16 || b.Remaining() < int(needsCount) {
-		return true
-	}
-	if _, err := b.Read(int(needsCount)); err != nil {
+	if _, err := b.Read(3); err != nil {
 		return true
 	}
 	comment, err := b.ReadCString()
@@ -547,18 +545,19 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		comment = comment[:255]
 	}
 	roles8 := uint8(roles)
-	// HandleLfgJoinOpcode (LFGHandler.cpp:60-64): no dungeons selected is a
+	// HandleLfgJoinOpcode (LFGHandler.cpp:59-61): no dungeons selected is a
 	// silent return — no join-result packet.
 	if len(dungeons) == 0 {
 		return true
 	}
-	// HandleLfgJoinOpcode (LFGHandler.cpp:67-73): only DBC-known dungeons with
-	// a supported type enter the join set (the slot's type bits were already
-	// masked above).
+	// HandleLfgJoinOpcode (LFGHandler.cpp:62-67): the handler keeps every
+	// DBC-known dungeon (the slot's type bits were already masked above) —
+	// unsupported types are rejected downstream by the JoinLfg type loop
+	// (LFGMgr.cpp:527-557) with LFG_JOIN_DUNGEON_INVALID, not dropped here.
 	filtered := make([]uint32, 0, len(dungeons))
 	if s.server != nil && s.server.Data != nil {
 		for _, dungeonID := range dungeons {
-			if dungeon, found, derr := s.server.Data.LFGDungeon(dungeonID); derr == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID) {
+			if _, found, derr := s.server.Data.LFGDungeon(dungeonID); derr == nil && found {
 				filtered = append(filtered, dungeonID)
 			}
 		}
@@ -881,7 +880,9 @@ func (s *session) sendLFGUpdatePlayer(updateType uint8, entry LFGQueueEntry) err
 	}
 	packet := protocol.NewBuffer(16 + len(entry.Dungeons)*4 + len(entry.Comment))
 	packet.WriteU8(updateType)
-	if len(entry.Dungeons) == 0 || entry.State == LFGStateNone {
+	// SendLfgUpdatePlayer (LFGHandler.cpp:310-312): the joined flag is
+	// (size > 0) — the entry state plays no part.
+	if len(entry.Dungeons) == 0 {
 		packet.WriteU8(0)
 	} else {
 		packet.WriteU8(1)
@@ -942,23 +943,34 @@ func (s *session) sendLFGUpdateParty(updateType uint8, entry LFGQueueEntry) erro
 
 func (s *session) getLFGDungeonEntrance(dungeonID uint32) (mapID uint32, x, y, z, ori float32) {
 	baseID := dungeonID & 0x00FFFFFF
+	var dungeonType uint32
 	if s.server != nil && s.server.Data != nil {
 		dungeon, found, _ := s.server.Data.LFGDungeon(baseID)
-		if found && dungeon.MapID >= 0 {
-			mapID = uint32(dungeon.MapID)
+		if found {
+			if dungeon.MapID >= 0 {
+				mapID = uint32(dungeon.MapID)
+			}
+			dungeonType = dungeon.TypeID
 		}
 	}
+	var posX, posY, posZ, orientation float32
+	hasRow := false
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var posX, posY, posZ, orientation float32
 		err := s.server.WorldStore.DB.QueryRow(
 			"SELECT position_x, position_y, position_z, orientation FROM lfg_dungeon_template WHERE dungeonId = ? LIMIT 1",
 			baseID,
 		).Scan(&posX, &posY, &posZ, &orientation)
-		if err == nil {
-			return mapID, posX, posY, posZ, orientation
+		hasRow = err == nil
+	}
+	// LFGMgr::LoadLFGDungeons (LFGMgr.cpp:260-273): with no usable
+	// lfg_dungeon_template row, non-random dungeons fall back to the
+	// map-entrance areatrigger (ObjectMgr::GetMapEntranceTrigger).
+	if (!hasRow || (posX == 0 && posY == 0 && posZ == 0)) && dungeonType != LFGDungeonTypeRandom {
+		if tx, ty, tz, to, ok := s.instanceEntranceTrigger(context.Background(), mapID); ok {
+			return mapID, tx, ty, tz, to
 		}
 	}
-	return mapID, 0, 0, 0, 0
+	return mapID, posX, posY, posZ, orientation
 }
 
 // lfgSelectedRandomDungeon mirrors LFGMgr::selectedRandomLfgDungeon
@@ -998,7 +1010,7 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 	}
 	_ = target.sendLFGUpdateParty(LFGUpdateLeaderUnk1, LFGQueueEntry{})
 	if target.isDungeonMap(target.player.Map) {
-		target.teleportToLFGEntryPoint()
+		target.teleportToBGEntryPoint()
 	}
 }
 
@@ -1253,27 +1265,20 @@ func lfgBootTargetInGroup(g *groupState, guid uint64) bool {
 	return false
 }
 
-// teleportToLFGEntryPoint mirrors the out=true leg of
-// WorldSession::HandleLfgTeleportOpcode, i.e. LFGMgr::TeleportPlayer(player,
-// true) (LFGMgr.cpp:1529-1582): returns the player to the stored LFG entry
-// point, falling back to the Stormwind gates when none was recorded.
-func (s *session) teleportToLFGEntryPoint() {
-	if s.player == nil {
+// teleportToBGEntryPoint mirrors the out=true leg of LFGMgr::TeleportPlayer
+// (LFGMgr.cpp:1529-1537) via Player::TeleportToBGEntryPoint
+// (Player.cpp:1896-1906): the player returns to the battleground entry point
+// recorded by setBattlegroundEntryPoint on the way in. An unset entry point
+// teleports nowhere (the MAPID_INVALID leg) — this C++ tree keeps no separate
+// LFG entry point and has no Stormwind fallback.
+func (s *session) teleportToBGEntryPoint() {
+	if s == nil || s.player == nil {
 		return
 	}
-	destMap := s.player.LfgEntryPointMap
-	destX := s.player.LfgEntryPointX
-	destY := s.player.LfgEntryPointY
-	destZ := s.player.LfgEntryPointZ
-	destOri := s.player.LfgEntryPointO
-
-	if destMap == 0 && destX == 0 && destY == 0 {
-		destMap = 0
-		destX = -8949.95
-		destY = 512.28
-		destZ = 96.35
+	if s.bgData.JoinMap == 0 {
+		return
 	}
-	s.teleportTo(destMap, destX, destY, destZ, destOri)
+	s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
 }
 
 func (s *session) teleportToLFGDungeon(dungeonID uint32, fromOpcode bool) {
@@ -1290,11 +1295,6 @@ func (s *session) teleportToLFGDungeon(dungeonID uint32, fromOpcode bool) {
 		s.setBattlegroundEntryPoint()
 	}
 	s.finishTaxiFlight()
-	s.player.LfgEntryPointMap = s.player.Map
-	s.player.LfgEntryPointX = s.player.X
-	s.player.LfgEntryPointY = s.player.Y
-	s.player.LfgEntryPointZ = s.player.Z
-	s.player.LfgEntryPointO = s.player.Orientation
 
 	mapID, x, y, z, ori := s.getLFGDungeonEntrance(dungeonID)
 	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1550-1567): with fromOpcode=false
@@ -1686,6 +1686,12 @@ func (s *session) handleLfdPartyLockInfoRequest(ctx context.Context, payload []b
 	var otherLocks []memberLock
 	for _, m := range grp.Members {
 		if m.GUID == s.playerGUID {
+			continue
+		}
+		// HandleLfgPartyLockInfoRequestOpcode (LFGHandler.cpp:233-237):
+		// members with no live session (GetSource() null) are skipped —
+		// GetLockedDungeons early-returns empty for them anyway.
+		if s.server.findSessionByGUID(m.GUID) == nil {
 			continue
 		}
 		locks := s.getLockedDungeons(m.GUID)
@@ -2145,9 +2151,10 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 
 	if out {
 		// LFGMgr::TeleportPlayer (LFGMgr.cpp:1529-1537): the out leg only
-		// fires when the player is standing on the dungeon map.
+		// fires when the player is standing on the dungeon map, returning
+		// via Player::TeleportToBGEntryPoint.
 		if dungeonMap != 0 && s.player.Map == dungeonMap {
-			s.teleportToLFGEntryPoint()
+			s.teleportToBGEntryPoint()
 		}
 		return true
 	}
@@ -2224,9 +2231,15 @@ func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool 
 	if s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
 		lfg := s.server.Features.LFG
 		lfg.mu.Lock()
-		entry := lfg.queue[s.playerGUID]
-		entry.Comment = comment
-		lfg.queue[s.playerGUID] = entry
+		// HandleLfgSetCommentOpcode -> LFGMgr::SetComment (LFGMgr.cpp:1984)
+		// writes the player-data comment only; it never creates queue state,
+		// so a comment from a non-queued player must not materialize a queue
+		// entry (that phantom entry would make a later Leave emit a bogus
+		// REMOVED_FROM_QUEUE and inflate the queue dump).
+		if entry, ok := lfg.queue[s.playerGUID]; ok {
+			entry.Comment = comment
+			lfg.queue[s.playerGUID] = entry
+		}
 		lfg.mu.Unlock()
 	}
 	s.debug("lfg set comment", "account", s.accountName, "comment", comment)
