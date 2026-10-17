@@ -16591,7 +16591,7 @@ func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell
 		maxPower = target.player.MaxPowers[uint32(power)]
 	} else if s != nil && s.player != nil && s.server != nil && effectTarget != 0 && effectTarget != s.playerGUID {
 		s.server.motionMu.Lock()
-		if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, effectTarget); motion != nil && motion.PetID != 0 && motion.Health > 0 {
+		if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, effectTarget); motion != nil && motion.Health > 0 {
 			maxPower = motion.MaxPowers[uint32(power)]
 		}
 		s.server.motionMu.Unlock()
@@ -17306,7 +17306,7 @@ func (s *session) adjustSpellPower(ctx context.Context, targetGUID uint64, power
 	if s.server != nil && targetGUID != 0 && targetGUID != s.playerGUID {
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
-		if motion != nil && motion.PetID != 0 && motion.Health > 0 {
+		if motion != nil && motion.Health > 0 {
 			index := uint32(powerType)
 			maximum, old := motion.MaxPowers[index], motion.Powers[index]
 			if maximum != 0 {
