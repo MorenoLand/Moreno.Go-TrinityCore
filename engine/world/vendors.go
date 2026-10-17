@@ -1394,7 +1394,13 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var sellPrice int64
-	_ = wdb.QueryRowContext(ctx, "SELECT SellPrice FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&sellPrice)
+	// ItemHandler.cpp:442-478 — a missing template skips the sell-price
+	// block entirely and answers SELL_ERR_CANT_FIND_ITEM; only
+	// SellPrice <= 0 on an existing template means SELL_ERR_CANT_SELL_ITEM.
+	if err := wdb.QueryRowContext(ctx, "SELECT SellPrice FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&sellPrice); err != nil {
+		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantFindItem)
+		return true
+	}
 	// ItemHandler.cpp:472-474 — SellPrice <= 0 means the merchant doesn't want it.
 	if sellPrice <= 0 {
 		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
@@ -1437,14 +1443,22 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	// Assign buyback slot (0..11 corresponding to BUYBACK_SLOT_START 74 .. BUYBACK_SLOT_END 86)
 	slot := int(s.currentBuybackSlot)
 	if slot >= 12 || s.buyback[slot] != nil {
+		// Player::AddItemToBuyBackSlot (Player.cpp:13500-13522) seeds the
+		// oldest timestamp from eslot 0 and scans eslot 1..11 for the first
+		// free slot — eslot 0 never wins the "found empty" break, only the
+		// oldest-timestamp fallback (ties keep the earlier slot via the
+		// strict comparison).
+		var oldestTime uint32
+		if s.buyback[0] != nil {
+			oldestTime = s.buyback[0].Timestamp
+		}
 		oldestSlot := 0
-		oldestTime := uint32(0xFFFFFFFF)
-		for i := 0; i < 12; i++ {
+		for i := 1; i < 12; i++ {
 			if s.buyback[i] == nil {
 				oldestSlot = i
 				break
 			}
-			if s.buyback[i].Timestamp < oldestTime {
+			if oldestTime > s.buyback[i].Timestamp {
 				oldestTime = s.buyback[i].Timestamp
 				oldestSlot = i
 			}
