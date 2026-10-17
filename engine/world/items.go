@@ -3573,6 +3573,31 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		s.sendEquipError(equipErrItemNotFound, itemGUID)
 		return true
 	}
+	// Player::GetUseableItemByPos (Player.cpp:10045-10050): the
+	// CanUseAttackType gate fires before the GUID match — a disarmed weapon
+	// slot (Unit::CanUseAttackType, Unit.cpp:2462-2475) answers
+	// EQUIP_ERR_ITEM_NOT_FOUND. GetAttackBySlot maps only slots
+	// 15/16/17 (main/off/ranged) to a real attack type (Player.cpp:10130),
+	// and the check runs on the slot alone, bag-independent.
+	if s.player != nil {
+		switch slot {
+		case equipSlotMainhand:
+			if s.player.UnitFlags&unitFlagDisarmed != 0 {
+				s.sendEquipError(equipErrItemNotFound, itemGUID)
+				return true
+			}
+		case equipSlotOffhand:
+			if s.player.UnitFlags2&unitFlag2DisarmOffhand != 0 {
+				s.sendEquipError(equipErrItemNotFound, itemGUID)
+				return true
+			}
+		case equipSlotRanged:
+			if s.player.UnitFlags2&unitFlag2DisarmRanged != 0 {
+				s.sendEquipError(equipErrItemNotFound, itemGUID)
+				return true
+			}
+		}
+	}
 	rawItemGUID := uint64(dbItemGUID)
 	fullItemGUID := rawItemGUID | (uint64(0x4000) << 48)
 	// SpellHandler.cpp:98-103 — the wire GUID must match exactly, zero included.
@@ -3693,207 +3718,215 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	// SPELLVALUE_BASE_POINT0 override (the taught spell) alongside.
 	spellID, learnBasePoint := s.resolveItemUseSpell(ctx, uint32(itemEntry), dbItemGUID)
 	if spellID != 0 && s.server != nil && s.server.Data != nil {
-		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-			if learnBasePoint != nil {
-				// Player::CastItemUseSpell (Player.cpp:8245): the learning
-				// spell (483/55884) carries the taught spell in
-				// SPELLVALUE_BASE_POINT0. Go's EffectLearnSpell reads
-				// eff.CalcValueForLevel(spell, casterLevel), so the override lands on this cast's
-				// spell copy (Store.Spell returns a value).
-				spell.Effects[0].BasePoints = *learnBasePoint
+		spell, found, spellErr := s.server.Data.Spell(spellID)
+		if spellErr != nil || !found {
+			// Player::CastItemUseSpell learning arm (Player.cpp:8239-8246):
+			// a missing SpellInfo on the learn spell answers EQUIP_ERR_NONE
+			// (the stuck-item hack). The on-use and enchantment legs skip
+			// unknown spells inside resolveItemUseSpell, so only the
+			// learning case reaches this branch.
+			s.sendEquipError(equipErrNone, fullItemGUID)
+			return true
+		}
+		if learnBasePoint != nil {
+			// Player::CastItemUseSpell (Player.cpp:8245): the learning
+			// spell (483/55884) carries the taught spell in
+			// SPELLVALUE_BASE_POINT0. Go's EffectLearnSpell reads
+			// eff.CalcValueForLevel(spell, casterLevel), so the override lands on this cast's
+			// spell copy (Store.Spell returns a value).
+			spell.Effects[0].BasePoints = *learnBasePoint
+		}
+		// Spell::CheckCast cooldown block (Spell.cpp:5187-5221) on the
+		// m_CastItem path: SpellHistory::IsReady/HasCooldown
+		// (SpellHistory.cpp:190-200/473-487) fails with
+		// SPELL_FAILED_NOT_READY when the spell or its category is
+		// cooling down. The category arm reads the category entry
+		// alone — SpellHistory::Update (SpellHistory.cpp:141-155)
+		// erases category and spell entries independently, so the
+		// spell arm's End must not gate it. Runs after the Eluna
+		// hooks, matching C++ SpellHandler.cpp order (OnItemUse at
+		// SpellHandler.cpp:176 precedes the cast and its CheckCast).
+		nowUnix := time.Now().Unix()
+		for _, cd := range s.player.Cooldowns {
+			if cd.Spell == spellID && cd.End > nowUnix {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell on cooldown")
+				return true
 			}
-			// Spell::CheckCast cooldown block (Spell.cpp:5187-5221) on the
-			// m_CastItem path: SpellHistory::IsReady/HasCooldown
-			// (SpellHistory.cpp:190-200/473-487) fails with
-			// SPELL_FAILED_NOT_READY when the spell or its category is
-			// cooling down. The category arm reads the category entry
-			// alone — SpellHistory::Update (SpellHistory.cpp:141-155)
-			// erases category and spell entries independently, so the
-			// spell arm's End must not gate it. Runs after the Eluna
-			// hooks, matching C++ SpellHandler.cpp order (OnItemUse at
-			// SpellHandler.cpp:176 precedes the cast and its CheckCast).
-			nowUnix := time.Now().Unix()
+		}
+		if categoryID := spell.Category; categoryID != 0 {
 			for _, cd := range s.player.Cooldowns {
-				if cd.Spell == spellID && cd.End > nowUnix {
+				if cd.Category == categoryID && cd.CategoryEnd > nowUnix {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
-					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell on cooldown")
+					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
 					return true
 				}
 			}
-			if categoryID := spell.Category; categoryID != 0 {
-				for _, cd := range s.player.Cooldowns {
-					if cd.Category == categoryID && cd.CategoryEnd > nowUnix {
-						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
-						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
-						return true
+		}
+		// Spell::CheckCast potion leg (Spell.cpp:5195-5198): with a
+		// banked m_lastPotionId (set at SendSpellCooldown above), a
+		// further potion (Item::IsPotion, Item.h:177) or
+		// cooldown-started-on-event spell
+		// (SpellInfo::IsCooldownStartedOnEvent, SpellInfo.cpp:1159)
+		// item cast fails SPELL_FAILED_NOT_READY. C++ runs this in
+		// Spell::CheckCast with m_CastItem set; Go's item casts never
+		// pass through handleCastSpell's gates, so the arm lives on
+		// the m_CastItem path here. The !IsIgnoringCooldowns() arm is
+		// vacuous: handleUseItem serves only client CMSG_USE_ITEM
+		// casts, never triggered ones.
+		if s.lastPotionId != 0 && (s.server.isPotionItem(ctx, uint32(itemEntry)) || s.server.spellIsCooldownStartedOnEvent(spell)) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+			return true
+		}
+		// Cast-item charge arm of Spell::CheckItems (Spell.cpp:6690-6696):
+		// a template spell slot carrying charges whose instance charges
+		// read 0 rejects the cast with SPELL_FAILED_NO_CHARGES_REMAIN
+		// before SMSG_SPELL_START. Runs ahead of the consumable arm,
+		// matching C++ CheckItems relative order.
+		if !s.checkCastItemCharges(ctx, dbItemGUID, itemEntry) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNoChargesRemain), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "no charges remain")
+			return true
+		}
+		// Consumable full-health/full-power arm of Spell::CheckItems
+		// (Spell.cpp:6707-6756): when the cast item is a consumable and
+		// the spell targets a unit, effects are tried in order — the
+		// first HEAL effect against a non-full-health target or
+		// ENERGIZE effect against a non-full power target clears the
+		// pending failure (the Rejuvenation Potion pattern), while an
+		// effect that finds a full target only sets the failure reason
+		// and continues. TARGET_UNIT_PET effects are skipped: there the
+		// C++ target is the caster, not the pet. Vitals come from the
+		// target's session or creature motion; an unreadable target
+		// skips the arm. Runs before SMSG_SPELL_START, matching C++
+		// CheckCast order (CheckItems precedes prepare's START).
+		if tplOK && itemClass == itemClassConsumable && target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+			if health, maxHealth, powers, maxPowers, ok := s.consumableTargetVitals(target.UnitGUID); ok {
+				failReason := uint8(0)
+				for _, eff := range spell.Effects {
+					if eff.ImplicitTargetA == spellImplicitTargetUnitPet {
+						continue
 					}
-				}
-			}
-			// Spell::CheckCast potion leg (Spell.cpp:5195-5198): with a
-			// banked m_lastPotionId (set at SendSpellCooldown above), a
-			// further potion (Item::IsPotion, Item.h:177) or
-			// cooldown-started-on-event spell
-			// (SpellInfo::IsCooldownStartedOnEvent, SpellInfo.cpp:1159)
-			// item cast fails SPELL_FAILED_NOT_READY. C++ runs this in
-			// Spell::CheckCast with m_CastItem set; Go's item casts never
-			// pass through handleCastSpell's gates, so the arm lives on
-			// the m_CastItem path here. The !IsIgnoringCooldowns() arm is
-			// vacuous: handleUseItem serves only client CMSG_USE_ITEM
-			// casts, never triggered ones.
-			if s.lastPotionId != 0 && (s.server.isPotionItem(ctx, uint32(itemEntry)) || s.server.spellIsCooldownStartedOnEvent(spell)) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
-				return true
-			}
-			// Cast-item charge arm of Spell::CheckItems (Spell.cpp:6690-6696):
-			// a template spell slot carrying charges whose instance charges
-			// read 0 rejects the cast with SPELL_FAILED_NO_CHARGES_REMAIN
-			// before SMSG_SPELL_START. Runs ahead of the consumable arm,
-			// matching C++ CheckItems relative order.
-			if !s.checkCastItemCharges(ctx, dbItemGUID, itemEntry) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNoChargesRemain), true)
-				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "no charges remain")
-				return true
-			}
-			// Consumable full-health/full-power arm of Spell::CheckItems
-			// (Spell.cpp:6707-6756): when the cast item is a consumable and
-			// the spell targets a unit, effects are tried in order — the
-			// first HEAL effect against a non-full-health target or
-			// ENERGIZE effect against a non-full power target clears the
-			// pending failure (the Rejuvenation Potion pattern), while an
-			// effect that finds a full target only sets the failure reason
-			// and continues. TARGET_UNIT_PET effects are skipped: there the
-			// C++ target is the caster, not the pet. Vitals come from the
-			// target's session or creature motion; an unreadable target
-			// skips the arm. Runs before SMSG_SPELL_START, matching C++
-			// CheckCast order (CheckItems precedes prepare's START).
-			if tplOK && itemClass == itemClassConsumable && target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
-				if health, maxHealth, powers, maxPowers, ok := s.consumableTargetVitals(target.UnitGUID); ok {
-					failReason := uint8(0)
-					for _, eff := range spell.Effects {
-						if eff.ImplicitTargetA == spellImplicitTargetUnitPet {
+					if eff.Effect == spellEffectHeal {
+						if health >= maxHealth {
+							failReason = spellFailedAlreadyAtFullHealth
 							continue
 						}
-						if eff.Effect == spellEffectHeal {
-							if health >= maxHealth {
-								failReason = spellFailedAlreadyAtFullHealth
-								continue
-							}
-							failReason = 0
-							break
-						}
-						if eff.Effect == spellEffectEnergize {
-							if eff.MiscValue < 0 || eff.MiscValue >= 7 /* MAX_POWERS (SharedDefines.h:302) */ {
-								failReason = spellFailedAlreadyAtFullPower
-								continue
-							}
-							power := int(eff.MiscValue)
-							if powers[power] >= maxPowers[power] {
-								failReason = spellFailedAlreadyAtFullPower
-								continue
-							}
-							failReason = 0
-							break
-						}
+						failReason = 0
+						break
 					}
-					if failReason != 0 {
-						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
-						s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "consumable target at full health/power", "failReason", failReason)
-						return true
+					if eff.Effect == spellEffectEnergize {
+						if eff.MiscValue < 0 || eff.MiscValue >= 7 /* MAX_POWERS (SharedDefines.h:302) */ {
+							failReason = spellFailedAlreadyAtFullPower
+							continue
+						}
+						power := int(eff.MiscValue)
+						if powers[power] >= maxPowers[power] {
+							failReason = spellFailedAlreadyAtFullPower
+							continue
+						}
+						failReason = 0
+						break
 					}
 				}
-			}
-			// Reagent sufficiency arm of Spell::CheckItems (Spell.cpp:6777-6818)
-			// on the m_CastItem path: item casts are TRIGGERED_NONE, so the
-			// triggered-flag arm is vacuous and checkReagents reduces to
-			// !Player::CanNoReagentCast, forced on by a non-owned trade-item
-			// target (Spell.cpp:6781-6784) — unless the cast item's template
-			// carries ITEM_FLAG_NO_REAGENT_COST (ItemTemplate.h:180). C++
-			// fails SPELL_FAILED_REAGENTS before the cast; Go's completion
-			// path only destroyed what was present, so the cast must fail
-			// here. Runs before SMSG_SPELL_START like the other CheckCast
-			// gates on this path.
-			skipReagents := false
-			if info, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry)); ok && info.Flags&itemFlagNoReagentCost != 0 {
-				skipReagents = true
-			}
-			checkReagents := !s.canNoReagentCast(spell)
-			if !checkReagents && s.tradeItemTargetCast(target) {
-				checkReagents = true
-			}
-			if !skipReagents && checkReagents && !s.hasSpellReagents(ctx, spell) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedReagents), true)
-				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
-				return true
-			}
-			// Totem item/category arm of Spell::CheckItems (Spell.cpp:6823-6857)
-			// on the m_CastItem path: runs right after the reagent arm,
-			// matching C++ CheckItems relative order.
-			if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
-				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
-				return true
-			}
-			// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
-			// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster):
-			// item casts are TRIGGERED_NONE prepares
-			// (Player::CastItemUseSpell, Player.cpp:8232), so the gate
-			// applies here too, ahead of the in-progress gate.
-			if s.spellDisabledForCaster(ctx, spellID) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedSpellUnavailable), true)
-				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell disabled", "failure", spellFailedSpellUnavailable)
-				return true
-			}
-			// Spell::prepare server-side gate (Spell.cpp:3082-3087): a
-			// cast-bar cast already in progress blocks the item cast with
-			// SPELL_FAILED_SPELL_IN_PROGRESS (105). The TRIGGERED_NONE
-			// item prepare carries no TRIGGERED_IGNORE_CAST_IN_PROGRESS,
-			// so the gate is live on this path; the auto-shot exception
-			// rides the same helper as the client cast path.
-			if s.genericCastInProgress() && !s.autoShotNonBlockingCast(spellID) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
-				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
-				return true
-			}
-			// Spell::CheckCast GCD arm (Spell.cpp:5227-5228): the
-			// TRIGGERED_NONE item prepare runs the strict CheckCast, so an
-			// active global cooldown fails the cast with
-			// SPELL_FAILED_NOT_READY (SPELL_FAILED_DONT_REPORT for
-			// DISABLED_WHILE_ACTIVE spells), ahead of SMSG_SPELL_START —
-			// matching C++ CheckCast-before-START order.
-			if s.isGCDActive(spell) {
-				reason := spellFailedNotReady
-				if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
-					reason = spellFailedDontReport
+				if failReason != 0 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "consumable target at full health/power", "failReason", failReason)
+					return true
 				}
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, reason), true)
-				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
-				return true
 			}
-			castTime := uint32(0)
-			if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
-				castTime = uint32(value)
+		}
+		// Reagent sufficiency arm of Spell::CheckItems (Spell.cpp:6777-6818)
+		// on the m_CastItem path: item casts are TRIGGERED_NONE, so the
+		// triggered-flag arm is vacuous and checkReagents reduces to
+		// !Player::CanNoReagentCast, forced on by a non-owned trade-item
+		// target (Spell.cpp:6781-6784) — unless the cast item's template
+		// carries ITEM_FLAG_NO_REAGENT_COST (ItemTemplate.h:180). C++
+		// fails SPELL_FAILED_REAGENTS before the cast; Go's completion
+		// path only destroyed what was present, so the cast must fail
+		// here. Runs before SMSG_SPELL_START like the other CheckCast
+		// gates on this path.
+		skipReagents := false
+		if info, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry)); ok && info.Flags&itemFlagNoReagentCost != 0 {
+			skipReagents = true
+		}
+		checkReagents := !s.canNoReagentCast(spell)
+		if !checkReagents && s.tradeItemTargetCast(target) {
+			checkReagents = true
+		}
+		if !skipReagents && checkReagents && !s.hasSpellReagents(ctx, spell) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedReagents), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
+			return true
+		}
+		// Totem item/category arm of Spell::CheckItems (Spell.cpp:6823-6857)
+		// on the m_CastItem path: runs right after the reagent arm,
+		// matching C++ CheckItems relative order.
+		if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
+			return true
+		}
+		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
+		// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster):
+		// item casts are TRIGGERED_NONE prepares
+		// (Player::CastItemUseSpell, Player.cpp:8232), so the gate
+		// applies here too, ahead of the in-progress gate.
+		if s.spellDisabledForCaster(ctx, spellID) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedSpellUnavailable), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell disabled", "failure", spellFailedSpellUnavailable)
+			return true
+		}
+		// Spell::prepare server-side gate (Spell.cpp:3082-3087): a
+		// cast-bar cast already in progress blocks the item cast with
+		// SPELL_FAILED_SPELL_IN_PROGRESS (105). The TRIGGERED_NONE
+		// item prepare carries no TRIGGERED_IGNORE_CAST_IN_PROGRESS,
+		// so the gate is live on this path; the auto-shot exception
+		// rides the same helper as the client cast path.
+		if s.genericCastInProgress() && !s.autoShotNonBlockingCast(spellID) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
+			return true
+		}
+		// Spell::CheckCast GCD arm (Spell.cpp:5227-5228): the
+		// TRIGGERED_NONE item prepare runs the strict CheckCast, so an
+		// active global cooldown fails the cast with
+		// SPELL_FAILED_NOT_READY (SPELL_FAILED_DONT_REPORT for
+		// DISABLED_WHILE_ACTIVE spells), ahead of SMSG_SPELL_START —
+		// matching C++ CheckCast-before-START order.
+		if s.isGCDActive(spell) {
+			reason := spellFailedNotReady
+			if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
+				reason = spellFailedDontReport
 			}
-			// Spell::SendSpellStart (Spell.cpp:4253-4259): item casts carry the
-			// cast item's GUID as CasterGUID (0x4000 high bits on the wire;
-			// castItemGUID is the raw instance guid) with the player as
-			// CasterUnit; flags/powers follow the same arms as the client path.
-			itemGUID := rawItemGUID | (uint64(0x4000) << 48)
-			startFlags := spellStartCastFlags(spell)
-			if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
-				return false
-			}
-			// Spell::prepare (Spell.cpp:3188-3196) sends SMSG_SPELL_START
-			// before TriggerGlobalCooldown: item casts are TRIGGERED_NONE
-			// prepares (Player::CastItemUseSpell, Player.cpp:8232), so they
-			// set the category GCD exactly like client-initiated casts.
-			s.triggerGlobalCooldown(spell)
-			if castTime > 0 {
-				time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
-					s.finishSpellCast(context.Background(), castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
-				})
-			} else {
-				s.finishSpellCast(ctx, castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
-			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, reason), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
+			return true
+		}
+		castTime := uint32(0)
+		if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
+			castTime = uint32(value)
+		}
+		// Spell::SendSpellStart (Spell.cpp:4253-4259): item casts carry the
+		// cast item's GUID as CasterGUID (0x4000 high bits on the wire;
+		// castItemGUID is the raw instance guid) with the player as
+		// CasterUnit; flags/powers follow the same arms as the client path.
+		itemGUID := rawItemGUID | (uint64(0x4000) << 48)
+		startFlags := spellStartCastFlags(spell)
+		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+			return false
+		}
+		// Spell::prepare (Spell.cpp:3188-3196) sends SMSG_SPELL_START
+		// before TriggerGlobalCooldown: item casts are TRIGGERED_NONE
+		// prepares (Player::CastItemUseSpell, Player.cpp:8232), so they
+		// set the category GCD exactly like client-initiated casts.
+		s.triggerGlobalCooldown(spell)
+		if castTime > 0 {
+			time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
+				s.finishSpellCast(context.Background(), castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
+			})
+		} else {
+			s.finishSpellCast(ctx, castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
 		}
 	}
 
