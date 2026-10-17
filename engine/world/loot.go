@@ -5125,31 +5125,6 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	// outside 0..3 records no vote but still reaches the totals check
 	// below, which can resolve the roll.
 
-	// In Need Before Greed, verify that player can need if they chose NEED (TC GroupHandler.cpp:487)
-	if rollType == rollNeed && s.groupID != 0 {
-		s.server.groupsMu.Lock()
-		grp := s.server.groups[s.groupID]
-		s.server.groupsMu.Unlock()
-		if grp != nil && grp.LootMethod == 4 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			var allowableClass uint32 = 0xFFFFFFFF
-			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT AllowableClass FROM item_template WHERE entry = ?", roll.ItemEntry).Scan(&allowableClass)
-			if allowableClass > 0 && allowableClass != 0xFFFFFFFF && s.player.Class > 0 {
-				playerClassMask := uint32(1 << (s.player.Class - 1))
-				if (allowableClass & playerClassMask) == 0 {
-					rollType = rollPass // Ineligible to roll Need
-				}
-			}
-		}
-	}
-
-	// Group::NeedBeforeGreed (Group.cpp:1299): ITEM_FLAG2_CAN_ONLY_ROLL_GREED
-	// clears NEED from the roll vote mask, so a NEED vote on such a roll
-	// drops to pass (the client UI can't offer need, and the server follows
-	// the mask). Kept next to the class-eligibility downgrade above.
-	if rollType == rollNeed && roll.RollVoteMask&rollFlagTypeNeed == 0 {
-		rollType = rollPass
-	}
-
 	voteRecorded := false
 	if rollType <= rollDisenchant {
 		roll.Votes[s.playerGUID] = rollType
