@@ -2889,7 +2889,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// CREATE_ITEM arm, matching C++ CheckItems relative order (CREATE_ITEM
 	// 6864 → ENCHANT_ITEM 6917, fallthrough to ENCHANT_ITEM_PRISMATIC 6935).
 	// Client-initiated casts only — triggered casts go through castSpellDirect.
-	if failReason := s.checkSpellEnchantItemCast(ctx, spell, target); failReason != 0 {
+	if failReason := s.checkSpellEnchantItemCast(ctx, spell, target, nil); failReason != 0 {
 		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "enchant requirements not met", "failReason", failReason)
 		return true
@@ -2899,7 +2899,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// loop (Spell.cpp:6996-7011): runs right after the ENCHANT_ITEM /
 	// ENCHANT_ITEM_PRISMATIC arm, matching C++ CheckItems relative order.
 	// Client-initiated casts only — triggered casts go through castSpellDirect.
-	if failReason := s.checkSpellEnchantItemTemporaryCast(ctx, spell, target); failReason != 0 {
+	if failReason := s.checkSpellEnchantItemTemporaryCast(ctx, spell, target, nil); failReason != 0 {
 		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "temporary-enchant requirements not met", "failReason", failReason)
 		return true
@@ -33275,7 +33275,12 @@ func (s *session) enchantTargetPrismaticID(ctx context.Context, instanceGUID uin
 // special-effects loop (Spell.cpp:6917-6994). Returns the SpellCastResult
 // failure code, or 0 when the arm passes. Client-initiated casts only —
 // triggered casts go through castSpellDirect.
-func (s *session) checkSpellEnchantItemCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+// checkSpellEnchantItemCast mirrors the SPELL_EFFECT_ENCHANT_ITEM /
+// SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC arms (Spell.cpp:6917-6994). castItem
+// is the used item's template on the item-cast path (handleUseItem) and nil
+// on the client-cast path (handleCastSpell) — the vellum NO_REAGENT_COST
+// exploit guard (Spell.cpp:6924-6925) is live only when a cast item exists.
+func (s *session) checkSpellEnchantItemCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData, castItem *itemStoreTemplateInfo) uint8 {
 	for i := 0; i < len(spell.Effects); i++ {
 		eff := spell.Effects[i]
 		isEnchant := eff.Effect == spellEffectEnchantItem
@@ -33296,8 +33301,12 @@ func (s *session) checkSpellEnchantItemCast(ctx context.Context, spell wotlk.Spe
 					return spellFailedNotTradeable
 				}
 				// The m_CastItem NO_REAGENT_COST exploit guard
-				// (Spell.cpp:6924-6925) is structural: handleCastSpell never
-				// carries a cast item (item casts run through handleUseItem).
+				// (Spell.cpp:6924-6925): live only when a cast item exists
+				// (the item-cast path passes the used item's template; the
+				// client-cast path passes nil).
+				if castItem != nil && castItem.Flags&itemFlagNoReagentCost != 0 {
+					return spellFailedTotemCategory
+				}
 				// Room for the created scroll (Spell.cpp:6926-6932).
 				if msg := s.canStoreNewItem(ctx, s.playerGUID, eff.ItemType, 1); msg != equipErrOk {
 					s.sendEquipError(msg, 0)
@@ -33383,10 +33392,13 @@ func (s *session) checkSpellEnchantItemCast(ctx context.Context, spell wotlk.Spe
 
 // checkSpellEnchantItemTemporaryCast mirrors the
 // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY arm of the Spell::CheckItems
-// special-effects loop (Spell.cpp:6996-7011). Returns the SpellCastResult
-// failure code, or 0 when the arm passes. Client-initiated casts only —
-// triggered casts go through castSpellDirect.
-func (s *session) checkSpellEnchantItemTemporaryCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+// special-effects loop (Spell.cpp:6996-7011). castItem is the used item's
+// template on the item-cast path and nil on the client-cast path — the
+// m_CastItem x MaxLevel LOWLEVEL/HIGHLEVEL gates (Spell.cpp:7010-7011)
+// are live only when a cast item exists.
+// Returns the SpellCastResult failure code, or 0 when the arm passes.
+// Client-initiated casts only — triggered casts go through castSpellDirect.
+func (s *session) checkSpellEnchantItemTemporaryCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData, castItem *itemStoreTemplateInfo) uint8 {
 	for i := 0; i < len(spell.Effects); i++ {
 		eff := spell.Effects[i]
 		if eff.Effect != spellEffectEnchantItemTemporary {
@@ -33415,10 +33427,21 @@ func (s *session) checkSpellEnchantItemTemporaryCast(ctx context.Context, spell 
 				return spellFailedNotTradeable
 			}
 		}
-		// The item-level restriction arm (Spell.cpp:7010-7011, the m_CastItem ×
-		// MaxLevel LOWLEVEL/HIGHLEVEL gates) is structural: handleCastSpell
-		// never carries a cast item (item casts run through handleUseItem,
-		// which runs no CheckCast gates).
+		// The item-level restriction arm (Spell.cpp:7010-7011): live only
+		// when the cast comes from an item (m_CastItem) — the client-cast
+		// path passes nil and skips it, exactly like C++.
+		if castItem != nil && spell.MaxLevel > 0 {
+			info, ok := s.server.getItemStoreTemplateInfo(ctx, t.entry)
+			if !ok {
+				continue
+			}
+			if info.ItemLevel < castItem.RequiredLevel {
+				return spellFailedLowLevel
+			}
+			if info.ItemLevel > spell.MaxLevel {
+				return spellFailedHighLevel
+			}
+		}
 	}
 	return 0
 }

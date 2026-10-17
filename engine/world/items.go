@@ -3836,6 +3836,30 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				}
 			}
 		}
+		// Target-item arm of Spell::CheckItems (Spell.cpp:6748-6754) on the
+		// m_CastItem path: an item target that no longer resolves fails
+		// with SPELL_FAILED_ITEM_GONE; one that does not fit the spell
+		// fails with SPELL_FAILED_EQUIPPED_ITEM_CLASS. Runs after the
+		// consumable arm and before the reagent block, matching C++
+		// CheckItems relative order.
+		if failReason := s.checkItemTargetCast(ctx, spell, target); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "item target requirements not met", "failReason", failReason)
+			return true
+		}
+		// Equipped-item requirement arm of Spell::CheckItems
+		// (Spell.cpp:6769-6774) on the m_CastItem path: runs right after
+		// the item-target arm and before the reagent block, matching C++
+		// CheckItems relative order. Like the client-cast path this is
+		// the merged bridge (the general HasItemFitToSpellRequirements
+		// arm plus the tail weapon block at Spell.cpp:7202-7237, which C++
+		// runs after the effect loop — all failures share
+		// SPELL_FAILED_EQUIPPED_ITEM_CLASS).
+		if failReason, ok := s.checkSpellEquippedItemRequirements(ctx, spell); !ok {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "equipped item requirements not met", "failReason", failReason)
+			return true
+		}
 		// Reagent sufficiency arm of Spell::CheckItems (Spell.cpp:6777-6818)
 		// on the m_CastItem path: item casts are TRIGGERED_NONE, so the
 		// triggered-flag arm is vacuous and checkReagents reduces to
@@ -3846,10 +3870,14 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// path only destroyed what was present, so the cast must fail
 		// here. Runs before SMSG_SPELL_START like the other CheckCast
 		// gates on this path.
-		skipReagents := false
-		if info, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry)); ok && info.Flags&itemFlagNoReagentCost != 0 {
-			skipReagents = true
+		// The used item's template (m_CastItem->GetTemplate(), Spell.cpp):
+		// the NO_REAGENT_COST skip and the ENCHANT_ITEM /
+		// ENCHANT_ITEM_TEMPORARY m_CastItem arms below read it.
+		var castItemInfo *itemStoreTemplateInfo
+		if tplInfo, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry)); ok {
+			castItemInfo = &tplInfo
 		}
+		skipReagents := castItemInfo != nil && castItemInfo.Flags&itemFlagNoReagentCost != 0
 		checkReagents := !s.canNoReagentCast(spell)
 		if !checkReagents && s.tradeItemTargetCast(target) {
 			checkReagents = true
@@ -3870,6 +3898,57 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
 				return true
 			}
+		}
+		// Spell-effect special checks of Spell::CheckItems
+		// (Spell.cpp:6862-7198) on the m_CastItem path: C++ runs the whole
+		// loop for item casts (item casts are TRIGGERED_NONE, so only the
+		// CREATE_ITEM !IsTriggered() arm is cast-type sensitive and it
+		// applies). Run right after the totem block, matching C++
+		// CheckItems relative order (totem 6821-6857 → effects 6862+).
+		// Enchanting scrolls (ENCHANT_ITEM) and wizard oils
+		// (ENCHANT_ITEM_TEMPORARY) are the live item-path cases; the
+		// ENCHANT_ITEM_TEMPORARY m_CastItem × MaxLevel gates are wired
+		// here via the used item's template.
+		if failReason := s.checkSpellCreateItemCast(ctx, spell, target); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "created-item requirements not met", "failReason", failReason)
+			return true
+		}
+		if failReason := s.checkSpellEnchantItemCast(ctx, spell, target, castItemInfo); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "enchant requirements not met", "failReason", failReason)
+			return true
+		}
+		if failReason := s.checkSpellEnchantItemTemporaryCast(ctx, spell, target, castItemInfo); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "temporary-enchant requirements not met", "failReason", failReason)
+			return true
+		}
+		if failReason := s.checkSpellDisenchantCast(ctx, spell, target); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "disenchant requirements not met", "failReason", failReason)
+			return true
+		}
+		if failReason, needMoreEntry := s.checkSpellProspectMillingCast(ctx, spell, target); failReason != 0 {
+			if failReason == spellFailedNeedMoreItems {
+				// WriteCastResultInfo (Spell.cpp:4114-4123): param1 = item
+				// entry, param2 = 5.
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castCount, spellID, failReason, needMoreEntry, 5), true)
+			} else {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			}
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "prospecting/milling requirements not met", "failReason", failReason)
+			return true
+		}
+		if failReason := s.checkSpellRangedWeaponCast(ctx, spell); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "ranged weapon requirements not met", "failReason", failReason)
+			return true
+		}
+		if failReason := s.checkSpellCreateManaGemCast(ctx, spell); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "mana gem at max charges", "failReason", failReason)
+			return true
 		}
 		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
 		// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster):
