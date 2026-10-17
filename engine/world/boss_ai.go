@@ -2238,9 +2238,12 @@ func (s *Server) fireCreatureSpellHitTarget(ctx context.Context, m *creatureMoti
 // that survive the damagetype guard (AI DamageTaken/DamageDealt hooks, the
 // tap/loot-recipient block) plus the Unit::Kill chain. The skipped
 // damagetype-guarded legs (split/share damage, aura interrupts, damage
-// procs) stay skipped per the 13:4x audit, and the sScriptMgr->OnDamage /
-// npcbot / OwnerAttackedBy-signal / vehicle-duel legs have no Go model
-// (documented).
+// procs) stay skipped per the 13:4x audit. The npcbot legs stay structural
+// (third-party mod, no Go model) and sScriptMgr->OnDamage is a no-op in this
+// tree (ScriptMgr.h:430 base no-op; the bundled LuaEngine binds no server
+// OnDamage hook). The vehicle-mounted duel arm stays unbridged (no vehicle
+// model); the plain duel arm and the OwnerAttackedBy signal are bridged in
+// the player-victim path, the signal also in creatureInstaKillVictim.
 func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool) {
 	if s == nil || m == nil {
 		return
@@ -2265,6 +2268,21 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 		packet.WriteU32(spellID)
 		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 		if vs := s.findSessionByGUID(guid); vs != nil && vs.player != nil {
+			// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
+			// creatures are signaled OwnerAttackedBy on any non-DoT damage
+			// (NODAMAGE qualifies). Fires before the duel arm, matching C++
+			// order.
+			s.triggerPetDefensive(ctx, vs.player.Map, vs.player.InstanceID, vs.playerGUID, m.GUID, scripting.CreatureEventOnOwnerAttackedAt)
+			// Unit::DealDamage duel arm (Unit.cpp:825-853, 957-973): lethal
+			// damage on a duelist ends the duel — the duel opponent's hit is
+			// clamped to health-1, so the victim survives at 1 HP and no kill
+			// follows. The vehicle-mounted arm stays unbridged (no vehicle
+			// model); a non-opponent kill falls through to killPlayer, whose
+			// interruptDuel mirrors Unit::Kill's DUEL_INTERRUPTED arm
+			// (Unit.cpp:11359-11365).
+			if duelDefeatOnDamage(vs, vs.controllingPlayerGUID(m.GUID), vs.player.Health, vs.player.Health) {
+				continue
+			}
 			vs.player.Health = 0
 			var creatureKiller *session
 			if m.OwnerGUID != 0 {
@@ -2292,9 +2310,9 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 // full Kill chain runs on the owner's session (the pet-kill path's model:
 // party-kill log, Eluna events, KILL/KILLED/DEATH procs, killing-blow
 // criteria, XP/loot, respawn); without one the minimal death registration
-// runs (the pet owner-gone path's model). The no-owner KILL/KILLED/DEATH
-// proc loops stay banked with that model — C++ Unit.cpp:11257-11279 fires
-// them, Go's no-owner path does not yet.
+// runs, including the no-owner KILL/KILLED/DEATH proc loops
+// (Unit.cpp:11257-11279) ahead of the death-aura strip. The OwnerAttackedBy
+// signal (Unit.cpp:728-733) fires after the motion unlock below.
 func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion, guid uint64) {
 	if s == nil || m == nil || guid == 0 {
 		return
@@ -2350,6 +2368,11 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 		tm.ThreatMgr.ClearThreat()
 	}
 	s.motionMu.Unlock()
+	// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled creatures
+	// are signaled OwnerAttackedBy on any non-DoT damage (NODAMAGE
+	// qualifies). Fires outside the motion lock — the Eluna hook re-enters
+	// it on demand.
+	s.triggerPetDefensive(ctx, tm.Map, tm.InstanceID, tm.GUID, m.GUID, scripting.CreatureEventOnOwnerAttackedAt)
 	// Deferred Eluna summon hooks queued by boss OnDamageTaken fire after
 	// the unlock (Lua handler methods lock motionMu on demand) — the
 	// spells.go lethal path's order.
