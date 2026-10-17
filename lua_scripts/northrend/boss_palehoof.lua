@@ -107,8 +107,12 @@
 --   -> DoCast(target, SPELL_POISON_BREATH 48133), 2-arg = non-triggered
 --   -> CastSpell(target, 48133), init 13s, Repeat(14s).
 -- The H_* heroic spell variants (59268/59267/59273/59265/59264/59263/
--- 59272/59271) are unmodeled (no difficulty bridge — the vazruden /
--- thespia precedent).
+-- 59272/59271) are unreferenced in the C++ — the enum decls (:34-65)
+-- are the only hits; no arm ever selects them, so there is nothing to
+-- port. (The old "no difficulty bridge — vazruden/thespia precedent"
+-- claim is STALE: creature:IsHeroic() IS bridged
+-- (engine/world/lua_creature_events.go:203); it is simply unneeded
+-- here.)
 -- DOCUMENTED DEVIATION: the awakening preamble is unbridged — the orb
 -- BasicEvent machines (OrbAirPositionEvent / OrbFlyEvent /
 -- OrbFinalPositionEvent), the SPELL_AWAKEN_SUBBOSS 47669 /
@@ -129,9 +133,13 @@
 -- (dedicated palehoofDied); the instance SetBossState(DONE) +
 -- SendEncounterUnit disengage legs have no instance bridges.
 -- PalehoofMinionsBossAI Reset (:329-335) — DoCastSelf(SPELL_FREEZE
--- 16245, true) is triggered — triggered casts stay out (the emerald
--- MARK_OF_NATURE_AURA precedent); the unfreeze/DoZoneInCombat legs
--- ride the unbridged DoAction machine (see DEVIATION above).
+-- 16245, true) PORTED as a triggered self-cast on event 23
+-- (minibossReset; the anubrekhan/auriaya/ichoron triggered-3rd-arg
+-- precedent — the old "triggered casts stay out" header claim is
+-- STALE); the matching ACTION_START_FIGHT RemoveAurasDueToSpell
+-- (:341-345) is ported via creature:RemoveAura at combat start; the
+-- SetImmuneToPC/DoZoneInCombat legs ride the unbridged DoAction
+-- machine (see DEVIATION above).
 -- The orb / awaken-spell / sphere DoAction machine (see DEVIATION
 -- above), spell_palehoof_crazed / spell_palehoof_crazed_effect /
 -- spell_palehoof_awaken_subboss / spell_palehoof_awaken_gortok
@@ -168,6 +176,12 @@ local SPELL_STOMP = 48131
 local SPELL_ACID_SPIT = 48132
 local SPELL_ACID_SPLATTER = 48136
 local SPELL_POISON_BREATH = 48133
+
+-- C++ PalehoofMinionsBossAI::Reset (:329-335): DoCastSelf(SPELL_FREEZE
+-- 16245, true) — triggered self-cast, re-applied on every reset/evade
+-- (the anubrekhan triggered-self-cast precedent); removed at
+-- ACTION_START_FIGHT (:341-345) via RemoveAurasDueToSpell.
+local SPELL_FREEZE = 16245
 
 local timers = {}
 
@@ -215,6 +229,15 @@ end
 
 -- Shared timer wipe for events 2/23/4 on timer-carrying entries.
 local function cancelCombatTimers(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ PalehoofMinionsBossAI::Reset (:329-335) — DoCastSelf(SPELL_FREEZE
+-- 16245, true): the triggered freeze is re-applied on every reset/evade
+-- (event 23 fires first on the Go respawn/death/evade paths; no 23 fire
+-- at first grid spawn, so the spawn-time freeze visual stays unmodeled).
+local function minibossReset(event, creature)
+    creature:CastSpell(creature, SPELL_FREEZE, true)
     cancelTimers(creature:GetGUID())
 end
 
@@ -286,6 +309,10 @@ end
 local function furbolgEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ PalehoofMinionsBossAI::DoAction(ACTION_START_FIGHT) (:341-345):
+    -- RemoveAurasDueToSpell(SPELL_FREEZE) — the unfreeze leg (the
+    -- SetImmuneToPC/DoZoneInCombat legs have no bridges).
+    creature:RemoveAura(SPELL_FREEZE)
     local function crazedTick()
         creature:CastSpell(creature, SPELL_CRAZED)
         schedule(guid, "crazed", {20000, 25000}, crazedTick)
@@ -308,6 +335,7 @@ end
 local function worgenEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:RemoveAura(SPELL_FREEZE)
     local function mortalWoundTick()
         creature:CastSpell(nil, SPELL_MORTAL_WOUND)
         schedule(guid, "mortalwound", 6000, mortalWoundTick)
@@ -328,6 +356,7 @@ end
 local function rhinoEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:RemoveAura(SPELL_FREEZE)
     local function goreTick()
         creature:CastSpell(nil, SPELL_GORE)
         schedule(guid, "gore", 19000, goreTick)
@@ -353,6 +382,7 @@ end
 local function jormungarEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:RemoveAura(SPELL_FREEZE)
     local function acidSpitTick()
         creature:CastSpell(nil, SPELL_ACID_SPIT)
         schedule(guid, "acidspit", 7000, acidSpitTick)
@@ -390,16 +420,16 @@ RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 1, furbolgEnterCombat)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 4, cancelCombatTimers)
-RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 23, minibossReset)
 RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 1, worgenEnterCombat)
 RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 4, cancelCombatTimers)
-RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 23, minibossReset)
 RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 1, rhinoEnterCombat)
 RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 4, cancelCombatTimers)
-RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 23, minibossReset)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 1, jormungarEnterCombat)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 4, cancelCombatTimers)
-RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 23, minibossReset)

@@ -28,18 +28,25 @@
 -- EVENT_VANISH (25-35s init/repeat): gated on
 -- GetThreatManager().GetThreatListSize() > 1 — no threat-list bridge on
 -- the Lua surface — and the leg drives SelectTarget(Random, 0, 100.0f,
--- true) for the embrace target — the random-target SelectTarget bridge is
--- absent (cairne/kazzak precedent) — so the whole vanish/feed machine
+-- true) for the embrace target — the random-target pool uses the
+-- randomPlayer idiom (eck/faerlina; the old "absent random-target
+-- bridge (cairne/kazzak precedent)" claim is STALE) — but the
+-- threat-list-size gate has no bridge, so the whole vanish/feed machine
 -- (EVENT_START_FEEDING Shadowstep 55966 + Embrace of the Vampyr 55959 +
 -- Talk(SAY_FEED 5), EVENT_DONE_FEEDING, _embraceTargetGUID via
 -- ObjectAccessor::GetUnit, RemoveAurasDueToSpell(VANISH 55964),
--- CastStop) is documented-only; emulating the timer alone would fire
--- Vanish with no feed target, failing the C++-exact port bar.
+-- CastStop) is documented-only; porting the timer without the
+-- threat-list gate would fire Vanish when solo, failing the C++-exact
+-- port bar.
 -- DamageTaken embrace-damage latch (_embraceTakenDamage vs
--- DATA_EMBRACE_DMG 20000 / heroic 40000 -> Clear + CastStop) — no
--- DamageTaken hook on the Lua surface (npc_unkor_the_ruthless
--- precedent) plus the IsHeroic gate has no difficulty bridge (kelidan
--- breaker precedent) — documented-only.
+-- DATA_EMBRACE_DMG 20000 / heroic 40000 -> Clear + CastStop) —
+-- documented-only: CREATURE_EVENT_ON_DAMAGE_TAKEN (9) and
+-- creature:IsHeroic() ARE now bridged (the old "no DamageTaken hook
+-- (npc_unkor_the_ruthless precedent)" and "no difficulty bridge
+-- (kelidan breaker precedent)" claims are STALE), but the latch stays
+-- unported — the embrace-target setter (the vanish SelectTarget leg,
+-- C++ :196-197) has no threat-list bridge, so _embraceTargetGUID would
+-- always be nil and the ported latch permanently inert.
 -- The UpdateAI vanish-evade check (HasAura(VANISH 55964) +
 -- IsThreatListEmpty -> EnterEvadeMode) — threat-list + evade bridges
 -- absent — documented-only.
