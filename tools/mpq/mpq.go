@@ -27,7 +27,10 @@ const (
 	fileFixKey   uint32 = 0x00020000
 	fileSingle   uint32 = 0x01000000
 	fileExists   uint32 = 0x80000000
-	sectorSize   uint32 = 512
+	// fileCompressedMask mirrors LIBMPQ_FLAG_COMPRESSED
+	// (dep/libmpq/libmpq/mpq-internal.h:42): the compression-method bits.
+	fileCompressedMask uint32 = 0x0000FF00
+	sectorSize         uint32 = 512
 )
 
 type header struct {
@@ -38,9 +41,14 @@ type header struct {
 	HashTablePos       uint64
 	BlockTablePos      uint64
 	ExtendedBlockTable uint64
-	ArchiveOffset      uint64
-	HashEntries        uint32
-	BlockEntries       uint32
+	// hasExtendedBlocks mirrors C's raw-field test
+	// (dep/libmpq/libmpq/mpq.c:244): the extended block table is present
+	// iff the on-disk extended_offset field is nonzero, before the
+	// archive offset is added.
+	hasExtendedBlocks bool
+	ArchiveOffset     uint64
+	HashEntries       uint32
+	BlockEntries      uint32
 }
 
 type hashEntry struct {
@@ -143,6 +151,7 @@ func (a *Archive) readHeader() error {
 				return fmt.Errorf("invalid MPQ extended header in %s: %w", a.path, err)
 			}
 			a.header.ExtendedBlockTable = binary.LittleEndian.Uint64(extended[:8]) + offset
+			a.header.hasExtendedBlocks = binary.LittleEndian.Uint64(extended[:8]) != 0
 			a.header.HashTablePos += uint64(binary.LittleEndian.Uint16(extended[8:10])) << 32
 			a.header.BlockTablePos += uint64(binary.LittleEndian.Uint16(extended[10:12])) << 32
 		}
@@ -173,7 +182,7 @@ func (a *Archive) readTables() error {
 		relative := uint64(binary.LittleEndian.Uint32(blockBytes[offset:]))
 		a.blocks[index] = blockEntry{RelativePos: relative, FilePos: relative + a.header.ArchiveOffset, CompressedSize: binary.LittleEndian.Uint32(blockBytes[offset+4:]), FileSize: binary.LittleEndian.Uint32(blockBytes[offset+8:]), Flags: binary.LittleEndian.Uint32(blockBytes[offset+12:])}
 	}
-	if a.header.ExtendedBlockTable != 0 {
+	if a.header.hasExtendedBlocks {
 		extended, err := a.readAt(a.header.ExtendedBlockTable, uint64(a.header.BlockEntries)*2)
 		if err != nil {
 			return err
@@ -254,13 +263,30 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 func (a *Archive) readSectors(block blockEntry, key uint32) ([]byte, error) {
 	sectorBytes := sectorSize << a.header.BlockSize
 	sectorCount := (block.FileSize + sectorBytes - 1) / sectorBytes
-	offsetBytes := (sectorCount + 1) * 4
-	offsets, err := a.readAt(block.FilePos, uint64(offsetBytes))
-	if err != nil {
-		return nil, err
-	}
-	if key != 0 {
-		decrypt(offsets, key-1)
+	var offsets []byte
+	if block.Flags&fileCompressedMask != 0 {
+		// C++ owner: dep/libmpq/libmpq/mpq.c libmpq__block_open_offset —
+		// the sector-offset table is read from disk only for files with
+		// compression flags; stored (uncompressed) multi-sector files get
+		// synthesized offsets (i * sectorBytes, last = unpacked size).
+		offsetBytes := (sectorCount + 1) * 4
+		var err error
+		offsets, err = a.readAt(block.FilePos, uint64(offsetBytes))
+		if err != nil {
+			return nil, err
+		}
+		if key != 0 {
+			decrypt(offsets, key-1)
+		}
+	} else {
+		offsets = make([]byte, (sectorCount+1)*4)
+		for index := uint32(0); index <= sectorCount; index++ {
+			value := block.FileSize
+			if index < sectorCount {
+				value = index * sectorBytes
+			}
+			binary.LittleEndian.PutUint32(offsets[index*4:], value)
+		}
 	}
 	result := bytes.NewBuffer(make([]byte, 0, block.FileSize))
 	for index := uint32(0); index < sectorCount; index++ {
@@ -420,7 +446,7 @@ func decompressImplode(data []byte, expected uint32) ([]byte, error) {
 
 var waveIndexAdjust = [...]int32{-1, 0, -1, 4, -1, 2, -1, 6, -1, 1, -1, 5, -1, 3, -1, 7, -1, 1, -1, 5, -1, 3, -1, 7, -1, 2, -1, 4, -1, 6, -1, 8}
 
-var waveStepTable = [...]int32{7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1165, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767}
+var waveStepTable = [...]int32{7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767}
 
 func decompressWave(data []byte, expected uint32, channels int) ([]byte, error) {
 	if channels < 1 || channels > 2 || len(data) < 2+channels*2 {

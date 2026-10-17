@@ -1,6 +1,7 @@
 package wowdata
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -162,23 +163,40 @@ func extractDBCFromArchives(archives []string, destination string) (int, error) 
 			continue
 		}
 		for _, name := range files {
-			if !strings.EqualFold(filepath.Ext(name), ".dbc") {
+			// C++ owner: System.cpp:994 — the ".dbc" suffix match is a
+			// case-sensitive rfind, so ".DBC" entries stay out exactly
+			// like C++.
+			if !strings.HasSuffix(name, ".dbc") {
 				continue
 			}
-			key := strings.ToLower(filepath.ToSlash(name))
-			if _, dup := seen[key]; dup {
+			if _, dup := seen[name]; dup {
 				continue
 			}
-			seen[key] = struct{}{}
-			base := filepath.Base(filepath.FromSlash(name))
+			seen[name] = struct{}{}
+			// C++ owner: System.cpp:1018 — the destination strips the
+			// literal "DBFilesClient\" prefix (14 chars, unchecked).
+			// Real listfiles always carry it; the backslash-base
+			// fallback keeps non-conforming names sane instead of
+			// reproducing the C++ out-of-bounds read.
+			base := strings.TrimPrefix(name, `DBFilesClient\`)
+			if idx := strings.LastIndexByte(base, '\\'); idx >= 0 {
+				base = base[idx+1:]
+			}
 			dest := filepath.Join(destination, base)
 			if _, err := os.Stat(dest); err == nil {
 				continue
 			}
 			data, err := archive.ReadFile(name)
 			if err != nil {
-				archive.Close()
-				return written, fmt.Errorf("read %s from %s: %w", name, path, err)
+				if !errors.Is(err, os.ErrNotExist) {
+					archive.Close()
+					return written, fmt.Errorf("read %s from %s: %w", name, path, err)
+				}
+				// C++ owner: mpq_libmpq.cpp:73 HACK — patch.mpq files
+				// reporting unpacked size 0/1 read as eof; C++
+				// ExtractFile then writes zero bytes and still counts
+				// the file. Mirror that instead of aborting the phase.
+				data = nil
 			}
 			// C++ ExtractFile (System.cpp:966-980) is a raw byte copy: it
 			// never parses or validates DBC content, so a malformed DBC is

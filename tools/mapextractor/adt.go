@@ -250,10 +250,12 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 			vertexOffset := binary.LittleEndian.Uint32(chunk[base+20:])
 			if vertexOffset != 0 {
 				// C++ owner: LiquidVertexFormatType
-				// (map_extractor/adt.h:190-195) + GetLiquidVertexFormatSize
-				// (adt.h:256-303): HeightDepth(0)=5,
-				// HeightTextureCoord(1)=8, Depth(2)=1 bytes/vertex;
-				// undefined formats default to 0, they are not an error.
+				// (map_extractor/adt.h:176-181); per-vertex byte sizes
+				// derived from the C++ accessors (adt.h:254-303):
+				// HeightDepth(0)=4-byte height + 1-byte depth,
+				// HeightTextureCoord(1)=4-byte height + 4-byte texcoord,
+				// Depth(2)=1-byte depth; undefined formats default to
+				// 0, they are not an error.
 				bytesPerVertex := map[uint16]uint64{0: 5, 1: 8, 2: 1}[lvf]
 				vertexBytes := uint64(width+1) * uint64(height+1) * bytesPerVertex
 				if uint64(vertexOffset)+vertexBytes > uint64(len(chunk)) {
