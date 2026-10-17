@@ -1446,10 +1446,13 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			// (giverTotal - old).
 			var bopFlags, played int64
 			if err := tx.QueryRowContext(ctx, "SELECT flags, COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?", it.ItemGUID).Scan(&bopFlags, &played); err == nil && bopFlags&int64(itemInstanceFlagBOPTradeable) != 0 {
-				newPlayed := int64(partner.player.TotalPlayedTime) - (int64(s.player.TotalPlayedTime) - played)
-				if newPlayed < 0 {
-					newPlayed = 0
-				}
+				// C++ applies no clamp here: the subtraction is uint32 arithmetic
+				// (TradeHandler.cpp:155-156), and the wrap is what keeps
+				// CheckSoulboundTradeExpire (Item.cpp:1188-1195) reading the
+				// window correctly when the item predates the new owner's
+				// played time. A clamp-to-0 mints a fresh 2h window on a
+				// young character instead.
+				newPlayed := int64(uint32(int64(partner.player.TotalPlayedTime) - (int64(s.player.TotalPlayedTime) - played)))
 				if !execTx("UPDATE item_instance SET playedTime = ? WHERE guid = ?", newPlayed, it.ItemGUID) {
 					return
 				}
@@ -1483,10 +1486,13 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			// (TradeHandler.cpp:225-230, mirror of the giver's arm above).
 			var bopFlags, played int64
 			if err := tx.QueryRowContext(ctx, "SELECT flags, COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?", it.ItemGUID).Scan(&bopFlags, &played); err == nil && bopFlags&int64(itemInstanceFlagBOPTradeable) != 0 {
-				newPlayed := int64(s.player.TotalPlayedTime) - (int64(partner.player.TotalPlayedTime) - played)
-				if newPlayed < 0 {
-					newPlayed = 0
-				}
+				// C++ applies no clamp here: the subtraction is uint32 arithmetic
+				// (TradeHandler.cpp:155-156), and the wrap is what keeps
+				// CheckSoulboundTradeExpire (Item.cpp:1188-1195) reading the
+				// window correctly when the item predates the new owner's
+				// played time. A clamp-to-0 mints a fresh 2h window on a
+				// young character instead.
+				newPlayed := int64(uint32(int64(s.player.TotalPlayedTime) - (int64(partner.player.TotalPlayedTime) - played)))
 				if !execTx("UPDATE item_instance SET playedTime = ? WHERE guid = ?", newPlayed, it.ItemGUID) {
 					return
 				}
