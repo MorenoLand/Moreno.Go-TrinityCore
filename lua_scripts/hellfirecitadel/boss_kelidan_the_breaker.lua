@@ -42,8 +42,8 @@
 -- {30s,50s} regardless (C++-exact); burning nova: 15s init then
 -- 20000+rand32()%8000 (C++ {20s,28s}) — the InterruptNonMeleeSpells
 -- arm has no unit-state bridge; Talk(SAY_NOVA); the AddAura(SPELL_
--- BURNING_NOVA 30940, me) arm has no aura bridge (the 5s firenova
--- machine drives the explosion — timer bookkeeping exact); the
+-- BURNING_NOVA 30940, me) arm is ported below (stale "no aura
+-- bridge" claim retracted — creature AddAura is bridged); the
 -- IsHeroic() DoTeleportAll arm has no teleport/difficulty bridge;
 -- firenova=true, firenovaTimer=5000, re-arm {20s,28s} regardless
 -- (C++-exact).
@@ -75,8 +75,8 @@
 -- EVOCATION 30935) check_Timer arm, which only fires in that
 -- state; no unit-state bridge — the JustEngagedWith and burning-
 -- nova InterruptNonMeleeSpells arms unmodeled (mennu/thespia
--- precedent); no aura bridge — the burning-nova AddAura(30940)
--- arm unmodeled (timer bookkeeping exact); no teleport bridge —
+-- precedent); the burning-nova AddAura(30940) arm is ported
+-- (stale "no aura bridge" claim retracted); no teleport bridge —
 -- the heroic DoTeleportAll arm unmodeled; the H_SPELL_ variants
 -- 37371/40070 are unused C++ enum members (both casts are
 -- unconditional, C++-exact); no
@@ -87,6 +87,7 @@
 local SPELL_SHADOW_BOLT_VOLLEY = 28599
 local SPELL_CORRUPTION = 30938
 local SPELL_FIRE_NOVA = 33132
+local SPELL_BURNING_NOVA = 30940
 
 local SAY_WAKE = 0
 local SAY_KILL = 2
@@ -172,13 +173,18 @@ local function bossTick(creature, guid)
 
     -- Burning nova: 15s init then 20000+rand32()%8000 (C++
     -- {20s,28s}) — the InterruptNonMeleeSpells arm has no
-    -- unit-state bridge; Talk(SAY_NOVA); the AddAura(30940) arm
-    -- has no aura bridge and the heroic DoTeleportAll arm has no
-    -- teleport/difficulty bridge (documented above); firenova=
+    -- unit-state bridge; Talk(SAY_NOVA); the AddAura(30940) arm is
+    -- ported below (stale "no aura bridge" claim retracted) and the
+    -- heroic DoTeleportAll arm has no teleport/difficulty bridge
+    -- (documented above); firenova=
     -- true with a 5s firenovaTimer, re-arm {20s,28s} regardless
     -- (C++-exact).
     if st.burningNova <= 1000 then
         creature:Talk(SAY_NOVA)
+        -- C++ me->AddAura(SPELL_BURNING_NOVA, me) (C++-exact —
+        -- the stale "no aura bridge" claim is retracted: creature
+        -- AddAura is bridged on the event-handler surface).
+        creature:AddAura(SPELL_BURNING_NOVA)
         st.burningNova = 20000 + math.random(0, 7999)
         st.firenovaTimer = 5000
         st.firenova = true

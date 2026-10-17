@@ -62,8 +62,10 @@
 --    TRIGGERED DoCast(target, SPELL_DIVE_BOMB 35181, true) on
 --    a random alive player in the instance (C++ SelectTarget
 --    (Random, 0), thespia precedent; the RemoveAurasDueToSpell
---    arm has no aura bridge and the UpdatePosition teleport
---    has no movement bridge — unmodeled), no target -> evade
+--    arm is ported below (stale "no aura bridge" claim
+--    retracted — creature RemoveAura is bridged) and the
+--    UpdatePosition teleport has no movement bridge —
+--    unmodeled), no target -> evade
 --    (C++ EnterEvadeMode — the evade hooks land the reset);
 --    land (+1s — C++ WaitTimer = 1000 + floor(dist/80*1000),
 --    dist in {3.0, 5.0} -> {1037, 1062}ms, 1s granularity
@@ -229,18 +231,25 @@ local function advanceDive(creature, guid)
     end
     local step = st.dive.step
     if step == "meteor" then
-        -- WE_METEOR: non-triggered self cast (C++-exact).
+        -- WE_METEOR: non-triggered self cast (C++-exact); the cast
+        -- applies the dive-bomb visual aura in C++ (aura 35367),
+        -- modeled as an explicit AddAura (stale "no aura bridge"
+        -- claim retracted — creature AddAura is bridged).
         creature:CastSpell(creature, SPELL_DIVE_BOMB_VISUAL)
+        creature:AddAura(SPELL_DIVE_BOMB_VISUAL)
         st.dive = { step = "dive", wait = 4000 }
     elseif step == "dive" then
         -- WE_DIVE: TRIGGERED dive bomb on a random target
         -- (C++-exact); no target -> EnterEvadeMode (C++-exact —
-        -- the evade hooks land the reset).
+        -- the evade hooks land the reset). C++ arm order:
+        -- RemoveAurasDueToSpell(SPELL_DIVE_BOMB_VISUAL) before
+        -- the dive-bomb cast (C++-exact).
         local target = randomAlivePlayer(creature)
         if not target then
             fullReset(guid)
             return
         end
+        creature:RemoveAura(SPELL_DIVE_BOMB_VISUAL)
         creature:CastSpell(target, SPELL_DIVE_BOMB, true)
         st.dive = { step = "land", wait = 1000 }
     elseif step == "land" then

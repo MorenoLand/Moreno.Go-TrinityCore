@@ -71,7 +71,10 @@
 --   prelude's casting/CC/teleport/order legs are live-unit-state with
 --   no model on the session creature object.
 -- - reason -1 (HasAura(BERSERK)) at menu time and its select arm
---   (SetFaction(14)/BotYell/Attack): the aura has no Lua bridge and
+--   (SetFaction(14)/BotYell/Attack): the HasAura bridge exists
+--   (lua_objects.go:228) but the BERSERK aura (46587) is never
+--   applied in the Go bot model (the GM toggle at bot_ai.cpp:7360
+--   is unported), so the reason -1 arm stays unreachable, and
 --   the attack leg has no live combat-AI bridge (03:04 audit).
 -- - The hello arm's me->isMoving() -> BotStopMovement() leg: no
 --   movement bridge on the session creature object (botgiver.lua
@@ -192,8 +195,10 @@ local function onBotHireHello(event, player, creature)
         return
     end
     local cost = player:GetNpcBotCost(player:GetLevel(), botclass)
-    -- C++ arm order: BERSERK (no aura bridge, stays 0), owner (0 here
-    -- by the free gate above), max bots, money, max class.
+    -- C++ arm order: BERSERK (HasAura bridged but the aura is
+    -- never applied in the Go bot model — reason stays 0),
+    -- owner (0 here by the free gate above), max bots, money,
+    -- max class.
     local reason = 0
     if player:GetNpcBotsCount() >= player:GetMaxNpcBots() then
         reason = 2
