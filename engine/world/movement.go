@@ -1673,7 +1673,10 @@ func (s *session) handleFall(ctx context.Context, info movementInfo) {
 // broadcasting SMSG_ENVIRONMENTAL_DAMAGE_LOG and triggering death if lethal.
 // Mirrors TrinityCore Player::EnvironmentalDamage (Player.cpp:758-809).
 func (s *session) environmentalDamage(ctx context.Context, damageType uint8, damage uint32) uint32 {
-	if s.player == nil || s.player.Health == 0 {
+	// IsImmuneToEnvironmentalDamage (Player.cpp:752-756) folds
+	// !IsAlive() into isTargetableForAttack: ghosts (Health=1,
+	// death.go:473, playerFlagGhost set) take no environmental damage.
+	if s.isDeadOrGhost() {
 		return 0
 	}
 	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0
@@ -1684,11 +1687,12 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	// Unit::DealDamage (Unit.cpp:735-737) via Player::EnvironmentalDamage
 	// (Player.cpp:784): CHEAT_GOD negates all environmental damage (fall,
 	// drowning, fatigue, lava) — the HandleFall zeroing (Player.cpp:25390) is the
-	// same arm one call up, so no separate fall check is needed. The damage log
-	// below still reports the pre-negation amount, matching C++ sending
-	// EnvironmentalDamageLog before DealDamage; the health legs run on the
-	// negated value and no damage procs fire.
-	damage = s.negateGodModeDamage(damage)
+	// same arm one call up, so no separate fall check is needed. C++ sends
+	// EnvironmentalDamageLog with the pre-negation amount (Player.cpp:778-786
+	// runs before Unit::DealDamage), so the negation below must not touch the
+	// logged amount; the health legs run on the negated value and no damage
+	// procs fire.
+	rolledDamage := damage
 
 	// Player::EnvironmentalDamage (Player.cpp:768-779): lava/slime damage
 	// runs the Unit::CalcAbsorbResist legs on a self DamageInfo (attacker ==
@@ -1709,7 +1713,12 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	case damageSlime:
 		schoolMask = 1 << 3 // SPELL_SCHOOL_MASK_NATURE
 	}
-	if schoolMask != 0 && damage > 0 {
+	// The god negation in Unit::DealDamage (Unit.cpp:735-737) zeroes the
+	// damage BEFORE shields absorb it in the shared DealDamage absorb pass,
+	// so no shield charges are consumed for a god-cheat player; the
+	// lava/slime absorb legs are skipped there (their log contribution stays
+	// 0/0, the rolled amount still going out as the C++ packet Amount).
+	if schoolMask != 0 && damage > 0 && !s.godCheatActive() {
 		ignoreResist := int32(0)
 		for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, uint32(schoolMask)) {
 			ignoreResist += amount
@@ -1762,13 +1771,21 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		logType = damageFall
 	}
 	packet.WriteU8(logType)
-	packet.WriteU32(damage)
+	if s.godCheatActive() {
+		packet.WriteU32(rolledDamage)
+	} else {
+		packet.WriteU32(damage)
+	}
 	packet.WriteU32(resist)
 	packet.WriteU32(absorb)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ENVIRONMENTAL_DAMAGE_LOG), packet.Bytes(), true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ENVIRONMENTAL_DAMAGE_LOG), packet.Bytes(), s)
 	}
+
+	// CHEAT_GOD (Unit.cpp:735-737) negates the damage inside
+	// Unit::DealDamage, AFTER the log above has been sent.
+	damage = s.negateGodModeDamage(damage)
 
 	s.sendPlayerUpdate()
 

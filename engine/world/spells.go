@@ -36154,7 +36154,10 @@ func (s *session) handleEffectAddHonor(ctx context.Context, spell wotlk.Spell, e
 			}
 		case damage <= 50:
 			if damage > 0 {
-				honor = uint32(math.Ceil(float64(targetSess.player.Level) * 1.55 * float64(damage)))
+				// Formulas.h:34-44: float32(level) * float32(1.55) * float32(damage)
+				// then ceil. float64 arithmetic yields +1 ceil off-by-ones
+				// at some level*damage pairs, so the float32 round-trip is kept.
+				honor = uint32(math.Ceil(float64(float32(targetSess.player.Level) * 1.55 * float32(damage))))
 			}
 		default:
 			if damage > 0 {

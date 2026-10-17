@@ -1172,8 +1172,9 @@ func (s *session) handleEffectDestroyAllTotems(ctx context.Context, spell wotlk.
 		}
 		s.destroyTotem(slot)
 	}
-	// ApplyPct(mana, damage): mana *= (100 + damage) / 100.
-	mana = mana * int64(100+eff.CalcValueForLevel(spell, uint32(s.player.Level))) / 100
+	// ApplyPct(mana, damage) (Util.h:74-78): mana = mana * damage / 100
+	// (e.g. Totemic Recall's damage=25 refunds 25%, not 125%).
+	mana = mana * int64(eff.CalcValueForLevel(spell, uint32(s.player.Level))) / 100
 	if mana > 0 {
 		// TRIGGERED_FULL_MASK in C++: castSpellDirect is Go's triggered-cast
 		// path, with the mana amount carried as SPELLVALUE_BASE_POINT0.
