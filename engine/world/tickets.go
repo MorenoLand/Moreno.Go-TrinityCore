@@ -149,7 +149,7 @@ func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) b
 		var lastModifiedTime int64
 		var completed int64
 		err := s.server.CharactersStore.DB.QueryRowContext(ctx,
-			"SELECT id, description, response, needMoreHelp, escalated, viewed, lastModifiedTime, completed FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
+			"SELECT id, description, response, needMoreHelp, escalated, viewed, lastModifiedTime, completed FROM gm_ticket WHERE playerGuid = ? AND type = 0 LIMIT 1",
 			s.playerGUID).Scan(&ticketID, &message, &response, &needMoreHelp, &escalated, &viewed, &lastModifiedTime, &completed)
 		if err == nil && ticketID > 0 {
 			if completed != 0 {
@@ -293,7 +293,7 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 		cdb := s.server.CharactersStore.DB
 		var existingID uint32
 		var existingCompleted int64
-		_ = cdb.QueryRowContext(ctx, "SELECT id, completed FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
+		_ = cdb.QueryRowContext(ctx, "SELECT id, completed FROM gm_ticket WHERE playerGuid = ? AND type = 0 LIMIT 1",
 			s.playerGUID).Scan(&existingID, &existingCompleted)
 		if existingID > 0 {
 			if existingCompleted == 0 {
@@ -365,7 +365,7 @@ func (s *session) handleGMTicketUpdate(ctx context.Context, payload []byte) bool
 		cdb := s.server.CharactersStore.DB
 		var ticketID uint32
 		if err := cdb.QueryRowContext(ctx,
-			"SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
+			"SELECT id FROM gm_ticket WHERE playerGuid = ? AND type = 0 LIMIT 1",
 			s.playerGUID).Scan(&ticketID); err == nil && ticketID > 0 {
 			now := time.Now().Unix()
 			_, _ = cdb.ExecContext(ctx,
@@ -401,10 +401,10 @@ func (s *session) handleGMTicketDelete(ctx context.Context, payload []byte) bool
 		cdb := s.server.CharactersStore.DB
 		var ticketID uint32
 		_ = cdb.QueryRowContext(ctx,
-			"SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
+			"SELECT id FROM gm_ticket WHERE playerGuid = ? AND type = 0 LIMIT 1",
 			s.playerGUID).Scan(&ticketID)
 		res, _ := cdb.ExecContext(ctx,
-			"UPDATE gm_ticket SET closedBy = ?, type = 1 WHERE playerGuid = ? AND closedBy = 0",
+			"UPDATE gm_ticket SET closedBy = ?, type = 1 WHERE playerGuid = ? AND type = 0",
 			s.playerGUID, s.playerGUID)
 		if n, _ := res.RowsAffected(); n > 0 {
 			buf := protocol.NewBuffer(4)
@@ -431,7 +431,7 @@ func (s *session) handleGMResponseResolve(ctx context.Context, payload []byte) b
 	// TicketMgr::CloseTicket sets closedBy (+type), never completed.
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		res, _ := s.server.CharactersStore.DB.ExecContext(ctx,
-			"UPDATE gm_ticket SET closedBy = ?, type = 1 WHERE playerGuid = ? AND closedBy = 0",
+			"UPDATE gm_ticket SET closedBy = ?, type = 1 WHERE playerGuid = ? AND type = 0",
 			s.playerGUID, s.playerGUID)
 		if n, _ := res.RowsAffected(); n > 0 {
 			var getSurvey uint8

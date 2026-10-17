@@ -2992,12 +2992,21 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 	if motion == nil {
 		return true
 	}
-	// PetHandler.cpp:104-111: a dead pet drops command/reaction/disabled
-	// actions (the spell arm survives only for CASTABLE_WHILE_DEAD spells,
-	// which Go's spell model does not carry — the cast arm keeps its current
-	// behavior and the nuance stays a documented delta).
-	if motion.Health == 0 && (actFlag == actCommand || actFlag == actReaction || actFlag == actDisabled) {
-		return true
+	// PetHandler.cpp:104-111: on a dead pet the spell arms (ACT_ENABLED /
+	// ACT_PASSIVE) survive only for spells carrying
+	// SPELL_ATTR0_CASTABLE_WHILE_DEAD (unknown spell ids drop too).
+	// Command, reaction and disabled arms take their normal paths — C++
+	// drops nothing else for a dead pet.
+	if motion.Health == 0 && (actFlag == actEnabled || actFlag == actPassive) {
+		castableWhileDead := false
+		if s.server != nil && s.server.Data != nil {
+			if si, found, spellErr := s.server.Data.Spell(spellOrAction); spellErr == nil && found && si.Attributes&spellAttr0CastableWhileDead != 0 {
+				castableWhileDead = true
+			}
+		}
+		if !castableWhileDead {
+			return true
+		}
 	}
 
 	switch actFlag {
@@ -3114,7 +3123,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		}
 	case actReaction:
 		if s.server != nil {
-			s.server.onPetSetReaction(s.player.Map, s.player.InstanceID, petGUID, uint8(spellOrAction))
+			s.server.onPetSetReaction(s.player.Map, s.player.InstanceID, petGUID, uint8(spellOrAction), s)
 		}
 		// Save react state (0 = passive, 1 = defensive, 2 = aggressive)
 		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -3171,25 +3180,47 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		if targetGUID != 0 {
 			castTarget.Flags = protocol.SpellTargetFlagUnitWireMask
 		}
+		// PetHandler.cpp:304-310: ahead of the cast the pet leaves its
+		// stay/follow/return states and enters command-attack — the AI
+		// resets the rest after AttackStart.
+		var prevCommand uint8
+		if s.server != nil {
+			prevCommand = s.server.petCommandOnSpellCast(s.player.Map, s.player.InstanceID, petGUID)
+		}
 		if !s.checkPetCastGauntlet(ctx, motion, spellInfo, spellOrAction, castTarget, 0, false) {
+			// PetHandler.cpp:380-382: the cast failure resets the
+			// command-attack flag.
+			if s.server != nil {
+				s.server.restorePetCommand(s.player.Map, s.player.InstanceID, petGUID, prevCommand)
+			}
 			return true
 		}
 		// PetHandler.cpp:337-349: the talk/growl fires on SPELL_CAST_OK,
 		// ahead of prepare.
 		s.sendPetActionBarTalkGrowl(petGUID, motion, targetGUID)
-		// The CharmInfo flag clears (PetHandler.cpp:304-310), the
-		// UNIT_NOT_INFRONT auto-turn (PetHandler.cpp:320-336) and the victim
-		// switch (PetHandler.cpp:351-365) have no Go twin: creatureMotion
-		// carries no charm flags, no facing and no single victim field —
-		// documented deltas. The failure-path ResetCooldown
-		// (PetHandler.cpp:376-377, same arm at :837-838) needs no twin: it
-		// runs only when !HasCooldown(spellid), and
+		// The UNIT_NOT_INFRONT auto-turn (PetHandler.cpp:320-336) has no Go
+		// twin — Go's motion model carries no facing. The failure-path
+		// ResetCooldown (PetHandler.cpp:376-377, same arm at :837-838) needs
+		// no twin: it runs only when !HasCooldown(spellid), and
 		// SpellHistory::ResetCooldown(spellId, update) returns immediately
 		// with no packet when the per-spell entry is absent
 		// (SpellHistory.cpp:432-439) — the arm is dead code in C++, so
 		// Go's omission is behaviorally exact.
 		if !s.executePetSpellWithOptions(ctx, motion, spellInfo, 0, castTarget, false) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(0, spellOrAction, spellFailedBadTargets), true)
+			// PetHandler.cpp:380-382: the cast failure resets the
+			// command-attack flag.
+			if s.server != nil {
+				s.server.restorePetCommand(s.player.Map, s.player.InstanceID, petGUID, prevCommand)
+			}
+		} else if targetGUID != 0 && motion.TargetGUID != targetGUID && s.server != nil {
+			// PetHandler.cpp:351-365: after SPELL_CAST_OK the pet
+			// force-switches victim to the spell's unit target when it is
+			// not friendly to the owner (possessed/vehicle pets excluded in
+			// C++; Go's motion model has no such distinction).
+			if !s.isFriendlyToTarget(targetGUID, s.server.findSessionByGUID(targetGUID)) {
+				s.server.switchPetVictim(s.player.Map, s.player.InstanceID, petGUID, targetGUID)
+			}
 		}
 		s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)
 	}

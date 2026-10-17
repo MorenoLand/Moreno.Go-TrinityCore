@@ -219,7 +219,7 @@ func (s *Server) onPetCommandStay(mapID, instanceID uint32, petGUID uint64) {
 }
 
 // onPetSetReaction updates the pet's reaction state (passive, defensive, aggressive).
-func (s *Server) onPetSetReaction(mapID, instanceID uint32, petGUID uint64, reactState uint8) {
+func (s *Server) onPetSetReaction(mapID, instanceID uint32, petGUID uint64, reactState uint8, source *session) {
 	if s == nil || petGUID == 0 {
 		return
 	}
@@ -242,7 +242,64 @@ func (s *Server) onPetSetReaction(mapID, instanceID uint32, petGUID uint64, reac
 	}
 	s.motionMu.Unlock()
 	if stopVictim != 0 {
-		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(petGUID, stopVictim, false), nil)
+		stopPkt := buildAttackStop(petGUID, stopVictim, false)
+		// Unit::AttackStop -> SendMeleeAttackStop (Unit.cpp:2402-2404) uses
+		// SendMessageToSet(&data, true): the broadcast reaches the nearby
+		// set including the sender — the old whole-instance broadcast was
+		// too wide and skipped the owner.
+		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, source)
+		if source != nil {
+			_ = source.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+		}
+	}
+}
+
+// petCommandOnSpellCast mirrors the CharmInfo clears at the top of the
+// pet action-bar spell arm (PetHandler.cpp:304-310): the pet leaves its
+// stay/follow/return states and enters command-attack as if the owner
+// clicked 'attack'. Returns the previous command so the failure path can
+// restore it (PetHandler.cpp:380-382).
+func (s *Server) petCommandOnSpellCast(mapID, instanceID uint32, petGUID uint64) uint8 {
+	if s == nil || petGUID == 0 {
+		return PetCommandStay
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	motion := s.motionMapLocked(mapID, instanceID)[petGUID]
+	if motion == nil {
+		return PetCommandStay
+	}
+	prev := motion.PetCommand
+	motion.PetCommand = PetCommandAttack
+	return prev
+}
+
+// restorePetCommand restores the pet's command state after a failed
+// action-bar spell cast (PetHandler.cpp:380-382: SetIsCommandAttack(false);
+// the AI resets the rest after a successful AttackStart).
+func (s *Server) restorePetCommand(mapID, instanceID uint32, petGUID uint64, prev uint8) {
+	if s == nil || petGUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
+		motion.PetCommand = prev
+	}
+}
+
+// switchPetVictim mirrors the forced victim switch after SPELL_CAST_OK in
+// the pet action-bar spell arm (PetHandler.cpp:351-365): PetAI::AttackStart
+// onto the spell's unit target when it differs from the current victim.
+func (s *Server) switchPetVictim(mapID, instanceID uint32, petGUID, targetGUID uint64) {
+	if s == nil || petGUID == 0 || targetGUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
+		motion.TargetGUID = targetGUID
+		motion.InCombat = true
 	}
 }
 

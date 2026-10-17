@@ -1238,6 +1238,11 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 	// movement info keeps the client time like C++'s m_movementInfo.
 	broadcastInfo := info
 	broadcastInfo.Time = gameTimeMS()
+	// Unit::BuildMovementPacket (Unit.cpp:13269-13274) writes the Unit's own
+	// server-side position into the broadcast — the acked coordinates only
+	// feed m_movementInfo, never the wire position, so a client cannot move
+	// its echoed position by knockback ack.
+	broadcastInfo.X, broadcastInfo.Y, broadcastInfo.Z, broadcastInfo.Orientation = s.player.X, s.player.Y, s.player.Z, s.player.Orientation
 	writeRawMovementInfo(packet, broadcastInfo)
 	if info.HasJump {
 		// MovementHandler.cpp:574-577 appends the jump params as sinAngle,
@@ -1256,6 +1261,10 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_KNOCK_BACK), packet.Bytes(), s)
 	}
+	// MovementHandler.cpp:578: _player->SendMessageToSet(&data, false) —
+	// the bool overload never skips self (Object.cpp:1814-1818), so the
+	// acking player receives its own knockback echo like everyone else.
+	_ = s.write(uint16(protocol.OpcodeMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
 	return true
 }
 

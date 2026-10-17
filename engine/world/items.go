@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -5031,7 +5030,13 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 // DurabilityQuality.dbc or no row for the item level), Go keeps the legacy
 // 10-copper-per-point heuristic so repairs keep working (documented delta);
 // C++ instead logs an error and refuses the repair.
-func (s *session) durabilityRepairCost(ctx context.Context, entry, lost uint32, discountMod float64) uint32 {
+// durabilityRepairCost mirrors the cost arm of Player::DurabilityRepair
+// (Player.cpp:5026-5081). It reports ok=false when the DurabilityCosts or
+// DurabilityQuality DBC rows are missing or the item template cannot be
+// read: C++ logs an error and refuses the repair (return TotalCost without
+// repairing), so the caller must skip the item rather than fall back to a
+// made-up price.
+func (s *session) durabilityRepairCost(ctx context.Context, entry, lost uint32, discountMod float64) (uint32, bool) {
 	rate := 1.0
 	if s != nil && s.server != nil {
 		rate = s.server.Config.RateRepairCost
@@ -5060,12 +5065,12 @@ func (s *session) durabilityRepairCost(ctx context.Context, entry, lost uint32, 
 					if costs == 0 {
 						costs = 1
 					}
-					return costs
+					return costs, true
 				}
 			}
 		}
 	}
-	return uint32(math.Ceil(float64(lost) * 10 * discountMod))
+	return 0, false
 }
 
 // handleRepairItem processes CMSG_REPAIR_ITEM (0x1F8 / 0x2A8).
@@ -5140,7 +5145,12 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 		}
 		maxDurability := getMaxDurability(itemEntry)
 		if maxDurability > durability {
-			cost := s.durabilityRepairCost(ctx, itemEntry, maxDurability-durability, discountMod)
+			cost, costOK := s.durabilityRepairCost(ctx, itemEntry, maxDurability-durability, discountMod)
+			if !costOK {
+				// Player::DurabilityRepair (Player.cpp:5036-5047): no
+				// DBC cost rows, no repair.
+				return true
+			}
 			repaired := false
 			if guildBank != 0 {
 				// Player::DurabilityRepair (Player.cpp:5084): guild-bank
@@ -5204,8 +5214,9 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			for _, it := range rawItems {
 				maxD := getMaxDurability(it.entry)
 				if maxD > it.curD {
-					cost := s.durabilityRepairCost(ctx, it.entry, maxD-it.curD, discountMod)
-					toRepair = append(toRepair, repairItem{guid: it.guid, cost: cost, maxD: maxD})
+					if cost, costOK := s.durabilityRepairCost(ctx, it.entry, maxD-it.curD, discountMod); costOK {
+						toRepair = append(toRepair, repairItem{guid: it.guid, cost: cost, maxD: maxD})
+					}
 				}
 			}
 
