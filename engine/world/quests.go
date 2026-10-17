@@ -1129,8 +1129,23 @@ func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) 
 	if st, _ := sharer.characterQuestStatus(ctx, questID); st == 0 {
 		return true
 	}
+	// QuestHandler.cpp:495 — CanTakeQuest runs with msg=true, so the
+	// Satisfy* arms answer SMSG_QUESTGIVER_QUEST_INVALID (Player.cpp:14934,
+	// 15878) before the handler's silent return; Go's canTakeQuest only
+	// reports the boolean, so the packet is sent here with the C++ reason
+	// order (already-done before already-on, generic reason last).
+	if status, _ := s.characterQuestStatus(ctx, questID); status != 0 && status != questStatusRewarded {
+		return s.sendQuestGiverQuestInvalid(questInvalidAlreadyOn)
+	}
+	if s.isQuestRewarded(ctx, questID) {
+		return s.sendQuestGiverQuestInvalid(questInvalidAlreadyDone)
+	}
 	if canTake, err := s.canTakeQuest(ctx, questID); err != nil || !canTake {
-		return true
+		if err != nil {
+			s.debug("quest confirm accept failed", "account", s.accountName, "quest", questID, "error", err)
+			return true
+		}
+		return s.sendQuestGiverQuestInvalid(questInvalidDontHaveReq)
 	}
 	// QuestHandler.cpp:497-499 — the share-accept path runs the full
 	// CanAddQuest(msg=true) gate, not just the log-capacity check: a quest
@@ -1197,7 +1212,10 @@ func (s *session) handleQueryQuestsCompleted(ctx context.Context, payload []byte
 	var completed []uint32
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		rows, err := cdb.QueryContext(ctx, "SELECT quest FROM character_queststatus_rewarded WHERE guid = ?", s.playerGUID)
+		// QuestHandler.cpp:676-685 — RewardedQuestSet is a std::set, so the
+		// packet lists quest ids in ascending order; the query needs the
+		// same ORDER BY instead of DB-arbitrary row order.
+		rows, err := cdb.QueryContext(ctx, "SELECT quest FROM character_queststatus_rewarded WHERE guid = ? ORDER BY quest", s.playerGUID)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -1265,8 +1283,7 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 	r := protocol.NewReader(payload)
 	questID, _ := r.ReadU32()
 
-	if s.groupID == 0 || s.server == nil {
-		s.sendPushToPartyResponse(s.playerGUID, QuestPartyMsgNotInParty)
+	if s.server == nil {
 		return true
 	}
 
@@ -1277,11 +1294,18 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 
 	// Player::CanShareQuest (Player.cpp:16145): the quest must carry
 	// QUEST_FLAGS_SHARABLE and the sender must have it active. (The
-	// pool-availability arm has no Go model.)
+	// pool-availability arm has no Go model.) C++ runs CanShareQuest before
+	// the group check (QuestHandler.cpp:567-578), so a groupless player
+	// pushing a non-sharable or unknown quest gets silence, not NOT_IN_PARTY.
 	if data.Flags&questFlagsSharable == 0 {
 		return true
 	}
 	if st, _ := s.characterQuestStatus(ctx, questID); st == 0 {
+		return true
+	}
+
+	if s.groupID == 0 {
+		s.sendPushToPartyResponse(s.playerGUID, QuestPartyMsgNotInParty)
 		return true
 	}
 

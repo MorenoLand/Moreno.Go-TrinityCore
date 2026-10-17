@@ -282,7 +282,9 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	}
 	data, err := s.loadQuestDetailData(ctx, questID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return s.sendGossipComplete()
+		// QuestHandler.cpp:248 — a missing quest template ends the handler
+		// silently; C++ sends nothing here (no details, no close).
+		return true
 	}
 	if err != nil {
 		s.debug("quest details failed", "account", s.accountName, "quest", questID, "error", err)
