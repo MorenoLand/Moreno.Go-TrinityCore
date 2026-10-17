@@ -53,16 +53,22 @@
 -- UNCONTROLLABLE_ENERGY (:105-109) — DoCastVictim
 -- (SPELL_UNCONTROLLABLE_ENERGY 58688) (:107, 1-arg = non-triggered)
 -- -> CastSpell(nil, 58688); 25s init / Repeat() 25s.
+-- MANA_DESTRUCTION (:113-119) — seeded ONLY when IsHeroic() at
+-- engage (:111): SelectTarget(Random, 0, 50.0f, true) (:115, random
+-- alive player within 50y, playerOnly, tank included) ->
+-- DoCast(target, SPELL_MANA_DESTRUCTION 59374) (:116, 2-arg =
+-- non-triggered) -> CastSpell(target, 59374); 30s init / Repeat() 30s
+-- (:117, unconditional — outside the target-pick if). The IsHeroic()
+-- gate rides creature:IsHeroic()
+-- (engine/world/lua_creature_events.go:203 — per-instance difficulty
+-- read); the old "heroic-mode branches are unbridged" claim for this
+-- arm is stale (ported this tick).
 -- KilledUnit (:61-65) — if (victim->GetTypeId() == TYPEID_PLAYER)
 -- Talk(SAY_SLAY 1) — player-gated, event 3 (the razuvious variant
 -- precedent).
 -- JustDied (:67-71) — Talk(SAY_DEATH 2) (:69); the _JustDied()
 -- passthrough is unmodeled (the sjonnir JustDied-Talk precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 31134):
--- MANA_DESTRUCTION (:111-117) — IsHeroic() gate (:111): heroic-mode
--- branches are unbridged; otherwise SelectTarget(Random, 0, 50.0f,
--- true) -> DoCast(target, SPELL_MANA_DESTRUCTION 59374), 30s init /
--- Repeat() 30s, non-triggered.
 -- spell_cyanigosa_arcane_vacuum (:147-176) — SpellScript
 -- OnEffectHitTarget (:161): GetCaster()->CastSpell(GetHitUnit(),
 -- SPELL_SUMMON_PLAYER 21150, true): no SpellScript bridge.
@@ -87,6 +93,7 @@ local SPELL_ARCANE_VACUUM = 58694
 local SPELL_BLIZZARD = 58693
 local SPELL_TAIL_SWEEP = 58690
 local SPELL_UNCONTROLLABLE_ENERGY = 58688
+local SPELL_MANA_DESTRUCTION = 59374
 
 local timers = {}
 
@@ -173,9 +180,29 @@ local function uncontrollableEnergyTick(creature, guid)
     end)
 end
 
+-- C++ MANA_DESTRUCTION (:113-119, seeded only when IsHeroic() at
+-- engage): SelectTarget(Random, 0, 50.0f, true) ->
+-- DoCast(target, SPELL_MANA_DESTRUCTION 59374) (2-arg =
+-- non-triggered); 30s init, Repeat() 30s unconditional (the Repeat
+-- sits outside the target-pick if). The IsHeroic() gate rides
+-- creature:IsHeroic() (engine/world/lua_creature_events.go:203, the
+-- per-instance difficulty read); the old "heroic-mode branches are
+-- unbridged" header claim is stale.
+local function manaDestructionTick(creature, guid)
+    local target = randomPlayerInRange(creature, 50)
+    if target then
+        creature:CastSpell(target, SPELL_MANA_DESTRUCTION)
+    end
+    schedule(guid, "manadestruction", 30000, function()
+        manaDestructionTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith (:55-59): Talk(SAY_AGGRO) + the ScheduleTasks
--- seeding (10s / 15s / 20s / 25s); the BossAI::JustEngagedWith(who)
--- passthrough is unmodeled.
+-- seeding (10s / 15s / 20s / 25s; 30s MANA_DESTRUCTION only when
+-- IsHeroic() — C++-exact: the timer is seeded at engage, not gated
+-- per-tick); the BossAI::JustEngagedWith(who) passthrough is
+-- unmodeled.
 local function cyanigosaEnterCombat(event, creature)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -192,6 +219,11 @@ local function cyanigosaEnterCombat(event, creature)
     schedule(guid, "uncontrollableenergy", 25000, function()
         uncontrollableEnergyTick(creature, guid)
     end)
+    if creature:IsHeroic() then
+        schedule(guid, "manadestruction", 30000, function()
+            manaDestructionTick(creature, guid)
+        end)
+    end
 end
 
 -- C++ KilledUnit (:61-65): player-gated Talk(SAY_SLAY) (the

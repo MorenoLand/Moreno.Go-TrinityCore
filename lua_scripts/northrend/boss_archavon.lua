@@ -77,7 +77,7 @@
 -- SpellScript bridge; joins the no-SpellScript-bridge queue.
 -- NPC_ARCHAVON_WARDER 32353 — unreferenced by every arm in this file
 -- (no summon legs).
--- DoMeleeAttackIfReady() (:126) — no bridge.
+-- DoMeleeAttackIfReady() (:127) — no bridge.
 -- No JustDied, no KilledUnit, no DamageTaken, no DoAction, no
 -- MovementInform, no EnterEvadeMode override exist on this AI —
 -- events 3/4 on the creature carry only the timer wipe.
