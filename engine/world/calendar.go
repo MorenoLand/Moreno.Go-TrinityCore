@@ -1366,15 +1366,21 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 				if rows.Scan(&invitee, &sender, &status, &statustime, &rank, &text) == nil {
 					var nextInviteID uint64 = 1
 					_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
-					_, _ = cdb.ExecContext(ctx,
-						"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-						nextInviteID, nextID, invitee, sender, status, statustime, rank, text)
 
 					// CalendarMgr::AddInvite on the copy path
 					// (CalendarHandler.cpp:491-499): the copied event is already
 					// in _events (AddEvent ran first), so SendCalendarEventInvite
 					// broadcasts to every event relative unless the invitee is
-					// the creator (CalendarMgr.cpp:505-508).
+					// the creator (CalendarMgr.cpp:505-508). The broadcast runs
+					// before the _invites push_back, so the relatives set must be
+					// read before this invite's insert: invitee i only hears the
+					// INVITE packets of invites 0..i-1.
+					copyTargets := calendarEventRelativeSessions(ctx, s.server, nextID)
+
+					_, _ = cdb.ExecContext(ctx,
+						"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+						nextInviteID, nextID, invitee, sender, status, statustime, rank, text)
+
 					var invLevel uint8
 					invSess := s.server.findSessionByGUID(uint64(invitee))
 					if invSess != nil && invSess.player != nil {
@@ -1385,7 +1391,7 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 					}
 					if uint64(invitee) != creator {
 						invPkt := buildCalendarInvitePacket(uint64(invitee), nextID, nextInviteID, invLevel, uint8(status), statustime, uint64(sender))
-						for _, t := range calendarEventRelativeSessions(ctx, s.server, nextID) {
+						for _, t := range copyTargets {
 							_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invPkt, true)
 						}
 					}
@@ -1521,6 +1527,15 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 
 		var nextInviteID uint64 = 1
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
+
+		// CalendarMgr::AddInvite (CalendarMgr.cpp:147-160) broadcasts
+		// SendCalendarEventInvite BEFORE storing the invite (the _invites
+		// push_back and UpdateInvite come after), so the new invitee is
+		// not yet in the relatives set and never receives the INVITE
+		// packet — only the ALERT below. Read the relatives before the
+		// insert.
+		inviteTargets := calendarEventRelativeSessions(ctx, s.server, eventID)
+
 		_, _ = cdb.ExecContext(ctx,
 			"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, '')",
 			nextInviteID, eventID, targetGUID, s.playerGUID, CalendarStatusInvited, calendarDefaultResponseTime, CalendarRankPlayer)
@@ -1528,8 +1543,7 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 		// CalendarMgr::AddInvite (CalendarMgr.cpp:147-160) via SendCalendarEventInvite
 		// (CalendarMgr.cpp:481-514): the invite packet goes to every event
 		// relative and is skipped entirely when the invitee is the event
-		// creator (the relatives set is read before the insert, matching
-		// AddInvite's broadcast-before-store order).
+		// creator.
 		if evCreator != targetGUID {
 			invBuf := protocol.NewBuffer(32)
 			invBuf.WritePackedGUID(targetGUID)
@@ -1539,7 +1553,7 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 			invBuf.WriteU8(CalendarStatusInvited)
 			invBuf.WriteU8(0)                                    // hasStatusTime (new invites carry 946684800)
 			invBuf.WriteU8(boolToU8(s.playerGUID != targetGUID)) // sender != invitee
-			for _, t := range calendarEventRelativeSessions(ctx, s.server, eventID) {
+			for _, t := range inviteTargets {
 				_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invBuf.Bytes(), true)
 			}
 		}
@@ -1660,8 +1674,12 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 			return s.sendCalendarCommandResult(CalendarErrorDeleteCreatorFailed)
 		}
 
-		// CalendarMgr::RemoveInvite (CalendarMgr.cpp:225-229): when the invite
+		// CalendarMgr::RemoveInvite (CalendarMgr.cpp:225-248) broadcasts
+		// SendCalendarEventInviteRemove BEFORE erasing the invite from the
+		// in-memory store, so the removed invitee still receives it when
+		// online. Read the relatives before the delete. When the invite
 		// isn't found it returns silently — no broadcast.
+		removeTargets := calendarEventRelativeSessions(ctx, s.server, eventID)
 		res, _ := cdb.ExecContext(ctx,
 			"DELETE FROM calendar_invites WHERE id = ? AND event = ?", inviteID, eventID)
 		if rows, _ := res.RowsAffected(); rows == 0 {
@@ -1690,7 +1708,7 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 		remBuf.WriteU64(eventID)
 		remBuf.WriteU32(evFlags)
 		remBuf.WriteU8(1) // FIXME (CalendarMgr.cpp:565)
-		for _, t := range calendarEventRelativeSessions(ctx, s.server, eventID) {
+		for _, t := range removeTargets {
 			_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_REMOVED), remBuf.Bytes(), true)
 		}
 	}
