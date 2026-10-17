@@ -211,7 +211,7 @@ func (s *session) bgAccessByLevel(ctx context.Context, bgTypeID uint32) bool {
 // handleBattlefieldList processes CMSG_BATTLEFIELD_LIST (0x23C).
 // Reference: WorldSession::HandleBattlefieldListOpcode (BattleGroundHandler.cpp:338).
 func (s *session) handleBattlefieldList(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 6 {
 		return true
 	}
 	r := protocol.NewReader(payload)
@@ -219,7 +219,17 @@ func (s *session) handleBattlefieldList(ctx context.Context, payload []byte) boo
 	if err != nil {
 		return true
 	}
-	fromWhere, _ := r.ReadU8()
+	fromWhere, err := r.ReadU8()
+	if err != nil {
+		return true
+	}
+	// BattleGroundHandler.cpp:340-342: canGainXP is read (players with locked
+	// XP have their own bg queue on retail) but never used downstream; a short
+	// packet throws before the battlemaster lookup, so the read is still
+	// error-checked — truncated packets answer nothing.
+	if _, err := r.ReadU8(); err != nil {
+		return true
+	}
 
 	// sBattlemasterListStore.LookupEntry(bgTypeId) (BattleGroundHandler.cpp:347):
 	// an invalid bgTypeId is answered with silence.
@@ -1994,6 +2004,13 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// BattleGroundHandler.cpp:531-534: the opcode handler skips 8 bytes
+	// (u8 unk1, u8 unk2, u32 bgTypeId, u16 unk3) before the combat gate; a
+	// short packet throws and nothing happens. Internal callers pass nil and
+	// skip this arm.
+	if payload != nil && len(payload) < 8 {
+		return true
+	}
 	// C++ WorldSession::HandleBattlefieldLeaveOpcode (BattleGroundHandler.cpp:528)
 	// denies leaving a battleground while in combat unless the BG is already in
 	// STATUS_WAIT_LEAVE, and it does so BEFORE _player->LeaveBattleground() — so a
@@ -2136,11 +2153,20 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 // handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).
 // Reference: WorldSession::HandleReportPvPAFK (BattleGroundHandler.cpp:795) and Player::ReportedAfkBy (Player.cpp:22524).
 func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// BattleGroundHandler.cpp:797: `ObjectGuid playerGuid; recvData >>
+	// playerGuid` reads a packed GUID (ByteBuffer::operator>> on ObjectGuid
+	// calls ReadPackedGuid); a raw 8-byte read misparses it — packed payloads
+	// with a full mask are 9 bytes and start with the mask byte, so raw reads
+	// yielded garbage guids and every AFK report no-op'd. Truncated packed
+	// payloads throw in C++, so a read error reports nothing.
 	r := protocol.NewReader(payload)
-	targetGUID, _ := r.ReadU64()
+	targetGUID, err := r.ReadPackedGUID()
+	if err != nil {
+		return true
+	}
 
 	if s.server == nil {
 		return true
