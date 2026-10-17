@@ -3234,11 +3234,9 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	// Player cannot use items while dead (SpellHandler.cpp:194)
-	if s.player.Health == 0 {
-		s.sendEquipError(equipErrYouAreDead, 0)
-		return true
-	}
+	// The remote-control drop (SpellHandler.cpp:77-79, GetUnitBeingMoved !=
+	// player) is vacuous: Go has no charm/possess mover model, the mover is
+	// always the player.
 	r := protocol.NewReader(payload)
 	bagIndex, err := r.ReadU8()
 	if err != nil {
@@ -3360,6 +3358,14 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// slots 0..18 (the client's bagIndex 255 arm resolves to bagKey 0).
 		if itemInvType != 0 /* INVTYPE_NON_EQUIP (ItemTemplate.h:261) */ && !(bagKey == 0 && slot < 19) {
 			s.sendEquipError(equipErrItemNotFound, fullItemGUID)
+			return true
+		}
+		// Player::CanUseItem (Player.cpp:11859-11866) — the dead gate fires
+		// here, after the glyph/item/guid/template/equipped gates: a dead
+		// player with a bad glyph index or a missing item answers
+		// ITEM_NOT_FOUND, not YOU_ARE_DEAD.
+		if s.player.Health == 0 {
+			s.sendEquipError(equipErrYouAreDead, fullItemGUID)
 			return true
 		}
 		// Player::CanUseItem (Player.cpp:11936) — the level gate.
