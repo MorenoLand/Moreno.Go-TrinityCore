@@ -1120,6 +1120,25 @@ func (s *Server) findSessionByGUID(guid uint64) *session {
 	return nil
 }
 
+// findSessionByPetGUID mirrors the C++ EffectLearnSpell/EffectLearnPetSpell
+// pet arms (SpellEffects.cpp:2411-2415, 3119-3127): the teach arm applies to
+// ANY pet unit target — Unit::ToPet is not owner-gated — so a pet owned by
+// another online player resolves to that owner's session and teaches through
+// the owner's pet path (Pet::learnSpell + SavePetToDB + PetSpellInitialize).
+func (s *Server) findSessionByPetGUID(petGUID uint64) *session {
+	if petGUID>>48 != 0xF140 {
+		return nil
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for value := range s.sessions {
+		if value.worldReady.Load() && value.player != nil && value.player.PetGUID == petGUID {
+			return value
+		}
+	}
+	return nil
+}
+
 func (s *Server) broadcastChat(source, receiver *session, chatType uint8, language uint32, message, channel string) {
 	if source == nil || source.player == nil {
 		return

@@ -10879,27 +10879,44 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL
 				// Spell::EffectLearnSpell (SpellEffects.cpp:2406-2424): a
 				// non-player unit target delegates to the pet-teach arm
-				// (EffectLearnPetSpell) when it is the caster's pet; other
-				// non-player targets learn nothing. Creature casters are
-				// unmodeled. The no-unit-target arm is vacuous: the effects
-				// loop returns early when hitTargets is empty.
+				// (EffectLearnPetSpell) for any pet unit target — C++
+				// Unit::ToPet is not owner-gated, so another player's pet
+				// teaches through its owner's session; other non-player
+				// targets learn nothing. Creature casters are unmodeled.
+				// The no-unit-target arm is vacuous: the effects loop
+				// returns early when hitTargets is empty.
 				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 					ts.learnSpellEffectTarget(effCtx, spellID, spell, eff, casterLevel)
 				} else if s.petNumberForGUID(targetGUID) != 0 {
 					s.teachPetSpell(effCtx, eff.TriggerSpell)
+				} else if os := s.server.findSessionByPetGUID(targetGUID); os != nil {
+					// Spell::EffectLearnSpell (SpellEffects.cpp:2411-2415): the
+					// pet arm teaches any pet unit target, not just the caster's
+					// own — a pet owned by another online player teaches through
+					// that owner's session (learn + DB save + PetSpellInitialize
+					// all ride the owner's teachPetSpell).
+					os.teachPetSpell(effCtx, eff.TriggerSpell)
 				}
 			case spellEffectLearnPetSpell: // 57: SPELL_EFFECT_LEARN_PET_SPELL
 				// Spell::EffectLearnPetSpell (SpellEffects.cpp:3105-3127): a
 				// player unit target runs the EffectLearnSpell path above
-				// (which carries the 483/55884 damage carve-out); the
-				// caster's pet learns TriggerSpell into the pet spellbook
+				// (which carries the 483/55884 damage carve-out); any pet
+				// unit target learns TriggerSpell into the pet spellbook
 				// (pet learnSpell + SavePetToDB + PetSpellInitialize via
-				// teachPetSpell); other targets learn nothing. The
+				// teachPetSpell, routed to the owning session when the pet
+				// is another player's); other targets learn nothing. The
 				// no-unit-target arm is vacuous as above.
 				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 					ts.learnSpellEffectTarget(effCtx, spellID, spell, eff, casterLevel)
 				} else if s.petNumberForGUID(targetGUID) != 0 {
 					s.teachPetSpell(effCtx, eff.TriggerSpell)
+				} else if os := s.server.findSessionByPetGUID(targetGUID); os != nil {
+					// Spell::EffectLearnSpell (SpellEffects.cpp:2411-2415): the
+					// pet arm teaches any pet unit target, not just the caster's
+					// own — a pet owned by another online player teaches through
+					// that owner's session (learn + DB save + PetSpellInitialize
+					// all ride the owner's teachPetSpell).
+					os.teachPetSpell(effCtx, eff.TriggerSpell)
 				}
 			case spellEffectResurrect: // 18: SPELL_EFFECT_RESURRECT
 				s.handleEffectResurrect(effCtx, targetGUID, spell, eff)
