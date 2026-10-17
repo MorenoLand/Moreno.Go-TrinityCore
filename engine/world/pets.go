@@ -2245,9 +2245,9 @@ func (s *session) handleFeedPet(ctx context.Context, spellID uint32, itemGUID ui
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
 	}
-	if !s.consumeInventoryItemByGUID(ctx, feed.ItemGUID, 1) {
-		return
-	}
+	// SpellEffects.cpp:4190: the DestroyItemCount result is ignored — the
+	// trigger spell fires even if the destroy failed.
+	s.consumeInventoryItemByGUID(ctx, feed.ItemGUID, 1)
 	s.castSpellDirectWithBasePoint(ctx, triggerSpell, feed.PetGUID, feed.Benefit)
 	s.debug("pet fed", "account", s.accountName, "petID", s.activePetNumber(), "item", feed.ItemEntry, "benefit", feed.Benefit, "effect", effectIndex)
 }
