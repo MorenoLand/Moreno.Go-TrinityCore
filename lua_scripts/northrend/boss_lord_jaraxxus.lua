@@ -118,8 +118,10 @@
 -- queue.
 -- npc_infernal_volcano (34813): Reset — SetReactState(REACT_PASSIVE)
 -- (no react bridge) + DoCastSelf(Infernal Eruption Effect 66252) +
--- heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) (no flag bridge; heroic
--- legs have no difficulty bridge — kelidan precedent) — rides the
+-- heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) (no flag bridge; the
+-- "no difficulty bridge" leg of the kelidan precedent is STALE
+-- (IsHeroic() is bridged) but the arm still rides the unbridged summon
+-- gate) — rides the
 -- unbridged summon gate (burrower precedent) — documented-only;
 -- joins the entry-verifiable-but-bridge-blocked queue.
 -- npc_fel_infernal (34815): Reset — instance-gated DespawnOrUnsummon
@@ -135,8 +137,9 @@
 -- interrupt, etc.)
 -- npc_nether_portal (34825): Reset — SetReactState(REACT_PASSIVE) +
 -- DoCastSelf(Nether Portal Effect 66263) + heroic RemoveFlag(
--- UNIT_FLAG_NOT_SELECTABLE) — react / flag / difficulty bridges
--- absent; rides the unbridged summon gate (burrower precedent) —
+-- UNIT_FLAG_NOT_SELECTABLE) — react / flag bridges absent (the
+-- "no difficulty bridge" claim is STALE — IsHeroic() is bridged) but
+-- the arm rides the unbridged summon gate (burrower precedent) —
 -- documented-only; joins the entry-verifiable-but-bridge-blocked
 -- queue.
 -- npc_mistress_of_pain — JustEngagedWith EVENT_SPINNING_SPIKE PORTED:
@@ -147,9 +150,10 @@
 -- DespawnOrUnsummon + cross-AI JustSummoned + DoCastSelf(66327) +
 -- SetData(DATA_MISTRESS_OF_PAIN_COUNT, INCREASE) (instance / cross-AI
 -- bridges absent); EVENT_MISTRESS_KISS:
--- DoCastSelf(Mistress' Kiss 66336), 15s init, 30s repeat — self-cast
--- bridged in isolation but IsHeroic()-gated — no difficulty bridge
--- (kelidan precedent); JustDied: SetData(
+-- DoCastSelf(Mistress' Kiss 66336) non-triggered, 15s init,
+-- 30s repeat — PORTED (IsHeroic-gated at engage; the old "no difficulty
+-- bridge (kelidan precedent)" claim is STALE — lavanthor heroic-flames
+-- port); JustDied: SetData(
 -- DATA_MISTRESS_OF_PAIN_COUNT, DECREASE) — instance model absent.
 -- spell_mistress_kiss (AuraScript 66334/67905/67906/67907) —
 -- HandleDummyTick: casting target -> caster casts Mistress' Kiss
@@ -178,6 +182,7 @@ local SPELL_FEL_LIGHTNING = 66528
 local SPELL_INCINERATE_FLESH = 66237
 local SPELL_LEGION_FLAME = 66197
 local SPELL_SPINNING_SPIKE = 66283
+local SPELL_MISTRESS_KISS = 66336
 local SPELL_NETHER_PORTAL = 66269
 local SPELL_INFERNAL_ERUPTION = 66258
 
@@ -407,6 +412,13 @@ local function spinningSpikeTick(creature, guid)
     end)
 end
 
+local function mistressKissTick(creature, guid)
+    creature:CastSpell(creature, SPELL_MISTRESS_KISS)
+    schedule(guid, "mistresskiss", 30000, function()
+        mistressKissTick(creature, guid)
+    end)
+end
+
 local function mistressEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -416,6 +428,17 @@ local function mistressEnterCombat(event, creature, target)
     schedule(guid, "spinningspike", 9000, function()
         spinningSpikeTick(creature, guid)
     end)
+    -- C++ npc_mistress_of_pain JustEngagedWith: EVENT_MISTRESS_KISS
+    -- DoCastSelf(Mistress' Kiss 66336) non-triggered, 15s init,
+    -- Repeat(30s) outside the cast (re-arm unconditional), seeded only
+    -- when IsHeroic() (the "no difficulty bridge (kelidan precedent)"
+    -- header claim is STALE — creature:IsHeroic() is bridged
+    -- engine/world/lua_creature_events.go:203, lavanthor precedent).
+    if creature:IsHeroic() then
+        schedule(guid, "mistresskiss", 15000, function()
+            mistressKissTick(creature, guid)
+        end)
+    end
 end
 
 local function mistressLeaveCombat(event, creature)

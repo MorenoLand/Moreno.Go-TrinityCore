@@ -49,19 +49,29 @@
 -- — creature:Talk(3) + creature:CastSpell(creature, 50760) (the
 -- DoCastAOE self-cast convention — selin_fireheart / mr_smite /
 -- razuvious precedent).
+-- UpdateAI EVENT_PARTING_SORROW — PORTED 2026-10-17 (partingTick —
+-- the "no heroic bridge" claim was stale: creature:IsHeroic() is
+-- bridged, blood-prince-council precedent): IsHeroic()-gated
+-- random-target DoCast(SPELL_PARTING_SORROW 59723) non-triggered,
+-- {25s,30s} init / unconditional {30s,40s} re-arm, no cast when no
+-- target (C++ :108-111).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 27975):
--- Reset ScheduleEvent EVENT_PARTING_SORROW (25s/30s, :66 —
--- heroic-only: no heroic bridge) + DoStopTimedAchievement(
--- ACHIEV_GOOD_GRIEF_START_EVENT) — no achievement bridge.
--- UpdateAI EVENT_PARTING_SORROW (random-target
--- DoCast(SPELL_PARTING_SORROW 59723), 30s/40s re-arm, :108-111) —
--- SelectTarget(Random, 0, 0.0f, true) is bridgeable (randomPlayer pool,
--- lavanthor precedent) but the arm is IsHeroic()-gated (:65-66) with no
--- difficulty bridge — stays parked (the cyanigosa heroic precedent). EVENT_PILLAR_OF_WOE — PORTED
--- (pillarTick — the "no random-target bridge" claim was stale, C++
--- :123-128; the UNIT_STATE_CASTING gate and the DoMeleeAttackIfReady
--- tail have no bridges.
+-- Reset DoStopTimedAchievement(ACHIEV_GOOD_GRIEF_START_EVENT) — no
+-- achievement bridge. JustEngagedWith DoStartTimedAchievement — no
+-- timed-achievement bridge.
+-- PORTED (retraction re-audit 2026-10-17: the "no heroic bridge" claim
+-- was stale — creature:IsHeroic() is bridged on the event-handler
+-- surface (engine/world/lua_creature_events.go:203, per-instance
+-- difficulty read), used live by boss_blood_prince_council.lua):
+-- UpdateAI EVENT_PARTING_SORROW (partingTick) — IsHeroic()-gated
+-- random-target DoCast(SPELL_PARTING_SORROW 59723) non-triggered,
+-- {25s,30s} init (:66) / unconditional {30s,40s} re-arm (:108-111),
+-- SelectTarget(Random, 0, 0.0f, true) via the randomPlayer pool
+-- (lavanthor precedent; offset-0 = tank stays in the pool).
+-- EVENT_PILLAR_OF_WOE — PORTED (pillarTick — the "no random-target
+-- bridge" claim was stale, C++ :123-128); the UNIT_STATE_CASTING gate
+-- and the DoMeleeAttackIfReady tail have no bridges.
 
 local ENTRY_MAIDEN_OF_GRIEF = 27975
 
@@ -73,6 +83,7 @@ local SAY_STUN = 3
 local SPELL_STORM_OF_GRIEF = 50752
 local SPELL_SHOCK_OF_SORROW = 50760
 local SPELL_PILLAR_OF_WOE = 50761
+local SPELL_PARTING_SORROW = 59723 -- boss_maiden_of_grief.cpp spells enum
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the maiden / bjarngrim-lieutenant convention.
@@ -148,6 +159,21 @@ local function randomPlayerTarget(creature)
     return candidates[math.random(#candidates)]
 end
 
+-- C++ UpdateAI EVENT_PARTING_SORROW (boss_maiden_of_grief.cpp:108-111):
+-- SelectTarget(Random, 0, 0.0f, true) -> DoCast(SPELL_PARTING_SORROW
+-- 59723) 2-arg = non-triggered; the arm is IsHeroic()-gated (:65-66,
+-- creature:IsHeroic() bridged — the blood-prince-council precedent);
+-- no cast when no target found, unconditional {30s,40s} re-arm (:111).
+local function partingTick(creature, guid)
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_PARTING_SORROW)
+    end
+    schedule(guid, "parting", {30000, 40000}, function()
+        partingTick(creature, guid)
+    end)
+end
+
 -- C++ UpdateAI EVENT_PILLAR_OF_WOE (boss_maiden_of_grief.cpp:123-128):
 -- SelectTarget(Random, 1, 0.0f, true) -> DoCast(SPELL_PILLAR_OF_WOE
 -- 50761), else DoCastVictim(SPELL_PILLAR_OF_WOE) — both 2-arg =
@@ -169,6 +195,14 @@ local function maidenEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ Reset() :65-66: the EVENT_PARTING_SORROW seed is
+    -- IsHeroic()-gated (creature:IsHeroic() bridged — the
+    -- blood-prince-council precedent).
+    if creature:IsHeroic() then
+        schedule(guid, "parting", {25000, 30000}, function()
+            partingTick(creature, guid)
+        end)
+    end
     schedule(guid, "storm", 10000, function()
         stormTick(creature, guid)
     end)

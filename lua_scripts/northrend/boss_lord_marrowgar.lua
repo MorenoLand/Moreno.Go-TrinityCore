@@ -77,9 +77,10 @@
 -- EVENT_ENRAGE ports (above); EVENT_ENABLE_BONE_SLICE /
 -- EVENT_BONE_SPIKE_GRAVEYARD / EVENT_COLDFLAME / EVENT_WARN_BONE_STORM
 -- stay out (see UpdateAI). The RemoveAurasDueToSpell(SPELL_BONE_STORM
--- 69076 / SPELL_BERSERK 26662) (:145-146) and speed-rate legs have no
--- bridge — documented deviation, consistent with the other berserk
--- ports (sindragosa/festergut/rotface/putricide).
+-- 69076 / SPELL_BERSERK 26662) legs (:145-146) PORT (creature:RemoveAura
+-- on event 23, C++ order kept); only the SetSpeedRate legs have no
+-- bridge — consistent with the other berserk ports
+-- (sindragosa/festergut/rotface/putricide).
 -- boss_lord_marrowgar UpdateAI — the EventMap machine: arms with
 -- unbridged phase/machine legs stay out (the gothik precedent).
 -- EVENT_WARN_BONE_STORM legs carry Talk(EMOTE_BONE_STORM 7)
@@ -124,6 +125,7 @@ local SAY_DEATH = 5
 local SAY_BERSERK = 6
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
+local SPELL_BONE_STORM = 69076 -- boss_lord_marrowgar.cpp spells enum
 
 local timers = {}
 
@@ -176,10 +178,12 @@ end
 
 local function marrowgarReset(event, creature)
     cancelTimers(creature:GetGUID())
-    -- C++ Reset() :147: RemoveAurasDueToSpell(SPELL_BERSERK) — the
-    -- RemoveAura bridge exists (boss_lady_deathwhisper.lua precedent);
-    -- without this an evade after a 10-min fight keeps the berserk aura
-    -- in Lua. BONE_STORM removal + SetSpeedRate have no bridge.
+    -- C++ Reset() :145-146: RemoveAurasDueToSpell(SPELL_BONE_STORM)
+    -- then RemoveAurasDueToSpell(SPELL_BERSERK) — order kept; the
+    -- RemoveAura bridge exists (boss_lady_deathwhisper.lua precedent).
+    -- Without this an evade during bone storm re-seeds the storm phase
+    -- with the aura still on. SetSpeedRate has no bridge.
+    creature:RemoveAura(SPELL_BONE_STORM)
     creature:RemoveAura(SPELL_BERSERK)
 end
 
