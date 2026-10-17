@@ -4998,9 +4998,18 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 	buf.WriteU64(uint64(ownerGUID))
 	buf.WriteCString(name)
 	buf.WriteU8(0)
-	buf.WriteU32(needed)
-	buf.WriteU32(needed)
-	buf.WriteU32(0)
+	if pType == int64(charterTypeGuild) {
+		buf.WriteU32(needed)
+		buf.WriteU32(needed)
+		buf.WriteU32(0)
+	} else {
+		// SendPetitionQueryOpcode (PetitionsHandler.cpp:272-303): the
+		// arena-charter arm writes (type-1, type-1, type) — not the guild
+		// needed/needed/0 triple.
+		buf.WriteU32(uint32(pType) - 1)
+		buf.WriteU32(uint32(pType) - 1)
+		buf.WriteU32(uint32(pType))
+	}
 	buf.WriteU32(0)
 	buf.WriteU32(0)
 	buf.WriteU32(0)
@@ -5013,7 +5022,11 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 		buf.WriteU8(0)
 	}
 	buf.WriteU32(0)
-	buf.WriteU32(0) // type != GUILD_CHARTER_TYPE -> 0 (guild only)
+	if pType == int64(charterTypeGuild) {
+		buf.WriteU32(0) // type != GUILD_CHARTER_TYPE -> 0 (guild only)
+	} else {
+		buf.WriteU32(1) // arena-team charter
+	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_QUERY_RESPONSE), buf.Bytes(), true)
 	return true
 }
@@ -5071,11 +5084,12 @@ func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// PetitionsHandler.cpp:441: a guild charter (type 9) accepts at most
-	// 9 signatures; further signs are silently dropped.
+	// PetitionsHandler.cpp:441: the client-sign cap is ++signs > type —
+	// 9 for guild charters, 2/3/5 for arena charters; further signs are
+	// silently dropped.
 	var signCount int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM petition_sign WHERE petitionguid = ?", petitionGUID).Scan(&signCount)
-	if signCount+1 > 9 {
+	if signCount+1 > pType {
 		return true
 	}
 
