@@ -33919,6 +33919,17 @@ func (s *session) equippedWeaponInstance(ctx context.Context, slot uint8) (uint6
 	return uint64(instanceGUID), uint32(itemEntry)
 }
 
+// enchantItemLogSession resolves the session through which enchantment
+// change logs are sent: Item::SetEnchantment logs through the item owner's
+// session (Item.cpp:841) — the caster's session for own items, the trade
+// partner's session for the trade-window non-traded item.
+func (s *session) enchantItemLogSession(t enchantItemTarget) (*session, uint64) {
+	if !t.ownedByCaster && s.trade != nil && s.trade.Partner != nil {
+		return s.trade.Partner, s.trade.Partner.playerGUID
+	}
+	return s, s.playerGUID
+}
+
 // handleEffectEnchantItemPerm mirrors Spell::EffectEnchantItemPerm
 // (SpellEffects.cpp:2704-2766). The vellum sub-arm (2718-2729): a weapon or
 // armor vellum target (ItemTemplate.h:701-702) is consumed — one from the
@@ -33967,7 +33978,22 @@ func (s *session) handleEffectEnchantItemPerm(ctx context.Context, target protoc
 	if _, found, err := s.server.Data.SpellItemEnchantment(enchantID); err != nil || !found {
 		return
 	}
-	s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 0, enchantID, 0)
+	oldID, oldDuration := s.itemEnchantmentIDAndDurationAtSlot(ctx, t.instanceGUID, 0)
+	// Item::SetEnchantment (Item.cpp:835): an identical id, duration and
+	// charges write stores nothing and logs nothing (charges are always 0
+	// in these arms, so id and duration decide).
+	if oldID != enchantID || oldDuration != 0 {
+		s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 0, enchantID, 0)
+		// Item::SetEnchantment logging (Item.cpp:842-848): the removed
+		// enchant's log first, then the new enchant's log, through the
+		// item owner's session (ItemHandler.cpp:791-798).
+		if logSess, ownerGUID := s.enchantItemLogSession(t); logSess != nil {
+			if oldID != 0 {
+				logSess.sendEnchantmentLog(ownerGUID, 0, t.entry, oldID)
+			}
+			logSess.sendEnchantmentLog(ownerGUID, s.playerGUID, t.entry, enchantID)
+		}
+	}
 	if t.ownedByCaster {
 		s.syncEquipmentCache(ctx)
 	}
@@ -34008,7 +34034,22 @@ func (s *session) handleEffectEnchantItemTmp(ctx context.Context, target protoco
 	if _, found, err := s.server.Data.SpellItemEnchantment(enchantID); err != nil || !found {
 		return
 	}
-	s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 1, enchantID, tempTradeEnchantDurationMs(spell))
+	durationMs := tempTradeEnchantDurationMs(spell)
+	oldID, oldDuration := s.itemEnchantmentIDAndDurationAtSlot(ctx, t.instanceGUID, 1)
+	// Item::SetEnchantment (Item.cpp:835): identical id, duration and
+	// charges writes nothing and logs nothing.
+	if oldID != enchantID || oldDuration != durationMs {
+		s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 1, enchantID, durationMs)
+		// Item::SetEnchantment logging (Item.cpp:842-848): removed
+		// enchant's log first, then the new enchant's log, through the
+		// item owner's session (ItemHandler.cpp:791-798).
+		if logSess, ownerGUID := s.enchantItemLogSession(t); logSess != nil {
+			if oldID != 0 {
+				logSess.sendEnchantmentLog(ownerGUID, 0, t.entry, oldID)
+			}
+			logSess.sendEnchantmentLog(ownerGUID, s.playerGUID, t.entry, enchantID)
+		}
+	}
 	if t.ownedByCaster {
 		s.syncEquipmentCache(ctx)
 	}
@@ -34118,7 +34159,21 @@ func (s *session) handleEffectEnchantItemPrismatic(ctx context.Context, target p
 	if !addSocket {
 		return
 	}
-	s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 6, enchantID, 0)
+	oldID, oldDuration := s.itemEnchantmentIDAndDurationAtSlot(ctx, t.instanceGUID, 6)
+	// Item::SetEnchantment (Item.cpp:835): identical id, duration and
+	// charges writes nothing and logs nothing (charges always 0 here).
+	if oldID != enchantID || oldDuration != 0 {
+		s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 6, enchantID, 0)
+		// Item::SetEnchantment logging (Item.cpp:842-848): removed
+		// enchant's log first, then the new enchant's log, through the
+		// item owner's session (ItemHandler.cpp:791-798).
+		if logSess, ownerGUID := s.enchantItemLogSession(t); logSess != nil {
+			if oldID != 0 {
+				logSess.sendEnchantmentLog(ownerGUID, 0, t.entry, oldID)
+			}
+			logSess.sendEnchantmentLog(ownerGUID, s.playerGUID, t.entry, enchantID)
+		}
+	}
 	if t.ownedByCaster {
 		s.syncEquipmentCache(ctx)
 	}
