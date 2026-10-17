@@ -4231,35 +4231,44 @@ func (s *Server) startGroupLootRoll(ctx context.Context, sourceGUID uint64, slot
 	s.lootMu.Unlock()
 
 	isGroupLoot := grp != nil && grp.LootMethod == 3
+	// Group::GroupLoot/NeedBeforeGreed vote seeding (Group.cpp:1128-1139,
+	// 1280-1290): every auto-pass voter records a PASS vote in playerVote
+	// unconditionally — the vote entry must exist even when no broadcast
+	// goes out, because a leaving PASS voter decrements totalPass whether
+	// or not their pass incremented it (Group.cpp:686-694): a GroupLoot
+	// roll whose auto-pass voters are all PassOnGroupLoot would otherwise
+	// resolve on vote while C++ waits out the 60s timer on the undercount.
+	// The broadcasts stay gated: GroupLoot only when totalPass > 0 — at
+	// least one CanRollOnItem failure (Group.cpp:1155-1165, autoPass=1) —
+	// NeedBeforeGreed per-voter, always (Group.cpp:1299-1312, autoPass=0).
 	// Auto-pass broadcasts go out BEFORE any start roll, carrying the roll
-	// item guid: GroupLoot (Group.cpp:1160-1163, autoPass=1, gated on
-	// totalPass) and NeedBeforeGreed (Group.cpp:1301-1312, per-voter,
-	// autoPass=0). Pass voters never receive SMSG_LOOT_START_ROLL —
+	// item guid. Pass voters never receive SMSG_LOOT_START_ROLL —
 	// SendLootStartRoll only targets NOT_EMITED_YET votes (Group.cpp:963-971).
 	// Votes are recorded here so the timer and the handleLootRoll duplicate
 	// check agree.
-	if !isGroupLoot || canRollFailTotal > 0 {
-		for _, m := range eligible {
-			if !autoPass[m.playerGUID] {
-				continue
-			}
-			roll.Votes[m.playerGUID] = rollPass
-			buf := protocol.NewBuffer(35)
-			buf.WriteU64(rollItemGUID)
-			buf.WriteU32(slot)
-			buf.WriteU64(m.playerGUID)
-			buf.WriteU32(itemEntry)
-			buf.WriteU32(roll.RandomSuffix) // randomSuffix
-			buf.WriteU32(roll.RandomPropID) // randomPropId
-			buf.WriteU8(128)
-			buf.WriteU8(rollPass)
-			if isGroupLoot {
-				buf.WriteU8(1) // autoPass
-			} else {
-				buf.WriteU8(0)
-			}
-			s.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+	for _, m := range eligible {
+		if !autoPass[m.playerGUID] {
+			continue
 		}
+		roll.Votes[m.playerGUID] = rollPass
+		if isGroupLoot && canRollFailTotal == 0 {
+			continue
+		}
+		buf := protocol.NewBuffer(35)
+		buf.WriteU64(rollItemGUID)
+		buf.WriteU32(slot)
+		buf.WriteU64(m.playerGUID)
+		buf.WriteU32(itemEntry)
+		buf.WriteU32(roll.RandomSuffix) // randomSuffix
+		buf.WriteU32(roll.RandomPropID) // randomPropId
+		buf.WriteU8(128)
+		buf.WriteU8(rollPass)
+		if isGroupLoot {
+			buf.WriteU8(1) // autoPass
+		} else {
+			buf.WriteU8(0)
+		}
+		s.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
 	}
 
 	// SMSG_LOOT_START_ROLL to each NOT_EMITED_YET voter only; the first
