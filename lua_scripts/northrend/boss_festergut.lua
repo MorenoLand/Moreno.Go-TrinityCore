@@ -42,9 +42,10 @@
 -- DoCastSelf(SPELL_PUNGENT_BLIGHT 69195) non-triggered, counter
 -- reset, RescheduleEvent(EVENT_GAS_SPORE, 20s..25s); init
 -- {25000,30000}, re-arm {33500,35000} both branches (:184-207).
--- OUT legs inside the arm: RemoveBlight() aura-removal (no
--- RemoveAura bridge), gaseous-blight visual triggered casts
--- (:202, aura legs without the removal bridge), DoAction(
+-- OUT legs inside the arm: RemoveBlight() aura-removal (stays out on the
+-- gas-dummy ObjectAccessor leg, not the aura removal — RemoveAura IS
+-- bridged: the Reset() berserk removal below uses it), gaseous-blight
+-- visual triggered casts (:202, aura legs without the removal bridge), DoAction(
 -- ACTION_FESTERGUT_GAS) cross-AI (:193-194).
 -- PORTED (2026-10-14): EVENT_GAS_SPORE — Talk(
 -- EMOTE_WARN_GAS_SPORE 3) + Talk(EMOTE_GAS_SPORE 2) + CastSpell(
@@ -224,6 +225,10 @@ local function festergutReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     inhale[guid] = nil
+    -- C++ Reset() (:92-110): me->RemoveAurasDueToSpell(SPELL_BERSERK2) —
+    -- the RemoveAura bridge (the drakkari / falric idiom); the gas-dummy
+    -- RemoveBlight legs stay out on the ObjectAccessor bridge.
+    creature:RemoveAura(SPELL_BERSERK2)
 end
 
 -- C++ boss_festergut::KilledUnit:

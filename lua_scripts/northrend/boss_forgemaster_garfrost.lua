@@ -112,8 +112,10 @@
 --   ScheduleCyanigosaIntro precedent).
 -- CallForHelp(70.0f) (:112) — no bridge.
 -- SpellHitTarget (:174-186) — SPELL_PERMAFROST_HELPER aura-stack
---   capture into _permafrostStack: no SpellHit bridge, and the
---   consumer is GetData -> the achievement leg (the zuramat /
+--   capture into _permafrostStack: the hook bridge EXISTS
+--   (CREATURE_EVENT_ON_SPELL_HIT_TARGET, event 15 — boss_ai.go,
+--   the faerlina SpellHit port), but the arm stays out because its
+--   only consumer is GetData -> the achievement leg (the zuramat /
 --   devourer_of_souls precedent).
 -- GetData (:187-190) — no GetData bridge (the boss_zuramat precedent).
 -- UpdateAI :198/:244 HasUnitState(UNIT_STATE_CASTING) gates — no
