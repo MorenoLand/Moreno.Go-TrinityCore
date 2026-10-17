@@ -392,6 +392,15 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 		threat += float32(spell.SpellLevel)
 	}
 	positive := !isHarmfulSpell(spell)
+	// The forward/negative legs below can newly engage the caster (the
+	// CombatManager::SetInCombatWith symmetry); the client update must go out
+	// after motionMu is released, mirroring the heal-threat path.
+	wasInCombat := s.player.UnitFlags&unitFlagInCombat != 0
+	pushCombatUpdate := func() {
+		if !wasInCombat && s.player.UnitFlags&unitFlagInCombat != 0 {
+			s.sendPlayerUpdate()
+		}
+	}
 	if threat == 0 {
 		// Spell::TargetInfo::DoTargetSpellHit (Spell.cpp:2762-2766): the
 		// friendly-assist arm fires even when the computed initial threat is
@@ -417,6 +426,7 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 				s.forwardInitialAssistThreatLocked(0, targetGUID)
 			}
 			s.server.motionMu.Unlock()
+			pushCombatUpdate()
 		}
 		return
 	}
@@ -441,7 +451,6 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	}
 
 	s.server.motionMu.Lock()
-	defer s.server.motionMu.Unlock()
 	// Missed targets are not in hitTargets, so dedupe them here (C++
 	// iterates m_UniqueTargetInfo, which holds each target once).
 	hitSet := make(map[uint64]struct{}, len(hitTargets))
@@ -472,6 +481,8 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 		}
 		s.addInitialNegativeThreatLocked(missGUID, 0)
 	}
+	s.server.motionMu.Unlock()
+	pushCombatUpdate()
 }
 
 // addInitialNegativeThreatLocked runs the Spell.cpp:5143 negative leg on one
@@ -517,6 +528,14 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	}
 	motion.InCombat = true
 	motion.Moving = true
+	// CombatManager::SetInCombatWith symmetry (CombatManager.cpp:200-257):
+	// the negative-leg AddThreat (Spell.cpp:5143) engages the caster with the
+	// target as well as the target with the caster. Go has no per-pair
+	// CombatManager model, so the caster side is the in-combat flag; the
+	// caller pushes the client update after motionMu is released.
+	if s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
+	}
 }
 
 // addDrainGainThreat runs the HandlePeriodicManaLeechAuraTick gain arm
@@ -649,6 +668,15 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 	}
 	if len(canBe) == 0 && len(cannotBe) == 0 {
 		return
+	}
+	// CombatManager::SetInCombatWith (CombatManager.cpp:200-257) inserts into
+	// both managers and updates both units' combat states: every per-recipient
+	// AddThreat below engages the assistant (the session player) as well as the
+	// recipient creature. Go has no per-pair CombatManager model, so the caster
+	// side is the in-combat flag; the caller pushes the client update after
+	// motionMu is released.
+	if s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
 	}
 	addShare := func(m *creatureMotion, amount float32) {
 		dist := distance3D(s.player.X, s.player.Y, s.player.Z, m.X, m.Y, m.Z)
