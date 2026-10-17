@@ -3103,12 +3103,15 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	// call site, inside the solo arm only) was factually wrong.
 	s.fireLootMoneyHook(ctx, copper)
 
-	// Loot::isLooted (Loot.h:236) is gold == 0 && unlootedCount == 0, and the
-	// quest-item fill arm counts quest items into unlootedCount
-	// (Loot.cpp:316): money-take with quest loot remaining must not clear
-	// the corpse. lootFullyLooted extends the check to multi-drop rows.
-	if lootFullyLooted(s.activeLoot) {
-		s.clearCreatureLoot(s.activeLoot)
+	// LootHandler.cpp:210-212 (HandleLootMoneyOpcode): the fully-looted
+	// cleanup runs only for ITEM loot, via DoLootRelease — whose item arm
+	// destroys the emptied container. Creature and gameobject loot get no
+	// take-time cleanup (the money handler has no corpse/GO legs): the
+	// dynflag strip, the skinnable transition and the loot clear run at
+	// DoLootRelease (window close), so a corpse whose last copper is taken
+	// keeps its lootable sparkle until the window closes.
+	if lootFullyLooted(s.activeLoot) && s.activeLoot.LootItemGUID != 0 {
+		s.doLootRelease(s.activeLoot)
 	}
 	s.debug("loot money collected", "account", s.accountName, "copper", copper)
 	return true
@@ -3452,13 +3455,12 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 	// leaves an ITEM loot, C++ runs DoLootRelease on it — the release's
 	// item arm destroys the emptied container / disenchanted item or the
 	// 5 consumed prospect/mill stack — so item loot routes through
-	// doLootRelease instead of just clearing the state.
-	if lootFullyLooted(loot) {
-		if loot.LootItemGUID != 0 {
-			s.doLootRelease(loot)
-		} else {
-			s.clearCreatureLoot(loot)
-		}
+	// doLootRelease instead of just clearing the state. Creature and
+	// gameobject loot get no take-time cleanup (Player::StoreLootItem has
+	// no corpse/GO legs); the dynflag strip, skinnable transition and loot
+	// clear run at DoLootRelease (window close).
+	if lootFullyLooted(loot) && loot.LootItemGUID != 0 {
+		s.doLootRelease(loot)
 	}
 	// Player::StoreLootItem (Player.cpp:25140) and the master-give arm
 	// (LootHandler.cpp:485): the Eluna hook fires after the store, the
@@ -3950,6 +3952,13 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 		_ = s.sendLootError(lootGUID, 14) // LOOT_ERROR_MASTER_OTHER
 		return true
 	}
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:431-444): the loot
+	// resolves from a creature/vehicle or gameobject on the player's map —
+	// any other loot type (an open disenchant/prospect/mill window, a
+	// player corpse) ends silently, with no error packet.
+	if high := uint16(lootGUID >> 48); high != 0xF130 && high != 0xF150 && high != 0xF110 {
+		return true
+	}
 	// HandleLootMasterGiveOpcode (LootHandler.cpp:448-452): the slot range
 	// covers items.size() + quest_items.size(); slots at/above items.size()
 	// index into the master looter's quest list.
@@ -4046,9 +4055,10 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 	}
 	_ = targetSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(targetGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount), true)
 
-	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 && len(s.activeLoot.QuestItems) == 0 {
-		s.clearCreatureLoot(s.activeLoot)
-	}
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:483-488): the give marks
+	// the row looted and notifies, with no fully-looted cleanup — the
+	// corpse/GO legs run at DoLootRelease (window close), so the corpse
+	// keeps its lootable sparkle until the master looter closes the window.
 	return true
 }
 

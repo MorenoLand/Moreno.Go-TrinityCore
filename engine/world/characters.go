@@ -4072,10 +4072,10 @@ func (s *session) releaseActiveLoot() {
 }
 
 // releaseActiveLootCleanup runs the unconditional release legs (loot-GUID
-// clear, UNIT_FLAG_LOOTING removal, viewer removal, round-robin reset);
-// cleanupAllowed gates only the fully-looted cleanup legs (dynflag clear,
-// loot-state row delete), which the gameobject arm computes with its own
-// distance gate instead of lootReleaseCleanupAllowed.
+// clear, UNIT_FLAG_LOOTING removal); cleanupAllowed gates the round-robin
+// reset, the viewer removal and the fully-looted cleanup legs (dynflag
+// clear, loot-state row delete), which the gameobject arm computes with its
+// own distance gate instead of lootReleaseCleanupAllowed.
 func (s *session) releaseActiveLootCleanup(cleanupAllowed bool) {
 	// WorldSession::DoLootRelease (LootHandler.cpp:265): the UNIT_FLAG_LOOTING
 	// bit set at loot open is removed on every release arm; clearing ahead of
@@ -4088,10 +4088,17 @@ func (s *session) releaseActiveLootCleanup(cleanupAllowed bool) {
 	if loot == nil {
 		return
 	}
-	if loot.RoundRobinPlayer == s.playerGUID {
-		loot.RoundRobinPlayer = 0
+	// WorldSession::DoLootRelease (LootHandler.cpp:292-296, 376-381): the
+	// round-robin reset and the final RemoveLooter sit behind the arms'
+	// reachability gates — a blocked release (failed distance/alive gate)
+	// returns before both, so the holder keeps the rotation and stays a
+	// viewer of the still-open loot.
+	if cleanupAllowed {
+		if loot.RoundRobinPlayer == s.playerGUID {
+			loot.RoundRobinPlayer = 0
+		}
+		loot.removeViewer(s.playerGUID)
 	}
-	loot.removeViewer(s.playerGUID)
 	s.activeLoot = nil
 	// WorldSession::DoLootRelease (LootHandler.cpp:349-352): the corpse is
 	// only stripped when Loot::isLooted (Loot.h:236) — gold == 0 and
