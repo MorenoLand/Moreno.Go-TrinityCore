@@ -8059,6 +8059,397 @@ func (s *session) spellGoAmmoData(ctx context.Context) *protocol.SpellGoAmmo {
 	return ammo
 }
 
+// applySchoolDMGFamilyArms ports Spell::EffectSchoolDMG's family-specific
+// damage arms (SpellEffects.cpp:322-790) as a shared per-(target, effect)
+// helper: the client-initiated cast path (finishSpellCast) and the
+// triggered-cast path (castSpellDirectWithOverrides) run the same
+// direct-bonus arms — C++ ApplyEffectModifiers fires per target inside
+// EffectSchoolDMG regardless of the TRIGGERED flags (Spell::cast runs the
+// full HandleEffects for triggered casts; only the CheckCast gauntlet is
+// skipped, Spell.cpp:3264). Returns the modified damage.
+func (s *session) applySchoolDMGFamilyArms(effCtx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, effectIndex int, casterLevel uint32, effectTarget uint64, targetDamage uint32) uint32 {
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the Warrior arms.
+	// Shield Slam (360-366, SpellFamilyFlags[1] & 0x200 with
+	// GetCategory() == 1209) adds the shield block value
+	// (soft/hard-capped by level, Unit.cpp:2623-2636) folded
+	// through ApplyEffectModifiers (Object.cpp:2304:
+	// SPELLMOD_ALL_EFFECTS then the per-effect-index mod).
+	// The !unitCaster gate is vacuous (the caster is always
+	// the session player on these cast paths).
+	if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x200 != 0 &&
+		spell.Category == 1209 {
+		level := uint32(s.player.Level)
+		softCap := uint32(float32(level) * 24.5)
+		hardCap := uint32(float32(level) * 34.5)
+		bv := s.getShieldBlockValue()
+		if bv >= hardCap {
+			bv = (softCap + hardCap) / 2
+		} else if bv > softCap {
+			bv = softCap + (bv-softCap)/2
+		}
+		v := s.applySpellMod(spell, spellModAllEffects, int32(bv))
+		switch effectIndex {
+		case 0:
+			v = s.applySpellMod(spell, spellModEffect1, v)
+		case 1:
+			v = s.applySpellMod(spell, spellModEffect2, v)
+		case 2:
+			v = s.applySpellMod(spell, spellModEffect3, v)
+		}
+		targetDamage += uint32(v)
+	} else if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x100 != 0 {
+		// Victory Rush (367-369): ApplyPct REPLACES
+		// (Util.h:78-81) — damage = damage * totalAP / 100
+		// in float32 (CalculatePct(int32, float), Util.h:66).
+		targetDamage = uint32(float32(targetDamage) * s.totalAttackPowerValue(false) / 100)
+	} else if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyWarrior && spellID == 46968 {
+		// Shockwave (370-377): damage += CalculatePct(
+		// GetTotalAttackPowerValue(BASE_ATTACK),
+		// CalculateSpellDamage(EFFECT_2)) — the pct carries
+		// the ALL_EFFECTS + EFFECT3 spell mods (SpellInfo.cpp:458-460).
+		pct := int32(0)
+		if len(spell.Effects) > 2 {
+			pct = spell.Effects[2].CalcValueForLevel(spell, casterLevel)
+			pct = s.applySpellMod(spell, spellModAllEffects, pct)
+			pct = s.applySpellMod(spell, spellModEffect3, pct)
+		}
+		if pct > 0 {
+			targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * float32(pct) / 100)
+		}
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:382-393): the
+	// Incinerate Rank 1 & 2 arm (Warlock family,
+	// SpellFamilyFlags[1] & 0x40, SpellIconID 2128) adds
+	// 25% (damage += damage / 4, integer) when the target
+	// carries Immolate. C++ checks AURA_STATE_CONFLAGRATE
+	// first "for speed" and then confirms with
+	// GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE,
+	// SPELLFAMILY_WARLOCK, 0x4, 0, 0) — a periodic-damage
+	// aura effect whose spell is Warlock-family with
+	// SpellFamilyFlags[0] & 0x4, no caster-GUID filter
+	// (Unit.cpp:4524). The fast-path check is an
+	// optimization: the unit-wide state bit it reads (the
+	// C++ call passes no spell/caster, so the per-caster
+	// targetHasAuraState is not the mirror here) is set
+	// exactly when an Immolate/Shadowflame aura is live,
+	// so the confirming lookup alone is the exact gate —
+	// a stale or missing state bit cannot change the
+	// conjunction's outcome. The bonus stays on the
+	// direct-bonus path (C++ leaves apply_direct_bonus
+	// true here, unlike the Conflagrate arm), so
+	// executeSpellDamage's SpellDamageBonusDone/Taken legs
+	// cover the modified damage. SCHOOL_DAMAGE (effect 2)
+	// only — the weapon-damage effects in this case route
+	// to different C++ handlers.
+	if eff.Effect == 2 && spell.SpellFamilyName == spellFamilyWarlock &&
+		spell.SpellFamilyFlags[1]&0x40 != 0 && spell.SpellIconID == 2128 &&
+		s.targetHasFamilyAuraEffect(effCtx, effectTarget, spellAuraPeriodicDamage, spellFamilyWarlock, 0x4) {
+		targetDamage += targetDamage / 4
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:397-438):
+	// the Conflagrate arm (Warlock family, TargetAuraState
+	// == AURA_STATE_CONFLAGRATE) is a documented
+	// no-bridge. C++ picks the target's Immolate
+	// (preferred) or Shadowflame (SpellFamilyFlags[2] &
+	// 0x00000002) periodic-damage aura cast by the caster,
+	// runs its tick amount through SpellDamageBonusTaken
+	// (..., DOT), multiplies by the aura spell's DBC
+	// GetMaxTicks() for the damage potential, adds
+	// CalculatePct(potential, CalculateSpellDamage
+	// (EFFECT_1)) to the direct damage, rewrites the
+	// Conflagrate DoT component's base points to
+	// CalculatePct(potential, CalculateSpellDamage
+	// (EFFECT_2)) / GetMaxTicks() with apply_direct_bonus
+	// = false, and consumes the aura unless the caster
+	// carries Glyph of Conflagrate (56235). Go lacks every
+	// structural piece: no DBC tick-count lookup
+	// (GetMaxTicks — Go only hard-codes tick counts for
+	// Swiftmend), no CalculateSpellDamage bridge
+	// (standing delta), no per-cast m_spellValue
+	// EffectBasePoints override (Go's aura amounts come
+	// from the pristine DBC row), and executeSpellDamage
+	// always runs its spell-power Done leg with no
+	// apply_direct_bonus skip. Revisit only when the
+	// DoT-potential machinery lands.
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:444-460):
+	// the Shadow Bite arm (Warlock family,
+	// SpellFamilyFlags[1] & 0x400000) is a documented
+	// no-bridge. C++ fires only when the caster is the
+	// pet itself (TYPEID_UNIT && IsPet), the pet's owner
+	// is a player, and the owner carries the Improved
+	// Shadow Bite talent aura (SPELL_AURA_ADD_FLAT_
+	// MODIFIER, Warlock family, SpellIconID 214, effect
+	// index 0 — Unit.cpp:4510 matches effIndex +
+	// SpellIconID + family name, with the quirk that the
+	// talent rows carry no family flags); bp0 is 4 for
+	// aura 54037 (rank 1) else 8, and the pet makes a
+	// triggered cast of 54425 with a per-cast
+	// SPELLVALUE_BASE_POINT0 override of bp0 and a null
+	// explicit target. Go lacks both structural pieces:
+	// pet casts route through executePetSpellWithOptions
+	// (pet_combat.go) and never reach the session player's
+	// per-target damage-effect loop, and no per-cast
+	// spell-value base-point override machinery exists
+	// anywhere in the tree (triggered casts read amounts
+	// from the pristine DBC row). Revisit only if pet
+	// casts gain a real effect pipeline and per-cast
+	// spell-value overrides land.
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:460-479): the
+	// Improved Mind Blast arm (Priest family,
+	// SpellFamilyFlags[0] & 0x00002000) fires only while the
+	// caster is in Shadowform (FORM_SHADOW,
+	// SpellAuraDefines.h:435). The caster's Improved Mind
+	// Blast talent aura (Priest family, SpellIconID 95,
+	// carrying an ADD_FLAT_MODIFIER effect) supplies
+	// Effects[1].CalcValue as the percent chance to trigger
+	// Mind Trauma (48301) on the target
+	// (unitCaster->CastSpell(unitTarget, 48301, true)).
+	// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
+	// effects in this case route to different C++ handlers.
+	// The unitCaster null gate is vacuous here: the caster
+	// is always the session player on these cast paths.
+	if eff.Effect == 2 && s.player != nil && s.player.ShapeshiftForm == formShadow &&
+		spell.SpellFamilyName == spellFamilyPriest && spell.SpellFamilyFlags[0]&0x2000 != 0 {
+		if chance := s.improvedMindBlastChance(); chance > 0 && rand.Float64()*100 < float64(chance) {
+			s.castSpellDirect(effCtx, 48301, effectTarget)
+		}
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:663-668): the
+	// Gore arm (Hunter family, SpellIconID 1578) doubles
+	// the damage when the caster carries aura 57627 (the
+	// 6 sec post-Charge affect). SCHOOL_DAMAGE (effect 2)
+	// only — the weapon-damage effects in this case route
+	// to different C++ handlers. The bonus stays on the
+	// direct-bonus path (C++ leaves apply_direct_bonus
+	// true here), so executeSpellDamage's
+	// SpellDamageBonusDone/Taken legs cover the doubled
+	// damage. The unitCaster null gate is vacuous here:
+	// the caster is always the session player on these
+	// cast paths.
+	if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyHunter && spell.SpellIconID == 1578 &&
+		s.hasAura(57627) {
+		targetDamage *= 2
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:669-724):
+	// the Steady Shot arm (Hunter family,
+	// SpellFamilyFlags[1] & 0x1). The dazed leg scans the
+	// target's SPELL_AURA_MOD_DECREASE_SPEED auras for
+	// SpellIconID 15 with Dispel 0 and adds
+	// Effects[EFFECT_1].CalcValue() to the damage — bridged
+	// below via targetHasDazedAura; the earlier note
+	// blaming the CalculateSpellDamage standing delta was
+	// wrong (CalcValue is the no-caster flat value, not
+	// CalculateSpellDamage). The bonus stays on the
+	// direct-bonus path (C++ leaves apply_direct_bonus
+	// true), so executeSpellDamage's
+	// SpellDamageBonusDone/Taken legs cover it. The weapon
+	// leg adds a ranged weapon damage roll
+	// (GetWeaponDamageRange(RANGED_ATTACK) summed over the
+	// damage slots) plus GetAmmoDPS() *
+	// GetAttackTime(RANGED_ATTACK) * 0.001f — blocked on
+	// the missing ranged weapon-damage model (AmmoDPS is
+	// modeled in player_state.go, but no weapon damage
+	// range exists anywhere in the tree). The npcbot arm
+	// is structural (no npcbot model). The C++ else-if
+	// with the Gore arm above (663-668) cannot misroute:
+	// Gore-flagged spells carry no Steady Shot flag.
+	// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
+	// effects in this case route to different C++ handlers.
+	if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyHunter && spell.SpellFamilyFlags[1]&0x1 != 0 &&
+		len(spell.Effects) > 1 && s.targetHasDazedAura(effCtx, effectTarget) {
+		if bonus := spell.Effects[1].CalcValue(); bonus != 0 {
+			targetDamage = uint32(max(int64(0), int64(targetDamage)+int64(bonus)))
+		}
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:515-524): the
+	// Wrath arm (Druid family, SpellFamilyFlags[0] &
+	// 0x00000001) improves the damage by AddPct of the
+	// caster's Improved Insect Swarm talent dummy aura
+	// (Druid family, SpellIconID 1771, effect 0 — the C++
+	// GetDummyAuraEffect lookup) when the target carries
+	// the Insect Swarm periodic-damage aura
+	// (SPELL_AURA_PERIODIC_DAMAGE, Druid family,
+	// SpellFamilyFlags[0] & 0x00200000, no caster-GUID
+	// filter like the C++ GetAuraEffect call).
+	// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
+	// effects in this case route to different C++ handlers.
+	// The C++ else-if chain's Ferocious Bite arms
+	// (SpellFamilyFlags[0] & 0x000800000, the total-AP leg)
+	// take priority but no Wrath-flagged spell carries that
+	// bit, so the plain Wrath gate is exact; the unitCaster
+	// null gate is vacuous here: the caster is always the
+	// session player on these cast paths.
+	if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyDruid && spell.SpellFamilyFlags[0]&0x1 != 0 &&
+		s.targetHasFamilyAuraEffect(effCtx, effectTarget, spellAuraPeriodicDamage, spellFamilyDruid, 0x00200000) {
+		if bonus := s.wrathInsectSwarmBonus(); bonus != 0 {
+			targetDamage = uint32(int64(targetDamage) + int64(targetDamage)*int64(bonus)/100)
+		}
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:496-505):
+	// the Ferocious Bite arm (Druid family,
+	// SpellFamilyFlags[0] & 0x000800000, SpellVisual[0]
+	// == 6587) — bridged. C++ converts the energy above
+	// the spell's cost into damage at (AP/410 +
+	// Effects[effIndex].DamageMultiplier) per point
+	// (ModifyPower(POWER_ENERGY, -30) returns the
+	// negative of the energy actually removed) and adds
+	// CalculatePct(comboPoints * GetTotalAttackPowerValue
+	// (BASE_ATTACK), 7). C++ DamageMultiplier is
+	// EffectChainAmplitude (SpellInfo.cpp:345), loaded on
+	// the Go effect as ChainAmplitude;
+	// GetTotalAttackPowerValue(BASE_ATTACK) is
+	// totalAttackPowerValue(false). The arm runs in the
+	// per-target direct-bonus loop, so the drain applies
+	// per target like the C++ ModifyPower call. The
+	// npcbot arm (506-514) stays structural (no npcbot
+	// model). The C++ else-if order puts Ferocious Bite
+	// before the Wrath arm bridged above — disjoint
+	// gates (0x800000 vs 0x1), so no Ferocious
+	// Bite-flagged spell reaches the Wrath gate.
+	if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyDruid && spell.SpellFamilyFlags[0]&0x800000 != 0 &&
+		spell.SpellVisual[0] == 6587 && effectIndex < len(spell.Effects) {
+		// Unit::ModifyPower clamps at 0 (Unit.cpp:8577):
+		// a partial bar is drained, never negative.
+		extraEnergy := uint32(30)
+		if s.player.Powers[powerEnergy] < extraEnergy {
+			extraEnergy = s.player.Powers[powerEnergy]
+		}
+		s.player.Powers[powerEnergy] -= extraEnergy
+		powerPacket := protocol.NewBuffer(13)
+		powerPacket.WritePackedGUID(s.playerGUID)
+		powerPacket.WriteU8(uint8(powerEnergy))
+		powerPacket.WriteU32(s.player.Powers[powerEnergy])
+		_ = s.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), s)
+		}
+		ap := s.totalAttackPowerValue(false)
+		multiple := ap/410 + spell.Effects[effectIndex].ChainAmplitude
+		targetDamage += uint32(float32(extraEnergy) * multiple)
+		targetDamage += uint32(float32(s.sessionComboPoints(0)) * ap * 7 / 100)
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:531-624): the
+	// Envenom arm (Rogue family, SpellFamilyFlags[1] &
+	// 0x00000008) — else-if chained with the Eviscerate arm
+	// below, so no Envenom-flagged spell reaches the
+	// Eviscerate gate, matching C++ exactly. C++ reads the
+	// banked combo points with the no-arg GetComboPoints()
+	// overload, mirrored here by sessionComboPoints(0). The
+	// caster's Deadly Poison doses on the target multiply
+	// the damage (doses capped at the combo count) and are
+	// consumed one stack per dose unless the Master Poisoner
+	// talent roll keeps them. The npcbot arm is structural —
+	// Go has no npcbot model and the caster is always the
+	// session player on these cast paths, so the !unitCaster
+	// gate is vacuous too. SCHOOL_DAMAGE (effect 2) only —
+	// the weapon-damage effects in this case route to
+	// different C++ handlers.
+	if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyRogue && spell.SpellFamilyFlags[1]&0x8 != 0 {
+		if combo := s.sessionComboPoints(0); combo > 0 {
+			if poison, ok := s.envenomPoisonDoses(effCtx, effectTarget); ok {
+				doses := uint32(poison.StackCount)
+				if doses == 0 {
+					doses = 1
+				}
+				if doses > uint32(combo) {
+					doses = uint32(combo)
+				}
+				if !s.masterPoisonerKeepsDoses() {
+					s.consumePoisonDoses(effCtx, effectTarget, poison, doses)
+				}
+				targetDamage *= doses
+				// Spell::EffectSchoolDMG (SpellEffects.cpp:605):
+				// damage += int32(GetTotalAttackPowerValue(
+				// BASE_ATTACK) * 0.09f * combo) — inside the
+				// poison branch, keyed on combo (not doses).
+				targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * 0.09 * float32(combo))
+			}
+			// Eviscerate and Envenom Bonus Damage item set
+			// effect (aura 37169).
+			if s.hasAura(37169) {
+				targetDamage += uint32(combo) * 40
+			}
+		}
+	} else if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyRogue && spell.SpellFamilyFlags[0]&0x20000 != 0 {
+		// Spell::EffectSchoolDMG (SpellEffects.cpp:626-653):
+		// the Eviscerate arm (Rogue family,
+		// SpellFamilyFlags[0] & 0x00020000).
+		// Spell::EffectSchoolDMG (SpellEffects.cpp:636):
+		// damage += std::lroundf(GetTotalAttackPowerValue(
+		// BASE_ATTACK) * combo * 0.07f) — lroundf rounds
+		// half away from zero, the math.Round twin. The
+		// shared item set effect (aura 37169) below is
+		// bridged; the npcbot arm is structural (no npcbot
+		// model), and the !unitCaster gate is vacuous as
+		// above.
+		if combo := s.sessionComboPoints(0); combo > 0 {
+			targetDamage += uint32(math.Round(float64(s.totalAttackPowerValue(false)) * float64(combo) * 0.07))
+			if s.hasAura(37169) {
+				targetDamage += uint32(combo) * 40
+			}
+		}
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:734-759): the Paladin arms.
+	// Hammer of the Righteous (735-752, SpellFamilyFlags[1] &
+	// 0x00040000) stays a documented no-bridge: it sums
+	// CalculateMinMaxDamage(BASE_ATTACK) over the weapon's damage
+	// slots for the weapon DPS and adds CalculateSpellDamage(EFFECT_2)
+	// * average * 1000 / GetAttackTime(BASE_ATTACK) — blocked on
+	// the missing weapon-damage model and the CalculateSpellDamage
+	// standing delta.
+	// Shield of Righteousness (754-759, SpellFamilyFlags[EFFECT_1]
+	// & 0x100000): damage += CalculatePct(GetShieldBlockValue(
+	// level*29.5, level*39.5), Effects[EFFECT_1].CalcValue()) —
+	// the cap fold is Unit.cpp:2623-2636, the pct is the flat
+	// null-caster DBC value (SpellInfo.cpp:402). The !unitCaster
+	// gate is vacuous (the caster is always the session player
+	// on these cast paths).
+	if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyPaladin && spell.SpellFamilyFlags[1]&0x100000 != 0 &&
+		len(spell.Effects) > 1 {
+		level := uint32(s.player.Level)
+		softCap := uint32(float32(level) * 29.5)
+		hardCap := uint32(float32(level) * 39.5)
+		bv := s.getShieldBlockValue()
+		if bv >= hardCap {
+			bv = (softCap + hardCap) / 2
+		} else if bv > softCap {
+			bv = softCap + (bv-softCap)/2
+		}
+		pct := spell.Effects[1].CalcValue()
+		targetDamage += uint32(float32(bv) * float32(pct) / 100)
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:767-774): the Blood Boil
+	// arm (DeathKnight family, SpellFamilyFlags[0] & 0x00040000).
+	// C++ fires when the target carries the caster's Blood Plague
+	// (GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE,
+	// SPELLFAMILY_DEATHKNIGHT, 0, 0, 0x00000002 —
+	// SpellFamilyFlags[2] & 0x2 — with the caster-GUID filter,
+	// Unit.cpp:4524). The damage += m_damage / 2 term is dead
+	// code: m_damage is reset to 0 per (target, effect) at the
+	// top of DoEffectOnLaunchTarget (Spell.cpp:7750), the only
+	// path that runs this arm, so it always adds 0. The live
+	// term is damage += int32(GetTotalAttackPowerValue(
+	// BASE_ATTACK) * 0.035f). The !unitCaster gate is vacuous
+	// (the caster is always the session player on these cast
+	// paths).
+	if eff.Effect == 2 && s.player != nil &&
+		spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x40000 != 0 &&
+		s.targetHasBloodPlague(effCtx, effectTarget) {
+		targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * 0.035)
+	}
+	return targetDamage
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
@@ -9568,34 +9959,36 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						damage /= uint32(count)
 					}
 				}
-				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7756-7766): player
-				// AoE damage caps at 10 targets — damage * 10 / targetAmount
-				// when the target container holds more than 10. targetAmount
-				// is m_UniqueTargetInfo.size() (hits and misses); Go's
-				// effects loop runs only when every target hit, so the
-				// loop's hit set is the same count. The per-effect gate
-				// mirrors C++: IsTargetingArea (spellEffectTargetsArea),
-				// IsAreaAuraEffect, or SPELL_EFFECT_PERSISTENT_AREA_AURA
-				// (27); it applies only when the damage is positive.
-				// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404) runs
-				// just ahead of the cap in C++ (7758-7759 vs 7761-7766) —
-				// both are pure per-target multipliers, so Go folds the
-				// victim's avoidance product into targetDamage below,
-				// preserving the C++ relative order.
+				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7756-7766): the
+				// player AoE 10-target cap (damage * 10 / targetAmount) lands
+				// on the per-target post-bonus damage — after the family arms
+				// and AOE avoidance below — never on the pre-loop base.
+				// targetAmount is m_UniqueTargetInfo.size(): hits AND misses.
+				// hitTargets was already filtered to hits (missedTargets), so
+				// the miss entries are added back here; a clean reflect puts
+				// the caster in hitTargets, matching C++'s own caster
+				// TargetInfo. The per-effect gate mirrors C++: IsTargetingArea
+				// (spellEffectTargetsArea), IsAreaAuraEffect, or
+				// SPELL_EFFECT_PERSISTENT_AREA_AURA (27).
 				isAreaDamageEffect := spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect) || eff.Effect == 27
 				aoeSchoolMask := uint32(spell.SchoolMask)
 				if aoeSchoolMask == 0 {
 					aoeSchoolMask = 1
 				}
-				if damage > 0 && isAreaDamageEffect {
-					count := 0
+				aoeCapDivisor := 0
+				if isAreaDamageEffect {
 					for _, effectTarget := range hitTargets {
 						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
-							count++
+							aoeCapDivisor++
 						}
 					}
-					if count > 10 {
-						damage = damage * 10 / uint32(count)
+					for guid := range missedTargets {
+						if guid != 0 && (guid != s.playerGUID || isReflected) {
+							aoeCapDivisor++
+						}
+					}
+					if aoeCapDivisor <= 10 {
+						aoeCapDivisor = 0
 					}
 				}
 				// SpellEffectInfo::CalcDamageMultiplier (SpellInfo.cpp:537-544):
@@ -9918,360 +10311,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							// plus T8 4P 64736. Revisit when per-caster
 							// disease tracking lands.
 						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the Warrior arms.
-						// Shield Slam (360-366, SpellFamilyFlags[1] & 0x200 with
-						// GetCategory() == 1209) adds the shield block value
-						// (soft/hard-capped by level, Unit.cpp:2623-2636) folded
-						// through ApplyEffectModifiers (Object.cpp:2304:
-						// SPELLMOD_ALL_EFFECTS then the per-effect-index mod).
-						// The !unitCaster gate is vacuous (the caster is always
-						// the session player on these cast paths).
-						if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x200 != 0 &&
-							spell.Category == 1209 {
-							level := uint32(s.player.Level)
-							softCap := uint32(float32(level) * 24.5)
-							hardCap := uint32(float32(level) * 34.5)
-							bv := s.getShieldBlockValue()
-							if bv >= hardCap {
-								bv = (softCap + hardCap) / 2
-							} else if bv > softCap {
-								bv = softCap + (bv-softCap)/2
-							}
-							v := s.applySpellMod(spell, spellModAllEffects, int32(bv))
-							switch effectIndex {
-							case 0:
-								v = s.applySpellMod(spell, spellModEffect1, v)
-							case 1:
-								v = s.applySpellMod(spell, spellModEffect2, v)
-							case 2:
-								v = s.applySpellMod(spell, spellModEffect3, v)
-							}
-							targetDamage += uint32(v)
-						} else if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x100 != 0 {
-							// Victory Rush (367-369): ApplyPct REPLACES
-							// (Util.h:78-81) — damage = damage * totalAP / 100
-							// in float32 (CalculatePct(int32, float), Util.h:66).
-							targetDamage = uint32(float32(targetDamage) * s.totalAttackPowerValue(false) / 100)
-						} else if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyWarrior && spellID == 46968 {
-							// Shockwave (370-377): damage += CalculatePct(
-							// GetTotalAttackPowerValue(BASE_ATTACK),
-							// CalculateSpellDamage(EFFECT_2)) — the pct carries
-							// the ALL_EFFECTS + EFFECT3 spell mods (SpellInfo.cpp:458-460).
-							pct := int32(0)
-							if len(spell.Effects) > 2 {
-								pct = spell.Effects[2].CalcValueForLevel(spell, casterLevel)
-								pct = s.applySpellMod(spell, spellModAllEffects, pct)
-								pct = s.applySpellMod(spell, spellModEffect3, pct)
-							}
-							if pct > 0 {
-								targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * float32(pct) / 100)
-							}
-						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:382-393): the
-						// Incinerate Rank 1 & 2 arm (Warlock family,
-						// SpellFamilyFlags[1] & 0x40, SpellIconID 2128) adds
-						// 25% (damage += damage / 4, integer) when the target
-						// carries Immolate. C++ checks AURA_STATE_CONFLAGRATE
-						// first "for speed" and then confirms with
-						// GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE,
-						// SPELLFAMILY_WARLOCK, 0x4, 0, 0) — a periodic-damage
-						// aura effect whose spell is Warlock-family with
-						// SpellFamilyFlags[0] & 0x4, no caster-GUID filter
-						// (Unit.cpp:4524). The fast-path check is an
-						// optimization: the unit-wide state bit it reads (the
-						// C++ call passes no spell/caster, so the per-caster
-						// targetHasAuraState is not the mirror here) is set
-						// exactly when an Immolate/Shadowflame aura is live,
-						// so the confirming lookup alone is the exact gate —
-						// a stale or missing state bit cannot change the
-						// conjunction's outcome. The bonus stays on the
-						// direct-bonus path (C++ leaves apply_direct_bonus
-						// true here, unlike the Conflagrate arm), so
-						// executeSpellDamage's SpellDamageBonusDone/Taken legs
-						// cover the modified damage. SCHOOL_DAMAGE (effect 2)
-						// only — the weapon-damage effects in this case route
-						// to different C++ handlers.
-						if eff.Effect == 2 && spell.SpellFamilyName == spellFamilyWarlock &&
-							spell.SpellFamilyFlags[1]&0x40 != 0 && spell.SpellIconID == 2128 &&
-							s.targetHasFamilyAuraEffect(effCtx, effectTarget, spellAuraPeriodicDamage, spellFamilyWarlock, 0x4) {
-							targetDamage += targetDamage / 4
-						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:397-438):
-						// the Conflagrate arm (Warlock family, TargetAuraState
-						// == AURA_STATE_CONFLAGRATE) is a documented
-						// no-bridge. C++ picks the target's Immolate
-						// (preferred) or Shadowflame (SpellFamilyFlags[2] &
-						// 0x00000002) periodic-damage aura cast by the caster,
-						// runs its tick amount through SpellDamageBonusTaken
-						// (..., DOT), multiplies by the aura spell's DBC
-						// GetMaxTicks() for the damage potential, adds
-						// CalculatePct(potential, CalculateSpellDamage
-						// (EFFECT_1)) to the direct damage, rewrites the
-						// Conflagrate DoT component's base points to
-						// CalculatePct(potential, CalculateSpellDamage
-						// (EFFECT_2)) / GetMaxTicks() with apply_direct_bonus
-						// = false, and consumes the aura unless the caster
-						// carries Glyph of Conflagrate (56235). Go lacks every
-						// structural piece: no DBC tick-count lookup
-						// (GetMaxTicks — Go only hard-codes tick counts for
-						// Swiftmend), no CalculateSpellDamage bridge
-						// (standing delta), no per-cast m_spellValue
-						// EffectBasePoints override (Go's aura amounts come
-						// from the pristine DBC row), and executeSpellDamage
-						// always runs its spell-power Done leg with no
-						// apply_direct_bonus skip. Revisit only when the
-						// DoT-potential machinery lands.
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:444-460):
-						// the Shadow Bite arm (Warlock family,
-						// SpellFamilyFlags[1] & 0x400000) is a documented
-						// no-bridge. C++ fires only when the caster is the
-						// pet itself (TYPEID_UNIT && IsPet), the pet's owner
-						// is a player, and the owner carries the Improved
-						// Shadow Bite talent aura (SPELL_AURA_ADD_FLAT_
-						// MODIFIER, Warlock family, SpellIconID 214, effect
-						// index 0 — Unit.cpp:4510 matches effIndex +
-						// SpellIconID + family name, with the quirk that the
-						// talent rows carry no family flags); bp0 is 4 for
-						// aura 54037 (rank 1) else 8, and the pet makes a
-						// triggered cast of 54425 with a per-cast
-						// SPELLVALUE_BASE_POINT0 override of bp0 and a null
-						// explicit target. Go lacks both structural pieces:
-						// pet casts route through executePetSpellWithOptions
-						// (pet_combat.go) and never reach the session player's
-						// per-target damage-effect loop, and no per-cast
-						// spell-value base-point override machinery exists
-						// anywhere in the tree (triggered casts read amounts
-						// from the pristine DBC row). Revisit only if pet
-						// casts gain a real effect pipeline and per-cast
-						// spell-value overrides land.
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:460-479): the
-						// Improved Mind Blast arm (Priest family,
-						// SpellFamilyFlags[0] & 0x00002000) fires only while the
-						// caster is in Shadowform (FORM_SHADOW,
-						// SpellAuraDefines.h:435). The caster's Improved Mind
-						// Blast talent aura (Priest family, SpellIconID 95,
-						// carrying an ADD_FLAT_MODIFIER effect) supplies
-						// Effects[1].CalcValue as the percent chance to trigger
-						// Mind Trauma (48301) on the target
-						// (unitCaster->CastSpell(unitTarget, 48301, true)).
-						// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
-						// effects in this case route to different C++ handlers.
-						// The unitCaster null gate is vacuous here: the caster
-						// is always the session player on these cast paths.
-						if eff.Effect == 2 && s.player != nil && s.player.ShapeshiftForm == formShadow &&
-							spell.SpellFamilyName == spellFamilyPriest && spell.SpellFamilyFlags[0]&0x2000 != 0 {
-							if chance := s.improvedMindBlastChance(); chance > 0 && rand.Float64()*100 < float64(chance) {
-								s.castSpellDirect(effCtx, 48301, effectTarget)
-							}
-						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:663-668): the
-						// Gore arm (Hunter family, SpellIconID 1578) doubles
-						// the damage when the caster carries aura 57627 (the
-						// 6 sec post-Charge affect). SCHOOL_DAMAGE (effect 2)
-						// only — the weapon-damage effects in this case route
-						// to different C++ handlers. The bonus stays on the
-						// direct-bonus path (C++ leaves apply_direct_bonus
-						// true here), so executeSpellDamage's
-						// SpellDamageBonusDone/Taken legs cover the doubled
-						// damage. The unitCaster null gate is vacuous here:
-						// the caster is always the session player on these
-						// cast paths.
-						if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyHunter && spell.SpellIconID == 1578 &&
-							s.hasAura(57627) {
-							targetDamage *= 2
-						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:669-724):
-						// the Steady Shot arm (Hunter family,
-						// SpellFamilyFlags[1] & 0x1). The dazed leg scans the
-						// target's SPELL_AURA_MOD_DECREASE_SPEED auras for
-						// SpellIconID 15 with Dispel 0 and adds
-						// Effects[EFFECT_1].CalcValue() to the damage — bridged
-						// below via targetHasDazedAura; the earlier note
-						// blaming the CalculateSpellDamage standing delta was
-						// wrong (CalcValue is the no-caster flat value, not
-						// CalculateSpellDamage). The bonus stays on the
-						// direct-bonus path (C++ leaves apply_direct_bonus
-						// true), so executeSpellDamage's
-						// SpellDamageBonusDone/Taken legs cover it. The weapon
-						// leg adds a ranged weapon damage roll
-						// (GetWeaponDamageRange(RANGED_ATTACK) summed over the
-						// damage slots) plus GetAmmoDPS() *
-						// GetAttackTime(RANGED_ATTACK) * 0.001f — blocked on
-						// the missing ranged weapon-damage model (AmmoDPS is
-						// modeled in player_state.go, but no weapon damage
-						// range exists anywhere in the tree). The npcbot arm
-						// is structural (no npcbot model). The C++ else-if
-						// with the Gore arm above (663-668) cannot misroute:
-						// Gore-flagged spells carry no Steady Shot flag.
-						// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
-						// effects in this case route to different C++ handlers.
-						if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyHunter && spell.SpellFamilyFlags[1]&0x1 != 0 &&
-							len(spell.Effects) > 1 && s.targetHasDazedAura(effCtx, effectTarget) {
-							if bonus := spell.Effects[1].CalcValue(); bonus != 0 {
-								targetDamage = uint32(max(int64(0), int64(targetDamage)+int64(bonus)))
-							}
-						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:515-524): the
-						// Wrath arm (Druid family, SpellFamilyFlags[0] &
-						// 0x00000001) improves the damage by AddPct of the
-						// caster's Improved Insect Swarm talent dummy aura
-						// (Druid family, SpellIconID 1771, effect 0 — the C++
-						// GetDummyAuraEffect lookup) when the target carries
-						// the Insect Swarm periodic-damage aura
-						// (SPELL_AURA_PERIODIC_DAMAGE, Druid family,
-						// SpellFamilyFlags[0] & 0x00200000, no caster-GUID
-						// filter like the C++ GetAuraEffect call).
-						// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
-						// effects in this case route to different C++ handlers.
-						// The C++ else-if chain's Ferocious Bite arms
-						// (SpellFamilyFlags[0] & 0x000800000, the total-AP leg)
-						// take priority but no Wrath-flagged spell carries that
-						// bit, so the plain Wrath gate is exact; the unitCaster
-						// null gate is vacuous here: the caster is always the
-						// session player on these cast paths.
-						if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyDruid && spell.SpellFamilyFlags[0]&0x1 != 0 &&
-							s.targetHasFamilyAuraEffect(effCtx, effectTarget, spellAuraPeriodicDamage, spellFamilyDruid, 0x00200000) {
-							if bonus := s.wrathInsectSwarmBonus(); bonus != 0 {
-								targetDamage = uint32(int64(targetDamage) + int64(targetDamage)*int64(bonus)/100)
-							}
-						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:496-505):
-						// the Ferocious Bite arm (Druid family,
-						// SpellFamilyFlags[0] & 0x000800000, SpellVisual[0]
-						// == 6587) is a documented no-bridge. C++ converts
-						// the energy spent above the spell's cost into damage
-						// at (AP/410 + DamageMultiplier) per point
-						// (ModifyPower(POWER_ENERGY, -30) returns the negative
-						// of the energy actually removed) and adds
-						// CalculatePct(comboPoints * GetTotalAttackPowerValue
-						// (BASE_ATTACK), 7). Blocked on the missing total-AP
-						// model (standing delta; the energy-power drain has no
-						// player power model either, but the AP gap alone
-						// closes the arm). Combo points are modeled
-						// (sessionComboPoints), but bridge nothing while the
-						// AP model is absent. The npcbot arm (506-514) is
-						// structural (no npcbot model). The C++ else-if order
-						// puts Ferocious Bite before the Wrath arm bridged
-						// above — disjoint gates (0x800000 vs 0x1), so no
-						// Ferocious Bite-flagged spell reaches the Wrath
-						// gate. Revisit only when the total-AP model lands.
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:531-624): the
-						// Envenom arm (Rogue family, SpellFamilyFlags[1] &
-						// 0x00000008) — else-if chained with the Eviscerate arm
-						// below, so no Envenom-flagged spell reaches the
-						// Eviscerate gate, matching C++ exactly. C++ reads the
-						// banked combo points with the no-arg GetComboPoints()
-						// overload, mirrored here by sessionComboPoints(0). The
-						// caster's Deadly Poison doses on the target multiply
-						// the damage (doses capped at the combo count) and are
-						// consumed one stack per dose unless the Master Poisoner
-						// talent roll keeps them. The npcbot arm is structural —
-						// Go has no npcbot model and the caster is always the
-						// session player on these cast paths, so the !unitCaster
-						// gate is vacuous too. SCHOOL_DAMAGE (effect 2) only —
-						// the weapon-damage effects in this case route to
-						// different C++ handlers.
-						if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyRogue && spell.SpellFamilyFlags[1]&0x8 != 0 {
-							if combo := s.sessionComboPoints(0); combo > 0 {
-								if poison, ok := s.envenomPoisonDoses(effCtx, effectTarget); ok {
-									doses := uint32(poison.StackCount)
-									if doses == 0 {
-										doses = 1
-									}
-									if doses > uint32(combo) {
-										doses = uint32(combo)
-									}
-									if !s.masterPoisonerKeepsDoses() {
-										s.consumePoisonDoses(effCtx, effectTarget, poison, doses)
-									}
-									targetDamage *= doses
-									// Spell::EffectSchoolDMG (SpellEffects.cpp:605):
-									// damage += int32(GetTotalAttackPowerValue(
-									// BASE_ATTACK) * 0.09f * combo) — inside the
-									// poison branch, keyed on combo (not doses).
-									targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * 0.09 * float32(combo))
-								}
-								// Eviscerate and Envenom Bonus Damage item set
-								// effect (aura 37169).
-								if s.hasAura(37169) {
-									targetDamage += uint32(combo) * 40
-								}
-							}
-						} else if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyRogue && spell.SpellFamilyFlags[0]&0x20000 != 0 {
-							// Spell::EffectSchoolDMG (SpellEffects.cpp:626-653):
-							// the Eviscerate arm (Rogue family,
-							// SpellFamilyFlags[0] & 0x00020000).
-							// Spell::EffectSchoolDMG (SpellEffects.cpp:636):
-							// damage += std::lroundf(GetTotalAttackPowerValue(
-							// BASE_ATTACK) * combo * 0.07f) — lroundf rounds
-							// half away from zero, the math.Round twin. The
-							// shared item set effect (aura 37169) below is
-							// bridged; the npcbot arm is structural (no npcbot
-							// model), and the !unitCaster gate is vacuous as
-							// above.
-							if combo := s.sessionComboPoints(0); combo > 0 {
-								targetDamage += uint32(math.Round(float64(s.totalAttackPowerValue(false)) * float64(combo) * 0.07))
-								if s.hasAura(37169) {
-									targetDamage += uint32(combo) * 40
-								}
-							}
-						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:734-759): the Paladin arms.
-						// Hammer of the Righteous (735-752, SpellFamilyFlags[1] &
-						// 0x00040000) stays a documented no-bridge: it sums
-						// CalculateMinMaxDamage(BASE_ATTACK) over the weapon's damage
-						// slots for the weapon DPS and adds CalculateSpellDamage(EFFECT_2)
-						// * average * 1000 / GetAttackTime(BASE_ATTACK) — blocked on
-						// the missing weapon-damage model and the CalculateSpellDamage
-						// standing delta.
-						// Shield of Righteousness (754-759, SpellFamilyFlags[EFFECT_1]
-						// & 0x100000): damage += CalculatePct(GetShieldBlockValue(
-						// level*29.5, level*39.5), Effects[EFFECT_1].CalcValue()) —
-						// the cap fold is Unit.cpp:2623-2636, the pct is the flat
-						// null-caster DBC value (SpellInfo.cpp:402). The !unitCaster
-						// gate is vacuous (the caster is always the session player
-						// on these cast paths).
-						if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyPaladin && spell.SpellFamilyFlags[1]&0x100000 != 0 &&
-							len(spell.Effects) > 1 {
-							level := uint32(s.player.Level)
-							softCap := uint32(float32(level) * 29.5)
-							hardCap := uint32(float32(level) * 39.5)
-							bv := s.getShieldBlockValue()
-							if bv >= hardCap {
-								bv = (softCap + hardCap) / 2
-							} else if bv > softCap {
-								bv = softCap + (bv-softCap)/2
-							}
-							pct := spell.Effects[1].CalcValue()
-							targetDamage += uint32(float32(bv) * float32(pct) / 100)
-						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:767-774): the Blood Boil
-						// arm (DeathKnight family, SpellFamilyFlags[0] & 0x00040000).
-						// C++ fires when the target carries the caster's Blood Plague
-						// (GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE,
-						// SPELLFAMILY_DEATHKNIGHT, 0, 0, 0x00000002 —
-						// SpellFamilyFlags[2] & 0x2 — with the caster-GUID filter,
-						// Unit.cpp:4524). The damage += m_damage / 2 term is dead
-						// code: m_damage is reset to 0 per (target, effect) at the
-						// top of DoEffectOnLaunchTarget (Spell.cpp:7750), the only
-						// path that runs this arm, so it always adds 0. The live
-						// term is damage += int32(GetTotalAttackPowerValue(
-						// BASE_ATTACK) * 0.035f). The !unitCaster gate is vacuous
-						// (the caster is always the session player on these cast
-						// paths).
-						if eff.Effect == 2 && s.player != nil &&
-							spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x40000 != 0 &&
-							s.targetHasBloodPlague(effCtx, effectTarget) {
-							targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * 0.035)
+						targetDamage = s.applySchoolDMGFamilyArms(effCtx, spell, spellID, eff, effectIndex, casterLevel, effectTarget, targetDamage)
+						// Spell::DoEffectOnLaunchTarget (Spell.cpp:7761-7766): the
+						// player AOE cap lands on the post-bonus per-target damage
+						// (m_damage > 0 gate).
+						if aoeCapDivisor > 0 && targetDamage > 0 {
+							targetDamage = targetDamage * 10 / uint32(aoeCapDivisor)
 						}
 						s.executeSpellDamageWithFlags(effCtx, effectTarget, spellID, targetDamage, effectIndex, false, isReflected)
 					}
@@ -16017,10 +16062,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// per effect for area-targeting damage effects: the victim's
 		// Unit::CalculateAOEAvoidance product per target, and for player
 		// casters the 10-target cap (damage * 10 / targetAmount over the
-		// whole unique target list, hits and misses). Same legs as the
-		// client path (spells.go:8275); this fan-out never applied them.
-		// The cap divisor counts hitTargets (the full unique list) minus
-		// the caster, matching the client-path convention.
+		// whole unique target list, hits and misses). targetAmount is
+		// m_UniqueTargetInfo.size(): hitTargets already holds hits and
+		// misses on this path, and a clean reflect adds the caster as its
+		// own TargetInfo (Spell.cpp:2181-2188), so each clean reflect
+		// counts one more.
 		areaDmgEffect := eff.Effect == 2 && (spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect))
 		aoeCapDivisor := 0
 		if areaDmgEffect {
@@ -16029,6 +16075,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					continue
 				}
 				aoeCapDivisor++
+			}
+			for _, miss := range triggeredMiss {
+				if miss == protocol.SpellMissReflect && reflectReturnStatus == protocol.SpellMissNone {
+					aoeCapDivisor++
+				}
 			}
 			if aoeCapDivisor <= 10 {
 				aoeCapDivisor = 0
@@ -16068,12 +16119,6 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 && len(effectTargets) > 1 {
 					baseDmg /= uint32(len(effectTargets))
 				}
-				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7752-7758): the
-				// player 10-target AOE cap lands on the per-effect damage
-				// (cap-then-avoidance order matches the client path).
-				if areaDmgEffect && baseDmg > 0 && aoeCapDivisor > 0 {
-					baseDmg = baseDmg * 10 / uint32(aoeCapDivisor)
-				}
 				targetDamage := chainScaledAmount(baseDmg, chainMult, jumpIndex)
 				// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404): the
 				// victim's AOE-avoidance aura product scales the
@@ -16082,6 +16127,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					if avoid := s.aoeDamageAvoidanceMultiplier(ctx, effectTarget, aoeSchoolMask); avoid != 1 {
 						targetDamage = uint32(float64(targetDamage) * avoid)
 					}
+				}
+				// Spell::EffectSchoolDMG family arms (SpellEffects.cpp:322-790):
+				// the triggered path runs the same direct-bonus arms as the
+				// client path — C++ ApplyEffectModifiers fires per target
+				// inside EffectSchoolDMG regardless of the TRIGGERED flags.
+				targetDamage = s.applySchoolDMGFamilyArms(ctx, spell, spellID, eff, effectIndex, casterLevel, effectTarget, targetDamage)
+				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7761-7766): the
+				// player AOE cap lands on the post-bonus per-target damage
+				// (m_damage > 0 gate), after the family arms above.
+				if areaDmgEffect && aoeCapDivisor > 0 && targetDamage > 0 {
+					targetDamage = targetDamage * 10 / uint32(aoeCapDivisor)
 				}
 				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase)
 			} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
