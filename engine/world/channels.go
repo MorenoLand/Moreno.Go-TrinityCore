@@ -90,6 +90,40 @@ type worldChannel struct {
 	NextActivityUpdate time.Time
 }
 
+// canonicalSystemChannelName mirrors the system-channel half of
+// ChannelHandler.cpp:74-79 / ChannelMgr::GetSystemChannel: builtin channels
+// resolve by (channelId, zone), never by the packet name. The ChatChannels.dbc
+// entry supplies the canonical base name; the client's " - Zone" suffix is
+// kept so zone-dependent channels keep their zone-scoped key.
+func (s *session) canonicalSystemChannelName(channelID uint32, packetName string) string {
+	base := ""
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if entries, err := s.server.Data.ChatChannels(); err == nil {
+			for _, e := range entries {
+				if e.ID == channelID {
+					base = e.Name
+					break
+				}
+			}
+		}
+	}
+	if base == "" {
+		return packetName
+	}
+	if i := strings.Index(base, " - "); i >= 0 {
+		base = base[:i]
+	}
+	base = strings.TrimSpace(strings.ReplaceAll(base, "%s", ""))
+	if base == "" {
+		return packetName
+	}
+	suffix := ""
+	if i := strings.Index(packetName, " - "); i >= 0 {
+		suffix = packetName[i:]
+	}
+	return base + suffix
+}
+
 func (s *session) handleJoinChannel(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -129,6 +163,13 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	if channelID != 0 && (s.player == nil || !s.constantChannelZoneAllowed(channelID)) {
 		s.debug("channel join rejected: zone gate", "account", s.accountName, "id", channelID)
 		return true
+	}
+	if channelID != 0 {
+		// Reference: ChannelHandler.cpp:74-79 — system channels resolve
+		// purely by (channelId, zone) via GetSystemChannel; the packet name
+		// is only validity-checked, never used for the lookup. A phantom
+		// name must not create a duplicate channel object.
+		name = s.canonicalSystemChannelName(channelID, name)
 	}
 	if name == "" || (name[0] >= '0' && name[0] <= '9') {
 		return s.sendChannelNotify(channelInvalidNameNotice, name, nil) == nil
@@ -223,6 +264,20 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	}
 	channelName, channelFlagsValue, channelIDValue, announce := channel.Name, channel.Flags, channel.ID, channel.Announce
 	joinerFlags, numPlayers := channel.memberFlags(s.playerGUID), uint32(len(channel.Members))
+	// Reference: Channel::JoinChannel (Channel.cpp:217-228) — when ownership
+	// is enabled and the channel has no owner (the DB-persisted empty custom
+	// channel case), the joiner becomes owner+moderator. Fresh channels
+	// already carry the joiner as owner from creation above.
+	handoutOwner := false
+	var handoutOldFlags, handoutNewFlags uint8
+	if channelIDValue == 0 && channel.OwnershipEnabled && channel.Owner == 0 {
+		handoutOldFlags = channel.memberFlags(s.playerGUID)
+		channel.Owner = s.playerGUID
+		channel.Moderators[s.playerGUID] = struct{}{}
+		channel.Dirty = true
+		handoutNewFlags = channel.memberFlags(s.playerGUID)
+		handoutOwner = true
+	}
 	s.server.channelsMu.Unlock()
 	// Reference: Channel::JoinChannel (Channel.cpp) - the joined broadcast
 	// is suppressed when the session holds
@@ -246,6 +301,14 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	// new flags owner+moderator) to all members.
 	if fresh && channelIDValue == 0 {
 		_ = s.sendChannelNotify(channelModeChangeNotice, channelName, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: 0, NewFlags: joinerFlags})
+	}
+	if handoutOwner {
+		// Reference: Channel::JoinChannel / SetOwner(guid, exclaim=true)
+		// (Channel.cpp:217-228, 777-805) — the ownership handout on an
+		// existing ownerless custom channel broadcasts the mode change and
+		// the owner-changed notice.
+		_ = s.sendChannelNotify(channelModeChangeNotice, channelName, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: handoutOldFlags, NewFlags: handoutNewFlags})
+		_ = s.sendChannelNotify(channelOwnerChangedNotice, channelName, &channelNotifyGUID{GUID: s.playerGUID})
 	}
 	s.debug("channel joined", "account", s.accountName, "channel", channelName, "id", channelIDValue)
 	return true
@@ -278,15 +341,17 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 	s.server.channelsMu.Lock()
 	channel := s.server.channels[key]
 	if channel == nil && channelID != 0 {
-		for candidateKey, candidate := range s.server.channels {
-			if candidate.ID == channelID {
-				key, channel = candidateKey, candidate
-				break
-			}
-		}
+		// Reference: ChannelMgr::GetChannel (ChannelMgr.cpp:197-241) —
+		// builtin channels resolve by (channelId, zone); retry with the
+		// DBC-canonical name instead of scanning every channel by id.
+		name = s.canonicalSystemChannelName(channelID, name)
+		key = s.scopedChannelKey(name)
+		channel = s.server.channels[key]
 	}
 	if channel == nil {
 		s.server.channelsMu.Unlock()
+		// Reference: ChannelMgr::GetChannel (ChannelMgr.cpp:234-241) —
+		// the not-on notice carries the DBC-resolved channel name.
 		return s.sendChannelNotify(channelNotMemberNotice, name, nil) == nil
 	}
 	if _, exists := channel.Members[s]; !exists {
@@ -308,7 +373,11 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 	if channel.Owner == s.playerGUID {
 		newOwner, oldFlags, newFlags = channelTakeOwnershipLocked(channel)
 	}
-	if len(channel.Members) == 0 {
+	// Reference: ChannelMgr::LeftChannel (ChannelMgr.cpp:244-268) only
+	// erases system channels from _channels, and Player::CleanupChannels
+	// (Player.cpp:5183-5197) only deletes constant ones — custom channels
+	// persist (with password, bans, announce/ownership flags) when empty.
+	if len(channel.Members) == 0 && channel.Flags&channelFlagCustom == 0 {
 		delete(s.server.channels, key)
 	}
 	s.server.channelsMu.Unlock()
@@ -557,9 +626,9 @@ func (s *Server) resolveChannelNamePart(member *session, namePart string) (strin
 		return "", "", false
 	}
 	part := strings.ToLower(strings.TrimSpace(namePart))
-	if part == "" {
-		return "", "", false
-	}
+	// Reference: ChannelMgr::GetChannelForPlayerByNamePart
+	// (ChannelMgr.cpp:124-147) — an empty prefix compares equal for the
+	// FIRST joined channel, so it resolves instead of dropping.
 	// Reference: ChannelMgr::GetChannelForPlayerByNamePart walks the player's
 	// joined-channel list (a std::list in join order) and returns the FIRST
 	// channel whose lowercased name starts with the lowercased prefix.
@@ -618,7 +687,9 @@ func removeChannelKeyLocked(member *session, key string) {
 // new owner session plus the old/new member flags for the mode-change
 // broadcast, or nil when no transfer applies.
 func channelTakeOwnershipLocked(ch *worldChannel) (newOwner *session, oldFlags, newFlags uint8) {
-	if ch.Flags&channelFlagCustom == 0 || len(ch.Members) == 0 {
+	// Reference: Channel::LeaveChannel (Channel.cpp:266-282) — the handout
+	// requires _ownershipEnabled (the DB-persisted ownership=0 arm).
+	if ch.Flags&channelFlagCustom == 0 || !ch.OwnershipEnabled || len(ch.Members) == 0 {
 		return nil, 0, 0
 	}
 	for m := range ch.Members {
@@ -626,10 +697,13 @@ func channelTakeOwnershipLocked(ch *worldChannel) (newOwner *session, oldFlags, 
 			newOwner = m
 		}
 	}
+	// Reference: Channel::LeaveChannel (Channel.cpp:278-282) grants the
+	// moderator bit BEFORE SetOwner reads the old flags, so the mode-change
+	// oldFlags already carry MEMBER_FLAG_MODERATOR.
+	ch.Moderators[newOwner.playerGUID] = struct{}{}
 	oldFlags = ch.memberFlags(newOwner.playerGUID)
 	ch.Owner = newOwner.playerGUID
 	ch.Dirty = true
-	ch.Moderators[newOwner.playerGUID] = struct{}{}
 	return newOwner, oldFlags, ch.memberFlags(newOwner.playerGUID)
 }
 
@@ -691,6 +765,7 @@ func channelFlags(id uint32, name string) uint8 {
 func (s *Server) removeSessionChannels(member *session) {
 	type departure struct {
 		name     string
+		flags    uint8
 		announce bool
 		members  []*session
 		newOwner *session
@@ -722,8 +797,10 @@ func (s *Server) removeSessionChannels(member *session) {
 		for other := range channel.Members {
 			members = append(members, other)
 		}
-		departures = append(departures, departure{name: channel.Name, announce: channel.Announce, members: members, newOwner: newOwner, oldFlags: oldFlags, newFlags: newFlags})
-		if len(channel.Members) == 0 {
+		departures = append(departures, departure{name: channel.Name, flags: channel.Flags, announce: channel.Announce, members: members, newOwner: newOwner, oldFlags: oldFlags, newFlags: newFlags})
+		// Reference: Player::CleanupChannels (Player.cpp:5183-5197) —
+		// custom channels are never deleted when empty.
+		if len(channel.Members) == 0 && channel.Flags&channelFlagCustom == 0 {
 			delete(s.channels, key)
 		}
 	}
@@ -731,14 +808,25 @@ func (s *Server) removeSessionChannels(member *session) {
 	member.channels = nil
 	member.channelOrder = nil
 	for _, left := range departures {
+		// Reference: Channel::LeaveNotify (Channel.cpp:842-860) — the
+		// SMSG_USERLIST_REMOVE fires even on the send=false logout path.
+		removePkt := protocol.NewBuffer(8 + 1 + 4 + len(left.name) + 1)
+		removePkt.WriteU64(member.playerGUID)
+		removePkt.WriteU8(left.flags)
+		removePkt.WriteU32(uint32(len(left.members)))
+		removePkt.WriteCString(left.name)
 		for _, other := range left.members {
-			if left.announce {
+			// Reference: Channel::LeaveChannel (Channel.cpp:244-249) — the
+			// leave broadcast is gated on RBAC_PERM_SILENTLY_JOIN_CHANNEL
+			// even when send=false.
+			if left.announce && !member.silentlyJoinChannel() {
 				_ = other.sendChannelNotify(channelLeftNotice, left.name, &channelNotifyGUID{GUID: member.playerGUID})
 			}
 			if left.newOwner != nil {
 				_ = other.sendChannelNotify(channelModeChangeNotice, left.name, &channelNotifyModeChange{GUID: left.newOwner.playerGUID, OldFlags: left.oldFlags, NewFlags: left.newFlags})
 				_ = other.sendChannelNotify(channelOwnerChangedNotice, left.name, &channelNotifyGUID{GUID: left.newOwner.playerGUID})
 			}
+			_ = other.write(uint16(protocol.OpcodeSMSG_USERLIST_REMOVE), removePkt.Bytes(), true)
 		}
 	}
 }
@@ -763,6 +851,14 @@ func (s *session) isCityZone(zone uint32) bool {
 // (:112-115) on it, silently in both cases.
 func (s *session) constantChannelZoneAllowed(channelID uint32) bool {
 	if s == nil || s.player == nil {
+		return false
+	}
+	// Reference: ChannelHandler.cpp:46-49 — a failed AreaTableEntry lookup
+	// drops every constant-channel join/leave before the zone gates run.
+	if s.server == nil || s.server.Data == nil {
+		return false
+	}
+	if _, found, err := s.server.Data.Area(s.player.Zone); err != nil || !found {
 		return false
 	}
 	switch channelID {
@@ -897,10 +993,9 @@ func (s *session) syncLocalChannels(newZone uint32) {
 				ID:    entry.ID,
 				Name:  joinName,
 				Flags: channelFlags(entry.ID, joinName),
-				// Built-in channels have no ownership model in C++
-				// (_ownershipEnabled=false); the Go tree tracks the first
-				// joiner as owner like the client-driven join path does.
-				Owner:      s.playerGUID,
+				// Reference: Channel::Channel — built-in channels never get
+				// an owner (_ownershipEnabled=false); members carry
+				// MEMBER_FLAG_NONE in userlist and channel-list packets.
 				Announce:   false,
 				Members:    make(map[*session]struct{}),
 				Moderators: make(map[uint64]struct{}),
@@ -1000,7 +1095,9 @@ func (s *session) removeZoneChannelLocked(key string, channel *worldChannel, sen
 	for other := range channel.Members {
 		members = append(members, other)
 	}
-	if len(channel.Members) == 0 {
+	// Reference: ChannelMgr::LeftChannel / Player::CleanupChannels — custom
+	// channels are never deleted when empty (see handleLeaveChannel).
+	if len(channel.Members) == 0 && channel.Flags&channelFlagCustom == 0 {
 		delete(s.server.channels, key)
 	}
 	return channelZoneEvent{
@@ -1278,9 +1375,12 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
 		return true
 	}
+	// Reference: Channel::SetOwner(ObjectGuid) (Channel.cpp:569-572) — the
+	// moderator bit is granted BEFORE SetOwner reads the old flags, so the
+	// mode-change oldFlags already carry MEMBER_FLAG_MODERATOR.
+	ch.Moderators[target.playerGUID] = struct{}{}
 	oldFlags := ch.memberFlags(target.playerGUID)
 	ch.Owner = target.playerGUID
-	ch.Moderators[target.playerGUID] = struct{}{}
 	ch.Dirty = true
 	newFlags := ch.memberFlags(target.playerGUID)
 	members := s.server.channelMembersSnapshot(ch)
@@ -1660,10 +1760,14 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	// channel the acting moderator becomes the new owner.
 	ownerTransferred := false
 	var oldFlags, newFlags uint8
-	if ch.Owner == victimGUID && ch.Flags&channelFlagCustom != 0 && len(ch.Members) > 0 {
+	// Reference: Channel::KickOrBan (Channel.cpp:354-359) — the transfer
+	// requires _ownershipEnabled, and the kicker's moderator bit is granted
+	// BEFORE SetOwner reads the old flags.
+	if ch.Owner == victimGUID && ch.Flags&channelFlagCustom != 0 && ch.OwnershipEnabled && len(ch.Members) > 0 {
+		ch.Moderators[s.playerGUID] = struct{}{}
 		oldFlags = ch.memberFlags(s.playerGUID)
 		ch.Owner = s.playerGUID
-		ch.Moderators[s.playerGUID] = struct{}{}
+		ch.Dirty = true
 		newFlags = ch.memberFlags(s.playerGUID)
 		ownerTransferred = true
 	}

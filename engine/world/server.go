@@ -532,6 +532,7 @@ type session struct {
 	nextMailDelivery          int64
 	activeLoot                *activeLootState
 	trade                     *playerTradeState
+	suppressEquipErrors       bool // set while a C++-silent path (equipment-set use SwapItem) reuses a packet-sending helper: sendEquipError drops instead of answering
 	diminishing               [DiminishingMax]diminishingReturn
 	procICD                   map[uint32]time.Time
 	triggeredNoProcEvents     int

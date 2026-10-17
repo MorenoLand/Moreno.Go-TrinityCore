@@ -870,6 +870,83 @@ func (s *session) handleClearTradeItem(ctx context.Context, payload []byte) bool
 
 // handleAcceptTrade processes CMSG_ACCEPT_TRADE (0x11A).
 // Reference: WorldSession::HandleAcceptTradeOpcode (TradeHandler.cpp:337).
+// tradeAcceptItemStillTradable re-runs the full Item::CanBeTraded(false,
+// true) gate (Item.cpp:716-742) on a traded item at accept time
+// (TradeHandler.cpp:307-348). Traded items stay in the owner's inventory
+// until execute, so the current position and instance row are resolved by
+// GUID here.
+func (s *session) tradeAcceptItemStillTradable(ctx context.Context, owner *session, itemGUID uint64) bool {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil || owner == nil {
+		return true
+	}
+	var bagKey, slot int64
+	if err := cdb.QueryRowContext(ctx, "SELECT bag, slot FROM character_inventory WHERE guid = ? AND item = ? LIMIT 1", owner.playerGUID, itemGUID).Scan(&bagKey, &slot); err != nil {
+		// Not in inventory: impossible with a correct client (traded items
+		// are locked in the window), and C++ has no packet arm for it.
+		return true
+	}
+	var itemEntry, flags int64
+	var encStr sql.NullString
+	if err := cdb.QueryRowContext(ctx, "SELECT itemEntry, flags, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &flags, &encStr); err != nil {
+		return true
+	}
+	var enchantFields []string
+	if encStr.Valid && encStr.String != "" {
+		enchantFields = strings.Fields(encStr.String)
+	}
+	var itemClass, inventoryType, containerSlots uint32
+	templateFound := false
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var class, invType, slots int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT class, InventoryType, COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&class, &invType, &slots); err == nil {
+			templateFound = true
+			itemClass, inventoryType, containerSlots = uint32(class), uint32(invType), uint32(slots)
+		}
+	}
+	// character_inventory bag keys are 0 for the backpack and the bag
+	// item's GUID for bag contents; tradeItemCanBeTraded takes the
+	// packet-style bag byte (the inverse of inventoryBagKey).
+	var bag uint8
+	switch {
+	case bagKey == 0:
+		bag = invSlotBag0
+	default:
+		var bagSlot int64
+		if err := cdb.QueryRowContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND item = ? LIMIT 1", owner.playerGUID, bagKey).Scan(&bagSlot); err != nil {
+			return true
+		}
+		switch {
+		case bagSlot >= 19 && bagSlot <= 22:
+			bag = uint8(bagSlot - 18)
+		case bagSlot >= 67 && bagSlot <= 73:
+			bag = uint8(bagSlot - 62)
+		default:
+			return true
+		}
+	}
+	return owner.tradeItemCanBeTraded(ctx, itemGUID, bag, uint8(slot), flags, containerSlots, itemClass, inventoryType, templateFound, enchantFields)
+}
+
+// tradeItemBindedNotWith mirrors Item::IsBindedNotWith (Item.cpp:1039-1051)
+// for the accept-time arm (TradeHandler.cpp:318-323): a soulbound item in
+// the acceptor's inventory is bound to the acceptor, not to the target
+// trader, unless it is BOP-tradeable to them (tradeTaplistAllows).
+func (s *session) tradeItemBindedNotWith(ctx context.Context, itemGUID, traderGUID uint64) bool {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return false
+	}
+	var flags int64
+	if err := cdb.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&flags); err != nil || flags&1 == 0 {
+		return false
+	}
+	if flags&int64(itemInstanceFlagBOPTradeable) != 0 && s.tradeTaplistAllows(ctx, itemGUID, traderGUID) {
+		return false
+	}
+	return true
+}
+
 func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil || s.trade.Partner == nil {
 		return true
@@ -929,35 +1006,46 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	}
 
 	// Accept-time item re-validation, in C++ order (TradeHandler.cpp:307-348):
-	// every traded-slot item of both parties is re-checked with
-	// Item::CanBeTraded(false, true) before the partner is notified. The
-	// soulbound arm admits BOP-tradeable items whose 2h window has not
-	// expired (Item::CheckSoulboundTradeExpire); the expiry is evaluated
-	// against the item owner's played time. The his-items IsBindedNotWith
-	// branch is commented out in C++ too. A failing item answers
+	// every traded-slot item of both parties is re-checked with the full
+	// Item::CanBeTraded(false, true) gate (Item.cpp:716-742) before the
+	// partner is notified, catching state that changed between offer and
+	// accept (loot generated on the item, bag filled, soulbinding enchant
+	// applied, combat equip-state flips). My own items additionally get
+	// the IsBindedNotWith(trader) arm (Item.cpp:1039-1051,
+	// TradeHandler.cpp:318-323); the his-items arm is commented out in C++
+	// too, so it is skipped here as well. A CanBeTraded failure answers
 	// TRADE_STATUS_TRADE_CANCELED and the handler returns, leaving the
 	// accepted state untouched exactly like C++.
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		type ownedTrade struct {
-			tr    *playerTradeState
-			owner *session
+			tr      *playerTradeState
+			owner   *session
+			bindArm bool
 		}
-		for _, owned := range []ownedTrade{{s.trade, s}, {partner.trade, partner}} {
+		for _, owned := range []ownedTrade{{s.trade, s, true}, {partner.trade, partner, false}} {
 			tr := owned.tr
 			if tr == nil {
 				continue
 			}
+			failed := false
 			for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
 				it, ok := tr.Items[slot]
 				if !ok {
 					continue
 				}
-				var flags int64
-				_ = cdb.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ? LIMIT 1", it.ItemGUID).Scan(&flags)
-				if flags&1 != 0 && (flags&int64(itemInstanceFlagBOPTradeable) == 0 || owned.owner.soulboundTradeExpired(ctx, it.ItemGUID)) {
+				if !s.tradeAcceptItemStillTradable(ctx, owned.owner, it.ItemGUID) {
 					_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
-					return true
+					failed = true
+					break
 				}
+				if owned.bindArm && owned.owner.tradeItemBindedNotWith(ctx, it.ItemGUID, partner.playerGUID) {
+					_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrCannotTradeThat, 0, 0, 0)
+					failed = true
+					break
+				}
+			}
+			if failed {
+				return true
 			}
 		}
 	}
@@ -1379,6 +1467,10 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 				return
 			}
 			partner.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
+			// Reference: Player::MoveItemToInventory (Player.cpp:12603-12626)
+			// fires UpdateAchievementCriteria(RECEIVE_EPIC_ITEM) for the
+			// receiver of every moved item, traded items included.
+			partner.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.StackCount)
 		}
 		if it, ok := partner.trade.Items[slot]; ok {
 			targetLoc := sSlots[partnerTransferSlots[slot]]
@@ -1412,6 +1504,10 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 				return
 			}
 			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
+			// Reference: Player::MoveItemToInventory (Player.cpp:12603-12626)
+			// fires UpdateAchievementCriteria(RECEIVE_EPIC_ITEM) for the
+			// receiver of every moved item, traded items included.
+			s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.StackCount)
 		}
 	}
 

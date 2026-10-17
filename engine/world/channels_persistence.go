@@ -33,13 +33,20 @@ func channelPersistTeam(s *session) uint32 {
 
 // persistedChannelKey rebuilds the in-memory channel key for a DB row,
 // matching scopedChannelKey for the row's team: the key prefix is the
-// playerTeam value (469 alliance / 67 horde), not the C++ TeamId.
-func persistedChannelKey(name string, team uint32) string {
+// playerTeam value (469 alliance / 67 horde), not the C++ TeamId. Like
+// scopedChannelKey, the prefix is dropped when
+// AllowTwoSideInteractionChannel shares the key space (ChannelMgr::forTeam,
+// ChannelMgr.cpp:108-121).
+func (s *Server) persistedChannelKey(name string, team uint32) string {
+	key := channelKey(name)
+	if s != nil && s.Config.AllowTwoSideInteractionChannel {
+		return key
+	}
 	prefix := teamAlliance
 	if team == 1 {
 		prefix = teamHorde
 	}
-	return strconv.FormatUint(uint64(prefix), 10) + ":" + channelKey(name)
+	return strconv.FormatUint(uint64(prefix), 10) + ":" + key
 }
 
 // loadCustomChannels mirrors ChannelMgr::Load (ChannelMgr.cpp:30-105): the
@@ -128,7 +135,7 @@ func (s *Server) loadCustomChannels(ctx context.Context) {
 		if s.channels == nil {
 			s.channels = make(map[string]*worldChannel)
 		}
-		s.channels[persistedChannelKey(name, team)] = ch
+		s.channels[s.persistedChannelKey(name, team)] = ch
 		s.channelsMu.Unlock()
 		count++
 	}

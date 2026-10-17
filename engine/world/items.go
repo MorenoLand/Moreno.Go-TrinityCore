@@ -2199,6 +2199,7 @@ const (
 	equipErrItemCantStack                     = 19 // C++ EQUIP_ERR_ITEM_CANT_STACK (ItemDefines.h:45): Item::CanBeMergedPartlyWith different-entry arm.
 	equipErrAlreadyLooted                     = 49 // C++ EQUIP_ERR_ALREADY_LOOTED (ItemDefines.h:75)
 	equipErrTooMuchGold                       = 77
+	equipErrCannotTradeThat                   = 79 // C++ EQUIP_ERR_CANNOT_TRADE_THAT (ItemDefines.h:104)
 	equipErrItemMaxLimitCategoryCountExceeded = 84
 	equipErrCantEquipRank                     = 63
 	equipErrVendorMissingTurnins              = 68
@@ -2223,6 +2224,9 @@ const (
 )
 
 func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
+	if s != nil && s.suppressEquipErrors {
+		return
+	}
 	buf := protocol.NewBuffer(18)
 	buf.WriteU8(errCode)
 	if errCode != equipErrOk {
@@ -6313,9 +6317,50 @@ func (s *session) equipmentSetSwapToSlot(ctx context.Context, slot uint32, itemG
 	if !ok {
 		return
 	}
-	// CanEquipItem(i, dstpos) is approximated by handleSwapItem's
-	// isSlotValidForItem gate; SwapItem maps onto the coordinate swap.
+	// Player::CanEquipItem(i, dstpos, item, true) eligibility arm
+	// (Player.cpp:11845+): required level, allowable class, allowable race.
+	// C++ silently skips the slot (continue) when the item cannot be
+	// equipped — never an equip-error packet (CharacterHandler.cpp:1603).
+	if !s.equipmentSetItemEligible(ctx, counter) {
+		return
+	}
+	// C++ SwapItem never sends equip-error packets from this path: every
+	// failing arm is a silent `continue` (CharacterHandler.cpp:1574-1608),
+	// so the slot-table gate inside handleSwapItem runs with errors
+	// suppressed while the coordinate swap itself is reused.
+	s.suppressEquipErrors = true
 	_ = s.handleSwapItem(ctx, []byte{0, uint8(slot), bagByte, uint8(itemSlot)})
+	s.suppressEquipErrors = false
+}
+
+// equipmentSetItemEligible ports the Player::CanEquipItem eligibility arm
+// (Player.cpp:11845+) for the equipment-set use path: required level,
+// allowable class, allowable race. The slot-table arm stays in
+// handleSwapItem's isSlotValidForItem gate; the deeper CanEquipItem arms
+// (proficiencies, unique limits, 2H rules) have no Go model.
+func (s *session) equipmentSetItemEligible(ctx context.Context, itemGUID int64) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	var itemEntry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry); err != nil {
+		return true
+	}
+	var reqLevel, allowableClass, allowableRace int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT RequiredLevel, AllowableClass, AllowableRace FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&reqLevel, &allowableClass, &allowableRace); err != nil {
+		return true
+	}
+	if int64(s.player.Level) < reqLevel {
+		return false
+	}
+	classMask, raceMask := uint32(0), uint32(0)
+	if s.player.Class > 0 {
+		classMask = uint32(1) << uint(s.player.Class-1)
+	}
+	if s.player.Race > 0 {
+		raceMask = uint32(1) << uint(s.player.Race-1)
+	}
+	return uint32(allowableClass)&classMask != 0 && uint32(allowableRace)&raceMask != 0
 }
 
 // equipmentSetBagByte maps a character_inventory bag key (0 for the main
@@ -6355,6 +6400,14 @@ func (s *session) equipmentSetUnequipSlot(ctx context.Context, slot uint32) {
 	var itemGUID int64
 	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, slot).Scan(&itemGUID)
 	if itemGUID == 0 {
+		return
+	}
+	// CanUnequipItem(dstpos, true) arm (CharacterHandler.cpp:1584-1586): a
+	// failing unequip gate silently skips the slot, ahead of the store
+	// search.
+	var wornEntry int64
+	_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&wornEntry)
+	if msg := s.canUnequipLegs(ctx, itemGUID, wornEntry); msg != equipErrOk {
 		return
 	}
 	// CanStoreItem(NULL_BAG, NULL_SLOT) searches the backpack first, then the
