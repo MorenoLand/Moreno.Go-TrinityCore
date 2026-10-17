@@ -4691,8 +4691,13 @@ func (s *session) initializeSession(ctx context.Context) bool {
 		}
 	}
 	s.inQueue = false
-	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), buildAddonInfoResponse(s.pendingAddonInfo), true); err != nil {
-		return false
+	// AddonHandler::BuildAddonPacket (AddonHandler.cpp) returns false on a
+	// broken addon packet and the caller sends nothing — only build and send
+	// SMSG_ADDON_INFO when the parse succeeded.
+	if addonInfo, ok := buildAddonInfoResponse(s.pendingAddonInfo); ok {
+		if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), addonInfo, true); err != nil {
+			return false
+		}
 	}
 	s.pendingAddonInfo = nil
 	cacheVersion := protocol.NewBuffer(4)

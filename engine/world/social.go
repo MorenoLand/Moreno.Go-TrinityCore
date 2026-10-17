@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -133,14 +134,19 @@ func isVisibleGloballyFor(viewer, target *session) bool {
 	return false
 }
 
-// truncateSocialNote mirrors utf8truncate(note, 48) in
-// PlayerSocial::SetFriendNote (SocialMgr.cpp:131): the note is limited to 48
-// Unicode code points, not bytes.
+// truncateSocialNote mirrors utf8truncate(note, 48) (Util.cpp:344): the note
+// is limited to 48 UTF-16 code units; when the cut splits a surrogate pair the
+// C++ utf16to8 throws and the note is cleared entirely.
 func truncateSocialNote(note string) string {
-	if runes := []rune(note); len(runes) > 48 {
-		return string(runes[:48])
+	runes := []rune(note)
+	if len(runes) <= 48 {
+		return note
 	}
-	return note
+	units := utf16.Encode(runes)[:48]
+	if units[47] >= 0xD800 && units[47] < 0xDC00 {
+		return ""
+	}
+	return string(utf16.Decode(units))
 }
 
 // upsertSocialContact mirrors PlayerSocial::AddToSocialList (SocialMgr.cpp:50):
@@ -299,11 +305,13 @@ func (s *Server) broadcastFriendStatus(playerGUID uint64, result uint8, zone, le
 	// via GetFriendInfo(subject, subjectGUID, fi) and the identical payload goes
 	// to every friend lister; per-recipient status recomputation would inject a
 	// FRIEND_STATUS_RAF bit that C++ only ever sets for direct (non-broadcast)
-	// packets. The subject is always visible to itself (ObjectAccessor always
-	// resolves it), so the shared status is the subject's real DND/AFK/online
-	// state without RAF, independent of the worldReady gate used for viewers.
+	// packets. GetFriendInfo also applies the WHO_SEE_ALL_SEC_LEVELS gate to
+	// the subject's own session (SocialMgr.cpp:222): a high-sec GM subject
+	// lacking the permission broadcasts as OFFLINE.
 	status := friendStatusOnline
-	if target.player.PlayerFlags&playerFlagDND != 0 {
+	if !target.whoSeeAllSecurityLevels && int(target.security) > s.Config.GMInWhoListLevel {
+		status = friendStatusOffline
+	} else if target.player.PlayerFlags&playerFlagDND != 0 {
 		status = friendStatusDND
 	} else if target.player.PlayerFlags&playerFlagAFK != 0 {
 		status = friendStatusAFK
@@ -374,14 +382,6 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	// TrinityCore: HandleAddFriendOpcode normalizes the name before the lookup.
 	friendName = normalizePlayerName(friendName)
 
-	// Can't friend yourself. TrinityCore answers FRIEND_SELF with the
-	// requester's own GUID (SocialHandler.cpp:66-67 -> SendFriendStatus
-	// carries friendCharacterInfo->Guid, which is the player's own GUID).
-	if toLower(friendName) == toLower(s.player.Name) {
-		_ = s.sendFriendStatus(friendsResultSelf, s.playerGUID, "")
-		return true
-	}
-
 	// Look up GUID by name from DB
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -398,14 +398,12 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		}
 		return true
 	}
-	if friendGUID == s.playerGUID {
-		_ = s.sendFriendStatus(friendsResultSelf, s.playerGUID, "")
-		return true
-	}
-
 	// TrinityCore: without RBAC_PERM_ALLOW_GM_FRIEND the target must be a
 	// plain player account, checked on the online session or, when offline,
 	// via the account's realm security (AccountMgr::GetSecurityAsync arm).
+	// LOGIN_GET_GMLEVEL_BY_REALMID (CharacterDatabase.cpp:83): the
+	// realm-specific row wins over the global -1 row, so ORDER BY RealmID
+	// DESC LIMIT 1 — MAX() would over-report when the realm row is lower.
 	if !s.allowGMFriend {
 		var targetSecurity uint8
 		if friendSess := s.server.findSessionByGUID(friendGUID); friendSess != nil {
@@ -414,7 +412,7 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 			var accountID uint32
 			if cdb.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", friendGUID).Scan(&accountID) == nil {
 				var sec int64
-				if s.server.AuthStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?)", accountID, s.server.RealmID).Scan(&sec) == nil && sec > 0 && sec <= 255 {
+				if s.server.AuthStore.DB.QueryRowContext(ctx, "SELECT SecurityLevel FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?) ORDER BY RealmID DESC LIMIT 1", accountID, s.server.RealmID).Scan(&sec) == nil && sec > 0 && sec <= 255 {
 					targetSecurity = uint8(sec)
 				}
 			}
@@ -425,9 +423,18 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// TrinityCore: the lambda's first arm is the self check
+	// (SocialHandler.cpp:64-67), running AFTER the security gate above — a GM
+	// lacking RBAC_PERM_ALLOW_GM_FRIEND gets FRIEND_NOT_FOUND, not FRIEND_SELF.
+	// SendFriendStatus carries friendCharacterInfo->Guid, the player's own GUID.
+	if friendGUID == s.playerGUID {
+		_ = s.sendFriendStatus(friendsResultSelf, s.playerGUID, "")
+		return true
+	}
+
 	// TrinityCore: cross-faction target without RBAC_PERM_TWO_SIDE_ADD_FRIEND
 	// is FRIEND_ENEMY (SocialHandler.cpp:68).
-	if playerTeam(friendRace) != playerTeam(s.player.Race) && !s.twoSideAddFriend {
+	if teamForRace(friendRace) != teamForRace(s.player.Race) && !s.twoSideAddFriend {
 		_ = s.sendFriendStatus(friendsResultEnemy, friendGUID, "")
 		return true
 	}
@@ -451,7 +458,7 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	// the target is online AND globally visible to the requester
 	// (Player::IsVisibleGloballyFor).
 	result := friendsResultAddedOffline
-	if friendSess := s.server.findSessionByGUID(friendGUID); friendSess != nil && isVisibleGloballyFor(s, friendSess) {
+	if friendSess := s.server.findSessionByGUID(friendGUID); friendSess != nil && friendSess.worldReady.Load() && isVisibleGloballyFor(s, friendSess) {
 		result = friendsResultAddedOnline
 	}
 
@@ -594,7 +601,7 @@ func (s *session) handleDelIgnore(ctx context.Context, payload []byte) bool {
 }
 
 // -----------------------------------------------------------------
-// handleSetContactNotes processes CMSG_SET_CONTACT_NOTES (0x1C6 in 3.3.5).
+// handleSetContactNotes processes CMSG_SET_CONTACT_NOTES (0x06B).
 // TrinityCore: WorldSession::HandleSetContactNotesOpcode.
 // -----------------------------------------------------------------
 func (s *session) handleSetContactNotes(ctx context.Context, payload []byte) bool {

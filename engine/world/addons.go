@@ -34,41 +34,42 @@ type addonEntry struct {
 	crc     uint32
 }
 
-func buildAddonInfoResponse(payload []byte) []byte {
+// buildAddonInfoResponse mirrors AddonHandler::BuildAddonPacket (AddonHandler.cpp).
+// It returns ok=false when the source packet is broken (C++ returns false and
+// the caller sends nothing) — an empty-addon success still returns ok=true.
+func buildAddonInfoResponse(payload []byte) ([]byte, bool) {
+	if len(payload) < 4 {
+		return nil, false
+	}
+	reader := protocol.NewReader(payload)
+	uncompressedSize, err := reader.ReadU32()
+	if err != nil || uncompressedSize == 0 || uncompressedSize > 0xFFFFF || reader.Remaining() == 0 {
+		return nil, false
+	}
+	compressed := bytes.NewReader(reader.Bytes()[reader.Position():])
+	zreader, zerr := zlib.NewReader(compressed)
+	if zerr != nil {
+		return nil, false
+	}
+	decoded, readErr := io.ReadAll(io.LimitReader(zreader, int64(uncompressedSize)+1))
+	_ = zreader.Close()
+	if readErr != nil || len(decoded) > int(uncompressedSize) {
+		return nil, false
+	}
 	var addons []addonEntry
-	if len(payload) >= 4 {
-		reader := protocol.NewReader(payload)
-		uncompressedSize, err := reader.ReadU32()
-		if err == nil && uncompressedSize > 0 && uncompressedSize <= 0xFFFFF && reader.Remaining() > 0 {
-			compressed := bytes.NewReader(reader.Bytes()[reader.Position():])
-			zreader, zerr := zlib.NewReader(compressed)
-			if zerr == nil {
-				decoded, readErr := io.ReadAll(io.LimitReader(zreader, int64(uncompressedSize)+1))
-				_ = zreader.Close()
-				if readErr == nil && len(decoded) <= int(uncompressedSize) {
-					decodedReader := protocol.NewReader(decoded)
-					count, countErr := decodedReader.ReadU32()
-					if countErr == nil {
-						for i := uint32(0); i < count; i++ {
-							if _, err := decodedReader.ReadCString(); err != nil {
-								break
-							}
-							enabled, err := decodedReader.ReadU8()
-							if err != nil {
-								break
-							}
-							crc, err := decodedReader.ReadU32()
-							if err != nil {
-								break
-							}
-							if _, err := decodedReader.ReadU32(); err != nil {
-								break
-							}
-							addons = append(addons, addonEntry{enabled: enabled != 0, crc: crc})
-						}
-					}
-				}
+	decodedReader := protocol.NewReader(decoded)
+	if count, countErr := decodedReader.ReadU32(); countErr == nil {
+		for i := uint32(0); i < count; i++ {
+			if _, err := decodedReader.ReadCString(); err != nil {
+				return nil, false
 			}
+			if decodedReader.Remaining() < 1+4+4 {
+				return nil, false
+			}
+			enabled, _ := decodedReader.ReadU8()
+			crc, _ := decodedReader.ReadU32()
+			_, _ = decodedReader.ReadU32()
+			addons = append(addons, addonEntry{enabled: enabled != 0, crc: crc})
 		}
 	}
 	response := protocol.NewBuffer(4 + len(addons)*8)
@@ -100,5 +101,5 @@ func buildAddonInfoResponse(payload []byte) []byte {
 		}
 	}
 	response.WriteU32(0)
-	return response.Bytes()
+	return response.Bytes(), true
 }
