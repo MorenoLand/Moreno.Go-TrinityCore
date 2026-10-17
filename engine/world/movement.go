@@ -12,18 +12,20 @@ import (
 )
 
 const (
-	movementOnTransport      uint32 = 0x00000200
-	movementFalling          uint32 = 0x00001000
-	movementSwimming         uint32 = 0x00200000
-	movementFlying           uint32 = 0x02000000
-	movementSplineElevation  uint32 = 0x04000000
-	movementRoot             uint32 = 0x00000800
-	movementDisableGravity   uint32 = 0x00000400
-	movementCanFly           uint32 = 0x01000000
-	movementWaterWalking     uint32 = 0x10000000
-	movementFallingSlow      uint32 = 0x20000000
-	movementHover            uint32 = 0x40000000
-	movementSplineEnabled    uint32 = 0x08000000 // MOVEMENTFLAG_SPLINE_ENABLED (UnitDefines.h:245), used for flight paths
+	movementOnTransport     uint32 = 0x00000200
+	movementFalling         uint32 = 0x00001000
+	movementSwimming        uint32 = 0x00200000
+	movementFlying          uint32 = 0x02000000
+	movementSplineElevation uint32 = 0x04000000
+	movementRoot            uint32 = 0x00000800
+	movementDisableGravity  uint32 = 0x00000400
+	movementCanFly          uint32 = 0x01000000
+	movementWaterWalking    uint32 = 0x10000000
+	movementFallingSlow     uint32 = 0x20000000
+	movementHover           uint32 = 0x40000000
+	movementSplineEnabled   uint32 = 0x08000000 // MOVEMENTFLAG_SPLINE_ENABLED (UnitDefines.h:245), used for flight paths
+	// maskMoving ports MOVEMENTFLAG_MASK_MOVING (UnitDefines.h:250-254).
+	maskMoving                      = movementForward | movementBackward | movementStrafeLeft | movementStrafeRight | movementFalling | movementFallingFar | movementAscending | movementDescending | movementSplineElevation
 	movementPlayerStatusMask        = movementDisableGravity | movementRoot | movementCanFly | movementWaterWalking | movementFallingSlow | movementHover
 	movementForward          uint32 = 0x00000001
 	movementBackward         uint32 = 0x00000002
@@ -193,11 +195,16 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	s.updateZoneAndArea(ctx, true)
 	// MovementHandler.cpp:240-248 (HandleMoveTeleportAck): after a
 	// zone-changing near teleport, a hostile-zone landing earns Honorless
-	// Target (2479, triggered). The friendly-area UpdatePvP(false,false) arm
-	// is vacuous in Go: IN_PVP is never set without the unit flag, and
-	// applyZoneState derives the unit flag deterministically from the zone.
-	if s.player.Zone != oldZone && s.pvpHostile {
-		s.castSpellDirect(ctx, 2479, s.playerGUID)
+	// Target (2479, triggered); a friendly-zone landing clears PvP
+	// immediately and cancels the toggle-off countdown
+	// (Player::UpdatePvP(false,false), Player.cpp:22196-22200) — the same
+	// arm as the far-teleport ack.
+	if s.player.Zone != oldZone {
+		if s.pvpHostile {
+			s.castSpellDirect(ctx, 2479, s.playerGUID)
+		} else if s.player.PVPFlags&0x01 != 0 && s.player.PlayerFlags&playerFlagInPVP == 0 {
+			s.clearPvPState()
+		}
 	}
 	if s.worldReady.Load() {
 		s.refreshNearbyObjects(ctx)
@@ -239,7 +246,6 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 	}
 	// The copied flags come from the sanitizing ReadMovementInfo in C++, so
 	// the ack runs the same anti-cheat pass before the copy.
-	info.Flags &^= movementRoot
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
 	s.movementMu.Lock()
 	s.lastMovementInfo.Flags = info.Flags
@@ -259,11 +265,8 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	if s.nearTeleportPending || s.farTeleportPending || s.inFlight {
 		return true
 	}
-	// MovementHandler.cpp:69-70: leaving the instance restores validity — the
-	// destination map is not an instance, so the homebind countdown ends.
-	if !s.instanceValid && !dungeonMapID(s.server, s.player.Map) {
-		s.instanceValid = true
-	}
+	// The instance-validity reset lives at the worldport ack
+	// (MovementHandler.cpp:67-68, completeWorldPort), not here.
 	b := protocol.NewReader(payload)
 	guid, err := b.ReadPackedGUID()
 	if err != nil {
@@ -310,7 +313,6 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			return true
 		}
 	}
-	info.Flags &^= movementRoot
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
 	// Unit::isMoving (Unit.h:1641) is HasUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING)
 	// (UnitDefines.h:250-254): forward/backward/strafe/falling/falling-far/
@@ -364,6 +366,13 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// A seat with CanControl is the C++ vehicle mover instead: its packets
 	// drive the vehicle and relocate every passenger, so it keeps the full
 	// path below.
+	// MovementHandler.cpp:381-388 builds and broadcasts the movement packet
+	// BEFORE the vehicle block, so a locked seat's broadcast and stored
+	// movement info carry the client-reported orientation even though the
+	// server orientation stands. Snapshot the pre-lock info for the
+	// broadcast/storage below; the seat-lock overwrite on info stays
+	// internal to Go's vehicle-mover model.
+	broadcastInfo := info
 	vehiclePassenger := false
 	if s.player.VehicleGUID != 0 && s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
@@ -571,15 +580,15 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	moveTime := int64(info.Time) + s.timeSyncClockDelta
 	if s.timeSyncClockDelta == 0 || moveTime < 0 || moveTime > 0xFFFFFFFF {
 		s.debug("movement time fallback", "account", s.accountName, "reason", "no clock delta or overflow")
-		info.Time = gameTimeMS()
+		broadcastInfo.Time = gameTimeMS()
 	} else {
-		info.Time = uint32(moveTime)
+		broadcastInfo.Time = uint32(moveTime)
 	}
-	s.setLastMovementInfo(info)
+	s.setLastMovementInfo(broadcastInfo)
 	packet := protocol.NewBuffer(len(payload))
-	writeMovementInfo(packet, info)
-	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), info, s)
-	s.debug("movement accepted", "account", s.accountName, "guid", guid, "x", info.X, "y", info.Y, "z", info.Z)
+	writeMovementInfo(packet, broadcastInfo)
+	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), broadcastInfo, s)
+	s.debug("movement accepted", "account", s.accountName, "guid", guid, "x", broadcastInfo.X, "y", broadcastInfo.Y, "z", broadcastInfo.Z)
 	if !vehiclePassenger {
 		dx := float64(info.X - s.lastStreamX)
 		dy := float64(info.Y - s.lastStreamY)
@@ -883,6 +892,24 @@ func (s *session) movementInfoForCreate(state playerState) movementInfo {
 }
 
 func (s *session) sanitizeMovementFlags(flags uint32) uint32 {
+	// WorldSession.cpp:957-965: MOVEMENTFLAG_ROOT is stripped unless the
+	// mover rides a fixed-position vehicle (Vehicle.dbc 0x200000, cannons
+	// etc.); a rooted mover that also carries moving flags has the moving
+	// flags stripped instead — ROOT+MOVING from a client freezes receiving
+	// clients, so the combination is treated as spoofed.
+	if flags&movementRoot != 0 {
+		fixedPosition := false
+		if s != nil && s.player != nil && s.player.VehicleGUID != 0 && s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil && kit.VehicleInfo != nil {
+				fixedPosition = kit.VehicleInfo.Flags&wotlk.VehicleFlagFixedPosition != 0
+			}
+		}
+		if !fixedPosition {
+			flags &^= movementRoot
+		} else if flags&maskMoving != 0 {
+			flags &^= maskMoving
+		}
+	}
 	if flags&movementForward != 0 && flags&movementBackward != 0 {
 		flags &^= movementForward | movementBackward
 	}
@@ -1130,18 +1157,26 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 	// let a client teleport by knockback ack. The info passes through the
 	// ReadMovementInfo anti-cheat sanitize like C++ before it is stored and
 	// rebroadcast.
-	info.Flags &^= movementRoot
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
 	info.GUID = guid
 	s.setLastMovementInfo(info)
 
 	packet := protocol.NewBuffer(66)
 	packet.WritePackedGUID(guid)
-	writeRawMovementInfo(packet, info)
+	// Unit::BuildMovementPacket writes the server game time into the time
+	// field (Unit.cpp:13279), not the acked client time; the stored
+	// movement info keeps the client time like C++'s m_movementInfo.
+	broadcastInfo := info
+	broadcastInfo.Time = gameTimeMS()
+	writeRawMovementInfo(packet, broadcastInfo)
 	if info.HasJump {
-		for _, v := range info.Jump {
-			packet.WriteF32(v)
-		}
+		// MovementHandler.cpp:574-577 appends the jump params as sinAngle,
+		// cosAngle, xyspeed, zspeed; the parsed Jump array holds them as
+		// zspeed, sinAngle, cosAngle, xyspeed (WorldSession.cpp:928-931).
+		packet.WriteF32(info.Jump[1])
+		packet.WriteF32(info.Jump[2])
+		packet.WriteF32(info.Jump[3])
+		packet.WriteF32(info.Jump[0])
 	} else {
 		packet.WriteF32(0)
 		packet.WriteF32(0)
@@ -1238,7 +1273,6 @@ func (s *session) handleMoveNotActiveMover(ctx context.Context, payload []byte) 
 	}
 	// The info runs the ReadMovementInfo anti-cheat sanitize before it is
 	// stored, matching C++ (WorldSession.cpp:969-1016).
-	info.Flags &^= movementRoot
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
 	info.GUID = guid
 	s.setLastMovementInfo(info)

@@ -34661,7 +34661,7 @@ func (s *session) handleEffectCharge(ctx context.Context, targetGUID uint64, spe
 	facing := float32(math.Atan2(float64(target.Y-destY), float64(target.X-destX)))
 	s.nearTeleportMove(destX, destY, target.Z, facing)
 	if !spellIsPositive(spell) && target.Health != 0 {
-		s.startAttackOn(targetGUID)
+		s.startAttackOn(ctx, targetGUID)
 	}
 }
 

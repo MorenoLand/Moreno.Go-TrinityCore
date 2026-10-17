@@ -2196,7 +2196,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_SET_SHEATHED):
-			if !state.authed || !state.handleSetSheathed(payload) {
+			if !state.authed || !state.handleSetSheathed(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CAST_SPELL):

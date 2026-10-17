@@ -260,30 +260,34 @@ type playerState struct {
 	// the corpse position, not the ghost position. hasCorpse is false when
 	// no corpse exists (never died / corpse reclaimed), mirroring the
 	// !GetCorpse() fallback to the player itself.
-	hasCorpse                       bool
-	corpseX, corpseY, corpseZ       float32
-	BaseMana                        uint32
-	ItemHealthBonus                 uint32
-	ItemManaBonus                   uint32
-	Powers                          [7]uint32
-	MaxPowers                       [7]uint32
-	Cinematic                       uint32
-	Movie                           uint32
-	KnownCurrency                   uint64
-	WatchedFaction                  uint32
-	AmmoID                          uint32
-	ChosenTitle                     uint32
-	KnownTitles                     [6]uint32
-	ActionBars                      uint32
-	GrantableLevels                 uint8
-	FishingSteps                    uint8
-	PassOnGroupLoot                 bool
-	Skills                          []playerSkill
-	Spells                          []learnedSpell
-	Actions                         [144]uint32
-	Cooldowns                       []spellCooldown
-	Equipment                       string
-	SheathState                     uint8
+	hasCorpse                 bool
+	corpseX, corpseY, corpseZ float32
+	BaseMana                  uint32
+	ItemHealthBonus           uint32
+	ItemManaBonus             uint32
+	Powers                    [7]uint32
+	MaxPowers                 [7]uint32
+	Cinematic                 uint32
+	Movie                     uint32
+	KnownCurrency             uint64
+	WatchedFaction            uint32
+	AmmoID                    uint32
+	ChosenTitle               uint32
+	KnownTitles               [6]uint32
+	ActionBars                uint32
+	GrantableLevels           uint8
+	FishingSteps              uint8
+	PassOnGroupLoot           bool
+	Skills                    []playerSkill
+	Spells                    []learnedSpell
+	Actions                   [144]uint32
+	Cooldowns                 []spellCooldown
+	Equipment                 string
+	SheathState               uint8
+	// VirtualItemSlots carries the three UNIT_VIRTUAL_ITEM_SLOT_ID values
+	// Player::SetSheath derives from the sheath state (Player.cpp:9655-9682):
+	// the weapon entries shown on the sheathed/unsheathed model.
+	VirtualItemSlots                [3]uint32
 	PVPFlags                        uint8
 	StandFlags                      uint8
 	AuraVision                      uint8
@@ -3795,6 +3799,11 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		pvpFlags |= 0x01
 	}
 	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(pvpFlags)<<8 | uint32(state.ShapeshiftForm)<<24
+	// Player::SetSheath (Player.cpp:9655-9682): the sheath state drives the
+	// three UNIT_VIRTUAL_ITEM_SLOT_ID values alongside the sheath byte.
+	values[unitVirtualItemSlotID] = state.VirtualItemSlots[0]
+	values[unitVirtualItemSlotID+1] = state.VirtualItemSlots[1]
+	values[unitVirtualItemSlotID+2] = state.VirtualItemSlots[2]
 	if recipient != nil {
 		if bytes2, faction, override := s.resolvePlayerGroupFactionFields(state, *recipient, values[unitFieldBytes2], partyMember, targetSelf); override {
 			values[unitFieldBytes2], values[unitFieldFaction] = bytes2, faction

@@ -28,6 +28,11 @@ const (
 	// 2 (ranged); HandleSetSheathedOpcode (CombatHandler.cpp) rejects anything
 	// at or past this value.
 	maxSheathState = 3
+	// Sheath states (UnitDefines.h:93-97) for Player::SetSheath's virtual
+	// item slot switch (Player.cpp:9655-9682).
+	sheathStateUnarmed = 0
+	sheathStateMelee   = 1
+	sheathStateRanged  = 2
 )
 
 // haveOffhandWeapon checks if the player has an offhand weapon equipped.
@@ -256,7 +261,7 @@ func (s *session) ghostAttackTargetBlocked(guid uint64) bool {
 // server-driven attack starts (e.g. Spell::EffectCharge's HIT_TARGET arm,
 // SpellEffects.cpp:4520-4525) where the target has already passed spell
 // target validation, so the CMSG gates are not re-run.
-func (s *session) startAttackOn(victim uint64) {
+func (s *session) startAttackOn(ctx context.Context, victim uint64) {
 	if s == nil || s.player == nil || victim == 0 {
 		return
 	}
@@ -279,6 +284,10 @@ func (s *session) startAttackOn(victim uint64) {
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
 	}
+	// Unit::Attack's controlled-pet notify (Unit.cpp:5752-5760) fires for
+	// spell-driven attack starts too (EffectCharge calls Attack directly,
+	// SpellEffects.cpp:4520-4525).
+	s.notifyPetsOwnerAttacked(ctx, victim)
 }
 
 func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
@@ -307,15 +316,14 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		// server cannot resolve answers SMSG_ATTACK_STOP with an empty
 		// victim guid (WorldSession::SendAttackStop(nullptr)); the packet
 		// goes to the session only, not the surrounding set.
-		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(s.playerGUID, 0, false), true)
+		_ = s.sendAttackStopSelf(0)
 		return true
 	}
 	// WorldObject::IsValidAttackTarget (Object.cpp:2936-2938): attacking
 	// yourself is never valid; the handler answers with SMSG_ATTACK_STOP
 	// (HandleAttackSwingOpcode, CombatHandler.cpp:40-43).
 	if victim == s.playerGUID {
-		s.attackTarget = 0
-		return s.sendAttackStop(victim, false) == nil
+		return s.sendAttackStopSelf(victim) == nil
 	}
 	// WorldObject::IsValidAttackTarget GM/invisibility legs (Object.cpp:2945-2947)
 	// via HandleAttackSwingOpcode (CombatHandler.cpp): a GM-mode or GM-invisible
@@ -323,8 +331,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	// IsValidAttackTarget before Unit::Attack, so this gate sits ahead of the
 	// dead-target reject and of Unit::Attack's own GM leg (Unit.cpp:5664-5668).
 	if s.server != nil && s.server.gmAttackTargetBlocked(victim) {
-		s.attackTarget = 0
-		return s.sendAttackStop(victim, false) == nil
+		return s.sendAttackStopSelf(victim) == nil
 	}
 	if target.Health == 0 {
 		// CombatHandler.cpp:40-43: a dead target fails IsValidAttackTarget and
@@ -332,8 +339,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		// SMSG_ATTACKSWING_DEADTARGET sender (Player::SendAttackSwingDeadTarget,
 		// Player.cpp:20585) has no callers in this revision, so C++ never
 		// emits that packet on this path.
-		s.attackTarget = 0
-		return s.sendAttackStop(victim, false) == nil
+		return s.sendAttackStopSelf(victim) == nil
 	}
 	// WorldObject::IsValidAttackTarget's "can't attack dead" leg
 	// (Object.cpp:2935-2937): ghosts model IsAlive()==false with Health=1,
@@ -342,12 +348,10 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	// CombatHandler.cpp:40-43), not the dead-target packet (whose sender,
 	// Player::SendAttackSwingDeadTarget, has no callers in this revision).
 	if s.ghostAttackTargetBlocked(victim) {
-		s.attackTarget = 0
-		return s.sendAttackStop(victim, false) == nil
+		return s.sendAttackStopSelf(victim) == nil
 	}
 	if creatureCombatDisabled(target.UnitFlags, target.FlagsExtra) {
-		s.attackTarget = 0
-		return s.sendAttackStop(victim, false) == nil
+		return s.sendAttackStopSelf(victim) == nil
 	}
 	// WorldObject::IsValidAttackTarget's remaining flag arms for the melee
 	// (bySpell=null) path (Object.cpp:2982): the bundle is
@@ -360,18 +364,21 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	// TYPEID_PLAYER-only, so a session with a live taxi path is an
 	// in-flight victim C++ rejects before Unit::Attack.
 	if target.UnitFlags&(unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
-		s.attackTarget = 0
-		return s.sendAttackStop(victim, false) == nil
+		return s.sendAttackStopSelf(victim) == nil
 	}
 	if s.server != nil {
 		if victimSess := s.server.findSessionByGUID(victim); victimSess != nil && victimSess.player != nil && victimSess.player.TaxiPath != "" {
-			s.attackTarget = 0
-			return s.sendAttackStop(victim, false) == nil
+			return s.sendAttackStopSelf(victim) == nil
 		}
 	}
 	if target.Map != s.player.Map {
-		s.attackTarget = 0
-		return s.sendAttackStop(victim, false) == nil
+		return s.sendAttackStopSelf(victim) == nil
+	}
+	// WorldObject::IsValidAttackTarget (Object.cpp:3026-3027): friendly
+	// targets reject with SMSG_ATTACK_STOP, checked in both directions
+	// (IsFriendlyTo(target) || target->IsFriendlyTo(this)).
+	if s.attackTargetFriendlyToPlayer(victim, target) {
+		return s.sendAttackStopSelf(victim) == nil
 	}
 	// CombatHandler.cpp:47-56: a passenger may start a melee swing only when
 	// their vehicle seat carries VEHICLE_SEAT_FLAG_CAN_ATTACK; otherwise the
@@ -379,8 +386,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if s.player.VehicleGUID != 0 && s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if _, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID); seatInfo != nil && !seatInfo.HasFlag(wotlk.VehicleSeatFlagCanAttack) {
-				s.attackTarget = 0
-				return s.sendAttackStop(victim, false) == nil
+				return s.sendAttackStopSelf(victim) == nil
 			}
 		}
 	}
@@ -389,6 +395,12 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	// AttackStop gates and ahead of the attack tail.
 	if s.isPlayerMounted() {
 		s.attackTarget = 0
+		return true
+	}
+	// Unit::Attack (Unit.cpp:5664-5676): a creature victim that is evading
+	// rejects silently — no packet, no attack-state change. (The GM-victim
+	// leg is already answered above via IsValidAttackTarget.)
+	if s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, victim) {
 		return true
 	}
 	// Unit::Attack (Unit.cpp:5680-5683): remove SPELL_AURA_MOD_UNATTACKABLE at
@@ -432,6 +444,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if s.server != nil && s.player != nil {
 		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
 	}
+	s.notifyPetsOwnerAttacked(ctx, victim)
 	return true
 }
 
@@ -2288,7 +2301,7 @@ func (s *session) stopPvPCombatForSanctuary() {
 	}
 }
 
-func (s *session) handleSetSheathed(payload []byte) bool {
+func (s *session) handleSetSheathed(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
 	}
@@ -2303,7 +2316,19 @@ func (s *session) handleSetSheathed(payload []byte) bool {
 		s.debug("unknown sheath state rejected", "account", s.accountName, "state", state)
 		return true
 	}
+	// Player::SetSheath (Player.cpp:9655-9682): the sheath state sets the
+	// three UNIT_VIRTUAL_ITEM_SLOT_ID values (weapon entries shown on the
+	// model) before the sheath byte itself; UNARMED clears all three.
+	var slots [3]uint32
+	switch state {
+	case sheathStateMelee:
+		_, slots[0] = s.equippedWeaponInstance(ctx, 15) // EQUIPMENT_SLOT_MAINHAND
+		_, slots[1] = s.equippedWeaponInstance(ctx, 16) // EQUIPMENT_SLOT_OFFHAND
+	case sheathStateRanged:
+		_, slots[2] = s.equippedWeaponInstance(ctx, 17) // EQUIPMENT_SLOT_RANGED
+	}
 	s.player.SheathState = uint8(state)
+	s.player.VirtualItemSlots = slots
 	s.sendPlayerUpdate()
 	s.debug("sheath state changed", "account", s.accountName, "state", state)
 	return true
@@ -2316,6 +2341,66 @@ func (s *session) sendAttackStop(victim uint64, nowDead bool) error {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), payload, s)
 	}
 	return nil
+}
+
+// sendAttackStopSelf is WorldSession::SendAttackStop (CombatHandler.cpp:82-85):
+// a session-only SMSG_ATTACK_STOP. The swing handler's IsValidAttackTarget
+// rejects answer the client alone, never the surrounding set; the
+// broadcast twin above stays for genuine stops (death, AttackStop) per the
+// tree's broadcast convention.
+func (s *session) sendAttackStopSelf(victim uint64) error {
+	return s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(s.playerGUID, victim, false), true)
+}
+
+// attackTargetFriendlyToPlayer mirrors the friendly-target arm of
+// WorldObject::IsValidAttackTarget (Object.cpp:3026-3027): a target the
+// player is friendly to — in either direction — rejects CMSG_ATTACKSWING.
+func (s *session) attackTargetFriendlyToPlayer(victim uint64, target combatTarget) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return false
+	}
+	if victimSess := s.server.findSessionByGUID(victim); victimSess != nil && victimSess.player != nil {
+		return s.isFriendlyToTarget(victim, victimSess)
+	}
+	if target.Faction == 0 {
+		return false
+	}
+	playerTpl, found := s.factionTemplateEntry(s.effectiveFactionTemplate(s.player.Race))
+	if !found {
+		return false
+	}
+	creatureTpl, found := s.factionTemplateEntry(target.Faction)
+	if !found {
+		return false
+	}
+	return factionTemplateFriendlyTo(playerTpl, creatureTpl) || factionTemplateFriendlyTo(creatureTpl, playerTpl)
+}
+
+// notifyPetsOwnerAttacked ports the controlled-pet notify in Unit::Attack
+// (Unit.cpp:5752-5760): starting a melee attack tells every controlled pet
+// via PetAI::OwnerAttacked (PetAI.cpp:295-314) — a live, non-passive pet
+// whose current victim is not alive assists the owner (AttackStart). Go's
+// AttackStart twin is onPetCommandAttack.
+func (s *session) notifyPetsOwnerAttacked(ctx context.Context, victim uint64) {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 || victim == 0 {
+		return
+	}
+	motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+	if motion == nil || motion.Health == 0 || motion.PetReact == PetReactPassive {
+		return
+	}
+	if motion.TargetGUID != 0 {
+		victimAlive := false
+		if targetSess := s.server.findSessionByGUID(motion.TargetGUID); targetSess != nil && targetSess.player != nil {
+			victimAlive = targetSess.player.Health > 0
+		} else if targetMotion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, motion.TargetGUID); targetMotion != nil {
+			victimAlive = targetMotion.Health > 0
+		}
+		if victimAlive {
+			return
+		}
+	}
+	s.server.onPetCommandAttack(ctx, s.player.Map, s.player.InstanceID, s.player.PetGUID, victim)
 }
 
 func buildAttackStart(attacker, victim uint64) []byte {

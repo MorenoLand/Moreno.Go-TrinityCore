@@ -1444,6 +1444,20 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	return state.PVPFlags != oldFlags || state.PlayerFlags != oldPlayerFlags
 }
 
+// clearPvPState ports Player::UpdatePvP(false,false) (Player.cpp:22196-22200):
+// the PvP flag clears immediately and the toggle-off countdown
+// (pvpInfo.EndTimer, s.pvpEnd) is cancelled. C++ fans the clear out through
+// Player::SetPvP to controlled units; Go models no per-unit PvP flag on
+// pets, so the player flag is the whole model.
+func (s *session) clearPvPState() {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.player.PVPFlags &^= 0x01
+	s.pvpEnd = time.Time{}
+	s.sendPlayerUpdate()
+}
+
 func (s *session) hasPvPForcingQuest(ctx context.Context) bool {
 	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
@@ -1609,6 +1623,24 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.triggerMapEntryEvent(ctx)
 	s.fireInstancePlayerEnter(ctx)
 	s.streamDynamicSpellObjects()
+	// MovementHandler.cpp:127-143 (HandleMoveWorldportAck): a fast teleport
+	// while in flight re-initializes the flight movement generator and
+	// returns early — the revive, corpse-resurrect, instance, mount, zone,
+	// honorless, and pet legs below are all skipped. Entering a battleground
+	// instead ends the flight (FinishTaxiFlight) and continues the leg set.
+	// Go has no movement generator to re-initialize (the client keeps flying
+	// the spline; no SMSG_NEW_WORLD is emitted here), so the arm reduces to
+	// the early return plus the bookkeeping tail every path runs.
+	if s.isInFlight() {
+		if !teleIsBattlegroundOrArena(mapEntry) {
+			s.farTeleportPending = false
+			s.initialLoginPending = false
+			s.server.autoBalanceTransferInstance(s, s.farTeleportOriginMap, s.farTeleportOriginInstanceID, s.player.Map, s.player.InstanceID)
+			s.farTeleportOriginMap, s.farTeleportOriginInstanceID = 0, 0
+			return true
+		}
+		s.finishTaxiFlight()
+	}
 	// WorldSession::HandleMoveWorldportAck corpse/instance legs
 	// (MovementHandler.cpp:149-179): a ghost re-entering the dungeon where
 	// their corpse lies is resurrected at half health with the corpse
@@ -1630,11 +1662,19 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	// feeds C++ MapDifficulty::resetTime, DBCStores.cpp:443) and a global
 	// reset time exists (the instance_reset table is the
 	// InstanceSaveManager::GetResetTimeFor analog, CHAR_INS_GLOBAL_INSTANCE_RESETTIME).
-	// Instance validity is then recomputed one-directional (false only),
-	// mirroring the C++ arm; the homebind timer in homebind.go acts on it.
+	// Instance validity is then recomputed per the C++ arm below; the
+	// homebind timer in homebind.go acts on it.
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		var instanceRow int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM instance_template WHERE map = ?", state.Map).Scan(&instanceRow); err == nil {
+		hasInstanceTemplate := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM instance_template WHERE map = ?", state.Map).Scan(&instanceRow) == nil
+		// MovementHandler.cpp:67-68 (HandleMoveWorldportAck): the reset
+		// fires at ack time — a player whose instance validity lapsed
+		// regains it when the destination carries no instance_template
+		// row — not on the next movement packet.
+		if !s.instanceValid && !hasInstanceTemplate {
+			s.instanceValid = true
+		}
+		if hasInstanceTemplate {
 			diff := uint32(s.player.DungeonDifficulty)
 			if mapEntry.IsRaid() {
 				diff = uint32(s.player.RaidDifficulty)
@@ -1687,10 +1727,14 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	// MovementHandler.cpp:186-196 (HandleMoveWorldPortAck): a far teleport
 	// into a hostile zone earns Honorless Target (2479, triggered) — unlike
 	// the near-teleport arm there is no zone-change gate here, only
-	// hostility. The UpdatePvP(false,false) arm is vacuous in Go (see the
-	// near-teleport note).
+	// hostility. A far teleport into a friendly zone clears PvP immediately
+	// and cancels the toggle-off countdown (Player::UpdatePvP(false,false),
+	// Player.cpp:22196-22200); without this arm the countdown applyZoneState
+	// just started keeps the player PvP-flagged ~5 minutes longer than C++.
 	if s.pvpHostile {
 		s.castSpellDirect(ctx, 2479, s.playerGUID)
+	} else if s.player.PVPFlags&0x01 != 0 && s.player.PlayerFlags&playerFlagInPVP == 0 {
+		s.clearPvPState()
 	}
 	s.recordInstanceEnterTime(ctx, time.Now())
 	s.resetTimeSync()
