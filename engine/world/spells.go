@@ -6850,14 +6850,22 @@ func spellInfoTargetsArea(spell wotlk.Spell) bool {
 // m_spellValue->EffectBasePoints[i] is the DBC BasePoints on the client
 // path (no custom base points), so CalcValueForLevel covers the
 // base-points + caster-level scaling + die roll, and applySpellMod covers
-// Unit::ApplyEffectModifiers (SPELLMOD_ALL_EFFECTS then
-// SPELLMOD_EFFECT1+index). The combo-point term has no Go model
-// (documented); the LEVEL_DAMAGE_CALCULATION scaling arm needs a
-// non-player-controlled caster and is vacuous on the client path.
+// Unit::ApplyEffectModifiers (SPELLMOD_ALL_EFFECTS then the per-effect-index
+// mod: EFFECT_0->SPELLMOD_EFFECT1(3), EFFECT_1->SPELLMOD_EFFECT2(12),
+// EFFECT_2->SPELLMOD_EFFECT3(23), Object.cpp:2304-2320). The combo-point
+// term has no Go model (documented); the LEVEL_DAMAGE_CALCULATION scaling
+// arm needs a non-player-controlled caster and is vacuous on the client path.
 func (s *session) spellEffectCheckCastValue(spell wotlk.Spell, eff wotlk.SpellEffect, index int) int32 {
 	value := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	value = s.applySpellMod(spell, spellModAllEffects, value)
-	value = s.applySpellMod(spell, spellModEffect1+uint8(index), value)
+	switch index {
+	case 0:
+		value = s.applySpellMod(spell, spellModEffect1, value)
+	case 1:
+		value = s.applySpellMod(spell, spellModEffect2, value)
+	case 2:
+		value = s.applySpellMod(spell, spellModEffect3, value)
+	}
 	return value
 }
 
@@ -9910,24 +9918,58 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							// plus T8 4P 64736. Revisit when per-caster
 							// disease tracking lands.
 						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the
-						// Warrior arms are documented no-bridge. Shield Slam
-						// (360-366, SpellFamilyFlags[1] & 0x200 with
-						// GetCategory() == 1209) adds ApplyEffectModifiers of
-						// GetShieldBlockValue(level*24.5, level*34.5) —
-						// blocked on the missing shield-block-value model
-						// (grep for ShieldBlockValue: empty). Victory Rush
-						// (367-369, SpellFamilyFlags[1] & 0x100) runs
-						// ApplyPct(damage, GetTotalAttackPowerValue(
-						// BASE_ATTACK)) — blocked on the missing total-AP
-						// model (standing delta). Shockwave (370-377, Id ==
-						// 46968) adds CalculatePct(GetTotalAttackPowerValue(
-						// BASE_ATTACK), CalculateSpellDamage(EFFECT_2)) —
-						// blocked on both the CalculateSpellDamage standing
-						// delta and the total-AP model. The !unitCaster gates
-						// are vacuous (the caster is always the session player
-						// on these cast paths). Revisit only when the
-						// shield-block-value and total-AP models land.
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the Warrior arms.
+						// Shield Slam (360-366, SpellFamilyFlags[1] & 0x200 with
+						// GetCategory() == 1209) adds the shield block value
+						// (soft/hard-capped by level, Unit.cpp:2623-2636) folded
+						// through ApplyEffectModifiers (Object.cpp:2304:
+						// SPELLMOD_ALL_EFFECTS then the per-effect-index mod).
+						// The !unitCaster gate is vacuous (the caster is always
+						// the session player on these cast paths).
+						if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x200 != 0 &&
+							spell.Category == 1209 {
+							level := uint32(s.player.Level)
+							softCap := uint32(float32(level) * 24.5)
+							hardCap := uint32(float32(level) * 34.5)
+							bv := s.getShieldBlockValue()
+							if bv >= hardCap {
+								bv = (softCap + hardCap) / 2
+							} else if bv > softCap {
+								bv = softCap + (bv-softCap)/2
+							}
+							v := s.applySpellMod(spell, spellModAllEffects, int32(bv))
+							switch effectIndex {
+							case 0:
+								v = s.applySpellMod(spell, spellModEffect1, v)
+							case 1:
+								v = s.applySpellMod(spell, spellModEffect2, v)
+							case 2:
+								v = s.applySpellMod(spell, spellModEffect3, v)
+							}
+							targetDamage += uint32(v)
+						} else if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x100 != 0 {
+							// Victory Rush (367-369): ApplyPct REPLACES
+							// (Util.h:78-81) — damage = damage * totalAP / 100
+							// in float32 (CalculatePct(int32, float), Util.h:66).
+							targetDamage = uint32(float32(targetDamage) * s.totalAttackPowerValue(false) / 100)
+						} else if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyWarrior && spellID == 46968 {
+							// Shockwave (370-377): damage += CalculatePct(
+							// GetTotalAttackPowerValue(BASE_ATTACK),
+							// CalculateSpellDamage(EFFECT_2)) — the pct carries
+							// the ALL_EFFECTS + EFFECT3 spell mods (SpellInfo.cpp:458-460).
+							pct := int32(0)
+							if len(spell.Effects) > 2 {
+								pct = spell.Effects[2].CalcValueForLevel(spell, casterLevel)
+								pct = s.applySpellMod(spell, spellModAllEffects, pct)
+								pct = s.applySpellMod(spell, spellModEffect3, pct)
+							}
+							if pct > 0 {
+								targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * float32(pct) / 100)
+							}
+						}
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:382-393): the
 						// Incinerate Rank 1 & 2 arm (Warlock family,
 						// SpellFamilyFlags[1] & 0x40, SpellIconID 2128) adds
@@ -10150,13 +10192,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 										s.consumePoisonDoses(effCtx, effectTarget, poison, doses)
 									}
 									targetDamage *= doses
-									// Documented no-bridge: damage += int32(
-									// GetTotalAttackPowerValue(BASE_ATTACK) *
-									// 0.09f * combo) — no total-attack-power
-									// model exists anywhere in the tree (standing
-									// delta, same queue as Ferocious Bite,
-									// Shield Slam, Eviscerate). Revisit only if
-									// it lands.
+									// Spell::EffectSchoolDMG (SpellEffects.cpp:605):
+									// damage += int32(GetTotalAttackPowerValue(
+									// BASE_ATTACK) * 0.09f * combo) — inside the
+									// poison branch, keyed on combo (not doses).
+									targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * 0.09 * float32(combo))
 								}
 								// Eviscerate and Envenom Bonus Damage item set
 								// effect (aura 37169).
@@ -10168,62 +10208,71 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							spell.SpellFamilyName == spellFamilyRogue && spell.SpellFamilyFlags[0]&0x20000 != 0 {
 							// Spell::EffectSchoolDMG (SpellEffects.cpp:626-653):
 							// the Eviscerate arm (Rogue family,
-							// SpellFamilyFlags[0] & 0x00020000). The main leg is
-							// a documented no-bridge: damage += std::lroundf(
-							// GetTotalAttackPowerValue(BASE_ATTACK) * combo *
-							// 0.07f) — no total-attack-power model in the tree
-							// (standing delta). The shared item set effect
-							// (aura 37169) below is bridged; the npcbot arm is
-							// structural (no npcbot model), and the !unitCaster
-							// gate is vacuous as above.
+							// SpellFamilyFlags[0] & 0x00020000).
+							// Spell::EffectSchoolDMG (SpellEffects.cpp:636):
+							// damage += std::lroundf(GetTotalAttackPowerValue(
+							// BASE_ATTACK) * combo * 0.07f) — lroundf rounds
+							// half away from zero, the math.Round twin. The
+							// shared item set effect (aura 37169) below is
+							// bridged; the npcbot arm is structural (no npcbot
+							// model), and the !unitCaster gate is vacuous as
+							// above.
 							if combo := s.sessionComboPoints(0); combo > 0 {
+								targetDamage += uint32(math.Round(float64(s.totalAttackPowerValue(false)) * float64(combo) * 0.07))
 								if s.hasAura(37169) {
 									targetDamage += uint32(combo) * 40
 								}
 							}
 						}
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:734-759):
-						// the Paladin arms are documented no-bridge. Hammer
-						// of the Righteous (735-752, SpellFamilyFlags[1] &
-						// 0x00040000) sums CalculateMinMaxDamage(BASE_ATTACK)
-						// over the weapon's damage slots for the weapon DPS
-						// and adds CalculateSpellDamage(EFFECT_2) * average *
-						// 1000 / GetAttackTime(BASE_ATTACK) — blocked on the
-						// missing weapon-damage model and the
-						// CalculateSpellDamage standing delta. Shield of
-						// Righteousness (754-759, SpellFamilyFlags[EFFECT_1]
-						// & 0x100000) adds CalculatePct of GetShieldBlockValue
-						// (level*29.5, level*39.5) at Effects[EFFECT_1]
-						// .CalcValue() — blocked on the missing
-						// shield-block-value model and the CalcValue
-						// machinery. The !unitCaster gates are vacuous (the
-						// caster is always the session player on these cast
-						// paths). Revisit only when the weapon-damage,
-						// shield-block-value, and CalculateSpellDamage
-						// machinery land.
-						// Spell::EffectSchoolDMG (SpellEffects.cpp:767-774):
-						// the Blood Boil arm (DeathKnight family,
-						// SpellFamilyFlags[0] & 0x00040000) is a documented
-						// no-bridge. C++ fires only when the target carries the
-						// caster's Blood Plague (GetAuraEffect(
-						// SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_DEATHKNIGHT,
-						// 0, 0, 0x00000002 — SpellFamilyFlags[2] & 0x2 — with the
-						// caster-GUID filter, Unit.cpp:4524): damage += m_damage / 2
-						// (half of the cast-wide damage accumulated so far —
-						// m_damage is a Spell member fed post-bonus by every
-						// damage effect handler: EffectSchoolDMG at 788,
-						// EffectHealthLeech at 1532, EffectWeaponDmg at 3467, the
-						// power-burn leg at 1390; reset only in the Mocking Blow
-						// immune leg at 3223) plus int32(GetTotalAttackPowerValue(
-						// BASE_ATTACK) * 0.035f). Go lacks both structural pieces:
-						// the per-target loop rebuilds each target's damage from
-						// the base amount (no cross-target accumulator exists, and
-						// the post-bonus final stays inside executeSpellDamage),
-						// and no total-attack-power model exists anywhere in the
-						// tree. The !unitCaster gate is vacuous here: the caster
-						// is always the session player on these cast paths.
-						// Revisit only if a cast-wide damage accumulator and the
-						// total-AP model land.
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:734-759): the Paladin arms.
+						// Hammer of the Righteous (735-752, SpellFamilyFlags[1] &
+						// 0x00040000) stays a documented no-bridge: it sums
+						// CalculateMinMaxDamage(BASE_ATTACK) over the weapon's damage
+						// slots for the weapon DPS and adds CalculateSpellDamage(EFFECT_2)
+						// * average * 1000 / GetAttackTime(BASE_ATTACK) — blocked on
+						// the missing weapon-damage model and the CalculateSpellDamage
+						// standing delta.
+						// Shield of Righteousness (754-759, SpellFamilyFlags[EFFECT_1]
+						// & 0x100000): damage += CalculatePct(GetShieldBlockValue(
+						// level*29.5, level*39.5), Effects[EFFECT_1].CalcValue()) —
+						// the cap fold is Unit.cpp:2623-2636, the pct is the flat
+						// null-caster DBC value (SpellInfo.cpp:402). The !unitCaster
+						// gate is vacuous (the caster is always the session player
+						// on these cast paths).
+						if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyPaladin && spell.SpellFamilyFlags[1]&0x100000 != 0 &&
+							len(spell.Effects) > 1 {
+							level := uint32(s.player.Level)
+							softCap := uint32(float32(level) * 29.5)
+							hardCap := uint32(float32(level) * 39.5)
+							bv := s.getShieldBlockValue()
+							if bv >= hardCap {
+								bv = (softCap + hardCap) / 2
+							} else if bv > softCap {
+								bv = softCap + (bv-softCap)/2
+							}
+							pct := spell.Effects[1].CalcValue()
+							targetDamage += uint32(float32(bv) * float32(pct) / 100)
+						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:767-774): the Blood Boil
+						// arm (DeathKnight family, SpellFamilyFlags[0] & 0x00040000).
+						// C++ fires when the target carries the caster's Blood Plague
+						// (GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE,
+						// SPELLFAMILY_DEATHKNIGHT, 0, 0, 0x00000002 —
+						// SpellFamilyFlags[2] & 0x2 — with the caster-GUID filter,
+						// Unit.cpp:4524). The damage += m_damage / 2 term is dead
+						// code: m_damage is reset to 0 per (target, effect) at the
+						// top of DoEffectOnLaunchTarget (Spell.cpp:7750), the only
+						// path that runs this arm, so it always adds 0. The live
+						// term is damage += int32(GetTotalAttackPowerValue(
+						// BASE_ATTACK) * 0.035f). The !unitCaster gate is vacuous
+						// (the caster is always the session player on these cast
+						// paths).
+						if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x40000 != 0 &&
+							s.targetHasBloodPlague(effCtx, effectTarget) {
+							targetDamage += uint32(float32(s.totalAttackPowerValue(false)) * 0.035)
+						}
 						s.executeSpellDamageWithFlags(effCtx, effectTarget, spellID, targetDamage, effectIndex, false, isReflected)
 					}
 				}
@@ -17987,6 +18036,40 @@ func (s *session) targetHasFamilyAuraEffectByCaster(ctx context.Context, targetG
 				continue
 			}
 			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraType {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// targetHasBloodPlague mirrors the Blood Boil gate of Spell::EffectSchoolDMG
+// (SpellEffects.cpp:771): the victim carries the caster's own Blood Plague —
+// a SPELL_AURA_PERIODIC_DAMAGE aura whose spell is DeathKnight-family with
+// SpellFamilyFlags[2] & 0x2 (Unit::GetAuraEffect, Unit.cpp:4524). The
+// sibling targetHasFamilyAuraEffectByCaster only tests SpellFamilyFlags[0],
+// so this arm gets its own loop.
+func (s *session) targetHasBloodPlague(ctx context.Context, targetGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyDeathKnight || auraSpell.SpellFamilyFlags[2]&0x2 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraPeriodicDamage {
 				continue
 			}
 			return true
