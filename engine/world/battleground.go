@@ -14,11 +14,17 @@ import (
 // handleBattlemasterHello processes CMSG_BATTLEMASTER_HELLO (0x2D7).
 // Reference: WorldSession::HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:41).
 func (s *session) handleBattlemasterHello(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// BattleGroundHandler.cpp:41: `recvData >> guid` reads a packed GUID
+	// (ObjectGuid::ReadFromPacket); a raw 8-byte read misparsed it — packed
+	// payloads with a full mask are 9 bytes and start with the mask byte, so
+	// raw reads yielded garbage guids, the interact gate below never passed,
+	// and every hello no-op'd (same bug class as the 06:39 ReportPvPAFK fix).
+	// Truncated packed payloads throw in C++, so a read error reports nothing.
 	r := protocol.NewReader(payload)
-	bmGUID, err := r.ReadU64()
+	bmGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return true
 	}
@@ -308,20 +314,31 @@ func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID u
 // handleBattlemasterJoin processes CMSG_BATTLEMASTER_JOIN (0x2EE).
 // Reference: WorldSession::HandleBattlemasterJoinOpcode (BattleGroundHandler.cpp:74).
 func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 17 {
+	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// BattleGroundHandler.cpp:76: `recvData >> guid` reads a packed GUID; a
+	// raw 8-byte read misaligned every field after it (the guid is only
+	// logged in C++, but bgTypeId/instanceId/joinAsGroup then ran on the
+	// packed bytes), so real-client joins silently failed the BattlemasterList
+	// lookup below. Truncated packets throw in C++ → drop with the
+	// connection open (WorldSession.cpp:427-432), never close it.
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // guid
+	if _, err := r.ReadPackedGUID(); err != nil {
+		return true
+	}
 	bgTypeID, err := r.ReadU32()
 	if err != nil {
-		// Truncated read: the len(payload) < 17 gate above makes this
-		// unreachable, but a malformed packet drops (WorldSession.cpp:427-432),
-		// never closes.
 		return true
 	}
-	instanceID, _ := r.ReadU32()
-	joinAsGroup, _ := r.ReadU8()
+	instanceID, err := r.ReadU32()
+	if err != nil {
+		return true
+	}
+	joinAsGroup, err := r.ReadU8()
+	if err != nil {
+		return true
+	}
 
 	// sBattlemasterListStore.LookupEntry(bgTypeId_) (BattleGroundHandler.cpp:84-88):
 	// an invalid bgTypeId is answered with silence (error log on the C++ side).
@@ -972,14 +989,30 @@ func arenaTeamAnnounceInfo(ctx context.Context, s *session, teamID uint32) (stri
 // handleBattlemasterJoinArena processes CMSG_BATTLEMASTER_JOIN_ARENA (0x358).
 // Reference: WorldSession::HandleBattlemasterJoinArena (BattleGroundHandler.cpp:610).
 func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 11 {
+	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// BattleGroundHandler.cpp:615: `recvData >> guid` reads a packed GUID; a
+	// raw 8-byte read misparsed it, so the GetNPCIfCanInteractWith gate below
+	// never passed and every arena join no-op'd (same bug class as the
+	// battlemaster-hello fix). Truncated packets throw in C++ → drop.
 	r := protocol.NewReader(payload)
-	guid, _ := r.ReadU64() // arena battlemaster guid
-	arenaSlot, _ := r.ReadU8()
-	asGroup, _ := r.ReadU8()
-	isRated, _ := r.ReadU8()
+	guid, err := r.ReadPackedGUID()
+	if err != nil {
+		return true
+	}
+	arenaSlot, err := r.ReadU8()
+	if err != nil {
+		return true
+	}
+	asGroup, err := r.ReadU8()
+	if err != nil {
+		return true
+	}
+	isRated, err := r.ReadU8()
+	if err != nil {
+		return true
+	}
 
 	// BattleGroundHandler.cpp:618-619 — ignore if already in a battleground
 	// (the "or BG queue" half of the comment is the queue checks below; the code
