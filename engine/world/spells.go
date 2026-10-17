@@ -14819,8 +14819,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2524-2530): the
 	// IsImmunedToDamage arm zeroes the damage and sends NO damage-log
 	// packet ("no packet found in sniffs") — the immunity shows only via
-	// the miss path, never SMSG_SPELLNONMELEEDAMAGELOG.
-	if !immune {
+	// the miss path, never SMSG_SPELLNONMELEEDAMAGELOG. An instakill kill
+	// never sends a damage log either: C++ EffectInstaKill calls
+	// Unit::DealDamage (NODAMAGE) directly, which sends none
+	// (SpellEffects.cpp:274-296; Unit.cpp:696-995 has no damage-log send).
+	if !immune && !instantKill {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
 	}
 
@@ -14845,7 +14848,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// gates engage; the triggered-cast suppression is the gate's own job,
 	// not a call-site skip. A zero incoming damage takes the no-damage arm
 	// (PROC_SPELL_TYPE_NO_DMG_HEAL, Spell.cpp:2563-2579), not the damage arm.
-	if hadIncomingDamage && !targetCantProc {
+	// An instakill kill bypasses DoDamageAndTriggers entirely (C++
+	// EffectInstaKill calls Unit::DealDamage directly, which contains zero
+	// ProcDamageAndSpell calls), so no spell-hit procs fire on either arm.
+	if !instantKill && hadIncomingDamage && !targetCantProc {
 		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, reflected)
 		// Taken-side aura procs on the victim's own auras (TrinityCore
 		// Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418): the done
@@ -14859,7 +14865,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, s.triggeredNoProcEvents > 0, reflected)
 			}
 		}
-	} else if !targetCantProc {
+	} else if !instantKill && !targetCantProc {
 		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, isHit, immune, reflected)
 		// Taken-side no-damage pass on the victim's session, after the
 		// done side, matching the ProcSkillsAndAuras ordering.
@@ -14879,7 +14885,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// intersects the default hit mask. The table runs AFTER the aura
 	// triggers: Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2553-2570)
 	// calls Unit::ProcSkillsAndAuras first, then CastItemCombatSpell.
-	if s.triggeredNoProcEvents == 0 && !targetCantProc && s.spellHitMayFireItemProcs(spellID) &&
+	// Instakill kills fire no spell-hit procs (no DoDamageAndTriggers), so
+	// the item-spell table is skipped too.
+	if !instantKill && s.triggeredNoProcEvents == 0 && !targetCantProc && s.spellHitMayFireItemProcs(spellID) &&
 		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
 		s.procSpellCastAndHitEffects(ctx, target, spellID)
 		s.procWeaponEnchantProcsFromSpellHit(ctx, target, !(damage >= target.Health && target.Health > 0))
@@ -14902,12 +14910,14 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			damage = playerSess.negateGodModeDamage(damage)
 			// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage
 			// auras (81/153) redirect part of the damage to the aura's
-			// caster, ahead of the 300 share leg.
-			if damage > 0 {
+			// caster, ahead of the 300 share leg. Both legs sit inside
+			// Unit::DealDamage's damagetype != NODAMAGE guard (Unit.cpp:742),
+			// so an instakill kill (NODAMAGE) applies neither.
+			if damage > 0 && !instantKill {
 				damage = s.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
 			}
 			// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
-			if damage > 0 {
+			if damage > 0 && !instantKill {
 				s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
 			}
 			playerSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
@@ -14917,7 +14927,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			}
 			// The IsImmunedToDamage arm (Spell.cpp:2524-2530) sends no damage-log
 			// packet; the victim-side send is gated the same as the caster's.
-			if !immune {
+			// Instakill kills send no damage log either (SpellEffects.cpp:294
+			// calls DealDamage directly; DealDamage never logs).
+			if !immune && !instantKill {
 				_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
 			}
 			victimHealth := playerSess.player.Health
@@ -15001,12 +15013,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 
 	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
 	// redirect part of the damage to the aura's caster, ahead of the 300
-	// share leg.
-	if damage > 0 {
+	// share leg. Both legs are skipped on an instakill kill (the NODAMAGE
+	// guard, Unit.cpp:742).
+	if damage > 0 && !instantKill {
 		damage = s.server.splitDamageToCaster(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
 	}
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
-	if damage > 0 {
+	if damage > 0 && !instantKill {
 		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
 	}
 
@@ -31240,15 +31253,13 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 			}
 		}
 		rows.Close()
+		// Player::ActivateSpec (Player.cpp:26340-26374): every talent rank
+		// goes through Player::RemoveSpell, which recurses into non-talent
+		// higher ranks, spells requiring the rank, and spells the rank
+		// teaches — the cascade, not just the talent row.
+		visited := make(map[uint32]bool)
 		for _, sp := range oldSpells {
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, sp)
-			if s.hasAura(sp) {
-				s.removeAura(sp)
-			}
-			s.removeOwnerPetAurasForSpell(ctx, sp)
-			unlearnBuf := protocol.NewBuffer(4)
-			unlearnBuf.WriteU32(sp)
-			_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)
+			s.removeSpellCascade(ctx, sp, visited)
 		}
 	}
 
@@ -35002,8 +35013,10 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 // environmentalDamage). Unit targets take NO damage — C++ only computes
 // absorb/resist and sends the non-melee damage log
 // (Unit::SendSpellNonMeleeDamageLog, Unit.cpp:5302) — so only the packet is
-// sent. Go has no creature absorb-aura model on this path; the resistance
-// leg mirrors Unit::CalcSpellResistedDamage via calcMagicSpellResistance.
+// sent. The creature absorb leg mirrors Unit::CalcAbsorbResist via
+// applyCreatureAbsorptionShields (auras 69/256; no mana-shield leg) with
+// the attacker's 194/245 absorb-ignore bypass, and the resistance leg
+// mirrors Unit::CalcSpellResistedDamage via calcMagicSpellResistance.
 func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, spellID uint32, schoolMask uint8, hitTargets []uint64) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
@@ -35040,9 +35053,22 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 			// the live resistance fold (22/101/143) lands on every creature
 			// victim's resistances.
 			resistances := s.server.petFoldedResistances(creatureAuraKeyForMotion(motion), resistances)
-			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, uint8(level), true, false, s.casterIgnoreResistPct(spellID, uint32(schoolMask)))
+			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, uint8(level), true, false, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), s.player.SpellPenetration)
 		}
-		logPkt := buildSpellNonMeleeDamageLog(effectTarget, s.playerGUID, spellID, damage, 0, schoolMask, 0, resisted, 0)
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857, 1977-2060): the
+		// attacker's absorb-ignore pct (194/245) bypasses shields, then
+		// the victim's school-absorb shields soak the rest — C++ sends the
+		// computed absorb in the damage log even though no damage lands.
+		// No mana-shield (aura 97) leg: Go's creature absorb model covers
+		// auras 69/256 only (absorption.go:448).
+		var absorbed uint32
+		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
+		var soakable uint32
+		if resisted+bypass < damage {
+			soakable = damage - resisted - bypass
+		}
+		absorbed, _ = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForMotion(motion), soakable, schoolMask)
+		logPkt := buildSpellNonMeleeDamageLog(effectTarget, s.playerGUID, spellID, damage, 0, schoolMask, absorbed, resisted, 0)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 		s.server.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s)
 	}

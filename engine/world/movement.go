@@ -1737,6 +1737,20 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		}
 	}
 
+	// Unit::DealDamage (Unit.cpp:735-737) via Player::EnvironmentalDamage
+	// (Player.cpp:784): CHEAT_GOD negates the damage before the absorb,
+	// achievement, lethal, duel, and pushback legs — the HandleFall zeroing
+	// (Player.cpp:25390) is the same arm one call up for falls, but lava,
+	// slime, drowning, and fatigue reach here directly. The log below still
+	// carries the pre-negation amount (rolledDamage), matching C++ sending
+	// EnvironmentalDamageLog before DealDamage (Player.cpp:778-786).
+	damage = s.negateGodModeDamage(damage)
+
+	// Unit::DealDamage (Unit.cpp:868-870): HIGHEST_HIT_RECEIVED fires with
+	// the dealt damage for player victims with no attacker gate — it runs
+	// on the duel-defeat, lethal, and non-lethal paths alike.
+	s.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
+
 	// Unit::DealDamage (Unit.cpp:825-853, 957-973): environmental damage is
 	// self-damage (attacker == victim, Player.cpp:792) — damage of exactly
 	// health-1 on a duelist completes the duel as won; lethal damage is not
@@ -1749,13 +1763,22 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		s.player.Health = 0
 	} else {
 		s.player.Health -= damage
-		if damage > 0 {
-			// Unit::DealDamage (Unit.cpp:896-897): the DIRECT_DAMAGE aura
-			// interrupt runs only for damagetype DIRECT_DAMAGE /
-			// SPELL_DIRECT_DAMAGE — environmental damage is SELF_DAMAGE
-			// (Player.cpp:792), so it strips TAKE_DAMAGE-interrupt auras
-			// only, not DIRECT_DAMAGE ones.
+		// Unit::DealDamage (Unit.cpp:739-747): the TAKE_DAMAGE aura
+		// interrupt strip runs inside the damagetype != NODAMAGE guard with
+		// no damage gate — fully absorbed hits still strip it. CHEAT_GOD
+		// returns from DealDamage before the strip (Unit.cpp:735-737).
+		// Environmental damage is SELF_DAMAGE (Player.cpp:792), so only
+		// TAKE_DAMAGE-interrupt auras strip, never DIRECT_DAMAGE ones
+		// (Unit.cpp:896-897).
+		if !s.godCheatActive() {
 			s.procDamageAuras(false)
+		}
+		if damage > 0 {
+			// Unit::DealDamage (Unit.cpp:887-889): TOTAL_DAMAGE_RECEIVED
+			// fires with the dealt damage on a non-lethal hit (the lethal
+			// arm is gated victim != attacker, Unit.cpp:883-885, so
+			// self-kills skip it).
+			s.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 		}
 	}
 
@@ -1783,21 +1806,39 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ENVIRONMENTAL_DAMAGE_LOG), packet.Bytes(), s)
 	}
 
-	// CHEAT_GOD (Unit.cpp:735-737) negates the damage inside
-	// Unit::DealDamage, AFTER the log above has been sent.
-	damage = s.negateGodModeDamage(damage)
-
 	s.sendPlayerUpdate()
 
 	if s.player.Health == 0 {
 		s.updateAchievementCriteria(criteriaTypeDeathsFrom, uint32(damageType), 1)
-		// Environmental damage has no attacker (Unit::Kill's attacker is nil).
-		// The durabilityLoss arm mirrors Player::EnvironmentalDamage
-		// (Player.cpp:793-803): DealDamage passes durabilityLoss=false for
-		// self-inflicted damage, and the loss is re-applied only for
-		// DAMAGE_FALL — drowning, fatigue, lava, slime, fire and
-		// fall-to-void deaths cost no durability.
-		s.killPlayer(ctx, nil, false, damageType == damageFall)
+		// Unit::DealDamage (Player.cpp:784): the attacker is the player
+		// itself (SELF_DAMAGE), so Unit::Kill runs the self-kill legs with
+		// a non-nil attacker: the KILL proc fires on the victim
+		// (Unit.cpp:11285, via killPlayer's killer leg), the killing-blow
+		// criteria credit the player (Unit.cpp:11294-11297), and the death
+		// is a PvP death (SetPvPDeath(player != nullptr), Unit.cpp:11344).
+		// Unit::Kill (Unit.cpp:11324-11335): the victim's own alive pet gets
+		// KilledUnit(victim) — fired before killPlayer dismisses the pet.
+		if s.server != nil {
+			if pet := s.livePetMotion(); pet != nil {
+				s.server.fireCreatureTargetDied(ctx, pet, s.luaPlayer())
+			}
+		}
+		s.killPlayer(ctx, s, false, false)
+		// Player::EnvironmentalDamage (Player.cpp:793-803): DealDamage does
+		// not apply item durability loss for self-inflicted damage — the
+		// loss is re-applied directly for DAMAGE_FALL only.
+		if damageType == damageFall {
+			lossRate := 0.0
+			if s.server != nil {
+				lossRate = s.server.Config.DurabilityLossOnDeath
+				if lossRate < 0 || lossRate > 100 {
+					lossRate = 0
+				}
+				lossRate /= 100
+			}
+			s.durabilityLossAll(ctx, lossRate, false)
+			_ = s.write(uint16(protocol.OpcodeSMSG_DURABILITY_DAMAGE_DEATH), []byte{}, true)
+		}
 	}
 	return damage
 }

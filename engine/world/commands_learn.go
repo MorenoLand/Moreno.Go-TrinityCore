@@ -142,6 +142,96 @@ func (s *session) unlearnSpell(ctx context.Context, spellID uint32) {
 	s.autoUnequipOffhandIfNeeded(ctx)
 }
 
+// removeSpellCascade mirrors Player::RemoveSpell (Player.cpp:3699) as used
+// by Player::ActivateSpec: before dropping the spell it recursively unlearns
+// (1) known non-talent higher ranks via GetNextSpellInChain
+// (Player.cpp:3709-3713) and (2) spells gated on it via
+// SpellsRequiringSpellMap (Player.cpp:3715-3718); after the drop it
+// recursively unlearns (3) spells the rank teaches through
+// SPELL_EFFECT_LEARN_SPELL TriggerSpells (the ActivateSpec loop arm,
+// Player.cpp:26363-26366) and (4) spell_learn_spell dependents (the
+// SpellLearnSpellMap leg, Player.cpp:3827-3830). Talent points free
+// implicitly: Go derives free points from the talent map, which
+// loadPlayerTalents rebuilds for the new spec after the swap. The disabled
+// mark (RemoveSpell's disabled=true from ActivateSpec), the primary-
+// profession free-point arm, and the skill-rank rollback have no Go model
+// and stay documented gaps.
+func (s *session) removeSpellCascade(ctx context.Context, spellID uint32, visited map[uint32]bool) {
+	if s == nil || s.player == nil || spellID == 0 || visited[spellID] || !s.hasLearnedSpell(spellID) {
+		return
+	}
+	visited[spellID] = true
+	if s.server != nil {
+		if next := s.server.getNextSpellInChain(spellID); next != 0 && s.hasLearnedSpell(next) {
+			if cost, err := s.server.Data.TalentSpellCost(next); err == nil && cost == 0 {
+				s.removeSpellCascade(ctx, next, visited)
+			}
+		}
+		for _, dep := range s.spellsRequiringSpell(ctx, spellID) {
+			s.removeSpellCascade(ctx, dep, visited)
+		}
+	}
+	s.unlearnSpell(ctx, spellID)
+	for _, taught := range s.spellsTaughtBySpell(ctx, spellID) {
+		s.removeSpellCascade(ctx, taught, visited)
+	}
+}
+
+// spellsRequiringSpell mirrors the SpellsRequiringSpellMap lookup in
+// Player::RemoveSpell (Player.cpp:3715-3718): every spell whose
+// spell_required row gates on spellID.
+func (s *session) spellsRequiringSpell(ctx context.Context, spellID uint32) []uint32 {
+	var out []uint32
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return out
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell_id FROM spell_required_spell WHERE req_spell = ?", spellID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var dep int64
+		if rows.Scan(&dep) == nil && dep > 0 {
+			out = append(out, uint32(dep))
+		}
+	}
+	return out
+}
+
+// spellsTaughtBySpell mirrors the two taught-spell legs of
+// Player::RemoveSpell: the DBC SPELL_EFFECT_LEARN_SPELL TriggerSpells
+// (Player.cpp:26363-26366, the ActivateSpec loop arm) and the
+// SpellLearnSpellMap bounds over spell_learn_spell (Player.cpp:3827-3830).
+func (s *session) spellsTaughtBySpell(ctx context.Context, spellID uint32) []uint32 {
+	var out []uint32
+	if s == nil || s.server == nil {
+		return out
+	}
+	if s.server.Data != nil {
+		if spell, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
+			for _, eff := range spell.Effects {
+				if eff.Effect == spellEffectLearnSpell && eff.TriggerSpell > 0 {
+					out = append(out, eff.TriggerSpell)
+				}
+			}
+		}
+	}
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT SpellID FROM spell_learn_spell WHERE entry = ?", spellID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var taught int64
+				if rows.Scan(&taught) == nil && taught > 0 {
+					out = append(out, uint32(taught))
+				}
+			}
+		}
+	}
+	return out
+}
+
 // learnTalentDirect grants a talent rank bypassing the talent-point gate,
 // mirroring the LearnSpell + AddTalent pair in HandleLearnAllTalentsCommand
 // (cs_learn.cpp:280-283). Persistence follows learnTalent (skills.go): the

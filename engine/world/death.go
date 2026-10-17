@@ -458,9 +458,11 @@ const (
 // the corpse in place, keep health at zero, raise the release timer flag on
 // non-instance maps (the Go server has no instance maps), start the 6 minute
 // auto-release timer, and notify the client of the corpse reclaim delay.
-// killer is the killing player session (nil for environment, fall, and GM
-// kills) — the Go analog of Unit::Kill's
+// killer is the killing player session — the Go analog of Unit::Kill's
 // attacker->GetCharmerOrOwnerPlayerOrPlayerItself() arm (Unit.cpp:11279).
+// It is nil for wild-creature, fall-to-void, and GM kills; environmental
+// self-damage (lava, drowning, fatigue, falls) passes the victim session
+// itself, since C++ deals it as attacker == victim (Player.cpp:784).
 // pvpDeath carries Unit::Kill's attacker arm (Unit.cpp:11341-11343): true when
 // the killer resolves to a player (attacker->GetCharmerOrOwnerPlayerOrPlayerItself()),
 // feeding the corpse type and the reclaim delay. A non-nil killer forces it
