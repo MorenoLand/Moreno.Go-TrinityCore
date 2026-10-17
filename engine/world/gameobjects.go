@@ -665,6 +665,12 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	if !s.worldReady.Load() {
 		return true
 	}
+	// HandleGameObjectUseOpcode (SpellHandler.cpp:306-309): the remote-control
+	// arm is NOT a drop — it only blocks when NOT (IsOnVehicle(mover) ||
+	// IsMounted() || goInfo.IsUsableMounted()). Go's only divergent mover is
+	// the driven control-seat vehicle, and the driver is on it, so the arm
+	// always permits: no gate needed. (Charm/possess movers, where the arm
+	// could fire, have no Go model.)
 
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	// ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT is updated by CMSG_GAMEOBJ_REPORT_USE
@@ -1165,6 +1171,12 @@ func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte)
 	}
 	guid, err := readObjectGUID(payload)
 	if err != nil || guid == 0 {
+		return true
+	}
+	// HandleGameobjectReportUse (SpellHandler.cpp:321-322) — ignore for
+	// remote control state: while the mover is a vehicle the achievement
+	// update is dropped, after the guid read like C++.
+	if s.moverGUID() != s.playerGUID {
 		return true
 	}
 	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2371): a player in

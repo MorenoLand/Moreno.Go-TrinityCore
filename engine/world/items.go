@@ -3234,9 +3234,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	// The remote-control drop (SpellHandler.cpp:77-79, GetUnitBeingMoved !=
-	// player) is vacuous: Go has no charm/possess mover model, the mover is
-	// always the player.
+	// SpellHandler.cpp:77-79 — ignore for remote control state: the gate
+	// fires before any packet read, while the mover is a vehicle (the
+	// mover model added in the 00:29 vehicle-mover strip).
+	if s.moverGUID() != s.playerGUID {
+		return true
+	}
 	r := protocol.NewReader(payload)
 	bagIndex, err := r.ReadU8()
 	if err != nil {
@@ -4361,6 +4364,11 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 // Reference: WorldSession::HandleOpenItemOpcode (SpellHandler.cpp:183).
 func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	// SpellHandler.cpp:190 — ignore for remote control state: the gate
+	// fires before the packet read and before the dead gate.
+	if s.moverGUID() != s.playerGUID {
 		return true
 	}
 	if s.player.Health == 0 {

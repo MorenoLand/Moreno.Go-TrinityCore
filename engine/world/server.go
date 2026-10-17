@@ -5608,6 +5608,12 @@ func (s *session) handleUpdateAccountData(ctx context.Context, payload []byte) b
 		s.debug("account data decompression failed", "account", s.accountName, "type", typeID, "error", err)
 		return true
 	}
+	// MiscHandler.cpp:837-839 — ByteBuffer::operator>>(std::string) stops
+	// at the null terminator, so SetAccountData stores the payload WITHOUT
+	// the trailing null the client sends inside decompressedSize.
+	if len(data) > 0 && data[len(data)-1] == 0 {
+		data = data[:len(data)-1]
+	}
 	var result sql.Result
 	if globalAccountDataMask&(1<<typeID) != 0 {
 		result, err = s.server.CharactersStore.ExecStatement(ctx, "CHAR_REP_ACCOUNT_DATA", s.accountID, typeID, timestamp, data)

@@ -2108,6 +2108,11 @@ func (s *session) handleOpeningCinematic() bool {
 	return s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), packet.Bytes(), true) == nil
 }
 
+// handleCompleteCinematic mirrors WorldSession::HandleCompleteCinematic
+// (MiscHandler.cpp:899-903): the C++ arm calls
+// GetPlayer()->GetCinematicMgr()->EndCinematic() (unbinding the sight-bound
+// visual waypoint). Go has no cinematic manager, so there is nothing to
+// end — the no-op is a no-bridge gap, not an exact port.
 func (s *session) handleCompleteCinematic(ctx context.Context) bool {
 	return true
 }
