@@ -132,11 +132,12 @@ end
 -- (jeklik convention; C++ returns without re-arming when casting or
 -- victimless — mal_ganis precedent, documented deviation).
 local function onFireball(creature, guid)
-    -- C++ UpdateAI returns before events.Update() while
-    -- !eventInProgress (razorfen_downs.cpp); the scheduled line stays
-    -- frozen and never fires. Re-schedule without casting.
+    -- C++ UpdateAI never ticks events while !eventInProgress
+    -- (razorfen_downs.cpp:154-157): the 1s initial stays frozen, so the
+    -- frozen leg re-arms with the initial, not the 8s repeat — the
+    -- fireball fires ~1s after the quest-accept latch, like C++.
     if not getState(guid).eventInProgress then
-        schedule(guid, "fireball", 8000, function()
+        schedule(guid, "fireball", 1000, function()
             onFireball(creature, guid)
         end)
         return
@@ -153,12 +154,14 @@ end
 -- C++ EVENT_FROST_NOVA: DoCastAOE(11831) -> self-cast (kazrogal/illidan
 -- precedent); re-arm 15s unconditional, same blocked-gate deviation.
 local function onFrostNova(creature, guid)
-    -- C++ UpdateAI gate: no fire while !eventInProgress; frozen line
-    -- re-scheduled without casting (same as Fireball).
+    -- Frozen leg: re-arm with the rolled {8s,12s} initial (see engage),
+    -- not the 15s repeat — C++ fires the frozen initial 8-12s after the
+    -- quest-accept latch (razorfen_downs.cpp:154-157).
     if not getState(guid).eventInProgress then
-        schedule(guid, "frostnova", 15000, function()
-            onFrostNova(creature, guid)
-        end)
+        schedule(guid, "frostnova", getState(guid).frostNovaInit or 8000,
+            function()
+                onFrostNova(creature, guid)
+            end)
         return
     end
     creature:CastSpell(creature, SPELL_FROST_NOVA)
@@ -184,7 +187,11 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "fireball", 1000, function()
         onFireball(creature, guid)
     end)
-    schedule(guid, "frostnova", math.random(8000, 12000), function()
+    -- The {8s,12s} initial is rolled once here and reused by the frozen
+    -- leg below, matching C++'s frozen-timer semantics
+    -- (razorfen_downs.cpp:154-157).
+    st.frostNovaInit = math.random(8000, 12000)
+    schedule(guid, "frostnova", st.frostNovaInit, function()
         onFrostNova(creature, guid)
     end)
     if math.random(0, 100) > 40 then

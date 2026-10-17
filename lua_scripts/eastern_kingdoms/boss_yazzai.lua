@@ -41,12 +41,12 @@
 -- convention).
 -- Polymorph machine: DoCast(SelectTarget(Random, 0), SPELL_POLYMORPH
 -- 13323) 1000ms init -> 20000ms loop, the re-arm inside the C++ pick
--- guard (boss_priestess_delrissa.cpp:817-820): re-arms only on a
+-- guard (boss_priestess_delrissa.cpp:813-819): re-arms only on a
 -- successful pick; on a failed pick the expired timer retries next
 -- tick, modeled as a 1s re-poll (moroes dorotheaSwPain precedent).
 -- Blizzard machine: DoCast(SelectTarget(Random, 0), SPELL_BLIZZARD
 -- 44178) 8000ms init -> 8000ms loop, unconditional re-arm
--- (:828-834). Both target via the map-wide random-player pool
+-- (:827-833). Both target via the map-wide random-player pool
 -- (GetPlayersInWorld filtered by map/instance, opera-Julianne
 -- precedent); caveat: C++ picks from the threat list (pets/totems
 -- eligible, non-threat players excluded) — the accepted

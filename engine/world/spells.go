@@ -386,6 +386,7 @@ const (
 	spellEffectLearnPetSpell           = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
 	spellEffectAddExtraAttacks         = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
 	spellEffectAddComboPoints          = 80 // SPELL_EFFECT_ADD_COMBO_POINTS (SharedDefines.h:891)
+	spellEffectDuel                    = 83 // SPELL_EFFECT_DUEL (SharedDefines.h:894; EffectDuel, SpellEffects.cpp:3795)
 	spellEffectResurrect               = 18
 	spellEffectReputation              = 103
 	spellEffectQuestComplete           = 16
@@ -9329,63 +9330,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
 	s.startTimedAchievement(timedTypeSpellCast, spellID)
 
-	// Reference SpellEffects.cpp:3858-3874: Spell 7266 (Duel). Spell 62875 is the
-	// Argent Tournament joust duel — same EffectDuel path, with DuelInfo::IsMounted
-	// captured (SpellEffects.cpp:3866-3868).
-	if (spellID == 7266 || spellID == 62875) && targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
-		if partner := s.server.findSessionByGUID(targetGUID); partner != nil && partner.player != nil {
-			// Spell::EffectDuel (SpellEffects.cpp:3805-3823): an already-dueling
-			// caster or target, or a target ignoring the caster, drops the
-			// request silently; zones without AREA_FLAG_ALLOW_DUELS reject
-			// with SPELL_FAILED_NO_DUELING. The duel-flag GameObject spawn
-			// (SpellEffects.cpp:3826-3855) has no Go temp-GO model, so the
-			// arbiter GUID below stays synthetic (documented).
-			if s.duelPartner != 0 || partner.duelPartner != 0 || s.duelTargetIgnored(ctx, targetGUID) {
-				return
-			}
-			if !s.duelAreaAllowsDuels(s.areaID) || !s.duelAreaAllowsDuels(partner.areaID) {
-				s.sendCastFailed(ctx, castID, spell, spellFailedNoDueling)
-				return
-			}
-			s.duelPartner = targetGUID
-			partner.duelPartner = s.playerGUID
-			// SpellEffects.cpp:3866-3868: isMounted = (spellId == 62875).
-			s.duelMounted = spellID == 62875
-			partner.duelMounted = spellID == 62875
-			// Spell::EffectDuel (SpellEffects.cpp:3867-3868): the caster is the
-			// initiator on both DuelInfo records; only the challenged accepts.
-			s.duelInitiator = true
-			partner.duelInitiator = false
-			s.duelCountdown = false
-			partner.duelCountdown = false
-			arbiterGUID := uint64(s.playerGUID) | (uint64(0xF110) << 48)
-			s.player.DuelArbiter = arbiterGUID
-			partner.player.DuelArbiter = arbiterGUID
-			s.player.DuelTeam = 0
-			partner.player.DuelTeam = 0
-			s.sendPlayerUpdate()
-			partner.sendPlayerUpdate()
-
-			midX := s.player.X + (partner.player.X-s.player.X)/2
-			midY := s.player.Y + (partner.player.Y-s.player.Y)/2
-			midZ := s.player.Z
-			s.duelArbiterX, s.duelArbiterY, s.duelArbiterZ = midX, midY, midZ
-			partner.duelArbiterX, partner.duelArbiterY, partner.duelArbiterZ = midX, midY, midZ
-			s.duelOutOfBounds = time.Time{}
-			partner.duelOutOfBounds = time.Time{}
-
-			reqBuf := protocol.NewBuffer(16)
-			reqBuf.WriteU64(arbiterGUID)
-			reqBuf.WriteU64(s.playerGUID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_REQUESTED), reqBuf.Bytes(), true)
-			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_REQUESTED), reqBuf.Bytes(), true)
-			// Spell::EffectDuel (SpellEffects.cpp:3873): sScriptMgr->OnPlayerDuelRequest
-			// fires after the duel-info records are created and the request
-			// packets are sent. Eluna arg order is (event, target, challenger).
-			partner.triggerPlayerEvent(ctx, scripting.PlayerEventDuelRequest, partner.luaPlayer(), s.luaPlayer())
-		}
-	}
-
 	// Apply spell effects
 	// Spell::AddComboPointGain (Spell.h:515-522) per-cast bank: the
 	// ADD_COMBO_POINTS effects bank (target, gain) pairs during the HIT
@@ -10489,16 +10433,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			case spellEffectAddExtraAttacks: // 19: SPELL_EFFECT_ADD_EXTRA_ATTACKS
-			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
-				// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996-1043)
-				// — per-target legs ride runTriggerMissileEffect (the
-				// HIT_TARGET / HIT handle-mode split is structural there).
-				s.runTriggerMissileEffect(ctx, spell, eff, hitTargets)
-			case spellEffectSkillStep: // 44: SPELL_EFFECT_SKILL_STEP
-				// Spell::EffectLearnSkill (SpellEffects.cpp:2637-2654).
-				for _, effectTarget := range hitTargets {
-					s.applySkillStepEffect(ctx, spell, eff, casterLevel, effectTarget)
-				}
 				// Spell::EffectAddExtraAttacks (SpellEffects.cpp:4301-4314)
 				// banks the effect's damage as pending extra swings on the
 				// effect's unit target when none are pending. The known
@@ -10510,6 +10444,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if effectTarget == s.playerGUID && s.grantExtraAttacks(amount) {
 						s.sendExtraAttacksLog(spellID, effectIndex, amount)
 					}
+				}
+			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
+				// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996-1043)
+				// — per-target legs ride runTriggerMissileEffect (the
+				// HIT_TARGET / HIT handle-mode split is structural there).
+				s.runTriggerMissileEffect(ctx, spell, eff, hitTargets)
+			case spellEffectSkillStep: // 44: SPELL_EFFECT_SKILL_STEP
+				// Spell::EffectLearnSkill (SpellEffects.cpp:2637-2654).
+				for _, effectTarget := range hitTargets {
+					s.applySkillStepEffect(ctx, spell, eff, casterLevel, effectTarget)
 				}
 			case spellEffectAddComboPoints: // 80: SPELL_EFFECT_ADD_COMBO_POINTS
 				// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789)
@@ -11272,6 +11216,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
 				// SetCanBlock(true).
 				s.handleEffectBlock()
+			case spellEffectDuel: // 83: SPELL_EFFECT_DUEL
+				// Spell::EffectDuel (SpellEffects.cpp:3795-3874) — duel
+				// initiation; the countdown/accept/cancel lifecycle lives
+				// in combat.go (HandleDuelAcceptedOpcode et al.).
+				if s.handleDuelEffect(ctx, castID, spell, spellID, targetGUID) {
+					return
+				}
 			default:
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
@@ -11972,6 +11923,73 @@ func (s *session) consumeExtraAttacks(ctx context.Context, targetGUID uint64) {
 		s.lastSwing = savedSwing
 		s.extraAttacks--
 	}
+}
+
+// handleDuelEffect mirrors Spell::EffectDuel (SpellEffects.cpp:3795-3874) as
+// far as the Go duel model reaches. Spells 7266 (Duel) and 62875 (Argent
+// Tournament joust) are the known carriers — 62875 sets DuelInfo::IsMounted
+// (SpellEffects.cpp:3866-3868); routing by effect ID instead of spell ID
+// handles any spell carrying SPELL_EFFECT_DUEL. Reports whether the cast was
+// consumed: a silent gate drop, a NO_DUELING failure, or a sent request all
+// terminate effect processing like the C++ HIT_TARGET arm.
+func (s *session) handleDuelEffect(ctx context.Context, castID uint8, spell wotlk.Spell, spellID uint32, targetGUID uint64) bool {
+	if targetGUID == 0 || targetGUID == s.playerGUID || s.server == nil {
+		return false
+	}
+	partner := s.server.findSessionByGUID(targetGUID)
+	if partner == nil || partner.player == nil {
+		return false
+	}
+	// Spell::EffectDuel (SpellEffects.cpp:3805-3823): an already-dueling
+	// caster or target, or a target ignoring the caster, drops the
+	// request silently; zones without AREA_FLAG_ALLOW_DUELS reject
+	// with SPELL_FAILED_NO_DUELING. The duel-flag GameObject spawn
+	// (SpellEffects.cpp:3826-3855) has no Go temp-GO model, so the
+	// arbiter GUID below stays synthetic (documented).
+	if s.duelPartner != 0 || partner.duelPartner != 0 || s.duelTargetIgnored(ctx, targetGUID) {
+		return true
+	}
+	if !s.duelAreaAllowsDuels(s.areaID) || !s.duelAreaAllowsDuels(partner.areaID) {
+		s.sendCastFailed(ctx, castID, spell, spellFailedNoDueling)
+		return true
+	}
+	s.duelPartner = targetGUID
+	partner.duelPartner = s.playerGUID
+	// SpellEffects.cpp:3866-3868: isMounted = (spellId == 62875).
+	s.duelMounted = spellID == 62875
+	partner.duelMounted = spellID == 62875
+	// Spell::EffectDuel (SpellEffects.cpp:3867-3868): the caster is the
+	// initiator on both DuelInfo records; only the challenged accepts.
+	s.duelInitiator = true
+	partner.duelInitiator = false
+	s.duelCountdown = false
+	partner.duelCountdown = false
+	arbiterGUID := uint64(s.playerGUID) | (uint64(0xF110) << 48)
+	s.player.DuelArbiter = arbiterGUID
+	partner.player.DuelArbiter = arbiterGUID
+	s.player.DuelTeam = 0
+	partner.player.DuelTeam = 0
+	s.sendPlayerUpdate()
+	partner.sendPlayerUpdate()
+
+	midX := s.player.X + (partner.player.X-s.player.X)/2
+	midY := s.player.Y + (partner.player.Y-s.player.Y)/2
+	midZ := s.player.Z
+	s.duelArbiterX, s.duelArbiterY, s.duelArbiterZ = midX, midY, midZ
+	partner.duelArbiterX, partner.duelArbiterY, partner.duelArbiterZ = midX, midY, midZ
+	s.duelOutOfBounds = time.Time{}
+	partner.duelOutOfBounds = time.Time{}
+
+	reqBuf := protocol.NewBuffer(16)
+	reqBuf.WriteU64(arbiterGUID)
+	reqBuf.WriteU64(s.playerGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_REQUESTED), reqBuf.Bytes(), true)
+	_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_REQUESTED), reqBuf.Bytes(), true)
+	// Spell::EffectDuel (SpellEffects.cpp:3873): sScriptMgr->OnPlayerDuelRequest
+	// fires after the duel-info records are created and the request
+	// packets are sent. Eluna arg order is (event, target, challenger).
+	partner.triggerPlayerEvent(ctx, scripting.PlayerEventDuelRequest, partner.luaPlayer(), s.luaPlayer())
+	return true
 }
 
 func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) {

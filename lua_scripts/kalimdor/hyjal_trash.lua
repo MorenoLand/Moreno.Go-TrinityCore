@@ -66,7 +66,10 @@
 --   UNIT_FLAG_NOT_SELECTABLE / NON_ATTACKABLE flags, Delay, world-trigger
 --   21987 summon + SPELL_METEOR 33814 visual) — flags, model swap, and
 --   summon have no bridges (maiden/jeklik precedent); the IsEvent waypoint
---   leg (HordeWPs[7] in front of Thrall) — no escort bridge.
+--   leg (HordeWPs[7] in front of Thrall) — no escort bridge. Timing: C++
+--   runs the infernal arms only after the meteor leg sets CanMove
+--   (hyjal_trash.cpp:503); here they arm at combat-enter, the unmodeled
+--   choreography's practical equivalent.
 -- - npc_frost_wyrm: Reset SetDisableGravity(true), the chase/StopMoving/
 --   Clear movement legs, JustDied ground-position despawn visuals —
 --   no bridges.
@@ -111,6 +114,8 @@ local MOB = {
 --   otherwise the timer stays expired — 1s retry (batrider precedent).
 -- trig: C++ casts with the triggered flag (DoCast*(..., true)) — cast via
 --   CastSpell(target, spell, true); default is non-triggered (2-arg).
+-- spawn: arm ticks from spawn, not combat-enter (C++ legs ahead of the
+--   UpdateVictim gate — abomination disease-cloud re-cast, ghoul frenzy).
 local SPELLS = {
     ["npc_giant_infernal"] = {
         { spell = 31724, lo = 2000, hi = 2000, rlo = 7000, rhi = 7000,
@@ -118,13 +123,13 @@ local SPELLS = {
         { spell = 37059, once = true, target = "self" },
     },
     ["npc_abomination"] = {
-        { spell = 31607, refresh = true, target = "self" },
+        { spell = 31607, refresh = true, target = "self", spawn = true },
         { spell = 31610, lo = 10000, hi = 10000, rlo = 15000, rhi = 24999,
           target = "victim" },
     },
     ["npc_ghoul"] = {
         { spell = 31540, lo = 5000, hi = 9999, rlo = 15000, rhi = 29999,
-          target = "self" },
+          target = "self", spawn = true },
     },
     ["npc_necromancer"] = {
         { spell = 31627, lo = 1000, hi = 5999, rlo = 20000, rhi = 29999,
@@ -264,8 +269,50 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+local function onDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ legs ahead of the UpdateVictim gate (abomination disease-cloud
+-- re-cast, hyjal_trash.cpp:624-626; ghoul frenzy, :728-734) tick from
+-- spawn. onEnterCombat cancels and re-arms the same keys, so the spawn
+-- legs hand off cleanly at engage.
+local function onSpawn(name)
+    return function(event, creature)
+        local guid = creature:GetGUID()
+        for i, spec in ipairs(SPELLS[name]) do
+            if spec.spawn then
+                local n, id = name, i
+                if spec.refresh then
+                    schedule(guid, "spell" .. i, 0, function()
+                        onRefresh(creature, guid, n, id)
+                    end)
+                else
+                    schedule(guid, "spell" .. i, math.random(spec.lo, spec.hi),
+                        function()
+                            onSpell(creature, guid, n, id)
+                        end)
+                end
+            end
+        end
+    end
+end
+
+local function hasSpawnArm(name)
+    for _, spec in ipairs(SPELLS[name]) do
+        if spec.spawn then
+            return true
+        end
+    end
+    return false
+end
+
 for name, entry in pairs(MOB) do
     RegisterCreatureEvent(entry, 1, onEnterCombat(name))
     RegisterCreatureEvent(entry, 2, onLeaveCombat)
+    RegisterCreatureEvent(entry, 4, onDied)
     RegisterCreatureEvent(entry, 23, onReset)
+    if hasSpawnArm(name) then
+        RegisterCreatureEvent(entry, 5, onSpawn(name))
+    end
 end
