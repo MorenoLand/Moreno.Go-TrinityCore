@@ -54,7 +54,7 @@ const (
 	guildRightModifyGuildInfo        uint32 = 0x00010040
 	guildRightEPNote                 uint32 = 0x00002040
 	guildRightEOffNote               uint32 = 0x00008040
-	guildRightViewOfficerNote        uint32 = 0x00004000
+	guildRightViewOfficerNote        uint32 = 0x00004040 // GR_RIGHT_EMPTY | 0x4000 (Guild.h:93)
 	guildRightInvite                 uint32 = 0x00000050
 	guildRightRemove                 uint32 = 0x00000060
 	guildRightPromote                uint32 = 0x000000C0
@@ -572,7 +572,7 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 	viewOfficerNote := false
 	for _, rank := range ranks {
 		if rank.RankID == uint32(s.player.GuildRank) {
-			viewOfficerNote = rank.Rights&guildRightViewOfficerNote != 0
+			viewOfficerNote = rank.Rights&guildRightViewOfficerNote != grRightEmpty
 			break
 		}
 	}
@@ -673,6 +673,12 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 	// FindPlayerByName — an exact, case-sensitive match on the normalized
 	// name. Same normalize+exact treatment as the other name-based handlers.
 	targetName = normalizePlayerName(targetName)
+	// WorldSession::HandleGuildInviteOpcode (GuildHandler.cpp:53):
+	// normalizePlayerName failing UTF-8 conversion is a silent return, not
+	// a PLAYER_NOT_FOUND error.
+	if !utf8.ValidString(targetName) {
+		return true
+	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -731,13 +737,15 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 	targetSess.guildInvitedID = uint32(guildID)
 	targetSess.guildInviterGUID = s.playerGUID
 
+	// Guild::HandleInviteMember (Guild.cpp:1505-1512): SetGuildIdInvited,
+	// then _LogEvent(GUILD_EVENT_LOG_INVITE_PLAYER, inviter, invitee),
+	// then the SMSG_GUILD_INVITE packet.
+	s.logGuildEvent(ctx, uint32(guildID), guildEventLogInvitePlayer, s.playerGUID, uint64(targetGUID), 0)
+
 	invBuf := protocol.NewBuffer(128)
 	invBuf.WriteCString(s.player.Name)
 	invBuf.WriteCString(guildName)
 	_ = targetSess.write(uint16(protocol.OpcodeSMSG_GUILD_INVITE), invBuf.Bytes(), true)
-	// Guild::HandleInviteMember (Guild.cpp:1507):
-	// _LogEvent(GUILD_EVENT_LOG_INVITE_PLAYER, inviter, invitee)
-	s.logGuildEvent(ctx, uint32(guildID), guildEventLogInvitePlayer, s.playerGUID, uint64(targetGUID), 0)
 	s.debug("guild invite sent", "from", s.player.Name, "to", targetName, "guild", guildName)
 	return true
 }
@@ -797,15 +805,19 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	}
 	s.guildInvitedID = 0
 	s.guildInviterGUID = 0
-	_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, ?, '', '')", guildID, s.playerGUID, lowestRank)
+	// Guild::AddMember (Guild.cpp:2221-2228): SetInGuild, clear the invited
+	// id, SetRank, then SendLoginInfo — the member row (CHAR_INS_GUILD_MEMBER,
+	// a plain INSERT per Guild.cpp:596-605) is saved only after.
 	s.player.GuildID = guildID
 	s.player.GuildRank = uint8(lowestRank)
 	s.sendPlayerUpdate()
-
-	// Guild::AddMember (Guild.cpp:2228): SendLoginInfo runs right after the
-	// member is in place — MOTD event, bank tabs info, the roster reply, and
-	// the SIGNED_ON broadcast — before the join log event.
 	s.sendGuildLoginInfo(ctx)
+
+	// A pre-existing row means the join fails silently (C++ precludes it via
+	// the in-memory member guard; INSERT is never REPLACE).
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, ?, '', '')", guildID, s.playerGUID, lowestRank); err != nil {
+		return true
+	}
 
 	// Guild::AddMember (Guild.cpp:2268):
 	// _LogEvent(GUILD_EVENT_LOG_JOIN_GUILD, lowguid)
@@ -860,18 +872,18 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 	if guildID == 0 {
 		return true
 	}
-	// Guild::HandleLeaveMember (Guild.cpp:1558):
-	// RemovePlayerGuildEventsAndSignups runs on both the leave and the
-	// disband path.
-	s.removePlayerGuildEventsAndSignups(ctx, s.playerGUID, uint32(guildID))
 	// Guild::HandleLeaveMember (Guild.cpp:1529): the leader cannot leave while
 	// other members remain; a lone leader disbands the guild instead of leaving.
-	if uint64(leaderGUID) == s.playerGUID {
+	if s.isGuildLeader(ctx, leaderGUID) {
 		var members int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_member WHERE guildid = ?", guildID).Scan(&members)
 		if members > 1 {
 			// SendCommandResult(session, GUILD_COMMAND_QUIT, ERR_GUILD_LEADER_LEAVE)
 			s.sendGuildCommandResult(guildCmdQuit, "", errGuildLeaderLeave)
+			// Guild::HandleLeaveMember (Guild.cpp:1558):
+			// RemovePlayerGuildEventsAndSignups runs even on the rejected
+			// leader-leave arm.
+			s.removePlayerGuildEventsAndSignups(ctx, s.playerGUID, uint32(guildID))
 			return true
 		}
 		// ScriptMgr::OnGuildDisband (Guild.cpp:1144) fires before guild data is
@@ -894,6 +906,8 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 		// are unchanged ([8, 0], no guid appended per GuildPackets.cpp:130).
 		_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), guildEventPayload(guildEventDisbanded, 0), true)
 		s.debug("guild disbanded on leader leave", "guild_id", guildID)
+		// Guild::HandleLeaveMember (Guild.cpp:1558).
+		s.removePlayerGuildEventsAndSignups(ctx, s.playerGUID, uint32(guildID))
 		return true
 	}
 	// ScriptMgr::OnGuildRemoveMember (Guild.cpp:2318): fires in DeleteMember
@@ -928,6 +942,9 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 	s.server.sessionsMu.RUnlock()
 	// SendCommandResult(session, GUILD_COMMAND_QUIT, ERR_GUILD_COMMAND_SUCCESS, m_name)
 	s.sendGuildCommandResult(guildCmdQuit, guildName, errGuildCommandSuccess)
+	// Guild::HandleLeaveMember (Guild.cpp:1558):
+	// RemovePlayerGuildEventsAndSignups runs last, unconditionally.
+	s.removePlayerGuildEventsAndSignups(ctx, s.playerGUID, uint32(guildID))
 	return true
 }
 
@@ -940,17 +957,21 @@ func (s *session) handleGuildMotd(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return true
 	}
+	// GuildUpdateMotdText::Read (GuildPackets.h:150): MotdText is
+	// String<128, NoHyperlinks> — oversized input fails packet validation,
+	// so the handler never runs.
+	if len(motd) > 128 {
+		return true
+	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
 	}
 	var guildID int64
 	var curMotd string
-	var rights uint32
-	if err := cdb.QueryRowContext(ctx, `SELECT gm.guildid, g.motd, gr.rights FROM guild_member AS gm
+	if err := cdb.QueryRowContext(ctx, `SELECT gm.guildid, g.motd FROM guild_member AS gm
 		JOIN guild AS g ON g.guildid = gm.guildid
-		JOIN guild_rank AS gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
-		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &curMotd, &rights); err != nil || guildID == 0 {
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &curMotd); err != nil || guildID == 0 {
 		return true
 	}
 	// Guild::HandleSetMOTD (Guild.cpp:1301): an unchanged motd is a silent
@@ -959,8 +980,9 @@ func (s *session) handleGuildMotd(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// The setter must hold GR_RIGHT_SETMOTD (Guild.cpp:1307), via the exact
-	// _HasRankRight form (Guild.cpp:2388); denial sends EDIT_MOTD + PERMISSIONS.
-	if rights&guildRightSetMOTD == grRightEmpty {
+	// _HasRankRight form (Guild.cpp:2388); a missing guild_rank row denies
+	// rather than silently returning. Denial sends EDIT_MOTD + PERMISSIONS.
+	if s.guildRankRightsMasked(ctx, guildRightSetMOTD) == grRightEmpty {
 		s.sendGuildCommandResult(guildCmdEditMotd, "", errGuildPermissions)
 		return true
 	}
@@ -1437,7 +1459,13 @@ func execGuildDisband(ctx context.Context, cdb *sql.DB, guildID int64) {
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guildid = ?", guildID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_rank WHERE guildid = ?", guildID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_tab WHERE guildid = ?", guildID)
+	// Guild::Disband (Guild.cpp:1169): _DeleteBankItems(trans, true) deletes
+	// each banked item's item_instance row via Item::DeleteFromDB before the
+	// guild_bank_item link rows are removed.
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid IN (SELECT item_guid FROM guild_bank_item WHERE guildid = ?)", guildID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ?", guildID)
+	// Guild::Disband (Guild.cpp:1177): CHAR_DEL_GUILD_BANK_RIGHTS
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_right WHERE guildid = ?", guildID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_eventlog WHERE guildid = ?", guildID)
 	// Guild::Disband (Guild.cpp:1183): CHAR_DEL_GUILD_EVENTLOGS
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_eventlog WHERE guildid = ?", guildID)
@@ -1458,7 +1486,9 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 	err := cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
 		JOIN guild_member gm ON gm.guildid = g.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
-	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+	// Guild::_IsLeader (Guild.cpp:2485-2492): the leader is the leaderguid
+	// holder OR a rank-0 member.
+	if err != nil || guildID == 0 || !s.isGuildLeader(ctx, leaderGUID) {
 		return true
 	}
 
@@ -1926,6 +1956,12 @@ func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool 
 	if err != nil {
 		return true
 	}
+	// GuildUpdateInfoText::Read (GuildPackets.h:309): InfoText is
+	// String<500, NoHyperlinks> — oversized input fails packet validation,
+	// so the handler never runs.
+	if len(infoText) > 500 {
+		return true
+	}
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -1934,11 +1970,9 @@ func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool 
 
 	var guildID int64
 	var curInfo string
-	var rights uint32
-	if err := cdb.QueryRowContext(ctx, `SELECT gm.guildid, g.info, gr.rights FROM guild_member AS gm
+	if err := cdb.QueryRowContext(ctx, `SELECT gm.guildid, g.info FROM guild_member AS gm
 		JOIN guild AS g ON g.guildid = gm.guildid
-		JOIN guild_rank AS gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
-		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &curInfo, &rights); err != nil || guildID == 0 {
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &curInfo); err != nil || guildID == 0 {
 		return true
 	}
 
@@ -1948,9 +1982,10 @@ func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	// The setter must hold GR_RIGHT_MODIFY_GUILD_INFO (Guild.cpp:1330), via
-	// the exact _HasRankRight form (Guild.cpp:2388); unlike the MOTD arm,
-	// denial is fully silent — HandleSetInfo sends no command result.
-	if rights&guildRightModifyGuildInfo == grRightEmpty {
+	// the exact _HasRankRight form (Guild.cpp:2388); a missing guild_rank row
+	// denies rather than silently returning. Unlike the MOTD arm, denial is
+	// fully silent — HandleSetInfo sends no command result.
+	if s.guildRankRightsMasked(ctx, guildRightModifyGuildInfo) == grRightEmpty {
 		return true
 	}
 	// Guild::HandleSetInfo (Guild.cpp:1332-1339): the info is set, then
@@ -2089,7 +2124,12 @@ func (s *session) sendGuildPermissions(ctx context.Context) {
 		_ = cdb.QueryRowContext(ctx, `SELECT gbright FROM guild_bank_right
 			WHERE guildid = ? AND TabId = ? AND rid = ? LIMIT 1`, guildID, tab, rankID).Scan(&tabFlags)
 		var withdrawItemLimit int32
-		if rankID == 0 || tab < uint8(numTabs) {
+		if rankID == 0 {
+			// Guild::_GetMemberRemainingSlots (Guild.cpp:2586): the
+			// guildmaster has unlimited (GUILD_WITHDRAW_SLOT_UNLIMITED, -1)
+			// slots on every tab, purchased or not.
+			withdrawItemLimit = -1
+		} else if tab < uint8(numTabs) {
 			withdrawItemLimit = s.guildBankWithdrawalsRemaining(ctx, guildID, tab)
 		}
 		buf.WriteI32(int32(tabFlags))
@@ -4299,6 +4339,12 @@ func (s *session) handleGuildBankUpdateTab(ctx context.Context, payload []byte) 
 	if name == "" || icon == "" {
 		return true
 	}
+	// GuildBankUpdateTab::Read (GuildPackets.h:391-402): Name is
+	// String<16, NoHyperlinks> and Icon is String<100> — oversized input
+	// fails packet validation, so the handler never runs.
+	if len(name) > 16 || len(icon) > 100 {
+		return true
+	}
 
 	// Reference: WorldSession::HandleGuildBankUpdateTab (GuildHandler.cpp:
 	// 355): the banker-interact gate runs before the guild lookup.
@@ -4702,9 +4748,12 @@ func (s *session) handleSetGuildBankText(ctx context.Context, payload []byte) bo
 		return true
 	}
 
-	// Reference: Guild::BankTab::SetText (Guild.cpp:450-459): utf8truncate
-	// to MAX_GUILD_BANK_TAB_TEXT_LEN before persisting and broadcasting.
-	tabText = truncateBankTabText(tabText)
+	// GuildBankSetTabText::Read (GuildPackets.h:577-585): TabText is
+	// String<500, NoHyperlinks> — oversized input fails packet validation,
+	// so the handler never runs.
+	if len(tabText) > 500 {
+		return true
+	}
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
