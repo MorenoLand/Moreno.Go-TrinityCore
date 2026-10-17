@@ -56,9 +56,13 @@ type tradeSlotItem struct {
 	CreatorGUID      uint64
 	Wrapped          bool
 	RandomPropertyID uint32
-	Durability       uint32
-	MaxDurability    uint32
-	LockID           uint32
+	// Charges is uint32(item->GetSpellCharges()) for spell slot 0
+	// (Item.h:159, default index), written by SendUpdateTrade
+	// (TradeHandler.cpp:102).
+	Charges       uint32
+	Durability    uint32
+	MaxDurability uint32
+	LockID        uint32
 }
 
 type playerTradeState struct {
@@ -718,7 +722,8 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	var giftCreatorGUID, creatorGUID uint64
 	var durability, randomPropertyID int64
 	var encStr sql.NullString
-	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, creatorGuid, enchantments, durability, randomPropertyId FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &creatorGUID, &encStr, &durability, &randomPropertyID)
+	var rawCharges string
+	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, creatorGuid, enchantments, durability, randomPropertyId, COALESCE(charges, '') FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &creatorGUID, &encStr, &durability, &randomPropertyID, &rawCharges)
 	// NOTE: no blanket soulbound rejection here. C++ runs the single
 	// Item::CanBeTraded(false, true) gate (TradeHandler.cpp:760-765), whose
 	// soulbound arm admits BOP-tradeable items (Item.cpp:724:
@@ -752,10 +757,12 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	}
 	var displayID, lockID, maxDurability, containerSlots uint32
 	var itemClass, inventoryType uint32
+	var chargeDefaults [5]int32
 	templateFound := false
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		var disp, lock, maxDur, slots, class, invType int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid, lockid, MaxDurability, COALESCE(ContainerSlots, 0), class, InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&disp, &lock, &maxDur, &slots, &class, &invType); err == nil {
+		var spCh0, spCh1, spCh2, spCh3, spCh4 int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid, lockid, MaxDurability, COALESCE(ContainerSlots, 0), class, InventoryType, spellcharges_1, spellcharges_2, spellcharges_3, spellcharges_4, spellcharges_5 FROM item_template WHERE entry = ?", itemEntry).Scan(&disp, &lock, &maxDur, &slots, &class, &invType, &spCh0, &spCh1, &spCh2, &spCh3, &spCh4); err == nil {
 			templateFound = true
 			displayID = uint32(disp)
 			lockID = uint32(lock)
@@ -763,6 +770,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 			containerSlots = uint32(slots)
 			itemClass = uint32(class)
 			inventoryType = uint32(invType)
+			chargeDefaults = [5]int32{int32(spCh0), int32(spCh1), int32(spCh2), int32(spCh3), int32(spCh4)}
 		}
 	}
 	if tradeSlot < tradeSlotTradedCount && !s.tradeItemCanBeTraded(ctx, uint64(itemGUID), bag, slot, flags, containerSlots, itemClass, inventoryType, templateFound, enchantFields) {
@@ -808,6 +816,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		CreatorGUID:      creatorGUID,
 		Wrapped:          wrapped,
 		RandomPropertyID: uint32(randomPropertyID),
+		Charges:          parseItemSpellCharges(rawCharges, chargeDefaults)[0],
 		Durability:       uint32(durability),
 		MaxDurability:    maxDurability,
 		LockID:           lockID,
@@ -1645,9 +1654,9 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 				buf.WriteU32(it.GemSocketIDs[j]) // gem sockets (SendUpdateTrade, TradeHandler.cpp:96-97)
 			}
 			buf.WriteU64(it.CreatorGUID) // creator (SendUpdateTrade, TradeHandler.cpp:101)
-			buf.WriteU32(0)              // charges: C++ item->GetSpellCharges(); Go's
-			// item_instance.charges TEXT column is never populated with live
-			// charge data, so there is nothing representable to send.
+			buf.WriteU32(it.Charges)     // charges: uint32(item->GetSpellCharges())
+			// (Item.h:159, index 0), resolved from the item_instance.charges
+			// 5-slot column with template defaults (parseItemSpellCharges).
 			buf.WriteU32(0) // suffixFactor: no Go model (no item_instance column)
 			buf.WriteU32(it.RandomPropertyID)
 			buf.WriteU32(it.LockID)
