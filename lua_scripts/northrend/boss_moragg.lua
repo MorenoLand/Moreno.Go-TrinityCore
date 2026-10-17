@@ -39,9 +39,10 @@
 -- (SPELL_CORROSIVE_SALIVA 54527) (:89, 1-arg = non-triggered) ->
 -- CastSpell(nil, 54527); init 5s, re-arm 10s.
 -- DOCUMENTED DEVIATIONS:
--- The optic-link SelectTarget 50.0f distance filter (:81) has no
--- bridge — the randomPlayer pool (alive same-map/instance players,
--- the keleseth / thorim precedent) ignores distance.
+-- (retracted 2026-10-17: the "no distance bridge" claim was stale —
+-- creature:IsWithinDist is bridged (engine/scripting/object.go:167,
+-- the maiden / kiljaeden / marwyn precedent); the optic-link pool is
+-- now filtered at the C++ 50.0f distance.)
 -- FIDELITY NOTE: C++ UpdateAI (:64-69) gates on UpdateVictim() only —
 -- there is NO HasUnitState(UNIT_STATE_CASTING) pre-check in
 -- boss_moragg.cpp; Lua's unconditional timer firing matches the C++
@@ -92,8 +93,7 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, ...) — alive
--- players on the same map/instance; the 50.0f distance filter is
--- unbridged (documented in the header; the keleseth / thorim
+-- players on the same map/instance (the keleseth / thorim
 -- precedent).
 local function randomPlayer(creature)
     local mapId = creature:GetMapId()
@@ -111,10 +111,30 @@ local function randomPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
--- C++ ScheduleTasks optic-link leg (:80-85): DoCast(target,
+-- Same pool with the C++ SelectTarget 50.0f distance filter
+-- (creature:IsWithinDist is the bridged distance check — the
+-- maiden / kiljaeden / marwyn 100.0f precedent).
+local function randomPlayerInRange(creature, dist)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, dist) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ ScheduleTasks optic-link leg (:80-85): SelectTarget Random, 0,
+-- 50.0f, true (:81) — random alive player within 50 yd; DoCast(target,
 -- SPELL_OPTIC_LINK), 2-arg = non-triggered; init 15s, re-arm 25s.
 local function opticLinkTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomPlayerInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_OPTIC_LINK)
     end
