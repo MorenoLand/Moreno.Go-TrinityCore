@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2407,9 +2408,10 @@ func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32,
 		}
 	}
 	if len(tabs) == 0 {
-		tabs = []guildBankTabInfo{
-			{ID: 0, Name: "General", Icon: "INV_Misc_Bag_08", Text: ""},
-		}
+		// Guild::_SendBankList (Guild.cpp:2848-2856): a guild with zero
+		// purchased tabs sends an empty TabInfo list (GetBankTab(0) is
+		// null, so no items either) — no fabricated default tab.
+		tabs = []guildBankTabInfo{}
 	}
 
 	var items []guildBankSlotItem
@@ -3015,16 +3017,15 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, bankItemCount)
 		movedItems = moved
 		if moved {
-			// Same tab: one message for the src tab carries the src and
-			// dest slots; cross-tab: the dest-tab message carries only
-			// the dest slot, the src tab gets its own message below.
-			if bankTab == bankTab1 && bankSlot1 != bankSlot {
-				contentSlots = []uint8{bankSlot1, bankSlot}
-				if bankSlot1 > bankSlot {
-					contentSlots[0], contentSlots[1] = contentSlots[1], contentSlots[0]
-				}
-			} else {
-				contentSlots = []uint8{bankSlot}
+			// Guild::_SendBankContentUpdate (Guild.cpp:2797-2816): the dest-tab
+			// message carries the plan's placement slots (m_vec via
+			// CopySlots) — the explicit dest slot plus any spill slots —
+			// and on a same-tab move the src slot joins that set. A bare
+			// {bankSlot} misses spill placements, and auto-store has no
+			// explicit slot at all (a phantom 0xFF entry).
+			contentSlots = guildUnionBankSlots(outcome.BankPlacements, nil)
+			if bankTab == bankTab1 {
+				contentSlots = guildUnionBankSlots(contentSlots, []uint8{bankSlot1})
 			}
 		}
 		if moved && bankTab != bankTab1 {
@@ -3152,8 +3153,11 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, splitCount)
 			movedItems = moved
 			if moved {
-				// C->B: only the dest bank slot changes.
-				contentSlots = []uint8{bankSlot}
+				// C->B: the dest-tab message carries the plan's placement
+				// slots (Guild::_SendBankContentUpdate, Guild.cpp:2807-2816)
+				// — the explicit slot plus any spill slots, or the
+				// auto-store placements when bankSlot is 0xFF.
+				contentSlots = outcome.BankPlacements
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, outcome.Source.Entry, outcome.Count, 0)
 				if outcome.Swapped {
 					s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, outcome.Destination.Entry, outcome.Destination.Count, 0)
@@ -3219,6 +3223,14 @@ type guildMoveOutcome struct {
 	DestLoc     guildMoveLocation
 	Count       uint32
 	Swapped     bool
+	// BankPlacements carries the bank-side destination slots the plan
+	// touched (Guild::MoveItemData::m_vec as collected by CopySlots,
+	// Guild.cpp:783): Guild::_SendBankContentUpdate (Guild.cpp:2794-2826)
+	// sends exactly these slots for the dest tab, so the partial
+	// content-update list must carry them — including spill slots beyond
+	// the requested explicit slot and the auto-store placements, never a
+	// phantom 0xFF entry.
+	BankPlacements []uint8
 }
 
 func guildReadMoveItem(ctx context.Context, q guildMoveQueryer, guildID, playerGUID uint64, loc guildMoveLocation) (guildMoveItem, error) {
@@ -3735,7 +3747,13 @@ func (s *session) guildItemIsNonemptyBag(ctx context.Context, loc guildMoveLocat
 
 func (s *session) guildPlayerLocationValid(ctx context.Context, playerGUID uint64, loc guildMoveLocation) bool {
 	if loc.Bag == 0 {
-		return loc.Slot >= bagSlotStart && loc.Slot <= bagSlotEnd
+		if loc.Slot >= bagSlotStart && loc.Slot <= bagSlotEnd {
+			return true
+		}
+		// Player::IsInventoryPos (Player.cpp:10141-10150) also accepts the
+		// keyring (86-117) and currency-token (118-149) bag-0 slots, and
+		// Guild::PlayerMoveItemData works through GetItemByPos on them.
+		return loc.Slot >= invSlotKeyringStart && loc.Slot < currencyTokenSlotEnd
 	}
 	var slots int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.ContainerSlots, 0) FROM character_inventory ci
@@ -3751,6 +3769,40 @@ func guildSameMoveLocation(a, b guildMoveLocation) bool {
 }
 
 func guildFullItemGUID(guid uint64) uint64 { return guid | (uint64(0x4000) << 48) }
+
+// guildUnionBankSlots merges two slot lists into one ascending,
+// de-duplicated list, mirroring the C++ SlotIds (std::set) collected by
+// Guild::_SendBankContentUpdate (Guild.cpp:2794-2826).
+func guildUnionBankSlots(a, b []uint8) []uint8 {
+	seen := map[uint8]bool{}
+	var out []uint8
+	for _, s := range append(append([]uint8{}, a...), b...) {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// guildMoveBankPlacements extracts the bank-destination slot ids from a
+// plan's placements (Guild::MoveItemData::CopySlots, Guild.cpp:783-788):
+// the m_vec placements for the dest tab, in ascending slot order like the
+// C++ SlotIds set.
+func guildMoveBankPlacements(placements []guildMovePlacement, destTab uint8) []uint8 {
+	seen := map[uint8]bool{}
+	var slots []uint8
+	for _, p := range placements {
+		if !p.Location.Bank || p.Location.Tab != destTab || seen[p.Location.Slot] {
+			continue
+		}
+		seen[p.Location.Slot] = true
+		slots = append(slots, p.Location.Slot)
+	}
+	sort.Slice(slots, func(i, j int) bool { return slots[i] < slots[j] })
+	return slots
+}
 
 func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc guildMoveLocation, destination *guildMoveLocation, autoStore bool, requestedCount uint32) (guildMoveOutcome, bool) {
 	cdb := s.server.CharactersStore.DB
@@ -3773,13 +3825,13 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		return guildMoveOutcome{}, false
 	}
 	if !sourceLoc.Bank && !s.guildPlayerLocationValid(ctx, s.playerGUID, sourceLoc) {
+		// Guild::MoveItemData::InitItem (Guild.cpp:743) is fully silent on
+		// item fetch failure — C++ sends no equip error here.
 		_ = tx.Rollback()
-		s.sendEquipError(equipErrOk, 0)
 		return guildMoveOutcome{}, false
 	}
 	if destination != nil && !destination.Bank && !autoStore && !s.guildPlayerLocationValid(ctx, s.playerGUID, *destination) {
 		_ = tx.Rollback()
-		s.sendEquipError(equipErrOk, 0)
 		return guildMoveOutcome{}, false
 	}
 	if destination != nil && !autoStore && guildSameMoveLocation(sourceLoc, *destination) {
@@ -3888,6 +3940,18 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		// failure is silent — no command result, no equip error.
 		capped, capErr := s.guildPlayerSimilarItemCap(ctx, tx, s.playerGUID, source.Entry, moveCount)
 		if capErr != 0 {
+			// Guild::_DoItemsMove runs with sendError=false on the
+			// non-split merge attempt (Guild.cpp:2714) — silent — but
+			// with sendError=true on the split path (Guild.cpp:2709) and
+			// the swap fallback (Guild.cpp:2729), so the MaxCount cap
+			// failure emits EQUIP_ERR_CANT_CARRY_MORE_OF_THIS (17) there.
+			emit := requestedCount != 0 && requestedCount != source.Count
+			if destination != nil && !autoStore && destExists && full {
+				emit = true
+			}
+			if emit {
+				return rollback(equipErrCantCarryMoreOfThis, source.GUID)
+			}
 			_ = tx.Rollback()
 			return guildMoveOutcome{}, false
 		}
@@ -3964,7 +4028,8 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		if !sourceLoc.Bank {
 			s.adjustQuestItemCount(ctx, destItem.Entry, destItem.Count, true)
 		}
-		return guildMoveOutcome{Source: source, Destination: destItem, SourceLoc: sourceLoc, DestLoc: *destination, Count: moveCount, Swapped: true}, true
+		bankSlots := guildMoveBankPlacements(placements, destination.Tab)
+		return guildMoveOutcome{Source: source, Destination: destItem, SourceLoc: sourceLoc, DestLoc: *destination, Count: moveCount, Swapped: true, BankPlacements: bankSlots}, true
 	}
 	if storeErr != 0 {
 		// Guild::_DoItemsMove (Guild.cpp:2736) takes a sendError flag: the
@@ -4013,7 +4078,11 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	if destination != nil && !destination.Bank {
 		s.adjustQuestItemCount(ctx, source.Entry, moveCount, true)
 	}
-	return guildMoveOutcome{Source: source, SourceLoc: sourceLoc, Count: moveCount, DestLoc: destLoc}, true
+	var bankSlots []uint8
+	if destination != nil && destination.Bank {
+		bankSlots = guildMoveBankPlacements(placements, destination.Tab)
+	}
+	return guildMoveOutcome{Source: source, SourceLoc: sourceLoc, Count: moveCount, DestLoc: destLoc, BankPlacements: bankSlots}, true
 }
 
 func guildSwapMoveItems(ctx context.Context, tx *sql.Tx, guildID, playerGUID uint64, sourceLoc, destination guildMoveLocation, source, dest guildMoveItem) error {
