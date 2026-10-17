@@ -1688,12 +1688,47 @@ func (s *session) incompleteQuest(ctx context.Context, questID uint32) {
 	}
 }
 
+// areaExploredOrEventHappens mirrors Player::AreaExploredOrEventHappens
+// (Player.cpp:16503-16527): with the quest in the log, an unexplored
+// non-failed quest flips its Explored flag and broadcasts
+// SMSG_QUESTUPDATE_COMPLETE (Player::SendQuestComplete, Player.cpp:17003-17009);
+// the quest itself completes only when CanCompleteQuest passes
+// (Player.cpp:16525-16526) — the explored flip and the completion are
+// separate arms, so a quest whose objectives are not yet done is NOT
+// completed by this call.
+func (s *session) areaExploredOrEventHappens(ctx context.Context, questID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		if s.player.QuestLog[slot].QuestID != questID {
+			continue
+		}
+		// Player::AreaExploredOrEventHappens (Player.cpp:16512-16520):
+		// "Dont complete failed quest" — the Explored flip skips failed
+		// quests; the save-type mark is folded into the explored column
+		// write since Go has no per-quest save-flag model.
+		status, statusErr := s.characterQuestStatus(ctx, questID)
+		if statusErr == nil && !s.player.QuestLog[slot].Explored && status != questStatusFailed {
+			s.player.QuestLog[slot].Explored = true
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET explored = 1 WHERE guid = ? AND quest = ?", s.playerGUID, questID)
+			s.sendQuestComplete(questID)
+		}
+		break
+	}
+	if s.canCompleteQuest(ctx, questID) {
+		s.completeQuest(ctx, questID)
+	}
+}
+
 // completeQuestFromSpell mirrors Spell::EffectQuestComplete
 // (SpellEffects.cpp:4371-4389): the quest template must exist
-// (SpellEffects.cpp:4380-4382), and the completion only lands when the
-// quest sits in the target's log (AreaExploredOrEventHappens arm — Go:
-// completeQuest) or, without a log entry, when the quest carries
-// QUEST_FLAGS_TRACKING (SetRewardedQuest arm). Anything else is a no-op.
+// (SpellEffects.cpp:4380-4382); with the quest in the target's log the
+// arm is Player::AreaExploredOrEventHappens (Explored flip +
+// SMSG_QUESTUPDATE_COMPLETE + CanCompleteQuest-gated completion), and
+// without a log entry only QUEST_FLAGS_TRACKING quests land the
+// SetRewardedQuest serverside mark (QuestDef.h:142). Anything else is a
+// no-op.
 func (s *session) completeQuestFromSpell(ctx context.Context, questID uint32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
@@ -1704,7 +1739,7 @@ func (s *session) completeQuestFromSpell(ctx context.Context, questID uint32) {
 	}
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		if s.player.QuestLog[slot].QuestID == questID {
-			s.completeQuest(ctx, questID)
+			s.areaExploredOrEventHappens(ctx, questID)
 			return
 		}
 	}

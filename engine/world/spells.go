@@ -10432,12 +10432,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if len(burnLog) > 0 {
 					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerBurn), burnLog)
 				}
-			case spellEffectParry:
-				if s.player != nil && !s.player.CanParry {
-					s.player.CanParry = true
-					s.updatePlayerParryPercentage(s.player, s.player.Level)
-					s.sendPlayerUpdate()
-				}
 			case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
 				// Spell::EffectTriggerSpell (SpellEffects.cpp:823-996) —
 				// the per-target legs ride triggerSpellEffectTarget, which
@@ -10675,7 +10669,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 101: // SPELL_EFFECT_FEED_PET
 				s.handleFeedPet(effCtx, spellID, target.ItemGUID, eff.TriggerSpell, uint8(effectIndex))
 			case 102: // SPELL_EFFECT_DISMISS_PET
-				s.handleDismissPet(effCtx, spellID)
+				// Spell::EffectDismissPet (SpellEffects.cpp:4201-4213) is a
+				// SPELL_EFFECT_HANDLE_HIT_TARGET arm gated on the unit target
+				// being a pet — !unitTarget || !unitTarget->IsPet() returns
+				// without dismissing, so a cast whose unit target is not a
+				// pet dismisses nothing.
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					if ts := s.server.findSessionByPetGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.handleDismissPet(effCtx, spellID)
+					}
+				}
 			case 109: // SPELL_EFFECT_RESURRECT_PET
 				s.handleResurrectPet(effCtx, spellID, eff)
 			case 55: // SPELL_EFFECT_TAMECREATURE
@@ -11261,6 +11267,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
 				// SetCanBlock(true).
 				s.handleEffectBlock()
+			case spellEffectParry: // 22: SPELL_EFFECT_PARRY (EffectParry, SpellEffects.cpp:4316)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on a player
+				// caster: SetCanParry(true) — not per hit target.
+				if s.player != nil && !s.player.CanParry {
+					s.player.CanParry = true
+					s.updatePlayerParryPercentage(s.player, s.player.Level)
+					s.sendPlayerUpdate()
+				}
 			case spellEffectDuel: // 83: SPELL_EFFECT_DUEL
 				// Spell::EffectDuel (SpellEffects.cpp:3795-3874) — duel
 				// initiation; the countdown/accept/cancel lifecycle lives
@@ -31196,13 +31210,17 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 	// non-melee casts (the Executing guard inside the interrupt helpers skips
 	// the spec spell itself, matching the C++ SPELL_STATE_FINISHED state when
 	// the 162 effect runs), dismiss the pet without saving it to a slot,
-	// unsummon all totems, exit the vehicle, drop single-target auras this
+	// clear reactive timers (Player.cpp:26308, ClearAllReactives), unsummon
+	// all totems, exit the vehicle, drop single-target auras this
 	// player cast on other units, clear the client's action bars
 	// (SendActionButtons(2)), and remove the old spec's glyph auras
-	// (RemoveAurasDueToSpell(gp->SpellID)).
+	// (RemoveAurasDueToSpell(gp->SpellID)). RemoveAllControlled has no Go
+	// model (no player charm state) and the shapeshift-boost re-apply is
+	// vacuous (boosts derive from live auras, shapeshift.go).
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
 	s.unsummonPet(ctx, petSaveNotInSlot)
+	s.clearAllReactives()
 	for slot := uint8(0); slot < 4; slot++ {
 		s.destroyTotem(slot)
 	}
@@ -36130,8 +36148,9 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell
 // damage/10 with no scaling (C++ expects /10 values for those); damage<=50
 // scales via Trinity::Honor::hk_honor_at_level (Formulas.h:41-44:
 // ceil(level*1.55*damage)); larger damage is taken as a flat honor amount.
-// Defensive delta: non-positive damage yields 0 honor (C++ would wrap the
-// uint32 conversion); no shipped spell carries such a value.
+// Non-positive damage yields 0 honor and the RewardHonor arm returns false
+// before the packet (Player.cpp:6906-6910) — the honor-fields roll still
+// runs; no shipped spell carries such a value.
 func (s *session) handleEffectAddHonor(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, castItemBased bool) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
@@ -36163,6 +36182,14 @@ func (s *session) handleEffectAddHonor(ctx context.Context, spell wotlk.Spell, e
 			if damage > 0 {
 				honor = uint32(damage)
 			}
+		}
+		if honor == 0 {
+			// Player::RewardHonor (Player.cpp:6906-6910): honor_f <= 0 with
+			// a null victim returns false before the packet — but only
+			// after UpdateHonorFields has run, so the fields roll still
+			// happens while no SMSG_PVP_CREDIT goes out.
+			targetSess.updateHonorFields()
+			continue
 		}
 		targetSess.rewardHonorPoints(ctx, honor)
 	}

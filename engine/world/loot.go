@@ -5015,7 +5015,8 @@ func (s *session) autoStoreSpellLoot(ctx context.Context, playerGUID uint64, spe
 	if createdByPlayer {
 		created = 1
 	}
-	store := func(item, count uint32) {
+	store := func(li lootItem) {
+		item, count := li.ItemEntry, li.Count
 		res, err := ps.storeOrStackItem(ctx, playerGUID, item, count)
 		if err != nil {
 			ps.sendEquipError(equipErrInvFull, 0)
@@ -5027,23 +5028,27 @@ func (s *session) autoStoreSpellLoot(ctx context.Context, playerGUID uint64, spe
 		if res.IsStack {
 			slotForPush = 0xFFFFFFFF
 		}
+		// Player::SendNewItem (Player.cpp:14334-14358): received=false,
+		// created=createdByPlayer, sendChatMessage=true (Player.h:1155
+		// default — the AutoStoreLoot call site passes only 5 args), plus
+		// the rolled random property id (Player.cpp:25050).
 		packet := protocol.NewBuffer(48)
 		packet.WriteU64(playerGUID)
 		packet.WriteU32(0) // received
 		packet.WriteU32(created)
-		packet.WriteU32(0) // chat
+		packet.WriteU32(1) // chat
 		packet.WriteU8(res.ClientBag)
 		packet.WriteU32(slotForPush)
 		packet.WriteU32(item)
 		packet.WriteU32(0)
-		packet.WriteI32(0)
+		packet.WriteI32(li.RandomPropertyID)
 		packet.WriteU32(count)
 		packet.WriteU32(res.InventoryCount)
 		_ = ps.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), packet.Bytes(), true)
 	}
 	for i := uint8(0); i < loot.NormalSlotCount; i++ {
 		if li, ok := loot.Items[i]; ok && li.Count > 0 {
-			store(li.ItemEntry, li.Count)
+			store(li)
 		}
 	}
 	qindices := make([]uint8, 0, len(loot.QuestItems))
@@ -5053,7 +5058,15 @@ func (s *session) autoStoreSpellLoot(ctx context.Context, playerGUID uint64, spe
 	sort.Slice(qindices, func(i, j int) bool { return qindices[i] < qindices[j] })
 	for _, qidx := range qindices {
 		if qi, ok := loot.QuestItems[qidx]; ok && qi.Count > 0 {
-			store(qi.ItemEntry, qi.Count)
+			// Loot::FillQuestLoot (Loot.cpp:296-327): quest rows enter the
+			// player's quest vector only through LootItem::AllowedForPlayer
+			// — quest items the player has no quest for never reach the
+			// auto-store walk, so they are skipped here rather than
+			// stored unconditionally.
+			if !ps.lootItemAllowedForPlayer(ctx, qi, false) {
+				continue
+			}
+			store(qi)
 		}
 	}
 }
