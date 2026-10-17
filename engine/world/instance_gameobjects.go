@@ -289,6 +289,23 @@ func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, gui
 			}
 			hasBytes1 = true
 		} else {
+			// GO_JUST_DEACTIVATED goober arm (GameObject.cpp:778-814): after
+			// the (vacuous for pure goobers — m_unique_users is only ever
+			// populated by the ritual arm) spell tail and the
+			// lockId/autoCloseTime re-ready, a summoned GO (owner or spell
+			// link) whose respawn timer is still live is DELETED, not
+			// re-readied — the isSummonedAndExpired keep-alive only fires
+			// when (owner || spellId) && m_respawnTime == 0, i.e. a
+			// zero-duration summon. Go: delete when the GO carries an
+			// owner/spell link AND an active DespawnTimer (the live
+			// m_respawnTime twin); the zero-duration keep-alive keeps the
+			// old re-ready behavior. Previously a spell-summoned goober
+			// lingered after its auto-close instead of vanishing.
+			if current != nil && (current.OwnerGUID != 0 || current.SpellID != 0) && current.DespawnTimer != nil {
+				s.objectsMu.Unlock()
+				s.despawnDynamicGameObjectInInstance(mapID, instanceID, guid)
+				return
+			}
 			// Goober reset twin: the C++ GO_JUST_DEACTIVATED update arm
 			// (GameObject.cpp:797-798) re-readies the state when the
 			// template carries a lockId or autoCloseTime; SetGoState marks
