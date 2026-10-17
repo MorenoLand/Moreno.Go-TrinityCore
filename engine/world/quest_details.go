@@ -1036,6 +1036,29 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 	if questID == 0 {
 		return true
 	}
+	// WorldSession::HandleQuestLogRemoveQuest (QuestHandler.cpp:427-428):
+	// the first Player::TakeQuestSourceItem call is a gate — an unequip
+	// failure rejects the abandon before the quest log slot, the DB rows,
+	// or the achievement criteria are touched.
+	if !s.takeQuestSourceItem(ctx, questID, true) {
+		return true
+	}
+	// QuestHandler.cpp:431-439: the timed arm and the PVP re-arm run before
+	// AbandonQuest, while the quest is still in the log. The hostile-state
+	// recompute still sees this quest in the forcing-quest scan, so an
+	// abandoned PVP-flagged quest forces IsHostile on and UpdatePvPState
+	// flags the player PvP — it is not a no-op.
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var specialFlags, questFlags int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags); err == nil && specialFlags&questSpecialFlagsTimed != 0 {
+			s.removeTimedQuest(questID)
+		}
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM quest_template WHERE ID = ?", questID).Scan(&questFlags); err == nil && questFlags&questFlagsPVP != 0 && s.player != nil {
+			if s.applyZoneState(ctx, s.player, s.player.Zone, s.areaID) {
+				s.sendPlayerUpdate()
+			}
+		}
+	}
 	s.player.QuestLog[slot] = questLogEntry{}
 	s.sendPlayerQuestLogUpdate(slot)
 	s.updateAchievementCriteria(criteriaTypeQuestAbandoned, 0, 1)
@@ -1045,24 +1068,13 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 	}
-	// WorldSession::HandleQuestLogRemoveQuest (QuestHandler.cpp:428): the
-	// first Player::TakeQuestSourceItem call is a gate — an unequip failure
-	// rejects the abandon before anything is removed.
-	if !s.takeQuestSourceItem(ctx, questID, true) {
-		return true
-	}
 	// Player::AbandonQuest (Player.cpp:15578-15598): BIND_QUEST_ITEM copies
-	// of the required/source item lists are destroyed; the handler's PvP
-	// re-arm is a provable no-op (C++ recomputes IsHostile while the quest
-	// is still in the quest log).
+	// of the required/source item lists are destroyed.
 	// AchievementMgr::RemoveTimedAchievement (AchievementMgr.cpp:1487-1501):
 	// the abandoned quest's timed accept criteria lose their timers.
 	// QuestHandler.cpp:443 — the second TakeQuestSourceItem pass (idempotent).
 	s.takeQuestSourceItem(ctx, questID, true)
 	s.destroyQuestItems(ctx, questID)
-	// WorldSession::HandleQuestLogRemoveQuest (QuestHandler.cpp:434): a
-	// timed quest leaves the timed set on abandon.
-	s.removeTimedQuest(questID)
 	s.removeTimedAchievements(timedTypeQuest, questID)
 	// Eluna PLAYER_EVENT_ON_QUEST_ABANDON (38): Eluna::OnQuestAbandon
 	// (PlayerHooks.cpp:101-107), (event, player, questId), void
