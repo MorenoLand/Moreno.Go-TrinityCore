@@ -1406,11 +1406,9 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
 		return true
 	}
+	// The sale proceeds are credited only after the sold item reaches the
+	// buyback slot (ItemHandler.cpp:469-471) — see the addLootMoney block below.
 	earned := uint32(sellPrice) * uint32(count)
-	s.player.Money += earned
-	s.questMoneyChanged(ctx)
-	s.updateAchievementCriteria(criteriaTypeMoneyFromVendor, 0, earned)
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
 	bbItemGUID := uint64(itemGUID)
 	if currentCount <= int64(count) {
@@ -1505,6 +1503,18 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		s.currentBuybackSlot++
 	}
 	_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, 74+slot, bbItemGUID)
+
+	// ItemHandler.cpp:469-471 — the money credit runs only after the sold
+	// item reaches the buyback slot. addLootMoney mirrors Player::ModifyMoney's
+	// positive arm (Player.cpp:22821-22840): a credit that would push the player
+	// past MAX_MONEY_AMOUNT is rejected outright with EQUIP_ERR_TOO_MUCH_GOLD
+	// and no partial add — the item stays sold into the buyback slot — while
+	// the MONEY_FROM_VENDORS criteria still fires on the rejected amount.
+	if s.addLootMoney(earned) {
+		s.questMoneyChanged(ctx)
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	}
+	s.updateAchievementCriteria(criteriaTypeMoneyFromVendor, 0, earned)
 
 	s.syncEquipmentCache(ctx)
 	// Player.cpp:13646-13655 — SendSellError is error-only; HandleSellItemOpcode
