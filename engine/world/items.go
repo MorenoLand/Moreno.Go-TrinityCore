@@ -3956,6 +3956,197 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				return true
 			}
 		}
+		// CheckCast pet-presence arm (Spell::CheckCast, Spell.cpp:5411-5428):
+		// any effect with TargetA == TARGET_UNIT_PET (5) requires the
+		// caster's guardian pet (Unit::GetGuardianPet); without one the
+		// cast fails with SPELL_FAILED_NO_PET (84). The
+		// m_triggeredByAuraSpell -> SPELL_FAILED_DONT_REPORT leg is
+		// vacuous: item casts are TRIGGERED_NONE prepares
+		// (Player::CastItemUseSpell, Player.cpp:8232), never
+		// aura-triggered. The npcbot leg is vacuous (caster is always the
+		// session player). C++ order: right after the dest-LOS arm, ahead
+		// of the battleground gate.
+		hasPetTarget := false
+		for _, effect := range spell.Effects {
+			if effect.ImplicitTargetA == spellImplicitTargetUnitPet {
+				hasPetTarget = true
+				break
+			}
+		}
+		if hasPetTarget && s.activePetNumber() == 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNoPet), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "pet-targeted spell without guardian pet")
+			return true
+		}
+		// CheckCast battleground gate (Spell::CheckCast, Spell.cpp:5434-5437):
+		// SPELL_ATTR3_BATTLEGROUND spells require Player::InBattleground
+		// (m_bgData.bgInstanceID != 0, Player.h:1906) — mirrored by
+		// s.bgData.InstanceID (character_battleground_data). The
+		// TYPEID_PLAYER arm is vacuous (caster is always the session
+		// player). Fails SPELL_FAILED_ONLY_BATTLEGROUNDS (142).
+		if spell.AttributesEx3&spellAttr3Battleground != 0 && s.bgData.InstanceID == 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedOnlyBattlegrounds), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "not in battleground")
+			return true
+		}
+		// CheckCast arena gate (Spell::CheckCast, Spell.cpp:5441-5447):
+		// SPELL_ATTR4_NOT_USABLE_IN_ARENA spells, or spells with a
+		// recovery time over 10 minutes without
+		// SPELL_ATTR4_USABLE_IN_ARENA, fail SPELL_FAILED_NOT_IN_ARENA
+		// (151) when the caster's map is a battle arena
+		// (MapEntry::IsBattleArena). GetRecoveryTime is
+		// max(RecoveryTime, CategoryRecoveryTime) (SpellInfo.cpp:3149-3152);
+		// a missing map entry skips the gate (C++ has no else arm).
+		recoveryTime := spell.RecoveryTime
+		if spell.CategoryRecoveryTime > recoveryTime {
+			recoveryTime = spell.CategoryRecoveryTime
+		}
+		if spell.AttributesEx4&spellAttr4NotUsableInArena != 0 ||
+			(recoveryTime > 10*60*1000 && spell.AttributesEx4&spellAttr4UsableInArena == 0) {
+			if entry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && entry.IsBattleArena() {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotInArena), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "not usable in arena")
+				return true
+			}
+		}
+		// CheckCast zone/location leg (Spell::CheckCast, Spell.cpp:5452-5462):
+		// the npcbot TYPEID_UNIT arm is vacuous (caster is always the
+		// session player) and game masters bypass the whole check
+		// (Player::IsGameMaster). Zone/area are the session's tracked
+		// values (s.player.Zone / s.areaID, refreshed on movement and
+		// teleports), the Go model of Unit::GetZoneAndAreaId. The legs
+		// mirror SpellInfo::CheckLocation (SpellInfo.cpp:1505) exactly as
+		// on the client path.
+		if (s.player.ExtraFlags&playerExtraGMOn) == 0 && (s.player.PlayerFlags&playerFlagGM) == 0 {
+			zoneID, areaID := s.player.Zone, s.areaID
+			// Area-group leg (SpellInfo::CheckLocation, SpellInfo.cpp:1508-1527):
+			// AreaGroupId > 0 requires zone or area membership, else
+			// SPELL_FAILED_INCORRECT_AREA. Unknown/missing group data keeps
+			// the existing bridge convention (terrain.go) and does not reject.
+			if spell.AreaGroupID > 0 {
+				if allowed, known, groupErr := s.server.Data.AreaGroupAllows(uint32(spell.AreaGroupID), zoneID, areaID); groupErr == nil && known && !allowed {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedIncorrectArea), true)
+					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "incorrect area group", "zone", zoneID, "area", areaID)
+					return true
+				}
+			}
+			// Raid-instance leg (SpellInfo::CheckLocation, SpellInfo.cpp:1552-1556):
+			// SPELL_ATTR6_NOT_IN_RAID_INSTANCE fails on raid maps — and
+			// when the map entry is missing, matching the C++ !mapEntry arm.
+			if spell.AttributesEx6&spellAttr6NotInRaidInstance != 0 {
+				if entry, found, err := s.server.Data.Map(s.player.Map); err != nil || !found || entry.IsRaid() {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotInRaidInstance), true)
+					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "not usable in raid instance")
+					return true
+				}
+			}
+			// spell_area DB leg (SpellInfo::CheckLocation, SpellInfo.cpp:1558-1567):
+			// when the spell has spell_area rows, at least one must fit the
+			// player's zone/area (SpellArea::IsFitToRequirements), else
+			// SPELL_FAILED_INCORRECT_AREA.
+			if rules, hasRules := s.spellAreaRules(ctx, spellID); hasRules && !s.spellAreaRulesFit(ctx, spellID, rules, zoneID, areaID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedIncorrectArea), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "incorrect area (spell_area)", "zone", zoneID, "area", areaID)
+				return true
+			}
+			// Battleground-spell special cases (SpellInfo::CheckLocation,
+			// SpellInfo.cpp:1569-1631). Player::InBattleground is
+			// m_bgData.bgInstanceID != 0 (Player.h:1906), mirrored by
+			// s.bgData.InstanceID. A missing Map.dbc entry fails with
+			// SPELL_FAILED_INCORRECT_AREA (SpellInfo.cpp:1576/1588/1602/1617),
+			// not SPELL_FAILED_REQUIRES_AREA.
+			inBattleground := s.bgData.InstanceID != 0
+			mapEntry, mapFound, mapErr := s.server.Data.Map(s.player.Map)
+			var locationFail uint8
+			switch spellID {
+			case 23333, 23335: // Warsong Gulch / Silverwing flag
+				if !(s.player.Map == 489 && inBattleground) {
+					locationFail = spellFailedRequiresArea
+				}
+			case 34976: // Netherstorm flag
+				if !(s.player.Map == 566 && inBattleground) {
+					locationFail = spellFailedRequiresArea
+				}
+			case 2584, 22011, 22012, 42792, 43681, 44535: // spirit heal / dropped-flag spells
+				switch {
+				case mapErr != nil || !mapFound:
+					locationFail = spellFailedIncorrectArea
+				case !(zoneID == WGZoneID || (mapEntry.IsBattleground() && inBattleground)):
+					locationFail = spellFailedRequiresArea
+				}
+			case 44521: // Preparation
+				switch {
+				case mapErr != nil || !mapFound:
+					locationFail = spellFailedIncorrectArea
+				case !(mapEntry.IsBattleground() && inBattleground):
+					locationFail = spellFailedRequiresArea
+				}
+			case 32724, 32725, 35774, 35775: // arena team spells
+				switch {
+				case mapErr != nil || !mapFound:
+					locationFail = spellFailedIncorrectArea
+				case !(mapEntry.IsBattleArena() && inBattleground):
+					locationFail = spellFailedRequiresArea
+				}
+			case 32727: // Arena Preparation
+				switch {
+				case mapErr != nil || !mapFound:
+					locationFail = spellFailedIncorrectArea
+				default:
+					locationFail = spellFailedRequiresArea
+					if mapEntry.IsBattleArena() && inBattleground {
+						for i := range s.bgQueues {
+							if q := &s.bgQueues[i]; q.Active && q.IsArena && q.InstanceID == s.bgData.InstanceID && q.Status == ArenaStatusWaitJoin {
+								locationFail = 0
+								break
+							}
+						}
+					}
+				}
+			}
+			if locationFail != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, locationFail), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "location check", "zone", zoneID, "area", areaID, "failure", locationFail)
+				return true
+			}
+			// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SpellInfo.cpp:1529-1550): no bridge.
+			// The strict leg needs AreaTableEntry flyability AND
+			// Player::CanFlyInZone (Cold Weather Flying known-spell check via
+			// GetVirtualMapForMapAndZone); Go has no WorldMapArea store and no
+			// known-spell model for the flight check.
+		}
+		// CheckCast mounted gate (Spell::CheckCast, Spell.cpp:5465-5476):
+		// mounted players cannot cast spells lacking
+		// SPELL_ATTR0_CASTABLE_WHILE_MOUNTED — flying players fail
+		// SPELL_FAILED_NOT_ON_TAXI (65), other mounted players fail
+		// SPELL_FAILED_NOT_MOUNTED (64). The
+		// TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE wrapper is
+		// vacuous (item casts are TRIGGERED_NONE); the TYPEID_PLAYER
+		// arm is vacuous (caster is always the session player); passive
+		// spells are exempt per the !IsPassive() arm. Unit::IsMounted is
+		// the UNIT_FLAG_MOUNT unit flag (Unit.h:932), mirrored by
+		// unitFlagMount (UNIT_FLAG_MOUNT = 0x08000000, UnitDefines.h:151);
+		// IsInFlight is the UNIT_STATE_IN_FLIGHT mirror (s.isInFlight,
+		// taxi.go). C++ order: after the zone leg, ahead of spell focus.
+		if s.player.UnitFlags&unitFlagMount != 0 && spell.Attributes&spellAttr0CastableWhileMounted == 0 && spell.Attributes&spellAttr0Passive == 0 {
+			reason := spellFailedNotMounted
+			if s.isInFlight() {
+				reason = spellFailedNotOnTaxi
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, reason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "mounted cast blocked", "reason_code", reason)
+			return true
+		}
+		// CheckCast spell-focus arm (Spell::CheckCast, Spell.cpp:5479-5481):
+		// spells carrying a spell-focus requirement fail
+		// SPELL_FAILED_REQUIRES_SPELL_FOCUS (102) when no matching focus
+		// gameobject is in range (SearchSpellFocus). C++ order: after the
+		// mounted gate, before CheckItems.
+		if spell.RequiresSpellFocus != 0 && !s.spellFocusFound(ctx, spell) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedRequiresSpellFocus), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "no spell focus object in range", "focus", spell.RequiresSpellFocus)
+			return true
+		}
 		// Spell::CheckCast cooldown block (Spell.cpp:5187-5221) on the
 		// m_CastItem path: SpellHistory::IsReady/HasCooldown
 		// (SpellHistory.cpp:190-200/473-487) fails with
@@ -4257,6 +4448,21 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			}
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
+			return true
+		}
+		// Dispel pre-check (Spell::CheckCast, Spell.cpp:5513-5560): a spell
+		// whose effects are all SPELL_EFFECT_DISPEL (no non-dispel
+		// effects, no area-targeted dispel, and a nonzero dispel mask)
+		// fails SPELL_FAILED_NOTHING_TO_DISPEL when the unit target has
+		// no dispellable auras. Item casts are TRIGGERED_NONE, so the
+		// !IsTriggered() arm applies. The CallScriptCheckCastHandlers
+		// arm between CheckCasterAuras and this one (Spell.cpp:5508) is a
+		// no-op: Go has no scripted-check-cast model. C++ keys on
+		// m_targets.GetUnitTarget() — the adopted wire unit here, exactly
+		// like the client path's checkDispelPreCast.
+		if failReason := s.checkDispelPreCast(spell, target.UnitGUID); failReason != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to dispel")
 			return true
 		}
 		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
