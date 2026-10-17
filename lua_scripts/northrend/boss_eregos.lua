@@ -93,8 +93,17 @@
 -- 60%..20% -> PHASE_FIRST_PLANAR (or < 20% ->
 -- PHASE_SECOND_PLANAR), events.Reset() + Talk(SAY_SHIELD 5) +
 -- DoCast(SPELL_PLANAR_SHIFT 51162) + summons.DespawnAll() +
--- DoCast(SPELL_PLANAR_ANOMALIES 57959) x6 — no health /
--- timer-event / cast / summon bridges.
+-- DoCast(SPELL_PLANAR_ANOMALIES 57959) x6 — stays out on the
+-- PHASE MACHINE, not on missing bridges: creature:IsHeroic()
+-- (lua_creature_events.go:203) and creature:GetHealthPct()
+-- (scripting/object.go:107) ARE bridged now. The blockers are
+-- the machine's consumer legs: the 6x anomaly summons have no
+-- delivery (no SPELL_EFFECT_SUMMON leg in the creature-cast
+-- path — the ley-whelp removal precedent), summons.DespawnAll()
+-- has no bridge, and the normal-events re-arm rides the
+-- unbridged spell_eregos_planar_shift AfterEffectRemove
+-- AuraScript below — porting Talk+cancel alone would leave the
+-- normal rotation dead with no re-arm. Documented-only.
 -- JustSummoned — BossAI::JustSummoned + NPC_PLANAR_ANOMALY
 -- 30879: CombatStop + REACT_PASSIVE + MoveRandom(100.0f) — no
 -- motion / react-state bridges. SummonedCreatureDespawn —

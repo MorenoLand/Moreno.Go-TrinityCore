@@ -7,7 +7,7 @@
 -- pass; the GetAhnKahetAI ScriptName binding is instance-shimmed, the
 -- creature_template binding DB-side as usual).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
--- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is
+-- 4 OnDied, 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- C++ DoCast default is triggered=false (vaelastrasz convention):
 -- creature:CastSpell(nil, spell) = DoCastVictim,
@@ -16,31 +16,40 @@
 -- precedent); BossAI _Reset/_JustDied instance bookkeeping has no bridge.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_elder_nadox: JustEngagedWith Talk(SAY_AGGRO 0) (event 1);
+-- EVENT_PLAGUE DoCast(SelectTarget(Random, 0, 100, true),
+-- SPELL_BROOD_PLAGUE 56130, TRIGGERED), 13s init, 15s repeat — the old
+-- "random-target SelectTarget bridge absent (cairne/kazzak)" header
+-- claim is RETRACTED (randomPlayer is the in-tree bridge: anomalus /
+-- eadric / keleseth precedent); no cast on an empty candidate pool
+-- (C++ SelectTarget null leg — eadric hammer precedent);
+-- EVENT_RAGE DoCast(H_SPELL_BROOD_RAGE 59465) self-cast non-triggered,
+-- 12s init, 10-50s repeat (math.random — eck spring precedent),
+-- IsHeroic()-gated at engage — the old "no difficulty bridge
+-- (kelidan)" header claim is RETRACTED (creature:IsHeroic() bridged —
+-- engine/world/lua_creature_events.go:203, AGENTS.md 2026-10-17);
+-- EVENT_CHECK_ENRAGE, 5s init, 5s repeat: HasAura(26662) returns WITHOUT
+-- re-arming (exact C++ :191-192); GetZ() < 24.0 -> DoCast(me,
+-- SPELL_ENRAGE 26662, true) TRIGGERED; unconditional 5s re-arm
+-- otherwise — the old "no map-height bridge for the Z check" header
+-- claim is RETRACTED (GetZ is in the generic scripting fallback —
+-- engine/scripting/object.go:94);
 -- EVENT_SUMMON_SWARMER DoCastSelf(Summon Swarmers 56119) + 33% Talk
 -- (SAY_EGG_SAC 3), 10s init, 10s repeat (math.random for the C++ urand —
--- slad_ran precedent); KilledUnit Talk(SAY_SLAY 1) player-gated (event
--- 3, victim:GetObjectType()=="Player" — nalorakk precedent); JustDied
+-- slad_ran precedent); the guardian-summon latch
+-- (!GuardianSummoned && HealthBelowPct(50) -> Talk(EMOTE_HATCHES 4, me)
+-- + DoCast(me, SPELL_SUMMON_SWARM_GUARD 56120)) modeled in the
+-- pre-application DamageTaken handler (event 9) with the C++-exact
+-- HealthBelowPctDamaged(50, damage) strict-< (Unit.h:872) and a
+-- per-GUID latch — the old "no health-pct bridge (doomwalker)" header
+-- claim is RETRACTED (creature:GetHealthPct()/GetHealth() are bridged —
+-- engine/scripting/object.go:107);
+-- KilledUnit Talk(SAY_SLAY 1) player-gated (event 3,
+-- victim:GetObjectType()=="Player" — nalorakk precedent); JustDied
 -- Talk(SAY_DEATH 2) (event 4).
 -- Unmodeled (no bridges — documented, not wired):
--- EVENT_PLAGUE — DoCast(SelectTarget(Random, 0, 100, true),
--- SPELL_BROOD_PLAGUE 56130, triggered), 13s init, 15s repeat: the
--- random-target SelectTarget bridge is absent (cairne/kazzak
--- precedent), so the cast leg is unmodelable — documented-only.
--- EVENT_RAGE (DoCastSelf(H_SPELL_BROOD_RAGE 59465), 12s init, 10-50s
--- repeat) and EVENT_CHECK_ENRAGE (HasAura(SPELL_ENRAGE 26662) /
--- GetPositionZ() < 24.0f -> DoCastSelf(Enrage, triggered), 5s init,
--- 5s repeat) are both IsHeroic()-gated and there is no difficulty
--- bridge on the Lua surface (kelidan breaker precedent) — not
--- emulated even ungated, since normal-mode behavior must not fire
--- them; the map-height bridge for the Z check is absent anyway —
--- documented-only.
--- The HealthBelowPct(50) guardian-summon leg (Talk(EMOTE_HATCHES 4)
--- + DoCastSelf(SPELL_SUMMON_SWARM_GUARD 56120) + GuardianSummoned
--- latch) — no health-pct bridge on the Lua surface (doomwalker
--- precedent) — documented-only. SummonedCreatureDies(NPC_AHNKAHAR_
--- GUARDIAN 30176) -> GuardianDied latch and GetData(DATA_RESPECT_
--- YOUR_ELDERS) behind the absent cross-AI DoAction/GetData bridge
--- (zero hits) — documented-only.
+-- SummonedCreatureDies(NPC_AHNKAHAR_GUARDIAN 30176) -> GuardianDied latch
+-- and GetData(DATA_RESPECT_YOUR_ELDERS) behind the absent cross-AI
+-- DoAction/GetData bridge (zero hits) — documented-only.
 -- npc_ahnkahar_nerubian — ENTRY UNVERIFIABLE (no NPC_AHNKAHAR_
 -- NERUBIAN constant in ahnkahet.h or anywhere in the C++ sources;
 -- the file enums name only the guardian 30176 / swarmer 30178 —
@@ -64,10 +73,20 @@ local SAY_AGGRO   = 0
 local SAY_SLAY    = 1
 local SAY_DEATH   = 2
 local SAY_EGG_SAC = 3
+local EMOTE_HATCHES = 4
 
-local SPELL_SUMMON_SWARMERS = 56119
+local SPELL_BROOD_PLAGUE       = 56130
+local H_SPELL_BROOD_RAGE       = 59465
+local SPELL_ENRAGE             = 26662 -- Enraged if too far away from home
+local SPELL_SUMMON_SWARMERS    = 56119
+local SPELL_SUMMON_SWARM_GUARD = 56120
 
 local timers = {}
+local nadoxState = {}
+
+local function clearState(guid)
+    nadoxState[guid] = nil
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -91,6 +110,25 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- randomPlayer: the in-tree random-target SelectTarget bridge
+-- (anomalus / eadric / keleseth precedent) — GetPlayersInWorld +
+-- map/instance/alive filter + maxDist.
+local function randomPlayer(creature, maxDist)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:GetDistance(plr) <= maxDist then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ EVENT_SUMMON_SWARMER: DoCastSelf; 10s init, 10s repeat; 33%
 -- Talk(SAY_EGG_SAC) on the same tick.
 local function swarmerTick(creature, guid)
@@ -103,17 +141,70 @@ local function swarmerTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_PLAGUE: DoCast(SelectTarget(Random, 0, 100, true),
+-- SPELL_BROOD_PLAGUE, true) TRIGGERED, 13s init, 15s repeat. No cast
+-- when no candidate (C++ SelectTarget returns null on empty pool —
+-- eadric hammer precedent).
+local function plagueTick(creature, guid)
+    local target = randomPlayer(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_BROOD_PLAGUE, true)
+    end
+    schedule(guid, "plague", 15000, function()
+        plagueTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_RAGE (IsHeroic-gated): DoCast(H_SPELL_BROOD_RAGE)
+-- non-triggered self-cast, 12s init, 10-50s repeat (urand — eck
+-- spring math.random(min,max) precedent).
+local function rageTick(creature, guid)
+    creature:CastSpell(creature, H_SPELL_BROOD_RAGE)
+    schedule(guid, "rage", math.random(10000, 50000), function()
+        rageTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_CHECK_ENRAGE (IsHeroic-gated), 5s init, 5s repeat: the
+-- HasAura(SPELL_ENRAGE) arm returns WITHOUT re-arming (exact C++
+-- :191-192); GetZ() < 24.0 -> DoCast(me, SPELL_ENRAGE, true)
+-- TRIGGERED; the re-arm is unconditional otherwise.
+local function enrageCheckTick(creature, guid)
+    if not creature:HasAura(SPELL_ENRAGE) then
+        if creature:GetZ() < 24.0 then
+            creature:CastSpell(creature, SPELL_ENRAGE, true)
+        end
+        schedule(guid, "enrageCheck", 5000, function()
+            enrageCheckTick(creature, guid)
+        end)
+    end
+end
+
 local function nadoxEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    nadoxState[guid] = { guardianSummoned = false }
     creature:Talk(SAY_AGGRO)
     schedule(guid, "swarmer", 10000, function()
         swarmerTick(creature, guid)
     end)
+    schedule(guid, "plague", 13000, function()
+        plagueTick(creature, guid)
+    end)
+    if creature:IsHeroic() then
+        schedule(guid, "rage", 12000, function()
+            rageTick(creature, guid)
+        end)
+        schedule(guid, "enrageCheck", 5000, function()
+            enrageCheckTick(creature, guid)
+        end)
+    end
 end
 
 local function nadoxLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    clearState(guid)
 end
 
 local function nadoxTargetDied(event, creature, victim)
@@ -123,16 +214,41 @@ local function nadoxTargetDied(event, creature, victim)
 end
 
 local function nadoxDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    clearState(guid)
     creature:Talk(SAY_DEATH)
 end
 
 local function nadoxReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    clearState(guid)
+end
+
+-- C++ UpdateAI GuardianSummoned latch (every-tick HealthBelowPct(50)
+-- check) — modeled in the pre-application DamageTaken handler (event
+-- 9): C++-exact HealthBelowPctDamaged(50, damage) = GetHealth()-damage
+-- < CountPctFromMaxHealth(50), strict (Unit.h:872). Talk(EMOTE_HATCHES
+-- 4, me) + DoCast(me, SPELL_SUMMON_SWARM_GUARD) + latch; the per-GUID
+-- latch replaces the C++ bool.
+local function nadoxDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local st = nadoxState[guid]
+    if st and not st.guardianSummoned then
+        local health = creature:GetHealth()
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth ~= 0 and health - damage < math.floor(maxHealth * 50 / 100) then
+            st.guardianSummoned = true
+            creature:Talk(EMOTE_HATCHES, creature)
+            creature:CastSpell(creature, SPELL_SUMMON_SWARM_GUARD)
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 1, nadoxEnterCombat)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 2, nadoxLeaveCombat)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 3, nadoxTargetDied)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 4, nadoxDied)
+RegisterCreatureEvent(ENTRY_ELDER_NADOX, 9, nadoxDamageTaken)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 23, nadoxReset)
