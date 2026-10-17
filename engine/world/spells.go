@@ -185,6 +185,7 @@ const (
 	spellFailedTargetNotPlayer           uint8  = 122 // SPELL_FAILED_TARGET_NOT_PLAYER (SharedDefines.h:1104)
 	spellFailedTargetNoWeapons           uint8  = 124 // SPELL_FAILED_TARGET_NO_WEAPONS (SharedDefines.h:1106)
 	spellFailedTargetAffectingCombat     uint8  = 110 // SPELL_FAILED_TARGET_AFFECTING_COMBAT (SharedDefines.h:1092)
+	spellFailedTargetsDead               uint8  = 109 // SPELL_FAILED_TARGETS_DEAD (SharedDefines.h:1091)
 	spellFailedAffectingCombat           uint8  = 1
 	spellFailedFoodLowLevel              uint8  = 35
 	spellFailedNoPet                     uint8  = 84
