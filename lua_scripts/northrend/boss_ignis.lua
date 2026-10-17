@@ -29,11 +29,14 @@
 -- DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (:147, event 1; the
--- BossAI::JustEngagedWith passthrough, the six ScheduleEvent
--- legs and the DoStartTimedAchievement leg have no bridges —
--- boss_bookkeeping precedent for the passthrough, no timer /
--- timed-achievement bridge for the rest — the auriaya
--- engage-port precedent).
+-- BossAI::JustEngagedWith passthrough, the six ScheduleEvent legs and the
+-- DoStartTimedAchievement leg have no bridges — boss_bookkeeping precedent
+-- for the passthrough, no timed-achievement bridge for the last — the
+-- auriaya engage-port precedent). The Oct-12/13 "no timer bridge" doctrine
+-- is STALE: CreateLuaEvent (engine/scripting/runtime.go:798) is the timer
+-- bridge, already used below; the SCORCH/SLAG_POT/CONSTRUCT/END_POT legs
+-- stay unported because their ARMS contain blocked legs (summon / vehicle /
+-- DoSummon), not because timers lack bridges.
 -- EVENT_JET — Talk(EMOTE_JETS 7) (:222) + DoCast(me,
 -- SPELL_FLAME_JETS 62680) 2-arg non-triggered self-cast (:223);
 -- 30s init (:148), re-arm randtime 35-40s (:224).
@@ -67,32 +70,44 @@
 -- (EnterVehicle seat 0, 500ms) -> EVENT_CHANGE_POT (DoCast
 -- SPELL_SLAG_POT 62717 triggered + seat swap, 1s) -> EVENT_END_POT
 -- (ExitVehicle, 10s); 35s init, re-arm RAID_MODE(30s, 15s) —
--- random-target-search + vehicle (movement) legs: no bridge.
+-- random-target-search is bridgeable via the GetPlayersInWorld idiom (6
+-- northrend precedents: gal_darah, eck, elder_nadox, eadric, lord_jaraxxus,
+-- nexus_commanders) — the vehicle (EnterVehicle/ExitVehicle) legs have no
+-- bridge: arm blocked.
 -- EVENT_SCORCH (:262-:268) — Talk(SAY_SCORCH 3) +
 -- SummonCreature(NPC_GROUND_SCORCH 33221) at victim + DoCast(
--- SPELL_SCORCH 62546) self; 25s init / 25s re-arm — the summon
--- leg has no bridge: unported.
+-- SPELL_SCORCH 62546) self; 25s init / 25s re-arm — the Talk + self-cast +
+-- re-arm legs are individually bridgeable via CreateLuaEvent, but the
+-- SummonCreature leg (the arm's damage mechanism) has no bridge: arm
+-- blocked, unported.
 -- EVENT_CONSTRUCT (:270-:275) — Talk(SAY_SUMMON 1) +
 -- DoSummon(NPC_IRON_CONSTRUCT 33121, random spawn point) +
 -- DoCast(SPELL_STRENGHT 64473) self + DoCast(me, SPELL_ACTIVATE_
 -- CONSTRUCT 62488) self; 15s init, re-arm RAID_MODE(40s, 30s) —
--- the summon leg has no bridge: unported.
+-- DoSummon(NPC_IRON_CONSTRUCT) has no bridge and is the arm's purpose: arm
+-- blocked, unported (Talk/self-cast legs would be individually bridgeable).
 -- npc_iron_construct (NPC_IRON_CONSTRUCT 33121 local enum —
 -- entry-verifiable but bridge-blocked; the npc_spark_of_ionar
 -- no-bridgeable-arms precedent — no registration): DamageTaken
 -- shatter leg (HasAura(SPELL_BRITTLE 62382 / 67114) && damage
 -- >= 5000 -> DoCast(SPELL_SHATTER 62383) self + DoAction(
--- ACTION_REMOVE_BUFF) to Ignis + DespawnOrUnsummon(1s)) — no
--- damage-taken / DoAction bridges; UpdateAI HEAT-stack / MOLTEN
--- / BRITTLE / IsInWater machine — no aura-stack / water-state
--- bridges; no Talk arms anywhere.
+-- ACTION_REMOVE_BUFF) to Ignis + DespawnOrUnsummon(1s)) — damage-taken IS
+-- bridged (creature event 9, engine/world/lua_creature_events.go:286); the
+-- leg is blocked by the DoAction cross-AI arm (RemoveAuraFromStack also
+-- unbridged) and DespawnOrUnsummon; the NPC never spawns in Lua (DoSummon
+-- blocked) so no registration. UpdateAI HEAT-stack / MOLTEN / BRITTLE /
+-- IsInWater machine — aura-stack (GetStackAmount) and water-state
+-- (IsInWater) have no bridges (both verified absent this run); no Talk arms
+-- anywhere.
 -- npc_scorch_ground (NPC_GROUND_SCORCH 33221 local enum —
 -- entry-verifiable but bridge-blocked — no registration):
 -- MoveInLineOfSight heat tracking + UpdateAI AddAura(SPELL_
--- HEAT 65667) 1s machine — no proximity / aura bridges; Reset
--- DoCast(me, SPELL_GROUND 62548) — the entry itself is
--- bridge-blocked so no event-23 registration; no Talk arms
--- anywhere.
+-- HEAT 65667) 1s machine — proximity IS bridged (creature event 27) and
+-- HasAura/AddAura are bridged, so the old "no proximity / aura bridge"
+-- claim is stale; the real blocker is the spawn: SummonCreature has no
+-- bridge, so the entry never exists in Lua and no event-23 registration is
+-- needed. Reset DoCast(me, SPELL_GROUND 62548) would be bridgeable alone;
+-- no Talk arms anywhere.
 -- spell_ignis_slag_pot (62717) — periodic-dummy AuraScript
 -- (SPELL_SLAG_POT_DAMAGE 65722 on tick; OnRemove casts SPELL_
 -- SLAG_IMBUED 62836 when target alive) — no AuraScript bridge;

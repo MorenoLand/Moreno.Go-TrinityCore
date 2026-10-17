@@ -34,7 +34,7 @@
 -- spawn-event bridge, documented); the BossAI::Reset passthrough leg
 -- has no bridge.
 -- boss_ichoronAI::JustEngagedWith (:103-107) — Talk(SAY_AGGRO 0)
--- (:106) kept; seeds the two combat timers below (the
+-- (:106) kept; seeds the three combat timers below (the
 -- BossAI::JustEngagedWith passthrough leg has no bridge).
 -- ScheduleTasks water-bolt-volley leg (:213-217) — DoCastAOE
 -- (SPELL_WATER_BOLT_VOLLEY 54241) (:215, 2-arg = non-triggered) =
@@ -50,6 +50,18 @@
 -- JustDied (:167-171) — Talk(SAY_DEATH 2) — the sjonnir
 -- JustDied-Talk precedent; the _JustDied() passthrough leg has no
 -- bridge.
+-- UpdateAI frenzy leg (:194-198) — !_isFrenzy && HealthBelowPct(25) +
+-- no DRAINED aura -> Talk(SAY_ENRAGE 4) + DoCast(me, SPELL_FRENZY
+-- 54312, true), one-flip _isFrenzy latch. The Oct-era "no
+-- health-threshold bridge" claim is RETRACTED: creature:GetHealthPct()
+-- is bridged via the generic object fallback (engine/scripting/
+-- object.go:107 — elder_nadox retraction precedent) and HealthBelowPct
+-- (25) strict-< is C++-exact as GetHealthPct() < 25; creature:HasAura
+-- (59820) is bridged (engine/world/lua_objects.go:228). The per-tick
+-- check rides a 1s re-armed CreateLuaEvent poll seeded on combat start
+-- (the sindragosa 1s third-phase-check convention), latch table
+-- frenzyFired[], wiped on events 2/4/23; the poll stops re-arming
+-- once the latch fires.
 -- DOCUMENTED DEVIATIONS:
 -- The water-blast SelectTarget 50.0f distance filter (:221) has no
 -- bridge — the randomPlayer pool (alive same-map/instance players,
@@ -61,9 +73,8 @@
 -- DOCUMENTED-ONLY (in this header; entry 29313):
 -- SAY_SPAWN (3) is never Talk()ed (dead enum text, the cyanigosa
 -- precedent).
--- Talk(SAY_ENRAGE 4) rides the UpdateAI health-threshold leg
--- (:194-198: HealthBelowPct(25) + no DRAINED aura -> FRENZY 54312
--- triggered) — no health-threshold bridge; joins the bridge queue.
+-- (Talk(SAY_ENRAGE 4) frenzy leg was documented-only in the Oct
+-- sweep; RETRACTED — ported above per the health-threshold retraction.)
 -- Talk(SAY_SHATTER 5) + Talk(EMOTE_SHATTER 7) ride the DoAction
 -- ACTION_PROTECTIVE_BUBBLE_SHATTERED leg (:127-140: AOE splatter /
 -- burst, DRAINED cast, 30% max-health damage leg, scheduler.DelayAll)
@@ -100,12 +111,19 @@ local ENTRY_ICHORON = 29313
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
+local SAY_ENRAGE = 4
 
 local SPELL_WATER_BLAST = 54237
 local SPELL_WATER_BOLT_VOLLEY = 54241
 local SPELL_THREAT_PROC = 61732
+local SPELL_FRENZY = 54312
+local SPELL_DRAINED = 59820
 
 local timers = {}
+
+-- C++ _isFrenzy latch (:185): one-flip Talk(SAY_ENRAGE 4) + FRENZY
+-- (54312) cast guard.
+local frenzyFired = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -170,17 +188,44 @@ local function waterBlastTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI frenzy leg (:194-198): !_isFrenzy && HealthBelowPct(25)
+-- && !HasAura(SPELL_DRAINED 59820) -> Talk(SAY_ENRAGE 4), DoCast(me,
+-- SPELL_FRENZY 54312, true), latch. HealthBelowPct(25) is strict-<, so
+-- GetHealthPct() < 25 is C++-exact (object.go float pct, threshold 25
+-- integer — equivalent; elder_nadox retraction precedent). The per-tick
+-- UpdateAI check rides a 1s re-armed CreateLuaEvent poll seeded on
+-- combat start, wiped on 2/4/23 (the sindragosa third-phase-check
+-- 1s convention).
+local function frenzyTick(creature, guid)
+    if not frenzyFired[guid]
+            and creature:GetHealthPct() < 25
+            and not creature:HasAura(SPELL_DRAINED) then
+        creature:Talk(SAY_ENRAGE)
+        creature:CastSpell(creature, SPELL_FRENZY, true)
+        frenzyFired[guid] = true
+    end
+    if not frenzyFired[guid] then
+        schedule(guid, "frenzy", 1000, function()
+            frenzyTick(creature, guid)
+        end)
+    end
+end
+
 -- C++ boss_ichoronAI::JustEngagedWith (:103-107): Talk(SAY_AGGRO)
 -- kept; seeds the combat timers.
 local function ichoronEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    frenzyFired[guid] = nil
     schedule(guid, "volley", {10000, 15000}, function()
         waterBoltVolleyTick(creature, guid)
     end)
     schedule(guid, "blast", {6000, 9000}, function()
         waterBlastTick(creature, guid)
+    end)
+    schedule(guid, "frenzy", 1000, function()
+        frenzyTick(creature, guid)
     end)
 end
 
@@ -188,7 +233,9 @@ end
 -- scheduler (mirrored by cancelTimers); DoCast(me, SPELL_THREAT_PROC,
 -- true) — triggered self-cast.
 local function ichoronReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    frenzyFired[guid] = nil
     -- C++ Reset(): DoCast(me, SPELL_THREAT_PROC, true) is Reset-only
     -- (boss_ichoron.cpp). Alive-gated; the timer cancel rides the death
     -- leg deliberately.
@@ -199,7 +246,9 @@ end
 
 -- Shared timer wipe for events 2/4.
 local function ichoronCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    frenzyFired[guid] = nil
 end
 
 -- C++ KilledUnit (:162-165): player-gated Talk(SAY_SLAY) — the
