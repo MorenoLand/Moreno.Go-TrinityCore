@@ -2965,6 +2965,17 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			if motion.InCombat && motion.TargetGUID == targetGUID && motion.PetCommand == PetCommandAttack {
 				return true
 			}
+			// PetHandler.cpp:197-198: when the order switches victims (or
+			// the pet wasn't under a command-attack), the old attack stops
+			// first — Unit::AttackStop broadcasts SMSG_ATTACK_STOP with the
+			// old victim before the new AttackStart.
+			if oldVictim := motion.TargetGUID; oldVictim != 0 {
+				stopPkt := buildAttackStop(petGUID, oldVictim, false)
+				_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+				if s.server != nil {
+					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+				}
+			}
 			if s.server != nil {
 				s.server.onPetCommandAttack(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
 			}
@@ -2990,11 +3001,23 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			}
 			s.debug("pet attack command", "account", s.accountName, "pet", petGUID, "target", targetGUID)
 		case commandFollow:
+			// PetHandler.cpp:164: the follow arm runs Unit::AttackStop ahead
+			// of the follow move — Unit::AttackStop (Unit.cpp:5763-5789)
+			// emits SMSG_ATTACK_STOP (SendMeleeAttackStop broadcasts to the
+			// set) only when an attack was actually in progress, carrying
+			// the real victim; the old unconditional victim-0 owner-only
+			// packet never matched C++.
+			followVictim := motion.TargetGUID
 			if s.server != nil {
 				s.server.onPetCommandFollow(s.player.Map, s.player.InstanceID, petGUID)
 			}
-			stopPkt := buildAttackStop(petGUID, 0, false)
-			_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+			if followVictim != 0 {
+				stopPkt := buildAttackStop(petGUID, followVictim, false)
+				_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+				if s.server != nil {
+					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+				}
+			}
 			s.debug("pet follow command", "account", s.accountName, "pet", petGUID)
 		case commandStay:
 			// PetHandler.cpp:151-162: the stay command sets the stay state
@@ -3400,8 +3423,14 @@ func (s *session) petKnowsSpell(ctx context.Context, motion *creatureMotion, spe
 	return err == nil && found != 0
 }
 
-// maxPetTalentRank mirrors MAX_PET_TALENT_RANK: pet talents carry at most 5 ranks.
-const maxPetTalentRank = 5
+// maxPetTalentRank mirrors MAX_PET_TALENT_RANK (DBCEnums.h:433): a requested
+// pet talent rank must sit below 3 — Player::LearnPetTalent (Player.cpp:25578)
+// rejects rank >= 3, where Go previously accepted ranks 3-4.
+// maxPetTalentScanRanks mirrors MAX_TALENT_RANK (DBCEnums.h:432): the
+// SpellRank scan width when finding the pet's current max rank of a talent
+// (Player.cpp:25610). Kept separate from skills.go's typed maxTalentRank.
+const maxPetTalentRank = 3
+const maxPetTalentScanRanks = 5
 
 // learnPetTalent mirrors Player::LearnPetTalent (Player.cpp:25563-25702),
 // shared by CMSG_PET_LEARN_TALENT and CMSG_LEARN_PREVIEW_TALENTS_PET. The
@@ -3428,8 +3457,8 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 	if motion == nil {
 		return false
 	}
-	known := [maxPetTalentRank]bool{}
-	for i := 0; i < maxPetTalentRank; i++ {
+	known := [maxPetTalentScanRanks]bool{}
+	for i := 0; i < maxPetTalentScanRanks; i++ {
 		if tEntry.SpellRank[i] == 0 {
 			continue
 		}
@@ -3441,7 +3470,7 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 		}
 	}
 	curMax := -1
-	for i := maxPetTalentRank - 1; i >= 0; i-- {
+	for i := maxPetTalentScanRanks - 1; i >= 0; i-- {
 		if known[i] {
 			curMax = i
 			break

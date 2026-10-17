@@ -223,19 +223,26 @@ func (s *Server) onPetSetReaction(mapID, instanceID uint32, petGUID uint64, reac
 	if s == nil || petGUID == 0 {
 		return
 	}
+	var stopVictim uint64
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
 		motion.PetReact = reactState
 		if reactState == PetReactPassive {
-			// PetHandler.cpp:252-255: REACT_PASSIVE falls through to
-			// pet->AttackStop() unconditionally — a pet mid-command-attack
-			// disengages too, where the old PetCommand != Attack carve-out
-			// kept it attacking.
+			// PetHandler.cpp:263-264: the REACT_PASSIVE arm calls
+			// pet->AttackStop() — a pet mid-command-attack disengages
+			// too, where the old PetCommand != Attack carve-out kept it
+			// attacking. Unit::AttackStop (Unit.cpp:5763-5789) emits
+			// SMSG_ATTACK_STOP (broadcast to the set) only when an
+			// attack was actually in progress.
+			stopVictim = motion.TargetGUID
 			motion.TargetGUID = 0
 			motion.InCombat = false
 			motion.Moving = false
 		}
+	}
+	s.motionMu.Unlock()
+	if stopVictim != 0 {
+		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(petGUID, stopVictim, false), nil)
 	}
 }
 
