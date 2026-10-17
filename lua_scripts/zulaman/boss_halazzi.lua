@@ -16,7 +16,8 @@
 -- nil-target fallback). The 1s check timer drops to the SPLIT phase below
 -- 25%*(3-TransformCount) health: Talk(SAY_SPLIT), triggered 43142
 -- self-cast, then the human phase — shock at 10s (repeat {10s,15s},
--- flameshock 43303 on a random alive player) and summon totem 43302 at
+-- earthshock 43305 when the target is casting (player IsCasting bridge),
+-- else flameshock 43303, on a random alive player) and summon totem 43302 at
 -- 12s (repeat 20s). The 1s check timer merges below 20% boss health:
 -- Talk(SAY_MERGE), merge walk, then back to lynx (health reset to
 -- 600000-150000*TransformCount, C++-exact fractions) or to the ENRAGE
@@ -38,9 +39,10 @@
 -- on the bridge, so the per-cycle health reset is mapped as
 -- SetHealth(max - max/4*TransformCount) — the exact C++ fractions
 -- (600000-150000*count) on the engine's fixed max; no instance-script
--- model — admission only via the luaBossAI shim; no cast-state model, so
--- the shock target's IsNonMeleeSpellCast check always takes the
--- flameshock branch (earthshock unreachable); the saber-lash defense
+-- model — admission only via the luaBossAI shim; the shock target's
+-- IsNonMeleeSpellCast check uses the live player IsCasting bridge
+-- (Go activeCast is the cast-bar phase, like C++'s non-melee check);
+-- the saber-lash defense
 -- comment arm is dead C++ (not modeled); AttackStart's merge-phase
 -- suppression and the lynx's NON_ATTACKABLE AttackStart gate have no
 -- bridge (engine combat is continuous).
@@ -193,13 +195,17 @@ local function onSaberLash(creature, guid)
 end
 
 -- C++ shock (human/enrage phases): random target; earthshock when the
--- target is casting, flameshock otherwise. No cast-state model — the
--- flameshock branch always runs. The {10s,15s} re-arm lives inside the
--- if(target) leg (nil target retries next tick with no re-arm).
+-- target is casting (player IsCasting bridge), flameshock otherwise.
+-- The {10s,15s} re-arm lives inside the if(target) leg (nil target
+-- retries next tick with no re-arm).
 local function onShock(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
-        creature:CastSpell(target, SPELL_FLAMESHOCK)
+        if target:IsCasting() then
+            creature:CastSpell(target, SPELL_EARTHSHOCK)
+        else
+            creature:CastSpell(target, SPELL_FLAMESHOCK)
+        end
         schedule(timers, guid, "shock", math.random(10000, 15000), function()
             onShock(creature, guid)
         end)

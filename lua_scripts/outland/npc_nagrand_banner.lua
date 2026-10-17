@@ -106,8 +106,10 @@
 -- escort / quest-accept / summon / movement bridges — the
 -- maghar and kurenai captive AIs documented only; no
 -- ConditionScript bridge — condition_nagrand_banner
--- documented only; no cast-state bridge — the TaskScheduler
--- validator and the spellbinder interrupt arm unmodeled;
+-- documented only; the TaskScheduler validator and the spellbinder
+-- interrupt arm stay unmodeled with the documented-only AI (the victim
+-- is a player, so the cast-state check itself is bridgeable via
+-- player IsCasting — not a no-bridge case);
 -- no flee bridge — the spellbinder 15% DoFleeToGetAssistance
 -- latch unmodeled; no SpellHit bridge — the base banner
 -- AI's bannered latch (SPELL_PLANT_WARMAUL_OGRE_BANNER
