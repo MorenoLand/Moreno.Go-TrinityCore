@@ -71,6 +71,19 @@ type VehicleKit struct {
 	Accessories          []VehicleAccessory
 	InstalledAccessories []uint64
 	LastShootPos         [3]float32
+	X, Y, Z, Orientation float32
+}
+
+// setPosition records the vehicle base's canonical world position.
+// Reference: Unit::UpdatePosition (Unit.cpp:13395-13424) — the driven
+// vehicle is the mover, so its packets drive the base's position.
+func (v *VehicleKit) setPosition(x, y, z, o float32) {
+	if v == nil {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.X, v.Y, v.Z, v.Orientation = x, y, z, o
 }
 
 type vehicleKitKey struct {
@@ -1025,6 +1038,20 @@ func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []
 // SetCharmedBy is gated on GetTypeId() == TYPEID_UNIT). A player vehicle
 // base never charms its controller, so its dismiss packet dies at the C++
 // gate the same way.
+
+// moverGUID returns the GUID the client's movement packets carry: the
+// vehicle GUID while driving a control seat (mover =
+// _player->GetUnitBeingMoved(), MovementHandler.cpp:261), else the player.
+func (s *session) moverGUID() uint64 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if s.controlsVehicle() {
+		return s.player.VehicleGUID
+	}
+	return s.playerGUID
+}
+
 func (s *session) controlsVehicle() bool {
 	if s == nil || s.player == nil || s.server == nil || s.player.VehicleGUID == 0 {
 		return false

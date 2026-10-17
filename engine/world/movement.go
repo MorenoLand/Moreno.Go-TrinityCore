@@ -273,12 +273,26 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.debug("movement rejected", "account", s.accountName, "reason", "malformed guid", "opcode", opcode)
 		return true
 	}
-	if guid != s.playerGUID {
+	// Mover resolution (MovementHandler.cpp:261): the tamper check runs
+	// against mover = _player->GetUnitBeingMoved(), not the player. Boarding
+	// a CAN_CONTROL seat charms the creature base (CHARM_TYPE_VEHICLE,
+	// Unit.cpp:11878, gated on a unit base, Vehicle.cpp:871-873) and hands
+	// the client its control (Player::SetClientControl ->
+	// SetMovedUnit(vehicle), Player.cpp:24239-24272), so the driver's
+	// movement packets carry the vehicle GUID. The old player-GUID-only
+	// check rejected every one of them, freezing driven vehicles
+	// server-side: the vehicle never moved and passengers never relocated.
+	vehicleMover := s.controlsVehicle()
+	moverGUID := s.playerGUID
+	if vehicleMover {
+		moverGUID = s.player.VehicleGUID
+	}
+	if guid != moverGUID {
 		prefix := payload
 		if len(prefix) > 24 {
 			prefix = prefix[:24]
 		}
-		s.debug("movement rejected", "account", s.accountName, "reason", "mover mismatch", "guid", guid, "expected", s.playerGUID, "prefix", hex.EncodeToString(prefix))
+		s.debug("movement rejected", "account", s.accountName, "reason", "mover mismatch", "guid", guid, "expected", moverGUID, "prefix", hex.EncodeToString(prefix))
 		return true
 	}
 	info, err := readMovementInfo(b)
@@ -374,7 +388,9 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// internal to Go's vehicle-mover model.
 	broadcastInfo := info
 	vehiclePassenger := false
-	if s.player.VehicleGUID != 0 && s.server != nil {
+	// The vehicle-mover path skips the passenger orientation leg: the
+	// packet describes the vehicle, not the driver.
+	if !vehicleMover && s.player.VehicleGUID != 0 && s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if _, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID); seatInfo != nil {
 				if seatInfo.HasFlag(wotlk.VehicleSeatFlagAllowTurning) {
@@ -408,7 +424,35 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// update, no transport attachment, no passenger relocation, no duel
 	// bounds. The passenger rides the vehicle; the client-reported
 	// position is rebroadcast below but never becomes canonical.
-	if !vehiclePassenger {
+	if vehicleMover {
+		// The vehicle is the mover (MovementHandler.cpp:261-439 with
+		// plrMover == null): the vehicle block's early return does not
+		// apply (mover->GetVehicle() is null for the base itself), so the
+		// vehicle takes UpdatePosition — CreatureRelocation fans the move
+		// out to every passenger (Map.cpp:1136) — and every plrMover-gated
+		// arm below (sit-state clear, fall info, undermap void damage,
+		// transport attach, swim state) is skipped.
+		// MovementHandler.cpp:345-349 — the mover is the vehicle itself
+		// (GetTransport/GetVehicle both null), so a client ONTRANSPORT
+		// flag on its packets is stripped: no gameobject transport backs it.
+		if info.Flags&movementOnTransport != 0 {
+			info.Flags &^= movementOnTransport
+			info.Transport = nil
+			broadcastInfo.Flags &^= movementOnTransport
+			broadcastInfo.Transport = nil
+		}
+		if s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+				kit.setPosition(info.X, info.Y, info.Z, info.Orientation)
+			}
+			s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.player.VehicleGUID, info.X, info.Y, info.Z, info.Orientation)
+		}
+		// The driver rides the vehicle: zone and duel state follow the
+		// driver's relocated position. Go-model compensation — C++ runs no
+		// zone arm in this handler.
+		s.updateZoneAndArea(ctx, false)
+		s.checkDuelBounds()
+	} else if !vehiclePassenger {
 		// Unit::InterruptMovementBasedAuras (Unit.cpp:562-570): every world
 		// tick C++ strips auras with AURA_INTERRUPT_FLAG_TURNING when the
 		// player's orientation changed, and AURA_INTERRUPT_FLAG_MOVE when the
@@ -537,13 +581,17 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// C++ keeps InWater when the reported position is still under water
 	// (jumping under water with the flag absent) — no bridge, Go has no
 	// water-volume model. START_SWIM/STOP_SWIM carry no override in C++.
-	wasSwimming := s.isSwimming
-	isSwimming := info.Flags&movementSwimming != 0
-	s.isSwimming = isSwimming
-	if isSwimming && !wasSwimming {
-		s.handleEnterSwimming()
-	} else if !isSwimming && wasSwimming {
-		s.handleExitSwimming()
+	// The swim arm is plrMover-gated in C++ (MovementHandler.cpp:366-369);
+	// a driven vehicle's packets never touch the driver's swim state.
+	if !vehicleMover {
+		wasSwimming := s.isSwimming
+		isSwimming := info.Flags&movementSwimming != 0
+		s.isSwimming = isSwimming
+		if isSwimming && !wasSwimming {
+			s.handleEnterSwimming()
+		} else if !isSwimming && wasSwimming {
+			s.handleExitSwimming()
+		}
 	}
 
 	// In flight cancels dark water / fatigue (TC Player.cpp:24539)
@@ -552,20 +600,24 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 
 	// Fall damage generation and parachute interrupts (TC MovementHandler.cpp:359-365)
-	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
-		s.handleFall(ctx, info)
-	}
-	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM) {
-		s.removeAurasWithInterruptFlags(0x02000000) // AURA_INTERRUPT_FLAG_LANDING
+	// HandleFall is plrMover-gated; the LANDING-aura strip hits the mover —
+	// the vehicle, which has no aura model (documented gap) — never the driver.
+	if !vehicleMover {
+		if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
+			s.handleFall(ctx, info)
+		}
+		if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM) {
+			s.removeAurasWithInterruptFlags(0x02000000) // AURA_INTERRUPT_FLAG_LANDING
+		}
 	}
 	// Player::UpdateFallInformationIfNeed runs only on the non-vehicle path
 	// (after UpdatePosition, MovementHandler.cpp:404-406); a vehicle
 	// passenger keeps the fall state the vehicle controller's packets set.
-	if !vehiclePassenger {
+	if !vehicleMover && !vehiclePassenger {
 		s.updateFallInformationIfNeed(info, uint16(opcode))
 	}
 
-	if !vehiclePassenger && (opcode == uint32(protocol.OpcodeMSG_MOVE_STOP) || opcode == uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT) || opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND)) {
+	if !vehicleMover && !vehiclePassenger && (opcode == uint32(protocol.OpcodeMSG_MOVE_STOP) || opcode == uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT) || opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND)) {
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 				"UPDATE characters SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ?, zone = ? WHERE guid = ?",
@@ -605,7 +657,12 @@ func (s *session) handleSetActiveMover(payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	s.debug("active mover received", "account", s.accountName, "guid", guid, "expected", s.playerGUID)
+	// MovementHandler.cpp:602-607 — the client names the active mover; C++
+	// only logs a mismatch against GetUnitBeingMoved() (the vehicle while
+	// driving) and applies nothing.
+	if moverGUID := s.moverGUID(); guid != moverGUID {
+		s.debug("active mover mismatch", "account", s.accountName, "guid", guid, "expected", moverGUID)
+	}
 	return true
 }
 
@@ -1147,7 +1204,9 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 	guid, _ := b.ReadPackedGUID()
 	_, _ = b.ReadU32() // ack index
 	info, err := readMovementInfo(b)
-	if err != nil || guid != s.playerGUID {
+	// MovementHandler.cpp:553-560 — the check runs against the mover
+	// (GetUnitBeingMoved), so a driver acks with the vehicle GUID.
+	if err != nil || guid != s.moverGUID() {
 		return true
 	}
 	// MovementHandler.cpp:553-576 — the acked info becomes m_movementInfo
@@ -1331,7 +1390,9 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	}
 	r := protocol.NewReader(payload)
 	moverGUID, err := r.ReadPackedGUID()
-	if err != nil || moverGUID != s.playerGUID {
+	// MovementHandler.cpp:626-651 — the check runs against the mover
+	// (m_unitMovedByMe), so a driver sends the vehicle GUID here.
+	if err != nil || moverGUID != s.moverGUID() {
 		return true
 	}
 	timeSkipped, err := r.ReadU32()
@@ -1343,7 +1404,7 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	s.lastMovementInfo.Time += timeSkipped
 	s.movementMu.Unlock()
 	buf := protocol.NewBuffer(16)
-	buf.WritePackedGUID(s.playerGUID)
+	buf.WritePackedGUID(moverGUID)
 	buf.WriteU32(timeSkipped)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s)
