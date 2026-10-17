@@ -107,6 +107,12 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 			var mGuid int64
 			if rows.Scan(&mGuid, &m.name, &m.class, &m.level, &m.weekGames, &m.weekWins, &m.seasonGames, &m.seasonWins, &m.personalRating) == nil {
 				m.guid = uint64(mGuid)
+				if m.name == "" {
+					// C++ LoadMembersFromDB deletes members whose character
+					// row is missing (ArenaTeam.cpp:248-253) instead of
+					// listing a ghost row, so skip them here too.
+					continue
+				}
 				members = append(members, m)
 			}
 		}
@@ -374,15 +380,17 @@ func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) boo
 	}
 
 	// Only the other faction joins when cross-faction interaction is on ==
-	// C++ GetCharacterTeamByGuid(arenaTeam->GetCaptain()).
-	if !s.server.Config.AllowTwoSideInteractionGuild {
-		var captainRace uint8
-		if err := cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", captainGUID).Scan(&captainRace); err == nil {
-			if teamForRace(s.player.Race) != teamForRace(captainRace) {
-				s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamNotAllied)
-				return true
-			}
-		}
+	// C++ GetCharacterTeamByGuid(arenaTeam->GetCaptain()). On a cache miss the
+	// C++ returns 0 (TEAM_ALLIANCE, CharacterCache.cpp:227-228), so fail the
+	// DB arm to the same default instead of skipping the gate.
+	var captainRace uint8
+	captainTeam := uint32(0)
+	if err := cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", captainGUID).Scan(&captainRace); err == nil {
+		captainTeam = teamForRace(captainRace)
+	}
+	if !s.server.Config.AllowTwoSideInteractionGuild && teamForRace(s.player.Race) != captainTeam {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamNotAllied)
+		return true
 	}
 
 	// Team full == C++ AddMember GetMembersSize() >= GetType() * 2.
@@ -471,8 +479,10 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 
 	// Disallow leave team while in arena == C++ Player::InArena(). Go keeps no
 	// live-instance model; an active arena queue entry past wait-queue is the
-	// port-arm's established proxy. Only the in-progress leg maps to InArena —
-	// invited-but-not-ported players fall to the locked arm below, == C++.
+	// port-arm's established proxy. InProgress AND WaitLeave both map to
+	// InArena (Player.cpp:23647-23652: inside the instance through the
+	// wait-leave window) — invited-but-not-ported players fall to the locked
+	// arm below, == C++.
 	inArena := false
 	invited := false
 	for i := range s.bgQueues {
@@ -480,7 +490,7 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 		if !e.Active || !e.IsArena {
 			continue
 		}
-		if e.Status == BGStatusInProgress {
+		if e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave {
 			inArena = true
 		}
 		if e.ArenaType == uint8(aType) && e.InstanceID != 0 {
