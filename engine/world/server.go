@@ -5399,22 +5399,21 @@ func nextDailyQuestResetTime(now time.Time) time.Time {
 }
 
 func (s *session) handlePlayedTime(ctx context.Context, payload []byte) bool {
-	reader := protocol.NewReader(payload)
-	trigger, err := reader.ReadU8()
-	if err != nil {
+	// Opcodes.cpp:591 STATUS_LOGGEDIN — the handler is unreachable without a
+	// logged-in player, so there is no pre-login DB-fallback arm; C++ never
+	// answers this opcode before login.
+	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	var total, level int64
-	if s.playerLoaded && s.player != nil {
-		s.updatePlayedTime(time.Now())
-		total, level = int64(s.player.TotalPlayedTime), int64(s.player.LevelPlayedTime)
-	} else {
-		err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT totaltime, leveltime FROM characters WHERE guid = ? AND account = ?", s.playerGUID, s.accountID).Scan(&total, &level)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			s.debug("played time query failed", "account", s.accountName, "error", err)
-			return true
-		}
+	reader := protocol.NewReader(payload)
+	// CharacterPackets.h:117 — TriggerScriptEvent defaults to false and the
+	// reply goes out even on a truncated packet.
+	trigger, err := reader.ReadU8()
+	if err != nil {
+		trigger = 0
 	}
+	s.updatePlayedTime(time.Now())
+	total, level := int64(s.player.TotalPlayedTime), int64(s.player.LevelPlayedTime)
 	packet := protocol.NewBuffer(9)
 	packet.WriteU32(uint32(total))
 	packet.WriteU32(uint32(level))

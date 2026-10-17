@@ -3328,8 +3328,34 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if castFlags&0x02 != 0 {
-		_, _ = r.ReadF32()
-		_, _ = r.ReadF32()
+		// HandleClientCastFlags (SpellHandler.cpp:50-72, via
+		// PetHandler.cpp:775-778): elevation/speed feed
+		// SelectImplicitTrajTargets (Spell.cpp:1626); the optional embedded
+		// movement block routes through HandleMovementOpcodes so the
+		// position update is not lost.
+		if target.TrajElevation, err = r.ReadF32(); err != nil {
+			return true
+		}
+		if target.TrajSpeed, err = r.ReadF32(); err != nil {
+			return true
+		}
+		var hasMovementData uint8
+		if hasMovementData, err = r.ReadU8(); err != nil {
+			return true
+		}
+		if hasMovementData != 0 {
+			var moveOpcode uint32
+			if moveOpcode, err = r.ReadU32(); err != nil {
+				return true
+			}
+			var movePayload []byte
+			if movePayload, err = r.Read(r.Remaining()); err != nil {
+				return true
+			}
+			if !s.handleMovement(ctx, moveOpcode, movePayload) {
+				return false
+			}
+		}
 	}
 	if spellID == 0 || s.server == nil || s.server.Data == nil || s.player == nil {
 		return true

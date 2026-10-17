@@ -1244,6 +1244,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	var totemGUID uint64
 	var buffSpell uint32
 	var creatingSpellID uint32
+	var totemEntry uint32
 	var mapID, instanceID uint32
 	matched := false
 
@@ -1261,6 +1262,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 				totemGUID = totem.TotemGUID
 				buffSpell = totem.BuffSpell
 				creatingSpellID = totem.SpellID
+				totemEntry = totem.Entry
 				mapID, instanceID = totem.Map, totem.InstanceID
 				matched = true
 				totem.mu.Unlock()
@@ -1286,6 +1288,12 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 
 	if buffSpell > 0 && s.player != nil {
 		s.removeAura(buffSpell)
+	}
+
+	// Totem::UnSummon (Totem.cpp): destroying a Sentry Totem (entry 3968)
+	// strips the owner's Sentry Totem aura (spell 6495, Totem.h:30-32).
+	if totemEntry == 3968 && s.player != nil {
+		s.removeAura(6495)
 	}
 
 	// Totem::UnSummon (Totem.cpp:150-162): the totem's aura leaves every

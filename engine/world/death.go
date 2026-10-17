@@ -2124,7 +2124,9 @@ func (s *session) handleSelfRes(ctx context.Context) bool {
 		}
 	}
 	s.player.SelfResSpell = 0
-	s.sendPlayerUpdate()
+	// SpellHandler.cpp:602-614 sends no packet here: cast, clear the field,
+	// done. The field clear rides the next periodic update like C++'s
+	// SetUInt32Value.
 	return true
 }
 
@@ -2515,7 +2517,12 @@ func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
 	if s.isInFlight() {
 		return true
 	}
-	if s.inWintergraspBattlefield() {
+	// MiscHandler.cpp:1508-1512 + BattlefieldMgr.cpp:121-133: the gate is
+	// the zone id having a registered battlefield — Battlefield::m_IsEnabled
+	// is not consulted (PlayerAskToLeave teleports unconditionally,
+	// Battlefield.cpp:382-387), so a GM-disabled Wintergrasp still asks the
+	// player to leave instead of repopping in place.
+	if s.player.Zone == WGZoneID {
 		s.teleportTo(WGMapID, 5804.1499, 624.7710, 647.7670, 1.64)
 		return true
 	}
