@@ -428,7 +428,12 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	}
 
 	if !foundSpell {
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true) // C++ FailReason::Unavailable
+		// C++ HandleTrainerBuySpellOpcode + Trainer::TeachSpell (NPCHandler.cpp:137-140,
+		// Trainer.cpp:80-93): a GetTrainer(entry) miss returns with no packet at all —
+		// only the GetSpell(spellId) miss sends SMSG_TRAINER_BUY_FAILED(Unavailable).
+		if foundTrainer {
+			_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true) // C++ FailReason::Unavailable
+		}
 		s.debug("trainer spell not found", "account", s.accountName, "trainer", trainerGUID, "entry", creatureEntry, "spell", spellID)
 		return true
 	}

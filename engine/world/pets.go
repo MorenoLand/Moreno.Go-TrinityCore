@@ -2584,6 +2584,38 @@ func (s *session) queryUnslottedStablePets(ctx context.Context, cdb *sql.DB) ([]
 	return out, rows.Err()
 }
 
+// summonStabledPet spawns the given character_pet row as the player's active
+// pet, mirroring Pet::LoadPetFromDB's world spawn (Pet.cpp:351 SetMinion,
+// :356 AddToMap) plus PetSpellInitialize for the stable swap/unstable
+// handlers (NPCHandler.cpp:686+, :536+). The row must already sit in slot 0;
+// the stat derivation matches the login summon (characters.go).
+func (s *session) summonStabledPet(ctx context.Context, cdb *sql.DB, petNumber uint32) {
+	var petID, entry, modelID, level, curHealth, curMana, petType, reactState int64
+	var petName string
+	if err := cdb.QueryRowContext(ctx, "SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(PetType, 0), COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petNumber).Scan(&petID, &entry, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState); err != nil {
+		return
+	}
+	petLevel := uint32(level)
+	maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), petLevel, uint8(petType), uint32(petID))
+	if maxHP == 0 {
+		maxHP = uint32(curHealth)
+	}
+	if maxMP == 0 {
+		maxMP = uint32(curMana)
+	}
+	if curHealth > int64(maxHP) {
+		curHealth = int64(maxHP)
+	}
+	if curMana > int64(maxMP) {
+		curMana = int64(maxMP)
+	}
+	s.learnPetFamilyPassives(ctx, uint32(petID), uint32(entry))
+	s.spawnPet(ctx, uint32(petID), uint32(entry), petName, petLevel, uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
+	if s.player.PetGUID != 0 {
+		_ = s.sendTalentsInfo(true)
+	}
+}
+
 // handleStablePet processes CMSG_STABLE_PET (0x270).
 // Reference: WorldSession::HandleStablePet (NPCHandler.cpp:410): a living
 // player stables its active hunter pet (slot 0) into the first free stable
@@ -2652,6 +2684,11 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 			s.sendPetStableResult(stableErrStable)
 			return true
 		}
+		// NPCHandler.cpp:424 (HandleStablePet): RemovePet despawns the
+		// stabled pet (destroy object, SMSG_PET_SPELLS clear) and saves it
+		// with the stable-slot mode; unsummonPet persists the live stats to
+		// slot 0 and tears down the entity, then the row moves below.
+		s.unsummonPet(ctx, petSaveAsCurrent)
 		if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", freeSlot, time.Now().Unix(), s.playerGUID); err != nil {
 			s.sendPetStableResult(stableErrStable)
 			return true
@@ -2741,6 +2778,11 @@ func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool 
 			s.sendPetStableResult(stableErrStable)
 			return true
 		}
+		// NPCHandler.cpp:659 (HandleStableSwapPet): RemovePet despawns the
+		// displaced pet and saves it into the requested stabled slot;
+		// unsummonPet persists the live stats to slot 0 and tears down the
+		// entity, then the row moves to the stabled slot below.
+		s.unsummonPet(ctx, petSaveAsCurrent)
 		if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", stabledSlot, time.Now().Unix(), s.playerGUID); err != nil {
 			s.sendPetStableResult(stableErrStable)
 			return true
@@ -2761,10 +2803,23 @@ func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool 
 			return true
 		}
 	}
-	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ? AND slot > 0 AND slot < 100", time.Now().Unix(), s.playerGUID, petNumber); err != nil {
+	result, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ? AND slot > 0 AND slot < 100", time.Now().Unix(), s.playerGUID, petNumber)
+	if err != nil {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
+	// NPCHandler.cpp:686-699 (HandleStableSwapPet): the LoadPetFromDB
+	// failure arm answers STABLE_ERR_STABLE; the Go DB model surfaces it as
+	// zero affected rows on the slot-0 write.
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	// NPCHandler.cpp:686+: LoadPetFromDB spawns the swapped-in pet into the
+	// world (Pet.cpp:351 SetMinion, :356 AddToMap) and re-initializes its
+	// spells; summonStabledPet mirrors the login summon for the new slot-0
+	// row.
+	s.summonStabledPet(ctx, cdb, petNumber)
 	s.sendPetStableResult(stableSuccessUnslot)
 	return true
 }
@@ -2819,6 +2874,11 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 			s.sendPetStableResult(stableErrStable)
 			return true
 		}
+		// NPCHandler.cpp:505 (HandleUnstablePet): RemovePet despawns the
+		// current pet and saves it into the requested stabled slot;
+		// unsummonPet persists the live stats to slot 0 and tears down the
+		// entity, then the row moves to the stabled slot below.
+		s.unsummonPet(ctx, petSaveAsCurrent)
 		if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", stabledSlot, time.Now().Unix(), s.playerGUID); err != nil {
 			s.sendPetStableResult(stableErrStable)
 			return true
@@ -2851,6 +2911,11 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
+	// NPCHandler.cpp:536+: LoadPetFromDB spawns the un-stabled pet into the
+	// world (Pet.cpp:351 SetMinion, :356 AddToMap) and re-initializes its
+	// spells; summonStabledPet mirrors the login summon for the new slot-0
+	// row.
+	s.summonStabledPet(ctx, cdb, petNumber)
 	s.sendPetStableResult(stableSuccessUnslot)
 	return true
 }

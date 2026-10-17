@@ -589,6 +589,13 @@ func (s *session) tryMergeStacks(ctx context.Context, srcItemGUID, srcBagKey int
 	if srcItemGUID == 0 || dstItemGUID == 0 || srcItemGUID == dstItemGUID {
 		return false, nil
 	}
+	// Player::CanStoreItem (Player.cpp:10713-10719) refuses a loot-generated
+	// source and Item::CanBeMergedPartlyWith (Item.cpp:782-784) a
+	// loot-generated target: the merge simply does not happen and the
+	// caller falls through to the swap arms.
+	if s.server.containerLootGenerated(uint64(srcItemGUID)) || s.server.containerLootGenerated(uint64(dstItemGUID)) {
+		return false, nil
+	}
 	db := s.server.CharactersStore.DB
 	if db == nil {
 		return false, nil
@@ -864,7 +871,10 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 	if err != nil {
 		return true
 	}
-	if dstSlot >= equipSlotEnd {
+	// HandleAutoEquipItemSlotOpcode (ItemHandler.cpp:112-114): the cheat
+	// gate is Player::IsEquipmentPos(INVENTORY_SLOT_BAG_0, dstslot), which
+	// covers equipment slots 0..18 AND bag slots 19..22 — not 0..18 alone.
+	if dstSlot >= invSlotBagEnd {
 		return true
 	}
 	db := s.server.CharactersStore.DB
@@ -886,6 +896,13 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 		return true
 	}
 	if srcBag == 0 && srcSlot == int64(dstSlot) {
+		return true
+	}
+	// Player::SwapItem (Player.cpp:13161-13164), reached via
+	// HandleAutoEquipItemSlotOpcode (ItemHandler.cpp:121): equipping while
+	// dead answers EQUIP_ERR_YOU_ARE_DEAD.
+	if s.player.Health == 0 {
+		s.sendEquipError(equipErrYouAreDead, uint64(itemGUID))
 		return true
 	}
 	var invType int64
@@ -911,6 +928,14 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 	}
 	var dstItemGUID int64
 	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, dstSlot).Scan(&dstItemGUID)
+	// Player::SwapItem (Player.cpp:13189-13213): displacing a non-empty bag
+	// answers EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS unless the dragged item
+	// itself sits at a bag position (it can trade places with the bag).
+	if dstItemGUID != 0 && s.itemIsNonemptyBag(ctx, uint64(dstItemGUID)) &&
+		!(srcBag == 0 && ((srcSlot >= int64(invSlotBagStart) && srcSlot < int64(invSlotBagEnd)) || (srcSlot >= 67 && srcSlot <= 73))) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
+		return true
+	}
 	s.swapInventoryCoordinates(ctx, itemGUID, srcBag, srcSlot, dstItemGUID, 0, int64(dstSlot))
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
@@ -935,15 +960,19 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 	}
 	// HandleSwapInvItemOpcode (ItemHandler.cpp:90-101): slot validity is
 	// Player::IsValidPos(INVENTORY_SLOT_BAG_0, slot, true) — bag-0 slots
-	// 0..73 only — and it fires BEFORE SwapItem's empty-source arm: an
-	// invalid source slot answers EQUIP_ERR_ITEM_NOT_FOUND, an invalid
-	// destination slot EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT (null item guids
-	// == the C++ nullptr, nullptr).
-	if srcSlot > 73 {
+	// 0..73 plus the keyring 86..117 — and it fires BEFORE SwapItem's
+	// empty-source arm: an invalid source slot answers
+	// EQUIP_ERR_ITEM_NOT_FOUND, an invalid destination slot
+	// EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT (null item guids == the C++
+	// nullptr, nullptr).
+	validSwapSlot := func(sl uint8) bool {
+		return sl <= 73 || (sl >= invSlotKeyringStart && sl < invSlotKeyringEnd)
+	}
+	if !validSwapSlot(srcSlot) {
 		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
-	if dstSlot > 73 {
+	if !validSwapSlot(dstSlot) {
 		s.sendEquipError(equipErrItemDoesntGoToSlot, 0)
 		return true
 	}
@@ -975,28 +1004,76 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Check bag moves: the non-empty-bag legs of Player::CanUnequipItem
+	// (Player.cpp:11656-58) are swap-gated (Player.cpp:13166-79,
+	// 13189-99) — a non-empty bag may leave its bag slot for another bag
+	// position, or trade places with an empty bag.
+	isBagSlot := func(sl uint8) bool {
+		return (sl >= invSlotBagStart && sl < invSlotBagEnd) || (sl >= 67 && sl <= 73)
+	}
+
+	// Player::SwapItem (Player.cpp:13166-13179): the SRC CanUnequipItem
+	// legs (missing template, generated loot, combat/arena) run before the
+	// bag arms.
+	if srcSlot < equipSlotEnd || isBagSlot(srcSlot) {
+		var srcEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&srcEntry)
+		if msg := s.canUnequipLegs(ctx, srcItemGUID, srcEntry); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(srcItemGUID))
+			return true
+		}
+	}
+	dstIsEmptyBag := dstItemGUID != 0 && s.itemIsBag(ctx, uint64(dstItemGUID)) && s.isBagEmpty(ctx, dstItemGUID)
+	if isBagSlot(srcSlot) && !isBagSlot(dstSlot) && !dstIsEmptyBag && s.itemIsNonemptyBag(ctx, uint64(srcItemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
+		return true
+	}
+	// Player::SwapItem (Player.cpp:13189-13199): the DST CanUnequipItem legs.
+	if dstItemGUID != 0 && (dstSlot < equipSlotEnd || isBagSlot(dstSlot)) {
+		var dstEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&dstEntry)
+		if msg := s.canUnequipLegs(ctx, dstItemGUID, dstEntry); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(dstItemGUID))
+			return true
+		}
+	}
+	srcIsEmptyBag := srcItemGUID != 0 && s.itemIsBag(ctx, uint64(srcItemGUID)) && s.isBagEmpty(ctx, srcItemGUID)
+	if isBagSlot(dstSlot) && !isBagSlot(srcSlot) && !srcIsEmptyBag && s.itemIsNonemptyBag(ctx, uint64(dstItemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
+		return true
+	}
+
+	// Player::CanStoreItem_InSpecificSlot (Player.cpp:10518): a non-empty
+	// bag cannot move into a slot that is not a bag position.
+	if !isBagSlot(dstSlot) && s.itemIsNonemptyBag(ctx, uint64(srcItemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
+		return true
+	}
+	if !isBagSlot(srcSlot) && s.itemIsNonemptyBag(ctx, uint64(dstItemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
+		return true
+	}
+
+	// Player::SwapItem (Player.cpp:13245-13293): the merge/fill attempt runs
+	// after the DST unequip checks — never before them.
 	if srcItemGUID != 0 && dstItemGUID != 0 {
 		if merged, _ := s.tryMergeStacks(ctx, srcItemGUID, 0, srcSlot, dstItemGUID, 0, dstSlot); merged {
 			s.debug("inventory items merged", "account", s.accountName, "src", srcSlot, "dst", dstSlot)
 			return true
 		}
 	}
-	// Check bag moves: un-equipping or moving an equipped bag (19..22) or bank bag (67..73) requires it to be empty
-	isBagSlot := func(sl uint8) bool {
-		return (sl >= invSlotBagStart && sl < invSlotBagEnd) || (sl >= 67 && sl <= 73)
-	}
 
-	if isBagSlot(srcSlot) && srcItemGUID != 0 {
-		if !s.isBagEmpty(ctx, srcItemGUID) {
-			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
-			return true
-		}
+	// Player::CanStoreItem (Player.cpp:10713-10719): a loot-generated item
+	// moved through the inventory/bank move checks answers
+	// EQUIP_ERR_ALREADY_LOOTED (equipment/bag positions were covered by the
+	// CanUnequipItem legs above).
+	if s.server.containerLootGenerated(uint64(srcItemGUID)) {
+		s.sendEquipError(equipErrAlreadyLooted, uint64(srcItemGUID))
+		return true
 	}
-	if isBagSlot(dstSlot) && dstItemGUID != 0 {
-		if !s.isBagEmpty(ctx, dstItemGUID) {
-			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
-			return true
-		}
+	if dstItemGUID != 0 && s.server.containerLootGenerated(uint64(dstItemGUID)) {
+		s.sendEquipError(equipErrAlreadyLooted, uint64(dstItemGUID))
+		return true
 	}
 	// If putting item into a bag slot (19..22 or 67..73), ensure it is a bag container and bank slot is purchased
 	if isBagSlot(dstSlot) && srcItemGUID != 0 {
@@ -1084,6 +1161,24 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 	}
 
 	s.swapInventoryCoordinates(ctx, srcItemGUID, 0, int64(srcSlot), dstItemGUID, 0, int64(dstSlot))
+	// Player::SwapItem (Player.cpp:13216-13250): the move case (empty
+	// destination) adjusts quest counts across the bank boundary — out of
+	// the bank adds, into the bank removes. Equipment/bag-slot destinations
+	// (Player.cpp:13240-13250) change nothing.
+	if dstItemGUID == 0 && dstSlot >= invSlotBagEnd {
+		srcBank := srcSlot >= 39 && srcSlot < 74
+		dstBank := dstSlot >= 39 && dstSlot < 74
+		if dstBank || srcBank {
+			var moveEntry, moveCount int64
+			if db.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&moveEntry, &moveCount) == nil && moveEntry != 0 {
+				if dstBank {
+					s.adjustQuestItemCount(ctx, uint32(moveEntry), uint32(moveCount), false)
+				} else {
+					s.adjustQuestItemCount(ctx, uint32(moveEntry), uint32(moveCount), true)
+				}
+			}
+		}
+	}
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
@@ -1104,6 +1199,30 @@ func interiorBagSlot(bag uint8) int64 {
 		return int64(bag)
 	}
 	return -1
+}
+
+// swapSlotValid mirrors the slot half of Player::IsValidPos(bag, slot, true)
+// (Player.cpp:10185-10231) for the swap handlers: bag-0 slots must fall in
+// the equipment/bag/backpack/keyring/bank ranges, interior slots below the
+// bag's ContainerSlots. The bag-byte half is already covered by
+// inventoryBagKey.
+func (s *session) swapSlotValid(ctx context.Context, bagKey int64, slot uint8) bool {
+	if bagKey == 0 {
+		return slot < equipSlotEnd ||
+			(slot >= invSlotBagStart && slot < invSlotBagEnd) ||
+			(slot >= invSlotItemStart && slot < invSlotItemEnd) ||
+			(slot >= 39 && slot < 67) ||
+			(slot >= 67 && slot < 74) ||
+			(slot >= invSlotKeyringStart && slot < invSlotKeyringEnd)
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
+	}
+	var bagSlots int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, bagKey).Scan(&bagSlots); err != nil || bagSlots <= 0 {
+		return true
+	}
+	return int64(slot) < bagSlots
 }
 
 func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
@@ -1135,6 +1254,21 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	}
 
 	if bagKeyA == bagKeyB && slotSlotA == slotSlotB {
+		return true
+	}
+
+	// Player::IsValidPos (Player.cpp:10185-10231): the slot byte must name
+	// a real position — bag-0 slots outside the equipment/bag/backpack/
+	// keyring/bank ranges, and interior slots past the bag's ContainerSlots,
+	// are rejected by the handler (ItemHandler.cpp:143-156) before
+	// Player::SwapItem runs: source side ITEM_NOT_FOUND, destination side
+	// EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT.
+	if !s.swapSlotValid(ctx, bagKeyB, slotSlotB) {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+	if !s.swapSlotValid(ctx, bagKeyA, slotSlotA) {
+		s.sendEquipError(equipErrItemDoesntGoToSlot, 0)
 		return true
 	}
 
@@ -1179,9 +1313,15 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	if srcItemGUID != 0 && dstItemGUID != 0 {
-		if merged, _ := s.tryMergeStacks(ctx, srcItemGUID, srcBagKey, srcSlot, dstItemGUID, dstBagKey, dstSlot); merged {
-			s.debug("items merged across bags", "account", s.accountName, "srcBag", srcBag, "srcSlot", srcSlot, "dstBag", dstBag, "dstSlot", dstSlot)
+	// Player::SwapItem (Player.cpp:13166-13179): the SRC CanUnequipItem
+	// legs (missing template, generated loot, combat/arena) run before the
+	// bag-in-self arm; the swap-gated non-empty-bag leg keeps its existing
+	// arm below, in C++ position.
+	if srcBagKey == 0 && (srcSlot < equipSlotEnd || (srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot <= 73)) {
+		var srcEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&srcEntry)
+		if msg := s.canUnequipLegs(ctx, srcItemGUID, srcEntry); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(srcItemGUID))
 			return true
 		}
 	}
@@ -1211,8 +1351,40 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 		s.sendEquipError(equipErrItemsCantBeSwapped, uint64(srcItemGUID))
 		return true
 	}
+	// Player::SwapItem (Player.cpp:13189-13199): the DST CanUnequipItem
+	// legs mirror the SRC ones and run after the bag-from-inside arm.
+	if dstItemGUID != 0 && dstBagKey == 0 && (dstSlot < equipSlotEnd || (dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) || (dstSlot >= 67 && dstSlot <= 73)) {
+		var dstEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&dstEntry)
+		if msg := s.canUnequipLegs(ctx, dstItemGUID, dstEntry); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(dstItemGUID))
+			return true
+		}
+	}
 	if dstIsBagPos && dstItemGUID != 0 && !srcIsBagPos && !srcIsEmptyBag && s.itemIsNonemptyBag(ctx, uint64(dstItemGUID)) {
 		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
+		return true
+	}
+
+	// Player::SwapItem (Player.cpp:13245-13293): the merge/fill attempt runs
+	// after the DST unequip checks — never before them.
+	if srcItemGUID != 0 && dstItemGUID != 0 {
+		if merged, _ := s.tryMergeStacks(ctx, srcItemGUID, srcBagKey, srcSlot, dstItemGUID, dstBagKey, dstSlot); merged {
+			s.debug("items merged across bags", "account", s.accountName, "srcBag", srcBag, "srcSlot", srcSlot, "dstBag", dstBag, "dstSlot", dstSlot)
+			return true
+		}
+	}
+
+	// Player::CanStoreItem (Player.cpp:10713-10719): a loot-generated item
+	// moved through the inventory/bank move checks answers
+	// EQUIP_ERR_ALREADY_LOOTED (equipment/bag positions were covered by the
+	// CanUnequipItem legs above).
+	if s.server.containerLootGenerated(uint64(srcItemGUID)) {
+		s.sendEquipError(equipErrAlreadyLooted, uint64(srcItemGUID))
+		return true
+	}
+	if dstItemGUID != 0 && s.server.containerLootGenerated(uint64(dstItemGUID)) {
+		s.sendEquipError(equipErrAlreadyLooted, uint64(dstItemGUID))
 		return true
 	}
 
@@ -1316,6 +1488,20 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	}
 
 	s.swapInventoryCoordinates(ctx, srcItemGUID, srcBagKey, int64(srcSlot), dstItemGUID, dstBagKey, int64(dstSlot))
+	// Player::SwapItem (Player.cpp:13216-13250): the move case (empty
+	// destination) adjusts quest counts across the bank boundary — out of
+	// the bank adds, into the bank removes. Equipment destinations
+	// (Player.cpp:13240-13250, slots 0..22) change nothing.
+	if dstItemGUID == 0 && !(dstBagKey == 0 && dstSlot < invSlotBagEnd) {
+		var moveEntry, moveCount int64
+		if db.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&moveEntry, &moveCount) == nil && moveEntry != 0 {
+			if isBankPos(slotBagA, slotSlotA) {
+				s.adjustQuestItemCount(ctx, uint32(moveEntry), uint32(moveCount), false)
+			} else if isBankPos(slotBagB, slotSlotB) {
+				s.adjustQuestItemCount(ctx, uint32(moveEntry), uint32(moveCount), true)
+			}
+		}
+	}
 	// Player::SwapItem (Player.cpp:13452-13483): after the swap, "if
 	// player is moving bags and is looting an item inside this bag
 	// release the loot". IsBagPos(src)/IsBagPos(dst) picks the bag at
@@ -1381,6 +1567,33 @@ func (s *session) unequipCombatError(invType, class uint32) uint8 {
 	return equipErrOk
 }
 
+// canUnequipLegs mirrors the non-bag legs of Player::CanUnequipItem
+// (Player.cpp:11634-11654): a missing template answers
+// EQUIP_ERR_ITEM_NOT_FOUND, generated loot EQUIP_ERR_ALREADY_LOOTED, and the
+// combat/arena legs delegate to unequipCombatError. The IsCharmed leg
+// (Player.cpp:11643-11644) has no Go player model and stays unbridged; the
+// swap-gated non-empty-bag leg (Player.cpp:11656-11658) stays in the
+// caller's existing bag arms, which already encode the swap terms.
+func (s *session) canUnequipLegs(ctx context.Context, itemGUID, itemEntry int64) uint8 {
+	if itemGUID == 0 {
+		return equipErrOk
+	}
+	var invType, class int64
+	found := false
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(InventoryType, 0), COALESCE(Class, 0) FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&invType, &class); err == nil {
+			found = true
+		}
+	}
+	if !found {
+		return equipErrItemNotFound
+	}
+	if s.server.containerLootGenerated(uint64(itemGUID)) {
+		return equipErrAlreadyLooted
+	}
+	return s.unequipCombatError(uint32(invType), uint32(class))
+}
+
 func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 3 {
 		return true
@@ -1394,6 +1607,10 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	}
 	bagKey, ok := s.inventoryBagKey(ctx, bag)
 	if !ok {
+		// HandleDestroyItemOpcode (ItemHandler.cpp:294-297): an
+		// unresolvable position answers EQUIP_ERR_ITEM_NOT_FOUND —
+		// Player::GetItemByPos returns null for it.
+		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
 	var itemGUID, currentCount int64
@@ -1470,6 +1687,23 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	}
 	if currentCount <= int64(count) || count == 0 {
 		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
+		// Player::DestroyItem (Player.cpp:12638-12642): contained items go
+		// down with a destroyed bag, even if the empty-bag gate above was
+		// bypassed somehow.
+		var contained []int64
+		if rows, err := db.QueryContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ?", s.playerGUID, itemGUID); err == nil {
+			for rows.Next() {
+				var cg int64
+				if rows.Scan(&cg) == nil {
+					contained = append(contained, cg)
+				}
+			}
+			rows.Close()
+		}
+		for _, cg := range contained {
+			_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", cg)
+		}
+		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ?", s.playerGUID, itemGUID)
 		_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 		// Player::RemoveItem arm (Player.cpp:12660): a destroyed item sheds
 		// its ITEM_SPELLTRIGGER_ON_NO_DELAY_USE obtain auras.
@@ -3749,6 +3983,17 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 		s.sendEquipError(equipErrCouldntSplitItems, uint64(srcGUID))
 		return true
 	}
+	// Player::SplitItem (Player.cpp:13052-62): splitting the whole stack or
+	// more than the stack holds is answered, not dropped — and these arms
+	// run BEFORE the trade-window arm (Player.cpp:13065-70).
+	if count == uint32(srcCount) {
+		s.sendEquipError(equipErrCouldntSplitItems, uint64(srcGUID))
+		return true
+	}
+	if count > uint32(srcCount) {
+		s.sendEquipError(equipErrTriedToSplitMoreThanCount, uint64(srcGUID))
+		return true
+	}
 	// Player::SplitItem (Player.cpp:13065-70): an item parked in the trade
 	// window cannot be split (packet spoofing — silent return).
 	if s.trade != nil {
@@ -3758,16 +4003,6 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
-	// Player::SplitItem (Player.cpp:13052-62): splitting the whole stack or
-	// more than the stack holds is answered, not dropped.
-	if count == uint32(srcCount) {
-		s.sendEquipError(equipErrCouldntSplitItems, uint64(srcGUID))
-		return true
-	}
-	if count > uint32(srcCount) {
-		s.sendEquipError(equipErrTriedToSplitMoreThanCount, uint64(srcGUID))
-		return true
-	}
 	dstKey, ok := s.inventoryBagKey(ctx, dstBag)
 	if !ok {
 		// ItemHandler.cpp HandleSplitItemOpcode: IsValidPos(dstbag, dstslot,
@@ -3775,6 +4010,61 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 		// return (same arm as the autostore handler below).
 		s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcGUID))
 		return true
+	}
+	// Player::IsValidPos(dstbag, dstslot, false) (Player.cpp:10185-10231):
+	// interior slots must fit the bag's ContainerSlots, NULL_SLOT (255)
+	// autostores, and bag-0 slots outside the equipment/bag/backpack/
+	// keyring/bank ranges are rejected by the handler
+	// (ItemHandler.cpp:64-68) before Player::SplitItem runs.
+	if dstKey == 0 {
+		if dstSlot == 255 {
+			refs := s.collectFreeInventorySlots(ctx, s.playerGUID, 1)
+			if len(refs) == 0 {
+				s.sendEquipError(equipErrInvFull, uint64(srcGUID))
+				return true
+			}
+			dstKey, dstSlot = refs[0].bagKey, refs[0].slot
+		} else {
+			valid := dstSlot < equipSlotEnd ||
+				(dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) ||
+				(dstSlot >= invSlotItemStart && dstSlot < invSlotItemEnd) ||
+				(dstSlot >= 39 && dstSlot < 67) ||
+				(dstSlot >= 67 && dstSlot < 74) ||
+				(dstSlot >= invSlotKeyringStart && dstSlot < invSlotKeyringEnd)
+			if !valid {
+				s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcGUID))
+				return true
+			}
+			if dstSlot < equipSlotEnd {
+				// Player::SplitItem (Player.cpp:13115-13126): an equipment
+				// destination runs CanEquipItem — the slot must fit the item.
+				var invType int64
+				if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+					_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(InventoryType, 0) FROM item_template WHERE entry = ? LIMIT 1", srcEntry).Scan(&invType)
+				}
+				if !s.isSlotValidForItem(uint8(invType), dstSlot) {
+					s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcGUID))
+					return true
+				}
+			}
+		}
+	} else if dstSlot == 255 {
+		freeSlot, ok := s.freeInventorySlot(ctx, dstKey)
+		if !ok {
+			s.sendEquipError(equipErrInvFull, uint64(srcGUID))
+			return true
+		}
+		dstSlot = freeSlot
+	} else {
+		// Fail open when the template store is unreachable (old behavior);
+		// reject only on positive evidence the slot is past the bag's size.
+		var bagSlots int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil &&
+			s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, dstKey).Scan(&bagSlots) == nil &&
+			bagSlots > 0 && int64(dstSlot) >= bagSlots {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcGUID))
+			return true
+		}
 	}
 	db := s.server.CharactersStore.DB
 	var dstGUID, dstEntry, dstCount int64
