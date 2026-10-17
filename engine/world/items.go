@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -3948,6 +3949,73 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		if failReason := s.checkSpellCreateManaGemCast(ctx, spell); failReason != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "mana gem at max charges", "failReason", failReason)
+			return true
+		}
+		// CheckRange arms (Spell::CheckCast, Spell.cpp:5496-5499): the
+		// TRIGGERED_NONE item prepare runs CheckCast(true) too
+		// (Spell::prepare, Spell.cpp:3096 via Player::CastItemUseSpell,
+		// Player.cpp:8232), so item casts check range exactly like
+		// client-initiated casts — after the CheckItems block, before
+		// CheckPower. CheckPower is vacuous here: m_CastItem
+		// short-circuits it (Spell.cpp:6645) and Spell::prepare zeroes
+		// m_powerCost on the item path (Spell.cpp:3091), so neither the
+		// POWER_HEALTH arm nor the power-amount arm can fire.
+		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.Flags&protocol.SpellTargetFlagGameObject == 0 && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID {
+			if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
+				if rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex); ok {
+					// DBC-driven range check (TC Spell::CheckRange,
+					// strict=true): the GetMinMaxRange reach / REQ_AMMO /
+					// spellmod terms apply here exactly as at completion.
+					minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(target.UnitGUID>>48) == 0, s.spellRangeTargetHostile(target.UnitGUID, tgt))
+					dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
+					if maxRange > 0 && dist > maxRange {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedOutOfRange), true)
+						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "out of range", "dist", dist, "max", maxRange)
+						return true
+					}
+					if minRange > 0 && dist < minRange {
+						// Spell::CheckRange (Spell.cpp:6567-6569): min-range
+						// violations fail with SPELL_FAILED_OUT_OF_RANGE, not
+						// TOO_CLOSE — this C++ tree's engine never emits
+						// SPELL_FAILED_TOO_CLOSE (sole emitter is the Death Grip
+						// script leg, spell_dk.cpp:2760).
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedOutOfRange), true)
+						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
+						return true
+					}
+				}
+				// Caster facing requirement (Spell::CheckRange,
+				// Spell.cpp:6559-6560): with SPELL_FACING_FLAG_INFRONT
+				// the target must be within the caster's 180-degree
+				// frontal hemisphere — C++ calls HasInArc(M_PI), which
+				// with the default border of 2.0 spans +/-pi/2
+				// (Position.cpp:120-136). Reports
+				// SPELL_FAILED_UNIT_NOT_INFRONT = 134.
+				if spell.FacingCasterFlags&SpellFacingFlagInfront != 0 {
+					if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, math.Pi) {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedUnitNotInFront), true)
+						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not in front")
+						return true
+					}
+				}
+			}
+		}
+		// Gameobject-target leg (Spell::CheckRange, Spell.cpp:6565-6569):
+		// sits between the unit-target and dest legs in C++ order. A GO
+		// target outside interact distance fails SPELL_FAILED_OUT_OF_RANGE.
+		if failCode := s.validateSpellGORange(ctx, spell, target); failCode != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failCode), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "go out of range", "code", failCode)
+			return true
+		}
+		// Dest range arm (Spell::CheckRange, Spell.cpp:6571-6578): the
+		// strict CheckCast(true) recheck (Spell::prepare, Spell.cpp:3096),
+		// so no tolerance applies. Implicit dest targets (filled by
+		// SetTargetMap) have no Go model at cast time — only the explicit
+		// wire dest is checked.
+		if failCode := s.validateSpellDestRange(ctx, spell, target, true); failCode != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failCode), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "dest out of range", "code", failCode)
 			return true
 		}
 		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
