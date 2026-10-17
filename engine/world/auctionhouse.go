@@ -494,6 +494,8 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	}
 	var itemEntry int64
 	var finalCount uint32
+	var tmplFlags int64
+	tmplFlagsOK := false
 	itemCounts := make([]int64, len(itemGUIDs))
 	for j, itemGUID := range itemGUIDs {
 		var entry, have, flags, duration int64
@@ -505,6 +507,18 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		}
 		if j == 0 {
 			itemEntry = entry
+			// item->GetTemplate()->HasFlag(ITEM_FLAG_CONJURED)
+			// (AuctionHouseHandler.cpp:208, ITEM_FLAG_CONJURED = 0x2,
+			// ItemTemplate.h:153): all listed items share one entry, so one
+			// template lookup covers the loop — but the conjured gate
+			// evaluates per item, inside the loop, so a conjured item
+			// answers ERR_AUCTION_DATABASE_ERROR before a later missing
+			// item can answer ERR_AUCTION_ITEM_NOT_FOUND, exactly like
+			// C++.
+			if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&tmplFlags)
+				tmplFlagsOK = true
+			}
 		}
 		var listed int
 		// sAuctionMgr->GetAItem (AuctionHouseHandler.cpp:207): an item that is
@@ -514,24 +528,13 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		// already-listed item, a soulbound item (the representable slice of
 		// Item::CanBeTraded — Go has no loot/bag/enchant state), a
 		// non-empty bag (Item::IsNotEmptyBag, via itemIsNonemptyBag), a
-		// temporary item, a short stack, or a mixed entry all answer
-		// ERR_AUCTION_DATABASE_ERROR with auction id 0.
-		if alreadyListed || flags&1 != 0 || s.itemIsNonemptyBag(ctx, uint64(itemGUID)) || duration != 0 || have < int64(stackCounts[j]) || entry != itemEntry {
+		// conjured item, a temporary item, a short stack, or a mixed entry
+		// all answer ERR_AUCTION_DATABASE_ERROR with auction id 0.
+		if alreadyListed || flags&1 != 0 || s.itemIsNonemptyBag(ctx, uint64(itemGUID)) || (tmplFlagsOK && tmplFlags&2 != 0) || duration != 0 || have < int64(stackCounts[j]) || entry != itemEntry {
 			return sellFail(errAuctionDatabaseError)
 		}
 		itemCounts[j] = have
 		finalCount += stackCounts[j]
-	}
-	// item->GetTemplate()->HasFlag(ITEM_FLAG_CONJURED)
-	// (AuctionHouseHandler.cpp:208, ITEM_FLAG_CONJURED = 0x2,
-	// ItemTemplate.h:153): all listed items share one entry, so one template
-	// lookup covers the loop.
-	var tmplFlags int64
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&tmplFlags)
-	}
-	if tmplFlags&2 != 0 {
-		return sellFail(errAuctionDatabaseError)
 	}
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:218-222): a zero
 	// total count answers ERR_AUCTION_DATABASE_ERROR.
@@ -1091,21 +1094,22 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	// C++ HandleAuctionRemoveItem (AuctionHouseHandler.cpp:599-610): with an
 	// active bidder the seller pays the auction cut (neutral 15% via
 	// AuctionEntry::GetAuctionCut); insufficient money silently aborts the
-	// cancel — no command result is sent, and the bidder-refund mail goes
-	// out before the cut is taken.
-	// C++ SendAuctionCancelledToBidderMail (AuctionHouseMgr.cpp:287-299):
-	// the bidder refund fires only when the bidder still exists
-	// ((bidder || bidder_accId)).
-	if bidderGUID > 0 && lastBid > 0 && s.auctionCharExists(ctx, uint64(bidderGUID)) {
+	// cancel — no command result is sent. The cut is taken whenever
+	// auction->bidder > 0, even when the bidder no longer exists — only the
+	// refund mail is existence-gated (SendAuctionCancelledToBidderMail,
+	// AuctionHouseMgr.cpp:285-299: (bidder || bidder_accId)).
+	if bidderGUID > 0 {
 		auctionCut := auctionCutFor(uint32(lastBid), s.server.Config.AuctionCutRate)
 		if s.player.Money < auctionCut {
 			return true
 		}
-		bidderMailID := s.server.generateMailID()
-		bidderSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionCancelledToBidder, auctionID, itemCount)
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
-			bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
-		s.sendMailNotify(uint64(bidderGUID))
+		if s.auctionCharExists(ctx, uint64(bidderGUID)) {
+			bidderMailID := s.server.generateMailID()
+			bidderSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionCancelledToBidder, auctionID, itemCount)
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
+				bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
+			s.sendMailNotify(uint64(bidderGUID))
+		}
 		s.player.Money -= auctionCut
 		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
