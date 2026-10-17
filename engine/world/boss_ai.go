@@ -2698,6 +2698,14 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		if !ok {
 			continue
 		}
+		// Session-side twin of the Aura::GetProcEffectMask self-trigger
+		// guard (SpellAuras.cpp:2055-2057, Spell::IsTriggeredByAura,
+		// Spell.h:544): inert on the creature path — the creature trigger
+		// cast (castCreatureSpellInternal) carries no triggering-aura
+		// attribution, so ev.triggeredByAuraSpell is always 0 here.
+		if ev.eventSpell != nil && ev.triggeredByAuraSpell != 0 && ev.triggeredByAuraSpell == auraSpell.ID {
+			continue
+		}
 		if entry.Charges > 0 && aura.RemainingCharges == 0 {
 			continue
 		}
@@ -2710,7 +2718,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		if entry.AttributesMask&procAttrReqSpellmod != 0 {
 			continue
 		}
-		if !canSpellTriggerProcOnEvent(entry, ev) {
+		if !canSpellTriggerProcOnEvent(entry, ev, auraSpell.AttributesEx3&spellAttr3CanProcWithTriggered != 0) {
 			continue
 		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,

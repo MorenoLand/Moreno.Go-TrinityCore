@@ -14998,7 +14998,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// taken passes iterate the same aura list.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, s.triggeredNoProcEvents > 0, reflected)
+				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
 			}
 		}
 	} else if !instantKill && !targetCantProc {
@@ -15007,7 +15007,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// done side, matching the ProcSkillsAndAuras ordering.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, s.triggeredNoProcEvents > 0, reflected)
+				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
 			}
 		}
 	}
@@ -15503,7 +15503,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (SpellDefines.h:155). C++ suppresses the attacker's own proc rolls for such
 	// spells (Unit::TriggerAurasProcOnEvent, Unit.cpp:10424, Spell::IsProcDisabled).
 	s.triggeredNoProcEvents++
-	defer func() { s.triggeredNoProcEvents-- }()
+	// Spell::m_triggeredByAuraSpell (Spell.cpp:3068) rides the per-Spell-object
+	// lifetime: the pending aura-spell attribution moves into the in-cast
+	// slot for this cast's proc events, with save/restore for nested casts.
+	prevCastTriggerAuraSpell := s.castTriggerAuraSpell
+	s.castTriggerAuraSpell = s.triggeredByAuraSpell
+	s.triggeredByAuraSpell = 0
+	defer func() {
+		s.triggeredNoProcEvents--
+		s.castTriggerAuraSpell = prevCastTriggerAuraSpell
+	}()
 	// Spell::m_triggeredByAuraSpell (Spell.h:808): the diminishing-returns
 	// group resolves the triggered variant when the cast was triggered by an
 	// aura (Spell::PreprocessSpellHit, Spell.cpp:2798). The flag is consumed
@@ -17905,13 +17914,13 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 		// gate; on a self-heal this is the caster session, matching C++ where
 		// ProcDamageAndSpellFor's done and taken passes iterate the same aura
 		// list. The trigger spell targets the healer.
-		targetSess.procSpellHealTakenAuraTriggers(ctx, s.playerGUID, spellID, rawHeal, isCrit)
+		targetSess.procSpellHealTakenAuraTriggers(ctx, s.playerGUID, spellID, rawHeal, isCrit, s.triggeredNoProcEvents > 0, s.castTriggerAuraSpell)
 	} else if !targetCantProc {
 		// No-damage arm (Spell.cpp:2563-2579, 2581-2586): done side first,
 		// then the taken side on the target's session, matching the
 		// ProcSkillsAndAuras ordering.
 		s.procSpellNoDmgHealAuraTriggers(ctx, targetGUID, spellID)
-		targetSess.procSpellNoDmgHealTakenAuraTriggers(ctx, s.playerGUID, spellID)
+		targetSess.procSpellNoDmgHealTakenAuraTriggers(ctx, s.playerGUID, spellID, s.triggeredNoProcEvents > 0, s.castTriggerAuraSpell)
 
 		// Item combat spells also fire on the no-damage arm for melee/ranged
 		// damage-class spells (Spell.cpp:2589-2596); heal spells are magic

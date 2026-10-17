@@ -457,7 +457,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// CHEAT_GOD skip lives inside DealDamage, not the proc call.
 	// The creature actor has no auras, so only the taken leg runs.
 	if p.Sess != nil && p.Sess.player != nil && p.Sess.procDeep == 0 {
-		p.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, false, false, false, false, 0, damage, false, false)
+		p.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, false, false, false, false, 0, damage, false, false, 0)
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 	// non-friendly non-positive (or dispel-effect) spell hit stands

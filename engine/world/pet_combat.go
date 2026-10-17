@@ -4642,7 +4642,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// the mask is NORMAL or CRIT; pet spell crits roll at the
 		// taken-leg site above (Unit::SpellCritChanceDone, Unit.cpp:7167).
 		if victim.procDeep == 0 {
-			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, false, false, isCrit, absorbed, procEventDamage, triggered, false)
+			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, false, false, isCrit, absorbed, procEventDamage, triggered, false, 0)
 		}
 		// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
 		// runs after the taken side on both the lethal and non-lethal arms.
