@@ -149,17 +149,19 @@ func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternat
 	// GameObject::SetGoState (GameObject.cpp:2407), like
 	// setGameObjectStateInInstance.
 	s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(newState))
-	s.broadcastGameObjectCustomAnimInInstance(mapID, instanceID, guid, 0)
-	if newState != GameObjectStateReady {
-		restoreMs := delayMs
-		if restoreMs == 0 {
-			if d := s.gameObjectAutoCloseDelay(entry); d > 0 {
-				restoreMs = uint32(d / time.Millisecond)
-			}
+	// GameObject.cpp:1447 arms m_cooldownTime on every UseDoorOrButton,
+	// including the close-toggle branch, so the GO_ACTIVATED Update arm
+	// always fires ResetDoorOrButton (clears GO_FLAG_IN_USE, restores
+	// m_prevGoState). A newState gate here left close-toggled doors flagged
+	// IN_USE forever and permanently unusable.
+	restoreMs := delayMs
+	if restoreMs == 0 {
+		if d := s.gameObjectAutoCloseDelay(entry); d > 0 {
+			restoreMs = uint32(d / time.Millisecond)
 		}
-		if restoreMs > 0 {
-			s.scheduleGameObjectResetInInstance(mapID, instanceID, guid, time.Duration(restoreMs)*time.Millisecond, true)
-		}
+	}
+	if restoreMs > 0 {
+		s.scheduleGameObjectResetInInstance(mapID, instanceID, guid, time.Duration(restoreMs)*time.Millisecond, true)
 	}
 }
 
@@ -250,7 +252,6 @@ func (s *Server) resetDoorOrButton(mapID, instanceID uint32, guid uint64) {
 	}
 	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags, gameObjectBytes1: bytes1})
 	s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(newState))
-	s.broadcastGameObjectResetStateInInstance(mapID, instanceID, guid)
 }
 
 func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, guid uint64, delay time.Duration, restorePrev bool) {
@@ -288,11 +289,14 @@ func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, gui
 			}
 			hasBytes1 = true
 		} else {
-			// Goober reset twin: the C++ GO_ACTIVATED update arm drops the
-			// IN_USE flag and re-readies the state only when the template
-			// carries a lockId or autoCloseTime; the timer only exists when
-			// autoCloseTime > 0, so the state returns to ready here.
+			// Goober reset twin: the C++ GO_JUST_DEACTIVATED update arm
+			// (GameObject.cpp:797-798) re-readies the state when the
+			// template carries a lockId or autoCloseTime; SetGoState marks
+			// GAMEOBJECT_BYTES_1 dirty (GameObject.cpp:2407-2409), so the
+			// READY flip is broadcast like the door/button reset above.
 			current.State = GameObjectStateReady
+			bytes1 = uint32(current.State) | uint32(current.Type)<<8 | uint32(current.ArtKit)<<16 | uint32(current.AnimProgress)<<24
+			hasBytes1 = true
 		}
 		flags = current.Flags
 		newState = current.State
@@ -305,7 +309,6 @@ func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, gui
 		// Eluna GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED (event 10), fired from
 		// GameObject::SetGoState (GameObject.cpp:2407).
 		s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(newState))
-		s.broadcastGameObjectResetStateInInstance(mapID, instanceID, guid)
 	})
 	s.objectsMu.Unlock()
 }

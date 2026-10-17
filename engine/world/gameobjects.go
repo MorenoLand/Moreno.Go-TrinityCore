@@ -601,13 +601,16 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 	}
 	// m_cooldownTime = GetGameTimeMS() + GetAutoCloseTime()
 	// (GameObject.cpp:1689): the raw template value is consumed as
-	// milliseconds against the ms game clock. With no autoCloseTime the
-	// GO_ACTIVATED update arm fires at the next tick and only re-readies
-	// the state when the template carries a lockId or autoCloseTime —
-	// otherwise the goober stays ACTIVE and is immediately reusable, so
-	// no reset is scheduled.
+	// milliseconds against the ms game clock. The GO_ACTIVATED update arm
+	// fires at the next tick and the GO_JUST_DEACTIVATED arm re-readies the
+	// state when the template carries a lockId or an autoCloseTime
+	// (GameObject.cpp:797-798) — a lockId-only goober re-readies
+	// immediately, like the C++ next-tick transition; otherwise the goober
+	// stays ACTIVE and is immediately reusable, so no reset is scheduled.
 	if tpl.autoCloseTime > 0 {
 		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, time.Duration(tpl.autoCloseTime)*time.Millisecond, false)
+	} else if tpl.lockID != 0 {
+		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 0, false)
 	}
 	// The spell is data10 in this TrinityCore layout (GameObjectData.h:171);
 	// the old code cast data1 (the questId) as the spell. C++ casts it at
@@ -1229,6 +1232,7 @@ func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte)
 // gooberTemplateData carries the gameobject_template data columns used by the
 // GameObject::Use GAMEOBJECT_TYPE_GOOBER arm (GameObjectData.h:171-197).
 type gooberTemplateData struct {
+	lockID        uint32 // data0
 	questID       uint32 // data1
 	eventID       uint32 // data2
 	autoCloseTime uint32 // data3
@@ -1245,15 +1249,16 @@ func (s *session) loadGooberTemplate(ctx context.Context, entry uint32) gooberTe
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return tpl
 	}
-	var questID, eventID, autoCloseTime, customAnim, pageID, spellID, linkedTrapID, gossipID int64
+	var lockID, questID, eventID, autoCloseTime, customAnim, pageID, spellID, linkedTrapID, gossipID int64
 	err := s.server.WorldStore.DB.QueryRowContext(ctx,
-		`SELECT COALESCE(Data1, 0), COALESCE(Data2, 0), COALESCE(Data3, 0), COALESCE(Data4, 0),
+		`SELECT COALESCE(Data0, 0), COALESCE(Data1, 0), COALESCE(Data2, 0), COALESCE(Data3, 0), COALESCE(Data4, 0),
 			COALESCE(Data7, 0), COALESCE(Data10, 0), COALESCE(Data12, 0), COALESCE(Data19, 0)
 		FROM gameobject_template WHERE entry = ? LIMIT 1`, entry).
-		Scan(&questID, &eventID, &autoCloseTime, &customAnim, &pageID, &spellID, &linkedTrapID, &gossipID)
+		Scan(&lockID, &questID, &eventID, &autoCloseTime, &customAnim, &pageID, &spellID, &linkedTrapID, &gossipID)
 	if err != nil {
 		return tpl
 	}
+	tpl.lockID = uint32(lockID)
 	tpl.questID = uint32(questID)
 	tpl.eventID = uint32(eventID)
 	tpl.autoCloseTime = uint32(autoCloseTime)
