@@ -32877,18 +32877,35 @@ func (s *session) handleEffectEnchantHeldItem(ctx context.Context, spell wotlk.S
 		if targetSess == nil || targetSess.player == nil {
 			continue
 		}
-		// GetItemByPos(mainhand) + IsEquipped: equippedWeaponInstance
-		// returns 0 for a missing or broken weapon.
-		instanceGUID, _ := targetSess.equippedWeaponInstance(ctx, equipSlotMainhand)
+		// Player::GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND)
+		// + Item::IsEquipped (SpellEffects.cpp:4088-4095): a broken main-hand
+		// weapon still takes the temporary enchantment, so this skips the
+		// unbroken-weapon gate of equippedWeaponInstance.
+		instanceGUID, itemEntry := targetSess.equippedMainhandInstance(ctx)
 		if instanceGUID == 0 {
 			continue
 		}
-		// Enchantment will not be applied if a different one already exists.
-		if existing := targetSess.itemEnchantmentIDAtSlot(ctx, instanceGUID, 1); existing != 0 && existing != enchantID {
+		oldID, oldDuration := targetSess.itemEnchantmentIDAndDurationAtSlot(ctx, instanceGUID, 1)
+		// Enchantment will not be applied if a different one already exists
+		// (SpellEffects.cpp:4117).
+		if oldID != 0 && oldID != enchantID {
+			continue
+		}
+		// Item::SetEnchantment identical-arm early return (Item.cpp:835):
+		// same id, duration and charges writes nothing and logs nothing.
+		if oldID == enchantID && oldDuration == durationMs {
 			continue
 		}
 		targetSess.writeItemEnchantmentSlot(ctx, instanceGUID, 1, enchantID, durationMs)
 		targetSess.syncEquipmentCache(ctx)
+		// Item::SetEnchantment logging (Item.cpp:842-848): the removed
+		// enchant's log first, then the new enchant's log, both to the item
+		// owner and nearby players (WorldSession::SendEnchantmentLog,
+		// ItemHandler.cpp:791).
+		if oldID != 0 {
+			targetSess.sendEnchantmentLog(effectTarget, 0, itemEntry, oldID)
+		}
+		targetSess.sendEnchantmentLog(effectTarget, s.playerGUID, itemEntry, enchantID)
 	}
 }
 
@@ -32949,7 +32966,7 @@ func (s *session) handleEffectSummonObject(ctx context.Context, spell wotlk.Spel
 		z = s.player.Z
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
-	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spell.ID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: uint8(goType), DisplayID: uint32(displayID), Size: float32(size), ParentRotation: [4]float32{0, 0, 0, 1}, Faction: s.server.raceFaction(s.player.Race), IsRuntimeSpawn: true} // OwnerGUID: Unit::AddGameObject (Unit.cpp:5208-5213)
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spell.ID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: uint8(goType), DisplayID: uint32(displayID), Size: float32(size), ParentRotation: [4]float32{0, 0, 0, 1}, Faction: s.server.raceFaction(s.player.Race), IsRuntimeSpawn: true, PhaseMask: s.currentPlayerPhaseMask()} // OwnerGUID: Unit::AddGameObject (Unit.cpp:5208-5213); PhaseMask: GameObject::Create takes m_caster->GetPhaseMask() (SpellEffects.cpp:4246)
 	// GameObject::SetRespawnTime(duration/IN_MILLISECONDS)
 	// (SpellEffects.cpp:4257): the object's lifetime is the spell duration; a
 	// non-positive duration leaves it persistent like C++.
@@ -32958,10 +32975,12 @@ func (s *session) handleEffectSummonObject(ctx context.Context, spell wotlk.Spel
 			s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
 		})
 	}
-	s.server.spawnDynamicGameObject(dyn)
-	// unitCaster->m_ObjectSlot[slot] = go->GetGUID(); ExecuteLogEffectSummonObject.
-	s.player.ObjectSlots[slot] = dyn.GUID
+	// Spell::EffectSummonObject: ExecuteLogEffectSummonObject runs ahead of
+	// map->AddToMap and the object-slot take (SpellEffects.cpp:4259-4266).
 	s.sendSummonObjectLog(spell.ID, eff.Effect, dyn.GUID)
+	s.server.spawnDynamicGameObject(dyn)
+	// unitCaster->m_ObjectSlot[slot] = go->GetGUID().
+	s.player.ObjectSlots[slot] = dyn.GUID
 	// Unit::AddGameObject (Unit.cpp:5220-5225): a game object created by a
 	// cooldown-started-on-event spell parks the owner's infinity (onHold)
 	// cooldown. The recast arm above nulls the old object's spell id
@@ -33516,6 +33535,75 @@ func (s *session) writeItemEnchantmentSlot(ctx context.Context, instanceGUID uin
 	}
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 		`UPDATE item_instance SET enchantments = ? WHERE guid = ?`, strings.Join(parts, " "), int64(instanceGUID))
+}
+
+// itemEnchantmentIDAndDurationAtSlot extends itemEnchantmentIDAtSlot with the
+// stored duration (fields 0/1 of the slot triple) — the Item::SetEnchantment
+// identical-arm check (Item.cpp:835) compares id, duration and charges
+// before deciding to skip the write.
+func (s *session) itemEnchantmentIDAndDurationAtSlot(ctx context.Context, instanceGUID uint64, slot uint32) (uint32, uint32) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil ||
+		s.server.CharactersStore.DB == nil || instanceGUID == 0 {
+		return 0, 0
+	}
+	var raw string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(enchantments, '') FROM item_instance WHERE guid = ? LIMIT 1`,
+		int64(instanceGUID)).Scan(&raw); err != nil {
+		return 0, 0
+	}
+	fields := strings.Fields(raw)
+	base := int(slot * 3)
+	if base+1 >= len(fields) {
+		return 0, 0
+	}
+	var id, duration uint32
+	if v, err := strconv.ParseUint(fields[base], 10, 32); err == nil {
+		id = uint32(v)
+	}
+	if v, err := strconv.ParseUint(fields[base+1], 10, 32); err == nil {
+		duration = uint32(v)
+	}
+	return id, duration
+}
+
+// equippedMainhandInstance returns the item instance GUID and entry in the
+// target's main-hand equipment slot with no usability filter — the
+// Player::GetItemByPos + Item::IsEquipped twin (SpellEffects.cpp:4088-4095).
+// Unlike equippedWeaponInstance it does not drop broken or non-weapon items.
+func (s *session) equippedMainhandInstance(ctx context.Context) (uint64, uint32) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, 0
+	}
+	var instanceGUID, itemEntry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT ii.guid, ii.itemEntry FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, int64(equipSlotMainhand)).Scan(&instanceGUID, &itemEntry); err != nil || itemEntry <= 0 {
+		return 0, 0
+	}
+	return uint64(instanceGUID), uint32(itemEntry)
+}
+
+// sendEnchantmentLog mirrors WorldSession::SendEnchantmentLog
+// (ItemHandler.cpp:791-798): SMSG_ENCHANTMENTLOG carrying the target and
+// caster packed GUIDs plus the item entry and enchantment id, sent to the
+// item owner and nearby players (GetPlayer()->SendMessageToSet, true). The
+// removal arm passes an empty caster GUID (Item.cpp:845).
+func (s *session) sendEnchantmentLog(targetGUID, casterGUID uint64, itemEntry, enchantID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(targetGUID)
+	log.WritePackedGUID(casterGUID)
+	log.WriteU32(itemEntry)
+	log.WriteU32(enchantID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ENCHANTMENTLOG), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ENCHANTMENTLOG), log.Bytes(), s)
+	}
 }
 
 // equippedWeaponInstance mirrors the Player::GetWeaponForAttack(useable=true)
@@ -35191,9 +35279,10 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// Mug Transformation (SpellEffects.cpp:3654-3685): hunt the bags for
 		// item 38587; on a hit consume one stack unit and fire triggered
 		// 42518 at the caster. C++ walks bags 19..255, slots 0..38 via
-		// GetItemByPos; Go's bag space is 1..4 (equipped bags) + 0 (backpack).
+		// GetItemByPos; Go's bag space is 1..4 (equipped bags 19..22), 5..10
+		// (bank bags 67..72) and 0 (backpack).
 		// The caster-is-player gate is vacuous (s.player is always set here).
-		for _, bag := range []uint8{1, 2, 3, 4, 0} {
+		for _, bag := range []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0} {
 			for slot := uint8(0); slot < 39; slot++ {
 				itemGUID, itemEntry, _, err := s.inventoryItemAt(ctx, bag, slot)
 				if err != nil || itemGUID == 0 || uint32(itemEntry) != 38587 {
@@ -35245,7 +35334,10 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		if targetSess.hasAura(46394) {
 			return
 		}
-		s.castSpellDirect(ctx, 46394, targetGUID)
+		// unitTarget->CastSpell(unitTarget, 46394, true) (SpellEffects.cpp:3684):
+		// the burn is self-cast by the target, so aura-caster attribution
+		// rides the target's session, not the original caster's.
+		targetSess.castSpellDirect(ctx, 46394, targetGUID)
 	case 57347:
 		// Retrieving (Wintergrasp RP-GG pickup, SpellEffects.cpp:3711-3716):
 		// the hit target must be a creature; the caster must be a player
@@ -35282,6 +35374,9 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// (DestroyItemCount(damage, 5, true)).
 		if entry := eff.CalcValueForLevel(spell, uint32(s.player.Level)); entry > 0 {
 			s.destroyPlayerItemCount(ctx, s.playerGUID, uint32(entry), 5)
+			// Player::DestroyItemCount's update=true arm (Player.cpp:13027):
+			// push the inventory update so the client sees the destroyed items.
+			_ = s.sendInventoryItems(ctx)
 		}
 	}
 }
@@ -36336,7 +36431,7 @@ func (s *session) handleEffectSummonObjectWild(ctx context.Context, spell wotlk.
 		z = s.player.Z
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
-	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, SpellID: spell.ID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: uint8(goType), DisplayID: uint32(displayID), Size: float32(size), ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, SpellID: spell.ID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: uint8(goType), DisplayID: uint32(displayID), Size: float32(size), ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true, PhaseMask: s.currentPlayerPhaseMask()} // PhaseMask: GameObject::Create takes m_caster->GetPhaseMask() (SpellEffects.cpp:3574)
 	// GameObject::SetRespawnTime(duration/IN_MILLISECONDS)
 	// (SpellEffects.cpp:3579): the wild object's lifetime is the spell
 	// duration; a non-positive duration leaves it persistent like C++.
@@ -36345,8 +36440,10 @@ func (s *session) handleEffectSummonObjectWild(ctx context.Context, spell wotlk.
 			s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
 		})
 	}
-	s.server.spawnDynamicGameObject(dyn)
+	// Spell::EffectSummonObjectWild: ExecuteLogEffectSummonObject runs ahead
+	// of map->AddToMap (SpellEffects.cpp:3585-3588).
 	s.sendSummonObjectLog(spell.ID, eff.Effect, dyn.GUID)
+	s.server.spawnDynamicGameObject(dyn)
 	_ = ctx
 }
 
