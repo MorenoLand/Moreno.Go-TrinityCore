@@ -6674,6 +6674,8 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	// Slot 3: Sock 2 (index 9)
 	// Slot 4: Sock 3 (index 12)
 	// C++ clears ALL socket enchants first, then sets only nonzero GemEnchants[i].
+	// The pre-write ids feed the SMSG_ENCHANTMENTLOG pair below.
+	oldSocketEnchants := [4]uint32{enchants[6], enchants[9], enchants[12], enchants[15]}
 	enchants[6] = gemEnchants[0]
 	enchants[9] = gemEnchants[1]
 	enchants[12] = gemEnchants[2]
@@ -6707,6 +6709,24 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	}
 	newEncStr := strings.Join(encParts, " ")
 	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", newEncStr, rawTargetGUID)
+
+	// Item::SetEnchantment logging (Item.cpp:842-848): each changed socket /
+	// bonus slot logs the removed enchant (empty caster GUID) then the new
+	// enchant (caster = the socketing player) through the item owner's
+	// session (ItemHandler.cpp:791-798). Identical ids log nothing — the
+	// SetEnchantment identical-write early return (Item.cpp:835).
+	newSocketEnchants := [4]uint32{enchants[6], enchants[9], enchants[12], enchants[15]}
+	for i := 0; i < 4; i++ {
+		if oldSocketEnchants[i] == newSocketEnchants[i] {
+			continue
+		}
+		if oldSocketEnchants[i] != 0 {
+			s.sendEnchantmentLog(s.playerGUID, 0, targetEntry, oldSocketEnchants[i])
+		}
+		if newSocketEnchants[i] != 0 {
+			s.sendEnchantmentLog(s.playerGUID, s.playerGUID, targetEntry, newSocketEnchants[i])
+		}
+	}
 
 	// Consume the socketed gems — only when GemEnchants[i] resolved (ItemHandler.cpp:1119).
 	for index, gemGUID := range gemGUIDs {

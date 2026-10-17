@@ -15176,6 +15176,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	if motion != nil {
 		victimHealth = motion.Health
 	}
+	// Unit::DealDamage vehicle-mounted duel leg (Unit.cpp:837-853): a blow
+	// that would leave a ridden vehicle at health-1 ends the rider's mounted
+	// duel instead — the hit is consumed, skipping the health legs below.
+	if motion != nil && duelDefeatOnVehicleDamage(s, motion, s.playerGUID, damage, victimHealth) {
+		s.server.motionMu.Unlock()
+		return damage
+	}
 	if damage >= victimHealth {
 		// Target dies
 		corpseFlags := unitDynFlagLootable
@@ -33190,6 +33197,13 @@ func (s *session) handleEffectEnchantHeldItem(ctx context.Context, spell wotlk.S
 			targetSess.sendEnchantmentLog(effectTarget, 0, itemEntry, oldID)
 		}
 		targetSess.sendEnchantmentLog(effectTarget, s.playerGUID, itemEntry, enchantID)
+		// EffectEnchantHeldItem (SpellEffects.cpp:4121-4122): the temp
+		// enchant's ApplyEnchantment apply_dur leg registers the duration
+		// and pushes SMSG_ITEM_ENCHANT_TIME_UPDATE through the item
+		// owner's session (Player.cpp:14261-14270).
+		if durationMs > 0 {
+			targetSess.sendItemEnchantTimeUpdate(effectTarget, instanceGUID|(uint64(0x4000)<<48), 1, durationMs/1000)
+		}
 	}
 }
 
@@ -33875,6 +33889,22 @@ func (s *session) equippedMainhandInstance(ctx context.Context) (uint64, uint32)
 // caster packed GUIDs plus the item entry and enchantment id, sent to the
 // item owner and nearby players (GetPlayer()->SendMessageToSet, true). The
 // removal arm passes an empty caster GUID (Item.cpp:845).
+// sendItemEnchantTimeUpdate mirrors WorldSession::SendItemEnchantTimeUpdate
+// (ItemHandler.cpp:801-810): SMSG_ITEM_ENCHANT_TIME_UPDATE carries a
+// temp-enchant's remaining duration in whole seconds to the item owner's
+// session. Player::AddEnchantmentDuration (Player.cpp:13879-13899) sends it
+// on every temp-enchant apply with duration > 0 through the ApplyEnchantment
+// apply_dur leg (Player.cpp:14261-14270); the perm and prismatic arms write
+// duration 0 and never send it. The session replay at login
+// (Player::SendEnchantmentDurations, Player.cpp:14318) is covered by the
+// inventory-build path.
+func (s *session) sendItemEnchantTimeUpdate(playerGUID, itemGUID uint64, slot, durationSec uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE), protocol.BuildItemEnchantTimeUpdate(playerGUID, itemGUID, slot, durationSec), true)
+}
+
 func (s *session) sendEnchantmentLog(targetGUID, casterGUID uint64, itemEntry, enchantID uint32) {
 	if s == nil || s.player == nil {
 		return
@@ -34048,6 +34078,13 @@ func (s *session) handleEffectEnchantItemTmp(ctx context.Context, target protoco
 				logSess.sendEnchantmentLog(ownerGUID, 0, t.entry, oldID)
 			}
 			logSess.sendEnchantmentLog(ownerGUID, s.playerGUID, t.entry, enchantID)
+			// Player::ApplyEnchantment apply_dur leg (Player.cpp:14261-14270):
+			// a temp enchant applied with duration > 0 registers its
+			// duration and pushes SMSG_ITEM_ENCHANT_TIME_UPDATE through
+			// the item owner's session.
+			if durationMs > 0 {
+				logSess.sendItemEnchantTimeUpdate(ownerGUID, t.instanceGUID|(uint64(0x4000)<<48), 1, durationMs/1000)
+			}
 		}
 	}
 	if t.ownedByCaster {
@@ -34120,6 +34157,13 @@ func (s *session) applyRockbiterEnchant(ctx context.Context, spell wotlk.Spell) 
 		if classInfo, ok := s.getItemTemplateClassInfo(ctx, entry); ok &&
 			isItemFitToSpell(spell, classInfo.Class, classInfo.SubClass, classInfo.InvType) {
 			s.writeItemEnchantmentSlot(ctx, instanceGUID, 1, enchantID, durationMs)
+			// The triggered rank-spell casts are EffectEnchantItemTmp casts
+			// (SpellEffects.cpp:2864-2875), so each weapon's temp enchant
+			// registers its duration with SMSG_ITEM_ENCHANT_TIME_UPDATE
+			// (Player::AddEnchantmentDuration, Player.cpp:13879-13899).
+			if durationMs > 0 {
+				s.sendItemEnchantTimeUpdate(s.playerGUID, instanceGUID|(uint64(0x4000)<<48), 1, durationMs/1000)
+			}
 		}
 	}
 	s.syncEquipmentCache(ctx)

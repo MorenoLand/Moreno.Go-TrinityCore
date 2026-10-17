@@ -291,6 +291,16 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, tx *sql.Tx
 			enchants[i] = uint32(val)
 		}
 	}
+	// Pre-write ids for the SMSG_ENCHANTMENTLOG pair below — the
+	// Item::SetEnchantment identical-write early return (Item.cpp:835)
+	// logs nothing when id, duration and charges are unchanged (charges
+	// are always 0 on this path).
+	oldEnchantIDs := make(map[uint32]uint32, len(writes))
+	oldEnchantDurations := make(map[uint32]uint32, len(writes))
+	for _, w := range writes {
+		oldEnchantIDs[w.slot] = enchants[w.slot*3]
+		oldEnchantDurations[w.slot] = enchants[w.slot*3+1]
+	}
 	for _, w := range writes {
 		base := w.slot * 3
 		enchants[base] = w.enchant
@@ -302,6 +312,26 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, tx *sql.Tx
 		encParts[i] = strconv.FormatUint(uint64(enchants[i]), 10)
 	}
 	_, _ = tx.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", strings.Join(encParts, " "), item.ItemGUID)
+	// TradeHandler.cpp:524-526 — the deferred spell prepare at trade execute
+	// runs the EffectEnchantItem* arms, so the SetEnchantment log pair
+	// (Item.cpp:842-848) and the temp-enchant SMSG_ITEM_ENCHANT_TIME_UPDATE
+	// (Player::AddEnchantmentDuration, Player.cpp:13879-13899) fire through
+	// the item owner's session, exactly like the direct-cast arms.
+	for _, w := range writes {
+		// Item::SetEnchantment identical-write early return (Item.cpp:835):
+		// same id, duration and charges writes nothing and logs nothing.
+		if oldEnchantIDs[w.slot] != w.enchant || oldEnchantDurations[w.slot] != w.duration {
+			if oldID := oldEnchantIDs[w.slot]; oldID != 0 {
+				target.sendEnchantmentLog(target.playerGUID, 0, item.ItemEntry, oldID)
+			}
+			if w.enchant != 0 {
+				target.sendEnchantmentLog(target.playerGUID, caster.playerGUID, item.ItemEntry, w.enchant)
+			}
+			if w.slot == 1 && w.duration > 0 {
+				target.sendItemEnchantTimeUpdate(target.playerGUID, item.ItemGUID|(uint64(0x4000)<<48), 1, w.duration/1000)
+			}
+		}
+	}
 }
 
 // tempTradeEnchantDurationMs mirrors the duration selection in

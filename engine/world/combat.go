@@ -1350,6 +1350,13 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if motion != nil {
 		victimHealth = motion.Health
 	}
+	// Unit::DealDamage vehicle-mounted duel leg (Unit.cpp:837-853): a blow
+	// that would leave a ridden vehicle at health-1 ends the rider's mounted
+	// duel instead — the hit is consumed, skipping the health legs below.
+	if motion != nil && duelDefeatOnVehicleDamage(s, motion, s.playerGUID, damage, victimHealth) {
+		s.server.motionMu.Unlock()
+		return
+	}
 	if damage >= victimHealth {
 		// Target dies
 		corpseFlags := unitDynFlagLootable
@@ -2110,6 +2117,13 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	victimHealth := target.Health
 	if motion != nil {
 		victimHealth = motion.Health
+	}
+	// Unit::DealDamage vehicle-mounted duel leg (Unit.cpp:837-853): a blow
+	// that would leave a ridden vehicle at health-1 ends the rider's mounted
+	// duel instead — the hit is consumed, skipping the health legs below.
+	if motion != nil && duelDefeatOnVehicleDamage(s, motion, s.playerGUID, damage, victimHealth) {
+		s.server.motionMu.Unlock()
+		return
 	}
 	if damage >= victimHealth {
 		// Target dies
@@ -3848,6 +3862,58 @@ func (s *session) controllingPlayerGUID(guid uint64) uint64 {
 		}
 	}
 	return 0
+}
+
+// duelDefeatOnVehicleDamage mirrors the vehicle-mounted duel leg of
+// Unit::DealDamage (Unit.cpp:837-853 + 957-973): a blow that would leave a
+// ridden vehicle at health-1 ends the rider's mounted duel. victim->IsVehicle()
+// is the vehicle kit on the victim motion; victim->GetCharmer() is the
+// CAN_CONTROL seat's passenger (VehicleKit.CharmerGUID); the duel->IsMounted
+// latch is session.duelMounted (SpellEffects.cpp:3866-3868, spell 62875).
+// The opponent (or its controlled creature, via GetControllingPlayer) clamps
+// the hit to health-1; a non-opponent's exactly-health-1 hit still completes
+// the duel as won, while its lethal hit falls through to the kill path (which
+// interrupts the duel via Unit::Kill, Unit.cpp:11359-11365). The vehicle is
+// left at 1 HP, both duelists combat-stop, the rider casts the beg visual
+// (7267), and DuelComplete(DUEL_WON) runs. Returns true when the leg consumed
+// the hit. The caller must hold motionMu and skip its normal health legs.
+// Damage of 0 never reaches the leg (the !damage early-return precedes it).
+func duelDefeatOnVehicleDamage(s *session, motion *creatureMotion, attackerPlayerGUID uint64, damage, health uint32) bool {
+	if s == nil || s.server == nil || motion == nil {
+		return false
+	}
+	kit := s.server.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
+	if kit == nil {
+		return false
+	}
+	rider := s.server.findSessionByGUID(kit.CharmerGUID())
+	if rider == nil || rider.player == nil || rider.duelPartner == 0 || !rider.duelMounted {
+		return false
+	}
+	if damage == 0 || health == 0 || damage+1 < health {
+		return false
+	}
+	if attackerPlayerGUID != rider.duelPartner && damage >= health {
+		return false
+	}
+	motion.Health = 1
+	s.server.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: 1})
+	opp := s.server.findSessionByGUID(rider.duelPartner)
+	if opp == nil {
+		opp = rider
+	}
+	// Unit.cpp:966-972: the duel-win path combat-stops both duelists
+	// (CombatStopWithPets(true)) before the beg cast and DuelComplete,
+	// exactly like the plain arm above.
+	opp.interruptCurrentCast()
+	opp.interruptCurrentChannel()
+	opp.stopControlledPetCombat()
+	rider.interruptCurrentCast()
+	rider.interruptCurrentChannel()
+	rider.stopControlledPetCombat()
+	rider.castVisualSpell(7267)
+	opp.endDuel(true, rider.duelPartner, false)
+	return true
 }
 
 // clearDuelState performs the shared end-of-duel cleanup: attack stops and

@@ -300,6 +300,22 @@ func (v *VehicleKit) IsControllable() bool {
 	return false
 }
 
+// CharmerGUID returns the GUID of the vehicle's controlling passenger: the
+// occupant of a CAN_CONTROL seat (VehicleJoinEvent::Execute,
+// Vehicle.cpp:871-881 grants CHARM_TYPE_VEHICLE on boarding such a seat when
+// the base is a creature). This is the Go twin of Unit::GetCharmer for the
+// vehicle-mounted duel leg (Unit.cpp:841).
+func (v *VehicleKit) CharmerGUID() uint64 {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, seat := range v.Seats {
+		if seat.SeatInfo != nil && seat.SeatInfo.CanControl() && seat.Passenger.GUID != 0 {
+			return seat.Passenger.GUID
+		}
+	}
+	return 0
+}
+
 // CalculatePassengerPosition transforms transport offsets into global coordinates.
 // Reference: TransportBase::CalculatePassengerPosition (VehicleDefines.h:134-143).
 func CalculatePassengerPosition(transX, transY, transZ, transO float32, inX, inY, inZ, inO float32) (outX, outY, outZ, outO float32) {
