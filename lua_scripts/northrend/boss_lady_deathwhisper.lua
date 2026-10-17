@@ -58,8 +58,9 @@
 -- unconditional, cancelled at the phase-2 transition
 -- (CancelGroup(GROUP_ONE) :419). The other phase-one scheduler seeds
 -- stay out: SummonWaveP1 (summon machine); Dominate Mind
--- (random-target SelectTargetList + difficulty gate — no difficulty
--- bridge); DoImproveCultist (cross-creature machine) — see
+-- (multi-target SelectTargetList + -SPELL_DOMINATE_MIND exclusion +
+-- the GetDifficulty() != 10MAN_NORMAL gate, which IsHeroic() does not
+-- express exactly); DoImproveCultist (cross-creature machine) — see
 -- documented-only.
 -- npc_cult_fanatic (37890, icecrown_citadel.h:175) — C++ schedules in
 --   Reset() (:601-615); re-keyed to the add's own OnEnterCombat
@@ -79,8 +80,10 @@
 --   DoCastSelf(SPELL_DARK_TRANSFORMATION 70900) non-triggered; the
 --   InterruptNonMeleeSpells(true) leg has no bridge on the
 --   event-creature method set (net no-op in Go: packet-only casts).
---   The other fanatic SpellHit legs stay out per-arm: :626-629
---   FULL_HEAL rides UpdateEntry (no bridge); :631-635 martyrdom rides
+--   The other fanatic SpellHit legs stay out per-arm: the :626-629
+--   FULL_HEAL self-cast is PORTED (event 14 fires the self-cast hit;
+--   only the UpdateEntry(NPC_DEFORMED_FANATIC) leg stays out, no
+--   bridge); :631-635 martyrdom rides
 --   SetReactState/AttackStop (no bridges); the :640-660 2s/6s reanimate
 --   scheduler rides UpdateEntry + SetFlag(UNIT_FIELD_FLAGS) + the
 --   instance-legged ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD)
@@ -127,8 +130,12 @@
 -- boss_lady_deathwhisper JustEngagedWith scheduler legs —
 -- Talk(SAY_BERSERK 15) is PORTED (10-min berserk timer, above);
 -- Talk(SAY_DOMINATE_MIND 10) rides a scheduler task with
--- random-target SelectTargetList (no random-target bridge) and a
--- difficulty gate (!= 10-man normal, :307); SummonWaveP1 /
+-- multi-target SelectTargetList (randomPlayer is the in-tree bridge —
+-- the earlier "no random-target bridge" claim is STALE, retracted) and
+-- a GetDifficulty() != RAID_DIFFICULTY_10MAN_NORMAL gate (:307; stays
+-- out: IsHeroic() is bridged but false for 25N, which the gate passes,
+-- so no exact difficulty bridge; the list also carries the
+-- -SPELL_DOMINATE_MIND aura exclusion); SummonWaveP1 /
 -- Shadow Bolt / DoImproveCultist scheduler tasks with
 -- Talk(SAY_DARK_EMPOWERMENT 11 / SAY_DARK_TRANSFORMATION 12) ride
 -- summon / random-target / cross-creature machines (no bridge); the
@@ -210,6 +217,7 @@ local SPELL_FROSTBOLT = 71420 -- :66
 local SPELL_FROSTBOLT_VOLLEY = 72905 -- :67
 local SPELL_DARK_TRANSFORMATION_T = 70895 -- :71 (boss trigger)
 local SPELL_DARK_TRANSFORMATION = 70900 -- :86
+local SPELL_FULL_HEAL = 17683 -- :82 (fanatic self-cast :627)
 local SPELL_VAMPIRIC_MIGHT = 70674
 local SPELL_SHADOW_CLEAVE = 70670
 local SPELL_NECROTIC_STRIKE = 70659
@@ -380,10 +388,13 @@ end
 
 -- C++ boss_lady_deathwhisper::JustEngagedWith (:281-342): the
 -- CheckRequiredBosses evade branch has no bridge; the phase-one
--- scheduler seeds stay out: SummonWaveP1 (summon machine), Shadow Bolt
--- / Death and Decay (playerOnly=FALSE default — dagran precedent),
--- Dominate Mind (difficulty gate), DoImproveCultist (cross-creature
--- machine). Talk(SAY_AGGRO)
+-- scheduler seeds that stay out are SummonWaveP1 (summon machine),
+-- Dominate Mind (multi-target SelectTargetList + the GetDifficulty()
+-- != 10MAN_NORMAL gate) and DoImproveCultist (cross-creature machine).
+-- Shadow Bolt (GROUP_ONE) and Death and Decay (phase-INDEPENDENT) ARE
+-- ported below — the C++ SelectTarget(Random) playerOnly=FALSE default
+-- is documented on randomPlayer (the tuten_kash pets/totems caveat).
+-- Talk(SAY_AGGRO)
 -- (:338) then DoCastSelf(SPELL_MANA_BARRIER, true) TRIGGERED (:340).
 local function deathwhisperJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
@@ -482,8 +493,9 @@ end
 -- method set (StopSpellCast lives only on the session-scoped gossip
 -- creature; Go creature casts are packet-only with no cast state, so
 -- the interrupt is a net no-op anyway — engine/world/lua_objects.go).
--- BLOCKED arms in the same switch: :626-629 FULL_HEAL rides
--- UpdateEntry(NPC_DEFORMED_FANATIC) — no UpdateEntry bridge; :631-635
+-- BLOCKED arms in the same switch: the :626-629 UpdateEntry
+-- (NPC_DEFORMED_FANATIC) leg stays out (no UpdateEntry bridge) while
+-- the FULL_HEAL self-cast is PORTED (above); :631-635
 -- DARK_MARTYRDOM rides SetReactState/AttackStop — no bridges; the
 -- :640-660 2s/6s reanimate scheduler legs ride UpdateEntry +
 -- SetFlag(UNIT_FIELD_FLAGS) + the instance-legged
@@ -491,6 +503,14 @@ end
 local function fanaticSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_DARK_TRANSFORMATION_T then
         creature:CastSpell(creature, SPELL_DARK_TRANSFORMATION)
+    elseif spellId == SPELL_DARK_TRANSFORMATION then
+        -- C++ :626-629 — DoCastSelf(SPELL_FULL_HEAL 17683) non-triggered
+        -- fires on the self-cast hit (event 14 delivers self-cast hits,
+        -- engine/world/boss_ai.go:2033 — only reflected targets are
+        -- skipped); the me->UpdateEntry(NPC_DEFORMED_FANATIC) leg stays
+        -- out (no UpdateEntry bridge), so the creature heals without
+        -- changing form.
+        creature:CastSpell(creature, SPELL_FULL_HEAL)
     end
 end
 

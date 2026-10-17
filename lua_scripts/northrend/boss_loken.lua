@@ -21,11 +21,11 @@
 -- AddSC_boss_loken() only; whole-server-tree grep for
 -- "spell_loken_pulsing_shockwave" hits boss_loken.cpp only; zero
 -- sql/ hits for either. No loken lua existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied, 9
--- OnDamageTaken (lua_creature_events.go fires (event, creature, attacker,
--- damage) pre-application — the moroes convention).
--- No timers in the ported arms; melee is engine-driven in Go
--- (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
+-- OnTargetDied, 4 OnDied, 9 OnDamageTaken (lua_creature_events.go fires
+-- (event, creature, attacker, damage) pre-application — the moroes
+-- convention). Timers via CreateLuaEvent (GUID-keyed, cancelled on
+-- events 2/4/23); melee is engine-driven in Go.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 2) (event 1; the BossAI
 -- bookkeeping passthrough, events.SetPhase(PHASE_NORMAL), the three
@@ -41,6 +41,21 @@
 -- instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_PULSING_SHOCKWAVE_AURA
 -- 59414) have no bridges).
 -- EVENT_ARC_LIGHTNING — PORTED (see UpdateAI note above).
+-- EVENT_LIGHTNING_NOVA — PORTED 2026-10-17 (Talk(SAY_NOVA 3) +
+-- Talk(EMOTE_NOVA 9) + DoCastAOE(SPELL_LIGHTNING_NOVA 52960) self-cast
+-- non-triggered + RemoveAurasDueToSpell(SPELL_PULSING_SHOCKWAVE 52961)
+-- via the RemoveAura bridge + reschedule self {20s,21s}; init 20s).
+-- EVENT_RESUME_PULSING_SHOCKWAVE — PORTED 2026-10-17 (DoCast(me,
+-- SPELL_PULSING_SHOCKWAVE_AURA 59414, TRIGGERED) + DoCast(me,
+-- SPELL_PULSING_SHOCKWAVE 52961, TRIGGERED); the ClearUnitState
+-- (UNIT_STATE_CASTING) leg is a net no-op in Go — packet-only casts,
+-- no creature cast state; re-seeded at DUNGEON_MODE(5s, 4s) after each
+-- nova via creature:IsHeroic(); init 1s at engage).
+-- EVENT_INTRO_DIALOGUE (Talk(SAY_INTRO_2 1) +
+-- events.SetPhase(PHASE_NORMAL)) — no timer-event bridge; the
+-- MoveInLineOfSight intro (Talk(SAY_INTRO_1 0) gated on _isIntroDone +
+-- IsValidAttackTarget + IsWithinDistInMap 40.0f, schedules
+-- EVENT_INTRO_DIALOGUE at 20s) — no MoveInLineOfSight bridge.
 -- DamageTaken — the health-pct one-shot machine (event 9): C++
 -- DamageTaken arms Talk(SAY_75HEALTH 5 / SAY_50HEALTH 6 /
 -- SAY_25HEALTH 7) when HealthBelowPctDamaged(100 - 25 *
@@ -68,20 +83,12 @@
 -- (SelectTarget(Random, 0) -> DoCast(SPELL_ARC_LIGHTNING 52921)
 -- non-triggered, 15s init / {15s,16s} re-arm, boss_loken.cpp:150-153
 -- / :109; the player-only pool documents the playerOnly=FALSE
--- approximation, lavanthor precedent). EVENT_LIGHTNING_NOVA
--- (Talk(SAY_NOVA 3) + Talk(EMOTE_NOVA 9) +
--- DoCastAOE(SPELL_LIGHTNING_NOVA 52960) +
--- RemoveAurasDueToSpell(SPELL_PULSING_SHOCKWAVE 52961) + reschedule
--- EVENT_RESUME_PULSING_SHOCKWAVE at DUNGEON_MODE(5s, 4s) + reschedule
--- self at 20-21s); EVENT_RESUME_PULSING_SHOCKWAVE
--- (DoCast(me, SPELL_PULSING_SHOCKWAVE_AURA 59414, triggered) +
--- ClearUnitState(UNIT_STATE_CASTING) + DoCast(me,
--- SPELL_PULSING_SHOCKWAVE 52961, triggered)) — STAYS OUT: the
--- legs are the blocker, not the timer bridge (CreateLuaEvent
--- exists) — EVENT_LIGHTNING_NOVA's
--- RemoveAurasDueToSpell(SPELL_PULSING_SHOCKWAVE 52961) has no
--- aura-removal bridge, EVENT_RESUME's ClearUnitState has no bridge,
--- Talk arms 3 and 9 ride the unmodeled machine.
+-- approximation, lavanthor precedent). EVENT_LIGHTNING_NOVA and
+-- EVENT_RESUME_PULSING_SHOCKWAVE are PORTED (see the PORTED ARMS
+-- note above — the "no aura-removal bridge" and "ClearUnitState has
+-- no bridge" stay-out rationales are superseded 2026-10-17:
+-- creature:RemoveAura is bridged and the clear-unit-state is a net
+-- no-op).
 
 -- spell_loken_pulsing_shockwave (SpellScript OnEffectHitTarget
 -- CalculateDamage: damage *= distance2d when > 1.0f,
@@ -96,8 +103,13 @@ local SAY_DEATH = 8
 local SAY_75HEALTH = 5
 local SAY_50HEALTH = 6
 local SAY_25HEALTH = 7
+local SAY_NOVA = 3 -- boss_loken.cpp:36
+local EMOTE_NOVA = 9 -- :43
 
 local SPELL_ARC_LIGHTNING = 52921
+local SPELL_LIGHTNING_NOVA = 52960 -- :47
+local SPELL_PULSING_SHOCKWAVE = 52961 -- :49
+local SPELL_PULSING_SHOCKWAVE_AURA = 59414 -- :50
 
 local timers = {}
 
@@ -164,6 +176,39 @@ local function arcTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI EVENT_RESUME_PULSING_SHOCKWAVE (boss_loken.cpp
+-- :163-166): DoCast(me, SPELL_PULSING_SHOCKWAVE_AURA 59414, TRIGGERED)
+-- + me->ClearUnitState(UNIT_STATE_CASTING) (net no-op in Go —
+-- packet-only casts, no creature cast state, engine/world/lua_objects.go)
+-- + DoCast(me, SPELL_PULSING_SHOCKWAVE 52961, TRIGGERED). One-shot:
+-- seeded at engage (1s) and re-seeded by each nova; no self re-arm.
+local function resumeTick(creature, guid)
+    creature:CastSpell(creature, SPELL_PULSING_SHOCKWAVE_AURA, true)
+    creature:CastSpell(creature, SPELL_PULSING_SHOCKWAVE, true)
+end
+
+-- C++ UpdateAI EVENT_LIGHTNING_NOVA (boss_loken.cpp:155-161):
+-- Talk(SAY_NOVA 3) + Talk(EMOTE_NOVA 9) +
+-- DoCastAOE(SPELL_LIGHTNING_NOVA 52960) (self-cast per the boss_ai.go
+-- DoCastAOE lowering, 1-arg = non-triggered) +
+-- RemoveAurasDueToSpell(SPELL_PULSING_SHOCKWAVE 52961) + reschedule
+-- EVENT_RESUME_PULSING_SHOCKWAVE at DUNGEON_MODE(5s, 4s) (heroic 4s,
+-- creature:IsHeroic()) + reschedule self at {20s,21s}; init 20s. The
+-- earlier "no aura-removal bridge" header claim was stale
+-- (creature:RemoveAura is bridged, engine/world/lua_objects.go:228).
+local function novaTick(creature, guid)
+    creature:Talk(SAY_NOVA)
+    creature:Talk(EMOTE_NOVA)
+    creature:CastSpell(creature, SPELL_LIGHTNING_NOVA)
+    creature:RemoveAura(SPELL_PULSING_SHOCKWAVE)
+    schedule(guid, "resume", creature:IsHeroic() and 4000 or 5000, function()
+        resumeTick(creature, guid)
+    end)
+    schedule(guid, "nova", {20000, 21000}, function()
+        novaTick(creature, guid)
+    end)
+end
+
 local function lokenEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     lokenResetMod(creature:GetGUID())
@@ -171,6 +216,12 @@ local function lokenEnterCombat(event, creature, target)
     cancelTimers(guid)
     schedule(guid, "arc", 15000, function()
         arcTick(creature, guid)
+    end)
+    schedule(guid, "nova", 20000, function()
+        novaTick(creature, guid)
+    end)
+    schedule(guid, "resume", 1000, function()
+        resumeTick(creature, guid)
     end)
 end
 

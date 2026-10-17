@@ -37,6 +37,13 @@
 -- 50.0f) -> DoCast(target, SPELL_LAVA_BURN 54249) (:83, 2-arg =
 -- non-triggered) -> CastSpell(target, 54249); init 10s, re-arm
 -- 15-23s.
+-- ScheduleTasks cauterizing-flames leg (:87-93, heroic-only) —
+-- DoCastAOE(SPELL_CAUTERIZING_FLAMES 59466) -> CastSpell(creature,
+-- 59466) self-cast (the boss_ai.go DoCastAOE lowering), 1-arg =
+-- non-triggered; init 3s, re-arm 10-16s; seeded at engage only when
+-- creature:IsHeroic() (the earlier "no IsHeroic bridge" claim was
+-- stale — IsHeroic is bridged, engine/world/lua_creature_events.go:203;
+-- the cyanigosa mana-destruction port).
 -- DOCUMENTED DEVIATIONS:
 -- The SelectTarget distance filters (40.0f :68, 50.0f :81) have no
 -- bridge — the randomPlayer pool (alive same-map/instance players,
@@ -49,11 +56,6 @@
 -- bridge — casts fire unconditionally on their timers (the hodir
 -- precedent).
 -- DOCUMENTED-ONLY (in this header; entry 29312):
--- The heroic-only cauterizing-flames leg (:89-94: DoCastAOE
--- SPELL_CAUTERIZING_FLAMES 59466, init 3s, re-arm 10-16s) — no
--- IsHeroic / difficulty bridge in the Lua runtime; porting it
--- unconditionally would fabricate normal-mode casts (the cyanigosa
--- heroic precedent).
 -- The JustReachedHome instance->SetData(DATA_HANDLE_CELLS,
 -- DATA_LAVANTHOR) leg — no instance-script bridge.
 
@@ -62,6 +64,7 @@ local ENTRY_LAVANTHOR = 29312
 local SPELL_FIREBOLT = 54235
 local SPELL_FLAME_BREATH = 54282
 local SPELL_LAVA_BURN = 54249
+local SPELL_CAUTERIZING_FLAMES = 59466 -- :25 (heroic-only)
 
 local timers = {}
 
@@ -141,6 +144,16 @@ local function lavaBurnTick(creature, guid)
     end)
 end
 
+-- C++ ScheduleTasks cauterizing-flames leg (:87-93, heroic-only):
+-- DoCastAOE(SPELL_CAUTERIZING_FLAMES) (self-cast per the boss_ai.go
+-- DoCastAOE lowering), 1-arg = non-triggered; init 3s, re-arm 10-16s.
+local function cauterizingFlamesTick(creature, guid)
+    creature:CastSpell(creature, SPELL_CAUTERIZING_FLAMES)
+    schedule(guid, "cauterizing", {10000, 16000}, function()
+        cauterizingFlamesTick(creature, guid)
+    end)
+end
+
 -- C++ boss_lavanthorAI::JustEngagedWith (:61-64): seeds the three
 -- combat timers; the BossAI::JustEngagedWith passthrough leg has no
 -- bridge.
@@ -156,6 +169,15 @@ local function lavanthorEnterCombat(event, creature)
     schedule(guid, "lavaburn", 10000, function()
         lavaBurnTick(creature, guid)
     end)
+    -- C++ :87: the cauterizing-flames scheduler seeds only when
+    -- IsHeroic() (the earlier "no IsHeroic bridge" header claim was
+    -- stale — creature:IsHeroic() is bridged,
+    -- engine/world/lua_creature_events.go:203).
+    if creature:IsHeroic() then
+        schedule(guid, "cauterizing", 3000, function()
+            cauterizingFlamesTick(creature, guid)
+        end)
+    end
 end
 
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
