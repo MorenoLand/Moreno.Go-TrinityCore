@@ -22,10 +22,17 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
--- DoMeleeAttackIfReady. Creature event 15 (OnSpellHitTarget) has a
--- constant in the scripting package but the world engine never
--- fires it — no bridge, so all SpellHitTarget touched-spell arms
--- are unmodeled (below).
+-- DoMeleeAttackIfReady. The "event 15 never fires — no bridge"
+-- claim is STALE — CREATURE_EVENT_ON_SPELL_HIT_TARGET is bridged
+-- (boss_ai.go:2033-2055; the arugal precedent). The SpellHitTarget
+-- touched-spell arms stay unmodeled on hit-target-enumeration grounds:
+-- C++ fires SpellHitTarget per ACTUAL hit unit of each cast, while Go
+-- reports the cast's single target — the shadow-blades / flame-sear /
+-- shadow-fury arms are self-cast AoEs, so Go would report the boss
+-- herself as the "hit" target, and the touched chain is an interacting
+-- aura system (dark-touched + flame-touched -> dark flame) that cannot
+-- be half-ported on primary-target-only data without fabricating
+-- aura states C++ never produces. Corrected 2026-10-17.
 -- Fight shape (C++-exact for the modeled arms): Lady Sacrolash
 -- (25165). OnEnterCombat(1): per-GUID reset, arm shadow blades
 -- 45248 10s then 10s, non-triggered self-cast (C++ DoCast(me, ...),
@@ -59,8 +66,9 @@
 -- arms have no UNIT_STATE/interrupt bridges — timers fire
 -- unconditionally (jeklik convention). The SpellHitTarget
 -- HandleTouchedSpells arm (45248/45329/45256/45270 -> dark touched
--- 45347; 45342 -> flame touched 45348) has no SpellHitTarget bridge
--- — unmodeled. The melee-range HandleTouchedSpells(victim, 45347)
+-- 45347; 45342 -> flame touched 45348) is unmodeled on
+-- hit-target-enumeration grounds (see header top — the "no bridge"
+-- label was stale). The melee-range HandleTouchedSpells(victim, 45347)
 -- arm has no melee-hook bridge — unmodeled (melee is engine-
 -- driven). Grand Warlock Alythess (25166). OnEnterCombat(1):
 -- per-GUID reset, arm conflagration 45342 45s then {30s,35s}, non-
@@ -112,7 +120,7 @@
 -- (instance->GetCreature(DATA_*), Talk(YELL_SISTER_*_DEAD), empower
 -- 45366 self-cast, the sister-phase spell arms, the death Talk/
 -- SetBossState(DONE) gates) and the alythess intro cross-Talk are
--- unmodeled; no SpellHitTarget bridge — all touched-spell chaining
+-- unmodeled (hit-target-enumeration grounds, see header top); all touched-spell chaining
 -- and the alythess blaze-summon (GO 187366) arms unmodeled; no
 -- summon bridge — the shadow-image spawns unmodeled; no flag/move/
 -- threat/MoveInLineOfSight/kill bridges — the lootable-flag,

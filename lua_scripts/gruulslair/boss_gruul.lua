@@ -54,13 +54,15 @@
 -- OnDied(4): Talk(SAY_DEATH) + cleanup (the _JustDied arm is
 -- blocked on the instance-script model). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state.
--- The SpellHitTarget override (event 15 exists as a scripting-
--- package constant but the world engine never fires it — eredar-
--- twins standing gap) is unmodeled: the ground-slam knockback
--- arms (player hit by 33525 -> urand magnetic pull 28337 /
--- knock back 24199) and the shatter-movement-correction arm
--- (hit by 33654 while performing -> performing=false + MoveChase
--- resume when not already chasing) have no bridge. The two
+-- The SpellHitTarget override: the "event 15 never fires" claim is
+-- STALE — event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) is bridged
+-- (boss_ai.go:2033-2055; the arugal precedent). Ported: the shatter
+-- performing-clear (gruulSpellHitTarget; the MoveChase correction leg
+-- has no movement bridge and stays out). Unmodeled: the ground-slam
+-- knockback arms (player hit by 33525 -> urand magnetic pull 28337 /
+-- knock back 24199) — Go reports the cast target (Gruul himself on
+-- the self-cast) while C++ iterates the actual AoE hit players, so the
+-- player-gated arm would never fire faithfully. The two
 -- SpellScripts are unmodeled (standing SpellScript gap):
 -- spell_gruul_shatter (33525-hit -> RemoveAurasDueToSpell(stoned
 -- 33652) + triggered 33671 shatter effect) and spell_gruul_
@@ -68,11 +70,9 @@
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (the
 -- BossAI::JustEngagedWith/JustDied/Reset DATA_GRUUL bookkeeping
--- arms skipped); no SpellHitTarget bridge — the knockback arm
--- and the C++-side performing-flag clear are unmodeled, so the
--- Lua port clears performing=false inline in the 10s ground-slam
--- timer arm (documented — the flag cannot otherwise clear since
--- event 15 never fires); no movement bridge — the ground-slam
+-- arms skipped). The knockback arm stays out (hit-enumeration
+-- gap, above); the performing-flag clear now rides event 15
+-- (gruulSpellHitTarget), C++-exact; no movement bridge — the ground-slam
 -- MotionMaster Clear/MoveIdle and the shatter MoveChase-resume
 -- arms unmodeled; no threat bridge — the hurtful-strike MaxThreat
 -- pick is a random alive player (curator convention) and the
@@ -172,10 +172,9 @@ local function gruulTick(creature, guid)
                 st.reverberation = st.reverberation + 10000
             end
             creature:CastSpell(creature, SPELL_SHATTER)
-            -- Deviation: C++ clears m_bPerformingGroundSlam in the
-            -- SpellHitTarget(33654) arm; event 15 never fires in
-            -- the Go engine, so the flag is cleared here.
-            st.performing = false
+            -- m_bPerformingGroundSlam clears in the SpellHitTarget(33654)
+            -- arm (gruulSpellHitTarget below); the MoveChase correction
+            -- leg has no movement bridge and stays out.
         end
     else
         -- Hurtful Strike: SelectTarget(MaxThreat, 1) approximated
@@ -249,6 +248,25 @@ local function gruulLeaveCombat(event, creature)
     resetState(creature:GetGUID())
 end
 
+-- C++ boss_gruul::SpellHitTarget (:125-159): the SPELL_SHATTER arm
+-- clears m_bPerformingGroundSlam when the shatter lands. Event 15
+-- (CREATURE_EVENT_ON_SPELL_HIT_TARGET) fires on the caster's bindings
+-- (boss_ai.go:2033-2055; the arugal precedent); the shatter cast is a
+-- self-cast so the reported target is Gruul himself, but the C++
+-- performing-clear does not gate on target type. The ground-slam
+-- knockback arm (33525 -> 28337/24199 self-casts on the hit PLAYER)
+-- stays out: Go reports the cast target (Gruul, on the self-cast)
+-- while C++ iterates the actual AoE hit players — no hit-enumeration
+-- bridge, and fabricating the hit set would misattribute knockbacks.
+local function gruulSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_SHATTER then
+        local st = gruulState[creature:GetGUID()]
+        if st and st.performing then
+            st.performing = false
+        end
+    end
+end
+
 -- C++ KilledUnit: TYPEID_PLAYER gate (C++-exact via GetObjectType() == "Player").
 local function gruulTargetDied(event, creature, victim)
     if victim:GetObjectType() == "Player" then
@@ -272,3 +290,4 @@ RegisterCreatureEvent(ENTRY_GRUUL, 2, gruulLeaveCombat)
 RegisterCreatureEvent(ENTRY_GRUUL, 3, gruulTargetDied)
 RegisterCreatureEvent(ENTRY_GRUUL, 4, gruulDied)
 RegisterCreatureEvent(ENTRY_GRUUL, 23, gruulReset)
+RegisterCreatureEvent(ENTRY_GRUUL, 15, gruulSpellHitTarget)

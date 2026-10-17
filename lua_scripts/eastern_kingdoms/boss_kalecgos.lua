@@ -100,7 +100,12 @@
 --   SetInCombatWith legs (no summon bridge — gurtogg precedent
 --   class); the human registers independently for 24891.
 -- - KilledUnit Talk legs (dragon 50% Talk(1), sathrovarr Talk(1)):
---   no KilledUnit bridge in engine/scripting.
+--   "no KilledUnit bridge" claim is STALE — CREATURE_EVENT_ON_TARGET_DIED
+--   (event 3) is bridged (lua_creature_events.go:438); the canonical port
+--   lua_scripts/sunwellplateau/boss_kalecgos.lua already ports both legs
+--   (kalecgosTargetDied :317, sathrovarrTargetDied :541). This file's
+--   registrations were removed 2026-10-12 so nothing here could fire anyway.
+--   Corrected 2026-10-17.
 -- - The 5 SpellScript/AuraScript loaders
 --   (spell_kalecgos_tap_check 46732 / spell_kalecgos_spectral_
 --   blast 44869 / spell_kalecgos_spectral_realm_trigger 44811 /

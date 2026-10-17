@@ -21,12 +21,12 @@
 -- Frenzy 55163, triggered); EVENT_TRANFORMATION (12s init): Talk
 -- (EMOTE_BEGIN_TRANSFORM 5) + Talk(SAY_TRANSFORM 3) +
 -- DoCastSelf(Transformation 55098) + DoCastSelf(Summon Phantom
--- Transform 55097, triggered) — single-fire: C++ re-arms 10s until
--- SpellHit(55098) LANDS (sets _transformed, Talk(EMOTE_TRANSFORMED),
--- cancels the event, :128-136) — no SpellHit bridge exists on the Lua
--- surface, so a 10s re-arm would re-cast the transformation forever;
--- the leg is modeled single-fire with the landing Talk(
--- EMOTE_TRANSFORMED 6) emulated at cast time (see transformTick).
+-- Transform 55097, triggered) + Repeat(10s) until the landing; the
+-- landing rides the event-15 SpellHitTarget hook (self-cast —
+-- moorabiSpellHitTarget), which sets _transformed,
+-- Talk(EMOTE_TRANSFORMED 6), cancels the re-arm, and strips
+-- SPELL_MOJO_FRENZY — the C++ SpellHit(55098) arm (:128-136) verbatim.
+-- Ported 2026-10-17 (the "event 15 never fires" claim was stale).
 -- The _transformed flag is emulation-internal and has no other modeled
 -- reader. KilledUnit Talk(SAY_SLAY 1) player-gated (event 3,
 -- victim:GetObjectType() == "Player" — nalorakk precedent);
@@ -46,9 +46,8 @@
 -- cast is not emulated.
 -- EnterEvadeMode _DespawnAtEvade — no despawn bridge (terestian
 -- precedent).
--- SpellHit(55098) _transformed latch — event 15 never fires
--- (standing); GetData(DATA_LESS_RABI) has no cross-AI bridge (zero
--- hits).
+-- GetData(DATA_LESS_RABI) has no cross-AI bridge (zero hits);
+-- the SpellHit(55098) latch now lands via event 15 (see transformTick).
 -- achievement_less_rabi (AchievementCriteriaScript, CAST_AI cross-AI
 -- OnCheck) — no achievement-criteria bridge on the Lua surface
 -- (snakes precedent) — documented-only.
@@ -110,18 +109,23 @@ end
 -- DoCastSelf(SUMMON_PHANTOM_TRANSFORM, triggered); the C++
 -- Repeat(10s) (:171) runs until SpellHit(55098) LANDS, at which point
 -- SpellHit sets _transformed, fires Talk(EMOTE_TRANSFORMED), and
--- cancels the event (:128-136) — no SpellHit bridge exists on the Lua
--- surface, so a re-arm would re-cast the transformation forever; the
--- leg stays single-fire with the landing Talk(EMOTE_TRANSFORMED)
--- emulated at cast time and the header's old "no reschedule is
--- C++-exact" claim corrected.
+-- cancels the event (:128-136).
 local function transformTick(creature, guid)
-    transformed[guid] = true
     creature:Talk(EMOTE_BEGIN_TRANSFORM)
     creature:Talk(SAY_TRANSFORM)
     creature:CastSpell(creature, SPELL_TRANSFORMATION)
     creature:CastSpell(creature, SPELL_SUMMON_PHANTOM_TRANSFORM, true)
-    creature:Talk(EMOTE_TRANSFORMED)
+    -- C++ Repeat(10s) (:171): re-arms until the transformation LANDS;
+    -- the landing is caught by the event-15 hook below
+    -- (moorabiSpellHitTarget), which sets _transformed, fires
+    -- Talk(EMOTE_TRANSFORMED), cancels this re-arm, and strips
+    -- SPELL_MOJO_FRENZY — the C++ SpellHit(55098) arm (:128-136)
+    -- verbatim. Ported 2026-10-17 (the "event 15 never fires" claim
+    -- was stale: the self-cast fires the caster-side SpellHitTarget
+    -- hook, bridged; the arugal precedent).
+    schedule(guid, "transform", 10000, function()
+        transformTick(creature, guid)
+    end)
 end
 
 -- C++ EVENT_GROUND_TREMOR: DoCastAOE; 18s init, 10s repeat; 50%
@@ -196,8 +200,31 @@ local function moorabiReset(event, creature)
     transformed[creature:GetGUID()] = nil
 end
 
+-- C++ boss_moorabi::SpellHitTarget on the SPELL_TRANSFORMATION
+-- self-cast landing (event 15 fires on the caster's bindings,
+-- boss_ai.go:1904; the cast is a self-cast so the boss is both
+-- parties — C++ fires both the target-side SpellHit and this
+-- caster-side hook). Ports the SpellHit(55098) arm (:128-136):
+-- _transformed latch, Talk(EMOTE_TRANSFORMED 6), cancel the
+-- EVENT_TRANFORMATION re-arm, RemoveAurasDueToSpell(SPELL_MOJO_FRENZY)
+-- (creature:RemoveAura, the alar precedent).
+local function moorabiSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_TRANSFORMATION then
+        local guid = creature:GetGUID()
+        transformed[guid] = true
+        creature:Talk(EMOTE_TRANSFORMED)
+        local per = timers[guid]
+        if per and per["transform"] then
+            RemoveEventById(per["transform"])
+            per["transform"] = nil
+        end
+        creature:RemoveAura(SPELL_MOJO_FRENZY)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_MOORABI, 1, moorabiEnterCombat)
 RegisterCreatureEvent(ENTRY_MOORABI, 2, moorabiLeaveCombat)
 RegisterCreatureEvent(ENTRY_MOORABI, 3, moorabiTargetDied)
 RegisterCreatureEvent(ENTRY_MOORABI, 4, moorabiDied)
 RegisterCreatureEvent(ENTRY_MOORABI, 23, moorabiReset)
+RegisterCreatureEvent(ENTRY_MOORABI, 15, moorabiSpellHitTarget)

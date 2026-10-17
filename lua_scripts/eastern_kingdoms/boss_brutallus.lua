@@ -70,8 +70,13 @@
 --   25038 IS header-verifiable (NPC_FELMYST = 25038) but me->
 --   SummonCreature has no Lua summon bridge (gurtogg class) —
 --   STRAND.
--- - KilledUnit's Talk(YELL_KILL = 6) leg: no KilledUnit bridge in
---   engine/scripting (no CreatureEvent id declared) — queued.
+-- - KilledUnit's Talk(YELL_KILL = 6) leg: the "no KilledUnit bridge"
+--   claim is STALE — CREATURE_EVENT_ON_TARGET_DIED (event 3) is bridged
+--   (lua_creature_events.go:438); the canonical port
+--   lua_scripts/sunwellplateau/boss_brutallus.lua already ports it
+--   (brutallusTargetDied :180, no victim gate — C++-exact). This file's
+--   registrations were removed 2026-10-12 so nothing here could fire
+--   anyway. Corrected 2026-10-17.
 -- - The whole Madrigosa intro: StartIntro's instance->Get-
 --   Creature(DATA_MADRIGOSA) leg (instance-leg-blocked) +
 --   Madrigosa->Respawn / setActive / SetFarVisible / SetMax-

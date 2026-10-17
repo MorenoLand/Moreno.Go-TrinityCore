@@ -96,15 +96,23 @@
 --   phase-transition arm would be a firesworn stub.
 -- - DamageTaken's phase != PHASE_GROUND no-lethal-damage latch:
 --   flight-only arm, moot without the flight model (noted).
--- - KilledUnit's Talk(YELL_KILL = 1) leg: no KilledUnit bridge
---   in engine/scripting (no CreatureEvent id declared) — queued
---   (standing).
+-- - KilledUnit's Talk(YELL_KILL = 1) leg: the "no KilledUnit bridge"
+--   claim is STALE — CREATURE_EVENT_ON_TARGET_DIED (event 3) is bridged
+--   (lua_creature_events.go:438); the canonical port
+--   lua_scripts/sunwellplateau/boss_felmyst.lua already ports it
+--   (felmystTargetDied :218, no victim gate — C++-exact). This file's
+--   events 1/2/4/23 registrations were removed 2026-10-12 so nothing
+--   here could fire anyway. Corrected 2026-10-17.
 -- - SpellHit(45714)'s SummonCreature(NPC_DEAD = 25268, 5s
 --   out-of-combat despawn) + SetMaxHealth/SetHealth + double
 --   self-charm (45717/45726) + Unit::DealDamage leg: me->
 --   SummonCreature has no Lua summon bridge (gurtogg class) —
---   STRAND; event 15 never fires in the Go engine (stratholme
---   finding).
+--   STRAND. The "event 15 never fires" label was doubly stale:
+--   the C++ hook is void SpellHit = event 14
+--   (CreatureEventOnHitBySpell, bridged — boss_ai.go:2033 +
+--   spells.go:9469; the 45714 caster is the fog-forced player, so
+--   the player-caster path would fire it), but the arm's load-bearing
+--   SummonCreature leg keeps it unmodeled. Corrected 2026-10-17.
 -- - JustSummoned's NPC_DEAD AttackStart/random + DoZoneInCombat
 --   + 45415 self-cast arm: shares the no-summon-bridge block.
 -- - npc_felmyst_vapor (25265): entry only in the header + this

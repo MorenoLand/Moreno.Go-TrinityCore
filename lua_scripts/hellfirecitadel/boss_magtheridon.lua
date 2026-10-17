@@ -110,9 +110,14 @@
 -- quake/blaze SPELLVALUE target-count args, the channeler
 -- InterruptNonMeleeSpells and the DoSelectBelowHpPctFriendly
 -- dark-mending pick (no creature-enumeration bridge) unmodeled;
--- no SpellHitTarget bridge — event 15 never fires in the Go
--- engine (eredar-twins standing gap; nothing in this file uses
--- it); no SpellScript/AuraScript bridge — spell_magtheridon_
+-- the "no SpellHitTarget bridge / event 15 never fires" claim is
+-- STALE — event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) is bridged
+-- (boss_ai.go:2033-2055; the arugal precedent). The boss's
+-- SpellHit(SPELL_SHADOW_CAGE 30168) -> Talk(SAY_BANISHED) arm
+-- (:187-191) is event-14-side and is ALREADY ported
+-- (magtheridonSpellHit below, registered :364; the muru-portal
+-- precedent). Corrected 2026-10-17.
+-- No SpellScript/AuraScript bridge — spell_magtheridon_
 -- blaze_target (30541-hit -> 30542 blaze on the hit unit),
 -- spell_magtheridon_shadow_grasp (30410-remove -> interrupt +
 -- triggered 44032 mind exhaustion) and spell_magtheridon_

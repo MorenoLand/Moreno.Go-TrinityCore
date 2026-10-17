@@ -67,8 +67,24 @@
 -- rides ACTION_TELEPORT_BACK (no-DoAction bridge; the krick
 -- ACTION_OUTRO precedent).
 -- boss_the_lich_king SpellHit — Talk(SAY_LK_FROSTMOURNE_KILL 9) on
--- SPELL_HARVESTED_SOUL (event 15 never fires; the anub_arak
--- precedent).
+-- SPELL_HARVESTED_SOUL 72679 (:813-816), gated me->IsInCombat() &&
+-- !IsHeroic() — stays unmodeled on trigger-path grounds. The C++ arm
+-- fires when the boss is HIT BY the spell, i.e. Eluna event 14
+-- (CreatureEventOnHitBySpell — BRIDGED: boss_ai.go:2033
+-- creature-caster path + spells.go:9469 player-caster path; the
+-- attumen/terestian/halazzi precedent; the 2026-10-17 "no event-14
+-- bridge" correction was itself wrong and is retracted here). But the
+-- SOLE caster of 72679 is the harvest-soul / in-frostmourne-room
+-- AuraScript OnRemove (C++ :2547-2552 / :2692-2697: the dead
+-- Frostmourne-room player casts it on the LK) — no AuraScript bridge
+-- exists, so event 14 would never fire for it in Go (the rotface /
+-- infinite-corruptor trigger-path precedent). The old "event 15 never
+-- fires" rationale conflated the two events: event 15
+-- (OnSpellHitTarget) fires on the CASTER's bindings and was never the
+-- right hook for this boss-side arm. Corrected 2026-10-17.
+-- The second SpellHit arm (:818-820, REMORSELESS_WINTER_1/2 68981/
+-- 72259 —> SetZoneOverrideLight) also stays out: no zone-light
+-- bridge on the Lua surface.
 -- boss_the_lich_king MovementInform — Talk(SAY_LK_REMORSELESS_WINTER
 -- 4) on POINT_CENTER_1 / POINT_CENTER_2; tirion->AI()->
 -- Talk(SAY_TIRION_OUTRO_2) is cross-AI Talk on POINT_LK_OUTRO_2 (no

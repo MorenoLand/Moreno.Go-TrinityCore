@@ -86,10 +86,16 @@
 -- smellSaronite / animusDead / vaporCount init — no bridges.
 -- SpellHitTarget — SPELL_SHADOW_CRASH_HIT 62659
 -- TYPEID_PLAYER leg -> shadowDodger = false (consumer:
--- achievement_shadowdodger below) — stays out on trigger-path grounds
--- (event 15 never fires for it in Go — event 15 itself is live,
--- boss_ai.go:1904); the achievement consumer has no GetData bridge
--- besides. The EVENT_SHADOW_CRASH 62660 cast itself IS ported above.
+-- achievement_shadowdodger below) — stays out on spell-id-key grounds.
+-- Event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) IS bridged
+-- (boss_ai.go:2033-2055; the arugal precedent) and the EVENT_SHADOW_CRASH
+-- 62660 cast itself IS ported above, but Go fires event 15 with the CAST
+-- spellId (62660) while the C++ arm keys on 62659, the triggered
+-- sub-spell applied by 62660's effect — keying the arm on 62660 would
+-- fire it on casts C++ ignores (a fabrication, not a port). The
+-- achievement consumer has no GetData bridge besides.
+-- Corrected 2026-10-17 (the old "event 15 never fires" rationale was
+-- stale).
 -- GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
 -- 31813188 — no GetData bridge; consumers: the two
 -- achievements below); DoAction(ACTION_VAPORS_DIE 1 /
