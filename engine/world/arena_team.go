@@ -97,7 +97,10 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 	}
 	var members []memberInfo
 
-	rows, err := cdb.QueryContext(ctx, "SELECT atm.guid, COALESCE(c.name, ''), COALESCE(c.class, 1), COALESCE(c.level, 80), atm.weekGames, atm.weekWins, atm.seasonGames, atm.seasonWins, atm.personalRating FROM arena_team_member AS atm LEFT JOIN characters AS c ON c.guid = atm.guid WHERE atm.arenaTeamId = ?", teamID)
+	// ORDER BY guid == C++: Members is a std::list in DB-load order, and the
+	// C++ load query is ORDER BY arenaTeamId ASC over PK (arenaTeamId, guid),
+	// so rows arrive guid-ascending within a team (ArenaTeamMgr.cpp:111-116).
+	rows, err := cdb.QueryContext(ctx, "SELECT atm.guid, COALESCE(c.name, ''), COALESCE(c.class, 1), COALESCE(c.level, 80), atm.weekGames, atm.weekWins, atm.seasonGames, atm.seasonWins, atm.personalRating FROM arena_team_member AS atm LEFT JOIN characters AS c ON c.guid = atm.guid WHERE atm.arenaTeamId = ? ORDER BY atm.guid", teamID)
 	if err == nil {
 		for rows.Next() {
 			var m memberInfo
@@ -422,9 +425,10 @@ func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) boo
 	// member including the joiner == C++ AddMember-then-broadcast order.
 	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventJoinSS, s.playerGUID, s.player.Name, teamName)
 
-	rosterPayload := protocol.NewBuffer(4)
-	rosterPayload.WriteU32(teamID)
-	s.handleArenaTeamRoster(ctx, rosterPayload.Bytes())
+	// C++ HandleArenaTeamAcceptOpcode ends after BroadcastEvent(JOIN_SS)
+	// (ArenaTeamHandler.cpp:200-201): the client shows "you joined"
+	// automatically and requests the roster itself, so no roster packet is
+	// sent here. A previous port fabricated one; removed.
 	s.debug("arena team accepted", "team", teamID)
 	return true
 }
