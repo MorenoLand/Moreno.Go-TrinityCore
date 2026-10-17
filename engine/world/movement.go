@@ -1780,6 +1780,15 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 			// self-kills skip it).
 			s.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 		}
+		// Unit::DealDamage (Unit.cpp:908-931): the random HIT-TAKEN and
+		// HIT-DONE durability arms sit in the non-lethal path with no
+		// damagetype and no attacker!=victim guard, so environmental
+		// self-damage rolls both, independently (rollDurabilityLossOnHit's
+		// "call once per side" contract). CHEAT_GOD returns from DealDamage
+		// before the rolls (Unit.cpp:735-737); here the god-negated damage
+		// is 0 and the helper's damage==0 early return covers that arm.
+		s.rollDurabilityLossOnHit(ctx, damage)
+		s.rollDurabilityLossOnHit(ctx, damage)
 	}
 
 	packet := protocol.NewBuffer(21)

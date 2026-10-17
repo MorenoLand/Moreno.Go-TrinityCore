@@ -10695,14 +10695,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if hbX == 0 && hbY == 0 && hbZ == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 						_ = s.server.WorldStore.DB.QueryRowContext(effCtx, "SELECT map, position_x, position_y, position_z FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", s.player.Race, s.player.Class).Scan(&hbMap, &hbX, &hbY, &hbZ)
 					}
-					s.teleportTo(hbMap, hbX, hbY, hbZ, s.player.Orientation)
+					s.teleportSpellEffectCaster(hbMap, hbX, hbY, hbZ, s.player.Orientation)
 					s.teleportEffectUnitTargets(hitTargets, hbMap, hbX, hbY, hbZ, s.player.Orientation)
 				} else if x, y, z, ori, mapID, ok := s.spellTargetPositionDest(effCtx, spell, spellID, uint32(effectIndex)); ok {
 					// Spell::SelectImplicitCasterDestTargets
 					// (Spell.cpp:1342-1357): TARGET_DEST_DB (17) — fixed
 					// teleports (e.g. 3561 Teleport: Stormwind) resolve the
 					// destination from `spell_target_position`.
-					s.teleportTo(mapID, x, y, z, ori)
+					s.teleportSpellEffectCaster(mapID, x, y, z, ori)
 					s.teleportEffectUnitTargets(hitTargets, mapID, x, y, z, ori)
 				} else {
 					// Spell::SelectImplicitCasterDestTargets
@@ -10721,7 +10721,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							if ori == 0 {
 								ori = s.player.Orientation
 							}
-							s.teleportTo(s.player.Map, obj.X, obj.Y, obj.Z, ori)
+							s.teleportSpellEffectCaster(s.player.Map, obj.X, obj.Y, obj.Z, ori)
 							s.teleportEffectUnitTargets(hitTargets, s.player.Map, obj.X, obj.Y, obj.Z, ori)
 						}
 					} else {
@@ -35253,7 +35253,11 @@ func (s *session) teleportEffectUnitTargets(hitTargets []uint64, mapID uint32, x
 		s.server.motionMu.Lock()
 		sameMap := motion.Map == mapID
 		if sameMap {
+			// Unit::NearTeleportTo (Unit.cpp:13332) carries the full
+			// position including the substituted orientation
+			// (SpellEffects.cpp:1222, folded into ori by the callers).
 			motion.X, motion.Y, motion.Z = x, y, z
+			motion.Orientation = ori
 		}
 		instMap, instanceID := motion.Map, motion.InstanceID
 		s.server.motionMu.Unlock()
@@ -35262,6 +35266,39 @@ func (s *session) teleportEffectUnitTargets(hitTargets []uint64, mapID uint32, x
 		}
 		s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, effectTarget, x, y, z)
 	}
+}
+
+// teleportSpellEffectCaster is the caster's own leg of
+// Spell::EffectTeleportUnits (SpellEffects.cpp:1199-1232): the caster rides
+// the spell's unit-target list, so its own HIT_TARGET invocation carries the
+// same arms. An in-flight caster skips the teleport
+// (SpellEffects.cpp:1202-1204, the unitTarget->IsInFlight() gate fires for
+// the caster's own invocation too). A same-map destination lands as a near
+// teleport (Unit::NearTeleportTo, Unit.cpp:13332 —
+// TELE_TO_NOT_LEAVE_COMBAT | TELE_TO_NOT_UNSUMMON_PET, so combat is not
+// stopped, the pet is never unsummoned, and selection is not cleared),
+// which is nearTeleportMove; only a cross-map destination takes the far
+// path (Player::TeleportTo with TELE_TO_SPELL, SpellEffects.cpp:1227-1228).
+// The movement-state clear mirrors teleportTo's same-map tail (the shared
+// Player::TeleportTo prefix resets movement flags on any teleport,
+// Player.cpp:1704-1706).
+func (s *session) teleportSpellEffectCaster(mapID uint32, x, y, z, ori float32) {
+	if s == nil || s.player == nil || s.inFlight {
+		return
+	}
+	if mapID == s.player.Map {
+		// Fail closed on a degenerate destination (e.g. an unset homebind
+		// resolving to 0,0,0) — the old teleportTo leg rejected it via
+		// validTrinityMapLocation; C++ always carries a real homebind/row.
+		if s.server != nil && !s.validTrinityMapLocation(mapID, x, y, z, ori) {
+			return
+		}
+		s.nearTeleportMove(x, y, z, ori)
+		s.isFalling = false
+		s.isMoving = false
+		return
+	}
+	s.teleportTo(mapID, x, y, z, ori)
 }
 
 // handleEffectTeleUnitsFaceCaster mirrors Spell::EffectTeleUnitsFaceCaster
