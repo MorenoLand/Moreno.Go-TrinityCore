@@ -10001,6 +10001,38 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 						targetDamage := chainScaledAmount(damage, chainMult, chainJumpIndex[effectTarget])
+						// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
+						// the Devastate arm (Warrior family, SpellFamilyFlags[1]
+						// & 0x40 — "player ones" per the C++ comment) applies
+						// Sunder Armor through a triggered cast of 58567, then a
+						// second time when the caster carries the Glyph of
+						// Devastate dummy aura (58388), and folds (stackAmount-1)
+						// * CalculateDamage(EFFECT_2) into fixed_bonus ahead of
+						// the addPctMods TOTAL_PCT fold and the chain-multiplier
+						// falloff (SpellEffects.cpp:3216, pre-fold like C++).
+						// The triggered casts ride castSpellDirect (the C++
+						// CastSpell(..., true) route); the stack count is the
+						// target's live Sunder Armor stacks (the C++
+						// GetAura(58567, casterGUID) lookup — the caster-GUID
+						// filter folds into Go's one-aura-per-spell merge model,
+						// so stacks applied by other warriors merge in, the same
+						// standing delta recorded on the Envenom arm). The C++
+						// effect-2 CalculateDamage term rides CalcValueForLevel
+						// (the CalculateDamage twin).
+						wdTarget := wd
+						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x40 != 0 {
+							s.castSpellDirect(effCtx, devastateSunderArmorSpell, effectTarget)
+							if s.hasAura(devastateGlyphSpell) {
+								s.castSpellDirect(effCtx, devastateSunderArmorSpell, effectTarget)
+							}
+							if stacks := s.devastateSunderStacks(effCtx, effectTarget); stacks > 1 {
+								var eff2 uint32
+								if len(spell.Effects) > 2 {
+									eff2 = uint32(spell.Effects[2].CalcValueForLevel(spell, casterLevel))
+								}
+								wdTarget.fixedBonus += int32((stacks - 1) * eff2)
+							}
+						}
 						if weaponDamageEffect {
 							// Spell::EffectWeaponDmg (SpellEffects.cpp:3171-3498):
 							// the weapon-damage computation — the
@@ -10016,7 +10048,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							// order (spell_bonus :3453, pct :3456); ApplySpellMod
 							// and MeleeDamageBonusDone/Taken ride the damage
 							// pipeline (executeSpellDamageWithFlags).
-							targetDamage = chainScaledAmount(s.weaponDmgEffectBase(effCtx, spell, wd), chainMult, chainJumpIndex[effectTarget])
+							targetDamage = chainScaledAmount(s.weaponDmgEffectBase(effCtx, spell, wdTarget), chainMult, chainJumpIndex[effectTarget])
 						}
 						// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404):
 						// the victim's AOE-avoidance aura product scales the
@@ -10027,39 +10059,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						if isAreaDamageEffect && targetDamage > 0 {
 							if avoid := s.aoeDamageAvoidanceMultiplier(effCtx, effectTarget, aoeSchoolMask); avoid != 1 {
 								targetDamage = uint32(float64(targetDamage) * avoid)
-							}
-						}
-						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x40 != 0 {
-							// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
-							// the Devastate arm (Warrior family,
-							// SpellFamilyFlags[1] & 0x40 — "player ones" per
-							// the C++ comment) applies Sunder Armor through a
-							// triggered cast of 58567, then a second time when
-							// the caster carries the Glyph of Devastate dummy
-							// aura (58388), and folds (stackAmount-1) *
-							// CalculateDamage(EFFECT_2) into fixed_bonus. The
-							// triggered casts ride castSpellDirect (the C++
-							// CastSpell(..., true) route); the stack count is
-							// the target's live Sunder Armor stacks (the C++
-							// GetAura(58567, casterGUID) lookup — the
-							// caster-GUID filter folds into Go's
-							// one-aura-per-spell merge model, so stacks
-							// applied by other warriors merge in, the same
-							// standing delta recorded on the Envenom arm).
-							// The C++ effect-2 CalculateDamage term rides
-							// CalcValueForLevel (the CalculateDamage twin);
-							// the actual weapon swing behind it stays
-							// unmodeled.
-							s.castSpellDirect(effCtx, devastateSunderArmorSpell, effectTarget)
-							if s.hasAura(devastateGlyphSpell) {
-								s.castSpellDirect(effCtx, devastateSunderArmorSpell, effectTarget)
-							}
-							if stacks := s.devastateSunderStacks(effCtx, effectTarget); stacks > 1 {
-								var eff2 uint32
-								if len(spell.Effects) > 2 {
-									eff2 = uint32(spell.Effects[2].CalcValueForLevel(spell, casterLevel))
-								}
-								targetDamage += (stacks - 1) * eff2
 							}
 						}
 						if weaponDamageEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[0]&0x8000000 != 0 {
@@ -10516,12 +10515,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// a documented no-bridge (no cast-wide accumulator in
 					// Go — one executeSpellDamage per effect per target,
 					// the tree-wide convention).
-					if burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID, true); burned > 0 {
-						s.executeSpellDamage(effCtx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex)
-						// SpellEffects.cpp:1370-1373: the take-target-power
-						// log fires before the multiplier, with a zero gain.
-						burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: burned, powerType: uint32(eff.MiscValue)})
+					// SpellEffects.cpp:1359: damage < 0 returns before the
+					// log; a zero amount burns nothing but still logs.
+					if amount < 0 || !s.spellPowerBurnGatesPass(effectTarget, eff.MiscValue) {
+						continue
 					}
+					burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID, true)
+					if burned > 0 {
+						s.executeSpellDamage(effCtx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex)
+					}
+					// SpellEffects.cpp:1370-1373: the take-target-power log
+					// fires past the gates before the multiplier, even for
+					// a zero burn, with a zero gain.
+					burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: burned, powerType: uint32(eff.MiscValue)})
 				}
 				if len(burnLog) > 0 {
 					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerBurn), burnLog)
@@ -11102,9 +11108,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				baseAmount := eff.CalcValueForLevel(spell, casterLevel)
 				var drainLog []takeTargetPowerEntry
 				for _, effectTarget := range hitTargets {
-					// SpellEffects.cpp:1275: damage < 0 returns before any
-					// power moves; a zero amount drains nothing below.
-					if baseAmount <= 0 {
+					// SpellEffects.cpp:1274: damage < 0 returns before any
+					// power moves; a zero amount drains nothing but still
+					// logs. The alive/power-type gates sit ahead of the
+					// damage-bonus legs like C++.
+					if baseAmount < 0 || !s.spellPowerBurnGatesPass(effectTarget, eff.MiscValue) {
 						continue
 					}
 					amount := s.spellDamageBonusDone(effCtx, drainSpell, drainKnown, uint32(baseAmount), effectTarget, effectIndex, false)
@@ -11119,22 +11127,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// power scaled by the effect value multiplier, never
 					// from a self drain. The Mana Burn cap is burn-only
 					// (SpellEffects.cpp:1358-1364).
-					if drained := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, int32(amount), spellID, false); drained > 0 {
-						gainMultiplier := float32(0)
-						if effectTarget != s.playerGUID {
-							gain := int32(effectValueMultiplied(drained, calcValueMultiplier(drainSpell, effectIndex, s)))
-							s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, gain)
-							// SpellEffects.cpp:1300: the drain gain rides
-							// Unit::EnergizeBySpell(caster, caster, ...) — log +
-							// assist-threat tail.
-							s.energizeBySpellTail(effCtx, drainSpell, spellID, s.playerGUID, eff.MiscValue, gain)
-							gainMultiplier = calcValueMultiplier(drainSpell, effectIndex, s)
-						}
-						// SpellEffects.cpp:1305: the take-target-power log
-						// carries the drained amount with the value
-						// multiplier (zero on a self drain).
-						drainLog = append(drainLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: drained, powerType: uint32(eff.MiscValue), gainMultiplier: gainMultiplier})
+					drained := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, int32(amount), spellID, false)
+					gainMultiplier := float32(0)
+					if effectTarget != s.playerGUID {
+						gain := int32(effectValueMultiplied(drained, calcValueMultiplier(drainSpell, effectIndex, s)))
+						s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, gain)
+						// SpellEffects.cpp:1299-1302: the drain gain rides
+						// Unit::EnergizeBySpell(caster, caster, ...) even when
+						// zero — the log fires, the threat tail stays gated
+						// on a positive gain (energizeBySpellTail).
+						s.energizeBySpellTail(effCtx, drainSpell, spellID, s.playerGUID, eff.MiscValue, gain)
+						gainMultiplier = calcValueMultiplier(drainSpell, effectIndex, s)
 					}
+					// SpellEffects.cpp:1305: the take-target-power log fires
+					// past the gates even for a zero drain, carrying the
+					// value multiplier (zero on a self drain).
+					drainLog = append(drainLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: drained, powerType: uint32(eff.MiscValue), gainMultiplier: gainMultiplier})
 				}
 				if len(drainLog) > 0 {
 					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), drainLog)
@@ -16178,10 +16186,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				var burnLog []takeTargetPowerEntry
 				// Spell::EffectPowerBurn (SpellEffects.cpp:1352): the power
 				// taken is `damage` (the HandleEffects CalculateDamage value).
-				if burned := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, eff.CalcValueForLevel(spell, casterLevel), spellID, true); burned > 0 {
-					s.executeSpellDamage(ctx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex)
-					// SpellEffects.cpp:1370-1373: the take-target-power log
-					// fires before the multiplier, with a zero gain.
+				// SpellEffects.cpp:1359/1370-1373: damage < 0 returns before
+				// the log; past the gates the log fires even for a zero burn.
+				burnAmount := eff.CalcValueForLevel(spell, casterLevel)
+				if burnAmount >= 0 && s.spellPowerBurnGatesPass(effectTarget, eff.MiscValue) {
+					burned := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, burnAmount, spellID, true)
+					if burned > 0 {
+						s.executeSpellDamage(ctx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex)
+					}
 					burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: burned, powerType: uint32(eff.MiscValue)})
 				}
 				if len(burnLog) > 0 {
@@ -16544,7 +16556,11 @@ func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell
 		return
 	}
 	gain := int32(int64(maxPower) * int64(eff.CalcValueForLevel(spell, casterLevel)) / 100)
-	if gain <= 0 {
+	// Spell::EffectEnergizePct (SpellEffects.cpp:1869-1872) calls
+	// Unit::EnergizeBySpell unconditionally past the maxPower gate, and the
+	// log fires even for a zero gain (Unit.cpp:6590-6596) — so the call runs
+	// for gain == 0; only negative gains return early.
+	if gain < 0 {
 		return
 	}
 	s.applySpellEnergize(ctx, effectTarget, power, gain)
@@ -17066,6 +17082,26 @@ func drainManaResilienceReduction(target *session, amount uint32) uint32 {
 	return reduction
 }
 
+// spellPowerBurnGatesPass mirrors the unit-target gates shared by
+// Spell::EffectPowerDrain (SpellEffects.cpp:1274) and Spell::EffectPowerBurn
+// (SpellEffects.cpp:1359): the effect's MiscValue names a valid power, and
+// the target is an alive unit whose power type matches. Past these gates C++
+// fires the take-target-power log even when the drained/burned amount is
+// zero, so the effect arms check this to decide whether a zero amount still
+// logs (a gate failure logs nothing).
+func (s *session) spellPowerBurnGatesPass(targetGUID uint64, powerType int32) bool {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 || powerType < 0 || powerType >= 7 {
+		return false
+	}
+	if target := s.spellPowerTarget(targetGUID); target != nil && target.player != nil {
+		return target.player.Health != 0 && playerPowerType(target.player) == uint8(powerType)
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+	return motion != nil && motion.Health != 0 && motion.PowerType == uint32(powerType)
+}
+
 func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, powerType int32, amount int32, spellID uint32, manaBurnCap bool) uint32 {
 	if s == nil || s.player == nil || powerType < 0 || powerType >= 7 || amount <= 0 {
 		return 0
@@ -17302,7 +17338,11 @@ func (s *session) adjustSpellPower(ctx context.Context, targetGUID uint64, power
 }
 
 func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targetGUID uint64, amount int32) {
-	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 || amount <= 0 {
+	// Spell::EffectThreat (SpellEffects.cpp:3470-3485) carries no amount
+	// guard: zero registers a threat-list entry (and sets combat) and
+	// negative amounts reduce threat through ThreatReference::AddThreat
+	// (ThreatManager.cpp:375-408), so the call runs for any amount.
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
 		return
 	}
 	// Spell::EffectThreat (SpellEffects.cpp:3476): a dead caster generates no
@@ -17345,17 +17385,27 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	if motion.ThreatMgr == nil {
 		motion.ThreatMgr = NewThreatManager(motion)
 	}
+	// Spell::EffectThreat (SpellEffects.cpp:3481-3482) returns silently for
+	// units that cannot have a threat list — no combat state, no AI reaction.
+	// (The combat-state arm at ThreatManager.cpp:328-339 lives inside
+	// AddThreat, which this effect never reaches.)
+	if !motion.ThreatMgr.OwnerCanHaveThreatList() {
+		s.server.motionMu.Unlock()
+		return
+	}
 	wasInCombat := motion.InCombat
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z))
-	// Units that cannot have a threat list skip the whole arm
-	// (ThreatManager::AddThreat's !CanHaveThreatList() early leg,
-	// ThreatManager.cpp:328-339): no redirect consumption, no victim set —
-	// combat state alone is kept.
 	switched := false
 	var victim uint64
-	if motion.ThreatMgr.OwnerCanHaveThreatList() {
+	{
 		threat := float32(amount)
-		threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
+		var rSwitched bool
+		var rVictim uint64
+		// ThreatManager::AddThreat (ThreatManager.cpp:346): redirects only
+		// consume positive amounts.
+		if amount > 0 {
+			threat, rSwitched, rVictim = s.splitThreatRedirects(motion, threat)
+		}
 		switched, victim = motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 		if rSwitched {
 			switched, victim = true, rVictim
@@ -34382,14 +34432,29 @@ func (s *session) spellWeaponSwingDamage(ctx context.Context, p weaponDmgParams)
 // effects in index order ("Sequence is important", SpellEffects.cpp:3440):
 // each 58/17/121 effect adds fixed_bonus, each 31 effect multiplies by
 // weaponDamagePercentMod. The addPctMods UNIT_MOD_DAMAGE_* TOTAL_PCT fold on
-// fixed_bonus is deferred to the damage pipeline (spellDamagePctDone),
-// which is exact by distributivity — see weaponDmgParamsForSpell.
+// fixed_bonus lands inline above when wd.addTotalPct (physical school, no
+// ATTR6 limit); when the fold is off, C++ defers the pct legs to
+// Unit::MeleeDamageBonusDone and Go's spellDamagePctDone covers them by
+// distributivity — see weaponDmgParamsForSpell.
 func (s *session) weaponDmgEffectBase(ctx context.Context, spell wotlk.Spell, wd weaponDmgParams) uint32 {
 	base := int64(s.spellWeaponSwingDamage(ctx, wd))
+	fixedBonus := wd.fixedBonus
+	if wd.addTotalPct {
+		// Spell::EffectWeaponDmg (SpellEffects.cpp:3426-3432): the addPctMods
+		// UNIT_MOD_DAMAGE_* TOTAL_PCT fold lands on fixed_bonus — the
+		// NORMAL-school SPELL_AURA_MOD_DAMAGE_PERCENT_DONE product with the
+		// CheckAttackFitToAuraRequirement gate, i.e. meleeDamageDonePctMod.
+		// The swing already carries it (baked player damage fields), but the
+		// pipeline's spellDamagePctDone skips the arm for physical weapon
+		// spells, so the fold lands here rather than riding distributivity.
+		if mult := s.meleeDamageDonePctMod(ctx, wd.attType); mult != 1 {
+			fixedBonus = int32(float64(fixedBonus) * mult)
+		}
+	}
 	for j := range spell.Effects {
 		switch spell.Effects[j].Effect {
 		case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectNormalizedWeaponDmg:
-			base += int64(wd.fixedBonus)
+			base += int64(fixedBonus)
 		case spellEffectWeaponPercentDamage:
 			base = int64(float64(base) * wd.pctMod)
 		}
