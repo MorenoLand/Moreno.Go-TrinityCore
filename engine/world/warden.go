@@ -458,25 +458,30 @@ func (w *wardenSession) handleHashResult(data []byte) error {
 	var hash [20]byte
 	copy(hash[:], data[:20])
 	if hash != wardenWinClientKeySeedHash {
+		// C++ WardenWin.cpp:165-172 returns early on mismatch without
+		// re-keying, but Warden::HandleData (Warden.cpp:246-248) still runs
+		// InitializeModule() unconditionally afterward — with the OLD
+		// ciphers and without the _initialized re-key. With the LOG action
+		// the session stays open and C++ still delivers
+		// WARDEN_SMSG_MODULE_INITIALIZE, so fall through to it here.
 		w.applyPenalty(nil, "warden hash reply mismatch")
-		return fmt.Errorf("hash reply mismatch")
-	}
+	} else {
+		// Re-key ciphers to ClientKeySeed and ServerKeySeed
+		w.inputKey = wardenWinClientKeySeed
+		w.outputKey = wardenWinServerKeySeed
 
-	// Re-key ciphers to ClientKeySeed and ServerKeySeed
-	w.inputKey = wardenWinClientKeySeed
-	w.outputKey = wardenWinServerKeySeed
+		var err error
+		w.inputCrypto, err = rc4.NewCipher(w.inputKey[:])
+		if err != nil {
+			return fmt.Errorf("failed to re-key input cipher: %w", err)
+		}
+		w.outputCrypto, err = rc4.NewCipher(w.outputKey[:])
+		if err != nil {
+			return fmt.Errorf("failed to re-key output cipher: %w", err)
+		}
 
-	var err error
-	w.inputCrypto, err = rc4.NewCipher(w.inputKey[:])
-	if err != nil {
-		return fmt.Errorf("failed to re-key input cipher: %w", err)
+		w.initialized = true
 	}
-	w.outputCrypto, err = rc4.NewCipher(w.outputKey[:])
-	if err != nil {
-		return fmt.Errorf("failed to re-key output cipher: %w", err)
-	}
-
-	w.initialized = true
 
 	// Send WARDEN_SMSG_MODULE_INITIALIZE
 	return w.sendModuleInitialize()
@@ -858,6 +863,10 @@ func (w *wardenSession) handleWardenData(ctx context.Context, payload []byte) bo
 	opcode := payload[0]
 	rest := payload[1:]
 
+	// Warden.cpp:226-228 — C++ logs every packet's opcode and size at
+	// dispatch entry (plus a hexdump, which Go does not emit).
+	w.session.server.Logger.Debug("warden packet", "opcode", fmt.Sprintf("%02X", opcode), "size", len(payload)-1)
+
 	switch opcode {
 	case wardenCmsgModuleMissing:
 		_ = w.sendModuleToClient()
@@ -867,8 +876,12 @@ func (w *wardenSession) handleWardenData(ctx context.Context, payload []byte) bo
 		_ = w.handleCheckResult(rest)
 	case wardenCmsgHashResult:
 		_ = w.handleHashResult(rest)
-	case wardenCmsgMemChecksResult, wardenCmsgModuleFailed:
-		// Client warnings / failures
+	case wardenCmsgMemChecksResult:
+		// Warden.cpp:243-244 — C++ logs "NYI WARDEN_CMSG_MEM_CHECKS_RESULT received!".
+		w.session.server.Logger.Debug("warden", "msg", "NYI WARDEN_CMSG_MEM_CHECKS_RESULT received!")
+	case wardenCmsgModuleFailed:
+		// Warden.cpp:250-251 — C++ logs "NYI WARDEN_CMSG_MODULE_FAILED received!".
+		w.session.server.Logger.Debug("warden", "msg", "NYI WARDEN_CMSG_MODULE_FAILED received!")
 	default:
 		w.session.server.Logger.Warn("unknown warden opcode received", "opcode", opcode, "size", len(payload))
 	}

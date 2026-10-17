@@ -5828,7 +5828,8 @@ func compressAccountData(data []byte) ([]byte, error) {
 }
 
 // handleWardenData processes CMSG_WARDEN_DATA (0x2E7).
-// Reference: WorldSession::HandleWardenDataOpcode (WardenHandler.cpp:25).
+// Reference: WorldSession::HandleWardenDataOpcode (Warden.cpp:283),
+// dispatch at Warden::HandleData (Warden.cpp:224).
 func (s *session) handleWardenData(ctx context.Context, payload []byte) bool {
 	if s.warden == nil {
 		return true

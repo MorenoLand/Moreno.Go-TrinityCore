@@ -1441,6 +1441,11 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s)
 	}
+	// MovementHandler.cpp:647-650: GetPlayer()->SendMessageToSet(&data, false) —
+	// the bool overload never skips self (Object.cpp:1814-1818), so the acking
+	// player receives its own time-skipped echo like everyone else. Same
+	// self-echo fix as handleMoveKnockBackAck.
+	_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), true)
 	return true
 }
 
