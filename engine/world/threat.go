@@ -596,14 +596,24 @@ func (tm *ThreatManager) SetThreat(victim uint64, amount float32) (switched bool
 
 // MatchUnitThreatToHighestThreat sets the victim's threat equal to the highest threat currently on the creature.
 // Reference: TrinityCore ThreatManager::MatchUnitThreatToHighestThreat (ThreatManager.cpp:419-437).
-// Documented deltas: C++ skips a highest that is itself taunting or unavailable;
-// Go has no taunt-state model, so the raw highest wins. C++ returns early on an
-// empty list; Go matches (no seed, no victim change). C++ routes the delta
-// through AddThreat with ignoreModifiers/ignoreRedirects; Go writes the entry
-// directly, which is value-equivalent for the missing-or-lower victim. Go always
-// reports switched; C++ re-selects through the taunt-state comparator.
-// The taunt-state machinery (TauntUpdate, comparator precedence) is
-// documented at AddThreat; Go has no taunt-state model.
+// The "highest" is the heap's top (CompareReferencesLT, ThreatManager.cpp:593-601):
+// taunt-state precedence first, then effective threat descending — with the
+// taunt-skip leg (ThreatManager.cpp:424-429): a taunting highest yields to a
+// next available ref with strictly more threat. Go entries have no
+// online/suppressed/offline states, so every entry is available.
+// The delta runs through the AddThreat entry legs
+// (ThreatManager.cpp:379-410) with ignoreModifiers/ignoreRedirects, which
+// keeps the redirect registry untouched: a missing entry is created
+// (PutThreatListRef, ThreatManager.cpp:793, marks the client list dirty),
+// then ThreatReference::AddThreat (ThreatManager.cpp:38-47) applies the delta
+// — a zero delta is a no-op with no dirty mark, negatives floor at 0.
+// Victim selection is the AddThreat legs verbatim: with a current victim the
+// existing-entry leg selects nothing (the new-entry leg runs ProcessAIUpdates
+// hooks only) — the 1s Update tick reselects, where the taunt-state
+// precedence (ReselectVictim, ThreatManager.cpp:540-585) promotes the taunter
+// while its bridged MOD_TAUNT state lives, so the victim switches on the tick
+// exactly like C++ rather than inside the taunt. Only a missing current
+// victim reselects immediately (UpdateVictim, ThreatManager.cpp:516-528).
 func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched bool, newVictim uint64) {
 	if victim == 0 {
 		return false, tm.currentVictim
@@ -617,23 +627,56 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 		return false, tm.currentVictim
 	}
 
-	var highestThreat float32
-	for guid := range tm.entries {
-		if eff := tm.effectiveThreatLocked(guid); eff > highestThreat {
-			highestThreat = eff
-		}
+	type candidate struct {
+		guid    uint64
+		threat  float32
+		taunted bool
 	}
-	current := tm.effectiveThreatLocked(victim)
-	if highestThreat > current {
-		// C++ adds the delta to the victim's _baseAmount
-		// (ThreatManager.cpp:419-437 runs highest->GetThreat() -
-		// GetThreat(target) through ThreatReference::AddThreat), which
-		// marks the client list dirty (ThreatManager.cpp:49).
-		tm.entries[victim] += highestThreat - current
+	cands := make([]candidate, 0, len(tm.entries))
+	for guid := range tm.entries {
+		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid)})
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].taunted != cands[j].taunted {
+			return cands[i].taunted
+		}
+		return cands[i].threat > cands[j].threat
+	})
+	highest := cands[0]
+	// The taunt-skip leg (ThreatManager.cpp:424-429): a taunting highest
+	// yields to the next available ref with strictly more threat.
+	if highest.taunted && len(cands) > 1 && cands[1].threat > highest.threat {
+		highest = cands[1]
+	}
+
+	delta := highest.threat - tm.effectiveThreatLocked(victim)
+	if _, ok := tm.entries[victim]; !ok {
+		// PutThreatListRef (ThreatManager.cpp:793) marks the client list
+		// dirty on every new ref — even when the delta below no-ops.
+		tm.entries[victim] = 0
 		tm.needClientUpdate = true
 	}
-	tm.currentVictim = victim
-	return true, victim
+	// ThreatReference::AddThreat (ThreatManager.cpp:38-47): a zero delta is
+	// a no-op with no dirty mark; a negative delta floors the base at 0;
+	// any nonzero write marks the client list dirty (ThreatManager.cpp:49).
+	if delta != 0 {
+		newThreat := tm.entries[victim] + delta
+		if newThreat < 0 {
+			newThreat = 0
+		}
+		tm.entries[victim] = newThreat
+		tm.needClientUpdate = true
+	}
+	// Victim selection (ThreatManager.cpp:379-410): the AddThreat route
+	// reselects only when there is no current victim; with one, the
+	// victim stays until the Update tick's taunt-precedence reselect.
+	if tm.currentVictim == 0 {
+		if nv := tm.reselectVictimLocked(nil); nv != 0 && nv != tm.currentVictim {
+			tm.currentVictim = nv
+			return true, nv
+		}
+	}
+	return false, tm.currentVictim
 }
 
 // RemoveThreat removes a victim from the threat table and re-evaluates top victim.
