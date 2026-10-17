@@ -3586,12 +3586,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// GCD refund) at completion instead of mid-bar.
 		s.castMu.Lock()
 		castState := &activeCastState{
-			CastID:       castID,
-			SpellID:      spellID,
-			StartAt:      time.Now(),
-			CastTimeMs:   castTime,
-			InterruptFlg: spell.InterruptFlags,
-			Target:       target,
+			CastID:               castID,
+			SpellID:              spellID,
+			StartAt:              time.Now(),
+			CastTimeMs:           castTime,
+			InterruptFlg:         spell.InterruptFlags,
+			Target:               target,
+			SelectionOrientation: s.player.Orientation,
 		}
 		castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 			s.castMu.Lock()
@@ -10685,10 +10686,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				if spellID == 8690 || spellID == 556 {
 					// Spell::SelectImplicitCasterDestTargets
-					// (Spell.cpp:1339-1341): TARGET_DEST_HOME (9) — Hearthstone
+					// (Spell.cpp:1320-1322): TARGET_DEST_HOME (9) — Hearthstone
 					// 8690 and Astral Recall 556 resolve to the player's
-					// homebind with the caster's CURRENT orientation (not the
-					// bind orientation) and the bind map. EffectTeleportUnits
+					// homebind with the caster's SELECTION-TIME orientation
+					// (not the bind orientation, and not the effect-time
+					// orientation) and the bind map. The cast state's
+					// SelectionOrientation snapshot carries it to the effect,
+					// so a mid-cast turn no longer changes the landing
+					// facing. Instant casts never build a cast state —
+					// selection and effect coincide there, so the live value
+					// is already exact. EffectTeleportUnits
 					// (SpellEffects.cpp:1219-1221) only substitutes the unit
 					// target's orientation when the dest orientation is zero;
 					// with the selection-time orientation set it is preserved.
@@ -10696,8 +10703,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if hbX == 0 && hbY == 0 && hbZ == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 						_ = s.server.WorldStore.DB.QueryRowContext(effCtx, "SELECT map, position_x, position_y, position_z FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", s.player.Race, s.player.Class).Scan(&hbMap, &hbX, &hbY, &hbZ)
 					}
-					s.teleportSpellEffectCaster(hbMap, hbX, hbY, hbZ, s.player.Orientation)
-					s.teleportEffectUnitTargets(hitTargets, hbMap, hbX, hbY, hbZ, s.player.Orientation)
+					ori := s.player.Orientation
+					if completedCast != nil {
+						ori = completedCast.SelectionOrientation
+					}
+					s.teleportSpellEffectCaster(hbMap, hbX, hbY, hbZ, ori)
+					s.teleportEffectUnitTargets(hitTargets, hbMap, hbX, hbY, hbZ, ori)
 				} else if x, y, z, ori, mapID, ok := s.spellTargetPositionDest(effCtx, spell, spellID, uint32(effectIndex)); ok {
 					// Spell::SelectImplicitCasterDestTargets
 					// (Spell.cpp:1342-1357): TARGET_DEST_DB (17) — fixed
@@ -19208,7 +19219,7 @@ func (s *session) cancelNextSwingSpell() {
 // Unit.cpp:2151) don't consume the slot — Go has no extra-attack model, so
 // every main-hand swing consumes.
 func (s *session) finishNextSwingCast(ctx context.Context, q *queuedNextSwing) {
-	swingCast := &activeCastState{CastID: q.CastID, SpellID: q.SpellID}
+	swingCast := &activeCastState{CastID: q.CastID, SpellID: q.SpellID, SelectionOrientation: s.player.Orientation}
 	s.finishSpellCast(ctx, q.CastID, q.SpellID, q.Spell, q.Target, q.CastItemGUID, q.CastItemEntry, swingCast)
 }
 

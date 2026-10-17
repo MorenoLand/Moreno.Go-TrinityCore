@@ -666,6 +666,14 @@ type activeCastState struct {
 	// ADD_TARGET_TRIGGER auras present on the caster at cast completion, for
 	// the on-hit trigger consumer.
 	HitTriggers []spellHitTrigger
+	// SelectionOrientation is the caster's orientation at target-selection
+	// time (Spell::SelectImplicitCasterDestTargets). TARGET_DEST_HOME
+	// (Spell.cpp:1320-1322) snapshots playerCaster->GetOrientation() at
+	// selection; the hearthstone/teleport arm reads this instead of the
+	// live orientation so a mid-cast turn doesn't change the landing
+	// facing. Instant casts never build a cast state — selection and
+	// effect coincide there, so the arm falls back to the live value.
+	SelectionOrientation float32
 	// Executing is the m_executedCurrently analog (Spell.h:548:
 	// IsInterruptable() = !m_executedCurrently, set Spell.cpp:3315, cleared
 	// 3345/3421/3526): true while finishSpellCast runs the cast's effects.

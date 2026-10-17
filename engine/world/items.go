@@ -4895,12 +4895,13 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// the slot.
 			s.castMu.Lock()
 			castState := &activeCastState{
-				CastID:       castCount,
-				SpellID:      spellID,
-				StartAt:      time.Now(),
-				CastTimeMs:   castTime,
-				InterruptFlg: spell.InterruptFlags,
-				Target:       target,
+				CastID:               castCount,
+				SpellID:              spellID,
+				StartAt:              time.Now(),
+				CastTimeMs:           castTime,
+				InterruptFlg:         spell.InterruptFlags,
+				Target:               target,
+				SelectionOrientation: s.player.Orientation,
 			}
 			castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 				s.castMu.Lock()

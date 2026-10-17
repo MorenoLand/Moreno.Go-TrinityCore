@@ -2234,9 +2234,13 @@ func (s *Server) fireCreatureSpellHitTarget(ctx context.Context, m *creatureMoti
 // the KilledByCreature hook and BossAI OnKillPlayer — the same funnel as the
 // creature aura-damage kill. C++ EffectInstaKill's DealDamage passes
 // durabilityLoss=false, so the kill carries no durability roll. Creature
-// victims keep the packet only: the creature->creature spell-damage lethal
-// path is the documented no-damage-model delta (this path deals no spell
-// damage at all), so their lethal leg stays banked.
+// victims die through creatureInstaKillVictim: the NODAMAGE DealDamage legs
+// that survive the damagetype guard (AI DamageTaken/DamageDealt hooks, the
+// tap/loot-recipient block) plus the Unit::Kill chain. The skipped
+// damagetype-guarded legs (split/share damage, aura interrupts, damage
+// procs) stay skipped per the 13:4x audit, and the sScriptMgr->OnDamage /
+// npcbot / OwnerAttackedBy-signal / vehicle-duel legs have no Go model
+// (documented).
 func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool) {
 	if s == nil || m == nil {
 		return
@@ -2260,20 +2264,134 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 		packet.WriteU64(guid)
 		packet.WriteU32(spellID)
 		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
-		vs := s.findSessionByGUID(guid)
-		if vs == nil || vs.player == nil {
+		if vs := s.findSessionByGUID(guid); vs != nil && vs.player != nil {
+			vs.player.Health = 0
+			var creatureKiller *session
+			if m.OwnerGUID != 0 {
+				creatureKiller = s.findSessionByGUID(m.OwnerGUID)
+			}
+			vs.killPlayer(ctx, creatureKiller, false, false)
+			s.fireKilledByCreatureHook(ctx, m, vs)
+			if m.BossAI != nil {
+				m.BossAI.OnKillPlayer(ctx, s, m, guid)
+			}
 			continue
 		}
-		vs.player.Health = 0
-		var creatureKiller *session
-		if m.OwnerGUID != 0 {
-			creatureKiller = s.findSessionByGUID(m.OwnerGUID)
-		}
-		vs.killPlayer(ctx, creatureKiller, false, false)
-		s.fireKilledByCreatureHook(ctx, m, vs)
-		if m.BossAI != nil {
-			m.BossAI.OnKillPlayer(ctx, s, m, guid)
-		}
+		s.creatureInstaKillVictim(ctx, m, guid)
+	}
+}
+
+// creatureInstaKillVictim runs the creature-victim legs of a creature
+// caster's EffectInstaKill: Unit::DealDamage with damagetype NODAMAGE
+// (Unit.cpp:696) followed by Unit::Kill (Unit.cpp:11153). Only the legs
+// outside the damagetype != NODAMAGE guard survive: the AI DamageTaken /
+// DamageDealt hooks, the tap + loot-recipient + damage-requirement block
+// (Unit.cpp:872-876), and the Kill chain. The skipped legs (damage log,
+// split/share, aura interrupts, DoDamageAndTriggers procs) were verified
+// absent for NODAMAGE in the 13:4x audit. With a charmer/owner player the
+// full Kill chain runs on the owner's session (the pet-kill path's model:
+// party-kill log, Eluna events, KILL/KILLED/DEATH procs, killing-blow
+// criteria, XP/loot, respawn); without one the minimal death registration
+// runs (the pet owner-gone path's model). The no-owner KILL/KILLED/DEATH
+// proc loops stay banked with that model — C++ Unit.cpp:11257-11279 fires
+// them, Go's no-owner path does not yet.
+func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion, guid uint64) {
+	if s == nil || m == nil || guid == 0 {
+		return
+	}
+	var owner *session
+	if m.OwnerGUID != 0 {
+		owner = s.findSessionByGUID(m.OwnerGUID)
+	}
+	var tapPlayer, tapGroup uint64
+	if owner != nil && owner.player != nil {
+		tapPlayer, tapGroup = owner.playerGUID, owner.groupID
+	}
+	s.motionMu.Lock()
+	tm := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+	if tm == nil || tm.Health == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	if tm.BossAI == nil {
+		tm.BossAI = getBossAIForCreature(tm, tm.ScriptName)
+	}
+	// Unit::DealDamage (Unit.cpp:701-704): the victim's DamageTaken and the
+	// attacker's DamageDealt AI hooks fire for NODAMAGE too.
+	damage := tm.Health
+	fireDealDamageAIHooks(ctx, s, tm, m, m.GUID, guid, &damage)
+	// Unit::DealDamage tap block (Unit.cpp:872-876): the killing blow taps
+	// for the caster's charmer/owner player
+	// (GetCharmerOrOwnerPlayerOrPlayerItself) and lowers the player-damage
+	// requirement. A wild caster taps nothing — C++ sets the killer
+	// creature itself as loot recipient, which has no Go player-tap model
+	// — and the requirement stands, so no reward follows.
+	if tapPlayer != 0 {
+		s.recordCreatureTap(tm, tapPlayer, tapGroup, damage, tm.Health)
+	}
+	killedTarget := combatTarget{
+		GUID:       tm.GUID,
+		Map:        tm.Map,
+		InstanceID: tm.InstanceID,
+		X:          tm.X,
+		Y:          tm.Y,
+		Z:          tm.Z,
+		Health:     tm.Health,
+		MaxHealth:  tm.MaxHealth,
+		Level:      uint8(tm.Level),
+	}
+	s.clearInstanceEncounter(tm)
+	tm.Health = 0
+	tm.DynamicFlags |= unitDynFlagLootable
+	tm.InCombat = false
+	tm.TargetGUID = 0
+	tm.Moving = false
+	if tm.ThreatMgr != nil {
+		tm.ThreatMgr.ClearThreat()
+	}
+	s.motionMu.Unlock()
+	// Deferred Eluna summon hooks queued by boss OnDamageTaken fire after
+	// the unlock (Lua handler methods lock motionMu on demand) — the
+	// spells.go lethal path's order.
+	s.drainBossSummonHooks(ctx, tm, tm.BossAI)
+	s.stopCreatureMotionInInstance(tm.Map, tm.InstanceID, tm.GUID, tm.X, tm.Y, tm.Z)
+	s.broadcastCreatureValuesUpdateInInstance(tm.Map, tm.InstanceID, tm.GUID, map[int]uint32{
+		unitFieldHealth:       0,
+		unitFieldDynamicFlags: tm.DynamicFlags,
+	})
+	s.broadcastThreatClearInInstance(tm.Map, tm.InstanceID, tm.GUID)
+	if owner != nil && owner.player != nil {
+		// Unit::Kill's full chain on the charmer/owner player session.
+		owner.onCreatureKilled(ctx, killedTarget, m)
+		return
+	}
+	// No charmer/owner player: the minimal death registration. Unit::Kill
+	// fires the death-aura strip (Unit.cpp:11320) ahead of the hooks even
+	// here.
+	deathKey := creatureAuraKeyForMotion(tm)
+	s.auraMu.Lock()
+	var deathAuras []*activeAura
+	for _, aura := range s.activeCreatureAuras[deathKey] {
+		deathAuras = append(deathAuras, aura)
+	}
+	s.auraMu.Unlock()
+	s.grantChannelDeathItems(ctx, deathAuras, tm.Level, true, tm.TapPlayerGUID, tm.TapGroupID)
+	s.clearCreatureAurasOnDeath(deathKey)
+	s.removeThreatVictimFromAllLists(tm.Map, tm.InstanceID, tm.GUID)
+	// Unit::Kill's KilledUnit branch arm (Unit.cpp:11385-11387): a
+	// non-pet creature attacker fires only the branch arm — the pet-arm
+	// double dispatch is pet-specific.
+	s.fireCreatureTargetDied(ctx, m, s.luaMotionCreature(tm))
+	// BossAI::_JustDied (ScriptedCreature.cpp:512-518).
+	if tm.BossAI != nil {
+		tm.BossAI.OnDied(ctx, s, tm)
+	}
+	// Creature::RemoveCorpse schedules the respawn for every death; the
+	// owner path gets it from onCreatureKilled.
+	if tm.InstanceID == 0 {
+		s.scheduleCreatureRespawn(ctx, uint32(tm.GUID&0x00FFFFFF), uint32(math.Max(float64(tm.MaxHealth), 1)), time.Now())
+	} else {
+		s.scheduleInstanceCreatureRespawn(ctx, killedTarget, uint32(math.Max(float64(tm.MaxHealth), 1)), time.Now())
 	}
 }
 
