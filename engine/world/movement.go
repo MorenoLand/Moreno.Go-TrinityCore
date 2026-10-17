@@ -411,12 +411,23 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		}
 	}
 	// A sitting player stands on any move or turn input (MovementHandler.cpp:404-405;
-	// Unit::IsSitState, Unit.cpp:10542-10549 — the chair variants are unreachable
-	// from Go's 0..3 stand-state range). Gated on not being a vehicle passenger,
-	// matching the C++ vehicle block's early return.
-	if s.player.VehicleGUID == 0 && (s.player.StandState == 1 || s.player.StandState == 2) &&
+	// Unit::IsSitState, Unit.cpp:10542-10549 — SIT(1), SIT_CHAIR(2) and the
+	// SIT_LOW/MEDIUM/HIGH_CHAIR(4/5/6) variants. The chairs are set server-side
+	// (barber chairs, gameobjects.go), so they never arrive via the stand-state
+	// opcode gate but must still stand here. SLEEP(3) is not a sit state.
+	// Gated on not being a vehicle passenger, matching the C++ vehicle
+	// block's early return. Unit::SetStandState (Unit.cpp:10557-10569) strips
+	// AURA_INTERRUPT_FLAG_NOT_SEATED on the stand and sends
+	// SMSG_STANDSTATE_UPDATE to the player directly.
+	standState := s.player.StandState
+	isSitState := standState == 1 || standState == 2 || (standState >= 4 && standState <= 6)
+	if s.player.VehicleGUID == 0 && isSitState &&
 		info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling|movementFallingFar|movementAscending|movementDescending|movementSplineElevation|movementTurnLeft|movementTurnRight|movementPitchUp|movementPitchDown) != 0 {
 		s.player.StandState = 0
+		s.removeAurasWithInterruptFlags(auraInterruptFlagNotSeated)
+		standBuf := protocol.NewBuffer(1)
+		standBuf.WriteU8(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_STANDSTATE_UPDATE), standBuf.Bytes(), true)
 		s.sendPlayerUpdate()
 	}
 	// MovementHandler.cpp:386-402 — a vehicle passenger's movement packet

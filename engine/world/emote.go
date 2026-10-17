@@ -16,7 +16,14 @@ func (s *session) handleStandStateChange(ctx context.Context, payload []byte) bo
 	}
 	reader := protocol.NewReader(payload)
 	state, err := reader.ReadU32()
-	if err != nil || state > 3 {
+	// HandleStandStateChangeOpcode (MiscHandler.cpp:537-546): the gate is
+	// STAND(0)/SIT(1)/SLEEP(3)/KNEEL(8) — not 0..3. SIT_CHAIR(2) is rejected
+	// (chairs are set server-side) while KNEEL(8) is accepted.
+	switch {
+	case err != nil:
+		return true
+	case state == 0 || state == 1 || state == 3 || state == 8:
+	default:
 		return true
 	}
 	s.player.StandState = uint8(state)
