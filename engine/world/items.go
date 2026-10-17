@@ -4781,9 +4781,71 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
 			return true
 		}
-		castTime := uint32(0)
-		if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
-			castTime = uint32(value)
+		// Spell::prepare (Spell.cpp:3114-3121): cast time is calculated
+		// after the first CheckCast pass (the C++ comment's charge-count
+		// rationale), and item casts run the same CalcCastTime as client
+		// casts (Player::CastItemUseSpell builds a TRIGGERED_NONE Spell).
+		// The old raw DBC read missed the haste/spellmod/REQ_AMMO legs,
+		// so this rides calculateSpellCastTime like the client path.
+		castTime := s.calculateSpellCastTime(spell)
+		// Spell::prepare (Spell.cpp:3119-3124): .cheat casttime forces
+		// m_casttime to 0 (GetCommandStatus(CHEAT_CASTTIME),
+		// Player.h:982); the client path arms it at spells.go:3512 and
+		// the item path is a player cast too (s.player non-nil by the
+		// entry guard above).
+		if s.player.ActiveCheats&cheatCasttime != 0 {
+			castTime = 0
+		}
+		// Spell::prepare (Spell.cpp:3138-3150): channeled spells and spells
+		// with cast time cannot start while moving, unless the channel
+		// allows movement (SpellInfo::IsMoveAllowedChannel,
+		// SpellInfo.cpp:1229-1232). The charmed-by-creature trust arm is
+		// vacuous (no player-charmer model); the TYPEID_PLAYER arm is
+		// vacuous on this player-cast path.
+		if (isChanneledSpell(spell) || castTime > 0) && s.isMoving && spell.InterruptFlags&spellInterruptFlagMovement != 0 {
+			if castTime > 0 || !spellIsMoveAllowedChannel(spell) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedMoving), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "casting while moving")
+				return true
+			}
+		}
+		// Spell::prepare (Spell.cpp:3155-3172): stealth breaks at cast
+		// start. Item casts are TRIGGERED_NONE
+		// (Player::CastItemUseSpell, Player.cpp:8232), so the
+		// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS sub-arm is vacuous and
+		// the gate reduces to IsBreakingStealth()
+		// (SpellInfo.cpp:1244-1247) == !SPELL_ATTR1_NOT_BREAK_STEALTH.
+		if spell.AttributesEx&spellAttr1NotBreakStealth == 0 {
+			s.removeAurasWithInterruptFlags(auraInterruptFlagCast)
+			for _, eff := range spell.Effects {
+				if spellEffectTargetsUnit(eff.Effect) {
+					s.removeAurasWithInterruptFlags(auraInterruptFlagSpellAttack)
+					break
+				}
+			}
+		}
+		// Unit::SetCurrentCastSpell (Unit.cpp:3064-3090), called from
+		// Spell::prepare (Spell.cpp:3174) before SendSpellStart:
+		// registering the new cast breaks the other containers. The
+		// in-progress gate above already rejected while a cast-bar cast
+		// runs, so interruptCurrentCast is the same-container break and a
+		// no-op except in the Auto-Shot exception path (skipped here); a
+		// generic cast breaks the active channel ("generic spells always
+		// break channeled not delayed spells") and any autorepeat that is
+		// not Auto Shot. Item casts are never Auto Shot (75) or
+		// next-swing spells in practice, but the arms are structural like
+		// the client path (spells.go:3469-3499); the item path has no
+		// CURRENT_MELEE_SPELL slot, so a hypothetical next-swing item
+		// spell stays a documented delta.
+		nextSwing := isNextMeleeSwingSpell(spell)
+		if spellID != 75 && !nextSwing {
+			s.interruptCurrentCast()
+			s.interruptCurrentChannel()
+			s.cancelFishingBobber()
+		}
+		if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 && !nextSwing {
+			s.autoRepeatSpell = 0
+			s.autoRepeatTarget = 0
 		}
 		// Spell::SendSpellStart (Spell.cpp:4253-4259): item casts carry the
 		// cast item's GUID as CasterGUID (0x4000 high bits on the wire;
@@ -4800,9 +4862,45 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// set the category GCD exactly like client-initiated casts.
 		s.triggerGlobalCooldown(spell)
 		if castTime > 0 {
-			time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
+			// Spell::prepare (Spell.cpp:3174) registers the new cast via
+			// Unit::SetCurrentCastSpell; the CURRENT_GENERIC_SPELL slot
+			// is what the SPELL_IN_PROGRESS gate (Spell.cpp:3082-3087)
+			// and the interrupt/pushback legs read. The item path never
+			// registered, so a cast-time item cast neither blocked
+			// follow-up casts nor honoured interrupts mid-bar (the old
+			// AfterFunc fired unconditionally). The closure mirrors the
+			// client path (spells.go:3595-3611): a cancelled or replaced
+			// cast never fires, and finishSpellCast claims and clears
+			// the slot.
+			s.castMu.Lock()
+			castState := &activeCastState{
+				CastID:       castCount,
+				SpellID:      spellID,
+				StartAt:      time.Now(),
+				CastTimeMs:   castTime,
+				InterruptFlg: spell.InterruptFlags,
+				Target:       target,
+			}
+			castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
+				s.castMu.Lock()
+				// The cast must still be the active one: if it was
+				// interrupted, activeCast is nil (or a different cast),
+				// and the spell must not fire. Checking Cancelled alone
+				// is insufficient because of the race between the timer
+				// firing and the interrupt acquiring the lock.
+				if castState.Cancelled || s.activeCast != castState {
+					s.castMu.Unlock()
+					return
+				}
+				// Re-read the target under the lock: the completion
+				// closure sees the in-flight SpellCastTargets
+				// (m_targets), as on the client path.
+				target := castState.Target
+				s.castMu.Unlock()
 				s.finishSpellCast(context.Background(), castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
 			})
+			s.activeCast = castState
+			s.castMu.Unlock()
 		} else {
 			s.finishSpellCast(ctx, castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
 		}
