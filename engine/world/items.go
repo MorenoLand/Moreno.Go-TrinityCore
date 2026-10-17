@@ -3737,6 +3737,31 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// spell copy (Store.Spell returns a value).
 			spell.Effects[0].BasePoints = *learnBasePoint
 		}
+		// Spell::InitExplicitTargets (Spell.cpp:659-700) +
+		// SpellInfo::CheckExplicitTarget (Spell.cpp:5353-5367) on the
+		// m_CastItem path: item casts run the same Spell constructor, so the
+		// wire target gets the same adoption and validation as
+		// client-initiated casts — a mask-fitting wire unit target is kept,
+		// a mismatched one is dropped like C++'s RemoveObjectTarget
+		// (Spell.cpp:668-678), and with no wire object target at all the
+		// selection (CheckExplicitTarget-validated) or the self fallback
+		// (ALLY/PARTY/RAID masks) is adopted. The adopted unit mirrors into
+		// the target slot like m_targets, so the CheckItems arms, the
+		// CheckRange legs, the START packet, and the completion path read
+		// the same object C++ does. Self-cast-only spells keep the legacy
+		// wire read (their explicit mask is empty — no C++ adoption — and
+		// the completion path self-targets via implicit
+		// TARGET_UNIT_CASTER), mirroring the client path.
+		if !isSelfCastOnly(spell) {
+			var failReason uint8
+			var failDetail string
+			_, target, failReason, failDetail = s.resolveExplicitUnitTarget(ctx, spell, target)
+			if failReason != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", failDetail, "failure", failReason)
+				return true
+			}
+		}
 		// Spell::CheckCast cooldown block (Spell.cpp:5187-5221) on the
 		// m_CastItem path: SpellHistory::IsReady/HasCooldown
 		// (SpellHistory.cpp:190-200/473-487) fails with
@@ -4016,6 +4041,28 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		if failCode := s.validateSpellDestRange(ctx, spell, target, true); failCode != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failCode), true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "dest out of range", "code", failCode)
+			return true
+		}
+		// CheckCasterAuras (Spell::CheckCast, Spell.cpp:5509) on the
+		// m_CastItem path: item casts are TRIGGERED_NONE (no
+		// TRIGGERED_IGNORE_CASTER_AURAS), so the caster's UNIT_FIELD_FLAGS
+		// CC state gates the cast exactly like client-initiated casts —
+		// stunned/silenced/pacified/fleeing/confused fail unless the spell
+		// is immune to caster auras (ATTR6), usable while in that CC state
+		// (ATTR5 mechanic-mask check, incl. the Pain Suppression glyph
+		// carve-out), or cancels the preventing aura effects. A set
+		// mechanic converts to SPELL_FAILED_PREVENTED_BY_MECHANIC with the
+		// mechanic as the extended packet param (WriteCastResultInfo,
+		// Spell.cpp:4102-4107). C++ order places this right after CheckPower
+		// (5502 — vacuous on this path: prepare zeroes m_powerCost for item
+		// casts, Spell.cpp:3091) and before the script hook (5515).
+		if result, mechanic := s.checkCasterAuras(spell); result != 0 {
+			payload := buildCastFailed(castCount, spellID, result)
+			if result == spellFailedPreventedByMechanic {
+				payload = buildCastFailedParams(castCount, spellID, result, mechanic)
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
 			return true
 		}
 		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
