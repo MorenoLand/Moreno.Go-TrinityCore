@@ -78,6 +78,14 @@
 -- PORTED (2026-10-16): npc_captain_brandon::Reset :1015-1023 +
 --   UpdateAI :1039-1051 and npc_captain_grondel::Reset :1075-1082 +
 --   UpdateAI :1099-1111 — Reset-seeded timers re-keyed to event 1,
+--   all 8 captain entries (living + undead) registered;
+--   captain KilledUnit -> Talk(SAY_CAPTAIN_KILL 2) ported this
+--   run (:832-835); captainDied cancels timers on event 4 (the
+--   brandon/grondel phantom-cast timer leak is fixed); arnath
+--   smite (:947/:978-980) + rupert bomb/gun/rocket
+--   (:1138-1140/:1157-1169) ported this run with entry-gated
+--   undead spell picks; arnath flash-heal/PW-shield stay out on
+--   friendly-search legs, dominate-mind on the Is25ManRaid gate,
 --   registered for both the living and undead entries (same
 --   struct/AI survives UpdateEntry): brandon
 --   EVENT_BRANDON_CRUSADER_STRIKE {6s,10s} -> DoCastVictim(
@@ -155,17 +163,21 @@
 --   ACTION_CAPTAIN_DIES (Talk(SAY_SVALNA_CAPTAIN_DEATH 5)),
 --   ACTION_RESET_EVENT — no-DoAction bridge (the krick
 --   ACTION_OUTRO precedent).
--- boss_sister_svalna SpellHit (:430-437) — Talk(
---   EMOTE_SVALNA_BROKEN_SHIELD 8, caster) on SPELL_HURL_SPEAR
---   71466 rides the SpellHit arm (event 15 never fires; the
---   anub_arak precedent); the RemoveAurasDueToSpell leg has no
---   aura bridge on this path.
+-- boss_sister_svalna SpellHit (:430-437) — PORTED this run:
+--   Talk(EMOTE_SVALNA_BROKEN_SHIELD 8, caster) + RemoveAura(
+--   SPELL_AETHER_SHIELD 71463) on SPELL_HURL_SPEAR 71466 via
+--   event 14 (the stale "event 15 never fires / no aura bridge"
+--   claim is retracted — event 14, HasAura, RemoveAura and
+--   Talk(id, target) are all bridged).
 -- boss_sister_svalna SpellHitTarget (:452-476) — Talk(
 --   EMOTE_SVALNA_IMPALE 7, unitTarget) on SPELL_IMPALING_SPEAR
---   71443 rides the SpellHitTarget arm (no bridge); the
+--   71443 rides the SpellHitTarget arm — event 15 IS bridged
+--   (boss_ai.go:2196-2206) but the stay-out holds: the
 --   SPELL_IMPALING_SPEAR_KILL Unit::Kill leg and the
---   NPC_IMPALING_SPEAR summon + vehicle-cast legs are summon
---   machines.
+--   NPC_IMPALING_SPEAR summon + vehicle-cast legs have no bridge
+--   (DespawnOrUnsummon/GetVehicle zero hits), and the Talk is
+--   conditional on summon success — Talk-alone would be
+--   C++-inexact.
 -- boss_sister_svalna JustReachedHome (:389-395) /
 --   MovementInform (:439-450) — SetReactState / SetDisableGravity
 --   / SetHover legs, no Talk of Svalna's own (no MovementInform
@@ -181,8 +193,13 @@
 --   machine) and the 10%-latch chew machine (damage = 0 latch +
 --   1s EVENT_HEALTH_CHECK loop with ModifyHealth(+5% max) and
 --   HealthAbovePct(15) re-arm) are not a single-flip floored
---   latch; the event-9 damage-rewrite bridge cannot express the
---   health-modify / re-arm legs.
+--   latch. Stays parked — the corrected blockers are the
+--   FrostwingGauntletRespawner mass-DespawnOrUnsummon+reposition
+--   machine (DespawnOrUnsummon unbridged), cross-AI
+--   DoAction(ACTION_RESET_EVENT), ModifyHealth (zero hits) and
+--   the _isEventActive-gated Talk; event 9 DOES support numeric
+--   damage rewrite (lua_creature_events.go:303-324), so the old
+--   "event-9 cannot express damage rewrite" claim was stale.
 -- npc_crok_scourgebane SetGUID / WaypointReached / WaypointStarted
 --   (:591-689) — gauntlet waypoint machine, no bridge.
 -- npc_frostwing_ymirjar_vrykul UpdateAI random-target arms —
@@ -246,6 +263,7 @@ local SAY_SVALNA_DEATH = 6
 
 local SAY_CAPTAIN_DEATH = 0
 local SAY_CAPTAIN_SECOND_DEATH = 3
+local SAY_CAPTAIN_KILL = 2 -- :62
 
 local SPELL_DIVINE_SURGE = 71465
 
@@ -265,6 +283,17 @@ local SPELL_WARLORDS_PRESENCE = 71244
 
 local SPELL_CRUSADER_STRIKE = 71549 -- :1040
 local SPELL_JUDGEMENT_OF_COMMAND = 71551 -- :1049
+local SPELL_DIVINE_SHIELD = 71550 -- :98
+local SPELL_HAMMER_OF_BETRAYAL = 71784 -- :100
+local SPELL_SMITE_NORMAL = 71546 -- :91
+local SPELL_SMITE_UNDEAD = 71778 -- :94
+local SPELL_FEL_IRON_BOMB_NORMAL = 71592 -- :109
+local SPELL_FEL_IRON_BOMB_UNDEAD = 71787 -- :112
+local SPELL_MACHINE_GUN_NORMAL = 71594 -- :110
+local SPELL_MACHINE_GUN_UNDEAD = 71788 -- :113
+local SPELL_ROCKET_LAUNCH_NORMAL = 71590 -- :111
+local SPELL_ROCKET_LAUNCH_UNDEAD = 71786 -- :114
+local SPELL_CONFLAGRATION = 71785 -- :106
 local SPELL_CHARGE = 71553 -- :1100
 local SPELL_MORTAL_STRIKE = 71552 -- :1104
 local SPELL_SUNDER_ARMOR = 71554 -- :1108
@@ -275,6 +304,8 @@ local SPELL_VOLLEY = 71252
 local SPELL_BANISH = 71298
 local SPELL_IMPALING_SPEAR = 71443
 local SPELL_AETHER_SHIELD = 71463
+local SPELL_HURL_SPEAR = 71466 -- :84
+local EMOTE_SVALNA_BROKEN_SHIELD = 8 -- :48
 
 local timers = {}
 
@@ -398,6 +429,25 @@ RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 2, svalnaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 3, svalnaKilledUnit)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 4, svalnaJustDied)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 23, svalnaReset)
+
+-- C++ boss_sister_svalna::SpellHit :430-437 — ungated arm:
+-- if (spellInfo->Id == SPELL_HURL_SPEAR (71466) &&
+--     me->HasAura(SPELL_AETHER_SHIELD (71463)))
+--   { me->RemoveAurasDueToSpell(SPELL_AETHER_SHIELD);
+--     Talk(EMOTE_SVALNA_BROKEN_SHIELD (8), caster); }
+-- Event 14 is bridged (boss_ai.go:2033 creature hits, spells.go:9469
+-- player hits; args = (event, creature, caster, spellId)); HasAura /
+-- RemoveAura / Talk(id, target) all bridged. Idempotent: the aura is
+-- gone on re-fire. The stale "event 15 never fires / no aura bridge"
+-- header claim is retracted.
+local function svalnaSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_HURL_SPEAR and creature:HasAura(SPELL_AETHER_SHIELD) then
+        creature:RemoveAura(SPELL_AETHER_SHIELD)
+        creature:Talk(EMOTE_SVALNA_BROKEN_SHIELD, caster)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 14, svalnaSpellHit)
 
 -- C++ npc_crok_scourgebane::Reset :544-551 seeds
 -- EVENT_SCOURGE_STRIKE {7500,12500}ms and EVENT_DEATH_STRIKE
@@ -630,9 +680,12 @@ end
 -- DoCastVictim(SPELL_JUDGEMENT_OF_COMMAND 71551), re-arm
 -- {8s,13s}. The undead entry (37493) runs the same struct/AI
 -- (UpdateEntry keeps the AI instance) — same seeds, same arms.
--- The EVENT_BRANDON_DIVINE_SHIELD 500ms poll (HealthBelowPct(20)
--- gate) and the IsUndead EVENT_BRANDON_HAMMER_OF_BETRAYAL
--- random-target leg are not in the scan set — left out.
+-- PORTED this run: EVENT_BRANDON_DIVINE_SHIELD 500ms poll
+-- (HealthBelowPct(20) -> self-cast 71550, unconditional 500ms
+-- re-arm) + EVENT_BRANDON_HAMMER_OF_BETRAYAL {25s,30s} ->
+-- randomPlayerTarget -> 71784, re-arm {45s,60s} (undead-entry
+-- gated; the position-1 offset has no bridge — tyrannus
+-- precedent).
 local function onBrandonCrusaderStrike(creature, guid)
     creature:CastSpell(nil, SPELL_CRUSADER_STRIKE)
     schedule(guid, "crusader", {6000, 12000},
@@ -645,6 +698,33 @@ local function onBrandonJudgementOfCommand(creature, guid)
         function() onBrandonJudgementOfCommand(creature, guid) end)
 end
 
+-- C++ EVENT_BRANDON_DIVINE_SHIELD :1043-1046 — 500ms poll, ungated:
+-- if (HealthBelowPct(20)) DoCast(me, SPELL_DIVINE_SHIELD 71550);
+-- re-arm 500ms unconditional (outside the health-if, crok
+-- death-strike pattern).
+local function onBrandonDivineShield(creature, guid)
+    if creature:GetHealthPct() < 20 then
+        creature:CastSpell(creature, SPELL_DIVINE_SHIELD)
+    end
+    schedule(guid, "divine", 500,
+        function() onBrandonDivineShield(creature, guid) end)
+end
+
+-- C++ EVENT_BRANDON_HAMMER_OF_BETRAYAL :1053-1055 — seeded only when
+-- IsUndead (Reset :1021-1022; IsUndead flips exactly with the entry
+-- remap to 37493, :896-898) — SelectTarget(Random, 1, 0.0f, true) ->
+-- DoCast(target, SPELL_HAMMER_OF_BETRAYAL 71784) non-triggered;
+-- re-arm {45s,60s} unconditional. The position-1 offset has no
+-- bridge — plain random alive player (the tyrannus precedent).
+local function onBrandonHammerOfBetrayal(creature, guid)
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_HAMMER_OF_BETRAYAL)
+    end
+    schedule(guid, "hammer", {45000, 60000},
+        function() onBrandonHammerOfBetrayal(creature, guid) end)
+end
+
 local function brandonEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -652,6 +732,12 @@ local function brandonEnterCombat(event, creature, target)
         function() onBrandonCrusaderStrike(creature, guid) end)
     schedule(guid, "judgement", {8000, 13000},
         function() onBrandonJudgementOfCommand(creature, guid) end)
+    schedule(guid, "divine", 500,
+        function() onBrandonDivineShield(creature, guid) end)
+    if creature:GetEntry() == NPC_CAPTAIN_BRANDON_UNDEAD then
+        schedule(guid, "hammer", {25000, 30000},
+            function() onBrandonHammerOfBetrayal(creature, guid) end)
+    end
 end
 
 -- C++ npc_captain_grondel::Reset :1075-1082 + UpdateAI :1099-1111 —
@@ -662,9 +748,10 @@ end
 -- DoCastVictim(SPELL_MORTAL_STRIKE 71552), re-arm {10s,15s};
 -- EVENT_GRONDEL_SUNDER_ARMOR {3s,12s} -> DoCastVictim(
 -- SPELL_SUNDER_ARMOR 71554), re-arm {5s,17s}. The undead entry
--- (37494) runs the same struct/AI — same seeds, same arms. The
--- IsUndead EVENT_GRONDEL_CONFLAGRATION random-target leg is not
--- in the scan set — left out.
+-- (37494) runs the same struct/AI — same seeds, same arms.
+-- PORTED this run: EVENT_GRONDEL_CONFLAGRATION {12s,17s} ->
+-- randomPlayerTarget -> 71785, re-arm {10s,15s} (undead-entry
+-- gated).
 local function onGrondelCharge(creature, guid)
     creature:CastSpell(nil, SPELL_CHARGE)
     schedule(guid, "charge", 500,
@@ -683,6 +770,20 @@ local function onGrondelSunderArmor(creature, guid)
         function() onGrondelSunderArmor(creature, guid) end)
 end
 
+-- C++ EVENT_GRONDEL_CONFLAGRATION :1112-1114 — seeded only when
+-- IsUndead (Reset :1080-1081; entry remap to 37494) —
+-- SelectTarget(Random, 0, 0.0f, true) -> DoCast(target,
+-- SPELL_CONFLAGRATION 71785) non-triggered; re-arm {10s,15s}
+-- unconditional.
+local function onGrondelConflagration(creature, guid)
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_CONFLAGRATION)
+    end
+    schedule(guid, "conflagration", {10000, 15000},
+        function() onGrondelConflagration(creature, guid) end)
+end
+
 local function grondelEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -692,6 +793,10 @@ local function grondelEnterCombat(event, creature, target)
         function() onGrondelMortalStrike(creature, guid) end)
     schedule(guid, "sunder", {3000, 12000},
         function() onGrondelSunderArmor(creature, guid) end)
+    if creature:GetEntry() == NPC_CAPTAIN_GRONDEL_UNDEAD then
+        schedule(guid, "conflagration", {12000, 17000},
+            function() onGrondelConflagration(creature, guid) end)
+    end
 end
 
 local function captainCombatLeave(event, creature)
@@ -702,6 +807,36 @@ local function captainCombatReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_argent_captainAI::KilledUnit :832-835 — victim player ->
+-- Talk(SAY_CAPTAIN_KILL 2) — the razuvious player-gated variant
+-- precedent; entirely absent from the file until this run.
+local function captainKilledUnit(event, creature, victim)
+    if victim and victim:GetObjectType() == "Player" then
+        creature:Talk(SAY_CAPTAIN_KILL)
+    end
+end
+
+-- C++ npc_argent_captainAI::JustDied (:820-829): the _firstDeath latch
+-- (true at construction) — first death Talk(SAY_CAPTAIN_DEATH 0) and
+-- flips the latch; later deaths Talk(SAY_CAPTAIN_SECOND_DEATH 3). The
+-- latch is per-AI-instance and survives in-place resurrection, so it is
+-- keyed by GUID and never cleared on events 2/23 (a fresh spawn gets a
+-- fresh GUID, matching the ctor). TIMER-LEAK FIX: cancelTimers runs
+-- first — brandon/grondel previously registered no event 4, so their
+-- GUID-keyed timers kept firing phantom casts on the corpse.
+local captainFirstDeath = {}
+
+local function captainDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    if captainFirstDeath[guid] ~= false then
+        captainFirstDeath[guid] = false
+        creature:Talk(SAY_CAPTAIN_DEATH)
+    else
+        creature:Talk(SAY_CAPTAIN_SECOND_DEATH)
+    end
+end
+
 local BRANDON_ENTRIES = {
     NPC_CAPTAIN_BRANDON,
     NPC_CAPTAIN_BRANDON_UNDEAD,
@@ -710,6 +845,8 @@ local BRANDON_ENTRIES = {
 for _, entry in ipairs(BRANDON_ENTRIES) do
     RegisterCreatureEvent(entry, 1, brandonEnterCombat)
     RegisterCreatureEvent(entry, 2, captainCombatLeave)
+    RegisterCreatureEvent(entry, 3, captainKilledUnit)
+    RegisterCreatureEvent(entry, 4, captainDied)
     RegisterCreatureEvent(entry, 23, captainCombatReset)
 end
 
@@ -721,40 +858,123 @@ local GRONDEL_ENTRIES = {
 for _, entry in ipairs(GRONDEL_ENTRIES) do
     RegisterCreatureEvent(entry, 1, grondelEnterCombat)
     RegisterCreatureEvent(entry, 2, captainCombatLeave)
+    RegisterCreatureEvent(entry, 3, captainKilledUnit)
+    RegisterCreatureEvent(entry, 4, captainDied)
     RegisterCreatureEvent(entry, 23, captainCombatReset)
 end
 
--- C++ npc_argent_captainAI::JustDied (:820-829): the _firstDeath latch
--- (true at construction) — first death Talk(SAY_CAPTAIN_DEATH 0) and
--- flips the latch; later deaths Talk(SAY_CAPTAIN_SECOND_DEATH 3). The
--- latch is per-AI-instance and survives in-place resurrection, so it is
--- keyed by GUID and never cleared on events 2/23 (a fresh spawn gets a
--- fresh GUID, matching the ctor). All 8 captain entries (living +
--- undead) are Go-side registered (boss_ai.go RegisterLuaBoss
--- lines); event 4 captainDied is registered for all 8.
-local captainFirstDeath = {}
+-- C++ npc_captain_arnath::Reset :947 — Reset-seeded timers re-keyed to
+-- event 1: EVENT_ARNATH_SMITE {3s,6s} -> DoCastVictim(SPELL_SMITE)
+-- non-triggered, re-arm {4s,7s} (:978-980). SPELL_SMITE is IsUndead ?
+-- 71778 : 71546 (:218) — the entry flips exactly with IsUndead
+-- (:896-898), so the entry gates the spell pick. Flash heal / PW
+-- shield stay out on friendly-search legs (FindFriendlyCreature /
+-- DoFindFriendlyMissingBuff, no bridge); dominate mind stays out on
+-- the Is25ManRaid gate (no 25-man-raid bridge).
+local function onArnathSmite(creature, guid)
+    local spell = SPELL_SMITE_NORMAL
+    if creature:GetEntry() == NPC_CAPTAIN_ARNATH_UNDEAD then
+        spell = SPELL_SMITE_UNDEAD
+    end
+    creature:CastSpell(nil, spell)
+    schedule(guid, "smite", {4000, 7000},
+        function() onArnathSmite(creature, guid) end)
+end
 
-local CAPTAIN_ENTRIES = {
+local function arnathEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "smite", {3000, 6000},
+        function() onArnathSmite(creature, guid) end)
+end
+
+-- C++ npc_captain_rupert::Reset :1138-1140 — Reset-seeded timers
+-- re-keyed to event 1:
+-- EVENT_RUPERT_FEL_IRON_BOMB {15s,20s} -> SelectTarget(Random, 0) ->
+--   DoCast(target, SPELL_FEL_IRON_BOMB) non-triggered, re-arm
+--   {15s,20s} (:1157-1159);
+-- EVENT_RUPERT_MACHINE_GUN {25s,30s} -> SelectTarget(Random, 1) ->
+--   DoCast(target, SPELL_MACHINE_GUN) non-triggered, re-arm
+--   {25s,30s} (:1162-1164);
+-- EVENT_RUPERT_ROCKET_LAUNCH {10s,15s} -> SelectTarget(Random, 1) ->
+--   DoCast(target, SPELL_ROCKET_LAUNCH) non-triggered, re-arm
+--   {10s,15s} (:1167-1169).
+-- Undead spell picks via the entry (IsUndead flip, :896-898). The
+-- position-1 offsets on machine gun / rocket launch have no bridge —
+-- plain random alive player (the tyrannus precedent).
+local function onRupertFelIronBomb(creature, guid)
+    local spell = SPELL_FEL_IRON_BOMB_NORMAL
+    if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
+        spell = SPELL_FEL_IRON_BOMB_UNDEAD
+    end
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, spell)
+    end
+    schedule(guid, "bomb", {15000, 20000},
+        function() onRupertFelIronBomb(creature, guid) end)
+end
+
+local function onRupertMachineGun(creature, guid)
+    local spell = SPELL_MACHINE_GUN_NORMAL
+    if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
+        spell = SPELL_MACHINE_GUN_UNDEAD
+    end
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, spell)
+    end
+    schedule(guid, "gun", {25000, 30000},
+        function() onRupertMachineGun(creature, guid) end)
+end
+
+local function onRupertRocketLaunch(creature, guid)
+    local spell = SPELL_ROCKET_LAUNCH_NORMAL
+    if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
+        spell = SPELL_ROCKET_LAUNCH_UNDEAD
+    end
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, spell)
+    end
+    schedule(guid, "rocket", {10000, 15000},
+        function() onRupertRocketLaunch(creature, guid) end)
+end
+
+local function rupertEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "bomb", {15000, 20000},
+        function() onRupertFelIronBomb(creature, guid) end)
+    schedule(guid, "gun", {25000, 30000},
+        function() onRupertMachineGun(creature, guid) end)
+    schedule(guid, "rocket", {10000, 15000},
+        function() onRupertRocketLaunch(creature, guid) end)
+end
+
+local ARNATH_ENTRIES = {
     NPC_CAPTAIN_ARNATH,
-    NPC_CAPTAIN_BRANDON,
-    NPC_CAPTAIN_GRONDEL,
-    NPC_CAPTAIN_RUPERT,
     NPC_CAPTAIN_ARNATH_UNDEAD,
-    NPC_CAPTAIN_BRANDON_UNDEAD,
-    NPC_CAPTAIN_GRONDEL_UNDEAD,
+}
+
+for _, entry in ipairs(ARNATH_ENTRIES) do
+    RegisterCreatureEvent(entry, 1, arnathEnterCombat)
+    RegisterCreatureEvent(entry, 2, captainCombatLeave)
+    RegisterCreatureEvent(entry, 3, captainKilledUnit)
+    RegisterCreatureEvent(entry, 4, captainDied)
+    RegisterCreatureEvent(entry, 23, captainCombatReset)
+end
+
+local RUPERT_ENTRIES = {
+    NPC_CAPTAIN_RUPERT,
     NPC_CAPTAIN_RUPERT_UNDEAD,
 }
 
-local function captainDied(event, creature, killer)
-    local guid = creature:GetGUID()
-    if captainFirstDeath[guid] ~= false then
-        captainFirstDeath[guid] = false
-        creature:Talk(SAY_CAPTAIN_DEATH)
-    else
-        creature:Talk(SAY_CAPTAIN_SECOND_DEATH)
-    end
+for _, entry in ipairs(RUPERT_ENTRIES) do
+    RegisterCreatureEvent(entry, 1, rupertEnterCombat)
+    RegisterCreatureEvent(entry, 2, captainCombatLeave)
+    RegisterCreatureEvent(entry, 3, captainKilledUnit)
+    RegisterCreatureEvent(entry, 4, captainDied)
+    RegisterCreatureEvent(entry, 23, captainCombatReset)
 end
 
-for _, entry in ipairs(CAPTAIN_ENTRIES) do
-    RegisterCreatureEvent(entry, 4, captainDied)
-end

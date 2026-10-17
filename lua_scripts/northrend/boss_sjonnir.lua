@@ -65,11 +65,7 @@
 -- periodic trigger of 50841 is spell-data-driven, no script
 -- leg). The UNIT_STATE_CASTING gates have no bridge (documented
 -- deviation); DoMeleeAttackIfReady is engine-driven.
--- STAY-OUT: EVENT_CHAIN_LIGHTNING DoCast(target, 50830)
--- gates on SelectTarget(Random, 0, 100, true) — no
--- random-target bridge (porting as victim-cast would fabricate
--- targeting; the C++ re-arms even when no target is found, so a
--- victim-only port diverges further); EVENT_SUMMON health-tier
+-- STAY-OUT: EVENT_SUMMON health-tier
 -- (75/50/25%) PipeLocations summon machine (FORGED_IRON_DWARF
 -- 27982 / FORGED_IRON_TROGG 27979 / MALFORMED_OOZE 27981 /
 -- EARTHEN_DWARF 27980, TEMPSUMMON_CORPSE_TIMED_DESPAWN 30s, 20s
@@ -78,6 +74,15 @@
 -- EVENT_FRENZY DoCast(me, SPELL_FRENZY 28747, true) — PORTED (event 1;
 -- triggered self-cast one-shot, no re-arm; the stale "no triggered-cast
 -- bridge" claim is retracted — the bridge is CastSpell(creature, spell, true).
+-- PORTED: EVENT_CHAIN_LIGHTNING (:166-169) — DoCast(target, SPELL_CHAIN_LIGHTING
+-- 50830) non-triggered on randomPlayerInRange(creature, 100) (the C++
+-- SelectTarget(Random, 0, 100, true) alive-player pool with the 100.0f filter —
+-- creature:IsWithinDist is bridged, moragg 50.0f precedent; the
+-- cairne/kazzak "no random-target bridge" claim is STALE and retracted); init
+-- {3s,8s} randtime, re-arm {10s,15s} unconditional (outside the target-if,
+-- C++-exact); creature:CastSpell(target, ...) is the bridgeable shape
+-- (the keleseth nil-call sweep — target:CastSpell would nil-call on
+-- player targets).
 -- npc_malformed_ooze (CreatureScript via
 -- GetHallsOfStoneAI<npc_malformed_oozeAI> (ScriptedAI);
 -- NPC_MALFORMED_OOZE = 27981, local enum in boss_sjonnir.cpp —
@@ -107,6 +112,7 @@ local SAY_DEATH = 2
 local SPELL_LIGHTING_SHIELD = 50831
 local SPELL_STATIC_CHARGE = 50834
 local SPELL_LIGHTING_RING = 51849
+local SPELL_CHAIN_LIGHTING = 50830
 local SPELL_FRENZY = 28747
 
 local timers = {}
@@ -131,6 +137,39 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(Random, 0, 100, true) — random alive player within 100.0f
+-- (the moragg optic-link precedent; creature:IsWithinDist is bridged —
+-- engine/scripting/object.go:167; the cairne/kazzak "absent random-target
+-- bridge" claim is STALE).
+local function randomPlayerInRange(creature, dist)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, dist) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_CHAIN_LIGHTNING (:166-169): DoCast(target, 50830)
+-- non-triggered on SelectTarget(Random, 0, 100, true); {3s,8s} init ->
+-- {10s,15s} re-arm, unconditional (outside the target-if).
+local function chainLightningTick(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_CHAIN_LIGHTING)
+    end
+    schedule(guid, "chainLightning", {10000, 15000}, function()
+        chainLightningTick(creature, guid)
+    end)
 end
 
 -- C++ EVENT_STATIC_CHARGE (:173-175): DoCastVictim(50834)
@@ -159,6 +198,10 @@ local function sjonnirEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+-- C++ JustEngagedWith: EVENT_CHAIN_LIGHTNING {3s,8s} randtime seed.
+    schedule(guid, "chainLightning", {3000, 8000}, function()
+        chainLightningTick(creature, guid)
+    end)
 -- C++ EVENT_LIGHTNING_SHIELD (:170-172): DoCast(me, 50831)
 -- non-triggered, one-shot 20s/25s, no re-arm.
     schedule(guid, "lightningShield", {20000, 25000}, function()
