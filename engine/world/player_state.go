@@ -2681,20 +2681,7 @@ func (s *session) calculatePlayerCritFields(ctx context.Context, state *playerSt
 			state.DodgePercentage = 0
 		}
 	}
-	if state.CanBlock && state.Block > 0 && (state.Class == 1 || state.Class == 2 || state.Class == 6 || state.Class == 7) {
-		state.BlockPercentage = 5 + ratingBonus(int(CombatRatingBlock))
-		// Player::UpdateBlockPercentage (StatSystem.cpp:612):
-		// SPELL_AURA_MOD_BLOCK_PERCENT (51) adds flat, before the clamp.
-		state.BlockPercentage += s.playerAuraModifier(spellAuraModBlockPercent)
-		if defenseSkill > maxSkill {
-			state.BlockPercentage += float32(defenseSkill-maxSkill) * 0.04
-		} else {
-			state.BlockPercentage -= float32(maxSkill-defenseSkill) * 0.04
-		}
-		if state.BlockPercentage < 0 {
-			state.BlockPercentage = 0
-		}
-	}
+	state.BlockPercentage = ResolvePlayerBlockPercentage(state.CanBlock, defenseSkill, maxSkill, ratingBonus(int(CombatRatingBlock)), s.playerAuraModifier(spellAuraModBlockPercent))
 	expertise := ratingBonus(23)
 	// Player::UpdateExpertise (StatSystem.cpp:872-897): the
 	// SPELL_AURA_MOD_EXPERTISE (120) fold is in raw expertise skill points
@@ -2714,6 +2701,17 @@ func (s *session) calculatePlayerCritFields(ctx context.Context, state *playerSt
 
 var playerParryCaps = [...]float32{47.003525, 47.003525, 145.560408, 145.560408, 0, 47.003525, 145.560408, 0, 0, 0, 0}
 var playerParryDiminishingK = [...]float32{0.9560, 0.9560, 0.9880, 0.9880, 0.9830, 0.9560, 0.9880, 0.9830, 0.9830, 0, 0.9720}
+
+func ResolvePlayerBlockPercentage(canBlock bool, defenseSkill, maxSkill uint32, blockRatingBonus, auraModifier float32) float32 {
+	if !canBlock {
+		return 0
+	}
+	value := 5 + float32(int32(defenseSkill)-int32(maxSkill))*0.04 + auraModifier + blockRatingBonus
+	if value < 0 {
+		return 0
+	}
+	return value
+}
 
 func ResolvePlayerParryPercentage(class uint8, canParry bool, defenseSkill, maxSkill uint32, parryRatingBonus, defenseRatingBonus, auraModifier float32) float32 {
 	classIndex := int(class) - 1

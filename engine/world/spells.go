@@ -9208,7 +9208,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// to the per-target LAUNCH_TARGET arm. Effects that fire per launch
 	// target (needs-caster + parent unit mask) skip this arm per 969 and
 	// ride the per-target loop in applyEffects below.
-	s.triggerLaunchSpellEffects(ctx, spell, spellID, target)
+	// Spell::HandleLaunchPhase (Spell.cpp:3550): every effect's
+	// SPELL_EFFECT_HANDLE_LAUNCH arm fires in effect order before
+	// SendSpellGo. The TriggerSpell whole-spell arm rides
+	// triggerLaunchSpellEffectIndex per index (SpellEffects.cpp:966-985)
+	// and the ActivateRune arm rides handleEffectActivateRune per index
+	// (SpellEffects.cpp:5318-5360), so the SPELL_GO rune-list Count
+	// reflects the activated runes (Spell.cpp:4351-4366).
+	for effectIndex, eff := range spell.Effects {
+		s.triggerLaunchSpellEffectIndex(ctx, spell, spellID, target, eff)
+		if eff.Effect == spellEffectActivateRune {
+			s.handleEffectActivateRune(spell, eff, effectIndex)
+		}
+	}
 
 	// Spell::SendSpellGo (Spell.cpp:4286-4366) castFlags arms:
 	//   - CAST_FLAG_PENDING: vacuous — finishSpellCast serves the client
@@ -11205,13 +11217,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the session (spell_threat.go).
 				s.handleEffectRedirectThreat(spell, eff, hitTargets)
 			case spellEffectActivateRune: // 146: SPELL_EFFECT_ACTIVATE_RUNE (EffectActivateRune, SpellEffects.cpp:5318)
-				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on a Death
-				// Knight caster: runes of the MiscValue type with cooldowns
-				// remaining have them zeroed (damage, or 1 when 0), plus the
-				// Empower Rune Weapon (47568) frost-base sweep (effIndex 0
-				// only). Go has no launch-phase dispatch, so the caster arm
-				// runs once per cast.
-				s.handleEffectActivateRune(spell, eff, effectIndex)
+				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH; the arm fires
+				// in the launch block above, before SendSpellGo, so the
+				// SPELL_GO rune-list Count carries the activated runes.
 			case spellEffectTitanGrip: // 155: SPELL_EFFECT_TITAN_GRIP (EffectTitanGrip, SpellEffects.cpp:5402)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on a player
 				// caster: SetCanTitanGrip(true, MiscValue), feeding the equip
@@ -16512,51 +16520,53 @@ func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, 
 // TRIGGER_SPELL_WITH_VALUE base-point override (989-992) does run here.
 // The self-trigger recursion guard (TriggerSpell == spellID) is Go-only,
 // kept on both arms.
-func (s *session) triggerLaunchSpellEffects(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) {
+// triggerLaunchSpellEffectIndex is the per-effect-index body of the old
+// triggerLaunchSpellEffects loop, split out so the launch block can run the
+// TriggerSpell and ActivateRune LAUNCH arms in C++ effect order
+// (Spell::HandleLaunchPhase, Spell.cpp:3550).
+func (s *session) triggerLaunchSpellEffectIndex(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, eff wotlk.SpellEffect) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
-	for _, eff := range spell.Effects {
-		if eff.Effect != spellEffectTriggerSpell && eff.Effect != spellEffectTriggerSpellWithValue {
-			continue
-		}
-		if eff.TriggerSpell == 0 || eff.TriggerSpell == spellID {
-			// SpellEffects.cpp:948-951: no triggered spell — warn and return
-			// (the warn log has no Go equivalent).
-			continue
-		}
-		triggered, found, err := s.server.Data.Spell(eff.TriggerSpell)
-		if err != nil || !found {
-			// SpellEffects.cpp:954-958: unknown triggered spell — log error
-			// and return.
-			continue
-		}
-		needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
-		providesUnit := spellEffectProvidedTargetMask(eff)&targetFlagUnitMask != 0
-		if needsCaster && providesUnit {
-			// SpellEffects.cpp:969: fires per launch target instead.
-			continue
-		}
-		targetGUID := s.playerGUID
-		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
-			targetGUID = target.UnitGUID
-		}
-		if eff.Effect == spellEffectTriggerSpellWithValue {
-			// SpellEffects.cpp:989-992: TRIGGER_SPELL_WITH_VALUE sets every
-			// base point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the
-			// effect damage (the HandleEffects CalculateDamage value). The
-			// zero clamp keeps the Go damage-model convention: C++ passes
-			// damage unclamped, but the nested uint32 consumers would wrap a
-			// negative.
-			bp := eff.CalcValueForLevel(spell, uint32(s.player.Level))
-			if bp < 0 {
-				bp = 0
-			}
-			s.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, targetGUID, []int32{bp, bp, bp})
-			continue
-		}
-		s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
+	if eff.Effect != spellEffectTriggerSpell && eff.Effect != spellEffectTriggerSpellWithValue {
+		return
 	}
+	if eff.TriggerSpell == 0 || eff.TriggerSpell == spellID {
+		// SpellEffects.cpp:948-951: no triggered spell — warn and return
+		// (the warn log has no Go equivalent).
+		return
+	}
+	triggered, found, err := s.server.Data.Spell(eff.TriggerSpell)
+	if err != nil || !found {
+		// SpellEffects.cpp:954-958: unknown triggered spell — log error
+		// and return.
+		return
+	}
+	needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
+	providesUnit := spellEffectProvidedTargetMask(eff)&targetFlagUnitMask != 0
+	if needsCaster && providesUnit {
+		// SpellEffects.cpp:969: fires per launch target instead.
+		return
+	}
+	targetGUID := s.playerGUID
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		targetGUID = target.UnitGUID
+	}
+	if eff.Effect == spellEffectTriggerSpellWithValue {
+		// SpellEffects.cpp:989-992: TRIGGER_SPELL_WITH_VALUE sets every
+		// base point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the
+		// effect damage (the HandleEffects CalculateDamage value). The
+		// zero clamp keeps the Go damage-model convention: C++ passes
+		// damage unclamped, but the nested uint32 consumers would wrap a
+		// negative.
+		bp := eff.CalcValueForLevel(spell, uint32(s.player.Level))
+		if bp < 0 {
+			bp = 0
+		}
+		s.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, targetGUID, []int32{bp, bp, bp})
+		return
+	}
+	s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
 }
 
 // triggerSpellSpecialCase mirrors the "special cases" switch of
@@ -35072,13 +35082,13 @@ func (s *session) handleEffectBind(ctx context.Context, eff wotlk.SpellEffect, t
 // handleEffectBlock mirrors Spell::EffectBlock (SpellEffects.cpp:4325-4331),
 // which runs once at SPELL_EFFECT_HANDLE_HIT on the caster:
 // m_caster->ToPlayer()->SetCanBlock(true). The flag is Player::m_canBlock —
-// it gates the block chance in Unit::GetUnitBlockChance (Unit.cpp:2787) and
-// zeroes the block percentage in Player::UpdateBlockPercentage
-// (StatSystem.cpp:601-623) until set. The caster is always the session
-// player on these cast paths. The block percentage recompute mirrors
-// UpdateBlockPercentage with the standing Go deltas (block-rating>0 and
-// shield-class gates approximating GetUnitBlockChance's usable-shield leg;
-// SPELL_AURA_MOD_BLOCK_PERCENT has no Go aura model).
+// it gates the block chance in Unit::GetUnitBlockChance (Unit.cpp:2787).
+// The caster is always the session player on these cast paths. The flag
+// flip re-runs Player::UpdateBlockPercentage (StatSystem.cpp:601-622):
+// 5% base plus the defense-skill delta, the SPELL_AURA_MOD_BLOCK_PERCENT
+// aura total and the CR_BLOCK rating bonus, floored at 0 — gated only on
+// CanBlock, with no class or equipped-shield gate (usable-shield gating
+// lives in Unit::GetUnitBlockChance, not the stat).
 func (s *session) handleEffectBlock() {
 	if s == nil || s.player == nil {
 		return
@@ -35095,18 +35105,9 @@ func (s *session) handleEffectBlock() {
 		}
 	}
 	maxSkill := uint32(s.player.Level) * 5
-	s.player.BlockPercentage = 0
-	if s.player.Block > 0 && (s.player.Class == 1 || s.player.Class == 2 || s.player.Class == 6 || s.player.Class == 7) {
-		s.player.BlockPercentage = 5 + s.playerCombatRatingBonus(s.player, s.player.Level, int(CombatRatingBlock))
-		if defenseSkill > maxSkill {
-			s.player.BlockPercentage += float32(defenseSkill-maxSkill) * 0.04
-		} else {
-			s.player.BlockPercentage -= float32(maxSkill-defenseSkill) * 0.04
-		}
-		if s.player.BlockPercentage < 0 {
-			s.player.BlockPercentage = 0
-		}
-	}
+	s.player.BlockPercentage = ResolvePlayerBlockPercentage(true, defenseSkill, maxSkill,
+		s.playerCombatRatingBonus(s.player, s.player.Level, int(CombatRatingBlock)),
+		s.playerAuraModifier(spellAuraModBlockPercent))
 	s.sendPlayerUpdate()
 }
 

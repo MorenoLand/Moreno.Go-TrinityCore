@@ -128,13 +128,16 @@ func (s *session) unlearnSpell(ctx context.Context, spellID uint32) {
 	unlearnBuf := protocol.NewBuffer(4)
 	unlearnBuf.WriteU32(spellID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)
-	// Player::RemoveSpell (Player.cpp:3884-3895): unlearning Titan's Grip
-	// (46917) clears the capability and re-arms the penalty aura evaluation,
-	// and every unlearn re-checks the offhand (OffhandCheckAtSpellUnlearn
-	// defaults true). C++ clears the capability flags before the offhand
-	// check; Go's spell list already dropped the spell above.
+	// Player::RemoveSpell (Player.cpp:3884-3887): unlearning Titan's Grip
+	// (46917) while the capability flag is set removes the penalty aura
+	// and clears the flag. The flag is derivable from the spell list,
+	// which already dropped the spell above; the penalty spell id comes
+	// from the DBC row of 46917 itself (the effect's MiscValue), since
+	// checkTitanGripPenalty can no longer see the unlearned spell.
 	if spellID == 46917 {
-		s.checkTitanGripPenalty(ctx)
+		if penaltyID := s.titanGripPenaltySpellID(spellID); penaltyID != 0 {
+			s.removeAura(penaltyID)
+		}
 	}
 	s.autoUnequipOffhandIfNeeded(ctx)
 }

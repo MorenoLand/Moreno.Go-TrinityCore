@@ -2621,6 +2621,27 @@ func (s *session) castAllObtainSpells(ctx context.Context) {
 	}
 }
 
+// titanGripPenaltySpellID reads the SPELL_EFFECT_TITAN_GRIP (155) effect's
+// MiscValue from a spell's DBC row — the penalty aura id C++ stores in
+// m_titanGripPenaltySpellId (Player.cpp:13668) when the effect arm fires.
+// Used on the 46917 unlearn path where the learned-spell scan can no
+// longer see the removed spell (Player.cpp:3884-3887).
+func (s *session) titanGripPenaltySpellID(spellID uint32) uint32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return 0
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect == spellEffectTitanGrip && effect.MiscValue > 0 {
+			return uint32(effect.MiscValue)
+		}
+	}
+	return 0
+}
+
 // checkTitanGripPenalty mirrors Player::CheckTitanGripPenalty (Player.cpp:13672-13686).
 // m_canTitanGrip / m_titanGripPenaltySpellId are set by Spell::EffectTitanGrip
 // (SpellEffects.cpp:5402) from the TITAN_GRIP effect's MiscValue on the learned
