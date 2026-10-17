@@ -214,41 +214,71 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+	if !s.playerLoaded || s.player == nil {
 		return true
 	}
 	s.expireAuctions(ctx)
 	reader := protocol.NewReader(payload)
-	// Raw 8-byte NPC GUID (AuctionHouseHandler.cpp:747: recvData >> guid).
-	auctioneer, _ := reader.ReadU64()
+	// AuctionHouseHandler.cpp:747-761 — C++ reads the whole packet (GUID,
+	// listfrom, name, filters, getAll, unkCnt trailer) before the NPC
+	// interact check; any short read throws and the handler drops silently
+	// with no result packet. Error-checked reads reproduce that exactly —
+	// there are no defaults for missing fields.
+	auctioneer, err := reader.ReadU64() // Raw 8-byte NPC GUID
+	if err != nil {
+		return true
+	}
+	listFrom, err := reader.ReadU32()
+	if err != nil {
+		return true
+	}
+	searchedName, err := reader.ReadCString()
+	if err != nil {
+		return true
+	}
+	var levelMin, levelMax, usable, getAll uint8
+	var auctionSlotID, auctionMainCategory, auctionSubCategory, quality uint32 = 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
+	if levelMin, err = reader.ReadU8(); err != nil {
+		return true
+	}
+	if levelMax, err = reader.ReadU8(); err != nil {
+		return true
+	}
+	if auctionSlotID, err = reader.ReadU32(); err != nil {
+		return true
+	}
+	if auctionMainCategory, err = reader.ReadU32(); err != nil {
+		return true
+	}
+	if auctionSubCategory, err = reader.ReadU32(); err != nil {
+		return true
+	}
+	if quality, err = reader.ReadU32(); err != nil {
+		return true
+	}
+	if usable, err = reader.ReadU8(); err != nil {
+		return true
+	}
+	if getAll, err = reader.ReadU8(); err != nil {
+		return true
+	}
+	unkCnt, err := reader.ReadU8()
+	if err != nil {
+		return true
+	}
+	for i := uint8(0); i < unkCnt; i++ {
+		if _, err = reader.ReadU8(); err != nil {
+			return true
+		}
+		if _, err = reader.ReadU8(); err != nil {
+			return true
+		}
+	}
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
 	// AuctionHouseHandler.cpp:781-782 — remove fake death after the interact check.
 	s.removeFakeDeath()
-	listFrom, _ := reader.ReadU32()
-	searchedName, _ := reader.ReadCString()
-
-	var levelMin, levelMax, usable, getAll uint8
-	var auctionSlotID, auctionMainCategory, auctionSubCategory, quality uint32 = 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-	if reader.Remaining() >= 2 {
-		levelMin, _ = reader.ReadU8()
-		levelMax, _ = reader.ReadU8()
-	}
-	if reader.Remaining() >= 12 {
-		auctionSlotID, _ = reader.ReadU32()
-		auctionMainCategory, _ = reader.ReadU32()
-		auctionSubCategory, _ = reader.ReadU32()
-	}
-	if reader.Remaining() >= 4 {
-		quality, _ = reader.ReadU32()
-	}
-	if reader.Remaining() >= 1 {
-		usable, _ = reader.ReadU8()
-	}
-	if reader.Remaining() >= 1 {
-		getAll, _ = reader.ReadU8()
-	}
 
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
@@ -911,13 +941,16 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	}
 	s.expireAuctions(ctx)
 	// C++ HandleAuctionListOwnerItems (AuctionHouseHandler.cpp:708-727):
-	// the auctioneer GUID comes first in the packet and the NPC interact
-	// check runs before anything else.
-	if len(payload) < 1 {
+	// the reads (8-byte GUID + listfrom) come first; a payload under 12
+	// bytes throws in C++ and drops silently with no result packet.
+	if len(payload) < 12 {
 		return true
 	}
 	// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:712: recvData >> guid).
-	auctioneer, _ := protocol.NewReader(payload).ReadU64()
+	auctioneer, err := protocol.NewReader(payload).ReadU64()
+	if err != nil {
+		return true
+	}
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
@@ -975,13 +1008,27 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 		return true
 	}
 
+	// C++ HandleAuctionListBidderItems (AuctionHouseHandler.cpp:653-657):
+	// the three header reads (8-byte GUID, listfrom, outbiddedCount) throw
+	// on a payload under 16 bytes and drop silently with no result packet.
+	if len(payload) < 16 {
+		return true
+	}
 	var outbidIDs []uint32
-	if len(payload) >= 1 {
+	{
 		r := protocol.NewReader(payload)
 		// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:657: recvData >> guid).
-		auctioneer, _ := r.ReadU64()
-		_, _ = r.ReadU32() // listFrom, unused
-		outbiddedCount, _ := r.ReadU32()
+		auctioneer, err := r.ReadU64()
+		if err != nil {
+			return true
+		}
+		if _, err = r.ReadU32(); err != nil { // listFrom, unused
+			return true
+		}
+		outbiddedCount, err := r.ReadU32()
+		if err != nil {
+			return true
+		}
 		// C++ HandleAuctionListBidderItems (AuctionHouseHandler.cpp:659-663):
 		// a bad packet size zeroes the outbidded count instead of trusting it.
 		// The constant 16 is C++'s own: 8-byte raw GUID + u32 listFrom + u32
@@ -1001,8 +1048,6 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 				outbidIDs = append(outbidIDs, id)
 			}
 		}
-	} else {
-		return true
 	}
 
 	now := time.Now().Unix()
@@ -1445,7 +1490,8 @@ func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []b
 		return true
 	}
 	// WorldSession::HandleAuctionListPendingSales (AuctionHouseHandler.cpp:812-830):
-	// the handler only skips the 8-byte auctioneer GUID (read_skip<uint64>)
+	// the handler only skips the 8-byte auctioneer GUID (read_skip<uint64>,
+	// which throws on a payload under 8 bytes — silent drop, no packet)
 	// and always answers a zero count — the per-sale loop in C++ is
 	// commented out, so no sale data is ever sent, and there is NO NPC
 	// interact check on this path (a prior Go implementation gated on
@@ -1453,6 +1499,9 @@ func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []b
 	// whenever the player was away from an auctioneer).
 	// (A prior Go implementation parsed pending-sale mails here; that was
 	// invented behavior with no C++ arm, removed for fidelity.)
+	if len(payload) < 8 {
+		return true
+	}
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(0)
 	return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
