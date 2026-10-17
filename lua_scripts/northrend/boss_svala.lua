@@ -82,8 +82,12 @@
 -- (NORMAL); the NORMAL <-> SACRIFICING phase machine (HealthBelowPct
 -- (50) latch -> SetPhase(SACRIFICING) + SetCombatMovement(false) +
 -- MotionMaster legs, :244-252; SpellHitTarget
--- SPELL_RITUAL_STRIKE_EFF_1 48277 -> SetPhase(NORMAL), :223-233) has
--- no health-pct / SpellHitTarget bridges — porting on combat-start
+-- SPELL_RITUAL_STRIKE_EFF_1 48277 -> SetPhase(NORMAL), :223-233) —
+-- the old "no health-pct / SpellHitTarget" rationale is stale
+-- (both are bridged: GetHealthPct via the generic object fallback,
+-- event-15 SpellHitTarget per boss_ai.go); the blocker is the phase
+-- machine (SetPhase / SetCombatMovement / MoveChase), so porting on
+-- combat-start
 -- timers would fabricate SACRIFICING-phase casts (the gothik
 -- phase-gating precedent; the AGENTS.md 2026-10-13 DoCastAOE-vs-
 -- phase-gating counterpoint). Stay out.

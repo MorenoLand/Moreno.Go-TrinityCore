@@ -69,8 +69,12 @@
 -- DoCast(me, SPELL_SCREAMS_OF_THE_DEAD 51750) + AttackStop +
 -- REACT_PASSIVE + MovePoint(POINT_BOAT) + boat-ghost despawns +
 -- events.CancelEvent(prev ancestor event) +
--- events.DelayEvents(10s, EVENT_GROUP_BASE_SPELLS) have no health-pct /
--- MotionMaster bridges; the MovementInform(POINT_BOAT) ->
+-- events.DelayEvents(10s, EVENT_GROUP_BASE_SPELLS) have no MotionMaster /
+-- MovementInform bridge (the health-threshold latch itself is bridgeable
+-- via event 9 + GetHealthPct — boss_nethekurse.lua uses GetHealthPct()
+-- <= 20 at event 9 — but the blocker is the MovePoint(POINT_BOAT) leg,
+-- :218, plus no InterruptNonMeleeSpells / react-state / despawn
+-- bridges); the MovementInform(POINT_BOAT) ->
 -- Talk(summon say 3-6) -> SummonCreature(ancestor visual) ->
 -- DoCast(ancestor, SPELL_CHANNEL_YMIRON_TO_SPIRIT 48307) +
 -- ancestor->CastSpell(me, SPELL_CHANNEL_SPIRIT_TO_YMIRON 48316, true) ->

@@ -70,9 +70,10 @@
 -- (the GUID latch from IsSummonedBy has no bridge either);
 -- no unit-state bridge — the C++ flight phase never calls
 -- DoMeleeAttackIfReady but engine melee is always on in
--- this model (kargath in-blade precedent); no difficulty
--- bridge — the heroic-only bellowing roar 39427 arm
--- unmodeled (thespia precedent); no summon bridge — the
+-- this model (kargath in-blade precedent); the heroic-only
+-- bellowing roar 39427 arm is ported below (IsHeroic() is
+-- bridged — blood_prince_council precedent); no summon
+-- bridge — the
 -- SpellHitTarget arm (SummonCreature NPC_LIQUID_FIRE 22515
 -- at the fireball target, TEMPSUMMON_TIMED_DESPAWN 30s) and
 -- the JustSummoned liquid-fire setup (SetLevel/SetFaction/
@@ -132,6 +133,7 @@ end
 local function freshState()
     return {
         flight = true,
+        bellowingRoar = 0,
         fireball = 4000,
         fly = 45000,
         coneOfFire = 12000,
@@ -185,6 +187,7 @@ local function bossTick(creature, guid)
         -- no cross-creature bridge.
         if st.fly < 1000 then
             st.flight = false
+            st.bellowingRoar = 6000
             st.coneOfFire = 12000
             creature:Talk(EMOTE)
         else
@@ -195,15 +198,29 @@ local function bossTick(creature, guid)
 
     -- Land phase: cone of fire 30926 — 12s init then 12s,
     -- non-triggered DoCast on self (C++-exact), re-arm
-    -- 12000, Fireball_Timer reset to 4000 (C++-exact). The
-    -- heroic-only bellowing roar arm has no difficulty
-    -- bridge (thespia precedent).
+    -- 12000, Fireball_Timer reset to 4000 (C++-exact); the
+    -- heroic-only bellowing roar 39427 arm is ported below
+    -- (IsHeroic() is bridged — blood_prince_council
+    -- precedent).
     if st.coneOfFire <= 1000 then
         creature:CastSpell(creature, SPELL_CONE_OF_FIRE)
         st.coneOfFire = 12000
         st.fireball = 4000
     else
         st.coneOfFire = st.coneOfFire - 1000
+    end
+
+    -- Bellowing roar 39427 (heroic only, C++-exact: armed 6s
+    -- at land, then 45s, non-triggered self-cast —
+    -- boss_vazruden_the_herald.cpp:175-183); the timer only
+    -- ticks under IsHeroic(), like the C++.
+    if creature:IsHeroic() then
+        if st.bellowingRoar <= 1000 then
+            creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
+            st.bellowingRoar = 45000
+        else
+            st.bellowingRoar = st.bellowingRoar - 1000
+        end
     end
 end
 

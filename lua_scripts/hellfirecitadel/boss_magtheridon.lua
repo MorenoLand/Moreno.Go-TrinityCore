@@ -106,7 +106,7 @@
 -- set, C++-exact values); no summon bridge — the channeler
 -- group summon skipped; no react/flag bridge — the passive/
 -- aggressive/react-defensive, NOT_SELECTABLE and immune-to-PC
--- arms unmodeled; no movement/interrupt/distance bridges — the
+-- arms unmodeled; no interrupt/distance bridges — the
 -- quake/blaze SPELLVALUE target-count args, the channeler
 -- InterruptNonMeleeSpells and the DoSelectBelowHpPctFriendly
 -- dark-mending pick (no creature-enumeration bridge) unmodeled;

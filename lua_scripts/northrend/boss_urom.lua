@@ -75,8 +75,12 @@
 -- BACK (DUNGEON_MODE 10s/8s) re-aggressive + NearTeleportTo(victim)
 -- + AttackStart; EVENT_FROST_BOMB (5s) DoCastVictim(SPELL_FROSTBOMB
 -- 51103) 5s repeat; EVENT_TIME_BOMB (20s) SelectTarget(Random) ->
--- DoCast(SPELL_TIME_BOMB 51121) 20s repeat — no timer-event / random-
--- target / cast / teleport / react-state / gravity bridges.
+-- DoCast(SPELL_TIME_BOMB 51121) 20s repeat — timer-event and cast
+-- ARE bridged (this file ports Reset/JustReachedHome casts on
+-- CreateLuaEvent), but the arm is gated on the center _platform leg
+-- (:189-219 summon x4 + DoCast(TeleportSpells) cycle) with
+-- teleport / react-state / gravity / controlled-state legs — no
+-- bridges; unmodeled.
 -- DamageTaken — _isInCenter-gated NearTeleportTo(1124.0432,
 -- 1078.2109, 508.3597, 5.4623) on lethal damage — state- and
 -- health-gated, no bridges.

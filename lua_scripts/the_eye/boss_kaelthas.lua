@@ -69,7 +69,10 @@
 -- BLOW 10689). The gaze arm (100 init then 8500: random
 -- target + ResetThreatList + AddThreat(5000000) + Talk(EMOTE_
 -- THALADRED_GAZE 2, target)) is unmodeled — no threat
--- bridge and no targeted-Talk bridge (keleseth precedent).
+-- bridge (Talk(id, target) is bridged — whisperTarget arm,
+-- engine/world/lua_creature_events.go:100, boss_arlokk.lua
+-- precedent — but the arm is threat-gated, keleseth
+-- precedent).
 -- Sanguinar (20060): OnEnterCombat(1): Talk(SAY_SANGUINAR_
 -- AGGRO) + 1s pump: bellowing roar — 20000 init then
 -- 25000+rand()%10000: DoCastVictim(SPELL_BELLOWING_ROAR

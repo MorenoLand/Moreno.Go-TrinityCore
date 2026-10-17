@@ -44,7 +44,9 @@
 -- arm has no unit-state bridge; Talk(SAY_NOVA); the AddAura(SPELL_
 -- BURNING_NOVA 30940, me) arm is ported below (stale "no aura
 -- bridge" claim retracted — creature AddAura is bridged); the
--- IsHeroic() DoTeleportAll arm has no teleport/difficulty bridge;
+-- IsHeroic() DoTeleportAll arm has no teleport bridge (IsHeroic()
+-- is bridged — blood_prince_council precedent — but DoTeleportAll
+-- has no bridge, so the arm stays unmodeled);
 -- firenova=true, firenovaTimer=5000, re-arm {20s,28s} regardless
 -- (C++-exact).
 -- OnTargetDied(3): 50% Talk(SAY_KILL) (C++ `if (rand32() % 2)
@@ -175,8 +177,8 @@ local function bossTick(creature, guid)
     -- {20s,28s}) — the InterruptNonMeleeSpells arm has no
     -- unit-state bridge; Talk(SAY_NOVA); the AddAura(30940) arm is
     -- ported below (stale "no aura bridge" claim retracted) and the
-    -- heroic DoTeleportAll arm has no teleport/difficulty bridge
-    -- (documented above); firenova=
+    -- heroic DoTeleportAll arm has no teleport bridge (IsHeroic()
+    -- is bridged — documented above); firenova=
     -- true with a 5s firenovaTimer, re-arm {20s,28s} regardless
     -- (C++-exact).
     if st.burningNova <= 1000 then

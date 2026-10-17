@@ -55,10 +55,11 @@
 -- no target-selection bridge — the cast lands on the victim
 -- (nil target, vaelastrasz convention); the Elune's Candle
 -- aura arm (HasAura(SPELL_OMEN_STARFALL) ->
--- RemoveAurasDueToSpell) has no creature-aura bridge (aura
--- bridges exist on the session player proxy only, durotar
--- precedent) — the re-arm still fires on every 26374 hit,
--- C++-exact for the reschedule half; the C++ constructor-
+-- RemoveAurasDueToSpell) is ported via the bridged
+-- creature:HasAura/creature:RemoveAura (lua_objects.go:228,242
+-- — hakkar/netherspite precedent), C++-exact on event 14;
+-- the re-arm still fires on every 26374 hit, C++-exact for
+-- the reschedule half; the C++ constructor-
 -- driven immunity phase means omen is attackable from spawn
 -- in this model.
 -- npc_clintar_spirit — the whole quest-10965 escort event
@@ -164,8 +165,10 @@ end
 -- C++ SpellHit: SPELL_ELUNE_CANDLE -> RescheduleEvent(EVENT_
 -- CAST_STARFALL, 14s, 16s) — modeled as re-arming the
 -- starfall timer to 14-16s (C++-exact). The aura-strip half
--- (HasAura/RemoveAurasDueToSpell SPELL_OMEN_STARFALL) has no
--- creature-aura bridge (durotar precedent) — unmodeled. The
+-- is ported via the bridged creature:HasAura/creature:
+-- RemoveAura (lua_objects.go:228,242 — hakkar/netherspite
+-- precedent), firing unconditionally on every 26374 hit
+-- before the re-arm (C++-exact). The
 -- event-14 caster is always the player proxy in this model
 -- and the C++ arm gates only on the spell id (desolace-kodo
 -- precedent). Out-of-combat hits find no pump state — the
@@ -176,6 +179,12 @@ end
 local function onSpellHit(_, creature, _, spellId)
     if spellId ~= SPELL_ELUNE_CANDLE then
         return
+    end
+    -- C++ SpellHit (zone_moonglade.cpp:454-462): strip the
+    -- starfall aura first, unconditionally — C++-exact
+    -- ordering.
+    if creature:HasAura(SPELL_OMEN_STARFALL) then
+        creature:RemoveAura(SPELL_OMEN_STARFALL)
     end
     local st = omenState[creature:GetGUID()]
     if st then
