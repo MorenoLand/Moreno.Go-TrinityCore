@@ -62,10 +62,13 @@
 -- target is bridgeable (the mandokir SAY_WATCH / razorscale
 -- EMOTE_BERSERK precedent); DoCast(target, SPELL_FROST_TOMB_STUN
 -- 42672, true) -> CastSpell(target, 42672, true); target->CastSpell
--- (target, SPELL_FROST_TOMB_SUMMON 42714, true) -> target:CastSpell
+-- (target, SPELL_FROST_TOMB_SUMMON 42714, true) -> creature:CastSpell
 -- (target, 42714, true) — the C++ comment says "checked from sniffs -
--- the player casts the spell" (the moroes GARROTE target-self-cast
--- precedent); repeat {14s,19s} regardless of target found, C++-exact.
+-- the player casts the spell", but player:CastSpell has no bridge
+-- (CastSpell is creature-only, engine/world/lua_creature_events.go:60),
+-- so the caster deviates from C++ (the moroes GARROTE target-self-cast
+-- shape is unbridgeable); repeat {14s,19s} regardless of target found,
+-- C++-exact.
 -- JustDied (:165-169) — Talk(SAY_DEATH 5) (event 4 — the sjonnir
 -- JustDied-Talk precedent); the BossAI::_JustDied() passthrough has no
 -- bridge; the combat timers are wiped with it.
@@ -188,8 +191,12 @@ local function frostTombTick(creature, guid)
         creature:Talk(SAY_FROST_TOMB_EMOTE, target)
         creature:CastSpell(target, SPELL_FROST_TOMB_STUN, true)
         -- C++ comment: "checked from sniffs - the player casts the
-        -- spell" — the moroes GARROTE target-self-cast precedent.
-        target:CastSpell(target, SPELL_FROST_TOMB_SUMMON, true)
+        -- spell" — but player:CastSpell has no bridge (CastSpell is
+        -- registered for creature objects only,
+        -- engine/world/lua_creature_events.go:60); the target-self-cast
+        -- would nil-call and kill this timer chain, so the creature
+        -- casts on the target instead (caster deviates from C++).
+        creature:CastSpell(target, SPELL_FROST_TOMB_SUMMON, true)
     end
     schedule(guid, "frosttomb", {14000, 19000}, function()
         frostTombTick(creature, guid)

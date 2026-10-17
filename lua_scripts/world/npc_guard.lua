@@ -115,9 +115,13 @@ armBanish = function(creature, guid) -- C++ npc_guard.cpp:210 ScheduleVanish
                 local p = GetPlayerByGUID(pGUID)
                 if p then
                     -- C++ :223-224 temp->CastSpell(temp, ..., true) —
-                    -- explicit TRIGGERED_FULL_MASK.
-                    p:CastSpell(p, SPELL_EXILE, true)
-                    p:CastSpell(p, SPELL_BANISH_TELEPORT, true)
+                    -- explicit TRIGGERED_FULL_MASK. But player:CastSpell
+                    -- has no bridge (CastSpell is creature-only,
+                    -- engine/world/lua_creature_events.go:60); the
+                    -- creature casts on the player instead (caster
+                    -- deviates from C++).
+                    creature:CastSpell(p, SPELL_EXILE, true)
+                    creature:CastSpell(p, SPELL_BANISH_TELEPORT, true)
                 end
                 armBanish(creature, guid) -- C++ :226 ScheduleVanish() re-arm (unconditional)
             end, 9000)

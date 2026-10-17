@@ -106,17 +106,21 @@ local function onMortalWound(creature, guid)
     end)
 end
 
--- C++ EVENT_SANDTRAP: random alive player within 100 casts on itself
--- (triggered); nil target -> victim casts on itself. Init {5s,15s} ->
--- {5s,15s}.
+-- C++ EVENT_SANDTRAP (boss_kurinnaxx.cpp:109-115): random alive player
+-- within 100 self-casts SPELL_SANDTRAP (triggered); nil target -> victim
+-- self-casts. Init {5s,15s} -> {5s,15s}. But player:CastSpell has no
+-- bridge (CastSpell is registered for creature objects only,
+-- engine/world/lua_creature_events.go:60) — the self-casts would
+-- nil-call and kill this timer chain, so the creature casts on the
+-- target/victim instead (caster deviates from C++).
 local function onSandTrap(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
-        target:CastSpell(target, SPELL_SAND_TRAP, true)
+        creature:CastSpell(target, SPELL_SAND_TRAP, true)
     else
         local victim = creature:GetVictim()
         if victim then
-            victim:CastSpell(victim, SPELL_SAND_TRAP, true)
+            creature:CastSpell(victim, SPELL_SAND_TRAP, true)
         end
     end
     schedule(guid, "sandtrap", math.random(5000, 15000), function()

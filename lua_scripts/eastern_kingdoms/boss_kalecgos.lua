@@ -71,9 +71,13 @@
 --   -> Talk(1)), <= 10 (phase 3 -> Talk(2)), one-shot latches
 --   reset on 23.
 -- go_kalecgos_spectral_rift (GO 187055), GossipHello(1):
--- - if !player:HasAura(44867) then player:CastSpell(player,
---   44811, true) (C++-exact OnGossipHello body; Eluna GO gossip
---   event ids 1=hello, handler args (event, player, object)).
+-- - if !player:HasAura(44867) then player->CastSpell(player, 44811,
+--   true) (C++ boss_kalecgos.cpp:590-595). NOT registered: the cast is
+--   unbridgeable — player:CastSpell has no bridge (CastSpell is
+--   registered for creature objects only,
+--   engine/world/lua_creature_events.go:60) and no creature is in scope
+--   in a GO gossip handler to substitute as caster (the canonical
+--   sunwellplateau/boss_kalecgos.lua likewise leaves it unregistered).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - instance_sunwell_plateau.cpp (AddSC_instance_sunwell_plateau)
 --   — instance-script model blocked (standing): DATA_KALECGOS_*
@@ -114,7 +118,6 @@
 local ENTRY_KALECGOS_DRAGON = 24850
 local ENTRY_SATHROVARR = 24892
 local ENTRY_KALECGOS_HUMAN = 24891
-local ENTRY_SPECTRAL_RIFT = 187055
 
 local SPELL_ARCANE_BUFFET = 45018
 local SPELL_FROST_BREATH = 44799
@@ -133,8 +136,6 @@ local SPELL_AGONY_CURSE = 45032
 local SPELL_CORRUPTION_STRIKE = 45029
 local SPELL_REVITALIZE = 45027
 local SPELL_HEROIC_STRIKE = 45026
-local SPELL_SPECTRAL_EXHAUSTION = 44867
-local SPELL_SPECTRAL_REALM_TRIGGER = 44811
 
 local WILD_MAGIC = {
     SPELL_WILD_MAGIC_1, SPELL_WILD_MAGIC_2, SPELL_WILD_MAGIC_3,
@@ -397,13 +398,6 @@ end
 -- by the canonical port lua_scripts/sunwellplateau/boss_kalecgos.lua
 -- (verified closed); two registrations double-fired every combat event.
 
--- go_kalecgos_spectral_rift (GO 187055) --
-
-local function onSpectralRiftGossip(_, player, _)
-    if not player:HasAura(SPELL_SPECTRAL_EXHAUSTION) then
-        player:CastSpell(player, SPELL_SPECTRAL_REALM_TRIGGER, true)
-    end
-    return true
-end
-
-RegisterGameObjectGossipEvent(ENTRY_SPECTRAL_RIFT, 1, onSpectralRiftGossip)
+-- go_kalecgos_spectral_rift (GO 187055) — unregistered (see header):
+-- the OnGossipHello cast player->CastSpell(player, 44811, true) has no
+-- bridge (no player:CastSpell; no creature in GO-gossip scope).
