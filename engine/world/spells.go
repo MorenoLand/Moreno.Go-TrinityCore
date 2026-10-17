@@ -36373,6 +36373,14 @@ func (s *session) handleEffectActivateObjectGO(ctx context.Context, goGUID uint6
 		// GameObject::SendCustomAnim(action - AnimateCustom0)
 		// (SpellEffects.cpp:3954).
 		s.server.broadcastGameObjectCustomAnimInInstance(mapID, instanceID, goGUID, action-goActionAnimateCustom0)
+	case action == goActionDisturb || action == goActionOpen:
+		// GameObjectActions::Disturb / ::Open (SpellEffects.cpp:3956-3960):
+		// gameObjTarget->Use(unitCaster) — the full GameObject::Use on the
+		// target (Disturb's client name is "Triggers trap"). ToggleOpen,
+		// Creation and SetTapList have no C++ arm (the default case logs an
+		// unhandled-action error) and None logs fatal; Go leaves them
+		// no-ops.
+		s.activateGameObjectUse(ctx, goGUID)
 	case action == goActionOpenAndUnlock:
 		// GameObject::UseDoorOrButton(0, false) then the fallthrough Unlock
 		// arm clears GO_FLAG_LOCKED (SpellEffects.cpp:3961-3967).

@@ -757,6 +757,19 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
+	return s.useGameObjectTypeArms(ctx, payload, goState, guid, entry)
+}
+
+// useGameObjectTypeArms is the battleground-delegate + GameObject::Use
+// per-type arm dispatch (GameObject.cpp:1484-2087), factored out of
+// handleGameObjectUse so the SPELL_EFFECT_ACTIVATE_OBJECT Disturb/Open arms
+// can run the same Use() the C++ effect runs directly on the target
+// (gameObjTarget->Use(unitCaster), SpellEffects.cpp:3956-3960). The interact
+// gates (distance/phase/flight/icon) and the Use() head arms (immunity,
+// dismount, ClearMenus, gossip hook, template cooldown) stay with the
+// callers: the packet path keeps its gates, the spell-effect path runs its
+// own copy of the head arms (activateGameObjectUse).
+func (s *session) useGameObjectTypeArms(ctx context.Context, payload []byte, goState *dynamicGameObjectState, guid uint64, entry uint32) bool {
 	// Battleground/objective delegates sit AFTER the interact gates
 	// (GetGameObjectIfCanInteractWith, Player.cpp:2363-2386) and the
 	// GameObject::Use head arms (immunity, dismount, ClearMenus, gossip hooks,
@@ -956,6 +969,49 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	}
 
 	return true
+}
+
+// activateGameObjectUse runs GameObject::Use on a spell-effect target for
+// the SPELL_EFFECT_ACTIVATE_OBJECT Disturb/Open arms (SpellEffects.cpp:3956-
+// 3960: gameObjTarget->Use(unitCaster)): the Use() head arms
+// (CannotBeUsedUnderImmunity, mounted dismount, ClearMenus, the gossip-hello
+// hook, and the template-cooldown gate — GameObject.cpp:1491-1518) ahead of
+// the per-type arm dispatch. There are no interact gates here — the C++
+// effect calls Use() directly on the gameobject target, not through the
+// click-opcode path.
+func (s *session) activateGameObjectUse(ctx context.Context, guid uint64) {
+	if s == nil || s.server == nil || s.player == nil || guid == 0 {
+		return
+	}
+	entry := uint32((guid >> 24) & 0xFFFFFF)
+	lowGUID := uint32(guid & 0xFFFFFF)
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry, mapID, instanceID)
+	if err != nil || goState == nil {
+		return
+	}
+	// GameObject::Use head arms (GameObject.cpp:1491-1518): the
+	// CannotBeUsedUnderImmunity gate, the mounted dismount, and
+	// PlayerTalkClass->ClearMenus() run for every GO type before the gossip
+	// hooks and the template-cooldown gate.
+	goTpl := s.loadGameObjectTemplateData(ctx, entry)
+	if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.isTotalImmune() {
+		return
+	}
+	if !goIsUsableMounted(goState.Type, goTpl) {
+		s.removeAurasByType(spellAuraMounted)
+	}
+	s.gossip = nil
+	if s.fireGameObjectGossipHelloHook(ctx, guid) {
+		return
+	}
+	if !s.admitGameObjectUse(entry, goState) {
+		return
+	}
+	// The fishing arms read the wire payload; a spell-effect use carries
+	// none, and the reader fails closed on a nil payload, so the per-type
+	// dispatch gets none.
+	s.useGameObjectTypeArms(ctx, nil, goState, guid, entry)
 }
 
 // useQuestGiverGameObject mirrors the GAMEOBJECT_TYPE_QUESTGIVER arm of
