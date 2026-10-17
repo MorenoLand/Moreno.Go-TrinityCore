@@ -159,17 +159,19 @@ const (
 )
 
 type auctionRecord struct {
-	ID         uint32
-	ItemGUID   uint64
-	ItemEntry  uint32
-	ItemCount  uint32
-	Owner      uint64
-	StartBid   uint32
-	Buyout     uint32
-	Bidder     uint64
-	Bid        uint32
-	ExpireTime int64
-	Deposit    uint32
+	ID           uint32
+	ItemGUID     uint64
+	ItemEntry    uint32
+	ItemCount    uint32
+	Owner        uint64
+	StartBid     uint32
+	Buyout       uint32
+	Bidder       uint64
+	Bid          uint32
+	ExpireTime   int64
+	Deposit      uint32
+	RandomPropID int32
+	ItemFlags    uint32
 }
 
 // sendAuctionHelloPacket ports WorldSession::SendAuctionHello
@@ -318,7 +320,7 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 		if !found || throttleTime <= now {
 			s.server.auctionGetAllThrottle[s.playerGUID] = now + int64(cfg.AuctionGetAllDelay)
 			s.server.auctionGetAllMu.Unlock()
-			auctions := scanAuctionRows(ctx, cdb, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
+			auctions := scanAuctionRows(ctx, cdb, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 				FROM auctionhouse AS ah
 				INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
 				WHERE ah.time > ?
@@ -407,7 +409,7 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 		}
 	}
 
-	query := `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
+	query := `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
 		LEFT JOIN item_template AS it ON it.entry = ii.itemEntry
@@ -420,20 +422,22 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	defer rows.Close()
 	var auctions []auctionRecord
 	for rows.Next() {
-		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count int64
-		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count); err == nil {
+		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count, randProp, itemFlags int64
+		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count, &randProp, &itemFlags); err == nil {
 			auctions = append(auctions, auctionRecord{
-				ID:         uint32(id),
-				ItemGUID:   uint64(iGuid),
-				ItemEntry:  uint32(iTmpl),
-				ItemCount:  uint32(count),
-				Owner:      uint64(owner),
-				Buyout:     uint32(buyout),
-				ExpireTime: expTime,
-				Bidder:     uint64(bidder),
-				Bid:        uint32(lastBid),
-				StartBid:   uint32(startBid),
-				Deposit:    uint32(deposit),
+				ID:           uint32(id),
+				ItemGUID:     uint64(iGuid),
+				ItemEntry:    uint32(iTmpl),
+				ItemCount:    uint32(count),
+				Owner:        uint64(owner),
+				Buyout:       uint32(buyout),
+				ExpireTime:   expTime,
+				Bidder:       uint64(bidder),
+				Bid:          uint32(lastBid),
+				StartBid:     uint32(startBid),
+				Deposit:      uint32(deposit),
+				RandomPropID: int32(randProp),
+				ItemFlags:    uint32(itemFlags),
 			})
 		}
 	}
@@ -542,10 +546,15 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	var finalCount uint32
 	var tmplFlags int64
 	tmplFlagsOK := false
+	// Item::CloneItem (Item.cpp:1027-1042) clones items[0]: creator and
+	// gift-creator GUIDs, flags, and the random property id travel with it.
+	var cloneCreatorGUID, cloneGiftCreatorGUID int64
+	var cloneRandPropID int32
+	var cloneSrcFlags int64
 	itemCounts := make([]int64, len(itemGUIDs))
 	for j, itemGUID := range itemGUIDs {
-		var entry, have, flags, duration int64
-		qerr := cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, duration FROM item_instance WHERE guid = ? AND owner_guid = ? LIMIT 1", itemGUID, s.playerGUID).Scan(&entry, &have, &flags, &duration)
+		var entry, have, flags, duration, creatorGUID, giftCreatorGUID, randPropID int64
+		qerr := cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, duration, COALESCE(creatorGuid, 0), COALESCE(giftCreatorGuid, 0), COALESCE(randomPropertyId, 0) FROM item_instance WHERE guid = ? AND owner_guid = ? LIMIT 1", itemGUID, s.playerGUID).Scan(&entry, &have, &flags, &duration, &creatorGUID, &giftCreatorGUID, &randPropID)
 		// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:199-204): a
 		// missing item answers ERR_AUCTION_ITEM_NOT_FOUND with auction id 0.
 		if qerr != nil {
@@ -553,6 +562,10 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		}
 		if j == 0 {
 			itemEntry = entry
+			cloneCreatorGUID = creatorGUID
+			cloneGiftCreatorGUID = giftCreatorGUID
+			cloneRandPropID = int32(randPropID)
+			cloneSrcFlags = flags
 			// item->GetTemplate()->HasFlag(ITEM_FLAG_CONJURED)
 			// (AuctionHouseHandler.cpp:208, ITEM_FLAG_CONJURED = 0x2,
 			// ItemTemplate.h:153): all listed items share one entry, so one
@@ -639,11 +652,20 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		if newGUID <= 0 {
 			return sellFail(errAuctionDatabaseError)
 		}
-		// Item::CloneItem (Item.cpp:1033) copies the source's remaining
-		// ITEM_FIELD_DURATION onto the merged stack — not the template's.
+		// Item::CloneItem (Item.cpp:1027-1042) copies the source's remaining
+		// ITEM_FIELD_DURATION onto the merged stack — not the template's —
+		// along with its creator/gift-creator GUIDs, its flags with the
+		// refundable and BoP-tradeable bits cleared, and its random property
+		// id (SetItemRandomProperties — Go resolves the suffix at display
+		// time from randomPropertyId, so carrying the id preserves it).
+		// Enchantments are not copied: CloneItem only re-applies the
+		// random-property ones, which Go derives from the id the same way.
+		// Duration is 0 here — the duration gate above rejects any item with
+		// a remaining duration.
 		var auctionDuration int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(duration, 0) FROM item_instance WHERE guid = ?", auctionItemGUID).Scan(&auctionDuration)
-		if _, err = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count, duration) VALUES (?, ?, ?, ?, ?)", newGUID, itemEntry, s.playerGUID, finalCount, auctionDuration); err != nil {
+		cloneFlags := cloneSrcFlags &^ int64(itemInstanceFlagRefundable|itemInstanceFlagBOPTradeable)
+		if _, err = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, flags, randomPropertyId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", newGUID, itemEntry, s.playerGUID, cloneCreatorGUID, cloneGiftCreatorGUID, finalCount, auctionDuration, cloneFlags, cloneRandPropID); err != nil {
 			return sellFail(errAuctionDatabaseError)
 		}
 		for j, itemGUID := range itemGUIDs {
@@ -654,28 +676,28 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 				s.despawnItem(uint64(itemGUID))
 			} else {
 				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", stackCounts[j], itemGUID)
-				// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:405): the
-				// clone path fires Player::ItemRemovedQuestCheck for each
-				// partially-consumed stack with that stack's listed count.
-				// Fully-consumed stacks and the whole-item path
-				// (AuctionHouseHandler.cpp:293-341) fire nothing.
-				s.adjustQuestItemCount(ctx, uint32(itemEntry), stackCounts[j], false)
 			}
+			// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:405) fires
+			// Player::ItemRemovedQuestCheck explicitly for each
+			// partially-consumed stack, and Player::MoveItemFromInventory
+			// (Player.cpp:12586-12597) fires it for every moved stack — so
+			// every listed stack fires with its listed count.
+			s.adjustQuestItemCount(ctx, uint32(itemEntry), stackCounts[j], false)
 		}
 		auctionItemGUID = newGUID
 	} else {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, auctionItemGUID)
 		s.despawnItem(uint64(auctionItemGUID))
+		// Player::MoveItemFromInventory (Player.cpp:12586-12597) fires
+		// Player::ItemRemovedQuestCheck(entry, count) on the moved item —
+		// the whole-item path (AuctionHouseHandler.cpp:320) is not exempt.
+		s.adjustQuestItemCount(ctx, uint32(itemEntry), stackCounts[0], false)
 		// Player::MoveItemFromInventory (Player.cpp:12588-12595): posting to
 		// the auction runs Item::SetNotRefundable — flag cleared, refund row
 		// deleted.
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), auctionItemGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", auctionItemGUID)
 	}
-	// C++ HandleAuctionSellItem: the whole-item path (AuctionHouseHandler.cpp:293-341)
-	// fires no ItemRemovedQuestCheck — the moved item keeps its quest counts.
-	// The clone path fires per partially-consumed stack inside the loop above
-	// (AuctionHouseHandler.cpp:405).
 	now := time.Now().Unix()
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:254): auctionTime =
 	// uint32(etime_seconds * Rate.Auction.Time); the auction's expire time is
@@ -969,7 +991,7 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	if cdb == nil {
 		return true
 	}
-	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
+	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
 		WHERE ah.itemowner = ? AND ah.time > ?`, s.playerGUID, time.Now().Unix())
@@ -979,20 +1001,22 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	defer rows.Close()
 	var auctions []auctionRecord
 	for rows.Next() {
-		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count int64
-		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count); err == nil {
+		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count, randProp, itemFlags int64
+		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count, &randProp, &itemFlags); err == nil {
 			auctions = append(auctions, auctionRecord{
-				ID:         uint32(id),
-				ItemGUID:   uint64(iGuid),
-				ItemEntry:  uint32(iTmpl),
-				ItemCount:  uint32(count),
-				Owner:      uint64(owner),
-				Buyout:     uint32(buyout),
-				ExpireTime: expTime,
-				Bidder:     uint64(bidder),
-				Bid:        uint32(lastBid),
-				StartBid:   uint32(startBid),
-				Deposit:    uint32(deposit),
+				ID:           uint32(id),
+				ItemGUID:     uint64(iGuid),
+				ItemEntry:    uint32(iTmpl),
+				ItemCount:    uint32(count),
+				Owner:        uint64(owner),
+				Buyout:       uint32(buyout),
+				ExpireTime:   expTime,
+				Bidder:       uint64(bidder),
+				Bid:          uint32(lastBid),
+				StartBid:     uint32(startBid),
+				Deposit:      uint32(deposit),
+				RandomPropID: int32(randProp),
+				ItemFlags:    uint32(itemFlags),
 			})
 		}
 	}
@@ -1062,7 +1086,7 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	now := time.Now().Unix()
 	var auctions []auctionRecord
 	var count, totalcount uint32
-	auctionSelect := `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
+	auctionSelect := `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid`
 	for _, oid := range outbidIDs {
@@ -1072,7 +1096,7 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 			totalcount++
 		}
 	}
-	bidderRows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
+	bidderRows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 		FROM auctionhouse AS ah
 		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
 		WHERE ah.id IN (SELECT id FROM auctionbidders WHERE bidderguid = ?) AND ah.time > ?
@@ -1080,25 +1104,27 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	if err == nil {
 		defer bidderRows.Close()
 		for bidderRows.Next() {
-			var id, iGuid, owner, buyout, expTime, bidder, lastBid, startBid, deposit int64
+			var id, iGuid, owner, buyout, expTime, bidder, lastBid, startBid, deposit, randProp, itemFlags int64
 			var iTmpl, itemCount sql.NullInt64
-			if err := bidderRows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &itemCount); err != nil {
+			if err := bidderRows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &itemCount, &randProp, &itemFlags); err != nil {
 				continue
 			}
 			totalcount++
 			if iTmpl.Valid && itemCount.Valid {
 				auctions = append(auctions, auctionRecord{
-					ID:         uint32(id),
-					ItemGUID:   uint64(iGuid),
-					ItemEntry:  uint32(iTmpl.Int64),
-					ItemCount:  uint32(itemCount.Int64),
-					Owner:      uint64(owner),
-					Buyout:     uint32(buyout),
-					ExpireTime: expTime,
-					Bidder:     uint64(bidder),
-					Bid:        uint32(lastBid),
-					StartBid:   uint32(startBid),
-					Deposit:    uint32(deposit),
+					ID:           uint32(id),
+					ItemGUID:     uint64(iGuid),
+					ItemEntry:    uint32(iTmpl.Int64),
+					ItemCount:    uint32(itemCount.Int64),
+					Owner:        uint64(owner),
+					Buyout:       uint32(buyout),
+					ExpireTime:   expTime,
+					Bidder:       uint64(bidder),
+					Bid:          uint32(lastBid),
+					StartBid:     uint32(startBid),
+					RandomPropID: int32(randProp),
+					ItemFlags:    uint32(itemFlags),
+					Deposit:      uint32(deposit),
 				})
 				count++
 			}
@@ -1423,20 +1449,22 @@ func scanAuctionRows(ctx context.Context, db *sql.DB, query string, args ...inte
 	defer rows.Close()
 	var auctions []auctionRecord
 	for rows.Next() {
-		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count int64
-		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count); err == nil {
+		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count, randProp, itemFlags int64
+		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count, &randProp, &itemFlags); err == nil {
 			auctions = append(auctions, auctionRecord{
-				ID:         uint32(id),
-				ItemGUID:   uint64(iGuid),
-				ItemEntry:  uint32(iTmpl),
-				ItemCount:  uint32(count),
-				Owner:      uint64(owner),
-				Buyout:     uint32(buyout),
-				ExpireTime: expTime,
-				Bidder:     uint64(bidder),
-				Bid:        uint32(lastBid),
-				StartBid:   uint32(startBid),
-				Deposit:    uint32(deposit),
+				ID:           uint32(id),
+				ItemGUID:     uint64(iGuid),
+				ItemEntry:    uint32(iTmpl),
+				ItemCount:    uint32(count),
+				Owner:        uint64(owner),
+				Buyout:       uint32(buyout),
+				ExpireTime:   expTime,
+				Bidder:       uint64(bidder),
+				Bid:          uint32(lastBid),
+				StartBid:     uint32(startBid),
+				Deposit:      uint32(deposit),
+				RandomPropID: int32(randProp),
+				ItemFlags:    uint32(itemFlags),
 			})
 		}
 	}
@@ -1461,11 +1489,17 @@ func writeAuctionInfo(buf *protocol.Buffer, a auctionRecord) {
 		buf.WriteU32(0)
 		buf.WriteU32(0)
 	}
-	buf.WriteI32(0) // RandomPropertyId
-	buf.WriteU32(0) // SuffixFactor
+	// C++ AuctionEntry::BuildAuctionInfo (AuctionHouseMgr.cpp:855-859): the
+	// list packet carries the item's real random property id and item flags.
+	// SuffixFactor stays 0 (no inventory suffix-factor bridge — the factor is
+	// not stored on item_instance); spell charges stay 0 (the charges column
+	// is a serialized 5-slot string, no single-slot bridge); enchantments
+	// stay zeroed (no per-item enchantment model on auction rows).
+	buf.WriteI32(a.RandomPropID) // RandomPropertyId
+	buf.WriteU32(0)              // SuffixFactor
 	buf.WriteU32(a.ItemCount)
-	buf.WriteU32(0) // SpellCharges
-	buf.WriteU32(0) // ItemFlags
+	buf.WriteU32(0)           // SpellCharges
+	buf.WriteU32(a.ItemFlags) // ItemFlags
 	buf.WriteU64(a.Owner)
 	buf.WriteU32(a.StartBid)
 	// C++ AuctionEntry::BuildAuctionInfo (AuctionHouseMgr.cpp:863): the
