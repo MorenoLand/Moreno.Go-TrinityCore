@@ -158,6 +158,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.removeCreatureAura(auraKey(), spell)
 		return nil, nil
 	}
+	// RemoveAllAuras is Unit::RemoveAllAuras for handler creatures: the
+	// full strip via clearCreatureAuras (the evade-leg twin — timers
+	// stopped, both aura maps cleared). Freywinn's tranquility arm.
+	methods["RemoveAllAuras"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.clearCreatureAuras(auraKey())
+		return nil, nil
+	}
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

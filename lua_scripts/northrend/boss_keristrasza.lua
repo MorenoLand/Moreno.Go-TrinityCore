@@ -41,8 +41,11 @@
 -- (ymiron normal-values precedent); EVENT_TAIL_SWEEP Talk(SAY_
 -- CRYSTAL_NOVA 4) + normal SelectTarget(Random,0,100.0f,true) ->
 -- DoCast(target, SPELL_CRYSTAL_CHAINS 50997) non-triggered, 5s
--- init / 30s normal repeat — the heroic DoCast(me, SPELL_
--- CRYSTALLIZE 48179) leg stays out (no IsHeroic bridge).
+-- init / 30s normal repeat; heroic leg DoCast(me, SPELL_
+-- CRYSTALLIZE 48179) 2-arg (non-triggered) self-cast when
+-- creature:IsHeroic() (the "no IsHeroic bridge" claim was stale —
+-- IsHeroic is bridged, engine/world/lua_creature_events.go:203;
+-- lavanthor precedent), 11s heroic repeat (DUNGEON_MODE(30s,11s)).
 -- The BossAI::JustEngagedWith instance-bookkeeping leg has no
 -- bridge — tharon_ja precedent.
 -- DamageTaken (event 9) — HealthBelowPctDamaged(25, damage)
@@ -62,10 +65,9 @@
 -- RemovePrison(CheckContainmentSpheres()) + _Reset() — no instance /
 -- GO-state / flag bridges (the containment-sphere prison machine is
 -- documented-only; see containment_sphere below).
--- (EVENT_TAIL_SWEEP's heroic DoCast(me, SPELL_CRYSTALLIZE 48179)
--- leg is the only UpdateAI arm staying out — no IsHeroic bridge;
--- the Oct-12 "no timer-event / random-target / cast bridge"
--- claims were wrong, retracted this run.)
+-- (the Oct-12 "no timer-event / random-target / cast bridge" and
+-- "no IsHeroic bridge" claims were wrong, retracted — the heroic
+-- crystallize leg is ported above.)
 -- SetGUID(DATA_INTENSE_COLD) — _intenseColdList push, consumed only by
 -- achievement_intense_cold's OnCheck — no SetGUID / GetData bridge and
 -- no achievement bridge.
@@ -101,8 +103,7 @@ local SPELL_TAIL_SWEEP = 50155 -- boss_keristrasza.cpp:33
 local SPELL_CRYSTAL_CHAINS = 50997 -- boss_keristrasza.cpp:34
 local SPELL_ENRAGE = 8599 -- boss_keristrasza.cpp:35
 local SPELL_CRYSTALFIRE_BREATH = 48096 -- boss_keristrasza.cpp:36
--- SPELL_CRYSTALLIZE = 48179 (boss_keristrasza.cpp:37) — heroic leg
--- of EVENT_TAIL_SWEEP only; STAYS OUT (no IsHeroic bridge).
+local SPELL_CRYSTALLIZE = 48179 -- boss_keristrasza.cpp:37
 
 local timers = {}
 local keristraszaEnraged = {}
@@ -167,17 +168,25 @@ local function crystalChainsCrystallizeTick(creature, guid)
 end
 
 -- C++ EVENT_TAIL_SWEEP (cpp:193-200): Talk(SAY_CRYSTAL_NOVA 4)
--- unconditional; the normal leg SelectTarget(Random,0,100.0f,true)
--- -> DoCast(target, 50997) 2-arg (non-triggered); 5s init /
--- 30s normal repeat (DUNGEON_MODE(30s,11s)). The heroic leg
--- DoCast(me, SPELL_CRYSTALLIZE 48179) stays out (no IsHeroic).
+-- unconditional; if IsHeroic() DoCast(me, SPELL_CRYSTALLIZE 48179)
+-- 2-arg (non-triggered) self-cast, else SelectTarget(Random,0,100.0f,
+-- true) -> DoCast(target, 50997) 2-arg (non-triggered); 5s init /
+-- 30s normal repeat, 11s heroic repeat (DUNGEON_MODE(30s,11s)).
+-- creature:IsHeroic() is bridged (engine/world/lua_creature_events.go
+-- :203; lavanthor precedent).
 local function tailSweepTick(creature, guid)
     creature:Talk(SAY_CRYSTAL_NOVA)
-    local target = randomTargetInRange(creature, 100)
-    if target then
-        creature:CastSpell(target, SPELL_CRYSTAL_CHAINS)
+    local heroic = creature:IsHeroic()
+    if heroic then
+        creature:CastSpell(creature, SPELL_CRYSTALLIZE)
+    else
+        local target = randomTargetInRange(creature, 100)
+        if target then
+            creature:CastSpell(target, SPELL_CRYSTAL_CHAINS)
+        end
     end
-    schedule(guid, "tailsweep", 30000, function()
+    local repeatMs = heroic and 11000 or 30000
+    schedule(guid, "tailsweep", repeatMs, function()
         tailSweepTick(creature, guid)
     end)
 end

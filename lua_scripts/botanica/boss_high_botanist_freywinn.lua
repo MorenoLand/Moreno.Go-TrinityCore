@@ -51,16 +51,18 @@
 --    modeled. The IsNonMeleeSpellCast/InterruptNonMeleeSpells
 --    gate has no cast-state bridge — the arm fires
 --    unconditionally (netherspite precedent); the
---    RemoveAllAuras arm has no aura bridge; the MoveIdle()
---    arm has no movement bridge (omor precedent).
+--    RemoveAllAuras arm is bridged (creature:RemoveAllAuras —
+--    this run); the MoveIdle() arm has no movement bridge
+--    (omor precedent).
 -- 2. Tree-form exit machine (only while !MoveFree): the
 --    dead-frayer scan over the summons list is unreachable
 --    (no summon bridge — the summons list is always empty),
 --    so the only reachable exit is the forced arm — when
 --    TreeForm - 30000 <= 1000, exit tree form (MoveFree =
 --    true; the summons.DespawnAll() is a no-op, the
---    InterruptNonMeleeSpells/RemoveAllAuras arms have no
---    bridges, the MoveChase(victim) arm has no movement
+--    InterruptNonMeleeSpells arm has no bridge, the
+--    RemoveAllAuras arm is bridged this run, the
+--    MoveChase(victim) arm has no movement
 --    bridge), C++-exact for the reachable model. At 1s
 --    granularity this lands 44 ticks after entry (TreeForm
 --    75000 -> 31000), and the entry arm re-fires 30 ticks
@@ -95,8 +97,9 @@
 -- Despawn tracking arms and the DeadAddsCount dead-frayer
 -- scan arm unmodeled (steamrigger precedent) — the forced
 -- TreeForm_Timer - 30000 exit is the only reachable exit
--- path; no aura bridge — the tree-form entry/exit
--- RemoveAllAuras arms unmodeled; no movement bridge — the
+-- path; the tree-form entry/exit RemoveAllAuras arms are
+-- bridged (creature:RemoveAllAuras — this run); no movement
+-- bridge — the
 -- tree-form MoveIdle() arm and the exit MoveChase(victim)
 -- arm unmodeled (omor precedent); no cast-state bridge —
 -- the tree-form IsNonMeleeSpellCast/InterruptNonMeleeSpells
@@ -179,8 +182,10 @@ local function combatTick(creature, guid)
         -- TRIGGERED in the C++ (C++-exact) — bridged with the
         -- triggered flag. The IsNonMeleeSpellCast gate /
         -- InterruptNonMeleeSpells have no cast-state bridge,
-        -- the RemoveAllAuras arm has no aura bridge, the
-        -- MoveIdle() arm has no movement bridge.
+        -- the MoveIdle() arm has no movement bridge; the
+        -- RemoveAllAuras arm is bridged this run (C++ arm
+        -- order: strip before the casts).
+        creature:RemoveAllAuras()
         creature:CastSpell(creature, SPELL_TRANQUILITY, true)
         creature:CastSpell(creature, SPELL_TREE_FORM, true)
         st.moveFree = false
@@ -197,9 +202,10 @@ local function combatTick(creature, guid)
     if not st.moveFree then
         if st.treeForm - 30000 <= 1000 then
             -- summons.DespawnAll() is a no-op; the
-            -- InterruptNonMeleeSpells / RemoveAllAuras /
-            -- MoveChase arms have no bridges — the
-            -- observable remainder is MoveFree = true.
+            -- InterruptNonMeleeSpells / MoveChase arms have
+            -- no bridges — the observable remainder is
+            -- RemoveAllAuras + MoveFree = true (C++ arm order).
+            creature:RemoveAllAuras()
             st.moveFree = true
         end
         return
