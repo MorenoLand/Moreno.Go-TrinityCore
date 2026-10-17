@@ -86,8 +86,10 @@
 -- without the passive model fails the C++-exact port bar (amanitar
 -- mushrooms precedent). The EVENT_WEB_WRAP arms (all three watchers,
 -- DoCast(SelectTarget(Random, 0, 100.0f[, true]), WEB_WRAP 52086))
--- additionally need the absent random-target SelectTarget bridge
--- (cairne/kazzak precedent).
+-- do NOT need a SelectTarget bridge: randomPlayer is the in-tree
+-- bridge (anomalus spark / faerlina / eck precedents) — the
+-- cairne/kazzak "absent bridge" verdict is retracted 2026-10-17;
+-- the arms stay out on the host-blocked grounds above.
 -- npc_anub_ar_warrior / npc_anub_ar_skirmisher /
 -- npc_anub_ar_shadowcaster / npc_skittering_swarmer /
 -- npc_skittering_infector / npc_gatewatcher_web_wrap — ENTRY
@@ -111,8 +113,12 @@
 -- stays out: host npc entry-unverifiable (summon STRAND absent) and
 -- its InitializeAI is likewise instance-bound;
 -- npc_gatewatcher_web_wrap (NullCreatureAI) JustDied -> summoner
--- RemoveAurasDueToSpell(WEB_WRAP_WRAPPED 52087) — no aura-removal
--- bridge (aeranas precedent) + summoner-unit bridge absent.
+-- RemoveAurasDueToSpell(WEB_WRAP_WRAPPED 52087) — the aura-removal
+-- bridge EXISTS (creature:RemoveAura — the gal_darah / drakkari_colossus /
+-- festergut precedent; the aeranas "absent" verdict is retracted
+-- 2026-10-17) but the arm stays out: the host npc is
+-- entry-unverifiable + summon STRAND absent, and no summoner-unit
+-- bridge exists.
 -- spell_gatewatcher_subboss_trigger (52343 watcher target selection)
 -- / spell_anub_ar_skirmisher_fixate (52536 -> 52537) /
 -- spell_gatewatcher_web_wrap (52086 expire -> 52087) — no

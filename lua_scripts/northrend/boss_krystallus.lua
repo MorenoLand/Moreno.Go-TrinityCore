@@ -46,15 +46,19 @@
 -- Reset (_Reset() — no bridge).
 -- JustEngagedWith ScheduleEvent legs (EVENT_BOULDER_TOSS 3s/9s,
 -- EVENT_GROUND_SLAM 15s/18s, EVENT_GROUND_SPIKE 9s/14s
--- heroic-only — no bridge for the reasons below; EVENT_STOMP
--- 20s/29s is PORTED).
--- UpdateAI event machine — EVENT_BOULDER_TOSS (random-target
--- 50.0f DoCast(SPELL_BOULDER_TOSS 50843), 9s/15s — no
--- random-target bridge: CastSpell(nil)=victim,
--- CastSpell(creature)=self, no SelectTarget bridge);
--- EVENT_GROUND_SPIKE (random-target 100.0f
--- DoCast(SPELL_GROUND_SPIKE 59750), 12s/17s — heroic-only, no
--- heroic bridge, plus no random-target bridge);
+-- heroic-only; EVENT_STOMP 20s/29s was PORTED before).
+-- RETRACTION (2026-10-17): the "no random-target bridge" claim above
+-- is STALE — randomPlayer is the in-tree bridge (anomalus spark /
+-- faerlina / eck precedents), and the "no heroic bridge" claim is
+-- STALE — creature:IsHeroic() is bridged per-instance
+-- (lua_creature_events.go:203, cyanigosa / saurfang precedent). So:
+-- EVENT_BOULDER_TOSS — PORTED: DoCast(target, SPELL_BOULDER_TOSS
+-- 50843) non-triggered on randomPlayerInRange(creature, 50), {3s,9s}
+-- init / {9s,15s} repeat, unconditional re-arm (C++-exact);
+-- EVENT_GROUND_SPIKE — PORTED: DoCast(target, SPELL_GROUND_SPIKE
+-- 59750) non-triggered on randomPlayerInRange(creature, 100),
+-- IsHeroic()-gated seed {9s,14s} / {12s,17s} repeat.
+-- UpdateAI event machine (remaining):
 -- EVENT_GROUND_SLAM (DoCast(SPELL_GROUND_SLAM 50827) + schedules
 -- EVENT_SHATTER 10s, 15s/18s — SHATTER (50810) is
 -- SpellScript-delivered (see below); porting SLAM alone would
@@ -86,6 +90,8 @@ local SAY_KILL = 1
 local SAY_DEATH = 2
 
 local SPELL_STOMP = 48131
+local SPELL_BOULDER_TOSS = 50843
+local SPELL_GROUND_SPIKE = 59750
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the maiden / bjarngrim-lieutenant convention.
@@ -113,6 +119,55 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0, dist, true) — random alive player on the
+-- same map/instance within dist (the eck randomNonTankPlayer / keleseth /
+-- thorim / archavon GetPlayersInWorld precedent); offset 0 means the main
+-- tank is eligible, so no victim exclusion.
+local function randomPlayerInRange(creature, maxDist)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:GetDistance(plr) <= maxDist then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ UpdateAI EVENT_BOULDER_TOSS: DoCast(target, SPELL_BOULDER_TOSS
+-- 50843) non-triggered on a SelectTarget(Random, 0, 50.0f, true) target;
+-- re-arm unconditional {9s,15s} (C++ re-arms outside the if-target).
+local function boulderTossTick(creature, guid)
+    local target = randomPlayerInRange(creature, 50)
+    if target then
+        creature:CastSpell(target, SPELL_BOULDER_TOSS)
+    end
+    schedule(guid, "boulder", math.random(9000, 15000), function()
+        boulderTossTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_GROUND_SPIKE: heroic-only (seeded in JustEngagedWith
+-- under IsHeroic(); creature:IsHeroic() bridged per-instance —
+-- lua_creature_events.go:203, the cyanigosa / saurfang precedent);
+-- DoCast(target, SPELL_GROUND_SPIKE 59750) non-triggered on a
+-- SelectTarget(Random, 0, 100.0f, true) target; re-arm unconditional
+-- {12s,17s}.
+local function groundSpikeTick(creature, guid)
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_GROUND_SPIKE)
+    end
+    schedule(guid, "spike", math.random(12000, 17000), function()
+        groundSpikeTick(creature, guid)
+    end)
+end
+
 -- C++ UpdateAI EVENT_STOMP: DoCast(me, SPELL_STOMP 48131)
 -- non-triggered self-cast, {20s,29s} init / {20s,29s} re-arm
 -- (boss_krystallus.cpp:73/:108-110) — zero gating legs.
@@ -132,6 +187,14 @@ local function krystallusEnterCombat(event, creature, target)
     schedule(guid, "stomp", {20000, 29000}, function()
         stompTick(creature, guid)
     end)
+    schedule(guid, "boulder", {3000, 9000}, function()
+        boulderTossTick(creature, guid)
+    end)
+    if creature:IsHeroic() then
+        schedule(guid, "spike", {9000, 14000}, function()
+            groundSpikeTick(creature, guid)
+        end)
+    end
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
