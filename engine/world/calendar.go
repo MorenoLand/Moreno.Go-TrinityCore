@@ -3,9 +3,13 @@ package world
 import (
 	"context"
 	"database/sql"
+	"os"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -139,16 +143,174 @@ func unpackCalendarPackedTime(packed uint32) time.Time {
 	)
 }
 
+// calendarStdEastOffset returns the server-local standard (DST-blind) UTC
+// offset in seconds east of UTC — the Go equivalent of the POSIX `timezone`
+// global that LocalTimeToUTCTime adds (Util.cpp:73-80). It is parsed from the
+// POSIX TZ string ($TZ when set, else the footer of the zoneinfo file
+// time.Local was loaded from), so it is exact for every zone — including
+// negative-DST zones like Europe/Dublin where the DST offset sits below the
+// standard one, and long-DST zones like America/New_York where DST covers
+// most of the year. A wrong offset here shifts every stored eventtime by
+// the DST delta (verified against mktime(tm_isdst=0) semantics).
+var calendarStdEastOffset = sync.OnceValue(func() int {
+	if time.Local == time.UTC {
+		return 0
+	}
+	if east, ok := calendarPOSIXStdEast(); ok {
+		return east
+	}
+	// Last resort: the offset in effect just before the year's first
+	// forward (offset-increasing) transition, i.e. the pre-DST offset.
+	year := time.Now().Year()
+	t := time.Date(year, time.January, 1, 12, 0, 0, 0, time.Local)
+	_, prev := t.Zone()
+	end := t.AddDate(1, 0, 0)
+	for tt := t.Add(24 * time.Hour); tt.Before(end); tt = tt.Add(24 * time.Hour) {
+		_, off := tt.Zone()
+		if off > prev {
+			return prev
+		}
+		prev = off
+	}
+	_, off := t.Zone()
+	return off
+})
+
+// calendarPOSIXStdEast resolves the POSIX TZ string for the local zone and
+// extracts its standard offset.
+func calendarPOSIXStdEast() (int, bool) {
+	tz := os.Getenv("TZ")
+	var posix string
+	switch {
+	case tz == "":
+		posix = calendarTZifPOSIX("/etc/localtime")
+	case strings.HasPrefix(tz, ":"):
+		posix = calendarTZifPOSIX(tz[1:])
+	case strings.Contains(tz, "/"):
+		if strings.HasPrefix(tz, "/") {
+			posix = calendarTZifPOSIX(tz)
+		} else {
+			posix = calendarTZifPOSIX("/usr/share/zoneinfo/" + tz)
+		}
+	default:
+		posix = tz
+	}
+	return parsePOSIXStdOffset(posix)
+}
+
+// calendarTZifPOSIX reads the POSIX TZ string from a TZif file footer
+// (present in v2+ zoneinfo files: newline, TZ string, newline at EOF).
+func calendarTZifPOSIX(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	s := strings.TrimRight(string(data), "\n")
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	}
+	if s == "" || (s[0] != '<' && !isASCIILetter(s[0])) {
+		return ""
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return ""
+		}
+	}
+	return s
+}
+
+func isASCIILetter(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// parsePOSIXStdOffset parses the std offset out of a POSIX TZ string
+// ("STDoffset[DST[offset]][,rules]") and returns seconds east of UTC. The
+// POSIX offset uses the inverted sign convention (it is added to local time
+// to get UTC), so the sign is negated.
+func parsePOSIXStdOffset(posix string) (int, bool) {
+	i := 0
+	if i < len(posix) && posix[i] == '<' {
+		j := strings.IndexByte(posix, '>')
+		if j < 0 {
+			return 0, false
+		}
+		i = j + 1
+	} else {
+		for i < len(posix) && isASCIILetter(posix[i]) {
+			i++
+		}
+		if i == 0 {
+			return 0, false
+		}
+	}
+	neg := false
+	if i < len(posix) && (posix[i] == '+' || posix[i] == '-') {
+		neg = posix[i] == '-'
+		i++
+	}
+	readNum := func() (int, bool) {
+		start := i
+		for i < len(posix) && posix[i] >= '0' && posix[i] <= '9' {
+			i++
+		}
+		if start == i {
+			return 0, false
+		}
+		n := 0
+		for _, c := range posix[start:i] {
+			n = n*10 + int(c-'0')
+		}
+		return n, true
+	}
+	hh, ok := readNum()
+	if !ok {
+		return 0, false
+	}
+	mm, ss := 0, 0
+	if i < len(posix) && posix[i] == ':' {
+		i++
+		if mm, ok = readNum(); !ok {
+			return 0, false
+		}
+		if i < len(posix) && posix[i] == ':' {
+			i++
+			if ss, ok = readNum(); !ok {
+				return 0, false
+			}
+		}
+	}
+	secs := hh*3600 + mm*60 + ss
+	if neg {
+		secs = -secs
+	}
+	return -secs, true
+}
+
 // calendarPackedToEventTime mirrors the C++ event-time pipeline
 // LocalTimeToUTCTime(ReadPackedTime(p)) (CalendarHandler.cpp:240, Util.cpp:73):
-// ReadPackedTime decodes the packed bits as server-local wall time (mktime),
-// then LocalTimeToUTCTime adds the POSIX timezone offset (seconds west of
-// UTC). The result is what CalendarEvent stores in the eventtime column and
-// what AppendPackedTime re-packs on every send path (CalendarMgr.cpp:523+).
+// ReadPackedTime zero-initializes tm (tm_isdst=0, ByteBuffer.cpp:92-104),
+// so mktime interprets the wall time with the DST-blind standard offset:
+// ReadPackedTime = W - east_std (W = wall clock as a UTC epoch). Then
+// LocalTimeToUTCTime adds the POSIX `timezone` global (seconds west of UTC,
+// i.e. -east_std, DST-blind): eventtime = W - 2*east_std. A DST-aware decode
+// (t.Unix() - east_effective) diverges by twice the DST shift in summer.
+// The result is what CalendarEvent stores in the eventtime column and what
+// AppendPackedTime re-packs on every send path (CalendarMgr.cpp:523+).
 func calendarPackedToEventTime(packed uint32) int64 {
 	t := unpackCalendarPackedTime(packed)
-	_, east := t.Zone()
-	return t.Unix() - int64(east)
+	_, eff := t.Zone()
+	wall := t.Unix() + int64(eff)
+	return wall - 2*int64(calendarStdEastOffset())
+}
+
+// calendarPackedRawEpoch mirrors ByteBuffer::ReadPackedTime
+// (ByteBuffer.cpp:92-104) alone: W - east_std. unkPackedTime is stored
+// unconverted (CalendarHandler.cpp:291), so the time2 column holds this.
+func calendarPackedRawEpoch(packed uint32) int64 {
+	t := unpackCalendarPackedTime(packed)
+	_, eff := t.Zone()
+	return t.Unix() + int64(eff) - int64(calendarStdEastOffset())
 }
 
 // calendarEventInPast mirrors the "prevent events in the past" gate in
@@ -991,10 +1153,11 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_events").Scan(&nextID)
 		// C++ stores eventtime as LocalTimeToUTCTime(ReadPackedTime(...))
 		// (CalendarHandler.cpp:240) and time2 as the raw ReadPackedTime epoch
-		// (unkPackedTime is never converted), so the columns hold time_t, not
-		// packed bits — every send path re-packs via AppendPackedTime.
+		// (unkPackedTime is never converted, CalendarHandler.cpp:291), so the
+		// columns hold time_t, not packed bits — every send path re-packs
+		// via AppendPackedTime.
 		eventTime := uint32(calendarPackedToEventTime(packedEventTime))
-		lockDate := uint32(unpackCalendarPackedTime(packedLockDate).Unix())
+		lockDate := uint32(calendarPackedRawEpoch(packedLockDate))
 		_, _ = cdb.ExecContext(ctx,
 			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1026,7 +1189,6 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 						"SELECT level FROM characters WHERE guid = ?", inv.guid).Scan(&invLevel)
 				}
 
-				nextInviteID++
 				_, _ = cdb.ExecContext(ctx,
 					`INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text)
 					 VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
@@ -1053,6 +1215,10 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 						_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
 					}
 				}
+				// CalendarMgr::GetFreeInviteId (CalendarMgr.cpp:355-363) hands
+				// out ++_maxInviteId per invite, so the first invite takes
+				// MAX(id)+1: increment after the insert, not before.
+				nextInviteID++
 			}
 		}
 
@@ -1127,7 +1293,7 @@ func (s *session) handleCalendarUpdateEvent(ctx context.Context, payload []byte)
 			`UPDATE calendar_events SET title = ?, description = ?, type = ?, dungeon = ?, eventtime = ?, flags = ?, time2 = ?
 			 WHERE id = ?`,
 			title, description, eventType, dungeonID, uint32(calendarPackedToEventTime(packedEventTime)), flags,
-			uint32(unpackCalendarPackedTime(packedLockDate).Unix()), eventID)
+			uint32(calendarPackedRawEpoch(packedLockDate)), eventID)
 
 		// SendCalendarEventUpdateAlert (CalendarMgr.cpp:515-533): u8(1), u64 event
 		// id, packed old event time, u32 flags, packed event time, u8 type,
@@ -1357,6 +1523,17 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 			 SELECT ?, creator, title, description, type, dungeon, ?, flags, time2 FROM calendar_events WHERE id = ?`,
 			nextID, uint32(newEventTime), eventID)
 
+		// CalendarMgr::AddEvent on the copy path (CalendarHandler.cpp:489)
+		// sends the copied event to its (original) creator with
+		// CALENDAR_SENDTYPE_COPY BEFORE the invite loop (:491-499);
+		// SendCalendarEvent skips players who are offline
+		// (CalendarMgr.cpp:607-609).
+		if pkt, ok := s.buildCalendarSendEvent(ctx, nextID, CalendarSendTypeCopy); ok {
+			if target := s.server.findSessionByGUID(creator); target != nil {
+				_ = target.write(uint16(protocol.OpcodeSMSG_CALENDAR_SEND_EVENT), pkt, true)
+			}
+		}
+
 		rows, err := cdb.QueryContext(ctx, "SELECT invitee, sender, status, statustime, rank, text FROM calendar_invites WHERE event = ?", eventID)
 		if err == nil {
 			defer rows.Close()
@@ -1414,15 +1591,6 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 			}
 		}
 
-		// CalendarMgr::AddEvent on the copy path (CalendarHandler.cpp:489)
-		// sends the copied event to its (original) creator with
-		// CALENDAR_SENDTYPE_COPY; SendCalendarEvent skips players who are
-		// offline (CalendarMgr.cpp:607-609).
-		if pkt, ok := s.buildCalendarSendEvent(ctx, nextID, CalendarSendTypeCopy); ok {
-			if target := s.server.findSessionByGUID(creator); target != nil {
-				_ = target.write(uint16(protocol.OpcodeSMSG_CALENDAR_SEND_EVENT), pkt, true)
-			}
-		}
 	}
 	return true
 }
@@ -1457,6 +1625,14 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 	isPreInvite, _ := r.ReadU8()
 	isGuildEvent, _ := r.ReadU8()
 
+	// normalizePlayerName (ObjectMgr.cpp:141-156) fails on empty or
+	// non-UTF8 names, and the handler returns silently
+	// (CalendarHandler.cpp:525-526); the normalized name is what the
+	// lookup and the IGNORING_YOU_S echo use.
+	if !utf8.ValidString(name) {
+		return true
+	}
+	name = normalizePlayerName(name)
 	if name == "" {
 		return true
 	}
@@ -1680,6 +1856,13 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 		// online. Read the relatives before the delete. When the invite
 		// isn't found it returns silently — no broadcast.
 		removeTargets := calendarEventRelativeSessions(ctx, s.server, eventID)
+		// CalendarMgr::RemoveInvite (CalendarMgr.cpp:238-240) alerts and
+		// broadcasts the invite ROW's invitee GUID, not the packet's; read
+		// it before the delete. The rows==0 silent return below covers a
+		// missing row.
+		var rowInvitee uint64
+		_ = cdb.QueryRowContext(ctx,
+			"SELECT invitee FROM calendar_invites WHERE id = ? AND event = ?", inviteID, eventID).Scan(&rowInvitee)
 		res, _ := cdb.ExecContext(ctx,
 			"DELETE FROM calendar_invites WHERE id = ? AND event = ?", inviteID, eventID)
 		if rows, _ := res.RowsAffected(); rows == 0 {
@@ -1691,7 +1874,7 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 		// to the removed invitee for non-guild events: u64 event id, packed
 		// event time, u32 flags, u8 status.
 		if evFlags&calendarFlagGuildEvent == 0 {
-			if invSess := s.server.findSessionByGUID(inviteeGUID); invSess != nil {
+			if invSess := s.server.findSessionByGUID(rowInvitee); invSess != nil {
 				alertBuf := protocol.NewBuffer(16)
 				alertBuf.WriteU64(eventID)
 				alertBuf.WritePackedTime(time.Unix(int64(evTime), 0))
@@ -1704,7 +1887,7 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 		// SendCalendarEventInviteRemove (CalendarMgr.cpp:559-568): the event's
 		// flags (not 0), trailing u8(1), broadcast to every event relative.
 		remBuf := protocol.NewBuffer(24)
-		remBuf.WritePackedGUID(inviteeGUID)
+		remBuf.WritePackedGUID(rowInvitee)
 		remBuf.WriteU64(eventID)
 		remBuf.WriteU32(evFlags)
 		remBuf.WriteU8(1) // FIXME (CalendarMgr.cpp:565)
@@ -1728,7 +1911,7 @@ func (s *session) handleCalendarEventStatus(ctx context.Context, payload []byte)
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadPackedGUID() // invitee (the invite's DB row is authoritative)
+	inviteeGUID, _ := r.ReadPackedGUID() // invitee: C++ :724 clears pending on the packet-parsed GUID
 	eventID, _ := r.ReadU64()
 	inviteID, _ := r.ReadU64()
 	_, _ = r.ReadU64() // moderatorID
@@ -1759,8 +1942,8 @@ func (s *session) handleCalendarEventStatus(ctx context.Context, payload []byte)
 			invInvitee, eventID, int64(evTime), evFlags, status, rank, statusTime)
 
 		// CalendarHandler.cpp:724 — the moderator-driven status change clears
-		// the pending action on the invitee's client, not the sender's.
-		if invSess := s.server.findSessionByGUID(invInvitee); invSess != nil {
+		// the pending action on the packet-parsed invitee's client.
+		if invSess := s.server.findSessionByGUID(inviteeGUID); invSess != nil {
 			_ = invSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_CLEAR_PENDING_ACTION), nil, true)
 		}
 	}

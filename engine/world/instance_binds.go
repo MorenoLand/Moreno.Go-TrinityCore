@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -78,7 +79,14 @@ func (s *Server) permBindAllPlayers(ctx context.Context, mapID, instanceID, diff
 		buf := protocol.NewBuffer(4)
 		buf.WriteU32(0)
 		_ = sess.write(uint16(protocol.OpcodeSMSG_INSTANCE_SAVE_CREATED), buf.Bytes(), true)
-		sess.sendCalendarRaidLockout(mapID, difficulty, uint32(resetTime), uint64(instanceID), true)
+		// SendCalendarRaidLockout takes seconds remaining
+		// (CalendarHandler.cpp:831: save->GetResetTime() - currTime), not
+		// the absolute reset timestamp from the instance table.
+		var remaining uint32
+		if rt := resetTime - time.Now().Unix(); rt > 0 {
+			remaining = uint32(rt)
+		}
+		sess.sendCalendarRaidLockout(mapID, difficulty, remaining, uint64(instanceID), true)
 		// Reference: "if group leader is in instance, group also gets bound"
 		// (Map.cpp:4168-4170) — group->BindToInstance(save, true).
 		if sess.groupID != 0 {
