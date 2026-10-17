@@ -16543,9 +16543,10 @@ func (s *session) energizeBySpellTail(ctx context.Context, spell wotlk.Spell, sp
 	}
 	logPkt := buildSpellEnergizeLog(victimGUID, s.playerGUID, spellID, uint32(powerType), amount)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, true)
-	if victimSess := s.server.findSessionByGUID(victimGUID); victimSess != nil && victimSess != s {
-		_ = victimSess.write(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, true)
-	}
+	// Unit::SendEnergizeSpellLog (Unit.cpp:6573-6582) fans out via
+	// SendMessageToSet — the caster's visibility set (100.0f), not just the
+	// victim's session.
+	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	if amount > 0 {
 		s.server.distributeHealingThreat(ctx, s.playerGUID, victimGUID, uint32(amount), true, spellID)
 	}
@@ -17853,8 +17854,11 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// TC Unit.cpp:6550: packet = packed(target), packed(healer), spellID, heal, overheal, absorb, crit, unused
 	healPkt := buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, absorbed, isCrit)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, true)
-	if targetSess != s {
-		_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, true)
+	// Unit::SendHealSpellLog (Unit.cpp:6546-6558) fans out via
+	// SendMessageToSet — the healer's visibility set (100.0f), not just the
+	// target's session and not the whole instance.
+	if s.server != nil {
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	targetSess.sendPlayerUpdate()
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

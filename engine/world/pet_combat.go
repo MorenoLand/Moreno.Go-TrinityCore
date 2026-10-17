@@ -4004,7 +4004,12 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	}
 	packet := buildSpellHealLog(target.GUID, caster.GUID, spellID, heal, overheal, absorbed, isCrit)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
+	// Unit::SendHealSpellLog (Unit.cpp:6546-6558) fans out via
+	// SendMessageToSet — the caster creature's visibility set (100.0f),
+	// not the whole instance.
+	if s.server != nil && caster != nil {
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, caster.Map, caster.InstanceID, caster.X, caster.Y, caster.Z, s)
+	}
 	if targetSess != nil && targetSess.player != nil {
 		newHealth := targetSess.player.Health + heal
 		if newHealth > targetSess.player.MaxHealth {

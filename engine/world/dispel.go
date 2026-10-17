@@ -1588,7 +1588,12 @@ func (s *session) applyDevourMagicSelfHeal(healAmount uint32) {
 		}
 		packet := buildSpellHealLog(s.playerGUID, s.playerGUID, 19658, heal, overheal, 0, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
+		// Unit::SendHealSpellLog (Unit.cpp:6546-6558) fans out via
+		// SendMessageToSet — the healer's visibility set (100.0f), not the
+		// whole instance.
+		if s.server != nil {
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
+		}
 		s.startTimedAchievement(timedTypeSpellCast, 19658)
 		s.updateAchievementCriteria(criteriaTypeCastSpell2, 19658, 1)
 		s.startTimedAchievement(timedTypeSpellTarget, 19658)
