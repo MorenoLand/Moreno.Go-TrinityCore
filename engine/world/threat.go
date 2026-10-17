@@ -1350,7 +1350,7 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 		return
 	}
 
-	s.distributeHealingThreatLocked(healerSess.player.Map, healerSess.player.InstanceID,
+	s.distributeHealingThreatLocked(healerSess, healerSess.player.Map, healerSess.player.InstanceID,
 		healerSess.player.X, healerSess.player.Y, healerSess.player.Z, healerSess.player.CombatReach,
 		healerGUID, targetGUID, totalThreat)
 
@@ -1386,12 +1386,13 @@ func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, ins
 	}
 	hx, hy, hz, hReach := healer.X, healer.Y, healer.Z, healer.CombatReach
 	s.motionMu.Unlock()
-	s.distributeHealingThreatLocked(mapID, instanceID, hx, hy, hz, hReach, healerGUID, targetGUID, float32(effectiveHeal)*0.5)
+	s.distributeHealingThreatLocked(nil, mapID, instanceID, hx, hy, hz, hReach, healerGUID, targetGUID, float32(effectiveHeal)*0.5)
 }
 
 // distributeHealingThreatLocked fans totalThreat out to every engaged creature
-// on the map. Callers hold no locks.
-func (s *Server) distributeHealingThreatLocked(mapID, instanceID uint32, healerX, healerY, healerZ, healerReach float32, healerGUID, targetGUID uint64, totalThreat float32) {
+// on the map. healerSess is the player healer's session (nil for creature
+// healers, which never register threat redirects). Callers hold no locks.
+func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, instanceID uint32, healerX, healerY, healerZ, healerReach float32, healerGUID, targetGUID uint64, totalThreat float32) {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 
@@ -1401,15 +1402,22 @@ func (s *Server) distributeHealingThreatLocked(mapID, instanceID uint32, healerX
 		if m == nil || m.Health == 0 || !m.InCombat || m.Evading {
 			continue
 		}
-		// ThreatManager::ForwardThreatForAssistingMe (ThreatManager.cpp:662-680):
+		// ThreatManager::ForwardThreatForAssistingMe (ThreatManager.cpp:662-688):
 		// the recipient set is the assisted unit's _threatenedByMe — the
 		// creatures that threaten it — not every creature engaged with the
-		// assistant. Go approximates that set as creatures whose current
-		// target is the assisted unit or that hold positive threat on it.
+		// assistant. C++ iterates ALL _threatenedByMe pairs with no
+		// threat-value filter: zero-threat refs are recipients too (AddThreat
+		// creates the ref even at 0, ThreatManager.cpp:308-410; negatives
+		// floor at 0 keeping the entry). Go approximates that set as
+		// creatures whose current target is the assisted unit or that hold
+		// a threat-table entry (HasVictim tests entry existence, not a
+		// positive value) for it. Combat-end ref cleanup
+		// (CombatManager.cpp:68-73,347) is approximated by the in-combat /
+		// alive / non-evading gates.
 		isEngaged := false
 		if m.TargetGUID == targetGUID {
 			isEngaged = true
-		} else if m.ThreatMgr != nil && targetGUID != 0 && m.ThreatMgr.GetThreat(targetGUID) > 0 {
+		} else if m.ThreatMgr != nil && targetGUID != 0 && m.ThreatMgr.HasVictim(targetGUID) {
 			isEngaged = true
 		}
 		if !isEngaged {
@@ -1442,7 +1450,16 @@ func (s *Server) distributeHealingThreatLocked(mapID, instanceID uint32, healerX
 		}
 		dist := distance3D(healerX, healerY, healerZ, m.X, m.Y, m.Z)
 		inMelee := inMeleeThreatRange(m.CombatReach, healerReach, dist)
-		switched, newVictim := m.ThreatMgr.AddThreat(healerGUID, amount, inMelee)
+		// The per-recipient AddThreat runs the redirect leg against the
+		// assistant's registry (ThreatManager.cpp:344-373, ignoreRedirects
+		// stays false on the ForwardThreatForAssistingMe adds); the nil
+		// session guard inside splitThreatRedirects covers creature healers,
+		// which never register redirects.
+		share, rSwitched, rVictim := healerSess.splitThreatRedirects(m, amount)
+		switched, newVictim := m.ThreatMgr.AddThreat(healerGUID, share, inMelee)
+		if rSwitched {
+			switched, newVictim = true, rVictim
+		}
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()

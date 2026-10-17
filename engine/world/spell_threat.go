@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
@@ -609,14 +610,13 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 // SPELLMOD_THREAT spell mods, then the assistant's own school multipliers —
 // since spell and assistant are constant across recipients. Caller holds
 // motionMu.
-// Documented deltas: creatures under UNIT_STATE_CONTROLLED are excluded from
-// the even split in C++ and receive a zero-threat add instead
-// (ThreatManager.cpp:676-680); Go has no CC-state model, so every recipient
-// takes the full share. C++ builds its recipient set from the target's
-// _threatenedByMe refs, which include zero-threat engaged creatures; Go's
-// scan requires GetThreat > 0.
+// Recipients under UNIT_STATE_CONTROLLED (ThreatManager.cpp:676-680) take a
+// zero add and are excluded from the even-split denominator; Go reads the CC
+// state from the creature's live confuse/stun/fear auras plus the fleeing
+// timer, the same model as distributeHealingThreatLocked.
 func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID uint64) {
-	var assisting []*creatureMotion
+	var canBe, cannotBe []*creatureMotion
+	now := time.Now()
 	for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
 		if m == nil || m.GUID == targetGUID || m.ThreatMgr == nil {
 			continue
@@ -627,24 +627,57 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 		if m.OwnerGUID != 0 {
 			continue
 		}
-		if m.ThreatMgr.GetThreat(targetGUID) <= 0 {
+		// ThreatManager.cpp:662-688 iterates ALL _threatenedByMe pairs with no
+		// threat-value filter: zero-threat refs are recipients too (AddThreat
+		// creates the ref even at 0, ThreatManager.cpp:308-410; negatives
+		// floor at 0 keeping the entry) — HasVictim tests entry existence,
+		// not a positive value.
+		if !m.ThreatMgr.HasVictim(targetGUID) {
 			continue
 		}
-		assisting = append(assisting, m)
+		// UNIT_STATE_CONTROLLED (Unit.h:251 — CONFUSED | STUNNED | FLEEING;
+		// fear lands here via the fleeing leg) recipients take the zero add.
+		key := creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: m.GUID}
+		if (!m.FleeingUntil.IsZero() && now.Before(m.FleeingUntil)) ||
+			s.server.creatureHasAuraType(key, spellAuraModConfuse) ||
+			s.server.creatureHasAuraType(key, spellAuraModStun) ||
+			s.server.creatureHasAuraType(key, spellAuraModFear) {
+			cannotBe = append(cannotBe, m)
+			continue
+		}
+		canBe = append(canBe, m)
 	}
-	if len(assisting) == 0 {
+	if len(canBe) == 0 && len(cannotBe) == 0 {
 		return
 	}
-	perTarget := threat / float32(len(assisting))
-	for _, m := range assisting {
+	addShare := func(m *creatureMotion, amount float32) {
 		dist := distance3D(s.player.X, s.player.Y, s.player.Z, m.X, m.Y, m.Z)
 		inMelee := inMeleeThreatRange(m.CombatReach, s.player.CombatReach, dist)
-		switched, newVictim := m.ThreatMgr.AddThreat(s.playerGUID, perTarget, inMelee)
+		// The per-recipient AddThreat runs the redirect leg against the
+		// assistant's registry (ThreatManager.cpp:344-373, ignoreRedirects
+		// stays false on the ForwardThreatForAssistingMe adds).
+		share, rSwitched, rVictim := s.splitThreatRedirects(m, amount)
+		switched, newVictim := m.ThreatMgr.AddThreat(s.playerGUID, share, inMelee)
+		if rSwitched {
+			switched, newVictim = true, rVictim
+		}
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()
 			s.server.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, entries)
 		}
 		m.Moving = true
+	}
+	// Targets under CC cannot gain assist threat — split evenly among the
+	// rest (ThreatManager.cpp:676-684); the zero add registers the threat
+	// ref and engages combat without adding threat.
+	if len(canBe) > 0 {
+		perTarget := threat / float32(len(canBe))
+		for _, m := range canBe {
+			addShare(m, perTarget)
+		}
+	}
+	for _, m := range cannotBe {
+		addShare(m, 0)
 	}
 }
