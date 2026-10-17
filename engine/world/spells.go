@@ -400,6 +400,7 @@ const (
 	spellEffectOpenLock                = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
 	spellEffectSummonChangeItem        = 34  // SPELL_EFFECT_SUMMON_CHANGE_ITEM (SharedDefines.h:845; EffectSummonChangeItem, SpellEffects.cpp:2061)
 	spellEffectTransmitted             = 50  // SPELL_EFFECT_TRANS_DOOR (SharedDefines.h:861; EffectTransmitted, SpellEffects.cpp:4927)
+	spellEffectInstaKill               = 1   // SPELL_EFFECT_INSTAKILL (SharedDefines.h:812; EffectInstaKill, SpellEffects.cpp:274)
 	spellEffectDismissPet              = 102 // SPELL_EFFECT_DISMISS_PET (SharedDefines.h:913)
 	spellEffectDispel                  = 38  // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
 	spellEffectDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
@@ -13632,8 +13633,10 @@ func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64
 	packet.WriteU64(targetGUID)
 	packet.WriteU32(spellID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), true)
+	// SpellEffects.cpp:293: m_caster->SendMessageToSet — the log fans out to
+	// the caster's visibility set (100.0f), not the whole instance.
 	if s.server != nil {
-		s.server.broadcastToInstance(target.Map, target.InstanceID, uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true, false, false, 0)
 }
@@ -35350,7 +35353,7 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 // absorb/resist and sends the non-melee damage log
 // (Unit::SendSpellNonMeleeDamageLog, Unit.cpp:5302) — so only the packet is
 // sent. The creature absorb leg mirrors Unit::CalcAbsorbResist via
-// applyCreatureAbsorptionShields (auras 69/256; no mana-shield leg) with
+// applyCreatureAbsorptionShields (auras 69/256/97) with
 // the attacker's 194/245 absorb-ignore bypass, and the resistance leg
 // mirrors Unit::CalcSpellResistedDamage via calcMagicSpellResistance.
 func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, spellID uint32, schoolMask uint8, hitTargets []uint64) {
@@ -35393,10 +35396,9 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857, 1977-2060): the
 		// attacker's absorb-ignore pct (194/245) bypasses shields, then
-		// the victim's school-absorb shields soak the rest — C++ sends the
-		// computed absorb in the damage log even though no damage lands.
-		// No mana-shield (aura 97) leg: Go's creature absorb model covers
-		// auras 69/256 only (absorption.go:448).
+		// the victim's school-absorb and mana-shield (97) shields soak the
+		// rest — C++ sends the computed absorb in the damage log even
+		// though no damage lands.
 		var absorbed uint32
 		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
 		var soakable uint32

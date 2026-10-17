@@ -1173,6 +1173,33 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 	}
 }
 
+// broadcastToVisibleSet mirrors WorldObject::SendMessageToSet (the
+// visibility-range fan-out of spell combat-log packets): the payload goes to
+// every authed, world-ready session on the same map/instance within
+// DEFAULT_VISIBILITY_DISTANCE = 100.0f (ObjectDefines.h:35) of the given
+// center, excluding the source session — the caller's own write is the
+// SendMessageToSet "self" leg. The center form (not source-player position)
+// lets server-side casters (creatures) fan out too.
+func (s *Server) broadcastToVisibleSet(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, source *session) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for target := range s.sessions {
+		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil {
+			continue
+		}
+		if target.player.Map != mapID || target.player.InstanceID != instanceID {
+			continue
+		}
+		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > 100.0 {
+			continue
+		}
+		_ = target.write(opcode, payload, true)
+	}
+}
+
 func (s *Server) broadcastToInstance(mapID, instanceID uint32, opcode uint16, payload []byte, source *session) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()

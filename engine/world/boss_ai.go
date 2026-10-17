@@ -2000,6 +2000,21 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectInstaKill (SpellEffects.cpp:274-296) for a creature
+	// caster: the per-effect HIT_TARGET arm — the only spell-effect arm
+	// bridged on this path, which otherwise runs the no-damage model (all
+	// other effects deal nothing here). Each effect-1 effect kills its hit
+	// targets; reflected/evaded targets are skipped like every other
+	// per-hit leg above. The m_caster == unitTarget finish() leg is vacuous
+	// (no client-side interrupt message on this path). Gated on spellKnown
+	// like the Transmitted arm.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect == spellEffectInstaKill {
+				s.creatureEffectInstaKill(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets)
+			}
+		}
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
@@ -2204,6 +2219,62 @@ func (s *Server) fireCreatureSpellHitTarget(ctx context.Context, m *creatureMoti
 		target = s.luaMotionCreature(tm)
 	}
 	s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnSpellHitTarget, target, spellID)
+}
+
+// creatureEffectInstaKill mirrors Spell::EffectInstaKill
+// (SpellEffects.cpp:274-296) for a creature caster: the per-hit-target arm
+// of each effect-1 effect. Gates (dead/ghost, god-cheat) run first, then
+// SMSG_SPELLINSTAKILLLOG fans out to the caster's visibility set
+// (m_caster->SendMessageToSet, 100.0f), then the target dies — C++ sends the
+// packet before DealDamage, so the ordering matches. The m_caster ==
+// unitTarget finish() leg is vacuous (no client-side interrupt message on
+// this path). Player victims die through the server-side creature-kill
+// funnel: health zeroed, killPlayer with the charmer/owner player session as
+// killer (nil for wild creatures — GetCharmerOrOwnerPlayerOrPlayerItself),
+// the KilledByCreature hook and BossAI OnKillPlayer — the same funnel as the
+// creature aura-damage kill. C++ EffectInstaKill's DealDamage passes
+// durabilityLoss=false, so the kill carries no durability roll. Creature
+// victims keep the packet only: the creature->creature spell-damage lethal
+// path is the documented no-damage-model delta (this path deals no spell
+// damage at all), so their lethal leg stays banked.
+func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] {
+			continue
+		}
+		if _, isReflected := reflected[guid]; isReflected {
+			continue
+		}
+		if vs := s.findSessionByGUID(guid); vs != nil && vs.player != nil {
+			if vs.player.Health == 0 || vs.isDeadOrGhost() || vs.godCheatActive() {
+				continue
+			}
+		} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm == nil || tm.Health == 0 {
+			continue
+		}
+		packet := protocol.NewBuffer(20)
+		packet.WriteU64(m.GUID)
+		packet.WriteU64(guid)
+		packet.WriteU32(spellID)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		vs := s.findSessionByGUID(guid)
+		if vs == nil || vs.player == nil {
+			continue
+		}
+		vs.player.Health = 0
+		var creatureKiller *session
+		if m.OwnerGUID != 0 {
+			creatureKiller = s.findSessionByGUID(m.OwnerGUID)
+		}
+		vs.killPlayer(ctx, creatureKiller, false, false)
+		s.fireKilledByCreatureHook(ctx, m, vs)
+		if m.BossAI != nil {
+			m.BossAI.OnKillPlayer(ctx, s, m, guid)
+		}
+	}
 }
 
 // prepareCreatureHitTriggerSpells mirrors Spell::PrepareTriggersExecutedOnHit

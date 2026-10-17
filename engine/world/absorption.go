@@ -453,6 +453,11 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 	remainingDamage = damage
 	var exhaustedSpells []uint32
 
+	// The mana-shield leg drains the creature's mana pool (Powers[0], filled
+	// from the template mana row at spawn); resolved ahead of the aura lock
+	// so the leg below never takes motionMu under auraMu.
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+
 	s.auraMu.Lock()
 	if s.activeCreatureAuras != nil {
 		if auras, ok := s.activeCreatureAuras[key]; ok && auras != nil {
@@ -484,6 +489,42 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 						aura.Amount -= absorbThis
 						remainingDamage -= absorbThis
 						absorbed += absorbThis
+						if aura.Amount == 0 {
+							exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+						}
+					}
+					continue
+				}
+				// 3. Mana Shield (SPELL_AURA_MANA_SHIELD = 97): the mana-cost
+				// absorb loop of Unit::CalcAbsorbResist (Unit.cpp:1914-1965)
+				// runs after the school-absorb loop (the sort above already
+				// orders 97 last). Each point absorbed drains 1.5 mana (the
+				// DBC ValueMultiplier — CalcValueMultiplier with no
+				// spellmods, the same hardcode as the player leg); when mana
+				// runs out the absorb scales by the fraction actually paid
+				// (Unit.cpp:1949), and the school-mask gate (Unit.cpp:1922)
+				// applies like the 69 arm's.
+				if aura.AuraType == SpellAuraManaShield && motion != nil && motion.Powers[0] > 0 {
+					if aura.SchoolMask != 0 && (aura.SchoolMask&uint32(schoolMask)) == 0 {
+						continue
+					}
+					absorbPossible := aura.Amount
+					if absorbPossible > remainingDamage {
+						absorbPossible = remainingDamage
+					}
+					neededMana := uint32(math.Ceil(float64(absorbPossible) * 1.5))
+					manaTaken := motion.Powers[0]
+					if manaTaken > neededMana {
+						manaTaken = neededMana
+					}
+					motion.Powers[0] -= manaTaken
+					if neededMana > 0 && manaTaken < neededMana {
+						absorbPossible = uint32(float64(absorbPossible) * (float64(manaTaken) / float64(neededMana)))
+					}
+					if absorbPossible > 0 {
+						aura.Amount -= absorbPossible
+						remainingDamage -= absorbPossible
+						absorbed += absorbPossible
 						if aura.Amount == 0 {
 							exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 						}
