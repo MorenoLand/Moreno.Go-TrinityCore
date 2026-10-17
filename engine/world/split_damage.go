@@ -200,7 +200,7 @@ func (s *Server) dealSplitDamageToCaster(ctx context.Context, victimGUID uint64,
 	}
 	// Unit.cpp:2006-2012, 2052-2058: the attacker logs the split hit on the
 	// caster before the recursive DealDamage.
-	s.sendSplitDamageLog(attackerGUID, a.casterGUID, a.spellID, split, casterHealth, schoolMask)
+	s.sendSplitDamageLog(attackerGUID, a.casterGUID, a.spellID, split, casterHealth, schoolMask, key.Map, key.InstanceID)
 	// Unit.cpp:2014, 2060: the recursive hit is a full DealDamage with the
 	// original attacker, the aura's spell, and durabilityLoss=false.
 	attackerSess := s.findSessionByGUID(attackerGUID)
@@ -225,19 +225,33 @@ func (s *Server) sendSplitImmuneMiss(victimGUID uint64, victimIsPlayer bool, cas
 }
 
 // sendSplitDamageLog sends the attacker's SMSG_SPELLNONMELEEDAMAGELOG for the
-// redirected split (Unit.cpp:2009, 2055). Creature attackers have no session
-// for the log path (documented delta).
-func (s *Server) sendSplitDamageLog(attackerGUID, casterGUID uint64, spellID, split, casterHealth uint32, schoolMask uint32) {
+// redirected split (Unit.cpp:2009, 2055). Unit::SendSpellNonMeleeDamageLog
+// ends in SendMessageToSet on the attacker — the attacker's visibility set —
+// so a player attacker writes its own copy and fans out from its position,
+// and a creature attacker fans out from its motion position with no session
+// leg. The attacker's map/instance comes from the victim's key (the split
+// runs where the original damage landed).
+func (s *Server) sendSplitDamageLog(attackerGUID, casterGUID uint64, spellID, split, casterHealth uint32, schoolMask uint32, mapID, instanceID uint32) {
 	if s == nil || split == 0 {
-		return
-	}
-	as := s.findSessionByGUID(attackerGUID)
-	if as == nil {
 		return
 	}
 	var overkill uint32
 	if split > casterHealth {
 		overkill = split - casterHealth
 	}
-	_ = as.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(casterGUID, attackerGUID, spellID, split, overkill, uint8(schoolMask)), true)
+	logPkt := buildSpellNonMeleeDamageLog(casterGUID, attackerGUID, spellID, split, overkill, uint8(schoolMask))
+	var source *session
+	var cx, cy, cz float32
+	if as := s.findSessionByGUID(attackerGUID); as != nil && as.player != nil {
+		source = as
+		mapID, instanceID = as.player.Map, as.player.InstanceID
+		cx, cy, cz = as.player.X, as.player.Y, as.player.Z
+		_ = as.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
+	} else if m := s.findCreatureMotion(mapID, instanceID, attackerGUID); m != nil {
+		mapID, instanceID = m.Map, m.InstanceID
+		cx, cy, cz = m.X, m.Y, m.Z
+	} else {
+		return
+	}
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, mapID, instanceID, cx, cy, cz, source)
 }

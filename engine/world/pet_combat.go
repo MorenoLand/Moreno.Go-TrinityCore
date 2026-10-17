@@ -1298,8 +1298,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 
 	asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, targetGUID, damage, overkill, hitInfo, targetState, blocked)
 	if isTargetPlayer && targetSess != nil {
-		_ = targetSess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, true)
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, targetSess)
+		// Unit::SendAttackStateUpdate: SendMessageToSet on the attacker — the
+		// pet's visibility set; the pet has no session leg.
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 		// after the attacker-state update (sent pre-DealDamage in C++).
 		// shieldGateDamage keeps the pre-god value for the damage-shield
@@ -1405,7 +1406,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		if owner != nil && damage > 0 {
 			owner.splitShareDamagePct(ctx, targetGUID, false, creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, motion.GUID, damage, 1)
 		}
-		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, nil)
+		// Unit::SendAttackStateUpdate: the pet attacker's visibility set, not
+		// the whole instance.
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 		var killedTarget combatTarget
 		var killed bool
 		var killX, killY, killZ float32

@@ -1163,7 +1163,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	asuPayload := protocol.BuildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, s)
+		// Unit::SendAttackStateUpdate (Unit.cpp): SendMessageToSet on the
+		// attacker — the attacker's visibility set.
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 
 	// Attacker enters combat on swing

@@ -693,11 +693,11 @@ func (s *session) totemHealPulseTick(ctx context.Context, def TotemDef, totem *a
 		s.server.updateArenaHealingScore(s, effectiveHeal)
 	}
 	logPkt := protocol.BuildPeriodicAuraLogHeal(target.playerGUID, totem.TotemGUID, def.PulseSpell, spellAuraPeriodicHeal, heal, overheal, absorbed, false)
+	// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+	// SendMessageToSet on the aura owner — the healed target's visibility
+	// set, including the target itself.
 	_ = target.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
-	if casterSess := s.server.findSessionByGUID(totem.TotemGUID); casterSess != nil && casterSess != target {
-		_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
-	}
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, target)
+	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, target.player.Map, target.player.InstanceID, target.player.X, target.player.Y, target.player.Z, target)
 	target.sendPlayerUpdate()
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", target.player.Health, target.playerGUID)

@@ -221,11 +221,16 @@ func (s *Server) applyOneDamageShield(ctx context.Context, victim, attacker dama
 	pkt.WriteU32(damage)
 	pkt.WriteU32(overkill)
 	pkt.WriteU32(sh.schoolMask)
-	if victim.isPlayer && victim.sess != nil {
+	// Unit.cpp:1595: victim->SendMessageToSet — the shield holder's
+	// visibility set; the holder writes its own copy and a creature holder
+	// has no session leg.
+	if victim.isPlayer && victim.sess != nil && victim.sess.player != nil {
 		_ = victim.sess.write(uint16(protocol.OpcodeSMSG_SPELLDAMAGESHIELD), pkt.Bytes(), true)
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLDAMAGESHIELD), pkt.Bytes(), victim.sess)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLDAMAGESHIELD), pkt.Bytes(), victim.sess.player.Map, victim.sess.player.InstanceID, victim.sess.player.X, victim.sess.player.Y, victim.sess.player.Z, victim.sess)
 	} else if !victim.isPlayer {
-		s.broadcastToInstance(victim.key.Map, victim.key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLDAMAGESHIELD), pkt.Bytes(), nil)
+		if m := s.findCreatureMotion(victim.key.Map, victim.key.InstanceID, victim.key.GUID); m != nil {
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLDAMAGESHIELD), pkt.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		}
 	}
 	// Unit.cpp:1597: no CalcAbsorbResist on shield damage — it bypasses
 	// absorbs entirely, so neither applyAbsorptionShields arm runs here.

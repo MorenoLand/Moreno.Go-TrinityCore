@@ -12069,9 +12069,11 @@ func (s *session) sendExtraAttacksLog(spellID uint32, effectIndex int, count uin
 	log.WriteU32(1)
 	log.WritePackedGUID(s.playerGUID)
 	log.WriteU32(count)
+	// Spell::SendLogExecute (Spell.cpp:4523): the log rides SendMessageToSet
+	// on the caster — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	_ = effectIndex
 }
@@ -14664,9 +14666,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
 	if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
-		hitInfo := uint32(0x01) // SPELL_HIT_TYPE_MISS
-		damage = 0
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, 0, schoolMask, 0, 0, hitInfo), true)
+		// Spell::PreprocessSpellHit (Spell.cpp:2715-2717): an evading creature
+		// reports SPELL_MISS_EVADE — C++ answers with SendSpellMiss
+		// (SMSG_SPELLLOGMISS), never a non-melee damage log.
+		s.sendSpellMiss(target.GUID, spellID, protocol.SpellMissEvade)
 		return 0
 	}
 	isHit := true
@@ -14950,7 +14953,14 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// Unit::DealDamage (NODAMAGE) directly, which sends none
 	// (SpellEffects.cpp:274-296; Unit.cpp:696-995 has no damage-log send).
 	if !immune && !instantKill {
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
+		dmgLogPkt := buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), dmgLogPkt, true)
+		if s.server != nil {
+			// Spell::DoDamageAndTriggers (Spell.cpp:2542): the log rides
+			// SendMessageToSet — the caster's visibility set, not the caster
+			// alone.
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), dmgLogPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
+		}
 	}
 
 	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor);
@@ -15052,12 +15062,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
 			// The IsImmunedToDamage arm (Spell.cpp:2524-2530) sends no damage-log
-			// packet; the victim-side send is gated the same as the caster's.
+			// packet. The victim receives the caster's log through the
+			// visibility-set fan-out above (SendMessageToSet covers the set,
+			// there is no separate victim leg in C++).
 			// Instakill kills send no damage log either (SpellEffects.cpp:294
 			// calls DealDamage directly; DealDamage never logs).
-			if !immune && !instantKill {
-				_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
-			}
 			victimHealth := playerSess.player.Health
 			// Duel defeat (Unit.cpp:825-853, 957-973): any damage >= health-1
 			// on a duelist ends the duel — the clamped hit leaves the loser
@@ -17284,9 +17293,11 @@ func (s *session) sendTakeTargetPowerLog(spellID uint32, effectID uint32, target
 		log.WriteU32(t.powerType)
 		log.WriteF32(t.gainMultiplier)
 	}
+	// Spell::SendLogExecute (Spell.cpp:4523): the log rides SendMessageToSet
+	// on the caster — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 
@@ -26063,17 +26074,22 @@ func (s *session) faceChannelTargetOnPeriodicTick(aura *activeAura, spell wotlk.
 // (SpellAuraEffects.cpp:860-865): the caster sends SMSG_SPELLORDAMAGE_IMMUNE
 // for the target; a nil caster sends nothing. Player-victim recipient shape:
 // victim + caster session + nearby.
+// sendPeriodicTickImmune mirrors AuraEffect::SendTickImmune
+// (SpellAuraEffects.cpp:860-863): the CASTER unit sends SendSpellDamageImmune
+// through SendMessageToSet — the caster's visibility set, not the target's.
+// A player caster writes its own copy; a creature caster has no session leg.
 func (ts *session) sendPeriodicTickImmune(aura *activeAura) {
-	if ts == nil || aura == nil || aura.CasterGUID == 0 {
+	if ts == nil || ts.server == nil || aura == nil || aura.CasterGUID == 0 || ts.player == nil {
 		return
 	}
 	immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-	_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-	if ts.server != nil {
-		if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-			_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-		}
-		ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
+	if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess.player != nil {
+		_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+		ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, casterSess.player.Map, casterSess.player.InstanceID, casterSess.player.X, casterSess.player.Y, casterSess.player.Z, casterSess)
+		return
+	}
+	if m := ts.server.findCreatureMotion(ts.player.Map, ts.player.InstanceID, aura.CasterGUID); m != nil {
+		ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 	}
 }
 
@@ -26239,16 +26255,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// skipped, before the per-tick miss roll below. The isolated term
 		// needs no tick row (Unit::HasUnitState, not a spell gate).
 		if isolated || (tickKnown && ts.isImmuneToDamageSpell(tickSpell, tickSpell.SchoolMask)) {
-			if aura.CasterGUID != 0 {
-				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-				_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-				if ts.server != nil {
-					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-						_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-					}
-					ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
-				}
-			}
+			ts.sendPeriodicTickImmune(aura)
 			return
 		}
 		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
@@ -26416,12 +26423,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, crit)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target's visibility set,
+		// including the target itself.
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
-			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
-			}
-			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts.player.Map, ts.player.InstanceID, ts.player.X, ts.player.Y, ts.player.Z, ts)
 		}
 
 		// Unit::DealDamage (Unit.cpp:735-737) + kill legs, shared with the
@@ -26638,12 +26645,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		healerTickMotion := ts.findCreatureMotion(aura.CasterGUID)
 		fireDealHealAIHooks(context.Background(), ts.server, victimTickMotion, healerTickMotion, aura.CasterGUID, aura.TargetGUID, &heal)
 		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, healAbsorbed, healCrit)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target's visibility set,
+		// including the target itself.
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
-			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
-			}
-			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts.player.Map, ts.player.InstanceID, ts.player.X, ts.player.Y, ts.player.Z, ts)
 		}
 
 		ts.player.Health = newHP
@@ -26760,12 +26767,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// uint32 storage.
 		energizeAmount := aura.Amount
 		energizeLog := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, energizePT, energizeAmount)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target's visibility set,
+		// including the target itself.
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), energizeLog, true)
 		if ts.server != nil {
-			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), energizeLog, true)
-			}
-			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), energizeLog, ts)
+			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), energizeLog, ts.player.Map, ts.player.InstanceID, ts.player.X, ts.player.Y, ts.player.Z, ts)
 		}
 		oldEnergizePower := ts.player.Powers[energizePT]
 		ts.adjustSpellPower(context.Background(), aura.TargetGUID, energizePower, int64(energizeAmount))
@@ -26799,16 +26806,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// per-tick miss roll. The isolated term needs no tick row
 		// (Unit::HasUnitState, not a spell gate).
 		if isolated || (tickKnown && ts.isImmuneToDamageSpell(tickSpell, tickSpell.SchoolMask)) {
-			if aura.CasterGUID != 0 {
-				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-				_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-				if ts.server != nil {
-					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-						_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-					}
-					ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
-				}
-			}
+			ts.sendPeriodicTickImmune(aura)
 			return
 		}
 		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
@@ -26946,12 +26944,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			overkill = dmg - targetHealth
 		}
 		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, crit)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target's visibility set,
+		// including the target itself.
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
-			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
-			}
-			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts.player.Map, ts.player.InstanceID, ts.player.X, ts.player.Y, ts.player.Z, ts)
 		}
 		dealt := ts.applyPeriodicTickDamageToPlayer(dmg, targetHealth, aura)
 		// Periodic-tick aura procs (SpellAuraEffects.cpp:5295-5305): the
@@ -27059,16 +27057,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// gates, before the drain. The isolated term needs no tick row
 		// (Unit::HasUnitState, not a spell gate).
 		if isolated || (tickKnown && ts.isImmuneToDamageSpell(tickSpell, tickSpell.SchoolMask)) {
-			if aura.CasterGUID != 0 {
-				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-				_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-				if ts.server != nil {
-					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-						_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-					}
-					ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
-				}
-			}
+			ts.sendPeriodicTickImmune(aura)
 			break
 		}
 		drain := aura.Amount
@@ -27107,12 +27096,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// packet for PERIODIC_MANA_LEECH carries the float multiplier tail
 		// (SendPeriodicAuraLog Unit.cpp:5372), not the energize format.
 		logPkt := protocol.BuildPeriodicAuraLogManaLeech(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained, ts.calcValueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech, leechCaster))
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target's visibility set,
+		// including the target itself.
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
-			if leechCaster != ts {
-				_ = leechCaster.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
-			}
-			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts.player.Map, ts.player.InstanceID, ts.player.X, ts.player.Y, ts.player.Z, ts)
 		}
 		ts.applyPeriodicManaLeechGain(context.Background(), leechCaster, aura, tickSpell, tickKnown, powerType, drained)
 
@@ -27155,12 +27144,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// The periodic log carries the energize shape
 		// (SpellPeriodicAuraLogInfo with the raw amount).
 		logPkt21 := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(obsPowerType), amount)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target's visibility set,
+		// including the target itself.
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, true)
 		if ts.server != nil {
-			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, true)
-			}
-			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, ts)
+			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, ts.player.Map, ts.player.InstanceID, ts.player.X, ts.player.Y, ts.player.Z, ts)
 		}
 		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
 		// distributeHealingThreat already folds the 0.5 in.
@@ -27202,16 +27191,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 		}
 		if burnImmune {
-			if aura.CasterGUID != 0 {
-				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-				_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-				if ts.server != nil {
-					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-						_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-					}
-					ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, ts)
-				}
-			}
+			ts.sendPeriodicTickImmune(aura)
 			break
 		}
 		if int(burnPowerType) >= len(ts.player.MaxPowers) || ts.player.MaxPowers[burnPowerType] == 0 {
@@ -27283,12 +27263,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			burnOverkill = dmg - burnTargetHealth
 		}
 		logPkt162 := buildPeriodicNonMeleeDamageLog(aura.TargetGUID, aura.CasterGUID, aura.SpellID, dmg, burnOverkill, uint8(aura.SchoolMask), burnAbsorbed, burnResisted, 0)
-		_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
+		// SpellAuraEffects.cpp:5291: the tick's log rides the caster's
+		// SendMessageToSet — the caster's visibility set, not the victim's
+		// session and not a nearby-only broadcast.
+		_ = burnCaster.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
 		if ts.server != nil {
-			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
-				_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
-			}
-			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, ts)
+			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, burnCaster.player.Map, burnCaster.player.InstanceID, burnCaster.player.X, burnCaster.player.Y, burnCaster.player.Z, burnCaster)
 		}
 		_ = ts.applyPeriodicTickDamageToPlayer(dmg, burnTargetHealth, aura)
 		// Periodic-tick aura procs (SpellAuraEffects.cpp:5583-5623): the burn
@@ -27844,17 +27824,22 @@ func (s *session) periodicTickProcCaster(mapID, instanceID uint32, casterGUID ui
 }
 
 // sendCreaturePeriodicTickImmune mirrors AuraEffect::SendTickImmune
-// (SpellAuraEffects.cpp:860-865) on the creature-victim path: the caster sends
-// SMSG_SPELLORDAMAGE_IMMUNE for the target; a nil caster sends nothing.
-// The packet goes to the tick-running session and the instance broadcast.
+// (SpellAuraEffects.cpp:860-865) on the creature-victim path: the caster unit
+// sends SMSG_SPELLORDAMAGE_IMMUNE through SendMessageToSet — the caster's
+// visibility set. A nil caster sends nothing (SpellAuraEffects.cpp:862); a
+// creature caster has no session leg.
 func (s *session) sendCreaturePeriodicTickImmune(key creatureAuraKey, aura *activeAura) {
-	if s == nil || aura == nil || aura.CasterGUID == 0 {
+	if s == nil || s.server == nil || aura == nil || aura.CasterGUID == 0 {
 		return
 	}
 	immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-	if s.server != nil {
-		s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
+	if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess.player != nil {
+		_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, casterSess.player.Map, casterSess.player.InstanceID, casterSess.player.X, casterSess.player.Y, casterSess.player.Z, casterSess)
+		return
+	}
+	if m := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); m != nil {
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 	}
 }
 
@@ -27916,11 +27901,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// chain alive. The isolated term needs no tick row
 		// (Unit::HasUnitState, not a spell gate).
 		if isolated || (tickKnown && s.server != nil && creatureImmuneToDamageSpell(s.server, key, tickSpell, tickSpell.SchoolMask)) {
-			if aura.CasterGUID != 0 {
-				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-				s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
-			}
+			s.sendCreaturePeriodicTickImmune(key, aura)
 			return true
 		}
 		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
@@ -28100,9 +28081,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 
 		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, crit)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target creature's
+		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
 		}
 
 		// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9): fires before damage
@@ -28339,9 +28322,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		healerTickMotion := s.findCreatureMotion(aura.CasterGUID)
 		fireDealHealAIHooks(ctx, s.server, victimTickMotion, healerTickMotion, aura.CasterGUID, aura.TargetGUID, &heal)
 		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, healAbsorbed, healCrit)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target creature's
+		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
 			s.server.motionMu.Lock()
 			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, aura.TargetGUID)
 			if motion != nil {
@@ -28552,9 +28537,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			return true
 		}
 		cEnergizeLog := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, cEnergizePT, cEnergizeAmount)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), cEnergizeLog, true)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target creature's
+		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), cEnergizeLog, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), cEnergizeLog, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
 		}
 		// SpellAuraEffects.cpp:5576-5577 — half the actual gain as threat,
 		// ignoring modifiers. Creature healers carry no
@@ -28583,11 +28570,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// chain alive. The isolated term needs no tick row
 		// (Unit::HasUnitState, not a spell gate).
 		if isolated || (tickKnown && s.server != nil && creatureImmuneToDamageSpell(s.server, key, tickSpell, tickSpell.SchoolMask)) {
-			if aura.CasterGUID != 0 {
-				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-				s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
-			}
+			s.sendCreaturePeriodicTickImmune(key, aura)
 			return true
 		}
 		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
@@ -28721,9 +28704,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			overkill = dmg - targetHealth
 		}
 		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, crit)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target creature's
+		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
 		}
 		// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9), mirroring the damage tick.
 		if s.server != nil {
@@ -28872,11 +28857,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// gates, keeping the chain alive. The isolated term needs no tick
 		// row (Unit::HasUnitState, not a spell gate).
 		if isolated || (tickKnown && s.server != nil && creatureImmuneToDamageSpell(s.server, key, tickSpell, tickSpell.SchoolMask)) {
-			if aura.CasterGUID != 0 {
-				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-				s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
-			}
+			s.sendCreaturePeriodicTickImmune(key, aura)
 			return true
 		}
 		drain := aura.Amount
@@ -28918,9 +28899,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		logPkt := protocol.BuildPeriodicAuraLogManaLeech(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained, s.calcValueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech, leechCaster))
-		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target creature's
+		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
 		}
 		s.applyPeriodicManaLeechGain(ctx, leechCaster, aura, tickSpell, tickKnown, powerType, drained)
 		return true
@@ -28987,9 +28970,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		logPkt21 := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(obsPowerType), obsAmount)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, true)
+		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
+		// SendMessageToSet on the aura owner — the target creature's
+		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
 		}
 		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
 		// distributeHealingThreat already folds the 0.5 in. The obs-mod-power
@@ -29034,11 +29019,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		if burnImmune {
-			if aura.CasterGUID != 0 {
-				immunePkt := protocol.BuildSpellDamageImmune(aura.CasterGUID, aura.TargetGUID, aura.SpellID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
-				s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, s)
-			}
+			s.sendCreaturePeriodicTickImmune(key, aura)
 			return true
 		}
 		// int32 drainedAmount = -target->ModifyPower(powerType, -damage).
@@ -29119,9 +29100,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			burnOverkill = dmg - burnTargetHealth
 		}
 		logPkt162 := buildPeriodicNonMeleeDamageLog(aura.TargetGUID, aura.CasterGUID, aura.SpellID, dmg, burnOverkill, uint8(aura.SchoolMask), burnAbsorbed, burnResisted, 0)
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
+		// SpellAuraEffects.cpp:5291: the log rides the caster's
+		// SendMessageToSet — the caster's visibility set, not the whole
+		// instance.
+		_ = burnCaster.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
 		if s.server != nil {
-			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, burnCaster.player.Map, burnCaster.player.InstanceID, burnCaster.player.X, burnCaster.player.Y, burnCaster.player.Z, burnCaster)
 		}
 		_, burnAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, burnTargetHealth, target, key, aura)
 		// Periodic-tick aura procs (SpellAuraEffects.cpp:5583-5623): the same
@@ -29250,9 +29234,11 @@ func (s *session) applyHealthFunnelSelfDamage(spellID, manaPerSecond, effectiveH
 		overkill = funnelDamage - casterHealth
 	}
 	logPkt := buildHealthFunnelDamageLog(s.playerGUID, s.playerGUID, spellID, funnelDamage, overkill, schoolMask)
+	// SpellAuraEffects.cpp:5423: the funnel's self-damage log rides the
+	// caster's SendMessageToSet — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	// Unit::DealDamage(caster, caster, funnelDamage, cleanDamage, SELF_DAMAGE,
 	// school, spellInfo, true): no absorb, no procs; the kill leg runs with
@@ -29293,6 +29279,8 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 		srv.motionMu.Unlock()
 		return
 	}
+	casterMap, casterInst := motion.Map, motion.InstanceID
+	casterX, casterY, casterZ := motion.X, motion.Y, motion.Z
 	casterHealth := motion.Health
 	overkill := uint32(0)
 	if funnelDamage >= casterHealth {
@@ -29320,7 +29308,9 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 		cx, cy, cz = motion.X, motion.Y, motion.Z
 	}
 	srv.motionMu.Unlock()
-	srv.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, nil)
+	// SpellAuraEffects.cpp:5423: the log rides the caster's SendMessageToSet
+	// — the caster creature's visibility set, not the whole instance.
+	srv.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, casterMap, casterInst, casterX, casterY, casterZ, nil)
 	if !casterDead {
 		srv.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, map[int]uint32{unitFieldHealth: newHealth})
 		return
@@ -35399,7 +35389,6 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 		alive := motion.Health > 0
 		resistances := motion.Resistances
 		level := motion.Level
-		mapID, instanceID := motion.Map, motion.InstanceID
 		s.server.motionMu.Unlock()
 		if !alive {
 			continue
@@ -35425,8 +35414,11 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 		}
 		absorbed, _ = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForMotion(motion), soakable, schoolMask)
 		logPkt := buildSpellNonMeleeDamageLog(effectTarget, s.playerGUID, spellID, damage, 0, schoolMask, absorbed, resisted, 0)
+		// SpellEffects.cpp:318: unitCaster->SendSpellNonMeleeDamageLog rides
+		// SendMessageToSet — the caster's visibility set, not the whole
+		// instance.
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
-		s.server.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 
@@ -36077,9 +36069,11 @@ func (s *session) sendDurabilityDamageLog(spellID uint32, targetGUID uint64, ite
 	log.WritePackedGUID(targetGUID)
 	log.WriteI32(itemID)
 	log.WriteI32(slot)
+	// Spell::SendLogExecute (Spell.cpp:4523): the log rides SendMessageToSet
+	// on the caster — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 
@@ -36478,9 +36472,11 @@ func (s *session) sendResurrectLog(spellID uint32, casterGUID uint64, targetGUID
 	log.WriteU32(spellEffectResurrect)
 	log.WriteU32(1)
 	log.WritePackedGUID(targetGUID)
+	// Spell::SendLogExecute (Spell.cpp:4523): the log rides SendMessageToSet
+	// on the caster — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 
@@ -37024,9 +37020,11 @@ func (s *session) sendSummonObjectLog(spellID, effectID uint32, goGUID uint64) {
 	log.WriteU32(effectID)
 	log.WriteU32(1)
 	log.WritePackedGUID(goGUID)
+	// Spell::SendLogExecute (Spell.cpp:4523): the log rides SendMessageToSet
+	// on the caster — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 
@@ -37045,9 +37043,11 @@ func (s *session) sendOpenLockLog(spellID uint32, goGUID uint64) {
 	log.WriteU32(spellEffectOpenLock)
 	log.WriteU32(1)
 	log.WritePackedGUID(goGUID)
+	// Spell::SendLogExecute (Spell.cpp:4523): the log rides SendMessageToSet
+	// on the caster — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 
@@ -37066,9 +37066,11 @@ func (s *session) sendUnsummonObjectLog(spellID uint32, petGUID uint64) {
 	log.WriteU32(spellEffectDismissPet)
 	log.WriteU32(1)
 	log.WritePackedGUID(petGUID)
+	// Spell::SendLogExecute (Spell.cpp:4523): the log rides SendMessageToSet
+	// on the caster — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 
@@ -37089,8 +37091,10 @@ func (s *session) sendCreateItemLog(spellID, itemEntry uint32) {
 	log.WriteU32(spellEffectCreateItem)
 	log.WriteU32(1)
 	log.WriteU32(itemEntry)
+	// Spell::SendLogExecute (Spell.cpp:4523): the log rides SendMessageToSet
+	// on the caster — the caster's visibility set.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
