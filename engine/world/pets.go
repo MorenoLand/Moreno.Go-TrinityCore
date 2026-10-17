@@ -3106,19 +3106,23 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		if targetGUID != 0 {
 			castTarget.Flags = protocol.SpellTargetFlagUnitWireMask
 		}
-		if !s.checkPetCastGauntlet(ctx, motion, spellInfo, spellOrAction, castTarget, 0) {
+		if !s.checkPetCastGauntlet(ctx, motion, spellInfo, spellOrAction, castTarget, 0, false) {
 			return true
 		}
 		// PetHandler.cpp:337-349: the talk/growl fires on SPELL_CAST_OK,
 		// ahead of prepare.
 		s.sendPetActionBarTalkGrowl(petGUID, motion, targetGUID)
 		// The CharmInfo flag clears (PetHandler.cpp:304-310), the
-		// UNIT_NOT_INFRONT auto-turn (PetHandler.cpp:320-336), the victim
-		// switch (PetHandler.cpp:351-365) and the failure-path
-		// ResetCooldown (PetHandler.cpp:376-377) have no Go twin:
-		// creatureMotion carries no charm flags, no facing and no single
-		// victim field, and Go records spell cooldowns only on the success
-		// path — documented deltas.
+		// UNIT_NOT_INFRONT auto-turn (PetHandler.cpp:320-336) and the victim
+		// switch (PetHandler.cpp:351-365) have no Go twin: creatureMotion
+		// carries no charm flags, no facing and no single victim field —
+		// documented deltas. The failure-path ResetCooldown
+		// (PetHandler.cpp:376-377, same arm at :837-838) needs no twin: it
+		// runs only when !HasCooldown(spellid), and
+		// SpellHistory::ResetCooldown(spellId, update) returns immediately
+		// with no packet when the per-spell entry is absent
+		// (SpellHistory.cpp:432-439) — the arm is dead code in C++, so
+		// Go's omission is behaviorally exact.
 		if !s.executePetSpellWithOptions(ctx, motion, spellInfo, 0, castTarget, false) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(0, spellOrAction, spellFailedBadTargets), true)
 		}
@@ -3187,7 +3191,12 @@ func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool 
 // the packet's guid2 only (C++: unit_target =
 // ObjectAccessor::GetUnit(guid2), possibly null) with no selection
 // fallback.
-func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, castCount uint8) bool {
+// deathGate enables the CheckCast death arm: the CMSG_PET_CAST_SPELL path
+// resolves the motion in any state and a dead pet reports
+// SPELL_FAILED_CASTER_DEAD from the tail's head (Spell.cpp:5177-5179); the
+// action-bar path keeps its pre-filtered motion and its documented dead-pet
+// behavior, so the arm stays off there.
+func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, castCount uint8, deathGate bool) bool {
 	if s.isDeadOrGhost() {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
 		return false
@@ -3237,6 +3246,15 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	// then CheckCast(true).
 	if spell.StartRecoveryCategory > 0 && s.server.petGlobalCooldownActive(motion, spell, now) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+		return false
+	}
+	// Spell::CheckCast (Spell.cpp:5177-5179): the death-state arm opens
+	// CheckCast, ahead of every tail leg — a caster that is dead when the
+	// tail runs fails SPELL_FAILED_CASTER_DEAD. (The passive/triggered
+	// exemption has no pet-path trigger source: the triggered leg already
+	// passed the aura gate above, and Go carries no SPELL_ATTR0_CASTABLE_WHILE_DEAD.)
+	if deathGate && motion.Health == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
 		return false
 	}
 	// CheckCast(true) tail (Spell.cpp:6254), modeled subset in C++ relative
@@ -3316,7 +3334,11 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	if spellID == 0 || s.server == nil || s.server.Data == nil || s.player == nil {
 		return true
 	}
-	motion, ok := s.petMotionForCast(petGUID)
+	// PetHandler.cpp:775-797: the alive gate is off here — a dead pet
+	// runs through the Spell and fails at CheckCast's death arm (the
+	// gauntlet's deathGate leg below), answering SMSG_PET_CAST_FAILED like
+	// C++ instead of a silent drop.
+	motion, ok := s.petMotionForCastAnyState(petGUID)
 	if !ok {
 		return true
 	}
@@ -3365,7 +3387,7 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 			target.Flags |= protocol.SpellTargetFlagUnitWireMask
 		}
 	}
-	if !s.checkPetCastGauntlet(ctx, motion, spell, spellID, target, castCount) {
+	if !s.checkPetCastGauntlet(ctx, motion, spell, spellID, target, castCount, true) {
 		return true
 	}
 	if !s.executePetSpellWithOptions(ctx, motion, spell, castCount, target, triggered) {
@@ -3394,13 +3416,26 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) petMotionForCast(petGUID uint64) (*creatureMotion, bool) {
+	return s.petMotionForCastWithAlive(petGUID, true)
+}
+
+// petMotionForCastAnyState is petMotionForCast without the alive gate: the
+// CMSG_PET_CAST_SPELL path runs a dead pet through the Spell and fails at
+// Spell::CheckCast's death arm (Spell.cpp:5177-5179) with
+// SPELL_FAILED_CASTER_DEAD, so resolving the motion only when alive would
+// swallow the SMSG_PET_CAST_FAILED the client gets in C++.
+func (s *session) petMotionForCastAnyState(petGUID uint64) (*creatureMotion, bool) {
+	return s.petMotionForCastWithAlive(petGUID, false)
+}
+
+func (s *session) petMotionForCastWithAlive(petGUID uint64, alive bool) (*creatureMotion, bool) {
 	if s == nil || s.server == nil || petGUID == 0 {
 		return nil, false
 	}
 	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
-	if motion == nil || motion.Health == 0 || (motion.OwnerGUID != s.playerGUID && motion.CharmerGUID != s.playerGUID) {
+	if motion == nil || (alive && motion.Health == 0) || (motion.OwnerGUID != s.playerGUID && motion.CharmerGUID != s.playerGUID) {
 		return nil, false
 	}
 	return motion, true
@@ -3440,10 +3475,11 @@ const maxPetTalentScanRanks = 5
 // silent no-op), which also blocks rank downgrades; all lower known ranks
 // are unlearned like Pet::learnSpell's rank-chain arm, and the learned
 // spell is added to the live motion's spell list so later HasSpell checks
-// see it. Free-talent-point accounting (Pet::GetFreeTalentPoints) and the
-// family PetTalentMask / tier-point / prereq gates have no Go model yet
-// (no usedTalentCount, no CreatureFamily entry) and stay documented
-// deviations.
+// see it. The prereq-talent and tier spent-points gates below mirror
+// Player.cpp:25627-25673. Free-talent-point accounting
+// (Pet::GetFreeTalentPoints) and the family PetTalentMask gate have no Go
+// model yet (no usedTalentCount, no CreatureFamily entry) and stay
+// documented deviations.
 func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID uint64, talentID uint32, talentRank uint32) bool {
 	if petNumber == 0 || talentRank >= maxPetTalentRank || s == nil || s.server == nil ||
 		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
@@ -3478,6 +3514,51 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 	}
 	if int(talentRank) <= curMax {
 		return false
+	}
+	// Player.cpp:25627-25641: a talent with PrereqTalent learns only when the
+	// pet knows some rank of the dependency at or above PrereqRank.
+	if tEntry.PrereqTalent > 0 {
+		if dep, depOK, depErr := s.server.Data.Talent(tEntry.PrereqTalent); depErr == nil && depOK {
+			hasEnoughRank := false
+			for rank := int(tEntry.PrereqRank); rank < maxPetTalentScanRanks && !hasEnoughRank; rank++ {
+				if dep.SpellRank[rank] == 0 {
+					continue
+				}
+				for _, sp := range motion.Spells {
+					if sp == dep.SpellRank[rank] {
+						hasEnoughRank = true
+						break
+					}
+				}
+			}
+			if !hasEnoughRank {
+				return false
+			}
+		}
+	}
+	// Player.cpp:25644-25673: talents past the first tier need
+	// TierID*MAX_PET_TALENT_RANK points spent in the same tab (rank+1 per
+	// known rank of each same-tab talent).
+	if tEntry.TierID > 0 {
+		var spentPoints uint32
+		if tabTalents, tabErr := s.server.Data.TalentsByTab(tEntry.TabID); tabErr == nil {
+			for _, tmp := range tabTalents {
+				for rank := 0; rank < maxPetTalentScanRanks; rank++ {
+					if tmp.SpellRank[rank] == 0 {
+						continue
+					}
+					for _, sp := range motion.Spells {
+						if sp == tmp.SpellRank[rank] {
+							spentPoints += uint32(rank + 1)
+							break
+						}
+					}
+				}
+			}
+		}
+		if spentPoints < tEntry.TierID*maxPetTalentRank {
+			return false
+		}
 	}
 	spellID := tEntry.SpellRank[talentRank]
 	if spellID == 0 {
@@ -3652,10 +3733,21 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 		if s.server != nil {
 			s.server.broadcastCreatureValuesUpdateInInstance(s.player.Map, s.player.InstanceID, petGUID, map[int]uint32{unitFieldPetNameTimestamp: uint32(now)})
 		}
+		// PetHandler.cpp:628-645: when the client sends declined names they
+		// must pass ObjectMgr::CheckDeclinedNames (ObjectMgr.cpp:8808) —
+		// GetMainPartOfName's ending table (Util.cpp:466) pads every ending
+		// with an embedded null wchar, so the suffix strip never matches a
+		// real name and the function is an identity; the check therefore
+		// passes exactly when all five declined forms equal the base name
+		// (and are valid UTF-8). A mismatch answers
+		// SMSG_PET_NAME_INVALID with PET_NAME_DECLENSION_DOESNT_MATCH_BASE_NAME
+		// (16) and the five declined strings, before any DB write.
+		if isDeclined != 0 && !checkPetDeclinedNames(newName, declined) {
+			s.sendPetNameInvalid(petNameDeclension, newName, &declined)
+			return true
+		}
 		// PetHandler.cpp:649-662: declined names persist in
 		// character_pet_declinedname (id, owner, genitive..prepositional).
-		// ObjectMgr::CheckDeclinedNames' declension match has no Go bridge
-		// (Russian declension table); client-sent names store verbatim.
 		if isDeclined != 0 {
 			_, _ = cdb.ExecContext(ctx,
 				"DELETE FROM character_pet_declinedname WHERE id = ?", petNumber)
@@ -3680,11 +3772,79 @@ const (
 	petNameDeclension = 16
 )
 
+// isExtendedLatinRune / isEastAsianRune port the Util.h character
+// predicates (Util.h:109-166; isCyrillicRune already lives in
+// characters.go) used by isValidString's
+// strictMask==0 branch (ObjectMgr.cpp:8563-8571): at the
+// CONFIG_STRICT_PET_NAMES default of 0 (World.cpp:802) every rune of the
+// name must be extended-Latin, or every rune Cyrillic, or every rune
+// East-Asian — a mixed-script name answers PET_NAME_MIXED_LANGUAGES.
+func isExtendedLatinRune(r rune) bool {
+	if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+		return true
+	}
+	if (r >= 0x00C0 && r <= 0x00D6) || (r >= 0x00D8 && r <= 0x00DE) {
+		return true
+	}
+	if r == 0x00DF {
+		return true
+	}
+	if (r >= 0x00E0 && r <= 0x00F6) || (r >= 0x00F8 && r <= 0x00FE) {
+		return true
+	}
+	if r >= 0x0100 && r <= 0x012F {
+		return true
+	}
+	return r == 0x1E9E
+}
+
+func isEastAsianRune(r rune) bool {
+	if r >= 0x1100 && r <= 0x11F9 {
+		return true
+	}
+	if r >= 0x3041 && r <= 0x30FF {
+		return true
+	}
+	if r >= 0x3131 && r <= 0x318E {
+		return true
+	}
+	if r >= 0x31F0 && r <= 0x31FF {
+		return true
+	}
+	if r >= 0x3400 && r <= 0x4DB5 {
+		return true
+	}
+	if r >= 0x4E00 && r <= 0x9FC3 {
+		return true
+	}
+	if r >= 0xAC00 && r <= 0xD7A3 {
+		return true
+	}
+	return r >= 0xFF01 && r <= 0xFFEE
+}
+
+func isValidPetNameCharset(name string) bool {
+	allLatin, allCyrillic, allEastAsian := true, true, true
+	for _, r := range name {
+		if !isExtendedLatinRune(r) {
+			allLatin = false
+		}
+		if !isCyrillicRune(r) {
+			allCyrillic = false
+		}
+		if !isEastAsianRune(r) {
+			allEastAsian = false
+		}
+	}
+	return allLatin || allCyrillic || allEastAsian
+}
+
 // checkPetName mirrors the portable core of ObjectMgr::CheckPetName
 // (ObjectMgr.cpp:8642): utf8 validity, MAX_PET_NAME (12) and MinPetName (2,
-// World.cpp:818 config default) bounds, and the reserved_name list C++ loads
-// from the characters DB (ObjectMgr.cpp:8482). The ValidateName profanity and
-// strict-mask checks have no Go bridge (no name-validation DB model).
+// World.cpp:818 config default) bounds, the strictMask==0 charset check
+// (PET_NAME_MIXED_LANGUAGES), and the reserved_name list C++ loads from the
+// characters DB (ObjectMgr.cpp:8482). The ValidateName profanity DBC checks
+// have no Go bridge (no name-validation DBC model).
 func (s *session) checkPetName(ctx context.Context, name string) uint32 {
 	if !utf8.ValidString(name) {
 		return petNameInvalid
@@ -3695,13 +3855,38 @@ func (s *session) checkPetName(ctx context.Context, name string) uint32 {
 	if len([]rune(name)) < 2 {
 		return petNameTooShort
 	}
+	if !isValidPetNameCharset(name) {
+		return petNameMixedLang
+	}
 	if s != nil && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		var n int64
-		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", name).Scan(&n); err == nil && n > 0 {
+		// ObjectMgr::IsReservedName (ObjectMgr.cpp:8515-8523) lowercases
+		// both sides (wstrToLower) before the lookup; LOWER() on both sides
+		// is the equivalent here.
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE LOWER(name) = LOWER(?)", name).Scan(&n); err == nil && n > 0 {
 			return petNameReserved
 		}
 	}
 	return petNameSuccess
+}
+
+// checkPetDeclinedNames ports the effective behavior of
+// ObjectMgr::CheckDeclinedNames (ObjectMgr.cpp:8808-8829): because
+// GetMainPartOfName (Util.cpp:466-518) is an identity for real names (its
+// ending table's embedded nulls defeat the suffix strip — see the
+// handlePetRename comment), the x and y accumulators reduce to the same
+// condition: every declined form must equal the base name, and every form
+// must be valid UTF-8 (C++ returns false on Utf8toWStr failure). This is
+// deliberately stricter than characters.go's checkDeclinedNames, whose
+// table strips endings the C++ table never strips — the pet path follows
+// the C++ text exactly.
+func checkPetDeclinedNames(base string, declined [5]string) bool {
+	for i := 0; i < 5; i++ {
+		if !utf8.ValidString(declined[i]) || declined[i] != base {
+			return false
+		}
+	}
+	return true
 }
 
 // sendPetNameInvalid mirrors WorldSession::SendPetNameInvalid
@@ -3750,6 +3935,13 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	if cdb == nil {
 		return true
 	}
+	// PetHandler.cpp:515-518: the whole mutation block runs inside the loop
+	// over same-entry alive controlled units — an empty list (pet dead or
+	// despawned) is a complete no-op, so the packet drops here.
+	motion := s.controlledPetMotion(petGUID)
+	if motion == nil || motion.Health == 0 {
+		return true
+	}
 
 	var existingAbdata string
 	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(abdata, '') FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&existingAbdata)
@@ -3763,13 +3955,27 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		actType uint8
 		action  uint32
 	}
+	const (
+		petActCommand  uint8 = 0x07
+		petActReaction uint8 = 0x06
+		petActEnabled  uint8 = 0xC1
+		petActDisabled uint8 = 0x81
+		petActPassive  uint8 = 0x01
+	)
+
 	slots := make([]actionSlot, 10)
-	slots[0] = actionSlot{actType: 0x07, action: 2} // Attack
-	slots[1] = actionSlot{actType: 0x07, action: 1} // Follow
-	slots[2] = actionSlot{actType: 0x07, action: 0} // Stay
-	slots[7] = actionSlot{actType: 0x06, action: 2} // Aggressive
-	slots[8] = actionSlot{actType: 0x06, action: 1} // Defensive
-	slots[9] = actionSlot{actType: 0x06, action: 0} // Passive
+	slots[0] = actionSlot{actType: petActCommand, action: 2}  // Attack
+	slots[1] = actionSlot{actType: petActCommand, action: 1}  // Follow
+	slots[2] = actionSlot{actType: petActCommand, action: 0}  // Stay
+	slots[7] = actionSlot{actType: petActReaction, action: 2} // Aggressive
+	slots[8] = actionSlot{actType: petActReaction, action: 1} // Defensive
+	slots[9] = actionSlot{actType: petActReaction, action: 0} // Passive
+	// CharmInfo::InitPetActionBar (Unit.cpp:9948-9950): the middle 4 slots
+	// default to ACT_PASSIVE, not the zero value — a first-ever set-action
+	// with missing/malformed abdata must seed "1 0" there like C++.
+	for i := 3; i < 7; i++ {
+		slots[i] = actionSlot{actType: petActPassive, action: 0}
+	}
 
 	if existingAbdata != "" {
 		tokens := strings.Fields(existingAbdata)
@@ -3798,14 +4004,6 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		aAction := data & 0x00FFFFFF
 		pairs = append(pairs, petSetActionPair{pos: pos, actType: aType, action: aAction})
 	}
-
-	const (
-		petActCommand  uint8 = 0x07
-		petActReaction uint8 = 0x06
-		petActEnabled  uint8 = 0xC1
-		petActDisabled uint8 = 0x81
-		petActPassive  uint8 = 0x01
-	)
 
 	// PetHandler.cpp:494-501: command and reaction buttons can only be MOVED,
 	// not removed — at moving count == 2, at removing count == 1, so a
@@ -3838,7 +4036,6 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	// PetHandler.cpp:547-551: a spell-type button (en/disable/cast) whose
 	// action the pet does not know is skipped entirely — no bar entry, no
 	// autocast toggle.
-	motion := s.controlledPetMotion(petGUID)
 	for _, p := range pairs {
 		if p.action != 0 && (p.actType == petActEnabled || p.actType == petActDisabled || p.actType == petActPassive) && !s.petKnowsSpell(ctx, motion, p.action) {
 			continue
@@ -3848,8 +4045,11 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		// Synchronize pet_spell table when spell action buttons change active state
 		petNumber := s.petNumberForGUID(petGUID)
 		if p.action > 0 && petNumber > 0 {
-			if p.actType == 0xC1 { // ACT_ENABLED (autocast enabled)
-				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 1 WHERE guid = ? AND spell = ?", petNumber, p.action)
+			if p.actType == petActEnabled { // ACT_ENABLED (autocast enabled)
+				// Pet::ToggleAutocast (Pet.cpp:1808-1824): pet_spell.active
+				// stores the ActiveStates byte (ACT_ENABLED 0xC1 /
+				// ACT_DISABLED 0x81), persisted verbatim (Pet.cpp:1194-1196).
+				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", petActionEnabled, petNumber, p.action)
 				// PetHandler.cpp:553-577: the set-action path runs the same
 				// ToggleAutocast arms as the autocast opcode, so the live
 				// motion's autocast list follows the bar immediately — the
@@ -3857,8 +4057,8 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 				if s.server != nil {
 					s.server.onPetToggleAutocast(s.player.Map, s.player.InstanceID, petGUID, p.action, true)
 				}
-			} else if p.actType == 0x81 { // ACT_DISABLED (autocast disabled)
-				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 0 WHERE guid = ? AND spell = ?", petNumber, p.action)
+			} else if p.actType == petActDisabled { // ACT_DISABLED (autocast disabled)
+				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", petActionDisabled, petNumber, p.action)
 				if s.server != nil {
 					s.server.onPetToggleAutocast(s.player.Map, s.player.InstanceID, petGUID, p.action, false)
 				}
@@ -3935,11 +4135,10 @@ func (s *session) syncPetSpellAutocast(ctx context.Context, petID uint32, spellI
 // handlePetSpellAutocast processes CMSG_PET_SPELL_AUTOCAST (0x2F3).
 // Reference: WorldSession::HandlePetSpellAutocastOpcode (PetHandler.cpp:694).
 func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bool {
-	if len(payload) < 13 {
-		return true
-	}
+	// PetPackets.cpp:37: the pet GUID rides packed on the wire (2-9 bytes),
+	// then the u32 spell id and the u8 autocast flag.
 	r := protocol.NewReader(payload)
-	petGUID, err := r.ReadU64()
+	petGUID, err := r.ReadPackedGUID()
 	if err != nil {
 		return true
 	}
@@ -3951,34 +4150,63 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 	if err != nil {
 		return true
 	}
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return true
+	}
+	// PetHandler.cpp:697-714: an unresolvable GUID, or one that isn't the
+	// player's guardian pet or charmed creature, drops silently. The
+	// pet-number gate admits the session's pet; charmed creatures have no
+	// spell-bar model in Go, so their ToggleCreatureAutocast arm is a
+	// documented delta.
 	petNumber := s.petNumberForGUID(petGUID)
-	// PetHandler.cpp:709-727: C++ returns without touching pet_spell/abdata
-	// when the spell info is missing (GetSpellInfo), the pet hasn't learned
-	// the spell (Unit::HasSpell), or the spell is not autocastable
-	// (SpellInfo::IsAutocastable: passive or SPELL_ATTR1_UNAUTOCASTABLE_BY_PET,
-	// the two flags petSpellPassive/petSpellNoAutocast mirror). The
-	// pet-number gate above already enforces the guardian-pet/charmed
-	// ownership check (petNumberForGUID only resolves the session's pet);
-	// charmed creatures have no CharmInfo model in Go, so the
-	// ToggleCreatureAutocast arm is unreachable and stays undocumented.
-	if petNumber != 0 && s != nil && s.server != nil && s.server.Data != nil {
-		spell, found, spellErr := s.server.Data.Spell(spellID)
-		motion := s.controlledPetMotion(petGUID)
+	addressed := s.controlledPetMotion(petGUID)
+	if petNumber == 0 || addressed == nil {
+		return true
+	}
+	spell, found, spellErr := s.server.Data.Spell(spellID)
+	// PetHandler.cpp:711-714 + SpellInfo::IsAutocastable (SpellInfo.cpp:1101):
+	// a missing spell or a passive / SPELL_ATTR1_UNAUTOCASTABLE_BY_PET spell
+	// drops silently (petSpellPassive/petSpellNoAutocast mirror the flags).
+	if spellErr != nil || !found || spell.Attributes&petSpellPassive != 0 || spell.AttributesEx&petSpellNoAutocast != 0 {
+		return true
+	}
+	// PetHandler.cpp:716-741: the toggle fans out to every alive controlled
+	// unit sharing the addressed pet's entry (e.g. both Spirit Wolves); the
+	// loop aborts the whole handler — earlier units keep their toggles —
+	// when any iterated unit hasn't learned the spell (the CharmInfo-missing
+	// return is vacuous in Go's motion model). A dead addressed pet leaves
+	// the list empty: no-op, no DB write.
+	s.server.motionMu.Lock()
+	var units []*creatureMotion
+	for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if m == nil || m.Entry != addressed.Entry || m.Health == 0 ||
+			(m.OwnerGUID != s.playerGUID && m.CharmerGUID != s.playerGUID) {
+			continue
+		}
 		hasSpell := false
-		if motion != nil {
-			for _, sp := range motion.Spells {
-				if sp == spellID {
-					hasSpell = true
-					break
-				}
+		for _, sp := range m.Spells {
+			if sp == spellID {
+				hasSpell = true
+				break
 			}
 		}
-		if spellErr != nil || !found || motion == nil || !hasSpell ||
-			spell.Attributes&petSpellPassive != 0 || spell.AttributesEx&petSpellNoAutocast != 0 {
+		if !hasSpell {
+			s.server.motionMu.Unlock()
 			return true
 		}
+		units = append(units, m)
 	}
-	s.syncPetSpellAutocast(ctx, petNumber, spellID, state)
+	s.server.motionMu.Unlock()
+	for _, m := range units {
+		// Pet::ToggleAutocast persists (pet_spell + bar); the non-Pet arm
+		// (CharmInfo::ToggleCreatureAutocast) is in-memory only, so siblings
+		// without a pet number take the live toggle alone.
+		if m.GUID == petGUID {
+			s.syncPetSpellAutocast(ctx, petNumber, spellID, state)
+		} else {
+			s.server.onPetToggleAutocast(s.player.Map, s.player.InstanceID, m.GUID, spellID, state != 0)
+		}
+	}
 	s.debug("pet spell autocast", "account", s.accountName, "pet", petNumber, "spell", spellID, "state", state)
 	return true
 }
@@ -4185,10 +4413,16 @@ func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []by
 	for i := uint32(0); i < talentCount && i < maxPreviewPetTalents && r.Remaining() >= 8; i++ {
 		talentID, _ := r.ReadU32()
 		rank, _ := r.ReadU32()
-		s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank)
+		// Pet::learnSpell (Pet.cpp:1486-1497) answers SMSG_PET_LEARNED_SPELL
+		// and runs PetSpellInitialize (SMSG_PET_SPELLS) per learned spell;
+		// learnPetTalent already sends the learned packet, so the spells
+		// packet follows each successful learn like the single-learn path.
+		if s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank) {
+			s.sendPetSpells(ctx, petNumber, 0, 1)
+		}
 	}
-	// PetHandler.cpp:882 — the C++ handler learns the talents and answers
-	// SendTalentsInfoData(true) only; it never sends pet spells here.
+	// PetHandler.cpp:882: SendTalentsInfoData(true) runs unconditionally
+	// after the loop, even when nothing was learned.
 	s.sendTalentsInfo(true)
 	s.debug("pet preview talents learned", "account", s.accountName, "pet", petGUID, "count", talentCount)
 	return true
