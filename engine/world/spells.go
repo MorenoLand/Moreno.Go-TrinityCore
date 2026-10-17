@@ -10408,10 +10408,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// already ran ahead of the effects.
 				swiftmend := eff.Effect == 10 && spell.TargetAuraState == auraStateSwiftmend
 				// Same CalcDamageMultiplier arm as the damage loop above:
-				// the multiplier scales healing too (Spell.cpp:7772).
+				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7771-7774) runs
+				// HandleEffects (Done/Taken bonuses into m_healing) FIRST and
+				// then multiplies the bonused m_healing by the chain falloff,
+				// so the spellpower bonus scales per jump too — the chain
+				// scaling rides executeSpellHealDoneBonus post-Taken, not the
+				// pre-bonus base here.
 				chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 				for _, effectTarget := range hitTargets {
-					targetHeal := chainScaledAmount(heal, chainMult, chainJumpIndex[effectTarget])
+					targetHeal := heal
 					if eff.Effect == spellEffectHealPct {
 						// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
 						// the effect value is a percentage of the TARGET's
@@ -10444,7 +10449,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							}
 						}
 					}
-					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, targetHeal, effectIndex, doneBonus, 0)
+					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, targetHeal, effectIndex, doneBonus, 0, chainMult, chainJumpIndex[effectTarget])
 					// Spell::EffectHeal (SpellEffects.cpp:1468-1470): the
 					// Grievous Bite (48920) removal arm lives in EffectHeal
 					// (10) only — EffectHealPct (136), EffectHealMechanical
@@ -10471,7 +10476,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
 						continue
 					}
-					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, mechHeal, effectIndex, true, 0)
+					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, mechHeal, effectIndex, true, 0, 1.0, 0)
 				}
 			case spellEffectEnergize:
 				// Spell::EffectEnergize (SpellEffects.cpp:1775-1845) — audited;
@@ -10944,10 +10949,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			case spellEffectCreateTamedPet: // 153: SPELL_EFFECT_CREATE_TAMED_PET (EffectCreateTamedPet, SpellEffects.cpp:5362)
-				// CreateTamedPetFrom (new wild-creature-to-pet conversion +
-				// talent init + DB save) has no Go model — existing pets are
-				// only manipulated, never created from a creature entry.
-				// Documented no-bridge.
+				// The pet is created from the effect's MiscValue creature
+				// entry (Unit::CreateTamedPetFrom, Unit.cpp:11103) — the
+				// wild-creature target of effect 150 plays no role here.
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleCreateTamedPet(effCtx, spellID, effectTarget, eff)
+				}
 			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
 				if primaryLive {
 					s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
@@ -15956,6 +15966,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			continue
 		}
 		hasExplicitEffects = true
+		// Spell::HandleLaunchPhase (Spell.cpp:3465, 7685-7694): the
+		// whole-spell SPELL_EFFECT_HANDLE_LAUNCH arm fires per effect in
+		// effect order before any per-target handling. Triggered casts
+		// reach HandleLaunchPhase too (Spell::prepare's TRIGGERED_CAST_
+		// DIRECTLY fast path -> cast -> _cast, Spell.cpp:3172), so the arm
+		// fires here on the triggered path as well — it was previously
+		// missing, and the per-target loop below misfired its logic per
+		// target. The helper self-gates on the needs-caster rule (969).
+		s.triggerLaunchSpellEffectIndex(ctx, spell, spellID, spellTarget, eff)
 		// Spell::SelectEffectTypeImplicitTargets special case (Spell.cpp:1708-1746):
 		// effects 85 (SUMMON_PLAYER) and 152 (SUMMON_RAF_FRIEND) target the
 		// caster's *selection*, never the wire target, and run once per effect.
@@ -16172,7 +16191,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if healAmount == 0 && spellID == ProcSpellCrusader {
 					healAmount = 100
 				}
-				s.executeSpellHeal(ctx, effectTarget, spellID, chainScaledAmount(healAmount, chainMult, jumpIndex), effectIndex, inheritCritBase)
+				s.executeSpellHeal(ctx, effectTarget, spellID, healAmount, effectIndex, inheritCritBase, chainMult, jumpIndex)
 			} else if eff.Effect == spellEffectEnergize {
 				// Spell::EffectEnergize per-target legs (power-type gate,
 				// per-spell adjustments) ride energizeEffectTarget on the
@@ -16200,11 +16219,22 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerBurn), burnLog)
 				}
 			} else if eff.Effect == spellEffectTriggerSpell || eff.Effect == spellEffectTriggerSpellWithValue {
-				// Spell::EffectTriggerSpell per-target legs ride
-				// triggerSpellEffectTarget on the triggered path too (the
-				// special cases are per-target LAUNCH_TARGET legs; the
-				// handle-mode split is structural on both paths).
-				s.triggerSpellEffectTarget(ctx, spellID, spell, eff, effectTarget)
+				// Spell::EffectTriggerSpell SPELL_EFFECT_HANDLE_LAUNCH_
+				// TARGET (SpellEffects.cpp:961-966): the per-target leg fires
+				// only when the triggered spell needs to be triggered by the
+				// caster. Trigger effects that fire once per cast ride the
+				// whole-spell LAUNCH arm above (966-985); without the gate a
+				// non-needs-caster trigger fired once per target instead of
+				// once per cast.
+				firesPerTarget := false
+				if s.server != nil && s.server.Data != nil {
+					if triggered, found, err := s.server.Data.Spell(eff.TriggerSpell); err == nil && found {
+						firesPerTarget = spellNeedsToBeTriggeredByCaster(triggered, spell)
+					}
+				}
+				if firesPerTarget {
+					s.triggerSpellEffectTarget(ctx, spellID, spell, eff, effectTarget)
+				}
 			} else if eff.Effect == spellEffectTriggerMissile || eff.Effect == spellEffectTriggerMissileWithValue {
 				// Spell::EffectTriggerMissileSpell per-target legs ride
 				// runTriggerMissileEffect on the triggered path too (the HIT
@@ -17458,7 +17488,7 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 		} else {
 			addhealth = s.player.MaxHealth - s.player.Health
 		}
-		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0, 0)
+		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0, 0, 1.0, 0)
 		return
 	}
 	if s.server == nil {
@@ -17474,7 +17504,7 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 		} else {
 			addhealth = target.player.MaxHealth - target.player.Health
 		}
-		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0, 0)
+		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0, 0, 1.0, 0)
 		return
 	}
 	if creature, ok := s.getCombatTarget(ctx, targetGUID); ok && creature.Health > 0 {
@@ -17538,8 +17568,8 @@ func (s *session) effectTargetMaxHealth(ctx context.Context, targetGUID uint64) 
 	return 0
 }
 
-func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int, inheritCritBase float64) {
-	s.executeSpellHealDoneBonus(ctx, targetGUID, spellID, heal, effIndex, true, inheritCritBase)
+func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int, inheritCritBase float64, chainMult float64, chainJump int) {
+	s.executeSpellHealDoneBonus(ctx, targetGUID, spellID, heal, effIndex, true, inheritCritBase, chainMult, chainJump)
 }
 
 // hasAuraOfType reports whether the session carries an active aura whose
@@ -17699,7 +17729,7 @@ func (s *session) removeGrievousBiteIfFullyHealed(targetGUID uint64) {
 // Spell::EffectHeal (SpellEffects.cpp:1423-1462) skips that leg on its path
 // (the else-if chain never reaches SpellHealingBonusDone), so the Swiftmend
 // dispatch passes doneBonus=false; every other caller passes true.
-func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int, doneBonus bool, inheritCritBase float64) {
+func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int, doneBonus bool, inheritCritBase float64, chainMult float64, chainJump int) {
 	if s.player == nil {
 		return
 	}
@@ -17749,6 +17779,12 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// (Spell.cpp:2500-2515). Direct heals are HEAL type, so the MOD_HOT_PCT
 	// leg is off (dotType=false).
 	heal = s.healingTakenBonus(targetSess, s.playerGUID, spellID, heal, false)
+
+	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7771-7774): the chain
+	// falloff multiplies the post-Done/post-Taken m_healing (pre-crit,
+	// pre-absorb). chainScaledAmount no-ops at jump 0, matching C++'s
+	// 1.0 seed for the primary target.
+	heal = chainScaledAmount(heal, chainMult, chainJump)
 
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem).
 	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7788): the
@@ -32072,7 +32108,7 @@ func (s *session) channelTick() {
 			if targetGUID != 0 && targetGUID != s.playerGUID {
 				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount, effectIndex)
 			} else {
-				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex, 0)
+				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex, 0, 1.0, 0)
 			}
 		}
 	}
@@ -34786,6 +34822,20 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	if eff.ItemType == 0 {
 		return
 	}
+	// Spell::DoCreateItem (SpellEffects.cpp:1570-1575): a missing item
+	// template errors out with EQUIP_ERR_ITEM_NOT_FOUND. Go previously
+	// created the item anyway with a stackable=1 fallback.
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var maxStack int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1) FROM item_template WHERE entry = ? LIMIT 1", eff.ItemType).Scan(&maxStack); err != nil {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return
+	}
+	if maxStack < 1 {
+		maxStack = 1
+	}
 	playerGUID := targetGUID
 	if playerGUID == 0 {
 		playerGUID = s.playerGUID
@@ -34801,6 +34851,13 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	count := eff.CalcValueForLevel(spell, createCasterLevel)
 	if count < 1 {
 		count = 1
+	}
+	// Spell::DoCreateItem (SpellEffects.cpp:1593-1594): num_to_add is
+	// clamped to the template's max stack size before the extra-item
+	// multiply below. Go previously carried an over-large count through
+	// (visible on triggered crafts that skip the cast-time clamp).
+	if count > int32(maxStack) {
+		count = int32(maxStack)
 	}
 	// Spell::DoCreateItem (SpellEffects.cpp:1552-1625): gem perfection
 	// (CanCreatePerfectItem, SkillExtraItems.cpp:202) swaps the created
@@ -34833,6 +34890,7 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	// property (GenerateItemRandomPropertyId). Both land only on the newly
 	// created stacks — a merged partial stack keeps the creator and
 	// property it already had.
+	craftedRandomProperty := uint32(0)
 	if res != nil && !res.IsStack {
 		guids := append([]uint64{res.ItemGUID}, res.ExtraItemGUIDs...)
 		created := make([]uint64, 0, len(guids))
@@ -34853,6 +34911,7 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 					"UPDATE item_instance SET creatorGuid = ? WHERE guid IN ("+placeholders+")", args...)
 			}
 			if propertyID := s.rollCreatedItemRandomProperty(ctx, itemType); propertyID != 0 {
+				craftedRandomProperty = uint32(propertyID)
 				args := make([]interface{}, 0, len(created)+1)
 				args = append(args, propertyID)
 				for _, g := range created {
@@ -34863,6 +34922,13 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 			}
 		}
 	}
+	// Spell::DoCreateItem (SpellEffects.cpp:1666): a successful craft fires
+	// Player::SendNewItem (Player.cpp:14334-14358) — received=1, created=1
+	// (bgType is unmodeled in Go, so every craft counts as created),
+	// chat=1 (C++ default true, Player.h:1155). Go previously landed
+	// crafted items silently. C++ sends one packet per created item when a
+	// craft splits across stacks; Go sends one for the primary stack.
+	s.sendCraftedItemPushResult(playerGUID, res, itemType, uint32(count), craftedRandomProperty)
 	// Spell::DoCreateItem (SpellEffects.cpp:1666): a successful craft grows
 	// the profession skill.
 	s.updateCraftSkill(ctx, spell.ID)
@@ -34874,6 +34940,35 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	if eff.Effect == spellEffectCreateItem {
 		s.sendCreateItemLog(spell.ID, itemType)
 	}
+}
+
+// sendCraftedItemPushResult mirrors Player::SendNewItem
+// (Player.cpp:14334-14358) for the DoCreateItem path: the crafted item is
+// announced with received=1, created=1, sendChatMessage=1 and the rolled
+// random property id. The shared buildItemPushResult hardcodes the
+// (1,0,0) quest/loot flags and drops the property, so crafts need their
+// own builder.
+func (s *session) sendCraftedItemPushResult(playerGUID uint64, res *inventoryStoreResult, itemEntry, count, randomPropertyID uint32) {
+	if res == nil {
+		return
+	}
+	slotForPush := uint32(res.Slot)
+	if res.IsStack {
+		slotForPush = 0xFFFFFFFF
+	}
+	packet := protocol.NewBuffer(48)
+	packet.WriteU64(playerGUID)
+	packet.WriteU32(1)
+	packet.WriteU32(1)
+	packet.WriteU32(1)
+	packet.WriteU8(res.ClientBag)
+	packet.WriteU32(slotForPush)
+	packet.WriteU32(itemEntry)
+	packet.WriteU32(0)
+	packet.WriteI32(int32(randomPropertyID))
+	packet.WriteU32(count)
+	packet.WriteU32(res.InventoryCount)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), packet.Bytes(), true)
 }
 
 // canCreatePerfectItem mirrors CanCreatePerfectItem (SkillExtraItems.cpp:202):
@@ -36366,7 +36461,7 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell
 		// self-heal only lands when the caster is alive — the damage leg
 		// above runs regardless.
 		if s.player != nil && s.player.Health > 0 {
-			s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex, 0)
+			s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex, 0, 1.0, 0)
 		}
 	}
 }

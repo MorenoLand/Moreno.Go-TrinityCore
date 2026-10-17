@@ -92,9 +92,11 @@ func (s *session) petCommandMotion(ts *session) *creatureMotion {
 }
 
 // handlePetCreateCommand is documented-blocked (cs_pet.cpp:78-121): taming
-// the selected creature needs getSelectedCreature plus the taming pipeline
-// (CreatureTemplate family gate, CreateTamedPetFrom, DespawnOrUnsummon,
-// InitTalentForLevel, SavePetToDB, SetMinion, PetSpellInitialize).
+// the selected creature needs getSelectedCreature (selected-unit creature
+// targeting has no Go bridge). The taming pipeline itself is bridged
+// (handleTameCreature/handleCreateTamedPet in pets.go: DespawnOrUnsummon,
+// DB save, SetMinion, PetSpellInitialize; InitTalentForLevel stays
+// unmodeled).
 func (s *session) handlePetCreateCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandPetCreate) {
 		return

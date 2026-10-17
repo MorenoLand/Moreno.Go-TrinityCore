@@ -2090,6 +2090,12 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 	if s.player.PetGUID != 0 {
 		return // already has an active pet
 	}
+	// Unit::InitTamedPet (Unit.cpp:11122-11125): taming fails when the
+	// stable already holds a current or unslotted hunter pet — the old
+	// check covered only the live pet.
+	if s.hasStabledHunterPet(ctx) {
+		return
+	}
 	// Spell::EffectTameCreature (SpellEffects.cpp:2972-2979): the target must
 	// be a non-pet creature.
 	if uint16(targetGUID>>48) != 0xF130 {
@@ -2120,15 +2126,18 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 
 	s.sendDestroyObject(targetGUID, false)
 	if s.server != nil {
+		// Spell::EffectTameCreature (SpellEffects.cpp:2991):
+		// DespawnOrUnsummon removes the creature server-side too — the old
+		// code only sent SMSG_DESTROY_OBJECT and left the motion entry
+		// re-targetable and ticking.
+		s.server.motionMu.Lock()
+		delete(s.server.motionMapLocked(s.player.Map, s.player.InstanceID), targetGUID)
+		s.server.motionMu.Unlock()
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(targetGUID)
 		destroyBuf.WriteU8(0)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), s)
 	}
-
-	var maxPetID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM character_pet").Scan(&maxPetID)
-	newPetID := uint32(maxPetID + 1)
 
 	playerLevel := uint32(s.player.Level)
 	// Spell::EffectTameCreature (SpellEffects.cpp:2994): the tamed pet keeps
@@ -2141,31 +2150,114 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 			petLevel = playerLevel - 5
 		}
 	}
+	s.createTamedPetFromEntry(ctx, cdb, spellID, targetEntry, petLevel)
+}
+
+// createTamedPetFromEntry builds a hunter pet from a creature entry and
+// spawns it, mirroring the pet-creation tail of Unit::CreateTamedPetFrom
+// (Unit.cpp:11103-11120) + Spell::EffectCreateTamedPet (SpellEffects.cpp:
+// 5362-5396): character_pet INSERT (PET_SAVE_AS_CURRENT), pet_spell rows
+// (PetSpellInitialize), family passives, and the world spawn (AddToMap +
+// SetMinion). Shared by the wild-creature tame (effect 150) and the
+// MiscValue-entry pet creation (effect 153).
+func (s *session) createTamedPetFromEntry(ctx context.Context, cdb *sql.DB, spellID, creatureEntry, petLevel uint32) {
+	if cdb == nil {
+		return
+	}
+	var maxPetID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM character_pet").Scan(&maxPetID)
+	newPetID := uint32(maxPetID + 1)
+
 	var modelID uint32
 	var cName string
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && targetEntry != 0 {
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && creatureEntry != 0 {
 		var mID int64
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, modelid1 FROM creature_template WHERE entry = ?", targetEntry).Scan(&cName, &mID)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, modelid1 FROM creature_template WHERE entry = ?", creatureEntry).Scan(&cName, &mID)
 		modelID = uint32(mID)
 	}
 	if cName == "" {
 		cName = "Pet"
 	}
 
-	maxHP, _, maxMP, _ := s.getPetStats(ctx, targetEntry, petLevel, 1, newPetID)
+	maxHP, _, maxMP, _ := s.getPetStats(ctx, creatureEntry, petLevel, 1, newPetID)
 	now := time.Now().Unix()
 
 	_, _ = cdb.ExecContext(ctx,
 		"INSERT INTO character_pet (id, entry, owner, modelid, CreatedBySpell, PetType, level, exp, Reactstate, name, renamed, slot, curhealth, curmana, curhappiness, savetime, abdata) VALUES (?, ?, ?, ?, ?, 1, ?, 0, 1, ?, 0, 0, ?, ?, ?, ?, '')",
-		newPetID, targetEntry, s.playerGUID, modelID, spellID, petLevel, cName, maxHP, maxMP, petTameStartHappiness, now)
+		newPetID, creatureEntry, s.playerGUID, modelID, spellID, petLevel, cName, maxHP, maxMP, petTameStartHappiness, now)
 
-	spells := getPetSpellsForLevel(targetEntry, petLevel)
+	spells := getPetSpellsForLevel(creatureEntry, petLevel)
 	for _, sp := range spells {
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", newPetID, sp.id, sp.active)
 	}
-	s.learnPetFamilyPassives(ctx, newPetID, targetEntry)
+	s.learnPetFamilyPassives(ctx, newPetID, creatureEntry)
 
-	s.spawnPet(ctx, newPetID, targetEntry, cName, petLevel, modelID, maxHP, maxHP, maxMP, maxMP, 1)
+	s.spawnPet(ctx, newPetID, creatureEntry, cName, petLevel, modelID, maxHP, maxHP, maxMP, maxMP, 1)
+}
+
+// hasStabledHunterPet mirrors the InitTamedPet refusal arm
+// (Unit.cpp:11122-11125): taming fails when the stable holds a current
+// (slot 0) or unslotted (slot 100) hunter pet. The live-pet case
+// (PetGUID != 0) is checked by the callers.
+func (s *session) hasStabledHunterPet(ctx context.Context) bool {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	rows, err := s.queryUnslottedStablePets(ctx, cdb)
+	if err == nil {
+		for _, r := range rows {
+			if r.petType == 1 { // HUNTER_PET
+				return true
+			}
+		}
+	}
+	var current int64
+	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&current); err == nil && current > 0 {
+		return true
+	}
+	return false
+}
+
+// handleCreateTamedPet mirrors Spell::EffectCreateTamedPet
+// (SpellEffects.cpp:5362-5396): the unit target must be a hunter player
+// with no current pet; the pet is created from the effect's MiscValue
+// creature entry at the caster's level (Unit::CreateTamedPetFrom,
+// Unit.cpp:11103-11120). The target is session-bound — cross-player
+// targets resolve through findSessionByGUID only when the target's
+// session is live, else the caster's own target arm is the only
+// modelable case.
+func (s *session) handleCreateTamedPet(ctx context.Context, spellID uint32, targetGUID uint64, eff wotlk.SpellEffect) {
+	if s.player == nil || s.player.Class != 3 || targetGUID == 0 || targetGUID != s.playerGUID { // Hunter only
+		return
+	}
+	if s.player.PetGUID != 0 {
+		return
+	}
+	if s.hasStabledHunterPet(ctx) {
+		return
+	}
+	creatureEntry := uint32(0)
+	if eff.MiscValue > 0 {
+		creatureEntry = uint32(eff.MiscValue)
+	}
+	if creatureEntry == 0 {
+		return
+	}
+	// Unit::CreateTamedPetFrom (Unit.cpp:11106-11108): a missing creature
+	// template fails the creation.
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var exists int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&exists); err != nil || exists == 0 {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return
+	}
+	s.createTamedPetFromEntry(ctx, cdb, spellID, creatureEntry, uint32(s.player.Level))
 }
 
 type petFeedState struct {
