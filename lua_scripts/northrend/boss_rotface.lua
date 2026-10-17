@@ -38,8 +38,12 @@
 -- DoCastAOE(SPELL_MUTATED_INFECTION 69674) non-triggered as
 -- self-cast, 14s init on the lua-local hasten machine
 -- (EVENT_HASTEN_INFECTIONS 90s ticks, -2s per tick, min 6s —
--- vexallus local-machine precedent); the Vile Gas DoCast leg is
--- heroic-gated (no IsHeroic bridge).
+-- vexallus local-machine precedent); PORTED (2026-10-17):
+-- EVENT_VILE_GAS — DoCastAOE(SPELL_VILE_GAS_TRIGGER 72285)
+-- non-triggered as self-cast, 22s..27s init / 30s..35s re-arm,
+-- heroic-gated via creature:IsHeroic()
+-- (engine/world/lua_creature_events.go:203) — the 2026-10-14 "no
+-- IsHeroic bridge" claim was stale.
 -- boss_rotface SpellHitTarget — Talk(SAY_SLIME_SPRAY 3) rides the
 -- SPELL_SLIME_SPRAY case of the SpellHitTarget switch — stays out on
 -- trigger-path grounds: the slime-spray cast rides the unported
@@ -85,11 +89,15 @@
 -- SPELL_AWAKEN_PLAGUED_ZOMBIES 71159) non-triggered OUT (summon
 -- leg, :394-400); JustDied cross-AI Talk(SAY_PRECIOUS_DIES 0)
 -- stays (no cross-AI bridge).
--- Re-audit 2026-10-14: EVENT_VILE_GAS DoCastAOE(
+-- Re-audit 2026-10-14 then 2026-10-17: EVENT_VILE_GAS DoCastAOE(
 -- SPELL_VILE_GAS_TRIGGER 72285) non-triggered, 30s..35s re-arm
 -- (:220-222) is pure but HEROIC-GATED (scheduled only
--- `if (IsHeroic())` :117-118; no IsHeroic bridge) — stays OUT;
--- porting unconditionally would cast on normal too (unfaithful).
+-- `if (IsHeroic())` :117-118). The 10-14 claim of "no IsHeroic
+-- bridge" was STALE — creature:IsHeroic() is live on the
+-- event-handler surface (engine/world/lua_creature_events.go:203,
+-- boss_blood_prince_council.lua uses it) — so the arm is now
+-- PORTED with the heroic gate (this run); porting unconditionally
+-- would cast on normal too (unfaithful), so the gate is required.
 -- The 10 spell scripts join the no-SpellScript-bridge queue (the
 -- boss_moragg optic-link precedent): spell_rotface_mutated_infection
 -- Talk(EMOTE_MUTATED_INFECTION 9) is cross-AI Talk riding a
@@ -123,6 +131,7 @@ local SAY_DEATH = 8
 
 local SPELL_GREEN_ABOMINATION = 70001
 local SPELL_MUTATED_INFECTION = 69674
+local SPELL_VILE_GAS_TRIGGER = 72285 -- boss_rotface.cpp:82
 
 local timers = {}
 
@@ -172,6 +181,17 @@ local function onHastenInfections(creature, guid)
     end
 end
 
+-- C++ EVENT_VILE_GAS (:219-222): DoCastAOE(SPELL_VILE_GAS_TRIGGER)
+-- non-triggered -> self-cast (selin_fireheart/mr_smite convention);
+-- heroic-gated: Reset schedules it only `if (IsHeroic())` (:117-118),
+-- so the Lua arm gates on creature:IsHeroic()
+-- (engine/world/lua_creature_events.go:203 — the 2026-10-14 "no
+-- IsHeroic bridge" claim was stale); 22s..27s init, 30s..35s re-arm.
+local function onVileGas(creature, guid)
+    creature:CastSpell(creature, SPELL_VILE_GAS_TRIGGER)
+    schedule(guid, "vile_gas", {30000, 35000}, function() onVileGas(creature, guid) end)
+end
+
 -- C++ boss_rotface::JustEngagedWith:
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
 -- CheckRequiredBosses evade branch (:126-130) has no bridge.
@@ -186,6 +206,9 @@ local function rotfaceJustEngagedWith(event, creature, target)
     infection[guid] = { stage = 0, cooldown = 14000 }
     schedule(guid, "mutated_infection", 14000, function() onMutatedInfection(creature, guid) end)
     schedule(guid, "hasten", 90000, function() onHastenInfections(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "vile_gas", math.random(22000, 27000), function() onVileGas(creature, guid) end)
+    end
 end
 
 -- C++ Reset/JustDied _Reset()/_JustDied() timer machinery —
