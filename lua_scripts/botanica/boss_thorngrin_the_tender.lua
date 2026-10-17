@@ -38,9 +38,9 @@
 -- / Initialize() values (sacrifice 5.7s / hellfire 18s /
 -- enrage 12s / phase1 = true / phase2 = true — the BossAI
 -- ctor DATA_THORNGRIN_THE_TENDER = 2 arm is instance-
--- blocked, unbridgeable; the non-heroic hellfire schedule
--- is modeled — the heroic {17.4s,19.3s} schedule has no
--- difficulty bridge, thespia precedent) + Talk(SAY_AGGRO) +
+-- blocked, unbridgeable; the hellfire schedule is heroic-
+-- gated via creature:IsHeroic() — {17.4s,19.3s} on heroic,
+-- 18s otherwise) + Talk(SAY_AGGRO) +
 -- 1s scheduler pump (a port of UpdateAI in C++ event arm
 -- order — 1s granularity exact for all C++ timers; the
 -- !UpdateVictim early return collapses into the pump; the
@@ -187,13 +187,13 @@ local function combatTick(creature, guid)
     end
 
     -- 2. Hellfire arm: Talk(SAY_CAST_HELLFIRE) +
-    -- TRIGGERED DoCastVictim (C++-exact), re-arm 18s (the
-    -- heroic {17.4s,19.3s} schedule has no difficulty
-    -- bridge, unmodeled).
+    -- TRIGGERED DoCastVictim (C++-exact), re-arm 18s — or
+    -- {17.4s,19.3s} on heroic (C++-exact via
+    -- creature:IsHeroic()).
     if st.hellfire <= 1000 then
         creature:Talk(SAY_CAST_HELLFIRE)
         creature:CastSpell(nil, SPELL_HELLFIRE, true)
-        st.hellfire = 18000
+        st.hellfire = creature:IsHeroic() and (17400 + math.random(0, 1899)) or 18000
     else
         st.hellfire = st.hellfire - 1000
     end
@@ -211,9 +211,9 @@ end
 
 -- C++ ctor / Initialize() values (the whole schedule lands
 -- on OnEnterCombat): sacrifice 5.7s / hellfire 18s /
--- enrage 12s / phase1 = true / phase2 = true (non-heroic
--- hellfire schedule modeled — the heroic {17.4s,19.3s}
--- schedule has no difficulty bridge, thespia precedent).
+-- enrage 12s / phase1 = true / phase2 = true (hellfire
+-- schedule is heroic-gated: {17.4s,19.3s} on heroic,
+-- 18s otherwise).
 -- The C++ JustEngagedWith talks SAY_AGGRO (the BossAI arm is
 -- instance-blocked) — Talk(SAY_AGGRO) (C++-exact).
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 1, function(_, creature)
@@ -221,7 +221,7 @@ RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 1, function(_, creature)
     cancelCombatPump(guid)
     combatStates[guid] = {
         sacrifice = 5700,
-        hellfire = 18000,
+        hellfire = creature:IsHeroic() and (17400 + math.random(0, 1899)) or 18000,
         enrage = 12000,
         phase1 = true,
         phase2 = true,

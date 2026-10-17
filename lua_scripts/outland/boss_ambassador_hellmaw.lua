@@ -70,9 +70,10 @@
 -- EnterEvadeMode gate is unreachable in the Lua combat context
 -- (DoIntro removes the aura pre-combat; the DoAction INTRO leg is
 -- instance-driven, unbridged).
--- STAYS OUT: EVENT_BERSERK — heroic-only (IsHeroic() gate, no
--- heroic bridge), one-shot DoCast(me, SPELL_ENRAGE 34970, triggered),
--- 3min (Reset) — documented-only; DoMeleeAttackIfReady is
+-- STAYS OUT: nothing — the heroic-only EVENT_BERSERK (IsHeroic()
+-- gate via creature:IsHeroic(), one-shot TRIGGERED DoCast(me,
+-- SPELL_ENRAGE 34970), 3min, no re-arm, C++-exact) is modeled
+-- below; DoMeleeAttackIfReady is
 -- engine-driven in Go.
 -- All 4 Talk() calls in the file accounted for (3 ported above +
 -- SAY_INTRO 0 DoAction-driven documented above; SAY_HELP 2 unused).
@@ -85,6 +86,7 @@ local SAY_DEATH = 4
 
 local SPELL_CORROSIVE_ACID = 33551
 local SPELL_FEAR           = 33547
+local SPELL_ENRAGE         = 34970
 
 local timers = {}
 
@@ -143,6 +145,15 @@ local function hellmawEnterCombat(event, creature, target)
     schedule(guid, "fear", {25000, 30000}, function()
         fearTick(creature, guid)
     end)
+    -- C++ EVENT_BERSERK: heroic-only one-shot — TRIGGERED
+    -- DoCast(me, SPELL_ENRAGE 34970), 3min, no re-arm (C++-exact);
+    -- CreateLuaEvent defaults to a one-shot (runtime.go:1120),
+    -- cancelTimers drops it on leave-combat/death.
+    if creature:IsHeroic() then
+        schedule(guid, "berserk", 180000, function()
+            creature:CastSpell(creature, SPELL_ENRAGE, true)
+        end)
+    end
 end
 
 local function hellmawLeaveCombat(event, creature)

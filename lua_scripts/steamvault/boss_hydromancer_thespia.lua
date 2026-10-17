@@ -33,7 +33,8 @@
 -- player in the instance within 30 yd (C++ SelectTarget(Random,
 -- 0, 30.0f, true), netherspite distance-gate convention); nil
 -- pick casts nothing, timer re-arms (C++-exact); the Heroic
--- second cast has no difficulty bridge — unmodeled (below).
+-- second cast is modeled via creature:IsHeroic() (independent
+-- random pick, below).
 -- Lung burst 31481 7s init then {7s,12s} — random alive player
 -- within 40 yd, cast or skip, re-arm (C++-exact). Enveloping
 -- winds 31718 9s init then {10s,15s} — random alive player
@@ -60,9 +61,10 @@
 -- bookkeeping in _Reset/_JustDied/BossAI::JustEngagedWith
 -- skipped; the DATA_ACCESS_PANEL_HYDRO / main-door sequencing
 -- arms live in instance_steam_vault.cpp, which stays blocked on
--- the instance-script model); no difficulty bridge — the
--- IsHeroic() second casts of lightning cloud (25033) and
--- enveloping winds (31718) are unmodeled; no unit-state bridge —
+-- the instance-script model); difficulty is bridged —
+-- creature:IsHeroic() (per-instance difficulty, lua_creature_events.go)
+-- drives the heroic second casts of lightning cloud (25033) and
+-- enveloping winds (31718); no unit-state bridge —
 -- the elemental's UNIT_STATE_CASTING skip arm unmodeled (timer
 -- bookkeeping exact); no SpellScript/AuraScript scripts in this
 -- file.
@@ -145,12 +147,19 @@ local function thespiaTick(creature, guid)
     end
 
     -- Lightning cloud 25033: 15s init then {15s,25s}; nil pick
-    -- casts nothing, timer re-arms (C++-exact). The Heroic
-    -- second cast has no difficulty bridge — unmodeled (header).
+    -- casts nothing, timer re-arms (C++-exact). Heroic second
+    -- cast: independent random pick (C++-exact; IsHeroic is the
+    -- per-instance difficulty bridge, lua_creature_events.go).
     if st.lightningCloud <= 1000 then
         local target = pickRandomPlayerInRange(creature, 30)
         if target then
             creature:CastSpell(target, SPELL_LIGHTNING_CLOUD)
+        end
+        if creature:IsHeroic() then
+            local heroicTarget = pickRandomPlayerInRange(creature, 30)
+            if heroicTarget then
+                creature:CastSpell(heroicTarget, SPELL_LIGHTNING_CLOUD)
+            end
         end
         st.lightningCloud = 15000 + math.random(0, 10000)
     else
@@ -169,11 +178,17 @@ local function thespiaTick(creature, guid)
     end
 
     -- Enveloping winds 31718: 9s init then {10s,15s}; the Heroic
-    -- second cast unmodeled (header).
+    -- second cast uses an independent random pick (C++-exact).
     if st.envelopingWinds <= 1000 then
         local target = pickRandomPlayerInRange(creature, 35)
         if target then
             creature:CastSpell(target, SPELL_ENVELOPING_WINDS)
+        end
+        if creature:IsHeroic() then
+            local heroicTarget = pickRandomPlayerInRange(creature, 35)
+            if heroicTarget then
+                creature:CastSpell(heroicTarget, SPELL_ENVELOPING_WINDS)
+            end
         end
         st.envelopingWinds = 10000 + math.random(0, 5000)
     else

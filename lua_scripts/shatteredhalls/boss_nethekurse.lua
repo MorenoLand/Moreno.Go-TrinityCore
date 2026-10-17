@@ -87,9 +87,9 @@
 -- original-caster args) is unreachable (steamrigger
 -- precedent); npc_lesser_shadow_fissure documented only,
 -- not registered — all four of its AI overrides are empty
--- (ahune bunny empty-skeleton precedent); no difficulty
--- bridge — the H_SPELL_DEATH_COIL 30741 and H_SPELL_SHADOW_
--- SLAM 35953 variants unmodeled (thespia precedent); no
+-- (ahune bunny empty-skeleton precedent); H_SPELL_DEATH_COIL
+-- 30741 / H_SPELL_SHADOW_SLAM 35953 are unused C++ enum
+-- members (both casts are unconditional, C++-exact); no
 -- movement bridge — the AttackStart DoStartNoMovement/
 -- DoStartMovement arms unmodeled (thespia precedent); no
 -- unit-state bridge — the C++ phase-2 branch skips DoMelee
@@ -197,9 +197,8 @@ local function bossTick(creature, guid)
 
         -- Death coil 30500: 20s init then {15s,20s} — same
         -- targeting (C++-exact), nil pick casts nothing,
-        -- re-arm {15s,20s} regardless (C++-exact). The
-        -- heroic 30741 variant has no difficulty bridge
-        -- (thespia precedent).
+        -- re-arm {15s,20s} regardless (C++-exact).
+        -- (H_SPELL 30741 is an unused C++ enum member.)
         if st.deathCoil <= 1000 then
             local players = playersInInstance(creature)
             if #players > 0 then

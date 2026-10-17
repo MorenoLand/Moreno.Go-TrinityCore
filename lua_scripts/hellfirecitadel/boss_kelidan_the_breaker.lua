@@ -30,10 +30,11 @@
 -- C++ timers; the !UpdateVictim early return collapses into the
 -- pump). Pump: the Firenova machine first — while firenova is set
 -- nothing else fires (the C++ early return is C++-exact): fire nova
--- 33132 (H_SPELL_FIRE_NOVA 37371 — no difficulty bridge) 5s after
+-- 33132 (H_SPELL 37371 is an unused C++ enum member — the cast
+-- is unconditional, C++-exact) 5s after
 -- burning nova — triggered DoCastSelf, firenova=false afterwards,
 -- ShadowVolley_Timer=2000 (C++-exact); shadow bolt volley 28599
--- (H_SPELL_SHADOW_BOLT_VOLLEY 40070 — no difficulty bridge): 1s init
+-- (H_SPELL 40070 unused in the C++ — cast unconditional): 1s init
 -- then 5000+rand32()%8000 (C++ {5s,13s}) — non-triggered DoCastSelf
 -- (C++ DoCast(me), C++-exact), re-arm {5s,13s} regardless
 -- (C++-exact); corruption 30938: 5s init then 30000+rand32()%20000
@@ -76,9 +77,9 @@
 -- nova InterruptNonMeleeSpells arms unmodeled (mennu/thespia
 -- precedent); no aura bridge — the burning-nova AddAura(30940)
 -- arm unmodeled (timer bookkeeping exact); no teleport bridge —
--- the heroic DoTeleportAll arm unmodeled; no difficulty bridge —
--- the IsHeroic() arms and H_SPELL_FIRE_NOVA 37371 / H_SPELL_
--- SHADOW_BOLT_VOLLEY 40070 unmodeled (thespia precedent); no
+-- the heroic DoTeleportAll arm unmodeled; the H_SPELL_ variants
+-- 37371/40070 are unused C++ enum members (both casts are
+-- unconditional, C++-exact); no
 -- movement bridge — the JustEngagedWith DoStartMovement arm
 -- unmodeled; SPELL_VORTEX 37370 is an unused enum member —
 -- never referenced in the file (gruul unused-enum precedent).
@@ -134,7 +135,7 @@ local function bossTick(creature, guid)
 
     -- Firenova machine: while firenova is set, nothing else fires
     -- (the C++ early return, C++-exact). Fire nova 33132
-    -- (heroic 37371 — no difficulty bridge): triggered DoCastSelf
+    -- (H_SPELL 37371 unused in the C++): triggered DoCastSelf
     -- (C++ DoCast(me, SPELL_FIRE_NOVA, true), C++-exact),
     -- firenova=false afterwards, ShadowVolley_Timer=2000.
     if st.firenova then

@@ -47,12 +47,12 @@
 --   31472) — unbounded random player; nil target -> no cast
 --   (nefarian randomAlivePlayer convention), non-triggered, init
 --   {20s,30s} -> {20s,30s}.
--- Unmodeled (documented-only, no bridges):
+-- Modeled (creature:IsHeroic() bridge, per-instance difficulty,
+-- lua_creature_events.go):
 -- - EVENT_ATTRACTION (SPELL_ATTRACTION 38540, heroic-only): C++
 --   DoCast(me, 38540), non-triggered, init {25s,35s} -> {25s,35s},
---   scheduled only under IsHeroic(). No heroic/difficulty bridge exists
---   in the Lua API, so the arm is documented, not wired (the standing
---   heroic-unmodeled case).
+--   scheduled only under IsHeroic() (C++-exact).
+-- Unmodeled (documented-only, no bridges):
 -- - MoveInLineOfSight's Time Keeper leg: who->GetTypeId() ==
 --   TYPEID_UNIT (creature, not player) && who->GetEntry() ==
 --   NPC_TIME_KEEPER (17918, the_black_morass.h:57) &&
@@ -161,6 +161,15 @@ local function onArcaneDischarge(creature, guid)
     end)
 end
 
+-- C++ EVENT_ATTRACTION (heroic only): DoCast(me, SPELL_ATTRACTION
+-- 38540), non-triggered, re-arm {25s,35s} (C++-exact).
+local function onAttraction(creature, guid)
+    creature:CastSpell(creature, SPELL_ATTRACTION)
+    schedule(guid, "attraction", math.random(25000, 35000), function()
+        onAttraction(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -174,6 +183,13 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "arcanedischarge", math.random(20000, 30000), function()
         onArcaneDischarge(creature, guid)
     end)
+    -- C++ EVENT_ATTRACTION (heroic only): DoCast(me, 38540),
+    -- non-triggered, init {25s,35s} -> {25s,35s} (C++-exact).
+    if creature:IsHeroic() then
+        schedule(guid, "attraction", math.random(25000, 35000), function()
+            onAttraction(creature, guid)
+        end)
+    end
 end
 
 local function onLeaveCombat(event, creature)

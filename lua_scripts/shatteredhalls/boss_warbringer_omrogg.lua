@@ -92,9 +92,9 @@
 -- relay, and its Reset/JustEngagedWith overrides are empty
 -- (ahune bunny / nethekurse fissure precedent); no threat
 -- bridge — the ResetThreatList/AddThreat arms unmodeled
--- (timer bookkeeping exact); no difficulty bridge — the
--- H_SPELL_BURNING_MAUL 36056 variant unmodeled (thespia
--- precedent); the ScriptData "Heroic enabled. Spell timing
+-- (timer bookkeeping exact); H_SPELL_BURNING_MAUL 36056 is an
+-- unused C++ enum member (the cast is unconditional, C++-
+-- exact); the ScriptData "Heroic enabled. Spell timing
 -- may need additional tweaks" (SD%Complete: 85) is an
 -- upstream caveat, documented, not bridged; no movement
 -- bridge — no movement arms in this file; no SpellScript/
@@ -169,8 +169,7 @@ local function bossTick(creature, guid)
     -- ENRAGE), non-triggered self-cast (C++ DoCast(me), C++-exact),
     -- re-arm
     -- 40000, blastWave = 16000, blastCount = 1 (C++-exact).
-    -- The heroic 36056 variant has no difficulty bridge
-    -- (thespia precedent).
+    -- (H_SPELL 36056 is an unused C++ enum member.)
     if st.burningMaul <= 1000 then
         creature:Talk(EMOTE_ENRAGE)
         creature:CastSpell(creature, SPELL_BURNING_MAUL)

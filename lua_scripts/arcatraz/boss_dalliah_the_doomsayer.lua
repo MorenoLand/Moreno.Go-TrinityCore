@@ -85,9 +85,9 @@
 -- when Dalliah is alive and out of combat; 6s later Dalliah
 -- says SAY_SOCCOTHRATES_DEATH = 7 via the !UpdateVictim arm)
 -- unmodeled — no SetData bridge exists on the shim (see
--- engine/world/lua_creature_events.go); no difficulty bridge
--- — the heroic-only EVENT_SHADOW_WAVE 39016 arm (TRIGGERED
--- DoCastVictim {11s,16s}) unmodeled (thespia precedent); no
+-- engine/world/lua_creature_events.go); the heroic-only
+-- EVENT_SHADOW_WAVE 39016 arm (TRIGGERED DoCastVictim
+-- {11s,16s}) is modeled via creature:IsHeroic(); no
 -- cast-state bridge — the UNIT_STATE_CASTING early-return
 -- gates unmodeled (netherspite precedent); no SpellScript/
 -- AuraScript scripts in this file.
@@ -95,6 +95,7 @@
 local SPELL_GIFT_OF_THE_DOOMSAYER = 36173
 local SPELL_WHIRLWIND = 36142
 local SPELL_HEAL = 36144
+local SPELL_SHADOW_WAVE = 39016
 
 local SAY_AGGRO = 1
 local SAY_SLAY = 2
@@ -130,6 +131,7 @@ local function freshState()
         gift = 1000 + math.random(0, 2999),
         whirlwind = 7000 + math.random(0, 1999),
         heal = nil,
+        shadowWave = nil,
         soccothratesTaunt = false,
     }
 end
@@ -177,6 +179,18 @@ local function bossTick(creature, guid)
         end
     end
 
+    -- Shadow wave 39016 (heroic only): TRIGGERED DoCastVictim
+    -- {11s,16s} init then {11s,16s} (C++-exact); scheduled at
+    -- engage only under IsHeroic() (C++ :92-94).
+    if st.shadowWave then
+        if st.shadowWave <= 1000 then
+            creature:CastSpell(nil, SPELL_SHADOW_WAVE, true)
+            st.shadowWave = 11000 + math.random(0, 4999)
+        else
+            st.shadowWave = st.shadowWave - 1000
+        end
+    end
+
     -- HealthBelowPct(25) latch (halazzi strict-fraction
     -- precedent): the C++ arm fires Talk(SAY_DALLIAH_25_
     -- PERCENT) on Soccothrates' AI via the instance GUID —
@@ -191,6 +205,9 @@ RegisterCreatureEvent(ENTRY_DALLIAH, 1, function(_, creature)
     local guid = creature:GetGUID()
     resetBoss(guid)
     states[guid] = freshState()
+    if creature:IsHeroic() then
+        states[guid].shadowWave = 11000 + math.random(0, 4999)
+    end
     creature:Talk(SAY_AGGRO)
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)

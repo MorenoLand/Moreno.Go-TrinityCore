@@ -42,9 +42,8 @@
 -- early return collapses into the pump). Pump: revenge —
 -- 4s init then 5s, target = victim (C++ GetVictim(), the
 -- nil-fallback in this model, C++-exact), non-triggered
--- DoCast (DUNGEON_MODE normal 19130 — no difficulty bridge,
--- thespia precedent, the H_SPELL_REVENGE 40392 variant
--- unmodeled), re-arm 5000 regardless (C++-exact). Melee is
+-- DoCast (DUNGEON_MODE normal 19130 / heroic 40392 via
+-- creature:IsHeroic()), re-arm 5000 regardless (C++-exact). Melee is
 -- engine-driven.
 -- OnTargetDied(3): Talk(SAY_KILL) gated on the killed unit's
 -- entry not being NPC_VAZRUDEN (C++ `if (who && who->
@@ -65,8 +64,9 @@
 -- shim (instance_hellfire_ramparts.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_VAZRUDEN = 2
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped);
--- no difficulty bridge — SPELL_REVENGE_H 40392 unmodeled
--- (thespia precedent); no despawn bridge — the
+-- difficulty is bridged — creature:IsHeroic() (per-instance
+-- difficulty, lua_creature_events.go) drives the DUNGEON_MODE
+-- spell variants; no despawn bridge — the
 -- DisappearAndDie arm of the UnsummonCheck machine
 -- unmodeled; no SpellScript/AuraScript scripts in this
 -- file.
@@ -116,11 +116,11 @@ local function bossTick(creature, guid)
 
     -- Revenge 19130: 4s init then 5s — non-triggered DoCast
     -- on the victim (C++ GetVictim(), the nil-fallback in
-    -- this model, C++-exact; no difficulty bridge so the
-    -- normal spell is used, thespia precedent), re-arm 5000
+    -- this model, C++-exact; DUNGEON_MODE heroic 40392 via
+    -- creature:IsHeroic()), re-arm 5000
     -- regardless (C++-exact).
     if st.revenge <= 1000 then
-        creature:CastSpell(nil, SPELL_REVENGE)
+        creature:CastSpell(nil, creature:IsHeroic() and SPELL_REVENGE_H or SPELL_REVENGE)
         st.revenge = 5000
     else
         st.revenge = st.revenge - 1000

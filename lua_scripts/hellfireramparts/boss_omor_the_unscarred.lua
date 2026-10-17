@@ -66,13 +66,11 @@
 -- below 20% (C++ HealthBelowPct(20), halazzi strict-fraction
 -- precedent), 1s init then 15s — non-triggered DoCastSelf
 -- (C++-exact), re-arm 15000 (C++-exact; the timer only ticks
--- while the health gate holds); treacherous aura 30695 (heroic
--- 37566 — no difficulty bridge, thespia precedent) — 10s init
+-- while the health gate holds); treacherous aura 30695 — 10s init
 -- then {8s,16s}, Talk(SAY_CURSE), target = random alive player
 -- in the instance, nil pick casts nothing, non-triggered
 -- DoCast on the target (C++-exact), re-arm {8s,16s} only when
--- a target was picked (C++-exact); shadow bolt 30686 (heroic
--- 39297 — no difficulty bridge) — 2s init then {4s,6.5s}: the
+-- a target was picked (C++-exact); shadow bolt 30686 — 2s init then {4s,6.5s}: the
 -- C++ picks SelectTarget(Random, 0) for the null check then
 -- overrides the target to the victim, so the cast lands on the
 -- victim (C++-exact), non-triggered DoCastVictim (felmyst
@@ -106,9 +104,9 @@
 -- documented, not bridged); the IsWithinMeleeRange gate on
 -- orbital strike is approximated with GetDistance <= 5 (no
 -- IsWithinMeleeRange bridge, zuljin precedent); no movement
--- bridge — the SetCombatMovement(false) arm unmodeled; no
--- difficulty bridge — H_SPELL_BANE_OF_TREACHERY 37566 and H_
--- SPELL_SHADOW_BOLT 39297 unmodeled (thespia precedent); no
+-- bridge — the SetCombatMovement(false) arm unmodeled; the
+-- H_SPELL_ variants 37566/39297 are unused C++ enum members
+-- (both casts are unconditional); no
 -- SpellScript/AuraScript scripts in this file.
 
 local SPELL_ORBITAL_STRIKE = 30637
@@ -288,7 +286,7 @@ local function bossTick(creature, guid)
         st.aura = st.aura - 1000
     end
 
-    -- Shadow bolt 30686 (heroic 39297 — no difficulty bridge):
+    -- Shadow bolt 30686 (H_SPELL 39297 unused in the C++):
     -- 2s init then {4s,6.5s} — the C++ picks SelectTarget
     -- (Random, 0) for the null check then overrides the target
     -- to the victim, so the cast lands on the victim (C++-

@@ -30,7 +30,8 @@
 -- thespia precedent), nil pick casts nothing, non-triggered
 -- DoCast on the target (C++ DoCast(target), C++-exact), re-arm
 -- {15s,20s} regardless (C++-exact); shadow bolt 12739
--- (H_SPELL_SHADOW_BOLT 15472 — no difficulty bridge): 1000+
+-- (H_SPELL_SHADOW_BOLT 15472 is an unused C++ enum member —
+-- the cast is unconditional, C++-exact): 1000+
 -- rand32()%1000 init then 5000+rand32()%1000 (C++ {5s,6s}) —
 -- non-triggered DoCastVictim (felmyst convention), re-arm
 -- {5s,6s} regardless (C++-exact).
@@ -49,9 +50,9 @@
 -- REACT_AGGRESSIVE + RemoveFlag(NON_ATTACKABLE) +
 -- SetImmuneToAll(false) + AttackStart(killer)); no unit-state
 -- bridge — the Reset/JustEngagedWith InterruptNonMeleeSpells
--- arms unmodeled (mennu/thespia precedent); no difficulty
--- bridge — H_SPELL_SHADOW_BOLT 15472 unmodeled (thespia
--- precedent); no movement bridge — the JustEngagedWith
+-- arms unmodeled (mennu/thespia precedent); H_SPELL_SHADOW_BOLT
+-- 15472 is an unused C++ enum member (the cast is
+-- unconditional); no movement bridge — the JustEngagedWith
 -- DoStartMovement arm unmodeled.
 
 local SPELL_MARK_OF_SHADOW = 30937
@@ -127,7 +128,7 @@ local function addTick(creature, guid)
         st.markOfShadow = st.markOfShadow - 1000
     end
 
-    -- Shadow bolt 12739 (heroic 15472 — no difficulty bridge):
+    -- Shadow bolt 12739 (H_SPELL 15472 unused in the C++):
     -- 1000+rand32()%1000 init then 5000+rand32()%1000 (C++
     -- {5s,6s}) — non-triggered DoCastVictim (felmyst
     -- convention), re-arm {5s,6s} regardless (C++-exact).

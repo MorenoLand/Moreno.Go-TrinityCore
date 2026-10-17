@@ -53,9 +53,9 @@
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (instance_the_underbog.cpp stays blocked on the
--- instance-script model); no difficulty bridge — the heroic-
--- only spore-strider summon fire arm unmodeled (timer
--- bookkeeping exact); no ObjectAccessor/cross-creature
+-- instance-script model); difficulty is bridged —
+-- creature:IsHeroic() (per-instance difficulty, lua_creature_events.go)
+-- drives the heroic-only spore-strider summon fire arm; no ObjectAccessor/cross-creature
 -- bridge — the whole LevitatedTarget/LevitatedTarget_Timer/
 -- InAir followup machine unmodeled (GetUnit + HasAura +
 -- AddAura(SPELL_SUSPENSION 31719) + triggered CastSpell
@@ -75,6 +75,7 @@
 local SPELL_LEVITATE = 31704
 local SPELL_CHAIN_LIGHTNING = 31717
 local SPELL_STATIC_CHARGE = 31715
+local SPELL_SUMMON_SPORE_STRIDER = 38755
 
 local ENTRY_BLACK_STALKER = 17882
 
@@ -182,11 +183,12 @@ local function bossTick(creature, guid)
     end
 
     -- Spore striders 38755 (ENTRY_SPORE_STRIDER 22299):
-    -- 10000+rand32()%5000 init then 10000+rand32()%5000 —
-    -- timer bookkeeping only: the whole fire arm is
-    -- IsHeroic()-gated and no difficulty bridge exists
-    -- (thespia precedent); re-arm regardless (C++-exact).
-    if st.sporeStriders <= 1000 then
+    -- 10000+rand32()%5000 init then 10000+rand32()%5000 — the
+    -- fire arm is IsHeroic()-gated (C++ :130-134, self-cast,
+    -- non-triggered); the decrement arm runs on all paths
+    -- (C++-exact).
+    if creature:IsHeroic() and st.sporeStriders <= 1000 then
+        creature:CastSpell(creature, SPELL_SUMMON_SPORE_STRIDER)
         st.sporeStriders = 10000 + math.random(0, 4999)
     else
         st.sporeStriders = st.sporeStriders - 1000
