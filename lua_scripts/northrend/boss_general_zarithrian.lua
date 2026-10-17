@@ -58,27 +58,25 @@
 -- DoCastVictim(SPELL_CLEAVE_ARMOR 74367) now ported (roarTick /
 -- cleaveTick, 2026-10-13); DoMeleeAttackIfReady has no melee-model
 -- bridge.
--- npc_onyx_flamecaller (NPC_ONYX_FLAMECALLER = 39814) — zero Talk
--- lines in the file — NOT registered (the bronjahm
--- npc_corrupted_soul_fragment precedent: the add never spawns in-engine
--- because its only summon path is the unbridged stalker
--- CastSpell(SPELL_SUMMON_FLAMECALLER 74398) legs
--- (instance->GetGuidData(DATA_ZARITHRIAN_SPAWN_STALKER_*), no instance
--- bridge)). Its timer arms are bridgeable and documented here for the
--- day the summon path lands: JustEngagedWith seeds EVENT_BLAST_NOVA
--- 17s + EVENT_LAVA_GOUT 3s (:200-204); BLAST_NOVA 74392 —
--- DoCastAOE = self-cast `CastSpell(creature, 74392)` (non-triggered,
--- :226-229), Repeat(15s, 20s); LAVA_GOUT 74394 — DoCastVictim =
--- `CastSpell(nil, 74394)` (non-triggered, :246-256) with the 3-cast
--- latch (_lavaGoutCount >= 3 -> reset + 8s re-arm; else cast, count++,
--- 1s re-arm). NOT portable: Reset MoveAlongSplineChain
--- (POINT_GENERAL_ROOM) (no-motion-master bridge), MovementInform
--- DoZoneInCombat (no-movement-inform bridge), IsSummonedBy
--- zarithrian->AI()->JustSummoned(me) (no cross-AI-summon bridge).
+-- npc_onyx_flamecaller (NPC_ONYX_FLAMECALLER = 39814) — REGISTERED
+-- (entry-verifiable, ruby_sanctum.h:73 — the bronjahm
+-- not-registered verdict is superseded: C++ AddSC registers the
+-- script and a spawned 39814 gets this AI in Go too; dormant
+-- in-engine until the stalker summon path lands): JustEngagedWith
+-- seeds EVENT_BLAST_NOVA 17s + EVENT_LAVA_GOUT 3s (ported below);
+-- BLAST_NOVA 74392 — DoCastAOE = self-cast (non-triggered),
+-- Repeat(15s, 20s); LAVA_GOUT 74394 — DoCastVictim (non-triggered)
+-- with the 3-cast latch (_lavaGoutCount >= 3 -> reset + 8s re-arm;
+-- else cast, count++, 1s re-arm); zero Talk lines; Reset's
+-- MoveAlongSplineChain (POINT_GENERAL_ROOM) (no-motion-master
+-- bridge), MovementInform DoZoneInCombat (no-movement-inform
+-- bridge), IsSummonedBy zarithrian->AI()->JustSummoned(me) (no
+-- cross-AI-summon bridge) stay out.
 -- All 4 Talk() calls in the file accounted for and ported
 -- (SAY_AGGRO 0 + SAY_KILL 1 + SAY_ADDS 2 + SAY_DEATH 3).
 
 local ENTRY_GENERAL_ZARITHRIAN = 39746
+local ENTRY_ONYX_FLAMECALLER = 39814
 
 local SAY_AGGRO = 0
 local SAY_KILL  = 1
@@ -87,6 +85,8 @@ local SAY_DEATH = 3
 
 local SPELL_CLEAVE_ARMOR    = 74367
 local SPELL_INTIMIDATING_ROAR = 74384
+local SPELL_BLAST_NOVA      = 74392
+local SPELL_LAVA_GOUT       = 74394
 
 local timers = {}
 
@@ -201,3 +201,80 @@ RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 2, zarithrianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 3, zarithrianKilledUnit)
 RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 4, zarithrianDied)
 RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 23, zarithrianReset)
+
+-- npc_onyx_flamecaller (C++-exact for all bridgeable arms): the
+-- entry-verifiable (39814, ruby_sanctum.h:73) add AI is REGISTERED —
+-- the "not registered because it never spawns (bronjahm precedent)"
+-- verdict is superseded by the strip rule that hunts
+-- unregistered-but-ported scripts; C++ AddSC registers it and a
+-- spawned 39814 gets this AI in Go too. Dormant in-engine until the
+-- stalker summon path lands (unchanged). Zero Talk lines in C++.
+local flamecallerState = {}
+
+local function flamecallerCancel(guid)
+    cancelTimers(guid)
+    flamecallerState[guid] = nil
+end
+
+-- C++ EVENT_BLAST_NOVA (:226-229): DoCastAOE(SPELL_BLAST_NOVA 74392)
+-- non-triggered self-cast; Repeat(15s, 20s).
+local function flamecallerBlastNovaTick(creature, guid)
+    creature:CastSpell(creature, SPELL_BLAST_NOVA)
+    schedule(guid, "blast_nova", {15000, 20000}, function()
+        flamecallerBlastNovaTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_LAVA_GOUT (:246-256): _lavaGoutCount >= 3 -> count = 0 +
+-- Repeat(8s); else DoCastVictim(SPELL_LAVA_GOUT 74394) non-triggered,
+-- count++, Repeat(1s).
+local function flamecallerLavaGoutTick(creature, guid)
+    local st = flamecallerState[guid]
+    if st and st.lavaGout >= 3 then
+        st.lavaGout = 0
+        schedule(guid, "lava_gout", 8000, function()
+            flamecallerLavaGoutTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_LAVA_GOUT)
+    if st then
+        st.lavaGout = st.lavaGout + 1
+    end
+    schedule(guid, "lava_gout", 1000, function()
+        flamecallerLavaGoutTick(creature, guid)
+    end)
+end
+
+-- C++ npc_onyx_flamecaller::JustEngagedWith (:200-204):
+-- ScheduleEvent(EVENT_BLAST_NOVA, 17s) + ScheduleEvent(EVENT_LAVA_GOUT,
+-- 3s). Reset (:195-199): _events.Reset() + _lavaGoutCount = 0 (the
+-- motion/react legs have no bridges).
+local function flamecallerEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    flamecallerState[guid] = { lavaGout = 0 }
+    schedule(guid, "blast_nova", 17000, function()
+        flamecallerBlastNovaTick(creature, guid)
+    end)
+    schedule(guid, "lava_gout", 3000, function()
+        flamecallerLavaGoutTick(creature, guid)
+    end)
+end
+
+local function flamecallerLeaveCombat(event, creature)
+    flamecallerCancel(creature:GetGUID())
+end
+
+local function flamecallerDied(event, creature, killer)
+    flamecallerCancel(creature:GetGUID())
+end
+
+local function flamecallerReset(event, creature)
+    flamecallerCancel(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 1, flamecallerEnterCombat)
+RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 2, flamecallerLeaveCombat)
+RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 4, flamecallerDied)
+RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 23, flamecallerReset)

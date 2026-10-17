@@ -43,10 +43,11 @@
 -- JustEngagedWith (:134-148) — Talk(SAY_AGGRO 0) + DoCast(me,
 -- SPELL_AURA_OF_DESPAIR 62692) 2-arg non-triggered self-cast
 -- (:139) at engage (event 1; the BossAI::JustEngagedWith
--- passthrough, the CheckShamanisticRage (player-shaman
--- SPELL_SHAMANTIC_RAGE 30823 -> SPELL_CORRUPTED_RAGE 68415)
--- map-player-scan leg and the four unbridgeable ScheduleEvent
--- legs have no bridges — the malygos engage-aura precedent).
+-- passthrough, CheckShamanisticRage (PORTED this run —
+-- gal_darah GetPlayersInWorld precedent + player:HasSpell /
+-- player:CastSpell bridges, no longer "no map-player-scan
+-- bridge"), and the four unbridgeable ScheduleEvent legs are
+-- the vapor summon legs — the malygos engage-aura precedent).
 -- EVENT_SURGE_OF_DARKNESS (:188-193) — Talk
 -- (EMOTE_SURGE_OF_DARKNESS 8) + Talk(SAY_SURGE_OF_DARKNESS 2) +
 -- DoCast(me, SPELL_SURGE_OF_DARKNESS 62662) 2-arg non-triggered,
@@ -94,9 +95,9 @@
 -- achievements below); DoAction(ACTION_VAPORS_DIE 1 /
 -- ACTION_ANIMUS_DIE 2 — no DoAction bridge; producers:
 -- npc_saronite_vapors / boss_saronite_animus below).
--- CheckShamanisticRage — HasSpell(SPELL_SHAMANTIC_RAGE)
--- player-scan -> SPELL_CORRUPTED_RAGE — no map-player-scan
--- bridge.
+-- CheckShamanisticRage — PORTED at engage (map-player-scan via
+-- GetPlayersInWorld + map/instance filter -> player:HasSpell
+-- (30823) -> player:CastSpell(player, 68415) non-triggered).
 -- EVENT_SARONITE_VAPORS (:194-208) — DoCast
 -- (SPELL_SUMMON_SARONITE_VAPORS 63081) self-cast (2-arg
 -- DoCast(uint32) resolves SELF — UnitAI.cpp:113), 30s init
@@ -158,6 +159,8 @@ local SPELL_SHADOW_CRASH = 62660
 local SPELL_SEARING_FLAMES = 62661
 local SPELL_MARK_OF_THE_FACELESS = 63276
 local SPELL_BERSERK = 26662
+local SPELL_SHAMANTIC_RAGE = 30823
+local SPELL_CORRUPTED_RAGE = 68415
 
 local timers = {}
 
@@ -277,14 +280,33 @@ local function markOfTheFacelessTick(creature, guid)
     end)
 end
 
+-- C++ CheckShamanisticRage (boss_general_vezax.cpp:244-251): map
+-- player scan -> player:HasSpell(SPELL_SHAMANTIC_RAGE 30823) ->
+-- player:CastSpell(player, SPELL_CORRUPTED_RAGE 68415) 2-arg
+-- non-triggered. The "no map-player-scan bridge" claim is stale —
+-- GetPlayersInWorld + map/instance filter is the in-tree bridge
+-- (gal_darah precedent); player:HasSpell is live
+-- (engine/world/lua_player.go:145) and player:CastSpell is live
+-- (kalecgos precedent). No alive gate — C++-exact (C++ has none).
+local function checkShamanisticRage(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and plr:HasSpell(SPELL_SHAMANTIC_RAGE) then
+            plr:CastSpell(plr, SPELL_CORRUPTED_RAGE)
+        end
+    end
+end
+
 -- C++ JustEngagedWith (:134-148): BossAI passthrough + Talk
 -- (SAY_AGGRO) + DoCast(me, SPELL_AURA_OF_DESPAIR 62692) (:139,
 -- 2-arg non-triggered self-cast) + CheckShamanisticRage +
--- ScheduleEvent legs — only the Talk arm, the engage aura cast
--- and the two bridgeable timer legs are modeled here (event 1).
+-- ScheduleEvent legs — the four unbridgeable ScheduleEvent legs are
+-- the vapor/summon legs below (event 1).
 local function vezaxEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_AURA_OF_DESPAIR)
+    checkShamanisticRage(creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "surge", 60000, function()

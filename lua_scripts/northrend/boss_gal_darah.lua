@@ -84,11 +84,12 @@
 -- (SetGUID leg: ObjectAccessor::GetUnit + _impaledPlayers latch, :147-:155)
 -- — documented-only.
 -- SpellHit(SPELL_TRANSFORM_BACK 55299) -> RemoveAurasDueToSpell(55297)
--- (:177-:181) — the victim-side arm maps to event 14
--- (CREATURE_EVENT_ON_HIT_BY_SPELL; 15 is the caster-side
--- OnSpellHitTarget), which fires in Go, but there is no
--- aura-removal bridge on the Lua surface (aeranas precedent) —
--- documented-only.
+-- (:177-:181) — PORTED: the victim-side arm rides event 14
+-- (CREATURE_EVENT_ON_HIT_BY_SPELL, faerlina precedent) and the aura
+-- removal rides creature:RemoveAura (the drakkari / festergut
+-- RemoveAura bridge — the "no aura-removal bridge (aeranas precedent)"
+-- header claim is stale). The cast of 55299 itself is the transform
+-- tick's DoCast, exactly as in C++.
 -- EnterEvadeMode summons.DespawnAll + _DespawnAtEvade (:111-:115) — no
 -- despawn bridge (terestian precedent) — documented-only.
 -- JustEngagedWith InterruptNonMeleeSpells — no bridge; BossAI
@@ -330,6 +331,17 @@ local function galDarahTargetDied(event, creature, victim)
     end
 end
 
+-- C++ boss_gal_darah::SpellHit (:177-:181): if (spellInfo->Id ==
+-- SPELL_TRANSFORM_BACK 55299) me->RemoveAurasDueToSpell(
+-- SPELL_TRANSFORM_RHINO 55297). Victim-side arm on event 14
+-- CREATURE_EVENT_ON_HIT_BY_SPELL (faerlina precedent); the aura
+-- removal rides creature:RemoveAura (drakkari/festergut idiom).
+local function galDarahSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_TRANSFORM_BACK then
+        creature:RemoveAura(SPELL_TRANSFORM_RHINO)
+    end
+end
+
 local function galDarahDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
@@ -353,4 +365,5 @@ RegisterCreatureEvent(ENTRY_GAL_DARAH, 1, galDarahEnterCombat)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 2, galDarahLeaveCombat)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 3, galDarahTargetDied)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 4, galDarahDied)
+RegisterCreatureEvent(ENTRY_GAL_DARAH, 14, galDarahSpellHit)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 23, galDarahReset)
