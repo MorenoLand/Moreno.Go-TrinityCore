@@ -37,12 +37,11 @@ func isInterruptSpell(spellID uint32) bool {
 
 // getInterruptDuration resolves the lockout duration in milliseconds for an interrupt spell.
 func (s *session) getInterruptDuration(spell wotlk.Spell) uint32 {
+	// SpellInfo::GetDuration (SpellInfo.cpp:3077-3082): the raw Duration column,
+	// absolute value, no per-level scaling — the level-scaled SpellDuration
+	// accessor is the aura-duration path, not this one.
 	if s.server != nil && s.server.Data != nil && spell.DurationIndex > 0 {
-		lvl := uint32(80)
-		if s.player != nil && s.player.Level > 0 {
-			lvl = uint32(s.player.Level)
-		}
-		if dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, lvl); err == nil && ok && dur > 0 {
+		if dur, ok, err := s.server.Data.SpellDurationBase(spell.DurationIndex); err == nil && ok && dur > 0 {
 			return uint32(dur)
 		}
 	}
@@ -346,12 +345,13 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 }
 
 // isSchoolLocked returns true if the spell's school is currently locked out by an interrupt.
-// Mirrors TrinityCore Player::IsSchoolLocked.
+// SpellHistory::IsReady (SpellHistory.cpp:190-199) consults the school lockout only for
+// SPELL_PREVENTION_TYPE_SILENCE spells — pacify and no-prevention spells cast through it.
 func (s *session) isSchoolLocked(spell wotlk.Spell) bool {
 	if spell.SchoolMask == 0 {
 		return false
 	}
-	if spell.PreventionType == spellPreventionTypePacify {
+	if spell.PreventionType != spellPreventionTypeSilence {
 		return false
 	}
 	s.castMu.Lock()

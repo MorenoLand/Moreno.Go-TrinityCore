@@ -7863,8 +7863,8 @@ func (s *session) implicitUnitTargetLOSPasses(spell wotlk.Spell, targetGUID uint
 // SMSG_SPELLLOGMISS carries the spell id, the caster GUID, a zero byte, the
 // target count (always 1 here), and per target the target GUID plus the miss
 // info byte. C++ sends it with SendMessageToSet(&data, true) — the caster's
-// visible set including the caster — so Go broadcasts to nearby sessions and
-// writes the caster's own copy directly.
+// visible set including the caster — so Go fans out to the caster's visibility
+// set and writes the caster's own copy directly.
 func (s *session) sendSpellMiss(targetGUID uint64, spellID uint32, missInfo uint8) {
 	if s == nil || s.server == nil || s.player == nil || targetGUID == 0 {
 		return
@@ -7876,7 +7876,7 @@ func (s *session) sendSpellMiss(targetGUID uint64, spellID uint32, missInfo uint
 	pkt.WriteU32(1)
 	pkt.WriteU64(targetGUID)
 	pkt.WriteU8(missInfo)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGMISS), pkt.Bytes(), s)
+	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGMISS), pkt.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGMISS), pkt.Bytes(), true)
 }
 
@@ -19135,8 +19135,8 @@ func (s *session) sendInterrupted(castID uint8, spellID uint32, result uint8) {
 	// result 0 — the failure reason reaches the caster separately via
 	// SMSG_CAST_FAILED (SendCastResult).
 	payload := protocol.BuildSpellFailure(s.playerGUID, castID, spellID, result)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), payload, s)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), payload, s)
+	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), payload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
+	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), payload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), payload, true)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), payload, true)
 }
@@ -32307,6 +32307,9 @@ func (s *session) delayCurrentCast() {
 	packet := protocol.NewBuffer(8)
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU32(uint32(delayMs))
+	// Spell::Delayed (Spell.cpp:7274-7278): SMSG_SPELL_DELAYED goes to the
+	// caster's set (SendMessageToSet), not the caster alone.
+	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_DELAYED), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_DELAYED), packet.Bytes(), true)
 	s.debug("cast pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delayMs, "count", pushbacks)
 }
