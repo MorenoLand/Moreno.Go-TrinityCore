@@ -35388,6 +35388,11 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 // TriggerSpell at the original caster, triggered (castSpellDirect is
 // Unit::CastSpell triggered). Only player hit targets have a Go cast model;
 // creature targets are documented no-bridge (no creature cast path).
+// 52588/48598: RemoveAura(damage), then the inner switch breaks — the
+// trigger cast still fires (no early continue). 52463/52349 and 72298 ride
+// the triggered twin though C++ casts them non-triggered (no
+// non-triggered forced-cast bridge). FORCE_CAST_WITH_VALUE overrides all
+// three base points (castSpellDirectWithBasePoints).
 func (s *session) handleEffectForceCast(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
@@ -35410,9 +35415,17 @@ func (s *session) handleEffectForceCast(ctx context.Context, spell wotlk.Spell, 
 		if eff.Effect == spellEffectForceCast && damage != 0 {
 			switch spellID {
 			case 52588, 48598: // Skeletal Gryphon Escape / Ride Flamebringer Cue
+				// SpellEffects.cpp:1074-1077: RemoveAura(damage), then the
+				// inner switch BREAKS — the target still casts the
+				// triggered spell at the caster below (no return).
 				targetSess.removeAura(uint32(damage))
-				continue
 			case 52463, 52349: // Hide In Mine Car / Overtake
+				// SpellEffects.cpp:1078-1085: a non-triggered self-cast with
+				// SPELLVALUE_BASE_POINT0=damage and original caster
+				// m_originalCasterGUID, then return. Go's forced-cast twin
+				// is the triggered direct path (no non-triggered
+				// forced-cast bridge, documented); the BP0-only override
+				// is exact (C++ adds only SPELLVALUE_BASE_POINT0).
 				targetSess.castSpellDirectWithBasePoint(ctx, triggered, targetGUID, uint32(damage))
 				continue
 			}
@@ -35422,7 +35435,12 @@ func (s *session) handleEffectForceCast(ctx context.Context, spell wotlk.Spell, 
 			continue
 		}
 		if eff.Effect == spellEffectForceCastWithValue {
-			targetSess.castSpellDirectWithBasePoint(ctx, triggered, s.playerGUID, uint32(damage))
+			// SpellEffects.cpp:1102-1104: SPELLVALUE_BASE_POINT0+i = damage
+			// for i in 0..MAX_SPELL_EFFECTS-1 (3) — every effect's base
+			// point rides the damage, not just BP0
+			// (castSpellDirectWithBasePoints twin).
+			bp := damage
+			targetSess.castSpellDirectWithBasePoints(ctx, triggered, s.playerGUID, []int32{bp, bp, bp})
 			continue
 		}
 		targetSess.castSpellDirect(ctx, triggered, s.playerGUID)
