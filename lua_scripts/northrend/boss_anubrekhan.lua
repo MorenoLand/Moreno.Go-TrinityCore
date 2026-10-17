@@ -51,8 +51,11 @@
 -- EVENT_IMPALE — SelectTarget(Random,0) -> DoCast(Impale 28783
 -- / 25-man 56090), init randtime(10s,20s), repeat randtime(10s,20s),
 -- with the anti-chain leg (GetTimeUntilEvent(EVENT_LOCUST) < 5s ->
--- skip) — no random-target SelectTarget bridge (cairne/kazzak
--- precedent); EVENT_SCARABS — random guardCorpses corpse ->
+-- skip) — STAYS OUT: phase-gated behind events.SetPhase(PHASE_NORMAL)
+-- (no phase bridge — gothik precedent); the random-target leg itself
+-- is bridgeable via randomPlayer (keleseth / thorim / archavon
+-- precedent), but the phase gate rules.
+-- EVENT_SCARABS — random guardCorpses corpse ->
 -- creatureTarget->CastSpell(SUMMON_CORPSE_SCARABS_MOB 28864) +
 -- Talk(EMOTE_SCARAB 2) + DespawnOrUnsummon, init randtime(20s,30s),
 -- repeat randtime(40s,60s) — summon / corpse bridges absent;

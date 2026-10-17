@@ -79,8 +79,8 @@
 -- (tharon_ja bar) — documented-only.
 -- boss_anubarak_trial EVENT_SUMMON_NERUBIAN — me->CastSpell(
 -- nullptr, SPELL_SUMMON_BURROWER 66332, SPELLVALUE_MAX_TARGETS
--- RAID_MODE(1,2,2,4)), 45s init, PHASE_MELEE — phase-gated +
--- summon STRAND absent — documented-only.
+-- RAID_MODE(1,2,2,4)), 10s init / 45s re-arm, PHASE_MELEE —
+-- phase-gated + summon STRAND absent — documented-only.
 -- boss_anubarak_trial EVENT_NERUBIAN_SHADOW_STRIKE (heroic) —
 -- summons.DoAction(ACTION_SHADOW_STRIKE) — cross-AI DoAction
 -- bridge absent — documented-only.
@@ -128,8 +128,10 @@
 -- the unbridged summon gate; DoAction(ACTION_SHADOW_STRIKE):
 -- SelectTarget(Random,0) -> DoCast(Shadow Strike 66134) — no
 -- DoAction / random-target bridges; UpdateAI submerge timer:
--- HealthBelowPct(80) (no health-pct bridge) + flag / aura / permafrost
--- gates (no flag / aura bridges) — all documented-only.
+-- HealthBelowPct(80) (no health-pct bridge — doomwalker precedent) +
+-- flag / aura / permafrost gates (flag bridges absent; the aura leg
+-- rides the unbridged health-pct gate — creature HasAura IS bridged,
+-- engine/world/lua_objects.go:228) — all documented-only.
 -- npc_anubarak_spike (34660) — zero registration (entry
 -- verifiable from the Summons enum, but zero bridgeable arms —
 -- joins the entry-verifiable-but-bridge-blocked queue): DamageTaken

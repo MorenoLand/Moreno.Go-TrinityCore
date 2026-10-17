@@ -27,8 +27,10 @@
 -- AddSC_boss_anomalus, no separate loader lines); zero sql/ hits. No
 -- anomalus lua existed.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset. No timers in the ported arms; melee is engine-driven
--- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- 23 OnReset. Timers via CreateLuaEvent (module-local GUID-keyed
+-- timers table, cancelled on 2/4/23 — yogg_saron / svala / archavon
+-- precedent); melee is engine-driven in Go (creature combat tick),
+-- like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the instance->
 -- SetBossState(DATA_ANOMALUS, IN_PROGRESS) leg has no instance bridge
@@ -36,6 +38,10 @@
 -- JustDied — Talk(SAY_DEATH 1) (event 4; the instance->
 -- SetBossState(DATA_ANOMALUS, DONE) leg has no instance bridge —
 -- tharon_ja precedent).
+-- uiSparkTimer — randomPlayer(target) -> CastSpell(target, 47751),
+-- 5s init / 5s unconditional re-arm, non-triggered; scheduled on
+-- event 1, cancelled on 2/4/23 (see sparkTick comment for the C++
+-- mapping and the shield-phase caveat).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — Initialize() (Phase/timers/GUID/chaosTheory reset) +
 -- instance->SetBossState(DATA_ANOMALUS, NOT_STARTED) — no instance
@@ -49,16 +55,20 @@
 -- UpdateAI — the home-position distance >60.0f EnterEvadeMode hack —
 -- no position / EnterEvadeMode bridges; the SPELL_RIFT_SHIELD 47748
 -- HasAura + uiChaoticRiftGUID ObjectAccessor::GetCreature + Rift->
--- isDead() -> RemoveAurasDueToSpell leg — no aura / GUID / instance
--- bridges; the Phase 0 + HealthBelowPct(50) -> Phase=1 + Talk(SAY_
+-- isDead() -> RemoveAurasDueToSpell leg — no GUID / instance bridges
+-- (the HasAura leg rides the unbridged machine; creature HasAura IS
+-- bridged — engine/world/lua_objects.go:228); the Phase 0 +
+-- HealthBelowPct(50) -> Phase=1 + Talk(SAY_
 -- SHIELD 3) + DoCast(me, SPELL_RIFT_SHIELD) + SummonCreature(NPC_
 -- CHAOTIC_RIFT 26918, RiftLocation[urand(0,5)], TEMPSUMMON_TIMED_
 -- DESPAWN_OUT_OF_COMBAT 1s) + Rift AttackStart(SelectTarget(Random,0))
 -- + Talk(SAY_RIFT 2) machine — no health-pct / summon / random-target
--- SelectTarget / cross-AI AttackStart bridges; uiSparkTimer —
--- SelectTarget(Random, 0) -> DoCast(SPELL_SPARK 47751/57062), 5s init,
--- 5s repeat — no random-target SelectTarget bridge (cairne/kazzak via
--- anubrekhan EVENT_IMPALE precedent).
+-- SelectTarget / cross-AI AttackStart bridges.
+-- Ported: uiSparkTimer — SelectTarget(Random, 0) -> DoCast(SPELL_SPARK
+-- 47751), 5s init, 5s repeat, non-triggered — via randomPlayer +
+-- CreateLuaEvent (keleseth / thorim / archavon GetPlayersInWorld
+-- precedent); C++ fires 47751 unconditionally (H_SPELL_SPARK never
+-- referenced at :182), so no IsHeroic gating needed.
 -- npc_chaotic_rift — entry-unverifiable (26918, local-enum-only) — no
 -- registration, no lua; its arms are documented here only:
 -- SetCombatMovement(false); Reset — SetDisplayId(Modelid2) +
@@ -82,18 +92,104 @@ local ENTRY_ANOMALUS = 26763
 local SAY_AGGRO = 0
 local SAY_DEATH = 1
 
+local SPELL_SPARK = 47751 -- C++ :182 fires SPELL_SPARK unconditionally
+-- (H_SPELL_SPARK 57062 is never referenced in the fire path); no
+-- IsHeroic gating needed (creature:IsHeroic() IS bridged —
+-- engine/world/lua_creature_events.go:203, blood_prince_council.lua
+-- precedent — the keristrasza-era "no IsHeroic bridge" claims are
+-- stale).
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
+-- the same map/instance, no distance filter (the keleseth / thorim /
+-- archavon GetPlayersInWorld precedent); only threat-listed units
+-- qualify in practice.
+local function randomPlayer(creature)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ uiSparkTimer: Initialize() seeds 5000; UpdateAI decrements only
+-- post-UpdateVictim, so event-1 scheduling is exact. C++ :fire:
+-- SelectTarget(Random, 0) -> DoCast(SPELL_SPARK), 2-arg =
+-- non-triggered; re-arm 5000 unconditional. The shield-phase early
+-- return (HasAura(SPELL_RIFT_SHIELD) -> return before the spark block)
+-- is vacuous here — the phase-1 machine that applies the shield is
+-- unmodeled, so the boss never carries the aura. Declared before the
+-- event-1 handler so the closure resolves the chunk-local (algalon
+-- nil-call bomb precedent — later-declared locals are NOT in scope).
+local function sparkTick(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_SPARK)
+    end
+    schedule(guid, "spark", 5000, function()
+        sparkTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) (the instance->SetBossState
 -- (DATA_ANOMALUS, IN_PROGRESS) leg has no instance bridge — tharon_ja
 -- precedent).
 local function anomalusEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "spark", 5000, function()
+        sparkTick(creature, guid)
+    end)
+end
+
+local function anomalusLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ JustDied: Talk(SAY_DEATH) (the instance->SetBossState(DATA_
 -- ANOMALUS, DONE) leg has no instance bridge — tharon_ja precedent).
 local function anomalusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
+end
+
+local function anomalusReset(event, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_ANOMALUS, 1, anomalusEnterCombat)
+RegisterCreatureEvent(ENTRY_ANOMALUS, 2, anomalusLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANOMALUS, 4, anomalusDied)
+RegisterCreatureEvent(ENTRY_ANOMALUS, 23, anomalusReset)

@@ -95,8 +95,9 @@
 -- EVENT_IMPALE 4s) / DoAction(ACTION_PET_DIED -> last-pet-died
 -- re-emerge: RemoveAurasDueToSpell(SUBMERGE 53421 / IMPALE_AURA
 -- 53456) (RemoveAura bridged — aeranas precedent stale), RemoveFlag,
--- DoCastSelf(EMERGE 53500), SetPhase(PHASE_EMERGE) + re-armed POUND/
--- LEECHING_SWARM/CARRION_BEETLES (phase-gated); ACTION_PET_EVADE ->
+-- DoCastSelf(EMERGE 53500), SetPhase(PHASE_EMERGE) + re-armed POUND
+-- (13s-18s) / LEECHING_SWARM (3s-7s) / CARRION_BEETLES (10s-15s)
+-- (phase-gated); ACTION_PET_EVADE ->
 -- EnterEvadeMode) — no cross-AI SetGUID / DoAction bridges —
 -- documented-only.
 -- EnterEvadeMode: summons.DespawnAll (no despawn bridge — terestian
@@ -126,9 +127,11 @@
 -- rotation arms — guardian EVENT Sunder Armor DoCastVictim(53618)
 -- 6s init, 12s repeat; venomancer EVENT Poison Bolt DoCastVictim(
 -- 53617) 5s init, 2-3s repeat; assassin JustEngagedWith backstab
--- machine (DoCastVictim(SPELL_BACKSTAB 52540) gated on
--- victim->isInBack(me) — no positional-facing bridge anyway,
--- krik_thir skirmisher precedent). Additionally unbridged:
+-- machine (6s init / 6s repeat via task.Repeat(), DoCastVictim(
+-- SPELL_BACKSTAB 52540) gated on victim->isInBack(me) — no
+-- positional-facing bridge on the event-handler surface (IsInBack is
+-- session-bound-only, lua_objects.go:467) — krik_thir skirmisher
+-- precedent). Additionally unbridged:
 -- the pet-template InitializeAI leg (cross-AI SetGUID(GUID_TYPE_PET)
 -- -> JustSummoned — SetGUID bridge absent; GetCreature(DATA_ANUBARAK)
 -- instance legs — instance model absent), JustDied
