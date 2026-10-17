@@ -175,7 +175,7 @@ func (s *session) adjustQuestItemCountForState(ctx context.Context, state *playe
 			// passes s.player; the other callers pass added=false).
 			entry.State = questCompleteStateFlag(questStatusComplete)
 			s.completeQuest(ctx, entry.QuestID)
-		} else if !added && entry.State == questCompleteStateFlag(questStatusComplete) {
+		} else if !added && changed && entry.State == questCompleteStateFlag(questStatusComplete) {
 			entry.State = questCompleteStateFlag(questStatusIncomplete)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, state.GUID, entry.QuestID)
 			if notify {
@@ -183,6 +183,13 @@ func (s *session) adjustQuestItemCountForState(ctx context.Context, state *playe
 			}
 		}
 		state.QuestLog[slot] = entry
+		// Player::ItemRemovedQuestCheck (Player.cpp:16617): the arm
+		// returns after the first matching objective across the whole
+		// quest log, not just the slot — a second deliver quest
+		// requiring the same item keeps its count.
+		if !added && matched {
+			return
+		}
 	}
 }
 
