@@ -1245,17 +1245,13 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			s.sendNotification("All spells have been reset.")
 		}
 	}
+	// CharacterHandler.cpp:901-906: the ResetTalents return is ignored —
+	// talents info and the notification go out unconditionally; the at-login
+	// flag is cleared inside resetTalents (Player.cpp:3994-3996).
 	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
-		if s.resetTalents(ctx, true) {
-			_ = s.sendTalentsInfo(false)
-			// CharacterHandler.cpp:891-896: SendNotification(LANG_RESET_TALENTS)
-			// follows the talents-info resend after a reset.
-			s.sendNotification("All talents have been reset.")
-			s.player.AtLogin &^= uint32(atLoginResetTalents)
-			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~4 WHERE guid = ?", s.playerGUID)
-			}
-		}
+		s.resetTalents(ctx, true)
+		_ = s.sendTalentsInfo(false)
+		s.sendNotification("All talents have been reset.")
 	}
 	if s.player.AtLogin&uint32(atLoginFirst) != 0 {
 		s.player.AtLogin &^= uint32(atLoginFirst)

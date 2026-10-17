@@ -259,11 +259,11 @@ func (s *session) handleResetTalents(ctx context.Context, args []string) {
 		return
 	}
 	if target != nil && target.player != nil {
-		// Player::ResetTalents(true) + SendTalentsInfoData(false); the pet
+		// Player::ResetTalents(true) + SendTalentsInfoData(false) go out
+		// unconditionally — cs_reset.cpp ignores the return; the pet
 		// talent reset (Pet::resetTalentsForAllPetsOf) has no bridge.
-		if target.resetTalents(ctx, true) {
-			_ = target.sendTalentsInfo(false)
-		}
+		target.resetTalents(ctx, true)
+		_ = target.sendTalentsInfo(false)
 		target.sendSysMessage("Your talents have been reset.") // LANG_RESET_TALENTS 216
 		if s.player == nil || s.playerGUID != target.playerGUID {
 			s.sendSysMessage(miscPlayerLink(name) + "'s talents have been reset.") // LANG_RESET_TALENTS_ONLINE 213

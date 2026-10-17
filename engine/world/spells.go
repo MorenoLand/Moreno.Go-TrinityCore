@@ -30796,17 +30796,22 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 		return true
 	}
 
-	// C++ sends no packet on success (the old Go (guid,0) success reply is
-	// dropped); the talents panel refresh and player update already happened
-	// inside resetTalents. unit->CastSpell(_player, 14867, true):
-	// "Untalent Visual Effect".
-	castPkt := protocol.NewBuffer(16)
-	castPkt.WritePackedGUID(wipeGUID)
-	castPkt.WritePackedGUID(s.playerGUID)
-	castPkt.WriteU8(1)
-	castPkt.WriteU32(14867)
-	castPkt.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), true)
+	// C++: SendTalentsInfoData(false) already went out inside resetTalents,
+	// and unit->CastSpell(_player, 14867, true) ("Untalent Visual Effect",
+	// SkillHandler.cpp:90) emits a complete SMSG_SPELL_GO from the trainer
+	// caster, broadcast to nearby.
+	castTimeStamp := uint32(time.Now().UnixMilli())
+	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: s.playerGUID}
+	if s.server != nil && s.server.Data != nil {
+		if spellInfo, found, err := s.server.Data.Spell(14867); err == nil && found {
+			spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+		}
+	}
+	goPkt := protocol.BuildSpellGo(wipeGUID, wipeGUID, 1, 14867, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, spellTarget)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+	}
 	return true
 }
 

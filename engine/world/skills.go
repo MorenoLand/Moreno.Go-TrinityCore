@@ -72,19 +72,19 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 	// PrereqTalent arm (Player.cpp:25497-25510): some rank at or above the
 	// required rank of the prerequisite talent must be known.
 	if tEntry.PrereqTalent > 0 {
-		depEntry, ok, depErr := s.server.Data.Talent(tEntry.PrereqTalent)
-		if depErr != nil || !ok {
-			return false
-		}
-		hasEnoughRank := false
-		for rank := tEntry.PrereqRank; rank < maxTalentRank; rank++ {
-			if depEntry.SpellRank[rank] != 0 && playerHasSpell(s.player, depEntry.SpellRank[rank]) {
-				hasEnoughRank = true
-				break
+		// Player.cpp:25499: the prereq is enforced only when the dependency
+		// row exists; a missing row is ignored, not fatal.
+		if depEntry, ok, depErr := s.server.Data.Talent(tEntry.PrereqTalent); depErr == nil && ok {
+			hasEnoughRank := false
+			for rank := tEntry.PrereqRank; rank < maxTalentRank; rank++ {
+				if depEntry.SpellRank[rank] != 0 && playerHasSpell(s.player, depEntry.SpellRank[rank]) {
+					hasEnoughRank = true
+					break
+				}
 			}
-		}
-		if !hasEnoughRank {
-			return false
+			if !hasEnoughRank {
+				return false
+			}
 		}
 	}
 	// Tier arm (Player.cpp:25512-25526): the tree must already hold
@@ -117,6 +117,13 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 		spellID = tEntry.SpellRank[requestedRank]
 	}
 	if spellID == 0 {
+		s.debug("learn talent failed: null spell id", "talent", talentID, "rank", requestedRank)
+		return false
+	}
+	// Player::AddTalent (Player.cpp:3171-3199): a rank spell with no spell
+	// row fails validation and is never learned.
+	if _, sok, serr := s.server.Data.Spell(spellID); serr != nil || !sok {
+		s.debug("learn talent failed: invalid spell", "spell", spellID)
 		return false
 	}
 	// C++: "already known"
@@ -126,21 +133,45 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 
 	s.player.Talents[talentID] = uint8(requestedRank)
 
+	// Player::LearnTalent -> AddSpell (Player.cpp:3404-3418): every other
+	// rank of the talent leaves the in-memory spell set with its auras and
+	// owner-pet auras stripped, and the new rank's spell enters it. The
+	// same-session prereq/tier arms read it via playerHasSpell.
+	for _, rankSpell := range tEntry.SpellRank {
+		if rankSpell == 0 || rankSpell == spellID || !playerHasSpell(s.player, rankSpell) {
+			continue
+		}
+		if s.hasAura(rankSpell) {
+			s.removeAura(rankSpell)
+		}
+		s.removeOwnerPetAurasForSpell(ctx, rankSpell)
+		for i := range s.player.Spells {
+			if s.player.Spells[i].ID == rankSpell {
+				s.player.Spells = append(s.player.Spells[:i], s.player.Spells[i+1:]...)
+				break
+			}
+		}
+	}
+	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: true})
+
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		if oldSpellID > 0 {
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND spell = ? AND talentGroup = ?", s.playerGUID, oldSpellID, s.player.ActiveTalentGroup)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, oldSpellID)
-			if s.hasAura(oldSpellID) {
-				s.removeAura(oldSpellID)
-			}
-			s.removeOwnerPetAurasForSpell(ctx, oldSpellID)
 		}
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_talent (guid, spell, talentGroup) VALUES (?, ?, ?)", s.playerGUID, spellID, s.player.ActiveTalentGroup)
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
 		s.learnOwnerPetAuraSources(ctx, spellID)
 		s.updateAchievementCriteria(criteriaTypeLearnSpell, spellID, 1)
 	}
+	// Player::LearnSpell (Player.cpp:3675-3680): SMSG_LEARNED_SPELL with the
+	// spell id and a uint16 zero.
+	learnedPkt := protocol.NewBuffer(6)
+	learnedPkt.WriteU32(spellID)
+	learnedPkt.WriteU16(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedPkt.Bytes(), true)
+	s.debug("learned talent", "talent", talentID, "spell", spellID, "rank", requestedRank)
 	return true
 }
 
@@ -372,6 +403,20 @@ func (s *session) handleUnlearnSkill(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Player::SetSkill remove arm (Player.cpp:6123): when the skill is not
+	// known the whole path is a silent no-op — no spell unlearning, no DB
+	// delete.
+	known := false
+	for _, sk := range s.player.Skills {
+		if uint32(sk.Skill) == skillID {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return true
+	}
+
 	newSkills := make([]playerSkill, 0, len(s.player.Skills))
 	for _, sk := range s.player.Skills {
 		if uint32(sk.Skill) != skillID {
@@ -414,7 +459,9 @@ func (s *session) unlearnSpellRankChain(ctx context.Context, spellID uint32) {
 	if s.server != nil {
 		next = s.server.getNextSpellInChain(spellID)
 	}
-	s.unlearnSpell(ctx, spellID)
+	// Player::RemoveSpell (Player.cpp:3708-3713): the higher rank is
+	// removed before the current spell, so removal order is highest-rank
+	// down to first-rank.
 	if next != 0 && s.hasLearnedSpell(next) {
 		if s.server != nil && s.server.Data != nil {
 			if cost, cerr := s.server.Data.TalentSpellCost(next); cerr == nil && cost > 0 {
@@ -423,6 +470,7 @@ func (s *session) unlearnSpellRankChain(ctx context.Context, spellID uint32) {
 		}
 		s.unlearnSpellRankChain(ctx, next)
 	}
+	s.unlearnSpell(ctx, spellID)
 }
 
 const (
@@ -472,8 +520,16 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	if s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
 	}
+	// Player::ResetTalents (Player.cpp:3994-3996): the at-login flag is
+	// cleared on entry, before the no-talents-spent arm.
+	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
+		s.player.AtLogin &^= uint32(atLoginResetTalents)
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~4 WHERE guid = ?", s.playerGUID); err != nil {
+			s.debug("talent reset at-login flag persistence failed", "account", s.accountName, "error", err)
+		}
+	}
 	if len(s.player.Talents) == 0 {
-		return true // nothing spent, nothing to reset
+		return false // Player.cpp:4000-4004: no talents spent -> false
 	}
 	cost := uint32(0)
 	// Player::ResetTalents (Player.cpp:4008): the escalating cost is skipped
@@ -508,7 +564,8 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 		if err != nil || !ok {
 			continue
 		}
-		for _, spellID := range tEntry.SpellRank {
+		for ri := len(tEntry.SpellRank) - 1; ri >= 0; ri-- {
+			spellID := tEntry.SpellRank[ri]
 			if spellID == 0 || !s.hasLearnedSpell(spellID) {
 				continue
 			}
