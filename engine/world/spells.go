@@ -1608,7 +1608,7 @@ func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
 	return uint32(cost)
 }
 
-func (s *session) hasSpellReagents(ctx context.Context, spell wotlk.Spell) bool {
+func (s *session) hasSpellReagents(ctx context.Context, spell wotlk.Spell, castItemGUID uint64, castItemEntry uint32) bool {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return true
 	}
@@ -1629,6 +1629,15 @@ func (s *session) hasSpellReagents(ctx context.Context, spell wotlk.Spell) bool 
 		need := spell.ReagentCount[i]
 		if need == 0 {
 			need = 1
+		}
+		// Spell::CheckItems cast-item-as-reagent arm (Spell.cpp:6795-6808):
+		// when the cast item is also a spell reagent and this cast spends
+		// its last charge (negative template SpellCharges with fewer than
+		// 2 charges left, castItemReagentTakesExtra), the item is used up
+		// and does not count as a reagent, so one extra is required.
+		// The client path passes no cast item, so the arm is vacuous there.
+		if castItemEntry != 0 && uint32(itemID) == castItemEntry && s.castItemReagentTakesExtra(ctx, castItemGUID, castItemEntry) {
+			need++
 		}
 		var have int64
 		if len(inTrade) == 0 {
@@ -2832,7 +2841,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !checkReagents && s.tradeItemTargetCast(target) {
 		checkReagents = true
 	}
-	if checkReagents && !s.hasSpellReagents(ctx, spell) {
+	if checkReagents && !s.hasSpellReagents(ctx, spell, 0, 0) {
 		s.sendCastFailed(ctx, castID, spell, spellFailedReagents)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
 		return true
@@ -2848,7 +2857,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// SPELL_FAILED_REAGENTS) with SPELL_FAILED_DONT_REPORT.
 	if spellID == 46584 {
 		if reagentSpell, found, err := s.server.Data.Spell(48289); err == nil && found &&
-			!s.canNoReagentCast(reagentSpell) && !s.hasSpellReagents(ctx, reagentSpell) {
+			!s.canNoReagentCast(reagentSpell) && !s.hasSpellReagents(ctx, reagentSpell, 0, 0) {
 			s.sendCastFailed(ctx, castID, reagentSpell, spellFailedReagents)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "raise dead reagent missing")
 			return true
@@ -15270,6 +15279,25 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	// Spell::CheckItems cast-item charge arm (Spell.cpp:6699-6703) on the
+	// triggered item-cast path: Player::ApplyEquipSpell (Player.cpp:8007),
+	// Player::ApplyItemObtainSpells (Player.cpp:7873) and
+	// Player::CastItemCombatSpell (Player.cpp:8146) all ride
+	// CastSpellExtraArgs(Item*) (SpellDefines.h:165), so m_CastItem is set
+	// and prepare's CheckCast (Spell.cpp:3100 via 5489) runs the
+	// no-charges gate even though TRIGGERED_FULL_MASK skips the
+	// TakeCastItem spend. The entry rides the instance row; a missing row
+	// fails closed like the C++ !m_CastItem && m_castItemGUID ->
+	// ITEM_NOT_READY arm. Arms (b)/(c) are vacuous here: the caller just
+	// resolved the item from the player's inventory with its template.
+	if castItemGUID != 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var itemEntry int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1`, int64(castItemGUID)).Scan(&itemEntry); err != nil || !s.checkCastItemCharges(ctx, int64(castItemGUID), itemEntry) {
+			s.debug("triggered item cast rejected", "account", s.accountName, "spell", spellID, "reason", "no charges remain")
+			return
+		}
 	}
 
 	// Triggered casts map to C++ Unit::CastSpell(..., triggered=true), which sets

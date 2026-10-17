@@ -3854,18 +3854,22 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		if !checkReagents && s.tradeItemTargetCast(target) {
 			checkReagents = true
 		}
-		if !skipReagents && checkReagents && !s.hasSpellReagents(ctx, spell) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedReagents), true)
+		if !skipReagents && checkReagents && !s.hasSpellReagents(ctx, spell, rawItemGUID, uint32(itemEntry)) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castCount, spellID, spellFailedReagents, s.firstMissingSpellReagent(ctx, spell, rawItemGUID, uint32(itemEntry))), true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
 			return true
 		}
 		// Totem item/category arm of Spell::CheckItems (Spell.cpp:6823-6857)
 		// on the m_CastItem path: runs right after the reagent arm,
-		// matching C++ CheckItems relative order.
-		if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
-			return true
+		// matching C++ CheckItems relative order. Like the reagent arm it
+		// sits inside the "do not take reagents" gate (Spell.cpp:6777-6858):
+		// skipped when the cast item carries ITEM_FLAG_NO_REAGENT_COST.
+		if !skipReagents {
+			if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
+				return true
+			}
 		}
 		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
 		// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster):

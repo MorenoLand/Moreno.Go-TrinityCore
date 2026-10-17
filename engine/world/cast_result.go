@@ -56,7 +56,7 @@ func (s *session) castFailedExtParams(ctx context.Context, spell wotlk.Spell, re
 	case spellFailedEquippedItemClass, spellFailedEquippedItemClassMainhand, spellFailedEquippedItemClassOffhand:
 		return []uint32{uint32(spell.EquippedItemClass), spell.EquippedItemSubClass}
 	case spellFailedReagents: // SPELL_FAILED_REAGENTS: first missing reagent item id
-		return []uint32{s.firstMissingSpellReagent(ctx, spell)}
+		return []uint32{s.firstMissingSpellReagent(ctx, spell, 0, 0)}
 	case spellFailedTooManyOfItem:
 		// WriteCastResultInfo (Spell.cpp:4056-4064): the trailer is the
 		// created item's ItemLimitCategory — and no trailer at all when the
@@ -84,7 +84,7 @@ func (s *session) castFailedExtParams(ctx context.Context, spell wotlk.Spell, re
 // firstMissingSpellReagent mirrors the SPELL_FAILED_REAGENTS branch of
 // WriteCastResultInfo: skip Reagent[i] <= 0, return the first item whose
 // inventory count is short (0 when none, which C++ also sends as 0).
-func (s *session) firstMissingSpellReagent(ctx context.Context, spell wotlk.Spell) uint32 {
+func (s *session) firstMissingSpellReagent(ctx context.Context, spell wotlk.Spell, castItemGUID uint64, castItemEntry uint32) uint32 {
 	if s == nil || s.player == nil {
 		return 0
 	}
@@ -96,6 +96,11 @@ func (s *session) firstMissingSpellReagent(ctx context.Context, spell wotlk.Spel
 		need := spell.ReagentCount[i]
 		if need == 0 {
 			need = 1
+		}
+		// Spell.cpp:6795-6808 cast-item-as-reagent adjustment, mirroring
+		// hasSpellReagents so the failure names the reagent C++ reports.
+		if castItemEntry != 0 && itemID == castItemEntry && s.castItemReagentTakesExtra(ctx, castItemGUID, castItemEntry) {
+			need++
 		}
 		if s.playerItemCount(ctx, itemID) < int64(need) {
 			return itemID

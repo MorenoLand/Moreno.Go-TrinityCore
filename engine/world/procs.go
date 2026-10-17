@@ -502,18 +502,22 @@ func (s *session) procItemCombatSpells(ctx context.Context, target combatTarget,
 	// Broken-item skip (Player.cpp:8063: !item->IsBroken()): one durability
 	// lookup for the equipped candidates.
 	broken := make(map[uint8]bool)
+	guidBySlot := make(map[uint8]uint64)
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.durability
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.durability, ci.item
 			FROM character_inventory AS ci
 			JOIN item_instance AS ii ON ii.guid = ci.item
 			WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ?`, s.playerGUID, equipmentSlotEnd)
 		if err == nil {
 			durBySlot := make(map[uint8]uint32)
 			for rows.Next() {
-				var slot int64
+				var slot, itemGUID int64
 				var dur uint32
-				if rows.Scan(&slot, &dur) == nil && slot >= 0 && slot < int64(equipmentSlotEnd) {
+				if rows.Scan(&slot, &dur, &itemGUID) == nil && slot >= 0 && slot < int64(equipmentSlotEnd) {
 					durBySlot[uint8(slot)] = dur
+					if itemGUID != 0 {
+						guidBySlot[uint8(slot)] = uint64(itemGUID)
+					}
 				}
 			}
 			rows.Close()
@@ -586,8 +590,13 @@ func (s *session) procItemCombatSpells(ctx context.Context, target combatTarget,
 					continue
 				}
 			}
-			// CastSpell(victim, spellId, item) — triggered (Player.cpp:8146).
-			s.castSpellDirect(ctx, sp.spellID, target.GUID)
+			// CastSpell(victim, spellId, item) — triggered (Player.cpp:8146):
+			// the weapon rides as the cast item (CastSpellExtraArgs(Item*),
+			// SpellDefines.h:165 -> Object.cpp:2900), so prepare's CheckCast
+			// runs the CheckItems charge gate (Spell.cpp:6699-6703), bridged
+			// in castSpellDirectWithOverrides. A missing row keeps the
+			// item-less direct cast.
+			s.castSpellDirectWithItem(ctx, sp.spellID, target.GUID, guidBySlot[c.slot])
 		}
 	}
 }
