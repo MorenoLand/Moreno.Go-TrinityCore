@@ -1378,6 +1378,7 @@ func (s *session) handleMoveSplineDone(ctx context.Context, payload []byte) bool
 			s.player.MountDisplayID = 0
 			s.sendPlayerMountUpdate()
 			s.sendPlayerUpdate()
+			s.clearTaxiBenchmarkMode()
 		}
 	}
 	return true

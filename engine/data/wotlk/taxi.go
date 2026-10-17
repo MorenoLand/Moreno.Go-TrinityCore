@@ -394,8 +394,13 @@ func (s *Store) TaxiNode(id uint32) (TaxiNode, bool, error) {
 	return TaxiNode{}, false, nil
 }
 
-// TaxiNodeMount returns the mount display id serving the team at a node.
-func (s *Store) TaxiNodeMount(node uint32, teamAlliance bool) (uint32, error) {
+// TaxiNodeMountEntry returns the mount creature ENTRY serving the team at a
+// node, mirroring the selection arm of ObjectMgr::GetTaxiMountDisplayId
+// (ObjectMgr.cpp:6752-6765): MountCreatureID[1] for Alliance, [0] otherwise,
+// falling back to the other team's entry only when allowedAltTeam is set
+// (the Acherus spell/DK hack). The entry is resolved to a display id by the
+// world layer, which owns the creature_template table.
+func (s *Store) TaxiNodeMountEntry(node uint32, teamAlliance, allowedAltTeam bool) (uint32, error) {
 	network, err := s.taxiNetwork()
 	if err != nil {
 		return 0, err
@@ -405,10 +410,12 @@ func (s *Store) TaxiNodeMount(node uint32, teamAlliance bool) (uint32, error) {
 		teamIndex = 1
 	}
 	if index, ok := network.byID[node]; ok {
-		if mount := network.nodes[index].MountCreatureID[teamIndex]; mount != 0 {
-			return mount, nil
+		if entry := network.nodes[index].MountCreatureID[teamIndex]; entry != 0 {
+			return entry, nil
 		}
-		return network.nodes[index].MountCreatureID[0], nil
+		if allowedAltTeam {
+			return network.nodes[index].MountCreatureID[1-teamIndex], nil
+		}
 	}
 	return 0, nil
 }

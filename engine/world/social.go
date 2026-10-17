@@ -469,7 +469,15 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	_ = s.sendFriendStatus(result, friendGUID, friendNote)
+	// TrinityCore: SendFriendStatus (SocialMgr.cpp:260-266) echoes the note
+	// via GetFriendInfo, which returns before the note lookup when the added
+	// friend is offline (SocialMgr.cpp:212) — the ADDED_OFFLINE arm carries
+	// an empty note even though the note is stored.
+	note := friendNote
+	if result == friendsResultAddedOffline {
+		note = ""
+	}
+	_ = s.sendFriendStatus(result, friendGUID, note)
 	return true
 }
 

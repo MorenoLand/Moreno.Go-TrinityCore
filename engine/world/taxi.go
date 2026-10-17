@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -387,6 +388,42 @@ const (
 	taxiErrShapeshifted   uint32 = 9 // ERR_TAXIPLAYERSHAPESHIFTED (SharedDefines.h:3657)
 )
 
+// taxiMountDisplayID mirrors ObjectMgr::GetTaxiMountDisplayId
+// (ObjectMgr.cpp:6745-6782): the taxi node stores a mount creature ENTRY,
+// resolved to a display id through the template's random valid model
+// (CreatureTemplate::GetRandomValidModelId, Creature.cpp:112) with the 50%
+// other-gender model swap (ObjectMgr::GetCreatureModelRandomGender,
+// ObjectMgr.cpp:1613-1638). A missing template or a template with no valid
+// model yields 0, like the C++ arm.
+func (s *session) taxiMountDisplayID(ctx context.Context, node uint32, allowedAltTeam bool) uint32 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0
+	}
+	entry, err := s.server.Data.TaxiNodeMountEntry(node, s.playerAlliance(), allowedAltTeam)
+	if err != nil || entry == 0 {
+		return 0
+	}
+	var m1, m2, m3, m4 uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT modelid1, modelid2, modelid3, modelid4 FROM creature_template WHERE entry = ?", entry).Scan(&m1, &m2, &m3, &m4); err != nil {
+		return 0
+	}
+	models := make([]uint32, 0, 4)
+	for _, m := range []uint32{m1, m2, m3, m4} {
+		if m != 0 {
+			models = append(models, m)
+		}
+	}
+	if len(models) == 0 {
+		return 0
+	}
+	display := models[rand.Intn(len(models))]
+	var otherGender uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT DisplayID_Other_Gender FROM creature_model_info WHERE DisplayID = ?", display).Scan(&otherGender); err == nil && otherGender != 0 && rand.Intn(2) == 0 {
+		display = otherGender
+	}
+	return display
+}
+
 // handleActivateTaxi serves both CMSG_ACTIVATETAXI and
 // CMSG_ACTIVATETAXIEXPRESS; express selects the packet layout. C++ keeps
 // the two handlers separate (HandleActivateTaxiOpcode vs
@@ -521,10 +558,10 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	// SendDoFlight mount gate (Player.cpp:21610-21616) fires BEFORE the
 	// money gate: no mount model for the source node answers
 	// ERR_TAXIUNSPECIFIEDSERVERERROR even when the player is also broke.
-	mount := uint32(0)
-	if mountDisplay, merr := s.server.Data.TaxiNodeMount(sourceNode, s.playerAlliance()); merr == nil {
-		mount = mountDisplay
-	}
+	// Player.cpp:21628-21634: the alternate-team mount fallback is allowed
+	// only for the Acherus node (315) taken by a death knight — every other
+	// npc-path flight resolves its own team's mount entry.
+	mount := s.taxiMountDisplayID(ctx, sourceNode, sourceNode == 315 && s.player.Class == classDeathKnight)
 	if mount == 0 {
 		return reply(taxiErrUnspecified)
 	}
@@ -626,8 +663,10 @@ func (s *session) continueTaxiFlight() {
 	if err != nil || !found {
 		return
 	}
-	mount, err := s.server.Data.TaxiNodeMount(uint32(source), s.playerAlliance())
-	if err != nil || mount == 0 {
+	// Player::ContinueTaxiFlight (Player.cpp:21728) resolves the mount with
+	// the wide alternate-team lookup.
+	mount := s.taxiMountDisplayID(context.Background(), uint32(source), true)
+	if mount == 0 {
 		return
 	}
 	points, err := s.server.Data.TaxiPathPoints(pathID)
@@ -715,6 +754,7 @@ func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int
 			s.player.MountDisplayID = 0
 			s.sendPlayerMountUpdate()
 		}
+		s.clearTaxiBenchmarkMode()
 	})
 	return true
 }
@@ -722,6 +762,20 @@ func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int
 // isInFlight mirrors Unit::IsInFlight (UNIT_STATE_IN_FLIGHT).
 func (s *session) isInFlight() bool {
 	return s.inFlight
+}
+
+// clearTaxiBenchmarkMode mirrors FlightPathMovementGenerator::DoFinalize
+// (FlightPathMovementGenerator.cpp:176), which clears
+// PLAYER_FLAGS_TAXI_BENCHMARK whenever the flight movement generator
+// finalizes — natural arrival or interruption.
+func (s *session) clearTaxiBenchmarkMode() {
+	if s == nil || s.player == nil {
+		return
+	}
+	if s.player.PlayerFlags&playerFlagTaxiBenchmark != 0 {
+		s.player.PlayerFlags &^= playerFlagTaxiBenchmark
+		s.sendPlayerUpdate()
+	}
 }
 
 // finishTaxiFlight mirrors Player::FinishTaxiFlight.
@@ -735,6 +789,7 @@ func (s *session) finishTaxiFlight() {
 		s.player.MountDisplayID = 0
 		s.sendPlayerMountUpdate()
 	}
+	s.clearTaxiBenchmarkMode()
 }
 
 // initTaxiNodesForLevel mirrors PlayerTaxi::InitTaxiNodesForLevel for the
@@ -896,10 +951,7 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 		return
 	}
 	// Player.cpp:21611: wide mount lookup for the spell case (npc == nil).
-	mount := uint32(0)
-	if mountDisplay, err := s.server.Data.TaxiNodeMount(from, s.playerAlliance()); err == nil {
-		mount = mountDisplay
-	}
+	mount := s.taxiMountDisplayID(ctx, from, true)
 	if s.player.Money < price {
 		reply(taxiErrNotEnoughMoney)
 		return
