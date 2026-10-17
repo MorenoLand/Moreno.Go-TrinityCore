@@ -52,9 +52,11 @@
 -- is DB-side (garr firesworn convention). Its JustDied
 -- DATA_RAGNAROS_ADDS increment is instance-side and blocked on the
 -- instance-script model.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no UNIT_STATE bridge —
--- timers fire unconditionally (jeklik convention); no instance-
+-- C++-exact on cast gating: boss_ragnarosAI::UpdateAI (boss_ragnaros.cpp:127)
+-- has no UNIT_STATE_CASTING queue gate — events fire unconditionally in
+-- C++ too (the submerge InterruptNonMeleeSpells arm is documented
+-- separately below; the old "no UNIT_STATE bridge" claim was stale).
+-- Deviations from C++: no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the BOSS_RAGNAROS bookkeeping arms
 -- skipped), and the DATA_RAGNAROS_ADDS SetData/GetData arms and the

@@ -119,8 +119,11 @@
 -- cataclysmic-bolt tank-pick threat arm approximated (random
 -- alive non-victim player pick); no raw-yell bridge — the
 -- blessing yell (raw string) stays unmodeled while the sound arm
--- is ported via creature:PlayDirectSound; no UNIT_STATE bridge —
--- timers fire unconditionally (jeklik convention).
+-- is ported via creature:PlayDirectSound. C++-exact on cast gating:
+-- boss_fathomlord_karathressAI::UpdateAI uses plain uint32 timers
+-- (CataclysmicBolt_Timer <= diff) with no UNIT_STATE_CASTING gate —
+-- unconditional firing matches C++ (the old "no UNIT_STATE bridge"
+-- claim was stale).
 
 local SPELL_CATACLYSMIC_BOLT = 38441
 local SPELL_SEAR_NOVA = 38445

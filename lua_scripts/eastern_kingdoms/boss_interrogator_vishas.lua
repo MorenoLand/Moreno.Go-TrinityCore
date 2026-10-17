@@ -30,8 +30,9 @@
 -- 2/4/23.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate has
 -- no UNIT_STATE bridge — timers fire unconditionally (jeklik
--- convention); the DamageTaken latch fires on the damage hook rather
--- than the script's UpdateAI tick (timing documented); JustDied's
+-- convention); the DamageTaken _yellCount staircase is C++-exact —
+-- the C++ arm lives in DamageTaken itself (boss_interrogator_vishas.
+-- cpp:83-96), not the UpdateAI tick; JustDied's
 -- Vorrel Sengutz Talk(SAY_TRIGGER_VORREL 0) via
 -- instance->GetCreature(DATA_VORREL) has no instance-creature
 -- bridge (documented-only); BossAI::JustEngagedWith/_Reset/_JustDied

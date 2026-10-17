@@ -12,14 +12,22 @@
 -- inferno 19695 45s then 45s, non-triggered self-cast (C++ DoCast
 -- default is triggered=false — vaelastrasz convention) / ignite mana
 -- 19659 30s then 30s, non-triggered on a random alive player in the
--- instance (the C++ -SPELL_IGNITE_MANA no-aura filter has no HasAura
--- bridge — the pick may land on a target already carrying it) /
+-- instance (the C++ -SPELL_IGNITE_MANA no-aura filter is unmodeled —
+-- player HasAura is bridged (lua_player.go:203) but the engine's
+-- creature-cast path never applies auras to targets (boss_ai.go:1481,
+-- no applyAura arm; player-cast path only, spells.go:8922), so
+-- HasAura(19659) would always read false) /
 -- living bomb 20475 35s then 35s, non-triggered on a random alive
 -- player in the instance. Nil-target ticks cast nothing but keep the
 -- schedule (jeklik convention). Per-tick UpdateAI armageddon check
 -- (Lua 1s pump): health at-or-below 2% -> Talk(EMOTE_SERVICE=0) +
 -- non-triggered self-cast armageddon 20478, C++-exact (no once-guard:
--- C++ re-casts and re-Talks every UpdateAI tick below 2%). OnDied(4)/
+-- C++ re-casts and re-Talks every UpdateAI tick below 2%). While the
+-- pump holds the armageddon-suppression flag the inferno/ignite-mana/
+-- living-bomb callbacks skip their casts but keep re-arming (C++
+-- events.Update keeps ticking while ExecuteEvent is skipped,
+-- boss_baron_geddon.cpp:80-86); engine melee has no suppression
+-- bridge (documented delta). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cancel timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no UNIT_STATE bridge — timers fire
@@ -45,6 +53,15 @@ local SPELL_ARMAGEDDON = 20478
 
 local timers = {}
 
+-- Armageddon suppression: C++ UpdateAI returns right after the armageddon
+-- arm while !HealthAbovePct(2) (boss_baron_geddon.cpp:80-86): the C++
+-- timers keep ticking via events.Update but no other event executes and
+-- no melee happens. The
+-- three timer callbacks skip their casts while the pump holds this flag
+-- but keep re-arming (the C++ timers keep ticking via events.Update).
+-- Engine-driven melee has no Lua suppression bridge (documented delta).
+local armageddonSuppress = {}
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -69,7 +86,9 @@ end
 
 -- C++ EVENT_INFERNO: non-triggered DoCast(me, 19695); re-arm 45s.
 local function onInferno(creature, guid)
-    creature:CastSpell(creature, SPELL_INFERNO)
+    if not armageddonSuppress[guid] then
+        creature:CastSpell(creature, SPELL_INFERNO)
+    end
     schedule(guid, "inferno", 45000, function()
         onInferno(creature, guid)
     end)
@@ -92,12 +111,15 @@ local function randomAlivePlayer(creature)
 end
 
 -- C++ EVENT_IGNITE_MANA: non-triggered cast 19659 on a random alive
--- player in the instance (the -SPELL_IGNITE_MANA no-aura filter has no
--- HasAura bridge); re-arm 30s.
+-- player in the instance (the -SPELL_IGNITE_MANA no-aura filter is
+-- unmodeled — creature casts apply no auras engine-side, so the
+-- bridged player HasAura(19659) would always read false); re-arm 30s.
 local function onIgniteMana(creature, guid)
-    local pick = randomAlivePlayer(creature)
-    if pick then
-        creature:CastSpell(pick, SPELL_IGNITE_MANA)
+    if not armageddonSuppress[guid] then
+        local pick = randomAlivePlayer(creature)
+        if pick then
+            creature:CastSpell(pick, SPELL_IGNITE_MANA)
+        end
     end
     schedule(guid, "ignitemana", 30000, function()
         onIgniteMana(creature, guid)
@@ -107,9 +129,11 @@ end
 -- C++ EVENT_LIVING_BOMB: non-triggered cast 20475 on a random alive
 -- player in the instance; re-arm 35s.
 local function onLivingBomb(creature, guid)
-    local pick = randomAlivePlayer(creature)
-    if pick then
-        creature:CastSpell(pick, SPELL_LIVING_BOMB)
+    if not armageddonSuppress[guid] then
+        local pick = randomAlivePlayer(creature)
+        if pick then
+            creature:CastSpell(pick, SPELL_LIVING_BOMB)
+        end
     end
     schedule(guid, "livingbomb", 35000, function()
         onLivingBomb(creature, guid)
@@ -147,8 +171,11 @@ local function onArmageddonPump(creature, guid)
     local maxHealth = creature:GetMaxHealth()
     if maxHealth ~= 0
             and creature:GetHealth() <= math.floor(maxHealth * 2 / 100) then
+        armageddonSuppress[guid] = true
         creature:CastSpell(creature, SPELL_ARMAGEDDON)
         creature:Talk(EMOTE_SERVICE)
+    else
+        armageddonSuppress[guid] = nil
     end
     schedule(guid, "armageddon", 1000, function()
         onArmageddonPump(creature, guid)
@@ -157,6 +184,7 @@ end
 
 local function baronGeddonResetState(guid)
     cancelTimers(guid)
+    armageddonSuppress[guid] = nil
 end
 
 local function baronGeddonLeaveCombat(event, creature)

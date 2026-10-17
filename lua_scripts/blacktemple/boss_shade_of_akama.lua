@@ -43,9 +43,12 @@
 -- The spell_shade_soul_channel_serverside and spell_shade_soul_
 -- channel AuraScripts have no AuraScript bridge (standing AuraScript
 -- gap).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- has no UNIT_STATE bridge — arms fire unconditionally (jeklik
--- convention); no instance-script model — the DATA_SHADE_OF_AKAMA /
+-- C++-exact on cast gating: boss_shade_of_akama::UpdateAI
+-- (boss_shade_of_akama.cpp:297) has no UNIT_STATE_CASTING gate — arms
+-- fire unconditionally in C++ too (the file's only such gate, :756, is
+-- npc_ashtongue_sorcerer's, which is not registered; the old "no
+-- UNIT_STATE bridge" claim was stale). Deviations from C++: no
+-- instance-script model — the DATA_SHADE_OF_AKAMA /
 -- DATA_AKAMA_SHADE creature lookups, the SetBossState DONE arm, the
 -- akama DoAction(ACTION_SHADE_OF_AKAMA_DEAD) arm and the spawner
 -- DoAction(ACTION_START/STOP/DESPAWN_ALL_SPAWNS) arms have no
