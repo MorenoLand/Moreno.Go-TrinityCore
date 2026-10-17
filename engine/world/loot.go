@@ -3447,7 +3447,7 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 	if res.IsStack {
 		slotForPush = 0xFFFFFFFF
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(s.playerGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(s.playerGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount, it.RandomPropertyID), true)
 	s.sendPlayerUpdate()
 	// Loot::isLooted (Loot.h:236) via lootFullyLooted: a multi-drop row
 	// keeps the loot open until every current viewer takes their copy.
@@ -3572,7 +3572,12 @@ func (s *Server) autoStoreLootCurrencyTokens(ctx context.Context, loot *activeLo
 	}
 }
 
-func buildLootItemPushResult(playerGUID uint64, bag uint8, slot, entry, count, inventoryCount uint32) []byte {
+// Player::SendNewItem (Player.cpp:14334): SuffixFactor and the item random
+// property id ride on the new item. The store paths never model suffix
+// factors on inventory items (no bridge), so that field stays 0; the random
+// property id is the stored row's — the StoreNewItem arm applies
+// item.randomPropertyId to the new item before SendNewItem runs.
+func buildLootItemPushResult(playerGUID uint64, bag uint8, slot, entry, count, inventoryCount uint32, randomPropID int32) []byte {
 	packet := protocol.NewBuffer(48)
 	packet.WriteU64(playerGUID)
 	packet.WriteU32(0)
@@ -3582,7 +3587,7 @@ func buildLootItemPushResult(playerGUID uint64, bag uint8, slot, entry, count, i
 	packet.WriteU32(slot)
 	packet.WriteU32(entry)
 	packet.WriteU32(0)
-	packet.WriteI32(0)
+	packet.WriteI32(randomPropID)
 	packet.WriteU32(count)
 	packet.WriteU32(inventoryCount)
 	return packet.Bytes()
@@ -4053,7 +4058,7 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 	if res.IsStack {
 		slotForPush = 0xFFFFFFFF
 	}
-	_ = targetSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(targetGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount), true)
+	_ = targetSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(targetGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount, it.RandomPropertyID), true)
 
 	// HandleLootMasterGiveOpcode (LootHandler.cpp:483-488): the give marks
 	// the row looted and notifies, with no fully-looted cleanup — the
@@ -4843,7 +4848,7 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 	if res.IsStack {
 		slotForPush = 0xFFFFFFFF
 	}
-	_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, deliveredItem, deliveredCount, res.InventoryCount), true)
+	_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, deliveredItem, deliveredCount, res.InventoryCount, int32(roll.RandomPropID)), true)
 
 	s.lootMu.Lock()
 	cLoot := s.creatureLoot[rollLootObjectKey(roll)]
@@ -4945,7 +4950,7 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 			if res.IsStack {
 				slotForPush = 0xFFFFFFFF
 			}
-			_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, m.item, m.count, res.InventoryCount), true)
+			_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, m.item, m.count, res.InventoryCount, 0), true)
 		}
 	}
 
