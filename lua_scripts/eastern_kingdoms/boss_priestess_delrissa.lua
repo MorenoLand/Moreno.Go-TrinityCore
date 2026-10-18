@@ -45,7 +45,10 @@
 -- creature:CastSpell(creature, spell), selin DoCastAOE convention).
 -- Renew machine: renew self-cast 44174 10000ms -> 5000ms loop (the
 -- C++ leg that targets a random alive lackey is the same GUID-list
--- bridge; the heroic 46192 leg is dropped — no difficulty bridge).
+-- bridge; the C++ has NO heroic 46192 leg at all — the enum entry is
+-- never referenced in the source (SD "No Heroic support yet"), so the
+-- "dropped — no difficulty bridge" claim was stale and is retracted;
+-- there is no heroic arm to gate).
 -- Shield machine: shield self-cast 44291 2000ms -> 7500ms loop (the
 -- C++ random-lackey leg and the HasAura(44291) check share the same
 -- missing bridges).
@@ -89,8 +92,10 @@
 -- - SW_PAIN machine (PORTED): DoCast(SelectTarget(Random, 0, 100,
 --   true), SPELL_SW_PAIN_NORMAL 14032) 5000ms init -> 10000ms loop —
 --   random-player-in-100yd port, re-arms unconditionally (C++ re-arms
---   outside the null-target guard). The heroic 15654 leg is dropped
---   (no difficulty bridge).
+--   outside the null-target guard). There is NO heroic 15654 leg in
+--   the C++ — the enum entry is never referenced (SD "No Heroic
+--   support yet"), so the "dropped (no difficulty bridge)" claim was
+--   stale and is retracted.
 -- - ResetTimer's home-position Z+10 evade check (EnterEvadeMode) — no
 --   evade/home bridge on the Lua surface (the_beast evade precedent).
 -- - The eight lackey CreatureScript classes + commented-out

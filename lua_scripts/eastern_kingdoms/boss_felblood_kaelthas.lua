@@ -27,15 +27,17 @@
 -- sources of the class name.
 -- Verifiable numbers (file's own enums/header): SPELL_FIREBALL =
 -- 44189 / SPELL_PHOENIX = 44194 / SPELL_FLAME_STRIKE = 46162
--- (random-player targeted, 44s loop — bridged) / SPELL_SHOCK_BARRIER = 46165
--- (heroic-only arm — no difficulty bridge) / SPELL_PYROBLAST = 36819
--- (SelectTarget-gated — no bridge) / SPELL_EMOTE_TALK_EXCLAMATION =
+-- (random-player targeted, 44s loop — bridged) / SPELL_SHOCK_BARRIER =
+-- 46165 (heroic-only arm — PORTED via creature:IsHeroic(); stale
+-- "no difficulty bridge" claim retracted) / SPELL_PYROBLAST = 36819
+-- (ported — maiden_of_virtue random-player precedent; stale
+-- "no SelectTarget bridge" claim retracted) / SPELL_EMOTE_TALK_EXCLAMATION =
 -- 48348 / SPELL_EMOTE_POINT = 48349 / SPELL_EMOTE_ROAR = 48350 /
 -- SPELL_QUITE_SUICIDE = 3617 (serverside) / SAY_GRAVITY_LAPSE_1 = 2 /
 -- SAY_GRAVITY_LAPSE_2 = 3 (repeat lapses never recur — no phase-two
 -- machinery) / SAY_POWER_FEEDBACK = 4 (phase-two — no bridge) /
 -- SAY_SUMMON_PHOENIX = 5 / SAY_ANNOUNCE_PYROBLAST = 6
--- (heroic-only arm — no bridge) / SAY_FLAME_STRIKE = 7 (ported) /
+-- (heroic-only arm — ported) / SAY_FLAME_STRIKE = 7 (ported) /
 -- SAY_DEATH = 8 /
 -- SAY_INTRO_1 = 0 / SAY_INTRO_2 = 1 (SetData(DATA_KAELTHAS_INTRO)-
 -- gated — no instance SetData bridge) / EVENT_FIREBALL init 1ms
@@ -61,6 +63,17 @@
 --   (SelectTarget(Random, 0, 40.0f, true) — GetPlayersInWorld + map/
 --   instance/alive/IsWithinDist filter, maiden_of_virtue precedent)
 --   cast 46162, 44s init -> 44s loop.
+-- - EVENT_SHOCK_BARRIER (heroic-only): OnEnterCombat schedules it
+--   61s only under creature:IsHeroic() (C++-exact JustEngagedWith
+--   gate, lua_creature_events.go:203; the "no difficulty bridge"
+--   claim was stale, retracted). Fire arm in C++ order:
+--   Talk(SAY_ANNOUNCE_PYROBLAST) + self-cast 46165 + fireball
+--   reschedule 2s500ms (schedule() cancel-on-reschedule = EventMap
+--   RescheduleEvent) + one-shot EVENT_PYROBLAST 2s + 1min repeat.
+-- - EVENT_PYROBLAST: random-player (SelectTarget(Random, 0, 40.0f,
+--   true) — same maiden_of_virtue precedent as flame strike; the
+--   "no SelectTarget bridge" claim was stale, retracted) cast
+--   36819, single-shot (C++ never re-arms it).
 -- 50%-HP phase-two latch via OnDamageTaken(9) with a per-guid
 -- one-shot flag reset on OnEnterCombat(1) (gyth convention —
 -- C++-exact HealthBelowPctDamaged(50): GetHealth() - damage <
@@ -99,10 +112,13 @@
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - EVENT_FLAME_STRIKE now ported (above); stale "no SelectTarget
 --   bridge" claim retracted (maiden_of_virtue random-player precedent).
--- - EVENT_SHOCK_BARRIER + EVENT_PYROBLAST: the whole arm is heroic-
---   gated (IsHeroic) and pyroblast gates on SelectTarget(Random, 0,
---   40.0f, true) — no difficulty bridge, no SelectTarget bridge; no
---   timers ported.
+-- - EVENT_SHOCK_BARRIER + EVENT_PYROBLAST: now PORTED (above).
+--   Stale claims retracted: "no difficulty bridge" (IsHeroic bridged
+--   at lua_creature_events.go:203, keristrasza crystallize precedent)
+--   and "no SelectTarget bridge" (maiden_of_virtue random-player
+--   precedent, already in this file). The shock-barrier arm is the
+--   heroic-gated leg of JustEngagedWith; pyroblast fires only from
+--   its fire arm, one-shot.
 -- - Phase-two machinery: EVENT_PREPARE_GRAVITY_LAPSE /
 --   EVENT_GRAVITY_LAPSE_CENTER_TELEPORT (self-cast 44218) /
 --   EVENT_GRAVITY_LAPSE (DoCastAOE 44224) / beam visual 44251 /
@@ -133,11 +149,14 @@ local SPELL_EMOTE_POINT = 48349
 local SPELL_EMOTE_ROAR = 48350
 local SPELL_QUITE_SUICIDE = 3617
 local SPELL_FLAME_STRIKE = 46162
+local SPELL_SHOCK_BARRIER = 46165
+local SPELL_PYROBLAST = 36819
 local SPELL_CLEAR_FLIGHT = 44232
 
 local SAY_GRAVITY_LAPSE_1 = 2
 local SAY_FLAME_STRIKE = 7
 local SAY_SUMMON_PHOENIX = 5
+local SAY_ANNOUNCE_PYROBLAST = 6
 local SAY_DEATH = 8
 
 local ENTRY_KAELTHAS = 24664
@@ -206,6 +225,30 @@ local function onFlameStrike(creature, guid)
     schedule(guid, "flame_strike", 44000, function() onFlameStrike(creature, guid) end)
 end
 
+-- C++ EVENT_PYROBLAST (cpp:254-258): random-player
+-- (SelectTarget(Random, 0, 40.0f, true) — maiden_of_virtue
+-- random-player precedent) cast 36819, one-shot: C++ schedules it
+-- once from the shock-barrier arm, no repeat.
+local function onPyroblast(creature, guid)
+    local target = randomTargetInRange(creature, 40)
+    if target then
+        creature:CastSpell(target, SPELL_PYROBLAST)
+    end
+end
+
+-- C++ EVENT_SHOCK_BARRIER (cpp:246-253), heroic-only via
+-- JustEngagedWith's IsHeroic() gate (cpp:151): Talk(SAY_ANNOUNCE_
+-- PYROBLAST) + self-cast 46165 + RescheduleEvent(EVENT_FIREBALL,
+-- 2s500ms) — schedule() re-arm = EventMap cancel-on-reschedule —
+-- + ScheduleEvent(EVENT_PYROBLAST, 2s), repeat 1min.
+local function onShockBarrier(creature, guid)
+    creature:Talk(SAY_ANNOUNCE_PYROBLAST)
+    creature:CastSpell(creature, SPELL_SHOCK_BARRIER)
+    schedule(guid, "fireball", 2500, function() onFireball(creature, guid) end)
+    schedule(guid, "pyroblast", 2000, function() onPyroblast(creature, guid) end)
+    schedule(guid, "shock_barrier", 60000, function() onShockBarrier(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -214,6 +257,9 @@ local function onEnterCombat(_, creature)
     schedule(guid, "fireball", 1, function() onFireball(creature, guid) end)
     schedule(guid, "flame_strike", 44000, function() onFlameStrike(creature, guid) end)
     schedule(guid, "phoenix", 12000, function() onPhoenix(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "shock_barrier", 61000, function() onShockBarrier(creature, guid) end)
+    end
 end
 
 -- C++ boss_felblood_kaelthas::EnterEvadeMode (:168):

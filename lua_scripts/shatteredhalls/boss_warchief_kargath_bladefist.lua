@@ -71,10 +71,17 @@
 -- SetSpeedRate(MOVE_RUN, 2) / MoveChase(victim) /
 -- Blade_Dance_Timer = 30000 — none of it can run without a
 -- movement bridge, and the speed-rate arms have no speed
--- bridge; no difficulty bridge — the IsHeroic()-gated
--- Charge_timer = 5000 arm at blade-dance end, and its
--- DoCast(SelectTarget(Random, 0), H_SPELL_CHARGE 25821) fire
--- arm, unmodeled (thespia precedent); no cross-creature/
+-- bridge; the IsHeroic()-gated Charge_timer = 5000 arm at
+-- blade-dance end and its DoCast(SelectTarget(Random, 0),
+-- H_SPELL_CHARGE 25821) fire arm stay unmodeled — the "no
+-- difficulty bridge" claim was stale and is retracted
+-- (creature:IsHeroic() is bridged, lua_creature_events.go:203),
+-- but the arm still has no landing point: Charge_timer is only
+-- ever armed by the blade-dance-end leg (no movement bridge —
+-- MovePoint/MovementInform) and the fire arm needs
+-- SelectTarget(Random, 0) non-playerOnly, which has no bridge
+-- (kagani-vanish precedent); porting the gate alone would
+-- fabricate a fire arm with no trigger (thespia precedent); no cross-creature/
 -- ObjectAccessor bridge — the JustSummoned AttackStart relay
 -- for guard adds and the removeAdds DespawnOrUnsummon sweeps
 -- unmodeled; no position/home bridge — the resetcheck_timer
