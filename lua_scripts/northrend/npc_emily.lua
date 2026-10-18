@@ -36,31 +36,38 @@
 -- (Emily->AI()->Talk SAY_WORGHAGGRO2 1 / SAY_WORGRAGGRO4 3 /
 -- SAY_RANDOMAGGRO 4, entry-gated on 26586/26590) — no cross-creature
 -- Talk bridge; no JustDied / KilledUnit arms.
--- npc_outhouse_bunny (Doing Your Duty 12227): SpellHit
--- SPELL_OUTHOUSE_GROANS 48382 -> emote + DoCast
--- SPELL_CAMERA_SHAKE 47533 / SPELL_DUST_FIELD 48329 — no-SpellHit /
--- no-cast bridges.
+-- npc_outhouse_bunny (Doing Your Duty 12227): PORTED in
+-- npc_outhouse_bunny.lua (entry 27326, go_scripts.cpp:585) — SpellHit
+-- SPELL_OUTHOUSE_GROANS 48382 -> counter arm -> DoCast(caster,
+-- SPELL_CAMERA_SHAKE 47533) when counter < 5 / DoCast(me,
+-- SPELL_DUST_FIELD 48329) always (zone_grizzly_hills.cpp:298-323);
+-- the gender-gated sound arm (SetData, Type 1) stays out
+-- (no SetData bridge; the go_amberpine_outhouse gossip caller is
+-- not ported).
 -- npc_tallhorn_stag + npc_amberpine_woodsman (Amberpine woodsman
 -- skinning event): zero Talk; UpdateAI NPC_NPC_FLAGS /
 -- UNIT_NPC_EMOTESTATE state machine (0.2f FindNearestCreature
 -- 26363) — no-quest-state bridge.
 -- npc_wounded_skirmisher (Overwhelmed 12288): SpellHit
 -- SPELL_RENEW_SKIRMISHER 48812 -> Talk(SAY_RANDOM) + DoCast
--- SPELL_KILL_CREDIT 48813 — no-SpellHit bridge (fizzule precedent).
+-- SPELL_KILL_CREDIT 48813 — bridgeable (event 14 SpellHit + cast), but
+-- the skirmisher carries NO entry constant anywhere in the C++ tree
+-- (DB ScriptName binding only, unverifiable — laughing-skull
+-- precedent), so no entry-verifiable registration can be wired.
 -- npc_venture_co_straggler (Smoke 'Em Out 12323/12324): Talk(SAY_SEO)
 -- rides EVENT_STRAGGLER_2 timer + MovePoint chain + DisappearAndDie;
 -- SpellHit SPELL_SMOKE_BOMB 49075 -> pacify + event chain — the
--- SpellHit/MovePoint sequence genuinely stays out (no-SpellHit /
--- no-movement bridges). EVENT_CHOP (DoCastVictim SPELL_CHOP 43410,
--- 2-arg non-triggered, JustEngagedWith init (3s,6s), unconditional
--- Repeat(10s,12s), zone_grizzly_hills.cpp:572-574/:610-616) is
--- SEPARABLE from the SpellHit chain (scheduled in JustEngagedWith
--- independently, not gated on the SpellHit flip) and would bridge in
--- isolation — but the straggler carries NO entry constant anywhere in
+-- SpellHit arm itself bridges now (event 14), but the smoke-bomb arm
+-- is gated on the unbridged MovePoint/DisappearAndDie/SetImmuneToPC
+-- chain, and the straggler carries NO entry constant anywhere in
 -- the C++ tree (DB ScriptName binding only, unverifiable), so no
--- entry-verifiable registration can be wired (laughing-skull
--- precedent) — full spec documented here for the day the entry is
--- confirmed; not ported.
+-- entry-verifiable registration can be wired. EVENT_CHOP
+-- (DoCastVictim SPELL_CHOP 43410, 2-arg non-triggered,
+-- JustEngagedWith init (3s,6s), unconditional Repeat(10s,12s),
+-- zone_grizzly_hills.cpp:572-574/:610-616) is SEPARABLE from the
+-- SpellHit chain (scheduled in JustEngagedWith independently, not
+-- gated on the SpellHit flip) and would bridge in isolation — but
+-- no entry (see above), so the full spec stays documented-only.
 -- npc_lake_frog: Talk SAY_MAIDEN_0 / SAY_MAIDEN_1 ride
 -- EVENT_LAKEFROG_2/5 timers (SetEntry 33220 maiden transform,
 -- SPELL_MAIDEN_OF_ASHWOOD_LAKE_TRANSFORM 62550, gossip-flag
