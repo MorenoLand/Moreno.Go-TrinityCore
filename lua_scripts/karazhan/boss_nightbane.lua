@@ -322,8 +322,10 @@ local function nightbaneDamageTaken(event, creature, attacker, damage)
     end
     local newDamage = damage
     if st.phase == PHASE_FLY then
-        -- C++ DamageTaken PHASE_FLY arm: the boss cannot die mid-air.
-        if health > 1 and damage >= health then
+        -- C++ DamageTaken PHASE_FLY arm: the boss cannot die mid-air
+        -- (no health guard in C++; at exactly 1 HP a lethal hit becomes
+        -- 0 damage, damage = health - 1).
+        if damage >= health then
             newDamage = health - 1
         end
         return false, newDamage

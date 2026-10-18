@@ -17,7 +17,9 @@
 -- Lua-side: each Astral Flare summon drains 10% of max mana exactly as
 -- C++ ModifyPower(POWER_MANA, -GetMaxPower/10); the Evocate arm fires when
 -- the drain leaves mana strictly below 10%, mirroring C++ GetPower*100/
--- GetMaxPower < 10. The Lua bridge exposes no power APIs, so the Evocation
+-- GetMaxPower < 10. The Lua bridge exposes no power-write APIs (reads
+-- creature:GetPower()/GetMaxPower() are bridged via the object-field
+-- fallback), so the Evocation
 -- channel's in-spell mana refill is approximated by restoring mana to 100%
 -- after the 20s channel; in-combat mana regen is not modeled (evocates on
 -- a pure drain clock: 10 summons, ~100s). ApplySpellImmune(arcane damage)
@@ -166,10 +168,11 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
     -- C++ DamageTaken reads !HealthAbovePct(15) on current health; the
     -- engine fires event 9 pre-damage, so `health` is already the C++
-    -- value: latch when health <= floor(maxHealth*15/100), the integer form
-    -- of !HealthAbovePct(15).
+    -- value: latch when health < floor(maxHealth*15/100), the integer form
+    -- of !HealthAbovePct(15) (strict <; at exactly floor(max*15/100) the
+    -- C++ does not fire).
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
-    if maxHealth ~= 0 and not st.infused and health <= math.floor(maxHealth * 15 / 100) then
+    if maxHealth ~= 0 and not st.infused and health < math.floor(maxHealth * 15 / 100) then
         st.infused = true
         cancelKey(guid, "astralflare")
         schedule(guid, "infusion", 1, function() onArcaneInfusion(creature) end)
