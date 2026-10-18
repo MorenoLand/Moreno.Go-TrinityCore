@@ -2045,11 +2045,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "school lockout active")
 		return true
 	}
-	if s.hasAuraType(18) && (spell.SchoolMask > 1 || spell.SchoolMask == 0) && spell.PreventionType != spellPreventionTypePacify {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSilenced), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "silenced")
-		return true
-	}
+	// No early silence gate: C++ CheckCast carries no silence arm ahead of the
+	// cooldown block — silenced/pacified casters are rejected by
+	// Spell::CheckCasterAuras (Spell.cpp:6257-6389), bridged as checkCasterAuras
+	// and called later in C++ relative order (after CheckPower). The removed
+	// arm tested aura type 18 (SPELL_AURA_MOD_INVISIBILITY, not
+	// SPELL_AURA_MOD_SILENCE = 27), so invisible casters ate a bogus
+	// SPELL_FAILED_SILENCED here.
 	// CheckCast early arms (Spell.cpp:5191-5246): C++ runs the
 	// cooldown/cheat/GCD/ended-BG/outdoors arms before the unit-caster
 	// block; internal C++ order is allow-only-ability -> cooldowns ->
@@ -2230,6 +2232,21 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell family blocked by aura")
 		return true
 	}
+	// Caster aura state requirements (Spell::CheckCast caster-state block, Spell.cpp:5298-5304):
+	// C++ runs the state arms before the aura-spell arms (5298-5301 ahead of
+	// 5305-5308); all four fail SPELL_FAILED_CASTER_AURASTATE so the order is
+	// behavior-neutral, kept for arm-order fidelity.
+	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.CasterAuraState != 0 && !s.hasAuraState(spell.CasterAuraState, spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura state missing", "state", spell.CasterAuraState)
+		return true
+	}
+	if spell.ExcludeCasterAuraState != 0 && s.hasAuraState(spell.ExcludeCasterAuraState, spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura state present", "state", spell.ExcludeCasterAuraState)
+		return true
+	}
 	// Caster aura spell requirements (Spell::CheckCast caster-state block, Spell.cpp:5305-5308):
 	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
 	if spell.CasterAuraSpell != 0 && !s.hasAura(spell.CasterAuraSpell) {
@@ -2240,18 +2257,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if spell.ExcludeCasterAuraSpell != 0 && s.hasAura(spell.ExcludeCasterAuraSpell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura present", "aura", spell.ExcludeCasterAuraSpell)
-		return true
-	}
-	// Caster aura state requirements (Spell::CheckCast caster-state block, Spell.cpp:5298-5304):
-	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.CasterAuraState != 0 && !s.hasAuraState(spell.CasterAuraState, spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura state missing", "state", spell.CasterAuraState)
-		return true
-	}
-	if spell.ExcludeCasterAuraState != 0 && s.hasAuraState(spell.ExcludeCasterAuraState, spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura state present", "state", spell.ExcludeCasterAuraState)
 		return true
 	}
 	// CheckCast caster-state reqCombat arm (Spell::CheckCast, Spell.cpp:5311-5312):
