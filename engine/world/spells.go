@@ -8821,9 +8821,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell.cpp:1500 — pet 5 / vehicle 94, resolved from the caster after
 	// CheckCast) and the magic redirect (Spell::SelectExplicitTargets,
 	// Spell.cpp:724-757 — Grounding Totem magnet, also post-CheckCast).
-	// The TARGET_FLAG_UNIT_MINIPET arm (SpellInfo.cpp:1806-1808) is dead —
-	// GetExplicitTargetMask never produces the MINIPET bit (target 90 falls
-	// through to plain TARGET_FLAG_UNIT, SpellInfo.cpp:184-210). The IsPassive
+	// The TARGET_FLAG_UNIT_MINIPET arm (SpellInfo.cpp:1806-1808) is
+	// validated at the CheckCast gauntlet by resolveExplicitUnitTarget
+	// (explicitTargetFactionBlocked: target must be the caster's
+	// player.CritterGUID); its only live mask source is the raw DBC Targets
+	// field (SpellInfo.cpp:3347), target 90 falls through to plain
+	// TARGET_FLAG_UNIT (SpellInfo.cpp:184-210). The IsPassive
 	// wrapper (Spell.cpp:5353-5360) is vacuous (passive spells are rejected at
 	// the lookup) and the m_originalCaster / GO-caster arm (5360-5364) is
 	// vacuous on the client-initiated path (the caster is always the session

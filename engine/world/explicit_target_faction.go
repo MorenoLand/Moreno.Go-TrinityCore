@@ -50,12 +50,15 @@ const (
 // 6 -> ENEMY; 21, 45 -> ALLY; 35 -> PARTY; 57 -> RAID (SpellInfo.cpp:226,
 // 241, 255, 265, 277); 95 -> PASSENGER (SpellInfo.cpp:184, 315).
 // Target 90 (TARGET_UNIT_TARGET_MINIPET) carries TARGET_CHECK_DEFAULT and
-// falls through to plain TARGET_FLAG_UNIT, so the TARGET_FLAG_UNIT_MINIPET
-// bit (0x10000, SpellInfo.h:64) is never produced by GetExplicitTargetMask
-// and its CheckExplicitTarget arm (SpellInfo.cpp:1806-1808) is dead on the
-// DBC-driven path.
+// falls through to plain TARGET_FLAG_UNIT (SpellInfo.cpp:184-210), and the
+// GetMissingTargetMask extension only ever adds TARGET_FLAG_UNIT
+// (SpellInfo.cpp:38-64) — neither implicit path produces
+// TARGET_FLAG_UNIT_MINIPET (0x10000, SpellInfo.h:64). The sole live source is
+// the raw DBC Targets field, which _InitializeExplicitTargetMask ORs in
+// first (SpellInfo.cpp:3347), folded below so the faction gate sees the same
+// bit C++ tests at SpellInfo.cpp:1795/1806.
 func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
-	mask := uint32(0)
+	mask := spell.Targets & targetFlagUnitMinipet
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -330,6 +333,17 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 	switch {
 	case wireUnit && explicitWireTargetFitsMask(spell, target):
 		adoptedUnit = target.UnitGUID
+	case !wireObject && s.selection != 0 && s.player.CritterGUID != 0 && s.selection == s.player.CritterGUID &&
+		spellExplicitUnitTargetMask(spell)&targetFlagUnitMinipet != 0:
+		// Spell::InitExplicitTargets selection arm (Spell.cpp:678-690) for
+		// the caster's own critter: C++ resolves the TempSummon via
+		// ObjectAccessor::GetUnit and CheckExplicitTarget's MINIPET arm
+		// (SpellInfo.cpp:1806-1808) passes on pure GUID equality with the
+		// caster's UNIT_FIELD_CRITTER. Go registers no creatureMotion for
+		// critters, so explicitSelectionTargetOK (getCombatTarget) can never
+		// resolve it — the equality needs no target data and is checked
+		// here directly.
+		adoptedUnit = s.selection
 	case !wireObject && s.selection != 0 && s.explicitSelectionTargetOK(ctx, spell, s.selection):
 		adoptedUnit = s.selection
 	case !wireObject && spellExplicitUnitTargetMask(spell)&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0:
@@ -397,13 +411,18 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 // assist non-friendly targets" - GetReactionTo below REP_NEUTRAL in both
 // directions, Object.cpp:3145), with the PARTY/RAID membership terms
 // (Unit::IsInPartyWith/Unit::IsInRaidWith, Unit.cpp:12126).
+// TARGET_FLAG_UNIT_MINIPET runs the unitTarget->GetGUID() ==
+// unitCaster->GetCritterGUID() term (SpellInfo.cpp:1806-1808): only the
+// caster's own vanity-pet minion is a valid target. Go's per-player critter
+// GUID (player.CritterGUID, set/cleared by the Unit::SetMinion add/remove
+// arms, Unit.cpp:6085-6087/6111-6114) is the UNIT_FIELD_CRITTER mirror, so
+// the caster is always the session player here and its null arm is vacuous.
 // TARGET_FLAG_UNIT_PASSENGER runs the unitTarget->IsOnVehicle(unitCaster)
-// term (SpellInfo.cpp:1809-1811) via explicitTargetPassengerBlocked. The
-// TARGET_FLAG_UNIT_MINIPET arm is dead (see spellExplicitUnitTargetMask).
+// term (SpellInfo.cpp:1809-1811) via explicitTargetPassengerBlocked.
 // Returns true when no branch passes and the cast must fail with
 // SPELL_FAILED_BAD_TARGETS.
 func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uint64, tgt combatTarget) bool {
-	if mask&(targetFlagUnitEnemy|targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid|targetFlagUnitPassenger) == 0 {
+	if mask&(targetFlagUnitEnemy|targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid|targetFlagUnitMinipet|targetFlagUnitPassenger) == 0 {
 		return false
 	}
 	targetSess := s.server.findSessionByGUID(explicitUnitGUID)
@@ -434,6 +453,9 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 		return false
 	}
 	if mask&targetFlagUnitRaid != 0 && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, true) {
+		return false
+	}
+	if mask&targetFlagUnitMinipet != 0 && s.player.CritterGUID != 0 && explicitUnitGUID == s.player.CritterGUID {
 		return false
 	}
 	if mask&targetFlagUnitPassenger != 0 && !s.explicitTargetPassengerBlocked(explicitUnitGUID) {

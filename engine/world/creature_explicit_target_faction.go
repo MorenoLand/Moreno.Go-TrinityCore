@@ -56,11 +56,16 @@ func (s *Server) checkCreatureExplicitTargetFaction(m *creatureMotion, attacker 
 			return true
 		}
 	}
-	// TARGET_FLAG_UNIT_MINIPET arm (SpellInfo.cpp:1806-1808): dead —
-	// GetExplicitTargetMask never produces the bit (target 90 carries
-	// TARGET_CHECK_DEFAULT and falls through to plain TARGET_FLAG_UNIT,
-	// SpellInfo.cpp:184-210; see spellExplicitUnitTargetMask), so this arm
-	// can never fire on the DBC-driven path.
+	// TARGET_FLAG_UNIT_MINIPET arm (SpellInfo.cpp:1806-1808): the bit can
+	// arrive via the raw DBC Targets field (folded by
+	// spellExplicitUnitTargetMask, SpellInfo.cpp:3347); the implicit-target
+	// and missing-mask paths never produce it. C++ passes only when the
+	// target GUID equals the caster's UNIT_FIELD_CRITTER
+	// (Unit::SetMinion add/remove arms, Unit.cpp:6085-6087/6111-6114).
+	// Creature casters have no Go critter model, so the arm collapses to a
+	// never-pass — the tail's BAD_TARGETS fizzle below is C++-exact for
+	// them (a MINIPET-only mask fails unless the target is the caster's
+	// own critter, which a creature never has).
 	// TARGET_FLAG_UNIT_PASSENGER arm (SpellInfo.cpp:1809-1811):
 	// unitTarget->IsOnVehicle(unitCaster) (Unit.cpp:12074-12077: the
 	// target's vehicle kit is the caster's kit).
