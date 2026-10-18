@@ -31,18 +31,15 @@
 -- grow timer and the 20s shrink timer; the Stop early return
 -- collapses into the pump). Pump: grow 31698 non-triggered
 -- self-cast — fires immediately on the first tick (C++ Grow_
--- Timer=0) then every 3s (C++-exact); shrink 20s -> Stop=true
--- (the me->RemoveAurasDueToSpell(SPELL_GROW 31698) arm has no
--- aura-removal bridge, documented only) — the pump is
--- cancelled and per-GUID state dropped, ending the grow
--- machine (timer bookkeeping exact). OnDied(4): cleanup. OnLea
+-- Timer=0) then every 3s (C++-exact); shrink 20s -> RemoveAura
+-- (SPELL_GROW 31698) via creature:RemoveAura + Stop=true — the
+-- pump is cancelled and per-GUID state dropped, ending the
+-- grow machine (C++-exact). OnDied(4): cleanup. OnLea
 -- veCombat(2)/OnReset(23): cleanup (the C++ Reset arms are
 -- covered by OnSpawn — the mushroom never engages, so evade
 -- Reset is unreachable).
--- Deliberate deviations (all await engine bridges): no aura-
--- removal bridge — the shrink-time RemoveAurasDueToSpell arm
--- unmodeled (the Stop=true arm is modeled as pump cancel);
--- no instance-script model — instance_the_underbog.cpp is a
+-- Deliberate deviations (all await engine bridges): no
+-- instance-script model — instance_the_underbog.cpp is a
 -- placeholder and stays blocked on the instance-script model;
 -- no summon bridge — the boss's SummonCreature(17990) arm
 -- unmodeled, so these mushrooms spawn only via DB/world
@@ -98,10 +95,11 @@ local function mushroomTick(creature, guid)
     end
 
     -- Shrink 20s: C++ RemoveAurasDueToSpell(SPELL_GROW) + Stop
-    -- =true. The aura-removal arm has no bridge (documented
-    -- only); the Stop arm is modeled as pump cancel (timer
-    -- bookkeeping exact).
+    -- =true. The aura-removal arm IS bridged (creature:RemoveAura,
+    -- lua_creature_events.go); the Stop arm is modeled as pump
+    -- cancel (timer bookkeeping exact).
     if st.shrink <= 1000 then
+        creature:RemoveAura(SPELL_GROW)
         resetMushroom(guid)
     else
         st.shrink = st.shrink - 1000

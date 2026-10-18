@@ -39,7 +39,7 @@
 -- within 40 yd, cast or skip, re-arm (C++-exact). Enveloping
 -- winds 31718 9s init then {10s,15s} — random alive player
 -- within 35 yd, cast or skip, re-arm (C++-exact); the Heroic
--- second cast unmodeled (below). OnTargetDied(3): victim:
+-- second cast is modeled via creature:IsHeroic() (above). OnTargetDied(3): victim:
 -- GetObjectType() == "Player" -> Talk(SAY_SLAY) (C++-exact). OnDied(4): Talk(
 -- SAY_DEAD) + cleanup (the _JustDied arm is instance-blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
