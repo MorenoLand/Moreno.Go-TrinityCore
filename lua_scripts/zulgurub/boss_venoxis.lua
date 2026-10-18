@@ -32,7 +32,8 @@
 -- no instance-script model — boss admission via the luaBossAI shim
 -- (_Reset/_JustDied/BossAI::JustEngagedWith, GetZulGurubAI bookkeeping
 -- and the DATA_VENOXIS encounter-state arms skipped); DoZoneInCombat has
--- no bridge — zone adds are not pulled; RemoveAllAuras and the
+-- no bridge — zone adds are not pulled; RemoveAllAuras is bridged
+-- (creature:RemoveAllAuras) and ported in Reset/JustDied, but the
 -- REACT_PASSIVE/REACT_AGGRESSIVE arms have no bridge — reset is
 -- timer/state-only (jindo convention); ResetThreatList has no bridge
 -- (no threat model); the holy-nova SelectTarget(MaxThreat) scan has no
@@ -301,10 +302,12 @@ end
 RegisterCreatureEvent(ENTRY_VENOXIS, 1, function(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    -- C++ Reset: _Reset, RemoveAllAuras / REACT_PASSIVE have no bridge —
-    -- state and timers only (jindo convention). C++ JustEngagedWith:
+    -- C++ Reset: _Reset, RemoveAllAuras (bridged — creature:RemoveAllAuras),
+    -- SetReactState(REACT_PASSIVE) has no bridge — state and timers only
+    -- (jindo convention). C++ JustEngagedWith:
     -- BossAI::JustEngagedWith bookkeeping and DoZoneInCombat have no
     -- bridge.
+    creature:RemoveAllAuras()
     venoxisState[guid] = { phase = PHASE_ONE, transformed = false, frenzied = false }
     schedule(guid, "thrash", 5000, function()
         onThrash(creature, guid)
@@ -332,8 +335,9 @@ end)
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 4, function(event, creature)
     -- C++ JustDied: _JustDied, Talk(SAY_VENOXIS_DEATH), RemoveAllAuras
-    -- (no bridge).
+    -- (bridged — creature:RemoveAllAuras).
     creature:Talk(TALK_VENOXIS_DEATH)
+    creature:RemoveAllAuras()
     cancelTimers(creature:GetGUID())
 end)
 

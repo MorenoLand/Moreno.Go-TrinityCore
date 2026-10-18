@@ -130,11 +130,12 @@
 -- spell_transform_visual_missile_periodic (periodic 46208/46178
 -- missile) and spell_summon_blood_elves_periodic (periodic 46050
 -- re-cast) unmodeled (standing gaps); no aura-enumeration/
--- flag/visibility/react/movement/kill/despawn bridges — the
--- muru phase-two RemoveAllAuras + NOT_SELECTABLE arms, the
--- portal DoResetPortals grid scan, the dark-fiend display/react/
--- proximity-despawn arms, the black-hole 15s despawn and the
--- entropius evade despawn-all arms unmodeled.
+-- flag/visibility/react/movement/kill/despawn bridges — the muru
+-- phase-two RemoveAllAuras arm is bridged and ported in
+-- muruDamageTaken; the NOT_SELECTABLE arm, the portal DoResetPortals
+-- grid scan, the dark-fiend display/react/proximity-despawn arms, the
+-- black-hole 15s despawn and the entropius evade despawn-all arms stay
+-- unmodeled.
 
 local SPELL_OPEN_PORTAL_PERIODIC = 45994
 local SPELL_DARKNESS_PERIODIC = 45998
@@ -218,7 +219,9 @@ local function muruEnterCombat(event, creature)
 end
 
 -- C++ DamageTaken: lethal -> damage = health - 1; PHASE_ONE only:
--- phase=PHASE_TWO, triggered 46177, 6s-delayed triggered 46217.
+-- phase=PHASE_TWO, RemoveAllAuras (bridged), triggered 46177,
+-- 6s-delayed triggered 46217. The UNIT_FLAG_NOT_SELECTABLE arm has no
+-- flag bridge (standing gap).
 local function muruDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if health > 0 and damage >= health then
@@ -226,6 +229,7 @@ local function muruDamageTaken(event, creature, attacker, damage)
         local st = muruState[guid]
         if st and st.phase == 1 then
             st.phase = 2
+            creature:RemoveAllAuras()
             creature:CastSpell(creature, SPELL_OPEN_ALL_PORTALS, true)
             schedule(guid, "summonentropius", 6000, function()
                 creature:CastSpell(creature, SPELL_SUMMON_ENTROPIUS, true)

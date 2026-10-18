@@ -71,8 +71,9 @@
 -- skipped); the SetImmuneToPC/NPC flag arms and the RemoveFlag
 -- un-immune arms have no flag bridge — feign death is aura-only and
 -- further damage while feign-dead is zeroed to approximate immunity;
--- RemoveAllAuras has no bridge — only the feign-death aura is removed at
--- resurrect/phase change/reset; no stat-modifier bridge — the +40% tiger
+-- RemoveAllAuras is bridged (creature:RemoveAllAuras) and ported in the
+-- fake-death arm; the feign-death aura alone is removed at
+-- resurrect/phase change/reset per C++ (RemoveAurasDueToSpell); no stat-modifier bridge — the +40% tiger
 -- damage hack and the Reset -damage hack are skipped (marli/arlokk
 -- convention); no threat model — ResetThreatList and the gouge
 -- ModifyThreatByPercent arms skipped; no movement model — the charge
@@ -361,8 +362,12 @@ end
 -- was converted into a fake death (damage must be zeroed by the caller).
 local function fakeDeath(e, creature, entry, guid)
     creature:Talk(TALK_FAKE_DEATH)
-    -- RemoveAllAuras / SetImmuneToPC / SetImmuneToNPC have no bridge —
-    -- only the feign-death aura is applied.
+    -- C++ arm order: Talk -> RemoveAllAuras -> SetImmuneToPC/NPC ->
+    -- DoCastSelf(FEIGN_DEATH). RemoveAllAuras is bridged
+    -- (creature:RemoveAllAuras, lua_creature_events.go); the
+    -- SetImmuneToPC/NPC flag arms still have no flag bridge, so damage
+    -- while feign-dead is zeroed to approximate immunity (header).
+    creature:RemoveAllAuras()
     creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH, true)
     delayTimers(guid, 10000)
     thekalFakeDeath(e, entry)
