@@ -401,7 +401,8 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "guild rights", "type", typeID)
 		return true
 	}
-	if !s.groupChatAllowed(uint8(typeID)) {
+	chatAllowed, chatGroupID := s.resolveGroupChat(uint8(typeID))
+	if !chatAllowed {
 		s.debug("chat rejected", "account", s.accountName, "reason", "group chat gate", "type", typeID)
 		return true
 	}
@@ -441,7 +442,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		case scripting.PlayerEventWhisper:
 			extra = luaPlayerOrNil(receiver)
 		case scripting.PlayerEventGroupChat:
-			extra = groupLuaObject(s.server, s.server.findGroupByID(s.groupID))
+			extra = groupLuaObject(s.server, s.server.findGroupByID(chatGroupID))
 		case scripting.PlayerEventGuildChat:
 			extra = s.luaGuildObject(ctx, s.player.GuildID)
 		case scripting.PlayerEventChannelChat:
@@ -456,7 +457,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channelName)
+	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channelName, chatGroupID)
 	if typeID == chatWhisper && receiver != nil && language != languageAddon {
 		s.announceChatAutoReply(receiver)
 	}
@@ -654,7 +655,7 @@ func (s *session) sendAddonChannelReply(body string) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	s.server.broadcastChat(s, s, chatWhisper, languageAddon, body, "")
+	s.server.broadcastChat(s, s, chatWhisper, languageAddon, body, "", 0)
 }
 
 // sendAddonChannelAck mirrors AddonChannelCommandHandler::SendAck
@@ -1009,73 +1010,106 @@ func (s *Server) guildChatListenAllowed(target *session, officer bool) bool {
 	return rights&required == required
 }
 
-// groupChatAllowed mirrors the group-resolution gates of the
+// resolveGroupChat mirrors the group-resolution gates of the
 // CHAT_MSG_PARTY/PARTY_LEADER/RAID/RAID_LEADER/RAID_WARNING arms of
-// WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:395-528). Non-group
-// chat types always pass; group chat silently fails (no packet) when the gates
-// fail. The original (pre-battleground) group is stashed on BG-raid join
-// (session.originalGroupID, mirroring Player::m_originalGroup) and
-// restored on BG leave, so the battleground-group exclusion applies to the
-// session's current group; the CHAT_MSG_BATTLEGROUND/BATTLEGROUND_LEADER
-// arms below resolve against the sender's current group via
-// Group::isBGGroup (the BG-raid back-pointer, wired by
-// addOrSetPlayerToCorrectBGGroup on battleground entry).
-func (s *session) groupChatAllowed(chatType uint8) bool {
+// WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:395-528) and returns
+// the group the message is routed to. Non-group chat types always pass with no
+// target. The party/party-leader/raid/raid-leader arms resolve
+// Player::GetOriginalGroup() first: when the sender is in a battleground the
+// message goes to the pre-BG group with none of the BG/raid-type exclusions
+// (the leader check still applies for PARTY_LEADER on that path; the
+// RAID_LEADER arm only checks it on the fallback path — ChatHandler.cpp:483).
+// RAID_WARNING and the BATTLEGROUND arms resolve the current group only.
+func (s *session) resolveGroupChat(chatType uint8) (allowed bool, targetGroupID uint64) {
 	switch chatType {
 	case chatParty, chatPartyLeader, chatRaid, chatRaidLeader, chatRaidWarning, chatBattleground, chatBattleLeader:
 	default:
-		return true
+		return true, 0
 	}
-	if s == nil || s.server == nil || s.groupID == 0 {
-		return false
-	}
-	group := s.server.findGroupByID(s.groupID)
-	if group == nil {
-		return false
+	if s == nil || s.server == nil {
+		return false, 0
 	}
 	// Reference: Group::isBGGroup (Group.cpp:2466) keys on the m_bgGroup
 	// back-pointer — set by SetBattlegroundGroup from
 	// Battleground::SetBgRaid — not on the GROUPTYPE_BG bit, which the
 	// formation path never assigns.
-	isBGGroup := group.isBGGroup()
 	switch chatType {
+	case chatParty, chatPartyLeader:
+		// C++ (ChatHandler.cpp:395-408): the original group takes precedence;
+		// only the fallback through the current group applies the
+		// battleground exclusion.
+		if s.originalGroupID != 0 {
+			original := s.server.findGroupByID(s.originalGroupID)
+			if original == nil {
+				return false, 0
+			}
+			return chatType != chatPartyLeader || original.isLeader(s.playerGUID), s.originalGroupID
+		}
+		if s.groupID == 0 {
+			return false, 0
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil || group.isBGGroup() {
+			return false, 0
+		}
+		return chatType != chatPartyLeader || group.isLeader(s.playerGUID), s.groupID
+	case chatRaid, chatRaidLeader:
+		// C++ (ChatHandler.cpp:440-491): same original-group precedence; the
+		// fallback requires a non-BG raid group, and RAID_LEADER adds the
+		// leader check only on the fallback path.
+		if s.originalGroupID != 0 {
+			if original := s.server.findGroupByID(s.originalGroupID); original != nil {
+				return true, s.originalGroupID
+			}
+			return false, 0
+		}
+		if s.groupID == 0 {
+			return false, 0
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil || group.isBGGroup() || !group.IsRaid {
+			return false, 0
+		}
+		return chatType != chatRaidLeader || group.isLeader(s.playerGUID), s.groupID
+	case chatRaidWarning:
+		// C++ (ChatHandler.cpp:493-511): resolves GetGroup() only — no
+		// original-group arm; the group must be a raid group (or
+		// CONFIG_CHAT_PARTY_RAID_WARNINGS), never a battleground group, and
+		// the sender must be leader or assistant.
+		if s.groupID == 0 {
+			return false, 0
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil || group.isBGGroup() || !(group.IsRaid || s.server.Config.ChatPartyRaidWarnings) {
+			return false, 0
+		}
+		return group.isLeaderOrAssistant(s.playerGUID), s.groupID
 	case chatBattleground:
-		// Reference: the CHAT_MSG_BATTLEGROUND arm (ChatHandler.cpp:517-534)
+		// Reference: the CHAT_MSG_BATTLEGROUND arm (ChatHandler.cpp:512-529)
 		// — "battleground raid is always in Player->GetGroup(), never in
 		// GetOriginalGroup()": the sender's current group must be a
-		// battleground group (Group::isBGGroup, the BG-raid back-pointer
-		// assigned by addOrSetPlayerToCorrectBGGroup on BG entry).
-		return isBGGroup
+		// battleground group.
+		if s.groupID == 0 {
+			return false, 0
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil {
+			return false, 0
+		}
+		return group.isBGGroup(), s.groupID
 	case chatBattleLeader:
 		// Reference: the CHAT_MSG_BATTLEGROUND_LEADER arm
-		// (ChatHandler.cpp:535-551) adds the group-leader gate.
-		if !isBGGroup {
-			return false
+		// (ChatHandler.cpp:530-551) adds the group-leader gate.
+		if s.groupID == 0 {
+			return false, 0
 		}
-		return group.isLeader(s.playerGUID)
-	case chatParty, chatPartyLeader:
-		// C++: without an original group, the current group must not be a
-		// battleground group; party-leader chat requires the group leader.
-		if isBGGroup {
-			return false
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil || !group.isBGGroup() {
+			return false, 0
 		}
-		return chatType != chatPartyLeader || group.isLeader(s.playerGUID)
-	case chatRaid, chatRaidLeader:
-		// C++: the group must be a raid group and not a battleground group;
-		// raid-leader chat requires the group leader.
-		if isBGGroup || !group.IsRaid {
-			return false
-		}
-		return chatType != chatRaidLeader || group.isLeader(s.playerGUID)
-	case chatRaidWarning:
-		// C++: raid group (or CONFIG_CHAT_PARTY_RAID_WARNINGS), never a
-		// battleground group, and the sender must be leader or assistant.
-		if isBGGroup || !(group.IsRaid || s.server.Config.ChatPartyRaidWarnings) {
-			return false
-		}
-		return group.isLeaderOrAssistant(s.playerGUID)
+		return group.isLeader(s.playerGUID), s.groupID
 	}
-	return false
+	return false, 0
 }
 
 func (s *Server) chatIgnoredBy(targetGUID, sourceGUID uint64) bool {
@@ -1139,7 +1173,7 @@ func (s *Server) findSessionByPetGUID(petGUID uint64) *session {
 	return nil
 }
 
-func (s *Server) broadcastChat(source, receiver *session, chatType uint8, language uint32, message, channel string) {
+func (s *Server) broadcastChat(source, receiver *session, chatType uint8, language uint32, message, channel string, chatGroupID uint64) {
 	if source == nil || source.player == nil {
 		return
 	}
@@ -1156,11 +1190,13 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	if chatType == chatChannel && s.Config.AllowTwoSideInteractionChannel {
 		language = languageUniversal
 	}
-	// Party/raid chat is group-scoped (ChatHandler.cpp:395-528); hoist the
-	// group lookup so the per-target filter below stays cheap.
+	// Party/raid chat is group-scoped (ChatHandler.cpp:395-528); the group was
+	// resolved by resolveGroupChat (original-group-first for party/raid), so
+	// the per-target filter below uses the resolved group, not the session's
+	// current (possibly battleground) group.
 	var chatGroup *groupState
 	if chatType == chatParty || chatType == chatPartyLeader || chatType == chatRaid || chatType == chatRaidLeader || chatType == chatRaidWarning || chatType == chatBattleground || chatType == chatBattleLeader {
-		chatGroup = s.findGroupByID(source.groupID)
+		chatGroup = s.findGroupByID(chatGroupID)
 	}
 	// Reference: the CHAT_MSG_PARTY/PARTY_LEADER arm calls
 	// group->BroadcastPacket(&data, false, group->GetMemberGroup(senderGUID)),
@@ -1220,7 +1256,7 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 				continue
 			}
 		} else if chatType == chatParty || chatType == chatPartyLeader {
-			if source.groupID == 0 || value.groupID != source.groupID {
+			if chatGroupID == 0 || value.groupID != chatGroupID {
 				continue
 			}
 			if senderSubGroupKnown {
@@ -1232,16 +1268,16 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			// Reference: the CHAT_MSG_RAID/RAID_LEADER/RAID_WARNING arms
 			// broadcast to the group only (ChatHandler.cpp:470-528) — the
 			// raid-group / leader / assistant gates already ran in
-			// groupChatAllowed before broadcast.
-			if source.groupID == 0 || value.groupID != source.groupID {
+			// resolveGroupChat before broadcast.
+			if chatGroupID == 0 || value.groupID != chatGroupID {
 				continue
 			}
 		} else if chatType == chatBattleground || chatType == chatBattleLeader {
 			// Reference: the CHAT_MSG_BATTLEGROUND/BATTLEGROUND_LEADER arms
 			// (ChatHandler.cpp:517-551) broadcast to the whole group with no
 			// subgroup restriction; the BG-group / leader gates already ran
-			// in groupChatAllowed before broadcast.
-			if source.groupID == 0 || value.groupID != source.groupID {
+			// in resolveGroupChat before broadcast.
+			if chatGroupID == 0 || value.groupID != chatGroupID {
 				continue
 			}
 		} else if chatType == chatGuild || chatType == chatOfficer {
