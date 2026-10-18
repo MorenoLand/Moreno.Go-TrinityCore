@@ -65,12 +65,18 @@
 -- scheduled only in PHASE_TWO via EVENT_PHASE_TWO (:441/:449-452);
 -- the phase machine has no bridge (gothik precedent; the Oct-12 "no
 -- DoCastAOE bridge" claim is superseded by the phase-gating verdict); EVENT_SHADOW_FISSURE —
--- SelectTarget(Random, 0, 0.0f, true) -> DoCast(SHADOW_FISSURE 27810) —
--- no random-target SelectTarget bridge (cairne/kazzak precedent);
--- EVENT_DETONATE_MANA — random mana-user SelectTarget ->
--- DoCast(DETONATE_MANA 27819) — no random-target bridge;
--- EVENT_FROST_BLAST — SelectTarget(Random, 1) -> DoCast(FROST_BLAST
--- 27808) — no random-target bridge; EVENT_CHAINS —
+-- SelectTarget(Random, 0, 0.0f, true) -> DoCast(SHADOW_FISSURE 27810), Repeat randtime(14s,17s) —
+-- stays OUT: the random-target leg rides the thorim randomPlayerInRange convention, but the arm is
+-- PHASE_TWO-gated (scheduled only at :442 — the phase machine has no bridge, gothik precedent;
+-- the stale "no random-target SelectTarget bridge (cairne/kazzak)" claim is retracted);
+-- EVENT_DETONATE_MANA — SelectTarget(Random, 0, ManaUserTargetSelector) -> DoCast(DETONATE_MANA
+-- 27819), Repeat randtime(30s,40s) — stays OUT: PHASE_TWO-gated (:443); the random-target + mana-user
+-- legs are bridgeable (thorim pool + plr:GetPowerType(), lua_player.go:84), the phase gate rules;
+-- stale "no random-target bridge" retracted;
+-- EVENT_FROST_BLAST — SelectTarget(Random, 1) -> DoCast(FROST_BLAST 27808), Repeat randtime(25s,45s)
+-- — stays OUT: PHASE_TWO-gated (:444); random-target rides the thorim convention, the position-1
+-- offset rides the netherspite victim-exclusion, but the phase gate rules; stale claim retracted;
+-- EVENT_CHAINS —
 -- DoCastAOE(SPELL_CHAINS_DUMMY 28408) single-arg (triggered=false is the default),
 -- randtime(60s,80s) init, 1min+randtime(0s,20s) repeat — stays OUT:
 -- scheduled only in PHASE_TWO via EVENT_PHASE_TWO + gated on

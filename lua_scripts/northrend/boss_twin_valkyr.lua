@@ -61,6 +61,12 @@
 -- EVENT_BERSERK — DoCastSelf(Berserk 64238) + Talk(SAY_BERSERK 7),
 -- IsHeroic() ? 6min : 8min one-shot (creature:IsHeroic() bridge —
 -- the old "no difficulty bridge" claim was stale, retracted).
+-- EVENT_TOUCH — heroic-only SelectTarget(Random,0,200.0f,true,true,
+-- OtherEssenceSpellId) -> CastSpell(target, Light Touch 67297 / Dark
+-- Touch 67282), randtime(10s,15s) init / randtime(10s,15s) re-arm —
+-- the random-target leg rides the thorim randomPlayerInRange
+-- convention, the aura filter rides plr:HasAura (hakkar precedent);
+-- the SPELLVALUE_MAX_TARGETS=1 spell-mod has no bridge (noted).
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- Whole intro/positioning machine — JustAppeared:
@@ -93,11 +99,16 @@
 -- 65875) — the self-cast legs are port-pattern-ready in isolation
 -- (phase_hunter precedent) but fire only via cross-AI DoAction —
 -- documented-only.
--- EVENT_TOUCH (heroic only): SelectTarget(Random,0,200.0f,true,true,
--- OtherEssenceSpellId) -> CastSpell(target, Light Touch 67297 / Dark
--- Touch 67282, SPELLVALUE_MAX_TARGETS 1), 10s/15s init, 10s/15s
--- repeat — no random-target / aura-filtered SelectTarget bridge
--- (cairne/kazzak precedent) — documented-only.
+-- EVENT_TOUCH (heroic only) — PORTED (touchTick, below):
+-- SelectTarget(Random,0,200.0f,true,true,OtherEssenceSpellId) ->
+-- CastSpell(target, Light Touch 67297 / Dark Touch 67282,
+-- SPELLVALUE_MAX_TARGETS 1), randtime(10s,15s) init / randtime(10s,15s)
+-- repeat — the stale "no random-target / aura-filtered SelectTarget
+-- bridge (cairne/kazzak)" claim is retracted: the random-target leg
+-- rides the thorim randomPlayerInRange convention, the aura filter
+-- rides plr:HasAura (bridged — engine/world/lua_player.go:203, hakkar
+-- precedent); the SPELLVALUE_MAX_TARGETS=1 spell-mod has no bridge
+-- (noted, not wired).
 -- npc_essence_of_twin (34567/34568 — entry-unverifiable): OnGossipHello
 -- -> RemoveAurasDueToSpell(ESSENCE_REMOVE) + CastSpell(player,
 -- ESSENCE_APPLY) — no gossip bridge — documented-only.
@@ -152,6 +163,13 @@ local SPELL_SURGE_EYDIS = 65768
 local SPELL_SPIKE_FJOLA = 66075
 local SPELL_SPIKE_EYDIS = 66069
 local SPELL_BERSERK = 64238
+local SPELL_LIGHT_TOUCH = 67297 -- C++ :74 (fjola's TouchSpellId)
+local SPELL_DARK_TOUCH = 67282 -- C++ :86 (eydis's TouchSpellId)
+-- C++ RAID_MODE essence variants (:120-121): only one variant can be
+-- present per instance (applied difficulty-gated), so the pool checks
+-- all four — C++-exact within a running instance.
+local DARK_ESSENCE_AURAS = { 65684, 67176, 67177, 67178 }
+local LIGHT_ESSENCE_AURAS = { 65686, 67222, 67223, 67224 }
 
 local timers = {}
 
@@ -177,6 +195,46 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random,0,200.0f,true,true,OtherEssenceSpellId)
+-- pool (:323): alive players in the encounter within 200y carrying
+-- the OTHER essence — thorim randomPlayerInRange convention with the
+-- HasAura filter (player HasAura bridged — hakkar precedent).
+local function randomPlayerWithEssence(creature, auraIds, maxDist)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead()
+                and creature:GetDistance(plr) <= maxDist then
+            for _, aura in ipairs(auraIds) do
+                if plr:HasAura(aura) then
+                    candidates[#candidates + 1] = plr
+                    break
+                end
+            end
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ UpdateAI EVENT_TOUCH (:322-330): random other-essence target ->
+-- CastSpell(target, TouchSpellId, MAX_TARGETS 1), repeat randtime
+-- (10s,15s) — re-armed unconditionally (outside the target-if —
+-- sjonnir precedent). The SPELLVALUE_MAX_TARGETS=1 spell-mod has no
+-- bridge (noted).
+local function touchTick(creature, guid, touchSpell, essenceAuras)
+    local target = randomPlayerWithEssence(creature, essenceAuras, 200)
+    if target then
+        creature:CastSpell(target, touchSpell)
+    end
+    schedule(guid, "touch", {10000, 15000}, function()
+        touchTick(creature, guid, touchSpell, essenceAuras)
+    end)
+end
+
 -- C++ EVENT_TWIN_SPIKE: DoCastVictim(SpikeSpellId), 20s init, 20s
 -- repeat.
 local function twinSpikeTick(creature, guid, spell)
@@ -186,7 +244,7 @@ local function twinSpikeTick(creature, guid, spell)
     end)
 end
 
-local function makeEnterCombat(surgeSpell, spikeSpell)
+local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras)
     return function(event, creature, target)
         creature:Talk(SAY_AGGRO)
         creature:CastSpell(creature, surgeSpell)
@@ -195,6 +253,13 @@ local function makeEnterCombat(surgeSpell, spikeSpell)
         schedule(guid, "twinspike", 20000, function()
             twinSpikeTick(creature, guid, spikeSpell)
         end)
+        -- C++ JustEngagedWith :283-284: EVENT_TOUCH scheduled
+        -- randtime(10s,15s) under IsHeroic() only.
+        if creature:IsHeroic() then
+            schedule(guid, "touch", {10000, 15000}, function()
+                touchTick(creature, guid, touchSpell, essenceAuras)
+            end)
+        end
         -- C++ EVENT_BERSERK: IsHeroic() ? 6min : 8min (one-shot);
         -- execute: DoCastSelf(Berserk 64238) + Talk(SAY_BERSERK 7).
         -- Stale "no difficulty bridge" claim retracted: creature:IsHeroic()
@@ -227,13 +292,13 @@ local function reset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
-RegisterCreatureEvent(ENTRY_FJOLA, 1, makeEnterCombat(SPELL_SURGE_FJOLA, SPELL_SPIKE_FJOLA))
+RegisterCreatureEvent(ENTRY_FJOLA, 1, makeEnterCombat(SPELL_SURGE_FJOLA, SPELL_SPIKE_FJOLA, SPELL_LIGHT_TOUCH, DARK_ESSENCE_AURAS))
 RegisterCreatureEvent(ENTRY_FJOLA, 2, makeLeaveCombat())
 RegisterCreatureEvent(ENTRY_FJOLA, 3, targetDied)
 RegisterCreatureEvent(ENTRY_FJOLA, 4, died)
 RegisterCreatureEvent(ENTRY_FJOLA, 23, reset)
 
-RegisterCreatureEvent(ENTRY_EYDIS, 1, makeEnterCombat(SPELL_SURGE_EYDIS, SPELL_SPIKE_EYDIS))
+RegisterCreatureEvent(ENTRY_EYDIS, 1, makeEnterCombat(SPELL_SURGE_EYDIS, SPELL_SPIKE_EYDIS, SPELL_DARK_TOUCH, LIGHT_ESSENCE_AURAS))
 RegisterCreatureEvent(ENTRY_EYDIS, 2, makeLeaveCombat())
 RegisterCreatureEvent(ENTRY_EYDIS, 3, targetDied)
 RegisterCreatureEvent(ENTRY_EYDIS, 4, died)

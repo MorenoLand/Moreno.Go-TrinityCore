@@ -196,8 +196,11 @@
 -- port-pattern-ready in isolation but fires only in PHASE_COMBAT and
 -- is suspended/rescheduled around the unbridged charge machine —
 -- jedoga over-cast bar; EVENT_WHIRL — DoCastSelf(67345), 15s init,
--- 16s repeat — same bar; EVENT_ARCTIC_BREATH — SelectTarget(Random)
--- -> DoCast(66688) (no random-target bridge); DoAction ACTION_ENRAGE
+-- 16s repeat — same bar; EVENT_ARCTIC_BREATH — SelectTarget(Random,0,0.0f,true) ->
+-- DoCast(66688), 20s init / 24s re-arm (:951/:1050-1053) — stays OUT: fires from the unbridged
+-- icehowl charge machine (only GORMOK registers handlers in this file; no MovementInform / motion
+-- bridges); the random-target leg rides the thorim randomPlayerInRange convention, the machine rules;
+-- stale "no random-target bridge" retracted; DoAction ACTION_ENRAGE
 -- — DoCastSelf(SPELL_FROTHING_RAGE 66759) + Talk(EMOTE_TRAMPLE_ENRAGE
 -- 2) — gated via spell_icehowl_trample CheckTargets -> DoAction (no
 -- SpellScript binding bridge); DoAction ACTION_TRAMPLE_FAIL —

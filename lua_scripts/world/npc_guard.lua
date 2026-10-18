@@ -53,7 +53,10 @@
 -- AttackerStateUpdate) + the 5s spell machine (HealthBelowPct(30)
 -- 33%-chance SELECT_EFFECT_HEALING self-cast, else
 -- SELECT_TARGET_ANY_ENEMY ranged DoCastVictim) — SelectSpell machine,
--- spell IDs unnamed in C++ (plus no random-target bridge).
+-- spell IDs unnamed in C++ (the stale "no random-target bridge"
+-- parenthetical is retracted as misapplied: both machines target the
+-- victim, not a random target — the SelectSpell machine and the
+-- unnamed spell IDs are the blockers).
 -- npc_guard_generic::UpdateAI — _scheduler.Update / UpdateVictim /
 -- _combatScheduler.Update legs — no bridges.
 

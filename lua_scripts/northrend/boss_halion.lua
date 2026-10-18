@@ -108,16 +108,23 @@
 -- :260/:296/:667 — no phase-machine bridge). EVENT_BREATH /
 -- EVENT_CLEAVE / EVENT_TAIL_LASH are PORTED above (phase-ungated
 -- engage arms, stopped by the 75% latch).
--- boss_twilight_halion JustEngagedWith — zero Talk; the three
+-- boss_twilight_halion JustEngagedWith — zero Talk; the four
 -- phase-ungated timer arms are PORTED (see twilightHalionEnterCombat
--- below). C++ UpdateAI has no phase early-return (boss_halion.cpp:
+-- below — EVENT_SOUL_CONSUMPTION's ctor schedule re-anchored on
+-- engage). C++ UpdateAI has no phase early-return (boss_halion.cpp:
 -- 511-544), so the timers run identically in PHASE_TWO and
 -- PHASE_THREE — engage-armed CreateLuaEvent timers are faithful
 -- across both. The SendEncounterUnit / DoCastSelf
 -- SPELL_TWILIGHT_PRECISION legs ride absent bridges.
--- EVENT_SOUL_CONSUMPTION 74792 stays out: SelectTarget Random with
--- SPELL_TWILIGHT_REALM aura filter + TRIGGERED_IGNORE_SET_FACING —
--- no random-target / target-filter bridges (no-bridge queues).
+-- EVENT_SOUL_CONSUMPTION 74792 — PORTED (soulConsumptionTick, below):
+-- SelectTarget(Random,1,0.0f,true,true,SPELL_TWILIGHT_REALM 74807) ->
+-- CastSpell(target, SOUL_CONSUMPTION 74792, TRIGGERED_IGNORE_SET_FACING),
+-- 15s init / 20s re-arm (:421/:537-540) — the stale "no random-target /
+-- target-filter bridges" claim is retracted: the random-target leg rides
+-- the thorim randomPlayerInRange convention (netherspite victim-exclusion
+-- for the position-1 offset), the aura filter rides plr:HasAura (bridged,
+-- engine/world/lua_player.go:203 — hakkar precedent), the triggered flag
+-- rides the arlokk CastSpell(target, id, true) idiom.
 -- Constructor-side legs (boss_twilight_halionAI ctor, :405-421): DUSK_
 -- SHROUD 75476's triggered self-cast is bridgeable
 -- (creature:CastSpell(creature, id, true)) but the ctor fires at
@@ -201,6 +208,8 @@ local SPELL_FLAME_BREATH = 74525
 local SPELL_TAIL_LASH   = 74531
 local SPELL_LEAVE_TWILIGHT_REALM = 74812
 local SPELL_TWILIGHT_PHASING = 74808 -- C++ enum :111 ("Phase spell from phase 1 to phase 2")
+local SPELL_SOUL_CONSUMPTION = 74792 -- C++ enum :81
+local SPELL_TWILIGHT_REALM = 74807 -- C++ enum :115 (SelectTarget aura filter)
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the krystallus / bjarngrim-lieutenant convention.
@@ -397,9 +406,48 @@ end
 -- events.ScheduleEvent(EVENT_CLEAVE, 3s);
 -- events.ScheduleEvent(EVENT_BREATH, 12s);
 -- instance->SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE, me, 2)
--- — only the three timer arms bridge (the TAIL_LASH arm moves here
--- from its constructor schedule; SOUL_CONSUMPTION's random-target
--- filter arm has no bridge and stays out).
+-- — the four timer arms bridge (the TAIL_LASH arm moves here from
+-- its constructor schedule; SOUL_CONSUMPTION's constructor schedule
+-- is re-anchored the same way — tailLashTick precedent).
+-- C++ boss_twilight_halionAI UpdateAI EVENT_SOUL_CONSUMPTION
+-- (:537-540): SelectTarget(Random,1,0.0f,true,true,
+-- SPELL_TWILIGHT_REALM 74807) -> CastSpell(target, SPELL_SOUL_CONSUMPTION
+-- 74792, TRIGGERED_IGNORE_SET_FACING), 20s re-arm — re-armed
+-- unconditionally (outside the target-if — sjonnir precedent). The
+-- position-1 offset (skips the MaxThreat-ordered first entry, i.e. the
+-- tank — UnitAI.h:172-174) rides the netherspite victim-exclusion; the
+-- aura filter rides plr:HasAura (player HasAura bridged —
+-- engine/world/lua_player.go:203, hakkar precedent); the triggered flag
+-- rides the arlokk CastSpell(target, id, true) idiom.
+local function randomTwilightPlayer(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead()
+                and plr:GetGUID() ~= victimGuid
+                and plr:HasAura(SPELL_TWILIGHT_REALM) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+local function soulConsumptionTick(creature, guid)
+    local target = randomTwilightPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_SOUL_CONSUMPTION, true)
+    end
+    schedule(guid, "soul_consumption", 20000, function()
+        soulConsumptionTick(creature, guid)
+    end)
+end
+
 local function twilightHalionEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -411,6 +459,13 @@ local function twilightHalionEnterCombat(event, creature, target)
     end)
     schedule(guid, "tail_lash", 12000, function()
         tailLashTick(creature, guid)
+    end)
+    -- C++ ctor schedules EVENT_SOUL_CONSUMPTION at 15s (:421);
+    -- re-anchored on OnEnterCombat — twilight halion spawns in combat
+    -- (UNIT_FLAG_IN_COMBAT at :414), so the spawn->engage delta on the
+    -- first tick is near-zero (tailLashTick precedent).
+    schedule(guid, "soul_consumption", 15000, function()
+        soulConsumptionTick(creature, guid)
     end)
 end
 
