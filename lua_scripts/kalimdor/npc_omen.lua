@@ -51,9 +51,9 @@
 -- bridges — unmodeled; MovementInform point 1 (SetHomePosition
 -- + SetImmuneToPC(false) + SelectNearestPlayer(40) ->
 -- AttackStart) has no movement / world-search bridges —
--- unmodeled; the starfall arm's SelectTarget(Random, 0) has
--- no target-selection bridge — the cast lands on the victim
--- (nil target, vaelastrasz convention); the Elune's Candle
+-- unmodeled; the starfall arm's SelectTarget(Random, 0) rides
+-- the GetAITargets threat-list pool (the 02:4x sweep7 fold-in;
+-- the old "no target-selection bridge" claim was stale); the Elune's Candle
 -- aura arm (HasAura(SPELL_OMEN_STARFALL) ->
 -- RemoveAurasDueToSpell) is ported via the bridged
 -- creature:HasAura/creature:RemoveAura (lua_objects.go:228,242
@@ -127,13 +127,23 @@ local function combatTick(creature, guid)
         st.cleaveTimer = 8000 + math.random(0, 2000)
     end
 
-    -- Starfall arm — non-triggered DoCast(SPELL_OMEN_
-    -- STARFALL) (C++-exact), re-arm 14-16s. The C++
-    -- SelectTarget(Random, 0) has no target-selection
-    -- bridge — the cast lands on the victim (nil target,
-    -- vaelastrasz convention).
+    -- Starfall arm — SelectTarget(Random, 0) (C++ defaults:
+    -- playerOnly=false) over the threat list ->
+    -- creature:GetAITargets() alive pool (C++-exact pool; the
+    -- jaraxxus idiom without its player filter); nil-guarded
+    -- pick (C++ `if` — skip cast on nil); DoCast 2-arg =
+    -- non-triggered -> CastSpell(target, spell); re-arm 14-16s
+    -- unconditional (outside the target-if, C++-exact).
     if st.starfallTimer <= 0 then
-        creature:CastSpell(nil, SPELL_OMEN_STARFALL)
+        local candidates = {}
+        for _, unit in ipairs(creature:GetAITargets()) do
+            if not unit:IsDead() then
+                candidates[#candidates + 1] = unit
+            end
+        end
+        if #candidates > 0 then
+            creature:CastSpell(candidates[math.random(#candidates)], SPELL_OMEN_STARFALL)
+        end
         st.starfallTimer = 14000 + math.random(0, 2000)
     end
 end

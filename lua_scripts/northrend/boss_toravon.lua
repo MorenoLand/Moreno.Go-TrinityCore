@@ -47,8 +47,8 @@
 -- RAID_MODE(1, 3)) leg (:79) has no bridge — the cast fires with no
 -- max-targets cap.
 -- EVENT_FREEZING_GROUND's SelectTarget position-1 tank-exclusion
--- (:88) has no bridge (no tank-exclusion in SelectTarget) — the cast
--- fires on any alive same-map/instance player, including the tank.
+-- (:88) rides the halion victim-exclusion idiom — the "no bridge"
+-- claim was stale.
 -- The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates (pre-check
 -- :67 and the per-event :95 return) have no bridge — casts fire
 -- unconditionally on their timers (the hodir UNIT_STATE_CASTING
@@ -101,16 +101,18 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 1) — alive players on
--- the same map/instance; the tank-exclusion (position 1) is
--- unbridged, so this pools every alive player (documented in the
--- header; the thorim documented-deviation precedent).
-local function randomPlayer(creature)
+-- the same map/instance; the position-1 tank exclusion rides the
+-- halion victim-exclusion idiom (the "no tank-exclusion bridge"
+-- claim was stale).
+local function randomNonTankPlayer(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local mapId = creature:GetMapId()
     local instanceId = creature:GetInstanceId()
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
             candidates[#candidates + 1] = plr
         end
     end
@@ -143,7 +145,7 @@ end
 -- SPELL_FREEZING_GROUND), 2-arg = non-triggered; re-arm via Repeat
 -- 38s (:90, unconditional).
 local function freezingGroundTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomNonTankPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_FREEZING_GROUND)
     end

@@ -114,12 +114,13 @@
 -- and the JustSummoned health-set (66%/33%)/AttackStart-
 -- random-target/Summon/immunity arms unmodeled (steamrigger
 -- precedent); the illusion SpellIds H_SPELL_MIND_REND_IMAGE
--- 39021 never fire in the C++ AI — not bridged; no
--- difficulty bridge — the heroic-only H_SPELL_MANA_BURN
--- 39020 {16s,32s} arm unmodeled (thespia precedent); no
+-- 39021 never fire in the C++ AI — not bridged; the heroic-only
+-- H_SPELL_MANA_BURN 39020 {16s,32s} arm is PORTED (the old "no
+-- difficulty bridge" claim was stale — creature:IsHeroic() is
+-- bridged, lua_creature_events.go:260); no
 -- cast-state bridge — the DoSplit InterruptNonMeleeSpells
--- arm and the fear/domination IsNonMeleeSpellCast early-
--- return gates unmodeled (netherspite precedent); the
+-- arm and the fear/domination/mana-burn IsNonMeleeSpellCast
+-- early-return gates unmodeled (netherspite precedent); the
 -- unused spell enums H_SPELL_MIND_REND 39017 / H_SPELL_
 -- DOMINATION 39019 never fire in the C++ AI — not bridged
 -- (millhouse unused-spells precedent); the ScriptData
@@ -135,6 +136,7 @@
 local SPELL_MIND_REND = 36924
 local SPELL_FEAR = 39415
 local SPELL_DOMINATION = 37162
+local H_SPELL_MANA_BURN = 39020
 
 local SAY_INTRO = 0
 local SAY_AGGRO = 1
@@ -265,6 +267,7 @@ local function freshCombatState()
         mindRend = 3000,
         fear = 15000,
         domination = 30000,
+        manaBurn = 25000,
         isImage66 = false,
         isImage33 = false,
     }
@@ -324,6 +327,25 @@ local function combatTick(creature, guid)
         st.domination = 16000 + math.random(0, 15999)
     else
         st.domination = st.domination - 1000
+    end
+
+    -- Heroic-only Mana Burn 39020: 25s init then {16s,32s} —
+    -- same targeting (SelectTarget(Random, 1) =
+    -- randomNonVictimPlayer, C++-exact), non-triggered,
+    -- re-arm {16s,32s} (C++-exact). The C++ IsNonMeleeSpellCast
+    -- early-return gate has no cast-state bridge — the arm fires
+    -- unconditionally (netherspite precedent, as for fear /
+    -- domination). The old "no difficulty bridge" claim was
+    -- stale — creature:IsHeroic() is bridged
+    -- (lua_creature_events.go:260).
+    if creature:IsHeroic() then
+        if st.manaBurn <= 1000 then
+            local target = randomNonVictimPlayer(creature)
+            creature:CastSpell(target, H_SPELL_MANA_BURN)
+            st.manaBurn = 16000 + math.random(0, 15999)
+        else
+            st.manaBurn = st.manaBurn - 1000
+        end
     end
 end
 

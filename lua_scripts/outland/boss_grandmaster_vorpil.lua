@@ -70,8 +70,9 @@
 -- banishTick, the scheduler seeded only when creature:IsHeroic()
 -- (the earlier "no heroic bridge" claim was stale — IsHeroic is
 -- bridged, engine/world/lua_creature_events.go:260; the lavanthor
--- precedent). Documented deviations: the 30.0f distance filter has
--- no bridge (the lavanthor precedent); C++ SelectTarget defaults
+-- precedent). Documented deviations: the 30.0f distance filter
+-- rides the thorim randomPlayerInRange idiom (the "no distance
+-- bridge" claim was stale); C++ SelectTarget defaults
 -- playerOnly=FALSE, so the pool can include pets/totems — Lua's
 -- player-only pool is the documented approximation (the tuten_kash
 -- precedent); the UNIT_STATE_CASTING pre-check has no bridge —
@@ -153,17 +154,20 @@ local function shadowboltVolleyTick(creature, guid)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, ...) — alive
--- players on the same map/instance; the distance filters are
--- unbridged (documented in the header; the keleseth / thorim
--- precedent — the lavanthor randomPlayer idiom).
-local function randomPlayer(creature)
+-- players on the same map/instance. The thorim
+-- randomPlayerInRange idiom carries the C++ distance filters
+-- (the lavanthor "no distance bridge" claim was stale).
+local function randomPlayerInRange(creature, minDist, maxDist)
     local mapId = creature:GetMapId()
     local instanceId = creature:GetInstanceId()
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
                 and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+            local dist = creature:GetDistance(plr)
+            if dist >= minDist and dist <= maxDist then
+                candidates[#candidates + 1] = plr
+            end
         end
     end
     if #candidates == 0 then
@@ -177,7 +181,7 @@ end
 -- scheduler seeds only when IsHeroic() (:144-145). DoCast 1-arg
 -- form is non-triggered, so creature:CastSpell(target, spell).
 local function banishTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomPlayerInRange(creature, 0, 30)
     if target then
         creature:CastSpell(target, SPELL_BANISH)
     end

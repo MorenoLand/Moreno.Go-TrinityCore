@@ -32,10 +32,11 @@
 -- DoCastAOE(SPELL_SOUL_CORRUPTION) is CreatureAI::DoCastAOE =
 -- DoCast(nullptr, spellId) (UnitAI.h:322), so creature:
 -- CastSpell(creature, 25805) is C++-exact; re-arm 15-19s
--- (urand(15s, 19s), C++-exact); creature-of-nightmare arm — the
--- C++ SelectTarget(Random, 0, 0.0f, true) has no target-selection
--- bridge — the cast lands on the victim (nil target, omen
--- precedent; the playerOnly flag is a documented degradation),
+-- (urand(15s, 19s), C++-exact); creature-of-nightmare arm —
+-- C++ SelectTarget(Random, 0, 0.0f, true) rides
+-- randomPlayerInRange(creature, 0, 500) (playerOnly=true is
+-- idiom-exact; the old "no target-selection bridge / playerOnly
+-- degradation" claim was stale),
 -- non-triggered DoCast(target, SPELL_CREATURE_OF_NIGHTMARE
 -- 25806), re-arm 45s (C++-exact). Melee is engine-driven.
 -- OnTargetDied(3): the C++ KilledUnit victim->GetTypeId() ==
@@ -103,6 +104,30 @@ end
 -- collapses into the pump (it only runs in combat). Each
 -- tick decrements every timer (the EventMap::Update(diff)
 -- pass), then expired events fire in C++ arm order.
+-- C++ SelectTarget(Random, 0, 0.0f, true) legs — alive players
+-- on the same map/instance; playerOnly=true is idiom-exact;
+-- 0.0f = unlimited range approximated by a 500yd cap (the
+-- thorim randomPlayerInRange idiom; the old "no target-selection
+-- bridge / playerOnly degradation" claim was stale).
+local function randomPlayerInRange(creature, minDist, maxDist)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            local dist = creature:GetDistance(plr)
+            if dist >= minDist and dist <= maxDist then
+                candidates[#candidates + 1] = plr
+            end
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 local function combatTick(creature, guid)
     local st = corrupterState[guid]
     if not st then
@@ -122,12 +147,14 @@ local function combatTick(creature, guid)
     end
 
     -- Creature of nightmare arm — non-triggered DoCast(target,
-    -- SPELL_CREATURE_OF_NIGHTMARE), re-arm 45s (C++-exact).
-    -- The C++ SelectTarget(Random, 0, 0.0f, true) has no
-    -- target-selection bridge — the cast lands on the victim
-    -- (nil target, omen precedent).
+    -- SPELL_CREATURE_OF_NIGHTMARE 25806), re-arm 45s (C++-exact,
+    -- unconditional); C++ SelectTarget(Random, 0, 0.0f, true) ->
+    -- randomPlayerInRange(creature, 0, 500), nil-guarded (C++ `if`).
     if st.nightmareTimer <= 0 then
-        creature:CastSpell(nil, SPELL_CREATURE_OF_NIGHTMARE)
+        local target = randomPlayerInRange(creature, 0, 500)
+        if target then
+            creature:CastSpell(target, SPELL_CREATURE_OF_NIGHTMARE)
+        end
         st.nightmareTimer = 45000
     end
 end
