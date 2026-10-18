@@ -82,16 +82,20 @@
 -- UpdateAI — the nine-event machine's remaining legs:
 -- EVENT_HARD_ENRAGE SPELL_PYROBUFFET 56916 triggered (dead arm —
 -- declared but never scheduled; porting would fabricate casts);
--- EVENT_FLAME_TSUNAMI WHISPER_LAVA_CHURN 9 + SummonCreature
--- NPC_FLAME_TSUNAMI 30616 waves with MovePoints; EVENT_LAVA_STRIKE
+-- EVENT_FLAME_TSUNAMI WHISPER_LAVA_CHURN 9 Talk leg — PORTED
+-- (event 2, unconditional 30s/30s — the Talk precedes the summon
+-- wave branch, so no summon bridge is needed); the NPC_FLAME_
+-- TSUNAMI 30616 wave summons + MovePoints stay out (no summon /
+-- motion bridges); EVENT_LAVA_STRIKE
 -- random-target lava strike + urand SAY_SARTHARION_SPECIAL 7;
 -- EVENT_CALL_* dragon calls) + the 35%-health SPELL_BERSERK 61632
 -- leg (Talk SAY_SARTHARION_BERSERK 1) gated on the three drake
 -- boss states + the 10%-health soft-enrage lava-strike cadence
 -- shift — no timer-event / summon / target-search / instance /
 -- health bridges.
--- Whisper arms (WHISPER_LAVA_CHURN 9) ride the tsunami event —
--- no bridge.
+-- Whisper arms (WHISPER_LAVA_CHURN 9) — ported below (event 2;
+-- the 30s init Talk + unconditional 30s re-arm are bridgeable,
+-- summon waves stay out).
 
 local ENTRY_SARTHARION = 28860
 
@@ -99,6 +103,7 @@ local SAY_SARTHARION_AGGRO  = 0
 local SAY_SARTHARION_BREATH = 2
 local SAY_SARTHARION_DEATH  = 6
 local SAY_SARTHARION_SLAY   = 8
+local WHISPER_LAVA_CHURN    = 9
 
 local SPELL_CLEAVE       = 56909
 local SPELL_FLAME_BREATH = 56908
@@ -157,6 +162,16 @@ local function tailSweepTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_FLAME_TSUNAMI: Talk(WHISPER_LAVA_CHURN 9) (unconditional),
+-- 30s init, unconditional 30s re-arm. The summon-wave legs stay out
+-- (no summon / motion bridges); only the Talk is ported.
+local function lavaChurnTick(creature, guid)
+    creature:Talk(WHISPER_LAVA_CHURN)
+    schedule(guid, "lavachurn", 30000, function()
+        lavaChurnTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: BossAI::JustEngagedWith (setActive /
 -- CheckRequiredBosses / SetBossState IN_PROGRESS) + Talk(AGGRO)
 -- + DoZoneInCombat + FetchDragons (drake power-aura casts, loot
@@ -175,6 +190,9 @@ local function sartharionEnterCombat(event, creature, target)
     end)
     schedule(guid, "tailsweep", 20000, function()
         tailSweepTick(creature, guid)
+    end)
+    schedule(guid, "lavachurn", 30000, function()
+        lavaChurnTick(creature, guid)
     end)
 end
 

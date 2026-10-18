@@ -9577,8 +9577,8 @@ func init() {
 	// lua_scripts/northrend/boss_drakos.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
 	// (the BossAI::JustEngagedWith instance-bookkeeping leg has no
-	// bridge — tharon_ja precedent; the three events.ScheduleEvent
-	// legs have no timer-event bridge); KilledUnit Talk(SAY_KILL 1)
+	// bridge — tharon_ja precedent; the MAGIC_PULL/STOMP timer legs
+	// are ported via CreateLuaEvent); KilledUnit Talk(SAY_KILL 1)
 	// C++-UNCONDITIONAL (the anubrekhan unconditional variant —
 	// second unconditional, the eighth ported variant overall);
 	// JustDied Talk(SAY_DEATH 2) (_JustDied bookkeeping has no
@@ -9605,16 +9605,18 @@ func init() {
 	// identical to nalorakk / kelthuzad / gothik / thaddius /
 	// keristrasza); JustDied Talk(SAY_DEATH 6) (_JustDied
 	// bookkeeping has no bridge — tharon_ja precedent; the
-	// DoCastSelf(SPELL_DEATH_SPELL) leg has no cast bridge).
+	// DoCastSelf(SPELL_DEATH_SPELL) leg stays out — summon delivery
+	// leg, no SPELL_EFFECT_SUMMON bridge).
 	// Documented-only: JustEngagedWith / StartAttack Talk arms —
 	// _platform-state-gated (Talk(SAY_SUMMON_1..3) on the first
 	// three engages, Talk(SAY_AGGRO) only on the fourth engage
 	// when _platform > 2); porting either unconditionally would be
-	// C++-inexact — no _platform-state / summon / cast bridges;
+	// C++-inexact — no _platform-state / summon bridges (cast is
+	// bridged; the machine is not);
 	// Reset (SetControlled / SetDisableGravity / SetReactState /
 	// DoCastSelf SPELL_EVOCATE 51602 / _Reset());
-	// JustReachedHome (DoCastSelf SPELL_EVOCATE — no cast bridge);
-	// EnterEvadeMode
+	// JustReachedHome (DoCastSelf SPELL_EVOCATE ported on events
+	// 23/24); EnterEvadeMode
 	// (center-gated, no evade / teleport / motion bridges);
 	// AttackStart (z-gated DoStartNoMovement); the UpdateAI
 	// teleport event machine (no timer-event / random-target /
@@ -9633,14 +9635,15 @@ func init() {
 	// (the BossAI::JustEngagedWith instance-bookkeeping leg has no
 	// bridge — tharon_ja precedent); JustDied Talk(SAY_DEATH 3)
 	// (_JustDied bookkeeping has no bridge — tharon_ja precedent;
-	// the DoCast(me, SPELL_DEATH_SPELL, true) leg has no cast
-	// bridge — the urom precedent).
+	// the DoCast(me, SPELL_DEATH_SPELL, true) leg stays out —
+	// summon delivery leg, no SPELL_EFFECT_SUMMON bridge).
 	// Documented-only: InitializeAI DoCast(SPELL_CENTRIFUGE_SHIELD
 	// 50053) gated on GetBossState(DATA_DRAKOS) != DONE; Reset
 	// (events.ScheduleEvent EVENT_AMPLIFY_MAGIC / EVENT_ENERGIZE_
 	// CORES_VISUAL / EVENT_CALL_AZURE); the UpdateAI energize-
-	// cores / azure-captain / amplify-magic event machine (no
-	// timer-event / cast / random-target bridges); npc_azure_ring_
+	// cores / azure-captain / amplify-magic event machine — the
+	// timer-event / cast / random-target legs ARE bridged and the
+	// three arms are ported via CreateLuaEvent; npc_azure_ring_
 	// captain entry-unverifiable (no C++-evidenced entry — joins
 	// the entry-unverifiable queue; SpellHitTarget leg joins the
 	// SpellHit-15-never-fires queue; DoAction / MovementInform /
@@ -9666,15 +9669,16 @@ func init() {
 	// Documented-only: Reset (Initialize _phase / void
 	// booleans + _Reset() + DoAction); DoAction schedules the
 	// four PHASE_NORMAL events (no timer-event / phase bridge);
-	// the UpdateAI arcane event machine (EVENT_ARCANE_BARRAGE /
-	// EVENT_ARCANE_VOLLEY / EVENT_ENRAGED_ASSAULT / EVENT_SUMMON_
-	// LEY_WHELP — no timer-event / cast bridges); DamageTaken
-	// heroic+health-gated phase-shift machine (Talk SAY_SHIELD +
-	// DoCast SPELL_PLANAR_SHIFT 51162 + 6x SPELL_PLANAR_
+	// the UpdateAI arcane event machine — EVENT_ARCANE_BARRAGE /
+	// EVENT_ARCANE_VOLLEY / EVENT_ENRAGED_ASSAULT are ported via
+	// CreateLuaEvent (timer-event / cast legs bridged);
+	// EVENT_SUMMON_LEY_WHELP stays out (no summon delivery bridge);
+	// DamageTaken heroic+health-gated phase-shift machine (Talk
+	// SAY_SHIELD + DoCast SPELL_PLANAR_SHIFT 51162 + 6x SPELL_PLANAR_
 	// ANOMALIES 57959 — no bridges); JustSummoned /
 	// SummonedCreatureDespawn (NPC_PLANAR_ANOMALY 30879 —
-	// CombatStop / MoveRandom / SPELL_PLANAR_BLAST 57976 —
-	// no motion / cast bridges); spell_eregos_planar_shift
+	// CombatStop / MoveRandom / SPELL_PLANAR_BLAST 57976 — no
+	// motion bridge; CastSpell bridged but summons never delivered); spell_eregos_planar_shift
 	// joins the no-AuraScript-bridge queue (AfterEffectRemove
 	// -> DoAction(ACTION_SET_NORMAL_EVENTS)); achievement_gen_
 	// eregos_void x3 (achievement_ruby_void / _emerald_void /
@@ -9714,8 +9718,12 @@ func init() {
 	// SpellHit-15-never-fires queue); MoveInLineOfSight (power-spark
 	// proximity cast — no LOS bridge); npc_portal_eoe (NPC_PORTAL_TRIGGER
 	// 30118 — SpellHit / aura-maintenance UpdateAI — no SpellHit / cast /
-	// aura bridges); npc_power_spark (NPC_POWER_SPARK 30084 — despawn-when-
-	// reached UpdateAI, JustDied cast — no motion / cast bridges);
+	// aura bridges); npc_power_spark (NPC_POWER_SPARK 30084 —
+	// despawn-when-reached UpdateAI + MoveFollow legs
+	// documented-only, no motion bridge; JustDied me->CastSpell(me,
+	// SPELL_POWER_SPARK_DEATH 55852, true) PORTED as
+	// lua_scripts/northrend/npc_power_spark.lua, event 4 —
+	// triggered self-cast, no phase gate in C++);
 	// npc_melee_hover_disk (30234) / npc_caster_hover_disk (30248) —
 	// VehicleAI PassengerBoarded / MovementInform machines (no vehicle /
 	// passenger / motion bridges); npc_nexus_lord (DoAction ->
@@ -9758,6 +9766,17 @@ func init() {
 	// instance / phase / despawn bridges.
 	RegisterLuaBoss("npc_arcane_overload", 30282)
 
+	// npc_power_spark (Eye of Eternity) — fight logic in
+	// lua_scripts/northrend/npc_power_spark.lua.
+	// Ported arms (C++-exact): JustDied -> me->CastSpell(me,
+	// SPELL_POWER_SPARK_DEATH 55852, true) (event 4 — triggered
+	// self-cast, no phase gate in the C++ arm).
+	// Documented-only: constructor Talk(EMOTE_POWER_SPARK_SUMMONED 0) /
+	// MoveToMalygos MoveFollow (no spawn / motion bridges); UpdateAI
+	// phase-one/vortex despawn gates + CHASE_MOTION_TYPE MoveFollow
+	// maintenance (no per-tick UpdateAI / motion / instance bridges).
+	RegisterLuaBoss("npc_power_spark", 30084)
+
 	// Sartharion (28860), Obsidian Sanctum —
 	// lua_scripts/northrend/boss_sartharion.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_SARTHARION_AGGRO 0)
@@ -9786,68 +9805,85 @@ func init() {
 	// CastLavaStrikeOnTarget (fire-cyclone grid search + random-cyclone
 	// CastSpell(SPELL_LAVA_STRIKE 57571) — no creature-search / cast
 	// bridges); the UpdateAI nine-event machine (hard enrage SPELL_PYROBUFFET
-	// 56916; flame tsunami WHISPER_LAVA_CHURN 9 + NPC_FLAME_TSUNAMI 30616
-	// summon waves; flame breath Talk(SAY_BREATH 2) + SPELL_FLAME_BREATH
-	// 56908; tail lash SPELL_TAIL_LASH 56910; cleave SPELL_CLEAVE 56909;
-	// lava strike + urand SAY_SARTHARION_SPECIAL 7; call-dragon legs) +
-	// the 35%-health SPELL_BERSERK 61632 leg (Talk SAY_SARTHARION_BERSERK 1,
-	// gated on the three drake boss states) + the 10%-health soft-enrage
-	// lava-strike cadence shift — no timer-event / cast / health / instance
-	// bridges.
+	// 56916 — dead arm, never scheduled; flame tsunami WHISPER_LAVA_CHURN 9
+	// Talk leg PORTED (30s/30s; the NPC_FLAME_TSUNAMI 30616 summon waves
+	// stay out — no summon / motion bridges); flame breath Talk(SAY_BREATH 2)
+	// + SPELL_FLAME_BREATH 56908; tail lash SPELL_TAIL_LASH 56910; cleave
+	// SPELL_CLEAVE 56909; lava strike + urand SAY_SARTHARION_SPECIAL 7;
+	// call-dragon legs) + the 35%-health SPELL_BERSERK 61632 leg (Talk
+	// SAY_SARTHARION_BERSERK 1, gated on the three drake boss states) +
+	// the 10%-health soft-enrage lava-strike cadence shift — no
+	// health / instance bridges.
 	RegisterLuaBoss("boss_sartharion", 28860)
 
 	// Tenebron (30452), Shadron (30451), Vesperon (30449), Obsidian
 	// Sanctum drake mini-bosses — lua_scripts/northrend/obsidian_sanctum.lua
 	// (dummy_dragonAI base shared across the three drakes).
-	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (the DoZoneInCombat and the ScheduleEvent(EVENT_SHADOW_FISSURE
-	// / EVENT_SHADOW_BREATH) legs have no bridges — the tharon_ja /
-	// malygos precedents); KilledUnit player-gated Talk(SAY_SLAY 1)
-	// (event 3 — razuvious player-gated variant precedent);
-	// JustDied Talk(SAY_DEATH 2) (the _canLoot / SetLootRecipient
-	// leg, the entry-switched power-aura removals (61248 / 58105 /
-	// 61251) via RemoveAurasDueToSpell +
-	// DoRemoveAurasDueToSpellOnPlayers, the acolyte KillSelf legs
-	// (FindNearestCreature 31218 / 31219), the SetBossState
-	// (DATA_TENEBRON / SHADRON / VESPERON, DONE) legs, and the
-	// Twilight Revenge DoCast (60639) on Sartharion via instance
-	// GUID fetch have no bridges — no aura / instance / cast /
-	// creature-search bridges).
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) +
+	// the ScheduleEvent(EVENT_SHADOW_FISSURE / EVENT_SHADOW_BREATH)
+	// timer seeds (timer legs ported via CreateLuaEvent — the
+	// tharon_ja precedent's "no bridges" claim is stale; the
+	// DoZoneInCombat leg alone stays out); KilledUnit player-gated
+	// Talk(SAY_SLAY 1) (event 3 — razuvious player-gated variant
+	// precedent); JustDied Talk(SAY_DEATH 2) (the _canLoot /
+	// SetLootRecipient leg, the entry-switched power-aura removals
+	// (61248 / 58105 / 61251) + DoRemoveAurasDueToSpellOnPlayers
+	// legs, the acolyte KillSelf legs (FindNearestCreature 31218 /
+	// 31219), the SetBossState (DATA_TENEBRON / SHADRON / VESPERON,
+	// DONE) legs, and the Twilight Revenge DoCast (60639) on
+	// Sartharion via instance GUID fetch have no instance /
+	// creature-search bridges — the aura / cast legs are bridged
+	// but instance-gated).
 	// Documented-only: dummy_dragonAI Reset / SetData(DATA_CAN_LOOT) /
 	// MovementInform (the waypoint machine, POINT_ID_INIT 100 /
-	// POINT_ID_LAND 200 — no motion / instance / target-selection
-	// bridges); OpenPortal (portal grid search GO_TWILIGHT_PORTAL
-	// 193988 50.0f; Tenebron egg summons 30882 / 31204; Shadron /
-	// Vesperon acolyte summons 31218 / 31219; Talk(WHISPER_OPEN_PORTAL
-	// 6 / WHISPER_OPENED_PORTAL 7); portal SetRespawnTime 30000 — no
-	// summon / cast / creature-search / GO-respawn bridges);
+	// POINT_ID_LAND 200 — no motion / instance bridges);
+	// OpenPortal (portal grid search GO_TWILIGHT_PORTAL 193988 50.0f;
+	// Tenebron egg summons 30882 / 31204; Shadron / Vesperon acolyte
+	// summons 31218 / 31219; Talk(WHISPER_OPEN_PORTAL 6 /
+	// WHISPER_OPENED_PORTAL 7); portal SetRespawnTime 30000 — no
+	// summon / creature-search / GO-respawn bridges);
 	// ExecuteEvent EVENT_SHADOW_FISSURE (random-target
-	// SPELL_SHADOW_FISSURE 57579 — no target-selection / cast
-	// bridges) / EVENT_SHADOW_BREATH (Talk(SAY_BREATH 3) +
-	// DoCastVictim(SPELL_SHADOW_BREATH 57570) — no cast bridge); the
-	// UpdateAI EVENT_FREE_MOVEMENT machine (no motion bridge);
-	// npc_tenebron Reset / JustEngagedWith (+EVENT_HATCH_EGGS 30s) /
-	// UpdateAI (no timer bridges); npc_shadron Reset (aura strips
-	// 57948 / 57835 + SetBossState(DATA_PORTAL_OPEN, NOT_STARTED))
-	// / JustEngagedWith (+EVENT_ACOLYTE_SHADRON 1min) / UpdateAI
-	// (instance-gated OpenPortal + SetBossState(IN_PROGRESS) — no
-	// timer / instance bridges); npc_vesperon Reset / JustEngagedWith
-	// (+EVENT_ACOLYTE_VESPERON 1min) / UpdateAI (instance-gated
-	// OpenPortal + DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP 57948)
-	// — no timer / instance / cast bridges);
-	// npc_acolyte_of_shadron (31218) / npc_acolyte_of_vesperon
-	// (31219): Reset / JustDied / UpdateAI melee — all aura / cast /
-	// instance-gated, no Talk arms — no registration;
-	// npc_twilight_eggs (30882 / 31204): SpawnWhelps (whelp summons
-	// 30890 / 31214) / JustSummoned / UpdateAI — no summon /
-	// timer / aura bridges — no registration;
-	// npc_flame_tsunami (30616): aura / cast / creature-search legs
-	// (57494 / 57491 / 60430, lava blaze 30643) — no bridges — no
-	// registration; npc_twilight_fissure: entry UNVERIFIABLE from C++
-	// (no local NPC enum — joins the entry-unverifiable queue) and
-	// aura / cast-gated arms regardless — no registration;
-	// npc_twilight_whelp: aura / timer / cast-gated arms
-	// (60708) — no bridges — no registration;
+	// SPELL_SHADOW_FISSURE 57579 — fissureTick ported) /
+	// EVENT_SHADOW_BREATH (Talk(SAY_BREATH 3) + DoCastVictim
+	// SPELL_SHADOW_BREATH 57570 — breathTick ported) — the
+	// target-selection / cast legs are bridged via
+	// CreateLuaEvent; the UpdateAI EVENT_FREE_MOVEMENT machine
+	// stays out (no motion bridge); npc_tenebron Reset /
+	// JustEngagedWith (+EVENT_HATCH_EGGS 30s ported) / UpdateAI
+	// (instance legs unbridged); npc_shadron Reset (aura strips
+	// 57948 / 57835 ported via HasAura/RemoveAura +
+	// SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) unbridged) /
+	// JustEngagedWith (+EVENT_ACOLYTE_SHADRON 1min ported) /
+	// UpdateAI (instance-gated OpenPortal +
+	// SetBossState(IN_PROGRESS) — no instance bridges);
+	// npc_vesperon Reset / JustEngagedWith (+EVENT_ACOLYTE_VESPERON
+	// 1min ported) / UpdateAI (instance-gated OpenPortal — no
+	// instance bridges; DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP
+	// 57948) bridgeable-in-isolation but rides the unbridged
+	// machine);
+	// npc_acolyte_of_shadron (31218): Reset AddAura(SPELL_TWILIGHT_
+	// SHIFT_ENTER 57620) PORTED; DespawnOrUnsummon(28s) inexpressible
+	// (Go Despawn takes no delay arg); the instance gift-aura legs
+	// and JustDied's instance/player legs have no instance bridges;
+	// no registration (walkdir-attached via RegisterCreatureEvent);
+	// npc_acolyte_of_vesperon (31219): Reset AddAura(57620) +
+	// DoCast(me, SPELL_TWILIGHT_TORMENT_VESP_ACO 58853) non-triggered
+	// self-cast PORTED; JustDied self RemoveAurasDueToSpell(58853)
+	// PORTED; the instance / vesperon / player legs have no
+	// instance bridges; no registration (walkdir-attached);
+	// npc_twilight_eggs (30882 / 31204): Reset AddAura(57620)
+	// PORTED; EVENT_TWILIGHT_EGGS 20s payload / SpawnWhelps (whelp
+	// summons 30890 / 31214) / JustSummoned — no summon / instance
+	// bridges; no registration (walkdir-attached);
+	// npc_flame_tsunami (30616): EVENT_TSUNAMI_TIMER DoCast(me,
+	// SPELL_FLAME_TSUNAMI_DMG_AURA 57491) non-triggered self-cast
+	// 100ms init / 500ms re-arm PORTED via CreateLuaEvent; the
+	// ctor / EVENT_TSUNAMI_BUFF (lava blaze 30643 creature-search)
+	// legs have no bridges; no registration (walkdir-attached);
+	// npc_twilight_fissure: entry UNVERIFIABLE from C++ (no local
+	// NPC enum — joins the entry-unverifiable queue) — no
+	// registration; npc_twilight_whelp: EVENT_FADE_ARMOR timer leg
+	// PORTED 2026-10-16;
 	// achievement_twilight_assist / duo / zone
 	// (GetData(TWILIGHT_ACHIEVEMENTS) >= 1 / >= 2 / == 3 — no
 	// achievement bridge, join the unmodeled-achievement queue).

@@ -77,7 +77,7 @@
 -- 51103) 5s repeat; EVENT_TIME_BOMB (20s) SelectTarget(Random) ->
 -- DoCast(SPELL_TIME_BOMB 51121) 20s repeat — timer-event and cast
 -- ARE bridged (this file ports Reset/JustReachedHome casts on
--- CreateLuaEvent), but the arm is gated on the center _platform leg
+-- events 23/24), but the arm is gated on the center _platform leg
 -- (:189-219 summon x4 + DoCast(TeleportSpells) cycle) with
 -- teleport / react-state / gravity / controlled-state legs — no
 -- bridges; unmodeled.

@@ -108,9 +108,11 @@
 -- re-keyed) but there is no per-tick UpdateAI bridge and the
 -- DATA_PHASE gate is instance-bound (no instance bridge) —
 -- documented-only. npc_power_spark
--- (NPC_POWER_SPARK 30084) — UpdateAI despawn-when-reached,
--- JustDied casts SPELL_POWER_SPARK_DEATH — no motion / cast
--- bridges. npc_melee_hover_disk (NPC_HOVER_DISK_MELEE 30234) /
+-- (NPC_POWER_SPARK 30084) — UpdateAI despawn-when-reached legs
+-- documented-only (no motion bridge); JustDied casts
+-- SPELL_POWER_SPARK_DEATH 55852 triggered self-cast PORTED as
+-- lua_scripts/northrend/npc_power_spark.lua (event 4 — no phase
+-- gate in the C++ arm). npc_melee_hover_disk (NPC_HOVER_DISK_MELEE 30234) /
 -- npc_caster_hover_disk (NPC_HOVER_DISK_CASTER 30248) —
 -- VehicleAI: PassengerBoarded (player enters -> welcome /
 -- special-attack / take-off event machine; UNIT-type passenger

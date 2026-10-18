@@ -106,31 +106,35 @@
 -- bridges, so in Lua the cast fires every 60-70s while the drake
 -- lives instead of being skipped by the instance gate.
 -- npc_acolyte_of_shadron (NPC_ACOLYTE_OF_SHADRON 31218,
--- entry-verifiable from the local enum) — Reset
--- (DespawnOrUnsummon(28s), instance-gated AddAura gift-of-twilight
--- 58766/57835, AddAura SPELL_TWILIGHT_SHIFT_ENTER 57620), JustDied
--- (instance SetBossState + player-loop cast/remove legs +
--- RemoveAurasDueToSpell legs on DATA_SARTHARION / DATA_SHADRON
--- via GUID fetch), UpdateAI (melee) — no despawn / aura / cast /
--- instance bridges; no bridgeable arms (no Talk arms).
+-- entry-verifiable from the local enum) — Reset self
+-- AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) PORTED (the aura leg
+-- is bridged); DespawnOrUnsummon(28s) is inexpressible (Go
+-- Despawn takes no delay arg); the instance-gated AddAura
+-- gift-of-twilight 58766/57835 legs and JustDied's instance
+-- SetBossState + player-loop cast/remove legs have no instance
+-- bridges — documented-only.
 -- npc_acolyte_of_vesperon (NPC_ACOLYTE_OF_VESPERON 31219) —
--- same verdict: Reset / JustDied / UpdateAI melee legs all
--- aura / cast / instance-gated — no bridgeable arms (the Reset
--- DoCast(me, SPELL_TWILIGHT_TORMENT_VESP_ACO 58853) :725 is
--- non-triggered but rides the unregistered-creature stay-out).
+-- Reset self AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) +
+-- DoCast(me, SPELL_TWILIGHT_TORMENT_VESP_ACO 58853) (2-arg
+-- non-triggered self-cast) PORTED; JustDied self
+-- RemoveAurasDueToSpell(58853) PORTED (the vesperon/player/instance
+-- legs have no bridges — documented-only); UpdateAI melee.
 -- npc_twilight_eggs (NPC_TWILIGHT_EGG 30882 /
--- NPC_SARTHARION_TWILIGHT_EGG 31204) — Reset (aura +
--- ScheduleEvent EVENT_TWILIGHT_EGGS 20s), SpawnWhelps (whelp
+-- NPC_SARTHARION_TWILIGHT_EGG 31204) — Reset self
+-- AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) PORTED; the
+-- EVENT_TWILIGHT_EGGS 20s payload (SetBossState + SpawnWhelps whelp
 -- summons NPC_TWILIGHT_WHELP 30890 / NPC_SARTHARION_TWILIGHT_WHELP
--- 31214 + KillSelf), JustSummoned (DoZoneInCombat), UpdateAI —
--- no aura / timer / summon bridges; no bridgeable arms.
+-- 31214 + KillSelf) and JustSummoned (DoZoneInCombat) have no
+-- summon / instance bridges — documented-only.
 -- npc_flame_tsunami (NPC_FLAME_TSUNAMI 30616, boss_sartharion.cpp
--- enum) — ctor (SetDisplayId 11686 + aura SPELL_FLAME_TSUNAMI
--- 57494), Reset (REACT_PASSIVE + flag legs + timer schedules),
--- UpdateAI (DoCast(SPELL_FLAME_TSUNAMI_DMG_AURA 57491) +
--- lava-blaze (NPC_LAVA_BLAZE 30643) search + buff cast
--- SPELL_FLAME_TSUNAMI_BUFF 60430) — no aura / cast /
--- creature-search bridges; no bridgeable arms.
+-- enum) — EVENT_TSUNAMI_TIMER DoCast(me,
+-- SPELL_FLAME_TSUNAMI_DMG_AURA 57491) (2-arg non-triggered
+-- self-cast, 100ms init / 500ms re-arm) PORTED via CreateLuaEvent
+-- (seeded on Reset, cancelled on event 37 — the wave is stationary;
+-- the C++ leap motion has no bridge); the ctor (SetDisplayId 11686
+-- + aura SPELL_FLAME_TSUNAMI 57494) and EVENT_TSUNAMI_BUFF
+-- (NPC_LAVA_BLAZE 30643 creature-search + SPELL_FLAME_TSUNAMI_BUFF
+-- 60430) have no spawn / creature-search bridges — documented-only.
 -- npc_twilight_fissure — entry UNVERIFIABLE from C++ (no local
 -- NPC enum; the fissure is spawned by SPELL_SHADOW_FISSURE
 -- 57579, entry not named in the C++ tree) — joins the
@@ -386,3 +390,78 @@ for _, entry in ipairs({ ENTRY_TWILIGHT_WHELP, ENTRY_SARTHARION_TWILIGHT_WHELP }
     RegisterCreatureEvent(entry, 4, whelpDied)
     RegisterCreatureEvent(entry, 23, whelpReset)
 end
+
+-- New arms (ported 2026-10-18, entries C++-verifiable):
+local SPELL_TWILIGHT_SHIFT_ENTER = 57620
+local SPELL_TWILIGHT_TORMENT_VESP_ACO = 58853
+local SPELL_FLAME_TSUNAMI_DMG_AURA = 57491
+local ENTRY_ACOLYTE_SHADRON = 31218
+local ENTRY_ACOLYTE_VESPERON = 31219
+local ENTRY_TWILIGHT_EGG = 30882
+local ENTRY_SARTHARION_TWILIGHT_EGG = 31204
+local ENTRY_FLAME_TSUNAMI = 30616
+
+-- C++ npc_acolyte_of_shadron::Reset (obsidian_sanctum.cpp:632-650):
+-- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) — self-aura leg
+-- ported; DespawnOrUnsummon(28s) inexpressible (Go Despawn takes
+-- no delay arg); the instance-gated gift-aura legs stay out.
+local function acolyteShadronReset(event, creature)
+    creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
+end
+RegisterCreatureEvent(ENTRY_ACOLYTE_SHADRON, 23, acolyteShadronReset)
+
+-- C++ npc_acolyte_of_vesperon::Reset (obsidian_sanctum.cpp:718-726):
+-- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) + DoCast(me,
+-- SPELL_TWILIGHT_TORMENT_VESP_ACO) (2-arg non-triggered self-cast)
+-- ported.
+local function acolyteVesperonReset(event, creature)
+    creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
+    creature:CastSpell(creature, SPELL_TWILIGHT_TORMENT_VESP_ACO)
+end
+RegisterCreatureEvent(ENTRY_ACOLYTE_VESPERON, 23, acolyteVesperonReset)
+
+-- C++ npc_acolyte_of_vesperon::JustDied (obsidian_sanctum.cpp:728):
+-- me->RemoveAurasDueToSpell(SPELL_TWILIGHT_TORMENT_VESP_ACO) —
+-- self leg ported; the instance/vesperon/player legs stay out.
+local function acolyteVesperonDied(event, creature, killer)
+    creature:RemoveAura(SPELL_TWILIGHT_TORMENT_VESP_ACO)
+end
+RegisterCreatureEvent(ENTRY_ACOLYTE_VESPERON, 4, acolyteVesperonDied)
+
+-- C++ npc_twilight_eggs::Reset (obsidian_sanctum.cpp:804-809):
+-- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) ported; the
+-- EVENT_TWILIGHT_EGGS 20s payload (SetBossState + SpawnWhelps)
+-- has no summon / instance bridges.
+local function twilightEggReset(event, creature)
+    creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
+end
+for _, entry in ipairs({ ENTRY_TWILIGHT_EGG, ENTRY_SARTHARION_TWILIGHT_EGG }) do
+    RegisterCreatureEvent(entry, 23, twilightEggReset)
+end
+
+-- C++ npc_flame_tsunami (obsidian_sanctum.cpp:866-916):
+-- EVENT_TSUNAMI_TIMER DoCast(me, SPELL_FLAME_TSUNAMI_DMG_AURA)
+-- (2-arg non-triggered self-cast), 100ms init / 500ms re-arm —
+-- ported via CreateLuaEvent, seeded on Reset, cancelled on
+-- OnRemove (event 37); REACT_PASSIVE, never combats. The ctor
+-- and EVENT_TSUNAMI_BUFF (creature-search) stay out.
+local function tsunamiTick(creature, guid)
+    creature:CastSpell(creature, SPELL_FLAME_TSUNAMI_DMG_AURA)
+    schedule(guid, "tsunami", 500, function()
+        tsunamiTick(creature, guid)
+    end)
+end
+
+local function tsunamiReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "tsunami", 100, function()
+        tsunamiTick(creature, guid)
+    end)
+end
+
+local function tsunamiRemove(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 23, tsunamiReset)
+RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 37, tsunamiRemove)

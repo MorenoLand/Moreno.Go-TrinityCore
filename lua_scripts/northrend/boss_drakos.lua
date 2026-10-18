@@ -69,12 +69,20 @@
 -- SPELL_UNSTABLE_SPHERE_PASSIVE 50756, SPELL_UNSTABLE_SPHERE_TIMER
 -- 50758, self) + DespawnOrUnsummon(19s) — no react-state / motion
 -- bridges (the aura and despawn legs ARE bridged: AddAura on the
--- event-handler surface (lua_creature_events.go:161), Despawn in
+-- event-handler surface (lua_creature_events.go:170), Despawn in
 -- lua_objects.go — the sphere still has no lua because its entry is
 -- unverifiable and there is no registration); UpdateAI pulseTimer
 -- 3000ms ->
--- DoCast(SPELL_UNSTABLE_SPHERE_PULSE 50757) + 3s repeat — no
--- timer-event / cast bridges.
+-- DoCast(SPELL_UNSTABLE_SPHERE_PULSE 50757) + 3s repeat — the
+-- cast/timer/aura/despawn legs ARE bridged (CastSpell +
+-- CreateLuaEvent + AddAura on the event-handler surface, Despawn in
+-- lua_objects.go); the sphere has no lua solely because its entry is
+-- unverifiable and there is no registration.
+-- UpdateAI UNIT_STATE_CASTING suppression gate (boss_drakos.cpp:96,
+-- 127): C++ defers ALL event execution while the boss is casting;
+-- creature:IsCasting() is hard-coded FALSE (lua_objects.go:326-330),
+-- so the 15s Lua timers fire rigidly even mid-cast — no bridge,
+-- unfixable, documented here.
 
 local ENTRY_DRAKOS = 27654
 
