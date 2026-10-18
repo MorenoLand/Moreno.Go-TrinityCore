@@ -21386,7 +21386,9 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	}
 	if durationMs > 0 && durationMs < 18000000 {
 		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
-			s.removeAura(spellID)
+			// Unit::Unit expiry sweep (Unit.cpp:2990): expired owned auras
+			// remove with AURA_REMOVE_BY_EXPIRE, not BY_DEFAULT.
+			s.removeAuraWithMode(spellID, auraRemoveByExpire)
 		})
 	}
 	s.activeAuras[spellID] = aura
@@ -24809,9 +24811,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if eff.Aura == spellAuraStealth {
 			targetSess.player.StandFlags |= unitStandFlagCreep
 			targetSess.player.AuraVision |= playerAuraVisionStealth
+			// AuraEffect::HandleAuraModStealth apply leg
+			// (SpellAuraEffects.cpp:1466-1472, REAL mode): drop flag at
+			// stealth in bg — strips auras carrying
+			// AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION.
+			targetSess.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
 		}
 		if eff.Aura == spellAuraInvisibility {
 			targetSess.player.AuraVision |= playerAuraVisionInvis
+			// AuraEffect::HandleAuraModInvisibility apply leg
+			// (SpellAuraEffects.cpp:1397-1401, REAL mode): drop flag at
+			// invisibility in bg, same strip as the stealth leg.
+			targetSess.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
 		}
 		if eff.Aura == spellAuraTrackStealthed {
 			targetSess.player.PlayerFieldBytes |= playerFieldByteTrackStealthed
@@ -25828,7 +25839,9 @@ func (ts *session) scheduleAuraUpkeepLocked(aura *activeAura) {
 		}
 		ts.playerStateMu.Unlock()
 		if !ts.server.auraUpkeepTick(aura, pMap, pInst) {
-			ts.expirePlayerAura(aura.SpellID)
+			// Aura::Update mana-upkeep failure (SpellAuras.cpp:855): plain
+			// Remove() = AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
+			ts.removeAuraWithMode(aura.SpellID, auraRemoveByDefault)
 			return
 		}
 		ts.castMu.Lock()
