@@ -12241,9 +12241,11 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	}
 	lowGUID := s.server.nextDynamicSpellLowGUID()
 	auraEffect := persistent
-	for _, effect := range spell.Effects {
+	auraEffectIndex := -1
+	for i, effect := range spell.Effects {
 		if effect.Effect == 6 && effect.Aura != 0 {
 			auraEffect = effect
+			auraEffectIndex = i
 			break
 		}
 	}
@@ -12275,7 +12277,7 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if schoolMask == 0 {
 		schoolMask = 1
 	}
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: time.Now()}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: time.Now()}
 	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 
@@ -24383,7 +24385,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 			// BuildUpdatePacket (SpellAuras.cpp:239) sends the stored aura's
 			// caster level — a refresh keeps the old aura's level.
-			updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.StoredCasterLevel, wireStack, effectMask)
+			// BuildUpdatePacket (SpellAuras.cpp:239) sends the stored aura's
+			// caster — a merge never changes the aura's caster, so the
+			// update carries the existing aura's caster even on a
+			// cross-caster re-cast (Go holds one aura per spell ID, so
+			// the re-cast merges rather than replacing).
+			wireCaster := existing.CasterGUID
+			if wireCaster == 0 {
+				wireCaster = casterGUID
+			}
+			updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.StoredCasterLevel, wireStack, effectMask)
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 			if s.server != nil {
 				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
@@ -24559,11 +24570,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// and dynamic-object paths create the aura with a foreign caster
 		// (Unit::RemoveAurasDueToSpellBySteal, Unit.cpp:4020:
 		// createInfo.SetCasterGUID(aura->GetCasterGUID())).
-		purgeIDs := s.server.rankChainNoStackPurge(spell, casterGUID, aura.ItemGUID, targetSess.activeAuras)
-		purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
-		purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
-		purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
-		purgeIDs = append(purgeIDs, highest.purge...)
+		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) issues no purge:
+		// a persistent-area application only skips when it cannot stack
+		// (the CanStackWith gate above) and never strips the target's
+		// other auras. Two overlapping dynobjs otherwise strip each
+		// other's applications on every 500ms refresh.
+		var purgeIDs []rankPurgeTarget
+		if !persistentAreaAura {
+			purgeIDs = s.server.rankChainNoStackPurge(spell, casterGUID, aura.ItemGUID, targetSess.activeAuras)
+			purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
+			purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
+			purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
+			purgeIDs = append(purgeIDs, highest.purge...)
+		}
 		targetSess.castMu.Unlock()
 		// Aura::_ApplyForTarget (SpellAuras.cpp:579-584): a player caster
 		// whose aura spell starts its cooldown on event parks an infinity
@@ -25329,11 +25348,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// new aura's caster — the casterGUID param — because the
 	// dynamic-object path creates the aura with the object's caster
 	// (Unit.cpp:4020 shape).
-	purge := s.server.rankChainNoStackPurge(spell, casterGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
-	purge = append(purge, s.server.spellGroupNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
-	purge = append(purge, s.server.spellSpecificNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
-	purge = append(purge, s.server.singleTargetNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
-	purge = append(purge, highest.purge...)
+	// Same no-purge arm as the player path above (Aura::UpdateTargetMap
+	// never strips auras — it only skips unstackable applications).
+	var purge []rankPurgeTarget
+	if !persistentAreaAura {
+		purge = s.server.rankChainNoStackPurge(spell, casterGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
+		purge = append(purge, s.server.spellGroupNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
+		purge = append(purge, s.server.spellSpecificNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
+		purge = append(purge, s.server.singleTargetNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
+		purge = append(purge, highest.purge...)
+	}
 	s.server.auraMu.Unlock()
 	// No-stack purge on apply: AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
 	for _, p := range purge {

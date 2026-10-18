@@ -2019,4 +2019,20 @@ func (s *session) removeAurasWithInterruptFlags(flags uint32, exceptSpellID ...u
 	for _, spellID := range toRemove {
 		s.removeAura(spellID)
 	}
+
+	// Unit::RemoveAurasWithInterruptFlags (Unit.cpp:4165-4170): interrupt
+	// the unit's own channeled spell when its ChannelInterruptFlags
+	// match the removal mask.
+	channelSpellID := uint32(0)
+	s.castMu.Lock()
+	if s.activeChannel != nil && !s.activeChannel.Stopped {
+		channelSpellID = s.activeChannel.SpellID
+	}
+	s.castMu.Unlock()
+	if channelSpellID != 0 && !isExceptedSpellID(channelSpellID, exceptSpellID) &&
+		s.server != nil && s.server.Data != nil {
+		if si, found, _ := s.server.Data.Spell(channelSpellID); found && si.ChannelInterrupt&flags != 0 {
+			s.interruptCurrentChannel()
+		}
+	}
 }

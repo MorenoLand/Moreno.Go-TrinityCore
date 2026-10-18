@@ -209,6 +209,64 @@ func (s *Server) sweepOwnedAurasOnDeath(casterGUID uint64) {
 	}
 }
 
+// sweepOwnedAurasOnLeaveWorld mirrors the first arm of
+// Unit::RemoveAreaAurasDueToLeaveWorld (Unit.cpp:4249-4266), reached at
+// logout via Unit::RemoveFromWorld (Unit.cpp:9802): auras the leaving
+// unit owns on other targets are removed with the default mode. Unlike
+// the death sweep there is no death-persistent gate — C++ strips every
+// owned application on leave-world. Foreign-owned auras on the leaving
+// unit itself are already cleared by clearActiveAuras.
+func (s *Server) sweepOwnedAurasOnLeaveWorld(casterGUID uint64) {
+	if s == nil || casterGUID == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	var sessions []*session
+	for sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		sess.castMu.Lock()
+		var strip []uint32
+		if sess.activeAuras != nil {
+			for id, aura := range sess.activeAuras {
+				if aura == nil || aura.CasterGUID != casterGUID {
+					continue
+				}
+				strip = append(strip, id)
+			}
+		}
+		sess.castMu.Unlock()
+		for _, id := range strip {
+			sess.removeAuraWithMode(id, auraRemoveByDefault)
+		}
+	}
+	type ownedStrip struct {
+		key creatureAuraKey
+		id  uint32
+	}
+	s.auraMu.Lock()
+	var cstrip []ownedStrip
+	if s.activeCreatureAuras != nil {
+		for key, auras := range s.activeCreatureAuras {
+			for id, aura := range auras {
+				if aura == nil || aura.CasterGUID != casterGUID {
+					continue
+				}
+				cstrip = append(cstrip, ownedStrip{key: key, id: id})
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, cs := range cstrip {
+		s.removeCreatureAuraWithMode(cs.key, cs.id, auraRemoveByDefault)
+	}
+}
+
 func (s *session) currentPlayerPhaseMask() uint32 {
 	if s == nil || s.player == nil {
 		return 1

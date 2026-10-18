@@ -2778,11 +2778,10 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 		// C++ PrepareProcToTrigger (SpellAuras.cpp:2032): a charge is taken
 		// only when the triggering spell is absent (melee swings carry no
 		// spell info) or lacks SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES.
+		chargesDepleted := false
 		if entry.Charges > 0 && !procEventKeepsProcCharges(ev) {
 			aura.RemainingCharges--
-			if aura.RemainingCharges == 0 {
-				s.removeAura(aura.SpellID)
-			}
+			chargesDepleted = aura.RemainingCharges == 0
 		}
 		// Unit::TriggerAurasProcOnEvent (Unit.cpp:10433-10440): an aura
 		// carrying SPELL_ATTR3_DISABLE_PROC elevates the no-proc guard
@@ -2862,6 +2861,12 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 		}
 		if disableProc {
 			s.procDeep--
+		}
+		// Aura::TriggerProcOnEvent (SpellAuras.cpp:2209-2211): the aura is
+		// removed only after all proc effects and after-proc handlers
+		// complete — never before the effects fire.
+		if chargesDepleted {
+			s.removeAura(aura.SpellID)
 		}
 	}
 }

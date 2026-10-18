@@ -2746,14 +2746,12 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		// C++ PrepareProcToTrigger (SpellAuras.cpp:2032): a charge is taken
 		// when the triggering spell is absent (melee/kill events carry no
 		// spell info) or lacks SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES.
+		spent := false
 		if entry.Charges > 0 && !procEventKeepsProcCharges(ev) {
 			s.auraMu.Lock()
 			aura.RemainingCharges--
-			spent := aura.RemainingCharges == 0
+			spent = aura.RemainingCharges == 0
 			s.auraMu.Unlock()
-			if spent {
-				s.removeCreatureAura(key, aura.SpellID)
-			}
 		}
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
@@ -2777,6 +2775,11 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			// m_caster->CastSpell(unit, triggeredSpell->Id, true): the
 			// triggered cast by the creature on the trigger target.
 			s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, triggerTargetGUID, true)
+		}
+		// Aura::TriggerProcOnEvent (SpellAuras.cpp:2209-2211): remove only
+		// after all proc effects complete.
+		if spent {
+			s.removeCreatureAura(key, aura.SpellID)
 		}
 	}
 }

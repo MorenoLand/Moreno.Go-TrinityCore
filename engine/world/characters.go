@@ -3891,6 +3891,11 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	}
 	s.worldReady.Store(false)
 	s.stopSpellLifecycle()
+	// Unit::RemoveFromWorld (Unit.cpp:9795-9796): a leaving unit's
+	// dynamic objects are all removed, not just the current channel's.
+	if s.server != nil {
+		s.server.despawnAllCasterDynObjects(s.playerGUID)
+	}
 	s.stopTimedAchievements()
 	s.stopPlayerCombat()
 	// Player::CleanupsBeforeDelete (Player.cpp:1974): the logging-out
@@ -3981,6 +3986,11 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		_ = s.savePlayerPosition(ctx)
 	}
 	s.clearActiveAuras()
+	// Unit::RemoveAreaAurasDueToLeaveWorld (Unit.cpp:4249-4266): auras
+	// the leaving player owns on other targets are stripped.
+	if s.server != nil {
+		s.server.sweepOwnedAurasOnLeaveWorld(s.playerGUID)
+	}
 	if err := s.clearBuybackState(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}

@@ -27,11 +27,18 @@ type dynamicSpellObjectState struct {
 	IsFarsightFocus           bool  // SetCasterViewpoint viewpoint; cleared on despawn
 	SpellData                 wotlk.Spell
 	AuraEffect                wotlk.SpellEffect
-	AuraDurationMs            uint32
-	AuraPeriodMs              uint32
-	AuraAmount                uint32
-	AuraSchoolMask            uint8
-	NextAuraTick              time.Time
+	// AuraEffectIndex is the DBC effect row feeding AuraEffect; -1 when
+	// no aura effect was found (mirrors the synthetic-effIndex
+	// convention in applyAuraToTarget). Carried so the target-map
+	// refresh can run the per-effect immunity gate (Spell.cpp:2108-2112
+	// via Aura::UpdateTargetMap, SpellAuras.cpp:690-695) instead of
+	// skipping it with the -1 dummy.
+	AuraEffectIndex int
+	AuraDurationMs  uint32
+	AuraPeriodMs    uint32
+	AuraAmount      uint32
+	AuraSchoolMask  uint8
+	NextAuraTick    time.Time
 	// NextTargetMapPass is the next UpdateTargetMap pass deadline. C++
 	// refreshes the dynobj target map every UPDATE_TARGET_MAP_INTERVAL
 	// (500ms, SpellAuras.h:43) — applying the debuff to newcomers via
@@ -164,12 +171,18 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	s.objectsMu.Lock()
 	objects := make([]*dynamicSpellObjectState, 0, len(s.dynamicSpellObjects))
 	for _, object := range s.dynamicSpellObjects {
-		if object == nil || object.AuraPeriodMs == 0 {
+		if object == nil {
 			continue
 		}
-		period := time.Duration(object.AuraPeriodMs) * time.Millisecond
-		for !now.Before(object.NextAuraTick) {
-			object.NextAuraTick = object.NextAuraTick.Add(period)
+		// C++ refreshes the target map every 500ms regardless of
+		// periodicity (Aura::UpdateTargetMap, SpellAuras.cpp:643-767);
+		// only the tick catch-up needs a non-zero period (it would
+		// spin forever on a zero period).
+		if object.AuraPeriodMs != 0 {
+			period := time.Duration(object.AuraPeriodMs) * time.Millisecond
+			for !now.Before(object.NextAuraTick) {
+				object.NextAuraTick = object.NextAuraTick.Add(period)
+			}
 		}
 		if now.Before(object.NextTargetMapPass) {
 			continue
@@ -221,7 +234,7 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			if caster.hasDynamicAreaAura(targetGUID, object.SpellData.ID) {
 				continue
 			}
-			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, -1, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0, false, &sharedDelayMs)
+			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, object.AuraEffectIndex, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0, false, &sharedDelayMs)
 			if object.AuraHolders == nil {
 				object.AuraHolders = make(map[uint64]struct{})
 			}
@@ -481,6 +494,29 @@ func (s *Server) despawnCasterDynObjects(casterGUID uint64, spellID uint32) {
 	guids := make([]uint64, 0, 2)
 	for _, object := range s.dynamicSpellObjects {
 		if object != nil && object.CasterGUID == casterGUID && object.SpellID == uint64(spellID) {
+			guids = append(guids, object.GUID)
+		}
+	}
+	s.objectsMu.Unlock()
+	for _, guid := range guids {
+		s.despawnDynamicSpellObject(guid)
+	}
+}
+
+// despawnAllCasterDynObjects mirrors Unit::RemoveAllDynObjects
+// (Unit.cpp:5193-5197), reached at logout via Unit::RemoveFromWorld
+// (Unit.cpp:9795-9796): every dynamic object the leaving unit owns is
+// removed, not just the current spell's. Without this, persistent-area
+// patches (Blizzard etc.) keep affecting players after the caster
+// logs out.
+func (s *Server) despawnAllCasterDynObjects(casterGUID uint64) {
+	if s == nil || casterGUID == 0 {
+		return
+	}
+	s.objectsMu.Lock()
+	guids := make([]uint64, 0, 2)
+	for _, object := range s.dynamicSpellObjects {
+		if object != nil && object.CasterGUID == casterGUID {
 			guids = append(guids, object.GUID)
 		}
 	}
