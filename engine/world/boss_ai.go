@@ -5279,6 +5279,13 @@ func init() {
 	// gossip / MotionMaster machine, entry not C++-verifiable)
 	// are documented-only.
 	RegisterLuaBoss("npc_depth_charge", 23025)
+	// npc_engineer_spark_overgrind (Azuremyst Isle zone script): Reset
+	// restores UNIT_NPC_FLAGS via per-GUID first-seen capture +
+	// SetNPCFlags (C++-exact, 7fe143eb); entry 17243 = NPC_SPARK
+	// (zone_azuremyst_isle.cpp:463) — see
+	// lua_scripts/kalimdor/npc_engineer_spark_overgrind.lua. The
+	// SetFaction leg awaits the faction bridge — documented only.
+	RegisterLuaBoss("npc_engineer_spark_overgrind", 17243)
 	// npc_sironas (Bloodmyst Isle zone script): combat rotation
 	// only — uppercut (10966, 15s init then 10-12s), immolate
 	// (12742, 10s init then 15-20s), curse of blood (8282, 5s
@@ -8006,8 +8013,10 @@ func init() {
 	// DoAction(ACTION_FLESH_TENTACLE_KILLED)) has no bearer — razorgore
 	// precedent. The 4 tentacle NPCs ARE ported (npc_eye_tentacle 15726 /
 	// npc_claw_tentacle 15725 / npc_giant_claw_tentacle 15728 /
-	// npc_giant_eye_tentacle 15334, npc_*.lua convention — no Go
-	// registration). 2026-10-07 name-by-name re-verify found 3 fidelity
+	// npc_giant_eye_tentacle 15334, npc_*.lua convention; the four
+	// luaBossAI bindings are registered below (the 2026-10-18
+	// dead-binding sweep found them unbound). 2026-10-07
+	// name-by-name re-verify found 3 fidelity
 	// deviations, fixed: claw Hamstring repeat 10s -> 5s (C++ reset is
 	// 5000 — the 10s was a giant-claw copy slip), giant claw was MISSING
 	// the Hamstring arm (2s init -> 10s repeat per C++), giant eye beam
@@ -8015,6 +8024,10 @@ func init() {
 	// cast leg applies. No-bridge legs (portal summon/KillSelf, EvadeTimer
 	// reposition, DoZoneInCombat, 35s KillSelf) stay documented in the
 	// lua files, not wired.
+	RegisterLuaBoss("npc_eye_tentacle", 15726)
+	RegisterLuaBoss("npc_claw_tentacle", 15725)
+	RegisterLuaBoss("npc_giant_claw_tentacle", 15728)
+	RegisterLuaBoss("npc_giant_eye_tentacle", 15334)
 	// wailing_caverns.cpp audit (loader decl :99 / call :212): single
 	// script npc_disciple_of_naralex, an EscortAI — the whole Naralex
 	// awakening chain (WaypointReached 4/5/11/19/24 arms,

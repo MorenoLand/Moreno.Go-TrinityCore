@@ -21,9 +21,9 @@
 --   self-cast SUPREME 25176; Talk(SAY_AGGRO 2). (C++ also sets
 --   weather, summons tornados, spawns crystals — no bridge,
 --   documented below.)
--- - EVENT_SILENCE: Curse of Tongues 25195 on all players in the
---   instance (C++ DoCastAOE; no AoE bridge — iterate via
---   GetPlayersInWorld filtered by map/instance/alive, maiden
+-- - EVENT_SILENCE: Curse of Tongues 25195 via DoCastAOE lowering to
+--   self-cast (C++ DoCastAOE = DoCast(nullptr, spell); the spell's
+--   own AoE targeting resolves the victims — selin_fireheart
 --   convention), reschedule 20-30s.
 -- - EVENT_CYCLONE: DoCastVictim 25189 (jeklik GetVictim + CastSpell
 --   convention), reschedule 20s.
