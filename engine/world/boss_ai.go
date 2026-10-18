@@ -5125,6 +5125,48 @@ func init() {
 	// creature:Despawn() — see lua_scripts/mechanar/
 	// boss_pathaleon_the_calculator.lua.
 	RegisterLuaBoss("npc_nether_wraith", 21062)
+	// boss_mechano_lord_capacitus (19219; DB-side ScriptName
+	// binding, no NPC_ constant — entry per standard TBC
+	// creature data; DATA_MECHANOLORD_CAPACITUS = 2 is
+	// instance-side): head crack 35161 non-triggered
+	// DoCastVictim 10s/10s, reflective damage shield 35159
+	// Talk(2) + non-triggered DoCast(me) 15s init and
+	// reflective magic shield 35158 Talk(1) + non-triggered
+	// DoCast(me) as a C++-exact ping-pong — each shield arm
+	// schedules the other at 30s (exactly one shield event
+	// pending), polarity shift 39096 non-triggered DoCastAOE
+	// self-cast randtime(45s,60s) on the C++ IsHeroic()
+	// engage gate (creature:IsHeroic() is bridged),
+	// summon nether charge RAND of 35153/35904/35905/35906
+	// non-triggered DoCastSelf with DUNGEON_MODE(randtime
+	// (9s,11s), randtime(2s,5s)) evaluated at fire time,
+	// berserk 26662 non-triggered DoCast(me) 3min one-shot
+	// (the C++ arm does not re-arm); KilledUnit
+	// SAY_KILL, JustDied SAY_DEATH; cast-state gates have no
+	// cast-state bridge; the two polarity SpellScripts have
+	// no SpellScript bridge — see lua_scripts/mechanar/
+	// boss_mechano_lord_capacitus.lua.
+	RegisterLuaBoss("boss_mechano_lord_capacitus", 19219)
+	// instance_mechanar (map 554): door data 184632->
+	// DATA_GATEWATCHER_IRON_HAND(1) and 184322->
+	// DATA_GATEWATCHER_GYROKILL(0) as passage doors, 184449->
+	// DATA_NETHERMANCER_SEPRETHREA(3) as a room door; the
+	// SetBossState override is a no-op switch — documented
+	// only, no-instance-script-bridge queue; see
+	// hidden_files/CHECKPOINT.md.
+	// zone_blades_edge_mountains residuals (npc_nether_drake
+	// already ported at lua_scripts/outland/npc_nether_drake.lua
+	// per the earlier Outland zone-set work): go_legion_
+	// obelisk's quest-10821 spawn arm needs SummonCreature
+	// (no summon bridge), npc_simon_bunny's Simon game needs
+	// SetGUID/SetData/Action dispatch and GameObject flag,
+	// teleport, sound, summon bridges (none exist),
+	// go_simon_cluster / go_apexis_relic's gossip summon
+	// arms need the same, npc_oscillating_frequency_scanner_
+	// master_bunny's Reset summon machine + IsSummonedBy
+	// player-capture arm have no bridges, and
+	// spell_oscillating_field is a SpellScript — all
+	// documented only; see hidden_files/CHECKPOINT.md.
 	// boss_doomlordkazzak and boss_doomwalker: the C++ files
 	// carry no NPC_ entry constants anywhere in the sources —
 	// the entries are DB-side only — so both are documented-
