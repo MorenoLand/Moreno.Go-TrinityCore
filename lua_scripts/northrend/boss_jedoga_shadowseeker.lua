@@ -113,8 +113,10 @@
 -- latch + PHASE_THREE flip; payload rides the unbridged summon /
 -- movement / instance arms), EnterEvadeMode (summons.DespawnAll has
 -- no bearer — the _DespawnAtEvade(15s) leg is ported in
--- jedogaLeaveCombat via a 15s Lua event -> creature:Despawn,
--- terestian precedent; stale "no despawn bridge" retracted),
+-- jedogaLeaveCombat as immediate creature:Despawn (drakkari
+-- precedent; C++ despawns immediately, the 15s is respawn-side —
+-- ScriptedCreature.cpp:596-616; stale "no despawn bridge"
+-- retracted),
 -- MovementInform (all point choreography — no motion
 -- bridges), GetData(DATA_VOLUNTEER_WORK) (no cross-AI GetData
 -- bridge — achievement_volunteer_work needs it too).
@@ -175,13 +177,11 @@ local function jedogaDied(event, creature, killer)
 end
 
 local function jedogaLeaveCombat(event, creature)
-    -- C++ EnterEvadeMode: _EnterEvadeMode() + _DespawnAtEvade(Seconds(15))
-    -- (cpp:182-186; _EnterEvadeMode cancels timers and
-    -- summons.DespawnAll is moot — nothing is modeled); the 15s delayed
-    -- despawn rides the terestian precedent (15s Lua event).
-    CreateLuaEvent(function()
-        creature:Despawn()
-    end, 15000)
+    -- C++ EnterEvadeMode: _DespawnAtEvade(Seconds(15)) (cpp:182-186;
+    -- summons.DespawnAll is moot — nothing is modeled) — DespawnOrUnsummon
+    -- is immediate at evade, the 15s is respawn-side
+    -- (ScriptedCreature.cpp:596-616); drakkari precedent.
+    creature:Despawn()
 end
 
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 1, jedogaEnterCombat)

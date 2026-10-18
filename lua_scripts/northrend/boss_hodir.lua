@@ -97,16 +97,18 @@
 -- SetControlled root / InterruptNonMeleeSpells /
 -- StopMoving / MoveIdle / SetControlled stun /
 -- CombatStop — no bridges; DoCastAOE SPELL_KILL_CREDIT
--- 64899 — no cast bridge; SetFaction FACTION_FRIENDLY —
--- no faction bridge; DespawnOrUnsummon(10s) — no despawn
--- bridge; _JustDied() passthrough — never reachable in Go
--- since the boss cannot actually die while the damage=0
--- rewrite holds (consequence of the rewrite without the
--- despawn leg: every subsequent hit still satisfies
--- damage >= health, so the death Talk re-fires on each
--- hit — verbatim C++ behavior, which in C++ is bounded
--- by the 10s despawn; documented here since Go cannot
--- despawn him).
+-- 64899 + SetFaction FACTION_FRIENDLY — the kill-credit
+-- must precede the faction change in one coupled machine
+-- (SetFaction unbridged); DespawnOrUnsummon(10s) and
+-- RemoveAllAuras ARE bridged, but the arm stays out —
+-- porting the tail legs without the machine would
+-- fabricate behavior. _JustDied() passthrough — never
+-- reachable in Go since the boss cannot actually die
+-- while the damage=0 rewrite holds (consequence of the
+-- rewrite without the despawn leg: every subsequent hit
+-- still satisfies damage >= health, so the death Talk
+-- re-fires on each hit — verbatim C++ behavior, which in
+-- C++ is bounded by the 10s despawn).
 -- DamageTaken lethal instance->SetData(DATA_HODIR_RARE_CACHE,
 -- 1) (line 400) — no instance SetData bridge; joins the
 -- no-SetData-bridge queue.

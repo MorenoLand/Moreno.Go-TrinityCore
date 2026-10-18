@@ -200,6 +200,18 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+local function onEvade(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ EnterEvadeMode (boss_kirtonos_the_herald.cpp:115-124):
+    -- me->DespawnOrUnsummon(5s) — the gate/brazier GO legs ride the
+    -- unbridged instance-GO machine; the 5s self-despawn is a genuine
+    -- delayed despawn (terestian precedent).
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 5000)
+end
+
 local function onReset(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -216,7 +228,7 @@ local function onBrazierGossip(_, player, go)
 end
 
 RegisterCreatureEvent(ENTRY_KIRTONOS, 1, onEnterCombat)
-RegisterCreatureEvent(ENTRY_KIRTONOS, 2, onCombatEnd)
+RegisterCreatureEvent(ENTRY_KIRTONOS, 2, onEvade)
 RegisterCreatureEvent(ENTRY_KIRTONOS, 4, onCombatEnd)
 RegisterCreatureEvent(ENTRY_KIRTONOS, 23, onReset)
 

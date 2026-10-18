@@ -72,7 +72,12 @@
 -- boolean-only), DoCast(me, SPELL_OVERCHARGED) every 2s,
 -- SPELL_OVERCHARGED_BLAST 64219 at 10 stacks: no GetAura stack-count
 -- bridge.
--- SetFullHealth (:152) and DespawnOrUnsummon (:259): no bridges.
+-- SetFullHealth (:152) and DespawnOrUnsummon (:259): both
+-- legs are npc_tempest_minionAI arms behind the unbridged
+-- summon machine (minions never exist in the port), and the
+-- 10-stack trigger needs GetAura stack count (HasAura is
+-- boolean-only) — SetHealth/Despawn bridges exist but the
+-- arms stay out.
 -- DoZoneInCombat() (:221): no bridge.
 
 local ENTRY_EMALON = 33993

@@ -136,6 +136,12 @@ end
 
 local function amanitarLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode (boss_amanitar.cpp:103-109): summons.DespawnAll()
+    -- (moot — nothing modeled) + instance DoRemoveAurasDueToSpellOnPlayers
+    -- (no instance bridge) + _DespawnAtEvade() — DespawnOrUnsummon is
+    -- immediate at evade (ScriptedCreature.cpp:596-616); drakkari precedent.
+    -- Stale "no despawn bridge" retracted.
+    creature:Despawn()
 end
 
 local function amanitarDied(event, creature, killer)

@@ -100,8 +100,13 @@
 -- (phase-gated); ACTION_PET_EVADE ->
 -- EnterEvadeMode) — no cross-AI SetGUID / DoAction bridges —
 -- documented-only.
--- EnterEvadeMode: summons.DespawnAll (no despawn bridge — terestian
--- precedent), _DespawnAtEvade() — documented-only.
+-- EnterEvadeMode: summons.DespawnAll is moot (no summons modeled);
+-- _DespawnAtEvade() PORTED below as immediate creature:Despawn() in the
+-- event-2 handler (drakkari precedent; stale "no despawn bridge"
+-- retracted — bridged engine/world/lua_creature_events.go:214; C++
+-- despawns immediately at evade, the 30s default is respawn-side —
+-- ScriptedCreature.cpp:596-616; the instance SetBossState(FAIL) leg
+-- stays out — no instance bridge).
 -- DamageTaken: HasAura(SUBMERGE) damage=0 / the
 -- HealthBelowPctDamaged(_nextSubmerge, damage) -> RescheduleEvent(
 -- EVENT_SUBMERGE, 0s, 0, PHASE_EMERGE) gate with the _nextSubmerge
@@ -166,6 +171,14 @@ local function anubarakEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
 end
 
+local function anubarakLeaveCombat(event, creature)
+    -- C++ boss_anub_arak::EnterEvadeMode (boss_anubarak.cpp:165-169):
+    -- summons.DespawnAll() (moot — no summons modeled) +
+    -- _DespawnAtEvade() — DespawnOrUnsummon is immediate at evade
+    -- (ScriptedCreature.cpp:596-616); drakkari precedent.
+    creature:Despawn()
+end
+
 local function anubarakTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
@@ -177,5 +190,6 @@ local function anubarakDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_ANUBARAK, 1, anubarakEnterCombat)
+RegisterCreatureEvent(ENTRY_ANUBARAK, 2, anubarakLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 3, anubarakTargetDied)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 4, anubarakDied)

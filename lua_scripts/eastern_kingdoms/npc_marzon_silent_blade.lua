@@ -9,8 +9,8 @@
 -- Entry (LordGregorLescovar enum, verifiable from the C++ sources):
 -- 1755 (NPC_MARZON_BLADE). The creature_template ScriptName
 -- binding is DB-side (no TDB in this workspace).
--- Eluna creature events: 1 OnEnterCombat (the C++ overrides no
--- other event with a bridged arm — melee is engine-driven).
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat (evade
+-- self-despawn, ported below) — melee is engine-driven).
 -- Fight shape (C++-exact for all modeled arms):
 -- OnEnterCombat(1): Talk(SAY_MARZON_2 1) — the C++ JustEngagedWith
 -- self-Talk arm (Talk takes a textId only; the line plays nearby).
@@ -19,9 +19,10 @@
 -- AttackStart(who)) has no summon bridge — unmodeled (marzon is
 -- summoned by the lescovar waypoint-16 phase arm, behind the
 -- no-summon bridge). The C++ EnterEvadeMode DisappearAndDie pair
--- (marzon + summoner) stays out behind the summon bridge (marzon is
--- summoned; the old "no despawn bridge" was stale —
--- creature:Despawn() is bridged, lua_creature_events.go:214). The
+-- self-DisappearAndDie arm is PORTED below (vazruden/muru
+-- convention: DisappearAndDie -> immediate creature:Despawn());
+-- the summoner-DisappearAndDie leg stays out behind the
+-- no-summoner-access bridge. The
 -- C++ Reset RestoreFaction arm has no faction bridge —
 -- unmodeled. The C++ MovementInform POINT_MOTION_TYPE cross-AI
 -- latch (CAST_AI into the lescovar AI's uiTimer/uiPhase) has no
@@ -56,4 +57,14 @@ local function onEnterCombat(_, creature)
     creature:Talk(SAY_MARZON_2)
 end
 
+local function onLeaveCombat(_, creature)
+    -- C++ npc_marzon_silent_bladeAI::EnterEvadeMode
+    -- (zone_stormwind_city.cpp:257-259): me->DisappearAndDie(),
+    -- unconditional self arm -> immediate creature:Despawn()
+    -- (vazruden/muru convention); the IsSummon summoner leg stays
+    -- out (no summoner-access bridge).
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(NPC_MARZON_BLADE, 1, onEnterCombat)
+RegisterCreatureEvent(NPC_MARZON_BLADE, 2, onLeaveCombat)

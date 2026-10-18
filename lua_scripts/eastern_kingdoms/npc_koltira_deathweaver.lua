@@ -80,10 +80,10 @@
 -- - EVENT_OUTRO_1..4 (RemoveAurasDueToSpell 52894 / gossip flag /
 --   MovePath(NPC_KOLTIRA) — no aura-removal / flag / MotionMaster
 --   bridges; DoCastSelf 53627's trigger is stranded).
--- - EVENT_CHECK_PLAYER (no ObjectAccessor player-GUID bridge —
---   dark-rider precedent; no DespawnOrUnsummon bridge; no
---   FailQuest / quest-status bridge — death_knight_initiate
---   precedent).
+-- - EVENT_CHECK_PLAYER (quest-accept _playerGUID capture +
+--   ObjectAccessor::GetPlayer + player alive/distance check
+--   + player->FailQuest(QUEST_BLOODY_BREAKOUT) — no bridges;
+--   dark-rider / death_knight_initiate precedents).
 -- - MovementInform's POINT_ID_6 Mount(NPC_KOLTIRA_MOUNT 25445)
 --   arm (no MovementInform / mount bridge).
 -- Documented deviations: _eventGossip is set true only by the
