@@ -62,11 +62,21 @@
 -- 33569 visual cast — no-summon / no-cast bridges —
 -- documented-only.
 -- boss_grandmaster_vorpilAI::UpdateAI — the remaining timer
--- machine (EVENT_SHADOWBOLT_VOLLEY ported above) stays out on
--- evidence-based legs, not the old blanket "no-timer" claim:
+-- machine (EVENT_SHADOWBOLT_VOLLEY + heroic-only EVENT_BANISH
+-- ported above) stays out on evidence-based legs, not the old
+-- blanket "no-timer" claim:
 -- heroic-only EVENT_BANISH (SelectTarget random 30f → DoCast(
--- target, SPELL_BANISH 38791), 15s cycle) — IsHeroic() gate, no
--- heroic bridge; EVENT_DRAW_SHADOWS (teleports every alive
+-- target, SPELL_BANISH 38791), 15s cycle) — PORTED as
+-- banishTick, the scheduler seeded only when creature:IsHeroic()
+-- (the earlier "no heroic bridge" claim was stale — IsHeroic is
+-- bridged, engine/world/lua_creature_events.go:260; the lavanthor
+-- precedent). Documented deviations: the 30.0f distance filter has
+-- no bridge (the lavanthor precedent); C++ SelectTarget defaults
+-- playerOnly=FALSE, so the pool can include pets/totems — Lua's
+-- player-only pool is the documented approximation (the tuten_kash
+-- precedent); the UNIT_STATE_CASTING pre-check has no bridge —
+-- casts fire unconditionally on their timers (the hodir precedent);
+-- EVENT_DRAW_SHADOWS (teleports every alive
 -- non-banished player to VorpilPosition + me->UpdatePosition() —
 -- no Teleport/UpdatePosition bridge in engine/scripting/object.go and
 -- the teleport IS the mechanic; DoCast(me, SPELL_DRAW_SHADOWS 33563,
@@ -105,6 +115,7 @@ local SAY_SLAY  = 3
 local SAY_DEATH = 4
 
 local SPELL_SHADOWBOLT_VOLLEY = 33841
+local SPELL_BANISH = 38791
 
 local timers = {}
 local introSeen = {} -- per-GUID _intro latch (C++ _intro, :159)
@@ -141,16 +152,51 @@ local function shadowboltVolleyTick(creature, guid)
     end)
 end
 
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, ...) — alive
+-- players on the same map/instance; the distance filters are
+-- unbridged (documented in the header; the keleseth / thorim
+-- precedent — the lavanthor randomPlayer idiom).
+local function randomPlayer(creature)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_BANISH (:182-186): SelectTarget(Random, 0, 30.0f, false)
+-- -> DoCast(target, SPELL_BANISH 38791), fixed 15s re-arm; the
+-- scheduler seeds only when IsHeroic() (:144-145). DoCast 1-arg
+-- form is non-triggered, so creature:CastSpell(target, spell).
+local function banishTick(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_BANISH)
+    end
+    schedule(guid, "banish", 15000, function()
+        banishTick(creature, guid)
+    end)
+end
+
 -- C++ boss_grandmaster_vorpilAI::JustEngagedWith:
 -- events.ScheduleEvent(EVENT_SHADOWBOLT_VOLLEY, 7s, 14s);
 -- if (IsHeroic()) events.ScheduleEvent(EVENT_BANISH, 15s);
 -- events.ScheduleEvent(EVENT_DRAW_SHADOWS, 45s);
 -- events.ScheduleEvent(EVENT_SUMMON_TRAVELER, 90s);
 -- Talk(SAY_AGGRO); SummonPortals(); — the auriaya precedent
--- (event 1; the EVENT_SHADOWBOLT_VOLLEY leg is ported above; the
--- remaining ScheduleEvent legs (heroic-only banish / draw_shadows /
--- summon_traveler) + SummonPortals() ride the documented-only
--- bridges — see the header).
+-- (event 1; the EVENT_SHADOWBOLT_VOLLEY leg is ported above and the
+-- heroic-only EVENT_BANISH leg is ported as banishTick seeded under
+-- creature:IsHeroic(); the remaining ScheduleEvent legs
+-- (draw_shadows / summon_traveler) + SummonPortals() ride the
+-- documented-only bridges — see the header).
 local function vorpilEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -158,6 +204,16 @@ local function vorpilEnterCombat(event, creature, target)
     schedule(guid, "volley", {7000, 14000}, function()
         shadowboltVolleyTick(creature, guid)
     end)
+    -- C++ :144-145: the EVENT_BANISH scheduler seeds only when
+    -- IsHeroic() (the earlier "no heroic bridge" claim was stale —
+    -- creature:IsHeroic() is bridged,
+    -- engine/world/lua_creature_events.go:260; the lavanthor
+    -- precedent).
+    if creature:IsHeroic() then
+        schedule(guid, "banish", 15000, function()
+            banishTick(creature, guid)
+        end)
+    end
 end
 
 local function vorpilLeaveCombat(event, creature)

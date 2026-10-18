@@ -6980,8 +6980,9 @@ func init() {
 	// below 50% semantics (C++ HealthBelowPct — golemagg 704fb8e bug
 	// class); the latch fires on the damage hook rather than the next
 	// UpdateAI tick (documented timing deviation) and the
-	// DoCastAOE(detonation 9435) arm has no bridge (shazzrah gate
-	// precedent). The UpdateAI UNIT_STATE_CASTING gates and
+	// DoCastAOE(detonation 9435) rides the self-cast lowering in Lua
+	// (boss_arcanist_doan.lua:210, selin_fireheart convention) — the
+	// old "no DoCastAOE bridge" claim was stale. The UpdateAI UNIT_STATE_CASTING gates and
 	// BossAI::JustEngagedWith + DATA_ARCANIST_DOAN bookkeeping have
 	// no instance/UNIT_STATE bridges (luaBossAI shim). Entry 6487 is
 	// not named in the C++ tree (RegisterScarletMonasteryCreatureAI

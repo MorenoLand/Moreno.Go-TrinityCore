@@ -44,9 +44,10 @@
 -- 26662), 8min init, 5min repeat. JustEngagedWith schedules the four
 -- ported events (BossAI::JustEngagedWith instance-bookkeeping leg has
 -- no bridge — tharon_ja precedent); no aggro Talk in C++.
--- EMOTE_DECIMATE (1), EMOTE_SPOTS_ONE (0), EMOTE_DEVOURS_ALL (3)
--- ride unported legs (DoCastAOE / summon / motion-master) — not
--- ported orphaned (vortex precedent). No KilledUnit Talk, no
+-- EMOTE_SPOTS_ONE (0), EMOTE_DEVOURS_ALL (3) ride unported legs
+-- (DoCastAOE / summon / motion-master) — not ported (vortex
+-- precedent). (EMOTE_DECIMATE (1) rides the ported decimate tick —
+-- the earlier "orphaned" list was stale.) No KilledUnit Talk, no
 -- JustDied Talk in C++ for gluth. All timers cancelled on 2/4/23
 -- (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
