@@ -209,8 +209,9 @@
 --   (the skadi precedent); EVENT_YMIRJAR_SUMMON (71303) stays
 --   parked (summon machine + _events.DelayEvents(2s) leg).
 -- npc_frostwing_ymirjar_vrykul Reset (:1189-1213) — the
---   RemoveAurasDueToSpell(SPELL_ARCTIC_CHILL) leg has no aura
---   bridge on this path; the OOC EVENT_YMIRJAR_SPIRIT_STREAM
+--   RemoveAurasDueToSpell(SPELL_ARCTIC_CHILL) leg is PORTED (stale "no aura
+--   bridge on this path" claim retracted — creature:RemoveAura bridged);
+--   the OOC EVENT_YMIRJAR_SPIRIT_STREAM
 --   (69929, {10000,20000}ms, re-arm {40000,60000}ms) fires while
 --   !UpdateVictim() — no OOC-tick bridge; the huntress
 --   Is25ManRaid() DoCast(SPELL_SUMMON_WARHAWK 71705) leg is a
@@ -655,6 +656,14 @@ end
 
 local function ymirjarReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- cpp:1196-1199 — Reset entry-gated RemoveAurasDueToSpell(SPELL_ARCTIC_CHILL)
+    -- (ungated in C++ — no HasAura query); the stale "no aura bridge on this
+    -- path" claim is retracted — creature:RemoveAura is bridged. The C++
+    -- !IsAlive() early return guards the unbridged OOC-event/summon legs
+    -- below; the strip leg itself is safe on reset.
+    if creature:GetEntry() == ENTRY_YMIRJAR_FROSTBINDER then
+        creature:RemoveAura(SPELL_ARCTIC_CHILL)
+    end
 end
 
 local YMIRJAR_ENTRIES = {

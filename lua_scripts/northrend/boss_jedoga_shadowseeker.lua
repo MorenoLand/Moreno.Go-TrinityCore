@@ -23,10 +23,11 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_jedoga_shadowseeker: JustEngagedWith Talk(SAY_AGGRO 0)
--- (event 1 — the hook itself is bridged; its other legs —
+-- (event 1 — the hook itself is bridged); the
 -- RemoveAurasDueToSpell(SPELL_SPHERE_VISUAL 56075) /
--- RemoveAurasDueToSpell(SPELL_RANDOM_LIGHTNING_VISUAL 56327) (no
--- aura-removal bridge — aeranas precedent), SummonCreatureGroup(
+-- RemoveAurasDueToSpell(SPELL_RANDOM_LIGHTNING_VISUAL 56327) legs are
+-- PORTED (stale "no aura-removal bridge" claim retracted —
+-- creature:RemoveAura bridged); SummonCreatureGroup(
 -- SUMMON_GROUP_WORSHIPPERS) (summon STRAND absent — standing),
 -- events.SetPhase(PHASE_ONE) (no phase bridge on the Lua surface —
 -- moorabi precedent), and the 25 NPC_TWILIGHT_VOLUNTEER 30385
@@ -149,7 +150,17 @@ local SAY_AGGRO = 0
 local SAY_SLAY = 3
 local SAY_DEATH = 4
 
+local SPELL_SPHERE_VISUAL = 56075            -- boss_jedoga_shadowseeker.cpp:46
+local SPELL_RANDOM_LIGHTNING_VISUAL = 56327  -- boss_jedoga_shadowseeker.cpp:43
+
 local function jedogaEnterCombat(event, creature, target)
+    -- cpp:162-165 — JustEngagedWith strips the two intro visual auras before
+    -- anything else (arm order C++-exact); the stale "no aura-removal
+    -- bridge" claim is retracted — creature:RemoveAura is bridged
+    -- (engine/world/lua_creature_events.go:155). The SummonCreatureGroup /
+    -- phase legs of the same handler stay documented-only.
+    creature:RemoveAura(SPELL_SPHERE_VISUAL)
+    creature:RemoveAura(SPELL_RANDOM_LIGHTNING_VISUAL)
     creature:Talk(SAY_AGGRO)
 end
 
