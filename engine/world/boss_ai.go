@@ -7973,6 +7973,28 @@ func init() {
 	// lua_scripts/kalimdor/boss_ouro.lua.
 	RegisterLuaBoss("boss_ouro", 15517)
 
+	// npc_anubisath_sentinel (Anubisath Sentinel, entry 15264 —
+	// C++-verified via the sentinel's own grid-search constant at
+	// mob_anubisath_sentinel.cpp:159; the creature_template ScriptName
+	// binding stays DB-side): on EVERY enter combat, picks one of the 9
+	// sentinel ability buffs (2147/21737/812/13022/19595/25777/2834/9347/
+	// 2148) uniformly at random and self-casts it (75dd5ef5 corrected
+	// the pick to re-arm per engage, matching C++ JustEngagedWith).
+	// Unwired: the whole buddy machinery (grid scan, buddy lists,
+	// CallBuddiesToAttack, JustDied 50% heal + ability transfer, Reset
+	// respawn — no ObjectAccessor / cross-AI / AttackStart bridges).
+	// Full analysis in lua_scripts/kalimdor/npc_anubisath_sentinel.lua.
+	RegisterLuaBoss("npc_anubisath_sentinel", 15264)
+
+	// instance_temple_of_ahnqiraj.cpp audit (loader decl :93 / call :210):
+	// pure InstanceMapScript (map 531, "AQ40") — creature GUID latches
+	// (VEM/KRI/VEKLOR/VEKNILASH/VISCIDUS/SARTURA via creatureData),
+	// 5 passage doors on 4 encounters (doorData), GetData/SetData
+	// state (DATA_VEMISDEAD/VEKLORISDEAD/VEKNILASHISDEAD latches,
+	// BUG_TRIO_DEATH counter, CTHUN_PHASE), IsEncounterInProgress ->
+	// false. Zero Talk, zero timers, zero creature behavior — joins
+	// the no-instance-script-bridge queue, documented-only, no lua.
+
 	// boss_cthun audit (Temple of Ahn'Qiraj head, loader decl :87 / call
 	// :200): eye_of_cthunAI + cthunAI are no-bridge document-only — the
 	// fight runs on instance DATA_CTHUN_PHASE SetData/GetData (no
@@ -8318,6 +8340,18 @@ func init() {
 	// SPELL_GOBLIN_LAND_MINE / SPELL_WEEGLIS_BARREL are dead C++
 	// legs — documented in the lua file, not wired.
 	RegisterLuaBoss("npc_weegli_blastfuse", 7607)
+
+	// zulfarrak.cpp residual audit (loader decl :98 / call :214; Bly +
+	// Weegli + Zum'rah ported above): go_troll_cage (GameObjectScript —
+	// OnGossipHello sets instance EVENT_PYRAMID/CAGES_OPEN and herds
+	// the 5 Bly crew members via GetGuidData + SetReactState/SetWalk/
+	// SetHomePosition/MovePoint/SetFaction — no instance/movement/
+	// faction bridges); go_shallow_grave (GO gossip first-use random
+	// summon: 65% zombie 7286 / 10% dead hero 7276 via SummonCreature —
+	// no summon bridge, so the gossip arm would be dead content);
+	// at_zumrah (AreaTriggerScript — FindNearestCreature 7271 30y +
+	// SetFaction(FACTION_TROLL_FROSTMANE): no area-trigger bridge).
+	// All three documented-only, joining the no-bridge queues.
 
 	// npc_qiraj_war_spawn: Silithus zone script, entries 15414
 	// (Qiraji Wasp), 15422 (Qiraji Tank), 15423 (Kaldorei Infantry),
