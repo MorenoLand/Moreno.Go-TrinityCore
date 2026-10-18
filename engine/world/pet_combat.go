@@ -3092,7 +3092,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.motionSpellFocusFound(ctx, motion, spell) {
 		return true
 	}
-	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID) {
+	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID, s) {
 		return true
 	}
 	// Spell::CheckCast CheckCasterAuras arm (Spell.cpp:5509): after

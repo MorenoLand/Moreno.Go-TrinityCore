@@ -19535,7 +19535,11 @@ func (s *session) handleCancelCast(payload []byte) bool {
 	spellID, _ := reader.ReadU32()
 
 	s.castMu.Lock()
-	if s.activeCast != nil && s.activeCast.SpellID == spellID {
+	// WorldSession::HandleCancelCastOpcode (SpellHandler.cpp:449-453) ->
+	// InterruptNonMeleeSpells -> Unit::InterruptSpell (Unit.cpp:3145): the
+	// IsInterruptable gate (Spell.h:548) — a cast already executing its
+	// effects ignores the client's cancel.
+	if s.activeCast != nil && s.activeCast.SpellID == spellID && !s.activeCast.Executing {
 		if s.activeCast.Timer != nil {
 			s.activeCast.Timer.Stop()
 		}
@@ -33616,6 +33620,12 @@ func (s *session) takeCastButtonsSpellPower(ctx context.Context, spell wotlk.Spe
 	if s == nil || s.player == nil {
 		return
 	}
+	// Spell::TakePower (Spell.cpp:4789-4794): .cheat power skips the
+	// deduction. The EffectCastButtons mana-sufficiency gate keeps its
+	// no-cheat-exemption check (SpellEffects.cpp:5655-5657).
+	if s.player.ActiveCheats&cheatPower != 0 {
+		return
+	}
 	pType := spell.PowerType
 	if !(pType < 7 && pType != 5 && cost > 0) {
 		return
@@ -36236,6 +36246,12 @@ func (s *session) handleEffectKnockBack(ctx context.Context, spell wotlk.Spell, 
 		// Instantly interrupt non melee spells being cast.
 		targetSess.castMu.Lock()
 		cast := targetSess.activeCast
+		// Unit::InterruptSpell (Unit.cpp:3145-3146) via InterruptNonMeleeSpells
+		// (Unit.cpp:3212-3222): the IsInterruptable gate (Spell.h:548) — a
+		// cast already executing its effects cannot be interrupted.
+		if cast != nil && cast.Executing {
+			cast = nil
+		}
 		if cast != nil {
 			if cast.Timer != nil {
 				cast.Timer.Stop()

@@ -972,7 +972,7 @@ func takeCreatureSpellPower(spell wotlk.Spell, m *creatureMotion, cost int32) {
 // the REQ_AMMO ranged-weapon arm (player-only, Spell.cpp:6628),
 // pet/charmed owner SPELLMOD_RANGE (Unit::GetSpellModOwner needs the
 // owner's live session spellmods), and npcbot range mods.
-func (s *Server) checkCreatureSpellRange(m *creatureMotion, spellInfo wotlk.Spell, targetGUID uint64) bool {
+func (s *Server) checkCreatureSpellRange(m *creatureMotion, spellInfo wotlk.Spell, targetGUID uint64, modOwner *session) bool {
 	if s == nil || s.Data == nil || m == nil {
 		return true
 	}
@@ -1006,6 +1006,12 @@ func (s *Server) checkCreatureSpellRange(m *creatureMotion, spellInfo wotlk.Spel
 			minRange += calcMeleeRange(cReach, reach)
 		} else if minRange > 0 {
 			minRange += float64(cReach) + float64(reach)
+		}
+		// Spell::GetMinMaxRange (Spell.cpp:6632-6635): SPELLMOD_RANGE
+		// applies to the DBC max before the reach term, via
+		// GetSpellModOwner (Object.cpp:2246-2268) — the pet/totem owner.
+		if modOwner != nil {
+			maxRange = modOwner.applySpellModFloat(spellInfo, spellModRange, maxRange)
 		}
 		maxRange += float64(cReach) + float64(reach)
 	}
@@ -1593,7 +1599,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS or
 		// SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK. C++ runs this for triggered
 		// casts too (no triggered exemption on this arm); the dynObj
-		// losTarget origin arm is vacuous (no dyn objects in Go) and the
+		// losTarget origin arm is near-vacuous (needs a triggered-by-aura
+		// cast with a live dynobj of the aura spell) and the
 		// GO-caster exemption is vacuous (caster is always a creature here).
 		// DisableMgr::SPELL_DISABLE_LOS has no Go model (no DisableMgr).
 		// C++ relative order: inside the unit-target block, after the
@@ -1677,7 +1684,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// triggered casts too (5494-5496, "Triggered spells also have
 		// range check"), after the unit-target LOS arm and before
 		// CheckPower (5502)/CheckCasterAuras (5509).
-		if !s.checkCreatureSpellRange(m, spellInfo, targetGUID) {
+		if !s.checkCreatureSpellRange(m, spellInfo, targetGUID, nil) {
 			return
 		}
 		// Spell::CheckPower (Spell.cpp:5502): the affordability check runs in

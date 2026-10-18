@@ -141,6 +141,10 @@ func (s *session) spellEntryNearbyTarget(ctx context.Context, spell wotlk.Spell,
 	if spellIsPositive(spell) {
 		maxRange = float64(rangeEntry.MaxFriendly)
 	}
+	// Spell.cpp:1047-1057 (TARGET_CHECK_ENTRY arm): range =
+	// GetMaxRange(IsPositive(), m_caster, this), which folds SPELLMOD_RANGE
+	// (SpellInfo.cpp:3070-3072).
+	maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
 	if maxRange <= 0 {
 		return 0, false
 	}

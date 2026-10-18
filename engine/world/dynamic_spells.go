@@ -199,6 +199,13 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 		}
 		target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagDestLocation, Destination: protocol.SpellTargetLocation{X: object.X, Y: object.Y, Z: object.Z}}
 		areaTargets := caster.spellAreaEnemyTargets(ctx, object.SpellData, target)
+		if isFriendlyAreaSpell(object.SpellData) {
+			// DynObjAura::FillTargetMap (SpellAuras.cpp:2763) picks the
+			// check type per effect from its implicit targets; the enemy
+			// path above only covers TARGET_CHECK_ENEMY, so friendly
+			// persistent-area auras route through the ALLY/PARTY/RAID path.
+			areaTargets = caster.spellFriendlyAreaTargets(ctx, object.SpellData, target)
+		}
 		inRadius := make(map[uint64]struct{}, len(areaTargets))
 		for _, targetGUID := range areaTargets {
 			// Aura::UpdateTargetMap (SpellAuras.cpp:700-701): dynobj auras

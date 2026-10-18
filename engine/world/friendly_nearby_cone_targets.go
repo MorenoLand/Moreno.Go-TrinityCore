@@ -101,6 +101,10 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 		return 0, false
 	}
 	maxRange := float64(rangeEntry.MaxHostile)
+	// SelectImplicitNearbyTargets (Spell.cpp:1047-1057) ranges the search
+	// with GetMaxRange(positive, m_caster, this), which folds SPELLMOD_RANGE
+	// (SpellInfo.cpp:3070-3072).
+	maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
 	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	bestGUID := uint64(0)
 	bestDist := maxRange
@@ -423,6 +427,10 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 		return 0, false
 	}
 	maxRange := float64(rangeEntry.MaxFriendly)
+	// SelectImplicitNearbyTargets (Spell.cpp:1047-1057) ranges the search
+	// with GetMaxRange(positive, m_caster, this), which folds SPELLMOD_RANGE
+	// (SpellInfo.cpp:3070-3072).
+	maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
 	checks := make(map[uint8]struct{})
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {

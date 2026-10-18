@@ -235,6 +235,13 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if guid == 0 || guid == excludeGUID {
 			return
 		}
+		// SpellInfo::CheckTarget (SpellInfo.cpp:1637) opens
+		// WorldObjectSpellTargetCheck::operator() (Spell.cpp:8318), so
+		// SPELL_ATTR1_CANT_TARGET_SELF rejects the caster from implicit
+		// chain selection too.
+		if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && guid == s.playerGUID {
+			return
+		}
 		if mapID != primary.Map || instanceID != primary.InstanceID || health == 0 {
 			return
 		}
