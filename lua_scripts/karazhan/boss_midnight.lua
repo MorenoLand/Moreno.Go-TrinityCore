@@ -28,8 +28,12 @@
 -- steps have no bridge (no MoveFollow/SetVisible/react-state model). No
 -- MECHANIC_DISARM info reaches the Lua spell-hit hook, so the
 -- SAY_DISARMED arm is skipped. Midnight's directed Talk(SAY_MIDNIGHT_KILL,
--- attumenGUID) broadcasts without a target (Talk bridge takes only the
--- text id). Attumen's JustDied Talk(SAY_DEATH) is kept; midnight->KillSelf
+-- attumenGUID) — Talk(textId[, target]) is bridged (lua_creature_events.go:102),
+-- but there is no handle to the attumen creature from the midnight kill arm,
+-- so it broadcasts untargeted. Attumen's JustDied Talk(SAY_DEATH) is kept; midnight->KillSelf
+-- has no bridge. The EMOTE_MOUNT_UP (cpp:309) mount-emote arm is skipped:
+-- no GUID->creature bridge to direct the attumen mount's Talk/emote, so
+-- it is named here rather than rediscovered. EnterEvadeMode despawns now
 -- has no bridge. EnterEvadeMode despawns now ported: midnight's
 -- _DespawnAtEvade(Seconds(10)) as a 10s event-2 schedule (jedoga
 -- precedent, re-engage cancels); attumen's me->DespawnOrUnsummon()
@@ -84,24 +88,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
+-- C++-exact target pools: boss_midnight.cpp:154-160,189-215 source charge and
+-- intangible-presence picks from GetThreatManager().GetUnsortedThreatList(),
+-- never the whole instance map. GetAITargets (lua_creature_events.go:345) is
+-- the bridged threat list; GetDistance2d resolves via the generic fallback
+-- (engine/scripting/object.go:158). C++ applies no dead filter, so none added.
 local function randomTargetInBand(creature, minDist, maxDist)
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        local dist = creature:GetDistance(p)
+    for _, t in ipairs(creature:GetAITargets()) do
+        local dist = creature:GetDistance2d(t)
         if dist >= minDist and dist < maxDist then
-            candidates[#candidates + 1] = p
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -111,11 +108,11 @@ local function randomTargetInBand(creature, minDist, maxDist)
 end
 
 local function randomTargetAnywhere(creature)
-    local candidates = playersInInstance(creature)
-    if #candidates == 0 then
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[math.random(#targets)]
 end
 
 -- Midnight (16151) ------------------------------------------------------------

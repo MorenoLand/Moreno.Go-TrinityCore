@@ -50,9 +50,13 @@
 -- pre-combat tick (their NON_ATTACKABLE/faction arms have no bridge
 -- either). Julianne's SpellHit(DRINK_POISON) arm is folded into the
 -- event-9 hook — the only caster is her own event-9 arm, so the id-only
--- spell-hit hook adds nothing. PretendToDie's timer freeze is
--- approximated by cancelling combat timers and re-arming them at initial
--- values on resurrect (C++ resumes the frozen timers). The partner's
+-- spell-hit hook adds nothing. PretendToDie's timer freeze is ported via
+-- deadline banking (the wolf fear/swipe pattern): the combat arms record
+-- fire-times through rajSchedule, pretend-die banks the remainders before
+-- cancelling, and resurrect re-arms at the banked remainder (0 -> 1ms, so
+-- a zero remainder fires next tick) or the combat-initial delay when
+-- nothing was banked — matching C++ UpdateAI resuming the untouched timers
+-- on IsFakingDeath exit. The partner's
 -- real-death cross-kill (setDeathState JUST_DIED etc.) has no bridge —
 -- the survivor's OnDied runs while the faking partner stays down. The
 -- Romulo↔Julianne dance shares one module-level table (single-instance
@@ -195,10 +199,20 @@ local function dorotheeDied(event, creature, killer)
     creature:Talk(DOROTHEE_SAY_DEATH)
 end
 
+
+-- C++ JustReachedHome() -> me->DespawnOrUnsummon() (bosses_opera.cpp);
+-- event 24 = CreatureEventOnReachHome (runtime.go:207), Despawn bridged
+-- (lua_creature_events.go:214).
+local function dorotheeReachHome(event, creature)
+    dorotheeLeaveCombat(event, creature)
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_DOROTHEE, 1, dorotheeEnterCombat)
 RegisterCreatureEvent(ENTRY_DOROTHEE, 2, dorotheeLeaveCombat)
 RegisterCreatureEvent(ENTRY_DOROTHEE, 4, dorotheeDied)
 RegisterCreatureEvent(ENTRY_DOROTHEE, 23, dorotheeLeaveCombat)
+RegisterCreatureEvent(ENTRY_DOROTHEE, 24, dorotheeReachHome)
 
 -- Tito (npc_tito, C++ ScriptName for 17548): yipping 31015 on the victim
 -- every 10s. Never summoned (no summon model); registered so any spawned
@@ -293,11 +307,21 @@ local function strawmanDied(event, creature, killer)
     creature:Talk(STRAWMAN_SAY_DEATH)
 end
 
+
+-- C++ JustReachedHome() -> me->DespawnOrUnsummon() (bosses_opera.cpp);
+-- event 24 = CreatureEventOnReachHome (runtime.go:207), Despawn bridged
+-- (lua_creature_events.go:214).
+local function strawmanReachHome(event, creature)
+    strawmanLeaveCombat(event, creature)
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_STRAWMAN, 1, strawmanEnterCombat)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 2, strawmanLeaveCombat)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 3, strawmanTargetDied)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 4, strawmanDied)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 23, strawmanLeaveCombat)
+RegisterCreatureEvent(ENTRY_STRAWMAN, 24, strawmanReachHome)
 
 -- Tinhead (boss_tinhead, C++ ScriptName for 17547): cleave 31043 on the
 -- victim every 5s; rust 31086 on self — first at 30s, then every 6s, at
@@ -368,11 +392,21 @@ local function tinheadDied(event, creature, killer)
     creature:Talk(TINHEAD_SAY_DEATH)
 end
 
+
+-- C++ JustReachedHome() -> me->DespawnOrUnsummon() (bosses_opera.cpp);
+-- event 24 = CreatureEventOnReachHome (runtime.go:207), Despawn bridged
+-- (lua_creature_events.go:214).
+local function tinheadReachHome(event, creature)
+    tinheadLeaveCombat(event, creature)
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_TINHEAD, 1, tinheadEnterCombat)
 RegisterCreatureEvent(ENTRY_TINHEAD, 2, tinheadLeaveCombat)
 RegisterCreatureEvent(ENTRY_TINHEAD, 3, tinheadTargetDied)
 RegisterCreatureEvent(ENTRY_TINHEAD, 4, tinheadDied)
 RegisterCreatureEvent(ENTRY_TINHEAD, 23, tinheadLeaveCombat)
+RegisterCreatureEvent(ENTRY_TINHEAD, 24, tinheadReachHome)
 
 -- Roar (boss_roar, C++ ScriptName for 17546): mangle 31041 on the victim
 -- every 5-8s; shred 31042 on the victim every 10-15s; frightened scream
@@ -446,11 +480,21 @@ local function roarDied(event, creature, killer)
     creature:Talk(ROAR_SAY_DEATH)
 end
 
+
+-- C++ JustReachedHome() -> me->DespawnOrUnsummon() (bosses_opera.cpp);
+-- event 24 = CreatureEventOnReachHome (runtime.go:207), Despawn bridged
+-- (lua_creature_events.go:214).
+local function roarReachHome(event, creature)
+    roarLeaveCombat(event, creature)
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_ROAR, 1, roarEnterCombat)
 RegisterCreatureEvent(ENTRY_ROAR, 2, roarLeaveCombat)
 RegisterCreatureEvent(ENTRY_ROAR, 3, roarTargetDied)
 RegisterCreatureEvent(ENTRY_ROAR, 4, roarDied)
 RegisterCreatureEvent(ENTRY_ROAR, 23, roarLeaveCombat)
+RegisterCreatureEvent(ENTRY_ROAR, 24, roarReachHome)
 
 -- The Crone (boss_crone, C++ ScriptName for 18168): chain lightning 32337
 -- on the victim every 15s (first 10s). The cyclone summon (30s) never
@@ -497,11 +541,21 @@ local function croneDied(event, creature, killer)
     creature:Talk(CRONE_SAY_DEATH)
 end
 
+
+-- C++ JustReachedHome() -> me->DespawnOrUnsummon() (bosses_opera.cpp);
+-- event 24 = CreatureEventOnReachHome (runtime.go:207), Despawn bridged
+-- (lua_creature_events.go:214).
+local function croneReachHome(event, creature)
+    croneLeaveCombat(event, creature)
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_CRONE, 1, croneEnterCombat)
 RegisterCreatureEvent(ENTRY_CRONE, 2, croneLeaveCombat)
 RegisterCreatureEvent(ENTRY_CRONE, 3, croneTargetDied)
 RegisterCreatureEvent(ENTRY_CRONE, 4, croneDied)
 RegisterCreatureEvent(ENTRY_CRONE, 23, croneLeaveCombat)
+RegisterCreatureEvent(ENTRY_CRONE, 24, croneReachHome)
 
 -- The Big Bad Wolf (boss_bigbadwolf, C++ ScriptName for 17521): chase
 -- every 30s — Talk(SAY_WOLF_HOOD = 2) + triggered Little Red Riding Hood
@@ -639,11 +693,21 @@ local function wolfDied(event, creature, killer)
     wolfState[guid] = nil
 end
 
+
+-- C++ JustReachedHome() -> me->DespawnOrUnsummon() (bosses_opera.cpp);
+-- event 24 = CreatureEventOnReachHome (runtime.go:207), Despawn bridged
+-- (lua_creature_events.go:214).
+local function wolfReachHome(event, creature)
+    wolfLeaveCombat(event, creature)
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_WOLF, 1, wolfEnterCombat)
 RegisterCreatureEvent(ENTRY_WOLF, 2, wolfLeaveCombat)
 RegisterCreatureEvent(ENTRY_WOLF, 3, wolfTargetDied)
 RegisterCreatureEvent(ENTRY_WOLF, 4, wolfDied)
 RegisterCreatureEvent(ENTRY_WOLF, 23, wolfLeaveCombat)
+RegisterCreatureEvent(ENTRY_WOLF, 24, wolfReachHome)
 
 -- Romulo and Julianne (boss_julianne / boss_romulo, C++ ScriptNames for
 -- 17534 / 17533): the three-phase fake-death dance.
@@ -717,8 +781,41 @@ local raj = {
     julianneDead = false,
 }
 
+-- C++ UpdateAI early-returns on IsFakingDeath (bosses_opera.cpp ~1315/1430)
+-- without touching the combat timers, so they resume with their remainders
+-- when the fake ends. CreateLuaEvent has no pause, so the wolf's
+-- deadline-banking pattern is reused: rajSchedule records each combat arm's
+-- fire-time per GUID+key (os.time seconds), rajBankRemainders freezes the
+-- remainders at pretend-die time, and the ReArmCombat variants re-arm with
+-- the banked remainder (0 -> 1ms: CreateLuaEvent floors at 1ms, so a zero
+-- remainder fires next tick, the C++ analogue) or the combat-initial delay
+-- when nothing was banked (the partner was never in combat).
+local rajDeadlines = {}
+
+local function rajSchedule(guid, key, delayMs, fn)
+    local dl = rajDeadlines[guid]
+    if dl == nil then
+        dl = {}
+        rajDeadlines[guid] = dl
+    end
+    dl[key] = os.time() + delayMs / 1000
+    schedule(guid, key, delayMs, fn)
+end
+
+local function rajBankRemainders(guid, keys)
+    local dl = rajDeadlines[guid] or {}
+    local now = os.time()
+    local frozen = {}
+    for _, key in ipairs(keys) do
+        frozen[key] = dl[key] ~= nil and math.max(dl[key] - now, 0) or nil
+    end
+    return frozen
+end
+
 local julianneArmCombat
 local romuloArmCombat
+local julianneReArmCombat
+local romuloReArmCombat
 local julianneResurrectSelf
 local julianneResurrectRomulo
 local romuloResurrectJulianne
@@ -728,14 +825,14 @@ local function julianneBlindingPassion(creature, guid)
     if target then
         creature:CastSpell(target, SPELL_BLINDING_PASSION)
     end
-    schedule(guid, "blinding", math.random(30000, 45000), function()
+    rajSchedule(guid, "blinding", math.random(30000, 45000), function()
         julianneBlindingPassion(creature, guid)
     end)
 end
 
 local function julianneDevotion(creature, guid)
     creature:CastSpell(creature, SPELL_DEVOTION)
-    schedule(guid, "devotion", math.random(15000, 45000), function()
+    rajSchedule(guid, "devotion", math.random(15000, 45000), function()
         julianneDevotion(creature, guid)
     end)
 end
@@ -749,34 +846,52 @@ local function julianneAttraction(creature, guid)
     if target then
         creature:CastSpell(target, SPELL_POWERFUL_ATTRACTION)
     end
-    schedule(guid, "attraction", math.random(5000, 30000), function()
+    rajSchedule(guid, "attraction", math.random(5000, 30000), function()
         julianneAttraction(creature, guid)
     end)
 end
 
 local function julianneAffection(creature, guid)
     creature:CastSpell(creature, SPELL_ETERNAL_AFFECTION)
-    schedule(guid, "affection", math.random(45000, 60000), function()
+    rajSchedule(guid, "affection", math.random(45000, 60000), function()
         julianneAffection(creature, guid)
     end)
 end
 
 julianneArmCombat = function(creature, guid)
-    schedule(guid, "blinding", 30000, function()
+    rajSchedule(guid, "blinding", 30000, function()
         julianneBlindingPassion(creature, guid)
     end)
-    schedule(guid, "devotion", 15000, function()
+    rajSchedule(guid, "devotion", 15000, function()
         julianneDevotion(creature, guid)
     end)
-    schedule(guid, "attraction", 5000, function()
+    rajSchedule(guid, "attraction", 5000, function()
         julianneAttraction(creature, guid)
     end)
-    schedule(guid, "affection", 25000, function()
+    rajSchedule(guid, "affection", 25000, function()
         julianneAffection(creature, guid)
     end)
 end
 
+julianneReArmCombat = function(creature, guid)
+    local frozen = raj.julianneFrozen
+    raj.julianneFrozen = nil
+    local function arm(key, initialMs, armFn)
+        local remain = frozen and frozen[key] or nil
+        local delayMs = remain ~= nil and math.max(remain * 1000, 1) or initialMs
+        rajSchedule(guid, key, delayMs, function()
+            armFn(creature, guid)
+        end)
+    end
+    arm("blinding", 30000, julianneBlindingPassion)
+    arm("devotion", 15000, julianneDevotion)
+    arm("attraction", 5000, julianneAttraction)
+    arm("affection", 25000, julianneAffection)
+end
+
 local function juliannePretendDie(creature, guid)
+    -- Bank the remainders BEFORE the cancel: C++ froze the timers untouched.
+    raj.julianneFrozen = rajBankRemainders(guid, JULIANNE_COMBAT_KEYS)
     cancelKeys(guid, JULIANNE_COMBAT_KEYS)
 end
 
@@ -791,6 +906,8 @@ end
 local function julianneLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    rajDeadlines[guid] = nil
+    raj.julianneFrozen = nil
     if raj.julianneGuid == guid then
         raj.julianneFaking = false
         raj.romuloDead = false
@@ -808,6 +925,8 @@ end
 local function julianneDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    rajDeadlines[guid] = nil
+    raj.julianneFrozen = nil
     creature:Talk(JULIANNE_SAY_DEATH02)
     if raj.julianneGuid == guid then
         raj.julianneFaking = false
@@ -882,7 +1001,7 @@ julianneResurrectSelf = function()
     raj.julianneFaking = false
     raj.phase = PHASE_BOTH
     if raj.julianne ~= nil then
-        julianneArmCombat(raj.julianne, jguid)
+        julianneReArmCombat(raj.julianne, jguid)
     end
     schedule(jguid, "resromulo", 1000, function()
         julianneResurrectRomulo()
@@ -903,7 +1022,7 @@ julianneResurrectRomulo = function()
     raj.romuloFaking = false
     raj.romuloDead = false
     if raj.romulo ~= nil then
-        romuloArmCombat(raj.romulo, rguid)
+        romuloReArmCombat(raj.romulo, rguid)
     end
 end
 
@@ -921,8 +1040,17 @@ romuloResurrectJulianne = function()
     raj.julianneFaking = false
     raj.julianneDead = false
     if raj.julianne ~= nil then
-        julianneArmCombat(raj.julianne, jguid)
+        julianneReArmCombat(raj.julianne, jguid)
     end
+end
+
+
+-- C++ JustReachedHome() -> me->DespawnOrUnsummon() (bosses_opera.cpp);
+-- event 24 = CreatureEventOnReachHome (runtime.go:207), Despawn bridged
+-- (lua_creature_events.go:214).
+local function julianneReachHome(event, creature)
+    julianneLeaveCombat(event, creature)
+    creature:Despawn()
 end
 
 RegisterCreatureEvent(ENTRY_JULIANNE, 1, julianneEnterCombat)
@@ -931,6 +1059,7 @@ RegisterCreatureEvent(ENTRY_JULIANNE, 3, julianneTargetDied)
 RegisterCreatureEvent(ENTRY_JULIANNE, 4, julianneDied)
 RegisterCreatureEvent(ENTRY_JULIANNE, 9, julianneDamageTaken)
 RegisterCreatureEvent(ENTRY_JULIANNE, 23, julianneLeaveCombat)
+RegisterCreatureEvent(ENTRY_JULIANNE, 24, julianneReachHome)
 
 -- C++ EVENT_BACKWARD_LUNGE (:1335-1343): SelectTarget(Random, 1, 100, true)
 -- (offset 1 = second-threat pick, tank excluded) + !me->HasInArc(M_PI)
@@ -947,11 +1076,11 @@ local function romuloLunge(creature, guid)
     end
     if #pool > 0 then
         creature:CastSpell(pool[math.random(#pool)], SPELL_BACKWARD_LUNGE)
-        schedule(guid, "lunge", {15000, 30000}, function()
+        rajSchedule(guid, "lunge", math.random(15000, 30000), function()
             romuloLunge(creature, guid)
         end)
     else
-        schedule(guid, "lunge", 1000, function()
+        rajSchedule(guid, "lunge", 1000, function()
             romuloLunge(creature, guid)
         end)
     end
@@ -959,7 +1088,7 @@ end
 
 local function romuloDaring(creature, guid)
     creature:CastSpell(creature, SPELL_DARING)
-    schedule(guid, "daring", math.random(20000, 40000), function()
+    rajSchedule(guid, "daring", math.random(20000, 40000), function()
         romuloDaring(creature, guid)
     end)
 end
@@ -969,7 +1098,7 @@ local function romuloSwathe(creature, guid)
     if target then
         creature:CastSpell(target, SPELL_DEADLY_SWATHE)
     end
-    schedule(guid, "swathe", math.random(15000, 25000), function()
+    rajSchedule(guid, "swathe", math.random(15000, 25000), function()
         romuloSwathe(creature, guid)
     end)
 end
@@ -979,27 +1108,45 @@ local function romuloThrust(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_POISON_THRUST)
     end
-    schedule(guid, "thrust", math.random(10000, 20000), function()
+    rajSchedule(guid, "thrust", math.random(10000, 20000), function()
         romuloThrust(creature, guid)
     end)
 end
 
 romuloArmCombat = function(creature, guid)
-    schedule(guid, "lunge", 15000, function()
+    rajSchedule(guid, "lunge", 15000, function()
         romuloLunge(creature, guid)
     end)
-    schedule(guid, "daring", 20000, function()
+    rajSchedule(guid, "daring", 20000, function()
         romuloDaring(creature, guid)
     end)
-    schedule(guid, "swathe", 25000, function()
+    rajSchedule(guid, "swathe", 25000, function()
         romuloSwathe(creature, guid)
     end)
-    schedule(guid, "thrust", 10000, function()
+    rajSchedule(guid, "thrust", 10000, function()
         romuloThrust(creature, guid)
     end)
 end
 
+romuloReArmCombat = function(creature, guid)
+    local frozen = raj.romuloFrozen
+    raj.romuloFrozen = nil
+    local function arm(key, initialMs, armFn)
+        local remain = frozen and frozen[key] or nil
+        local delayMs = remain ~= nil and math.max(remain * 1000, 1) or initialMs
+        rajSchedule(guid, key, delayMs, function()
+            armFn(creature, guid)
+        end)
+    end
+    arm("lunge", 15000, romuloLunge)
+    arm("daring", 20000, romuloDaring)
+    arm("swathe", 25000, romuloSwathe)
+    arm("thrust", 10000, romuloThrust)
+end
+
 local function romuloPretendDie(creature, guid)
+    -- Bank the remainders BEFORE the cancel: C++ froze the timers untouched.
+    raj.romuloFrozen = rajBankRemainders(guid, ROMULO_COMBAT_KEYS)
     cancelKeys(guid, ROMULO_COMBAT_KEYS)
 end
 
@@ -1015,6 +1162,8 @@ end
 local function romuloLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    rajDeadlines[guid] = nil
+    raj.romuloFrozen = nil
     if raj.romuloGuid == guid then
         raj.romuloFaking = false
         raj.julianneDead = false
@@ -1082,9 +1231,19 @@ local function romuloDamageTaken(event, creature, attacker, damage)
     return false, 0
 end
 
+
+-- C++ JustReachedHome() -> me->DespawnOrUnsummon() (bosses_opera.cpp);
+-- event 24 = CreatureEventOnReachHome (runtime.go:207), Despawn bridged
+-- (lua_creature_events.go:214).
+local function romuloReachHome(event, creature)
+    romuloLeaveCombat(event, creature)
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_ROMULO, 1, romuloEnterCombat)
 RegisterCreatureEvent(ENTRY_ROMULO, 2, romuloLeaveCombat)
 RegisterCreatureEvent(ENTRY_ROMULO, 3, romuloTargetDied)
 RegisterCreatureEvent(ENTRY_ROMULO, 4, romuloDied)
 RegisterCreatureEvent(ENTRY_ROMULO, 9, romuloDamageTaken)
 RegisterCreatureEvent(ENTRY_ROMULO, 23, romuloLeaveCombat)
+RegisterCreatureEvent(ENTRY_ROMULO, 24, romuloReachHome)

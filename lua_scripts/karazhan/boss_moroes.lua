@@ -199,10 +199,11 @@ local function moroesEnterCombat(event, creature, target)
     schedule(guid, "gouge", 23000, function() onGouge(creature, guid) end)
 end
 
--- Enrage: C++ UpdateAI checks HealthBelowPct(30) every tick. The damage
--- C++ checks HealthBelowPct(30) in UpdateAI on current health (no damage
--- projection); the engine fires event 9 pre-damage, so `health` is already
--- the C++ value. Integer floor form matches CalculatePct exactly.
+-- Enrage: C++ UpdateAI checks HealthBelowPct(30) on the post-damage health
+-- (Unit.h:872) every tick; the engine fires event 9 pre-damage
+-- (lua_creature_events.go:424-425), so `health` is not the C++ value.
+-- HealthBelowPctDamaged(30, damage) projection matches (malchezaar
+-- precedent); integer floor form matches CalculatePct exactly.
 local function moroesDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = moroesState[guid]
@@ -213,7 +214,8 @@ local function moroesDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if health < math.floor(maxHealth * 30 / 100) then
+    local postDamage = math.max(health - damage, 0)
+    if postDamage < math.floor(maxHealth * 30 / 100) then
         creature:CastSpell(creature, SPELL_FRENZY)
         state.enrage = true
     end
@@ -276,8 +278,11 @@ local function guestEnterCombat(event, creature, target)
     cancelTimers(guid)
 end
 
--- Dorothea (shadow priest): MindFlay on the victim, ManaBurn on a random
--- mana user within 100, ShadowWordPain on a random player within 100
+-- Dorothea (shadow priest): MindFlay on the victim, ManaBurn picking one
+-- random player within 100 and casting only if that target is a mana user
+-- (C++ boss_moroes.cpp:424-430: SelectTarget(Random, 0, 100, true), tank
+-- eligible, cast gated on target power type — probability M/N per 5s, not
+-- guaranteed), ShadowWordPain on a random player within 100
 -- (the repeat only re-arms when a target was found, like C++).
 local function dorotheaMindFlay(creature, guid)
     creature:CastSpell(nil, SPELL_MINDFLY)
@@ -285,14 +290,9 @@ local function dorotheaMindFlay(creature, guid)
 end
 
 local function dorotheaManaBurn(creature, guid)
-    local manaUsers = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetPowerType() == POWER_MANA and creature:IsWithinDist(p, 100) then
-            manaUsers[#manaUsers + 1] = p
-        end
-    end
-    if #manaUsers > 0 then
-        creature:CastSpell(manaUsers[math.random(#manaUsers)], SPELL_MANABURN)
+    local target = randomTargetInRange(creature, 100)
+    if target and target:GetPowerType() == POWER_MANA then
+        creature:CastSpell(target, SPELL_MANABURN)
     end
     schedule(guid, "manaburn", 5000, function() dorotheaManaBurn(creature, guid) end)
 end
