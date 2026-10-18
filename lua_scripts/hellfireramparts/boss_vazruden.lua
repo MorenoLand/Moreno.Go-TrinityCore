@@ -48,11 +48,10 @@
 -- OnTargetDied(3): Talk(SAY_KILL) gated on the killed unit's
 -- entry not being NPC_VAZRUDEN (C++ `if (who && who->
 -- GetEntry() != NPC_VAZRUDEN)`, C++-exact).
--- OnLeaveCombat(2): Talk(SAY_WIPE) + cleanup (the C++
--- UnsummonCheck 2s no-victim arm — the WipeSaid latch is
--- reset by C++ Reset() on the same evade, so the yell fires
--- on the evade hook; the DisappearAndDie arm has no
--- bridge, omor SAY_WIPE-on-evade precedent, C++-exact).
+-- OnLeaveCombat(2): cleanup + 2000ms one-shot (the C++
+-- UnsummonCheck no-victim arm: Talk(SAY_WIPE) once +
+-- DisappearAndDie — self, no delay, me->IsAlive() gate,
+-- creature:Despawn(), cancelled on re-engage, C++-exact).
 -- OnDied(4): Talk(SAY_DIE) gated on killer ~= me
 -- (C++-exact) + cleanup (the _JustDied arm is
 -- instance-blocked). OnReset(23): cancel the pump, drop
@@ -66,11 +65,13 @@
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped);
 -- difficulty is bridged — creature:IsHeroic() (per-instance
 -- difficulty, lua_creature_events.go) drives the DUNGEON_MODE
--- spell variants; the DisappearAndDie arm of the UnsummonCheck
--- machine stays out behind the unbridged machine (the old
--- "no despawn bridge" was stale — creature:Despawn() is bridged,
--- lua_creature_events.go:214); no SpellScript/AuraScript scripts in
--- this file.
+-- spell variants; the UnsummonCheck DisappearAndDie arm is PORTED
+-- (2026-10-17): the old "no despawn bridge" was stale —
+-- creature:Despawn() is bridged (lua_creature_events.go:214) —
+-- 2000ms evade one-shot -> Talk(SAY_WIPE) + Despawn(), cancelled
+-- on re-engage (the WipeSaid latch is the one-shot; Reset()
+-- re-seeds the 2000ms timer in C++, C++-exact); no
+-- SpellScript/AuraScript scripts in this file.
 
 local SPELL_REVENGE = 19130
 local SPELL_REVENGE_H = 40392
@@ -96,6 +97,16 @@ end
 local function resetBoss(guid)
     cancelPump(guid)
     states[guid] = nil
+end
+
+local despawnTimers = {}
+
+local function cancelDespawn(guid)
+    local id = despawnTimers[guid]
+    if id then
+        RemoveEventById(id)
+        despawnTimers[guid] = nil
+    end
 end
 
 -- C++ Initialize() values (the BossAI ctor instance arms are
@@ -131,6 +142,7 @@ end
 RegisterCreatureEvent(ENTRY_VAZRUDEN, 1, function(_, creature)
     local guid = creature:GetGUID()
     resetBoss(guid)
+    cancelDespawn(guid)
     states[guid] = freshState()
     creature:Talk(SAY_AGGRO)
     timers[guid] = CreateLuaEvent(function()
@@ -139,12 +151,23 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN, 2, function(_, creature)
-    -- C++ UnsummonCheck no-victim arm (2s): Talk(SAY_WIPE) +
-    -- DisappearAndDie — the wipe yell lands on the evade
-    -- hook in this model (omor precedent); the despawn arm
-    -- has no bridge.
-    creature:Talk(SAY_WIPE)
-    resetBoss(creature:GetGUID())
+    -- C++ UnsummonCheck no-victim arm (:253-266): 2000ms after losing
+    -- the victim, Talk(SAY_WIPE) once (the WipeSaid latch — the
+    -- one-shot fires once) + DisappearAndDie — self, no delay,
+    -- me->IsAlive() gate; creature:Despawn() is bridged
+    -- (lua_creature_events.go:214). Re-engage (event 1) cancels the
+    -- pending despawn — the C++ decrements UnsummonCheck only in the
+    -- !UpdateVictim() branch, and Reset() re-seeds it to 2000.
+    local guid = creature:GetGUID()
+    resetBoss(guid)
+    cancelDespawn(guid)
+    despawnTimers[guid] = CreateLuaEvent(function()
+        despawnTimers[guid] = nil
+        if not creature:IsDead() then
+            creature:Talk(SAY_WIPE)
+            creature:Despawn()
+        end
+    end, 2000, 1)
 end)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN, 3, function(_, creature, victim)
@@ -163,8 +186,10 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN, 4, function(_, creature, killer)
         creature:Talk(SAY_DIE)
     end
     resetBoss(creature:GetGUID())
+    cancelDespawn(creature:GetGUID())
 end)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN, 23, function(_, creature)
     resetBoss(creature:GetGUID())
+    cancelDespawn(creature:GetGUID())
 end)

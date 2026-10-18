@@ -84,10 +84,12 @@
 -- Melee is engine-driven in Go (creature combat tick), like
 -- C++ DoMeleeAttackIfReady.
 -- OnDied(4): the C++ JustDied arms — me->DespawnOrUnsummon
--- (no despawn bridge — terestian precedent) and the
+-- (PORTED 2026-10-17: the old "no despawn bridge" was stale —
+-- creature:Despawn() is bridged, lua_creature_events.go:214,
+-- immediate self-despawn, C++-exact) and the
 -- LordIllidan LiveCounter() cross-AI call (no cross-
--- creature bridge) — land nowhere; the hook drops per-GUID
--- state like the other cleanup hooks.
+-- creature bridge) stays documented-only; the hook despawns
+-- and drops per-GUID state like the other cleanup hooks.
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the C++ Reset() observable remainder —
 -- the Initialize() re-latch — lands on OnEnterCombat,
@@ -262,10 +264,11 @@ local function onLeaveCombat(_, creature)
     fullReset(creature:GetGUID())
 end
 
--- C++ JustDied: the DespawnOrUnsummon and the LordIllidan
--- LiveCounter() cross-AI call have no bridges (see header);
--- the hook drops per-GUID state like the other cleanup hooks.
+-- C++ JustDied (:1092-1097): me->DespawnOrUnsummon() — immediate,
+-- self — then the cross-GUID LordIllidan LiveCounter() call (no
+-- cross-creature bridge; stays documented-only).
 local function onDied(_, creature)
+    creature:Despawn()
     fullReset(creature:GetGUID())
 end
 

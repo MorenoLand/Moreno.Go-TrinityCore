@@ -94,12 +94,12 @@
 -- ACTION_ACTIVE_SNOBOLD — cross-AI DoAction-gated (no bridge);
 -- EVENT_FIRE_BOMB — SelectTarget(Random,0,0.0f,true) -> CastSpell(
 -- SPELL_FIRE_BOMB 66313), 12s/25s init, 20s/30s repeat — the
--- random-target leg has NO bridge (the "bridge exists" note here
--- was wrong; dreadscale/acidmaw EVENT_SPRAY notes say so
--- accurately), so it stays out on top of the unbridged
--- cancel/re-arm machine (cross-AI DoAction ENABLE/DISABLE,
--- MountOnBoss vehicle entry, EVENT_THROW's throw-off):
--- porting it alone would over-cast (jedoga bar); EVENT_BATTER /
+-- random-target leg is bridged (GetPlayersInWorld + math.random,
+-- nightbane/midnight precedent); it stays out on the true blockers:
+-- the MountOnBoss vehicle mount machine (no vehicle bridge) and the
+-- cross-AI DoAction ENABLE/DISABLE cancel-rearm
+-- (boss_northrend_beasts.cpp:441) — porting it alone would
+-- over-cast (jedoga bar); EVENT_BATTER /
 -- EVENT_HEAD_CRACK — DoCast(vehicleBase, 66408 / 66407) else
 -- DoCastVictim (DoCastVictim legs port-pattern-ready in isolation but
 -- fire only via the vehicle/SetGUID/SetCombatMovement machine —
@@ -137,8 +137,9 @@
 -- precedent); EVENT_SLIME_POOL — DoCastSelf(
 -- SUMMON_SLIME_POOL 66883) (summon STRAND absent — no Lua-surface
 -- consumer); EVENT_SPRAY — SelectTarget(Random,1,...,true) -> DoCast(
--- 66902 Burning Spray / 66901 Paralytic Spray) (no random-target
--- bridge); EVENT_SWEEP — DoCastAOE(SPELL_SWEEP 66794) (stays out:
+-- 66902 Burning Spray / 66901 Paralytic Spray) (random-target leg is
+-- bridged; true blocker: PHASE_STATIONARY gated behind the unbridged
+-- submerge/emerge machine (boss_northrend_beasts.cpp:683)); EVENT_SWEEP — DoCastAOE(SPELL_SWEEP 66794) (stays out:
 -- PHASE_STATIONARY-gated behind the unbridged submerge machine);
 -- EVENT_SUBMERGE -> Submerge() — SetReactState(REACT_PASSIVE)
 -- + AttackStop + HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE) +
@@ -185,7 +186,9 @@
 -- ScheduleEvent(EVENT_SELECT_CHARGE_TARGET, 4s) (no MovementInform
 -- hook); EVENT_SELECT_CHARGE_TARGET — SelectTarget(Random,0,0.0f,true)
 -- -> DoCast(SPELL_FURIOUS_CHARGE_SUMMON 66729) + SetTarget +
--- Talk(EMOTE_TRAMPLE_ROAR 0) (no random-target bridge);
+-- Talk(EMOTE_TRAMPLE_ROAR 0) (random-target leg is bridged; true
+-- blocker: the unbridged charge machine — MoveJump ->
+-- MovementInform -> MoveCharge — no motion/movement hooks);
 -- EVENT_ICEHOWL_ROAR / EVENT_JUMP_BACK — DoCast(stalker, SPELL_ROAR
 -- 66736 / SPELL_JUMP_BACK 66733) via instance->GetCreature(
 -- DATA_FURIOUS_CHARGE) (instance model); EVENT_TRAMPLE — MoveCharge

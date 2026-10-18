@@ -49,8 +49,10 @@
 -- (:612-615) — OUT: P1&&P2-gated, cancelled at the P2->P3
 -- transition (:531) — phase machine (gothik precedent). Talk(
 -- EMOTE_MALLEABLE_GOO 9) ×2 rides EVENT_MALLEABLE_GOO (:630-650)
--- — OUT: random-target with -7.0f distance leg + raid-mode branch
--- (no SelectTarget/Is25Man bridge) + P1->P2 phase-gated (:525).
+-- — OUT: the random-target leg is bridged (GetPlayersInWorld +
+-- math.random, nightbane/midnight precedent); the true blockers are
+-- the P1->P2 tear-gas phase machine (boss_professor_putricide.cpp:524-525)
+-- and the Is25ManRaid branch (:631; no Is25Man bridge).
 -- Talk(EMOTE_CHOKING_GAS_BOMB 10) rides EVENT_CHOKING_GAS_BOMB
 -- (:652-655) — OUT: P2/P3 phase-gated (:526). Talk(
 -- SAY_FESTERGUT_DEATH 1) rides EVENT_FESTERGUT_DIES (:579-581)

@@ -55,9 +55,9 @@
 --   EVENT_ANCESTORS_VENGEANCE (arm :248-250): DoCast(me,
 --   SPELL_ANCESTORS_VENGEANCE 16939), 2-arg = non-triggered ->
 --   CastSpell(creature, 16939); init DUNGEON_MODE(60s,45s), re-arm
---   DUNGEON_MODE({60s,65s},{45s,50s}) — no difficulty bridge; normal-
---   mode values 60s / {60s,65s} used (the vazruden / thespia
---   precedent).
+--   DUNGEON_MODE({60s,65s},{45s,50s}) — difficulty-branched via
+--   creature:IsHeroic() (lua_creature_events.go:260, per-instance
+--   difficulty; the old "no difficulty bridge" claim was stale).
 -- JustDied (:277) — Talk(SAY_DEATH 2) — unconditional (the sjonnir
 -- JustDied-Talk precedent; the _JustDied() passthrough leg has no
 -- bridge).
@@ -174,13 +174,13 @@ end
 
 -- C++ EVENT_ANCESTORS_VENGEANCE arm (:248-250): DoCast(me,
 -- SPELL_ANCESTORS_VENGEANCE 16939), 2-arg = non-triggered; init
--- DUNGEON_MODE(60s,45s) -> 60s normal, re-arm
--- DUNGEON_MODE({60s,65s},{45s,50s}) -> {60s,65s} normal (no difficulty
--- bridge — the vazruden / thespia precedent).
-local function ancestorsVengeanceTick(creature, guid)
+-- DUNGEON_MODE(60s,45s), re-arm DUNGEON_MODE({60s,65s},{45s,50s}),
+-- branched on creature:IsHeroic().
+local function ancestorsVengeanceTick(creature, guid, heroic)
     creature:CastSpell(creature, SPELL_ANCESTORS_VENGEANCE)
-    schedule(guid, "ancestorsvengeance", {60000, 65000}, function()
-        ancestorsVengeanceTick(creature, guid)
+    local delay = heroic and {45000, 50000} or {60000, 65000}
+    schedule(guid, "ancestorsvengeance", delay, function()
+        ancestorsVengeanceTick(creature, guid, heroic)
     end)
 end
 
@@ -190,6 +190,7 @@ end
 local function ymironEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
+    local heroic = creature:IsHeroic()
     cancelTimers(guid)
     schedule(guid, "bane", {18000, 23000}, function()
         baneTick(creature, guid)
@@ -200,8 +201,8 @@ local function ymironEnterCombat(event, creature, target)
     schedule(guid, "darkslash", {28000, 33000}, function()
         darkSlashTick(creature, guid)
     end)
-    schedule(guid, "ancestorsvengeance", 60000, function()
-        ancestorsVengeanceTick(creature, guid)
+    schedule(guid, "ancestorsvengeance", heroic and 45000 or 60000, function()
+        ancestorsVengeanceTick(creature, guid, heroic)
     end)
 end
 
