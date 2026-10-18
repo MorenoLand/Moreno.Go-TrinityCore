@@ -1500,27 +1500,13 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 	if victim.player.Race == 0 || victim.player.Class == 0 {
 		return
 	}
-	if killer.player.TodayKills < ^uint16(0) {
-		killer.player.TodayKills++
-	}
-	killer.player.TotalKills++
-	if killer.server != nil && killer.server.CharactersStore != nil && killer.server.CharactersStore.DB != nil {
-		_, _ = killer.server.CharactersStore.DB.Exec("UPDATE characters SET totalKills = ?, todayKills = ? WHERE guid = ?", killer.player.TotalKills, killer.player.TodayKills, killer.playerGUID)
-	}
-	killer.sendPlayerUpdate()
-	// The victim threads through to the DATA_TYPE_SCRIPT gate
-	// (achievement_killed_exp_or_honor_target, achievement_scripts.cpp:282).
-	killer.updateAchievementCriteriaWithTarget(criteriaTypeHonorableKill, 0, 1, victim)
-	// EARN_HONORABLE_KILL is PROGRESS_SET to lifetime kills (AchievementMgr.cpp:1039),
-	// not an accumulate; HONORABLE_KILL_AT_AREA is keyed by area id (Player.cpp:6945).
-	killer.setAchievementCriteria(criteriaTypeEarnHonorableKill, 0, killer.player.TotalKills)
-	if killer.areaID > 0 {
-		killer.updateAchievementCriteriaWithTarget(criteriaTypeHKAtArea, killer.areaID, 1, victim)
-	}
+	// The gated honor chain (Player::RewardHonor, Player.cpp:6865): honor
+	// points, the TodayKills/TotalKills counters, and the HONORABLE_KILL
+	// criteria family all run only when the kill passes the honorability
+	// gates (self, SPELL_AURA_NO_PVP_CREDIT, same team, gray level —
+	// Player.cpp:6898-6936); the duel gate above is the only extra.
+	killer.rewardHonorKill(context.Background(), victim)
 	victim.updateAchievementCriteria(criteriaTypeKilledByPlayer, 0, 1)
-	killer.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)
-	killer.updateAchievementCriteria(criteriaTypeHKRace, uint32(victim.player.Race), 1)
-	killer.updateAchievementCriteria(criteriaTypeSpecialPvPKill, 0, 1)
 	killer.creditPlayerKillQuest(context.Background())
 }
 

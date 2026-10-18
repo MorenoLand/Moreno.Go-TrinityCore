@@ -257,14 +257,14 @@ func (s *session) rewardHonorKill(ctx context.Context, victim *session) {
 	// is PROGRESS_SET to the lifetime kill field (AchievementMgr.cpp:1039),
 	// not an accumulate; HONORABLE_KILL_AT_AREA is keyed by area id
 	// (GetAreaId, Player.cpp:6945), not zone id.
-	s.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
+	s.updateAchievementCriteriaWithTarget(criteriaTypeHonorableKill, 0, 1, victim)
 	s.setAchievementCriteria(criteriaTypeEarnHonorableKill, 0, s.player.TotalKills)
 	if s.areaID > 0 {
-		s.updateAchievementCriteria(criteriaTypeHKAtArea, s.areaID, 1)
+		s.updateAchievementCriteriaWithTarget(criteriaTypeHKAtArea, s.areaID, 1, victim)
 	}
 	s.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)
 	s.updateAchievementCriteria(criteriaTypeHKRace, uint32(victim.player.Race), 1)
-	s.updateAchievementCriteria(criteriaTypeSpecialPvPKill, 0, 1)
+	s.updateAchievementCriteriaWithTarget(criteriaTypeSpecialPvPKill, 0, 1, victim)
 	// Non-stacking honor-gain aura modifier (Player.cpp:6983) then the world
 	// honor rate (Player.cpp:6986).
 	honorF *= 1 + float64(s.maxPositiveAuraModifier(spellAuraModHonorGainPct))/100

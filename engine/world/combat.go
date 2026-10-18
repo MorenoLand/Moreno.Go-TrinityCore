@@ -3810,10 +3810,14 @@ func (s *session) interruptDuel() {
 	// ungated here (the interrupt helpers are no-ops when nothing is active).
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
+	// CombatStopWithPets(true) also interrupts CURRENT_AUTOREPEAT_SPELL
+	// (Unit.cpp:3219-3220, 5809-5811).
+	s.cancelAutoRepeatOnInterrupt()
 	s.stopOwnPetAttacks()
 	if partner != nil {
 		partner.interruptCurrentCast()
 		partner.interruptCurrentChannel()
+		partner.cancelAutoRepeatOnInterrupt()
 		partner.stopOwnPetAttacks()
 	}
 	buf := protocol.NewBuffer(1)

@@ -586,6 +586,10 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		s.interruptCurrentCast()
 		s.interruptCurrentChannel()
 		s.cancelNextSwingSpell()
+		// Unit::setDeathState(JUST_DIED) (Unit.cpp:8909-8911) runs
+		// InterruptNonMeleeSpells(false), which interrupts the
+		// CURRENT_AUTOREPEAT_SPELL too (Unit.cpp:3219-3220).
+		s.cancelAutoRepeatOnInterrupt()
 	}
 	// Player::setDeathState(JUST_DIED), Player.cpp:1412 — RemovePet(nullptr,
 	// PET_SAVE_NOT_IN_SLOT, true) dismisses the pet at death rather than
@@ -677,7 +681,7 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		s.server.handleSAPlayerDeath(s)
 		s.server.handleICPlayerDeath(s)
 		s.server.handleArenaPlayerDeath(s)
-		s.server.handleWGPlayerDeath(s, nil)
+		s.server.handleWGPlayerDeath(s, killer)
 	}
 	// Unit::Kill proc legs (Unit.cpp:11257-11272) and the per-kill
 	// GET_KILLING_BLOWS criteria (Unit.cpp:11277-11279) — must run before
@@ -856,6 +860,10 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
 	s.cancelNextSwingSpell()
+	// Unit::setDeathState(JUST_DIED) (Unit.cpp:8909-8911) runs
+	// InterruptNonMeleeSpells(false), which interrupts the
+	// CURRENT_AUTOREPEAT_SPELL too (Unit.cpp:3219-3220).
+	s.cancelAutoRepeatOnInterrupt()
 	// The deferred cascade keeps the same guardian exemption as the
 	// immediate one above (TempSummon::Update has no owner-death arm).
 	if !s.activePetIsTemporaryGuardian(ctx) {
@@ -1099,12 +1107,18 @@ func (s *session) spawnCorpseObject(ctx context.Context, displayID uint32, battl
 	if err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		if s.server != nil {
-			s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+			// Map::ConvertCorpseToBones / corpse AddToMap fan out on the
+			// corpse's map (Map.cpp:4627-4670): center on the corpse
+			// position, which here equals the player position at creation.
+			s.server.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 		}
 	}
 }
 
-func (s *session) despawnCorpseObject() {
+// despawnCorpseObject mirrors the corpse despawn on the corpse's own map
+// (Map::RemoveCorpse): the out-of-range update goes to players near the
+// corpse, not near the player.
+func (s *session) despawnCorpseObject(mapID, instanceID uint32, x, y, z float32) {
 	// Mirror of the m_corpse clear on reclaim/resurrect: corpse-anchored
 	// distance checks fall back to the player position.
 	if s.player != nil {
@@ -1117,7 +1131,7 @@ func (s *session) despawnCorpseObject() {
 	if err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		if s.server != nil {
-			s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+			s.server.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), mapID, instanceID, x, y, z, s)
 		}
 	}
 }
@@ -1200,7 +1214,11 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost
-	s.player.PlayerFieldBytes &^= playerFieldByteReleaseTimer
+	// The release-timer byte is owned by Player::KillPlayer (set/clear,
+	// Player.cpp:4783), the login corpse load (Player.cpp:18315), and the
+	// SPELL_AURA_PREVENT_RESURRECTION apply/remove legs — neither
+	// BuildPlayerRepop nor ResurrectPlayer touches it, so it stays set
+	// through repop and resurrect.
 	s.player.Health = 1
 	s.deathTimer = time.Time{}
 	if s.player.Race == 4 { // RACE_NIGHTELF
@@ -1423,7 +1441,10 @@ func closestGraveyardCandidate(locations []wotlk.WorldSafeLoc, mapID uint32, map
 			if entrance == nil || dist < entrance.dist {
 				entrance = &candidate{loc: loc, dist: dist}
 			}
-		} else if far == nil {
+		} else {
+			// ObjectMgr::GetClosestGraveyard overwrites unconditionally
+			// (ObjectMgr.cpp:6936-6945) — the last iterated far-zone
+			// graveyard wins, not the first.
 			locCopy := loc
 			far = &locCopy
 		}
@@ -1579,23 +1600,25 @@ type spiritWaveDue struct {
 }
 
 type corpseObjectState struct {
-	MapID, DisplayID, Bytes1, Bytes2, Flags, DynamicFlags uint32
-	GuildID                                               uint32
-	CorpseType                                            uint32
-	GhostTime                                             int64
-	X, Y, Z, Orientation                                  float32
+	MapID, InstanceID                              uint32
+	DisplayID, Bytes1, Bytes2, Flags, DynamicFlags uint32
+	GuildID                                        uint32
+	CorpseType                                     uint32
+	GhostTime                                      int64
+	X, Y, Z, Orientation                           float32
 }
 
 func (s *session) loadCorpseObject(ctx context.Context) (corpseObjectState, bool) {
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return corpseObjectState{}, false
 	}
-	var mapID, displayID, bytes1, bytes2, flags, dynamicFlags, corpseType, ghostTime int64
+	var mapID, instanceID, displayID, bytes1, bytes2, flags, dynamicFlags, corpseType, ghostTime int64
 	var corpse corpseObjectState
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, flags, dynFlags, corpseType, time FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones).Scan(&mapID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &displayID, &bytes1, &bytes2, &flags, &dynamicFlags, &corpseType, &ghostTime); err != nil {
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, instanceId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, flags, dynFlags, corpseType, time FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones).Scan(&mapID, &instanceID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &displayID, &bytes1, &bytes2, &flags, &dynamicFlags, &corpseType, &ghostTime); err != nil {
 		return corpseObjectState{}, false
 	}
 	corpse.MapID = uint32(mapID)
+	corpse.InstanceID = uint32(instanceID)
 	corpse.DisplayID = uint32(displayID)
 	corpse.Bytes1 = uint32(bytes1)
 	corpse.Bytes2 = uint32(bytes2)
@@ -1633,7 +1656,7 @@ func (s *session) prepareLoginResurrection(ctx context.Context, state *playerSta
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ?", state.GUID)
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ?, health = ?, playerFlags = ?, death_expire_time = 0 WHERE guid = ?", ^uint32(atLoginResurrect), maxUint32(state.MaxHealth/2, 1), state.PlayerFlags&^playerFlagGhost, state.GUID)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ?, health = ?, playerFlags = ? WHERE guid = ?", ^uint32(atLoginResurrect), maxUint32(state.MaxHealth/2, 1), state.PlayerFlags&^playerFlagGhost, state.GUID)
 	}
 	s.castMu.Lock()
 	for _, spellID := range []uint32{8326, 20584} {
@@ -1651,14 +1674,19 @@ func (s *session) prepareLoginResurrection(ctx context.Context, state *playerSta
 		delete(s.auraSlots, spellID)
 	}
 	s.castMu.Unlock()
+	// Player::LoadCorpse's AT_LOGIN_RESURRECT leg runs the full
+	// ResurrectPlayer (Player.cpp:18310), which always recasts item
+	// obtain-spell auras (Player.cpp:4732).
+	s.castAllObtainSpells(ctx)
 	state.PlayerFlags &^= playerFlagGhost
-	state.PlayerFieldBytes &^= playerFieldByteReleaseTimer
 	state.Health = maxUint32(state.MaxHealth/2, 1)
 	state.Powers[0] = state.MaxPowers[0] / 2
 	state.Powers[1] = 0
 	state.Powers[3] = state.MaxPowers[3] / 2
 	state.AtLogin &^= uint32(atLoginResurrect)
-	s.deathExpireTime = 0
+	// m_deathExpireTime is never zeroed by ResurrectPlayer — the only
+	// zeroing site is the Player constructor (Player.cpp:274); the
+	// escalation window survives across resurrections and relogs.
 }
 
 func battlegroundMap(mapID uint32) bool {
@@ -1696,7 +1724,7 @@ func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool)
 		return
 	}
 	if destroyVisible {
-		s.despawnCorpseObject()
+		s.despawnCorpseObject(corpse.MapID, corpse.InstanceID, corpse.X, corpse.Y, corpse.Z)
 	}
 	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones); err != nil {
 		return
@@ -1712,7 +1740,9 @@ func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool)
 	packet, err := updates.BuildPacket(0)
 	if err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+		// Bones are AddToMap'd on the corpse's map (Map.cpp:4627-4670):
+		// center the fan-out on the corpse, not the player.
+		s.server.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), corpse.MapID, corpse.InstanceID, corpse.X, corpse.Y, corpse.Z, s)
 	}
 }
 
@@ -1729,9 +1759,10 @@ const corpseExpirySweepInterval = 20 * time.Minute
 // resurrectable corpse older than corpseResurrectableExpiry is converted to
 // bones. An online owner's visible corpse is despawned and replaced with
 // bones via spawnLoadedCorpseBones (the RemoveCorpse + ConvertCorpseToBones
-// arm); an offline owner's row is simply deleted — C++ bones are never
-// persisted either, so with no session to show them the delete is
-// outcome-equivalent. Returns the number of expired corpses handled.
+// arm); an offline owner's corpse still becomes visible bones for nearby
+// players (Map::RemoveOldCorpses, Map.cpp:4681-4703) before the row is
+// deleted — bones are never persisted. Returns the number of expired
+// corpses handled.
 // No-bridge: the 60-minute bones expiry (Corpse.cpp:209, Map.cpp:4693-4701)
 // has no Go analog — Go bones are fire-and-forget client visuals with no
 // server-side state (no _corpseBones analog, no DB row), so nothing exists
@@ -1743,24 +1774,49 @@ func (s *Server) expireOldCorpses(ctx context.Context) int {
 		return 0
 	}
 	cutoff := time.Now().Unix() - int64(corpseResurrectableExpiry/time.Second)
-	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid FROM corpse WHERE corpseType <> ? AND time < ?", corpseTypeBones, cutoff)
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid, mapId, instanceId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags FROM corpse WHERE corpseType <> ? AND time < ?", corpseTypeBones, cutoff)
 	if err != nil {
 		return 0
 	}
-	var guids []uint64
+	type expiredCorpse struct {
+		guid                                                  uint64
+		mapID, instanceID, displayID, bytes1, bytes2, guildID uint32
+		flags, dynFlags                                       uint32
+		x, y, z, orientation                                  float32
+	}
+	var corpses []expiredCorpse
 	for rows.Next() {
-		var guid uint64
-		if err := rows.Scan(&guid); err == nil {
-			guids = append(guids, guid)
+		var c expiredCorpse
+		var mapID, instanceID, displayID, bytes1, bytes2, guildID, flags, dynFlags int64
+		if err := rows.Scan(&c.guid, &mapID, &instanceID, &c.x, &c.y, &c.z, &c.orientation, &displayID, &bytes1, &bytes2, &guildID, &flags, &dynFlags); err != nil {
+			continue
 		}
+		c.mapID, c.instanceID = uint32(mapID), uint32(instanceID)
+		c.displayID, c.bytes1, c.bytes2, c.guildID = uint32(displayID), uint32(bytes1), uint32(bytes2), uint32(guildID)
+		c.flags, c.dynFlags = uint32(flags), uint32(dynFlags)
+		corpses = append(corpses, c)
 	}
 	_ = rows.Close()
 	handled := 0
-	for _, guid := range guids {
-		if sess := s.findSessionByGUID(guid); sess != nil {
+	for _, c := range corpses {
+		if sess := s.findSessionByGUID(c.guid); sess != nil {
 			sess.spawnLoadedCorpseBones(ctx)
-		} else if _, err := s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", guid, corpseTypeBones); err != nil {
-			continue
+		} else {
+			// Map::RemoveOldCorpses converts the corpse even when the owner
+			// is offline (Map.cpp:4681-4703): broadcast the bones visual on
+			// the corpse's own map, then delete the row (bones are never
+			// persisted, Player.cpp:4867 / Map.cpp:4636).
+			corpseGUID := c.guid | (uint64(0xF101) << 48)
+			fields := corpseObjectFields{DisplayID: c.displayID, Bytes1: c.bytes1, Bytes2: c.bytes2, GuildID: c.guildID, Flags: c.flags | corpseFlagBones, DynamicFlags: c.dynFlags}
+			block := buildCorpseCreateBlockWithFields(corpseGUID, fields, c.x, c.y, c.z, c.orientation)
+			updates := protocol.NewUpdateData()
+			updates.AddUpdateBlock(block)
+			if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+				s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), c.mapID, c.instanceID, c.x, c.y, c.z, nil)
+			}
+			if _, err := s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", c.guid, corpseTypeBones); err != nil {
+				continue
+			}
 		}
 		handled++
 	}
@@ -1830,7 +1886,6 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	packet.WriteF32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
 	s.player.PlayerFlags &^= playerFlagGhost
-	s.player.PlayerFieldBytes &^= playerFieldByteReleaseTimer
 	s.deathTimer = time.Time{}
 	s.removeAura(8326)
 	s.removeAura(20584)
@@ -1862,8 +1917,10 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	}
 	if toBones {
 		s.convertCorpseToBones(ctx, false)
+	} else if corpse, ok := s.loadCorpseObject(ctx); ok {
+		s.despawnCorpseObject(corpse.MapID, corpse.InstanceID, corpse.X, corpse.Y, corpse.Z)
 	} else {
-		s.despawnCorpseObject()
+		s.despawnCorpseObject(s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z)
 	}
 	s.persistResurrectionState(ctx)
 	s.sendPlayerUpdate()
@@ -1879,7 +1936,7 @@ func (s *session) persistResurrectionState(ctx context.Context) {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
-	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, playerFlags = ?, death_expire_time = 0 WHERE guid = ?", s.player.Health, s.player.PlayerFlags, s.playerGUID)
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, playerFlags = ? WHERE guid = ?", s.player.Health, s.player.PlayerFlags, s.playerGUID)
 }
 
 // resurrectionData mirrors Player::_resurrectionData (ResurrectionData,
@@ -1914,13 +1971,15 @@ func (s *session) setResurrectRequestData(casterGUID uint64, mapID uint32, x, y,
 // those by GUID), the spirit healer resurrection sickness flag, and the flag
 // overriding the corpse reclaim delay for spells that ignore the timer. The
 // name is NUL-terminated (ByteBuffer.h:212-218), hence WriteCString.
-func (s *session) sendResurrectRequest(casterGUID uint64, name string, spiritHealer, ignoreReclaimTimer bool) {
+func (s *session) sendResurrectRequest(casterGUID uint64, name string, spiritHealer, reclaimDelayApplies bool) {
 	packet := protocol.NewBuffer(25 + len(name))
 	packet.WriteU64(casterGUID)
 	packet.WriteU32(uint32(len(name)) + 1)
 	packet.WriteCString(name)
 	packet.WriteU8(boolByte(spiritHealer))
-	packet.WriteU8(boolByte(ignoreReclaimTimer))
+	// 1 = the corpse reclaim delay applies (the spell lacks
+	// SPELL_ATTR3_IGNORE_RESURRECTION_TIMER, Spell.cpp:4709).
+	packet.WriteU8(boolByte(reclaimDelayApplies))
 	_ = s.write(uint16(protocol.OpcodeSMSG_RESURRECT_REQUEST), packet.Bytes(), true)
 }
 
@@ -2356,7 +2415,7 @@ func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellE
 	if eff.MiscValue > 0 {
 		mana = uint32(eff.MiscValue)
 	}
-	ignoreReclaimTimer := spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0
+	reclaimDelayApplies := spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 || targetGUID == s.playerGUID {
 			continue
@@ -2372,7 +2431,7 @@ func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellE
 		// stores the request at the caster's location, and sends the request
 		// whose reclaim-delay byte is !HasAttribute(IGNORE_RESURRECTION_TIMER).
 		targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
-		targetSess.sendResurrectRequest(s.playerGUID, "", false, ignoreReclaimTimer)
+		targetSess.sendResurrectRequest(s.playerGUID, "", false, reclaimDelayApplies)
 		s.sendResurrectLog(spell.ID, s.playerGUID, targetGUID)
 	}
 }
@@ -2631,10 +2690,17 @@ func (s *session) resSicknessSpellID(race uint8) uint32 {
 // ten minutes at level 20+. The C++ CastSpell(..., true) is a triggered
 // apply, which applyAuraWithDuration mirrors.
 func (s *session) applyResurrectionSickness() {
-	if s == nil || s.player == nil || s.player.Level < 11 {
+	// CONFIG_DEATH_SICKNESS_LEVEL ("Death.SicknessLevel", default 11,
+	// Player.cpp:4743): one minute per level above startLevel-1 for
+	// startLevel..startLevel+8, ten minutes at startLevel+9+.
+	startLevel := uint8(11)
+	if s != nil && s.server != nil {
+		startLevel = uint8(s.server.Config.DeathSicknessLevel)
+	}
+	if s == nil || s.player == nil || s.player.Level < startLevel {
 		return
 	}
-	durationMinutes := s.player.Level - 10
+	durationMinutes := s.player.Level - startLevel + 1
 	if durationMinutes > 10 {
 		durationMinutes = 10
 	}
