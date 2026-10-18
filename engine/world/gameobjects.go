@@ -1756,6 +1756,14 @@ func (s *session) handleEffectTransmitted(ctx context.Context, target protocol.S
 		size = 1.0
 	}
 	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spell.ID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	if tmpl.goType == GameObjectTypeRitual {
+		// SpellEffects.cpp:5003-5005 (GAMEOBJECT_TYPE_SUMMONING_RITUAL, player
+		// caster only): the caster counts as the first unique user from summon
+		// time. useSummoningRitual excludes the owner from clicking on the
+		// assumption that this seed is present (GameObject.cpp:1825-1828);
+		// without it a ritual needed one extra non-owner participant.
+		dyn.RitualUsers = map[uint64]struct{}{s.playerGUID: {}}
+	}
 	// SpellEffects.cpp:5019: the object's respawn time is the spell duration;
 	// a runtime spawn with a positive duration despawns when it elapses.
 	if spell.DurationIndex > 0 && s.server.Data != nil {

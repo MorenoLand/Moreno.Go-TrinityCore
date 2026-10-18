@@ -192,11 +192,14 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 		}
 		// Player::SendPreparedGossip (Player.cpp:14536-14548): on the
 		// questgiver-hello path a flagless questgiver with a non-empty quest
-		// menu goes through SendPreparedQuest (Player.cpp:14816) — empty
-		// answers nothing, a single quest fast-opens, multiple quests go out
-		// in SMSG_QUESTGIVER_QUEST_LIST. The gossip-hello path always carries
-		// the flag (gated above), so it always sends the menu.
-		if questPath && npcFlags&npcFlagGossip == 0 && defaultMenu != nil && len(defaultMenu.Items) == 0 {
+		// menu goes through SendPreparedQuest (Player.cpp:14816) — a single
+		// quest fast-opens, multiple quests go out in
+		// SMSG_QUESTGIVER_QUEST_LIST. The quest menu takes precedence over
+		// gossip items (!questMenu.Empty() is the whole gate); with an empty
+		// quest menu it falls through to SendGossipMenu. The gossip-hello
+		// path always carries the flag (gated above), so it always sends the
+		// menu.
+		if questPath && npcFlags&npcFlagGossip == 0 && defaultMenu != nil && len(defaultMenu.Quests) != 0 {
 			return s.sendPreparedCreatureQuest(ctx, guid, entry, defaultMenu.Quests)
 		}
 		s.gossip = defaultMenu
@@ -403,8 +406,9 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		// OUTDOORPVP, not DUALSPEC_INFO — an earlier revision mapped 19 to
 		// the submenu arm.
 		if item.Action == 3 || item.Action == 15 { // GOSSIP_OPTION_VENDOR / GOSSIP_OPTION_ARMORER
+			// Player::OnGossipSelect (Player.cpp:14629-14631): SendListInventory
+			// with no close — the tail restores the live menu.
 			s.sendVendorList(ctx, guid)
-			s.gossipClosed = true
 		} else if item.Action == 6 { // GOSSIP_OPTION_SPIRITHEALER
 			// Player::OnGossipSelect (Player.cpp:14621-14624): the spirit
 			// healer casts 17251 (triggered, original caster = the player) on
@@ -412,8 +416,8 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// request (Spell::EffectResurrect, SpellEffects.cpp:4270-4293).
 			// No confirm dialog: SMSG_SPIRIT_HEALER_CONFIRM is STATUS_NEVER in
 			// Opcodes.cpp:677 — the confirm/activate flow nothing sends — and
-			// no gossip close, so gossipClosed only suppresses the tail's
-			// SMSG_GOSSIP_COMPLETE to stay wire-faithful. The cast visual
+			// no gossip close (Player.cpp:14621-14624), so the tail restores
+			// the live menu. The cast visual
 			// (SMSG_SPELL_START/GO from the creature) has no Go bridge; the
 			// mechanic is what lands here.
 			// Player::OnGossipSelect GOSSIP_OPTION_SPIRITHEALER arm
@@ -454,14 +458,17 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				// flushed by SendLogExecute: caster is the creature, and the
 				// log broadcasts to nearby like C++ (was session-only).
 				s.sendResurrectLog(17251, guid, s.playerGUID)
-				s.gossipClosed = true
+				// No gossip close (Player.cpp:14621-14624) — the tail restores
+				// the live menu.
 			}
 		} else if item.Action == 4 { // GOSSIP_OPTION_TAXIVENDOR
+			// Player::OnGossipSelect (Player.cpp:14659-14661): SendTaxiMenu
+			// with no close — the tail restores the live menu.
 			s.sendTaxiMenu(ctx, guid)
-			s.gossipClosed = true
 		} else if item.Action == 5 { // GOSSIP_OPTION_TRAINER
+			// Player::OnGossipSelect (Player.cpp:14636-14638): SendTrainerList
+			// with no close — the tail restores the live menu.
 			s.sendTrainerList(ctx, guid)
-			s.gossipClosed = true
 		} else if item.Action == 8 { // GOSSIP_OPTION_INNKEEPER
 			// Player::OnGossipSelect (Player.cpp:14663-14666): SendCloseGossip
 			// runs before Player::SetBindPoint, which itself only sends
@@ -476,7 +483,8 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				return true
 			}
 		} else if item.Action == 9 { // GOSSIP_OPTION_BANKER
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14662-14664): SendShowBank
+			// with no close — the tail restores the live menu.
 			bank := protocol.NewBuffer(8)
 			bank.WriteU64(guid)
 			if err := s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true); err != nil {
@@ -498,10 +506,13 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// WorldSession::SendAuctionHello (AuctionHouseHandler.cpp:59-75):
 			// the packet is guid + u32 house id + u8 enabled behind the
 			// auction level gate — not the bare 9-byte write this arm had.
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14672-14674): no close — the
+			// tail restores the live menu.
 			s.sendAuctionHelloPacket(guid)
 		} else if item.Action == 14 { // GOSSIP_OPTION_STABLEPET
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14632-14634): SendStablePet
+			// with no close — the menu stays live for subsequent selects.
+			s.gossip = prevGossip
 			stableBuf := protocol.NewBuffer(8)
 			stableBuf.WriteU64(guid)
 			return s.handleListStabledPets(ctx, stableBuf.Bytes())
@@ -562,7 +573,8 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				if !s.sendPreparedCreatureQuest(ctx, guid, entry, quests) {
 					return false
 				}
-				s.gossipClosed = true
+				// Player::OnGossipSelect (Player.cpp:14625-14628): no close —
+				// the tail restores the live menu.
 			}
 		} else if item.Action == 7 { // GOSSIP_OPTION_SPIRITGUIDE
 			// Player::OnGossipSelect (Player.cpp:14677-14680): re-prepare the
@@ -601,7 +613,8 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				s.gossip = prevGossip
 				return true
 			}
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14684-14696): no close — the
+			// tail restores the live menu.
 			s.sendBattlefieldList(guid, 0, bgTypeID)
 		} else if item.Action == 17 { // GOSSIP_OPTION_UNLEARNPETTALENTS
 			// Player::OnGossipSelect (Player.cpp:14653-14656): SendCloseGossip
@@ -1293,14 +1306,14 @@ func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, ent
 func (s *session) fastOpenQuestGiverQuest(ctx context.Context, guid uint64, q gossipQuestItem) bool {
 	questID := q.ID
 	if q.Icon == 4 {
+		// Player::SendPreparedQuest (Player.cpp:14818-14820): icon 4 routes to
+		// the request-items window unconditionally — this covers
+		// autocomplete-repeatable quests the player has not taken yet, which
+		// the old status gate sent to the details window instead.
 		queryPayload := protocol.NewBuffer(12)
 		queryPayload.WriteU64(guid)
 		queryPayload.WriteU32(questID)
-		status, _ := s.characterQuestStatus(ctx, questID)
-		if status == questStatusComplete || status == questStatusIncomplete {
-			return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
-		}
-		return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
+		return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
 	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {

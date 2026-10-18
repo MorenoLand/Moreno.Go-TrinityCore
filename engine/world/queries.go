@@ -90,6 +90,17 @@ func (s *session) loadCreatureQueryData(ctx context.Context, entry uint32) (crea
 	}
 	data.Entry = entry
 	data.Name, data.Title, data.IconName = name.String, title.String, iconName.String
+	if s.locale != 0 && int(s.locale) < len(localeNames) {
+		var locName, locTitle sql.NullString
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Name, Title FROM creature_template_locale WHERE entry = ? AND locale = ?", entry, localeNames[s.locale]).Scan(&locName, &locTitle); err == nil {
+			if locName.Valid && locName.String != "" {
+				data.Name = locName.String
+			}
+			if locTitle.Valid && locTitle.String != "" {
+				data.Title = locTitle.String
+			}
+		}
+	}
 	data.Flags, data.Type, data.Family, data.Rank = uint32(flags), uint32(creatureType), uint32(family), uint32(rank)
 	data.KillCredits = [creatureKillCredits]uint32{uint32(killCredit1), uint32(killCredit2)}
 	data.Models = [creatureModels]uint32{uint32(model1), uint32(model2), uint32(model3), uint32(model4)}

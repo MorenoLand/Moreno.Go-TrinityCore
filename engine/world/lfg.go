@@ -1989,7 +1989,7 @@ func (s *session) questXPRewardRaw(ctx context.Context, questID, xpDiff uint32) 
 	}
 	var qLevel int64
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT QuestLevel FROM quest_template WHERE entry = ?", questID).Scan(&qLevel)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT QuestLevel FROM quest_template WHERE ID = ?", questID).Scan(&qLevel)
 	}
 	playerLevel := int64(0)
 	if s.player != nil {

@@ -87,6 +87,11 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 				return true
 			}
 		}
+		// Player::CanRewardQuest (Player.cpp:15093-15095): the required-money
+		// arm applies here too.
+		if canComplete && view.Detail.RequiredMoney > 0 && (s.player == nil || s.player.Money < view.Detail.RequiredMoney) {
+			canComplete = false
+		}
 		s.debug("quest request items", "account", s.accountName, "entry", entry, "quest", questID, "complete", canComplete)
 		return s.sendQuestRequestItems(view, giverGUID, canComplete, false)
 	}
@@ -99,6 +104,11 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 		if err != nil {
 			return true
 		}
+	}
+	// Player::CanRewardQuest (Player.cpp:15093-15095): required money gates
+	// the complete branch as well.
+	if canComplete && view.Detail.RequiredMoney > 0 && (s.player == nil || s.player.Money < view.Detail.RequiredMoney) {
+		canComplete = false
 	}
 	if canComplete && len(view.RequiredItems) == 0 {
 		s.debug("quest offer reward", "account", s.accountName, "entry", entry, "quest", questID)
@@ -316,25 +326,61 @@ func (s *session) hasQuestRequiredItems(ctx context.Context, items []questReward
 }
 
 // canCompleteRepeatableQuest mirrors Player::CanCompleteRepeatableQuest
-// (Player.cpp:15040): the receiver must be able to take the quest, hold the
-// required items when the quest is repeatable, and satisfy the modeled
-// CanRewardQuest arms (reward state is folded into canTakeQuest; required
-// money comes from the quest view).
+// (Player.cpp:15040-15056): CanTakeQuest, the DELIVER carried-only item counts
+// (Player::HasItemCount takes no bank), and the CanRewardQuest arms — the
+// status gate for non-autocomplete quests, the rewarded-state gate, and the
+// required-money arm. The day/week/month/level/skill/rep arms ride
+// canTakeQuest, like the C++.
 func (s *session) canCompleteRepeatableQuest(ctx context.Context, questID uint32, view questRewardView, repeatable bool) bool {
 	canTake, err := s.canTakeQuest(ctx, questID)
 	if err != nil || !canTake {
 		return false
 	}
+	// Player::CanRewardQuest (Player.cpp:15064-15067): non-autocomplete,
+	// non-DF quests must already be complete.
+	if !s.questIsDFQuest(ctx, questID) && !s.questIsAutoComplete(ctx, questID, view.Detail.Flags) {
+		if status, serr := s.characterQuestStatus(ctx, questID); serr != nil || status != questStatusComplete {
+			return false
+		}
+	}
 	if repeatable && len(view.RequiredItems) != 0 {
-		ok, err := s.hasQuestRequiredItems(ctx, view.RequiredItems)
+		ok, err := s.hasQuestRequiredItemsCarried(ctx, view.RequiredItems)
 		if err != nil || !ok {
 			return false
 		}
+	}
+	// Player::CanRewardQuest (Player.cpp:15077-15079).
+	if s.getQuestRewardStatus(ctx, questID) {
+		return false
 	}
 	if view.Detail.RequiredMoney > 0 && (s.player == nil || s.player.Money < view.Detail.RequiredMoney) {
 		return false
 	}
 	return true
+}
+
+// hasQuestRequiredItemsCarried mirrors the DELIVER arm of
+// Player::CanCompleteRepeatableQuest (Player.cpp:15044-15048):
+// Player::HasItemCount counts carried items only, bank excluded. The carried
+// predicate follows the durability-repair arm (items.go).
+func (s *session) hasQuestRequiredItemsCarried(ctx context.Context, items []questRewardItem) (bool, error) {
+	for _, item := range items {
+		var count int64
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			LEFT JOIN character_inventory AS cb ON cb.guid = ci.guid AND cb.item = ci.bag
+			WHERE ci.guid = ? AND ii.itemEntry = ? AND ((ci.bag = 0 AND ci.slot >= 0 AND ci.slot < 39) OR (ci.bag != 0 AND cb.bag = 0 AND cb.slot >= 19 AND cb.slot < 23))`, s.playerGUID, item.ID).Scan(&count)
+		if err != nil {
+			if missingTable(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		if count < int64(item.Quantity) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *session) sendQuestRequestItems(view questRewardView, giverGUID uint64, canComplete, closeOnCancel bool) bool {
@@ -420,6 +466,9 @@ func buildQuestGiverOfferReward(view questRewardView, giverGUID uint64, autoLaun
 	packet.WriteU32(view.Detail.RewardXPDifficulty)
 	packet.WriteU32(view.Detail.RewardHonor)
 	packet.WriteF32(view.Detail.RewardKillHonor)
+	// QuestGiverOfferRewardMessage::Write (QuestPackets.cpp:229): a uint32(0)
+	// "unknown value" sits between RewardKillHonor and RewardDisplaySpell.
+	packet.WriteU32(0)
 	packet.WriteU32(view.Detail.RewardDisplaySpell)
 	packet.WriteI32(view.Detail.RewardSpell)
 	packet.WriteU32(view.Detail.RewardTitleID)

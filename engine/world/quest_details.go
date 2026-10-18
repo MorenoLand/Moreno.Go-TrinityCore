@@ -549,23 +549,23 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canTakeQuest failed", "error", err)
 		return s.rejectQuestgiverAccept()
 	}
-	// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:153):
-	// CanAddQuest gates AddQuestAndCheckCompletion — a full quest log or an
-	// unstoreable source item rejects with the window closed and the sharing
-	// info cleared.
-	if !s.canAddQuest(ctx, questID, true) {
-		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canAddQuest failed")
-		return s.rejectQuestgiverAccept()
-	}
-	// QuestHandler.cpp:144-151 — an accept that lands while the player still
+	// QuestHandler.cpp:183-189 — an accept that lands while the player still
 	// holds quest-sharing info answers QUEST_PARTY_MSG_ACCEPT_QUEST to the
-	// sharer and clears the sharing info, ahead of CanAddQuest like the C++.
+	// sharer and clears the sharing info, ahead of CanAddQuest.
 	if s.sharingQuestSender != 0 && s.server != nil {
 		if sharer := s.server.findSessionByGUID(s.sharingQuestSender); sharer != nil {
 			sharer.sendPushToPartyResponse(s.playerGUID, QuestPartyMsgAcceptQuest)
 			s.sharingQuestID = 0
 			s.sharingQuestSender = 0
 		}
+	}
+	// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:191):
+	// CanAddQuest gates AddQuestAndCheckCompletion — a full quest log or an
+	// unstoreable source item rejects with the window closed and the sharing
+	// info cleared.
+	if !s.canAddQuest(ctx, questID, true) {
+		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canAddQuest failed")
+		return s.rejectQuestgiverAccept()
 	}
 	s.addQuestToPlayer(ctx, questID, guid)
 	// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
@@ -656,9 +656,9 @@ func (s *session) broadcastQuestPartyAccept(ctx context.Context, questID uint32)
 // castQuestSourceSpell mirrors the source-spell arm of
 // WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:176-177)
 // and WorldSession::HandleQuestConfirmAccept (QuestHandler.cpp:501-503): the
-// quest_template_addon SrcSpell is cast triggered on the player. The packet
-// bridge follows the trainer teach-spell arm; spell effects resolve
-// server-side only where modeled.
+// quest_template_addon SrcSpell is cast triggered on the player — a real cast
+// with server-side effects, not a visual. castSpellDirect is the triggered
+// bridge.
 func (s *session) castQuestSourceSpell(ctx context.Context, questID uint32) {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
@@ -667,13 +667,7 @@ func (s *session) castQuestSourceSpell(ctx context.Context, questID uint32) {
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SrcSpell, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&srcSpell); err != nil || srcSpell <= 0 {
 		return
 	}
-	castTimeStamp := uint32(time.Now().UnixMilli())
-	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
-	goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, uint32(srcSpell), spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
-	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
-	}
+	s.castSpellDirect(ctx, uint32(srcSpell), s.playerGUID)
 }
 
 func (s *session) addQuestToPlayer(ctx context.Context, questID uint32, questGiverGUID uint64) bool {
@@ -1077,6 +1071,10 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 	// QuestHandler.cpp:443 — the second TakeQuestSourceItem pass (idempotent).
 	s.takeQuestSourceItem(ctx, questID, true)
 	s.destroyQuestItems(ctx, questID)
+	// Player::RemoveActiveQuest (Player.cpp:16182-16192, called with
+	// update=true from HandleQuestLogRemoveQuest, QuestHandler.cpp:443):
+	// SendQuestUpdate re-evaluates the spell_area auras for the quest.
+	s.sendQuestUpdate(ctx, questID)
 	s.removeTimedAchievements(timedTypeQuest, questID)
 	// Eluna PLAYER_EVENT_ON_QUEST_ABANDON (38): Eluna::OnQuestAbandon
 	// (PlayerHooks.cpp:101-107), (event, player, questId), void
@@ -1359,20 +1357,30 @@ func buildQuestGiverDetails(data questDetailData, giverGUID, informGUID uint64) 
 	packet.WriteU32(data.Flags)
 	packet.WriteU32(data.SuggestedGroupNum)
 	packet.WriteU8(0)
-	packet.WriteU32(uint32(len(data.ChoiceItems)))
-	for _, item := range data.ChoiceItems {
+	// Quest::BuildQuestRewards (QuestDef.cpp:238-268): with
+	// QUEST_FLAGS_HIDDEN_REWARDS and sendHiddenRewards=false (the Details
+	// path, GossipDef.cpp:414), choice/reward items, money and XP difficulty
+	// are zeroed; honor, spells, title, talents and factions still send.
+	choiceItems, rewardItems := data.ChoiceItems, data.RewardItems
+	rewardMoney, rewardXPDifficulty := data.RewardMoney, data.RewardXPDifficulty
+	if data.Flags&questHiddenRewardsFlag != 0 {
+		choiceItems, rewardItems = nil, nil
+		rewardMoney, rewardXPDifficulty = 0, 0
+	}
+	packet.WriteU32(uint32(len(choiceItems)))
+	for _, item := range choiceItems {
 		packet.WriteU32(item.ID)
 		packet.WriteU32(item.Quantity)
 		packet.WriteU32(item.DisplayID)
 	}
-	packet.WriteU32(uint32(len(data.RewardItems)))
-	for _, item := range data.RewardItems {
+	packet.WriteU32(uint32(len(rewardItems)))
+	for _, item := range rewardItems {
 		packet.WriteU32(item.ID)
 		packet.WriteU32(item.Quantity)
 		packet.WriteU32(item.DisplayID)
 	}
-	packet.WriteU32(data.RewardMoney)
-	packet.WriteU32(data.RewardXPDifficulty)
+	packet.WriteU32(rewardMoney)
+	packet.WriteU32(rewardXPDifficulty)
 	packet.WriteU32(data.RewardHonor)
 	packet.WriteF32(data.RewardKillHonor)
 	packet.WriteU32(data.RewardDisplaySpell)

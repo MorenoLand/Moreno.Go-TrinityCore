@@ -15,23 +15,34 @@ import (
 )
 
 const (
-	questStatusComplete                   = 1
-	questStatusIncomplete                 = 3
-	questStatusFailed                     = 5      // QUEST_STATUS_FAILED (QuestDef.h:108)
-	questStatusRewarded                   = 6      // Player::GetQuestStatus reports QUEST_STATUS_REWARDED, never NONE, for rewarded quests
-	questFlagTracking              uint32 = 0x400  // QUEST_FLAGS_TRACKING (QuestDef.h:142): automatically rewarded on complete, never in the client quest log
-	questSpecialExplorationOrEvent        = 0x002  // QUEST_SPECIAL_FLAGS_EXPLORATION_OR_EVENT (QuestDef.h:161)
-	questSlotStateFail             uint32 = 0x0002 // QUEST_STATE_FAIL (Player.h:496)
-	itemBondingQuestItem           uint32 = 4      // BIND_QUEST_ITEM (ItemTemplate.h:102)
-	QuestTypeRaid                  uint32 = 62
-	QuestTypeRaid10                uint32 = 88
-	QuestTypeRaid25                uint32 = 89
-	RaidDifficulty25ManMask        uint8  = 1
-	questDialogNone                       = 0
-	questDialogIncomplete                 = 5
-	questDialogReward                     = 10
-	questDialogAvailable                  = 8
+	questStatusComplete                    = 1
+	questStatusIncomplete                  = 3
+	questStatusFailed                      = 5      // QUEST_STATUS_FAILED (QuestDef.h:108)
+	questStatusRewarded                    = 6      // Player::GetQuestStatus reports QUEST_STATUS_REWARDED, never NONE, for rewarded quests
+	questFlagTracking               uint32 = 0x400  // QUEST_FLAGS_TRACKING (QuestDef.h:142): automatically rewarded on complete, never in the client quest log
+	questSpecialExplorationOrEvent         = 0x002  // QUEST_SPECIAL_FLAGS_EXPLORATION_OR_EVENT (QuestDef.h:161)
+	questSlotStateFail              uint32 = 0x0002 // QUEST_STATE_FAIL (Player.h:496)
+	itemBondingQuestItem            uint32 = 4      // BIND_QUEST_ITEM (ItemTemplate.h:102)
+	QuestTypeRaid                   uint32 = 62
+	QuestTypeRaid10                 uint32 = 88
+	QuestTypeRaid25                 uint32 = 89
+	RaidDifficulty25ManMask         uint8  = 1
+	questDialogNone                        = 0
+	questDialogUnavailable                 = 1
+	questDialogLowLevelAvailable           = 2
+	questDialogLowLevelRewardRep           = 3
+	questDialogLowLevelAvailableRep        = 4
+	questDialogIncomplete                  = 5
+	questDialogRewardRep                   = 6
+	questDialogAvailableRep                = 7
+	questDialogAvailable                   = 8
+	questDialogReward                      = 10
 )
+
+// questLowLevelHideDiff mirrors CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF
+// ("Quests.LowLevelHideDiff", World.cpp:1126): the gray-quest band below
+// which the dialog icon degrades to its low-level variant.
+const questLowLevelHideDiff = 4
 
 func QuestAllowedInRaid(questType uint32, difficulty uint8, raidGroup, ignoreRaid bool) bool {
 	if !raidGroup || ignoreRaid {
@@ -282,6 +293,28 @@ func (s *session) isQuestRewarded(ctx context.Context, questID uint32) bool {
 	var count int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ? AND active = 1", s.playerGUID, questID).Scan(&count)
 	return count > 0
+}
+
+// getQuestRewardStatus mirrors Player::GetQuestRewardStatus
+// (Player.cpp:16115-16128): for repeatable quests the rewarded flag is only
+// consulted to suppress repeat XP (Player.cpp:15399-15401), so the dialog and
+// reward gates treat them as unrewarded.
+func (s *session) getQuestRewardStatus(ctx context.Context, questID uint32) bool {
+	if s.loadQuestDialogTemplate(ctx, questID).specialFlags&questSpecialRepeatable != 0 {
+		return false
+	}
+	return s.isQuestRewarded(ctx, questID)
+}
+
+// questIsDFQuest mirrors Quest::IsDFQuest (QuestDef.h:295):
+// QUEST_SPECIAL_FLAGS_DF_QUEST (0x008) in quest_template_addon.
+func (s *session) questIsDFQuest(ctx context.Context, questID uint32) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var specialFlags int64
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	return specialFlags&0x008 != 0
 }
 
 func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error) {
@@ -897,6 +930,14 @@ func (s *session) questDialogStatusFromRelations(ctx context.Context, entry uint
 	if err != nil {
 		return questDialogNone, err
 	}
+	// Player::GetQuestDialogStatus (Player.cpp:16306-16390): the max icon
+	// across enders then starters.
+	result := uint8(questDialogNone)
+	consider := func(status uint8) {
+		if status > result {
+			result = status
+		}
+	}
 	for _, questID := range enderIDs {
 		status, err := s.characterQuestStatus(ctx, questID)
 		if err != nil {
@@ -908,33 +949,119 @@ func (s *session) questDialogStatusFromRelations(ctx context.Context, entry uint
 				status = questStatusComplete
 			}
 		}
-		if status == questStatusComplete {
-			if s.isQuestRewarded(ctx, questID) {
-				continue
-			}
-			return questDialogReward, nil
+		result2 := uint8(questDialogNone)
+		if status == questStatusComplete && !s.getQuestRewardStatus(ctx, questID) {
+			result2 = questDialogReward
+		} else if status == questStatusIncomplete {
+			result2 = questDialogIncomplete
 		}
-		if status == questStatusIncomplete {
-			return questDialogIncomplete, nil
+		// Player.cpp:16321-16324: an autocomplete repeatable
+		// (non-daily/weekly) quest the player can take shows the reward-rep
+		// icon even as an ender. Plain assignment, like the C++.
+		if s.questDialogEnderRewardRep(ctx, questID) {
+			result2 = questDialogRewardRep
 		}
+		consider(result2)
 	}
 	if s.player == nil {
-		return questDialogNone, nil
+		return result, nil
 	}
 	starterIDs, err := loadQuestRelationIDs(ctx, s.server.WorldStore.DB, starterTable, entry)
 	if err != nil {
 		return questDialogNone, err
 	}
 	for _, questID := range starterIDs {
-		canTake, err := s.canTakeQuest(ctx, questID)
-		if err != nil {
-			return questDialogNone, err
-		}
-		if canTake {
-			return questDialogAvailable, nil
-		}
+		consider(s.questDialogStarterStatus(ctx, questID))
 	}
-	return questDialogNone, nil
+	return result, nil
+}
+
+// questDialogEnderRewardRep mirrors the reward-rep arm of
+// Player::GetQuestDialogStatus (Player.cpp:16321-16324).
+func (s *session) questDialogEnderRewardRep(ctx context.Context, questID uint32) bool {
+	t := s.loadQuestDialogTemplate(ctx, questID)
+	if !s.questIsAutoComplete(ctx, questID, uint32(t.flags)) {
+		return false
+	}
+	if t.specialFlags&questSpecialRepeatable == 0 {
+		return false
+	}
+	if t.flags&(questFlagsDaily|questFlagsWeekly) != 0 {
+		return false
+	}
+	canTake, err := s.canTakeQuest(ctx, questID)
+	return err == nil && canTake
+}
+
+// questDialogStarterStatus mirrors the starter-relation arms of
+// Player::GetQuestDialogStatus (Player.cpp:16328-16387): daily quests show
+// the rep variants, autocomplete repeatables the reward-rep variants, and
+// gray quests the low-level variants.
+func (s *session) questDialogStarterStatus(ctx context.Context, questID uint32) uint8 {
+	status, err := s.characterQuestStatus(ctx, questID)
+	if err != nil || status != int64(questStatusNoneValue) {
+		return questDialogNone
+	}
+	if !s.canSeeStartQuest(ctx, questID) {
+		return questDialogNone
+	}
+	t := s.loadQuestDialogTemplate(ctx, questID)
+	playerLevel := int64(0)
+	if s.player != nil {
+		playerLevel = int64(s.player.Level)
+	}
+	// SatisfyQuestLevel (Player.cpp:15619-15643): the min/max level gate.
+	if playerLevel < t.minLevel || (t.maxLevel > 0 && playerLevel > t.maxLevel) {
+		return questDialogUnavailable
+	}
+	// Player::GetQuestLevel (Player.h:1207): quest level when positive,
+	// else the player's level.
+	questLevel := t.questLevel
+	if questLevel <= 0 {
+		questLevel = playerLevel
+	}
+	isNotLowLevel := playerLevel <= questLevel+questLowLevelHideDiff
+	repeatable := t.specialFlags&questSpecialRepeatable != 0
+	daily := t.flags&questFlagsDaily != 0
+	weekly := t.flags&questFlagsWeekly != 0
+	monthly := t.specialFlags&0x10 != 0 // QUEST_SPECIAL_FLAGS_MONTHLY (QuestDef.h:164)
+	autoComplete := s.questIsAutoComplete(ctx, questID, uint32(t.flags))
+	switch {
+	case repeatable && daily:
+		if isNotLowLevel {
+			return questDialogAvailableRep
+		}
+		return questDialogLowLevelAvailableRep
+	case repeatable && (weekly || monthly):
+		if isNotLowLevel {
+			return questDialogAvailable
+		}
+		return questDialogLowLevelAvailable
+	case repeatable && autoComplete:
+		if isNotLowLevel {
+			return questDialogRewardRep
+		}
+		return questDialogLowLevelRewardRep
+	default:
+		if isNotLowLevel {
+			return questDialogAvailable
+		}
+		return questDialogLowLevelAvailable
+	}
+}
+
+type questDialogTemplate struct {
+	flags, specialFlags, minLevel, maxLevel, questLevel int64
+}
+
+func (s *session) loadQuestDialogTemplate(ctx context.Context, questID uint32) questDialogTemplate {
+	var t questDialogTemplate
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return t
+	}
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(qt.Flags, 0), COALESCE(qta.SpecialFlags, 0), COALESCE(qt.MinLevel, 0), COALESCE(qta.MaxLevel, 0), COALESCE(qt.QuestLevel, 0)
+		FROM quest_template qt LEFT JOIN quest_template_addon qta ON qta.ID = qt.ID WHERE qt.ID = ?`, questID).Scan(&t.flags, &t.specialFlags, &t.minLevel, &t.maxLevel, &t.questLevel)
+	return t
 }
 
 func (s *session) characterQuestStatus(ctx context.Context, questID uint32) (int64, error) {
@@ -1036,7 +1163,7 @@ func (s *session) buildQuestMenu(ctx context.Context, starterIDs, enderIDs []uin
 		if err != nil || !canTake {
 			continue
 		}
-		quest, err := s.loadQuestMenuItem(ctx, questID, 2, playerLevel)
+		quest, err := s.loadQuestMenuItem(ctx, questID, s.questStarterMenuIcon(ctx, questID), playerLevel)
 		if err != nil {
 			return nil, err
 		}
@@ -1045,6 +1172,29 @@ func (s *session) buildQuestMenu(ctx context.Context, starterIDs, enderIDs []uin
 		}
 	}
 	return quests, nil
+}
+
+// questStarterMenuIcon mirrors the quest-menu icon arms of
+// Player::PrepareQuestMenu (Player.cpp:14798-14802): an autocomplete quest
+// takes icon 0 when it is non-repeatable or daily/weekly/monthly, icon 4 when
+// it is repeatable and not daily/weekly/monthly; any other available quest
+// takes icon 2.
+func (s *session) questStarterMenuIcon(ctx context.Context, questID uint32) uint32 {
+	var flags int64
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil ||
+		s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM quest_template WHERE ID = ?", questID).Scan(&flags) != nil {
+		return 2
+	}
+	if !s.questIsAutoComplete(ctx, questID, uint32(flags)) {
+		return 2
+	}
+	var specialFlags int64
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	// QUEST_SPECIAL_FLAGS_MONTHLY = 0x010 (QuestDef.h:164).
+	if s.questIsRepeatable(ctx, questID) && flags&(questFlagsDaily|questFlagsWeekly) == 0 && specialFlags&0x10 == 0 {
+		return 4
+	}
+	return 0
 }
 
 func (s *session) loadQuestMenuItem(ctx context.Context, questID, icon uint32, playerLevel uint8) (*gossipQuestItem, error) {

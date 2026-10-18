@@ -533,24 +533,6 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		s.learnSpell(ctx, spellID)
 	}
 
-	// 11. Check spell_learn_spell for dependent spells (e.g. Find Herbs, Smelting, Campfire, etc.)
-	var depSpells []uint32
-	depRows, dErr := wdb.QueryContext(ctx, "SELECT SpellID FROM spell_learn_spell WHERE entry = ?", spellID)
-	if dErr == nil {
-		for depRows.Next() {
-			var depSpell uint32
-			if err := depRows.Scan(&depSpell); err == nil && depSpell > 0 {
-				depSpells = append(depSpells, depSpell)
-			}
-		}
-		_ = depRows.Close()
-	}
-	for _, depSpell := range depSpells {
-		if !s.hasLearnedSpell(depSpell) {
-			s.learnSpell(ctx, depSpell)
-		}
-	}
-
 	// 12. Send teach succeeded (TC: SendTeachSucceeded(npc, player, spellId))
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_SUCCEEDED), buildTrainerBuySucceeded(trainerGUID, spellID), true)
 	s.sendPlayerUpdate()
@@ -559,6 +541,13 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 }
 
 func (s *session) learnSpell(ctx context.Context, spellID uint32) {
+	s.learnSpellActive(ctx, spellID, true)
+}
+
+// learnSpellActive is the Player::LearnSpell/Player::AddSpell analog with an
+// explicit active flag (Player.cpp:3661-3666 → AddSpell, Player.cpp:3490+):
+// the row's Active flag is stored, not hardcoded.
+func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active bool) {
 	if s.hasLearnedSpell(spellID) {
 		return
 	}
@@ -591,10 +580,14 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 	}
 
 	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
+		activeInt := 0
+		if active {
+			activeInt = 1
+		}
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, ?, 0)", s.playerGUID, spellID, activeInt)
 	}
 	s.learnOwnerPetAuraSources(ctx, spellID)
-	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: true, Disabled: false})
+	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: active, Disabled: false})
 
 	learnedBuf := protocol.NewBuffer(6)
 	learnedBuf.WriteU32(spellID)
@@ -671,6 +664,24 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 					s.setOrUpdateSkill(ctx, skillID, maxVal)
 				}
 			}
+		}
+	}
+
+	// Player::AddSpell's dependent-spell arm (Player.cpp:3578-3589): every
+	// newly learned spell pulls its spell_learn_spell dependents. DB rows are
+	// never autoLearned (SpellMgr.cpp:1107), so no DBC filter applies here;
+	// the row's Active flag is honored.
+	if wdb := s.server.WorldStore.DB; wdb != nil {
+		rows, rerr := wdb.QueryContext(ctx, "SELECT SpellID, COALESCE(Active, 0) FROM spell_learn_spell WHERE entry = ?", spellID)
+		if rerr == nil {
+			for rows.Next() {
+				var depSpell uint32
+				var depActive int64
+				if serr := rows.Scan(&depSpell, &depActive); serr == nil && depSpell > 0 && !s.hasLearnedSpell(depSpell) {
+					s.learnSpellActive(ctx, depSpell, depActive != 0)
+				}
+			}
+			_ = rows.Close()
 		}
 	}
 }

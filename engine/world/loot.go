@@ -1751,6 +1751,14 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	if goMap != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goX, goY, goZ) > maxDist {
 		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
+	// A despawned (hidden) gameobject is gone for the client — e.g. a
+	// fully-looted consumable chest awaiting its respawn. C++ removes it with
+	// DestroyForNearbyPlayers (GameObject.cpp:850-858); the Go analog is the
+	// hidden registry, which the direct-use path already consults
+	// (gameobjects.go:223) but the lock path bypasses.
+	if s.server.isGameObjectHiddenInInstance(goMap, s.player.InstanceID, targetGUID) {
+		return s.sendLootReleaseResponse(targetGUID) == nil
+	}
 	lootID := data1
 
 	key := lootObjectKey{MapID: goMap, InstanceID: s.player.InstanceID, GUID: targetGUID}
@@ -3884,8 +3892,10 @@ func (s *session) doLootRelease(loot *activeLootState) {
 // release and deactivate at max opens (despawned next tick) or return to ready
 // (LootHandler.cpp:289-296); the bobber always despawns on release
 // (LootHandler.cpp:287, type == FISHINGNODE enters the despawn branch even
-// with loot remaining). Chest GO_JUST_DEACTIVATED respawn timing has no Go
-// model — the loot row is still deleted by clearCreatureLoot.
+// with loot remaining). A fully-looted consumable chest/goober despawns via
+// despawnFullyLootedChestOrGoober (GameObject.cpp:806-870 GO_JUST_DEACTIVATED
+// arm); non-consumable ones return to ready, which is Go's standing state.
+// The loot row is still deleted by clearCreatureLoot.
 func (s *session) releaseGameObjectLoot(loot *activeLootState, targetGUID uint64) bool {
 	if s == nil || s.server == nil {
 		return true
@@ -3926,8 +3936,51 @@ func (s *session) releaseGameObjectLoot(loot *activeLootState, targetGUID uint64
 		} else {
 			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, goState.GUID, GameObjectStateReady)
 		}
+	case GameObjectTypeChest, GameObjectTypeGoober:
+		s.despawnFullyLootedChestOrGoober(goState, targetGUID)
 	}
 	return true
+}
+
+// despawnFullyLootedChestOrGoober is the chest/goober leg of the
+// GO_JUST_DEACTIVATED Update arm (GameObject.cpp:806-870) fed by DoLootRelease
+// (LootHandler.cpp:287-297): a fully-looted consumable chest/goober despawns.
+// Summoned (owner/spell) objects are deleted outright (GameObject.cpp:826-830);
+// static ones play the despawn anim, hide, and respawn after their
+// spawntimesecs (GameObject.cpp:832-859). Non-consumable chests/goobers return
+// to ready in C++; Go's state already stays ready, so there is nothing to do
+// for them here.
+func (s *session) despawnFullyLootedChestOrGoober(goState *dynamicGameObjectState, targetGUID uint64) {
+	srv := s.server
+	if srv == nil || goState == nil {
+		return
+	}
+	ctx := context.Background()
+	tpl := s.loadGameObjectTemplateData(ctx, goState.Entry)
+	consumable := tpl[3] != 0 // chest.consumable (GameObjectData.h:60)
+	if goState.Type == GameObjectTypeGoober {
+		consumable = tpl[5] != 0 // goober.consumable (GameObjectData.h:147)
+	}
+	if goState.OwnerGUID != 0 || goState.SpellID != 0 {
+		srv.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, goState.GUID)
+		return
+	}
+	if !consumable {
+		return
+	}
+	srv.setGameObjectHiddenInInstance(goState.Map, goState.InstanceID, goState.GUID, true)
+	srv.broadcastGameObjectDespawnInInstance(goState.Map, goState.InstanceID, goState.GUID)
+	lowGUID := uint32(targetGUID & 0x00FFFFFF)
+	var respawnDelay int64
+	if wdb := srv.WorldStore.DB; wdb != nil {
+		_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(spawntimesecs, 0) FROM gameobject WHERE guid = ? AND id = ? LIMIT 1", lowGUID, goState.Entry).Scan(&respawnDelay)
+	}
+	if respawnDelay <= 0 {
+		return
+	}
+	time.AfterFunc(time.Duration(respawnDelay)*time.Second, func() {
+		srv.setGameObjectHiddenInInstance(goState.Map, goState.InstanceID, goState.GUID, false)
+	})
 }
 
 // handleLootMasterGive processes CMSG_LOOT_MASTER_GIVE (0x2A3).

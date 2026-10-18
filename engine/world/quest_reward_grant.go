@@ -301,7 +301,12 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 	moneyRew := s.questRewOrReqMoney(view.Detail)
 	newMoney, _ := applyMoneyDelta(s.player.Money, moneyRew)
 	s.setPlayerMoney(ctx, newMoney)
-	rewardXP := s.calculateQuestRewardXP(ctx, view.Detail.ID, view.Detail.RewardXPDifficulty)
+	rewardXP := uint32(0)
+	// Player::RewardQuest (Player.cpp:15399-15401): no XP for an already
+	// rewarded repeatable quest (DF quests exempt).
+	if !s.isQuestRewarded(ctx, view.Detail.ID) || s.questIsDFQuest(ctx, view.Detail.ID) {
+		rewardXP = s.calculateQuestRewardXP(ctx, view.Detail.ID, view.Detail.RewardXPDifficulty)
+	}
 	// Player::RewardQuest (Player.cpp:15403-15404):
 	// SPELL_AURA_MOD_XP_QUEST_PCT (291) scales the quest XP after the rate.
 	if rewardXP > 0 {
@@ -354,21 +359,20 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 	// full Player::RewardReputation pipeline — the template values are
 	// QuestFactionReward.dbc field indices, not flat reputation.
 	s.rewardQuestReputation(ctx, view, questID)
-	// Player::RewardQuest (Player.cpp:15479-15497): the quest's reward spell
+	// Player::RewardQuest (Player.cpp:15476-15497): the quest's reward spell
 	// is cast after the quest is marked complete (some spells gate on the
-	// completed state via spell_area data). RewSpellCast wins over RewSpell.
-	// The questgiver-creature cast arm is visual-only — the cast is
-	// triggered — so Go casts as the player, which teaches
-	// SPELL_EFFECT_LEARN_SPELL payloads through the normal cast pipeline.
-	var rewSpellCast int64
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewSpellCast, 0) FROM quest_template WHERE ID = ?", questID).Scan(&rewSpellCast)
-	}
+	// completed state via spell_area data). GetRewSpellCast() — the DB
+	// RewardSpell column (QuestDef.h:274) — wins; GetRewSpell() — the DB
+	// RewardDisplaySpell column (QuestDef.h:273) — is the fallback. Both are
+	// triggered casts; Go's castSpellDirect is the triggered bridge. The
+	// questgiver-creature cast arm is visual-only — the cast is triggered —
+	// so Go casts as the player, which teaches SPELL_EFFECT_LEARN_SPELL
+	// payloads through the normal cast pipeline.
 	rewardSpellID := uint32(0)
-	if rewSpellCast > 0 {
-		rewardSpellID = uint32(rewSpellCast)
-	} else if view.Detail.RewardSpell > 0 {
+	if view.Detail.RewardSpell > 0 {
 		rewardSpellID = uint32(view.Detail.RewardSpell)
+	} else if view.Detail.RewardDisplaySpell > 0 {
+		rewardSpellID = view.Detail.RewardDisplaySpell
 	}
 	if rewardSpellID > 0 {
 		s.castSpellDirect(ctx, rewardSpellID, s.playerGUID)
@@ -1082,16 +1086,20 @@ func (s *session) calculateQuestRewardXP(ctx context.Context, questID, xpDiff ui
 	if xpDiff >= 9 {
 		return 0
 	}
+	// Quest::GetXPReward (QuestDef.cpp:202-215): the quest's own level feeds
+	// the QuestXP.dbc lookup; the player level substitutes only for level -1
+	// quests. The diff-factor scaling and RoundXPValue apply before the
+	// quest XP rate.
 	var qLevel int64
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT QuestLevel FROM quest_template WHERE entry = ?", questID).Scan(&qLevel)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT QuestLevel FROM quest_template WHERE ID = ?", questID).Scan(&qLevel)
+	}
+	playerLevel := int64(0)
+	if s.player != nil {
+		playerLevel = int64(s.player.Level)
 	}
 	if qLevel <= 0 {
-		if s.player != nil && s.player.Level > 0 {
-			qLevel = int64(s.player.Level)
-		} else {
-			qLevel = 1
-		}
+		qLevel = playerLevel
 	}
 	if qLevel < 1 {
 		qLevel = 1
@@ -1102,7 +1110,13 @@ func (s *session) calculateQuestRewardXP(ctx context.Context, questID, xpDiff ui
 	if !ok {
 		return 0
 	}
-	xp := entry[xpDiff]
+	diffFactor := 2*(qLevel-playerLevel) + 20
+	if diffFactor < 1 {
+		diffFactor = 1
+	} else if diffFactor > 10 {
+		diffFactor = 10
+	}
+	xp := roundQuestXPValue(uint32(diffFactor) * entry[xpDiff] / 10)
 	if s.server != nil {
 		xp = uint32(float64(xp) * s.server.Config.XPRateQuest)
 	}
