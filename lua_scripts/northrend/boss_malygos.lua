@@ -103,8 +103,11 @@
 -- SPELL_POWER_SPARK_MALYGOS) — no LOS bridge.
 -- npc_portal_eoe (NPC_PORTAL_TRIGGER 30118) — SpellHit
 -- SPELL_PORTAL_OPENED -> phase-one-gated DoCast
--- SPELL_SUMMON_POWER_PARK; UpdateAI aura maintenance —
--- no SpellHit / cast / aura bridges. npc_power_spark
+-- SPELL_SUMMON_POWER_PARK; UpdateAI per-tick aura maintenance —
+-- HasAura/RemoveAura/CastSpell are bridged (stale "no aura bridge"
+-- re-keyed) but there is no per-tick UpdateAI bridge and the
+-- DATA_PHASE gate is instance-bound (no instance bridge) —
+-- documented-only. npc_power_spark
 -- (NPC_POWER_SPARK 30084) — UpdateAI despawn-when-reached,
 -- JustDied casts SPELL_POWER_SPARK_DEATH — no motion / cast
 -- bridges. npc_melee_hover_disk (NPC_HOVER_DISK_MELEE 30234) /
@@ -116,7 +119,9 @@
 -- npc_nexus_lord (NPC_HOVER disk adds' lord) — DoAction ->
 -- EVENT_NUKE_DUMMY / EVENT_ARCANE_SHOCK / EVENT_HASTE_BUFF
 -- event machine (DoCast SPELL_ARCANE_SHOCK / haste, nuke the
--- disk the player rides) — no timer-event / cast bridges.
+-- disk the player rides) — DoAction-gated, no DoAction bridge
+-- (stale "no timer-event bridge" re-keyed: the timer bridge is live
+-- but the machine never starts) — documented-only.
 -- npc_scion_of_eternity (entry-UNVERIFIABLE from repo sources:
 -- NPC_SURGE_OF_POWER 30334 is defined at eye_of_eternity.h :60 but
 -- never referenced anywhere in the C++ tree; the ScriptName->entry

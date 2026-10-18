@@ -71,9 +71,10 @@
 -- - DoAction: SetImmuneToPC(true) + SetFaction(FACTION_MONSTER) +
 --   summons.DoAction(ACTION_START_EVENT, DummyEntryCheckPredicate) relay —
 --   no immunity/faction/summon-DoAction bridges.
--- - DamageTaken: RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME 68589) +
---   SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29|UNIT_FLAG_NOT_SELECTABLE)
---   — no aura-remove/flag bridges (kalecgos uses HasAura only).
+-- - DamageTaken SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29 |
+--   UNIT_FLAG_NOT_SELECTABLE) leg — no flag bridge (stands); the
+--   RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME 68589) leg is PORTED via
+--   creature:RemoveAura (stale "no aura-remove bridge" claim retracted).
 -- - SummonedCreatureDies: no event-21 fire site in the engine, so
 --   _deadCount never increments in the port — the lethal clamp persists
 --   and the DoCastSelf(SPELL_QUIET_SUICIDE 3617) arm that ends the
@@ -292,8 +293,14 @@ local function onDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() and st.deadCount < 2 then
         if not st.isDead then
             st.isDead = true
-            creature:Talk(SAY_HUMMEL_DEATH)
+            -- C++-exact arm order: RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME)
+            -- via creature:RemoveAura (the "no aura-remove bridge" claim was
+            -- stale — lua_objects.go), then triggered self-cast
+            -- SPELL_PERMANENT_FEIGN_DEATH; the SetFlag(UNIT_FIELD_FLAGS, ...)
+            -- leg has no flag bridge (stands); Talk(SAY_HUMMEL_DEATH) last.
+            creature:RemoveAura(SPELL_ALLURING_PERFUME)
             creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH, true)
+            creature:Talk(SAY_HUMMEL_DEATH)
         end
         return false, creature:GetHealth() - 1
     end

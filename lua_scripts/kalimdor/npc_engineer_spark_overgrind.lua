@@ -15,6 +15,11 @@
 --   combat, re-armed on leave combat. C++ resumes a partially
 --   elapsed timer after combat; the Lua port re-arms full delay.
 -- - DoMeleeAttackIfReady — engine-driven in Go (ouro precedent).
+-- - Reset's UNIT_NPC_FLAGS restore (zone_azuremyst_isle.cpp:224):
+--   constructor-captured value cached per GUID, restored via
+--   creature:SetNPCFlags() (engine/world/lua_objects.go:657) — C++
+--   arm order after Initialize(); the old "no Lua bridge" claim was
+--   stale for NPC flags (only SetFaction stays unbridged).
 -- Documented-only (no bridges):
 -- - IsTreeEvent gate (GetAreaId() == 3579 cove / 3639 isle returns
 --   before combat entirely): GetAreaId has no Lua bridge (talbot
@@ -24,8 +29,8 @@
 -- - OnGossipSelect (CloseGossipMenuFor + SetFaction(FACTION_MONSTER)
 --   + Attack): gossip bridge absent (ashenvale go_naga_brazier
 --   precedent); SetFaction has zero Lua usage (ouro).
--- - Reset's NormFaction / NpcFlags restore: SetFaction and
---   SetUInt32Value(UNIT_NPC_FLAGS) have no Lua bridge.
+-- - Reset's NormFaction restore: SetFaction has no Lua bridge
+--   (zero Lua usage — ouro precedent).
 -- - The rest of zone_azuremyst_isle.cpp, documented-only:
 --   npc_draenei_survivor (MoveInLineOfSight help-call +
 --   SpellHit heal leg + timed thanks/run-away) — entry ID not
@@ -56,6 +61,10 @@ local EMOTE_MIN_MS = 120000
 local EMOTE_MAX_MS = 150000
 
 local timers = {}
+
+-- guid -> AI-constructor-captured UNIT_NPC_FLAGS
+-- (zone_azuremyst_isle.cpp:205: NpcFlags = creature->GetUInt32Value(UNIT_NPC_FLAGS))
+local npcFlags = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -119,6 +128,17 @@ end
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- zone_azuremyst_isle.cpp:224 — Reset restores the constructor-captured
+    -- UNIT_NPC_FLAGS via SetUInt32Value; the SetFaction(NormFaction) leg
+    -- (:223) has no Lua bridge. creature:SetNPCFlags() is bridged
+    -- (engine/world/lua_objects.go:657); Go fires event 23 only on
+    -- respawn/evade (lua_creature_events.go:539-549), so the capture
+    -- lands at first reset — equal to the C++ constructor capture,
+    -- since nothing mutates this creature's NPC flags before then.
+    if npcFlags[guid] == nil then
+        npcFlags[guid] = creature:GetNPCFlags()
+    end
+    creature:SetNPCFlags(npcFlags[guid])
     -- C++ UpdateAI never runs while dead (zone_azuremyst_isle.cpp:238-261);
     -- a death-reset (23 fires before 4 on the kill path) must not re-arm
     -- the emote timer, or the corpse Talks every 120-150s until respawn.

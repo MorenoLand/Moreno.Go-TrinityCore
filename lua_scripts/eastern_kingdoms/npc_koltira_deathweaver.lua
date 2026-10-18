@@ -36,21 +36,31 @@
 --   C++ returning false from OnGossipHello.
 -- - OnReset (23): cancel timers + clear the event-gossip state
 --   (the C++ Reset's _events.Reset() / _eventGossip=false residue;
---   flag/stand-state/aura/summon arms unbridged, below).
+--   SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) (chapter2.cpp:142)
+--   PORTED via creature:SetNPCFlags(), C++ arm order before
+--   RemoveAllAuras; UNIT_FLAG_IMMUNE_TO_NPC / stand-state / summon
+--   arms unbridged, below).
+-- - EVENT_INTRO_0's RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP)
+--   (chapter2.cpp:166) PORTED via creature:SetNPCFlags(), C++ arm
+--   order before Talk(SAY_KOLTIRA_0). The old "no flag bridges"
+--   claims were stale — GetNPCFlags/SetNPCFlags are bridged
+--   (engine/world/lua_objects.go:657); only UNIT_FLAG_* set/remove
+--   stays unbridged.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - OnGossipHello's PrepareQuestMenu leg (no quest-menu bridge —
 --   kalecgos precedent; IsQuestGiver() is creature_template data).
--- - Reset's SetFlag(UNIT_FLAG_IMMUNE_TO_NPC) /
---   SetFlag(UNIT_NPC_FLAG_GOSSIP) (no flag bridges — unworthy_
---   initiate precedent), SetByteValue stand-state legs (no
+-- - Reset's SetFlag(UNIT_FLAG_IMMUNE_TO_NPC) (no unit-flag bridge —
+--   unworthy_initiate precedent), SetByteValue stand-state legs (no
 --   stand-state bridge), _summons.DespawnAll (no summon/
 --   despawn bridge — dark-rider precedent). The Reset
---   RemoveAllAuras arm (chapter2.cpp:144) is PORTED via
---   creature:RemoveAllAuras() — the old "no aura-removal bridge
---   (eye_of_acherus precedent)" header claim was stale.
--- - EVENT_INTRO_0's SetByteValue(SIT) + RemoveFlag(GOSSIP) arms
---   and EVENT_INTRO_1's SetByteValue(STAND) arm (stand-state /
---   flag bridges, as above) — only the Talk legs are ported.
+--   SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) arm (chapter2.cpp:142)
+--   and RemoveAllAuras arm (chapter2.cpp:144) are PORTED (see above) —
+--   the old "no flag bridges" and "no aura-removal bridge
+--   (eye_of_acherus precedent)" header claims were stale.
+-- - EVENT_INTRO_0's SetByteValue(SIT) arm and EVENT_INTRO_1's
+--   SetByteValue(STAND) arm (no stand-state bridge) — only the Talk
+--   legs plus EVENT_INTRO_0's RemoveFlag(GOSSIP) arm (ported, above)
+--   are modeled.
 -- - EVENT_INTRO_2's MoveJump + EVENT_INTRO_3's MovePoint (no
 --   MotionMaster bridge — selin_fireheart precedent); the intro
 --   chain stalls here in the port — the timers are NOT ported
@@ -88,6 +98,9 @@ local QUEST_BLOODY_BREAKOUT = 12727
 local SAY_KOLTIRA_0 = 0
 local SAY_KOLTIRA_1 = 1
 local TEXT_ID_EVENT = 13425
+-- UNIT_NPC_FLAG_GOSSIP = 0x00000001 (UnitDefines.h:186 — zulaman /
+-- vaelastrasz precedent)
+local UNIT_NPC_FLAG_GOSSIP = 0x00000001
 
 local timers = {}
 local eventGossip = {}
@@ -120,6 +133,11 @@ local function onIntro1(creature)
 end
 
 local function onIntro0(creature, guid)
+    -- chapter2.cpp:166 — EVENT_INTRO_0 arm order: RemoveFlag(UNIT_NPC_FLAGS,
+    -- UNIT_NPC_FLAG_GOSSIP) before Talk(SAY_KOLTIRA_0) (the SetByteValue SIT
+    -- leg has no stand-state bridge); via creature:SetNPCFlags()
+    -- (engine/world/lua_objects.go:657)
+    creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
     creature:Talk(SAY_KOLTIRA_0)
     schedule(guid, "intro1", 5000, function() onIntro1(creature) end)
 end
@@ -140,6 +158,11 @@ local function onGossipHello(event, player, creature)
 end
 
 local function onReset(_, creature)
+    -- chapter2.cpp:142 — Reset arm order: SetFlag(UNIT_NPC_FLAGS,
+    -- UNIT_NPC_FLAG_GOSSIP) after the unbridged UNIT_FLAG_IMMUNE_TO_NPC leg,
+    -- before RemoveAllAuras; the old "no flag bridges" header claim was
+    -- stale — creature:SetNPCFlags() is bridged (engine/world/lua_objects.go:657)
+    creature:SetNPCFlags(bit32.bor(creature:GetNPCFlags(), UNIT_NPC_FLAG_GOSSIP))
     creature:RemoveAllAuras() -- chapter2.cpp:144, C++ arm order (before
                                -- _events.Reset()); the "no aura-removal
                                -- bridge" header claim was stale —

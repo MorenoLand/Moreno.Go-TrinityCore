@@ -39,17 +39,18 @@
 -- then Talk(SAY_SLAY 1) — PORTED (event 3; the razuvious
 -- player-gated variant precedent: victim nil-guard,
 -- victim:GetObjectType() == "Player").
--- JustDied — Talk(SAY_DEATH 2) (event 4; the _canLoot /
--- SetLootRecipient leg, the entry-switched power-aura-removal legs
--- (SPELL_POWER_OF_TENEBRON 61248 / SPELL_POWER_OF_SHADRON 58105 /
--- SPELL_POWER_OF_VESPERON 61251 via RemoveAurasDueToSpell +
--- DoRemoveAurasDueToSpellOnPlayers), the acolyte KillSelf legs
--- (FindNearestCreature NPC_ACOLYTE_OF_SHADRON 31218 /
+-- JustDied — Talk(SAY_DEATH 2) + the entry-switched SELF
+-- RemoveAurasDueToSpell leg (SPELL_POWER_OF_TENEBRON 61248 /
+-- SPELL_POWER_OF_SHADRON 58105 / SPELL_POWER_OF_VESPERON 61251 via
+-- creature:RemoveAura — stale "only the Talk arm is bridgeable" claim
+-- retracted) PORTED (event 4; the _canLoot / SetLootRecipient leg, the
+-- DoRemoveAurasDueToSpellOnPlayers player-loop leg, the acolyte
+-- KillSelf legs (FindNearestCreature NPC_ACOLYTE_OF_SHADRON 31218 /
 -- NPC_ACOLYTE_OF_VESPERON 31219, 100.0f), the SetBossState
 -- (DATA_TENEBRON / DATA_SHADRON / DATA_VESPERON, DONE) legs, and
 -- the Twilight Revenge on Sartharion (SPELL_TWILIGHT_REVENGE 60639
--- DoCast via instance GUID fetch) all have no bridges — no
--- aura / instance / cast / creature-search bridges).
+-- DoCast via instance GUID fetch) have no loot / player-loop / kill /
+-- instance / cast bridges — documented-only).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entries
 -- 30452 / 30451 / 30449 — no bridgeable arms):
 -- dummy_dragonAI Reset (flag clear + events.Reset + Initialize —
@@ -82,10 +83,11 @@
 -- instance bridges), so the timer arm stays out (the stale
 -- "no timer bridge" claim is re-keyed: payload-unbridged, not
 -- timer-unbridged).
--- npc_shadron — Reset (base + aura strips
+-- npc_shadron — Reset (base + the self HasAura-gated aura strips
 -- SPELL_TWILIGHT_TORMENT_VESP 57948 / SPELL_GIFT_OF_TWILIGTH_SHA
--- 57835 + SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) — no aura /
--- instance bridges); JustEngagedWith (base + ScheduleEvent
+-- 57835 PORTED — stale "no aura bridge" claim retracted;
+-- SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) has no instance bridge —
+-- documented); JustEngagedWith (base + ScheduleEvent
 -- EVENT_ACOLYTE_SHADRON 1min); UpdateAI EVENT_ACOLYTE_SHADRON
 -- (obsidian_sanctum.cpp:519-531: instance-gated OpenPortal +
 -- SetBossState(DATA_PORTAL_OPEN, IN_PROGRESS)) — all payload legs
@@ -153,6 +155,10 @@ local SAY_BREATH = 3
 
 local SPELL_SHADOW_BREATH = 57570
 local SPELL_TWILIGHT_TORMENT_VESP = 57948
+local SPELL_GIFT_OF_TWILIGTH_SHA = 57835
+local SPELL_POWER_OF_TENEBRON = 61248
+local SPELL_POWER_OF_SHADRON = 58105
+local SPELL_POWER_OF_VESPERON = 61251
 local SPELL_FADE_ARMOR = 60708
 
 local ENTRY_TWILIGHT_WHELP = 30890
@@ -241,13 +247,27 @@ local function dragonTargetDied(event, creature, victim)
     end
 end
 
--- C++ dummy_dragonAI::JustDied: _canLoot leg + entry-switched
--- power-aura removals + acolyte KillSelf + instance SetBossState
--- + Talk(SAY_DEATH) + Twilight Revenge on Sartharion — only the
--- Talk arm is bridgeable.
+local powerAuraByEntry = {
+    [ENTRY_TENEBRON] = SPELL_POWER_OF_TENEBRON,
+    [ENTRY_SHADRON] = SPELL_POWER_OF_SHADRON,
+    [ENTRY_VESPERON] = SPELL_POWER_OF_VESPERON,
+}
+
+-- C++ dummy_dragonAI::JustDied: the _canLoot/SetLootRecipient,
+-- entry-switched SetBossState(DATA_TENEBRON/SHADRON/VESPERON, DONE),
+-- and acolyte KillSelf legs have no loot/instance/kill bridges
+-- (documented); Talk(SAY_DEATH) + the entry-switched SELF
+-- RemoveAurasDueToSpell(spellId) leg are PORTED — creature:RemoveAura
+-- is bridged (stale "only the Talk arm is bridgeable" claim retracted).
+-- DoRemoveAurasDueToSpellOnPlayers + Twilight Revenge on Sartharion
+-- ride instance/player-list legs with no bridges (documented).
 local function dragonDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    local spellId = powerAuraByEntry[creature:GetEntry()]
+    if spellId then
+        creature:RemoveAura(spellId)
+    end
 end
 
 local function dragonReset(event, creature)
@@ -261,6 +281,22 @@ for _, entry in ipairs({ ENTRY_TENEBRON, ENTRY_SHADRON, ENTRY_VESPERON }) do
     RegisterCreatureEvent(entry, 4, dragonDied)
     RegisterCreatureEvent(entry, 23, dragonReset)
 end
+
+-- C++ npc_shadron::Reset: the self HasAura-gated strips of
+-- SPELL_TWILIGHT_TORMENT_VESP / SPELL_GIFT_OF_TWILIGTH_SHA are PORTED
+-- (stale "no aura bridge" claim retracted — HasAura/RemoveAura are
+-- bridged); the SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) leg has no
+-- instance bridge (documented). Registered after dragonReset so the
+-- timer cancel lands first, mirroring the C++ base-then-override order.
+local function shadronReset(event, creature)
+    if creature:HasAura(SPELL_TWILIGHT_TORMENT_VESP) then
+        creature:RemoveAura(SPELL_TWILIGHT_TORMENT_VESP)
+    end
+    if creature:HasAura(SPELL_GIFT_OF_TWILIGTH_SHA) then
+        creature:RemoveAura(SPELL_GIFT_OF_TWILIGTH_SHA)
+    end
+end
+RegisterCreatureEvent(ENTRY_SHADRON, 23, shadronReset)
 
 -- C++ npc_twilight_whelp::Reset (obsidian_sanctum.cpp:983-988):
 -- RemoveAllAuras + DoZoneInCombat legs have no bridges (documented
