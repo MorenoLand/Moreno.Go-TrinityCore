@@ -438,12 +438,6 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
 	}
-	// Unit::Attack (Unit.cpp:5650-5760) engages the victim; on a critter
-	// that engagement fires CritterAI::JustEngagedWith -> flee
-	// (PassiveAI.cpp:76-79), bridged in triggerCritterFlee.
-	if s.server != nil && s.player != nil {
-		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
-	}
 	s.notifyPetsOwnerAttacked(ctx, victim)
 	return true
 }
@@ -731,6 +725,17 @@ func glancingReducedDamage(damage uint32, attackerLevel, victimLevel uint8) uint
 func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType) {
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
+	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2141): AtTargetAttacked(victim,
+	// true) fires at the top of every swing — ahead of the next-swing-spell
+	// slot, the redirect, and the outcome roll — so the victim engages even
+	// on a miss. On a critter that engagement fires
+	// CritterAI::JustEngagedWith -> flee (PassiveAI.cpp:76-79), bridged in
+	// triggerCritterFlee. (The old T-press site was wrong: C++ Unit::Attack
+	// (5650-5760) never engages the victim for player attackers — the
+	// critter used to bolt before the first swing could land.)
+	if s.server != nil && s.player != nil {
+		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
 	}
 	// Unit::AttackerStateUpdate (Unit.cpp:2151-2152): "melee attack spell cast
 	// at main hand attack only - no normal melee dmg dealt" — a queued
@@ -1363,7 +1368,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		if motion != nil {
 			// Unit::DealDamage tap block (Unit.cpp:872-876): the killing
 			// blow taps and lowers the damage requirement when untapped.
-			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health)
+			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health, true)
 			s.server.clearInstanceEncounter(motion)
 			motion.Health = 0
 			motion.DynamicFlags |= unitDynFlagLootable
@@ -1426,7 +1431,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// Unit::DealDamage tap block (Unit.cpp:872-876): first
 			// player-attributed hit claims the loot rights, every hit
 			// lowers the damage requirement.
-			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health) {
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health, true) {
 				newlyTapped = true
 				tappedFlags = motion.DynamicFlags
 			}
@@ -1624,6 +1629,14 @@ func (s *session) takeAmmo(ctx context.Context, spell wotlk.Spell) (consumed, ou
 func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, spellID uint32) {
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
+	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2141): AtTargetAttacked(victim,
+	// true) fires ahead of the ranged early-out (Unit.cpp:2144) too — a
+	// shot engages the victim just like a melee swing. On a critter that
+	// engagement fires CritterAI::JustEngagedWith -> flee
+	// (PassiveAI.cpp:76-79), bridged in triggerCritterFlee.
+	if s.server != nil && s.player != nil {
+		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
 	}
 	now := time.Now()
 	s.lastRangedSwing = now
@@ -2132,7 +2145,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			s.server.clearInstanceEncounter(motion)
 			// Unit::DealDamage tap block (Unit.cpp:872-876): the killing
 			// blow taps and lowers the damage requirement when untapped.
-			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health)
+			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health, true)
 			motion.Health = 0
 			motion.DynamicFlags |= unitDynFlagLootable
 			// The corpse keeps TAPPED when the tap survived to death
@@ -2198,7 +2211,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			// pre-hit health, as in C++.
 			newHealth = motion.Health - damage
 			// Unit::DealDamage tap block (Unit.cpp:872-876).
-			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health) {
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health, true) {
 				newlyTapped = true
 				tappedFlags = motion.DynamicFlags
 			}
@@ -2575,7 +2588,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight int64
 	var creatureType int64
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
-	var healthMod, manaMod, armorMod, damageMod float64
+	var healthMod, manaMod, armorMod, damageMod, baseVariance float64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
 		COALESCE(maxlevel, 1), 
@@ -2593,9 +2606,10 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ctm.Flight, 0),
 		COALESCE(ct.type, 0),
 		COALESCE(ct.MechanicImmuneMask, 0),
-		COALESCE(ct.SpellSchoolImmuneMask, 0)
+		COALESCE(ct.SpellSchoolImmuneMask, 0),
+		COALESCE(ct.BaseVariance, 1.0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2648,12 +2662,12 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.MaxDamage = float32(maxlevel) * 1.25 * attSpeed
 
 	// Query creature_classlevelstats
-	var basehp0, basehp1, basehp2, basearmor, basemana int64
+	var basehp0, basehp1, basehp2, basearmor, basemana, attackPower int64
 	var dmgBase, dmgExp1, dmgExp2 float64
-	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
-		basehp0, basehp1, basehp2, basearmor, basemana, damage_base, damage_exp1, damage_exp2 
+	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT
+		basehp0, basehp1, basehp2, basearmor, basemana, damage_base, damage_exp1, damage_exp2, attackpower
 		FROM creature_classlevelstats WHERE level = ? AND class = ?`, maxlevel, unitClass).
-		Scan(&basehp0, &basehp1, &basehp2, &basearmor, &basemana, &dmgBase, &dmgExp1, &dmgExp2)
+		Scan(&basehp0, &basehp1, &basehp2, &basearmor, &basemana, &dmgBase, &dmgExp1, &dmgExp2, &attackPower)
 	if err == nil {
 		if basemana > 0 && manaMod > 0 {
 			stats.Mana = uint32(math.Ceil(float64(basemana) * manaMod))
@@ -2682,10 +2696,31 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 			stats.Armor = uint32(math.Ceil(float64(basearmor) * armorMod))
 		}
 		if selectedDmg > 0 {
-			dmg := float32(selectedDmg * damageMod)
-			if dmg > 0 {
-				stats.MinDamage = dmg
-				stats.MaxDamage = dmg * 1.5
+			// Creature::CalculateMinMaxDamage (StatSystem.cpp:1161-1173):
+			// baseValue = GetFlatModifierValue(UNIT_MOD_DAMAGE_MAINHAND,
+			// BASE_VALUE) + (GetTotalAttackPowerValue(BASE_ATTACK) / 14) *
+			// BaseVariance * GetAPMultiplier(BASE_ATTACK, false). At load
+			// the flat BASE_VALUE is 0 (Creature::UpdateLevelDependantStats,
+			// Creature.cpp:1535-1548, writes the weapon fields directly and
+			// parks the classlevelstats AttackPower on UNIT_MOD_ATTACK_POWER
+			// instead); the AP multiplier for creatures is GetAttackTime /
+			// 1000 with no 0.25 floor (the floor is Player-only,
+			// StatSystem.cpp:549). dmgMultiplier = ModDamage (the rank fold
+			// at ObjectMgr.cpp:1200 is 1.0 under default rates); basePct /
+			// totalValue / totalPct are 1 / 0 / 1 without auras — the live
+			// aura arms ride the swing path, and a live AP-aura change would
+			// re-run UpdateDamagePhysical in C++ (unbridged here; the
+			// load-time value is baked).
+			ap := float64(attackPower)
+			if ap < 0 {
+				ap = 0
+			}
+			apBonus := ap / 14.0 * baseVariance * (float64(baseAttackTime) / 1000.0)
+			minDmg := (selectedDmg + apBonus) * damageMod
+			maxDmg := (selectedDmg*1.5 + apBonus) * damageMod
+			if minDmg > 0 {
+				stats.MinDamage = float32(minDmg)
+				stats.MaxDamage = float32(maxDmg)
 			}
 		}
 	}

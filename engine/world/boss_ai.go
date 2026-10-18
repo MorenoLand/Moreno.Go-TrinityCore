@@ -2352,7 +2352,7 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// creature itself as loot recipient, which has no Go player-tap model
 	// — and the requirement stands, so no reward follows.
 	if tapPlayer != 0 {
-		s.recordCreatureTap(tm, tapPlayer, tapGroup, damage, tm.Health)
+		s.recordCreatureTap(tm, tapPlayer, tapGroup, damage, tm.Health, true)
 	}
 	killedTarget := combatTarget{
 		GUID:       tm.GUID,

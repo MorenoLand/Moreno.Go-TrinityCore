@@ -59,14 +59,19 @@ const creatureFlagExtraNoPlayerDamageReq uint32 = 0x00200000
 // recordCreatureTap mirrors the tap block of Unit::DealDamage
 // (Unit.cpp:872-876): the first player-attributed damage sets the loot
 // recipient (Creature::SetLootRecipient, Creature.cpp:1328-1355 — the
-// charmer/owner-resolved player GUID plus group, UNIT_DYNFLAG_TAPPED)
-// and every such hit lowers m_PlayerDamageReq
-// (Creature::LowerPlayerDamageReq, Creature.cpp:1577-1582, capped at the
-// pre-hit health). Call with motionMu held. Returns true when the tap is
-// newly set — the caller broadcasts the dynamic-flags update after
-// unlocking. A zero playerGUID (no session) lowers the requirement but
-// sets no recipient, matching C++'s !attacker LowerPlayerDamageReq arm.
-func (s *Server) recordCreatureTap(motion *creatureMotion, playerGUID, groupID uint64, damage, healthBefore uint32) bool {
+// charmer/owner-resolved player GUID plus group, UNIT_DYNFLAG_TAPPED;
+// a non-player, non-vehicle attacker taps nothing, Creature.cpp:1342-1347)
+// and lowers m_PlayerDamageReq (Creature::LowerPlayerDamageReq,
+// Creature.cpp:1577-1582, capped at the pre-hit health) — but only when the
+// attacker counts: the !attacker / IsControlledByPlayer / player-temp-summon
+// gate (Unit.cpp:873-876). countsForDamageReq carries that gate: true for
+// player, pet, and player-controlled/charm attackers; false for
+// wild-creature damage (shield retaliation, shared damage), which in C++
+// leaves the requirement standing. Call with motionMu held. Returns true
+// when the tap is newly set — the caller broadcasts the dynamic-flags
+// update after unlocking. A zero tap playerGUID (the C++ !attacker leg)
+// lowers the requirement but sets no recipient.
+func (s *Server) recordCreatureTap(motion *creatureMotion, playerGUID, groupID uint64, damage, healthBefore uint32, countsForDamageReq bool) bool {
 	if motion == nil {
 		return false
 	}
@@ -77,16 +82,54 @@ func (s *Server) recordCreatureTap(motion *creatureMotion, playerGUID, groupID u
 		motion.DynamicFlags |= unitDynFlagTapped
 		newlyTapped = true
 	}
-	dealt := damage
-	if healthBefore < damage {
-		dealt = healthBefore
-	}
-	if motion.PlayerDamageReq > dealt {
-		motion.PlayerDamageReq -= dealt
-	} else {
-		motion.PlayerDamageReq = 0
+	if countsForDamageReq {
+		dealt := damage
+		if healthBefore < damage {
+			dealt = healthBefore
+		}
+		if motion.PlayerDamageReq > dealt {
+			motion.PlayerDamageReq -= dealt
+		} else {
+			motion.PlayerDamageReq = 0
+		}
 	}
 	return newlyTapped
+}
+
+// tapAttackerAttribution resolves the C++ tap attribution for recursive
+// damage paths (damage-shield retaliation, shared damage) whose attacker is
+// not the direct session: Creature::SetLootRecipient (Creature.cpp:1342-1347)
+// taps nothing for a non-player, non-vehicle attacker — the recipient is the
+// attacker's charmer/owner player or the player itself — and the
+// LowerPlayerDamageReq arm (Unit.cpp:872-876) counts only a null attacker,
+// a player-controlled attacker (Unit.cpp:6056 minions; 6219/6259/6265 player
+// charms — Player.cpp:389 sets m_ControlledByPlayer for players), or a temp
+// summon with a player summoner. A creature-charmed attacker
+// (Unit.cpp:6224/6271) is not player-controlled: the owner lookup below
+// yields nothing and the hit neither taps nor lowers the requirement.
+// Returns the tap player (0 = no tap), its group, and whether the hit
+// lowers the damage requirement. Callers hold motionMu; the owner session
+// lookup follows the in-tree findSessionByGUID-under-motionMu precedent
+// (rage.go).
+func (s *Server) tapAttackerAttribution(attackerGUID uint64, attackerSess *session, attackerMotion *creatureMotion) (tapPlayer, tapGroup uint64, counts bool) {
+	if attackerGUID == 0 {
+		// Unit.cpp:874 !attacker leg: no recipient, but the requirement lowers.
+		return 0, 0, true
+	}
+	if attackerSess != nil && attackerSess.player != nil {
+		return attackerSess.playerGUID, attackerSess.groupID, true
+	}
+	if attackerMotion == nil {
+		return 0, 0, false
+	}
+	// Player-controlled attacker (pet, player charm) or temp summon: the tap
+	// player is the controlling/summoning player via the motion's OwnerGUID.
+	if attackerMotion.UnitFlags&unitFlagPlayerControlled != 0 || attackerMotion.TempSummonLifetime > 0 {
+		if owner := s.findSessionByGUID(attackerMotion.OwnerGUID); owner != nil && owner.player != nil {
+			return owner.playerGUID, owner.groupID, true
+		}
+	}
+	return 0, 0, false
 }
 
 // creatureRespawn records when a killed spawn restores its health.
@@ -1288,13 +1331,26 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
 	}
-	var seconds int64
-	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(spawntimesecs, 0), 300) FROM creature WHERE guid = ?", guid).Scan(&seconds); err != nil || seconds <= 0 {
-		seconds = 300
+	var rawSeconds int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(spawntimesecs, 0) FROM creature WHERE guid = ?", guid).Scan(&rawSeconds); err != nil || rawSeconds < 0 {
+		rawSeconds = 0
 	}
 	var entry, mapID int64
 	var x, y, z float64
 	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&entry, &mapID, &x, &y, &z)
+	if rawSeconds == 0 && s.autoBalanceIsDungeonBoss(ctx, uint32(entry)) {
+		// Creature::setDeathState JUST_DIED (Creature.cpp:2085-2093): a
+		// dungeon boss (Creature::IsDungeonBoss, Creature.h:112 — the
+		// instance_encounters kill-credit set behind
+		// CREATURE_FLAG_EXTRA_DUNGEON_BOSS) with no respawn delay never
+		// respawns; the old NULLIF(...,0)->300 default resurrected it
+		// after 5 minutes.
+		return
+	}
+	seconds := rawSeconds
+	if seconds <= 0 {
+		seconds = 300
+	}
 	// Eluna CREATURE_EVENT_ON_CORPSE_REMOVED (26): C++ fires it from
 	// Creature::RemoveCorpse (Creature.cpp:393/429) and applies the rewrite as
 	// m_respawnTime = max(now + respawnDelay, m_respawnTime) — the hook can
@@ -1321,9 +1377,9 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	}
 	guid := uint32(target.GUID & 0x00FFFFFF)
 	entry := uint32(target.GUID>>24) & 0x00FFFFFF
-	var seconds int64
-	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(spawntimesecs, 0), 300) FROM creature WHERE guid = ?", guid).Scan(&seconds); err != nil || seconds <= 0 {
-		seconds = 300
+	var rawSeconds int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(spawntimesecs, 0) FROM creature WHERE guid = ?", guid).Scan(&rawSeconds); err != nil || rawSeconds < 0 {
+		rawSeconds = 0
 	}
 	var spawnEntry int64
 	var mapID int64
@@ -1331,6 +1387,17 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&spawnEntry, &mapID, &x, &y, &z)
 	if spawnEntry <= 0 {
 		spawnEntry = int64(entry)
+	}
+	if rawSeconds == 0 && s.autoBalanceIsDungeonBoss(ctx, uint32(spawnEntry)) {
+		// Creature::setDeathState JUST_DIED (Creature.cpp:2085-2093): a
+		// dungeon boss (Creature::IsDungeonBoss, Creature.h:112) with no
+		// respawn delay never respawns in the instance; the old
+		// NULLIF(...,0)->300 default resurrected it after 5 minutes.
+		return
+	}
+	seconds := rawSeconds
+	if seconds <= 0 {
+		seconds = 300
 	}
 	// Eluna CREATURE_EVENT_ON_CORPSE_REMOVED (26), instance path: same
 	// extend-only rewrite semantics as the world path above

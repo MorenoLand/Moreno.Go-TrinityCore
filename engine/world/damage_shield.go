@@ -417,10 +417,6 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 	if attackerSess != nil {
 		attackerSess.splitShareDamagePct(ctx, key.GUID, false, key, attackerGUID, damage, schoolMask)
 	}
-	var groupID uint64
-	if attackerSess != nil {
-		groupID = attackerSess.groupID
-	}
 	s.motionMu.Lock()
 	m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 	if m == nil || m.Health == 0 {
@@ -441,7 +437,13 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 	}
 	fireDealDamageAIHooks(ctx, s, m, attackerMotion, attackerGUID, m.GUID, &damage)
 	// Unit::DealDamage tap block (Unit.cpp:872-876): not damagetype-gated.
-	s.recordCreatureTap(m, attackerGUID, groupID, damage, m.Health)
+	// The tap attribution resolves the C++ SetLootRecipient /
+	// LowerPlayerDamageReq gates (Creature.cpp:1342-1347, Unit.cpp:873-876):
+	// a wild-creature attacker taps nothing and leaves the damage
+	// requirement standing; a pet/player-controlled attacker taps for its
+	// controlling player.
+	tapPlayer, tapGroup, counts := s.tapAttackerAttribution(attackerGUID, attackerSess, attackerMotion)
+	s.recordCreatureTap(m, tapPlayer, tapGroup, damage, m.Health, counts)
 	wasInCombat := m.InCombat
 	if damage >= m.Health {
 		m.Health = 0

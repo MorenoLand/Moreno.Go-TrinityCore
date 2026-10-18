@@ -174,6 +174,18 @@ func (s *Server) memberEngagingTarget(ctx context.Context, motion *creatureMotio
 	}
 	s.motionMu.Unlock()
 	for _, member := range engaged {
+		// CreatureAI::UpdateVictim (CreatureAI.cpp:251-257): only a
+		// non-passive member's AI calls AttackStart -> Unit::Attack, the
+		// sole sender of SMSG_ATTACK_START (Unit.cpp:5694/5748) and the
+		// AI_REACTION_HOSTILE reaction (Unit.cpp:5734-5737).
+		// CreatureGroup::MemberEngagingTarget (CreatureGroups.cpp:226-255)
+		// engages via Unit::EngageWithTarget (Unit.cpp:8429-8438), which
+		// sends neither — a passive member engages silently (combat state +
+		// threat, cleared by the step tick's passive arm) and must not
+		// broadcast attack packets.
+		if isCreaturePassive(member) {
+			continue
+		}
 		s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, member.GUID, 2)
 		startPkt := buildAttackStart(member.GUID, targetGUID)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)

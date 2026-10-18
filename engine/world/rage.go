@@ -284,10 +284,6 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 	if s == nil || s.server == nil || share == 0 {
 		return
 	}
-	var groupID uint64
-	if as := s.server.findSessionByGUID(attackerGUID); as != nil {
-		groupID = as.groupID
-	}
 	s.server.motionMu.Lock()
 	motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 	if motion == nil || motion.Health == 0 {
@@ -295,7 +291,14 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 		return
 	}
 	// Unit::DealDamage tap block (Unit.cpp:872-876) is not damagetype-gated.
-	s.server.recordCreatureTap(motion, attackerGUID, groupID, share, motion.Health)
+	// The tap attribution resolves the C++ SetLootRecipient /
+	// LowerPlayerDamageReq gates (Creature.cpp:1342-1347, Unit.cpp:873-876):
+	// a wild-creature attacker taps nothing and leaves the damage
+	// requirement standing; a pet/player-controlled attacker taps for its
+	// controlling player.
+	attackerMotion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, attackerGUID)
+	tapPlayer, tapGroup, counts := s.server.tapAttackerAttribution(attackerGUID, s.server.findSessionByGUID(attackerGUID), attackerMotion)
+	s.server.recordCreatureTap(motion, tapPlayer, tapGroup, share, motion.Health, counts)
 	if motion.ThreatMgr == nil {
 		motion.ThreatMgr = NewThreatManager(motion)
 	}

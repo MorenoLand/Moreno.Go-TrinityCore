@@ -15258,7 +15258,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		if motion != nil {
 			// Unit::DealDamage tap block (Unit.cpp:872-876): the killing
 			// blow taps and lowers the damage requirement when untapped.
-			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health)
+			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health, true)
 			s.server.clearInstanceEncounter(motion)
 			motion.Health = 0
 			motion.DynamicFlags |= unitDynFlagLootable
@@ -15323,7 +15323,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// pre-hit health, as in C++.
 			newHealth = motion.Health - damage
 			// Unit::DealDamage tap block (Unit.cpp:872-876).
-			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health) {
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, motion.Health, true) {
 				newlyTapped = true
 				tappedFlags = motion.DynamicFlags
 			}
@@ -29667,7 +29667,7 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				// when untapped. The tick runs on the caster's session
 				// (the owner's when the caster is a pet), so s.playerGUID
 				// is already the charmer/owner-resolved player.
-				s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, motion.Health)
+				s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, motion.Health, true)
 				s.server.clearInstanceEncounter(motion)
 				motion.Health = 0
 				motion.DynamicFlags |= unitDynFlagLootable
@@ -29736,7 +29736,7 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		if motion != nil {
 			// Unit::DealDamage tap block (Unit.cpp:872-876); the tick
 			// runs on the caster/owner session (see the kill arm above).
-			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, motion.Health) {
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, motion.Health, true) {
 				newlyTapped = true
 				tappedFlags = motion.DynamicFlags
 			}

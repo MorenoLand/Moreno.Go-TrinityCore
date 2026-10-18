@@ -2542,6 +2542,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 		dist := float32(math.Hypot(float64(target.X-motion.X), float64(target.Y-motion.Y)))
+		// Unit::IsWithinMeleeRangeAt (Unit.cpp:599-612) — the
+		// DoMeleeAttackIfReady gate (CoreAI/UnitAI.cpp:61-68) — measures 3D
+		// distance (dz included). The 2D dist above keeps driving the XY
+		// shorten math and the spline duration below (the chase spline ends
+		// at the victim's Z, so its final 3D gap is the XY gap).
+		dist3D := float32(distance3D(motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z))
 		// Creature::Update no-path evade arm (Creature.cpp:924-930, CREATURE_NOPATH_EVADE_TIME
 		// = 5 * IN_MILLISECONDS, CreatureData.h:139) — document-only, no Go bridge.
 		// In C++ the ChaseMovementGenerator sets the m_cannotReachTarget flag when the
@@ -2856,7 +2862,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 
-		if dist > contactDist {
+		// In melee range (3D, Unit::IsWithinMeleeRangeAt): attack player.
+		// A 2D check here let mobs on a different height swing before true
+		// contact; C++ measures dz too.
+		if dist3D > contactDist {
 			// Pursue player: move towards target at run speed.
 			// TurretAI never pursues (CombatAI.cpp:253-258: AttackStart ->
 			// me->Attack(who, false), meleePossible=false); it stands and

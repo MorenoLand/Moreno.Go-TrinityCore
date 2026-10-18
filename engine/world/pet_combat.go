@@ -883,6 +883,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	var targetX, targetY, targetZ float32
 	var targetHealth, targetArmor uint32
 	var targetLevel uint8
+	var victimReach float32 = 1.5
 	targetFound := false
 	isTargetPlayer := false
 	var targetSess *session
@@ -896,6 +897,9 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		targetHealth = pSess.player.Health
 		targetArmor = pSess.player.Armor
 		targetLevel = pSess.player.Level
+		if pSess.player.CombatReach > 0 {
+			victimReach = pSess.player.CombatReach
+		}
 	} else {
 		// Check if target is creature
 		s.motionMu.Lock()
@@ -906,6 +910,9 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			targetHealth = cMotion.Health
 			targetArmor = cMotion.Armor
 			targetLevel = uint8(cMotion.Level)
+			if cMotion.CombatReach > 0 {
+				victimReach = cMotion.CombatReach
+			}
 		}
 		s.motionMu.Unlock()
 	}
@@ -984,8 +991,13 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		}
 	}
 
-	dist := float32(math.Hypot(float64(targetX-motion.X), float64(targetY-motion.Y)))
-	meleeRange := float32(3.5)
+	dist := float32(distance3D(motion.X, motion.Y, motion.Z, targetX, targetY, targetZ))
+	// UnitAI::DoMeleeAttackIfReady (UnitAI.cpp:61-83) swings only inside
+	// Unit::IsWithinMeleeRange (Unit.cpp:599-618): both combat reaches +
+	// 4/3, floored at NOMINAL_MELEE_RANGE (5.0), in 3D — the same contact
+	// test the wild-creature tick uses (calcMeleeRange). The old hardcoded
+	// 3.5-yard 2D band made pets chase closer than C++ before swinging.
+	meleeRange := float32(calcMeleeRange(motion.CombatReach, victimReach))
 
 	// PetAI::UpdateAI breakable-CC arm (PetAI.cpp:74-80): when the victim
 	// carries a breakable-by-damage crowd-control aura the pet must not
@@ -1519,7 +1531,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			if owner != nil && owner.player != nil {
 				tapPlayer, tapGroup = owner.playerGUID, owner.groupID
 			}
-			newlyTapped := s.recordCreatureTap(cMotion, tapPlayer, tapGroup, damage, cMotion.Health)
+			newlyTapped := s.recordCreatureTap(cMotion, tapPlayer, tapGroup, damage, cMotion.Health, true)
 			// Unit::DealDamage (Unit.cpp:905-906): the victim's threat
 			// manager adds threat for the attacker — the pet, not its
 			// owner. The add runs even on the killing blow (C++ order);
@@ -4800,7 +4812,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if caster != nil && caster.OwnerGUID != 0 {
 			tapPlayer = caster.OwnerGUID
 		}
-		newlyTapped = s.server.recordCreatureTap(targetMotion, tapPlayer, s.groupID, damage, targetMotion.Health)
+		newlyTapped = s.server.recordCreatureTap(targetMotion, tapPlayer, s.groupID, damage, targetMotion.Health, true)
 		if damage >= targetMotion.Health {
 			targetMotion.Health = 0
 			targetMotion.DynamicFlags |= unitDynFlagLootable
