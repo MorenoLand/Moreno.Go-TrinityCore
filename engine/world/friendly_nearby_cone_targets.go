@@ -501,10 +501,13 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	}
 	radius := float32(0)
 	checks := make(map[uint8]struct{})
-	// Spell.cpp:1194-1196: zero-radius fallback to the spell's max range.
+	// Spell.cpp:1194-1196: zero-radius fallback to the spell's max range
+	// (the caster overload of GetMaxRange folds SPELLMOD_RANGE,
+	// SpellInfo.cpp:3060-3072).
 	var maxRange float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
 		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
+		maxRange = float32(s.applySpellModFloat(spell, spellModRange, float64(maxRange)))
 	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
@@ -632,10 +635,13 @@ func (s *session) spellFriendlyRefCenteredAreaTargets(ctx context.Context, spell
 		return nil
 	}
 	radius := float32(0)
-	// Spell.cpp:1249-1251: zero-radius fallback to the spell's max range.
+	// Spell.cpp:1249-1251: zero-radius fallback to the spell's max range
+	// (the caster overload of GetMaxRange folds SPELLMOD_RANGE,
+	// SpellInfo.cpp:3060-3072).
 	var maxRange float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
 		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
+		maxRange = float32(s.applySpellModFloat(spell, spellModRange, float64(maxRange)))
 	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {

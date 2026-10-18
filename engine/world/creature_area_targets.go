@@ -34,11 +34,16 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	// Spell.cpp:1249-1251: when an effect has no radius entry (CalcRadius ==
 	// 0), the area radius falls back to the spell's max range (hostile/
 	// friendly per IsPositiveEffect — spellDBCMaxRange mirrors the same
-	// split per isHarmfulSpell).
+	// split per isHarmfulSpell; the caster overload folds SPELLMOD_RANGE
+	// via GetSpellModOwner (SpellInfo.cpp:3060-3072, Object.cpp:2246-2268)
+	// — the pet/totem owner's session, nil for wild casters).
 	var maxRange float32
 	if s.Data != nil {
 		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
 			maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
+			if owner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID); owner != nil {
+				maxRange = float32(owner.applySpellModFloat(spell, spellModRange, float64(maxRange)))
+			}
 		}
 	}
 	for _, eff := range spell.Effects {

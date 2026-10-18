@@ -110,10 +110,12 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 	checks := make(map[uint8]struct{})
 	// Spell.cpp:1249-1251: zero-radius fallback to the spell's max range
 	// (friendly/hostile per IsPositiveEffect — spellRangeBounds mirrors the
-	// same split per isHarmfulSpell).
+	// same split per isHarmfulSpell; the caster overload of GetMaxRange
+	// folds SPELLMOD_RANGE (SpellInfo.cpp:3060-3072)).
 	var maxRange float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
 		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
+		maxRange = float32(s.applySpellModFloat(spell, spellModRange, float64(maxRange)))
 	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {

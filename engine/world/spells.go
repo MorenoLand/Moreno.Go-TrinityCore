@@ -1066,10 +1066,12 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	// (CalcRadius == 0), the area radius falls back to the spell's max range
 	// (hostile/friendly per IsPositiveEffect — spellDBCMaxRange mirrors the
 	// same split per isHarmfulSpell; this is GetMaxRange, not GetMinMaxRange,
-	// so no reach/REQ_AMMO/spellmod terms apply).
+	// so no reach/REQ_AMMO terms — but the caster overload folds
+	// SPELLMOD_RANGE (SpellInfo.cpp:3060-3072)).
 	var maxRange float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
 		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
+		maxRange = float32(s.applySpellModFloat(spell, spellModRange, float64(maxRange)))
 	}
 	for _, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
@@ -4412,7 +4414,10 @@ func (s *session) checkChargeCast(ctx context.Context, spell wotlk.Spell, target
 	// unresolvable GUIDs skip, mirroring C++'s resolved-target gate.
 	if spellNeedsExplicitUnitTarget(spell) && s.server != nil {
 		if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
-			if !s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+			// Spell.cpp:5685 — "Do full LoS/Path check. Don't exclude m2":
+			// charge LOS runs the no-ignore form, unlike the normal
+			// spell-check path (hasLineOfSightSpellCheck skips M2).
+			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 				return spellFailedLineOfSight
 			}
 		}
@@ -15026,7 +15031,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	}
 
 	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor);
-	// suppressed for triggered casts (TRIGGERED_DISALLOW_PROC_EVENTS parity).
+	// the triggered-cast suppression is the gates' own job (every engine
+	// triggered cast carries the full triggered mask incl.
+	// TRIGGERED_DISALLOW_PROC_EVENTS), not a call-site skip.
 	// Spell::TargetInfo::DoDamageAndTriggers canEffectTrigger arm
 	// (Spell.cpp:2440-2442): a hit whose target sits inside its own proc
 	// evaluation cannot trigger further procs (Unit::CanProc, Unit.h:1609 —
@@ -15085,7 +15092,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// calls Unit::ProcSkillsAndAuras first, then CastItemCombatSpell.
 	// Instakill kills fire no spell-hit procs (no DoDamageAndTriggers), so
 	// the item-spell table is skipped too.
-	if !instantKill && s.triggeredNoProcEvents == 0 && !targetCantProc && s.spellHitMayFireItemProcs(spellID) &&
+	if !instantKill && !targetCantProc && s.spellHitMayFireItemProcs(spellID) &&
 		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
 		s.procSpellCastAndHitEffects(ctx, target, spellID)
 		s.procWeaponEnchantProcsFromSpellHit(ctx, target, !(damage >= target.Health && target.Health > 0))
@@ -18010,7 +18017,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 		// Item combat spells also fire on the no-damage arm for melee/ranged
 		// damage-class spells (Spell.cpp:2589-2596); heal spells are magic
 		// class and fail the gate, matching C++.
-		if s.triggeredNoProcEvents == 0 && s.spellHitMayFireItemProcs(spellID) {
+		if s.spellHitMayFireItemProcs(spellID) {
 			s.procSpellCastAndHitEffects(ctx, combatTarget{GUID: targetGUID}, spellID)
 			alive := targetSess != nil && targetSess.player != nil && targetSess.player.Health > 0
 			s.procWeaponEnchantProcsFromSpellHit(ctx, combatTarget{GUID: targetGUID}, alive)
