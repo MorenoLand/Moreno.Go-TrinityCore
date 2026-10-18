@@ -11541,7 +11541,7 @@ func init() {
 	// the JustDied _JustDied() instance leg and the cross-AI
 	// xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH) leg have no
 	// bridges; npc_baltharus_the_warborn_clone (39899) has zero Talk
-	// lines (NOT registered) — documented in the lua header. Third group
+	// lines — registered via RegisterCreatureEvent in the lua file (entry-based dispatch). Third group
 	// of the "// Ruby Sanctum" block.
 	RegisterLuaBoss("boss_baltharus_the_warborn", 39751)
 }

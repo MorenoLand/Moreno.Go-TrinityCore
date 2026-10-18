@@ -32,7 +32,7 @@
 -- decl/call lines); this clone carries no sql/ tree, so ScriptName
 -- bindings are DB-side by construction. Pre-existing lua coverage
 -- AUDITED this run — COMPLETE (see accounting below).
--- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_halion JustEngagedWith — Talk(SAY_AGGRO 2) + the three
 -- phase-ungated timer arms (event 1 — the auriaya precedent):
@@ -142,10 +142,18 @@
 -- constructor-arm is documented as a spawn->engage drift on the first
 -- tick only (twilight halion spawns in combat, so the delta is
 -- near-zero).
--- boss_twilight_halion DamageTaken — Talk(SAY_PHASE_THREE 2) rides the
--- 50% health transition (no-DamageTaken bridge); the
--- DoCastSelf SPELL_TWILIGHT_DIVISION / controller SetData legs ride
--- absent bridges.
+-- boss_twilight_halion DamageTaken — PORTED (event 9, pre-damage):
+-- the 50% transition (boss_halion.cpp:469-482) — the stale
+-- "(no-DamageTaken bridge)" claim is retracted (event 9 is bridged and
+-- already used by the material 75% latch in this file): latch-gated
+-- DoCastSelf(SPELL_TWILIGHT_DIVISION 75063) (non-triggered) +
+-- Talk(SAY_PHASE_THREE 2), C++ arm order (cast then Talk); the
+-- never-die cap above it in C++ is applied to the check only (C++
+-- evaluation order — the damage rewrite stays out, else the boss is
+-- unkillable without the cross-creature KillSelf legs); CastStop rides
+-- the absent CastStop bridge (benign); the PHASE_THREE
+-- controller->AI()->SetData(DATA_TWILIGHT_DAMAGE_TAKEN) routing leg
+-- rides the no-cross-AI bridge.
 -- boss_twilight_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING 75509 — stays out on the same unported-
 -- controller trigger (boss_halion.cpp:732-735); the SPELL_TWILIGHT_
@@ -199,6 +207,7 @@ local ENTRY_TWILIGHT_HALION = 40142
 local SAY_INTRO    = 1 -- (documented-only, rides the controller's cross-AI intro)
 local SAY_AGGRO    = 2
 local SAY_PHASE_TWO = 4
+local SAY_PHASE_THREE = 2
 local SAY_DEATH    = 5
 local SAY_KILL     = 6 -- twilight halion only
 
@@ -210,6 +219,7 @@ local SPELL_LEAVE_TWILIGHT_REALM = 74812
 local SPELL_TWILIGHT_PHASING = 74808 -- C++ enum :111 ("Phase spell from phase 1 to phase 2")
 local SPELL_SOUL_CONSUMPTION = 74792 -- C++ enum :81
 local SPELL_TWILIGHT_REALM = 74807 -- C++ enum :115 (SelectTarget aura filter)
+local SPELL_TWILIGHT_DIVISION = 75063 -- C++ enum :103 ("Phase spell from phase 2 to phase 3")
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the krystallus / bjarngrim-lieutenant convention.
@@ -469,8 +479,16 @@ local function twilightHalionEnterCombat(event, creature, target)
     end)
 end
 
+local twilightPhaseThree = {}
+
+local function twilightHalionClearPhase(guid)
+    twilightPhaseThree[guid] = nil
+end
+
 local function twilightHalionLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    twilightHalionClearPhase(guid)
 end
 
 -- C++ boss_twilight_halion::Reset is EMPTY (boss_halion.cpp:436) —
@@ -478,7 +496,9 @@ end
 -- npc_halion_controllerAI::Reset (entry 40146, unregistered). Event 23
 -- only cancels timers.
 local function twilightHalionReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    twilightHalionClearPhase(guid)
 end
 
 -- C++ boss_twilight_halion::JustDied: _events.Reset() +
@@ -486,10 +506,52 @@ end
 -- DoCastSelf(SPELL_CLEAR_DEBUFFS) arm at :599-605 is
 -- npc_halion_controllerAI::JustDied (entry 40146, unregistered).
 local function twilightHalionDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    twilightHalionClearPhase(guid)
+end
+
+-- C++ boss_twilight_halion::DamageTaken :469-482 (pre-damage event 9 —
+-- the zum_rah latch precedent): HealthBelowPctDamaged(50, damage) &&
+-- IsInPhase(PHASE_TWO) -> SetPhase(PHASE_THREE); me->CastStop();
+-- DoCastSelf(SPELL_TWILIGHT_DIVISION 75063) (non-triggered);
+-- Talk(SAY_PHASE_THREE 2). The PHASE_TWO gate is entered in
+-- JustEngagedWith (twilightHalionEnterCombat below), so the latch below
+-- is the faithful substitute; the never-die cap above it in C++
+-- (damage = health-1 while not PHASE_THREE) is applied to the CHECK
+-- only (C++ evaluation order) — the actual damage rewrite stays out,
+-- since porting it without the cross-creature KillSelf legs would make
+-- the boss unkillable. The CastStop leg rides the absent CastStop
+-- bridge (benign: Go casts are packet-only); the PHASE_THREE
+-- damage-routing leg (controller->AI()->SetData
+-- (DATA_TWILIGHT_DAMAGE_TAKEN)) rides the no-cross-AI bridge.
+local function twilightHalionDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if twilightPhaseThree[guid] then
+        return
+    end
+    local health = creature:GetHealth()
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 or health == 0 then
+        return
+    end
+    -- C++ applies the never-die cap before the 50% check; mirror the
+    -- evaluation order for the check without rewriting damage.
+    local effDamage = damage
+    if effDamage >= health then
+        effDamage = health - 1
+    end
+    -- HealthBelowPctDamaged strict-<, signed, unclamped
+    -- (Unit.h:873; the zum_rah precedent).
+    if (health - effDamage) * 100 < maxHealth * 50 then
+        twilightPhaseThree[guid] = true
+        creature:CastSpell(creature, SPELL_TWILIGHT_DIVISION)
+        creature:Talk(SAY_PHASE_THREE)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 1, twilightHalionEnterCombat)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 2, twilightHalionLeaveCombat)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 4, twilightHalionDied)
+RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 9, twilightHalionDamageTaken)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 23, twilightHalionReset)
