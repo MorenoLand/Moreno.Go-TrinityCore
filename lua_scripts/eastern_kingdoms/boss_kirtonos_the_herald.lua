@@ -53,8 +53,9 @@
 -- - JustDied / EnterEvadeMode: the gate/brazier GameObject arms
 --   (instance->GetGuidData(GO_GATE_KIRTONOS) /
 --   GO_BRAZIER_OF_THE_HERALD through ObjectAccessor + SetGoState /
---   ResetDoorOrButton; instance-script model blocked) and the 5s
---   DespawnOrUnsummon arm (no despawn bridge).
+--   ResetDoorOrButton; instance-script model blocked — the true bar;
+--   the old "no despawn bridge" on the 5s DespawnOrUnsummon arm was
+--   stale (creature:Despawn() is bridged, lua_creature_events.go:214).
 -- - IsSummonedBy + MovementInform INTRO_1..6 choreography: MovePath(
 --   KIRTONOS_PATH = 105061) and MovePoint (no MotionMaster bridge —
 --   selin_fireheart precedent); the gate SetGoState(GO_STATE_READY) arm

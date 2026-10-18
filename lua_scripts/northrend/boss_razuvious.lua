@@ -64,7 +64,8 @@
 -- Reset — SetCombatMovement(false) + _Reset() — no bridges;
 -- InitializeAI / JustReachedHome — SummonAdds: SummonCreatureGroup(
 -- SUMMON_GROUP_10MAN 1) + 25-man SUMMON_GROUP_25MAN 2 — no summon
--- bridge + no difficulty bridge (kelidan precedent).
+-- bridge (standing; the old "no difficulty bridge" parenthetical was
+-- stale — IsHeroic() is bridged, lua_creature_events.go:260).
 -- npc_dk_understudy (ScriptedAI, 16803 — joins the
 -- entry-verifiable-but-bridge-blocked queue; ScriptedAI has no
 -- RegisterLuaBoss-style surface): LoadEquipment(1) — no equipment

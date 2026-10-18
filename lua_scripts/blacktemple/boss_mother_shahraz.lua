@@ -44,8 +44,10 @@
 -- Talk(SAY_DEATH); the _JustDied instance arm is blocked on the
 -- instance-script model. OnLeaveCombat(2)/OnReset(23): cancel
 -- timers, drop per-GUID state (C++ Reset: _Reset/_enraged=false;
--- the EnterEvadeMode _DespawnAtEvade arm has no despawn bridge —
--- evade-side cleanup is engine-side).
+-- the EnterEvadeMode _DespawnAtEvade() -> DespawnOrUnsummon() arm is
+-- port-pattern-ready (stale "no despawn bridge" retracted:
+-- creature:Despawn() is bridged, lua_creature_events.go:214 —
+-- supremus precedent, deferred by the 4-unit port cap).
 -- The five spell/aura scripts registered by the C++ file have no
 -- script bridges (standing gaps): spell_mother_shahraz_fatal_
 -- attraction (40869 target filter to 3 enemies + TARGET_DEST_

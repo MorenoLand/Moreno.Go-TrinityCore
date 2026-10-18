@@ -48,8 +48,9 @@
 --   creature-lookup bridge absent), DoCast(self, SPELL_STONED
 --   33652) every tick: unreachable.
 -- - JustDied: me->DespawnOrUnsummon() + LiveCounter() on the
---   trigger AI via MobGUID: no despawn bridge (giant_spotlight
---   precedent) and no cross-AI GUID-lookup bridge.
+--   trigger AI via MobGUID: no cross-AI GUID-lookup bridge (the
+--   true bar; the old "no despawn bridge" was stale —
+--   creature:Despawn() is bridged, lua_creature_events.go:214).
 
 local ENTRY_QIRAJI_WASP       = 15414
 local ENTRY_QIRAJI_TANK       = 15422

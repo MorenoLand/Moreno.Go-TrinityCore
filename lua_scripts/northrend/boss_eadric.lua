@@ -52,8 +52,9 @@
 -- boss_eadric MovementInform (POINT_MOTION_TYPE) ->
 -- instance->SetBossState(BOSS_ARGENT_CHALLENGE_E, DONE) +
 -- DisappearAndDie — no motion-master bridge + instance-script
--- model absent (standing) + no despawn bridge (terestian
--- precedent).
+-- model absent (standing; the old "no despawn bridge" parenthetical
+-- was stale — creature:Despawn() is bridged,
+-- lua_creature_events.go:214).
 -- boss_eadric bDone-reset MovePoint(0, 746.87, 665.87, 411.75)
 -- leg — no motion-master bridge.
 -- boss_paletress — zero registration. Constructor legs

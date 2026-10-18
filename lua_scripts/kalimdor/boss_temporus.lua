@@ -25,9 +25,10 @@
 -- the Lua API (aeonus precedent — unmodeled).
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (1) + arm each timer
---   at its C++ ScheduleEvent cooldown. The IsHeroic() arm is
---   unbridgeable (no difficulty bridge), so SPELL_REFLECTION is never
---   scheduled here (see unmodeled section).
+--   at its C++ ScheduleEvent cooldown, incl. the heroic-only
+--   EVENT_SPELL_REFLECTION under creature:IsHeroic() (the old
+--   "no difficulty bridge" claim was stale — IsHeroic is bridged,
+--   engine/world/lua_creature_events.go:260 — retracted).
 -- - Death (C++ JustDied, non-instance leg): Talk SAY_DEATH (4).
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): Talk
 --   SAY_SLAY (3); C++ has NO TYPEID gate here (like deja, unlike
@@ -38,13 +39,11 @@
 --   8s -> {10s,20s}.
 -- - Wing Buffet 31475 self-cast (C++ DoCast(me)), non-triggered, init
 --   {25s,35s} -> {20s,30s}.
--- Unmodeled (documented-only, no bridges):
 -- - EVENT_SPELL_REFLECTION (SPELL_REFLECT 38592, heroic-only; the C++
 --   enum carries the comment "//Not Implemented (Heroic mod)"): C++
 --   DoCast(me, 38592), non-triggered, init 30s -> {25s,35s}, scheduled
---   only under IsHeroic(). No heroic/difficulty bridge exists in the
---   Lua API, so the arm is documented, not wired (the standing
---   heroic-unmodeled case).
+--   only under IsHeroic() (C++-exact; deja ATTRACTION convention).
+-- Unmodeled (documented-only, no bridges):
 -- - MoveInLineOfSight's Time Keeper leg: who->GetTypeId() ==
 --   TYPEID_UNIT (creature, not player) && who->GetEntry() ==
 --   NPC_TIME_KEEPER (17918, the_black_morass.h:57) &&
@@ -129,6 +128,15 @@ local function onWingBuffet(creature, guid)
     end)
 end
 
+-- C++ EVENT_SPELL_REFLECTION (heroic only): DoCast(me, 38592),
+-- non-triggered, init 30s -> {25s,35s}.
+local function onSpellReflection(creature, guid)
+    creature:CastSpell(creature, SPELL_REFLECT)
+    schedule(guid, "spellreflection", math.random(25000, 35000), function()
+        onSpellReflection(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -142,6 +150,13 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "wingbuffet", math.random(25000, 35000), function()
         onWingBuffet(creature, guid)
     end)
+    -- C++ schedules EVENT_SPELL_REFLECTION only under IsHeroic()
+    -- (C++-exact; stale "no difficulty bridge" claim retracted).
+    if creature:IsHeroic() then
+        schedule(guid, "spellreflection", 30000, function()
+            onSpellReflection(creature, guid)
+        end)
+    end
 end
 
 local function onLeaveCombat(event, creature)

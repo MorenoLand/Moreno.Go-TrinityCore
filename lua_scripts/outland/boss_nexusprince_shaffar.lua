@@ -86,8 +86,10 @@
 -- 18344, 100f) + AttackStart(who) when shaffar not in combat) has no
 -- cross-creature bridge; EVENT_APPRENTICE (DUNGEON_MODE 20s/10s —
 -- DoCast(SPELL_ETHEREAL_APPRENTICE 32372, triggered, summons 18430))
--- rides the missing summon bridge and the DespawnOrUnsummon leg has
--- no despawn bridge; EVENT_ARCANE_BOLT (1s init -> 2-4.5s loop,
+-- rides the missing summon bridge (the old "no despawn bridge" was
+-- stale — creature:Despawn() is bridged, lua_creature_events.go:214;
+-- the summon bridge is the true blocker); EVENT_ARCANE_BOLT (1s init
+-- -> 2-4.5s loop,
 -- non-triggered victim cast) would bridge but has no registered
 -- creature to host it. The stale "no-timer / no-cast" claim is
 -- corrected — the absence of registrations is the true blocker.

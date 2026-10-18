@@ -42,7 +42,9 @@
 -- (guardCorpses.clear) / JustReachedHome (SummonGuards) — summon
 -- STRAND absent (no Lua-surface consumer without summoning);
 -- SummonGuards: Is25ManRaid() -> SummonCreatureGroup(GROUP_INITIAL_25M
--- 1) — no difficulty bridge (kelidan precedent); JustEngagedWith 10-man
+-- 1) — no summon bridge (standing; the old "no difficulty bridge"
+-- parenthetical was stale — IsHeroic() is bridged,
+-- lua_creature_events.go:260); JustEngagedWith 10-man
 -- EVENT_SPAWN_GUARD leg (randtime 15s-20s) — same bar; EVENT_SPAWN_GUARD
 -- -> SummonCreatureGroup(GROUP_SINGLE_SPAWN 2) — summon STRAND absent;
 -- JustSummoned: NPC_CRYPT_GUARD summon->AI()->Talk(EMOTE_SPAWN 1) —

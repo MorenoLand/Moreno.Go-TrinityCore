@@ -690,8 +690,9 @@ RegisterCreatureEvent(ENTRY_FELFIRE_FIEND, 23, fiendCleanup)
 
 -- ================= Armageddon Target (25735) =================
 
--- C++ npc_armageddonAI::UpdateAI visual chain, 1:1. The final
--- DespawnOrUnsummon arm has no despawn bridge — documented.
+-- C++ npc_armageddonAI::UpdateAI visual chain, 1:1, incl. the final
+-- DespawnOrUnsummon arm (stale "no despawn bridge" claim retracted:
+-- creature:Despawn() is bridged, engine/world/lua_creature_events.go:214).
 local function armageddonReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -704,11 +705,15 @@ local function armageddonReset(event, creature)
         -- C++ case 0 leaves uiTimer at 0, so VISUAL2 fires on the next
         -- UpdateAI tick (100ms here); case 1 sets uiTimer=9000 before
         -- the TRIGGER cast; the final uiTimer=5000 is the
-        -- DespawnOrUnsummon wait (no despawn bridge — header).
+        -- DespawnOrUnsummon wait (ported via creature:Despawn()).
         schedule(guid, "visual2", 100, function()
             creature:CastSpell(creature, SPELL_ARMAGEDDON_VISUAL2, true)
             schedule(guid, "trigger", 9000, function()
                 creature:CastSpell(creature, SPELL_ARMAGEDDON_TRIGGER, true)
+                -- C++ case 2 sets uiTimer=5000; case 3: me->DespawnOrUnsummon().
+                schedule(guid, "despawn", 5000, function()
+                    creature:Despawn()
+                end)
             end)
         end)
     end

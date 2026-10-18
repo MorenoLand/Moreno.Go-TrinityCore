@@ -58,9 +58,11 @@
 -- add arms are unregistered with it; the summons.DoAction(ACTION_
 -- DISABLE_VULCANO) aura-cleanup arm has no bearer (no volcano
 -- summons exist to address); the ApplySpellImmune taunt/attack-me
--- arms have no bridge; the EnterEvadeMode summons.DespawnAll/
--- _DespawnAtEvade arm has no despawn bridge (evade-side cleanup is
--- engine-side).
+-- arms have no bridge; the EnterEvadeMode summons.DespawnAll arm
+-- has no bearer (no volcano summons exist to address) while the
+-- _DespawnAtEvade() -> DespawnOrUnsummon() leg is PORTED below
+-- (stale "no despawn bridge" claim retracted: creature:Despawn()
+-- is bridged, engine/world/lua_creature_events.go:214).
 
 local ENTRY_SUPREMUS = 22898
 
@@ -288,6 +290,9 @@ end
 
 local function supremusLeaveCombat(event, creature)
     supremusResetState(creature:GetGUID())
+    -- C++ EnterEvadeMode: _DespawnAtEvade() -> DespawnOrUnsummon()
+    -- (summons.DespawnAll is moot — no volcano summons are modeled).
+    creature:Despawn()
 end
 
 local function supremusDied(event, creature, killer)

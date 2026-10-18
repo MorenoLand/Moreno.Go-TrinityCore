@@ -57,7 +57,11 @@
 -- SPELL_SUMMON_PURE_ENERGY 44322 (kaelthas phoenix-summon precedent —
 -- the summon spell itself is real even though the add's class has no
 -- C++-verifiable entry and is unported, queued below); the heroic pair
--- 46154/46159 is unmodeled — no difficulty bridge.
+-- 46154/46159 (C++: if (IsHeroic()) DoCast(me, 46154) + DoCast(me,
+-- 46159) else DoCast(me, 44322)) is port-pattern-ready — stale "no
+-- difficulty bridge" retracted (creature:IsHeroic() is bridged,
+-- lua_creature_events.go:260; same cast-only precedent as 44322) —
+-- deferred by the 4-unit port cap.
 -- At health below 10% (stage == INTERVAL_SWITCH = 6): _enraged latch —
 -- Talk is skipped, all timers cancelled (C++ events.Reset()), then
 -- EVENT_OVERLOAD 1200ms -> 2s loop: DoCastVictim(SPELL_OVERLOAD 44353)

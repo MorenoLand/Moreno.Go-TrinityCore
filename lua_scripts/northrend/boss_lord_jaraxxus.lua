@@ -83,8 +83,9 @@
 -- SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (no cross-AI
 -- DoAction / aura-removal / immune / react / zone bridges);
 -- EnterEvadeMode: _EnterEvadeMode + instance->SetBossState(
--- DATA_JARAXXUS, FAIL) + DespawnOrUnsummon (instance model +
--- no despawn bridge — terestian precedent).
+-- DATA_JARAXXUS, FAIL) + DespawnOrUnsummon (instance model is the
+-- true bar; the old "no despawn bridge" was stale —
+-- creature:Despawn() is bridged, lua_creature_events.go:214).
 -- boss_jaraxxus EVENT_FEL_LIGHTNING — PORTED: SelectTarget(
 -- Random,0,0.0f,true) (any-range -> 100, curator precedent) ->
 -- DoCast(Fel Lightning 66528) non-triggered, 17s init, urand(10s,30s)

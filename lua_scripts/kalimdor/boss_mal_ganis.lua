@@ -78,8 +78,10 @@
 -- - UpdateAI's _defeated leg: me->IsInCombat() -> EnterEvadeMode() +
 --   SetImmuneToAll(true) — no evade-mode / immune-to-all bridges
 --   (infinite_corruptor DoAction-leave precedent).
--- - JustReachedHome: DespawnOrUnsummon(1s) — no despawn bridge
---   (standing).
+-- - JustReachedHome: DespawnOrUnsummon(1s) — stale "no despawn
+--   bridge" retracted (creature:Despawn() is bridged,
+--   lua_creature_events.go:214); the true blocker is the absent
+--   JustReachedHome event in the Go API (standing).
 -- - The C++ while(ExecuteEvent()) + UNIT_STATE_CASTING gates — no
 --   casting-state bridge in the Lua API (aeonus precedent —
 --   unmodeled).

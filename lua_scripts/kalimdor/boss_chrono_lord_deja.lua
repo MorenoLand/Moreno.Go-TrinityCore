@@ -28,9 +28,9 @@
 -- the Lua API (aeonus precedent — unmodeled).
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (1) + arm each timer
---   at its C++ ScheduleEvent cooldown. The IsHeroic() arm is
---   unbridgeable (no difficulty bridge), so ATTRACTION is never
---   scheduled here (see unmodeled section).
+--   at its C++ ScheduleEvent cooldown, incl. the heroic-only
+--   EVENT_ATTRACTION under creature:IsHeroic() (stale "no difficulty
+--   bridge" leftover retracted — see Modeled section below).
 -- - Death (C++ JustDied, non-instance leg): Talk SAY_DEATH (4).
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): Talk
 --   SAY_SLAY (3); C++ has NO TYPEID gate here (unlike aeonus, which

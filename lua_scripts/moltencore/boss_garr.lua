@@ -22,8 +22,10 @@
 -- 10% health) is not registered — no NPC_FIRESWORN constant exists in
 -- the C++ tree and the creature_template ScriptName binding is DB-side,
 -- so the add entry cannot be verified from the C++ sources alone; the
--- eruption damage-zeroing arm would need a pre-damage hook plus a
--- despawn bridge (no despawn bridge, razorgore convention).
+-- eruption damage-zeroing arm would need a pre-damage hook plus
+-- creature:Despawn() (stale "no despawn bridge" retracted — bridged,
+-- lua_creature_events.go:214); the true blocker is the unregistered
+-- firesworn add (entry-unverifiable, razorgore convention).
 
 local ENTRY_GARR = 12057
 

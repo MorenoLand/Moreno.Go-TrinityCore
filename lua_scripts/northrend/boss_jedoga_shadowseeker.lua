@@ -110,9 +110,11 @@
 -- summons.DespawnEntry(controller) + SetDisableGravity(false) +
 -- MoveLand(POINT_GROUND)) and the volunteer _volunteerWork=false
 -- latch + PHASE_THREE flip; payload rides the unbridged summon /
--- movement / instance arms), EnterEvadeMode (summons.DespawnAll —
--- no despawn bridge, terestian precedent; _DespawnAtEvade(15s) —
--- no bridge), MovementInform (all point choreography — no motion
+-- movement / instance arms), EnterEvadeMode (summons.DespawnAll has
+-- no bearer — stale "no despawn bridge" retracted: creature:Despawn()
+-- is bridged, lua_creature_events.go:214 — the _DespawnAtEvade(15s)
+-- leg is port-pattern-ready, supremus precedent, deferred by the
+-- 4-unit port cap), MovementInform (all point choreography — no motion
 -- bridges), GetData(DATA_VOLUNTEER_WORK) (no cross-AI GetData
 -- bridge — achievement_volunteer_work needs it too).
 -- npc_twilight_volunteer — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED

@@ -112,8 +112,10 @@
 -- (DATA_PLAYER_GUID) arms have no react/instance-player/movement
 -- bridges — skipped), after a further 1.2s cast 46242, after a
 -- further 2s cast 46228 + 46235, then the chain ends (C++-exact
--- — no repeat after the counter-2 arm). The 15s
--- DisappearAndDie arm has no despawn bridge — skipped.
+-- — no repeat after the counter-2 arm). The 15s DisappearAndDie
+-- arm (Reset scheduler) is port-pattern-ready — stale "no despawn
+-- bridge" retracted (creature:Despawn() bridged,
+-- lua_creature_events.go:214) — deferred by the 4-unit port cap.
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (BossAI::
 -- JustEngagedWith/JustDied/Reset and the DATA_MURU bookkeeping

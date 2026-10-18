@@ -73,8 +73,10 @@
 -- binding bridge (razelikh precedent) + cross-AI SetGUID bridge absent
 -- — documented-only; the cast of 54956 itself is ported.
 -- spell_gal_darah_stampede_charge (SpellScript 55220/59823: rhino spirit
--- despawns 1s after its charge hits) — no SpellScript binding bridge +
--- no despawn bridge — documented-only.
+-- despawns 1s after its charge hits) — no SpellScript binding bridge
+-- (standing; the old "no despawn bridge" parenthetical was stale —
+-- creature:Despawn() is bridged, lua_creature_events.go:214) —
+-- documented-only.
 -- spell_gal_darah_clear_puncture (SpellScript 60022: remove Puncture
 -- 55276 / heroic 59826) — no SpellScript binding bridge —
 -- documented-only; the JustDied cast of 60022 itself is ported.

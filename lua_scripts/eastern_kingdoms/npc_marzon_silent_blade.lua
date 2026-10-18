@@ -19,7 +19,9 @@
 -- AttackStart(who)) has no summon bridge — unmodeled (marzon is
 -- summoned by the lescovar waypoint-16 phase arm, behind the
 -- no-summon bridge). The C++ EnterEvadeMode DisappearAndDie pair
--- (marzon + summoner) has no despawn bridge — unmodeled. The
+-- (marzon + summoner) stays out behind the summon bridge (marzon is
+-- summoned; the old "no despawn bridge" was stale —
+-- creature:Despawn() is bridged, lua_creature_events.go:214). The
 -- C++ Reset RestoreFaction arm has no faction bridge —
 -- unmodeled. The C++ MovementInform POINT_MOTION_TYPE cross-AI
 -- latch (CAST_AI into the lescovar AI's uiTimer/uiPhase) has no

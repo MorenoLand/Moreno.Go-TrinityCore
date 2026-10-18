@@ -111,8 +111,10 @@
 -- npc_beasts_combat_stalker (36549 — kalecgos pass; instance binds
 -- NPC_BEASTS_COMBAT_STALKER -> DATA_BEASTS_COMBAT_STALKER): Reset —
 -- SetReactState(REACT_PASSIVE) (no react bridge) + EVENT_BERSERK
--- IsHeroic() ? 9min : 15min (no difficulty bridge — kelidan
--- precedent); DoAction ACTION_START_JORMUNGARS / ACTION_GORMOK_DEAD /
+-- IsHeroic() ? 9min : 15min (stale "no difficulty bridge" retracted:
+-- IsHeroic() IS bridged, lua_creature_events.go:260 — the arm stays
+-- out behind the instance/combat-stalker model, not difficulty);
+-- DoAction ACTION_START_JORMUNGARS / ACTION_GORMOK_DEAD /
 -- ACTION_START_ICEHOWL / ACTION_JORMUNGARS_DEAD (no cross-AI DoAction
 -- bridge); EVENT_BERSERK — instance->GetCreature(gormok / dreadscale /
 -- acidmaw / icehowl)->CastSpell(Berserk 26662) (instance model);

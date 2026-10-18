@@ -57,7 +57,10 @@
 -- precedent); EVENT_TWIN_SPIKE — DoCastVictim(Light Twin Spike 66075
 -- / Dark Twin Spike 66069), 20s init, 20s repeat (moroes precedent;
 -- C++ UpdateAI runs combat events whenever UpdateVictim() holds —
--- the PHASE_EVENT leg only matters pre-combat for EVENT_START_MOVE).
+-- the PHASE_EVENT leg only matters pre-combat for EVENT_START_MOVE);
+-- EVENT_BERSERK — DoCastSelf(Berserk 64238) + Talk(SAY_BERSERK 7),
+-- IsHeroic() ? 6min : 8min one-shot (creature:IsHeroic() bridge —
+-- the old "no difficulty bridge" claim was stale, retracted).
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- Whole intro/positioning machine — JustAppeared:
@@ -95,9 +98,6 @@
 -- Touch 67282, SPELLVALUE_MAX_TARGETS 1), 10s/15s init, 10s/15s
 -- repeat — no random-target / aura-filtered SelectTarget bridge
 -- (cairne/kazzak precedent) — documented-only.
--- EVENT_BERSERK: DoCastSelf(Berserk 64238) + Talk(SAY_BERSERK 7) —
--- timer is IsHeroic() ? 6min : 8min: no difficulty bridge (kelidan
--- precedent) — documented-only.
 -- npc_essence_of_twin (34567/34568 — entry-unverifiable): OnGossipHello
 -- -> RemoveAurasDueToSpell(ESSENCE_REMOVE) + CastSpell(player,
 -- ESSENCE_APPLY) — no gossip bridge — documented-only.
@@ -144,12 +144,14 @@ local ENTRY_EYDIS = 34496
 
 local SAY_AGGRO = 0
 local SAY_KILL_PLAYER = 6
+local SAY_BERSERK = 7
 local SAY_DEATH = 8
 
 local SPELL_SURGE_FJOLA = 65766
 local SPELL_SURGE_EYDIS = 65768
 local SPELL_SPIKE_FJOLA = 66075
 local SPELL_SPIKE_EYDIS = 66069
+local SPELL_BERSERK = 64238
 
 local timers = {}
 
@@ -192,6 +194,14 @@ local function makeEnterCombat(surgeSpell, spikeSpell)
         cancelTimers(guid)
         schedule(guid, "twinspike", 20000, function()
             twinSpikeTick(creature, guid, spikeSpell)
+        end)
+        -- C++ EVENT_BERSERK: IsHeroic() ? 6min : 8min (one-shot);
+        -- execute: DoCastSelf(Berserk 64238) + Talk(SAY_BERSERK 7).
+        -- Stale "no difficulty bridge" claim retracted: creature:IsHeroic()
+        -- is bridged (engine/world/lua_creature_events.go:260).
+        schedule(guid, "berserk", creature:IsHeroic() and 360000 or 480000, function()
+            creature:CastSpell(creature, SPELL_BERSERK)
+            creature:Talk(SAY_BERSERK)
         end)
     end
 end

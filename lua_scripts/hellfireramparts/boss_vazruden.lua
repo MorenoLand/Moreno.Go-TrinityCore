@@ -66,10 +66,11 @@
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped);
 -- difficulty is bridged — creature:IsHeroic() (per-instance
 -- difficulty, lua_creature_events.go) drives the DUNGEON_MODE
--- spell variants; no despawn bridge — the
--- DisappearAndDie arm of the UnsummonCheck machine
--- unmodeled; no SpellScript/AuraScript scripts in this
--- file.
+-- spell variants; the DisappearAndDie arm of the UnsummonCheck
+-- machine stays out behind the unbridged machine (the old
+-- "no despawn bridge" was stale — creature:Despawn() is bridged,
+-- lua_creature_events.go:214); no SpellScript/AuraScript scripts in
+-- this file.
 
 local SPELL_REVENGE = 19130
 local SPELL_REVENGE_H = 40392

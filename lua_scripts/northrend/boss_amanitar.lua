@@ -72,7 +72,9 @@
 -- aura-removal bridge — aeranas precedent), DoCastAOE(Poisonous
 -- Mushroom Poison Cloud 57061) (stays out: summon STRAND absent),
 -- SetObjectScale(0.1f) (no scale bridge), DespawnOrUnsummon(4s)
--- (no despawn bridge — terestian precedent). JustDied healthy
+-- (stale "no despawn bridge" retracted — creature:Despawn() is
+-- bridged, lua_creature_events.go:214; the proximity + summon legs
+-- are the true blockers). JustDied healthy
 -- leg: DoCastAOE(Potent Fungus 56648, triggered) (stays out:
 -- behind the unbridged summon STRAND). Joins the
 -- entry-verifiable-but-bridge-blocked queue.
