@@ -19,7 +19,9 @@
 -- SPELL_WING_FLAP = 12882 / SPELL_PIERCE_ARMOR = 6016 / SPELL_DISARM =
 -- 8379 / SPELL_KIRTONOS_TRANSFORM = 16467 / SPELL_SHADOW_BOLT = 17228 /
 -- SPELL_CURSE_OF_TONGUES = 12889 / SPELL_DOMINATE_MIND = 14515;
--- WEAPON_KIRTONOS_STAFF = 11365 (no equipment bridge — skipped);
+-- WEAPON_KIRTONOS_STAFF = 11365 (staff equip/clear legs ported via
+-- creature:SetEquipmentSlots with the 0xFFFFFFFF NO_CHANGE sentinel —
+-- see onTransform);
 -- GO_GATE_KIRTONOS = 175570 (scholomance.h:48, instance-model blocked).
 -- Ported arms (C++ JustEngagedWith + UpdateAI combat machine):
 -- - SPELL_SWOOP: self-cast 18144 (DoCast(me)), 8s init -> 15s re-arm.
@@ -42,9 +44,8 @@
 --   so a fresh re-summon starts aura-clean exactly as C++ does.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally (maiden precedent);
--- the transform arm's SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID) staff
--- equip/clear and SetCanFly(true/false) legs have no bridges (zuljin
--- precedent) — only the aura itself is applied/removed.
+-- the transform arm's SetCanFly(true/false) legs have no bridge (zuljin
+-- precedent);
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - The BossAI(creature, DATA_KIRTONOS) constructor and
 --   GetScholomanceAI -> GetInstanceAI legs (instance-script model
@@ -61,8 +62,9 @@
 --   selin_fireheart precedent); the gate SetGoState(GO_STATE_READY) arm
 --   (instance-model blocked); SetFacingTo / SetWalk / SetDisableGravity
 --   (no bridges); Talk(EMOTE_SUMMONED = 0) and the EMOTE_ONESHOT_ROAR
---   (emote legs fire inside the unmodeled intro); the staff equip arm
---   (no equipment bridge); UNIT_FLAG_NON_ATTACKABLE/NOT_SELECTABLE and
+--   (emote legs fire inside the unmodeled intro); the INTRO_5 staff equip
+--   arm fires inside the same unmodeled intro choreography (the combat
+--   transform-toggle staff legs are ported in onTransform); UNIT_FLAG_NON_ATTACKABLE/NOT_SELECTABLE and
 --   REACT_PASSIVE/REACT_AGGRESSIVE flag legs (no flag/react-state
 --   bridges — koltira / eye_of_acherus precedents).
 -- - go_brazier_of_the_herald::OnGossipHello (GameObjectScript, registered
@@ -73,6 +75,8 @@
 --   go:PlayDirectSound on the brazier GO gossip hook (onBrazierGossip).
 
 local ENTRY_KIRTONOS = 10506
+
+local EQUIP_NO_CHANGE = 0xFFFFFFFF
 
 local GO_BRAZIER_OF_THE_HERALD = 175564
 local SOUND_SCREECH = 557
@@ -160,15 +164,21 @@ local function onDominateMind(creature, guid)
     schedule(guid, "dominatemind", math.random(44000, 48000), function() onDominateMind(creature, guid) end)
 end
 
--- C++ EVENT_KIRTONOS_TRANSFORM: HasAura(16467) -> RemoveAura + ground
--- legs; else DoCast(me, 16467) + staff + fly legs. No fly / equipment
--- bridges — only the aura itself is applied/removed. creature:HasAura
--- is bridged, so the toggle reads the real aura state C++-exact.
+-- C++ EVENT_KIRTONOS_TRANSFORM: HasAura(16467) -> RemoveAura + staff
+-- clear + ground legs; else DoCast(me, 16467) + staff equip + fly legs.
+-- creature:HasAura is bridged, so the toggle reads the real aura state
+-- C++-exact. The staff legs are ported via creature:SetEquipmentSlots
+-- with EQUIP_NO_CHANGE (0xFFFFFFFF) on the untouched slots, mirroring
+-- C++ SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID + 0, 11365/0) which
+-- writes slot 0 only. The SetCanFly(true/false) legs have no bridge
+-- (zuljin precedent).
 local function onTransform(creature, guid)
     if creature:HasAura(SPELL_KIRTONOS_TRANSFORM) then
         creature:RemoveAura(SPELL_KIRTONOS_TRANSFORM)
+        creature:SetEquipmentSlots(0, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE)
     else
         creature:CastSpell(creature, SPELL_KIRTONOS_TRANSFORM)
+        creature:SetEquipmentSlots(WEAPON_KIRTONOS_STAFF, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE)
     end
     schedule(guid, "transform", math.random(16000, 18000), function() onTransform(creature, guid) end)
 end

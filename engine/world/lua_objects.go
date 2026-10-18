@@ -748,7 +748,11 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// (CreatureMethods.h:982-994, Trinity): SetUInt32Value
 	// (UNIT_VIRTUAL_ITEM_SLOT_ID + i, slot) for the three virtual item
 	// slots (UpdateFields.h:116, Go index 56) — the values-update
-	// broadcast is the SetUInt32Value twin.
+	// broadcast is the SetUInt32Value twin. A slot passed as 0xFFFFFFFF
+	// is left untouched, mirroring ScriptedAI::SetEquipmentSlots'
+	// EQUIP_NO_CHANGE = -1 skip semantics (ScriptedCreature.h:226,
+	// ScriptedCreature.cpp:473-477: slots < 0 are never written), since
+	// Lua uint32 args cannot carry -1.
 	methods["SetEquipmentSlots"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 3 {
 			return nil, fmt.Errorf("main_hand, off_hand and ranged are required")
@@ -761,11 +765,16 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			}
 			slots[i] = slot
 		}
-		s.server.broadcastCreatureValuesUpdateInInstance(state.Map, state.InstanceID, state.GUID, map[int]uint32{
-			unitVirtualItemSlotID:     slots[0],
-			unitVirtualItemSlotID + 1: slots[1],
-			unitVirtualItemSlotID + 2: slots[2],
-		})
+		updates := map[int]uint32{}
+		for i, slot := range slots {
+			if slot == 0xFFFFFFFF {
+				continue
+			}
+			updates[unitVirtualItemSlotID+i] = slot
+		}
+		if len(updates) > 0 {
+			s.server.broadcastCreatureValuesUpdateInInstance(state.Map, state.InstanceID, state.GUID, updates)
+		}
 		return nil, nil
 	}
 	// luaTapMotion resolves the creature motion for the tap/loot-recipient

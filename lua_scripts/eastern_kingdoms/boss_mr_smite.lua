@@ -34,12 +34,11 @@
 -- model in Go (creature casts are packet-visual), so timers fire
 -- unconditionally (maiden precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Reset's SetEquipmentSlots(false, EQUIP_SWORD, EQUIP_UNEQUIP,
---   EQUIP_NO_CHANGE) (no equipment bridge — koltira precedent) +
---   SetStandState(UNIT_STAND_STATE_STAND) (no stand-state bridge —
+-- - Reset's SetStandState(UNIT_STAND_STATE_STAND) (no stand-state bridge —
 --   koltira precedent) + SetReactState(REACT_AGGRESSIVE) (no react-state
 --   bridge — eye_of_acherus precedent) + SetNoCallAssistance(true)
---   (no bridge).
+--   (no bridge). The Reset SetEquipmentSlots arm IS ported (onSpawn /
+--   onReset via the EQUIP_NO_CHANGE sentinel).
 -- - The phase/equip event machine: phase 1's instance chest lookup
 --   (instance->GetGuidData(DATA_SMITE_CHEST), GO 144111) through
 --   ObjectAccessor (instance-script model blocked; no ObjectAccessor
@@ -47,7 +46,8 @@
 --   (no MotionMaster bridge — selin_fireheart precedent);
 --   MovementInform(POINT_MOTION_TYPE) -> SetFacingTo(5.47f) + kneel +
 --   phase 2 (no MovementInform bridge — kalecgos precedent); phase 2's
---   SetEquipmentSlots(EQUIP_AXE x2 / EQUIP_MACE) (no equipment bridge);
+--   SetEquipmentSlots(EQUIP_AXE x2 / EQUIP_MACE) arms fire inside the
+--   same unmodeled phase machine (the bridge exists — see onReset);
 --   phase 3's SetStandState(STAND) (no bridge); phase 4's
 --   SetCombatMovement(true) + MoveChase (no bridges). JustEngagedWith
 --   is empty in C++ — nothing to port.
@@ -60,6 +60,13 @@ local SAY_PHASE_1 = 2
 local SAY_PHASE_2 = 3
 
 local ENTRY_MR_SMITE = 646
+
+-- C++ Reset: SetEquipmentSlots(false, EQUIP_SWORD, EQUIP_UNEQUIP,
+-- EQUIP_NO_CHANGE) (boss_mr_smite.cpp:41/99): main hand 5191, off hand
+-- unequipped, ranged untouched (0xFFFFFFFF NO_CHANGE sentinel).
+local EQUIP_SWORD = 5191
+local EQUIP_UNEQUIP = 0
+local EQUIP_NO_CHANGE = 0xFFFFFFFF
 
 local timers = {}
 local phaseStage = {}
@@ -150,12 +157,16 @@ end
 
 local function onSpawn(_, creature)
     initState(creature:GetGUID())
+    creature:SetEquipmentSlots(EQUIP_SWORD, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
 end
 
 local function onReset(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     initState(guid)
+    -- C++ Reset arm (boss_mr_smite.cpp:99); Creature::Respawn calls
+    -- AI()->Reset(), so spawn gets the same arm (Creature.cpp:2198).
+    creature:SetEquipmentSlots(EQUIP_SWORD, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
 end
 
 RegisterCreatureEvent(ENTRY_MR_SMITE, 1, onEnterCombat)
