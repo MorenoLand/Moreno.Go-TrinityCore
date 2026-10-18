@@ -65,8 +65,10 @@
 -- DoCast(target, SPELL_SLIME_PUDDLE_TRIGGER 70341) non-triggered,
 -- 10s init (:267), Repeat(35s) OUTSIDE the target-empty guard
 -- (re-arm unconditional); the stale "no SelectTarget bridge" claim
--- for this arm is retracted (maiden/jaraxxus GetPlayersInWorld
--- precedent, any-range modeled with 100 — curator precedent).
+-- for this arm is retracted — C++-exact since 2026-10-18 via the
+-- handler-surface GetAITargets twin (lua_creature_events.go): threat
+-- list filtered playerOnly + alive, replacing the retired
+-- GetPlayersInWorld 100yd approx (maiden/jaraxxus/curator precedent).
 -- EVENT_TEAR_GAS (:617-619)
 -- and EVENT_RESUME_ATTACK (:621-628) OUT: phase-transition machine
 -- (MovePoint + tear-gas chain). EVENT_UNBOUND_PLAGUE (:657-663)
@@ -158,17 +160,17 @@ end
 -- 70341) non-triggered per target, 10s init (:267), Repeat(35s)
 -- outside the target-empty guard (re-arm unconditional — the
 -- ScheduleEvent at :608 runs even when the list is empty).
--- Caveat (keleseth/thorim/jaraxxus): C++ draws from the threat
--- list (engaged units); the bridge can include nearby unengaged
--- players. The 30s transition delay (events.DelayEvents(30s),
--- ACTION_CHANGE_PHASE) rides the unported phase machine.
-local function randomPlayers(creature, range, count)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- Threat-list pool via creature:GetAITargets() (handler twin,
+-- lua_creature_events.go) filtered playerOnly + alive — C++-exact,
+-- retargeted 2026-10-18 off the retired GetPlayersInWorld 100yd
+-- approx (maiden/jaraxxus/curator precedent). The 30s phase-
+-- transition event delay (events.DelayEvents(30s), ACTION_CHANGE_PHASE)
+-- still rides the unported phase machine — unmodeled.
+local function randomPlayers(creature, count)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
-            candidates[#candidates + 1] = plr
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     local targets = {}
@@ -179,7 +181,7 @@ local function randomPlayers(creature, range, count)
 end
 
 local function slimePuddleTick(creature, guid)
-    for _, target in ipairs(randomPlayers(creature, 100, 2)) do
+    for _, target in ipairs(randomPlayers(creature, 2)) do
         creature:CastSpell(target, SPELL_SLIME_PUDDLE_TRIGGER)
     end
     schedule(guid, "slimepuddle", 35000, function()

@@ -333,6 +333,31 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), nil)
 		return nil, nil
 	}
+	// GetAITargets is CreatureMethods::GetAITargets
+	// (CreatureMethods.h:807-839, Trinity): the threatened-by-me victims
+	// as Unit objects (players first-resolved, then creatures). Exact twin
+	// of the session-bound binding (lua_objects.go:994-1021): creature
+	// targets resolve through the server creature-motion index here
+	// (the GetVictim arm above). RegisterCreatureEvent handlers nil-call
+	// on this name without it (objectIndex pushes nil for unknown methods;
+	// ProtectedCall then aborts the arm mid-flight), the same class fixed
+	// for SetEquipmentSlots/PerformEmote above.
+	methods["GetAITargets"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil || motion.ThreatMgr == nil {
+			return []any{[]any{}}, nil
+		}
+		targets := []any{}
+		for _, entry := range motion.ThreatMgr.SortedEntries() {
+			if player := s.findPlayer(entry.VictimGUID); player != nil {
+				targets = append(targets, player)
+				continue
+			}
+			if target := s.findCreatureMotion(motion.Map, motion.InstanceID, entry.VictimGUID); target != nil {
+				targets = append(targets, s.luaMotionCreature(target))
+			}
+		}
+		return []any{targets}, nil
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{
 		"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry,
 		"Map": state.Map, "MapId": state.Map,

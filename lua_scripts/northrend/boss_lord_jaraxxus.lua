@@ -222,17 +222,15 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, idx, 0.0f, true) playerOnly=true arms ride the
--- keleseth GetPlayersInWorld precedent (0.0f = any-range, modeled with
--- 100 — curator precedent). Caveat shared with the keleseth/thorim/
--- beast ports: C++ draws from the threat list (engaged units); the
--- bridge can include nearby unengaged players.
-local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- handler-surface GetAITargets twin (lua_creature_events.go): threat
+-- list, playerOnly + alive, 0.0f = any range (no distance filter) —
+-- C++-exact since 2026-10-18, retargeted off the retired
+-- GetPlayersInWorld 100yd approx.
+local function randomThreatPlayer(creature)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
-            candidates[#candidates + 1] = plr
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -265,7 +263,7 @@ end
 -- DoCast(Fel Lightning 66528) non-triggered, 17s init,
 -- Repeat(10s,30s) outside the target check (re-arm unconditional).
 local function felLightningTick(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_FEL_LIGHTNING)
     end
@@ -279,7 +277,7 @@ end
 -- DoCast(Incinerate Flesh 66237) non-triggered, 14s init,
 -- Repeat(23s) outside the target check (re-arm unconditional).
 local function incinerateFleshTick(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:Talk(EMOTE_INCINERATE, target)
         creature:Talk(SAY_INCINERATE)
@@ -295,7 +293,7 @@ end
 -- non-triggered, 20s init, Repeat(30s) outside the target check
 -- (re-arm unconditional).
 local function legionFlameTick(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:Talk(EMOTE_LEGION_FLAME, target)
         creature:CastSpell(target, SPELL_LEGION_FLAME)
@@ -404,7 +402,7 @@ end
 -- DoCast(Spinning Spike 66283) non-triggered, 9s init, Repeat(20s)
 -- outside the target check (re-arm unconditional).
 local function spinningSpikeTick(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_SPINNING_SPIKE)
     end

@@ -55,9 +55,10 @@
 -- CastSpell(nil, 43667); repeat {2s,3s}.
 -- EVENT_FROST_TOMB (id 2; init 14-19s :138, arm :207-217):
 -- SelectTarget(Random, 0, 100.0f, true, true, -SPELL_FROST_TOMB 48400)
--- -> randomFrostTombTarget (GetPlayersInWorld, same map/instance,
--- alive, within 100yd, minus aura 48400 — the baltharus
--- ENERVATING_BRAND precedent); Talk(SAY_FROST_TOMB 3);
+-- -> randomFrostTombTarget (threat list via the handler GetAITargets
+-- twin — C++-exact pool, retargeted 2026-10-18 off the retired
+-- GetPlayersInWorld 100yd approx; same map/instance, alive, within
+-- 100yd, minus aura 48400 — the baltharus ENERVATING_BRAND precedent); Talk(SAY_FROST_TOMB 3);
 -- Talk(SAY_FROST_TOMB_EMOTE 4, target) — the targeted-emote whisper
 -- target is bridgeable (the mandokir SAY_WATCH / razorscale
 -- EMOTE_BERSERK precedent); DoCast(target, SPELL_FROST_TOMB_STUN
@@ -164,13 +165,12 @@ end
 -- 100.0f, true, true, -SPELL_FROST_TOMB) — the baltharus
 -- ENERVATING_BRAND precedent.
 local function randomFrostTombTarget(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, 100)
-                and not plr:HasAura(SPELL_FROST_TOMB) then
-            candidates[#candidates + 1] = plr
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:IsWithinDist(unit, 100)
+                and not unit:HasAura(SPELL_FROST_TOMB) then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
