@@ -263,7 +263,8 @@ local function beginEvent(creature, guid)
 end
 
 local function onNefariusGossipHello(event, player, creature)
-    if not nefariusState[creature:GetGUID()] then
+    local st = nefariusState[creature:GetGUID()]
+    if not (st and st.eventStarted) then
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_GAMES_BEGIN,
             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
     end
