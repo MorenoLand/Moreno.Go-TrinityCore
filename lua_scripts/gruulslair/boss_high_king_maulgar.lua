@@ -28,9 +28,10 @@
 -- C++ UpdateAI timers. Maulgar phase 2 (a 1s recurring health
 -- check, C++-exact transition rule, once-guarded): <50% health
 -- -> Phase2=true, Talk(SAY_ENRAGE), triggered self-cast 29651
--- (C++-exact); the UNIT_VIRTUAL_ITEM_SLOT_ID zeroing arms have
--- no item-display bridge (blocked). Phase 2 charging: random
--- target, DoCast(target, SPELL_BERSERKER_C 26561), repeat 20s
+-- (C++-exact); the UNIT_VIRTUAL_ITEM_SLOT_ID zeroing arms ride
+-- creature:SetEquipmentSlots (slot 2 skipped, EQUIP_NO_CHANGE).
+-- Phase 2 charging: random target, DoCast(target, SPELL_BERSERKER_C
+-- 26561), repeat 20s
 -- (initial 0s) — the AttackStart(target) victim-switch arm has
 -- no bridge, so the victim arm stays engine-side. Phase 2 roar:
 -- non-triggered self-cast 16508, repeat {40s,50s} (initial 0s).
@@ -242,8 +243,8 @@ end
 
 -- C++ UpdateAI phase-2 gate, once-guarded: <50% health ->
 -- Talk(SAY_ENRAGE) + triggered self-cast 29651 + the charging/
--- roar arms (the virtual-item-slot zeroing arms have no
--- item-display bridge).
+-- roar arms (the virtual-item-slot zeroing arms are ported in
+-- maulgarPhaseCheck via creature:SetEquipmentSlots).
 local function maulgarPhaseCheck(creature, guid)
     local state = maulgarState[guid]
     if state == nil or state.phase2 then
@@ -255,6 +256,10 @@ local function maulgarPhaseCheck(creature, guid)
         state.phase2 = true
         creature:Talk(SAY_ENRAGE)
         creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
+        -- C++ SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID(+1), 0): clear the
+        -- main-hand/off-hand display slots, slot 2 untouched (lua_creature_
+        -- events.go SetEquipmentSlots; 0xFFFFFFFF = EQUIP_NO_CHANGE skip).
+        creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
         schedule(guid, "charging", 0, function()
             maulgarCharging(creature, guid)
         end)
