@@ -592,7 +592,11 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 		return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
 	}
 	var loaded account
-	var locked, failed, banned, permanent, security uint64
+	var locked, failed uint64
+	// Field::GetUInt64/GetUInt8 return 0 on NULL (Field.cpp); the two LEFT JOINs
+	// yield NULL for unbanned accounts and accounts without access rows, so scan
+	// those columns nullable rather than erroring on the MySQL backend.
+	var banned, permanent, security sql.NullInt64
 	var sessionKey []byte
 	if err := row.Scan(&loaded.ID, &loaded.Login, &locked, &loaded.LockCountry, &loaded.LastIP, &failed, &banned, &permanent, &security, &sessionKey); err != nil {
 		// AuthSession::ReconnectChallengeCallback (AuthSession.cpp:647): a failed
@@ -605,9 +609,9 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	}
 	loaded.Locked = locked != 0
 	loaded.FailedLogins = uint32(failed)
-	loaded.Banned = banned != 0
-	loaded.PermanentBan = permanent != 0
-	loaded.Security = uint8(security)
+	loaded.Banned = banned.Int64 != 0
+	loaded.PermanentBan = permanent.Int64 != 0
+	loaded.Security = uint8(security.Int64)
 	if len(sessionKey) != crypto.SRP6SessionKeyLength {
 		s.debug("reconnect rejected", "account", login, "reason", "missing session key")
 		return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
@@ -772,7 +776,11 @@ func loadAccount(ctx context.Context, store *database.Store, login, remoteIP str
 		return nil, err
 	}
 	var result account
-	var locked, failed, banned, permanent, security uint64
+	var locked, failed uint64
+	// Field::GetUInt64/GetUInt8 return 0 on NULL (Field.cpp); the two LEFT JOINs
+	// yield NULL for unbanned accounts and accounts without access rows, so scan
+	// those columns nullable rather than erroring on the MySQL backend.
+	var banned, permanent, security sql.NullInt64
 	var totp []byte
 	var salt, verifier []byte
 	if err := row.Scan(&result.ID, &result.Login, &locked, &result.LockCountry, &result.LastIP, &failed, &banned, &permanent, &security, &totp, &salt, &verifier); err != nil {
@@ -783,9 +791,9 @@ func loadAccount(ctx context.Context, store *database.Store, login, remoteIP str
 	}
 	result.Locked = locked != 0
 	result.FailedLogins = uint32(failed)
-	result.Banned = banned != 0
-	result.PermanentBan = permanent != 0
-	result.Security = uint8(security)
+	result.Banned = banned.Int64 != 0
+	result.PermanentBan = permanent.Int64 != 0
+	result.Security = uint8(security.Int64)
 	result.TotpConfigured = totp != nil
 	result.TotpSecret = totp
 	result.Login = upperOnlyLatin(result.Login)
