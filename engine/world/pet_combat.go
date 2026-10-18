@@ -794,18 +794,27 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			destX := owner.X + float32(nearDist*math.Cos(absAngle))
 			destY := owner.Y + float32(nearDist*math.Sin(absAngle))
 			destZ := owner.Z
-			motion.Orientation = ownerOrient
 			speed := creatureSplineVelocity(motion, false)
-			if speed <= 0 {
-				speed = 7.0
+			if speed < 0.001 {
+				// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate
+				// (MoveSpline.cpp:210): velocity below 0.001 fails validation —
+				// no spline is launched and no SMSG_MONSTER_MOVE is sent. A
+				// zero-speed pet (e.g. 100%-slowed run speed) stands still
+				// instead of sprinting to its owner at base run speed — the old
+				// `speed = 7.0` fallback fabricated a leg C++ would reject.
+				// FollowMovementGenerator::Update retries each tick, so this is
+				// a per-tick stand-still, not a stuck state.
+				motion.Moving = false
+			} else {
+				motion.Orientation = ownerOrient
+				duration := splineDurationMs(float64(dist), speed)
+				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, ownerOrient, true)
+				motion.X = destX
+				motion.Y = destY
+				motion.Z = destZ
+				motion.Moving = true
+				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 			}
-			duration := splineDurationMs(float64(dist), speed)
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, ownerOrient, true)
-			motion.X = destX
-			motion.Y = destY
-			motion.Z = destZ
-			motion.Moving = true
-			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 		} else {
 			motion.Moving = false
 		}
@@ -1024,23 +1033,29 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		dx := targetX - motion.X
 		dy := targetY - motion.Y
 		angle := float32(math.Atan2(float64(dy), float64(dx)))
-		motion.Orientation = angle
 		destX := targetX - 1.5*float32(math.Cos(float64(angle)))
 		destY := targetY - 1.5*float32(math.Sin(float64(angle)))
 		destZ := targetZ
 		speed := motion.RunSpeed
-		if speed <= 0 {
-			speed = 7.0
+		if speed < 0.001 {
+			// ChaseMovementGenerator launches with no explicit velocity
+			// (ChaseMovementGenerator.cpp:230-234), so the owner's speed feeds
+			// MoveSplineInitArgs::Validate (MoveSpline.cpp:210) — below 0.001
+			// no spline launches and no SMSG_MONSTER_MOVE is sent. A zero-speed
+			// pet stands still instead of sprinting at base run speed.
+			motion.Moving = false
+		} else {
+			motion.Orientation = angle
+			duration := uint32(float64(dist) / float64(speed) * 1000.0)
+			if duration < 200 {
+				duration = 200
+			}
+			motion.X = destX
+			motion.Y = destY
+			motion.Z = destZ
+			motion.Moving = true
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false)
 		}
-		duration := uint32(float64(dist) / float64(speed) * 1000.0)
-		if duration < 200 {
-			duration = 200
-		}
-		motion.X = destX
-		motion.Y = destY
-		motion.Z = destZ
-		motion.Moving = true
-		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false)
 	} else {
 		motion.Moving = false
 

@@ -185,6 +185,14 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 }
 
 func (s *session) teleportToStayOnTransport(mapID uint32, x, y, z, orientation float32, stayOnTransport bool) bool {
+	return s.teleportToOptions(mapID, x, y, z, orientation, stayOnTransport, false)
+}
+
+// teleportToOptions is the full Player::TeleportTo twin: stayOnTransport
+// carries TELE_TO_NOT_LEAVE_TRANSPORT (Transport.cpp:676) and teleToSpell
+// carries TELE_TO_SPELL (SpellEffects.cpp:1227-1228) — a teleport spell's own
+// far teleport must not interrupt its caster's cast (Player.cpp:1841-1842).
+func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, stayOnTransport, teleToSpell bool) bool {
 	if s.player == nil {
 		return false
 	}
@@ -353,8 +361,22 @@ func (s *session) teleportToStayOnTransport(mapID uint32, x, y, z, orientation f
 			s.server.broadcastTeleportMovement(s, nearbyPacket)
 		}
 	} else {
-		// Player::TeleportTo far branch (Player.cpp:1844-1845): CHANGE_MAP |
-		// MOVE | TURNING auras are removed before the transfer packets.
+		// Player::TeleportTo far branch (Player.cpp:1836-1845), in C++ order:
+		// RemoveAllDynObjects first, then the spellcast stop — but not when
+		// the teleport is the spell's own (TELE_TO_SPELL, Player.cpp:1841-1842:
+		// "not attempt interrupt teleportation spell at caster teleport") —
+		// then the CHANGE_MAP | MOVE | TURNING aura strip. The interrupt twins
+		// no-op when nothing is active, which subsumes C++'s
+		// IsNonMeleeSpellCast(true) gate; the IsInterruptable (Executing)
+		// gate rides interruptCurrentCast.
+		if s.server != nil {
+			s.server.despawnAllCasterDynObjects(s.playerGUID)
+		}
+		if !teleToSpell {
+			s.interruptCurrentCast()
+			s.interruptCurrentChannel()
+			s.cancelAutoRepeatOnInterrupt()
+		}
 		s.removeAurasWithInterruptFlags(auraInterruptFlagChangeMap | auraInterruptFlagMove | auraInterruptFlagTurning)
 		pending := protocol.NewBuffer(12)
 		pending.WriteU32(mapID)

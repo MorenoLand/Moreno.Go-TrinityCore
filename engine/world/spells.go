@@ -35651,7 +35651,9 @@ func (s *session) teleportEffectUnitTargets(hitTargets []uint64, mapID uint32, x
 // TELE_TO_NOT_LEAVE_COMBAT | TELE_TO_NOT_UNSUMMON_PET, so combat is not
 // stopped, the pet is never unsummoned, and selection is not cleared),
 // which is nearTeleportMove; only a cross-map destination takes the far
-// path (Player::TeleportTo with TELE_TO_SPELL, SpellEffects.cpp:1227-1228).
+// path (Player::TeleportTo with TELE_TO_SPELL, SpellEffects.cpp:1227-1228) —
+// hence teleportToOptions with teleToSpell=true: the far branch must not
+// interrupt the teleport spell's own cast (Player.cpp:1841-1842).
 // The movement-state clear mirrors teleportTo's same-map tail (the shared
 // Player::TeleportTo prefix resets movement flags on any teleport,
 // Player.cpp:1704-1706).
@@ -35671,7 +35673,7 @@ func (s *session) teleportSpellEffectCaster(mapID uint32, x, y, z, ori float32) 
 		s.isMoving = false
 		return
 	}
-	s.teleportTo(mapID, x, y, z, ori)
+	s.teleportToOptions(mapID, x, y, z, ori, false, true)
 }
 
 // handleEffectTeleUnitsFaceCaster mirrors Spell::EffectTeleUnitsFaceCaster
