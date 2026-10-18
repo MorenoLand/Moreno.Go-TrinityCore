@@ -25,12 +25,11 @@
 -- Fight shape (C++-exact for all modeled arms):
 -- OnEnterCombat(1): per-GUID latch of the C++ JustEngagedWith
 -- schedule — hemorrhage 5-8s, kidney shot 12-15s (ScheduleEvent
--- urand ranges, C++-exact), Talk(SAY_AGGRO 0) — the C++ Talk
--- targets the engaging player; the Go Talk bridge takes a textId
--- only (broadcast to nearby, C++-exact for the line played) —
--- documented deviation — + 1s scheduler pump (events.Reset in
--- the C++ latch — the pump is cancelled first, gargolmar
--- precedent).
+-- urand ranges, C++-exact); Talk(SAY_AGGRO 0, player) gated on
+-- the engaging unit being a player (who->ToPlayer()) with Talk's
+-- optional whisper-target arg (whisperTarget arm, C++-exact) —
+-- + 1s scheduler pump (events.Reset in the C++ latch — the pump
+-- is cancelled first, gargolmar precedent).
 -- Pump (C++ UpdateAI arm order): hemorrhage arm —
 -- DoCastVictim(SPELL_HEMORRHAGE 30478), re-arm urand(12s, 168s)
 -- (C++-exact range); kidney-shot arm —
@@ -128,15 +127,17 @@ end
 
 -- C++ JustEngagedWith schedule values land on OnEnterCombat:
 -- hemorrhage 5-8s, kidney shot 12-15s (C++ urand ranges,
--- C++-exact), Talk(SAY_AGGRO 0) — the Go Talk bridge takes a
--- textId only, so the victim targeting collapses to the nearby
--- broadcast (line still plays, C++-exact) — + 1s scheduler
--- pump (events.Reset in the C++ latch — the pump is cancelled
--- first, gargolmar precedent).
-local function onEnterCombat(_, creature)
+-- C++-exact); Talk(SAY_AGGRO 0) only when the engaging unit is
+-- a player (who->ToPlayer()), with Talk's optional whisper-
+-- target arg (C++-exact) — + 1s scheduler pump (events.Reset
+-- in the C++ latch — the pump is cancelled first, gargolmar
+-- precedent).
+local function onEnterCombat(_, creature, target)
     local guid = creature:GetGUID()
     cancelPump(guid)
-    creature:Talk(SAY_AGGRO)
+    if target and target:GetObjectType() == "Player" then
+        creature:Talk(SAY_AGGRO, target)
+    end
     -- C++ JustEngagedWith (zone_dragonblight.cpp:617-624) re-schedules
     -- the two timers and Talks but does NOT touch _textCounter /
     -- _playerGUID (only Reset() clears them) — preserve any pre-combat
@@ -163,11 +164,10 @@ end
 -- Iron (48603) talk ladder. The first qualifying hit latches
 -- the caster's GUID (textCounter starts 1, the C++ ctor value);
 -- only the latched caster's subsequent hits advance the ladder.
--- Talk(textCounter, player) collapses to the textId-only
--- broadcast (documented deviation, same class as the engage
--- Talk); KilledMonsterCredit(NPC_TORTURER_LECRAFT 27394) at
--- counter 5 has no lua bridge — unmodeled; counter wraps
--- 13 -> 6.
+-- Talk(textCounter, player) passes the latched player as Talk's
+-- whisper-target arg (C++-exact); KilledMonsterCredit(
+-- NPC_TORTURER_LECRAFT 27394) at counter 5 has no lua bridge —
+-- unmodeled; counter wraps 13 -> 6.
 local function onSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_HIGH_EXECUTORS_BRANDING_IRON then
         return
@@ -187,7 +187,7 @@ local function onSpellHit(event, creature, caster, spellId)
     if st.playerGUID ~= caster:GetGUID() then
         return
     end
-    creature:Talk(st.textCounter)
+    creature:Talk(st.textCounter, caster)
     st.textCounter = st.textCounter + 1
     if st.textCounter == 13 then
         st.textCounter = 6

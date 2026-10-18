@@ -148,6 +148,7 @@ end
 -- Forward declarations: onShadowNova / onSWPain reference the arming
 -- helpers that are assigned below (cyclic chain; gal_darah idiom).
 local armShadowNova, armSWPain
+local onSWPain
 
 local function onShadowNova(creature, guid)
     local st = malchezaarState[guid]
@@ -238,7 +239,7 @@ armSWPain = function(creature, guid, delay)
     schedule(guid, "swpain", delay, function() onSWPain(creature, guid) end)
 end
 
-local function onSWPain(creature, guid)
+onSWPain = function(creature, guid)
     local st = malchezaarState[guid]
     if st == nil or st.phase == PHASE_TWO then
         return
