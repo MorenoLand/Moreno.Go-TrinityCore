@@ -69,8 +69,10 @@
 -- triggered=false, vaelastrasz convention) and heroic strike 45026
 -- 3s then 2s (non-triggered DoCastVictim; nil ticks cast nothing but
 -- keep the schedule, jeklik convention). OnDamageTaken: the sath-
--- GUID damage-source arm (damage = 0 from anyone but sathrovarr) has
--- no instance-creature bridge — skipped; health thresholds use the
+-- GUID damage-source arm (damage = 0 from anyone but sathrovarr,
+-- C++ DamageTaken :375-376) rides attacker:GetEntry() (object.go
+-- generic fallback) against ENTRY_SATHROVARR — the single-Sathrovarr
+-- entry proxy for the GUID compare; health thresholds use the
 -- pre-damage health (C++ DamageTaken evaluates HealthBelowPct before
 -- the damage is applied): below 75% in phase 1 -> Talk(SAY_GOOD_
 -- NEAR_DEATH_0), phase 2; below 50% in phase 2 -> phase 3, Talk(SAY_
@@ -414,11 +416,15 @@ local function humanEnterCombat(event, creature, target)
     end)
 end
 
--- C++ DamageTaken: the sath-GUID damage-source rewrite has no
--- instance-creature bridge — skipped; the health-threshold Talks use
--- pre-damage health (C++ HealthBelowPct is evaluated before the
--- damage is applied).
+-- C++ DamageTaken: damage = 0 from anyone but sathrovarr (C++ :375-
+-- 376); attacker:GetEntry() (object.go generic fallback) against
+-- ENTRY_SATHROVARR is the entry proxy for the sath-GUID compare.
+-- The health-threshold Talks use pre-damage health (C++ HealthBelowPct
+-- is evaluated before the damage is applied).
 local function humanDamageTaken(event, creature, attacker, damage)
+    if attacker == nil or attacker:GetEntry() ~= ENTRY_SATHROVARR then
+        return false, 0
+    end
     local guid = creature:GetGUID()
     local phase = humanSayPhase[guid] or 1
     if belowPct(creature, 75) and phase == 1 then

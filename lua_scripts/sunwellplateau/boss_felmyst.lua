@@ -30,8 +30,10 @@
 -- convention; nil pick casts nothing but keeps the schedule) /
 -- berserk 45078 10min one-shot: Talk(YELL_BERSERK), triggered
 -- self-cast (C++ DoCast(me, SPELL_BERSERK, true)), then re-armed
--- at 10s (C++-exact — the C++ handler re-schedules EVENT_BERSERK
--- at 10s after every fire). OnTargetDied(3): Talk(YELL_KILL), no
+-- at 10s (C++-exact — the PHASE_GROUND arm re-schedules
+-- EVENT_BERSERK at 10s; the PHASE_FLIGHT arm fires without
+-- re-arming, and the ground-only Lua model matches that arm).
+-- OnTargetDied(3): Talk(YELL_KILL), no
 -- TYPEID gate (C++-exact — the C++ KilledUnit Talk has no victim
 -- gate). OnDied(4): Talk(YELL_DEATH); the SetBossState(DONE) arm
 -- is blocked on the instance-script model. OnReset(23): the
