@@ -5617,7 +5617,10 @@ func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) boo
 		s.sendSaveGuildEmblemResult(guildEmblemNoGuild)
 		return true
 	}
-	if uint64(leaderGUID) != s.playerGUID {
+	// Reference: Guild::HandleSetEmblem (Guild.cpp:1343-1347) gates on
+	// Guild::_IsLeader — the leader GUID or any rank-0 (guildmaster) member
+	// (Guild.cpp:2485-2492), not a raw leader-guid comparison.
+	if !s.isGuildLeader(ctx, leaderGUID) {
 		s.sendSaveGuildEmblemResult(guildEmblemNotGuildMaster)
 		return true
 	}

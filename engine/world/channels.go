@@ -1438,10 +1438,20 @@ func (s *session) handleChannelOwner(ctx context.Context, payload []byte) bool {
 				break
 			}
 		}
+	}
+	s.server.channelsMu.RUnlock()
+	// Reference: ChannelOwnerAppend (ChannelAppenders.h:190-199) resolves the
+	// owner name via sCharacterCache->GetCharacterCacheByGuid — the correct
+	// name even when the owner is offline. Fall back to the characters table
+	// when the owner is not among the live members; constant channels (or a
+	// zero owner) answer "Nobody".
+	if custom && owner != 0 {
+		if ownerName == "" && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ? LIMIT 1", owner).Scan(&ownerName)
+		}
 	} else {
 		ownerName = "Nobody"
 	}
-	s.server.channelsMu.RUnlock()
 	if !on {
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
