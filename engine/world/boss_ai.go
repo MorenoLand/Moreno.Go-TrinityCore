@@ -9125,6 +9125,21 @@ func init() {
 	// kiss_area, spell_fel_streak_visual — no SpellScript / AuraScript
 	// binding bridge (razelikh precedent).
 	RegisterLuaBoss("boss_lord_jaraxxus", 34780)
+	// npc_toc_boomkin: Faction Champions balance-druid champion script,
+	// entries 34460 (Alliance, NPC_ALLIANCE_DRUID_BALANCE) / 34451 (Horde,
+	// NPC_HORDE_DRUID_BALANCE) — trial_of_the_crusader.h:183/197 kalecgos
+	// pass. Fight logic in lua_scripts/northrend/npc_toc_boomkin.lua:
+	// Reset-scheduled 8-event rotation (cyclone 65859 random non-tank,
+	// entangling roots 65857 random <=30yd, faerie fire 65863 / force of
+	// nature 65861 / insect swarm 65855 / moonfire 65856 / starfire 65854
+	// victim, barkskin 65860 <30% self) + equipment staff 50966; engage
+	// triggered self-cast anti-AOE 68595. Base-class legs (instance
+	// GetData DATA_TEAM, threat/power machines, controller cross-AI
+	// DoAction, DoZoneInCombat, DoSpellAttackIfReady wrath) unbridged —
+	// documented in the lua header. Controller encounter machine still
+	// documented-only (06:5x audit).
+	RegisterLuaBoss("npc_toc_boomkin", 34460)
+	RegisterLuaBoss("npc_toc_boomkin", 34451)
 	// boss_twin_valkyr: Trial of the Crusader dungeon boss script,
 	// entries 34497 Fjola Lightbane (trial_of_the_crusader.h
 	// NPC_FJOLA_LIGHTBANE — kalecgos pass;
