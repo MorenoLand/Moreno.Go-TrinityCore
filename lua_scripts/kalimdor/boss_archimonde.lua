@@ -81,9 +81,11 @@
 --   instance->SetData(DATA_ARCHIMONDE, DONE) leg and BossAI::_JustDied
 --   are instance bookkeeping (blocked, standing).
 -- - Reset (event 23): C++ Initialize() clears enraged/protected/charges
---   and RemoveAllAuras clears the soul-charge auras (no RemoveAllAuras
---   bridge — subsumed by the counter reset); _Reset() is instance
---   bookkeeping (blocked, standing).
+--   (modeled by clearState) + me->RemoveAllAuras() clears the
+--   soul-charge auras (cpp:299 — now ported; stale "no RemoveAllAuras
+--   bridge" claim retracted, creature:RemoveAllAuras() bridged,
+--   engine/world/lua_creature_events.go:166, hor_gauntlet_trash
+--   precedent); _Reset() is instance bookkeeping (blocked, standing).
 -- Unmodeled (documented-only, no bridges):
 -- - EVENT_DOOMFIRE (Talk SAY_DOOMFIRE (2) + SummonDoomfire): the entire
 --   effect is summon choreography — SummonCreature(NPC_DOOMFIRE_SPIRIT
@@ -423,6 +425,9 @@ local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     clearState(guid)
+    -- C++ Reset: Initialize() (counter reset, above) +
+    -- me->RemoveAllAuras() (soul-charge auras, cpp:299).
+    creature:RemoveAllAuras()
 end
 
 local function onDied(event, creature, killer)

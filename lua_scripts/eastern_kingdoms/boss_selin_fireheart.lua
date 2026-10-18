@@ -50,8 +50,12 @@
 -- EVENT_DRAIN_LIFE randtime(3s,7s) -> 10s loop: random-player within
 -- 20.0f (GetPlayersInWorld + map/instance/alive/IsWithinDist filter,
 -- maiden precedent) cast 44294 non-triggered; EVENT_DRAIN_CRYSTAL's
--- non-heroic 20s/25s timing is modeled as the flag re-arm (crystal
--- selection itself stays out, above).
+-- non-heroic 20s/25s (heroic 10s/15s) timing is modeled as the flag
+-- re-arm (crystal selection itself stays out, above); heroic-only
+-- EVENT_DRAIN_MANA: same drawn timer + 5s -> 10s loop: random-player
+-- within 45.0f cast 46153 non-triggered (stale "no difficulty /
+-- SelectTarget bridge" claims retracted — IsHeroic bridged,
+-- engine/world/lua_creature_events.go:260).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
 -- packet-visual), so the fel-explosion timer fires unconditionally and
 -- the in-loop casting gate is dropped (maiden precedent). The C++
@@ -71,14 +75,16 @@
 -- bridge — no caller exists on the Lua surface.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - the sub-10%-mana latch -> EVENT_DRAIN_LIFE now ported (below);
---   the latch's EVENT_DRAIN_CRYSTAL 20s/25s leg is modeled as a
---   flag-reset only (SelectNearestCrystal needs FindNearestCreature
---   + MotionMaster, unbridged); the old "GetPower not bridged on
---   creatures" claim is retracted (GetPowerPct is bridged on generic
---   objects, engine/scripting/object.go). The heroic fork (DRAIN_
---   CRYSTAL 10s/15s + DRAIN_MANA 46153) stays out — no difficulty
---   bridge. The whole PHASE_DRAIN machine below stays out on
---   missing motion/flag/kill legs.
+--   the latch's EVENT_DRAIN_CRYSTAL 20s/25s (heroic 10s/15s) leg is
+--   modeled as a flag-reset only (SelectNearestCrystal needs
+--   FindNearestCreature + MotionMaster, unbridged); the old
+--   "GetPower not bridged on creatures" claim is retracted
+--   (GetPowerPct is bridged on generic objects,
+--   engine/scripting/object.go), and the stale "no difficulty
+--   bridge" for the heroic fork is retracted (creature:IsHeroic()
+--   bridged, engine/world/lua_creature_events.go:260). The whole
+--   PHASE_DRAIN machine below stays out on missing motion/flag/kill
+--   legs.
 -- - EVENT_DRAIN_CRYSTAL -> SelectNearestCrystal():
 --   FindNearestCreature(NPC_FEL_CRYSTAL = 24722, 250.0f) + Talk(
 --   SAY_ENERGY) + Talk(EMOTE_CRYSTAL) + DoCast(crystal,
@@ -91,9 +97,9 @@
 --   MotionMaster Clear + MoveChase(victim) — no MotionMaster bridge.
 -- - EVENT_DRAIN_LIFE now ported (below); stale "no SelectTarget
 --   bridge" claim retracted (maiden_of_virtue precedent).
--- - EVENT_DRAIN_MANA: SelectTarget(Random, 0, 45.0f) -> DoCast(46153)
---   — no SelectTarget bridge, and the whole arm is heroic-gated (no
---   difficulty bridge).
+-- - EVENT_DRAIN_MANA now ported (below, heroic-only): SelectTarget(
+--   Random, 0, 45.0f) -> DoCast(46153) non-triggered, 10s loop;
+--   stale "no SelectTarget / difficulty bridge" claims retracted.
 -- - JustDied's ShatterRemainingCrystals: GetCreatureListWithEntryInGrid
 --   + KillSelf — no creature-list bridge.
 -- - npc_fel_crystal (the file's second CreatureScript class): its only
@@ -106,6 +112,7 @@ local SAY_DEATH = 4
 
 local SPELL_FEL_EXPLOSION = 44314
 local SPELL_DRAIN_LIFE = 44294
+local SPELL_DRAIN_MANA = 46153
 
 local ENTRY_SELIN_FIREHEART = 24723
 
@@ -157,6 +164,16 @@ local function onDrainLife(creature, guid)
     schedule(guid, "drain_life", 10000, function() onDrainLife(creature, guid) end)
 end
 
+-- C++ EVENT_DRAIN_MANA (heroic-only): SelectTarget(Random, 0, 45.0f)
+-- -> DoCast(46153), non-triggered; re-arm ScheduleEvent(10s).
+local function onDrainMana(creature, guid)
+    local target = randomTargetInRange(creature, 45)
+    if target then
+        creature:CastSpell(target, SPELL_DRAIN_MANA)
+    end
+    schedule(guid, "drain_mana", 10000, function() onDrainMana(creature, guid) end)
+end
+
 local function onDrainCrystalReset(_, guid)
     drainScheduled[guid] = false
 end
@@ -164,8 +181,16 @@ end
 local function checkManaLatch(creature, guid)
     if not drainScheduled[guid] and creature:GetPowerPct() < 10 then
         drainScheduled[guid] = true
-        schedule(guid, "drain_life", {3000, 7000}, function() onDrainLife(creature, guid) end)
-        schedule(guid, "drain_crystal", {20000, 25000}, function() onDrainCrystalReset(creature, guid) end)
+        -- C++ draws the DRAIN_LIFE timer once (randtime(3s,7s)) and
+        -- reuses it for the heroic DRAIN_MANA (timer + 5s).
+        local timer = math.random(3000, 7000)
+        schedule(guid, "drain_life", timer, function() onDrainLife(creature, guid) end)
+        if creature:IsHeroic() then
+            schedule(guid, "drain_crystal", {10000, 15000}, function() onDrainCrystalReset(creature, guid) end)
+            schedule(guid, "drain_mana", timer + 5000, function() onDrainMana(creature, guid) end)
+        else
+            schedule(guid, "drain_crystal", {20000, 25000}, function() onDrainCrystalReset(creature, guid) end)
+        end
     end
 end
 

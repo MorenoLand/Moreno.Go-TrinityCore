@@ -34,12 +34,13 @@
 -- SummonCreature(NPC_SPIRESTONE_WARLORD=9216, SummonLocation1,
 -- TEMPSUMMON_TIMED_DESPAWN, 5min) + SummonCreature(
 -- NPC_SMOLDERTHORN_BERSERKER=9268, SummonLocation2, ...) then
--- AI()->AttackStart(target) on each — no SelectTarget, SummonCreature
--- or AttackStart bridges on the Lua surface (halycon gizrul
--- precedent). Summoned is write-only otherwise, so no Lua state is
--- ported. Porting the four timers without the latch does not strand
--- the fight — the latch is an add-spawn mid-fight arm, not the combat
--- trigger.
+-- AI()->AttackStart(target) on each — no SummonCreature or
+-- AttackStart bridges on the Lua surface (the "no SelectTarget"
+-- parenthetical is retracted as moot — the random-player pool is
+-- bridged; halycon gizrul precedent). Summoned is write-only
+-- otherwise, so no Lua state is ported. Porting the four timers
+-- without the latch does not strand the fight — the latch is an
+-- add-spawn mid-fight arm, not the combat trigger.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and both
 -- in-loop casting gates are dropped (maiden precedent). The C++

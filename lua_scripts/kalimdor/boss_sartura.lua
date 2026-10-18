@@ -33,8 +33,11 @@
 -- - Whirlwind random-target switch (WhirlWindRandom 3-7s:
 --   SelectTarget Random 100y + AddThreat + AttackStart) and the
 --   AggroReset arms (45-55s -> 2-5s re-arm, AggroResetEnd 5s ->
---   35-45s): no SelectTarget/AttackStart/ResetThreatList bridge
---   (buru precedent — target switching unmodeled).
+--   35-45s): no AttackStart / AddThreat / ResetThreatList bridges
+--   (the "no SelectTarget" parenthetical is retracted as moot — the
+--   random-player pool is bridged — but the arms stay out behind
+--   AttackStart + threat-modeling; buru precedent — target switching
+--   unmodeled).
 -- - at_aq_battleguard_sartura (AreaTriggerScript 4052):
 --   GetInstanceScript + GetCreature(DATA_SARTURA) + AttackStart —
 --   no at/InstanceScript bridge (document-only, like the ruins

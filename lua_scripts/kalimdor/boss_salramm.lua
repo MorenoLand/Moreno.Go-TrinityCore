@@ -22,11 +22,15 @@
 -- like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer at
---   its C++ ScheduleEvent cooldown ({19s,24s} / 2s / {25s,35s}); the
---   BossAI::JustEngagedWith instance leg is blocked (standing); the
---   IsHeroic()-gated EVENT_CURSE_FLESH 40s arm is never scheduled —
---   no difficulty/heroic bridge (standing heroic-unmodeled case, the
---   temporus SPELL_REFLECTION / deja ATTRACTION precedent).
+--   its C++ ScheduleEvent cooldown ({19s,24s} / 2s / {25s,35s} /
+--   40s heroic-only); the BossAI::JustEngagedWith instance leg is
+--   blocked (standing).
+-- - Curse of Twisted Flesh (EVENT_CURSE_FLESH, heroic-only):
+--   DoCastVictim(SPELL_CURSE_OF_TWISTED_FLESH 58845), non-triggered,
+--   init 40s -> repeat 37s (C++ Repeat unconditional, nil victim ->
+--   no cast), scheduled only under creature:IsHeroic() (C++-exact;
+--   stale "no difficulty/heroic bridge" claim retracted — temporus
+--   SPELL_REFLECTION / deja ATTRACTION precedent).
 -- - Summon Ghouls (EVENT_SUMMON_GHOULS): Talk SAY_SUMMON_GHOULS (6) +
 --   DoCastAOE(SPELL_SUMMON_GHOULS 52451), non-triggered (DoCastAOE
 --   resolves to self-cast — kazrogal/illidan precedent), init
@@ -63,11 +67,6 @@
 --   Lua API (arthas JustAppeared precedent); instance->GetBossState
 --   (DATA_SALRAMM) == DONE -> RemoveLootMode(LOOT_MODE_DEFAULT) — no
 --   instance-data bridge (epoch InitializeAI precedent).
--- - EVENT_CURSE_FLESH (SPELL_CURSE_OF_TWISTED_FLESH 58845): DoCastVictim
---   (the ctor args carry IsHeroic() as the triggered flag in C++ —
---   DoCastVictim(spell) is non-triggered), init 40s -> repeat 37s,
---   scheduled only under IsHeroic() — never fires without a
---   difficulty bridge (standing heroic-unmodeled case).
 -- - BossAI::JustEngagedWith / BossAI::_Reset / BossAI::_JustDied
 --   instance legs — blocked (standing).
 -- - spell_salramm_steal_flesh (AuraScript): HandlePeriodic on
@@ -95,6 +94,7 @@ local SPELL_SUMMON_GHOULS = 52451
 local SPELL_EXPLODE_GHOUL = 52480
 local SPELL_SHADOW_BOLT   = 57725
 local SPELL_STEAL_FLESH   = 52708
+local SPELL_CURSE_OF_TWISTED_FLESH = 58845
 
 local timers = {}
 
@@ -198,6 +198,18 @@ local function onStealFlesh(creature, guid)
     end)
 end
 
+-- C++ EVENT_CURSE_FLESH: DoCastVictim(SPELL_CURSE_OF_TWISTED_FLESH),
+-- non-triggered; Repeat(37s) unconditional.
+local function onCurseFlesh(creature, guid)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_CURSE_OF_TWISTED_FLESH)
+    end
+    schedule(guid, "curseflesh", 37000, function()
+        onCurseFlesh(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -211,6 +223,12 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "stealflesh", math.random(25000, 35000), function()
         onStealFlesh(creature, guid)
     end)
+    -- C++: if (IsHeroic()) ScheduleEvent(EVENT_CURSE_FLESH, 40s).
+    if creature:IsHeroic() then
+        schedule(guid, "curseflesh", 40000, function()
+            onCurseFlesh(creature, guid)
+        end)
+    end
 end
 
 local function onLeaveCombat(event, creature)
