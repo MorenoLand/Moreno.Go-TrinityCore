@@ -5,12 +5,19 @@
 -- (karazhan.h:36,49); the encounter never reads encounter state — the
 -- library-door arms have no Go model (see deviations).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
--- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
--- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent. C++ Aran melees only
+-- when all three school cooldowns are armed — i.e. only right after a
+-- successful interrupt (if (ArcaneCooldown && FireCooldown && FrostCooldown)
+-- DoMeleeAttackIfReady()); with the interrupt arm unportable he effectively
+-- never melees in C++. Melee is engine-driven in Go (creature combat tick)
+-- and cannot be gated on the missing interrupt, so the port melees where
+-- C++ does not — a genuine bridge gap.
 -- Fight shape: every 1s a random normal bolt (frostbolt 29954 / fireball
 -- 29953 / arc missile 29955 — the three 5s school cooldowns are only ever
--- armed by the interrupt arm, which has no Lua-modelable input, so all
--- three are always available); every 5-20s a secondary (AOE counterspell
+-- armed by the interrupt arm (event 14 fires, but C++ needs the
+-- SPELL_EFFECT_INTERRUPT_CAST effect data the hook does not carry, so the
+-- arm has no Lua-modelable input and all three schools stay available);
+-- every 5-20s a secondary (AOE counterspell
 -- 29961 or chains of ice 29991); every 35-40s a super spell that never
 -- repeats the previous one — arcane explosion (blink center 29967,
 -- player pull 32265, mass slow 30035, then 29973), flame wreath (29946 on
@@ -38,11 +45,13 @@
 -- visual casts — the whole drink arm (SAY_DRINK=4, mass poly 29963,
 -- conjure 29975, drink 29975 30024, potion 32453, AOE pyroblast 29978, the
 -- drink-interrupt damage hook, the 10s interrupt timer) is skipped; SAY_4
--- never fires. The SpellHit interrupt arm has no modelable input — the
--- engine's OnHitBySpell hook passes only the spell id, while C++ checks
--- SPELL_EFFECT_INTERRUPT_CAST on the spell effects. No facing on the
--- bridge, so the flame-wreath 3-yd check is 2D distance from the cast
--- point; the C++ punishment is the moved unit casting 20476 on itself
+-- never fires. The SpellHit interrupt arm stays out: CreatureEventOnHitBySpell
+-- (14) is wired and fires with caster + spell id, but C++ gates on
+-- spellInfo->Effects[i].Effect == SPELL_EFFECT_INTERRUPT_CAST and no
+-- bridge exposes a spell's effect list. The flame-wreath 3-yd check is 2D
+-- distance from the cast point — C++-exact
+-- (unit->IsWithinDist2d(FWTargPosX[i], FWTargPosY[i], 3); no facing
+-- involved); the C++ punishment is the moved unit casting 20476 on itself
 -- with Aran as original caster — the bridge's CastSpell lives on the boss
 -- object, so Aran casts 20476 onto the moved player instead (11027 via
 -- player:AddAura, as C++ casts it triggered on the unit).
@@ -123,6 +132,18 @@ local function schedule(store, guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+local function alivePlayers(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            found[#found + 1] = p
+        end
+    end
+    return found
+end
+
 local function alivePlayersInRange(creature, maxDist)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
@@ -187,9 +208,9 @@ end
 local function startFlameWreath(creature, guid)
     local st = aranState[guid]
     -- C++ FlameWreathEffect: up to 3 random alive players from the threat
-    -- list (random removal while > 3); no threat model on the bridge, so
-    -- the pool is the alive instance players.
-    local pool = alivePlayersInRange(creature, 100)
+    -- list (random removal while > 3), with no range cap; no threat model on
+    -- the bridge, so the pool is the alive instance players, uncapped.
+    local pool = alivePlayers(creature)
     while #pool > 3 do
         table.remove(pool, math.random(#pool))
     end

@@ -27,10 +27,12 @@
 -- axes are never spawned, so the phase-3 AxesTargetSwitchTimer threat
 -- rewiring (no threat model) is skipped entirely. No instance-script
 -- model, so the DATA_GO_NETHER_DOOR toggles on Reset/JustEngagedWith/
--- JustDied are skipped. The phase-2 equipment swap (SetEquipmentSlots,
--- SetCanDualWield, OFF_ATTACK 1.5x) and the thrash-aura model (12787
--- passive proc) have no bridge — the visual SPELL_EQUIP_AXES (30857) and
--- the thrash aura itself are cast triggered on self at the transition.
+-- JustDied are skipped. The phase-2 equipment swap is ported via
+-- creature:SetEquipmentSlots (33542,33542,0xFFFFFFFF at the phase-2
+-- transition; 0,0,0xFFFFFFFF at phase 3 = C++ ClearWeapons) alongside the
+-- visual SPELL_EQUIP_AXES (30857); only SetCanDualWield and the OFF_ATTACK
+-- 1.5x attack-time change have no bridge. The phase-2 thrash aura (12787)
+-- is removed at the phase-3 transition via creature:RemoveAura (bridged).
 -- The UpdateAI stun-gate (UNIT_STATE_STUNNED during the phase-2 shift) and
 -- InterruptNonMeleeSpells have no UNIT_STATE model — timers fire
 -- unconditionally, the standing convention for these ports. The
@@ -40,10 +42,14 @@
 -- with no range cap, while Amplify Damage and phase-3 SW:Pain use the
 -- 100 yd SelectTarget cap (creature:GetDistance). The phase-3
 -- Shadow Nova clamp (re-arm to EnfeebleTimer+5s when >35s out) is modeled
--- with os.time deadlines recorded at arm time. The phase-2 SWPain freeze
--- (C++ neither fires nor decrements the timer in phase 2, preserving the
--- leftover into phase 3) is approximated: the in-flight timer fires once as
--- a no-op in phase 2 and re-arms 20s at phase-3 entry.
+-- with second-resolution deadline stamps recorded at arm time plus a
+-- shadowArmed latch mirroring C++'s uint32(-1) disabled state: a nova that
+-- already fired in phase 1/2 (not armed) always takes the clamp, as in
+-- C++; an armed timer is clamped only when > 35s remain. The phase-2
+-- SWPain freeze (C++ neither fires nor decrements the timer in phase 2,
+-- preserving the leftover into phase 3) is modeled exactly via the same
+-- deadline stamps: the in-flight timer fires once as a no-op in phase 2
+-- and the preserved leftover is re-armed at phase-3 entry.
 
 local ENTRY_MALCHEZAAR = 15690
 
@@ -132,10 +138,16 @@ local function malchezaarInitState(guid)
     malchezaarState[guid] = {
         phase = PHASE_ONE,
         enfeebleTargets = {},
-        enfeebleDeadline = 0,
-        shadowNovaDeadline = 0,
+        enfeebleDeadlineSec = 0,
+        shadowNovaDeadlineSec = 0,
+        swpainDeadlineSec = 0,
+        shadowArmed = false,
     }
 end
+
+-- Forward declarations: onShadowNova / onSWPain reference the arming
+-- helpers that are assigned below (cyclic chain; gal_darah idiom).
+local armShadowNova, armSWPain
 
 local function onShadowNova(creature, guid)
     local st = malchezaarState[guid]
@@ -144,20 +156,23 @@ local function onShadowNova(creature, guid)
     end
     -- C++ DoCastVictim — nil falls back to the current victim.
     creature:CastSpell(nil, SPELL_SHADOWNOVA)
+    -- C++: ShadowNovaTimer = phase == 3 ? 31000 : uint32(-1) (disabled).
+    st.shadowArmed = false
     if st.phase == PHASE_THREE then
-        -- C++ ShadowNovaTimer = 31000 only in phase 3; otherwise -1 (never).
-        st.shadowNovaDeadline = os.time() + 31
-        schedule(guid, "shadow", 31000, function() onShadowNova(creature, guid) end)
+        armShadowNova(creature, guid, 31000)
     end
 end
 
-local function armShadowNova(creature, guid, delay)
+armShadowNova = function(creature, guid, delay)
     local st = malchezaarState[guid]
     if st == nil then
         return
     end
     cancelOne(guid, "shadow")
-    st.shadowNovaDeadline = os.time() + math.floor(delay / 1000)
+    -- Deadline in fractional seconds: the C++ 35000 ms clamp threshold
+    -- needs sub-second fidelity (35500 ms must compare > 35).
+    st.shadowNovaDeadlineSec = os.time() + delay / 1000
+    st.shadowArmed = true
     schedule(guid, "shadow", delay, function() onShadowNova(creature, guid) end)
 end
 
@@ -206,11 +221,21 @@ local function onEnfeeble(creature, guid)
         creature:CastSpell(target, SPELL_ENFEEBLE, true)
         target:SetHealth(1)
     end
-    st.enfeebleDeadline = os.time() + 30
+    st.enfeebleDeadlineSec = os.time() + 30
     schedule(guid, "enfeeble", 30000, function() onEnfeeble(creature, guid) end)
     -- C++: ShadowNovaTimer = 5000, EnfeebleResetTimer = 9000.
     armShadowNova(creature, guid, 5000)
     schedule(guid, "enfeeblereset", 9000, function() onEnfeebleReset(creature, guid) end)
+end
+
+armSWPain = function(creature, guid, delay)
+    local st = malchezaarState[guid]
+    if st == nil then
+        return
+    end
+    cancelOne(guid, "swpain")
+    st.swpainDeadlineSec = os.time() + delay / 1000
+    schedule(guid, "swpain", delay, function() onSWPain(creature, guid) end)
 end
 
 local function onSWPain(creature, guid)
@@ -230,7 +255,7 @@ local function onSWPain(creature, guid)
             creature:CastSpell(target, SPELL_SW_PAIN)
         end
     end
-    schedule(guid, "swpain", 20000, function() onSWPain(creature, guid) end)
+    armSWPain(creature, guid, 20000)
 end
 
 local function onSunderArmor(creature, guid)
@@ -286,15 +311,19 @@ local function startPhaseTwo(creature, guid)
         return
     end
     -- C++ UpdateAI phase-1 arm: InterruptNonMeleeSpells (no bridge),
-    -- DoCast SPELL_EQUIP_AXES, Talk(SAY_AXE_TOSS1), thrash aura triggered;
-    -- the SetEquipmentSlots / SetCanDualWield / OFF_ATTACK changes have no
-    -- bridge (documented above).
+    -- DoCast SPELL_EQUIP_AXES, Talk(SAY_AXE_TOSS1), thrash aura triggered,
+    -- SetEquipmentSlots(false, EQUIP_ID_AXE, EQUIP_ID_AXE, EQUIP_NO_CHANGE)
+    -- (bridged, ported below); SetCanDualWield and the OFF_ATTACK 1.5x
+    -- attack-time change have no bridge.
     st.phase = PHASE_TWO
     -- C++ arm order: DoCast(EQUIP_AXES) -> Talk(SAY_AXE_TOSS1) ->
     -- DoCast(THRASH_AURA, triggered) (mandokir cast-then-yell precedent).
     creature:CastSpell(creature, SPELL_EQUIP_AXES)
     creature:Talk(SAY_AXE_TOSS1)
     creature:CastSpell(creature, SPELL_THRASH_AURA, true)
+    -- C++ SetEquipmentSlots(false, EQUIP_ID_AXE, EQUIP_ID_AXE,
+    -- EQUIP_NO_CHANGE) = (33542, 33542, 0xFFFFFFFF).
+    creature:SetEquipmentSlots(33542, 33542, 0xFFFFFFFF)
     schedule(guid, "sunder", {5000, 10000}, function() onSunderArmor(creature, guid) end)
     -- C++ Cleave_Timer = 8000 in Initialize, decremented only in the
     -- phase-2 arm, so the first cleave lands 8s after the transition.
@@ -307,29 +336,43 @@ local function startPhaseThree(creature, guid)
         return
     end
     -- C++ UpdateAI phase-2 arm: InfernalTimer = 15000, ClearWeapons /
-    -- RemoveAurasDueToSpell(thrash) (no bridge), Talk(SAY_AXE_TOSS2), two
-    -- axe summons with 10M threat (no summon or threat model — the
-    -- AxesTargetSwitchTimer re-threating is skipped entirely).
+    -- RemoveAurasDueToSpell(thrash) (both bridged, ported below),
+    -- Talk(SAY_AXE_TOSS2), two axe summons with 10M threat (no summon or
+    -- threat model — the AxesTargetSwitchTimer re-threating is skipped
+    -- entirely).
     st.phase = PHASE_THREE
+    -- C++ ClearWeapons: SetEquipmentSlots(false, EQUIP_UNEQUIP,
+    -- EQUIP_UNEQUIP, EQUIP_NO_CHANGE) = (0, 0, 0xFFFFFFFF); the
+    -- SetCanDualWield(false) leg has no bridge.
+    creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
+    creature:RemoveAura(SPELL_THRASH_AURA)
     creature:Talk(SAY_AXE_TOSS2)
     cancelOne(guid, "sunder")
     cancelOne(guid, "cleave")
     cancelOne(guid, "swpain")
     cancelOne(guid, "infernal")
     schedule(guid, "infernal", 15000, function() onInfernal(creature, guid) end)
-    -- C++: if ShadowNovaTimer > 35000, ShadowNovaTimer = EnfeebleTimer + 5000.
-    local remaining = st.shadowNovaDeadline - os.time()
-    if remaining > 35 then
-        local enfeebleRemaining = st.enfeebleDeadline - os.time()
-        if enfeebleRemaining < 0 then
-            enfeebleRemaining = 0
-        end
+    -- C++: if (ShadowNovaTimer > 35000) ShadowNovaTimer = EnfeebleTimer +
+    -- 5000. ShadowNovaTimer is uint32(-1) (unreachable) once the nova fired
+    -- in phase 1/2 without re-arm, so the clamp always applies when no
+    -- timer is armed; an armed timer is clamped only with > 35s left.
+    local enfeebleRemaining = st.enfeebleDeadlineSec - os.time()
+    if enfeebleRemaining < 0 then
+        enfeebleRemaining = 0
+    end
+    if not st.shadowArmed or st.shadowNovaDeadlineSec - os.time() > 35 then
         armShadowNova(creature, guid, (enfeebleRemaining + 5) * 1000)
     end
     -- AmplifyDamage starts at 5000 on phase-3 entry (C++ Initialize).
     schedule(guid, "amplify", 5000, function() onAmplifyDamage(creature, guid) end)
-    -- Phase-3 SWPain targets a random player, not the victim.
-    schedule(guid, "swpain", 20000, function() onSWPain(creature, guid) end)
+    -- Phase-3 SWPain targets a random player, not the victim; C++ neither
+    -- fires nor decrements SWPainTimer in phase 2, so the phase-1 leftover
+    -- is preserved here.
+    local swpainRemaining = st.swpainDeadlineSec - os.time()
+    if swpainRemaining <= 0 then
+        swpainRemaining = 1
+    end
+    armSWPain(creature, guid, swpainRemaining * 1000)
 end
 
 local function malchezaarEnterCombat(event, creature, target)
@@ -338,9 +381,11 @@ local function malchezaarEnterCombat(event, creature, target)
     malchezaarInitState(guid)
     -- C++ JustEngagedWith: Talk(SAY_AGGRO) + door close (no instance model).
     creature:Talk(SAY_AGGRO)
+    local st = malchezaarState[guid]
+    st.enfeebleDeadlineSec = os.time() + 30
     schedule(guid, "enfeeble", 30000, function() onEnfeeble(creature, guid) end)
     armShadowNova(creature, guid, 35500)
-    schedule(guid, "swpain", 20000, function() onSWPain(creature, guid) end)
+    armSWPain(creature, guid, 20000)
     schedule(guid, "infernal", 40000, function() onInfernal(creature, guid) end)
 end
 
