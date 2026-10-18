@@ -113,9 +113,8 @@
 -- bridges — skipped), after a further 1.2s cast 46242, after a
 -- further 2s cast 46228 + 46235, then the chain ends (C++-exact
 -- — no repeat after the counter-2 arm). The 15s DisappearAndDie
--- arm (Reset scheduler) is port-pattern-ready — stale "no despawn
--- bridge" retracted (creature:Despawn() bridged,
--- lua_creature_events.go:214) — deferred by the 4-unit port cap.
+-- arm (Reset scheduler, cpp:528-531) is ported in blackholeReset
+-- via creature:Despawn — stale "no despawn bridge" retracted.
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (BossAI::
 -- JustEngagedWith/JustDied/Reset and the DATA_MURU bookkeeping
@@ -417,6 +416,11 @@ local function blackholeReset(event, creature)
         creature:CastSpell(creature, SPELL_BLACKHOLE_SUMMON_VISUAL)
         schedule(guid, "visual", 1000, function()
             blackholeVisualStep0(creature, guid)
+        end)
+        -- C++ Reset 15s one-shot: me->DisappearAndDie() (cpp:528-531);
+        -- stale "no despawn bridge" retracted, creature:Despawn bridged.
+        schedule(guid, "despawn", 15000, function()
+            creature:Despawn()
         end)
     end
 end

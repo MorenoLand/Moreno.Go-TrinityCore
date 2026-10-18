@@ -45,9 +45,8 @@
 -- instance-script model. OnLeaveCombat(2)/OnReset(23): cancel
 -- timers, drop per-GUID state (C++ Reset: _Reset/_enraged=false;
 -- the EnterEvadeMode _DespawnAtEvade() -> DespawnOrUnsummon() arm is
--- port-pattern-ready (stale "no despawn bridge" retracted:
--- creature:Despawn() is bridged, lua_creature_events.go:214 —
--- supremus precedent, deferred by the 4-unit port cap).
+-- ported in shahrazLeaveCombat via creature:Despawn, supremus
+-- precedent).
 -- The five spell/aura scripts registered by the C++ file have no
 -- script bridges (standing gaps): spell_mother_shahraz_fatal_
 -- attraction (40869 target filter to 3 enemies + TARGET_DEST_
@@ -226,6 +225,9 @@ end
 
 local function shahrazLeaveCombat(event, creature)
     shahrazResetState(creature:GetGUID())
+    -- C++ EnterEvadeMode: _DespawnAtEvade() -> DespawnOrUnsummon()
+    -- (supremus precedent).
+    creature:Despawn()
 end
 
 local function shahrazReset(event, creature)

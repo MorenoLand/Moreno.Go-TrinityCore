@@ -111,10 +111,10 @@
 -- MoveLand(POINT_GROUND)) and the volunteer _volunteerWork=false
 -- latch + PHASE_THREE flip; payload rides the unbridged summon /
 -- movement / instance arms), EnterEvadeMode (summons.DespawnAll has
--- no bearer — stale "no despawn bridge" retracted: creature:Despawn()
--- is bridged, lua_creature_events.go:214 — the _DespawnAtEvade(15s)
--- leg is port-pattern-ready, supremus precedent, deferred by the
--- 4-unit port cap), MovementInform (all point choreography — no motion
+-- no bearer — the _DespawnAtEvade(15s) leg is ported in
+-- jedogaLeaveCombat via a 15s Lua event -> creature:Despawn,
+-- terestian precedent; stale "no despawn bridge" retracted),
+-- MovementInform (all point choreography — no motion
 -- bridges), GetData(DATA_VOLUNTEER_WORK) (no cross-AI GetData
 -- bridge — achievement_volunteer_work needs it too).
 -- npc_twilight_volunteer — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
@@ -163,6 +163,17 @@ local function jedogaDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+local function jedogaLeaveCombat(event, creature)
+    -- C++ EnterEvadeMode: _EnterEvadeMode() + _DespawnAtEvade(Seconds(15))
+    -- (cpp:182-186; _EnterEvadeMode cancels timers and
+    -- summons.DespawnAll is moot — nothing is modeled); the 15s delayed
+    -- despawn rides the terestian precedent (15s Lua event).
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 15000)
+end
+
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 1, jedogaEnterCombat)
+RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 2, jedogaLeaveCombat)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 3, jedogaTargetDied)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 4, jedogaDied)

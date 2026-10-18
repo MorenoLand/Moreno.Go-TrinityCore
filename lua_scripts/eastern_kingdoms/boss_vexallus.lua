@@ -56,12 +56,11 @@
 -- Talk(SAY_ENERGY), Talk(EMOTE_DISCHARGE_ENERGY), self-cast
 -- SPELL_SUMMON_PURE_ENERGY 44322 (kaelthas phoenix-summon precedent —
 -- the summon spell itself is real even though the add's class has no
--- C++-verifiable entry and is unported, queued below); the heroic pair
--- 46154/46159 (C++: if (IsHeroic()) DoCast(me, 46154) + DoCast(me,
--- 46159) else DoCast(me, 44322)) is port-pattern-ready — stale "no
--- difficulty bridge" retracted (creature:IsHeroic() is bridged,
--- lua_creature_events.go:260; same cast-only precedent as 44322) —
--- deferred by the 4-unit port cap.
+-- C++-verifiable entry and is unported, queued below); the heroic
+-- pair 46154/46159 (C++: if (IsHeroic()) DoCast(me, 46154) +
+-- DoCast(me, 46159) else DoCast(me, 44322), cpp:125-131) is ported
+-- above — stale "no difficulty bridge" retracted
+-- (creature:IsHeroic() bridged, lua_creature_events.go:260).
 -- At health below 10% (stage == INTERVAL_SWITCH = 6): _enraged latch —
 -- Talk is skipped, all timers cancelled (C++ events.Reset()), then
 -- EVENT_OVERLOAD 1200ms -> 2s loop: DoCastVictim(SPELL_OVERLOAD 44353)
@@ -99,6 +98,8 @@ local SAY_KILL = 3
 local EMOTE_DISCHARGE_ENERGY = 4
 
 local SPELL_SUMMON_PURE_ENERGY = 44322
+local SPELL_SUMMON_PURE_ENERGY_H1 = 46154
+local SPELL_SUMMON_PURE_ENERGY_H2 = 46159
 local SPELL_OVERLOAD = 44353
 local SPELL_CHAIN_LIGHTNING = 44318
 local SPELL_ARCANE_SHOCK = 44319
@@ -207,7 +208,15 @@ local function onDamageTaken(_, creature, _, _damage)
         dischargeStage[guid] = stage + 1
         creature:Talk(SAY_ENERGY)
         creature:Talk(EMOTE_DISCHARGE_ENERGY)
-        creature:CastSpell(creature, SPELL_SUMMON_PURE_ENERGY)
+        -- C++: if (IsHeroic()) DoCast(me, 46154) + DoCast(me, 46159)
+        -- else DoCast(me, 44322) (cpp:125-131); stale "no difficulty
+        -- bridge" retracted, creature:IsHeroic() bridged.
+        if creature:IsHeroic() then
+            creature:CastSpell(creature, SPELL_SUMMON_PURE_ENERGY_H1)
+            creature:CastSpell(creature, SPELL_SUMMON_PURE_ENERGY_H2)
+        else
+            creature:CastSpell(creature, SPELL_SUMMON_PURE_ENERGY)
+        end
     end
 end
 
