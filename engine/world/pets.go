@@ -3175,7 +3175,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			// packet never matched C++.
 			followVictim := motion.TargetGUID
 			if s.server != nil {
-				s.server.onPetCommandFollow(s.player.Map, s.player.InstanceID, petGUID)
+				s.server.onPetCommandFollow(ctx, s.player.Map, s.player.InstanceID, petGUID)
 			}
 			if followVictim != 0 {
 				stopPkt := buildAttackStop(petGUID, followVictim, false)
@@ -3215,7 +3215,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		}
 	case actReaction:
 		if s.server != nil {
-			s.server.onPetSetReaction(s.player.Map, s.player.InstanceID, petGUID, uint8(spellOrAction), s)
+			s.server.onPetSetReaction(ctx, s.player.Map, s.player.InstanceID, petGUID, uint8(spellOrAction), s)
 		}
 		// Save react state (0 = passive, 1 = defensive, 2 = aggressive)
 		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -3311,7 +3311,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			// not friendly to the owner (possessed/vehicle pets excluded in
 			// C++; Go's motion model has no such distinction).
 			if !s.isFriendlyToTarget(targetGUID, s.server.findSessionByGUID(targetGUID)) {
-				s.server.switchPetVictim(s.player.Map, s.player.InstanceID, petGUID, targetGUID)
+				s.server.switchPetVictim(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
 			}
 		}
 		s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)

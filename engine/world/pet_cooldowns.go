@@ -59,6 +59,18 @@ func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID u
 	s.server.motionMu.Lock()
 	s.server.motionMapLocked(s.player.Map, s.player.InstanceID)[petGUID] = motion
 	s.server.motionMu.Unlock()
+	// Eluna pet fire-site gap (checkpoint 2026-10-18): player-pet and
+	// guardian motions never received creature events on this
+	// direct-construction funnel — event 1 (engage), event 2 (leave
+	// combat), event 5 (spawn) and event 22 (summoned) had no fire sites
+	// for pets (only events 8/14 fired). C++ fires JustRespawned (On_Reset
+	// then OnSpawn, CreatureHooks.cpp:210-216) and IsSummonedBy (OnSummoned
+	// with the summoner, CreatureHooks.cpp:86-94) for Eluna-driven pets.
+	// fireCreatureSpawned mirrors JustRespawned (reset + spawn, both
+	// binding families); the summon fires after the unlock since Lua
+	// handlers lock motionMu on demand.
+	s.server.fireCreatureSpawned(ctx, motion)
+	s.server.fireCreaturePetSummoned(ctx, motion, s.luaPlayer())
 }
 
 func (s *session) loadPetCooldowns(ctx context.Context, petID uint32, motion *creatureMotion) {

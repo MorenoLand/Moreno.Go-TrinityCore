@@ -675,6 +675,74 @@ func (s *Server) fireCreatureSummoned(ctx context.Context, owner *creatureMotion
 	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, owner.GUID, owner.InstanceID, event, args...)
 }
 
+// fireCreaturePetSummoned dispatches Eluna CREATURE_EVENT_ON_SUMMONED (22)
+// on the summoned creature itself, with the summoner as the extra argument.
+// C++ (Eluna::OnSummoned, CreatureHooks.cpp:86-94, reached from
+// ElunaCreatureAI::IsSummonedBy, ElunaCreatureAI.h:246-253) pushes (event,
+// creature, summoner) through CallAllFunctionsBool over entry then unique
+// bindings. The boolean veto gates only ScriptedAI::IsSummonedBy, whose base
+// is empty (CreatureAI.h) — a provable no-op like the JustDied/KilledUnit
+// rulings — so Go discards it. Fires from the direct-construction pet
+// funnel (registerPetMotion), which bypasses the AddToWorld/IsSummonedBy
+// chain C++ Eluna-driven pets take. Must be called with motionMu released:
+// Lua handler object methods lock it on demand.
+func (s *Server) fireCreaturePetSummoned(ctx context.Context, motion *creatureMotion, summoner any) {
+	if s == nil || motion == nil || summoner == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	args := []any{scripting.CreatureEventOnSummoned, creature, summoner}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnSummoned, args...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnSummoned, args...)
+}
+
+// firePetEnterCombat dispatches Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1)
+// when a pet transitions from out-of-combat to engaged, with the victim as
+// the extra argument (Eluna::EnterCombat, CreatureHooks.cpp:105-113, entry
+// then unique bindings). C++ fires it for binding-carrying pets via
+// ElunaCreatureAI::JustEngagedWith; the boolean veto gates only the empty
+// ScriptedAI::JustEngagedWith base, so Go discards it. Call after the
+// InCombat mutation, with motionMu released.
+func (s *Server) firePetEnterCombat(ctx context.Context, motion *creatureMotion, targetGUID uint64) {
+	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	args := []any{scripting.CreatureEventOnEnterCombat, creature, s.luaUnitObjectForGUID(motion.Map, motion.InstanceID, targetGUID)}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnEnterCombat, args...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnEnterCombat, args...)
+}
+
+// firePetLeaveCombat dispatches the Eluna EnterEvadeMode pair —
+// CREATURE_EVENT_ON_RESET (23) then CREATURE_EVENT_ON_LEAVE_COMBAT (2) —
+// when a live pet disengages (Eluna::EnterEvadeMode, CreatureHooks.cpp:199-208,
+// entry then unique bindings). The event-2 veto gates the evade itself in
+// C++; Go's pet disengages carry no evade machine to gate, so both vetoes
+// are provable no-ops and discarded, like the evade-veto ruling at
+// creaturemotion.go:2025's inline twin. Call after the InCombat clear, with
+// motionMu released.
+func (s *Server) firePetLeaveCombat(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	resetArgs := []any{scripting.CreatureEventOnReset, creature}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnReset, resetArgs...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnReset, resetArgs...)
+	leaveArgs := []any{scripting.CreatureEventOnLeaveCombat, creature}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnLeaveCombat, leaveArgs...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnLeaveCombat, leaveArgs...)
+}
+
 // luaQuest builds the Eluna Quest userdata surface used as the quest
 // argument of the quest hooks. It mirrors the GetQuest global's quest
 // object in engine/scripting/globals.go (ID/Name/Title/Level/MinLevel/Flags

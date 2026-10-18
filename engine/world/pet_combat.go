@@ -170,24 +170,37 @@ func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint3
 		return
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	enteredCombat := false
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil && motion.Health > 0 {
+		enteredCombat = !motion.InCombat
 		motion.TargetGUID = targetGUID
 		motion.InCombat = true
 		motion.PetCommand = PetCommandAttack
 		motion.Moving = true
 	}
+	s.motionMu.Unlock()
+	// Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1): C++ PetAI::AttackStart
+	// reaches it via ElunaCreatureAI::JustEngagedWith for
+	// binding-carrying pets (CreatureHooks.cpp:105-113). Fires only on
+	// fresh engages (enteredCombat), after the unlock — Lua handlers lock
+	// motionMu on demand.
+	if enteredCombat {
+		s.firePetEnterCombat(ctx, motion, targetGUID)
+	}
 }
 
 // onPetCommandFollow handles recalling the pet back to follow the owner.
 // Mirrors TrinityCore PetAI::DoRecall (PetAI.cpp:215).
-func (s *Server) onPetCommandFollow(mapID, instanceID uint32, petGUID uint64) {
+func (s *Server) onPetCommandFollow(ctx context.Context, mapID, instanceID uint32, petGUID uint64) {
 	if s == nil || petGUID == 0 {
 		return
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	var leftMotion *creatureMotion
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
+		if motion.InCombat {
+			leftMotion = motion
+		}
 		motion.TargetGUID = 0
 		motion.InCombat = false
 		motion.PetCommand = PetCommandFollow
@@ -195,6 +208,12 @@ func (s *Server) onPetCommandFollow(mapID, instanceID uint32, petGUID uint64) {
 		if motion.ThreatMgr != nil {
 			motion.ThreatMgr.ClearThreat()
 		}
+	}
+	s.motionMu.Unlock()
+	// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (2) + On_Reset (23) twin:
+	// the recall drops a live pet out of combat (PetAI::DoRecall leg).
+	if leftMotion != nil {
+		s.firePetLeaveCombat(ctx, leftMotion)
 	}
 }
 
@@ -219,11 +238,12 @@ func (s *Server) onPetCommandStay(mapID, instanceID uint32, petGUID uint64) {
 }
 
 // onPetSetReaction updates the pet's reaction state (passive, defensive, aggressive).
-func (s *Server) onPetSetReaction(mapID, instanceID uint32, petGUID uint64, reactState uint8, source *session) {
+func (s *Server) onPetSetReaction(ctx context.Context, mapID, instanceID uint32, petGUID uint64, reactState uint8, source *session) {
 	if s == nil || petGUID == 0 {
 		return
 	}
 	var stopVictim uint64
+	var leftMotion *creatureMotion
 	s.motionMu.Lock()
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
 		motion.PetReact = reactState
@@ -235,12 +255,21 @@ func (s *Server) onPetSetReaction(mapID, instanceID uint32, petGUID uint64, reac
 			// SMSG_ATTACK_STOP (broadcast to the set) only when an
 			// attack was actually in progress.
 			stopVictim = motion.TargetGUID
+			if motion.InCombat {
+				leftMotion = motion
+			}
 			motion.TargetGUID = 0
 			motion.InCombat = false
 			motion.Moving = false
 		}
 	}
 	s.motionMu.Unlock()
+	// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (2) + On_Reset (23) twin: the
+	// passive switch drops a live pet out of combat. Fires after the
+	// unlock — Lua handlers lock motionMu on demand.
+	if leftMotion != nil {
+		s.firePetLeaveCombat(ctx, leftMotion)
+	}
 	if stopVictim != 0 {
 		stopPkt := buildAttackStop(petGUID, stopVictim, false)
 		// Unit::AttackStop -> SendMeleeAttackStop (Unit.cpp:2402-2404) uses
@@ -291,15 +320,25 @@ func (s *Server) restorePetCommand(mapID, instanceID uint32, petGUID uint64, pre
 // switchPetVictim mirrors the forced victim switch after SPELL_CAST_OK in
 // the pet action-bar spell arm (PetHandler.cpp:351-365): PetAI::AttackStart
 // onto the spell's unit target when it differs from the current victim.
-func (s *Server) switchPetVictim(mapID, instanceID uint32, petGUID, targetGUID uint64) {
+func (s *Server) switchPetVictim(ctx context.Context, mapID, instanceID uint32, petGUID, targetGUID uint64) {
 	if s == nil || petGUID == 0 || targetGUID == 0 {
 		return
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	var engagedMotion *creatureMotion
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
+		if !motion.InCombat {
+			engagedMotion = motion
+		}
 		motion.TargetGUID = targetGUID
 		motion.InCombat = true
+	}
+	s.motionMu.Unlock()
+	// Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1): a victim switch onto an
+	// idle pet is a fresh engage (ElunaCreatureAI::JustEngagedWith twin);
+	// a mid-fight switch fires no new event, matching C++.
+	if engagedMotion != nil {
+		s.firePetEnterCombat(ctx, engagedMotion, targetGUID)
 	}
 }
 
@@ -428,7 +467,11 @@ func (s *Server) triggerPetDefensive(ctx context.Context, mapID, instanceID uint
 		}
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	type petEngage struct {
+		motion     *creatureMotion
+		targetGUID uint64
+	}
+	var entered []petEngage
 	for _, guid := range cands {
 		if vetoed[guid] {
 			continue
@@ -443,9 +486,20 @@ func (s *Server) triggerPetDefensive(ctx context.Context, mapID, instanceID uint
 		if m.TargetGUID != 0 && m.InCombat {
 			continue
 		}
+		if !m.InCombat {
+			entered = append(entered, petEngage{motion: m, targetGUID: targetGUID})
+		}
 		m.TargetGUID = targetGUID
 		m.InCombat = true
 		m.Moving = m.PetCommand != PetCommandStay
+	}
+	s.motionMu.Unlock()
+	// Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1): defensive pets engage via
+	// PetAI::OwnerAttackedBy / OwnerAttacked (PetAI.cpp); binding-carrying
+	// pets reach it through ElunaCreatureAI::JustEngagedWith. Fires only
+	// for fresh engages, after the unlock.
+	for _, e := range entered {
+		s.firePetEnterCombat(ctx, e.motion, e.targetGUID)
 	}
 }
 
@@ -503,7 +557,7 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 		}
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	var entered []*creatureMotion
 	for _, guid := range cands {
 		if vetoed[guid] {
 			continue
@@ -518,9 +572,20 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 		if m.TargetGUID != 0 && m.InCombat {
 			continue
 		}
+		if !m.InCombat {
+			entered = append(entered, m)
+		}
 		m.TargetGUID = targetGUID
 		m.InCombat = true
 		m.Moving = true
+	}
+	s.motionMu.Unlock()
+	// Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1): pets engage via
+	// PetAI::OwnerAttacked (PetAI.cpp:292-312); binding-carrying pets
+	// reach it through ElunaCreatureAI::JustEngagedWith. Fresh engages
+	// only, fired after the unlock.
+	for _, m := range entered {
+		s.firePetEnterCombat(ctx, m, targetGUID)
 	}
 }
 
@@ -608,7 +673,13 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 		}
 	}
 	if owner == nil || owner.IsDead || owner.Map != motion.Map {
-		motion.InCombat = false
+		if motion.InCombat {
+			motion.InCombat = false
+			// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (2) + On_Reset (23):
+			// an ownerless pet stops attacking (PetAI owner-absent arm).
+			// Tick path: motionMu is not held here.
+			s.firePetLeaveCombat(ctx, motion)
+		}
 		motion.TargetGUID = 0
 		motion.Moving = false
 		return
@@ -635,6 +706,10 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			motion.TargetGUID = hostileGUID
 			motion.InCombat = true
 			motion.Moving = true
+			// Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1): an aggressive
+			// pet's auto-aggro engage (PetAI aggressive reaction arm).
+			// Tick path: motionMu is not held here.
+			s.firePetEnterCombat(ctx, motion, hostileGUID)
 			s.petCombatPursuitAndAttack(ctx, motion, owner, now)
 			return
 		}
@@ -857,8 +932,15 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			}
 		}
 		motion.TargetGUID = 0
+		leftCombat := motion.InCombat
 		motion.InCombat = false
 		motion.Moving = false
+		if leftCombat {
+			// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (2) + On_Reset (23):
+			// PetAI::KilledUnit victim-lost arm with no next target.
+			// Tick path: motionMu is not held here.
+			s.firePetLeaveCombat(ctx, motion)
+		}
 		if motion.PetCommand == PetCommandAttack {
 			motion.PetCommand = PetCommandFollow
 		}
@@ -884,8 +966,15 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			// combat state, drop a command-attack order, and let the next
 			// tick's follow arm return the pet (HandleReturnMovement analog).
 			motion.TargetGUID = 0
+			leftCombat := motion.InCombat
 			motion.InCombat = false
 			motion.Moving = false
+			if leftCombat {
+				// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (2) + On_Reset
+				// (23): the out-of-range StopAttack drops combat.
+				// Tick path: motionMu is not held here.
+				s.firePetLeaveCombat(ctx, motion)
+			}
 			if motion.PetCommand == PetCommandAttack {
 				motion.PetCommand = PetCommandFollow
 			}
