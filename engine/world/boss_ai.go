@@ -5167,12 +5167,13 @@ func init() {
 	// player-capture arm have no bridges, and
 	// spell_oscillating_field is a SpellScript — all
 	// documented only; see hidden_files/CHECKPOINT.md.
-	// boss_doomlordkazzak and boss_doomwalker: the C++ files
-	// carry no NPC_ entry constants anywhere in the sources —
-	// the entries are DB-side only — so both are documented-
-	// only, unregistered (wowhead-TBC entry verification would
-	// register them, void_reaver precedent this commit); see
-	// hidden_files/CHECKPOINT.md.
+	// boss_doomlord_kazzak (18728) and boss_doomwalker (17711):
+	// the C++ files carry no NPC_ entry constants anywhere in
+	// the sources; both entries verified via the 2010
+	// TrinityCore changelog paste listing each entry ID
+	// (void_reaver precedent) — registered per loader order.
+	RegisterLuaBoss("boss_doomlord_kazzak", 18728)
+	RegisterLuaBoss("boss_doomwalker", 17711)
 	// npc_nether_drake (Blade's Edge Mountains zone script,
 	// first unit after the world-boss set per
 	// outland_script_loader.cpp order — AddSC_blades_edge_

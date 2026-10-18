@@ -29,9 +29,11 @@
 -- Fight shape (C++-exact for all modeled arms):
 -- 1. Stream of Machine Fluid 35311: 55s init then randtime
 --    35-50s — TRIGGERED DoCastVictim (C++-exact).
--- 2. Jackhammer 35326: 45s init then 30s — EMOTE_HAMMER
+-- 2. Jackhammer 35327: 45s init then 30s — EMOTE_HAMMER
 --    Talk + TRIGGERED DoCastVictim (C++-exact) + 50% Talk
 --    (SAY_HAMMER); re-arm 30s regardless (C++-exact).
+--    35326 is SPELL_HAMMER_PUNCH, a dead enum the C++ never
+--    casts.
 -- 3. Shadow Power 35322: 25s init then randtime 20-28s —
 --    non-triggered DoCast(me) self-cast (C++-exact). The
 --    heroic variants H_SPELL_SHADOW_POWER 39193 /
@@ -48,7 +50,7 @@
 -- precedent).
 
 local SPELL_STREAM_OF_MACHINE_FLUID = 35311
-local SPELL_JACKHAMMER = 35326
+local SPELL_JACKHAMMER = 35327
 local SPELL_SHADOW_POWER = 35322
 
 local SAY_AGGRO = 0
@@ -101,7 +103,7 @@ local function bossTick(creature, guid)
         st.stream = st.stream - 1000
     end
 
-    -- Jackhammer 35326: 45s init then 30s — EMOTE_HAMMER Talk
+    -- Jackhammer 35327: 45s init then 30s — EMOTE_HAMMER Talk
     -- + TRIGGERED DoCastVictim + 50% Talk(SAY_HAMMER)
     -- (C++-exact order); re-arm 30s regardless (C++-exact).
     if st.jackhammer <= 1000 then
