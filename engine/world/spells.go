@@ -8544,28 +8544,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.server.triggerPetOwnerAttacked(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.UnitGUID)
 	}
 
-	// Spell::SelectExplicitTargets (Spell.cpp:722-752): the explicit-target
-	// magnet arm — a SPELL_DAMAGE_CLASS_MELEE / SPELL_DAMAGE_CLASS_RANGED
-	// spell with an explicit unit target ((GetExplicitTargetMask() &
-	// TARGET_FLAG_UNIT_ENEMY) || ((mask & TARGET_FLAG_UNIT) &&
-	// !m_caster->IsFriendlyTo(target))) redirects through the
-	// ADD_CASTER_HIT_TRIGGER (111) magnet via Unit::GetMeleeHitRedirectTarget,
-	// the same bridge as the auto-attack site (meleeHitRedirectGUID in
-	// combat.go); the MAGIC arm is the already-bridged 96 spell-magnet.
-	// C++ rewrites m_targets before SelectSpellTargets, so the redirect
-	// lands here, ahead of every effect-target use of target.UnitGUID.
-	if (spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged) &&
-		target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
-		explicitMask := spell.Targets | spellExplicitUnitTargetMask(spell)
-		targetSess := s.server.findSessionByGUID(target.UnitGUID)
-		if explicitMask&targetFlagUnitEnemy != 0 ||
-			(explicitMask&targetFlagUnit != 0 && !s.isFriendlyToTarget(target.UnitGUID, targetSess)) {
-			if redirectGUID, ok := s.meleeHitRedirectGUID(ctx, target.UnitGUID); ok {
-				target.UnitGUID = redirectGUID
-			}
-		}
-	}
-
 	// Spell::_cast (Spell.cpp:3335) re-runs CheckCast(false) when the cast timer
 	// finishes; power drained mid-cast must fail the cast, not clamp to zero.
 	pType := spell.PowerType
@@ -8793,6 +8771,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// legs in the explicit-target and area-target checks (no modOwner
 	// spellmod-window arm either — beginSpellModTaking defers the window
 	// across the whole function, matching 3323/3418/3519).
+	// Spell::SelectExplicitTargets (Spell.cpp:729-757): the explicit-target
+	// magnet arm — a SPELL_DAMAGE_CLASS_MELEE / SPELL_DAMAGE_CLASS_RANGED
+	// spell with an explicit unit target ((GetExplicitTargetMask() &
+	// TARGET_FLAG_UNIT_ENEMY) || ((mask & TARGET_FLAG_UNIT) &&
+	// !m_caster->IsFriendlyTo(target))) redirects through the
+	// ADD_CASTER_HIT_TRIGGER (111) magnet via Unit::GetMeleeHitRedirectTarget,
+	// the same bridge as the auto-attack site (meleeHitRedirectGUID in
+	// combat.go); the MAGIC arm is the already-bridged 96 spell-magnet.
+	// C++ runs the redirect inside SelectSpellTargets (Spell.cpp:3410),
+	// after the _cast CheckCast revalidation (Spell.cpp:3349) — so the
+	// rechecks above validate the pre-redirect explicit target, and the
+	// redirect lands here, ahead of every effect-target use of
+	// target.UnitGUID.
+	if (spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged) &&
+		target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		explicitMask := spell.Targets | spellExplicitUnitTargetMask(spell)
+		targetSess := s.server.findSessionByGUID(target.UnitGUID)
+		if explicitMask&targetFlagUnitEnemy != 0 ||
+			(explicitMask&targetFlagUnit != 0 && !s.isFriendlyToTarget(target.UnitGUID, targetSess)) {
+			if redirectGUID, ok := s.meleeHitRedirectGUID(ctx, target.UnitGUID); ok {
+				target.UnitGUID = redirectGUID
+			}
+		}
+	}
+
 	hitTargets := make([]uint64, 0, 1)
 	// The explicit unit target arrives resolved: handleCastSpell ran
 	// resolveExplicitUnitTarget at the CheckCast gauntlet (Spell.cpp:5353-5367),
@@ -22813,8 +22816,24 @@ func (s *session) applyAuraScaling(ctx context.Context, spellID uint32, spell wo
 	}
 	downranks := make(map[uint64]wotlk.Spell)
 	kept := make([]uint64, 0, len(hitTargets))
+	scannedUnits, keptUnits := 0, 0
+	isUnitGUID := func(guid uint64) bool { return guid != 0 && uint16(guid>>48) != 0xF110 }
 	for _, guid := range hitTargets {
+		if isUnitGUID(guid) {
+			scannedUnits++
+		}
 		if guid == 0 || guid == s.playerGUID || targetMask != mask {
+			kept = append(kept, guid)
+			if isUnitGUID(guid) {
+				keptUnits++
+			}
+			continue
+		}
+		if uint16(guid>>48) == 0xF110 {
+			// Spell::SelectSpellTargets (Spell.cpp:807-830): the
+			// aura-scaling removal leg scans m_UniqueTargetInfo only —
+			// gameobject targets (m_UniqueGOTargetInfo) are never
+			// level-checked and never trip SPELL_FAILED_LOWLEVEL.
 			kept = append(kept, guid)
 			continue
 		}
@@ -22828,8 +22847,13 @@ func (s *session) applyAuraScaling(ctx context.Context, spellID uint32, spell wo
 			}
 		}
 		kept = append(kept, guid)
+		keptUnits++
 	}
-	if len(hitTargets) > 0 && len(kept) == 0 {
+	// Spell::SelectSpellTargets (Spell.cpp:811-828): checkLvl is the
+	// pre-removal non-emptiness of m_UniqueTargetInfo — gameobject targets
+	// never count, and the fail fires when no unit targets remain even if
+	// gameobject targets survive.
+	if scannedUnits > 0 && keptUnits == 0 {
 		return nil, nil, true
 	}
 	return kept, downranks, false
