@@ -9524,13 +9524,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell::_cast (Spell.cpp:3462-3470) calls SendSpellCooldown() before
 	// HandleLaunchPhase() and SendSpellGo(): the cooldown packet must reach
 	// the client before SMSG_SPELL_GO.
-	categoryID, categoryRecoveryTime := spell.Category, spell.CategoryRecoveryTime
+	// SpellHistory::GetCooldownDurations (SpellHistory.cpp:641-670): the
+	// cooldown triplet resolves the item template's spell-slot values
+	// (spellcooldown_N / spellcategory_N / spellcategorycooldown_N) before
+	// falling back to the DBC — trinkets and engineering items carry their
+	// cooldowns in the item prototype, not in SpellInfo.
+	cooldownMs, categoryCooldownMs, categoryID := s.server.spellCooldownDurationsForItem(ctx, spell, castItemEntry)
 	now := time.Now()
 	categoryEnd := now.Unix()
-	if categoryRecoveryTime > 0 {
-		categoryEnd = now.Add(time.Duration(categoryRecoveryTime) * time.Millisecond).Unix()
+	if categoryCooldownMs > 0 {
+		categoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
 	}
-	applyCooldown := len(hitTargets) > 0 && !isFishingSpell(spellID)
+	// Spell::_cast (Spell.cpp:3459-3469) takes the cooldown in
+	// SendSpellCooldown regardless of hit/miss outcome: a fully-resisted or
+	// fully-immune cast still burns the cooldown. C++ has no hit-target
+	// gate here.
+	applyCooldown := !isFishingSpell(spellID)
 	// SpellHistory::HandleCooldowns potion arm (SpellHistory.cpp:172-184):
 	// a player item cast whose item is a potion (ItemTemplate::IsPotion,
 	// ItemTemplate.h:700) or whose spell starts its cooldown on event
@@ -9540,7 +9549,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// combat ends (Player::UpdatePotionCooldown, Player.cpp:22215).
 	if castItemEntry != 0 && (s.server.isPotionItem(ctx, castItemEntry) || s.server.spellIsCooldownStartedOnEvent(spell)) {
 		s.lastPotionId = castItemEntry
-	} else if applyCooldown && !s.server.spellIsCooldownStartedOnEvent(spell) && (spell.RecoveryTime > 0 || categoryRecoveryTime > 0) {
+	} else if applyCooldown && !s.server.spellIsCooldownStartedOnEvent(spell) && (cooldownMs > 0 || categoryCooldownMs > 0) {
 		// SpellHistory::HandleCooldowns (SpellHistory.cpp:184):
 		// cooldown-started-on-event spells take no cooldown at cast time
 		// regardless of item — the lock is the onHold marker armed when
@@ -9550,7 +9559,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// SPELLMOD_COOLDOWN fold inside startRealSpellCooldown mirrors
 		// the ApplySpellMod(spellInfo->Id, SPELLMOD_COOLDOWN, ..., spell)
 		// calls, which also run with a non-null taking spell.
-		s.startRealSpellCooldown(spell, int32(spell.RecoveryTime), int32(categoryRecoveryTime), categoryID, now)
+		s.startRealSpellCooldown(spell, cooldownMs, categoryCooldownMs, categoryID, now)
 	}
 	if applyCooldown && spellID == 8690 {
 		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
@@ -12011,15 +12020,18 @@ func (s *session) stopAttackOnSpellFinish(spell wotlk.Spell) {
 	if spell.Attributes&spellAttr0StopAttackTarget == 0 {
 		return
 	}
+	// Unit::AttackStop (Unit.cpp:5763-5784): a no-op returning false when
+	// not attacking (no packet); otherwise it clears the attacker link and
+	// interrupts only CURRENT_MELEE_SPELL — the queued on-next-swing spell
+	// (cancelNextSwingSpell) — and sends the melee attack stop. The
+	// CURRENT_AUTOREPEAT_SPELL (Auto Shot) is deliberately untouched: on
+	// retail a STOP_ATTACK_TARGET spell does not stop Auto Shot.
+	if s.attackTarget == 0 {
+		return
+	}
 	victim := s.attackTarget
 	s.attackTarget = 0
-	if s.autoRepeatSpell != 0 {
-		s.autoRepeatSpell = 0
-		s.autoRepeatTarget = 0
-		buf := protocol.NewBuffer(9)
-		buf.WritePackedGUID(s.playerGUID)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
-	}
+	s.cancelNextSwingSpell()
 	_ = s.sendAttackStop(victim, false)
 	s.debug("attack stopped by spell", "account", s.accountName, "spell", spell.ID)
 }
