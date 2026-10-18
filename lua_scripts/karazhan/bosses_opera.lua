@@ -27,8 +27,10 @@
 -- instance-script model — the Oz death counter, DATA_OPERA_PERFORMANCE
 -- SetBossState(DONE), and DoZoneInCombat arms are skipped. No threat
 -- model — the wolf's chase threat juggling is skipped (chase is Talk +
--- debuff + a fear/swipe freeze) and BackwardLunge picks any random alive
--- player (C++ takes the second-threat target). No UNIT_FLAG model — the
+-- debuff + a fear/swipe freeze) and BackwardLunge picks a random alive
+-- player excluding the victim (approximates the C++ second-threat
+-- offset-1 pick; re-arm-on-success + next-tick retry mirror the C++
+-- timer semantics, yazzai-Polymorph precedent). No UNIT_FLAG model — the
 -- Oz AggroTimer RemoveFlag(NON_ATTACKABLE) arms, PretendToDie's
 -- NOT_SELECTABLE/SetHealth(0)/stand-state arms, and Resurrect's
 -- flag/health/stand-state restores have no bridge; fake death is
@@ -930,14 +932,29 @@ RegisterCreatureEvent(ENTRY_JULIANNE, 4, julianneDied)
 RegisterCreatureEvent(ENTRY_JULIANNE, 9, julianneDamageTaken)
 RegisterCreatureEvent(ENTRY_JULIANNE, 23, julianneLeaveCombat)
 
+-- C++ EVENT_BACKWARD_LUNGE (:1335-1343): SelectTarget(Random, 1, 100, true)
+-- (offset 1 = second-threat pick, tank excluded) + !me->HasInArc(M_PI)
+-- (behind-target check — skipped, no facing bridge, documented above).
+-- The timer resets urand(15000,30000) ONLY on a successful cast; a failed
+-- pick retries next tick (yazzai-Polymorph precedent).
 local function romuloLunge(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
-    if target then
-        creature:CastSpell(target, SPELL_BACKWARD_LUNGE)
+    local victim = creature:GetVictim()
+    local pool = {}
+    for _, p in ipairs(alivePlayersInRange(creature, 100)) do
+        if p ~= victim then
+            pool[#pool + 1] = p
+        end
     end
-    schedule(guid, "lunge", math.random(15000, 30000), function()
-        romuloLunge(creature, guid)
-    end)
+    if #pool > 0 then
+        creature:CastSpell(pool[math.random(#pool)], SPELL_BACKWARD_LUNGE)
+        schedule(guid, "lunge", {15000, 30000}, function()
+            romuloLunge(creature, guid)
+        end)
+    else
+        schedule(guid, "lunge", 1000, function()
+            romuloLunge(creature, guid)
+        end)
+    end
 end
 
 local function romuloDaring(creature, guid)
