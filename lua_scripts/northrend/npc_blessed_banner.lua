@@ -68,27 +68,22 @@
 -- creature AI — corastrasza precedent) — documented-only. No
 -- NPC_ entry constant in the C++ sources; 63987/63986/4676/
 -- 4677 verifiable.
--- npc_tournament_training_dummy — entries 33272/33229/33243
--- verifiable but no arm is bridgeable: DamageTaken -> damage =
--- 0 + EVENT_DUMMY_RESET reschedule 10s (no DamageTaken hook in
--- the model — lecraft events-9/14 precedent); SpellHit credit
--- machines (62544 -> 62658 + 62709 counterattack on the
--- vehicle's base; 62626 -> 62673 gated on isVulnerable; 62874
--- -> 62658 gated on isVulnerable; 62626 sets isVulnerable when
--- neither 64100 nor 62719 is present — no SpellHit bridge —
--- fizzule precedent — and no player-target / vehicle-base
--- cast path); Reset -> EVENT_DUMMY_RECAST_DEFEND 5s (DoCast(me,
--- 64100) / stack-gated DoCast(me, 62719), both gated on HasAura
--- (creature:HasAura is now bridged — the 64100 boolean leg is
--- expressible, but the 62719 leg needs GetStackAmount/GetDuration,
--- which are unbridged, so a blind 5s recast would still
--- double-apply —
--- not C++-exact — borean imprisoned_beryl_sorcerer precedent);
--- the stunned control (SetControlled UNIT_STATE_STUNNED — no
--- unit-state bridge — twilight_corrupter precedent);
--- MoveInLineOfSight overridden empty. Documented-only.
--- 33272/33229/33243 + 62658/62672/62673 + 62544/62626/62874 +
--- 62719/64100/62665/62709 verifiable.
+-- npc_tournament_training_dummy — SpellHit credit machines PORTED
+-- 2026-10-18 (see the port block below; event 14 is live —
+-- volkhan precedent — retracted the stale "no SpellHit bridge"
+-- claim). Remaining documented-only: DamageTaken -> damage = 0 +
+-- EVENT_DUMMY_RESET reschedule 10s (no DamageTaken hook in the
+-- model — lecraft events-9/14 precedent); Reset ->
+-- EVENT_DUMMY_RECAST_DEFEND 5s (DoCast(me, 64100) / stack-gated
+-- DoCast(me, 62719) — the 62719 leg needs GetStackAmount/
+-- GetDuration, unbridged, so a blind 5s recast would
+-- double-apply — not C++-exact — borean
+-- imprisoned_beryl_sorcerer precedent); the stunned control
+-- (SetControlled UNIT_STATE_STUNNED — no unit-state bridge —
+-- twilight_corrupter precedent); MoveInLineOfSight overridden
+-- empty; 62709 counterattack on the vehicle's base (no
+-- vehicle-base bridge). 33272/33229/33243 + 62658/62672/62673
+-- + 62544/62626/62874 + 62719/64100/62665/62709 verifiable.
 -- npc_frostbrood_skytalon (VehicleAI) — the UpdateAI low-hp /
 -- periodic arms run through VehicleAI::UpdateAI (the base is
 -- unmodeled — wyrmrest_defender precedent); SpellHit 59335 ->
@@ -123,3 +118,65 @@ end
 
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 5, onSpawnOrReset)
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 23, onSpawnOrReset)
+
+-- C++ npc_tournament_training_dummy::SpellHit (zone_icecrown.cpp:237-267)
+-- credit machines (PORTED 2026-10-18, sweep6 candidate 2; the stale
+-- "no SpellHit bridge" claim is retracted - event 14 is live, volkhan
+-- precedent; the 62544->62658 / 62874->62658 header mis-pairing is
+-- fixed: C++ has 62544->62672 MELEE_CREDIT, 62874->62658 CHARGE_CREDIT).
+-- Per-GUID isVulnerable latch, reset on spawn/reset (C++ Initialize).
+-- The 62709 counterattack-on-vehicle-base leg stays out (no
+-- vehicle-base bridge); the DamageTaken / recast-defend / stunned-
+-- control legs stay documented in the header.
+local SPELL_CHARGE_CREDIT = 62658
+local SPELL_MELEE_CREDIT = 62672
+local SPELL_RANGED_CREDIT = 62673
+local SPELL_PLAYER_THRUST = 62544
+local SPELL_PLAYER_BREAK_SHIELD = 62626
+local SPELL_PLAYER_CHARGE = 62874
+local SPELL_RANGED_DEFEND = 62719
+local SPELL_CHARGE_DEFEND = 64100
+
+local NPC_CHARGE_TARGET = 33272
+local NPC_MELEE_TARGET = 33229
+local NPC_RANGED_TARGET = 33243
+
+local dummyVulnerable = {}
+
+local function onDummyReset(_, creature)
+    dummyVulnerable[creature:GetGUID()] = nil
+end
+
+local function onDummySpellHit(event, creature, caster, spellId)
+    local guid = creature:GetGUID()
+    local entry = creature:GetEntry()
+    if entry == NPC_CHARGE_TARGET then
+        if spellId == SPELL_PLAYER_CHARGE and dummyVulnerable[guid] then
+            creature:CastSpell(caster, SPELL_CHARGE_CREDIT, true)
+        end
+    elseif entry == NPC_MELEE_TARGET then
+        if spellId == SPELL_PLAYER_THRUST then
+            creature:CastSpell(caster, SPELL_MELEE_CREDIT, true)
+        end
+    elseif entry == NPC_RANGED_TARGET then
+        if spellId == SPELL_PLAYER_BREAK_SHIELD and dummyVulnerable[guid] then
+            creature:CastSpell(caster, SPELL_RANGED_CREDIT, true)
+        end
+    end
+    if spellId == SPELL_PLAYER_BREAK_SHIELD then
+        if not creature:HasAura(SPELL_CHARGE_DEFEND)
+                and not creature:HasAura(SPELL_RANGED_DEFEND) then
+            dummyVulnerable[guid] = true
+        end
+    end
+end
+
+RegisterCreatureEvent(NPC_CHARGE_TARGET, 14, onDummySpellHit)
+RegisterCreatureEvent(NPC_MELEE_TARGET, 14, onDummySpellHit)
+RegisterCreatureEvent(NPC_RANGED_TARGET, 14, onDummySpellHit)
+RegisterCreatureEvent(NPC_CHARGE_TARGET, 5, onDummyReset)
+RegisterCreatureEvent(NPC_MELEE_TARGET, 5, onDummyReset)
+RegisterCreatureEvent(NPC_RANGED_TARGET, 5, onDummyReset)
+RegisterCreatureEvent(NPC_CHARGE_TARGET, 23, onDummyReset)
+RegisterCreatureEvent(NPC_MELEE_TARGET, 23, onDummyReset)
+RegisterCreatureEvent(NPC_RANGED_TARGET, 23, onDummyReset)

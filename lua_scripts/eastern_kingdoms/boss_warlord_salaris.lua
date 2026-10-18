@@ -51,6 +51,12 @@
 -- 10000ms init -> 10000ms loop, same conventions.
 -- Frightening-shout machine: DoCastVictim(SPELL_FRIGHTENING_SHOUT
 -- 19134) 18000ms init -> 18000ms loop, same conventions.
+-- Intercept machine (PORTED 2026-10-18, sweep6 candidate 1): DoCast(
+-- SelectTarget(Random, 0), SPELL_INTERCEPT_STUN 27577), 500ms init ->
+-- 10000ms loop with unconditional re-arm (cpp:962); melee-range gate
+-- over the threat-list proxy (GetAITargets) with the 5yd proxy; target
+-- pool is alive threat-list units (C++ playerOnly default = false,
+-- jaraxxus idiom without the player filter).
 -- Healing-potion latch (common-AI UpdateAI arm: !UsedPotion &&
 -- HealthBelowPct(25) -> DoCast(me, SPELL_HEALING_POTION 15503),
 -- UsedPotion = true): via OnDamageTaken(9), per-guid one-shot,
@@ -68,14 +74,10 @@
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Intercept machine (GetCombatManager().GetPvECombatRefs() loop:
---   nobody IsWithinMeleeRange -> DoCast(SelectTarget(Random, 0),
---   SPELL_INTERCEPT_STUN 27577), 500ms init -> 10000ms loop) —
---   re-keyed 2026-10-15 (timer doctrine): the timer leg bridges
---   (CreateLuaEvent is live) but the payload gates on the
---   combat-manager melee-range loop AND SelectTarget (the_beast /
---   doomwalker precedent — both absent), so the machine stays out;
---   the stale "no timer bridge" claim is corrected.
+-- - Intercept machine — PORTED 2026-10-18 (see Ported arms); the
+--   combat-manager PvE-refs loop is approximated by the GetAITargets
+--   threat-list proxy, the standard in-tree mapping since the 01:4x
+--   handler-twin landing.
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature
@@ -89,6 +91,7 @@
 --   of-Delrissa leg (instance bridge).
 -- - Common-AI ResetThreatTimer (urand(5000, 20000) -> ResetThreatList)
 --   — no threat-list bridge.
+local SPELL_INTERCEPT_STUN = 27577
 local SPELL_DISARM = 27581
 local SPELL_PIERCING_HOWL = 23600
 local SPELL_FRIGHTENING_SHOUT = 19134
@@ -164,11 +167,51 @@ local function onFrighteningShout(creature, guid)
     schedule(guid, "frighteningshout", 18000, function() onFrighteningShout(creature, guid) end)
 end
 
+-- C++ UpdateAI Intercept_Stun_Timer arm (cpp:943-963): 500ms init ->
+-- 10000ms loop, re-arm unconditional at :962 (outside the target-if).
+-- Gate: nobody IsWithinMeleeRange over the combat-manager PvE refs;
+-- the port iterates the threat-list proxy (creature:GetAITargets(),
+-- lua_creature_events.go:336-345) with the standard 5yd melee proxy.
+-- SelectTarget(Random, 0) with C++ defaults (playerOnly=false) draws
+-- from the same threat list, so the target pool is the alive targets
+-- list (jaraxxus randomThreatPlayer idiom, without its playerOnly
+-- filter - bare SelectTarget admits non-player threat entries).
+local function randomTarget(creature)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+local function interceptTick(creature, guid)
+    local inMeleeRange = false
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if creature:GetDistance(unit) <= 5.0 then
+            inMeleeRange = true
+            break
+        end
+    end
+    if not inMeleeRange then
+        local target = randomTarget(creature)
+        if target then
+            creature:CastSpell(target, SPELL_INTERCEPT_STUN)
+        end
+    end
+    schedule(guid, "intercept", 10000, function() interceptTick(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     usedPotion[guid] = false
     creature:CastSpell(creature, SPELL_BATTLE_SHOUT)
+    schedule(guid, "intercept", 500, function() interceptTick(creature, guid) end)
     schedule(guid, "disarm", 6000, function() onDisarm(creature, guid) end)
     schedule(guid, "hamstring", 4500, function() onHamstring(creature, guid) end)
     schedule(guid, "mortalstrike", 8000, function() onMortalStrike(creature, guid) end)
