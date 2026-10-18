@@ -5052,6 +5052,79 @@ func init() {
 	// instance_mechanar.cpp stays blocked on the
 	// instance-script model.
 	RegisterLuaBoss("boss_gatewatcher_iron_hand", 19710)
+	// boss_gatewatcher_gyrokill (19218; no NPC_ constant in the
+	// C++ tree — DB-side ScriptName binding, entry per standard
+	// TBC creature data; DATA_GATEWATCHER_GYROKILL = 0 is
+	// instance-side): stream of machine fluid 35311 TRIGGERED
+	// DoCastVictim 10s/randtime(13s,17s), saw blade 35318
+	// non-triggered DoCast(me) self-cast 20s/randtime(20s,30s)
+	// with SAY_SAW_BLADEs (the H_SPELL_* heroic variants are
+	// never fired by the C++ UpdateAI — not IsHeroic-gated),
+	// shadow power 35322 non-triggered DoCast(me) self-cast
+	// 25s one-shot — C++-exact quirk: the EVENT_SHADOW_POWER
+	// arm schedules EVENT_SAW_BLADE at randtime(25s,35s)
+	// instead of re-arming itself (modeled as a second pending
+	// saw-blade countdown); KilledUnit SAY_SLAY, JustDied
+	// SAY_DEATH; cast-state gates have no cast-state bridge —
+	// see lua_scripts/mechanar/boss_gatewatcher_gyrokill.lua.
+	RegisterLuaBoss("boss_gatewatcher_gyrokill", 19218)
+	// boss_nethermancer_sepethrea (17271; DB-side ScriptName
+	// binding, no NPC_ constant — entry per standard TBC
+	// creature data; DATA_NETHERMANCER_SEPRETHREA = 3 is
+	// instance-side): summon ragin flames 35275 non-triggered
+	// DoCastVictim + SAY_SUMMON on engage, frost attack 35263
+	// TRIGGERED DoCastVictim randtime(7s,10s) init and re-arm,
+	// arcane blast 35314 TRIGGERED DoCastVictim
+	// randtime(12s,18s)/15s, dragon's breath 35250 TRIGGERED
+	// DoCastVictim randtime(18s,22s)/randtime(12s,22s) with
+	// 50% SAY_DRAGONS_BREATH, knockback 37317 TRIGGERED
+	// DoCastVictim randtime(22s,28s)/randtime(15s,25s),
+	// solarburn 35267 TRIGGERED DoCastVictim 30s/30s;
+	// KilledUnit SAY_SLAY, JustDied SAY_DEATH; cast-state
+	// gates have no cast-state bridge — see
+	// lua_scripts/mechanar/boss_nethermancer_sepethrea.lua.
+	RegisterLuaBoss("boss_nethermancer_sepethrea", 17271)
+	// npc_ragin_flames (22323; DB-side ScriptName binding, no
+	// NPC_ constant — entry per standard TBC creature data):
+	// the bridgeable UpdateAI arms — inferno 35268
+	// non-triggered DoCastVictim 10s/10s and fire tail 35278
+	// non-triggered DoCast(me) self-cast 500ms/500ms. The
+	// Reset() ApplySpellImmune / SetSpeedRate legs, the
+	// Check_Timer instance-boss-state despawn check, and the
+	// onlyonce MoveChase(random-target) leg have no bridges —
+	// see lua_scripts/mechanar/boss_nethermancer_sepethrea.lua.
+	RegisterLuaBoss("npc_ragin_flames", 22323)
+	// boss_pathaleon_the_calculator (19220; DB-side ScriptName
+	// binding, no NPC_ constant — entry per standard TBC
+	// creature data; DATA_PATHALEON_THE_CALCULATOR = 4 is
+	// instance-side): summon timer 30s/randtime(30s,45s) with
+	// Talk(SAY_SUMMON) (the SummonCreature/AttackStart legs
+	// have no summon bridge — unmodeled), mana tap 36021
+	// TRIGGERED DoCastVictim randtime(12s,20s)/
+	// randtime(14s,22s), arcane torrent 36022 TRIGGERED
+	// DoCastVictim randtime(16s,25s)/randtime(12s,18s),
+	// domination 35280 TRIGGERED DoCastVictim
+	// randtime(25s,40s)/randtime(25s,30s) with SAY_DOMINATION
+	// before the cast, arcane explosion 15453 TRIGGERED
+	// DoCastVictim randtime(8s,13s)/randtime(10s,14s) fired
+	// always (the "Heroic only" comment has no IsHeroic gate
+	// in the code — C++-exact), frenzy 36992 on the
+	// HealthBelowPctDamaged(20,damage) && !HasAura latch via
+	// OnDamageTaken(9) + Talk(SAY_ENRAGE); KilledUnit
+	// SAY_SLAY, JustDied SAY_DEATH; cast-state gates have no
+	// cast-state bridge — see lua_scripts/mechanar/
+	// boss_pathaleon_the_calculator.lua.
+	RegisterLuaBoss("boss_pathaleon_the_calculator", 19220)
+	// npc_nether_wraith (21062, from the C++ Creatures enum):
+	// arcane missiles 35034 DoCast(target) on a random alive
+	// player (the C++ SelectTarget(Random,1) skips top threat
+	// — Lua picks any alive player, gruul/vashj precedent)
+	// else DoCastVictim, urand(1s,4s)/urand(5s,10s),
+	// detonation 35058 non-triggered DoCast(me) self-cast 20s
+	// one-shot, then DespawnOrUnsummon after 2200ms via
+	// creature:Despawn() — see lua_scripts/mechanar/
+	// boss_pathaleon_the_calculator.lua.
+	RegisterLuaBoss("npc_nether_wraith", 21062)
 	// boss_doomlordkazzak and boss_doomwalker: the C++ files
 	// carry no NPC_ entry constants anywhere in the sources —
 	// the entries are DB-side only — so both are documented-
