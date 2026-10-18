@@ -82,48 +82,70 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		s.sendSysMessage("You must be in game to use that command.")
 		return
 	}
-	// The Trinity parser prefix-matches command names at every nesting
-	// level; match the arm the same way here (commands_npc.go convention).
+	// ChatCommandNode::TryExecuteCommand (ChatCommand.cpp:267-288): the token
+	// prefix-matches visible subcommands; an exact-name match wins, a token
+	// matching more than one subcommand is ambiguous — the candidates are
+	// listed and nothing executes. A first-prefix-match dispatch would run
+	// e.g. the spawn arm for ".npcbot s" while C++ lists
+	// set/show/spawn/suicide and runs nothing.
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
-	switch {
-	case strings.HasPrefix("add", sub):
+	npcBotSubs := []string{"add", "remove", "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command", "info", "hide", "unhide", "show", "recall", "kill", "suicide", "distance", "order", "set"}
+	var subMatches []string
+	for _, name := range npcBotSubs {
+		if name == sub {
+			subMatches = []string{name}
+			break
+		}
+		if strings.HasPrefix(name, sub) {
+			subMatches = append(subMatches, name)
+		}
+	}
+	if len(subMatches) == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if len(subMatches) > 1 {
+		s.sendSysMessage("There are multiple npcbot subcommands matching '" + sub + "'. Did you mean:")
+		for _, candidate := range subMatches {
+			s.sendSysMessage(candidate)
+		}
+		return
+	}
+	switch subMatches[0] {
+	case "add":
 		s.handleNpcBotAddCommand(ctx)
-	case strings.HasPrefix("remove", sub):
+	case "remove":
 		s.handleNpcBotRemoveCommand(ctx)
-	case strings.HasPrefix("spawn", sub):
+	case "spawn":
 		s.handleNpcBotSpawnCommand(ctx, rest)
-	case strings.HasPrefix("move", sub):
+	case "move":
 		s.handleNpcBotMoveCommand(ctx, rest)
-	case strings.HasPrefix("delete", sub):
+	case "delete":
 		s.handleNpcBotDeleteCommand(ctx)
-	case strings.HasPrefix("lookup", sub):
+	case "lookup":
 		s.handleNpcBotLookupCommand(ctx, rest)
-	case strings.HasPrefix("revive", sub):
+	case "revive":
 		s.handleNpcBotReviveCommand(ctx)
-	case strings.HasPrefix("reloadconfig", sub):
+	case "reloadconfig":
 		s.handleNpcBotReloadConfigCommand(ctx)
-	case strings.HasPrefix("command", sub):
+	case "command":
 		s.handleNpcBotCommandSubCommand(ctx, rest)
-	case strings.HasPrefix("info", sub):
+	case "info":
 		s.handleNpcBotInfoCommand(ctx)
-	case strings.HasPrefix("hide", sub):
+	case "hide":
 		s.handleNpcBotHideCommand(ctx)
-	case strings.HasPrefix("unhide", sub):
-		s.handleNpcBotUnhideCommand(ctx)
-	case strings.HasPrefix("show", sub):
+	case "unhide", "show":
 		s.handleNpcBotUnhideCommand(ctx) // C++ maps "show" to HandleNpcBotUnhideCommand
-	case strings.HasPrefix("recall", sub):
+	case "recall":
 		s.handleNpcBotRecallCommand(ctx)
-	case strings.HasPrefix("kill", sub):
-		s.handleNpcBotKillCommand(ctx)
-	case strings.HasPrefix("suicide", sub):
+	case "kill", "suicide":
 		s.handleNpcBotKillCommand(ctx) // C++ maps "suicide" to HandleNpcBotKillCommand
-	case strings.HasPrefix("distance", sub):
+	case "distance":
 		s.handleNpcBotDistanceCommand(ctx, rest)
-	case strings.HasPrefix("order", sub):
+	case "order":
 		s.handleNpcBotOrderCommand(ctx, rest)
-	case strings.HasPrefix("set", sub):
+	case "set":
 		s.handleNpcBotSetCommand(ctx, rest)
 	default:
 		s.sendSysMessage(syntax)

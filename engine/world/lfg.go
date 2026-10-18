@@ -215,6 +215,41 @@ func (m *LFGManager) RequiresFullGroup(players, groupSize int) bool {
 	return !m.Solo() && players != groupSize
 }
 
+// FormSoloProposal mirrors the net SoloLFG effect of the
+// LFGQueue::CheckCompatibility arms (LFGQueue.cpp:425, 523): with SoloLFG on,
+// the "underfilled group always compatible" early-out is skipped and the
+// "Enough players?" numPlayers != MAXGROUPSIZE gate is skipped, so a solo
+// queued player is matchable alone and a proposal forms with fewer than 5
+// players. Go has no queue matcher (FindNewGroups has no twin), so the solo
+// path forms the proposal directly from the queued entry; grouped queues
+// stay queued because the role-check pipeline (StartRoleCheck) has no live
+// callers and grouped solo proposals cannot form faithfully.
+func (m *LFGManager) FormSoloProposal(guid uint64) *LFGProposal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.solo {
+		return nil
+	}
+	entry, ok := m.queue[guid]
+	if !ok || len(entry.Dungeons) == 0 {
+		return nil
+	}
+	m.nextProposalID++
+	prop := &LFGProposal{
+		ID:         m.nextProposalID,
+		DungeonID:  entry.Dungeons[0],
+		State:      LFGProposalInitiating,
+		Group:      0,
+		Leader:     guid,
+		CancelTime: time.Now().Add(45 * time.Second),
+		Players:    map[uint64]*LFGProposalPlayer{guid: {Role: entry.Roles, Group: 0, Accept: LFGAnswerPending}},
+	}
+	m.proposals[prop.ID] = prop
+	entry.State = LFGStateProposal
+	m.queue[guid] = entry
+	return prop
+}
+
 func (m *LFGManager) Join(guid uint64, roles uint8, dungeons []uint32, comment string) (uint32, LFGQueueEntry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -472,6 +507,9 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 	if !accept {
 		player.Accept = LFGAnswerDeny
 		prop.State = LFGProposalFailed
+		// LFGMgr::RemoveProposal (LFGMgr.cpp:1318-1332): the decliner is
+		// removed from the queue.
+		delete(m.queue, guid)
 		delete(m.proposals, proposalID)
 		return prop, true
 	}
@@ -487,9 +525,16 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 	// LFGMgr::UpdateProposal (LFGMgr.cpp:1228): with SoloLFG on, the
 	// proposal completes on the first accept without waiting for the other
 	// players' answers (!IsSoloLFG() && !allAnswered waits); otherwise all
-	// must agree.
-	if allAgree || m.Solo() {
+	// must agree. m.solo is read directly: the manager lock is already held
+	// here, and Solo() would take a read lock — a self-deadlock on the
+	// first accept of any proposal.
+	if allAgree || m.solo {
 		prop.State = LFGProposalSuccess
+		// LFGMgr::UpdateProposal (LFGMgr.cpp:1291-1293): players leave the
+		// queue when the proposal succeeds.
+		for pguid := range prop.Players {
+			delete(m.queue, pguid)
+		}
 		delete(m.proposals, proposalID)
 	}
 	return prop, true
@@ -801,7 +846,23 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		if isContinue {
 			entry.Dungeons = joinDungeons
 		}
-		return s.sendLFGUpdatePlayer(LFGUpdateJoinQueue, entry) == nil
+		if err := s.sendLFGUpdatePlayer(LFGUpdateJoinQueue, entry); err != nil {
+			return true
+		}
+		// SoloLFG: the C++ queue matcher forms proposals from underfilled
+		// queue sets on its update tick (LFGQueue.cpp:425, 523 arms); Go has
+		// no matcher, so the solo proposal is formed directly from the
+		// queued entry. Grouped joiners stay queued — the role-check
+		// pipeline (StartRoleCheck) has no live callers, so grouped solo
+		// proposals cannot form faithfully.
+		if s.groupID == 0 {
+			if prop := s.server.Features.LFG.FormSoloProposal(s.playerGUID); prop != nil {
+				if err := s.sendLFGProposalUpdate(prop); err != nil {
+					return true
+				}
+			}
+		}
+		return true
 	}
 	return true
 }
@@ -2197,6 +2258,48 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 					_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", dbGroupID, proposal.DungeonID, LFGStateDungeon)
 				}
+			}
+		}
+
+		// LFGMgr::MakeNewGroup (LFGMgr.cpp:1050-1145): a proposal formed from
+		// the queue (Group == 0) creates a new LFG group for its players —
+		// new Group, ConvertToLFG, Create(player), SetLfgRoles — with the
+		// dungeon difficulty from the LFG dungeon data and the group update
+		// broadcast after creation. Grouped proposals ride the existing
+		// Group != 0 arm above. lfg_data persistence follows the
+		// deliberate DBID-0 design (no group roster persistence); the
+		// proposal.Group != 0 arm above keeps its existing write.
+		if proposal.Group == 0 {
+			var diff uint8
+			if dungeon, found, derr := s.server.Data.LFGDungeon(proposal.DungeonID); derr == nil && found {
+				diff = uint8(dungeon.Difficulty)
+			}
+			for pguid, pdata := range proposal.Players {
+				ps := s.server.findSessionByGUID(pguid)
+				if ps == nil || ps.player == nil || ps.groupID != 0 {
+					continue
+				}
+				s.server.groupsMu.Lock()
+				g := &groupState{
+					ID:            newGroupID(),
+					LeaderGUID:    pguid,
+					LootMethod:    3,
+					LootThreshold: 2,
+					LooterGUID:    pguid,
+					DungeonDiff:   diff,
+					IsLFG:         true,
+					LFGDungeonID:  proposal.DungeonID,
+					LFGState:      LFGStateDungeon,
+					LFGKicksLeft:  lfgGroupMaxKicks,
+					Members:       []groupMember{{GUID: pguid, Name: ps.player.Name, Roles: pdata.Role}},
+				}
+				s.server.groups[g.ID] = g
+				ps.groupID = g.ID
+				// Group::Create (Group.cpp:158) sets PLAYER_FLAGS_GROUP_LEADER
+				// on the leader at creation.
+				ps.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(ps.player.PlayerFlags, true)
+				s.server.groupsMu.Unlock()
+				s.server.broadcastGroupList(g)
 			}
 		}
 

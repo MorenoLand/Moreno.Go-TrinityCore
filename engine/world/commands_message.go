@@ -404,10 +404,11 @@ func (s *session) handleCmdWorldChat(ctx context.Context, args []string) bool {
 	s.updatePlayedTime(time.Now())
 	now := time.Now().Unix()
 	if strings.Contains(msg, "unixmad") {
-		// Broadcast-text 17000's exact format lives in BroadcastText.dbc,
-		// which is not in the tree; the name + offending message is the
-		// faithful rendering the Go SendGMText analog can carry.
-		s.server.broadcastMessageChatGM(ctx, s.player.Name+": "+msg)
+		// trinity_string 17000's format is seeded by the C++ file's own
+		// header comment (cs_world_chat.cpp:9):
+		// 'Player |cff00ff00%s|r Chat Blocked : |cffff0000%s'
+		// (SendGMText(17000, name, msg), cs_world_chat.cpp:117).
+		s.server.broadcastMessageChatGM(ctx, fmt.Sprintf("Player |cff00ff00%s|r Chat Blocked : |cffff0000%s", s.player.Name, msg))
 		s.sendSysMessage("That word is not allowed on the server.")
 		s.muteTime = now + 1
 		return true
