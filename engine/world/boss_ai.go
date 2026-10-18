@@ -5375,6 +5375,21 @@ func init() {
 	// hoofprint gossip menu awaits the gossip bridge — documented
 	// only.
 	RegisterLuaBoss("npc_cairne_bloodhoof", 3057)
+	// boss_azuregos (Azshara world boss): combat rotation only —
+	// mark-of-frost aura 23184 triggered self-cast on engage; mana storm
+	// 21097 (5-17s then 7.5-12.5s, random alive player within 60yd of the
+	// threat list, C++ SelectTarget playerOnly verified); chill 21098
+	// (10-30s then 13-25s) + frost breath 21099 (2-8s then 10-15s) +
+	// cleave 8255 (7s then 7s) victim-cast; reflect 22067 self-cast
+	// (15-30s then 20-35s); teleport (30s then 30s, SAY_TELEPORT 0 +
+	// TeleportNear of threat-list players to boss pos +3z, ResetThreatList
+	// unbridged); EVENT_MARK_OF_FROST is a C++ dead event (scheduled, no
+	// switch case); KilledUnit mark of frost 23182 on player victims
+	// (caster deviates — no player CastSpell bridge); enrage 23537
+	// one-shot latch below 26%% via 1s pump; entry 6109 — see
+	// lua_scripts/kalimdor/boss_azuregos.lua. The spell_mark_of_frost
+	// SpellScript awaits the SpellScript bridge — documented only.
+	RegisterLuaBoss("boss_azuregos", 6109)
 	// boss_twilight_corrupter (Duskwood zone script): combat
 	// rotation only — soul corruption (25805, 15s init then
 	// 15-19s; DoCastAOE = DoCast(nullptr, spell) self-cast,
