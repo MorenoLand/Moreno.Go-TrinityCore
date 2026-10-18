@@ -62,10 +62,12 @@
 -- Insanity Visual 57561, triggered) (bridged in isolation but its
 -- trigger is event 15).
 -- Reset: SetPhaseMask((1|16|32|64|128|256), true) (no phase-mask
--- bridge); ResetPlayersPhaseMask() — player->RemoveAurasDueToSpell
--- (no aura-removal bridge — aeranas precedent); RemoveFlag(
--- UNIT_FLAG_NOT_SELECTABLE) + SetControlled(false, UNIT_STATE_
--- STUNNED) (no flag bridges).
+-- bridge); ResetPlayersPhaseMask() is PORTED below via
+-- resetPlayersPhaseMask (player:RemoveAura x5 — the old
+-- "no aura-removal bridge (aeranas precedent)" claim was stale,
+-- player:RemoveAura is bridged, engine/world/lua_player.go:219);
+-- RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) + SetControlled(false,
+-- UNIT_STATE_STUNNED) (no flag bridges).
 -- SummonedCreatureDespawn visage-phase roll-back machine
 -- (ObjectAccessor::GetCreature per-summon phase walk, player
 -- phasing-aura re-roll 57508-57512): summon STRAND + cross-AI
@@ -94,6 +96,12 @@ local SAY_DEATH = 2
 -- used in boss_herald_volazj.cpp — the sole usage grep hits only
 -- the enum line — so nothing to port.)
 
+local SPELL_INSANITY_PHASING_1 = 57508 -- boss_herald_volazj.cpp:41
+local SPELL_INSANITY_PHASING_2 = 57509 -- boss_herald_volazj.cpp:42
+local SPELL_INSANITY_PHASING_3 = 57510 -- boss_herald_volazj.cpp:43
+local SPELL_INSANITY_PHASING_4 = 57511 -- boss_herald_volazj.cpp:44
+local SPELL_INSANITY_PHASING_5 = 57512 -- boss_herald_volazj.cpp:45
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -103,6 +111,32 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+    end
+end
+
+-- boss_herald_volazj.cpp:173 ResetPlayersPhaseMask. C++ removes
+-- GetSpellForPhaseMask(player->GetPhaseMask()) per map player — the
+-- one phasing aura matching their phase (16->57508, 32->57509,
+-- 64->57510, 128->57511, 256->57512; phase 1 maps to 0, a no-op).
+-- player:GetPhaseMask() has no bridge, so the port strips all five
+-- phasing auras per same-map/instance player instead: absent auras
+-- are no-ops, so the net state is C++-exact. player:RemoveAura is
+-- bridged (engine/world/lua_player.go:219); the GetPlayersInWorld +
+-- map/instance filter pool is the archavon / anomalus precedent.
+local function resetPlayersPhaseMask(creature)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local phasing = {
+        SPELL_INSANITY_PHASING_1, SPELL_INSANITY_PHASING_2,
+        SPELL_INSANITY_PHASING_3, SPELL_INSANITY_PHASING_4,
+        SPELL_INSANITY_PHASING_5,
+    }
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
+            for _, spell in ipairs(phasing) do
+                plr:RemoveAura(spell)
+            end
+        end
     end
 end
 
@@ -164,10 +198,15 @@ end
 local function volazjDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    resetPlayersPhaseMask(creature) -- boss_herald_volazj.cpp:284, C++
+                                     -- arm order (after Talk)
 end
 
 local function volazjReset(event, creature)
     cancelTimers(creature:GetGUID())
+    resetPlayersPhaseMask(creature) -- boss_herald_volazj.cpp:80, C++
+                                     -- arm order (after the SetPhaseMask
+                                     -- leg, whose bridge is absent)
 end
 
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 1, volazjEnterCombat)

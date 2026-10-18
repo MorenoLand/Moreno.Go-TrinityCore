@@ -43,9 +43,11 @@
 -- - Reset's SetFlag(UNIT_FLAG_IMMUNE_TO_NPC) /
 --   SetFlag(UNIT_NPC_FLAG_GOSSIP) (no flag bridges — unworthy_
 --   initiate precedent), SetByteValue stand-state legs (no
---   stand-state bridge), RemoveAllAuras (no aura-removal bridge —
---   eye_of_acherus precedent), _summons.DespawnAll (no summon/
---   despawn bridge — dark-rider precedent).
+--   stand-state bridge), _summons.DespawnAll (no summon/
+--   despawn bridge — dark-rider precedent). The Reset
+--   RemoveAllAuras arm (chapter2.cpp:144) is PORTED via
+--   creature:RemoveAllAuras() — the old "no aura-removal bridge
+--   (eye_of_acherus precedent)" header claim was stale.
 -- - EVENT_INTRO_0's SetByteValue(SIT) + RemoveFlag(GOSSIP) arms
 --   and EVENT_INTRO_1's SetByteValue(STAND) arm (stand-state /
 --   flag bridges, as above) — only the Talk legs are ported.
@@ -138,6 +140,11 @@ local function onGossipHello(event, player, creature)
 end
 
 local function onReset(_, creature)
+    creature:RemoveAllAuras() -- chapter2.cpp:144, C++ arm order (before
+                               -- _events.Reset()); the "no aura-removal
+                               -- bridge" header claim was stale —
+                               -- creature:RemoveAllAuras() is bridged
+                               -- (engine/world/lua_creature_events.go:164)
     cancelTimers(creature:GetGUID())
 end
 

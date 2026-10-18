@@ -41,7 +41,8 @@
 -- SPELL_BATTLE_SHOUT) + schedules EVENT_CHARGE_COMMANDER ({3s,4s}) +
 -- EVENT_WHIRLWIND (6s, 8s); the EVENT_FRIGHTENING_SHOUT scheduling leg
 -- is PORTED below; the RemoveAurasDueToSpell(SPELL_FROZEN_PRISON 47543)
--- leg has no aura-removal bridge — documented, not wired.
+-- leg is PORTED in commandersEnterCombat (creature:RemoveAura,
+-- boss_nexus_commanders.cpp:58, C++ arm order).
 -- EVENT_WHIRLWIND — DoCast(me, SPELL_WHIRLWIND 38618), 6s/8s init,
 -- 19500ms/25s repeat.
 -- EVENT_FRIGHTENING_SHOUT — DoCastAOE(SPELL_FRIGHTENING_SHOUT 19134)
@@ -57,7 +58,8 @@
 -- (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith — RemoveAurasDueToSpell(SPELL_FROZEN_PRISON 47543)
--- (no aura-removal bridge — boss_amanitar / boss_anub_arak precedent).
+-- PORTED via creature:RemoveAura (the old "no aura-removal bridge —
+-- boss_amanitar / boss_anub_arak precedent" claim was stale).
 -- EVENT_CHARGE_COMMANDER — PORTED (see chargeTick; the "no
 -- random-target SelectTarget bridge" claim was stale — the C++
 -- playerOnly=TRUE pool is exactly what the Lua alive-player pool
@@ -73,6 +75,7 @@ local SAY_DEATH = 2
 local SPELL_BATTLE_SHOUT = 31403
 local SPELL_WHIRLWIND = 38618
 local SPELL_FRIGHTENING_SHOUT = 19134 -- boss_nexus_commanders.cpp:26
+local SPELL_FROZEN_PRISON = 47543 -- boss_nexus_commanders.cpp:28
 local SPELL_CHARGE = 60067 -- boss_nexus_commanders.cpp:25
 
 local timers = {}
@@ -154,13 +157,19 @@ local function frighteningShoutTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: Talk(SAY_AGGRO) + DoCast(me, SPELL_BATTLE_SHOUT
--- 31403) + schedules EVENT_CHARGE_COMMANDER ({3s,4s}) + EVENT_WHIRLWIND
--- (6s, 8s) + EVENT_FRIGHTENING_SHOUT (13s, 15s). The
--- RemoveAurasDueToSpell (SPELL_FROZEN_PRISON 47543) leg has no
--- aura-removal bridge — documented, not wired.
+-- C++ JustEngagedWith: Talk(SAY_AGGRO) + RemoveAurasDueToSpell(
+-- SPELL_FROZEN_PRISON 47543) + DoCast(me, SPELL_BATTLE_SHOUT 31403) +
+-- schedules EVENT_CHARGE_COMMANDER ({3s,4s}) + EVENT_WHIRLWIND (6s, 8s)
+-- + EVENT_FRIGHTENING_SHOUT (13s, 15s); the aura-removal leg is PORTED
+-- above via creature:RemoveAura (the old "no aura-removal bridge"
+-- claim was stale).
 local function commandersEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:RemoveAura(SPELL_FROZEN_PRISON) -- boss_nexus_commanders.cpp:58,
+        -- C++ arm order (between Talk and Battle Shout); the old
+        -- "no aura-removal bridge" claim was stale —
+        -- creature:RemoveAura is bridged
+        -- (engine/world/lua_objects.go:228)
     creature:CastSpell(creature, SPELL_BATTLE_SHOUT)
     local guid = creature:GetGUID()
     cancelTimers(guid)
