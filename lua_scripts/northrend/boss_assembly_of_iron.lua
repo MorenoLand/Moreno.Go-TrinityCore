@@ -32,6 +32,16 @@
 -- of runes, overload, steelbreaker engage high voltage) —
 -- phase-gated / random-target / summon / instance / movement
 -- legs stay documented-only.
+-- Re-audited 2026-10-18: EVENT_CHAIN_LIGHTNING ported on the
+-- GetAITargets random-target idiom (the old "random-target
+-- bridge absent" claim was stale — the razuvious precedent);
+-- RemoveAllAuras() added to the three event-23 Reset handlers
+-- (bridge exists at engine/world/lua_creature_events.go:166);
+-- the UNIT_STATE_CASTING gates stay unmodeled — IsCasting is
+-- bridged-but-false in Go (engine/world/lua_objects.go:330),
+-- so the gate is vacuous; every spell enum value, yell index,
+-- init/re-arm delay and triggered flag re-verified C++-exact
+-- name-by-name this run.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
@@ -82,12 +92,16 @@
 -- non-triggered self-cast, 15min init, one-shot);
 -- EVENT_OVERLOAD (Talk(EMOTE_BRUNDIR_OVERLOAD 7) +
 -- Talk(SAY_BRUNDIR_SPECIAL 2) + DoCast(SPELL_OVERLOAD 61869)
--- non-triggered self-cast, {60s,120s} init and repeat) — the
--- maiden CreateLuaEvent convention (the
+-- non-triggered self-cast, {60s,120s} init and repeat);
+-- EVENT_CHAIN_LIGHTNING (DoCast(target, SPELL_CHAIN_LIGHTNING
+-- 61879) non-triggered, SelectTarget(Random, 0) ->
+-- randomThreatTarget via the handler GetAITargets twin — the
+-- razuvious random-target idiom — 4s init, {7s,10s} repeat) —
+-- the maiden CreateLuaEvent convention (the
 -- BossAI::JustEngagedWith passthrough, SetPhase leg, the
--- EVENT_CHAIN_LIGHTNING random-target and EVENT_MOVE_POSITION
--- motion-machine legs, and the FindNearestCreature
--- NPC_WORLD_TRIGGER 22515 trigger-GUID leg have no bridges);
+-- EVENT_MOVE_POSITION motion-machine leg, and the
+-- FindNearestCreature NPC_WORLD_TRIGGER 22515 trigger-GUID leg
+-- have no bridges);
 -- KilledUnit: player-gated Talk(SAY_SLAY 1) (event 3; the
 -- twenty-eighth player-gated variant ported); JustDied:
 -- Talk(SAY_DEATH 4) (event 4; the _JustDied() passthrough, the
@@ -98,9 +112,11 @@
 -- precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond
 -- entries 32867 / 32927 / 32857):
--- Reset / Initialize (all three) — _Reset() + phase = 0 +
--- RemoveAllAuras (+ SetHover(false) / interrupt-immunity reset
--- for brundir) — no bridges.
+-- Reset / Initialize (all three) — the _Reset() + phase = 0
+-- legs have no bridges; RemoveAllAuras() IS bridged (the
+-- handler twin, engine/world/lua_creature_events.go:166) and
+-- rides the three event-23 handlers; brundir's SetHover(false)
+-- / interrupt-immunity reset have no bridges.
 -- DoAction (all three) — ACTION_SUPERCHARGE 1 (SetFullHealth
 -- + SPELL_SUPERCHARGE 61920 + phase++ + event reschedules)
 -- and ACTION_ADD_CHARGE 2 (steelbreaker, SPELL_ELECTRICAL_
@@ -122,11 +138,7 @@
 -- SPELL_RUNE_OF_DEATH 62269, random target, phase >= 2);
 -- EVENT_RUNE_OF_SUMMONING (Talk(SAY_SUMMON 3) +
 -- SPELL_RUNE_OF_SUMMONING 62273, random target, phase >= 3).
--- brundir EVENT_CHAIN_LIGHTNING (SPELL_CHAIN_LIGHTNING
--- 61879, random target, 4s init, {7s,10s} repeat) — the
--- baltharus enervating-brand HasAura pattern does not clearly
--- apply (no aura exclusion in C++); random-target bridge
--- absent. EVENT_LIGHTNING_WHIRL (SPELL_LIGHTNING_WHIRL
+-- brundir EVENT_LIGHTNING_WHIRL (SPELL_LIGHTNING_WHIRL
 -- 61915, phase >= 2); EVENT_LIGHTNING_TENDRILS
 -- (Talk(SAY_FLIGHT 3) + SPELL_LIGHTNING_TENDRILS 61887 /
 -- VISUAL 61883 + hover / flight / landing state machine,
@@ -182,6 +194,7 @@ local SPELL_HIGH_VOLTAGE = 61890
 local SPELL_FUSION_PUNCH = 61903
 local SPELL_SHIELD_OF_RUNES = 62274
 local SPELL_OVERLOAD = 61869
+local SPELL_CHAIN_LIGHTNING = 61879
 
 local timers = {}
 
@@ -250,8 +263,13 @@ local function steelbreakerLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset: _Reset() + phase = 0 + me->RemoveAllAuras() — the
+-- _Reset()/phase legs have no bridges; RemoveAllAuras rides the
+-- handler twin (engine/world/lua_creature_events.go:166, the
+-- evade-leg twin).
 local function steelbreakerReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:RemoveAllAuras()
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -311,8 +329,13 @@ local function molgeimLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset: _Reset() + phase = 0 + me->RemoveAllAuras() — the
+-- _Reset()/phase legs have no bridges; RemoveAllAuras rides the
+-- handler twin (engine/world/lua_creature_events.go:166, the
+-- evade-leg twin).
 local function molgeimReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:RemoveAllAuras()
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -331,6 +354,38 @@ end
 local function molgeimDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_MOLGEIM_DEATH)
+end
+
+-- C++ SelectTarget(Random, 0) leg: alive units on the threat
+-- list (C++ playerOnly default = false), no distance filter —
+-- the GetAITargets pool (the razuvious random-target idiom;
+-- the old "no random-target SelectTarget bridge" claim was
+-- stale).
+local function randomThreatTarget(creature)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_CHAIN_LIGHTNING: if (Unit* target =
+-- SelectTarget(Random, 0)) DoCast(target, SPELL_CHAIN_LIGHTNING
+-- 61879) (non-triggered), 4s init, {7s,10s} repeat; the re-arm
+-- sits outside the target check — C++-exact.
+local function chainLightningTick(creature, guid)
+    local target = randomThreatTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
+    end
+    schedule(guid, "chainlightning", {7000, 10000}, function()
+        chainLightningTick(creature, guid)
+    end)
 end
 
 -- C++ EVENT_OVERLOAD: Talk(EMOTE_BRUNDIR_OVERLOAD 7) +
@@ -370,14 +425,22 @@ local function brundirEnterCombat(event, creature, target)
     schedule(guid, "overload", {60000, 120000}, function()
         overloadTick(creature, guid)
     end)
+    schedule(guid, "chainlightning", 4000, function()
+        chainLightningTick(creature, guid)
+    end)
 end
 
 local function brundirLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset: _Reset() + phase = 0 + me->RemoveAllAuras() — the
+-- _Reset()/phase legs have no bridges; RemoveAllAuras rides the
+-- handler twin (engine/world/lua_creature_events.go:166, the
+-- evade-leg twin).
 local function brundirReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:RemoveAllAuras()
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk

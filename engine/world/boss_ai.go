@@ -10378,38 +10378,38 @@ func init() {
 	// Assembly of Iron (Steelbreaker 32867 / Runemaster Molgeim
 	// 32927 / Stormcaller Brundir 32857), Ulduar —
 	// lua_scripts/northrend/boss_assembly_of_iron.lua.
-	// Ported arms (C++-exact): JustEngagedWith
-	// Talk(SAY_AGGRO 0) (event 1; the BossAI::JustEngagedWith
-	// passthrough, SetPhase / ScheduleEvent / DoCast
-	// SPELL_HIGH_VOLTAGE 61890 legs have no bridges — the
-	// auriaya engage-port precedent); KilledUnit player-gated
-	// Talk(SAY_SLAY 1) (event 3 — the razuvious player-gated
-	// variant precedent — the twenty-sixth / twenty-seventh /
-	// twenty-eighth player-gated variants ported); JustDied
-	// Talk(SAY_DEATH 3/4) (event 4; the _JustDied() passthrough,
-	// the instance GetBossState DONE check, the DONE branch
-	// (Talk SAY_ENCOUNTER_DEFEATED + DoCastAOE
-	// SPELL_KILL_CREDIT 65195), the SetLootRecipient leg and
-	// the supercharge DoAction cascade have no bridges — the
-	// sjonnir JustDied-Talk precedent).
-	// Documented-only: Reset / Initialize (all three — no
-	// bridges); DoAction(ACTION_SUPERCHARGE / ACTION_ADD_CHARGE
-	// — no DoAction bridge); GetData(DATA_PHASE_3 — no GetData
-	// bridge); the three UpdateAI event machines (fusion punch
-	// / static disruption / overwhelming power / rune of power
-	// / shield of runes / rune of death / rune of summoning /
-	// chain lightning / overload / lightning whirl / lightning
-	// tendrils flight machine / berserk — no timer-event /
-	// cast / summon / phase / movement / hover bridges; all
-	// timer-leg yells ride the unbridgeable event machine);
-	// the three spell scripts (spell_shield_of_runes /
-	// spell_assembly_meltdown / spell_assembly_rune_of_
-	// summoning — no AuraScript / SpellScript bridges; all
-	// three join the no-AuraScript / no-SpellScript-bridge
-	// queues); the achievement
-	// (achievement_assembly_i_choose_you — GetData-based
-	// OnCheck — no GetData / achievement bridges; joins the
-	// unmodeled-achievement queue).
+	// Ported arms (C++-exact for all modeled arms): engage
+	// Talk(SAY_AGGRO 0) x3 (event 1) + steelbreaker DoCast(me,
+	// SPELL_HIGH_VOLTAGE 61890); EVENT_BERSERK x3 (Talk
+	// SAY_BERSERK 5/6/6 + DoCast(SPELL_BERSERK 47008) self-cast,
+	// 15min init, one-shot); EVENT_FUSION_PUNCH (melee-range
+	// gated DoCastVictim(SPELL_FUSION_PUNCH 61903), 15s init,
+	// {13s,22s} repeat); EVENT_SHIELD_OF_RUNES (DoCast(me,
+	// SPELL_SHIELD_OF_RUNES 62274), 30s init, {27s,34s} repeat);
+	// EVENT_OVERLOAD (Talk EMOTE 7 + SAY_SPECIAL 2 + DoCast
+	// 61869 self-cast, {60s,120s}); EVENT_CHAIN_LIGHTNING
+	// (random-target DoCast(SPELL_CHAIN_LIGHTNING 61879) via the
+	// GetAITargets twin — the razuvious idiom — 4s init,
+	// {7s,10s} repeat); KilledUnit player-gated Talk(SAY_SLAY 1)
+	// x3 (event 3); JustDied Talk(SAY_DEATH 3/4/4) x3 (event 4);
+	// RemoveAllAuras() on the event-23 Reset handlers (the
+	// _Reset()/phase legs have no bridges).
+	// Documented-only (no bridges): DoAction
+	// ACTION_SUPERCHARGE 1 / ACTION_ADD_CHARGE 2 — the phase
+	// machine and the death-cascade never advance, so static
+	// disruption / overwhelming power / rune of death / rune of
+	// summoning / lightning whirl / tendrils flight machine stay
+	// unfired (C++-exact for the reachable phase-1 state — the
+	// gothik precedent); GetData(DATA_PHASE_3) + the
+	// achievement_assembly_i_choose_you OnCheck; EVENT_RUNE_OF_
+	// POWER (random alive ally via instance GUIDs — note the
+	// C++ case-2 DATA_STEELBREAKER copy-paste quirk);
+	// EVENT_MOVE_POSITION + the tendrils flight/land/ground
+	// machine (no motion/hover bridges); the DONE-branch kill
+	// credit (no instance GetBossState bridge); the three spell
+	// scripts (no AuraScript/SpellScript bridges); the
+	// UNIT_STATE_CASTING gates (IsCasting is bridged-but-false
+	// in Go — vacuous).
 	RegisterLuaBoss("boss_steelbreaker", 32867)
 	RegisterLuaBoss("boss_runemaster_molgeim", 32927)
 	RegisterLuaBoss("boss_stormcaller_brundir", 32857)
