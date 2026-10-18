@@ -25,7 +25,9 @@
 -- death: Talk SAY_DEATH.
 -- Deviations from C++: the entire bomb phase has no bridge — no summon
 -- model (the 40 fire bombs + fire wall never exist), no creature teleport
--- (DoTeleportTo), no player teleport (DoTeleportPlayer), no AttackStop/
+-- (DoTeleportTo), stale 'no player teleport (DoTeleportPlayer)' retracted —
+-- player:TeleportNear is bridged (lua_player.go:366); the arm stays out on
+-- the summon machine, no AttackStop/
 -- motion-master clear, so Talk(SAY_FIRE_BOMBS=1), the fire-wall arms, the
 -- 100ms-per-bomb sequence, Boom, and the enrage-timer 10s shave never run;
 -- the hatcher arm has no bridge — no egg enumeration (HatchAllEggs), no

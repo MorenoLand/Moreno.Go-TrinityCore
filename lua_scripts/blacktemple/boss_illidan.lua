@@ -48,7 +48,8 @@
 -- Fight shape (C++-exact for the modeled arms): Illidan (22917).
 -- OnEnterCombat (the intro arms — PHASE_INTRO, the akama gossip
 -- chain, SetImmuneToAll, DoZoneInCombat and the instance-data
--- gates — have no gossip/instance bridges, so the fight starts on
+-- gates — stale 'no gossip bridge' retracted (bridged); no instance
+-- bridge, so the fight starts on
 -- pull, ragnaros-intro convention): per-GUID state reset
 -- (phase=PHASE_1, _dead=false, _isDemon=false; C++ Reset values),
 -- berserk 45078 25min one-shot, triggered self-cast (C++
@@ -141,7 +142,8 @@
 -- the minions-phase arms (EVENT_AKAMA_MINIONS chain driven by
 -- illidan's DoAction(ACTION_START_MINIONS)) and the outro arms
 -- (DoAction(ACTION_START_OUTRO) from illidan's quiet-suicide)
--- have no gossip/movement/instance/summon/DoAction bridges —
+-- have no movement/instance/summon/DoAction bridges (stale 'no gossip
+-- bridge' retracted — bridged) —
 -- unmodeled; the CanAIAttack illidan gate has no attack-gating
 -- bridge. OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel timers.
 -- Flame of Azzinoth (22997): OnReset: triggered self-cast flame
@@ -217,7 +219,8 @@
 -- unmodeled (the illidan air-phase timer chain is kept, the
 -- positions are not); no summon bridge — the warglaive/db-target/
 -- maiev/shadow-demon/cage-trap/blade-tear/spirit/minion summons
--- never spawn; no gossip bridge — the akama intro never starts;
+-- never spawn; stale 'no gossip bridge' retracted (bridged) — the
+-- akama intro stays out on the movement/instance machine;
 -- no flag/react/equipment/sheath/gravity/threat/immune/sound/
 -- despawn bridges — those arms are skipped; the air-phase
 -- finalize arm (both flames dead -> middle, glaive returns, land,

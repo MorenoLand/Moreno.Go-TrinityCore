@@ -283,7 +283,9 @@ local function nightbaneEnterCombat(event, creature, target)
     cancelTimers(guid)
     nightbaneInitState(guid)
     -- The intro (ACTION_SUMMON spline chain, IMMUNE_TO_PC, DoZoneInCombat)
-    -- is skipped — no movement or gameobject-gossip bridge — so combat
+    -- is skipped — no movement bridge (stale 'no gameobject-gossip
+    -- bridge' retracted — RegisterGameObjectGossipEvent bridged,
+    -- engine/world/gameobject_hooks.go) — so combat
     -- starts directly at the landing state: Talk + SetupGroundPhase, like
     -- C++ JustEngagedWith.
     creature:Talk(YELL_AGGRO)

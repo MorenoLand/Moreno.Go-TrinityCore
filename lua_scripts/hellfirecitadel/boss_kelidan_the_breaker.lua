@@ -44,9 +44,9 @@
 -- arm has no unit-state bridge; Talk(SAY_NOVA); the AddAura(SPELL_
 -- BURNING_NOVA 30940, me) arm is ported below (stale "no aura
 -- bridge" claim retracted — creature AddAura is bridged); the
--- IsHeroic() DoTeleportAll arm has no teleport bridge (IsHeroic()
--- is bridged — blood_prince_council precedent — but DoTeleportAll
--- has no bridge, so the arm stays unmodeled);
+-- IsHeroic() DoTeleportAll arm is ported below (stale "no teleport
+-- bridge" claim retracted — player:TeleportNear is bridged,
+-- lua_player.go:366; creature orientation approximated);
 -- firenova=true, firenovaTimer=5000, re-arm {20s,28s} regardless
 -- (C++-exact).
 -- OnTargetDied(3): 50% Talk(SAY_KILL) (C++ `if (rand32() % 2)
@@ -78,8 +78,9 @@
 -- state; no unit-state bridge — the JustEngagedWith and burning-
 -- nova InterruptNonMeleeSpells arms unmodeled (mennu/thespia
 -- precedent); the burning-nova AddAura(30940) arm is ported
--- (stale "no aura bridge" claim retracted); no teleport bridge —
--- the heroic DoTeleportAll arm unmodeled; the H_SPELL_ variants
+-- (stale "no aura bridge" claim retracted); the heroic DoTeleportAll
+-- arm is ported below (stale "no teleport bridge" retracted —
+-- player:TeleportNear is bridged); the H_SPELL_ variants
 -- 37371/40070 are unused C++ enum members (both casts are
 -- unconditional, C++-exact); no
 -- movement bridge — the JustEngagedWith DoStartMovement arm
@@ -178,8 +179,8 @@ local function bossTick(creature, guid)
     -- {20s,28s}) — the InterruptNonMeleeSpells arm has no
     -- unit-state bridge; Talk(SAY_NOVA); the AddAura(30940) arm is
     -- ported below (stale "no aura bridge" claim retracted) and the
-    -- heroic DoTeleportAll arm has no teleport bridge (IsHeroic()
-    -- is bridged — documented above); firenova=
+    -- heroic DoTeleportAll arm is ported below (stale "no teleport
+    -- bridge" retracted — player:TeleportNear is bridged); firenova=
     -- true with a 5s firenovaTimer, re-arm {20s,28s} regardless
     -- (C++-exact).
     if st.burningNova <= 1000 then
@@ -188,6 +189,20 @@ local function bossTick(creature, guid)
         -- the stale "no aura bridge" claim is retracted: creature
         -- AddAura is bridged on the event-handler surface).
         creature:AddAura(SPELL_BURNING_NOVA)
+        -- C++ `if (IsHeroic()) DoTeleportAll(x,y,z,o)` (boss_kelidan_the_breaker.cpp:239-240):
+        -- ScriptedCreature.cpp:402-412 iterates dungeon map players, IsAlive-gated,
+        -- same-map TeleportTo — ported via player:TeleportNear (lua_player.go:366,
+        -- jin'do precedent) with the maiden_of_virtue map/instance + IsDead filter;
+        -- creature Lua Fields carry no Orientation, so facing is approximated (reads 0).
+        if creature:IsHeroic() then
+            local bx, by, bz = creature:GetX(), creature:GetY(), creature:GetZ()
+            local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+            for _, p in ipairs(GetPlayersInWorld()) do
+                if p:GetMapId() == mapId and p:GetInstanceId() == instanceId and not p:IsDead() then
+                    p:TeleportNear(bx, by, bz, creature:GetO())
+                end
+            end
+        end
         st.burningNova = 20000 + math.random(0, 7999)
         st.firenovaTimer = 5000
         st.firenova = true

@@ -106,8 +106,9 @@
 -- instance-script model — boss admission via the luaBossAI shim
 -- (DATA_THELURKERBELOWEVENT 17 NOT_STARTED/IN_PROGRESS/DONE
 -- and DATA_STRANGE_POOL 23 NOT_STARTED/IN_PROGRESS bookkeeping
--- skipped); no GO bridge — go_strange_pool's OnGossipHello
--- (the 25% fishing roll, the 54587 cast, the DATA_STRANGE_POOL
+-- skipped); stale 'no GO bridge' retracted (RegisterGameObjectGossipEvent
+-- bridged, engine/world/gameobject_hooks.go) — go_strange_pool's
+-- OnGossipHello (the 25% fishing roll, the 54587 cast, the DATA_STRANGE_POOL
 -- transitions) unmodeled; no summon bridge — the 9x submerged
 -- ambusher/guardian summons unmodeled; no movement bridge —
 -- the spout MoveRotate 20s machine, the rot-arc spout picks

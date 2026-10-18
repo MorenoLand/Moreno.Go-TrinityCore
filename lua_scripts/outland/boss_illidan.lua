@@ -120,7 +120,8 @@
 -- POINT_RANDOM_PILLAR / POINT_ILLIDAN_MIDDLE (glaive-returns leg) —
 -- no-motion / no-cast bridges — documented-only.
 -- npc_akama_illidan (NOT registered — boss companion-AI precedent) —
--- gossip handlers (GOSSIP_START_INTRO/FIGHT, no-gossip bridge),
+-- gossip handlers (GOSSIP_START_INTRO/FIGHT — stale 'no-gossip bridge'
+-- retracted, bridged),
 -- MovementInform Talks (SAY_AKAMA_FINISH 8 / SAY_AKAMA_BETRAYER 3 —
 -- no-motion bridge), timer Talks (EVENT_AKAMA_SAY_DOOR 0 / SAY_ALONE 1 /
 -- spirit ALONE Talks / SAY_SALUTE 2 / SAY_FREE 4 / SAY_TIME_HAS_COME 5 /

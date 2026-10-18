@@ -83,7 +83,9 @@
 --   prisoner-GUID holder) is ported nowhere: a GUID store with no
 --   bridgeable behavior (never mark stubs as completed).
 -- - go_acherus_soul_prison (gameobject gossip -> anchor -> prisoner
---   EventStart): no gameobject-gossip bridge.
+--   EventStart): stale 'no gameobject-gossip bridge' retracted
+--   (RegisterGameObjectGossipEvent bridged); arm stays out on the
+--   cross-AI EventStart leg.
 -- - spell_death_knight_initiate_visual's displayId -> 51552/
 --   equipment-dressup leg: no bridges (SpellScript model).
 local SPELL_ICY_TOUCH = 52372

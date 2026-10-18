@@ -63,7 +63,8 @@
 --   AddSC): OnGossipHello reads instance->GetData(TYPE_BARREL_DIVERSION
 --   = 1) and calls instance->SetData(TYPE_BARREL_DIVERSION,
 --   IN_PROGRESS) unless DONE, always returning false (gossip not
---   consumed) — no instance-data or gameobject-gossip bridge exists, so
+--   consumed) — no instance-data bridge (stale 'no gameobject-gossip
+--   bridge' retracted — RegisterGameObjectGossipEvent bridged), so
 --   the script is documented here, not registered (the five-gossip ->
 --   DRAKE summon at instance_old_hillsbrad.cpp:149 is quest-10283
 --   territory; SD%Complete: 70 flags exactly this as missing).

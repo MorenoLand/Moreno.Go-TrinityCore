@@ -76,7 +76,9 @@
 --   summon-with-position / instance-script bridges exist — documented
 --   here, not wired (EscortAI movement + instance-script model, both
 --   blocked, standing).
--- - Thrall gossip (no gossip bridge): OnGossipHello shows GOSSIP_ITEM_WALKING
+-- - Thrall gossip (stale 'no gossip bridge' retracted —
+--   RegisterCreatureGossipEvent bridged): OnGossipHello shows
+--   GOSSIP_ITEM_WALKING
 --   (menu GOSSIP_ID_START 9568) when TYPE_BARREL_DIVERSION 1 == DONE and
 --   !TYPE_THRALL_EVENT 2; GOSSIP_ITEM_SKARLOC1 ("Taretha cannot see you,
 --   Thrall.", menu 9614) when TYPE_THRALL_PART1 3 == DONE and
@@ -94,7 +96,8 @@
 -- - Thrall JustSummoned: barn guards/protectors/lookouts, SKARLOC_MOUNT,
 --   EROZION_ENTRY are exempt; every other summoned creature gets
 --   AttackStart(me) (summon-ownership bridge blocked, standing).
--- - npc_erozion (gossip-only, no gossip / inventory bridges — documented,
+-- - npc_erozion (gossip-only, stale 'no gossip bridge' retracted —
+--   bridged; no inventory bridge — documented,
 --   not registered): OnGossipHello offers "I need a pack of Incendiary
 --   Bombs." (GOSSIP_ACTION_INFO_DEF+1) when instance TYPE_BARREL_DIVERSION
 --   1 != DONE and the player lacks ITEM_ENTRY_BOMBS 25853, and "[PH]

@@ -19,9 +19,10 @@
 -- DATA_FJOLA_LIGHTBANE with a CircleBoundary); 34496 Eydis
 -- Darkbane (NPC_EYDIS_DARKBANE — kalecgos pass; bound to
 -- DATA_EYDIS_DARKBANE the same way). Add entries: 34567 Dark
--- Essence / 34568 Light Essence (trial_of_the_crusader.h
--- kalecgos pass — NOT bound in instance_trial_of_the_crusader.cpp;
--- ScriptName->entry binding DB-side, entry-unverifiable); 34743
+-- Essence / 34568 Light Essence (trial_of_the_crusader.h:213-214
+-- NPC_DARK_ESSENCE = 34567 / NPC_LIGHT_ESSENCE = 34568 — kalecgos
+-- pass — NOT bound in instance_trial_of_the_crusader.cpp;
+-- ScriptName->entry binding DB-side); 34743
 -- Bullet Controller / 34628 Bullet Dark / 34630 Bullet Light
 -- (Summons enum in the .cpp — kalecgos pass, no instance binding).
 -- Sole-source verified: whole-server-tree grep for "boss_fjola",
@@ -109,9 +110,12 @@
 -- rides plr:HasAura (bridged — engine/world/lua_player.go:203, hakkar
 -- precedent); the SPELLVALUE_MAX_TARGETS=1 spell-mod has no bridge
 -- (noted, not wired).
--- npc_essence_of_twin (34567/34568 — entry-unverifiable): OnGossipHello
--- -> RemoveAurasDueToSpell(ESSENCE_REMOVE) + CastSpell(player,
--- ESSENCE_APPLY) — no gossip bridge — documented-only.
+-- npc_essence_of_twin (34567/34568 — trial_of_the_crusader.h:213-214,
+-- entries C++-verifiable — the old "entry-unverifiable" note was stale):
+-- OnGossipHello -> RemoveAurasDueToSpell(ESSENCE_REMOVE) +
+-- CastSpell(player, ESSENCE_APPLY) — ported below (stale "no gossip
+-- bridge" claim retracted — RegisterCreatureGossipEvent is bridged,
+-- engine/scripting/runtime.go:902).
 -- npc_unleashed_dark (34628) / npc_unleashed_light (34630) —
 -- entry-unverifiable: Reset SetFlag(NON_ATTACKABLE | NOT_SELECTABLE)
 -- + SetReactState(REACT_PASSIVE) + SetDisableGravity(true) +
@@ -303,3 +307,32 @@ RegisterCreatureEvent(ENTRY_EYDIS, 2, makeLeaveCombat())
 RegisterCreatureEvent(ENTRY_EYDIS, 3, targetDied)
 RegisterCreatureEvent(ENTRY_EYDIS, 4, died)
 RegisterCreatureEvent(ENTRY_EYDIS, 23, reset)
+
+-- npc_essence_of_twin OnGossipHello (boss_twin_valkyr.cpp:548-555):
+-- C++-exact RemoveAurasDueToSpell(ESSENCE_REMOVE) + triggered
+-- player self-cast ESSENCE_APPLY + CloseGossipMenuFor. Entries
+-- 34567 Dark / 34568 Light Essence (trial_of_the_crusader.h:213-214);
+-- GetData (cpp:534-543): light essence removes the dark helper and
+-- applies the light helper, dark essence mirrored. player:CastSpell
+-- has no bridge (kalecgos pass), so the triggered player self-cast
+-- is modeled as player:AddAura (kodo precedent —
+-- npc_aged_dying_ancient_kodo.lua:71). RAID_MODE
+-- 10/25 has no bridge: the remove leg strips all four variants (the
+-- file's pool convention); the apply leg uses the 10-man normal
+-- variant (65684 dark / 65686 light — index 0), documented
+-- approximation. Handler signature (event, player, creature) per the
+-- zulaman.lua RegisterCreatureGossipEvent precedent. No
+-- forward-decl hazard: the factory returns the closure before
+-- registration.
+local function makeEssenceHello(removeAuras, applyAura)
+    return function(_, player, _)
+        for _, aura in ipairs(removeAuras) do
+            player:RemoveAura(aura)
+        end
+        player:AddAura(applyAura)
+        player:GossipComplete()
+    end
+end
+
+RegisterCreatureGossipEvent(34568, 1, makeEssenceHello(DARK_ESSENCE_AURAS, 65686))
+RegisterCreatureGossipEvent(34567, 1, makeEssenceHello(LIGHT_ESSENCE_AURAS, 65684))

@@ -104,7 +104,7 @@
 -- EnterEvadeMode / HandleMusic / SummonMinions — no bridges.
 -- npc_expedition_commander (33210 ulduar.h:90 — entry-verifiable
 -- but bridge-blocked): OnGossipSelect -> DoAction
--- (ACTION_START_FIGHT) — no gossip / DoAction bridges;
+-- (ACTION_START_FIGHT) — gossip bridged (stale 'no gossip bridge' retracted — RegisterCreatureGossipEvent, engine/scripting/runtime.go:902), no DoAction bridge;
 -- DoAction Talk(SAY_COMMANDER_AGGRO 0) / Talk
 -- (SAY_COMMANDER_GROUND_PHASE 1) / Talk
 -- (SAY_COMMANDER_ENGINEERS_DEAD 2) ride the DoAction machine —

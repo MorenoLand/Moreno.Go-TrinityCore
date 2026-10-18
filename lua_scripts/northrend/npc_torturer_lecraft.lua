@@ -66,7 +66,9 @@
 -- unregistered file = dead code — minigob precedent); the
 -- SpellHit arms (49256 mount / 52421 low-hp emote / 49263 renew
 -- talk machines) have no SpellHit bridge, the OnGossipSelect
--- quest-12372 arm has no gossip bridge, the OnCharmed flag arm
+-- quest-12372 arm: stale 'no gossip bridge' retracted (bridged —
+-- RegisterCreatureGossipEvent); arm stays out on the no
+-- player:CastSpell bridge (kalecgos pass); the OnCharmed flag arm
 -- has no flag bridge — documented-only.
 
 local SPELL_HEMORRHAGE = 30478

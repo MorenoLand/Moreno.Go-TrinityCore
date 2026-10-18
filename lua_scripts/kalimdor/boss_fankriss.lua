@@ -29,8 +29,10 @@
 --   unused without a working summon.
 -- - SpawnHatchlings_Timer (urand 6000-12000 init -> urand 45000-60000,
 --   gated by HealthAbovePct(3)): DoCast(target, SPELL_ROOT 28858) +
---   DoTeleportPlayer to one of three tunnel coords (no DoTeleportPlayer
---   bridge) + ModifyThreatByPercent(target, -100) (no threat bridge) +
+--   DoTeleportPlayer to one of three tunnel coords (stale 'no
+--   DoTeleportPlayer bridge' retracted — player:TeleportNear is bridged,
+--   engine/world/lua_player.go:366) + ModifyThreatByPercent(target, -100)
+--   (no threat bridge) +
 --   me->SummonCreature(15962 x4, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT
 --   15s) with AttackStart(target) (SummonCreature zero Lua usage,
 --   AttackStart cross-AI unbridgeable). Casting Root alone without the

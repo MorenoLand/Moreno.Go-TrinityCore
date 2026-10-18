@@ -70,7 +70,9 @@
 -- omor precedents); no summon bridge — the oscillating-
 -- frequency scanner master bunny's SummonCreature /
 -- SummonGameObject arms unmodeled (steamrigger precedent);
--- no gossip bridge — go_legion_obelisk, go_simon_cluster
+-- stale 'no gossip bridge' retracted (RegisterGameObjectGossipEvent
+-- bridged, engine/world/gameobject_hooks.go); go_legion_obelisk,
+-- go_simon_cluster
 -- and go_apexis_relic gossip arms unmodeled; no
 -- gameobject-flag/world-search bridges — the simon-game
 -- node setup/reset arms (SetCanFly, cluster searches,

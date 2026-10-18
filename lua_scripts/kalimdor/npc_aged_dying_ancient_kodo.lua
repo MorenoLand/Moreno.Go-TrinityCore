@@ -37,7 +37,10 @@
 -- + smeed Talk(SAY_SMEED_HOME 0)) has no proximity-detection
 -- bridge (azshara depth-charge precedent) and the directed
 -- cross-creature Talk has no bridge (omor precedent) —
--- unmodeled; OnGossipHello has no gossip bridge — unmodeled.
+-- unmodeled; OnGossipHello: stale 'no gossip bridge' retracted
+-- (RegisterCreatureGossipEvent bridged) — stays unmodeled: the
+-- UNIT_NPC_FLAG_GOSSIP flag is only set by the unported 18362
+-- SpellHit arm, so the hello can never fire.
 -- In the Go model the event-14 caster is always the player
 -- session (no creature-caster spell path), so the C++
 -- caster->ToUnit() gate always passes here.
