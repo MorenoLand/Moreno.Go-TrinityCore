@@ -35,7 +35,7 @@
 -- nil-target fallback (C++ MaxThreat) and sacrifice picks any random alive
 -- player. No UNIT_STATE_CASTING model — timers fire unconditionally. The
 -- fiendish imp's fire-school ApplySpellImmune and kil'rek's
--- DespawnOrUnsummon(15s) on death have no bridge.
+-- DespawnOrUnsummon(15s) on death rides a 15s creature:Despawn event.
 
 local ENTRY_TERESTIAN_ILLHOOF = 15688
 local ENTRY_KILREK = 17229
@@ -229,7 +229,8 @@ RegisterCreatureEvent(ENTRY_TERESTIAN_ILLHOOF, 23, terestianReset)
 -- Kil'rek (npc_kilrek, C++ ScriptName for 17229): amplify flames 30053 on
 -- the victim 8s after Reset, every 9s after; melee is engine-driven. On
 -- death casts broken pact 30065 triggered (the boss's SpellHit arm re-arms
--- the kilrek summon timer at 32s); DespawnOrUnsummon has no bridge.
+-- the kilrek summon timer at 32s); DespawnOrUnsummon(15s) rides a 15s
+-- creature:Despawn event.
 -- Kil'rek never spawns in this build (no summon model), but the AI is
 -- registered so any that exist fight correctly.
 local function onAmplifyFlames(creature, guid)
@@ -259,6 +260,11 @@ local function kilrekDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(kilrekTimers, guid)
     creature:CastSpell(creature, SPELL_BROKEN_PACT, true)
+    -- C++ JustDied: DespawnOrUnsummon(Seconds(15)) after the broken-pact
+    -- cast (boss_terestian_illhoof.cpp:180); modeled as a 15s Lua event.
+    schedule(kilrekTimers, guid, "despawn", 15000, function()
+        creature:Despawn()
+    end)
 end
 
 RegisterCreatureEvent(ENTRY_KILREK, 1, kilrekEnterCombat)

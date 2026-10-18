@@ -59,16 +59,17 @@
 -- change phase 60s, the taunt/attack-me immunity-off arms have no
 -- bridge, re-arm the phase-1 schedule; the
 -- ModifyThreatByPercent(-100) / AttackStart(oldTarget) /
--- AddThreat(oldThreat) victim-restore arms have no threat bridge
--- and are unmodeled, so the GUID state is simply cleared
+-- AddThreat(oldThreat) victim-restore arms have no AddThreat/GetThreat
+-- bridge (ClearThreatList is bridged but the arms restore threat, not
+-- clear it) and are unmodeled, so the GUID state is simply cleared
 -- (C++ Initialize). OnTargetDied(3): Talk(SAY_SLAY), TYPEID_PLAYER
 -- gate (terestian convention). OnDied(4): _JustDied instance arm is
 -- blocked on the instance-script model; the DoPlaySoundToSet(11439)
 -- arm is ported via creature:PlayDirectSound. OnLeave-
 -- Combat(2)/OnReset(23): cancel timers, drop per-GUID state. The
 -- Reset ApplySpellImmune(false) arms have no bridge; the
--- EnterEvadeMode _DespawnAtEvade arm has no despawn bridge
--- (evade-side cleanup is engine-side). The CanAIAttack gate
+-- EnterEvadeMode _DespawnAtEvade arm rides creature:Despawn in
+-- gurtoggLeaveCombat (drakkari/moorabi precedent). The CanAIAttack gate
 -- (!who->HasAura(SPELL_BEWILDERING_STRIKE 40491)) has no attack-
 -- gating bridge — the engine keeps attacking normally. The
 -- npc_fel_geyser AI (Reset: triggered self-casts 40593 + 40031)
@@ -431,6 +432,8 @@ end
 
 local function gurtoggLeaveCombat(event, creature)
     gurtoggResetState(creature:GetGUID())
+    -- C++ EnterEvadeMode: _DespawnAtEvade() (boss_gurtogg_bloodboil.cpp:140).
+    creature:Despawn()
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY), TYPEID_PLAYER gate.

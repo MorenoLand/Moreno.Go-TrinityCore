@@ -51,8 +51,8 @@
 -- (BossAI::JustEngagedWith and the DATA_HIGH_WARLORD_NAJENTUS
 -- bookkeeping arms skipped); the impaling-spine GO summon (185584)
 -- has no summon bridge — only the spine cast and Talk are kept;
--- the EnterEvadeMode _DespawnAtEvade arm has no despawn bridge
--- (evade-side cleanup is engine-side).
+-- the EnterEvadeMode _DespawnAtEvade arm rides creature:Despawn in
+-- najentusLeaveCombat (drakkari/moorabi precedent).
 
 local ENTRY_NAJENTUS = 22887
 
@@ -211,6 +211,9 @@ end
 
 local function najentusLeaveCombat(event, creature)
     najentusResetState(creature:GetGUID())
+    -- C++ EnterEvadeMode: _EnterEvadeMode() + _DespawnAtEvade()
+    -- (boss_warlord_najentus.cpp:77-80).
+    creature:Despawn()
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY), TYPEID_PLAYER gate.
