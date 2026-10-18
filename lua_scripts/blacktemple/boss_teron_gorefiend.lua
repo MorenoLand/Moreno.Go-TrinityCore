@@ -53,8 +53,9 @@
 -- area-trigger bridge and the instance-data/flag/react arms are
 -- blocked on the instance-script model (standing gaps), so the
 -- fight starts on pull, ragnaros-intro convention. The
--- EnterEvadeMode summons.DespawnAll/_DespawnAtEvade arms have no
--- bridges (evade-side cleanup is engine-side). The npc_doom_blossom
+-- EnterEvadeMode arms: summons.DespawnAll has no summon bridge; the
+-- _DespawnAtEvade() -> DespawnOrUnsummon(0s,30s) arm rides
+-- creature:Despawn in teronLeaveCombat (stale 'no bridge' retracted). The npc_doom_blossom
 -- AI (NPC_DOOM_BLOSSOM 23123 per black_temple companion enum: hover
 -- takeoff +8z, cast 40186, shadowbolt 40185 on a random target 12s
 -- then every 2s) and npc_shadowy_construct AI (NPC_SHADOWY_
@@ -242,6 +243,11 @@ end
 
 local function teronLeaveCombat(event, creature)
     teronResetState(creature:GetGUID())
+    -- C++ EnterEvadeMode: _DespawnAtEvade() -> DespawnOrUnsummon(0s, 30s)
+    -- (ScriptedCreature.cpp:596-614; najentus/supremus precedent); the
+    -- DoCast(SPELL_SHADOW_OF_DEATH_REMOVE) and summons.DespawnAll()
+    -- arms have no cross-creature/summon bridges.
+    creature:Despawn()
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY), TYPEID_PLAYER gate.

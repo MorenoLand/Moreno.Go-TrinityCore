@@ -493,15 +493,26 @@ end
 -- random alive player is within 10 yd -> non-triggered
 -- DoCastSelf(41524), clear the gate, arm the 5s re-arm (EVENT_
 -- ARCANE_EXPLOSION_CHECK); the 1s cycle re-arms unconditionally.
+-- C++ SelectTarget(Random, 0, 10.0f) filters the 10-yd pool BEFORE
+-- the random pick — pick from the pool, not pick-then-gate (fixed
+-- 2026-10-18; the pick-then-gate form usually picked a far player
+-- and cast nothing).
 local function zerevorArcaneExplosion(creature, guid)
     local st = bossState(guid)
-    local target = randomInstancePlayer(creature)
-    if st.canUseArcaneExplosion and target and creature:GetDistance(target) <= 10 then
-        creature:CastSpell(creature, SPELL_ARCANE_EXPLOSION)
-        st.canUseArcaneExplosion = false
-        schedule(guid, "zerevor_ae_check", 5000, function()
-            bossState(guid).canUseArcaneExplosion = true
-        end)
+    if st.canUseArcaneExplosion then
+        local near = {}
+        for _, p in ipairs(playersInInstance(creature)) do
+            if creature:GetDistance(p) <= 10 then
+                near[#near + 1] = p
+            end
+        end
+        if #near > 0 then
+            creature:CastSpell(creature, SPELL_ARCANE_EXPLOSION)
+            st.canUseArcaneExplosion = false
+            schedule(guid, "zerevor_ae_check", 5000, function()
+                bossState(guid).canUseArcaneExplosion = true
+            end)
+        end
     end
     schedule(guid, "zerevor_ae", 1000, function()
         zerevorArcaneExplosion(creature, guid)

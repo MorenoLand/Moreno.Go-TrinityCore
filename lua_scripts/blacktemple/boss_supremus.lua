@@ -38,10 +38,12 @@
 -- bindings from the C++ sources alone (garr firesworn convention;
 -- NPC_SUPREMUS_VOLCANO=23085 exists in the header but the binding
 -- is still DB-side).
--- C++-exact on cast gating: supremus's UpdateAI is _scheduler.Update(diff)
--- only (boss_supremus.cpp:213-216) — no UNIT_STATE_CASTING queue gate
--- exists in C++, so unconditional task firing matches C++ (the old
--- "no UNIT_STATE bridge" claim was stale). Deviations from C++: no instance-
+-- Cast gating: boss_supremus has no UpdateAI override, so it runs
+-- under BossAI::UpdateAI (ScriptedCreature.cpp:571-589), which gates
+-- event execution on HasUnitState(UNIT_STATE_CASTING). That gate has
+-- no Lua bridge, so timers fire unconditionally (jeklik convention) —
+-- a standing deviation (the old boss_supremus.cpp:213-216 citation was
+-- npc_volcano's UpdateAI, not the boss's). Deviations from C++: no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the DATA_SUPREMUS bookkeeping arms
 -- skipped); no threat model — the ResetThreatList/AddThreat
