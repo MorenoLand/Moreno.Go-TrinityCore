@@ -39,8 +39,8 @@
 -- models the freeze as cancel + re-arm with re-arm delays on emerge).
 -- Emerge: re-arm the combat timers (eruption {20s,45s}, wrath 25s,
 -- hand 20s, lava burst 10s, elemental fire {10s,14s}, magma blast
--- 2500ms); the C++ Talk/faction/emote/flag/AttackStart arms have no
--- bridges — see deviations. The 8-son-of-flame summons and the
+-- 2500ms); the C++ Talk/faction/flag/AttackStart arms have no bridges
+-- (emerge emote is ported — see deviations); see deviations. The 8-son-of-flame summons and the
 -- DATA_RAGNAROS_ADDS
 -- counter arms have no bridges — they are never spawned, so the
 -- C++ early-emerge condition (adds > 8) can never fire and emerge
@@ -61,15 +61,16 @@
 -- (BossAI::JustEngagedWith and the BOSS_RAGNAROS bookkeeping arms
 -- skipped), and the DATA_RAGNAROS_ADDS SetData/GetData arms and the
 -- majordomo-executus kill arm are unmodeled; the intro sequence
--- (emerge emote, intro Talks SAY_ARRIVAL1_RAG/SAY_ARRIVAL3_RAG/
--- SAY_ARRIVAL5_RAG, REACT_PASSIVE/AGGRESSIVE, UNIT_FLAG_NON_
--- ATTACKABLE, SetImmuneToPC, the ObjectAccessor majordomo kill) has
--- no react/emote/flag/immune/creature-lookup bridges — the fight
+-- (intro Talks SAY_ARRIVAL1_RAG/SAY_ARRIVAL3_RAG/SAY_ARRIVAL5_RAG,
+-- REACT_PASSIVE/AGGRESSIVE, UNIT_FLAG_NON_ATTACKABLE, SetImmuneToPC,
+-- the ObjectAccessor majordomo kill) has no react/flag/immune/
+-- creature-lookup bridges (emerge emote is ported) — the fight
 -- starts on pull instead of after the 53s intro; the submerge
 -- AttackStop, ResetThreatList, InterruptNonMeleeSpells, faction
--- change, NOT_SELECTABLE flag, SUBMERGED emotestate and submerge
--- emote arms have no bridges; the emerge react/faction/flag/emote/
--- AttackStart arms have no bridges; no summon model — the 8 sons of
+-- change, NOT_SELECTABLE flag and SUBMERGED emotestate have no
+-- bridges; the emerge react/faction/flag/AttackStart arms have no
+-- bridges (submerge/emerge emotes are ported); no summon model —
+-- the 8 sons of
 -- flame never spawn; the magma blast IsWithinMeleeRange gate has no
 -- bridge; SPELL_RAGSUBMERGE 21107 / SPELL_RAGEMERGE 20568 /
 -- SPELL_SONS_OF_FLAME_DUMMY 21108 are commented out / server-side in
@@ -229,8 +230,9 @@ local function cancelCombatTimers(guid)
 end
 
 -- C++ UpdateAI banished arm: _emergeTimer 90s -> flip _isBanished
--- back. The C++ faction/emote/flag/AttackStart arms have no bridges;
--- the sons-of-flame counter never advances (no summon bridge), so
+-- back. The C++ faction/flag/AttackStart arms have no bridges (emerge
+-- emote is ported); the sons-of-flame counter never advances (no
+-- summon bridge), so
 -- the >8-adds early-emerge arm is unmodeled.
 -- Forward declaration: onEmerge's timer closures reference onSubmerge
 -- textually before its local definition; without this the name compiles
@@ -240,6 +242,8 @@ local onSubmerge
 
 local function onEmerge(creature, guid)
     getState(guid)
+    -- C++ boss_ragnaros.cpp:133/182: HandleEmoteCommand(EMOTE_ONESHOT_EMERGE=449)
+    creature:PerformEmote(449)
     schedule(guid, "eruption", 20000 + math.random(0, 25000), function()
         onEruption(creature, guid)
     end)
@@ -273,9 +277,15 @@ end
 -- previous submerge in real time. The port models the freeze as
 -- cancel + re-arm: submerge arms only the 90s emerge; emerge re-arms
 -- the 3min submerge. The summon (8 sons of flame), threat reset,
--- faction/flag/emote/react/immobilize arms have no bridges.
-local function onSubmerge(creature, guid)
+-- faction/flag/react/immobilize arms have no bridges (submerge/emerge
+-- emotes are ported).
+-- NOTE: plain assignment, NOT `local function` — the forward-declared
+-- `local onSubmerge` above is a separate slot; re-declaring with
+-- `local function` would shadow it and Ragnaros would never re-submerge.
+onSubmerge = function(creature, guid)
     local s = getState(guid)
+    -- C++ boss_ragnaros.cpp:260: HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE=374)
+    creature:PerformEmote(374)
     if not s.hasSubmergedOnce then
         creature:Talk(SAY_REINFORCEMENTS1)
         s.hasSubmergedOnce = true

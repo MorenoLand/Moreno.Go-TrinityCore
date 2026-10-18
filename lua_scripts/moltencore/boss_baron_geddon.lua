@@ -167,7 +167,10 @@ end
 -- return — checked every tick (no once-guard, no DamageTaken hook in
 -- C++). Modeled as a 1s gated pump (phalanx convention): !HealthAbovePct(2)
 -- is health <= floor(2M/100), so it fires AT exactly 2%.
-local function onArmageddonPump(creature, guid)
+-- NOTE: plain assignment, NOT `local function` — the forward-declared
+-- `local onArmageddonPump` above is a separate slot; re-declaring with
+-- `local function` would shadow it and the pump would call nil.
+onArmageddonPump = function(creature, guid)
     local maxHealth = creature:GetMaxHealth()
     if maxHealth ~= 0
             and creature:GetHealth() <= math.floor(maxHealth * 2 / 100) then

@@ -185,7 +185,10 @@ end
 -- Ragnaros 20620 — checked every tick (no once-guard, no DamageTaken
 -- hook in C++). Modeled as a 1s gated pump (geddon convention);
 -- strictly below the floored threshold (ironaya convention).
-local function onAegisPump(creature, guid)
+-- NOTE: plain assignment, NOT `local function` — the forward-declared
+-- `local onAegisPump` above is a separate slot; re-declaring with
+-- `local function` would shadow it and the pump would call nil.
+onAegisPump = function(creature, guid)
     local maxHealth = creature:GetMaxHealth()
     if maxHealth ~= 0
             and creature:GetHealth() < math.floor(maxHealth * 50 / 100) then
