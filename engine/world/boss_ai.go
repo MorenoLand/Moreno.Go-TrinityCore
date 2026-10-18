@@ -5014,6 +5014,16 @@ func init() {
 	// lua_scripts/the_eye/boss_void_reaver.lua.
 	RegisterLuaBoss("boss_void_reaver", 19516)
 
+	// npc_crystalcore_devastator (20040 — wowhead-verified; the
+	// C++ carries no NPC_ constant): knock-away 22893 TRIGGERED
+	// DoCastVictim 25s/23s with the C++ GetVictim() nil guard
+	// (the ResetThreat victim leg has no single-target threat
+	// bridge) + countercharge 35035 non-triggered DoCast(me)
+	// self-cast 9s/45s; no Talk lines in the C++; cast-state
+	// gates have no cast-state bridge — see lua_scripts/the_eye/
+	// npc_crystalcore_devastator.lua.
+	RegisterLuaBoss("npc_crystalcore_devastator", 20040)
+
 	// boss_high_astromancer_solarian (18805): the bridgeable
 	// Phase 1 arms — the blinding-light latch, the two wrath
 	// timers, the arcane-missiles arm — plus the 20% health
@@ -5025,6 +5035,23 @@ func init() {
 	// creature bridges — see lua_scripts/the_eye/
 	// boss_high_astromancer_solarian.lua.
 	RegisterLuaBoss("boss_high_astromancer_solarian", 18805)
+
+	// boss_gatewatcher_iron_hand (19710 — wowhead-verified;
+	// mechanar.h carries no NPC_ constant; DATA_GATEWATCHER_
+	// IRON_HAND = 1 is instance-side): stream of machine fluid
+	// 35311 TRIGGERED DoCastVictim 55s/randtime(35s,50s),
+	// jackhammer 35326 TRIGGERED DoCastVictim 45s/30s with
+	// EMOTE_HAMMER + 50% SAY_HAMMER talks, shadow power 35322
+	// non-triggered DoCast(me) self-cast 25s/randtime(20s,28s)
+	// (the H_SPELL_* heroic variants are never fired by the
+	// C++ UpdateAI — not IsHeroic-gated), KilledUnit 50%
+	// SAY_SLAY, JustDied SAY_DEATH; cast-state gates have no
+	// cast-state bridge — see lua_scripts/mechanar/
+	// boss_gatewatcher_iron_hand.lua. First unit of the
+	// Mechanar block per outland_script_loader.cpp order;
+	// instance_mechanar.cpp stays blocked on the
+	// instance-script model.
+	RegisterLuaBoss("boss_gatewatcher_iron_hand", 19710)
 	// boss_doomlordkazzak and boss_doomwalker: the C++ files
 	// carry no NPC_ entry constants anywhere in the sources —
 	// the entries are DB-side only — so both are documented-
