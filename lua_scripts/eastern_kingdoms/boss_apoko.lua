@@ -45,6 +45,12 @@
 -- (incarcerator convention).
 -- Lesser-healing-wave machine: DoCast(me, SPELL_LESSER_HEALING_WAVE
 -- 44256) 5000ms init -> 5000ms loop.
+-- Purge machine: DoCast(SelectTarget(Random, 0), SPELL_PURGE 27626)
+-- 8000ms init -> 15000ms unconditional re-arm (C++ re-arms outside
+-- the target check), ported via the maiden_of_virtue / thorim
+-- random-player pool (GetPlayersInWorld, same map/instance, alive;
+-- no distance limit — C++ distance 0.0f is unlimited); stale "no
+-- SelectTarget bridge" retracted.
 -- Healing-potion latch (common-AI UpdateAI arm: !UsedPotion &&
 -- HealthBelowPct(25) -> DoCast(me, SPELL_HEALING_POTION 15503),
 -- UsedPotion = true): via OnDamageTaken(9), per-guid one-shot,
@@ -62,8 +68,8 @@
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Purge machine (DoCast(SelectTarget(Random, 0), SPELL_PURGE
---   27626) 8000ms init -> 15000ms loop — no SelectTarget bridge).
+-- - Purge machine now ported (above); the old "no SelectTarget
+--   bridge" claim was stale and is retracted.
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature
@@ -84,6 +90,7 @@ local SPELL_WAR_STOMP = 46026
 local SPELL_FROST_SHOCK = 21401
 local SPELL_LESSER_HEALING_WAVE = 44256
 local SPELL_HEALING_POTION = 15503
+local SPELL_PURGE = 27626
 
 local ENTRY_APOKO = 24553
 
@@ -113,6 +120,32 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(Random, 0) legs (maiden_of_virtue / thorim precedent):
+-- GetPlayersInWorld filtered by map/instance/alive; no distance limit
+-- (C++ distance 0.0f = unlimited).
+local function randomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+local function onPurge(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_PURGE)
+    end
+    schedule(guid, "purge", 15000, function() onPurge(creature, guid) end)
 end
 
 local function onTotem(creature, guid)
@@ -148,6 +181,7 @@ local function onEnterCombat(_, creature)
     schedule(guid, "warstomp", 10000, function() onWarStomp(creature, guid) end)
     schedule(guid, "frostshock", 7000, function() onFrostShock(creature, guid) end)
     schedule(guid, "healingwave", 5000, function() onHealingWave(creature, guid) end)
+    schedule(guid, "purge", 8000, function() onPurge(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

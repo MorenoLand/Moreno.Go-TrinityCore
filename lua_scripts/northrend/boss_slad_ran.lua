@@ -43,9 +43,12 @@
 -- netherstorm precedent). achievement_snakes_whyd_it_have_to_be_snakes
 -- (AchievementCriteriaScript, CAST_AI cross-AI OnCheck) has no
 -- achievement-criteria bridge on the Lua surface — documented-only.
--- Constrictor: the stack-count leg (GetAura(55093) stack check == 5),
+-- Constrictor: the stack-count leg (GetAura(55093) stack check == 5 —
+-- GetStackAmount has no bridge, blessed_banner precedent),
 -- RemoveAurasDueToSpell, the victim self-cast of SNAKE_WRAP 55126
--- (no victim CastSpell bridge), the TempSummon -> summoner SetGUID
+-- (a player-side self-cast with no player-cast path from creature AI,
+-- corastrasza precedent — the old "no victim CastSpell bridge"
+-- misnamed the blocker), the TempSummon -> summoner SetGUID
 -- cross-AI hop, and DespawnOrUnsummon all have no bridges
 -- (terestian despawn precedent) — so only the Grip cast rides the
 -- timer; the wrap/achievement-fail payload is documented-only.

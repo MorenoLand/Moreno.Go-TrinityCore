@@ -116,10 +116,11 @@
 --   creature enumeration, so the 20s/5s timer is dropped, not
 --   re-targeted at a player.
 -- phantom_mage EVENT_HALLUCINATION (:1630-1634) —
---   me->RemoveAllAuras() (:1632) has no Lua bridge (only RemoveAura);
---   the non-triggered self-cast 72342 ports, so the invisibility may
---   break early on dotted mages — a fidelity gap, not a fabricated
---   cast.
+--   me->RemoveAllAuras() (:1632) now ported via creature:RemoveAllAuras()
+--   (bridged lua_creature_events.go:166, Freywinn precedent); the old
+--   "no RemoveAllAuras bridge" claim was stale and is retracted.
+--   The non-triggered self-cast 72342 ports after the strip, so the
+--   invisibility no longer breaks early on dotted mages.
 --
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally (the maiden
@@ -283,10 +284,12 @@ local function mageChainsOfIce(creature, guid)
     schedule(guid, "chains", 15000, function() mageChainsOfIce(creature, guid) end)
 end
 
--- C++ :1630-1634: one-shot non-triggered self-cast 72342 (the
--- RemoveAllAuras :1632 leg has no bridge — documented above).
+-- C++ :1630-1634: me->RemoveAllAuras() (bridged at
+-- lua_creature_events.go:166, Freywinn precedent) then one-shot
+-- non-triggered self-cast 72342 — C++ order.
 local function mageHallucination(creature, guid)
     if not alive(guid) then return end
+    creature:RemoveAllAuras()
     creature:CastSpell(creature, SPELL_HALLUCINATION)
 end
 

@@ -30,7 +30,12 @@
 -- SAY_DISARMED arm is skipped. Midnight's directed Talk(SAY_MIDNIGHT_KILL,
 -- attumenGUID) broadcasts without a target (Talk bridge takes only the
 -- text id). Attumen's JustDied Talk(SAY_DEATH) is kept; midnight->KillSelf
--- has no bridge. EnterEvadeMode despawns (10s) have no bridge.
+-- has no bridge. EnterEvadeMode despawns now ported: midnight's
+-- _DespawnAtEvade(Seconds(10)) as a 10s event-2 schedule (jedoga
+-- precedent, re-engage cancels); attumen's me->DespawnOrUnsummon()
+-- immediate. Stale "no despawn bridge" retracted; the
+-- _DespawnAtEvade(10s, midnight) cross-GUID leg stays blocked (zero
+-- GUID->creature lookup bridges on the Lua surface).
 -- SPELL_CHARGE / SPELL_INTANGIBLE_PRESENCE with no candidate target are
 -- skipped (the bridge would fall back to the victim where C++ DoCast(null)
 -- is a no-op).
@@ -180,6 +185,9 @@ local function midnightLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     midnightState[guid] = nil
+    -- C++ boss_midnightAI::EnterEvadeMode: _DespawnAtEvade(Seconds(10))
+    -- (jedoga 15s precedent); re-engage cancels via cancelTimers.
+    schedule(guid, "evade-despawn", 10000, function() creature:Despawn() end)
 end
 
 local function midnightReset(event, creature)
@@ -326,6 +334,10 @@ local function attumenLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     attumenState[guid] = nil
+    -- C++ boss_attumenAI::EnterEvadeMode: me->DespawnOrUnsummon()
+    -- immediate (the _DespawnAtEvade(10s, midnight) cross-GUID leg stays
+    -- blocked — zero GUID->creature lookup bridges on the Lua surface).
+    creature:Despawn()
 end
 
 local function attumenReset(event, creature)

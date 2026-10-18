@@ -15,6 +15,13 @@
 -- engine-driven in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++ JustEngagedWith schedule + UpdateAI event machine):
 -- SPELL_AVATAROFFLAME: victim-cast AVATAR 15636, 25s init -> 18s;
+-- EVENT_HANDOFTHAURISSAN: SelectTarget(Random, 0) -> DoCast(target,
+-- SPELL_HANDOFTHAURISSAN 17492) non-triggered, 4s init -> 5s
+-- unconditional re-arm (C++ re-arms outside the target check),
+-- ported via the maiden_of_virtue / thorim random-player pool
+-- (GetPlayersInWorld, same map/instance, alive; no distance limit —
+-- C++ distance 0.0f is unlimited); stale "no SelectTarget bridge"
+-- (kazzak / doomwalker) retracted.
 -- JustEngagedWith Talk(SAY_AGGRO=0);
 -- KilledUnit victim->GetTypeId() == TYPEID_PLAYER -> Talk(SAY_SLAY=1).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
@@ -23,10 +30,9 @@
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) (maiden convention).
--- Unmodeled: EVENT_HANDOFTHAURISSAN (4s init -> 5s) -> SelectTarget
--- (Random) + DoCast(target, 17492) — no SelectTarget bridge on the Lua
--- surface (kazzak / doomwalker precedent); the timer chain is
--- documented-only, not a no-op dead loop.
+-- - EVENT_HANDOFTHAURISSAN now ported (above); the old "no
+--   SelectTarget bridge" claim (kazzak / doomwalker) was stale and
+--   is retracted.
 -- Unmodeled: JustEngagedWith me->CallForHelp(VISIBLE_RANGE) — no
 -- CallForHelp bridge on the luaMotionCreature surface.
 -- Unmodeled: JustDied moira arm — ObjectAccessor::GetCreature via
@@ -37,6 +43,7 @@
 -- model).
 
 local SPELL_AVATAROFFLAME = 15636
+local SPELL_HANDOFTHAURISSAN = 17492
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -69,6 +76,32 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0) legs (maiden_of_virtue / thorim precedent):
+-- GetPlayersInWorld filtered by map/instance/alive; no distance limit
+-- (C++ distance 0.0f = unlimited).
+local function randomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+local function onHandOfThaurissan(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_HANDOFTHAURISSAN)
+    end
+    schedule(guid, "handofthaurissan", 5000, function() onHandOfThaurissan(creature, guid) end)
+end
+
 local function onAvatarOfFlame(creature, guid)
     local victim = creature:GetVictim()
     if victim then
@@ -81,6 +114,7 @@ local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "handofthaurissan", 4000, function() onHandOfThaurissan(creature, guid) end)
     schedule(guid, "avatarofflame", 25000, function() onAvatarOfFlame(creature, guid) end)
 end
 

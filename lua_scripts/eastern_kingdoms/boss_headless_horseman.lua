@@ -79,7 +79,9 @@
 --   pumpkin-spawn machinery is the aura's DBC effect (no summon
 --   bridge).
 -- - Reset/JustReachedHome/InitializeAI legs: SetDisableGravity/SetHover
---   (no bridge), _summons.DespawnAll (no despawn bridge), SetReactState
+--   (no bridge), _summons.DespawnAll (moot — zero summons are modeled
+--   in this file; the stale "no despawn bridge" parenthetical is
+--   retracted, supremus precedent), SetReactState
 --   (no react-state bridge — koltira precedent), SetImmuneToPC (no
 --   bridge), HandleInitialSetup's DoCastSelf(42413/43877) self-casts are
 --   stranded halves (rageclaw/phoenix_tk precedent: C++ Reset/JustAppeared
