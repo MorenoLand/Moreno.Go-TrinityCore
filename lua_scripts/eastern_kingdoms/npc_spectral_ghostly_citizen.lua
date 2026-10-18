@@ -54,7 +54,10 @@ local SPELL_DEBILITATING_TOUCH = 16333
 -- event 8 fires in the Go engine (emote.go:210) with
 -- (event, creature, player, textEmote). Text-emote IDs from
 -- SharedDefines.h, oneshot IDs from the same file's Emote enum;
--- creature:PerformEmote == Unit::HandleEmoteCommand (lua_objects.go:375).
+-- creature:PerformEmote == Unit::HandleEmoteCommand (handler twin,
+-- lua_creature_events.go:325; event 8 fires the handler creature via
+-- fireCreatureLuaEvent, so the session-bound twin at lua_objects.go:375
+-- alone nil-calls here).
 local TEXT_EMOTE_BOW = 17
 local TEXT_EMOTE_KISS = 58
 local TEXT_EMOTE_WAVE = 101

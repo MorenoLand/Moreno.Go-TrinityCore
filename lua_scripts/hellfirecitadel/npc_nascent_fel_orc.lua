@@ -43,7 +43,7 @@
 -- model; the base Reset() emote arm (scheduler.CancelAll +
 -- the 1s-5s emote task repeating 6s-9s over the
 -- EMOTE_ONESHOT_ROAR/SHOUT/BATTLE_ROAR one-shots) ported
--- via creature:PerformEmote (lua_objects.go:375;
+-- via creature:PerformEmote (handler twin, lua_creature_events.go:325;
 -- ghostly_citizen precedent); event 5 arms it at spawn and
 -- events 2/23 re-arm on evade (C++-exact), event 1 kills
 -- it (JustEngagedWith CancelAll);
@@ -59,7 +59,7 @@ local states = {}
 local emoteTimers = {}
 
 -- C++ BroggokPrisionersAI::Reset (boss_broggok.cpp:160-171): random
--- roar/shout one-shot via creature:PerformEmote (lua_objects.go:375;
+-- roar/shout one-shot via creature:PerformEmote (handler twin, lua_creature_events.go:325;
 -- ghostly_citizen precedent); first at {1s,5s}, then repeat {6s,9s}
 -- (C++-exact: emote.Repeat(6s,9s) after each fire).
 local PRISIONER_EMOTES = { 15, 22, 53 }

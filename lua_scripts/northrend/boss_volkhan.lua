@@ -110,14 +110,13 @@
 -- C++ reschedules EVENT_BLAST (not EVENT_IMMOLATION) at 5s — the C++
 -- typo replicated as written (the same "blast" timer key is
 -- overwritten, matching EventMap.ScheduleEvent overwrite).
--- DamageTaken kill-shot latch (:430-451): damage >= GetHealth() ->
--- damage = 0 + m_bIsFrozen = true — PORTED via event 9 (the thekal
--- kill-shot precedent: return false, 0). Timers canceled on the
--- latch; frozen flag cleared on event 23 (C++ Reset -> Initialize).
--- DOCUMENTED DEVIATIONS: C++ SetHealth(1) has no bridge — the golem
--- keeps its pre-kill-shot health (unkillable either way: every
--- later kill-shot is zeroed, matching the C++ 1-HP freeze);
--- UpdateEntry(NPC_BRITTLE_GOLEM 28681) has no bridge — the frozen
+-- DamageTaken kill-shot latch (:425-444): damage >= GetHealth() ->
+-- SetHealth(1) + damage = 0 + RemoveAllAuras + m_bIsFrozen = true —
+-- PORTED via event 9 (the thekal kill-shot precedent: return false,
+-- 0; SetHealth + RemoveAllAuras bridged on the handler surface,
+-- lua_creature_events.go:166/:189). Timers canceled on the latch;
+-- frozen flag cleared on event 23 (C++ Reset -> Initialize).
+-- DOCUMENTED DEVIATIONS: UpdateEntry(NPC_BRITTLE_GOLEM 28681) has no
 -- golem keeps its molten model (cosmetic).
 -- AttackStart (:411-424: m_bIsFrozen-gated MoveChase) — no motion
 -- bridge; melee is engine-driven in Go like DoMeleeAttackIfReady.
@@ -234,17 +233,19 @@ local function golemDied(event, creature, killer)
     golemCancelTimers(creature:GetGUID())
 end
 
--- C++ DamageTaken :430-451: kill-shot (damage >= GetHealth()) ->
+-- C++ DamageTaken :425-444: kill-shot (damage >= GetHealth()) ->
 -- SetHealth(1) + damage = 0 + UpdateEntry(28681) + RemoveAllAuras +
 -- AttackStop + InterruptNonMeleeSpells + MotionMaster clear +
 -- m_bIsFrozen = true. Event 9 fires pre-application with the damage
 -- (fireCreatureDamageTaken, lua_creature_events.go); the boolean +
--- damage rewrite is the thekal kill-shot precedent. No SetHealth /
--- UpdateEntry / Interrupt bridges — the frozen flag + damage
--- zeroing carry the semantics (see header deviations).
+-- damage rewrite is the thekal kill-shot precedent. UpdateEntry /
+-- AttackStop / Interrupt / MotionMaster stay out behind true blockers
+-- (see header deviations).
 local function golemDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if damage >= creature:GetHealth() then
+        creature:SetHealth(1)
+        creature:RemoveAllAuras()
         golemFrozen[guid] = true
         golemCancelTimers(guid)
         return false, 0

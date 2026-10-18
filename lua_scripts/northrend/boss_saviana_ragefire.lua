@@ -143,8 +143,8 @@ local function savianaLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- Harness-only: no C++ JustDied Talk (only DoPlaySoundToSet, no
--- play-sound bridge) — cancels the engage timers.
+-- JustDied's DoPlaySoundToSet arm ported via creature:PlayDirectSound
+-- (savianaDied); the _JustDied() instance leg stays out (no bridge).
 -- C++ boss_saviana_ragefireAI::JustDied: _JustDied() (instance leg —
 -- no bridge) + DoPlaySoundToSet(me, SOUND_ID_DEATH 17531), ungated.
 local function savianaDied(event, creature, killer)

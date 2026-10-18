@@ -277,6 +277,62 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{difficulty >= 1}, nil
 	}
+	// SetEquipmentSlots is CreatureMethods::SetEquipmentSlots
+	// (CreatureMethods.h:982-994, Trinity): SetUInt32Value
+	// (UNIT_VIRTUAL_ITEM_SLOT_ID + i, slot) for the three virtual item
+	// slots (UpdateFields.h:116, Go index 56) — the values-update
+	// broadcast is the SetUInt32Value twin. A slot passed as 0xFFFFFFFF
+	// is left untouched, mirroring ScriptedAI::SetEquipmentSlots'
+	// EQUIP_NO_CHANGE = -1 skip semantics (ScriptedCreature.h:226,
+	// ScriptedCreature.cpp:473-477: slots < 0 are never written), since
+	// Lua uint32 args cannot carry -1. Exact twin of the session-bound
+	// binding (lua_objects.go:747-777): commits bf5e8ec5/4030673b ported
+	// handler arms (kirtonos onTransform, mr_smite onSpawn/onReset)
+	// against the session-only binding, which nil-calls from this surface
+	// (objectIndex pushes nil for unknown methods; ProtectedCall then
+	// aborts the arm mid-flight), so the handler twin exists.
+	methods["SetEquipmentSlots"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 3 {
+			return nil, fmt.Errorf("main_hand, off_hand and ranged are required")
+		}
+		slots := make([]uint32, 3)
+		for i := range slots {
+			slot, err := luaUint32Arg(args, i)
+			if err != nil {
+				return nil, err
+			}
+			slots[i] = slot
+		}
+		updates := map[int]uint32{}
+		for i, slot := range slots {
+			if slot == 0xFFFFFFFF {
+				continue
+			}
+			updates[unitVirtualItemSlotID+i] = slot
+		}
+		if len(updates) > 0 {
+			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, updates)
+		}
+		return nil, nil
+	}
+	// PerformEmote is UnitMethods::PerformEmote (UnitMethods.h:2041-2049):
+	// Unit::HandleEmoteCommand sends SMSG_EMOTE (u32 emote + u64 guid) to
+	// the visibility set; creatures broadcast with a nil source like the
+	// creature-text arms. Exact twin of the session-bound binding
+	// (lua_objects.go:375): the mordresh OOC_3 and fel-orc Reset-emote
+	// arms ported in 4030673b nil-call from this surface without it (see
+	// SetEquipmentSlots above), killing their timer chains mid-arm.
+	methods["PerformEmote"] = func(_ context.Context, args []any) ([]any, error) {
+		emote, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		pkt := protocol.NewBuffer(12)
+		pkt.WriteU32(emote)
+		pkt.WriteU64(motion.GUID)
+		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), nil)
+		return nil, nil
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{
 		"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry,
 		"Map": state.Map, "MapId": state.Map,

@@ -18,7 +18,7 @@
 --   of combat; JustEngagedWith's events.Reset() clears it):
 --   OOC_1 -> Talk(SAY_OOC_1 0), 8s -> OOC_2 -> Talk(SAY_OOC_2 1),
 --   3s -> OOC_3 -> creature:PerformEmote
---   (EMOTE_ONESHOT_EXCLAMATION 5; lua_objects.go:375,
+--   (EMOTE_ONESHOT_EXCLAMATION 5; lua_creature_events.go:325 (handler twin),
 --   ghostly_citizen precedent), 6s -> OOC_4 ->
 --   Talk(SAY_OOC_3 2), 14s -> OOC_1.
 -- - Engage (C++ JustEngagedWith): events.Reset() (kills the OOC
@@ -86,7 +86,7 @@ local function oocLoop(creature, guid)
         schedule(guid, "ooc", 3000, function()
             -- C++ EVENT_OOC_3: HandleEmoteCommand
             -- (EMOTE_ONESHOT_EXCLAMATION = 5) via creature:PerformEmote
-            -- (lua_objects.go:375; ghostly_citizen precedent).
+            -- (lua_creature_events.go:325, handler twin; ghostly_citizen precedent).
             creature:PerformEmote(5)
             schedule(guid, "ooc", 6000, function()
                 creature:Talk(SAY_OOC_3)
