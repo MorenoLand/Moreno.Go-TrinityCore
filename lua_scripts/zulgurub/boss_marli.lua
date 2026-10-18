@@ -29,9 +29,11 @@
 -- non-triggered self-cast 24084 (spider form), non-triggered
 -- DoCastVictim(24110) envolwing web, threat wipe (no threat model —
 -- skipped), phase -> 3; the phase-2 timers are canceled (C++ phase
--- mask); arm charge 22911 1.5s then every 8s on a mana-using random
--- player (up to 3 draws, not the current victim — C++ "not aggro
--- leader" is approximated as excluding the victim; no threat model) /
+-- mask); arm charge 22911 1.5s then every 8s on a random player (up
+-- to 3 draws breaking on a mana user, not the current victim — C++
+-- "not aggro leader" is approximated as excluding the victim; no
+-- threat model; the C++ charges the last draw even when all three miss
+-- a mana user, C++-exact) /
 -- transform back 25s. Transform back: RemoveAura(24084), phase -> 2,
 -- re-arm aspect 12s, transform 45s + {35s,60s} (C++-exact double
 -- scheduling — first-to-fire wins, the other is canceled),
@@ -197,6 +199,8 @@ local onTransformBack
 
 -- C++ EVENT_CHARGE_PLAYER: up to 3 tries at SelectTarget(Random, 1,
 -- 100, true) — "not aggro leader" — breaking on a POWER_MANA target;
+-- the C++ charges the LAST draw even when all three miss a mana user
+-- (a nil draw just clears the target for the next try, C++-exact);
 -- DoCast(target, 22911) non-triggered; re-arm 8s phase-THREE. Handler
 -- no-ops outside phase 3 (C++ phase mask).
 local function onChargePlayer(creature, guid)
@@ -214,12 +218,12 @@ local function onChargePlayer(creature, guid)
             end
         end
         if #candidates == 0 then
-            break
-        end
-        local pick = candidates[math.random(#candidates)]
-        if pick:GetPowerType() == POWER_MANA then
-            target = pick
-            break
+            target = nil
+        else
+            target = candidates[math.random(#candidates)]
+            if target:GetPowerType() == POWER_MANA then
+                break
+            end
         end
     end
     if target then
