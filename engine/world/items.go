@@ -4136,7 +4136,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 					// DisableMgr SPELL_DISABLE_LOS has no Go model
 					// (documented on the client path).
 					if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
-						if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+						if !s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 							_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedLineOfSight), true)
 							s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight")
 							return true
@@ -4150,7 +4150,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// stays unmodeled. Only the explicit wire dest is checked — implicit
 		// dest targets have no Go model at cast time.
 		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 && spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
-			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z) {
+			if !s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedLineOfSight), true)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight to dest")
 				return true

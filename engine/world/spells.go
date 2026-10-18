@@ -2594,7 +2594,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			// exemptions, matching Spell::_cast's CheckCast re-run
 			// (Spell.cpp:3328).
 			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
-				if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+				if !s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight")
 					return true
@@ -2609,7 +2609,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// attribute exemptions as the unit-target arm (the DisableMgr arm stays
 	// unmodeled here too).
 	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 && spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
-		if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z) {
+		if !s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight to dest")
 			return true
@@ -3895,15 +3895,26 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 			// emitter is the Death Grip script leg, spell_dk.cpp:2760).
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
-		// Spell::GetMinMaxRange REQ_AMMO leg (Spell.cpp:6628-6630).
-		if dist > 35.0*s.rangedWeaponRangeMod(ctx, spell) {
+		// Spell::GetMinMaxRange (Spell.cpp:6584-6637): the completion recheck
+		// uses the same terms as the prepare arm — the REQ_AMMO weapon term
+		// (Spell.cpp:6628-6630), SPELLMOD_RANGE (Spell.cpp:6632-6633), then
+		// the combat-reach rangeMod (Spell.cpp:6614-6620).
+		maxRange := 35.0 * s.rangedWeaponRangeMod(ctx, spell)
+		maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+		maxRange += float64(pReach) + float64(tgt.CombatReach)
+		if dist > maxRange {
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
 		return 0
 	}
 	if spellID == 5019 { // Shoot
-		// Spell::GetMinMaxRange REQ_AMMO leg (Spell.cpp:6628-6630).
-		if dist > 30.0*s.rangedWeaponRangeMod(ctx, spell) {
+		// Same GetMinMaxRange terms as Auto Shot above (Spell.cpp:6584-6637):
+		// DBC max 30, REQ_AMMO weapon term (no-op for wands), SPELLMOD_RANGE,
+		// plus the combat-reach rangeMod.
+		maxRange := 30.0 * s.rangedWeaponRangeMod(ctx, spell)
+		maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+		maxRange += float64(pReach) + float64(tgt.CombatReach)
+		if dist > maxRange {
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
 		return 0
@@ -4401,7 +4412,7 @@ func (s *session) checkChargeCast(ctx context.Context, spell wotlk.Spell, target
 	// unresolvable GUIDs skip, mirroring C++'s resolved-target gate.
 	if spellNeedsExplicitUnitTarget(spell) && s.server != nil {
 		if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
-			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+			if !s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 				return spellFailedLineOfSight
 			}
 		}
@@ -7877,7 +7888,7 @@ func (s *session) implicitUnitTargetLOSPasses(spell wotlk.Spell, targetGUID uint
 	if targetGUID == s.playerGUID {
 		return true
 	}
-	return s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tx, ty, tz)
+	return s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, tx, ty, tz)
 }
 
 // sendSpellMiss mirrors WorldObject::SendSpellMiss (Object.cpp:2666-2677):
@@ -8633,7 +8644,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// below (SpellInfo.cpp:1715) is not touched by those exemptions.
 		if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok && s.server != nil {
 			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
-				if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+				if !s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_LINE_OF_SIGHT = 47
 					s.sendInterrupted(castID, spellID, 0)                                                            // _cast cleanupSpell (Spell.cpp:3330-3334)
 					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "line of sight")
@@ -19415,6 +19426,25 @@ func (s *session) interruptSilencePreventionCasts() {
 	if spell, ok := lookup(repeatSpell); ok && spell.PreventionType == spellPreventionTypeSilence {
 		s.cancelAutoRepeatOnInterrupt()
 	}
+	// AuraEffect::HandleAuraModSilence apply leg
+	// (SpellAuraEffects.cpp:2355-2366): the InterruptSpell loop covers
+	// CURRENT_MELEE_SPELL..CURRENT_MAX_SPELL, so a silence-preventable queued
+	// next swing is cancelled too — with no GCD refund
+	// (Spell::CancelGlobalCooldown, Spell.cpp:8273-8274, refunds only the
+	// CURRENT_GENERIC_SPELL slot). The SendInterrupted(0) +
+	// SendCastResult(INTERRUPTED) packets match cancelNextSwingSpell.
+	s.castMu.Lock()
+	swing := s.nextSwing
+	if swing != nil && swing.Spell.PreventionType == spellPreventionTypeSilence {
+		s.nextSwing = nil
+	} else {
+		swing = nil
+	}
+	s.castMu.Unlock()
+	if swing != nil {
+		s.sendInterrupted(swing.CastID, swing.SpellID, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(swing.CastID, swing.SpellID, spellFailedInterrupted), true)
+	}
 }
 
 // interruptSpellsOnMovement breaks the active cast and channel when the
@@ -26365,12 +26395,26 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
 			triggerCaster.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
 		}
+		// HandlePeriodicTriggerSpellAuraTick (SpellAuraEffects.cpp:5062) casts
+		// with CastSpellExtraArgs(AuraEffect): the triggered spell carries
+		// m_triggeredByAuraSpell (Spell.cpp:3068) — the recursion terminator
+		// IsTriggeredByAura (SpellAuras.cpp:2054-2056) and the triggered DR
+		// variant (Spell.cpp:2798) read it. Go's per-Spell-object lifetime is
+		// the session's triggeredByAuraCast/triggeredByAuraSpell pending pair,
+		// consumed at castSpellDirectWithOverrides entry (the proc path
+		// already sets it, procs.go:2849-2859); the periodic tick never did,
+		// so a periodic-triggered spell's damage could proc the aura whose
+		// tick fired it.
+		triggerCaster.triggeredByAuraCast = true
+		triggerCaster.triggeredByAuraSpell = aura.SpellID
 		if aura.AuraType == spellAuraPeriodicTriggerSpellWithValue {
 			withValue := int32(aura.Amount)
 			triggerCaster.castSpellDirectWithBasePoints(context.Background(), aura.TriggerSpell, ts.periodicTriggerTarget(aura), []int32{withValue, withValue, withValue})
 		} else {
 			triggerCaster.castSpellDirect(context.Background(), aura.TriggerSpell, ts.periodicTriggerTarget(aura))
 		}
+		triggerCaster.triggeredByAuraCast = false
+		triggerCaster.triggeredByAuraSpell = 0
 		return
 	}
 	ts.playerStateMu.Lock()

@@ -189,7 +189,7 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 			var maxDeficit uint32
 			for i, c := range candidates {
 				if c.deficit > maxDeficit && distance3D(c.x, c.y, c.z, lx, ly, lz) <= float64(jumpRadius) &&
-					s.server.hasLineOfSight(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
+					s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
 					best, maxDeficit = i, c.deficit
 				}
 			}
@@ -199,11 +199,11 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 				d := distance3D(c.x, c.y, c.z, lx, ly, lz)
 				if best == -1 {
 					if (!isBouncingFar || d <= float64(jumpRadius)) &&
-						s.server.hasLineOfSight(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
+						s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
 						best = i
 					}
 				} else if d < distance3D(candidates[best].x, candidates[best].y, candidates[best].z, lx, ly, lz) &&
-					s.server.hasLineOfSight(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
+					s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
 					best = i
 				}
 			}

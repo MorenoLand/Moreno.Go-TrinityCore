@@ -105,6 +105,13 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 		curCastID := targetSess.activeCast.CastID
 		curSpellID := targetSess.activeCast.SpellID
 		canInterrupt := true
+		// Unit::InterruptSpell (Unit.cpp:3145-3146): the IsInterruptable
+		// gate (m_executedCurrently, Spell.h:548) rides every interrupt —
+		// a cast already executing its effects cannot be interrupted, so a
+		// Kick landing mid-effect-execution must not nil the fired cast.
+		if targetSess.activeCast.Executing {
+			canInterrupt = false
+		}
 		schoolMask := uint32(1)
 
 		// SpellEffects.cpp:3533-3535: the unconditional InterruptFlags bit
@@ -151,6 +158,12 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 		curCastID := targetSess.activeChannel.CastID
 		curSpellID := targetSess.activeChannel.SpellID
 		canInterrupt := true
+		// Unit::InterruptSpell (Unit.cpp:3145-3146): the IsInterruptable
+		// gate (m_executedCurrently, Spell.h:548) — a channel already
+		// executing its tick effects cannot be interrupted.
+		if targetSess.activeChannel.Executing {
+			canInterrupt = false
+		}
 		schoolMask := uint32(1)
 
 		if s.server.Data != nil {

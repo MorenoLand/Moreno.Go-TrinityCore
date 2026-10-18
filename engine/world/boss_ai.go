@@ -1603,7 +1603,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 			spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
 			if x, y, z, _, _, found := s.aiThreatUnitPos(m, targetGUID, nil, true); found {
-				if !s.hasLineOfSight(m.Map, m.X, m.Y, m.Z, x, y, z) {
+				if !s.hasLineOfSightSpellCheck(m.Map, m.X, m.Y, m.Z, x, y, z) {
 					return
 				}
 			}
@@ -1623,7 +1623,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if hasDest &&
 			spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 			spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
-			if !s.hasLineOfSight(m.Map, m.X, m.Y, m.Z, destX, destY, destZ) {
+			if !s.hasLineOfSightSpellCheck(m.Map, m.X, m.Y, m.Z, destX, destY, destZ) {
 				return
 			}
 		}

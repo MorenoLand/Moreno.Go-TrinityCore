@@ -903,6 +903,19 @@ func terrainSegmentIntersectsBounds(start, end, low, high terrainVector) bool {
 }
 
 func (s *Server) hasLineOfSight(mapID uint32, x1, y1, z1, x2, y2, z2 float32) bool {
+	return s.hasLineOfSightFlags(mapID, x1, y1, z1, x2, y2, z2, false)
+}
+
+// hasLineOfSightSpellCheck mirrors the spell CheckCast LOS arms
+// (Spell.cpp:5394, 5406-5411): C++ passes VMAP::ModelIgnoreFlags::M2, so
+// doodad (M2) geometry — trees, fences, tents — never fails a spell's line
+// of sight. Chain-target LOS (Spell.cpp:1955-1973) carries the same flag.
+// Creature aggro / assist / melee checks use the default (no-ignore) form.
+func (s *Server) hasLineOfSightSpellCheck(mapID uint32, x1, y1, z1, x2, y2, z2 float32) bool {
+	return s.hasLineOfSightFlags(mapID, x1, y1, z1, x2, y2, z2, true)
+}
+
+func (s *Server) hasLineOfSightFlags(mapID uint32, x1, y1, z1, x2, y2, z2 float32, ignoreM2 bool) bool {
 	if s == nil || s.terrainTileKnown == nil || s.terrainTiles == nil || s.terrainModels == nil || x1 == x2 && y1 == y2 && z1 == z2 {
 		return true
 	}
@@ -920,7 +933,10 @@ func (s *Server) hasLineOfSight(mapID uint32, x1, y1, z1, x2, y2, z2 float32) bo
 	for gridX := minX; gridX <= maxX; gridX++ {
 		for gridY := minY; gridY <= maxY; gridY++ {
 			for _, spawn := range s.terrainTile(mapID, 63-gridX, 63-gridY) {
-				if spawn.Flags&terrainModelHasBound == 0 || !terrainSegmentIntersectsBounds(start, end, spawn.BoundsLow, spawn.BoundsHigh) {
+				// Spell CheckCast LOS ignores M2 doodad models
+				// (VMAP::ModelIgnoreFlags::M2, Spell.cpp:5394, 5406-5411);
+				// the default (aggro/assist/melee) form keeps them.
+				if spawn.Flags&terrainModelHasBound == 0 || (ignoreM2 && spawn.Flags&terrainModelM2 != 0) || !terrainSegmentIntersectsBounds(start, end, spawn.BoundsLow, spawn.BoundsHigh) {
 					continue
 				}
 				model := s.terrainModel(spawn.Name)

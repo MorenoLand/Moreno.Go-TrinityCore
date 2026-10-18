@@ -3042,7 +3042,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 		spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
 		if x, y, z, _, _, found := s.server.aiThreatUnitPos(motion, targetGUID, nil, true); found {
-			if !s.server.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, x, y, z) {
+			if !s.server.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, x, y, z) {
 				return true
 			}
 		}
@@ -3050,7 +3050,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if hasDest &&
 		spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 		spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
-		if !s.server.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, dx, dy, dz) {
+		if !s.server.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, dx, dy, dz) {
 			return true
 		}
 	}
