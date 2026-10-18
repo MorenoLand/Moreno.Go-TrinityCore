@@ -10729,9 +10729,11 @@ func init() {
 	// precedent); the whole intro Talk machine (EVENT_INTRO_* timers,
 	// cross-creature Arthas talks), the EVENT_RITUAL_PREPARATION Talk
 	// (SAY_SACRIFICE_PLAYER) fused with the ritual summon machine, the
-	// ritual-channeler / spectator / spell_paralyze_pinnacle /
-	// achievement_incredible_hulk legs are bridge-blocked — documented
-	// in the lua header.
+	// spectator / spell_paralyze_pinnacle / achievement_incredible_hulk
+	// legs are bridge-blocked — documented in the lua header; the
+	// npc_ritual_channeler (27281) heroic Reset AddAura (SHADOWS_IN_THE_
+	// DARK 59407, IsHeroic-gated, event 23) is ported — its paralyze timer
+	// rides unbridged instance GetGuidData legs (documented in the header).
 	RegisterLuaBoss("boss_svala", 26668)
 	// AddSC_boss_palehoof: Gortok Palehoof (Utgarde Pinnacle) — ported arms
 	// (lua_scripts/northrend/boss_palehoof.lua): JustEngagedWith

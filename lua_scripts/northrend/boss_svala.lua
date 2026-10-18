@@ -19,7 +19,12 @@
 -- registered this run for its ungated timer arms; entry-verifiable,
 -- registration proceeds (the nexus_commanders / malygos / sartharion
 -- kalecgos precedent); the CreatureScript ScriptName binding is DB-side
--- as usual). DATA_SVALA_SORROWGRAVE = 0 (utgarde_pinnacle.h line 31). The intro form NPC_SVALA = 29281 (line
+-- as usual). DATA_SVALA_SORROWGRAVE = 0 (utgarde_pinnacle.h line 31);
+-- 27281 Ritual Channeler (boss_svala.cpp enum Creatures — not in
+-- utgarde_pinnacle.h — registered this run for its heroic Reset aura;
+-- entry-verifiable, registration proceeds (the nexus_commanders /
+-- malygos / sartharion kalecgos precedent); the CreatureScript
+-- ScriptName binding is DB-side as usual). The intro form NPC_SVALA = 29281 (line
 -- 59) UpdateEntry-transforms into 26668; its Talk arms ride the
 -- EVENT_INTRO_* timer machine (see DOCUMENTED-ONLY).
 -- Sole-source verified: whole-server-tree grep for all six script names
@@ -74,8 +79,19 @@
 -- (!victim->HasUnitState(UNIT_STATE_STUNNED), :574-575 — "Prevent
 -- knocking back a ritual player") has no bridge — the cast fires
 -- unconditionally (the hodir UNIT_STATE_CASTING precedent).
+-- npc_ritual_channeler (27281) Reset (:427-432) — the IsHeroic()-gated
+-- DoCast(me, SPELL_SHADOWS_IN_THE_DARK 59407), 2-arg = non-triggered ->
+-- CastSpell(creature, 59407) (event 23 — the Reset AddAura port
+-- category; creature:IsHeroic() is bridged, lua_creature_events.go:260)
+-- — the old "reset leg is unmodeled" header claim is STALE and
+-- RETRACTED: the gating predicate is bridged and the arm is ungated
+-- (no phase machine, no timers). The Initialize() paralyzeTimer re-seed
+-- and the paralyze timer itself ride unbridged instance
+-- GetGuidData(DATA_SACRIFICED_PLAYER) — stay out; no event-23 fire at
+-- first grid spawn, so the spawn-time heroic aura stays unmodeled (the
+-- palehoof freeze-visual precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond 26668 /
--- 26555):
+-- 26555 / 27281):
 -- EVENT_SINISTER_STRIKE (:350-353) — DoCastVictim(SPELL_SINSTER_STRIKE
 -- 15667), non-triggered, init 7s / re-arm {5s,9s} — and
 -- EVENT_CALL_FLAMES (:354-358) — SelectTarget(Random, 0, 100.0f,
@@ -114,10 +130,6 @@
 -- SAY_DIALOG_OF_ARTHAS_2 1) — the intro machine (MoveInLineOfSight
 -- IDLE -> INTRO, summon NPC_ARTHAS 29280, MotionMaster takeoff/land,
 -- UpdateEntry 29281 -> 26668) has no bridges. Stay out.
--- npc_ritual_channeler (27281) — the paralyze timer rides instance
--- GetGuidData(DATA_SACRIFICED_PLAYER) (the spell_palehoof / instance-
--- GUID legs, no bridge); its heroic SPELL_SHADOWS_IN_THE_DARK 59407
--- reset leg is unmodeled. Stay out.
 -- npc_spectator (26667) — MovementInform flee machine, no Talk arms,
 -- no MovementInform bridge. Stay out.
 -- spell_paralyze_pinnacle (SpellScript target filter) and
@@ -126,6 +138,7 @@
 
 local ENTRY_SVALA_SORROWGRAVE = 26668
 local ENTRY_SCOURGE_HULK = 26555
+local ENTRY_RITUAL_CHANNELER = 27281
 
 local SAY_AGGRO = 2
 local SAY_SLAY = 3
@@ -133,6 +146,7 @@ local SAY_DEATH = 4
 
 local SPELL_MIGHTY_BLOW = 48697
 local SPELL_VOLATILE_INFECTION = 56785
+local SPELL_SHADOWS_IN_THE_DARK = 59407
 
 local timers = {}
 
@@ -181,6 +195,20 @@ end
 -- precedent.
 local function svalaJustDied(event, creature)
     creature:Talk(SAY_DEATH)
+end
+
+-- C++ npc_ritual_channelerAI::Reset (:427-432): Initialize() (the
+-- paralyzeTimer re-seed — the paralyze machine rides unbridged instance
+-- GetGuidData(DATA_SACRIFICED_PLAYER)) + the IsHeroic()-gated DoCast(me,
+-- SPELL_SHADOWS_IN_THE_DARK 59407), 2-arg = non-triggered ->
+-- CastSpell(creature, 59407) (the Reset AddAura port category —
+-- creature:IsHeroic() is bridged, lua_creature_events.go:260). No event-23
+-- fire at first grid spawn, so the spawn-time heroic aura stays unmodeled
+-- (the palehoof freeze-visual precedent).
+local function channelerReset(event, creature)
+    if creature:IsHeroic() then
+        creature:CastSpell(creature, SPELL_SHADOWS_IN_THE_DARK)
+    end
 end
 
 -- C++ npc_scourge_hulkAI mightyBlow arm (:571-577): DoCast(victim,
@@ -236,3 +264,4 @@ RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 1, hulkEnterCombat)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 2, hulkCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 4, hulkCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 23, hulkCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_RITUAL_CHANNELER, 23, channelerReset)

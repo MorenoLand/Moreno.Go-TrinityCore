@@ -88,7 +88,7 @@
 -- DoAction-reschedule deviation precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 26861):
 -- The four ancestor events — EVENT_BJORN_SPIRIT_FOUNT
--- (SPELL_SUMMON_SPIRIT_FOUNT 48592), EVENT_HALDOR_SPIRIT_STRIKE
+-- (SPELL_SUMMON_SPIRIT_FOUNT 48386), EVENT_HALDOR_SPIRIT_STRIKE
 -- (DoCastVictim SPELL_SPIRIT_STRIKE 48423, 5s), EVENT_RANULF_SPIRIT_
 -- BURST (DoCast(me, SPELL_SPIRIT_BURST 48529), 10s), EVENT_TORGYN_
 -- SUMMON_AVENGING_SPIRITS (4x DoCast(SPELL_SUMMON_AVENGING_SPIRIT
@@ -104,6 +104,13 @@
 -- summon legs, no bridges. Stay out.
 -- spell_dark_slash — SpellScript OnHit damage hook only; joins the
 -- no-SpellScript-bridge queue.
+-- The kingsBane SpellHitTarget latch (:153-157): if (target->GetTypeId()
+-- == TYPEID_PLAYER && spellInfo->Id == SPELL_BANE_HIT 59203) kingsBane =
+-- false — pure achievement bookkeeping feeding GetData(DATA_KINGS_BANE
+-- 2157); no GetData / achievement consumer bridge, and a write-only
+-- local would be dead code (Eluna CREATURE_EVENT_ON_SPELL_HIT_TARGET /
+-- event 15 fires per boss_ai.go:2204, but nothing reads the latch).
+-- Documented only.
 -- achievement_kings_bane (OnCheck: GetData(DATA_KINGS_BANE 2157) == 1) —
 -- no GetData / achievement bridges; joins the unmodeled-achievement
 -- queue.
