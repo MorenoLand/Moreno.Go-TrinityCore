@@ -36,9 +36,12 @@
 -- casting-state gate and the per-event in-loop re-check are dropped
 -- (maiden precedent).
 -- Unmodeled: CheckInRoom (home-position 2D distance > 50yd ->
--- EnterEvadeMode + Talk(SAY_EVADE=1)) — no HomePosition bridge on the
--- luaMotionCreature surface (X/Y/Z reads only; GetDistance2d needs two
--- objects — av_marshal / balinda precedent); evade still re-arms
+-- EnterEvadeMode + Talk(SAY_EVADE=1)) — documented-only, not for lack
+-- of position reads (creature:GetHomePosition() IS bridged,
+-- lua_objects.go:337, plus GetX/GetY/GetZ — the 2D check is
+-- computable), but because EnterEvadeMode has no Lua bridge and
+-- Talk(SAY_EVADE) fires only inside the evade flow: a Talk-only port
+-- would yell without evading (fabrication). Evade still re-arms
 -- through OnReset(23) when the engine leashes the creature.
 -- SPELL_SWEEPING_STRIKES=18765, SPELL_CLEAVE=20677,
 -- SPELL_WINDFURY=35886, SPELL_STORMPIKE=51876 are declared in the C++

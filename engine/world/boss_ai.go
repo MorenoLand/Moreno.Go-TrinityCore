@@ -5654,8 +5654,11 @@ func init() {
 	// convention (CreateLuaEvent timers; GetVictim for DoCastVictim;
 	// no UNIT_STATE_CASTING gate). The CheckInRoom home leash arm
 	// (home-position 2D distance > 50yd -> EnterEvadeMode + Talk(1))
-	// has no HomePosition bridge — documented only; evade still re-arms
-	// through OnReset(23). SPELL_SWEEPING_STRIKES 18765 /
+	// stays documented-only: EnterEvadeMode has no Lua bridge and
+	// Talk(1) fires only inside the evade flow (a Talk-only port would
+	// yell without evading — fabrication), not for lack of position
+	// reads (creature:GetHomePosition is bridged, lua_objects.go:337);
+	// evade still re-arms through OnReset(23). SPELL_SWEEPING_STRIKES 18765 /
 	// SPELL_CLEAVE 20677 / SPELL_WINDFURY 35886 / SPELL_STORMPIKE 51876
 	// are declared but unused by this AI. Entry 11946 verifiable from
 	// the C++ sources: BattlegroundAV.h names "Drek'Thar" at 11946 —
@@ -5731,6 +5734,25 @@ func init() {
 	// faction/immune/flag/instance arms (no bridges). Full analysis in
 	// lua_scripts/eastern_kingdoms/boss_doomrel.lua.
 	RegisterLuaBoss("boss_doomrel", 9039)
+
+	// boss_general_angerforge / boss_general_angerforgeAI (Blackrock
+	// Depths, Hall of Crafting; ScriptedAI — mightyblow 14099 8s->18s,
+	// hamstring 9080 12s->15s, cleave 20691 16s->9s, all DoCastVictim
+	// phase-agnostic; DamageTaken 20% one-shot phase latch -> EVENT_MEDIC
+	// one-shot + EVENT_ADDS 0s->25s PHASE_TWO nil-ticks (no positional
+	// spawn bridge). Entry 9033 DB-verified (classic NPC list; neighbors
+	// 9034-9040 are the C++-verified NPC_ANGERREL..NPC_DOOMREL, 9019 the
+	// C++-verified NPC_EMPEROR — flamelash 9156 precedent) — see
+	// lua_scripts/eastern_kingdoms/boss_general_angerforge.lua.
+	RegisterLuaBoss("boss_general_angerforge", 9033)
+	// boss_high_interrogator_gerstahn / boss_high_interrogator_gerstahnAI
+	// (Blackrock Depths, Detention Block; ScriptedAI combat scheduler —
+	// SW:P 10894 4s->7s, Mana Burn 10876 14s->10s, Psychic Scream 8122
+	// 32s->30s, Shadow Shield 22417 8s->25s self-cast; random-alive-player
+	// <=100yd selectors, re-arm outside target-nil check). Entry 9018
+	// DB-verified (flamelash 9156 precedent) — see
+	// lua_scripts/eastern_kingdoms/boss_high_interrogator_gerstahn.lua.
+	RegisterLuaBoss("boss_high_interrogator_gerstahn", 9018)
 
 	// boss_coren_direbrew (Coren Direbrew, entry 23872 — NPC_COREN at
 	// instance_blackrock_depths.cpp:47): BossAI combat scheduler.

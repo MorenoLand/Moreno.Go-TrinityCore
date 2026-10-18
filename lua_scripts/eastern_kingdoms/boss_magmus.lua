@@ -108,7 +108,10 @@ local function onDamageTaken(_, creature, _, damage)
     end
     if creature:GetHealth() - damage < math.floor(maxHealth * 50 / 100) then
         state.phaseTwo = true
-        schedule(guid, "warstomp", 0, function() onWarstomp(creature, guid) end)
+        -- C++ ScheduleEvent(EVENT_WARSTOMP, 0s) fires on the next tick:
+        -- CreateLuaEvent rejects delay 0, so fire the tick directly
+        -- (it re-arms at 8s itself).
+        onWarstomp(creature, guid)
     end
 end
 

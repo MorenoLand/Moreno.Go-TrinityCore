@@ -27,17 +27,18 @@
 -- Unmodeled: the SpellHit arm (spell 55516 GYMERS_GRAB: unit-
 -- caster gate -> vehicle-kit seat-count gate -> me->CastSpell(
 -- caster, RIDE_VEHICLE 43671, true) + me->CastSpell(caster,
--- HEALING_WINDS 55549, true)) has no SpellHit / vehicle /
--- passenger bridges (fizzule / wintergrasp vehicle_teleporter
--- precedent) — documented-only.
+-- HEALING_WINDS 55549, true)) has no vehicle / passenger bridges (SpellHit IS bridged — event 14
+-- — fizzule / wintergrasp vehicle_teleporter precedent; the seat-count
+-- + ride-vehicle legs are the blockers) — documented-only.
 -- npc_drakuru_shackles — the Reset arm (SetFlag NOT_SELECTABLE,
 -- GetClosePoint + SummonCreature NPC_RAGECLAW 29686, SetFacing
 -- ToObject pair) sits behind the flag / summon / facing bridges;
 -- the SpellHit(55083 UNLOCK_SHACKLE) machine (player-caster +
 -- quest-12861 INCOMPLETE gates -> DoCast(rageclaw, 55223)
 -- triggered + setDeathState(DEAD) + KilledMonster + RemoveAura
--- (54990) + DespawnOrUnsummon) behind the SpellHit / quest /
--- kill-credit / despawn bridges — documented-only. 29686 +
+-- (54990) + DespawnOrUnsummon) behind the quest / kill-credit / despawn bridges (SpellHit IS
+-- bridged — event 14; player:KilledMonsterCredit is the blocker)
+-- — documented-only. 29686 +
 -- 12861 + 54990/55009/55083/55223 verifiable.
 -- npc_captured_rageclaw — the Reset arm (SetFaction(FACTION_
 -- FRIENDLY) + triggered self-cast 54990) is bridgeable in
@@ -45,8 +46,9 @@
 -- but the release machine (SpellHit 55223: RemoveAura(55009) +
 -- SetStandState(STAND) + SetFaction(template) + DoCast(me,
 -- 55085) + Talk(0) + MoveRandom(10) + DespawnOrUnsummon(10s))
--- has no SpellHit / faction / stand-state / movement / despawn
--- bridges, so the Reset arm was deferred rather than ported as
+-- has no faction / stand-state / movement / despawn
+-- bridges (SpellHit IS bridged — event 14), so the Reset arm was
+-- deferred rather than ported as
 -- a stranded half (a permanently-chained NPC is worse than no
 -- registration); MoveInLineOfSight overridden empty —
 -- documented-only. 55085 verifiable.

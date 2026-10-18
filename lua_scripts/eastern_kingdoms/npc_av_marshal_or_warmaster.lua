@@ -31,10 +31,13 @@
 -- packet-visual), so timers fire unconditionally (maiden precedent); the
 -- C++ casting-state re-check inside the event loop is likewise dropped.
 -- Unmodeled: EVENT_CHECK_RESET (home-position 2D distance > 50yd ->
--- EnterEvadeMode) — no HomePosition bridge on the luaMotionCreature
--- surface (X/Y/Z reads only; GetDistance2d needs two objects), so the
--- leash arm is documented-only; evade still re-arms through OnReset(23)
--- when the engine leashes the creature.
+-- EnterEvadeMode). GetHomePosition()/GetX()/GetY() ARE bridged
+-- (lua_objects.go:337,1074-1075 — the old "no HomePosition bridge" claim
+-- was stale), so the distance check itself is modelable; the hard blocker
+-- is EnterEvadeMode, which has no Lua bridge (only IsInEvadeMode reads
+-- motion.Evading, lua_creature_events.go:126). The leash arm stays
+-- documented-only; evade still re-arms through OnReset(23) when the
+-- engine leashes the creature.
 
 local SPELL_CHARGE = 22911
 local SPELL_CLEAVE = 40504
