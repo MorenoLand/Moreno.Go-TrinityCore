@@ -74,7 +74,7 @@ func LoadMigrations(dir string) ([]Migration, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Version < result[j].Version })
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	for i := 1; i < len(result); i++ {
 		if result[i-1].Version == result[i].Version {
 			return nil, fmt.Errorf("duplicate migration version %d", result[i].Version)
@@ -96,7 +96,9 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 	if err := ensureMigrationMetadata(ctx, store); err != nil {
 		return result, err
 	}
-	sort.Slice(migrations, func(i, j int) bool { return migrations[i].Version < migrations[j].Version })
+	// C++ UpdateFetcher orders updates by filename string (PathCompare), not by
+	// the numeric prefix — sort by name so apply order matches exactly.
+	sort.Slice(migrations, func(i, j int) bool { return migrations[i].Name < migrations[j].Name })
 	seen := make(map[int]struct{}, len(migrations))
 	seenNames := make(map[string]struct{}, len(migrations))
 	for index := range migrations {

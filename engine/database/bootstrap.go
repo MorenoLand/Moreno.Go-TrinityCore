@@ -84,8 +84,13 @@ func applyConfiguredMigrations(ctx context.Context, c config.Config, store *Stor
 			return fmt.Errorf("%s migration discovery %s: %w", store.Name, directory.path, loadErr)
 		}
 		if directory.state != "" {
+			// C++ AppliedFileEntry::StateConvert: anything but "RELEASED" reads as ARCHIVED.
+			state := strings.ToUpper(directory.state)
+			if state != MigrationStateArchived {
+				state = MigrationStateReleased
+			}
 			for index := range loaded {
-				loaded[index].State = strings.ToUpper(directory.state)
+				loaded[index].State = state
 			}
 		}
 		migrations = append(migrations, loaded...)
@@ -118,6 +123,19 @@ func ensureSchema(ctx context.Context, c config.Config, store *Store) error {
 	if version > 0 {
 		return nil
 	}
+	// C++ DBUpdater::Populate: a database that already holds tables was created
+	// externally (e.g. by the C++ server) — skip the base file and mark it done
+	// instead of re-applying CREATE TABLEs onto a live schema.
+	populated, err := databaseHasTables(ctx, store)
+	if err != nil {
+		return fmt.Errorf("%s schema table check: %w", store.Name, err)
+	}
+	if populated {
+		if _, err := store.Exec(ctx, "UPDATE trinitygo_schema SET version = 1 WHERE id = 1"); err != nil {
+			return fmt.Errorf("%s schema metadata update: %w", store.Name, err)
+		}
+		return nil
+	}
 	if !c.UpdatesAutoSetup {
 		return nil
 	}
@@ -148,6 +166,29 @@ func ensureSchema(ctx context.Context, c config.Config, store *Store) error {
 		return fmt.Errorf("%s schema commit: %w", store.Name, err)
 	}
 	return nil
+}
+
+func databaseHasTables(ctx context.Context, store *Store) (bool, error) {
+	if store.Backend == BackendSQLite {
+		var count int
+		err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name <> 'trinitygo_schema'").Scan(&count)
+		return count > 0, err
+	}
+	rows, err := store.DB.QueryContext(ctx, "SHOW TABLES")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name != "trinitygo_schema" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func normalizeMySQLCreateTable(statement string) string {
