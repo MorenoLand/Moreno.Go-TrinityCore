@@ -52,8 +52,10 @@
 -- anywhere in the file.)
 -- boss_ambassador_hellmawAI::DoAction BANISH leg (lines 97-98):
 -- _instance->GetData(DATA_FEL_OVERSEER) + me->HasAura(SPELL_BANISH)
--- gated DoCast(me, SPELL_BANISH 30231, triggered) — no-instance /
--- no-cast bridges — documented-only.
+-- gated DoCast(me, SPELL_BANISH 30231, triggered) — the genuine gap
+-- is only the instance-driven DoAction dispatch (the self triggered
+-- cast and creature:HasAura both bridge — lua_objects.go:228);
+-- documented-only.
 -- boss_ambassador_hellmawAI::MoveInLineOfSight — HasAura
 -- (SPELL_BANISH) gate then EscortAI::MoveInLineOfSight — no-escort
 -- bridge — documented-only.

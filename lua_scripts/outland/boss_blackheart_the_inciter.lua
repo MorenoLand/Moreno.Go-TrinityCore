@@ -188,11 +188,10 @@ local function blackheartEnterCombat(event, creature, target)
     end)
 end
 
-local function blackheartLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-end
-
-local function blackheartReset(event, creature)
+-- Events 2 (OnLeaveCombat) and 23 (OnReset) share one handler: both
+-- are cancelTimers only (C++ Reset's SetReactState(REACT_AGGRESSIVE)
+-- leg rides the no-react-state bridge, header above — documented-only).
+local function blackheartLeaveCombatOrReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
@@ -216,7 +215,7 @@ local function blackheartDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 1, blackheartEnterCombat)
-RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 2, blackheartLeaveCombat)
+RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 2, blackheartLeaveCombatOrReset)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 3, blackheartTargetDied)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 4, blackheartDied)
-RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 23, blackheartReset)
+RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 23, blackheartLeaveCombatOrReset)
