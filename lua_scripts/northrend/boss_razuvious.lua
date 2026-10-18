@@ -47,7 +47,8 @@
 -- instance->SetBossState bookkeeping has no bridge — tharon_ja
 -- precedent). All timers cancelled on 2/4/23 (gargolmar precedent).
 -- No summon-arm Talk orphaning: EVENT_KNIFE's target leg rides the
--- unbridged SelectTarget.
+-- GetAITargets threat-list pool + 45yd filter (knifeTick — the old
+-- "unbridged SelectTarget" claim was stale).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_razuvious SpellHit — SPELL_UNDERSTUDY_TAUNT 29060 ->
 -- Talk(SAY_TAUNTED 2, caster) stays out: the MC'd understudy's taunt
@@ -58,9 +59,6 @@
 -- the 22:34 "trigger live in Go" claim was wrong);
 -- JustEngagedWith EVENT_ATTACK (7s) — SetCombatMovement(true) +
 -- MoveChase — no motion bridges;
--- EVENT_KNIFE (10s init, randtime(10s,15s) repeat) —
--- SelectTarget(Random, 0, 45.0f) -> DoCast(Jagged Knife 55550) — no
--- random-target SelectTarget bridge (cairne/kazzak precedent);
 -- Reset — SetCombatMovement(false) + _Reset() — no bridges;
 -- InitializeAI / JustReachedHome — SummonAdds: SummonCreatureGroup(
 -- SUMMON_GROUP_10MAN 1) + 25-man SUMMON_GROUP_25MAN 2 — no summon
@@ -88,6 +86,7 @@ local SAY_DEATH = 3
 
 local SPELL_UNBALANCING_STRIKE = 26613
 local SPELL_DISRUPTING_SHOUT = 29107 -- boss_razuvious.cpp:37
+local SPELL_JAGGED_KNIFE = 55550 -- boss_razuvious.cpp:38
 local SPELL_HOPELESS = 29125 -- boss_razuvious.cpp:39
 
 local timers = {}
@@ -114,6 +113,40 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0, 45.0f) leg: alive units on the threat
+-- list (C++ playerOnly default = false), within 45yd — the
+-- GetAITargets pool (the omen precedent's jaraxxus idiom sans player
+-- filter, plus the 45yd filter; the old "no random-target
+-- SelectTarget bridge (cairne/kazzak precedent)" claim was stale).
+local function randomThreatTargetInRange(creature, maxDist)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() and creature:GetDistance(unit) <= maxDist then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_KNIFE (:156-159): SelectTarget(Random, 0, 45.0f) ->
+-- randomThreatTargetInRange(creature, 45), nil-guarded pick (C++
+-- `if` — skip cast on nil); DoCast 2-arg = non-triggered ->
+-- CastSpell(target, SPELL_JAGGED_KNIFE 55550); re-arm
+-- randtime(10s,15s) unconditional (outside the target-if,
+-- C++-exact); 10s init (:129).
+local function knifeTick(creature, guid)
+    local target = randomThreatTargetInRange(creature, 45)
+    if target then
+        creature:CastSpell(target, SPELL_JAGGED_KNIFE)
+    end
+    schedule(guid, "knife", {10000, 15000}, function()
+        knifeTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_STRIKE: DoCastVictim(Unbalancing Strike 26613), 21s init,
 -- 6s repeat.
 local function strikeTick(creature, guid)
@@ -123,6 +156,12 @@ local function strikeTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_KNIFE (:156-159) — SelectTarget(Random, 0, 45.0f)
+-- (playerOnly default false, C++-exact) over the threat-list pool +
+-- 45yd filter (randomThreatTargetInRange — the omen idiom), nil-guarded
+-- pick, DoCast 2-arg non-triggered (Jagged Knife 55550), re-arm
+-- randtime(10s,15s) unconditional, 10s init (:129); the old
+-- "no random-target SelectTarget bridge" claim was stale.
 -- C++ EVENT_SHOUT (:152-154): DoCastAOE(Disrupting Shout 29107) 1-arg (triggered defaults false)
 -- (non-triggered); 16s init, 16s repeat. DoCastAOE lowers to self-cast
 -- creature:CastSpell(creature, spell) (boss_ai.go convention —
@@ -144,6 +183,9 @@ local function razyviousEnterCombat(event, creature, target)
     end)
     schedule(guid, "shout", 16000, function()
         shoutTick(creature, guid)
+    end)
+    schedule(guid, "knife", 10000, function()
+        knifeTick(creature, guid)
     end)
 end
 

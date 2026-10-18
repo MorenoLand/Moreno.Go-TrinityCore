@@ -28,7 +28,7 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_auriaya.cpp):
--- JustEngagedWith (:160-170) — Talk(SAY_AGGRO 0) + the four
+-- JustEngagedWith (:160-170) — Talk(SAY_AGGRO 0) + the five
 -- bridgeable timer legs below (event 1; the
 -- BossAI::JustEngagedWith passthrough and the SendEncounterUnit
 -- engage leg have no bridges — the boss_bookkeeping precedent).
@@ -47,6 +47,13 @@
 -- EVENT_ACTIVATE_DEFENDER (:252-253) — DoCastSelf
 -- (SPELL_ACTIVATE_DEFENDER 64449) 2-arg non-triggered, fires 2s
 -- after SUMMON_DEFENDER, no re-arm.
+-- EVENT_SWARMING_GUARDIAN (:255-258) — SelectTarget(Random, 1,
+-- 0.0f, true) -> randomNonVictimPlayer (C++-exact: non-victim,
+-- playerOnly=true, 0.0f unlimited), nil-guarded pick, DoCast 2-arg
+-- non-triggered (SPELL_SUMMON_SWARMING_GUARDIAN 64396), re-arm
+-- {25s,45s} unconditional, 51s init (:168); the old "no
+-- target-selection bridge / summon leg unbridged" claim was stale
+-- (twilight-corrupter precedent).
 -- EVENT_BERSERK (:260-262) — DoCastSelf(SPELL_BERSERK 47008,
 -- TRIGGERED) + Talk(SAY_BERSERK 2), 600s init (:169), no re-arm.
 -- KilledUnit (:172-176) — TYPEID_PLAYER gate AND roll_chance_i(50),
@@ -78,11 +85,6 @@
 -- instance/grid bridges; no Talk arms.
 -- EnterEvadeMode (:214-218) — SendEncounterUnit disengage + BossAI
 -- leg — no bridge.
--- EVENT_SWARNING_GUARDIAN (:255-258) — DoCast(target,
--- SPELL_SUMMON_SWARMING_GUARDIAN 64396) on SelectTarget(Random, 1,
--- 0.0f, true), 51s init (:168), re-arm {25s,45s} — random-target
--- selection leg needs target search, and it is a summon leg; no
--- bridges either way.
 -- The UNIT_STATE_CASTING gates and the DoMeleeAttackIfReady tail
 -- have no bridges.
 -- npc_feral_defender — the whole machine is phase-gated
@@ -127,6 +129,7 @@ local SPELL_SENTINEL_BLAST     = 64389
 local SPELL_TERRIFYING_SCREECH = 64386
 local SPELL_DEFENDER_TRIGGER   = 64448
 local SPELL_ACTIVATE_DEFENDER  = 64449
+local SPELL_SUMMON_SWARMING_GUARDIAN = 64396
 local SPELL_BERSERK            = 47008
 
 local SOUND_AURIAYA_DEATH = 15476
@@ -155,6 +158,37 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(Random, 1) leg: a random alive player in the
+-- instance excluding the current victim (the skyriss / thespia
+-- randomNonVictimPlayer idiom; position 1 = non-victim,
+-- playerOnly=true idiom-exact; the old "no target-selection bridge"
+-- claim was stale).
+local function playersInInstance(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            found[#found + 1] = p
+        end
+    end
+    return found
+end
+
+local function randomNonVictimPlayer(creature)
+    local victim = creature:GetVictim()
+    local candidates = {}
+    for _, p in ipairs(playersInInstance(creature)) do
+        if not victim or p:GetGUID() ~= victim:GetGUID() then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ EVENT_SONIC_SCREECH (:234-236): DoCastVictim
@@ -208,6 +242,24 @@ local function summonDefenderTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SWARMING_GUARDIAN (:255-258): SelectTarget(Random, 1,
+-- 0.0f, true) -> randomNonVictimPlayer(creature), nil-guarded pick
+-- (C++ `if` — skip cast on nil); DoCast 2-arg = non-triggered ->
+-- CastSpell(target, SPELL_SUMMON_SWARMING_GUARDIAN 64396); re-arm
+-- {25s,45s} unconditional (outside the target-if, C++-exact);
+-- 51s init (:168). The summon is the spell's own effect (the
+-- twilight-corrupter precedent); the old "needs target search, and
+-- it is a summon leg; no bridges either way" claim was stale.
+local function swarmingGuardianTick(creature, guid)
+    local target = randomNonVictimPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_SUMMON_SWARMING_GUARDIAN)
+    end
+    schedule(guid, "swarming", {25000, 45000}, function()
+        swarmingGuardianTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_BERSERK (:260-262): DoCastSelf(SPELL_BERSERK 47008,
 -- TRIGGERED) + Talk(SAY_BERSERK 2); 600s init (:169), no re-arm.
 local function berserkTick(creature)
@@ -230,6 +282,9 @@ local function auriayaEnterCombat(event, creature, target)
     end)
     schedule(guid, "summondefender", 60000, function()
         summonDefenderTick(creature, guid)
+    end)
+    schedule(guid, "swarming", 51000, function()
+        swarmingGuardianTick(creature, guid)
     end)
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature)
