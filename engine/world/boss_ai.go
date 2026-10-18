@@ -5351,6 +5351,30 @@ func init() {
 	// bridges; npc_giant_spotlight (5-min despawn sweep) awaits
 	// the world-search / despawn bridges — documented only.
 	RegisterLuaBoss("npc_omen", 15467)
+	// npc_thrall_warchief (Orgrimmar zone script): combat rotation
+	// only — chain lightning (16033, 2s init then 9s) + shock
+	// (16034, 8s init then 15s), both non-triggered DoCastVictim
+	// (C++-exact); JustEngagedWith PlayDirectSound (5880); entry
+	// 4949 wowhead-verified — see
+	// lua_scripts/kalimdor/npc_thrall_warchief.lua. The quest-6566
+	// gossip menu chain awaits the gossip bridge; npc_shenthul
+	// (Shattered Salute emote machine), npc_overlord_runthak_orgrimmar
+	// (citizen scene) and npc_thrall_herald_of_war (Wrathgate
+	// cinematic) await the emote / quest / summon / movement /
+	// DoAction bridges — documented only.
+	RegisterLuaBoss("npc_thrall_warchief", 4949)
+	// npc_cairne_bloodhoof (Thunder Bluff zone script): combat
+	// rotation only — berserker charge (16636, 30s init then 25s,
+	// random-target via the GetAITargets alive pool, omen idiom) +
+	// uppercut (22916, 10s then 20s) + thunderclap (23931, 15s then
+	// 15s) + mortal strike (16856, 10s then 15s) + cleave (16044,
+	// 5s then 7s), all non-triggered DoCastVictim (C++-exact);
+	// JustEngagedWith PlayDirectSound (5884); entry 3057
+	// wowhead-verified — see
+	// lua_scripts/kalimdor/npc_cairne_bloodhoof.lua. The quest-925
+	// hoofprint gossip menu awaits the gossip bridge — documented
+	// only.
+	RegisterLuaBoss("npc_cairne_bloodhoof", 3057)
 	// boss_twilight_corrupter (Duskwood zone script): combat
 	// rotation only — soul corruption (25805, 15s init then
 	// 15-19s; DoCastAOE = DoCast(nullptr, spell) self-cast,

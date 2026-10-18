@@ -15,8 +15,11 @@
 -- NPC_QIRAJI_WASP = 15414, NPC_QIRAJI_TANK = 15422,
 -- NPC_KALDOREI_INFANTRY = 15423, NPC_ANUBISATH_CONQUEROR = 15424 —
 -- kalecgos check PASSES for all four; creature_template ScriptName
--- binding stays DB-side. Eluna creature events: 1 OnEnterCombat,
--- 2 OnLeaveCombat, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
+-- binding stays DB-side. Eluna creature events: 1 OnEnterCombat
+-- (first-engage arm latch only — C++ JustEngagedWith is empty),
+-- 4 OnDied, 23 OnReset (evade/respawn re-arm; death-path pre-fire
+-- skipped). Event 2 intentionally unused: the C++ timers tick outside
+-- combat. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. The file has no UNIT_STATE_CASTING gates.
 -- Ported arms (from npc_qiraj_war_spawnAI::UpdateAI, entry-gated
@@ -37,8 +40,9 @@
 --   preamble me->RemoveAllAttackers() + me->AttackStop() has no
 --   bridge (no such methods on the creature Lua surface), so the
 --   port models the cast itself, not the combat drop.
--- LeaveCombat/Died/Reset cancel timers (hyjal.lua convention).
--- Unmodeled (documented-only, no bridges):
+-- Died/Reset cancel + re-arm per the C++ Reset latch (see below);
+-- the old leave-combat cancel was wrong (the C++ timers tick outside
+-- combat). Unmodeled (documented-only, no bridges):
 -- - Target acquisition (C++ hasTarget/AttackStart via
 --   me->FindNearestCreature(entry, 20, true) — kaldorei infantry
 --   pick a random qiraji entry, qiraji-side picks nearest kaldorei):
@@ -125,9 +129,24 @@ local function onStonedChannel(creature, guid)
     end)
 end
 
-local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
+-- C++ SpawnCast table (zone_silithus.cpp:289-295): {100000, 2000,
+-- 33652} Stoned / {38500, 300000, 28528} Poison Cloud / {58000,
+-- 300000, 35871} Frost Debuff / {80950, 300000, 42075} Fire
+-- Explosion. Timers tick from the first UpdateAI (spawn) and run
+-- OUTSIDE combat — the C++ UpdateAI has no UpdateVictim gate before
+-- the timer arms, and JustEngagedWith is EMPTY (no engage reset).
+-- Go has no spawn fire site for summoned creatures (fireCreatureSpawned
+-- runs only on the respawn/evade paths), so the earliest bridgeable
+-- arm point is first enter combat; the timers then persist across
+-- combat like the C++ (no leave-combat cancel, no engage re-arm —
+-- the old combat-gated model restarted the timers on every engage,
+-- which the C++ never does). Evade/respawn (event 23) re-arms the
+-- init delays (C++ Reset() re-inits the Timers latch); the death-path
+-- 23 pre-fire is skipped via the IsDead guard (overgrind precedent).
+
+local armed = {}
+
+local function armTimers(creature, guid)
     local entry = creature:GetEntry()
     if entry == ENTRY_QIRAJI_WASP or entry == ENTRY_QIRAJI_TANK
         or entry == ENTRY_ANUBISATH_CONQUEROR then
@@ -144,18 +163,37 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "stoned", 100000, function()
         onStonedChannel(creature, guid)
     end)
+    armed[guid] = true
 end
 
-local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+-- C++ JustEngagedWith is empty: engaging neither arms nor resets the
+-- timers. The first engage is only the earliest bridgeable arm point
+-- (no summon-path spawn event in Go); the latch keeps later engages
+-- from restarting them.
+local function onEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    if not armed[guid] then
+        armTimers(creature, guid)
+    end
 end
 
+-- C++ Reset() (evade/respawn) re-inits the Timers latch: cancel and
+-- re-arm the init delays. The death-path 23 pre-fire must not re-arm
+-- (23 fires before 4 on the kill path).
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    if creature:IsDead() then
+        return
+    end
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    armed[guid] = nil
+    armTimers(creature, guid)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    armed[guid] = nil
     -- C++ JustDied: me->DespawnOrUnsummon() first (illidari_spawn
     -- precedent); cross-GUID LiveCounter stays unbridged.
     creature:Despawn()
@@ -169,7 +207,6 @@ local ENTRIES = {
 }
 for _, entry in ipairs(ENTRIES) do
     RegisterCreatureEvent(entry, 1, onEnterCombat)
-    RegisterCreatureEvent(entry, 2, onLeaveCombat)
     RegisterCreatureEvent(entry, 4, onDied)
     RegisterCreatureEvent(entry, 23, onReset)
 end
