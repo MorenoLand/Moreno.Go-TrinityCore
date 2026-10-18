@@ -39,11 +39,13 @@
 -- instance-script model — the prisoner wave release and the
 -- cell-door/lever choreography live in instance_blood_
 -- furnace.cpp, which stays blocked on the instance-script
--- model; no emote bridge — the base Reset() emote arm
--- (scheduler.CancelAll + the 1s-5s emote task repeating
--- 6s-9s over the EMOTE_ONESHOT_ROAR/SHOUT/BATTLE_ROAR
--- one-shots) unmodeled, so no event 5 is registered (an
--- empty OnSpawn would be a kalithresh-style empty skeleton);
+-- model; the base Reset() emote arm (scheduler.CancelAll +
+-- the 1s-5s emote task repeating 6s-9s over the
+-- EMOTE_ONESHOT_ROAR/SHOUT/BATTLE_ROAR one-shots) ported
+-- via creature:PerformEmote (lua_objects.go:375;
+-- ghostly_citizen precedent); event 5 arms it at spawn and
+-- events 2/23 re-arm on evade (C++-exact), event 1 kills
+-- it (JustEngagedWith CancelAll);
 -- no SpellScript/AuraScript scripts in this file.
 
 local SPELL_CHARGE = 22120
@@ -53,6 +55,31 @@ local ENTRY_FEL_ORC_NEOPHYTE = 17429
 
 local timers = {}
 local states = {}
+local emoteTimers = {}
+
+-- C++ BroggokPrisionersAI::Reset (boss_broggok.cpp:160-171): random
+-- roar/shout one-shot via creature:PerformEmote (lua_objects.go:375;
+-- ghostly_citizen precedent); first at {1s,5s}, then repeat {6s,9s}
+-- (C++-exact: emote.Repeat(6s,9s) after each fire).
+local PRISIONER_EMOTES = { 15, 22, 53 }
+
+local function stopEmoteLoop(guid)
+    local id = emoteTimers[guid]
+    if id then
+        RemoveEventById(id)
+        emoteTimers[guid] = nil
+    end
+end
+
+local function startEmoteLoop(creature, guid)
+    stopEmoteLoop(guid)
+    local function emoteTick()
+        creature:PerformEmote(PRISIONER_EMOTES[math.random(#PRISIONER_EMOTES)])
+        emoteTimers[guid] = CreateLuaEvent(emoteTick, math.random(6000, 9000), 1)
+    end
+    emoteTimers[guid] = CreateLuaEvent(emoteTick, math.random(1000, 5000), 1)
+end
+
 
 local function cancelPump(guid)
     local id = timers[guid]
@@ -64,6 +91,7 @@ end
 
 local function resetMob(guid)
     cancelPump(guid)
+    stopEmoteLoop(guid)
     states[guid] = nil
 end
 
@@ -112,7 +140,9 @@ RegisterCreatureEvent(ENTRY_FEL_ORC_NEOPHYTE, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_NEOPHYTE, 2, function(_, creature)
-    resetMob(creature:GetGUID())
+    local guid = creature:GetGUID()
+    resetMob(guid)
+    startEmoteLoop(creature, guid)
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_NEOPHYTE, 4, function(_, creature)
@@ -120,5 +150,13 @@ RegisterCreatureEvent(ENTRY_FEL_ORC_NEOPHYTE, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_NEOPHYTE, 23, function(_, creature)
-    resetMob(creature:GetGUID())
+    local guid = creature:GetGUID()
+    resetMob(guid)
+    startEmoteLoop(creature, guid)
+end)
+
+-- Event 5 (On Spawn): C++ Reset() arms the emote loop.
+RegisterCreatureEvent(ENTRY_FEL_ORC_NEOPHYTE, 5, function(_, creature)
+    local guid = creature:GetGUID()
+    startEmoteLoop(creature, guid)
 end)

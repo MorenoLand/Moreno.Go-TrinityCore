@@ -17,8 +17,9 @@
 -- - OOC loop (C++ UpdateAI !UpdateVictim() branch — fires only out
 --   of combat; JustEngagedWith's events.Reset() clears it):
 --   OOC_1 -> Talk(SAY_OOC_1 0), 8s -> OOC_2 -> Talk(SAY_OOC_2 1),
---   3s -> OOC_3 -> HandleEmoteCommand(EMOTE_ONESHOT_EXCLAMATION)
---   documented-only (no emote bridge), 6s -> OOC_4 ->
+--   3s -> OOC_3 -> creature:PerformEmote
+--   (EMOTE_ONESHOT_EXCLAMATION 5; lua_objects.go:375,
+--   ghostly_citizen precedent), 6s -> OOC_4 ->
 --   Talk(SAY_OOC_3 2), 14s -> OOC_1.
 -- - Engage (C++ JustEngagedWith): events.Reset() (kills the OOC
 --   chain) + Talk(SAY_AGGRO 3) + arm Fireball at 100ms and Fire
@@ -83,8 +84,10 @@ local function oocLoop(creature, guid)
     schedule(guid, "ooc", 8000, function()
         creature:Talk(SAY_OOC_2)
         schedule(guid, "ooc", 3000, function()
-            -- HandleEmoteCommand(EMOTE_ONESHOT_EXCLAMATION): no
-            -- emote bridge (documented-only).
+            -- C++ EVENT_OOC_3: HandleEmoteCommand
+            -- (EMOTE_ONESHOT_EXCLAMATION = 5) via creature:PerformEmote
+            -- (lua_objects.go:375; ghostly_citizen precedent).
+            creature:PerformEmote(5)
             schedule(guid, "ooc", 6000, function()
                 creature:Talk(SAY_OOC_3)
                 schedule(guid, "ooc", 14000, function()

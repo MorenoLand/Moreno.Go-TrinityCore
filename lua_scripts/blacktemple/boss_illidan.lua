@@ -177,7 +177,10 @@
 -- (summon-driven Talk(SAY_MAIEV_SHADOWSONG_APPEAR)), the outro
 -- chain (ACTION_START_OUTRO from illidan) and the teleport-
 -- despawn have no summon/DoAction/despawn bridges — unmodeled;
--- the emote arms have no emote bridge. OnLeaveCombat(2)/OnDied(4)
+-- the akama/maiev/outro emote arms stay out behind true blockers
+-- (outro/maiev/door choreography: cross-creature DoAction, summon,
+-- instance and phase machines); PerformEmote itself is bridged
+-- (lua_objects.go:375). OnLeaveCombat(2)/OnDied(4)
 -- /OnReset(23): cancel timers, drop per-GUID state.
 -- Blade of Azzinoth (22996): OnReset: triggered self-cast birth
 -- 40031 (C++ DoCastSelf(..., true); the spawn sound, the tear-of-
