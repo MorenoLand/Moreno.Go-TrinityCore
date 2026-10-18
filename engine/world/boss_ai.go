@@ -5003,6 +5003,17 @@ func init() {
 	RegisterLuaBoss("boss_lord_sanguinar", 20060)
 	RegisterLuaBoss("boss_grand_astromancer_capernian", 20062)
 	RegisterLuaBoss("boss_master_engineer_telonicus", 20063)
+
+	// boss_void_reaver (19516): pounding / arcane-orb / knock-
+	// away / 10-minute berserk boss; the arcane-orb threat-list
+	// leg picks over alive players in the instance (no threat-
+	// list bridge), the knock-away 25% threat drop has no
+	// ModifyThreatByPercent bridge, the cast-state gates have
+	// no cast-state bridge, and the BossAI DATA_VOID_REAVER =
+	// 3 ctor / reset / death arms are instance-blocked — see
+	// lua_scripts/the_eye/boss_void_reaver.lua.
+	RegisterLuaBoss("boss_void_reaver", 19516)
+
 	// boss_high_astromancer_solarian (18805): the bridgeable
 	// Phase 1 arms — the blinding-light latch, the two wrath
 	// timers, the arcane-missiles arm — plus the 20% health
@@ -5017,7 +5028,8 @@ func init() {
 	// boss_doomlordkazzak and boss_doomwalker: the C++ files
 	// carry no NPC_ entry constants anywhere in the sources —
 	// the entries are DB-side only — so both are documented-
-	// only, unregistered (void_reaver precedent); see
+	// only, unregistered (wowhead-TBC entry verification would
+	// register them, void_reaver precedent this commit); see
 	// hidden_files/CHECKPOINT.md.
 	// npc_nether_drake (Blade's Edge Mountains zone script,
 	// first unit after the world-boss set per
