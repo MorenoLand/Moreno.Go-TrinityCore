@@ -808,9 +808,12 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 
 // isVendorInventoryPos mirrors Player::IsInventoryPos (Player.cpp:10141)
 // for the buy-destination arms: (NULL_BAG, NULL_SLOT), backpack slots
-// 23..38, bag contents 19..22, keyring/currency 86..117. Go's
+// 23..38, bag contents 19..22, keyring/currency 86..149. Go's
 // vendorBuyBagSlot maps the player GUID to bag 0 where C++ uses
-// INVENTORY_SLOT_BAG_0 (255), so the 255-bag arms shift to bag 0.
+// INVENTORY_SLOT_BAG_0 (255), so the 255-bag arms shift to bag 0. The
+// keyring arm runs to CURRENCYTOKEN_SLOT_END (150, Player.h:599), not
+// KEYRING_SLOT_END (118) — currency-token slots 118..149 are inventory
+// positions in C++ too.
 func isVendorInventoryPos(bag, bagSlot uint8) bool {
 	if bag == vendorNullBag && bagSlot == vendorNullSlot {
 		return true
@@ -821,7 +824,7 @@ func isVendorInventoryPos(bag, bagSlot uint8) bool {
 	if bag >= invSlotBagStart && bag < invSlotBagEnd {
 		return true
 	}
-	if bag == 0 && bagSlot >= invSlotKeyringStart && bagSlot < invSlotKeyringEnd {
+	if bag == 0 && bagSlot >= invSlotKeyringStart && bagSlot < currencyTokenSlotEnd {
 		return true
 	}
 	return false
@@ -1146,11 +1149,14 @@ func (s *session) vendorInventoryItemCount(ctx context.Context, itemEntry uint32
 		return 0, errors.New("characters database not available")
 	}
 	var count int64
+	// Player::HasItemCount (Player.cpp:10239) sums bag-0 slots 0..38,
+	// KEYRING_SLOT_START..CURRENCYTOKEN_SLOT_END (86..149) and the bag
+	// contents — equipment counts toward the turnin feasibility.
 	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0)
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ((ci.bag = 0 AND (ci.slot BETWEEN 0 AND ? OR (ci.slot >= ? AND ci.slot < ?))) OR ci.bag IN
 			(SELECT bag.item FROM character_inventory AS bag WHERE bag.guid = ? AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))
-		AND ii.itemEntry = ?`, s.playerGUID, invSlotItemEnd-1, invSlotKeyringStart, invSlotKeyringEnd, s.playerGUID, itemEntry).Scan(&count)
+		AND ii.itemEntry = ?`, s.playerGUID, invSlotItemEnd-1, invSlotKeyringStart, currencyTokenSlotEnd, s.playerGUID, itemEntry).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -1197,11 +1203,16 @@ func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql
 	if count == 0 {
 		return nil
 	}
+	// Player::DestroyItemCount (Player.cpp:12727) destroys bag-0 slots
+	// INVENTORY_SLOT_ITEM_START..INVENTORY_SLOT_ITEM_END (23..38) then
+	// KEYRING_SLOT_START..CURRENCYTOKEN_SLOT_END (86..149), then the bags —
+	// equipped slots 0..18 are never destroyed even though HasItemCount
+	// counted them toward the feasibility.
 	rows, err := tx.QueryContext(ctx, `SELECT ci.item, ci.bag, ci.slot, ii.count
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ((ci.bag = 0 AND (ci.slot BETWEEN 0 AND ? OR (ci.slot >= ? AND ci.slot < ?))) OR ci.bag IN
+		WHERE ci.guid = ? AND ((ci.bag = 0 AND (ci.slot BETWEEN ? AND ? OR (ci.slot >= ? AND ci.slot < ?))) OR ci.bag IN
 			(SELECT bag.item FROM character_inventory AS bag WHERE bag.guid = ? AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))
-		AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot`, s.playerGUID, invSlotItemEnd-1, invSlotKeyringStart, invSlotKeyringEnd, s.playerGUID, itemEntry)
+		AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot`, s.playerGUID, invSlotItemStart, invSlotItemEnd-1, invSlotKeyringStart, currencyTokenSlotEnd, s.playerGUID, itemEntry)
 	if err != nil {
 		return err
 	}
@@ -1415,25 +1426,35 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", count, itemGUID)
 	} else {
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
-		newGUID := int64(s.server.generateItemGUID())
-		if newGUID > 0 {
-			bbItemGUID = uint64(newGUID)
-		} else {
-			bbItemGUID = uint64(time.Now().UnixNano() & 0x7FFFFFFF)
-		}
 		// Item::CloneItem (Item.cpp:1022-1036): the split-off stack copies
 		// creator, giftcreator, duration and the random property id; flags
 		// lose ITEM_FIELD_FLAG_REFUNDABLE (0x1000) |
 		// ITEM_FIELD_FLAG_BOP_TRADEABLE (0x100); charges, enchantments,
 		// durability, playedTime and text are NOT copied — the clone is a
 		// fresh item otherwise (durability = template max).
+		newGUID := int64(s.server.generateItemGUID())
+		if newGUID <= 0 {
+			// ItemHandler.cpp:454-459 — a failed clone answers
+			// SELL_ERR_CANT_SELL_ITEM and leaves the original stack untouched.
+			s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
+			return true
+		}
 		var maxDurability int64
 		_ = wdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&maxDurability)
-		_, _ = cdb.ExecContext(ctx, `INSERT INTO item_instance
+		res, err := cdb.ExecContext(ctx, `INSERT INTO item_instance
 			(guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
 			SELECT ?, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, ?, duration, 0, flags & ~0x1100, '', randomPropertyId, ?, 0, ''
-			FROM item_instance WHERE guid = ?`, bbItemGUID, count, maxDurability, itemGUID)
+			FROM item_instance WHERE guid = ?`, newGUID, count, maxDurability, itemGUID)
+		if err != nil {
+			s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
+			return true
+		}
+		if n, err := res.RowsAffected(); err != nil || n != 1 {
+			s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
+			return true
+		}
+		bbItemGUID = uint64(newGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(count), false)
 
@@ -1566,7 +1587,7 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 
 	entry := s.buyback[eslot]
 	if s.player.Money < entry.Price {
-		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, entry.ItemEntry, 2), true) // BUY_ERR_NOT_ENOUGHT_MONEY
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, entry.ItemEntry, buyErrNotEnoughMoney), true) // BUY_ERR_NOT_ENOUGHT_MONEY
 		return true
 	}
 
