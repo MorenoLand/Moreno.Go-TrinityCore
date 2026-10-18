@@ -5265,6 +5265,20 @@ func init() {
 	RegisterLuaBoss("npc_enraged_spirit", 21061)
 	RegisterLuaBoss("npc_enraged_spirit", 21060)
 	RegisterLuaBoss("npc_enraged_spirit", 21059)
+	// npc_depth_charge (Azshara zone script): proximity-trap
+	// arms only — MoveInLineOfSight on a player within 5yd ->
+	// non-triggered DoCast SPELL_DEPTH_CHARGE_TRAP 38576, then
+	// the 1s WeMustDieTimer despawn (C++-exact once-latch on
+	// the despawn; the event-27 veto suppresses the default
+	// aggro engage, matching the empty AttackStart/JustEngagedWith
+	// overrides); entry 23025 verifiable from the C++ enum —
+	// see lua_scripts/kalimdor/npc_depth_charge.lua. The Reset
+	// SetHover/SetSwim/NOT_SELECTABLE arms have no unit-flag
+	// bridges; the summoning leg (SPELL_PERIODIC_DEPTH_CHARGE)
+	// and npc_rizzle_sprysprocket (escort / quest-status /
+	// gossip / MotionMaster machine, entry not C++-verifiable)
+	// are documented-only.
+	RegisterLuaBoss("npc_depth_charge", 23025)
 	// npc_sironas (Bloodmyst Isle zone script): combat rotation
 	// only — uppercut (10966, 15s init then 10-12s), immolate
 	// (12742, 10s init then 15-20s), curse of blood (8282, 5s
