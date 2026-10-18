@@ -9350,6 +9350,26 @@ func init() {
 	// bridgeable-but-entry-blocked queue).
 	RegisterLuaBoss("boss_faerlina", 15953)
 
+	// Maexxna (15952, Naxxramas, Arachnid Quarter) —
+	// lua_scripts/northrend/boss_maexxna.lua. Entry wowhead-verified
+	// (wowhead.com/?npc=15952; no NPC_ constant in the C++ tree —
+	// naxxramas.h carries only BOSS_MAEXXNA, DB-side binding like
+	// flamelash 9156). Ported arms (C++-exact): EVENT_SPRAY Talk(
+	// EMOTE_WEB_SPRAY 2) + DoCastAOE(WEB_SPRAY 29484) 40s/40s
+	// (DoCastAOE self-cast convention); EVENT_SHOCK DoCastAOE(
+	// POISON_SHOCK 28741) randtime(5s,10s)/randtime(10s,20s);
+	// EVENT_POISON DoCastVictim(NECROTIC_POISON 28776) randtime(10s,
+	// 15s)/randtime(10s,20s) (CastSpell(nil) victim-cast);
+	// EVENT_SUMMON Talk(EMOTE_SPIDERS 0) + C++-exact 30s/40s schedule
+	// (spiderling summons unmodeled — no summon bridge); 30%-health
+	// frenzy latch via 1s pump (both RAID_MODE aura IDs 54123/54124
+	// checked, no difficulty bridge — faerlina precedent) -> DoCastSelf
+	// FRENZY 54123. Unmodeled: EVENT_WRAP DoSummon(NPC_WEB_WRAP
+	// 16486) + SetGUID/MoveJump web-wrap machine + npc_webwrap
+	// (no summon / cross-AI SetGUID / MoveJump / MoveSplineInit
+	// bridges); Reset aura-removal (no instance bridge).
+	RegisterLuaBoss("boss_maexxna", 15952)
+
 	// boss_heigan: Naxxramas boss script, entry 15936 (naxxramas.h
 	// NPC_HEIGAN — kalecgos pass; the GetNaxxramasAI ScriptName binding
 	// is instance-shimmed, the creature_template binding DB-side).
@@ -9446,20 +9466,34 @@ func init() {
 	RegisterLuaBoss("npc_stalagg", 15929)
 	RegisterLuaBoss("npc_feugen", 15930)
 
+	// instance_naxxramas.cpp audit (2026-10-18): pure InstanceMapScript
+	// (map 533, "instance_naxxramas") — 16-boss GUID latches, door/
+	// boundary/port GO data, achievement 7600/7601 + Immortal/Undying
+	// criteria (AreAllEncountersDone + playerDied latch), and the
+	// Kel'Thuzad dialogue chains (wing taunts, gothik->horsemen 8-line
+	// chain, sapphiron/lich-king 6-line chain). All legs need the
+	// unbridged instance machinery (SetBossState/GetBossState,
+	// GetGuidData/SetData, GO flags). No-instance-script-bridge queue,
+	// documented-only, no lua.
+
 	// Commander Stoutbeard (26796), Commander Kolurg (26798), The
 	// Nexus — lua_scripts/northrend/boss_nexus_commanders.lua.
-	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) +
-	// DoCastSelf(BATTLE_SHOUT 31403) + EVENT_WHIRLWIND schedule
-	// (6s/8s init); EVENT_WHIRLWIND DoCastSelf(WHIRLWIND 38618)
-	// 19500ms/25s repeat; KilledUnit Talk(SAY_KILL 1) player-gated
-	// (nalorakk variant); JustDied Talk(SAY_DEATH 2) (_JustDied
-	// bookkeeping has no bridge). Documented-only: JustEngagedWith
-	// RemoveAurasDueToSpell(FROZEN_PRISON 47543) (no aura-removal
-	// bridge), EVENT_CHARGE_COMMANDER SelectTarget(Random)->DoCast(
-	// CHARGE 60067) (no random-target SelectTarget bridge),
-	// EVENT_FRIGHTENING_SHOUT DoCastAOE(19134) (no DoCastAOE bridge).
-	// Single C++ script serves both faction-variant commanders
-	// (twin_valkyr shared-handler precedent).
+	// Ported arms (C++-exact, name-by-name 2026-10-18): JustEngagedWith
+	// Talk(SAY_AGGRO 0) + RemoveAura(FROZEN_PRISON 47543) (lua_objects.
+	// go:242) + DoCastSelf(BATTLE_SHOUT 31403) + EVENT_CHARGE_COMMANDER
+	// schedule ({3s,4s}) + EVENT_WHIRLWIND schedule (6s/8s) +
+	// EVENT_FRIGHTENING_SHOUT schedule ({13s,15s}); EVENT_WHIRLWIND
+	// DoCastSelf(WHIRLWIND 38618) 19500ms/25s repeat;
+	// EVENT_FRIGHTENING_SHOUT DoCastAOE-lowered self-cast
+	// (FRIGHTENING_SHOUT 19134) {13s,15s} init / {45s,55s} repeat;
+	// EVENT_CHARGE_COMMANDER random-alive-player pool (SelectTarget
+	// Random/0/100/playerOnly pool C++-exact) DoCast(CHARGE 60067)
+	// {11s,15s} unconditional re-arm; KilledUnit Talk(SAY_KILL 1)
+	// player-gated (nalorakk variant); JustDied Talk(SAY_DEATH 2)
+	// (_JustDied bookkeeping has no bridge). Documented-only:
+	// JustEngagedWith BossAI::JustEngagedWith instance leg (no
+	// instance bridge). Single C++ script serves both faction-variant
+	// commanders (twin_valkyr shared-handler precedent).
 	RegisterLuaBoss("boss_nexus_commanders", 26796)
 	RegisterLuaBoss("boss_nexus_commanders", 26798)
 
