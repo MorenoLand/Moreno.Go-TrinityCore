@@ -1,0 +1,111 @@
+-- Ambassador Flamelash (Blackrock Depths, Chamber of Enchantment) — Lua
+-- port of src/server/scripts/EasternKingdoms/BlackrockMountain/
+-- BlackrockDepths/boss_ambassador_flamelash.cpp
+-- (boss_ambassador_flamelashAI : public ScriptedAI).
+-- Entry 9156 — "Ambassador Flamelash" (wowhead-verified:
+-- wowhead.com/mop-classic/npc=9156/ambassador-flamelash; no NPC_
+-- constant in the C++ tree — the creature_template ScriptName binding
+-- is DB-side, no TDB in this workspace).
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
+-- 23 OnReset (the C++ overrides no KilledUnit/DamageTaken/SpellHit).
+-- Timers via CreateLuaEvent per-GUID timers (cancel on leave combat /
+-- died / reset); melee is engine-driven in Go (creature combat tick),
+-- like C++ DoMeleeAttackIfReady.
+-- Fight shape (C++-exact for the modeled arms):
+-- OnEnterCombat(1): EVENT_FIREBLAST 2s, EVENT_SUMMON_SPIRITS 24s.
+-- Pump: fireblast arm — non-triggered DoCastVictim(SPELL_FIREBLAST
+-- 15573), re-arm 7s regardless (C++-exact: no UNIT_STATE_CASTING
+-- early return in this UpdateAI — no casting gate modeled).
+-- summon-spirits arm — C++ SummonSpirit x4 (DoSpawnCreature(9178,
+-- frand(-9,9), frand(-9,9)) + AttackStart(victim),
+-- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 60s) then re-arm 30s. The
+-- DoSpawnCreature positional-spawn primitive has no bridge
+-- (standing no-summon-bridge), so the event keeps its C++-exact
+-- 24s/30s schedule but the spawn leg is unmodeled (azuregos
+-- nil-tick schedule convention).
+-- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel the timers (the
+-- C++ Reset() _events.Reset() has no other observable arms).
+-- Deliberate deviations (all await engine bridges): no
+-- DoSpawnCreature/AttackStart-victim bridge — the Burning Spirit
+-- 9178 summon leg of EVENT_SUMMON_SPIRITS unmodeled; no Talk lines
+-- exist in the C++.
+
+local SPELL_FIREBLAST = 15573
+local NPC_BURNING_SPIRIT = 9178
+
+local ENTRY = 9156
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function castFireblast(creature, guid)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_FIREBLAST)
+    end
+    schedule(guid, "fireblast", 7000, function()
+        castFireblast(creature, guid)
+    end)
+end
+
+-- C++ SummonSpirit x4 (DoSpawnCreature(9178) + AttackStart): the
+-- positional-spawn primitive has no bridge, so the event keeps its
+-- C++-exact schedule (24s init, 30s repeat) with the spawn leg
+-- unmodeled.
+local function summonSpiritsTick(guid)
+    -- no DoSpawnCreature bridge (standing) — NPC_BURNING_SPIRIT
+    -- 9178 summons unmodeled; the schedule stays C++-exact.
+    schedule(guid, "spirits", 30000, function()
+        summonSpiritsTick(guid)
+    end)
+end
+
+local function onEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- boss_ambassador_flamelash.cpp JustEngagedWith schedule.
+    schedule(guid, "fireblast", 2000, function()
+        castFireblast(creature, guid)
+    end)
+    schedule(guid, "spirits", 24000, function()
+        summonSpiritsTick(guid)
+    end)
+end
+
+local function onLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function onDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+local function onReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
+RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 23, onReset)

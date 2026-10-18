@@ -5757,6 +5757,19 @@ func init() {
 	// the sibling npc_ironhand_guardian is instance-arm-gated plus
 	// DoCastAOE — documented-only.
 	RegisterLuaBoss("boss_magmus", 9938)
+	// boss_ambassador_flamelash / boss_ambassador_flamelashAI (Blackrock
+	// Depths, Chamber of Enchantment; ScriptedAI — fireblast 15573
+	// victim-cast 2s->7s) — maiden convention (CreateLuaEvent timers;
+	// GetVictim for DoCastVictim; no UNIT_STATE_CASTING gate in the C++
+	// UpdateAI; melee engine-driven). Entry 9156 wowhead-verified
+	// (wowhead.com/mop-classic/npc=9156/ambassador-flamelash; no NPC_
+	// constant in the C++ tree — DB ScriptName binding) — see
+	// lua_scripts/eastern_kingdoms/boss_ambassador_flamelash.lua.
+	// EVENT_SUMMON_SPIRITS (24s->30s, Burning Spirit 9178 x4 via
+	// DoSpawnCreature + AttackStart) keeps its C++-exact schedule with
+	// the spawn leg unmodeled (no positional-spawn bridge; azuregos
+	// nil-tick schedule convention).
+	RegisterLuaBoss("boss_ambassador_flamelash", 9156)
 	// boss_moira_bronzebeard / boss_moira_bronzebeardAI (Blackrock
 	// Depths, Lyceum; ScriptedAI combat scheduler via GetBlackrockDepthsAI
 	// — mindblast 10947 victim-cast 16s->14s, shadowwordpain 10894
@@ -8198,6 +8211,22 @@ func init() {
 	// — documented in
 	// lua_scripts/kalimdor/boss_princess_theradras.lua, not wired.
 	RegisterLuaBoss("boss_princess_theradras", 12201)
+	// instance_maraudon.cpp audit (loader decl :64 / call :177): pure
+	// placeholder InstanceMapScript (map 349, "instance_maraudon") —
+	// empty InstanceScript body, zero arms; the dungeon-finder credit
+	// comment is the whole content. No-instance-script-bridge queue,
+	// documented-only, no lua.
+	// instance_dire_maul.cpp audit (loader decl :56 / call :169): pure
+	// placeholder InstanceMapScript (map 429, SetBossNumber(17)) —
+	// the 17-boss encounter list lives in comments (East/West/North),
+	// zero runtime arms. No-instance-script-bridge queue,
+	// documented-only, no lua.
+	// instance_ragefire_chasm.cpp audit (loader decl :58 / call :171):
+	// pure placeholder InstanceMapScript (map 389, "instance_ragefire_chasm")
+	// — empty InstanceScript body, zero arms; the dungeon-finder credit
+	// comment is the whole content. No-instance-script-bridge queue,
+	// documented-only, no lua. (The Ragefire Chasm boss fights —
+	// taragamanAI etc. — live in the Go AI track, not Lua.)
 	// Onyxia: combat arms ported (entry 10184, NPC_ONYXIA GUID-bound
 	// in instance_onyxias_lair.cpp OnCreatureCreate —
 	// onyxias_lair.h:62; OnyxiaScriptName "instance_onyxias_lair",
@@ -8312,6 +8341,14 @@ func init() {
 	// JustDied FailQuest have no bridges — documented in the lua
 	// file, not wired.
 	RegisterLuaBoss("npc_willix", 4508)
+	// instance_razorfen_kraul.cpp audit (loader decl :76 / call :189):
+	// InstanceMapScript (map 47, "instance_razorfen_kraul") — GO latch
+	// 21099 (ward door) + 20920 faction-hack on OnGameObjectCreate, and
+	// an EVENT_WARD_KEEPER SetData counter whose Update tick would open
+	// the door at 2 kills. No-instance-script-bridge queue,
+	// documented-only, no lua. NOTE: EVENT_WARD_KEEPER has zero
+	// in-tree callers — no script reports a ward keeper death — so the
+	// door-open arm is provably dead code in the C++ tree itself.
 
 	// boss_zum_rah: Zul'Farrak, entry 7271 (zulfarrak.h ZFEntries
 	// ENTRY_ZUM_RAH — kalecgos passes). BossAI(creature, DATA_ZUM_RAH)
