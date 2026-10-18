@@ -298,10 +298,25 @@ func (s *session) isQuestRewarded(ctx context.Context, questID uint32) bool {
 // getQuestRewardStatus mirrors Player::GetQuestRewardStatus
 // (Player.cpp:16115-16128): for repeatable quests the rewarded flag is only
 // consulted to suppress repeat XP (Player.cpp:15399-15401), so the dialog and
-// reward gates treat them as unrewarded.
+// reward gates treat them as unrewarded. A seasonal non-repeatable quest is
+// treated as rewarded while it sits in the player's seasonal cooldown for
+// the current event (Player.cpp:16119-16120).
 func (s *session) getQuestRewardStatus(ctx context.Context, questID uint32) bool {
-	if s.loadQuestDialogTemplate(ctx, questID).specialFlags&questSpecialRepeatable != 0 {
+	t := s.loadQuestDialogTemplate(ctx, questID)
+	if t.specialFlags&questSpecialRepeatable != 0 {
 		return false
+	}
+	if isSeasonalQuestSort(int32(t.zoneOrSort)) &&
+		s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil &&
+		s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var eventEntry sql.NullInt64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT eventEntry FROM game_event_seasonal_questrelation WHERE questId = ?", questID).Scan(&eventEntry); err == nil && eventEntry.Valid && eventEntry.Int64 > 0 {
+			var count int64
+			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_seasonal WHERE guid = ? AND quest = ? AND event = ?", s.playerGUID, questID, eventEntry.Int64).Scan(&count)
+			return count > 0
+		}
+		// No seasonal relation row: fall through to the normal rewarded
+		// check (Player.cpp:16124-16126).
 	}
 	return s.isQuestRewarded(ctx, questID)
 }
@@ -1051,7 +1066,7 @@ func (s *session) questDialogStarterStatus(ctx context.Context, questID uint32) 
 }
 
 type questDialogTemplate struct {
-	flags, specialFlags, minLevel, maxLevel, questLevel int64
+	flags, specialFlags, minLevel, maxLevel, questLevel, zoneOrSort int64
 }
 
 func (s *session) loadQuestDialogTemplate(ctx context.Context, questID uint32) questDialogTemplate {
@@ -1059,8 +1074,8 @@ func (s *session) loadQuestDialogTemplate(ctx context.Context, questID uint32) q
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return t
 	}
-	_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(qt.Flags, 0), COALESCE(qta.SpecialFlags, 0), COALESCE(qt.MinLevel, 0), COALESCE(qta.MaxLevel, 0), COALESCE(qt.QuestLevel, 0)
-		FROM quest_template qt LEFT JOIN quest_template_addon qta ON qta.ID = qt.ID WHERE qt.ID = ?`, questID).Scan(&t.flags, &t.specialFlags, &t.minLevel, &t.maxLevel, &t.questLevel)
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(qt.Flags, 0), COALESCE(qta.SpecialFlags, 0), COALESCE(qt.MinLevel, 0), COALESCE(qta.MaxLevel, 0), COALESCE(qt.QuestLevel, 0), COALESCE(qt.ZoneOrSort, 0)
+		FROM quest_template qt LEFT JOIN quest_template_addon qta ON qta.ID = qt.ID WHERE qt.ID = ?`, questID).Scan(&t.flags, &t.specialFlags, &t.minLevel, &t.maxLevel, &t.questLevel, &t.zoneOrSort)
 	return t
 }
 
