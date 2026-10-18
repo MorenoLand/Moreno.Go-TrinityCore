@@ -165,13 +165,19 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		return true
 	}
 	if channelID != 0 {
+		// Reference: ChannelHandler.cpp:54-59 — the invalid-name check runs
+		// on the RAW packet name, BEFORE system-channel resolution
+		// (:72-79). A canonicalization that turns "5Bogus" into "General"
+		// must not bypass the digit-leading-name rejection.
+		if name == "" || (name[0] >= '0' && name[0] <= '9') {
+			return s.sendChannelNotify(channelInvalidNameNotice, name, nil) == nil
+		}
 		// Reference: ChannelHandler.cpp:74-79 — system channels resolve
 		// purely by (channelId, zone) via GetSystemChannel; the packet name
 		// is only validity-checked, never used for the lookup. A phantom
 		// name must not create a duplicate channel object.
 		name = s.canonicalSystemChannelName(channelID, name)
-	}
-	if name == "" || (name[0] >= '0' && name[0] <= '9') {
+	} else if name == "" || (name[0] >= '0' && name[0] <= '9') {
 		return s.sendChannelNotify(channelInvalidNameNotice, name, nil) == nil
 	}
 	// Reference: ChannelHandler.cpp:60-72 — an over-long password is a silent

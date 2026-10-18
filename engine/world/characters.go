@@ -692,11 +692,12 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		delete(s.legitimate, guid)
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), charDeleteSuccess)
 	}
-	// Player::DeleteFromDB (Player.cpp:4349): online players who had the
-	// deleted character on their social list get FRIEND_REMOVED. Capture the
-	// contact list before the wipe below deletes the rows.
+	// Player::DeleteFromDB (Player.cpp:4349, CHAR_SEL_CHAR_SOCIAL): online
+	// players who had the deleted character on their social list get
+	// FRIEND_REMOVED. Capture those owners before the wipe below deletes
+	// the rows.
 	var deletedContacts []uint64
-	if rows, qerr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT friend FROM character_social WHERE guid = ?", guid); qerr == nil {
+	if rows, qerr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT DISTINCT guid FROM character_social WHERE friend = ?", guid); qerr == nil {
 		for rows.Next() {
 			var contactGUID uint64
 			if rows.Scan(&contactGUID) == nil {

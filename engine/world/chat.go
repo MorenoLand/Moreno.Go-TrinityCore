@@ -1274,13 +1274,22 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 				outType, senderGUID, receiverGUID = chatWhisperInform, receiver.playerGUID, receiver.playerGUID
 			}
 		}
-		tag := source.chatTag()
-		isGM := source.gmMessage
+		// Reference: ChatHandler.cpp:271-297 — the WorldObject* overload
+		// derives tag, SMSG_GM_MESSAGECHAT opcode, and sender name from its
+		// sender argument; Player::Whisper (Player.cpp:21040) passes the
+		// TARGET for CHAT_MSG_WHISPER_INFORM, so the echo's GM fields come
+		// from the receiver, not from the source.
+		fieldSource := source
+		if receiver != nil && target != receiver {
+			fieldSource = receiver
+		}
+		tag := fieldSource.chatTag()
+		isGM := fieldSource.gmMessage
 		opcode := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
 		senderName := ""
-		if isGM && source.player != nil {
+		if isGM && fieldSource.player != nil {
 			opcode = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
-			senderName = source.player.Name
+			senderName = fieldSource.player.Name
 		}
 		payload := protocol.BuildChatMessageWithOptions(outType, language, senderGUID, receiverGUID, message, channel, isGM, senderName, tag)
 		if err := target.write(opcode, payload, true); err != nil {
@@ -1293,8 +1302,14 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	// loop above only delivers the CHAT_MSG_WHISPER packet, so the inform
 	// is sent here to match.
 	if chatType == chatWhisper && language != languageAddon && receiver != nil && receiver == source {
-		payload := protocol.BuildChatMessageWithOptions(chatWhisperInform, language, source.playerGUID, source.playerGUID, message, channel, false, "", source.chatTag())
-		_ = source.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+		op := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
+		senderName := ""
+		if source.gmMessage && source.player != nil {
+			op = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
+			senderName = source.player.Name
+		}
+		payload := protocol.BuildChatMessageWithOptions(chatWhisperInform, language, source.playerGUID, source.playerGUID, message, channel, source.gmMessage, senderName, source.chatTag())
+		_ = source.write(op, payload, true)
 	}
 }
 
