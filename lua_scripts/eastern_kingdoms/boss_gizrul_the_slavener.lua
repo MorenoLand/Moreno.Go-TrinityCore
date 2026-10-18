@@ -25,10 +25,10 @@
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI event
 -- machine):
 -- EVENT_FATAL_BITE: victim-cast FATAL_BITE 16495, 17s init -> 8s loop
--- (C++ urand(17s,20s) init / urand(8s,10s) loop — ranges use the
--- lower bound, halycon recurring-timer convention).
+-- (C++ urand(17s,20s) init / urand(8s,10s) loop — CreateLuaEvent
+-- {min,max} tables, maiden convention).
 -- EVENT_INFECTED_BITE: one-shot self-cast INFECTED_BITE 16128 at 10s
--- (C++ urand(10s,12s) — lower bound). The C++ handler does NOT re-arm
+-- (C++ urand(10s,12s)). The C++ handler does NOT re-arm
 -- EVENT_INFECTED_BITE; it schedules EVENT_FATAL_BITE at 8s-10s, so the
 -- arm fires exactly once and overwrites the live fatal-bite timer
 -- (EventMap semantics: schedule() cancels the same-key timer first —
@@ -78,19 +78,19 @@ local function onFatalBite(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_FATAL_BITE)
     end
-    schedule(guid, "fatalbite", 8000, function() onFatalBite(creature, guid) end)
+    schedule(guid, "fatalbite", {8000, 10000}, function() onFatalBite(creature, guid) end)
 end
 
 local function onInfectedBite(creature, guid)
     creature:CastSpell(creature, SPELL_INFECTED_BITE)
-    schedule(guid, "fatalbite", 8000, function() onFatalBite(creature, guid) end)
+    schedule(guid, "fatalbite", {8000, 10000}, function() onFatalBite(creature, guid) end)
 end
 
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "fatalbite", 17000, function() onFatalBite(creature, guid) end)
-    schedule(guid, "infectedbite", 10000, function() onInfectedBite(creature, guid) end)
+    schedule(guid, "fatalbite", {17000, 20000}, function() onFatalBite(creature, guid) end)
+    schedule(guid, "infectedbite", {10000, 12000}, function() onInfectedBite(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

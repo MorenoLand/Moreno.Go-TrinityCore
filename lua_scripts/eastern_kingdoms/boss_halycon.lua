@@ -18,9 +18,9 @@
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI event
 -- machine + JustDied talk):
--- EVENT_REND: victim-cast REND 13738, 17s init -> 8s (C++ ranges
--- 17s,20s init and 8s,10s loop use the lower bound, the recurring-timer
--- convention).
+-- EVENT_REND: victim-cast REND 13738, {17s,20s} init -> {8s,10s} loop
+-- (C++ ScheduleEvent ranges; CreateLuaEvent {min,max} table is the
+-- randtime idiom, maiden convention).
 -- EVENT_THRASH: self-cast THRASH 3391, 10s one-shot init — C++ does
 -- NOT re-arm the timer, so the one-shot is C++-exact
 -- (creature:CastSpell(creature, spell) is the DoCast(me, spell) path,
@@ -76,7 +76,7 @@ local function onRend(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_REND)
     end
-    schedule(guid, "rend", 8000, function() onRend(creature, guid) end)
+    schedule(guid, "rend", {8000, 10000}, function() onRend(creature, guid) end)
 end
 
 local function onThrash(creature)
@@ -86,7 +86,7 @@ end
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "rend", 17000, function() onRend(creature, guid) end)
+    schedule(guid, "rend", {17000, 20000}, function() onRend(creature, guid) end)
     schedule(guid, "thrash", 10000, function() onThrash(creature) end)
 end
 

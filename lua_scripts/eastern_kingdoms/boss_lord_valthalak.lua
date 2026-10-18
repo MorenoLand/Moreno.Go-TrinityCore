@@ -18,8 +18,8 @@
 -- is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady.
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI event
--- machine), all urand ranges at their lower bound (halycon
--- recurring-timer convention):
+-- machine), all urand ranges as CreateLuaEvent {min,max} tables
+-- (maiden convention):
 -- EVENT_SUMMON_SPECTRAL_ASSASSIN: self-cast SPELL_SUMMON_SPECTRAL_ASSASSIN
 -- 27249, 6s init (urand(6s,8s)) -> 30s loop (urand(30s,35s))
 -- (DoCast(me) path — creature:CastSpell(creature, spell),
@@ -96,7 +96,7 @@ end
 
 local function onSummonSpectralAssassin(creature, guid)
     creature:CastSpell(creature, SPELL_SUMMON_SPECTRAL_ASSASSIN)
-    schedule(guid, "summon", 30000, function() onSummonSpectralAssassin(creature, guid) end)
+    schedule(guid, "summon", {30000, 35000}, function() onSummonSpectralAssassin(creature, guid) end)
 end
 
 local function onShadowWrath(creature, guid)
@@ -104,7 +104,7 @@ local function onShadowWrath(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_WRATH)
     end
-    schedule(guid, "wrath", 19000, function() onShadowWrath(creature, guid) end)
+    schedule(guid, "wrath", {19000, 24000}, function() onShadowWrath(creature, guid) end)
 end
 
 local function onShadowBoltVolley(creature, guid)
@@ -112,7 +112,7 @@ local function onShadowBoltVolley(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_BOLT_VOLLEY)
     end
-    schedule(guid, "volley", 4000, function() onShadowBoltVolley(creature, guid) end)
+    schedule(guid, "volley", {4000, 6000}, function() onShadowBoltVolley(creature, guid) end)
 end
 
 local function onEnterCombat(_, creature)
@@ -120,8 +120,8 @@ local function onEnterCombat(_, creature)
     cancelTimers(guid)
     frenzy40[guid] = nil
     frenzy15[guid] = nil
-    schedule(guid, "summon", 6000, function() onSummonSpectralAssassin(creature, guid) end)
-    schedule(guid, "wrath", 9000, function() onShadowWrath(creature, guid) end)
+    schedule(guid, "summon", {6000, 8000}, function() onSummonSpectralAssassin(creature, guid) end)
+    schedule(guid, "wrath", {9000, 18000}, function() onShadowWrath(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
@@ -141,7 +141,7 @@ local function onDamageTaken(_, creature, _, damage)
         if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 15 / 100) then
             frenzy15[guid] = true
             creature:CastSpell(creature, SPELL_FRENZY)
-            schedule(guid, "volley", 7000, function() onShadowBoltVolley(creature, guid) end)
+            schedule(guid, "volley", {7000, 14000}, function() onShadowBoltVolley(creature, guid) end)
         end
     end
 end

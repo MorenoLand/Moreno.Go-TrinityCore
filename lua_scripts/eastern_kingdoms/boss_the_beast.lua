@@ -46,8 +46,11 @@
 -- (at_trigger_the_beast_movement AT 2066, at_the_beast_room) and the
 -- instance script; no area-trigger / instance / MotionMaster bridges
 -- on the Lua surface (coren_direbrew / instance precedent).
--- Documented-only. SpellHit skinning arm — no SpellHit bridge on the
--- Lua surface (draenei_survivor precedent); gates on !IsAlive
+-- Documented-only. SpellHit skinning arm — CreatureEventOnHitBySpell(14)
+-- is bridged on the Lua surface, but the C++ arm gates on
+-- spellInfo effect SPELL_EFFECT_SKINNING, which the bridge does not
+-- expose (handler receives (event, creature, caster, spellId) only);
+-- hard-coding spell IDs would be fabrication. Gates on !IsAlive
 -- anyway. Documented-only.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and both

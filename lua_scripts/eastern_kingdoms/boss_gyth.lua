@@ -18,18 +18,19 @@
 -- DoMeleeAttackIfReady.
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI combat
 -- event machine):
--- EVENT_CORROSIVE_ACID: self-cast CORROSIVE_ACID 16359, 8s init -> 10s
--- loop (DoCast(me) path — creature:CastSpell(creature, spell),
--- pyroguard_emberseer convention; C++ urand(8s,16s) init / urand(10s,
--- 16s) loop, recurring-timer convention uses the lower bound).
--- EVENT_FREEZE: self-cast FREEZE 16350, 8s init -> 10s loop.
--- EVENT_FLAME_BREATH: self-cast FLAMEBREATH 16390, 8s init -> 10s loop.
--- EVENT_KNOCK_AWAY: victim-cast KNOCK_AWAY 10101, 12s init -> 14s loop
--- (C++ urand(12s,18s) init / urand(14s,20s) loop).
+-- EVENT_CORROSIVE_ACID: self-cast CORROSIVE_ACID 16359, {8s,16s} init
+-- -> {10s,16s} loop (DoCast(me) path — creature:CastSpell(creature,
+-- spell), pyroguard_emberseer convention; C++ urand ranges as
+-- CreateLuaEvent {min,max} tables, maiden convention).
+-- EVENT_FREEZE: self-cast FREEZE 16350, {8s,16s} init -> {10s,16s} loop.
+-- EVENT_FLAME_BREATH: self-cast FLAMEBREATH 16390, {8s,16s} init ->
+-- {10s,16s} loop.
+-- EVENT_KNOCK_AWAY: victim-cast KNOCK_AWAY 10101, {12s,18s} init ->
+-- {14s,20s} loop (C++ urand ranges as {min,max} tables).
 -- DamageTaken: HealthBelowPct(5) one-shot -> self-cast SPELL_SUMMON_REND
--- 16328 (DoCast(me, 16328)); C++-exact condition, carried as the cast
--- arm only — me->RemoveAura(SPELL_REND_MOUNTS 16167) has no bridge on
--- the Lua surface. Ported via OnDamageTaken(9) with a per-guid
+-- 16328 (DoCast(me, 16328)) then RemoveAura(SPELL_REND_MOUNTS 16167)
+-- (creature:RemoveAura bridged on the handler surface, C++ arm order).
+-- Ported via OnDamageTaken(9) with a per-guid
 -- one-shot latch reset on OnEnterCombat(1) (mother_smolderweb /
 -- magmus latch convention); C++ checks the 5% latch in UpdateAI even
 -- out of combat, but the only state transition into sub-5% is damage,
@@ -68,6 +69,7 @@ local SPELL_FLAMEBREATH = 16390
 local SPELL_FREEZE = 16350
 local SPELL_KNOCK_AWAY = 10101
 local SPELL_SUMMON_REND = 16328
+local SPELL_REND_MOUNTS = 16167
 
 local timers = {}
 local rendFired = {}
@@ -94,17 +96,17 @@ end
 
 local function onCorrosiveAcid(creature, guid)
     creature:CastSpell(creature, SPELL_CORROSIVE_ACID)
-    schedule(guid, "acid", 10000, function() onCorrosiveAcid(creature, guid) end)
+    schedule(guid, "acid", {10000, 16000}, function() onCorrosiveAcid(creature, guid) end)
 end
 
 local function onFreeze(creature, guid)
     creature:CastSpell(creature, SPELL_FREEZE)
-    schedule(guid, "freeze", 10000, function() onFreeze(creature, guid) end)
+    schedule(guid, "freeze", {10000, 16000}, function() onFreeze(creature, guid) end)
 end
 
 local function onFlameBreath(creature, guid)
     creature:CastSpell(creature, SPELL_FLAMEBREATH)
-    schedule(guid, "flame", 10000, function() onFlameBreath(creature, guid) end)
+    schedule(guid, "flame", {10000, 16000}, function() onFlameBreath(creature, guid) end)
 end
 
 local function onKnockAway(creature, guid)
@@ -112,17 +114,17 @@ local function onKnockAway(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_KNOCK_AWAY)
     end
-    schedule(guid, "knock", 14000, function() onKnockAway(creature, guid) end)
+    schedule(guid, "knock", {14000, 20000}, function() onKnockAway(creature, guid) end)
 end
 
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     rendFired[guid] = nil
-    schedule(guid, "acid", 8000, function() onCorrosiveAcid(creature, guid) end)
-    schedule(guid, "freeze", 8000, function() onFreeze(creature, guid) end)
-    schedule(guid, "flame", 8000, function() onFlameBreath(creature, guid) end)
-    schedule(guid, "knock", 12000, function() onKnockAway(creature, guid) end)
+    schedule(guid, "acid", {8000, 16000}, function() onCorrosiveAcid(creature, guid) end)
+    schedule(guid, "freeze", {8000, 16000}, function() onFreeze(creature, guid) end)
+    schedule(guid, "flame", {8000, 16000}, function() onFlameBreath(creature, guid) end)
+    schedule(guid, "knock", {12000, 18000}, function() onKnockAway(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
@@ -140,6 +142,7 @@ local function onDamageTaken(_, creature, _, damage)
     if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 5 / 100) then
         rendFired[guid] = true
         creature:CastSpell(creature, SPELL_SUMMON_REND)
+        creature:RemoveAura(SPELL_REND_MOUNTS)
     end
 end
 
