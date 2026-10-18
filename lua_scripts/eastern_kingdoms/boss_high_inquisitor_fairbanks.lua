@@ -32,8 +32,9 @@
 -- sole-victim tick casts nothing but keeps the 40s schedule.
 -- C++ EVENT_SLEEP: SelectTarget(MaxThreat, 0, 30.f, true, false) —
 -- top-threat player within 30 yd, approximated by the current
--- victim (jeklik convention); nil-victim ticks keep the 30s
--- schedule.
+-- victim (jeklik convention) with the 30yd filter enforced via
+-- GetDistance (vorpil precedent); nil-victim/out-of-range ticks
+-- keep the 30s schedule.
 -- The DamageTaken latch fires when post-damage health drops strictly
 -- below 25% (C++ HealthBelowPctDamaged(25, damage) — the damaged
 -- class, the same class as the thalnos/azshir latches, NOT the
@@ -152,11 +153,12 @@ local function onFear(creature, guid)
 end
 
 -- C++ EVENT_SLEEP: non-triggered DoCast(8399) on the top-threat
--- target, approximated by the current victim; nil-victim ticks keep
--- the schedule. Repeat(30s).
+-- target within 30 yd, approximated by the current victim (jeklik
+-- convention); the 30yd filter rides the vorpil GetDistance idiom.
+-- Nil-victim or out-of-range ticks keep the schedule. Repeat(30s).
 local function onSleep(creature, guid)
     local victim = creature:GetVictim()
-    if victim then
+    if victim and creature:GetDistance(victim) <= 30 then
         creature:CastSpell(victim, SPELL_SLEEP)
     end
     schedule(guid, "sleep", 30000, function()
