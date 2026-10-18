@@ -162,7 +162,8 @@ func queryGetBool(state *lua.State, query *Query, index int) int {
 		return 1
 	}
 	if number, err := asInt64(value); err == nil {
-		state.PushBoolean(number != 0)
+		// C++ Field::GetBool is GetUInt8() == 1 — only 1 reads true.
+		state.PushBoolean(number == 1)
 		return 1
 	}
 	text := strings.ToLower(fmt.Sprint(value))
@@ -215,7 +216,8 @@ func queryGetSigned(state *lua.State, query *Query, index int, push func(int64))
 
 func queryGetString(state *lua.State, query *Query, index int) int {
 	value, ok := queryValue(query, state, index)
-	if !ok {
+	if !ok || value == nil {
+		// C++ Field::GetString returns "" when data.value is null.
 		state.PushString("")
 		return 1
 	}

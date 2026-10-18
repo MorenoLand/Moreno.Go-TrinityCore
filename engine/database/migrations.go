@@ -99,6 +99,9 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 	// C++ UpdateFetcher orders updates by filename string (PathCompare), not by
 	// the numeric prefix — sort by name so apply order matches exactly.
 	sort.Slice(migrations, func(i, j int) bool { return migrations[i].Name < migrations[j].Name })
+	// C++ UpdateFetcher::FillFileListRecursively throws on a duplicate filename
+	// during discovery, before any file applies — validate the whole list up
+	// front so a duplicate can never follow a partial apply.
 	seen := make(map[int]struct{}, len(migrations))
 	seenNames := make(map[string]struct{}, len(migrations))
 	for index := range migrations {
@@ -111,6 +114,9 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 			return result, fmt.Errorf("duplicate migration name %s", migration.Name)
 		}
 		seenNames[migration.Name] = struct{}{}
+	}
+	for index := range migrations {
+		migration := &migrations[index]
 		if migration.State == "" {
 			migration.State = MigrationStateReleased
 		}

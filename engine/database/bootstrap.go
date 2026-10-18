@@ -83,15 +83,14 @@ func applyConfiguredMigrations(ctx context.Context, c config.Config, store *Stor
 		if loadErr != nil {
 			return fmt.Errorf("%s migration discovery %s: %w", store.Name, directory.path, loadErr)
 		}
-		if directory.state != "" {
-			// C++ AppliedFileEntry::StateConvert: anything but "RELEASED" reads as ARCHIVED.
-			state := strings.ToUpper(directory.state)
-			if state != MigrationStateArchived {
-				state = MigrationStateReleased
-			}
-			for index := range loaded {
-				loaded[index].State = state
-			}
+		// C++ UpdateFetcher::AppliedFileEntry::StateConvert: only "RELEASED" reads
+		// as RELEASED — anything else, including an empty state, is ARCHIVED.
+		state := strings.ToUpper(directory.state)
+		if state != MigrationStateReleased {
+			state = MigrationStateArchived
+		}
+		for index := range loaded {
+			loaded[index].State = state
 		}
 		migrations = append(migrations, loaded...)
 	}
