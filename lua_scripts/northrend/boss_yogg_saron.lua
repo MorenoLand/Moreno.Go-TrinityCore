@@ -418,8 +418,10 @@ end
 
 -- C++ npc_immortal_guardianAI::Reset (:1489-1493): non-triggered
 -- one-shots DoCast(me, SPELL_EMPOWERED 64161) + DoCast(me,
--- SPELL_RECENTLY_SPAWNED 64497) ride event 23; the DamageTaken 1% floor
--- has no health bridge.
+-- SPELL_RECENTLY_SPAWNED 64497) ride event 23; the DamageTaken 1%
+-- floor is ported on event 9 below (the old "no health bridge"
+-- claim was stale — creature:GetHealth/GetMaxHealth are bridged,
+-- object.go fallback, sindragosa precedent).
 local function immortalReset(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ npc_immortal_guardianAI::Reset(): DoCast(me, EMPOWERED);
@@ -430,6 +432,31 @@ local function immortalReset(event, creature)
         creature:CastSpell(creature, SPELL_RECENTLY_SPAWNED)
     end
 end
+
+-- C++ npc_immortal_guardianAI::DamageTaken (:1494-1499): the 1% floor —
+-- if (HealthBelowPctDamaged(1, damage)) damage = GetHealth() -
+-- CountPctFromMaxHealth(1). PORTED 2026-10-17 via event 9's second-return
+-- damage rewrite (volazj event-9 precedent; midnight/curator/nightbane
+-- "return false, newDamage" convention): HealthBelowPctDamaged is the
+-- int64 compare (int64(health)-int64(damage) < int64(1% of max),
+-- Unit.h:873); CountPctFromMaxHealth(1) = math.floor(maxHealth/100)
+-- per the nightbane CalculatePct convention. The C++ uint32 wrap when
+-- health < 1% is unreachable — the floor pins health at exactly 1%.
+local function immortalDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return false, damage
+    end
+    local newDamage = damage
+    local onePct = math.floor(maxHealth / 100)
+    if health - damage < onePct then
+        newDamage = health - onePct
+    end
+    return false, newDamage
+end
+
+RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 9, immortalDamageTaken)
 
 local function cancelAll(event, creature)
     cancelTimers(creature:GetGUID())

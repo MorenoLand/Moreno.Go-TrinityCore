@@ -50,9 +50,9 @@
 -- blocked on the instance-script model); no summon/position
 -- bridges — the mushroom summon machine unmodeled (timer
 -- bookkeeping exact; the ScriptData heroic "faster rate" note
--- stays unmodeled — no difficulty bridge, thespia precedent;
--- the ScriptData "spell data same in both modes" uncertainty
--- is documented, not bridged); no SpellScript/AuraScript
+-- is moot — the C++ has zero IsHeroic/DUNGEON_MODE references,
+-- no heroic arm exists; the "spell data same in both modes"
+-- uncertainty is documented, not bridged); no SpellScript/AuraScript
 -- scripts in this file.
 
 local SPELL_FOUL_SPORES = 31673

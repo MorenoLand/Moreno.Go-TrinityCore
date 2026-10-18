@@ -152,8 +152,9 @@ local function bossTick(creature, guid)
         return
     end
 
-    -- Shadow bolt volley 28599 (heroic 40070 — no difficulty
-    -- bridge): 1s init then 5000+rand32()%8000 (C++ {5s,13s}) —
+    -- Shadow bolt volley 28599 (heroic 40070 — unused enum in the
+    -- C++, no heroic leg: the C++ casts 28599 unconditionally):
+    -- 1s init then 5000+rand32()%8000 (C++ {5s,13s}) —
     -- non-triggered DoCastSelf (C++ DoCast(me), C++-exact),
     -- re-arm {5s,13s} regardless (C++-exact).
     if st.shadowVolley <= 1000 then

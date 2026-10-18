@@ -68,8 +68,9 @@
 -- the very first UpdateAI tick even out of combat in C++, which
 -- has no out-of-combat update hook in the Lua model — unmodeled;
 -- the JustSummoned elemental-spawnin (25035) + ApplySpellImmune
--- arms are summon-blocked; no threat bridge — ResetThreatList on
--- both form switches unmodeled; no display bridge — the
+-- arms are summon-blocked; ResetThreatList on both form switches
+-- PORTED 2026-10-17 (creature:ClearThreatList, bridged
+-- lua_objects.go:389, C++ arm order after Talk); no display
 -- MODEL_CORRUPT/MODEL_CLEAN SetDisplayId swaps unmodeled
 -- (maulgar convention); no school bridge — SetMeleeDamageSchool
 -- and the ApplySpellImmune frost/nature immunity arms unmodeled
@@ -198,8 +199,10 @@ local function hydrossTick(creature, guid)
         end
 
         -- PosCheck: switch back to clean form inside the radius.
-        -- The SetDisplayId / threat-reset / beam-summon / add-spawn /
-        -- melee-school / immunity arms have no bridges.
+        -- The SetDisplayId / beam-summon / add-spawn / melee-school /
+        -- immunity arms have no bridges (ResetThreatList PORTED
+        -- 2026-10-17: creature:ClearThreatList, bridged
+        -- lua_objects.go:389, C++ arm order after Talk).
         st.posCheck = st.posCheck - 1000
         if st.posCheck <= 0 then
             local dx = creature:GetX() - HYDROSS_X
@@ -208,6 +211,7 @@ local function hydrossTick(creature, guid)
                 st.corrupted = false
                 st.hydrossCount = 0
                 creature:Talk(SAY_SWITCH_TO_CLEAN)
+                creature:ClearThreatList()
             end
             st.posCheck = 2500
         end
@@ -235,8 +239,10 @@ local function hydrossTick(creature, guid)
         end
 
         -- PosCheck: switch to corrupted form outside the radius.
-        -- The SetDisplayId / threat-reset / beam-despawn / add-spawn /
-        -- melee-school / immunity arms have no bridges.
+        -- The SetDisplayId / beam-despawn / add-spawn / melee-school /
+        -- immunity arms have no bridges (ResetThreatList PORTED
+        -- 2026-10-17: creature:ClearThreatList, bridged
+        -- lua_objects.go:389, C++ arm order after Talk).
         st.posCheck = st.posCheck - 1000
         if st.posCheck <= 0 then
             local dx = creature:GetX() - HYDROSS_X
@@ -245,6 +251,7 @@ local function hydrossTick(creature, guid)
                 st.corrupted = true
                 st.corruptCount = 0
                 creature:Talk(SAY_SWITCH_TO_CORRUPT)
+                creature:ClearThreatList()
             end
             st.posCheck = 2500
         end

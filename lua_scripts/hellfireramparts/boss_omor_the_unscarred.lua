@@ -269,10 +269,10 @@ local function bossTick(creature, guid)
         end
     end
 
-    -- Treacherous aura 30695 (heroic 37566 — no difficulty
-    -- bridge, thespia precedent): 10s init then {8s,16s} —
-    -- Talk(SAY_CURSE), target = random alive player in the
-    -- instance, nil pick casts nothing, non-triggered DoCast
+    -- Treacherous aura 30695 (heroic 37566 — unused enum in the C++,
+    -- no heroic leg: the C++ casts 30695 unconditionally): 10s init
+    -- then {8s,16s} — Talk(SAY_CURSE), target = random alive player
+    -- in the instance, nil pick casts nothing, non-triggered DoCast
     -- on the target (C++-exact), re-arm {8s,16s} only when a
     -- target was picked (C++-exact).
     if st.aura <= 1000 then

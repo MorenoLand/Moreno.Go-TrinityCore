@@ -43,8 +43,8 @@
 -- convention), nil pick casts nothing, re-arm 10000
 -- regardless (C++-exact). Spore striders 38755:
 -- 10000+rand32()%5000 init then 10000+rand32()%5000 — timer
--- bookkeeping only: the whole fire arm is IsHeroic()-gated
--- and no difficulty bridge exists (thespia precedent);
+-- bookkeeping exact; the IsHeroic()-gated fire arm IS ported
+-- (creature:IsHeroic(), see deliberate deviations below);
 -- re-arm regardless (C++-exact). OnDied(4): cleanup (the
 -- Striders.DespawnAll arm is summon-bridgeless, steamrigger
 -- precedent). OnLeaveCombat(2)/OnReset(23): cancel the pump,
