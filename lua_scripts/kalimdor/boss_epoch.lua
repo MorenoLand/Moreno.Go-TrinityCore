@@ -35,6 +35,9 @@
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): C++ gates on
 --   victim->GetTypeId() == TYPEID_PLAYER before Talk SAY_SLAY (3)
 --   (terestian_illhoof victim:GetObjectType() == "Player" convention).
+-- - Time Stop (EVENT_TIME_STOP, heroic-only): scheduled on engage
+--   under creature:IsHeroic(), DoCastAOE(58848) non-triggered
+--   self-cast, init 15s -> repeat 25s.
 -- - Death (C++ JustDied): _JustDied() only — instance bookkeeping,
 --   blocked (standing); the Go leg is cancel only.
 -- Unmodeled (documented-only, no bridges):
@@ -43,9 +46,6 @@
 --   (standing).
 -- - BossAI::JustEngagedWith / BossAI::_Reset / BossAI::_JustDied
 --   instance legs — blocked (standing).
--- - EVENT_TIME_STOP (SPELL_TIME_STOP 58848): DoCastAOE, non-triggered,
---   init 15s -> repeat 25s, scheduled only under IsHeroic() — no
---   heroic/difficulty bridge (standing heroic-unmodeled case).
 -- - EVENT_TIME_STEP + SpellHitTarget: SpellHitTarget(SPELL_TIME_STEP_
 --   DUMMY 52736, hostile) pushes the target's GUID into _stepTargets and
 --   reschedules EVENT_TIME_STEP at 500ms; the event then charges (DoCast
@@ -149,9 +149,24 @@ local function onTimeWarp(creature, guid)
     end)
 end
 
+-- C++ EVENT_TIME_STOP: DoCastAOE(58848) non-triggered, init 15s ->
+-- repeat 25s, scheduled only under IsHeroic() (creature:IsHeroic()
+-- bridges ScriptedAI::_isHeroic — blood_prince_council precedent).
+local function onTimeStop(creature, guid)
+    creature:CastSpell(creature, SPELL_TIME_STOP)
+    schedule(guid, "timestop", 25000, function()
+        onTimeStop(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if creature:IsHeroic() then
+        schedule(guid, "timestop", 15000, function()
+            onTimeStop(creature, guid)
+        end)
+    end
     schedule(guid, "woundingstrike", math.random(4000, 6000), function()
         onWoundingStrike(creature, guid)
     end)

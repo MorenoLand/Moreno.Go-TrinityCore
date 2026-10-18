@@ -49,6 +49,9 @@
 --   -> repeat {10s,15s} unconditional (nil target -> victim cast).
 --   C++ Talks NOTHING here — SAY_SLEEP (5) is never Talked in the
 --   file (same class as SAY_KILL (3)); both unused.
+-- - DamageTaken (event 9): lethal clamp damage = health-1 +
+--   _defeated once-latch (midnight never-die convention; PermBind leg
+--   out, no Lua bridge); latch reset on engage.
 -- - Health yells (UpdateAI per-tick legs): SAY_30HEALTH (6) at
 --   HealthBelowPct(30) and SAY_15HEALTH (7) at HealthBelowPct(15),
 --   each latched once (C++ _hadYell30/_hadYell15, reset in
@@ -58,9 +61,9 @@
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): C++ gates
 --   on !_defeated && victim->GetTypeId() == TYPEID_PLAYER before Talk
 --   SAY_SLAY (4) (terestian_illhoof victim:GetObjectType() ==
---   "Player" convention); the !_defeated leg is unbridgeable — the
---   defeated machine is not modeled (below) — so only the player
---   gate is wired.
+--   "Player" convention); the !_defeated gate now rides the
+--   DamageTaken latch ported above (clamp + latch); the UpdateAI
+--   _defeated evade/immune legs stay out (no bridges).
 -- - Death (no JustDied override in C++ — the defeated machine
 --   short-circuits it): cancel only.
 -- Unmodeled (documented-only, no bridges):
@@ -71,10 +74,14 @@
 -- - BossAI ctor (DATA_MAL_GANIS) / Reset's
 --   SetBossState(DATA_MAL_GANIS, NOT_STARTED) — instance legs
 --   blocked (standing).
--- - DamageTaken lethal clamp (damage = health-1) + _defeated = true +
---   PermBindAllPlayers — no DamageTaken / PermBind bridges; the
---   whole fake-death outro machine (DATA_MALGANIS_DONE is sent by the
---   arthas AI, not here) is instance-driven.
+-- - DamageTaken lethal clamp — PORTED (this run): OnDamageTaken
+--   event 9 is bridged (midnight never-die clamp precedent); the
+--   damage = health-1 clamp and the _defeated once-latch ride the
+--   midnight "returns false, newDamage" convention with the health > 0
+--   hook guard. The PermBindAllPlayers leg rides no Lua bridge
+--   (instance_binds.go has no Lua surface) — stays out. The UpdateAI
+--   _defeated legs (EnterEvadeMode/SetImmuneToAll) still ride no
+--   evade/immune bridges (below).
 -- - UpdateAI's _defeated leg: me->IsInCombat() -> EnterEvadeMode() +
 --   SetImmuneToAll(true) — no evade-mode / immune-to-all bridges
 --   (infinite_corruptor DoAction-leave precedent).
@@ -101,6 +108,7 @@ local SPELL_VAMPIRIC_TOUCH = 52723
 
 local timers = {}
 local pumps = {}
+local defeated = {} -- per-GUID C++ _defeated latch, reset on engage
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -189,6 +197,23 @@ local function onVampiricTouch(creature, guid)
     end)
 end
 
+-- C++ DamageTaken (boss_mal_ganis.cpp:80-92): if (damage >= health)
+--   { damage = health - 1; if (_defeated) return; _defeated = true;
+--   PermBindAllPlayers }. Clamp + latch ported via event 9
+--   (fireCreatureDamageTaken, midnight never-die-clamp precedent); the
+--   PermBind leg rides no Lua bridge. health > 0 guards the hook on an
+--   already-dead creature.
+local function malganisDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local health = creature:GetHealth()
+    local newDamage = damage
+    if health > 0 and damage >= health then
+        newDamage = health - 1
+        defeated[guid] = true
+    end
+    return false, newDamage
+end
+
 -- C++ EVENT_SLEEP: DoCast(SelectTarget(Random, 1, 100.0f), 52721)
 -- non-triggered else DoCastVictim(52721); init {17s,21s} ->
 -- repeat {10s,15s} unconditional (nil target -> victim cast).
@@ -244,6 +269,7 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    defeated[guid] = nil -- C++ JustEngagedWith resets _defeated
     startHealthYellPump(creature, guid)
     schedule(guid, "carrionswarm", 5000, function()
         onCarrionSwarm(creature, guid)
@@ -279,4 +305,5 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
     end
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 9, malganisDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)

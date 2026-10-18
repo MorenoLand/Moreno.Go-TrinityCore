@@ -71,17 +71,16 @@
 -- boss_emeriss KilledUnit — DoCast(who, SPELL_PUTRID_MUSHROOM 24904,
 -- triggered) gated on player victim — same victim-self-cast / no-
 -- effect grounds (rides on the base KilledUnit leg above).
--- boss_ysondre DamageTaken — Talk(SAY_YSONDRE_SUMMON_DRUIDS 1) rides
--- the 25%-per-stage DamageTaken machine (10x triggered
--- SPELL_SUMMON_DRUID_SPIRITS 24795 casts) — no-DamageTaken bridge.
--- boss_lethon DamageTaken — Talk(SAY_LETHON_DRAW_SPIRIT 1) rides the
--- 25%-per-stage DamageTaken machine (DoCast SPELL_DRAW_SPIRIT 24811) —
--- no-DamageTaken bridge.
+-- boss_ysondre / boss_lethon / boss_emeriss DamageTaken — PORTED
+-- (this run): OnDamageTaken event 9 is bridged (midnight never-die
+-- clamp precedent), so the stale "no-DamageTaken bridge" claims are
+-- retracted — Talk + cast + ++_stage, pre-damage health (event 9 fires
+-- pre-damage, moroes precedent), C++-exact floor comparisons
+-- (!HealthAbovePct(p) = health <= floor(max*p/100)). The three cast
+-- spells (24795/24811/24910) have no Go effect implementation —
+-- visual-only casts like midnight's SPELL_SUMMON_ATTUMEN.
 -- boss_lethon SpellHitTarget — the DRAW_SPIRIT hit-target summon
 -- machine (NPC_SPIRIT_SHADE 15261, 50s) — no-SpellHitTarget bridge.
--- boss_emeriss DamageTaken — Talk(SAY_EMERISS_CAST_CORRUPTION 1) rides
--- the 25%-per-stage DamageTaken machine (triggered
--- SPELL_CORRUPTION_OF_EARTH 24910 cast) — no-DamageTaken bridge.
 -- boss_taerar DamageTaken — Talk(SAY_TAERAR_SUMMON_SHADES 1) rides the
 -- 25%-per-stage banish machine (3x triggered victim-cast shade summons
 -- 24841/24842/24843 + DoCast SPELL_SHADE 24313 + NOT_SELECTABLE /
@@ -125,6 +124,15 @@ local SPELL_SHADOW_BOLT_WHIRL = 24834 -- boss_emerald_dragons.cpp:337 (Lethon)
 local SPELL_VOLATILE_INFECTION = 24928 -- boss_emerald_dragons.cpp:475 (Emeriss)
 local SPELL_ARCANE_BLAST = 24857 -- boss_emerald_dragons.cpp:568 (Taerar)
 local SPELL_BELLOWING_ROAR = 22686 -- boss_emerald_dragons.cpp:563 (Taerar)
+local SPELL_SUMMON_DRUID_SPIRITS = 24795 -- boss_emerald_dragons.cpp:249 (Ysondre DamageTaken)
+local SPELL_DRAW_SPIRIT = 24811 -- boss_emerald_dragons.cpp:336 (Lethon DamageTaken)
+local SPELL_CORRUPTION_OF_EARTH = 24910 -- boss_emerald_dragons.cpp:474 (Emeriss DamageTaken)
+
+local SAY_SUMMON = 1 -- SAY_YSONDRE_SUMMON_DRUIDS / SAY_LETHON_DRAW_SPIRIT /
+                     -- SAY_EMERISS_CAST_CORRUPTION (all 1)
+
+-- per-GUID C++ _stage (Initialize/Reset sets 1; stages at 75/50/25%).
+local stages = {}
 
 local timers = {}
 
@@ -203,6 +211,64 @@ local function bellowingRoarTick(creature, guid)
     end)
 end
 
+-- C++ boss_ysondre::DamageTaken (:283-293): if (!HealthAbovePct(100 -
+-- 25*_stage)) { Talk(1); 10x DoCast(me, 24795, triggered); ++_stage; }.
+-- Pre-damage health in the event-9 hook (moroes precedent); C++-exact
+-- floor form (ironaya convention); health > 0 hook guard (midnight).
+local function ysondreDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local stage = stages[guid] or 1
+    stages[guid] = stage
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 or health == 0 then
+        return
+    end
+    if health <= math.floor(maxHealth * (100 - 25 * stage) / 100) then
+        creature:Talk(SAY_SUMMON)
+        for _ = 1, 10 do
+            creature:CastSpell(creature, SPELL_SUMMON_DRUID_SPIRITS, true)
+        end
+        stages[guid] = stage + 1
+    end
+end
+
+-- C++ boss_lethon::DamageTaken (:376-384): if (!HealthAbovePct(100 -
+-- 25*_stage)) { Talk(1); DoCast(me, 24811) non-triggered; ++_stage; }.
+-- The SpellHitTarget spirit-shade summon machine stays out
+-- (no-SpellHitTarget bridge); the draw-spirit cast is visual-only
+-- (no Go effect for 24811).
+local function lethonDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local stage = stages[guid] or 1
+    stages[guid] = stage
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 or health == 0 then
+        return
+    end
+    if health <= math.floor(maxHealth * (100 - 25 * stage) / 100) then
+        creature:Talk(SAY_SUMMON)
+        creature:CastSpell(creature, SPELL_DRAW_SPIRIT)
+        stages[guid] = stage + 1
+    end
+end
+
+-- C++ boss_emeriss::DamageTaken (:515-523): if (!HealthAbovePct(100 -
+-- 25*_stage)) { Talk(1); DoCast(me, 24910, triggered); ++_stage; }.
+local function emerissDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local stage = stages[guid] or 1
+    stages[guid] = stage
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 or health == 0 then
+        return
+    end
+    if health <= math.floor(maxHealth * (100 - 25 * stage) / 100) then
+        creature:Talk(SAY_SUMMON)
+        creature:CastSpell(creature, SPELL_CORRUPTION_OF_EARTH, true)
+        stages[guid] = stage + 1
+    end
+end
+
 -- C++ boss_ysondre/boss_lethon/boss_emeriss/boss_taerar::JustEngagedWith:
 -- Talk(SAY_*_AGGRO); WorldBossAI::JustEngagedWith(who) — the auriaya
 -- precedent (the WorldBossAI legs have no bridges). Each dragon seeds
@@ -256,20 +322,25 @@ local function dragonDied(event, creature, killer)
 end
 
 local function dragonReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    stages[guid] = 1 -- C++ Initialize()/Reset() sets _stage = 1
 end
 
 RegisterCreatureEvent(ENTRY_YSONDRE, 1, ysondreEnterCombat)
 RegisterCreatureEvent(ENTRY_YSONDRE, 2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_YSONDRE, 4, dragonDied)
+RegisterCreatureEvent(ENTRY_YSONDRE, 9, ysondreDamageTaken)
 RegisterCreatureEvent(ENTRY_YSONDRE, 23, dragonReset)
 RegisterCreatureEvent(ENTRY_LETHON,  1, lethonEnterCombat)
 RegisterCreatureEvent(ENTRY_LETHON,  2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_LETHON,  4, dragonDied)
+RegisterCreatureEvent(ENTRY_LETHON,  9, lethonDamageTaken)
 RegisterCreatureEvent(ENTRY_LETHON,  23, dragonReset)
 RegisterCreatureEvent(ENTRY_EMERISS, 1, emerissEnterCombat)
 RegisterCreatureEvent(ENTRY_EMERISS, 2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_EMERISS, 4, dragonDied)
+RegisterCreatureEvent(ENTRY_EMERISS, 9, emerissDamageTaken)
 RegisterCreatureEvent(ENTRY_EMERISS, 23, dragonReset)
 RegisterCreatureEvent(ENTRY_TAERAR,  1, taerarEnterCombat)
 RegisterCreatureEvent(ENTRY_TAERAR,  2, dragonLeaveCombat)
