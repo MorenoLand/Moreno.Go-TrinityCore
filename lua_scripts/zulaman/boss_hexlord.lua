@@ -43,8 +43,9 @@
 -- 43582 8s then 12s on victim; Darkheart — psychic wail 43590 8s then
 -- 12s on victim; Slither — venom spit 43579 5s then 2.5s on a random
 -- alive player within 100 yd; Fenstalker — volatile infection 43586 15s
--- then 12s on victim; Koragg — mighty blow 43592 10s then 12s on victim /
--- cold stare 43593 15s then 12s on a random alive player within 100 yd.
+-- then 12s on victim; Koragg — mighty blow 43592 / cold stare 43593
+-- are upstream-dead (timers never decrement, boss_hexlord.cpp:984-993)
+-- and are not modeled.
 -- The adds never spawn in this build (no summon model) but are
 -- registered so any that exist fight correctly.
 -- Deviations from C++: no summon model — the four adds never spawn, so
@@ -56,8 +57,8 @@
 -- instance-script model, so the BOSS_HEXLORD encounter bookkeeping never
 -- runs); the SiphonSoul !target/!trigger EnterEvadeMode arm has no
 -- bridge, so a missing siphon target is a no-op; the shadow-priest
--- HasSpell(15473) redirect has no bridge, so priests always use the holy
--- row; the C++ druid PlayerClass special case (class 11 -> index 11 of
+-- HasSpell(15473) redirect is ported via the player:HasSpell bridge;
+-- the C++ druid PlayerClass special case (class 11 -> index 11 of
 -- the 10-row table) is genuine out-of-bounds upstream — Lua guards it
 -- and steals no abilities from druids; HEAL-target and BUFF-target
 -- abilities (DoSelectLowestHpFriendly / DoFindFriendlyMissingBuff) have
@@ -244,9 +245,9 @@ onSiphonSoul = function(creature, guid)
         local pc = target:GetClass() - 1
         if pc == 10 then
             pc = 11 -- C++ druid special case; out of bounds upstream — guarded below.
+        elseif pc == 4 and target:HasSpell(15473) then
+            pc = 5 -- C++ shadow-priest redirect (boss_hexlord.cpp:446).
         end
-        -- The shadow-priest HasSpell(15473) redirect has no bridge;
-        -- priests keep the holy row.
         local st = bossState(guid)
         st.playerClass = pc
         st.playerGuid = target:GetGUID()
@@ -413,19 +414,12 @@ local ADD_ARMS = {
               creature:CastSpell(nil, SPELL_VOLATILE_INFECTION, false)
           end },
     },
-    [ENTRY_KORAGG] = {
-        { key = "mightyblow", first = 10000, min = 12000, max = 12000,
-          fire = function(creature)
-              creature:CastSpell(nil, SPELL_MIGHTY_BLOW, false)
-          end },
-        { key = "coldstare", first = 15000, min = 12000, max = 12000,
-          fire = function(creature)
-              local target = randomAlivePlayer(creature, 100)
-              if target then
-                  creature:CastSpell(target, SPELL_COLD_STARE, false)
-              end
-          end },
-    },
+    -- Koragg's mighty-blow/cold-stare arms are upstream-dead C++: the
+    -- UpdateAI checks (timer <= diff) but never decrements the timers
+    -- in an else leg (boss_hexlord.cpp:984-993), so they never fire.
+    -- The empty table keeps the registration shape without inventing
+    -- casts.
+    [ENTRY_KORAGG] = {},
 }
 
 local addArmFire

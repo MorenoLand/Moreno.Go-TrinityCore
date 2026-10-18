@@ -177,7 +177,12 @@ end
 -- C++ EVENT frenzy (lynx/enrage phases): DoCast(me, FRENZY) non-triggered.
 -- Repeat {10s,15s}.
 local function onFrenzy(creature, guid)
-    creature:CastSpell(creature, SPELL_FRENZY)
+    -- C++ UpdateAI returns on !UpdateVictim(): Reset arms the timers via
+    -- EnterPhase(PHASE_LYNX) but they never fire out of combat — gate
+    -- the cast; the re-arm below keeps the cadence.
+    if creature:GetVictim() then
+        creature:CastSpell(creature, SPELL_FRENZY)
+    end
     schedule(timers, guid, "frenzy", math.random(10000, 15000), function()
         onFrenzy(creature, guid)
     end)
@@ -197,7 +202,7 @@ end
 -- C++ shock (human/enrage phases): random target; earthshock when the
 -- target is casting (player IsCasting bridge), flameshock otherwise.
 -- The {10s,15s} re-arm lives inside the if(target) leg (nil target
--- retries next tick with no re-arm).
+-- retries in 1s — C++ leaves ShockTimer at 0, next tick retries).
 local function onShock(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
@@ -207,6 +212,12 @@ local function onShock(creature, guid)
             creature:CastSpell(target, SPELL_FLAMESHOCK)
         end
         schedule(timers, guid, "shock", math.random(10000, 15000), function()
+            onShock(creature, guid)
+        end)
+    else
+        -- C++ ShockTimer stays 0 on a nil target (retry next tick);
+        -- the arm is not dropped.
+        schedule(timers, guid, "shock", 1000, function()
             onShock(creature, guid)
         end)
     end
@@ -305,9 +316,15 @@ enterPhase = function(creature, guid, nextPhase)
         end
     elseif nextPhase == PHASE_HUMAN then
         -- C++ DoSpawnCreature(SPIRIT_LYNX) skipped — no summon model.
-        -- The max-health reset (400000/400000) is subsumed by the
-        -- ratio-preserving heal on merge return.
+        -- C++ EnterPhase(PHASE_HUMAN): SetMaxHealth(400000) +
+        -- SetHealth(400000) — a full heal; SetMaxHealth has no bridge,
+        -- so the heal lands on the engine's fixed max (100%, C++-exact
+        -- fraction).
         st.phase = PHASE_HUMAN
+        local maxH = creature:GetMaxHealth()
+        if maxH > 0 then
+            creature:SetHealth(maxH)
+        end
         schedule(timers, guid, "shock", 10000, function()
             onShock(creature, guid)
         end)

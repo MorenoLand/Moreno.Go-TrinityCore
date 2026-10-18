@@ -42,8 +42,8 @@
 -- arms (incl. JustDied's), and the vortex summon/cleanup arms are
 -- skipped (the vortex AI is still registered so any spawned 24136
 -- zaps back correctly); no teleport bridge — DoTeleportTo(CENTER) on
--- phase change skipped; no threat model — ResetThreatList skipped; no
--- equipment bridge — the UNIT_VIRTUAL_ITEM_SLOT_ID arms skipped; no
+-- phase change skipped; no equipment bridge — the UNIT_VIRTUAL_ITEM_SLOT_ID
+-- arms skipped; no
 -- movement model — AttackStartNoMove (eagle), AttackStart victim
 -- switches (claw/lynx), SetSpeedRate 5.0/1.2, and MoveChase (lynx
 -- entry) have no bearer, so the rush sequences are modeled as
@@ -55,9 +55,9 @@
 -- expired starter re-fires every UpdateAI tick until the active sequence
 -- ends, then starts immediately);
 -- the C++ melee-range gate on each sequence hit is approximated with
--- GetDistance <= 5 (no IsWithinMeleeRange bridge); the
--- isTargetableForAttack fallback chain collapses to victim-or-random
--- (no targetable bridge); the no-target EnterEvadeMode arm has no
+-- GetDistance <= 5 (no IsWithinMeleeRange bridge); the claw-loop
+-- isTargetableForAttack chain is ported (creature bridge; player leg
+-- falls back to the alive check); the no-target EnterEvadeMode arm has no
 -- bridge — the sequence ends and the starter re-arms instead; the bear
 -- overpower arm has no bridge — it keys off a dodged melee swing
 -- (AttackerStateUpdate health-unchanged check) with no per-swing Lua
@@ -169,6 +169,17 @@ local function randomPlayer(creature, maxDist)
     return candidates[math.random(#candidates)]
 end
 
+-- isTargetableForAttack is a creature-method bridge; player targets
+-- have no such method (nil would be a call hazard), so they fall back
+-- to the bridge's alive leg.
+local function isTargetableForAttack(target)
+    local f = target.IsTargetableForAttack
+    if f ~= nil then
+        return target:IsTargetableForAttack()
+    end
+    return not target:IsDead()
+end
+
 -- C++ berserk: one-shot 600s, Talk, triggered self-cast 45078; the C++
 -- timer then re-arms for 60s (not 600s).
 local function onBerserk(creature, guid)
@@ -231,7 +242,14 @@ onSeqLoop = function(creature, guid)
     end
     local target
     if seq == "claw" then
-        target = creature:GetVictim() or randomPlayer(creature)
+        -- C++ claw loop (boss_zuljin.cpp:444-448): victim, then stored
+        -- tank, then random — each leg gated on isTargetableForAttack.
+        -- The tank GUID has no bearer here, so it collapses to
+        -- victim-if-targetable else random.
+        target = creature:GetVictim()
+        if target == nil or not isTargetableForAttack(target) then
+            target = randomPlayer(creature)
+        end
     else
         target = randomPlayer(creature)
     end
@@ -358,9 +376,9 @@ end
 local PHASE_TIMER_KEYS = { "intro", "whirlwind", "grievous", "paralysis",
     "clawrage", "lynxrush", "seqloop", "flamework", "flamebreath", "pillar" }
 
--- C++ EnterPhase(NextPhase): teleport/threat/equipment/AttackStart arms
--- have no bridge; the transform unaura removal, transform cast, yell,
--- energy-storm cast/removal, and per-phase timer arming are modeled.
+-- C++ EnterPhase(NextPhase): teleport/equipment/AttackStart arms have
+-- no bridge; the threat reset, transform unaura removal, transform cast,
+-- yell, energy-storm cast/removal, and per-phase timer arming are modeled.
 -- Phase timers start ticking only on phase entry (C++ decrements them
 -- only in their phase's UpdateAI case).
 local function enterPhase(creature, guid, next)
@@ -374,6 +392,10 @@ local function enterPhase(creature, guid, next)
         end
     end
     st.phase = next
+    if next >= PHASE_BEAR then
+        -- C++ EnterPhase cases 1-4: ResetThreatList().
+        creature:ClearThreatList()
+    end
     st.sequence = nil
     st.seqCount = 0
     local t = TRANSFORMS[old]
