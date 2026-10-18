@@ -5,14 +5,15 @@
 -- Eluna gossip events: 1 OnGossipHello (offers "I am glad to help you."),
 -- 2 OnGossipSelect (closes the menu on the GOSSIP_ACTION_INFO_DEF + 1
 -- action). No combat AI, no timers; melee is engine-driven in Go.
--- Deviations from C++: the UNIT_NPC_FLAG_GOSSIP flag gate has no bridge
--- (no HasFlag/RemoveFlag on the creature Lua object) — the one-shot is
--- modeled with a per-GUID "released" table, so the option is not offered
--- again after a select; instance->SetData(DATA_CHESTLOOTED, 0) has no
+-- Deviations from C++: instance->SetData(DATA_CHESTLOOTED, 0) has no
 -- bearer (no instance-script model); SummonGameObject(ChestEntry[i])
 -- (186648 / 187021 / 186672 / 186667 per hostage entry) has no bearer
 -- (no summon/gameobject-spawn bridge) — no chest is spawned; player->
 -- GetGossipTextId has no bridge, so the menu title id is 0.
+-- (The old "no HasFlag/RemoveFlag on the creature Lua object" claim was
+-- stale — the Eluna gossip creature has GetNPCFlags/SetNPCFlags,
+-- engine/world/lua_objects.go:657/666 — so the one-shot below is the
+-- C++-exact UNIT_NPC_FLAG_GOSSIP removal.)
 -- The npc_harrison_jones script from the same C++ file is NOT registered:
 -- its OnGossipSelect gates on the creature's GossipMenuId and its entire
 -- gong-event machine is MovePath/MovePoint waypoint work (no movement
@@ -30,15 +31,15 @@ local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
 local GOSSIP_HOSTAGE1 = "I am glad to help you."
 
--- Per-GUID one-shot gate: stands in for the C++ UNIT_NPC_FLAG_GOSSIP
--- flag removal (no flag bridge on the creature object).
-local released = {}
+-- UNIT_NPC_FLAG_GOSSIP (UnitDefines.h:186) — the engine runs the gossip
+-- hooks only while this flag is set (gossip.go helloCreatureNPC /
+-- select flag gates), so clearing it is the C++-exact one-shot.
+local UNIT_NPC_FLAG_GOSSIP = 0x00000001
 
 local function onHello(event, player, creature)
-    local guid = creature:GetGUID()
-    if not released[guid] then
-        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_HOSTAGE1, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-    end
+    -- C++ adds the item unconditionally; the hook only fires while the
+    -- flag is set, so the option is inherently one-shot.
+    player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_HOSTAGE1, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
     player:GossipSendMenu(0, creature)
 end
 
@@ -47,8 +48,13 @@ local function onSelect(event, player, creature, sender, action)
     if action == GOSSIP_ACTION_INFO_DEF + 1 then
         player:GossipComplete()
     end
-    -- C++-exact order: the close arms run first; the rest has no bearer.
-    released[creature:GetGUID()] = true
+    -- C++-exact order: the close arms run first; then the flag gate.
+    if bit32.band(creature:GetNPCFlags(), UNIT_NPC_FLAG_GOSSIP) == 0 then
+        return
+    end
+    -- C++ me->RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP).
+    creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
+    -- instance->SetData(DATA_CHESTLOOTED, 0) + SummonGameObject: no bearer.
 end
 
 for _, entry in ipairs(HOSTAGE_ENTRIES) do

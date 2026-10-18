@@ -13,7 +13,9 @@
 -- DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): the player talks to
 -- Vael (one-shot gossip option — the C++ UNIT_NPC_FLAG_GOSSIP flag
--- removal is modeled with a per-GUID gate, so the option is never
+-- removal is ported via GetNPCFlags/SetNPCFlags on the Eluna gossip
+-- creature (the old "no flag bridge" claim was stale —
+-- engine/world/lua_objects.go:657/666), so the option is never
 -- offered again after the first select, and C++ Reset does NOT restore
 -- it, so the one-shot survives wipes), then the speech machine runs
 -- while out of combat — 1s SAY_LINE1 (0), 12s SAY_LINE2 (1), 12s
@@ -41,7 +43,8 @@
 -- at or below 15%, Talk(SAY_HALFLIFE=3) once (C++ checks post-damage
 -- HealthBelowPct(15) every UpdateAI tick; the Lua check is a timing
 -- approximation). OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel
--- timers, clear combat state; speechStarted survives Reset C++-exact.
+-- timers, clear combat state; the gossip-flag one-shot survives Reset
+-- C++-exact (C++ never re-adds UNIT_NPC_FLAG_GOSSIP).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no UNIT_STATE bridge — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
@@ -89,8 +92,13 @@ local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
 local GOSSIP_BEGIN_TEXT = "Begin the fight against Vaelastrasz."
 
+-- UNIT_NPC_FLAG_GOSSIP (UnitDefines.h:186) — the engine runs the gossip
+-- hooks only while this flag is set (gossip.go helloCreatureNPC /
+-- select flag gates), so clearing it in BeginSpeech is the C++-exact
+-- one-shot (C++ Reset never re-adds it).
+local UNIT_NPC_FLAG_GOSSIP = 0x00000001
+
 local timers = {}
-local speechStarted = {}
 local hasYelled = {}
 
 local function cancelTimers(guid)
@@ -221,12 +229,12 @@ local function armSpeech(creature, guid)
 end
 
 local function onGossipHello(event, player, creature)
-    -- One-shot: stands in for the C++ UNIT_NPC_FLAG_GOSSIP flag
-    -- removal (no flag bridge on the creature object). Survives Reset
-    -- C++-exact — C++ never re-adds the flag.
-    if not speechStarted[creature:GetGUID()] then
-        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_BEGIN_TEXT, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-    end
+    -- C++ adds the item unconditionally; the engine only fires the hook
+    -- while UNIT_NPC_FLAG_GOSSIP is set (gossip.go helloCreatureNPC flag
+    -- gate), so the option is inherently one-shot. C++ Reset never
+    -- re-adds the flag (boss_vaelastrasz.cpp:88-94) — one-shot survives
+    -- wipes C++-exact.
+    player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_BEGIN_TEXT, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
     player:GossipSendMenu(0, creature)
 end
 
@@ -234,14 +242,12 @@ local function onGossipSelect(event, player, creature, sender, action)
     player:GossipClearMenu()
     player:GossipComplete()
     if sender == GOSSIP_SENDER_MAIN and action == GOSSIP_ACTION_INFO_DEF + 1 then
-        local guid = creature:GetGUID()
-        if not speechStarted[guid] then
-            speechStarted[guid] = true
-            -- C++ BeginSpeech: clears the gossip flag (the gate above),
-            -- records the player (ObjectGuid has no bridge), arms the
-            -- speech machine.
-            armSpeech(creature, guid)
-        end
+        -- C++ BeginSpeech (boss_vaelastrasz.cpp:113-116):
+        -- me->RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) — the
+        -- one-shot; the player GUID record (ObjectGuid) has no bridge.
+        -- Then the speech machine arms.
+        creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
+        armSpeech(creature, creature:GetGUID())
     end
 end
 
