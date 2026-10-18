@@ -38,8 +38,9 @@
 -- DoAction(ACTION_AMBASSADOR_HELLMAW_BANISH) (instance-driven,
 -- unbridged) + the ScheduleEvent inits (EVENT_CORROSIVE_ACID 5-10s,
 -- EVENT_FEAR 25-30s — now the ported timers' init values;
--- EVENT_BERSERK 3min heroic-only stays out — no heroic bridge)
--- — documented-only.
+-- EVENT_BERSERK 3min heroic-only is PORTED below (the "no heroic
+-- bridge" claim was stale — creature:IsHeroic() is bridged,
+-- lua_creature_events.go:203, kelidan precedent).
 -- boss_ambassador_hellmawAI::DoAction INTRO leg —
 -- hellmaw->AI()->DoAction(ACTION_AMBASSADOR_HELLMAW_INTRO) is called
 -- from instance_shadow_labyrinth.cpp:137 (the InstanceMapScript —

@@ -19,7 +19,9 @@
 -- are no-ops and the four guests never enter the world — their hooks only
 -- fire when the creatures exist; the healer guests' AcquireGUID/
 -- SelectGuestTarget need instance GetGuidData, so they target themselves;
--- JustDied's DoRemoveAurasDueToSpellOnPlayers(GARROTE) has no Lua bridge.
+-- JustDied's DoRemoveAurasDueToSpellOnPlayers(GARROTE) is ported (arm
+-- order after Talk(SAY_DEATH), boss_moroes.cpp:181) via GetPlayersInWorld
+-- + mapId/instanceId filter and player:RemoveAura (bridged).
 
 local ENTRY_MOROES = 15687
 local ENTRY_DOROTHEA, ENTRY_RAFE, ENTRY_CATRIONA = 17007, 19872, 19873
@@ -236,6 +238,17 @@ local function moroesDied(event, creature, killer)
     cancelTimers(guid)
     moroesInitState(guid)
     creature:Talk(SAY_DEATH)
+    -- C++-exact arm order: instance->DoRemoveAurasDueToSpellOnPlayers(
+    -- SPELL_GARROTE) (boss_moroes.cpp:181) — the SetBossState/DeSpawnAdds
+    -- legs ride the no-instance/no-summon bridges. No death filter: C++
+    -- iterates every instance player (mapId/instanceId match, maiden
+    -- precedent); player:RemoveAura is bridged (lua_player.go:219).
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:RemoveAura(SPELL_GARROTE)
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_MOROES, 1, moroesEnterCombat)

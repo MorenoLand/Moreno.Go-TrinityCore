@@ -56,11 +56,11 @@
 --    (C++-exact); re-arm 29400 regardless of whether a
 --    target was picked (the C++ ScheduleEvent sits outside
 --    the target if, C++-exact).
--- 2. Hellfire arm — 18s init then 18s (non-heroic; the
---    heroic {17.4s,19.3s} re-arm has no difficulty bridge,
---    unmodeled — thespia precedent): Talk(SAY_CAST_HELLFIRE)
---    + TRIGGERED DoCastVictim(SPELL_HELLFIRE 34659, true)
---    (C++-exact), re-arm 18s (C++-exact).
+-- 2. Hellfire arm — heroic {17.4s,19.3s} via creature:IsHeroic()
+--    (lua_creature_events.go:203), 18s otherwise (C++ JustEngagedWith
+--    / EVENT_HELLFIRE arm, boss_thorngrin_the_tender.cpp:76-81,
+--    133-137): Talk(SAY_CAST_HELLFIRE) + TRIGGERED DoCastVictim(
+--    SPELL_HELLFIRE 34659, true) (C++-exact).
 -- 3. Enrage arm — 12s init then 33s: Talk(EMOTE_ENRAGE) +
 --    non-triggered DoCast(me, SPELL_ENRAGE 34670) (C++-
 --    exact), re-arm 33000 (C++-exact). Melee is engine-
@@ -88,9 +88,9 @@
 -- shim (instance_the_botanica.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_THORNGRIN_
 -- THE_TENDER = 2 bookkeeping in Reset/JustEngagedWith/
--- JustDied skipped); no difficulty bridge — the heroic
--- EVENT_HELLFIRE {17400,19300} init / re-arm schedule
--- unmodeled (thespia precedent); no cast-state bridge —
+-- JustDied skipped); the heroic EVENT_HELLFIRE {17400,19300}
+-- init / re-arm is ported via creature:IsHeroic() (the old
+-- "no difficulty bridge" claim was stale); no cast-state bridge —
 -- the UpdateAI UNIT_STATE_CASTING early-return gates
 -- unmodeled, the arms fire unconditionally (netherspite
 -- precedent); no SpellScript/AuraScript scripts in this
@@ -193,7 +193,7 @@ local function combatTick(creature, guid)
     if st.hellfire <= 1000 then
         creature:Talk(SAY_CAST_HELLFIRE)
         creature:CastSpell(nil, SPELL_HELLFIRE, true)
-        st.hellfire = creature:IsHeroic() and (17400 + math.random(0, 1899)) or 18000
+        st.hellfire = creature:IsHeroic() and (17400 + math.random(0, 1900)) or 18000
     else
         st.hellfire = st.hellfire - 1000
     end
@@ -221,7 +221,7 @@ RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 1, function(_, creature)
     cancelCombatPump(guid)
     combatStates[guid] = {
         sacrifice = 5700,
-        hellfire = creature:IsHeroic() and (17400 + math.random(0, 1899)) or 18000,
+        hellfire = creature:IsHeroic() and (17400 + math.random(0, 1900)) or 18000,
         enrage = 12000,
         phase1 = true,
         phase2 = true,
