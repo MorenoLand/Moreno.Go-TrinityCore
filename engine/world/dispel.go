@@ -926,7 +926,10 @@ func rescaleAuraAmountsByStack(aura *activeAura, oldCount, newCount uint32) {
 		return
 	}
 	rescale := func(v int64) int64 { return v * int64(newCount) / int64(oldCount) }
-	aura.Amount = uint32(rescale(int64(aura.Amount)))
+	// SpellAuraEffects.cpp:537 — the stack rescale is signed
+	// (amount *= GetStackAmount()); sign-extend the wrapped uint32
+	// first so this field tracks the signed Amounts[] leg below.
+	aura.Amount = uint32(rescale(int64(int32(aura.Amount))))
 	for index := range aura.Amounts {
 		if aura.EffectMask&(1<<uint(index)) == 0 {
 			continue

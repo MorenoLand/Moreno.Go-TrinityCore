@@ -8462,11 +8462,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if s.player == nil {
 		return
 	}
-	// Spell::_cast (Spell.cpp:3323): the cast holds the spellmod taking
-	// window for its whole execution; the deferred end mirrors the _cast
-	// tail and failure exits (Spell.cpp:3418, 3519).
-	s.beginSpellModTaking()
-	defer s.endSpellModTaking()
 	// Spell::m_hitMask (Spell.cpp:2603): each Spell object accumulates its
 	// targets' proc hit masks for the FINISH/CAST-phase proc events; the
 	// save/reset/restore mirrors that per-cast lifetime across nested
@@ -8508,6 +8503,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.castMu.Unlock()
 		}()
 	}
+	// Spell::_cast head (Spell.cpp:3323): SetSpellModTakingSpell(spell, true)
+	// arms the taking window on the SAME Spell object that ran the cast bar —
+	// FindCurrentSpellBySpellId (Unit.cpp:3227-3233) hands the periodic-tick
+	// wrapper (SpellAuras.cpp:795-809) that same object, so tick-phase and
+	// cast-phase m_appliedMods registrations share one accumulator
+	// (end-to-end HasSpellModApplied, Player.cpp:21430-21433). The deferred
+	// end mirrors the _cast tail and failure exits (Spell.cpp:3418, 3519).
+	// Casts with no cast state (or a stateless swing/item state) fall back
+	// to a fresh registry, matching the nil-spell C++ path.
+	if completedCast != nil && completedCast.Taking != nil {
+		s.pushSpellModTaking(completedCast.Taking)
+	} else {
+		s.beginSpellModTaking()
+	}
+	defer s.endSpellModTaking()
 	if s.isDeadOrGhost() {
 		canResurrect := false
 		for _, effect := range spell.Effects {
@@ -26337,7 +26347,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
-		dmg := aura.Amount
+		// SpellAuraEffects.cpp:5128 — ignore negative values (can result from
+		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
+		dmg := uint32(max(int32(aura.Amount), 0))
 		var tickSpell wotlk.Spell
 		tickKnown := false
 		if ts.server != nil && ts.server.Data != nil {
@@ -26368,10 +26380,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		if aura.AuraType == 89 {
 			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
-			// ticks deal a percentage of the target's max health
-			// (ceil), not the stored flat amount; the taken leg below
+			// ticks deal a percentage of the target's max health (ceil),
+			// converting the clamped, hook-modified tick damage — C++
+			// converts `damage`, not GetAmount(); the taken leg below
 			// then runs on the converted value, matching C++ order.
-			dmg = uint32(math.Ceil(float64(ts.player.MaxHealth) * float64(aura.Amount) / 100))
+			dmg = uint32(math.Ceil(float64(ts.player.MaxHealth) * float64(dmg) / 100))
 		}
 		// SpellAuraEffects.cpp:5149-5163 — Unbound Plague
 		// (70911/72854/72855/72856) ramps 1.25^_ticksDone on the base amount
@@ -26549,7 +26562,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
-		heal := aura.Amount
+		// SpellAuraEffects.cpp:5373 — ignore negative values (can result from
+		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
+		heal := uint32(max(int32(aura.Amount), 0))
 		var healCaster *session
 		if ts.server != nil {
 			healCaster = ts.server.findSessionByGUID(aura.CasterGUID)
@@ -26836,12 +26851,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if aura.DurationMs == 0 && ts.player.Powers[energizePT] == ts.player.MaxPowers[energizePT] {
 			break
 		}
-		// SpellAuraEffects.cpp:5565 — ignore negative values (can be the
-		// result of applying spellmods to the aura amount). Go has no
-		// tick-time spellmod recalculation of periodic amounts, so
-		// aura.Amount is always non-negative here; the clamp rides the
-		// uint32 storage.
-		energizeAmount := aura.Amount
+		// SpellAuraEffects.cpp:5569 — ignore negative values (can be the result
+		// of applying spellmods to the aura amount):
+		// int32 amount = std::max(GetAmount(), 0). The uint32 store wraps
+		// a negative instead of clamping it, so the clamp is explicit.
+		energizeAmount := uint32(max(int32(aura.Amount), 0))
 		energizeLog := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, energizePT, energizeAmount)
 		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
 		// SendMessageToSet on the aura owner — the target's visibility set,
@@ -26869,7 +26883,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
-		dmg := aura.Amount
+		// SpellAuraEffects.cpp:5248 — ignore negative values (can result from
+		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
+		dmg := uint32(max(int32(aura.Amount), 0))
 		var tickSpell wotlk.Spell
 		tickKnown := false
 		if ts.server != nil && ts.server.Data != nil {
@@ -27065,7 +27081,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.sendPeriodicTickImmune(aura)
 			break
 		}
-		paid, _, ok := ts.server.funnelDonatorCost(ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.Amount)
+		// SpellAuraEffects.cpp:5334 — the donator-cost cap clamps negatives:
+		// uint32 damage = std::max(GetAmount(), 0).
+		paid, _, ok := ts.server.funnelDonatorCost(ts.player.Map, ts.player.InstanceID, aura.CasterGUID, uint32(max(int32(aura.Amount), 0)))
 		if !ok {
 			break
 		}
@@ -27136,7 +27154,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.sendPeriodicTickImmune(aura)
 			break
 		}
-		drain := aura.Amount
+		// SpellAuraEffects.cpp:5459 — ignore negative values (can result from
+		// applying spellmods to aura damage): int32 drainAmount = std::max(GetAmount(), 0).
+		drain := uint32(max(int32(aura.Amount), 0))
 		if tickKnown && tickSpell.ManaCostPct != 0 {
 			// SpellAuraEffects.cpp:5471-5478 — percent-drain spells (Drain
 			// Mana): drain x% of the target's max power, capped at 2*x% of
@@ -27209,8 +27229,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if aura.DurationMs == 0 && ts.player.Powers[obsPowerType] == ts.player.MaxPowers[obsPowerType] {
 			break
 		}
-		// uint32 amount = std::max(GetAmount(), 0) * maxPower / 100.
-		amount := aura.Amount * ts.player.MaxPowers[obsPowerType] / 100
+		// SpellAuraEffects.cpp:5535 — uint32 amount = std::max(GetAmount(), 0) *
+		// target->GetMaxPower(powerType) / 100.
+		amount := uint32(max(int32(aura.Amount), 0)) * ts.player.MaxPowers[obsPowerType] / 100
 		oldObsPower := ts.player.Powers[obsPowerType]
 		ts.adjustSpellPower(context.Background(), aura.TargetGUID, obsPowerType, int64(amount))
 		gained := uint32(0)
@@ -27283,7 +27304,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				burnFixedDamage = burnSpell.AttributesEx4&spellAttr4FixedDamage != 0
 			}
 		}
-		burnDamage := aura.Amount
+		// SpellAuraEffects.cpp:5597 — ignore negative values (can result from
+		// applying spellmods to aura damage): int32 damage = std::max(GetAmount(), 0).
+		burnDamage := uint32(max(int32(aura.Amount), 0))
 		// SpellAuraEffects.cpp:5596-5598 — resilience cuts mana burns at
 		// the spell-crit-damage reduction rate (added in 2.4).
 		if burnPowerType == 0 && int(CombatRatingCritTakenSpell) < len(ts.player.CombatRatings) {
@@ -27970,7 +27993,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
-		dmg := aura.Amount
+		// SpellAuraEffects.cpp:5128 — ignore negative values (can result from
+		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
+		dmg := uint32(max(int32(aura.Amount), 0))
 		var tickSpell wotlk.Spell
 		tickKnown := false
 		if s.server != nil && s.server.Data != nil {
@@ -28003,10 +28028,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		if aura.AuraType == 89 {
 			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
-			// ticks deal a percentage of the target's max health
-			// (ceil), not the stored flat amount; the taken leg below
+			// ticks deal a percentage of the target's max health (ceil),
+			// converting the clamped, hook-modified tick damage — C++
+			// converts `damage`, not GetAmount(); the taken leg below
 			// then runs on the converted value, matching C++ order.
-			dmg = uint32(math.Ceil(float64(target.MaxHealth) * float64(aura.Amount) / 100))
+			dmg = uint32(math.Ceil(float64(target.MaxHealth) * float64(dmg) / 100))
 		}
 		// SpellAuraEffects.cpp:5149-5163 — Unbound Plague
 		// (70911/72854/72855/72856) ramps 1.25^_ticksDone on the base amount
@@ -28259,7 +28285,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.DurationMs == 0 && target.Health == target.MaxHealth {
 			return true
 		}
-		heal := aura.Amount
+		// SpellAuraEffects.cpp:5373 — ignore negative values (can result from
+		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
+		heal := uint32(max(int32(aura.Amount), 0))
 		// SpellAuraEffects.cpp:5376 — sScriptMgr->ModifyPeriodicDamageAurasTick
 		// (AutoBalance_UnitScript::_Modifer_DealDamage): a creature caster's
 		// damage multiplier scales the heal tick too (C++ routes heals
@@ -28561,7 +28589,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			s.sendCreaturePeriodicTickImmune(key, aura)
 			return true
 		}
-		cEnergizeAmount := aura.Amount
+		// SpellAuraEffects.cpp:5569 — ignore negative values (can be the result
+		// of applying spellmods to the aura amount):
+		// int32 amount = std::max(GetAmount(), 0). The uint32 store wraps
+		// a negative instead of clamping it, so the clamp is explicit.
+		cEnergizeAmount := uint32(max(int32(aura.Amount), 0))
 		cEnergizeGained := uint32(0)
 		cEnergizeSkip := true
 		if s.server != nil {
@@ -28617,7 +28649,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		return true
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
-		dmg := aura.Amount
+		// SpellAuraEffects.cpp:5248 — ignore negative values (can result from
+		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
+		dmg := uint32(max(int32(aura.Amount), 0))
 		var tickSpell wotlk.Spell
 		tickKnown := false
 		if s.server != nil && s.server.Data != nil {
@@ -28826,7 +28860,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			s.sendCreaturePeriodicTickImmune(key, aura)
 			return true
 		}
-		paid, _, ok := s.server.funnelDonatorCost(key.Map, key.InstanceID, aura.CasterGUID, aura.Amount)
+		// SpellAuraEffects.cpp:5334 — the donator-cost cap clamps negatives:
+		// uint32 damage = std::max(GetAmount(), 0).
+		paid, _, ok := s.server.funnelDonatorCost(key.Map, key.InstanceID, aura.CasterGUID, uint32(max(int32(aura.Amount), 0)))
 		if !ok {
 			return true
 		}
@@ -28920,7 +28956,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			s.sendCreaturePeriodicTickImmune(key, aura)
 			return true
 		}
-		drain := aura.Amount
+		// SpellAuraEffects.cpp:5459 — ignore negative values (can result from
+		// applying spellmods to aura damage): int32 drainAmount = std::max(GetAmount(), 0).
+		drain := uint32(max(int32(aura.Amount), 0))
 		if tickKnown && tickSpell.ManaCostPct != 0 && s.server != nil {
 			// SpellAuraEffects.cpp:5471-5478 — percent-drain cap: 2*x% of the
 			// caster's max power over x% of the target's.
@@ -29006,8 +29044,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.DurationMs == 0 && curObsPower == maxObsPower {
 			return true
 		}
-		// uint32 amount = std::max(GetAmount(), 0) * maxPower / 100.
-		obsAmount := aura.Amount * maxObsPower / 100
+		// SpellAuraEffects.cpp:5535 — uint32 amount = std::max(GetAmount(), 0) *
+		// target->GetMaxPower(powerType) / 100.
+		obsAmount := uint32(max(int32(aura.Amount), 0)) * maxObsPower / 100
 		gained := uint32(0)
 		if s.server != nil {
 			s.server.motionMu.Lock()
@@ -29083,7 +29122,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			return true
 		}
 		// int32 drainedAmount = -target->ModifyPower(powerType, -damage).
-		burnDrain := aura.Amount
+		// SpellAuraEffects.cpp:5597 — ignore negative values (can result from
+		// applying spellmods to aura damage): int32 damage = std::max(GetAmount(), 0).
+		burnDrain := uint32(max(int32(aura.Amount), 0))
 		drained := uint32(0)
 		if s.server != nil {
 			s.server.motionMu.Lock()
