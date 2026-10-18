@@ -57,9 +57,10 @@
 -- creature lookup, no bridge); DamageTaken HealthBelowPct(50) ->
 -- cross-AI GetData(DATA_COLOSSUS_PHASE) + DoAction
 -- (ACTION_RETURN_TO_COLOSSUS) (GetData/DoAction bridges absent);
--- EnterEvadeMode DespawnOrUnsummon (creature:Despawn IS bridged —
--- lua_objects.go:1126, so the old "no despawn bridge" claim is
--- stale); SpellHitTarget(54878 Merge) — event 15 IS live
+-- EnterEvadeMode DespawnOrUnsummon — now bridgeable via
+-- creature:Despawn (lua_creature_events.go — bridged this tick for
+-- the vashj/morogrim/depth-charge nil-call time-bombs; the old
+-- "no despawn bridge" claim is stale).
 -- (boss_ai.go:1904), but the payload is cross-AI DoAction
 -- (ACTION_UNFREEZE_COLOSSUS) + self-despawn (DoAction bridge
 -- absent); Reset's AddAura(Mojo Volley 54849, self) — creature:
@@ -135,6 +136,10 @@ end
 
 local function colossusLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode (boss_drakkari_colossus.cpp:328-331):
+    -- me->DespawnOrUnsummon() — the colossus leaves the world and
+    -- respawns on its normal delay via creature:Despawn.
+    creature:Despawn()
 end
 
 local function colossusDied(event, creature, killer)

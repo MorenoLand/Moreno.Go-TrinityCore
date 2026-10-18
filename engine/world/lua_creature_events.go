@@ -3,8 +3,10 @@ package world
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // luaMotionCreature builds a scripting creature object from a live motion
@@ -197,6 +199,54 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: health})
+		return nil, nil
+	}
+	// Despawn is Lua Creature::DespawnOrUnsummon() (Creature.cpp): the
+	// creature leaves the world immediately — motion removed, a
+	// SMSG_DESTROY_OBJECT broadcast (the despawnAtEvade precedent,
+	// boss_ai.go), and Eluna CREATURE_EVENT_ON_REMOVE (37) fired
+	// (Creature::RemoveFromWorld, Creature.cpp:314). DB-spawned
+	// creatures respawn on their normal spawntimesecs delay through the
+	// standard death-respawn path (the curhealth=0 row keeps the spawn
+	// sweep from recreating them early); summoned creatures have no
+	// creature row and leave no respawn record, so they are gone
+	// permanently — matching C++ DespawnOrUnsummon on a summon.
+	methods["Despawn"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		motions := s.motionMapLocked(motion.Map, motion.InstanceID)
+		m, ok := motions[motion.GUID]
+		if !ok {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		delete(motions, motion.GUID)
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		maxHealth := m.MaxHealth
+		x, y, z := m.X, m.Y, m.Z
+		s.motionMu.Unlock()
+		destroyBuf := protocol.NewBuffer(9)
+		destroyBuf.WriteU64(guid)
+		destroyBuf.WriteU8(0)
+		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
+		if maxHealth == 0 {
+			maxHealth = 1
+		}
+		dbGUID := uint32(guid & 0x00FFFFFF)
+		dbSpawned := false
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			var one int
+			dbSpawned = s.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM creature WHERE guid = ?", dbGUID).Scan(&one) == nil
+		}
+		if !dbSpawned {
+			return nil, nil
+		}
+		if instanceID == 0 {
+			_, _ = s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", dbGUID)
+			s.scheduleCreatureRespawn(ctx, dbGUID, maxHealth, time.Now())
+		} else {
+			s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, MaxHealth: maxHealth}, maxHealth, time.Now())
+		}
 		return nil, nil
 	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the

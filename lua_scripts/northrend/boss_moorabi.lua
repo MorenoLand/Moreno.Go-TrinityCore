@@ -44,8 +44,9 @@
 -- no phase bridge (SetPhase/IsInPhase zero hits on the Lua surface)
 -- and no faithful pre-pull Reset trigger, so the pre-pull summon
 -- cast is not emulated.
--- EnterEvadeMode _DespawnAtEvade — no despawn bridge (terestian
--- precedent).
+-- EnterEvadeMode _DespawnAtEvade — the despawn half now rides
+-- creature:Despawn (bridged this tick); the instance
+-- SetBossState(FAIL) half rides the no-instance bridge.
 -- GetData(DATA_LESS_RABI) has no cross-AI bridge (zero hits);
 -- the SpellHit(55098) latch now lands via event 15 (see transformTick).
 -- achievement_less_rabi (AchievementCriteriaScript, CAST_AI cross-AI
@@ -180,6 +181,10 @@ end
 local function moorabiLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
     transformed[creature:GetGUID()] = nil
+    -- C++ EnterEvadeMode (boss_moorabi.cpp:101-104): _DespawnAtEvade()
+    -- — the despawn half is creature:Despawn; the instance
+    -- SetBossState(FAIL) half rides the no-instance bridge.
+    creature:Despawn()
 end
 
 local function moorabiTargetDied(event, creature, victim)
