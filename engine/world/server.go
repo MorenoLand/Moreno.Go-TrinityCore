@@ -683,6 +683,16 @@ type activeCastState struct {
 	// set, so self-inflicted side effects (e.g. a self-stun) cannot cancel
 	// the executing cast.
 	Executing bool
+	// Taking is the spellmod taking context for the generic (cast-bar)
+	// slot — the Go model of the C++ Spell's m_appliedMods registry for a
+	// non-channeled in-progress cast. Aura::UpdateOwner
+	// (SpellAuras.cpp:795-809) installs the taking wrapper from
+	// FindCurrentSpellBySpellId (Unit.cpp:3227-3233), which scans all
+	// current-spell slots, so a periodic aura ticking while its spell id
+	// is mid-cast folds spellmods under the in-progress cast (see
+	// takingContextForActiveSpell). Created with the cast state so
+	// registrations accumulate across ticks like the channel's.
+	Taking *spellModTakingContext
 }
 
 func (s *Server) playerSessionForGUID(guid uint64) *session {

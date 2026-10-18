@@ -3598,6 +3598,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			InterruptFlg:         spell.InterruptFlags,
 			Target:               target,
 			SelectionOrientation: s.player.Orientation,
+			Taking:               &spellModTakingContext{applied: make(map[*activeAura]struct{})},
 		}
 		castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 			s.castMu.Lock()
@@ -9317,9 +9318,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	chainJumpIndex := make(map[uint64]int)
 	reflectedJumpIndexes := make([]int, 0, 1)
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
-		if jumps, isChainHeal := chainSpellJumps(s, spell); jumps > 0 {
+		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
 			jump := 0
-			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
+			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask) {
 				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
 					entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
 					if missInfo == protocol.SpellMissReflect {
@@ -15747,8 +15748,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// A missed jump takes no miss entry on this path (no arrival-time miss
 	// model for triggered casts).
 	chainJumpGUIDs := []uint64{}
-	if jumps, isChainHeal := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
-		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal)
+	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
+		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask)
 		hitTargets = append(hitTargets, chainJumpGUIDs...)
 	}
 	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) runs on triggered
@@ -26248,7 +26249,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	// call site, so the push/pop cannot deadlock.
 	if ts.server != nil && aura != nil {
 		if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
-			if taking := casterSess.channelTakingForSpell(aura.SpellID); taking != nil {
+			if taking := casterSess.takingContextForActiveSpell(aura.SpellID); taking != nil {
 				casterSess.pushSpellModTaking(taking)
 				defer casterSess.endSpellModTaking()
 			}
@@ -26605,36 +26606,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if aura.AuraType == 20 {
 			heal = uint32(float32(ts.player.MaxHealth) * float32(heal) / 100.0)
 		}
-		// SpellAuraEffects.cpp:5384 — the per-tick SpellHealingBonusDone (DOT,
-		// stack-scaled: Unit.cpp:7595 factorMod = penalty * stack) runs on the
-		// tick amount before the taken leg. Gated off persistent-area auras:
-		// their done leg is baked into the stored amount at spawn (see
-		// spawnPersistentAreaAura), so a per-tick pass would double-count.
-		healEffIndex := 0
-		for i, eff := range healSpell.Effects {
-			if eff.Aura == aura.AuraType {
-				healEffIndex = i
-				break
-			}
-		}
-		stack := uint32(aura.StackCount)
-		if stack == 0 {
-			stack = 1
-		}
-		if healCaster != nil && healKnown && !aura.PersistentAreaAura {
-			heal = healCaster.spellHealingBonusDone(healSpell, heal, ts, healEffIndex, true, stack)
-		}
-		// Pet casters have no session, so the block above never runs for
-		// them — but C++ runs the per-tick SpellHealingBonusDone (DOT) on
-		// the pet unit too (SpellAuraEffects.cpp:5384). The pet done legs
-		// ride the live pet motion; the spellmod tail folds on the owner's
-		// session (GetSpellModOwner). An offline owner passes the legs
-		// through, matching the unresolved-caster convention on this path.
-		if healCaster == nil && healKnown && !aura.PersistentAreaAura && ts.server != nil {
-			if motion := ts.findCreatureMotion(aura.CasterGUID); motion != nil {
-				heal = petTickHealDoneLegs(ts.server.findSessionByGUID(motion.OwnerGUID), context.Background(), motion, healSpell, healEffIndex, ts.playerGUID, heal, stack)
-			}
-		}
+		// HandlePeriodicHealAurasTick (SpellAuraEffects.cpp:5353-5390): the
+		// per-tick SpellHealingBonusDone (DOT) re-run at :5383 is gated on
+		// DYNOBJ_AURA_TYPE — unit-aura HoTs take the done leg once, baked
+		// into the stored amount at apply (AuraEffect::CalculateAmount
+		// :506-518; Go: the auraEffectParams tickBonus bake, and
+		// petPeriodicApplyDoneLegs for pet casters). Re-running it here
+		// double-counted the spellpower flat, and wrongly gave aura-20 a
+		// done leg C++ never applies (20 is in neither the apply switch
+		// nor the tick arm). Persistent-area auras likewise bake at spawn
+		// (spawnPersistentAreaAura), so no per-tick done leg runs on this
+		// path; the taken leg below is the per-tick arm.
 		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, Nourish,
 		// MOD_HOT_PCT and MOD_HEALING_RECEIVED run on the tick before the
@@ -27721,24 +27703,31 @@ func (s *session) channelTargetForSpell(spellID uint32) uint64 {
 	return 0
 }
 
-// channelTakingForSpell mirrors the Aura::UpdateOwner channeled arm's
-// taking-spell selection (SpellAuras.cpp:790-800): the caster's current
-// spell with the aura's own spell id — i.e. the live channel of that
-// spell — becomes the spellmod taking spell for the aura's update. The
-// returned context is the channel's own (created with the channel, so
-// registrations accumulate across ticks like m_appliedMods on the C++
-// Spell); callers push it around the tick with pushSpellModTaking and
-// pop it after. A nil return means nil-spell semantics, exactly like
-// the C++ modSpell == nullptr path. Creature casters resolve through
-// the caster's own session here; the C++ GetSpellModOwner indirection
-// (pet/totem -> owner player channeling the same spell) is unbridged —
-// an owner never channels the pet's aura spell in practice.
-func (s *session) channelTakingForSpell(spellID uint32) *spellModTakingContext {
+// takingContextForActiveSpell is the Unit::FindCurrentSpellBySpellId twin
+// (Unit.cpp:3227-3233) for the Aura::UpdateOwner taking wrapper
+// (SpellAuras.cpp:795-809): the aura tick folds spellmods under the live
+// Spell* carrying the aura's spell id, scanning the current-spell slots in
+// numeric order (Unit.h:570-579) — the generic cast (activeCast,
+// !Cancelled) then the channel (activeChannel, !Stopped).
+// CURRENT_MELEE_SPELL / CURRENT_AUTOREPEAT_SPELL have no Go taking state
+// and no realistic periodic-aura spell-id collision (documented no-op).
+// The returned context is the slot's own (created with the cast/channel,
+// so registrations accumulate across ticks like m_appliedMods on the C++
+// Spell); callers push it around the tick with pushSpellModTaking and pop
+// it after. A nil return means nil-spell semantics, exactly like the C++
+// modSpell == nullptr path. Creature casters resolve through the caster's
+// own session here; the C++ GetSpellModOwner indirection (pet/totem ->
+// owner player casting the same spell) is unbridged — an owner never casts
+// the pet's aura spell in practice.
+func (s *session) takingContextForActiveSpell(spellID uint32) *spellModTakingContext {
 	if s == nil {
 		return nil
 	}
 	s.castMu.Lock()
 	defer s.castMu.Unlock()
+	if cast := s.activeCast; cast != nil && !cast.Cancelled && cast.SpellID == spellID {
+		return cast.Taking
+	}
 	if channel := s.activeChannel; channel != nil && !channel.Stopped && channel.SpellID == spellID {
 		return channel.Taking
 	}
@@ -27942,11 +27931,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	// arm — same window as the player tick above. The caster resolves
 	// through its own session; a creature caster's GetSpellModOwner
 	// indirection (pet/totem -> owner player) is unbridged (see
-	// channelTakingForSpell). No auraMu/castMu is held on entry at any
+	// takingContextForActiveSpell). No auraMu/castMu is held on entry at any
 	// call site, so the push/pop cannot deadlock.
 	if s.server != nil && aura != nil {
 		if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
-			if taking := casterSess.channelTakingForSpell(aura.SpellID); taking != nil {
+			if taking := casterSess.takingContextForActiveSpell(aura.SpellID); taking != nil {
 				casterSess.pushSpellModTaking(taking)
 				defer casterSess.endSpellModTaking()
 			}
@@ -28286,37 +28275,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.AuraType == 20 {
 			heal = uint32(float32(target.MaxHealth) * float32(heal) / 100.0)
 		}
-		// SpellAuraEffects.cpp:5384 — the per-tick SpellHealingBonusDone (DOT,
-		// stack-scaled: Unit.cpp:7595 factorMod = penalty * stack) runs on the
-		// tick amount before the taken leg, on creature victims too — the
-		// earlier creature path skipped it entirely. Gated off
-		// persistent-area auras: their done leg is baked into the stored
-		// amount at spawn, so a per-tick pass would double-count.
-		healEffIndex := 0
-		for i, eff := range tickSpell.Effects {
-			if eff.Aura == aura.AuraType {
-				healEffIndex = i
-				break
-			}
-		}
-		stack := uint32(aura.StackCount)
-		if stack == 0 {
-			stack = 1
-		}
-		if tickCaster != nil && tickKnown && !aura.PersistentAreaAura {
-			heal = tickCaster.spellHealingBonusDoneCreatureVictim(ctx, tickSpell, heal, key, aura.TargetGUID, target.Health, target.MaxHealth, healEffIndex, true, stack)
-		}
-		// Pet casters have no session, so the block above never runs for
-		// them — but C++ runs the per-tick SpellHealingBonusDone (DOT) on
-		// the pet unit too (SpellAuraEffects.cpp:5384). The pet done legs
-		// ride the live pet motion; the spellmod tail folds on the owner's
-		// session (GetSpellModOwner). An offline owner passes the legs
-		// through, matching the unresolved-caster convention on this path.
-		if tickCaster == nil && tickKnown && !aura.PersistentAreaAura && s.server != nil {
-			if motion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); motion != nil {
-				heal = petTickHealDoneLegs(s.server.findSessionByGUID(motion.OwnerGUID), ctx, motion, tickSpell, healEffIndex, aura.TargetGUID, heal, stack)
-			}
-		}
+		// HandlePeriodicHealAurasTick (SpellAuraEffects.cpp:5353-5390): the
+		// per-tick SpellHealingBonusDone (DOT) re-run at :5383 is gated on
+		// DYNOBJ_AURA_TYPE — unit-aura HoTs take the done leg once, baked
+		// into the stored amount at apply (AuraEffect::CalculateAmount
+		// :506-518), on creature victims too. Re-running it here
+		// double-counted the spellpower flat, and wrongly gave aura-20 a
+		// done leg C++ never applies. The taken leg below is the per-tick
+		// arm.
 		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, the
 		// Nourish 1.2x leg, MOD_HOT_PCT and MOD_HEALING_RECEIVED run on
@@ -31757,7 +31723,7 @@ type activeChannelState struct {
 	// update, so periodic ticks of the channeled aura fold spellmods
 	// under it; the context lives on the channel so registrations
 	// accumulate across the channel's ticks, and each tick pushes it
-	// (see channelTakingForSpell). Charge consumption at channel end
+	// (see takingContextForActiveSpell). Charge consumption at channel end
 	// has no Go model — the tree never drops charges from a taking
 	// context — so this only gates the exhausted-charge skip and the
 	// HasSpellModApplied PCT legs.

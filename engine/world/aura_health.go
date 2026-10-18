@@ -86,15 +86,28 @@ func (s *session) auraTouchesHealth(aura *activeAura) bool {
 	return false
 }
 
-// effectiveMaxHealth mirrors Unit::UpdateMaxHealth for UNIT_MOD_HEALTH
-// (Unit.cpp:9315): (base*basePct + totalValue) * totalPct, floored at 1 like
-// Unit::SetMaxHealth (Unit.cpp:9588-9591).
+// staminaHealthBonus mirrors Player::GetHealthBonusFromStamina
+// (StatSystem.cpp:286-293): min(20,stam) + (stam-20)*10.
+func staminaHealthBonus(totalStam uint32) uint32 {
+	if totalStam <= 20 {
+		return totalStam
+	}
+	return 20 + (totalStam-20)*10
+}
+
+// effectiveMaxHealth mirrors Player::UpdateMaxHealth (StatSystem.cpp:304-309):
+// ((BASE_VALUE + CreateHealth) * BASE_PCT + TOTAL_VALUE + staminaBonus) *
+// TOTAL_PCT, floored at 1 like Unit::SetMaxHealth (Unit.cpp:9588-9591).
+// The 282 BASE_PCT multiply runs before the stamina bonus is added, so the
+// stamina leg is excluded from the baseMult multiply and re-added after,
+// with the flat/TOTAL_VALUE leg.
 func (s *session) effectiveMaxHealth() uint32 {
 	if s == nil || s.player == nil {
 		return 1
 	}
 	flat, baseMult, totalMult := s.auraHealthMods(0)
-	v := (float64(s.player.MaxHealth)*float64(baseMult) + float64(flat)) * float64(totalMult)
+	stamBonus := staminaHealthBonus(s.player.Stats[2])
+	v := (float64(s.player.MaxHealth-stamBonus)*float64(baseMult) + float64(flat) + float64(stamBonus)) * float64(totalMult)
 	if v < 1 {
 		v = 1
 	}
@@ -108,7 +121,8 @@ func (s *session) effectiveMaxHealthExcluding(spellID uint32) uint32 {
 		return 1
 	}
 	flat, baseMult, totalMult := s.auraHealthMods(spellID)
-	v := (float64(s.player.MaxHealth)*float64(baseMult) + float64(flat)) * float64(totalMult)
+	stamBonus := staminaHealthBonus(s.player.Stats[2])
+	v := (float64(s.player.MaxHealth-stamBonus)*float64(baseMult) + float64(flat) + float64(stamBonus)) * float64(totalMult)
 	if v < 1 {
 		v = 1
 	}

@@ -15,6 +15,18 @@ const (
 	spellAttr4AreaTargetChain uint32 = 0x00040000 // SPELL_ATTR4_AREA_TARGET_CHAIN (SharedDefines.h:578)
 
 	spellImplicitTargetChainHealAlly uint32 = 45 // TARGET_UNIT_TARGET_CHAINHEAL_ALLY (SharedDefines.h:1481)
+
+	// SpellTargetCheckTypes (SpellInfo.h:116-123) — the per-implicit-target
+	// selection predicate Spell::SearchChainTargets hands to
+	// WorldObjectSpellTargetCheck (Spell.cpp:1891 -> 8316).
+	targetCheckDefault   uint32 = 0 // TARGET_CHECK_DEFAULT
+	targetCheckEntry     uint32 = 1 // TARGET_CHECK_ENTRY
+	targetCheckEnemy     uint32 = 2 // TARGET_CHECK_ENEMY
+	targetCheckAlly      uint32 = 3 // TARGET_CHECK_ALLY
+	targetCheckParty     uint32 = 4 // TARGET_CHECK_PARTY
+	targetCheckRaid      uint32 = 5 // TARGET_CHECK_RAID
+	targetCheckRaidClass uint32 = 6 // TARGET_CHECK_RAID_CLASS
+	targetCheckPassenger uint32 = 7 // TARGET_CHECK_PASSENGER
 )
 
 // chainSelectionEligibleTarget mirrors the SelectImplicitChainTargets call
@@ -36,19 +48,48 @@ func chainSelectionEligibleTarget(target uint32) bool {
 	return false
 }
 
-// chainSpellJumps returns the number of additional chain jumps for a spell and
-// whether it selects allies (Chain Heal). Mirrors the maxTargets > 1 gate in
+// chainCheckType maps a chain-eligible implicit target to its
+// SpellImplicitTargetInfo::GetCheckType (the SelectionCheckType column of
+// the SpellInfo.cpp:218-330 table) — the predicate
+// WorldObjectSpellTargetCheck::operator() applies per candidate
+// (Spell.cpp:8316-8384).
+func chainCheckType(target uint32) uint32 {
+	switch target {
+	case 2, 6: // TARGET_UNIT_NEARBY_ENEMY, TARGET_UNIT_TARGET_ENEMY
+		return targetCheckEnemy
+	case 4, 21, 45: // TARGET_UNIT_NEARBY_ALLY, TARGET_UNIT_TARGET_ALLY, TARGET_UNIT_TARGET_CHAINHEAL_ALLY
+		return targetCheckAlly
+	case 3, 35: // TARGET_UNIT_NEARBY_PARTY, TARGET_UNIT_TARGET_PARTY
+		return targetCheckParty
+	case 57, 58: // TARGET_UNIT_TARGET_RAID, TARGET_UNIT_NEARBY_RAID
+		return targetCheckRaid
+	case 38: // TARGET_UNIT_NEARBY_ENTRY
+		return targetCheckEntry
+	case 95: // TARGET_UNIT_TARGET_PASSENGER
+		return targetCheckPassenger
+	default: // 25 TARGET_UNIT_TARGET_ANY, 90 TARGET_UNIT_TARGET_MINIPET
+		return targetCheckDefault
+	}
+}
+
+// chainSpellJumps returns the number of additional chain jumps for a spell,
+// whether it selects allies (Chain Heal), the winning effect's target check
+// type, and the winning effect's mask (for the ImplicitTargetConditions
+// load). Mirrors the maxTargets > 1 gate in
 // Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624): the player's
 // SPELLMOD_JUMP_TARGETS modifiers fold into ChainTarget BEFORE the >1 gate
 // (C++ applies ApplySpellMod to maxTargets at 1585-1588, then checks
 // maxTargets > 1 at 1593), so jumps = moddedChainTarget - 1. Creature casters
 // have no spell-mod owner, so the fold is a pass-through when s carries no
 // mods. Go shares one hit-target list across effects, so the largest modded
-// ChainTarget among chain-eligible effects wins. Effects whose ChainTarget > 1
+// ChainTarget among chain-eligible effects wins, and its check type routes
+// the candidate predicate (C++ runs the search per effect with
+// targetType.GetCheckType(), Spell.cpp:1602). Effects whose ChainTarget > 1
 // rides a non-eligible implicit target (cone, area, caster-object,
 // caster-dest) contribute nothing, matching the C++ call sites above.
-func chainSpellJumps(s *session, spell wotlk.Spell) (jumps uint32, isChainHeal bool) {
-	for _, eff := range spell.Effects {
+func chainSpellJumps(s *session, spell wotlk.Spell) (jumps uint32, isChainHeal bool, checkType uint32, effectMask uint32) {
+	var winTarget uint32
+	for i, eff := range spell.Effects {
 		if chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB) {
 			// Spell.cpp:1585-1593: the mod folds into maxTargets before the
 			// >1 gate, so it runs even when the raw ChainTarget is 0 or 1.
@@ -58,13 +99,18 @@ func chainSpellJumps(s *session, spell wotlk.Spell) (jumps uint32, isChainHeal b
 			}
 			if moddedJumps := maxTargets - 1; moddedJumps > int32(jumps) && moddedJumps > 0 {
 				jumps = uint32(moddedJumps)
+				effectMask = 1 << uint(i)
+				winTarget = eff.ImplicitTargetA
+				if !chainSelectionEligibleTarget(winTarget) {
+					winTarget = eff.ImplicitTargetB
+				}
 			}
 		}
 		if eff.ImplicitTargetA == spellImplicitTargetChainHealAlly || eff.ImplicitTargetB == spellImplicitTargetChainHealAlly {
 			isChainHeal = true
 		}
 	}
-	return jumps, isChainHeal
+	return jumps, isChainHeal, chainCheckType(winTarget), effectMask
 }
 
 // chainScaledAmount applies the per-jump falloff of a chain spell:
@@ -92,7 +138,7 @@ type chainCandidate struct {
 // jump radius; other chains pick the closest unit. Every jump requires line of
 // sight (LINEOFSIGHT_ALL_CHECKS). Non-bouncing chains only jump to targets in
 // front of the caster (HasInArc(M_PI)).
-func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell, primaryTargetGUID uint64, jumps uint32, isChainHeal bool) []uint64 {
+func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell, spellID uint32, primaryTargetGUID uint64, jumps uint32, isChainHeal bool, checkType uint32, effectMask uint32) []uint64 {
 	if s == nil || s.player == nil || s.server == nil || jumps == 0 {
 		return nil
 	}
@@ -121,7 +167,9 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 	if isBouncingFar {
 		searchRadius *= float32(jumps)
 	}
-	candidates := s.chainCandidates(ctx, spell, primary, searchRadius, isChainHeal, primaryTargetGUID)
+	condRows := s.loadImplicitTargetConditions(ctx, spellID, effectMask)
+	scope := s.friendlyRefererScope(s.playerGUID)
+	candidates := s.chainCandidates(ctx, spell, primary, searchRadius, isChainHeal, primaryTargetGUID, checkType, condRows, scope)
 	if !isBouncingFar {
 		// Spell.cpp:1931-1940: non-bouncing chains only jump in front of the caster
 		kept := candidates[:0]
@@ -172,15 +220,18 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 
 // chainCandidates collects units around the primary target within radius that
 // pass the chain spell's target check (WorldObjectSpellAreaTargetCheck,
-// Spell.cpp:8409, via WorldObjectSpellTargetCheck::operator(), Spell.cpp:8316):
-// TARGET_CHECK_ENEMY ~= Unit::IsValidAttackTarget, TARGET_CHECK_ALLY ~=
-// Unit::IsValidAssistTarget. Range uses the C++ cylinder test
-// (IsWithinDist2d + |dz| <= range).
-func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primary combatTarget, radius float32, isChainHeal bool, excludeGUID uint64) []chainCandidate {
+// Spell.cpp:8409, via WorldObjectSpellTargetCheck::operator(), Spell.cpp:8316).
+// The check type routes the per-candidate predicate: TARGET_CHECK_ENEMY ~=
+// Unit::IsValidAttackTarget, TARGET_CHECK_ALLY ~= Unit::IsValidAssistTarget,
+// PARTY/RAID add the caster-referer group test (Unit::IsInPartyWith /
+// IsInRaidWith, Unit.cpp:12126/12155), ENTRY runs only the effect's entry
+// conditions, DEFAULT/PASSENGER apply no faction filter. Range uses the C++
+// cylinder test (IsWithinDist2d + |dz| <= range).
+func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primary combatTarget, radius float32, isChainHeal bool, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
-	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool) {
+	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool, isPlayer bool, entry, spawnLow, faction uint32, ownerGUID uint64) {
 		if guid == 0 || guid == excludeGUID {
 			return
 		}
@@ -190,11 +241,48 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, isChainHeal) {
 			return
 		}
-		// WorldObjectSpellTargetCheck (Spell.cpp:8324/8333/8344/8354): the
-		// ENEMY/ALLY/PARTY/RAID check types all reject totems, so chain
-		// selection never jumps to one (same convention as the area/cone
-		// totem rejection in spells.go).
-		if s.server.isTotemGUID(guid) {
+		// Spell.cpp:8333/8344/8354/8365: only the ENEMY/ALLY/PARTY/RAID
+		// check types reject totems; DEFAULT/ENTRY/PASSENGER do not.
+		switch checkType {
+		case targetCheckEnemy, targetCheckAlly, targetCheckParty, targetCheckRaid:
+			if s.server.isTotemGUID(guid) {
+				return
+			}
+		}
+		cand := friendlyCandidate{guid: guid, isPlayer: isPlayer, ownerGUID: ownerGUID, entry: entry, faction: faction}
+		switch checkType {
+		case targetCheckEnemy:
+			// TARGET_CHECK_ENEMY: Unit::IsValidAttackTarget (Spell.cpp:8336).
+			if allyToCaster {
+				return
+			}
+		case targetCheckAlly:
+			// TARGET_CHECK_ALLY: Unit::IsValidAssistTarget (Spell.cpp:8347).
+			if !allyToCaster {
+				return
+			}
+		case targetCheckParty:
+			// TARGET_CHECK_PARTY: assist target in the caster's party
+			// (Spell.cpp:8351-8359; Unit::IsInPartyWith, Unit.cpp:12126).
+			if !allyToCaster || !scope.inParty(cand) {
+				return
+			}
+		case targetCheckRaid:
+			// TARGET_CHECK_RAID: assist target in the caster's raid
+			// (Spell.cpp:8361-8374; Unit::IsInRaidWith, Unit.cpp:12155).
+			if !allyToCaster || !scope.inRaid(cand) {
+				return
+			}
+		case targetCheckEntry:
+			// TARGET_CHECK_ENTRY has no faction arm (Spell.cpp:8316: no
+			// case) — CheckTarget plus the effect's entry conditions only.
+		default:
+			// TARGET_CHECK_DEFAULT / TARGET_CHECK_PASSENGER: no faction
+			// filter (Spell.cpp:8316: default case).
+		}
+		// Spell.cpp:8381-8384: the effect's ImplicitTargetConditions gate
+		// every check type.
+		if !implicitEntryConditionsMet(condRows, isPlayer, entry, spawnLow) {
 			return
 		}
 		dx, dy := float64(x-primary.X), float64(y-primary.Y)
@@ -202,9 +290,6 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 			return
 		}
 		if _, ok := seen[guid]; ok {
-			return
-		}
-		if isChainHeal != allyToCaster {
 			return
 		}
 		seen[guid] = struct{}{}
@@ -234,14 +319,18 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 			continue
 		}
 		motionGUIDs[motion.GUID] = struct{}{}
-		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction))
+		motionOwner := motion.OwnerGUID
+		if motionOwner == 0 {
+			motionOwner = motion.CharmOwnerGUID
+		}
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction), false, motion.Entry, 0, motion.Faction, motionOwner)
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
 			continue
 		}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, targetSession.playerAlliance() == s.playerAlliance())
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, targetSession.playerAlliance() == s.playerAlliance(), true, 0, 0, 0, 0)
 	}
 	s.server.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
@@ -256,7 +345,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						st := s.server.loadCreatureStats(ctx, uint32(entry))
-						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)))
+						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)), false, uint32(entry), uint32(low), uint32(faction), 0)
 					}
 				}
 			}

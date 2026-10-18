@@ -151,7 +151,13 @@ func (s *session) effectiveResistances(base [schoolCount]uint32) [schoolCount]ui
 	f := s.auraResistanceMods(0)
 	out := base
 	for x := 1; x < schoolCount; x++ {
-		v := (float64(f.exclusive[x])*float64(f.basePct[x]) + float64(f.flat[x])) * float64(f.totalPct[x])
+		// Player::UpdateResistances (StatSystem.cpp:245-251) = GetTotalAuraModValue
+		// (Unit.cpp:9437-9446): (BASE_VALUE*BASE_PCT + TOTAL_VALUE)*TOTAL_PCT.
+		// BASE_VALUE is the item resists (Player.cpp:7734-7749) plus the 143
+		// exclusive winner (SpellAuraEffects.cpp:3239-3246); the item leg was
+		// dropped before. Enchant resists ride TOTAL_VALUE (Player.cpp:14020)
+		// with the aura flats.
+		v := (float64(int64(base[x])+int64(f.exclusive[x]))*float64(f.basePct[x]) + float64(f.flat[x])) * float64(f.totalPct[x])
 		if v < 0 {
 			v = 0
 		}

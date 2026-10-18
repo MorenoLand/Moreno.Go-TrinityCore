@@ -2322,14 +2322,16 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	// Aura stat modifiers (aura_stats.go): the flat 29 and pct 80/137
 	// folds apply on top of the item totals before the derived stats,
 	// like Unit::UpdateStats (StatSystem.cpp) feeding UpdateMaxHealth /
-	// UpdateArmor / UpdateAttackPowerAndDamage: (base*basePct + total) *
-	// totalPct. At this point state.Stats holds base + items only (aura
-	// residue is impossible: every entry path rebuilds from BaseStats),
-	// so items separate cleanly.
+	// Unit::GetTotalStatValue (Unit.cpp:9424-9433):
+	// ((BASE_VALUE + CreateStat) * BASE_PCT + TOTAL_VALUE) * TOTAL_PCT.
+	// Item stats ride BASE_VALUE (Player.cpp:7542-7564), so the aura-80
+	// basePct multiply covers them too, not just the create stat. At this
+	// point state.Stats holds base + items only (aura residue is
+	// impossible: every entry path rebuilds from BaseStats).
 	statFlat, statBaseMult, statTotalMult := s.auraStatMods(0)
 	for i := 0; i < 5; i++ {
 		items := int64(state.Stats[i]) - int64(state.BaseStats[i])
-		v := int64(float64(int64(state.BaseStats[i]))*float64(statBaseMult[i])) + items + int64(statFlat[i])
+		v := int64(float64(int64(state.BaseStats[i])+items)*float64(statBaseMult[i])) + int64(statFlat[i])
 		v = int64(float64(v) * float64(statTotalMult[i]))
 		if v < 0 {
 			v = 0
@@ -2359,7 +2361,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	totalStr := state.Stats[0]
 	totalAgi := state.Stats[1]
 
-	state.MaxHealth = uint32(baseHealth) + (totalSta * 10) + state.ItemHealthBonus
+	state.MaxHealth = uint32(baseHealth) + staminaHealthBonus(totalSta) + state.ItemHealthBonus
 	totalMana := uint32(baseMana) + (totalInte * 15) + state.ItemManaBonus
 	if state.Class == 1 { // Warrior: rage max 1000
 		state.MaxPowers[1] = 1000
