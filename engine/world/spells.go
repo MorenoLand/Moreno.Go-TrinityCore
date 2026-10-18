@@ -32973,6 +32973,7 @@ func (s *session) tradeItemTargetCast(target protocol.SpellTargetData) bool {
 // jewelcrafting / inscription test, Spell.cpp:7062-7063/7087-7088).
 type itemStoreTemplateInfo struct {
 	Stackable               uint32
+	MaxCount                int32
 	LimitCategory           uint32
 	ItemLevel               uint32
 	RequiredLevel           uint32
@@ -33013,6 +33014,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		return itemStoreTemplateInfo{}, false
 	}
 	var stackable, limitCategory, itemLevel, requiredLevel uint32
+	var maxCount int32
 	var class, subclass, quality, disenchantID, flags, requiredSkillRank, maxDurability uint32
 	var delay uint32
 	// RequiredDisenchantSkill defaults to -1 in the world item_template
@@ -33023,7 +33025,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 	var socketColors [3]uint32
 	var spellIDs, spellTriggers, spellCharges [5]uint32
 	var rangedModRange float64
-	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(stackable, 1), COALESCE(ItemLimitCategory, 0),
+	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(stackable, 1), COALESCE(MaxCount, 0), COALESCE(ItemLimitCategory, 0),
 		COALESCE(ItemLevel, 0), COALESCE(RequiredLevel, 0),
 		COALESCE(class, 0), COALESCE(subclass, 0), COALESCE(Quality, 0),
 		COALESCE(RequiredDisenchantSkill, -1), COALESCE(DisenchantID, 0),
@@ -33040,7 +33042,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		COALESCE(spellcharges_5, 0), COALESCE(RangedModRange, 0),
 		COALESCE(delay, 0)
 		FROM item_template WHERE entry = ? LIMIT 1`, entry).Scan(
-		&stackable, &limitCategory, &itemLevel, &requiredLevel,
+		&stackable, &maxCount, &limitCategory, &itemLevel, &requiredLevel,
 		&class, &subclass, &quality, &requiredDisenchantSkill, &disenchantID,
 		&flags, &requiredSkillRank, &maxDurability,
 		&socketColors[0], &socketColors[1], &socketColors[2],
@@ -33054,7 +33056,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 	if err != nil {
 		return itemStoreTemplateInfo{}, false
 	}
-	info := itemStoreTemplateInfo{Stackable: stackable, LimitCategory: limitCategory,
+	info := itemStoreTemplateInfo{Stackable: stackable, MaxCount: maxCount, LimitCategory: limitCategory,
 		ItemLevel: itemLevel, RequiredLevel: requiredLevel,
 		Class: class, SubClass: subclass, Quality: quality,
 		RequiredDisenchantSkill: uint32(requiredDisenchantSkill), DisenchantID: disenchantID,
@@ -33144,6 +33146,15 @@ func (s *session) canStoreNewItem(ctx context.Context, playerGUID uint64, entry 
 	info, ok := s.server.getItemStoreTemplateInfo(ctx, entry)
 	if !ok {
 		return equipErrItemNotFound
+	}
+	// Player::CanTakeMoreSimilarItems (Player.cpp:10404-10430): unique
+	// items (0 < MaxCount != INT_MAX) are capped across inventory and
+	// bank; exceeding the cap answers EQUIP_ERR_CANT_CARRY_MORE_OF_THIS.
+	// C++ runs this before the slot search, so it outranks inventory-full.
+	if info.MaxCount > 0 && info.MaxCount != 2147483647 {
+		if owned := s.ownedItemCount(ctx, playerGUID, entry); owned+count > uint32(info.MaxCount) {
+			return equipErrCantCarryMoreOfThis
+		}
 	}
 	maxStack := info.Stackable
 	if maxStack < 1 {

@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"math"
 	"math/rand"
 	"sort"
@@ -1223,18 +1222,26 @@ func (s *session) hasQuestForItem(ctx context.Context, itemID uint32) bool {
 		var reqCounts [6]int64
 		var dropIDs [4]int64
 		var dropQty [4]int64
+		var questType int64
 		if err := wdb.QueryRowContext(ctx, `SELECT
 				COALESCE(RequiredItemId1, 0), COALESCE(RequiredItemId2, 0), COALESCE(RequiredItemId3, 0),
 				COALESCE(RequiredItemId4, 0), COALESCE(RequiredItemId5, 0), COALESCE(RequiredItemId6, 0),
 				COALESCE(RequiredItemCount1, 0), COALESCE(RequiredItemCount2, 0), COALESCE(RequiredItemCount3, 0),
 				COALESCE(RequiredItemCount4, 0), COALESCE(RequiredItemCount5, 0), COALESCE(RequiredItemCount6, 0),
 				COALESCE(ItemDrop1, 0), COALESCE(ItemDrop2, 0), COALESCE(ItemDrop3, 0), COALESCE(ItemDrop4, 0),
-				COALESCE(ItemDropQuantity1, 0), COALESCE(ItemDropQuantity2, 0), COALESCE(ItemDropQuantity3, 0), COALESCE(ItemDropQuantity4, 0)
+				COALESCE(ItemDropQuantity1, 0), COALESCE(ItemDropQuantity2, 0), COALESCE(ItemDropQuantity3, 0), COALESCE(ItemDropQuantity4, 0),
+				COALESCE(Type, 0)
 			FROM quest_template WHERE ID = ?`, entry.QuestID).Scan(
 			&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqIDs[4], &reqIDs[5],
 			&reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3], &reqCounts[4], &reqCounts[5],
 			&dropIDs[0], &dropIDs[1], &dropIDs[2], &dropIDs[3],
-			&dropQty[0], &dropQty[1], &dropQty[2], &dropQty[3]); err != nil {
+			&dropQty[0], &dropQty[1], &dropQty[2], &dropQty[3],
+			&questType); err != nil {
+			continue
+		}
+		// Player.cpp:16966-16969: a raid-group member hides quests that
+		// aren't allowed in raids — unless in a battleground.
+		if _, _, _, inBG := battlegroundTypeForMap(s.player.Map); !inBG && !s.questAllowedInRaid(uint32(questType)) {
 			continue
 		}
 		for j := 0; j < 6; j++ {
@@ -1305,18 +1312,26 @@ func (s *session) hasQuestForItemEx(ctx context.Context, itemID uint32, excludeQ
 		var reqCounts [6]int64
 		var dropIDs [4]int64
 		var dropQty [4]int64
+		var questType int64
 		if err := wdb.QueryRowContext(ctx, `SELECT
 				COALESCE(RequiredItemId1, 0), COALESCE(RequiredItemId2, 0), COALESCE(RequiredItemId3, 0),
 				COALESCE(RequiredItemId4, 0), COALESCE(RequiredItemId5, 0), COALESCE(RequiredItemId6, 0),
 				COALESCE(RequiredItemCount1, 0), COALESCE(RequiredItemCount2, 0), COALESCE(RequiredItemCount3, 0),
 				COALESCE(RequiredItemCount4, 0), COALESCE(RequiredItemCount5, 0), COALESCE(RequiredItemCount6, 0),
 				COALESCE(ItemDrop1, 0), COALESCE(ItemDrop2, 0), COALESCE(ItemDrop3, 0), COALESCE(ItemDrop4, 0),
-				COALESCE(ItemDropQuantity1, 0), COALESCE(ItemDropQuantity2, 0), COALESCE(ItemDropQuantity3, 0), COALESCE(ItemDropQuantity4, 0)
+				COALESCE(ItemDropQuantity1, 0), COALESCE(ItemDropQuantity2, 0), COALESCE(ItemDropQuantity3, 0), COALESCE(ItemDropQuantity4, 0),
+				COALESCE(Type, 0)
 			FROM quest_template WHERE ID = ?`, entry.QuestID).Scan(
 			&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqIDs[4], &reqIDs[5],
 			&reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3], &reqCounts[4], &reqCounts[5],
 			&dropIDs[0], &dropIDs[1], &dropIDs[2], &dropIDs[3],
-			&dropQty[0], &dropQty[1], &dropQty[2], &dropQty[3]); err != nil {
+			&dropQty[0], &dropQty[1], &dropQty[2], &dropQty[3],
+			&questType); err != nil {
+			continue
+		}
+		// Player.cpp:16966-16969: a raid-group member hides quests that
+		// aren't allowed in raids — unless in a battleground.
+		if _, _, _, inBG := battlegroundTypeForMap(s.player.Map); !inBG && !s.questAllowedInRaid(uint32(questType)) {
 			continue
 		}
 		for j := 0; j < 6; j++ {
@@ -1682,9 +1697,9 @@ func rollLootObjectKey(roll *activeGroupRoll) lootObjectKey {
 // model), and the fishing/fishing-hole/fishing-junk arms have no Go model.
 // generateMoneyLootValue mirrors Loot::generateMoneyLoot (Loot.cpp:433):
 // the maxAmount<=minAmount arm takes maxAmount (not minAmount), and a zero
-// max means no money at all. The (maxAmount-minAmount)>=32700 arm is a
-// 32-bit urand overflow guard with no Go analog (rand.Intn runs on 64-bit
-// ints). All three arms scale by RATE_DROP_MONEY (worldserver.conf
+// max means no money at all. Wide ranges ((maxAmount-minAmount)>=32700)
+// roll 256-aligned (Loot.cpp:437-440). All three arms scale by
+// RATE_DROP_MONEY (worldserver.conf
 // Rate.Drop.Money, default 1).
 func (s *Server) generateMoneyLootValue(minGold, maxGold int64) uint32 {
 	rate := 1.0
@@ -1695,6 +1710,12 @@ func (s *Server) generateMoneyLootValue(minGold, maxGold int64) uint32 {
 		return 0
 	}
 	if maxGold > minGold {
+		if maxGold-minGold >= 32700 {
+			// Loot.cpp:437-440: wide ranges roll 256-aligned —
+			// urand(min>>8, max>>8), scaled by the rate, then shifted back.
+			lo, hi := minGold>>8, maxGold>>8
+			return uint32(float64(lo+int64(rand.Intn(int(hi-lo+1))))*rate) << 8
+		}
 		return uint32(float64(minGold+int64(rand.Intn(int(maxGold-minGold+1)))) * rate)
 	}
 	return uint32(float64(maxGold) * rate)
@@ -2989,14 +3010,14 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		// the money is only reachable when the GO is still there for the
 		// player — owned GOs (fishing bobbers) skip the distance check, all
 		// other types must be within GameObject::IsWithinDistInMap
-		// (interact distance, approximated with the 8.0 convention of
-		// lootReleaseCleanupAllowed). A blocked take is silent: C++ leaves
+		// (INTERACTION_DISTANCE, 5.0 — the autostore GO arm uses the same).
+		// A blocked take is silent: C++ leaves
 		// loot null and skips the money block without an error. Static GOs
 		// have no server-side dynamic state, so a nil state allows the take.
 		// shareMoney stays true for GOs — only corpse/item/pickpocket clear
 		// it (LootHandler.cpp:157 comment).
 		if goState := s.server.gameObjectState(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID); goState != nil && goState.OwnerGUID != s.playerGUID &&
-			(s.player == nil || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 8.0) {
+			(s.player == nil || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 5.0) {
 			return true
 		}
 	}
@@ -3118,15 +3139,21 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 }
 
 func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || s.activeLoot == nil || len(payload) < 1 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
-	if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
-		return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
+	// LootHandler.cpp:87-97: with no open loot window GetLootGUID is empty,
+	// so the take falls to the creature arm and answers LOOT_ERROR_DIDNT_KILL.
+	if s.activeLoot == nil {
+		return s.sendLootError(0, 0) == nil
 	}
-	if s.isDeadOrGhost() {
-		return true
-	}
+	// LootHandler.cpp:37-102 has no map/instance gate and no dead/ghost gate
+	// in this handler or in Player::StoreLootItem. A post-open teleport
+	// resolves per arm below: the creature arm answers DIDNT_KILL
+	// (GetCreature on the player's map returns null), the GO arm answers
+	// SendLootRelease (GetGameObject returns null), and the item arm is
+	// map-independent so the take proceeds. A dead player with an open
+	// window can still autostore.
 	lootSlot := payload[0]
 	it, ok := s.activeLoot.Items[lootSlot]
 	// Loot::LootItemInSlot (Loot.cpp:446): slots at/above items.size() index
@@ -3180,15 +3207,6 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		if !withinLootDistance(s, target) {
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 		}
-		// Take-time recipient re-check: C++ has none in this handler, but
-		// StoreLootItem's AllowedForPlayer-fail arm (Player.cpp:25065-25068)
-		// answers with SendLootRelease, so a revoked permission releases
-		// the window instead of erroring.
-		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
-		entry := uint32((s.activeLoot.TargetGUID >> 24) & 0x00FFFFFF)
-		if !s.server.creatureLootAllowed(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID) {
-			return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
-		}
 	}
 	// LootHandler.cpp (HandleAutostoreLootItemOpcode): the IsItem arm resolves
 	// the item with Player::GetItemByGuid — an item the player no longer
@@ -3217,14 +3235,13 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		s.server.groupsMu.Unlock()
 		if grp != nil {
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
-			// Loot.cpp:307: only follow_loot_rules quest items are
-			// master-distributed; plain quest items stay directly lootable
-			// by quest-holding members under master loot. (Go anti-cheat
-			// gate: C++ hides these slots instead of rejecting the take.)
-			// Group::MasterLoot (Group.cpp:1408-1413) never blocks
-			// free-for-all rows, so they stay takeable by everyone.
-			if grp.LootMethod == 2 && isOverThreshold && !it.FreeForAll &&
-				!(isQuestItem && it.CustomFlags&itemFlagsCuFollowLootRules == 0) {
+			// Player::StoreLootItem (Player.cpp:25076-25080): quest items
+			// skip the blocked gate entirely ("questitems use the blocked
+			// field for other purposes"), so a master-loot
+			// follow_loot_rules quest row stays takeable even though
+			// Group::MasterLoot (Group.cpp:1419-1422) marks it blocked.
+			// Group::MasterLoot never blocks free-for-all rows.
+			if grp.LootMethod == 2 && isOverThreshold && !it.FreeForAll && !isQuestItem {
 				// Player::StoreLootItem (Player.cpp:25076-25080): a blocked
 				// item answers with SendLootRelease, not a silent drop.
 				return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
@@ -3245,17 +3262,11 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 				if it.RollWinner != 0 && it.RollWinner != s.playerGUID {
 					return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 				}
-			} else if grp.LootMethod == 1 {
-				// Loot.cpp:675-689 (ROUND_ROBIN_PERMISSION): only the
-				// round-robin loot owner may take; under group/need-greed
-				// (GROUP_PERMISSION, Loot.cpp:657) under-threshold items
-				// are ALLOW_LOOT for every viewer, so the gate must not
-				// fire for methods 3/4. Free-for-all rows ignore the
-				// round-robin owner (LootView FFA arm, Loot.cpp:743-757).
-				if !it.FreeForAll && s.activeLoot.RoundRobinPlayer != 0 && s.activeLoot.RoundRobinPlayer != s.playerGUID {
-					return true
-				}
 			}
+			// No round-robin take-time gate: C++ enforces round-robin only
+			// at view time (Loot.cpp:675-689); Player::StoreLootItem has
+			// zero round-robin checks, so a take on another member's row
+			// succeeds.
 		}
 	}
 
@@ -3356,9 +3367,14 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 	}
 	res, err := s.storeOrStackItem(ctx, s.playerGUID, it.ItemEntry, it.Count)
 	if err != nil {
-		if errors.Is(err, errInventoryFull) {
-			s.sendEquipError(equipErrInvFull, 0)
+		// Player.cpp:25130-25135: any CanStoreNewItem failure answers with
+		// the specific equip error — including EQUIP_ERR_CANT_CARRY_MORE_OF_THIS
+		// for unique items — never a silent drop.
+		gate := s.canStoreNewItem(ctx, s.playerGUID, it.ItemEntry, it.Count)
+		if gate == equipErrOk {
+			gate = equipErrInvFull
 		}
+		s.sendEquipError(gate, 0)
 		return true
 	}
 	// Player::StoreLootItem (Player.cpp:25096): the new item is created
@@ -3996,18 +4012,23 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 		return true
 	}
 
-	res, err := targetSess.storeOrStackItem(ctx, targetGUID, it.ItemEntry, it.Count)
-	if err != nil {
-		// HandleLootMasterGiveOpcode (LootHandler.cpp:460-471): inventory
-		// full maps to LOOT_ERROR_MASTER_INV_FULL (12), any other store
-		// failure to LOOT_ERROR_MASTER_OTHER (14); the loot stays put. The
-		// CANT_CARRY_MORE_OF_THIS -> LOOT_ERROR_MASTER_UNIQUE_ITEM (13) leg
-		// has no Go analog (storeOrStackItem models no unique-item check).
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:460-471): the
+	// CanStoreNewItem probe runs before the store; CANT_CARRY_MORE_OF_THIS
+	// maps to LOOT_ERROR_MASTER_UNIQUE_ITEM (13), INVENTORY_FULL to (12),
+	// any other failure to (14); the loot stays put.
+	if gate := targetSess.canStoreNewItem(ctx, targetGUID, it.ItemEntry, it.Count); gate != equipErrOk {
 		code := uint8(14)
-		if errors.Is(err, errInventoryFull) {
+		if gate == equipErrCantCarryMoreOfThis {
+			code = 13
+		} else if gate == equipErrInvFull {
 			code = 12
 		}
 		_ = s.sendLootError(lootGUID, code)
+		return true
+	}
+	res, err := targetSess.storeOrStackItem(ctx, targetGUID, it.ItemEntry, it.Count)
+	if err != nil {
+		_ = s.sendLootError(lootGUID, 14)
 		return true
 	}
 	// HandleLootMasterGiveOpcode (LootHandler.cpp:475): the given item carries
@@ -4635,6 +4656,12 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey, enforceMap bool) {
 	if roll.Timer != nil {
 		roll.Timer.Stop()
 	}
+	// Group.cpp:1513-1519 (Roll::isValid): a roll whose loot object was
+	// destroyed is erased silently — no won/all-passed broadcast, no unblock.
+	if s.creatureLoot[rollLootObjectKey(roll)] == nil {
+		s.lootMu.Unlock()
+		return
+	}
 	s.lootMu.Unlock()
 
 	// Group.cpp:1527-1531, 1589-1593: voters whose player object is gone
@@ -4804,7 +4831,16 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 
 	res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, deliveredItem, deliveredCount)
 	if err != nil {
-		winnerSess.sendEquipError(equipErrInvFull, 0)
+		// Group.cpp:1567/1632: the probe's specific equip error goes to the
+		// winner — not a blanket inventory-full. The item guid stays 0:
+		// C++ passes nullptr items (zero guids on the wire for storage
+		// errors; the itemid param only feeds CANT_EQUIP_* arms,
+		// Player.cpp:13592).
+		gate := winnerSess.canStoreNewItem(ctx, winnerGUID, deliveredItem, deliveredCount)
+		if gate == equipErrOk {
+			gate = equipErrInvFull
+		}
+		winnerSess.sendEquipError(gate, 0)
 		s.lootMu.Lock()
 		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
 			if qi, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {
@@ -4932,6 +4968,8 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 	if gate := winnerSess.canStoreNewItem(ctx, winnerGUID, roll.ItemEntry, roll.ItemCount); gate != equipErrOk {
 		mailed = true
 		for _, m := range mats {
+			// Group.cpp:1662-1665: the probe's equip error per mailed mat
+			// (nullptr items on the wire, same as the win path above).
 			winnerSess.sendEquipError(gate, 0)
 			s.sendItemRetrievalMail(ctx, winnerGUID, m.item, m.count)
 		}
@@ -4940,7 +4978,14 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 		for _, m := range mats {
 			res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, m.item, m.count)
 			if err != nil {
-				winnerSess.sendEquipError(equipErrInvFull, 0)
+				// Player::AutoStoreLoot (Player.cpp:25030-25057): a
+				// per-material probe; the specific equip error goes to the
+				// winner (nullptr items on the wire, same as above).
+				matGate := winnerSess.canStoreNewItem(ctx, winnerGUID, m.item, m.count)
+				if matGate == equipErrOk {
+					matGate = equipErrInvFull
+				}
+				winnerSess.sendEquipError(matGate, 0)
 				continue
 			}
 			storedAny = true
@@ -5125,7 +5170,10 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		s.server.lootMu.Unlock()
 		return true
 	}
-	if roll.GroupID != s.groupID || roll.MapID != s.player.Map || roll.InstanceID != s.player.InstanceID {
+	// Group::CountRollVote (Group.cpp:1452-1460) has no group/map/instance
+	// re-check on the voter; the GroupID arm is the global-registry
+	// stand-in for rolls living on the Group object in C++.
+	if roll.GroupID != s.groupID {
 		s.server.lootMu.Unlock()
 		return true
 	}
