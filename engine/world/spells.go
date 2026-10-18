@@ -24766,6 +24766,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 			targetSess.sendClientControl(targetSess.playerGUID, false)
 		}
+		// Unit::SetCharmedBy (Unit.cpp:11765-11766) via HandleCharmConvert
+		// (SpellAuraEffects.cpp:2946-2958): CHARM_TYPE_CONVERT dismounts
+		// the charmed player too — the MOD_CHARM leg above covers aura 6
+		// only, and both handlers funnel through SetCharmedBy.
+		if eff.Aura == spellAuraAoeCharm {
+			targetSess.clearOtherMountedAuras(0)
+		}
 		if eff.Aura == spellAuraModSilence || eff.Aura == spellAuraModPacifySilence {
 			// AuraEffect::HandleAuraModSilence apply leg
 			// (SpellAuraEffects.cpp:2355-2372): the fresh silence aura sets
@@ -25518,6 +25525,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		charmer := aura.CasterGUID
 		if charmer == 0 {
 			charmer = s.playerGUID
+		}
+		// Unit::SetCharmedBy (Unit.cpp:11768-11769): a player charmer is
+		// dismounted when the charm lands — reachable when the charm was
+		// cast while mounted (SPELL_ATTR0_CASTABLE_WHILE_MOUNTED) or applied
+		// triggered (castSpellDirect skips the CheckCast mounted gate).
+		// findSessionByGUID is non-nil only for players, matching C++'s
+		// charmer->GetTypeId() == TYPEID_PLAYER gate.
+		if s.server != nil {
+			if charmerSess := s.server.findSessionByGUID(charmer); charmerSess != nil {
+				charmerSess.removeAurasByType(spellAuraMounted)
+			}
 		}
 		charmerFaction := s.server.raceFaction(s.player.Race)
 		if charmer != s.playerGUID && s.server != nil {

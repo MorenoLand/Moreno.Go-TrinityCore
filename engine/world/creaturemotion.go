@@ -1989,8 +1989,17 @@ func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, at
 	destX := motion.X + float32(dx/dist*fleeDist)
 	destY := motion.Y + float32(dy/dist*fleeDist)
 	speed := creatureSplineVelocity(motion, false)
-	if speed <= 0 {
-		speed = creatureBaseRunSpeed
+	if speed < 0.001 {
+		// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
+		// velocity below 0.001 fails validation — no spline is launched and no
+		// SMSG_MONSTER_MOVE is sent. The flee generator stays active for the
+		// flee duration anyway (FleeingMovementGenerator::DoUpdate resets its
+		// retry timer even on a 0-traveltime launch, FleeingMovementGenerator.cpp:180),
+		// so the critter stands still "fleeing" until FleeingUntil, then the
+		// expiry arm funnels it into evade — instead of fleeing at base run speed.
+		motion.FleeingUntil = now.Add(7 * time.Second)
+		s.motionMu.Unlock()
+		return
 	}
 	duration := splineDurationMs(fleeDist, speed)
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
@@ -2090,8 +2099,15 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
 	if homeDist > 0.5 {
 		speed := creatureSplineVelocity(motion, false)
-		if speed <= 0 {
-			speed = creatureBaseRunSpeed
+		if speed < 0.001 {
+			// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
+			// velocity below 0.001 fails validation — no spline is launched and no
+			// SMSG_MONSTER_MOVE is sent. HomeMovementGenerator::DoUpdate then sees the
+			// finalized spline and finalizes immediately, so AI()->JustReachedHome()
+			// still fires (HomeMovementGenerator.cpp:139-151); the creature simply
+			// stays where it is instead of returning home at base run speed.
+			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+			return
 		}
 		duration := splineDurationMs(float64(homeDist), speed)
 		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false)
@@ -2495,8 +2511,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
 		if homeDist > 0.5 {
 			speed := creatureSplineVelocity(motion, false)
-			if speed <= 0 {
-				speed = creatureBaseRunSpeed
+			if speed < 0.001 {
+				// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
+				// velocity below 0.001 fails validation — no spline is launched and no
+				// SMSG_MONSTER_MOVE is sent. The flee expiry funnels into evade
+				// (CritterAI::OnMovementGeneratorFinalized, PassiveAI.cpp:81-86) whose
+				// home generator finalizes immediately on the failed launch, so
+				// AI()->JustReachedHome() still fires (HomeMovementGenerator.cpp:139-151).
+				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+				return
 			}
 			duration := splineDurationMs(float64(homeDist), speed)
 			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false)
@@ -2907,12 +2930,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							faceAngle += 2 * math.Pi
 						}
 						motion.Orientation = faceAngle
-						duration := splineDurationMs(float64(dist), creatureSplineVelocity(motion, false))
-						s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true)
-						motion.X, motion.Y, motion.Z = destX, destY, target.Z
-						motion.ChaseTX, motion.ChaseTY = target.X, target.Y
-						motion.Moving = true
-						motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+						// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
+						// velocity below 0.001 fails validation — no spline is launched and no
+						// SMSG_MONSTER_MOVE is sent. A fully slowed chaser stands still; the
+						// melee swing below still fires.
+						if speed := creatureSplineVelocity(motion, false); speed >= 0.001 {
+							duration := splineDurationMs(float64(dist), speed)
+							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true)
+							motion.X, motion.Y, motion.Z = destX, destY, target.Z
+							motion.ChaseTX, motion.ChaseTY = target.X, target.Y
+							motion.Moving = true
+							motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+						}
 					}
 				}
 			}
@@ -3647,6 +3676,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			facing, hasFacing = point.Orientation, true
 		}
 		motion.NextIdx = (motion.NextIdx + 1) % len(motion.Points)
+		if speed < 0.001 {
+			// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
+			// velocity below 0.001 fails validation — no spline is launched and no
+			// SMSG_MONSTER_MOVE is sent. The node index was already advanced above
+			// (ComputeNextNode runs before Launch in WaypointMovementGenerator::StartMove);
+			// the home-position refresh runs only while a spline is actually in motion
+			// (WaypointMovementGenerator::DoUpdate), so it is skipped and the next tick
+			// retries the following node.
+			return
+		}
 		// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:169-175):
 		// while the spline is in motion, every update sets the home position
 		// to the creature's current position ("set home position at place").

@@ -175,7 +175,16 @@ func (s *session) sendPlayerValuesUpdate(fields map[int]uint32) {
 	s.server.broadcastPlayerValuesUpdateFromSession(s, fields)
 }
 
+// teleportTo runs a full near/far teleport. A far teleport detaches the
+// player from their transport (Player::TeleportTo, Player.cpp:1711-1716 —
+// RemovePassenger unless TELE_TO_NOT_LEAVE_TRANSPORT); use
+// teleportToStayOnTransport for the transport's own map-change teleport,
+// which keeps passengers attached (Transport.cpp:676).
 func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
+	return s.teleportToStayOnTransport(mapID, x, y, z, orientation, false)
+}
+
+func (s *session) teleportToStayOnTransport(mapID uint32, x, y, z, orientation float32, stayOnTransport bool) bool {
 	if s.player == nil {
 		return false
 	}
@@ -275,6 +284,17 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 	s.stopPlayerCombat()
 	s.selection = 0
 	s.player.Selection = 0
+	// Player::TeleportTo (Player.cpp:1711-1716): a far teleport leaves the
+	// transport unless TELE_TO_NOT_LEAVE_TRANSPORT. Detaching before the
+	// snapshot keeps TRANSFER_PENDING / NEW_WORLD faithful to C++'s
+	// post-detach GetTransport() checks, and a stale TransportGUID can no
+	// longer keep the old map's transport relocating the player after
+	// arrival (broadcastTransportMovement).
+	if !sameMap && !stayOnTransport {
+		s.player.TransportGUID = 0
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
+		s.player.TransportSeat = 0
+	}
 	transportGUID := s.player.TransportGUID
 	transportX, transportY, transportZ, transportO := s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO
 	transportAttached := false
@@ -333,6 +353,9 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 			s.server.broadcastTeleportMovement(s, nearbyPacket)
 		}
 	} else {
+		// Player::TeleportTo far branch (Player.cpp:1844-1845): CHANGE_MAP |
+		// MOVE | TURNING auras are removed before the transfer packets.
+		s.removeAurasWithInterruptFlags(auraInterruptFlagChangeMap | auraInterruptFlagMove | auraInterruptFlagTurning)
 		pending := protocol.NewBuffer(12)
 		pending.WriteU32(mapID)
 		if transportAttached {

@@ -706,9 +706,14 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		if !sess.authed || !sess.worldReady.Load() || sess.player == nil {
 			continue
 		}
-		if sess.player.TransportGUID == rawGUID && change.OldSpawn.Map == change.Spawn.Map {
+		if sess.player.TransportGUID == rawGUID && change.OldSpawn.Map == change.Spawn.Map && !sess.nearTeleportPending && !sess.farTeleportPending {
 			x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
 			sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation = x, y, z, o
+			// Transport::UpdatePassengerPositions (Transport.cpp:724-727):
+			// teleporting passengers are skipped, and the tick resets the
+			// passenger's fall info to the relocated position so a later
+			// FALL_LAND measures from here, not from the boarding position.
+			sess.lastFallZ, sess.lastFallTime = z, 0
 			dx, dy := float64(x-sess.lastStreamX), float64(y-sess.lastStreamY)
 			if dx*dx+dy*dy > 30*30 {
 				stream = append(stream, sess)
@@ -748,7 +753,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 	s.sessionsMu.RUnlock()
 	for _, passenger := range teleports {
 		passenger.session.resetTransportPassengerVisibility()
-		passenger.session.teleportTo(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o)
+		passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true)
 	}
 	for _, sess := range refresh {
 		s.updateTransportPassengerVisibility(context.Background(), sess, transport)

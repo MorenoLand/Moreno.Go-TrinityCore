@@ -1302,11 +1302,10 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 		reply(taxiErrPlayerBusy)
 		return
 	}
-	// Player.cpp:21542 (spell case): strip mounted auras.
-	if s.player.MountDisplayID != 0 {
-		s.player.MountDisplayID = 0
-		s.sendPlayerMountUpdate()
-	}
+	// Player.cpp:21551 (spell case): strip the SPELL_AURA_MOUNTED auras —
+	// the aura remove leg runs the Unit::Dismount mirror (display/flag
+	// clear, SMSG_DISMOUNT, pet resummon), not just the display field.
+	s.removeAurasByType(spellAuraMounted)
 	// Player.cpp:21562: the source node must exist.
 	if !s.server.Data.TaxiNodeExists(from) {
 		reply(taxiErrNoSuchPath)

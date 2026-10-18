@@ -179,7 +179,19 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	s.nearTeleportPending = false
 	s.nearTeleportDest = nearTeleportDestination{}
 	oldZone := s.player.Zone
+	oldOrientation := s.player.Orientation
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = dest.X, dest.Y, dest.Z, dest.Orientation
+	// HandleMoveTeleportAck (MovementHandler.cpp:232) applies the destination
+	// via UpdatePosition(dest, true), which forces _positionUpdateInfo.Relocated
+	// (Unit.cpp:13418-13423); the next world tick then strips
+	// AURA_INTERRUPT_FLAG_MOVE auras — and AURA_INTERRUPT_FLAG_TURNING when the
+	// orientation changed — via Unit::InterruptMovementBasedAuras
+	// (Unit.cpp:476-479, 562-570). Go has no world tick, so the strip rides
+	// the ack.
+	s.removeAurasWithInterruptFlags(auraInterruptFlagMove)
+	if dest.Orientation != oldOrientation {
+		s.removeAurasWithInterruptFlags(auraInterruptFlagTurning)
+	}
 	if dest.Movement.Flags&movementOnTransport != 0 && dest.Movement.Transport != nil {
 		s.player.TransportGUID = dest.Movement.Transport.GUID
 		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = dest.Movement.Transport.X, dest.Movement.Transport.Y, dest.Movement.Transport.Z, dest.Movement.Transport.Orientation

@@ -427,11 +427,13 @@ func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBa
 		}
 	}
 
-	// Remove mounts
-	if sess.player.MountDisplayID != 0 {
-		sess.player.MountDisplayID = 0
-		sess.sendPlayerMountUpdate()
-	}
+	// Battleground::AddPlayer (Battleground.cpp:1003): entering the arena
+	// strips SPELL_AURA_MOUNTED auras. The aura remove leg runs the
+	// Unit::Dismount mirror — display/flag clear, SMSG_DISMOUNT, collision
+	// height, NOT_MOUNTED interrupt strip, pet resummon — instead of just
+	// clearing the display field (which sendPlayerMountUpdate would
+	// immediately re-flag from the surviving aura).
+	sess.removeAurasByType(spellAuraMounted)
 
 	// Assign team flag aura
 	// Alliance player on Gold gets 32724, Horde on Gold gets 35774
