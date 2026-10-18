@@ -1,0 +1,80 @@
+-- npcs_special_part2.lua — npc_steam_tonk, npc_tournament_mount,
+-- npc_brewfest_reveler, npc_wormhole, npc_pet_trainer, npc_experience,
+-- npc_firework, npc_spring_rabbit, npc_imp_in_a_ball, npc_stable_master,
+-- npc_train_wrecker, npc_argent_squire_gruntling, npc_bountiful_table
+-- (+ CastFoodSpell), from
+-- src/server/scripts/World/npcs_special.cpp (lines 1154-2632).
+--
+-- PORTED: none. Every class in this range is a DOCUMENTED-ONLY gap
+-- class — each needs at least one bridge that does not exist in the
+-- current runtime (verified against engine/scripting/*.go,
+-- engine/world/lua_player.go, engine/world/lua_creature_events.go,
+-- engine/world/lua_objects.go), or its creature entry is not present
+-- in the C++ tree (entries are never invented).
+--
+-- Gap notes (C++ line refs):
+-- npc_steam_tonk (:1154-1186) — OnPossess (:1166) needs
+-- InitCharmInfo/InitEmptyActionBar/SetReactState; no possess event or
+-- charm/react-state bridges.
+-- npc_tournament_mount (:1291-1400) — PassengerBoarded (:1302) has no
+-- Lua event; GetPennantSpellId (:1334) needs player HasAchieved and
+-- GetQuestRewardStatus — neither bridged (HasSpell/LearnSpell/HasQuest
+-- are; these two are not).
+-- npc_brewfest_reveler (:1407-1431) — ReceiveEmote (:1421, creature
+-- event 8 IS bridged) gated on IsHolidayActive(HOLIDAY_BREWFEST): no
+-- holiday bridge, and the entry is not in the C++ tree.
+-- npc_wormhole (:1501-1601) — OnGossipHello/OnGossipSelect
+-- (:1528/:1554): the gossip bridges exist (GossipMenuAddItem,
+-- GossipSendMenu, GossipClearMenu, GossipComplete; select delivers
+-- sender+action, C++-exact twin of GetGossipOptionAction) and the
+-- teleport arms are creature:CastSpell(player, spellId) (the C++ casts
+-- teleport spells 67834/67838/67835/67836/67837/68081, NOT
+-- player:Teleport), and the 1% _showUnderground roll is local Lua
+-- state. BLOCKED on two gaps: the entry is not in the C++ tree, and
+-- the summoner gate (me->IsSummon()/GetSummoner(), :1530-1532) has no
+-- bridge — porting without it would show the menu to anyone, which is
+-- not the C++ behavior.
+-- npc_pet_trainer (:1609-1638) — OnGossipSelect (:1624) calls
+-- player->ResetPetTalents(): no bridge.
+-- npc_experience (:1640-1706) — OnGossipHello/OnGossipSelect
+-- (:1657/:1672) toggle PLAYER_FLAGS_NO_XP_GAIN via player
+-- HasFlag/SetFlag/RemoveFlag: no player flag bridges.
+-- npc_firework (:1760-1996) — Reset (:1938): FindNearestGameObject,
+-- SendCustomAnim, SetOrientation, GetZoneId, FindNearestCreature,
+-- SummonCreature, SummonGameObject, sSpellMgr lookup — none bridged.
+-- The lone bridgeable fragment (DoCast lunar fortune 26522) cannot
+-- fire without the launcher/zone legs.
+-- npc_spring_rabbit (:2002-2100) — UpdateAI (:2057) timer pump is
+-- CreateLuaEvent-shaped, but FindNearestCreature, GetOwner, and the
+-- rabbitGUID ObjectAccessor::GetUnit resolution are unbridged; entry
+-- 32791 IS in the C++ file (:2007) but every arm needs those legs.
+-- npc_imp_in_a_ball (:2102-2160) — IsSummonedBy (:2119) needs
+-- summonerGUID + ObjectAccessor::GetPlayer lookup (no bridge); the
+-- addon-channel monster whisper/party text (:2128-2141) is not the
+-- creature_text Talk path.
+-- npc_stable_master (:2162-2205) — OnGossipSelect (:2176) for SmartAI
+-- sub-menu 9820: player self-cast spells (54573/54611/54619/54631/
+-- 54634/54677/54688) are castable via creature:CastSpell(player,
+-- spell, false), but entries are not in the C++ tree and the SmartAI
+-- menu-hello leg lives in SmartAI, not this script.
+-- npc_train_wrecker (:2207-2311) — UpdateAI (:2234)/MovementInform
+-- (:2292): FindNearestGameObject, MovePoint/MoveJump, HandleEmoteCommand,
+-- target->AI()->DoAction — none bridged; no entry in C++ tree.
+-- npc_argent_squire_gruntling (:2314-2500) — ScheduleTasks (:2338):
+-- GetOwner + aura SetDuration, both unbridged; OnGossipSelect (:2426):
+-- creature SetFlag/RemoveFlag UNIT_NPC_FLAGS (no SetFlag bridge) and
+-- player->GetSession()->SendShowMailBox (no bridge). Entry 33238 IS in
+-- the file (:2312) but the flag/mail legs block every arm.
+-- npc_bountiful_table + CastFoodSpell (:2553-2601) — PassengerBoarded
+-- (:2577) has no Lua event; MoveSpline/vehicle accessory/DisplayId
+-- legs unbridged; CastFoodSpell's m_Events arm has no creature-event
+-- twin for boarding. Chair entries (34812/34823/34819/34824/34822) and
+-- chair->spell map (:2540-2547) are in the file but unusable.
+--
+-- npc_training_dummy (:1463-1497) — DOCUMENTED-ONLY: DamageTaken
+-- (:1470-1478) zeroes damage and arms a 5s per-attacker timer; UpdateAI
+-- (:1480-1495) ends PvE combat for attackers idle >5s via
+-- GetCombatManager(). Gap: no DamageTaken bridge (event 9 has no
+-- damage-rewrite twin in the runtime), no GetCombatManager/EndCombat
+-- bridge, no entry const in the C++ tree. All arms accounted for
+-- (this file now covers the full :1154-2632 range).

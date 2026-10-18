@@ -1,0 +1,122 @@
+-- go_scripts.cpp PART 2 (classes at C++ :683-1363; AddSC :1375-1399) — triage notes.
+-- Sibling child owns :61-682. All 10 classes below are DOCUMENTED-ONLY gap
+-- classes: no Register* calls. Nothing in this part is end-to-end
+-- bridgeable; every arm is gated on at least one unbridged call, and 9 of
+-- the 10 classes bind by ScriptName with no entry ID named anywhere in the
+-- C++ tree (whole-tree quoted-name grep: go_scripts.cpp is the sole hit),
+-- so the gameobject_template binding stays DB-side per the no-invent rule.
+-- Bridge facts (grepped this run against the CURRENT runtime):
+--   - GameObjectEventOnAIUpdate (=1, runtime.go) has NO fire site in
+--     engine/ — UpdateAI arms (toy_train, *_music, bells) have no trigger.
+--   - IsHolidayActive: zero hits in engine/ — no bridge (blocks all *_music).
+--   - player:GetQuestStatus: zero hits in engine/ — no bridge (blocks
+--     veil_skith_cage, frostblade_shrine).
+--   - CastSpell exists ONLY on the creature handler surface
+--     (lua_creature_events.go:62) — no player:CastSpell and no
+--     gameobject:CastSpell (blocks bonfire, shrine cast, ribbon pole cast,
+--     toy_train pulse).
+--   - SetStandState: engine-internal only, no Lua method (blocks shrine sit).
+--   - CloseGossipMenuFor: zero hits in engine/ (blocks bonfire select tail).
+--   - GameObject grid search (GetCreatureListWithEntryInGrid /
+--     FindNearestCreature / GetPlayerListInGrid): no bridge (blocks cage
+--     children, ribbon pole bunny, brewfest/midsummer per-player dispatch).
+--   - Creature DoAction / MovePoint / AI()->Talk via a GO-obtained
+--     creature: no bridge (blocks cage children walk+Talk, ribbon pole
+--     ACTION_COSMETIC_FIRES).
+--   - player:KilledMonsterCredit: no Lua bridge (blocks cage quest credit).
+--   - GameObject: no GetAreaId/GetZoneId (only GetMapId) — blocks brewfest
+--     area dispatch and bells zone->soundId init.
+--   - No game-event hook in runtime.go at all — go_bells OnGameEvent(73)
+--     has no fire path.
+--   - Bridged but unreachable: go:UseDoorOrButton([delay]) (lua_objects.go),
+--     player:HasAura (lua_objects.go:228), go:PlayMusic(id[, player]) =
+--     SMSG_PLAY_MUSIC with optional per-player target (lua_objects.go:106),
+--     go:PlayDirectSound(id) (lua_objects.go:120), GetGameTime() unix
+--     seconds (runtime.go:768). These become usable if the gating bridges
+--     above ever land.
+
+-- DOCUMENTED-ONLY: go_veil_skith_cage (C++ :683-716)
+-- OnGossipHello (:691-709): me->UseDoorOrButton() is bridged, but the arm
+-- is entry-less in-tree (ScriptName "go_veil_skith_cage", DB-side bind) and
+-- the quest arm needs player:GetQuestStatus(QUEST_MISSING_FRIENDS 10852 —
+-- enum :678) == QUEST_STATUS_INCOMPLETE (no bridge), grid search for
+-- NPC_CAPTIVE_CHILD 22314 (enum :679, no bridge), player:KilledMonsterCredit
+-- (no bridge), creature DespawnOrUnsummon/MovePoint/AI()->Talk(SAY_FREE_0 0,
+-- enum :680) (no bridge).
+
+-- DOCUMENTED-ONLY: go_frostblade_shrine (C++ :730-758)
+-- OnGossipHello (:739-753): me->UseDoorOrButton(10) bridged (delay arg);
+-- player:HasAura(SPELL_RECENT_MEDITATION 61720) bridged — but the cleansing
+-- arm needs player:GetQuestStatus(QUEST_THE_CLEANSING_HORDE 11317 /
+-- QUEST_THE_CLEANSING_ALLIANCE 11322, enum :733-736) (no bridge),
+-- player:CastSpell(player, SPELL_CLEANSING_SOUL 43351) (no bridge), and
+-- player:SetStandState(UNIT_STAND_STATE_SIT) (no bridge).
+
+-- DOCUMENTED-ONLY: go_midsummer_bonfire (C++ :769-800)
+-- OnGossipSelect (:783-788; gameobject_gossip ON_SELECT=2 fires per
+-- engine/world/gameobject_hooks.go:215): player:CastSpell(player,
+-- STAMP_OUT_BONFIRE_QUEST_COMPLETE 45458, true — enum :764) (no bridge) and
+-- CloseGossipMenuFor(player) (no bridge). Entry is DB-side (ScriptName).
+
+-- DOCUMENTED-ONLY: go_midsummer_ribbon_pole (C++ :808-834)
+-- OnGossipHello (:817-826): needs me:FindNearestCreature(
+-- NPC_POLE_RIBBON_BUNNY 17066, 10.0f) (no bridge), creature DoAction(
+-- ACTION_COSMETIC_FIRES 0) (no bridge), player:CastSpell(player,
+-- RibbonPoleSpells[urand(0,2)] in {29705, 29726, 29727} — enum :811-813)
+-- (no bridge). Entry DB-side.
+
+-- DOCUMENTED-ONLY: go_toy_train_set (C++ :839-869)
+-- UpdateAI (:851-860): GameObjectEventOnAIUpdate has no fire site; the
+-- pulse arm needs gameobject:CastSpell(nullptr, SPELL_TOY_TRAIN_PULSE
+-- 61551, true — enum :842) (no bridge; CastSpell is creature-surface only).
+-- DoAction (:863-867, "wrecker'd") -> me->Delete(): GO has Despawn/
+-- RemoveFromWorld but no Delete bridge. Entry DB-side.
+
+-- DOCUMENTED-ONLY: go_brewfest_music (C++ :917-1056)
+-- UpdateAI (:931-1051): no AIUpdate fire site; EVENT_BM_SELECT_MUSIC /
+-- EVENT_BM_START_MUSIC machine is gated on IsHolidayActive(HOLIDAY_BREWFEST)
+-- (no bridge), area dispatch on me->GetAreaId() (no bridge; areas
+-- SILVERMOON 3430 / UNDERCITY 1497 / ORGRIMMAR_1 1296 / ORGRIMMAR_2 14 /
+-- THUNDERBLUFF 1638 / IRONFORGE_1 809 / IRONFORGE_2 1 / STORMWIND 12 /
+-- EXODAR 3557 / DARNASSUS 1657 / SHATTRATH 3703 — enum :892-905) with
+-- SHATTRATH leg needing GetPlayerListInGrid (no bridge).
+-- go:PlayMusic(soundId[, player]) IS bridged (SMSG_PLAY_MUSIC) and maps
+-- 1:1 onto me->PlayDirectMusic (sounds 11810/11812/11813 goblin,
+-- 11811/11814/11815 dwarf — enum :879-887; durations 95s/155s/23s/68s/93s/28s
+-- — :889-894), but is unreachable behind the holiday + area gates.
+-- Entry DB-side.
+
+-- DOCUMENTED-ONLY: go_midsummer_music (C++ :1074-1122)
+-- UpdateAI (:1086-1114): no fire site; gated on
+-- IsHolidayActive(HOLIDAY_FIRE_FESTIVAL) (no bridge) + GetPlayerListInGrid
+-- (no bridge). Per-player go:PlayMusic(id, player) IS bridged and matches
+-- me->PlayDirectMusic(EVENTMIDSUMMERFIREFESTIVAL_A 12319 /
+-- EVENTMIDSUMMERFIREFESTIVAL_H 12325 — enum :1063-1067) exactly, but is
+-- unreachable. Entry DB-side.
+
+-- DOCUMENTED-ONLY: go_darkmoon_faire_music (C++ :1139-1176)
+-- UpdateAI (:1149-1171): no fire site; gated on IsHolidayActive(
+-- HOLIDAY_DARKMOON_FAIRE_ELWYNN / _THUNDER / _SHATTRATH) (no bridge).
+-- go:PlayMusic(MUSIC_DARKMOON_FAIRE_MUSIC 8440 — enum :1129-1132) bridged
+-- but unreachable. Entry DB-side.
+
+-- DOCUMENTED-ONLY: go_pirate_day_music (C++ :1193-1230)
+-- UpdateAI (:1203-1225): no fire site; gated on
+-- IsHolidayActive(HOLIDAY_PIRATES_DAY) (no bridge).
+-- go:PlayMusic(MUSIC_PIRATE_DAY_MUSIC 12845 — enum :1183-1186) bridged but
+-- unreachable. Entry DB-side.
+
+-- DOCUMENTED-ONLY: go_bells (C++ :1273-1363)
+-- Entries ARE in-tree (enum :1252-1256): GO_HORDE_BELL 175885,
+-- GO_ALLIANCE_BELL 176573, GO_KHARAZHAN_BELL 182064.
+-- InitializeAI (:1282-1325): needs me:GetEntry() (bridged) + me:GetZoneId()
+-- (no bridge) to pick _soundId from BELLTOLLHORDE 6595 / BELLTOLLTRIBAL 6675
+-- / BELLTOLLALLIANCE 6594 / BELLTOLLNIGHTELF 6674 / BELLTOLLDWARFGNOME 7234 /
+-- BELLTOLLKHARAZHAN 9154 (enum :1234-1241; zones 85/1497/267/10/1/1537/
+-- 141/1657/331 — enum :1243-1250).
+-- OnGameEvent (:1327-1344, GAME_EVENT_HOURLY_BELLS 73 — enum :1258): no
+-- game-event hook exists in runtime.go — no fire path at all.
+-- UpdateAI (:1346-1360): no AIUpdate fire site; ring arm is
+-- go:PlayDirectSound(_soundId) which IS bridged (lua_objects.go:120), and
+-- GetGameTime() exists, but the trigger and the zone init are dead, so
+-- nothing is registered.

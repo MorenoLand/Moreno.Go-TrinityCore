@@ -1,0 +1,50 @@
+-- npc_prof_leather + npc_prof_tailor — triage of npc_professions.cpp:847-1154.
+-- DOCUMENTED-ONLY (both classes): every arm is gated or driven by an
+-- unbridged primitive (verified against the CURRENT runtime this run).
+-- No RegisterCreatureGossipEvent calls below — registering a hello hook
+-- would veto the native vendor/trainer default handling (gossip.go:129-153)
+-- while the TRADE/TRAIN select legs have no bridge (no SendListInventory /
+-- SendTrainerList / SendBuyError / SendEquipError in lua_player.go).
+--
+-- npc_prof_leather (C++ :847-976; entries 7866 Peter Galen, 7867 Thorkaf
+-- Dragoneye, 7868 Sarah Tanner, 7869 Brumn Winterhoof, 7870 Caryssia
+-- Moonhunter, 7871 Se'Jib):
+--   Hello unlearn-option arms (:867-890) need GetBaseSkillValue
+--   (SKILL_LEATHERWORKING 165) >= 250 — no GetSkillValue/GetBaseSkillValue
+--   bridge (HasSkill exists but is presence-only). Showing the options
+--   without the value gate would expose them to sub-250 players, a live
+--   deviation from C++.
+--   Select unlearn arms (:893-915, :944-963) run ProcessUnlearnAction
+--   (:385-396) which needs EquippedOk (:244-268, item-equipped inspection,
+--   no bridge), player->CastSpell(player, S_UNLEARN_*, true) (no player
+--   CastSpell bridge — only creature CastSpell, lua_creature_events.go:62),
+--   and SendBuyError/SendEquipError (no bridge). ProfessionUnlearnSpells
+--   (:319-338) RemoveSpell lists are bridged (RemoveSpell) but dead without
+--   the guard+cast.
+-- npc_prof_tailor (C++ :977-1154; entries 22213 Gidge Spellweaver, 22208
+-- Nasmara Moonsong, 22212 Andrion Darkspinner):
+--   Hello learn/unlearn arms (:1003-1033) need GetBaseSkillValue
+--   (SKILL_TAILORING 197) >= 350 — no bridge — AND GetQuestRewardStatus
+--   (10831/10832/10833) (:1005) — no bridge (HasQuest checks the status row
+--   only; isQuestRewarded is internal to quests.go).
+--   Learn arms (:1035-1058) run ProcessCastaction (:228-242): player cast of
+--   the learn-trigger spell (S_LEARN_SPELLFIRE 26796 / S_LEARN_MOONCLOTH
+--   26799 / S_LEARN_SHADOWEAVE 26800) + money deduction. No player CastSpell
+--   bridge, and LearnSpell is a raw character_spell insert (lua_player.go
+--   :278-290) — it does NOT run the trigger spell's learn effect, so it
+--   cannot replicate the cast.
+--   Unlearn arms (:1059-1066, :1093-1116) run ProcessUnlearnAction (:385)
+--   with S_UNLEARN_SPELLFIRE 41299 / S_UNLEARN_MOONCLOTH 41558 /
+--   S_UNLEARN_SHADOWEAVE 41559 — same EquippedOk + player-CastSpell gaps;
+--   recipe lists (:343-360) bridged but dead without them.
+-- Constants for a future port (all exact from C++): GOSSIP_SENDER_LEARN 50,
+-- GOSSIP_SENDER_UNLEARN 51, GOSSIP_SENDER_CHECK 52; GOSSIP_ACTION_INFO_DEF
+-- 1000; S_DRAGON 10656 / S_ELEMENTAL 10658 / S_TRIBAL 10660; S_UNLEARN_DRAGON
+-- 36434 / S_UNLEARN_ELEMENTAL 36328 / S_UNLEARN_TRIBAL 36433;
+-- S_SPELLFIRE 26797 / S_MOONCLOTH 26798 / S_SHADOWEAVE 26801;
+-- DoLearnCost 200000 (:198), DoHighUnlearnCost 1500000 (:203),
+-- DoMedUnlearnCost 250000/500000/1000000 by level <51/<66/else (:208-216).
+-- Confirm-box SHAPE (coded + boxMoney) is bridgeable via
+-- player:GossipMenuAddItem(icon,msg,sender,action,coded,boxMsg,boxMoney);
+-- the underlying gates/actions are not. Re-triage when a skill-value,
+-- quest-reward-status, or player-CastSpell bridge lands.

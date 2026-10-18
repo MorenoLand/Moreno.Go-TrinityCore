@@ -11685,19 +11685,24 @@ func init() {
 	// (DRAGON_YSONDRE 14887 / DRAGON_LETHON 14888 / DRAGON_EMERISS 14889 /
 	// DRAGON_TAERAR 14890); ScriptName bindings are DB-side as usual.
 	// Ported arms in lua_scripts/world/boss_emerald_dragons.lua (new world/
-	// dir mirroring the C++ src/server/scripts/World layout):
-	// boss_ysondre JustEngagedWith Talk(SAY_YSONDRE_AGGRO 0) (event 1, the
-	// auriaya precedent); boss_lethon JustEngagedWith
-	// Talk(SAY_LETHON_AGGRO 0); boss_emeriss JustEngagedWith
-	// Talk(SAY_EMERISS_AGGRO 0); boss_taerar JustEngagedWith
-	// Talk(SAY_TAERAR_AGGRO 0) (the WorldBossAI legs have no bridges).
-	// No other bridgeable arm in the file: the four DamageTaken
-	// Talk(SAY_*_SUMMON_DRUIDS / DRAW_SPIRIT / CAST_CORRUPTION /
-	// SUMMON_SHADES 1) arms have no-DamageTaken bridge; emerald_dragonAI
-	// KilledUnit / emeriss KilledUnit player-gated casts (zero Talk) have
-	// no-cast bridge; the Reset self-cast MARK_OF_NATURE_AURA is not a Talk
-	// arm; timers / flags / react-state / movement / SpellHitTarget /
-	// SpellScript legs have no bridges.
+	// dir mirroring the C++ src/server/scripts/World layout): the four
+	// JustEngagedWith Talk(SAY_*_AGGRO 0) arms (event 1, the auriaya
+	// precedent; the WorldBossAI legs have no bridges) + their ExecuteEvent
+	// timer arms via CreateLuaEvent {min,max} tables (cancel on 2/4/23) —
+	// lightning wave 24819 {10s,20s} / shadow bolt whirl 24834 {15s,30s} /
+	// volatile infection 24928 120s / arcane blast 24857 {7s,12s} /
+	// bellowing roar 22686 {20s,30s}; the ysondre / lethon / emeriss
+	// DamageTaken arms (event 9, pre-damage health, floor-form 75/50/25%
+	// thresholds) — Talk(SAY_*_SUMMON 1) + 10x 24795 triggered / 24811 /
+	// 24910 triggered + ++_stage.
+	// Documented-only: taerar DamageTaken (event 9 bridges; the banish
+	// machine rides no-flag / no-react-state / no-summon-death bridges);
+	// emerald_dragonAI / emeriss KilledUnit player-gated victim-self-casts
+	// (25040 / 24904, no Go spell effect); the Reset self-cast 25041 +
+	// RemoveFlag / SetReactState legs; the UpdateAI SPELL_SUMMON_PLAYER
+	// 24776 max-threat pull; npc_dream_fog + npc_spirit_shade (no-movement /
+	// no-despawn bridges — not registered); the SpellHitTarget shade-summon
+	// machine; the two SpellScriptLoaders (no-SpellScript bridge).
 	RegisterLuaBoss("boss_ysondre", 14887)
 	RegisterLuaBoss("boss_lethon", 14888)
 	RegisterLuaBoss("boss_emeriss", 14889)
@@ -11707,15 +11712,18 @@ func init() {
 	// me->GetEntry() == NPC_CENARION_HOLD_INFANTRY (15184) — the
 	// event-1 auriaya precedent; the player target flattens through the
 	// moroes precedent (Lua Talk takes no target); the GuardAI
-	// _combatScheduler melee/spell legs have no-timer / no-cast
-	// bridges. Entry-verifiable: 15184 from the file's own GuardMisc
-	// enum; ScriptName bindings are DB-side as usual — see
-	// lua_scripts/world/npc_guard.lua. The Reset 10-minute buff
-	// machine, the Stormwind/Orgrimmar ReceiveEmote reply legs, and the
-	// whole npc_guard_shattrath_faction banish machine
-	// (NPC_ALDOR_VINDICATOR 18549 — 36642/36671 + 39533/36643 cast
-	// chains, zero Talk) sit behind the timer / cast / emote bridges —
-	// documented only.
+	// _combatScheduler melee/spell legs are SelectSpell machines (spell IDs
+	// unnamed in C++ — no bridge). Entry-verifiable: 15184 from the file's
+	// own GuardMisc enum; ScriptName bindings are DB-side as usual — see
+	// lua_scripts/world/npc_guard.lua. Ported too: the
+	// npc_guard_shattrath_faction ScheduleVanish banish machine (entry
+	// 18549, zero Talk — 5s victim-player gate -> 36671/36642
+	// non-triggered + 9s 39533/36643 triggered chain, unconditional
+	// re-arm; the exile/teleport legs deviate: player:CastSpell has no
+	// bridge, so the creature casts them on the player instead; cancel on
+	// 2/4/23). Documented-only: the Reset 10-minute SelectSpell buff
+	// machine and the Stormwind/Orgrimmar ReceiveEmote reply legs
+	// (no-emote bridge).
 	RegisterLuaBoss("npc_guard_generic", 15184)
 	// boss_nexusprince_shaffar (Mana Tombs, Outland dungeon pass): the
 	// bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO 1) (event 1,

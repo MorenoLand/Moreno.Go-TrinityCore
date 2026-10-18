@@ -1,0 +1,15 @@
+-- AchievementCriteriaScript BG/arena criteria checks --
+-- Deliberately unported (documented only — no AchievementCriteria event
+-- bridge): grep of engine/scripting for RegisterAchievement /
+-- AchievementCriteria returns zero bindings, and the Lua surface has no
+-- synchronous OnCheck(Player, Unit)->bool hook. The 16 classes in
+-- achievement_scripts.cpp (AddSC_achievement_scripts, :324-343) also depend
+-- on unbridged queries: Battleground::CheckAchievementCriteriaMeet /
+-- IsAllNodesControlledByTeam (:32-37, :44-49, :56-61, :167-172, :180-185,
+-- :236-243, :284-290), player HasAura of the IC refinery/quarry spells
+-- (:68-74), GetVehicleCreatureBase entry checks for the glaive thrower /
+-- keep cannon / SA artillery (:82-89, :97-104, :112-119), InArena +
+-- GetBattleground()->GetArenaType (:131-143), ToPlayer()->IsMounted
+-- (:153-160), GetAreaId + duel->IsMounted for the Argent Tournament rings
+-- (:267-277), and isHonorOrXPTarget (:318-322). Awaits an achievement
+-- criteria hook plus the battleground/vehicle query bridges.

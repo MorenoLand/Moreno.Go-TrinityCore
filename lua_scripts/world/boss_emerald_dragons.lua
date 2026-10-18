@@ -84,12 +84,11 @@
 -- boss_taerar DamageTaken — Talk(SAY_TAERAR_SUMMON_SHADES 1) rides the
 -- 25%-per-stage banish machine (3x triggered victim-cast shade summons
 -- 24841/24842/24843 + DoCast SPELL_SHADE 24313 + NOT_SELECTABLE /
--- NON_ATTACKABLE flags + REACT_PASSIVE + 60s _banishedTimer) —
--- no-DamageTaken bridge; the SummonedCreatureDies _shades-- leg rides
--- no-summon-death bridge; the UpdateAI banish/timeout machine —
--- re-keyed 2026-10-15 (timer doctrine): the timer and cast legs
--- bridge, but the machine stays out on the no-flag / no-react-state
--- / no-summon bridges. The stale "no-timer" claim is corrected.
+-- NON_ATTACKABLE flags + REACT_PASSIVE + 60s _banishedTimer) — event 9
+-- IS bridged, so the arm stays out only on the no-flag / no-react-state
+-- / no-summon-death bridges (SummonedCreatureDies _shades-- leg +
+-- UpdateAI banish/timeout machine); the stale "no-DamageTaken bridge"
+-- claim is retracted.
 -- The four dragon ExecuteEvent arms ported above (EVENT_LIGHTNING_WAVE
 -- / EVENT_SHADOW_BOLT_WHIRL / EVENT_VOLATILE_INFECTION /
 -- EVENT_ARCANE_BLAST / EVENT_BELLOWING_ROAR).
@@ -163,7 +162,7 @@ end
 -- randtime(10s,20s) repeat.
 local function lightningWaveTick(creature, guid)
     creature:CastSpell(nil, SPELL_LIGHTNING_WAVE)
-    schedule(guid, "lightning_wave", math.random(10, 20) * 1000, function()
+    schedule(guid, "lightning_wave", {10000, 20000}, function()
         lightningWaveTick(creature, guid)
     end)
 end
@@ -175,7 +174,7 @@ end
 -- self-cast convention — selin_fireheart / mr_smite precedent).
 local function shadowBoltWhirlTick(creature, guid)
     creature:CastSpell(creature, SPELL_SHADOW_BOLT_WHIRL)
-    schedule(guid, "shadow_bolt_whirl", math.random(15, 30) * 1000, function()
+    schedule(guid, "shadow_bolt_whirl", {15000, 30000}, function()
         shadowBoltWhirlTick(creature, guid)
     end)
 end
@@ -194,7 +193,7 @@ end
 -- 24857) 1-arg (DoCastVictim); 12s init, randtime(7s,12s) repeat.
 local function arcaneBlastTick(creature, guid)
     creature:CastSpell(nil, SPELL_ARCANE_BLAST)
-    schedule(guid, "arcane_blast", math.random(7, 12) * 1000, function()
+    schedule(guid, "arcane_blast", {7000, 12000}, function()
         arcaneBlastTick(creature, guid)
     end)
 end
@@ -206,7 +205,7 @@ end
 -- randtime(20s,30s) repeat.
 local function bellowingRoarTick(creature, guid)
     creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
-    schedule(guid, "bellowing_roar", math.random(20, 30) * 1000, function()
+    schedule(guid, "bellowing_roar", {20000, 30000}, function()
         bellowingRoarTick(creature, guid)
     end)
 end

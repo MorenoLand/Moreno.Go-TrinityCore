@@ -1,0 +1,10 @@
+-- xp_boost_PlayerScript (boosted XP days) --
+-- Deliberately unported (documented only — engine-inlined): the Go engine
+-- already runs this exact arm natively in grantXPWithVictimGroup
+-- (engine/world/kill.go:1196-1205) — when Config.XPBoostDaymask's bit for
+-- today's weekday is set (1 = Sunday, matching the C++ tm_wday in
+-- IsXPBoostActive, boosted_xp.cpp:29-37 on CONFIG_XP_BOOST_DAYMASK), the
+-- amount is multiplied by Config.XPBoostRate with the same uint32
+-- truncation, after the AutoBalance hook (the C++ module order). Event 12
+-- does fire (fireGiveXPHook, kill.go:1119), but registering a Lua OnGiveXP
+-- duplicate of boosted_xp.cpp:43-46 would multiply the boost twice.

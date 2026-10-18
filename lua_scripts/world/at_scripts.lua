@@ -1,0 +1,46 @@
+-- Area trigger scripts — src/server/scripts/World/areatrigger_scripts.cpp
+-- (474 lines; 10 AreaTriggerScript classes, AddSC_areatrigger_scripts).
+-- Lua fire site: engine/world/areatrigger.go:64 (TriggerServerEvent ctx,
+-- scripting.ServerEventAreaTrigger (=24), luaPlayer, triggerID); handlers
+-- registered via RegisterServerEvent(24, fn) receive (event, player, triggerID)
+-- per runtime.go:640-642. WalkDir auto-loads this file; no loader edit needed.
+-- PORTED: none. DOCUMENTED-ONLY — every class is gap class. Missing bridges
+-- verified against the current runtime this run (player method table at
+-- engine/world/lua_player.go, creature table at
+-- engine/world/lua_creature_events.go:55-102, server-event hooks at
+-- engine/scripting/runtime.go:966).
+-- Gap classes (spell IDs exact from the C++ enum blocks):
+-- 1. no player:CastSpell bridge (creatures only: lua_creature_events.go:62;
+--    in-tree f839950e nil-call-class precedent): at_legion_teleporter
+--    (:117-141; SPELL_TELE_A_TO 37387 / SPELL_TELE_H_TO 37389 gated on
+--    IsAlive/IsInCombat/GetTeam/GetQuestRewardStatus 10589/10604 — reward
+--    status also unbridged: only HasQuest exists, lua_player.go:303), and
+--    at_stormwright_shelf (:159-177; SPELL_CREATE_TRUE_POWER_OF_THE_TEMPEST
+--    53067 gated on GetQuestStatus(12741)==INCOMPLETE(3) — quest status enum
+--    unbridged), at_sholazar_waygate (:214-256; SHOLAZAR_TO_UNGORO 52056 /
+--    UNGORO_TO_SHOLAZAR 52057 on AT_SHOLAZAR 5046 / AT_UNGORO 5047, gated on
+--    quest statuses 12613/12559/13956).
+-- 2. no player:SummonCreature / FindNearestCreature bridge (method lists
+--    above): at_scent_larkorwi (:192-212; quest 4291 + SummonCreature(9683)),
+--    at_nats_landing (:261-293; HasAura(42644) bridgeable but quest 11209 +
+--    SummonCreature(23928)+AttackStart not), at_sentry_point (:298-326;
+--    quest 1265 + SummonCreature(4967)+SPELL_TELEPORT_VISUAL 799 cast), and
+--    the at_area_52_entrance (:381-442) SummonCreature(19913) spotlight arm
+--    (its SPELL_A52_NEURALYZER 34400 AddAura arm is atomic with the summon —
+--    no partial port; AT IDs 4472/4466/4471/4422, 5s per-trigger cooldown).
+-- 3. no creature-motion bridges (SetWalk/MovePath/AddUnitState):
+--    at_frostgrips_hollow (:449-512; quest 12877 + SummonCreature(29862/29861)
+--    + MovePath(NPC*100)); quest-status gate also unbridged.
+-- 4. no entry-filtered gameobject bridge (player:GetNearestGameObject(range)
+--    at lua_player.go:813 takes no entry; no loot-state gate, no
+--    UseDoorOrButton): at_coilfang_waterfall (:72-94; GO_COILFANG_WATERFALL
+--    184212 within 35.0f, GO_READY check, UseDoorOrButton).
+-- 5. at_brewfest (:331-376): FindNearestCreature(24711/24710) unbridged, so the
+--    creature:Talk(SAY_WELCOME 4) arm (bridge exists at
+--    lua_creature_events.go:102) is unreachable; 5s per-trigger cooldown on
+--    AT_BREWFEST_DUROTAR 4829 / AT_BREWFEST_DUN_MOROGH 4820.
+-- NOTE: one RegisterServerEvent(24, fn) handler would serve all 10 scriptnames
+-- (hooks are per-event, not per-trigger ID); when bridges land, dispatch on
+-- the triggerID argument. Trigger IDs needed: 4591, 4560, 5046, 5047, 4829,
+-- 4820, 4472, 4466, 4471, 4422 (frostgrips AT unnumbered in the C++ file —
+-- DB-side AreaTrigger entry).
