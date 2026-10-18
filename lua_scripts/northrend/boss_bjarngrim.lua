@@ -56,15 +56,17 @@
 -- instance bridge; DOCUMENTED DEVIATION: in C++ this fires on a live
 -- bjarngrim, in Lua it never fires). Lieutenant has no Talk arms
 -- (:380-460 confirmed — no Talk( in the class).
--- boss_bjarngrim Reset / Initialize — the canBuff AddAura
--- (SPELL_TEMPORARY_ELECTRICAL_CHARGE 52092) leg, the
--- m_auiStormforgedLieutenantGUID respawn loop (C++ self-notes the GUIDs
--- are never assigned), the stance-reset DoRemoveStanceAura +
--- DoCast(SPELL_DEFENSIVE_STANCE 53790) leg, SetEquipmentSlots
--- (EQUIP_SWORD 37871 / EQUIP_SHIELD 35642), and
--- instance->SetBossState(DATA_BJARNGRIM, NOT_STARTED) — no aura /
--- cast / equipment / instance bridges.
--- EnterEvadeMode — canBuff flag leg — no bridge.
+-- boss_bjarngrim Reset / Initialize — PORTED 2026-10-18 (the
+-- canBuff AddAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE 52092) leg,
+-- boss_bjarngrim.cpp:163-167: re-buffs on Reset only if canBuff is true
+-- and the aura is absent); the m_auiStormforgedLieutenantGUID respawn
+-- loop (C++ self-notes the GUIDs are never assigned), the stance-reset
+-- DoRemoveStanceAura + DoCast(SPELL_DEFENSIVE_STANCE 53790) leg,
+-- SetEquipmentSlots (EQUIP_SWORD 37871 / EQUIP_SHIELD 35642), and
+-- instance->SetBossState(DATA_BJARNGRIM, NOT_STARTED) stay out — no
+-- summon / cast / equipment / instance bridges.
+-- EnterEvadeMode — PORTED 2026-10-18 (canBuff = HasAura(52092)
+-- snapshot, boss_bjarngrim.cpp:191-196 — no re-buff after dispel).
 -- DoRemoveStanceAura (stance-switched RemoveAurasDueToSpell 53790 /
 -- 53791 / 53792) — the old "no aura-removal bridge" claim was stale
 -- (creature:RemoveAura is bridged, lua_creature_events.go:153), but
@@ -178,3 +180,23 @@ RegisterCreatureEvent(ENTRY_STORMFORGED_LIEUTENANT, 1, lieutenantEnterCombat)
 RegisterCreatureEvent(ENTRY_STORMFORGED_LIEUTENANT, 2, lieutenantLeaveCombat)
 RegisterCreatureEvent(ENTRY_STORMFORGED_LIEUTENANT, 4, lieutenantDied)
 RegisterCreatureEvent(ENTRY_STORMFORGED_LIEUTENANT, 23, lieutenantLeaveCombat)
+
+-- C++ boss_bjarngrim.cpp:113/163-167/191-196: ctor canBuff = true;
+-- Reset: if (canBuff) if (!HasAura(52092)) AddAura(52092, me);
+-- EnterEvadeMode: canBuff = HasAura(52092) (snapshot — dispelled buff is
+-- never re-applied). Nil (never evaded, incl. first spawn) reads as true
+-- = the ctor state; creature:HasAura (lua_creature_events.go:141) and
+-- single-arg creature:AddAura (lua_creature_events.go:170) are bridged.
+local SPELL_TEMPORARY_ELECTRICAL_CHARGE = 52092
+local canBuff = {}
+local function bjarngrimLeaveCombat(event, creature)
+    canBuff[creature:GetGUID()] = creature:HasAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE)
+end
+local function bjarngrimReset(event, creature)
+    local guid = creature:GetGUID()
+    if canBuff[guid] ~= false and not creature:HasAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE) then
+        creature:AddAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE)
+    end
+end
+RegisterCreatureEvent(ENTRY_BJARNGRIM, 2, bjarngrimLeaveCombat)
+RegisterCreatureEvent(ENTRY_BJARNGRIM, 23, bjarngrimReset)

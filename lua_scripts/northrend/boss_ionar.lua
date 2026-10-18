@@ -83,7 +83,10 @@
 -- HealthBelowPct(uiDisperseHealth) (45 + urand(0,10)):
 -- Talk(SAY_SPLIT 1) + InterruptNonMeleeSpells +
 -- DoCast(me, SPELL_DISPERSE 52770) — Talk(1) rides the unmodeled
--- machine; no health-check / interrupt / cast bridges.
+-- machine; firing it without the split would fabricate context. NOTE:
+-- creature:GetHealthPct IS bridged (object.go:107 fallback, sindragosa
+-- precedent) — the arm is blocked by the split/disperse MACHINE
+-- (gothik rule), not the health check.
 -- npc_spark_of_ionar (NPC_SPARK_OF_IONAR 28926, local enum in
 -- boss_ionar.cpp — the acolyte_of_shadron / stormforged_lieutenant
 -- local-enum precedent) — entry-verifiable but bridge-blocked, no

@@ -36,10 +36,11 @@
 -- Talk(SAY_SLAY 4) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
 -- "Player") — sixteenth player-gated variant ported.
--- JustDied — Talk(SAY_DEATH 8) (event 4; the _JustDied boss
--- bookkeeping passthrough and
+-- JustDied — PORTED (event 4; arm order: Talk(SAY_DEATH 8) then
 -- instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_PULSING_SHOCKWAVE_AURA
--- 59414) have no bridges).
+-- 59414), boss_loken.cpp:118, via GetPlayersInWorld + mapId/instanceId
+-- filter + player:RemoveAura — the moroes precedent; the _JustDied boss
+-- bookkeeping passthrough rides the Go native layer).
 -- EVENT_ARC_LIGHTNING — PORTED (see UpdateAI note above).
 -- EVENT_LIGHTNING_NOVA — PORTED 2026-10-17 (Talk(SAY_NOVA 3) +
 -- Talk(EMOTE_NOVA 9) + DoCastAOE(SPELL_LIGHTNING_NOVA 52960) self-cast
@@ -265,10 +266,17 @@ lokenResetMod = function(guid)
 end
 
 -- C++ JustDied: Talk(DEATH) + _JustDied() +
--- DoRemoveAurasDueToSpellOnPlayers(PULSING_SHOCKWAVE_AURA 59414) —
--- only the Talk arm is bridgeable.
+-- DoRemoveAurasDueToSpellOnPlayers(PULSING_SHOCKWAVE_AURA 59414) — Talk
+-- and the player-strip both ported (moroes precedent: no dead-player
+-- filter, C++ iterates every instance player).
 local function lokenDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:RemoveAura(SPELL_PULSING_SHOCKWAVE_AURA)
+        end
+    end
     cancelTimers(creature:GetGUID())
 end
 
