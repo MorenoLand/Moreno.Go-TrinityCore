@@ -36,6 +36,10 @@
 -- victim:GetObjectType()=="Player" — nalorakk precedent);
 -- JustDied Talk(SAY_DEATH 2) (event 4; _JustDied instance
 -- bookkeeping has no bridge).
+-- C++ DamageTaken 66%/33% health-crossing -> DoCastSelf(Insanity
+-- 57496) (event 9, pre-damage damage arg; InterruptNonMeleeSpells
+-- (false) has no bridge — documented; NOT_SELECTABLE damage=0
+-- leg needs the absent flag bridge — documented only).
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith _instance->DoStartTimedAchievement(
 -- ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_QUICK_DEMISE_START_EVENT
@@ -45,10 +49,11 @@
 -- DoCast(target, Shiver 57949) (15s repeat): the random-target
 -- SelectTarget bridge is absent (cairne/kazzak precedent).
 -- DamageTaken: UNIT_FLAG_NOT_SELECTABLE damage-nullification leg
--- (no UNIT_FIELD_FLAGS flag bridge); 66%/33% health-crossing
--- machine — me->InterruptNonMeleeSpells(false) +
--- DoCast(me, Insanity 57496, triggered): no health-pct bridge
--- (doomwalker precedent) and no interrupt bridge.
+-- (no UNIT_FIELD_FLAGS flag bridge); the 66%/33% crossing arm is
+-- PORTED below (event 9; the old "no health-pct bridge (doomwalker
+-- precedent)" claim was stale — event 9 carries pre-damage damage
+-- and creature:GetHealth()/GetMaxHealth() are bridged);
+-- me->InterruptNonMeleeSpells(false) still has no bridge.
 -- SpellHitTarget(SPELL_INSANITY 57496) insanity machinery — event
 -- 15 never fires (standing); plus the payload needs absent
 -- bridges: SummonCreature(NPC_TWISTED_VISAGE 30625,
@@ -88,6 +93,7 @@ local ENTRY_HERALD_VOLAZJ = 29311
 
 local SPELL_MIND_FLAY = 57941
 local SPELL_SHADOW_BOLT_VOLLEY = 57942
+local SPELL_INSANITY = 57496 -- boss_herald_volazj.cpp:34
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -209,8 +215,40 @@ local function volazjReset(event, creature)
                                      -- leg, whose bridge is absent)
 end
 
+-- C++ DamageTaken (cpp:114-134): GetHealthPct(damage) with
+-- damage > health -> 0 and integer division
+-- (100*(health-damage)/maxHealth). Downward crossing of 66% or 33%
+-- -> me->InterruptNonMeleeSpells(false) (no bridge, documented)
+-- + DoCast(me, SPELL_INSANITY, false) = self-cast, non-triggered
+-- (vaelastrasz convention: CastSpell(creature, spell) = DoCastSelf).
+-- The UNIT_FLAG_NOT_SELECTABLE damage=0 leg needs the absent flag
+-- bridge; the flag is only set by the unported SpellHitTarget
+-- insanity machine (event 15 never fires), so it never fires in
+-- Lua. Event 9 fires pre-damage carrying damage (eck precedent),
+-- so pre/post pct are C++-exact. No once-latch in C++: a re-cross
+-- after a heal re-fires.
+local function volazjDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local function pctAfter(dmg)
+        if dmg > health then
+            return 0
+        end
+        return math.floor(100 * (health - dmg) / maxHealth)
+    end
+    local pre = pctAfter(0)
+    local post = pctAfter(damage)
+    if (pre >= 66 and post < 66) or (pre >= 33 and post < 33) then
+        creature:CastSpell(creature, SPELL_INSANITY)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 1, volazjEnterCombat)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 2, volazjLeaveCombat)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 3, volazjTargetDied)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 4, volazjDied)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 23, volazjReset)
+RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 9, volazjDamageTaken)

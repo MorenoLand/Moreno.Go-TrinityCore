@@ -66,7 +66,13 @@
 -- cast / equipment / instance bridges.
 -- EnterEvadeMode — canBuff flag leg — no bridge.
 -- DoRemoveStanceAura (stance-switched RemoveAurasDueToSpell 53790 /
--- 53791 / 53792) — no aura-removal bridge.
+-- 53791 / 53792) — the old "no aura-removal bridge" claim was stale
+-- (creature:RemoveAura is bridged, lua_creature_events.go:153), but
+-- the arm is gated on the unbridged stance-change machine (m_uiStance
+-- written only there; all nine stance-gated timers ride it), so it
+-- stays documented-only — removing the stance aura on independent
+-- timers would fabricate stance-switched behavior (gothik
+-- precedent).
 -- UpdateAI — the stance-change machine (:123/:284, urand(20000,25000)
 -- init/re-arm) — 2026-10-14 re-audit: the stance Talk/Emote arms
 -- (defensive 1/6 :265-266, berserker 3/8 :271-272, battle 2/7 :277-278) +

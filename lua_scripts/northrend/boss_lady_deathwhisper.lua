@@ -144,13 +144,18 @@
 -- bridge.
 -- boss_lady_deathwhisper DamageTaken — Talk(SAY_PHASE_2 8) +
 -- Talk(EMOTE_PHASE_2 9) ride the mana-power pct gate of the phase
--- transition (no health-pct bridge; the garfrost precedent);
--- the mana-barrier aura legs have no bridge. The DamageTaken
--- phase-2 transition + Frostbolt / Frostbolt Volley GROUP_TWO seeds
--- PORTED 2026-10-14 (event-9 latch; Touch of Insignificance stays
--- out — victim-targeted AddAura has no bridge, the Lua AddAura is
+-- transition; the old "(no health-pct bridge; the garfrost
+-- precedent)" note was wrong — HealthBelowPct appears nowhere in
+-- the C++ arm (cpp:406-419), the gate is damage > GetPower(MANA),
+-- so the health-pct precedent does not apply. The DamageTaken
+-- phase-2 transition (mana-power gate, event-9 latch, per-GUID
+-- PHASE_ONE latch, damage -= mana via event-9 return) + Frostbolt /
+-- Frostbolt Volley GROUP_TWO seeds are PORTED 2026-10-14
+-- (deathwhisperDamageTaken; Touch of Insignificance stays out —
+-- victim-targeted AddAura has no bridge, the Lua AddAura is
 -- self-only; Summon Spirits stays out — creature-cast path has no
--- SPELL_EFFECT_SUMMON delivery leg, the eregos precedent).
+-- SPELL_EFFECT_SUMMON delivery leg, the eregos precedent); the
+-- mana-barrier aura legs have no bridge.
 -- boss_lady_deathwhisper JustDied — the Full House achievement
 -- legs, the DaranavanMoveEvent, faction/ReactState legs, and
 -- KilledMonsterCredit(NPC_DARNAVAN_CREDIT) group loop have no

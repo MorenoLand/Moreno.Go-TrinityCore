@@ -72,8 +72,14 @@
 -- random-target SelectTarget bridge is absent (cairne/kazzak
 -- precedent), so both casts are unmodelable — documented-only.
 -- DamageTaken 55% health crossing (events.Reset + SetPhase(
--- PHASE_TWO) + EVENT_START_PHASE_TWO 1s) — no health-pct bridge
--- (doomwalker precedent) — documented-only.
+-- PHASE_TWO) + EVENT_START_PHASE_TWO 1s) — the old "no health-pct
+-- bridge (doomwalker precedent)" claim was stale (event 9 carries
+-- pre-damage damage; creature:GetHealthPct() is bridged), but the
+-- arm stays documented-only: the payload is the whole unbridged
+-- phase-two machine — SetReactState/InterruptNonMeleeSpells/
+-- SetFlag(NOT_SELECTABLE) + the flying-sacrifice MovePoint/motion
+-- + summon + cross-AI DoAction sequence (no phase / flag /
+-- motion / summon / cross-AI bridges).
 -- Phase-two machine — EVENT_START_PHASE_TWO (SetReactState(
 -- REACT_PASSIVE), AttackStop, InterruptNonMeleeSpells(true),
 -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE), MovePoint(
@@ -115,7 +121,11 @@
 -- ACTION_CHOSEN) initiation (no DoAction bridge), SPELL_PILLAR_OF_
 -- LIGHTNING 56868 self-cast (port-pattern-ready: creature:CastSpell(
 -- creature, spell)), RemoveAurasDueToSpell(SPELL_SPHERE_VISUAL_
--- VOLUNTEER 56102) (no aura-removal bridge), Talk(SAY_CHOSEN 0) /
+-- VOLUNTEER 56102) (the old "no aura-removal bridge" claim was
+-- stale — creature:RemoveAura is bridged, lua_creature_events.go:
+-- 153 — but the arm fires only through the unbridged DoAction /
+-- sacrifice machine, so it stays documented-only), Talk(SAY_CHOSEN
+-- 0) /
 -- Talk(SAY_SACRIFICED 1), stand-state machine, MovePoint(
 -- POINT_SACRIFICE) choreography (no motion bridges), the sacrifice
 -- payload (instance->GetCreature(DATA_JEDOGA_SHADOWSEEKER) +

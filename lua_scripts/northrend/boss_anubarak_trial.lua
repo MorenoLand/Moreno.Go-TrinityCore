@@ -128,10 +128,16 @@
 -- the unbridged summon gate; DoAction(ACTION_SHADOW_STRIKE):
 -- SelectTarget(Random,0) -> DoCast(Shadow Strike 66134) — no
 -- DoAction / random-target bridges; UpdateAI submerge timer:
--- HealthBelowPct(80) (no health-pct bridge — doomwalker precedent) +
--- flag / aura / permafrost gates (flag bridges absent; the aura leg
--- rides the unbridged health-pct gate — creature HasAura IS bridged,
--- engine/world/lua_objects.go:228) — all documented-only.
+-- HealthBelowPct(80) — the old "no health-pct bridge (doomwalker
+-- precedent)" claim was stale (event 9 + creature:GetHealthPct()
+-- observe it, eck/sindragosa precedent) — but the arm stays
+-- documented-only: conjunctive on unbridged SetFlag/RemoveFlag(
+-- NOT_SELECTABLE) (a still-targetable submerge would fabricate
+-- behavior), instance-gated (GetBossState(DATA_ANUBARAK) — no
+-- instance bridge), and summon-context (zero registration) +
+-- flag / aura / permafrost gates (flag bridges absent; creature
+-- HasAura IS bridged, engine/world/lua_objects.go:228) — all
+-- documented-only.
 -- npc_anubarak_spike (34660) — zero registration (entry
 -- verifiable from the Summons enum, but zero bridgeable arms —
 -- joins the entry-verifiable-but-bridge-blocked queue): DamageTaken

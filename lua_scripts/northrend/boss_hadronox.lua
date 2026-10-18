@@ -99,8 +99,15 @@
 -- creature engine-engaging players where C++ holds it REACT_PASSIVE
 -- (amanitar mushrooms precedent — the C++-exact port bar fails).
 -- DamageTaken frenzy (HealthBelowPctDamaged(25) -> _hadFrenzy latch +
--- Talk(CRUSHER_EMOTE_FRENZY 2) + DoCastSelf(FRENZY 53801)) — no
--- DamageTaken hook + no health-pct bridge. JustDied -> hadronox AI
+-- Talk(CRUSHER_EMOTE_FRENZY 2) + DoCastSelf(FRENZY 53801)) — the old
+-- "no DamageTaken hook + no health-pct bridge" claim was stale
+-- (event 9 carries pre-damage damage; the crusher's 5% mitigation
+-- arm needs attacker->IsControlledByPlayer(), which has zero hits
+-- in engine/scripting/ and engine/world/lua_*.go — that missing
+-- attacker-classification bridge is the true blocker, and a
+-- GetObjectType()=="Player" approximation would wrongly reduce
+-- pet/charm damage that C++ lets through at full). JustDied ->
+-- hadronox AI
 -- DoAction(ACTION_HADRONOX_MOVE) — DoAction bridge absent.
 -- npc_anub_ar_crusher_champion / npc_anub_ar_crusher_crypt_fiend /
 -- npc_anub_ar_crusher_necromancer + npc_anub_ar_champion /
