@@ -94,8 +94,9 @@
 -- cancel the combat pump, drop combat state, and restart the
 -- intro machine from phase 1 / 5000 when Intro has not yet
 -- completed (the C++ Reset() observable remainder, C++-
--- exact); the split latches persist across a wipe only after
--- Intro — matching the C++ Reset() not resetting them.
+-- exact); the split latches never persist across a wipe — the
+-- C++ Reset() calls Initialize(), which resets both latches,
+-- so the combatStates drop in fullReset is C++-exact.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI
 -- shim (instance_arcatraz.cpp stays blocked on the
@@ -331,17 +332,21 @@ local function combatTick(creature, guid)
 
     -- Heroic-only Mana Burn 39020: 25s init then {16s,32s} —
     -- same targeting (SelectTarget(Random, 1) =
-    -- randomNonVictimPlayer, C++-exact), non-triggered,
-    -- re-arm {16s,32s} (C++-exact). The C++ IsNonMeleeSpellCast
-    -- early-return gate has no cast-state bridge — the arm fires
-    -- unconditionally (netherspite precedent, as for fear /
-    -- domination). The old "no difficulty bridge" claim was
-    -- stale — creature:IsHeroic() is bridged
+    -- randomNonVictimPlayer, C++-exact); nil pick casts NOTHING
+    -- (no DoCastVictim fallback — unlike mind rend / fear /
+    -- domination), non-triggered, re-arm {16s,32s} (C++-exact).
+    -- The C++ IsNonMeleeSpellCast early-return gate has no
+    -- cast-state bridge — the arm fires unconditionally
+    -- (netherspite precedent, as for fear / domination). The
+    -- old "no difficulty bridge" claim was stale —
+    -- creature:IsHeroic() is bridged
     -- (lua_creature_events.go:260).
     if creature:IsHeroic() then
         if st.manaBurn <= 1000 then
             local target = randomNonVictimPlayer(creature)
-            creature:CastSpell(target, H_SPELL_MANA_BURN)
+            if target then
+                creature:CastSpell(target, H_SPELL_MANA_BURN)
+            end
             st.manaBurn = 16000 + math.random(0, 15999)
         else
             st.manaBurn = st.manaBurn - 1000

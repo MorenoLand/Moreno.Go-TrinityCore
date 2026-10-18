@@ -4513,15 +4513,17 @@ func init() {
 	// set (arcing smash / whirlwind / mighty blow) and the <50%
 	// phase-2 machine: Talk(SAY_ENRAGE) + triggered self-cast
 	// dual wield 29651 + the charging and roar arms (initial 0s).
-	// The virtual-item-slot zeroing arms have no item-display
-	// bridge; the charging AttackStart victim-switch arm has no
+	// The virtual-item-slot zeroing arms ride
+	// creature:SetEquipmentSlots (0, 0, EQUIP_NO_CHANGE skip);
+	// the charging AttackStart victim-switch arm has no
 	// bridge; the instance/SetBossState/DoZoneInCombat arms are
 	// blocked on the instance-script model.
 	RegisterLuaBoss("boss_high_king_maulgar", 18831)
-	// Krosh Firehand (18832) runs the fireball 2s floor (the
-	// within-30-yd gate has no distance bridge), the spell-shield
-	// arm and blast wave 60s (random alive player — the
-	// threat-list/15-yd picks have no bridges; the
+	// Krosh Firehand (18832) runs the fireball 2s floor + the
+	// within-30-yd (3D) distance poller (IsWithinDist bridged),
+	// the spell-shield arm and blast wave 60s (random alive
+	// player within 15 yd 2D — IsWithinDist2d bridged; only the
+	// threat-list half of the pick has no bridge; the
 	// InterruptNonMeleeSpells arms have no interrupt bridge).
 	RegisterLuaBoss("boss_krosh_firehand", 18832)
 	// Olm the Summoner (18834) runs dark decay / summon WFH
@@ -4538,8 +4540,9 @@ func init() {
 	RegisterLuaBoss("boss_blindeye_the_seer", 18836)
 	// Gruul the Dragonkiller (19044) runs the growth / cave-in /
 	// ground-slam+shatter / hurtful-strike / reverberation arms;
-	// the SpellHitTarget knockback arms are unmodeled (event 15
-	// never fires in the Go engine).
+	// the shatter performing-clear rides bridged event 15 (caster-
+	// side bindings); the ground-slam knockback arms are unmodeled
+	// (no hit-enumeration bridge for the AoE hit players).
 	RegisterLuaBoss("boss_gruul", 19044)
 	// Magtheridon (17257) runs the break-free / cleave / blast
 	// nova / blaze / quake / berserk arms plus the 30% collapse
