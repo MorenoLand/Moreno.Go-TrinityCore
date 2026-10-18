@@ -303,7 +303,7 @@ end
 -- C++ :516-519 EVENT_BERSERK: DoCastSelf(SPELL_BERSERK 26662)
 -- non-triggered + Talk(SAY_BERSERK 12), cast-before-Talk kept;
 -- one-shot. Seed IsHeroic() ? 360000 : 480000 (:305) rides
--- creature:IsHeroic() (engine/world/lua_creature_events.go:203, the
+-- creature:IsHeroic() (engine/world/lua_creature_events.go:260, the
 -- cyanigosa mana-destruction precedent).
 local function onBerserk(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK)

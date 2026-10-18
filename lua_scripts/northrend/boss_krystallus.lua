@@ -51,7 +51,7 @@
 -- is STALE — randomPlayer is the in-tree bridge (anomalus spark /
 -- faerlina / eck precedents), and the "no heroic bridge" claim is
 -- STALE — creature:IsHeroic() is bridged per-instance
--- (lua_creature_events.go:203, cyanigosa / saurfang precedent). So:
+-- (lua_creature_events.go:260, cyanigosa / saurfang precedent). So:
 -- EVENT_BOULDER_TOSS — PORTED: DoCast(target, SPELL_BOULDER_TOSS
 -- 50843) non-triggered on randomPlayerInRange(creature, 50), {3s,9s}
 -- init / {9s,15s} repeat, unconditional re-arm (C++-exact);
@@ -154,7 +154,7 @@ end
 
 -- C++ UpdateAI EVENT_GROUND_SPIKE: heroic-only (seeded in JustEngagedWith
 -- under IsHeroic(); creature:IsHeroic() bridged per-instance —
--- lua_creature_events.go:203, the cyanigosa / saurfang precedent);
+-- lua_creature_events.go:260, the cyanigosa / saurfang precedent);
 -- DoCast(target, SPELL_GROUND_SPIKE 59750) non-triggered on a
 -- SelectTarget(Random, 0, 100.0f, true) target; re-arm unconditional
 -- {12s,17s}.

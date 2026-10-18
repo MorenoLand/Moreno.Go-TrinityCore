@@ -434,7 +434,7 @@ local function mistressEnterCombat(event, creature, target)
     -- Repeat(30s) outside the cast (re-arm unconditional), seeded only
     -- when IsHeroic() (the "no difficulty bridge (kelidan precedent)"
     -- header claim is STALE — creature:IsHeroic() is bridged
-    -- engine/world/lua_creature_events.go:203, lavanthor precedent).
+    -- engine/world/lua_creature_events.go:260, lavanthor precedent).
     if creature:IsHeroic() then
         schedule(guid, "mistresskiss", 15000, function()
             mistressKissTick(creature, guid)

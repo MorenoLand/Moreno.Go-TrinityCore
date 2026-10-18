@@ -75,7 +75,7 @@
 -- blade-dance end and its DoCast(SelectTarget(Random, 0),
 -- H_SPELL_CHARGE 25821) fire arm stay unmodeled — the "no
 -- difficulty bridge" claim was stale and is retracted
--- (creature:IsHeroic() is bridged, lua_creature_events.go:203),
+-- (creature:IsHeroic() is bridged, lua_creature_events.go:260),
 -- but the arm still has no landing point: Charge_timer is only
 -- ever armed by the blade-dance-end leg (no movement bridge —
 -- MovePoint/MovementInform) and the fire arm needs

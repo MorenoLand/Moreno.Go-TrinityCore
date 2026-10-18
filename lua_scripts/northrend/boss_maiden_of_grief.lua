@@ -63,7 +63,7 @@
 -- timed-achievement bridge.
 -- PORTED (retraction re-audit 2026-10-17: the "no heroic bridge" claim
 -- was stale — creature:IsHeroic() is bridged on the event-handler
--- surface (engine/world/lua_creature_events.go:203, per-instance
+-- surface (engine/world/lua_creature_events.go:260, per-instance
 -- difficulty read), used live by boss_blood_prince_council.lua):
 -- UpdateAI EVENT_PARTING_SORROW (partingTick) — IsHeroic()-gated
 -- random-target DoCast(SPELL_PARTING_SORROW 59723) non-triggered,

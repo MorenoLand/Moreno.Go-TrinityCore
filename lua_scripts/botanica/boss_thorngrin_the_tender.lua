@@ -57,7 +57,7 @@
 --    target was picked (the C++ ScheduleEvent sits outside
 --    the target if, C++-exact).
 -- 2. Hellfire arm — heroic {17.4s,19.3s} via creature:IsHeroic()
---    (lua_creature_events.go:203), 18s otherwise (C++ JustEngagedWith
+--    (lua_creature_events.go:260), 18s otherwise (C++ JustEngagedWith
 --    / EVENT_HELLFIRE arm, boss_thorngrin_the_tender.cpp:76-81,
 --    133-137): Talk(SAY_CAST_HELLFIRE) + TRIGGERED DoCastVictim(
 --    SPELL_HELLFIRE 34659, true) (C++-exact).

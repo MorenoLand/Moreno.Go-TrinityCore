@@ -111,7 +111,7 @@
 -- are the only hits; no arm ever selects them, so there is nothing to
 -- port. (The old "no difficulty bridge — vazruden/thespia precedent"
 -- claim is STALE: creature:IsHeroic() IS bridged
--- (engine/world/lua_creature_events.go:203); it is simply unneeded
+-- (engine/world/lua_creature_events.go:260); it is simply unneeded
 -- here.)
 -- DOCUMENTED DEVIATION: the awakening preamble is unbridged — the orb
 -- BasicEvent machines (OrbAirPositionEvent / OrbFlyEvent /

@@ -42,7 +42,7 @@
 -- 59466) self-cast (the boss_ai.go DoCastAOE lowering), 1-arg =
 -- non-triggered; init 3s, re-arm 10-16s; seeded at engage only when
 -- creature:IsHeroic() (the earlier "no IsHeroic bridge" claim was
--- stale — IsHeroic is bridged, engine/world/lua_creature_events.go:203;
+-- stale — IsHeroic is bridged, engine/world/lua_creature_events.go:260;
 -- the cyanigosa mana-destruction port).
 -- DOCUMENTED DEVIATIONS:
 -- The SelectTarget distance filters (40.0f :68, 50.0f :81) have no
@@ -172,7 +172,7 @@ local function lavanthorEnterCombat(event, creature)
     -- C++ :87: the cauterizing-flames scheduler seeds only when
     -- IsHeroic() (the earlier "no IsHeroic bridge" header claim was
     -- stale — creature:IsHeroic() is bridged,
-    -- engine/world/lua_creature_events.go:203).
+    -- engine/world/lua_creature_events.go:260).
     if creature:IsHeroic() then
         schedule(guid, "cauterizing", 3000, function()
             cauterizingFlamesTick(creature, guid)

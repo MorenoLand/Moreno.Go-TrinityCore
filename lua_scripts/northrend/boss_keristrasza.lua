@@ -44,7 +44,7 @@
 -- init / 30s normal repeat; heroic leg DoCast(me, SPELL_
 -- CRYSTALLIZE 48179) 2-arg (non-triggered) self-cast when
 -- creature:IsHeroic() (the "no IsHeroic bridge" claim was stale —
--- IsHeroic is bridged, engine/world/lua_creature_events.go:203;
+-- IsHeroic is bridged, engine/world/lua_creature_events.go:260;
 -- lavanthor precedent), 11s heroic repeat (DUNGEON_MODE(30s,11s)).
 -- The BossAI::JustEngagedWith instance-bookkeeping leg has no
 -- bridge — tharon_ja precedent.

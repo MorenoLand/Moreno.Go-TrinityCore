@@ -95,7 +95,7 @@
 -- DoCast(SPELL_PLANAR_SHIFT 51162) + summons.DespawnAll() +
 -- DoCast(SPELL_PLANAR_ANOMALIES 57959) x6 — stays out on the
 -- PHASE MACHINE, not on missing bridges: creature:IsHeroic()
--- (lua_creature_events.go:203) and creature:GetHealthPct()
+-- (lua_creature_events.go:260) and creature:GetHealthPct()
 -- (scripting/object.go:107) ARE bridged now. The blockers are
 -- the machine's consumer legs: the 6x anomaly summons have no
 -- delivery (no SPELL_EFFECT_SUMMON leg in the creature-cast

@@ -26,7 +26,7 @@
 -- 12s init, 10-50s repeat (math.random — eck spring precedent),
 -- IsHeroic()-gated at engage — the old "no difficulty bridge
 -- (kelidan)" header claim is RETRACTED (creature:IsHeroic() bridged —
--- engine/world/lua_creature_events.go:203, AGENTS.md 2026-10-17);
+-- engine/world/lua_creature_events.go:260, AGENTS.md 2026-10-17);
 -- EVENT_CHECK_ENRAGE, 5s init, 5s repeat: HasAura(26662) returns WITHOUT
 -- re-arming (exact C++ :191-192); GetZ() < 24.0 -> DoCast(me,
 -- SPELL_ENRAGE 26662, true) TRIGGERED; unconditional 5s re-arm

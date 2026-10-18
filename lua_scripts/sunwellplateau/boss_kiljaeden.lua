@@ -128,8 +128,8 @@
 -- Armageddon Target (25735). OnReset(23): triggered self-cast
 -- armageddon visual 45911, ~1 tick later triggered 45914 (C++ case
 -- 0 leaves uiTimer=0), 9s later triggered 45909 (C++-exact chain);
--- the trailing 5000ms is the DespawnOrUnsummon wait (no despawn
--- bridge — documented). (The KJ-side armageddon-target
+-- the trailing 5000ms is the DespawnOrUnsummon wait (ported via
+-- creature:Despawn(), below). (The KJ-side armageddon-target
 -- summon arm is summon-blocked — above.)
 -- Sinister Reflection (25708). OnEnterCombat(1): read the
 -- victim's class (player-only; unclassed victims get no spells —

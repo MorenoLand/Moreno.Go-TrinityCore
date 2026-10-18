@@ -60,7 +60,7 @@
 -- non-triggered) -> CastSpell(target, 59374); 30s init / Repeat() 30s
 -- (:117, unconditional — outside the target-pick if). The IsHeroic()
 -- gate rides creature:IsHeroic()
--- (engine/world/lua_creature_events.go:203 — per-instance difficulty
+-- (engine/world/lua_creature_events.go:260 — per-instance difficulty
 -- read); the old "heroic-mode branches are unbridged" claim for this
 -- arm is stale (ported this tick).
 -- KilledUnit (:61-65) — if (victim->GetTypeId() == TYPEID_PLAYER)
@@ -185,7 +185,7 @@ end
 -- DoCast(target, SPELL_MANA_DESTRUCTION 59374) (2-arg =
 -- non-triggered); 30s init, Repeat() 30s unconditional (the Repeat
 -- sits outside the target-pick if). The IsHeroic() gate rides
--- creature:IsHeroic() (engine/world/lua_creature_events.go:203, the
+-- creature:IsHeroic() (engine/world/lua_creature_events.go:260, the
 -- per-instance difficulty read); the old "heroic-mode branches are
 -- unbridged" header claim is stale.
 local function manaDestructionTick(creature, guid)

@@ -65,7 +65,7 @@
 --   cast 46162, 44s init -> 44s loop.
 -- - EVENT_SHOCK_BARRIER (heroic-only): OnEnterCombat schedules it
 --   61s only under creature:IsHeroic() (C++-exact JustEngagedWith
---   gate, lua_creature_events.go:203; the "no difficulty bridge"
+--   gate, lua_creature_events.go:260; the "no difficulty bridge"
 --   claim was stale, retracted). Fire arm in C++ order:
 --   Talk(SAY_ANNOUNCE_PYROBLAST) + self-cast 46165 + fireball
 --   reschedule 2s500ms (schedule() cancel-on-reschedule = EventMap
@@ -114,7 +114,7 @@
 --   bridge" claim retracted (maiden_of_virtue random-player precedent).
 -- - EVENT_SHOCK_BARRIER + EVENT_PYROBLAST: now PORTED (above).
 --   Stale claims retracted: "no difficulty bridge" (IsHeroic bridged
---   at lua_creature_events.go:203, keristrasza crystallize precedent)
+--   at lua_creature_events.go:260, keristrasza crystallize precedent)
 --   and "no SelectTarget bridge" (maiden_of_virtue random-player
 --   precedent, already in this file). The shock-barrier arm is the
 --   heroic-gated leg of JustEngagedWith; pyroblast fires only from

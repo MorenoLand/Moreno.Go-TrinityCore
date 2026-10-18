@@ -159,7 +159,7 @@
 -- :1308-1313 + runtime before applying; delegated audit reconciled):
 -- npc_shambling_horror_icc's heroic-only DamageTaken frenzy latch —
 -- the "no difficulty bridge" header claim was STALE (IsHeroic is
--- bridged, lua_creature_events.go:203; event 9 DamageTaken fires
+-- bridged, lua_creature_events.go:260; event 9 DamageTaken fires
 -- pre-application with attacker+damage, lua_creature_events.go:303).
 -- HealthBelowPctDamaged(20, damage) ≡ post-damage health below
 -- floor(maxHealth*20/100) (algalon precedent); the _frenzied latch

@@ -42,7 +42,7 @@
 -- EVENT_VILE_GAS — DoCastAOE(SPELL_VILE_GAS_TRIGGER 72285)
 -- non-triggered as self-cast, 22s..27s init / 30s..35s re-arm,
 -- heroic-gated via creature:IsHeroic()
--- (engine/world/lua_creature_events.go:203) — the 2026-10-14 "no
+-- (engine/world/lua_creature_events.go:260) — the 2026-10-14 "no
 -- IsHeroic bridge" claim was stale.
 -- boss_rotface SpellHitTarget — Talk(SAY_SLIME_SPRAY 3) rides the
 -- SPELL_SLIME_SPRAY case of the SpellHitTarget switch — stays out on
@@ -94,7 +94,7 @@
 -- (:220-222) is pure but HEROIC-GATED (scheduled only
 -- `if (IsHeroic())` :117-118). The 10-14 claim of "no IsHeroic
 -- bridge" was STALE — creature:IsHeroic() is live on the
--- event-handler surface (engine/world/lua_creature_events.go:203,
+-- event-handler surface (engine/world/lua_creature_events.go:260,
 -- boss_blood_prince_council.lua uses it) — so the arm is now
 -- PORTED with the heroic gate (this run); porting unconditionally
 -- would cast on normal too (unfaithful), so the gate is required.
@@ -185,7 +185,7 @@ end
 -- non-triggered -> self-cast (selin_fireheart/mr_smite convention);
 -- heroic-gated: Reset schedules it only `if (IsHeroic())` (:117-118),
 -- so the Lua arm gates on creature:IsHeroic()
--- (engine/world/lua_creature_events.go:203 — the 2026-10-14 "no
+-- (engine/world/lua_creature_events.go:260 — the 2026-10-14 "no
 -- IsHeroic bridge" claim was stale); 22s..27s init, 30s..35s re-arm.
 local function onVileGas(creature, guid)
     creature:CastSpell(creature, SPELL_VILE_GAS_TRIGGER)

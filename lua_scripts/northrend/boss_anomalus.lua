@@ -95,7 +95,7 @@ local SAY_DEATH = 1
 local SPELL_SPARK = 47751 -- C++ :182 fires SPELL_SPARK unconditionally
 -- (H_SPELL_SPARK 57062 is never referenced in the fire path); no
 -- IsHeroic gating needed (creature:IsHeroic() IS bridged —
--- engine/world/lua_creature_events.go:203, blood_prince_council.lua
+-- engine/world/lua_creature_events.go:260, blood_prince_council.lua
 -- precedent — the keristrasza-era "no IsHeroic bridge" claims are
 -- stale).
 

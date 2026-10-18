@@ -40,7 +40,7 @@
 -- EVENT_FEAR 25-30s — now the ported timers' init values;
 -- EVENT_BERSERK 3min heroic-only is PORTED below (the "no heroic
 -- bridge" claim was stale — creature:IsHeroic() is bridged,
--- lua_creature_events.go:203, kelidan precedent).
+-- lua_creature_events.go:260, kelidan precedent).
 -- boss_ambassador_hellmawAI::DoAction INTRO leg —
 -- hellmaw->AI()->DoAction(ACTION_AMBASSADOR_HELLMAW_INTRO) is called
 -- from instance_shadow_labyrinth.cpp:137 (the InstanceMapScript —
