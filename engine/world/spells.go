@@ -3507,6 +3507,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// timer at cast COMPLETION, not initiation — s.lastCastTime is now
 	// assigned in finishSpellCast alongside the power deduction, so
 	// interrupted casts and non-mana spells do not start the timer.
+	// Spell::prepare runs CalcCastTime (Spell.cpp:3130-3136) before
+	// TriggerGlobalCooldown (Spell.cpp:3197) on the same Spell object, so
+	// the PCT global-cooldown gate (Backdraft, Player.cpp:21328-21337)
+	// sees the cast-time leg's m_appliedMods registration. The
+	// begin/endSpellModTaking window is the Go model of that single
+	// per-cast registry: it opens before the cast-time fold and closes
+	// right after each TriggerGlobalCooldown call below (including the
+	// next-swing early return), never spanning the cast-bar wait — C++
+	// prepare sets no taking spell, the registry is per-Spell-object.
+	s.beginSpellModTaking()
 	castTime := s.calculateSpellCastTime(spell)
 	// Spell::prepare (Spell.cpp:3125-3133): the .cheat casttime arm forces
 	// m_casttime to 0 after the first CheckCast pass (the C++ comment's
@@ -3529,6 +3539,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		if castTime > 0 || !spellIsMoveAllowedChannel(spell) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "casting while moving")
+			s.endSpellModTaking() // close the prepare-time registry (opened above)
 			return true
 		}
 	}
@@ -3558,14 +3569,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.queueNextSwingSpell(castID, spellID, spell, target, 0, 0)
 		startFlags := spellStartCastFlags(spell)
 		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+			s.endSpellModTaking() // close the prepare-time registry (opened above)
 			return false
 		}
 		s.triggerGlobalCooldown(spell)
+		s.endSpellModTaking() // prepare-time registry closes after the GCD fold
 		s.debug("spell queued for next swing", "account", s.accountName, "spell", spellID, "cast_id", castID)
 		return true
 	}
 	startFlags := spellStartCastFlags(spell)
 	if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+		s.endSpellModTaking() // close the prepare-time registry (opened above)
 		return false
 	}
 
@@ -3576,6 +3590,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// TRIGGERED_FULL_MASK, which carries TRIGGERED_IGNORE_GCD
 	// (SpellDefines.h:134/153).
 	s.triggerGlobalCooldown(spell)
+	s.endSpellModTaking() // prepare-time registry closes after the GCD fold
 
 	if castTime > 0 {
 		// Spell::update (Spell.cpp:3794-3880) drives the PREPARING cast-bar
@@ -15492,6 +15507,13 @@ func (s *session) triggeredSpellHitResult(ctx context.Context, spell wotlk.Spell
 	if spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, spell.SchoolMask) {
 		return protocol.SpellMissImmune
 	}
+	// WorldObject::SpellHitResult (Object.cpp:2637-2639): units in evade
+	// mode report SPELL_MISS_EVADE after the immunity arms and before the
+	// reflect roll — an evading creature neither reflects nor takes the
+	// effect (PreprocessTarget leaves _spellHitTarget null).
+	if s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
+		return protocol.SpellMissEvade
+	}
 	if s.creatureReflectOffered(spell, targetFaction) && s.server.creatureCheckSpellReflection(creatureAuraKeyForPlayer(*s.player, targetGUID), spell) {
 		return protocol.SpellMissReflect
 	}
@@ -16103,6 +16125,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if miss == protocol.SpellMissImmune {
 					continue
 				}
+				// SPELL_MISS_EVADE (Object.cpp:2637-2639, via
+				// triggeredSpellHitResult): PreprocessTarget leaves
+				// _spellHitTarget null — the evading target takes no
+				// effects, same as IMMUNE.
+				if miss == protocol.SpellMissEvade {
+					continue
+				}
 				if miss == protocol.SpellMissReflect {
 					// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
 					// ReflectResult nulls _spellHitTarget — the reflected
@@ -16144,6 +16173,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					if miss == protocol.SpellMissImmune {
 						continue
 					}
+					// SPELL_MISS_EVADE (Object.cpp:2637-2639, via
+					// triggeredSpellHitResult): PreprocessTarget leaves
+					// _spellHitTarget null — the evading jump target takes
+					// no effects, same as IMMUNE.
+					if miss == protocol.SpellMissEvade {
+						continue
+					}
 					if miss == protocol.SpellMissReflect {
 						// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
 						// ReflectResult nulls _spellHitTarget — the reflected
@@ -16165,10 +16201,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// Unit::CalculateAOEAvoidance product per target, and for player
 		// casters the 10-target cap (damage * 10 / targetAmount over the
 		// whole unique target list, hits and misses). targetAmount is
-		// m_UniqueTargetInfo.size(): hitTargets already holds hits and
-		// misses on this path, and a clean reflect adds the caster as its
-		// own TargetInfo (Spell.cpp:2181-2188), so each clean reflect
-		// counts one more.
+		// m_UniqueTargetInfo.size(): Spell::AddUnitTarget (Spell.cpp:2189)
+		// has exactly one emplace_back per target, so hitTargets — which
+		// already holds every target once, reflectors included — is the
+		// complete count. A clean reflect does NOT add a second entry.
 		areaDmgEffect := eff.Effect == 2 && (spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect))
 		aoeCapDivisor := 0
 		if areaDmgEffect {
@@ -16177,11 +16213,6 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					continue
 				}
 				aoeCapDivisor++
-			}
-			for _, miss := range triggeredMiss {
-				if miss == protocol.SpellMissReflect && reflectReturnStatus == protocol.SpellMissNone {
-					aoeCapDivisor++
-				}
 			}
 			if aoeCapDivisor <= 10 {
 				aoeCapDivisor = 0
@@ -33502,12 +33533,68 @@ func (s *session) handleEffectCastButtons(ctx context.Context, eff wotlk.SpellEf
 		}
 		// CalcPowerCost (SpellInfo.cpp:3154) vs the player's mana
 		// (Player::GetPower(POWER_MANA), Powers[0]).
-		if s.player.Powers[0] < s.calculateSpellPowerCost(spell) {
+		cost := s.calculateSpellPowerCost(spell)
+		if s.player.Powers[0] < cost {
 			continue
 		}
-		// TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS |
-		// TRIGGERED_CAST_DIRECTLY): the castSpellDirect triggered-cast bridge.
+		// Spell::EffectCastButtons (SpellEffects.cpp:5660-5661) casts with
+		// only TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS |
+		// TRIGGERED_CAST_DIRECTLY — deliberately WITHOUT
+		// TRIGGERED_IGNORE_POWER_AND_REAGENT_COST (0x4),
+		// TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD (0x2), and
+		// TRIGGERED_DISALLOW_PROC_EVENTS (0x1000). So unlike the
+		// FULL_MASK triggered bridge: power and reagents are taken
+		// (Spell::TakePower, Spell.cpp:4779; Spell::TakeReagents,
+		// Spell.cpp:5046), the cooldown is added, and procs roll.
+		s.takeCastButtonsSpellPower(ctx, spell, cost)
+		s.takeSpellReagents(ctx, spell, 0, 0)
+		// Proc suppression is per-Spell-object flags in C++
+		// (Spell::IsProcDisabled); the inner cast keeps procs while an
+		// outer triggered cast's suppression survives — save/restore,
+		// not inc/dec.
+		savedNoProc := s.triggeredNoProcEvents
+		s.triggeredNoProcEvents = 0
 		s.castSpellDirect(ctx, spellID, s.playerGUID)
+		s.triggeredNoProcEvents = savedNoProc
+		s.sendSpellCooldownEvent(spell)
+	}
+}
+
+// takeCastButtonsSpellPower mirrors the power leg of Spell::TakePower
+// (Spell.cpp:4779-4810) for Spell::EffectCastButtons totem casts
+// (SpellEffects.cpp:5660-5661): the trigger flags omit
+// TRIGGERED_IGNORE_POWER_AND_REAGENT_COST, so the mana cost is deducted
+// exactly like a normal cast — clamp at zero (Unit::ModifyPower,
+// Unit.cpp:8519-8605), the five-second-rule timer for mana
+// (Spell.cpp:4870-4872), the SMSG_POWER_UPDATE broadcast, and the
+// characters persistence.
+func (s *session) takeCastButtonsSpellPower(ctx context.Context, spell wotlk.Spell, cost uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	pType := spell.PowerType
+	if !(pType < 7 && pType != 5 && cost > 0) {
+		return
+	}
+	if s.player.Powers[pType] >= cost {
+		s.player.Powers[pType] -= cost
+	} else {
+		s.player.Powers[pType] = 0
+	}
+	if pType == 0 {
+		s.lastCastTime = time.Now()
+	}
+	powerPacket := protocol.NewBuffer(13)
+	powerPacket.WritePackedGUID(s.playerGUID)
+	powerPacket.WriteU8(uint8(pType))
+	powerPacket.WriteU32(s.player.Powers[pType])
+	_ = s.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), s)
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		col := fmt.Sprintf("power%d", pType+1)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
 	}
 }
 
@@ -36546,6 +36633,16 @@ func (s *session) handleEffectStuck(ctx context.Context) {
 	}
 	if hasHearthstone {
 		s.castSpellDirect(ctx, 8690, s.playerGUID)
+		// Spell::EffectStuck (SpellEffects.cpp:3919) casts 8690 with
+		// TRIGGERED_FULL_MASK & ~TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD:
+		// the cooldown survives the trigger. castSpellDirect is
+		// FULL_MASK, so the cooldown is added the HandleCooldowns way
+		// (SMSG_COOLDOWN_EVENT + real start, like sendSpellCooldownEvent).
+		if s.server != nil && s.server.Data != nil {
+			if hs, found, err := s.server.Data.Spell(8690); err == nil && found {
+				s.sendSpellCooldownEvent(hs)
+			}
+		}
 		return
 	}
 	angle := rand.Float64() * 2 * math.Pi

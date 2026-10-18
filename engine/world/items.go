@@ -4808,6 +4808,11 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// casts (Player::CastItemUseSpell builds a TRIGGERED_NONE Spell).
 		// The old raw DBC read missed the haste/spellmod/REQ_AMMO legs,
 		// so this rides calculateSpellCastTime like the client path.
+		// The begin/endSpellModTaking window is the same prepare-time
+		// per-cast registry as the client path (spells.go): the PCT
+		// global-cooldown gate (Backdraft, Player.cpp:21328-21337) reads
+		// the cast-time leg's m_appliedMods registration.
+		s.beginSpellModTaking()
 		castTime := s.calculateSpellCastTime(spell)
 		// Spell::prepare (Spell.cpp:3119-3124): .cheat casttime forces
 		// m_casttime to 0 (GetCommandStatus(CHEAT_CASTTIME),
@@ -4827,6 +4832,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			if castTime > 0 || !spellIsMoveAllowedChannel(spell) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedMoving), true)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "casting while moving")
+				s.endSpellModTaking() // close the prepare-time registry (opened above)
 				return true
 			}
 		}
@@ -4875,6 +4881,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		itemGUID := rawItemGUID | (uint64(0x4000) << 48)
 		startFlags := spellStartCastFlags(spell)
 		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+			s.endSpellModTaking() // close the prepare-time registry (opened above)
 			return false
 		}
 		// Spell::prepare (Spell.cpp:3188-3196) sends SMSG_SPELL_START
@@ -4882,6 +4889,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// prepares (Player::CastItemUseSpell, Player.cpp:8232), so they
 		// set the category GCD exactly like client-initiated casts.
 		s.triggerGlobalCooldown(spell)
+		s.endSpellModTaking() // prepare-time registry closes after the GCD fold
 		if castTime > 0 {
 			// Spell::prepare (Spell.cpp:3174) registers the new cast via
 			// Unit::SetCurrentCastSpell; the CURRENT_GENERIC_SPELL slot

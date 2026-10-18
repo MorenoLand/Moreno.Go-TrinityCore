@@ -28,10 +28,6 @@ const (
 // session stores per-category expiry times instead of a single GCD slot.
 func (s *session) triggerGlobalCooldown(spell wotlk.Spell) {
 	// CanHaveGlobalCooldown is vacuous in Go: only player sessions cast.
-	// SPELLMOD_GLOBAL_COOLDOWN is not applied here (applySpellMod covers
-	// the taking-window side per Player::ApplySpellMod, but wiring the
-	// GCD arm needs the prepare-time taking context — the Backdraft PCT
-	// ordering leg — which Go does not model yet; noted gap).
 	if spell.StartRecoveryCategory == 0 {
 		return
 	}
@@ -46,16 +42,33 @@ func (s *session) triggerGlobalCooldown(spell wotlk.Spell) {
 
 	gcd := int64(spell.StartRecoveryTime)
 
-	// Apply haste rating (Spell.cpp:8249-8258): only category 133 / 1500ms
+	// Spell::TriggerGlobalCooldown (Spell.cpp:8244-8246): gcd-modifier
+	// auras (SPELLMOD_GLOBAL_COOLDOWN) fold before haste scaling. The
+	// Backdraft PCT gate reads the same per-cast m_appliedMods registry
+	// the cast-time fold registered (Player.cpp:21328-21337); the
+	// prepare-time taking window (begin/endSpellModTaking around the
+	// cast-time + GCD pair in handleCastSpell / handleUseItem) is the Go
+	// model of that single registry.
+	gcd = int64(s.applySpellMod(spell, spellModGlobalCooldown, int32(gcd)))
+
+	// Apply haste (Spell.cpp:8249-8258): only category 133 / 1500ms
 	// spells, excluding melee and ranged damage classes and REQ_AMMO/ABILITY
-	// spells. C++ truncates (int32(float(gcd) * UNIT_MOD_CAST_SPEED)) then
-	// clamps to [MIN_GCD, MAX_GCD] via RoundToInterval (Util.h:84-87).
+	// spells. C++ scales by the full UNIT_MOD_CAST_SPEED — haste rating
+	// (Player.cpp:5618, ApplyCastTimePercentMod on CR_HASTE_SPELL) plus the
+	// cast-speed aura legs (aura 65/216) and the combat-speed leg (aura
+	// 193/252, SpellAuraEffects.cpp:3927-3967). Go keeps the legs separate;
+	// castingSpeedCastFactor / combatSlowCastFactor are the same helpers
+	// calculateSpellCastTime uses. C++ truncates (int32(float(gcd) *
+	// UNIT_MOD_CAST_SPEED)) then clamps to [MIN_GCD, MAX_GCD] via
+	// RoundToInterval (Util.h:84-87).
 	if spell.StartRecoveryCategory == gcdHasteRecoveryCategory &&
 		spell.StartRecoveryTime == gcdHasteRecoveryTime &&
 		spell.DefenseType != 2 && spell.DefenseType != 3 && // SPELL_DAMAGE_CLASS_MELEE / RANGED
 		spell.Attributes&spellAttr0ReqAmmo == 0 &&
 		spell.Attributes&spellAttr0Ability == 0 {
-		speed := 1.0 / (1.0 + s.getSpellHastePct()/100.0) // UNIT_MOD_CAST_SPEED
+		speed := 1.0 / (1.0 + s.getSpellHastePct()/100.0)
+		speed *= s.castingSpeedCastFactor()
+		speed *= s.combatSlowCastFactor()
 		gcd = int64(float64(gcd) * speed)
 		if gcd < gcdMinMs {
 			gcd = gcdMinMs

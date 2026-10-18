@@ -1188,7 +1188,13 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0), COALESCE(dynamicflags, 0), COALESCE(scale, 1), COALESCE(HoverHeight, 1), COALESCE(speed_walk, 1), COALESCE(speed_run, 1), COALESCE(RangeAttackTime, 2000) FROM creature_template WHERE entry = ?", entry).Scan(&npcFlags, &dynamicFlags, &scale, &hoverHeight, &walkSpeed, &runSpeed, &rangeAttack)
 		}
-		updateBlock = buildCreatureUpdate(ctx, creatureSpawn{GUID: uint32(petGUID), RawGUID: petGUID, Entry: entry, Map: s.player.Map, X: petX, Y: petY, Z: petZ, Orientation: petO, Model: modelID, Faction: faction, NPCFlags: uint32(npcFlags), UnitFlags: stats.UnitFlags, UnitFlags2: unitFlag2RegeneratePower, DynamicFlags: uint32(dynamicFlags), CreatedBySpell: uint32(createdBySpell), Level: stats.Level, Health: stats.Health, MaxHealth: stats.MaxHealth, Scale: float32(scale), HoverHeight: float32(hoverHeight), BoundingRadius: petBoundingRadius, CombatReach: petCombatReach, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: stats.AttackTime, RangedAttack: uint32(rangeAttack)}, s)
+		// Unit::SetMinion (Unit.cpp:6053-6057) sets
+		// UNIT_FLAG_PLAYER_CONTROLLED on every player-owned minion;
+		// SUMMON_TYPE_MINIPET summons are Minions, so vanity critters
+		// broadcast it too. Non-critter pets hardcode it (pet_cooldowns.go)
+		// and charmed creatures get it (creaturemotion.go) — only the
+		// critter branch missed the OR.
+		updateBlock = buildCreatureUpdate(ctx, creatureSpawn{GUID: uint32(petGUID), RawGUID: petGUID, Entry: entry, Map: s.player.Map, X: petX, Y: petY, Z: petZ, Orientation: petO, Model: modelID, Faction: faction, NPCFlags: uint32(npcFlags), UnitFlags: stats.UnitFlags | unitFlagPlayerControlled, UnitFlags2: unitFlag2RegeneratePower, DynamicFlags: uint32(dynamicFlags), CreatedBySpell: uint32(createdBySpell), Level: stats.Level, Health: stats.Health, MaxHealth: stats.MaxHealth, Scale: float32(scale), HoverHeight: float32(hoverHeight), BoundingRadius: petBoundingRadius, CombatReach: petCombatReach, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: stats.AttackTime, RangedAttack: uint32(rangeAttack)}, s)
 	} else {
 		attributes := s.getPetAttributes(ctx, entry, level, uint8(petType))
 		// The UNIT_FIELD_STAT0+index broadcast carries the aura-fed stats
