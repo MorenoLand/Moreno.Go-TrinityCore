@@ -68,8 +68,7 @@
 -- talk machines) have no SpellHit bridge, the OnGossipSelect
 -- quest-12372 arm: stale 'no gossip bridge' retracted (bridged —
 -- RegisterCreatureGossipEvent); arm stays out on the no
--- player:CastSpell bridge (kalecgos pass); the OnCharmed flag arm
--- has no flag bridge — documented-only.
+-- player:CastSpell bridge (kalecgos pass).
 
 local SPELL_HEMORRHAGE = 30478
 local SPELL_KIDNEY_SHOT = 30621

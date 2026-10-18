@@ -99,7 +99,8 @@
 -- Talk(SAY_YOGG_SARON_PHASE_3) — no DoAction bridge; joins
 -- the no-DoAction-bridge queue.
 -- Yogg-Saron SpellHit — Val'anyr loot-mode leg (no Talk) —
--- no SpellHit bridge.
+-- PORTED via event 14 (yoggSaronSpellHit below); the Reset
+-- ResetLootMode leg (:939) rides the unbridged scheduler.
 -- Voice of Yogg-Saron (33280, ulduar.h line 203) —
 -- PORTED: JustEngagedWith DoCast(me, SPELL_SANITY_PERIODIC 63786)
 -- (2-arg self, non-triggered, ungated, :525) + the 15s
@@ -169,6 +170,7 @@ local SAY_YOGG_SARON_DEATH = 6
 
 local SPELL_SHADOWY_BARRIER_YOGG = 63894
 local SPELL_KNOCK_AWAY = 64022
+local SPELL_IN_THE_MAWS_OF_THE_OLD_GOD = 64184
 
 -- C++ JustEngagedWith (boss_saraAI, ScriptedAI):
 -- Talk(SAY_SARA_AGGRO) + three ScheduleEvent legs — only
@@ -213,7 +215,16 @@ end
 
 RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
 RegisterCreatureEvent(ENTRY_SARA, 3, saraKilledUnit)
+-- C++ SpellHit :951-956 — Val'anyr: SPELL_IN_THE_MAWS_OF_THE_OLD_GOD
+-- (64184) hit -> AddLootMode(32). Pure loot-mode leg, no Talk arm.
+local function yoggSaronSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_IN_THE_MAWS_OF_THE_OLD_GOD then
+        creature:AddLootMode(32)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 4, yoggSaronDied)
+RegisterCreatureEvent(ENTRY_YOGG_SARON, 14, yoggSaronSpellHit)
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
 
 -- Timer-driven cast arms (the maiden CreateLuaEvent convention —

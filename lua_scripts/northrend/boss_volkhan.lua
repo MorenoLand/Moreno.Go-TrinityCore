@@ -120,8 +120,10 @@
 -- golem keeps its molten model (cosmetic).
 -- AttackStart (:411-424: m_bIsFrozen-gated MoveChase) — no motion
 -- bridge; melee is engine-driven in Go like DoMeleeAttackIfReady.
--- SpellHit (:454-461: SPELL_SHATTER 52429 dummy on a brittle golem
--- -> DespawnOrUnsummon — no SpellHit bridge). Stay out.
+-- SpellHit (:444-449: SPELL_SHATTER 52429 dummy on a brittle golem
+-- -> DespawnOrUnsummon) — PORTED via event 14 (golemSpellHit below;
+-- golemFrozen latch = UpdateEntry(NPC_BRITTLE_GOLEM) proxy, set on the
+-- same kill-shot transition as the C++).
 -- achievement_shatter_resistant (AchievementCriteriaScript
 -- OnCheck: target->GetAI()->GetData(DATA_SHATTER_RESISTANT 2042) <
 -- 5 — no GetData / achievement bridges; joins the
@@ -264,4 +266,24 @@ RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 1, golemEnterCombat)
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 2, golemLeaveCombat)
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 4, golemDied)
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 9, golemDamageTaken)
+-- C++ SpellHit :444-449 — the dummy effect of SPELL_SHATTER
+-- (52429) on a brittle golem -> DespawnOrUnsummon(). No heroic
+-- variant of SPELL_SHATTER in the C++ enum, so
+-- GetSpellIdForDifficulty returns 52429 as-is. The C++ checks
+-- me->GetEntry() == NPC_BRITTLE_GOLEM (28681); the port's
+-- golemFrozen latch is the UpdateEntry proxy set on the same
+-- kill-shot transition in golemDamageTaken above.
+local SPELL_SHATTER = 52429
+local function golemSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_SHATTER then
+        local guid = creature:GetGUID()
+        if golemFrozen[guid] then
+            golemCancelTimers(guid)
+            golemFrozen[guid] = nil
+            creature:Despawn()
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 14, golemSpellHit)
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 23, golemReset)
