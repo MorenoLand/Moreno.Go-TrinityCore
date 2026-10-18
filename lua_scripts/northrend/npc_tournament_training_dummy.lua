@@ -1,69 +1,91 @@
 -- Tournament Training Dummy (Icecrown, Argent Tournament) --
 -- Lua port of src/server/scripts/Northrend/zone_icecrown.cpp
--- (npc_tournament_training_dummyAI — charge-target arms only).
--- Zone-script unit per northrend_script_loader.cpp order (decl 203 /
--- call 398; howling_fjord done, icecrown: 5 registrations).
--- Retraction re-audit of the 11:28 "VERIFIED already ported (1fa3069)"
--- entry: that audit verified the blessed_banner Reset arm but the
--- dummy's timer/SpellHit/DamageTaken arms were never ported — the
--- "zero additional bridgeable arms" verdict predates the retraction
--- lens (CreateLuaEvent + event-14 + event-9-damage-rewrite are all
--- real bridges).
--- Entry: NPC_CHARGE_TARGET = 33272 (TournamentDummy enum :171,
--- C++-verifiable). Only the charge-target leg ports — the ranged leg
--- needs GetAura() stack/duration gates (no bridge) and the melee
--- target has no cast leg.
+-- (npc_tournament_training_dummyAI, all three entries). Zone-script
+-- unit per northrend_script_loader.cpp order.
+-- MERGE NOTE (2026-10-18): the 02:3x tick added a second,
+-- overlapping implementation of the SpellHit arms in
+-- npc_blessed_banner.lua, double-registering event 14 on 33272
+-- (double charge-credit casts) and event 23 (competing latch
+-- clears). That block is removed; this file is the single home of
+-- the dummy arms for all three entries. The melee/ranged legs it
+-- documents as unmodelable were stale — C++ has an ungated
+-- thrust-credit cast (33229) and a vulnerable-gated break-shield
+-- credit cast (33243); only the 62709 vehicle-base counterattack
+-- leg and the aura-stack recast leg stay out.
+-- Entries (TournamentDummy enum, zone_icecrown.cpp:169-191,
+-- C++-verifiable): NPC_CHARGE_TARGET = 33272,
+-- NPC_MELEE_TARGET = 33229, NPC_RANGED_TARGET = 33243.
+-- The creature_template ScriptName binding is DB-side (no TDB in
+-- this workspace).
 -- Eluna creature events: 5 OnSpawn, 23 OnReset, 14 OnHitBySpell,
 -- 9 OnDamageTaken, 2 OnLeaveCombat, 4 OnDied.
--- Spells (TournamentDummy enum :169-191): SPELL_CHARGE_DEFEND 64100,
--- SPELL_RANGED_DEFEND 62719, SPELL_PLAYER_BREAK_SHIELD 62626,
--- SPELL_PLAYER_CHARGE 62874, SPELL_CHARGE_CREDIT 62658.
+-- Spells (TournamentDummy enum): SPELL_CHARGE_CREDIT 62658,
+-- SPELL_MELEE_CREDIT 62672, SPELL_RANGED_CREDIT 62673,
+-- SPELL_PLAYER_THRUST 62544, SPELL_PLAYER_BREAK_SHIELD 62626,
+-- SPELL_PLAYER_CHARGE 62874, SPELL_RANGED_DEFEND 62719,
+-- SPELL_CHARGE_DEFEND 64100, SPELL_VULNERABLE 62665,
+-- SPELL_COUNTERATTACK 62709.
 -- Ported arm 1 (C++ Reset() :214-221 -> EVENT_DUMMY_RECAST_DEFEND
 -- :278-294): Reset-seeded 5s repeating timer (first fire 5s after
--- reset — C++ schedules, not immediate); the 33272 leg:
+-- reset — C++ schedules, not immediate); entry-switched: 33272 leg
 -- if (!me->HasAura(SPELL_CHARGE_DEFEND)) DoCast(me, 64100, true) —
 -- triggered self-cast, HasAura gate bridged (gunship precedent);
--- then isVulnerable=false (:293) and the 5s re-arm. The
--- SetControlled(STUNNED) Reset leg has no control-state bridge
--- (documented).
--- Ported arm 2 (C++ SpellHit :237-269): receive-side event 14 is
--- engine-fired (boss_ai.go / spells.go) — the "no-SpellHit bridge"
--- doctrine is stale. if (spellId == 62626 SPELL_PLAYER_BREAK_SHIELD)
--- if (!HasAura(64100) && !HasAura(62719)) isVulnerable = true
--- (:267-269, outside the entry switch — applies to all dummies);
--- if (spellId == 62874 SPELL_PLAYER_CHARGE) if (isVulnerable)
--- DoCast(unitCaster, 62658 SPELL_CHARGE_CREDIT, true) — the
+-- the 33243 leg (aura stack < 3 / duration <= 8000 gate) has no
+-- aura-detail bridge — stays out; the 33229 entry has no recast
+-- leg. All entries: isVulnerable=false (:293) and the 5s re-arm.
+-- The SetControlled(STUNNED) Reset leg has no control-state
+-- bridge (documented).
+-- Ported arm 2 (C++ SpellHit :237-267, entry-switched):
+-- 33272: 62874 SPELL_PLAYER_CHARGE, isVulnerable-gated ->
+-- DoCast(unitCaster, 62658 SPELL_CHARGE_CREDIT, true);
+-- 33229: 62544 SPELL_PLAYER_THRUST -> DoCast(unitCaster,
+-- 62672 SPELL_MELEE_CREDIT, true), UNGATED (C++ has no
+-- isVulnerable gate on the melee arm); the 62709 counterattack on
+-- the caster's vehicle base stays out (no vehicle-base bridge);
+-- 33243: 62626 SPELL_PLAYER_BREAK_SHIELD, isVulnerable-gated ->
+-- DoCast(unitCaster, 62673 SPELL_RANGED_CREDIT, true).
 -- creature:CastSpell(caster, spell, true) convention (zuljin
--- precedent). isVulnerable is per-GUID lua state (C++ member :210,
--- init false :207/:215).
--- Ported arm 3 (C++ DamageTaken :226-230): damage = 0 unconditionally
--- -> event-9 damage-rewrite returns (true, 0) (lich_king_escape
--- precedent). The RescheduleEvent(EVENT_DUMMY_RESET, 10s) leg rides
--- the unbridged evade machine (EVENT_DUMMY_RESET :296-302:
--- UpdateVictim-gated EnterEvadeMode, no evade bridge) — documented
--- deviation.
--- Unmodeled: EVENT_DUMMY_RECAST_DEFEND ranged leg (aura stack <
--- 3 / duration <= 8000 gates — no aura-detail bridge); melee-target
--- entry (no cast leg); the SpellHit melee/ranged credit legs
--- (vehicle-base / counterattack gates); argent_valiant's charge /
--- shield-breaker combat timers (no NPC_ARGENT_VALIANT entry constant
--- anywhere in-tree — entry-blocked, stinky precedent); DamageTaken
--- kill-credit machine (faction/despawn/evade legs); guardian_pavilion
--- (MoveInLineOfSight area/team/aura gates — no area/team bridges);
--- frostbrood_skytalon (IsSummonedBy/MovementInform/vehicle legs);
--- blessed_banner summon/intro/wave machines (Reset arm ported Oct 1,
--- 1fa3069).
--- Go: RegisterLuaBoss("npc_tournament_training_dummy", 33272) — the
--- no-op AI neutralizes default combat behavior for this stunned
--- non-combatant (storm_cloud / blessed_banner zone-script precedent).
+-- precedent). The 62626 latch leg (:266-269, outside the entry
+-- switch — applies to all entries): if (!HasAura(64100) &&
+-- !HasAura(62719)) isVulnerable = true — creature:HasAura bridged
+-- (lua_creature_events.go:141). isVulnerable is per-GUID lua state
+-- (C++ member :210, init false in Initialize :207/:215 — reset
+-- here on spawn/reset; cleared on leave-combat/died via the
+-- evade-Reset path, halycon precedent).
+-- Ported arm 3 (C++ DamageTaken :226-230, shared AI — all three
+-- entries): damage = 0 unconditionally -> event-9 damage-rewrite
+-- returns (true, 0) (lich_king_escape precedent). The
+-- RescheduleEvent(EVENT_DUMMY_RESET, 10s) leg rides the unbridged
+-- evade machine (EVENT_DUMMY_RESET :296-302: UpdateVictim-gated
+-- EnterEvadeMode, no evade bridge) — documented deviation; the
+-- latch-clear side effect is moot since the 5s recast clears it.
+-- Unmodeled: the 62709 counterattack; the 33243 recast stack /
+-- duration gate; MoveInLineOfSight overridden empty; the
+-- SetControlled stunned leg; npc_argent_valiant's charge /
+-- shield-breaker combat timers (no NPC_ARGENT_VALIANT entry
+-- constant anywhere in-tree — entry-blocked, stinky precedent);
+-- DamageTaken kill-credit machine (faction/despawn/evade legs);
+-- npc_guardian_pavilion (MoveInLineOfSight area/team/aura gates —
+-- no area/team bridges); npc_frostbrood_skytalon (VehicleAI);
+-- blessed_banner summon/intro/wave machines (Reset arm ported in
+-- npc_blessed_banner.lua).
+-- Go: RegisterLuaBoss("npc_tournament_training_dummy", 33272 /
+-- 33229 / 33243) — the no-op AI neutralizes default combat
+-- behavior for these stunned non-combatants (storm_cloud /
+-- blessed_banner zone-script precedent).
 
 local ENTRY_CHARGE_TARGET = 33272
+local ENTRY_MELEE_TARGET = 33229
+local ENTRY_RANGED_TARGET = 33243
 
-local SPELL_CHARGE_DEFEND = 64100
-local SPELL_RANGED_DEFEND = 62719
+local SPELL_CHARGE_CREDIT = 62658
+local SPELL_MELEE_CREDIT = 62672
+local SPELL_RANGED_CREDIT = 62673
+local SPELL_PLAYER_THRUST = 62544
 local SPELL_PLAYER_BREAK_SHIELD = 62626
 local SPELL_PLAYER_CHARGE = 62874
-local SPELL_CHARGE_CREDIT = 62658
+local SPELL_RANGED_DEFEND = 62719
+local SPELL_CHARGE_DEFEND = 64100
 
 local RECAST_INTERVAL = 5000
 
@@ -93,18 +115,20 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ :278-294 EVENT_DUMMY_RECAST_DEFEND (33272 leg): !HasAura(64100)
--- -> triggered self-cast 64100; isVulnerable=false; re-arm 5s.
+-- C++ :278-294 EVENT_DUMMY_RECAST_DEFEND: 33272 leg only
+-- (!HasAura(64100) -> triggered self-cast 64100); all entries get
+-- isVulnerable=false + the 5s re-arm.
 local function onRecastDefend(creature, guid)
-    if not creature:HasAura(SPELL_CHARGE_DEFEND) then
+    if creature:GetEntry() == ENTRY_CHARGE_TARGET
+            and not creature:HasAura(SPELL_CHARGE_DEFEND) then
         creature:CastSpell(creature, SPELL_CHARGE_DEFEND, true)
     end
     vulnerable[guid] = false
     schedule(guid, "recast_defend", RECAST_INTERVAL, function() onRecastDefend(creature, guid) end)
 end
 
--- C++ Reset() :214-221: Initialize() (isVulnerable=false) + schedule
--- EVENT_DUMMY_RECAST_DEFEND 5s (first fire delayed, not immediate).
+-- C++ Reset() :214-221: Initialize() (isVulnerable=false) +
+-- schedule EVENT_DUMMY_RECAST_DEFEND 5s (first fire delayed).
 local function dummySpawnOrReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -116,24 +140,35 @@ local function dummyLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ SpellHit :237-269 (33272): 62626 break-shield -> vulnerable
--- latch (dual HasAura gate :267-269); 62874 charge -> credit cast on
--- the caster while vulnerable.
+-- C++ SpellHit :237-269: entry-switched credit casts + the global
+-- 62626 vulnerable latch (dual HasAura gate).
 local function dummySpellHit(event, creature, caster, spellId)
     local guid = creature:GetGUID()
-    if spellId == SPELL_PLAYER_BREAK_SHIELD then
-        if not creature:HasAura(SPELL_CHARGE_DEFEND) and not creature:HasAura(SPELL_RANGED_DEFEND) then
-            vulnerable[guid] = true
-        end
-    elseif spellId == SPELL_PLAYER_CHARGE then
-        if vulnerable[guid] and caster then
+    local entry = creature:GetEntry()
+    if entry == ENTRY_CHARGE_TARGET then
+        if spellId == SPELL_PLAYER_CHARGE and vulnerable[guid] and caster then
             creature:CastSpell(caster, SPELL_CHARGE_CREDIT, true)
+        end
+    elseif entry == ENTRY_MELEE_TARGET then
+        if spellId == SPELL_PLAYER_THRUST and caster then
+            creature:CastSpell(caster, SPELL_MELEE_CREDIT, true)
+        end
+    elseif entry == ENTRY_RANGED_TARGET then
+        if spellId == SPELL_PLAYER_BREAK_SHIELD and vulnerable[guid] and caster then
+            creature:CastSpell(caster, SPELL_RANGED_CREDIT, true)
+        end
+    end
+    if spellId == SPELL_PLAYER_BREAK_SHIELD then
+        if not creature:HasAura(SPELL_CHARGE_DEFEND)
+                and not creature:HasAura(SPELL_RANGED_DEFEND) then
+            vulnerable[guid] = true
         end
     end
 end
 
 -- C++ DamageTaken :226-230: damage = 0 unconditionally (the
--- EVENT_DUMMY_RESET reschedule leg rides the unbridged evade machine).
+-- EVENT_DUMMY_RESET reschedule leg rides the unbridged evade
+-- machine — documented above).
 local function dummyDamageTaken(event, creature, attacker, damage)
     return true, 0
 end
@@ -144,3 +179,17 @@ RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 14, dummySpellHit)
 RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 9, dummyDamageTaken)
 RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 2, dummyLeaveCombat)
 RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 4, dummyLeaveCombat)
+
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 5, dummySpawnOrReset)
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 23, dummySpawnOrReset)
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 14, dummySpellHit)
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 9, dummyDamageTaken)
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 2, dummyLeaveCombat)
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 4, dummyLeaveCombat)
+
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 5, dummySpawnOrReset)
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 23, dummySpawnOrReset)
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 14, dummySpellHit)
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 9, dummyDamageTaken)
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 2, dummyLeaveCombat)
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 4, dummyLeaveCombat)

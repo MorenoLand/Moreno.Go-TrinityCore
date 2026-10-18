@@ -5341,11 +5341,13 @@ func init() {
 	// GetTeamId branch, player self-cast) sits behind the
 	// proximity / area-ID / HasAura / team / player-self-cast
 	// bridges. npc_tournament_training_dummy (entries
-	// 33272/33229/33243 verifiable) — DamageTaken zeroing,
+	// 33272/33229/33243 verifiable) — the SetControlled(STUNNED)
+	// leg has no unit-state bridge; DamageTaken zeroing, the
 	// SpellHit 62544/62626/62874 credit machines, the HasAura-
-	// gated EVENT_DUMMY_RECAST_DEFEND self-casts 64100/62719, and
-	// the stunned control have no damage-hook / SpellHit /
-	// HasAura / unit-state bridges. npc_frostbrood_skytalon
+	// gated recast-defend self-cast 64100 and the vulnerable latch
+	// are ported in
+	// lua_scripts/northrend/npc_tournament_training_dummy.lua.
+	// npc_frostbrood_skytalon
 	// (VehicleAI) — the UpdateAI arms run through the unmodeled
 	// VehicleAI base; SpellHit 59335/59319 has no SpellHit
 	// bridge. Entry 30891 verifiable from the C++ BlessedBanner
@@ -11428,11 +11430,15 @@ func init() {
 	RegisterLuaBoss("npc_counselor_talbot", 25301)
 	// npc_tournament_training_dummy (Icecrown, Argent Tournament) —
 	// ported arms in lua_scripts/northrend/npc_tournament_training_dummy.lua:
-	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, !HasAura(64100)
-	// gate, triggered self-cast 64100), the SpellHit break-shield /
-	// charge-credit machine (event 14), and DamageTaken damage=0
-	// (event 9). Entry 33272 (NPC_CHARGE_TARGET) verifiable from the
-	// C++ TournamentDummy enum; the ranged/melee entries carry no
-	// bridgeable arms.
+	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, 33272 leg:
+	// !HasAura(64100) gate, triggered self-cast 64100), the SpellHit
+	// charge/melee/ranged credit machine (event 14: 33272 gated,
+	// 33229 ungated, 33243 gated), and DamageTaken damage=0
+	// (event 9). Entries 33272 (NPC_CHARGE_TARGET), 33229
+	// (NPC_MELEE_TARGET) and 33243 (NPC_RANGED_TARGET) verifiable
+	// from the C++ TournamentDummy enum — all three share the AI
+	// struct, so all three register.
 	RegisterLuaBoss("npc_tournament_training_dummy", 33272)
+	RegisterLuaBoss("npc_tournament_training_dummy", 33229)
+	RegisterLuaBoss("npc_tournament_training_dummy", 33243)
 }

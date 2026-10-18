@@ -64,9 +64,12 @@
 --   EVENT_VOLATILE_INFECTION arm (:581-586): DoCastVictim
 --   (SPELL_VOLATILE_INFECTION 56785), 1-arg = non-triggered ->
 --   CastSpell(nil, 56785); init urand(10s,14s), re-arm urand(13s,17s);
---   the H_SPELL_VOLATILE_INFECTION 59228 heroic variant is unmodeled
---   (DUNGEON_MODE — no difficulty bridge, the vazruden / thespia
---   precedent).
+--   C++-exact already: H_SPELL_VOLATILE_INFECTION 59228 is a dead
+--   enum entry (defined :58, never referenced — the hulk fires
+--   56785 unconditionally in both modes, anomalus precedent), so
+--   there is no heroic arm to model; the old "no difficulty
+--   bridge" rationale was doubly stale (creature:IsHeroic() is
+--   bridged, ymiron/vazruden precedent).
 -- DOCUMENTED DEVIATION: the C++ victim-stun gate
 -- (!victim->HasUnitState(UNIT_STATE_STUNNED), :574-575 — "Prevent
 -- knocking back a ritual player") has no bridge — the cast fires
@@ -196,7 +199,10 @@ end
 
 -- C++ npc_scourge_hulkAI volatileInfection arm (:581-586):
 -- DoCastVictim(SPELL_VOLATILE_INFECTION 56785), 1-arg = non-triggered;
--- init urand(10s,14s), re-arm urand(13s,17s). Heroic 59228 unmodeled.
+-- init urand(10s,14s), re-arm urand(13s,17s). No heroic variant —
+-- H_SPELL_VOLATILE_INFECTION 59228 is a dead enum entry, never
+-- referenced in the C++ (56785 fires both modes, anomalus
+-- precedent).
 local function volatileInfectionTick(creature, guid)
     creature:CastSpell(nil, SPELL_VOLATILE_INFECTION)
     schedule(guid, "volatileinfection", {13000, 17000}, function()
