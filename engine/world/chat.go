@@ -392,13 +392,15 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	// Reference: the CHAT_MSG_PARTY/PARTY_LEADER/RAID/RAID_LEADER/RAID_WARNING
-	// arms of WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:395-528)
-	// and Guild::BroadcastToGuild (Guild.cpp:2133-2145) — sScriptMgr::OnPlayerChat
-	// fires first (firePlayerChatHook above), then the group/guild gates silently
-	// drop the message with no packet at all.
-	if (typeID == chatGuild || typeID == chatOfficer) && !s.guildChatSpeakAllowed(typeID == chatOfficer) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "guild rights", "type", typeID)
+	// Reference: the CHAT_MSG_GUILD/OFFICER arms (ChatHandler.cpp:421-453) only
+	// reach the hooks when the sender has a guild; guildless senders are
+	// dropped before any hook fires. The speak-rights gate itself lives inside
+	// Guild::BroadcastToGuild (Guild.cpp:2133-2145), AFTER the hooks
+	// (ChatHandler.cpp:427-433, :444-450), so it runs below, after the
+	// sub-event hook block. The same holds for the channel mute check, which
+	// lives inside Channel::Say after the hooks (Channel.cpp:679-716).
+	if (typeID == chatGuild || typeID == chatOfficer) && (s.player == nil || s.player.GuildID == 0) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "no guild", "type", typeID)
 		return true
 	}
 	chatAllowed, chatGroupID := s.resolveGroupChat(uint8(typeID))
@@ -423,12 +425,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "channel membership", "channel", channelName)
 		return s.sendChannelNotify(channelNotMemberNotice, channelName, nil) == nil
 	}
-	if typeID == chatChannel && s.server.isChannelMuted(s, channelName) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "channel muted", "channel", channelName)
-		// Reference Channel::Say: muted members receive CHAT_MUTED_NOTICE and
-		// the message is not delivered.
-		return s.sendChannelNotify(channelMutedNotice, channelName, nil) == nil
-	}
+	// Reference Channel::Say (Channel.cpp:679-716): the muted check runs
+	// inside Say, after the chat hooks — so it runs below, after the
+	// sub-event hook block.
 	// Eluna's dedicated chat events (Hooks.h:19-22) fire after the
 	// type-specific gates above — C++ (ChatHandler.cpp) resolves the
 	// receiver/group/guild/channel and runs the permission gates before the
@@ -456,6 +455,20 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.debug("chat rejected", "account", s.accountName, "reason", "lua hook cancelled", "type", typeID)
 			return true
 		}
+	}
+	// Reference: Guild::BroadcastToGuild (Guild.cpp:2138-2145) gates the
+	// sender's speak rights (GR_RIGHT_GCHATSPEAK/GR_RIGHT_OFFCHATSPEAK) AFTER
+	// the OnPlayerChat/Eluna hooks (ChatHandler.cpp:421-433, :438-450) — the
+	// hook fires even for a rights-less sender, then the message is dropped.
+	if (typeID == chatGuild || typeID == chatOfficer) && !s.guildChatSpeakAllowed(typeID == chatOfficer) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "guild rights", "type", typeID)
+		return true
+	}
+	// Reference Channel::Say (Channel.cpp:679-716): muted members receive
+	// CHAT_MUTED_NOTICE and the message is not delivered — after the hooks.
+	if typeID == chatChannel && s.server.isChannelMuted(s, channelName) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "channel muted", "channel", channelName)
+		return s.sendChannelNotify(channelMutedNotice, channelName, nil) == nil
 	}
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channelName, chatGroupID)
 	if typeID == chatWhisper && receiver != nil && language != languageAddon {
