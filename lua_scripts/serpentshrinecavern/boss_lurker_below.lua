@@ -47,7 +47,10 @@
 -- movement/react bridges; the 20s rotating spout machine —
 -- the per-tick HasInArc + SPOUT_DIST(100 yd) + IsInWater
 -- player pick and the triggered 37433 per-player casts, the
--- SPOUT_ANIM 42835 upkeep, and the MovementInform react-
+-- SPOUT_ANIM 42835 upkeep, the C++ melee suppression during
+-- the 20s rotation (UpdateAI returns before DoMeleeAttackIfReady;
+-- engine melee has no gate bridge, unmodeled), and the
+-- MovementInform react-
 -- aggressive flip — has no arc/movement/react/water bridges,
 -- so the RotTimer arm only does C++-exact timer bookkeeping
 -- and the spout delivers no damage in this model, header).
@@ -112,8 +115,8 @@
 -- transitions) unmodeled; no summon bridge — the 9x submerged
 -- ambusher/guardian summons unmodeled; no movement bridge —
 -- the spout MoveRotate 20s machine, the rot-arc spout picks
--- and the SPOUT_ANIM upkeep unmodeled; no LOS/arc/water/react/
--- flag/display/interrupt/threat/evade/yell bridges — the
+-- and the SPOUT_ANIM upkeep unmodeled; no LOS/arc/water-on-
+-- creature/react/flag/display/interrupt/evade bridges — the
 -- arc+distance+water spout target pick, the react passive/
 -- aggressive flips, the visibility/flag/immune reset arms, the
 -- InterruptNonMeleeSpells arm and the evade/zone-combat arms

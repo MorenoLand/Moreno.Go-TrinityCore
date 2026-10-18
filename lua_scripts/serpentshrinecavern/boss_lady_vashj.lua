@@ -106,9 +106,12 @@
 -- bridge — unmodeled.
 -- npc_tainted_elemental (22009) port: OnEnterCombat(1) per-GUID
 -- reset + 1s pump; Poison bolt 40095 {5s,10s} then {5s,10s} —
--- random alive player within 30 yd (C++ SelectTarget(Random, 0)
--- + IsWithinDistInMap(me, 30)); nil pick or out-of-range pick
--- casts nothing, timer re-arms (C++-exact). DespawnTimer 30s ->
+-- random alive player pick, cast only when within 30 yd (C++
+-- SelectTarget(Random, 0) + IsWithinDistInMap(me, 30): gate
+-- after pick, so an out-of-range pick wastes the round with no
+-- cast; timer re-arms regardless). Pick is player-only by the
+-- teron convention — C++ playerOnly defaults false (pets etc.
+-- eligible), no any-hostile enumeration bridge. DespawnTimer 30s ->
 -- creature:Despawn() + cancel pump (C++ setDeathState(DEAD), the
 -- 1s anti-crash re-arm folded into the cancel). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup (the JustDied tainted-
@@ -373,11 +376,14 @@ local function elementalTick(creature, guid)
         return
     end
 
-    -- Poison bolt: random alive player within 30 yd; nil or
-    -- out-of-range pick casts nothing, timer re-arms (C++-exact).
+    -- Poison bolt: random alive player pick, cast only when within
+    -- 30 yd — an out-of-range pick wastes the round (C++ SelectTarget
+    -- (Random, 0) + IsWithinDistInMap(me, 30) gate-after-pick; timer
+    -- re-arms regardless). Player-only pick is the teron convention
+    -- (no any-hostile enumeration bridge).
     if st.poisonBolt <= 1000 then
-        local pick = pickRandomAlivePlayerInRange(creature, POISON_BOLT_RANGE)
-        if pick then
+        local pick = pickRandomAlivePlayer(creature)
+        if pick and creature:GetDistance(pick) <= POISON_BOLT_RANGE then
             creature:CastSpell(pick, SPELL_POISON_BOLT)
         end
         st.poisonBolt = 5000 + math.random(0, 4999)

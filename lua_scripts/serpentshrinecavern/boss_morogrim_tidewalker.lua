@@ -61,7 +61,7 @@
 -- 500ms after the first check; the 1s pump checks every 1000ms
 -- instead (1s granularity, documented below). The Reset flag/
 -- faction arms have no flag/faction bridges — unmodeled; the
--- MoveInLineOfSight aggro machine has no LOS hook — unmodeled;
+-- MoveInLineOfSight aggro machine is unmodeled (CREATURE_EVENT_ON_MOVE_IN_LOS (27) exists, but the C++ arm's AttackStart relay has no creature-side bridge);
 -- the C++ do-NOT-melee arm has no no-melee bridge — engine
 -- melee applies (leotheras demon-form precedent). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
@@ -77,7 +77,7 @@
 -- 38025/37850) and the globule-summon player-side triggered
 -- casts (37854/37858/37860/37861) unmodeled (the C++ target-
 -- pick loops with dedup collapse with the unbridgeable casts);
--- no LOS/flag/faction/no-melee bridges for the globule (above);
+-- no flag/faction/no-melee bridges for the globule (above; LOS event 27 exists but the AttackStart relay is unbridged);
 -- the globule Check_Timer runs at 1s pump granularity instead
 -- of the C++ 500ms re-arm; no SpellScript/AuraScript scripts
 -- in this file.

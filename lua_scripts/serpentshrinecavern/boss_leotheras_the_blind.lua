@@ -122,8 +122,12 @@
 -- non-triggered — vaelastrasz convention). The victim binding
 -- (SetGUID(INNER_DEMON_VICTIM) from leotheras — cross-creature
 -- blocked), the damage-immunity arm (damage=0 unless the
--- attacker is the bound victim or self — no damage-modify
--- bridge, standing gap) and the threat retarget/owner-death
+-- attacker is the bound victim or self — CREATURE_EVENT_ON_-
+-- DAMAGE_TAKEN (9) carries a damage rewrite, but the arm's
+-- victim-GUID exemption is cross-creature blocked and
+-- ModifyThreatByPercent has no bridge, so a port would fabricate
+-- blanket immunity — unmodeled) and the threat retarget/owner-
+-- death
 -- arms (no threat bridge) are unmodeled; the JustDied whisper-
 -- aura removal is cross-creature blocked. OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
