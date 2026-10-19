@@ -29378,31 +29378,53 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		return true
 
 	case 23: // SPELL_AURA_PERIODIC_TRIGGER_SPELL
+		// SpellAuraEffects.cpp:5049-5079 (HandlePeriodicTriggerSpellAuraTick):
+		// the triggered spell is a full cast — CastSpellExtraArgs(AuraEffect)
+		// (SpellDefines.h:166) carries TRIGGERED_FULL_MASK, so the trigger
+		// rolls its own hit result per tick (Spell.cpp:2095-2152), the
+		// per-target immunity strip applies, and the trigger spell's own
+		// implicit targets select the victims. The previous arm skipped the
+		// cast and dealt direct damage to the aura holder: ticks never
+		// missed, immunities to the trigger spell were ignored, area
+		// triggers hit only the holder, and non-damage triggers were
+		// silently dropped.
+		// SpellAuraEffects.cpp:5056 — triggerCaster is the aura caster when
+		// the trigger spell NeedsToBeTriggeredByCaster, else the aura target
+		// (the creature). The target-cast arm has no bridge: the creature
+		// tick has no full-cast path, so it rides the caster's player
+		// session as well — the tree's documented cast-attribution delta
+		// for creature targets (same as case 227). A creature caster or an
+		// offline player caster stays unbridged.
 		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
-			if trigger, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
-				controlledByPlayer := aura.CasterGUID == s.playerGUID
-				if !controlledByPlayer && s.server != nil {
-					controlledByPlayer = s.server.findSessionByGUID(aura.CasterGUID) != nil
-				}
-				// C++ HandlePeriodicTriggerSpellAuraTick casts the trigger via the
-				// tick's live caster (or the target when the triggered spell
-				// doesn't need the caster), so its CalcValue per-level leg
-				// keys on the live level like the damage-tick arms above.
-				triggerLevel, _ := tickAttackerLevel(s.server, key.Map, key.InstanceID, aura)
-				if damage, ok := creatureSpellDamage(s.server, trigger, uint32(triggerLevel), controlledByPlayer); ok && damage > 0 {
-					// C++ HandlePeriodicTriggerSpellAuraTick casts via
-					// CastSpellExtraArgs(AuraEffect) = TRIGGERED_FULL_MASK, so
-					// TRIGGERED_DISALLOW_PROC_EVENTS applies here too.
-					s.triggeredNoProcEvents++
-					// SpellAuraEffects.cpp:5059-5061 — the INHERIT_CRIT_FROM_AURA
-					// seed is consumed by the damage funnel below (the fallback
-					// arm in executeDirectSpellDamageWithFlags); the field is
-					// always consumed on this path because damage > 0.
-					if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
-						s.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
+			if triggering, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				if triggered, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
+					var triggerCaster *session
+					if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
+						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
+					} else {
+						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
 					}
-					s.executeSpellDamage(ctx, aura.TargetGUID, aura.TriggerSpell, damage, 0)
-					s.triggeredNoProcEvents--
+					if triggerCaster != nil {
+						// SpellAuraEffects.cpp:5059-5061 — the
+						// INHERIT_CRIT_FROM_AURA SPELLVALUE_CRIT_CHANCE seed
+						// rides the cast entry (consumed there like the
+						// player tick and case 227).
+						if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
+							triggerCaster.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
+						}
+						// Spell.cpp:3068 — the m_triggeredByAuraSpell
+						// attribution rides the pending pair into the cast;
+						// the IsTriggeredByAura recursion terminator
+						// (SpellAuras.cpp:2054-2056) reads it. The cast
+						// entry maps TRIGGERED_FULL_MASK to
+						// triggeredNoProcEvents itself, so no manual bump
+						// here (unlike the previous direct-damage arm).
+						triggerCaster.triggeredByAuraCast = true
+						triggerCaster.triggeredByAuraSpell = aura.SpellID
+						triggerCaster.castSpellDirect(ctx, aura.TriggerSpell, aura.TargetGUID)
+						triggerCaster.triggeredByAuraCast = false
+						triggerCaster.triggeredByAuraSpell = 0
+					}
 				}
 			}
 		}
