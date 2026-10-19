@@ -160,8 +160,9 @@ local function feugenReset(event, creature)
 end
 
 -- C++ npc_feugen::DamageTaken (boss_thaddius.cpp:823-852), portable
--- legs only: lethal damage -> Talk(EMOTE_FEIGN_DEATH 3) + damage =
--- health-1; once latched, all further damage = 0. The cross-AI
+-- legs only: lethal damage -> Talk(EMOTE_FEIGN_DEATH 3) +
+-- AttackStop() + damage = health-1; once latched, all further
+-- damage = 0. The cross-AI
 -- DoAction + stand-state / react-state / flag / aura / beam legs stay
 -- out (no bridges). Event 9's second return rewrites damage
 -- (fireCreatureDamageTaken; halazzi precedent). The C++ latch resets
@@ -180,6 +181,7 @@ local function feugenDamageTaken(event, creature, attacker, damage)
     end
     feugenFeign[guid] = true
     creature:Talk(EMOTE_FEIGN_DEATH)
+    creature:AttackStop()
     return false, creature:GetHealth() - 1
 end
 

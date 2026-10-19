@@ -274,8 +274,11 @@ local function soulDamageTaken(event, creature, attacker, damage)
         end
         if not state.dead then
             state.dead = true
-            -- C++ HandleSoulRelease -> DoCastSelf(SPELL_SOUL_RELEASE)
+            -- C++ HandleSoulRelease: AttackStop() (ported
+            -- 2026-10-19; the Go bridge drops the victim +
+            -- SMSG_ATTACK_STOP) -> DoCastSelf(SPELL_SOUL_RELEASE)
             -- defaults non-triggered (UnitAI.h:320, UnitAI.cpp:165).
+            creature:AttackStop()
             creature:CastSpell(creature, SPELL_SOUL_RELEASE)
         end
         return false, 0

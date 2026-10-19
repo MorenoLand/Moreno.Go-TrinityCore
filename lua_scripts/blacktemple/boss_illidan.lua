@@ -807,11 +807,13 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                 -- no summon bridge.
                 creature:CastSpell(creature,
                     SPELL_REMOVE_PARASITIC_SHADOWFIEND, true)
-                -- C++ DoAction(ACTION_START_OUTRO): triggered
-                -- self-cast death 41218 (the NOT_SELECTABLE arm has
-                -- no flag bridge), defeated Talk 4s, quiet suicide
-                -- 3617 18s later. The maiev DoAction(ACTION_START_
-                -- OUTRO) and summon-despawn arms have no bridges.
+                -- C++ DoAction(ACTION_START_OUTRO): AttackStop()
+                -- (ported 2026-10-19) + triggered self-cast death
+                -- 41218 (the NOT_SELECTABLE arm has no flag bridge),
+                -- defeated Talk 4s, quiet suicide 3617 18s later.
+                -- The maiev DoAction(ACTION_START_OUTRO) and
+                -- summon-despawn arms have no bridges.
+                creature:AttackStop()
                 creature:CastSpell(creature, SPELL_DEATH, true)
                 schedule(guid, "defeatedText", 4000, function()
                     creature:Talk(SAY_ILLIDAN_DEFEATED)

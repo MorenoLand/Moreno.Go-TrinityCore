@@ -893,6 +893,7 @@ julianneReArmCombat = function(creature, guid)
 end
 
 local function juliannePretendDie(creature, guid)
+    creature:RemoveAllAuras()
     -- Bank the remainders BEFORE the cancel: C++ froze the timers untouched.
     raj.julianneFrozen = rajBankRemainders(guid, JULIANNE_COMBAT_KEYS)
     cancelKeys(guid, JULIANNE_COMBAT_KEYS)
@@ -1148,6 +1149,7 @@ romuloReArmCombat = function(creature, guid)
 end
 
 local function romuloPretendDie(creature, guid)
+    creature:RemoveAllAuras()
     -- Bank the remainders BEFORE the cancel: C++ froze the timers untouched.
     raj.romuloFrozen = rajBankRemainders(guid, ROMULO_COMBAT_KEYS)
     cancelKeys(guid, ROMULO_COMBAT_KEYS)

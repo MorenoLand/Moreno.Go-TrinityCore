@@ -663,11 +663,12 @@ end
 
 -- C++ npc_yogg_saron_keeperAI::Reset (:1605-1612): DoCast(
 -- SPELL_KEEPER_ACTIVE 62647) (1-arg self, non-triggered, ungated)
--- — event 23. The _events Reset/SetPhase, SetReactState,
--- RemoveAllAuras legs and the Freya sanity-well GetCreatureList
--- cleanup ride unbridged machines.
+-- — event 23. The _events Reset/SetPhase, SetReactState legs and
+-- the Freya sanity-well GetCreatureList cleanup ride unbridged
+-- machines (RemoveAllAuras ported 2026-10-19).
 local function yoggKeeperReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:RemoveAllAuras()
     -- C++ Reset: DoCast(KEEPER_ACTIVE)
     -- (boss_yogg_saron.cpp:1610). Alive-gated.
     if creature:IsAlive() then

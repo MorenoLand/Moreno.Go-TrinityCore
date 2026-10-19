@@ -143,8 +143,9 @@
 -- RemoveAllAuras + KillSelf) — no aura / cast bridges regardless.
 -- npc_twilight_whelp — PORTED 2026-10-16: the EVENT_FADE_ARMOR
 -- timer leg is bridgeable (CreateLuaEvent; see whelpEnterCombat /
--- fadeArmorTick below); Reset's RemoveAllAuras + DoZoneInCombat
--- legs have no bridges (documented deviation).
+-- fadeArmorTick below); Reset's RemoveAllAuras leg ported
+-- 2026-10-19, the DoZoneInCombat leg has no bridge (documented
+-- deviation).
 -- achievement_twilight_assist / achievement_twilight_duo /
 -- achievement_twilight_zone (target->GetAI()->GetData
 -- (TWILIGHT_ACHIEVEMENTS) >= 1 / >= 2 / == 3 — Sartharion's
@@ -351,8 +352,9 @@ end
 RegisterCreatureEvent(ENTRY_SHADRON, 23, shadronReset)
 
 -- C++ npc_twilight_whelp::Reset (obsidian_sanctum.cpp:983-988):
--- RemoveAllAuras + DoZoneInCombat legs have no bridges (documented
--- deviation); the bridgeable leg is ScheduleEvent(EVENT_FADE_ARMOR,
+-- RemoveAllAuras ported 2026-10-19; the DoZoneInCombat leg has no
+-- bridge (documented deviation); the bridgeable leg is
+-- ScheduleEvent(EVENT_FADE_ARMOR,
 -- 1s), seeded here on event 1 per the svalna precedent (Reset-seeded
 -- timers re-keyed to combat start). UpdateAI ExecuteEvent:
 -- DoCastVictim(SPELL_FADE_ARMOR 60708) (non-triggered), re-arm
@@ -381,6 +383,7 @@ local function whelpDied(event, creature, killer)
 end
 
 local function whelpReset(event, creature)
+    creature:RemoveAllAuras()
     cancelTimers(creature:GetGUID())
 end
 

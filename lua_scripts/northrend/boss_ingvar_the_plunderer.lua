@@ -240,8 +240,8 @@ local function ingvarEnterCombat(event, creature, target)
 end
 
 -- C++ DamageTaken (lines 122-140): if (damage >= me->GetHealth() &&
--- events.IsInPhase(PHASE_HUMAN)) { <unbridgeable feign-death legs>;
--- Talk(SAY_DEATH); } — the engaged gate mirrors the PHASE_HUMAN
+-- events.IsInPhase(PHASE_HUMAN)) { RemoveAllAuras (ported 2026-10-19)
+-- + unbridgeable feign-death legs; Talk(SAY_DEATH); } — the engaged gate mirrors the PHASE_HUMAN
 -- requirement, the feignDead latch the one-shot transition (the moroes
 -- threshold+latch precedent); cancelTimers mirrors the EventMap phase
 -- gate — the human timers never fire again once PHASE_EVENT starts.
@@ -256,6 +256,7 @@ local function ingvarDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         state.feignDead = true
         cancelTimers(creature:GetGUID())
+        creature:RemoveAllAuras()
         creature:Talk(SAY_DEATH)
     end
 end
