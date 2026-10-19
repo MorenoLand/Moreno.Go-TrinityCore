@@ -2733,6 +2733,12 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		if entry.Charges > 0 && aura.RemainingCharges == 0 {
 			continue
 		}
+		// C++ Aura::GetProcEffectMask (SpellAuras.cpp:2089-2091): a proc on
+		// cooldown (Aura::IsProcOnCooldown, SpellAuras.cpp:2010-2013) gates
+		// before the chance roll, per aura.
+		if time.Now().Before(aura.ProcCooldownUntil) {
+			continue
+		}
 		// C++ Aura::GetProcEffectMask (SpellAuras.cpp:2082-2086): a
 		// charge-using aura with PROC_ATTR_REQ_SPELLMOD only procs when the
 		// triggering spell's applied-mods registry holds the aura. Creature
@@ -2775,6 +2781,14 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			s.auraMu.Lock()
 			aura.RemainingCharges--
 			spent = aura.RemainingCharges == 0
+			s.auraMu.Unlock()
+		}
+		// C++ Aura::PrepareProcToTrigger (SpellAuras.cpp:2042):
+		// AddProcCooldown(now + procEntry->Cooldown), set after the chance
+		// roll succeeded.
+		if entry.CooldownMs > 0 {
+			s.auraMu.Lock()
+			aura.ProcCooldownUntil = time.Now().Add(time.Duration(entry.CooldownMs) * time.Millisecond)
 			s.auraMu.Unlock()
 		}
 		for _, i := range eligible {

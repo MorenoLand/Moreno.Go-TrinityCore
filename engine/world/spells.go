@@ -20389,6 +20389,10 @@ type activeAura struct {
 	// every second, and the aura is removed when the caster cannot pay.
 	UpkeepTimer *time.Timer
 	Stopped     bool
+	// ProcCooldownUntil is Aura::m_procCooldown (SpellAuras.h:301): the
+	// steady-clock deadline of the per-aura proc ICD
+	// (SpellProcEntry::Cooldown); a zero value is never on cooldown.
+	ProcCooldownUntil time.Time
 }
 
 func isHarmfulAura(auraType uint32) bool {

@@ -999,6 +999,11 @@ type spellProcEntry struct {
 	AttributesMask  uint32
 	Chance          uint32
 	Charges         uint32
+	// CooldownMs is SpellProcEntry::Cooldown (SpellMgr.h:262), loaded from
+	// spell_proc field 14 (SpellMgr.cpp:1578); the generated-default branch
+	// zeroes it (SpellMgr.cpp:1871), and this server builds generated
+	// entries only, so it is 0 until a spell_proc table import exists.
+	CooldownMs uint32
 }
 
 // serverSpellProcEntryFor builds the generated spell_proc entry for an aura
@@ -2752,6 +2757,13 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 		if entry.Charges > 0 && aura.RemainingCharges == 0 {
 			continue
 		}
+		// C++ Aura::GetProcEffectMask (SpellAuras.cpp:2089-2091): a proc on
+		// cooldown (Aura::IsProcOnCooldown, SpellAuras.cpp:2010-2013,
+		// m_procCooldown > now) gates before the chance roll, per aura —
+		// "cooldowns should be added to the whole aura" (SpellAuras.cpp:2042).
+		if time.Now().Before(aura.ProcCooldownUntil) {
+			continue
+		}
 		// C++ Aura::GetProcEffectMask (SpellAuras.cpp:2082-2086): a
 		// charge-using aura with PROC_ATTR_REQ_SPELLMOD only procs when the
 		// triggering spell's applied-mods registry holds the aura. The Go
@@ -2802,6 +2814,12 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 		if entry.Charges > 0 && !procEventKeepsProcCharges(ev) {
 			aura.RemainingCharges--
 			chargesDepleted = aura.RemainingCharges == 0
+		}
+		// C++ Aura::PrepareProcToTrigger (SpellAuras.cpp:2042):
+		// AddProcCooldown(now + procEntry->Cooldown) — set only after the
+		// chance roll succeeded (GetProcEffectMask returned nonzero).
+		if entry.CooldownMs > 0 {
+			aura.ProcCooldownUntil = time.Now().Add(time.Duration(entry.CooldownMs) * time.Millisecond)
 		}
 		// Unit::TriggerAurasProcOnEvent (Unit.cpp:10433-10440): an aura
 		// carrying SPELL_ATTR3_DISABLE_PROC elevates the no-proc guard
