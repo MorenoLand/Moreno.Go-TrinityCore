@@ -15002,11 +15002,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		s.sendSpellMiss(target.GUID, spellID, protocol.SpellMissEvade)
 		return 0
 	}
-	isHit := true
+	// Spell::AddUnitTarget (Spell.cpp:2151-2152) rolls the hit ONCE per
+	// target and DoEffectOnLaunchTarget (Spell.cpp:7733-7743) applies
+	// effects on the stored MissCondition — C++ never re-rolls at damage
+	// time. Every caller here already passed hit resolution (launch roll,
+	// reflect resolution, or the triggered-cast model which never
+	// table-rolls), so the target is always a hit.
 	crit := false
-	if targetGUID != s.playerGUID && !instantKill && !procDamage {
-		isHit = s.rollSpellHit(target.Level, isPlayerVictim)
-	}
 	hitInfo := uint32(0)
 	resisted := uint32(0)
 	absorbed := uint32(0)
@@ -15020,45 +15022,94 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// spell row is known.
 	fixedDamageSpell := false
 
-	if !isHit {
-		hitInfo = 0x01 // SPELL_HIT_TYPE_MISS
-		damage = 0
-	} else {
-		// Spell crit roll (fixed damage backlash spells do not crit, per TrinityCore SPELL_ATTR4_FIXED_DAMAGE)
-		crit = false
-		dmgSpell := wotlk.Spell{}
-		spellKnown := false
+	// Spell crit roll (fixed damage backlash spells do not crit, per TrinityCore SPELL_ATTR4_FIXED_DAMAGE)
+	crit = false
+	dmgSpell := wotlk.Spell{}
+	spellKnown := false
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			spellKnown = true
+			dmgSpell = sp
+		}
+	}
+	if !instantKill && !procDamage && spellKnown && spellID != 31117 && spellID != 64085 {
+		crit = s.rollDirectSpellCrit(ctx, target, isPlayerVictim, schoolMask, dmgSpell, inheritCritBase)
+	}
+	// SpellInfo::DmgClass is the DefenseType DBC field (SpellInfo.cpp:856),
+	// so the DefenseType route below is C++-exact.
+	fixedDamageSpell = spellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0
+	// Unit::CalculateSpellDamageTaken (Unit.cpp:1004-1006): physical-school
+	// spell damage is reduced by the victim's armor
+	// (Unit::IsDamageReducedByArmor: school bit 0 set and no
+	// SPELL_ATTR0_CU_IGNORE_ARMOR; SPELL_ATTR4_FIXED_DAMAGE skips the
+	// whole taken-mitigation block). C++ runs CalcArmorReducedDamage
+	// AHEAD of the crit doubling (:1037+/1095) — the ceil runs once on
+	// the pre-crit damage, then the crit doubles the integer; ceiling
+	// the doubled product instead differs by 1 whenever the pre-crit
+	// reduced damage carries a fractional part in (0, 0.5].
+	// Hybrid (melee+magic) spells skip this arm: C++ strips the NORMAL
+	// bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor is
+	// false for them, and the armor comparison moves into
+	// CalcSpellResistedDamage (Unit.cpp:1764-1770), which C++ evaluates
+	// on the post-crit damage inside DealDamage — the hybrid figure is
+	// computed at the resist call below, not here.
+	isHybridSpell := spellKnown && dmgSpell.SchoolMask&1 != 0 && dmgSpell.SchoolMask&0x7E != 0
+	if !instantKill && damage > 0 && schoolMask&1 != 0 && spellKnown &&
+		dmgSpell.AttributesEx4&spellAttr4FixedDamage == 0 && dmgSpell.Attributes&spellAttr0CUIgnoreArmor == 0 &&
+		s.player != nil && !isHybridSpell {
+		armor := float64(target.Armor)
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+			armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
+		}
+		if armor < 0 {
+			armor = 0
+		}
+		if armor > 0 {
+			// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650): the 123/270/269
+			// ignore-resist armor legs run before the ARP-rating leg inside
+			// calcArmorReducedDamage.
+			armor = s.ignoreTargetResistArmor(armor, dmgSpell)
+			damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
+		}
+	}
+	if crit && !fixedDamageSpell {
 		if s.server != nil && s.server.Data != nil {
 			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-				spellKnown = true
-				dmgSpell = sp
+				// Unit::CalculateSpellDamageTaken (Unit.cpp:1014-1040):
+				// melee/ranged-DmgClass spells take their own crit arm
+				// (flat 100% bonus plus the 203/204 victim auras), not
+				// the magic leg's SpellCriticalDamageBonus.
+				if sp.DefenseType == spellDamageClassMelee || sp.DefenseType == spellDamageClassRanged {
+					damage = s.spellWeaponCritDamageBonus(ctx, sp, damage, target, isPlayerVictim)
+				} else {
+					damage = s.spellCriticalDamageBonus(ctx, sp, damage, targetGUID)
+				}
+			} else {
+				damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
+			}
+		} else {
+			damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
+		}
+		hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
+	}
+
+	if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
+		chaosBolt := false
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				chaosBolt = sp.SpellFamilyName == spellFamilyWarlock && sp.SpellIconID == 3178
 			}
 		}
-		if !instantKill && !procDamage && spellKnown && spellID != 31117 && spellID != 64085 {
-			crit = s.rollDirectSpellCrit(ctx, target, isPlayerVictim, schoolMask, dmgSpell, inheritCritBase)
-		}
-		// SpellInfo::DmgClass is the DefenseType DBC field (SpellInfo.cpp:856),
-		// so the DefenseType route below is C++-exact.
-		fixedDamageSpell = spellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0
-		// Unit::CalculateSpellDamageTaken (Unit.cpp:1004-1006): physical-school
-		// spell damage is reduced by the victim's armor
-		// (Unit::IsDamageReducedByArmor: school bit 0 set and no
-		// SPELL_ATTR0_CU_IGNORE_ARMOR; SPELL_ATTR4_FIXED_DAMAGE skips the
-		// whole taken-mitigation block). C++ runs CalcArmorReducedDamage
-		// AHEAD of the crit doubling (:1037+/1095) — the ceil runs once on
-		// the pre-crit damage, then the crit doubles the integer; ceiling
-		// the doubled product instead differs by 1 whenever the pre-crit
-		// reduced damage carries a fractional part in (0, 0.5].
-		// Hybrid (melee+magic) spells skip this arm: C++ strips the NORMAL
-		// bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor is
-		// false for them, and the armor comparison moves into
-		// CalcSpellResistedDamage (Unit.cpp:1764-1770), which C++ evaluates
-		// on the post-crit damage inside DealDamage — the hybrid figure is
-		// computed at the resist call below, not here.
-		isHybridSpell := spellKnown && dmgSpell.SchoolMask&1 != 0 && dmgSpell.SchoolMask&0x7E != 0
-		if !instantKill && damage > 0 && schoolMask&1 != 0 && spellKnown &&
-			dmgSpell.AttributesEx4&spellAttr4FixedDamage == 0 && dmgSpell.Attributes&spellAttr0CUIgnoreArmor == 0 &&
-			s.player != nil && !isHybridSpell {
+		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
+		// the live resistance fold (22/101/143) lands on every creature
+		// victim's resistances.
+		resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
+		// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+		// armor figure is evaluated on the post-crit damage, like the
+		// C++ leg inside DealDamage; it runs even for FIXED_DAMAGE and
+		// CU_IGNORE_ARMOR spells, which skip the taken-block armor arm.
+		hybridArmorReduced := uint32(0)
+		if isHybridSpell && s.player != nil {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
 				armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
@@ -15067,147 +15118,160 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				armor = 0
 			}
 			if armor > 0 {
-				// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1650): the 123/270/269
-				// ignore-resist armor legs run before the ARP-rating leg inside
-				// calcArmorReducedDamage.
 				armor = s.ignoreTargetResistArmor(armor, dmgSpell)
-				damage = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
-			}
-		}
-		if crit && !fixedDamageSpell {
-			if s.server != nil && s.server.Data != nil {
-				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-					// Unit::CalculateSpellDamageTaken (Unit.cpp:1014-1040):
-					// melee/ranged-DmgClass spells take their own crit arm
-					// (flat 100% bonus plus the 203/204 victim auras), not
-					// the magic leg's SpellCriticalDamageBonus.
-					if sp.DefenseType == spellDamageClassMelee || sp.DefenseType == spellDamageClassRanged {
-						damage = s.spellWeaponCritDamageBonus(ctx, sp, damage, target, isPlayerVictim)
-					} else {
-						damage = s.spellCriticalDamageBonus(ctx, sp, damage, targetGUID)
-					}
-				} else {
-					damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
-				}
+				hybridArmorReduced = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
 			} else {
-				damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
+				hybridArmorReduced = damage
 			}
-			hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
 		}
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), spellResistInput{
+			ignoreResistances:  spellKnown && dmgSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+			binary:             spellKnown && dmgSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+			hybrid:             isHybridSpell,
+			hybridArmorReduced: hybridArmorReduced,
+			targetResistMod:    s.casterTargetResistMod(uint32(schoolMask)),
+		}, s.player.SpellPenetration)
+		if resisted > 0 && damage == 0 {
+			// PROC_HIT_FULL_RESIST (createProcHitMask, Unit.cpp:10179):
+			// captured here, before immunity/absorption/taken
+			// multipliers can zero the damage for other reasons.
+			fullyResisted = true
+		}
+	}
 
-		if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
-			chaosBolt := false
+	if instantKill {
+		damage, hitInfo, resisted, absorbed = target.Health, 0, 0, 0
+	}
+	if isPlayerVictim {
+		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
+			// Reference BE_SPELL_TARGET (28) and TIMED 6: being the
+			// target of a hostile spell credits the victim and starts
+			// target-timed criteria.
+			playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget, spellID, 1)
+			playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget2, spellID, 1)
+			playerSess.startTimedAchievement(timedTypeSpellTarget, spellID)
+			// Unit::IsImmunedToDamage(SpellInfo const*) (Unit.cpp:7818-7860):
+			// the attribute gates (e.g. 40175) and the per-entry pierce
+			// filter need the spell; an unresolvable spell falls back to
+			// the mask-only fold.
+			dmgSpell, dmgSpellKnown := wotlk.Spell{}, false
 			if s.server != nil && s.server.Data != nil {
 				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-					chaosBolt = sp.SpellFamilyName == spellFamilyWarlock && sp.SpellIconID == 3178
+					dmgSpell, dmgSpellKnown = sp, true
 				}
 			}
-			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
-			// the live resistance fold (22/101/143) lands on every creature
-			// victim's resistances.
-			resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
-			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
-			// armor figure is evaluated on the post-crit damage, like the
-			// C++ leg inside DealDamage; it runs even for FIXED_DAMAGE and
-			// CU_IGNORE_ARMOR spells, which skip the taken-block armor arm.
-			hybridArmorReduced := uint32(0)
-			if isHybridSpell && s.player != nil {
-				armor := float64(target.Armor)
-				if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
-					armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
-				}
-				if armor < 0 {
-					armor = 0
-				}
-				if armor > 0 {
-					armor = s.ignoreTargetResistArmor(armor, dmgSpell)
-					hybridArmorReduced = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
-				} else {
-					hybridArmorReduced = damage
-				}
+			immuneToDmg := false
+			if dmgSpellKnown {
+				immuneToDmg = playerSess.isImmuneToDamageSpell(dmgSpell, uint32(schoolMask))
+			} else {
+				immuneToDmg = playerSess.isImmuneToDamage(uint32(schoolMask))
 			}
-			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), spellResistInput{
-				ignoreResistances:  spellKnown && dmgSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
-				binary:             spellKnown && dmgSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
-				hybrid:             isHybridSpell,
-				hybridArmorReduced: hybridArmorReduced,
-				targetResistMod:    s.casterTargetResistMod(uint32(schoolMask)),
-			}, s.player.SpellPenetration)
-			if resisted > 0 && damage == 0 {
-				// PROC_HIT_FULL_RESIST (createProcHitMask, Unit.cpp:10179):
-				// captured here, before immunity/absorption/taken
-				// multipliers can zero the damage for other reasons.
-				fullyResisted = true
+			if !instantKill && immuneToDmg {
+				damage = 0
+				immune = true
 			}
-		}
-
-		if instantKill {
-			damage, hitInfo, resisted, absorbed = target.Health, 0, 0, 0
-		}
-		if isPlayerVictim {
-			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				// Reference BE_SPELL_TARGET (28) and TIMED 6: being the
-				// target of a hostile spell credits the victim and starts
-				// target-timed criteria.
-				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget, spellID, 1)
-				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget2, spellID, 1)
-				playerSess.startTimedAchievement(timedTypeSpellTarget, spellID)
-				// Unit::IsImmunedToDamage(SpellInfo const*) (Unit.cpp:7818-7860):
-				// the attribute gates (e.g. 40175) and the per-entry pierce
-				// filter need the spell; an unresolvable spell falls back to
-				// the mask-only fold.
-				dmgSpell, dmgSpellKnown := wotlk.Spell{}, false
-				if s.server != nil && s.server.Data != nil {
-					if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-						dmgSpell, dmgSpellKnown = sp, true
+			// Victim-side damage-taken multiplier (TrinityCore
+			// Unit::SpellDamageBonusTaken, Unit.cpp:7052), applied
+			// before resilience/absorption like the C++
+			// EffectSchoolDMG ordering (SpellEffects.cpp:785).
+			if !instantKill && damage > 0 && s.server != nil && s.server.Data != nil {
+				if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+					// Unit::MeleeDamageBonusTaken (Unit.cpp:8154): weapon-damage
+					// spells run the melee taken legs (flat 14/125/113 with the
+					// negative clamp, then the 126/114 pct) ahead of the shared
+					// SpellDamageBonusTaken pct arms, matching the C++ order.
+					meleePctMod := 1.0
+					if spellHasWeaponDamageEffect(spell) {
+						damage, meleePctMod = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
 					}
+					damage = spellDamageBonusTaken(damage, spell, uint32(schoolMask), playerSess, s, meleePctMod)
 				}
-				immuneToDmg := false
+			}
+			isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
+			// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062):
+			// after the crit fold and before resilience.
+			if !instantKill && damage > 0 && dmgSpellKnown {
+				if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, playerSess, dmgSpell, damage); ok {
+					blocked = b
+					damage -= b
+				}
+			}
+			// SPELL_ATTR4_FIXED_DAMAGE skips the whole taken-mitigation
+			// block (Unit.cpp:999); the armor and block arms above carry
+			// their own gates, and the crit arm dispatches on it.
+			if !instantKill && !(dmgSpellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0) {
+				// Unit::CalculateSpellDamageTaken (Unit.cpp:1060-1066):
+				// the melee/ranged-DmgClass arm applies CR_CRIT_TAKEN_MELEE
+				// / CR_CRIT_TAKEN_RANGED, not the CR_CRIT_TAKEN_SPELL the
+				// magic arm (:1098) uses.
+				resilCR := CombatRatingCritTakenSpell
 				if dmgSpellKnown {
-					immuneToDmg = playerSess.isImmuneToDamageSpell(dmgSpell, uint32(schoolMask))
-				} else {
-					immuneToDmg = playerSess.isImmuneToDamage(uint32(schoolMask))
-				}
-				if !instantKill && immuneToDmg {
-					damage = 0
-					immune = true
-				}
-				// Victim-side damage-taken multiplier (TrinityCore
-				// Unit::SpellDamageBonusTaken, Unit.cpp:7052), applied
-				// before resilience/absorption like the C++
-				// EffectSchoolDMG ordering (SpellEffects.cpp:785).
-				if !instantKill && damage > 0 && s.server != nil && s.server.Data != nil {
-					if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-						// Unit::MeleeDamageBonusTaken (Unit.cpp:8154): weapon-damage
-						// spells run the melee taken legs (flat 14/125/113 with the
-						// negative clamp, then the 126/114 pct) ahead of the shared
-						// SpellDamageBonusTaken pct arms, matching the C++ order.
-						meleePctMod := 1.0
-						if spellHasWeaponDamageEffect(spell) {
-							damage, meleePctMod = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
-						}
-						damage = spellDamageBonusTaken(damage, spell, uint32(schoolMask), playerSess, s, meleePctMod)
+					switch dmgSpell.DefenseType {
+					case spellDamageClassMelee:
+						resilCR = CombatRatingCritTakenMelee
+					case spellDamageClassRanged:
+						resilCR = CombatRatingCritTakenRanged
 					}
 				}
-				isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
-				// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062):
-				// after the crit fold and before resilience.
-				if !instantKill && damage > 0 && dmgSpellKnown {
-					if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, playerSess, dmgSpell, damage); ok {
-						blocked = b
-						damage -= b
-					}
-				}
-				// SPELL_ATTR4_FIXED_DAMAGE skips the whole taken-mitigation
-				// block (Unit.cpp:999); the armor and block arms above carry
-				// their own gates, and the crit arm dispatches on it.
-				if !instantKill && !(dmgSpellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0) {
-					// Unit::CalculateSpellDamageTaken (Unit.cpp:1060-1066):
-					// the melee/ranged-DmgClass arm applies CR_CRIT_TAKEN_MELEE
-					// / CR_CRIT_TAKEN_RANGED, not the CR_CRIT_TAKEN_SPELL the
-					// magic arm (:1098) uses.
+				playerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
+			}
+			if !instantKill && damage > 0 {
+				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+				// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
+				// (245, affecting this spell) pct of damage bypasses absorbs.
+				bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
+				absorbed, damage = playerSess.applyAbsorptionShields(damage-bypass, schoolMask)
+				damage += bypass
+			}
+		}
+	} else if !instantKill && s.server != nil && damage > 0 {
+		// Unit::IsImmunedToDamage on creature victims (Unit.cpp:7818-7860
+		// applies to any Unit): a creature with live aura-39/aura-4 rows
+		// zeroes the spell damage, mirroring the player gate above.
+		if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			if creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(target), sp, uint32(schoolMask)) {
+				damage = 0
+				immune = true
+			}
+		}
+		// Victim-side damage-taken multiplier for creature victims
+		// (TrinityCore Unit::SpellDamageBonusTaken, Unit.cpp:7052):
+		// EffectSchoolDMG (SpellEffects.cpp:365-366) runs the taken leg
+		// on every target, not just players. Applied before absorption
+		// like the player path above.
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			// Unit::MeleeDamageBonusTaken (Unit.cpp:8154) on creature victims:
+			// the melee taken legs run ahead of the shared
+			// creatureSpellDamageBonusTaken pct arms, matching the C++ order.
+			meleePctMod := 1.0
+			if spellHasWeaponDamageEffect(spell) && damage > 0 {
+				damage, meleePctMod = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
+			}
+			damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s, meleePctMod)
+		}
+		// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062):
+		// after the crit fold and before absorb/resist.
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, nil, spell, damage); ok {
+				blocked = b
+				damage -= b
+			}
+		}
+		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079-1080,
+		// 1105-1106) with the Unit::GetCombatRatingReduction pet arm
+		// (Unit.cpp:12548-12553): the caster is a player, so a creature
+		// victim owned by a player takes the owner's resilience; wild
+		// creatures resolve to no owner session. Placed after the block
+		// arm and before absorption, matching the C++ order. Fixed-damage
+		// spells skip the whole taken-mitigation block (Unit.cpp:999).
+		if !instantKill && damage > 0 && !(spellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0) {
+			// Unit::ApplyResilience (Unit.cpp:12342-12343): a non-player
+			// vehicle victim takes no resilience — the early return
+			// fires before the owner lookup.
+			if targetMotion := s.findCreatureMotion(target.GUID); targetMotion != nil && s.server.creatureVictimTakesResilience(targetMotion) {
+				if ownerSess := s.playerOwnerSessionOfCreature(target.GUID); ownerSess != nil {
 					resilCR := CombatRatingCritTakenSpell
-					if dmgSpellKnown {
+					if spellKnown {
 						switch dmgSpell.DefenseType {
 						case spellDamageClassMelee:
 							resilCR = CombatRatingCritTakenMelee
@@ -15215,83 +15279,16 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 							resilCR = CombatRatingCritTakenRanged
 						}
 					}
-					playerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
-				}
-				if !instantKill && damage > 0 {
-					// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
-					// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
-					// (245, affecting this spell) pct of damage bypasses absorbs.
-					bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
-					absorbed, damage = playerSess.applyAbsorptionShields(damage-bypass, schoolMask)
-					damage += bypass
+					ownerSess.applyResilienceToDamage(true, &damage, (hitInfo&0x02) != 0, resilCR)
 				}
 			}
-		} else if !instantKill && s.server != nil && damage > 0 {
-			// Unit::IsImmunedToDamage on creature victims (Unit.cpp:7818-7860
-			// applies to any Unit): a creature with live aura-39/aura-4 rows
-			// zeroes the spell damage, mirroring the player gate above.
-			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-				if creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(target), sp, uint32(schoolMask)) {
-					damage = 0
-					immune = true
-				}
-			}
-			// Victim-side damage-taken multiplier for creature victims
-			// (TrinityCore Unit::SpellDamageBonusTaken, Unit.cpp:7052):
-			// EffectSchoolDMG (SpellEffects.cpp:365-366) runs the taken leg
-			// on every target, not just players. Applied before absorption
-			// like the player path above.
-			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-				// Unit::MeleeDamageBonusTaken (Unit.cpp:8154) on creature victims:
-				// the melee taken legs run ahead of the shared
-				// creatureSpellDamageBonusTaken pct arms, matching the C++ order.
-				meleePctMod := 1.0
-				if spellHasWeaponDamageEffect(spell) && damage > 0 {
-					damage, meleePctMod = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell), false)
-				}
-				damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s, meleePctMod)
-			}
-			// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062):
-			// after the crit fold and before absorb/resist.
-			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-				if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, nil, spell, damage); ok {
-					blocked = b
-					damage -= b
-				}
-			}
-			// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079-1080,
-			// 1105-1106) with the Unit::GetCombatRatingReduction pet arm
-			// (Unit.cpp:12548-12553): the caster is a player, so a creature
-			// victim owned by a player takes the owner's resilience; wild
-			// creatures resolve to no owner session. Placed after the block
-			// arm and before absorption, matching the C++ order. Fixed-damage
-			// spells skip the whole taken-mitigation block (Unit.cpp:999).
-			if !instantKill && damage > 0 && !(spellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0) {
-				// Unit::ApplyResilience (Unit.cpp:12342-12343): a non-player
-				// vehicle victim takes no resilience — the early return
-				// fires before the owner lookup.
-				if targetMotion := s.findCreatureMotion(target.GUID); targetMotion != nil && s.server.creatureVictimTakesResilience(targetMotion) {
-					if ownerSess := s.playerOwnerSessionOfCreature(target.GUID); ownerSess != nil {
-						resilCR := CombatRatingCritTakenSpell
-						if spellKnown {
-							switch dmgSpell.DefenseType {
-							case spellDamageClassMelee:
-								resilCR = CombatRatingCritTakenMelee
-							case spellDamageClassRanged:
-								resilCR = CombatRatingCritTakenRanged
-							}
-						}
-						ownerSess.applyResilienceToDamage(true, &damage, (hitInfo&0x02) != 0, resilCR)
-					}
-				}
-			}
-			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
-			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
-			// (245, affecting this spell) pct of damage bypasses absorbs.
-			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
-			absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, schoolMask)
-			damage += bypass
 		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+		// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
+		// (245, affecting this spell) pct of damage bypasses absorbs.
+		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
+		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, schoolMask)
+		damage += bypass
 	}
 
 	overkill := uint32(0)
@@ -15353,7 +15350,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// EffectInstaKill calls Unit::DealDamage directly, which contains zero
 	// ProcDamageAndSpell calls), so no spell-hit procs fire on either arm.
 	if !instantKill && hadIncomingDamage && !targetCantProc {
-		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, reflected)
+		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, true, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, reflected)
 		// Taken-side aura procs on the victim's own auras (TrinityCore
 		// Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418): the done
 		// side runs first, matching the ProcSkillsAndAuras ordering
@@ -15363,16 +15360,16 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// taken passes iterate the same aura list.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
+				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, true, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
 			}
 		}
 	} else if !instantKill && !targetCantProc {
-		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, isHit, immune, reflected)
+		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, true, immune, reflected)
 		// Taken-side no-damage pass on the victim's session, after the
 		// done side, matching the ProcSkillsAndAuras ordering.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
+				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, true, immune, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
 			}
 		}
 	}
@@ -15389,7 +15386,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// Instakill kills fire no spell-hit procs (no DoDamageAndTriggers), so
 	// the item-spell table is skipped too.
 	if !instantKill && !targetCantProc && s.spellHitMayFireItemProcs(spellID) &&
-		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
+		spellHitCanTriggerItemProcs(true, immune, fullyResisted, absorbed) {
 		s.procSpellCastAndHitEffects(ctx, target, spellID)
 		s.procWeaponEnchantProcsFromSpellHit(ctx, target, !(damage >= target.Health && target.Health > 0))
 	}
