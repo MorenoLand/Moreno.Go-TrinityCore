@@ -142,11 +142,13 @@ func (s *session) fireGameObjectQuestHook(ctx context.Context, giverGUID uint64,
 // unbound entries. Returns true when a handler returned false, following the
 // engine's luaCancelled convention, same as fireItemGossipHelloHook.
 //
-// Documented no-bridge (gameobject_gossip family): ON_SELECT (2) fires from
-// the guid.IsGameObject() arm of HandleGossipSelectOptionOpcode
-// (MiscHandler.cpp:138-198); Go never opens gameobject gossip menus
-// (gameobjects.go:541 — Go's gossip path is creature-only), so that arm can
-// never be reached and selections are rejected at the sender cheat check.
+// gameobject_gossip ON_SELECT (2) is WIRED, not a no-bridge:
+// fireGameObjectGossipSelectHook below fires from the guid.IsGameObject()
+// arm of the select handler (gossip.go:718, MiscHandler.cpp:138-198), and GO
+// gossip menus do open in Go (gameobjects.go:530-550 goober arm via
+// prepareGameObjectGossip + sendGossipMenu). A Lua false return cancels the
+// native select arms. (An older revision of this comment claimed the arm
+// unreachable; corrected 2026-10-19.)
 //
 // Documented no-bridge (player_gossip family): ON_HELLO does not exist in
 // Eluna — GossipHooks.cpp has no player hello arm and Hooks.h:327 documents

@@ -46,7 +46,12 @@
 --   (zero Lua usage).
 -- - Crystal/trigger summons (SpawnNextCrystal): SummonCreature no
 --   bridge.
--- - go_ossirian_crystal (GameObjectAI OnGossipHello): no bridge.
+-- - go_ossirian_crystal (GameObjectAI OnGossipHello): the GO gossip
+--   hello hook IS bridged (RegisterGameObjectGossipEvent, engine/world/
+--   gameobjects.go:747) — the 2026-10-18 "no bridge" claim was stale.
+--   The arm stays unported on its real blockers: FindNearestCreature
+--   (unbridged) + cross-AI DoAction(ACTION_TRIGGER_WEAKNESS) (unbridged).
+--   go:SetLootState is bridged but is not the arm's driver.
 -- - MoveInLineOfSight SAY_INTRO: Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27)
 --   is live (lua_creature_events.go:531-560, shaffar/vorpil/ikiss/maladaar
 --   precedent) — ported below with a per-GUID one-shot SaidIntro latch

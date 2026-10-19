@@ -70,9 +70,11 @@
 -- gossip — unreachable in this model, documented only; the
 -- RESET summons.DespawnAll arm is summon-bridgeless
 -- (steamrigger precedent); the lever SetFlag(GO_FLAG_NOT_
--- SELECTABLE|GO_FLAG_IN_USE)/SetGoState/RemoveFlag arms have
--- no GO bridge — go_broggok_lever (GO_BROGGOK_LEVER 181982)
--- documented only, not registered (ahune precedent); the
+-- SELECTABLE|GO_FLAG_IN_USE)/SetGoState/RemoveFlag arms stay
+-- unported on the instance-machine core (the 2026-10-18 "no GO
+-- bridge" claim was partially stale: go:SetGoState IS bridged,
+-- engine/world/lua_objects.go) — go_broggok_lever (GO_BROGGOK_LEVER
+-- 181982) documented only, not registered (ahune precedent); the
 -- prisoner JustReachedHome -> DoAction(ACTION_RESET_BROGGOK)
 -- relay is instance/cross-creature blocked; the instance
 -- OnUnitDeath prisoner-counter -> ActivateCell chain and the

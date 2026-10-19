@@ -68,11 +68,13 @@
 --   REACT_PASSIVE/REACT_AGGRESSIVE flag legs (no flag/react-state
 --   bridges — koltira / eye_of_acherus precedents).
 -- - go_brazier_of_the_herald::OnGossipHello (GameObjectScript, registered
---   by new go_brazier_of_the_herald): me->UseDoorOrButton() and
---   player->SummonCreature(NPC_KIRTONOS, PosSummon[0],
---   TEMPSUMMON_DEAD_DESPAWN, 15min) have no door/summon bridges —
---   skipped; me->PlayDirectSound(SOUND_SCREECH = 557) is ported via
---   go:PlayDirectSound on the brazier GO gossip hook (onBrazierGossip).
+--   by new go_brazier_of_the_herald): me->UseDoorOrButton() is ported via
+--   go:UseDoorOrButton (bridged, engine/world/lua_objects.go:1113) on the
+--   brazier GO gossip hook (onBrazierGossip); player->SummonCreature(
+--   NPC_KIRTONOS, PosSummon[0], TEMPSUMMON_DEAD_DESPAWN, 15min) has no
+--   summon bridge — skipped; me->PlayDirectSound(SOUND_SCREECH = 557)
+--   is ported via go:PlayDirectSound on the same hook. (The 2026-10-18
+--   "no door bridge" claim was stale; corrected 2026-10-19.)
 
 local ENTRY_KIRTONOS = 10506
 
@@ -220,13 +222,16 @@ local function onReset(_, creature)
 end
 
 -- go_brazier_of_the_herald::OnGossipHello
--- (boss_kirtonos_the_herald.cpp:290-294): me->UseDoorOrButton()
--- (no door bridge) + me->PlayDirectSound(SOUND_SCREECH, 0) +
+-- (boss_kirtonos_the_herald.cpp:290-294): me->UseDoorOrButton() (bridged,
+-- ported below) + me->PlayDirectSound(SOUND_SCREECH, 0) +
 -- player->SummonCreature(NPC_KIRTONOS, PosSummon[0],
--- TEMPSUMMON_DEAD_DESPAWN, 15min) (no summon bridge).
+-- TEMPSUMMON_DEAD_DESPAWN, 15min) (no summon bridge — skipped).
+-- C++ returns true (handled: native GO use suppressed) == Lua false
+-- (engine/world/gameobject_hooks.go:134-143, luaCancelled convention).
 local function onBrazierGossip(_, player, go)
+    go:UseDoorOrButton()
     go:PlayDirectSound(SOUND_SCREECH)
-    return true
+    return false
 end
 
 RegisterCreatureEvent(ENTRY_KIRTONOS, 1, onEnterCombat)
