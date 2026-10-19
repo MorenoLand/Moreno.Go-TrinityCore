@@ -2204,7 +2204,7 @@ func (s *Store) SpellRadius(id, level uint32) (float32, bool, error) {
 	}
 	if level > 0 {
 		radius += perLevel * float32(level)
-		if maxRadius > 0 && radius > maxRadius {
+		if radius > maxRadius {
 			radius = maxRadius
 		}
 	}
