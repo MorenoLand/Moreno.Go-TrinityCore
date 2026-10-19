@@ -3659,26 +3659,23 @@ func (s *session) deleteAccount(ctx context.Context, accountID uint32) accountOp
 			return accountOpDBInternalError
 		}
 	}
-	tx, err := s.server.AuthStore.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return accountOpDBInternalError
-	}
-	for _, stmt := range []string{"LOGIN_DEL_ACCOUNT", "LOGIN_DEL_ACCOUNT_ACCESS", "LOGIN_DEL_REALM_CHARACTERS", "LOGIN_DEL_ACCOUNT_BANNED", "LOGIN_DEL_ACCOUNT_MUTED"} {
-		if _, err := s.server.AuthStore.ExecStatementTx(ctx, tx, database.StatementID(stmt), accountID); err != nil {
-			tx.Rollback()
-			return accountOpDBInternalError
+	authStore := s.server.AuthStore
+	if err := authStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		for _, stmt := range []string{"LOGIN_DEL_ACCOUNT", "LOGIN_DEL_ACCOUNT_ACCESS", "LOGIN_DEL_REALM_CHARACTERS", "LOGIN_DEL_ACCOUNT_BANNED", "LOGIN_DEL_ACCOUNT_MUTED"} {
+			if _, err := authStore.ExecStatementTx(txCtx, tx, database.StatementID(stmt), accountID); err != nil {
+				return err
+			}
 		}
-	}
-	// C++ AccountMgr::DeleteAccount (AccountMgr.cpp:77-150) issues no explicit
-	// rbac_account_permissions delete: MySQL's ON DELETE CASCADE FK
-	// (fk__rbac_account_permissions__account in sql/mysql/auth.sql) removes them.
-	// SQLite leaves PRAGMA foreign_keys off, so without this the rows would
-	// orphan; the explicit delete reproduces the cascade end state on both dialects.
-	if _, err := tx.ExecContext(ctx, "DELETE FROM rbac_account_permissions WHERE accountId = ?", accountID); err != nil {
-		tx.Rollback()
-		return accountOpDBInternalError
-	}
-	if err := tx.Commit(); err != nil {
+		// C++ AccountMgr::DeleteAccount (AccountMgr.cpp:77-150) issues no explicit
+		// rbac_account_permissions delete: MySQL's ON DELETE CASCADE FK
+		// (fk__rbac_account_permissions__account in sql/mysql/auth.sql) removes them.
+		// SQLite leaves PRAGMA foreign_keys off, so without this the rows would
+		// orphan; the explicit delete reproduces the cascade end state on both dialects.
+		if _, err := tx.ExecContext(txCtx, "DELETE FROM rbac_account_permissions WHERE accountId = ?", accountID); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return accountOpDBInternalError
 	}
 	return accountOpOK
@@ -5677,24 +5674,20 @@ func (s *session) worldBanAccount(ctx context.Context, mode int, nameOrIP, durat
 			return banNotFound // Nobody to ban
 		}
 		accounts = []uint32{id}
-		tx, err := auth.DB.BeginTx(ctx, nil)
-		if err != nil {
-			return banSyntaxError
-		}
-		for _, account := range accounts {
-			// LOGIN_UPD_ACCOUNT_NOT_BANNED: make sure there is only one
-			// active ban.
-			if _, err := auth.ExecStatementTx(ctx, tx, "LOGIN_UPD_ACCOUNT_NOT_BANNED", account); err != nil {
-				tx.Rollback()
-				return banSyntaxError
+		if err := auth.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+			for _, account := range accounts {
+				// LOGIN_UPD_ACCOUNT_NOT_BANNED: make sure there is only
+				// one active ban.
+				if _, err := auth.ExecStatementTx(txCtx, tx, "LOGIN_UPD_ACCOUNT_NOT_BANNED", account); err != nil {
+					return err
+				}
+				// LOGIN_INS_ACCOUNT_BANNED.
+				if _, err := auth.ExecStatementTx(txCtx, tx, "LOGIN_INS_ACCOUNT_BANNED", account, durationSecs, author, reason); err != nil {
+					return err
+				}
 			}
-			// LOGIN_INS_ACCOUNT_BANNED.
-			if _, err := auth.ExecStatementTx(ctx, tx, "LOGIN_INS_ACCOUNT_BANNED", account, durationSecs, author, reason); err != nil {
-				tx.Rollback()
-				return banSyntaxError
-			}
-		}
-		if err := tx.Commit(); err != nil {
+			return nil
+		}); err != nil {
 			return banSyntaxError
 		}
 	}
@@ -5725,20 +5718,16 @@ func (s *session) worldBanCharacter(ctx context.Context, name, durationStr, reas
 		}
 	}
 	// Use transaction in order to ensure the order of the queries.
-	tx, err := chars.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return banSyntaxError
-	}
-	// CHAR_UPD_CHARACTER_BAN + CHAR_INS_CHARACTER_BAN.
-	if _, err := chars.ExecStatementTx(ctx, tx, "CHAR_UPD_CHARACTER_BAN", guid); err != nil {
-		tx.Rollback()
-		return banSyntaxError
-	}
-	if _, err := chars.ExecStatementTx(ctx, tx, "CHAR_INS_CHARACTER_BAN", guid, durationSecs, author, reason); err != nil {
-		tx.Rollback()
-		return banSyntaxError
-	}
-	if err := tx.Commit(); err != nil {
+	if err := chars.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		// CHAR_UPD_CHARACTER_BAN + CHAR_INS_CHARACTER_BAN.
+		if _, err := chars.ExecStatementTx(txCtx, tx, "CHAR_UPD_CHARACTER_BAN", guid); err != nil {
+			return err
+		}
+		if _, err := chars.ExecStatementTx(txCtx, tx, "CHAR_INS_CHARACTER_BAN", guid, durationSecs, author, reason); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return banSyntaxError
 	}
 	if online != nil {

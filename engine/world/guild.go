@@ -241,43 +241,43 @@ func (s *session) ensureStartingGuild(ctx context.Context, playerGUID uint64) er
 	if s == nil || s.server == nil || !s.server.Config.StartingGuildEnable || s.server.Config.StartingGuildID == 0 || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil
 	}
-	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var existingGuild uint32
-	if err := tx.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", playerGUID).Scan(&existingGuild); err == nil {
-		return nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
 	var guildID uint32
-	if err := tx.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE guildid = ? LIMIT 1", s.server.Config.StartingGuildID).Scan(&guildID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	var memberRank uint32
+	inserted := false
+	if err := s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		var existingGuild uint32
+		if err := tx.QueryRowContext(txCtx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", playerGUID).Scan(&existingGuild); err == nil {
 			return nil
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
 		}
+		if err := tx.QueryRowContext(txCtx, "SELECT guildid FROM guild WHERE guildid = ? LIMIT 1", s.server.Config.StartingGuildID).Scan(&guildID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		var rank sql.NullInt64
+		if err := tx.QueryRowContext(txCtx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rank); err != nil {
+			return err
+		}
+		// Guild::AddMember (Guild.cpp:2209) runs Player::RemovePetitionsAndSigns
+		// before inserting the member; the starting-guild script reaches
+		// AddMember on both its OnCreate and OnLogin arms.
+		removeGuildCharterPetitions(txCtx, tx, playerGUID)
+		memberRank = uint32(4)
+		if rank.Valid {
+			memberRank = uint32(rank.Int64)
+		}
+		if _, err := tx.ExecContext(txCtx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, ?, '', '')", guildID, playerGUID, memberRank); err != nil {
+			return err
+		}
+		inserted = true
+		return nil
+	}); err != nil {
 		return err
 	}
-	var rank sql.NullInt64
-	if err := tx.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rank); err != nil {
-		return err
-	}
-	// Guild::AddMember (Guild.cpp:2209) runs Player::RemovePetitionsAndSigns
-	// before inserting the member; the starting-guild script reaches
-	// AddMember on both its OnCreate and OnLogin arms.
-	removeGuildCharterPetitions(ctx, tx, playerGUID)
-	memberRank := uint32(4)
-	if rank.Valid {
-		memberRank = uint32(rank.Int64)
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, ?, '', '')", guildID, playerGUID, memberRank); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	if s.player != nil && s.playerGUID == playerGUID {
+	if inserted && s.player != nil && s.playerGUID == playerGUID {
 		s.player.GuildID = guildID
 		s.player.GuildRank = uint8(memberRank)
 	}
@@ -4259,42 +4259,39 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 	// CharacterDatabase transaction, and the tab row carries only the
 	// (guildid, TabId) columns == CHAR_INS_GUILD_BANK_TAB — TabName/TabIcon
 	// stay at their '' schema defaults and TabText stays NULL until set.
-	tx, err := cdb.BeginTx(ctx, nil)
-	if err != nil {
-		return true
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_tab (guildid, TabId) VALUES (?, ?)", guildID, tabID); err != nil {
-		return true
-	}
+	if err := s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(txCtx, "INSERT OR IGNORE INTO guild_bank_tab (guildid, TabId) VALUES (?, ?)", guildID, tabID); err != nil {
+			return err
+		}
 
-	// Reference: RankInfo::CreateMissingTabsIfNeeded (Guild.cpp:276-300)
-	// via GuildBankRightsAndSlots::SetGuildMasterValues (Guild.h:259-263):
-	// fresh rights rows start at rights 0/slots 0; only the guildmaster
-	// rank (rid 0 == GR_GUILDMASTER) gets FULL rights + unlimited slots.
-	var rankIDs []uint32
-	if rankRows, err := tx.QueryContext(ctx, "SELECT rid FROM guild_rank WHERE guildid = ?", guildID); err == nil {
-		for rankRows.Next() {
-			var rid uint32
-			if err := rankRows.Scan(&rid); err == nil {
-				rankIDs = append(rankIDs, rid)
+		// Reference: RankInfo::CreateMissingTabsIfNeeded (Guild.cpp:276-300)
+		// via GuildBankRightsAndSlots::SetGuildMasterValues (Guild.h:259-263):
+		// fresh rights rows start at rights 0/slots 0; only the guildmaster
+		// rank (rid 0 == GR_GUILDMASTER) gets FULL rights + unlimited slots.
+		var rankIDs []uint32
+		if rankRows, err := tx.QueryContext(txCtx, "SELECT rid FROM guild_rank WHERE guildid = ?", guildID); err == nil {
+			for rankRows.Next() {
+				var rid uint32
+				if err := rankRows.Scan(&rid); err == nil {
+					rankIDs = append(rankIDs, rid)
+				}
+			}
+			rankRows.Close()
+		}
+		for _, rid := range rankIDs {
+			rights := uint8(0)
+			slots := uint32(0)
+			if rid == 0 {
+				rights = guildBankRightFull
+				slots = guildWithdrawSlotUnlimited
+			}
+			if _, err := tx.ExecContext(txCtx, "INSERT OR IGNORE INTO guild_bank_right (guildid, TabId, rid, gbright, SlotPerDay) VALUES (?, ?, ?, ?, ?)",
+				guildID, tabID, rid, rights, slots); err != nil {
+				return err
 			}
 		}
-		rankRows.Close()
-	}
-	for _, rid := range rankIDs {
-		rights := uint8(0)
-		slots := uint32(0)
-		if rid == 0 {
-			rights = guildBankRightFull
-			slots = guildWithdrawSlotUnlimited
-		}
-		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_right (guildid, TabId, rid, gbright, SlotPerDay) VALUES (?, ?, ?, ?, ?)",
-			guildID, tabID, rid, rights, slots); err != nil {
-			return true
-		}
-	}
-	if err := tx.Commit(); err != nil {
+		return nil
+	}); err != nil {
 		return true
 	}
 

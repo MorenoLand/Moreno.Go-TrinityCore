@@ -4022,43 +4022,35 @@ func (s *session) clearBuybackState(ctx context.Context) error {
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.playerGUID == 0 {
 		return nil
 	}
-	db := s.server.CharactersStore.DB
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	rows, err := tx.QueryContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot BETWEEN 74 AND 85", s.playerGUID)
-	if err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	items := make([]int64, 0, 12)
-	for rows.Next() {
-		var item int64
-		if err := rows.Scan(&item); err != nil {
+	if err := s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(txCtx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot BETWEEN 74 AND 85", s.playerGUID)
+		if err != nil {
+			return err
+		}
+		items := make([]int64, 0, 12)
+		for rows.Next() {
+			var item int64
+			if err := rows.Scan(&item); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			items = append(items, item)
+		}
+		if err := rows.Err(); err != nil {
 			_ = rows.Close()
-			_ = tx.Rollback()
 			return err
 		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		_ = tx.Rollback()
-		return err
-	}
-	_ = rows.Close()
-	if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot BETWEEN 74 AND 85", s.playerGUID); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	for _, item := range items {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item); err != nil {
-			_ = tx.Rollback()
+		if _, err := tx.ExecContext(txCtx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot BETWEEN 74 AND 85", s.playerGUID); err != nil {
 			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
+		for _, item := range items {
+			if _, err := tx.ExecContext(txCtx, "DELETE FROM item_instance WHERE guid = ?", item); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	for index := range s.buyback {

@@ -310,47 +310,36 @@ func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) {
 	// Go bridge; MAX+1 is the documented stand-in), leader = target,
 	// motd "No message set.", emblem fields zeroed, then the five default
 	// ranks (Guild.cpp:2428) and the leader at GR_GUILDMASTER.
-	tx, err := cdb.BeginTx(ctx, nil)
-	if err != nil {
-		s.sendSysMessage("Guild is not created.") // LANG_GUILD_NOT_CREATED 501
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	var maxID uint32
-	_ = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(guildid), 0) FROM guild").Scan(&maxID)
-	guildID := maxID + 1
 	now := time.Now().Unix()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO guild (guildid, name, leaderguid, info, motd, createdate, EmblemStyle, EmblemColor, BorderStyle, BorderColor, BackgroundColor, BankMoney)
+	var guildID uint32
+	if err := s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		var maxID uint32
+		_ = tx.QueryRowContext(txCtx, "SELECT COALESCE(MAX(guildid), 0) FROM guild").Scan(&maxID)
+		guildID = maxID + 1
+		if _, err := tx.ExecContext(txCtx, `INSERT INTO guild (guildid, name, leaderguid, info, motd, createdate, EmblemStyle, EmblemColor, BorderStyle, BorderColor, BackgroundColor, BankMoney)
 		VALUES (?, ?, ?, '', 'No message set.', ?, 0, 0, 0, 0, 0, 0)`, guildID, guildName, targetGUID, now); err != nil {
-		s.sendSysMessage("Guild is not created.") // LANG_GUILD_NOT_CREATED 501
-		return
-	}
-	defaultRanks := []struct {
-		name   string
-		rights uint32
-	}{
-		{"Guild Master", guildRightAll},                                            // LANG_GUILD_MASTER 811
-		{"Officer", guildRightAll},                                                 // LANG_GUILD_OFFICER 812
-		{"Veteran", guildRightGChatListen | guildRightGChatSpeak},                 // LANG_GUILD_VETERAN 813
-		{"Member", guildRightGChatListen | guildRightGChatSpeak},                   // LANG_GUILD_MEMBER 814
-		{"Initiate", guildRightGChatListen | guildRightGChatSpeak},                 // LANG_GUILD_INITIATE 815
-	}
-	for rid, r := range defaultRanks {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, ?, ?, ?, 0)", guildID, rid, r.name, r.rights); err != nil {
-			s.sendSysMessage("Guild is not created.") // LANG_GUILD_NOT_CREATED 501
-			return
+			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
+		defaultRanks := []struct {
+			name   string
+			rights uint32
+		}{
+			{"Guild Master", guildRightAll},                            // LANG_GUILD_MASTER 811
+			{"Officer", guildRightAll},                                 // LANG_GUILD_OFFICER 812
+			{"Veteran", guildRightGChatListen | guildRightGChatSpeak},  // LANG_GUILD_VETERAN 813
+			{"Member", guildRightGChatListen | guildRightGChatSpeak},   // LANG_GUILD_MEMBER 814
+			{"Initiate", guildRightGChatListen | guildRightGChatSpeak}, // LANG_GUILD_INITIATE 815
+		}
+		for rid, r := range defaultRanks {
+			if _, err := tx.ExecContext(txCtx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, ?, ?, ?, 0)", guildID, rid, r.name, r.rights); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		s.sendSysMessage("Guild is not created.") // LANG_GUILD_NOT_CREATED 501
 		return
 	}
-	committed = true
 	// Guild::Create -> AddMember(trans, m_leaderGuid, GR_GUILDMASTER)
 	// (Guild.cpp:1131).
 	if !s.guildAddMember(ctx, cdb, guildID, targetGUID, 0, targetSess.player.Name) {
