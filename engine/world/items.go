@@ -7168,8 +7168,12 @@ func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bo
 		if sentItems[i] == 0 {
 			continue
 		}
-		if eq, ok := equipped[i]; ok && eq == sentItems[i]&0xFFFFFFFF {
-			items[i] = sentItems[i] & 0xFFFFFFFF
+		// C++ compares the full item GUID (HandleEquipmentSetSave,
+		// CharacterHandler.cpp:1530-1532: item->GetGUID() != itemGuid), not
+		// just the counter: a client-sent GUID whose high bits are not the
+		// item type fails the cheat check exactly like a counter mismatch.
+		if eq, ok := equipped[i]; ok && sentItems[i] == eq|(uint64(0x4000)<<48) {
+			items[i] = eq
 		}
 	}
 
@@ -7371,6 +7375,14 @@ func (s *session) equipmentSetSwapToSlot(ctx context.Context, slot uint32, itemG
 	if db == nil {
 		return
 	}
+	// C++ GetItemByGuid compares the full typed GUID: a client-sent GUID
+	// whose high bits are not HighGuid::Item (0x4000) matches nothing and
+	// takes the unequip arm (CharacterHandler.cpp:1576), it is not masked
+	// down to a counter and located.
+	if itemGuid>>48 != 0x4000 {
+		s.equipmentSetUnequipSlot(ctx, slot)
+		return
+	}
 	counter := int64(itemGuid & 0xFFFFFFFF)
 	var bagKey, itemSlot int64
 	if err := db.QueryRowContext(ctx, "SELECT bag, slot FROM character_inventory WHERE guid = ? AND item = ? LIMIT 1", s.playerGUID, counter).Scan(&bagKey, &itemSlot); err != nil {
@@ -7458,9 +7470,10 @@ func (s *session) equipmentSetBagByte(ctx context.Context, bagKey int64) (uint8,
 
 // equipmentSetUnequipSlot moves the item worn in equipment slot into the
 // inventory (WorldSession::HandleEquipmentSetUse, CharacterHandler.cpp:1576-
-// 1593: CanStoreItem NULL_BAG/NULL_SLOT, then CanUnequipItem(dstpos) — always
-// OK for equipment slots since bags cannot be equipped — then RemoveItem +
-// StoreItem; a full inventory sends the equip error).
+// 1593: CanStoreItem NULL_BAG/NULL_SLOT first, then CanUnequipItem(dstpos) —
+// a full inventory sends the equip error even when the unequip gate would
+// also fail; a successful store search then silently skips the slot when
+// the unequip gate fails; RemoveItem + StoreItem on both passing).
 func (s *session) equipmentSetUnequipSlot(ctx context.Context, slot uint32) {
 	db := s.server.CharactersStore.DB
 	if db == nil {
@@ -7471,20 +7484,21 @@ func (s *session) equipmentSetUnequipSlot(ctx context.Context, slot uint32) {
 	if itemGUID == 0 {
 		return
 	}
-	// CanUnequipItem(dstpos, true) arm (CharacterHandler.cpp:1584-1586): a
-	// failing unequip gate silently skips the slot, ahead of the store
-	// search.
-	var wornEntry int64
-	_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&wornEntry)
-	if msg := s.canUnequipLegs(ctx, itemGUID, wornEntry); msg != equipErrOk {
-		return
-	}
 	// CanStoreItem(NULL_BAG, NULL_SLOT) searches the backpack first, then the
 	// equipped bags — findFreeInventorySlot covers both (findFreeBackpackSlot
-	// stopped at the backpack and reported full too early).
+	// stopped at the backpack and reported full too early). C++ runs this
+	// search BEFORE CanUnequipItem: a full inventory answers the equip error
+	// even when the item could not be unequipped either.
 	freeBagKey, _, freeSlot, ok := s.findFreeInventorySlot(ctx, s.playerGUID)
 	if !ok {
 		s.sendEquipError(equipErrInvFull, uint64(itemGUID))
+		return
+	}
+	// CanUnequipItem(dstpos, true) arm (CharacterHandler.cpp:1584-1586): a
+	// failing unequip gate silently skips the slot after the store search.
+	var wornEntry int64
+	_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&wornEntry)
+	if msg := s.canUnequipLegs(ctx, itemGUID, wornEntry); msg != equipErrOk {
 		return
 	}
 	_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", freeBagKey, freeSlot, s.playerGUID, itemGUID)

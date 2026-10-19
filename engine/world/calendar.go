@@ -1085,6 +1085,12 @@ func buildCalendarInviteAlertPacket(eventID uint64, title string, eventTime int6
 	return buf.Bytes()
 }
 
+// calendarExecer is satisfied by *sql.DB and *sql.Tx, so the same insert
+// loop runs immediately or inside a transaction.
+type calendarExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 // Reference: WorldSession::HandleCalendarAddEvent (CalendarHandler.cpp:221-268)
 // & WorldPackets::Calendar::CalendarAddEvent::Read (CalendarPackets.cpp:123-137):
 // past-time gate (with the -86400s hack) answers CALENDAR_ERROR_EVENT_PASSED,
@@ -1167,19 +1173,25 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 		// that CalendarMgr::AddInvite neither stores nor broadcasts
 		// (CalendarMgr.cpp:147-160), so no invites are inserted for them.
 		if flags&calendarFlagWithoutInvites == 0 {
-			// The client-sent invite rows are stored verbatim
+			// The client-sent invite rows are stored as sent
 			// (CalendarHandler.cpp:321-340): the client includes the creator
 			// in the list itself, so C++ synthesizes no creator invite and
-			// never rewrites the client-sent status/rank.
+			// never rewrites the client-sent status/rank. Empty-GUID entries
+			// are dropped: C++ would store them as invitee-0 rows, but no
+			// client ever sends one and only forged packets produce them.
+			type pendingInvite struct {
+				guid, id          uint64
+				status, moderator uint8
+				level             uint8
+				sess              *session
+			}
 			var nextInviteID uint64 = 1
 			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
-
-			// Insert client-sent invites. CalendarMgr::AddInvite
+			var pending []pendingInvite
 			for _, inv := range rawInvites {
 				if inv.guid == 0 {
 					continue
 				}
-
 				var invLevel uint8
 				inviteSess := s.server.findSessionByGUID(inv.guid)
 				if inviteSess != nil && inviteSess.player != nil {
@@ -1188,37 +1200,59 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 					_ = cdb.QueryRowContext(ctx,
 						"SELECT level FROM characters WHERE guid = ?", inv.guid).Scan(&invLevel)
 				}
+				// CalendarMgr::GetFreeInviteId (CalendarMgr.cpp:355-363) hands
+				// out ++_maxInviteId per invite, so the first invite takes
+				// MAX(id)+1: increment after assigning, not before.
+				pending = append(pending, pendingInvite{guid: inv.guid, id: nextInviteID, status: inv.status, moderator: inv.moderator, level: invLevel, sess: inviteSess})
+				nextInviteID++
+			}
 
-				_, _ = cdb.ExecContext(ctx,
-					`INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
-					nextInviteID, nextID, inv.guid, s.playerGUID, inv.status, calendarDefaultResponseTime, inv.moderator)
+			// CalendarHandler.cpp:328-344: when the client sent more than one
+			// invite the INSERTs ride one CharacterDatabaseTransaction; a lone
+			// invite executes immediately (AddInvite with a null trans).
+			// The condition counts the client-sent entries, before the
+			// empty-GUID drop.
+			insertInvites := func(exCtx context.Context, ex calendarExecer) error {
+				for _, p := range pending {
+					if _, err := ex.ExecContext(exCtx,
+						`INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
+						p.id, nextID, p.guid, s.playerGUID, p.status, calendarDefaultResponseTime, p.moderator); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			if len(rawInvites) > 1 {
+				_ = s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+					return insertInvites(txCtx, tx)
+				})
+			} else {
+				_ = insertInvites(ctx, cdb)
+			}
 
+			for _, p := range pending {
 				// CalendarMgr::AddInvite during HandleCalendarAddEvent: the new
 				// event is not in _events yet (AddEvent runs after the invite
 				// loop), so SendCalendarEventInvite takes the pre-invite arm
 				// (CalendarMgr.cpp:498-502) and the INVITE packet goes to the
 				// sender (creator) only — never to the event relatives.
-				invPkt := buildCalendarInvitePacket(inv.guid, nextID, nextInviteID, invLevel, inv.status, calendarDefaultResponseTime, s.playerGUID)
+				invPkt := buildCalendarInvitePacket(p.guid, nextID, p.id, p.level, p.status, calendarDefaultResponseTime, s.playerGUID)
 				_ = s.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invPkt, true)
 
 				// SendCalendarEventInviteAlert (CalendarMgr.cpp:151-154):
 				// non-guild events alert the invitee direct; guild events
 				// alert only the creator-invitee, as a guild broadcast.
-				alertPkt := buildCalendarInviteAlertPacket(nextID, title, int64(eventTime), flags, uint32(eventType), dungeonID, nextInviteID, inv.status, inv.moderator, s.playerGUID, s.playerGUID)
+				alertPkt := buildCalendarInviteAlertPacket(nextID, title, int64(eventTime), flags, uint32(eventType), dungeonID, p.id, p.status, p.moderator, s.playerGUID, s.playerGUID)
 				if flags&calendarFlagGuildEvent == 0 {
-					if inviteSess != nil {
-						_ = inviteSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
+					if p.sess != nil {
+						_ = p.sess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
 					}
-				} else if inv.guid == s.playerGUID {
+				} else if p.guid == s.playerGUID {
 					for _, t := range calendarGuildMemberSessions(s.server, s.player.GuildID) {
 						_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
 					}
 				}
-				// CalendarMgr::GetFreeInviteId (CalendarMgr.cpp:355-363) hands
-				// out ++_maxInviteId per invite, so the first invite takes
-				// MAX(id)+1: increment after the insert, not before.
-				nextInviteID++
 			}
 		}
 
