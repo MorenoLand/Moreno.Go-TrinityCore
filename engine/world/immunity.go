@@ -559,9 +559,14 @@ func spellReflectOffered(spell wotlk.Spell, caster *session, targetGUID uint64, 
 //	if (reflectchance > 0 && roll_chance_i(reflectchance)) return SPELL_MISS_REFLECT
 //
 // The flattened activeAura entries carry the aura effect's own amount, so
-// the sums match C++ per-effect GetAmount accumulation. On success the
-// reflect aura is consumed (Go consumes at roll time; C++ spends the aura's
-// charge through the proc system at arrival).
+// the sums match C++ per-effect GetAmount accumulation. The roll consumes
+// nothing: C++ spends the reflect aura's charge at outbound-missile arrival
+// through the proc system (ProcReflectDelayed, Spell.cpp:2181;
+// Aura::PrepareProcToTrigger, SpellAuras.cpp:2025-2043), never at the
+// Object.cpp:2641-2648 roll. Every reflect site arms that arrival timer and
+// spends the charge there via consumeReflectAuraCharge; the synchronous
+// paths (pet casts, chain jumps) spend it immediately after the roll, which
+// is their arrival-timer equivalent.
 func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 	if s == nil || s.player == nil {
 		return false
@@ -573,32 +578,20 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 
 	s.castMu.Lock()
 	var chance int32
-	var reflectSpellID uint32
 	seen23920 := false
 	for _, aura := range s.activeAuras {
 		if aura == nil {
 			continue
 		}
-		// The consumed aura is chosen deterministically (lowest spell id):
-		// C++ drops one charge on every reflect aura through the proc system at
-		// missile arrival (Spell.cpp:2181), while Go removes a single whole aura
-		// at roll time — picking by map iteration order would make the choice
-		// nondeterministic.
 		switch aura.AuraType {
 		case spellAuraReflectSpells:
 			chance += int32(aura.Amount)
-			if reflectSpellID == 0 || aura.SpellID < reflectSpellID {
-				reflectSpellID = aura.SpellID
-			}
 			if aura.SpellID == 23920 {
 				seen23920 = true
 			}
 		case spellAuraReflectSpellsSchool:
 			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
 				chance += int32(aura.Amount)
-				if reflectSpellID == 0 || aura.SpellID < reflectSpellID {
-					reflectSpellID = aura.SpellID
-				}
 			}
 		}
 	}
@@ -608,21 +601,10 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 	// than the per-effect map: its DBC reflect effect carries amount 100.
 	if _, ok := s.auras[23920]; ok && !seen23920 {
 		chance += 100
-		if reflectSpellID == 0 {
-			reflectSpellID = 23920
-		}
 	}
 
 	// roll_chance_i(reflectchance): urand(0, 99) < chance.
-	if chance <= 0 || rand.Float64()*100 >= float64(chance) {
-		return false
-	}
-
-	if reflectSpellID != 0 {
-		// Reflection consumes the buff
-		s.removeAura(reflectSpellID)
-	}
-	return true
+	return chance > 0 && rand.Float64()*100 < float64(chance)
 }
 
 // creatureReflectOffered is the creature-target form of spellReflectOffered:
@@ -645,7 +627,10 @@ func (s *session) creatureReflectOffered(spell wotlk.Spell, targetFaction uint32
 // SPELL_AURA_REFLECT_SPELLS (28) / SPELL_AURA_REFLECT_SPELLS_SCHOOL (74)
 // auras rolls the same summed chance. The activeCreatureAuras entries carry
 // the aura effect's own amount, matching the player-side flattened model.
-// On success the reflect aura is consumed. The 23920 presence-set fallback
+// The roll consumes nothing — the charge is spent at outbound-missile
+// arrival (ProcReflectDelayed, Spell.cpp:2181) via
+// consumeCreatureReflectAuraCharge; the synchronous paths spend it
+// immediately after the roll. The 23920 presence-set fallback
 // is player-session state and has no creature analog.
 func (srv *Server) creatureCheckSpellReflection(key creatureAuraKey, spell wotlk.Spell) bool {
 	if srv == nil || key.GUID == 0 {
@@ -656,41 +641,105 @@ func (srv *Server) creatureCheckSpellReflection(key creatureAuraKey, spell wotlk
 	}
 	srv.auraMu.Lock()
 	var chance int32
-	var reflectSpellID uint32
 	for _, aura := range srv.activeCreatureAuras[key] {
 		if aura == nil {
 			continue
 		}
-		// Deterministic consumed-aura choice (lowest spell id), matching the
-		// player-side arm above: C++ drops one charge on every reflect aura at
-		// missile arrival (Spell.cpp:2181), Go removes a single whole aura at
-		// roll time.
 		switch aura.AuraType {
 		case spellAuraReflectSpells:
 			chance += int32(aura.Amount)
-			if reflectSpellID == 0 || aura.SpellID < reflectSpellID {
-				reflectSpellID = aura.SpellID
-			}
 		case spellAuraReflectSpellsSchool:
 			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
 				chance += int32(aura.Amount)
-				if reflectSpellID == 0 || aura.SpellID < reflectSpellID {
-					reflectSpellID = aura.SpellID
-				}
 			}
 		}
 	}
 	srv.auraMu.Unlock()
 
 	// roll_chance_i(reflectchance): urand(0, 99) < chance.
-	if chance <= 0 || rand.Float64()*100 >= float64(chance) {
-		return false
-	}
+	return chance > 0 && rand.Float64()*100 < float64(chance)
+}
 
-	if reflectSpellID != 0 {
-		srv.removeCreatureAura(key, reflectSpellID)
+// consumeReflectAuraCharge spends one charge on each of the session's
+// SPELL_AURA_REFLECT_SPELLS (28) auras, removing auras whose last charge is
+// spent. This is the arrival-time half of the ProcReflectDelayed bridge
+// (Spell.cpp:2181): C++ never consumes the reflect aura at the
+// WorldObject::SpellHitResult roll (Object.cpp:2641-2648) — the charge is
+// spent through the proc system when the outbound missile would have
+// arrived (Aura::PrepareProcToTrigger, SpellAuras.cpp:2025-2043), and the
+// aura is removed once its charges run out (Aura::TriggerProcOnEvent,
+// SpellAuras.cpp:2209-2211). SPELL_AURA_REFLECT_SPELLS_SCHOOL (74) auras
+// never proc at the spell-less arrival event (AuraEffect::CheckEffectProc,
+// SpellAuraEffects.cpp:987-989 — the !spellInfo arm fails the school
+// comparison), so their charges stand, exactly like C++. Auras with no
+// charges left are untouched: C++ only drops charges on charge-using auras,
+// so a chargeless reflect aura keeps reflecting until it expires.
+func (s *session) consumeReflectAuraCharge() {
+	if s == nil {
+		return
 	}
-	return true
+	s.castMu.Lock()
+	var depleted []uint32
+	saw23920Entry := false
+	for _, aura := range s.activeAuras {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraReflectSpells {
+			continue
+		}
+		if aura.SpellID == 23920 {
+			saw23920Entry = true
+		}
+		if aura.RemainingCharges == 0 {
+			continue
+		}
+		aura.RemainingCharges--
+		if aura.RemainingCharges == 0 {
+			depleted = append(depleted, aura.SpellID)
+		}
+	}
+	_, presence23920 := s.auras[23920]
+	s.castMu.Unlock()
+	for _, id := range depleted {
+		s.removeAura(id)
+	}
+	if presence23920 && !saw23920Entry {
+		// Warrior Spell Reflection (23920): tracked in the presence set
+		// rather than as a 28-type activeAura entry — its single DBC
+		// charge is spent at arrival here.
+		s.removeAura(23920)
+	}
+}
+
+// consumeCreatureReflectAuraCharge is the creature-side twin of
+// consumeReflectAuraCharge: at outbound-missile arrival each
+// SPELL_AURA_REFLECT_SPELLS (28) aura on the creature drops one charge
+// (ProcReflectDelayed → Aura::PrepareProcToTrigger, Spell.cpp:2181,
+// SpellAuras.cpp:2025-2043), removed at zero (Aura::TriggerProcOnEvent,
+// SpellAuras.cpp:2209-2211). Go has no creature event-list model, so the
+// reflect sites arm this on the same arrival timer as the player arm.
+func (srv *Server) consumeCreatureReflectAuraCharge(key creatureAuraKey) {
+	if srv == nil || key.GUID == 0 {
+		return
+	}
+	srv.auraMu.Lock()
+	var depleted []uint32
+	if auras, ok := srv.activeCreatureAuras[key]; ok {
+		for _, aura := range auras {
+			if aura == nil || aura.Stopped || aura.AuraType != spellAuraReflectSpells {
+				continue
+			}
+			if aura.RemainingCharges == 0 {
+				continue
+			}
+			aura.RemainingCharges--
+			if aura.RemainingCharges == 0 {
+				depleted = append(depleted, aura.SpellID)
+			}
+		}
+	}
+	srv.auraMu.Unlock()
+	for _, id := range depleted {
+		srv.removeCreatureAura(key, id)
+	}
 }
 
 // spellHasOnlyDamageEffects mirrors SpellInfo::HasOnlyDamageEffects

@@ -739,13 +739,13 @@ func (s *Server) serverCastCreatureReflectVerdict(ctx context.Context, m *creatu
 // floored, min 5y, 0 for instant — Spell.cpp:2157-2171), measured from the
 // motion to the reflector's combat position; the session resolves at fire
 // time, the same shape as the inline-path and pet-path bridges. Creature
-// reflectors have no Go event-list model, so the arm only runs for player
-// reflectors.
+// reflectors have no Go event-list model, so the taken-side proc loop only
+// runs for player reflectors — but the charge arm
+// (consumeCreatureReflectAuraCharge) runs for creature reflectors on the
+// same timer, matching C++ which schedules ProcReflectDelayed on the
+// creature's own event list.
 func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *creatureMotion, reflectorGUID uint64, spell wotlk.Spell) {
 	if s == nil || motion == nil || reflectorGUID == 0 {
-		return
-	}
-	if s.findSessionByGUID(reflectorGUID) == nil {
 		return
 	}
 	delayMs := 0
@@ -760,16 +760,30 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 			} else {
 				dist = 5.0
 			}
+		} else if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, reflectorGUID); tm != nil {
+			dx := float64(tm.X - motion.X)
+			dy := float64(tm.Y - motion.Y)
+			dz := float64(tm.Z - motion.Z)
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d > 5.0 {
+				dist = d
+			} else {
+				dist = 5.0
+			}
 		}
 		delayMs = int(math.Floor(dist / float64(spell.Speed) * 1000.0))
 	}
 	attackerGUID := motion.GUID
+	reflectCreatureKey := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: reflectorGUID}
 	time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
 		if s == nil {
 			return
 		}
 		if rsess := s.findSessionByGUID(reflectorGUID); rsess != nil {
 			rsess.procSpellReflectTakenAuraTriggers(context.Background(), attackerGUID, spell, false)
+			// ProcReflectDelayed charge arm (Spell.cpp:2181).
+			rsess.consumeReflectAuraCharge()
+		} else {
+			s.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 		}
 	})
 }
@@ -908,6 +922,8 @@ func (s *Server) armInlineReflectProcDelayed(motion *creatureMotion, reflector *
 		}
 		if rsess := s.findSessionByGUID(reflectorGUID); rsess != nil {
 			rsess.procSpellReflectTakenAuraTriggers(context.Background(), attackerGUID, spell, false)
+			// ProcReflectDelayed charge arm (Spell.cpp:2181).
+			rsess.consumeReflectAuraCharge()
 		}
 	})
 }

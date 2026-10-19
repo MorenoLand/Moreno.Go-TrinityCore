@@ -9273,12 +9273,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		procTriggered := s.triggeredNoProcEvents > 0
 		procSpell := spell
 		procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectSourceGUID)
+		reflectCreatureKey := creatureAuraKeyForPlayer(*s.player, reflectorGUID)
 		time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
 			if s.server == nil {
 				return
 			}
 			if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
 				rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
+				// ProcReflectDelayed charge arm (Spell.cpp:2181): the
+				// reflector's 28-type reflect auras drop one charge at
+				// outbound-missile arrival — never at the roll above.
+				rsess.consumeReflectAuraCharge()
+			} else {
+				// Creature reflector: the same charge arm over
+				// activeCreatureAuras. Go has no creature event-list
+				// model, so the timer covers it (the taken-side proc
+				// loop itself stays player-only).
+				s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 			}
 		})
 		// Spell::AddUnitTarget (Spell.cpp:2178): ReflectResult is the caster's
@@ -16233,12 +16244,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				reflectorGUID := guid
 				procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectorGUID)
 				procTriggered := s.triggeredNoProcEvents > 0
+				reflectCreatureKey := creatureAuraKeyForPlayer(*s.player, reflectorGUID)
 				time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
 					if s.server == nil {
 						return
 					}
 					if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
 						rsess.procSpellReflectTakenAuraTriggers(context.Background(), s.playerGUID, spell, procTriggered)
+						// ProcReflectDelayed charge arm (Spell.cpp:2181).
+						rsess.consumeReflectAuraCharge()
+					} else {
+						// Creature reflector: the same arrival charge arm
+						// over activeCreatureAuras.
+						s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 					}
 				})
 			}
@@ -20957,6 +20975,11 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	// the same C++-exact Spell.cpp:622/2152 form as the primary path
 	// (spellReflectOffered), not a narrower local re-check.
 	if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
+		// Synchronous chain path: the C++ ProcReflectDelayed arm
+		// (Spell.cpp:2181) would fire at the jump's TimeDelay, but this
+		// path resolves jumps synchronously — the charge is spent here,
+		// the arrival equivalent.
+		targetSess.consumeReflectAuraCharge()
 		return protocol.SpellMissReflect
 	}
 	// Creature jump targets roll the same reflect arm over their
@@ -20974,6 +20997,9 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 			}
 			if s.creatureReflectOffered(spell, tgt.Faction) &&
 				s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
+				// Synchronous chain path: spend the charge here, the
+				// arrival-timer equivalent (see the player arm above).
+				s.server.consumeCreatureReflectAuraCharge(creatureAuraKeyForTarget(tgt))
 				return protocol.SpellMissReflect
 			}
 		}
@@ -21020,15 +21046,17 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 // leave the kept list (no outbound effects) and ride MissStatus with their
 // ReflectResult; clean (NONE) reflects resolve the return trip to the
 // caster (Spell.cpp:2174-2188), returned as trips for the damage loop.
-// The reflect aura is consumed per target by the roll, like C++ (the
-// arrival-time ProcReflectDelayed arm below is armed per player reflector).
-// Reflect verdicts other than NONE null the return trip's _spellHitTarget
+// The reflect aura is consumed per target at outbound-missile arrival by
+// the timer below (consumeReflectAuraCharge), like C++ (the arrival-time
+// ProcReflectDelayed arm, Spell.cpp:2181) — never at the roll. Reflect
+// verdicts other than NONE null the return trip's _spellHitTarget
 // (Spell.cpp:2350, 7740-7743): the caster takes nothing, so only NONE
 // trips are returned.
 func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, targets []uint64) (kept []uint64, trips []uint64, misses []protocol.SpellMissStatus) {
 	kept = make([]uint64, 0, len(targets))
 	for _, guid := range targets {
 		reflected := false
+		var reflectCreatureKey creatureAuraKey
 		var targetSess *session
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(guid)
@@ -21050,6 +21078,7 @@ func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, 
 				if s.creatureReflectOffered(spell, tgt.Faction) &&
 					s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
 					reflected = true
+					reflectCreatureKey = creatureAuraKeyForTarget(tgt)
 				}
 			}
 		}
@@ -21080,7 +21109,21 @@ func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, 
 				}
 				if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
 					rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
+					// ProcReflectDelayed charge arm (Spell.cpp:2181).
+					rsess.consumeReflectAuraCharge()
 				}
+			})
+		} else if reflectCreatureKey.GUID != 0 {
+			// Creature reflector: the same arrival charge arm over
+			// activeCreatureAuras (no creature event-list model, so the
+			// timer covers it; the taken-side proc loop stays
+			// player-only).
+			procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, guid)
+			time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
+				if s.server == nil {
+					return
+				}
+				s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 			})
 		}
 	}

@@ -4196,6 +4196,13 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 	reflected = false
 	if targetSess != nil {
 		reflected = targetSess.checkSpellReflection(spell)
+		if reflected {
+			// Synchronous pet path: the C++ ProcReflectDelayed arm
+			// (Spell.cpp:2181) would fire at TimeDelay, but this path
+			// applies everything synchronously — the charge is spent
+			// here, the arrival equivalent.
+			targetSess.consumeReflectAuraCharge()
+		}
 	} else {
 		if s.player != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
 			return false, true, protocol.SpellMissNone
@@ -4205,6 +4212,9 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 			key = creatureAuraKeyForTarget(tgt)
 		}
 		reflected = s.server.creatureCheckSpellReflection(key, spell)
+		if reflected {
+			s.server.consumeCreatureReflectAuraCharge(key)
+		}
 	}
 	if !reflected {
 		return false, false, protocol.SpellMissNone
