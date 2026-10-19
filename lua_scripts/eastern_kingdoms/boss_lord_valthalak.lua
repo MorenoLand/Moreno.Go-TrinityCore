@@ -131,14 +131,16 @@ end
 local function onDamageTaken(_, creature, _, damage)
     local guid = creature:GetGUID()
     if not frenzy40[guid] then
-        if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 40 / 100) then
+        local postDamage = creature:GetHealth() - damage
+        if postDamage > 0 and postDamage < math.floor(creature:GetMaxHealth() * 40 / 100) then
             frenzy40[guid] = true
             creature:CastSpell(creature, SPELL_FRENZY)
             cancelKey(guid, "summon")
         end
     end
     if not frenzy15[guid] then
-        if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 15 / 100) then
+        local postDamage = creature:GetHealth() - damage
+        if postDamage > 0 and postDamage < math.floor(creature:GetMaxHealth() * 15 / 100) then
             frenzy15[guid] = true
             creature:CastSpell(creature, SPELL_FRENZY)
             schedule(guid, "volley", {7000, 14000}, function() onShadowBoltVolley(creature, guid) end)

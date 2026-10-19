@@ -238,7 +238,7 @@ local function nadoxDamageTaken(event, creature, attacker, damage)
     if st and not st.guardianSummoned then
         local health = creature:GetHealth()
         local maxHealth = creature:GetMaxHealth()
-        if maxHealth ~= 0 and health - damage < math.floor(maxHealth * 50 / 100) then
+        if maxHealth ~= 0 and (health - damage) > 0 and health - damage < math.floor(maxHealth * 50 / 100) then
             st.guardianSummoned = true
             creature:Talk(EMOTE_HATCHES, creature)
             creature:CastSpell(creature, SPELL_SUMMON_SWARM_GUARD)
