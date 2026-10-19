@@ -674,6 +674,17 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID u
 		// summons, boss minions, totems, pets) bypass this funnel — the same
 		// documented delta as the instance-create bridge.
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnAdd)
+		// Eluna initial-spawn leg (checkpoint 2026-10-19): ElunaCreatureAI::
+		// JustAppeared (ElunaCreatureAI.h:169-175) runs sEluna->JustRespawned
+		// — On_Reset (23) then CREATURE_EVENT_ON_SPAWN (5),
+		// CreatureHooks.cpp:209-216 — on the first grid update after
+		// AddToWorld (Creature.cpp:699-704, m_triggerJustAppeared), i.e. on
+		// a fresh spawn too, not only on respawn. The respawn/evade/pet
+		// paths already fire this pair; the initial-spawn funnel had no
+		// fire site, so reset-time arms (e.g. akama-shade stealth
+		// self-apply) never ran on the first server spawn. Fires after
+		// OnAdd (36), matching the C++ AddToWorld-then-first-update order.
+		s.fireCreatureSpawned(ctx, motion)
 	}
 	return motion
 }

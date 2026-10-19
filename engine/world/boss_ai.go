@@ -431,7 +431,9 @@ func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		s.broadcastToInstance(rec.Map, rec.InstanceID, packet.Opcode, packet.Payload.Bytes(), nil)
 	}
-	s.fireCreatureSpawned(ctx, motion)
+	// motionFor already fired the Eluna spawn pair (23+5) when it created
+	// the motion; the native AI reset still runs after, matching the
+	// ElunaCreatureAI::JustAppeared sEluna-before-ScriptedAI order.
 	if motion.BossAI != nil {
 		motion.BossAI.OnReset(ctx, s, motion)
 	}
