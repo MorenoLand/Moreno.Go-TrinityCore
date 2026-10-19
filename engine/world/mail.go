@@ -962,10 +962,24 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 	// Player::ModifyMoney(0) is a no-op that returns true, so a mail carrying
 	// no money still answers MAIL_OK (Player.cpp:22823; MailHandler.cpp:524-527).
 	if money > 0 {
-		s.player.Money += uint32(money)
+		newMoney := s.player.Money + uint32(money)
+		// HandleMailTakeMoney (MailHandler.cpp:524-535) persists the gold
+		// and the mail in one CharacterDatabase transaction ("save money
+		// and mail to prevent cheating"); two separate statements could
+		// duplicate or lose the gold on a crash between them. The body is
+		// pure absolute-value writes, replay-safe on deadlock retry.
+		if err := s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(txCtx, "UPDATE characters SET money = ? WHERE guid = ?", newMoney, s.playerGUID); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(txCtx, "UPDATE mail SET money = 0 WHERE id = ?", mailID)
+			return err
+		}); err != nil {
+			s.debug("mail money collect tx failed", "account", s.accountName, "mail_id", mailID, "err", err)
+			return true
+		}
+		s.player.Money = newMoney
 		s.questMoneyChanged(ctx)
-		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET money = 0 WHERE id = ?", mailID)
 		s.sendPlayerMoneyUpdate()
 		s.sendPlayerUpdate()
 	}
@@ -1033,40 +1047,87 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// HandleMailTakeItem (MailHandler.cpp:440-497) runs the whole take in one
+	// CharacterDatabase transaction: the mail-item removal, the COD charge,
+	// the COD-payment draft, and the inventory+gold save. Go folds the same
+	// writes into one RunTransaction; the body is pure absolute-value writes
+	// (the COD-payment mail ID is a counter, burning one on a deadlock
+	// replay without duplicating), so it is replay-safe.
+	newMoney := s.player.Money
+	codPayment := cod > 0
+	if codPayment {
+		newMoney -= uint32(cod)
+	}
 	// C++ drafts the COD payment mail only when the original sender still exists
 	// (online session, or a characters-table row — the "check player existence"
 	// gate on receiver || sender_accId, MailHandler.cpp:478-483); the COD
 	// charge and the COD zeroing below fire unconditionally. The
 	// RBAC_PERM_LOG_GM_TRADE log branch has no Go model (no GM-log sink —
 	// standing unrepresentable ruling).
-	if cod > 0 {
-		s.player.Money -= uint32(cod)
-		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET cod = 0 WHERE id = ?", mailID)
-
-		if s.server.findSessionByGUID(uint64(senderGUID)) != nil || s.mailSenderCharacterExists(ctx, uint64(senderGUID)) {
-			now := time.Now().Unix()
-			nextMailID := s.server.generateMailID()
-			// C++ MailDraft::SendMailTo (Mail.cpp:211-215): the COD-payment draft
-			// carries no COD, so expiry is 90 days when the taker is a game
-			// master, 30 days otherwise.
-			expireTime := now + mailSendExpireDelay(s.player.ExtraFlags&playerExtraGMOn != 0, 0)
-			_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-				VALUES (?, 0, 41, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 0x08)`,
-				nextMailID, s.playerGUID, senderGUID, subject, expireTime, now, cod)
+	senderExists := codPayment && (s.server.findSessionByGUID(uint64(senderGUID)) != nil || s.mailSenderCharacterExists(ctx, uint64(senderGUID)))
+	// C++ MailDraft::SendMailTo (Mail.cpp:211-215): the COD-payment draft
+	// carries no COD, so expiry is 90 days when the taker is a game
+	// master, 30 days otherwise.
+	codDeliverAt := time.Now().Unix()
+	codExpireAt := codDeliverAt + mailSendExpireDelay(s.player.ExtraFlags&playerExtraGMOn != 0, 0)
+	if err := s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		if codPayment {
+			if _, err := tx.ExecContext(txCtx, "UPDATE characters SET money = ? WHERE guid = ?", newMoney, s.playerGUID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(txCtx, "UPDATE mail SET cod = 0 WHERE id = ?", mailID); err != nil {
+				return err
+			}
+			if senderExists {
+				nextMailID := s.server.generateMailID()
+				if _, err := tx.ExecContext(txCtx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+					VALUES (?, 0, 41, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 0x08)`,
+					nextMailID, s.playerGUID, senderGUID, subject, codExpireAt, codDeliverAt, cod); err != nil {
+					return err
+				}
+			}
+		}
+		if mergeFits {
+			// Reference: Player::StoreItem (Player.cpp:12169+) — a merged item is
+			// destroyed and its count folds into the existing stack row.
+			if _, err := tx.ExecContext(txCtx, "UPDATE item_instance SET count = ? WHERE guid = ?", mergeCount+uint32(itemCount), mergeItemGUID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(txCtx, "DELETE FROM item_instance WHERE guid = ?", attachID); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.ExecContext(txCtx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, attachID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(txCtx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, attachID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(txCtx, "DELETE FROM mail_items WHERE mail_id = ? AND item_guid = ?", mailID, attachID); err != nil {
+			return err
+		}
+		// Check if any items left
+		var remainingCount int64
+		if err := tx.QueryRowContext(txCtx, "SELECT COUNT(*) FROM mail_items WHERE mail_id = ?", mailID).Scan(&remainingCount); err != nil {
+			return err
+		}
+		if remainingCount == 0 {
+			if _, err := tx.ExecContext(txCtx, "UPDATE mail SET has_items = 0 WHERE id = ?", mailID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		s.debug("mail item collect tx failed", "account", s.accountName, "mail_id", mailID, "err", err)
+		return true
+	}
+	if codPayment {
+		s.player.Money = newMoney
+		if senderExists {
 			s.sendMailNotify(uint64(senderGUID))
 		}
 		s.sendPlayerMoneyUpdate()
-	}
-
-	if mergeFits {
-		// Reference: Player::StoreItem (Player.cpp:12169+) — a merged item is
-		// destroyed and its count folds into the existing stack row.
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", mergeCount+uint32(itemCount), mergeItemGUID)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", attachID)
-	} else {
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, attachID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, attachID)
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), true)
 	// Reference: Player::MoveItemToInventory (Player.cpp:12624) credits
@@ -1075,13 +1136,6 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	// (AchievementMgr.cpp:759-765).
 	if s.player.ExtraFlags&playerExtraGMOn == 0 {
 		s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, uint32(itemEntry), uint32(itemCount))
-	}
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ? AND item_guid = ?", mailID, attachID)
-	// Check if any items left
-	var remainingCount int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM mail_items WHERE mail_id = ?", mailID).Scan(&remainingCount)
-	if remainingCount == 0 {
-		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET has_items = 0 WHERE id = ?", mailID)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailOk, 0, attachID, uint32(itemCount)), true)
 	_ = s.sendInventoryItems(ctx)

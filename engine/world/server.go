@@ -654,6 +654,7 @@ type activeCastState struct {
 	CastID       uint8
 	SpellID      uint32
 	Timer        *time.Timer
+	UpdateTicker *time.Ticker // Spell::update model (Spell.cpp:3794-3880): the 50ms PREPARING tick running the target-removal cancel arm (Spell.cpp:3805-3811); self-terminates when the cast is no longer active
 	Cancelled    bool
 	StartAt      time.Time
 	CastTimeMs   uint32

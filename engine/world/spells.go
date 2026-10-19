@@ -3597,15 +3597,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if castTime > 0 {
 		// Spell::update (Spell.cpp:3794-3880) drives the PREPARING cast-bar
 		// on the server tick (~50ms): each tick revalidates caster/target
-		// pointers (UpdatePointers, cancelling when the unit target is
-		// gone), checks the movement-interrupt leg, and counts the timer
-		// down to cast(!m_casttime). Go has no pointer model and no per-tick
-		// update loop, so the cast bar is a single timer and the rechecks
-		// move to completion: finishSpellCast revalidates power, runes,
-		// range, and line of sight, and movement interrupts land eagerly
-		// via interruptSpellsOnMovement (movement.go). A target removed
-		// mid-cast cancels with the update-cancel packets (INTERRUPTED +
-		// GCD refund) at completion instead of mid-bar.
+		// pointers (UpdatePointers — Go has no pointer model, targets travel
+		// as GUIDs resolved at each use site, so that arm is vacuous), runs
+		// the target-removal cancel arm (Spell.cpp:3805-3811), checks the
+		// movement-interrupt leg (movement.go interrupts eagerly via
+		// interruptSpellsOnMovement instead of per-tick), and counts the
+		// timer down to cast(!m_casttime). The bar itself stays a single
+		// AfterFunc timer; the per-tick target-removal arm runs on a 50ms
+		// ticker started below.
 		s.castMu.Lock()
 		castState := &activeCastState{
 			CastID:               castID,
@@ -3635,6 +3634,40 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		})
 		s.activeCast = castState
 		s.castMu.Unlock()
+		// Spell::update (Spell.cpp:3794-3880) revalidates the cast on
+		// every server tick (~50ms); the target-removal arm
+		// (Spell.cpp:3805-3811) cancels mid-bar when the explicit unit
+		// target no longer resolves. The ticker checks the state under
+		// castMu each tick and self-terminates when the cast is no
+		// longer the active one (completed, cancelled, or replaced),
+		// so no end-path site needs a dedicated stop. The cancel reuses
+		// interruptCurrentCast — the Spell::cancel PREPARING arm
+		// (Spell.cpp:3210-3225): CancelGlobalCooldown, SendInterrupted(0),
+		// SendCastResult(INTERRUPTED), RemoveDynObject (3251-3255) —
+		// which also frees the generic slot for a new cast.
+		castState.UpdateTicker = time.NewTicker(50 * time.Millisecond)
+		go func(st *activeCastState) {
+			defer castState.UpdateTicker.Stop()
+			for range castState.UpdateTicker.C {
+				s.castMu.Lock()
+				cur := s.activeCast
+				if cur != st || cur.Cancelled {
+					s.castMu.Unlock()
+					return
+				}
+				targetGUID := cur.Target.UnitGUID
+				s.castMu.Unlock()
+				// Spell::update (Spell.cpp:3805-3811):
+				// m_targets.GetUnitTargetGUID() && !m_targets.GetUnitTarget()
+				if targetGUID != 0 {
+					if _, ok := s.getCombatTarget(context.Background(), targetGUID); !ok {
+						s.debug("spell cast cancelled mid-bar", "account", s.accountName, "spell", st.SpellID, "reason", "target removed")
+						s.interruptCurrentCast()
+						return
+					}
+				}
+			}
+		}(castState)
 	} else {
 		// Spell::prepare (Spell.cpp:3062-3064) registers the cast on the
 		// caster's event queue (_spellEvent fired after CalculateTime(1ms));
@@ -8625,9 +8658,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// tick while PREPARING when the explicit unit target no longer
 		// resolves in the caster's world — the cancel() arm refunds the
 		// GCD and sends INTERRUPTED (SendInterrupted + SendCastResult,
-		// Spell.cpp:3220-3225). Go has no per-tick update loop, so the
-		// recheck lands here at completion; the packets match, only the
-		// timing moves to bar end. A dead-but-present target still
+		// Spell.cpp:3220-3225). The primary port is the 50ms update
+		// ticker on the cast state, which cancels mid-bar; this
+		// completion recheck is the Spell::_cast CheckCast revalidation
+		// net (Spell.cpp:3335) for a target removed between the last
+		// tick and bar end. A dead-but-present target still
 		// resolves and falls through to the TARGETS_DEAD gate below.
 		if _, ok := s.getCombatTarget(ctx, target.UnitGUID); !ok {
 			s.cancelGlobalCooldown(spellID)
