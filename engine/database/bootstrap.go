@@ -25,7 +25,7 @@ func EnsureSchemas(ctx context.Context, c config.Config, set *Set) error {
 	}{{set.Auth, 1}, {set.Characters, 2}, {set.World, 4}}
 	for _, item := range stores {
 		store := item.store
-		if err := ensureSchema(ctx, c, store); err != nil {
+		if err := ensureSchema(ctx, c, store, item.mask); err != nil {
 			return err
 		}
 		if c.UpdatesEnableDatabases&item.mask != 0 {
@@ -101,7 +101,7 @@ func applyConfiguredMigrations(ctx context.Context, c config.Config, store *Stor
 	return nil
 }
 
-func ensureSchema(ctx context.Context, c config.Config, store *Store) error {
+func ensureSchema(ctx context.Context, c config.Config, store *Store, mask uint32) error {
 	meta := "CREATE TABLE IF NOT EXISTS trinitygo_schema (id INTEGER NOT NULL PRIMARY KEY, version INTEGER NOT NULL)"
 	if store.Backend != BackendSQLite {
 		meta = "CREATE TABLE IF NOT EXISTS trinitygo_schema (id INT NOT NULL PRIMARY KEY, version INT NOT NULL)"
@@ -135,7 +135,12 @@ func ensureSchema(ctx context.Context, c config.Config, store *Store) error {
 		}
 		return nil
 	}
-	if !c.UpdatesAutoSetup {
+	// C++ DatabaseLoader::AddDatabase (DatabaseLoader.cpp:84-108): the base-file
+	// populate is pushed only when updates are enabled for this database pool
+	// (1=Login, 2=Character, 4=World). Updates.AutoSetup never gates populate;
+	// it gates only the create-database retry on ER_BAD_DB_ERROR
+	// (DatabaseLoader.cpp:53-60).
+	if c.UpdatesEnableDatabases&mask == 0 {
 		return nil
 	}
 	dialect := "mysql"

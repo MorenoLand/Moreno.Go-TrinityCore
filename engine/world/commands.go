@@ -2899,24 +2899,45 @@ func (s *session) deleteCharacterFromDB(ctx context.Context, guid uint64, accoun
 	if chars == nil || chars.DB == nil {
 		return
 	}
-	tx, err := chars.DB.BeginTx(ctx, nil)
+	// The mail-return write phase is pure database work, but it draws mail IDs
+	// from the server's in-memory counter and reports new-mail notifies — both
+	// retry-unsafe. IDs are reserved up front (reused identically on a deadlock
+	// replay) and notifies fire only after a successful commit, mirroring
+	// DatabaseWorkerPool::DirectCommitTransaction's whole-body retry.
+	doomed, err := s.loadCharacterDoomedMails(ctx, chars.DB, guid)
 	if err != nil {
 		return
 	}
-	defer tx.Rollback()
-	if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
+	mailIDs := s.server.reserveMailIDs(len(doomed))
+	var notifyGUIDs []uint64
+	txErr := chars.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		nextMailID := 0
+		notifies, err := s.rehomeCharacterDoomedMails(txCtx, tx, guid, accountID, doomed, func() uint32 {
+			id := mailIDs[nextMailID]
+			nextMailID++
+			return id
+		})
+		if err != nil {
+			return err
+		}
+		notifyGUIDs = notifies
+		if err := deleteCharacterPrelude(txCtx, tx, guid); err != nil {
+			return err
+		}
+		if err := deleteCharacterOwnedState(txCtx, tx, guid, s.server.Config.DeletedCharacterTicketTrace); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(txCtx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
+			return err
+		}
+		return nil
+	})
+	if txErr != nil {
 		return
 	}
-	if err := deleteCharacterPrelude(ctx, tx, guid); err != nil {
-		return
+	for _, notifyGUID := range notifyGUIDs {
+		s.sendMailNotify(notifyGUID)
 	}
-	if err := deleteCharacterOwnedState(ctx, tx, guid, s.server.Config.DeletedCharacterTicketTrace); err != nil {
-		return
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
-		return
-	}
-	_ = tx.Commit()
 	s.releaseNpcBotOwnerCache(guid)
 }
 
@@ -3629,28 +3650,40 @@ func (s *session) deleteAccount(ctx context.Context, accountID uint32) accountOp
 				_ = sess.conn.Close()
 			}
 		}
-		tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
+		chars := s.server.CharactersStore
+		doomed, err := s.loadCharacterDoomedMails(ctx, chars.DB, guid)
 		if err != nil {
 			return accountOpDBInternalError
 		}
-		if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
-			tx.Rollback()
+		mailIDs := s.server.reserveMailIDs(len(doomed))
+		var notifyGUIDs []uint64
+		txErr := chars.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+			nextMailID := 0
+			notifies, err := s.rehomeCharacterDoomedMails(txCtx, tx, guid, accountID, doomed, func() uint32 {
+				id := mailIDs[nextMailID]
+				nextMailID++
+				return id
+			})
+			if err != nil {
+				return err
+			}
+			notifyGUIDs = notifies
+			if err := deleteCharacterPrelude(txCtx, tx, guid); err != nil {
+				return err
+			}
+			if err := deleteCharacterOwnedState(txCtx, tx, guid, s.server.Config.DeletedCharacterTicketTrace); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(txCtx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
+				return err
+			}
+			return nil
+		})
+		if txErr != nil {
 			return accountOpDBInternalError
 		}
-		if err := deleteCharacterPrelude(ctx, tx, guid); err != nil {
-			tx.Rollback()
-			return accountOpDBInternalError
-		}
-		if err := deleteCharacterOwnedState(ctx, tx, guid, s.server.Config.DeletedCharacterTicketTrace); err != nil {
-			tx.Rollback()
-			return accountOpDBInternalError
-		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
-			tx.Rollback()
-			return accountOpDBInternalError
-		}
-		if err := tx.Commit(); err != nil {
-			return accountOpDBInternalError
+		for _, notifyGUID := range notifyGUIDs {
+			s.sendMailNotify(notifyGUID)
 		}
 		s.releaseNpcBotOwnerCache(guid)
 	}

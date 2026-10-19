@@ -1619,34 +1619,54 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 // When the original sender no longer exists the draft's items are destroyed
 // and no mail is sent. Every mail left over is wiped afterwards (CHAR_DEL_MAIL
 // / CHAR_DEL_MAIL_ITEMS, Player.cpp:4457-4463).
-func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, guid uint64, accountID uint32) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id, messageType, mailTemplateId, sender, subject, body, money FROM mail WHERE receiver = ? AND has_items <> 0 AND cod <> 0`, guid)
+// doomedMail is one COD mail with items re-homed when its receiver's character
+// is deleted (MailDraft::SendReturnToSender, Mail.cpp:141-186).
+type doomedMail struct {
+	id          uint64
+	messageType uint32
+	templateID  uint32
+	sender      uint64
+	subject     string
+	body        string
+	money       uint32
+}
+
+type mailRowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// loadCharacterDoomedMails reads the COD mails with items awaiting return for
+// the deleted character. It runs on either a *sql.DB (pre-tx snapshot, so the
+// caller can reserve mail IDs up front) or a *sql.Tx.
+func (s *session) loadCharacterDoomedMails(ctx context.Context, q mailRowQuerier, guid uint64) ([]doomedMail, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, messageType, mailTemplateId, sender, subject, body, money FROM mail WHERE receiver = ? AND has_items <> 0 AND cod <> 0`, guid)
 	if err != nil {
-		return err
-	}
-	type doomedMail struct {
-		id          uint64
-		messageType uint32
-		templateID  uint32
-		sender      uint64
-		subject     string
-		body        string
-		money       uint32
+		return nil, err
 	}
 	var mails []doomedMail
 	for rows.Next() {
 		var m doomedMail
 		if err := rows.Scan(&m.id, &m.messageType, &m.templateID, &m.sender, &m.subject, &m.body, &m.money); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		mails = append(mails, m)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return nil, err
 	}
+	return mails, nil
+}
 
+// rehomeCharacterDoomedMails runs the pure-database write phase of the
+// character-delete mail return: COD mails are re-homed to their senders and
+// every leftover mail row is wiped (CHAR_DEL_MAIL / CHAR_DEL_MAIL_ITEMS,
+// Player.cpp:4457-4463). Mail IDs come from reserveMailID, which the caller
+// supplies; GUIDs needing a post-commit new-mail notify are returned so the
+// caller can send them after the transaction commits — a packet send inside
+// the retried body would double-fire on deadlock replay.
+func (s *session) rehomeCharacterDoomedMails(ctx context.Context, tx *sql.Tx, guid uint64, accountID uint32, mails []doomedMail, reserveMailID func() uint32) ([]uint64, error) {
 	loadMailItemGUIDs := func(mailID uint64) ([]uint64, error) {
 		itemRows, err := tx.QueryContext(ctx, "SELECT item_guid FROM mail_items WHERE mail_id = ?", mailID)
 		if err != nil {
@@ -1666,18 +1686,19 @@ func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, gu
 	}
 
 	now := time.Now().Unix()
+	var notifyGUIDs []uint64
 	for _, m := range mails {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", m.id); err != nil {
-			return err
+			return nil, err
 		}
 		itemGUIDs, err := loadMailItemGUIDs(m.id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if m.messageType != 0 {
 			if len(itemGUIDs) > 0 {
 				if _, err := tx.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", m.id); err != nil {
-					return err
+					return nil, err
 				}
 			}
 			continue
@@ -1690,16 +1711,16 @@ func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, gu
 			if err == sql.ErrNoRows {
 				for _, itemGUID := range itemGUIDs {
 					if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID); err != nil {
-						return err
+						return nil, err
 					}
 				}
 				if _, err := tx.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", m.id); err != nil {
-					return err
+					return nil, err
 				}
 				continue
 			}
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -1715,7 +1736,7 @@ func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, gu
 		}
 		expireTime := deliverTime + mailSendExpireDelay(gmSender, 0)
 
-		nextMailID := s.server.generateMailID()
+		nextMailID := reserveMailID()
 		hasItems := 0
 		if len(itemGUIDs) > 0 {
 			hasItems = 1
@@ -1732,27 +1753,48 @@ func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, gu
 		if _, err := tx.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
 			VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 2)`,
 			nextMailID, mailSenderStationery(false), m.templateID, guid, m.sender, subject, body, hasItems, expireTime, deliverTime, m.money); err != nil {
-			return err
+			return nil, err
 		}
 		for _, itemGUID := range itemGUIDs {
 			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", m.sender, itemGUID); err != nil {
-				return err
+				return nil, err
 			}
 			if _, err := tx.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, itemGUID, m.sender); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", m.id); err != nil {
-			return err
+			return nil, err
 		}
-		s.sendMailNotify(m.sender)
+		notifyGUIDs = append(notifyGUIDs, m.sender)
 	}
 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM mail WHERE receiver = ?", guid); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM mail_items WHERE receiver = ?", guid); err != nil {
+		return nil, err
+	}
+	return notifyGUIDs, nil
+}
+
+// deleteCharacterReturnMails is the manual-tx entry point (CMSG_CHAR_DELETE
+// path): loads and re-homes inside the caller's transaction, drawing mail IDs
+// from the live counter and sending new-mail notifies inline — the exact
+// pre-split behavior. RunTransaction callers use loadCharacterDoomedMails +
+// rehomeCharacterDoomedMails directly so the counter draw and the notifies
+// stay outside the retried body.
+func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, guid uint64, accountID uint32) error {
+	mails, err := s.loadCharacterDoomedMails(ctx, tx, guid)
+	if err != nil {
 		return err
+	}
+	notifyGUIDs, err := s.rehomeCharacterDoomedMails(ctx, tx, guid, accountID, mails, s.server.generateMailID)
+	if err != nil {
+		return err
+	}
+	for _, notifyGUID := range notifyGUIDs {
+		s.sendMailNotify(notifyGUID)
 	}
 	return nil
 }

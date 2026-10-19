@@ -4201,36 +4201,41 @@ func (s *session) savePlayerState(ctx context.Context, online uint32, logout boo
 		transportLow = state.TransportGUID & 0xFFFFFFFF
 	}
 	args := []any{state.Name, state.Race, state.Class, state.Gender, state.Level, state.XP, state.Money, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.BankBagSlots, state.RestState, state.PlayerFlags, state.Map, state.InstanceID, state.InstanceModeMask, state.X, state.Y, state.Z, state.Orientation, state.TransportX, state.TransportY, state.TransportZ, state.TransportO, transportLow, strings.Join(taxi, " "), state.Cinematic, state.TotalPlayedTime, state.LevelPlayedTime, state.RestBonus, state.LogoutTime, state.LogoutResting, state.ResetTalentsCost, state.ResetTalentsTime, state.ExtraFlags, state.StableSlots, state.AtLogin, state.Zone, s.deathExpireTime, state.TaxiPath, state.ArenaPoints, state.TotalHonorPoints, state.TodayHonorPoints, state.YesterdayHonorPoints, state.TotalKills, state.TodayKills, state.YesterdayKills, state.ChosenTitle, state.KnownCurrency, state.WatchedFaction, state.DrunkenState, state.Health, state.Powers[0], state.Powers[1], state.Powers[2], state.Powers[3], state.Powers[4], state.Powers[5], state.Powers[6], s.latency.Load(), state.TalentGroupsCount, state.ActiveTalentGroup, explored, state.Equipment, state.AmmoID, strings.Join(titles, " ") + " ", state.ActionBars, state.GrantableLevels, online, state.GUID}
-	tx, err := s.server.CharactersStore.Begin(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_UPD_CHARACTER", args...); err != nil {
-		return err
-	}
-	if err = s.saveFishingSteps(ctx, tx, state); err != nil {
-		return err
-	}
-	if err = s.savePlayerAuras(ctx, tx, state); err != nil {
-		return err
-	}
-	if err = s.savePlayerSpellCooldowns(ctx, tx, state); err != nil {
-		return err
-	}
-	if err = s.savePetState(ctx, tx); err != nil {
-		return err
-	}
-	if err = s.saveBattlegroundData(ctx, tx, state); err != nil {
-		return err
-	}
-	if err = s.saveInstanceTimeRestrictions(ctx, tx); err != nil {
-		return err
-	}
-	if err = s.saveCharacterStats(ctx, tx, state, logout); err != nil {
-		return err
-	}
-	return tx.Commit()
+	store := s.server.CharactersStore
+	// Player::SaveToDB (Player.cpp:19525+) persists inside a single
+	// CharacterDatabaseTransaction; the whole body below is pure database
+	// work (all save* helpers take only the tx plus the pre-tx state
+	// snapshot), so it runs through Store.RunTransaction for the C++
+	// DirectCommitTransaction deadlock-1213 retry. The PLAYER_EVENT_ON_SAVE
+	// Lua hook and the played-time mutation above stay outside: they fire
+	// exactly once per save, before the transaction begins.
+	return store.RunTransaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := store.ExecStatementTx(ctx, tx, "CHAR_UPD_CHARACTER", args...); err != nil {
+			return err
+		}
+		if err := s.saveFishingSteps(ctx, tx, state); err != nil {
+			return err
+		}
+		if err := s.savePlayerAuras(ctx, tx, state); err != nil {
+			return err
+		}
+		if err := s.savePlayerSpellCooldowns(ctx, tx, state); err != nil {
+			return err
+		}
+		if err := s.savePetState(ctx, tx); err != nil {
+			return err
+		}
+		if err := s.saveBattlegroundData(ctx, tx, state); err != nil {
+			return err
+		}
+		if err := s.saveInstanceTimeRestrictions(ctx, tx); err != nil {
+			return err
+		}
+		if err := s.saveCharacterStats(ctx, tx, state, logout); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 func IsPlayerRestingForLogout(playerFlags uint32) bool {

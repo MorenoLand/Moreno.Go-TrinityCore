@@ -888,6 +888,32 @@ func (s *Server) generateMailID() uint32 {
 	return id
 }
 
+// reserveMailIDs draws n consecutive mail IDs from the in-memory counter in
+// one lock hold (ObjectMgr::GenerateMailID, ObjectMgr.cpp:7366-7374). The
+// batch is reserved outside a RunTransaction body so a deadlock replay reuses
+// the same IDs instead of consuming fresh ones per attempt.
+func (s *Server) reserveMailIDs(n int) []uint32 {
+	s.mailIDMu.Lock()
+	defer s.mailIDMu.Unlock()
+	if !s.mailIDReady {
+		s.mailIDReady = true
+		s.mailIDNext = 1
+	}
+	ids := make([]uint32, 0, n)
+	for i := 0; i < n; i++ {
+		if s.mailIDNext >= 0xFFFFFFFE {
+			if s.Logger != nil {
+				s.Logger.Error("mail: mail ID overflow, cannot generate new mail IDs")
+			}
+			ids = append(ids, 0)
+			continue
+		}
+		ids = append(ids, s.mailIDNext)
+		s.mailIDNext++
+	}
+	return ids
+}
+
 // seedItemGUID loads the item-GUID generator seed from the characters
 // database, mirroring ObjectMgr::SetHighestGuids (ObjectMgr.cpp:7293-7301):
 // the item counter starts one past the highest item_instance row guid seen
