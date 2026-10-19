@@ -2808,7 +2808,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			}
 		}
 		if locationFail != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, locationFail), true)
+			// Spell::WriteCastResultInfo (Spell.cpp:4014-4042) appends a
+			// uint32 trailer for SPELL_FAILED_REQUIRES_AREA (0 for spells
+			// outside the hardcoded pairs); sendCastFailed carries the
+			// extended payload, the raw builder would drop it.
+			s.sendCastFailed(ctx, castID, spell, locationFail)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "location check", "zone", zoneID, "area", areaID, "failure", locationFail)
 			return true
 		}

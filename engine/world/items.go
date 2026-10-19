@@ -4505,7 +4505,11 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// skipped when the cast item carries ITEM_FLAG_NO_REAGENT_COST.
 		if !skipReagents {
 			if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+				// WriteCastResultInfo (Spell.cpp:4047-4093) appends the
+				// totem ids / totem-category ids for SPELL_FAILED_TOTEMS /
+				// SPELL_FAILED_TOTEM_CATEGORY — the book-cast path already
+				// routes through sendCastFailed for this.
+				s.sendCastFailed(ctx, castCount, spell, failReason)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
 				return true
 			}

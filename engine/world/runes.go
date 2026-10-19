@@ -209,9 +209,9 @@ func (s *session) checkRuneCost(spell wotlk.Spell, nowMs int64) bool {
 	}
 	var runeCost [4]int32
 	for i := 0; i < runeDeath; i++ {
-		runeCost[i] = int32(cost.RuneCost[i])
-		// SPELLMOD_COST has no Go spellmod infra (noted gap); C++ applies
-		// it here via ApplySpellMod.
+		// Spell::CheckRuneCost (Spell.cpp:4928-4932): SPELLMOD_COST folds
+		// per rune type through the mod owner (the player caster here).
+		runeCost[i] = s.applySpellMod(spell, spellModCost, int32(cost.RuneCost[i]))
 	}
 	runeCost[runeDeath] = maxRunes // calculated later
 	rs := s.runes
@@ -291,8 +291,9 @@ func (s *session) takeRunePower(ctx context.Context, spell wotlk.Spell, didHit b
 	}
 	var runeCost [4]int32
 	for i := 0; i < runeDeath; i++ {
-		runeCost[i] = int32(runeCostData.RuneCost[i])
-		// SPELLMOD_COST has no Go spellmod infra (noted gap).
+		// Spell::TakeRunePower (Spell.cpp:4971-4974): same SPELLMOD_COST
+		// fold as the check arm — the spend mirrors the check's modded cost.
+		runeCost[i] = s.applySpellMod(spell, spellModCost, int32(runeCostData.RuneCost[i]))
 	}
 	runeCost[runeDeath] = 0 // calculated later
 	for i := 0; i < maxRunes; i++ {
