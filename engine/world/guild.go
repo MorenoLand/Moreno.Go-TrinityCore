@@ -3844,42 +3844,53 @@ func guildMoveBankPlacements(placements []guildMovePlacement, destTab uint8) []u
 	return slots
 }
 
+// guildMoveItem runs in three phases, mirroring the tx-purity shape the
+// item-16 banked wiring prescribes for every convertible tx site:
+//
+// Phase 1 (planning reads, pooled cdb): all validation, rights gates and
+// destination planning run before any transaction exists, so equip-error
+// packets fire here with no rollback in play. This mirrors the C++ shape,
+// where Guild::_MoveItems plans against in-memory state (Guild::m_bankTabs)
+// and only then persists through a CharacterDatabaseTransaction.
+// Phase 2 (Store.RunTransaction): the write-only closure — withdraw-slot
+// consumes plus guildSwapMoveItems/guildApplyMovePlan. It is replayed on
+// MySQL deadlock, so it performs no packets, no Lua and no in-memory
+// mutation; every in-tx failure maps to the old silent rollback arm.
+// Phase 3 (post-commit): the GUILD_EVENT_ON_ITEM_MOVE Lua hooks and the
+// quest item counts. C++ fires pDest->LogAction/pSrc->LogAction before the
+// store tx commits (Guild.cpp:2751-2754); Go fires them after commit
+// because the retryable closure cannot host Lua. inventoryMu serializes
+// concurrent guildMoveItem calls across all three phases.
 func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc guildMoveLocation, destination *guildMoveLocation, autoStore bool, requestedCount uint32) (guildMoveOutcome, bool) {
 	cdb := s.server.CharactersStore.DB
 	s.server.inventoryMu.Lock()
 	defer s.server.inventoryMu.Unlock()
-	tx, err := cdb.BeginTx(ctx, nil)
-	if err != nil {
-		return guildMoveOutcome{}, false
-	}
-	rollback := func(code uint8, itemGUID uint64) (guildMoveOutcome, bool) {
-		_ = tx.Rollback()
+	// fail emits the phase-1 equip-error packet; there is no transaction to
+	// roll back yet, and the old code sent these packets only from arms that
+	// had written nothing.
+	fail := func(code uint8, itemGUID uint64) (guildMoveOutcome, bool) {
 		if code != 0 {
 			s.sendEquipError(code, guildFullItemGUID(itemGUID))
 		}
 		return guildMoveOutcome{}, false
 	}
-	source, err := guildReadMoveItem(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc)
+	// ---- Phase 1: planning reads on the pooled characters DB. ----
+	source, err := guildReadMoveItem(ctx, cdb, uint64(guildID), s.playerGUID, sourceLoc)
 	if err != nil {
-		_ = tx.Rollback()
 		return guildMoveOutcome{}, false
 	}
 	if !sourceLoc.Bank && !s.guildPlayerLocationValid(ctx, s.playerGUID, sourceLoc) {
 		// Guild::MoveItemData::InitItem (Guild.cpp:743) is fully silent on
 		// item fetch failure — C++ sends no equip error here.
-		_ = tx.Rollback()
 		return guildMoveOutcome{}, false
 	}
 	if destination != nil && !destination.Bank && !autoStore && !s.guildPlayerLocationValid(ctx, s.playerGUID, *destination) {
-		_ = tx.Rollback()
 		return guildMoveOutcome{}, false
 	}
 	if destination != nil && !autoStore && guildSameMoveLocation(sourceLoc, *destination) {
-		_ = tx.Rollback()
 		return guildMoveOutcome{}, false
 	}
 	if requestedCount > source.Count {
-		_ = tx.Rollback()
 		return guildMoveOutcome{}, false
 	}
 	moveCount, full := requestedCount, false
@@ -3888,7 +3899,7 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	}
 	if !sourceLoc.Bank {
 		if s.guildItemIsNonemptyBag(ctx, sourceLoc, source) {
-			return rollback(equipErrCanOnlyDoWithEmptyBags, source.GUID)
+			return fail(equipErrCanOnlyDoWithEmptyBags, source.GUID)
 		}
 	}
 	// PlayerMoveItemData::InitItem (Guild.cpp:810-812) rejects the item
@@ -3904,7 +3915,7 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		if !sourceLoc.Bank {
 			code = equipErrItemsCantBeSwapped
 		}
-		return rollback(code, source.GUID)
+		return fail(code, source.GUID)
 	}
 	maxStack := s.guildMoveMaxStack(ctx, source.Entry)
 	// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) runs before step 4's
@@ -3915,41 +3926,21 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	// player, so the same-tab skip does not apply). Silent on failure —
 	// HandleGuildBankSwapItems emits no command result on this path.
 	if destination != nil && destination.Bank && !sourceLoc.Bank && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
-		_ = tx.Rollback()
 		return guildMoveOutcome{}, false
 	}
 	var destItem guildMoveItem
 	destExists := false
 	if destination != nil && !autoStore {
-		if it, readErr := guildReadMoveItem(ctx, tx, uint64(guildID), s.playerGUID, *destination); readErr == nil {
+		if it, readErr := guildReadMoveItem(ctx, cdb, uint64(guildID), s.playerGUID, *destination); readErr == nil {
 			destItem, destExists = it, true
 		} else if readErr != sql.ErrNoRows {
-			_ = tx.Rollback()
 			return guildMoveOutcome{}, false
 		}
-	}
-	consumeWithdraw := func(swapping bool) bool {
-		if destination == nil {
-			return true
-		}
-		if sourceLoc.Bank && (!destination.Bank || sourceLoc.Tab != destination.Tab) && !guildConsumeBankWithdraw(ctx, tx, s.playerGUID, guildID, sourceLoc.Tab) {
-			return false
-		}
-		if swapping && destination.Bank && (!sourceLoc.Bank || sourceLoc.Tab != destination.Tab) && !guildConsumeBankWithdraw(ctx, tx, s.playerGUID, guildID, destination.Tab) {
-			return false
-		}
-		// Guild::_MoveItems step 4 (Guild.cpp:2698):
-		// BankMoveItemData::HasWithdrawRights (Guild.cpp:864-876) skips the
-		// check entirely when the other side is a bank tab with the same
-		// container, so a same-tab bank rearrangement applies no withdraw
-		// gate at all. Silent on failure — _MoveItems returns with no
-		// feedback.
-		return true
 	}
 	var placements []guildMovePlacement
 	var storeErr uint8
 	if destination != nil && destination.Bank {
-		placements, storeErr = s.guildBankMovePlan(ctx, tx, uint64(guildID), destination.Tab, destination.Slot, sourceLoc, source, moveCount, maxStack, full)
+		placements, storeErr = s.guildBankMovePlan(ctx, cdb, uint64(guildID), destination.Tab, destination.Slot, sourceLoc, source, moveCount, maxStack, full)
 	} else {
 		// Item::IsBindedNotWith (Item.cpp:1039-1051) runs inside
 		// Player::CanStoreItem (Player.cpp:10714-10720) before destination
@@ -3968,9 +3959,8 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 				emit = true
 			}
 			if emit {
-				return rollback(guildEquipErrDontOwnThatItem, source.GUID)
+				return fail(guildEquipErrDontOwnThatItem, source.GUID)
 			}
-			_ = tx.Rollback()
 			return guildMoveOutcome{}, false
 		}
 		// Player::CanStoreItem (Player.cpp:10731-10742) runs the
@@ -3978,7 +3968,7 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		// destination planning. Guild::_DoItemsMove runs the store with
 		// sendError=false on this path (Guild.cpp:2714), so a zero-headroom
 		// failure is silent — no command result, no equip error.
-		capped, capErr := s.guildPlayerSimilarItemCap(ctx, tx, s.playerGUID, source.Entry, moveCount)
+		capped, capErr := s.guildPlayerSimilarItemCap(ctx, cdb, s.playerGUID, source.Entry, moveCount)
 		if capErr != 0 {
 			// Guild::_DoItemsMove runs with sendError=false on the
 			// non-split merge attempt (Guild.cpp:2714) — silent — but
@@ -3990,9 +3980,8 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 				emit = true
 			}
 			if emit {
-				return rollback(equipErrCantCarryMoreOfThis, source.GUID)
+				return fail(equipErrCantCarryMoreOfThis, source.GUID)
 			}
-			_ = tx.Rollback()
 			return guildMoveOutcome{}, false
 		}
 		if capped < moveCount {
@@ -4006,15 +3995,17 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		if destination != nil && !autoStore {
 			target = destination
 		}
-		placements, storeErr = s.guildPlayerMovePlan(ctx, tx, s.playerGUID, source.Entry, moveCount, maxStack, target)
+		placements, storeErr = s.guildPlayerMovePlan(ctx, cdb, s.playerGUID, source.Entry, moveCount, maxStack, target)
 	}
+	doSwap := false
 	if storeErr != 0 && destination != nil && destExists && full {
+		doSwap = true
 		// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) ran above for the
 		// player->bank direction; the cross-tab bank case is re-checked
 		// below, and the swap-arm opposite-direction rights are the
 		// silent withdraw-slots check
 		// (BankMoveItemData::HasWithdrawRights, Guild.cpp:864-876),
-		// enforced by consumeWithdraw(true) below.
+		// enforced by consumeWithdraw(true) in phase 2.
 		// Guild::_MoveItems step 3 (Guild.cpp:2683-2690): a cross-tab bank
 		// swap needs GUILD_BANK_RIGHT_DEPOSIT_ITEM (VIEW_TAB|PUT_ITEM,
 		// Guild.h:181) on the dest tab
@@ -4022,7 +4013,7 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		// same-tab skip lives there too). Silent on failure — C++ returns
 		// with no feedback on this path.
 		if destination.Bank && sourceLoc.Bank && sourceLoc.Tab != destination.Tab && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
-			return rollback(0, source.GUID)
+			return fail(0, source.GUID)
 		}
 		// Guild::_MoveItems step 6.2.2 (Guild.cpp:2722-2729): the swap
 		// fallback checks the opposite direction too — the dest item is
@@ -4033,31 +4024,76 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		// step 3). Silent on failure — C++ returns with no feedback on
 		// this path.
 		if sourceLoc.Bank && (!destination.Bank || sourceLoc.Tab != destination.Tab) && !s.checkGuildBankRights(ctx, guildID, sourceLoc.Tab, true) {
-			return rollback(0, source.GUID)
+			return fail(0, source.GUID)
 		}
 		if swapErr := s.guildMoveCanSwap(ctx, sourceLoc, *destination, source, destItem); swapErr != 0 {
-			return rollback(swapErr, source.GUID)
+			return fail(swapErr, source.GUID)
 		}
 		if !sourceLoc.Bank && s.guildItemIsNonemptyBag(ctx, sourceLoc, source) || !destination.Bank && s.guildItemIsNonemptyBag(ctx, *destination, destItem) {
-			return rollback(equipErrCanOnlyDoWithEmptyBags, source.GUID)
+			return fail(equipErrCanOnlyDoWithEmptyBags, source.GUID)
 		}
-		if !consumeWithdraw(true) {
-			_ = tx.Rollback()
-			// Guild::_MoveItems steps 3-4 return silently on rights failure; C++
-			// never emits ERR_GUILD_WITHDRAW_LIMIT on this path.
-			return guildMoveOutcome{}, false
+	} else if storeErr != 0 {
+		// Guild::_DoItemsMove (Guild.cpp:2736) takes a sendError flag: the
+		// non-split merge attempt (Guild.cpp:2714) passes false, so a store
+		// failure is silent — no equip error packet. The split path
+		// (Guild.cpp:2709) and the swap fallback (Guild.cpp:2729) pass true
+		// and do emit the equip error.
+		if requestedCount != 0 && requestedCount != source.Count {
+			return fail(storeErr, source.GUID)
 		}
-		if err := guildSwapMoveItems(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc, *destination, source, destItem); err != nil {
-			return rollback(0, source.GUID)
+		return guildMoveOutcome{}, false
+	}
+	// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) runs before step 4's
+	// withdraw-slot check: a cross-tab bank move needs
+	// GUILD_BANK_RIGHT_DEPOSIT_ITEM (VIEW_TAB|PUT_ITEM, Guild.h:181) on the
+	// dest tab (BankMoveItemData::HasStoreRights, Guild.cpp:855-862; the
+	// same-tab skip lives there too). Silent on failure — C++ returns with
+	// no feedback on this path.
+	if destination != nil && destination.Bank && sourceLoc.Bank && sourceLoc.Tab != destination.Tab && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
+		return guildMoveOutcome{}, false
+	}
+	// ---- Phase 2: pure-DB writes inside Store.RunTransaction. ----
+	// consumeWithdraw is the write half of the old in-tx closure:
+	// guildConsumeBankWithdraw's read-then-increment runs atomically inside
+	// the transaction (it issues no packets and touches no Lua), so it stays
+	// whole in the replayable body. Any failure here maps to the old silent
+	// rollback arm — the C++ steps 3-4 return with no feedback on this path.
+	consumeWithdraw := func(tx *sql.Tx, swapping bool) bool {
+		if destination == nil {
+			return true
 		}
+		if sourceLoc.Bank && (!destination.Bank || sourceLoc.Tab != destination.Tab) && !guildConsumeBankWithdraw(ctx, tx, s.playerGUID, guildID, sourceLoc.Tab) {
+			return false
+		}
+		if swapping && destination.Bank && (!sourceLoc.Bank || sourceLoc.Tab != destination.Tab) && !guildConsumeBankWithdraw(ctx, tx, s.playerGUID, guildID, destination.Tab) {
+			return false
+		}
+		// Guild::_MoveItems step 4 (Guild.cpp:2698):
+		// BankMoveItemData::HasWithdrawRights (Guild.cpp:864-876) skips the
+		// check entirely when the other side is a bank tab with the same
+		// container, so a same-tab bank rearrangement applies no withdraw
+		// gate at all. Silent on failure — _MoveItems returns with no
+		// feedback.
+		return true
+	}
+	if err := s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		if !consumeWithdraw(tx, doSwap) {
+			return errors.New("guild move withdraw denied")
+		}
+		if doSwap {
+			return guildSwapMoveItems(txCtx, tx, uint64(guildID), s.playerGUID, sourceLoc, *destination, source, destItem)
+		}
+		return s.guildApplyMovePlan(txCtx, tx, uint64(guildID), s.playerGUID, sourceLoc, source, moveCount, full, placements)
+	}); err != nil {
+		return guildMoveOutcome{}, false
+	}
+	// ---- Phase 3: post-commit Lua hooks and quest item counts. ----
+	if doSwap {
 		// Guild::_MoveItems (Guild.cpp:2751-2754): pDest->LogAction(pSrc)
-		// then pSrc->LogAction(pDest) fire the OnItemMove hook before the
-		// store transaction commits.
+		// then pSrc->LogAction(pDest) fire the OnItemMove hook around the
+		// store; Go fires them after commit (see the phase note above).
 		s.fireGuildItemMove(ctx, guildID, sourceLoc, *destination, source, moveCount)
 		s.fireGuildItemMove(ctx, guildID, *destination, sourceLoc, destItem, destItem.Count)
-		if err := tx.Commit(); err != nil {
-			return guildMoveOutcome{}, false
-		}
 		if !sourceLoc.Bank {
 			s.adjustQuestItemCount(ctx, source.Entry, source.Count, false)
 		}
@@ -4071,47 +4107,14 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		bankSlots := guildMoveBankPlacements(placements, destination.Tab)
 		return guildMoveOutcome{Source: source, Destination: destItem, SourceLoc: sourceLoc, DestLoc: *destination, Count: moveCount, Swapped: true, BankPlacements: bankSlots}, true
 	}
-	if storeErr != 0 {
-		// Guild::_DoItemsMove (Guild.cpp:2736) takes a sendError flag: the
-		// non-split merge attempt (Guild.cpp:2714) passes false, so a store
-		// failure is silent — no equip error packet. The split path
-		// (Guild.cpp:2709) and the swap fallback (Guild.cpp:2729) pass true
-		// and do emit the equip error.
-		if requestedCount != 0 && requestedCount != source.Count {
-			return rollback(storeErr, source.GUID)
-		}
-		_ = tx.Rollback()
-		return guildMoveOutcome{}, false
-	}
-	// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) runs before step 4's
-	// withdraw-slot check: a cross-tab bank move needs
-	// GUILD_BANK_RIGHT_DEPOSIT_ITEM (VIEW_TAB|PUT_ITEM, Guild.h:181) on the
-	// dest tab (BankMoveItemData::HasStoreRights, Guild.cpp:855-862; the
-	// same-tab skip lives there too). Silent on failure — C++ returns with
-	// no feedback on this path.
-	if destination != nil && destination.Bank && sourceLoc.Bank && sourceLoc.Tab != destination.Tab && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
-		_ = tx.Rollback()
-		return guildMoveOutcome{}, false
-	}
-	if !consumeWithdraw(false) {
-		_ = tx.Rollback()
-		// Guild::_MoveItems steps 3-4 return silently on rights failure; C++
-		// never emits ERR_GUILD_WITHDRAW_LIMIT on this path.
-		return guildMoveOutcome{}, false
-	}
-	if err := s.guildApplyMovePlan(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc, source, moveCount, full, placements); err != nil {
-		return rollback(0, source.GUID)
-	}
 	// Guild::_MoveItems (Guild.cpp:2751): pDest->LogAction(pSrc) fires the
-	// OnItemMove hook before the store transaction commits.
+	// OnItemMove hook around the store; Go fires it after commit (see the
+	// phase note above).
 	destLoc := guildMoveLocation{BagSlot: 0xFF, Slot: 0xFF}
 	if destination != nil {
 		destLoc = *destination
 	}
 	s.fireGuildItemMove(ctx, guildID, sourceLoc, destLoc, source, moveCount)
-	if err := tx.Commit(); err != nil {
-		return guildMoveOutcome{}, false
-	}
 	if !sourceLoc.Bank && full {
 		s.adjustQuestItemCount(ctx, source.Entry, source.Count, false)
 	}
