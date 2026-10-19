@@ -28,14 +28,14 @@
 -- npc_slad_ran_viper: JustEngagedWith — Venomous Bite 54987 (victim,
 -- 2s init, 10s repeat).
 -- Unmodeled (no bridges — documented, not wired):
--- boss DamageTaken phase machine — HealthBelowPct(30/25) has no
--- bridge (zero hits on the Lua surface — doomwalker precedent) and
--- the SummonCreature snake/constrictor waves (3 normal / 5 heroic
--- SpawnLoc entries, TEMPSUMMON_CORPSE_TIMED_DESPAWN) sit behind the
--- summon STRAND (standing), so the GROUP_SNAKES cancel and the
--- PHASE_SNAKES -> PHASE_CONSTRICTORS transition never fire.
--- Talk(SAY_SUMMON_SNAKES 3) / Talk(SAY_SUMMON_CONSTRICTORS 4) ride
--- that same machine — documented-only.
+-- boss DamageTaken phase machine — the summon waves (3 normal / 5
+-- heroic SpawnLoc entries, TEMPSUMMON_CORPSE_TIMED_DESPAWN) sit behind
+-- the summon STRAND (standing), so the GROUP_SNAKES cancel never
+-- fires. Talk(SAY_SUMMON_SNAKES 3) / Talk(SAY_SUMMON_CONSTRICTORS 4)
+-- ARE ported (below): HealthBelowPct(30/25) runs on the bridged
+-- creature:GetHealthPct() in an event-9 handler with a per-GUID phase
+-- latch (the old "no HealthBelowPct bridge" claim was stale —
+-- sindragosa/moroes use GetHealthPct in handler context).
 -- JustSummoned's MovePoint-to-boss choreography is movement-model
 -- only and has no summons to move; summons.Summon bookkeeping has
 -- no Go bearer. SetGUID(DATA_SNAKES_WHYD_IT_HAVE_TO_BE_SNAKES) /
@@ -65,6 +65,10 @@ local SAY_SLAY = 1
 local SAY_DEATH = 2
 local SAY_SUMMON_SNAKES = 3
 local SAY_SUMMON_CONSTRICTORS = 4
+
+-- Forward declare: sladranLeaveCombat/sladranReset (below) reference this
+-- before its assignment point; plain assignment later (tharon_ja idiom).
+local sladranPhase
 local EMOTE_NOVA = 5
 local EMOTE_ACTIVATE_ALTAR = 6
 
@@ -141,7 +145,9 @@ local function sladranEnterCombat(event, creature, target)
 end
 
 local function sladranLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    sladranPhase[guid] = nil
 end
 
 local function sladranTargetDied(event, creature, victim)
@@ -157,13 +163,38 @@ local function sladranDied(event, creature, killer)
 end
 
 local function sladranReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    sladranPhase[guid] = nil
+end
+
+-- C++ DamageTaken phase machine (boss_slad_ran.cpp:143-160): PHASE_NONE +
+-- HealthBelowPct(30) -> Talk(SAY_SUMMON_SNAKES) + PHASE_SNAKES; then
+-- PHASE_SNAKES + HealthBelowPct(25) -> Talk(SAY_SUMMON_CONSTRICTORS) +
+-- PHASE_CONSTRICTORS. DamageTaken arms fire on lethal hits (no
+-- post-damage guard — yazzai/nefarian convention). The summon waves
+-- (GROUP_SNAKES scheduler + SummonCreature) stay out behind the
+-- summon STRAND (standing) — Talk fires without the wave. Phase latch
+-- cleared on evade/reset (C++ Initialize()/Reset()).
+sladranPhase = {}
+
+local function sladranDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local phase = sladranPhase[guid] or 0
+    if phase == 0 and creature:GetHealthPct() < 30 then
+        sladranPhase[guid] = 1
+        creature:Talk(SAY_SUMMON_SNAKES)
+    elseif phase == 1 and creature:GetHealthPct() < 25 then
+        sladranPhase[guid] = 2
+        creature:Talk(SAY_SUMMON_CONSTRICTORS)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 1, sladranEnterCombat)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 2, sladranLeaveCombat)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 3, sladranTargetDied)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 4, sladranDied)
+RegisterCreatureEvent(ENTRY_SLAD_RAN, 9, sladranDamageTaken)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 23, sladranReset)
 
 -- npc_slad_ran_constrictor (29713): Grip of Slad'ran 55093 on the

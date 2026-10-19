@@ -8,7 +8,8 @@
 -- OF_AKAMA = 2, third boss), :42 (DATA_AKAMA_SHADE = 9), :73 (NPC_
 -- SHADE_OF_AKAMA = 22841). Creature entry: 22841 Shade of Akama
 -- (C++ ScriptName "boss_shade_of_akama" per
--- AddSC_boss_shade_of_akama). No Talk lines in the boss AI.
+-- AddSC_boss_shade_of_akama). One Talk line in the boss AI: the
+-- 20%-health DamageTaken yell SAY_LOW_HEALTH=3 (ported below).
 -- Eluna creature events: 2 OnLeaveCombat, 4 OnDied, 14 OnHitBySpell
 -- (SpellHit), 23 OnReset. Melee is engine-driven in Go (creature
 -- combat tick), like C++ DoMeleeAttackIfReady.
@@ -67,9 +68,27 @@
 
 local ENTRY_SHADE_OF_AKAMA = 22841
 
+local SAY_LOW_HEALTH = 3
+
 local SPELL_SHADE_OF_AKAMA_TRIGGER = 40955
 local SPELL_AKAMA_SOUL_RETRIEVE = 40902
 local SPELL_AKAMA_SOUL_EXPEL_CHANNEL = 40927
+
+-- C++ DamageTaken: one-shot Talk(SAY_LOW_HEALTH=3) when HealthBelowPct(20)
+-- (boss_shade_of_akama.cpp:403-407; _hasYelledOnce cleared in
+-- Initialize()/Reset()). DamageTaken arms fire on lethal hits (C++
+-- HealthBelowPctDamaged semantics — yazzai/nefarian convention), so no
+-- post-damage guard. The SAY_BROKEN_FREE_*/SAY_DEAD lines (0,1,2,4) are
+-- npc_akama_shade's, not this AI's.
+local shadeYelledOnce = {}
+
+local function shadeDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if not shadeYelledOnce[guid] and creature:GetHealthPct() < 20 then
+        shadeYelledOnce[guid] = true
+        creature:Talk(SAY_LOW_HEALTH)
+    end
+end
 
 -- C++ JustDied: non-triggered self-cast of the shade trigger (the
 -- akama DoAction, spawner DoActions, channeler despawn and
@@ -90,13 +109,16 @@ end
 
 -- C++ Reset/EnterEvadeMode arms have no bridges — nothing modeled.
 local function shadeLeaveCombat(event, creature)
+    shadeYelledOnce[creature:GetGUID()] = nil
 end
 
 local function shadeReset(event, creature)
+    shadeYelledOnce[creature:GetGUID()] = nil
 end
 
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 2, shadeLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 4, shadeDied)
+RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 9, shadeDamageTaken)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 14, shadeSpellHit)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 23, shadeReset)
 

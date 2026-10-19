@@ -47,7 +47,14 @@
 -- - Crystal/trigger summons (SpawnNextCrystal): SummonCreature no
 --   bridge.
 -- - go_ossirian_crystal (GameObjectAI OnGossipHello): no bridge.
--- - MoveInLineOfSight SAY_INTRO: no Lua bridge for MoveInLineOfSight.
+-- - MoveInLineOfSight SAY_INTRO: Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27)
+--   is live (lua_creature_events.go:531-560, shaffar/vorpil/ikiss/maladaar
+--   precedent) — ported below with a per-GUID one-shot SaidIntro latch
+--   (C++ sets it in the AI constructor, never re-cleared; per-GUID table
+--   approximates per-AI-lifetime). Return nil so the default engage
+--   proceeds (C++ falls through to BossAI::MoveInLineOfSight). The
+--   Go fire site is the aggro-engage branch, a subset of C++'s
+--   any-unit LOS trigger — acceptable for a one-shot intro line.
 -- - DoAction(ACTION_TRIGGER_WEAKNESS): cross-AI via TriggerGUID,
 --   no bridge.
 -- - Cleanup()/EnterEvadeMode()/JustDied() instance legs: no bridge.
@@ -215,9 +222,22 @@ local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ MoveInLineOfSight: one-shot Talk(SAY_INTRO 1) with the
+-- SaidIntro latch, then the default engage (boss_ossirian.cpp:218-226).
+local ossirianSaidIntro = {}
+
+local function onMoveInLOS(event, creature, unit)
+    local guid = creature:GetGUID()
+    if not ossirianSaidIntro[guid] then
+        ossirianSaidIntro[guid] = true
+        creature:Talk(1)
+    end
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+RegisterCreatureEvent(ENTRY, 27, onMoveInLOS)
