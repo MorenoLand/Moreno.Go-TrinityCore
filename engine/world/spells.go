@@ -1363,11 +1363,10 @@ func (s *session) casterIgnoreResistPct(spellID uint32, schoolMask uint32) int32
 	for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask) {
 		pct += amount
 	}
+	// Unit.cpp:1759 caps the top end at 100 only — negative aura amounts
+	// legitimately boost the resisted portion, so there is no floor here.
 	if pct > 100 {
 		pct = 100
-	}
-	if pct < 0 {
-		pct = 0
 	}
 	return pct
 }
@@ -1571,8 +1570,10 @@ func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
 		default:
 			// POWER_RUNE (5) / POWER_RUNIC_POWER (6): C++ adds nothing
 			// ("Not implemented yet", SpellInfo.cpp:3194-3196). Unknown
-			// power types never reach here — the CheckPower unknown-type
-			// arm rejects them upstream (Spell.cpp:6659-6663).
+			// power types: C++ logs and returns 0 (SpellInfo.cpp:3197-3199).
+			if pType != 5 && pType != 6 {
+				return 0
+			}
 		}
 	}
 	// Flat mod from caster auras by spell school (SpellInfo.cpp:3199-3200):
@@ -8637,18 +8638,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.sendInterrupted(castID, spellID, 0)
 			return
 		}
+		// Spell::CheckPower (Spell.cpp:6659-6663): unknown power types fail
+		// with SPELL_FAILED_UNKNOWN, ahead of the rune/power arms per C++
+		// arm order.
+		if pType != 0xFFFFFFFE && pType >= 7 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnknown), true)
+			s.sendInterrupted(castID, spellID, 0)
+			return
+		}
 		if pType < 7 && cost > 0 && s.player.Powers[pType] < cost {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
 			s.sendInterrupted(castID, spellID, 0) // Spell::_cast cleanupSpell (Spell.cpp:3330-3334): CheckCast failure at completion sends SendCastResult + SendInterrupted(0)
 			return
 		}
-	}
-	// Spell::_cast re-runs CheckCast at completion; runes spent mid-cast
-	// must fail the cast too (Spell::CheckPower rune check, Spell.cpp:6665).
-	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
-		s.sendInterrupted(castID, spellID, 0)
-		return
+		// Spell::CheckPower (Spell.cpp:6646-6670): the m_CastItem early OK
+		// precedes the rune arm — item casts never run a rune check. The
+		// arm runs inside this castItemGUID == 0 gate, not below it.
+		if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
+			s.sendInterrupted(castID, spellID, 0)
+			return
+		}
 	}
 
 	// Spell::_cast revalidates CheckCast at completion: the target may have
@@ -9493,11 +9503,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if spell.Attributes&spellAttr0ReqAmmo != 0 || spell.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
 		castFlags |= protocol.SpellCastFlagAmmo
 	}
+	// Spell::SendSpellGo (Spell.cpp:4341) reads RemainingPower AFTER
+	// Spell::TakePower ran in Spell::_cast (Spell.cpp:3452); the value is
+	// captured just before the packet build below, not here.
 	var remainingPower *uint32
 	if pType < 7 {
 		castFlags |= protocol.SpellCastFlagPowerLeftSelf
-		power := s.player.Powers[pType]
-		remainingPower = &power
 	}
 	// Spell::TakePower (Spell.cpp:4785-4793): item casts (m_CastItem) and
 	// the CHEAT_POWER command both skip power entirely. The triggered-cast
@@ -9785,6 +9796,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			Pitch:      target.TrajElevation,
 			TravelTime: uint32(s.spellDelayMomentMs(ctx, spell, target, hitTargets)),
 		}
+	}
+	// Spell.cpp:4341 — RemainingPower is the post-TakePower value.
+	if pType < 7 {
+		power := s.player.Powers[pType]
+		remainingPower = &power
 	}
 	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
@@ -21122,18 +21138,21 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]ui
 	}
 
 	resisted = damage * uint32(step) / 10
-	if resisted > damage {
-		resisted = damage
-	}
 	// Unit::CalcSpellResistedDamage (Unit.cpp:1758-1760): the attacker's
 	// ignore-resist auras shrink the resisted portion — ApplyPct on
-	// damageResisted with (100 - ignoredResistance), capped at 100.
-	if resisted > 0 && ignoredResistPct > 0 {
+	// damageResisted with (100 - ignoredResistance), capped at 100 only;
+	// negative amounts boost the resist, so the floor is absent in C++.
+	if resisted > 0 && ignoredResistPct != 0 {
 		pct := ignoredResistPct
 		if pct > 100 {
 			pct = 100
 		}
 		resisted = resisted * uint32(100-pct) / 100
+	}
+	// DamageInfo::ResistDamage (Unit.cpp:208-210) clamps the resist to the
+	// damage after the ignore-resist reduction, not before.
+	if resisted > damage {
+		resisted = damage
 	}
 	remainingDamage = damage - resisted
 	return resisted, remainingDamage
