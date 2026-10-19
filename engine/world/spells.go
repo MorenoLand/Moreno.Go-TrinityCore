@@ -26280,7 +26280,9 @@ func (s *session) scheduleCreatureAuraUpkeepLocked(aura *activeAura) {
 		}
 		s.server.auraMu.Unlock()
 		if !s.server.auraUpkeepTick(aura, aura.TargetKey.Map, aura.TargetKey.InstanceID) {
-			s.expireCreatureAura(aura.TargetKey, aura.SpellID, aura.Slot)
+			// SpellAuras.cpp:838-857: upkeep failure is a plain Remove() =
+			// BY_DEFAULT (SpellAuras.h:129); only natural expiry is BY_EXPIRE.
+			s.removeCreatureAuraTimed(aura.TargetKey, aura.SpellID, aura.Slot, auraRemoveByDefault)
 			return
 		}
 		s.server.auraMu.Lock()

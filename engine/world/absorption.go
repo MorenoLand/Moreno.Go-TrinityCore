@@ -405,19 +405,28 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 			}
 
 			// 3. Mana Shield (SPELL_AURA_MANA_SHIELD = 97)
-			// In WotLK, Mana Shield absorbs all damage and drains 1.5 mana per point absorbed
+			// Each point absorbed drains the spell's value multiplier mana
+			// (Unit.cpp:1945-1948: int32(manaReduction * CalcValueMultiplier);
+			// Mana Shield's DBC value is 2.0, talent-folded via
+			// SPELLMOD_VALUE_MULTIPLIER). A zero multiplier leaves the mana
+			// cost unchanged, mirroring the C++ if (float manaMultiplier).
 			if aura.AuraType == SpellAuraManaShield && s.player.Powers[0] > 0 {
+				mult := s.calcValueMultiplierForAura(aura.SpellID, SpellAuraManaShield,
+					s.server.spellModOwnerSession(s.player.Map, s.player.InstanceID, aura.CasterGUID))
+				if mult == 0 {
+					mult = 1
+				}
 				currMana := s.player.Powers[0]
-				neededMana := uint32(math.Ceil(float64(remainingDamage) * 1.5))
+				neededMana := uint32(math.Ceil(float64(remainingDamage) * float64(mult)))
 				absorbPossible := remainingDamage
 				if currMana < neededMana {
-					absorbPossible = uint32(float64(currMana) / 1.5)
+					absorbPossible = uint32(float64(currMana) / float64(mult))
 				}
 				if absorbPossible > aura.Amount {
 					absorbPossible = aura.Amount
 				}
 				if absorbPossible > 0 {
-					manaDrain := uint32(math.Ceil(float64(absorbPossible) * 1.5))
+					manaDrain := uint32(math.Ceil(float64(absorbPossible) * float64(mult)))
 					if manaDrain > s.player.Powers[0] {
 						s.player.Powers[0] = 0
 					} else {
@@ -436,9 +445,11 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 	}
 	s.castMu.Unlock()
 
-	// Remove exhausted shields outside the lock
+	// Remove exhausted shields outside the lock; a shield that hits zero
+	// absorbed amount is destroyed by an enemy spell, not a default remove
+	// (Unit.cpp:1895, 1965).
 	for _, id := range exhaustedSpells {
-		s.removeAura(id)
+		s.removeAuraWithMode(id, auraRemoveByEnemySpell)
 	}
 
 	return absorbed, remainingDamage
@@ -535,8 +546,10 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 	}
 	s.auraMu.Unlock()
 
+	// Unit.cpp:1965: an exhausted shield is removed with
+	// AURA_REMOVE_BY_ENEMY_SPELL, not the default mode.
 	for _, id := range exhaustedSpells {
-		s.removeCreatureAura(key, id)
+		s.removeCreatureAuraWithMode(key, id, auraRemoveByEnemySpell)
 	}
 
 	return absorbed, remainingDamage
