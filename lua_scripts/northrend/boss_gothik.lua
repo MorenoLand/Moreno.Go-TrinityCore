@@ -19,8 +19,9 @@
 -- The seven minion entries (16124/16125/16126 living, 16127/16148/
 -- 16150/16149 spectral) + NPC_TRIGGER 16137 exist only in the .cpp's
 -- local Creatures enum — no NPC_ constants in naxxramas.h, no instance
--- bindings — entry-unverifiable from C++ evidence, no registration,
--- no lua.
+-- bindings; NPC_TRIGGER 16137 verified at boss_gothik.cpp:102 and its
+-- DamageTaken immunity arm is now registered (see below) — the rest
+-- stay unregistered, no lua.
 -- Sole-source verified: whole-server-tree grep for each of the ten
 -- script names hits boss_gothik.cpp only (loader carries only the
 -- decl/call lines); zero sql/ hits. No gothik lua existed.
@@ -130,6 +131,7 @@
 -- (razelikh precedent) — joins the SpellScript/AuraScript queue.
 
 local ENTRY_GOTHIK = 16060
+local ENTRY_GOTHIK_TRIGGER = 16137
 
 local SAY_INTRO_1 = 0
 local SAY_INTRO_2 = 1
@@ -209,3 +211,14 @@ RegisterCreatureEvent(ENTRY_GOTHIK, 2, gothikLeaveCombat)
 RegisterCreatureEvent(ENTRY_GOTHIK, 3, gothikTargetDied)
 RegisterCreatureEvent(ENTRY_GOTHIK, 4, gothikDied)
 RegisterCreatureEvent(ENTRY_GOTHIK, 23, gothikReset)
+
+-- C++ npc_gothik_trigger::DamageTaken (boss_gothik.cpp:904):
+-- damage = 0 unconditionally (the trigger is the SpellHit anchor —
+-- immune to damage; the SpellHit anchor machine itself stays
+-- documented-only). Event 9's second return rewrites damage
+-- (fireCreatureDamageTaken; halazzi precedent).
+local function gothikTriggerDamageTaken(event, creature, attacker, damage)
+    return false, 0
+end
+
+RegisterCreatureEvent(ENTRY_GOTHIK_TRIGGER, 9, gothikTriggerDamageTaken)

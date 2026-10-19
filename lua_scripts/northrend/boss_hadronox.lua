@@ -31,6 +31,11 @@
 -- 53400), randtime(7s,13s) init, randtime(16s,23s) repeat (math.random);
 -- position=0 so no threat-head exclusion; threat-list pool via
 -- GetAITargets (lua_creature_events.go:345; midnight precedent).
+-- npc_anub_ar_crusher DamageTaken (boss_hadronox.cpp:533-540):
+-- pre-damage HealthBelowPctDamaged(25) latch -> Talk(2) +
+-- DoCastSelf(SPELL_FRENZY 53801); latch wiped on event 4 (C++ ctor
+-- reset). The crusher's engage arms (CRUSHER_SAY_AGGRO etc.) stay
+-- unmodeled — they ride the unported pack-walk machine.
 -- Unmodeled (no bridges — documented, not wired):
 -- The whole pre-fight/step movement machine — InitializeAI
 -- SetReactState(REACT_AGGRESSIVE)/SetFloatValue bounding/combat reach
@@ -148,11 +153,14 @@
 -- documented-only.
 
 local ENTRY_HADRONOX = 28921
+local ENTRY_CRUSHER = 28922
 
 local SPELL_PIERCE_ARMOR = 53418
 local SPELL_LEECH_POISON = 53030
 local SPELL_WEB_GRAB = 57731
 local SPELL_ACID_CLOUD = 53400
+local SPELL_CRUSHER_FRENZY = 53801
+local CRUSHER_EMOTE_FRENZY = 2
 
 local timers = {}
 
@@ -262,7 +270,37 @@ local function hadronoxReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_anub_ar_crusher::DamageTaken (boss_hadronox.cpp:533-540):
+-- if (!_hadFrenzy && me->HealthBelowPctDamaged(25, damage)): latch,
+-- Talk(CRUSHER_EMOTE_FRENZY 2), DoCastSelf(SPELL_FRENZY 53801). The
+-- HealthBelowPctDamaged check is a pre-damage comparison ((health -
+-- damage) < 0.25 * maxHealth) and fires on lethal hits — no
+-- postDamage guard. The C++ latch resets only in the AI ctor, so the
+-- Lua mirror wipes the GUID entry on death (fresh latch on respawn).
+local crusherFrenzy = {}
+
+local function crusherDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if crusherFrenzy[guid] then
+        return false, damage
+    end
+    local health = creature:GetHealth()
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth ~= 0 and (health - damage) < 0.25 * maxHealth then
+        crusherFrenzy[guid] = true
+        creature:Talk(CRUSHER_EMOTE_FRENZY)
+        creature:CastSpell(creature, SPELL_CRUSHER_FRENZY)
+    end
+    return false, damage
+end
+
+local function crusherDied(event, creature, killer)
+    crusherFrenzy[creature:GetGUID()] = nil
+end
+
 RegisterCreatureEvent(ENTRY_HADRONOX, 1, hadronoxEnterCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 2, hadronoxLeaveCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 4, hadronoxDied)
 RegisterCreatureEvent(ENTRY_HADRONOX, 23, hadronoxReset)
+RegisterCreatureEvent(ENTRY_CRUSHER, 4, crusherDied)
+RegisterCreatureEvent(ENTRY_CRUSHER, 9, crusherDamageTaken)

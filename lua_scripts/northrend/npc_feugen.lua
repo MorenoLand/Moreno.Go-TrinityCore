@@ -63,8 +63,14 @@
 -- feign-death machine (EMOTE_FEIGN_DEATH 3 Talk + thaddius->
 -- AI()->DoAction(ACTION_FEUGEN_DIED) + NOT_SELECTABLE + auras
 -- wipe + REACT_PASSIVE + root + STAND_DEAD + damage = health-1,
--- and the isFeignDeath damage = 0 arm) — no damage / stand-state /
--- react-state / cross-AI bridges; SpellHit — the whole tesla-beam
+-- and the isFeignDeath damage = 0 arm): the Talk(3) + damage =
+-- health-1 + damage = 0 legs ARE ported (see feugenDamageTaken
+-- below — event 9 numeric-return rewrite, halazzi precedent); the
+-- stand-state / react-state / flag / aura / cross-AI legs stay out;
+-- the latch resets only on death (event 4 — C++ ctor reset); the
+-- C++ ACTION_FEUGEN_REVIVED revive machine is unbridged, so a
+-- feigned feugen stays feigned until killed/despawned — partial
+-- port, documented; SpellHit — the whole tesla-beam
 -- machine (SPELL_FEUGEN_TESLA_PERIODIC 28110 -> overload state +
 -- creatureCaster Talk(EMOTE_TESLA_LINK_BREAKS 0) + CastSpell(target,
 -- SPELL_TESLA_SHOCK 28099, triggered) / the refresh-beam recast of
@@ -141,16 +147,45 @@ local function feugenTargetDied(event, creature, victim)
     end
 end
 
+-- Feign-death latch (declared before the handlers that touch it).
+local feugenFeign = {}
+
 local function feugenDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    feugenFeign[creature:GetGUID()] = nil
 end
 
 local function feugenReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_feugen::DamageTaken (boss_thaddius.cpp:823-852), portable
+-- legs only: lethal damage -> Talk(EMOTE_FEIGN_DEATH 3) + damage =
+-- health-1; once latched, all further damage = 0. The cross-AI
+-- DoAction + stand-state / react-state / flag / aura / beam legs stay
+-- out (no bridges). Event 9's second return rewrites damage
+-- (fireCreatureDamageTaken; halazzi precedent). The C++ latch resets
+-- in the AI ctor; the Lua mirror wipes the GUID entry on death
+-- (event 4). The unbridged ACTION_FEUGEN_REVIVED machine means a
+-- feigned feugen never revives mid-fight in this port.
+local EMOTE_FEIGN_DEATH = 3
+
+local function feugenDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if damage < creature:GetHealth() then
+        return false, damage
+    end
+    if feugenFeign[guid] then
+        return false, 0
+    end
+    feugenFeign[guid] = true
+    creature:Talk(EMOTE_FEIGN_DEATH)
+    return false, creature:GetHealth() - 1
+end
+
 RegisterCreatureEvent(ENTRY_FEUGEN, 1, feugenEnterCombat)
 RegisterCreatureEvent(ENTRY_FEUGEN, 2, feugenLeaveCombat)
 RegisterCreatureEvent(ENTRY_FEUGEN, 3, feugenTargetDied)
 RegisterCreatureEvent(ENTRY_FEUGEN, 4, feugenDied)
+RegisterCreatureEvent(ENTRY_FEUGEN, 9, feugenDamageTaken)
 RegisterCreatureEvent(ENTRY_FEUGEN, 23, feugenReset)

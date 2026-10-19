@@ -98,8 +98,9 @@
 -- spell_thaddius_polarity_charge / spell_thaddius_polarity_shift /
 -- spell_thaddius_magnetic_pull / at_thaddius_entrance /
 -- achievement_thaddius_shocking) are documented in npc_stalagg.lua,
--- npc_feugen.lua and below: tesla's DamageTaken zeroing (no damage
--- bridge); the three SpellScripts (no SpellScript binding bridge —
+-- npc_feugen.lua and below: tesla's DamageTaken zeroing (ported
+-- 2026-10-19 in northrend/npc_tesla.lua — event 9 numeric-return
+-- rewrite, halazzi precedent); the three SpellScripts (no SpellScript binding bridge —
 -- razelikh precedent — SpellScript/AuraScript queue); the area
 -- trigger (no area-trigger bridge); the achievement (no achievement
 -- bridge — kelthuzad precedent).

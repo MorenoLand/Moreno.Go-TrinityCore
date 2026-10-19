@@ -91,8 +91,9 @@
 -- AuraScript legs, so a ported bubble would never shatter.
 -- The npc_ichor_globule machine (SpellHit TRANSFORM 54268 +
 -- MoveFollow, MovementInform FOLLOW_MOTION_TYPE MERGE 54269 +
--- DespawnOrUnsummon, DamageTaken SPLASH 59516) — no SpellHit /
--- MovementInform / DamageTaken bridges.
+-- DespawnOrUnsummon) — no SpellHit / MovementInform bridges; the
+-- DamageTaken SPLASH 59516 arm IS bridged (event 9, registered
+-- 2026-10-19 — the stale "no DamageTaken bridges" claim retracted).
 -- spell_ichoron_drained (59820 AuraScript: expire -> DoAction
 -- ACTION_DRAINED :332), spell_ichoron_merge (54269 SpellScript:
 -- shrink stack -1 + DoAction ACTION_WATER_GLOBULE_HIT :370),
@@ -107,6 +108,8 @@
 -- DATA_ICHORON) leg — no instance-script bridge.
 
 local ENTRY_ICHORON = 29313
+local ENTRY_ICHOR_GLOBULE = 29321
+local SPELL_SPLASH = 59516
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -272,3 +275,35 @@ RegisterCreatureEvent(ENTRY_ICHORON, 3, ichoronKilledUnit)
 RegisterCreatureEvent(ENTRY_ICHORON, 4, ichoronJustDied)
 RegisterCreatureEvent(ENTRY_ICHORON, 4, ichoronCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ICHORON, 23, ichoronReset)
+
+-- C++ npc_ichor_globule::DamageTaken (boss_ichoron.cpp:279-290):
+-- if (!_splashTriggered && damage >= me->GetHealth()): latch,
+-- DoCastAOE(SPELL_SPLASH 59516). DoCastAOE is self-cast per
+-- UnitAI.h:322, so creature:CastSpell(creature, 59516). C++ uses the
+-- direct lethal comparison and lets the damage through (the
+-- keep-at-1hp retail ideal is unimplemented in C++) — no
+-- postDamage guard. The latch resets only in the AI ctor, so the Lua
+-- mirror wipes the GUID entry on 2/4/23. Inert today: globules spawn
+-- from the unported spell_ichoron_splatter AuraScript.
+local ichorSplashLatch = {}
+
+local function ichorGlobuleDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if ichorSplashLatch[guid] then
+        return false, damage
+    end
+    if damage >= creature:GetHealth() then
+        ichorSplashLatch[guid] = true
+        creature:CastSpell(creature, SPELL_SPLASH)
+    end
+    return false, damage
+end
+
+local function ichorGlobuleCleanup(event, creature)
+    ichorSplashLatch[creature:GetGUID()] = nil
+end
+
+RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 2, ichorGlobuleCleanup)
+RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 4, ichorGlobuleCleanup)
+RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 9, ichorGlobuleDamageTaken)
+RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 23, ichorGlobuleCleanup)

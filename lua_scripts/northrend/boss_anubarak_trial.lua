@@ -177,6 +177,7 @@
 
 local ENTRY_ANUBARAK = 34564
 local ENTRY_SWARM_SCARAB = 34605
+local ENTRY_SPIKE = 34660
 
 local SAY_AGGRO = 1
 local SAY_KILL_PLAYER = 7
@@ -250,3 +251,13 @@ local function scarabDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_SWARM_SCARAB, 4, scarabDied)
+
+-- C++ npc_anubarak_spike::DamageTaken (boss_anubarak_trial.cpp:729-732):
+-- uiDamage = 0 unconditionally — spikes are damage-immune in all phases.
+-- Event 9 consumes the second return as the damage rewrite
+-- (fireCreatureDamageTaken; halazzi precedent).
+local function spikeDamageTaken(event, creature, attacker, damage)
+    return false, 0
+end
+
+RegisterCreatureEvent(ENTRY_SPIKE, 9, spikeDamageTaken)

@@ -83,7 +83,9 @@
 -- npc_thorims_hammer (33365/33364) / npc_mimirons_inferno (33370/33369) /
 -- npc_hodirs_fury (33212/33108) / npc_freyas_ward (33367/33366) /
 -- npc_freya_ward_summon — aura/timer/summon/move legs, no Talk arms anywhere
--- — no registrations.
+-- — no registrations EXCEPT the pool-of-tar DamageTaken immunity
+-- (damage = 0, boss_flame_leviathan.cpp:909-912 — registered 2026-10-19,
+-- event 9 numeric-return rewrite).
 -- npc_brann_bronzebeard_ulduar_intro / npc_lorekeeper — gossip legs:
 -- the gossip bridge IS live (RegisterCreatureGossipEvent,
 -- engine/world/gossip.go:129/369) — the "no gossip bridge" claim was
@@ -105,6 +107,7 @@
 -- bridges absent; all join the no-SpellScript-bridge queue.
 
 local ENTRY_FLAME_LEVIATHAN = 33113
+local ENTRY_POOL_OF_TAR = 33189
 
 local SAY_TARGET = 3
 local SAY_DEATH  = 2
@@ -248,3 +251,13 @@ RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 1, flameLeviathanEnterCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 2, flameLeviathanLeaveCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 4, flameLeviathanDied)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 23, flameLeviathanReset)
+
+-- C++ npc_pool_of_tar::DamageTaken (boss_flame_leviathan.cpp:909-912):
+-- damage = 0 unconditionally (NPC_LIQUID 33189 local enum). Event 9's
+-- second return rewrites damage (fireCreatureDamageTaken; halazzi
+-- precedent).
+local function poolOfTarDamageTaken(event, creature, attacker, damage)
+    return false, 0
+end
+
+RegisterCreatureEvent(ENTRY_POOL_OF_TAR, 9, poolOfTarDamageTaken)

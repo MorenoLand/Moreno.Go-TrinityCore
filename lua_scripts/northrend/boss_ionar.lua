@@ -94,14 +94,16 @@
 -- precedent): Reset (REACT_PASSIVE — no react bridge);
 -- MovementInform POINT_MOTION_TYPE / DATA_POINT_CALLBACK
 -- DespawnOrUnsummon — no motion bridge; DamageTaken uiDamage = 0 —
--- unregistered (the spark summon machine is unported — trigger-path
--- grounds); UpdateAI boss-state-gated
+-- REGISTERED 2026-10-19 (event 9, return false, 0 — halazzi
+-- precedent; the handler is inert until the spark summon machine is
+-- ported — trigger-path grounds); UpdateAI boss-state-gated
 -- DespawnOrUnsummon + uiCheckTimer distance-to-Ionar
 -- (> DATA_MAX_SPARK_DISTANCE 90) MovePoint callback machine via
 -- instance->GetGuidData(DATA_IONAR) — no timer / instance / motion
 -- / distance bridges. No Talk arms anywhere in the script.
 
 local ENTRY_IONAR = 28546
+local ENTRY_SPARK_OF_IONAR = 28926
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 2
@@ -209,3 +211,13 @@ RegisterCreatureEvent(ENTRY_IONAR, 2, ionarCombatEnd)
 RegisterCreatureEvent(ENTRY_IONAR, 3, ionarTargetDied)
 RegisterCreatureEvent(ENTRY_IONAR, 4, ionarDied)
 RegisterCreatureEvent(ENTRY_IONAR, 23, ionarCombatEnd)
+
+-- C++ npc_spark_of_ionar::DamageTaken (boss_ionar.cpp:339-342):
+-- uiDamage = 0 unconditionally. Event 9's second return rewrites
+-- damage (fireCreatureDamageTaken; halazzi precedent). Inert today:
+-- sparks spawn from the unported summon machine.
+local function sparkDamageTaken(event, creature, attacker, damage)
+    return false, 0
+end
+
+RegisterCreatureEvent(ENTRY_SPARK_OF_IONAR, 9, sparkDamageTaken)

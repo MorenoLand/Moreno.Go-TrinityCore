@@ -56,8 +56,14 @@
 -- feign-death machine (EMOTE_FEIGN_DEATH 3 Talk + thaddius->
 -- AI()->DoAction(ACTION_STALAGG_DIED) + NOT_SELECTABLE + auras
 -- wipe + REACT_PASSIVE + root + STAND_DEAD + damage = health-1,
--- and the isFeignDeath damage = 0 arm) — no damage / stand-state /
--- react-state / cross-AI bridges; SpellHit — the whole tesla-beam
+-- and the isFeignDeath damage = 0 arm): the Talk(3) + damage =
+-- health-1 + damage = 0 legs ARE ported (see stalaggDamageTaken
+-- below — event 9 numeric-return rewrite, halazzi precedent); the
+-- stand-state / react-state / flag / aura / cross-AI legs stay out;
+-- the latch resets only on death (event 4 — C++ ctor reset); the
+-- C++ ACTION_STALAGG_REVIVED revive machine is unbridged, so a
+-- feigned stalagg stays feigned until killed/despawned — partial
+-- port, documented; SpellHit — the whole tesla-beam
 -- machine (SPELL_STALAGG_TESLA_PERIODIC 28098 -> overload state +
 -- creatureCaster Talk(EMOTE_TESLA_LINK_BREAKS 0) + CastSpell(target,
 -- SPELL_TESLA_SHOCK 28099, triggered) / the refresh-beam recast of
@@ -133,16 +139,45 @@ local function stalaggTargetDied(event, creature, victim)
     end
 end
 
+-- Feign-death latch (declared before the handlers that touch it).
+local stalaggFeign = {}
+
 local function stalaggDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    stalaggFeign[creature:GetGUID()] = nil
 end
 
 local function stalaggReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_stalagg::DamageTaken (boss_thaddius.cpp:572-602), portable
+-- legs only: lethal damage -> Talk(EMOTE_FEIGN_DEATH 3) + damage =
+-- health-1; once latched, all further damage = 0. The cross-AI
+-- DoAction + stand-state / react-state / flag / aura / beam legs stay
+-- out (no bridges). Event 9's second return rewrites damage
+-- (fireCreatureDamageTaken; halazzi precedent). The C++ latch resets
+-- in the AI ctor; the Lua mirror wipes the GUID entry on death
+-- (event 4). The unbridged ACTION_STALAGG_REVIVED machine means a
+-- feigned stalagg never revives mid-fight in this port.
+local EMOTE_FEIGN_DEATH = 3
+
+local function stalaggDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if damage < creature:GetHealth() then
+        return false, damage
+    end
+    if stalaggFeign[guid] then
+        return false, 0
+    end
+    stalaggFeign[guid] = true
+    creature:Talk(EMOTE_FEIGN_DEATH)
+    return false, creature:GetHealth() - 1
+end
+
 RegisterCreatureEvent(ENTRY_STALAGG, 1, stalaggEnterCombat)
 RegisterCreatureEvent(ENTRY_STALAGG, 2, stalaggLeaveCombat)
 RegisterCreatureEvent(ENTRY_STALAGG, 3, stalaggTargetDied)
 RegisterCreatureEvent(ENTRY_STALAGG, 4, stalaggDied)
+RegisterCreatureEvent(ENTRY_STALAGG, 9, stalaggDamageTaken)
 RegisterCreatureEvent(ENTRY_STALAGG, 23, stalaggReset)

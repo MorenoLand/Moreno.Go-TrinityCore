@@ -70,8 +70,10 @@
 -- Reset — flight-phase DoRemoveAurasDueToSpellOnPlayers(ICEBOLT)
 -- (instance model), SetReactState / hover legs (no react-state /
 -- hover bridges) + _Reset bookkeeping.
--- DamageTaken — air-phase death prevention (damage = health-1) — no
--- health/damage bridge (doomwalker precedent).
+-- DamageTaken — air-phase death prevention (damage = health-1):
+-- the event-9 numeric-return bridge EXISTS (fireCreatureDamageTaken;
+-- halazzi precedent) — the arm stays out because the leg is
+-- PHASE_FLIGHT-gated (no phase model), not for lack of a bridge.
 -- SpellHitTarget — SPELL_CHECK_RESISTS resist comparison — no
 -- SpellHitTarget hook bridge (terestian precedent) + no resistance
 -- bridge.

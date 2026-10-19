@@ -118,9 +118,10 @@
 -- precedent).
 -- BloodPrincesBossAI::DamageTaken (:494-501) — non-empowered damage
 -- nullification (damage = 0 unless _isEmpowered) is gated on the
--- unbridged invocation machine — unmodeled (event 9 is read-only in
--- the bridge); all three princes take full damage in the port
--- (deviation, documented below).
+-- unbridged invocation machine — unmodeled (event 9 is NOT read-only:
+-- numeric-return damage rewrite exists, halazzi precedent — the arm
+-- stays out for the invocation-machine gate); all three princes take
+-- full damage in the port (deviation, documented below).
 -- keleseth "// does not melee" (:676) — melee is engine-driven in Go
 -- (deviation, documented below).
 -- keleseth EVENT_SHADOW_LANCE empowered variant
