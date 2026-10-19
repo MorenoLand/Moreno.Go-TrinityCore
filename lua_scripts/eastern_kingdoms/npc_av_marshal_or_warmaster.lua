@@ -14,10 +14,10 @@
 -- 4 OnDied, 23 OnReset. Driven by CreateLuaEvent timers; melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++ Reset() event schedule + UpdateAI event machine):
--- EVENT_CHARGE_TARGET: victim-cast CHARGE 22911, {2,12}s init -> {10,25}s
---   (C++ reschedules undefined EVENT_CHARGE at line 141 — an upstream typo
---   that would not compile; the port re-arms the charge chain at the
---   stated {10,25}s — documented deviation);
+-- EVENT_CHARGE_TARGET: victim-cast CHARGE 22911, {2,12}s init -> one-shot
+--   (C++ reschedules EVENT_CHARGE=1003, shared/SharedDefines.h:3342, at
+--   {10,25}s, but there is no case arm for 1003 — charge fires once per
+--   engagement in C++, so the Lua does not re-arm);
 -- EVENT_CLEAVE: victim-cast CLEAVE 40504, {1,11}s init -> {10,16}s;
 -- EVENT_DEMORALIZING_SHOUT: self-cast 23511, 2s init -> {10,15}s;
 -- EVENT_WHIRLWIND: self-cast 13736, {5,20}s init -> {10,25}s;
@@ -89,12 +89,17 @@ local function onSpawnOrReset(_, creature)
     end
 end
 
+-- C++ EVENT_CHARGE_TARGET: DoCastVictim(CHARGE) then ScheduleEvent(EVENT_CHARGE
+-- = 1003 from shared/SharedDefines.h:3342, 10-25s) — and there is NO case arm
+-- for 1003 in the UpdateAI switch, so the re-scheduled event fires once into
+-- the void: charge is a one-shot per engagement in C++. The Lua models it the
+-- same way (no re-arm); the old header claim of a deliberate repeat deviation
+-- was wrong (EVENT_CHARGE is a live enum entry, not an upstream typo).
 local function onCharge(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CHARGE)
     end
-    schedule(guid, "charge", {10000, 25000}, function() onCharge(creature, guid) end)
 end
 
 local function onCleave(creature, guid)
