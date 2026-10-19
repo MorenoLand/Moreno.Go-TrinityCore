@@ -86,6 +86,12 @@ end
 -- C++ Reset()/spawn: rebuff inits 0 -> immediate first fire, then the
 -- 180s loop (storm_cloud OnSpawn(5)/OnReset(23) convention).
 local function berylSorcererSpawnOrReset(event, creature)
+    -- Event 23 fires ahead of event 4 on the kill path (fireCreatureDied);
+    -- C++ Reset() re-inits the rebuff timer on a live creature only, so a
+    -- dead-state 23 fire must not cast or re-arm.
+    if event == 23 and creature:IsDead() then
+        return
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     onRebuff(creature, guid)
