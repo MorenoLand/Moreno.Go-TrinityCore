@@ -42,6 +42,9 @@
 -- (The Oct-12 "no-timer bridge" claim was wrong — CreateLuaEvent is
 -- a real bridge, retracted this run.) All timers cancelled on
 -- 2/4/23 (gargolmar precedent).
+-- PORTED (2026-10-19): boss_taerarAI::Reset's RemoveAurasDueToSpell(
+-- SPELL_SHADE 24313) — taerarReset; C++-exact (apply leg unported, so a
+-- no-op today).
 -- DOCUMENTED-ONLY (in this header; only the four dragon entries
 -- registered):
 -- emerald_dragonAI Reset — DoCast(me, SPELL_MARK_OF_NATURE_AURA 25041,
@@ -127,6 +130,8 @@ local SPELL_SHADOW_BOLT_WHIRL = 24834 -- boss_emerald_dragons.cpp:337 (Lethon)
 local SPELL_VOLATILE_INFECTION = 24928 -- boss_emerald_dragons.cpp:475 (Emeriss)
 local SPELL_ARCANE_BLAST = 24857 -- boss_emerald_dragons.cpp:568 (Taerar)
 local SPELL_BELLOWING_ROAR = 22686 -- boss_emerald_dragons.cpp:563 (Taerar)
+local SPELL_SHADE = 24313 -- boss_emerald_dragons.cpp:563 (Taerar self-cast
+    -- in the 25%-stage banish machine; cleared by boss_taerarAI::Reset)
 local SPELL_SUMMON_DRUID_SPIRITS = 24795 -- boss_emerald_dragons.cpp:249 (Ysondre DamageTaken)
 local SPELL_DRAW_SPIRIT = 24811 -- boss_emerald_dragons.cpp:336 (Lethon DamageTaken)
 local SPELL_CORRUPTION_OF_EARTH = 24910 -- boss_emerald_dragons.cpp:474 (Emeriss DamageTaken)
@@ -354,6 +359,17 @@ local function dragonReset(event, creature)
     stages[guid] = 1 -- C++ Initialize()/Reset() sets _stage = 1
 end
 
+-- C++ boss_taerarAI::Reset (boss_emerald_dragons.cpp:596-600):
+-- RemoveAurasDueToSpell(SPELL_SHADE) then Initialize(); it does NOT call
+-- the base emerald_dragonAI::Reset. The apply leg (DoCast 24313 in the
+-- unported 25%-stage banish machine) never fires in Lua, so the removal
+-- is currently a no-op — kept C++-exact; the base Reset's RemoveFlag
+-- (NOT_SELECTABLE/NON_ATTACKABLE) legs have no flag bridge.
+local function taerarReset(event, creature)
+    dragonReset(event, creature)
+    creature:RemoveAura(SPELL_SHADE)
+end
+
 RegisterCreatureEvent(ENTRY_YSONDRE, 1, ysondreEnterCombat)
 RegisterCreatureEvent(ENTRY_YSONDRE, 2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_YSONDRE, 4, dragonDied)
@@ -376,4 +392,4 @@ RegisterCreatureEvent(ENTRY_TAERAR,  1, taerarEnterCombat)
 RegisterCreatureEvent(ENTRY_TAERAR,  2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_TAERAR,  4, dragonDied)
 RegisterCreatureEvent(ENTRY_TAERAR,  3, dragonKilledUnit)
-RegisterCreatureEvent(ENTRY_TAERAR,  23, dragonReset)
+RegisterCreatureEvent(ENTRY_TAERAR,  23, taerarReset)
