@@ -74,9 +74,12 @@
 -- machine (SPELL_FEUGEN_TESLA_PERIODIC 28110 -> overload state +
 -- creatureCaster Talk(EMOTE_TESLA_LINK_BREAKS 0) + CastSpell(target,
 -- SPELL_TESLA_SHOCK 28099, triggered) / the refresh-beam recast of
--- SPELL_FEUGEN_CHAIN_VISUAL 28111) — SpellHit never fires in the
--- Lua surface (SpellHit ruling); UpdateAI's isFeignDeath early-
--- return — no bridge.
+-- SPELL_FEUGEN_CHAIN_VISUAL 28111) — event 14 (OnHitBySpell) DOES
+-- fire (boss_ai.go); the arm stays out because Talk/CastStop/
+-- CastSpell all run on creatureCaster, which the event does not
+-- pass (no caster bridge), and SetImmuneToPC + the random-target
+-- leg are unbridged; UpdateAI's isFeignDeath early-return —
+-- no bridge.
 
 local ENTRY_FEUGEN = 15930
 

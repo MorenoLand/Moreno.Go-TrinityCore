@@ -222,9 +222,17 @@ end
 -- bridge. The hello menu itself is DB-side (menu 4108); only the
 -- select arm is modeled.
 local function majordomoGossipSelect(event, player, creature, sender, action)
-    -- C++ OnGossipSelect requires the challenge option (gossipListId 0);
-    -- any other option does nothing.
-    if action ~= 0 then
+    -- C++ OnGossipSelect gates on menuId == 4108 (the DB gossip menu)
+    -- && gossipListId == 0 (the challenge option — the menu's only
+    -- option). The Go select hook passes the menu item's (Sender,
+    -- Action), not (menuId, gossipListId): DB items carry sender 0
+    -- (this creature has no Lua hello, so no script-built items exist),
+    -- so sender == 0 identifies the DB menu's challenge option. The
+    -- old `action ~= 0` gate compared the DB option's Action field
+    -- (OptionType, never 0 for a visible option) against the
+    -- gossipListId — it could never pass, leaving the whole outro arm
+    -- dead in-game.
+    if sender ~= 0 then
         return false
     end
     player:GossipClearMenu()
