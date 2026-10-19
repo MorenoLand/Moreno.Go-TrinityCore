@@ -204,6 +204,9 @@ end
 -- (lua_creature_events.go:424-425), so `health` is not the C++ value.
 -- HealthBelowPctDamaged(30, damage) projection matches (malchezaar
 -- precedent); integer floor form matches CalculatePct exactly.
+-- C++ is UpdateAI post-damage, so it never fires on the killing blow;
+-- the postDamage > 0 guard (nefarian rule) keeps the port from frenzying
+-- while dying.
 local function moroesDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = moroesState[guid]
@@ -215,7 +218,7 @@ local function moroesDamageTaken(event, creature, attacker, damage)
         return
     end
     local postDamage = math.max(health - damage, 0)
-    if postDamage < math.floor(maxHealth * 30 / 100) then
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 30 / 100) then
         creature:CastSpell(creature, SPELL_FRENZY)
         state.enrage = true
     end

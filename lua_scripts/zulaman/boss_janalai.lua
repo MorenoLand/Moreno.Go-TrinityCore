@@ -172,6 +172,9 @@ end
 -- C++ UpdateAI: if !enraged and HealthBelowPct(25) -> EnrageTimer = 0
 -- (fires immediately). Modeled on pre-damage health via the event-9 hook
 -- (malchezaar convention), canceling the pending 5min timer.
+-- C++ is UpdateAI post-damage, so it never fires on the killing blow;
+-- the (health - damage) > 0 guard (nefarian rule) keeps the port from
+-- enraging while dying.
 local function janalaiDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = janalaiState(guid)
@@ -182,7 +185,7 @@ local function janalaiDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if health < math.floor(maxHealth * 25 / 100) then
+    if health < math.floor(maxHealth * 25 / 100) and (health - damage) > 0 then
         local per = timers[guid]
         if per and per["enrage"] then
             RemoveEventById(per["enrage"])

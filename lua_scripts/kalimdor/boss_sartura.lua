@@ -133,6 +133,9 @@ end
 -- Eluna event 9 is pre-damage, so projected-health check
 -- (huhuran/jeklik convention). IsNonMeleeSpellCast: no bridge.
 -- !HealthAbovePct(20) fires AT exactly 20%: projected health <= floor(20M/100).
+-- C++ is UpdateAI post-damage, so it never fires on the killing blow;
+-- the postDamage > 0 guard (nefarian rule) keeps the port from enraging
+-- while dying.
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local s = st(guid)
@@ -143,7 +146,8 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (health - damage) <= math.floor(20 * maxHealth / 100) then
+    local postDamage = health - damage
+    if postDamage > 0 and postDamage <= math.floor(20 * maxHealth / 100) then
         s.enraged = true
         creature:CastSpell(creature, SPELL_ENRAGE)
     end

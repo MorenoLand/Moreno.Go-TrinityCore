@@ -430,10 +430,13 @@ local function malchezaarDamageTaken(event, creature, attacker, damage)
     -- event-9 hook is pre-damage, so project (health - damage) (zum_rah
     -- precedent). HealthBelowPct(pct) is strict < trunc(max*pct/100)
     -- (Unit.h:872-875); the integer floor form matches CalculatePct.
+    -- C++ is UpdateAI post-damage, so phases never flip on the killing
+    -- blow; the postDamage > 0 guard (nefarian rule) keeps the port from
+    -- phasing while dying.
     local postDamage = math.max(health - damage, 0)
-    if st.phase == PHASE_ONE and postDamage < math.floor(maxHealth * 60 / 100) then
+    if postDamage > 0 and st.phase == PHASE_ONE and postDamage < math.floor(maxHealth * 60 / 100) then
         startPhaseTwo(creature, guid)
-    elseif st.phase == PHASE_TWO and postDamage < math.floor(maxHealth * 30 / 100) then
+    elseif postDamage > 0 and st.phase == PHASE_TWO and postDamage < math.floor(maxHealth * 30 / 100) then
         startPhaseThree(creature, guid)
     end
     return false, damage
