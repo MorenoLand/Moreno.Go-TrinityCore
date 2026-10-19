@@ -4470,27 +4470,49 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
+	var petResistInput spellResistInput
+	petPenetration := uint32(0)
+	var petSpell wotlk.Spell
+	petSpellKnown := false
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+			petSpell, petSpellKnown = sp, true
+		}
+	}
+	if petSpellKnown {
+		petResistInput.ignoreResistances = petSpell.AttributesEx4&spellAttr4IgnoreResistances != 0
+		petResistInput.binary = petSpell.AttributesCu&spellAttr0CuBinarySpell != 0
+		petResistInput.hybrid = petSpell.SchoolMask&spellSchoolMaskNormal != 0 && petSpell.SchoolMask&0x7E != 0
+		// Unit.cpp:1786-1789: pets inherit the spell-mod owner's (the
+		// calling session is the owner's) 123-term and spell penetration.
+		petResistInput.targetResistMod = s.casterTargetResistMod(uint32(schoolMask))
+		if s.player != nil && caster.OwnerGUID != 0 && caster.OwnerGUID == s.playerGUID {
+			petPenetration = s.player.SpellPenetration
+		}
+	}
 	if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 {
 		// Unit::CalculateSpellDamageTaken (Unit.cpp:1002-1006): the
 		// physical-school armor arm runs for pet casters too. A null
 		// spellInfo runs the arm in C++, so an unknown spell runs it here;
 		// the 270 affect gate needs the spell row and is skipped then.
-		var armorSpell wotlk.Spell
-		armorSpellKnown := false
-		if s.server != nil && s.server.Data != nil {
-			if sp, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
-				armorSpell, armorSpellKnown = sp, true
-			}
+		// Hybrid (melee+magic) spells skip this arm: C++ strips the NORMAL
+		// bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor is
+		// false for them, and the armor comparison moves into
+		// CalcSpellResistedDamage (Unit.cpp:1764-1770) — which runs even
+		// under CU_IGNORE_ARMOR.
+		armorSpell := petSpell
+		armorSpellKnown := petSpellKnown
+		// The victim's live pet armor fold (Guardian::UpdateArmor,
+		// StatSystem.cpp:1316-1330): pet victims fold their aura legs
+		// here like the melee/ranged/spell damage paths do.
+		armorValue := float64(target.Armor)
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+			armorValue = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
 		}
-		if !armorSpellKnown || armorSpell.Attributes&spellAttr0CUIgnoreArmor == 0 {
-			// The victim's live pet armor fold (Guardian::UpdateArmor,
-			// StatSystem.cpp:1316-1330): pet victims fold their aura legs
-			// here like the melee/ranged/spell damage paths do.
-			armorValue := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
-				armorValue = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
-			}
-			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), armorValue, armorSpell, armorSpellKnown)
+		armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), armorValue, armorSpell, armorSpellKnown)
+		// Hybrid spells skip this arm (the figure is computed post-crit at
+		// the resist call); the hybrid leg runs even under CU_IGNORE_ARMOR.
+		if !petResistInput.hybrid && (!armorSpellKnown || armorSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
 			damage = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
 		}
 	}
@@ -4581,7 +4603,18 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
 		// the live 22 flat amounts fold into a pet victim's resistances.
 		resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0)
+		// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+		// armor figure is evaluated on the post-crit damage, like the C++
+		// leg inside DealDamage.
+		if petResistInput.hybrid {
+			armorValue := float64(target.Armor)
+			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+				armorValue = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
+			}
+			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), armorValue, petSpell, petSpellKnown)
+			petResistInput.hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
+		}
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0, petResistInput, petPenetration)
 	}
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:1079-1080): the
 	// MELEE/RANGED-DmgClass arm reduces by the melee/ranged taken

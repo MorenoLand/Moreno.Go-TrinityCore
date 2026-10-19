@@ -96,6 +96,7 @@ const (
 	spellAttr0IndoorsOnly                  uint32 = 0x00004000 // SPELL_ATTR0_INDOORS_ONLY (SharedDefines.h:426)
 	spellAttr0CuPickpocket                 uint32 = 0x00000400 // SPELL_ATTR0_CU_PICKPOCKET (SpellInfo.h:188) — custom attr, tested against AttributesCu
 	spellAttr0CuNegativeMask               uint32 = 0x00007000 // SPELL_ATTR0_CU_NEGATIVE (SpellInfo.h:203) = CU_NEGATIVE_EFF0|EFF1|EFF2 — custom attrs, tested against AttributesCu
+	spellAttr0CuBinarySpell                uint32 = 0x00100000 // SPELL_ATTR0_CU_BINARY_SPELL (SpellInfo.h:198) — custom attr, tested against AttributesCu; set at load by initializeSpellBinaryFlag (SpellMgr.cpp:2755-2825)
 	spellAttr0OnNextSwing2                 uint32 = 0x00000400 // SPELL_ATTR0_ON_NEXT_SWING_2 (SharedDefines.h:422) — tested against Attributes (DBC attr0), no clash with the custom-attr const above
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
@@ -9298,7 +9299,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the victim's 178 auras (MiscValue == DispelType).
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
-			} else if isBinarySpell(spell) {
+			} else if spellBinaryResistApplies(spell) {
 				var resistances [7]uint32
 				if targetSess != nil && targetSess.player != nil {
 					resistances = targetSess.player.Resistances
@@ -9310,7 +9311,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					pen = s.player.SpellPenetration
 				}
 				chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
-				if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt) {
+				if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt, s.casterTargetResistMod(uint32(spell.SchoolMask))) {
 					hitTargets = nil
 					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
 				}
@@ -14838,9 +14839,16 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// the pre-crit damage, then the crit doubles the integer; ceiling
 		// the doubled product instead differs by 1 whenever the pre-crit
 		// reduced damage carries a fractional part in (0, 0.5].
+		// Hybrid (melee+magic) spells skip this arm: C++ strips the NORMAL
+		// bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor is
+		// false for them, and the armor comparison moves into
+		// CalcSpellResistedDamage (Unit.cpp:1764-1770), which C++ evaluates
+		// on the post-crit damage inside DealDamage — the hybrid figure is
+		// computed at the resist call below, not here.
+		isHybridSpell := spellKnown && dmgSpell.SchoolMask&1 != 0 && dmgSpell.SchoolMask&0x7E != 0
 		if !instantKill && damage > 0 && schoolMask&1 != 0 && spellKnown &&
 			dmgSpell.AttributesEx4&spellAttr4FixedDamage == 0 && dmgSpell.Attributes&spellAttr0CUIgnoreArmor == 0 &&
-			s.player != nil {
+			s.player != nil && !isHybridSpell {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
 				armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
@@ -14888,7 +14896,33 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// the live resistance fold (22/101/143) lands on every creature
 			// victim's resistances.
 			resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
-			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), s.player.SpellPenetration)
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the post-crit damage, like the
+			// C++ leg inside DealDamage; it runs even for FIXED_DAMAGE and
+			// CU_IGNORE_ARMOR spells, which skip the taken-block armor arm.
+			hybridArmorReduced := uint32(0)
+			if isHybridSpell && s.player != nil {
+				armor := float64(target.Armor)
+				if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+					armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
+				}
+				if armor < 0 {
+					armor = 0
+				}
+				if armor > 0 {
+					armor = s.ignoreTargetResistArmor(armor, dmgSpell)
+					hybridArmorReduced = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
+				} else {
+					hybridArmorReduced = damage
+				}
+			}
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), spellResistInput{
+				ignoreResistances:  spellKnown && dmgSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             spellKnown && dmgSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridSpell,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    s.casterTargetResistMod(uint32(schoolMask)),
+			}, s.player.SpellPenetration)
 			if resisted > 0 && damage == 0 {
 				// PROC_HIT_FULL_RESIST (createProcHitMask, Unit.cpp:10179):
 				// captured here, before immunity/absorption/taken
@@ -20824,7 +20858,7 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	if s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
 		return protocol.SpellMissResist
 	}
-	if isBinarySpell(spell) {
+	if spellBinaryResistApplies(spell) {
 		var resistances [7]uint32
 		if targetSess != nil && targetSess.player != nil {
 			resistances = targetSess.player.Resistances
@@ -20832,7 +20866,7 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 			resistances = tgt.Resistances
 		}
 		chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
-		if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), s.player.SpellPenetration, s.player.Level, targetLevel, chaosBolt) {
+		if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), s.player.SpellPenetration, s.player.Level, targetLevel, chaosBolt, s.casterTargetResistMod(uint32(spell.SchoolMask))) {
 			return protocol.SpellMissResist
 		}
 	}
@@ -20966,32 +21000,6 @@ func (s *Server) persistentAreaTickMissed(mapID, instanceID uint32, aura *active
 	return magicSpellHitResult(attLevel, victimLevel, isPlayerVictim, bonusHit) != protocol.SpellMissNone
 }
 
-// isBinarySpell checks whether a spell is binary (i.e. does not deal direct damage,
-// but applies harmful magic debuffs or crowd control that can be fully resisted).
-// Mirrors TrinityCore SpellInfo::IsBinary (SpellInfo.cpp:3200).
-func isBinarySpell(spell wotlk.Spell) bool {
-	// Evaluate on the stripped mask: C++ removes the physical bit at load when
-	// magic schools are present (SpellMgr.cpp: CU_SCHOOLMASK_NORMAL_WITH_MAGIC).
-	schoolMask := spell.SchoolMask
-	if schoolMask&0x7E != 0 {
-		schoolMask &^= 1
-	}
-	// Physical (1) and Holy (2) spells are never resisted by magic resistance
-	if schoolMask == 0 || schoolMask&1 != 0 || schoolMask&2 != 0 {
-		return false
-	}
-	if !isHarmfulSpell(spell) {
-		return false
-	}
-	// Direct damage spells suffer partial resistance rather than binary full resist
-	for _, eff := range spell.Effects {
-		if eff.Effect == 2 || eff.Effect == 17 || eff.Effect == 31 || eff.Effect == 58 || eff.Effect == 87 {
-			return false
-		}
-	}
-	return true
-}
-
 // minResistanceForMask mirrors Unit::GetResistance(SpellSchoolMask)
 // (Unit.cpp:13581): the minimum resistance across the schools in the mask.
 // The physical bit is stripped when magic schools are present, mirroring the
@@ -21015,24 +21023,116 @@ func minResistanceForMask(resistances [7]uint32, schoolMask uint8) uint32 {
 	return best
 }
 
-// averageResistReduction mirrors Unit::CalculateAverageResistReduction
-// (Unit.cpp:1777): template resistance reduced by spell penetration; holy
-// template resistance and Chaos Bolt (warlock, icon 3178) template resistance
-// are ignored; the level-based term (+5 per level the victim out-levels the
-// caster, impenetrable) is skipped for binary spells.
-func averageResistReduction(resistances [7]uint32, schoolMask uint8, casterPenetration uint32, casterLevel, victimLevel uint8, binary, chaosBolt bool) float64 {
-	templateRes := minResistanceForMask(resistances, schoolMask)
-	if schoolMask&2 != 0 || chaosBolt {
-		templateRes = 0
-	}
-	effectiveRes := templateRes
-	if casterPenetration >= effectiveRes {
-		effectiveRes = 0
-	} else {
-		effectiveRes -= casterPenetration
-	}
+// spellResistInput bundles the spell- and caster-derived inputs that
+// Unit::CalcSpellResistedDamage / Unit::CalculateAverageResistReduction read
+// from the caster and the spellInfo (Unit.cpp:1704-1821). The zero value
+// mirrors a null spellInfo / null attacker: no ATTR4 early-out, no binary
+// flag, no hybrid armor comparison, no 123-term.
+type spellResistInput struct {
+	// SPELL_ATTR4_IGNORE_RESISTANCES (Unit.cpp:1714-1718): the spell cannot
+	// be resisted at all.
+	ignoreResistances bool
+	// SPELL_ATTR0_CU_BINARY_SPELL (Unit.cpp:1812): level-based resistance
+	// does not apply to the spell.
+	binary bool
+	// SPELL_ATTR0_CU_SCHOOLMASK_NORMAL_WITH_MAGIC (Unit.cpp:1764): the
+	// resisted amount is capped by the armor reduction.
+	hybrid bool
+	// CalcArmorReducedDamage result for the hybrid min() leg; valid only
+	// when hybrid is true.
+	hybridArmorReduced uint32
+	// The caster's SPELL_AURA_MOD_TARGET_RESISTANCE (123) aura sum by
+	// (stripped) school misc mask (Unit.cpp:1784-1792).
+	targetResistMod int32
+}
 
-	res := float64(effectiveRes)
+// casterTargetResistMod sums the caster's SPELL_AURA_MOD_TARGET_RESISTANCE
+// (123) aura amounts whose misc mask overlaps the spell's school mask,
+// mirroring the caster arms of Unit::CalculateAverageResistReduction
+// (Unit.cpp:1784-1795). The mask is load-stripped (the NORMAL bit is removed
+// when magic schools are present, SpellMgr.cpp:2830), so NORMAL-misc 123
+// auras do not match a hybrid spell here — they belong to the armor path.
+func (s *session) casterTargetResistMod(schoolMask uint32) int32 {
+	if s == nil {
+		return 0
+	}
+	if schoolMask&0x7E != 0 {
+		schoolMask &^= 1
+	}
+	var total int32
+	for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModTargetResistance, schoolMask) {
+		total += amount
+	}
+	return total
+}
+
+// tickCasterTargetResistMod mirrors the caster arms of
+// Unit::CalculateAverageResistReduction (Unit.cpp:1784-1795) for periodic
+// ticks: a resolved player caster session contributes its 123-term; a nil
+// session falls back to the wild caster motion's 123 auras (the non-player
+// unitCaster arm); a fully unresolved caster contributes nothing, like C++'s
+// null-caster skip. (Pet casters resolve to no session — findSessionByGUID
+// matches player GUIDs only — so their owner's 123-term stays unbridged,
+// matching the pre-existing penetration behavior on these paths.)
+func tickCasterTargetResistMod(server *Server, tickCaster *session, mapID, instanceID uint32, aura *activeAura) int32 {
+	if tickCaster != nil {
+		return tickCaster.casterTargetResistMod(uint32(aura.SchoolMask))
+	}
+	if server == nil || aura == nil || aura.CasterGUID == 0 {
+		return 0
+	}
+	mask := uint32(aura.SchoolMask)
+	if mask&0x7E != 0 {
+		mask &^= 1
+	}
+	if m := server.findCreatureMotion(mapID, instanceID, aura.CasterGUID); m != nil {
+		var total int32
+		for _, amount := range server.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(m), spellAuraModTargetResistance, mask) {
+			total += amount
+		}
+		return total
+	}
+	return 0
+}
+
+// spellBinaryResistApplies mirrors the gate around the binary-spell resist
+// arm of WorldObject::MagicSpellHitResult (Object.cpp:2580-2592): inside the
+// !positive && !ATTR4_IGNORE_RESISTANCES block, a spell carrying at least one
+// aura effect, the SPELL_ATTR0_CU_BINARY_SPELL custom attribute and a magic
+// school mask rolls the average-resist full resist ("bounce").
+func spellBinaryResistApplies(spell wotlk.Spell) bool {
+	if spellIsPositive(spell) || spell.AttributesEx4&spellAttr4IgnoreResistances != 0 {
+		return false
+	}
+	if spell.AttributesCu&spellAttr0CuBinarySpell == 0 || spell.SchoolMask&0x7E == 0 {
+		return false
+	}
+	for i := range spell.Effects {
+		if spellEffectIsAuraEffect(spell.Effects[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// averageResistReduction mirrors Unit::CalculateAverageResistReduction
+// (Unit.cpp:1777): template resistance plus the caster's 123-term, reduced by
+// spell penetration; holy template resistance and Chaos Bolt (warlock, icon
+// 3178) template resistance are ignored; the level-based term (+5 per level
+// the victim out-levels the caster, impenetrable) is skipped for binary
+// spells. The npcbot penetration/resistance legs (Unit.cpp:1797-1801) have no
+// Go model.
+func averageResistReduction(resistances [7]uint32, schoolMask uint8, casterPenetration uint32, casterLevel, victimLevel uint8, binary, chaosBolt bool, targetResistMod int32) float64 {
+	var res float64
+	if schoolMask&2 == 0 && !chaosBolt {
+		// Unit.cpp:1784-1795: the caster's 123-term lands on the template
+		// resistance before penetration is subtracted.
+		eff := int64(minResistanceForMask(resistances, schoolMask)) + int64(targetResistMod) - int64(casterPenetration)
+		if eff < 0 {
+			eff = 0
+		}
+		res = float64(eff)
+	}
 	if !binary && victimLevel > casterLevel {
 		res += float64(victimLevel-casterLevel) * 5.0
 	}
@@ -21052,8 +21152,8 @@ func averageResistReduction(resistances [7]uint32, schoolMask uint8, casterPenet
 // checkBinarySpellResist rolls the full resist for a binary spell, with the
 // average resist reduction as the resist chance. Mirrors the binary branch of
 // WorldObject::MagicSpellHitResult (Object.cpp:2585-2592).
-func checkBinarySpellResist(resistances [7]uint32, schoolMask uint8, casterPenetration uint32, casterLevel, victimLevel uint8, chaosBolt bool) bool {
-	averageResist := averageResistReduction(resistances, schoolMask, casterPenetration, casterLevel, victimLevel, true, chaosBolt)
+func checkBinarySpellResist(resistances [7]uint32, schoolMask uint8, casterPenetration uint32, casterLevel, victimLevel uint8, chaosBolt bool, targetResistMod int32) bool {
+	averageResist := averageResistReduction(resistances, schoolMask, casterPenetration, casterLevel, victimLevel, true, chaosBolt, targetResistMod)
 	if averageResist <= 0.0 {
 		return false
 	}
@@ -21091,14 +21191,21 @@ func schoolMaskToResistanceIndex(schoolMask uint8) uint8 {
 // (Unit.cpp:1704): the discrete 0%-100% partial-resist roll in 10% steps,
 // truncated like the C++ uint32 cast, with a fall-through roll resolving to
 // full resist (clamped by the caller like DamageInfo::ResistDamage,
-// Unit.cpp:208). Holy can only be partially resisted by creatures (the
-// level-based term; template holy resistance is ignored); non-magical
-// schools are never resisted.
-func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]uint32, casterLevel, victimLevel uint8, victimIsCreature, chaosBolt bool, ignoredResistPct int32, casterPenetration ...uint32) (resisted uint32, remainingDamage uint32) {
+// Unit.cpp:208). Spells with SPELL_ATTR4_IGNORE_RESISTANCES are never
+// resisted (Unit.cpp:1714-1718). Holy can only be partially resisted by
+// creatures (the level-based term; template holy resistance is ignored);
+// non-magical schools are never resisted. Binary spells (input.binary, the
+// load-time SPELL_ATTR0_CU_BINARY_SPELL) skip the level-based resistance
+// term. Hybrid (melee+magic school mask) spells cap the resisted amount at
+// the armor reduction (Unit.cpp:1764-1770).
+func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]uint32, casterLevel, victimLevel uint8, victimIsCreature, chaosBolt bool, ignoredResistPct int32, input spellResistInput, casterPenetration ...uint32) (resisted uint32, remainingDamage uint32) {
 	if damage == 0 || schoolMask == 0 || schoolMask&0x7E == 0 {
 		return 0, damage
 	}
 	if schoolMask&2 != 0 && !victimIsCreature {
+		return 0, damage
+	}
+	if input.ignoreResistances {
 		return 0, damage
 	}
 
@@ -21107,7 +21214,7 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]ui
 		pen = casterPenetration[0]
 	}
 
-	averageResist := averageResistReduction(resistances, schoolMask, pen, casterLevel, victimLevel, false, chaosBolt)
+	averageResist := averageResistReduction(resistances, schoolMask, pen, casterLevel, victimLevel, input.binary, chaosBolt, input.targetResistMod)
 	if averageResist <= 0.0 {
 		return 0, damage
 	}
@@ -21148,6 +21255,14 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]ui
 			pct = 100
 		}
 		resisted = resisted * uint32(100-pct) / 100
+	}
+	// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): spells with melee
+	// and magic school mask take the weaker of the resisted amount and the
+	// armor reduction.
+	if input.hybrid && input.hybridArmorReduced <= damage {
+		if armorReduction := damage - input.hybridArmorReduced; resisted > armorReduction {
+			resisted = armorReduction
+		}
 	}
 	// DamageInfo::ResistDamage (Unit.cpp:208-210) clamps the resist to the
 	// damage after the ignore-resist reduction, not before.
@@ -26722,8 +26837,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// schools only; Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000)
 		// skips the armor leg for FIXED_DAMAGE spells, as the resilience
 		// leg below already does. The AOE-avoidance leg (5184-5188) has no
-		// Go model and stays unbridged.
-		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+		// Go model and stays unbridged. Hybrid (melee+magic) spells skip
+		// this arm: C++ strips the NORMAL bit at load (SpellMgr.cpp:2830),
+		// so IsDamageReducedByArmor is false for them, and the armor
+		// comparison moves into CalcSpellResistedDamage (Unit.cpp:1764-1770).
+		isHybridTick := tickKnown && tickSpell.SchoolMask&1 != 0 && tickSpell.SchoolMask&0x7E != 0
+		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridTick {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
 		}
 		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
@@ -26743,7 +26862,25 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the post-resilience damage, like
+			// the C++ leg inside DealDamage; it uses the tick pipeline's
+			// armor model (the simplified calcArmorReducedDamage form).
+			hybridArmorReduced := uint32(0)
+			if isHybridTick {
+				if ts.player.Armor > 0 {
+					hybridArmorReduced = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
+				} else {
+					hybridArmorReduced = dmg
+				}
+			}
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+				ignoreResistances:  tickKnown && tickSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             tickKnown && tickSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridTick,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    tickCasterTargetResistMod(ts.server, tickCaster, ts.player.Map, ts.player.InstanceID, aura),
+			}, pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -27234,7 +27371,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				}
 			}
 		}
-		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+		// Hybrid (melee+magic) spells skip the armor arm: C++ strips the
+		// NORMAL bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor
+		// is false for them, and the armor comparison moves into
+		// CalcSpellResistedDamage (Unit.cpp:1764-1770).
+		isHybridTick := tickKnown && tickSpell.SchoolMask&1 != 0 && tickSpell.SchoolMask&0x7E != 0
+		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridTick {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
 		}
 		// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450) caster gate:
@@ -27249,7 +27391,25 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if tickCaster != nil && tickCaster.player != nil {
 				pen = tickCaster.player.SpellPenetration
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the post-resilience damage, like
+			// the C++ leg inside DealDamage; it uses the tick pipeline's
+			// armor model (the simplified calcArmorReducedDamage form).
+			hybridArmorReduced := uint32(0)
+			if isHybridTick {
+				if ts.player.Armor > 0 {
+					hybridArmorReduced = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
+				} else {
+					hybridArmorReduced = dmg
+				}
+			}
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+				ignoreResistances:  tickKnown && tickSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             tickKnown && tickSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridTick,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    tickCasterTargetResistMod(ts.server, tickCaster, ts.player.Map, ts.player.InstanceID, aura),
+			}, pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -27563,7 +27723,19 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// burnCaster is the live player caster session, so it folds its
 		// own mods.
 		dmg := effectValueMultiplied(burnDealt, ts.calcValueMultiplierForAura(aura.SpellID, spellAuraPowerBurn, burnCaster))
-		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+		// Hybrid (melee+magic) spells skip the armor arm: C++ strips the
+		// NORMAL bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor
+		// is false for them, and the armor comparison moves into
+		// CalcSpellResistedDamage (Unit.cpp:1764-1770).
+		var burnSpell wotlk.Spell
+		burnSpellKnown := false
+		if ts.server != nil && ts.server.Data != nil {
+			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				burnSpell, burnSpellKnown = sp, true
+			}
+		}
+		isHybridBurn := burnSpellKnown && burnSpell.SchoolMask&1 != 0 && burnSpell.SchoolMask&0x7E != 0
+		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridBurn {
 			// Unit.cpp:1693 — the burn tick only runs with a live caster
 			// session (nil burnCaster returns above), so the armor curve
 			// keys on its live level, like C++'s attacker->GetLevel().
@@ -27575,7 +27747,25 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if burnCaster.player != nil {
 				pen = burnCaster.player.SpellPenetration
 			}
-			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, burnCaster.player.Level, ts.player.Level, false, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the post-resilience damage, like
+			// the C++ leg inside DealDamage; it uses the tick pipeline's
+			// armor model (the simplified calcArmorReducedDamage form).
+			hybridArmorReduced := uint32(0)
+			if isHybridBurn {
+				if ts.player.Armor > 0 {
+					hybridArmorReduced = calcArmorReducedDamage(float64(ts.player.Armor), burnCaster.player.Level, ts.player.Level, dmg)
+				} else {
+					hybridArmorReduced = dmg
+				}
+			}
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, burnCaster.player.Level, ts.player.Level, false, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+				ignoreResistances:  burnSpellKnown && burnSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             burnSpellKnown && burnSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridBurn,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    burnCaster.casterTargetResistMod(uint32(aura.SchoolMask)),
+			}, pen)
 		}
 		if dmg < 1 && burnResisted == 0 {
 			dmg = 1
@@ -28376,8 +28566,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182); skipped for
 		// FIXED_DAMAGE spells (Unit.cpp:999-1000). Resilience has no Go
 		// creature-victim model (Unit.cpp:12345-12355: owner-is-player only)
-		// and stays unbridged, as does AOE-avoidance.
-		if !fixedDamage && aura.SchoolMask&1 != 0 {
+		// and stays unbridged, as does AOE-avoidance. Hybrid (melee+magic)
+		// spells skip this arm: C++ strips the NORMAL bit at load
+		// (SpellMgr.cpp:2830), so IsDamageReducedByArmor is false for them,
+		// and the armor comparison moves into CalcSpellResistedDamage
+		// (Unit.cpp:1764-1770).
+		isHybridTick := tickKnown && tickSpell.SchoolMask&1 != 0 && tickSpell.SchoolMask&0x7E != 0
+		if !fixedDamage && aura.SchoolMask&1 != 0 && !isHybridTick {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
 				armor = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
@@ -28402,7 +28597,32 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// the live resistance fold (22/101/143) lands on every creature
 			// victim's resistances.
 			resistances := s.server.petFoldedResistances(key, target.Resistances)
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the post-mitigation damage, like
+			// the C++ leg inside DealDamage; it uses the tick pipeline's
+			// armor model (the simplified calcArmorReducedDamage form).
+			hybridArmorReduced := uint32(0)
+			if isHybridTick {
+				armor := float64(target.Armor)
+				if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+					armor = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
+				}
+				if armor < 0 {
+					armor = 0
+				}
+				if armor > 0 {
+					hybridArmorReduced = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
+				} else {
+					hybridArmorReduced = dmg
+				}
+			}
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+				ignoreResistances:  tickKnown && tickSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             tickKnown && tickSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridTick,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    tickCasterTargetResistMod(s.server, tickCaster, key.Map, key.InstanceID, aura),
+			}, pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -28989,7 +29209,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				}
 			}
 		}
-		if !fixedDamage && aura.SchoolMask&1 != 0 {
+		// Hybrid (melee+magic) spells skip the armor arm: C++ strips the
+		// NORMAL bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor
+		// is false for them, and the armor comparison moves into
+		// CalcSpellResistedDamage (Unit.cpp:1764-1770).
+		isHybridTick := tickKnown && tickSpell.SchoolMask&1 != 0 && tickSpell.SchoolMask&0x7E != 0
+		if !fixedDamage && aura.SchoolMask&1 != 0 && !isHybridTick {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
 				armor = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
@@ -29011,7 +29236,32 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// the live resistance fold (22/101/143) lands on every creature
 			// victim's resistances.
 			resistances := s.server.petFoldedResistances(key, target.Resistances)
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the post-mitigation damage, like
+			// the C++ leg inside DealDamage; it uses the tick pipeline's
+			// armor model (the simplified calcArmorReducedDamage form).
+			hybridArmorReduced := uint32(0)
+			if isHybridTick {
+				armor := float64(target.Armor)
+				if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+					armor = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
+				}
+				if armor < 0 {
+					armor = 0
+				}
+				if armor > 0 {
+					hybridArmorReduced = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
+				} else {
+					hybridArmorReduced = dmg
+				}
+			}
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+				ignoreResistances:  tickKnown && tickSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             tickKnown && tickSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridTick,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    tickCasterTargetResistMod(s.server, tickCaster, key.Map, key.InstanceID, aura),
+			}, pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
@@ -29384,13 +29634,21 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000): FIXED_DAMAGE
 		// spells skip the armor leg; absorb/resist still run (below).
 		burnFixedDamage := false
+		var burnSpell wotlk.Spell
+		burnSpellKnown := false
 		if s.server != nil && s.server.Data != nil {
-			if burnSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
-				burnFixedDamage = burnSpell.AttributesEx4&spellAttr4FixedDamage != 0
+			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				burnFixedDamage = sp.AttributesEx4&spellAttr4FixedDamage != 0
+				burnSpell, burnSpellKnown = sp, true
 			}
 		}
 		dmg := drained
-		if !burnFixedDamage && aura.SchoolMask&1 != 0 {
+		// Hybrid (melee+magic) spells skip the armor arm: C++ strips the
+		// NORMAL bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor
+		// is false for them, and the armor comparison moves into
+		// CalcSpellResistedDamage (Unit.cpp:1764-1770).
+		isHybridBurn := burnSpellKnown && burnSpell.SchoolMask&1 != 0 && burnSpell.SchoolMask&0x7E != 0
+		if !burnFixedDamage && aura.SchoolMask&1 != 0 && !isHybridBurn {
 			// Unit.cpp:1693 — the burn tick only runs with a live caster
 			// session (nil burnCaster returns above), so the armor curve
 			// keys on its live level, like C++'s attacker->GetLevel().
@@ -29414,7 +29672,29 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// the live resistance fold (22/101/143) lands on every creature
 			// victim's resistances.
 			burnResistances := s.server.petFoldedResistances(key, target.Resistances)
-			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), burnResistances, burnCaster.player.Level, target.Level, true, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), pen)
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the post-mitigation damage, like
+			// the C++ leg inside DealDamage; it uses the tick pipeline's
+			// armor model (the simplified calcArmorReducedDamage form).
+			hybridArmorReduced := uint32(0)
+			if isHybridBurn {
+				armorValue := float64(target.Armor)
+				if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+					armorValue = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
+				}
+				if armorValue > 0 {
+					hybridArmorReduced = calcArmorReducedDamage(armorValue, burnCaster.player.Level, target.Level, dmg)
+				} else {
+					hybridArmorReduced = dmg
+				}
+			}
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), burnResistances, burnCaster.player.Level, target.Level, true, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+				ignoreResistances:  burnSpellKnown && burnSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             burnSpellKnown && burnSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridBurn,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    burnCaster.casterTargetResistMod(uint32(aura.SchoolMask)),
+			}, pen)
 		}
 		if dmg < 1 && burnResisted == 0 {
 			dmg = 1
@@ -35893,6 +36173,7 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 		alive := motion.Health > 0
 		resistances := motion.Resistances
 		level := motion.Level
+		victimArmor := motion.Armor
 		s.server.motionMu.Unlock()
 		if !alive {
 			continue
@@ -35903,7 +36184,23 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 			// the live resistance fold (22/101/143) lands on every creature
 			// victim's resistances.
 			resistances := s.server.petFoldedResistances(creatureAuraKeyForMotion(motion), resistances)
-			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, uint8(level), true, false, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), s.player.SpellPenetration)
+			// Hybrid (melee+magic) spells cap the resisted amount at the
+			// armor reduction (Unit.cpp:1764-1770); the attacker is the
+			// player caster, so the player-side 123/270/269/SPELLMOD armor
+			// legs and ArP apply (Unit.cpp:1632-1675).
+			isHybrid := spell.SchoolMask&1 != 0 && spell.SchoolMask&0x7E != 0
+			hybridArmorReduced := uint32(0)
+			if isHybrid {
+				armor := s.ignoreTargetResistArmor(float64(victimArmor), spell)
+				hybridArmorReduced = calcArmorReducedDamage(armor, s.player.Level, uint8(level), damage, s.getArmorPenPct(ctx, spellWeaponAttackType(spell)))
+			}
+			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, uint8(level), true, false, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), spellResistInput{
+				ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybrid,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    s.casterTargetResistMod(uint32(schoolMask)),
+			}, s.player.SpellPenetration)
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857, 1977-2060): the
 		// attacker's absorb-ignore pct (194/245) bypasses shields, then

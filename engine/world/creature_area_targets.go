@@ -192,8 +192,14 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// spellInfo runs the arm, so an unknown spell does too. The
 		// SPELLMOD_IGNORE_ARMOR / player-ARP / npcbot legs are
 		// player-or-bot-gated in C++ — a creature caster gets none.
+		// Hybrid (melee+magic) spells skip this arm: C++ strips the NORMAL
+		// bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor is
+		// false for them, and the armor comparison moves into
+		// CalcSpellResistedDamage (Unit.cpp:1764-1770) — which runs even
+		// under CU_IGNORE_ARMOR.
+		isHybridSpell := inlineSpellKnown && inlineSpell.SchoolMask&spellSchoolMaskNormal != 0 && inlineSpell.SchoolMask&0x7E != 0
 		if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 &&
-			(!inlineSpellKnown || inlineSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
+			!isHybridSpell && (!inlineSpellKnown || inlineSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
 			armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(motion), float64(p.Sess.player.Armor), inlineSpell, inlineSpellKnown)
 			damage = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, damage)
 		}
@@ -300,11 +306,34 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// the post-switch damage, ahead of the resist/absorb tail.
 		damage = s.autoBalanceModifyDealDamage(motion, p.Sess, damage)
 		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060) resistance leg:
-		// partial resists run for magic schools only; the creature caster
-		// carries no ignore-resist model, so the ignored pct is 0 (the pet
-		// path passes 0 too).
+		// partial resists run for magic schools only. The creature caster's
+		// SPELL_AURA_MOD_TARGET_RESISTANCE (123) misc-mask sum lands on the
+		// template resistance (Unit.cpp:1791-1792); the spell-derived
+		// ATTR4/binary/hybrid arms ride the spellResistInput.
 		if damage > 0 && schoolMask > 1 {
-			resisted, damage = calcMagicSpellResistance(damage, schoolMask, p.Sess.player.Resistances, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, false, false, 0)
+			mask123 := uint32(schoolMask)
+			if mask123&0x7E != 0 {
+				mask123 &^= 1
+			}
+			var targetResistMod int32
+			for _, amount := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(motion), spellAuraModTargetResistance, mask123) {
+				targetResistMod += amount
+			}
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the post-crit damage, like the
+			// C++ leg inside DealDamage.
+			hybridArmorReduced := uint32(0)
+			if isHybridSpell {
+				armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(motion), float64(p.Sess.player.Armor), inlineSpell, inlineSpellKnown)
+				hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, damage)
+			}
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, p.Sess.player.Resistances, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, false, false, 0, spellResistInput{
+				ignoreResistances:  inlineSpellKnown && inlineSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             inlineSpellKnown && inlineSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridSpell,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    targetResistMod,
+			})
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857) absorb leg: max(194
 		// misc-masked pct, 245 ability pct affecting the cast spell) of the

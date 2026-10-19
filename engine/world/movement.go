@@ -1767,7 +1767,7 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		} else if ignoreResist > 100 {
 			ignoreResist = 100
 		}
-		resist, damage = calcMagicSpellResistance(damage, schoolMask, s.player.Resistances, s.player.Level, s.player.Level, false, false, ignoreResist, s.player.SpellPenetration)
+		resist, damage = calcMagicSpellResistance(damage, schoolMask, s.player.Resistances, s.player.Level, s.player.Level, false, false, ignoreResist, spellResistInput{targetResistMod: s.casterTargetResistMod(uint32(schoolMask))}, s.player.SpellPenetration)
 		if damage > 0 {
 			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
 			absorbed, remaining := s.applyAbsorptionShields(damage-bypass, schoolMask)

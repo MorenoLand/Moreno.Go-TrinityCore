@@ -189,7 +189,7 @@ type Spell struct {
 	DispelType             uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
 	Mechanic               uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 	Attributes             uint32
-	AttributesCu           uint32 // computed, not DBC: SPELL_ATTR0_CU_NEGATIVE_EFF* bits (SpellInfo.h:190-203), filled by initializeSpellPositivity
+	AttributesCu           uint32 // computed, not DBC: SPELL_ATTR0_CU_NEGATIVE_EFF* bits (SpellInfo.h:190-203), filled by initializeSpellPositivity, plus SPELL_ATTR0_CU_BINARY_SPELL (SpellInfo.h:198), filled by initializeSpellBinaryFlag
 	SpellFamilyName        uint32
 	SpellFamilyFlags       [3]uint32
 	SpellIconID            uint32    // Spell.dbc field 133 = SpellIconID (DBCStructure.h:1465)
@@ -885,7 +885,10 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 	// (SpellInfo.cpp:3848-3886); the value is a pure function of DBC data,
 	// so the cache is behavior-identical to recomputing. The lock is not
 	// held across the computation: the trigger arm's s.spell lookup takes
-	// s.mu internally.
+	// s.mu internally. The binary-spell custom attribute
+	// (SpellMgr::LoadSpellInfoCustomAttributes, SpellMgr.cpp:2755-2825) is
+	// computed in the same memoized block; the cache holds the full
+	// AttributesCu word, not just the positivity bits.
 	s.positivityMu.RLock()
 	cu, cached := s.positivity[id]
 	s.positivityMu.RUnlock()
@@ -898,6 +901,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 			}
 			return triggered, true
 		}, visiting)
+		initializeSpellBinaryFlag(&spell)
 		cu = spell.AttributesCu
 		s.positivityMu.Lock()
 		if s.positivity == nil {
