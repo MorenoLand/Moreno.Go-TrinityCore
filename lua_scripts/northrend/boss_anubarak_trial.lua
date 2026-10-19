@@ -109,7 +109,10 @@
 -- precedent) + Talk(EMOTE_LEECHING_SWARM 6) +
 -- Talk(SAY_LEECHING_SWARM 5) (ride the unbridged leg).
 -- boss_anubarak_trial JustDied's grid despawn of frost spheres
--- and burrowers — no despawn bridge (terestian precedent).
+-- and burrowers — creature:Despawn() IS bridged
+-- (engine/world/lua_creature_events.go:236; the old "no despawn bridge
+-- (terestian precedent)" claim is stale); the arm stays out behind the
+-- unbridged grid-search (GetCreatureListWithEntryInGrid) leg.
 -- npc_swarm_scarab — zero registration beyond the JustDied arm.
 -- Reset: DoCast(me, Acid Mandible 65774) + DoZoneInCombat +
 -- cross-AI JustSummoned — no zone-in-combat / cross-AI / instance
@@ -141,8 +144,10 @@
 -- npc_anubarak_spike (34660) — zero registration (entry
 -- verifiable from the Summons enum, but zero bridgeable arms —
 -- joins the entry-verifiable-but-bridge-blocked queue): DamageTaken
--- uiDamage = 0 (no DamageTaken hook — npc_unkor_the_ruthless
--- precedent); the whole chase machine — DoCast(target, Mark
+-- uiDamage = 0 (event 9 IS bridged — the old "no DamageTaken hook
+-- (npc_unkor_the_ruthless precedent)" claim is stale; the arm stays
+-- out behind the unbridged motion/threat machine); the whole chase
+-- machine — DoCast(target, Mark
 -- 67574) + SetSpeedRate + threat reset + AddThreat + AttackStart
 -- (no motion / threat bridges); the phase-speed legs (DoCastSelf
 -- Spike Speed 65920/65922/65923 + Spike Trail 65921, 7s phase
@@ -153,7 +158,8 @@
 -- SetReactState(REACT_PASSIVE) + DoCast(Frost Sphere 67539) +
 -- SetDisplayId + MoveRandom (no react / display / motion-master
 -- bridges); DamageTaken + MovementInform(POINT_FALL_GROUND)
--- ground-impact machine (no DamageTaken / MovementInform hooks;
+-- ground-impact machine (event 9 DamageTaken IS bridged — the old
+-- "no DamageTaken hook" claim is stale; no MovementInform hook;
 -- no flag / aura / display / motion bridges).
 -- spell_pursuing_spikes (AuraScript 65920/65922/65923) —
 -- PeriodicTick permafrost-caster check -> Spike Fail 66181 +

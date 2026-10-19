@@ -67,6 +67,12 @@
 -- (no cross-AI bridge).
 -- base JustReachedHome: controller SetData(2, FAIL) + DespawnOrUnsummon
 -- (no bridges).
+-- Reset-scan note (2026-10-19): the 16592 SPELL_SHADOWFORM DoCast(me)
+-- flagged against this file belongs to npc_toc_shadow_priestAI::Reset
+-- (boss_faction_champions.cpp:1141-1156), a separate unported champion
+-- AI with no Lua file — not to npc_toc_boomkinAI::Reset, which casts
+-- nothing. The shadow priest's whole rotation is unported (scope:
+-- champion AIs beyond the boomkin stay out).
 -- base AttackStart / AI_RANGED movement legs (no motion-master bridge);
 -- faction targeting is DB-side (the _teamInstance GetData(DATA_TEAM)
 -- leg has no bridge — the creature attacks per its template faction).

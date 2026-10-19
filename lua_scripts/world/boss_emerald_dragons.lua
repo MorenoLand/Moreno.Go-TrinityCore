@@ -48,8 +48,13 @@
 -- triggered) non-targeted self-cast + RemoveFlag NOT_SELECTABLE /
 -- NON_ATTACKABLE + SetReactState(REACT_AGGRESSIVE) + the EVENT_TAIL_SWEEP
 -- / EVENT_NOXIOUS_BREATH / EVENT_SEEPING_FOG ScheduleEvent legs (the
--- self-cast rides the vaelastrasz self-cast convention but is not a
--- Talk arm; timers / flags / react-state have no bridges).
+-- self-cast is bridgeable in isolation (CastSpell(creature, 25041, true))
+-- but its whole mechanical payload rides unbridged legs: the aura's 10s
+-- tick triggers 25042 whose effect is the SpellScript-only
+-- spell_mark_of_nature (no SpellScript bridge), and the 25040 mark it
+-- tests for is applied by the unportable victim-self-cast KilledUnit leg
+-- below — a ported cast would apply a mechanically inert aura; flags /
+-- react-state have no bridges).
 -- emerald_dragonAI UpdateAI — the SPELL_SUMMON_PLAYER 24776 max-threat
 -- pull + DoMeleeAttackIfReady legs (no bridges); the base event machine
 -- (EVENT_SEEPING_FOG 120-150s DoCast pair, EVENT_NOXIOUS_BREATH 7.5-15s,

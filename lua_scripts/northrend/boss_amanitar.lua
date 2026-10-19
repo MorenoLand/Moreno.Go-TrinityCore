@@ -76,8 +76,10 @@
 -- the passive react-state bridge would leave the creature
 -- engaging players — fails the C++-exact port bar. The
 -- MoveInLineOfSight player-proximity poison leg (2.0f, _active
--- latch): target RemoveAurasDueToSpell(Potent Fungus 56648) (no
--- aura-removal bridge — aeranas precedent), DoCastAOE(Poisonous
+-- latch): target RemoveAurasDueToSpell(Potent Fungus 56648)
+-- (player:RemoveAura IS bridged — engine/world/lua_player.go:219; the
+-- old "no aura-removal bridge (aeranas precedent)" claim is stale),
+-- DoCastAOE(Poisonous
 -- Mushroom Poison Cloud 57061) (stays out: summon STRAND absent),
 -- SetObjectScale(0.1f) (no scale bridge), DespawnOrUnsummon(4s)
 -- (stale "no despawn bridge" retracted — creature:Despawn() is

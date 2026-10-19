@@ -92,7 +92,9 @@
 -- instance->DoCastSpellOnPlayers(LIGHT_S_HAMMER_TELEPORT) /
 -- DoZoneInCombat / instance->SetBossState(DATA_PROFESSOR_PUTRICIDE,
 -- IN_PROGRESS) — no instance bridge; JustDied DoCastAOE(
--- SPELL_UNHOLY_INFUSION_CREDIT) leg has no-cast bridge;
+-- SPELL_UNHOLY_INFUSION_CREDIT) leg: cast bridge exists
+-- (creature:CastSpell self-cast triggered) but the arm is gated on
+-- Is25ManRaid() — no 25-man bridge, stays out;
 -- JustReachedHome instance->SetBossState(FAIL) — no instance
 -- bridge.
 -- npc_volatile_ooze / npc_gas_cloud (npc_putricide_oozeAI, lines

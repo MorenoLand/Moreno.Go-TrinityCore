@@ -39,12 +39,17 @@
 -- KilledUnit — player-gated Talk(SAY_SLAY 1) (cpp:159, event
 -- 3; who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
--- JustDied — Talk(SAY_DEATH 6) (cpp:148, event 4; the DoCast
--- SPELL_KOLOGARN_PACIFY 63726 leg, the MoveTargetedHome leg,
--- the SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+-- JustDied — Talk(SAY_DEATH 6) (cpp:148, event 4; the MoveTargetedHome
+-- leg, the SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 -- leg, the SetCorpseDelay(604800) leg and the _JustDied()
 -- passthrough have no bridges — the sjonnir JustDied-Talk
--- precedent).
+-- precedent). The DoCast(SPELL_KOLOGARN_PACIFY 63726) leg has a
+-- cast bridge (creature:CastSpell, lua_creature_events.go:62) but
+-- stays out as a no-op: corpse-management-cluster self-pacify on
+-- a dead caster — the Go combat tick already gates dead
+-- creatures (stepCreatureMotion Health==0 early-return,
+-- creaturemotion.go), so the aura changes nothing (shazzrah
+-- no-op-cast precedent).
 -- EVENT_ENRAGE — DoCast(SPELL_BERSERK 47008) (self-cast,
 -- non-triggered) + Talk(SAY_BERSERK 7) (cpp:279-281); 10min
 -- init from JustEngagedWith (cpp:129), one-shot (no re-arm).
@@ -249,7 +254,8 @@ end
 
 -- C++ JustDied: DoCast PACIFY + MoveTargetedHome + SetFlag +
 -- SetCorpseDelay + _JustDied() + Talk(SAY_DEATH) — only the
--- Talk arm is bridgeable.
+-- Talk arm is ported (the PACIFY cast is bridgeable but a no-op
+-- on a dead caster — see header).
 local function kologarnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)

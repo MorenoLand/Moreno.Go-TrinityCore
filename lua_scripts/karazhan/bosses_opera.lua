@@ -216,8 +216,9 @@ RegisterCreatureEvent(ENTRY_DOROTHEE, 24, dorotheeReachHome)
 
 -- Tito (npc_tito, C++ ScriptName for 17548): yipping 31015 on the victim
 -- every 10s. Never summoned (no summon model); registered so any spawned
--- Tito fights correctly. The JustDied → Dorothee TitoDied arm needs the
--- cross-AI pointer, no bridge.
+-- Tito fights correctly. The JustDied → Dorothee arm (TitoDied write plus
+-- Tito Talk(SAY_DOROTHEE_TITO_DEATH = 2), both gated on Dorothee being found
+-- alive via ObjectAccessor) needs the cross-AI pointer, no bridge.
 local SPELL_YIPPING = 31015
 
 local function titoYip(creature, guid)

@@ -45,6 +45,13 @@
 -- npc_ancient_rune_giantAI EVENT_RUNE_DETONATION (enum line 125; arm
 -- lines 1567-1571, Repeat(10s,12s)) — random player target 60y,
 -- DoCast(target, SPELL_RUNE_DETONATION 62526), non-triggered.
+-- npc_thorim_trashAI JustEngagedWith (lines 1272-1281) — the
+-- DARK_RUNE_WARBRINGER-gated arm: DoCast(me, SPELL_AURA_OF_CELERITY
+-- 62320), 2-arg = non-triggered self-cast. The gate is entry-resolved
+-- in C++ (entry 32877 = NPC_DARK_RUNE_WARBRINGER, ulduar.h:184), so the
+-- port registers that entry directly; the companion
+-- DoAction(ACTION_ACTIVATE_RUNIC_SMASH) leg on the runic colossus has
+-- no DoAction / instance bridge.
 --
 -- DOCUMENTED-ONLY (no bridge; not registered):
 -- boss_thorimAI EVENT_SAY_SIF_START (lines 700-702) / EVENT_START_SIF_CHANNEL
@@ -79,13 +86,17 @@
 -- npc_sifAI (entry 33196) — all events gated by DoAction(ACTION_START_HARD_MODE);
 -- no DoAction bridge; not registered.
 -- npc_thorim_pre_phaseAI / npc_thorim_arena_phaseAI — per-entry trash-ability
--- tables (separate trash creature entries, not the boss file scope).
+-- tables (separate trash creature entries, not the boss file scope); the
+-- DARK_RUNE_WARBRINGER AURA_OF_CELERITY engage arm is ported (see PORTED
+-- ARMS), the per-entry Reset ability-schedule tables and the arena-phase
+-- DoAction legs stay out.
 -- The ten spell scripts / condition_thorim_arena_leap / three achievements —
 -- no SpellScript / AuraScript / ConditionScript / achievement bridges.
 
 local ENTRY_THORIM = 32865
 local ENTRY_RUNIC_COLOSSUS = 32872
 local ENTRY_ANCIENT_RUNE_GIANT = 32873
+local ENTRY_DARK_RUNE_WARBRINGER = 32877
 
 local SAY_AGGRO_1 = 0
 local SAY_SLAY = 4
@@ -101,6 +112,9 @@ local EMOTE_RUNIC_MIGHT = 0
 local SPELL_RUNIC_FORTIFICATION = 62942
 local SPELL_STOMP = 62411
 local SPELL_RUNE_DETONATION = 62526
+
+-- Dark Rune Warbringer (arena-phase trash)
+local SPELL_AURA_OF_CELERITY = 62320
 
 local timers = {}
 
@@ -312,3 +326,16 @@ RegisterCreatureEvent(ENTRY_ANCIENT_RUNE_GIANT, 1, giantEnterCombat)
 RegisterCreatureEvent(ENTRY_ANCIENT_RUNE_GIANT, 2, giantLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANCIENT_RUNE_GIANT, 4, giantDied)
 RegisterCreatureEvent(ENTRY_ANCIENT_RUNE_GIANT, 23, giantReset)
+
+-- C++ npc_thorim_trashAI::JustEngagedWith (boss_thorim.cpp:1272-1281):
+-- if (_info->Type == DARK_RUNE_WARBRINGER) DoCast(me,
+-- SPELL_AURA_OF_CELERITY 62320), 2-arg = non-triggered self-cast.
+-- The gate is entry-resolved (entry 32877 = NPC_DARK_RUNE_WARBRINGER,
+-- ulduar.h:184), so the arm registers on that entry directly; the
+-- companion DoAction(ACTION_ACTIVATE_RUNIC_SMASH) colossus leg has no
+-- DoAction / instance bridge.
+local function warbringerEnterCombat(event, creature, target)
+    creature:CastSpell(creature, SPELL_AURA_OF_CELERITY)
+end
+
+RegisterCreatureEvent(ENTRY_DARK_RUNE_WARBRINGER, 1, warbringerEnterCombat)

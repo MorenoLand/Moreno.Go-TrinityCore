@@ -41,9 +41,10 @@
 -- keep the schedule (jeklik convention). OnTargetDied(3):
 -- Talk(SAY_SLAY), TYPEID_PLAYER gate (terestian convention).
 -- OnDied(4): Talk(SAY_DEATH); the DoCast(SPELL_SHADOW_OF_DEATH_
--- REMOVE 41999) arm has no bearer — its entire effect lives in the
--- spell_shade-of-death-remove SpellScript, which has no bridge
--- (standing SpellScript gap). OnLeaveCombat(2)/OnReset(23): cancel
+-- REMOVE 41999) arm ports as a non-triggered self-cast (plain DoCast
+-- default triggered=false — vaelastrasz convention); its aura-removal
+-- arms live in the unmodeled SpellScript (no SpellScript bridge —
+-- shazzrah precedent: the cast fires, the script effect never happens). OnLeaveCombat(2)/OnReset(23): cancel
 -- timers. The C++ intro arms (Reset's DATA_TERON_GOREFIEND_INTRO
 -- gate, DoAction(ACTION_START_INTRO) + Talk(SAY_INTRO) + 20s
 -- EVENT_FINISH_INTRO, the NON_ATTACKABLE/NOT_SELECTABLE/REACT_
@@ -95,6 +96,7 @@ local SPELL_SHADOW_OF_DEATH = 40251
 local SPELL_BERSERK = 45078
 local SPELL_SUMMON_DOOM_BLOSSOM = 40188
 local SPELL_SPIRITUAL_VENGEANCE = 40268
+local SPELL_SHADOW_OF_DEATH_REMOVE = 41999
 
 local timers = {}
 
@@ -257,11 +259,15 @@ local function teronTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH). The DoCast(SPELL_SHADOW_OF_DEATH_
--- REMOVE) arm has no bearer — its effect lives in the unmodeled
--- SpellScript.
+-- C++ JustDied: Talk(SAY_DEATH) + the plain DoCast(SPELL_SHADOW_
+-- OF_DEATH_REMOVE 41999) arm (boss_teron_gorefiend.cpp:163; DoCast
+-- self-casts since 41999 carries no enemy-area effect target —
+-- UnitAI::FillAISpellInfo leaves AITARGET_SELF). The 41999 aura-
+-- removal arms live in the unmodeled SpellScript (no SpellScript
+-- bridge — shazzrah precedent: cast fires, script effect unmodeled).
 local function teronDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:CastSpell(creature, SPELL_SHADOW_OF_DEATH_REMOVE, false)
     teronResetState(creature:GetGUID())
 end
 

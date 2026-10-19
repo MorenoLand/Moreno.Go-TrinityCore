@@ -65,10 +65,11 @@
 -- SetGUID(_flameSphereTargetGUID) from the boss JustSummoned leg has no
 -- cross-AI bridge, EVENT_START_MOVE's ObjectAccessor::GetUnit target
 -- lookup + GetAbsoluteAngle MovePoint choreography has no motion-master
--- bridge, and EVENT_DESPAWN (DoCast 55947 + DespawnOrUnsummon) is behind
--- the despawn bridge (terestian precedent) — registering the two
--- cosmetic casts alone would leave the creature motionless and
--- non-despawning, failing the faithful-port bar.
+-- bridge; EVENT_DESPAWN's DespawnOrUnsummon leg is bridged
+-- (creature:Despawn(), engine/world/lua_creature_events.go:236 — the old
+-- "no despawn bridge (terestian precedent)" claim is stale) — registering
+-- the two cosmetic casts alone would still leave the creature motionless
+-- (the motion-master blocker stands), failing the faithful-port bar.
 -- go_prince_taldaram_sphere (193093 / 193094 Ancient Nerubian Device,
 -- OnGossipHello: SetFlag NOT_SELECTABLE + SetGoState ACTIVE +
 -- instance SetData(DATA_SPHERE_1/2) + boss Talk(SAY_1 0) +

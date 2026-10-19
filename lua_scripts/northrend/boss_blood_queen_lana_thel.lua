@@ -42,7 +42,9 @@
 -- instance bridge; PORTED (2026-10-13): the three triggered
 -- self-cast auras (:188-190) — curator engage-cast precedent.
 -- boss_blood_queen_lana_thel JustDied — DoCastAOE(
--- SPELL_BLOOD_INFUSION_CREDIT) leg has no-cast bridge;
+-- SPELL_BLOOD_INFUSION_CREDIT) leg: cast bridge exists
+-- (creature:CastSpell self-cast triggered) but the arm is gated on
+-- Is25ManRaid() — no 25-man bridge, stays out;
 -- instance->SetData(DATA_BLOOD_QUICKENING_STATE, DONE) /
 -- RewardPlayerAndGroupAtEvent / FindNearestCreature minchar legs
 -- have no instance bridge.

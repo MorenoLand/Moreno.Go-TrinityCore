@@ -49,7 +49,8 @@
 -- player-gated variant precedent).
 -- boss_sindragosa JustDied — Talk(SAY_DEATH 10) (event 4 — the
 -- sjonnir JustDied-Talk precedent; the DoCastAOE
--- FROST_INFUSION_CREDIT heroic leg is gated on Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE) (:262-264); no difficulty/aura bridge).
+-- FROST_INFUSION_CREDIT heroic leg is gated on Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE) (:262-264); no 25-man difficulty bridge
+-- (creature:HasAura IS bridged — the Is25ManRaid gate alone blocks the arm).
 -- DOCUMENTED-ONLY (in this header; only entry 36853 registered):
 -- PORTED (2026-10-13): JustEngagedWith — DoCastSelf(
 -- SPELL_FROST_AURA 70084) + DoCastSelf(SPELL_PERMAEATING_CHILL 70109)

@@ -89,7 +89,7 @@
 -- bridge (confirmed zero bindings in the Lua-facing engine this
 -- run); the captured soulmodel/soulholder/soulclass exist only
 -- for this leg.
--- boss_exarch_maladaarAI::JustDied D'ore leg (:223) —
+-- boss_exarch_maladaarAI::JustDied D'ore leg (:248-253) —
 -- me->SummonCreature(19412, -4.40722f, -387.277f, 40.6294f,
 -- 6.26573f, TEMPSUMMON_MANUAL_DESPAWN) — same no-summon bridge.
 -- DoMeleeAttackIfReady — no melee bridge (the alar precedent).

@@ -28,10 +28,24 @@
 -- script names hits boss_algalon_the_observer.cpp (+ the loader decl/call
 -- lines for AddSC_boss_algalon_the_observer) only; zero sql/ hits for all
 -- seventeen. Lua body: ported Oct 2 09:46 in 8af8496; re-audited this run
--- — both ported arms C++-exact (player-gated event-3 slay with the
--- os.time() 1s rate-limit deadline; event-9 phase-two threshold+latch).
--- Eluna creature events: 3 OnTargetDied, 9 OnDamageTaken, 23 OnReset.
+-- — the event-3 slay (os.time() 1s rate-limit deadline), event-9 phase-two
+-- threshold+latch, JustEngagedWith intro-Talk/_firstPull and the combat
+-- timer arms are C++-exact.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
+-- 4 OnDied, 9 OnDamageTaken, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
+-- JustEngagedWith intro Talks — the _firstPull flag (set true once in the
+-- AI ctor, :291; never cleared by Reset()/Initialize(), :293-296) chooses
+-- Talk(SAY_ALGALON_START_TIMER 3) + 26500ms intro (first pull, :377-387)
+-- vs Talk(SAY_ALGALON_AGGRO 4) + 8s intro (later pulls, :370-376); mirrored
+-- as a per-GUID Lua latch (script-lifetime, NOT wiped by event 23 —
+-- C++-exact). First pull also schedules EVENT_START_COMBAT (16s, :554-559)
+-- -> Talk(SAY_ALGALON_AGGRO 4) (the PlayDirectMusic +
+-- instance->SetBossState(IN_PROGRESS) companion legs have no bridges).
+-- The remaining JustEngagedWith legs (SetFlag NOT_SELECTABLE,
+-- SetImmuneToNPC, DoZoneInCombat, summons.DespawnEntry(NPC_AZEROTH),
+-- instance->SetData, PlayDirectMusic, BossAI::JustEngagedWith passthrough)
+-- have no bridges.
 -- KilledUnit — player-gated Talk(SAY_ALGALON_KILL 20) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious player-gated
 -- variant precedent — at least the fortieth player-gated variant ported
@@ -49,11 +63,6 @@
 -- worm-hole summons) have no bridges — documented only.
 -- DOCUMENTED-ONLY (in this header; ENTRY_LIVING_CONSTELLATION 33052 is
 -- registered too — entry-verifiable):
--- JustEngagedWith — the _firstPull flag chooses Talk(SAY_ALGALON_START_TIMER
--- 3) (first pull, 26.5s intro) vs Talk(SAY_ALGALON_AGGRO 4) (later pulls)
--- — no bridge for the construction/instance flag; event 1 IS registered
--- (algalonTimersStart — combat-start timer gate) but the intro Talks are
--- not ported (no single C++-exact yell).
 -- DamageTaken _fightWon branch — (health - damage) below 2.5% of max:
 -- damage = 0 + the outro event machine (REACT_PASSIVE, AttackStop,
 -- SPELL_SELF_STUN self-cast, summons.DespawnAll, EVENT_OUTRO_START ...)
@@ -79,7 +88,8 @@
 -- fabricate them mid-fight. EVENT_INTRO_TIMER_DONE (:560-584) has NO Talk
 -- arm (header correction this run) — pure machinery (SetPhase(NORMAL),
 -- constellation summons); Talk(AGGRO 4) fires in JustEngagedWith
--- non-first-pull (:372) and EVENT_START_COMBAT (:555, 16s, first-pull only).
+-- non-first-pull (:372) and EVENT_START_COMBAT (:555, 16s, first-pull
+-- only) — both now ported via the _firstPull latch above.
 -- Outro machine: Talk 12..16 (:664-682, EVENT_OUTRO_6..10) chained from the
 -- DamageTaken _fightWon branch (:483-495) via MovementInform spline arrival
 -- (:413) and a Brann-summon DoAction(:657-661) — unbridged; a Talk-only
@@ -119,6 +129,8 @@
 
 local ENTRY_ALGALON = 32871
 
+local SAY_ALGALON_START_TIMER = 3
+local SAY_ALGALON_AGGRO = 4
 local SAY_ALGALON_PHASE_TWO = 11
 local SAY_ALGALON_KILL = 20
 
@@ -126,6 +138,13 @@ local SAY_ALGALON_KILL = 20
 -- 20% threshold) and _hasYelled (the 1s kill-yell rate limit). C++
 -- Reset() -> Initialize() clears both; event 23 does the same here.
 local algalonState = {}
+
+-- C++ _firstPull (boss_algalon_the_observer.cpp:291): set true once in the
+-- AI ctor, never cleared by Reset()/Initialize() (:293-296) — mirrored as
+-- a per-GUID latch that event 23 deliberately does NOT wipe (C++-exact);
+-- event 4 (death -> fresh AI on respawn) clears it back to first-pull.
+-- Absent key = true (never pulled since script load, like a fresh AI).
+local algalonFirstPull = {}
 
 local function getState(guid)
     local state = algalonState[guid]
@@ -215,9 +234,9 @@ RegisterCreatureEvent(ENTRY_ALGALON, 23, algalonReset)
 -- boss arms are scheduled in JustEngagedWith with NO phase/group args —
 -- valid in all phases (phase-arg arms like the voice-of-Yogg-Saron kit are
 -- the gothik-blocked kind; these are not). DOCUMENTED DEVIATIONS: (1)
--- introDelay is 26500ms on true first pull / 8s on later pulls
--- (:364-386); the _firstPull flag has no bridge, so the re-pull 8s path is
--- used — timers fire ~18.5s early on a genuine first pull. (2)
+-- introDelay is selected by the _firstPull latch (26500ms first pull /
+-- 8s later pulls, :364-386) — the 2026-10-16 "re-pull 8s path always"
+-- deviation is superseded by the latch port above. (2)
 -- EVENT_ASCEND_TO_THE_HEAVENS schedules EVENT_EVADE 2.5s later
 -- (EnterEvadeMode — boss-state FAIL, no bridge); only the Talk+cast arm is
 -- ported, so the lua boss stays in combat ~2.5s past enrage. (3)
@@ -241,7 +260,8 @@ local ENTRY_LIVING_CONSTELLATION = 33052
 local SAY_ALGALON_ASCEND = 9
 local EMOTE_ALGALON_COSMIC_SMASH = 10
 
--- Re-pull introDelay (:376); first-pull 26500ms unbridged — see (1) above.
+-- Later-pull introDelay (:376); the first-pull 26500ms path is selected
+-- by the _firstPull latch in algalonTimersStart above.
 local INTRO_DELAY = 8000
 
 -- C++ boss_algalon_the_observerAI::EVENT_QUANTUM_STRIKE:
@@ -283,25 +303,56 @@ local function ascendTick(creature, guid)
     creature:CastSpell(creature, SPELL_ASCEND_TO_THE_HEAVENS)
 end
 
+-- C++ JustEngagedWith (boss_algalon_the_observer.cpp:362-386): the
+-- _firstPull latch chooses the arm. First pull (:377-387):
+-- Talk(SAY_ALGALON_START_TIMER 3), introDelay = 26500ms,
+-- EVENT_START_COMBAT scheduled in 16s. Later pulls (:370-376):
+-- Talk(SAY_ALGALON_AGGRO 4), introDelay = 8s. The combat timer arms
+-- below ride the same introDelay (the maiden CreateLuaEvent convention).
 local function algalonTimersStart(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "quantumstrike", 3500 + INTRO_DELAY, function()
+    local introDelay
+    if algalonFirstPull[guid] == nil then
+        algalonFirstPull[guid] = false
+        creature:Talk(SAY_ALGALON_START_TIMER)
+        introDelay = 26500
+        -- C++ EVENT_START_COMBAT (:554-559, first-pull only, 16s):
+        -- Talk(SAY_ALGALON_AGGRO 4) (the PlayDirectMusic +
+        -- instance->SetBossState(IN_PROGRESS) legs have no bridges).
+        -- cancelTimers above mirrors the C++ events.Reset() (:366),
+        -- which also wipes a pending START_COMBAT on re-pull.
+        schedule(guid, "startcombat", 16000, function()
+            creature:Talk(SAY_ALGALON_AGGRO)
+        end)
+    else
+        creature:Talk(SAY_ALGALON_AGGRO)
+        introDelay = INTRO_DELAY
+    end
+    schedule(guid, "quantumstrike", 3500 + introDelay, function()
         quantumStrikeTick(creature, guid)
     end)
-    schedule(guid, "phasepunch", 15500 + INTRO_DELAY, function()
+    schedule(guid, "phasepunch", 15500 + introDelay, function()
         phasePunchTick(creature, guid)
     end)
-    schedule(guid, "cosmicsmash", 25000 + INTRO_DELAY, function()
+    schedule(guid, "cosmicsmash", 25000 + introDelay, function()
         cosmicSmashTick(creature, guid)
     end)
-    schedule(guid, "ascend", 360000 + INTRO_DELAY, function()
+    schedule(guid, "ascend", 360000 + introDelay, function()
         ascendTick(creature, guid)
     end)
 end
 
 local function algalonTimersStop(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ _firstPull lives on the AI object: death -> despawn -> respawn
+    -- constructs a fresh AI with _firstPull = true (boss_algalon_the_
+    -- observer.cpp:291). Wipes (event 2) keep the latch; only death
+    -- re-arms the first-pull intro. Gated on entry — the shared handler
+    -- also serves the living constellation.
+    if event == 4 and creature:GetEntry() == ENTRY_ALGALON then
+        algalonFirstPull[creature:GetGUID()] = nil
+    end
 end
 
 -- C++ npc_living_constellationAI::EVENT_ARCANE_BARRAGE:

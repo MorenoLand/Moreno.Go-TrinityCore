@@ -120,6 +120,12 @@
 -- Talk(SAY_ELDER_DEATH 2) (event 4; the _JustDied()
 -- passthrough has no bridge — the sjonnir JustDied-Talk
 -- precedent).
+-- npc_ancient_conservator JustEngagedWith (:1293-1296) —
+-- DoCast(who, SPELL_CONSERVATOR_GRIP 62532), triggered; who
+-- is the engaging unit (the event 1 target arg), bridged as
+-- creature:CastSpell(target, spell, true) per the file
+-- doctrine. The class's UpdateAI/summon legs stay out (see
+-- DOCUMENTED-ONLY).
 --
 -- DEVIATIONS from C++ (all bridge-limited, documented):
 -- - No UNIT_STATE_CASTING model in Go (creature casts are
@@ -189,7 +195,7 @@
 -- (:841-855: who->CastSpell(who, SPELL_PETRIFIED_BARK_DMG
 -- 62379) with AddSpellBP0(damage) + damage = 0): the
 -- spell-BP damage mod has no bridge; not timer-driven.
--- npc_ancient_conservator / npc_snaplasher /
+-- npc_snaplasher /
 -- npc_storm_lasher / npc_ancient_water_spirit /
 -- npc_detonating_lasher / npc_sun_beam / npc_nature_bomb /
 -- npc_eonars_gift / npc_healthy_spore /
@@ -200,8 +206,11 @@
 -- threat/AttackStart legs, summon/despawn/RemoveFromWorld/
 -- DisappearAndDie legs, SetReactState / SetFlag /
 -- SetImmuneToPC / SetCombatMovement legs,
--- FindNearestGameObject leg — no spawn / cast / movement /
--- threat bridges; no registrations.
+-- FindNearestGameObject leg — no spawn / movement /
+-- threat bridges; no registrations. (npc_ancient_conservator
+-- is registered for its engage arm only — see PORTED ARMS;
+-- its Reset/UpdateAI/summon legs stay out for the same
+-- reasons.)
 -- spell_freya_attuned_to_nature_dose_reduction /
 -- spell_freya_iron_roots — no SpellScript bridges; both join
 -- the no-SpellScript-bridge queue.
@@ -215,6 +224,7 @@ local ENTRY_FREYA = 32906
 local ENTRY_BRIGHTLEAF = 32915
 local ENTRY_STONEBARK = 32914
 local ENTRY_IRONBRANCH = 32913
+local ENTRY_ANCIENT_CONSERVATOR = 33203
 
 local SPELL_DRAINED_OF_POWER = 62467
 
@@ -237,6 +247,9 @@ local SPELL_GROUND_TREMOR = 62325
 local SPELL_IMPALE = 62310
 local SPELL_THORN_SWARM = 62285
 local SPELL_ROOTS_IRONBRANCH = 62438
+
+-- Ancient Conservator
+local SPELL_CONSERVATOR_GRIP = 62532
 
 local SAY_SLAY = 2
 local SAY_DEATH = 3
@@ -573,3 +586,14 @@ RegisterCreatureEvent(ENTRY_IRONBRANCH, 2, elderLeaveCombat)
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 3, elderTargetDied)
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 4, elderDied)
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 23, elderReset)
+
+-- C++ npc_ancient_conservator::JustEngagedWith
+-- (boss_freya.cpp:1293-1296): DoCast(who, SPELL_CONSERVATOR_GRIP
+-- 62532), triggered — who is the engaging unit, bridged as the
+-- event 1 target arg (creature:CastSpell(target, spell, true)
+-- per the file doctrine).
+local function conservatorEnterCombat(event, creature, target)
+    creature:CastSpell(target, SPELL_CONSERVATOR_GRIP, true)
+end
+
+RegisterCreatureEvent(ENTRY_ANCIENT_CONSERVATOR, 1, conservatorEnterCombat)

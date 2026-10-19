@@ -130,11 +130,12 @@
 -- POINT_MOTION_TYPE point 0: urand
 -- 1/4 re-move else DisappearAndDie (no MovementInform / despawn
 -- bridges) — documented-only.
--- npc_bullet_controller (34743 — entry-unverifiable): Reset
--- DoCastAOE(Bullet Controller Periodic 66149) — stays out: the whole
--- effect is the spell_bullet_controller AuraScript (shazzrah
--- precedent) + entry-unverifiable; UpdateAI: UpdateVictim only —
--- documented-only.
+-- npc_bullet_controller (34743 — entry-verifiable: NPC_BULLET_
+-- CONTROLLER in the file's Summons enum, boss_twin_valkyr.cpp:60; the
+-- old "entry-unverifiable" note was stale): Reset DoCastAOE(Bullet
+-- Controller Periodic 66149) — stays out: the whole effect is the
+-- spell_bullet_controller AuraScript (shazzrah precedent); UpdateAI:
+-- UpdateVictim only — documented-only.
 -- spell_bullet_controller (AuraScript 66149 — also 68396 in C++ note):
 -- PeriodicTick -> caster casts Summon Periodic Light 66152 +
 -- Summon Periodic Dark 66153 (triggered, SPELLVALUE_MAX_TARGETS

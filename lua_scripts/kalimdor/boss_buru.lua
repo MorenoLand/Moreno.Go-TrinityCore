@@ -38,9 +38,17 @@
 -- - ChaseNewVictim's target switch (SelectTarget Random +
 --   ResetThreatList + AttackStart + Talk): no Lua bridge for any of
 --   the three calls.
--- - npc_buru_egg (JustEngagedWith / JustSummoned / JustDied):
---   cross-AI via instance GetGuidData(DATA_BURU) + dynamic_cast to
---   boss_buruAI + ManageRespawn — no bridge.
+-- - npc_buru_egg's cross-AI legs (JustEngagedWith/JustSummoned
+--   buru retargeting via instance GetGuidData(DATA_BURU);
+--   JustDied's ManageRespawn via dynamic_cast to boss_buruAI):
+--   no bridge. JustDied's three death-cast arms (boss_buru.cpp:225-233:
+--   DoCastAOE(SPELL_EXPLODE 19593, true) + DoCastAOE(SPELL_EXPLODE_2
+--   5255, true) + DoCast(me, SPELL_SUMMON_HATCHLING 1881, true)) are
+--   bridgeable (self-cast with `true` under the CastSpell bridge) but
+--   unregistrable: no NPC_BURU_EGG constant exists in
+--   ruins_of_ahnqiraj.h (the egg entry is DB-side via ScriptName
+--   "npc_buru_egg"), so there is no groundable entry to
+--   RegisterCreatureEvent on.
 -- - spell_egg_explosion (SpellScript: ACTION_EXPLODE on Buru at 5yd
 --   + distance-scaled dummy damage): no SpellScript bridge.
 -- - ACTION_EXPLODE's DealDamage(me, me, 45000): no bridge; also only

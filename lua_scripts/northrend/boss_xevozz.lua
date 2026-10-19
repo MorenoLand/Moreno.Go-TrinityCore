@@ -69,13 +69,16 @@
 -- second cast, 33-35s delayed summons.DoAction(ACTION_SUMMON)) stays
 -- out: the DoCast(me, summonSpell) legs are summon legs (the summoned
 -- sphere entry 29271 carries the unbridged npc_ethereal_sphere AI —
--- its ARCANE_POWER proximity machine, SAY_ETHEREAL_SPHERE_SUMMON
--- DoAction Talk leg and Reset POWER_BALL_VISUAL / POWER_BALL_DAMAGE_
--- TRIGGER self-casts have no bridges), the 33-35s delayed
--- summons.DoAction(ACTION_SUMMON) is a DoAction leg, the second cast
--- is IsHeroic()-gated (no difficulty bridge), and the Talk rides the
--- same leg — the emalon EVENT_OVERCHARGE precedent (whole event out
--- when its legs are unbridged). The JustSummoned MoveFollow leg
+-- its ARCANE_POWER proximity machine and SAY_ETHEREAL_SPHERE_SUMMON
+-- DoAction Talk leg have no bridges; the Reset POWER_BALL_VISUAL /
+-- POWER_BALL_DAMAGE_TRIGGER self-casts are bridgeable in isolation
+-- (CastSpell(creature, spell)) but the sphere is unreachable — Xevozz's
+-- summon leg above is unbridged, so 29271 can never exist in Go), the
+-- 33-35s delayed summons.DoAction(ACTION_SUMMON) is a DoAction leg,
+-- the second cast is IsHeroic()-gated (creature:IsHeroic() is bridged,
+-- lua_creature_events.go:282, but it rides the same unbridged summon
+-- leg), and the Talk rides the same leg — the emalon EVENT_OVERCHARGE
+-- precedent (whole event out when its legs are unbridged). The JustSummoned MoveFollow leg
 -- joins the no-MovementInform bridge queue; the JustReachedHome
 -- instance->SetData(DATA_HANDLE_CELLS, DATA_XEVOZZ) leg joins the
 -- no-instance-SetData bridge queue.

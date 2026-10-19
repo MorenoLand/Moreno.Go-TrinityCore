@@ -1,10 +1,10 @@
 -- Shade of Akama (Black Temple) — Lua port of
 -- src/server/scripts/Outland/BlackTemple/boss_shade_of_akama.cpp
--- (boss_shade_of_akama only; npc_akama_shade, npc_ashtongue_
--- channeler, npc_creature_generator_akama, npc_ashtongue_sorcerer,
--- npc_ashtongue_defender, npc_ashtongue_rogue, npc_ashtongue_
--- elementalist, npc_ashtongue_spiritbinder and npc_ashtongue_broken
--- documented below, not registered); black_temple.h:33 (DATA_SHADE_
+-- (boss_shade_of_akama plus npc_akama_shade's Reset stealth self-cast;
+-- npc_ashtongue_channeler, npc_creature_generator_akama,
+-- npc_ashtongue_sorcerer, npc_ashtongue_defender, npc_ashtongue_rogue,
+-- npc_ashtongue_elementalist, npc_ashtongue_spiritbinder and
+-- npc_ashtongue_broken documented below, not registered); black_temple.h:33 (DATA_SHADE_
 -- OF_AKAMA = 2, third boss), :42 (DATA_AKAMA_SHADE = 9), :73 (NPC_
 -- SHADE_OF_AKAMA = 22841). Creature entry: 22841 Shade of Akama
 -- (C++ ScriptName "boss_shade_of_akama" per
@@ -28,7 +28,8 @@
 -- NPC_CREATURE_SPAWNER_AKAMA=23210 header constants do not change
 -- this — supremus-volcano convention): npc_akama_shade (gossip
 -- intro, soul-channel sequence, chain lightning 39945 / destructive
--- poison 40874 / soul retrieve 40902, broken-free outro sequence),
+-- poison 40874 / soul retrieve 40902, broken-free outro sequence —
+-- only the Reset stealth self-cast 34189 is registered, below),
 -- npc_ashtongue_channeler (soul channel 40401 keepalive on the
 -- shade while it carries UNIT_FLAG_NOT_SELECTABLE), npc_creature_
 -- generator_akama (wave-B 42035 and sorcerer/defender summon
@@ -98,3 +99,25 @@ RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 2, shadeLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 4, shadeDied)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 14, shadeSpellHit)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 23, shadeReset)
+
+-- Akama shade (npc_akama_shade, C++ ScriptName; black_temple.h:88
+-- NPC_AKAMA_SHADE = 23191): only the Reset stealth arm is modeled —
+-- the gossip intro, soul-channel sequence and combat/outro arms are
+-- instance/react/threat-driven and stay unregistered (see above).
+-- C++ Reset: DoCastSelf(SPELL_STEALTH 34189), non-triggered (C++
+-- DoCast default is triggered=false — vaelastrasz convention).
+-- Event 23 also fires on death (reset-then-died order,
+-- lua_creature_events.go) but the C++ Reset() never runs on death,
+-- so the cast is alive-gated (bladeReset convention in
+-- boss_illidan.lua).
+local ENTRY_AKAMA_SHADE = 23191
+
+local SPELL_STEALTH = 34189
+
+local function akamaShadeReset(event, creature)
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_STEALTH)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 23, akamaShadeReset)

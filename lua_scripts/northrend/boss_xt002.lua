@@ -50,6 +50,18 @@
 -- (SPELL_ENRAGE 26662) 2-arg non-triggered, 600s init (:192), no
 -- re-arm, no phase gate (scheduled bare in JustEngagedWith —
 -- ExposeHeart never cancels it) — Talk-before-cast order kept.
+-- npc_life_spark (entry 34004 — upstream 3.3.5 Life Spark; the
+-- entry also exists in this repo's world_trainer.sql; no entry
+-- constant in ulduar.h/boss_xt002.cpp — ScriptName binding is
+-- DB-side, same precedent as the 33293 registration above):
+-- Reset (:624-628) — DoCastSelf(SPELL_ARCANE_POWER_STATE
+-- 49411) 2-arg non-triggered + scheduler wipe (event 23).
+-- JustEngagedWith (:630-638) — DoCastSelf
+-- (SPELL_STATIC_CHARGED 64227) 2-arg non-triggered at engage
+-- (event 1) + the 12s repeating _scheduler leg casting
+-- DoCastVictim(SPELL_SHOCK 64230) 2-arg non-triggered
+-- (creature:CastSpell(nil, spell) = DoCastVictim per the file
+-- convention); wiped on events 2/4/23 like the scheduler.
 -- KilledUnit (:204-208) — player-gated Talk(SAY_SLAY 4) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
@@ -119,9 +131,12 @@
 -- npc_pummeller (no Talk arms; TaskScheduler trample / arcing
 -- smash / uppercut legs — no bridges — no registration);
 -- npc_boombot (no Talk arms; DamageTaken boom leg + SPELL_BOOM
--- 62834 — no damage-taken bridge — no registration);
--- npc_life_spark (no Talk arms; SPELL_SHOCK 64230 scheduler
--- leg — no bridges — no registration);
+-- 62834 — the damage=0 rewrite is bridgeable (event 9 numeric return,
+-- moroes/hodir precedent) but the add never spawns in Go
+-- (spell_xt002_energy_orb 62826 — no SpellScript bridge) and Reset
+-- carries unbridged legs (SetFloatValue min/max-damage hack,
+-- SetReactState, instance gate, MoveFollow, DoAction, despawn) —
+-- no registration);
 -- npc_xt_void_zone (PassiveAI — no Talk arms; SPELL_CONSUMPTION
 -- 64208 periodic scheduler leg + SpellInfo BP0 machine — no
 -- bridges — no registration).
@@ -161,6 +176,7 @@
 -- unmodeled-achievement queue.
 
 local ENTRY_XT002 = 33293
+local ENTRY_LIFE_SPARK = 34004
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 4
@@ -168,6 +184,9 @@ local SAY_BERSERK = 5
 local SAY_DEATH = 6
 
 local SPELL_ENRAGE = 26662
+local SPELL_ARCANE_POWER_STATE = 49411
+local SPELL_STATIC_CHARGED = 64227
+local SPELL_SHOCK = 64230
 
 local timers = {}
 
@@ -241,3 +260,38 @@ RegisterCreatureEvent(ENTRY_XT002, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_XT002, 3, xt002TargetDied)
 RegisterCreatureEvent(ENTRY_XT002, 4, xt002Died)
 RegisterCreatureEvent(ENTRY_XT002, 23, cancelCombatTimers)
+
+-- C++ npc_life_spark::JustEngagedWith (:630-638): DoCastSelf
+-- (SPELL_STATIC_CHARGED 64227) (2-arg non-triggered) at engage,
+-- then the 12s repeating _scheduler leg casting DoCastVictim
+-- (SPELL_SHOCK 64230) (2-arg non-triggered; creature:CastSpell
+-- (nil, spell) = DoCastVictim per the file convention).
+local function lifeSparkShockTick(creature)
+    creature:CastSpell(nil, SPELL_SHOCK)
+    local guid = creature:GetGUID()
+    schedule(guid, "shock", 12000, function()
+        lifeSparkShockTick(creature)
+    end)
+end
+
+local function lifeSparkEnterCombat(event, creature, target)
+    creature:CastSpell(creature, SPELL_STATIC_CHARGED)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "shock", 12000, function()
+        lifeSparkShockTick(creature)
+    end)
+end
+
+-- C++ npc_life_spark::Reset (:624-628): DoCastSelf
+-- (SPELL_ARCANE_POWER_STATE 49411) (2-arg non-triggered) +
+-- scheduler wipe.
+local function lifeSparkReset(event, creature)
+    creature:CastSpell(creature, SPELL_ARCANE_POWER_STATE)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_LIFE_SPARK, 1, lifeSparkEnterCombat)
+RegisterCreatureEvent(ENTRY_LIFE_SPARK, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_LIFE_SPARK, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_LIFE_SPARK, 23, lifeSparkReset)
