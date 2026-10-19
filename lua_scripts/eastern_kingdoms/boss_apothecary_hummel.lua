@@ -273,6 +273,11 @@ end
 
 local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode: summons.DespawnAll() (moot — nothing modeled)
+    -- + _EnterEvadeMode() + _DespawnAtEvade(Seconds(10))
+    -- (boss_apothecary_hummel.cpp:124-130); the 10s is respawn-side, the
+    -- despawn itself is immediate (ScriptedCreature.cpp:616).
+    creature:Despawn()
 end
 
 local function onDied(event, creature)

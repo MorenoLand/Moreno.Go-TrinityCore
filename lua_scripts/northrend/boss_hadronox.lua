@@ -246,6 +246,12 @@ end
 
 local function hadronoxLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode: _DespawnAtEvade(25s) on self + aura triggers
+    -- (cross-creature legs unbridged) + summons.DespawnAll() (moot —
+    -- nothing modeled) (boss_hadronox.cpp:258-268); the 25s is
+    -- respawn-side, the despawn itself is immediate
+    -- (ScriptedCreature.cpp:616).
+    creature:Despawn()
 end
 
 local function hadronoxDied(event, creature, killer)

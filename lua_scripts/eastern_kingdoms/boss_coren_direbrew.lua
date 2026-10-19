@@ -141,6 +141,11 @@ end
 
 local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode: _EnterEvadeMode() + summons.DespawnAll() (moot —
+    -- mole machines are GO AI, unmodeled) + _DespawnAtEvade(Seconds(10))
+    -- (boss_coren_direbrew.cpp:150-152); the 10s is respawn-side, the
+    -- despawn itself is immediate (ScriptedCreature.cpp:616).
+    creature:Despawn()
 end
 
 local function onDied(event, creature, killer)

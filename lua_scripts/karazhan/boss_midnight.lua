@@ -183,8 +183,9 @@ local function midnightLeaveCombat(event, creature)
     cancelTimers(guid)
     midnightState[guid] = nil
     -- C++ boss_midnightAI::EnterEvadeMode: _DespawnAtEvade(Seconds(10))
-    -- (jedoga 15s precedent); re-engage cancels via cancelTimers.
-    schedule(guid, "evade-despawn", 10000, function() creature:Despawn() end)
+    -- (boss_midnight.cpp:351-354); the 10s is the respawn delay, the
+    -- despawn itself is immediate (ScriptedCreature.cpp:616).
+    creature:Despawn()
 end
 
 local function midnightReset(event, creature)
