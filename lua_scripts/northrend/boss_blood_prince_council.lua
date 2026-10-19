@@ -64,7 +64,8 @@
 -- {10000,15000}ms (:623), EVENT_SHADOW_LANCE 2000ms (:624);
 -- taldaram: EVENT_BERSERK 600000ms (:689), EVENT_GLITTERING_SPARKS
 -- {12000,15000}ms (:690), EVENT_CONJURE_FLAME 20000ms (:691);
--- valanar: EVENT_BERSERK 600000ms (:763).
+-- valanar: EVENT_BERSERK 600000ms (:763) + the valanar-override
+-- targetAuraCheck scheduler (:1050-1068, 1000ms seed/re-arm).
 -- keleseth EVENT_BERSERK (:658-661) — DoCastSelf(SPELL_BERSERK 50334)
 -- non-triggered + Talk(EMOTE_KELESETH_BERSERK 4), cast before Talk
 -- (C++ order), one-shot.
@@ -208,6 +209,7 @@ local SAY_VALANAR_BERSERK = 5
 -- SPELL_CONJURE_FLAME = 71718.
 local SPELL_BERSERK = 26662
 local SPELL_SHADOW_RESONANCE = 71943
+local SPELL_SHADOW_RESONANCE_RESIST = 71822
 local SPELL_SHADOW_LANCE = 71405
 local SPELL_GLITTERING_SPARKS = 71806
 local SPELL_CONJURE_FLAME = 71718
@@ -408,6 +410,23 @@ end
 -- EVENT_BERSERK 600000ms, EVENT_KINETIC_BOMB {18000,24000}ms,
 -- EVENT_SHOCK_VORTEX {15000,20000}ms + the IsHeroic-gated
 -- shadow-prison leg :767 (creature:IsHeroic() now bridged).
+-- C++ boss_prince_valanar_icc::JustEngagedWith :1050-1061 — the
+-- targetAuraCheck scheduler: 1000ms seed, targetAuraCheck.Repeat()
+-- 1000ms; if the victim is within 15.0f and lacks Valanar's Shadow
+-- Resonance Resist aura (71822), DoCast(victim, 71822) non-triggered.
+-- The else-leg MoveInLineOfSight(victim) has no bridge (movement
+-- machine) and is dropped; the C++ caster-GUID leg of HasAura is
+-- unrepresentable (bridged HasAura takes only the spell id) — only
+-- Valanar applies 71822, so the plain check is exact.
+local function onValanarAuraCheck(creature, guid)
+    local victim = creature:GetVictim()
+    if victim ~= nil and creature:GetDistance(victim) < 15.0
+            and not victim:HasAura(SPELL_SHADOW_RESONANCE_RESIST) then
+        creature:CastSpell(victim, SPELL_SHADOW_RESONANCE_RESIST)
+    end
+    schedule(guid, "auracheck", 1000, function() onValanarAuraCheck(creature, guid) end)
+end
+
 local function valanarEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -417,6 +436,7 @@ local function valanarEnterCombat(event, creature)
     schedule(guid, "berserk", 600000, function() onValanarBerserk(creature) end)
     schedule(guid, "kineticbomb", {18000, 24000}, function() onValanarKineticBomb(creature, guid) end)
     schedule(guid, "shockvortex", {15000, 20000}, function() onValanarShockVortex(creature, guid) end)
+    schedule(guid, "auracheck", 1000, function() onValanarAuraCheck(creature, guid) end)
 end
 
 -- C++ BloodPrincesBossAI::KilledUnit :505-521:
