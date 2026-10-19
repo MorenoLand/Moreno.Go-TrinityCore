@@ -9584,10 +9584,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// cooldowns in the item prototype, not in SpellInfo.
 	cooldownMs, categoryCooldownMs, categoryID := s.server.spellCooldownDurationsForItem(ctx, spell, castItemEntry)
 	now := time.Now()
-	categoryEnd := now.Unix()
-	if categoryCooldownMs > 0 {
-		categoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
-	}
 	// Spell::_cast (Spell.cpp:3459-3469) takes the cooldown in
 	// SendSpellCooldown regardless of hit/miss outcome: a fully-resisted or
 	// fully-immune cast still burns the cooldown. C++ has no hit-target
@@ -9612,12 +9608,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// SPELLMOD_COOLDOWN fold inside startRealSpellCooldown mirrors
 		// the ApplySpellMod(spellInfo->Id, SPELLMOD_COOLDOWN, ..., spell)
 		// calls, which also run with a non-null taking spell.
-		s.startRealSpellCooldown(spell, cooldownMs, categoryCooldownMs, categoryID, now)
-	}
-	if applyCooldown && spellID == 8690 {
-		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
-		s.replaceSpellCooldownEntry(spellCooldown{Spell: spellID, Item: 6948, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, 900000), true)
+		// SpellHistory::GetCooldownDurations (SpellHistory.cpp:641-670):
+		// the item template's spellcooldown_N slot governs when present
+		// (hearthstone 8690 via item 6948: 1800000ms); the DBC RecoveryTime
+		// applies only when both item cooldowns are negative. The old
+		// hardcoded 15-minute override is gone -- Player::CastItemUseSpell
+		// (Player.cpp:8273) casts with TRIGGERED_NONE, so the full
+		// cooldown path above applies.
+		s.startRealSpellCooldown(spell, cooldownMs, categoryCooldownMs, categoryID, castItemEntry, now)
 	}
 
 	// Spell::HandleLaunchPhase (Spell.cpp:7685-7726) runs at launch, between
@@ -11881,10 +11879,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//   - finish(true) runs only when m_spellState != SPELL_STATE_CASTING:
 	//     channeled spells skip it (Go's startChannel path) and the
 	//     non-channeled completion below is the finish(true) Go model.
-	// Delta: C++ also fires the tail TakeAmmo for triggered channeled
-	// ranged casts (the per-tick Volley casts have no triggered exemption
-	// on this leg); Go has no per-tick triggered casts (channelTick
-	// applies tick damage directly), so ticks consume no ammo.
+	// No per-tick ammo on either side: the per-tick Volley casts are the
+	// instant damage spell, not channeled, so the IsChanneled() half of
+	// this arm never fires for them in C++; the launch leg's Volley
+	// exemption (Spell.cpp:7706-7708) covers REQ_AMMO tick spells instead
+	// (e.g. Explosive Shot ticks). Go's channelTick applies tick damage
+	// directly with no per-tick casts, so the same two-ammo-per-channel
+	// total holds.
 	// Spell::handle_immediate tail (Spell.cpp:3616-3623): TakeCastItem at
 	// 3619 runs ahead of the Volley tail TakeAmmo at 3622-3623 — the charge
 	// is spent here after the finish-phase legs, then the tail ammo, in C++
@@ -15669,6 +15670,77 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 	}
+	// Spell::prepare (Spell.cpp:3100) runs the full CheckCast(true) gauntlet
+	// even for triggered casts -- only per-arm exemptions apply (the
+	// TRIGGERED_* ignore flags), so the triggered funnel re-runs every arm
+	// that carries no triggered exemption. Failures rewrite to
+	// SPELL_FAILED_DONT_REPORT (Spell.cpp:4171-4172, the full-mask path
+	// always carries TRIGGERED_DONT_REPORT_CAST_ERROR) and skip the packet
+	// at login (the IsLoading gate, firstLogin here).
+	rejectTriggeredCast := func(reason string) {
+		if !firstLogin {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+		}
+		s.debug("triggered cast failed CheckCast", "account", s.accountName, "spell", spellID, "reason", reason)
+	}
+	// CheckCast death arm (Spell.cpp:5177): an aura-triggered cast fails on
+	// a dead caster; a non-aura triggered cast passes while dead
+	// (IsTriggered() && !m_triggeredByAuraSpell). m_triggeredByAuraSpell
+	// rides s.castTriggerAuraSpell on this path. Passive and
+	// CASTABLE_WHILE_DEAD spells pass either way.
+	if s.isDeadOrGhost() && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 && s.castTriggerAuraSpell != 0 {
+		rejectTriggeredCast("caster dead on aura-triggered cast")
+		return
+	}
+	// CheckCast outdoors/indoors arms (Spell.cpp:5238-5245): no triggered
+	// exemption.
+	if spell.Attributes&spellAttr0OutdoorsOnly != 0 && !s.isOutdoors() {
+		rejectTriggeredCast("outdoors-only triggered cast indoors")
+		return
+	}
+	if spell.Attributes&spellAttr0IndoorsOnly != 0 && s.isOutdoors() {
+		rejectTriggeredCast("indoors-only triggered cast outdoors")
+		return
+	}
+	// CheckCast DB spell conditions (Spell.cpp:5337-5348): no triggered
+	// exemption; the object target is the wire target at prepare time
+	// (ahead of the SelectSpellTargets redirect arms below).
+	if condResult, _ := s.checkSpellCastConditions(ctx, spell.ID, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}); condResult != 0 {
+		rejectTriggeredCast("db spell condition unmet")
+		return
+	}
+	// CheckCast BLOCK_SPELL_FAMILY arm (Spell.cpp:5277-5278): no triggered
+	// exemption.
+	if s.spellFamilyBlockedByAura(spell) {
+		rejectTriggeredCast("spell family blocked by aura")
+		return
+	}
+	// CheckCast moving arm (Spell.cpp:5316-5322): no triggered exemption --
+	// a triggered autorepeat or NOT_SEATED-interrupt spell fails when the
+	// player is moving. The charmed-by-creature trust hack is vacuous here
+	// (no charm model, same as the client path's 5316 arm at
+	// spells.go:2302). This is a different arm from the cast-time movement
+	// gate bridged below (Spell.cpp:3139-3149).
+	if s.isMoving &&
+		!(s.isFallingFar && len(spell.Effects) > 0 && spell.Effects[0].Effect == spellEffectStuck) &&
+		(spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 || spell.AuraInterruptFlags&auraInterruptFlagNotSeated != 0) {
+		rejectTriggeredCast("moving autorepeat or not-seated triggered cast")
+		return
+	}
+	// CheckItems equipped-item requirements (Spell.cpp:5489, 6768-6775,
+	// 7206-7237): TRIGGERED_FULL_MASK does not carry
+	// TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT (SpellDefines.h:153-156,
+	// debug-mask only), so triggered casts check items too; passive spells
+	// skip CheckItems (Spell.cpp:5486) and the item-target arm is vacuous
+	// (no item-target model on this path).
+	if spell.Attributes&spellAttr0Passive == 0 {
+		if _, ok := s.checkSpellEquippedItemRequirements(ctx, spell); !ok {
+			rejectTriggeredCast("equipped item requirement unmet")
+			return
+		}
+	}
+	// The vehicle arm (Spell.cpp:5332) is exempt: TRIGGERED_FULL_MASK
+	// carries TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE.
 	// Spell::prepare (Spell.cpp:3139-3149): the moving-cast arm carries no
 	// triggered-flags guard -- a triggered cast with cast time, or a channeled
 	// one that is not move-allowed (SpellInfo::IsMoveAllowedChannel), fails
@@ -30615,7 +30687,7 @@ func (s *session) sendSpellCooldownEvent(spell wotlk.Spell) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, cd.Spell), true)
 				if s.server != nil && s.server.Data != nil {
 					if holder, found, err := s.server.Data.Spell(cd.Spell); err == nil && found {
-						s.startRealSpellCooldown(holder, int32(holder.RecoveryTime), int32(holder.CategoryRecoveryTime), holder.Category, now)
+						s.startRealSpellCooldown(holder, int32(holder.RecoveryTime), int32(holder.CategoryRecoveryTime), holder.Category, 0, now)
 					}
 				}
 				break
@@ -30623,7 +30695,7 @@ func (s *session) sendSpellCooldownEvent(spell wotlk.Spell) {
 		}
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, spell.ID), true)
-	s.startRealSpellCooldown(spell, int32(spell.RecoveryTime), int32(spell.CategoryRecoveryTime), spell.Category, now)
+	s.startRealSpellCooldown(spell, int32(spell.RecoveryTime), int32(spell.CategoryRecoveryTime), spell.Category, 0, now)
 }
 
 // startRealSpellCooldown mirrors the tail of SpellHistory::StartCooldown
@@ -30633,7 +30705,10 @@ func (s *session) sendSpellCooldownEvent(spell wotlk.Spell) {
 // write, and the conditional SMSG_SPELL_COOLDOWN (needsCooldownPacket
 // carries the modded value; otherwise the raw DBC RecoveryTime rides the
 // packet when positive).
-func (s *session) startRealSpellCooldown(spell wotlk.Spell, cooldownMs, categoryCooldownMs int32, categoryID uint32, now time.Time) {
+// The itemID rides the entry like SpellHistory::AddCooldown's itemId
+// (SpellHistory.cpp:395-407): the cooldown's item source, used by the
+// cooldown-event and persistence paths.
+func (s *session) startRealSpellCooldown(spell wotlk.Spell, cooldownMs, categoryCooldownMs int32, categoryID uint32, itemID uint32, now time.Time) {
 	if s == nil || s.player == nil {
 		return
 	}
@@ -30669,7 +30744,7 @@ func (s *session) startRealSpellCooldown(spell wotlk.Spell, cooldownMs, category
 	if categoryCooldownMs > 0 {
 		moddedCategoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
 	}
-	s.replaceSpellCooldownEntry(spellCooldown{Spell: spell.ID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
+	s.replaceSpellCooldownEntry(spellCooldown{Spell: spell.ID, Item: itemID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
 	if needsCooldownPacket {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spell.ID, uint32(cooldownMs)), true)
 	} else if spell.RecoveryTime > 0 {
