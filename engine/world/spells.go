@@ -9258,10 +9258,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// targets never rolled reflect here before this; they took full
 	// effects and the reflector's aura was never consumed.
 	var reflectedAoETrips []uint64
+	var reflectedAllyTrips []uint64
 	if areaSpell || friendlyAreaSpell || entryAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell {
 		var aoeMisses []protocol.SpellMissStatus
 		hitTargets, reflectedAoETrips, aoeMisses = s.rollAreaTargetReflect(ctx, spell, hitTargets)
 		missStatus = append(missStatus, aoeMisses...)
+		// Spell::AddUnitTarget (Spell.cpp:2152) rolls every selected target,
+		// including the per-effect friendly-area ally selection of a harmful
+		// spell -- the 2152 carve-out offers reflect to friendlies of a
+		// non-positive spell. A reflecting or evading ally leaves the kept
+		// partition and takes no heal; its miss joins the trailer below.
+		// The trips stay separate from the enemy trips: the ally is not in
+		// the damage effect's mask, so the return trip heals the caster
+		// (Spell::PreprocessTarget, Spell.cpp:2350) instead of damaging it.
+		if friendlyEffectTargets != nil {
+			var allyMisses []protocol.SpellMissStatus
+			friendlyEffectTargets, reflectedAllyTrips, allyMisses = s.rollAreaTargetReflect(ctx, spell, friendlyEffectTargets)
+			missStatus = append(missStatus, allyMisses...)
+		}
 	}
 	isReflected := false
 	// reflectSourceGUID is the pre-retarget unit target of a reflected cast
@@ -9998,9 +10012,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			missGUIDs = append(missGUIDs, miss.TargetGUID)
 		}
 	}
-	s.handleSpellInitialThreat(ctx, spell, hitTargets, missGUIDs)
+	// Spell.cpp:5123: the initial-threat divisor is m_UniqueTargetInfo.size()
+	// -- the ally partition counts too, so the kept allies join the hit list
+	// here (the negative leg skips non-threat-list units internally, and the
+	// partition only exists for harmful spells, so the positive leg is out).
+	threatHits := hitTargets
+	if len(friendlyEffectTargets) > 0 {
+		threatHits = append(append([]uint64{}, hitTargets...), friendlyEffectTargets...)
+	}
+	s.handleSpellInitialThreat(ctx, spell, threatHits, missGUIDs)
 
-	if len(hitTargets) == 0 {
+	// m_UniqueTargetInfo is non-empty while the ally partition holds targets:
+	// C++ runs the effects (missed targets resolve null per-target) rather
+	// than early-returning, so kept allies are still healed when every enemy
+	// missed or evaded.
+	if len(hitTargets) == 0 && len(friendlyEffectTargets) == 0 {
 		// Spell missed, do not trigger channel or effects
 		return
 	}
@@ -10692,6 +10718,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				healList := hitTargets
 				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
 					healList = friendlyEffectTargets
+					// Spell::PreprocessTarget (Spell.cpp:2350): a reflected ally's
+					// _spellHitTarget is the caster -- the heal lands on the
+					// caster once per reflected ally; the ally itself takes
+					// nothing. The append only ever writes past
+					// len(friendlyEffectTargets), never into its visible
+					// contents, and each arm rebuilds healList fresh.
+					for range reflectedAllyTrips {
+						healList = append(healList, s.playerGUID)
+					}
 				}
 				for _, effectTarget := range healList {
 					targetHeal := heal
@@ -10755,6 +10790,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				healList := hitTargets
 				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
 					healList = friendlyEffectTargets
+					// Reflected-ally retarget (Spell.cpp:2350), same as the heal
+					// arm above: one caster heal per reflected ally trip.
+					for range reflectedAllyTrips {
+						healList = append(healList, s.playerGUID)
+					}
 				}
 				for _, effectTarget := range healList {
 					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
@@ -16280,7 +16320,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	reflectReturnStatus := s.spellReflectReturnStatus(spell)
 	triggeredMiss := make(map[uint64]uint8)
 	var triggeredMissGUIDs []uint64
-	for _, guid := range hitTargets {
+	// Spell::AddUnitTarget (Spell.cpp:2152) rolls every selected target,
+	// including the per-effect friendly-area ally selection of a harmful
+	// spell — the 2152 carve-out offers reflect to friendlies of a
+	// non-positive spell, so a reflecting or immune ally takes no heal and
+	// its reflect aura is consumed at missile arrival like any other target.
+	// The dedupe below keeps the union disjoint-safe.
+	triggeredRollTargets := hitTargets
+	if triggeredFriendlyEffectTargets != nil {
+		triggeredRollTargets = make([]uint64, 0, len(hitTargets)+len(triggeredFriendlyEffectTargets))
+		triggeredRollTargets = append(triggeredRollTargets, hitTargets...)
+		triggeredRollTargets = append(triggeredRollTargets, triggeredFriendlyEffectTargets...)
+	}
+	for _, guid := range triggeredRollTargets {
 		if guid == 0 || guid == s.playerGUID {
 			continue
 		}
@@ -16322,9 +16374,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 	}
-	goHitTargets := make([]uint64, 0, len(hitTargets))
+	// Spell::UpdateSpellCastDataTargets (Spell.cpp:4486-4508) walks the whole
+	// m_UniqueTargetInfo: every non-missed target — ally partition included —
+	// lands in HitTargets, every missed one in MissStatus.
+	goHitTargets := make([]uint64, 0, len(triggeredRollTargets))
 	var goMissStatus []protocol.SpellMissStatus
-	for _, guid := range hitTargets {
+	for _, guid := range triggeredRollTargets {
 		if miss, ok := triggeredMiss[guid]; ok {
 			entry := protocol.SpellMissStatus{TargetGUID: guid, Reason: miss}
 			if miss == protocol.SpellMissReflect {
@@ -21124,6 +21179,14 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, targets []uint64) (kept []uint64, trips []uint64, misses []protocol.SpellMissStatus) {
 	kept = make([]uint64, 0, len(targets))
 	for _, guid := range targets {
+		// WorldObject::SpellHitResult (Object.cpp:2635): this == victim
+		// reports SPELL_MISS_NONE ahead of the reflect roll -- the caster
+		// never reflects its own cast (the ally partition of a mixed spell
+		// carries the caster).
+		if s.player != nil && guid == s.playerGUID {
+			kept = append(kept, guid)
+			continue
+		}
 		reflected := false
 		var reflectCreatureKey creatureAuraKey
 		var targetSess *session
