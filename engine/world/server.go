@@ -1890,21 +1890,21 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			continue
 		}
 		if state.authed && state.server.Features != nil && state.server.Features.Scripts != nil {
-			packet := &scripting.Packet{Opcode: header.Opcode, Data: append([]byte(nil), payload...)}
-			values, hookErr := state.server.Features.Scripts.TriggerPacketEvent(ctx, int(header.Opcode), 5, packet, state.luaPlayer())
+			// Eluna packet receive hooks (src/server/game/LuaEngine/PacketHooks.cpp:81-119):
+			// server-any (SERVER_EVENT_ON_PACKET_RECEIVE = 5) then per-opcode bindings.
+			// FORK QUIRK: the per-opcode receive lookup uses the SEND event number (7)
+			// (PacketHooks.cpp:117-119), so RegisterPacketEvent(op, 5, fn) is dead on
+			// receive and RegisterPacketEvent(op, 7, fn) fires. Bool-false skips the
+			// opcode handler; a Packet userdata second return replaces the packet the
+			// handler sees. Handler selection below stays on the original opcode.
+			blocked, hooked, hookErr := firePacketReceiveHooks(state.server.Features.Scripts, ctx, header.Opcode, payload, state.luaPlayer())
 			if hookErr != nil {
 				state.debug("lua packet hook failed", "account", state.accountName, "opcode", header.Opcode, "error", hookErr)
-			}
-			blocked := false
-			for _, value := range values {
-				if allowed, ok := value.(bool); ok && !allowed {
-					blocked = true
-					break
-				}
 			}
 			if blocked {
 				continue
 			}
+			payload = hooked.Data
 		}
 		// WorldSocket::ReadDataHandler refreshes the idle timer on every packet
 		// (WorldSocket.cpp:384) except CMSG_KEEP_ALIVE, which only refreshes the
@@ -5130,18 +5130,18 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 
 func (s *session) writeWithStatus(opcode uint16, payload []byte, encrypt bool) (bool, error) {
 	if s != nil && s.authed && s.server != nil && s.server.Features != nil && s.server.Features.Scripts != nil {
-		packet := &scripting.Packet{Opcode: uint32(opcode), Data: append([]byte(nil), payload...)}
-		values, hookErr := s.server.Features.Scripts.TriggerPacketEvent(context.Background(), int(opcode), 7, packet, s.luaPlayer())
+		// Eluna packet send hooks (src/server/game/LuaEngine/PacketHooks.cpp:35-80):
+		// server-any (SERVER_EVENT_ON_PACKET_SEND = 7) then per-opcode event-7
+		// bindings, 1 result each. Bool-false drops the packet. Lua gets a
+		// throwaway copy per stage and the C++ never re-reads it, so in-place
+		// Lua edits cannot alter the wire packet.
+		blocked, hookErr := firePacketSendHooks(s.server.Features.Scripts, context.Background(), uint32(opcode), payload, s.luaPlayer())
 		if hookErr != nil {
 			s.debug("lua packet send hook failed", "account", s.accountName, "opcode", opcode, "error", hookErr)
 		}
-		for _, value := range values {
-			if allowed, ok := value.(bool); ok && !allowed {
-				return false, nil
-			}
+		if blocked {
+			return false, nil
 		}
-		opcode = uint16(packet.Opcode)
-		payload = packet.Data
 	}
 	if s != nil && s.captureUpdatePackets && (opcode == uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) || opcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
 		s.capturedUpdatePackets = append(s.capturedUpdatePackets, protocol.PacketFrom(opcode, append([]byte(nil), payload...)))

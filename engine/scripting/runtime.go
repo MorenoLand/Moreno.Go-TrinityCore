@@ -188,6 +188,21 @@ const (
 	// the radius validation, and a boolean true return vetoes the rest
 	// of the handler (CallAllFunctionsBool).
 	ServerEventAreaTrigger = 24
+	// ServerEventPacketReceive is SERVER_EVENT_ON_PACKET_RECEIVE
+	// (LuaEngine/Hooks.h:108 = 5, args (event, packet, player) - player only
+	// if accessible): fires on every received packet before the opcode
+	// handler. Each hook's first return is a boolean (false blocks the
+	// handler) and the second return may be a Packet userdata that replaces
+	// the packet the handler sees (LuaEngine/PacketHooks.cpp:93-115,
+	// CallOneFunction(n, 2, 2)).
+	ServerEventPacketReceive = 5
+	// ServerEventPacketSend is SERVER_EVENT_ON_PACKET_SEND
+	// (LuaEngine/Hooks.h:110 = 7, args (event, packet, player) - player only
+	// if accessible): fires on every outgoing packet. Each hook's first
+	// return is a boolean (false drops the packet); Lua receives a copy and
+	// cannot alter the outgoing packet (LuaEngine/PacketHooks.cpp:42-80,
+	// CallOneFunction(n, 2, 1)).
+	ServerEventPacketSend = 7
 )
 
 // Eluna CreatureEvents contract for RegisterCreatureEvent /
@@ -689,6 +704,40 @@ func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, arg
 	}
 	r.mu.Unlock()
 	return r.Trigger(ctx, "packet:"+strconv.Itoa(opcode), event, append([]any{event}, args...)...)
+}
+
+// TriggerServerEvent2 fires hooks registered with RegisterServerEvent(event,
+// fn), capturing two return values per handler. It exists for Eluna hooks
+// whose C++ call sites consume a second return via CallOneFunction(n, args,
+// 2): SERVER_EVENT_ON_PACKET_RECEIVE (5), where a boolean false first return
+// blocks the opcode handler and a Packet userdata second return replaces the
+// packet the handler sees (LuaEngine/PacketHooks.cpp:93-115). The TryLock
+// guard mirrors TriggerPacketEvent: packet hooks can fire while a hook
+// already holds the runtime lock (e.g. Lua -> SendPacket -> send hooks), in
+// which case the fire is skipped instead of deadlocking.
+func (r *Runtime) TriggerServerEvent2(ctx context.Context, event int, args ...any) ([][]any, error) {
+	if !r.mu.TryLock() {
+		return nil, nil
+	}
+	r.mu.Unlock()
+	return r.triggerN(ctx, "server", event, 2, append([]any{event}, args...)...)
+}
+
+// TriggerPacketEvent2 fires hooks registered with RegisterPacketEvent(opcode,
+// event, fn), capturing two return values per handler, like
+// TriggerCreatureEvent2. It exists for the fork's per-opcode RECEIVE bindings,
+// whose C++ lookup site (LuaEngine/PacketHooks.cpp:117-119) consumes two
+// returns per handler: a boolean false first return blocks the opcode handler
+// and a Packet userdata second return replaces the packet the handler sees.
+// NOTE the fork quirk: that lookup uses the SEND event number
+// (PACKET_EVENT_ON_PACKET_SEND = 7, LuaEngine/Hooks.h:96), so on receive the
+// engine fires event-7 per-opcode bindings, never event-5 ones.
+func (r *Runtime) TriggerPacketEvent2(ctx context.Context, opcode, event int, args ...any) ([][]any, error) {
+	if !r.mu.TryLock() {
+		return nil, nil
+	}
+	r.mu.Unlock()
+	return r.triggerN(ctx, "packet:"+strconv.Itoa(opcode), event, 2, append([]any{event}, args...)...)
 }
 
 func (r *Runtime) Tick(ctx context.Context, elapsed int64) error {
