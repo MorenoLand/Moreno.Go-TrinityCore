@@ -1017,9 +1017,22 @@ func (s *Server) serverSpellProcEntryFor(auraSpellID uint32) (entry spellProcEnt
 	}
 	hasTrigger := false
 	hasTriggerSpellOrDamage := false
+	reflectAura := false
 	for i := range spell.Effects {
 		eff := &spell.Effects[i]
-		if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
+		if eff.Effect == 0 {
+			continue
+		}
+		triggerAura := isProcTriggerAuraType(eff.Aura)
+		// SpellMgr.cpp:1697/1704 — reflect auras (28/74) sit in isTriggerAura
+		// even though Go has no HandleProc arm for them (documented at
+		// isProcTriggerAuraType); they still qualify the spell for a
+		// generated entry, with HitMask forced below (SpellMgr.cpp:1838-1841).
+		if eff.Aura == spellAuraReflectSpells || eff.Aura == spellAuraReflectSpellsSchool {
+			triggerAura = true
+			reflectAura = true
+		}
+		if !triggerAura {
 			continue
 		}
 		hasTrigger = true
@@ -1041,6 +1054,13 @@ func (s *Server) serverSpellProcEntryFor(auraSpellID uint32) (entry spellProcEnt
 	entry.SpellPhaseMask = procSpellPhaseHit
 	entry.Chance = spell.ProcChance
 	entry.Charges = spell.ProcCharges
+	// SpellMgr.cpp:1838-1841 — reflect auras should only proc off reflects:
+	// the generated entry forces HitMask = PROC_HIT_REFLECT instead of the
+	// NORMAL|CRITICAL default the CanSpellTriggerProcOnEvent gate applies
+	// when HitMask is 0.
+	if reflectAura {
+		entry.HitMask = procHitReflect
+	}
 	if spell.ProcTypeMask&procFlagKill != 0 {
 		entry.AttributesMask |= procAttrReqExpOrHonor
 	}

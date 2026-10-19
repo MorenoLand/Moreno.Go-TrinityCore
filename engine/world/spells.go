@@ -9406,9 +9406,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
 				}
 			}
-			if len(missStatus) == 0 && s.player != nil && s.spellDeflectedByVictim(ctx, targetGUID, targetSess, s.player.X, s.player.Y) {
-				// WorldObject::MagicSpellHitResult (Object.cpp:2597-2604):
-				// the SPELL_AURA_DEFLECT_SPELLS (287) arm — after the resist
+			if len(missStatus) == 0 && s.player != nil && spell.DefenseType == spellDamageClassMagic && s.spellDeflectedByVictim(ctx, targetGUID, targetSess, s.player.X, s.player.Y) {
+				// WorldObject::MagicSpellHitResult (Object.cpp:2597-2604) runs
+				// only for SPELL_DAMAGE_CLASS_MAGIC (Object.cpp:2655-2666 routes
+				// MELEE/RANGED through Unit::MeleeSpellHitResult, whose only
+				// deflect arm is the ranged one at Unit.cpp:2533): the
+				// SPELL_AURA_DEFLECT_SPELLS (287) arm — after the resist
 				// rolls, a victim with the caster in its front arc (or
 				// carrying 288) deflects on its 287 total.
 				hitTargets = nil
@@ -9471,6 +9474,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			} else if s.player != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
+				// WorldObject::SpellHitResult (Object.cpp:2637-2639): an
+				// evading creature reports SPELL_MISS_EVADE ahead of the
+				// reflect roll — its reflect aura is never rolled or
+				// consumed.
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissEvade}}
 			} else if s.creatureReflectOffered(spell, targetFaction) && s.server.creatureCheckSpellReflection(creatureAuraKeyForPlayer(*s.player, targetGUID), spell) {
 				doReflect()
 			} else if s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s, targetFaction) {
@@ -9893,13 +9903,28 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		power := s.player.Powers[pType]
 		remainingPower = &power
 	}
-	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower, goExtras)
+	// Spell::SendSpellGo (Spell.cpp:4494-4507): HitTargets carries only
+	// MISS_NONE targets — a reflected cast reports through MissStatus
+	// (REFLECT + ReflectStatus) and the return-trip caster is never listed
+	// as a hit. hitTargets keeps the caster for the effect legs below; the
+	// packet list drops it.
+	packetHitTargets := hitTargets
+	if isReflected {
+		packetHitTargets = make([]uint64, 0, len(hitTargets))
+		for _, guid := range hitTargets {
+			if guid == s.playerGUID {
+				continue
+			}
+			packetHitTargets = append(packetHitTargets, guid)
+		}
+	}
+	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, packetHitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
 		// C++ strips only CAST_FLAG_POWER_LEFT_SELF for the nearby copy
 		// (Spell.cpp:4385-4389); the rune/ammo blocks ride along.
 		nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
-		nearbyPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target), nil, goExtras)
+		nearbyPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, packetHitTargets, missStatus, spellGoPacketTarget(spell, target), nil, goExtras)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
 	if isFishingSpell(spellID) {
@@ -20234,15 +20259,18 @@ func magicSpellHitResultFromBase(baseHitChance, bonusHit float64) uint8 {
 // SPELL_AURA_IGNORE_HIT_DIRECTION (288) — deflects on its
 // SPELL_AURA_DEFLECT_SPELLS (287) total. The C++ multiplies the aura sum by
 // 100 into the running miss threshold, so the sum is plain percent points.
-// The UNIT_STATE_CONTROLLED gate has no Go unit-state model (documented at
-// the melee positional checks in combat.go).
+// A controlled victim (UNIT_STATE_CONTROLLED — confused/stunned/fleeing,
+// Unit.h:251) never deflects; Go twins the state through the 5/7/12 aura
+// check (victimIsControlled).
 func (s *session) spellDeflectedByVictim(ctx context.Context, targetGUID uint64, targetSess *session, casterX, casterY float32) bool {
 	if s == nil {
 		return false
 	}
 	var deflectPct int32
 	var inFront bool
+	controlled := false
 	if targetSess != nil && targetSess.player != nil {
+		controlled = victimIsControlled(s.server, true, targetSess, combatTarget{})
 		deflectPct = targetSess.totalAuraModifier(spellAuraDeflectSpells)
 		inFront = targetSess.hasAuraType(spellAuraIgnoreHitDirection) ||
 			hasInArc(targetSess.player.Orientation, targetSess.player.X, targetSess.player.Y, casterX, casterY, math.Pi)
@@ -20251,6 +20279,7 @@ func (s *session) spellDeflectedByVictim(ctx context.Context, targetGUID uint64,
 		if !ok {
 			return false
 		}
+		controlled = victimIsControlled(s.server, false, nil, tgt)
 		key := creatureAuraKeyForTarget(tgt)
 		deflectPct = s.server.creatureAuraTypeSum(key, spellAuraDeflectSpells)
 		inFront = hasInArc(tgt.Orientation, tgt.X, tgt.Y, casterX, casterY, math.Pi)
@@ -20265,7 +20294,7 @@ func (s *session) spellDeflectedByVictim(ctx context.Context, targetGUID uint64,
 			s.server.auraMu.Unlock()
 		}
 	}
-	return inFront && deflectPct > 0 && rand.Float64()*100 < float64(deflectPct)
+	return !controlled && inFront && deflectPct > 0 && rand.Float64()*100 < float64(deflectPct)
 }
 
 // applyHealAbsorb mirrors Unit::CalcHealAbsorb (Unit.cpp:2067-2113):
@@ -20358,7 +20387,10 @@ func (s *session) spellDebuffResisted(ctx context.Context, spell wotlk.Spell, ta
 // still reports REFLECT with the ReflectStatus, but no effects land on the
 // caster.
 func (s *session) spellReflectReturnStatus(spell wotlk.Spell) uint8 {
-	if s.isImmuneToSpell(spell, s) {
+	// Unit::IsImmunedToSpell (Unit.cpp:7849) has no positivity gate — the
+	// return-trip roll reports IMMUNE for a reflected positive spell on an
+	// immune caster, ahead of the positive/NONE arm (Object.cpp:2630-2633).
+	if s.isImmuneToSpellNoHarmfulGate(spell, s) {
 		return protocol.SpellMissImmune
 	}
 	if spellHasOnlyDamageEffects(spell) && s.isImmuneToDamageSpell(spell, spell.SchoolMask) {
@@ -20923,10 +20955,18 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	// offer's positive-and-friendly carve-out resolves through the
 	// creature's faction (creatureReflectOffered).
 	if targetSess == nil && s.server != nil {
-		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok &&
-			s.creatureReflectOffered(spell, tgt.Faction) &&
-			s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
-			return protocol.SpellMissReflect
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			// WorldObject::SpellHitResult (Object.cpp:2637-2639): an
+			// evading creature reports SPELL_MISS_EVADE ahead of the
+			// reflect roll — it never rolls (or consumes) its reflect
+			// aura.
+			if s.player != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
+				return protocol.SpellMissEvade
+			}
+			if s.creatureReflectOffered(spell, tgt.Faction) &&
+				s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
+				return protocol.SpellMissReflect
+			}
 		}
 	}
 	targetLevel := uint8(1)

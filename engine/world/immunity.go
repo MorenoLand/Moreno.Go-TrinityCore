@@ -245,6 +245,20 @@ func mechanicImmuneMaskGranted(spell wotlk.Spell) uint32 {
 // and Go has no ApplySpellImmune model (fireSpellLinkedTriggers bridges only
 // the aura-removal arm).
 func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
+	return s.isImmuneToSpellFiltered(spell, caster, true)
+}
+
+// isImmuneToSpellNoHarmfulGate mirrors Unit::IsImmunedToSpell for the
+// reflect return-trip roll (Spell.cpp:2178 -> Object.cpp:2617-2627): the C++
+// immunity check has no positivity/harmfulness gate — a reflected positive
+// spell still reports ReflectResult=IMMUNE on an immune caster, so the
+// return trip lands nothing — which the hit-path twin's harmful bail would
+// wrongly soften to NONE.
+func (s *session) isImmuneToSpellNoHarmfulGate(spell wotlk.Spell, caster *session) bool {
+	return s.isImmuneToSpellFiltered(spell, caster, false)
+}
+
+func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, requireHarmful bool) bool {
 	if s == nil || s.player == nil {
 		return false
 	}
@@ -272,7 +286,7 @@ func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
 		return true
 	}
 
-	if !harmful {
+	if requireHarmful && !harmful {
 		return false
 	}
 
@@ -553,13 +567,6 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 		return false
 	}
 
-	// Pre-existing Go gate: channeled spells never reflect. C++ offers and
-	// rolls reflect for channeled spells too (no exclusion at Spell.cpp:622
-	// or in SpellHitResult) — documented deviation, kept deliberately.
-	if isChanneledSpell(spell) {
-		return false
-	}
-
 	if !spellCanBeReflected(spell) {
 		return false
 	}
@@ -572,10 +579,15 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 		if aura == nil {
 			continue
 		}
+		// The consumed aura is chosen deterministically (lowest spell id):
+		// C++ drops one charge on every reflect aura through the proc system at
+		// missile arrival (Spell.cpp:2181), while Go removes a single whole aura
+		// at roll time — picking by map iteration order would make the choice
+		// nondeterministic.
 		switch aura.AuraType {
 		case spellAuraReflectSpells:
 			chance += int32(aura.Amount)
-			if reflectSpellID == 0 {
+			if reflectSpellID == 0 || aura.SpellID < reflectSpellID {
 				reflectSpellID = aura.SpellID
 			}
 			if aura.SpellID == 23920 {
@@ -584,7 +596,7 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 		case spellAuraReflectSpellsSchool:
 			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
 				chance += int32(aura.Amount)
-				if reflectSpellID == 0 {
+				if reflectSpellID == 0 || aura.SpellID < reflectSpellID {
 					reflectSpellID = aura.SpellID
 				}
 			}
@@ -633,15 +645,10 @@ func (s *session) creatureReflectOffered(spell wotlk.Spell, targetFaction uint32
 // SPELL_AURA_REFLECT_SPELLS (28) / SPELL_AURA_REFLECT_SPELLS_SCHOOL (74)
 // auras rolls the same summed chance. The activeCreatureAuras entries carry
 // the aura effect's own amount, matching the player-side flattened model.
-// On success the reflect aura is consumed. The player-side channeled
-// exclusion applies here too (documented Go-wide deviation: C++ offers
-// reflect for channeled spells as well). The 23920 presence-set fallback
+// On success the reflect aura is consumed. The 23920 presence-set fallback
 // is player-session state and has no creature analog.
 func (srv *Server) creatureCheckSpellReflection(key creatureAuraKey, spell wotlk.Spell) bool {
 	if srv == nil || key.GUID == 0 {
-		return false
-	}
-	if isChanneledSpell(spell) {
 		return false
 	}
 	if !spellCanBeReflected(spell) {
@@ -654,16 +661,20 @@ func (srv *Server) creatureCheckSpellReflection(key creatureAuraKey, spell wotlk
 		if aura == nil {
 			continue
 		}
+		// Deterministic consumed-aura choice (lowest spell id), matching the
+		// player-side arm above: C++ drops one charge on every reflect aura at
+		// missile arrival (Spell.cpp:2181), Go removes a single whole aura at
+		// roll time.
 		switch aura.AuraType {
 		case spellAuraReflectSpells:
 			chance += int32(aura.Amount)
-			if reflectSpellID == 0 {
+			if reflectSpellID == 0 || aura.SpellID < reflectSpellID {
 				reflectSpellID = aura.SpellID
 			}
 		case spellAuraReflectSpellsSchool:
 			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
 				chance += int32(aura.Amount)
-				if reflectSpellID == 0 {
+				if reflectSpellID == 0 || aura.SpellID < reflectSpellID {
 					reflectSpellID = aura.SpellID
 				}
 			}

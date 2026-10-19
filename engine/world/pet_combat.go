@@ -3324,8 +3324,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 	}
 	var missStatus []protocol.SpellMissStatus
-	packetHits := make([]uint64, 0, len(hitTargets)+1)
-	petHitListed := false
+	// Spell::SendSpellGo (Spell.cpp:4494-4507): only MISS_NONE targets ride
+	// HitTargets — reflected victims and the return-trip caster report
+	// through MissStatus (REFLECT + ReflectStatus), never as hits.
+	packetHits := make([]uint64, 0, len(hitTargets))
 	for _, guid := range hitTargets {
 		if reflectedSet[guid] || evadedSet[guid] {
 			continue
@@ -3337,10 +3339,6 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	for _, trip := range reflectTrips {
 		missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.victimGUID, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
-		if trip.status == protocol.SpellMissNone && !petHitListed {
-			packetHits = append(packetHits, motion.GUID)
-			petHitListed = true
-		}
 		if s.server.findSessionByGUID(trip.victimGUID) != nil {
 			reflectorGUID := trip.victimGUID
 			delayMs := s.spellTargetTimeDelayMs(ctx, spell, trip.victimGUID)
