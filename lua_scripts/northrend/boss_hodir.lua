@@ -72,7 +72,8 @@
 -- SelectTarget(Random, 0, 100.0f, true) playerOnly=TRUE (jaraxxus /
 -- coren_direbrew precedent) -> DoCast(target, SPELL_ICICLE 62234)
 -- non-triggered, null-guarded like the C++ if; repeat 5500ms
--- (RAID_MODE 10-man/normal value, no difficulty bridge; the re-arm
+-- (RAID_MODE 10-man value — the 10-vs-25-man raid-size selector has no
+-- bridge (IsHeroic() is normal-vs-heroic only); the re-arm
 -- ScheduleEvent sits outside the target check, so it is unconditional).
 -- KilledUnit — player-gated Talk(SAY_SLAY 1) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER, C++ lines 389-391 —
@@ -254,8 +255,8 @@ end
 -- SelectTarget(Random, 0, 100.0f, true) playerOnly=TRUE ->
 -- DoCast(target, SPELL_ICICLE 62234), non-triggered, null-guarded like
 -- the C++ if; re-arm RAID_MODE(5500ms, 3500ms) unconditional — the
--- ScheduleEvent sits outside the target check, so 5500ms (10-man/normal
--- value; no difficulty bridge).
+-- ScheduleEvent sits outside the target check, so 5500ms (10-man value;
+-- the 10-vs-25-man raid-size selector has no bridge).
 local function onIcicle(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then

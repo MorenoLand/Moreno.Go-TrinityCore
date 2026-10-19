@@ -61,8 +61,11 @@
 -- no DoAction bridge — ACTION_LEGOSO_SIRONAS_KILLED
 -- (the sironas-slain speech cascade) is unmodeled;
 -- no dual-wield bridge — Reset() SetCanDualWield(true)
--- unmodeled; no talk bridge — no SAY_LEGOSO_* line fires
--- in this model (sironas precedent).
+-- unmodeled; the old "no talk bridge" claim was stale —
+-- creature:Talk() is bridged (lua_creature_events.go:102):
+-- no SAY_LEGOSO_* arm is reachable here because every
+-- speech leg rides the unbridged escort machine / DoAction
+-- cascade above.
 -- Zone set status: zone_bloodmyst_isle.cpp closed —
 -- npc_webbed_creature documented-only (no-summon /
 -- quest-credit bridges, unverifiable entry),

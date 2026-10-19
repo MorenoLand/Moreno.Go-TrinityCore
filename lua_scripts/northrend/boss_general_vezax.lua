@@ -58,9 +58,9 @@
 -- DoCast(target, SPELL_SHADOW_CRASH 62660) 2-arg non-triggered,
 -- init {8s,10s} (:142), re-arm {8s,12s} (:171) — bridged via the
 -- freya/gal_darah GetPlayersInWorld candidate-selection
--- precedent; the RAID_MODE count gate has no difficulty bridge
--- and is approximated as "any alive player in the 15-50y ring"
--- (fallback: random player within 150y); cast if target.
+-- precedent; the RAID_MODE(4,9) 10/25-man count gate has no raid-size
+-- selector and is approximated as "any alive player in the 15-50y
+-- ring" (fallback: random player within 150y); cast if target.
 -- EVENT_SEARING_FLAMES (:174-176) — DoCastAOE
 -- (SPELL_SEARING_FLAMES 62661) 2-arg non-triggered self-cast,
 -- 12s init (:143), re-arm {14s,17500ms} (:176) — the hard-mode
@@ -219,9 +219,9 @@ end
 -- candidate-selection precedent; the gal_darah threat-list caveat holds).
 -- EVENT_SHADOW_CRASH / EVENT_MARK_OF_THE_FACELESS select via
 -- CheckPlayersInRange(RAID_MODE(4,9), 15.0f, 50.0f) with fallback
--- SelectTarget(Random, 0, 150.0f, true) (:164-187). The RAID_MODE
--- count gate has no difficulty bridge, so the primary leg is
--- approximated as "any alive player in the 15-50y ring"; the 150y
+-- SelectTarget(Random, 0, 150.0f, true) (:164-187). The RAID_MODE(4,9)
+-- 10/25-man count gate has no raid-size selector, so the primary leg
+-- is approximated as "any alive player in the 15-50y ring"; the 150y
 -- fallback leg is exact.
 local function vezaxRandomTarget(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()

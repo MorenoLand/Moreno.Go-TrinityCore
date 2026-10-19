@@ -42,8 +42,9 @@
 -- DoCastAOE bridge" claim is superseded by the phase-gating verdict).
 -- EVENT_FEVER (init randtime(10s,20s), repeat randtime(20s,25s)) —
 -- DoCastAOE(SPELL_DECREPIT_FEVER 29998) 2-arg (non-triggered) —
--- stays OUT: same PHASE_FIGHT bar + no difficulty bridge (kelidan
--- precedent). FIDELITY NOTE: the C++ hard-codes 29998 on both
+-- stays OUT: same PHASE_FIGHT bar only (the "no difficulty bridge" was
+-- a phantom — the C++ hard-codes 29998 on both difficulties, see the
+-- FIDELITY NOTE below; no difficulty selection exists to bridge). FIDELITY NOTE: the C++ hard-codes 29998 on both
 -- difficulties — the enum comment "// 25-man: 55011" is stale vs the
 -- C++ text; a future port must NOT raid-mode it.
 -- EVENT_DANCE (90s, PHASE_FIGHT-only) — the whole phase machine rides

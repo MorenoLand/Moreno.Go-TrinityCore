@@ -50,9 +50,10 @@
 -- convention — selin_fireheart / mr_smite / razuvious precedent) and
 -- the aura gate bridges via creature:HasAura (the freya
 -- DRAINED_OF_POWER precedent); SPELL_WIDOWS_EMBRACE_HELPER is
--- RAID_MODE(28732, 54097) — no difficulty bridge, so both IDs are
--- checked (the applied aura is always the difficulty-appropriate
--- one); init randtime(10s,15s) (:104), repeat randtime(8s,15s).
+-- RAID_MODE(28732, 54097) — no raid-size (10/25-man) selector, so
+-- both IDs are checked (the applied aura is always the
+-- raid-size-appropriate one); init randtime(10s,15s) (:104), repeat
+-- randtime(8s,15s).
 -- SpellHit — PORTED (re-sweep 2026-10-17: the "SpellHit never
 -- fires in the Lua surface (SpellHit ruling)" claim is RETRACTED —
 -- CREATURE_EVENT_ON_HIT_BY_SPELL (event 14) IS live and fires when a
@@ -87,9 +88,12 @@
 -- JustEngagedWith cross-AI DoZoneInCombat via GetGuidData(
 -- DATA_FAERLINA) (no instance/cross-AI bridges), JustDied 10-man
 -- DoCast(WIDOWS_EMBRACE 28732) on Faerlina (same bar), UpdateAI
--- DoCastVictim(ADD_FIREBALL 54095/54096 difficulty pair) — moroes-ready
--- in isolation but the ScriptedAI surface has no entry bridge — joins
--- the bridgeable-but-entry-blocked queue (25-man spell 54096 noted).
+-- DoCastVictim(ADD_FIREBALL 54095) — moroes-ready in isolation but the
+-- add entries live in DB summon groups (SUMMON_GROUP_WORSHIPPERS 1 /
+-- SUMMON_GROUP_FOLLOWERS 2), unverifiable in the C++ tree — joins the
+-- bridgeable-but-entry-blocked queue. FIDELITY NOTE: the C++ hard-codes
+-- 54095 on both difficulties — the "// 25-man: 54096" enum comment is
+-- stale vs the C++ text; a future port must NOT raid-mode it.
 
 local ENTRY_FAERLINA = 15953
 

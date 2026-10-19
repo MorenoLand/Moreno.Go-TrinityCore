@@ -80,7 +80,9 @@
 --   self-cast, then Talk(SAY_BLOOD_BEASTS 9) (:498); re-arm 40s
 --   unconditional (:499). The 25-man trio DoCastSelf(
 --   SPELL_SUMMON_BLOOD_BEAST_25_MAN+i25 72356/72357/72358) (:495-497)
---   stays out: no difficulty bridge (the faerlina precedent).
+--   stays out: the C++ gate is Is25ManRaid() — the 10/25-man
+--   raid-size selector has no bridge (IsHeroic covers normal/heroic
+--   only; the deviations section names this blocker exactly).
 -- EVENT_BLOOD_NOVA (:504-507) — DoCastAOE(SPELL_BLOOD_NOVA_TRIGGER
 --   72378) = non-triggered self-cast; re-arm {20s,25s} randtime.
 -- EVENT_RUNE_OF_BLOOD (:508-511) — DoCastVictim(SPELL_RUNE_OF_BLOOD

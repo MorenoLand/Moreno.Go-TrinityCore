@@ -49,7 +49,7 @@
 -- schedule fire (the center leg). Porting either Talk uncondi-
 -- tionally would be C++-inexact, so both are documented-only here
 -- (no _platform / random-shuffle-group state bridge, no summon
--- bridge (summon STRAND absent), no cast bridge).
+-- bridge (summon STRAND absent)).
 -- Reset — SetControlled(false, UNIT_STATE_ROOT) + SetDisableGravity
 -- (false) + SetReactState(REACT_AGGRESSIVE) — no react-state /
 -- gravity / control / instance bridges; the ungated DoCastSelf(

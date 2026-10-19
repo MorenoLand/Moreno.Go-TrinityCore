@@ -109,8 +109,11 @@
 -- boss_jaraxxus EVENT_SUMMON_INFERNAL_ERUPTION — PORTED (infernalTick;
 -- the volcano/infernal summon STRANDs stay out — documented-only).
 -- npc_legion_flame (34784): Reset — instance->GetBossState(
--- DATA_JARAXXUS) != IN_PROGRESS -> DespawnOrUnsummon (instance model
--- + no despawn bridge); else cross-AI jaraxxus->AI()->JustSummoned
+-- DATA_JARAXXUS) != IN_PROGRESS -> DespawnOrUnsummon (the instance
+-- gate is the true bar — instance-script model absent; the old "no
+-- despawn bridge" parenthetical was stale, creature:Despawn() is
+-- bridged, lua_creature_events.go:236); else cross-AI
+-- jaraxxus->AI()->JustSummoned
 -- (no cross-AI bridge) + SetReactState(REACT_PASSIVE) (no react
 -- bridge) + DoCastSelf(Legion Flame Effect 66201) — self-cast
 -- bridged in isolation but instance-gated in C++: ungated emulation

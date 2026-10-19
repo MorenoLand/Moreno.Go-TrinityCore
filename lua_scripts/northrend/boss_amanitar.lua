@@ -54,8 +54,10 @@
 -- SummonedCreatureDies mushroom-position bookkeeping (into the
 -- deque the EVENT_RESPAWN leg reads) — cross-AI / summon bridges
 -- absent.
--- EnterEvadeMode — summons.DespawnAll (no despawn bridge —
--- terestian precedent), instance
+-- EnterEvadeMode — summons.DespawnAll (summon-lifecycle STRAND
+-- absent — the old "no despawn bridge (terestian precedent)" was
+-- stale: creature:Despawn() IS bridged (lua_creature_events.go:236),
+-- but the arm needs the whole summon list), instance
 -- DoRemoveAurasDueToSpellOnPlayers(Mini) (instance-script model
 -- absent — standing blocker), _DespawnAtEvade.
 -- JustDied — _JustDied() instance bookkeeping only (no bridge);

@@ -41,11 +41,16 @@
 --   cast 26638/800 + post-teleport ArcaneBurst 5s re-arm —
 --   no position/SelectTarget/InterruptNonMeleeSpells/
 --   ResetThreatList/AttackStart bridges.
--- - Arcane Burst 568: C++ DoCast on nearest MELEE-range target
---   (SelectTarget MinDistance, 0, NOMINAL_MELEE_RANGE, true),
---   1s init -> 5s repeat — no range bridge; melee-proximity
---   detection is the whole point of the spell, so unlike
---   Uppercut (kri victim-cast convention) this stays unmodeled.
+-- - Arcane Burst 568: PORTED (the old "no range bridge" claim was
+--   stale — GetDistance / IsWithinDist are bridged, blizzard-arm
+--   precedent): nearest alive player within NOMINAL_MELEE_RANGE
+--   (5.0f) via the same GetPlayersInWorld pool, non-triggered
+--   DoCast on the pick, null-guarded like the C++ if; 1s init,
+--   5s re-arm on cast, 500ms retry poll on empty (C++ leaves the
+--   timer <= diff on no target — retried next UpdateAI tick, the
+--   krosh distance-poller idiom). The unbridged TeleportToMyBrother
+--   gate (TryActivateAfterTTelep / AfterTeleport 5s re-arm) stays
+--   out, as does the sibling teleport arm.
 -- - HandleBugs / CastSpellOnBug (SPELL_EXPLODEBUG 804): creature
 --   grid enumeration + SetFaction + AddAura — no bridges.
 -- - Shadow Bolt MoveChase leg (VEKLOR_DIST 20, "VL will not come
@@ -63,6 +68,8 @@ local ENTRY = 15276
 local SPELL_SHADOWBOLT = 26006
 local SPELL_BLIZZARD = 26607
 local SPELL_BERSERK = 26662
+
+local SPELL_ARCANEBURST = 568
 
 local SOUND_VL_AGGRO = 8657
 local SOUND_VL_KILL = 8658
@@ -140,6 +147,35 @@ local function onBerserk(creature, guid)
     end)
 end
 
+-- C++ Arcane Burst arm (boss_twinemperors.cpp:562-567):
+-- SelectTarget MinDistance, 0, NOMINAL_MELEE_RANGE (5.0f),
+-- playerOnly=true -> DoCast(target, SPELL_ARCANEBURST) 1-arg
+-- (non-triggered); 1s init; re-arm 5s only on a successful cast
+-- (on no target the timer is left <= diff, retried next UpdateAI
+-- tick — emulated as a bounded 500ms retry poll, the krosh
+-- distance-poller idiom).
+local function onArcaneBurst(creature, guid)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local nearest, nearestDist = nil, nil
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            local d = creature:GetDistance(p)
+            if d <= 5.0 and (nearestDist == nil or d < nearestDist) then
+                nearest, nearestDist = p, d
+            end
+        end
+    end
+    local delay = 500
+    if nearest then
+        creature:CastSpell(nearest, SPELL_ARCANEBURST)
+        delay = 5000
+    end
+    schedule(guid, "arcaneburst", delay, function()
+        onArcaneBurst(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -150,6 +186,9 @@ local function onEnterCombat(event, creature, target)
     creature:PlayDirectSound(SOUND_VL_AGGRO)
     schedule(guid, "sb", 1, function()
         onShadowBolt(creature, guid)
+    end)
+    schedule(guid, "arcaneburst", 1000, function()
+        onArcaneBurst(creature, guid)
     end)
     schedule(guid, "blizzard", math.random(15000, 20000), function()
         onBlizzard(creature, guid)

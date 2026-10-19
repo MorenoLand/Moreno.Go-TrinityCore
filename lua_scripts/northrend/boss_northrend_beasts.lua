@@ -83,7 +83,9 @@
 -- cross-AI bridges; no Talk); EnterEvadeMode — instance->SetData(
 -- DATA_DESPAWN_SNOBOLDS) + TYPE_NORTHREND_BEASTS FAIL + combatStalker
 -- DespawnOrUnsummon + summons.DespawnAll + me->DespawnOrUnsummon
--- (instance model + no despawn bridge — terestian precedent).
+-- (instance model + cross-AI / summon-lifecycle bridges absent; own-
+-- despawn IS bridged (creature:Despawn()), the old "no despawn bridge
+-- — terestian precedent" note was stale — anubarak_trial precedent).
 -- npc_snobold_vassal (34800 — header constant; instance OnCreatureCreate
 -- tracks NPC_SNOBOLD_VASSAL GUIDs — entry-evidence exists but the
 -- ScriptName binding is DB-side): the whole vehicle mount machine —

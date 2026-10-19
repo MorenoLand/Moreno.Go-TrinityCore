@@ -58,9 +58,12 @@
 -- excluded.
 -- SpellHitTarget (SPELL_PURSUED: _pursueTarget GUID + vehicle seat walk ->
 -- Talk(EMOTE_PURSUE 12, passenger)) — no vehicle bridge.
--- SpellHit (SPELL_START_THE_ENGINE 62472 vehicle-accessory install;
--- SPELL_ELECTROSHOCK 62522 channeled-interrupt, no cast bridge;
--- SPELL_OVERLOAD_CIRCUIT 62399 ++Shutdown) — no vehicle/cast bridges.
+-- SpellHit (SPELL_START_THE_ENGINE 62472 vehicle-accessory install —
+-- no vehicle bridge; SPELL_ELECTROSHOCK 62522
+-- InterruptSpell(CURRENT_CHANNELED_SPELL) — no interrupt bridge
+-- (CastSpell itself is bridged; the arm interrupts, it doesn't cast);
+-- SPELL_OVERLOAD_CIRCUIT 62399 ++Shutdown — the early-4s shutdown
+-- consumer calls InterruptNonMeleeSpells, also unbridged).
 -- GetData(DATA_SHUTOUT / DATA_UNBROKEN / DATA_ORBIT_ACHIEVEMENTS) /
 -- SetData(DATA_UNBROKEN) / DoAction tower-destruction loot-mode ladder —
 -- no GetData/SetData/DoAction bridges.

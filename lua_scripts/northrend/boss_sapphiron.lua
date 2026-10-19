@@ -93,8 +93,8 @@
 -- PHASE_GROUND bar.
 -- EVENT_BLIZZARD — DoCastAOE(Summon Blizzard 28560) 1-arg
 -- (triggered defaults false) + RAID_MODE(20s, 7s) repeat — stays OUT: same
--- PHASE_GROUND bar + the summon leg + no difficulty bridge (kelidan
--- precedent).
+-- PHASE_GROUND bar + the summon leg + no raid-size (10/25-man)
+-- selector bridge (IsHeroic covers normal/heroic only).
 -- EVENT_FLIGHT — HealthAbovePct(10) + REACT_PASSIVE + AttackStop +
 -- MovePoint home — no health-pct / motion / react bridges.
 -- EVENT_LIFTOFF — DoSummon(NPC_WING_BUFFET 17025) + hover/emote
