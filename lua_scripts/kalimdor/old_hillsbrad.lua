@@ -104,19 +104,20 @@
 --   Teleport please, i'm tired." (action +2) when QUEST_ENTRY_RETURN 10285
 --   is complete (menu 9778); action +1 grants one Incendiary Bombs 25853
 --   via CanStoreNewItem/StoreNewItem (menu 9515), action +2 just closes.
--- - npc_taretha (EscortAI, zero bridgeable arms — documented, not
---   registered): WaypointReached case 6 Talk(SAY_TA_FREE 0), case 7
---   HandleEmoteCommand(EMOTE_ONESHOT_CHEER); OnGossipHello shows
---   GOSSIP_ITEM_EPOCH1 ("Strange wizard?", menu 9610) when
---   TYPE_THRALL_PART3 6 == DONE and TYPE_THRALL_PART4 7 == NOT_STARTED;
---   OnGossipSelect action 2 -> SetData(TYPE_THRALL_PART4 7, IN_PROGRESS) +
---   SummonCreature(ENTRY_EPOCH 18096, 2639.13, 698.55, 65.43, 4.59,
---   TIMED_OR_DEAD_DESPAWN, 2min) if DATA_EPOCH 9 GUID empty + Thrall's
---   StartWP(). Taretha's entry (TARETHA_ENTRY 18887: old_hillsbrad.h:36 +
---   instance_old_hillsbrad.cpp:111 OnCreatureCreate case) and Erozion's
---   (EROZION_ENTRY 18723: named in this cpp's ThrallOldHillsbrad enum and
---   summoned at waypoint 106 — the skarloc summon-strength pattern) are
---   C++-verifiable, but neither script has a bridgeable arm to register.
+-- - npc_taretha (EscortAI): WaypointReached case 6 Talk(SAY_TA_FREE 0),
+--   case 7 HandleEmoteCommand(EMOTE_ONESHOT_CHEER) — escort-only,
+--   documented. OnGossipHello shows GOSSIP_ITEM_EPOCH1 ("Strange
+--   wizard?", menu 9610) when TYPE_THRALL_PART3 6 == DONE and
+--   TYPE_THRALL_PART4 7 == NOT_STARTED; OnGossipSelect action 1001 ->
+--   EPOCH2 item + menu 9613 (pure menu nav), action 1002 ->
+--   CloseGossipMenuFor + the instance/summon machine (SetData
+--   TYPE_THRALL_PART4 7 IN_PROGRESS, SummonCreature ENTRY_EPOCH 18096
+--   at 2639.13/698.55/65.43/4.59 TIMED_OR_DEAD_DESPAWN 2min if
+--   DATA_EPOCH 9 GUID empty, Thrall StartWP). PORTED below (entry
+--   TARETHA_ENTRY 18887: instance_old_hillsbrad.cpp:36): the hello
+--   instance gate is documented-only (kalecgos precedent); the
+--   action-1002 machine's SetData/summon/escort legs are unbridged,
+--   so only the menu close is ported there.
 -- - The C++ "/// @todo add his abilities'n-crap here" comment (Thrall
 --   UpdateAI) and the commented-out UNIT_VIRTUAL_ITEM_INFO sets are ported
 --   as-is above; the escort Talk lines (SAY_TH_START_EVENT_PART1 0 through
@@ -191,3 +192,46 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- npc_taretha gossip (old_hillsbrad.cpp:597-629) — entry TARETHA_ENTRY
+-- 18887 (instance_old_hillsbrad.cpp:36).
+local TARETHA_ENTRY = 18887
+
+local GOSSIP_ICON_CHAT = 0
+local GOSSIP_SENDER_MAIN = 1
+local GOSSIP_ACTION_INFO_DEF = 1000
+local GOSSIP_ITEM_EPOCH1 = "Strange wizard?"
+local GOSSIP_ITEM_EPOCH2 = "We'll get you out. Taretha. Don't worry. I doubt the wizard would wander too far away."
+local GOSSIP_MENU_EPOCH1 = 9610
+local GOSSIP_MENU_EPOCH2 = 9613
+
+-- C++ OnGossipHello (old_hillsbrad.cpp:622-629): EPOCH1 item + menu
+-- 9610 only when instance TYPE_THRALL_PART3 == DONE and
+-- TYPE_THRALL_PART4 == NOT_STARTED. Instance gates have no bridge —
+-- kalecgos precedent — so the item is offered unconditionally and
+-- the gate is documented.
+local function tarethaGossipHello(event, player, creature)
+    player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_EPOCH1,
+        GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
+    player:GossipSendMenu(0, creature, GOSSIP_MENU_EPOCH1)
+end
+
+-- C++ OnGossipSelect (old_hillsbrad.cpp:597-620): action 1001 ->
+-- AddGossipItemFor EPOCH2 + SendGossipMenuFor 9613 (pure menu nav);
+-- action 1002 -> CloseGossipMenuFor + instance/summon machine
+-- (SetData TYPE_THRALL_PART4 IN_PROGRESS, SummonCreature ENTRY_EPOCH,
+-- Thrall StartWP) — instance/summon/escort unbridged, so only the
+-- menu close is ported on that leg, the machine documented above.
+local function tarethaGossipSelect(event, player, creature, sender, action)
+    if action == GOSSIP_ACTION_INFO_DEF + 1 then
+        player:GossipClearMenu()
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_EPOCH2,
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
+        player:GossipSendMenu(0, creature, GOSSIP_MENU_EPOCH2)
+    elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
+        player:GossipComplete()
+    end
+end
+
+RegisterCreatureGossipEvent(TARETHA_ENTRY, 1, tarethaGossipHello)
+RegisterCreatureGossipEvent(TARETHA_ENTRY, 2, tarethaGossipSelect)

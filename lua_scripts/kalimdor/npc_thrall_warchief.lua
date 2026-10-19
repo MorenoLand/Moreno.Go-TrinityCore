@@ -21,8 +21,12 @@
 -- - DoMeleeAttackIfReady — engine-driven in Go (ouro precedent).
 -- Documented-only (no bridges):
 -- - OnGossipHello/OnGossipSelect (quest-6566 "What the Wind
---   Carries" menu chain, AreaExploredOrEventHappens): no gossip
---   bridge (ashenvale go_naga_brazier precedent).
+--   Carries" menu chain, AreaExploredOrEventHappens): gossip IS
+--   bridged (RegisterCreatureGossipEvent — the "no gossip bridge"
+--   claim was stale; live at engine/world/gossip.go:129/369); the
+--   arm stays documented-only on the quest machine
+--   (GetQuestRewardStatus / AreaExploredOrEventHappens —
+--   ashenvale go_naga_brazier precedent).
 -- - npc_shenthul (quest-1654 Shattered Salute emote machine:
 --   ReceiveEmote / HandleEmoteCommand / FailQuest /
 --   AreaExploredOrEventHappens): no emote/quest bridges.

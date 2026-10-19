@@ -32,10 +32,15 @@
 -- target picks are alive players on the same map/instance
 -- (keleseth/thorim/moroes precedent); DoMeleeAttackIfReady is
 -- engine-driven.
--- DOCUMENTED-ONLY (this file's entries): npc_sinclari_vh (gossip +
--- intro/outro scheduler machine), the 3 teleportation portal scripts
--- (wave-summon machines, instance wave-count gates, sinclariTrigger
--- talks), npc_azure_saboteur (MoveSmoothPath choreography,
+-- DOCUMENTED-ONLY (this file's entries): npc_sinclari_vh — gossip
+-- select arms gate on menuId (GOSSIP_MENU_START_ENCOUNTER 9998 /
+-- GOSSIP_MENU_SEND_ME_IN 10275), which the Lua select hook never
+-- receives (sender/action only — gossip.go:351), and the SEND_ME_IN
+-- option's action value is DB-side; the intro/outro scheduler
+-- machine (instance wave-count gates, sinclariTrigger talks) is
+-- unbridged — documented-only.
+-- The 3 teleportation portal scripts (wave-summon machines, instance
+-- wave-count gates), npc_azure_saboteur (MoveSmoothPath choreography,
 -- MovementInform-gated SHIELD_DISRUPTION 58291, instance
 -- DATA_START_BOSS_ENCOUNTER), npc_violet_hold_defense_system
 -- (Reset-scheduled, not combat-engaged: 4s DoCastAOE 57912+57930, 1s

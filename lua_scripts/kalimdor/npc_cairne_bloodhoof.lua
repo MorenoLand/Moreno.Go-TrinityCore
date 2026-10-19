@@ -29,8 +29,11 @@
 -- - DoMeleeAttackIfReady — engine-driven in Go (ouro precedent).
 -- Documented-only (no bridges):
 -- - OnGossipHello/OnGossipSelect (quest 925 "A Sacred Burial"
---   hoofprint menu): no gossip bridge (ashenvale go_naga_brazier
---   precedent).
+--   hoofprint menu): gossip IS bridged (RegisterCreatureGossipEvent
+--   — the "no gossip bridge" claim was stale; live at
+--   engine/world/gossip.go:129/369); the arm stays documented-only
+--   on the quest machine (GetQuestRewardStatus) + player->CastSpell
+--   23123 (no player-self-cast bridge).
 
 local SPELL_BERSERKER_CHARGE = 16636
 local SPELL_CLEAVE = 16044

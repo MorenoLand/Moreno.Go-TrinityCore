@@ -27,8 +27,10 @@
 --   Spark therefore still attacks on the live wire; tree-event area
 --   gating is unmodeled.
 -- - OnGossipSelect (CloseGossipMenuFor + SetFaction(FACTION_MONSTER)
---   + Attack): gossip bridge absent (ashenvale go_naga_brazier
---   precedent); SetFaction has zero Lua usage (ouro).
+--   + Attack): gossip IS bridged (RegisterCreatureGossipEvent — the
+--   "gossip bridge absent" claim was stale; live at
+--   engine/world/gossip.go:129/369); SetFaction/Attack have zero Lua
+--   usage (ouro) so the arm stays documented-only.
 -- - Reset's NormFaction restore: SetFaction has no Lua bridge
 --   (zero Lua usage — ouro precedent).
 -- - The rest of zone_azuremyst_isle.cpp, documented-only:

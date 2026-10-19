@@ -59,27 +59,39 @@
 -- RECRUIT_1: RemoveFlag gossip + Talk(0) + 3s->RECRUIT_2;
 -- EVENT_RECRUIT_2: SetWalk + MovePoint 10yd forward + Despawn
 -- OrUnsummon(5s)) and the OnGossipSelect arm (schedule 100ms +
--- CloseGossip + CastSpell(player, 50633) + SetFacingToObject)
--- sit behind the gossip / flag / cross-creature-Talk /
--- movement / despawn bridges — documented-only. 50633/12509
--- verifiable.
+-- CloseGossip + CastSpell(player, 50633) + SetFacingToObject):
+-- gossip itself IS bridged (RegisterCreatureGossipEvent — the
+-- "no gossip bridge" claim was stale; live at
+-- engine/world/gossip.go:129/369), creature:CastSpell(player) and
+-- Despawn are bridged too — the real blockers are the flag /
+-- emotestate writes (no UNIT_NPC_FLAGS / UNIT_FIELD_EMOTESTATE
+-- write bridge), SetFacingToObject / SetWalk / MovePoint (no
+-- facing/movement bridges), and the entry, which is not
+-- C++-verifiable (DB-side ScriptName bind), so nothing can be
+-- registered — documented-only. 50633/12509 verifiable.
 -- go_scourge_enclosure (GameObjectAI) — the OnGossipHello arm
 -- (UseDoorOrButton + quest-12916 INCOMPLETE gate -> FindNearest
 -- Creature(29928, 20yd) -> KilledMonsterCredit + dummy CastSpell
 -- (dummy, 55529) + DespawnOrUnsummon(4s)) sits behind the GO /
 -- quest / world-search / kill-credit / despawn bridges —
 -- documented-only. 12916/29928/55529 verifiable.
--- npc_alchemist_finklestein — the whole machine (EVENT_TURN_TO
+-- npc_alchemist_finklestein — the facing/emote loop (EVENT_TURN_TO
 -- _POT 15-26s SetFacingTo(6.230825) + EMOTE_STATE_USE_STANDING
 -- _NO_SHEATHE -> EVENT_TURN_BACK 11s SetFacingTo(4.886922) +
--- EMOTE_STATE_NONE -> 25-41s->TURN_TO_POT; EVENT_EASY_123 /
--- MEDIUM_4 / MEDIUM_5 / HARD_6: player GUID lookup -> Talk(say,
--- player) + DoCast(player, 51015/51154/51157) + ++try; SetData
--- (1,1) try-gated dispatch; OnGossipSelect: CloseGossip +
--- DoCast(player, 51216) + _playerGUID stash + try=1 + schedule
--- EVENT_EASY_123 100ms) sits behind the emote / facing /
--- cross-creature-Talk / player-cast / gossip bridges; entry
--- 28205 verifiable — documented-only.
+-- EMOTE_STATE_NONE -> 25-41s->TURN_TO_POT), the MEDIUM_4 / MEDIUM_5 /
+-- HARD_6 ingredient events (player GUID lookup -> Talk(say, player) +
+-- DoCast(player, 51154/51157) + ++try, dispatched by the cauldron's
+-- SetData(1,1)), and the cauldron GO arm (player->CastSpell(player,
+-- SPELL_POT_CHECK 51046)) stay documented-only: no facing/emote/
+-- GO/player-self-cast bridges. OnGossipSelect (zone_zuldrak.cpp:
+-- 575-583: CloseGossipMenuFor + DoCast(player,
+-- SPELL_ALCHEMIST_APPRENTICE_INVISBUFF 51216) + ScheduleEvent
+-- (EVENT_EASY_123, 100ms) -> Talk(SAY_EASY_123 0, player) +
+-- DoCast(player, SPELL_RANDOM_INGREDIENT_EASY_AURA 51015)) is
+-- PORTED below — entry NPC_FINKLESTEIN 28205 (zone_zuldrak.cpp:
+-- 341); all three calls are bridged (creature:CastSpell(player,
+-- ...), Talk whisper arm); the 100ms timer rides the per-GUID
+-- schedule table with cancel on 2/4/23.
 -- go_finklesteins_cauldron (GameObjectAI) — OnGossipHello:
 -- player->CastSpell(player, SPELL_POT_CHECK 51046) behind the
 -- GO / player-self-cast bridges — documented-only.
@@ -133,3 +145,65 @@ end
 
 RegisterCreatureEvent(STORM_CLOUD_ENTRY, 5, onSpawnOrReset)
 RegisterCreatureEvent(STORM_CLOUD_ENTRY, 23, onSpawnOrReset)
+
+-- npc_alchemist_finklestein gossip (zone_zuldrak.cpp:575-583) — entry
+-- NPC_FINKLESTEIN 28205 (zone_zuldrak.cpp:341).
+local NPC_FINKLESTEIN = 28205
+local SPELL_ALCHEMIST_APPRENTICE_INVISBUFF = 51216
+local SPELL_RANDOM_INGREDIENT_EASY_AURA = 51015
+local SAY_EASY_123 = 0
+
+local finklesteinTimers = {}
+
+local function finklesteinCancelTimers(guid)
+    local per = finklesteinTimers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        finklesteinTimers[guid] = nil
+    end
+end
+
+local function finklesteinSchedule(guid, key, delay, fn)
+    local per = finklesteinTimers[guid]
+    if not per then
+        per = {}
+        finklesteinTimers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EVENT_EASY_123 (zone_zuldrak.cpp:528-533): Talk(SAY_EASY_123 0,
+-- player) + DoCast(player, SPELL_RANDOM_INGREDIENT_EASY_AURA 51015) +
+-- ++try. The player is captured in the closure (the C++ _playerGUID
+-- stash); the try counter gates only the unbridged cauldron SetData
+-- dispatch, so it is not modeled.
+local function finklesteinEasy123(creature, player)
+    creature:Talk(SAY_EASY_123, player)
+    creature:CastSpell(player, SPELL_RANDOM_INGREDIENT_EASY_AURA)
+end
+
+-- C++ OnGossipSelect (zone_zuldrak.cpp:575-583): CloseGossipMenuFor +
+-- DoCast(player, SPELL_ALCHEMIST_APPRENTICE_INVISBUFF 51216) +
+-- ScheduleEvent(EVENT_EASY_123, 100ms). No menuId/gossipListId gate.
+local function finklesteinGossipSelect(event, player, creature, sender, action)
+    player:GossipComplete()
+    creature:CastSpell(player, SPELL_ALCHEMIST_APPRENTICE_INVISBUFF)
+    local guid = creature:GetGUID()
+    finklesteinSchedule(guid, "easy123", 100, function()
+        finklesteinEasy123(creature, player)
+    end)
+end
+
+local function finklesteinCancel(event, creature)
+    finklesteinCancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureGossipEvent(NPC_FINKLESTEIN, 2, finklesteinGossipSelect)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 2, finklesteinCancel)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 4, finklesteinCancel)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 23, finklesteinCancel)

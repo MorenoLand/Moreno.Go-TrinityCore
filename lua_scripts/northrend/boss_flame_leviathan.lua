@@ -84,9 +84,16 @@
 -- npc_hodirs_fury (33212/33108) / npc_freyas_ward (33367/33366) /
 -- npc_freya_ward_summon — aura/timer/summon/move legs, no Talk arms anywhere
 -- — no registrations.
--- npc_brann_bronzebeard_ulduar_intro / npc_lorekeeper — gossip legs, no
--- gossip bridge; the lorekeeper Talk call is commented out in C++ (dead code).
--- go_ulduar_tower — GameObjectScript — no GO bridge.
+-- npc_brann_bronzebeard_ulduar_intro / npc_lorekeeper — gossip legs:
+-- the gossip bridge IS live (RegisterCreatureGossipEvent,
+-- engine/world/gossip.go:129/369) — the "no gossip bridge" claim was
+-- stale; the arms stay documented-only because C++ gates them on
+-- OnGossipSelect menuId (10355 / 10477), which the Lua select hook
+-- never receives (sender/action only — gossip.go:351); the lorekeeper
+-- Talk call is commented out in C++ (dead code).
+-- go_ulduar_tower — GameObjectScript — RegisterGameObjectGossipEvent
+-- exists (runtime.go:802); the arm's legs (tower destruction state)
+-- stay documented-only on the instance/GO-state machine.
 -- achievement_three_car_garage_{demolisher,chopper,siege}, achievement_shutout,
 -- achievement_unbroken, achievement_orbital_bombardment,
 -- achievement_orbital_devastation, achievement_nuked_from_orbit,

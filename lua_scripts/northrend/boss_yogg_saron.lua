@@ -127,8 +127,11 @@
 -- only); DoAction ACTION_INDUCE_MADNESS /
 -- ACTION_TENTACLE_KILLED have no Talk arms.
 -- npc_observation_ring_keeper — Talk(SAY_KEEPER_CHOSEN_1/2,
--- player) gated on OnGossipSelect menuId 10333 — no
--- gossip-select bridge; Reset one-shots PORTED below (event
+-- player) gated on OnGossipSelect menuId 10333 — the gossip bridge
+-- IS live (RegisterCreatureGossipEvent,
+-- engine/world/gossip.go:129/369) but the Lua select hook never
+-- receives menuId (sender/action only — gossip.go:351), so the gate
+-- is unexpressible; Reset one-shots PORTED below (event
 -- 23); (observation-ring
 -- keeper entries 33213 / 33241 / 33242 / 33244 entry-verifiable,
 -- ulduar.h lines 199-202).

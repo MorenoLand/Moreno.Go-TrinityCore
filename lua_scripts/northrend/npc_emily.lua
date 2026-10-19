@@ -75,6 +75,9 @@
 -- EVENT_LAKEFROG timers + entry-update/gossip legs with no bridge
 -- for the sequence machine; ReceiveEmote TEXT_EMOTE_KISS + item 44986 /
 -- auras 62537/62574/62581 legs — no-emote / no-item bridges.
+-- OnGossipSelect (zone_grizzly_hills.cpp:777-781: ungated DoCast(player,
+-- SPELL_SUMMON_ASHWOOD_BRAND 62554)) is PORTED below — no menuId or
+-- gossipListId gate in C++, so the Lua port gates on nothing either.
 -- npc_rocket_propelled_warhead: VehicleAI PassengerBoarded DoCast
 -- SPELL_VEHICLE_WARHEAD_FUSE + DoAction MovePoint chain — no
 -- PassengerBoarded / no-DoAction / no-movement bridges.
@@ -93,3 +96,17 @@ local function emilyEnterCombat(event, creature, target)
 end
 
 RegisterCreatureEvent(ENTRY_EMILY, 1, emilyEnterCombat)
+
+-- npc_lake_frog gossip (zone_grizzly_hills.cpp:777-781) — entry
+-- NPC_LAKE_FROG 33211 (zone_grizzly_hills.cpp:658).
+local NPC_LAKE_FROG = 33211
+local SPELL_SUMMON_ASHWOOD_BRAND = 62554
+
+-- C++ OnGossipSelect: DoCast(player, SPELL_SUMMON_ASHWOOD_BRAND) with
+-- no menuId/gossipListId gate — the Lua port likewise gates on
+-- nothing (exact). Non-triggered DoCast, matching UnitAI::DoCast.
+local function lakeFrogGossipSelect(event, player, creature, sender, action)
+    creature:CastSpell(player, SPELL_SUMMON_ASHWOOD_BRAND)
+end
+
+RegisterCreatureGossipEvent(NPC_LAKE_FROG, 2, lakeFrogGossipSelect)

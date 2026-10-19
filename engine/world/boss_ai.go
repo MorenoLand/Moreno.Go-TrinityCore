@@ -5637,7 +5637,10 @@ func init() {
 	// (RECRUIT_1/2 event machine + OnGossipSelect player-cast),
 	// go_scourge_enclosure (GO gossip quest-12916 credit machine),
 	// npc_alchemist_finklestein (the facing/emote loop +
-	// ingredient Talk/cast machine + gossip), go_finklesteins_
+	// ingredient aura machine) — the OnGossipSelect arm
+	// (CloseGossip + CastSpell(player, 51216) + 100ms ->
+	// Talk(0, player) + CastSpell(player, 51015)) is PORTED in
+	// lua_scripts/northrend/npc_storm_cloud.lua; go_finklesteins_
 	// cauldron (gossip 51046 self-cast), and the five
 	// SpellScript/AuraScript loaders (spell_random_ingredient_
 	// aura, spell_random_ingredient, spell_pot_check,
