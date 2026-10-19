@@ -122,19 +122,6 @@ local function alivePlayersInRange(creature, maxDist)
     return found
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0) with no distance or
--- alive filter (Julianne's Powerful Attraction): any player on the map.
-local function playersOnMap(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
 -- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
 -- random over the threat list, pets/totems eligible. Bridged via
 -- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),

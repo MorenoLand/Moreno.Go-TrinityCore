@@ -26,7 +26,8 @@
 -- auriaya precedent for the Talk).
 -- EVENT_POLYMORPH — heroic: SelectTarget(Random, 0) →
 -- DoCast(target, SPELL_POLYMORPH 38245); normal:
--- SelectTarget(MaxThreat, 1) (SECOND on threat, tank excluded) →
+-- SelectTarget(MaxThreat, 1) (SECOND on threat, tank excluded;
+-- playerOnly defaults FALSE per UnitAI.h:170, so pets/totems eligible) →
 -- DoCast(target, SPELL_POLYMORPH); re-arm randtime(15s,17.5s)
 -- (C++ 15s, 17500ms — millisecond granularity, not whole seconds).
 -- GetAITargets is threat-SORTED (lua_creature_events.go:345-359),
@@ -107,7 +108,7 @@ end
 -- GetAITargets (the bridged, threat-sorted list;
 -- lua_creature_events.go:345-359); the Player filter was dropped
 -- 2026-10-19.
-local function randomPlayerThreat(creature)
+local function randomThreatTarget(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         candidates[#candidates + 1] = t
@@ -125,15 +126,12 @@ end
 local function polymorphTick(creature, guid)
     local target
     if creature:IsHeroic() then
-        target = randomPlayerThreat(creature)
+        target = randomThreatTarget(creature)
     else
-        local players = {}
-        for _, t in ipairs(creature:GetAITargets()) do
-            if t:GetObjectType() == "Player" then
-                players[#players + 1] = t
-            end
-        end
-        target = players[2] -- offset 1: second-highest threat
+        -- C++ SelectTarget(MaxThreat, 1) (playerOnly defaults FALSE per
+        -- UnitAI.h:170): the second threat-list entry outright, pets/totems
+        -- eligible — NOT the second-highest-threat player.
+        target = creature:GetAITargets()[2]
     end
     if target then
         creature:CastSpell(target, SPELL_POLYMORPH)

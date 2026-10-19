@@ -122,7 +122,7 @@ end
 -- C++ SelectTarget(Random, 0) (playerOnly defaults FALSE per
 -- UnitAI.h:170 — pets/totems eligible) — threat-list pool via
 -- GetAITargets (the Player filter was dropped 2026-10-19).
-local function randomPlayerThreat(creature)
+local function randomThreatTarget(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         candidates[#candidates + 1] = t
@@ -148,7 +148,7 @@ end
 -- SelectTarget(Random, 0) → DoCast(target, SPELL_CYCLONE_OF_FEATHERS)
 -- 2-arg (non-triggered); 5s init, 21s flat repeat.
 local function cycloneOfFeathersTick(creature, guid)
-    local target = randomPlayerThreat(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CYCLONE_OF_FEATHERS)
     end
@@ -162,7 +162,7 @@ end
 -- SPELL_SPELL_BOMB) 2-arg (non-triggered) + Talk(SAY_SPELL_BOMB,
 -- target); non-mana targets fall through with no cast.
 local function spellBombTick(creature, guid)
-    local target = randomPlayerThreat(creature)
+    local target = randomThreatTarget(creature)
     if target and target:GetPowerType() == POWER_MANA then
         creature:CastSpell(target, SPELL_SPELL_BOMB)
         creature:Talk(SAY_SPELL_BOMB, target)
