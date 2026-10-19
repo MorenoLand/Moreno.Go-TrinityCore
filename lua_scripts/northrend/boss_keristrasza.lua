@@ -235,7 +235,9 @@ local function keristraszaEnterCombat(event, creature, target)
     schedule(guid, "crystalfirebreath", 14000, function()
         crystalFireBreathTick(creature, guid)
     end)
-    schedule(guid, "crystalchainscrystallize", 30000, function()
+    -- C++ JustEngagedWith schedules EVENT_CRYSTAL_CHAINS_CRYSTALLIZE
+    -- with DUNGEON_MODE(30s, 11s) (cpp:102) — heroic fires 19s sooner.
+    schedule(guid, "crystalchainscrystallize", creature:IsHeroic() and 11000 or 30000, function()
         crystalChainsCrystallizeTick(creature, guid)
     end)
     schedule(guid, "tailsweep", 5000, function()

@@ -198,7 +198,9 @@ local function doanDamageTaken(event, creature, attacker, damage)
     -- magmus precedent). The golemagg 704fb8e no-subtraction rule does
     -- NOT apply here: there C++ reads pre-damage health in AI::DamageTaken,
     -- here it reads post-damage health in UpdateAI.
-    if health - damage < math.floor(maxHealth * 50 / 100) then
+    -- C++ reads post-damage health in UpdateAI, so the arm never
+    -- fires on the killing blow (nefarian postDamage > 0 rule).
+    if health - damage > 0 and health - damage < math.floor(maxHealth * 50 / 100) then
         bubbleLatched[guid] = true
         creature:Talk(SAY_SPECIALAE)
         creature:CastSpell(creature, SPELL_ARCANE_BUBBLE)

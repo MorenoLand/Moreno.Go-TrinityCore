@@ -155,7 +155,9 @@ local function onDamageTaken(_, creature, _, damage)
     if usedPotion[guid] then
         return
     end
-    if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 25 / 100) then
+    -- C++ reads post-damage health in UpdateAI (HealthBelowPct(25));
+    -- never fires on the killing blow (nefarian postDamage > 0 rule).
+    if creature:GetHealth() - damage > 0 and creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 25 / 100) then
         usedPotion[guid] = true
         creature:CastSpell(creature, SPELL_HEALING_POTION)
     end
