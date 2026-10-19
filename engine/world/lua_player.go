@@ -809,6 +809,81 @@ func (s *session) luaPlayer() *scripting.Object {
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242) —
 	// replaces the old no-op PlayDirectSound stub.
 	luaWorldObjectSoundMethods(s.server, s, s.playerGUID, methods)
+	// SetVisibleItemEnchantment ports the visual-only enchant write of the
+	// custom weapon-visual scripts
+	// (src/server/scripts/Custom/cs_npc_weapon_visual.cpp,
+	// TrintyRetardsAI::SetVisual, and the denveous_stuff item script):
+	// player->SetUInt16Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + (slot * 2),
+	// 0, visual). The low uint16 of the enchantment update word is the
+	// permanent enchant the client renders as the weapon glow; the high
+	// uint16 (temporary enchant) is preserved, matching SetUInt16Value's
+	// word write. slot is the equipment slot (EQUIPMENT_SLOT_MAINHAND = 15,
+	// EQUIPMENT_SLOT_OFFHAND = 16); the update is ephemeral like the C++
+	// field write — a relog rebuilds the word from item_instance
+	// enchantments. Returns true when the visual was applied.
+	methods["SetVisibleItemEnchantment"] = func(lctx context.Context, args []any) ([]any, error) {
+		if s.player == nil {
+			return []any{false}, nil
+		}
+		slot, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		visual, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if slot >= uint32(playerVisibleItemCount) {
+			return []any{false}, nil
+		}
+		pairs := strings.Fields(s.player.Equipment)
+		base := int(slot) * 2
+		var itemID, enchant uint64
+		if base < len(pairs) {
+			itemID, _ = strconv.ParseUint(pairs[base], 10, 32)
+			if base+1 < len(pairs) {
+				enchant, _ = strconv.ParseUint(pairs[base+1], 10, 32)
+			}
+		}
+		if itemID == 0 {
+			// C++: ChatHandler(player->GetSession()).PSendSysMessage("Equip
+			// an item in that slot in order to change the look.")
+			_ = s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildSystemChatMessage("Equip an item in that slot in order to change the look."), true)
+			return []any{false}, nil
+		}
+		// C++ SetVisual subclass gate, a raw SubClass compare with no class
+		// check (ItemTemplate.h:349-369, 400-401) — so armor 5/6 reject the
+		// same way as weapon polearm/2h-mace 5/6:
+		// shield 6, buckler 5, bow 2, gun 3, obsolete 9, exotic 11,
+		// exotic2 12, misc 14, thrown 16, spear 17, crossbow 18, wand 19,
+		// fishing pole 20.
+		if data, dataErr := s.loadItemQueryData(lctx, uint32(itemID)); dataErr == nil {
+			switch data.SubClass {
+			case 2, 3, 5, 6, 9, 11, 12, 14, 16, 17, 18, 19, 20:
+				return []any{false}, nil
+			}
+		}
+		newEnchant := (uint32(enchant) & 0xFFFF0000) | (uint32(visual) & 0xFFFF)
+		if newEnchant != uint32(enchant) {
+			padded := make([]string, base+2)
+			copy(padded, pairs)
+			for i := len(pairs); i < base+2; i++ {
+				padded[i] = "0"
+			}
+			padded[base] = strconv.FormatUint(itemID, 10)
+			padded[base+1] = strconv.FormatUint(uint64(newEnchant), 10)
+			s.player.Equipment = strings.Join(padded, " ") + " "
+		}
+		fields := map[int]uint32{
+			int(playerVisibleItemStart) + int(slot)*2:     uint32(itemID),
+			int(playerVisibleItemStart) + int(slot)*2 + 1: newEnchant,
+		}
+		if packet, perr := s.server.buildPlayerValuesUpdate(s.playerGUID, fields); perr == nil && packet != nil {
+			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		}
+		s.server.broadcastPlayerValuesUpdateFromSession(s, fields)
+		return []any{true}, nil
+	}
 	methods["GetItemByPos"] = func(_ context.Context, _ []any) ([]any, error) { return []any{nil}, nil }
 	methods["GetNearestGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
