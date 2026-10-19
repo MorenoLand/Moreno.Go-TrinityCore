@@ -1299,6 +1299,13 @@ func (s *Server) Stop() {
 			}
 		}
 		s.lootMu.Unlock()
+		// C++ Eluna::CloseLua fires ELUNA_EVENT_ON_LUA_STATE_CLOSE (16) just
+		// before destroying the bindings at teardown (LuaEngine.cpp:202),
+		// after WORLD_EVENT_ON_SHUTDOWN (15) — so it closes the Lua state
+		// after every other shutdown trigger above has run.
+		if s.Features != nil && s.Features.Scripts != nil {
+			_, _ = s.Features.Scripts.TriggerServerEvent(context.Background(), scripting.ServerEventLuaStateClose)
+		}
 	})
 }
 

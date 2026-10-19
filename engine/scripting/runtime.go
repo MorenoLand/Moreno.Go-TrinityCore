@@ -169,6 +169,18 @@ const (
 // the events the engine fires carry Go constants.
 const (
 	ServerEventAddonMessage = 30
+	// ServerEventLuaStateClose is ELUNA_EVENT_ON_LUA_STATE_CLOSE
+	// (LuaEngine/Hooks.h:123 = 16, args (event)): fires just before the
+	// Lua state shuts down (on shutdown and restart). The Go engine fires
+	// it at the end of Server.Stop, after WORLD_EVENT_ON_SHUTDOWN (15),
+	// matching the C++ teardown order (World::ShutdownServ, then Eluna
+	// destruction -> CloseLua -> OnLuaStateClose, LuaEngine.cpp:202).
+	ServerEventLuaStateClose = 16
+	// ServerEventLuaStateOpen is ELUNA_EVENT_ON_LUA_STATE_OPEN
+	// (LuaEngine/Hooks.h:153 = 33, args (event)): fires after all scripts
+	// are loaded. The Go engine fires it at the end of Runtime.Load,
+	// matching Eluna::LoadScripts (LuaEngine.cpp:520).
+	ServerEventLuaStateOpen = 33
 	// ServerEventAreaTrigger is the Eluna TRIGGER_EVENT_ON_TRIGGER
 	// (LuaEngine/Hooks.h:135 = 24, args (event, player, triggerId)):
 	// ServerHooks.cpp:115-125 fires it from
@@ -287,7 +299,6 @@ func (r *Runtime) Load(ctx context.Context) error {
 		return err
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.initializeLocked()
 	files := make([]string, 0)
 	err := filepath.WalkDir(r.config.ScriptPath, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -307,6 +318,7 @@ func (r *Runtime) Load(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
+		r.mu.Unlock()
 		return err
 	}
 	sort.Slice(files, func(i, j int) bool {
@@ -343,7 +355,11 @@ func (r *Runtime) Load(ctx context.Context) error {
 		r.state.SetTop(0)
 		r.loadedFiles = append(r.loadedFiles, path)
 	}
-	_ = ctx
+	r.mu.Unlock()
+	// C++ Eluna::LoadScripts fires ELUNA_EVENT_ON_LUA_STATE_OPEN (33) right
+	// after every script has loaded (LuaEngine.cpp:520). The trigger takes
+	// the runtime lock, so it runs after the load lock is released.
+	_, _ = r.TriggerServerEvent(ctx, ServerEventLuaStateOpen)
 	return nil
 }
 
