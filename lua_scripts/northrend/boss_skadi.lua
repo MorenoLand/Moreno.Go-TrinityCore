@@ -71,10 +71,9 @@
 --   npc_ymirjar_harpooner (26692), ScheduleTasks :607-619:
 --   SelectTarget(SelectTargetMethod::MaxDistance, 0, 30, true) ->
 --   DoCast(target, SPELL_NET 49092), 2-arg = non-triggered ->
---   CastSpell(target, 49092), init 13s, Repeat() = 13s (DOCUMENTED
---   DEVIATION: C++ SelectTargetMethod::MaxDistance picks the farthest
---   player within 30y; the GetPlayersInWorld port picks a random alive
---   player within 30y — no distance-ordering bridge); DoCastVictim
+--   CastSpell(target, 49092), init 13s, Repeat() = 13s (C++-exact via
+--   farthestPlayerTarget — the stale "no distance-ordering bridge"
+--   claim is retracted: GetDistance is the bridged object.go fallback); DoCastVictim
 --   (SPELL_THROW 49091), 1-arg = non-triggered -> CastSpell(nil,
 --   49091), init 2s, Repeat() = 2s.
 -- DOCUMENTED DEVIATION: the TaskScheduler validator (!me->
@@ -162,22 +161,23 @@ local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- GetPlayersInWorld random-target helper — the baltharus /
--- ENERVATING_BRAND / thorim colossus precedent (alive, same map and
--- instance, within maxDist yards of the creature).
-local function randomPlayerTarget(creature, maxDist)
+-- Farthest-target helper — the SelectTargetMethod::MaxDistance counterpart
+-- of the baltharus / ENERVATING_BRAND / thorim colossus random-target
+-- precedent (alive, same map and instance, within maxDist yards of the
+-- creature; picks the max-distance candidate).
+local function farthestPlayerTarget(creature, maxDist)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
+    local best, bestDist = nil, nil
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
                 and not plr:IsDead() and creature:IsWithinDist(plr, maxDist) then
-            candidates[#candidates + 1] = plr
+            local dist = creature:GetDistance(plr)
+            if bestDist == nil or dist > bestDist then
+                best, bestDist = plr, dist
+            end
         end
     end
-    if #candidates == 0 then
-        return nil
-    end
-    return candidates[math.random(#candidates)]
+    return best
 end
 
 -- C++ KilledUnit: if (who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_KILL)
@@ -242,7 +242,7 @@ local function harpoonerEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     local function netTick()
-        local target = randomPlayerTarget(creature, 30)
+        local target = farthestPlayerTarget(creature, 30)
         if target then
             creature:CastSpell(target, SPELL_NET)
         end

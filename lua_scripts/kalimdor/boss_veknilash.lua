@@ -13,10 +13,11 @@
 -- - Unbalancing Strike 26613 (DoCastVictim): init urand(8s,18s)
 --   -> urand(8s,20s). Victim cast (jeklik convention).
 -- - Uppercut 26007: C++ DoCast on a random MELEE-range target
---   (SelectTarget Random, 0, NOMINAL_MELEE_RANGE, true), init
---   urand(14s,29s) -> urand(15s,30s). No range/SelectTarget
---   bridge; ported as victim-cast (kri convention) — the victim
---   of the melee emperor is by definition within melee range.
+--   (SelectTarget Random, 0, NOMINAL_MELEE_RANGE 5.0f, true), init
+--   urand(14s,29s) -> urand(15s,30s). The stale "no range/
+--   SelectTarget bridge" claim is retracted: the pick is a random
+--   alive player within 5y via the bridged IsWithinDist check
+--   (the skadi MaxDistance precedent for distance-filtered picks).
 -- - Berserk 26662 (CheckEnrage): DoCast self, init 15min ->
 --   repeat 60min. The IsNonMeleeSpellCast gate has no bridge —
 --   fixed timer.
@@ -91,12 +92,27 @@ local function onUnbalancingStrike(creature, guid)
 end
 
 -- C++ EVENT_UPPERCUT: DoCast on random melee-range target, init
--- urand(14000,29000) -> 15000 + rand32()%15000 = [15000,29999]. No range/SelectTarget
--- bridge; ported as victim-cast (kri convention).
+-- urand(14000,29000) -> 15000 + rand32()%15000 = [15000,29999].
+-- Random alive player within 5y (NOMINAL_MELEE_RANGE).
+local function randomMeleePlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and creature:IsWithinDist(plr, 5.0) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 local function onUppercut(creature, guid)
-    local victim = creature:GetVictim()
-    if victim then
-        creature:CastSpell(victim, SPELL_UPPERCUT)
+    local target = randomMeleePlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_UPPERCUT)
     end
     schedule(guid, "uppercut", math.random(15000, 29999), function()
         onUppercut(creature, guid)
