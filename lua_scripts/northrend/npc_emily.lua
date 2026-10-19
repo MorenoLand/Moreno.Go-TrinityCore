@@ -14,7 +14,9 @@
 -- Eluna creature events: 1 OnEnterCombat. The C++ overrides no
 -- KilledUnit / JustDied (no events 3/4); no SpellHit arm (event 14,
 -- runtime.go:195-214), no MoveInLOS (event 27) or QuestAccept (event
--- 31) arm for emily; DoAction has no Eluna event at all — no bridge;
+-- 31) arm for emily is PORTED below (event 31 fires live from
+-- engine/world/quest_details.go); DoAction has no Eluna event at all
+-- — no bridge;
 -- no OnReset work worth wiring (GUID clears only).
 -- Fight shape (C++-exact for all modeled arms):
 -- OnEnterCombat(1): Talk(SAY_RANDOMAGGRO 4, no target — C++ calls
@@ -31,7 +33,8 @@
 -- has no escort-waypoint bridge; the single cast arm (DoCast 47184 on
 -- Mrfloppy, :116) is waypoint-18-gated, not timer-driven
 -- (thassarian/borean_tundra precedent); OnQuestAccept Talk
--- SAY_QUEST_ACCEPT 11 + Start escort — no-quest-accept bridge.
+-- SAY_QUEST_ACCEPT 11 is PORTED below (event 31) — the Start escort
+-- + Mrfloppy MoveFollow legs stay out (no bridges).
 -- npc_mrfloppy: JustEngagedWith Talk arms are all cross-creature
 -- (Emily->AI()->Talk SAY_WORGHAGGRO2 1 / SAY_WORGRAGGRO4 3 /
 -- SAY_RANDOMAGGRO 4, entry-gated on 26586/26590) — no cross-creature
@@ -89,13 +92,27 @@
 
 local ENTRY_EMILY = 26588
 local SAY_RANDOMAGGRO = 4 -- There's a big meanie attacking Mr. Floppy! Help!
+local SAY_QUEST_ACCEPT = 11 -- Are you ready, Mr. Floppy? Stay close to me and watch out for those wolves!
+
+local QUEST_PERILOUS_ADVENTURE = 12027
 
 -- C++ JustEngagedWith: Talk(SAY_RANDOMAGGRO) (no target).
 local function emilyEnterCombat(event, creature, target)
     creature:Talk(SAY_RANDOMAGGRO)
 end
 
+-- C++ OnQuestAccept (zone_grizzly_hills.cpp:186-195): quest 12027
+-- -> Talk(SAY_QUEST_ACCEPT), untargeted. The Mrfloppy MoveFollow and
+-- EscortAI::Start legs have no bridges (muglash/ranshalla precedent).
+local function emilyQuestAccept(event, player, creature, quest)
+    if not quest or quest:GetId() ~= QUEST_PERILOUS_ADVENTURE then
+        return
+    end
+    creature:Talk(SAY_QUEST_ACCEPT)
+end
+
 RegisterCreatureEvent(ENTRY_EMILY, 1, emilyEnterCombat)
+RegisterCreatureEvent(ENTRY_EMILY, 31, emilyQuestAccept)
 
 -- npc_lake_frog gossip (zone_grizzly_hills.cpp:777-781) — entry
 -- NPC_LAKE_FROG 33211 (zone_grizzly_hills.cpp:658).
