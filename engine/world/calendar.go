@@ -1413,26 +1413,46 @@ func (s *session) calendarRemoveEventFully(ctx context.Context, cdb *sql.DB, eve
 	// (CalendarEvent::BuildCalendarMailSubject/BuildCalendarMailBody).
 	// MailSender(CalendarEvent*) -> MAIL_CALENDAR (5), sender = event id,
 	// MAIL_STATIONERY_DEFAULT; the 30-day expiry arm applies.
-	now := time.Now().Unix()
-	mailBody := strconv.FormatUint(uint64(protocol.PackTime(time.Unix(int64(evTime), 0))), 10)
+	// CalendarMgr::RemoveEvent (CalendarMgr.cpp:186-209) appends the
+	// per-invitee calendar mail rows, the invite deletes and the event delete
+	// to a single CharacterDatabaseTransaction committed once at the end.
+	// The mail notifies stay outside the transaction: they are in-memory
+	// only, and the tx body may replay on deadlock.
+	var mailInvitees []uint64
 	if mailRows, mailErr := cdb.QueryContext(ctx, "SELECT invitee FROM calendar_invites WHERE event = ?", eventID); mailErr == nil {
 		for mailRows.Next() {
 			var inviteeGUID uint64
 			if err := mailRows.Scan(&inviteeGUID); err != nil || inviteeGUID == removerGUID {
 				continue
 			}
-			nextMailID := s.server.generateMailID()
-			subject := strconv.FormatUint(removerGUID, 10) + ":" + evTitle
-			_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-				VALUES (?, 5, 41, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)`,
-				nextMailID, uint32(eventID), inviteeGUID, subject, mailBody, now+mailSendExpireDelay(false, 0), now)
-			s.sendMailNotify(inviteeGUID)
+			mailInvitees = append(mailInvitees, inviteeGUID)
 		}
 		mailRows.Close()
 	}
-
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM calendar_events WHERE id = ?", eventID)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM calendar_invites WHERE event = ?", eventID)
+	now := time.Now().Unix()
+	mailBody := strconv.FormatUint(uint64(protocol.PackTime(time.Unix(int64(evTime), 0))), 10)
+	subject := strconv.FormatUint(removerGUID, 10) + ":" + evTitle
+	expire := now + mailSendExpireDelay(false, 0)
+	_ = s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		for _, inviteeGUID := range mailInvitees {
+			nextMailID := s.server.generateMailID()
+			if _, err := tx.ExecContext(txCtx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+				VALUES (?, 5, 41, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)`,
+				nextMailID, uint32(eventID), inviteeGUID, subject, mailBody, expire, now); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(txCtx, "DELETE FROM calendar_invites WHERE event = ?", eventID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(txCtx, "DELETE FROM calendar_events WHERE id = ?", eventID); err != nil {
+			return err
+		}
+		return nil
+	})
+	for _, inviteeGUID := range mailInvitees {
+		s.sendMailNotify(inviteeGUID)
+	}
 }
 
 // removePlayerGuildEventsAndSignups mirrors
@@ -1570,58 +1590,120 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 
 		rows, err := cdb.QueryContext(ctx, "SELECT invitee, sender, status, statustime, rank, text FROM calendar_invites WHERE event = ?", eventID)
 		if err == nil {
-			defer rows.Close()
+			type copyInvite struct {
+				invitee, sender, status, statustime, rank int64
+				text                                      string
+				id                                        uint64
+			}
+			var copies []copyInvite
+			// CalendarMgr::GetFreeInviteId (CalendarMgr.cpp:355-363) hands
+			// out ++_maxInviteId per invite, so the first copy takes
+			// MAX(id)+1: increment after assigning, not before.
+			var nextInviteID uint64 = 1
+			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
 			for rows.Next() {
-				var invitee, sender, status, statustime, rank int64
-				var text string
-				if rows.Scan(&invitee, &sender, &status, &statustime, &rank, &text) == nil {
-					var nextInviteID uint64 = 1
-					_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
+				var c copyInvite
+				if rows.Scan(&c.invitee, &c.sender, &c.status, &c.statustime, &c.rank, &c.text) == nil {
+					c.id = nextInviteID
+					nextInviteID++
+					copies = append(copies, c)
+				}
+			}
+			rows.Close()
 
-					// CalendarMgr::AddInvite on the copy path
-					// (CalendarHandler.cpp:491-499): the copied event is already
-					// in _events (AddEvent ran first), so SendCalendarEventInvite
-					// broadcasts to every event relative unless the invitee is
-					// the creator (CalendarMgr.cpp:505-508). The broadcast runs
-					// before the _invites push_back, so the relatives set must be
-					// read before this invite's insert: invitee i only hears the
-					// INVITE packets of invites 0..i-1.
-					copyTargets := calendarEventRelativeSessions(ctx, s.server, nextID)
+			// CalendarHandler.cpp:491-499: when the copied event carries more
+			// than one invite the UpdateInvite calls ride a single
+			// CharacterDatabaseTransaction; a lone invite executes
+			// immediately (AddInvite with a null trans). The transaction is
+			// driven manually (no deadlock replay): the broadcasts below
+			// are network side effects that must not repeat.
+			var tx *sql.Tx
+			if len(copies) > 1 {
+				if btx, berr := cdb.BeginTx(ctx, nil); berr == nil {
+					tx = btx
+					defer func() { _ = tx.Rollback() }()
+				}
+			}
+			ex := calendarExecer(cdb)
+			if tx != nil {
+				ex = tx
+			}
 
-					_, _ = cdb.ExecContext(ctx,
-						"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-						nextInviteID, nextID, invitee, sender, status, statustime, rank, text)
+			var eventGuild uint32
+			if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
+				eventGuild = calendarCreatorGuildID(ctx, cdb, creator)
+			}
 
-					var invLevel uint8
-					invSess := s.server.findSessionByGUID(uint64(invitee))
-					if invSess != nil && invSess.player != nil {
-						invLevel = invSess.player.Level
-					} else {
-						_ = cdb.QueryRowContext(ctx,
-							"SELECT level FROM characters WHERE guid = ?", invitee).Scan(&invLevel)
+			for i, c := range copies {
+				// CalendarMgr::AddInvite on the copy path
+				// (CalendarHandler.cpp:491-499): the copied event is already
+				// in _events (AddEvent ran first), so SendCalendarEventInvite
+				// broadcasts to every event relative unless the invitee is
+				// the creator (CalendarMgr.cpp:505-508). The broadcast runs
+				// before the _invites push_back, so the relatives set must be
+				// read before this invite's insert: invitee i only hears the
+				// INVITE packets of invites 0..i-1. The tx's uncommitted rows
+				// are invisible to the DB-backed relatives read, so fold the
+				// connected sessions of the already-copied invitees in by
+				// hand, with the same guild-event skip
+				// SendPacketToAllEventRelatives applies
+				// (CalendarMgr.cpp:700-712).
+				copyTargets := calendarEventRelativeSessions(ctx, s.server, nextID)
+				seen := make(map[*session]struct{}, len(copyTargets)+i)
+				for _, t := range copyTargets {
+					seen[t] = struct{}{}
+				}
+				for _, prev := range copies[:i] {
+					prevSess := s.server.findSessionByGUID(uint64(prev.invitee))
+					if prevSess == nil || prevSess.player == nil {
+						continue
 					}
-					if uint64(invitee) != creator {
-						invPkt := buildCalendarInvitePacket(uint64(invitee), nextID, nextInviteID, invLevel, uint8(status), statustime, uint64(sender))
-						for _, t := range copyTargets {
-							_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invPkt, true)
-						}
+					if _, ok := seen[prevSess]; ok {
+						continue
 					}
+					if flags&calendarFlagGuildEvent != 0 && eventGuild != 0 && prevSess.player.GuildID == eventGuild {
+						continue
+					}
+					seen[prevSess] = struct{}{}
+					copyTargets = append(copyTargets, prevSess)
+				}
 
-					// SendCalendarEventInviteAlert (CalendarMgr.cpp:151-154):
-					// non-guild events alert the invitee direct; guild events
-					// and announcements alert only the creator-invitee, as a
-					// guild broadcast.
-					if flags&calendarFlagGuildEvent == 0 || uint64(invitee) == creator {
-						alertPkt := buildCalendarInviteAlertPacket(nextID, evTitle, newEventTime, flags, evType, evDungeon, nextInviteID, uint8(status), uint8(rank), creator, uint64(sender))
-						if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
-							for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, creator)) {
-								_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
-							}
-						} else if invSess != nil {
-							_ = invSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
-						}
+				_, _ = ex.ExecContext(ctx,
+					"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+					c.id, nextID, c.invitee, c.sender, c.status, c.statustime, c.rank, c.text)
+
+				var invLevel uint8
+				invSess := s.server.findSessionByGUID(uint64(c.invitee))
+				if invSess != nil && invSess.player != nil {
+					invLevel = invSess.player.Level
+				} else {
+					_ = cdb.QueryRowContext(ctx,
+						"SELECT level FROM characters WHERE guid = ?", c.invitee).Scan(&invLevel)
+				}
+				if uint64(c.invitee) != creator {
+					invPkt := buildCalendarInvitePacket(uint64(c.invitee), nextID, c.id, invLevel, uint8(c.status), c.statustime, uint64(c.sender))
+					for _, t := range copyTargets {
+						_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invPkt, true)
 					}
 				}
+
+				// SendCalendarEventInviteAlert (CalendarMgr.cpp:151-154):
+				// non-guild events alert the invitee direct; guild events
+				// and announcements alert only the creator-invitee, as a
+				// guild broadcast.
+				if flags&calendarFlagGuildEvent == 0 || uint64(c.invitee) == creator {
+					alertPkt := buildCalendarInviteAlertPacket(nextID, evTitle, newEventTime, flags, evType, evDungeon, c.id, uint8(c.status), uint8(c.rank), creator, uint64(c.sender))
+					if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
+						for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, creator)) {
+							_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
+						}
+					} else if invSess != nil {
+						_ = invSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
+					}
+				}
+			}
+			if tx != nil {
+				_ = tx.Commit()
 			}
 		}
 
