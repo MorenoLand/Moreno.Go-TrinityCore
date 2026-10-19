@@ -84,7 +84,14 @@ local shadeYelledOnce = {}
 
 local function shadeDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    if not shadeYelledOnce[guid] and creature:GetHealthPct() < 20 then
+    -- C++ DamageTaken HealthBelowPct(20) (boss_shade_of_akama.cpp:403,
+    -- pre-damage): strict-< against the floored integer threshold (the
+    -- old GetHealthPct() < 20 fired up to 1 HP early — maulgar/ironaya
+    -- precedent). DamageTaken arms fire on lethal hits (no post-damage
+    -- guard — yazzai/nefarian convention).
+    local maxHealth = creature:GetMaxHealth()
+    if not shadeYelledOnce[guid] and maxHealth > 0
+        and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
         shadeYelledOnce[guid] = true
         creature:Talk(SAY_LOW_HEALTH)
     end

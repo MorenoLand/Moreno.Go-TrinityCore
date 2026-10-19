@@ -172,7 +172,11 @@ end
 -- HealthBelowPct(30) -> Talk(SAY_SUMMON_SNAKES) + PHASE_SNAKES; then
 -- PHASE_SNAKES + HealthBelowPct(25) -> Talk(SAY_SUMMON_CONSTRICTORS) +
 -- PHASE_CONSTRICTORS. DamageTaken arms fire on lethal hits (no
--- post-damage guard — yazzai/nefarian convention). The summon waves
+-- post-damage guard — yazzai/nefarian convention). HealthBelowPct is
+-- strict-< against the floored integer threshold (the old
+-- GetHealthPct() < N fired up to 1 HP early — maulgar/ironaya
+-- precedent). The C++ ifs are sequential with live _phase, so a single
+-- hit can cascade 0->1->2 — no elseif. The summon waves
 -- (GROUP_SNAKES scheduler + SummonCreature) stay out behind the
 -- summon STRAND (standing) — Talk fires without the wave. Phase latch
 -- cleared on evade/reset (C++ Initialize()/Reset()).
@@ -180,11 +184,18 @@ sladranPhase = {}
 
 local function sladranDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local health = creature:GetHealth()
     local phase = sladranPhase[guid] or 0
-    if phase == 0 and creature:GetHealthPct() < 30 then
+    if phase == 0 and health < math.floor(maxHealth * 30 / 100) then
         sladranPhase[guid] = 1
+        phase = 1
         creature:Talk(SAY_SUMMON_SNAKES)
-    elseif phase == 1 and creature:GetHealthPct() < 25 then
+    end
+    if phase == 1 and health < math.floor(maxHealth * 25 / 100) then
         sladranPhase[guid] = 2
         creature:Talk(SAY_SUMMON_CONSTRICTORS)
     end

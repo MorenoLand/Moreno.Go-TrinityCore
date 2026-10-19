@@ -454,7 +454,14 @@ local function thekalDamageTaken(event, creature, attacker, damage)
         end
         return
     end
-    if not e.enraged and creature:GetHealthPct() < 10 then
+    -- C++ DamageTaken HealthBelowPct(10) (boss_thekal.cpp:232, pre-damage):
+    -- strict-< against the floored integer threshold (the old
+    -- GetHealthPct() < 10 fired up to 1 HP early — maulgar/ironaya
+    -- precedent). DamageTaken arms fire on lethal hits (no post-damage
+    -- guard — yazzai/nefarian convention).
+    local maxHealth = creature:GetMaxHealth()
+    if not e.enraged and maxHealth > 0
+        and creature:GetHealth() < math.floor(maxHealth * 10 / 100) then
         creature:CastSpell(creature, SPELL_FRENZY)
         creature:Talk(TALK_FRENZY)
         e.enraged = true
