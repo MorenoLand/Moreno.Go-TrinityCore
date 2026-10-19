@@ -123,8 +123,13 @@
 -- cross-creature precedent).
 -- Brain of Yogg-Saron (33890, ulduar.h line 218) — Reset
 -- DoCast(me, SPELL_MATCH_HEALTH 64066) PORTED below (event 23);
--- DamageTaken has no Talk arm (aura/flag/DoAction legs
--- only); DoAction ACTION_INDUCE_MADNESS /
+-- DamageTaken below-30% cascade (:1068-1093): DoCastAOE(
+-- SPELL_SHATTERED_ILLUSION_REMOVE 65238, triggered) + DoCast(me,
+-- SPELL_MATCH_HEALTH_2 64069, triggered) + DoCast(me,
+-- SPELL_BRAIN_HURT_VISUAL 64361, triggered) — stays out with the
+-- InterruptNonMeleeSpells / cross-creature DoAction / instance legs
+-- (no bridges; the HasAura(64361) gate is bridged but the cascade
+-- cannot be split); DoAction ACTION_INDUCE_MADNESS /
 -- ACTION_TENTACLE_KILLED have no Talk arms.
 -- npc_observation_ring_keeper — Talk(SAY_KEEPER_CHOSEN_1/2,
 -- player) gated on OnGossipSelect menuId 10333 — the gossip bridge

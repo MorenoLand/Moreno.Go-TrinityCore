@@ -54,10 +54,14 @@
 -- (event 3 — the razuvious player-gated variant precedent; the
 -- nil-guard is the hodir-port convention — Eluna event 3 always
 -- carries a victim, so C++-exactness is unaffected).
--- boss_svala JustDied (:217-221) — Talk(SAY_DEATH 4) unconditional
--- (event 4 — the sjonnir JustDied-Talk precedent; the SACRIFICING
--- SetEquipmentSlots / HandleEmoteCommand(EMOTE_ONESHOT_FLYDEATH) /
--- _JustDied() legs have no bridges).
+-- boss_svala JustDied (:217-221) — HandleEmoteCommand(EMOTE_ONESHOT_
+-- FLYDEATH 445) is unconditional in C++ (outside the SACRIFICING
+-- SetEquipmentSlots gate) and PerformEmote is bridged
+-- (lua_creature_events.go:347, Unit::HandleEmoteCommand lowering) —
+-- ported; Talk(SAY_DEATH 4) unconditional (event 4 — the sjonnir
+-- JustDied-Talk precedent). The SACRIFICING-gated SetEquipmentSlots
+-- leg stays out (phase-gated, gothik precedent); the _JustDied()
+-- instance passthrough has no bridge.
 -- npc_scourge_hulk (26555) — the scourge hulk's two spell-timer arms
 -- are ungated in its UpdateAI (no phase groups, no DoAction legs —
 -- the yogg_saron adds precedent), scheduled here on event 1 with the
@@ -143,6 +147,7 @@ local ENTRY_RITUAL_CHANNELER = 27281
 local SAY_AGGRO = 2
 local SAY_SLAY = 3
 local SAY_DEATH = 4
+local EMOTE_ONESHOT_FLYDEATH = 445
 
 local SPELL_MIGHTY_BLOW = 48697
 local SPELL_VOLATILE_INFECTION = 56785
@@ -190,10 +195,13 @@ local function svalaKilledUnit(event, creature, victim)
     creature:Talk(SAY_SLAY)
 end
 
--- C++ JustDied (:217-221): <unbridgeable equipment/emote/passthrough
--- legs>; Talk(SAY_DEATH) — unconditional — the sjonnir JustDied-Talk
--- precedent.
+-- C++ JustDied (:217-221): HandleEmoteCommand(EMOTE_ONESHOT_FLYDEATH
+-- 445) unconditional — ported (PerformEmote bridged); Talk(SAY_DEATH) —
+-- unconditional — the sjonnir JustDied-Talk precedent; SACRIFICING-gated
+-- SetEquipmentSlots + _JustDied() instance passthrough stay out
+-- (phase-gated / no bridge).
 local function svalaJustDied(event, creature)
+    creature:PerformEmote(EMOTE_ONESHOT_FLYDEATH)
     creature:Talk(SAY_DEATH)
 end
 
