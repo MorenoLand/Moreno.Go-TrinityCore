@@ -29,7 +29,7 @@
 -- Seconds literals), so plain ms delays carry the C++-exact timing —
 -- no {minMs, maxMs} randtime table.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill,
--- 4 OnDied, 23 OnReset.
+-- 4 OnDied, 23 OnReset, 27 OnMoveInLOS.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_cyanigosa.cpp):
 -- boss_cyanigosaAI::JustEngagedWith (:55-59) — Talk(SAY_AGGRO 0) (:58)
@@ -246,9 +246,19 @@ local function cyanigosaCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ MoveInLineOfSight (:73) is an EMPTY override — it suppresses the
+-- default ScriptedAI::MoveInLineOfSight aggro engage. Go's fireCreatureMoveInLOS
+-- (lua_creature_events.go:531) fires ev27 on the aggro-engage branch and a
+-- boolean true vetoes exactly that engage, so return true models :73
+-- C++-exact (the vashj header documents the fire-site subset semantics).
+local function cyanigosaMoveInLOS(event, creature, unit)
+    return true
+end
+
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 1, cyanigosaEnterCombat)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 2, cyanigosaCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 3, cyanigosaKilledUnit)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 4, cyanigosaCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 4, cyanigosaJustDied)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 23, cyanigosaCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_CYANIGOSA, 27, cyanigosaMoveInLOS)
