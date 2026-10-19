@@ -1074,18 +1074,18 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	// where the merged anchor differs from C++).
 	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
 	destinationCenter := false
-	// Spell.cpp:1194-1196 / 1249-1251: when an effect has no radius entry
-	// (CalcRadius == 0), the area radius falls back to the spell's max range
-	// (hostile/friendly per IsPositiveEffect — spellDBCMaxRange mirrors the
-	// same split per isHarmfulSpell; this is GetMaxRange, not GetMinMaxRange,
+	// Spell.cpp:1192 (cone) / 1282 (area): when an effect has no radius entry
+	// (CalcRadius == 0), its radius falls back to the spell's max range —
+	// per effect, via GetMaxRange(IsPositiveEffect(effIndex)) (hostile/
+	// friendly per effect positivity; this is GetMaxRange, not GetMinMaxRange,
 	// so no reach/REQ_AMMO terms — but the caster overload folds
 	// SPELLMOD_RANGE (SpellInfo.cpp:3060-3072)).
-	var maxRange float32
+	var maxRangePositive, maxRangeNegative float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
-		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
-		maxRange = float32(s.applySpellModFloat(spell, spellModRange, float64(maxRange)))
+		maxRangePositive = float32(s.applySpellModFloat(spell, spellModRange, spellDBCMaxRange(true, rangeEntry)))
+		maxRangeNegative = float32(s.applySpellModFloat(spell, spellModRange, spellDBCMaxRange(false, rangeEntry)))
 	}
-	for _, eff := range spell.Effects {
+	for i, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
 		areaTargetB := isAreaEnemyTargetType(eff.ImplicitTargetB) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
 		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
@@ -1106,9 +1106,15 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			if value > radius {
 				radius = value
 			}
-		} else if maxRange > radius {
-			// Spell.cpp:1194-1196 / 1249-1251: zero-radius fallback.
-			radius = maxRange
+		} else {
+			// Spell.cpp:1192 / 1282: zero-radius fallback — per effect.
+			effMaxRange := maxRangeNegative
+			if spell.IsPositiveEffect(i) {
+				effMaxRange = maxRangePositive
+			}
+			if effMaxRange > radius {
+				radius = effMaxRange
+			}
 		}
 	}
 	if radius <= 0 {
@@ -3797,14 +3803,17 @@ func (s *session) autoShotNonBlockingCast(spellID uint32) bool {
 }
 
 // spellDBCMaxRange mirrors the SpellInfo::GetMaxRange DBC read (the
-// friendly/hostile split only). The area-target zero-radius fallbacks
-// (Spell.cpp:1194-1196, 1249-1251) read GetMaxRange, not GetMinMaxRange,
-// so no combat-reach, REQ_AMMO, or spellmod terms apply there.
-func spellDBCMaxRange(spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry) float64 {
-	if isHarmfulSpell(spell) {
-		return float64(rangeEntry.MaxHostile)
+// friendly/hostile split only). The area/cone zero-radius fallbacks
+// (Spell.cpp:1192, 1282) read GetMaxRange per effect, keyed on
+// IsPositiveEffect(effIndex) — not on the whole spell — so the split is a
+// bool bridged from the load-computed CU_NEGATIVE_EFF bits
+// (SpellInfo.cpp:1213). GetMaxRange carries no combat-reach, REQ_AMMO, or
+// spellmod terms itself; the caller folds SPELLMOD_RANGE.
+func spellDBCMaxRange(positive bool, rangeEntry wotlk.SpellRangeEntry) float64 {
+	if positive {
+		return float64(rangeEntry.MaxFriendly)
 	}
-	return float64(rangeEntry.MaxFriendly)
+	return float64(rangeEntry.MaxHostile)
 }
 
 // spellRangeTargetHostile mirrors the hostility term of

@@ -31,23 +31,25 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	// cone; otherwise the front cone at the hardcoded M_PI/2 (same read as
 	// the player-path area sweep).
 	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
-	// Spell.cpp:1249-1251: when an effect has no radius entry (CalcRadius ==
-	// 0), the area radius falls back to the spell's max range (hostile/
-	// friendly per IsPositiveEffect — spellDBCMaxRange mirrors the same
-	// split per isHarmfulSpell; the caster overload folds SPELLMOD_RANGE
-	// via GetSpellModOwner (SpellInfo.cpp:3060-3072, Object.cpp:2246-2268)
-	// — the pet/totem owner's session, nil for wild casters).
-	var maxRange float32
+	// Spell.cpp:1282: when an effect has no radius entry (CalcRadius == 0),
+	// the area radius falls back to the spell's max range — per effect via
+	// GetMaxRange(IsPositiveEffect(effIndex)); the caster overload folds
+	// SPELLMOD_RANGE via GetSpellModOwner (SpellInfo.cpp:3060-3072,
+	// Object.cpp:2246-2268) — the pet/totem owner's session, nil for wild
+	// casters.
+	var maxRangePositive, maxRangeNegative float32
 	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
 	if s.Data != nil {
 		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
-			maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
+			maxRangePositive = float32(spellDBCMaxRange(true, rangeEntry))
+			maxRangeNegative = float32(spellDBCMaxRange(false, rangeEntry))
 			if modOwner != nil {
-				maxRange = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRange)))
+				maxRangePositive = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangePositive)))
+				maxRangeNegative = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangeNegative)))
 			}
 		}
 	}
-	for _, eff := range spell.Effects {
+	for i, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
 		areaTargetB := isAreaEnemyTargetType(eff.ImplicitTargetB) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
 		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
@@ -73,8 +75,15 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 				if value > radius {
 					radius = value
 				}
-			} else if maxRange > radius {
-				radius = maxRange
+			} else {
+				// Spell.cpp:1282: zero-radius fallback — per effect.
+				effMaxRange := maxRangeNegative
+				if spell.IsPositiveEffect(i) {
+					effMaxRange = maxRangePositive
+				}
+				if effMaxRange > radius {
+					radius = effMaxRange
+				}
 			}
 		}
 	}
