@@ -83,9 +83,10 @@
 --   in this file; the stale "no despawn bridge" parenthetical is
 --   retracted, supremus precedent), SetReactState
 --   (no react-state bridge — koltira precedent), SetImmuneToPC (no
---   bridge), HandleInitialSetup's DoCastSelf(42413/43877) self-casts are
---   stranded halves (rageclaw/phoenix_tk precedent: C++ Reset/JustAppeared
---   run at spawn Initialize, Lua OnReset (23) fires only on reset/evade).
+--   bridge). HandleInitialSetup's DoCastSelf(42413/43877) self-casts were
+--   "stranded halves" (rageclaw/phoenix_tk precedent) only before the ev5
+--   spawn bridge landed; they now port on event 5 below, which fires at the
+--   exact C++ JustAppeared moments (fireCreatureSpawned, initial + respawn).
 -- - npc_headless_horseman_head (23775): REGISTERED — JustDied's
 --   EVENT_RAIN_OF_TREATS 11s -> DoCastSelf(43344) ports cleanly as a
 --   single-arm registration. The rest strands: SpellScript/AuraScript
@@ -113,6 +114,9 @@
 local SPELL_HORSEMAN_CLEAVE = 42587
 local SPELL_BURNING_COSMETIC = 42971
 local SPELL_RAIN_OF_TREATS = 43344
+local SPELL_HEAD_STUN = 42408
+local SPELL_HEAD_VISUAL = 42413
+local SPELL_ONKILL_PROC = 43877
 
 local SAY_DEATH = 4
 local SAY_KILL_PLAYER = 5
@@ -184,10 +188,18 @@ local function onDied(_, creature)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_headless_horseman::JustAppeared -> HandleInitialSetup
+-- (boss_headless_horseman.cpp:357): two TRIGGERED self-casts.
+local function onSpawn(_, creature)
+    creature:CastSpell(creature, SPELL_HEAD_VISUAL, true)
+    creature:CastSpell(creature, SPELL_ONKILL_PROC, true)
+end
+
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 4, onDied)
+RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 23, onCombatEnd)
 
 -- npc_headless_horseman_head (23775, scarlet_monastery.h:70):
@@ -203,4 +215,11 @@ local function onHeadDied(_, creature)
     end)
 end
 
+-- C++ npc_headless_horseman_head::JustAppeared -> HandleInitialSetup
+-- (boss_headless_horseman.cpp:194): non-triggered DoCastSelf(42408).
+local function onHeadSpawn(_, creature)
+    creature:CastSpell(creature, SPELL_HEAD_STUN)
+end
+
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 4, onHeadDied)
+RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 5, onHeadSpawn)

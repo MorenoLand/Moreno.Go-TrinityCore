@@ -63,8 +63,9 @@
 --   changes, instance SetData/GetData legs), and EnterEvadeMode (trace
 --   only). No spline-chain / summon-with-position / instance-data /
 --   nearby-creature / gameobject bridges exist.
--- - JustAppeared: DoCastSelf(SPELL_DEVOTION_AURA 52442) — no
---   spawn/appear bridge in the Lua API.
+-- - JustAppeared: DoCastSelf(SPELL_DEVOTION_AURA 52442) — ports on
+--   event 5 below (the old "no spawn/appear bridge" note predates the ev5
+--   spawn bridge, which fires at the exact C++ JustAppeared moments).
 -- - CanAIAttack: REACT_AGGRESSIVE chase capped at 30.0f 2D from the
 --   home/relative position — no chase-range bridge.
 -- - npc_stratholme_rp_dummy (NullCreatureAI whose MovementInform forwards
@@ -171,7 +172,17 @@ local function onDied(event, creature, killer)
     cancelPump(creature:GetGUID())
 end
 
+-- C++ npc_arthas_stratholmeAI::JustAppeared (npc_arthas.cpp:1585):
+-- DoCastSelf(SPELL_DEVOTION_AURA), non-triggered. The _progressRP /
+-- AdvanceToState legs ride the unported RP/spline-chain machine and stay
+-- out; the self-cast is severable (C++ re-casts it in UpdateAI while the
+-- aura is missing, which the onReachHome arm below already models).
+local function onSpawn(event, creature)
+    creature:CastSpell(creature, SPELL_DEVOTION_AURA)
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
     if victim:GetEntry() == NPC_RISEN_ZOMBIE then
