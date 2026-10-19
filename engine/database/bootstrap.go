@@ -147,22 +147,18 @@ func ensureSchema(ctx context.Context, c config.Config, store *Store) error {
 	if err != nil {
 		return fmt.Errorf("%s schema file %s: %w", store.Name, path, err)
 	}
-	tx, err := store.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("%s schema transaction: %w", store.Name, err)
-	}
-	for _, statement := range SplitSQL(string(script)) {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("%s schema statement: %w", store.Name, err)
+	if err := store.RunTransaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		for _, statement := range SplitSQL(string(script)) {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("%s schema statement: %w", store.Name, err)
+			}
 		}
-	}
-	if _, err := tx.ExecContext(ctx, "UPDATE trinitygo_schema SET version = 1 WHERE id = 1"); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("%s schema metadata update: %w", store.Name, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("%s schema commit: %w", store.Name, err)
+		if _, err := tx.ExecContext(ctx, "UPDATE trinitygo_schema SET version = 1 WHERE id = 1"); err != nil {
+			return fmt.Errorf("%s schema metadata update: %w", store.Name, err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("%s schema transaction: %w", store.Name, err)
 	}
 	return nil
 }

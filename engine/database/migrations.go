@@ -260,31 +260,27 @@ func ensureMigrationMetadata(ctx context.Context, store *Store) error {
 
 func applyMigration(ctx context.Context, store *Store, migration Migration, replacing bool) error {
 	start := time.Now()
-	tx, err := store.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	for _, statement := range migration.Statements {
-		if strings.TrimSpace(statement) == "" {
-			continue
+	if err := store.RunTransaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		for _, statement := range migration.Statements {
+			if strings.TrimSpace(statement) == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("migration %d %s: %w", migration.Version, migration.Name, err)
+			}
 		}
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("migration %d %s: %w", migration.Version, migration.Name, err)
+		speed := time.Since(start).Milliseconds()
+		query := "INSERT INTO updates (name, hash, state, speed) VALUES (?, ?, ?, ?)"
+		args := []any{migration.Name, migration.Hash, migration.State, speed}
+		if replacing {
+			query = "UPDATE updates SET hash = ?, state = ?, speed = ?, timestamp = CURRENT_TIMESTAMP WHERE name = ?"
+			args = []any{migration.Hash, migration.State, speed, migration.Name}
 		}
-	}
-	speed := time.Since(start).Milliseconds()
-	query := "INSERT INTO updates (name, hash, state, speed) VALUES (?, ?, ?, ?)"
-	args := []any{migration.Name, migration.Hash, migration.State, speed}
-	if replacing {
-		query = "UPDATE updates SET hash = ?, state = ?, speed = ?, timestamp = CURRENT_TIMESTAMP WHERE name = ?"
-		args = []any{migration.Hash, migration.State, speed, migration.Name}
-	}
-	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	if err := tx.Commit(); err != nil {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	return nil
