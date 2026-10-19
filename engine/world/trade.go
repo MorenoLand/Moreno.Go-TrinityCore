@@ -226,27 +226,39 @@ func (caster *session) tradeSpellStillCastable(ctx context.Context, target *sess
 // (sSpellItemEnchantmentStore.LookupEntry). Stat application for an equipped
 // target is covered by the syncEquipmentCache calls later in completeTrade,
 // which read the enchantment column.
-func (caster *session) applyDeferredTradeEnchant(ctx context.Context, tx *sql.Tx, target *session) {
+// deferredTradeEnchantWrite describes one enchant-slot write for a
+// deferred trade spell: enchant ID into slot, duration in milliseconds,
+// charges zeroed like Item::SetEnchantment(slot, id, 0, 0, caster).
+type deferredTradeEnchantWrite struct {
+	slot     uint32
+	enchant  uint32
+	duration uint32
+}
+
+// deferredTradeEnchantPlan computes the deferred-spell enchant writes for
+// the trade-execute path (TradeHandler.cpp:524-526) without touching the
+// persistence transaction: the enchantment-column read runs against the
+// characters store directly, so the plan is computable in completeTrade's
+// in-memory phase while the UPDATE rides inside the retryable persistence
+// closure. It returns an empty encString (and nil writes) when the
+// deferred spell carries no enchant effects or the read fails, in which
+// case the caller skips both the UPDATE and the log packets — the same
+// silent return the old tx-scoped function had.
+func (caster *session) deferredTradeEnchantPlan(ctx context.Context, target *session) (itemGUID uint64, itemEntry uint32, encString string, writes []deferredTradeEnchantWrite, oldEnchantIDs, oldEnchantDurations map[uint32]uint32) {
 	if caster.trade == nil || target.trade == nil || caster.trade.SpellID == 0 {
-		return
+		return 0, 0, "", nil, nil, nil
 	}
 	if caster.server == nil || caster.server.Data == nil {
-		return
+		return 0, 0, "", nil, nil, nil
 	}
 	item, ok := target.trade.Items[tradeSlotNonTraded]
 	if !ok {
-		return
+		return 0, 0, "", nil, nil, nil
 	}
 	spell, found, err := caster.server.Data.Spell(caster.trade.SpellID)
 	if err != nil || !found {
-		return
+		return 0, 0, "", nil, nil, nil
 	}
-	type slotWrite struct {
-		slot     uint32
-		enchant  uint32
-		duration uint32
-	}
-	var writes []slotWrite
 	for _, eff := range spell.Effects {
 		if eff.MiscValue <= 0 {
 			continue
@@ -258,7 +270,7 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, tx *sql.Tx
 		}
 		switch eff.Effect {
 		case 53: // SPELL_EFFECT_ENCHANT_ITEM
-			writes = append(writes, slotWrite{slot: 0, enchant: enchantID})
+			writes = append(writes, deferredTradeEnchantWrite{slot: 0, enchant: enchantID})
 		case 54: // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
 			// Rockbiter Weapon (SpellEffects.cpp:2843-2871): C++ enchants the
 			// caster's own weapons via triggered spells and returns without
@@ -267,22 +279,26 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, tx *sql.Tx
 			if spell.SpellFamilyName == spellFamilyShaman && spell.SpellFamilyFlags[0]&0x400000 != 0 {
 				continue
 			}
-			writes = append(writes, slotWrite{slot: 1, enchant: enchantID, duration: tempTradeEnchantDurationMs(spell)})
+			writes = append(writes, deferredTradeEnchantWrite{slot: 1, enchant: enchantID, duration: tempTradeEnchantDurationMs(spell)})
 		case 156: // SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
 			for _, e := range entry.Effects {
 				if e == 8 { // ITEM_ENCHANTMENT_TYPE_PRISMATIC_SOCKET
-					writes = append(writes, slotWrite{slot: 6, enchant: enchantID})
+					writes = append(writes, deferredTradeEnchantWrite{slot: 6, enchant: enchantID})
 					break
 				}
 			}
 		}
 	}
 	if len(writes) == 0 {
-		return
+		return 0, 0, "", nil, nil, nil
+	}
+	cdb := caster.server.CharactersStore
+	if cdb == nil || cdb.DB == nil {
+		return 0, 0, "", nil, nil, nil
 	}
 	var encStr sql.NullString
-	if err := tx.QueryRowContext(ctx, "SELECT enchantments FROM item_instance WHERE guid = ? LIMIT 1", item.ItemGUID).Scan(&encStr); err != nil {
-		return
+	if err := cdb.DB.QueryRowContext(ctx, "SELECT enchantments FROM item_instance WHERE guid = ? LIMIT 1", item.ItemGUID).Scan(&encStr); err != nil {
+		return 0, 0, "", nil, nil, nil
 	}
 	fields := strings.Fields(encStr.String)
 	var enchants [36]uint32
@@ -295,8 +311,8 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, tx *sql.Tx
 	// Item::SetEnchantment identical-write early return (Item.cpp:835)
 	// logs nothing when id, duration and charges are unchanged (charges
 	// are always 0 on this path).
-	oldEnchantIDs := make(map[uint32]uint32, len(writes))
-	oldEnchantDurations := make(map[uint32]uint32, len(writes))
+	oldEnchantIDs = make(map[uint32]uint32, len(writes))
+	oldEnchantDurations = make(map[uint32]uint32, len(writes))
 	for _, w := range writes {
 		oldEnchantIDs[w.slot] = enchants[w.slot*3]
 		oldEnchantDurations[w.slot] = enchants[w.slot*3+1]
@@ -311,24 +327,28 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, tx *sql.Tx
 	for i := 0; i < 36; i++ {
 		encParts[i] = strconv.FormatUint(uint64(enchants[i]), 10)
 	}
-	_, _ = tx.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", strings.Join(encParts, " "), item.ItemGUID)
-	// TradeHandler.cpp:524-526 — the deferred spell prepare at trade execute
-	// runs the EffectEnchantItem* arms, so the SetEnchantment log pair
-	// (Item.cpp:842-848) and the temp-enchant SMSG_ITEM_ENCHANT_TIME_UPDATE
-	// (Player::AddEnchantmentDuration, Player.cpp:13879-13899) fire through
-	// the item owner's session, exactly like the direct-cast arms.
+	return item.ItemGUID, item.ItemEntry, strings.Join(encParts, " "), writes, oldEnchantIDs, oldEnchantDurations
+}
+
+// sendDeferredTradeEnchantLogs fires the SetEnchantment log pair
+// (Item.cpp:842-848) and the temp-enchant SMSG_ITEM_ENCHANT_TIME_UPDATE
+// (Player::AddEnchantmentDuration, Player.cpp:13879-13899) for a deferred
+// trade enchant, through the item owner's session exactly like the
+// direct-cast arms. It runs in completeTrade's in-memory phase, not inside
+// the persistence transaction, so a deadlock retry cannot double-send it.
+func (caster *session) sendDeferredTradeEnchantLogs(target *session, itemGUID uint64, itemEntry uint32, writes []deferredTradeEnchantWrite, oldEnchantIDs, oldEnchantDurations map[uint32]uint32) {
 	for _, w := range writes {
 		// Item::SetEnchantment identical-write early return (Item.cpp:835):
 		// same id, duration and charges writes nothing and logs nothing.
 		if oldEnchantIDs[w.slot] != w.enchant || oldEnchantDurations[w.slot] != w.duration {
 			if oldID := oldEnchantIDs[w.slot]; oldID != 0 {
-				target.sendEnchantmentLog(target.playerGUID, 0, item.ItemEntry, oldID)
+				target.sendEnchantmentLog(target.playerGUID, 0, itemEntry, oldID)
 			}
 			if w.enchant != 0 {
-				target.sendEnchantmentLog(target.playerGUID, caster.playerGUID, item.ItemEntry, w.enchant)
+				target.sendEnchantmentLog(target.playerGUID, caster.playerGUID, itemEntry, w.enchant)
 			}
 			if w.slot == 1 && w.duration > 0 {
-				target.sendItemEnchantTimeUpdate(target.playerGUID, item.ItemGUID|(uint64(0x4000)<<48), 1, w.duration/1000)
+				target.sendItemEnchantTimeUpdate(target.playerGUID, itemGUID|(uint64(0x4000)<<48), 1, w.duration/1000)
 			}
 		}
 	}
@@ -1404,110 +1424,51 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		return
 	}
 
-	// Execute trade inside one transaction: C++ wraps both players'
-	// SaveInventoryAndGoldToDB in a single CharacterDatabaseTransaction
-	// (TradeHandler.cpp:532-535). A mid-trade DB failure rolls back, tears
-	// the trade down, and closes both client windows with TRADE_CANCELED
-	// (C++ has no failure arm here; leaving the windows open on torn-down
-	// server state would desync the clients).
-	tx, err := cdb.BeginTx(ctx, nil)
-	if err != nil {
-		clearAcceptTradeMode(s, partner)
-		s.trade = nil
-		partner.trade = nil
-		return
-	}
-	aborted := false
-	abort := func() {
-		if !aborted {
-			aborted = true
-			_ = tx.Rollback()
-			clearAcceptTradeMode(s, partner)
-			_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
-			_ = partner.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
-			s.trade = nil
-			partner.trade = nil
-		}
-	}
-	execTx := func(query string, args ...interface{}) bool {
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			abort()
-			return false
-		}
-		return true
-	}
+	// Trade execute runs in two phases (TradeHandler.cpp:476-535): the
+	// in-memory move first (money mutation, quest checks, item moves,
+	// deferred-spell prepare), then a single CharacterDatabaseTransaction
+	// wrapping both players' SaveInventoryAndGoldToDB. The persistence phase
+	// is a pure-database closure replayed from scratch by
+	// Store.RunTransaction on MySQL deadlock (errno 1213) — the Go analog of
+	// DatabaseWorkerPool::DirectCommitTransaction — so no in-memory, quest,
+	// achievement or packet side effects may live inside it; those run
+	// exactly once in the in-memory phase below. A failed persistence phase
+	// rolls back, tears the trade down, and closes both client windows with
+	// TRADE_CANCELED (C++ has no failure arm here; leaving the windows open
+	// on torn-down server state would desync the clients).
+
+	// Phase 1: in-memory effects. The quest/achievement reads below see
+	// pre-trade database state, exactly like C++ (the item moves and quest
+	// checks run before the persistence transaction; the old Go code's
+	// uncommitted tx writes were invisible to these pooled reads anyway).
 
 	// Money transfer
-	s.player.Money = s.player.Money - s.trade.Money + partner.trade.Money
-	partner.player.Money = partner.player.Money - partner.trade.Money + s.trade.Money
+	newMoneyS := s.player.Money - s.trade.Money + partner.trade.Money
+	newMoneyP := partner.player.Money - partner.trade.Money + s.trade.Money
+	s.player.Money = newMoneyS
+	partner.player.Money = newMoneyP
 	s.questMoneyChanged(ctx)
 	partner.questMoneyChanged(ctx)
-	if !execTx("UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID) {
-		return
-	}
-	if !execTx("UPDATE characters SET money = ? WHERE guid = ?", partner.player.Money, partner.playerGUID) {
-		return
-	}
 
-	sTransferSlots := make(map[uint8]int, tradeSlotTradedCount)
-	partnerTransferSlots := make(map[uint8]int, tradeSlotTradedCount)
+	// Execute trade: 1. remove (TradeHandler.cpp:477-490) — the
+	// character_inventory row deletes ride in the persistence phase; the
+	// despawn packets and quest-count bookkeeping run here.
 	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
 		if it, ok := s.trade.Items[slot]; ok {
-			sTransferSlots[slot] = len(sTransferSlots)
-			if !execTx("DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, it.ItemGUID) {
-				return
-			}
 			s.despawnItem(it.ItemGUID)
 			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, false)
 		}
 		if it, ok := partner.trade.Items[slot]; ok {
-			partnerTransferSlots[slot] = len(partnerTransferSlots)
-			if !execTx("DELETE FROM character_inventory WHERE guid = ? AND item = ?", partner.playerGUID, it.ItemGUID) {
-				return
-			}
 			partner.despawnItem(it.ItemGUID)
 			partner.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, false)
 		}
 	}
 
+	// Execute trade: 2. store (TradeHandler.cpp:491-494) — the
+	// item_instance/character_inventory writes ride in the persistence
+	// phase; the quest-count and achievement arms run here.
 	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
 		if it, ok := s.trade.Items[slot]; ok {
-			targetLoc := partnerSlots[sTransferSlots[slot]]
-			// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
-			// on each traded item (TradeHandler.cpp:483).
-			if !execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", partner.playerGUID, s.playerGUID, it.ItemGUID) {
-				return
-			}
-			// Reference: TradeHandler.cpp:225-230 (moveItems) — a
-			// BOP-tradeable item rebases CREATE_PLAYED_TIME onto the new
-			// owner's played-time clock so the 2h soulbound-trade window
-			// survives the owner change: new = receiverTotal -
-			// (giverTotal - old).
-			var bopFlags, played int64
-			if err := tx.QueryRowContext(ctx, "SELECT flags, COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?", it.ItemGUID).Scan(&bopFlags, &played); err == nil && bopFlags&int64(itemInstanceFlagBOPTradeable) != 0 {
-				// C++ applies no clamp here: the subtraction is uint32 arithmetic
-				// (TradeHandler.cpp:155-156), and the wrap is what keeps
-				// CheckSoulboundTradeExpire (Item.cpp:1188-1195) reading the
-				// window correctly when the item predates the new owner's
-				// played time. A clamp-to-0 mints a fresh 2h window on a
-				// young character instead.
-				newPlayed := int64(uint32(int64(partner.player.TotalPlayedTime) - (int64(s.player.TotalPlayedTime) - played)))
-				if !execTx("UPDATE item_instance SET playedTime = ? WHERE guid = ?", newPlayed, it.ItemGUID) {
-					return
-				}
-			}
-			// Player::MoveItemFromInventory (Player.cpp:12588-12595) runs
-			// Item::SetNotRefundable on every traded item: the refundable
-			// flag is cleared and the refund DB row deleted.
-			if !execTx("UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), it.ItemGUID) {
-				return
-			}
-			if !execTx("DELETE FROM item_refund_instance WHERE item_guid = ?", it.ItemGUID) {
-				return
-			}
-			if !execTx("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID) {
-				return
-			}
 			partner.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
 			// Reference: Player::MoveItemToInventory (Player.cpp:12603-12626)
 			// fires UpdateAchievementCriteria(RECEIVE_EPIC_ITEM) for the
@@ -1515,39 +1476,6 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			partner.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.StackCount)
 		}
 		if it, ok := partner.trade.Items[slot]; ok {
-			targetLoc := sSlots[partnerTransferSlots[slot]]
-			// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
-			// on each traded item (TradeHandler.cpp:488).
-			if !execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", s.playerGUID, partner.playerGUID, it.ItemGUID) {
-				return
-			}
-			// BOP-tradeable played-time rebase onto the new owner's clock
-			// (TradeHandler.cpp:225-230, mirror of the giver's arm above).
-			var bopFlags, played int64
-			if err := tx.QueryRowContext(ctx, "SELECT flags, COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?", it.ItemGUID).Scan(&bopFlags, &played); err == nil && bopFlags&int64(itemInstanceFlagBOPTradeable) != 0 {
-				// C++ applies no clamp here: the subtraction is uint32 arithmetic
-				// (TradeHandler.cpp:155-156), and the wrap is what keeps
-				// CheckSoulboundTradeExpire (Item.cpp:1188-1195) reading the
-				// window correctly when the item predates the new owner's
-				// played time. A clamp-to-0 mints a fresh 2h window on a
-				// young character instead.
-				newPlayed := int64(uint32(int64(s.player.TotalPlayedTime) - (int64(partner.player.TotalPlayedTime) - played)))
-				if !execTx("UPDATE item_instance SET playedTime = ? WHERE guid = ?", newPlayed, it.ItemGUID) {
-					return
-				}
-			}
-			// Player::MoveItemFromInventory (Player.cpp:12588-12595) runs
-			// Item::SetNotRefundable on every traded item: the refundable
-			// flag is cleared and the refund DB row deleted.
-			if !execTx("UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), it.ItemGUID) {
-				return
-			}
-			if !execTx("DELETE FROM item_refund_instance WHERE item_guid = ?", it.ItemGUID) {
-				return
-			}
-			if !execTx("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID) {
-				return
-			}
 			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
 			// Reference: Player::MoveItemToInventory (Player.cpp:12603-12626)
 			// fires UpdateAchievementCriteria(RECEIVE_EPIC_ITEM) for the
@@ -1556,14 +1484,149 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		}
 	}
 
+	sTransferSlots := make(map[uint8]int, tradeSlotTradedCount)
+	partnerTransferSlots := make(map[uint8]int, tradeSlotTradedCount)
+	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+		if _, ok := s.trade.Items[slot]; ok {
+			sTransferSlots[slot] = len(sTransferSlots)
+		}
+		if _, ok := partner.trade.Items[slot]; ok {
+			partnerTransferSlots[slot] = len(partnerTransferSlots)
+		}
+	}
+
 	// Deferred-spell prepare at execute (TradeHandler.cpp:524-526): each
 	// side's deferred spell is applied to the other side's non-traded slot
 	// item now that the inventory move is done, before the trade completes.
-	s.applyDeferredTradeEnchant(ctx, tx, partner)
-	partner.applyDeferredTradeEnchant(ctx, tx, s)
+	// The enchantment-column read and log packets run here; the UPDATE
+	// rides in the persistence phase.
+	sEnchantItem, sEnchantEntry, sEnchantStr, sEnchantWrites, sOldIDs, sOldDurations := s.deferredTradeEnchantPlan(ctx, partner)
+	pEnchantItem, pEnchantEntry, pEnchantStr, pEnchantWrites, pOldIDs, pOldDurations := partner.deferredTradeEnchantPlan(ctx, s)
+	s.sendDeferredTradeEnchantLogs(partner, sEnchantItem, sEnchantEntry, sEnchantWrites, sOldIDs, sOldDurations)
+	partner.sendDeferredTradeEnchantLogs(s, pEnchantItem, pEnchantEntry, pEnchantWrites, pOldIDs, pOldDurations)
 
-	if err := tx.Commit(); err != nil {
-		abort()
+	// Phase 2: pure-database persistence, retried on deadlock.
+	if err := s.server.CharactersStore.RunTransaction(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		execTx := func(query string, args ...interface{}) error {
+			_, err := tx.ExecContext(txCtx, query, args...)
+			return err
+		}
+
+		if err := execTx("UPDATE characters SET money = ? WHERE guid = ?", newMoneyS, s.playerGUID); err != nil {
+			return err
+		}
+		if err := execTx("UPDATE characters SET money = ? WHERE guid = ?", newMoneyP, partner.playerGUID); err != nil {
+			return err
+		}
+
+		for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+			if it, ok := s.trade.Items[slot]; ok {
+				if err := execTx("DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, it.ItemGUID); err != nil {
+					return err
+				}
+			}
+			if it, ok := partner.trade.Items[slot]; ok {
+				if err := execTx("DELETE FROM character_inventory WHERE guid = ? AND item = ?", partner.playerGUID, it.ItemGUID); err != nil {
+					return err
+				}
+			}
+		}
+
+		for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+			if it, ok := s.trade.Items[slot]; ok {
+				targetLoc := partnerSlots[sTransferSlots[slot]]
+				// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
+				// on each traded item (TradeHandler.cpp:483).
+				if err := execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", partner.playerGUID, s.playerGUID, it.ItemGUID); err != nil {
+					return err
+				}
+				// Reference: TradeHandler.cpp:225-230 (moveItems) — a
+				// BOP-tradeable item rebases CREATE_PLAYED_TIME onto the new
+				// owner's played-time clock so the 2h soulbound-trade window
+				// survives the owner change: new = receiverTotal -
+				// (giverTotal - old).
+				var bopFlags, played int64
+				if err := tx.QueryRowContext(txCtx, "SELECT flags, COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?", it.ItemGUID).Scan(&bopFlags, &played); err == nil && bopFlags&int64(itemInstanceFlagBOPTradeable) != 0 {
+					// C++ applies no clamp here: the subtraction is uint32 arithmetic
+					// (TradeHandler.cpp:155-156), and the wrap is what keeps
+					// CheckSoulboundTradeExpire (Item.cpp:1188-1195) reading the
+					// window correctly when the item predates the new owner's
+					// played time. A clamp-to-0 mints a fresh 2h window on a
+					// young character instead.
+					newPlayed := int64(uint32(int64(partner.player.TotalPlayedTime) - (int64(s.player.TotalPlayedTime) - played)))
+					if err := execTx("UPDATE item_instance SET playedTime = ? WHERE guid = ?", newPlayed, it.ItemGUID); err != nil {
+						return err
+					}
+				}
+				// Player::MoveItemFromInventory (Player.cpp:12588-12595) runs
+				// Item::SetNotRefundable on every traded item: the refundable
+				// flag is cleared and the refund DB row deleted.
+				if err := execTx("UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), it.ItemGUID); err != nil {
+					return err
+				}
+				if err := execTx("DELETE FROM item_refund_instance WHERE item_guid = ?", it.ItemGUID); err != nil {
+					return err
+				}
+				if err := execTx("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID); err != nil {
+					return err
+				}
+			}
+			if it, ok := partner.trade.Items[slot]; ok {
+				targetLoc := sSlots[partnerTransferSlots[slot]]
+				// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
+				// on each traded item (TradeHandler.cpp:488).
+				if err := execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", s.playerGUID, partner.playerGUID, it.ItemGUID); err != nil {
+					return err
+				}
+				// BOP-tradeable played-time rebase onto the new owner's clock
+				// (TradeHandler.cpp:225-230, mirror of the giver's arm above).
+				var bopFlags, played int64
+				if err := tx.QueryRowContext(txCtx, "SELECT flags, COALESCE(playedTime, 0) FROM item_instance WHERE guid = ?", it.ItemGUID).Scan(&bopFlags, &played); err == nil && bopFlags&int64(itemInstanceFlagBOPTradeable) != 0 {
+					// C++ applies no clamp here: the subtraction is uint32 arithmetic
+					// (TradeHandler.cpp:155-156), and the wrap is what keeps
+					// CheckSoulboundTradeExpire (Item.cpp:1188-1195) reading the
+					// window correctly when the item predates the new owner's
+					// played time. A clamp-to-0 mints a fresh 2h window on a
+					// young character instead.
+					newPlayed := int64(uint32(int64(s.player.TotalPlayedTime) - (int64(partner.player.TotalPlayedTime) - played)))
+					if err := execTx("UPDATE item_instance SET playedTime = ? WHERE guid = ?", newPlayed, it.ItemGUID); err != nil {
+						return err
+					}
+				}
+				// Player::MoveItemFromInventory (Player.cpp:12588-12595) runs
+				// Item::SetNotRefundable on every traded item: the refundable
+				// flag is cleared and the refund DB row deleted.
+				if err := execTx("UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), it.ItemGUID); err != nil {
+					return err
+				}
+				if err := execTx("DELETE FROM item_refund_instance WHERE item_guid = ?", it.ItemGUID); err != nil {
+					return err
+				}
+				if err := execTx("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Deferred-spell enchantment writes (TradeHandler.cpp:524-526), the
+		// DB half of the plan computed above.
+		if sEnchantStr != "" {
+			if err := execTx("UPDATE item_instance SET enchantments = ? WHERE guid = ?", sEnchantStr, sEnchantItem); err != nil {
+				return err
+			}
+		}
+		if pEnchantStr != "" {
+			if err := execTx("UPDATE item_instance SET enchantments = ? WHERE guid = ?", pEnchantStr, pEnchantItem); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		clearAcceptTradeMode(s, partner)
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+		s.trade = nil
+		partner.trade = nil
 		return
 	}
 
