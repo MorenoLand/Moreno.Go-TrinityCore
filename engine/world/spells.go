@@ -16354,6 +16354,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 	}
+	// Spell::prepare's TRIGGERED_CAST_DIRECTLY arm (Spell.cpp:3171) routes
+	// triggered casts through cast -> _cast -> the effect handlers, so
+	// Spell::EffectPersistentAA (SpellEffects.cpp:1729) spawns the
+	// DynamicObject on triggered casts too. Placed after target selection
+	// like the client path's spawnPersistentAreaAura call (spells.go:9225);
+	// the dynobj's first target-map pass (NextTargetMapPass: now) applies
+	// the aura to units in the radius, replacing the per-target fan-out
+	// application the persistent-aura arm above now skips.
+	s.spawnPersistentAreaAura(ctx, spell, spellTarget)
 	// Spell::_cast (Spell.cpp:3416-3420): SPELL_ATTR1_DISMISS_PET dismisses
 	// the caster's active pet at cast time -- no triggered-flags guard, so
 	// triggered casts dismiss too. Placed after target selection like C++,
@@ -16814,7 +16823,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					targetDamage = targetDamage * 10 / uint32(aoeCapDivisor)
 				}
 				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase)
-			} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
+			} else if eff.Effect == 6 || (eff.Aura != 0 && eff.Effect != spellEffectPersistentAreaAura) { // SPELL_EFFECT_APPLY_AURA
+				// Spell::EffectPersistentAA (SpellEffects.cpp:1729) runs in
+				// SPELL_EFFECT_HANDLE_HIT mode — once per effect, never per
+				// target — and the DynamicObject owns application
+				// (_dynObjAura->_ApplyEffectForTargets at spawn plus the
+				// Aura::UpdateTargetMap 500ms passes, which strip the aura
+				// from targets that leave the radius). Applying effect 27
+				// here fabricated regular caster auras the dynobj's
+				// leave-removal (removeDynobjAura's PersistentAreaAura gate)
+				// could never strip, so leavers kept the aura for the full
+				// cast duration; the dynobj tick below owns all of it.
 				// Spell::DoSpellEffectHit (Spell.cpp:2840-2872): the aura's base
 				// amount is m_spellValue->EffectBasePoints — the raw DBC base
 				// (SpellValue ctor, Spell.cpp:500-507), never rolled and with no
