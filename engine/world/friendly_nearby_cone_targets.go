@@ -377,24 +377,7 @@ func (s *session) friendlyRefererScope(refererGUID uint64) friendlyRefererScope 
 		return playerGroupScope(refererGUID, party, raid, inGroup, refererSession.player.Class)
 	}
 	if motion := s.findCreatureMotion(refererGUID); motion != nil {
-		owner := motion.OwnerGUID
-		if owner == 0 {
-			owner = motion.CharmOwnerGUID
-		}
-		if owner != 0 {
-			if ownerSession := s.server.findSessionByGUID(owner); ownerSession != nil && ownerSession.player != nil {
-				_, party, raid, inGroup := groupMembershipSnapshot(s.server, ownerSession.groupID, owner)
-				return playerGroupScope(refererGUID, party, raid, inGroup, 0)
-			}
-		}
-		refFaction := motion.Faction
-		scope := friendlyRefererScope{}
-		sameFaction := func(c friendlyCandidate) bool {
-			return c.guid == refererGUID || (!c.isPlayer && c.faction == refFaction)
-		}
-		scope.inParty = sameFaction
-		scope.inRaid = sameFaction
-		return scope
+		return s.server.motionChainRefererScope(motion, refererGUID)
 	}
 	return friendlyRefererScope{}
 }

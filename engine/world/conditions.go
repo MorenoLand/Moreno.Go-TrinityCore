@@ -222,15 +222,18 @@ const (
 )
 
 // loadImplicitTargetConditions fetches the `conditions` rows attached to a
-// spell's implicit targets (SourceEntry = spell id, SourceGroup = effect
-// mask). TARGET_CHECK_ENTRY targets (7/8/38/40/46/60) resolve their entry
-// filter from these rows; a missing table or query error degrades to no
-// rows, matching C++ behavior with no ImplicitTargetConditions.
-func (s *session) loadImplicitTargetConditions(ctx context.Context, spellID uint32, effectMask uint32) []conditionRow {
-	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || effectMask == 0 {
+// loadImplicitTargetConditionRows is the Server-level twin of
+// (*session).loadImplicitTargetConditions: the implicit-target condition
+// rows for a spell's implicit targets (SourceEntry = spell id, SourceGroup =
+// effect mask). TARGET_CHECK_ENTRY targets (7/8/38/40/46/60) resolve their
+// entry filter from these rows; a missing table or query error degrades to
+// no rows, matching C++ behavior with no ImplicitTargetConditions. The
+// session loader delegates here so the query stays single-sourced.
+func (s *Server) loadImplicitTargetConditionRows(ctx context.Context, spellID uint32, effectMask uint32) []conditionRow {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || effectMask == 0 {
 		return nil
 	}
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceEntry = ? AND (SourceGroup & ?) <> 0 ORDER BY ElseGroup", conditionSourceSpellImplicitTarget, spellID, effectMask)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceEntry = ? AND (SourceGroup & ?) <> 0 ORDER BY ElseGroup", conditionSourceSpellImplicitTarget, spellID, effectMask)
 	if err != nil {
 		return nil
 	}
@@ -244,6 +247,16 @@ func (s *session) loadImplicitTargetConditions(ctx context.Context, spellID uint
 		result = append(result, row)
 	}
 	return result
+}
+
+// loadImplicitTargetConditions is the session-rooted entry point: the
+// implicit-target condition rows for a spell, delegating to the
+// Server-level twin.
+func (s *session) loadImplicitTargetConditions(ctx context.Context, spellID uint32, effectMask uint32) []conditionRow {
+	if s == nil || s.server == nil {
+		return nil
+	}
+	return s.server.loadImplicitTargetConditionRows(ctx, spellID, effectMask)
 }
 
 // loadSpellCastConditionRows is the Server-level twin of

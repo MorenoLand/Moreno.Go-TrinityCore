@@ -1835,6 +1835,23 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				}
 			}
 		}
+		// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) for a
+		// creature caster: chain selection runs inside SelectSpellTargets
+		// (Spell.cpp:3410) with no caster-type gate, so creature-cast chain
+		// spells (Black Stalker 31717 via creature:CastSpell) jump. The
+		// selection is inert for area/cone/caster-object effects
+		// (chainSelectionEligibleTarget, Spell.cpp:1173/1575), and the
+		// SPELLMOD_JUMP_TARGETS fold is a pass-through with no session.
+		// Jumps join hitTargets ahead of the reflect arm below so each
+		// jump rolls its own reflect/evade verdict like the primary
+		// target (Spell::AddUnitTarget, Spell.cpp:2152), and ride the GO
+		// packet plus the Eluna/trigger legs with it. Triggered casts run
+		// the arm too — SelectSpellTargets carries no IsTriggered gate.
+		if spellKnown && targetGUID != 0 {
+			if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(nil, spellInfo); jumps > 0 {
+				hitTargets = append(hitTargets, s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask)...)
+			}
+		}
 		// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
 		// this path: a hit target whose reflect roll succeeds leaves the
 		// hit list and becomes a REFLECT miss in the GO packet below

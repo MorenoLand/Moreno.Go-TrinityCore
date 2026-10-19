@@ -143,41 +143,47 @@ func inMeleeThreatRange(attackerReach, victimReach float32, dist float64) bool {
 	return dist <= calcMeleeRange(attackerReach, victimReach)
 }
 
-func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarget, bool) {
+// combatTargetByGUID is the Server-level twin of (*session).getCombatTarget
+// for callers with no player session (creature casters): the online-player
+// leg, the tracked-motion leg on the given map/instance, then the
+// world-store DB leg. The session method delegates here so the lookup stays
+// single-sourced.
+func (s *Server) combatTargetByGUID(ctx context.Context, mapID, instanceID uint32, guid uint64) (combatTarget, bool) {
+	if s == nil {
+		return combatTarget{}, false
+	}
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
 	// Check if target is an online player (e.g. duel opponent or PvP target)
-	if s.server != nil {
-		if playerSess := s.server.findSessionByGUID(guid); playerSess != nil && playerSess.player != nil {
-			reach := playerSess.player.CombatReach
-			if reach <= 0 {
-				reach = 1.5
-			}
-			return combatTarget{
-				GUID:        guid,
-				Map:         playerSess.player.Map,
-				InstanceID:  playerSess.player.InstanceID,
-				X:           playerSess.player.X,
-				Y:           playerSess.player.Y,
-				Z:           playerSess.player.Z,
-				Orientation: playerSess.player.Orientation,
-				Health:      playerSess.player.Health,
-				MaxHealth:   playerSess.player.MaxHealth,
-				Armor:       playerSess.player.Armor,
-				Resistances: playerSess.player.Resistances,
-				MinDamage:   playerSess.player.MinDamage,
-				MaxDamage:   playerSess.player.MaxDamage,
-				Level:       playerSess.player.Level,
-				UnitFlags:   playerSess.player.UnitFlags,
-				FlagsExtra:  0,
-				Faction:     0,
-				CombatReach: reach,
-			}, true
+	if playerSess := s.findSessionByGUID(guid); playerSess != nil && playerSess.player != nil {
+		reach := playerSess.player.CombatReach
+		if reach <= 0 {
+			reach = 1.5
 		}
+		return combatTarget{
+			GUID:        guid,
+			Map:         playerSess.player.Map,
+			InstanceID:  playerSess.player.InstanceID,
+			X:           playerSess.player.X,
+			Y:           playerSess.player.Y,
+			Z:           playerSess.player.Z,
+			Orientation: playerSess.player.Orientation,
+			Health:      playerSess.player.Health,
+			MaxHealth:   playerSess.player.MaxHealth,
+			Armor:       playerSess.player.Armor,
+			Resistances: playerSess.player.Resistances,
+			MinDamage:   playerSess.player.MinDamage,
+			MaxDamage:   playerSess.player.MaxDamage,
+			Level:       playerSess.player.Level,
+			UnitFlags:   playerSess.player.UnitFlags,
+			FlagsExtra:  0,
+			Faction:     0,
+			CombatReach: reach,
+		}, true
 	}
-	s.server.motionMu.Lock()
-	if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid); motion != nil {
+	s.motionMu.Lock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, guid); motion != nil {
 		if motion != nil {
 			reach := motion.CombatReach
 			if reach <= 0 {
@@ -203,17 +209,27 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 				Faction:     motion.Faction,
 				CombatReach: reach,
 			}
-			s.server.motionMu.Unlock()
+			s.motionMu.Unlock()
 			return target, true
 		}
 	}
-	s.server.motionMu.Unlock()
+	s.motionMu.Unlock()
 
-	target, err := s.loadCombatTarget(ctx, guid)
+	target, err := s.loadCombatTargetForInstance(ctx, guid, mapID, instanceID)
 	if err != nil {
 		return combatTarget{}, false
 	}
 	return target, true
+}
+
+// getCombatTarget is the session-rooted entry point: the combat-target
+// lookup on the session player's map/instance, delegating to the
+// Server-level twin.
+func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarget, bool) {
+	if s == nil || s.player == nil || s.server == nil {
+		return combatTarget{}, false
+	}
+	return s.server.combatTargetByGUID(ctx, s.player.Map, s.player.InstanceID, guid)
 }
 
 // gmAttackTargetBlocked mirrors the player-target legs of
@@ -2769,32 +2785,37 @@ func (s *Server) loadCreatureReaction(ctx context.Context, entry uint32) (uint8,
 	return creatureReactState(uint32(creatureType), uint32(npcFlags), uint32(flagsExtra), aiName), true, aiName
 }
 
-func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarget, error) {
+// loadCombatTargetForInstance is the Server-level twin of
+// (*session).loadCombatTarget: the world-store DB leg of the combat-target
+// lookup, spawning a tracked motion for the row on the given map/instance
+// when none exists. The session method delegates here so the query stays
+// single-sourced.
+func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, mapID, instanceID uint32) (combatTarget, error) {
 	var target combatTarget
-	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return target, fmt.Errorf("world store DB not initialized")
 	}
-	var low, entry, mapID int64
+	var low, entry, rowMapID int64
 	var curHealth sql.NullInt64
 	lowGUID := uint32(guid & 0x00FFFFFF)
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.curhealth FROM creature AS c WHERE c.guid = ?", lowGUID).Scan(&low, &entry, &mapID, &target.X, &target.Y, &target.Z, &curHealth); err != nil {
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.curhealth FROM creature AS c WHERE c.guid = ?", lowGUID).Scan(&low, &entry, &rowMapID, &target.X, &target.Y, &target.Z, &curHealth); err != nil {
 		return target, err
 	}
 	target.GUID = creatureWorldGUID(uint32(low), uint32(entry))
-	target.Map = uint32(mapID)
+	target.Map = uint32(rowMapID)
 
 	var ori sql.NullFloat64
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.orientation FROM creature AS c WHERE c.guid = ?", lowGUID).Scan(&ori)
+	{
+		_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT c.orientation FROM creature AS c WHERE c.guid = ?", lowGUID).Scan(&ori)
 		if ori.Valid {
 			target.Orientation = float32(ori.Float64)
 		}
 	}
 
-	st := s.server.loadCreatureStats(ctx, uint32(entry))
+	st := s.loadCreatureStats(ctx, uint32(entry))
 	target.UnitFlags = st.UnitFlags
 	target.FlagsExtra = st.FlagsExtra
-	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(faction, 0) FROM creature_template WHERE entry = ?", uint32(entry)).Scan(&target.Faction)
+	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(faction, 0) FROM creature_template WHERE entry = ?", uint32(entry)).Scan(&target.Faction)
 	target.Armor = st.Armor
 	target.Resistances = st.Resistances
 	target.MinDamage = st.MinDamage
@@ -2815,8 +2836,8 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 		target.Health = target.MaxHealth
 	}
 
-	s.server.motionMu.Lock()
-	if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
+	s.motionMu.Lock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, target.GUID); motion != nil {
 		target.X, target.Y, target.Z, target.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
 		target.UnitFlags, target.FlagsExtra = motion.UnitFlags, motion.FlagsExtra
 		target.Health = motion.Health
@@ -2839,7 +2860,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			LootMode:   lootModeDefault,
 			Entry:      uint32(entry),
 			Map:        target.Map,
-			InstanceID: s.player.InstanceID,
+			InstanceID: instanceID,
 			HomeX:      target.X,
 			HomeY:      target.Y,
 			HomeZ:      target.Z,
@@ -2864,14 +2885,23 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			CombatReach:     target.CombatReach,
 			Refreshed:       time.Now(),
 		}
-		motions := s.server.motionMapLocked(target.Map, s.player.InstanceID)
+		motions := s.motionMapLocked(target.Map, instanceID)
 		motions[target.GUID] = motion
 		if guid != target.GUID {
 			motions[guid] = motion
 		}
 	}
-	s.server.motionMu.Unlock()
+	s.motionMu.Unlock()
 	return target, nil
+}
+
+// loadCombatTarget is the session-rooted entry point: the world-store DB
+// leg of the combat-target lookup on the session player's map/instance.
+func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarget, error) {
+	if s == nil || s.player == nil || s.server == nil {
+		return combatTarget{}, fmt.Errorf("world store DB not initialized")
+	}
+	return s.server.loadCombatTargetForInstance(ctx, guid, s.player.Map, s.player.InstanceID)
 }
 
 func (s *session) stopAttacksForFaction(ctx context.Context, factionID uint32) {
