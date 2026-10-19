@@ -16149,11 +16149,30 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// fan-out below: the chain jumps appended above are stripped (they join
 	// per effect with their own ordinals), and each area/cone arm replaces
 	// it with the area search — the pre-fan-out wire-only list.
+	// The ally partition for the mixed class (harmful spell with a friendly-area
+	// effect) on the triggered path — mirrors the client-launch arm
+	// (hasFriendlyAreaEffect, spells.go:9113-9120).
+	var triggeredFriendlyEffectTargets []uint64
 	selectionTargets := hitTargets[:len(hitTargets)-len(chainJumpGUIDs)]
 	if !nearbySelected {
 		switch {
 		case isAreaEnemySpell(spell):
 			hitTargets = s.spellAreaEnemyTargets(ctx, spell, spellTarget)
+			// C++ SelectImplicitAreaTargets runs per effect (Spell.cpp:1227-1309)
+			// with each effect's own check type (ENEMY vs ALLY/PARTY/RAID) on
+			// triggered casts too — SelectSpellTargets carries no IsTriggered gate
+			// (Spell::prepare TRIGGERED_CAST_DIRECTLY -> cast -> _cast ->
+			// SelectSpellTargets, Spell.cpp:3171/3264/3410). The friendly-area
+			// effect of a triggered harmful spell selects allies, not the merged
+			// enemy list the heal arms would otherwise seed from. The partition
+			// is non-nil even when empty so "no allies in radius" heals nobody
+			// rather than falling back to enemies.
+			if hasFriendlyAreaEffect(spell) {
+				triggeredFriendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, spellTarget)
+				if triggeredFriendlyEffectTargets == nil {
+					triggeredFriendlyEffectTargets = []uint64{}
+				}
+			}
 			selectionTargets = hitTargets
 		case isFriendlyAreaSpell(spell):
 			hitTargets = s.spellFriendlyAreaTargets(ctx, spell, spellTarget)
@@ -16473,7 +16492,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// unscaled amount. Immune targets take nothing; reflected targets resolve
 		// to the caster (Spell.cpp:7740).
 		effectTargets := make([]triggeredEffectTarget, 0, len(selectionTargets)+len(chainJumpGUIDs))
-		for _, selGUID := range selectionTargets {
+		// Per-effect target list (Spell.cpp:758-779): a heal-family effect with a
+		// friendly-area target seeds from the ally partition, not the merged enemy
+		// list — the triggered-path mirror of the launch-path heal arms. Non-heal
+		// mixed effects keep the merged list, matching the launch path's documented
+		// residual.
+		seedTargets := selectionTargets
+		if triggeredFriendlyEffectTargets != nil && (eff.Effect == spellEffectHeal || eff.Effect == spellEffectHealPct || eff.Effect == spellEffectHealMechanical) && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+			seedTargets = triggeredFriendlyEffectTargets
+		}
+		for _, selGUID := range seedTargets {
 			target := selGUID
 			if target == 0 && spellEffectImplicitTargetExplicit(eff.Effect) {
 				target = s.playerGUID
