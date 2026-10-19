@@ -1606,8 +1606,9 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 	return true
 }
 
-// deleteCharacterReturnMails runs the mail return-to-sender sweep of the
-// character-delete path before the character's rows are wiped.
+// loadCharacterDoomedMails + rehomeCharacterDoomedMails run the mail
+// return-to-sender sweep of the character-delete path before the character's
+// rows are wiped.
 // Reference: Player::DeleteFromDB CHAR_DELETE_REMOVE arm (Player.cpp:4253-4332):
 // CHAR_SEL_CHAR_COD_ITEM_MAIL selects the receiver's mails with items and COD,
 // each old row is deleted (CHAR_DEL_MAIL_BY_ID), non-MAIL_NORMAL mails are
@@ -1618,7 +1619,9 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 // sender sits on another account (an online sender always takes the delay).
 // When the original sender no longer exists the draft's items are destroyed
 // and no mail is sent. Every mail left over is wiped afterwards (CHAR_DEL_MAIL
-// / CHAR_DEL_MAIL_ITEMS, Player.cpp:4457-4463).
+// / CHAR_DEL_MAIL_ITEMS, Player.cpp:4457-4463). The load runs pre-tx (callers
+// reserve mail IDs from the pre-tx snapshot) and the re-home write phase is
+// pure database work; callers fire new-mail notifies post-commit.
 // doomedMail is one COD mail with items re-homed when its receiver's character
 // is deleted (MailDraft::SendReturnToSender, Mail.cpp:141-186).
 type doomedMail struct {
