@@ -102,7 +102,9 @@
 -- DoCastVictim (nil ticks cast nothing but keep the schedule,
 -- jeklik convention). The IsSummonedBy muru-relay arm is summon/
 -- instance blocked; the JustDied 6x triggered DoCastAOE(SUMMON_
--- VOID_SPAWN 46071) arm is summon-blocked — skipped. UpdateAI
+-- VOID_SPAWN 46071) arm ports below as 6x triggered self-cast
+-- (the DoCastAOE self-cast convention; the summon effect resolves
+-- through the Go creature-cast summon arms). UpdateAI
 -- melee is engine-driven (C++ DoMeleeAttackIfReady). Darkness /
 -- Black Hole (25879). OnReset(23): non-triggered self-cast
 -- blackhole summon visual 46242 (C++ DoCast default is
@@ -157,6 +159,7 @@ local SPELL_TRANSFORM_VISUAL_MISSILE = 46205
 local SPELL_DARKFIEND_SKIN = 45934
 local SPELL_SHADOW_PULSE_PERIODIC = 46086
 local SPELL_VOID_BLAST = 46161
+local SPELL_SUMMON_VOID_SPAWN = 46071
 local SPELL_BLACKHOLE_SUMMON_VISUAL = 46242
 local SPELL_BLACKHOLE_SUMMON_VISUAL_2 = 46247
 local SPELL_BLACKHOLE_PASSIVE = 46228
@@ -376,8 +379,20 @@ local function voidSentinelCleanup(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_void_sentinelAI::JustDied (boss_muru.cpp:484-491):
+-- unconditional 6x triggered DoCastAOE(SPELL_SUMMON_VOID_SPAWN
+-- 46071, true) — DoCastAOE is self-cast under the in-tree
+-- convention, so 6x triggered self-cast (triggered casts never
+-- record spell-history cooldowns, so all six fire).
+local function voidSentinelDied(event, creature)
+    for _ = 1, 6 do
+        creature:CastSpell(creature, SPELL_SUMMON_VOID_SPAWN, true)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_VOID_SENTINEL, 1, voidSentinelEnterCombat)
 RegisterCreatureEvent(ENTRY_VOID_SENTINEL, 2, voidSentinelCleanup)
+RegisterCreatureEvent(ENTRY_VOID_SENTINEL, 4, voidSentinelDied)
 RegisterCreatureEvent(ENTRY_VOID_SENTINEL, 23, voidSentinelCleanup)
 
 -- ================= Darkness / Black Hole (25879) =================
