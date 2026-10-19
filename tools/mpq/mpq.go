@@ -26,6 +26,7 @@ const (
 	fileEncrypt  uint32 = 0x00010000
 	fileFixKey   uint32 = 0x00020000
 	fileSingle   uint32 = 0x01000000
+	fileCRC      uint32 = 0x04000000
 	fileExists   uint32 = 0x80000000
 	// fileCompressedMask mirrors LIBMPQ_FLAG_COMPRESSED
 	// (dep/libmpq/libmpq/mpq-internal.h:42): the compression-method bits.
@@ -220,30 +221,13 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 	if block.FileSize <= 1 {
 		return nil, os.ErrNotExist
 	}
-	if block.Flags&fileImplode != 0 {
-		data, err := a.readAt(block.FilePos, uint64(block.CompressedSize))
-		if err != nil {
-			return nil, err
-		}
-		key := uint32(0)
-		if block.Flags&fileEncrypt != 0 {
-			key = hashString(name, 3)
-			if block.Flags&fileFixKey != 0 {
-				// FIX_KEY adjusts by the absolute file position
-				// (FilePos = RelativePos + ArchiveOffset), not the
-				// header-relative offset.
-				key = (key + uint32(block.FilePos)) ^ block.FileSize
-			}
-		}
-		if key != 0 {
-			decrypt(data, key)
-		}
-		return decompressImplode(data, block.FileSize)
-	}
 	key := uint32(0)
 	if block.Flags&fileEncrypt != 0 {
 		key = hashString(name, 3)
 		if block.Flags&fileFixKey != 0 {
+			// FIX_KEY adjusts by the absolute file position
+			// (FilePos = RelativePos + ArchiveOffset), not the
+			// header-relative offset.
 			key = (key + uint32(block.FilePos)) ^ block.FileSize
 		}
 	}
@@ -257,6 +241,11 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 		}
 		return decompress(data, block.FileSize, block.Flags)
 	}
+	// C++ owner: dep/libmpq/libmpq/mpq.c libmpq__block_read — imploded
+	// files are NOT read as one stream: like compressed files they carry
+	// an on-disk sector-offset table (0x100 is inside
+	// LIBMPQ_FLAG_COMPRESSED 0xFF00) and each sector is decrypted with
+	// seed+N and exploded (or verbatim-copied) on its own.
 	return a.readSectors(block, key)
 }
 
@@ -275,8 +264,30 @@ func (a *Archive) readSectors(block blockEntry, key uint32) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if key != 0 {
+		// C++ owner: mpq.c libmpq__block_open_offset — "sometimes the file
+		// appears not to be encrypted, but it is": when the first table
+		// entry is neither the table size nor table size + 4 (the CRC /
+		// extra-sector tolerance), the table is encrypted and the seed is
+		// brute-forced with libmpq__decrypt_key — it is never derived from
+		// the file name on this path. A plaintext table keeps key == 0 so
+		// sectors stay untouched.
+		tableSize := uint32(offsetBytes)
+		if block.Flags&fileCRC != 0 {
+			tableSize += 4
+		}
+		first := binary.LittleEndian.Uint32(offsets)
+		if first != tableSize && first != tableSize+4 {
+			seed, ok := detectSectorKey(offsets, tableSize, sectorBytes)
+			if !ok {
+				return nil, errors.New("MPQ sector table decryption failed")
+			}
+			key = seed
 			decrypt(offsets, key-1)
+			if binary.LittleEndian.Uint32(offsets) != tableSize {
+				return nil, errors.New("MPQ sector table decryption failed")
+			}
+		} else {
+			key = 0
 		}
 	} else {
 		offsets = make([]byte, (sectorCount+1)*4)
@@ -332,6 +343,15 @@ func (a *Archive) find(name string) (uint32, bool) {
 		if entry.Block == 0xFFFFFFFF {
 			return 0, false
 		}
+		// A hash entry with the deleted marker (0xFFFFFFFE) carries stale
+		// hashes: libmpq matches it and derives a garbage file number,
+		// which the C++ MPQFile wrapper then treats as eof in that
+		// archive. Keep probing past it (StormLib behavior) so a re-added
+		// live entry later in the chain still resolves; otherwise the
+		// file reads as absent instead of aborting the caller.
+		if entry.Block == 0xFFFFFFFE {
+			continue
+		}
 		if entry.NameA == hashA && entry.NameB == hashB {
 			return entry.Block, true
 		}
@@ -351,14 +371,24 @@ func (a *Archive) readAt(offset, size uint64) ([]byte, error) {
 }
 
 func decompress(data []byte, expected, flags uint32) ([]byte, error) {
+	// C++ owner: dep/libmpq/libmpq/common.c libmpq__decompress_block —
+	// "some blocks have set the compression flag, but are not compressed":
+	// a PKZIP- or MULTI-flagged block whose packed size is NOT smaller
+	// than the unpacked size is copied verbatim, never decompressed.
 	if flags&fileImplode != 0 {
+		if uint32(len(data)) >= expected {
+			return data[:expected], nil
+		}
 		return decompressImplode(data, expected)
 	}
-	if flags&fileCompress == 0 || uint32(len(data)) == expected {
+	if flags&fileCompress == 0 {
 		if uint32(len(data)) != expected {
 			return nil, fmt.Errorf("MPQ file size mismatch: got %d, want %d", len(data), expected)
 		}
 		return data, nil
+	}
+	if uint32(len(data)) >= expected {
+		return data[:expected], nil
 	}
 	if len(data) == 0 {
 		return nil, errors.New("empty compressed MPQ sector")
@@ -601,6 +631,38 @@ func hashString(name string, hashType uint32) uint32 {
 		seed2 = uint32(value) + seed1 + seed2 + (seed2 << 5) + 3
 	}
 	return seed1
+}
+
+// detectSectorKey mirrors libmpq__decrypt_key
+// (dep/libmpq/libmpq/common.c): brute-forces the 256 possible seeds to find
+// the one that decrypts the sector-offset table's first entry to tableSize,
+// with the second entry within sectorBytes of the first. Returns the
+// StormLib-style file key (seed1 + 1); the table itself decrypts with
+// key - 1 and sector N with key + N.
+func detectSectorKey(offsets []byte, tableSize, sectorBytes uint32) (uint32, bool) {
+	if len(offsets) < 8 {
+		return 0, false
+	}
+	cryptOnce.Do(initCryptTable)
+	first := binary.LittleEndian.Uint32(offsets)
+	temp := (first ^ tableSize) - 0xEEEEEEEE
+	for i := uint32(0); i < 0x100; i++ {
+		seed1 := temp - cryptTable[0x400+i]
+		seed2 := uint32(0xEEEEEEEE) + cryptTable[0x400+(seed1&0xFF)]
+		ch := first ^ (seed1 + seed2)
+		if ch != tableSize {
+			continue
+		}
+		saveSeed := seed1 + 1
+		seed1 = ((^seed1 << 21) + 0x11111111) | (seed1 >> 11)
+		seed2 = ch + seed2 + (seed2 << 5) + 3
+		seed2 += cryptTable[0x400+(seed1&0xFF)]
+		second := binary.LittleEndian.Uint32(offsets[4:])
+		if second^(seed1+seed2)-ch <= sectorBytes {
+			return saveSeed, true
+		}
+	}
+	return 0, false
 }
 
 func decrypt(data []byte, key uint32) {

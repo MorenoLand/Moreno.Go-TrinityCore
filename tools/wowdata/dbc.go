@@ -118,8 +118,10 @@ func extractBuildInfo(archives []string, destination, lang string, strict bool) 
 // parseBuildNumber mirrors C++ ReadBuild's version="NNNN" parse
 // (System.cpp:183-196): the marker must be present, a closing quote must
 // follow it (an empty value fails the pos1 >= pos2 gate), and the number
-// must parse to build > 0 — anything else is fatal. C++ atoi skips leading
-// whitespace; TrimSpace keeps the Go parse aligned on real files.
+// must parse to build > 0 — anything else is fatal. C++ uses atoi, which
+// parses the leading numeric prefix ("123abc" -> 123) rather than
+// rejecting trailing garbage, so atoiPrefix mirrors that instead of
+// strconv.Atoi.
 func parseBuildNumber(data []byte, lang string) (uint32, error) {
 	invalid := fmt.Errorf("Fatal error: Invalid component.wow-%s.txt file format!", lang)
 	text := string(data)
@@ -133,11 +135,38 @@ func parseBuildNumber(data []byte, lang string) (uint32, error) {
 	if end <= 0 {
 		return 0, invalid
 	}
-	build, err := strconv.Atoi(strings.TrimSpace(rest[:end]))
-	if err != nil || build <= 0 {
+	build, ok := atoiPrefix(rest[:end])
+	if !ok || build <= 0 {
 		return 0, invalid
 	}
 	return uint32(build), nil
+}
+
+func atoiPrefix(s string) (int, bool) {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r' || s[i] == '\f' || s[i] == '\v') {
+		i++
+	}
+	negative := false
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		negative = s[i] == '-'
+		i++
+	}
+	start := i
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if start == i {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s[start:i])
+	if err != nil {
+		return 0, false
+	}
+	if negative {
+		n = -n
+	}
+	return n, true
 }
 
 // extractDBCFromArchives reads every .dbc from archives, which must already

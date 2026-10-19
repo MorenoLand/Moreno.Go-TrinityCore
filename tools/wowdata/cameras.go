@@ -25,8 +25,8 @@ import (
 //     are skipped, never overwritten.
 //   - A missing model still creates the (empty) output file and counts it:
 //     C++ ExtractFile writes zero bytes when MPQFile isEof but returns true.
-//   - A missing CinematicCamera.dbc aborts the phase with the C++ message;
-//     it is not a fatal error.
+//   - A missing or malformed CinematicCamera.dbc aborts the phase with the
+//     C++ message; it is not a fatal error.
 //   - The C++ -e extract-select flag (MAP=1/DBC=2/Camera=4) is bridged by
 //     the mapextractor -extract mask (main.go); the camera phase runs when
 //     bit 4 is set (default mask 6 = DBC|Camera).
@@ -67,7 +67,12 @@ func ExtractCameras(input, output string) (int, error) {
 	}
 	db, err := dbc.Parse(dbcData)
 	if err != nil {
-		return 0, fmt.Errorf("invalid CinematicCamera.dbc: %w", err)
+		// C++ owner: System.cpp:1036-1041 — DBCFile::open() failing (bad
+		// magic, short reads, fieldCount*4 != recordSize, truncated data,
+		// per dbcfile.cpp) aborts the camera phase with the same message
+		// as a missing file; it is not a fatal error.
+		fmt.Println("Unable to open CinematicCamera.dbc. Camera extract aborted.")
+		return 0, nil
 	}
 	dest := filepath.Join(output, "Cameras")
 	if err := os.MkdirAll(dest, 0o755); err != nil {

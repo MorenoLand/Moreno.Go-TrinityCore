@@ -89,6 +89,10 @@ func loadWMODoodadMetadata(modelDir, modelName string) (rawWMODoodadMetadata, bo
 		if err := binary.Read(reader, binary.LittleEndian, &doodad.NameIndex); err != nil || binary.Read(reader, binary.LittleEndian, &doodad.Position) != nil || binary.Read(reader, binary.LittleEndian, &doodad.Rotation) != nil || binary.Read(reader, binary.LittleEndian, &doodad.Scale) != nil {
 			return metadata, true, errors.New("invalid WMO doodad record")
 		}
+		// C++ owner: vmap4_extractor/wmo.h:58 — NameIndex is a 24-bit
+		// bitfield; the high byte is padding, so mask it like the C++
+		// struct read does.
+		doodad.NameIndex &= 0xFFFFFF
 		var color uint32
 		if err := binary.Read(reader, binary.LittleEndian, &color); err != nil {
 			return metadata, true, err

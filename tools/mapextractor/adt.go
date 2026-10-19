@@ -155,9 +155,13 @@ func parseNameList(data []byte) []string {
 		for end < len(data) && data[end] != 0 {
 			end++
 		}
-		if end > start {
-			result = append(result, string(data[start:end]))
-		}
+		// C++ owner: vmap4_extractor/adtfile.cpp:113-135 (MMDX) and :137-152
+		// (MWMO) — the C++ pushes one vector entry per NUL-terminated
+		// segment, including empty ones (p advances by strlen(p)+1 even when
+		// strlen(p)==0). MDDF/MODF Id fields index that vector, so empty
+		// segments must be preserved here to keep indices aligned; dropping
+		// them would shift every later name lookup.
+		result = append(result, string(data[start:end]))
 		start = end + 1
 	}
 	return result
@@ -276,14 +280,20 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 
 func countADTSubchunks(chunk []byte, info *adtInfo) error {
 	const mcnkHeaderSize = 128
-	if len(chunk) <= mcnkHeaderSize {
-		return nil
+	// The cell fields read below run through Holes at payload offset 60;
+	// a shorter chunk cannot hold them (C++ owner: adt_MCNK field layout in
+	// map_extractor/adt.h, holes at struct offset 68 = payload offset 60).
+	if len(chunk) < 64 {
+		return fmt.Errorf("truncated ADT MCNK chunk: got %d, want at least %d", len(chunk), 64)
 	}
 	cell := adtCellInfo{Flags: binary.LittleEndian.Uint32(chunk[0:]), X: binary.LittleEndian.Uint32(chunk[4:]), Y: binary.LittleEndian.Uint32(chunk[8:]), Layers: binary.LittleEndian.Uint32(chunk[12:]), DoodadRefs: binary.LittleEndian.Uint32(chunk[16:]), AreaID: binary.LittleEndian.Uint32(chunk[52:]), Holes: binary.LittleEndian.Uint32(chunk[60:])}
 	if cell.X >= 16 || cell.Y >= 16 {
 		return fmt.Errorf("invalid ADT MCNK cell coordinates %d,%d", cell.X, cell.Y)
 	}
 	info.Cells = append(info.Cells, cell)
+	if len(chunk) <= mcnkHeaderSize {
+		return nil
+	}
 	for offset := mcnkHeaderSize; offset+8 <= len(chunk); {
 		name := string(chunk[offset : offset+4])
 		size := int(binary.LittleEndian.Uint32(chunk[offset+4 : offset+8]))
