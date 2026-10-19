@@ -4,7 +4,7 @@
 -- npc_coilfang_ambusher — the two creature AI classes
 -- AddSC_boss_the_lurker_below registers; go_strange_pool is a
 -- GameObjectScript — no GO bridge, documented only, not
--- registered; NPC_COILFANG_GUARDIAN = 21865 ... see below).
+-- registered; NPC_COILFANG_AMBUSHER = 21865 ... see below).
 -- Entry 21217 verified from the C++ sources
 -- (instance_serpent_shrine.cpp: case 21217 -> LurkerBelow,
 -- DATA_THELURKERBELOW); 21865 comes from the file's own

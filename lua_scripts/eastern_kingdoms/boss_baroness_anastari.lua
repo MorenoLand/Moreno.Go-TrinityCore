@@ -174,8 +174,9 @@ onCheckPossessed = function(creature, guid)
 end
 
 -- C++ EVENT_SPELL_POSSESS: random non-victim player pick; triggered
--- casts on pick + invisibility self-cast + GUID latch + immediate check
--- scheduling; no pick -> Repeat(20s, 30s).
+-- casts on pick + invisibility self-cast + GUID latch + 0s-delay check
+-- scheduling (Lua uses 1ms: the next-tick equivalent); no pick ->
+-- Repeat(20s, 30s).
 onPossess = function(creature, guid)
     local victim = creature:GetVictim()
     local target = randomAlivePlayerExcluding(creature, victim and victim:GetGUID() or nil)
@@ -187,7 +188,7 @@ onPossess = function(creature, guid)
         if st then
             st.possessedGuid = target:GetGUID()
         end
-        schedule(guid, "check_possessed", 100, function() onCheckPossessed(creature, guid) end)
+        schedule(guid, "check_possessed", 1, function() onCheckPossessed(creature, guid) end)
     else
         schedule(guid, "possess", possessDelay(), function() onPossess(creature, guid) end)
     end
