@@ -241,6 +241,19 @@ local function vorpilDied(event, creature, killer)
     introSeen[guid] = nil
 end
 
+-- C++ boss_grandmaster_vorpilAI::Reset -> Initialize() (:102-105) re-arms
+-- _intro = false: after an evade the intro Talk replays. Go fires event 23
+-- on evade (before event 2) and on the death path (before event 4), so the
+-- wipe lives here with the IsDead guard (overgrind precedent).
+local function vorpilReset(event, creature)
+    if creature:IsDead() then
+        return
+    end
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    introSeen[guid] = nil
+end
+
 -- C++ boss_grandmaster_vorpilAI::MoveInLineOfSight (:155-161):
 -- BossAI::MoveInLineOfSight(who) first, then the _intro one-shot
 -- Talk(SAY_INTRO 0) when the player is within 100.0f + LOS +
@@ -263,4 +276,5 @@ RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 1, vorpilEnterCombat)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 2, vorpilLeaveCombat)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 3, vorpilTargetDied)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 4, vorpilDied)
+RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 23, vorpilReset)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 27, vorpilMoveInLOS)
