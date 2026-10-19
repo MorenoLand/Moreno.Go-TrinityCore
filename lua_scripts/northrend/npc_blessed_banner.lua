@@ -111,3 +111,15 @@ end
 
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 5, onSpawnOrReset)
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 23, onSpawnOrReset)
+
+-- C++ npc_blessed_bannerAI::MoveInLineOfSight (zone_icecrown.cpp:447) is an
+-- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight
+-- aggro engage (the banner is a quest object, never attacks). Go's
+-- fireCreatureMoveInLOS (lua_creature_events.go:531) fires ev27 on the
+-- aggro-engage branch and a boolean true vetoes exactly that engage, so
+-- return true models :447 C++-exact (the cyanigosa precedent).
+local function onMoveInLOS(event, creature, unit)
+    return true
+end
+
+RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 27, onMoveInLOS)

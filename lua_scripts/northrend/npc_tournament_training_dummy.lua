@@ -193,3 +193,18 @@ RegisterCreatureEvent(ENTRY_RANGED_TARGET, 14, dummySpellHit)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 9, dummyDamageTaken)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 2, dummyLeaveCombat)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 4, dummyLeaveCombat)
+
+-- C++ npc_tournament_training_dummyAI::MoveInLineOfSight
+-- (zone_icecrown.cpp:313) is an EMPTY override — it suppresses the default
+-- ScriptedAI::MoveInLineOfSight aggro engage (the dummies never attack).
+-- Go's fireCreatureMoveInLOS (lua_creature_events.go:531) fires ev27 on the
+-- aggro-engage branch and a boolean true vetoes exactly that engage, so
+-- return true models :313 C++-exact (the cyanigosa precedent); registered
+-- for all three dummy entries sharing the AI.
+local function dummyMoveInLOS(event, creature, unit)
+    return true
+end
+
+RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 27, dummyMoveInLOS)
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 27, dummyMoveInLOS)
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 27, dummyMoveInLOS)
