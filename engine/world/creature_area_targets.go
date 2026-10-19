@@ -774,8 +774,16 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 	}
 	attackerGUID := motion.GUID
 	reflectCreatureKey := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: reflectorGUID}
+	casterMap, casterInstance := motion.Map, motion.InstanceID
 	time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
 		if s == nil {
+			return
+		}
+		// ProcReflectDelayed::Execute (Spell.cpp:2077-2078): the arrival
+		// proc and the charge drop are skipped when the original caster
+		// no longer resolves (ObjectAccessor::GetUnit null arm) —
+		// despawned creatures leave the motion map.
+		if s.findCreatureMotion(casterMap, casterInstance, attackerGUID) == nil {
 			return
 		}
 		if rsess := s.findSessionByGUID(reflectorGUID); rsess != nil {
@@ -916,8 +924,15 @@ func (s *Server) armInlineReflectProcDelayed(motion *creatureMotion, reflector *
 	}
 	attackerGUID := motion.GUID
 	reflectorGUID := reflector.GUID
+	casterMap, casterInstance := motion.Map, motion.InstanceID
 	time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
 		if s == nil {
+			return
+		}
+		// ProcReflectDelayed::Execute (Spell.cpp:2077-2078): skip the
+		// arrival proc and charge drop when the original caster no longer
+		// resolves (ObjectAccessor::GetUnit null arm).
+		if s.findCreatureMotion(casterMap, casterInstance, attackerGUID) == nil {
 			return
 		}
 		if rsess := s.findSessionByGUID(reflectorGUID); rsess != nil {

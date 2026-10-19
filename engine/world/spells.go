@@ -9278,6 +9278,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if s.server == nil {
 				return
 			}
+			// ProcReflectDelayed::Execute (Spell.cpp:2077-2078): the arrival
+			// proc and the charge drop are skipped when the original caster
+			// no longer resolves (ObjectAccessor::GetUnit null arm).
+			if s.server.findSessionByGUID(procCasterGUID) == nil {
+				return
+			}
 			if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
 				rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
 				// ProcReflectDelayed charge arm (Spell.cpp:2181): the
@@ -16249,6 +16255,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					if s.server == nil {
 						return
 					}
+					// ProcReflectDelayed::Execute (Spell.cpp:2077-2078):
+					// skip the arrival proc and charge drop when the
+					// original caster no longer resolves.
+					if s.server.findSessionByGUID(s.playerGUID) == nil {
+						return
+					}
 					if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
 						rsess.procSpellReflectTakenAuraTriggers(context.Background(), s.playerGUID, spell, procTriggered)
 						// ProcReflectDelayed charge arm (Spell.cpp:2181).
@@ -21105,6 +21117,13 @@ func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, 
 			procCasterGUID := s.playerGUID
 			time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
 				if s.server == nil {
+					return
+				}
+				// ProcReflectDelayed::Execute (Spell.cpp:2077-2078): the
+				// arrival proc and the charge drop are skipped when the
+				// original caster no longer resolves
+				// (ObjectAccessor::GetUnit null arm).
+				if s.server.findSessionByGUID(procCasterGUID) == nil {
 					return
 				}
 				if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {

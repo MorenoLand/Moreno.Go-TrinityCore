@@ -386,7 +386,10 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	var realmChars sql.NullFloat64
 	// CharacterHandler.cpp:434-438: a null SUM result counts as zero and the
 	// account-limit check proceeds — never a disconnect.
-	if err := s.server.AuthStore.QueryRowContext(ctx, "SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?", s.accountID).Scan(&realmChars); err != nil {
+	sumRow, sumErr := s.server.AuthStore.QueryRowStatement(ctx, "LOGIN_SEL_SUM_REALM_CHARACTERS", s.accountID)
+	if sumErr != nil {
+		s.debug("character create realm-character sum statement failed", "account", s.accountName, "error", sumErr)
+	} else if err := sumRow.Scan(&realmChars); err != nil {
 		s.debug("character create realm-character sum failed", "account", s.accountName, "error", err)
 	}
 	accountCharacters := 0.0

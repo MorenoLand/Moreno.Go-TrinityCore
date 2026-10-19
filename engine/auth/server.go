@@ -902,7 +902,7 @@ func loadBuilds(ctx context.Context, store *database.Store) (map[uint32]buildInf
 }
 
 func loadRealms(ctx context.Context, store *database.Store) ([]realm, error) {
-	rows, err := store.DB.QueryContext(ctx, "SELECT id, name, address, localAddress, localSubnetMask, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild FROM realmlist WHERE flag <> 3 ORDER BY name")
+	rows, err := store.QueryStatement(ctx, "LOGIN_SEL_REALMLIST")
 	if err != nil {
 		return nil, err
 	}
@@ -994,7 +994,7 @@ func loadCharacterCounts(ctx context.Context, store *database.Store, accountID u
 	// LoginDatabase.cpp:53 (LOGIN_SEL_REALM_CHARACTER_COUNTS): the client-visible
 	// count is the stored numchars column — realmcharacters holds one row per
 	// (acctid, realmid), so COUNT(*) would wrongly report 1 for every realm.
-	rows, err := store.DB.QueryContext(ctx, "SELECT realmid, numchars FROM realmcharacters WHERE acctid = ?", accountID)
+	rows, err := store.QueryStatement(ctx, "LOGIN_SEL_REALM_CHARACTER_COUNTS", accountID)
 	if err != nil {
 		return nil, err
 	}
