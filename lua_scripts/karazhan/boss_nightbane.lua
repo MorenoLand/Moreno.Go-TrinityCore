@@ -303,6 +303,18 @@ local function nightbaneDied(event, creature, killer)
     -- C++ JustDied: HandleTerraceDoors(true) — no instance-script model.
 end
 
+-- C++ boss_nightbane.cpp:142-145: JustReachedHome -> _DespawnAtEvade()
+-- (BossAI despawn with respawn delay + instance SetBossState(FAIL); the
+-- instance leg has no bridge). Go fires event 24 at the same home-arrival
+-- point; creature:Despawn() respawns DB-spawned creatures on their normal
+-- spawntimesecs (opera precedent).
+local function nightbaneReachHome(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    nightbaneInitState(guid)
+    creature:Despawn()
+end
+
 local function nightbaneReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -345,3 +357,4 @@ RegisterCreatureEvent(ENTRY_NIGHTBANE, 2, nightbaneLeaveCombat)
 RegisterCreatureEvent(ENTRY_NIGHTBANE, 4, nightbaneDied)
 RegisterCreatureEvent(ENTRY_NIGHTBANE, 9, nightbaneDamageTaken)
 RegisterCreatureEvent(ENTRY_NIGHTBANE, 23, nightbaneReset)
+RegisterCreatureEvent(ENTRY_NIGHTBANE, 24, nightbaneReachHome)

@@ -48,7 +48,7 @@
 -- InterruptSpell + DoZoneInCombat, RemoveAura(15282),
 -- EVENT_PRE_FIGHT_2 at 32s); EVENT_PRE_FIGHT_2 (self-cast 16245 +
 -- 16048, Talk(EMOTE_ONE_STACK)); EVENT_ENTER_COMBAT (AttackStart(
--- SelectNearestPlayer(30.0f))); SpellHit 15282 -> self-cast 15282 +
+-- SelectNearestPlayer(30.0f))); SpellHit 15281 (SPELL_ENCAGE_EMBERSEER) -> self-cast 15282 (SPELL_ENCAGED_EMBERSEER) +
 -- Reset if no aura; SpellHit 16049 stack latches (EMOTE_TEN_STACK at
 -- 10, at 20: remove 16245, cast 16047, Talk(EMOTE_FREE_OF_BONDS /
 -- YELL_FREE_OF_BONDS), clear flags, EVENT_ENTER_COMBAT at 2s)

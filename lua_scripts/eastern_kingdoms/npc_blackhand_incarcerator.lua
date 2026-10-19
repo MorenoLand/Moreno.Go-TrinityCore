@@ -36,9 +36,9 @@
 -- DoCast(target, 16045, true). Nil-guard around the cast: C++ calls
 -- DoCast directly on the SelectTarget result (fizzles on null); the
 -- port guards instead of casting on nil.
--- JustAppeared's DoCast(SPELL_ENCAGE_EMBERSEER 15282) is ported below on
+-- JustAppeared's DoCast(SPELL_ENCAGE_EMBERSEER 15281) is ported below on
 -- event 5 (OnSpawn; storm_cloud convention — Go fires 5 on the respawn
--- path). JustReachedHome's self-cast 15282 is ported below on event 24,
+-- path). JustReachedHome's self-cast 15281 is ported below on event 24,
 -- and SetImmuneToAll(true) has no bridge. The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
 -- NPC_BLACKHAND_INCARCERATOR 10316, 60.0f -> DoZoneInCombat each —
 -- "Had to do this because CallForHelp will ignore any npcs without
@@ -46,7 +46,7 @@
 
 local SPELL_STRIKE = 15580
 local SPELL_ENCAGE = 16045
-local SPELL_ENCAGE_EMBERSEER = 15282
+local SPELL_ENCAGE_EMBERSEER = 15281 -- C++ enum; 15282 is the distinct SPELL_ENCAGED_EMBERSEER
 
 local ENTRY_BLACKHAND_INCARCERATOR = 10316
 
@@ -121,9 +121,9 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ npc_blackhand_incarceratorAI::JustReachedHome: UnitAI::DoCast(15282)
+-- C++ npc_blackhand_incarceratorAI::JustReachedHome: DoCast(SPELL_ENCAGE_EMBERSEER) = 15281
 -- resolves via AISpellInfo target AITARGET_SELF to a self-cast, so this is
--- creature:CastSpell(creature, 15282) on event 24 (OnReachHome fires at the
+-- creature:CastSpell(creature, 15281) on event 24 (OnReachHome fires at the
 -- same point as C++ HomeMovementGenerator::DoFinalize). The
 -- me->SetImmuneToAll(true) leg has no bridge and stays out.
 local function onReachHome(_, creature)
@@ -134,8 +134,8 @@ RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 4, onCombatEnd)
 -- C++ npc_blackhand_incarceratorAI::JustAppeared: DoCast(SPELL_ENCAGE_EMBERSEER)
--- is UnitAI::DoCast(me, 15282) — a self-cast, triggered=false, so
--- creature:CastSpell(creature, 15282) on event 5 (storm_cloud convention).
+-- is DoCast(15281) non-triggered (UnitAI::DoCast -> CastSpell(target, id, false)) — a self-cast, so
+-- creature:CastSpell(creature, 15281) on event 5 (storm_cloud convention).
 local function onSpawn(_, creature)
     creature:CastSpell(creature, SPELL_ENCAGE_EMBERSEER)
 end

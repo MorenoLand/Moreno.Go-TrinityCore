@@ -124,6 +124,8 @@
 -- ACTION_KELTHUZAD_DIED Talk(EMOTE_GUARDIAN_FLEE 0) + flee/
 -- DespawnOrUnsummon(30s) / MoveTargetedHome legs — no motion/despawn
 -- bridges; EMOTE_GUARDIAN_APPEAR 1 — visibility bridge absent.
+-- JustReachedHome DespawnOrUnsummon (boss_kelthuzad.cpp:832-835) is
+-- bridgeable in isolation (Despawn) but joins the entry-blocked queue.
 -- spell_kelthuzad_chains (AuraScript 28410): scale-mod apply/remove
 -- handlers — no AuraScript binding bridge (razelikh precedent) — joins
 -- the SpellScript/AuraScript queue.

@@ -35,12 +35,11 @@
 --   11122 via 4x urand(1, i) == 1 DoSummon(20f, 10min) (no summon
 --   bridge, herod precedent) — tracking the latch alone would be a
 --   stub, so it is not registered).
--- - ReceiveEmote (dance -> EnterEvadeMode; rude -> DoCast(player,
---   SPELL_SLAP = 6754) within 5yd else EMOTE_ONESHOT_RUDE): dance has no
---   EnterEvadeMode bridge and the slap's 5yd gate needs the player's X/Y
---   (player surface exposes only GetZ) — both documented-only. The three
---   ungated visual arms (wave/bow/kiss -> emote commands) ARE ported via
---   event 8 + creature:PerformEmote (see onReceiveEmote).
+-- - ReceiveEmote dance -> EnterEvadeMode: no EnterEvadeMode bridge,
+--   documented-only. The rude arm IS ported (see onReceiveEmote):
+--   IsWithinDist is in the object.go generic fallback so the 5yd gate
+--   needs no player X/Y; the wave/bow/kiss visual arms ride
+--   creature:PerformEmote.
 -- - GetStratholmeAI -> GetInstanceAI leg (instance-model blocked,
 --   standing).
 
@@ -58,23 +57,35 @@ local SPELL_DEBILITATING_TOUCH = 16333
 -- lua_creature_events.go:325; event 8 fires the handler creature via
 -- fireCreatureLuaEvent, so the session-bound twin at lua_objects.go:375
 -- alone nil-calls here).
+local SPELL_SLAP = 6754
+
 local TEXT_EMOTE_BOW = 17
 local TEXT_EMOTE_KISS = 58
+local TEXT_EMOTE_RUDE = 77
 local TEXT_EMOTE_WAVE = 101
 
 local EMOTE_ONESHOT_BOW = 2
 local EMOTE_ONESHOT_WAVE = 3
+local EMOTE_ONESHOT_RUDE = 14
 local EMOTE_ONESHOT_FLEX = 23
 
--- C++-exact for the three ungated arms: wave -> ONESHOT_WAVE,
--- bow -> ONESHOT_BOW, kiss -> ONESHOT_FLEX.
-local function onReceiveEmote(_, creature, _, textEmote)
+-- C++ stratholme.cpp:297-320: rude -> DoCast(player, SPELL_SLAP, false)
+-- within 5yd (IsWithinDistInMap; IsWithinDist is the object.go fallback
+-- twin), else HandleEmoteCommand(EMOTE_ONESHOT_RUDE) == PerformEmote per
+-- the handler twin; dance -> EnterEvadeMode stays out (no bridge).
+local function onReceiveEmote(_, creature, player, textEmote)
     if textEmote == TEXT_EMOTE_WAVE then
         creature:PerformEmote(EMOTE_ONESHOT_WAVE)
     elseif textEmote == TEXT_EMOTE_BOW then
         creature:PerformEmote(EMOTE_ONESHOT_BOW)
     elseif textEmote == TEXT_EMOTE_KISS then
         creature:PerformEmote(EMOTE_ONESHOT_FLEX)
+    elseif textEmote == TEXT_EMOTE_RUDE then
+        if player and creature:IsWithinDist(player, 5) then
+            creature:CastSpell(player, SPELL_SLAP)
+        else
+            creature:PerformEmote(EMOTE_ONESHOT_RUDE)
+        end
     end
 end
 
