@@ -61,6 +61,16 @@ func (s *Server) resolveCreatureSpellDestination(m *creatureMotion, spell wotlk.
 	if combatReach <= 0 {
 		combatReach = 1.5
 	}
+	// SpellInfo.cpp:551-574: CalcRadius(m_caster) folds SPELLMOD_RADIUS
+	// through GetSpellModOwner (Object.cpp:2246-2261) — a pet or totem
+	// caster resolves to its owner player's session; wild creatures fold
+	// nothing.
+	var modRadius func(float32) float32
+	if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+		modRadius = func(r float32) float32 {
+			return float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(r)))
+		}
+	}
 	// SelectImplicitTargetDestTargets anchors on the wire object target
 	// (Spell.cpp:1433-1436); on this path that is the explicit unit target
 	// (Unit::CastSpell sets it before _cast).
@@ -80,10 +90,7 @@ func (s *Server) resolveCreatureSpellDestination(m *creatureMotion, spell wotlk.
 		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			switch {
 			case isCasterDestTarget(targetType):
-				// nil modRadius: CalcRadius's SPELLMOD_RADIUS fold goes through
-				// GetSpellModOwner(), which is null for creature casters
-				// (SpellInfo.cpp:560-563).
-				x, y, z = resolveCasterDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, m.X, m.Y, m.Z, m.Orientation, combatReach, nil)
+				x, y, z = resolveCasterDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, m.X, m.Y, m.Z, m.Orientation, combatReach, modRadius)
 			case isTargetDestTarget(targetType):
 				// C++ asserts a non-null object target here
 				// (Spell.cpp:1434); without a resolvable unit target Go
@@ -94,7 +101,7 @@ func (s *Server) resolveCreatureSpellDestination(m *creatureMotion, spell wotlk.
 				}
 				x, y, z = resolveTargetDestPosition(s.Data, targetType, eff.RadiusIndex, unitX, unitY, unitZ, unitO)
 			case isDestDestTarget(targetType):
-				if nx, ny, nz, changed := resolveDestDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, x, y, z, m.Orientation, nil); changed {
+				if nx, ny, nz, changed := resolveDestDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, x, y, z, m.Orientation, modRadius); changed {
 					x, y, z = nx, ny, nz
 				}
 			}
