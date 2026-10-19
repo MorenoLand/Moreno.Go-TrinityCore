@@ -351,7 +351,7 @@ end
 
 -- C++ DamageTaken (lines 396-399): damage >= me->GetHealth()
 -- -> damage = 0 + Talk(SAY_DEATH) — only the Talk arm and
--- the damage rewrite are bridgeable; the numeric return
+-- the damage rewrite are bridgeable; the numeric second return
 -- performs the C++-exact damage=0 rewrite (the moroes
 -- damage-rewrite precedent). The companion legs
 -- (RemoveAllAuras / ... / DoCastAOE SPELL_KILL_CREDIT /
@@ -360,7 +360,7 @@ end
 local function hodirDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:Talk(SAY_DEATH)
-        return 0
+        return false, 0
     end
 end
 

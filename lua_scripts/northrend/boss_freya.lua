@@ -380,7 +380,7 @@ end
 
 -- C++ DamageTaken: damage >= me->GetHealth() -> damage = 0
 -- + manual JustDied(who) call; JustDied's only bridgeable
--- arm is Talk(SAY_DEATH) — the numeric return performs the
+-- arm is Talk(SAY_DEATH) — the numeric second return performs the
 -- C++-exact damage=0 rewrite (the moroes damage-rewrite
 -- precedent; the hodir consequence applies). cancelTimers
 -- models the C++ post-lethal stop (no victim after
@@ -391,7 +391,7 @@ local function freyaDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:Talk(SAY_DEATH)
         cancelTimers(creature:GetGUID())
-        return 0
+        return false, 0
     end
 end
 
