@@ -322,6 +322,18 @@ RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 2, colossusLeaveCombat)
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 4, colossusDied)
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 23, colossusReset)
 
+-- C++ npc_runic_colossusAI::MoveInLineOfSight (boss_thorim.cpp:1383) is an
+-- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight
+-- aggro engage (the colossus only fights when the gauntlet reaches it).
+-- Go's fireCreatureMoveInLOS (lua_creature_events.go:531) fires ev27 on the
+-- aggro-engage branch and a boolean true vetoes exactly that engage, so
+-- return true models :1383 C++-exact (the cyanigosa precedent).
+local function colossusMoveInLOS(event, creature, unit)
+    return true
+end
+
+RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 27, colossusMoveInLOS)
+
 RegisterCreatureEvent(ENTRY_ANCIENT_RUNE_GIANT, 1, giantEnterCombat)
 RegisterCreatureEvent(ENTRY_ANCIENT_RUNE_GIANT, 2, giantLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANCIENT_RUNE_GIANT, 4, giantDied)
