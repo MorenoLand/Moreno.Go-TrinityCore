@@ -551,7 +551,7 @@ CREATE TABLE IF NOT EXISTS `characters` (
   PRIMARY KEY (`guid`),
   KEY `idx_account` (`account`),
   KEY `idx_online` (`online`),
-  KEY `idx_name` (`name`)
+  UNIQUE KEY `idx_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='Player System';
 CREATE TABLE IF NOT EXISTS `characters_npcbot` (
   `entry` int unsigned NOT NULL COMMENT 'creature_template.entry',
@@ -1001,7 +1001,8 @@ CREATE TABLE IF NOT EXISTS `quest_tracker` (
   `quest_abandon_time` datetime DEFAULT NULL,
   `completed_by_gm` tinyint(1) NOT NULL DEFAULT '0',
   `core_hash` varchar(120) NOT NULL DEFAULT '0',
-  `core_revision` varchar(120) NOT NULL DEFAULT '0'
+  `core_revision` varchar(120) NOT NULL DEFAULT '0',
+  UNIQUE KEY `idx_latest_quest_for_character` (`id`,`character_guid`,`quest_accept_time` DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 CREATE TABLE IF NOT EXISTS `reserved_name` (
   `name` varchar(12) NOT NULL DEFAULT '',

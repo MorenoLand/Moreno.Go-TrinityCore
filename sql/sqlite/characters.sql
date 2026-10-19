@@ -552,7 +552,7 @@ PRIMARY KEY (`guid`)
 );
 CREATE INDEX IF NOT EXISTS `characters__idx_account` ON `characters` (`account`);
 CREATE INDEX IF NOT EXISTS `characters__idx_online` ON `characters` (`online`);
-CREATE INDEX IF NOT EXISTS `characters__idx_name` ON `characters` (`name`);
+CREATE UNIQUE INDEX IF NOT EXISTS `characters__idx_name` ON `characters` (`name`);
 CREATE TABLE IF NOT EXISTS `characters_npcbot` (
 `entry` INTEGER  NOT NULL,
 `owner` INTEGER  NOT NULL DEFAULT '0',
@@ -1003,6 +1003,7 @@ CREATE TABLE IF NOT EXISTS `quest_tracker` (
 `core_hash` TEXT NOT NULL DEFAULT '0',
 `core_revision` TEXT NOT NULL DEFAULT '0'
 );
+CREATE UNIQUE INDEX IF NOT EXISTS `quest_tracker__idx_latest_quest_for_character` ON `quest_tracker` (`id`,`character_guid`,`quest_accept_time` DESC);
 CREATE TABLE IF NOT EXISTS `reserved_name` (
 `name` TEXT NOT NULL DEFAULT '',
 PRIMARY KEY (`name`)
