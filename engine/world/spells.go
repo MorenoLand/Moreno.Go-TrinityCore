@@ -15785,11 +15785,17 @@ func (s *session) triggeredSpellHitResult(ctx context.Context, spell wotlk.Spell
 	if s == nil || s.player == nil || s.server == nil {
 		return protocol.SpellMissNone
 	}
+	tgt, haveTgt := s.getCombatTarget(ctx, targetGUID)
+	targetLevel := uint8(1)
 	var targetFaction uint32
-	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+	if haveTgt {
+		targetLevel = tgt.Level
 		targetFaction = tgt.Faction
 	}
 	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
+		if targetSess.player != nil {
+			targetLevel = targetSess.player.Level
+		}
 		// WorldObject::SpellHitResult (Object.cpp:2620) checks IsImmunedToSpell
 		// (SPELL_MISS_IMMUNE) ahead of the canReflect arm, so a target that is
 		// both immune and reflecting reports IMMUNE and never consumes its
@@ -15803,12 +15809,23 @@ func (s *session) triggeredSpellHitResult(ctx context.Context, spell wotlk.Spell
 		if spellHasOnlyDamageEffects(spell) && targetSess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
 			return protocol.SpellMissImmune
 		}
+		// WorldObject::SpellHitResult (Object.cpp:2630): a positive spell
+		// can`t miss against a non-hostile target — checked before the
+		// reflect roll, so a friendly target of a positive triggered spell
+		// never reflects.
+		if spellIsPositive(spell) && !s.spellRangeTargetHostile(targetGUID, tgt) {
+			return protocol.SpellMissNone
+		}
 		// WorldObject::SpellHitResult (Object.cpp:2641-2648): the reflect roll,
 		// offered per Spell.cpp:622/2152 (spellReflectOffered).
 		if spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
 			return protocol.SpellMissReflect
 		}
-		return protocol.SpellMissNone
+		// WorldObject::SpellHitResult (Object.cpp:2652-2666): the
+		// SPELL_ATTR3_IGNORE_HIT_RESULT arm and the DmgClass switch run on
+		// triggered casts exactly as on the client path — C++ SelectSpellTargets
+		// -> AddUnitTarget (Spell.cpp:3410/2152) carries no triggered gate.
+		return s.triggeredSpellTableResult(ctx, spell, targetGUID, targetSess, targetLevel)
 	}
 	// Creature victims run the same arms in the same order (Object.cpp:2621
 	// before :2641 applies to any Unit).
@@ -15825,10 +15842,82 @@ func (s *session) triggeredSpellHitResult(ctx context.Context, spell wotlk.Spell
 	if s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
 		return protocol.SpellMissEvade
 	}
+	// WorldObject::SpellHitResult (Object.cpp:2630): positive-vs-non-hostile
+	// arm ahead of the reflect roll, same as the player branch.
+	if spellIsPositive(spell) && haveTgt && !s.spellRangeTargetHostile(targetGUID, tgt) {
+		return protocol.SpellMissNone
+	}
 	if s.creatureReflectOffered(spell, targetFaction) && s.server.creatureCheckSpellReflection(creatureAuraKeyForPlayer(*s.player, targetGUID), spell) {
 		return protocol.SpellMissReflect
 	}
-	return protocol.SpellMissNone
+	if !haveTgt {
+		return protocol.SpellMissNone
+	}
+	return s.triggeredSpellTableResult(ctx, spell, targetGUID, nil, targetLevel)
+}
+
+// triggeredSpellTableResult mirrors the WorldObject::SpellHitResult tail
+// (Object.cpp:2652-2666) for the triggered path, matching the client path's
+// finishSpellCast table (spells.go:9426-9465) arm for arm: the
+// SPELL_ATTR3_IGNORE_HIT_RESULT arm reports NONE, then the DmgClass switch
+// routes MELEE/RANGED through Unit::MeleeSpellHitResult (Unit.cpp:2478) and
+// MAGIC through the WorldObject::MagicSpellHitResult legs (Object.cpp:2534+).
+func (s *session) triggeredSpellTableResult(ctx context.Context, spell wotlk.Spell, targetGUID uint64, targetSess *session, targetLevel uint8) uint8 {
+	if s == nil || s.player == nil {
+		return protocol.SpellMissNone
+	}
+	if spell.AttributesEx3&spellAttr3IgnoreHitResult != 0 {
+		return protocol.SpellMissNone
+	}
+	isPlayerVictim := targetSess != nil
+	switch spell.DefenseType {
+	case spellDamageClassMelee, spellDamageClassRanged:
+		// WorldObject::SpellHitResult (Object.cpp:2656-2660).
+		return s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, isPlayerVictim)
+	case spellDamageClassMagic:
+		// WorldObject::MagicSpellHitResult (Object.cpp:2534-2561): the
+		// SPELLMOD_RESIST_MISS_CHANCE fold applies to the level-diff base
+		// before the 199/186/160/rating legs inside bonusHit.
+		bonusHit := s.spellHitTableBonus(spell, targetSess)
+		baseHit := int32(magicSpellHitBase(s.player.Level, targetLevel, isPlayerVictim))
+		baseHit = s.applySpellMod(spell, spellModResistMissChance, baseHit)
+		if missInfo := magicSpellHitResultFromBase(float64(baseHit), bonusHit); missInfo != protocol.SpellMissNone {
+			return missInfo
+		}
+		// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): the
+		// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm.
+		if s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
+			return protocol.SpellMissResist
+		}
+		// WorldObject::MagicSpellHitResult (Object.cpp:2589-2592): the binary
+		// spell resist arm for SPELL_ATTR0_CU_BINARY_SPELL magic-school spells.
+		if spellBinaryResistApplies(spell) {
+			var resistances [7]uint32
+			if targetSess != nil && targetSess.player != nil {
+				resistances = targetSess.player.Resistances
+			} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				resistances = tgt.Resistances
+			}
+			pen := uint32(0)
+			if s.player != nil {
+				pen = s.player.SpellPenetration
+			}
+			chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
+			if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt, s.casterTargetResistMod(uint32(spell.SchoolMask))) {
+				return protocol.SpellMissResist
+			}
+		}
+		// WorldObject::MagicSpellHitResult (Object.cpp:2597-2604): the
+		// SPELL_AURA_DEFLECT_SPELLS (287) arm, MAGIC only.
+		if s.spellDeflectedByVictim(ctx, targetGUID, targetSess, s.player.X, s.player.Y) {
+			return protocol.SpellMissDeflect
+		}
+		return protocol.SpellMissNone
+	default:
+		// SPELL_DAMAGE_CLASS_NONE (Object.cpp:2662) — and any unknown class —
+		// reports NONE.
+		return protocol.SpellMissNone
+	}
 }
 
 func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints []int32, castItemGUID uint64) {
@@ -16570,6 +16659,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if miss == protocol.SpellMissEvade {
 					continue
 				}
+				// SPELL_MISS_MISS/RESIST/DEFLECT (WorldObject::SpellHitResult
+				// Object.cpp:2652-2666, via triggeredSpellTableResult):
+				// PreprocessTarget nulls _spellHitTarget on any non-NONE
+				// MissCondition — the target takes no effects.
+				if miss == protocol.SpellMissMiss || miss == protocol.SpellMissResist || miss == protocol.SpellMissDeflect {
+					continue
+				}
 				if miss == protocol.SpellMissReflect {
 					// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
 					// ReflectResult nulls _spellHitTarget — the reflected
@@ -16616,6 +16712,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// _spellHitTarget null — the evading jump target takes
 					// no effects, same as IMMUNE.
 					if miss == protocol.SpellMissEvade {
+						continue
+					}
+					// SPELL_MISS_MISS/RESIST/DEFLECT (WorldObject::SpellHitResult
+					// Object.cpp:2652-2666, via triggeredSpellTableResult):
+					// PreprocessTarget nulls _spellHitTarget on any non-NONE
+					// MissCondition — the jump target takes no effects.
+					if miss == protocol.SpellMissMiss || miss == protocol.SpellMissResist || miss == protocol.SpellMissDeflect {
 						continue
 					}
 					if miss == protocol.SpellMissReflect {
