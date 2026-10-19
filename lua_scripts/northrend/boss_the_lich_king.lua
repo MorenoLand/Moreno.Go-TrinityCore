@@ -106,8 +106,9 @@
 -- bridge (the gothik counterpoint: no invented phase-agnostic
 -- timers); the intro/outro
 -- movement machines, DoCast summon legs, phase SetPhase legs, and the
--- JustDied SPELL_PLAY_MOVIE / MoveFall / light-override legs ride
--- bridges that do not exist.
+-- JustDied MoveFall / light-override legs ride bridges that do not
+-- exist; the SPELL_PLAY_MOVIE (73159) JustDied leg IS ported (ev4
+-- lichKingJustDied, DoCastAOE = self-cast per UnitAI.h:322).
 -- MISSING-CAST TRIAGE (2026-10-16; C++ line cites from
 -- boss_the_lich_king.cpp) — all 12 BLOCKED, none ported:
 -- 68981 SPELL_REMORSELESS_WINTER_1 (:849) / 72259
@@ -234,6 +235,7 @@ local SPELL_BOSS_HITTIN_YA = 73878
 local SPELL_DARK_HUNGER = 69383
 local SPELL_SOUL_RIP = 69397
 local SPELL_KILL_FROSTMOURNE_PLAYERS = 75127
+local SPELL_PLAY_MOVIE = 73159
 
 local timers = {}
 
@@ -291,6 +293,18 @@ local function lichKingReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_the_lich_king::JustDied (boss_the_lich_king.cpp:549-562):
+-- _JustDied() (instance boss-state machine, unported) then
+-- DoCastAOE(SPELL_PLAY_MOVIE 73159, false). DoCastAOE is self-cast
+-- per UnitAI.h:322, so creature:CastSpell(creature, SPELL_PLAY_MOVIE).
+-- The SetDisableGravity/MoveFall, FindNearestCreature(FROSTMOURNE_TRIGGER)
+-- despawn, zone light/weather, and 25-man quest-credit legs ride
+-- unbridged machines.
+local function lichKingJustDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:CastSpell(creature, SPELL_PLAY_MOVIE)
+end
+
 -- C++ boss_the_lich_king::KilledUnit:
 -- if (victim->GetTypeId() == TYPEID_PLAYER &&
 --     !me->IsInEvadeMode() && !events.IsInPhase(PHASE_OUTRO))
@@ -305,6 +319,7 @@ end
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 1, lichKingJustEngagedWith)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 2, lichKingLeaveCombat)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 3, lichKingKilledUnit)
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 4, lichKingJustDied)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)
 
 -- C++ npc_shambling_horror_icc: Reset seeds EVENT_SHOCKWAVE {20s,25s}
