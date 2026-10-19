@@ -22,8 +22,9 @@
 -- SAY_LINE3 (2), 16s the speech ends. Engaging early cancels the
 -- speech timers C++-exact (in C++ the combat branch of UpdateAI
 -- silently consumes unmatched speech events). OnEnterCombat: self-cast
--- essence of the red 23513 (the C++ SetHealth(30%) and
--- ResetPlayerDamageReq arms have no bridge), then arm cleave 19983
+-- essence of the red 23513 + SetHealth(30% of max) (C++-exact via the
+-- creature SetHealth bridge; ResetPlayerDamageReq has no bridge), then
+-- arm cleave 19983
 -- 10s then 15s (non-triggered DoCastVictim, C++-exact) / flame breath
 -- 23461 15s then {8s,14s} (non-triggered DoCastVictim, C++-exact) /
 -- fire nova 23462 20s then 15s (non-triggered DoCastVictim, C++-exact)
@@ -257,7 +258,10 @@ local function onEnterCombat(event, creature, target)
     -- combat branch consumes unmatched speech events without acting).
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_ESSENCEOFTHERED)
-    -- C++ also: SetHealth(30% of max), ResetPlayerDamageReq — no bridge.
+    -- C++ JustEngagedWith also: SetHealth(CountPctFromMaxHealth(30))
+    -- (bridged: floor(maxHealth*30/100)); ResetPlayerDamageReq has no
+    -- bridge.
+    creature:SetHealth(math.floor(creature:GetMaxHealth() * 30 / 100))
     schedule(guid, "cleave", 10000, function()
         onCleave(creature, guid)
     end)
@@ -289,28 +293,24 @@ local function onTargetDied(event, creature, victim)
     end
 end
 
--- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
--- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
--- float edge.
-local function healthBelowPct(creature, pct)
-    local max = creature:GetMaxHealth()
-    if max == 0 then
-        return false
-    end
-    return creature:GetHealth() < math.floor(max * pct / 100)
-end
-
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
     -- C++ UpdateAI: HealthBelowPct(15) && !HasYelled -> SAY_HALFLIFE,
-    -- once. Pre-damage approximation (no pre/post-damage distinction).
+    -- once. Post-damage math (moroes/nefarian convention): C++ checks
+    -- post-damage health every UpdateAI tick, and the killing blow never
+    -- yells because UpdateAI stops on death, hence the > 0 floor guard.
     local guid = creature:GetGUID()
-    if not hasYelled[guid] and healthBelowPct(creature, 15) then
-        hasYelled[guid] = true
-        creature:Talk(SAY_HALFLIFE)
+    if not hasYelled[guid] then
+        local max = creature:GetMaxHealth()
+        local postDamage = creature:GetHealth() - damage
+        if max > 0 and postDamage > 0
+            and postDamage < math.floor(max * 15 / 100) then
+            hasYelled[guid] = true
+            creature:Talk(SAY_HALFLIFE)
+        end
     end
     -- Damage is never modified (thekal convention returns nothing when
     -- the hook does not alter it).
