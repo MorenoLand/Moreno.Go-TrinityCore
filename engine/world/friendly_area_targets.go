@@ -131,6 +131,9 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 			checks[friendlyAreaCheck(targetType)] = struct{}{}
 		}
 		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
+			// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the DBC
+			// radius folds SPELLMOD_RADIUS via the mod owner.
+			value = float32(s.applySpellModFloat(spell, spellModRadius, float64(value)))
 			if value > radius {
 				radius = value
 			}

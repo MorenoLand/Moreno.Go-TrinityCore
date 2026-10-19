@@ -564,15 +564,17 @@ var playerBaseMoveSpeed = [9]float32{
 
 // speedForceOpcodes maps each UnitMoveType to its {SMSG_FORCE_*_SPEED_CHANGE,
 // MSG_MOVE_SET_*_SPEED} pair (Unit::SetSpeedRate's moveTypeToOpcode table,
-// Unit.cpp:8837-8847). Only the types the command and aura systems touch
-// are populated; the rest have no Go sender.
+// Unit.cpp:8837-8847), covering all 9 move types like C++.
 var speedForceOpcodes = [9][2]protocol.Opcode{
 	moveTypeWalk:       {protocol.OpcodeSMSG_FORCE_WALK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_WALK_SPEED},
 	moveTypeRun:        {protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_SPEED},
 	moveTypeRunBack:    {protocol.OpcodeSMSG_FORCE_RUN_BACK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_BACK_SPEED},
 	moveTypeSwim:       {protocol.OpcodeSMSG_FORCE_SWIM_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_SWIM_SPEED},
+	moveTypeSwimBack:   {protocol.OpcodeSMSG_FORCE_SWIM_BACK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_SWIM_BACK_SPEED},
+	moveTypeTurnRate:   {protocol.OpcodeSMSG_FORCE_TURN_RATE_CHANGE, protocol.OpcodeMSG_MOVE_SET_TURN_RATE},
 	moveTypeFlight:     {protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED},
 	moveTypeFlightBack: {protocol.OpcodeSMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_BACK_SPEED},
+	moveTypePitchRate:  {protocol.OpcodeSMSG_FORCE_PITCH_RATE_CHANGE, protocol.OpcodeMSG_MOVE_SET_PITCH_RATE},
 }
 
 // setGMSpeedRate mirrors Unit::SetSpeedRate (Unit.cpp:8825-8880) for the

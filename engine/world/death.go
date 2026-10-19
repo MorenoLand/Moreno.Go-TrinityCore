@@ -1278,20 +1278,29 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 
 	grave, ok := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, playerTeam(s.player.Race))
 	if ok {
-		s.teleportTo(grave.MapID, grave.X, grave.Y, grave.Z, s.player.Orientation)
-		if shouldResurrect {
-			// TELE_REVIVE_AT_TELEPORT: TeleportTo resurrects at half
-			// health/mana inside the teleport (Player.cpp:1749-1750).
-			s.resurrectPlayer(ctx, 0.5)
-		} else if s.isDeadOrGhost() {
-			// SMSG_DEATH_RELEASE_LOC is sent only when dead (Player.cpp:5146);
-			// the alive homebind-fallback caller skips it.
-			packet := protocol.NewBuffer(16)
-			packet.WriteU32(grave.MapID)
-			packet.WriteF32(grave.X)
-			packet.WriteF32(grave.Y)
-			packet.WriteF32(grave.Z)
-			_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
+		if s.teleportTo(grave.MapID, grave.X, grave.Y, grave.Z, s.player.Orientation) {
+			if shouldResurrect {
+				if s.farTeleportPending {
+					// TELE_REVIVE_AT_TELEPORT on a far teleport: C++
+					// revives after the map switch, at the worldport ack
+					// (MovementHandler.cpp:145-146), not at initiation.
+					s.teleportReviveAtAck = true
+				} else {
+					// TELE_REVIVE_AT_TELEPORT: same-map TeleportTo
+					// resurrects at half health/mana inside the teleport
+					// (Player.cpp:1749-1750).
+					s.resurrectPlayer(ctx, 0.5)
+				}
+			} else if s.isDeadOrGhost() {
+				// SMSG_DEATH_RELEASE_LOC is sent only when dead (Player.cpp:5146);
+				// the alive homebind-fallback caller skips it.
+				packet := protocol.NewBuffer(16)
+				packet.WriteU32(grave.MapID)
+				packet.WriteF32(grave.X)
+				packet.WriteF32(grave.Y)
+				packet.WriteF32(grave.Z)
+				_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
+			}
 		}
 	} else {
 		s.debug("no graveyard found, staying at current location", "account", s.accountName, "guid", s.playerGUID)

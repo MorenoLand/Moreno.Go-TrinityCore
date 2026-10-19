@@ -38,11 +38,12 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	// via GetSpellModOwner (SpellInfo.cpp:3060-3072, Object.cpp:2246-2268)
 	// — the pet/totem owner's session, nil for wild casters).
 	var maxRange float32
+	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
 	if s.Data != nil {
 		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
 			maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
-			if owner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID); owner != nil {
-				maxRange = float32(owner.applySpellModFloat(spell, spellModRange, float64(maxRange)))
+			if modOwner != nil {
+				maxRange = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRange)))
 			}
 		}
 	}
@@ -64,6 +65,11 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 		// DBC entry; the inline path has no client-side radius override.
 		if s.Data != nil {
 			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(motion.Level)); err == nil && ok && value > 0 {
+				// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the
+				// DBC radius folds SPELLMOD_RADIUS via the mod owner.
+				if modOwner != nil {
+					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+				}
 				if value > radius {
 					radius = value
 				}

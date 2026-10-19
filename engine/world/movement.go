@@ -352,14 +352,9 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		// Break casts/channels with SPELL_INTERRUPT_FLAG_MOVEMENT.
 		s.interruptSpellsOnMovement()
 	}
-	if isMove && s.rooted {
-		s.debug("movement rejected", "account", s.accountName, "reason", "rooted", "opcode", opcode)
-		return true
-	}
-	if isMove && (s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 || s.hasAuraType(spellAuraCharm)) {
-		s.debug("movement rejected", "account", s.accountName, "reason", "controlled", "opcode", opcode)
-		return true
-	}
+	// No rooted/controlled reject here: HandleMovementOpcodes carries no
+	// such gate (MovementHandler.cpp:423 even carries a @todo noting rooted
+	// packets are not discarded) — the packet is applied and rebroadcast.
 	isFalling := (info.Flags & movementFalling) != 0
 	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 		isFalling = false
@@ -630,7 +625,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			s.handleFall(ctx, info)
 		}
 		if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM) {
-			s.removeAurasWithInterruptFlags(0x02000000) // AURA_INTERRUPT_FLAG_LANDING
+			s.removeAurasWithInterruptFlags(auraInterruptFlagLanding)
 		}
 	}
 	// Player::UpdateFallInformationIfNeed runs only on the non-vehicle path
@@ -713,9 +708,8 @@ func (s *session) handleTimeSyncResponse(payload []byte) bool {
 	roundTrip := recvMS - sentAt
 	lagDelay := roundTrip / 2
 	clockDelta := int64(sentAt+lagDelay) - int64(clientTime)
-	if len(s.timeSyncClockDeltaQueue) == 6 {
-		s.timeSyncClockDeltaQueue = s.timeSyncClockDeltaQueue[1:]
-	}
+	// C++'s _timeSyncClockDeltaQueue is unbounded (MovementHandler.cpp:693);
+	// no cap is applied here either.
 	s.timeSyncClockDeltaQueue = append(s.timeSyncClockDeltaQueue, timeSyncSample{clockDelta: clockDelta, latency: roundTrip})
 	s.computeNewClockDelta()
 
@@ -1613,6 +1607,10 @@ func (s *session) handleMountSpecialAnim(ctx context.Context, payload []byte) bo
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(s.playerGUID)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_MOUNTSPECIAL_ANIM), buf.Bytes(), s)
+	// MovementHandler.cpp:549: SendMessageToSet(&data, false) — the bool
+	// overload never skips self (Object.cpp:1807-1813), so the actor
+	// receives its own SMSG_MOUNTSPECIAL_ANIM like everyone else.
+	_ = s.write(uint16(protocol.OpcodeSMSG_MOUNTSPECIAL_ANIM), buf.Bytes(), true)
 	return true
 }
 

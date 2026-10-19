@@ -1018,9 +1018,14 @@ func isAreaEnemySpell(spell wotlk.Spell) bool {
 	return false
 }
 
+// SpellInfo.cpp target table: 15/16 are AREA_ENEMY, 24/54/104 are
+// CONE_ENEMY. 2 is TARGET_UNIT_NEARBY_ENEMY (SELECT_CATEGORY_NEARBY — the
+// single nearest hostile, Spell.cpp:1036), 22 is TARGET_SRC_CASTER (a src
+// setter, no unit selection), and 28 is TARGET_DEST_DYNOBJ_ENEMY (explicit
+// unit-selection no-op, Spell.cpp:1469-1474) — none of the three is area.
 func isAreaEnemyTargetType(target uint32) bool {
 	switch target {
-	case 2, 15, 16, 22, 24, 28, 54, 104:
+	case 15, 16, 24, 54, 104:
 		return true
 	default:
 		return false
@@ -1089,6 +1094,9 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			}
 		}
 		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
+			// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the DBC
+			// radius folds SPELLMOD_RADIUS via the mod owner.
+			value = float32(s.applySpellModFloat(spell, spellModRadius, float64(value)))
 			if value > radius {
 				radius = value
 			}
@@ -3942,6 +3950,11 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 		if dist > maxRange {
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
+		// Spell::CheckRange (Spell.cpp:6559-6562): the facing arm runs on the
+		// non-strict completion recheck too, not just the prepare gauntlet.
+		if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, math.Pi) {
+			return spellFailedUnitNotInFront
+		}
 		return 0
 	}
 	if spellID == 5019 { // Shoot
@@ -3953,6 +3966,11 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 		maxRange += float64(pReach) + float64(tgt.CombatReach)
 		if dist > maxRange {
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
+		}
+		// Spell::CheckRange (Spell.cpp:6559-6562): the facing arm runs on the
+		// non-strict completion recheck too, not just the prepare gauntlet.
+		if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, math.Pi) {
+			return spellFailedUnitNotInFront
 		}
 		return 0
 	}
@@ -3974,6 +3992,15 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 		// never emits SPELL_FAILED_TOO_CLOSE (the sole C++ emitter is the
 		// Death Grip script leg, spell_dk.cpp:2760).
 		return 97 // SPELL_FAILED_OUT_OF_RANGE
+	}
+	// Spell::CheckRange (Spell.cpp:6559-6562): with SPELL_FACING_FLAG_INFRONT
+	// the target must be in the caster's 180-degree frontal hemisphere on the
+	// non-strict completion recheck too (Spell::_cast calls CheckCast(false),
+	// Spell.cpp:3349), not just the prepare gauntlet (spells.go:3063).
+	if spell.FacingCasterFlags&SpellFacingFlagInfront != 0 {
+		if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, math.Pi) {
+			return spellFailedUnitNotInFront
+		}
 	}
 	return 0
 }
@@ -26194,6 +26221,11 @@ func (ts *session) scheduleAuraUpkeep(aura *activeAura) {
 
 func (ts *session) scheduleAuraUpkeepLocked(aura *activeAura) {
 	stopAuraUpkeepTimer(aura)
+	// Aura::Update (SpellAuras.cpp:829-831): the m_timeCla upkeep block only
+	// runs while m_duration > 0 — a permanent aura never pays upkeep.
+	if aura.DurationMs == 0 {
+		return
+	}
 	aura.UpkeepTimer = time.AfterFunc(auraUpkeepIntervalMs*time.Millisecond, func() {
 		ts.castMu.Lock()
 		if aura.Stopped {
@@ -26232,6 +26264,11 @@ func (s *session) scheduleCreatureAuraUpkeep(aura *activeAura) {
 
 func (s *session) scheduleCreatureAuraUpkeepLocked(aura *activeAura) {
 	stopAuraUpkeepTimer(aura)
+	// Aura::Update (SpellAuras.cpp:829-831): the m_timeCla upkeep block only
+	// runs while m_duration > 0 — a permanent aura never pays upkeep.
+	if aura.DurationMs == 0 {
+		return
+	}
 	aura.UpkeepTimer = time.AfterFunc(auraUpkeepIntervalMs*time.Millisecond, func() {
 		if s.server == nil {
 			return

@@ -69,8 +69,13 @@ func (s *session) spellGOAreaRadius(spell wotlk.Spell, effectMask uint32) float6
 		if eff.Effect == 0 || effectMask&(1<<uint(i)) == 0 {
 			continue
 		}
-		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && float64(value) > radius {
-			radius = float64(value)
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok {
+			// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the DBC
+			// radius folds SPELLMOD_RADIUS via the mod owner; the max is
+			// taken over the modded per-effect radii.
+			if mv := s.applySpellModFloat(spell, spellModRadius, float64(value)); mv > radius {
+				radius = mv
+			}
 		}
 	}
 	if radius <= 0 {

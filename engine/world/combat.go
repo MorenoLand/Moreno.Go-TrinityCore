@@ -737,6 +737,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if s.server != nil && s.player != nil {
 		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
 	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2141-2142): AtTargetAttacked then
+	// RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_MELEE_ATTACK) fires
+	// at the top of every swing, ahead of the next-swing-spell slot.
+	s.removeAurasWithInterruptFlags(auraInterruptFlagMeleeAttack)
 	// Unit::AttackerStateUpdate (Unit.cpp:2151-2152): "melee attack spell cast
 	// at main hand attack only - no normal melee dmg dealt" — a queued
 	// on-next-swing spell (CURRENT_MELEE_SPELL slot) fires in place of the
@@ -1638,6 +1642,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	if s.server != nil && s.player != nil {
 		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
 	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2141-2144): the MELEE_ATTACK strip
+	// fires ahead of the ranged early-out, so shots break these auras too.
+	s.removeAurasWithInterruptFlags(auraInterruptFlagMeleeAttack)
 	now := time.Now()
 	s.lastRangedSwing = now
 

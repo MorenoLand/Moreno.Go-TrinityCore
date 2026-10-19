@@ -86,7 +86,9 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 		effectMask |= 1 << uint(i)
 		r := float64(0)
 		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok {
-			r = float64(value)
+			// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the DBC
+			// radius folds SPELLMOD_RADIUS via the mod owner.
+			r = s.applySpellModFloat(spell, spellModRadius, float64(value))
 		}
 		if r <= 0 {
 			if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {

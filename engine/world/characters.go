@@ -1672,6 +1672,15 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 		}
 		s.finishTaxiFlight()
 	}
+	// MovementHandler.cpp:145-146 (HandleMoveWorldportAck): a dead player
+	// whose teleport carried TELE_REVIVE_AT_TELEPORT is resurrected at half
+	// health after the map switch, at ack time.
+	if s.teleportReviveAtAck {
+		s.teleportReviveAtAck = false
+		if s.isDeadOrGhost() {
+			s.resurrectPlayer(ctx, 0.5)
+		}
+	}
 	// WorldSession::HandleMoveWorldportAck corpse/instance legs
 	// (MovementHandler.cpp:149-179): a ghost re-entering the dungeon where
 	// their corpse lies is resurrected at half health with the corpse

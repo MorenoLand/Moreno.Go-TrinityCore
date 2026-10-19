@@ -20,6 +20,7 @@ const (
 	auraInterruptFlagDirectDamage          uint32 = 0x01000000 // removed only by direct damage (AURA_INTERRUPT_FLAG_DIRECT_DAMAGE, SpellDefines.h:71)
 	auraInterruptFlagLanding               uint32 = 0x02000000 // removed on landing
 	auraInterruptFlagSpellAttack           uint32 = 0x00002000 // AURA_INTERRUPT_FLAG_SPELL_ATTACK (SpellDefines.h:60)
+	auraInterruptFlagMeleeAttack           uint32 = 0x00001000 // AURA_INTERRUPT_FLAG_MELEE_ATTACK (SpellDefines.h:59): removed by attacking
 	auraInterruptFlagImmuneOrLostSelection uint32 = 0x00100000 // AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION (SpellDefines.h:67)
 	auraInterruptFlagMount                 uint32 = 0x00020000 // removed by mounting (AURA_INTERRUPT_FLAG_MOUNT, SpellDefines.h:64)
 	auraInterruptFlagLeaveCombat           uint32 = 0x80000000 // removed by leaving combat (AURA_INTERRUPT_FLAG_LEAVE_COMBAT, SpellDefines.h:73)

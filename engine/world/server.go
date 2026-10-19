@@ -372,8 +372,13 @@ type session struct {
 	// time after which the connection counts as idle
 	// (WorldSession::IsConnectionIdle, WorldSession.cpp:741), armed by
 	// ResetTimeOutTime (WorldSession.cpp:733).
-	timeoutTime                  atomic.Int64
-	farTeleportPending           bool
+	timeoutTime        atomic.Int64
+	farTeleportPending bool
+	// teleportReviveAtAck carries a deferred TELE_REVIVE_AT_TELEPORT: a far
+	// teleport with the revive option resurrects at half health after the
+	// map switch, at the worldport ack (MovementHandler.cpp:145-146), not
+	// at initiation. Same-map teleports revive inline (Player.cpp:1749).
+	teleportReviveAtAck          bool
 	pendingDeserterCast          bool
 	farTeleportOriginOrientation float32
 	farTeleportOriginMap         uint32
