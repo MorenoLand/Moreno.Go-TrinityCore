@@ -178,6 +178,18 @@ local function bossState(guid)
     return st
 end
 
+-- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible. Bridged via
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
+-- the boss_midnight randomTargetAnywhere precedent.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 local function randomAlivePlayer(creature, maxDist)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
@@ -357,9 +369,10 @@ local ADD_ARMS = {
         -- bearer (treated as no heal target, so the else branch runs
         -- friendly leg has no bridge); the C++ else branch casts
         -- DoCast(SPELL_DISPEL_MAGIC, false) on whichever scan wins the
-        -- urand(0,1) — ~50% of 2.5s ticks dispel a random alive player
-        -- (randomAlivePlayer; SelectTarget Random has no range gate),
-        -- the friendly-leg ticks are skipped. The commented-out
+        -- urand(0,1) — ~50% of 2.5s ticks dispel a random threat-list
+        -- target (randomThreatTarget — SelectTarget(Random, 0) with
+        -- playerOnly=FALSE, UnitAI.h:170, has no range gate), the
+        -- friendly-leg ticks are skipped. The commented-out
         -- MoveChase fallback is dead C++ code, not modeled.
         { key = "flashheal", first = 2500, min = 2500, max = 2500,
           fire = function(creature)
@@ -367,7 +380,7 @@ local ADD_ARMS = {
               -- bridge so the cast is skipped; only the random-enemy leg
               -- dispels.
               if math.random(0, 1) == 0 then
-                  local target = randomAlivePlayer(creature, math.huge)
+                  local target = randomThreatTarget(creature)
                   if target then
                       creature:CastSpell(target, SPELL_DISPEL_MAGIC, false)
                   end

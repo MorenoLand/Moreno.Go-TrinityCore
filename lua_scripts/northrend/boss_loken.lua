@@ -139,23 +139,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- random alive player in the instance (anyAlivePlayer / vezax
--- precedent); C++ SelectTarget(Random, 0) = dist 0 unlimited range,
--- playerOnly default false — the player-only pool is the lavanthor
--- documented approximation.
-local function randomPlayerTarget(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
+-- C++ SelectTarget(Random, 0) — the bridged, threat-ordered
+-- GetAITargets list (lua_creature_events.go:345); playerOnly defaults
+-- FALSE (UnitAI.h:170), so pets/totems are eligible — no Player filter
+-- (the midnight randomTargetAnywhere precedent). dist 0 = unlimited
+-- range.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[math.random(#targets)]
 end
 
 -- forward declaration: lokenEnterCombat calls this before the local
@@ -171,7 +165,7 @@ local lokenResetMod
 -- 2-arg = non-triggered; init 15s (:109), unconditional re-arm
 -- {15s,16s} (:153).
 local function arcTick(creature, guid)
-    local target = randomPlayerTarget(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_ARC_LIGHTNING)
     end

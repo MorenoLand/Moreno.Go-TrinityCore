@@ -104,6 +104,20 @@ local function schedule(store, guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible — no range cap
+-- (the old 100yd randomPlayerInRange cap was invented; C++ carries
+-- the 0.0f dist default). Bridged via creature:GetAITargets()
+-- (threat-ordered; lua_creature_events.go:345), the boss_midnight
+-- randomTargetAnywhere precedent.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 local function alivePlayersInRange(creature, maxDist)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
@@ -204,7 +218,7 @@ end
 -- The {10s,15s} re-arm lives inside the if(target) leg (nil target
 -- retries in 1s — C++ leaves ShockTimer at 0, next tick retries).
 local function onShock(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatTarget(creature)
     if target then
         if target:IsCasting() then
             creature:CastSpell(target, SPELL_EARTHSHOCK)

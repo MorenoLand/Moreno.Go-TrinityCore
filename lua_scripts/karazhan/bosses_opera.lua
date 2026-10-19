@@ -135,6 +135,18 @@ local function playersOnMap(creature)
     return found
 end
 
+-- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible. Bridged via
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
+-- the boss_midnight randomTargetAnywhere precedent.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 local function randomPlayerInRange(creature, maxDist)
     local candidates = alivePlayersInRange(creature, maxDist)
     if #candidates == 0 then
@@ -155,11 +167,12 @@ local SPELL_WATERBOLT = 31012
 local SPELL_SCREAM = 31013
 
 local function dorotheeWaterbolt(creature, guid)
-    -- C++ SelectTarget(Random, 0): playerOnly=false, no range cap — pets
-    -- and totems are eligible; the map-wide pool (no alive filter either,
-    -- matching SelectTarget's no-alive-check) is the faithful lowering.
-    local candidates = playersOnMap(creature)
-    local target = #candidates > 0 and candidates[math.random(#candidates)] or nil
+    -- C++ SelectTarget(Random, 0) (:216): playerOnly=FALSE (UnitAI.h:170)
+    -- — the pool is the threat list (pets/totems eligible), not the map;
+    -- no range cap, no alive filter (SelectTarget applies no alive
+    -- check). Lowered over the threat-ordered GetAITargets list
+    -- (lua_creature_events.go:345 — the midnight precedent).
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_WATERBOLT)
     end
@@ -839,11 +852,13 @@ local function julianneDevotion(creature, guid)
 end
 
 local function julianneAttraction(creature, guid)
-    -- C++: DoCast(SelectTarget(SelectTargetMethod::Random, 0),
+    -- C++: DoCast(SelectTarget(SelectTargetMethod::Random, 0) (:1469),
     -- SPELL_POWERFUL_ATTRACTION) — no 100yd limit, no alive filter,
-    -- unlike Blinding Passion (Random, 0, 100, true).
-    local candidates = playersOnMap(creature)
-    local target = #candidates > 0 and candidates[math.random(#candidates)] or nil
+    -- unlike Blinding Passion (Random, 0, 100, true); playerOnly=FALSE
+    -- (UnitAI.h:170) so the pool is the threat list (pets/totems
+    -- eligible), lowered via GetAITargets (lua_creature_events.go:345 —
+    -- the midnight precedent).
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_POWERFUL_ATTRACTION)
     end

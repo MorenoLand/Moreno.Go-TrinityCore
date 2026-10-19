@@ -115,30 +115,24 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
--- the same map/instance, no distance filter (the keleseth / thorim
--- GetPlayersInWorld precedent).
-local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
+-- C++ SelectTarget(SelectTargetMethod::Random, 0) — the bridged,
+-- threat-ordered GetAITargets list (lua_creature_events.go:345);
+-- playerOnly defaults FALSE (UnitAI.h:170), so the tempest-minion adds
+-- on the threat list are eligible — no Player filter (the midnight
+-- randomTargetAnywhere precedent). No distance filter.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[math.random(#targets)]
 end
 
 -- C++ EVENT_CHAIN_LIGHTNING (:136-139): DoCast(target,
 -- SPELL_CHAIN_LIGHTNING), 2-arg = non-triggered; re-arm
 -- unconditional, 25s.
 local function chainLightningTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
     end

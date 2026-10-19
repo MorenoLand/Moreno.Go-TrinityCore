@@ -25,9 +25,10 @@
 --   its C++ Initialize() cooldown (hyjal.lua convention; Reset's
 --   Initialize() timer-reset half collapses into the engage re-arm).
 -- - Wrath 21807 on SelectTarget(Random, 0) with no range cap ->
---   unbounded random alive player in the instance (nefarian
---   randomAlivePlayer convention), non-triggered (C++ DoCast),
---   init 8s -> 8s.
+--   random threat-listed unit (playerOnly=false default, UnitAI.h:170 —
+--   C++ passes no playerOnly flag, so pets/totems qualify), plain
+--   GetAITargets pick (the midnight precedent), non-triggered
+--   (C++ DoCast), init 8s -> 8s.
 -- - Entangling Roots 12747 on the victim (C++ DoCastVictim — jeklik
 --   GetVictim + CastSpell convention), non-triggered, init 2s ->
 --   20s.
@@ -73,27 +74,23 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: unbounded random alive player in the instance.
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    if #found == 0 then
+-- C++ SelectTarget(Random, 0) — playerOnly=false default
+-- (UnitAI.h:170): the pool is the whole threat list (pets/totems
+-- included) — plain pick over GetAITargets (the bridged threat list;
+-- midnight precedent), no range cap, no Player filter.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return targets[math.random(#targets)]
 end
 
 -- C++ Wrath: DoCast(SelectTarget(Random, 0), 21807), non-triggered,
 -- init 8s -> 8s; jeklik nil-target-keeps-schedule convention (C++
 -- skips the cast when the pick is nil but the re-arm is outside).
 local function onWrath(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_WRATH)
     end

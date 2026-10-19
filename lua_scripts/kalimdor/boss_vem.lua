@@ -5,8 +5,8 @@
 -- kalimdor loader decl 91 — fifth "// Temple of ahn'qiraj" group).
 -- Entry: 15544 = NPC_VEM (worker-verified).
 -- Ported: Charge 26561 on random player (15-27s -> 8-16s;
--- C++ SelectTarget Random has no bridge — GetPlayersInWorld
--- filtered by map/instance/alive, maiden_of_virtue convention;
+-- C++ SelectTarget Random is bridged via the maiden_of_virtue
+-- idiom — GetPlayersInWorld filtered by map/instance/alive;
 -- the AttackStart leg has no bridge); Knockback 26027 on victim
 -- (8-20s -> 15-25s; the -80% threat modify has no bridge);
 -- Enrage 34624 is NOT ported: boss_bug_trio.cpp:219's enrage arm is

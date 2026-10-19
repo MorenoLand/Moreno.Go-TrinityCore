@@ -102,16 +102,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0) (playerOnly default true) — threat-list
--- pool via GetAITargets (the bridged, threat-sorted list;
--- lua_creature_events.go:345-359), "Player" filter per the illidan
--- convention.
+-- C++ SelectTarget(Random, 0) (playerOnly defaults FALSE per
+-- UnitAI.h:170 — pets/totems eligible) — threat-list pool via
+-- GetAITargets (the bridged, threat-sorted list;
+-- lua_creature_events.go:345-359); the Player filter was dropped
+-- 2026-10-19.
 local function randomPlayerThreat(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:GetObjectType() == "Player" then
-            candidates[#candidates + 1] = t
-        end
+        candidates[#candidates + 1] = t
     end
     if #candidates == 0 then
         return nil

@@ -51,24 +51,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 1) — alive players on
--- the same map/instance; the offset-1 top-threat skip
--- (UnitAI.h:162-166) has no bridge — the pool picks uniformly among
--- alive players (the ichoron / keleseth-thorim precedent).
-local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
+-- C++ SelectTarget(SelectTargetMethod::Random, 1) — the bridged,
+-- threat-ordered GetAITargets list (lua_creature_events.go:345);
+-- offset 1 skips the first (MaxThreat-ordered) entry, i.e. the current
+-- tank; the pick runs over the REST of the threat list — players,
+-- pets, totems (playerOnly defaults FALSE, UnitAI.h:170).
+local function randomNonTankThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets <= 1 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[1 + math.random(#targets - 1)]
 end
 
 -- C++ :90-99 EVENT_BRUTAL_STRIKE: DoCastVictim(SPELL_BRUTAL_STRIKE)
@@ -93,7 +86,7 @@ end
 -- (non-triggered); init 7s / unconditional re-arm 7s (re-arms even on
 -- nil target — the rage_winterchill precedent).
 local function onDaggerThrow(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomNonTankThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_DAGGER_THROW)
     end
@@ -127,9 +120,10 @@ local function iocBossDied(event, creature, killer)
 end
 
 -- Documented-only arms (no bridge):
--- EVENT_DAGGER_THROW (:100-103): PORTED above via the randomPlayer pool
--- (the ichoron / keleseth-thorim precedent); the offset-1 top-threat
--- skip (UnitAI.h:162-166) has no bridge — documented deviation.
+-- EVENT_DAGGER_THROW (:100-103): PORTED above via the threat-list
+-- pool (randomNonTankThreatTarget — offset 1 skips the MaxThreat
+-- head, the netherspite/curator offset-1 precedent generalized to
+-- the whole threat list since playerOnly defaults FALSE).
 -- EVENT_CHECK_RANGE (:108-113): init 1s / re-arm 1s; home-distance >
 -- 25.0f -> DoCast(me, SPELL_RAGE 66776) else RemoveAurasDueToSpell(66776)
 -- — the distance gate needs me->GetHomePosition(), which has no lua

@@ -70,12 +70,10 @@
 -- banishTick, the scheduler seeded only when creature:IsHeroic()
 -- (the earlier "no heroic bridge" claim was stale — IsHeroic is
 -- bridged, engine/world/lua_creature_events.go:260; the lavanthor
--- precedent). Documented deviations: the 30.0f distance filter
--- rides the thorim randomPlayerInRange idiom (the "no distance
--- bridge" claim was stale); C++ SelectTarget defaults
--- playerOnly=FALSE, so the pool can include pets/totems — Lua's
--- player-only pool is the documented approximation (the tuten_kash
--- precedent); the UNIT_STATE_CASTING pre-check has no bridge —
+-- precedent). Documented deviations: the C++ SelectTarget defaults
+-- playerOnly=FALSE (EXPLICIT false here), so the pool can include
+-- pets/totems — the threat-list pick via GetAITargets carries that
+-- (no Player filter); the UNIT_STATE_CASTING pre-check has no bridge —
 -- casts fire unconditionally on their timers (the hodir precedent);
 -- EVENT_DRAW_SHADOWS (teleports every alive
 -- non-banished player to VorpilPosition + me->UpdatePosition() —
@@ -153,21 +151,18 @@ local function shadowboltVolleyTick(creature, guid)
     end)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0, ...) — alive
--- players on the same map/instance. The thorim
--- randomPlayerInRange idiom carries the C++ distance filters
--- (the lavanthor "no distance bridge" claim was stale).
-local function randomPlayerInRange(creature, minDist, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, 30.0f, false) —
+-- playerOnly=FALSE EXPLICIT — threat-list pick within 30 yd (3D, the
+-- C++ DefaultTargetSelector dist semantics); no Player filter, so
+-- pets/totems are eligible. The bridged, threat-ordered GetAITargets
+-- list (lua_creature_events.go:345); the murmur
+-- randomThreatTarget(creature, 30, false) precedent.
+local function randomThreatTarget(creature, minDist, maxDist)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            local dist = creature:GetDistance(plr)
-            if dist >= minDist and dist <= maxDist then
-                candidates[#candidates + 1] = plr
-            end
+    for _, t in ipairs(creature:GetAITargets()) do
+        local dist = creature:GetDistance(t)
+        if dist >= minDist and dist <= maxDist then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -181,7 +176,7 @@ end
 -- scheduler seeds only when IsHeroic() (:144-145). DoCast 1-arg
 -- form is non-triggered, so creature:CastSpell(target, spell).
 local function banishTick(creature, guid)
-    local target = randomPlayerInRange(creature, 0, 30)
+    local target = randomThreatTarget(creature, 0, 30)
     if target then
         creature:CastSpell(target, SPELL_BANISH)
     end

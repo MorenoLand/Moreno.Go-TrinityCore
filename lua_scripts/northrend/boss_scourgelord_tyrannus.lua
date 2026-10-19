@@ -75,20 +75,21 @@
 --   when DoZoneInCombat() (:333) puts Rimefang in combat — the faithful
 --   anchor (the phase flip + DoZoneInCombat legs have no bridge, but the
 --   anchor is the same combat-start moment).
--- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0) -> random
---   alive player; DoCast(target, 69232); re-arm 15s unconditional (the
---   SelectTarget if only wraps the cast).
+-- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0)
+-- (playerOnly=false default, UnitAI.h:170) -> random threat-listed unit
+-- (GetAITargets pick, no Player filter); DoCast(target, 69232);
+-- re-arm 15s unconditional (the SelectTarget if only wraps the cast).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally and the :280-281
 -- early-return gate is unmodeled (the maiden / devourer precedent); the
 -- SelectTarget position-1 offset on the two Tyrannus random-target arms
 -- (:255, :272) has no bridge — a plain random alive player is picked (the
--- bronjahm corrupt-soul precedent); Rimefang's SelectTarget(Random, 0)
--- (:369) is not playerOnly in C++, but the threat list in practice holds
--- players — randomPlayer approximates with alive players only; no threat
--- model — no target at all when none qualify (Talk + cast stay inside the
--- C++ target-found legs where C++ has them: overlord brand :255-256,
--- mark :272-275).
+-- bronjahm corrupt-soul precedent), no threat model — no target at all
+-- when none qualify (Talk + cast stay inside the C++ target-found legs
+-- where C++ has them: overlord brand :255-256, mark :272-275).
+-- Rimefang's SelectTarget(Random, 0) (:369) is not playerOnly in C++ —
+-- it is now a plain pick over the bridged threat list GetAITargets (the
+-- midnight precedent), no Player filter.
 -- DOCUMENTED-ONLY (in this header; registrations: 36658 + 36661):
 -- Tyrannus intro machine — DoAction(ACTION_START_INTRO) (:207-217:
 --   Talk(SAY_TYRANNUS_INTRO_1 6) + EVENT_INTRO_1..3 / EVENT_COMBAT_START
@@ -188,10 +189,10 @@ local function initState(guid)
     cancelTimers(guid)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, ...) — alive players on the
--- same map/instance (the devourer_of_souls / archavon GetPlayersInWorld
--- precedent); the position-1 offset on the Tyrannus arms and the
--- non-playerOnly flag on Rimefang's have no bridge (see header).
+-- C++ SelectTarget(SelectTargetMethod::Random, 1, 0.0f, true) — alive
+-- players on the same map/instance (the devourer_of_souls / archavon
+-- GetPlayersInWorld precedent); the position-1 offset on the Tyrannus
+-- arms has no bridge (see header).
 local function randomPlayer(creature)
     local mapId = creature:GetMapId()
     local instanceId = creature:GetInstanceId()
@@ -281,10 +282,22 @@ local function tyrannusJustDied(event, creature)
     creature:Talk(SAY_DEATH)
 end
 
+-- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0) with
+-- playerOnly=false default (UnitAI.h:170): the pool is the whole threat
+-- list (pets/totems included) — plain pick over GetAITargets (the
+-- bridged threat list; midnight precedent), no Player filter.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 -- C++ :368-371 Rimefang EVENT_ICY_BLAST: DoCast(target, 69232) on a random
 -- target, non-triggered; re-arm 15s unconditional.
 local function icyBlastTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_ICY_BLAST)
     end

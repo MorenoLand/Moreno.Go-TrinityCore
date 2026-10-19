@@ -117,6 +117,18 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible. Bridged via
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
+-- the boss_midnight randomTargetAnywhere precedent.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 -- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
 -- the same map/instance, no distance filter (the keleseth / thorim
 -- GetPlayersInWorld precedent); only threat-listed units qualify in
@@ -141,7 +153,10 @@ end
 -- 2-arg = non-triggered; re-arm unconditional (the SelectTarget if only
 -- wraps the cast, :95-96), 15s.
 local function rockShardsTick(creature, guid)
-    local target = randomPlayer(creature)
+    -- C++ EVENT_ROCK_SHARDS (:94-98): SelectTarget(Random, 0) with
+    -- playerOnly=FALSE (UnitAI.h:170) — the pool is the threat list
+    -- (pets/totems eligible), lowered via GetAITargets.
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_ROCK_SHARDS)
     end

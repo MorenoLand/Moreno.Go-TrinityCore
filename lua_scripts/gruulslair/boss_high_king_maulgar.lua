@@ -44,10 +44,10 @@
 -- then 30s (non-triggered self-cast — the spell's summon is
 -- engine-side; the Wild Fel Hunter has no AI class in this file,
 -- so nothing further is registered, firesworn convention) /
--- death coil 33130 20s then 20s (non-triggered on a random
--- alive player in the instance — the C++ SelectTarget(Random, 0)
--- has no player-only gate and no threat bridge, teron/krosh
--- convention; nil pick casts nothing but keeps the schedule).
+-- death coil 33130 20s then 20s (non-triggered on a random threat-list
+-- target — the C++ SelectTarget(Random, 0) has no player-only gate
+-- (UnitAI.h:170); threat-list pick via GetAITargets, no Player filter;
+-- nil pick casts nothing but keeps the schedule).
 -- Olm's AttackStart override (0.0f threat + MoveChase 30 yd) has
 -- no threat/movement bridges — the default engine AttackStart
 -- applies (blocked). Kiggler the Crazed (18835): greater
@@ -169,12 +169,17 @@ local function playersInInstance(creature)
     return found
 end
 
-local function randomPlayer(creature)
-    local candidates = playersInInstance(creature)
-    if #candidates == 0 then
+-- C++ SelectTarget(Random, 0) (playerOnly default FALSE, UnitAI.h:170)
+-- — threat-list pick via the bridged, threat-ordered GetAITargets
+-- (lua_creature_events.go:345); no Player filter (the midnight
+-- randomTargetAnywhere precedent). Used by the three random-target
+-- arms below (maulgar charge, olm death coil, kiggler polymorph).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return candidates[math.random(1, #candidates)]
+    return targets[math.random(#targets)]
 end
 
 -- krosh blast wave (boss_high_king_maulgar.cpp:560): the C++ 15-yd
@@ -218,11 +223,12 @@ local function maulgarMightyBlow(creature, guid)
     end)
 end
 
--- C++ phase 2 charging arm: random target, DoCast(target, SPELL_
--- BERSERKER_C); repeat 20s (initial 0s). The AttackStart victim-
--- switch arm has no bridge.
+-- C++ phase 2 charging arm (boss_high_king_maulgar.cpp:183):
+-- SelectTarget(Random, 0) — playerOnly FALSE (2-arg form) — random
+-- target, DoCast(target, SPELL_BERSERKER_C); repeat 20s (initial 0s).
+-- The AttackStart victim-switch arm has no bridge.
 local function maulgarCharging(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_BERSERKER_C)
     end
@@ -361,8 +367,11 @@ local function olmSummon(creature, guid)
     end)
 end
 
+-- C++ DeathCoil_Timer (boss_high_king_maulgar.cpp:293):
+-- SelectTarget(Random, 0) — playerOnly FALSE (2-arg form);
+-- DoCast(target, SPELL_DEATH_COIL); repeat 20s (initial 20s).
 local function olmDeathCoil(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_DEATH_COIL)
     end
@@ -423,8 +432,11 @@ RegisterCreatureEvent(NPC_OLM_THE_SUMMONER, 23, olmReset)
 
 -- Kiggler the Crazed arms.
 
+-- C++ GreaterPolymorph_Timer (boss_high_king_maulgar.cpp:366):
+-- SelectTarget(Random, 0) — playerOnly FALSE (2-arg form); DoCast(target,
+-- SPELL_GREATER_POLYMORPH); repeat urand(15000, 20000).
 local function kigglerPolymorph(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_GREATER_POLYMORPH)
     end

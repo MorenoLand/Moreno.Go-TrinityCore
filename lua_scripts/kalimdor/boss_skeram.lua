@@ -56,8 +56,10 @@
 -- - BossAI ctor leg DATA_SKERAM and _Reset() — instance bridge,
 --   standing.
 -- - SelectTarget/AttackStart/ResetThreatList/SetVisible/
---   InterruptNonMeleeSpells/GetThreatModifiers — no bridges
---   anywhere in the engine's Lua API.
+--   InterruptNonMeleeSpells/GetThreatModifiers — no exact
+--   threat-list SelectTarget bridge in the engine's Lua API;
+--   random-target selection IS bridged via the documented
+--   maiden_of_virtue idiom (used in this file, lines 123-144).
 local ENTRY = 15263
 
 local SPELL_ARCANE_EXPLOSION = 26192

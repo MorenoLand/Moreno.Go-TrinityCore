@@ -42,12 +42,12 @@
 -- = non-triggered self-cast) -> CastSpell(creature, 54516); 2s init,
 -- task.Repeat(35s, 45s) -> {35000, 45000} randtime re-arm.
 -- LIGHTNING_BOLT (:201-206) — SelectTarget(Random, 0, 40.0f) (:204,
--- random alive unit within 40y; playerOnly defaults false — see
--- deviation) -> DoCast(target, SPELL_LIGHTNING_BOLT 53044) (:205,
--- 2-arg = non-triggered) -> CastSpell(target, 53044); 2s init,
--- task.Repeat(2500ms) -> 2500ms re-arm. Random-player pool:
--- GetPlayersInWorld, same map/instance, alive, within 40y (the
--- keleseth / thorim / freya precedent).
+-- random threat-listed unit within 40y; playerOnly=false default,
+-- UnitAI.h:170 — pets/totems qualify) -> DoCast(target,
+-- SPELL_LIGHTNING_BOLT 53044) (:205, 2-arg = non-triggered) ->
+-- CastSpell(target, 53044); 2s init, task.Repeat(2500ms) -> 2500ms
+-- re-arm. Random-threat pool: GetAITargets within 40y (the
+-- murmur randomThreatTarget precedent).
 -- EARTH_SHOCK (:220-224) — DoCastVictim(SPELL_EARTH_SHOCK 54511)
 -- (:222, 1-arg = non-triggered) -> CastSpell(nil, 54511); init
 -- Schedule(2s, 8s) -> {2000, 8000} randtime, task.Repeat(8s, 13s) ->
@@ -57,11 +57,11 @@
 -- JustDied (:96-100) — Talk(SAY_DEATH 2) (:98); the _JustDied()
 -- passthrough is unmodeled (the sjonnir precedent).
 -- DOCUMENTED DEVIATIONS:
--- LIGHTNING_BOLT's SelectTarget (:204) has no playerOnly flag
--- (playerOnly=false default) — C++ would also consider non-player
--- hostile units within 40y; the port uses the alive same-map/instance
--- player pool (only threat-listed units qualify in practice; the two
--- guards are friendly to Erekem).
+-- LIGHTNING_BOLT's SelectTarget (:204) passes no playerOnly flag
+-- (playerOnly=false default, UnitAI.h:170) — C++ would also consider
+-- non-player hostile units within 40y; the port now picks from the
+-- threat list via GetAITargets (the midnight precedent), which is the
+-- same pool C++ draws from.
 -- DOCUMENTED-ONLY (in this header; no guard registration):
 -- npc_erekem_guardAI::ScheduledTasks (:288-309) — DEAD CODE: the
 -- method name is typo'd (ScheduledTasks, not the ScheduleTasks
@@ -139,20 +139,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0, 40.0f) — alive
--- players on the same map/instance within 40y (the freya
--- randomPlayerInRange precedent; playerOnly=false default noted as a
--- documented deviation).
-local function randomPlayerInRange(creature, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, 40.0f) — playerOnly=false
+-- default (UnitAI.h:170): any threat-listed unit within 40y
+-- (IsWithinCombatRange 3D check) — plain pick over GetAITargets (the
+-- bridged threat list; midnight precedent), no Player filter.
+local function randomThreatTargetInRange(creature, maxDist)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            if creature:GetDistance(plr) <= maxDist then
-                candidates[#candidates + 1] = plr
-            end
+    for _, t in ipairs(creature:GetAITargets()) do
+        if creature:GetDistance(t) <= maxDist then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -170,10 +165,10 @@ local function bloodlustTick(creature, guid)
     end)
 end
 
--- C++ LIGHTNING_BOLT (:201-206): random alive unit within 40y ->
--- DoCast(target), non-triggered; 2s init, task.Repeat(2500ms).
+-- C++ LIGHTNING_BOLT (:201-206): random threat-listed unit within 40y
+-- -> DoCast(target), non-triggered; 2s init, task.Repeat(2500ms).
 local function lightningBoltTick(creature, guid)
-    local target = randomPlayerInRange(creature, 40)
+    local target = randomThreatTargetInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_LIGHTNING_BOLT)
     end

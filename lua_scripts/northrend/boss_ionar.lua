@@ -75,10 +75,10 @@
 -- init -> urand(5s,6s) re-arm (boss_ionar.cpp:260-266), cast only
 -- when SelectTarget(Random, 0) (boss_ionar.cpp:261-263) finds a
 -- target, re-arm unconditional (the rage_winterchill precedent).
--- Random-target modeled via the randomPlayer pool (the ichoron /
--- keleseth-thorim precedent); C++ omits the playerOnly flag, so the
--- player-only pool is the documented deviation (same as the ichoron
--- water-blast deviation).
+-- Random target is a plain pick over the bridged threat list
+-- GetAITargets (midnight precedent) — C++ passes no playerOnly flag,
+-- so pets/totems qualify (playerOnly=false default, UnitAI.h:170);
+-- the stale player-only deviation note is retracted.
 -- UpdateAI disperse health check — !bHasDispersed &&
 -- HealthBelowPct(uiDisperseHealth) (45 + urand(0,10)):
 -- Talk(SAY_SPLIT 1) + InterruptNonMeleeSpells +
@@ -134,23 +134,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
--- the same map/instance; no distance filter on this arm — the
--- randomPlayer pool (the ichoron / keleseth-thorim precedent).
-local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
+-- C++ SelectTarget(SelectTargetMethod::Random, 0) — playerOnly=false
+-- default (UnitAI.h:170), so the pool is the whole threat list
+-- (pets/totems included): plain pick over GetAITargets (the bridged
+-- threat list; midnight precedent), no Player filter.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[math.random(#targets)]
 end
 
 -- C++ uiBallLightningTimer (:270-274): DoCastVictim(52780)
@@ -167,7 +160,7 @@ end
 -- 2-arg non-triggered; urand(5s,6s) init / unconditional
 -- urand(5s,6s) re-arm.
 local function staticOverloadTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_STATIC_OVERLOAD)
     end

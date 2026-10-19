@@ -28,7 +28,7 @@
 -- DoCastVictim (nil falls back to the victim on the bridge; nil
 -- ticks cast nothing but keep the schedule, jeklik convention) /
 -- fel acid breath 40508 25s then {25s,30s}, non-triggered on a
--- random alive player in the instance within combat reach (no
+-- random threat-listed unit within combat reach (no
 -- combat-reach bridge — approximated as 10 yd, documented) /
 -- eject 40486 35s one-shot, Talk(SAY_SPECIAL) + non-triggered
 -- DoCastVictim / bewildering strike 40491 47s one-shot,
@@ -37,9 +37,9 @@
 -- start phase 2 100ms one-shot / eject 40597 14s one-shot,
 -- non-triggered DoCastVictim / fel acid breath 40595 16s one-shot,
 -- non-triggered DoCastVictim / arcing smash 40599 8s then 13s,
--- non-triggered DoCastVictim. Start phase 2: pick a random alive
--- player in the instance excluding the current victim (C++
--- SelectTarget(Random, 1), position 1, C++-exact); if found, store
+-- non-triggered DoCastVictim. Start phase 2: pick a random threat-listed
+-- unit excluding the threat head (C++ SelectTarget(Random, 1) — offset 1
+-- skips the first MaxThreat-order entry); if found, store
 -- its GUID (fel rage target), triggered self-cast fel rage 40594 +
 -- triggered casts fel rage target 40604 / fel rage 40616 / fel rage
 -- 41625 / fel geyser 40569 / fel rage target 46787 on the target,
@@ -47,7 +47,7 @@
 -- (the insignificance target-filter SpellScript has no
 -- SpellScript bridge), arm charge player 40602 2s one-shot,
 -- non-triggered on the stored GUID (ObjectAccessor::GetUnit arm —
--- bridged by GUID match over the instance players); the taunt /
+-- bridged by GUID match over the threat list); the taunt /
 -- attack-me ApplySpellImmune arms have no bridge. If no target is
 -- found: drop back to phase 1, re-arm the phase-1 schedule and the
 -- change-phase arm at 60s (C++-exact). The two player self-casts
@@ -162,42 +162,27 @@ local function cancelGroup(guid, keys)
     end
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 1): any alive player in the instance,
--- excluding the current victim (position 1), no range cap.
+-- C++ SelectTarget(Random, 1): any threat-listed unit (playerOnly=false
+-- default, UnitAI.h:170), excluding the threat head — offset 1 skips the
+-- first entry in MaxThreat order (UnitAI.h); no range cap.
 local function randomAnyTarget(creature)
-    local victim = creature:GetVictim()
-    local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if not victim or p:GetGUID() ~= victim:GetGUID() then
-            candidates[#candidates + 1] = p
-        end
-    end
-    if #candidates == 0 then
+    local targets = creature:GetAITargets()
+    -- C++ shortcut: threat list size <= offset ignores ALL elements.
+    if #targets <= 1 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[1 + math.random(#targets - 1)]
 end
 
--- C++ SelectTarget(Random, 0, me->GetCombatReach()): any alive
--- player in the instance within combat reach, victim included. No
--- combat-reach bridge — approximated as 10 yd (documented).
+-- C++ SelectTarget(Random, 0, me->GetCombatReach()): any threat-listed
+-- unit (playerOnly=false default, UnitAI.h:170) within combat reach,
+-- victim included. No combat-reach bridge — approximated as 10 yd
+-- (documented).
 local function randomTargetWithinReach(creature)
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= 10 then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if creature:GetDistance(t) <= 10 then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -206,13 +191,12 @@ local function randomTargetWithinReach(creature)
     return candidates[math.random(#candidates)]
 end
 
--- C++ ObjectAccessor::GetUnit(*me, guid): GUID-follow over the
--- instance players (no instance-creature bridge needed — the fel
--- rage target is always a player).
-local function findPlayerByGuid(creature, guid)
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetGUID() == guid then
-            return p
+-- C++ ObjectAccessor::GetUnit(*me, guid): GUID-follow over the threat
+-- list — the fel rage target may be a non-player threat-listed unit.
+local function findTargetByGuid(creature, guid)
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetGUID() == guid then
+            return t
         end
     end
     return nil
@@ -322,7 +306,7 @@ local function onChargePlayer(creature, guid)
     local st = state[guid]
     local rageGuid = st and st.felRageTarget
     if rageGuid then
-        local target = findPlayerByGuid(creature, rageGuid)
+        local target = findTargetByGuid(creature, rageGuid)
         if target then
             creature:CastSpell(target, SPELL_CHARGE, false)
         end

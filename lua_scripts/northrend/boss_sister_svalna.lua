@@ -897,6 +897,29 @@ local function arnathEnterCombat(event, creature, target)
         function() onArnathSmite(creature, guid) end)
 end
 
+-- C++ SelectTarget(Random, N) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible. Bridged via
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
+-- the boss_midnight randomTargetAnywhere precedent.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
+-- C++ SelectTarget(Random, 1) (UnitAI.h:170-174): like randomThreatTarget
+-- but the offset-1 skips the first MaxThreat-ordered entry (the tank) —
+-- the netherspite/auriaya tank-skip idiom on the bridged threat list.
+local function randomNonHeadThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets <= 1 then
+        return nil
+    end
+    return targets[math.random(2, #targets)]
+end
+
 -- C++ npc_captain_rupert::Reset :1138-1140 — Reset-seeded timers
 -- re-keyed to event 1:
 -- EVENT_RUPERT_FEL_IRON_BOMB {15s,20s} -> SelectTarget(Random, 0) ->
@@ -908,15 +931,18 @@ end
 -- EVENT_RUPERT_ROCKET_LAUNCH {10s,15s} -> SelectTarget(Random, 1) ->
 --   DoCast(target, SPELL_ROCKET_LAUNCH) non-triggered, re-arm
 --   {10s,15s} (:1167-1169).
--- Undead spell picks via the entry (IsUndead flip, :896-898). The
--- position-1 offsets on machine gun / rocket launch have no bridge —
--- plain random alive player (the tyrannus precedent).
+-- Undead spell picks via the entry (IsUndead flip, :896-898). All three
+-- arms are SelectTarget(Random, N) with playerOnly=FALSE (UnitAI.h:170),
+-- so the pools are the threat list via GetAITargets
+-- (lua_creature_events.go:345 — the midnight precedent); machine gun /
+-- rocket launch skip the MaxThreat head (Random, 1, UnitAI.h:173-174 —
+-- the netherspite/auriaya tank-skip idiom on the bridged threat list).
 local function onRupertFelIronBomb(creature, guid)
     local spell = SPELL_FEL_IRON_BOMB_NORMAL
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
         spell = SPELL_FEL_IRON_BOMB_UNDEAD
     end
-    local target = randomPlayerTarget(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, spell)
     end
@@ -929,7 +955,7 @@ local function onRupertMachineGun(creature, guid)
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
         spell = SPELL_MACHINE_GUN_UNDEAD
     end
-    local target = randomPlayerTarget(creature)
+    local target = randomNonHeadThreatTarget(creature)
     if target then
         creature:CastSpell(target, spell)
     end
@@ -942,7 +968,7 @@ local function onRupertRocketLaunch(creature, guid)
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
         spell = SPELL_ROCKET_LAUNCH_UNDEAD
     end
-    local target = randomPlayerTarget(creature)
+    local target = randomNonHeadThreatTarget(creature)
     if target then
         creature:CastSpell(target, spell)
     end

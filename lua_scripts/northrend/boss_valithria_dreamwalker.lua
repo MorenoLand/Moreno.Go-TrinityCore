@@ -84,8 +84,9 @@
 -- (no-DoAction bridge) — NOT registered.
 -- PORTED (2026-10-13 retraction re-audit): npc_risen_archmage
 -- (37868) — FROSTBOLT_VOLLEY 70759 self-cast {5s,15s}/{8s,15s};
--- MANA_VOID 71179 random-player {20s,25s}/{20s,25s} (the POWER_MANA
--- type filter has no bridge — moroes approximation, dist>15.0f kept);
+-- MANA_VOID 71179 random-player {20s,25s}/{20s,25s} (POWER_MANA
+-- filter bridged via player:GetPowerType() — moroes.lua:294 precedent,
+-- dist>15.0f kept, threat head excluded via victim GUID);
 -- COLUMN_OF_FROST 70704 random-player {10s,20s}/{15s,25s},
 -- dist>10.0f (:646-648/:705-721); npc_blazing_skeleton (36791) —
 -- FIREBALL 70754 victim-cast {2s,4s}/{2s,4s}, !IsWithinMeleeRange
@@ -132,6 +133,8 @@ local SPELL_COLUMN_OF_FROST = 70704
 local SPELL_FIREBALL = 70754
 local SPELL_LEY_WASTE = 69325
 
+local POWER_MANA = 0
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -158,11 +161,19 @@ end
 
 -- C++ random alive player with a minimum distance, on the same
 -- map (the falric / keleseth / thorim GetPlayersInWorld precedent).
-local function randomPlayer(creature, minDist)
+-- C++ :715 SelectTarget(Random, 1, ValithriaManaVoidSelector(me)) —
+-- POWER_MANA + dist>15.0f; C++ :720 SelectTarget(Random, 1, -10.0f, true)
+-- — min 10 yd, playerOnly. Position=1 in both skips the threat head,
+-- approximated by the moroes victim-GUID exclusion idiom; GetPowerType
+-- is bridged (moroes.lua:294 precedent).
+local function randomPlayer(creature, minDist, manaOnly)
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
     for _, p in ipairs(GetPlayersInWorld()) do
-        if p:IsAlive() and creature:GetMap() == p:GetMap()
-                and creature:GetDistance(p) > minDist then
+        if p:GetGUID() ~= victimGuid and p:IsAlive() and creature:GetMap() == p:GetMap()
+                and creature:GetDistance(p) > minDist
+                and (not manaOnly or p:GetPowerType() == POWER_MANA) then
             candidates[#candidates + 1] = p
         end
     end
@@ -199,14 +210,18 @@ local function onFrostboltVolley(creature, guid)
     schedule(guid, "frostbolt_volley", {8000, 15000}, function() onFrostboltVolley(creature, guid) end)
 end
 
+-- C++ :715 EVENT_MANA_VOID — ValithriaManaVoidSelector: POWER_MANA
+-- player, dist>15.0f (:161-170), position=1 threat-head exclusion.
 local function onManaVoid(creature, guid)
-    local target = randomPlayer(creature, 15.0)
+    local target = randomPlayer(creature, 15.0, true)
     if target then
         creature:CastSpell(target, SPELL_MANA_VOID)
     end
     schedule(guid, "mana_void", {20000, 25000}, function() onManaVoid(creature, guid) end)
 end
 
+-- C++ :720 EVENT_COLUMN_OF_FROST — SelectTarget(Random, 1, -10.0f, true):
+-- random player, min 10 yd, threat head excluded (position=1).
 local function onColumnOfFrost(creature, guid)
     local target = randomPlayer(creature, 10.0)
     if target then

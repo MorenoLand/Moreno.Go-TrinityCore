@@ -167,6 +167,28 @@ local function randomPlayer(creature, minDist, maxDist)
     return candidates[math.random(#candidates)]
 end
 
+-- C++ SkarvaldChargePredicate (boss_skarvald_dalronn.cpp:80-91):
+-- threat-list pick with GetDistance2d in [5, 30] — NOT player-only
+-- (the template SelectTarget overload has no player gate). The
+-- midnight randomTargetInBand precedent over the bridged,
+-- threat-ordered GetAITargets (lua_creature_events.go:345); the C++
+-- bounds are inclusive on both ends, kept here (midnight's upper
+-- bound was exclusive — this one is C++-exact). C++ applies no dead
+-- filter beyond threat-list offline-ness, so none is added.
+local function randomTargetInBand(creature, minDist, maxDist)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        local dist = creature:GetDistance2d(t)
+        if dist >= minDist and dist <= maxDist then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ EVENT_STONE_STRIKE (lines 210-213): DoCastVictim(SPELL_STONE_STRIKE),
 -- 2-arg = non-triggered; init 10s (line 198), repeat {5s,10s} (line 213).
 local function stoneStrikeTick(creature, guid)
@@ -175,13 +197,14 @@ local function stoneStrikeTick(creature, guid)
 end
 
 -- C++ EVENT_SKARVALD_CHARGE (lines 205-209): DoCast(target, SPELL_CHARGE),
--- 2-arg = non-triggered, random target 5-30yd; one-shot 5s (line 197) —
--- the line-208 re-arm targets the global EVENT_CHARGE (1003), never the
--- arm, so it does not re-fire in C++ either. The C++ predicate measures
--- 2D distance (GetDistance2d, :93-98); Lua randomPlayer uses 3D
--- GetDistance (5-30 bounds match; edge-case-only drift).
+-- 2-arg = non-triggered; SelectTarget(Random, 0,
+-- SkarvaldChargePredicate(me)) (:206) — threat-list pick, GetDistance2d
+-- in [5, 30], NOT player-only (template overload has no player gate);
+-- one-shot 5s (line 197) — the line-208 re-arm targets the global
+-- EVENT_CHARGE (1003), never the arm, so it does not re-fire in C++
+-- either.
 local function chargeTick(creature, guid)
-    local target = randomPlayer(creature, 5, 30)
+    local target = randomTargetInBand(creature, 5, 30)
     if target then
         creature:CastSpell(target, SPELL_CHARGE)
     end

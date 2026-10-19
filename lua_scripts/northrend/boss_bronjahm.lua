@@ -152,11 +152,16 @@ local function initState(guid)
     phase2[guid] = nil
 end
 
+-- C++ :187 SelectTarget(Random, 1, 0.0f, true) — position=1 skips the
+-- threat head, playerOnly=true; the netherspite victim-GUID exclusion
+-- idiom approximates both.
 local function randomPlayer(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
     for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+        if p:GetGUID() ~= victimGuid and p:GetMapId() == mapId and p:GetInstanceId() == instanceId
                 and not p:IsDead() then
             candidates[#candidates + 1] = p
         end
@@ -190,7 +195,8 @@ local function onShadowBolt(creature, guid)
     end
 end
 
--- C++ :187-194 EVENT_CORRUPT_SOUL (PHASE_1 only): random player target,
+-- C++ :187-194 EVENT_CORRUPT_SOUL (PHASE_1 only): random player target
+-- (SelectTarget position=1 = threat head excluded, via randomPlayer),
 -- Talk(SAY_CORRUPT_SOUL), cast 68839 on the target; re-arm {25000,35000}ms
 -- phase-1-gated, so a phase-2 flip between fires kills the chain.
 local function onCorruptSoul(creature, guid)

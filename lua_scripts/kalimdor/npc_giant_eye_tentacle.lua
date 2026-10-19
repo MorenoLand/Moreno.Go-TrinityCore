@@ -5,9 +5,10 @@
 -- AddSC_boss_cthun()).
 -- Entry: 15334 (worker-verified from C++ NPC_GIANT_EYE_TENTACLE).
 -- Ported: Green Beam 26134 on random player (500ms init -> 2.1s
--- repeat; C++ SelectTarget Random has no bridge — GetPlayersInWorld
--- filtered by map/instance/alive plus the Digestive Acid 26476
--- exclusion the C++ cast leg applies, maiden_of_virtue convention).
+-- repeat; C++ SelectTarget Random is bridged via the
+-- maiden_of_virtue idiom — GetPlayersInWorld filtered by
+-- map/instance/alive plus the Digestive Acid 26476
+-- exclusion the C++ cast leg applies).
 -- Summon/positioning legs have no bridge — documented, not wired.
 local ENTRY = 15334
 local SPELL_GREEN_BEAM = 26134

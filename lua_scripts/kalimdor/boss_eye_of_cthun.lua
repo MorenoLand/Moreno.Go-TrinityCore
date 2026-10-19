@@ -1,0 +1,85 @@
+-- Temple of Ahn'Qiraj: Eye of C'Thun — Lua documentation stub for
+-- src/server/scripts/Kalimdor/TempleOfAhnQiraj/boss_cthun.cpp
+-- (eye_of_cthunAI : public ScriptedAI; GetAI via
+-- GetAQ40AI<eye_of_cthunAI>(creature); AddSC_boss_cthun() registers
+-- boss_eye_of_cthun).
+-- Entry: temple_of_ahnqiraj.h:57 names BOSS_EYE_OF_CTHUN = 15589;
+-- NPC_EYE_TENTACLE = 15726, NPC_CLAW_TENTACLE = 15725,
+-- NPC_CTHUN_PORTAL = 15896 (temple_of_ahnqiraj.h:58-60);
+-- DATA_CTHUN = 5, DATA_CTHUN_PHASE = 20 (temple_of_ahnqiraj.h:35,52).
+--
+-- DOCUMENT-ONLY: no arms are wired. The boss body is a
+-- instance-phase-machine + summon/angle/DoAction script with no
+-- workable bridge for any of its four SelectTarget sites below, so
+-- this file documents the gaps per site instead of porting them.
+-- (Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
+-- OnDied; timers via CreateLuaEvent — none used here because every
+-- arm is gated or driven by unbridged machinery.)
+--
+-- Per-site verdicts (cthun.cpp line:site, verified 2026-10-19
+-- against the CURRENT engine/world/lua_creature_events.go method
+-- list — no stale header claims used):
+--
+-- - :233 (SpawnEyeTentacle target pick): BLOCKED. The arm is
+--   DoSpawnCreature(NPC_EYE_TENTACLE 15726) followed by
+--   Spawned->AI()->AttackStart(random target). The Lua creature
+--   method list has NO summon/spawn bridge (no SummonCreature /
+--   DoSpawnCreature / SpawnCreature entry) and no way to reach a
+--   spawned creature's AI to order AttackStart. The tentacle's own
+--   AI is already ported (npc_eye_tentacle.lua, entry 15726);
+--   only the eye's spawning of it is the gap. Not ported.
+--
+-- - :272 (green beam): BLOCKED. Arm: SelectTarget(Random, 0) ->
+--   InterruptNonMeleeSpells(false) -> DoCast(target,
+--   SPELL_GREEN_BEAM 26134) -> SetTarget, on a 3s timer that fires
+--   ONLY while instance->GetData(DATA_CTHUN_PHASE) ==
+--   PHASE_EYE_GREEN_BEAM (1; cthun.cpp:267). Three legs have no
+--   bridge: (a) instance GetData/SetData — Lua has no
+--   InstanceScript bridge, and the phase word is shared with the
+--   cthun body (writers at cthun.cpp:429 PHASE_CTHUN_TRANSITION,
+--   :627/:671/:815 stomach/weak, :840 done), so a Lua-local phase
+--   simulation would drift from the real shared state;
+--   (b) InterruptNonMeleeSpells — absent from the method list;
+--   (c) SetTarget — absent from the method list. The cast core
+--   (random threat pick via GetAITargets + CastSpell 26134) IS
+--   bridgeable in isolation, but without the phase gate a ported
+--   3s beam timer would keep firing green beams through the 35s
+--   dark-glare phase, where C++ never casts it — fabricated wrong
+--   behavior. Not ported.
+--
+-- - :288 (claw tentacle spawn target): BLOCKED. Arm:
+--   SelectTarget(Random, 0) ->
+--   SummonCreature(NPC_CLAW_TENTACLE 15725, *target,
+--   TEMPSUMMON_CORPSE_DESPAWN) -> Spawned->AI()->AttackStart.
+--   Same blocker as :233 — no summon bridge, no spawned-AI
+--   AttackStart bridge. Not ported.
+--
+-- - :316 (dark-glare start target): BLOCKED. Arm:
+--   SelectTarget(Random, 0) -> DarkGlareAngle =
+--   me->GetAbsoluteAngle(target), seeding the PHASE_EYE_RED_BEAM
+--   sweep machine (:340-:361: per-tick SetOrientation(DarkGlareAngle
+--   +/- tick*pi/35), StopMoving, DoCast(me, SPELL_DARK_GLARE
+--   26029, false)). GetAbsoluteAngle is absent from the Lua
+--   method list, and so are SetOrientation, StopMoving,
+--   SetReactState, and SetTarget — the whole dark-glare
+--   orientation machine is unportable. Not ported.
+--
+-- Surrounding machinery, also unbridged (for the record, not
+-- wired): Reset (:210-:220, RemoveAurasDueToSpell + SetVisible +
+-- FindNearestCreature(NPC_CTHUN_PORTAL) passive — FindNearestCreature
+-- and SetVisible have no bridge); JustEngagedWith (:224-:228,
+-- DoZoneInCombat + phase SetData — no instance bridge);
+-- EyeTentacleTimer 45s 8-spot spawn block (:247-:263, summon
+-- bridge blocker); PhaseTimer transitions (:303-:335 green->red,
+-- :363-:383 red->green — phase SetData legs, no bridge);
+-- PHASE_CTHUN_TRANSITION (:388-:393, SetTarget/SetHealth/SetVisible —
+-- unbridged; cross-AI hand-off to the cthun body, DoAction has no
+-- bridge); PHASE_CTHUN_DONE (:396-:400, FindNearestCreature +
+-- DespawnOrUnsummon — no bridge).
+--
+-- The 4 tentacle NPCs' own AIs are ported separately
+-- (npc_eye_tentacle 15726, npc_claw_tentacle 15725,
+-- npc_giant_claw_tentacle 15728, npc_giant_eye_tentacle 15334;
+-- RegisterLuaBoss bindings in engine/world/boss_ai.go). This file
+-- exists so the eye body (15589) has its four unported sites named
+-- per site with their blockers, instead of an undocumented hole.

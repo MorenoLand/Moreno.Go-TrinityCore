@@ -5,8 +5,9 @@
 -- AddSC_boss_cthun()).
 -- Entry: 15726 (worker-verified from C++ NPC_EYE_TENTACLE).
 -- Ported: Mind Flay 26143 on random player (500ms init -> 10s
--- repeat; C++ SelectTarget Random has no bridge — GetPlayersInWorld
--- filtered by map/instance/alive, maiden_of_virtue convention).
+-- repeat; C++ SelectTarget Random is bridged via the
+-- maiden_of_virtue idiom — GetPlayersInWorld filtered by
+-- map/instance/alive).
 -- The 35s KillSelf has no Lua bridge (no KillSelf API); the portal
 -- summon/JustDied cross-kill and DoZoneInCombat have no bridge —
 -- documented, not wired.

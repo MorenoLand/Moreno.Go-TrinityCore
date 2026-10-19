@@ -16,8 +16,9 @@
 -- storm 43648 every 60s on a random alive player within 50 yd (the storm
 -- zap sequence never runs — see the HandleStormSequence note below);
 -- berserk 45078 one-shot 10min with Talk(SAY_ENRAGE) and 10min repeat.
--- The soaring eagle (24858) swoops a random alive player with eagle swoop
--- 44732 (triggered) every {5s,10s} while in combat.
+-- The soaring eagle (24858) swoops a random threat-list unit with
+-- eagle swoop 44732 (triggered) every {5s,10s} while in combat (C++
+-- SelectTarget(Random, 0), playerOnly FALSE — pets/totems eligible).
 -- Deviations from C++: LOCAL-TREE DEFECT — boss_akilzon.cpp never
 -- schedules EVENT_STORM_SEQUENCE (the initial arm upstream TC has in the
 -- ELECTRICAL_STORM case is missing from this tree; the only schedule is
@@ -228,8 +229,23 @@ RegisterCreatureEvent(ENTRY_AKILZON, 23, akilzonReset)
 -- MoveInLineOfSight is suppressed in C++ (empty override) and Reset's
 -- SetDisableGravity has no bridge; JustEngagedWith's DoZoneInCombat has
 -- no bridge.
+-- C++ npc_akilzon_eagle UpdateAI (boss_akilzon.cpp:439):
+-- SelectTarget(Random, 0) — playerOnly FALSE (2-arg form) — picks from
+-- the eagle's threat list, not players only. The target feeds the
+-- MovePoint destination AND the TargetGUID that MovementInform casts
+-- SPELL_EAGLE_SWOOP on; the swoop stays a direct timer cast (no
+-- movement model). Threat-list pick, no Player filter (the midnight
+-- randomTargetAnywhere precedent — C++ has no distance filter here).
+local function randomThreatTargetEagle(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 local function onEagleSwoop(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatTargetEagle(creature)
     if target then
         creature:CastSpell(target, SPELL_EAGLE_SWOOP, true)
     end

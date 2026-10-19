@@ -17,11 +17,12 @@
 -- EVENT_FLAME_SHOCK (2s), EVENT_ARCANE_SHOCK (4s),
 -- EVENT_FROST_SHOCK (6s), EVENT_SHADOW_SHOCK (8s),
 -- EVENT_CHAIN_LIGHTNING (15s); Talk(SAY_AGGRO 1) (event 1).
--- EVENT_FLAME_SHOCK — SelectTarget(Random, 0) (playerOnly default
--- true) → DoCast(target, SPELL_FLAME_SHOCK 34354) 2-arg
--- (non-triggered); re-arm randtime(10s,15s). Threat-list pool via
--- GetAITargets (the bridged threat list; midnight precedent) with
--- the "Player" filter (illidan convention).
+-- EVENT_FLAME_SHOCK — SelectTarget(Random, 0) (playerOnly defaults
+-- FALSE per UnitAI.h:170 — pets/totems eligible) →
+-- DoCast(target, SPELL_FLAME_SHOCK 34354) 2-arg (non-triggered);
+-- re-arm randtime(10s,15s). Threat-list pool via GetAITargets (the
+-- bridged threat list; midnight precedent); the Player filter was
+-- dropped 2026-10-19.
 -- EVENT_ARCANE_SHOCK — same shape, SPELL_ARCANE_SHOCK 37132, 4s init.
 -- EVENT_FROST_SHOCK — same shape, SPELL_FROST_SHOCK 21401, 6s init.
 -- EVENT_SHADOW_SHOCK — same shape, SPELL_SHADOW_SHOCK 30138, 8s init.
@@ -97,27 +98,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0) (playerOnly default true) — threat-list
--- pool via GetAITargets (the bridged threat list; midnight
--- precedent), "Player" filter per the illidan convention.
-local function randomPlayerThreat(creature)
-    local candidates = {}
-    for _, t in ipairs(creature:GetAITargets()) do
-        if t:GetObjectType() == "Player" then
-            candidates[#candidates + 1] = t
-        end
-    end
-    if #candidates == 0 then
+-- C++ SelectTarget(Random, 0) — playerOnly defaults false (UnitAI.h:170),
+-- so the pool is the whole threat list (pets/totems included): plain
+-- pick over GetAITargets (the bridged threat list; midnight precedent).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[math.random(#targets)]
 end
 
 -- C++ shock arms (:212-231): SelectTarget(Random, 0) →
 -- DoCast(target, SPELL) 2-arg (non-triggered); re-arm
 -- randtime(10s,15s) ({min,max} table — millisecond granularity).
 local function shockTick(creature, guid, key, spell)
-    local target = randomPlayerThreat(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, spell)
     end
@@ -130,7 +126,7 @@ end
 -- DoCast(target, SPELL_CHAIN_LIGHTNING) 2-arg (non-triggered);
 -- 25s flat repeat.
 local function chainLightningTick(creature, guid)
-    local target = randomPlayerThreat(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
     end

@@ -25,9 +25,9 @@
 --   CastSpell convention), reschedule 2-3s; cancelled at ground
 --   phase per C++.
 -- - EVENT_PARALYZE: random player via GetPlayersInWorld filtered by
---   map/instance/alive (maiden_of_virtue convention — C++
---   SelectTarget Random has no bridge), DoCast 25725, reschedule
---   15s. The larva summon + instance SetGuidData(DATA_PARALYZED)
+--   map/instance/alive (maiden_of_virtue convention — C++ SelectTarget
+--   Random is bridged via this documented idiom), DoCast 25725,
+--   reschedule 15s. The larva summon + instance SetGuidData(DATA_PARALYZED)
 --   have no bridge — documented below.
 -- - Ground phase (event 9 damage leg, C++ UpdateAI's per-tick
 --   GetHealthPct() < 70 check): phase AIR -> GROUND, cancel

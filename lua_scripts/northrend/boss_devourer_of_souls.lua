@@ -202,6 +202,18 @@ local function delayTimers(guid, extraMs)
     end
 end
 
+-- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible. Bridged via
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
+-- the boss_midnight randomTargetAnywhere precedent.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 -- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on the
 -- same map/instance, no distance filter (the keleseth / thorim
 -- GetPlayersInWorld precedent).
@@ -257,7 +269,7 @@ local function wellOfSoulsTick(creature, guid)
     if state == nil then
         return
     end
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_WELL_OF_SOULS)
     end
@@ -278,7 +290,7 @@ local function unleashedSoulsTick(creature, guid)
     if state == nil then
         return
     end
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_UNLEASHED_SOULS)
     end

@@ -80,6 +80,18 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
+-- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible. Bridged via
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
+-- the boss_midnight randomTargetAnywhere precedent.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 -- thespia convention: random alive player in the instance, no distance
 -- limit (C++ SelectTarget(Random, 0) carries the 0.0f dist default).
 local function randomPlayerInInstance(creature)
@@ -111,8 +123,10 @@ end
 
 -- C++ EVENT_SHADOWBOLT_VOLLEY: SelectTarget(Random, 0) ->
 -- DoCast(target, 15245), non-triggered; reschedule 9s unconditional.
+-- playerOnly=FALSE (UnitAI.h:170): the pool is the threat list
+-- (pets/totems eligible), lowered via GetAITargets.
 local function onShadowboltVolley(creature, guid)
-    local target = randomPlayerInInstance(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOWBOLT_VOLLEY)
     end

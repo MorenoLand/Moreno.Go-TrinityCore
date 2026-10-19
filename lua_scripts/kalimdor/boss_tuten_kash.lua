@@ -33,8 +33,9 @@
 --   Curse of Tuten'kash at init {9s,14s} (the BossAI::JustEngagedWith
 --   instance leg is blocked — standing, no instance bridge).
 -- - Web Spray (EVENT_WEB_SPRAY): SelectTarget(Random, 0, 100, false)
---   -> randomPlayerInRange(creature, 100, false) — nefarian
---   convention; position 0 means no victim exclusion — and only
+--   -> randomThreatTargetInRange(creature, 100) — threat-list pick, no
+--   Player filter (playerOnly=FALSE explicit in C++); position 0 means
+--   no victim exclusion — and only
 --   DoCast(target, SPELL_WEB_SPRAY 12252) when the target lacks the
 --   aura (C++ !target->HasAura() guard, HasAura bridge exists);
 --   reschedules unconditionally at {6s,8s} (C++ Repeat sits outside
@@ -80,30 +81,32 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: random alive player in the instance within
--- maxDist; position 0 means no tank exclusion.
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+-- Threat-list pick within maxDist (3D, the C++ IsWithinDist semantics
+-- for the SelectTarget dist param); playerOnly=FALSE (EXPLICIT in the
+-- C++: SelectTarget(Random, 0, 100, false)), so pets/totems are
+-- eligible — no Player filter. The bridged, threat-ordered
+-- GetAITargets list (lua_creature_events.go:345); offset 0 means no
+-- tank exclusion.
+local function randomThreatTargetInRange(creature, maxDist)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if creature:GetDistance(t) <= maxDist then
+            candidates[#candidates + 1] = t
         end
     end
-    if #found == 0 then
+    if #candidates == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return candidates[math.random(#candidates)]
 end
 
--- C++ EVENT_WEB_SPRAY: SelectTarget(Random, 0, 100, false) ->
--- DoCast(target, 12252) under !target->HasAura(); reschedule
--- {6s,8s} unconditional. playerOnly=false makes pets/totems eligible
--- targets in C++; ported as player-only (no Lua bridge enumerates
--- non-player units) — documented approximation.
+-- C++ EVENT_WEB_SPRAY (boss_tuten_kash.cpp:81): SelectTarget(Random, 0,
+-- 100, false) -> DoCast(target, 12252) under !target->HasAura(); reschedule
+-- {6s,8s} unconditional. playerOnly=FALSE explicit — pets/totems are
+-- eligible; threat-list pick via GetAITargets (creature HasAura is
+-- bridged, lua_objects.go:228).
 local function onWebSpray(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatTargetInRange(creature, 100)
     if target and not target:HasAura(SPELL_WEB_SPRAY) then
         creature:CastSpell(target, SPELL_WEB_SPRAY)
     end

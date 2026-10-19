@@ -188,6 +188,18 @@ local function playersInInstance(creature)
     return found
 end
 
+-- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible. Bridged via
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
+-- the boss_midnight randomTargetAnywhere precedent.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 local function pickRandomPlayer(creature)
     local players = playersInInstance(creature)
     if #players == 0 then
@@ -213,7 +225,7 @@ end
 -- YELL_SHADOW_NOVA even when the target pick is nil — Talk
 -- placement matches.
 local function sacrolashShadowNova(creature, guid)
-    local target = pickRandomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_NOVA)
         creature:Talk(EMOTE_SHADOW_NOVA, target)
@@ -228,7 +240,7 @@ end
 -- C++ EVENT confounding blow: DoCast(random target, 45256);
 -- repeat {20s,25s}.
 local function sacrolashConfoundingBlow(creature, guid)
-    local target = pickRandomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CONFOUNDING_BLOW)
     end
@@ -309,7 +321,7 @@ end
 -- blaze re-arm even when the target pick is nil — placement
 -- matches.
 local function alythessConflagration(creature, guid)
-    local target = pickRandomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CONFLAGRATION)
         creature:Talk(EMOTE_CONFLAGRATION, target)

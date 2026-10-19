@@ -119,18 +119,16 @@ local function onFrenzyBack(creature, guid)
     end)
 end
 
--- C++ Wyvern_Timer: SelectTarget Random -> DoCast(target, 26180),
+-- C++ Wyvern_Timer (boss_huhuran.cpp:107): SelectTarget(Random, 0) —
+-- playerOnly FALSE (2-arg form) — picks from the threat list, not
+-- players only; the bridged, threat-ordered GetAITargets list
+-- (lua_creature_events.go:345), no Player filter (the midnight
+-- randomTargetAnywhere precedent). DoCast(target, 26180),
 -- init urand(18000,28000) -> urand(15000,32000).
 local function onWyvern(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local cands = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p and p:IsAlive() and p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
-            cands[#cands + 1] = p
-        end
-    end
-    if #cands > 0 then
-        local target = cands[math.random(1, #cands)]
+    local targets = creature:GetAITargets()
+    if #targets > 0 then
+        local target = targets[math.random(#targets)]
         creature:CastSpell(target, SPELL_WYVERNSTING)
     end
     schedule(guid, "wyvern", math.random(15000, 32000), function()

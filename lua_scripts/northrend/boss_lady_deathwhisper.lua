@@ -277,7 +277,8 @@ end
 -- FIDELITY CAVEAT: C++ SelectTarget defaults playerOnly=FALSE
 -- (UnitAI.h:170), so the pool can include pets/totems — Lua's
 -- player-only enumeration is the documented approximation (the
--- tuten_kash precedent); no Lua unit-enumeration bridge.
+-- tuten_kash precedent); the unit-enumeration bridge IS GetAITargets
+-- (lua_creature_events.go:345).
 local function randomPlayer(creature)
     local mapId = creature:GetMapId()
     local instanceId = creature:GetInstanceId()
@@ -519,6 +520,19 @@ local function fanaticSpellHit(event, creature, caster, spellId)
     end
 end
 
+-- C++ SelectTarget(Random, 1) (UnitAI.h:170-174): random over the threat
+-- list — playerOnly=FALSE so pets/totems are eligible — with offset 1
+-- skipping the first MaxThreat-ordered entry (the tank). Bridged via
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
+-- the netherspite/auriaya tank-skip idiom on the bridged threat list.
+local function randomNonHeadThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets <= 1 then
+        return nil
+    end
+    return targets[math.random(2, #targets)]
+end
+
 -- C++ npc_cult_adherent Reset() scheduler (:693-710), same re-key.
 local function onDeathchill(creature, guid)
     -- C++ :696-698 — entry-conditional: the empowered adherent casts the
@@ -539,12 +553,14 @@ local function onShroudOfTheOccult(creature, guid)
 end
 
 -- C++ :706-710: DoCast(target, SPELL_CURSE_OF_TORPOR) non-triggered on
--- SelectTarget(Random, 1) — offset-1 skips the MaxThreat head, so the
--- tank is excluded (tank-skip unbridged: the netherspite precedent;
--- the pool stays map-wide with the pets/totems caveat documented on
--- randomPlayer); init 15s, re-arm 18s unconditional.
+-- SelectTarget(Random, 1) — offset-1 skips the MaxThreat head
+-- (UnitAI.h:173-174), playerOnly=FALSE (UnitAI.h:170) so pets/totems
+-- are eligible; lowered over the threat-ordered GetAITargets list
+-- (lua_creature_events.go:345 — the netherspite/auriaya tank-skip
+-- idiom on the bridged threat list); init 15s, re-arm 18s
+-- unconditional.
 local function onCurseOfTorpor(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomNonHeadThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_TORPOR)
     end

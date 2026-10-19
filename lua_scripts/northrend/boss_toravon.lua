@@ -36,19 +36,21 @@
 -- EVENT_WHITEOUT (:83-86) — DoCastSelf(SPELL_WHITEOUT 72034) (:84,
 -- non-triggered) -> CastSpell(creature, 72034); 25s init (:57) /
 -- Repeat 38s (:85).
--- EVENT_FREEZING_GROUND (:87-91) — SelectTarget(Random, 1) (:88,
--- random player EXCLUDING tank — position 1) -> DoCast(target,
+-- EVENT_FREEZING_GROUND (:87-91) — SelectTarget(Random, 1) (:88 —
+-- offset 1 skips the first MaxThreat-order entry; playerOnly=false
+-- default, so the threat list is picked whole) -> DoCast(target,
 -- SPELL_FREEZING_GROUND 72090) (:89, 2-arg = non-triggered) ->
 -- CastSpell(target, 72090); 7s init (:58) / Repeat 38s (:90).
--- Random-player pool: GetPlayersInWorld, same map/instance, alive
--- (the keleseth / thorim precedent).
+-- Random-threat pool: GetAITargets (the bridged threat list; midnight
+-- precedent).
 -- DOCUMENTED DEVIATIONS:
 -- EVENT_FROZEN_ORB's AddSpellMod(SPELLVALUE_MAX_TARGETS,
 -- RAID_MODE(1, 3)) leg (:79) has no bridge — the cast fires with no
 -- max-targets cap.
--- EVENT_FREEZING_GROUND's SelectTarget position-1 tank-exclusion
--- (:88) rides the halion victim-exclusion idiom — the "no bridge"
--- claim was stale.
+-- EVENT_FREEZING_GROUND's SelectTarget position-1 exclusion (:88) —
+-- the offset now skips the threat head of the GetAITargets pool (the
+-- C++ MaxThreat-order semantic, UnitAI.h); the stale halion
+-- victim-exclusion idiom is retracted.
 -- The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates (pre-check
 -- :67 and the per-event :95 return) have no bridge — casts fire
 -- unconditionally on their timers (the hodir UNIT_STATE_CASTING
@@ -100,26 +102,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 1) — alive players on
--- the same map/instance; the position-1 tank exclusion rides the
--- halion victim-exclusion idiom (the "no tank-exclusion bridge"
--- claim was stale).
-local function randomNonTankPlayer(creature)
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
+-- C++ SelectTarget(SelectTargetMethod::Random, 1) — random threat-listed
+-- unit excluding the threat head: offset 1 skips the first entry in
+-- MaxThreat order (UnitAI.h); playerOnly=false default, so non-players
+-- qualify (midnight precedent).
+local function randomNonTankThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    -- C++ shortcut: threat list size <= offset ignores ALL elements.
+    if #targets <= 1 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[1 + math.random(#targets - 1)]
 end
 
 -- C++ EVENT_FROZEN_ORB (:76-82): me->CastSpell(me,
@@ -145,7 +138,7 @@ end
 -- SPELL_FREEZING_GROUND), 2-arg = non-triggered; re-arm via Repeat
 -- 38s (:90, unconditional).
 local function freezingGroundTick(creature, guid)
-    local target = randomNonTankPlayer(creature)
+    local target = randomNonTankThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_FREEZING_GROUND)
     end

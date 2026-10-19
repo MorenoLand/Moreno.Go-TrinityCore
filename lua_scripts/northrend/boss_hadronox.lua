@@ -27,6 +27,10 @@
 -- bridge).
 -- EVENT_WEB_GRAB — DoCastAOE(Web Grab 57731) self-cast,
 -- randtime(13s,19s) init, randtime(20s,25s) repeat (math.random).
+-- EVENT_ACID_CLOUD — DoCast(SelectTarget(Random, 0, 100.0f), ACID_CLOUD
+-- 53400), randtime(7s,13s) init, randtime(16s,23s) repeat (math.random);
+-- position=0 so no threat-head exclusion; threat-list pool via
+-- GetAITargets (lua_creature_events.go:345; midnight precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- The whole pre-fight/step movement machine — InitializeAI
 -- SetReactState(REACT_AGGRESSIVE)/SetFloatValue bounding/combat reach
@@ -52,9 +56,6 @@
 -- GetData/SetGUID bridges absent.
 -- CanAIAttack 70.0f home-distance leash — no leash bridge.
 -- JustEngagedWith me->setActive(true) leg — no active-flag bridge.
--- EVENT_ACID_CLOUD (DoCast(SelectTarget(Random, 0, 100.0f), ACID_CLOUD
--- 53400), 7-13s init, 16-23s repeat) — random-target SelectTarget
--- bridge absent (cairne/kazzak precedent).
 -- EVENT_PLAYER_CHECK (1s): GetCombatManager PvE-ref IsControlledByPlayer
 -- flip vs _lastPlayerCombatState -> instance->CheckRequiredBosses gate,
 -- Point-motion cancel + AttackStart(victim), else EnterEvadeMode(
@@ -151,6 +152,7 @@ local ENTRY_HADRONOX = 28921
 local SPELL_PIERCE_ARMOR = 53418
 local SPELL_LEECH_POISON = 53030
 local SPELL_WEB_GRAB = 57731
+local SPELL_ACID_CLOUD = 53400
 
 local timers = {}
 
@@ -203,6 +205,28 @@ local function webGrabTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_ACID_CLOUD (boss_hadronox.cpp:314-317):
+-- DoCast(SelectTarget(Random, 0, 100.0f), ACID_CLOUD 53400);
+-- position=0 — no threat-head exclusion (contrast skeram position=1).
+-- Threat-list pool via GetAITargets (lua_creature_events.go:345;
+-- midnight precedent), C++ dist=100.0f = max range; DoCast default
+-- triggered=false (vaelastrasz convention). Init randtime(7s,13s)
+-- (:229), repeat randtime(16s,23s) (math.random).
+local function acidCloudTick(creature, guid)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if creature:IsWithinDist(t, 100.0) then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_ACID_CLOUD)
+    end
+    schedule(guid, "acidcloud", math.random(16000, 23000), function()
+        acidCloudTick(creature, guid)
+    end)
+end
+
 local function hadronoxEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -214,6 +238,9 @@ local function hadronoxEnterCombat(event, creature, target)
     end)
     schedule(guid, "webgrab", math.random(13000, 19000), function()
         webGrabTick(creature, guid)
+    end)
+    schedule(guid, "acidcloud", math.random(7000, 13000), function()
+        acidCloudTick(creature, guid)
     end)
 end
 
