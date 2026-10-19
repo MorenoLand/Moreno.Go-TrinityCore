@@ -65,17 +65,16 @@
 -- random-target bridge — the_beast / doomwalker precedent) and the
 -- RemoveFlag / SetReactState legs. The stale "no-timer / no-cast"
 -- claim is corrected.
--- emerald_dragonAI KilledUnit — who->CastSpell(who, SPELL_MARK_OF_NATURE
--- 25040, triggered) gated on victim->GetTypeId() == TYPEID_PLAYER —
--- zero Talk, does not port: the C++ caster is the victim (a player
--- self-cast on a corpse); the Lua CastSpell path casts from the
--- creature with no caster override (blessed-banner precedent), and
--- spells 25040/24904 have no Go effect implementation (spell_
--- mark_of_nature SpellScript NOT registered, below) — a port would
--- broadcast a cast with no mechanical effect.
--- boss_emeriss KilledUnit — DoCast(who, SPELL_PUTRID_MUSHROOM 24904,
--- triggered) gated on player victim — same victim-self-cast / no-
--- effect grounds (rides on the base KilledUnit leg above).
+-- emerald_dragonAI KilledUnit — PORTED (this run): player-gated
+-- who->CastSpell(who, SPELL_MARK_OF_NATURE 25040, triggered), lowered to
+-- creature:CastSpell(victim, 25040, true) (maiden_of_virtue / moroes
+-- triggered-cast convention); the aura lands on the same target.
+-- Mechanically inert in Go (no spell_mark_of_nature effect), like the
+-- ported DamageTaken visual casts in this file — the old
+-- "victim-self-cast / no-caster-override" non-port rationale is
+-- retracted.
+-- boss_emeriss KilledUnit — PORTED (this run): DoCast(who, SPELL_PUTRID_
+-- MUSHROOM 24904, triggered) + the base mark leg, same convention.
 -- boss_ysondre / boss_lethon / boss_emeriss DamageTaken — PORTED
 -- (this run): OnDamageTaken event 9 is bridged (midnight never-die
 -- clamp precedent), so the stale "no-DamageTaken bridge" claims are
@@ -131,6 +130,8 @@ local SPELL_BELLOWING_ROAR = 22686 -- boss_emerald_dragons.cpp:563 (Taerar)
 local SPELL_SUMMON_DRUID_SPIRITS = 24795 -- boss_emerald_dragons.cpp:249 (Ysondre DamageTaken)
 local SPELL_DRAW_SPIRIT = 24811 -- boss_emerald_dragons.cpp:336 (Lethon DamageTaken)
 local SPELL_CORRUPTION_OF_EARTH = 24910 -- boss_emerald_dragons.cpp:474 (Emeriss DamageTaken)
+local SPELL_MARK_OF_NATURE = 25040 -- boss_emerald_dragons.cpp:53,112 (all-dragon KilledUnit)
+local SPELL_PUTRID_MUSHROOM = 24904 -- boss_emerald_dragons.cpp:473,505 (Emeriss KilledUnit)
 
 local SAY_SUMMON = 1 -- SAY_YSONDRE_SUMMON_DRUIDS / SAY_LETHON_DRAW_SPIRIT /
                      -- SAY_EMERISS_CAST_CORRUPTION (all 1)
@@ -317,6 +318,28 @@ local function taerarEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ emerald_dragonAI::KilledUnit (:109-113): player-gated
+-- who->CastSpell(who, SPELL_MARK_OF_NATURE 25040, triggered). The C++ caster
+-- is the victim self-cast; lowered to a triggered creature cast on the
+-- victim (maiden_of_virtue / moroes triggered-cast convention) — the aura
+-- lands on the same target. Mechanically inert in Go (no spell_mark_of_
+-- nature effect), like the ported DamageTaken visual casts in this file.
+local function dragonKilledUnit(event, creature, victim)
+    if victim and victim:GetObjectType() == "Player" then
+        creature:CastSpell(victim, SPELL_MARK_OF_NATURE, true)
+    end
+end
+
+-- C++ boss_emeriss::KilledUnit (:503-507): DoCast(who, SPELL_PUTRID_
+-- MUSHROOM 24904, triggered) on the player victim, then the base
+-- emerald_dragonAI::KilledUnit leg above.
+local function emerissKilledUnit(event, creature, victim)
+    if victim and victim:GetObjectType() == "Player" then
+        creature:CastSpell(victim, SPELL_PUTRID_MUSHROOM, true)
+        creature:CastSpell(victim, SPELL_MARK_OF_NATURE, true)
+    end
+end
+
 local function dragonLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
@@ -334,19 +357,23 @@ end
 RegisterCreatureEvent(ENTRY_YSONDRE, 1, ysondreEnterCombat)
 RegisterCreatureEvent(ENTRY_YSONDRE, 2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_YSONDRE, 4, dragonDied)
+RegisterCreatureEvent(ENTRY_YSONDRE, 3, dragonKilledUnit)
 RegisterCreatureEvent(ENTRY_YSONDRE, 9, ysondreDamageTaken)
 RegisterCreatureEvent(ENTRY_YSONDRE, 23, dragonReset)
 RegisterCreatureEvent(ENTRY_LETHON,  1, lethonEnterCombat)
 RegisterCreatureEvent(ENTRY_LETHON,  2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_LETHON,  4, dragonDied)
+RegisterCreatureEvent(ENTRY_LETHON,  3, dragonKilledUnit)
 RegisterCreatureEvent(ENTRY_LETHON,  9, lethonDamageTaken)
 RegisterCreatureEvent(ENTRY_LETHON,  23, dragonReset)
 RegisterCreatureEvent(ENTRY_EMERISS, 1, emerissEnterCombat)
 RegisterCreatureEvent(ENTRY_EMERISS, 2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_EMERISS, 4, dragonDied)
+RegisterCreatureEvent(ENTRY_EMERISS, 3, emerissKilledUnit)
 RegisterCreatureEvent(ENTRY_EMERISS, 9, emerissDamageTaken)
 RegisterCreatureEvent(ENTRY_EMERISS, 23, dragonReset)
 RegisterCreatureEvent(ENTRY_TAERAR,  1, taerarEnterCombat)
 RegisterCreatureEvent(ENTRY_TAERAR,  2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_TAERAR,  4, dragonDied)
+RegisterCreatureEvent(ENTRY_TAERAR,  3, dragonKilledUnit)
 RegisterCreatureEvent(ENTRY_TAERAR,  23, dragonReset)
