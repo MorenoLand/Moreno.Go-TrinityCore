@@ -129,7 +129,8 @@ func chainScaledAmount(base uint32, multiplier float64, jumpIndex int) uint32 {
 type chainCandidate struct {
 	guid    uint64
 	x, y, z float32
-	deficit uint32 // maxHealth - health, used by the chain-heal selection
+	deficit uint32  // maxHealth - health, used by the chain-heal selection
+	reach   float32 // combat reach: IsWithinDist adds both ends' reaches (Object.cpp:1147)
 }
 
 // spellSearchChainTargets ports Spell::SearchChainTargets (Spell.cpp:1891).
@@ -182,13 +183,16 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 	}
 	result := make([]uint64, 0, jumps)
 	lx, ly, lz := primary.X, primary.Y, primary.Z
+	nodeReach := primary.CombatReach
 	for remaining := jumps; remaining > 0 && len(candidates) > 0; remaining-- {
 		best := -1
+		// Object.cpp:1147-1164: IsWithinDist folds BOTH units' combat reaches
+		// into the radius and compares with strict less-than.
 		if isChainHeal {
 			// Spell.cpp:1950-1963: unit with highest HP deficit in jump radius
 			var maxDeficit uint32
 			for i, c := range candidates {
-				if c.deficit > maxDeficit && distance3D(c.x, c.y, c.z, lx, ly, lz) <= float64(jumpRadius) &&
+				if c.deficit > maxDeficit && distance3D(c.x, c.y, c.z, lx, ly, lz) < float64(jumpRadius)+float64(nodeReach)+float64(c.reach) &&
 					s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
 					best, maxDeficit = i, c.deficit
 				}
@@ -198,7 +202,7 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 			for i, c := range candidates {
 				d := distance3D(c.x, c.y, c.z, lx, ly, lz)
 				if best == -1 {
-					if (!isBouncingFar || d <= float64(jumpRadius)) &&
+					if (!isBouncingFar || d < float64(jumpRadius)+float64(nodeReach)+float64(c.reach)) &&
 						s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
 						best = i
 					}
@@ -213,6 +217,7 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 		}
 		result = append(result, candidates[best].guid)
 		lx, ly, lz = candidates[best].x, candidates[best].y, candidates[best].z
+		nodeReach = candidates[best].reach
 		candidates = append(candidates[:best], candidates[best+1:]...)
 	}
 	return result
@@ -231,7 +236,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
-	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool, isPlayer bool, entry, spawnLow, faction uint32, ownerGUID uint64) {
+	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool, isPlayer bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
 		if guid == 0 || guid == excludeGUID {
 			return
 		}
@@ -304,7 +309,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if maxHealth > health {
 			deficit = maxHealth - health
 		}
-		candidates = append(candidates, chainCandidate{guid: guid, x: x, y: y, z: z, deficit: deficit})
+		candidates = append(candidates, chainCandidate{guid: guid, x: x, y: y, z: z, deficit: deficit, reach: reach})
 	}
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
 	s.server.motionMu.Lock()
@@ -330,14 +335,14 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if motionOwner == 0 {
 			motionOwner = motion.CharmOwnerGUID
 		}
-		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction), false, motion.Entry, 0, motion.Faction, motionOwner)
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction), false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
 			continue
 		}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, targetSession.playerAlliance() == s.playerAlliance(), true, 0, 0, 0, 0)
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, targetSession.playerAlliance() == s.playerAlliance(), true, 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
 	s.server.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
@@ -352,7 +357,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						st := s.server.loadCreatureStats(ctx, uint32(entry))
-						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)), false, uint32(entry), uint32(low), uint32(faction), 0)
+						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)), false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}
 				}
 			}

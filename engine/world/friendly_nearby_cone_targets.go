@@ -122,9 +122,13 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 		} else if !s.server.isAttackableFaction(c.faction, player) {
 			return
 		}
-		dist := distance3D(c.x, c.y, c.z, s.player.X, s.player.Y, s.player.Z)
 		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8394): strict
-		// less-than, shrinking to the nearest match.
+		// less-than, shrinking to the nearest match. GetDistance (Object.cpp:1175)
+		// subtracts the candidate's combat reach and floors at 0.
+		dist := float64(distance3D(c.x, c.y, c.z, s.player.X, s.player.Y, s.player.Z)) - float64(c.reach)
+		if dist < 0 {
+			dist = 0
+		}
 		if dist < bestDist {
 			bestDist = dist
 			bestGUID = c.guid
@@ -193,8 +197,9 @@ type friendlyCandidate struct {
 	alliance   bool   // players: same alliance as the caster
 	class      uint8  // players only; 0 = unknown (creatures)
 	isPlayer   bool
-	ownerGUID  uint64 // creatures: charmer/owner resolution (Unit.cpp:12126)
-	entry      uint32 // creatures: template entry (0 for players)
+	ownerGUID  uint64  // creatures: charmer/owner resolution (Unit.cpp:12126)
+	entry      uint32  // creatures: template entry (0 for players)
+	reach      float32 // combat reach: GetDistance(Position) minus this, floored 0
 }
 
 // friendlyScanCandidates visits every plausible unit once: motion creatures,
@@ -230,7 +235,8 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 		}
 		visit(friendlyCandidate{guid: motion.GUID, mapID: motion.Map, instanceID: motion.InstanceID,
 			x: motion.X, y: motion.Y, z: motion.Z, unitFlags: motion.UnitFlags, flagsExtra: motion.FlagsExtra,
-			health: motion.Health, faction: motion.Faction, ownerGUID: owner, entry: motion.Entry})
+			health: motion.Health, faction: motion.Faction, ownerGUID: owner, entry: motion.Entry,
+			reach: motion.CombatReach})
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
@@ -240,25 +246,27 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 		p := targetSession.player
 		visit(friendlyCandidate{guid: targetSession.playerGUID, mapID: p.Map, instanceID: p.InstanceID,
 			x: p.X, y: p.Y, z: p.Z, unitFlags: p.UnitFlags, health: p.Health,
-			alliance: targetSession.playerAlliance() == s.playerAlliance(), class: p.Class, isPlayer: true})
+			alliance: targetSession.playerAlliance() == s.playerAlliance(), class: p.Class, isPlayer: true,
+			reach: p.CombatReach})
 	}
 	s.server.sessionsMu.RUnlock()
 	if playersOnly {
 		return
 	}
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, mapID, float64(cx-radius), float64(cx+radius), float64(cy-radius), float64(cy+radius))
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth, COALESCE(cmi.CombatReach, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id LEFT JOIN creature_model_info cmi ON t.modelid1 = cmi.DisplayID WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, mapID, float64(cx-radius), float64(cx+radius), float64(cy-radius), float64(cy+radius))
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
 				var low, entry, rowMap, faction, unitFlags, flagsExtra, health int64
-				var x, y, z float64
-				if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) == nil {
+				var x, y, z, reach float64
+				if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health, &reach) == nil {
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						visit(friendlyCandidate{guid: guid, mapID: uint32(rowMap), instanceID: instanceID,
 							x: float32(x), y: float32(y), z: float32(z), unitFlags: uint32(unitFlags),
-							flagsExtra: uint32(flagsExtra), health: uint32(health), faction: uint32(faction), entry: uint32(entry)})
+							flagsExtra: uint32(flagsExtra), health: uint32(health), faction: uint32(faction), entry: uint32(entry),
+							reach: float32(reach)})
 					}
 				}
 			}
@@ -466,9 +474,13 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 		if !((wantAlly) || (wantParty && scope.inParty(c)) || (wantRaid && scope.inRaid(c))) {
 			return
 		}
-		dist := distance3D(c.x, c.y, c.z, s.player.X, s.player.Y, s.player.Z)
 		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8394): strict less-than,
-		// shrinking to the nearest match.
+		// shrinking to the nearest match. GetDistance (Object.cpp:1175)
+		// subtracts the candidate's combat reach and floors at 0.
+		dist := float64(distance3D(c.x, c.y, c.z, s.player.X, s.player.Y, s.player.Z)) - float64(c.reach)
+		if dist < 0 {
+			dist = 0
+		}
 		if dist < bestDist {
 			bestDist = dist
 			bestGUID = c.guid

@@ -136,7 +136,7 @@ func resolveTargetDestPosition(store *wotlk.Store, target uint32, radiusIndex ui
 // is the current destination, and there is no combat-reach floor. Collision
 // degrades to a plain offset, z is kept. changed reports whether the
 // destination was modified.
-func resolveDestDestPosition(store *wotlk.Store, target uint32, radiusIndex uint32, level uint32, dx, dy, dz, cOrientation float32) (float32, float32, float32, bool) {
+func resolveDestDestPosition(store *wotlk.Store, target uint32, radiusIndex uint32, level uint32, dx, dy, dz, cOrientation float32, modRadius func(float32) float32) (float32, float32, float32, bool) {
 	switch target {
 	case implicitTargetDestDynobjEnemy, implicitTargetDestDynobjAlly,
 		implicitTargetDestDest, implicitTargetDestDynobjNone:
@@ -147,6 +147,11 @@ func resolveDestDestPosition(store *wotlk.Store, target uint32, radiusIndex uint
 		if value, ok, err := store.SpellRadius(radiusIndex, level); err == nil && ok {
 			radius = value
 		}
+	}
+	// SpellInfo.cpp:560-563: CalcRadius folds SPELLMOD_RADIUS through the
+	// caster's spell-mod owner after the per-level/max clamp.
+	if modRadius != nil {
+		radius = modRadius(radius)
 	}
 	dist := radius
 	if target == implicitTargetDestDestRandom {
@@ -248,7 +253,13 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				if combatReach <= 0 {
 					combatReach = 1.5
 				}
-				x, y, z = resolveCasterDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach)
+				// SpellInfo.cpp:551-574: CalcRadius(m_caster) folds SPELLMOD_RADIUS
+				// through the player's spell-mod owner; resolveTargetDestPosition
+				// stays unfolded (C++ passes nullptr).
+				modRadius := func(r float32) float32 {
+					return float32(s.applySpellModFloat(spell, spellModRadius, float64(r)))
+				}
+				x, y, z = resolveCasterDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach, modRadius)
 			case targetType == implicitTargetDestCasterFishing:
 				// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1359-1389):
 				// TARGET_DEST_CASTER_FISHING (39) — the bobber point resolves
@@ -265,7 +276,12 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				}
 				x, y, z = resolveTargetDestPosition(s.server.Data, targetType, eff.RadiusIndex, unitTarget.X, unitTarget.Y, unitTarget.Z, unitTarget.Orientation)
 			case isDestDestTarget(targetType):
-				nx, ny, nz, changed := resolveDestDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), x, y, z, s.player.Orientation)
+				// SpellInfo.cpp:551-574: CalcRadius(m_caster) folds SPELLMOD_RADIUS
+				// through the player's spell-mod owner.
+				modRadius := func(r float32) float32 {
+					return float32(s.applySpellModFloat(spell, spellModRadius, float64(r)))
+				}
+				nx, ny, nz, changed := resolveDestDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), x, y, z, s.player.Orientation, modRadius)
 				if changed {
 					x, y, z = nx, ny, nz
 				}

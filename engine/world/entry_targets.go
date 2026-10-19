@@ -186,9 +186,13 @@ func (s *session) spellEntryNearbyTarget(ctx context.Context, spell wotlk.Spell,
 		if !implicitEntryConditionsMet(condRows, c.isPlayer, c.entry, spawnLow) {
 			return
 		}
-		dist := distance3D(c.x, c.y, c.z, s.player.X, s.player.Y, s.player.Z)
 		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8388): strict
-		// less-than, shrinking to the nearest match.
+		// less-than, shrinking to the nearest match. GetDistance (Object.cpp:1175)
+		// subtracts the candidate's combat reach and floors at 0.
+		dist := float64(distance3D(c.x, c.y, c.z, s.player.X, s.player.Y, s.player.Z)) - float64(c.reach)
+		if dist < 0 {
+			dist = 0
+		}
 		if dist < bestDist {
 			bestDist = dist
 			bestGUID = c.guid

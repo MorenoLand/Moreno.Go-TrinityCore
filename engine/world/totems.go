@@ -344,7 +344,11 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 				if combatReach <= 0 {
 					combatReach = 1.5
 				}
-				totemX, totemY, totemZ = resolveCasterDestPosition(s.server.Data, targetType, radiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach)
+				totemX, totemY, totemZ = resolveCasterDestPosition(s.server.Data, targetType, radiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach, func(r float32) float32 {
+					// SpellInfo.cpp:551-574: CalcRadius(m_caster) folds SPELLMOD_RADIUS
+					// through the player's spell-mod owner.
+					return float32(s.applySpellModFloat(spell, spellModRadius, float64(r)))
+				})
 			}
 		}
 	}

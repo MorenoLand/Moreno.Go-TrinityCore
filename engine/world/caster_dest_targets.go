@@ -76,7 +76,7 @@ func casterDestDirectionAngle(target uint32) float32 {
 // WorldObject::MovePosition, Object.cpp:3340). Go has no collision or map
 // height queries, so MovePositionToFirstCollision degrades to a plain
 // offset and z is kept.
-func resolveCasterDestPosition(store *wotlk.Store, target uint32, radiusIndex uint32, level uint32, x, y, z, orientation, combatReach float32) (float32, float32, float32) {
+func resolveCasterDestPosition(store *wotlk.Store, target uint32, radiusIndex uint32, level uint32, x, y, z, orientation, combatReach float32, modRadius func(float32) float32) (float32, float32, float32) {
 	if target == implicitTargetDestCaster {
 		return x, y, z
 	}
@@ -91,6 +91,11 @@ func resolveCasterDestPosition(store *wotlk.Store, target uint32, radiusIndex ui
 			radius = value
 			hasRadius = radiusIndex != 0
 		}
+	}
+	// SpellInfo.cpp:560-563: CalcRadius folds SPELLMOD_RADIUS through the
+	// caster's spell-mod owner after the per-level/max clamp.
+	if modRadius != nil {
+		radius = modRadius(radius)
 	}
 	angle := casterDestDirectionAngle(target)
 	dist := radius
@@ -114,9 +119,10 @@ func resolveCasterDestPosition(store *wotlk.Store, target uint32, radiusIndex ui
 			dist = defaultTotemDistance
 		}
 	}
-	// Spell.cpp:1419-1420: the combat-reach floor applies to every target
-	// in the default branch, including FRONT_LEAP.
-	if dist < combatReach {
+	// Spell.cpp:1373-1382 vs 1419-1420: the combat-reach floor lives in the
+	// default: branch only — the FRONT_LEAP (55) case resolves dist from
+	// CalcRadius alone.
+	if target != implicitTargetDestCasterFrontLeap && dist < combatReach {
 		dist = combatReach
 	}
 	angle += orientation

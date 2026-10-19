@@ -80,7 +80,10 @@ func (s *Server) resolveCreatureSpellDestination(m *creatureMotion, spell wotlk.
 		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			switch {
 			case isCasterDestTarget(targetType):
-				x, y, z = resolveCasterDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, m.X, m.Y, m.Z, m.Orientation, combatReach)
+				// nil modRadius: CalcRadius's SPELLMOD_RADIUS fold goes through
+				// GetSpellModOwner(), which is null for creature casters
+				// (SpellInfo.cpp:560-563).
+				x, y, z = resolveCasterDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, m.X, m.Y, m.Z, m.Orientation, combatReach, nil)
 			case isTargetDestTarget(targetType):
 				// C++ asserts a non-null object target here
 				// (Spell.cpp:1434); without a resolvable unit target Go
@@ -91,7 +94,7 @@ func (s *Server) resolveCreatureSpellDestination(m *creatureMotion, spell wotlk.
 				}
 				x, y, z = resolveTargetDestPosition(s.Data, targetType, eff.RadiusIndex, unitX, unitY, unitZ, unitO)
 			case isDestDestTarget(targetType):
-				if nx, ny, nz, changed := resolveDestDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, x, y, z, m.Orientation); changed {
+				if nx, ny, nz, changed := resolveDestDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, x, y, z, m.Orientation, nil); changed {
 					x, y, z = nx, ny, nz
 				}
 			}
