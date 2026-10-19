@@ -357,20 +357,26 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		args = append(args, code)
 	}
 	if s.server.Features != nil && s.server.Features.Scripts != nil {
-		// HandleGossipSelectOptionOpcode (MiscHandler.cpp:175-204): a Lua
-		// false return from OnGossipSelect[Code] (Eluna's
-		// CallAllFunctionsBool, LuaEngine/HookHelpers.h:92 — any handler
-		// returning false flips the result) vetoes the AI and native
-		// arms, exactly like luaCancelled honors for the gameobject arm in
-		// gameobject_hooks.go. The menu was already cleared (s.gossip = nil
+		// HandleGossipSelectOptionOpcode (MiscHandler.cpp:175-204, 209):
+		// the AI and native arms run only when the Eluna hook did NOT veto
+		// (`if (!sEluna->OnGossipSelect(...))` then AI + native arms), and
+		// the Eluna hook returns false iff a handler returned boolean
+		// false (CallAllFunctionsBool(..., true), LuaEngine/HookHelpers.h:92).
+		// So a Lua false return lets the AI and native select arms
+		// PROCEED; true/nothing vetoes them — the uniform Eluna gossip
+		// polarity, same as the creature hello hook above and the
+		// gameobject hooks. The menu was already cleared (s.gossip = nil
 		// above, matching Eluna's ClearMenus-before-hooks), so a veto
 		// returns with it cleared and sends no close packet — ClearMenus
-		// (GossipDef.cpp:185) is server-side only.
-		values, terr := s.server.Features.Scripts.Trigger(ctx, "creature_gossip:"+strconv.FormatUint(uint64(entry), 10), 2, args...)
+		// (GossipDef.cpp:185) is server-side only. (An older revision had
+		// this inverted — Lua false vetoing; corrected 2026-10-19 against
+		// the in-tree Eluna sources.)
+		hookKind := "creature_gossip:" + strconv.FormatUint(uint64(entry), 10)
+		values, terr := s.server.Features.Scripts.Trigger(ctx, hookKind, 2, args...)
 		if terr != nil {
 			s.debug("gossip selection hook failed", "account", s.accountName, "entry", entry, "error", terr)
 		}
-		if luaCancelled(values) {
+		if s.server.Features.Scripts.HasHook(hookKind, 2) && !luaCancelled(values) {
 			s.debug("gossip selection vetoed by lua", "account", s.accountName, "entry", entry, "list", listID)
 			return true
 		}
@@ -713,8 +719,11 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	// path), so capture it for the menuId gate and the no-close restore
 	// below.
 	prevGossip := s.gossip
-	// Eluna::OnGossipSelect[Code] fires before the native arms; a Lua false
-	// return skips them (MiscHandler.cpp:198-204).
+	// Eluna::OnGossipSelect[Code] fires before the native arms; a true
+	// hook return (no handler returned false) skips them
+	// (MiscHandler.cpp:198-204, 225) — i.e. a Lua false return lets the
+	// native arms proceed (Eluna polarity; see
+	// fireGameObjectGossipSelectHook).
 	if s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code) {
 		return true
 	}

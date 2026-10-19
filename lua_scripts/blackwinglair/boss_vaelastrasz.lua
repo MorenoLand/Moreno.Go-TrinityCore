@@ -250,6 +250,10 @@ local function onGossipSelect(event, player, creature, sender, action)
         creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
         armSpeech(creature, creature:GetGUID())
     end
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 local function onEnterCombat(event, creature, target)

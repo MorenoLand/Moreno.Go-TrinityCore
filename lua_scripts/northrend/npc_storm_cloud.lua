@@ -197,6 +197,10 @@ local function finklesteinGossipSelect(event, player, creature, sender, action)
     finklesteinSchedule(guid, "easy123", 100, function()
         finklesteinEasy123(creature, player)
     end)
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 local function finklesteinCancel(event, creature)

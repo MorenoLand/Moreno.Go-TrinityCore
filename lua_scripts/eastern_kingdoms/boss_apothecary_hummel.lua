@@ -255,6 +255,10 @@ local function onGossipSelect(event, player, creature, sender, action)
         player:GossipComplete()
         startEvent(creature)
     end
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 local function onQuestReward(event, player, creature, quest)

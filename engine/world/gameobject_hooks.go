@@ -132,23 +132,31 @@ func (s *session) fireGameObjectQuestHook(ctx context.Context, giverGUID uint64,
 
 // fireGameObjectGossipHelloHook dispatches GOSSIP_EVENT_ON_HELLO (1) for the
 // gameobject_gossip bindings as (event, player, go), mirroring
-// Eluna::OnGossipHello(Player*, GameObject*) (GossipHooks.cpp:32), which
-// fires at the head of GameObject::Use (GameObject.cpp:1502) and skips the
-// native use arms when a handler returns false. The caller passes the C++
-// argument order without the leading event — TriggerGameObjectGossipEvent
-// prepends it, like TriggerItemGossipEvent. The pending gossip menu is
-// cleared first, but only when a handler is actually registered: C++'s
-// ClearMenus() sits behind START_HOOK_WITH_RETVAL's early return for
-// unbound entries. Returns true when a handler returned false, following the
-// engine's luaCancelled convention, same as fireItemGossipHelloHook.
+// Eluna::OnGossipHello(Player*, GameObject*) (GossipHooks.cpp:27-34), which
+// fires at the head of GameObject::Use (GameObject.cpp:1500-1503):
+// `if (sEluna->OnGossipHello(playerUser, this)) return;`. Eluna returns
+// CallAllFunctionsBool(..., true) (HookHelpers.h:92-117): false iff at
+// least one handler returned boolean false, true otherwise. So a Lua
+// handler returning false lets the native use arms PROCEED; returning true
+// or nothing suppresses them (handled). The caller passes the C++ argument
+// order without the leading event — TriggerGameObjectGossipEvent prepends
+// it, like TriggerItemGossipEvent. The pending gossip menu is cleared first,
+// but only when a handler is actually registered: C++'s ClearMenus() sits
+// behind START_HOOK_WITH_RETVAL's early return for unbound entries.
+// Returns true (skip native use) when a hook is registered and no handler
+// returned false — the uniform Eluna gossip polarity, same as the creature
+// hello hook in gossip.go. (An older revision had this inverted — Lua false
+// suppressing native — and mis-cited GossipHooks.cpp:32; corrected
+// 2026-10-19 against the in-tree Eluna sources.)
 //
 // gameobject_gossip ON_SELECT (2) is WIRED, not a no-bridge:
 // fireGameObjectGossipSelectHook below fires from the guid.IsGameObject()
 // arm of the select handler (gossip.go:718, MiscHandler.cpp:138-198), and GO
 // gossip menus do open in Go (gameobjects.go:530-550 goober arm via
-// prepareGameObjectGossip + sendGossipMenu). A Lua false return cancels the
-// native select arms. (An older revision of this comment claimed the arm
-// unreachable; corrected 2026-10-19.)
+// prepareGameObjectGossip + sendGossipMenu). Polarity is Eluna's: a Lua
+// false return lets the native select arms proceed; true/nothing vetoes
+// them (see fireGameObjectGossipSelectHook). (An older revision of this
+// comment claimed the arm unreachable; corrected 2026-10-19.)
 //
 // Documented no-bridge (player_gossip family): ON_HELLO does not exist in
 // Eluna — GossipHooks.cpp has no player hello arm and Hooks.h:327 documents
@@ -181,14 +189,21 @@ func (s *session) fireGameObjectGossipHelloHook(ctx context.Context, guid uint64
 	if err != nil {
 		s.debug("lua gameobject gossip hello failed", "entry", entry, "error", err)
 	}
-	return luaCancelled(values)
+	return !luaCancelled(values)
 }
 
 // fireGameObjectGossipSelectHook mirrors Eluna::OnGossipSelect[Code]
-// (LuaEngine/GossipHooks.cpp:42-61): ClearMenus, then (player, go, sender,
+// (LuaEngine/GossipHooks.cpp:36-61): ClearMenus, then (player, go, sender,
 // action[, code]) on the GOSSIP_EVENT_ON_SELECT bindings keyed by GO entry.
-// A Lua false return cancels the native select arms, like the C++ early
-// return in HandleGossipSelectOptionOpcode (MiscHandler.cpp:198-204).
+// HandleGossipSelectOptionOpcode runs the native arms only when the Eluna
+// hook did NOT veto (MiscHandler.cpp:198-204, 225:
+// `if (!sEluna->OnGossipSelect[Code](...))` then AI + native arms), and the
+// Eluna hook returns false iff a handler returned boolean false
+// (CallAllFunctionsBool(..., true), HookHelpers.h:92-117). So a Lua false
+// return lets the native select arms PROCEED; true/nothing vetoes them.
+// Returns true (skip native) when a hook is registered and no handler
+// returned false. (An older revision had this inverted; corrected
+// 2026-10-19 against the in-tree Eluna sources.)
 func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint64, sender, action uint32, code string) bool {
 	if s == nil || s.server == nil || uint16(guid>>48) != 0xF110 {
 		return false
@@ -218,5 +233,5 @@ func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint6
 	if err != nil {
 		s.debug("lua gameobject gossip select failed", "entry", entry, "error", err)
 	}
-	return luaCancelled(values)
+	return !luaCancelled(values)
 }

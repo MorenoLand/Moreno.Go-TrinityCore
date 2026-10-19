@@ -280,6 +280,10 @@ local function onNefariusGossipSelect(event, player, creature, sender, action)
         creature:Talk(SAY_GAMESBEGIN_1)
         beginEvent(creature, creature:GetGUID())
     end
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 local function onNefariusReset(event, creature)

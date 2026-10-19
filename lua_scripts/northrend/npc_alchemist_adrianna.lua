@@ -23,6 +23,10 @@ local function adriannaGossipHello(event, player, creature)
         and player:HasAura(SPELL_GREEN_BLIGHT_RESIDUE) then
         creature:CastSpell(creature, SPELL_HARVEST_BLIGHT_SPECIMEN)
     end
+    -- C++ npc_alchemist_adrianna::OnGossipHello returns false (no menu
+    -- sent; the default menu proceeds). Eluna GOSSIP_EVENT_ON_HELLO:
+    -- a Lua false lets the default menu proceed.
+    return false
 end
 
 RegisterCreatureGossipEvent(ENTRY_ALCHEMIST_ADRIANNA, 1, adriannaGossipHello)

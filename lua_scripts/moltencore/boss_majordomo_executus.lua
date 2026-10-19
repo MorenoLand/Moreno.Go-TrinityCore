@@ -225,7 +225,7 @@ local function majordomoGossipSelect(event, player, creature, sender, action)
     -- C++ OnGossipSelect requires the challenge option (gossipListId 0);
     -- any other option does nothing.
     if action ~= 0 then
-        return
+        return false
     end
     player:GossipClearMenu()
     player:GossipComplete()
@@ -234,6 +234,10 @@ local function majordomoGossipSelect(event, player, creature, sender, action)
     schedule(guid, "outro3", 24000, function()
         creature:Talk(SAY_ARRIVAL2_MAJ)
     end)
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 RegisterCreatureEvent(ENTRY_MAJORDOMO_EXECUTUS, 1, majordomoEnterCombat)

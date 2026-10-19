@@ -747,8 +747,10 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	// Eluna GOSSIP_EVENT_ON_HELLO (1) for the gameobject_gossip bindings,
 	// fired at the head of GameObject::Use (GameObject.cpp:1502) after the
 	// interact gates (HandleGameObjectUseOpcode, SpellHandler.cpp:300) and
-	// before the type arms: a Lua false return skips the native arms, like
-	// the C++ early return.
+	// before the type arms: a true hook return (no handler returned
+	// false) skips the native arms, like the C++ early return — i.e. a
+	// Lua false return lets the native arms proceed (Eluna polarity;
+	// see fireGameObjectGossipHelloHook).
 	if s.fireGameObjectGossipHelloHook(ctx, guid) {
 		return true
 	}

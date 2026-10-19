@@ -86,6 +86,10 @@ local function rizzleGossipSelect(event, player, creature, sender, action)
             end, RIZZLE_DESPAWN_DELAY_MS)
         end
     end
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 RegisterCreatureGossipEvent(ENTRY_RIZZLE, 1, rizzleGossipHello)

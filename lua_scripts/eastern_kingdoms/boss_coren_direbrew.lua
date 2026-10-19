@@ -168,7 +168,7 @@ end
 
 local function onGossipSelect(event, player, creature, sender, action)
     if sender ~= GOSSIP_SENDER_MAIN then
-        return
+        return false
     end
     if action == GOSSIP_ACTION_INFO_DEF + 1 then
         player:GossipClearMenu()
@@ -184,6 +184,10 @@ local function onGossipSelect(event, player, creature, sender, action)
         player:GossipComplete()
         -- C++ GOSSIP_OPTION_APOLOGIZE: CloseGossipMenuFor — C++-exact.
     end
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 RegisterCreatureEvent(ENTRY_COREN, 1, onEnterCombat)

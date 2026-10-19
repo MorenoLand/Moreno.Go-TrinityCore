@@ -226,12 +226,18 @@ end
 -- ported below) + me->PlayDirectSound(SOUND_SCREECH, 0) +
 -- player->SummonCreature(NPC_KIRTONOS, PosSummon[0],
 -- TEMPSUMMON_DEAD_DESPAWN, 15min) (no summon bridge — skipped).
--- C++ returns true (handled: native GO use suppressed) == Lua false
--- (engine/world/gameobject_hooks.go:134-143, luaCancelled convention).
+-- C++ returns true (handled: native GO use suppressed) == Lua true
+-- (Eluna GOSSIP_EVENT_ON_HELLO: only a Lua false lets native use
+-- proceed; see engine/world/gameobject_hooks.go).
 local function onBrazierGossip(_, player, go)
     go:UseDoorOrButton()
     go:PlayDirectSound(SOUND_SCREECH)
-    return false
+    -- C++ go_brazier_of_the_herald::OnGossipHello returns true (handled:
+    -- native GO use suppressed). Eluna GOSSIP_EVENT_ON_HELLO polarity
+    -- (in-tree GossipHooks.cpp:27-34, GameObject.cpp:1500-1503): a Lua
+    -- handler returning false lets native use PROCEED, so handled ==
+    -- return true here. (A 2026-10-19 edit briefly had this inverted.)
+    return true
 end
 
 RegisterCreatureEvent(ENTRY_KIRTONOS, 1, onEnterCombat)

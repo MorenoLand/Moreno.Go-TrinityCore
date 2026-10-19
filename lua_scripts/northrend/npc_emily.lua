@@ -124,6 +124,10 @@ local SPELL_SUMMON_ASHWOOD_BRAND = 62554
 -- nothing (exact). Non-triggered DoCast, matching UnitAI::DoCast.
 local function lakeFrogGossipSelect(event, player, creature, sender, action)
     creature:CastSpell(player, SPELL_SUMMON_ASHWOOD_BRAND)
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 RegisterCreatureGossipEvent(NPC_LAKE_FROG, 2, lakeFrogGossipSelect)

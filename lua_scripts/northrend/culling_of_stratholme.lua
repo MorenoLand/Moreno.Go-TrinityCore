@@ -26,6 +26,10 @@ local function chromieGossipSelect(event, player, creature, sender, action)
         player:GossipComplete()
         creature:CastSpell(player, SPELL_TELEPORT_PLAYER)
     end
+    -- C++ OnGossipSelect returns false: the AI/native select arms
+    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
+    -- proceed; true/nothing would veto them).
+    return false
 end
 
 RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
