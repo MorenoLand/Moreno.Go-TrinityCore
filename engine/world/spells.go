@@ -8984,6 +8984,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	hitTargets := make([]uint64, 0, 1)
+	// Per-effect friendly-area selection for the mixed class: a harmful spell
+	// whose effects include a friendly-area target (Holy Nova 15237,
+	// Divine Storm 53385). C++ selects each effect's list separately
+	// (Spell.cpp:1227), so the heal-family arms below iterate this list
+	// instead of the merged enemy list. Nil unless the mixed class fires.
+	var friendlyEffectTargets []uint64
 	// The explicit unit target arrives resolved: handleCastSpell ran
 	// resolveExplicitUnitTarget at the CheckCast gauntlet (Spell.cpp:5353-5367),
 	// mirroring how C++ fills m_targets via Spell::InitExplicitTargets
@@ -9103,6 +9109,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	friendlyListSpell := friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell || entryAreaSpell || goAreaSpell || goConeSpell
 	if areaSpell {
 		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
+		// C++ SelectImplicitAreaTargets runs per effect (Spell.cpp:1227-1309)
+		// with each effect's own check type (ENEMY vs ALLY/PARTY/RAID), so the
+		// friendly-area effect of a harmful spell selects allies — not the
+		// merged enemy list the heal arms would otherwise iterate.
+		if hasFriendlyAreaEffect(spell) {
+			friendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, target)
+			if friendlyEffectTargets == nil {
+				friendlyEffectTargets = []uint64{}
+			}
+		}
 	} else if friendlyAreaSpell {
 		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): friendly
 		// PARTY/ALLY/RAID area targets (20/30/31/33/34/56) replace the
@@ -10670,7 +10686,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// scaling rides executeSpellHealDoneBonus post-Taken, not the
 				// pre-bonus base here.
 				chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779): a heal effect
+				// with a friendly-area target heals its own ally selection,
+				// not the merged enemy list.
+				healList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					healList = friendlyEffectTargets
+				}
+				for _, effectTarget := range healList {
 					targetHeal := heal
 					if eff.Effect == spellEffectHealPct {
 						// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
@@ -10727,7 +10750,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					break
 				}
 				mechHeal := uint32(mechValue)
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779): same split as
+				// the heal arm above.
+				healList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					healList = friendlyEffectTargets
+				}
+				for _, effectTarget := range healList {
 					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
 						continue
 					}

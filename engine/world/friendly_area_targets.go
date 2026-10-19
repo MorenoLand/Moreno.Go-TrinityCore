@@ -43,6 +43,16 @@ func isFriendlyAreaSpell(spell wotlk.Spell) bool {
 	if isHarmfulSpell(spell) {
 		return false
 	}
+	return hasFriendlyAreaEffect(spell)
+}
+
+// hasFriendlyAreaEffect reports whether any active effect of the spell uses a
+// friendly-area implicit target (20/30/31/33/34/56). Unlike
+// isFriendlyAreaSpell it does not exclude harmful spells: C++ selects targets
+// per effect (Spell::SelectImplicitAreaTargets, Spell.cpp:1227), so the
+// friendly-area effect of a harmful spell (Holy Nova 15237, Divine Storm
+// 53385) has its own ally list while the spell's other effects sweep enemies.
+func hasFriendlyAreaEffect(spell wotlk.Spell) bool {
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -106,7 +116,20 @@ func (s *session) friendlyGroupSnapshot() (subGroup uint8, party, raid map[uint6
 // MaxTargets cap mirrors the enemy-area path (Spell.cpp:1293:
 // MOD_MAX_AFFECTED_TARGETS aura modifier + RandomResize).
 func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) []uint64 {
-	if s == nil || s.player == nil || s.server == nil || !isFriendlyAreaSpell(spell) || s.server.Data == nil {
+	if !isFriendlyAreaSpell(spell) {
+		return nil
+	}
+	return s.spellFriendlyAreaTargetsUnchecked(ctx, spell, target)
+}
+
+// spellFriendlyAreaTargetsUnchecked runs the friendly-area selection without
+// the isFriendlyAreaSpell gate. C++ resolves each effect's target list
+// separately (Spell::SelectSpellTargets, Spell.cpp:758-779), so a harmful
+// spell can carry a friendly-area effect — Holy Nova 15237 (enemy-area damage
+// + party-area heal), Divine Storm 53385 — and that effect needs its own ally
+// selection even though the spell as a whole sweeps enemies.
+func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) []uint64 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return nil
 	}
 	radius := float32(0)
