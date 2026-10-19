@@ -273,10 +273,11 @@ end
 -- C++ npc_anub_ar_crusher::DamageTaken (boss_hadronox.cpp:533-540):
 -- if (!_hadFrenzy && me->HealthBelowPctDamaged(25, damage)): latch,
 -- Talk(CRUSHER_EMOTE_FRENZY 2), DoCastSelf(SPELL_FRENZY 53801). The
--- HealthBelowPctDamaged check is a pre-damage comparison ((health -
--- damage) < 0.25 * maxHealth) and fires on lethal hits — no
--- postDamage guard. The C++ latch resets only in the AI ctor, so the
--- Lua mirror wipes the GUID entry on death (fresh latch on respawn).
+-- HealthBelowPctDamaged check is a pre-damage integer comparison
+-- ((health - damage) < floor(maxHealth*25/100), Unit.h:873) and fires
+-- on lethal hits — no postDamage guard. The C++ latch resets only in
+-- the AI ctor, so the Lua mirror wipes the GUID entry on death (fresh
+-- latch on respawn).
 local crusherFrenzy = {}
 
 local function crusherDamageTaken(event, creature, attacker, damage)
@@ -286,7 +287,7 @@ local function crusherDamageTaken(event, creature, attacker, damage)
     end
     local health = creature:GetHealth()
     local maxHealth = creature:GetMaxHealth()
-    if maxHealth ~= 0 and (health - damage) < 0.25 * maxHealth then
+    if maxHealth ~= 0 and (health - damage) < math.floor(maxHealth * 25 / 100) then
         crusherFrenzy[guid] = true
         creature:Talk(CRUSHER_EMOTE_FRENZY)
         creature:CastSpell(creature, SPELL_CRUSHER_FRENZY)
