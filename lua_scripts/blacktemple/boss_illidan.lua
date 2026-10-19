@@ -394,8 +394,10 @@ end
 
 -- Forward declarations: armPhase1's timer closures reference
 -- onFlameCrash/onDrawSoul/onShear/onParasitic textually before their
--- local definitions; without these the names compile to globals and
--- the phase-1 event streams call nil.
+-- definitions; without these the names compile to globals and the
+-- phase-1 event streams call nil. The bodies below must use plain
+-- assignment (onX = function), never re-`local function`, or the
+-- forward slot stays nil and the timers die on arrival.
 local onFlameCrash
 local onDrawSoul
 local onShear
@@ -454,7 +456,7 @@ local function onTaunt(creature, guid)
 end
 
 -- C++ EVENT_FLAME_CRASH: non-triggered DoCastVictim; repeat 30s.
-local function onFlameCrash(creature, guid)
+onFlameCrash = function(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FLAME_CRASH, false)
@@ -466,7 +468,7 @@ end
 
 -- C++ EVENT_DRAW_SOUL: non-triggered DoCastAOE (caster's own
 -- position — self-targeted bridge); repeat 34s.
-local function onDrawSoul(creature, guid)
+onDrawSoul = function(creature, guid)
     creature:CastSpell(creature, SPELL_DRAW_SOUL, false)
     schedule(guid, "drawSoul", 34000, function()
         onDrawSoul(creature, guid)
@@ -474,7 +476,7 @@ local function onDrawSoul(creature, guid)
 end
 
 -- C++ EVENT_SHEAR: non-triggered DoCastVictim; repeat 12s.
-local function onShear(creature, guid)
+onShear = function(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHEAR, false)
@@ -486,7 +488,7 @@ end
 
 -- C++ EVENT_PARASITIC_SHADOWFIEND: non-triggered 41917 on a
 -- random target; repeat 30s.
-local function onParasitic(creature, guid)
+onParasitic = function(creature, guid)
     local target = randomAnyTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_PARASITIC_SHADOWFIEND, false)
@@ -610,7 +612,7 @@ end
 -- schedule, triggered self-cast 40511, demon text 2s, demon
 -- spells 15s, cancel-demon 72s (the root/equipment arms have no
 -- bridges).
-local function onDemon(creature, guid)
+onDemon = function(creature, guid)
     local state = getIllidanState(guid)
     state.isDemon = true
     cancelPhaseSchedule(guid)
@@ -673,7 +675,7 @@ end
 -- and the MovementInform->ScheduleEvents arms have no movement
 -- bridge — the chain keeps the timers, the positions are
 -- unmodeled).
-local function onPillar(creature, guid)
+onPillar = function(creature, guid)
     local state = getIllidanState(guid)
     for _, key in ipairs({ "fireball", "eyeBlast",
             "darkBarrage" }) do
