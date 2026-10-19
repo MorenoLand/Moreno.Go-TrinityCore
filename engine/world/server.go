@@ -2450,7 +2450,11 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK):
-			if state.authed && state.player != nil && state.farTeleportPending && !state.completeWorldPort(ctx) {
+			// WorldSocket::ReadDataHandler (WorldSocket.cpp:378-385): every
+			// non-special opcode received before auth closes the connection
+			// (the MSG_MOVE_WORLDPORT_ACK special-casing below only applies to
+			// the queued, post-auth WorldSession dispatch).
+			if !state.authed || (state.player != nil && state.farTeleportPending && !state.completeWorldPort(ctx)) {
 				return
 			}
 		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK):
@@ -4468,6 +4472,13 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeUMSG_UPDATE_GROUP_INFO),
 			uint32(protocol.OpcodeUMSG_UPDATE_GROUP_MEMBERS),
 			uint32(protocol.OpcodeUMSG_UPDATE_GUILD):
+			// WorldSocket::ReadDataHandler (WorldSocket.cpp:378-385): before auth,
+			// every non-special client opcode (Handle_NULL-bound or client-sent
+			// server opcode alike) closes the connection — the null/server-side
+			// drop only applies to the queued, post-auth WorldSession dispatch.
+			if !state.authed {
+				return
+			}
 			// Intentionally discarded per TrinityCore Handle_NULL and the
 			// STATUS_NEVER server-opcode registrations (Handle_ServerSide):
 			// logged and dropped, never dispatched, connection left open.
