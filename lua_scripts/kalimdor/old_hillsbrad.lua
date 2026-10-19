@@ -155,9 +155,13 @@ local function onEnterCombat(event, creature, target)
     lowHp[guid] = false
     creature:Talk(SAY_TH_RANDOM_AGGRO)
     lowHpPump[guid] = CreateLuaEvent(function()
-        if not lowHp[guid] and creature:GetHealthPct() < 20 then
-            lowHp[guid] = true
-            creature:Talk(SAY_TH_RANDOM_LOW_HP)
+        if not lowHp[guid] then
+            local maxHealth = creature:GetMaxHealth()
+            if maxHealth > 0
+                    and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
+                lowHp[guid] = true
+                creature:Talk(SAY_TH_RANDOM_LOW_HP)
+            end
         end
     end, 1000, 0)
 end

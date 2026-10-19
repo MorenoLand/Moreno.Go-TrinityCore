@@ -112,7 +112,9 @@ local function bossTick(creature, guid)
     -- HealthBelowPct(100) (C++ gate); re-arm 30000 regardless
     -- (C++-exact).
     if st.stoneskin <= 1000 then
-        if creature:GetHealthPct() < 100 then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 100 / 100) then
             creature:CastSpell(creature, SPELL_TAINTED_STONESKIN_TOTEM)
         end
         st.stoneskin = 30000

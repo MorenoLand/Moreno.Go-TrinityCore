@@ -206,14 +206,18 @@ end
 -- C++ Avatar latch (:230-240): checked every UpdateAI tick — the
 -- 1s checker is the bridgeable approximation.
 local function avatarCheck(creature, guid)
-    if not avatarLatched[guid] and creature:GetHealthPct() < 25 then
-        -- The interrupt legs have no bridge (header).
-        creature:Talk(SAY_SUMMON)
-        creature:CastSpell(creature, SPELL_SUMMON_AVATAR)
-        avatarLatched[guid] = true
-        schedule(guid, "stolen_soul", {15000, 29999}, function()
-            stolenSoulTick(creature, guid)
-        end)
+    if not avatarLatched[guid] then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 25 / 100) then
+            -- The interrupt legs have no bridge (header).
+            creature:Talk(SAY_SUMMON)
+            creature:CastSpell(creature, SPELL_SUMMON_AVATAR)
+            avatarLatched[guid] = true
+            schedule(guid, "stolen_soul", {15000, 29999}, function()
+                stolenSoulTick(creature, guid)
+            end)
+        end
     end
     schedule(guid, "avatar_check", 1000, function()
         avatarCheck(creature, guid)

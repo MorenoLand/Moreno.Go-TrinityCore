@@ -127,7 +127,9 @@ end
 local function startCombatPump(creature, guid)
     local exorcism = math.random(7, 14)
     pumps[guid] = CreateLuaEvent(function()
-        if creature:GetHealthPct() < 40 then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 40 / 100) then
             creature:CastSpell(creature, SPELL_HOLY_LIGHT)
         end
         exorcism = exorcism - 1

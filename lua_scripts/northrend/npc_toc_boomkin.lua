@@ -201,11 +201,15 @@ local function onStarfire(creature, guid)
 end
 
 local function onBarkskin(creature, guid)
-    if creature:GetHealthPct() < 30 then
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth > 0
+            and creature:GetHealth() < math.floor(maxHealth * 30 / 100) then
         creature:CastSpell(creature, SPELL_BARKSKIN)
         schedule(guid, "barkskin", 60000, function() onBarkskin(creature, guid) end)
     else
-        schedule(guid, "barkskin", 5000, function() onBarkskin(creature, guid) end)
+        -- C++ else-leg: events.RescheduleEvent(EVENT_HEAL_BARKSKIN, 3s)
+        -- (boss_faction_champions.cpp:823), not 5s.
+        schedule(guid, "barkskin", 3000, function() onBarkskin(creature, guid) end)
     end
 end
 

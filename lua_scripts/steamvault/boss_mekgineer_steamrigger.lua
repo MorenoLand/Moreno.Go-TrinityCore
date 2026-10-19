@@ -183,17 +183,29 @@ local function bossTick(creature, guid)
     -- the C++ arm order; the Talk is unconditional in C++ and
     -- kept even though the mechanic summons have no summon
     -- bridge (morogrim precedent).
-    if not st.summon75 and creature:GetHealthPct() < 75 then
-        creature:Talk(SAY_MECHANICS)
-        st.summon75 = true
+    if not st.summon75 then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 75 / 100) then
+            creature:Talk(SAY_MECHANICS)
+            st.summon75 = true
+        end
     end
-    if not st.summon50 and creature:GetHealthPct() < 50 then
-        creature:Talk(SAY_MECHANICS)
-        st.summon50 = true
+    if not st.summon50 then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 50 / 100) then
+            creature:Talk(SAY_MECHANICS)
+            st.summon50 = true
+        end
     end
-    if not st.summon25 and creature:GetHealthPct() < 25 then
-        creature:Talk(SAY_MECHANICS)
-        st.summon25 = true
+    if not st.summon25 then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 25 / 100) then
+            creature:Talk(SAY_MECHANICS)
+            st.summon25 = true
+        end
     end
 end
 

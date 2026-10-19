@@ -135,9 +135,13 @@ local function bossTick(creature, guid)
     -- Frenzy 34970: once-guarded GetHealthPct() < 10 (C++
     -- HealthBelowPct(10)) — DoCast(me) non-triggered self-cast
     -- (C++-exact).
-    if not st.frenzyUsed and creature:GetHealthPct() < 10 then
-        creature:CastSpell(creature, SPELL_FRENZY)
-        st.frenzyUsed = true
+    if not st.frenzyUsed then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 10 / 100) then
+            creature:CastSpell(creature, SPELL_FRENZY)
+            st.frenzyUsed = true
+        end
     end
 end
 

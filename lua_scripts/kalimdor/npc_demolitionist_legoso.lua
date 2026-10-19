@@ -154,9 +154,12 @@ local function combatTick(creature, guid)
         st.strengthTimer = 110000 + math.random(0, 20000)
     end
 
-    -- Healing surge arm — 5s init, no DelayEvents: strict
-    -- self-health below 85% -> non-triggered DoCast(self),
-    -- re-arm 10s; else re-arm 2s (C++-exact). The escort-
+    -- Healing surge arm — 5s init, no DelayEvents: C++ compares the
+    -- FLOAT me->GetHealthPct() < 85 (zone_bloodmyst_isle.cpp:452), so
+    -- the float GetHealthPct() < 85 form is C++-exact here — NOT the
+    -- integer-threshold form (maulgar/ironaya only applies to C++
+    -- HealthBelowPct). Non-triggered DoCast(self), re-arm 10s; else
+    -- re-arm 2s (C++-exact). The escort-
     -- player arm has no escort bridge — unmodeled.
     if st.healingTimer <= 0 then
         if creature:GetHealthPct() < 85 then

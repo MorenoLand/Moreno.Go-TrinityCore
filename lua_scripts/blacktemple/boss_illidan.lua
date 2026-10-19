@@ -892,7 +892,9 @@ RegisterCreatureEvent(ENTRY_ILLIDAN, 23, illidanCleanup)
 -- re-arm 1s. Modeled on pull (the DoAction delivery has no
 -- bridge).
 local function onHealingPotion(creature, guid)
-    if creature:GetHealthPct() < 20 then
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth > 0
+            and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
         creature:CastSpell(creature, SPELL_HEALING_POTION, false)
     end
     schedule(guid, "healingPotion", 1000, function()

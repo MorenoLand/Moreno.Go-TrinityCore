@@ -176,8 +176,12 @@ local function bossTick(creature, guid)
     -- 25_PERCENT) on Dalliah's AI via the instance GUID —
     -- no cross-creature bridge, so the yell is unreachable
     -- and the latch is bookkeeping only (omor precedent).
-    if not st.dalliahTaunt and creature:GetHealthPct() < 25 then
-        st.dalliahTaunt = true
+    if not st.dalliahTaunt then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 25 / 100) then
+            st.dalliahTaunt = true
+        end
     end
 end
 

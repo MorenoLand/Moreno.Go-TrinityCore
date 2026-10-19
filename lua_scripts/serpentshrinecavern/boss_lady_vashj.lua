@@ -271,7 +271,9 @@ local function vashjTick(creature, guid)
         -- Phase 2 at <70% health, once (C++ HealthBelowPct(70) is
         -- evaluated every UpdateAI; the teleport and shield-
         -- channel summons have no bridges — unmodeled, header).
-        if creature:GetHealthPct() < 70 then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 70 / 100) then
             creature:Talk(SAY_PHASE2)
             st.phase = 2
         end

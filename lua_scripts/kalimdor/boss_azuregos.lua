@@ -140,9 +140,13 @@ local function onReflect(creature, guid)
 end
 
 local function onEnragePump(creature, guid)
-    if not enraged[guid] and creature:GetHealthPct() < 26 then
-        creature:CastSpell(creature, SPELL_ENRAGE)
-        enraged[guid] = true
+    if not enraged[guid] then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 26 / 100) then
+            creature:CastSpell(creature, SPELL_ENRAGE)
+            enraged[guid] = true
+        end
     end
     schedule(guid, "enrage", 1000, function()
         onEnragePump(creature, guid)

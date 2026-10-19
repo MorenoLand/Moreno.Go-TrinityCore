@@ -193,19 +193,22 @@ end
 
 -- C++ UpdateAI frenzy leg (:194-198): !_isFrenzy && HealthBelowPct(25)
 -- && !HasAura(SPELL_DRAINED 59820) -> Talk(SAY_ENRAGE 4), DoCast(me,
--- SPELL_FRENZY 54312, true), latch. HealthBelowPct(25) is strict-<, so
--- GetHealthPct() < 25 is C++-exact (object.go float pct, threshold 25
--- integer — equivalent; elder_nadox retraction precedent). The per-tick
+-- SPELL_FRENZY 54312, true), latch. HealthBelowPct(25) is strict-< the
+-- floored integer threshold (the old GetHealthPct() < 25 fired up to 1
+-- HP early — maulgar/ironaya precedent). The per-tick
 -- UpdateAI check rides a 1s re-armed CreateLuaEvent poll seeded on
 -- combat start, wiped on 2/4/23 (the sindragosa third-phase-check
 -- 1s convention).
 local function frenzyTick(creature, guid)
-    if not frenzyFired[guid]
-            and creature:GetHealthPct() < 25
-            and not creature:HasAura(SPELL_DRAINED) then
-        creature:Talk(SAY_ENRAGE)
-        creature:CastSpell(creature, SPELL_FRENZY, true)
-        frenzyFired[guid] = true
+    if not frenzyFired[guid] then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 25 / 100)
+                and not creature:HasAura(SPELL_DRAINED) then
+            creature:Talk(SAY_ENRAGE)
+            creature:CastSpell(creature, SPELL_FRENZY, true)
+            frenzyFired[guid] = true
+        end
     end
     if not frenzyFired[guid] then
         schedule(guid, "frenzy", 1000, function()

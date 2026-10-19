@@ -109,7 +109,9 @@ local function summonTick(creature, guid)
 end
 
 local function frenzyPump(creature, guid)
-    if creature:GetHealthPct() < 30
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth > 0
+            and creature:GetHealth() < math.floor(maxHealth * 30 / 100)
             and not creature:HasAura(SPELL_FRENZY)
             and not creature:HasAura(SPELL_FRENZY_HELPER_25) then
         creature:CastSpell(creature, SPELL_FRENZY)

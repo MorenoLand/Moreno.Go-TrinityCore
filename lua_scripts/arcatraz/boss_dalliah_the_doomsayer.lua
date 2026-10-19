@@ -196,8 +196,12 @@ local function bossTick(creature, guid)
     -- PERCENT) on Soccothrates' AI via the instance GUID —
     -- no cross-creature bridge, so the yell is unreachable
     -- and the latch is bookkeeping only (omor precedent).
-    if not st.soccothratesTaunt and creature:GetHealthPct() < 25 then
-        st.soccothratesTaunt = true
+    if not st.soccothratesTaunt then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 25 / 100) then
+            st.soccothratesTaunt = true
+        end
     end
 end
 

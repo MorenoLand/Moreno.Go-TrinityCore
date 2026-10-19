@@ -313,10 +313,14 @@ local function combatTick(creature, guid)
     -- 4 — Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
     -- flag/visibility/armor/display/scale arms have no
     -- bridges — unmodeled, see header.
-    if st.phase ~= 4 and creature:GetHealthPct() < 20 then
-        st.phase = 4
-        creature:Talk(SAY_VOIDA)
-        creature:Talk(SAY_VOIDB)
+    if st.phase ~= 4 then
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0
+                and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
+            st.phase = 4
+            creature:Talk(SAY_VOIDA)
+            creature:Talk(SAY_VOIDB)
+        end
     end
 end
 

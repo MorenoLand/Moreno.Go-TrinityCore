@@ -464,7 +464,9 @@ local function onCrokScourgeStrike(creature, guid)
 end
 
 local function onCrokDeathStrike(creature, guid)
-    if creature:GetHealthPct() < 20 then
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth > 0
+            and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
         creature:CastSpell(nil, SPELL_DEATH_STRIKE)
     end
     schedule(guid, "death", {5000, 10000},
@@ -712,7 +714,9 @@ end
 -- re-arm 500ms unconditional (outside the health-if, crok
 -- death-strike pattern).
 local function onBrandonDivineShield(creature, guid)
-    if creature:GetHealthPct() < 20 then
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth > 0
+            and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
         creature:CastSpell(creature, SPELL_DIVINE_SHIELD)
     end
     schedule(guid, "divine", 500,
