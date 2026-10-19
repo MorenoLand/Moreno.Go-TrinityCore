@@ -1778,27 +1778,6 @@ func (s *session) rehomeCharacterDoomedMails(ctx context.Context, tx *sql.Tx, gu
 	return notifyGUIDs, nil
 }
 
-// deleteCharacterReturnMails is the manual-tx entry point (CMSG_CHAR_DELETE
-// path): loads and re-homes inside the caller's transaction, drawing mail IDs
-// from the live counter and sending new-mail notifies inline — the exact
-// pre-split behavior. RunTransaction callers use loadCharacterDoomedMails +
-// rehomeCharacterDoomedMails directly so the counter draw and the notifies
-// stay outside the retried body.
-func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, guid uint64, accountID uint32) error {
-	mails, err := s.loadCharacterDoomedMails(ctx, tx, guid)
-	if err != nil {
-		return err
-	}
-	notifyGUIDs, err := s.rehomeCharacterDoomedMails(ctx, tx, guid, accountID, mails, s.server.generateMailID)
-	if err != nil {
-		return err
-	}
-	for _, notifyGUID := range notifyGUIDs {
-		s.sendMailNotify(notifyGUID)
-	}
-	return nil
-}
-
 // expireOldMails sweeps expired mails in characters DB.
 // Reference: ObjectMgr::ReturnOrDeleteOldMails (ObjectMgr.cpp:6308).
 func (s *session) expireOldMails(ctx context.Context) {

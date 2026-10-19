@@ -632,6 +632,22 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 			deleteMethod = charDeleteRemove
 		}
 	}
+	// Player::DeleteFromDB CHAR_DELETE_REMOVE (Player.cpp:4253): the mail
+	// return phase needs the doomed mails and their replacement mail IDs
+	// before the tx so the write phase stays pure database work; the UNLINK
+	// path keeps mails (Player.cpp:4537-4543) and needs neither. Notifies
+	// fire post-commit, matching the deleteAccount char-tx paths.
+	var doomedMails []doomedMail
+	var mailIDs []uint32
+	if deleteMethod != charDeleteUnlink {
+		var mailErr error
+		doomedMails, mailErr = s.loadCharacterDoomedMails(ctx, s.server.CharactersStore.DB, guid)
+		if mailErr != nil {
+			return true
+		}
+		mailIDs = s.server.reserveMailIDs(len(doomedMails))
+	}
+	var mailNotifyGUIDs []uint64
 	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return true
@@ -709,9 +725,19 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	// Player::DeleteFromDB CHAR_DELETE_REMOVE (Player.cpp:4253): the deleted
 	// character's COD mails carrying items are returned to their senders
 	// before any owned-state rows are wiped, so the re-homed items survive
-	// the item_instance-by-owner cleanup below.
-	if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
-		return true
+	// the item_instance-by-owner cleanup below. The write phase is pure
+	// database work; new-mail notifies fire post-commit only.
+	{
+		nextMailID := 0
+		notifies, mailErr := s.rehomeCharacterDoomedMails(ctx, tx, guid, accountID, doomedMails, func() uint32 {
+			id := mailIDs[nextMailID]
+			nextMailID++
+			return id
+		})
+		if mailErr != nil {
+			return true
+		}
+		mailNotifyGUIDs = notifies
 	}
 	if err := deleteCharacterOwnedState(ctx, tx, guid, s.server.Config.DeletedCharacterTicketTrace); err != nil {
 		return true
@@ -725,6 +751,9 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventCharacterDelete, uint32(guid))
 	if err := tx.Commit(); err != nil {
 		return true
+	}
+	for _, notifyGUID := range mailNotifyGUIDs {
+		s.sendMailNotify(notifyGUID)
 	}
 	s.refreshRealmCharacterCount(ctx, accountID)
 	s.releaseNpcBotOwnerCache(guid)
