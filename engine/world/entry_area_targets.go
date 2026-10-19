@@ -142,6 +142,12 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 		if dx*dx+dy*dy > radius*radius || math.Abs(float64(c.z-centerZ)) > radius {
 			return
 		}
+		// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481): area
+		// selection passes losPosition == center, so every candidate needs
+		// line of sight from the area center.
+		if !s.implicitAreaTargetLOSPasses(spell, c.x, c.y, c.z, float32(centerX), float32(centerY), float32(centerZ)) {
+			return
+		}
 		spawnLow := uint32(0)
 		if !c.isPlayer {
 			spawnLow = uint32(c.guid & 0xFFFFFF)

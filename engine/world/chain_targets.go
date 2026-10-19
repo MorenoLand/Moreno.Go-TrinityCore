@@ -193,7 +193,11 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 			var maxDeficit uint32
 			for i, c := range candidates {
 				if c.deficit > maxDeficit && distance3D(c.x, c.y, c.z, lx, ly, lz) < float64(jumpRadius)+float64(nodeReach)+float64(c.reach) &&
-					s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
+					s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) &&
+					// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
+					// chain selection passes losPosition == nullptr, so every
+					// jump target also needs line of sight from the caster.
+					s.implicitUnitTargetLOSPasses(spell, c.guid, c.x, c.y, c.z) {
 					best, maxDeficit = i, c.deficit
 				}
 			}
@@ -201,13 +205,18 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 			// Spell.cpp:1966-1977: closest unit (within jump radius for bouncing chains)
 			for i, c := range candidates {
 				d := distance3D(c.x, c.y, c.z, lx, ly, lz)
+				// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
+				// chain selection passes losPosition == nullptr, so every
+				// jump target also needs line of sight from the caster.
 				if best == -1 {
 					if (!isBouncingFar || d < float64(jumpRadius)+float64(nodeReach)+float64(c.reach)) &&
-						s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
+						s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) &&
+						s.implicitUnitTargetLOSPasses(spell, c.guid, c.x, c.y, c.z) {
 						best = i
 					}
 				} else if d < distance3D(candidates[best].x, candidates[best].y, candidates[best].z, lx, ly, lz) &&
-					s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) {
+					s.server.hasLineOfSightSpellCheck(primary.Map, lx, ly, lz, c.x, c.y, c.z) &&
+					s.implicitUnitTargetLOSPasses(spell, c.guid, c.x, c.y, c.z) {
 					best = i
 				}
 			}

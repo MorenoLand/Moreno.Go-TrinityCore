@@ -1066,6 +1066,12 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	// CU_CONE_LINE has no write site in C++ (only the read at Spell.cpp:8439)
 	// and is a no-op. Otherwise the front cone at the hardcoded M_PI/2
 	// cone targets (24/54/104) below.
+	//
+	// Go merges cone and area effects into one sweep: when cone is true the
+	// CheckEffectTarget LoS anchor is the caster for every candidate (per C++
+	// the cone effects carry caster LoS while area effects carry center LoS;
+	// a spell mixing cone with a DEST-centered area type is the only case
+	// where the merged anchor differs from C++).
 	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
 	destinationCenter := false
 	// Spell.cpp:1194-1196 / 1249-1251: when an effect has no radius entry
@@ -1143,6 +1149,19 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			} else if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi/2) {
 				return
 			}
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
+			// cone selection passes losPosition == nullptr, so every cone
+			// candidate needs line of sight from the caster.
+			if !s.implicitUnitTargetLOSPasses(spell, guid, x, y, z) {
+				return
+			}
+		} else {
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+			// area selection passes losPosition == center, so every area
+			// candidate needs line of sight from the area center.
+			if !s.implicitAreaTargetLOSPasses(spell, x, y, z, centerX, centerY, centerZ) {
+				return
+			}
 		}
 		if _, ok := seen[guid]; ok {
 			return
@@ -1201,6 +1220,17 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 					continue
 				}
 			} else if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, targetSession.player.X, targetSession.player.Y, math.Pi/2) {
+				continue
+			}
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
+			// cone candidates need line of sight from the caster.
+			if !s.implicitUnitTargetLOSPasses(spell, targetSession.playerGUID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z) {
+				continue
+			}
+		} else {
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+			// area candidates need line of sight from the area center.
+			if !s.implicitAreaTargetLOSPasses(spell, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, centerX, centerY, centerZ) {
 				continue
 			}
 		}
@@ -7931,12 +7961,14 @@ func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 
 // implicitUnitTargetLOSPasses mirrors the default arm of
 // Spell::CheckEffectTarget (Spell.cpp:7395-7450) for implicit unit targets
-// added with checkIfValid=true — the nearby single-target selections
-// (SelectImplicitNearbyTargets, Spell.cpp:1130) and the caster-object arm
-// (Spell.cpp:1552): the candidate is dropped when it lacks line of sight
-// to the caster. Area (1303), cone (1217) and chain (1610) selections pass
-// checkIfValid=false, so the LOS arm does not apply there; the explicit
-// target is covered by the cast-time LOS gates (spells.go:2630/2657/6978).
+// added with losPosition == nullptr: the nearby single-target selections
+// (SelectImplicitNearbyTargets, Spell.cpp:1130), the caster-object arm
+// (Spell.cpp:1552), the cone selection (Spell.cpp:1217) and the chain-jump
+// selection (Spell.cpp:1610) all run AddUnitTarget with a null losPosition,
+// and CheckEffectTarget executes BEFORE the checkIfValid gate in
+// AddUnitTarget (Spell.cpp:2095) — so the LOS arm applies even when
+// checkIfValid is false. The candidate is dropped when it lacks line of
+// sight to the caster (the target == m_caster arm is exempt).
 // Exemptions: SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS (the DisableMgr LOS-disable
 // leg has no Go model), the caster itself (target == m_caster), and a
 // gameobject caster ignoring LOS checks (vacuous here — the Go caster is
@@ -7956,6 +7988,33 @@ func (s *session) implicitUnitTargetLOSPasses(spell wotlk.Spell, targetGUID uint
 		return true
 	}
 	return s.server.hasLineOfSightSpellCheck(s.player.Map, s.player.X, s.player.Y, s.player.Z, tx, ty, tz)
+}
+
+// implicitAreaTargetLOSPasses mirrors the default arm of
+// Spell::CheckEffectTarget (Spell.cpp:7395-7450) for implicit area
+// selection: AddUnitTarget with losPosition = center (Spell.cpp:1303).
+// Spell::CheckEffectTarget runs before the checkIfValid gate in
+// AddUnitTarget (Spell.cpp:2095), so the arm applies even though area
+// selection passes checkIfValid = false. The candidate is dropped when it
+// lacks line of sight to the area center. Exemptions: the
+// SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS gate (Spell.cpp:7415-7416; the DisableMgr
+// SPELL_DISABLE_LOS leg has no Go model, the GO-caster ignoring-LOS leg is
+// vacuous for the session-player caster, and the triggered-by-aura
+// inheritance arm has no bridge since triggeredByAuraCast carries no spell
+// id). The target == m_caster exemption belongs to the null-losPosition
+// arm only; the position-equality early-true in hasLineOfSightFlags covers
+// the self case here. Per-effect mask stripping (C++ strips only the
+// failing effects — the charm/possess arms, RESURRECT_NEW and
+// SKIN_PLAYER_CORPSE never ride the default arm) stays all-or-nothing
+// given Go's shared hit list.
+func (s *session) implicitAreaTargetLOSPasses(spell wotlk.Spell, tx, ty, tz, cx, cy, cz float32) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return true
+	}
+	if spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 {
+		return true
+	}
+	return s.server.hasLineOfSightSpellCheck(s.player.Map, cx, cy, cz, tx, ty, tz)
 }
 
 // sendSpellMiss mirrors WorldObject::SendSpellMiss (Object.cpp:2666-2677):

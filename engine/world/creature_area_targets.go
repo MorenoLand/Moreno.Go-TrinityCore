@@ -130,6 +130,20 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 			} else if !hasInArc(motion.Orientation, motion.X, motion.Y, candidate.X, candidate.Y, math.Pi/2) {
 				continue
 			}
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
+			// cone selection passes losPosition == nullptr, so every cone
+			// candidate needs line of sight from the caster (the motion),
+			// unless SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS is set.
+			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+				!s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, candidate.X, candidate.Y, candidate.Z) {
+				continue
+			}
+		} else if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+			!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, candidate.X, candidate.Y, candidate.Z) {
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+			// area selection passes losPosition == center, so every area
+			// candidate needs line of sight from the area center.
+			continue
 		}
 		seen[targetSession.playerGUID] = struct{}{}
 		cp := candidate

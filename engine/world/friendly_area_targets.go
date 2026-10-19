@@ -98,9 +98,13 @@ func (s *session) friendlyGroupSnapshot() (subGroup uint8, party, raid map[uint6
 // (Unit.cpp:12126): self, same-subgroup group members, or creatures owned by
 // them (charmer/owner resolution). TARGET_CHECK_RAID requires
 // Unit::IsInRaidWith (Unit.cpp:12155): same group regardless of subgroup.
-// Range uses the C++ cylinder test (2D dist + |dz| <= radius, Spell.cpp:8409)
-// with no line-of-sight gate. The MaxTargets cap mirrors the enemy-area path
-// (Spell.cpp:1293: MOD_MAX_AFFECTED_TARGETS aura modifier + RandomResize).
+// Range uses the C++ cylinder test (2D dist + |dz| <= radius, Spell.cpp:8409),
+// and the CheckEffectTarget default arm (Spell.cpp:7479-7481) gates every
+// candidate on line of sight from the area center (AddUnitTarget with
+// losPosition = center, Spell.cpp:1303 — the arm runs before the
+// checkIfValid gate, so checkIfValid = false does not exempt it). The
+// MaxTargets cap mirrors the enemy-area path (Spell.cpp:1293:
+// MOD_MAX_AFFECTED_TARGETS aura modifier + RandomResize).
 func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) []uint64 {
 	if s == nil || s.player == nil || s.server == nil || !isFriendlyAreaSpell(spell) || s.server.Data == nil {
 		return nil
@@ -190,6 +194,11 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 		}
 		dx, dy := float64(x-centerX), float64(y-centerY)
 		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(z-centerZ)) > float64(radius) {
+			return
+		}
+		// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481): area
+		// candidates need line of sight from the area center.
+		if !s.implicitAreaTargetLOSPasses(spell, x, y, z, centerX, centerY, centerZ) {
 			return
 		}
 		if _, ok := seen[guid]; ok {

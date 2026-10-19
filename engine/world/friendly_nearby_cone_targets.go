@@ -589,6 +589,12 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 		if !pass {
 			return
 		}
+		// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492): cone
+		// selection passes losPosition == nullptr, so every cone candidate
+		// needs line of sight from the caster.
+		if !s.implicitUnitTargetLOSPasses(spell, c.guid, c.x, c.y, c.z) {
+			return
+		}
 		if _, ok := seen[c.guid]; ok {
 			return
 		}
@@ -713,6 +719,13 @@ func (s *session) spellFriendlyRefCenteredAreaTargets(ctx context.Context, spell
 			}
 			dx, dy := float64(c.x-referer.x), float64(c.y-referer.y)
 			if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(c.z-referer.z)) > float64(radius) {
+				return
+			}
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+			// area selection passes losPosition == center (the referer
+			// here), so every candidate needs line of sight from the
+			// referer.
+			if !s.implicitAreaTargetLOSPasses(spell, c.x, c.y, c.z, referer.x, referer.y, referer.z) {
 				return
 			}
 			if _, ok := seen[c.guid]; ok {
