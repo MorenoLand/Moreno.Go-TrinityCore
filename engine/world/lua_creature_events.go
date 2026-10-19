@@ -167,6 +167,28 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.clearCreatureAuras(auraKey())
 		return nil, nil
 	}
+	// AttackStop is Unit::AttackStop (Unit.cpp:5763) for handler creatures:
+	// the current victim is dropped (TargetGUID=0), SMSG_ATTACK_STOP goes
+	// to the instance, and the no-call-assistance flag resets (the
+	// combat-stop-only reset). Threat is untouched — C++ keeps the threat
+	// list; re-engagement rides the normal assist/aggro paths. The melee
+	// interrupt arm is vacuous (creature swings are tick-driven, no melee
+	// spell slot). The thekal zealot feign-death arm.
+	methods["AttackStop"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		victim := motion.TargetGUID
+		if victim == 0 {
+			s.motionMu.Unlock()
+			return []any{false}, nil
+		}
+		motion.TargetGUID = 0
+		motion.AlreadyCallAssistance = false
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		stopPkt := buildAttackStop(guid, victim, false)
+		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		return []any{true}, nil
+	}
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

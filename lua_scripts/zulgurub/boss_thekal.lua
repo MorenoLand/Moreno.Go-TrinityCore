@@ -19,7 +19,9 @@
 -- Talk in the C++ AI.
 -- Fake death (phase one killing blow, thekal and both adds — the adds
 -- have no phase gate in C++): Talk(TALK_FAKE_DEATH=2), triggered
--- self-cast 29266 (permanent feign death), the creature's timers are
+-- self-cast 29266 (permanent feign death), creature:AttackStop() (the
+-- zealots' explicit arm, boss_thekal.cpp:432/541; thekal's rides the
+-- feign-death aura's dungeon arm), the creature's timers are
 -- pushed out 10s (C++ EventMap::DelayEvents), the kill is forwarded to
 -- thekal's SetData(DATA_FAKE_DEATH, entry) and the damage is zeroed.
 -- A feign-dead creature ignores further damage (C++-exact
@@ -369,6 +371,11 @@ local function fakeDeath(e, creature, entry, guid)
     -- while feign-dead is zeroed to approximate immunity (header).
     creature:RemoveAllAuras()
     creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH, true)
+    -- C++: the zealots call me->AttackStop() right after the feign cast
+    -- (boss_thekal.cpp:432/541); thekal's own stop rides the feign-death
+    -- aura's dungeon arm (SpellAuraEffects.cpp:2207) — net effect is all
+    -- three stop attacking, so the shared arm calls it unconditionally.
+    creature:AttackStop()
     delayTimers(guid, 10000)
     thekalFakeDeath(e, entry)
     return true

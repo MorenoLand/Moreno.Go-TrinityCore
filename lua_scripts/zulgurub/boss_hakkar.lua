@@ -31,10 +31,14 @@
 -- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
 -- skipped); the at_zulgurub_entrance OnlyOnceAreaTriggerScript (the
--- SAY_ENTRANCE=4 / SAY_PROTECT_ALTAR=3 / SAY_MINION_DESTROY=2 Talk arms,
--- gated on DATA_HAKKAR != DONE and instance->GetCreature) has no Lua
--- area-trigger bridge — it is not registered; SAY_FLEEING=1 is defined
--- in the C++ enum but never used by the AI — not modeled.
+-- SAY_ENTRANCE=4 / SAY_PROTECT_ALTAR=3 / SAY_MINION_DESTROY=2 Talk arms
+-- on trigger IDs 3957/3958/3960, gated on DATA_HAKKAR != DONE and
+-- instance->GetCreature) stays unregistered: the area-trigger bridge
+-- exists (RegisterServerEvent 24), but the DATA_HAKKAR instance gate and
+-- FindNearestCreature (to reach hakkar 14834 for the Talk) have no
+-- bridge — registering it would fire the Talks under wrong gates;
+-- SAY_FLEEING=1 is defined in the C++ enum but never used by the AI —
+-- not modeled.
 
 local ENTRY_HAKKAR = 14834
 
