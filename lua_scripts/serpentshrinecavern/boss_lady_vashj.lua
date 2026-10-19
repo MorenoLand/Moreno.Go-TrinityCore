@@ -17,12 +17,12 @@
 -- (pull), SAY_PHASE2=3 (70% phase switch), SAY_BOWSHOT=5 (shoot/
 -- multishot, fires only when rand32()%3 != 0 — C++-exact),
 -- SAY_SLAY=6 (kill — NO TYPEID gate in C++, C++-exact), SAY_DEATH
--- =7 (death). SAY_INTRO=0 is defined but its only firing arm is
--- the MoveInLineOfSight intro — no LOS hook bridge, documented
--- only; SAY_PHASE1=2 is defined but never called anywhere in the
+-- =7 (death). SAY_INTRO=0 fires from the MoveInLineOfSight intro
+-- (event 27, per-GUID constructor latch — "no need do intro if
+-- wiped"); SAY_PHASE1=2 is defined but never called anywhere in the
 -- file — unused enum member, documented only (gruul precedent).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent
+-- OnTargetDied, 4 OnDied, 23 OnReset, 27 OnMoveInLineOfSight. Timers via CreateLuaEvent
 -- (per-GUID scheduler pump); melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady. C++
 -- DoCast default is triggered=false (vaelastrasz convention);
@@ -125,6 +125,7 @@ local SPELL_SHOOT = 40873
 local SPELL_MULTI_SHOT = 38310
 local SPELL_POISON_BOLT = 40095
 
+local SAY_INTRO = 0
 local SAY_AGGRO = 1
 local SAY_PHASE2 = 3
 local SAY_BOWSHOT = 5
@@ -341,11 +342,29 @@ local function vashjReset(event, creature)
     resetVashj(creature:GetGUID())
 end
 
+-- C++ MoveInLineOfSight: one-shot Talk(SAY_INTRO 0) on first sight,
+-- constructor-latched (Intro cleared only in the AI constructor —
+-- "no need do intro if wiped"), so the latch is per-GUID and never
+-- cleared on 2/23 (ossirian convention; boss_lady_vashj.cpp:275-282).
+-- The Go fire site is the aggro-engage branch (hostile/attackable
+-- faction), a subset of C++'s any-unit LOS trigger — acceptable for
+-- a one-shot intro line (ossirian precedent).
+local vashjSaidIntro = {}
+
+local function vashjMoveInLOS(event, creature, unit)
+    local guid = creature:GetGUID()
+    if not vashjSaidIntro[guid] then
+        vashjSaidIntro[guid] = true
+        creature:Talk(SAY_INTRO)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_LADY_VASHJ, 1, vashjEnterCombat)
 RegisterCreatureEvent(ENTRY_LADY_VASHJ, 2, vashjLeaveCombat)
 RegisterCreatureEvent(ENTRY_LADY_VASHJ, 3, vashjTargetDied)
 RegisterCreatureEvent(ENTRY_LADY_VASHJ, 4, vashjDied)
 RegisterCreatureEvent(ENTRY_LADY_VASHJ, 23, vashjReset)
+RegisterCreatureEvent(ENTRY_LADY_VASHJ, 27, vashjMoveInLOS)
 
 -- npc_tainted_elemental (22009) — see header.
 

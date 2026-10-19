@@ -53,10 +53,11 @@
 -- no creature cast state; re-seeded at DUNGEON_MODE(5s, 4s) after each
 -- nova via creature:IsHeroic(); init 1s at engage).
 -- EVENT_INTRO_DIALOGUE (Talk(SAY_INTRO_2 1) +
--- events.SetPhase(PHASE_NORMAL)) — no timer-event bridge; the
--- MoveInLineOfSight intro (Talk(SAY_INTRO_1 0) gated on _isIntroDone +
--- IsValidAttackTarget + IsWithinDistInMap 40.0f, schedules
--- EVENT_INTRO_DIALOGUE at 20s) — no MoveInLineOfSight bridge.
+-- events.SetPhase(PHASE_NORMAL)) — the phase flip has no Lua phase
+-- model (dropped); the MoveInLineOfSight intro (Talk(SAY_INTRO_1 0)
+-- gated on _isIntroDone + IsValidAttackTarget + IsWithinDistInMap
+-- 40.0f, schedules EVENT_INTRO_DIALOGUE at 20s) is PORTED below on
+-- event 27 with a per-GUID constructor latch (ossirian convention).
 -- DamageTaken — the health-pct one-shot machine (event 9): C++
 -- DamageTaken arms Talk(SAY_75HEALTH 5 / SAY_50HEALTH 6 /
 -- SAY_25HEALTH 7) when HealthBelowPctDamaged(100 - 25 *
@@ -76,10 +77,10 @@
 -- DoStartTimedAchievement leg — no achievement bridge.
 -- MoveInLineOfSight intro (Talk(SAY_INTRO_1 0) gated on
 -- _isIntroDone + IsValidAttackTarget + IsWithinDistInMap 40.0f,
--- schedules EVENT_INTRO_DIALOGUE at 20s) — no MoveInLineOfSight
--- bridge.
+-- schedules EVENT_INTRO_DIALOGUE at 20s) — PORTED below (event 27).
 -- EVENT_INTRO_DIALOGUE (Talk(SAY_INTRO_2 1) +
--- events.SetPhase(PHASE_NORMAL)) — no timer-event bridge.
+-- events.SetPhase(PHASE_NORMAL)) — Talk ported on the 20s timer; the
+-- phase flip has no Lua phase model.
 -- UpdateAI timer machine: EVENT_ARC_LIGHTNING — PORTED
 -- (SelectTarget(Random, 0) -> DoCast(SPELL_ARC_LIGHTNING 52921)
 -- non-triggered, 15s init / {15s,16s} re-arm, boss_loken.cpp:150-153
@@ -98,6 +99,8 @@
 
 local ENTRY_LOKEN = 28923
 
+local SAY_INTRO_1 = 0 -- boss_loken.cpp:34
+local SAY_INTRO_2 = 1 -- :35
 local SAY_AGGRO = 2
 local SAY_SLAY = 4
 local SAY_DEATH = 8
@@ -280,9 +283,34 @@ local function lokenDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ MoveInLineOfSight: Talk(SAY_INTRO_1 0) on first player sight
+-- within 40yd, then EVENT_INTRO_DIALOGUE at 20s -> Talk(SAY_INTRO_2 1)
+-- (boss_loken.cpp:128-137/:169-172). _isIntroDone is
+-- constructor-latched (never cleared in Reset), so the latch is
+-- per-GUID and never cleared on 2/23 (ossirian/vashj convention);
+-- the 20s dialogue timer rides the GUID-keyed schedule table so it
+-- dies on evade/death like the C++ event map. The phase flip
+-- (SetPhase(PHASE_NORMAL)) has no Lua phase model — dropped. The Go
+-- fire site is the aggro-engage branch, a subset of C++'s any-unit
+-- LOS trigger — acceptable for a one-shot intro (ossirian
+-- precedent).
+local lokenIntroDone = {}
+
+local function lokenMoveInLOS(event, creature, unit)
+    local guid = creature:GetGUID()
+    if not lokenIntroDone[guid] and unit:GetDistance(creature) <= 40 then
+        lokenIntroDone[guid] = true
+        creature:Talk(SAY_INTRO_1)
+        schedule(guid, "introDialogue", 20000, function()
+            creature:Talk(SAY_INTRO_2)
+        end)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_LOKEN, 1, lokenEnterCombat)
 RegisterCreatureEvent(ENTRY_LOKEN, 2, function(e, c) lokenResetMod(c:GetGUID()) cancelTimers(c:GetGUID()) end)
 RegisterCreatureEvent(ENTRY_LOKEN, 3, lokenTargetDied)
 RegisterCreatureEvent(ENTRY_LOKEN, 4, lokenDied)
 RegisterCreatureEvent(ENTRY_LOKEN, 9, lokenDamageTaken)
 RegisterCreatureEvent(ENTRY_LOKEN, 23, function(e, c) lokenResetMod(c:GetGUID()) cancelTimers(c:GetGUID()) end)
+RegisterCreatureEvent(ENTRY_LOKEN, 27, lokenMoveInLOS)

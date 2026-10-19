@@ -47,7 +47,12 @@
 -- machine, 3x NPC_ANTAGONIST 23795 summons at fixed positions,
 -- SAY_INTRO/1/2 Talk arms, ACTION_ANTAGONIST_SAY_1/2/ HOSTILE relayed
 -- via EntryCheckPredicate + DoAction) — no summon/DoAction bridges
--- (doomrel precedent for the Talk arms).
+-- (doomrel precedent for the Talk arms). The MIOS Talk(SAY_INTRO)
+-- arm itself is additionally unreachable: Go's event-27 fire site is
+-- the aggro-engage branch (hostile/attackable faction only,
+-- creaturemotion.go:3522-3525), but the C++ intro fires pre-fight
+-- while Coren is FACTION_FRIENDLY + ImmuneToPC — an event-27
+-- handler would be dead code, so it stays documented-only.
 -- npc_coren_direbrew_sisters (26764/26822) — PORTED in
 -- npc_coren_direbrew_sisters.lua: JustEngagedWith self-cast PORT_TO_COREN
 -- 52850 + control aura 47369/50278, then a 2s->4s SelectTarget(Random, 0,
