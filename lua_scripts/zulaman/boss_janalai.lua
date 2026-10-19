@@ -230,6 +230,18 @@ end
 
 RegisterCreatureEvent(ENTRY_FIRE_BOMB, 14, firebombSpellHit)
 
+-- C++ npc_janalai_firebombAI::MoveInLineOfSight (boss_janalai.cpp) is an
+-- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight
+-- aggro engage (the fire bomb is a thrown object, never attacks). Go's
+-- fireCreatureMoveInLOS (lua_creature_events.go:531) fires ev27 on the
+-- aggro-engage branch and a boolean true vetoes exactly that engage, so
+-- return true models it C++-exact (the cyanigosa precedent).
+local function firebombMoveInLOS(event, creature, unit)
+    return true
+end
+
+RegisterCreatureEvent(ENTRY_FIRE_BOMB, 27, firebombMoveInLOS)
+
 -- npc_janalai_hatchling (23598, C++ ScriptName "npc_janalai_hatchling"):
 -- flame buffet 43299 on the victim, first at 7s then every 10s; melee is
 -- engine-driven. The MovePoint spawn walk, SetDisableGravity, and the

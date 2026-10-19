@@ -357,6 +357,24 @@ end
 -- C++: the intro machine runs from spawn — UpdateAI ticks
 -- it before the !UpdateVictim early return — so the intro
 -- pump starts here (see fight-shape header comment).
+-- C++ boss_harbinger_skyrissAI::MoveInLineOfSight
+-- (boss_harbinger_skyriss.cpp:107-111): if (!Intro) return — the default
+-- aggro engage is suppressed until the intro machine completes (Intro =
+-- true at intro phase 3, :189). Go's fireCreatureMoveInLOS
+-- (lua_creature_events.go:531) fires ev27 on the aggro-engage branch and a
+-- boolean true vetoes exactly that engage, so veto while the Lua intro
+-- latch (introStates[guid].done, set true at introTick INTRO_PHASE_3 —
+-- the C++ :189 counterpart) is unset, and let the engage proceed after.
+-- Post-evade this follows the file's one-shot intro model (fullReset keeps
+-- done once set); C++ re-runs the intro on Reset, but that re-run is
+-- outside this arm's scope.
+RegisterCreatureEvent(ENTRY_SKYRISS, 27, function(_, creature, unit)
+    local intro = introStates[creature:GetGUID()]
+    if not intro or not intro.done then
+        return true
+    end
+end)
+
 RegisterCreatureEvent(ENTRY_SKYRISS, 5, function(_, creature)
     local guid = creature:GetGUID()
     fullReset(guid)

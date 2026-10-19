@@ -278,3 +278,15 @@ RegisterCreatureEvent(ENTRY_SOARING_EAGLE, 1, eagleEnterCombat)
 RegisterCreatureEvent(ENTRY_SOARING_EAGLE, 2, eagleLeaveCombat)
 RegisterCreatureEvent(ENTRY_SOARING_EAGLE, 4, eagleDied)
 RegisterCreatureEvent(ENTRY_SOARING_EAGLE, 23, eagleReset)
+
+-- C++ npc_akilzon_eagleAI::MoveInLineOfSight (boss_akilzon.cpp) is an EMPTY
+-- override — it suppresses the default ScriptedAI::MoveInLineOfSight aggro
+-- engage (eagles only fight via the swoop timer). Go's fireCreatureMoveInLOS
+-- (lua_creature_events.go:531) fires ev27 on the aggro-engage branch and a
+-- boolean true vetoes exactly that engage, so return true models it
+-- C++-exact (the cyanigosa precedent).
+local function eagleMoveInLOS(event, creature, unit)
+    return true
+end
+
+RegisterCreatureEvent(ENTRY_SOARING_EAGLE, 27, eagleMoveInLOS)

@@ -250,3 +250,15 @@ RegisterCreatureEvent(NPC_FELMYST, 3, felmystTargetDied)
 RegisterCreatureEvent(NPC_FELMYST, 4, felmystDied)
 RegisterCreatureEvent(NPC_FELMYST, 23, felmystResetState)
 RegisterCreatureEvent(NPC_VAPOR_TRAIL, 23, trailReset)
+
+-- C++ npc_felmyst_trailAI::MoveInLineOfSight (boss_felmyst.cpp:561) is an
+-- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight
+-- aggro engage (the trail is a visual trigger, never attacks). Go's
+-- fireCreatureMoveInLOS (lua_creature_events.go:531) fires ev27 on the
+-- aggro-engage branch and a boolean true vetoes exactly that engage, so
+-- return true models :561 C++-exact (the cyanigosa precedent).
+local function trailMoveInLOS(event, creature, unit)
+    return true
+end
+
+RegisterCreatureEvent(NPC_VAPOR_TRAIL, 27, trailMoveInLOS)
