@@ -25,7 +25,8 @@
 -- from the cast point), or circular blizzard. Below 40% health once, four
 -- water elementals; at 12 minutes and every 60s after, shadow-of-Aran
 -- berserk (Talk only). The drink/potion/pyroblast mana sequence needs
--- power APIs the creature Lua object only partly exposes (see deviations).
+-- mana to drain; the repo carries no Spell.dbc, so creature spell costs
+-- resolve to 0 and the mana pool never moves — see deviations.
 -- Deviations from C++: no summon model — the 4 water elementals (17167),
 -- the 5 shadow-of-Aran summons (18254), and the blizzard creature (17161)
 -- never spawn; the elemental sub-40% arm and the 12-min berserk keep their
@@ -40,14 +41,14 @@
 -- flame-wreath target pool is random alive players in the instance rather
 -- than the threat list. No UNIT_STATE_CASTING model — timers fire
 -- unconditionally (same convention as the other Karazhan ports), and
--- InterruptNonMeleeSpells gates are skipped. No SetPower/SetStandState
--- on the creature Lua object (the old "no GetPower" claim is stale:
--- creature:GetPower()/GetMaxPower() are bridged via the object-field
--- fallback, engine/scripting/object.go:101, live in
--- boss_lady_deathwhisper.lua) and no mana drain from visual casts — the
--- whole drink arm (SAY_DRINK=4, mass poly 29963, conjure 29975, drink
--- 29975 30024, potion 32453, AOE pyroblast 29978, the drink-interrupt
--- damage hook, the 10s interrupt timer) is skipped; SAY_4 never fires.
+-- InterruptNonMeleeSpells gates are skipped. SetPower (lua_creature_events.go:288), SetStandState (:568), and
+-- GetPower/GetMaxPower (object.go:101) are all bridged — the old "no
+-- GetPower" / "No SetPower/SetStandState" claims are stale. The whole
+-- drink arm (SAY_DRINK=4, mass poly 29963, conjure 29975, drink 30024,
+-- potion 32453, AOE pyroblast 29978, the drink-interrupt damage hook, the
+-- 10s interrupt timer) is skipped anyway: creature casts deduct no mana
+-- (no Spell.dbc, costs resolve to 0), so the C++ "< 20% mana" trigger can
+-- never fire and a port would be dead code; SAY_4 never fires.
 -- The drink aura's periodic mana refill has no tick executor in Go, so
 -- the machine's refill model (drink ticks + SetPower(max-32000)) cannot be
 -- reproduced — a partial port would re-drink in a loop. The SpellHit
@@ -243,7 +244,13 @@ onFlameWreathCheck = function(creature, guid)
         if slot then
             local unit = findPlayerByGuid(slot.guid)
             if unit and dist2d(unit:GetX(), unit:GetY(), slot.x, slot.y) > 3 then
-                creature:CastSpell(unit, SPELL_FLAMEWREATH_PUNISH)
+                -- C++ unit->CastSpell(unit, 20476, me->GetGUID()) resolves to
+                -- CastSpellExtraArgs(ObjectGuid) -> TRIGGERED_FULL_MASK
+                -- (SpellDefines.h: the third-arg GUID ctor is a triggered
+                -- cast), so the explosion is fully triggered — instant,
+                -- ignores GCD/cast-in-progress/power costs; the bridge's
+                -- third arg is the Eluna triggered flag.
+                creature:CastSpell(unit, SPELL_FLAMEWREATH_PUNISH, true)
                 unit:AddAura(SPELL_FLAMEWREATH_DOT)
                 st.fwTargets[i] = nil
             end
