@@ -221,8 +221,10 @@
 -- maiev/shadow-demon/cage-trap/blade-tear/spirit/minion summons
 -- never spawn; stale 'no gossip bridge' retracted (bridged) — the
 -- akama intro stays out on the movement/instance machine;
--- no flag/react/equipment/sheath/gravity/threat/immune/sound/
--- despawn bridges — those arms are skipped; the air-phase
+-- no flag/react/equipment/gravity/threat/immune/sound/
+-- despawn bridges — those arms are skipped (the throw-glaive-2 sheath
+-- arm IS ported via the creature:SetSheath bridge; the Reset/intro/
+-- air-finalize sheath arms ride unported machines); the air-phase
 -- finalize arm (both flames dead -> middle, glaive returns, land,
 -- phase 3) has no bearer, so the air phase loops on the pillar
 -- timer and phase 3 only ever starts via the resume-demon path;
@@ -701,10 +703,11 @@ onPillar = function(creature, guid)
     end)
 end
 
--- C++ EVENT_THROW_WARGLAIVE_2: non-triggered self-cast 39635,
--- then the pillar timer 2s (the sheath arm has no bridge).
+-- C++ EVENT_THROW_WARGLAIVE_2: non-triggered self-cast 39635 +
+-- SetSheath(SHEATH_STATE_UNARMED) (:878), then the pillar timer 2s.
 local function onThrowGlaive2(creature, guid)
     creature:CastSpell(creature, SPELL_THROW_GLAIVE2, false)
+    creature:SetSheath(0) -- SHEATH_STATE_UNARMED
     schedule(guid, "pillar", 2000, function()
         onPillar(creature, guid)
     end)
