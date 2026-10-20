@@ -85,10 +85,14 @@
 -- - UpdateAI's _defeated leg: me->IsInCombat() -> EnterEvadeMode() +
 --   SetImmuneToAll(true) — no evade-mode / immune-to-all bridges
 --   (infinite_corruptor DoAction-leave precedent).
--- - JustReachedHome: DespawnOrUnsummon(1s) — stale "no despawn
---   bridge" retracted (creature:Despawn() is bridged,
---   lua_creature_events.go:214); the true blocker is the absent
---   JustReachedHome event in the Go API (standing).
+-- - JustReachedHome: DespawnOrUnsummon(1s) — PORTED (onReachedHome,
+--   event 24): the stale "no despawn bridge" was retracted earlier
+--   (creature:Despawn() is bridged, lua_creature_events.go:214), and
+--   the stale "absent JustReachedHome event in the Go API" claim is
+--   retracted too — the engine fires CREATURE_EVENT_ON_REACH_HOME (24)
+--   from the home-move finalization (engine/world/creaturemotion.go).
+--   The !_defeated gate rides the DamageTaken latch (defeated[guid])
+--   ported above.
 -- - The C++ while(ExecuteEvent()) + UNIT_STATE_CASTING gates — no
 --   casting-state bridge in the Lua API (aeonus precedent —
 --   unmodeled).
@@ -297,6 +301,25 @@ local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustReachedHome (boss_mal_ganis.cpp:106-110): if (!_defeated)
+-- me->DespawnOrUnsummon(Seconds(1)). The _defeated gate rides the
+-- DamageTaken latch (defeated[guid]) ported above; the 1s delay ports
+-- as a one-shot CreateLuaEvent via the file's schedule idiom (the
+-- pending timer dies with cancelTimers on 1/2/4/23).
+local function onReachedHome(event, creature)
+    local guid = creature:GetGUID()
+    if not defeated[guid] then
+        cancelTimers(guid)
+        schedule(guid, "despawn", 1000, function()
+            creature:Despawn()
+            local per = timers[guid]
+            if per then
+                per["despawn"] = nil
+            end
+        end)
+    end
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
@@ -307,3 +330,4 @@ end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, malganisDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+RegisterCreatureEvent(ENTRY, 24, onReachedHome)

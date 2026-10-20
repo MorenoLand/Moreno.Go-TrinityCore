@@ -69,9 +69,11 @@
 -- JustDied — Talk(SAY_DEATH 17) (event 4; the _JustDied
 -- bookkeeping has no bridge — tharon_ja precedent; the
 -- GetGuidData DATA_GIFT_BOX_BUNNY_GUID -> SummonGameObject
--- GO_HEART_OF_MAGIC legs, the NPC_ALEXSTRASZA 32295 summon,
--- and the 5s DespawnOrUnsummon have no instance / summon /
--- despawn bridges — documented-only).
+-- GO_HEART_OF_MAGIC legs and the NPC_ALEXSTRASZA 32295 summon
+-- have no instance / summon bridges — documented-only. The 5s
+-- DespawnOrUnsummon IS ported (malygosDied below — stale
+-- "no despawn bridge" retracted; creature:Despawn() is bridged,
+-- lua_objects.go).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset / Initialize (gravity / immunity / flags / flight-speed
 -- legs, SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE,
@@ -186,12 +188,20 @@ local function malygosEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
 
--- C++ JustDied: _JustDied() + Talk(SAY_DEATH) + gift-box-bunny
--- GUID -> SummonGameObject(HEART_OF_MAGIC) + SummonCreature
--- NPC_ALEXSTRASZA + 5s DespawnOrUnsummon — only the Talk arm
--- is bridgeable.
+-- C++ JustDied (boss_malygos.cpp:979-987): _JustDied() +
+-- Talk(SAY_DEATH) + gift-box-bunny GUID ->
+-- SummonGameObject(HEART_OF_MAGIC) + SummonCreature
+-- NPC_ALEXSTRASZA + DespawnOrUnsummon(5s). The Talk arm is
+-- ported; the instance/summon legs have no bridge. The 5s
+-- despawn is a fire-and-forget one-shot CreateLuaEvent — the
+-- creature is dead, so no timer bookkeeping is needed (C++
+-- DespawnOrUnsummon rides the creature's own despawn timer,
+-- not the EventMap).
 local function malygosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 5000)
 end
 
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)

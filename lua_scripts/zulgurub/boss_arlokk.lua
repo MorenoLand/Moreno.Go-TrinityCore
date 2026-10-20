@@ -359,9 +359,14 @@ RegisterCreatureEvent(ENTRY_ARLOKK, 23, arlokkReset)
 -- npc_zulian_prowler (15101, C++ ScriptName "npc_zulian_prowler"):
 -- OnReset self-casts sneak auras 22766 + 7939; OnEnterCombat removes
 -- both (C++ JustEngagedWith); melee is engine-driven. The MovePoint to
--- Arlokk, the 6s random-attack timer (no Attack bridge), the
--- SpellHit(24211) attack arm, and the JustDied arlokk-SetData/despawn
--- arms have no bridge and are not modeled.
+-- Arlokk, the 6s random-attack timer (no Attack bridge) and the
+-- SpellHit(24211) attack arm have no bridge and are not modeled. The
+-- JustDied arlokk-SetData(_sideData, 0) leg is cross-creature summon
+-- bookkeeping with no bridge (stays out); the JustDied 4s
+-- DespawnOrUnsummon leg is PORTED below (prowlerDied) as a one-shot
+-- CreateLuaEvent (the stale "4s despawn has no bridge" claim is
+-- retracted — creature:Despawn() is bridged,
+-- engine/world/lua_creature_events.go:370).
 local function prowlerEnterCombat(event, creature, target)
     creature:RemoveAura(SPELL_SNEAK_1)
     creature:RemoveAura(SPELL_SNEAK_2)
@@ -370,13 +375,33 @@ end
 -- C++ Reset (boss_arlokk.cpp:353-370): the sneak casts are spawn/evade-only,
 -- never run on death; they do not belong on the corpse.
 local function prowlerReset(event, creature)
+    cancelTimers(timers, creature:GetGUID())
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_SNEAK_1)
         creature:CastSpell(creature, SPELL_SNEAK_2)
     end
 end
 
+-- C++ npc_zulian_prowlerAI::JustDied (boss_arlokk.cpp:388-396): the
+-- arlokk-SetData(_sideData, 0) leg has no cross-creature bridge (stays
+-- out — summon bookkeeping); the unconditional 4s DespawnOrUnsummon
+-- ports C++-exact as a one-shot CreateLuaEvent. The timer rides the
+-- file's timers idiom and is cancelled on 2/4/23 (prowlerReset covers
+-- 23; a dead prowler cannot leave combat, so 2 never fires here).
+local function prowlerDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    cancelTimers(timers, guid)
+    schedule(timers, guid, "despawn", 4000, function()
+        creature:Despawn()
+        local per = timers[guid]
+        if per then
+            per["despawn"] = nil
+        end
+    end)
+end
+
 RegisterCreatureEvent(ENTRY_PROWLER, 1, prowlerEnterCombat)
+RegisterCreatureEvent(ENTRY_PROWLER, 4, prowlerDied)
 RegisterCreatureEvent(ENTRY_PROWLER, 23, prowlerReset)
 
 -- go_gong_of_bethekk (180526, C++ ScriptName "go_gong_of_bethekk"):

@@ -180,8 +180,10 @@
 -- SPELL_KNOCK_ON_WOOD_CREDIT, _JustDied(), live-elder
 -- shutdown sweep (RemoveAllAuras / AttackStop / CombatStop
 -- / EngagementOver / DoAction(ACTION_ELDER_FREYA_KILLED))
--- — no cast / react-state / faction / despawn / DoAction
--- bridges; Talk(SAY_DEATH) itself is ported via event 9.
+-- — no cast / react-state / faction / DoAction bridges; the 7.5s
+-- DespawnOrUnsummon IS ported in freyaDamageTaken below (stale
+-- "no despawn bridge" retracted; creature:Despawn() is bridged,
+-- lua_objects.go). Talk(SAY_DEATH) itself is ported via event 9.
 -- Freya UpdateAI body legs — Touch-of-Eonar aura
 -- maintenance (every-tick, not timer-driven); attuned-stack
 -- achievement sampling; elemental 12s revive / trio-defeated
@@ -379,18 +381,26 @@ local function freyaTargetDied(event, creature, victim)
 end
 
 -- C++ DamageTaken: damage >= me->GetHealth() -> damage = 0
--- + manual JustDied(who) call; JustDied's only bridgeable
--- arm is Talk(SAY_DEATH) — the numeric second return performs the
+-- + manual JustDied(who) call; the manual JustDied's bridgeable
+-- arms are Talk(SAY_DEATH) + DespawnOrUnsummon(7500ms)
+-- (boss_freya.cpp:626) — the numeric second return performs the
 -- C++-exact damage=0 rewrite (the moroes damage-rewrite
 -- precedent; the hodir consequence applies). cancelTimers
 -- models the C++ post-lethal stop (no victim after
--- RemoveAllAttackers/AttackStop, 7.5s despawn — the despawn
--- leg itself has no bridge, so without the cancel the Lua
--- timers would fire forever on the unkillable body).
+-- RemoveAllAttackers/AttackStop; without the cancel the Lua
+-- timers would fire forever on the unkillable body). The 7.5s
+-- despawn is a fire-and-forget one-shot CreateLuaEvent —
+-- C++-exact: C++ DespawnOrUnsummon rides the creature's own
+-- despawn timer, not the EventMap, so it is deliberately NOT
+-- tracked in the timers table (leave-combat/reset must not
+-- cancel it, which C++ never does either).
 local function freyaDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:Talk(SAY_DEATH)
         cancelTimers(creature:GetGUID())
+        CreateLuaEvent(function()
+            creature:Despawn()
+        end, 7500)
         return false, 0
     end
 end
