@@ -68,6 +68,9 @@
 local ENTRY_BALTHARUS_THE_WARBORN = 39751
 local ENTRY_BALTHARUS_CLONE = 39899
 
+-- UnitDefines.h react states (engine/world/lua_creature_events.go SetReactState bridge).
+local REACT_DEFENSIVE = 1
+
 local SAY_AGGRO = 1
 local SAY_KILL  = 2
 local SAY_CLONE = 3
@@ -306,11 +309,12 @@ end
 -- C++ npc_baltharus_the_warborn_clone::Reset
 -- (boss_baltharus_the_warborn.cpp:249-253): DoCastSelf
 -- (SPELL_SPAWN_EFFECT 64195) (non-triggered) + SetReactState
--- (REACT_DEFENSIVE) — the react-state leg has no bridge
--- (documented deviation).
+-- (REACT_DEFENSIVE) — the react-state leg rides the SetReactState bridge
+-- (engine/world/lua_creature_events.go).
 local function cloneReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_SPAWN_EFFECT)
+    creature:SetReactState(REACT_DEFENSIVE)
 end
 
 -- C++ npc_baltharus_the_warborn_clone::JustDied (:277-282): _JustDied()

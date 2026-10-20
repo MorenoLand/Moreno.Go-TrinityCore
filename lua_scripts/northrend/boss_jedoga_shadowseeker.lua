@@ -41,8 +41,9 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset intro machine: _Reset() (instance-script model absent —
 -- standing blocker), events.SetPhase(PHASE_INTRO) (no phase
--- bridge), SetReactState(REACT_PASSIVE) (no react-state bridge —
--- drakkari_colossus precedent), SummonCreatureGroup(
+-- bridge), SetReactState(REACT_PASSIVE) (react-state bridge exists
+-- since 2026-10-20 — the arm stays unported because the intro Reset is
+-- instance/phase-gated, drakkari_colossus precedent), SummonCreatureGroup(
 -- SUMMON_GROUP_INITIATES) (summon STRAND absent), the two
 -- NPC_JEDOGA_CONTROLLER 30181 summons with SPELL_BEAM_VISUAL_
 -- JEDOGA 56312 beam-visual casts (summon STRAND absent), and
@@ -79,8 +80,9 @@
 -- arm stays documented-only: the payload is the whole unbridged
 -- phase-two machine — SetReactState/InterruptNonMeleeSpells/
 -- SetFlag(NOT_SELECTABLE) + the flying-sacrifice MovePoint/motion
--- + summon + cross-AI DoAction sequence (no phase / flag /
--- motion / summon / cross-AI bridges).
+-- + summon + cross-AI DoAction sequence (no phase / motion /
+-- summon / cross-AI bridges; flag/react-state bridges exist since
+-- 2026-10-20 but the payload is the unported phase machine).
 -- Phase-two machine — EVENT_START_PHASE_TWO (SetReactState(
 -- REACT_PASSIVE), AttackStop, InterruptNonMeleeSpells(true),
 -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE), MovePoint(

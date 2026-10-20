@@ -48,6 +48,9 @@ local ENTRY_MIDNIGHT = 16151
 local ENTRY_ATTUMEN = 15550
 local ENTRY_ATTUMEN_MOUNTED = 16152
 
+-- UnitDefines.h react states (engine/world/lua_creature_events.go SetReactState bridge).
+local REACT_DEFENSIVE = 1
+
 local SAY_KILL, SAY_RANDOM, SAY_DISARMED = 0, 1, 2
 local SAY_MIDNIGHT_KILL, SAY_DEATH, SAY_APPEAR, SAY_MOUNT = 3, 3, 4, 5
 local EMOTE_CALL_ATTUMEN, EMOTE_MOUNT_UP = 0, 1
@@ -192,6 +195,11 @@ local function midnightReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     midnightInitState(guid)
+    -- C++ boss_midnightAI::Reset (boss_midnight.cpp:300-306): SetVisible(true)
+    -- + SetReactState(REACT_DEFENSIVE). SetVisible(true) is a no-op on a
+    -- spawned creature; the react-state leg rides the SetReactState bridge
+    -- (engine/world/lua_creature_events.go).
+    creature:SetReactState(REACT_DEFENSIVE)
 end
 
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 1, midnightEnterCombat)

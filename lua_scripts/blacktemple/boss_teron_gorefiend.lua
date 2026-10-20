@@ -48,10 +48,11 @@
 -- timers. The C++ intro arms (Reset's DATA_TERON_GOREFIEND_INTRO
 -- gate, DoAction(ACTION_START_INTRO) + Talk(SAY_INTRO) + 20s
 -- EVENT_FINISH_INTRO, the NON_ATTACKABLE/NOT_SELECTABLE/REACT_
--- PASSIVE flag arms) have no bridge — the area trigger
+-- PASSIVE flag arms) stay unported — flag/react-state bridges exist
+-- since 2026-10-20 but the area trigger
 -- at_teron_gorefiend_entrance that starts the intro (instance
 -- GetCreature(DATA_TERON_GOREFIEND) -> DoAction) has no
--- area-trigger bridge and the instance-data/flag/react arms are
+-- area-trigger bridge and the intro arms are
 -- blocked on the instance-script model (standing gaps), so the
 -- fight starts on pull, ragnaros-intro convention. The
 -- EnterEvadeMode arms: summons.DespawnAll has no summon bridge; the

@@ -380,6 +380,62 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{targets}, nil
 	}
+	// SetReactState is CreatureMethods::SetReactState: Creature::SetReactState
+	// (UnitDefines.h: REACT_PASSIVE=0, REACT_DEFENSIVE=1, REACT_AGGRESSIVE=2 —
+	// matches creatureReact* in creaturemotion.go). The engine honors it in
+	// isCreaturePassive (creaturemotion.go:586) and help-call filtering, so
+	// phase/intro react arms (midnight, baltharus clone, ...) port with
+	// real effect instead of a Lua-side latch.
+	methods["SetReactState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.ReactState = uint8(st)
+		motion.ReactStateKnown = true
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// unitFieldFlagsValue is UNIT_FIELD_FLAGS = OBJECT_END(0x6)+0x35
+	// (UpdateFields.h:117). SetFlag/RemoveFlag on it mutate motion.UnitFlags,
+	// which the engine reads in help-call (creaturemotion.go:1089) and
+	// chain/area target filtering — intro NOT_SELECTABLE/NON_ATTACKABLE arms
+	// port with real targeting effect. Other update fields have no creature
+	// backing here and are ignored, matching the no-op stance of the
+	// unbridged NPC/dynamic-flag arms.
+	methods["SetFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flags, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if field == 59 {
+			s.motionMu.Lock()
+			motion.UnitFlags |= flags
+			s.motionMu.Unlock()
+		}
+		return nil, nil
+	}
+	methods["RemoveFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flags, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if field == 59 {
+			s.motionMu.Lock()
+			motion.UnitFlags &^= flags
+			s.motionMu.Unlock()
+		}
+		return nil, nil
+	}
 	// SetHomePosition is CreatureMethods::SetHomePosition
 	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o).
 	methods["SetHomePosition"] = func(_ context.Context, args []any) ([]any, error) {
