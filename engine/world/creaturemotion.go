@@ -2496,10 +2496,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		return
 	}
 	if isCreaturePassive(motion) && motion.InCombat {
-		if motion.ThreatMgr != nil {
-			motion.ThreatMgr.ClearThreat()
+		// CreatureAI::UpdateVictim (CreatureAI.cpp:240-264): REACT_PASSIVE
+		// while engaged stops attacking but does NOT drop combat — the
+		// threat list and IsInCombat() survive the phase (devourer wailing
+		// souls, midnight, baltharus clone, ...). The old threat-wipe +
+		// combat-drop predates the creature:SetReactState Lua bridge and
+		// broke every scripted mid-combat passive phase (threat wiped,
+		// combat bounced, boss re-acquired from scratch). This is the
+		// AttackStop twin (:259-261); victim re-selection stays gated in
+		// the threat-update step below.
+		if motion.TargetGUID != 0 {
+			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, motion.TargetGUID, false), nil)
 		}
-		motion.InCombat = false
 		motion.TargetGUID = 0
 		motion.Moving = false
 	}
@@ -2556,9 +2564,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			return false
 		}
-		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); switched && newVictim != 0 {
+		// CreatureAI::UpdateVictim (CreatureAI.cpp:251-257): the
+		// aggressive leg SelectVictim()s and AttackStarts a differing
+		// victim; the REACT_PASSIVE leg performs no selection — a passive
+		// creature stays stopped until the script restores an attacking
+		// react state, then resumes on the manager's current victim (the
+		// threat list survived the phase, so switched never fires for the
+		// resume).
+		passive := isCreaturePassive(motion)
+		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); !passive && switched && newVictim != 0 {
 			motion.TargetGUID = newVictim
 			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, motion.ThreatMgr.SortedEntries())
+		} else if !passive && motion.TargetGUID == 0 {
+			if victim := motion.ThreatMgr.GetCurrentVictim(); victim != 0 {
+				motion.TargetGUID = victim
+				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, victim), nil)
+				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, victim, motion.ThreatMgr.SortedEntries())
+			}
 		} else if dirty {
 			// The list moved without a victim switch: SendThreatListToClients
 			// sends SMSG_THREAT_UPDATE (ThreatManager.cpp:524, 770-787).
