@@ -60,12 +60,14 @@
 -- comes from the DB (menu 6045) and is approximated — the real text
 -- lives in the DB, not in C++ (vaelastrasz convention); the C++
 -- BeginEvent faction/stand-state/barrier/immune-to-PC/NPC-flag and
--- AttackStart arms: the SetStandState(UNIT_STAND_STATE_STAND) and the
+-- AttackStart arms: the SetFaction(FACTION_DRAGONFLIGHT_BLACK),
+-- SetStandState(UNIT_STAND_STATE_STAND) and the
 -- SetUInt32Value(UNIT_NPC_FLAGS, NONE) legs ARE bridged and ported at
--- the gossip select (see beginEvent); the faction / barrier-cast /
--- immune-to-PC / AttackStart legs still have no bridges — the timers
--- are armed from the gossip select (the BeginEvent site) and combat
--- begins on pull; no
+-- the gossip select (see beginEvent), as is the Reset
+-- SetFaction(FACTION_FRIENDLY) arm (see onNefariusReset); the
+-- barrier-cast / immune-to-PC / AttackStart legs still have no
+-- bridges — the timers are armed from the gossip select (the
+-- BeginEvent site) and combat begins on pull; no
 -- summon model — the drakonid waves, the Nefarian summon, the
 -- chromatic-chaos/vaelastrasz-spawn UBRS casts, and the
 -- SummonedCreatureDies bone-construct transformation (dead
@@ -104,6 +106,9 @@ local SPELL_NEFARIANS_BARRIER = 22663
 -- SetStandState bridge).
 local UNIT_STAND_STATE_STAND = 0
 local UNIT_STAND_STATE_SIT_HIGH_CHAIR = 6
+
+local FACTION_FRIENDLY = 35
+local FACTION_DRAGONFLIGHT_BLACK = 103
 
 -- Nefarian
 local SAY_RANDOM = 0
@@ -252,8 +257,9 @@ local function onNefariusSpawnAdd(creature, guid)
 end
 
 -- C++ BeginEvent (from OnGossipSelect): Talk(SAY_GAMESBEGIN_1) happens
--- in the select handler; the faction/flag/barrier/stand/immunity arms
--- have no bridge. Talk(SAY_GAMESBEGIN_2), then arm the fight.
+-- in the select handler; the faction/flag/stand arms are bridged and
+-- ported below; the barrier-cast / immune / AttackStart arms have no
+-- bridge. Talk(SAY_GAMESBEGIN_2), then arm the fight.
 local function beginEvent(creature, guid)
     local st = nefariusState[guid]
     if not st then
@@ -264,10 +270,14 @@ local function beginEvent(creature, guid)
     st.spawnedAdds = 0
     st.eventStarted = true
     creature:Talk(SAY_GAMESBEGIN_2)
+    -- C++ BeginEvent me->SetFaction(FACTION_DRAGONFLIGHT_BLACK): whole-value
+    -- faction-template write, bridged via SetFaction on the event surface
+    -- (SharedDefines.h:239); in C++ order (before the NPC-flag clear).
+    creature:SetFaction(FACTION_DRAGONFLIGHT_BLACK)
     -- C++ BeginEvent SetUInt32Value(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_NONE):
     -- the whole-value NPC-flag clear is bridged (SetNPCFlags on the
     -- event surface); the gossip option goes away once the event begins.
-    -- The faction / barrier-cast / immune / AttackStart legs still have
+    -- The barrier-cast / immune / AttackStart legs still have
     -- no bridges (see deviations).
     creature:SetNPCFlags(0)
     -- C++ BeginEvent SetStandState(UNIT_STAND_STATE_STAND): the bridged
@@ -315,13 +325,17 @@ local function onNefariusReset(event, creature)
     -- C++ boss_victor_nefariusAI::Reset (boss_nefarian.cpp:182-197):
     -- on map 469 he sits on the throne (SetStandState(
     -- UNIT_STAND_STATE_SIT_HIGH_CHAIR)) and the barrier aura is
-    -- removed; SetVisible / SetPhaseMask / faction legs have no
-    -- bridges (see deviations), so only the bridged legs port.
+    -- removed; SetVisible / SetPhaseMask legs have no bridges (see
+    -- deviations), so only the bridged legs port.
     if creature:GetMapId() == 469 then
         -- C++ SetUInt32Value(UNIT_NPC_FLAGS, 1): whole-value set to the
         -- GOSSIP bit, bridged via SetNPCFlags on the event surface
         -- (UpdateFields.h:139: UNIT_NPC_FLAGS = 82).
         creature:SetNPCFlags(1)
+        -- C++ Reset me->SetFaction(FACTION_FRIENDLY): bridged via SetFaction
+        -- on the event surface (SharedDefines.h:231); in C++ order (before
+        -- the stand-state arm).
+        creature:SetFaction(FACTION_FRIENDLY)
         creature:SetStandState(UNIT_STAND_STATE_SIT_HIGH_CHAIR)
         creature:RemoveAura(SPELL_NEFARIANS_BARRIER)
     end

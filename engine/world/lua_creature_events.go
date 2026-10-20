@@ -724,6 +724,36 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		defer s.motionMu.Unlock()
 		return motion.NPCFlags
 	})
+	// SetFaction is Unit::SetFaction: SetUInt32Value(UNIT_FIELD_FACTIONTEMPLATE,
+	// factionId) (Object.cpp) — whole-value assignment, no range validation in
+	// C++. The Go twin writes the motion record's live Faction slot and
+	// broadcasts UNIT_FIELD_FACTIONTEMPLATE, exactly the charmCreatureFaction
+	// pattern (creaturemotion.go:1794/1828): the faction slot feeds
+	// isAttackableFaction / isHostileFaction at aggro and targeting time, so
+	// faction-flip arms (nefarius throne/event, spark_overgrind gossip,
+	// zum_rah areatrigger restore, ...) take real effect instead of being
+	// header-documented as unbridgeable. Backs the faction-gap hunt
+	// (hidden_files/faction_gap_hunt.py, 2026-10-20).
+	methods["SetFaction"] = func(_ context.Context, args []any) ([]any, error) {
+		faction, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.Faction = faction
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
+			map[int]uint32{unitFieldFaction: faction})
+		return nil, nil
+	}
+	// GetFaction is UnitMethods::GetFaction (CreatureMethods.h): reads the
+	// creature's live faction-template id (the motion slot above, initialized
+	// from the template faction at spawn).
+	methods["GetFaction"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.Faction
+	})
 	// FindNearestCreature(entry, dist) is WorldObject::FindNearestCreature /
 	// GetClosestCreatureWithEntry (ObjectAccessor): the nearest live creature
 	// of entry within dist yards (3D, the C++ IsWithinDistInMap metric) in the

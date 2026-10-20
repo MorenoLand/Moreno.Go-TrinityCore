@@ -39,8 +39,10 @@
 --   All three can fire on the same tick — same sequential-check order
 --   as C++.
 -- Unmodeled (documented-only, no bridges):
--- - Reset: me->SetFaction(FACTION_FRIENDLY) — no SetFaction bridge;
---   the areatrigger leg that flips it hostile is in zulfarrak.cpp.
+-- - Reset: me->SetFaction(FACTION_FRIENDLY) — SetFaction is bridged on
+--   the event surface, but the only runtime flip is the unbridged
+--   at_zumrah areatrigger leg (zulfarrak.cpp), so the restore is a
+--   template-idempotent no-op and stays documented-only.
 -- - JustDied: instance->SetData(DATA_ZUM_RAH, DONE) — no
 --   instance-data bridge (standing); BossAI _JustDied ctor leg blocked.
 

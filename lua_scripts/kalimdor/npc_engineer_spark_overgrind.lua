@@ -19,7 +19,9 @@
 --   constructor-captured value cached per GUID, restored via
 --   creature:SetNPCFlags() (engine/world/lua_objects.go:657) — C++
 --   arm order after Initialize(); the old "no Lua bridge" claim was
---   stale for NPC flags (only SetFaction stays unbridged).
+--   stale for NPC flags (SetFaction is now bridged too, but the
+--   gossip-select flip still needs Attack — zero Lua usage — so the
+--   arm stays documented-only).
 -- Documented-only (no bridges):
 -- - IsTreeEvent gate (GetAreaId() == 3579 cove / 3639 isle returns
 --   before combat entirely): GetAreaId has no Lua bridge (talbot
@@ -29,10 +31,12 @@
 -- - OnGossipSelect (CloseGossipMenuFor + SetFaction(FACTION_MONSTER)
 --   + Attack): gossip IS bridged (RegisterCreatureGossipEvent — the
 --   "gossip bridge absent" claim was stale; live at
---   engine/world/gossip.go:129/369); SetFaction/Attack have zero Lua
---   usage (ouro) so the arm stays documented-only.
--- - Reset's NormFaction restore: SetFaction has no Lua bridge
---   (zero Lua usage — ouro precedent).
+--   engine/world/gossip.go:129/369); SetFaction is now bridged on the
+--   event surface but Attack has zero Lua usage (ouro), so the arm
+--   stays documented-only.
+-- - Reset's NormFaction restore: SetFaction is now bridged, but the
+--   only runtime flip is the gossip-select arm above (still Attack-
+--   blocked), so the restore stays documented-only.
 -- - The rest of zone_azuremyst_isle.cpp, documented-only:
 --   npc_draenei_survivor (MoveInLineOfSight help-call +
 --   SpellHit heal leg + timed thanks/run-away) — entry ID not
@@ -132,7 +136,8 @@ local function onReset(event, creature)
     cancelTimers(guid)
     -- zone_azuremyst_isle.cpp:224 — Reset restores the constructor-captured
     -- UNIT_NPC_FLAGS via SetUInt32Value; the SetFaction(NormFaction) leg
-    -- (:223) has no Lua bridge. creature:SetNPCFlags() is bridged
+    -- (:223) stays documented-only (bridge exists; the only runtime flip
+    -- is the Attack-blocked gossip-select arm). creature:SetNPCFlags()
     -- (engine/world/lua_objects.go:657); Go fires event 23 only on
     -- respawn/evade (lua_creature_events.go:539-549), so the capture
     -- lands at first reset — equal to the C++ constructor capture,
