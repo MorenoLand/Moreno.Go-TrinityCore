@@ -131,10 +131,13 @@
 -- SPELL_FLAME_TSUNAMI_DMG_AURA 57491) (2-arg non-triggered
 -- self-cast, 100ms init / 500ms re-arm) PORTED via CreateLuaEvent
 -- (seeded on Reset, cancelled on event 37 — the wave is stationary;
--- the C++ leap motion has no bridge); the ctor (SetDisplayId 11686
--- + aura SPELL_FLAME_TSUNAMI 57494) and EVENT_TSUNAMI_BUFF
--- (NPC_LAVA_BLAZE 30643 creature-search + SPELL_FLAME_TSUNAMI_BUFF
--- 60430) have no spawn / creature-search bridges — documented-only.
+-- the C++ leap motion has no bridge); Reset SetReactState(REACT_PASSIVE)
+-- + SetFlag(NON_ATTACKABLE | NOT_SELECTABLE) PORTED (bridged);
+-- EVENT_TSUNAMI_BUFF (nearest live NPC_LAVA_BLAZE 30643 within 10yd
+-- self-casts SPELL_FLAME_TSUNAMI_BUFF 60430, triggered, 1s/1s)
+-- PORTED via the FindNearestCreature bridge; the ctor (SetDisplayId
+-- 11686 + aura SPELL_FLAME_TSUNAMI 57494) has no spawn / display
+-- bridges — documented-only.
 -- npc_twilight_fissure — entry UNVERIFIABLE from C++ (no local
 -- NPC enum; the fissure is spawned by SPELL_SHADOW_FISSURE
 -- 57579, entry not named in the C++ tree) — joins the
@@ -406,6 +409,13 @@ end
 local SPELL_TWILIGHT_SHIFT_ENTER = 57620
 local SPELL_TWILIGHT_TORMENT_VESP_ACO = 58853
 local SPELL_FLAME_TSUNAMI_DMG_AURA = 57491
+local SPELL_FLAME_TSUNAMI_BUFF = 60430
+local NPC_LAVA_BLAZE = 30643
+local REACT_PASSIVE = 0
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
+local UNIT_FLAG_INTRO_MASK = UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE
 local ENTRY_ACOLYTE_SHADRON = 31218
 local ENTRY_ACOLYTE_VESPERON = 31219
 local ENTRY_TWILIGHT_EGG = 30882
@@ -477,12 +487,18 @@ for _, entry in ipairs({ ENTRY_TWILIGHT_EGG, ENTRY_SARTHARION_TWILIGHT_EGG }) do
     RegisterCreatureEvent(entry, 23, twilightEggReset)
 end
 
--- C++ npc_flame_tsunami (obsidian_sanctum.cpp:866-916):
+-- C++ npc_flame_tsunami (obsidian_sanctum.cpp:866-916): Reset —
+-- SetReactState(REACT_PASSIVE) + SetFlag(UNIT_FIELD_FLAGS,
+-- NON_ATTACKABLE | NOT_SELECTABLE) ported (both bridged);
 -- EVENT_TSUNAMI_TIMER DoCast(me, SPELL_FLAME_TSUNAMI_DMG_AURA)
 -- (2-arg non-triggered self-cast), 100ms init / 500ms re-arm —
 -- ported via CreateLuaEvent, seeded on Reset, cancelled on
--- OnRemove (event 37); REACT_PASSIVE, never combats. The ctor
--- and EVENT_TSUNAMI_BUFF (creature-search) stay out.
+-- OnRemove (event 37); EVENT_TSUNAMI_BUFF (1s init / 1s re-arm) —
+-- the nearest live lava blaze within 10yd self-casts
+-- SPELL_FLAME_TSUNAMI_BUFF (triggered) via the FindNearestCreature
+-- bridge — ported. The ctor (SetDisplayId 11686 + AddAura
+-- SPELL_FLAME_TSUNAMI 57494) stays out: no spawn hook / display
+-- bridge for that leg.
 local function tsunamiTick(creature, guid)
     creature:CastSpell(creature, SPELL_FLAME_TSUNAMI_DMG_AURA)
     schedule(guid, "tsunami", 500, function()
@@ -490,11 +506,27 @@ local function tsunamiTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_TSUNAMI_BUFF (obsidian_sanctum.cpp:894-897).
+local function tsunamiBuffTick(creature, guid)
+    local blaze = creature:FindNearestCreature(NPC_LAVA_BLAZE, 10)
+    if blaze then
+        blaze:CastSpell(blaze, SPELL_FLAME_TSUNAMI_BUFF, true)
+    end
+    schedule(guid, "tsunamiBuff", 1000, function()
+        tsunamiBuffTick(creature, guid)
+    end)
+end
+
 local function tsunamiReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_INTRO_MASK)
     schedule(guid, "tsunami", 100, function()
         tsunamiTick(creature, guid)
+    end)
+    schedule(guid, "tsunamiBuff", 1000, function()
+        tsunamiBuffTick(creature, guid)
     end)
 end
 

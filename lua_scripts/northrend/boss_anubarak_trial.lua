@@ -63,8 +63,9 @@
 -- random-target SelectTarget bridge — cairne/kazzak precedent) +
 -- Talk(EMOTE_SPIKE 0, target) (rides the unbridged leg).
 -- boss_anubarak_trial JustEngagedWith — RemoveFlag(
--- NON_ATTACKABLE | NOT_SELECTABLE) (no flag bridge —
--- drakkari_colossus precedent); summons.DoAction(
+-- NON_ATTACKABLE | NOT_SELECTABLE) PORTED via the RemoveFlag bridge
+-- (engine/world/lua_creature_events.go; the old "no flag bridge —
+-- drakkari_colossus precedent" claim was stale); summons.DoAction(
 -- ACTION_SCARAB_SUBMERGE) + SummonCreature(NPC_BURROW) x4 +
 -- SummonCreature(NPC_FROST_SPHERE) x6 with GUID latching (summon
 -- STRAND + cross-AI DoAction bridges absent).
@@ -109,10 +110,13 @@
 -- precedent) + Talk(EMOTE_LEECHING_SWARM 6) +
 -- Talk(SAY_LEECHING_SWARM 5) (ride the unbridged leg).
 -- boss_anubarak_trial JustDied's grid despawn of frost spheres
--- and burrowers — creature:Despawn() IS bridged
--- (engine/world/lua_creature_events.go:236; the old "no despawn bridge
--- (terestian precedent)" claim is stale); the arm stays out behind the
--- unbridged grid-search (GetCreatureListWithEntryInGrid) leg.
+-- and burrowers — PORTED via the GetCreaturesInGrid bridge
+-- (engine/world/lua_creature_events.go); creature:Despawn() was
+-- already bridged (the old "no despawn bridge (terestian
+-- precedent)" claim was stale).
+-- boss_anubarak_trial Reset's grid despawn of frost spheres (150yd)
+-- + RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE) — PORTED (same
+-- bridges); the Reset timer arms stay phase-gated (see below).
 -- npc_swarm_scarab — zero registration beyond the JustDied arm.
 -- Reset: DoCast(me, Acid Mandible 65774) + DoZoneInCombat +
 -- cross-AI JustSummoned — no zone-in-combat / cross-AI / instance
@@ -178,6 +182,12 @@
 local ENTRY_ANUBARAK = 34564
 local ENTRY_SWARM_SCARAB = 34605
 local ENTRY_SPIKE = 34660
+local NPC_FROST_SPHERE = 34606
+local NPC_BURROWER = 34607
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
+local UNIT_FLAG_INTRO_MASK = UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE
 
 local SAY_AGGRO = 1
 local SAY_KILL_PLAYER = 7
@@ -215,6 +225,11 @@ end
 -- C++; fires once).
 local function anubarakEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (boss_anubarak_trial.cpp:273-287):
+    -- RemoveFlag(UNIT_FIELD_FLAGS, NON_ATTACKABLE | NOT_SELECTABLE)
+    -- ported via the RemoveFlag bridge; the summon / DoAction legs
+    -- stay out (no summon / cross-AI bridges).
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_INTRO_MASK)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "berserk", 600000, function()
@@ -235,7 +250,32 @@ end
 local function anubarakDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_anubarak_trial.cpp:238-246): despawn
+    -- leftover frost spheres and burrowers within 150yd via the
+    -- GetCreaturesInGrid bridge.
+    for _, add in ipairs(creature:GetCreaturesInGrid(NPC_FROST_SPHERE, 150)) do
+        add:Despawn()
+    end
+    for _, add in ipairs(creature:GetCreaturesInGrid(NPC_BURROWER, 150)) do
+        add:Despawn()
+    end
 end
+
+-- C++ boss_anubarak_trialAI::Reset (boss_anubarak_trial.cpp:179-206):
+-- RemoveFlag(UNIT_FIELD_FLAGS, NON_ATTACKABLE | NOT_SELECTABLE)
+-- + grid despawn of leftover frost spheres (150yd) ported; the
+-- phase-gated timer arms (FREEZE_SLASH / PENETRATING_COLD /
+-- SUMMON_NERUBIAN / SUBMERGE, PHASE_MELEE) stay out behind the
+-- unported submerge phase machine (tharon_ja bar).
+local function anubarakReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_INTRO_MASK)
+    for _, sphere in ipairs(creature:GetCreaturesInGrid(NPC_FROST_SPHERE, 150)) do
+        sphere:Despawn()
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ANUBARAK, 23, anubarakReset)
 
 RegisterCreatureEvent(ENTRY_ANUBARAK, 1, anubarakEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 2, anubarakLeaveCombat)

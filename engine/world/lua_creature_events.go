@@ -3,6 +3,8 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -435,6 +437,79 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.motionMu.Unlock()
 		}
 		return nil, nil
+	}
+	// FindNearestCreature(entry, dist) is WorldObject::FindNearestCreature /
+	// GetClosestCreatureWithEntry (ObjectAccessor): the nearest live creature
+	// of entry within dist yards (3D, the C++ IsWithinDistInMap metric) in the
+	// same map+instance, excluding self; nil when none. Backs the
+	// creature-search arms (flame-tsunami lava-blaze buff, anubarak
+	// sphere/burrower cleanup) that headers documented as bridge-blocked.
+	methods["FindNearestCreature"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		dist := float64(dist32)
+		s.motionMu.Lock()
+		var best *creatureMotion
+		bestD := dist
+		for guid, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+			if guid == motion.GUID || m.Entry != entry || m.Health == 0 {
+				continue
+			}
+			dx := float64(m.X - motion.X)
+			dy := float64(m.Y - motion.Y)
+			dz := float64(m.Z - motion.Z)
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist && (best == nil || d < bestD) {
+				best, bestD = m, d
+			}
+		}
+		s.motionMu.Unlock()
+		if best == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.luaMotionCreature(best)}, nil
+	}
+	// GetCreaturesInGrid(entry, dist) is
+	// WorldObject::GetCreatureListWithEntryInGrid: every creature of entry
+	// within dist yards (3D) in the same map+instance, excluding self, as a
+	// Lua array of creature objects (GUID-sorted for determinism; the C++
+	// grid-visit order is unspecified). Backs mass-despawn arms such as
+	// anubarak's frost-sphere/burrower cleanup.
+	methods["GetCreaturesInGrid"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		dist := float64(dist32)
+		s.motionMu.Lock()
+		var matches []*creatureMotion
+		for guid, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+			if guid == motion.GUID || m.Entry != entry {
+				continue
+			}
+			dx := float64(m.X - motion.X)
+			dy := float64(m.Y - motion.Y)
+			dz := float64(m.Z - motion.Z)
+			if math.Sqrt(dx*dx+dy*dy+dz*dz) <= dist {
+				matches = append(matches, m)
+			}
+		}
+		s.motionMu.Unlock()
+		sort.Slice(matches, func(i, j int) bool { return matches[i].GUID < matches[j].GUID })
+		out := make([]any, 0, len(matches))
+		for _, m := range matches {
+			out = append(out, s.luaMotionCreature(m))
+		}
+		return []any{out}, nil
 	}
 	// SetHomePosition is CreatureMethods::SetHomePosition
 	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o).
