@@ -151,12 +151,24 @@
 -- AuraScript binding bridge (razelikh precedent) — documented-only.
 -- spell_power_of_the_twins (AuraScript 65879): AfterEffectApply/Remove
 -- -> cross-AI sister EnableDualWield(true/false) (SetEquipmentSlots +
--- SetCanDualWield) — no AuraScript / equipment / dual-wield bridges —
--- documented-only. The four spell scripts join the
+-- SetCanDualWield) — no AuraScript binding bridge (razelikh precedent)
+-- and no dual-wield bridge — documented-only. The stale "no equipment
+-- bridge" claim is retracted: creature:SetEquipmentSlots is bridged on the
+-- event surface (lua_creature_events.go), so the unconditional Reset arms
+-- are PORTED in reset(); the AuraScript-timed arms (:310) stay out on the
+-- missing AuraScript bridge. The four spell scripts join the
 -- SpellScript/AuraScript queue.
 
 local ENTRY_FJOLA = 34497
 local ENTRY_EYDIS = 34496
+
+-- boss_twin_valkyr.h:50-51 / Trinity SetEquipmentSlots(load=false, ...) with
+-- EQUIP_UNEQUIP=0 (slot zeroed) and EQUIP_NO_CHANGE->0xFFFFFFFF (slot skipped,
+-- the npc_toc_boomkin precedent) for the bridge's no-change sentinel.
+local EQUIP_MAIN_FJOLA = 9423
+local EQUIP_MAIN_EYDIS = 37377
+local EQUIP_UNEQUIP = 0
+local EQUIP_NO_CHANGE = 0xFFFFFFFF
 
 local SAY_AGGRO = 0
 local SAY_KILL_PLAYER = 6
@@ -295,6 +307,14 @@ end
 
 local function reset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- boss_fjolaAI::Reset :392 / boss_eydisAI::Reset :499 — unconditional
+    -- SetEquipmentSlots(false, EQUIP_MAIN_*, EQUIP_UNEQUIP, EQUIP_NO_CHANGE):
+    -- creature:SetEquipmentSlots is bridged on the event surface.
+    if creature:GetEntry() == ENTRY_FJOLA then
+        creature:SetEquipmentSlots(EQUIP_MAIN_FJOLA, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
+    else
+        creature:SetEquipmentSlots(EQUIP_MAIN_EYDIS, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_FJOLA, 1, makeEnterCombat(SPELL_SURGE_FJOLA, SPELL_SPIKE_FJOLA, SPELL_LIGHT_TOUCH, DARK_ESSENCE_AURAS))

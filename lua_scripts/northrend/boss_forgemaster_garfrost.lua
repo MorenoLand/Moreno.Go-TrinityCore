@@ -102,8 +102,13 @@
 --   no-movement bridge out, the equipment changes ride the
 --   no-equipment bridge. (FORGE_BLADE_HELPER is RAID_MODE(68774,
 --   70334): the 10-man removal target is the same 68774 that was cast.)
--- Reset (:99-105) — SetEquipmentSlots(true) (:103) has no equipment
---   bridge; SetPhase(PHASE_ONE) (:102) is the phase init.
+-- Reset (:99-105) — SetEquipmentSlots(true) (:103) is the template-default
+--   form (creature_equip_template default set); the Go bridge only takes
+--   explicit IDs, so the form has no expressible mapping — and the arm is
+--   inert: the forge-sword/forge-mace equipment arms (:160-170) ride the
+--   unported movement machine, so equipment never diverges from the spawn
+--   template state in Go. Documented-only; SetPhase(PHASE_ONE) (:102) is
+--   the phase init.
 -- JustDied :126 me->RemoveAllGameObjects() — no bridge (Go engine
 --   owns object cleanup).
 -- JustDied :128-129 tyrannus->AI()->Talk(SAY_TYRANNUS_DEATH 0) via

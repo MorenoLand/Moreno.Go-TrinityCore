@@ -64,7 +64,11 @@
 -- DoRemoveStanceAura + DoCast(SPELL_DEFENSIVE_STANCE 53790) leg,
 -- SetEquipmentSlots (EQUIP_SWORD 37871 / EQUIP_SHIELD 35642), and
 -- instance->SetBossState(DATA_BJARNGRIM, NOT_STARTED) stay out — no
--- summon / cast / equipment / instance bridges.
+-- summon / cast / instance bridges. (The stale "no equipment bridge" claim
+-- is retracted: creature:SetEquipmentSlots is bridged on the event surface,
+-- but the stance-machine equipment arms (:268/:274/:279) and the Reset
+-- restore (:186) are inert — the stance machine is unported, so equipment
+-- never diverges from the spawn template state in Go — documented-only.)
 -- EnterEvadeMode — PORTED 2026-10-18 (canBuff = HasAura(52092)
 -- snapshot, boss_bjarngrim.cpp:191-196 — no re-buff after dispel).
 -- DoRemoveStanceAura (stance-switched RemoveAurasDueToSpell 53790 /
