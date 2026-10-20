@@ -51,11 +51,12 @@
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (_Reset/BossAI::
 -- JustEngagedWith and the DATA_VAELASTRAZ_THE_CORRUPT bookkeeping
--- arms skipped); the Reset SetStandState(UNIT_STAND_STATE_DEAD) and
--- the speech SetStandState(UNIT_STAND_STATE_STAND) arms, the
--- HandleEmoteCommand(EMOTE_ONESHOT_TALK) arms, and the
+-- arms skipped); the
 -- SetFaction(FACTION_FRIENDLY)/SetFaction(FACTION_DRAGONFLIGHT_BLACK)
--- arms have no bridges; speech_4's AttackStart on the gossip player
+-- arms have no bridges; the Reset SetStandState(DEAD) and speech_1
+-- SetStandState(STAND) + all three HandleEmoteCommand(EMOTE_ONESHOT_TALK)
+-- arms are ported via creature:SetStandState/:PerformEmote;
+-- speech_4's AttackStart on the gossip player
 -- has no bearer (no movement/attack bridge on a non-combat target) —
 -- the speech simply ends and the fight starts when a player pulls;
 -- the DB gossip menu text (gossip_menu 6101) is approximated in the
@@ -214,10 +215,14 @@ end
 local function armSpeech(creature, guid)
     schedule(guid, "speech1", 1000, function()
         creature:Talk(SAY_LINE1)
+        creature:SetStandState(0) -- C++ speech_1: UNIT_STAND_STATE_STAND
+        creature:PerformEmote(1) -- C++ speech_1: EMOTE_ONESHOT_TALK
         schedule(guid, "speech2", 12000, function()
             creature:Talk(SAY_LINE2)
+            creature:PerformEmote(1) -- C++ speech_2: EMOTE_ONESHOT_TALK
             schedule(guid, "speech3", 12000, function()
                 creature:Talk(SAY_LINE3)
+                creature:PerformEmote(1) -- C++ speech_3: EMOTE_ONESHOT_TALK
                 schedule(guid, "speech4", 16000, function()
                     -- C++ speech_4: SetFaction(FACTION_DRAGONFLIGHT_BLACK)
                     -- + AttackStart on the gossip player — both have no
@@ -321,9 +326,10 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onReset(event, creature)
-    -- C++ Reset: SetStandState(DEAD) has no bridge — timer/state-only.
+    -- C++ Reset: SetStandState(UNIT_STAND_STATE_DEAD = 7).
     -- Initialize() also clears HasYelled (C++-exact).
     local guid = creature:GetGUID()
+    creature:SetStandState(7)
     hasYelled[guid] = false
     cancelTimers(guid)
 end
