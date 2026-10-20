@@ -4848,6 +4848,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	if damage > 0 {
 		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, caster.GUID, damage, uint32(schoolMask))
 	}
+	// ThreatManager::AddThreat step-1 gate (ThreatManager.cpp:311-317):
+	// probed pre-lock for the motion==nil tail path (conservative:
+	// NO_INITIAL_AGGRO gates here) and refined in the threat block
+	// below with the true pre-damage engagement state.
+	threatGated := s.spellDamageStep1Gate(spellID, false)
 	s.server.motionMu.Lock()
 	targetMotion := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
 	newlyTapped := false
@@ -4885,10 +4890,61 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			s.server.broadcastThreatClearInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID)
 		} else {
 			targetMotion.Health -= damage
+			// Unit::DealDamage's threat add runs on the victim's pre-damage
+			// engagement state for the step-1 gate (ThreatManager.cpp:315-317):
+			// capture it before the funnel's own engagement set.
+			wasInCombat := targetMotion.InCombat
 			if targetMotion.ThreatMgr == nil {
 				targetMotion.ThreatMgr = NewThreatManager(targetMotion)
 			}
-			targetMotion.ThreatMgr.AddThreat(caster.GUID, float32(damage), false)
+			dist := distance3D(caster.X, caster.Y, caster.Z, targetMotion.X, targetMotion.Y, targetMotion.Z)
+			inMelee := inMeleeThreatRange(targetMotion.CombatReach, caster.CombatReach, dist)
+			// Unit::DealDamage (Unit.cpp:906) calls AddThreat with the
+			// default args (ignoreModifiers=false, ignoreRedirects=false):
+			// the amount folds the spell_threat-row pctMod, the attacker's
+			// SPELLMOD_THREAT mods and school multipliers
+			// (ThreatManager::CalculateModifiedThreat, ThreatManager.cpp:606),
+			// and the caster's redirect registry applies on top
+			// (splitThreatRedirects).
+			threat, step1Gate := s.damageThreatAmount(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat)
+			// ThreatManager::AddThreat step 1 (ThreatManager.cpp:311-317)
+			// returns before SetInCombatWith: a gated spell neither adds
+			// threat nor engages the victim. Every other arm — including
+			// zero-damage hits — engages: "threat implies combat"
+			// (ThreatManager.cpp:366-368).
+			threatGated = step1Gate
+			if !step1Gate {
+				targetMotion.InCombat = true
+			}
+			// The threat arm is skipped for units that cannot have a threat
+			// list (ThreatManager::AddThreat's !CanHaveThreatList() early leg,
+			// ThreatManager.cpp:328-339): no redirect consumption, no victim
+			// switch — combat state alone is kept. A zero amount still runs
+			// AddThreat (the ref is created with 0 threat and the victim leg
+			// runs — Unit::EngageWithTarget seeds 0.0f the same way); only the
+			// redirect split is skipped (amount > 0.0f gate, ThreatManager.cpp:348).
+			if !step1Gate && targetMotion.ThreatMgr.OwnerCanHaveThreatList() {
+				var switched bool
+				var newVictim uint64
+				if threat > 0 {
+					var rSwitched bool
+					var rVictim uint64
+					threat, rSwitched, rVictim = s.splitThreatRedirects(targetMotion, threat)
+					switched, newVictim = targetMotion.ThreatMgr.AddThreat(caster.GUID, threat, inMelee)
+					if rSwitched {
+						switched, newVictim = true, rVictim
+					}
+				} else {
+					switched, newVictim = targetMotion.ThreatMgr.AddThreat(caster.GUID, 0, inMelee)
+				}
+				if switched && newVictim != targetMotion.TargetGUID {
+					targetMotion.TargetGUID = newVictim
+					entries := targetMotion.ThreatMgr.SortedEntries()
+					s.server.broadcastHighestThreatUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, newVictim, entries)
+				} else {
+					targetMotion.TargetGUID = targetMotion.ThreatMgr.GetCurrentVictim()
+				}
+			}
 			consumeKillCommandStack(caster)
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 			if next, changed := s.server.addCreatureRageLocked(targetMotion, targetMotion.Level, damage); changed {
@@ -4921,7 +4977,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			healthUpdate[unitFieldPower1+powerRage] = rageNext
 		}
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, healthUpdate)
-		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
+		// The step-1 gate skips victim engagement
+		// (ThreatManager.cpp:311-317) — without this guard the tail
+		// aggro call would re-engage a victim C++ leaves unengaged.
+		if !threatGated {
+			s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
+		}
 	}
 	// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
 	// runs after the taken side on both the lethal and non-lethal arms —
